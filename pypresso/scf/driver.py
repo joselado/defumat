@@ -32,6 +32,7 @@ import numpy as np
 from pypresso.basis.builder import Basis, build_basis
 from pypresso.basis.fft import g_to_r, r_to_g
 from pypresso.hamiltonian.operator import Hamiltonian
+from pypresso.pseudo.atomic import atomic_wavefunctions
 from pypresso.pseudo.potentials import local_potential, starting_charge
 from pypresso.pseudo.projectors import build_projectors
 from pypresso.pseudo.upf import Pseudopotential
@@ -46,7 +47,8 @@ from pypresso.scf.occupations import (
 )
 from pypresso.scf.potential import scf_accuracy, v_of_rho
 from pypresso.solvers import get_eigensolver
-from pypresso.solvers.davidson import ETHR_MIN
+from pypresso.solvers.davidson import ETHR_MIN, starting_vectors
+from pypresso.solvers.subspace import rayleigh_ritz
 from pypresso.system.builder import System
 from pypresso.system.symmetry import apply_symmetry_maps, find_symmetries, symmetry_maps
 from pypresso.units import RY_TO_EV
@@ -92,6 +94,14 @@ def _density_of_bands(psi, fft_index, grid, weights, cell, dense_index, maps):
     permutations, phases = maps
     rho_g = apply_symmetry_maps(r_to_g(rho, dense_index), permutations, phases)
     return jnp.real(g_to_r(rho_g, dense_index, grid))
+
+
+@partial(jax.jit, static_argnames=("nbnd",))
+def _rotate_all(hamiltonian, vectors, nbnd: int):
+    """Rayleigh-Ritz at every k-point at once."""
+    return jax.vmap(lambda ik, v: rayleigh_ritz(hamiltonian, ik, v, nbnd))(
+        jnp.arange(hamiltonian.nk), vectors
+    )
 
 
 @jax.jit
@@ -261,6 +271,37 @@ class Calculation:
         )
         return jnp.real(g_to_r(rho_g, self.basis.dense.fft_index, self.basis.dense.grid))
 
+    def starting_wavefunctions(self, hamiltonian: Hamiltonian, nbnd: int) -> jnp.ndarray:
+        """The first guess at the wavefunctions, from the atomic orbitals.
+
+        QE's ``wfcinit``: build the pseudo-atomic orbitals of every atom, then
+        diagonalise the Hamiltonian inside their span. What comes out is not the
+        answer, but it is close enough that the first Davidson call costs two
+        steps instead of eight -- the atoms already know roughly where their
+        electrons are, and the pseudopotential file carries that knowledge.
+
+        Falls back to random vectors for a pseudopotential with no ``PP_PSWFC``
+        section, and tops up with them when a species has fewer orbitals than
+        the calculation has bands.
+        """
+        atomic = atomic_wavefunctions(
+            self.pseudos, self.system.structure, self.system.cell,
+            self.basis.dense, self.basis.planewaves, self.system.kpoints,
+        )
+        missing = nbnd - atomic.shape[1]
+        if missing > 0:
+            # Aluminium has four atomic orbitals and a smeared calculation asks
+            # for six bands; the rest are random, exactly as QE tops up.
+            extra = jax.vmap(
+                lambda kinetic, mask: starting_vectors(
+                    None, missing, self.basis.npwx, kinetic, mask, atomic.dtype
+                )
+            )(self.kinetic, self.basis.planewaves.mask)
+            atomic = jnp.concatenate([atomic, extra], axis=1)
+
+        _, vectors = _rotate_all(hamiltonian, atomic, nbnd)
+        return vectors
+
     def diagonalize(self, hamiltonian: Hamiltonian, nbnd: int, psi0=None, ethr=None):
         """Solve at every k-point. Returns ``(eigenvalues, wavefunctions)``.
 
@@ -338,6 +379,9 @@ def run_scf(
         # if the density turns out to be better than the eigenvalues, the loose
         # starting ethr was a false economy and the iteration is redone.
         floor = ethr * max(1.0, calculation.nelec)
+        if wavefunctions is None:
+            wavefunctions = calculation.starting_wavefunctions(hamiltonian, nbnd)
+
         for attempt in range(2):
             eigenvalues, wavefunctions = calculation.diagonalize(
                 hamiltonian, nbnd, wavefunctions, ethr

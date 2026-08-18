@@ -48,12 +48,13 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-from jax.scipy.linalg import solve_triangular
 
 from pypresso.hamiltonian.operator import Hamiltonian
+from pypresso.solvers.subspace import generalised_eigh
 
 __all__ = ["davidson_eigensolver", "davidson_eigensolver_all", "DAVID_NDIM",
-           "MAX_ITERATIONS", "ETHR", "ETHR_MIN", "RESIDUAL_THRESHOLD"]
+           "MAX_ITERATIONS", "ETHR", "ETHR_MIN", "RESIDUAL_THRESHOLD",
+           "starting_vectors"]
 
 #: QE's ``diago_david_ndim``: the subspace may grow to this many times ``nbnd``
 #: before it is collapsed back onto the current eigenvector estimates.
@@ -94,23 +95,6 @@ ETHR_MIN = 1.0e-13
 #: density, and demanding more than that of the eigenvalues is exactly the waste
 #: this schedule exists to remove.
 RESIDUAL_THRESHOLD = None
-
-
-def _generalised_eigh(h, s):
-    """Lowest eigenpairs of ``H v = e S v`` for Hermitian ``H`` and positive ``S``.
-
-    QE's ``cdiaghg``: reduce to a standard problem through the Cholesky factor
-    of the overlap. Writing ``S = L L^H``, the substitution ``v = L^-H u`` gives
-    ``(L^-1 H L^-H) u = e u``, which is Hermitian, and the eigenvectors come back
-    with one triangular solve.
-    """
-    factor = jnp.linalg.cholesky(s)
-    reduced = solve_triangular(factor, h, lower=True)
-    reduced = solve_triangular(factor, reduced.conj().T, lower=True).conj().T
-    reduced = 0.5 * (reduced + reduced.conj().T)
-
-    values, vectors = jnp.linalg.eigh(reduced)
-    return values, solve_triangular(factor.conj().T, vectors, lower=False)
 
 
 def _precondition(residual, diagonal, energies):
@@ -161,7 +145,7 @@ def davidson_eigensolver(
     diagonal = hamiltonian.diagonal(ik)
     dtype = hamiltonian.projectors.vkb.dtype
 
-    start = _starting_vectors(psi0, nbnd, npwx, kinetic, mask, dtype)
+    start = starting_vectors(psi0, nbnd, npwx, kinetic, mask, dtype)
 
     # Inactive subspace directions are given this eigenvalue, which has to sit
     # above anything physical: the diagonal bounds the spectrum from above well
@@ -197,7 +181,7 @@ def davidson_eigensolver(
         hc = 0.5 * (hc + hc.conj().T)
         sc = 0.5 * (sc + sc.conj().T)
 
-        values, vectors = _generalised_eigh(hc, sc)
+        values, vectors = generalised_eigh(hc, sc)
         energies = values[:nbnd].real
         coefficients = vectors[:, :nbnd]  # (nvecx, nbnd)
 
@@ -254,7 +238,7 @@ def davidson_eigensolver(
     return energies, jnp.where(mask, evc, 0.0)
 
 
-def _starting_vectors(psi0, nbnd, npwx, kinetic, mask, dtype):
+def starting_vectors(psi0, nbnd, npwx, kinetic, mask, dtype):
     """The trial vectors: the caller's, or QE's random guess.
 
     ``wfcinit``'s ``starting_wfc = 'random'`` draws random coefficients damped by

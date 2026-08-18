@@ -36,6 +36,7 @@ __all__ = [
     "atomic_charge_of_g",
     "core_charge_of_g",
     "projector_form_factors",
+    "atomic_form_factors",
     "CHUNK",
 ]
 
@@ -190,6 +191,34 @@ def projector_form_factors(pseudo: Pseudopotential, q, omega: float) -> jnp.ndar
             q,
         ))
 
+    if not rows:
+        return jnp.zeros((0,) + q.shape)
+    return jnp.stack(rows, axis=0)
+
+
+def atomic_form_factors(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
+    """Radial parts of the pseudo-atomic orbitals, shaped ``(nwfc, nq)``.
+
+    ``upflib/atwfc_mod.f90``. ``PP_CHI`` is tabulated as ``r chi(r)``, exactly as
+    ``PP_BETA`` is, so this is the same integral as
+    :func:`projector_form_factors` with the same prefactor -- the difference is
+    the mesh it runs over (QE's 10-bohr truncation rather than each projector's
+    own cutoff) and that orbitals with negative occupation are skipped, as QE
+    skips them.
+    """
+    prefactor = FPI / np.sqrt(omega)
+    q = jnp.atleast_1d(jnp.asarray(q))
+    r, weights, _ = _truncated(pseudo)
+
+    rows = [
+        _chunked(
+            lambda qq, chi=jnp.asarray(orbital.chi[: r.shape[0]]), l=orbital.l:
+                _beta_kernel(qq, r, weights, chi, prefactor, l),
+            q,
+        )
+        for orbital in pseudo.orbitals
+        if orbital.occupation >= 0.0
+    ]
     if not rows:
         return jnp.zeros((0,) + q.shape)
     return jnp.stack(rows, axis=0)
