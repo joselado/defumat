@@ -9,17 +9,19 @@ Fortran QE 7.5 release is vendored here **as reference material only** — it is
 understand algorithms and to validate numerical results, never modified or compiled into
 the deliverable.
 
-No Python code exists yet. The first thing written should establish the package layout
-below.
+**Status: P0 is done** (scaffolding, precision policy, units, and the QE reference parser;
+commit `c5aad16`). `PLAN.md` §3 tracks the phases — read it before writing code. P1 (input
+parser, `ibrav` lattices, k-point grids) is next.
 
 ## Layout
 
 - `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/` — QE 7.5 Fortran sources. **Read-only.**
 - `quantum_espresso/Doc-QE-7.5/Doc-7.5/` — input-file documentation (`INPUT_PW.txt` is the
   authoritative spec for the `pw.x` input namelists/cards) and theory PDFs.
-- `pypresso/` — the Python package (to be created at repo root, alongside
-  `quantum_espresso/`).
-- Not a git repository yet.
+- `pypresso/` — the Python package. `tests/` alongside it; `tests/data/pseudo/` holds the
+  committed UPF files (QE's test-suite downloads rather than ships them).
+- Git repository, with `quantum_espresso/` gitignored — 285 MB of vendored reference does
+  not belong in history. Tests that need it skip cleanly when it is absent.
 - `/u/40/ladovj1/unix/Documents/...` is a symlink to `/u/40/ladovj1/data/Documents/...`;
   both working directories are the same files.
 
@@ -129,11 +131,17 @@ Tolerances per quantity are listed in `PLAN.md`.
 
 ## Environment
 
-`python3` is anaconda3 at `/u/40/ladovj1/unix/apps/anaconda3/bin/python3`, with JAX 0.11.0
-and NumPy 2.4.6 already installed. No build, lint, or test commands exist yet; add them
-here when the package gets a `pyproject.toml`. Development is on CPU; the JAX paths must
-run unchanged on GPU, so correctness is established in float64 on CPU and performance work
-is a later, separate phase.
+Dependencies live in the **base anaconda env** (`/u/40/ladovj1/unix/apps/anaconda3`):
+JAX 0.11.0, NumPy 2.4.6, SciPy 1.18, Numba 0.65, equinox 0.13.8 (verified working with this
+JAX under x64). Development is CPU-only here; the JAX paths must run unchanged on GPU, so
+correctness is established in float64 on CPU and performance work is a later, separate phase.
+
+```
+python3 -m pytest                      # whole suite
+python3 -m pytest -m unit              # fast checks only (markers: unit, regression, slow)
+python3 -m pytest tests/unit/test_qeref.py::test_scf_silicon   # a single test
+python3 -m pypresso.cli inspect <qe-output>   # summarise what the parser reads
+```
 
 ## JAX rules
 
