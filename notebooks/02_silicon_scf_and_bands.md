@@ -195,14 +195,10 @@ print(f"\nconverged: {result.converged} in {result.iterations} iterations")
 
 
       iteration   2   E =     -15.79468567 Ry   dE = 1.78e-02   |drho| = 6.45e-03
-
-
       iteration   3   E =     -15.79449745 Ry   dE = 1.88e-04   |drho| = 7.17e-04
 
 
       iteration   4   E =     -15.79449591 Ry   dE = 1.54e-06   |drho| = 2.80e-05
-
-
       iteration   5   E =     -15.79449594 Ry   dE = 2.71e-08   |drho| = 1.70e-06
 
 
@@ -391,9 +387,13 @@ for band in range(ours.shape[1]):
 
 ax.axhline(0, color="k", lw=0.8, ls=":")
 # The path vertices, at every 5th point by construction of the K_POINTS card.
-for vertex, label in zip(x[::5], [r"$\Gamma$", "X", "K", "L", r"$\Gamma$"]):
+# The third one is (1, 1/4, 1/4) in units of 2*pi/a, which is U rather than K --
+# they carry identical bands, which is why the path is usually written X-U|K,
+# but U is the point actually being sampled here.
+labels = [r"$\Gamma$", "X", "U", "L", r"$\Gamma$"]
+for vertex in x[::5]:
     ax.axvline(vertex, color="0.7", lw=0.8)
-ax.set_xticks(x[::5]); ax.set_xticklabels([r"$\Gamma$", "X", "K", "L", r"$\Gamma$"])
+ax.set_xticks(x[::5]); ax.set_xticklabels(labels)
 ax.set_ylabel("E - E$_{\\rm VBM}$  [eV]")
 ax.set_title("Silicon band structure, LDA")
 ax.legend(loc="upper right"); ax.grid(alpha=0.25, axis="y")
@@ -435,7 +435,7 @@ print("  * almost nothing is jitted yet, so the iteration dispatches its operati
 print("    one at a time.")
 ```
 
-    pypresso SCF (warm): 1.48 s
+    pypresso SCF (warm): 1.33 s
     Quantum ESPRESSO    : 0.15 s total, of which 0.02 s in 'electrons'
                           (reported in the reference output; a 2017 machine)
     
