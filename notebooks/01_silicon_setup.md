@@ -166,6 +166,8 @@ print("ecutrho         = %.1f Ry   (defaulted to 4 * ecutwfc)" % system.ecutrho)
     Cell(ibrav=2 [cubic F (fcc)], alat=10.200000 bohr, volume=265.3020)
     
     lattice vectors in units of alat (rows a1, a2, a3):
+
+
     [[-0.5  0.   0.5]
      [ 0.   0.5  0.5]
      [-0.5  0.5  0. ]]
@@ -251,6 +253,8 @@ print("nearest-neighbour distance = %.4f bohr  (sqrt(3)/4 * a = %.4f)"
     [[ 0.    0.    0.  ]
      [-0.25  0.75 -0.25]]
     
+
+
     nearest-neighbour distance = 4.4167 bohr  (sqrt(3)/4 * a = 4.4167)
 
 
@@ -280,8 +284,6 @@ print(np.asarray(kpoints.cartesian(cell)))
     k-points (cartesian, units 2*pi/alat):
     [[0.25 0.25 0.25]
      [0.25 0.25 0.75]]
-
-
     weights: [0.5 1.5]  sum = 2.0
     
     the same points in crystal coordinates:

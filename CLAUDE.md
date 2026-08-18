@@ -13,9 +13,11 @@ the deliverable.
 partial. A silicon SCF reproduces QE's total energy to **1.1e-8 Ry** term by term, its
 band structure to **0.0002 eV**, and metals with every smearing to ~2.5e-8 Ry.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
-read it before writing code. **Outstanding:** a Davidson eigensolver (the current one is
-dense and `O(npw^3)`), k-point reduction to the irreducible wedge, DOS (P8), spin (P9),
-and all of the performance work (P10) — see `PERFORMANCE.md`.
+read it before writing code. P4 is now complete: a block Davidson eigensolver behind a
+name registry, with the dense solver kept as its reference. A first pass of P10 has been
+done and puts pypresso within **3.5x of serial Quantum ESPRESSO per SCF iteration** on the
+same machine — see `PERFORMANCE.md`. **Outstanding:** k-point reduction to the irreducible
+wedge, DOS (P8), spin (P9), and the rest of P10.
 
 ## Layout
 
@@ -70,12 +72,29 @@ plain editor or a diff — regenerated together with the notebook by `tools/expo
 
 ## Performance
 
-`PERFORMANCE.md` is a running log: timings, where they go, and the optimisation
-backlog. **Add a measurement to it whenever a feature lands or a hot spot moves** —
-P10 is meant to start from data, not guesses. `tools/benchmark.py <input>` produces
-the breakdown. Nothing is optimised yet, and the file says so explicitly, including
-the two known deliberate costs (the dense eigensolver, and form factors computed
-rather than interpolated so they stay differentiable).
+**The measurement is single-core pypresso against single-core Quantum ESPRESSO on the
+same machine and the same input.** That comparison is the starting point of any
+performance discussion, not a summary of one:
+
+```bash
+python3 tools/compare_qe.py benchmarks/si-1k.in --repeats 5
+```
+
+It needs `pw.x` built serially once (`./configure --disable-parallel --disable-openmp &&
+make -j pw` inside the vendored tree; the binary is gitignored along with the rest of it).
+The tool pins both codes to one core — JAX otherwise uses every core and the comparison
+flatters it by the core count — and reads QE's own timing report, so the numbers on the
+QE side are QE's, not a stopwatch around it.
+
+The benchmark inputs live in `benchmarks/`, and are **single k-point** on purpose: both
+codes parallelise over k, so a multi-k comparison measures batching rather than the cost
+of the physics. `si-1k.in` is the test suite's silicon at `ecutwfc = 12`; `si-1k-ecut40.in`
+is the same cell at a production cutoff, where scaling starts to show.
+
+`PERFORMANCE.md` is the running log: the comparison, where the time goes, what each change
+was worth, and the backlog. **Add a measurement to it whenever a feature lands or a hot
+spot moves** — including the QE ratio, not only an internal timing. `tools/benchmark.py
+<input>` gives the component breakdown when a ratio needs explaining.
 
 ## Non-negotiable conventions
 
@@ -112,10 +131,10 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 
 | Subsystem | Reference | Notes for the port |
 |---|---|---|
-| Top-level driver | `PW/src/run_pwscf.f90` → `init_run.f90` → `electrons.f90` | `electrons_scf` is the SCF loop; ignore the EXX/RISM/OSCDFT branches |
+| Top-level driver | `PW/src/run_pwscf.f90` → `init_run.f90` → `electrons.f90` | `electrons_scf` is the SCF loop; ignore the EXX/RISM/OSCDFT branches. Its `ethr` schedule and `dr2` convergence test are transcribed — `conv_thr` means the same thing here as in a `pw.x` input |
 | SCF iteration body | `c_bands.f90`, `sum_band.f90`, `v_of_rho.f90`, `mix_rho.f90` | diagonalize → build density → build potential → Broyden mix |
 | Hamiltonian application | `h_psi.f90`, `vloc_psi_*.f90`, `add_vuspsi.f90`, `g2_kin.f90`, `s_psi.f90` | the hot path; the natural unit of `jit`/`vmap`; `k` must stay a traced argument, see `PLAN.md` §6 |
-| Iterative diagonalization | `KS_Solvers/Davidson/`, `KS_Solvers/CG/`, `KS_Solvers/PPCG_legacy/`, `KS_Solvers/RMM/` | Davidson is QE's default |
+| Iterative diagonalization | `KS_Solvers/Davidson/`, `KS_Solvers/CG/`, `KS_Solvers/PPCG_legacy/`, `KS_Solvers/RMM/` | Davidson is QE's default and is ported (`solvers/davidson.py`); note `c_bands.f90` re-enters `cegterg` up to 5 times, so QE's real budget is 100 steps |
 | FFT / G-vector grids | `FFTXlib/`, `PW/src/data_structure.f90`, `Modules/recvec*.f90` | replace with `jax.numpy.fft`; the sphere-to-box G-vector mapping still has to be reproduced |
 | Pseudopotentials | `upflib/` (`read_upf_new.f90`, `pseudo_types.f90`, `init_us_2.f90`, `sph_bes.f90`, `ylmr2.f90`) | UPF v2 XML parsing + radial→G-space transforms |
 | XC functionals | `XClib/` | must be reimplemented in pure JAX — a `libxc` binding is neither differentiable nor GPU-capable (see `PLAN.md` §6) |
@@ -130,6 +149,14 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 Fortran conventions that carry over: arrays are column-major and 1-indexed, so index order
 must be reversed when transcribing loops; internal units are Rydberg atomic units (energy
 in Ry, length in bohr) throughout `PW/`.
+
+## Reading beyond the source
+
+The vendored Fortran is the primary reference and transcription from it is the method.
+Where an algorithm's *reasoning* is not in the source — why a preconditioner has the form
+it does, what a method's convergence properties are, what the alternatives are — **arXiv
+is a legitimate thing to consult during implementation.** Cite what was used in the module
+docstring, the same way the Fortran file it came from is cited.
 
 ## Validation against reference QE
 

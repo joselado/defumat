@@ -191,20 +191,18 @@ result = run_scf(system, pseudos, conv_thr=1e-10, verbose=True)
 print(f"\nconverged: {result.converged} in {result.iterations} iterations")
 ```
 
-      iteration   1   E =     -15.81246806 Ry   dE = -   |drho| = 3.64e-02
+      iteration   1   ethr was too large; diagonalising again at 7.94e-04
 
 
-      iteration   2   E =     -15.79468567 Ry   dE = 1.78e-02   |drho| = 6.45e-03
-      iteration   3   E =     -15.79449745 Ry   dE = 1.88e-04   |drho| = 7.17e-04
-
-
-      iteration   4   E =     -15.79449591 Ry   dE = 1.54e-06   |drho| = 2.80e-05
-      iteration   5   E =     -15.79449594 Ry   dE = 2.71e-08   |drho| = 1.70e-06
-
-
-      iteration   6   E =     -15.79449594 Ry   dE = 5.96e-12   |drho| = 5.73e-07
+      iteration   1   E =     -15.81218464 Ry   accuracy = 6.45e-02   ethr = 7.94e-04   |drho| = 3.62e-02
+      iteration   2   E =     -15.79425671 Ry   accuracy = 2.25e-03   ethr = 8.06e-04   |drho| = 7.38e-03
+      iteration   3   E =     -15.79451159 Ry   accuracy = 6.47e-05   ethr = 2.81e-05   |drho| = 9.28e-04
+      iteration   4   E =     -15.79449691 Ry   accuracy = 4.13e-06   ethr = 8.09e-07   |drho| = 2.47e-04
+      iteration   5   E =     -15.79449595 Ry   accuracy = 4.77e-08   ethr = 5.16e-08   |drho| = 3.36e-05
+      iteration   6   E =     -15.79449594 Ry   accuracy = 3.83e-10   ethr = 5.96e-10   |drho| = 1.91e-06
+      iteration   7   E =     -15.79449594 Ry   accuracy = 1.29e-11   ethr = 4.79e-12   |drho| = 6.37e-07
     
-    converged: True in 6 iterations
+    converged: True in 7 iterations
 
 
 
@@ -261,9 +259,9 @@ print(f"\nhighest occupied level: {result.homo * 13.605693122994017:.4f} eV"
 
     term [Ry]                  pypresso   Quantum ESPRESSO   difference
     --------------------------------------------------------------------
-    one-electron             4.83372322         4.83378641     -6.3e-05
-    hartree                  1.08438823         1.08429090      9.7e-05
-    xc                      -4.81284881        -4.81281466     -3.4e-05
+    one-electron             4.83372264         4.83378641     -6.4e-05
+    hartree                  1.08438905         1.08429090      9.8e-05
+    xc                      -4.81284905        -4.81281466     -3.4e-05
     ewald                  -16.89975858       -16.89975858      2.8e-09
     --------------------------------------------------------------------
     TOTAL                  -15.79449594       -15.79449593     -1.1e-08
@@ -435,7 +433,7 @@ print("  * almost nothing is jitted yet, so the iteration dispatches its operati
 print("    one at a time.")
 ```
 
-    pypresso SCF (warm): 1.33 s
+    pypresso SCF (warm): 0.17 s
     Quantum ESPRESSO    : 0.15 s total, of which 0.02 s in 'electrons'
                           (reported in the reference output; a 2017 machine)
     

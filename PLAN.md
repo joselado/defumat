@@ -223,11 +223,27 @@ limit of the `erf`-split integrand used for `q > 0`. QE's source says so in a co
 Getting it wrong shifts every eigenvalue by a constant (2.5 eV for silicon) while the
 calculation still converges beautifully.
 
-**P4 — Hamiltonian and diagonalization. ✅ DONE (dense solver).**
+**P4 — Hamiltonian and diagonalization. ✅ DONE.**
 `hamiltonian/operator.py` (kinetic + local via FFT + nonlocal, plus `apply_s`),
-`solvers/dense.py`. *Check met:* eigenvalues match QE to <1e-3 eV wherever they are
-printed. **Davidson is still outstanding** — the dense solver is `O(npw^3)` and is
-correct-by-construction ground truth, not a production algorithm. See `PERFORMANCE.md`.
+`solvers/` — a name registry over `dense.py` and `davidson.py`, the latter transcribed
+from `cegterg.f90` and the default. *Check met:* eigenvalues match QE to <1e-3 eV wherever
+they are printed, and Davidson matches the dense solver to 1e-12 Ry. The dense solver
+stays as correct-by-construction ground truth; `Hamiltonian` likewise keeps two matrix
+builds, one from matrix elements and one from applying the operator, and the suite asserts
+they agree on the single-k and the padded multi-k silicon cases. The fast build is used
+only where the density grid resolves every `G - G'` (`ecutrho >= 4 ecutwfc`) and the full
+sphere is stored; gamma-only falls back to applying the operator, since a difference of
+two stored half-sphere G's need not be stored at all.
+
+**The traps:** (1) a **converged root must stop being expanded** — its residual is ~1e-14,
+and normalising that to unit length turns round-off into a basis vector, making the
+overlap matrix singular so the *other* roots stop converging. (2) The subspace must grow
+by the number of **unconverged** roots, not by the block size, or the periodic collapse
+discards a stubborn root's search direction first. `cegterg` avoids both by compacting
+unconverged roots to the front; under `jit` the same compaction is a stable `argsort`.
+Both traps showed the identical symptom — silicon's highest band a few meV off, nothing
+else wrong. (3) `c_bands.f90` re-enters `cegterg` up to five times, so QE's real iteration
+budget is `maxter × ntry = 100`, not the 20 the solver itself declares.
 
 **P5 — Full SCF. ✅ DONE.** `scf/` — `v_of_rho` (Hartree + LDA), `sum_band`,
 occupations for every QE smearing plus `from_input`, Anderson mixing, Ewald, and the
@@ -269,10 +285,24 @@ count.
 **P9 — Spin.** LSDA (`nspin=2`), collinear magnetization. Non-collinear/SOC stays out.
 *Check:* `pw_lsda` benchmarks.
 
-**P10 — Performance and parallelism.** Profile, widen `jit` regions, `vmap` over k-points
-and bands, buffer donation, k-axis sharding across CPU-cores-as-devices and across GPUs,
-Numba `prange` on the setup hot spots. *Check:* a documented timing and scaling table; no
-numerical drift from P5–P8 results.
+**P10 — Performance and parallelism. 🔶 FIRST PASS DONE.** The metric is single-core
+pypresso against single-core QE on the same machine (`tools/compare_qe.py`, inputs in
+`benchmarks/`), and it now stands at **~3.5x per SCF iteration**, from 53x. Done: `vmap`
+over k-points, the iteration body compiled in three units, the Fermi bisection moved
+on-device, one host sync per iteration, the Ewald real-space sum vectorised, setup's
+compilation count cut by wrapping whole functions in `jit`, and QE's adaptive `ethr`
+schedule (which needed `dr2`/`rho_ddot`, so `conv_thr` now means what it means in a `pw.x`
+input). Still to do: applying `H` only to unconverged bands, a persistent compilation
+cache, buffer donation, k-axis sharding across CPU-cores-as-devices and across GPUs,
+Numba `prange` on the setup hot spots. *Check met:*
+`PERFORMANCE.md` carries the timing and scaling table; no numerical drift — the full suite
+passes and the two eigensolvers agree to 2e-13 Ry on the total energy.
+
+**The trap:** on these array sizes the cost is **compilation, not arithmetic**. Every JAX
+operation dispatched outside a `jit` is compiled separately at ~50 ms, so setup spent 10 s
+compiling 81 kernels to do 0.2 s of work. Optimising here means reducing the number of
+compiled units, not the number of flops — which is the opposite of the instinct the
+Fortran encourages.
 
 **P11 — Higher-order autodiff quantities (after the first milestone).** Forces are already
 validated at P5; here: stress by differentiation w.r.t. strain, implicit differentiation of
