@@ -4,10 +4,10 @@ Run from the repository root:
 
     python3 tools/benchmark.py quantum_espresso/.../pw_scf/scf.in
 
-The QE reference outputs carry QE's own timing report, so the numbers here can
-be put beside them -- with the caveat that the references were produced on a
-different machine in a different year. What the breakdown is really for is
-finding *our* hot spots, which is machine-independent.
+This is the *diagnosis* tool: it says where pypresso's own time goes. The
+measurement that matters is ``tools/compare_qe.py``, which runs the same input
+through Quantum ESPRESSO and through pypresso with both pinned to one core; come
+here when that comparison has produced a ratio in need of an explanation.
 """
 
 from __future__ import annotations
@@ -75,15 +75,24 @@ def benchmark(input_path: Path, pseudo_dir: Path):
 
     start = time.perf_counter()
     result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-8)
-    scf = time.perf_counter() - start
+    cold = time.perf_counter() - start
+
+    # Again, with every kernel compiled. The difference between the two is XLA,
+    # not physics, and reporting only the first would put a fixed startup cost
+    # into a number meant to describe the loop.
+    start = time.perf_counter()
+    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-8)
+    warm = time.perf_counter() - start
 
     print(f"  setup (basis, projectors, vloc, ewald, symmetry): {setup:8.3f} s")
     for label, elapsed in timer.records.items():
         print(f"  {label:<34} {elapsed:8.3f} s")
-    print(f"  full SCF ({result.iterations} iterations):          {scf:8.3f} s"
-          f"   -> {scf / result.iterations:.3f} s/iteration")
+    print(f"  full SCF ({result.iterations} iterations), cold: {cold:8.3f} s")
+    print(f"  full SCF ({result.iterations} iterations), warm: {warm:8.3f} s"
+          f"   -> {warm / result.iterations:.3f} s/iteration")
     print(f"  total energy {result.total_energy:.8f} Ry")
-    return {"setup": setup, "scf": scf, "iterations": result.iterations, **timer.records}
+    return {"setup": setup, "scf": warm, "scf_cold": cold,
+            "iterations": result.iterations, **timer.records}
 
 
 if __name__ == "__main__":

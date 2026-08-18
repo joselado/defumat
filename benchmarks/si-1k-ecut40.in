@@ -1,0 +1,32 @@
+! Silicon, two atoms, one k-point, at a production cutoff.
+!
+! The same cell as si-1k.in with ecutwfc raised from 12 Ry to 40 Ry, which takes
+! the basis from 180 plane waves to about a thousand. 12 Ry is what QE's test
+! suite uses and is far too small to say anything about how either code scales:
+! at that size both are dominated by fixed overheads. This case is where the
+! choice of eigensolver starts to show, since a direct diagonalisation costs
+! O(npw^3) and an iterative one does not.
+!
+! conv_thr is tightened well past what either code needs so that both run to the
+! same fixed point: the comparison then reports a cost per iteration that means
+! the same thing on both sides, and the two total energies agreeing to 1e-8 Ry
+! doubles as a correctness check on every optimisation.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=2, celldm(1) =10.20,
+    nat=2, ntyp=1,
+    ecutwfc=40.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS
+  1
+   0.250000  0.250000  0.250000   1.00
