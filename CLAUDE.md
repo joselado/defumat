@@ -63,7 +63,9 @@ test suite. **Every new feature adds a notebook or extends an existing one; a ph
 finished until its notebook exists.** Demonstrate on the two-atom silicon cell from
 `test-suite/pw_scf/scf.in` wherever possible, compare against the committed QE benchmark
 whenever the reference contains the quantity, and commit the notebook executed so it reads
-without being run. `notebooks/README.md` holds the index and the full conventions.
+without being run. Each notebook also has a `.md` export committed beside it — raw `.ipynb` is unreadable in a
+plain editor or a diff — regenerated together with the notebook by `tools/export_notebooks.sh`.
+`notebooks/README.md` holds the index and the full conventions.
 
 ## Non-negotiable conventions
 
@@ -153,7 +155,7 @@ python3 -m pytest                      # whole suite
 python3 -m pytest -m unit              # fast checks only (markers: unit, regression, slow)
 python3 -m pytest tests/unit/test_qeref.py::test_scf_silicon   # a single test
 python3 -m pypresso.cli inspect <qe-output>   # summarise what the parser reads
-jupyter nbconvert --to notebook --execute --inplace notebooks/01_silicon_setup.ipynb
+tools/export_notebooks.sh                     # re-execute notebooks + refresh .md exports
 ```
 
 ## JAX rules

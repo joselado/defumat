@@ -21,6 +21,10 @@ that way.
   being computed, the notebook ends with a table putting the two side by side. Numbers
   without a reference are labelled as such.
 - **Committed with their outputs**, so they read on GitHub without being run.
+- **Each notebook has a `.md` export beside it**, regenerated whenever the notebook is.
+  Raw `.ipynb` is JSON and unreadable in a plain editor or a diff; the markdown version is
+  what to read (and review) when working on the project from anywhere that is not a
+  notebook viewer. The `.ipynb` stays the source of truth — edit that, then re-export.
 
 ## Running them
 
@@ -33,8 +37,15 @@ They need the vendored Quantum ESPRESSO tree at `../quantum_espresso/` for the i
 files and reference outputs. That tree is not in the repository (it is 285 MB); the paths
 at the top of each notebook say what it expects.
 
-To re-execute one after a code change:
+After changing code the notebooks depend on, re-execute them and refresh the exports:
+
+```bash
+tools/export_notebooks.sh          # all of them
+```
+
+or for one notebook:
 
 ```bash
 jupyter nbconvert --to notebook --execute --inplace notebooks/01_silicon_setup.ipynb
+jupyter nbconvert --to markdown --output-dir notebooks notebooks/01_silicon_setup.ipynb
 ```
