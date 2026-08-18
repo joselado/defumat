@@ -163,7 +163,10 @@ def _maps_structure(rotated, positions, types) -> bool:
 
 
 def symmetrize_density(
-    rho_g: jnp.ndarray, gvectors: GVectors, symmetries: Symmetries
+    rho_g: jnp.ndarray,
+    gvectors: GVectors,
+    symmetries: Symmetries,
+    maps=None,
 ) -> jnp.ndarray:
     """Average the density over the space group, in G space.
 
@@ -177,18 +180,20 @@ def symmetrize_density(
     if symmetries.nsym <= 1:
         return rho_g
 
-    permutations, phases = symmetry_maps(gvectors, symmetries)
-    total = jnp.zeros_like(rho_g)
-    for permutation, phase in zip(permutations, phases):
-        total = total + phase * rho_g[permutation]
-    return total / symmetries.nsym
+    permutations, phases = maps if maps is not None else symmetry_maps(gvectors, symmetries)
+    # One batched gather rather than a Python loop over operations: with 48
+    # operations the loop dispatches ~150 tiny kernels per call, which costs
+    # far more than the arithmetic on a 1459-element array.
+    return jnp.mean(phases * rho_g[permutations], axis=0)
 
 
 def symmetry_maps(gvectors: GVectors, symmetries: Symmetries):
     """For each operation, the G-index permutation and the translation phases.
 
-    Built once with NumPy: it is integer bookkeeping over a fixed G list, the
-    definition of setup work.
+    Returns ``(nsym, ngm)`` arrays. Built once with NumPy -- integer bookkeeping
+    over a fixed G list, the definition of setup work. Callers that symmetrise
+    repeatedly should hold on to the result rather than rebuilding it, which is
+    what :class:`pypresso.scf.driver.Calculation` does.
     """
     miller = np.asarray(gvectors.miller)
     lookup = {tuple(m): index for index, m in enumerate(miller)}
@@ -203,6 +208,6 @@ def symmetry_maps(gvectors: GVectors, symmetries: Symmetries):
                 "a symmetry operation maps a G-vector outside the cutoff sphere; "
                 "the operation is not a symmetry of the reciprocal lattice"
             ) from error
-        permutations.append(jnp.asarray(permutation))
-        phases.append(jnp.asarray(np.exp(-2j * np.pi * (miller @ translation))))
-    return permutations, phases
+        permutations.append(permutation)
+        phases.append(np.exp(-2j * np.pi * (miller @ translation)))
+    return jnp.asarray(np.array(permutations)), jnp.asarray(np.array(phases))

@@ -67,6 +67,15 @@ without being run. Each notebook also has a `.md` export committed beside it —
 plain editor or a diff — regenerated together with the notebook by `tools/export_notebooks.sh`.
 `notebooks/README.md` holds the index and the full conventions.
 
+## Performance
+
+`PERFORMANCE.md` is a running log: timings, where they go, and the optimisation
+backlog. **Add a measurement to it whenever a feature lands or a hot spot moves** —
+P10 is meant to start from data, not guesses. `tools/benchmark.py <input>` produces
+the breakdown. Nothing is optimised yet, and the file says so explicitly, including
+the two known deliberate costs (the dense eigensolver, and form factors computed
+rather than interpolated so they stay differentiable).
+
 ## Non-negotiable conventions
 
 - Pure Python. JAX for anything numerical that runs inside the SCF/diagonalization loop;

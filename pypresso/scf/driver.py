@@ -45,7 +45,7 @@ from pypresso.scf.occupations import (
 from pypresso.scf.potential import v_of_rho
 from pypresso.solvers.dense import dense_eigensolver
 from pypresso.system.builder import System
-from pypresso.system.symmetry import find_symmetries, symmetrize_density
+from pypresso.system.symmetry import find_symmetries, symmetry_maps, symmetrize_density
 from pypresso.units import RY_TO_EV
 
 __all__ = ["SCFResult", "Calculation", "run_scf", "default_nbnd"]
@@ -122,6 +122,9 @@ class Calculation:
         # degenerate levels split by tens of meV and the energy is wrong in the
         # third decimal. See pypresso.system.symmetry.
         self.symmetries = find_symmetries(system.cell, system.structure)
+        self._symmetry_maps = (
+            symmetry_maps(gvectors, self.symmetries) if self.symmetries.nsym > 1 else None
+        )
 
     def symmetrize(self, rho_r: jnp.ndarray) -> jnp.ndarray:
         """Impose the crystal symmetry on a real-space density."""
@@ -129,7 +132,7 @@ class Calculation:
             return rho_r
         gvectors = self.basis.dense
         rho_g = r_to_g(rho_r, gvectors.fft_index)
-        rho_g = symmetrize_density(rho_g, gvectors, self.symmetries)
+        rho_g = symmetrize_density(rho_g, gvectors, self.symmetries, self._symmetry_maps)
         return jnp.real(g_to_r(rho_g, gvectors.fft_index, gvectors.grid))
 
     def hamiltonian(self, v_scf: jnp.ndarray) -> Hamiltonian:
