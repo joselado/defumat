@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+# QE reference tree: vendored, large, and read-only. Kept out of the repo.
+quantum_espresso/
+# scratch run outputs
+out/
+*.save/

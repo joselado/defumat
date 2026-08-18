@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pypresso"
+version = "0.0.1"
+description = "Plane-wave DFT in Python and JAX, validated against Quantum ESPRESSO"
+requires-python = ">=3.10"
+dependencies = [
+    "jax>=0.4.30",
+    "equinox>=0.11",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "numba>=0.59",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.4"]
+
+[project.scripts]
+pypresso = "pypresso.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pypresso"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: fast, self-contained checks (no QE reference run needed)",
+    "regression: compares a full pypresso run against a QE reference output",
+    "slow: takes more than a few seconds",
+    "float32: also exercised under the single-precision policy",
+]
+
+[tool.ruff]
+line-length = 100

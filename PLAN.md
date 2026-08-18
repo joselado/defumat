@@ -1,0 +1,383 @@
+# pypresso — architecture and implementation plan
+
+Target for the first milestone: **SCF, band structure, DOS**, in pure Python with JAX
+(Numba where a host-side loop is the better tool). Everything else in Quantum ESPRESSO is
+out of scope for now but the code is expected to grow toward it, so the structure below is
+chosen to make additions local rather than invasive.
+
+JAX is chosen for two reasons that constrain the design throughout: **autodifferentiation**,
+so that response properties (forces, stress, polarization, second harmonic generation) come
+from differentiating the code rather than from hand-derived expressions (§6), and **GPU
+execution** of the same code (§5). Good performance is a requirement; it may be optimized
+later, but not designed out.
+
+Reference Fortran source and its per-subsystem map: see `CLAUDE.md`.
+
+---
+
+## 1. Design rules
+
+These exist because QE's own structure is what makes it hard to extend, and because the
+JAX/GPU target constrains the code shape. They apply to every module.
+
+**R1 — No mutable global state; objects with methods are welcome.** QE keeps nearly
+everything in shared `MODULE` variables (`scf_mod`, `wvfct`, `uspp`, ...) — that is the
+thing not to copy. State is passed explicitly instead. But this is *not* a literal
+transcription of the Fortran: write it as idiomatic Python, with classes and bound methods
+wherever they make the code clearer (`ham.apply(psi, k)`, `pseudo.projectors(k)`,
+`density.symmetrize(sym)`, `Wavefunctions.from_random(...)`). The one hard constraint is
+that any object crossing a `jit`/`grad` boundary must be a **frozen, pytree-registered
+class**: methods and properties are free, mutation is not. Arrays are pytree children;
+shapes, flags, and functions are static metadata, because changing them should trigger a
+retrace.
+
+*Decided:* use **equinox** (`eqx.Module`) as the base class. It gives exactly this — frozen
+dataclass, automatic pytree registration, `eqx.field(static=True)` for metadata, methods and
+inheritance that behave normally — without the boilerplate of hand-rolling
+`register_dataclass` on every state object. It is a small, stable, JAX-native dependency.
+`eqx.filter_jit`/`filter_grad` also remove the usual friction of pytrees that hold both
+arrays and static config.
+
+**R2 — Setup and compute are separate worlds.**
+- *Setup* (host): parsing, lattice/symmetry analysis, k-point generation, G-vector
+  enumeration and sorting, radial→G pseudopotential tables. NumPy (or Numba where loops
+  dominate), dynamic shapes, runs once, allowed to be slow and imperative.
+- *Compute*: everything inside the SCF/diagonalization loop. JAX, static shapes, jittable,
+  no Python branching on traced values, no host sync except the one convergence check per
+  iteration.
+Setup produces immutable, fully-shaped arrays that compute consumes. Nothing flows back.
+
+**R3 — One-directional layering.** `io → system → basis → pseudo → xc → hamiltonian →
+solvers → scf → workflows`. A module never imports from a later layer. If it needs to, the
+abstraction is in the wrong place.
+
+**R4 — Pluggable pieces go behind a named registry.** XC functionals, density mixers,
+eigensolvers, pseudopotential families, smearing types, DOS integration schemes. Input-file
+strings (`'pbe'`, `'david'`, `'mp'`) map to implementations through a registry so adding a
+variant is a new file plus one registration line, never an edit to a growing `if/elif` in
+the driver.
+
+**R5 — Write the general interface even when the first implementation is trivial.**
+Concretely: `apply_s(psi) -> psi` exists from day one (identity for norm-conserving,
+real for ultrasoft/PAW later) and the eigensolver calls the generalized form; the
+`Density` object carries a spin axis of length 1 for `nspin=1`; `Hamiltonian` is built from
+a list of potential terms so DFT+U or external fields are an added term. Retrofitting any
+of these later means touching every call site.
+
+**R6 — Rydberg atomic units internally**, matching QE (energies in Ry, lengths in bohr,
+masses in Ry a.u.). Conversion happens only in `io/`. Every public function's docstring
+states the units of its arguments.
+
+**R7 — Padding and masking, not ragged arrays.** The number of plane waves varies per
+k-point. Allocate to `npwx = max_k(npw_k)` and carry a boolean mask, as QE does. Never
+branch on `npw_k` inside compute code — it would retrace per k-point and defeat batching.
+
+**R8 — Everything is validated against QE numerically, not by inspection.** See §4.
+
+---
+
+## 2. Package layout
+
+```
+pypresso/
+  __init__.py           # enables x64 before anything else; top-level API
+  config.py             # precision policy, device selection, runtime options
+  units.py              # constants + conversions (ref: Modules/constants.f90)
+  io/
+    pwin.py             # pw.x input: namelists + cards -> InputConfig
+    upf.py              # UPF v2 XML -> PseudoPotential
+    output.py           # human-readable log; JSON results; bands/DOS files
+    qeref.py            # parse QE reference outputs (test/validation side)
+  system/
+    cell.py             # ibrav/celldm -> lattice, reciprocal lattice, volume
+    structure.py        # species + positions + cell (the geometry pytree)
+    symmetry.py         # symmetry op detection, IBZ reduction, symmetrization
+    kpoints.py          # Monkhorst-Pack grids, band paths, weights
+  basis/
+    gvectors.py         # G enumeration/sorting, cutoff spheres, per-k index maps
+    fft.py              # sphere<->FFT-box gather/scatter, jnp.fft wrappers
+    wavefunctions.py    # padded (nspin, nk, nbnd, npwx) container + masks
+  pseudo/
+    radial.py           # radial grids, Simpson integration, spherical Bessel
+    harmonics.py        # real spherical harmonics Y_lm(G) and derivatives
+    local.py            # vloc(G), rho_atomic(G), core charge
+    projectors.py       # beta projectors vkb(k), D_ij coefficients
+    tables.py           # PseudoPotential dataclass + per-species G tables
+  xc/
+    registry.py         # name -> functional
+    lda.py, gga.py      # PZ/PW, PBE (libxc bridge optional, behind the registry)
+  hamiltonian/
+    terms.py            # kinetic, local, nonlocal as composable term objects
+    operator.py         # Hamiltonian pytree; apply_h / apply_s
+  solvers/
+    registry.py
+    davidson.py         # block Davidson (QE default)
+    cg.py               # later
+  scf/
+    density.py          # sum_band: occupied states -> rho(r), rho(G)
+    potential.py        # v_of_rho: Hartree + XC + local -> V(r)
+    occupations.py      # Fermi level, smearing (gaussian/MP/FD), fixed occ
+    mixing.py           # simple / Anderson / Broyden, behind the registry
+    energy.py           # total-energy decomposition matching QE's printout
+    ewald.py            # Ewald sum for the ion-ion term
+    driver.py           # the SCF loop
+  workflows/
+    scf.py, nscf.py, bands.py, dos.py
+  cli.py                # pypresso scf|bands|dos <input>
+tests/
+  unit/                 # analytic and self-consistency checks
+  regression/           # against QE reference outputs
+  data/
+```
+
+---
+
+## 3. Phases
+
+Each phase ends with a concrete, checkable number — no phase is "done" on the basis that
+the code runs.
+
+**P0 — Scaffolding. ✅ DONE.** Package skeleton, `pyproject.toml`, x64 enabled at import,
+`config.Precision` dtype policy, `units.py`, pytest with tolerance module and markers,
+`io/qeref.py`, `cli.py inspect`. *Check met:* 17 tests pass; the parser reads `pw_scf/scf.in`
+(SCF + stress), `scf-1.in` (bands), `scf-2.in` (nscf), `pw_metal/metal.in` (Fermi level,
+smearing) and `pw_lsda/lsda.in` (two spin channels), and the parsed energy terms sum to the
+parsed total energy. `units.py` is checked against `Modules/constants.f90` by parsing the
+Fortran, not by restating numbers.
+
+**P1 — Input and geometry.** `pw.x` input parser (namelists `&control &system &electrons`,
+cards `ATOMIC_SPECIES/POSITIONS`, `K_POINTS`, `CELL_PARAMETERS`), `ibrav` lattice
+generation, Monkhorst-Pack grids with time-reversal only (no crystal symmetry yet).
+*Check:* lattice vectors, cell volume, and the unreduced k-point list/weights match the QE
+output header for the `pw_scf` and `pw_lattice-ibrav` inputs.
+
+**P2 — Plane-wave basis.** G-vector enumeration and QE-compatible ordering, dense and smooth
+FFT grid dimensions, `npw_k` per k-point, sphere↔box mapping, FFT wrappers. Gamma-only
+storage deferred. *Check:* `ngm`, FFT grid dimensions, and `npw` per k-point equal QE's
+reported values exactly.
+
+**P3 — Pseudopotentials (norm-conserving first).** UPF v2 parser, radial integration,
+spherical Bessel transforms, `Y_lm`, `vloc(G)`, atomic `rho(G)`, `vkb(k)` projectors and
+`D_ij`. *Check:* `vloc(G)` and projector norms against values computed from the same UPF by
+QE; the superposition-of-atomic-charges density integrates to the right electron count.
+
+**P4 — Hamiltonian and diagonalization.** `apply_h` (kinetic + local via FFT + nonlocal),
+`apply_s` (identity), block Davidson. `k` is a traced argument throughout (D2). *Check:*
+for a potential frozen from a converged QE run, the eigenvalues at each k-point match QE's
+to ~1e-6 Ry; the residuals fall to the requested threshold; `d(eigenvalue)/dk` from
+`jax.grad` matches central finite differences.
+
+**P5 — Full SCF.** *(autodiff force check lands here, not at P11.)* `sum_band`, Hartree, LDA (PZ) then PBE (both pure JAX, `v_xc` from
+`grad` of the energy density), Ewald, occupations with smearing and with fixed occupations,
+density mixing, the total-energy decomposition. The driver exposes the SCF residual
+`R(rho, params) = 0` so implicit differentiation can be attached (D3), even if the
+`custom_vjp` itself lands later. Symmetry still off (compare against QE runs with
+`nosym=.true., noinv=.true.`).
+*Check:* total energy within 1e-6 Ry and each printed energy term (one-electron, Hartree,
+XC, Ewald, smearing) within 1e-6 Ry of the QE reference, for Si (`pw_scf`), an isolated
+atom (`pw_atom`), and a metal (`pw_metal`). **Plus the first real autodiff check:**
+`jax.grad` of the total energy w.r.t. atomic positions, compared against (a) central finite
+differences of our own energy and (b) QE's analytic forces. (a) proves the differentiable
+path is intact; (b) proves it is differentiating the *right* energy — QE's forces are
+Hellmann-Feynman + Pulay, derived independently, so agreement is a strong two-sided check.
+If this fails, a D1/D2 violation has crept in and is cheaper to find here than three phases
+later.
+
+**P6 — Symmetry.** Point/space group detection, IBZ k-point reduction, density
+symmetrization. *Check:* the symmetry operation count and the reduced k-list match QE, and
+the P5 energies are reproduced with symmetry on at lower cost.
+
+**P7 — Band structure.** NSCF from a fixed converged density, explicit k-path input,
+high-symmetry path helper, band output files. *Check:* eigenvalues along the path match a
+QE `calculation='bands'` run to ~1e-4 eV.
+
+**P8 — DOS.** Smearing DOS and the tetrahedron method, on top of an NSCF grid run.
+*Check:* against `dos.x` output on the same grid; the integrated DOS returns the electron
+count.
+
+**P9 — Spin.** LSDA (`nspin=2`), collinear magnetization. Non-collinear/SOC stays out.
+*Check:* `pw_lsda` benchmarks.
+
+**P10 — Performance and parallelism.** Profile, widen `jit` regions, `vmap` over k-points
+and bands, buffer donation, k-axis sharding across CPU-cores-as-devices and across GPUs,
+Numba `prange` on the setup hot spots. *Check:* a documented timing and scaling table; no
+numerical drift from P5–P8 results.
+
+**P11 — Higher-order autodiff quantities (after the first milestone).** Forces are already
+validated at P5; here: stress by differentiation w.r.t. strain, implicit differentiation of
+the SCF fixed point (D3), then polarization/dielectric response and second harmonic
+generation. *Check:* stress matches QE to 1e-4 Ry/bohr³, and every response quantity has a
+finite-difference test.
+
+Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
+`nosym` runs are fully testable — but it must land before any timing claims, as it changes
+the k-point count.
+
+---
+
+## 3a. Environment decisions (settled)
+
+- Dependencies are installed into the **base anaconda env** (`pip install equinox`);
+  equinox 0.13.8 is verified working with JAX 0.11.0 under x64.
+- The repo **is** a git repository now. `quantum_espresso/` is gitignored — 285 MB of
+  vendored reference does not belong in history — so any test touching it must skip
+  cleanly when it is absent (`tests/conftest.py` does this).
+- Pseudopotentials for the target tests are downloaded and **committed** under
+  `tests/data/pseudo/` (10 UPF files covering `pw_scf`, `pw_atom`, `pw_metal`, `pw_lsda`).
+
+---
+
+## 4. Validation strategy
+
+The primary test is **the same input run through QE and through pypresso**.
+
+- QE's `test-suite/` ships inputs *with committed reference outputs* — use those first
+  (`pw_scf/scf-*.in` plus `benchmark.out.git.inp=scf-*.in`), so no Fortran build is needed
+  for the common cases. `io/qeref.py` parses them.
+- Build QE only if a genuinely new comparison is needed (e.g. a `bands` or `dos` run not
+  covered by a committed benchmark). Record how it was built and store the produced
+  reference output next to the test so it never has to be regenerated.
+- **The test-suite pseudopotentials are not shipped with QE.** Inputs reference files like
+  `Si.pz-vbc.UPF` that `test-suite/check_pseudo.sh` downloads from
+  `pseudopotentials.quantum-espresso.org`. They must be fetched once into a local
+  `tests/data/pseudo/` and committed (they are small text files), or nothing is runnable.
+- The canonical first target is `test-suite/pw_scf/scf.in`: Si in diamond structure,
+  `ibrav=2`, `celldm(1)=10.20`, `ecutwfc=12`, LDA (`Si.pz-vbc.UPF`, norm-conserving),
+  2 explicit k-points, 8 electrons, 15³ FFT grid, ~1459 G-vectors. Small enough to debug by
+  hand, and its benchmark carries energy terms, eigenvalues, and stress.
+- **The inputs in a test directory are a sequence sharing one `outdir`, not independent
+  runs** — `test-suite/jobconfig` gives the order. For `pw_scf/` it starts
+  `scf.in` → `scf-1.in` → `scf-2.in`, which are exactly SCF → `calculation='bands'` →
+  `calculation='nscf'` on the same Si system, each restarting from the previous density.
+  That single trio covers the whole first milestone with committed references, so it is the
+  spine of the test suite: P5 targets the first, P7 the second, P8 builds on the third.
+  A future session that treats `scf-1.in` as a standalone run will be confused by its
+  missing `&electrons` convergence and its dependence on an existing charge density.
+- Test tiers: `unit` (fast, analytic — FFT round-trip, Ewald for a known lattice, `Y_lm`
+  orthonormality, Simpson accuracy, parser round-trips), `regression` (full runs vs QE
+  references, marked slow), and per-quantity checks at the phase boundaries above.
+- Tolerances are declared centrally, per quantity, not per test: total energy 1e-6 Ry,
+  energy terms 1e-6 Ry, eigenvalues 1e-6 Ry, forces 1e-4 Ry/bohr, DOS 1e-3 states/eV.
+  A test that needs a looser tolerance says why in a comment.
+- Every phase's check is a committed test, not a one-off script.
+
+---
+
+## 5. Performance, parallelism, and GPU
+
+Performance is a real requirement, not an afterthought. The rule is: never make a design
+choice that forecloses good performance, but do not micro-optimize before P5 is numerically
+correct. Optimization is P10, and it must not change any validated number.
+
+**Precision — single precision must stay viable (decided).** The GPU target is hardware
+where float64 is expensive, so float32 has to remain a usable mode. Two consequences:
+
+- `jax.config.update("jax_enable_x64", True)` is still set before any array exists, and all
+  *validation* against QE happens in float64. Single precision cannot reproduce QE to 1e-6
+  Ry, so it is a performance mode, never the mode a correctness claim is made in.
+- **Never hardcode a dtype.** No literal `jnp.complex128`, `dtype=float`, or `1.0j` in
+  compute code. Real and complex dtypes come from a single policy object in `config.py`
+  (`dtypes.real`, `dtypes.complex`) that is threaded through construction, and every array
+  is created with an explicit dtype from it. Constants are written dtype-agnostically.
+  Retrofitting this is a whole-codebase edit, which is why it is a rule from P0.
+
+From P5 on, every regression test runs in float64; a small set also runs in float32 and
+asserts only the looser tolerance, so the single-precision path cannot silently rot. Where
+a reduction is accuracy-critical in float32 (density accumulation over bands and k-points,
+subspace overlap matrices in the eigensolver), accumulate in float64 regardless of the
+policy — this is a per-site decision to record in a comment, not a global switch.
+
+**Static shapes.** Pad to `npwx`, fixed `nbnd`, fixed FFT grid. Anything shape-dependent is
+decided during setup and passed as a static argument. Never branch on `npw_k` in compute
+code — it retraces per k-point and kills both batching and sharding.
+
+**Where the parallelism comes from.** JAX has no OpenMP pragmas; the equivalents are:
+
+- *Intra-op threading (free).* On CPU, XLA runs each op on an internal thread pool, so
+  large FFTs and GEMMs already use all cores. Control it with the standard thread-count
+  env vars rather than in code. This covers most of what an OpenMP loop inside `h_psi`
+  would have bought.
+- *Batching — `vmap` over k-points and bands.* This is the primary mechanism and the reason
+  R7 (padding, not ragged) exists: with a uniform `npwx` the k-index becomes a leading array
+  axis, one big batched op instead of a Python loop. Do this first; it is also what makes
+  the GPU path fast.
+- *Sharding — the k-axis across devices.* `jax.sharding` with a mesh over the k-axis gives
+  genuine parallelism, and the same code maps to (a) CPU cores exposed as devices via
+  `XLA_FLAGS=--xla_force_host_platform_device_count=N`, and (b) multiple GPUs later,
+  unchanged. Design for it now by keeping k as the leading, independent axis of every
+  wavefunction-shaped array; actually enabling it is P10.
+- *Numba `prange` for host-side setup.* G-vector enumeration/sorting, symmetry search, and
+  radial table construction are irreducible loops that run once. `@njit(parallel=True)`
+  there is real OpenMP and is the right tool. Every such function keeps a plain-NumPy
+  reference implementation beside it for testing.
+
+k-point parallelism is the natural top-level axis because k-points are independent within
+an SCF iteration and only couple in `sum_band` — the same decomposition QE uses for its
+pool parallelization. Anything else that is embarrassingly parallel (per-species radial
+tables, per-band residuals, DOS tetrahedra) follows the same pattern: make it an array axis
+first, and it becomes both `vmap`-able and shardable for free.
+
+**Loop structure.** The SCF convergence test is data-dependent, so the outer loop stays in
+Python; the iteration body (`h_psi` → diagonalize → `sum_band` → `v_of_rho` → mix) is
+jitted as one unit. Inside the eigensolver, the inner iteration uses
+`lax.while_loop`/`fori_loop` with a fixed subspace size so the solver stays on device.
+
+**Avoid host syncs in the inner loop:** no `.item()`, no `float()`, no Python `if` on device
+values, except the single once-per-iteration convergence check. Use `donate_argnums` for
+the large wavefunction and density buffers.
+
+---
+
+## 6. Differentiability and response properties
+
+Autodiff is a primary reason for choosing JAX, not a side benefit. The goal is that
+quantities like forces, stress, polarization, dielectric response, and second harmonic
+generation come from differentiating the code rather than from separately derived and
+separately debugged expressions. That imposes requirements from the very first phase,
+because differentiability is nearly impossible to retrofit.
+
+**D1 — The whole compute path must be differentiable.** Every function from inputs to
+observables is a pure JAX function. No NumPy, no Numba, no `libxc` C calls anywhere a
+gradient has to flow. This is why the XC functionals are written in JAX rather than bound
+from `libxc`: XC needs to be differentiated once for the potential, twice for the kernel,
+and more for higher-order response — `grad` of the energy density is strictly better than
+hand-coded `v_xc`/`f_xc` routines, and it is the same code on GPU. This does not conflict
+with using Numba for setup: setup produces *constants* (radial knot values, G-vector index
+maps), and gradients w.r.t. `k`, positions, or fields flow through the JAX interpolation
+and structure factors built on top of them, never through the Numba code itself.
+
+**D2 — `k` stays a traced argument of the Hamiltonian.** The velocity/position operator is
+what response theory needs, and for a nonlocal pseudopotential `[H, r] ≠ p` — QE hand-codes
+this in `commutator_Hx_psi.f90`. If `H(k)` is built by differentiable JAX code from `k`
+(rather than looked up from precomputed host tables), then `jacfwd` of `H(k)` w.r.t. `k`
+gives the velocity operator exactly, nonlocal contributions included, for free. This is a
+concrete constraint on P2–P4: `|k+G|²` and the projectors `vkb(k)` are *computed* in JAX
+from `k`, with the radial form factors interpolated differentiably (JAX splines), not
+gathered from a per-k table built during setup.
+
+**D3 — Differentiate the SCF fixed point implicitly, never by unrolling.** Backpropagating
+through the SCF iterations costs memory proportional to the iteration count and gives
+inaccurate gradients. Use the implicit function theorem: define the converged density
+through a `custom_vjp` whose backward pass solves the linear response equation
+(the Dyson/Sternheimer equation) with an iterative solver. `scf/driver.py` must be
+structured so the converged result is the output of one function with a well-defined
+residual `R(rho, params) = 0` — this shapes the driver's signature, so it has to be decided
+at P5, not later.
+
+**D4 — Beware `eigh` gradients.** The derivative of an eigendecomposition is singular at
+degeneracies, which crystals have everywhere by symmetry. Do not differentiate through the
+diagonalization. Formulate response quantities with degeneracy-safe constructions instead:
+projectors onto occupied subspaces (invariant under rotations within a degenerate manifold),
+and Sternheimer-style linear solves for the first-order wavefunctions. Any observable
+written for response must be checkable against a finite-difference reference in a test.
+
+**D5 — Differentiability is tested, not assumed.** From P4 onward, each phase adds a test
+that a representative gradient matches central finite differences. Cheapest useful ones:
+`d(total energy)/d(atomic position)` against the QE force (this validates autodiff forces
+against QE's Hellmann-Feynman + Pulay forces — a strong independent check on both), and
+`d(eigenvalue)/dk` against a finite-difference band velocity.
+
+**Deferred but planned.** SHG and other higher-order optical responses come after bands and
+DOS. They need: the velocity operator (D2), degeneracy-safe formulations (D4), and either
+sum-over-states or a Sternheimer solver. Nothing in P0–P8 should make them harder — which
+in practice means D1, D2, and D3 are respected as the earlier phases are written.
