@@ -149,7 +149,7 @@ Fortran, not by restating numbers.
 (`latgen` for every ibrav, `Cell`), `system/structure.py`, `system/kpoints.py` (MP grids,
 explicit lists, band paths), `system/builder.py`. *Check met:* 288 tests pass; a sweep over
 every input with a committed benchmark in `pw_lattice-ibrav`, `pw_scf`, `pw_metal`,
-`pw_atom`, `pw_lsda` (81 cases) reproduces QE's printed `alat`, volume, crystal axes and
+`pw_atom`, `pw_lsda` (87 cases, 174 test items) reproduces QE's printed `alat`, volume, crystal axes and
 reciprocal axes, and — for explicit k-point lists and band paths — the k-points and weights.
 
 Two conventions found the hard way, both now covered by tests:

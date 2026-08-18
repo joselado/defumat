@@ -211,12 +211,15 @@ class KPoints(eqx.Module):
         """
         points, lengths = expand_band_path(np.asarray(vertices, dtype=float), counts)
         if crystal:
+            # The path length has to be recomputed in cartesian space: distances
+            # in crystal coordinates are not physical for a non-orthogonal cell.
+            # Segments that expand_band_path held flat (a zero count, i.e. a
+            # deliberate discontinuity) must stay flat, so the recomputation is
+            # masked by where the crystal-space length actually advanced.
+            moved = np.diff(lengths) > 0.0
             points = np.asarray(cell.k_to_cartesian(points))
-            lengths = np.asarray(
-                np.concatenate(
-                    [[0.0], np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))]
-                )
-            )
+            steps = np.linalg.norm(np.diff(points, axis=0), axis=1) * moved
+            lengths = np.concatenate([[0.0], np.cumsum(steps)])
         weights = np.full(len(points), 1.0)
         return cls(
             coords=precision.as_real(points),

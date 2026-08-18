@@ -81,6 +81,17 @@ def test_band_path_zero_count_is_a_discontinuity():
     assert points[jump[0] + 1] == pytest.approx([0.0, 0.5, 0.0])
 
 
+def test_crystal_band_path_keeps_discontinuities_flat():
+    """A crystal_b path recomputes lengths in cartesian space; a zero count must
+    still add no length, exactly as in the tpiba_b branch."""
+    kpoints = KPoints.band_path(
+        [[0, 0, 0], [0.5, 0, 0], [0, 0.5, 0], [0, 0, 0]], [2, 0, 2, 1], CUBIC, crystal=True
+    )
+    lengths = np.asarray(kpoints.path_length)
+    assert np.all(np.diff(lengths) >= -1e-12)
+    assert np.sum(np.diff(lengths) == 0.0) == 1
+
+
 def test_weights_are_normalised_then_spin_degenerate():
     """QE normalises weights to 1 and multiplies by degspin for nspin=1."""
     kpoints = KPoints.from_cartesian([[0, 0, 0], [0.5, 0, 0]], [1.0, 3.0])
