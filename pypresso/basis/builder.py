@@ -7,6 +7,15 @@ quantities out to ``4*ecutwfc``. For norm-conserving pseudopotentials
 prints only one grid. Ultrasoft and PAW need a larger density cutoff (``dual``
 of 8 to 12) to represent the augmentation charges, and then the two differ --
 ``doublegrid`` in ``PW/src/setup.f90``.
+
+**A caveat for the ultrasoft phase.** ``build_plane_wave_basis`` currently selects
+from, and indexes into, the *dense* set. That is exact for norm-conserving
+pseudopotentials, where the two sets are the same object, and so it is correct
+for the whole first milestone. QE, however, keeps wavefunctions on the *smooth*
+grid: once ``doublegrid`` is true, the wavefunction FFTs must use the smooth
+grid's dimensions and index map, and ``PlaneWaveBasis.indices`` has to be rebased
+onto the smooth set. Anything choosing an FFT grid for ``vloc_psi`` should read
+this first.
 """
 
 from __future__ import annotations

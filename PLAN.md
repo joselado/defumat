@@ -194,6 +194,13 @@ Three things this phase settled:
   freeze the cell and make stress-by-differentiation impossible; a test confirms
   `grad(|G|²)` w.r.t. the lattice is non-zero (rule D2).
 
+Carried forward as a known limitation: `build_plane_wave_basis` selects from and indexes
+into the **dense** G set. That is exact while `dense is smooth` — i.e. for every
+norm-conserving run, hence all of the first milestone — but QE keeps wavefunctions on the
+**smooth** grid. When ultrasoft arrives, the wavefunction FFTs must use the smooth grid's
+dimensions and index map, and `PlaneWaveBasis.indices` must be rebased. P4's `h_psi` picks
+an FFT grid for `vloc_psi` and should inherit this warning rather than rediscover it.
+
 **P3 — Pseudopotentials (norm-conserving first).** UPF v2 parser, radial integration,
 spherical Bessel transforms, `Y_lm`, `vloc(G)`, atomic `rho(G)`, `vkb(k)` projectors and
 `D_ij`. *Check:* `vloc(G)` and projector norms against values computed from the same UPF by
