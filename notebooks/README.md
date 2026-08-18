@@ -25,7 +25,7 @@ that way.
 ## Running them
 
 ```bash
-pip install -e ".[dev]"          # from the repository root
+pip install -e ".[notebooks]"    # from the repository root: jupyter, matplotlib
 jupyter lab notebooks/
 ```
 
