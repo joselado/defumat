@@ -19,6 +19,7 @@ from pypresso.io.pwin import PwInput, read_pw_input
 from pypresso.system.cell import Cell, celldm_from_abc
 from pypresso.system.kpoints import KPoints
 from pypresso.system.structure import Species, Structure
+from pypresso.system.symmetry import find_symmetries
 from pypresso.units import ANGSTROM_TO_BOHR
 
 __all__ = ["System", "build_system", "system_from_file"]
@@ -53,7 +54,14 @@ def system_from_file(path, precision: Precision = DEFAULT_PRECISION) -> System:
 def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> System:
     cell = _build_cell(pwin, precision)
     structure = _build_structure(pwin, cell, precision)
-    kpoints = _build_kpoints(pwin, cell, precision)
+
+    # An automatic k-grid is reduced to its irreducible wedge here, which is
+    # where QE does it too (``setup.f90``, after the symmetry analysis and
+    # before anything is sized from the k-point count). It needs the crystal's
+    # symmetries, hence the ordering: cell, then structure, then symmetry, then
+    # k-points. Explicit k-point lists are taken as given, as QE takes them.
+    symmetries = find_symmetries(cell, structure)
+    kpoints = _build_kpoints(pwin, cell, precision, symmetries.rotation_array())
 
     ecutwfc = pwin.get("system", "ecutwfc")
     if ecutwfc is None:
@@ -167,7 +175,9 @@ def _build_structure(pwin: PwInput, cell: Cell, precision: Precision) -> Structu
     )
 
 
-def _build_kpoints(pwin: PwInput, cell: Cell, precision: Precision) -> KPoints:
+def _build_kpoints(
+    pwin: PwInput, cell: Cell, precision: Precision, rotations=None
+) -> KPoints:
     card = pwin.card("K_POINTS")
     if card is None:
         return KPoints.gamma(precision=precision)
@@ -179,7 +189,10 @@ def _build_kpoints(pwin: PwInput, cell: Cell, precision: Precision) -> KPoints:
 
     if option == "automatic":
         values = [int(v) for v in card.lines[0].split()[:6]]
-        return KPoints.automatic(tuple(values[:3]), tuple(values[3:6]), cell, precision=precision)
+        return KPoints.automatic(
+            tuple(values[:3]), tuple(values[3:6]), cell,
+            precision=precision, rotations=rotations,
+        )
 
     # All remaining forms start with a count, then one line per k-point.
     rows = np.array([[float(t) for t in line.split()[:4]] for line in card.lines[1:]])

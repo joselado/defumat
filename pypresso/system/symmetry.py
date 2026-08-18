@@ -23,13 +23,17 @@ symmetry, and degenerate levels split by a few tens of meV.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 
-from pypresso.basis.gvectors import GVectors
 from pypresso.system.cell import Cell
 from pypresso.system.structure import Structure
+
+if TYPE_CHECKING:  # only for annotations: importing it eagerly makes a cycle,
+    from pypresso.basis.gvectors import GVectors  # basis -> system -> basis
 
 __all__ = ["Symmetries", "lattice_point_group", "find_symmetries", "symmetrize_density",
            "symmetry_maps", "apply_symmetry_maps"]
@@ -165,7 +169,7 @@ def _maps_structure(rotated, positions, types) -> bool:
 
 def symmetrize_density(
     rho_g: jnp.ndarray,
-    gvectors: GVectors,
+    gvectors: "GVectors",
     symmetries: Symmetries,
     maps=None,
 ) -> jnp.ndarray:
@@ -198,7 +202,7 @@ def apply_symmetry_maps(rho_g: jnp.ndarray, permutations, phases) -> jnp.ndarray
     return jnp.mean(phases * rho_g[permutations], axis=0)
 
 
-def symmetry_maps(gvectors: GVectors, symmetries: Symmetries):
+def symmetry_maps(gvectors: "GVectors", symmetries: Symmetries):
     """For each operation, the G-index permutation and the translation phases.
 
     Returns ``(nsym, ngm)`` arrays. Built once with NumPy -- integer bookkeeping

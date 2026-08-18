@@ -22,7 +22,10 @@ import numpy as np
 from pypresso.config import DEFAULT_PRECISION, Precision
 from pypresso.system.cell import Cell
 
-__all__ = ["KPoints", "monkhorst_pack", "expand_band_path"]
+#: Tolerance for deciding that a rotated k-point lands on the grid (QE's ``eps``).
+_GRID_EPS = 1.0e-5
+
+__all__ = ["KPoints", "monkhorst_pack", "irreducible_wedge", "expand_band_path"]
 
 #: Spin degeneracy factor applied to weights for an unpolarised calculation.
 DEGSPIN = 2.0
@@ -68,6 +71,83 @@ def monkhorst_pack(
 
     nk = points.shape[0]
     return points, np.full(nk, 1.0 / nk)
+
+
+def irreducible_wedge(
+    grid: tuple[int, int, int],
+    shift: tuple[int, int, int],
+    rotations: np.ndarray,
+    time_reversal: bool = True,
+) -> tuple[np.ndarray, np.ndarray]:
+    """The symmetry-reduced Monkhorst-Pack grid: QE's ``kpoint_grid.f90``.
+
+    Two k-points related by a symmetry of the crystal give the same eigenvalues
+    and contribute the same thing to the density, so only one of each orbit has
+    to be diagonalised -- the other members are recovered by symmetrising the
+    density afterwards, which this code already does. For silicon on an 8x8x8
+    grid that is 60 k-points instead of 512.
+
+    The algorithm is QE's, and so is the choice of representative: walk the grid
+    in order, and whenever a point has not already been marked equivalent to an
+    earlier one, keep it and mark everything its orbit reaches. Keeping the
+    *first* member of each orbit is what makes the reduced list agree with QE's
+    point for point rather than merely orbit for orbit.
+
+    Args:
+        grid: ``(nk1, nk2, nk3)``.
+        shift: ``(k1, k2, k3)``, each 0 or 1.
+        rotations: ``(nsym, 3, 3)`` integer rotations in crystal axes -- the
+            crystal's symmetries, not the lattice point group, so that a
+            structure with fewer symmetries than its lattice is not over-reduced.
+        time_reversal: whether ``-k`` is equivalent to ``k``. True for everything
+            this code currently supports (no magnetism, no spin-orbit).
+
+    Returns:
+        ``(points, weights)``, points in crystal coordinates folded into the
+        first Brillouin zone and weights summing to 1.
+    """
+    nk1, nk2, nk3 = (int(n) for n in grid)
+    k1, k2, k3 = (int(x) for x in shift)
+    offsets = np.array([k1, k2, k3]) / 2.0
+    counts = np.array([nk1, nk2, nk3])
+
+    i, j, k = np.meshgrid(np.arange(nk1), np.arange(nk2), np.arange(nk3), indexing="ij")
+    integers = np.stack([i.ravel(), j.ravel(), k.ravel()], axis=1)
+    xkg = (integers + offsets) / counts  # QE's xkg, before folding
+
+    equivalent = np.arange(len(xkg))
+    multiplicity = np.zeros(len(xkg))
+
+    def grid_index(rotated):
+        """Which grid point ``rotated`` is, or None if it is not on the grid."""
+        scaled = rotated * counts - offsets
+        nearest = np.rint(scaled)
+        if np.any(np.abs(scaled - nearest) > _GRID_EPS):
+            return None
+        a, b, c = (int(x) % n for x, n in zip(nearest, counts))
+        return (a * nk2 + b) * nk3 + c
+
+    for n in range(len(xkg)):
+        if equivalent[n] != n:
+            continue
+        multiplicity[n] = 1.0
+        for rotation in rotations:
+            rotated = xkg[n] @ rotation.T
+            rotated = rotated - np.rint(rotated)
+            images = [rotated, -rotated] if time_reversal else [rotated]
+            for image in images:
+                other = grid_index(image)
+                if other is None or other <= n:
+                    continue
+                if equivalent[other] == other:
+                    equivalent[other] = n
+                    multiplicity[n] += 1.0
+
+    keep = equivalent == np.arange(len(xkg))
+    points = xkg[keep]
+    points = points - _fortran_nint(points)  # into the first Brillouin zone
+    weights = multiplicity[keep]
+    return points, weights / weights.sum()
 
 
 def expand_band_path(
@@ -183,9 +263,18 @@ class KPoints(eqx.Module):
         shift: tuple[int, int, int],
         cell: Cell,
         precision: Precision = DEFAULT_PRECISION,
+        rotations: np.ndarray | None = None,
     ) -> "KPoints":
-        """A complete Monkhorst-Pack grid (no symmetry reduction)."""
-        points, weights = monkhorst_pack(grid, shift)
+        """A Monkhorst-Pack grid, reduced to the irreducible wedge if it can be.
+
+        ``rotations`` are the crystal's symmetry operations in crystal axes.
+        Without them the complete grid is returned, which is correct but costs a
+        factor of up to the size of the point group in diagonalisations.
+        """
+        if rotations is not None and len(rotations):
+            points, weights = irreducible_wedge(grid, shift, rotations)
+        else:
+            points, weights = monkhorst_pack(grid, shift)
         return cls.from_crystal(
             points,
             weights,

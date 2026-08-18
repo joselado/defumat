@@ -94,16 +94,14 @@ def test_kpoints_match_reference(qe_testsuite, directory, name):
     option = (card.option or "tpiba").lower() if card else "gamma"
 
     if option == "automatic":
-        # QE prints the *irreducible* wedge, so a point-by-point comparison has
-        # to wait for symmetry (P6). It cannot even be checked that QE's points
-        # lie on our grid: kpoint_grid.f90 reduces using the point group of the
-        # Bravais lattice and keeps grid points, but irrek.f90 then maps those
-        # representatives into the wedge of the *crystal's* point group by
-        # rotating them, and a rotation carries a shifted grid off itself.
-        # (Concretely, lattice-ibrav2-kauto prints a k-point at crystal
-        # (0.25, 0.5, 0.5) which is not on the shifted 2x2x2 grid it came from.)
-        # What is checkable now: the complete grid has the right size, uniform
-        # weights, lies in the first BZ, and QE's reduction of it is no larger.
+        # QE prints the *irreducible* wedge, and so do we now. The two are not
+        # obliged to agree point for point: QE reduces with the point group of
+        # the Bravais lattice and then maps the representatives into the wedge of
+        # the crystal's group, which can carry them off the grid entirely
+        # (lattice-ibrav2-kauto prints a point at crystal (0.25, 0.5, 0.5), not
+        # on the shifted 2x2x2 grid it came from). Reducing directly with the
+        # crystal's symmetries lands on the same orbits by a shorter road, so
+        # what must agree is the number of orbits and their weights.
         grid = [int(v) for v in card.lines[0].split()[:6]]
         full, weights = monkhorst_pack(tuple(grid[:3]), tuple(grid[3:6]))
 
@@ -112,8 +110,11 @@ def test_kpoints_match_reference(qe_testsuite, directory, name):
         assert np.all(np.abs(full) <= 0.5 + 1e-12), "grid point outside the first BZ"
         assert len(np.unique(np.round(full, 9), axis=0)) == len(full), "duplicate grid point"
 
-        assert len(ref.kpoints) <= len(full)
-        assert system.kpoints.nk == len(full)
+        assert system.kpoints.nk == len(ref.kpoints), "k-point reduction disagrees with QE"
+        assert system.kpoints.nk <= len(full)
+        ours = np.sort(np.asarray(system.kpoints.weights))
+        theirs = np.sort(np.asarray(ref.weights))
+        assert ours == pytest.approx(theirs, abs=1e-6), "orbit weights disagree with QE"
         assert float(system.kpoints.weights.sum()) == pytest.approx(2.0)
         assert float(np.sum(ref.weights)) == pytest.approx(2.0)
         return
