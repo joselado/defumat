@@ -6,6 +6,11 @@ becomes float64 (or worse, x64 gets disabled and float64 silently becomes
 float32).
 """
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -75,3 +80,45 @@ def test_equinox_module_survives_jit_and_grad():
 def test_package_exports():
     assert pypresso.__version__
     assert pypresso.DOUBLE is DOUBLE
+
+
+# --- the persistent compilation cache -----------------------------------------
+#
+# Enabled on import, because compilation rather than arithmetic is what a short
+# run spends its time on. Tested through a subprocess: the setting is read once,
+# before JAX has created anything, so it cannot be exercised by re-importing.
+
+
+def _cache_dir_in_a_fresh_process(value: str | None) -> str:
+    """What ``jax_compilation_cache_dir`` ends up as, with the env var set."""
+    environment = dict(os.environ)
+    environment.pop("PYPRESSO_CACHE_DIR", None)
+    if value is not None:
+        environment["PYPRESSO_CACHE_DIR"] = value
+
+    script = (
+        "import sys; sys.path.insert(0, '.');"
+        "import pypresso, jax;"
+        "print(jax.config.jax_compilation_cache_dir or '')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True,
+        env=environment, cwd=Path(__file__).resolve().parents[2],
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    return result.stdout.strip()
+
+
+@pytest.mark.parametrize("setting", ["off", "0", "none", ""])
+def test_the_cache_can_be_turned_off(setting):
+    assert _cache_dir_in_a_fresh_process(setting) == ""
+
+
+def test_the_cache_honours_an_explicit_directory(tmp_path):
+    directory = tmp_path / "somewhere"
+    assert _cache_dir_in_a_fresh_process(str(directory)) == str(directory)
+    assert directory.is_dir()
+
+
+def test_the_cache_is_on_by_default():
+    assert _cache_dir_in_a_fresh_process(None) != ""
