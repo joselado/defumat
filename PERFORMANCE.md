@@ -251,33 +251,77 @@ What is left, in order:
 
 ## Optimisation backlog
 
-Ordered by expected gain per unit of effort. None of these may change a
-validated number.
+Ordered by expected gain per unit of effort, and by measurement rather than
+instinct — several plausible-looking items below turned out on measurement to be
+worth nothing, and are recorded as such so they are not attempted twice. None of
+these may change a validated number.
 
-1. **A persistent compilation cache** (`jax_compilation_cache_dir`). Does nothing
-   for a first run on a new machine, but it removes the ~7 s of compilation from
-   every run after that, which is what a user actually experiences. The cheapest
-   remaining win by a wide margin.
-2. **Apply `H` only to unconverged bands.** Worth up to 4x in the late SCF
-   iterations and nothing in the early ones — the largest remaining item in the
-   eigensolver. The machinery already exists: the subspace expansion compacts
-   unconverged roots with a stable `argsort`, and the same permutation would let
-   `h_psi` run on a masked block.
+1. **Reduce k-points to the irreducible wedge.** Not an optimisation of the code
+   but of how much of it runs, and the largest factor left by a wide margin. On
+   `K_POINTS automatic` we run the whole grid where QE runs the wedge — on the
+   test suite's own `scf-kauto.in`, 8 k-points against QE's 2. It grows with the
+   grid, and a production calculation uses a much denser one than the test suite:
 
-3. **Fold `dr2` into the iteration's other reductions.** It costs a transform and
-   a dispatch of its own (3% of an iteration) for a quantity the loop already
-   computes a residual for.
-4. **Fuse the iteration body further.** Three compiled units plus host glue could
-   be two, at the cost of putting the occupation weights on device for the fixed
-   -occupation case.
-5. **Shell-based radial evaluation** for quantities depending only on `|G|` (~100
-   shells vs 1459 G-vectors for Si). Note this is *not* strain-safe: shells split
-   under strain, so it must stay off the stress path.
-6. **k-point reduction to the irreducible wedge** — not an optimisation of code
-   but of how much of it runs, and worth more than anything above on a real
-   system.
-7. **`jax.sharding` over the k-axis**, once there is more than one device worth
-   using. The k-axis is already leading on every wavefunction-shaped array.
+   | grid | full | irreducible | |
+   |---|---|---|---|
+   | 2x2x2 | 8 | 2 | 4.0x |
+   | 4x4x4 | 64 | 10 | 6.4x |
+   | 6x6x6 | 216 | 28 | 7.7x |
+   | 8x8x8 | 512 | 60 | 8.5x |
+
+   (Silicon, 48 operations plus time reversal. Cases whose input lists k-points
+   explicitly, like `pw_scf/scf.in`, are already reduced and unaffected.)
+
+2. **Atomic starting wavefunctions** (`wfcinit` / `atomic_wfc`). The first SCF
+   iteration costs 8 Davidson steps against QE's 2, and the reason is the
+   starting guess: QE starts from the pseudo-atomic orbitals, this code from a
+   random vector damped by `1/(1+|k+G|^2)`. That is ~6 of the 33 steps a whole
+   run takes. The radial functions are already parsed (`Pseudopotential.orbitals`
+   carries `chi` per channel) and the transform to `|k+G|` space is the machinery
+   `build_projectors` already has, so this is assembly rather than new physics.
+
+3. **A persistent compilation cache** (`jax_compilation_cache_dir`). Nothing for
+   a first run on a new machine, but it removes ~7 s of compilation from every
+   run after that — against ~0.3 s of SCF. For anything short of a long run it is
+   the dominant term in the wall clock, whatever the loop costs.
+
+4. **Apply `H` only to unconverged bands**, as `cegterg` does. The saving is real
+   — `h_psi` is sublinear in the block size (1 band 1.9 ms, 4 bands 6.7 ms at
+   1131 PWs), so a late iteration with one root left could be ~3x cheaper — but
+   it is harder here than the Fortran makes it look. Shapes inside `jit` are
+   static, so masking the converged bands costs exactly what computing them
+   costs; realising it needs `lax.switch` over a handful of precompiled block
+   sizes, or giving up the on-device loop. Worth roughly 1.2x overall, at
+   moderate complexity.
+
+5. **Fold `dr2` into the iteration's other reductions.** It costs a transform and
+   a dispatch of its own (~3% of an iteration) for a quantity the loop already
+   computes a residual for. Mixing in G space would save another transform.
+
+6. **`jax.sharding` over the k-axis**, and GPU. Excluded from the single-core
+   metric by construction, and the reason the k-axis leads every
+   wavefunction-shaped array. On a 10-k-point run this is a factor of 10 sitting
+   unused on this machine alone.
+
+### Measured and rejected
+
+* **A faster FFT library.** XLA's CPU FFT is already **2x faster than SciPy's
+  pocketfft** single-threaded (0.92 ms against 2.36 ms for a `(4, 30^3)`
+  transform). There is no library-level win available; we are using a good one.
+
+* **Sticks/pencil FFTs**, QE's decomposition, where the 1D transforms are done
+  only along columns the wavefunction sphere actually occupies. The sphere does
+  touch only 16% of the z-columns and 50% of the x-planes, which looks like a
+  large saving — but against the *fused* 3D transform the ceiling is **1.13x**,
+  because the final pass runs on dense data and is 58% of the cost on its own.
+  Splitting the transform by hand also gives up XLA's fusion, and three separate
+  passes cost 4.8 ms where the fused `fftn` costs 3.3 ms. Not worth it.
+
+* **Folding the `1/N` FFT normalisations.** `g_to_r` multiplies by `N` and
+  `r_to_g` divides by it, and inside `h_psi` the two cancel exactly. Removing
+  them helps the 180-plane-wave case by 1.3x and the 1131-plane-wave case not at
+  all: XLA already fuses the scaling into the neighbouring elementwise pass at
+  any size where it would matter.
 
 ## History
 
