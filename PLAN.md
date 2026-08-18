@@ -206,32 +206,49 @@ norm-conserving run, hence all of the first milestone — but QE keeps wavefunct
 dimensions and index map, and `PlaneWaveBasis.indices` must be rebased. P4's `h_psi` picks
 an FFT grid for `vloc_psi` and should inherit this warning rather than rediscover it.
 
-**P3 — Pseudopotentials (norm-conserving first).** UPF v2 parser, radial integration,
-spherical Bessel transforms, `Y_lm`, `vloc(G)`, atomic `rho(G)`, `vkb(k)` projectors and
-`D_ij`. *Check:* `vloc(G)` and projector norms against values computed from the same UPF by
-QE; the superposition-of-atomic-charges density integrates to the right electron count.
+**P3 — Pseudopotentials. ✅ DONE.** `pseudo/upf.py` (UPF v2), `pseudo/radial.py`
+(QE's Simpson, the 10-bohr mesh truncation, spherical Bessel with series branches),
+`pseudo/harmonics.py` (`Y_lm` in QE's ordering), `pseudo/formfactors.py` (`vloc(G)`,
+atomic and core charge, projector form factors — integrated directly at each `|G|`
+rather than interpolated, so they stay differentiable in `q`), `pseudo/projectors.py`
+(`vkb(k)`), `pseudo/potentials.py` (structure factors and the crystal quantities).
+*Check met:* all 11 shipped UPF files parse; `Y_lm` satisfies the addition theorem and
+is orthonormal to 2e-14; Bessel functions match SciPy to 1e-10; the atomic charge
+integrates to the valence; and the Ewald energy — which exercises the cell, the
+G-vectors, the structure factors and the positions together — matches QE on **76
+benchmarks** to better than 1e-6 Ry.
 
-**P4 — Hamiltonian and diagonalization.** `apply_h` (kinetic + local via FFT + nonlocal),
-`apply_s` (identity), block Davidson. `k` is a traced argument throughout (D2). *Check:*
-for a potential frozen from a converged QE run, the eigenvalues at each k-point match QE's
-to ~1e-6 Ry; the residuals fall to the requested threshold; `d(eigenvalue)/dk` from
-`jax.grad` matches central finite differences.
+**The trap:** `vloc`'s `G = 0` term integrates `r(r V + Z e^2)`, **not** the `q -> 0`
+limit of the `erf`-split integrand used for `q > 0`. QE's source says so in a comment.
+Getting it wrong shifts every eigenvalue by a constant (2.5 eV for silicon) while the
+calculation still converges beautifully.
 
-**P5 — Full SCF.** *(autodiff force check lands here, not at P11.)* `sum_band`, Hartree, LDA (PZ) then PBE (both pure JAX, `v_xc` from
-`grad` of the energy density), Ewald, occupations with smearing and with fixed occupations,
-density mixing, the total-energy decomposition. The driver exposes the SCF residual
-`R(rho, params) = 0` so implicit differentiation can be attached (D3), even if the
-`custom_vjp` itself lands later. Symmetry still off (compare against QE runs with
-`nosym=.true., noinv=.true.`).
-*Check:* total energy within 1e-6 Ry and each printed energy term (one-electron, Hartree,
-XC, Ewald, smearing) within 1e-6 Ry of the QE reference, for Si (`pw_scf`), an isolated
-atom (`pw_atom`), and a metal (`pw_metal`). **Plus the first real autodiff check:**
-`jax.grad` of the total energy w.r.t. atomic positions, compared against (a) central finite
-differences of our own energy and (b) QE's analytic forces. (a) proves the differentiable
-path is intact; (b) proves it is differentiating the *right* energy — QE's forces are
-Hellmann-Feynman + Pulay, derived independently, so agreement is a strong two-sided check.
-If this fails, a D1/D2 violation has crept in and is cheaper to find here than three phases
-later.
+**P4 — Hamiltonian and diagonalization. ✅ DONE (dense solver).**
+`hamiltonian/operator.py` (kinetic + local via FFT + nonlocal, plus `apply_s`),
+`solvers/dense.py`. *Check met:* eigenvalues match QE to <1e-3 eV wherever they are
+printed. **Davidson is still outstanding** — the dense solver is `O(npw^3)` and is
+correct-by-construction ground truth, not a production algorithm. See `PERFORMANCE.md`.
+
+**P5 — Full SCF. ✅ DONE.** `scf/` — `v_of_rho` (Hartree + LDA), `sum_band`,
+occupations for every QE smearing plus `from_input`, Anderson mixing, Ewald, and the
+driver with QE's energy decomposition. `xc/lda.py` writes only the energy density and
+gets `v_xc` from `jax.grad`. *Check met:* **silicon's total energy matches QE to
+1.1e-8 Ry** and the metals to ~2.5e-8 Ry, term by term, across 8 regression cases.
+
+**The traps:** (1) XClib returns **Hartree**, not Rydberg — `v_of_rho` multiplies by
+`e2`, and missing that halves the XC energy. (2) **Density symmetrisation is not
+optional**: a symmetry-reduced k-point set gives an unsymmetric density, which
+converges happily and splits degenerate levels by tens of meV. That forced P6 forward.
+
+**P6 — Symmetry. ◐ PARTIAL.** `system/symmetry.py` finds the space group (48
+operations for diamond silicon, non-symmorphic, matching QE) and symmetrises the
+density. *Still to do:* reducing a k-point grid to the irreducible wedge — currently
+the full grid is used, which is correct but costs time, and is why an automatic-grid
+run cannot yet be compared to QE point by point. Also `crystal_sg` (Wyckoff) input.
+
+**The trap:** with `M` defined by `S a_i = sum_j M_ij a_j`, crystal coordinates
+transform as `c' = c M`. Transposing keeps only the operations that happen to be
+symmetric — 12 of diamond's 48.
 
 **P6 — Symmetry.** Point/space group detection, IBZ k-point reduction, density
 symmetrization, and `ATOMIC_POSITIONS crystal_sg` (Wyckoff) expansion. *Check:* the
@@ -240,9 +257,10 @@ into the crystal's wedge described under P1, which is what makes the automatic-g
 comparable point by point — and the P5 energies are reproduced with symmetry on at lower
 cost.
 
-**P7 — Band structure.** NSCF from a fixed converged density, explicit k-path input,
-high-symmetry path helper, band output files. *Check:* eigenvalues along the path match a
-QE `calculation='bands'` run to ~1e-4 eV.
+**P7 — Band structure. ✅ DONE.** `workflows/bands.py`: NSCF from a fixed converged
+density, on an explicit k-path. *Check met:* silicon's bands along the 21-point path of
+`pw_scf/scf-1.in` match QE to **0.0002 eV**, with the threefold degeneracies at Gamma
+exact; the `nscf` run of `scf-2.in` matches on its own grid.
 
 **P8 — DOS.** Smearing DOS and the tetrahedron method, on top of an NSCF grid run.
 *Check:* against `dos.x` output on the same grid; the integrated DOS returns the electron

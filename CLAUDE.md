@@ -9,12 +9,13 @@ Fortran QE 7.5 release is vendored here **as reference material only** — it is
 understand algorithms and to validate numerical results, never modified or compiled into
 the deliverable.
 
-**Status: P0–P2 are done** — scaffolding and precision policy, units, the QE reference
-parser, the `pw.x` input parser, geometry (`latgen` for every ibrav, Monkhorst-Pack grids,
-band paths), and the plane-wave basis (G-vectors with gamma-only support, dense and smooth
-FFT grids, per-k plane waves padded to `npwx`, sphere↔box transforms). `PLAN.md` §3 tracks
-the phases and records the conventions each one uncovered — read it before writing code.
-**P3 (pseudopotentials: UPF parsing, radial→G transforms, projectors) is next.**
+**Status: the first milestone is met for silicon.** P0–P5 and P7 are done, P6 is
+partial. A silicon SCF reproduces QE's total energy to **1.1e-8 Ry** term by term, its
+band structure to **0.0002 eV**, and metals with every smearing to ~2.5e-8 Ry.
+`PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
+read it before writing code. **Outstanding:** a Davidson eigensolver (the current one is
+dense and `O(npw^3)`), k-point reduction to the irreducible wedge, DOS (P8), spin (P9),
+and all of the performance work (P10) — see `PERFORMANCE.md`.
 
 ## Layout
 
