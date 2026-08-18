@@ -1,0 +1,42 @@
+"""Reference eigensolver: build the Hamiltonian and diagonalise it exactly.
+
+This is not how a plane-wave code should solve for its bands -- it costs
+``O(npw^3)`` time and ``O(npw^2)`` memory, and ``npw`` runs to tens of thousands
+in a real calculation. It exists because it is *unambiguously correct*: an
+iterative solver that disagrees with it has a bug, and one that agrees can be
+trusted on systems too large to check this way.
+
+For the small cells the project validates against (silicon at 12 Ry has 186
+plane waves) it is also perfectly fast.
+"""
+
+from __future__ import annotations
+
+import jax.numpy as jnp
+
+from pypresso.hamiltonian.operator import Hamiltonian
+
+__all__ = ["dense_eigensolver"]
+
+
+def dense_eigensolver(hamiltonian: Hamiltonian, ik: int, nbnd: int):
+    """The ``nbnd`` lowest eigenpairs at k-point ``ik``.
+
+    Returns ``(eigenvalues, eigenvectors)`` with eigenvalues in Ry, ascending,
+    and eigenvectors as ``(nbnd, npwx)`` -- bands first, matching how the rest of
+    the code carries wavefunctions.
+
+    Padded plane waves are projected out first. They would otherwise appear as
+    spurious zero eigenvalues sitting in the middle of the spectrum.
+    """
+    matrix = hamiltonian.matrix(ik)
+    mask = hamiltonian.mask[ik]
+
+    # Push padding rows/columns far above the physical spectrum instead of
+    # deleting them, so the matrix keeps its static shape.
+    shift = jnp.max(jnp.abs(matrix)) * 1000.0 + 1.0
+    matrix = jnp.where(mask[:, None] & mask[None, :], matrix, 0.0)
+    matrix = matrix + jnp.diag(jnp.where(mask, 0.0, shift))
+
+    eigenvalues, eigenvectors = jnp.linalg.eigh(matrix)
+    return eigenvalues[:nbnd], eigenvectors[:, :nbnd].T

@@ -42,6 +42,8 @@ class System(eqx.Module):
     occupations: str = eqx.field(static=True, default="fixed")
     smearing: str = eqx.field(static=True, default="gaussian")
     degauss: float = eqx.field(static=True, default=0.0)
+    #: Occupations read from an OCCUPATIONS card, for occupations='from_input'.
+    input_occupations: tuple[float, ...] | None = eqx.field(static=True, default=None)
 
 
 def system_from_file(path, precision: Precision = DEFAULT_PRECISION) -> System:
@@ -72,7 +74,16 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         occupations=str(pwin.get("system", "occupations", "fixed")).lower(),
         smearing=str(pwin.get("system", "smearing", "gaussian")).lower(),
         degauss=float(pwin.get("system", "degauss", 0.0)),
+        input_occupations=_input_occupations(pwin),
     )
+
+
+def _input_occupations(pwin: PwInput) -> tuple[float, ...] | None:
+    """The OCCUPATIONS card, flattened. Present only for occupations='from_input'."""
+    card = pwin.card("OCCUPATIONS")
+    if card is None:
+        return None
+    return tuple(value for row in card.floats() for value in row)
 
 
 def _build_cell(pwin: PwInput, precision: Precision) -> Cell:
