@@ -9,9 +9,11 @@ Fortran QE 7.5 release is vendored here **as reference material only** — it is
 understand algorithms and to validate numerical results, never modified or compiled into
 the deliverable.
 
-**Status: P0 is done** (scaffolding, precision policy, units, and the QE reference parser;
-commit `c5aad16`). `PLAN.md` §3 tracks the phases — read it before writing code. P1 (input
-parser, `ibrav` lattices, k-point grids) is next.
+**Status: P0 and P1 are done** — scaffolding, precision policy, units, the QE reference
+parser, the `pw.x` input parser, and geometry (`latgen` for every ibrav, structures,
+Monkhorst-Pack grids and band paths). `PLAN.md` §3 tracks the phases and records the
+conventions each one uncovered — read it before writing code. **P2 (plane-wave basis:
+G-vectors, FFT grids, `npw` per k-point) is next.**
 
 ## Layout
 

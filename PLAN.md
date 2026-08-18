@@ -145,11 +145,26 @@ smearing) and `pw_lsda/lsda.in` (two spin channels), and the parsed energy terms
 parsed total energy. `units.py` is checked against `Modules/constants.f90` by parsing the
 Fortran, not by restating numbers.
 
-**P1 — Input and geometry.** `pw.x` input parser (namelists `&control &system &electrons`,
-cards `ATOMIC_SPECIES/POSITIONS`, `K_POINTS`, `CELL_PARAMETERS`), `ibrav` lattice
-generation, Monkhorst-Pack grids with time-reversal only (no crystal symmetry yet).
-*Check:* lattice vectors, cell volume, and the unreduced k-point list/weights match the QE
-output header for the `pw_scf` and `pw_lattice-ibrav` inputs.
+**P1 — Input and geometry. ✅ DONE.** `io/pwin.py` (namelists + cards), `system/cell.py`
+(`latgen` for every ibrav, `Cell`), `system/structure.py`, `system/kpoints.py` (MP grids,
+explicit lists, band paths), `system/builder.py`. *Check met:* 288 tests pass; a sweep over
+every input with a committed benchmark in `pw_lattice-ibrav`, `pw_scf`, `pw_metal`,
+`pw_atom`, `pw_lsda` (81 cases) reproduces QE's printed `alat`, volume, crystal axes and
+reciprocal axes, and — for explicit k-point lists and band paths — the k-points and weights.
+
+Two conventions found the hard way, both now covered by tests:
+
+- **Fortran `NINT` rounds half away from zero; NumPy's `rint` rounds half to even.** The
+  Monkhorst-Pack fold `x - nint(x)` hits exact halves for every unshifted even grid, so
+  `rint` would leave points at `+0.5` where QE puts them at `-0.5`.
+- **QE's printed k-list for `K_POINTS automatic` is not a subset of the MP grid.**
+  `kpoint_grid.f90` reduces using the point group of the *Bravais lattice* and keeps grid
+  points, but `irrek.f90` then rotates those representatives into the wedge of the
+  *crystal's* point group, and a rotation carries a shifted grid off itself. (Concretely,
+  `lattice-ibrav2-kauto` prints a k-point at crystal `(0.25, 0.5, 0.5)` from a shifted
+  2×2×2 grid.) Point-by-point comparison of automatic grids therefore has to wait for P6;
+  until then the sweep checks grid size, uniform weights, first-BZ membership and
+  uniqueness.
 
 **P2 — Plane-wave basis.** G-vector enumeration and QE-compatible ordering, dense and smooth
 FFT grid dimensions, `npw_k` per k-point, sphere↔box mapping, FFT wrappers. Gamma-only
@@ -184,8 +199,11 @@ If this fails, a D1/D2 violation has crept in and is cheaper to find here than t
 later.
 
 **P6 — Symmetry.** Point/space group detection, IBZ k-point reduction, density
-symmetrization. *Check:* the symmetry operation count and the reduced k-list match QE, and
-the P5 energies are reproduced with symmetry on at lower cost.
+symmetrization, and `ATOMIC_POSITIONS crystal_sg` (Wyckoff) expansion. *Check:* the
+symmetry operation count and the reduced k-list match QE — including the `irrek` rotation
+into the crystal's wedge described under P1, which is what makes the automatic-grid k-lists
+comparable point by point — and the P5 energies are reproduced with symmetry on at lower
+cost.
 
 **P7 — Band structure.** NSCF from a fixed converged density, explicit k-path input,
 high-symmetry path helper, band output files. *Check:* eigenvalues along the path match a
