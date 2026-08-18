@@ -167,9 +167,9 @@ Two conventions found the hard way, both now covered by tests:
   points, but `irrek.f90` then rotates those representatives into the wedge of the
   *crystal's* point group, and a rotation carries a shifted grid off itself. (Concretely,
   `lattice-ibrav2-kauto` prints a k-point at crystal `(0.25, 0.5, 0.5)` from a shifted
-  2×2×2 grid.) Point-by-point comparison of automatic grids therefore has to wait for P6;
-  until then the sweep checks grid size, uniform weights, first-BZ membership and
-  uniqueness.
+  2×2×2 grid.) A point-by-point comparison of automatic grids is therefore not the right
+  test even now that P6 reduces them: what must agree is the number of orbits and their
+  weights, which it does on all 22 cases.
 
 **P2 — Plane-wave basis. ✅ DONE.** `basis/fftgrid.py` (FFT dimensions), `basis/gvectors.py`
 (`GVectors`, including gamma-only half-sphere), `basis/planewaves.py` (per-k selection,
@@ -256,11 +256,21 @@ gets `v_xc` from `jax.grad`. *Check met:* **silicon's total energy matches QE to
 optional**: a symmetry-reduced k-point set gives an unsymmetric density, which
 converges happily and splits degenerate levels by tens of meV. That forced P6 forward.
 
-**P6 — Symmetry. ◐ PARTIAL.** `system/symmetry.py` finds the space group (48
-operations for diamond silicon, non-symmorphic, matching QE) and symmetrises the
-density. *Still to do:* reducing a k-point grid to the irreducible wedge — currently
-the full grid is used, which is correct but costs time, and is why an automatic-grid
-run cannot yet be compared to QE point by point. Also `crystal_sg` (Wyckoff) input.
+**P6 — Symmetry. ✅ DONE** (bar Wyckoff input). `system/symmetry.py` finds the space
+group (48 operations for diamond silicon, non-symmorphic, matching QE) and symmetrises
+the density; `kpoints.irreducible_wedge` reduces an automatic grid, transcribed from
+`kpoint_grid.f90` and applied in `build_system` where `setup.f90` applies it. *Check met:*
+the reduced count matches QE on all 22 automatic-grid cases in the test suite — every
+Bravais lattice, including the triclinic ones — and the eigenvalue comparison for
+`scf-kauto.in`, which used to be skipped for want of this, now runs. Worth 2.8x on that
+input and 8.5x on an 8×8×8 grid. *Still to do:* `crystal_sg` (Wyckoff) input.
+
+**The trap:** QE reduces with the point group of the *Bravais lattice* and then remaps the
+representatives into the wedge of the crystal's group, which can carry them off the grid
+entirely. Reducing directly with the crystal's symmetries — the same operations the
+density symmetrisation uses — lands on the same orbits without the detour, and is what
+makes the counts agree. It is also the only version that is *safe*: the lattice group
+over-reduces a crystal whose symmetry is lower than its lattice's.
 
 **The trap:** with `M` defined by `S a_i = sum_j M_ij a_j`, crystal coordinates
 transform as `c' = c M`. Transposing keeps only the operations that happen to be
@@ -287,14 +297,18 @@ count.
 
 **P10 — Performance and parallelism. 🔶 FIRST PASS DONE.** The metric is single-core
 pypresso against single-core QE on the same machine (`tools/compare_qe.py`, inputs in
-`benchmarks/`), and it now stands at **~3.5x per SCF iteration**, from 53x. Done: `vmap`
+`benchmarks/`), and it now stands at **~3.3x per SCF iteration**, from 53x. Done: `vmap`
 over k-points, the iteration body compiled in three units, the Fermi bisection moved
 on-device, one host sync per iteration, the Ewald real-space sum vectorised, setup's
 compilation count cut by wrapping whole functions in `jit`, and QE's adaptive `ethr`
 schedule (which needed `dr2`/`rho_ddot`, so `conv_thr` now means what it means in a `pw.x`
-input). Still to do: applying `H` only to unconverged bands, a persistent compilation
-cache, buffer donation, k-axis sharding across CPU-cores-as-devices and across GPUs,
-Numba `prange` on the setup hot spots. *Check met:*
+input). Also done: a persistent compilation cache (process wall 9.7 s → 4.3 s), and — the largest
+factor of all, though it belongs to P6 rather than P10 — reducing automatic k-grids to the
+irreducible wedge. Applying `H` only to unconverged bands was measured and dropped: its
+ceiling is 3% of an iteration, because scheduling `ethr` and starting from atomic orbitals
+already stopped Davidson calls running long enough for compaction to pay. Still to do:
+buffer donation, k-axis sharding across CPU-cores-as-devices and across GPUs, Numba
+`prange` on the setup hot spots. *Check met:*
 `PERFORMANCE.md` carries the timing and scaling table; no numerical drift — the full suite
 passes and the two eigensolvers agree to 2e-13 Ry on the total energy.
 

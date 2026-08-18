@@ -14,10 +14,11 @@ partial. A silicon SCF reproduces QE's total energy to **1.1e-8 Ry** term by ter
 band structure to **0.0002 eV**, and metals with every smearing to ~2.5e-8 Ry.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
 read it before writing code. P4 is now complete: a block Davidson eigensolver behind a
-name registry, with the dense solver kept as its reference. A first pass of P10 has been
-done and puts pypresso within **3.5x of serial Quantum ESPRESSO per SCF iteration** on the
-same machine — see `PERFORMANCE.md`. **Outstanding:** k-point reduction to the irreducible
-wedge, DOS (P8), spin (P9), and the rest of P10.
+name registry, with the dense solver kept as its reference, seeded from the pseudo-atomic
+orbitals as QE seeds it. P6 is complete too: automatic k-grids are reduced to the
+irreducible wedge. P10's first pass puts pypresso within **3.3x of serial Quantum ESPRESSO
+per SCF iteration** on the same machine — see `PERFORMANCE.md`. **Outstanding:** DOS (P8),
+spin (P9), and the rest of P10 (k-axis sharding and GPU).
 
 ## Layout
 
@@ -138,7 +139,8 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | FFT / G-vector grids | `FFTXlib/`, `PW/src/data_structure.f90`, `Modules/recvec*.f90` | replace with `jax.numpy.fft`; the sphere-to-box G-vector mapping still has to be reproduced |
 | Pseudopotentials | `upflib/` (`read_upf_new.f90`, `pseudo_types.f90`, `init_us_2.f90`, `sph_bes.f90`, `ylmr2.f90`) | UPF v2 XML parsing + radial→G-space transforms |
 | XC functionals | `XClib/` | must be reimplemented in pure JAX — a `libxc` binding is neither differentiable nor GPU-capable (see `PLAN.md` §6) |
-| Structure / symmetry / k-points | `PW/src/symm_base.f90`, `symme.f90`, `kpoint_grid.f90`, `setup.f90`, `Modules/cell_base.f90` | `ibrav` lattice conventions live in `Modules/latgen.f90` |
+| Structure / symmetry / k-points | `PW/src/symm_base.f90`, `symme.f90`, `kpoint_grid.f90`, `setup.f90`, `Modules/cell_base.f90` | `ibrav` lattice conventions live in `Modules/latgen.f90`. `kpoint_grid` is called with the *lattice* point group and fixed up afterwards; reducing directly with the crystal's symmetries reaches the same orbits |
+| Starting wavefunctions | `PW/src/wfcinit.f90`, `Modules/atomic_wfc_mod.f90`, `upflib/atwfc_mod.f90` | the projectors' expression with `chi` for `beta` — but the phase is `i^l`, not `(-i)^l` |
 | Ewald / local potential / forces / stress | `PW/src/ewald.f90`, `setlocal.f90`, `forces.f90`, `stress.f90` | forces/stress come after energies are correct, and should come from autodiff rather than the hand-derived Fortran expressions |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]`; here it should fall out of `jacfwd` of `H(k)` w.r.t. `k` |
 | Input parsing | `Modules/read_input.f90`, `PW/src/input.f90`, `Modules/input_parameters.f90` | defaults for every input variable are declared in `input_parameters.f90` |
@@ -186,6 +188,10 @@ Dependencies live in the **base anaconda env** (`/u/40/ladovj1/unix/apps/anacond
 JAX 0.11.0, NumPy 2.4.6, SciPy 1.18, Numba 0.65, equinox 0.13.8 (verified working with this
 JAX under x64). Development is CPU-only here; the JAX paths must run unchanged on GPU, so
 correctness is established in float64 on CPU and performance work is a later, separate phase.
+
+Compiled kernels are cached in `~/.cache/pypresso/jax` so that only the first run of a
+process pays for them; `PYPRESSO_CACHE_DIR` moves it and `PYPRESSO_CACHE_DIR=off` disables
+it.
 
 ```
 python3 -m pytest                      # whole suite

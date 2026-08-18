@@ -10,12 +10,12 @@ follows is the anatomy of the answer: where the time went, what moved it, and wh
 remaining gap is made of.
 
 The headline: on a production-cutoff silicon SCF, **one pypresso iteration costs about
-three and a half times a Quantum ESPRESSO iteration**, and the two total energies agree
-to 2.6e-9 Ry.
+three times a Quantum ESPRESSO iteration**, and the two total energies agree to 2.6e-9 Ry.
 
 **What this covers:** the block Davidson eigensolver (completing P4), the dense
-Hamiltonian's matrix elements, and the P10 optimisation work. It uses the same two-atom
-silicon cell as the earlier notebooks.
+Hamiltonian's matrix elements, k-point reduction to the irreducible wedge (completing P6),
+and the P10 optimisation work. It uses the same two-atom silicon cell as the earlier
+notebooks.
 
 
 ```python
@@ -106,10 +106,10 @@ for label, milliseconds, _ in stages:
 
 ```
 
-      v_of_rho                      1.85 ms
-      diagonalise (Davidson)        3.24 ms
-      occupations                   0.85 ms
-      density + symmetrise          1.47 ms
+      v_of_rho                      1.55 ms
+      diagonalise (Davidson)        3.07 ms
+      occupations                   1.20 ms
+      density + symmetrise          1.44 ms
 
 
 The eigensolver dominates, and before any of this work it dominated far more: building the
@@ -148,8 +148,8 @@ print(f"  by applying H          {applied:7.2f} ms   ({applied / direct:.0f}x sl
 print(f"  largest disagreement   {difference:.2e} Ry")
 ```
 
-      from matrix elements      5.70 ms
-      by applying H            53.66 ms   (9x slower)
+      from matrix elements      5.01 ms
+      by applying H            60.60 ms   (12x slower)
       largest disagreement   3.55e-15 Ry
 
 
@@ -231,16 +231,16 @@ for name in ("si-1k.in", "si-1k-ecut40.in"):
               f"   E = {energy:.9f} Ry")
 ```
 
-      si-1k.in          npw   180  dense         23.9 ms/iteration   E = -15.254449448 Ry
+      si-1k.in          npw   180  dense         22.0 ms/iteration   E = -15.254449448 Ry
 
 
-      si-1k.in          npw   180  davidson      13.1 ms/iteration   E = -15.254449448 Ry
+      si-1k.in          npw   180  davidson      10.5 ms/iteration   E = -15.254449448 Ry
 
 
-      si-1k-ecut40.in   npw  1131  dense       1240.8 ms/iteration   E = -15.304610213 Ry
+      si-1k-ecut40.in   npw  1131  dense       1258.0 ms/iteration   E = -15.304610213 Ry
 
 
-      si-1k-ecut40.in   npw  1131  davidson      74.0 ms/iteration   E = -15.304610213 Ry
+      si-1k-ecut40.in   npw  1131  davidson      57.8 ms/iteration   E = -15.304610213 Ry
 
 
 Identical energies, and at 1131 plane waves Davidson is more than ten times faster. The
@@ -275,13 +275,14 @@ for row in result.history:
 ```
 
       iter      total energy      accuracy       ethr
-         1     -15.334298206   1.44e-01   1.00e-02
-         2     -15.303542878   3.60e-03   1.79e-03
-         3     -15.304584095   7.94e-05   4.50e-05
-         4     -15.304609263   1.21e-06   9.93e-07
-         5     -15.304610316   2.78e-07   1.51e-08
-         6     -15.304610211   2.32e-10   3.47e-09
-         7     -15.304610213   1.77e-11   2.90e-12
+         1     -15.348107858   1.43e-01   1.00e-02
+         2     -15.304036085   4.21e-03   1.79e-03
+         3     -15.304647211   1.97e-04   5.27e-05
+         4     -15.304618459   2.54e-05   2.46e-06
+         5     -15.304610128   1.24e-08   3.18e-07
+         6     -15.304610214   5.56e-09   1.55e-10
+         7     -15.304610213   3.52e-10   6.95e-11
+         8     -15.304610213   4.37e-11   4.40e-12
 
 
 The thresholds track QE's own sequence for the same input (1e-2, 1.6e-3, 7.0e-5, 1.5e-6,
@@ -291,7 +292,113 @@ total energy still matches QE to 1.09e-8 Ry, term by term, exactly as before. Th
 variational in the density, so stopping the eigenvalues early costs it nothing.
 
 
-## 7. The other half: compilation, not arithmetic
+## 7. The cheapest speed-up is not doing the work
+
+Every optimisation so far made the same work faster. The largest factor of all comes from
+doing less of it.
+
+Two k-points related by a symmetry of the crystal have the same eigenvalues and contribute
+the same thing to the density, so only one of each orbit has to be diagonalised — the rest
+is recovered by symmetrising the density, which this code has done since part 2. QE reduces
+an automatic grid to that irreducible wedge; pypresso was running the whole grid.
+
+
+```python
+import dataclasses
+
+from pypresso.system.kpoints import KPoints
+from pypresso.system.symmetry import find_symmetries
+
+QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_scf")
+kauto = build_system(read_pw_input(QE / "scf-kauto.in"))
+kpseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in kauto.structure.species)
+
+symmetries = find_symmetries(kauto.cell, kauto.structure)
+full = KPoints.automatic((2, 2, 2), (1, 1, 1), kauto.cell)   # no rotations -> unreduced
+
+print(f"  {symmetries.nsym} symmetry operations")
+for label, variant in (("full grid", dataclasses.replace(kauto, kpoints=full)),
+                       ("irreducible wedge", kauto)):
+    # a separate name: `calculation` above is the si-1k.in one, still needed below
+    kcalculation = Calculation(variant, kpseudos)
+    run_scf(variant, kpseudos, calculation=kcalculation, conv_thr=1e-10)   # compile
+    best = float("inf")
+    for _ in range(3):
+        start = time.perf_counter()
+        kresult = run_scf(variant, kpseudos, calculation=kcalculation, conv_thr=1e-10)
+        best = min(best, time.perf_counter() - start)
+    print(f"  {label:18s} {variant.kpoints.nk} k-points   "
+          f"{best / kresult.iterations * 1e3:6.1f} ms/iteration"
+          f"   E = {kresult.total_energy:.9f} Ry")
+```
+
+      48 symmetry operations
+
+
+      full grid          8 k-points     58.5 ms/iteration   E = -15.794495941 Ry
+
+
+      irreducible wedge  2 k-points     19.4 ms/iteration   E = -15.794495941 Ry
+
+
+Two points instead of eight, and **the total energy is identical to nine decimals**. That
+identity is the whole argument: the reduction is exact *because* the density is
+symmetrised, and this is that being verified rather than assumed.
+
+The factor grows with the grid, and a real calculation uses a denser one than the test
+suite: 6.4x on 4×4×4, 8.5x on 8×8×8, approaching the size of the point group.
+
+## 8. Starting from what the atoms already know
+
+The other way to do less work is to start closer to the answer. The first SCF iteration was
+costing 8 Davidson steps against QE's 2, and the difference was entirely the starting
+guess: a random vector here, the pseudo-atomic orbitals there. Those orbitals are sitting
+in the pseudopotential file — the `PP_PSWFC` section — and the crystal's occupied states
+are mostly made of them.
+
+Building them is the projector expression with `chi` in place of `beta`, sharing the same
+radial transform and the same angular part. One detail is not shared: the phase is `i^l`,
+not the `(-i)^l` of the projectors. QE's comment explains it — it is what makes the k = 0
+wavefunctions real in real space — and getting it wrong yields a merely worse guess rather
+than an error.
+
+
+```python
+from pypresso.pseudo.atomic import atomic_wavefunctions
+from pypresso.solvers.davidson import starting_vectors
+from pypresso.solvers.subspace import rayleigh_ritz
+
+exact, _ = dense_eigensolver_all(hamiltonian, nbnd)
+atomic = atomic_wavefunctions(
+    pseudos, system.structure, system.cell, calculation.basis.dense,
+    calculation.basis.planewaves, system.kpoints,
+)[0]
+random = starting_vectors(None, 8, calculation.basis.npwx, calculation.kinetic[0],
+                          calculation.basis.planewaves.mask[0], atomic.dtype)
+
+print("  band      exact        from atomic      from random")
+for band in range(nbnd):
+    a = float(rayleigh_ritz(hamiltonian, 0, atomic, nbnd)[0][band])
+    r = float(rayleigh_ritz(hamiltonian, 0, random, nbnd)[0][band])
+    e = float(np.asarray(exact)[0][band])
+    print(f"  {band:4d}   {e:10.6f}   {a:10.6f}     {r:10.6f}")
+```
+
+      band      exact        from atomic      from random
+
+
+         0    -0.390299    -0.378360       1.154036
+         1     0.140370     0.162021       1.981284
+         2     0.366614     0.393597       2.628833
+         3     0.366614     0.393597       3.128656
+
+
+A Rayleigh-Ritz rotation inside the atomic orbitals' span already lands within tens of
+milliRydberg of the exact eigenvalues; the same rotation inside a random span does not.
+That is worth 8 Davidson steps in the first iteration and 33 → 21 over a whole run —
+against QE's 25.
+
+## 9. The other half: compilation, not arithmetic
 
 Every JAX operation dispatched outside a `jit` is compiled by XLA separately, and on these
 array sizes that compilation costs tens of milliseconds while the arithmetic costs
@@ -338,12 +445,12 @@ print(subprocess.run([sys.executable, "-c", probe], capture_output=True, text=Tr
 
 ```
 
-      first  Calculation   4.084 s
-      second Calculation   0.049 s
+      first  Calculation   1.110 s
+      second Calculation   0.040 s
     
 
 
-## 8. Against Quantum ESPRESSO, single core
+## 10. Against Quantum ESPRESSO, single core
 
 `tools/compare_qe.py` runs both codes on the same input, QE built serial and pypresso with
 XLA pinned to one thread, and reads QE's own timing report. On this machine:
@@ -351,13 +458,14 @@ XLA pinned to one thread, and reads QE's own timing report. On this machine:
 | | `si-1k.in` (180 PWs) | `si-1k-ecut40.in` (1131 PWs) |
 |---|---|---|
 | QE, per SCF iteration | 0.003 s | 0.013 s |
-| pypresso, per SCF iteration | 0.009 s | 0.044 s |
-| ratio | **3.6x** | **3.5x** |
+| pypresso, per SCF iteration | 0.008 s | 0.040 s |
+| ratio | **3.3x** | **3.2x** |
 | total energy agreement | 7e-7 Ry | 3e-9 Ry |
 
-Three and a half times a mature Fortran code, in Python, on one core, with the same
-numbers. The remaining gap is not one thing: `h_psi` is applied to every band where
-`cegterg` applies it only to the unconverged ones, each FFT is about 1.5x FFTW
-single-threaded, and per-call dispatch overhead still shows on the small case.
+Three times a mature Fortran code, in Python, on one core, with the same numbers. What is
+left is mostly per-dispatch overhead on small arrays — which is why the ten-k-point
+aluminium case is the worst of the four at 5.2x, and also where the next factor is: the
+k-axis leads every wavefunction-shaped array precisely so it can be sharded across cores
+and GPUs, and none of that is switched on here.
 
 `PERFORMANCE.md` carries the full breakdown and the backlog.

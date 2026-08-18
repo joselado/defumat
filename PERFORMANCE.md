@@ -27,46 +27,36 @@ measures batching rather than the cost of the physics.
 
 ## Where it stands
 
-Single core, this machine, 2026-08-18. `conv_thr = 1e-10` on both sides so the
-two are converging to the same place, which also makes the energy agreement a
-correctness check on every optimisation.
+Single core, this machine, 2026-08-18. `conv_thr = 1e-10` where the input allows
+it, so both codes converge to the same place and the energy agreement doubles as
+a correctness check on every optimisation.
 
 | | QE 7.5 | pypresso | ratio |
 |---|---|---|---|
-| **`si-1k.in`** — 180 PWs | | | |
-| setup / `init_run` | 0.050 s | 3.7 s | 74x |
-| SCF, warm | 0.020 s | 0.064 s | 3.2x |
-| per SCF iteration | 0.003 s | 0.009 s | **3.6x** |
+| **`si-1k.in`** — 180 PWs, 1 k-point | | | |
+| per SCF iteration | 0.003 s | 0.008 s | **3.3x** |
 | total energy | −15.25444871 Ry | −15.25444945 Ry | Δ 7e-7 Ry |
-| **`si-1k-ecut40.in`** — 1131 PWs | | | |
-| setup / `init_run` | 0.250 s | 4.4 s | 18x |
-| SCF, warm | 0.100 s | 0.309 s | 3.1x |
-| per SCF iteration | 0.013 s | 0.044 s | **3.5x** |
+| **`si-1k-ecut40.in`** — 1131 PWs, 1 k-point | | | |
+| per SCF iteration | 0.013 s | 0.040 s | **3.2x** |
 | total energy | −15.30461021 Ry | −15.30461021 Ry | Δ 3e-9 Ry |
+| **`pw_scf/scf-kauto.in`** — 2 k-points, reduced from 8 | | | |
+| per SCF iteration | 0.003 s | 0.011 s | **3.3x** |
+| total energy | −15.79449452 Ry | −15.79449594 Ry | Δ 1e-6 Ry |
+| **`pw_metal/metal.in`** — Al, 10 k-points | | | |
+| per SCF iteration | 0.013 s | 0.069 s | **5.2x** |
+| total energy | −4.18546970 Ry | −4.18546964 Ry | Δ 6e-8 Ry |
 
-Best of five runs on each side, and worth taking as ±20%: the small case in
-particular swings between 0.064 s and 0.091 s from run to run, and QE prints its
-timings to 0.01 s.
+Best of five runs on each side, and worth taking as ±20%: QE prints its timings
+to 0.01 s, so on the small cases its per-iteration figure is one significant
+digit and the ratios inherit that. The metal is the worst case because ten
+k-points multiply the per-dispatch overhead that the single-k cases mostly hide.
 
-And the two cases the earlier log tracked, now measured the same way:
-
-| | QE, per iteration | pypresso, per iteration | ratio |
-|---|---|---|---|
-| `pw_scf/scf.in` — Si, 2 k-points | 0.003 s | 0.018 s | 7.4x |
-| `pw_metal/metal.in` — Al, 10 k-points | 0.017 s | 0.133 s | 8.0x |
-
-QE prints its timings to 0.01 s, so its per-iteration figures on the small cases
-are two significant figures at best and the ratios there carry that uncertainty.
-The multi-k cases are worse than the single-k ones because pypresso pays a fixed
-per-dispatch overhead that k-point batching does not yet hide; that is the same
-overhead the setup row shows, seen from a different angle.
-
-**Cold versus warm.** The tool reports both. A first SCF costs ~3.5 s more than
-a warm one, all of it XLA compiling kernels, and setup is ~3.9 s of which the
-arithmetic is 0.04 s. QE has no equivalent cost and never will. This is a fixed
-overhead, not a scaling problem — it is the same few seconds on a system a
-hundred times larger — but it is real for short runs, and the honest comparison
-of the *physics* is the warm number.
+**Setup and process wall time.** With the compilation cache warm, setup is
+1.0–1.3 s across all four cases and a complete silicon SCF takes **4.3 s of
+process wall time**, against 9.7 s before the cache and 0.09 s for QE. What
+remains is Python and JAX import, plus the compilations the cache cannot serve.
+The honest comparison of the *physics* is still the per-iteration number; this
+row is what a user waits for.
 
 ## What moved, and by how much
 
@@ -75,10 +65,12 @@ Baseline is the state before this optimisation pass, measured the same way on
 
 | | before | after | |
 |---|---|---|---|
-| setup | 9.96 s | 3.7 s | 2.7x |
-| SCF, warm | 0.920 s | 0.064 s | **14x** |
-| per SCF iteration | 0.131 s | 0.009 s | **14x** |
-| against QE, per iteration | 53x | 3.6x | |
+| setup, cache warm | 9.96 s | 1.1 s | 9x |
+| process wall, whole run | — | 9.7 s → 4.3 s | 2.2x |
+| SCF, warm | 0.920 s | 0.058 s | **16x** |
+| per SCF iteration | 0.131 s | 0.008 s | **16x** |
+| against QE, per iteration | 53x | 3.3x | |
+| Davidson steps for a run | 75 | 21 | 3.6x |
 
 Every validated number is unchanged: the full test suite passes, and the two
 eigensolvers agree on silicon's total energy to 2e-13 Ry.
@@ -203,105 +195,121 @@ solvers now differ by up to 1e-6 Ry rather than 1e-12, because Davidson stops
 where it is asked to stop; that is QE's behaviour, it is four orders inside the
 comparison tolerance, and the total energy is unmoved because it is variational.
 
-## What the remaining 3.5x is made of
+### 5. Doing less work: the irreducible wedge
 
-Measured in situ — a clock around each step of the real SCF loop, not around a
-micro-benchmark. (Timing the solver on its own with the *converged* wavefunctions
-as its seed understates it by more than half.)
+The largest factor of all, and not an optimisation of code. Two k-points related
+by a symmetry of the crystal give the same eigenvalues and contribute the same
+thing to the density, so only one of each orbit needs diagonalising — the rest is
+recovered by symmetrising the density, which this code already did. On
+`K_POINTS automatic` the whole grid was being run.
 
-| Stage | `si-1k.in` (180 PWs) | `si-1k-ecut40.in` (1131 PWs) |
+`kpoint_grid.f90`, transcribed into `system/kpoints.py` and applied in
+`build_system` where QE applies it (`setup.f90`, after the symmetry analysis).
+Reduction uses the *crystal's* symmetries rather than the lattice point group, so
+a structure with fewer symmetries than its lattice is never over-reduced; QE
+reaches the same orbits by a longer road (lattice group, then a remap that can
+carry representatives off the grid entirely).
+
+Measured on `pw_scf/scf-kauto.in`, 8 k-points against 2:
+
+| | k-points | warm SCF | per iteration |
+|---|---|---|---|
+| full grid | 8 | 346 ms | 49.4 ms |
+| irreducible wedge | 2 | 122 ms | 17.4 ms |
+
+**2.8x**, with a total energy identical to nine decimals — which is the real
+check: the reduction is exact only because the density is symmetrised, and the
+energy agreeing to 1e-9 is that identity being verified rather than assumed. And
+it grows with the grid, which a production calculation makes denser than the test
+suite's: 6.4x on 4x4x4, 8.5x on 8x8x8.
+
+Across the 22 automatic-grid cases in the test suite — every Bravais lattice
+including the triclinic ones — the reduced count matches QE's exactly, 22 out of
+22. The test that used to *skip* the eigenvalue comparison for `scf-kauto.in`
+("comparison needs P6's IBZ") now runs.
+
+### 6. Starting from atomic orbitals
+
+The first SCF iteration cost 8 Davidson steps where QE's cost 2, and the reason
+was the starting guess: QE begins from the pseudo-atomic orbitals in the
+pseudopotential's `PP_PSWFC` section, this code from a random vector damped by
+`1/(1+|k+G|^2)`. The atoms already know roughly where their electrons are.
+
+`pseudo/atomic.py` builds them — the projectors' expression with `chi` in place
+of `beta`, sharing the same radial transform, the same angular part and the same
+assembly — and `solvers/subspace.py` diagonalises the Hamiltonian inside their
+span (QE's `rotate_wfc`) before handing the result to Davidson. **The phase is
+`i^l`, not the `(-i)^l` of the projectors**; the Fortran comments say why, and
+getting it wrong produces a merely worse guess rather than a failure.
+
+| Davidson steps per SCF iteration | 1 | 2 | 3 | 4 | 5 | 6 | 7 | total |
+|---|---|---|---|---|---|---|---|---|
+| random start | 8 | 4 | 4 | 4 | 4 | 3 | 6 | **33** |
+| atomic start | 3 | 2 | 3 | 3 | 3 | 4 | 3 | **21** |
+| QE | 2 | 1 | 2 | 5 | 6 | 4 | 2 | **25** |
+
+Where a species has fewer orbitals than the calculation has bands — aluminium
+has four and a smeared run asks for six — the rest are random, as QE tops up.
+
+### 7. The compilation cache
+
+Nothing to do with the loop, and the largest effect on what a user actually
+waits for. XLA compilations are now written to `~/.cache/pypresso/jax`
+(`PYPRESSO_CACHE_DIR` overrides it; `off` disables it), so the second and every
+later run skips them:
+
+| | first run | later runs |
 |---|---|---|
-| **diagonalise** | 6.7 ms — **39%** | 39.6 ms — **60%** |
-| density + symmetrise | 2.3 ms | 9.4 ms |
-| `v_of_rho` | 1.6 ms | 7.4 ms |
-| occupations | 2.3 ms | 1.8 ms |
-| scf accuracy (`dr2`) | 0.9 ms | 2.3 ms |
-| mixing (host round trip) | 0.8 ms | 1.4 ms |
-| energies (one host sync) | 0.7 ms | 0.9 ms |
-| build the Hamiltonian object | 0.4 ms | 0.5 ms |
-| loop overhead | 1.2 ms | 3.2 ms |
-| **per iteration** | 17.0 ms | 66.2 ms |
+| process wall, complete silicon SCF | 9.7 s | **4.3 s** |
+| setup | 3.7 s | 1.1 s |
 
-The eigensolver is still the largest single item but no longer overwhelming: 60%
-at the production cutoff, down from 81%. Inside a Davidson step, at 1131 plane
-waves:
+Two defaults have to be overridden or it silently caches nothing: JAX only
+persists a kernel that took more than a second to compile, and ours take about
+fifty milliseconds each — there are simply a great many of them. Failure to write
+the cache is a warning, never an exception.
+
+The test suite is a side beneficiary: 134 s to 57 s.
+
+## What the remaining 3x is made of
+
+Everything below the top item has now been either done or measured and rejected,
+so what is left is short. Per Davidson step at 1131 plane waves:
 
 | | |
 |---|---|
-| `h_psi`, 4 bands | 7.33 ms — **85% of a step** |
+| `h_psi`, 4 bands | 5–7 ms — **~85% of a step** |
+| ...of which the two 3D FFTs | ~75% |
 | subspace solve, 16x16 (Cholesky + `eigh`) | 0.85 ms |
-| rotations, 16 -> 4 vectors | 0.19 ms x2 |
-| **one step** | **8.6 ms** |
 
-What is left, in order:
+So the SCF is **FFT-bound**, which is where a plane-wave code is supposed to be,
+and it is the same regime QE runs in. Roughly half the loop is 3D transforms.
+That leaves three things, none of them large:
 
-1. **Each step applies `H` to every band.** `cegterg` applies it only to the
-   unconverged ones (34 `h_psi` calls in the QE run above, on one to four vectors
-   each); the static-shape design here applies it to all four and masks the rest.
-   Cheap early, when nothing has converged, and up to 4x wasteful at the end. The
-   machinery already exists — the expansion compacts unconverged roots with a
-   stable `argsort`, and the same permutation would let `h_psi` run on a masked
-   block.
-2. **Each FFT is ~1.5x FFTW.** `h_psi` on 4 bands is 8 transforms of the 30^3 box
-   in 7.33 ms, or 0.92 ms each, against roughly 0.6 ms for QE's `fftw` calls.
-   This is close to a floor: XLA's CPU FFT against FFTW, single threaded.
-3. **Per-dispatch overhead**, which dominated before this pass, is now under 5%
-   at the production cutoff. It is why the small case still shows a worse ratio
-   than the big one, and why the multi-k cases are worse than either.
+1. **Per-dispatch overhead**, still visible on small arrays: it is why `metal.in`
+   with its ten k-points sits at 5.2x while the single-k cases sit at 3.2x.
+2. **FFT throughput.** XLA's transform is already 2x faster than pocketfft
+   single-threaded, and QE's sticks decomposition was measured at a 1.13x
+   ceiling here, so this is close to a floor rather than an opportunity.
+3. **Form factors computed rather than interpolated** — a deliberate trade for
+   differentiability (`PLAN.md` D1/D2), paid in setup and now largely hidden by
+   the compilation cache.
 
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
-instinct — several plausible-looking items below turned out on measurement to be
-worth nothing, and are recorded as such so they are not attempted twice. None of
-these may change a validated number.
+instinct. None of these may change a validated number.
 
-1. **Reduce k-points to the irreducible wedge.** Not an optimisation of the code
-   but of how much of it runs, and the largest factor left by a wide margin. On
-   `K_POINTS automatic` we run the whole grid where QE runs the wedge — on the
-   test suite's own `scf-kauto.in`, 8 k-points against QE's 2. It grows with the
-   grid, and a production calculation uses a much denser one than the test suite:
-
-   | grid | full | irreducible | |
-   |---|---|---|---|
-   | 2x2x2 | 8 | 2 | 4.0x |
-   | 4x4x4 | 64 | 10 | 6.4x |
-   | 6x6x6 | 216 | 28 | 7.7x |
-   | 8x8x8 | 512 | 60 | 8.5x |
-
-   (Silicon, 48 operations plus time reversal. Cases whose input lists k-points
-   explicitly, like `pw_scf/scf.in`, are already reduced and unaffected.)
-
-2. **Atomic starting wavefunctions** (`wfcinit` / `atomic_wfc`). The first SCF
-   iteration costs 8 Davidson steps against QE's 2, and the reason is the
-   starting guess: QE starts from the pseudo-atomic orbitals, this code from a
-   random vector damped by `1/(1+|k+G|^2)`. That is ~6 of the 33 steps a whole
-   run takes. The radial functions are already parsed (`Pseudopotential.orbitals`
-   carries `chi` per channel) and the transform to `|k+G|` space is the machinery
-   `build_projectors` already has, so this is assembly rather than new physics.
-
-3. **A persistent compilation cache** (`jax_compilation_cache_dir`). Nothing for
-   a first run on a new machine, but it removes ~7 s of compilation from every
-   run after that — against ~0.3 s of SCF. For anything short of a long run it is
-   the dominant term in the wall clock, whatever the loop costs.
-
-4. **Apply `H` only to unconverged bands**, as `cegterg` does. The saving is real
-   — `h_psi` is sublinear in the block size (1 band 1.9 ms, 4 bands 6.7 ms at
-   1131 PWs), so a late iteration with one root left could be ~3x cheaper — but
-   it is harder here than the Fortran makes it look. Shapes inside `jit` are
-   static, so masking the converged bands costs exactly what computing them
-   costs; realising it needs `lax.switch` over a handful of precompiled block
-   sizes, or giving up the on-device loop. Worth roughly 1.2x overall, at
-   moderate complexity.
-
-5. **Fold `dr2` into the iteration's other reductions.** It costs a transform and
+1. **`jax.sharding` over the k-axis**, and GPU. Excluded from the single-core
+   metric by construction, and the reason the k-axis leads every
+   wavefunction-shaped array. `metal.in` has ten k-points and a factor of ten
+   sitting unused on this machine alone — and it is the case with the worst
+   ratio, so this is where the remaining structural win is.
+2. **Fold `dr2` into the iteration's other reductions.** It costs a transform and
    a dispatch of its own (~3% of an iteration) for a quantity the loop already
    computes a residual for. Mixing in G space would save another transform.
-
-6. **`jax.sharding` over the k-axis**, and GPU. Excluded from the single-core
-   metric by construction, and the reason the k-axis leads every
-   wavefunction-shaped array. On a 10-k-point run this is a factor of 10 sitting
-   unused on this machine alone.
+3. **Shell-based radial evaluation** for quantities depending only on `|G|` (~100
+   shells vs 1459 G-vectors for Si). Note this is *not* strain-safe: shells split
+   under strain, so it must stay off the stress path.
 
 ### Measured and rejected
 
@@ -314,8 +322,30 @@ these may change a validated number.
   touch only 16% of the z-columns and 50% of the x-planes, which looks like a
   large saving — but against the *fused* 3D transform the ceiling is **1.13x**,
   because the final pass runs on dense data and is 58% of the cost on its own.
-  Splitting the transform by hand also gives up XLA's fusion, and three separate
-  passes cost 4.8 ms where the fused `fftn` costs 3.3 ms. Not worth it.
+  Splitting the transform by hand also gives up XLA's fusion: three separate
+  passes cost 4.8 ms where the fused `fftn` costs 3.3 ms.
+
+* **Applying `H` only to unconverged bands**, as `cegterg` does. This was second
+  on the backlog until it was measured. Counting the unconverged roots at every
+  Davidson step of a whole run and pricing them with the measured cost of
+  `h_psi` as a function of block size gives a ceiling of **6% (180 PWs) to 8%
+  (1131 PWs)** of `h_psi` time — about 3% of an SCF iteration.
+
+  The reason it is so small is that the two changes above it took its value
+  away. Davidson calls now last two to four steps rather than eight to
+  twenty-six, and the first step of every call has *all* roots unconverged by
+  construction, since the convergence test compares against the previous step.
+  Compaction pays when a call runs long; scheduling `ethr` and starting from
+  atomic orbitals are precisely what stopped calls running long.
+
+  It is also more expensive to implement here than in Fortran: shapes inside
+  `jit` are static, so masking converged bands costs exactly what computing them
+  costs, and realising the saving needs `lax.switch` over precompiled block
+  sizes. That cannot sit under the `vmap` over k-points either — a batched
+  switch index makes every branch execute — so it would need the per-k solver
+  rewritten as one joint loop over all k, where the block size is the *maximum*
+  over k-points and the saving shrinks again. A substantial rewrite of a
+  freshly validated solver, for 3%.
 
 * **Folding the `1/N` FFT normalisations.** `g_to_r` multiplies by `N` and
   `r_to_g` divides by it, and inside `h_psi` the two cancel exactly. Removing
@@ -334,3 +364,6 @@ these may change a validated number.
 | 2026-08-18 | Dense Hamiltonian built from its matrix elements, `V(G-G')`, instead of one FFT per plane wave | matrix build 49 → 6 ms |
 | 2026-08-18 | Block Davidson eigensolver (P4), solver registry, wavefunctions carried between SCF iterations | 0.036 → 0.012 s/iteration; 13x at 1131 PWs |
 | 2026-08-18 | QE's adaptive `ethr` schedule, `scf_accuracy` (`dr2`), and `conv_thr` on the same quantity QE uses | 75 → 33 Davidson steps; 0.067 → 0.044 s/iteration at 1131 PWs |
+| 2026-08-18 | k-point reduction to the irreducible wedge (`kpoint_grid.f90`) | 2.8x on `scf-kauto.in`; matches QE's count on 22/22 lattices |
+| 2026-08-18 | Pseudo-atomic starting wavefunctions and Rayleigh-Ritz (`wfcinit`) | 33 → 21 Davidson steps; first iteration 8 → 3 |
+| 2026-08-18 | Persistent XLA compilation cache, on by default | process wall 9.7 → 4.3 s; test suite 134 → 57 s |
