@@ -289,8 +289,6 @@ print(np.asarray(kpoints.cartesian(cell)))
      [0.25 0.5  0.  ]]
     
     and in 1/bohr, which is what |k+G|^2 needs:
-
-
     [[0.15399964 0.15399964 0.15399964]
      [0.15399964 0.15399964 0.46199892]]
 
@@ -331,8 +329,6 @@ print("|G|^2 in units of (2*pi/alat)^2:", np.asarray(gvectors.g2(cell))[:8])
     smooth grid is the same object: True   (dual = 4.0, so no double grid)
     
     Miller indices of the first few G-vectors:
-
-
     [[ 0  0  0]
      [-1 -1 -1]
      [-1  0  0]
