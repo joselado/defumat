@@ -46,14 +46,6 @@ def _cases():
 CASES = _cases()
 
 
-@pytest.fixture(scope="module")
-def suite():
-    path = QE_ROOT / "test-suite"
-    if not path.is_dir():
-        pytest.skip("QE reference tree not present")
-    return path
-
-
 #: ATOMIC_POSITIONS crystal_sg gives Wyckoff positions, which need space-group
 #: expansion -- a symmetry-phase (P6) feature, not a P1 gap.
 NEEDS_SPACE_GROUPS = {"lattice-wyckoff-sio2.in"}
@@ -66,9 +58,9 @@ def _build(path):
 
 
 @pytest.mark.parametrize(("directory", "name"), CASES)
-def test_cell_matches_reference(suite, directory, name):
-    system = _build(suite / directory / name)
-    ref = read_qe_output(suite / directory / f"benchmark.out.git.inp={name}")
+def test_cell_matches_reference(qe_testsuite, directory, name):
+    system = _build(qe_testsuite / directory / name)
+    ref = read_qe_output(qe_testsuite / directory / f"benchmark.out.git.inp={name}")
 
     # QE prints alat and the volume with 4 decimals and the axes with 6, so
     # agreement is demanded at the precision it actually reports: half of the
@@ -86,10 +78,10 @@ def test_cell_matches_reference(suite, directory, name):
 
 
 @pytest.mark.parametrize(("directory", "name"), CASES)
-def test_kpoints_match_reference(suite, directory, name):
-    system = _build(suite / directory / name)
-    pwin = read_pw_input(suite / directory / name)
-    ref = read_qe_output(suite / directory / f"benchmark.out.git.inp={name}")
+def test_kpoints_match_reference(qe_testsuite, directory, name):
+    system = _build(qe_testsuite / directory / name)
+    pwin = read_pw_input(qe_testsuite / directory / name)
+    ref = read_qe_output(qe_testsuite / directory / f"benchmark.out.git.inp={name}")
 
     if ref.kpoints is None:
         pytest.skip("QE did not print the k-point list for this run")

@@ -166,10 +166,33 @@ Two conventions found the hard way, both now covered by tests:
   until then the sweep checks grid size, uniform weights, first-BZ membership and
   uniqueness.
 
-**P2 — Plane-wave basis.** G-vector enumeration and QE-compatible ordering, dense and smooth
-FFT grid dimensions, `npw_k` per k-point, sphere↔box mapping, FFT wrappers. Gamma-only
-storage deferred. *Check:* `ngm`, FFT grid dimensions, and `npw` per k-point equal QE's
-reported values exactly.
+**P2 — Plane-wave basis. ✅ DONE.** `basis/fftgrid.py` (FFT dimensions), `basis/gvectors.py`
+(`GVectors`, including gamma-only half-sphere), `basis/planewaves.py` (per-k selection,
+padded to `npwx` with a mask), `basis/fft.py` (sphere↔box, QE's scaling), `basis/builder.py`
+(dense + smooth grids). *Check met:* 631 tests pass; across the 86-case sweep, `ngm` on the
+dense grid, the dense FFT dimensions, `ngm` and the FFT dimensions on the smooth grid (the
+14 ultrasoft cases with `dual > 4`), and `npw` at every k-point (52 cases with a
+non-symmetry-reduced k-set) all match QE **exactly** — these are integers, so there is no
+tolerance involved.
+
+Three things this phase settled:
+
+- **Gamma-only halves the G-vector set, and QE reports the halved count.** At k = 0 a real
+  wavefunction gives `c(-G) = conj(c(G))`, so `ggen` keeps the half-space `x > 0` plus the
+  half-plane `x = 0, y > 0` plus the half-line `x = y = 0, z >= 0` — G = 0 kept once, hence
+  `(ngm_full + 1)/2`. The selection is implemented; the *use* of it (real wavefunctions in
+  `h_psi`) comes at P4.
+- **One benchmark's FFT grid differs for a machine-dependent reason, not a physical one.**
+  `pw_scf/scf.in` and `pw_scf/scf-cg.in` are the same system at the same cutoffs and both
+  report 1459 G-vectors, but their committed grids are 15³ and 16³. 15 = 3·5 is a valid FFT
+  size everywhere except IBM ESSL, whose `allowed` additionally demands a factor of 2. The
+  references predate the current release (the suite records `REFERENCE_VERSION 6.0`) and
+  were evidently not all produced on one build. The Miller range is identical either way
+  ((15−1)/2 = (16−1)/2 = 7), so the G-vector set is the same; the test checks that instead
+  for this one case.
+- **Miller indices are stored, cartesian G is derived.** Storing cartesian components would
+  freeze the cell and make stress-by-differentiation impossible; a test confirms
+  `grad(|G|²)` w.r.t. the lattice is non-zero (rule D2).
 
 **P3 — Pseudopotentials (norm-conserving first).** UPF v2 parser, radial integration,
 spherical Bessel transforms, `Y_lm`, `vloc(G)`, atomic `rho(G)`, `vkb(k)` projectors and
