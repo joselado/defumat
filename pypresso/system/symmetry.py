@@ -31,7 +31,8 @@ from pypresso.basis.gvectors import GVectors
 from pypresso.system.cell import Cell
 from pypresso.system.structure import Structure
 
-__all__ = ["Symmetries", "lattice_point_group", "find_symmetries", "symmetrize_density"]
+__all__ = ["Symmetries", "lattice_point_group", "find_symmetries", "symmetrize_density",
+           "symmetry_maps", "apply_symmetry_maps"]
 
 _TOLERANCE = 1.0e-6
 
@@ -181,9 +182,19 @@ def symmetrize_density(
         return rho_g
 
     permutations, phases = maps if maps is not None else symmetry_maps(gvectors, symmetries)
-    # One batched gather rather than a Python loop over operations: with 48
-    # operations the loop dispatches ~150 tiny kernels per call, which costs
-    # far more than the arithmetic on a 1459-element array.
+    return apply_symmetry_maps(rho_g, permutations, phases)
+
+
+def apply_symmetry_maps(rho_g: jnp.ndarray, permutations, phases) -> jnp.ndarray:
+    """The averaging itself, given precomputed maps -- pure JAX, safe to ``jit``.
+
+    One batched gather rather than a Python loop over operations: with 48
+    operations the loop dispatches ~150 tiny kernels per call, which costs far
+    more than the arithmetic on a 1459-element array. Split out from
+    :func:`symmetrize_density` because that function's arguments include the
+    :class:`Symmetries` object, whose rotations are static NumPy arrays and so
+    cannot cross a ``jit`` boundary.
+    """
     return jnp.mean(phases * rho_g[permutations], axis=0)
 
 
@@ -196,18 +207,26 @@ def symmetry_maps(gvectors: GVectors, symmetries: Symmetries):
     what :class:`pypresso.scf.driver.Calculation` does.
     """
     miller = np.asarray(gvectors.miller)
-    lookup = {tuple(m): index for index, m in enumerate(miller)}
+    grid = np.asarray(gvectors.grid)
 
-    permutations, phases = [], []
-    for rotation, translation in zip(symmetries.rotation_array(), symmetries.translation_array()):
-        rotated = miller @ rotation.T  # m' = M m, written for row vectors
-        try:
-            permutation = np.array([lookup[tuple(m)] for m in rotated])
-        except KeyError as error:  # pragma: no cover - would mean a non-symmetry
-            raise ValueError(
-                "a symmetry operation maps a G-vector outside the cutoff sphere; "
-                "the operation is not a symmetry of the reciprocal lattice"
-            ) from error
-        permutations.append(permutation)
-        phases.append(np.exp(-2j * np.pi * (miller @ translation)))
-    return jnp.asarray(np.array(permutations)), jnp.asarray(np.array(phases))
+    # Look the rotated indices up through the FFT box rather than through a
+    # Python dict: every G in the sphere has a distinct residue modulo the grid
+    # (that is what makes the box big enough to hold the sphere), so wrapping the
+    # Miller index into the box is an injective key and one array indexing
+    # replaces 48 x ngm dictionary probes.
+    lookup = np.full(tuple(grid), -1, dtype=np.int64)
+    wrapped = tuple((miller % grid).T)
+    lookup[wrapped] = np.arange(len(miller))
+
+    rotations = symmetries.rotation_array()
+    translations = symmetries.translation_array()
+
+    rotated = np.einsum("gc,sdc->sgd", miller, rotations)  # m' = M m, row vectors
+    permutations = lookup[tuple((rotated % grid).transpose(2, 0, 1))]
+    if np.any(permutations < 0):  # pragma: no cover - would mean a non-symmetry
+        raise ValueError(
+            "a symmetry operation maps a G-vector outside the cutoff sphere; "
+            "the operation is not a symmetry of the reciprocal lattice"
+        )
+    phases = np.exp(-2j * np.pi * (miller @ translations.T)).T
+    return jnp.asarray(permutations), jnp.asarray(phases)

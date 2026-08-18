@@ -16,7 +16,10 @@ first, which many formulas rely on.
 
 from __future__ import annotations
 
+from functools import partial
+
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -44,11 +47,11 @@ class GVectors(eqx.Module):
 
     def reduced(self, cell: Cell) -> jnp.ndarray:
         """G in units of ``2*pi/alat`` -- QE's ``g`` array."""
-        return self.miller.astype(cell.at.dtype) @ cell.bg_2pi_alat
+        return _transform(self.miller, cell.bg_2pi_alat)
 
     def cartesian(self, cell: Cell) -> jnp.ndarray:
         """G in 1/bohr, which is what ``|k+G|^2`` in Ry needs."""
-        return self.miller.astype(cell.at.dtype) @ cell.bg
+        return _transform(self.miller, cell.bg)
 
     def g2(self, cell: Cell) -> jnp.ndarray:
         """``|G|^2`` in units of ``(2*pi/alat)^2`` -- QE's ``gg`` array."""
@@ -65,16 +68,26 @@ class GVectors(eqx.Module):
         Negative Miller indices wrap to the top of each axis, which is the
         standard FFT frequency layout and matches QE's ``nl`` map.
         """
-        n1, n2, n3 = self.grid
-        i = jnp.mod(self.miller[:, 0], n1)
-        j = jnp.mod(self.miller[:, 1], n2)
-        k = jnp.mod(self.miller[:, 2], n3)
-        return (i * n2 + j) * n3 + k
+        return _fft_index(self.miller, self.grid)
 
     def shell_boundaries(self, cell: Cell, tolerance: float = 1e-8) -> np.ndarray:
         """Indices where a new ``|G|^2`` shell starts. Useful for radial tables."""
         g2 = np.asarray(self.g2(cell))
         return np.flatnonzero(np.diff(g2) > tolerance) + 1
+
+
+@jax.jit
+def _transform(miller, matrix):
+    return miller.astype(matrix.dtype) @ matrix
+
+
+@partial(jax.jit, static_argnames=("grid",))
+def _fft_index(miller, grid):
+    n1, n2, n3 = grid
+    i = jnp.mod(miller[:, 0], n1)
+    j = jnp.mod(miller[:, 1], n2)
+    k = jnp.mod(miller[:, 2], n3)
+    return (i * n2 + j) * n3 + k
 
 
 def generate_gvectors(

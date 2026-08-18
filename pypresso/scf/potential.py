@@ -22,7 +22,7 @@ from pypresso.system.cell import Cell
 from pypresso.units import E2, FPI
 from pypresso.xc.lda import xc_energy_density, xc_potential
 
-__all__ = ["Potential", "v_of_rho", "hartree", "exchange_correlation"]
+__all__ = ["Potential", "v_of_rho", "hartree", "exchange_correlation", "scf_accuracy"]
 
 
 class Potential(eqx.Module):
@@ -51,6 +51,24 @@ def hartree(rho_g: jnp.ndarray, gvectors: GVectors, cell: Cell):
         # Only half the sphere is stored; every G != 0 stands for a +-G pair.
         energy = 2.0 * energy
     return v, energy
+
+
+def scf_accuracy(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell) -> jnp.ndarray:
+    """QE's ``dr2``: how far from self-consistency the density still is, in Ry.
+
+    ``rho_ddot`` in ``PW/src/scf_mod.f90``, evaluated on the residual with
+    itself. It is the *Hartree energy of the density error* -- literally the same
+    expression as :func:`hartree`'s energy, applied to ``rho_out - rho_in`` --
+    which is why it is an estimate of the error in the total energy rather than
+    just a size of the density change: it weights long-wavelength errors by
+    ``1/G^2``, and those are the ones that cost energy.
+
+    This is the quantity QE compares against ``conv_thr`` and the quantity its
+    diagonalisation threshold is scheduled from, so both of those now mean the
+    same thing here as they do there.
+    """
+    residual_g = r_to_g(residual_r, gvectors.fft_index)
+    return hartree(residual_g, gvectors, cell)[1]
 
 
 def exchange_correlation(rho_r: jnp.ndarray, cell: Cell):

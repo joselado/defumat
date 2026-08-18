@@ -19,9 +19,11 @@ be checked on its own long before there is an SCF to put it in.
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.scipy.special import erfc
+from scipy.special import erfc as erfc_host
 
 from pypresso.basis.gvectors import GVectors
 from pypresso.system.cell import Cell
@@ -46,7 +48,7 @@ def ewald_alpha(charge: float, gcut: float, tpiba2: float, tolerance: float = 1.
             2.0
             * charge**2
             * np.sqrt(2.0 * alpha / TPI)
-            * float(erfc(np.sqrt(tpiba2 * gcut / 4.0 / alpha)))
+            * float(erfc_host(np.sqrt(tpiba2 * gcut / 4.0 / alpha)))
         )
         if upperbound <= tolerance:
             return alpha
@@ -82,46 +84,70 @@ def ewald_energy(
 
 def _reciprocal_term(cell, structure, gvectors, charges, alpha) -> jnp.ndarray:
     """The smooth part, summed over G, plus the two ``G = 0`` constants."""
-    g = gvectors.cartesian(cell)  # (ngm, 3), 1/bohr
-    tau = structure.positions  # (nat, 3), bohr
+    factor = 2.0 if gvectors.gamma_only else 1.0
+    return _reciprocal_kernel(
+        gvectors.cartesian(cell), structure.positions, jnp.asarray(charges),
+        alpha, cell.volume, factor,
+    )
 
+
+@jax.jit
+def _reciprocal_kernel(g, tau, charges, alpha, volume, factor):
     # rho(G) = sum_a Z_a conj(S_a(G)); only |rho|^2 is used.
     rho = jnp.sum(charges * jnp.exp(1j * (g @ tau.T)), axis=1)
     g2 = jnp.sum(g**2, axis=1)
 
-    charge = float(charges.sum())
+    charge = jnp.sum(charges)
     total = -(charge**2) / alpha / 4.0
 
     # G = 0 is index 0 by construction and is excluded from the sum.
     nonzero = g2[1:]
-    factor = 2.0 if gvectors.gamma_only else 1.0
-    total = total + factor * jnp.sum(jnp.abs(rho[1:]) ** 2 * jnp.exp(-nonzero / alpha / 4.0) / nonzero)
+    total = total + factor * jnp.sum(
+        jnp.abs(rho[1:]) ** 2 * jnp.exp(-nonzero / alpha / 4.0) / nonzero
+    )
 
-    total = 2.0 * TPI / cell.volume * total
+    total = 2.0 * TPI / volume * total
 
     # The self-interaction of each Gaussian, removed once per atom.
-    return total - jnp.sum(charges**2) * np.sqrt(8.0 / TPI * alpha)
+    return total - jnp.sum(charges**2) * jnp.sqrt(8.0 / TPI * alpha)
 
 
 def _real_term(cell, structure, charges, alpha) -> jnp.ndarray:
-    """The short-ranged part: erfc(sqrt(alpha) r)/r over neighbouring images."""
+    """The short-ranged part: erfc(sqrt(alpha) r)/r over neighbouring images.
+
+    The set of lattice translations is enumerated on the host -- it is integer
+    bookkeeping over a fixed cell, the definition of setup work -- and the sum
+    over ``(atom, atom, translation)`` is then one broadcast kernel rather than a
+    Python double loop over atom pairs. Beyond the speed, this is what makes the
+    term differentiable with respect to the atomic positions, which the forces
+    will need: the neighbour list is a constant, the distances computed from it
+    are not.
+    """
     at = np.asarray(cell.at)
     tau = np.asarray(structure.positions)
     rmax = 4.0 / np.sqrt(alpha)
 
     translations = _lattice_translations(at, rmax + _max_separation(tau, at))
+    return _real_kernel(structure.positions, jnp.asarray(charges),
+                        jnp.asarray(translations), alpha, rmax)
 
-    total = 0.0
-    for a in range(len(tau)):
-        for b in range(len(tau)):
-            separations = tau[a] - tau[b] + translations
-            distances = np.linalg.norm(separations, axis=1)
-            distances = distances[(distances > 1.0e-8) & (distances <= rmax)]
-            if distances.size:
-                total += charges[a] * charges[b] * float(
-                    np.sum(np.asarray(erfc(np.sqrt(alpha) * distances)) / distances)
-                )
-    return jnp.asarray(total)
+
+@jax.jit
+def _real_kernel(tau, charges, translations, alpha, rmax):
+    # (nat, nat, ntrans, 3): every pair, every image.
+    separations = tau[:, None, None, :] - tau[None, :, None, :] + translations[None, None, :, :]
+    distances = jnp.sqrt(jnp.sum(separations**2, axis=-1))
+
+    # The self term (r = 0) and images past the cutoff are dropped by weight, not
+    # by indexing, so the shape stays static. The distance fed to the divide is
+    # sanitised first: masking the result of a division by zero afterwards still
+    # leaves a NaN in the gradient.
+    keep = (distances > 1.0e-8) & (distances <= rmax)
+    safe = jnp.where(keep, distances, 1.0)
+    terms = jnp.where(keep, erfc(jnp.sqrt(alpha) * safe) / safe, 0.0)
+
+    pairs = charges[:, None] * charges[None, :]
+    return jnp.sum(pairs * jnp.sum(terms, axis=-1))
 
 
 def _max_separation(tau: np.ndarray, at: np.ndarray) -> float:

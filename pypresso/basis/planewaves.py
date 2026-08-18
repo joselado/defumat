@@ -14,6 +14,7 @@ ordered by ``|k+G|^2``.
 from __future__ import annotations
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -62,14 +63,21 @@ class PlaneWaveBasis(eqx.Module):
         This is the kinetic energy operator in the plane-wave basis: diagonal,
         and the cheapest part of ``H|psi>``.
         """
-        g = gvectors.cartesian(cell)[self.indices]  # (nk, npwx, 3), 1/bohr
-        k = kpoints.cartesian(cell)[:, None, :]  # (nk, 1, 3), 1/bohr
-        kinetic = jnp.sum((k + g) ** 2, axis=-1)
-        return jnp.where(self.mask, kinetic, 0.0)
+        return _kinetic(gvectors.cartesian(cell), kpoints.cartesian(cell),
+                        self.indices, self.mask)
 
     def fft_index(self, gvectors: GVectors) -> jnp.ndarray:
         """(nk, npwx) flat FFT-box index for each retained plane wave."""
         return gvectors.fft_index[self.indices]
+
+
+# Setup arrays are built once, but each one built from a handful of eager
+# operations costs a separate XLA compilation -- which on a small cell is far
+# more than the arithmetic. One jitted function is one compilation.
+@jax.jit
+def _kinetic(gcart, kcart, indices, mask):
+    kinetic = jnp.sum((kcart[:, None, :] + gcart[indices]) ** 2, axis=-1)
+    return jnp.where(mask, kinetic, 0.0)
 
 
 def build_plane_wave_basis(

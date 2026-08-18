@@ -20,6 +20,8 @@ Conventions follow ``upflib``: ``vloc_mod.f90``, ``rhoat_mod.f90``,
 
 from __future__ import annotations
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -41,6 +43,14 @@ __all__ = [
 #: this bounds memory at a few tens of MB while keeping the work as large matrix
 #: products.
 CHUNK = 4096
+
+# The four kernels below are module-level and jitted rather than closures defined
+# per call. Each radial transform is ~30 elementwise operations on a (nq, mesh)
+# intermediate; dispatched eagerly, XLA compiles and launches every one of them
+# separately, which is where most of a cold run's setup time went. As one
+# compiled unit they fuse into a single pass over the intermediate, and the
+# compilation is cached across species and across calculations -- a closure
+# would be a new callable each time and so a new compilation each time.
 
 
 def _chunked(function, q: jnp.ndarray) -> jnp.ndarray:
@@ -87,18 +97,20 @@ def local_potential_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarra
     # a convincingly self-consistent calculation with the wrong absolute energy.
     at_zero = r * (r * vloc + z * E2)
 
-    def transform(qq):
-        qq = qq[:, None]
-        small = qq[:, 0] < 1e-8
-        safe = jnp.where(qq < 1e-8, 1.0, qq)
-        integrand = jnp.where(small[:, None], at_zero[None, :],
-                              short[None, :] * jnp.sin(safe * r[None, :]) / safe)
-        value = integrand @ weights * FPI / omega
+    return _chunked(lambda qq: _vloc_kernel(qq, r, weights, short, at_zero, z, omega), q)
 
-        analytic = FPI / omega * z * E2 * jnp.exp(-safe[:, 0] ** 2 * 0.25) / safe[:, 0] ** 2
-        return jnp.where(small, value, value - analytic)
 
-    return _chunked(transform, q)
+@jax.jit
+def _vloc_kernel(qq, r, weights, short, at_zero, z, omega):
+    qq = qq[:, None]
+    small = qq[:, 0] < 1e-8
+    safe = jnp.where(qq < 1e-8, 1.0, qq)
+    integrand = jnp.where(small[:, None], at_zero[None, :],
+                          short[None, :] * jnp.sin(safe * r[None, :]) / safe)
+    value = integrand @ weights * FPI / omega
+
+    analytic = FPI / omega * z * E2 * jnp.exp(-safe[:, 0] ** 2 * 0.25) / safe[:, 0] ** 2
+    return jnp.where(small, value, value - analytic)
 
 
 def atomic_charge_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
@@ -113,17 +125,19 @@ def atomic_charge_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
     r, weights, msh = _truncated(pseudo)
     rho = jnp.asarray(pseudo.rho_atom[:msh])
 
-    def transform(qq):
-        qq = qq[:, None]
-        small = qq[:, 0] < 1e-8
-        safe = jnp.where(qq < 1e-8, 1.0, qq)
-        argument = safe * r[None, :]
-        integrand = jnp.where(
-            small[:, None], rho[None, :], rho[None, :] * spherical_bessel(0, argument)
-        )
-        return integrand @ weights / omega
+    return _chunked(lambda qq: _rhoat_kernel(qq, r, weights, rho, omega), q)
 
-    return _chunked(transform, q)
+
+@jax.jit
+def _rhoat_kernel(qq, r, weights, rho, omega):
+    qq = qq[:, None]
+    small = qq[:, 0] < 1e-8
+    safe = jnp.where(qq < 1e-8, 1.0, qq)
+    argument = safe * r[None, :]
+    integrand = jnp.where(
+        small[:, None], rho[None, :], rho[None, :] * spherical_bessel(0, argument)
+    )
+    return integrand @ weights / omega
 
 
 def core_charge_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
@@ -138,13 +152,14 @@ def core_charge_of_g(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
     r, weights, msh = _truncated(pseudo)
     rho = jnp.asarray(pseudo.rho_core[:msh])
 
-    def transform(qq):
-        qq = qq[:, None]
-        argument = qq * r[None, :]
-        integrand = FPI * r[None, :] ** 2 * rho[None, :] * spherical_bessel(0, argument)
-        return integrand @ weights / omega
+    return _chunked(lambda qq: _rhocore_kernel(qq, r, weights, rho, omega), q)
 
-    return _chunked(transform, q)
+
+@jax.jit
+def _rhocore_kernel(qq, r, weights, rho, omega):
+    argument = qq[:, None] * r[None, :]
+    integrand = FPI * r[None, :] ** 2 * rho[None, :] * spherical_bessel(0, argument)
+    return integrand @ weights / omega
 
 
 def projector_form_factors(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
@@ -169,13 +184,19 @@ def projector_form_factors(pseudo: Pseudopotential, q, omega: float) -> jnp.ndar
         beta = jnp.asarray(projector.beta[:cutoff])
         l = projector.l
 
-        def transform(qq, r=r, weights=weights, beta=beta, l=l):
-            argument = qq[:, None] * r[None, :]
-            integrand = beta[None, :] * spherical_bessel(l, argument) * r[None, :]
-            return integrand @ weights * prefactor
-
-        rows.append(_chunked(transform, q))
+        rows.append(_chunked(
+            lambda qq, r=r, weights=weights, beta=beta, l=l:
+                _beta_kernel(qq, r, weights, beta, prefactor, l),
+            q,
+        ))
 
     if not rows:
         return jnp.zeros((0,) + q.shape)
     return jnp.stack(rows, axis=0)
+
+
+@partial(jax.jit, static_argnames=("l",))
+def _beta_kernel(qq, r, weights, beta, prefactor, l):
+    argument = qq[:, None] * r[None, :]
+    integrand = beta[None, :] * spherical_bessel(l, argument) * r[None, :]
+    return integrand @ weights * prefactor

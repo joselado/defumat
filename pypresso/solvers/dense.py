@@ -12,11 +12,14 @@ plane waves) it is also perfectly fast.
 
 from __future__ import annotations
 
+from functools import partial
+
+import jax
 import jax.numpy as jnp
 
 from pypresso.hamiltonian.operator import Hamiltonian
 
-__all__ = ["dense_eigensolver"]
+__all__ = ["dense_eigensolver", "dense_eigensolver_all"]
 
 
 def dense_eigensolver(hamiltonian: Hamiltonian, ik: int, nbnd: int):
@@ -40,3 +43,27 @@ def dense_eigensolver(hamiltonian: Hamiltonian, ik: int, nbnd: int):
 
     eigenvalues, eigenvectors = jnp.linalg.eigh(matrix)
     return eigenvalues[:nbnd], eigenvectors[:, :nbnd].T
+
+
+@partial(jax.jit, static_argnames=("nbnd",))
+def dense_eigensolver_all(hamiltonian: Hamiltonian, nbnd: int, psi0=None, ethr=None):
+    """Every k-point at once: the same solver, ``vmap``-ed over ``ik``.
+
+    ``psi0`` and ``ethr`` are accepted and ignored: a direct solve has no use for
+    a starting guess and no threshold to converge to, but the registry gives
+    every solver the same signature so that the driver does not have to know
+    which kind it is holding.
+
+    The k index is the leading axis of every wavefunction-shaped array (rule
+    R6), so batching over it is a ``vmap`` and nothing else. Doing it this way
+    rather than in a Python loop turns ``nk`` separate compilations-and-launches
+    of each kernel into one, which is where most of the loop's cost was: the
+    arithmetic per k-point is unchanged.
+
+    Returns ``(eigenvalues, wavefunctions)`` of shapes ``(nk, nbnd)`` and
+    ``(nk, nbnd, npwx)``.
+    """
+    def solve(ik):
+        return dense_eigensolver(hamiltonian, ik, nbnd)
+
+    return jax.vmap(solve)(jnp.arange(hamiltonian.nk))

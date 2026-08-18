@@ -22,7 +22,10 @@ this path is a table lookup.
 
 from __future__ import annotations
 
+from functools import partial
+
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -91,41 +94,80 @@ def build_projectors(
         return Projectors(vkb=empty, dij=jnp.zeros((0, 0)), atom_of_channel=())
 
     lmax = max(p.lmax for p in pseudos)
-    g = gvectors.cartesian(cell)[planewaves.indices]  # (nk, npwx, 3), 1/bohr
-    kg = kpoints.cartesian(cell)[:, None, :] + g  # (nk, npwx, 3)
-    kg_norm = jnp.sqrt(jnp.sum(kg**2, axis=-1))
+    kg, kg_norm, ylm = _angular_part(
+        gvectors.cartesian(cell), planewaves.indices, kpoints.cartesian(cell), lmax
+    )
 
-    ylm = real_spherical_harmonics(kg, lmax)  # (nk, npwx, (lmax+1)^2)
-
-    # Radial form factors, per species: (nbeta, nk * npwx) -> (nk, npwx, nbeta)
+    # Radial form factors, per species: (nbeta, nk * npwx) -> (nk, npwx, nbeta),
+    # concatenated over species so that a channel selects a column by one index.
     shape = kg_norm.shape
     flat = kg_norm.reshape(-1)
-    form_factors = [
-        projector_form_factors(p, flat, float(cell.volume)).reshape((-1,) + shape).transpose(1, 2, 0)
-        for p in pseudos
-    ]
+    form_factors = tuple(
+        projector_form_factors(p, flat, float(cell.volume)) for p in pseudos
+    )
+    radial = _radial_table(form_factors, shape)
+    beta_offset = np.cumsum([0] + [f.shape[0] for f in form_factors])
 
-    tau = structure.positions
-    columns, atom_of_channel, dij_blocks = [], [], []
-
+    # One row per projector channel, in QE's order: atoms outermost, then the
+    # channels of that atom's species. Everything the assembly needs is an index
+    # into an already-computed array, so it is three gathers and two products
+    # rather than four operations per channel.
+    beta_of, lm_of, l_of, atom_of = [], [], [], []
+    dij_blocks = []
     for atom, species in enumerate(structure.types):
-        phase = jnp.exp(-1j * jnp.einsum("kgc,c->kg", kg, tau[atom]))  # (nk, npwx)
-        pseudo = pseudos[species]
         for nb, l, lm in channels_by_species[species]:
-            radial = form_factors[species][..., nb]
-            # (-i)^l, the standard phase of a spherical-wave expansion.
-            columns.append(((-1j) ** l) * ylm[..., lm] * radial * phase)
-            atom_of_channel.append(atom)
-        dij_blocks.append(_expand_dij(pseudo, channels_by_species[species]))
+            beta_of.append(beta_offset[species] + nb)
+            lm_of.append(lm)
+            l_of.append(l)
+            atom_of.append(atom)
+        dij_blocks.append(_expand_dij(pseudos[species], channels_by_species[species]))
 
-    vkb = jnp.stack(columns, axis=-1)
-    vkb = jnp.where(planewaves.mask[..., None], vkb, 0.0)
+    vkb = _assemble(
+        kg,
+        ylm,
+        radial,
+        structure.positions,
+        planewaves.mask,
+        jnp.asarray(beta_of),
+        jnp.asarray(lm_of),
+        jnp.asarray(atom_of),
+        jnp.asarray((-1j) ** np.asarray(l_of)),
+    )
 
     return Projectors(
         vkb=vkb.astype(cell.precision.complex),
         dij=jnp.asarray(_block_diagonal(dij_blocks)),
-        atom_of_channel=tuple(atom_of_channel),
+        atom_of_channel=tuple(atom_of),
     )
+
+
+@partial(jax.jit, static_argnames=("lmax",))
+def _angular_part(gcart, indices, kcart, lmax):
+    """``k+G``, its modulus, and the spherical harmonics on it, in one kernel."""
+    kg = kcart[:, None, :] + gcart[indices]  # (nk, npwx, 3), 1/bohr
+    kg_norm = jnp.sqrt(jnp.sum(kg**2, axis=-1))
+    return kg, kg_norm, real_spherical_harmonics(kg, lmax)
+
+
+@partial(jax.jit, static_argnames=("shape",))
+def _radial_table(form_factors, shape):
+    """Per-species ``(nbeta, nk*npwx)`` tables -> one ``(nk, npwx, nbeta_total)``."""
+    reshaped = [f.reshape((-1,) + shape).transpose(1, 2, 0) for f in form_factors]
+    return jnp.concatenate(reshaped, axis=-1)
+
+
+@jax.jit
+def _assemble(kg, ylm, radial, tau, mask, beta_of, lm_of, atom_of, l_phase):
+    """``<k+G|beta>`` for every channel: angular times radial times structure."""
+    phases = jnp.exp(-1j * jnp.einsum("kgc,ac->akg", kg, tau))  # (nat, nk, npwx)
+    columns = (
+        l_phase[:, None, None]
+        * jnp.take(ylm, lm_of, axis=-1).transpose(2, 0, 1)
+        * jnp.take(radial, beta_of, axis=-1).transpose(2, 0, 1)
+        * phases[atom_of]
+    )
+    vkb = jnp.transpose(columns, (1, 2, 0))  # (nk, npwx, nkb)
+    return jnp.where(mask[..., None], vkb, 0.0)
 
 
 def _expand_dij(pseudo: Pseudopotential, channels) -> np.ndarray:

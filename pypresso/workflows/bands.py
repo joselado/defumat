@@ -20,6 +20,7 @@ import numpy as np
 from pypresso.pseudo.upf import Pseudopotential
 from pypresso.scf.driver import Calculation, default_nbnd
 from pypresso.scf.potential import v_of_rho
+from pypresso.solvers.davidson import ETHR_MIN
 from pypresso.system.builder import System
 from pypresso.system.kpoints import KPoints
 from pypresso.units import RY_TO_EV
@@ -63,6 +64,7 @@ def run_bands(
     density: jnp.ndarray,
     kpoints: KPoints | None = None,
     nbnd: int | None = None,
+    conv_thr: float = 1.0e-6,
     fermi_energy: float | None = None,
     homo: float | None = None,
 ) -> BandStructure:
@@ -76,6 +78,8 @@ def run_bands(
             is what an input file with ``calculation='bands'`` already carries.
         nbnd: number of bands; a band structure normally wants more than the
             occupied ones.
+        conv_thr: the accuracy the density was converged to, which is what sets
+            how accurately the bands are worth computing.
 
     The potential is built once from the given density and never updated -- that
     is the whole content of "non self-consistent".
@@ -89,7 +93,10 @@ def run_bands(
     potential = v_of_rho(density, calculation.basis.dense, system.cell)
     hamiltonian = calculation.hamiltonian(potential.v_scf)
 
-    eigenvalues, _ = calculation.diagonalize(hamiltonian, nbnd)
+    # There is no SCF here to tighten the threshold over, so ``setup.f90`` picks
+    # one up front from the accuracy of the density the bands are computed in.
+    ethr = max(ETHR_MIN, 0.1 * min(1.0e-2, conv_thr / max(1.0, calculation.nelec)))
+    eigenvalues, _ = calculation.diagonalize(hamiltonian, nbnd, None, ethr)
 
     return BandStructure(
         kpoints=system.kpoints,

@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -288,6 +289,27 @@ def celldm_from_abc(
     return celldm
 
 
+# These are one-line expressions on a 3x3, but they are evaluated dozens of
+# times during setup and every JAX operation dispatched outside a ``jit`` is
+# compiled separately -- tens of milliseconds each, which on a small cell adds up
+# to more than the physics. Compiled once here, they cost nothing thereafter, and
+# they stay differentiable in ``at`` so that stress can be taken by
+# differentiating with respect to the cell.
+@jax.jit
+def _volume(at):
+    return jnp.abs(jnp.linalg.det(at))
+
+
+@jax.jit
+def _bg(at):
+    return TPI * jnp.linalg.inv(at).T
+
+
+@jax.jit
+def _scaled(matrix, factor):
+    return matrix * factor
+
+
 class Cell(eqx.Module):
     """A unit cell: lattice vectors in bohr, plus the derived reciprocal cell.
 
@@ -336,7 +358,7 @@ class Cell(eqx.Module):
     @property
     def volume(self) -> jnp.ndarray:
         """Cell volume in bohr^3 (QE's ``omega``). Signed determinant magnitude."""
-        return jnp.abs(jnp.linalg.det(self.at))
+        return _volume(self.at)
 
     @property
     def bg(self) -> jnp.ndarray:
@@ -344,17 +366,17 @@ class Cell(eqx.Module):
 
         Defined with the 2*pi convention, so ``a_i . b_j = 2*pi delta_ij``.
         """
-        return TPI * jnp.linalg.inv(self.at).T
+        return _bg(self.at)
 
     @property
     def at_alat(self) -> jnp.ndarray:
         """Lattice vectors in units of alat -- what QE prints as ``crystal axes``."""
-        return self.at / self.alat
+        return _scaled(self.at, 1.0 / self.alat)
 
     @property
     def bg_2pi_alat(self) -> jnp.ndarray:
         """Reciprocal vectors in units of 2*pi/alat -- QE's ``reciprocal axes``."""
-        return self.bg * self.alat / TPI
+        return _scaled(_bg(self.at), self.alat / TPI)
 
     @property
     def tpiba(self) -> float:

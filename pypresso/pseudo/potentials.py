@@ -11,6 +11,7 @@ crystal quantities on the dense G grid. Following ``PW/src/setlocal.f90`` and
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -31,23 +32,53 @@ def structure_factors(
     structure: Structure, cell: Cell, gvectors: GVectors
 ) -> jnp.ndarray:
     """``S_t(G)`` for every species, shaped ``(ntyp, ngm)``."""
-    g = gvectors.cartesian(cell)  # (ngm, 3)
-    phases = jnp.exp(-1j * (g @ structure.positions.T))  # (ngm, nat)
+    membership = _membership(structure)
+    return _structure_factors(gvectors.cartesian(cell), structure.positions, membership)
 
+
+def _membership(structure: Structure) -> jnp.ndarray:
+    """``(ntyp, nat)``, one where the atom belongs to the species.
+
+    A matrix product against this sums the per-atom phases into per-species
+    structure factors in one operation, rather than one boolean gather and one
+    reduction per species. It is also what keeps the result a smooth function of
+    the positions, since nothing about it depends on their values.
+    """
     types = np.asarray(structure.types)
-    return jnp.stack(
-        [jnp.sum(phases[:, types == t], axis=1) for t in range(structure.ntyp)], axis=0
+    return jnp.asarray(
+        np.equal(types[None, :], np.arange(structure.ntyp)[:, None]).astype(float)
     )
 
 
+@jax.jit
+def _structure_factors(g, positions, membership):
+    phases = jnp.exp(-1j * (g @ positions.T))  # (ngm, nat)
+    return membership @ phases.T  # (ntyp, ngm)
+
+
 def _sum_over_species(radial, structure, cell, gvectors) -> jnp.ndarray:
-    """Combine per-species radial transforms with their structure factors."""
-    gmod = jnp.sqrt(gvectors.kinetic(cell))
+    """Combine per-species radial transforms with their structure factors.
+
+    The radial transforms are evaluated first and stacked, so that the
+    combination with the structure factors is a single compiled contraction
+    instead of one dispatch per species.
+    """
+    gmod = _gmod(gvectors.cartesian(cell))
     factors = structure_factors(structure, cell, gvectors)
-    total = jnp.zeros(gvectors.ngm, dtype=cell.precision.complex)
-    for t in range(structure.ntyp):
-        total = total + radial(t, gmod) * factors[t]
-    return total
+    values = tuple(radial(t, gmod) for t in range(structure.ntyp))
+    return _contract_species(values, factors)
+
+
+@jax.jit
+def _gmod(g):
+    return jnp.sqrt(jnp.sum(g**2, axis=1))
+
+
+@jax.jit
+def _contract_species(values, factors):
+    """``sum_t f_t(|G|) S_t(G)``. ``values`` arrives as a tuple, and stacking it
+    inside the compiled unit keeps the stack from being a dispatch of its own."""
+    return jnp.sum(jnp.stack(values, axis=0).astype(factors.dtype) * factors, axis=0)
 
 
 def local_potential(
@@ -90,7 +121,12 @@ def starting_charge(
 
     if nelec is None:
         nelec = sum(pseudos[t].z_valence for t in structure.types)
-    charge = jnp.real(rho[0]) * cell.volume  # rho(G=0) * Omega = electron count
+    return _renormalise(rho, cell.volume, nelec)
+
+
+@jax.jit
+def _renormalise(rho, volume, nelec):
+    charge = jnp.real(rho[0]) * volume  # rho(G=0) * Omega = electron count
     return rho * (nelec / charge)
 
 

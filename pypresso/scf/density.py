@@ -12,6 +12,7 @@ exact identity rather than something to renormalise.
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 
 from pypresso.basis.fft import g_to_r
@@ -41,8 +42,14 @@ def sum_band(psi, fft_index, grid, weights, cell: Cell) -> jnp.ndarray:
         psi: ``(nk, nbnd, npwx)``.
         fft_index: ``(nk, npwx)``.
         weights: ``(nk, nbnd)`` occupation weights.
+
+    Batched over k with ``vmap`` rather than accumulated in a Python loop: k is
+    the leading axis of every wavefunction-shaped array precisely so that this
+    is available (rule R6). Inside ``jit`` the sum over the batch fuses with the
+    transforms, so the intermediate ``(nk, nbnd, n1, n2, n3)`` field is not
+    materialised in full.
     """
-    total = jnp.zeros(grid, dtype=psi.real.dtype)
-    for ik in range(psi.shape[0]):
-        total = total + band_density(psi[ik], fft_index[ik], grid, weights[ik], cell)
-    return total
+    contributions = jax.vmap(band_density, in_axes=(0, 0, None, 0, None))(
+        psi, fft_index, grid, weights, cell
+    )
+    return jnp.sum(contributions, axis=0)

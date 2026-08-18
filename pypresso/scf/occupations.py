@@ -14,13 +14,17 @@ summing to the number of electrons.
 
 from __future__ import annotations
 
+from functools import partial
+
+import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.scipy.special import erf, erfc
 
 from pypresso.units import SQRT_PI
 
-__all__ = ["fixed_occupations", "smeared_occupations", "fermi_level", "smearing_entropy",
+__all__ = ["fixed_occupations", "smeared_occupations", "fermi_level", "bisect_fermi",
+           "smearing_entropy",
            "input_occupations", "wgauss", "w1gauss", "smearing_order"]
 
 
@@ -140,6 +144,50 @@ def smearing_order(smearing: str) -> int:
         ) from error
 
 
+#: Bisection steps. 200 halvings take any physical bracket far below the
+#: resolution of a float64, so the result is the exact root of the discretised
+#: count function and does not depend on this number.
+BISECTION_STEPS = 200
+
+
+@partial(jax.jit, static_argnames=("ngauss",))
+def bisect_fermi(
+    eigenvalues: jnp.ndarray,
+    weights: jnp.ndarray,
+    nelec: float,
+    degauss: float,
+    ngauss: int,
+) -> jnp.ndarray:
+    """The bisection itself, as a device-side loop.
+
+    Bisection rather than Newton because Methfessel-Paxton and cold occupations
+    are not monotonic in the energy, so a derivative-based search can step out
+    of the bracket entirely.
+
+    The loop runs a fixed number of steps and its branch is a ``where``, so it
+    is a ``fori_loop`` and never leaves the device. Written as a Python loop
+    with a ``float()`` comparison it cost 200 host round trips *per SCF
+    iteration* -- by far the most expensive thing about a metal.
+    """
+    eigenvalues = jnp.asarray(eigenvalues)
+    weights = jnp.asarray(weights)
+
+    def count(ef):
+        occupation = wgauss((ef - eigenvalues) / degauss, ngauss)
+        return jnp.sum(weights[:, None] * occupation)
+
+    def step(_, bracket):
+        low, high = bracket
+        middle = 0.5 * (low + high)
+        too_many = count(middle) > nelec
+        return jnp.where(too_many, low, middle), jnp.where(too_many, middle, high)
+
+    low = jnp.min(eigenvalues) - 20.0 * degauss
+    high = jnp.max(eigenvalues) + 20.0 * degauss
+    low, high = jax.lax.fori_loop(0, BISECTION_STEPS, step, (low, high))
+    return 0.5 * (low + high)
+
+
 def fermi_level(
     eigenvalues: jnp.ndarray,
     weights: jnp.ndarray,
@@ -147,29 +195,8 @@ def fermi_level(
     degauss: float,
     smearing: str = "gaussian",
 ) -> float:
-    """Find ``E_F`` by bisection on the total electron count.
-
-    Bisection rather than Newton because Methfessel-Paxton and cold occupations
-    are not monotonic in the energy, so a derivative-based search can step out
-    of the bracket entirely.
-    """
-    ngauss = smearing_order(smearing)
-    eigenvalues = jnp.asarray(eigenvalues)
-    weights_np = np.asarray(weights)
-
-    def count(ef):
-        occupation = np.asarray(wgauss((ef - eigenvalues) / degauss, ngauss))
-        return float(np.sum(weights_np[:, None] * occupation))
-
-    low = float(np.asarray(eigenvalues).min()) - 20.0 * degauss
-    high = float(np.asarray(eigenvalues).max()) + 20.0 * degauss
-    for _ in range(200):
-        middle = 0.5 * (low + high)
-        if count(middle) > nelec:
-            high = middle
-        else:
-            low = middle
-    return 0.5 * (low + high)
+    """Find ``E_F`` by bisection on the total electron count."""
+    return float(bisect_fermi(eigenvalues, weights, nelec, degauss, smearing_order(smearing)))
 
 
 def smeared_occupations(
@@ -181,7 +208,13 @@ def smeared_occupations(
 ):
     """Occupation weights and the Fermi level for a smeared calculation."""
     ngauss = smearing_order(smearing)
-    ef = fermi_level(eigenvalues, weights, nelec, degauss, smearing)
+    return _smeared(jnp.asarray(eigenvalues), jnp.asarray(weights), nelec, degauss, ngauss)
+
+
+@partial(jax.jit, static_argnames=("ngauss",))
+def _smeared(eigenvalues, weights, nelec, degauss, ngauss):
+    """Fermi level and weights in one compiled unit; ``ef`` stays on device."""
+    ef = bisect_fermi(eigenvalues, weights, nelec, degauss, ngauss)
     occupation = wgauss((ef - eigenvalues) / degauss, ngauss)
     return weights[:, None] * occupation, ef
 
@@ -198,7 +231,12 @@ def smearing_entropy(
     It is what makes a smeared total energy variational: the quantity being
     minimised is a free energy, not the energy at fictitious occupations.
     """
-    ngauss = smearing_order(smearing)
+    return _entropy(jnp.asarray(eigenvalues), jnp.asarray(weights), ef, degauss,
+                    smearing_order(smearing))
+
+
+@partial(jax.jit, static_argnames=("ngauss",))
+def _entropy(eigenvalues, weights, ef, degauss, ngauss):
     return degauss * jnp.sum(weights[:, None] * w1gauss((ef - eigenvalues) / degauss, ngauss))
 
 

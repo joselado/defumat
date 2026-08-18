@@ -36,9 +36,14 @@ def simpson_weights(rab) -> jnp.ndarray:
     Returning weights rather than performing the sum means an integral becomes a
     single dot product -- so a whole table of ``q`` values is one matrix
     multiplication, which is what the GPU wants.
+
+    The weights of a *tabulated* mesh are host constants -- ``rab`` comes from
+    the UPF file and nothing differentiates with respect to it -- so when the
+    caller passes host data the product is done on the host and never dispatched
+    to XLA. A traced ``rab`` still goes the JAX way, so the function remains
+    usable inside a differentiated path.
     """
-    rab = jnp.asarray(rab)
-    mesh = rab.shape[-1]
+    mesh = np.shape(rab)[-1]
 
     coefficients = np.empty(mesh)
     coefficients[0] = 1.0 / 3.0
@@ -53,6 +58,8 @@ def simpson_weights(rab) -> jnp.ndarray:
         coefficients[mesh - 2] = 1.0 / 3.0
         coefficients[mesh - 1] = 1.25 / 3.0
 
+    if isinstance(rab, (np.ndarray, list, tuple)):
+        return jnp.asarray(coefficients * np.asarray(rab))
     return jnp.asarray(coefficients) * rab
 
 
