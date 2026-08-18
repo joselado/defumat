@@ -56,6 +56,15 @@ Two reasons, both of which constrain how code is written:
 Performance matters. It does not have to be optimal in the first version, but no design
 choice should make good performance unreachable without a rewrite.
 
+## Tutorial notebooks
+
+`notebooks/` holds worked examples on concrete systems — the readable counterpart to the
+test suite. **Every new feature adds a notebook or extends an existing one; a phase is not
+finished until its notebook exists.** Demonstrate on the two-atom silicon cell from
+`test-suite/pw_scf/scf.in` wherever possible, compare against the committed QE benchmark
+whenever the reference contains the quantity, and commit the notebook executed so it reads
+without being run. `notebooks/README.md` holds the index and the full conventions.
+
 ## Non-negotiable conventions
 
 - Pure Python. JAX for anything numerical that runs inside the SCF/diagonalization loop;
@@ -144,6 +153,7 @@ python3 -m pytest                      # whole suite
 python3 -m pytest -m unit              # fast checks only (markers: unit, regression, slow)
 python3 -m pytest tests/unit/test_qeref.py::test_scf_silicon   # a single test
 python3 -m pypresso.cli inspect <qe-output>   # summarise what the parser reads
+jupyter nbconvert --to notebook --execute --inplace notebooks/01_silicon_setup.ipynb
 ```
 
 ## JAX rules

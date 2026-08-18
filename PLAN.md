@@ -74,6 +74,11 @@ branch on `npw_k` inside compute code — it would retrace per k-point and defea
 
 **R8 — Everything is validated against QE numerically, not by inspection.** See §4.
 
+**R9 — Every feature gets a tutorial notebook.** `notebooks/` demonstrates each capability
+on a concrete system (silicon by default), executed with outputs committed, ending in a
+comparison against the QE reference where one exists. A phase is finished when its
+notebook exists, not when its tests pass. See `notebooks/README.md`.
+
 ---
 
 ## 2. Package layout
