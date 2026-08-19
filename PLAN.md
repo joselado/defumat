@@ -426,7 +426,14 @@ broadcast, printed and written back, and never used in a calculation.
 
 *Not covered:* `occupations='fixed'` with `nspin = 2` (no committed benchmark exercises
 either of QE's two fillings for it, so it is refused rather than guessed), and
-non-collinear magnetism, which stays out of scope.
+non-collinear magnetism, which stays out of scope. `pw_lsda/lsda-2.in` — an `nscf` run on
+an 8x8x8 grid restarting from `lsda.in`'s density — waits on P8: the fixed-density
+workflow it needs is being lifted out of `workflows/bands.py` there, and threading `nspin`
+through it is the one place the two phases meet. Its reference is generable in a minute
+once that lands. `pw_pawatom/paw-atom_spin.in` is validated but kept out of the test
+suite: QE converges it in 32 iterations and this code's Anderson mixer does not do so
+quickly on a landscape that flat, which is a mixer-robustness item for `PERFORMANCE.md`'s
+backlog rather than a correctness gap — `o-paw-spin-pbe` pins the identical code path.
 
 **P10 — Performance and parallelism. 🔶 FIRST PASS DONE.** The metric is single-core
 pypresso against single-core QE on the same machine (`tools/compare_qe.py`, inputs in
