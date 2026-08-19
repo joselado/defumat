@@ -192,39 +192,33 @@ def davidson_eigensolver(
     eigenvectors ``(nbnd, npwx)``, matching :func:`~pypresso.solvers.dense`.
     """
     ethr = ETHR if ethr is None else ethr
-    npwx = hamiltonian.npwx
+    ndim = hamiltonian.ndim
     nvecx = david * nbnd
-    mask = hamiltonian.mask[ik]
-    kinetic = hamiltonian.kinetic[ik]
+    mask = hamiltonian.state_mask[ik]
+    kinetic = hamiltonian.state_kinetic[ik]
     diagonal = hamiltonian.diagonal(ik)
     s_diagonal = hamiltonian.overlap_diagonal(ik)
-    dtype = hamiltonian.projectors.vkb.dtype
+    dtype = hamiltonian.dtype
 
-    # The projector columns S is built from. With no augmentation charge there
-    # are none of them, and every expression below that touches `becp` operates
-    # on a zero-width array -- which is how the norm-conserving path stays
-    # exactly what it was.
-    if hamiltonian.has_overlap:
-        vkb = hamiltonian.projectors.vkb[ik]
-        qq = hamiltonian.projectors.qq.astype(dtype)
-    else:
-        vkb = hamiltonian.projectors.vkb[ik][:, :0]
-        qq = jnp.zeros((0, 0), dtype)
-
+    # The projections S is built from, asked of the operator rather than
+    # assembled here. With no augmentation charge they are zero-width arrays and
+    # every expression below that touches them is a no-op -- which is how the
+    # norm-conserving path stays exactly what it was -- and with a spinor
+    # Hamiltonian they carry the spin index folded into their width, so nothing
+    # in this routine has to know how many components a state has.
     def project(vectors):
         """``<beta|psi>`` and ``q <beta|psi>`` for a block of vectors."""
-        becp = vectors @ vkb.conj()
-        return becp, becp @ qq.T
+        return hamiltonian.s_projections(vectors, ik)
 
-    start = starting_vectors(psi0, nbnd, npwx, kinetic, mask, dtype)
+    start = starting_vectors(psi0, nbnd, ndim, kinetic, mask, dtype)
 
     # Inactive subspace directions are given this eigenvalue, which has to sit
     # above anything physical: the diagonal bounds the spectrum from above well
     # enough for that.
     shift = jnp.max(jnp.abs(diagonal)) * 1000.0 + 1.0
 
-    psi = jnp.zeros((nvecx, npwx), dtype).at[:nbnd].set(start)
-    hpsi = jnp.zeros((nvecx, npwx), dtype).at[:nbnd].set(hamiltonian.apply(start, ik))
+    psi = jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(start)
+    hpsi = jnp.zeros((nvecx, ndim), dtype).at[:nbnd].set(hamiltonian.apply(start, ik))
     becp0, becq0 = project(start)
     nkb = becp0.shape[1]
     becp = jnp.zeros((nvecx, nkb), dtype).at[:nbnd].set(becp0)
@@ -251,7 +245,7 @@ def davidson_eigensolver(
         hevc = coefficients.T @ hpsi
         # S|evc> without ever storing S|psi>: the Ritz vector's projections are
         # the same rotation of the stored ones.
-        sevc = evc + (coefficients.T @ becq) @ vkb.T
+        sevc = evc + hamiltonian.s_correction(coefficients.T @ becq, ik)
 
         residual = hevc - energies[:, None].astype(dtype) * sevc
         settled = jnp.abs(energies - previous) < ethr
@@ -344,7 +338,7 @@ def davidson_eigensolver(
     return energies, jnp.where(mask, evc, 0.0)
 
 
-def starting_vectors(psi0, nbnd, npwx, kinetic, mask, dtype):
+def starting_vectors(psi0, nbnd, ndim, kinetic, mask, dtype):
     """The trial vectors: the caller's, or QE's random guess.
 
     ``wfcinit``'s ``starting_wfc = 'random'`` draws random coefficients damped by
@@ -357,8 +351,8 @@ def starting_vectors(psi0, nbnd, npwx, kinetic, mask, dtype):
         return jnp.where(mask, psi0.astype(dtype), 0.0)
 
     keys = jax.random.split(jax.random.PRNGKey(0), 2)
-    real = jax.random.uniform(keys[0], (nbnd, npwx)) - 0.5
-    imaginary = jax.random.uniform(keys[1], (nbnd, npwx)) - 0.5
+    real = jax.random.uniform(keys[0], (nbnd, ndim)) - 0.5
+    imaginary = jax.random.uniform(keys[1], (nbnd, ndim)) - 0.5
     guess = (real + 1j * imaginary).astype(dtype) / (1.0 + kinetic)
     return jnp.where(mask, guess, 0.0)
 

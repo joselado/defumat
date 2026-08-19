@@ -29,6 +29,16 @@ is an explicit axis and the loop over it is a Python loop, since ``nspin`` is
 static and two Hamiltonians are two compiled kernels either way. What must not
 change is that ``k`` stays the leading *independent* axis inside each channel,
 because that is the axis the batching and the eventual sharding use.
+
+**Noncollinear.** With ``nspin = 4`` there is again *one* Hamiltonian, not two:
+the spin channels are not separate problems but the two components of a single
+spinor, and the loop below therefore runs once. What grows is the state itself
+-- ``2 npwx`` numbers instead of ``npwx``
+(:class:`~pypresso.hamiltonian.noncollinear.SpinorHamiltonian`) -- and, when the
+calculation carries a magnetization, the density and the potential, which become
+``(n, m_x, m_y, m_z)``. The spin-channel axis of every array is kept at length
+one so that occupations, mixing and the result objects need no third case; it is
+``npol`` and ``nspin_mag`` that carry the noncollinear shapes, not ``nspin``.
 """
 
 from __future__ import annotations
@@ -46,6 +56,7 @@ from pypresso.basis.builder import Basis, build_basis
 from pypresso.basis.interpolate import to_dense, to_smooth
 from pypresso.basis.sticks import build_sticks
 from pypresso.basis.fft import g_to_r, r_to_g
+from pypresso.hamiltonian.noncollinear import SpinorHamiltonian
 from pypresso.hamiltonian.operator import Hamiltonian
 from pypresso.pseudo.atomic import atomic_wavefunctions
 from pypresso.paw.onecenter import build_paw
@@ -54,7 +65,8 @@ from pypresso.pseudo.augmentation import build_augmentation
 from pypresso.pseudo.potentials import core_charge, local_potential, starting_charge
 from pypresso.pseudo.projectors import build_projectors, projector_channels
 from pypresso.pseudo.upf import Pseudopotential
-from pypresso.scf.density import becsum, sum_band
+from pypresso.pseudo.spinorbit import becsum_transform, build_spin_orbit
+from pypresso.scf.density import becsum, spinor_becsum, spinor_sum_band, sum_band
 from pypresso.scf.ewald import ewald_energy
 from pypresso.scf.mixing import get_mixer
 from pypresso.scf.occupations import (
@@ -66,7 +78,7 @@ from pypresso.scf.occupations import (
     tetrahedra_for,
     tetrahedron_occupations_spin,
 )
-from pypresso.scf.potential import scf_accuracy, v_of_rho
+from pypresso.scf.potential import scf_accuracy, v_of_rho, with_core
 from pypresso.xc.functional import resolve_functional
 from pypresso.solvers import get_eigensolver
 from pypresso.solvers.davidson import ETHR_MIN, starting_vectors
@@ -224,6 +236,62 @@ def _rotate_all(hamiltonian, vectors, nbnd: int):
     )
 
 
+@partial(jax.jit, static_argnames=("grid", "nspin_mag"))
+def _spinor_density_of_bands(psi, fft_index, grid, weights, cell, nspin_mag):
+    """``sum_band`` for spinors, in one kernel."""
+    return spinor_sum_band(psi, fft_index, grid, weights, cell, nspin_mag)
+
+
+@jax.jit
+def _newd_noncollinear(deeq_components, dvan_so, fcoef):
+    """``newd_so``/``newd_nc``: the scalar integrals as a 2x2 spin matrix.
+
+    ``deeq_components`` is ``(nspin_mag, nkb, nkb)`` -- one integral of the
+    augmentation charge against each component of the potential -- and the
+    recombination is the same one the local potential undergoes:
+    ``sum_a d_a sigma^a``, then sandwiched between the spin-orbit coefficients.
+
+    ``fcoef`` is block diagonal over atoms, so the full ``nkb x nkb`` matrix
+    products below never mix two atoms and the sandwich is the per-species one
+    of ``newd_so_acc`` written once. For a scalar-relativistic species ``fcoef``
+    is the identity on each diagonal spin block, and the sandwich collapses to
+    the plain recombination of ``newd_nc_acc``.
+    """
+    nspin_mag = deeq_components.shape[0]
+    charge = deeq_components[0]
+    zero = jnp.zeros_like(charge)
+    if nspin_mag == 1:
+        blocks = jnp.stack([jnp.stack([charge, zero]), jnp.stack([zero, charge])])
+    else:
+        mx, my, mz = deeq_components[1], deeq_components[2], deeq_components[3]
+        blocks = jnp.stack([
+            jnp.stack([charge + mz, mx - 1j * my]),
+            jnp.stack([mx + 1j * my, charge - mz]),
+        ])
+    blocks = blocks.astype(fcoef.dtype)
+    return dvan_so + jnp.einsum("asij,stjk,tbkl->abil", fcoef, blocks, fcoef, optimize=True)
+
+
+@jax.jit
+def _noncollinear_magnetization(rho_r, volume):
+    """``(m_x, m_y, m_z, |m|)`` integrated over the cell, in Bohr magnetons.
+
+    ``report_mag`` prints the three components of the total moment and, as in
+    the collinear case, the integral of the modulus. The two say different
+    things: an antiferromagnet or a spiral integrates to zero and still has a
+    large absolute moment, and with spin-orbit coupling the *direction* of the
+    total moment is a result rather than an input, which is why all three
+    components are worth printing.
+    """
+    magnetization = rho_r[1:]
+    scale = volume / magnetization[0].size
+    modulus = jnp.sqrt(jnp.sum(magnetization**2, axis=0))
+    return jnp.concatenate([
+        scale * jnp.sum(magnetization, axis=(1, 2, 3)),
+        jnp.asarray([scale * jnp.sum(modulus)]),
+    ])
+
+
 @jax.jit
 def _magnetization(rho_r, volume):
     """``(total, absolute)`` magnetization in Bohr magnetons per cell.
@@ -327,11 +395,19 @@ def next_ethr(ethr: float, accuracy: float, nelec: float, iteration: int) -> flo
     return max(min(ethr, 0.1 * accuracy / max(1.0, nelec)), ETHR_MIN)
 
 
-def default_nbnd(nelec: float, occupations: str, nelup=None, neldw=None) -> int:
+def default_nbnd(
+    nelec: float, occupations: str, nelup=None, neldw=None, noncolin: bool = False
+) -> int:
     """QE's default band count (``PW/src/setup.f90``).
 
     An insulator needs exactly the occupied bands; a smeared calculation needs
     20% more so there are empty states for the Fermi level to sit among.
+
+    ``IF (noncolin) nbnd = 2 * nbnd``, applied last and to whichever count the
+    lines above arrived at: a spinor band holds one electron rather than two, so
+    a noncollinear run of the same crystal needs twice as many. QE says why in a
+    comment -- "bands are NOT twofold degenerate" -- and the doubling is not
+    optional even when spin-orbit coupling leaves them degenerate anyway.
 
     With two channels the count is ``MAX(nelec/degspin, nelup, neldw)`` and
     ``degspin`` is 1, so what decides it is the *fuller* channel: eight
@@ -343,8 +419,9 @@ def default_nbnd(nelec: float, occupations: str, nelup=None, neldw=None) -> int:
     occupied = int(round(nelec / 2.0))
     if nelup is not None:
         occupied = max(occupied, int(round(nelup)), int(round(neldw)))
+    degeneracy = 2 if noncolin else 1
     if occupations == "fixed":
-        return max(occupied, 1)
+        return degeneracy * max(occupied, 1)
     if nelup is not None:
         return max(
             int(round(1.2 * nelec / 2.0)),
@@ -352,7 +429,7 @@ def default_nbnd(nelec: float, occupations: str, nelup=None, neldw=None) -> int:
             int(round(1.2 * neldw)),
             occupied + 4,
         )
-    return max(int(round(1.2 * nelec / 2.0)), occupied + 4)
+    return degeneracy * max(int(round(1.2 * nelec / 2.0)), occupied + 4)
 
 
 @dataclass
@@ -386,6 +463,13 @@ class SCFResult:
     #: Only when ``tot_magnetization`` constrained the two channels separately.
     fermi_energy_up: float | None = None
     fermi_energy_down: float | None = None
+    #: ``int m(r)`` as a cartesian vector, in Bohr magnetons per cell. Only a
+    #: noncollinear run has one -- a collinear one has :attr:`magnetization`,
+    #: which is the same quantity when the axis is fixed by construction.
+    magnetization_vector: tuple | None = None
+    #: 1, 2 or 4: how many components :attr:`density` and :attr:`potential`
+    #: have. It is 1 for a *nonmagnetic* spin-orbit run, where ``nspin`` is 4.
+    nspin_mag: int = 1
     history: list = field(default_factory=list)
 
     @property
@@ -399,8 +483,35 @@ class SCFResult:
 
     @property
     def total_density(self) -> jnp.ndarray:
-        """``(n1, n2, n3)``: the charge density, both channels summed."""
-        return jnp.sum(self.density, axis=0)
+        """``(n1, n2, n3)``: the charge density.
+
+        The two channels summed when they are ``(up, down)``, and the first
+        component alone when they are ``(n, m_x, m_y, m_z)``.
+        """
+        from pypresso.scf.potential import total_charge
+
+        return total_charge(self.density)
+
+
+def _spin_block_diagonal(per_atom) -> np.ndarray:
+    """Per-atom ``(nh, nh, 2, 2)`` blocks -> one ``(2, 2, nkb, nkb)`` matrix.
+
+    The same block-diagonal assembly ``build_projectors`` does for ``D_ij``,
+    with a spin pair in front. Laying the spin indices outermost is what lets
+    the sandwich in :func:`_newd_noncollinear` be four ordinary ``nkb x nkb``
+    matrix products: the block structure keeps the atoms from mixing, so nothing
+    downstream has to loop over them.
+    """
+    sizes = [block.shape[0] for block in per_atom]
+    nkb = sum(sizes)
+    out = np.zeros((2, 2, nkb, nkb), dtype=complex)
+    offset = 0
+    for block, nh in zip(per_atom, sizes):
+        out[:, :, offset : offset + nh, offset : offset + nh] = np.transpose(
+            block, (2, 3, 0, 1)
+        )
+        offset += nh
+    return out
 
 
 class Calculation:
@@ -438,13 +549,40 @@ class Calculation:
             [pseudo.functional for pseudo in self.pseudos], system.input_dft
         )
 
+        # QE's three spin numbers, kept apart (``set_spin_vars``): how many
+        # regimes there are, how many components a *state* has, and how many a
+        # *density* has. See :class:`pypresso.system.builder.System`.
         self.nspin = int(system.nspin)
-        if self.nspin == 2:
+        self.npol = int(system.npol)
+        self.nspin_mag = int(system.nspin_mag)
+        self.noncolin = bool(system.noncolin)
+        self.lspinorb = bool(system.lspinorb)
+        if self.nspin == 2 or self.nspin_mag == 4:
             # Refused here rather than where it would first divide by something:
             # a functional whose correlation has no polarized parameterisation
             # would otherwise run with the unpolarized one and converge to a
-            # number that is wrong and looks right.
+            # number that is wrong and looks right. A noncollinear magnetization
+            # needs it for the same reason -- the functional is evaluated along
+            # the local spin axis, which is the polarized one.
             self.functional.require_spin()
+        if self.lspinorb and not any(p.has_so for p in self.pseudos):
+            raise ValueError(
+                "lspinorb = .true. but no pseudopotential is fully relativistic; "
+                "a spin-orbit run needs a rel- dataset with a PP_SPIN_ORB section"
+            )
+        if self.noncolin and not self.lspinorb:
+            for pseudo in self.pseudos:
+                if pseudo.has_so:
+                    # ``average_pp``: QE j-averages the projectors back to the
+                    # scalar-relativistic ones. That is a different
+                    # pseudopotential from the one in the file, so it is refused
+                    # rather than done silently.
+                    raise NotImplementedError(
+                        f"{pseudo.element}: a fully-relativistic pseudopotential "
+                        "with lspinorb = .false. asks for QE's j-averaging "
+                        "(average_pp), which is not implemented; use "
+                        "lspinorb = .true. or a scalar-relativistic dataset"
+                    )
 
         self.nelec = sum(self.pseudos[t].z_valence for t in system.structure.types)
         # ``set_nelup_neldw``. Only used when the magnetization is constrained,
@@ -491,6 +629,39 @@ class Calculation:
         # does. They depend on ``becsum`` and on nothing else that changes, so
         # like ``newd`` they are rebuilt once per SCF iteration.
         self.paw = build_paw(self.pseudos, system.structure, self.functional)
+
+        # The spin-orbit coefficients: ``fcoef`` per species and, assembled over
+        # the atoms, the two block matrices the spinor Hamiltonian takes --
+        # ``dvan_so`` (which *is* the nonlocal potential for a norm-conserving
+        # run) and ``qq_so``. Built once: they depend on the pseudopotentials
+        # and on nothing that changes during the SCF.
+        self.spin_orbit = ()
+        self.dvan_so = None
+        self.fcoef_matrix = None
+        self.qq_so = None
+        if self.noncolin:
+            self.spin_orbit = build_spin_orbit(self.pseudos)
+            types = system.structure.types
+            self.dvan_so = jnp.asarray(_spin_block_diagonal(
+                [self.spin_orbit[t].dvan_so for t in types]
+            ))
+            self.fcoef_matrix = jnp.asarray(_spin_block_diagonal(
+                [self.spin_orbit[t].fcoef for t in types]
+            ))
+            if self.augmentation is not None:
+                # ``qq`` is empty for a norm-conserving species even inside an
+                # ultrasoft calculation, while its projector block is not: the
+                # atom has projectors and no augmentation charge. Padding it to
+                # ``nh`` here is what ``block_matrix`` does implicitly by
+                # writing nothing, and what keeps the assembled matrix square.
+                def species_qq(t: int) -> np.ndarray:
+                    nh = self.pseudos[t].nh
+                    values = np.asarray(self.augmentation.qq[t])
+                    return values if values.shape == (nh, nh) else np.zeros((nh, nh))
+
+                self.qq_so = jnp.asarray(_spin_block_diagonal(
+                    [self.spin_orbit[t].qq_so(species_qq(t)) for t in types]
+                ))
 
         vloc_g = local_potential(self.pseudos, system.structure, system.cell, dense)
         self.vltot = jnp.real(g_to_r(vloc_g, dense.fft_index, dense.grid))
@@ -605,8 +776,11 @@ class Calculation:
         """``(epaw, ddd_paw)`` for the current ``becsum``, as a block matrix.
 
         ``(0, None)`` when no species is PAW. ``ddd_paw`` is
-        ``(nspin, nkb, nkb)``: the one-centre potential differs between the
-        channels exactly as the grid potential does.
+        ``(nspin_mag, nkb, nkb)``: the one-centre potential differs between the
+        components exactly as the grid potential does, and there are as many of
+        them as the density has -- one for a nonmagnetic spin-orbit run, whose
+        spin structure comes entirely from ``fcoef`` afterwards and not from
+        the one-centre terms.
         """
         if self.paw is None:
             return jnp.asarray(0.0), None
@@ -615,19 +789,50 @@ class Calculation:
             self.augmentation.block_matrix(
                 tuple(None if b is None else b[spin] for b in blocks)
             )
-            for spin in range(self.nspin)
+            for spin in range(self.nspin_mag)
         ])
 
     def becsum(self, wavefunctions, weights) -> tuple:
         """``becsum`` for every ultrasoft species, or ``()`` when there are none."""
         if not self.is_ultrasoft:
             return ()
-        values = becsum(
-            wavefunctions, self.projectors.vkb, weights, self.species_channels
-        )
+        if self.noncolin:
+            values = self._noncollinear_becsum(wavefunctions, weights)
+        else:
+            values = becsum(
+                wavefunctions, self.projectors.vkb, weights, self.species_channels
+            )
         if self._becsum_symmetry is not None:
             values = self._becsum_symmetry.apply(values)
         return values
+
+    def _noncollinear_becsum(self, wavefunctions, weights) -> tuple:
+        """``sum_bec`` then ``add_becsum_so``, per species.
+
+        The projector occupations are accumulated as a spin-density *matrix* and
+        only then contracted with the spin-orbit coefficients into the
+        ``nspin_mag`` real components everything downstream wants. Doing it in
+        that order is not an implementation detail: the intermediate is the only
+        place the two spin components of the spinor still appear separately, and
+        it is what a fully-relativistic species needs in order to know which
+        ``j`` shell its occupation belongs to.
+        """
+        spinors = spinor_becsum(
+            wavefunctions[0], self.projectors.vkb, weights[0], self.species_channels
+        )
+        values = []
+        for t, block in enumerate(spinors):
+            if block is None:
+                values.append(None)
+                continue
+            values.append(
+                becsum_transform(
+                    jnp.asarray(self.spin_orbit[t].fcoef).astype(block.dtype),
+                    block,
+                    self.nspin_mag,
+                )
+            )
+        return tuple(values)
 
     def coefficients(self, potential: jnp.ndarray, ddd_paw=None) -> jnp.ndarray | None:
         """``newd``: the ``D_ij`` the Hamiltonian should use with this potential.
@@ -639,6 +844,8 @@ class Calculation:
         is. ``None`` means "nothing to rebuild": the norm-conserving case, where
         the file's ``D_ij`` is the answer for the whole run.
         """
+        if self.noncolin:
+            return self._noncollinear_coefficients(potential, ddd_paw)
         if not self.is_ultrasoft:
             return None
         dense = self.basis.dense
@@ -648,6 +855,41 @@ class Calculation:
         # ``add_paw_to_deeq``: the one-centre coefficients enter the nonlocal
         # term in exactly the same place the ultrasoft integral does.
         return deeq if ddd_paw is None else deeq + ddd_paw
+
+    def _noncollinear_coefficients(self, potential, ddd_paw=None):
+        """``deeq_nc``: the ``(2, 2, nkb, nkb)`` coefficients of a spinor run.
+
+        Three things happen in the order ``newd_us`` does them, and the order is
+        the point:
+
+        1. the augmentation charge is integrated against each component of the
+           potential, giving one *scalar* matrix per component;
+        2. ``add_paw_to_deeq`` adds PAW's one-centre coefficients to those
+           scalars -- **before** the spin transform, not after, because they are
+           an addition to the same integral;
+        3. only then are the components recombined into spin blocks and
+           sandwiched between the spin-orbit coefficients.
+
+        Adding ``ddd_paw`` after step 3 instead would put the one-centre term
+        into the wrong spin structure, which converges perfectly well to the
+        wrong answer.
+
+        A norm-conserving spin-orbit run has no step 1 or 2 at all -- there is
+        no augmentation charge to integrate -- and its coefficients are
+        ``dvan_so``, fixed for the whole run.
+        """
+        if not self.is_ultrasoft:
+            return self.dvan_so
+        dense = self.basis.dense
+        components = jnp.stack([
+            self.augmentation.block_matrix(
+                self.augmentation.integrals(r_to_g(channel, dense.fft_index))
+            )
+            for channel in potential
+        ])
+        if ddd_paw is not None:
+            components = components + ddd_paw
+        return _newd_noncollinear(components, self.dvan_so, self.fcoef_matrix)
 
     def augmented(self, rho_r: jnp.ndarray, becsum_) -> jnp.ndarray:
         """``addusdens``: the augmentation charge added to a real-space density."""
@@ -660,6 +902,20 @@ class Calculation:
         """Impose the crystal symmetry on a real-space density."""
         if self._symmetry_maps is None:
             return rho_r
+        if self.nspin_mag == 4:
+            # ``sym_rho`` treats the magnetization as an axial vector: a
+            # symmetry operation permutes the grid *and* rotates the three
+            # components into each other, with a sign from the determinant and
+            # a further one from time reversal on a magnetic operation. None of
+            # that is written here, and symmetrising the components
+            # independently -- which is what the collinear path would do -- is
+            # not an approximation but a different, wrong, symmetry.
+            raise NotImplementedError(
+                "symmetrising a noncollinear magnetization is not implemented; "
+                "run with nosym = .true., or with zero starting_magnetization "
+                "(a nonmagnetic spin-orbit run has a scalar density and is "
+                "symmetrised normally)"
+            )
         gvectors = self.basis.dense
         return _symmetrize(rho_r, gvectors.fft_index, gvectors.grid, self._symmetry_maps)
 
@@ -675,9 +931,15 @@ class Calculation:
         dense, smooth = self.basis.dense, self.basis.smooth
         if becsum_ is None:
             becsum_ = self.becsum(wavefunctions, weights)
-        rho = _density_of_bands(
-            wavefunctions, self.fft_index, smooth.grid, weights, self.system.cell
-        )
+        if self.noncolin:
+            rho = _spinor_density_of_bands(
+                wavefunctions[0], self.fft_index, smooth.grid, weights[0],
+                self.system.cell, self.nspin_mag,
+            )
+        else:
+            rho = _density_of_bands(
+                wavefunctions, self.fft_index, smooth.grid, weights, self.system.cell
+            )
         return self.symmetrize(self.augmented(to_dense(rho, smooth, dense), becsum_))
 
     def hamiltonian(self, v_scf: jnp.ndarray, ddd_paw=None) -> tuple:
@@ -695,8 +957,15 @@ class Calculation:
         # transforms a smooth-grid copy. ``newd`` reads the *dense* one, since
         # the augmentation charge it integrates against is only representable
         # there.
-        total = self.vltot[None] + v_scf
+        # ``set_vrs``. In the ``(up, down)`` representation the local
+        # pseudopotential is added to both channels; in ``(n, m_x, m_y, m_z)``
+        # it is all charge, so it goes into the first component only -- the same
+        # distinction :func:`pypresso.scf.potential.with_core` draws for the core
+        # charge, and the same silent error if it is missed.
+        total = v_scf + with_core(self.vltot, self.nspin_mag)
         deeq = self.coefficients(total, ddd_paw)
+        if self.noncolin:
+            return (self._spinor_hamiltonian(total, deeq),)
         hamiltonians = []
         for spin in range(self.nspin):
             potential = to_smooth(total[spin], self.basis.dense, self.basis.smooth)
@@ -716,6 +985,26 @@ class Calculation:
             ))
         return tuple(hamiltonians)
 
+    def _spinor_hamiltonian(self, total: jnp.ndarray, deeq) -> SpinorHamiltonian:
+        """The single noncollinear Hamiltonian, at the given total potential."""
+        potential = jnp.stack([
+            to_smooth(component, self.basis.dense, self.basis.smooth)
+            for component in total
+        ])
+        return SpinorHamiltonian(
+            kinetic=self.kinetic,
+            potential=potential,
+            potential_wave=jnp.moveaxis(potential, -1, -3),
+            sticks=self.sticks,
+            fft_index=self.fft_index,
+            mask=self.basis.planewaves.mask,
+            projectors=self.projectors,
+            deeq=deeq,
+            grid=self.basis.smooth.grid,
+            resolves_differences=self.resolves_differences,
+            qq=self.qq_so,
+        )
+
     def starting_density(self) -> jnp.ndarray:
         """The superposition of atomic charges, split by ``starting_magnetization``.
 
@@ -729,12 +1018,15 @@ class Calculation:
         finding the magnetic state on its own.
         """
         dense = self.basis.dense
-        if self.nspin == 1:
+        if self.nspin_mag == 1:
             rho_g = starting_charge(
                 self.pseudos, self.system.structure, self.system.cell, dense,
                 self.nelec,
             )
             return jnp.real(g_to_r(rho_g, dense.fft_index, dense.grid))[None]
+
+        if self.noncolin:
+            return self._noncollinear_starting_density()
 
         rho_g, magnetization_g = starting_charge(
             self.pseudos, self.system.structure, self.system.cell, dense, self.nelec,
@@ -742,6 +1034,62 @@ class Calculation:
         )
         channels = jnp.stack([rho_g + magnetization_g, rho_g - magnetization_g]) / 2.0
         return jnp.real(g_to_r(channels, dense.fft_index, dense.grid))
+
+    def _noncollinear_starting_density(self) -> jnp.ndarray:
+        """``atomic_rho_g`` with ``nspin = 4``: charge, and a magnetization vector.
+
+        The magnetization is the same superposition of atomic charges the
+        collinear case builds, once per cartesian component, with each species'
+        contribution weighted by its ``starting_magnetization`` *and* by the
+        direction ``(angle1, angle2)`` points in. Three sums rather than one is
+        the whole difference -- and it is why the angles are per species: two
+        sublattices pointing different ways is exactly what a noncollinear
+        calculation exists to describe, and a single common axis would make it a
+        collinear one in disguise.
+        """
+        dense = self.basis.dense
+        directions = self.magnetization_directions  # (ntyp, 3)
+        magnitudes = self.starting_magnetization
+        components = []
+        rho_g = None
+        for axis in range(3):
+            rho_g, component = starting_charge(
+                self.pseudos, self.system.structure, self.system.cell, dense,
+                self.nelec, magnetization=magnitudes * directions[:, axis],
+            )
+            components.append(component)
+        channels = jnp.stack([rho_g, *components])
+        return jnp.real(g_to_r(channels, dense.fft_index, dense.grid))
+
+    @property
+    def starting_magnetization(self) -> np.ndarray:
+        """``starting_magnetization`` per species, padded to ``ntyp``."""
+        ntyp = self.system.structure.ntyp
+        values = np.zeros(ntyp)
+        given = np.asarray(self.system.starting_magnetization, dtype=float)
+        values[: given.size] = given[:ntyp]
+        return values
+
+    @property
+    def magnetization_directions(self) -> np.ndarray:
+        """``(ntyp, 3)`` unit vectors from ``angle1``/``angle2``, in degrees.
+
+        ``input.f90`` converts the input's degrees to radians and
+        ``angle1``/``angle2`` are the polar and azimuthal angles of that
+        species' moment; both default to zero, which points along ``z`` and is
+        what makes an unspecified noncollinear run start out collinear.
+        """
+        ntyp = self.system.structure.ntyp
+        theta = np.zeros(ntyp)
+        phi = np.zeros(ntyp)
+        for target, given in ((theta, self.system.angle1), (phi, self.system.angle2)):
+            values = np.asarray(given, dtype=float)
+            target[: values.size] = np.radians(values[:ntyp])
+        return np.stack([
+            np.sin(theta) * np.cos(phi),
+            np.sin(theta) * np.sin(phi),
+            np.cos(theta),
+        ], axis=1)
 
     @property
     def spin_weights(self) -> np.ndarray:
@@ -785,14 +1133,31 @@ class Calculation:
             diagonal = np.array([
                 occupations[nb] / (2 * l + 1) for nb, l, _ in projector_channels(pseudo)
             ])
-            per_spin = self.spin_weights[:, t][:, None] * diagonal[None, :]
+            per_spin = self._becsum_split(t) [:, None] * diagonal[None, :]
             becsum.append(
                 jnp.broadcast_to(
                     jnp.stack([jnp.diag(jnp.asarray(row)) for row in per_spin])[:, None],
-                    (self.nspin, len(atoms), pseudo.nh, pseudo.nh),
+                    (self.nspin_mag, len(atoms), pseudo.nh, pseudo.nh),
                 )
             )
         return tuple(becsum)
+
+    def _becsum_split(self, t: int) -> np.ndarray:
+        """How one species' reference occupations divide over ``nspin_mag``.
+
+        ``PAW_atomic_becsum``. Collinear: the ``(1 +- m)/2`` pair. Noncollinear
+        with a magnetization: the occupation itself, then ``m`` times the
+        direction it points in -- which is the same information written in the
+        other representation, and has to agree with what
+        :meth:`_noncollinear_starting_density` does to the charge or the first
+        iteration contradicts itself.
+        """
+        if not self.noncolin:
+            return self.spin_weights[:, t]
+        if self.nspin_mag == 1:
+            return np.ones(1)
+        moment = self.starting_magnetization[t] * self.magnetization_directions[t]
+        return np.concatenate([[1.0], moment])
 
     def starting_wavefunctions(self, hamiltonians, nbnd: int) -> jnp.ndarray:
         """The first guess at the wavefunctions, from the atomic orbitals.
@@ -811,15 +1176,20 @@ class Calculation:
             self.pseudos, self.system.structure, self.system.cell,
             self.basis.smooth, self.basis.planewaves, self.system.kpoints,
         )
+        if self.noncolin:
+            atomic = self._as_spinors(atomic)
+
         missing = nbnd - atomic.shape[1]
         if missing > 0:
             # Aluminium has four atomic orbitals and a smeared calculation asks
             # for six bands; the rest are random, exactly as QE tops up.
+            ndim = self.npol * self.basis.npwx
+            tiled = jnp.tile(self.basis.planewaves.mask, (1, self.npol))
             extra = jax.vmap(
                 lambda kinetic, mask: starting_vectors(
-                    None, missing, self.basis.npwx, kinetic, mask, atomic.dtype
+                    None, missing, ndim, kinetic, mask, atomic.dtype
                 )
-            )(self.kinetic, self.basis.planewaves.mask)
+            )(jnp.tile(self.kinetic, (1, self.npol)), tiled)
             atomic = jnp.concatenate([atomic, extra], axis=1)
 
         # The same atomic orbitals seed both channels; what differs is the
@@ -828,6 +1198,24 @@ class Calculation:
         return jnp.stack([
             _rotate_all(hamiltonian, atomic, nbnd)[1] for hamiltonian in hamiltonians
         ])
+
+    def _as_spinors(self, atomic: jnp.ndarray) -> jnp.ndarray:
+        """Scalar atomic orbitals -> twice as many spinors, ``(nk, 2 n, 2 npwx)``.
+
+        Each orbital is used twice, once in each spin component, which spans the
+        same space as QE's ``atomic_wfc_nc``. It is *not* the same set of
+        vectors: with spin-orbit coupling QE builds the ``j``-resolved
+        spin-angle functions (``atomic_wfc_so``), which are already close to the
+        eigenstates. The difference is entirely one of convergence -- both spans
+        are then diagonalised by ``rotate_wfc``, and what comes out of that is
+        what the SCF starts from -- so this is a slower start, not a different
+        calculation.
+        """
+        nk, count, npwx = atomic.shape
+        zero = jnp.zeros_like(atomic)
+        up = jnp.concatenate([atomic, zero], axis=-1)
+        down = jnp.concatenate([zero, atomic], axis=-1)
+        return jnp.concatenate([up, down], axis=1)
 
     def diagonalize(self, hamiltonians, nbnd: int, psi0=None, ethr=None):
         """Solve at every k-point of every channel.
@@ -873,14 +1261,23 @@ class Calculation:
         weights = self.system.kpoints.weights
         scheme = self.system.occupations
 
+        # How many electrons one band holds. It is the factor the k-point
+        # weights already carry, and it appears here only where a *count* of
+        # bands is taken -- a spinor band holds one electron, not two.
+        degeneracy = 1 if self.noncolin else 2
+
         if scheme == "fixed":
-            wg, homo, lumo = fixed_occupations(eigenvalues, weights, self.nelec)
+            wg, homo, lumo = fixed_occupations(
+                eigenvalues, weights, self.nelec, degeneracy
+            )
             return wg, {"homo": float(homo), "lumo": None if lumo is None else float(lumo)}
 
         if scheme == "from_input":
             if self.system.input_occupations is None:
                 raise ValueError("occupations='from_input' needs an OCCUPATIONS card")
-            return input_occupations(self.system.input_occupations, eigenvalues, weights), {}
+            return input_occupations(
+                self.system.input_occupations, eigenvalues, weights, degeneracy
+            ), {}
 
         if scheme.startswith("tetrahedra"):
             # The tetrahedra are a property of the k-grid and the symmetry, not
@@ -948,6 +1345,7 @@ def run_scf(
         calculation.nelec,
         system.occupations,
         *((calculation.nelup, calculation.neldw) if system.nspin == 2 else (None, None)),
+        noncolin=system.noncolin,
     )
 
     mixer = get_mixer(mixing_mode, beta=mixing_beta)
@@ -1055,11 +1453,16 @@ def run_scf(
         total = sum(terms.values())
 
         change = None if previous_energy is None else abs(total - previous_energy)
-        magnetization = None
+        magnetization = moment = None
         if calculation.nspin == 2:
             magnetization = [
                 float(x) for x in _magnetization(rho_out, system.cell.volume)
             ]
+        elif calculation.nspin_mag == 4:
+            values = [
+                float(x) for x in _noncollinear_magnetization(rho_out, system.cell.volume)
+            ]
+            moment, magnetization = tuple(values[:3]), [None, values[3]]
 
         entry = {"iteration": iteration, "total_energy": total,
                  "accuracy": accuracy, "ethr": ethr,
@@ -1067,12 +1470,19 @@ def run_scf(
         if magnetization is not None:
             entry["magnetization"] = magnetization[0]
             entry["absolute_magnetization"] = magnetization[1]
+        if moment is not None:
+            entry["magnetization_vector"] = moment
         history.append(entry)
         if verbose:
-            extra = (
-                "" if magnetization is None
-                else f"   m = {magnetization[0]:7.4f} ({magnetization[1]:7.4f}) mu_B"
-            )
+            if moment is not None:
+                extra = (
+                    f"   m = ({moment[0]:6.3f}, {moment[1]:6.3f}, {moment[2]:6.3f})"
+                    f" [{magnetization[1]:6.3f}] mu_B"
+                )
+            elif magnetization is None:
+                extra = ""
+            else:
+                extra = f"   m = {magnetization[0]:7.4f} ({magnetization[1]:7.4f}) mu_B"
             print(f"  iteration {iteration:3d}   E = {total:16.8f} Ry"
                   f"   accuracy = {accuracy:.2e}   ethr = {ethr:.2e}"
                   f"   |drho| = {residual:.2e}{extra}")
@@ -1099,8 +1509,10 @@ def run_scf(
         potential=calculation.vltot[None] + potential.v_scf,
         accuracy=accuracy,
         nspin=nspin,
+        nspin_mag=calculation.nspin_mag,
         magnetization=None if magnetization is None else magnetization[0],
         absolute_magnetization=None if magnetization is None else magnetization[1],
+        magnetization_vector=moment,
         fermi_energy=levels.get("fermi_energy"),
         fermi_energy_up=levels.get("fermi_energy_up"),
         fermi_energy_down=levels.get("fermi_energy_down"),

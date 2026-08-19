@@ -76,6 +76,64 @@ class Hamiltonian(eqx.Module):
         return self.kinetic.shape[1]
 
     @property
+    def npol(self) -> int:
+        """Spinor components per state: one. See :mod:`pypresso.hamiltonian.noncollinear`."""
+        return 1
+
+    @property
+    def ndim(self) -> int:
+        """The dimension of the space a state lives in, ``npol * npwx``.
+
+        The eigensolvers are written against this rather than against ``npwx``
+        so that a spinor Hamiltonian -- whose states are twice as long -- is
+        another operator rather than another solver.
+        """
+        return self.npwx
+
+    @property
+    def dtype(self):
+        return self.projectors.vkb.dtype
+
+    @property
+    def state_mask(self) -> jnp.ndarray:
+        """``(nk, ndim)``: which entries of a state vector are real basis functions."""
+        return self.mask
+
+    @property
+    def state_kinetic(self) -> jnp.ndarray:
+        """``(nk, ndim)``: ``|k+G|^2`` laid out like a state vector.
+
+        Only the random starting guess uses it, to damp the high-kinetic
+        components; it is a property so that a spinor state gets one copy per
+        component without the solver knowing there are two.
+        """
+        return self.kinetic
+
+    def s_projections(self, vectors: jnp.ndarray, ik: int):
+        """``(<beta|psi>, q <beta|psi>)`` for a block of states, both flattened.
+
+        The pair the Davidson subspace carries: ``becp`` builds the projected
+        overlap and ``becq`` reconstructs ``S|psi>`` from a rotation of vectors
+        already stored, so ``S`` is never applied to the whole subspace. Both
+        come back as ``(nvec, m)`` matrices whatever the spin structure is, so
+        the solver's rotations stay single matrix products.
+        """
+        if not self.has_overlap:
+            width = 0
+            empty = self.projectors.vkb[ik][:, :width]
+            becp = vectors @ empty.conj()
+            return becp, becp
+        vkb = self.projectors.vkb[ik]
+        becp = vectors @ vkb.conj()
+        return becp, becp @ self.projectors.qq.astype(vkb.dtype).T
+
+    def s_correction(self, becq: jnp.ndarray, ik: int) -> jnp.ndarray:
+        """``(S - 1)|psi>`` from the stored ``q <beta|psi>``."""
+        if not self.has_overlap:
+            return jnp.zeros(becq.shape[:-1] + (self.ndim,), dtype=self.dtype)
+        return becq @ self.projectors.vkb[ik].T
+
+    @property
     def coefficients(self) -> jnp.ndarray:
         """``D_ij``: the rebuilt ultrasoft ones if present, the file's if not."""
         return self.projectors.dij if self.deeq is None else self.deeq

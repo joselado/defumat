@@ -58,8 +58,19 @@ class BandStructure:
         return np.concatenate([[0.0], np.cumsum(steps)])
 
     def gap(self, nelec: float) -> float:
-        """Direct-plus-indirect band gap in eV, for a system with fixed filling."""
-        occupied = int(round(nelec / 2))
+        """Fundamental band gap in eV, for a system with fixed filling.
+
+        The lowest conduction level anywhere on the path minus the highest
+        valence level anywhere on it -- the *indirect* gap, which is the smaller
+        of the two and equals the direct one when both extrema sit at the same
+        k-point.
+
+        How many bands are filled depends on how many electrons a band holds:
+        two for a spin-degenerate calculation, one for a noncollinear one, where
+        each band is a spinor. Getting that wrong halves or doubles the count of
+        occupied bands and reports the gap between the wrong pair.
+        """
+        occupied = int(round(nelec / (1 if self.nspin == 4 else 2)))
         levels = self.eigenvalues_ev
         if self.nspin == 2:
             raise NotImplementedError(

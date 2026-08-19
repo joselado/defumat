@@ -52,7 +52,7 @@ def rayleigh_ritz(hamiltonian, ik, vectors, nbnd: int):
     Returns ``(eigenvalues, wavefunctions)`` shaped ``(nbnd,)`` and
     ``(nbnd, npwx)``.
     """
-    mask = hamiltonian.mask[ik]
+    mask = hamiltonian.state_mask[ik]
     vectors = jnp.where(mask, vectors, 0.0)
     applied = hamiltonian.apply(vectors, ik)
 

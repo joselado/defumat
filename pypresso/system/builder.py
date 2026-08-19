@@ -37,8 +37,18 @@ class System(eqx.Module):
     kpoints: KPoints
     ecutwfc: float = eqx.field(static=True)
     ecutrho: float = eqx.field(static=True)
-    #: 1 for an unpolarized calculation, 2 for collinear LSDA. Static, because
-    #: it is an array *rank* everywhere downstream, not a value.
+    #: 1 for an unpolarized calculation, 2 for collinear LSDA, 4 for
+    #: noncollinear. Static, because it is an array *rank* everywhere
+    #: downstream, not a value.
+    #:
+    #: ``nspin`` alone does not fix any array shape once it is 4: QE keeps
+    #: *three* numbers and so does this code (``set_spin_vars`` in
+    #: ``Modules/noncol.f90``). :attr:`npol` is how many spinor components a
+    #: wavefunction has, :attr:`nspin_mag` how many components the density and
+    #: the potential have, and ``nspin`` only says which of the three regimes is
+    #: in force. Collapsing them is the mistake that makes a nonmagnetic
+    #: spin-orbit run allocate -- and symmetrise -- a magnetization it does not
+    #: have.
     nspin: int = eqx.field(static=True, default=1)
     calculation: str = eqx.field(static=True, default="scf")
     nbnd: int | None = eqx.field(static=True, default=None)
@@ -67,10 +77,66 @@ class System(eqx.Module):
     #: three p channels filled) needs it, and symmetrising anyway converges to a
     #: different state.
     nosym: bool = eqx.field(static=True, default=False)
+    #: ``lspinorb``: use the ``j``-resolved projectors of a fully-relativistic
+    #: pseudopotential, which is what puts spin-orbit coupling in the
+    #: Hamiltonian. Requires ``noncolin`` -- QE refuses the combination too,
+    #: because the spin-orbit term does not commute with ``S_z`` and there is no
+    #: collinear Hamiltonian for it to enter.
+    lspinorb: bool = eqx.field(static=True, default=False)
+    #: ``angle1``/``angle2`` in degrees, per species: the polar and azimuthal
+    #: angles of that species' starting magnetization. Only meaningful when
+    #: ``noncolin`` -- a collinear run has nothing to point.
+    angle1: tuple[float, ...] = eqx.field(static=True, default=())
+    angle2: tuple[float, ...] = eqx.field(static=True, default=())
 
     @property
     def lsda(self) -> bool:
         return self.nspin == 2
+
+    @property
+    def noncolin(self) -> bool:
+        return self.nspin == 4
+
+    @property
+    def npol(self) -> int:
+        """How many spinor components a wavefunction has: 2 noncollinear, 1 not.
+
+        This is an array *dimension* of every wavefunction-shaped quantity, and
+        the reason a noncollinear Hamiltonian is one operator on a space of
+        ``npol * npwx`` rather than ``nspin`` operators on ``npwx``.
+        """
+        return 2 if self.noncolin else 1
+
+    @property
+    def domag(self) -> bool:
+        """Whether the run carries a magnetization at all (``setup.f90``).
+
+        For a noncollinear calculation this is decided by ``starting_magnetization``
+        being nonzero *somewhere* and by nothing else: a spin-orbit run on a
+        nonmagnetic crystal has spinor wavefunctions and a scalar density, and
+        QE says so in the comment above the assignment -- "set the domag
+        variable to make a spin-orbit calculation with zero magnetization".
+
+        It is a property of the input rather than of the converged state, which
+        is what makes it static: the magnetization cannot appear during the SCF
+        if nothing in the starting guess breaks the symmetry.
+        """
+        if not self.noncolin:
+            return False
+        return any(abs(m) > 1.0e-6 for m in self.starting_magnetization)
+
+    @property
+    def nspin_mag(self) -> int:
+        """Components of the density and the potential: 1, 2 or 4.
+
+        4 only for a *magnetic* noncollinear run -- ``(n, m_x, m_y, m_z)``. A
+        nonmagnetic spin-orbit run has one, exactly as an unpolarized run does,
+        and every routine that builds, mixes, symmetrises or integrates a
+        density then runs unchanged.
+        """
+        if self.noncolin:
+            return 4 if self.domag else 1
+        return self.nspin
 
 
 def system_from_file(path, precision: Precision = DEFAULT_PRECISION) -> System:
@@ -91,11 +157,30 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     rotations = None if nosym else symmetries.rotation_array()
     kpoints = _build_kpoints(pwin, cell, precision, rotations)
 
+    # ``noncolin`` and ``nspin`` say the same thing twice in a pw.x input, and
+    # ``input.f90`` resolves it in one direction: noncolin wins and sets
+    # nspin = 4. An input that says both consistently is common; one that says
+    # nspin = 2 *and* noncolin is not, and is refused rather than silently
+    # resolved, since which one the author meant is not recoverable.
+    noncolin = _logical(pwin.get("system", "noncolin", False))
+    lspinorb = _logical(pwin.get("system", "lspinorb", False))
     nspin = int(pwin.get("system", "nspin", 1))
-    if nspin not in (1, 2):
-        raise NotImplementedError(
-            f"nspin = {nspin}: only 1 (unpolarized) and 2 (collinear LSDA) are "
-            "implemented; noncollinear magnetism and spin-orbit are out of scope"
+    if noncolin:
+        if nspin == 2:
+            raise ValueError(
+                "noncolin = .true. together with nspin = 2: a noncollinear "
+                "calculation is nspin = 4; drop one of the two"
+            )
+        nspin = 4
+    if nspin not in (1, 2, 4):
+        raise ValueError(f"nspin = {nspin}: expected 1, 2 or 4")
+    if lspinorb and nspin != 4:
+        # QE's own check (``input.f90``). Spin-orbit does not commute with S_z,
+        # so there is no collinear Hamiltonian for it to enter -- asking for it
+        # without noncolin is an input error, not a request to be approximated.
+        raise ValueError(
+            "lspinorb = .true. needs noncolin = .true.: the spin-orbit term "
+            "couples the two spin channels, so it has no collinear form"
         )
     # ``setup.f90``'s ``degspin``, applied in the one place that knows the rule
     # -- a k-set built later, for a denser DOS grid, has to go through the same
@@ -128,6 +213,9 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         ),
         tot_magnetization=_tot_magnetization(pwin),
         nosym=nosym,
+        lspinorb=lspinorb,
+        angle1=tuple(pwin.indexed("system", "angle1", structure.ntyp)),
+        angle2=tuple(pwin.indexed("system", "angle2", structure.ntyp)),
     )
 
 

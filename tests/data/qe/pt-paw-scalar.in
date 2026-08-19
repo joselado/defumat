@@ -1,0 +1,24 @@
+! Platinum, fcc, with a scalar-relativistic PAW pseudopotential.
+!
+! The control for the spin-orbit PAW case: the same cell and cutoffs as
+! test-suite/pw_spinorbit/spinorbit-paw.in, run collinear with the scalar
+! dataset. It exists to say whether a d-channel PAW pseudopotential works at
+! all here -- every PAW case validated so far (silicon, oxygen) has projectors
+! only up to l = 1, so l = 2 is untested ground independently of spin-orbit.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=2, celldm(1)=7.42, nat=1, ntyp=1,
+    ecutwfc=30.0, ecutrho=250.0,
+    occupations='smearing', degauss=0.02, smearing='mp',
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Pt 195.08 Pt.pbe-n-kjpaw_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Pt 0.0 0.0 0.0
+K_POINTS AUTOMATIC
+ 4 4 4 1 1 1

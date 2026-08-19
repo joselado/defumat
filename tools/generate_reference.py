@@ -72,6 +72,13 @@ RESTAMPED = [
     "pw_pawatom/paw-atom_lda.in",
     "pw_pawatom/paw-atom_spin_lda.in",
     "pw_pawatom/paw-atom_spin.in",
+    # Spin-orbit coupling (P14). Platinum with a fully-relativistic ultrasoft,
+    # PBE-ultrasoft and PAW dataset: the three pseudopotential kinds a spin-orbit
+    # run can use, all nonmagnetic, all with the same cell so that what differs
+    # between them is only the dataset.
+    "pw_spinorbit/spinorbit.in",
+    "pw_spinorbit/spinorbit-pbe.in",
+    "pw_spinorbit/spinorbit-paw.in",
 ]
 
 

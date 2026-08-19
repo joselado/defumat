@@ -295,6 +295,17 @@ def _build_species(pseudo: Pseudopotential, functional: Functional) -> PawSpecie
     ps = np.asarray(paw.ps_wfc)
     pfunc = np.einsum("nr,mr->nmr", ae, ae)
     ptfunc = np.einsum("nr,mr->nmr", ps, ps)
+    if paw.ae_wfc_rel is not None:
+        # A fully-relativistic dataset solves the Dirac equation, so its
+        # all-electron partial waves have a *small* component as well as a large
+        # one, and both carry charge. ``read_upf_new`` adds the small component's
+        # density into ``pfunc`` inside the augmentation sphere -- for every
+        # calculation, not only a magnetic one; ``pfunc_rel`` is kept separately
+        # only for the magnetization term. Leaving it out is worth about 1e-3 Ry
+        # on platinum: small enough to look like a convergence difference, large
+        # enough to be wrong.
+        small = np.asarray(paw.ae_wfc_rel)
+        pfunc[:, :, :iraug] += np.einsum("nr,mr->nmr", small, small)[:, :, :iraug]
     pfunc[:, :, iraug:] = 0.0
     ptfunc[:, :, iraug:] = 0.0
 

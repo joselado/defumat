@@ -1,0 +1,29 @@
+! Bismuthene band structure (without spin-orbit
+! coupling) along Gamma - M - K - Gamma.
+!
+! A 'bands' run reads the density the matching scf run left behind, so this
+! case is generated in the same directory immediately after it (see
+! tools/generate_reference.py). The gap the spin-orbit coupling opens sits at
+! K, which is why the path goes through it.
+ &control
+    calculation = 'bands'
+ /
+ &system
+    ibrav = 4, celldm(1) = 10.109950, celldm(3) = 1.978248,
+    nat = 2, ntyp = 1,
+    ecutwfc = 35.0, ecutrho = 280.0,
+    nbnd = 20,
+ /
+ &electrons
+ /
+ATOMIC_SPECIES
+ Bi 208.98 Bi.pbe-dn-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS (crystal)
+ Bi 0.333333333333 0.666666666667 0.0
+ Bi 0.666666666667 0.333333333333 0.0
+K_POINTS crystal_b
+  4
+   0.000000 0.000000 0.000000 12
+   0.500000 0.000000 0.000000  7
+   0.333333 0.333333 0.000000 14
+   0.000000 0.000000 0.000000  1

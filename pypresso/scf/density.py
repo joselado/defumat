@@ -26,7 +26,8 @@ import jax.numpy as jnp
 from pypresso.basis.fft import g_to_r
 from pypresso.system.cell import Cell
 
-__all__ = ["sum_band", "band_density", "becsum"]
+__all__ = ["sum_band", "band_density", "becsum", "spinor_sum_band",
+           "spinor_band_density", "spinor_becsum"]
 
 
 def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.ndarray, cell: Cell):
@@ -112,4 +113,93 @@ def _becsum_species(projections, weights, channels):
     return jnp.real(
         jnp.einsum("skb,skbai,skbaj->saij", weights.astype(columns.dtype),
                    columns.conj(), columns)
+    )
+
+
+def spinor_band_density(psi, fft_index, grid, weights, cell: Cell, nspin_mag: int):
+    """One k-point's contribution to a noncollinear density.
+
+    Args:
+        psi: ``(nbnd, 2 npwx)`` spinors -- the two components stored one after
+            the other, as :class:`~pypresso.hamiltonian.noncollinear.SpinorHamiltonian`
+            holds them.
+        nspin_mag: 1 for the charge alone, 4 for ``(n, m_x, m_y, m_z)``.
+
+    ``get_rho_k`` and ``get_rho_domag`` in ``sum_band.f90``. The charge is the
+    sum of the two components' densities and the magnetization is the Pauli
+    expectation value ``psi^dagger sigma psi`` -- so the *same* wavefunctions
+    give one number or four depending only on whether the calculation carries a
+    magnetization, and a nonmagnetic spin-orbit run keeps a scalar density.
+    """
+    npwx = psi.shape[-1] // 2
+    components = psi.reshape(psi.shape[:-1] + (2, npwx))
+    field = g_to_r(components, fft_index, grid)  # (nbnd, 2, n1, n2, n3)
+    up, down = field[:, 0], field[:, 1]
+
+    charge = jnp.abs(up) ** 2 + jnp.abs(down) ** 2
+    if nspin_mag == 1:
+        stacked = charge[None]
+    else:
+        cross = jnp.conj(up) * down
+        stacked = jnp.stack([
+            charge,
+            2.0 * jnp.real(cross),
+            2.0 * jnp.imag(cross),
+            jnp.abs(up) ** 2 - jnp.abs(down) ** 2,
+        ])
+    return jnp.einsum("b,cb...->c...", weights, stacked) / cell.volume
+
+
+def spinor_sum_band(psi, fft_index, grid, weights, cell: Cell, nspin_mag: int):
+    """A noncollinear density from every k-point, ``(nspin_mag, n1, n2, n3)``.
+
+    Args:
+        psi: ``(nk, nbnd, 2 npwx)``.
+        weights: ``(nk, nbnd)``.
+    """
+    contributions = jax.vmap(
+        spinor_band_density, in_axes=(0, 0, None, 0, None, None)
+    )(psi, fft_index, grid, weights, cell, nspin_mag)
+    return jnp.sum(contributions, axis=0)
+
+
+def spinor_becsum(psi, vkb, weights, species_channels) -> tuple:
+    """The spinor projector occupations, per species, before the spin transform.
+
+        becsum_nc^a_{i s1, j s2} = sum_kb w_kb <psi_kb|beta_i^a s1>
+                                              <beta_j^a s2|psi_kb>
+
+    ``sum_bec``'s noncollinear branch. It is *not* the ``becsum`` the
+    augmentation charge is built from: that one has ``nspin_mag`` real
+    components and comes from contracting this with the spin-orbit coefficients
+    (:meth:`pypresso.pseudo.spinorbit.SpinOrbitCoupling.becsum_so`). Keeping the
+    two apart is QE's structure too -- ``aux_nc`` then ``add_becsum_so`` -- and
+    it is what lets the same accumulation serve a spin-orbit species and a
+    scalar-relativistic one in the same cell.
+
+    Args:
+        psi: ``(nk, nbnd, 2 npwx)``.
+        vkb: ``(nk, npwx, nkb)``.
+        weights: ``(nk, nbnd)``.
+
+    Returns one complex ``(nat_t, nh_t, 2, nh_t, 2)`` array per species.
+    """
+    npwx = vkb.shape[-2]
+    components = psi.reshape(psi.shape[:-1] + (2, npwx))
+    projections = jnp.einsum("kgc,kbag->kbac", vkb.conj(), components)
+    return tuple(
+        None if channels is None else _spinor_becsum_species(projections, weights, channels)
+        for channels in species_channels
+    )
+
+
+@jax.jit
+def _spinor_becsum_species(projections, weights, channels):
+    """One species' spinor ``becsum``, gathering its atoms' channels in one go."""
+    columns = projections[:, :, :, channels]  # (nk, nbnd, 2, nat, nh)
+    return jnp.einsum(
+        "kb,kbani,kbcnj->niajc",
+        weights.astype(columns.dtype),
+        columns.conj(),
+        columns,
     )

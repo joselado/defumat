@@ -394,8 +394,9 @@ loops over them and the `.dos` file grows a `dosup`/`dosdw` pair with one summed
 Still out of P8: the projected DOS (`projwfc.x`), which needs atomic-orbital projections
 rather than eigenvalues alone.
 
-**P9 — Spin. ✅ DONE.** LSDA (`nspin=2`), collinear magnetization; non-collinear/SOC
-stays out. The density, the potential, `becsum`, `D_ij`, the eigenvalues and the
+**P9 — Spin. ✅ DONE.** LSDA (`nspin=2`), collinear magnetization. Non-collinear
+wavefunctions and spin-orbit coupling came later, in P14, and reused this axis rather than
+widening it. The density, the potential, `becsum`, `D_ij`, the eigenvalues and the
 wavefunctions all grew a leading channel axis, with `k` still the leading *independent*
 axis inside each channel. `xc/` gained the polarized correlation parameterisations (PZ,
 PW92 and PBE's) and nothing for exchange, which the spin-scaling relation supplies
@@ -633,6 +634,96 @@ density is written down and all four come from `jax.grad`; a unit test checks th
 QE's algebra transcribed independently, and they agree to machine precision. The same
 `grad` gives the PAW one-centre `ddd` with no extra code, since `rho_lm` stays linear in
 `becsum` whether or not the functional has a gradient term.
+
+**P14 — Spin-orbit coupling. ✅ DONE (nonmagnetic).** `noncolin` makes a wavefunction a
+two-component spinor stored as one vector of length `2 npwx`, exactly as QE stores it, so
+the eigensolvers see a larger vector space and not a new kind of problem; `lspinorb` puts
+the `j`-resolved projectors of a fully-relativistic dataset into `D_ij`, which becomes a
+complex 2x2 matrix in spin space. New modules: `pseudo/spinorbit.py` (`rot_ylm`, `spinor`,
+`sph_ind`, `fcoef`, `dvan_so`, `qq_so`, and the `becsum`/`newd` transforms) and
+`hamiltonian/noncollinear.py` (`SpinorHamiltonian`). The collinear `Hamiltonian` was not
+touched — it is the hot path of everything else — and the two present the same surface to
+the solvers (`ndim`, `state_mask`, `diagonal`, `s_projections`) instead.
+
+*Check met:* the three platinum cases QE's test suite ships, one per pseudopotential kind,
+all regenerated with the vendored `pw.x` at `conv_thr = 1e-10`:
+
+| case | what it isolates | total energy |
+|---|---|---|
+| `pw_spinorbit/spinorbit` | ultrasoft + LDA: `fcoef`, `dvan_so`, `qq_so`, `newd_so` | **1.3e-8 Ry** |
+| `pw_spinorbit/spinorbit-pbe` | the same with a gradient correction | **3.8e-9 Ry** |
+| `pw_spinorbit/spinorbit-paw` | PAW's one-centre terms under the spin transform | **8.4e-9 Ry** |
+| `bismuthene-soc` | the target system: 2D, ultrasoft + PBE, 30 electrons | see below |
+
+...and, ahead of any of them, an identity that needs no reference at all: **a noncollinear
+run with no spin-orbit coupling and no magnetization must reproduce the collinear answer
+term by term and double every eigenvalue.** It does, to 1e-14 Ry, on norm-conserving,
+ultrasoft and PAW silicon. That check is what gates the spinor infrastructure — it fails
+on any error in `vloc_psi_nc`, the doubled eigensolver, the spinor `sum_band`, the
+projector occupations or the k-point weights — and it was written and passed *before*
+`fcoef` existed, so the spin-orbit work started from a Hamiltonian already known to be
+right.
+
+`fcoef` itself has an exact characterisation that the unit tests use instead of a
+reference: for each radial projector it is the **orthogonal projector onto that `(l, j)`
+shell** in the basis of real harmonics times spin, so it is Hermitian, idempotent, of
+trace `2j+1`, and the two `j` shells of an `l` sum to the identity. All four hold to
+machine precision, which pins down `rot_ylm`, `spinor` and `sph_ind` together.
+
+*Traps, in the order they cost time:*
+
+1. **`fcoef` is used before it is zeroed.** `init_us_1` builds it for every pair with
+   matching `(l, j)`, multiplies `dion` by it to get `dvan_so`, and *then* sets the entries
+   whose two radial projectors differ to zero. `transform_qq_so`, `newd_so` and
+   `add_becsum_so` all consume the **zeroed** array and rely on it to kill the cross-radial
+   terms, having no same-radial guard of their own. One array used everywhere gives a
+   correct `dvan_so` and a silently wrong `qq_so`, `deeq_nc` and `becsum`.
+2. **`PP_AEWFC_REL` is not part of `PP_AEWFC`.** A fully-relativistic PAW file carries the
+   small component of the Dirac partial waves in its own tag series beside the large one.
+   Selecting the partial waves by tag *prefix* returns both series interleaved — twice as
+   many as there are projectors, each attached to the wrong channel — and nothing fails:
+   the one-centre energy simply comes out **tens of Ry** wrong. This was a latent bug in
+   the parser that only a relativistic PAW dataset could expose.
+3. **The small component carries charge at every `nspin_mag`.** `read_upf_new` adds
+   `|phi^rel_i phi^rel_j|` into `pfunc` inside the augmentation sphere for *any* run with
+   `has_so`; only its use in the magnetization (`pfunc_rel`, `with_small_so`) is gated on
+   `nspin_mag == 4`. Leaving it out is worth 1e-3 Ry on platinum — small enough to look
+   like a convergence difference, large enough to be wrong.
+4. **`domag` is a property of the input, not of the answer.** `setup.f90` sets it from
+   `starting_magnetization` being nonzero *somewhere*, and it decides `nspin_mag`. A
+   spin-orbit run on a nonmagnetic crystal therefore has a **scalar** density and
+   potential, so `v_of_rho`, the mixer, `rho_ddot` and `sym_rho` all run exactly as they do
+   unpolarized. Allocating four components anyway is not merely wasteful — it symmetrises,
+   mixes and exchange-correlates a magnetization that is identically zero, and QE's own
+   comment ("to make a spin-orbit calculation with zero magnetization") says this is the
+   intended case rather than an edge one.
+5. **`vltot` and `rho_core` go into the first component only when there are four.** In the
+   `(up, down)` representation an unpolarized quantity is shared *equally*; in
+   `(n, m_x, m_y, m_z)` it is all charge and no magnetization. `set_vrs` writes the
+   distinction out explicitly (`IF (is > 1 .AND. nspin == 4)`), and a single `/ nspin`
+   silently loses three quarters of the core charge.
+6. **`add_paw_to_deeq` runs before `newd_so`, not after.** PAW's one-centre coefficients
+   are an addition to the *scalar* integral `int V Q`, and the `fcoef` sandwich is applied
+   to the sum. Adding them to the already-transformed `deeq_nc` puts them in the wrong spin
+   structure and converges perfectly well to the wrong answer.
+7. **The degeneracy factor moves from the weights to the band count.** `setup.f90` does not
+   multiply the k-point weights by `degspin` for `nspin = 4` — a spinor band holds one
+   electron — and it *does* double `nbnd`. Everything downstream that is weight-driven
+   (the Fermi search, the tetrahedra, the DOS) then needs no change at all, and the only
+   places the factor reappears are where a *count* of filled bands is taken.
+8. **`usnldiag_nc` preconditions with the diagonal spin blocks only.** Blocks 1 and 4 of
+   `deeq_nc` and `qq_so`, and the charge component of the local potential. The
+   preconditioner does not have to be the operator.
+
+*Deferred, and refused rather than approximated:* symmetrising a noncollinear
+magnetization (`sym_rho` rotates it as an axial vector, with a sign from the determinant
+and another from time reversal on a magnetic operation) — so `nspin_mag = 4` needs
+`nosym`; `gradcorr` in the local spin frame — so `nspin_mag = 4` needs an LDA functional;
+`average_pp`, QE's `j`-averaging of a relativistic dataset asked for with
+`lspinorb = .false.`; and PAW's `with_small_so` magnetization term, which only
+`nspin_mag = 4` reaches. The atomic starting guess is the scalar orbitals tensored with
+`{up, down}` rather than QE's `atomic_wfc_so` spin-angle functions: the same span, so the
+same answer after `rotate_wfc`, at the cost of a Davidson step or two.
 
 **P11 — Higher-order autodiff quantities (after the first milestone).** Forces are already
 validated at P5; here: stress by differentiation w.r.t. strain, implicit differentiation of

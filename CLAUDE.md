@@ -20,6 +20,10 @@ kinds, matching QE to **≤6e-9 Ry** and 5e-5 eV in the bands (P13). **The densi
 scheme inside the SCF, matching QE's three aluminium benchmarks to 2.5e-8 Ry. **Collinear
 spin** (P9) matches eight LSDA benchmarks — nickel's total energy to **1.2e-9 Ry** and its
 magnetic moment to the two decimals QE prints (0.7280 against 0.73).
+**Spin-orbit coupling** (P14) is in as well: `noncolin`/`lspinorb` give two-component
+spinor wavefunctions and the `j`-resolved projectors of a fully-relativistic dataset, on
+norm-conserving, ultrasoft and PAW pseudopotentials, matching QE's three platinum
+benchmarks to **≤1.3e-8 Ry**.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
 read it before writing code. P4 is complete: a block Davidson eigensolver behind a name
 registry, with the dense solver kept as its reference, seeded from the pseudo-atomic
@@ -27,7 +31,10 @@ orbitals as QE seeds it. P6 is complete too: automatic k-grids are reduced to th
 irreducible wedge. P10's first pass puts pypresso within **2–4x of serial Quantum ESPRESSO
 per SCF iteration** on the same machine, ultrasoft and PAW included — see
 `PERFORMANCE.md`. **Outstanding:** the projected DOS (`projwfc.x`), Wyckoff input, and the
-rest of P10 (k-axis sharding and GPU). Non-collinear magnetism and spin-orbit stay out.
+rest of P10 (k-axis sharding and GPU). Non-collinear *magnetism* — a spin-orbit run whose
+magnetization is nonzero — is partly in: the density, potential and occupations carry it,
+but symmetrising it and gradient-correcting it are not written, so those combinations are
+refused rather than approximated.
 
 ## Layout
 
@@ -70,10 +77,24 @@ potential, `becsum`, `D_ij`, the eigenvalues and the wavefunctions a leading cha
 and one SCF iteration diagonalises a different Hamiltonian per channel. Whichever
 occupation scheme is in use decides how many Fermi levels there are — one shared between
 the channels, or one each when `tot_magnetization` constrains the magnetisation — and both
-the smearing and the tetrahedron families implement both. Non-collinear magnetism and
-spin-orbit stay out.
+the smearing and the tetrahedron families implement both.
 
-Out of scope until the above works: EXX, DFT+U, non-collinear/SOC, phonons
+**Spin-orbit coupling is in scope and implemented** (P14): `noncolin = .true.` makes a
+wavefunction a two-component spinor of length `2 npwx`, so there is *one* Hamiltonian on a
+space twice as large rather than two Hamiltonians, and `lspinorb = .true.` puts the
+`j`-resolved projectors of a fully-relativistic dataset into it. **Keep QE's three spin
+numbers apart**, because collapsing them is the mistake that makes a spin-orbit run
+allocate a magnetization it does not have: `nspin` says which regime (1, 2 or 4), `npol`
+how many components a *wavefunction* has, and `nspin_mag` how many a *density* has —
+which is **one** for a nonmagnetic spin-orbit run, exactly as for an unpolarized one. That
+is why such a run costs about what a doubled unpolarized one costs: the density, the
+potential, the exchange-correlation functional and the symmetrisation are untouched, and
+all the new physics is in the spinors and in `D_ij` becoming a complex 2x2 matrix in spin
+space. Non-collinear *magnetism* (`nspin_mag = 4`) is built but only partly validated —
+`sym_rho`'s vector rotation and `gradcorr`'s local-frame rotation are not written and are
+refused, so such a run needs `nosym` and an LDA functional.
+
+Out of scope until the above works: EXX, DFT+U, phonons
 (`PHonon/`), Car-Parrinello (`CPV/`), and everything in `EPW/`, `TDDFPT/`, `HP/`, `GWW/`.
 The code should nonetheless be shaped so these are additions, not rewrites.
 
@@ -158,6 +179,12 @@ spot moves** — including the QE ratio, not only an internal timing. `tools/ben
   wavefunction-shaped array so this stays available. Numba `prange` is the right tool for
   the host-side setup loops only.
 - Rydberg atomic units internally (Ry, bohr), matching QE; convert only in `io/`.
+- **`nspin`, `npol` and `nspin_mag` are three different numbers.** `nspin` says which
+  regime is in force, `npol` is the number of spinor components of a *wavefunction*, and
+  `nspin_mag` the number of components of a *density*. They coincide for 1 and 2 and come
+  apart at 4, where `npol = 2` and `nspin_mag` is 4 only if the run actually carries a
+  magnetization. All three are static; `System` exposes them as properties so no call site
+  recomputes the rule.
 - **The spin channel is the leading axis, and it is squeezed on the way out.** Densities,
   potentials and `becsum` are `(nspin, ...)` internally with no special case for one
   channel; the result objects (`SCFResult`, `NSCFResult`, `DensityOfStates`,
@@ -181,6 +208,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Ultrasoft augmentation | `upflib/qvan2.f90`, `uspp.f90` (`aainit`), `qrad_mod.f90`, `PW/src/addusdens.f90`, `newd_acc.f90`, `s_psi.f90` | `Q_ij(G)`, `becsum`, the overlap operator, and `D_ij` rebuilt each iteration from the potential |
 | PAW one-centre terms | `PW/src/paw_onecenter.f90`, `paw_init.f90`, `paw_symmetry.f90`, `upflib/radial_grids.f90` (`hartree`) | radial Poisson (a Numerov tridiagonal solve — transcribe it, do not substitute the closed form), a Gauss-Legendre×φ spherical quadrature for XC, and `becsum` symmetrisation, which is **not optional** on a reduced k-set. A GGA adds `PAW_gcxc_potential`: the quadrature grows (`xlm`), the vector field is expanded two multipoles past the density, and its θ component is divided by `sin θ` before projection |
 | XC functionals | `XClib/`, `PW/src/gradcorr.f90` | must be reimplemented in pure JAX — a `libxc` binding is neither differentiable nor GPU-capable (see `PLAN.md` §6). Only the **energy** is written down; `v_xc`, and a GGA's `v1`/`v2`, come from `jax.grad`. QE composes a functional from four independently chosen slots and UPF headers name all four, so `xc/functional.py` does the same |
+| Spin-orbit coupling | `upflib/init_us_1.f90` (`fcoef`, `dvan_so`), `upflib/spinor.f90`, `upflib/sph_ind.f90`, `upflib/upf_spinorb.f90` (`transform_qq_so`), `PW/src/newd_acc.f90` (`newd_so`), `PW/src/compute_becsum.f90` (`add_becsum_so`), `PW/src/vloc_psi_acc.f90` (`vloc_psi_nc`), `PW/src/add_vuspsi_acc.f90`, `PW/src/usnldiag.f90` | `init_us_1` builds `fcoef` for every matching `(l, j)` pair, uses it for `dvan_so`, and **then** zeroes the cross-radial entries — everything downstream consumes the *zeroed* array and has no check of its own, so one array used for both is a correct `dvan_so` and a silently wrong `qq_so`/`deeq_nc`/`becsum` |
 | Structure / symmetry / k-points | `PW/src/symm_base.f90`, `symme.f90`, `kpoint_grid.f90`, `setup.f90`, `Modules/cell_base.f90` | `ibrav` lattice conventions live in `Modules/latgen.f90`. `kpoint_grid` is called with the *lattice* point group and fixed up afterwards; reducing directly with the crystal's symmetries reaches the same orbits. Two rules in `symm_base.f90` change the **FFT grid**: dimensions must be a multiple of the fractional translations' denominators (`fft_fact`), and a cell that is a supercell has fractional translations disabled altogether |
 | Starting wavefunctions | `PW/src/wfcinit.f90`, `Modules/atomic_wfc_mod.f90`, `upflib/atwfc_mod.f90` | the projectors' expression with `chi` for `beta` — but the phase is `i^l`, not `(-i)^l` |
 | Ewald / local potential / forces / stress | `PW/src/ewald.f90`, `setlocal.f90`, `forces.f90`, `stress.f90` | forces/stress come after energies are correct, and should come from autodiff rather than the hand-derived Fortran expressions |

@@ -1,0 +1,42 @@
+! Bismuthene: a planar honeycomb monolayer of bismuth, with spin-orbit coupling.
+!
+! This is the P14 target system. Bismuthene is a two-dimensional topological
+! insulator: the flat Bi honeycomb has a Dirac point at K, and the spin-orbit
+! coupling of a 6p element -- which is large, bismuth being the heaviest stable
+! element -- gaps it. Without spin-orbit the same calculation is a semimetal, so
+! the gap here is not a correction to a number but the presence of a number at
+! all, which makes it the sharpest possible demonstration of the feature.
+!
+! The geometry is the planar one bismuthene takes when grown on SiC(0001)
+! (Reis et al., Science 357, 287 (2017)): a = 5.35 A, the SiC surface lattice
+! constant, with the two Bi atoms coplanar. Freestanding bismuth would buckle;
+! this is the substrate-stabilised structure without the substrate, which is the
+! standard model for it.
+!
+! The cell is periodic in three dimensions, as a plane-wave code's always is, so
+! the layer is repeated every 20 bohr (10.6 A) along z. That is enough vacuum
+! for the bands near the gap; the deep 5d semicore states are flat regardless.
+!
+! conv_thr is far tighter than the answer needs so that both codes stop at the
+! same fixed point and the energy terms can be compared digit by digit.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 4, celldm(1) = 10.109950, celldm(3) = 1.978248,
+    nat = 2, ntyp = 1,
+    ecutwfc = 35.0, ecutrho = 280.0,
+    noncolin = .true., lspinorb = .true.,
+    starting_magnetization = 0.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.01,
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Bi 208.98 Bi.rel-pbe-dn-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS (crystal)
+ Bi 0.333333333333 0.666666666667 0.0
+ Bi 0.666666666667 0.333333333333 0.0
+K_POINTS AUTOMATIC
+ 12 12 1 0 0 0

@@ -1,0 +1,28 @@
+! Bismuthene without spin-orbit coupling: the control for bismuthene-soc.
+!
+! The same cell, cutoffs and k-grid, run collinear with the *scalar*-relativistic
+! Bi dataset. Using the scalar dataset rather than the relativistic one with
+! lspinorb = .false. is deliberate: the second asks QE to j-average the
+! projectors (average_pp), which is a third pseudopotential and not the one in
+! either file. Comparing the two runs here therefore compares two published
+! datasets that differ in exactly one thing -- whether the j channels were kept
+! apart -- which is what "the effect of spin-orbit coupling" means.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 4, celldm(1) = 10.109950, celldm(3) = 1.978248,
+    nat = 2, ntyp = 1,
+    ecutwfc = 35.0, ecutrho = 280.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.01,
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Bi 208.98 Bi.pbe-dn-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS (crystal)
+ Bi 0.333333333333 0.666666666667 0.0
+ Bi 0.666666666667 0.333333333333 0.0
+K_POINTS AUTOMATIC
+ 12 12 1 0 0 0

@@ -397,6 +397,11 @@ def for_spin(kpoints: "KPoints", nspin: int) -> "KPoints":
     per band. Every constructor here applies the factor of two unconditionally,
     so this undoes it for a polarized run.
 
+    A **noncollinear** run (``nspin = 4``) is in the same branch of
+    ``setup.f90`` and for the same reason read the other way round: there is one
+    k-point list, but a band is a spinor and holds *one* electron rather than
+    two, so the degeneracy factor does not belong in the weights either.
+
     It exists as a function rather than a line in ``build_system`` because a
     k-set can be built long after the system is -- a density of states runs on a
     denser grid than the SCF did (:func:`pypresso.workflows.nscf.denser_grid`),
@@ -405,7 +410,7 @@ def for_spin(kpoints: "KPoints", nspin: int) -> "KPoints":
     somewhere else, and the density of states integrates to the right number of
     electrons at the wrong energy.
     """
-    if int(nspin) != 2:
+    if int(nspin) not in (2, 4):
         return kpoints
     return eqx.tree_at(lambda k: k.weights, kpoints, kpoints.weights / DEGSPIN)
 

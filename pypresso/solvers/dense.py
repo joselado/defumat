@@ -34,7 +34,7 @@ def dense_eigensolver(hamiltonian: Hamiltonian, ik: int, nbnd: int):
     spurious zero eigenvalues sitting in the middle of the spectrum.
     """
     matrix = hamiltonian.matrix(ik)
-    mask = hamiltonian.mask[ik]
+    mask = hamiltonian.state_mask[ik]
 
     # Push padding rows/columns far above the physical spectrum instead of
     # deleting them, so the matrix keeps its static shape.

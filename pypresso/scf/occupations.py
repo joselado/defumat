@@ -37,11 +37,20 @@ __all__ = ["fixed_occupations", "smeared_occupations", "fermi_level", "bisect_fe
            "tetrahedron_occupations_spin"]
 
 
-def fixed_occupations(eigenvalues: jnp.ndarray, weights: jnp.ndarray, nelec: float):
-    """Fill the lowest ``nelec/2`` bands completely.
+def fixed_occupations(
+    eigenvalues: jnp.ndarray, weights: jnp.ndarray, nelec: float, degeneracy: int = 2
+):
+    """Fill the lowest ``nelec / degeneracy`` bands completely.
 
-    Returns ``(wg, homo, lumo)``. Raises if the electron count is odd, which
-    means the system needs either spin polarisation or smearing.
+    ``degeneracy`` is how many electrons one band holds: two for an unpolarized
+    collinear calculation, one for a noncollinear one, where a band is a spinor
+    and there is no second spin state to put an electron in. It is the same
+    factor the k-point weights already carry (``for_spin``), which is why it
+    only has to appear here, in the *count* of filled bands.
+
+    Returns ``(wg, homo, lumo)``. Raises if the electron count does not fill a
+    whole number of bands, which means the system needs either spin
+    polarisation or smearing.
     """
     nspin, _, nbnd = eigenvalues.shape
     if nspin != 1:
@@ -51,10 +60,10 @@ def fixed_occupations(eigenvalues: jnp.ndarray, weights: jnp.ndarray, nelec: flo
             "and no committed benchmark exercises either, so it is refused "
             "rather than guessed. Use occupations='from_input' or 'smearing'"
         )
-    occupied = nelec / 2.0
+    occupied = nelec / degeneracy
     if abs(occupied - round(occupied)) > 1e-8:
         raise ValueError(
-            f"{nelec} electrons cannot fill spin-degenerate bands; use smearing or nspin=2"
+            f"{nelec} electrons cannot fill {degeneracy}-fold bands; use smearing or nspin=2"
         )
     occupied = int(round(occupied))
     if occupied > nbnd:
@@ -400,7 +409,9 @@ def _entropy(eigenvalues, weights, ef, degauss, ngauss):
     return degauss * jnp.sum(weights[:, None] * w1gauss((ef - eigenvalues) / degauss, ngauss))
 
 
-def input_occupations(card_values, eigenvalues: jnp.ndarray, weights: jnp.ndarray):
+def input_occupations(
+    card_values, eigenvalues: jnp.ndarray, weights: jnp.ndarray, degeneracy: int = 2
+):
     """Occupations read from an ``OCCUPATIONS`` card (``occupations='from_input'``).
 
     ``weights.f90``: ``wg(:,ik) = f_inp(:, isk(ik)) * wk(ik)``, halved **only**
@@ -421,7 +432,7 @@ def input_occupations(card_values, eigenvalues: jnp.ndarray, weights: jnp.ndarra
             "are needed (one row per spin channel)"
         )
     rows = values[: nspin * nbnd].reshape(nspin, nbnd)
-    occupation = jnp.asarray(rows if nspin == 2 else rows / 2.0)
+    occupation = jnp.asarray(rows if nspin == 2 else rows / degeneracy)
     return weights[None, :, None] * occupation[:, None, :]
 
 

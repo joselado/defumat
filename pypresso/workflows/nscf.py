@@ -96,6 +96,7 @@ def fixed_density_bands(
         calculation.nelec,
         system.occupations,
         *((calculation.nelup, calculation.neldw) if system.nspin == 2 else (None, None)),
+        noncolin=system.noncolin,
     )
 
     if calculation.is_paw:
