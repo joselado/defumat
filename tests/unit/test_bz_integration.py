@@ -255,7 +255,9 @@ def test_fermi_level_agrees_with_small_degauss_smearing(kind):
     exact = (3.0 / (8.0 * np.pi)) ** (2.0 / 3.0)
 
     _, ef = tetrahedron_occupations(tetra, eigenvalues, weights, nelec)
-    smeared = float(smeared_occupations(eigenvalues, weights, nelec, 0.005)[1])
+    # ``smeared_occupations`` takes ``(nspin, nk, nbnd)`` since P9; the
+    # tetrahedron routines are per channel, so the comparison adds the axis.
+    smeared = float(smeared_occupations(eigenvalues[None], weights, nelec, 0.005)[1])
 
     assert float(ef) == pytest.approx(exact, abs=5e-3)
     assert smeared == pytest.approx(exact, abs=1e-2)
