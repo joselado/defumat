@@ -24,6 +24,7 @@ The benchmark inputs are all a single k-point (`benchmarks/`):
 | `si8-1k*.in`, `si16-1k*.in` | the same crystal in 8- and 16-atom cells | where the cost is physics rather than fixed overhead |
 | `si2-us-1k.in`, `si8-us-1k.in` | ultrasoft, `ecutwfc = 20`, dual 8 | a different *shape* of calculation, not just a bigger one |
 | `si2-paw-1k.in`, `si8-paw-1k.in` | PAW, same cutoffs | ultrasoft plus the one-centre radial work |
+| `si8-pbe-1k.in`, `si8-paw-pbe-1k.in` | the same cells under PBE | what a gradient correction costs, on the grid and on a PAW sphere |
 
 One k-point on purpose: both codes parallelise over k, so a multi-k comparison
 measures batching rather than the cost of the physics.
@@ -60,6 +61,48 @@ and, for ultrasoft and PAW (2026-08-19, `ecutwfc = 20`, `ecutrho = 160`):
 | **`si2-paw-1k`** — the same, PAW | 0.044 s | 0.080 s | **1.8x** |
 | **`si8-us-1k`** — 8 atoms, 1607 PWs, 36257 G | 0.124 s | 0.355 s | **2.9x** |
 | **`si8-paw-1k`** — the same, PAW | 0.172 s | 0.477 s | **2.8x** |
+
+and, for the gradient-corrected functionals (2026-08-19, PBE). All four rows were
+measured in one session, the local ones re-run alongside the PBE ones, so each
+pair differs only in the functional — which is the only way the "what does a
+gradient correction cost" question has an answer:
+
+| | QE 7.5 | pypresso | ratio |
+|---|---|---|---|
+| **`si8-1k`** — 8 atoms, LDA | 0.030 s | 0.074 s | **2.5x** |
+| **`si8-pbe-1k`** — the same cell, PBE | 0.025 s | 0.077 s | **3.1x** |
+| **`si8-paw-1k`** — 8 atoms, PAW, LDA | 0.170 s | 0.479 s | **2.8x** |
+| **`si8-paw-pbe-1k`** — the same cell, PBE | 0.529 s | 0.841 s | **1.6x** |
+
+(`si8-1k` reads 0.064 s in the table above and 0.074 s here, on the same machine
+and the same input. That ~15% between sessions is the spread this measurement
+has, and it is exactly why a pair of runs has to be taken together before any
+difference between them is believed.)
+
+**On the plane-wave grid a gradient correction is nearly free here, and on a PAW
+sphere it is nearly free *relative to QE*.** The two rows say different things and
+both are worth reading.
+
+The first pair: PBE costs pypresso 4% per iteration (0.074 → 0.077 s) for four
+extra FFTs on the dense grid and a longer pointwise expression. Four transforms
+of a 24³ box is not nothing, but it is a fixed handful of large, dense
+operations — exactly the shape XLA is good at — where the iteration's real cost
+is still the eigensolver's many small dispatches. QE's side of that pair is
+within its own run-to-run spread, so the ratio moving from 2.5x to 3.1x is
+mostly QE getting slightly faster, not this code getting slower.
+
+The second pair is the interesting one. PAW's one-centre terms are radial work:
+per atom, per iteration, a spherical quadrature that a GGA grows from 28
+directions to 45, a radial derivative on a 1141-point mesh for each direction,
+and a spherical divergence. QE pays 3.1x for that (0.170 → 0.529 s per
+iteration); this code pays 1.8x (0.479 → 0.841 s), and the ratio against QE
+*improves* from 2.8x to 1.6x. The reason is the one this file keeps recording
+from the other direction: the radial work is loops in Fortran and batched array
+operations here, so where QE's cost scales with how many radial points and
+directions there are, this code's scales with how many *compiled units* — and
+the one-centre gradient adds work to existing kernels rather than adding
+kernels. It is the first place in this project where the JAX formulation wins on
+its own terms rather than catching up.
 
 Total energies against QE: **9.7e-10 Ry** on the sixteen-atom cell at 30 Ry,
 5.8e-9 at 12 Ry, 3.5e-9 and 1.5e-9 on the eight-atom cell, 3.8e-9 for two atoms

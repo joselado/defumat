@@ -47,13 +47,14 @@ import jax.numpy as jnp
 import numpy as np
 
 from pypresso.paw.angular import AngularGrid, build_angular_grid
+from pypresso.paw.gradient import onecenter_gradient_correction
 from pypresso.paw.hartree import radial_hartree
 from pypresso.pseudo.coupling import harmonic_products
 from pypresso.pseudo.projectors import projector_channels
 from pypresso.pseudo.radial import simpson_weights
 from pypresso.pseudo.upf import Pseudopotential
 from pypresso.units import E2, FPI
-from pypresso.xc.lda import xc_energy_density, xc_potential
+from pypresso.xc.functional import Functional
 
 __all__ = ["PawSpecies", "PawCorrections", "build_paw", "onecenter_species"]
 
@@ -79,6 +80,7 @@ class PawSpecies(eqx.Module):
     weights_full: jnp.ndarray
     weights_core: jnp.ndarray
     angular: AngularGrid
+    functional: Functional = eqx.field(static=True)
     dx: float = eqx.field(static=True)
     nlm: int = eqx.field(static=True)
     nh: int = eqx.field(static=True)
@@ -181,11 +183,11 @@ def _exchange_correlation(rho_lm, core, paw: PawSpecies):
     """
     # ... onto the angular grid. rho_lm holds r^2 rho, so dividing by r^2 gives
     # the density the functional wants; the core charge is tabulated directly.
-    rho_rad = jnp.einsum("xl,lr->xr", paw.angular.ylm, rho_lm)  # (nx, mesh)
+    rho_rad = jnp.einsum("xl,lr->xr", paw.angular.ylm[:, : paw.nlm], rho_lm)  # (nx, mesh)
     density = rho_rad / paw.r2 + core
 
-    potential_rad = xc_potential(density)
-    energy_density = xc_energy_density(density)
+    potential_rad = paw.functional.potential(density)
+    energy_density = paw.functional.energy_density(density)
 
     # ... the energy integrates e_xc against the total r^2 rho, direction by
     # direction, with the quadrature weights folded in.
@@ -195,11 +197,21 @@ def _exchange_correlation(rho_lm, core, paw: PawSpecies):
     )
 
     # ... and back onto the multipoles.
-    potential = jnp.einsum("xl,xr->lr", paw.angular.weighted_ylm, potential_rad)
+    potential = jnp.einsum(
+        "xl,xr->lr", paw.angular.weighted_ylm[:, : paw.nlm], potential_rad
+    )
+
+    # A gradient-corrected functional adds a second pass over the same sphere,
+    # this time needing the density's gradient there (``PAW_gcxc_potential``).
+    if paw.functional.is_gradient:
+        v_gradient, e_gradient = onecenter_gradient_correction(rho_lm, rho_rad, core, paw)
+        potential = potential + v_gradient
+        energy = energy + e_gradient
+
     return potential, energy
 
 
-def build_paw(pseudos, structure, cell=None) -> PawCorrections | None:
+def build_paw(pseudos, structure, functional: Functional, cell=None) -> PawCorrections | None:
     """Precompute the one-centre tensors. ``None`` if no species is PAW."""
     if not any(p.is_paw for p in pseudos):
         return None
@@ -207,7 +219,7 @@ def build_paw(pseudos, structure, cell=None) -> PawCorrections | None:
     types = np.asarray(structure.types)
     species = []
     for pseudo in pseudos:
-        species.append(_build_species(pseudo) if pseudo.is_paw else None)
+        species.append(_build_species(pseudo, functional) if pseudo.is_paw else None)
 
     return PawCorrections(
         species=tuple(species),
@@ -218,7 +230,7 @@ def build_paw(pseudos, structure, cell=None) -> PawCorrections | None:
     )
 
 
-def _build_species(pseudo: Pseudopotential) -> PawSpecies:
+def _build_species(pseudo: Pseudopotential, functional: Functional) -> PawSpecies:
     paw = pseudo.paw
     augmentation = pseudo.augmentation
     if paw is None or augmentation is None or augmentation.qfuncl is None:
@@ -291,7 +303,8 @@ def _build_species(pseudo: Pseudopotential) -> PawSpecies:
         sqr=jnp.asarray(np.sqrt(pseudo.r)),
         weights_full=simpson_weights(jnp.asarray(pseudo.rab)),
         weights_core=_truncated_weights(pseudo.rab, pseudo.kkbeta, mesh),
-        angular=build_angular_grid(lmax_rho, nlm),
+        angular=build_angular_grid(lmax_rho, nlm, functional.is_gradient),
+        functional=functional,
         dx=float(pseudo.dx),
         nlm=nlm,
         nh=nh,

@@ -1,0 +1,32 @@
+! Eight-atom silicon, ultrasoft, PBE.
+!
+! si8-us.in under PBE. The eight-atom cubic cell is the one that catches anything
+! scaling with the number of atoms, and it is a supercell, so it also keeps the
+! fractional-translation rule in play while the functional changes.
+!
+! conv_thr is tightened far past what the answer needs so that both codes run to
+! the same fixed point and the energy terms can be compared digit by digit.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=1, celldm(1)=10.20, nat=8, ntyp=1,
+    ecutwfc=20.0, ecutrho=160.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pbe-n-rrkjus_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.00 0.50 0.50
+ Si 0.50 0.00 0.50
+ Si 0.50 0.50 0.00
+ Si 0.25 0.25 0.25
+ Si 0.25 0.75 0.75
+ Si 0.75 0.25 0.75
+ Si 0.75 0.75 0.25
+K_POINTS
+  1
+   0.250000  0.250000  0.250000   1.00

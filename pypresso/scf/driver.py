@@ -52,6 +52,7 @@ from pypresso.scf.occupations import (
     smearing_entropy,
 )
 from pypresso.scf.potential import scf_accuracy, v_of_rho
+from pypresso.xc.functional import resolve_functional
 from pypresso.solvers import get_eigensolver
 from pypresso.solvers.davidson import ETHR_MIN, starting_vectors
 from pypresso.solvers.subspace import rayleigh_ritz
@@ -272,6 +273,14 @@ class Calculation:
         self.pseudos = tuple(pseudos)
         self.basis = basis if basis is not None else build_basis(system)
 
+        # Which exchange-correlation functional this run uses is decided once,
+        # here, from the pseudopotentials and the input -- not defaulted to
+        # anywhere downstream. Every consumer takes it as an argument, so a PBE
+        # dataset cannot end up running under LDA by omission.
+        self.functional = resolve_functional(
+            [pseudo.functional for pseudo in self.pseudos], system.input_dft
+        )
+
         self.nelec = sum(self.pseudos[t].z_valence for t in system.structure.types)
         self.charges = np.array([self.pseudos[t].z_valence for t in system.structure.types])
 
@@ -311,7 +320,7 @@ class Calculation:
         # PAW adds the one-centre corrections on top of everything ultrasoft
         # does. They depend on ``becsum`` and on nothing else that changes, so
         # like ``newd`` they are rebuilt once per SCF iteration.
-        self.paw = build_paw(self.pseudos, system.structure)
+        self.paw = build_paw(self.pseudos, system.structure, self.functional)
 
         vloc_g = local_potential(self.pseudos, system.structure, system.cell, dense)
         self.vltot = jnp.real(g_to_r(vloc_g, dense.fft_index, dense.grid))
@@ -325,6 +334,10 @@ class Calculation:
             None if rho_core_g is None
             else jnp.real(g_to_r(rho_core_g, dense.fft_index, dense.grid))
         )
+        # Kept as well as its transform: a gradient-corrected functional needs
+        # the core charge's gradient, which is taken in G space alongside the
+        # valence density's (``gradcorr`` adds ``rhog_core`` to ``rhogaux``).
+        self.rho_core_g = rho_core_g
 
         self.ewald = float(
             ewald_energy(system.cell, system.structure, dense, self.charges)
@@ -394,6 +407,23 @@ class Calculation:
     @property
     def is_paw(self) -> bool:
         return self.paw is not None
+
+    def potential(self, rho_r: jnp.ndarray):
+        """``v_of_rho`` for this calculation: Hartree plus exchange-correlation.
+
+        Everything the potential needs and the density does not carry -- the
+        core charge on both grids, and which functional is in use -- comes from
+        here rather than from a default, so that the same density cannot produce
+        two different potentials depending on which call site built it.
+        """
+        return _potential_of_rho(
+            rho_r,
+            self.basis.dense,
+            self.system.cell,
+            self.rho_core,
+            self.functional,
+            self.rho_core_g,
+        )
 
     def onecenter(self, becsum_):
         """``(epaw, ddd_paw)`` for the current ``becsum``, as a block matrix.
@@ -637,9 +667,7 @@ def run_scf(
     for iteration in range(1, max_iterations + 1):
         ethr = next_ethr(ethr, accuracy, calculation.nelec, iteration)
 
-        potential = _potential_of_rho(
-            rho, calculation.basis.dense, system.cell, calculation.rho_core
-        )
+        potential = calculation.potential(rho)
         epaw, ddd_paw = calculation.onecenter(becsum_state)
         hamiltonian = calculation.hamiltonian(potential.v_scf, ddd_paw)
 
@@ -699,9 +727,7 @@ def run_scf(
 
         converged = accuracy < conv_thr
         if converged:
-            potential = _potential_of_rho(
-                rho_out, calculation.basis.dense, system.cell, calculation.rho_core
-            )
+            potential = calculation.potential(rho_out)
             # ... and the one-centre energy with it. ``ddd_paw`` is deliberately
             # *not* refreshed: ``deband`` below pairs it with the output becsum
             # exactly as ``delta_e`` does, which runs before QE recomputes it.

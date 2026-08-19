@@ -1,0 +1,31 @@
+! Silicon with a PBE norm-conserving pseudopotential: the first gradient-corrected case.
+!
+! Everything except the functional is the norm-conserving path that already
+! reproduces QE to 1e-8 Ry, so a discrepancy here is the gradient correction and
+! nothing else. Si.pbe-rrkj is generated with PBE, so no input_dft override is
+! involved and the functional comes from the pseudopotential's own header --
+! which is the path a normal run takes and which, until GGA existed, silently
+! ran this dataset under LDA.
+!
+! ecutwfc is 20 rather than the 12 the LDA cases use: the rrkj dataset is harder,
+! and a gradient correction is evaluated pointwise on the density grid, so an
+! under-converged density shows up in it first.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=20.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pbe-rrkj.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS
+  2
+   0.250000  0.250000  0.250000   1.00
+   0.250000  0.250000  0.750000   3.00

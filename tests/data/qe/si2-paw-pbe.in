@@ -1,0 +1,30 @@
+! Silicon, 2 atoms in the primitive fcc cell, PAW, PBE.
+!
+! si2-paw.in under PBE, and the case that exercises the one-centre gradient
+! machinery: a radial derivative on each atom's own mesh, an angular gradient
+! taken from the harmonics' derivatives, and a spherical divergence, on a
+! quadrature that has grown from 28 directions to 45 because the functional is
+! gradient-corrected. QE prints the one-centre energy as its own term, so that
+! machinery is checked directly and not only through the total.
+!
+! conv_thr is tightened far past what the answer needs so that both codes run to
+! the same fixed point and the energy terms can be compared digit by digit.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=20.0, ecutrho=160.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pbe-n-kjpaw_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS
+  2
+   0.250000  0.250000  0.250000   1.00
+   0.250000  0.250000  0.750000   3.00

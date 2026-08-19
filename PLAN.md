@@ -101,6 +101,7 @@ pypresso/
   basis/
     gvectors.py         # G enumeration/sorting, cutoff spheres, per-k index maps
     fft.py              # sphere<->FFT-box gather/scatter, jnp.fft wrappers
+    gradients.py        # grad and div in G space (what a GGA potential needs)
     wavefunctions.py    # padded (nspin, nk, nbnd, npwx) container + masks
   pseudo/
     radial.py           # radial grids, Simpson integration, spherical Bessel
@@ -109,8 +110,8 @@ pypresso/
     projectors.py       # beta projectors vkb(k), D_ij coefficients
     tables.py           # PseudoPotential dataclass + per-species G tables
   xc/
-    registry.py         # name -> functional
-    lda.py, gga.py      # PZ/PW, PBE (libxc bridge optional, behind the registry)
+    functional.py       # QE's four slots, composed; name -> functional registry
+    lda.py, gga.py      # Slater/PZ/PW, and the PBE family's gradient corrections
   hamiltonian/
     terms.py            # kinetic, local, nonlocal as composable term objects
     operator.py         # Hamiltonian pytree; apply_h / apply_s
@@ -371,10 +372,62 @@ iteration**, the same band the norm-conserving path sits in (`PERFORMANCE.md`).
    and two discretisations of one integral do not agree to 1e-8 while one discretisation
    trivially does.
 
-*Not covered:* GGA (so PBE datasets are out of scope — both the plane-wave and the PAW
-radial XC would need gradients), the pre-2.0 `q_with_l = F` augmentation format, and
-gamma-only storage with an augmentation charge. All three are refused with a clear error
-rather than approximated.
+*Not covered:* the pre-2.0 `q_with_l = F` augmentation format, and gamma-only storage with
+an augmentation charge. Both are refused with a clear error rather than approximated. (GGA
+was the third such gap and is now closed — P13.)
+
+**P13 — Gradient-corrected functionals. ✅ DONE.** `xc/` restructured into QE's four
+independently chosen slots — local exchange, local correlation, and a gradient correction
+to each — behind a name registry (`xc/functional.py`), with `xc/gga.py` holding the PBE
+family and `xc/lda.py` gaining Perdew-Wang correlation. `basis/gradients.py` takes the
+gradient and divergence in G space; `scf/potential.py` assembles `v = v1 - div(v2 grad
+rho)` as `gradcorr.f90` does; `paw/gradient.py` does the same on each PAW sphere, where
+the gradient is radial-plus-angular and the divergence is the spherical one. The
+functional is resolved once per calculation from the pseudopotentials' headers, with
+`input_dft` overriding them as in QE. *Check met:* PBE silicon matches QE to **≤6e-9 Ry**
+on seven generated references — norm-conserving, ultrasoft and PAW, at 2 and 8 atoms, with
+revPBE and PBEsol on top — and a PBE band structure to **5e-5 eV**. Still only what a
+gradient needs: meta-GGA and hybrids remain out of scope.
+
+**The traps, all of them in how QE composes and gates the functional rather than in the
+formulas:**
+
+1. **PBE's local half is not the LDA.** `pbex`/`pbec` return only the *gradient
+   correction*; the local part underneath is Slater exchange plus **Perdew-Wang**
+   correlation, not the Perdew-Zunger correlation an LDA run uses. Pairing PBE's gradient
+   terms with PZ is a functional QE never prints, and it converges perfectly well.
+2. **The GGA thresholds are four orders of magnitude coarser than the LDA one.** XClib
+   zeroes the energy *and both potentials* wherever `rho <= 1e-6` or `|grad rho|^2 <=
+   1e-10`, against `1e-10` for the local part. A plane-wave density has low-density
+   regions over much of the cell, so evaluating the gradient terms there instead of
+   zeroing them is worth ~1e-6 Ry.
+3. **Old UPF files spell the gradient terms `PBE`, not `PBX`/`PBC`.** `igcx = 14` and
+   `igcc = 9` are legacy aliases that `set_dft_from_name` maps back to 3 and 4 under a "TO
+   BE REMOVED" comment. Every `*.pbe-*.UPF` in the test set uses them, so a parser that
+   only knows the canonical names reads a PBE dataset as having no gradient correction at
+   all — the same silent-LDA failure as trap 2 of P12, from the other direction.
+4. **A PAW sphere needs a bigger angular grid, and more tabulated on it.**
+   `paw_init.f90` adds `xlm = 2` to the quadrature's exactness when the functional is a
+   GGA, and the vector field whose divergence gives the potential is expanded two
+   multipoles past the density (`ladd`), because taking a divergence costs two. Reusing
+   the local functional's 28-direction grid gives a one-centre energy wrong in the fifth
+   decimal.
+5. **The `theta` component is divided by `sin(theta)` before it is projected**, with the
+   factor restored inside the divergence. QE's comment explains it: the `lm` expansion of
+   `dY/dtheta` converges far too slowly to truncate at `ladd = 2`, while the same
+   derivative divided by `sin(theta)` does not.
+6. **`PAW_gradient` fills its components in the order `(r, phi, theta)`** — not the order
+   its own comment claims. Only the pairing with `dylmp`/`dylmt` in `PAW_divergence`
+   settles it, and swapping the two is invisible in `|grad rho|^2`.
+
+*What autodiff bought here.* QE hand-derives `v1x`, `v2x`, `v1c`, `v2c` — four routines
+whose correctness depends on agreeing with an energy expression written elsewhere, and
+whose `v1c` contains `d(rho ec)/d rho` for the *local* correlation, so it also depends on
+the two halves agreeing about which parameterisation is in use. Here only the energy
+density is written down and all four come from `jax.grad`; a unit test checks them against
+QE's algebra transcribed independently, and they agree to machine precision. The same
+`grad` gives the PAW one-centre `ddd` with no extra code, since `rho_lm` stays linear in
+`becsum` whether or not the functional has a gradient term.
 
 **P11 — Higher-order autodiff quantities (after the first milestone).** Forces are already
 validated at P5; here: stress by differentiation w.r.t. strain, implicit differentiation of

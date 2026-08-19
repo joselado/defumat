@@ -41,6 +41,10 @@ class System(eqx.Module):
     calculation: str = eqx.field(static=True, default="scf")
     nbnd: int | None = eqx.field(static=True, default=None)
     occupations: str = eqx.field(static=True, default="fixed")
+    #: ``input_dft``: an exchange-correlation functional that overrides the one
+    #: the pseudopotentials were generated with. ``None`` -- the normal case --
+    #: means the pseudopotentials decide.
+    input_dft: str | None = eqx.field(static=True, default=None)
     smearing: str = eqx.field(static=True, default="gaussian")
     degauss: float = eqx.field(static=True, default=0.0)
     #: Occupations read from an OCCUPATIONS card, for occupations='from_input'.
@@ -80,6 +84,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         calculation=str(pwin.get("control", "calculation", "scf")).lower(),
         nbnd=pwin.get("system", "nbnd"),
         occupations=str(pwin.get("system", "occupations", "fixed")).lower(),
+        input_dft=pwin.get("system", "input_dft"),
         smearing=str(pwin.get("system", "smearing", "gaussian")).lower(),
         degauss=float(pwin.get("system", "degauss", 0.0)),
         input_occupations=_input_occupations(pwin),

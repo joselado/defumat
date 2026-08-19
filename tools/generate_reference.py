@@ -71,6 +71,22 @@ def restamped_path(relative: str) -> Path:
     return CASES / f"reference.out.{directory}-{Path(name).stem}"
 
 
+def prerequisite(case: Path) -> Path | None:
+    """The scf run a case needs to have happened first, by naming convention.
+
+    ``<stem>-bands.in`` reads the density ``<stem>.in`` converged, so the two
+    have to share an outdir. That is the only dependency between cases here, and
+    encoding it in the name keeps the inputs plain ``pw.x`` inputs -- which they
+    have to stay, since pypresso reads the same files.
+    """
+    if not case.stem.endswith("-bands"):
+        return None
+    parent = case.with_name(f"{case.stem[: -len('-bands')]}.in")
+    if not parent.is_file():
+        raise FileNotFoundError(f"{case.name} needs {parent.name}, which is missing")
+    return parent
+
+
 def run_case(case: Path, conv_thr: float | None = None) -> str:
     """Run one input and return QE's stdout.
 
@@ -84,36 +100,44 @@ def run_case(case: Path, conv_thr: float | None = None) -> str:
     reason; this brings the borrowed ones to the same footing.
     """
     with tempfile.TemporaryDirectory() as tmp:
-        # pseudo_dir and outdir are injected rather than written into the
-        # committed input: the input has to stay a plain pw.x input that
-        # pypresso reads unchanged, and neither path is a property of the case.
-        text = case.read_text()
+        before = prerequisite(case)
+        if before is not None:
+            _invoke(before, tmp, RESTAMPED_CONV_THR)
+        return _invoke(case, tmp, conv_thr)
+
+
+def _invoke(case: Path, tmp: str, conv_thr: float | None) -> str:
+    """One ``pw.x`` run in an existing directory."""
+    # pseudo_dir and outdir are injected rather than written into the
+    # committed input: the input has to stay a plain pw.x input that
+    # pypresso reads unchanged, and neither path is a property of the case.
+    text = case.read_text()
+    text = re.sub(
+        r"(&control\b)",
+        f"\\1\n    pseudo_dir = '{PSEUDO}'\n    outdir = '{tmp}'",
+        text,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    if conv_thr is not None:
+        text = re.sub(r"^\s*conv_thr\s*=.*$", "", text, flags=re.IGNORECASE | re.M)
         text = re.sub(
-            r"(&control\b)",
-            f"\\1\n    pseudo_dir = '{PSEUDO}'\n    outdir = '{tmp}'",
+            r"(&electrons\b)",
+            f"\\1\n    conv_thr = {conv_thr:.1e}",
             text,
             count=1,
             flags=re.IGNORECASE,
         )
-        if conv_thr is not None:
-            text = re.sub(r"^\s*conv_thr\s*=.*$", "", text, flags=re.IGNORECASE | re.M)
-            text = re.sub(
-                r"(&electrons\b)",
-                f"\\1\n    conv_thr = {conv_thr:.1e}",
-                text,
-                count=1,
-                flags=re.IGNORECASE,
-            )
-        stdin = Path(tmp) / "pw.in"
-        stdin.write_text(text)
-        result = subprocess.run(
-            [str(PW_X)],
-            stdin=stdin.open(),
-            capture_output=True,
-            text=True,
-            env={**os.environ, "OMP_NUM_THREADS": "1"},
-            timeout=3600,
-        )
+    stdin = Path(tmp) / "pw.in"
+    stdin.write_text(text)
+    result = subprocess.run(
+        [str(PW_X)],
+        stdin=stdin.open(),
+        capture_output=True,
+        text=True,
+        env={**os.environ, "OMP_NUM_THREADS": "1"},
+        timeout=3600,
+    )
     if "JOB DONE" not in result.stdout:
         raise RuntimeError(f"{case.name}: pw.x did not finish\n{result.stdout[-2000:]}")
     return result.stdout

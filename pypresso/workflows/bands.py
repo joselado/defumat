@@ -19,7 +19,6 @@ import numpy as np
 
 from pypresso.pseudo.upf import Pseudopotential
 from pypresso.scf.driver import Calculation, default_nbnd
-from pypresso.scf.potential import v_of_rho
 from pypresso.solvers.davidson import ETHR_MIN
 from pypresso.system.builder import System
 from pypresso.system.kpoints import KPoints
@@ -105,7 +104,7 @@ def run_bands(
             "ultrasoft and norm-conserving band structures work"
         )
 
-    potential = v_of_rho(density, calculation.basis.dense, system.cell, calculation.rho_core)
+    potential = calculation.potential(density)
     hamiltonian = calculation.hamiltonian(potential.v_scf)
 
     # There is no SCF here to tighten the threshold over, so ``setup.f90`` picks

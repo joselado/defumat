@@ -1,0 +1,38 @@
+! Silicon, eight atoms, PBE: the gradient-corrected counterpart of si8-1k.in.
+!
+! Same cell, same cutoff, same k-point as si8-1k.in -- only the functional
+! differs, so the ratio between the two measures what a gradient correction
+! costs and nothing else. It is not free: the exchange-correlation term stops
+! being a pointwise function of the density and becomes three transforms to
+! build grad rho, a pointwise evaluation, and one more transform to take the
+! divergence back, all on the dense grid and all once per SCF iteration.
+!
+! input_dft rather than a PBE dataset on purpose: holding the pseudopotential
+! fixed keeps the plane-wave count, the projector count and the starting density
+! identical to si8-1k.in, which is what makes the two timings comparable.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=1, celldm(1) =10.20,
+    nat=8, ntyp=1,
+    ecutwfc=12.0
+    input_dft='pbe'
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.00 0.50 0.50
+ Si 0.50 0.00 0.50
+ Si 0.50 0.50 0.00
+ Si 0.25 0.25 0.25
+ Si 0.25 0.75 0.75
+ Si 0.75 0.25 0.75
+ Si 0.75 0.75 0.25
+K_POINTS
+  1
+   0.250000  0.250000  0.250000   1.00

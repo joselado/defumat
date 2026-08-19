@@ -327,9 +327,9 @@ for i, d in enumerate(history, 1):
     
     converged D (same block):
     [[ 1.744154  3.272926  0.        0.      ]
-     [ 3.272926  5.793208  0.       -0.      ]
+     [ 3.272926  5.793208  0.        0.      ]
      [ 0.        0.        0.337418 -0.      ]
-     [ 0.       -0.       -0.        0.337418]]
+     [ 0.        0.       -0.        0.337418]]
     
       iteration  1: max |D - D_converged| = 4.63e-02 Ry
       iteration  2: max |D - D_converged| = 1.26e-02 Ry
@@ -387,6 +387,8 @@ for l in (0, 1, 2, 3):
        l = 0    1.2e-10
        l = 1    1.1e-09
        l = 2    3.0e-09
+
+
        l = 3    5.6e-09
 
 
@@ -439,7 +441,7 @@ print(f'they span {unsymmetrised[2,2]:.6f} .. {unsymmetrised[3,3]:.6f}; after, t
     n=4 l=1 m=2       0.00151585    0.00171822
     
     The three l=1 channels must be equal by cubic symmetry. Before symmetrisation
-    they span 1.003357 .. 1.267980; after, they agree to 4.4e-16.
+    they span 1.003357 .. 1.267980; after, they agree to 2.2e-16.
 
 
 Symmetrising `becsum` is the difference between agreeing with QE's one-centre energy to

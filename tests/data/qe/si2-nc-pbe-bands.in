@@ -1,0 +1,32 @@
+! Band structure of the si2-nc-pbe density, along the same path QE's own
+! pw_scf/scf-1.in uses.
+!
+! A 'bands' run is not self-contained: it reads the density a previous scf run
+! left behind, so this case is generated in the same directory as si2-nc-pbe
+! immediately after it (see tools/generate_reference.py). That is exactly the
+! situation run_bands is in -- a converged density, a frozen potential, one
+! diagonalisation per k-point -- and what it checks here is that the potential
+! rebuilt from that density carries the gradient correction. Without it the
+! bands come out shifted by tenths of an eV while everything still converges.
+ &control
+    calculation = 'bands'
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=20.0
+    nbnd=8
+ /
+ &electrons
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pbe-rrkj.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS tpiba_b
+  5
+  0.00  0.00  0.00 5
+  1.00  0.00  0.00 5
+  1.00  0.25  0.25 5
+  0.50  0.50  0.50 5
+  0.00  0.00  0.00 1

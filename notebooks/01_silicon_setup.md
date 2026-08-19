@@ -355,8 +355,6 @@ print("|G|^2 in units of (2*pi/alat)^2:", np.asarray(gvectors.g2(cell))[:8])
      [ 0  1  0]
      [ 1  0  0]]
     
-
-
     |G|^2 in units of (2*pi/alat)^2: [0. 3. 3. 3. 3. 3. 3. 3.]
 
 

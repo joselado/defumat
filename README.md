@@ -23,16 +23,15 @@ outputs for around a hundred cases.
 * **Band structures** along a k-point path.
 * **Metals and insulators**, with every smearing scheme Quantum ESPRESSO offers
   (Gaussian, Methfessel-Paxton, Marzari-Vanderbilt, Fermi-Dirac).
-* **Norm-conserving, ultrasoft and PAW pseudopotentials** in the UPF format,
-  with LDA.
+* **Norm-conserving, ultrasoft and PAW pseudopotentials** in the UPF format.
+* **LDA and GGA functionals** — Perdew-Zunger and Perdew-Wang, PBE, revPBE and
+  PBEsol — taken from the pseudopotential's own header, or from `input_dft`.
 * Crystal symmetry, automatic k-point grids reduced to the irreducible wedge,
   and gamma-only calculations.
 
-Not yet: GGA functionals, spin polarisation, density of states, and forces and
-stress. Those are the next things. GGA is the one that matters most for the
-ultrasoft and PAW support: the machinery is there and validated, but almost every
-published dataset is generated with PBE, and only the LDA ones can be used until
-the functional exists.
+Not yet: spin polarisation, density of states, and forces and stress. Those are
+the next things. A functional that is not implemented is refused with an error
+naming the terms that are, rather than quietly replaced by one that is.
 
 If your calculation needs any of those, use Quantum ESPRESSO — this is not a
 replacement for it, and on anything large it will be slower (about two to four
@@ -105,7 +104,7 @@ print(f"indirect gap   {bands.gap(8):.3f} eV")
 `bands.eigenvalues_ev` is `(k-points, bands)` in eV and `bands.path_length` is
 the x-axis for a plot. (The gap comes out small because LDA underestimates
 gaps — that is the functional, not the code; Quantum ESPRESSO gives the same
-answer.)
+answer, and so does PBE.)
 
 ## Examples
 
@@ -118,6 +117,8 @@ without being run, and each has a plain-text `.md` version beside it.
 | [`01_silicon_setup`](notebooks/01_silicon_setup.ipynb) | Reading an input file, the crystal, k-points, and the plane-wave basis |
 | [`02_silicon_scf_and_bands`](notebooks/02_silicon_scf_and_bands.ipynb) | What is inside a pseudopotential, the SCF, the bonding charge, and the band structure |
 | [`03_eigensolver_and_performance`](notebooks/03_eigensolver_and_performance.ipynb) | How the calculation is made fast, and how it compares to Quantum ESPRESSO |
+| [`04_ultrasoft_and_paw`](notebooks/04_ultrasoft_and_paw.ipynb) | Ultrasoft and PAW pseudopotentials: two grids, the augmentation charge, and PAW's one-centre terms |
+| [`05_gradient_corrections`](notebooks/05_gradient_corrections.ipynb) | PBE and its relatives: what a gradient correction adds to the potential, on the grid and inside a PAW sphere |
 
 `benchmarks/` holds ready-to-run input files, from a two-atom silicon cell up to
 a sixteen-atom one.
@@ -134,13 +135,14 @@ python3 -m pytest
 
 Silicon's total energy agrees to about 1e-9 Ry term by term, its band structure
 to 0.0002 eV, and metals with every smearing to about 2.5e-8 Ry. The ultrasoft
-and PAW cases agree to 3e-9 Ry or better on 2- and 8-atom cells.
+and PAW cases agree to 3e-9 Ry or better on 2- and 8-atom cells, and the PBE
+ones to 6e-9 Ry with the band structure within 0.05 meV.
 
 Most regression tests need Quantum ESPRESSO's `test-suite` directory, which is not
-shipped here; they skip cleanly without it. The ultrasoft and PAW ones do not:
-no benchmark Quantum ESPRESSO ships covers those pseudopotentials, so their
-reference outputs were generated once with `pw.x` and are committed under
-`tests/data/qe/` (regenerate with `tools/generate_reference.py`).
+shipped here; they skip cleanly without it. The ultrasoft, PAW and PBE ones do
+not: no benchmark Quantum ESPRESSO ships covers those pseudopotentials and
+functionals, so their reference outputs were generated once with `pw.x` and are
+committed under `tests/data/qe/` (regenerate with `tools/generate_reference.py`).
 
 ## Comparing against Quantum ESPRESSO yourself
 

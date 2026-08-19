@@ -1,0 +1,28 @@
+! PBEsol on a PBE dataset, requested through input_dft.
+!
+! Two things at once, both deliberate. The functional is PBEsol, which differs
+! from PBE in both gradient slots -- a smaller mu in exchange and a smaller beta
+! in correlation -- so it is the case that separates the two constants.
+! And it is requested through input_dft, overriding what the pseudopotential
+! header says -- the path QE's own pw_dft tests take, and the one that has to
+! warn rather than fail.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=20.0
+    input_dft='pbesol'
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pbe-rrkj.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS
+  2
+   0.250000  0.250000  0.250000   1.00
+   0.250000  0.250000  0.750000   3.00
