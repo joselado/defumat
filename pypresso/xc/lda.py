@@ -67,8 +67,17 @@ RHO_THRESHOLD = 1.0e-10
 
 
 def wigner_seitz_radius(rho: jnp.ndarray) -> jnp.ndarray:
-    """``rs`` such that a sphere of that radius holds one electron."""
-    safe = jnp.maximum(rho, RHO_THRESHOLD)
+    """``rs`` such that a sphere of that radius holds one electron.
+
+    The **absolute value** of the density, as ``xc_lda`` takes it. A plane-wave
+    density is a truncated Fourier series and goes slightly negative in vacuum
+    -- QE reports how much on every iteration -- and there the local functional
+    is evaluated at ``|rho|`` rather than switched off. Clamping to the
+    threshold instead leaves a large low-density region with no
+    exchange-correlation potential at all, which is invisible on a bulk crystal
+    and worth ~1e-5 Ry per energy term on an atom in a box.
+    """
+    safe = jnp.maximum(jnp.abs(rho), RHO_THRESHOLD)
     return (3.0 / (4.0 * jnp.pi * safe)) ** (1.0 / 3.0)
 
 

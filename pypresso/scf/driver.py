@@ -22,6 +22,7 @@ energy that QE labels "one-electron contribution".
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from functools import partial
 
@@ -57,6 +58,7 @@ from pypresso.solvers import get_eigensolver
 from pypresso.solvers.davidson import ETHR_MIN, starting_vectors
 from pypresso.solvers.subspace import rayleigh_ritz
 from pypresso.system.builder import System
+from pypresso.system.kpoints import KPoints
 from pypresso.system.symmetry import apply_symmetry_maps, find_symmetries, symmetry_maps
 from pypresso.units import RY_TO_EV
 
@@ -195,6 +197,48 @@ def _iteration_scalars(eigenvalues, weights, rho_in, rho_out, v_scf, volume):
     return jnp.stack([eband, deband, residual])
 
 
+def _without_gamma_storage(system: System) -> System:
+    """Turn ``K_POINTS gamma`` into an explicit single k-point at the origin.
+
+    ``ggen`` keeps only half the G sphere when the calculation is at k = 0,
+    because a real wavefunction has ``c(-G) = conj(c(G))``. That storage is
+    generated here (``basis/gvectors.py``) but it is not *consumed* anywhere:
+    ``vloc_psi`` would need QE's ``vloc_psi_gamma`` packing, the eigensolver
+    QE's real ``regterg`` overlaps, ``calbec``/``addusdens``/``newd`` their
+    ``fact = 2`` doubling, and the symmetry maps a way to follow a rotation that
+    leaves the stored half. None of that exists, so running a gamma-only basis
+    through the SCF would be silently wrong (where it does not simply fail in
+    ``symmetry_maps``).
+
+    The substitution below is exact rather than approximate: the same cell at
+    the same cutoffs has the same FFT dimensions and the same physics, and the
+    full sphere is what every routine here already expects. What it costs is
+    the factor of two in storage and transforms that the trick exists to save,
+    which is a performance matter and not a correctness one.
+
+    The k-point weights are carried over rather than rebuilt, because
+    :meth:`KPoints.from_cartesian` renormalises and reapplies ``DEGSPIN`` --
+    which would undo the halving an ``nspin = 2`` run has already applied.
+    """
+    kpoints = system.kpoints
+    if not kpoints.gamma_only:
+        return system
+    warnings.warn(
+        "K_POINTS gamma asks for the half-sphere storage of the gamma-point "
+        "trick, which is not implemented; running at an explicit k = 0 with the "
+        "full G sphere instead. The result is the same, the cost is twice the "
+        "plane waves",
+        stacklevel=3,
+    )
+    replacement = KPoints(
+        coords=kpoints.coords,
+        weights=kpoints.weights,
+        gamma_only=False,
+        precision=kpoints.precision,
+    )
+    return eqx.tree_at(lambda s: s.kpoints, system, replacement)
+
+
 def next_ethr(ethr: float, accuracy: float, nelec: float, iteration: int) -> float:
     """QE's diagonalisation-threshold schedule (``PW/src/electrons.f90``).
 
@@ -268,10 +312,17 @@ class Calculation:
         basis: Basis | None = None,
         diagonalization: str | None = None,
     ):
+        system = _without_gamma_storage(system)
         self.system = system
         self.eigensolver = get_eigensolver(diagonalization)
         self.pseudos = tuple(pseudos)
         self.basis = basis if basis is not None else build_basis(system)
+        if self.basis.dense.gamma_only:
+            raise NotImplementedError(
+                "the gamma-only half-sphere storage is not implemented in h_psi, "
+                "sum_band or the eigensolver; pass a basis built with "
+                "gamma_only=False"
+            )
 
         # Which exchange-correlation functional this run uses is decided once,
         # here, from the pseudopotentials and the input -- not defaulted to

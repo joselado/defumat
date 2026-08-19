@@ -183,11 +183,18 @@ class Functional(eqx.Module):
     def potential(self, rho: jnp.ndarray) -> jnp.ndarray:
         """``v_xc = d(rho e_xc)/d rho``, Ry, by differentiation.
 
+        Taken at ``|rho|``, which is where ``xc_lda`` evaluates it: a truncated
+        plane-wave density is slightly negative in vacuum and QE treats those
+        points as low-density rather than as empty. The energy that goes with
+        this potential keeps the *signed* density as its prefactor -- see
+        :func:`pypresso.scf.potential.exchange_correlation` -- so the pair is
+        QE's, not the naive derivative of one expression.
+
         Zero wherever the density is below the vacuum threshold: those points do
         not contribute to the energy, and letting the derivative act there would
         put spurious structure into empty space.
         """
-        rho = jnp.asarray(rho)
+        rho = jnp.abs(jnp.asarray(rho))
         potential = jax.grad(lambda r: jnp.sum(r * self.energy_density(r)))(rho)
         return jnp.where(rho > RHO_THRESHOLD, potential, 0.0)
 

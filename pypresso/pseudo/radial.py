@@ -106,7 +106,11 @@ def mesh_cutoff_index(r) -> int:
 
 
 def spherical_bessel(l: int, x: jnp.ndarray) -> jnp.ndarray:
-    """Spherical Bessel function ``j_l(x)`` for l = 0, 1, 2, 3.
+    """Spherical Bessel function ``j_l(x)`` for l = 0 .. 4.
+
+    ``l = 4`` is needed by the augmentation charge of any dataset with ``d``
+    projectors -- ``Q^L_ij`` runs to ``L = 2 lmax`` -- which is every transition
+    metal, nickel included.
 
     The closed forms lose all their significant digits as ``x -> 0`` (``j_1``
     computes ``sin(x)/x^2 - cos(x)/x``, a difference of two large numbers), so
@@ -116,6 +120,7 @@ def spherical_bessel(l: int, x: jnp.ndarray) -> jnp.ndarray:
     """
     x = jnp.asarray(x)
     small = x < 0.05
+    small4 = x < 1.0
     safe = jnp.where(small, 1.0, x)  # keeps the unused branch finite
 
     if l == 0:
@@ -133,7 +138,29 @@ def spherical_bessel(l: int, x: jnp.ndarray) -> jnp.ndarray:
             (15.0 / safe**3 - 6.0 / safe) * jnp.sin(safe)
             - (15.0 / safe**2 - 1.0) * jnp.cos(safe)
         ) / safe
+    elif l == 4:
+        # Five correction terms and a threshold of 1, not the three-and-0.05 the
+        # lower orders use: the closed form divides by ``x^5`` and its numerator
+        # cancels to ``x^4/945``, so at x = 0.05 it has lost every significant
+        # digit. The series in turn needs more terms to stay accurate out to
+        # where the closed form becomes safe. Both branches are good to ~1e-12
+        # relative at the crossover, which is where the two meet.
+        series = x**4 / 945.0 * (
+            1.0 - x**2 / 22.0 * (
+                1.0 - x**2 / 52.0 * (
+                    1.0 - x**2 / 90.0 * (
+                        1.0 - x**2 / 136.0 * (1.0 - x**2 / 190.0)
+                    )
+                )
+            )
+        )
+        big = jnp.where(small4, 1.0, x)
+        exact = (
+            jnp.sin(big) * (105.0 - 45.0 * big**2 + big**4)
+            + jnp.cos(big) * (10.0 * big**3 - 105.0 * big)
+        ) / big**5
+        return jnp.where(small4, series, exact)
     else:
-        raise NotImplementedError(f"spherical_bessel is implemented for l <= 3, got l = {l}")
+        raise NotImplementedError(f"spherical_bessel is implemented for l <= 4, got l = {l}")
 
     return jnp.where(small, series, exact)
