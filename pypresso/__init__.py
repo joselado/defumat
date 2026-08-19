@@ -1,7 +1,8 @@
 """pypresso -- plane-wave DFT in Python and JAX.
 
-Importing this package does two things before any array can be created: enables
-JAX's 64-bit mode, and points XLA at a persistent compilation cache.
+Importing this package does three things before any array can be created:
+enables JAX's 64-bit mode, points XLA at a persistent compilation cache, and
+stops XLA from oversubscribing the machine with threads.
 
 The 64-bit switch only *permits* 64-bit; the dtype every array is actually built
 with still comes from a :class:`pypresso.config.Precision` policy.
@@ -21,6 +22,58 @@ from pathlib import Path as _Path
 import jax as _jax
 
 _jax.config.update("jax_enable_x64", True)
+
+#: How many CPUs to leave visible to XLA. Four, because that is what the
+#: measurements say; see :func:`_limit_thread_pool`.
+DEFAULT_THREADS = 4
+
+
+def _limit_thread_pool() -> None:
+    """Keep XLA's CPU thread pool small, which on this workload makes it faster.
+
+    XLA sizes its CPU thread pool from the process's *affinity mask*, and its
+    default -- every core on the machine -- is the worst choice measured here.
+    A plane-wave SCF is a long chain of FFTs and small matrix products with
+    little parallelism inside any one operation, so past a handful of threads
+    the pool spends more time synchronising than computing. On this 14-core
+    machine, per SCF iteration of the 1131-plane-wave silicon benchmark:
+
+        1 core   38 ms      4 cores   33 ms      14 cores   63 ms
+
+    and the same shape holds for a 3215-plane-wave cell, so this is not an
+    artefact of the small cases. Nothing else responds: ``OMP_NUM_THREADS`` moves
+    it by a few percent, because it is not what sizes the pool.
+
+    The real parallel axis for this code is k-points, and that is a
+    ``jax.sharding`` question rather than a thread-pool one (``PLAN.md`` §5).
+
+    ``PYPRESSO_THREADS`` overrides the count; ``0`` or ``off`` leaves the machine
+    alone. The mask is only ever *narrowed* -- an outer ``taskset`` or a cluster
+    scheduler's allocation is respected, never widened.
+    """
+    setting = _os.environ.get("PYPRESSO_THREADS", "").strip().lower()
+    if setting in ("0", "off", "none", "false"):
+        return
+    try:
+        wanted = int(setting) if setting else DEFAULT_THREADS
+    except ValueError:
+        _warnings.warn(f"ignoring PYPRESSO_THREADS={setting!r}: not a number",
+                       RuntimeWarning, stacklevel=2)
+        return
+
+    affinity = getattr(_os, "sched_getaffinity", None)
+    if affinity is None:  # pragma: no cover - not Linux
+        return
+    try:
+        available = sorted(affinity(0))
+        if 0 < wanted < len(available):
+            _os.sched_setaffinity(0, set(available[:wanted]))
+    except OSError as error:  # pragma: no cover - depends on the scheduler
+        _warnings.warn(f"could not limit the CPU affinity: {error}",
+                       RuntimeWarning, stacklevel=2)
+
+
+_limit_thread_pool()
 
 
 def _enable_compilation_cache() -> None:
@@ -59,4 +112,5 @@ from pypresso import config, units  # noqa: E402
 from pypresso.config import DOUBLE, SINGLE, Precision  # noqa: E402
 
 __version__ = "0.0.1"
-__all__ = ["config", "units", "Precision", "DOUBLE", "SINGLE", "__version__"]
+__all__ = ["config", "units", "Precision", "DOUBLE", "SINGLE", "DEFAULT_THREADS",
+           "__version__"]

@@ -34,22 +34,31 @@ a correctness check on every optimisation.
 | | QE 7.5 | pypresso | ratio |
 |---|---|---|---|
 | **`si-1k.in`** — 180 PWs, 1 k-point | | | |
-| per SCF iteration | 0.003 s | 0.008 s | **3.3x** |
+| per SCF iteration | 0.003 s | 0.007 s | **3.0x** |
 | total energy | −15.25444871 Ry | −15.25444945 Ry | Δ 7e-7 Ry |
 | **`si-1k-ecut40.in`** — 1131 PWs, 1 k-point | | | |
-| per SCF iteration | 0.013 s | 0.040 s | **3.2x** |
+| per SCF iteration | 0.011 s | 0.038 s | **3.3x** |
 | total energy | −15.30461021 Ry | −15.30461021 Ry | Δ 3e-9 Ry |
 | **`pw_scf/scf-kauto.in`** — 2 k-points, reduced from 8 | | | |
-| per SCF iteration | 0.003 s | 0.011 s | **3.3x** |
+| per SCF iteration | 0.003 s | 0.012 s | **4.7x** |
 | total energy | −15.79449452 Ry | −15.79449594 Ry | Δ 1e-6 Ry |
 | **`pw_metal/metal.in`** — Al, 10 k-points | | | |
-| per SCF iteration | 0.013 s | 0.069 s | **5.2x** |
+| per SCF iteration | 0.013 s | 0.061 s | **4.6x** |
 | total energy | −4.18546970 Ry | −4.18546964 Ry | Δ 6e-8 Ry |
 
 Best of five runs on each side, and worth taking as ±20%: QE prints its timings
 to 0.01 s, so on the small cases its per-iteration figure is one significant
-digit and the ratios inherit that. The metal is the worst case because ten
+digit and the ratios inherit that. The multi-k cases are the worst because ten
 k-points multiply the per-dispatch overhead that the single-k cases mostly hide.
+
+**Both codes are pinned to one CPU by affinity**, which is the only mechanism
+that works — see "Threads" below. An earlier version of the harness passed
+`intra_op_parallelism_threads=1` inside `XLA_FLAGS`; XLA ignored it silently
+(the token does not begin with `--`, so it was read as a filename) and pypresso
+ran on 1.8 cores while the table claimed one. The ratios were not flattered by
+it — extra threads make this workload *slower*, so the honest single-core
+numbers came out slightly better — but the claim was wrong and is now enforced
+by `os.sched_setaffinity`.
 
 **Setup and process wall time.** With the compilation cache warm, setup is
 1.0–1.3 s across all four cases and a complete silicon SCF takes **4.3 s of
@@ -294,16 +303,53 @@ That leaves three things, none of them large:
    differentiability (`PLAN.md` D1/D2), paid in setup and now largely hidden by
    the compilation cache.
 
+## Threads: the default was the worst choice
+
+XLA sizes its CPU thread pool from the process's **affinity mask**, and its
+default — every core on the machine — was costing a factor of nearly two. A
+plane-wave SCF is a long chain of FFTs and small matrix products with little
+parallelism inside any single operation, so past a handful of threads the pool
+spends more time synchronising than computing.
+
+Per SCF iteration, same code, only the number of visible cores changing:
+
+| cores | `si-1k` (180 PWs) | `si-1k-ecut40` (1131 PWs) | `metal.in` | `ecutwfc=80` (3215 PWs) |
+|---|---|---|---|---|
+| 1 | 7.4 ms | 37.6 ms | 67.4 ms | 123 ms |
+| 4 | **6.1 ms** | **31.6 ms** | **66.8 ms** | **114 ms** |
+| 8 | 9.9 ms | 54.4 ms | 119.5 ms | — |
+| 14 (default) | 10.0 ms | 54.6 ms | 120.3 ms | 152 ms |
+
+Four is best everywhere measured, including a 3215-plane-wave cell, so this is
+not an artefact of small cases. `pypresso` now narrows the affinity mask to four
+CPUs on import — **1.7x faster out of the box** — with `PYPRESSO_THREADS` to
+change or disable it, and it only ever *narrows*, so an outer `taskset` or a
+scheduler's allocation is respected.
+
+Nothing else moves it: `OMP_NUM_THREADS` changes the time by a few percent
+(64 → 56 → 63 ms for 1, 4, 14) because it is not what sizes the pool. That is
+also why the affinity mask, rather than any environment variable, is what the
+benchmark harness sets.
+
+**The conclusion this points at is the more important one.** XLA's intra-op
+threading gives this workload essentially nothing — 1 core to 4 is a 15% gain on
+a 14-core machine. The parallelism that is actually available here is over
+k-points, which is exactly why the k index leads every wavefunction-shaped array
+(`PLAN.md` §5). `metal.in` has ten independent k-points and runs them through one
+thread pool; sharding them across CPU devices is a factor the thread pool cannot
+give.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
 instinct. None of these may change a validated number.
 
-1. **`jax.sharding` over the k-axis**, and GPU. Excluded from the single-core
-   metric by construction, and the reason the k-axis leads every
-   wavefunction-shaped array. `metal.in` has ten k-points and a factor of ten
-   sitting unused on this machine alone — and it is the case with the worst
-   ratio, so this is where the remaining structural win is.
+1. **`jax.sharding` over the k-axis**, and GPU. Now measured to be the *only*
+   parallelism worth having on CPU: the thread pool gives 15% between one core
+   and four and loses badly beyond that, while `metal.in`'s ten k-points are
+   independent and are currently run through a single pool. This is where the
+   remaining structural factor is, and the k-axis already leads every
+   wavefunction-shaped array so that it can be taken.
 2. **Fold `dr2` into the iteration's other reductions.** It costs a transform and
    a dispatch of its own (~3% of an iteration) for a quantity the loop already
    computes a residual for. Mixing in G space would save another transform.
@@ -367,3 +413,4 @@ instinct. None of these may change a validated number.
 | 2026-08-18 | k-point reduction to the irreducible wedge (`kpoint_grid.f90`) | 2.8x on `scf-kauto.in`; matches QE's count on 22/22 lattices |
 | 2026-08-18 | Pseudo-atomic starting wavefunctions and Rayleigh-Ritz (`wfcinit`) | 33 → 21 Davidson steps; first iteration 8 → 3 |
 | 2026-08-18 | Persistent XLA compilation cache, on by default | process wall 9.7 → 4.3 s; test suite 134 → 57 s |
+| 2026-08-19 | Cap XLA's CPU thread pool at four cores by affinity; fix the harness, which had claimed one core while using 1.8 | 1.7x out of the box; 14 cores was the worst setting measured |

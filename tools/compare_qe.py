@@ -41,21 +41,29 @@ import os
 import re
 import sys
 
-# XLA reads its flags when the backend is created, so they must be in the
-# environment before JAX is imported anywhere. Re-exec once with them set rather
-# than trusting the caller to have exported them.
+# One core on both sides, and the only mechanism that actually delivers it is
+# the CPU affinity mask: XLA sizes its thread pool from that, and ignores
+# OMP_NUM_THREADS and any thread flag passed through XLA_FLAGS. (An earlier
+# version of this file set "intra_op_parallelism_threads=1" inside XLA_FLAGS.
+# XLA silently ignored it -- the token does not begin with "--", so it was read
+# as a filename -- and the process ran on 1.8 cores while claiming one.)
+#
+# The affinity is set before JAX is imported, and inherited by the pw.x
+# subprocess, so both codes get the same single core.
 _SINGLE_CORE = {
-    "XLA_FLAGS": "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1",
     "OMP_NUM_THREADS": "1",
     "MKL_NUM_THREADS": "1",
     "OPENBLAS_NUM_THREADS": "1",
-    "NPROC": "1",
+    "PYPRESSO_THREADS": "1",
 }
 
 if os.environ.get("PYPRESSO_PINNED") != "1":
     os.environ.update(_SINGLE_CORE)
     os.environ["PYPRESSO_PINNED"] = "1"
     os.execv(sys.executable, [sys.executable, *sys.argv])
+
+if hasattr(os, "sched_setaffinity"):
+    os.sched_setaffinity(0, {sorted(os.sched_getaffinity(0))[0]})
 
 import argparse  # noqa: E402
 import shutil  # noqa: E402
@@ -213,7 +221,8 @@ def report(name: str, qe: dict, ours: dict) -> None:
     print()
     print(f"{name}: {ours['nat']} atoms, {ours['nk']} k-point(s), ecutwfc {ours['ecutwfc']} Ry")
     print(f"  {ngm} G-vectors, {npwx} plane waves, FFT grid {grid}")
-    print(f"  single core: XLA_FLAGS={_SINGLE_CORE['XLA_FLAGS']!r}, OMP_NUM_THREADS=1")
+    cores = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else ["?"]
+    print(f"  single core: both codes pinned to CPU {cores}, OMP_NUM_THREADS=1")
     print()
     print(f"  {'':22s} {'QE 7.5':>10s} {'pypresso':>10s} {'ratio':>8s}")
     print(f"  {'-' * 52}")

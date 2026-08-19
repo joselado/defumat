@@ -120,5 +120,64 @@ def test_the_cache_honours_an_explicit_directory(tmp_path):
     assert directory.is_dir()
 
 
+def _cores_in_a_fresh_process(value: str | None) -> int:
+    """How many CPUs the process is left with, with the env var set."""
+    environment = dict(os.environ)
+    environment.pop("PYPRESSO_THREADS", None)
+    if value is not None:
+        environment["PYPRESSO_THREADS"] = value
+
+    script = (
+        "import sys, os; sys.path.insert(0, '.');"
+        "import pypresso;"
+        "print(len(os.sched_getaffinity(0)))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True,
+        env=environment, cwd=Path(__file__).resolve().parents[2],
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    return int(result.stdout.strip())
+
+
+@pytest.mark.skipif(not hasattr(os, "sched_getaffinity"), reason="Linux only")
+def test_the_thread_pool_is_capped_by_default():
+    """XLA sizes its CPU pool from the affinity mask, and its default is slower.
+
+    See ``pypresso._limit_thread_pool``: on this workload fourteen threads are
+    almost twice as slow as four, so the package narrows the mask on import.
+    """
+    available = len(os.sched_getaffinity(0))
+    expected = min(pypresso.DEFAULT_THREADS, available)
+    assert _cores_in_a_fresh_process(None) == expected
+
+
+@pytest.mark.skipif(not hasattr(os, "sched_getaffinity"), reason="Linux only")
+def test_the_cap_can_be_set_or_turned_off():
+    available = len(os.sched_getaffinity(0))
+    assert _cores_in_a_fresh_process("1") == 1
+    assert _cores_in_a_fresh_process("off") == available
+
+
+@pytest.mark.skipif(not hasattr(os, "sched_getaffinity"), reason="Linux only")
+def test_the_cap_never_widens_an_existing_restriction():
+    """An outer taskset, or a scheduler's allocation, must be respected."""
+    available = sorted(os.sched_getaffinity(0))
+    if len(available) < 2:
+        pytest.skip("needs more than one CPU to narrow")
+    script = (
+        "import sys, os; sys.path.insert(0, '.');"
+        f"os.sched_setaffinity(0, {{{available[0]}}});"
+        "import pypresso;"
+        "print(len(os.sched_getaffinity(0)))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True,
+        cwd=Path(__file__).resolve().parents[2],
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert int(result.stdout.strip()) == 1
+
+
 def test_the_cache_is_on_by_default():
     assert _cache_dir_in_a_fresh_process(None) != ""
