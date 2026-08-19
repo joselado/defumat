@@ -11,6 +11,8 @@ remaining gap is made of.
 
 The headline: on a production-cutoff silicon SCF, **one pypresso iteration costs about
 three times a Quantum ESPRESSO iteration**, and the two total energies agree to 2.6e-9 Ry.
+On an eight-atom cell it is 3.6x and on a sixteen-atom one 4.1x, agreeing to 3.5e-9 and
+9.7e-10 Ry.
 
 **What this covers:** the block Davidson eigensolver (completing P4), the dense
 Hamiltonian's matrix elements, k-point reduction to the irreducible wedge (completing P6),
@@ -106,10 +108,10 @@ for label, milliseconds, _ in stages:
 
 ```
 
-      v_of_rho                      1.55 ms
-      diagonalise (Davidson)        3.07 ms
-      occupations                   1.20 ms
-      density + symmetrise          1.44 ms
+      v_of_rho                      0.86 ms
+      diagonalise (Davidson)        1.64 ms
+      occupations                   0.45 ms
+      density + symmetrise          0.78 ms
 
 
 The eigensolver dominates, and before any of this work it dominated far more: building the
@@ -148,8 +150,8 @@ print(f"  by applying H          {applied:7.2f} ms   ({applied / direct:.0f}x sl
 print(f"  largest disagreement   {difference:.2e} Ry")
 ```
 
-      from matrix elements      5.01 ms
-      by applying H            60.60 ms   (12x slower)
+      from matrix elements      4.80 ms
+      by applying H            61.55 ms   (13x slower)
       largest disagreement   3.55e-15 Ry
 
 
@@ -177,10 +179,10 @@ for band, (a, b) in enumerate(zip(np.asarray(exact)[0], np.asarray(iterative)[0]
 ```
 
       band     dense (Ry)     Davidson (Ry)     difference
-         0    -0.390299160    -0.390299160   3.3e-16
-         1     0.140370280     0.140370280   1.7e-15
-         2     0.366613820     0.366613820   2.3e-15
-         3     0.366613820     0.366613820   9.5e-14
+         0    -0.390299160    -0.390299160   0.0e+00
+         1     0.140370280     0.140370280   4.0e-15
+         2     0.366613820     0.366613820   1.4e-15
+         3     0.366613820     0.366613820   9.4e-14
 
 
 The same answer, and the subspace it came from was 16 x 16 rather than 180 x 180.
@@ -231,16 +233,16 @@ for name in ("si-1k.in", "si-1k-ecut40.in"):
               f"   E = {energy:.9f} Ry")
 ```
 
-      si-1k.in          npw   180  dense         22.0 ms/iteration   E = -15.254449448 Ry
+      si-1k.in          npw   180  dense         11.7 ms/iteration   E = -15.254449448 Ry
 
 
-      si-1k.in          npw   180  davidson      10.5 ms/iteration   E = -15.254449448 Ry
+      si-1k.in          npw   180  davidson       5.9 ms/iteration   E = -15.254449448 Ry
 
 
-      si-1k-ecut40.in   npw  1131  dense       1258.0 ms/iteration   E = -15.304610213 Ry
+      si-1k-ecut40.in   npw  1131  dense       1160.6 ms/iteration   E = -15.304610213 Ry
 
 
-      si-1k-ecut40.in   npw  1131  davidson      57.8 ms/iteration   E = -15.304610213 Ry
+      si-1k-ecut40.in   npw  1131  davidson      27.7 ms/iteration   E = -15.304610213 Ry
 
 
 Identical energies, and at 1131 plane waves Davidson is more than ten times faster. The
@@ -335,10 +337,10 @@ for label, variant in (("full grid", dataclasses.replace(kauto, kpoints=full)),
       48 symmetry operations
 
 
-      full grid          8 k-points     58.5 ms/iteration   E = -15.794495941 Ry
+      full grid          8 k-points     20.4 ms/iteration   E = -15.794495941 Ry
 
 
-      irreducible wedge  2 k-points     19.4 ms/iteration   E = -15.794495941 Ry
+      irreducible wedge  2 k-points      8.5 ms/iteration   E = -15.794495941 Ry
 
 
 Two points instead of eight, and **the total energy is identical to nine decimals**. That
@@ -445,8 +447,8 @@ print(subprocess.run([sys.executable, "-c", probe], capture_output=True, text=Tr
 
 ```
 
-      first  Calculation   1.110 s
-      second Calculation   0.040 s
+      first  Calculation   1.091 s
+      second Calculation   0.047 s
     
 
 
@@ -455,17 +457,23 @@ print(subprocess.run([sys.executable, "-c", probe], capture_output=True, text=Tr
 `tools/compare_qe.py` runs both codes on the same input, QE built serial and pypresso with
 XLA pinned to one thread, and reads QE's own timing report. On this machine:
 
-| | `si-1k.in` (180 PWs) | `si-1k-ecut40.in` (1131 PWs) |
-|---|---|---|
-| QE, per SCF iteration | 0.003 s | 0.013 s |
-| pypresso, per SCF iteration | 0.008 s | 0.040 s |
-| ratio | **3.3x** | **3.2x** |
-| total energy agreement | 7e-7 Ry | 3e-9 Ry |
+| | `si-1k` 2 atoms | `si-1k-ecut40` 2 atoms | `si8-1k-ecut30` 8 atoms | `si16-1k-ecut30` 16 atoms |
+|---|---|---|---|---|
+| plane waves | 180 | 1131 | 2950 | 5900 |
+| QE, per SCF iteration | 0.003 s | 0.011 s | 0.071 s | 0.278 s |
+| pypresso, per SCF iteration | 0.007 s | 0.033 s | 0.254 s | 1.141 s |
+| ratio | **2.8x** | **3.0x** | **3.6x** | **4.1x** |
+| total energy agreement | 7e-7 Ry | 3e-9 Ry | 4e-9 Ry | 1e-9 Ry |
 
-Three times a mature Fortran code, in Python, on one core, with the same numbers. What is
-left is mostly per-dispatch overhead on small arrays — which is why the ten-k-point
-aluminium case is the worst of the four at 5.2x, and also where the next factor is: the
-k-axis leads every wavefunction-shaped array precisely so it can be sharded across cores
-and GPUs, and none of that is switched on here.
+Three to four times a mature Fortran code, in Python, on one core, with the same numbers —
+and the supercells agree with QE more tightly than the small cells do, because there the
+comparison is limited by QE's own convergence rather than by ours.
+
+The ratio drifts *up* with size, which says where the remaining work is. At sixteen atoms
+the eigensolver is 84% of an iteration, `h_psi` is 71% of a Davidson step, and the subspace
+linear algebra — the projection update and the two rotations, both `O(nvecx·nbnd·npw)` — is
+27%. Beyond that the parallel axis is k-points: it leads every wavefunction-shaped array
+precisely so it can be sharded across cores and GPUs, and none of that is switched on
+here.
 
 `PERFORMANCE.md` carries the full breakdown and the backlog.

@@ -192,15 +192,13 @@ print(f"\nconverged: {result.converged} in {result.iterations} iterations")
 ```
 
       iteration   1   ethr was too large; diagonalising again at 7.94e-04
-
-
-      iteration   1   E =     -15.81218464 Ry   accuracy = 6.45e-02   ethr = 7.94e-04   |drho| = 3.62e-02
-      iteration   2   E =     -15.79425671 Ry   accuracy = 2.25e-03   ethr = 8.06e-04   |drho| = 7.38e-03
-      iteration   3   E =     -15.79451159 Ry   accuracy = 6.47e-05   ethr = 2.81e-05   |drho| = 9.28e-04
-      iteration   4   E =     -15.79449691 Ry   accuracy = 4.13e-06   ethr = 8.09e-07   |drho| = 2.47e-04
-      iteration   5   E =     -15.79449595 Ry   accuracy = 4.77e-08   ethr = 5.16e-08   |drho| = 3.36e-05
-      iteration   6   E =     -15.79449594 Ry   accuracy = 3.83e-10   ethr = 5.96e-10   |drho| = 1.91e-06
-      iteration   7   E =     -15.79449594 Ry   accuracy = 1.29e-11   ethr = 4.79e-12   |drho| = 6.37e-07
+      iteration   1   E =     -15.81238467 Ry   accuracy = 6.39e-02   ethr = 7.94e-04   |drho| = 3.60e-02
+      iteration   2   E =     -15.79440648 Ry   accuracy = 2.30e-03   ethr = 7.98e-04   |drho| = 7.58e-03
+      iteration   3   E =     -15.79451359 Ry   accuracy = 7.53e-05   ethr = 2.87e-05   |drho| = 9.29e-04
+      iteration   4   E =     -15.79449783 Ry   accuracy = 6.34e-06   ethr = 9.41e-07   |drho| = 2.98e-04
+      iteration   5   E =     -15.79449594 Ry   accuracy = 6.47e-08   ethr = 7.93e-08   |drho| = 3.77e-05
+      iteration   6   E =     -15.79449594 Ry   accuracy = 8.05e-10   ethr = 8.09e-10   |drho| = 4.95e-06
+      iteration   7   E =     -15.79449594 Ry   accuracy = 6.69e-11   ethr = 1.01e-11   |drho| = 1.47e-06
     
     converged: True in 7 iterations
 
@@ -259,20 +257,20 @@ print(f"\nhighest occupied level: {result.homo * 13.605693122994017:.4f} eV"
 
     term [Ry]                  pypresso   Quantum ESPRESSO   difference
     --------------------------------------------------------------------
-    one-electron             4.83372264         4.83378641     -6.4e-05
-    hartree                  1.08438905         1.08429090      9.8e-05
-    xc                      -4.81284905        -4.81281466     -3.4e-05
+    one-electron             4.83372670         4.83378641     -6.0e-05
+    hartree                  1.08438233         1.08429090      9.1e-05
+    xc                      -4.81284640        -4.81281466     -3.2e-05
     ewald                  -16.89975858       -16.89975858      2.8e-09
     --------------------------------------------------------------------
     TOTAL                  -15.79449594       -15.79449593     -1.1e-08
     
     eigenvalues [eV]
-      k1  ours [-4.8705  2.3787  5.5366  5.5366]
+      k1  ours [-4.8705  2.3787  5.5365  5.5365]
           QE   [-4.8701  2.3792  5.5371  5.5371]
-      k2  ours [-2.9169 -0.0658  2.6792  4.035 ]
+      k2  ours [-2.917  -0.0658  2.6791  4.035 ]
           QE   [-2.9165 -0.0653  2.6795  4.0355]
     
-    highest occupied level: 5.5366 eV   (QE 5.5371 eV)
+    highest occupied level: 5.5365 eV   (QE 5.5371 eV)
 
 
 ### The converged density
@@ -367,7 +365,7 @@ print("bands: %s   max |difference| from QE: %.5f eV" % (ours.shape, np.abs(ours
 print("indirect gap: %.4f eV   (LDA underestimates; experiment is ~1.1 eV)" % bands.gap(8))
 ```
 
-    bands: (21, 8)   max |difference| from QE: 0.00024 eV
+    bands: (21, 8)   max |difference| from QE: 0.00025 eV
     indirect gap: 0.4885 eV   (LDA underestimates; experiment is ~1.1 eV)
 
 
@@ -433,7 +431,7 @@ print("  * almost nothing is jitted yet, so the iteration dispatches its operati
 print("    one at a time.")
 ```
 
-    pypresso SCF (warm): 0.17 s
+    pypresso SCF (warm): 0.11 s
     Quantum ESPRESSO    : 0.15 s total, of which 0.02 s in 'electrons'
                           (reported in the reference output; a 2017 machine)
     

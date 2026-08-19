@@ -166,15 +166,11 @@ print("ecutrho         = %.1f Ry   (defaulted to 4 * ecutwfc)" % system.ecutrho)
     Cell(ibrav=2 [cubic F (fcc)], alat=10.200000 bohr, volume=265.3020)
     
     lattice vectors in units of alat (rows a1, a2, a3):
-
-
     [[-0.5  0.   0.5]
      [ 0.   0.5  0.5]
      [-0.5  0.5  0. ]]
     
     reciprocal vectors in units of 2*pi/alat (rows b1, b2, b3):
-
-
     [[-1. -1.  1.]
      [ 1.  1.  1.]
      [-1.  1. -1.]]
@@ -433,8 +429,6 @@ print("padding entries contribute:", np.abs(kinetic[~mask]).max())
     plane waves per k-point: (180, 186)
     npwx (padded width)    : 186
     mask shape             : (2, 186)  -> 366 real, 6 padding
-
-
     
     largest |k+G|^2 retained: 11.8342 Ry   (cutoff 12.0 Ry)
     padding entries contribute: 0.0
@@ -501,8 +495,6 @@ print("Parseval:  sum|c|^2 = %.6f    (1/N) sum|f(r)|^2 = %.6f"
 ```
 
     field on the grid: (15, 15, 15) complex128
-
-
     round-trip error  : 1.49e-15
 
 
