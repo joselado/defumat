@@ -30,6 +30,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from pypresso.basis.builder import Basis, build_basis
+from pypresso.basis.sticks import build_sticks
 from pypresso.basis.fft import g_to_r, r_to_g
 from pypresso.hamiltonian.operator import Hamiltonian
 from pypresso.pseudo.atomic import atomic_wavefunctions
@@ -203,6 +204,9 @@ class Calculation:
         self.kinetic = planewaves.kinetic(gvectors, system.kpoints, system.cell)
         self.fft_index = planewaves.fft_index(gvectors)
 
+        # QE's FFT layout for the wavefunction transforms; see basis/sticks.py.
+        self.sticks = build_sticks(self.fft_index, planewaves.mask, gvectors.grid)
+
         self.projectors = build_projectors(
             self.pseudos, system.structure, system.cell, gvectors, planewaves, system.kpoints
         )
@@ -255,9 +259,14 @@ class Calculation:
         )
 
     def hamiltonian(self, v_scf: jnp.ndarray) -> Hamiltonian:
+        potential = self.vltot + v_scf
         return Hamiltonian(
             kinetic=self.kinetic,
-            potential=self.vltot + v_scf,
+            potential=potential,
+            # the same potential with its xy plane contiguous, which is the
+            # layout the stick transforms hold the field in
+            potential_wave=jnp.moveaxis(potential, -1, -3),
+            sticks=self.sticks,
             fft_index=self.fft_index,
             mask=self.basis.planewaves.mask,
             projectors=self.projectors,

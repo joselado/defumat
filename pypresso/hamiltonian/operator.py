@@ -23,7 +23,7 @@ from __future__ import annotations
 import equinox as eqx
 import jax.numpy as jnp
 
-from pypresso.basis.fft import g_to_r, gather_from_box
+from pypresso.basis.fft import g_to_r, gather_from_box, r_to_sticks, sticks_to_r
 from pypresso.pseudo.projectors import Projectors
 
 __all__ = ["Hamiltonian"]
@@ -42,6 +42,10 @@ class Hamiltonian(eqx.Module):
     mask: jnp.ndarray  # (nk, npwx)
     projectors: Projectors
     grid: tuple[int, int, int] = eqx.field(static=True)
+    #: The stick layout, and the potential stored to match it -- see
+    #: :meth:`_local`. ``None`` falls back to transforming the whole box.
+    sticks: object = None
+    potential_wave: jnp.ndarray | None = None
     #: Whether the density grid resolves every difference ``G - G'`` of two
     #: wavefunction plane waves, i.e. whether ``ecutrho >= 4 ecutwfc``. It is
     #: what makes :meth:`matrix` exact; see there.
@@ -69,12 +73,25 @@ class Hamiltonian(eqx.Module):
         return jnp.where(self.mask[ik], psi, 0.0)
 
     def _local(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
-        """``V(r) psi``, evaluated by a round trip through the FFT grid."""
-        field = g_to_r(psi, self.fft_index[ik], self.grid)
-        product = field * self.potential
-        n = self.grid[0] * self.grid[1] * self.grid[2]
-        box = jnp.fft.fftn(product, axes=(-3, -2, -1)) / n
-        return gather_from_box(box, self.fft_index[ik])
+        """``V(r) psi``, evaluated by a round trip through the FFT grid.
+
+        Two ways of doing the same thing. The stick path is QE's: the ``z``
+        transform runs only over the columns the wavefunction sphere occupies
+        (under a fifth of them) and the field is held with its ``xy`` plane
+        contiguous so the 2D pass is cheap. The fallback transforms the whole
+        box in one fused call, which is what everything did before the layout
+        existed and is still what the dense-grid quantities use.
+        """
+        if self.sticks is None:
+            field = g_to_r(psi, self.fft_index[ik], self.grid)
+            product = field * self.potential
+            n = self.grid[0] * self.grid[1] * self.grid[2]
+            box = jnp.fft.fftn(product, axes=(-3, -2, -1)) / n
+            return gather_from_box(box, self.fft_index[ik])
+
+        columns, index = self.sticks.columns[ik], self.sticks.index[ik]
+        field = sticks_to_r(psi, self.sticks, columns, index)
+        return r_to_sticks(field * self.potential_wave, self.sticks, columns, index)
 
     def _nonlocal(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``sum_ij |beta_i> D_ij <beta_j|psi>``."""

@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 
-__all__ = ["scatter_to_box", "gather_from_box", "g_to_r", "r_to_g"]
+__all__ = ["scatter_to_box", "gather_from_box", "g_to_r", "r_to_g",
+           "sticks_to_r", "r_to_sticks"]
 
 
 def scatter_to_box(coefficients: jnp.ndarray, fft_index: jnp.ndarray, grid) -> jnp.ndarray:
@@ -63,3 +64,45 @@ def r_to_g(field: jnp.ndarray, fft_index: jnp.ndarray) -> jnp.ndarray:
     n1, n2, n3 = field.shape[-3:]
     box = jnp.fft.fftn(field, axes=(-3, -2, -1)) / (n1 * n2 * n3)
     return gather_from_box(box, fft_index)
+
+
+# --- the stick layout ---------------------------------------------------------
+#
+# The pair below is the same transform as g_to_r / r_to_g, done QE's way: the z
+# pass on the sticks the wavefunction sphere actually occupies, then the xy
+# passes on the box. The field they produce is laid out ``(n3, n1, n2)``, with
+# the xy plane contiguous, because that is what makes the 2D pass cheap -- see
+# pypresso.basis.sticks. Anything multiplying such a field, the local potential
+# above all, has to be stored in the same order.
+
+
+def sticks_to_r(coefficients: jnp.ndarray, sticks, columns, index) -> jnp.ndarray:
+    """Sphere coefficients -> the field on the grid, as ``(..., n3, n1, n2)``.
+
+    QE's ``invfft('Wave')``: ``cft_1z`` over the sticks, then ``cft_2xy``.
+    """
+    n1, n2, n3 = sticks.grid
+    lead = coefficients.shape[:-1]
+
+    compact = jnp.zeros(lead + (sticks.nsticks * n3,), coefficients.dtype)
+    compact = compact.at[..., index].add(coefficients)
+    compact = jnp.fft.ifft(compact.reshape(lead + (sticks.nsticks, n3)), axis=-1) * n3
+
+    box = jnp.zeros(lead + (n3, n1 * n2), coefficients.dtype)
+    box = box.at[..., columns].set(jnp.moveaxis(compact, -1, -2))
+    return jnp.fft.ifftn(box.reshape(lead + (n3, n1, n2)), axes=(-2, -1)) * (n1 * n2)
+
+
+def r_to_sticks(field: jnp.ndarray, sticks, columns, index) -> jnp.ndarray:
+    """The inverse of :func:`sticks_to_r`, back to sphere coefficients.
+
+    QE's ``fwfft('Wave')``. Only the sticks are transformed back along z, since
+    everything outside them is discarded by the sphere anyway.
+    """
+    n1, n2, n3 = sticks.grid
+    lead = field.shape[:-3]
+
+    box = jnp.fft.fftn(field, axes=(-2, -1)) / (n1 * n2)
+    compact = jnp.moveaxis(box.reshape(lead + (n3, n1 * n2))[..., columns], -1, -2)
+    compact = jnp.fft.fft(compact, axis=-1) / n3
+    return compact.reshape(lead + (sticks.nsticks * n3,))[..., index]

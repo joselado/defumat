@@ -398,6 +398,36 @@ step here. Both terms are `O(nvecx nbnd npw)` and both are what `cegterg`'s ZGEM
 do too, so there is no obvious waste left in them — but they are the reason the
 ratio drifts up with size rather than down.
 
+## QE's FFT layout
+
+A wavefunction's sphere touches under a fifth of the box's `z` columns, so QE
+transforms only those — `cft_1z` over the sticks, then `cft_2xy` over the planes.
+Reproducing it took three measurements, the first two of which said it was not
+worth doing, and both were wrong:
+
+| | | |
+|---|---|---|
+| three separate 1D passes | 1.13x *ceiling* | wrong: gives up XLA's fused `fftn` |
+| 1D on sticks + 2D over the C-ordered box | 0.48x | wrong: 2D over two *strided* axes |
+| 1D on sticks + 2D over an `xy`-contiguous box | **1.13x / 1.02x** | QE's actual layout |
+
+The whole difference is the layout. QE's arrays are Fortran-ordered with `x`
+fastest, so an `xy` plane is contiguous; a C-ordered `(n1, n2, n3)` box has `z`
+fastest, and the same 2D transform then runs over the two strided axes, where on
+a 36x36x72 box it costs more alone (107 ms) than the entire fused 3D transform
+(68 ms). Holding the field as `(n3, n1, n2)` instead — and storing the local
+potential to match — recovers it.
+
+`basis/sticks.py` builds the layout, `basis/fft.py` has the pair of transforms,
+and `h_psi` uses them; the dense-grid quantities still transform the whole box,
+which for them is the right thing. Measured end to end on the local potential
+term, 1.13x at eight atoms and 1.02x at sixteen, and about 4% on a whole SCF
+iteration.
+
+It is a small win for a fair amount of machinery. It is in because the layout is
+also the precondition for anything further here — and because the standing rule
+is now to mirror QE where performance matters, which this is the reason for.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -418,55 +448,12 @@ instinct. None of these may change a validated number.
 
 ### Measured and rejected
 
+*(The stick decomposition was in this list twice, on two different wrong
+measurements, before being implemented. See "QE's FFT layout" above.)
+
 * **A faster FFT library.** XLA's CPU FFT is already **2x faster than SciPy's
   pocketfft** single-threaded (0.92 ms against 2.36 ms for a `(4, 30^3)`
   transform). There is no library-level win available; we are using a good one.
-
-* **Sticks/pencil FFTs**, QE's decomposition, where the 1D transforms are done
-  only along the columns the wavefunction sphere actually occupies — which is
-  16-19% of them, so it looks like a large saving. Measured in its proper
-  two-stage form (one 1D transform on the compacted sticks, then a *fused* 2D
-  transform over the box, not three separate 1D passes) it is **slower, and
-  increasingly so with size**:
-
-  | | full 3D `fftn` | 1D on sticks + scatter + 2D | |
-  |---|---|---|---|
-  | 2 atoms, 30^3 | 1.32 ms | 1.46 ms | 0.90x |
-  | 8 atoms, 36^3 | 10.19 ms | 14.39 ms | 0.71x |
-  | 16 atoms, 36x36x72 | 67.77 ms | 142.49 ms | 0.48x |
-
-  The reason is the second stage: a 2D transform over the two *outer*, strided
-  axes costs more on its own than the whole fused 3D transform (107 ms against
-  68 ms for the largest case), and the scatter from sticks into the box adds
-  another 32 ms. XLA's `fftn` chooses its pass order and transposes internally;
-  decomposing it by hand throws that away and buys less than it loses. QE's
-  version works because it owns the data layout and the transposes — that is a
-  property of its implementation, not of the mathematics, and it does not port.
-
-* **Applying `H` only to unconverged bands**, as `cegterg` does — *the partial
-  blocks*, that is. Counting the unconverged roots at every Davidson step and
-  pricing them with the measured cost of `h_psi` as a function of block size
-  gives a ceiling of a few percent: outside the fully-converged steps, almost
-  every step still has every root unconverged, because the convergence test
-  compares against the previous step and the first step of a call always fails
-  it. (The *fully* converged steps were a different matter and are now gone; see
-  "What the eight-atom cell showed".)
-
-  The reason it is so small is that the two changes above it took its value
-  away. Davidson calls now last two to four steps rather than eight to
-  twenty-six, and the first step of every call has *all* roots unconverged by
-  construction, since the convergence test compares against the previous step.
-  Compaction pays when a call runs long; scheduling `ethr` and starting from
-  atomic orbitals are precisely what stopped calls running long.
-
-  It is also more expensive to implement here than in Fortran: shapes inside
-  `jit` are static, so masking converged bands costs exactly what computing them
-  costs, and realising the saving needs `lax.switch` over precompiled block
-  sizes. That cannot sit under the `vmap` over k-points either — a batched
-  switch index makes every branch execute — so it would need the per-k solver
-  rewritten as one joint loop over all k, where the block size is the *maximum*
-  over k-points and the saving shrinks again. A substantial rewrite of a
-  freshly validated solver, for 3%.
 
 * **Folding the `1/N` FFT normalisations.** `g_to_r` multiplies by `N` and
   `r_to_g` divides by it, and inside `h_psi` the two cancel exactly. Removing
@@ -490,4 +477,5 @@ instinct. None of these may change a validated number.
 | 2026-08-18 | Persistent XLA compilation cache, on by default | process wall 9.7 → 4.3 s; test suite 134 → 57 s |
 | 2026-08-19 | Cap XLA's CPU thread pool at four cores by affinity; fix the harness, which had claimed one core while using 1.8 | 1.7x out of the box; 14 cores was the worst setting measured |
 | 2026-08-19 | Davidson: extend the projected matrices a block at a time instead of rebuilding them, and test convergence after expanding rather than before | 4.5x → 3.8x on eight atoms; one wasted `h_psi` per call removed |
-| 2026-08-19 | Sixteen-atom benchmark added; QE's stick decomposition measured in its proper form and rejected | 3.9x / 4.2x; sticks are 0.48x at that size |
+| 2026-08-19 | Sixteen-atom benchmark added | 3.9x / 4.2x |
+| 2026-08-19 | QE's stick FFT layout implemented, with the field held xy-contiguous | 1.13x on the local term at eight atoms; ~4% per iteration |
