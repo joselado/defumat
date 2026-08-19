@@ -50,6 +50,8 @@ from pypresso.scf.occupations import (
     input_occupations,
     smeared_occupations,
     smearing_entropy,
+    tetrahedra_for,
+    tetrahedron_occupations,
 )
 from pypresso.scf.potential import scf_accuracy, v_of_rho
 from pypresso.xc.functional import resolve_functional
@@ -615,6 +617,20 @@ class Calculation:
             if self.system.input_occupations is None:
                 raise ValueError("occupations='from_input' needs an OCCUPATIONS card")
             return input_occupations(self.system.input_occupations, eigenvalues, weights), {}
+
+        if scheme.startswith("tetrahedra"):
+            # The tetrahedra are a property of the k-grid and the symmetry, not
+            # of the density, so they are built once and kept. There is no
+            # ``-TS`` term: the method integrates the true step function, which
+            # is why QE prints no "smearing contrib." for a tetrahedron run.
+            if getattr(self, "_tetrahedra", None) is None:
+                self._tetrahedra = tetrahedra_for(
+                    scheme, self.system.kpoints, self.symmetries, self.system.cell
+                )
+            wg, ef = tetrahedron_occupations(
+                self._tetrahedra, eigenvalues, weights, self.nelec
+            )
+            return wg, {"fermi_energy": float(ef)}
 
         wg, ef = smeared_occupations(
             eigenvalues, weights, self.nelec, self.system.degauss, self.system.smearing

@@ -25,7 +25,8 @@ from pypresso.units import SQRT_PI
 
 __all__ = ["fixed_occupations", "smeared_occupations", "fermi_level", "bisect_fermi",
            "smearing_entropy",
-           "input_occupations", "wgauss", "w1gauss", "smearing_order"]
+           "input_occupations", "wgauss", "w0gauss", "w1gauss", "smearing_order",
+           "tetrahedra_for", "tetrahedron_occupations"]
 
 
 def fixed_occupations(eigenvalues: jnp.ndarray, weights: jnp.ndarray, nelec: float):
@@ -253,3 +254,52 @@ def input_occupations(card_values, eigenvalues: jnp.ndarray, weights: jnp.ndarra
         raise ValueError(f"OCCUPATIONS card gives {values.size} values but {nbnd} bands are computed")
     occupation = jnp.asarray(values[:nbnd])
     return weights[:, None] * occupation[None, :] / 2.0
+
+
+def w0gauss(x: jnp.ndarray, ngauss: int) -> jnp.ndarray:
+    """QE's ``w0gauss``: the smeared delta function, ``d wgauss / dx``.
+
+    ``Modules/w0gauss.f90``'s own docstring is "the derivative of wgauss", and
+    :func:`wgauss` above is already pure JAX, elementwise, and static in
+    ``ngauss`` -- so the derivative is taken rather than transcribed. That is
+    exact, it is one line instead of forty, and it makes it impossible for the
+    delta function to drift out of step with the occupation function it is
+    supposed to be the derivative of. (The same trade `xc/functional.py` makes:
+    write the energy, differentiate for the potential.)
+
+    The argument convention is the one ``PP/src/dosg.f90`` uses when it forms a
+    density of states, ``x = (E - e)/degauss`` -- the same ``x`` :func:`wgauss`
+    takes with ``E`` in the role of the Fermi level, positive for a state below
+    ``E``. It matters: the Methfessel-Paxton and cold smearings are not
+    symmetric in ``x``, so a sign flip here is invisible for a Gaussian and
+    wrong for everything else.
+
+    ``sum_k w_k w0gauss((E - e_k)/degauss) / degauss`` is the smearing DOS.
+    """
+    x = jnp.asarray(x)
+    return jax.jvp(lambda t: wgauss(t, ngauss), (x,), (jnp.ones_like(x),))[1]
+
+
+def tetrahedra_for(occupations: str, kpoints, symmetries, cell):
+    """The tetrahedron decomposition of a calculation's k-grid.
+
+    Re-exported here so that the occupation schemes are reachable from one
+    place; the implementation is :mod:`pypresso.scf.tetrahedra`, which is
+    imported lazily because it needs ``system.kpoints`` and this module is
+    imported from everywhere.
+    """
+    from pypresso.scf.tetrahedra import tetrahedra_for as _build
+
+    return _build(occupations, kpoints, symmetries, cell)
+
+
+def tetrahedron_occupations(tetrahedra, eigenvalues, weights, nelec):
+    """Occupation weights and the Fermi level by the tetrahedron method.
+
+    Returns ``(wg, ef)`` like :func:`smeared_occupations`, with no ``-TS`` term:
+    the tetrahedron method integrates the true step function, so there is no
+    entropy to subtract and QE prints no "smearing contrib." for these runs.
+    """
+    from pypresso.scf.tetrahedra import tetrahedron_occupations as _occupations
+
+    return _occupations(tetrahedra, eigenvalues, weights, nelec)

@@ -25,7 +25,8 @@ from pypresso.system.cell import Cell
 #: Tolerance for deciding that a rotated k-point lands on the grid (QE's ``eps``).
 _GRID_EPS = 1.0e-5
 
-__all__ = ["KPoints", "monkhorst_pack", "irreducible_wedge", "expand_band_path"]
+__all__ = ["KPoints", "monkhorst_pack", "irreducible_wedge", "grid_equivalence",
+           "expand_band_path"]
 
 #: Spin degeneracy factor applied to weights for an unpolarised calculation.
 DEGSPIN = 2.0
@@ -148,6 +149,75 @@ def irreducible_wedge(
     points = points - _fortran_nint(points)  # into the first Brillouin zone
     weights = multiplicity[keep]
     return points, weights / weights.sum()
+
+
+def grid_equivalence(
+    grid: tuple[int, int, int],
+    shift: tuple[int, int, int],
+    rotations: np.ndarray,
+    time_reversal: bool = True,
+) -> np.ndarray:
+    """Which irreducible point each point of the *complete* grid reduces to.
+
+    :func:`irreducible_wedge` throws this map away -- it only needs the
+    representatives and their multiplicities -- but the tetrahedron method needs
+    it: the tetrahedra are built on the full ``nk1*nk2*nk3`` grid, where a
+    microcell has eight well-defined corners, and every corner is then looked up
+    in the reduced list. That is exactly what ``tetra_init``'s ``equiv`` array in
+    ``PW/src/tetra.f90`` is, and QE builds it the same way for the same reason.
+
+    QE recomputes the map by rotating every irreducible point by every symmetry
+    and matching it against the grid. Here the orbit walk of
+    :func:`irreducible_wedge` is repeated instead, which reaches the same answer
+    by construction rather than by a second search -- the price is that the loop
+    is written twice. It is duplicated rather than factored out because
+    ``irreducible_wedge`` is the function every existing k-point comparison
+    against QE goes through, and a shared helper would put those comparisons at
+    the mercy of an edit made for the tetrahedra.
+
+    Returns:
+        ``equiv`` of length ``nk1*nk2*nk3``: for each point of the complete grid,
+        its index **into the reduced list** ``irreducible_wedge`` returns, in the
+        same grid ordering ``monkhorst_pack`` uses (last index fastest).
+    """
+    nk1, nk2, nk3 = (int(n) for n in grid)
+    k1, k2, k3 = (int(x) for x in shift)
+    offsets = np.array([k1, k2, k3]) / 2.0
+    counts = np.array([nk1, nk2, nk3])
+
+    i, j, k = np.meshgrid(np.arange(nk1), np.arange(nk2), np.arange(nk3), indexing="ij")
+    integers = np.stack([i.ravel(), j.ravel(), k.ravel()], axis=1)
+    xkg = (integers + offsets) / counts
+
+    equivalent = np.arange(len(xkg))
+
+    def grid_index(rotated):
+        scaled = rotated * counts - offsets
+        nearest = np.rint(scaled)
+        if np.any(np.abs(scaled - nearest) > _GRID_EPS):
+            return None
+        a, b, c = (int(x) % n for x, n in zip(nearest, counts))
+        return (a * nk2 + b) * nk3 + c
+
+    for n in range(len(xkg)):
+        if equivalent[n] != n:
+            continue
+        for rotation in rotations:
+            rotated = xkg[n] @ rotation.T
+            rotated = rotated - np.rint(rotated)
+            images = [rotated, -rotated] if time_reversal else [rotated]
+            for image in images:
+                other = grid_index(image)
+                if other is None or other <= n:
+                    continue
+                if equivalent[other] == other:
+                    equivalent[other] = n
+
+    # Representatives are kept in grid order, so an irreducible point's position
+    # in the reduced list is how many representatives precede it.
+    keep = equivalent == np.arange(len(xkg))
+    position = np.cumsum(keep) - 1
+    return position[equivalent]
 
 
 def expand_band_path(
