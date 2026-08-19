@@ -306,9 +306,69 @@ density, on an explicit k-path. *Check met:* silicon's bands along the 21-point 
 `pw_scf/scf-1.in` match QE to **0.0002 eV**, with the threefold degeneracies at Gamma
 exact; the `nscf` run of `scf-2.in` matches on its own grid.
 
-**P8 — DOS.** Smearing DOS and the tetrahedron method, on top of an NSCF grid run.
-*Check:* against `dos.x` output on the same grid; the integrated DOS returns the electron
-count.
+**P8 — DOS. ✅ DONE.** Smearing and tetrahedron Brillouin-zone integration behind a name
+registry, on top of an NSCF grid run lifted out of `workflows/bands.py` into
+`workflows/nscf.py`, plus `dos.x`'s `.dos` file and a `pypresso dos` subcommand. The
+tetrahedron method is also an *occupation* scheme inside the SCF, which is where the hard
+numbers are. *Check met:* all three of QE's fcc-aluminium benchmarks in `pw_metal`, which
+between them cover every variant — `metal-tetrahedra.in` (`tetrahedra-opt`, an SCF) to
+**2.5e-8 Ry** in the total energy and 0.0002 eV in `E_F`; `metal-tetrahedra-1.in`
+(`tetrahedra`) and `metal-tetrahedra-2.in` (`tetrahedra-lin`), NSCF on 6×6×6 from that
+density, reproducing 8.3056 eV and 8.2622 eV **exactly to the four decimals QE prints**.
+The three differ by 40 meV, so matching all three is a real three-way check. No `dos.x`
+reference is committed anywhere in the test suite, so the DOS itself is held to its sum
+rules: `∫D = N` by construction, `N` = 7.99999995 at silicon's valence-band maximum,
+`N(E_F)` = 3.000001 for aluminium, zero states inside silicon's gap, and a √E aluminium
+DOS to 5%.
+
+Design decisions, each one a JAX consequence rather than a transcription choice:
+
+* **Only `N(E)` is written down.** `sumkt`, `tetra_dos_t`'s `dosint` and
+  `opt_tetra_dos_t`'s are one piecewise cubic; `D(E)` is `jax.grad` of it and QE's matched
+  `dost` is never transcribed. Likewise `w0gauss` is `jax.jvp` of `wgauss` — QE's own
+  docstring says it is that derivative, and taking it means the delta cannot drift out of
+  step with the occupation function the SCF uses. Same pattern as `xc/functional.py`.
+* **The Fermi search stays on device**: a fixed-step `fori_loop` mirroring
+  `occupations.py`'s `bisect_fermi`, which could not be reused because its count function
+  is `wgauss` and the count is the entire difference.
+* **The construction is host-side numpy**, producing a static `(ntetra, nntetra)` table
+  the compiled path only gathers through.
+* **The spin degeneracy is `sum(wk)`** — 2 unpolarised, 1 per channel — so nothing in
+  `scf/tetrahedra.py` needs an `nspin` axis. `tetra.f90` otherwise never looks at the
+  k-point weights: the tetrahedra carry the Brillouin-zone measure themselves.
+
+Transcription traps, in the order they cost time:
+
+1. **The benchmark names lie about which algorithm they test.** `set_occupations.f90` is
+   the authority: `metal-tetrahedra.in` is `tetrahedra-opt`, not the plain method, and the
+   two numbered files are NSCF continuations of it (QE's `jobconfig` runs them in one
+   `outdir`), not independent SCF runs.
+2. **Bloechl and Kawamura do not cut a microcell into the same six tetrahedra.**
+   `tetra_init` hardwires one decomposition along the n1–n8 diagonal; `opt_tetra_init`
+   picks the *shortest* of the four body diagonals as its shaft, encoded in a fourth,
+   otherwise unused component of `ivvec0`/`divvec`. Using one family's decomposition with
+   the other's weights gives a plausible answer that is wrong in the third decimal of
+   `E_F`.
+3. **The sort permutation indexes `wlsm`'s first axis**, not its second, in
+   `opt_tetra_weights_only`'s scatter — also a plausible wrong answer.
+4. **The NaN-in-`grad` trap.** QE's `IF/ELSEIF` chain becomes evaluate-all-branches plus
+   `jnp.where`, and degenerate corner energies (routine: any high-symmetry point, any flat
+   band) make the *dead* branches divide by zero. The forward value survives the `where`;
+   the gradient does not, because `where` hands the dead branch a zero cotangent and
+   `0 * inf` is NaN. Denominators are therefore clamped *before* the division, which is
+   exact — a branch spanning `e_i ≤ E < e_j` is empty precisely when `e_i == e_j`.
+5. `tetrahedra-opt`'s stencil has **negative weights**, so its corner energies can fall
+   outside the range of the eigenvalues themselves. Its integrated DOS therefore reaches
+   the electron count only to ~1e-3 on the grid `dos.x` sizes from the eigenvalues, and a
+   band edge leaks a little weight across a gap. Both are properties of the method, not
+   defects, and QE behaves the same way.
+6. `opt_tetra_weights_only` averages the weights of degenerate bands afterwards. QE's
+   version is a sequential scan comparing each band to the *first* of the group it is
+   building; the symmetric pairwise mean used here agrees whenever the relation is
+   transitive, which at 1e-6 Ry it is, and both preserve the total.
+
+Still out of P8: the projected DOS (`projwfc.x`), which needs atomic-orbital projections
+rather than eigenvalues alone.
 
 **P9 — Spin.** LSDA (`nspin=2`), collinear magnetization. Non-collinear/SOC stays out.
 *Check:* `pw_lsda` benchmarks.

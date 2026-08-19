@@ -4,6 +4,7 @@ parser for QE reference outputs used throughout the test suite.
 This is the only layer allowed to speak in units other than Rydberg atomic units.
 """
 
+from pypresso.io.output import format_dos, write_dos
 from pypresso.io.qeref import QEReference, read_qe_output
 
-__all__ = ["QEReference", "read_qe_output"]
+__all__ = ["QEReference", "format_dos", "read_qe_output", "write_dos"]

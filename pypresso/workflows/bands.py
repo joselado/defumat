@@ -5,24 +5,24 @@ converged SCF run, the potential built from it is frozen, and the Hamiltonian is
 then diagonalised at whatever k-points the band path asks for -- which is why
 those k-points may be anywhere in the zone and carry no integration weights.
 
-Following ``PW/src/non_scf.f90``. The same routine serves an NSCF run on a
-denser grid, which is what a density of states needs.
+Following ``PW/src/non_scf.f90``. The diagonalisation itself lives in
+:mod:`pypresso.workflows.nscf`, because the same routine serves an NSCF run on a
+denser grid, which is what a density of states needs; what is left here is the
+band-path presentation of it -- the path length, the gap, the plotting abscissa.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 
 from pypresso.pseudo.upf import Pseudopotential
-from pypresso.scf.driver import Calculation, default_nbnd
-from pypresso.solvers.davidson import ETHR_MIN
 from pypresso.system.builder import System
 from pypresso.system.kpoints import KPoints
 from pypresso.units import RY_TO_EV
+from pypresso.workflows.nscf import fixed_density_bands
 
 __all__ = ["BandStructure", "run_bands"]
 
@@ -81,37 +81,15 @@ def run_bands(
             how accurately the bands are worth computing.
 
     The potential is built once from the given density and never updated -- that
-    is the whole content of "non self-consistent".
+    is the whole content of "non self-consistent", and it is why this is a thin
+    wrapper around :func:`pypresso.workflows.nscf.fixed_density_bands`. A band
+    path carries no integration weights, so unlike an NSCF grid run it stops at
+    the eigenvalues: any Fermi level or HOMO must come from the SCF that
+    produced the density, which is what the two arguments are for.
     """
-    if kpoints is not None:
-        system = eqx.tree_at(lambda s: s.kpoints, system, kpoints)
-
-    calculation = Calculation(system, pseudos)
-    nbnd = nbnd or system.nbnd or default_nbnd(calculation.nelec, system.occupations)
-
-    if calculation.is_paw:
-        # A PAW Hamiltonian's nonlocal coefficients are D^(0) + int V Q + ddd_paw,
-        # and only the first two can be rebuilt from the density: ddd_paw comes
-        # from ``becsum``, which is a property of the *wavefunctions* and is not
-        # recoverable from the density that ``run_bands`` is handed. Building the
-        # Hamiltonian without it converges perfectly well and gives eigenvalues
-        # that are wrong by tenths of an eV -- the failure mode this codebase
-        # refuses rather than risks. Threading becsum through ``SCFResult`` is
-        # the fix; it is not written yet.
-        raise NotImplementedError(
-            "band structures with a PAW pseudopotential need the converged becsum "
-            "as well as the density, which run_bands does not yet take; "
-            "ultrasoft and norm-conserving band structures work"
-        )
-
-    potential = calculation.potential(density)
-    hamiltonian = calculation.hamiltonian(potential.v_scf)
-
-    # There is no SCF here to tighten the threshold over, so ``setup.f90`` picks
-    # one up front from the accuracy of the density the bands are computed in.
-    ethr = max(ETHR_MIN, 0.1 * min(1.0e-2, conv_thr / max(1.0, calculation.nelec)))
-    eigenvalues, _ = calculation.diagonalize(hamiltonian, nbnd, None, ethr)
-
+    _, system, eigenvalues = fixed_density_bands(
+        system, pseudos, density, kpoints, nbnd, conv_thr
+    )
     return BandStructure(
         kpoints=system.kpoints,
         eigenvalues=np.asarray(eigenvalues),
