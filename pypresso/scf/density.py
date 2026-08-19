@@ -8,6 +8,14 @@ Normalisation: a state is normalised as ``sum_G |c_G|^2 = 1``, so on the grid
 ``wg`` already include both the k-point weight and the occupation, and they sum
 to the number of electrons -- which is what makes ``integral rho = nelec`` an
 exact identity rather than something to renormalise.
+
+**Spin.** Wavefunctions, weights and the density all carry a leading channel
+axis, and the accumulation is per channel: ``sum_band`` writes into
+``rho%of_r(:,current_spin)``, with ``isk(ik)`` saying which. QE flattens the two
+channels into one k-list of length ``2 nks`` and lets that index decide; here
+the channel is a separate axis, which keeps ``k`` the leading *independent* axis
+of every wavefunction-shaped array -- the property the batching and the eventual
+sharding rest on.
 """
 
 from __future__ import annotations
@@ -36,12 +44,13 @@ def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.nd
 
 
 def sum_band(psi, fft_index, grid, weights, cell: Cell) -> jnp.ndarray:
-    """The density from every k-point, ``(n1, n2, n3)`` and real.
+    """The density from every k-point, ``(nspin, n1, n2, n3)`` and real.
 
     Args:
-        psi: ``(nk, nbnd, npwx)``.
-        fft_index: ``(nk, npwx)``.
-        weights: ``(nk, nbnd)`` occupation weights.
+        psi: ``(nspin, nk, nbnd, npwx)``.
+        fft_index: ``(nk, npwx)`` -- shared by the channels, since the plane-wave
+            basis at a k-point does not depend on spin.
+        weights: ``(nspin, nk, nbnd)`` occupation weights.
 
     Batched over k with ``vmap`` rather than accumulated in a Python loop: k is
     the leading axis of every wavefunction-shaped array precisely so that this
@@ -49,10 +58,14 @@ def sum_band(psi, fft_index, grid, weights, cell: Cell) -> jnp.ndarray:
     transforms, so the intermediate ``(nk, nbnd, n1, n2, n3)`` field is not
     materialised in full.
     """
-    contributions = jax.vmap(band_density, in_axes=(0, 0, None, 0, None))(
-        psi, fft_index, grid, weights, cell
-    )
-    return jnp.sum(contributions, axis=0)
+
+    def channel(states, occupations):
+        contributions = jax.vmap(band_density, in_axes=(0, 0, None, 0, None))(
+            states, fft_index, grid, occupations, cell
+        )
+        return jnp.sum(contributions, axis=0)
+
+    return jax.vmap(channel)(psi, weights)
 
 
 def becsum(psi, vkb, weights, species_channels) -> tuple:
@@ -67,20 +80,25 @@ def becsum(psi, vkb, weights, species_channels) -> tuple:
     these numbers.
 
     Args:
-        psi: ``(nk, nbnd, npwx)`` wavefunctions.
-        vkb: ``(nk, npwx, nkb)`` projectors.
-        weights: ``(nk, nbnd)`` occupation weights.
+        psi: ``(nspin, nk, nbnd, npwx)`` wavefunctions.
+        vkb: ``(nk, npwx, nkb)`` projectors -- the same in both channels.
+        weights: ``(nspin, nk, nbnd)`` occupation weights.
         species_channels: for each species, the ``(nat_t, nh_t)`` array of
             channel columns belonging to each of its atoms, or ``None`` when the
             species is norm-conserving.
 
-    Returns one real ``(nat_t, nh_t, nh_t)`` array per species. QE stores only
-    the upper triangle, with the off-diagonal entries doubled; the full
+    Returns one real ``(nspin, nat_t, nh_t, nh_t)`` array per species. QE stores
+    only the upper triangle, with the off-diagonal entries doubled; the full
     symmetric matrix is carried here instead, which is the same contraction
     against a ``Q_ij`` symmetric in the same pair of indices and avoids a packed
     index that nothing else in this code uses.
+
+    The spin index is ``becsum``'s third in QE (``becsum(ijh, na, nspin)``) and
+    it is not decoration: with two channels the augmentation charge, the
+    self-consistent ``D_ij`` and PAW's one-centre terms all become per-channel
+    quantities, and they are all built from this one.
     """
-    projections = jnp.einsum("kgc,kbg->kbc", vkb.conj(), psi)  # <beta_c|psi_kb>
+    projections = jnp.einsum("kgc,skbg->skbc", vkb.conj(), psi)  # <beta_c|psi_kb>
     return tuple(
         None if channels is None else _becsum_species(projections, weights, channels)
         for channels in species_channels
@@ -90,8 +108,8 @@ def becsum(psi, vkb, weights, species_channels) -> tuple:
 @jax.jit
 def _becsum_species(projections, weights, channels):
     """One species' ``becsum``, gathering its atoms' channels in one go."""
-    columns = projections[:, :, channels]  # (nk, nbnd, nat, nh)
+    columns = projections[:, :, :, channels]  # (nspin, nk, nbnd, nat, nh)
     return jnp.real(
-        jnp.einsum("kb,kbai,kbaj->aij", weights.astype(columns.dtype),
+        jnp.einsum("skb,skbai,skbaj->saij", weights.astype(columns.dtype),
                    columns.conj(), columns)
     )

@@ -17,7 +17,7 @@ import numpy as np
 from pypresso.config import DEFAULT_PRECISION, Precision
 from pypresso.io.pwin import PwInput, read_pw_input
 from pypresso.system.cell import Cell, celldm_from_abc
-from pypresso.system.kpoints import KPoints
+from pypresso.system.kpoints import DEGSPIN, KPoints
 from pypresso.system.structure import Species, Structure
 from pypresso.system.symmetry import find_symmetries
 from pypresso.units import ANGSTROM_TO_BOHR
@@ -37,6 +37,8 @@ class System(eqx.Module):
     kpoints: KPoints
     ecutwfc: float = eqx.field(static=True)
     ecutrho: float = eqx.field(static=True)
+    #: 1 for an unpolarized calculation, 2 for collinear LSDA. Static, because
+    #: it is an array *rank* everywhere downstream, not a value.
     nspin: int = eqx.field(static=True, default=1)
     calculation: str = eqx.field(static=True, default="scf")
     nbnd: int | None = eqx.field(static=True, default=None)
@@ -48,7 +50,27 @@ class System(eqx.Module):
     smearing: str = eqx.field(static=True, default="gaussian")
     degauss: float = eqx.field(static=True, default=0.0)
     #: Occupations read from an OCCUPATIONS card, for occupations='from_input'.
+    #: One row per spin channel when nspin = 2 (``f_inp(:, isk(ik))``).
     input_occupations: tuple[float, ...] | None = eqx.field(static=True, default=None)
+    #: ``starting_magnetization(i)``, per species, in [-1, 1]. It splits the
+    #: superposition of atomic charges the SCF starts from -- and it is the only
+    #: thing that does, so an LSDA run left at zero converges to the unpolarized
+    #: solution whenever that is a stationary point, which for a symmetric
+    #: crystal it always is.
+    starting_magnetization: tuple[float, ...] = eqx.field(static=True, default=())
+    #: ``tot_magnetization``: constrain ``N_up - N_dw`` instead of letting the
+    #: two channels share one Fermi level. ``None`` -- QE's -10000 sentinel --
+    #: means unconstrained.
+    tot_magnetization: float | None = eqx.field(static=True, default=None)
+    #: ``nosym``: use no symmetry at all. Not an optimisation switch -- an input
+    #: whose occupations break the crystal's symmetry (an atom with one of its
+    #: three p channels filled) needs it, and symmetrising anyway converges to a
+    #: different state.
+    nosym: bool = eqx.field(static=True, default=False)
+
+    @property
+    def lsda(self) -> bool:
+        return self.nspin == 2
 
 
 def system_from_file(path, precision: Precision = DEFAULT_PRECISION) -> System:
@@ -64,8 +86,27 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     # before anything is sized from the k-point count). It needs the crystal's
     # symmetries, hence the ordering: cell, then structure, then symmetry, then
     # k-points. Explicit k-point lists are taken as given, as QE takes them.
+    nosym = _logical(pwin.get("system", "nosym", False))
     symmetries = find_symmetries(cell, structure)
-    kpoints = _build_kpoints(pwin, cell, precision, symmetries.rotation_array())
+    rotations = None if nosym else symmetries.rotation_array()
+    kpoints = _build_kpoints(pwin, cell, precision, rotations)
+
+    nspin = int(pwin.get("system", "nspin", 1))
+    if nspin not in (1, 2):
+        raise NotImplementedError(
+            f"nspin = {nspin}: only 1 (unpolarized) and 2 (collinear LSDA) are "
+            "implemented; noncollinear magnetism and spin-orbit are out of scope"
+        )
+    if nspin == 2:
+        # ``setup.f90`` multiplies the k-point weights by ``degspin`` only in
+        # the LDA branch: with two channels each k-point is diagonalised twice
+        # and the weights sum to one *per channel*, so the two together still
+        # account for two electrons per band. Applying the factor here rather
+        # than inside KPoints keeps the spin-independent k-point code free of a
+        # flag it would otherwise have to be told.
+        kpoints = eqx.tree_at(
+            lambda k: k.weights, kpoints, kpoints.weights / DEGSPIN
+        )
 
     ecutwfc = pwin.get("system", "ecutwfc")
     if ecutwfc is None:
@@ -80,7 +121,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         kpoints=kpoints,
         ecutwfc=float(ecutwfc),
         ecutrho=float(ecutrho),
-        nspin=int(pwin.get("system", "nspin", 1)),
+        nspin=nspin,
         calculation=str(pwin.get("control", "calculation", "scf")).lower(),
         nbnd=pwin.get("system", "nbnd"),
         occupations=str(pwin.get("system", "occupations", "fixed")).lower(),
@@ -88,7 +129,33 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         smearing=str(pwin.get("system", "smearing", "gaussian")).lower(),
         degauss=float(pwin.get("system", "degauss", 0.0)),
         input_occupations=_input_occupations(pwin),
+        starting_magnetization=tuple(
+            pwin.indexed("system", "starting_magnetization", structure.ntyp)
+        ),
+        tot_magnetization=_tot_magnetization(pwin),
+        nosym=nosym,
     )
+
+
+def _logical(value) -> bool:
+    """A Fortran logical that may already have been parsed to a bool."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in (".true.", ".t.", "true", "t")
+
+
+def _tot_magnetization(pwin: PwInput) -> float | None:
+    """``tot_magnetization``, with QE's sentinel turned into ``None``.
+
+    ``input_parameters.f90`` defaults it to -10000 and ``set_nelup_neldw`` tests
+    ``< -9999`` -- the flag for "not given" is the *value*, and the switch it
+    controls (``two_fermi_energies``) changes the physics, so the sentinel is
+    resolved once here rather than compared for again downstream.
+    """
+    value = pwin.get("system", "tot_magnetization")
+    if value is None or float(value) < -9999.0:
+        return None
+    return float(value)
 
 
 def _input_occupations(pwin: PwInput) -> tuple[float, ...] | None:

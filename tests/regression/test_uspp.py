@@ -139,7 +139,19 @@ def test_the_two_eigensolvers_agree(pseudo_dir, case):
     assert dense.total_energy == pytest.approx(davidson.total_energy, abs=1e-9)
 
 
-def test_the_augmentation_charge_reproduces_the_files_own_q(pseudo_dir):
+@pytest.mark.parametrize(
+    ("case", "pseudo_file"),
+    [
+        # q_with_l = T: Q^L_ij is tabulated per (pair, L).
+        ("si2-us", None),
+        # q_with_l = F: one Q_ij per pair, expanded onto the L grid by
+        # ``upf._expand_qij``. Checking it here rather than only through a total
+        # energy is what makes the expansion falsifiable on its own.
+        ("si2-us", "O.pz-rrkjus.UPF"),
+        ("si2-us", "Ni.pz-nd-rrkjus.UPF"),
+    ],
+)
+def test_the_augmentation_charge_reproduces_the_files_own_q(pseudo_dir, case, pseudo_file):
     """``Omega * Q_ij(G=0)`` must be the ``PP_Q`` block the UPF file tabulates.
 
     An independent check on the whole radial-to-reciprocal chain: ``PP_Q`` is
@@ -148,12 +160,18 @@ def test_the_augmentation_charge_reproduces_the_files_own_q(pseudo_dir):
     Simpson weights, the ``4 pi / Omega`` normalisation and the ``L = 0``
     coupling coefficient at once. The bound is the file's own consistency: the
     two tabulations agree with each other to about 1e-6 relative.
+
+    The cell is silicon's in every case -- only ``Q(G = 0)`` is being read, and
+    it depends on the cell through ``1/Omega`` alone -- so a pseudopotential from
+    another element can be dropped into it to exercise its own storage format.
     """
     from pypresso.pseudo.augmentation import build_augmentation
     from pypresso.pseudo.projectors import projector_channels
 
-    system = build_system(read_pw_input(CASES / "si2-us.in"))
-    pseudo = read_upf(pseudo_dir / system.structure.species[0].pseudo_file)
+    system = build_system(read_pw_input(CASES / f"{case}.in"))
+    pseudo = read_upf(
+        pseudo_dir / (pseudo_file or system.structure.species[0].pseudo_file)
+    )
     from pypresso.basis.builder import build_basis
 
     basis = build_basis(system)

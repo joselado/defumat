@@ -71,7 +71,11 @@ def fixed_density_bands(
         system = eqx.tree_at(lambda s: s.kpoints, system, kpoints)
 
     calculation = Calculation(system, pseudos)
-    nbnd = nbnd or system.nbnd or default_nbnd(calculation.nelec, system.occupations)
+    nbnd = nbnd or system.nbnd or default_nbnd(
+        calculation.nelec,
+        system.occupations,
+        *((calculation.nelup, calculation.neldw) if system.nspin == 2 else (None, None)),
+    )
 
     if calculation.is_paw:
         # A PAW Hamiltonian's nonlocal coefficients are D^(0) + int V Q + ddd_paw,
@@ -89,12 +93,12 @@ def fixed_density_bands(
         )
 
     potential = calculation.potential(density)
-    hamiltonian = calculation.hamiltonian(potential.v_scf)
+    hamiltonians = calculation.hamiltonian(potential.v_scf)
 
     # There is no SCF here to tighten the threshold over, so ``setup.f90`` picks
     # one up front from the accuracy of the density the bands are computed in.
     ethr = max(ETHR_MIN, 0.1 * min(1.0e-2, conv_thr / max(1.0, calculation.nelec)))
-    eigenvalues, _ = calculation.diagonalize(hamiltonian, nbnd, None, ethr)
+    eigenvalues, _ = calculation.diagonalize(hamiltonians, nbnd, None, ethr)
     return calculation, system, np.asarray(eigenvalues)
 
 

@@ -1,0 +1,28 @@
+! The same symmetrically-occupied spin-polarized PAW oxygen atom as
+! ``o-paw-spin.in``, with a PBE dataset. It is the only well-conditioned case
+! that exercises the *gradient* correction on a PAW sphere with two channels --
+! the per-channel vector field, its theta component divided by sin(theta), and
+! the cross term that correlation's dependence on the total density's gradient
+! produces. The LDA case validates none of that.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 25.0,
+    nat = 1, ntyp = 1,
+    ecutwfc = 30
+    occupations = 'from_input'
+    nspin = 2
+    nbnd = 6
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ O   1.000  O.pbe-kjpaw.UPF
+ATOMIC_POSITIONS {alat}
+O   0.0   0.0   0.0
+K_POINTS {gamma}
+OCCUPATIONS
+1.0 1.0 1.0 1.0 0.0 0.0
+1.0 0.3333333333 0.3333333333 0.3333333333 0.0 0.0

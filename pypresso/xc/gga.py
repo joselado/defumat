@@ -39,10 +39,11 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from pypresso.units import E2
-from pypresso.xc.lda import pw_correlation_hartree
+from pypresso.xc.lda import pw_correlation_hartree, pw_spin_hartree
 
-__all__ = ["pbe_exchange", "pbe_correlation", "no_gradient_exchange",
-           "no_gradient_correlation", "PBE_KAPPA", "PBE_MU", "PBESOL_MU",
+__all__ = ["pbe_exchange", "pbe_correlation", "pbe_correlation_spin",
+           "no_gradient_exchange", "no_gradient_correlation",
+           "no_gradient_correlation_spin", "PBE_KAPPA", "PBE_MU", "PBESOL_MU",
            "REVPBE_KAPPA", "PBE_BETA", "PBESOL_BETA"]
 
 #: ``k`` and ``mu`` of ``pbex``, per variant.
@@ -120,4 +121,67 @@ def pbe_correlation(rho, sigma, beta: float = PBE_BETA):
     y = a * t2
     xy = (1.0 + y) / (1.0 + y + y * y)
     h0 = _GAMMA * jnp.log(1.0 + beta / _GAMMA * t2 * xy)
+    return E2 * rho * h0
+
+
+# --- the spin-polarized gradient correction -----------------------------------
+#
+# As in the local part, exchange needs nothing: ``gcx_spin`` doubles each
+# channel's density *and quadruples its |grad rho|^2* before calling the
+# unpolarized routine, which is the spin-scaling relation written for
+# ``sigma = |grad rho|^2``. Correlation does need its own version, and its
+# structure differs from exchange's in a way worth stating: it is a function of
+# the **total** density, its polarization, and the gradient of the **total**
+# density -- not of the two channels separately. That is why QE's ``gcc_spin``
+# takes ``(rho, zeta, grho)`` and returns a single ``v2c``, while ``gcx_spin``
+# takes two of everything.
+
+
+#: ``pbec_spin``'s ``gamma``, which is **not** ``pbec``'s. The unpolarized
+#: routine carries 0.0310906908696548950 and the polarized one the rounded
+#: 0.031091 -- a relative difference of 2e-6 that QE has never reconciled. It is
+#: reproduced rather than unified because the point of this code is to agree
+#: with that Fortran, and 2e-6 in ``gamma`` is visible in the sixth decimal of a
+#: PBE correlation energy.
+_GAMMA_SPIN = 0.031091
+
+
+def no_gradient_correlation_spin(rho, zeta, sigma):
+    """QE's ``NOGC``, spin-polarized."""
+    return jnp.zeros_like(rho)
+
+
+def pbe_correlation_spin(rho, zeta, sigma, beta: float = PBE_BETA):
+    """PBE correlation beyond the local part, Ry/bohr^3 (``pbec_spin``).
+
+    The polarized ``H(rho, zeta, t)``. Two things change relative to the
+    unpolarized form and both come from the same place -- the spin scaling of
+    the Thomas-Fermi screening length:
+
+    * ``phi(zeta) = ((1+z)^(2/3) + (1-z)^(2/3)) / 2`` divides the reduced
+      gradient, so ``t = |grad rho| / (2 phi k_s rho)``;
+    * every ``gamma`` in the expression becomes ``phi^3 gamma``, which is what
+      makes ``H`` reduce to the unpolarized one at ``z = 0`` and vanish in the
+      fully polarized high-density limit at the right rate.
+
+    ``ec`` underneath is the **spin-polarized** Perdew-Wang energy, so the
+    dependence QE's hand-derived ``v1c_up``/``v1c_dw`` have to carry explicitly
+    (they contain ``vc_up - ec`` and a ``dh0/dzeta``) is here just a term in an
+    expression that ``jax.grad`` differentiates.
+    """
+    z = jnp.clip(zeta, -1.0, 1.0)
+    rs = _PI34 / rho ** (1.0 / 3.0)
+    ec = pw_spin_hartree(rs, z)
+
+    kf = _XKF / rs
+    ks = _XKS * jnp.sqrt(kf)
+
+    phi = 0.5 * ((1.0 + z) ** (2.0 / 3.0) + (1.0 - z) ** (2.0 / 3.0))
+    phi3 = phi**3
+    t2 = sigma / (4.0 * phi * phi * ks * ks * rho * rho)
+
+    a = beta / _GAMMA_SPIN / jnp.expm1(-ec / (phi3 * _GAMMA_SPIN))
+    y = a * t2
+    xy = (1.0 + y) / (1.0 + y + y * y)
+    h0 = phi3 * _GAMMA_SPIN * jnp.log(1.0 + beta / _GAMMA_SPIN * t2 * xy)
     return E2 * rho * h0

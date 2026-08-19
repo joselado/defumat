@@ -33,7 +33,7 @@ def silicon(request, pseudo_dir):
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
     calculation = Calculation(system, pseudos)
     potential = v_of_rho(calculation.starting_density(), calculation.basis.dense, system.cell)
-    return system, calculation, calculation.hamiltonian(potential.v_scf)
+    return system, calculation, calculation.hamiltonian(potential.v_scf)[0]
 
 
 def _random_wavefunctions(calculation, nbnd=3, seed=0):

@@ -63,14 +63,13 @@ class Augmentation:
     peaked, which is the whole reason for the second, denser FFT grid.
 
     ``qfuncl[nb, mb, L]`` is ``r^2 Q^L_{nb mb}(r)`` for the angular momentum
-    ``L`` component, as ``PP_QIJL`` tabulates it -- the ``q_with_l`` form. The
-    older format instead stores one ``Q_ij(r)`` per pair plus ``qfcoef``
-    polynomial coefficients to re-pseudize it inside ``rinner``; that branch is
-    not implemented, so such a file parses (``q_with_l`` is false, ``qfuncl`` is
-    ``None``) and is refused only when a calculation actually asks for the
-    augmentation charge. Reading it has to keep working: several of the
-    committed test files are in the old format, and everything *else* about them
-    is read correctly.
+    ``L`` component. ``PP_QIJL`` tabulates exactly that (the ``q_with_l`` form);
+    the older Vanderbilt form stores one ``Q_ij(r)`` per pair, valid for every
+    ``L`` the pair couples to outside ``rinner(L)``, plus the ``qfcoef``
+    polynomial that replaces it inside. Both are expanded to the same array when
+    the file is read, which is what ``set_upf_q`` does in QE and for the same
+    reason: only one place should know that there are two forms. ``q_with_l``
+    records which one the file used.
     """
 
     q: np.ndarray  # (nbeta, nbeta) the integrated q_ij, from PP_Q
@@ -222,7 +221,7 @@ def read_upf(path: str | Path) -> Pseudopotential:
 
     vloc = _numbers(_require(root, "PP_LOCAL"))
 
-    projectors, dij, augmentation = _read_nonlocal(root, path)
+    projectors, dij, augmentation = _read_nonlocal(root, path, r)
     orbitals = _read_orbitals(root)
     paw = _read_paw(root, len(projectors))
 
@@ -271,7 +270,7 @@ def _optional_numbers(root: ET.Element, tag: str) -> np.ndarray | None:
     return None if node is None else _numbers(node)
 
 
-def _read_nonlocal(root: ET.Element, path: Path):
+def _read_nonlocal(root: ET.Element, path: Path, r: np.ndarray):
     section = root.find("PP_NONLOCAL")
     if section is None:
         return (), None, None
@@ -303,7 +302,7 @@ def _read_nonlocal(root: ET.Element, path: Path):
             raise ValueError(f"{path}: PP_DIJ has {values.size} entries, expected {n * n}")
         dij = values.reshape(n, n)
 
-    return tuple(projectors), dij, _read_augmentation(section, len(projectors), path)
+    return tuple(projectors), dij, _read_augmentation(section, projectors, r, path)
 
 
 def _read_orbitals(root: ET.Element) -> tuple[AtomicOrbital, ...]:
@@ -327,9 +326,27 @@ def _read_orbitals(root: ET.Element) -> tuple[AtomicOrbital, ...]:
     return tuple(orbitals)
 
 
-def _read_augmentation(section: ET.Element, nbeta: int, path: Path) -> Augmentation | None:
-    """Parse ``PP_AUGMENTATION``: the integrated ``q_ij`` and the ``Q^L_ij(r)``."""
+def _read_augmentation(
+    section: ET.Element, projectors, r: np.ndarray, path: Path
+) -> Augmentation | None:
+    """Parse ``PP_AUGMENTATION``: the integrated ``q_ij`` and the ``Q^L_ij(r)``.
+
+    Two storage forms, and both end up as the same ``qfuncl`` array, which is
+    what ``upflib/upf_to_internal.f90``'s ``set_upf_q`` exists to arrange:
+
+    * ``q_with_l = T`` tabulates one ``PP_QIJL`` per ``(i, j, L)`` and there is
+      nothing to do;
+    * ``q_with_l = F`` -- the Vanderbilt form every ``rrkjus`` file in the test
+      set uses -- tabulates a single ``PP_QIJ`` per pair, which stands for
+      *every* ``L`` the pair couples to, optionally re-pseudized inside
+      ``rinner(L)`` by the ``nqf`` polynomial coefficients of ``PP_QFCOEF``.
+
+    Expanding the second form here rather than in the consumer is QE's own
+    choice, and for the same reason: it is the difference between one place
+    knowing about ``qfcoef`` and every place that touches ``Q`` knowing.
+    """
     node = section.find("PP_AUGMENTATION")
+    nbeta = len(projectors)
     if node is None or nbeta == 0:
         return None
 
@@ -343,12 +360,24 @@ def _read_augmentation(section: ET.Element, nbeta: int, path: Path) -> Augmentat
 
     nqlc = int(node.attrib.get("nqlc", "0") or 0)
     cutoff_index = int(node.attrib.get("cutoff_r_index", "0") or 0)
-    if not q_with_l:
-        # The qfcoef/rinner re-pseudization is not implemented; q_ij is still
-        # read, since it is what the overlap operator needs and it is tabulated
-        # directly rather than derived from Q(r).
-        return Augmentation(q=q, qfuncl=None, nqlc=nqlc, q_with_l=False)
 
+    if q_with_l:
+        qfuncl, nqlc = _qijl_sections(node, nbeta, nqlc, path)
+    else:
+        qfuncl, nqlc = _expand_qij(node, projectors, r, nqlc, path)
+
+    if cutoff_index:
+        # ``read_upf_new`` zeroes Q beyond the augmentation radius for a PAW
+        # dataset. The files here already are zero there, but a dataset that is
+        # not would otherwise carry its tail into the one-centre integrals,
+        # which run over the whole mesh.
+        qfuncl[:, :, :, cutoff_index:] = 0.0
+
+    return Augmentation(q=q, qfuncl=qfuncl, nqlc=nqlc, q_with_l=q_with_l)
+
+
+def _qijl_sections(node: ET.Element, nbeta: int, nqlc: int, path: Path):
+    """The ``q_with_l = T`` form: one tabulated ``Q^L_ij(r)`` per section."""
     mesh = None
     entries = []
     for child in node:
@@ -371,14 +400,82 @@ def _read_augmentation(section: ET.Element, nbeta: int, path: Path) -> Augmentat
         # Only the upper triangle is stored; Q is symmetric in its two indices.
         qfuncl[nb, mb, l] = values
         qfuncl[mb, nb, l] = values
-    if cutoff_index:
-        # ``read_upf_new`` zeroes Q beyond the augmentation radius for a PAW
-        # dataset. The files here already are zero there, but a dataset that is
-        # not would otherwise carry its tail into the one-centre integrals,
-        # which run over the whole mesh.
-        qfuncl[:, :, :, cutoff_index:] = 0.0
+    return qfuncl, nqlc
 
-    return Augmentation(q=q, qfuncl=qfuncl, nqlc=nqlc, q_with_l=True)
+
+def _expand_qij(node: ET.Element, projectors, r: np.ndarray, nqlc: int, path: Path):
+    """The ``q_with_l = F`` form, expanded onto the L-dependent grid.
+
+    Transcribed from ``set_upf_q``: one ``Q_ij(r)`` per pair is copied to every
+    ``L`` with ``|l_i - l_j| <= L <= l_i + l_j`` and ``L + l_i + l_j`` even --
+    the same triangle-and-parity rule the transform to G space applies -- and
+    then, where ``nqf > 0`` and ``rinner(L) > 0``, the region inside
+    ``rinner(L)`` is replaced by ``setqfnew``'s polynomial,
+
+        r^2 Q^L(r) = r^(L+2) sum_i qfcoef(i, L) r^(2(i-1)).
+
+    The tabulated ``PP_QIJ`` is the *same function for every L* outside
+    ``rinner``; only the inner part is L-dependent, which is exactly why the
+    coefficients exist.
+    """
+    ls = [projector.l for projector in projectors]
+    nbeta = len(projectors)
+    nqf = int(node.attrib.get("nqf", "0") or 0)
+
+    entries = []
+    mesh = None
+    for child in node:
+        if not child.tag.startswith("PP_QIJ.") and child.tag != "PP_QIJ":
+            continue
+        values = _numbers(child)
+        mesh = values.size if mesh is None else mesh
+        entries.append((
+            int(child.attrib["first_index"]) - 1,
+            int(child.attrib["second_index"]) - 1,
+            values,
+        ))
+    if not entries:
+        raise ValueError(f"{path}: PP_AUGMENTATION has q_with_l='F' but no PP_QIJ sections")
+
+    nqlc = max(nqlc, 2 * max(ls) + 1)
+    qfuncl = np.zeros((nbeta, nbeta, nqlc, mesh))
+
+    rinner = np.zeros(nqlc)
+    qfcoef = None
+    if nqf > 0:
+        rinner_node = node.find("PP_RINNER")
+        qfcoef_node = node.find("PP_QFCOEF")
+        if rinner_node is None or qfcoef_node is None:
+            raise ValueError(
+                f"{path}: PP_AUGMENTATION declares nqf={nqf} but has no "
+                "PP_QFCOEF/PP_RINNER to go with it"
+            )
+        values = _numbers(rinner_node)
+        rinner[: values.size] = values
+        # Fortran order: qfcoef(nqf, nqlc, nbeta, nbeta), first index fastest.
+        qfcoef = _numbers(qfcoef_node).reshape(
+            (nqf, nqlc, nbeta, nbeta), order="F"
+        )
+
+    for nb, mb, values in entries:
+        l1, l2 = ls[nb], ls[mb]
+        for l in range(abs(l1 - l2), l1 + l2 + 1, 2):
+            if l >= nqlc:
+                continue
+            column = values.copy()
+            if qfcoef is not None and rinner[l] > 0.0:
+                inside = r[:mesh] < rinner[l]
+                # ``setqfnew`` with n = 2: the tabulated quantity is r^2 Q(r).
+                powers = np.ones(mesh)
+                polynomial = np.full(mesh, qfcoef[0, l, nb, mb])
+                for i in range(1, nqf):
+                    powers = powers * r[:mesh] ** 2
+                    polynomial = polynomial + qfcoef[i, l, nb, mb] * powers
+                column = np.where(inside, polynomial * r[:mesh] ** (l + 2), column)
+            qfuncl[nb, mb, l] = column
+            qfuncl[mb, nb, l] = column
+
+    return qfuncl, nqlc
 
 
 def _read_paw(root: ET.Element, nbeta: int) -> PawData | None:

@@ -18,10 +18,22 @@ error to one physical contribution:
 and exchange-correlation energies; ``deband = -int rho v_scf`` removes exactly
 that double counting, so their sum is the kinetic plus external-potential
 energy that QE labels "one-electron contribution".
+
+**Spin.** With ``nspin = 2`` the density, the potential, ``becsum``, ``D_ij``,
+the eigenvalues and the wavefunctions all grow a leading channel axis, and one
+SCF iteration diagonalises a *different Hamiltonian per channel* -- same kinetic
+term and same local pseudopotential, different self-consistent potential and
+different ``D_ij``. QE arranges this by storing both channels in a single
+k-point list of length ``2 nks`` with ``isk(ik)`` saying which; here the channel
+is an explicit axis and the loop over it is a Python loop, since ``nspin`` is
+static and two Hamiltonians are two compiled kernels either way. What must not
+change is that ``k`` stays the leading *independent* axis inside each channel,
+because that is the axis the batching and the eventual sharding use.
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from functools import partial
 
@@ -50,6 +62,7 @@ from pypresso.scf.occupations import (
     input_occupations,
     smeared_occupations,
     smearing_entropy,
+    spin_electron_counts,
     tetrahedra_for,
     tetrahedron_occupations,
 )
@@ -59,6 +72,7 @@ from pypresso.solvers import get_eigensolver
 from pypresso.solvers.davidson import ETHR_MIN, starting_vectors
 from pypresso.solvers.subspace import rayleigh_ritz
 from pypresso.system.builder import System
+from pypresso.system.kpoints import KPoints
 from pypresso.system.symmetry import apply_symmetry_maps, find_symmetries, symmetry_maps
 from pypresso.units import RY_TO_EV
 
@@ -83,10 +97,20 @@ ETHR_INIT = 1.0e-2
 
 @partial(jax.jit, static_argnames=("grid",))
 def _symmetrize(rho_r, fft_index, grid, maps):
-    """Impose the crystal symmetry on a real-space density, in one kernel."""
+    """Impose the crystal symmetry on a real-space density, in one kernel.
+
+    Per channel: a collinear symmetry operation acts on positions and leaves
+    the spin alone, so it symmetrises the two densities independently. (QE
+    symmetrises in the ``(up, down)`` representation too -- ``sym_rho`` runs
+    before ``rhoz_or_updw`` converts.)
+    """
     permutations, phases = maps
-    rho_g = apply_symmetry_maps(r_to_g(rho_r, fft_index), permutations, phases)
-    return jnp.real(g_to_r(rho_g, fft_index, grid))
+
+    def channel(rho):
+        rho_g = apply_symmetry_maps(r_to_g(rho, fft_index), permutations, phases)
+        return jnp.real(g_to_r(rho_g, fft_index, grid))
+
+    return jax.vmap(channel)(rho_r)
 
 
 @partial(jax.jit, static_argnames=("grid",))
@@ -102,21 +126,24 @@ def _density_of_bands(psi, fft_index, grid, weights, cell):
 
 @jax.jit
 def _paw_deband(ddd_paw, augmentation, becsum_):
-    """``sum_a sum_ij ddd_paw^a_ij becsum^a_ij``, out of the block matrix.
+    """``sum_s sum_a sum_ij ddd_paw^a_ij becsum^a_ij``, out of the block matrix.
 
-    Reading the blocks back out of the assembled ``(nkb, nkb)`` matrix rather
-    than keeping them separately is deliberate: it is the *same* array the
-    Hamiltonian used, so the two cannot drift apart.
+    Reading the blocks back out of the assembled ``(nspin, nkb, nkb)`` matrix
+    rather than keeping them separately is deliberate: it is the *same* array
+    the Hamiltonian used, so the two cannot drift apart.
     """
     total = jnp.asarray(0.0)
+    nspin = ddd_paw.shape[0]
     for values, atoms in zip(becsum_, augmentation.species_atoms):
         if values is None or not atoms:
             continue
         nh = values.shape[-1]
         for n, atom in enumerate(atoms):
             start = augmentation.channel_offsets[atom]
-            block = jax.lax.dynamic_slice(ddd_paw, (start, start), (nh, nh))
-            total = total + jnp.sum(block * values[n])
+            block = jax.lax.dynamic_slice(
+                ddd_paw, (0, start, start), (nspin, nh, nh)
+            )
+            total = total + jnp.sum(block * values[:, n])
     return total
 
 
@@ -159,15 +186,33 @@ def _paw_onecenter(paw, becsum_):
 
 @jax.jit
 def _newd(potential, fft_index, dij, augmentation):
-    """``D^(0)_ij + int V_eff Q_ij``, as the block matrix the Hamiltonian takes."""
-    potential_g = r_to_g(potential, fft_index)
-    return dij + augmentation.block_matrix(augmentation.integrals(potential_g))
+    """``D^(0)_ij + int V_eff Q_ij``, as the block matrix the Hamiltonian takes.
+
+    One block matrix per spin channel: ``newq_acc`` integrates ``v%of_r(:,is)``
+    against the same ``Q_ij`` for each ``is``, so the augmentation charge is
+    shared and only the potential differs.
+    """
+    blocks = [
+        augmentation.block_matrix(augmentation.integrals(r_to_g(channel, fft_index)))
+        for channel in potential
+    ]
+    return dij[None] + jnp.stack(blocks)
 
 
 @partial(jax.jit, static_argnames=("grid",))
 def _addusdens(rho_r, fft_index, grid, augmentation, becsum_):
-    """The augmentation charge, added to the density on the dense grid."""
-    charge = augmentation.charge(becsum_)
+    """The augmentation charge, added to the density on the dense grid.
+
+    Per channel, from that channel's ``becsum``: ``addusdens`` is called on
+    ``rho%of_g(:,:)`` while the density is still in the ``(up, down)``
+    representation, so each channel gets its own augmentation charge.
+    """
+    charge = jnp.stack([
+        augmentation.charge(
+            tuple(None if b is None else b[spin] for b in becsum_)
+        )
+        for spin in range(rho_r.shape[0])
+    ])
     return rho_r + jnp.real(g_to_r(charge, fft_index, grid))
 
 
@@ -177,6 +222,24 @@ def _rotate_all(hamiltonian, vectors, nbnd: int):
     return jax.vmap(lambda ik, v: rayleigh_ritz(hamiltonian, ik, v, nbnd))(
         jnp.arange(hamiltonian.nk), vectors
     )
+
+
+@jax.jit
+def _magnetization(rho_r, volume):
+    """``(total, absolute)`` magnetization in Bohr magnetons per cell.
+
+    ``report_mag``/``electrons.f90`` print both: the integral of ``rho_up -
+    rho_dw`` and the integral of its absolute value. They differ whenever the
+    magnetization changes sign inside the cell -- an antiferromagnet has zero
+    total and a large absolute moment -- so printing only the first would hide
+    exactly the states LSDA exists to describe.
+    """
+    magnetization = rho_r[0] - rho_r[1]
+    scale = volume / magnetization.size
+    return jnp.stack([
+        scale * jnp.sum(magnetization),
+        scale * jnp.sum(jnp.abs(magnetization)),
+    ])
 
 
 @jax.jit
@@ -192,9 +255,55 @@ def _iteration_scalars(eigenvalues, weights, rho_in, rho_out, v_scf, volume):
     ordering -- see the note in :func:`run_scf`.
     """
     eband = jnp.sum(weights * eigenvalues)
-    deband = -volume / rho_out.size * jnp.sum(rho_out * v_scf)
+    # ``delta_e``: one integral per channel of that channel's own density
+    # against its own potential. QE writes the same number in the (total,
+    # magnetization) representation as ``0.5[(v_up + v_dw) rho + (v_up - v_dw)
+    # m]``, which is the same contraction rearranged.
+    deband = -volume / rho_out[0].size * jnp.sum(rho_out * v_scf)
     residual = jnp.max(jnp.abs(rho_out - rho_in))
     return jnp.stack([eband, deband, residual])
+
+
+def _without_gamma_storage(system: System) -> System:
+    """Turn ``K_POINTS gamma`` into an explicit single k-point at the origin.
+
+    ``ggen`` keeps only half the G sphere when the calculation is at k = 0,
+    because a real wavefunction has ``c(-G) = conj(c(G))``. That storage is
+    generated here (``basis/gvectors.py``) but it is not *consumed* anywhere:
+    ``vloc_psi`` would need QE's ``vloc_psi_gamma`` packing, the eigensolver
+    QE's real ``regterg`` overlaps, ``calbec``/``addusdens``/``newd`` their
+    ``fact = 2`` doubling, and the symmetry maps a way to follow a rotation that
+    leaves the stored half. None of that exists, so running a gamma-only basis
+    through the SCF would be silently wrong (where it does not simply fail in
+    ``symmetry_maps``).
+
+    The substitution below is exact rather than approximate: the same cell at
+    the same cutoffs has the same FFT dimensions and the same physics, and the
+    full sphere is what every routine here already expects. What it costs is
+    the factor of two in storage and transforms that the trick exists to save,
+    which is a performance matter and not a correctness one.
+
+    The k-point weights are carried over rather than rebuilt, because
+    :meth:`KPoints.from_cartesian` renormalises and reapplies ``DEGSPIN`` --
+    which would undo the halving an ``nspin = 2`` run has already applied.
+    """
+    kpoints = system.kpoints
+    if not kpoints.gamma_only:
+        return system
+    warnings.warn(
+        "K_POINTS gamma asks for the half-sphere storage of the gamma-point "
+        "trick, which is not implemented; running at an explicit k = 0 with the "
+        "full G sphere instead. The result is the same, the cost is twice the "
+        "plane waves",
+        stacklevel=3,
+    )
+    replacement = KPoints(
+        coords=kpoints.coords,
+        weights=kpoints.weights,
+        gamma_only=False,
+        precision=kpoints.precision,
+    )
+    return eqx.tree_at(lambda s: s.kpoints, system, replacement)
 
 
 def next_ethr(ethr: float, accuracy: float, nelec: float, iteration: int) -> float:
@@ -218,15 +327,31 @@ def next_ethr(ethr: float, accuracy: float, nelec: float, iteration: int) -> flo
     return max(min(ethr, 0.1 * accuracy / max(1.0, nelec)), ETHR_MIN)
 
 
-def default_nbnd(nelec: float, occupations: str) -> int:
+def default_nbnd(nelec: float, occupations: str, nelup=None, neldw=None) -> int:
     """QE's default band count (``PW/src/setup.f90``).
 
     An insulator needs exactly the occupied bands; a smeared calculation needs
     20% more so there are empty states for the Fermi level to sit among.
+
+    With two channels the count is ``MAX(nelec/degspin, nelup, neldw)`` and
+    ``degspin`` is 1, so what decides it is the *fuller* channel: eight
+    electrons split 5/3 need five bands, not four. Getting this wrong is
+    immediately visible -- QE prints "number of Kohn-Sham states" -- but only if
+    it is looked at, and a run with too few bands converges to a wrong energy
+    rather than failing.
     """
     occupied = int(round(nelec / 2.0))
+    if nelup is not None:
+        occupied = max(occupied, int(round(nelup)), int(round(neldw)))
     if occupations == "fixed":
         return max(occupied, 1)
+    if nelup is not None:
+        return max(
+            int(round(1.2 * nelec / 2.0)),
+            int(round(1.2 * nelup)),
+            int(round(1.2 * neldw)),
+            occupied + 4,
+        )
     return max(int(round(1.2 * nelec / 2.0)), occupied + 4)
 
 
@@ -238,21 +363,44 @@ class SCFResult:
     iterations: int
     total_energy: float
     energy_terms: dict
-    eigenvalues: np.ndarray  # (nk, nbnd), Ry
-    occupations: np.ndarray  # (nk, nbnd), the weights wg
-    wavefunctions: jnp.ndarray  # (nk, nbnd, npwx)
-    density: jnp.ndarray  # (n1, n2, n3), electrons/bohr^3
-    potential: jnp.ndarray  # (n1, n2, n3), Ry -- the total local potential
+    #: ``(nk, nbnd)`` for an unpolarized run and ``(2, nk, nbnd)`` for LSDA, in
+    #: Ry. The spin axis is *squeezed away* when there is only one channel, so
+    #: that everything written against the unpolarized shape keeps working and
+    #: a polarized result cannot be mistaken for one. Use
+    #: :attr:`eigenvalues_by_spin` where the axis must always be there.
+    eigenvalues: np.ndarray
+    occupations: np.ndarray  # same shape as eigenvalues -- the weights wg
+    wavefunctions: jnp.ndarray  # (nspin, nk, nbnd, npwx)
+    density: jnp.ndarray  # (nspin, n1, n2, n3), electrons/bohr^3
+    potential: jnp.ndarray  # (nspin, n1, n2, n3), Ry -- the total local potential
     fermi_energy: float | None = None
     homo: float | None = None
     lumo: float | None = None
     #: QE's estimated scf accuracy at the last iteration, in Ry.
     accuracy: float | None = None
+    nspin: int = 1
+    #: ``int (rho_up - rho_dw)`` and ``int |rho_up - rho_dw|``, in Bohr
+    #: magnetons per cell -- the two numbers QE prints. ``None`` unpolarized.
+    magnetization: float | None = None
+    absolute_magnetization: float | None = None
+    #: Only when ``tot_magnetization`` constrained the two channels separately.
+    fermi_energy_up: float | None = None
+    fermi_energy_down: float | None = None
     history: list = field(default_factory=list)
 
     @property
     def eigenvalues_ev(self) -> np.ndarray:
         return self.eigenvalues * RY_TO_EV
+
+    @property
+    def eigenvalues_by_spin(self) -> np.ndarray:
+        """``(nspin, nk, nbnd)`` whatever ``nspin`` is."""
+        return self.eigenvalues if self.nspin == 2 else self.eigenvalues[None]
+
+    @property
+    def total_density(self) -> jnp.ndarray:
+        """``(n1, n2, n3)``: the charge density, both channels summed."""
+        return jnp.sum(self.density, axis=0)
 
 
 class Calculation:
@@ -270,10 +418,17 @@ class Calculation:
         basis: Basis | None = None,
         diagonalization: str | None = None,
     ):
+        system = _without_gamma_storage(system)
         self.system = system
         self.eigensolver = get_eigensolver(diagonalization)
         self.pseudos = tuple(pseudos)
         self.basis = basis if basis is not None else build_basis(system)
+        if self.basis.dense.gamma_only:
+            raise NotImplementedError(
+                "the gamma-only half-sphere storage is not implemented in h_psi, "
+                "sum_band or the eigensolver; pass a basis built with "
+                "gamma_only=False"
+            )
 
         # Which exchange-correlation functional this run uses is decided once,
         # here, from the pseudopotentials and the input -- not defaulted to
@@ -283,7 +438,20 @@ class Calculation:
             [pseudo.functional for pseudo in self.pseudos], system.input_dft
         )
 
+        self.nspin = int(system.nspin)
+        if self.nspin == 2:
+            # Refused here rather than where it would first divide by something:
+            # a functional whose correlation has no polarized parameterisation
+            # would otherwise run with the unpolarized one and converge to a
+            # number that is wrong and looks right.
+            self.functional.require_spin()
+
         self.nelec = sum(self.pseudos[t].z_valence for t in system.structure.types)
+        # ``set_nelup_neldw``. Only used when the magnetization is constrained,
+        # but computed always because ``default_nbnd`` needs both counts.
+        self.nelup, self.neldw = spin_electron_counts(
+            self.nelec, system.tot_magnetization
+        )
         self.charges = np.array([self.pseudos[t].z_valence for t in system.structure.types])
 
         # Two grids, and which quantity lives on which is QE's split: the
@@ -363,18 +531,24 @@ class Calculation:
             smooth.ecut >= 4.0 * system.ecutwfc - 1e-8 and not smooth.gamma_only
         )
 
+        # ``nosym`` is not a speed switch. An input can ask for a state that
+        # does not have the crystal's symmetry -- one of an atom's three p
+        # channels occupied and the others empty, which is what
+        # ``pw_pawatom/paw-atom_spin*.in`` does -- and symmetrising the density
+        # or ``becsum`` anyway averages the three and converges somewhere else
+        # entirely. QE requires ``nosym = .true.`` for those inputs; honouring it
+        # is a correctness matter.
         self.symmetries = find_symmetries(system.cell, system.structure)
+        use_symmetry = not system.nosym and self.symmetries.nsym > 1
         # PAW's projector occupations need the symmetry imposed on them
         # explicitly -- see pypresso.paw.symmetry. Built after the symmetry
         # search, which is why it is not up with the rest of the PAW setup.
         self._becsum_symmetry = (
             build_becsum_symmetry(self.pseudos, system.structure, system.cell,
                                   self.symmetries)
-            if self.paw is not None else None
+            if self.paw is not None and use_symmetry else None
         )
-        self._symmetry_maps = (
-            symmetry_maps(dense, self.symmetries) if self.symmetries.nsym > 1 else None
-        )
+        self._symmetry_maps = symmetry_maps(dense, self.symmetries) if use_symmetry else None
 
     def _per_atom(self, per_species) -> jnp.ndarray:
         """A per-species ``(nh, nh)`` quantity, as the ``(nkb, nkb)`` block matrix."""
@@ -430,12 +604,19 @@ class Calculation:
     def onecenter(self, becsum_):
         """``(epaw, ddd_paw)`` for the current ``becsum``, as a block matrix.
 
-        ``(0, None)`` when no species is PAW.
+        ``(0, None)`` when no species is PAW. ``ddd_paw`` is
+        ``(nspin, nkb, nkb)``: the one-centre potential differs between the
+        channels exactly as the grid potential does.
         """
         if self.paw is None:
             return jnp.asarray(0.0), None
         energy, blocks = _paw_onecenter(self.paw, becsum_)
-        return energy, self.augmentation.block_matrix(blocks)
+        return energy, jnp.stack([
+            self.augmentation.block_matrix(
+                tuple(None if b is None else b[spin] for b in blocks)
+            )
+            for spin in range(self.nspin)
+        ])
 
     def becsum(self, wavefunctions, weights) -> tuple:
         """``becsum`` for every ultrasoft species, or ``()`` when there are none."""
@@ -499,35 +680,85 @@ class Calculation:
         )
         return self.symmetrize(self.augmented(to_dense(rho, smooth, dense), becsum_))
 
-    def hamiltonian(self, v_scf: jnp.ndarray, ddd_paw=None) -> Hamiltonian:
+    def hamiltonian(self, v_scf: jnp.ndarray, ddd_paw=None) -> tuple:
+        """One :class:`Hamiltonian` per spin channel.
+
+        The kinetic term, the projectors and the local pseudopotential are
+        shared; the self-consistent potential and ``D_ij`` are not. Returned as
+        a tuple rather than one object with a spin axis because the eigensolver
+        is written for a single Hamiltonian and a channel is simply another
+        problem to solve -- which is also how QE sees it, its ``2 nks`` k-list
+        differing only in which ``vrs(:, isk)`` each point reads.
+        """
         # ``set_vrs`` adds the fixed local pseudopotential to the self-consistent
         # part on the dense grid, and ``interpolate`` hands the wavefunction
         # transforms a smooth-grid copy. ``newd`` reads the *dense* one, since
         # the augmentation charge it integrates against is only representable
         # there.
-        total = self.vltot + v_scf
+        total = self.vltot[None] + v_scf
         deeq = self.coefficients(total, ddd_paw)
-        potential = to_smooth(total, self.basis.dense, self.basis.smooth)
-        return Hamiltonian(
-            kinetic=self.kinetic,
-            potential=potential,
-            # the same potential with its xy plane contiguous, which is the
-            # layout the stick transforms hold the field in
-            potential_wave=jnp.moveaxis(potential, -1, -3),
-            sticks=self.sticks,
-            fft_index=self.fft_index,
-            mask=self.basis.planewaves.mask,
-            projectors=self.projectors,
-            grid=self.basis.smooth.grid,
-            resolves_differences=self.resolves_differences,
-            deeq=deeq,
-        )
+        hamiltonians = []
+        for spin in range(self.nspin):
+            potential = to_smooth(total[spin], self.basis.dense, self.basis.smooth)
+            hamiltonians.append(Hamiltonian(
+                kinetic=self.kinetic,
+                potential=potential,
+                # the same potential with its xy plane contiguous, which is the
+                # layout the stick transforms hold the field in
+                potential_wave=jnp.moveaxis(potential, -1, -3),
+                sticks=self.sticks,
+                fft_index=self.fft_index,
+                mask=self.basis.planewaves.mask,
+                projectors=self.projectors,
+                grid=self.basis.smooth.grid,
+                resolves_differences=self.resolves_differences,
+                deeq=None if deeq is None else deeq[spin],
+            ))
+        return tuple(hamiltonians)
 
     def starting_density(self) -> jnp.ndarray:
-        rho_g = starting_charge(
-            self.pseudos, self.system.structure, self.system.cell, self.basis.dense, self.nelec
+        """The superposition of atomic charges, split by ``starting_magnetization``.
+
+        ``atomic_rho_g``: the total is the sum of the species' tabulated atomic
+        charges, and the magnetization is the same sum weighted by each species'
+        ``starting_magnetization``. Nothing else in the calculation breaks the
+        spin symmetry -- with every ``starting_magnetization`` at zero the two
+        channels start identical, stay identical, and the run converges to the
+        unpolarized solution, which for a symmetric crystal is always a
+        stationary point. That is why QE demands the input variable rather than
+        finding the magnetic state on its own.
+        """
+        dense = self.basis.dense
+        if self.nspin == 1:
+            rho_g = starting_charge(
+                self.pseudos, self.system.structure, self.system.cell, dense,
+                self.nelec,
+            )
+            return jnp.real(g_to_r(rho_g, dense.fft_index, dense.grid))[None]
+
+        rho_g, magnetization_g = starting_charge(
+            self.pseudos, self.system.structure, self.system.cell, dense, self.nelec,
+            magnetization=self.spin_weights[0] - self.spin_weights[1],
         )
-        return jnp.real(g_to_r(rho_g, self.basis.dense.fft_index, self.basis.dense.grid))
+        channels = jnp.stack([rho_g + magnetization_g, rho_g - magnetization_g]) / 2.0
+        return jnp.real(g_to_r(channels, dense.fft_index, dense.grid))
+
+    @property
+    def spin_weights(self) -> np.ndarray:
+        """``0.5 (1 +- starting_magnetization)`` per species, or ``[1]``.
+
+        The split ``PAW_atomic_becsum`` applies to the reference occupations,
+        which is the same split :meth:`starting_density` applies to the atomic
+        charge -- the two starting guesses have to agree about how polarized the
+        atom is or the first iteration contradicts itself.
+        """
+        ntyp = self.system.structure.ntyp
+        magnetization = np.zeros(ntyp)
+        given = np.asarray(self.system.starting_magnetization, dtype=float)
+        magnetization[: given.size] = given[:ntyp]
+        if self.nspin == 1:
+            return np.ones((1, ntyp))
+        return 0.5 * np.stack([1.0 + magnetization, 1.0 - magnetization])
 
     def starting_becsum(self) -> tuple:
         """The projector occupations of isolated atoms (``PAW_atomic_becsum``).
@@ -554,13 +785,16 @@ class Calculation:
             diagonal = np.array([
                 occupations[nb] / (2 * l + 1) for nb, l, _ in projector_channels(pseudo)
             ])
+            per_spin = self.spin_weights[:, t][:, None] * diagonal[None, :]
             becsum.append(
-                jnp.broadcast_to(jnp.diag(jnp.asarray(diagonal)),
-                                 (len(atoms), pseudo.nh, pseudo.nh))
+                jnp.broadcast_to(
+                    jnp.stack([jnp.diag(jnp.asarray(row)) for row in per_spin])[:, None],
+                    (self.nspin, len(atoms), pseudo.nh, pseudo.nh),
+                )
             )
         return tuple(becsum)
 
-    def starting_wavefunctions(self, hamiltonian: Hamiltonian, nbnd: int) -> jnp.ndarray:
+    def starting_wavefunctions(self, hamiltonians, nbnd: int) -> jnp.ndarray:
         """The first guess at the wavefunctions, from the atomic orbitals.
 
         QE's ``wfcinit``: build the pseudo-atomic orbitals of every atom, then
@@ -588,11 +822,18 @@ class Calculation:
             )(self.kinetic, self.basis.planewaves.mask)
             atomic = jnp.concatenate([atomic, extra], axis=1)
 
-        _, vectors = _rotate_all(hamiltonian, atomic, nbnd)
-        return vectors
+        # The same atomic orbitals seed both channels; what differs is the
+        # Hamiltonian they are then diagonalised inside, which is already
+        # spin-split at the first iteration because the starting density is.
+        return jnp.stack([
+            _rotate_all(hamiltonian, atomic, nbnd)[1] for hamiltonian in hamiltonians
+        ])
 
-    def diagonalize(self, hamiltonian: Hamiltonian, nbnd: int, psi0=None, ethr=None):
-        """Solve at every k-point. Returns ``(eigenvalues, wavefunctions)``.
+    def diagonalize(self, hamiltonians, nbnd: int, psi0=None, ethr=None):
+        """Solve at every k-point of every channel.
+
+        Returns ``(eigenvalues, wavefunctions)`` shaped ``(nspin, nk, nbnd)``
+        and ``(nspin, nk, nbnd, npwx)``.
 
         ``psi0`` is the previous iteration's wavefunctions. Passing them is what
         makes an iterative solver cheap after the first SCF iteration: the
@@ -602,10 +843,33 @@ class Calculation:
         ``ethr`` is how accurately to converge each eigenvalue. A direct solver
         ignores both.
         """
-        return self.eigensolver(hamiltonian, nbnd, psi0, ethr)
+        solved = [
+            self.eigensolver(
+                hamiltonian, nbnd, None if psi0 is None else psi0[spin], ethr
+            )
+            for spin, hamiltonian in enumerate(hamiltonians)
+        ]
+        return (
+            jnp.stack([values for values, _ in solved]),
+            jnp.stack([vectors for _, vectors in solved]),
+        )
+
+    @property
+    def two_fermi_energies(self) -> bool:
+        """Whether the magnetization is constrained (QE's ``two_fermi_energies``).
+
+        Set by ``tot_magnetization`` being given at all, not by its value:
+        ``input.f90`` turns the sentinel into the flag, and the flag decides
+        whether the channels share a Fermi level or each gets its own.
+        """
+        return self.nspin == 2 and self.system.tot_magnetization is not None
 
     def occupations(self, eigenvalues):
-        """Occupation weights, plus whichever level statistic applies."""
+        """Occupation weights, plus whichever level statistic applies.
+
+        ``eigenvalues`` is ``(nspin, nk, nbnd)`` and the weights come back the
+        same shape.
+        """
         weights = self.system.kpoints.weights
         scheme = self.system.occupations
 
@@ -632,15 +896,26 @@ class Calculation:
             )
             return wg, {"fermi_energy": float(ef)}
 
+        counts = (self.nelup, self.neldw) if self.two_fermi_energies else None
         wg, ef = smeared_occupations(
-            eigenvalues, weights, self.nelec, self.system.degauss, self.system.smearing
+            eigenvalues, weights, self.nelec, self.system.degauss,
+            self.system.smearing, counts=counts,
         )
         entropy = float(
             smearing_entropy(
                 eigenvalues, weights, ef, self.system.degauss, self.system.smearing
             )
         )
-        return wg, {"fermi_energy": float(ef), "smearing": entropy}
+        levels = {"smearing": entropy}
+        if self.two_fermi_energies:
+            levels["fermi_energy_up"] = float(ef[0])
+            levels["fermi_energy_down"] = float(ef[1])
+            # QE prints the mean as "the" Fermi energy in this case, with a
+            # comment saying it is only to keep the printed value from being NaN.
+            levels["fermi_energy"] = 0.5 * (float(ef[0]) + float(ef[1]))
+        else:
+            levels["fermi_energy"] = float(ef)
+        return wg, levels
 
 
 def run_scf(
@@ -662,7 +937,11 @@ def run_scf(
     means the same thing here as in a ``pw.x`` input.
     """
     calculation = calculation or Calculation(system, pseudos, diagonalization=diagonalization)
-    nbnd = nbnd or system.nbnd or default_nbnd(calculation.nelec, system.occupations)
+    nbnd = nbnd or system.nbnd or default_nbnd(
+        calculation.nelec,
+        system.occupations,
+        *((calculation.nelup, calculation.neldw) if system.nspin == 2 else (None, None)),
+    )
 
     mixer = get_mixer(mixing_mode, beta=mixing_beta)
     rho = calculation.starting_density()
@@ -685,18 +964,18 @@ def run_scf(
 
         potential = calculation.potential(rho)
         epaw, ddd_paw = calculation.onecenter(becsum_state)
-        hamiltonian = calculation.hamiltonian(potential.v_scf, ddd_paw)
+        hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw)
 
         # QE's threshold for judging the *first* diagonalisation after the fact:
         # if the density turns out to be better than the eigenvalues, the loose
         # starting ethr was a false economy and the iteration is redone.
         floor = ethr * max(1.0, calculation.nelec)
         if wavefunctions is None:
-            wavefunctions = calculation.starting_wavefunctions(hamiltonian, nbnd)
+            wavefunctions = calculation.starting_wavefunctions(hamiltonians, nbnd)
 
         for attempt in range(2):
             eigenvalues, wavefunctions = calculation.diagonalize(
-                hamiltonian, nbnd, wavefunctions, ethr
+                hamiltonians, nbnd, wavefunctions, ethr
             )
             wg, levels = calculation.occupations(eigenvalues)
             becsum_out = calculation.becsum(wavefunctions, wg)
@@ -769,13 +1048,27 @@ def run_scf(
         total = sum(terms.values())
 
         change = None if previous_energy is None else abs(total - previous_energy)
-        history.append({"iteration": iteration, "total_energy": total,
-                        "accuracy": accuracy, "ethr": ethr,
-                        "residual": residual, "change": change})
+        magnetization = None
+        if calculation.nspin == 2:
+            magnetization = [
+                float(x) for x in _magnetization(rho_out, system.cell.volume)
+            ]
+
+        entry = {"iteration": iteration, "total_energy": total,
+                 "accuracy": accuracy, "ethr": ethr,
+                 "residual": residual, "change": change}
+        if magnetization is not None:
+            entry["magnetization"] = magnetization[0]
+            entry["absolute_magnetization"] = magnetization[1]
+        history.append(entry)
         if verbose:
+            extra = (
+                "" if magnetization is None
+                else f"   m = {magnetization[0]:7.4f} ({magnetization[1]:7.4f}) mu_B"
+            )
             print(f"  iteration {iteration:3d}   E = {total:16.8f} Ry"
                   f"   accuracy = {accuracy:.2e}   ethr = {ethr:.2e}"
-                  f"   |drho| = {residual:.2e}")
+                  f"   |drho| = {residual:.2e}{extra}")
 
         if converged:
             rho = rho_out
@@ -784,18 +1077,26 @@ def run_scf(
         previous_energy = total
         rho, becsum_state = _mix(mixer, rho, rho_out, becsum_state, becsum_out)
 
+    nspin = calculation.nspin
     return SCFResult(
         converged=converged,
         iterations=iteration,
         total_energy=total,
         energy_terms=terms,
-        eigenvalues=np.asarray(eigenvalues),
-        occupations=np.asarray(wg),
+        # The spin axis is dropped when there is only one channel: an
+        # unpolarized result then has exactly the shape it always had.
+        eigenvalues=np.asarray(eigenvalues if nspin == 2 else eigenvalues[0]),
+        occupations=np.asarray(wg if nspin == 2 else wg[0]),
         wavefunctions=wavefunctions,
         density=rho,
-        potential=calculation.vltot + potential.v_scf,
+        potential=calculation.vltot[None] + potential.v_scf,
         accuracy=accuracy,
+        nspin=nspin,
+        magnetization=None if magnetization is None else magnetization[0],
+        absolute_magnetization=None if magnetization is None else magnetization[1],
         fermi_energy=levels.get("fermi_energy"),
+        fermi_energy_up=levels.get("fermi_energy_up"),
+        fermi_energy_down=levels.get("fermi_energy_down"),
         homo=levels.get("homo"),
         lumo=levels.get("lumo"),
         history=history,

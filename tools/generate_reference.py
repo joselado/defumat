@@ -58,6 +58,20 @@ RESTAMPED = [
     "pw_scf/scf-kcrys.in",
     "pw_scf/scf-k0.in",
     "pw_scf/scf-occ.in",
+    # The spin and isolated-atom cases (P9). These have a second reason to be
+    # restamped on top of the FFT-grid one: their committed benchmarks are QE
+    # 6.1 runs stopped at conv_thr = 1e-6, where the printed energy *terms* are
+    # only good to ~1e-4 Ry, and the pw_lsda ones additionally print a total
+    # magnetization that is worth comparing at the same threshold as the energy.
+    "pw_atom/atom.in",
+    "pw_atom/atom-lsda.in",
+    "pw_atom/atom-sigmapbe.in",
+    "pw_lsda/lsda.in",
+    "pw_lsda/lsda-tot_magnetization.in",
+    "pw_lsda/lsda-nelup+neldw.in",
+    "pw_pawatom/paw-atom_lda.in",
+    "pw_pawatom/paw-atom_spin_lda.in",
+    "pw_pawatom/paw-atom_spin.in",
 ]
 
 
@@ -155,17 +169,17 @@ def main(argv=None) -> int:
 
     wanted = set(args.cases)
     inputs = sorted(c for c in CASES.glob("*.in") if not wanted or c.stem in wanted)
-    if wanted and len(inputs) != len(wanted):
-        missing = wanted - {c.stem for c in inputs}
-        print(f"no such case: {', '.join(sorted(missing))}", file=sys.stderr)
+    known = {c.stem for c in inputs} | {Path(rel).stem for rel in RESTAMPED}
+    if wanted - known:
+        print(f"no such case: {', '.join(sorted(wanted - known))}", file=sys.stderr)
         return 1
 
     todo = [(case, reference_path(case), None) for case in inputs]
-    if not wanted:
-        todo += [
-            (QE_ROOT / "test-suite" / rel, restamped_path(rel), RESTAMPED_CONV_THR)
-            for rel in RESTAMPED
-        ]
+    todo += [
+        (QE_ROOT / "test-suite" / rel, restamped_path(rel), RESTAMPED_CONV_THR)
+        for rel in RESTAMPED
+        if not wanted or Path(rel).stem in wanted
+    ]
 
     for case, out, conv_thr in todo:
         if not case.is_file():

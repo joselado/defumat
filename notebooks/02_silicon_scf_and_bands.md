@@ -290,7 +290,9 @@ from pypresso.basis.fft import r_to_g
 # Evaluate the density exactly at arbitrary points from its Fourier components,
 # rather than sampling the 16^3 grid: rho(r) = sum_G rho(G) exp(iG.r). The grid
 # holds all the information, but reading it off directly gives a blocky picture.
-rho_g = np.asarray(r_to_g(result.density, basis.dense.fft_index))
+# ``result.density`` is (nspin, n1, n2, n3) since P9; with one channel
+# ``total_density`` is that channel and with two it is their sum.
+rho_g = np.asarray(r_to_g(result.total_density, basis.dense.fft_index))
 g_cart = np.asarray(basis.dense.cartesian(system.cell))
 tau = np.asarray(system.structure.positions)
 
@@ -330,7 +332,7 @@ axes[1].set_title("The covalent bond: charge piled up between the atoms")
 axes[1].grid(alpha=0.3)
 fig.tight_layout()
 
-density = np.asarray(result.density)
+density = np.asarray(result.total_density)
 print("integral of rho over the cell = %.8f electrons"
       % (density.sum() * float(system.cell.volume) / density.size))
 print("density at the bond centre    = %.4f electrons/bohr^3" % density_at((tau[0] + 0.5 * bond)[None])[0])

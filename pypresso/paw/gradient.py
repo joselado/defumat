@@ -35,6 +35,7 @@ The components are ordered ``(r, phi, theta)`` throughout, which is the order
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 
 __all__ = ["radial_derivative", "onecenter_gradient_correction"]
@@ -75,23 +76,59 @@ def onecenter_gradient_correction(rho_lm, rho_rad, core, paw):
     """``(v_lm, energy)``: what a GGA adds to one on-site potential and energy.
 
     Args:
-        rho_lm: ``(nlm, mesh)``, holding ``r^2 rho_lm`` as everything in
+        rho_lm: ``(nspin, nlm, mesh)``, holding ``r^2 rho_lm`` as everything in
             :mod:`pypresso.paw.onecenter` does.
-        rho_rad: ``(nx, mesh)``, the same density already put on the sphere --
-            the local part needed it too, so it is passed in rather than
-            rebuilt.
-        core: ``(mesh,)`` core charge, spherical.
+        rho_rad: ``(nspin, nx, mesh)``, the same density already put on the
+            sphere -- the local part needed it too, so it is passed in rather
+            than rebuilt.
+        core: ``(mesh,)`` core charge, spherical, shared equally between the
+            channels (``co2 = rho_core / nspin_gga`` in ``PAW_gcxc_potential``).
         paw: the species' precomputed tables.
     """
     nlm = paw.nlm
     r2 = paw.r2
-    density = jnp.abs(rho_rad / r2 + core)  # (nx, mesh)
+    nspin = rho_lm.shape[0]
+    weighted = paw.angular.weighted_ylm
 
-    grad = _gradient(rho_lm, density, paw)  # (3, nx, mesh)
-    sigma = jnp.sum(grad * grad, axis=0)
+    if nspin == 1:
+        # ``rho_full(ixk,1) = ABS(...)``: QE takes the absolute value in the
+        # unpolarized branch only, so it stays inside this one.
+        density = jnp.abs(rho_rad[0] / r2 + core)  # (nx, mesh)
 
-    v1, v2 = paw.functional.gradient_potentials(density, sigma)
-    energy_density = paw.functional.gradient_energy(density, sigma)
+        grad = _gradient(rho_lm[0], density, paw)  # (3, nx, mesh)
+        sigma = jnp.sum(grad * grad, axis=0)
+
+        v1, v2 = paw.functional.gradient_potentials(density, sigma)
+        energy_density = paw.functional.gradient_energy(density, sigma)
+
+        # h = v2 grad rho, with the r^2 that the divergence expects to find in
+        # its input, and the theta component divided by sin(theta) -- see the
+        # module docstring.
+        h = v2[None, ...] * grad * r2[None, None, :]
+        h = h.at[2].divide(paw.angular.sin_theta[:, None])
+
+        v_lm = jnp.einsum("xl,xr->lr", weighted[:, :nlm], v1)
+        h_lm = jnp.einsum("xl,cxr->clr", weighted, h)
+        potential = (v_lm - _divergence(h_lm, paw))[None]
+    else:
+        density = rho_rad / r2 + core / nspin  # (nspin, nx, mesh)
+        grad = jnp.stack(
+            [_gradient(rho_lm[s], density[s], paw) for s in range(nspin)]
+        )  # (nspin, 3, nx, mesh)
+
+        # ``h`` comes out of the differentiation already carrying the cross term
+        # QE adds by hand: correlation depends on the *total* gradient, so
+        # ``d e / d(grad rho_up)`` sees ``grad rho_dw`` too. That is ``v2cud``,
+        # and here it is not a separate quantity at all.
+        v1, h = paw.functional.spin_gradient_terms(density, grad)
+        energy_density = paw.functional.spin_gradient_energy(density, grad)
+
+        h = h * r2
+        h = h.at[:, 2].divide(paw.angular.sin_theta[:, None])
+
+        v_lm = jnp.einsum("xl,sxr->slr", weighted[:, :nlm], v1)
+        h_lm = jnp.einsum("xl,scxr->sclr", weighted, h)
+        potential = v_lm - jax.vmap(_divergence, in_axes=(0, None))(h_lm, paw)
 
     # The energy integrates over the sphere with the quadrature weights and over
     # the mesh with Simpson's, against r^2 -- the r^2 that ``rho_lm`` carries
@@ -99,18 +136,7 @@ def onecenter_gradient_correction(rho_lm, rho_rad, core, paw):
     energy = jnp.sum(
         paw.angular.weights[:, None] * energy_density * (r2 * paw.weights_full)[None, :]
     )
-
-    # h = v2 grad rho, with the r^2 that the divergence expects to find in its
-    # input, and the theta component divided by sin(theta) -- see the module
-    # docstring.
-    h = v2[None, ...] * grad * r2[None, None, :]
-    h = h.at[2].divide(paw.angular.sin_theta[:, None])
-
-    weighted = paw.angular.weighted_ylm
-    v_lm = jnp.einsum("xl,xr->lr", weighted[:, :nlm], v1)
-    h_lm = jnp.einsum("xl,cxr->clr", weighted, h)
-
-    return v_lm - _divergence(h_lm, paw), energy
+    return potential, energy
 
 
 def _gradient(rho_lm, density, paw):

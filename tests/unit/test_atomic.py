@@ -41,7 +41,7 @@ def silicon(pseudo_dir):
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
     calculation = Calculation(system, pseudos)
     potential = v_of_rho(calculation.starting_density(), calculation.basis.dense, system.cell)
-    return system, pseudos, calculation, calculation.hamiltonian(potential.v_scf)
+    return system, pseudos, calculation, calculation.hamiltonian(potential.v_scf)[0]
 
 
 def test_the_channel_count_is_one_per_m_per_orbital(silicon):
