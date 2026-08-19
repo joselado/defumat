@@ -37,14 +37,21 @@ a correctness check on every optimisation.
 | **`si-1k-ecut40`** — 2 atoms, 1131 PWs | 0.011 s | 0.035 s | **3.1x** |
 | **`si8-1k`** — 8 atoms, 738 PWs | 0.020 s | 0.057 s | **2.8x** |
 | **`si8-1k-ecut30`** — 8 atoms, 2950 PWs | 0.070 s | 0.265 s | **3.8x** |
+| **`si16-1k`** — 16 atoms, 1476 PWs | 0.079 s | 0.307 s | **3.9x** |
+| **`si16-1k-ecut30`** — 16 atoms, 5900 PWs | 0.278 s | 1.159 s | **4.2x** |
 | **`pw_scf/scf-kauto`** — 2 k, reduced from 8 | 0.003 s | 0.011 s | **4.3x** |
 | **`pw_metal/metal`** — Al, 10 k | 0.013 s | 0.052 s | **3.9x** |
 
-Total energies against QE: 3.5e-9 Ry on the eight-atom cell at 30 Ry, 1.5e-9 at
-12 Ry, 2.6e-9 for two atoms at 40 Ry, 6.3e-8 for the metal. The eight-atom cases
-are an independent check as well as a bigger one: the conventional cubic cell is
-the same crystal as the primitive fcc cell of the other benchmarks, seen in a
-different cell with four times the atoms, bands and plane waves.
+Total energies against QE: **9.7e-10 Ry** on the sixteen-atom cell at 30 Ry,
+5.8e-9 at 12 Ry, 3.5e-9 and 1.5e-9 on the eight-atom cell, 2.6e-9 for two atoms
+at 40 Ry, 6.3e-8 for the metal.
+
+The supercells are independent checks as well as bigger ones. All of them are the
+same crystal in different cells — the primitive fcc cell has two atoms, the
+conventional cubic cell eight, and doubling that along z gives sixteen — so the
+energy per atom is known in advance. At 30 Ry the sixteen-atom cell comes out at
+−126.72076070 Ry against exactly twice the eight-atom cell's −63.36038036, which
+is 2e-8 Ry apart on a 126 Ry total.
 
 Best of five runs on each side, and worth taking as ±20%: QE prints its timings
 to 0.01 s, so on the small cases its per-iteration figure is one significant
@@ -365,6 +372,32 @@ Together: 4.5x to **3.8x** on the eight-atom cell at 30 Ry, and every other
 benchmark improved too. The eight-atom cell remains the worst ratio of the six,
 which is the honest place to look next.
 
+## At sixteen atoms
+
+The largest case here — 5900 plane waves, 32 bands, a 36x36x72 grid — is where
+the cost is genuinely the physics rather than fixed overheads. Per SCF iteration
+(1055 ms):
+
+| | | |
+|---|---|---|
+| diagonalise | 886 ms | **84%** |
+| density | 133 ms | 13% |
+| everything else | 36 ms | 3% |
+
+and inside one Davidson step (236 ms, so about 3.75 steps per iteration):
+
+| | | |
+|---|---|---|
+| `h_psi`, 32 bands | 167 ms | **71%** |
+| projection block update | 32 ms | 14% |
+| two rotations, 128 -> 32 vectors | 32 ms | 14% |
+| generalised eigh, 128x128 | 4.5 ms | 2% |
+
+The subspace linear algebra, invisible at two atoms and 5% at eight, is 27% of a
+step here. Both terms are `O(nvecx nbnd npw)` and both are what `cegterg`'s ZGEMMs
+do too, so there is no obvious waste left in them — but they are the reason the
+ratio drifts up with size rather than down.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -390,12 +423,25 @@ instinct. None of these may change a validated number.
   transform). There is no library-level win available; we are using a good one.
 
 * **Sticks/pencil FFTs**, QE's decomposition, where the 1D transforms are done
-  only along columns the wavefunction sphere actually occupies. The sphere does
-  touch only 16% of the z-columns and 50% of the x-planes, which looks like a
-  large saving — but against the *fused* 3D transform the ceiling is **1.13x**,
-  because the final pass runs on dense data and is 58% of the cost on its own.
-  Splitting the transform by hand also gives up XLA's fusion: three separate
-  passes cost 4.8 ms where the fused `fftn` costs 3.3 ms.
+  only along the columns the wavefunction sphere actually occupies — which is
+  16-19% of them, so it looks like a large saving. Measured in its proper
+  two-stage form (one 1D transform on the compacted sticks, then a *fused* 2D
+  transform over the box, not three separate 1D passes) it is **slower, and
+  increasingly so with size**:
+
+  | | full 3D `fftn` | 1D on sticks + scatter + 2D | |
+  |---|---|---|---|
+  | 2 atoms, 30^3 | 1.32 ms | 1.46 ms | 0.90x |
+  | 8 atoms, 36^3 | 10.19 ms | 14.39 ms | 0.71x |
+  | 16 atoms, 36x36x72 | 67.77 ms | 142.49 ms | 0.48x |
+
+  The reason is the second stage: a 2D transform over the two *outer*, strided
+  axes costs more on its own than the whole fused 3D transform (107 ms against
+  68 ms for the largest case), and the scatter from sticks into the box adds
+  another 32 ms. XLA's `fftn` chooses its pass order and transposes internally;
+  decomposing it by hand throws that away and buys less than it loses. QE's
+  version works because it owns the data layout and the transposes — that is a
+  property of its implementation, not of the mathematics, and it does not port.
 
 * **Applying `H` only to unconverged bands**, as `cegterg` does — *the partial
   blocks*, that is. Counting the unconverged roots at every Davidson step and
@@ -444,3 +490,4 @@ instinct. None of these may change a validated number.
 | 2026-08-18 | Persistent XLA compilation cache, on by default | process wall 9.7 → 4.3 s; test suite 134 → 57 s |
 | 2026-08-19 | Cap XLA's CPU thread pool at four cores by affinity; fix the harness, which had claimed one core while using 1.8 | 1.7x out of the box; 14 cores was the worst setting measured |
 | 2026-08-19 | Davidson: extend the projected matrices a block at a time instead of rebuilding them, and test convergence after expanding rather than before | 4.5x → 3.8x on eight atoms; one wasted `h_psi` per call removed |
+| 2026-08-19 | Sixteen-atom benchmark added; QE's stick decomposition measured in its proper form and rejected | 3.9x / 4.2x; sticks are 0.48x at that size |

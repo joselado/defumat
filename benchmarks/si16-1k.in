@@ -1,0 +1,41 @@
+! Silicon, sixteen atoms: the cubic cell of si8-1k.in doubled along z.
+!
+! Twice si8-1k.in again -- 64 electrons, 32 bands -- in a tetragonal cell with
+! c/a = 2. Still the same crystal, so the energy per atom is known from the
+! smaller cells and any disagreement is this code's fault rather than the
+! system's. This is the size at which the cost is genuinely dominated by the
+! physics rather than by fixed overheads, which is what makes it the useful
+! case to optimise against.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=6, celldm(1) =10.20, celldm(3) =2.0,
+    nat=16, ntyp=1,
+    ecutwfc=12.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ Si  0.00000  0.00000  0.00000
+ Si  0.00000  0.50000  0.25000
+ Si  0.50000  0.00000  0.25000
+ Si  0.50000  0.50000  0.00000
+ Si  0.25000  0.25000  0.12500
+ Si  0.25000  0.75000  0.37500
+ Si  0.75000  0.25000  0.37500
+ Si  0.75000  0.75000  0.12500
+ Si  0.00000  0.00000  0.50000
+ Si  0.00000  0.50000  0.75000
+ Si  0.50000  0.00000  0.75000
+ Si  0.50000  0.50000  0.50000
+ Si  0.25000  0.25000  0.62500
+ Si  0.25000  0.75000  0.87500
+ Si  0.75000  0.25000  0.87500
+ Si  0.75000  0.75000  0.62500
+K_POINTS
+  1
+   0.250000  0.250000  0.250000   1.00
