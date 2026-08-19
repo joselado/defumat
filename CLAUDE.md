@@ -29,8 +29,9 @@ spin (P9), and the rest of P10 (k-axis sharding and GPU).
   committed UPF files (QE's test-suite downloads rather than ships them).
 - Git repository, with `quantum_espresso/` gitignored — 285 MB of vendored reference does
   not belong in history. Tests that need it skip cleanly when it is absent.
-- `/u/40/ladovj1/unix/Documents/...` is a symlink to `/u/40/ladovj1/data/Documents/...`;
-  both working directories are the same files.
+- The two configured working directories are one directory: one path is a symlink to the
+  other, so the same file can arrive under either prefix. Do not treat them as separate
+  copies.
 
 ## Scope
 
@@ -217,10 +218,11 @@ Tolerances per quantity are listed in `PLAN.md`.
 
 ## Environment
 
-Dependencies live in the **base anaconda env** (`/u/40/ladovj1/unix/apps/anaconda3`):
-JAX 0.11.0, NumPy 2.4.6, SciPy 1.18, Numba 0.65, equinox 0.13.8 (verified working with this
-JAX under x64). Development is CPU-only here; the JAX paths must run unchanged on GPU, so
-correctness is established in float64 on CPU and performance work is a later, separate phase.
+Dependencies live in the **base anaconda env** — there is no project virtualenv, so
+`python3` is already the right interpreter. JAX 0.11.0, NumPy 2.4.6, SciPy 1.18, Numba
+0.65, equinox 0.13.8 (verified working with this JAX under x64). Development is CPU-only
+here; the JAX paths must run unchanged on GPU, so correctness is established in float64 on
+CPU and performance work is a later, separate phase.
 
 Compiled kernels are cached in `~/.cache/pypresso/jax` so that only the first run of a
 process pays for them; `PYPRESSO_CACHE_DIR` moves it and `PYPRESSO_CACHE_DIR=off` disables
