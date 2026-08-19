@@ -12,10 +12,22 @@ eigensolver, so it is the natural unit to ``jit`` and to ``vmap`` over bands and
 k-points. Everything here accepts arbitrary leading axes on ``psi`` for exactly
 that reason.
 
-``apply_s`` is the overlap operator. For norm-conserving pseudopotentials it is
-the identity, but it exists from the start (rule R5) because ultrasoft
-pseudopotentials make it a genuine operator, and the eigensolver is written for
-the generalised problem either way.
+``apply_s`` is the overlap operator,
+
+    S = 1 + sum_{a,ij} |beta_i^a> q_ij^a <beta_j^a|
+
+the identity for norm-conserving pseudopotentials and a genuine operator once a
+species is ultrasoft, where ``q_ij`` is the integral of the augmentation charge
+(``PW/src/s_psi.f90``). Everything downstream was written for the generalised
+problem from the start (rule R5), so switching it on is a matter of ``qq``
+ceasing to be ``None`` rather than of new call sites.
+
+The nonlocal coefficients differ between the two cases in the same way. For a
+norm-conserving potential ``D_ij`` is the file's, fixed for the run; for an
+ultrasoft one it is ``D_ij^(0) + int V_eff Q_ij``, which depends on the
+potential and therefore on the atom and on the SCF iteration. ``deeq`` carries
+the rebuilt matrix when there is one, and the projectors' own ``dij`` is used
+when there is not.
 """
 
 from __future__ import annotations
@@ -50,6 +62,10 @@ class Hamiltonian(eqx.Module):
     #: wavefunction plane waves, i.e. whether ``ecutrho >= 4 ecutwfc``. It is
     #: what makes :meth:`matrix` exact; see there.
     resolves_differences: bool = eqx.field(static=True, default=True)
+    #: The nonlocal coefficients, when they are not the projectors' own -- i.e.
+    #: ``deeq`` rebuilt by ``newd`` from the current potential. ``None`` means
+    #: "use ``projectors.dij``", which is the norm-conserving case.
+    deeq: jnp.ndarray | None = None
 
     @property
     def nk(self) -> int:
@@ -58,6 +74,16 @@ class Hamiltonian(eqx.Module):
     @property
     def npwx(self) -> int:
         return self.kinetic.shape[1]
+
+    @property
+    def coefficients(self) -> jnp.ndarray:
+        """``D_ij``: the rebuilt ultrasoft ones if present, the file's if not."""
+        return self.projectors.dij if self.deeq is None else self.deeq
+
+    @property
+    def has_overlap(self) -> bool:
+        """Whether ``S`` differs from the identity -- i.e. whether ``qq`` exists."""
+        return self.projectors.qq is not None
 
     def apply(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``H|psi>`` for ``psi`` of shape ``(..., npwx)``."""
@@ -70,7 +96,23 @@ class Hamiltonian(eqx.Module):
 
     def apply_s(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``S|psi>``. The identity for norm-conserving pseudopotentials."""
-        return jnp.where(self.mask[ik], psi, 0.0)
+        psi = jnp.where(self.mask[ik], psi, 0.0)
+        if not self.has_overlap:
+            return psi
+        vkb = self.projectors.vkb[ik]
+        becp = jnp.einsum("gk,...g->...k", vkb.conj(), psi)
+        qq = self.projectors.qq.astype(vkb.dtype)
+        result = psi + jnp.einsum("gk,...k->...g", vkb, becp @ qq.T)
+        return jnp.where(self.mask[ik], result, 0.0)
+
+    def overlap_diagonal(self, ik: int) -> jnp.ndarray:
+        """``<k+G|S|k+G>``, the preconditioner's ``s_diag`` (``usnldiag``)."""
+        if not self.has_overlap:
+            return jnp.where(self.mask[ik], 1.0, 0.0)
+        vkb = self.projectors.vkb[ik]
+        qq = self.projectors.qq.astype(vkb.dtype)
+        diagonal = 1.0 + jnp.real(jnp.einsum("gi,ij,gj->g", vkb.conj(), qq, vkb))
+        return jnp.where(self.mask[ik], diagonal, 0.0)
 
     def _local(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``V(r) psi``, evaluated by a round trip through the FFT grid.
@@ -99,7 +141,8 @@ class Hamiltonian(eqx.Module):
             return jnp.zeros_like(psi)
         vkb = self.projectors.vkb[ik]  # (npwx, nkb)
         becp = jnp.einsum("gk,...g->...k", vkb.conj(), psi)  # <beta|psi>
-        return jnp.einsum("gk,...k->...g", vkb, becp @ self.projectors.dij.T)
+        dij = self.coefficients.astype(vkb.dtype)
+        return jnp.einsum("gk,...k->...g", vkb, becp @ dij.T)
 
     def diagonal(self, ik: int) -> jnp.ndarray:
         """``<k+G|H|k+G>``: the diagonal of the Hamiltonian, ``(npwx,)`` and real.
@@ -112,11 +155,30 @@ class Hamiltonian(eqx.Module):
         diagonal = self.kinetic[ik] + jnp.mean(self.potential)
         if self.projectors.nkb:
             vkb = self.projectors.vkb[ik]
-            dij = self.projectors.dij.astype(vkb.dtype)
+            dij = self.coefficients.astype(vkb.dtype)
             diagonal = diagonal + jnp.real(
                 jnp.einsum("gi,ij,gj->g", vkb.conj(), dij, vkb)
             )
         return jnp.where(self.mask[ik], diagonal, 0.0)
+
+    def overlap_matrix(self, ik: int) -> jnp.ndarray:
+        """``S`` as an explicit matrix, for the reference dense solve.
+
+        The identity plus a rank-``nkb`` correction, so it is cheap however
+        large ``npwx`` is. Padding rows and columns are left as the identity,
+        which keeps the generalised problem positive definite -- a zero there
+        would make the Cholesky factorisation fail rather than merely give a
+        spurious eigenvalue.
+        """
+        mask = self.mask[ik]
+        identity = jnp.eye(self.npwx, dtype=self.projectors.vkb.dtype)
+        if not self.has_overlap:
+            return identity
+        vkb = self.projectors.vkb[ik]
+        qq = self.projectors.qq.astype(vkb.dtype)
+        correction = vkb @ qq @ vkb.conj().T
+        correction = jnp.where(mask[:, None] & mask[None, :], correction, 0.0)
+        return identity + 0.5 * (correction + correction.conj().T)
 
     def matrix_by_application(self, ik: int) -> jnp.ndarray:
         """The Hamiltonian as an explicit matrix, built by applying it.
@@ -172,7 +234,7 @@ class Hamiltonian(eqx.Module):
         matrix = matrix + jnp.diag(self.kinetic[ik].astype(matrix.dtype))
         if self.projectors.nkb:
             vkb = self.projectors.vkb[ik]
-            matrix = matrix + vkb @ self.projectors.dij.astype(vkb.dtype) @ vkb.conj().T
+            matrix = matrix + vkb @ self.coefficients.astype(vkb.dtype) @ vkb.conj().T
 
         mask = self.mask[ik]
         matrix = jnp.where(mask[:, None] & mask[None, :], matrix, 0.0)

@@ -40,6 +40,22 @@ that shapes inside ``jit`` are static:
 The convergence test is QE's -- two consecutive estimates of a root differing by
 less than ``ethr`` -- and the preconditioner is ``g_psi.f90``'s, including its
 ``TEST_NEW_PRECONDITIONING`` branch, which is the one QE compiles by default.
+
+**The problem is generalised**, ``H v = e S v``, because an ultrasoft
+pseudopotential makes ``S`` a genuine operator. ``cegterg`` tracks ``S|psi>``
+alongside ``H|psi>`` in a second ``(nvecx, npw)`` array; this does not, and the
+reason is worth stating. ``S`` differs from the identity only inside the
+projector subspace,
+
+    S|psi> = |psi> + sum_kl |beta_k> q_kl <beta_l|psi>
+
+so everything the algorithm needs from it is a function of the small
+``(nvecx, nkb)`` array of projections ``<beta|psi>`` -- the projected overlap is
+``psi^H psi + becp^H q becp``, and ``S`` applied to a Ritz vector is one
+``(nkb, npw)`` product away. Carrying ``becp`` instead of ``S|psi>`` is the same
+arithmetic in a fraction of the memory, and it makes the norm-conserving path
+free rather than merely cheap: with no augmentation charge the tracked array has
+zero columns, and every expression involving it disappears at compile time.
 """
 
 from __future__ import annotations
@@ -97,7 +113,7 @@ ETHR_MIN = 1.0e-13
 RESIDUAL_THRESHOLD = None
 
 
-def _extend_projection(hc, sc, psi, hpsi, offset, block):
+def _extend_projection(hc, sc, psi, hpsi, becp, becq, offset, block):
     """Add one block of rows and columns to the projected H and overlap.
 
     The projected matrices grow by a block of vectors per Davidson step, so all
@@ -114,10 +130,16 @@ def _extend_projection(hc, sc, psi, hpsi, offset, block):
 
     The Hermitian counterpart of each new row is written at the same time, so
     the stored matrices stay full rather than triangular.
+
+    ``becp``/``becq`` carry the augmentation part of the overlap: ``becq`` is
+    ``q <beta|psi>``, so ``becp^H becq`` is the ``<psi|S - 1|psi>`` block. They
+    have zero columns when there is no augmentation charge.
     """
     rows = jax.lax.dynamic_slice(psi, (offset, 0), (block, psi.shape[1]))
     row_h = rows.conj() @ hpsi.T
     row_s = rows.conj() @ psi.T
+    row_b = jax.lax.dynamic_slice(becp, (offset, 0), (block, becp.shape[1]))
+    row_s = row_s + row_b.conj() @ becq.T
 
     hc = jax.lax.dynamic_update_slice(hc, row_h, (offset, 0))
     sc = jax.lax.dynamic_update_slice(sc, row_s, (offset, 0))
@@ -126,16 +148,19 @@ def _extend_projection(hc, sc, psi, hpsi, offset, block):
     return hc, sc
 
 
-def _precondition(residual, diagonal, energies):
-    """``g_psi.f90``: an approximate inverse of ``H - e`` from its diagonal.
+def _precondition(residual, diagonal, overlap_diagonal, energies):
+    """``g_psi.f90``: an approximate inverse of ``H - e S`` from its diagonal.
 
-    The naive ``1/(H_ii - e)`` is unbounded where the shift meets the diagonal.
-    QE's default branch replaces it with ``(1 + x + sqrt(1 + (x-1)^2)) / 2``,
-    which agrees with ``x`` for large ``x`` and saturates at 1 near the pole --
-    so a plane wave nearly resonant with the eigenvalue is damped rather than
-    amplified.
+    The naive ``1/(H_ii - e S_ii)`` is unbounded where the shift meets the
+    diagonal. QE's default branch replaces it with
+    ``(1 + x + sqrt(1 + (x-1)^2)) / 2``, which agrees with ``x`` for large ``x``
+    and saturates at 1 near the pole -- so a plane wave nearly resonant with the
+    eigenvalue is damped rather than amplified.
+
+    ``overlap_diagonal`` is ``usnldiag``'s ``s_diag``, identically one without an
+    augmentation charge.
     """
-    x = diagonal[None, :] - energies[:, None]
+    x = diagonal[None, :] - energies[:, None] * overlap_diagonal[None, :]
     denominator = 0.5 * (1.0 + x + jnp.sqrt(1.0 + (x - 1.0) ** 2))
     return residual / denominator
 
@@ -172,7 +197,24 @@ def davidson_eigensolver(
     mask = hamiltonian.mask[ik]
     kinetic = hamiltonian.kinetic[ik]
     diagonal = hamiltonian.diagonal(ik)
+    s_diagonal = hamiltonian.overlap_diagonal(ik)
     dtype = hamiltonian.projectors.vkb.dtype
+
+    # The projector columns S is built from. With no augmentation charge there
+    # are none of them, and every expression below that touches `becp` operates
+    # on a zero-width array -- which is how the norm-conserving path stays
+    # exactly what it was.
+    if hamiltonian.has_overlap:
+        vkb = hamiltonian.projectors.vkb[ik]
+        qq = hamiltonian.projectors.qq.astype(dtype)
+    else:
+        vkb = hamiltonian.projectors.vkb[ik][:, :0]
+        qq = jnp.zeros((0, 0), dtype)
+
+    def project(vectors):
+        """``<beta|psi>`` and ``q <beta|psi>`` for a block of vectors."""
+        becp = vectors @ vkb.conj()
+        return becp, becp @ qq.T
 
     start = starting_vectors(psi0, nbnd, npwx, kinetic, mask, dtype)
 
@@ -183,11 +225,15 @@ def davidson_eigensolver(
 
     psi = jnp.zeros((nvecx, npwx), dtype).at[:nbnd].set(start)
     hpsi = jnp.zeros((nvecx, npwx), dtype).at[:nbnd].set(hamiltonian.apply(start, ik))
+    becp0, becq0 = project(start)
+    nkb = becp0.shape[1]
+    becp = jnp.zeros((nvecx, nkb), dtype).at[:nbnd].set(becp0)
+    becq = jnp.zeros((nvecx, nkb), dtype).at[:nbnd].set(becq0)
     first = jnp.arange(nvecx) < nbnd
     empty = jnp.zeros((nvecx, nvecx), dtype)
-    hc0, sc0 = _extend_projection(empty, empty, psi, hpsi, 0, nbnd)
+    hc0, sc0 = _extend_projection(empty, empty, psi, hpsi, becp, becq, 0, nbnd)
 
-    def solve(psi, hpsi, active, hc_raw, sc_raw, previous):
+    def solve(psi, hpsi, becq, active, hc_raw, sc_raw, previous):
         """Diagonalise in the current subspace and measure what is left."""
         pair = active[:, None] & active[None, :]
         inactive = jnp.where(active, 0.0, 1.0).astype(dtype)
@@ -203,8 +249,11 @@ def davidson_eigensolver(
         # rotations of vectors already computed -- no extra application of H.
         evc = coefficients.T @ psi
         hevc = coefficients.T @ hpsi
+        # S|evc> without ever storing S|psi>: the Ritz vector's projections are
+        # the same rotation of the stored ones.
+        sevc = evc + (coefficients.T @ becq) @ vkb.T
 
-        residual = hevc - energies[:, None].astype(dtype) * evc
+        residual = hevc - energies[:, None].astype(dtype) * sevc
         settled = jnp.abs(energies - previous) < ethr
         if residual_threshold is not None:
             settled = jnp.logical_and(
@@ -216,7 +265,7 @@ def davidson_eigensolver(
         # roots sorted to the front so the block written next starts with
         # exactly the vectors worth keeping. The sort is stable, so roots keep
         # their relative order.
-        correction = _precondition(residual, diagonal, energies)
+        correction = _precondition(residual, diagonal, s_diagonal, energies)
         correction = jnp.where(mask, correction, 0.0)
         norm = jnp.sqrt(jnp.sum(jnp.abs(correction) ** 2, axis=1, keepdims=True))
         correction = jnp.where(settled[:, None], 0.0,
@@ -227,11 +276,12 @@ def davidson_eigensolver(
                 jnp.sum(jnp.logical_not(settled)), jnp.all(settled))
 
     energies0, evc0, hevc0, correction0, notcnv0, converged0 = solve(
-        psi, hpsi, first, hc0, sc0, jnp.full((nbnd,), jnp.inf, dtype=diagonal.dtype)
+        psi, hpsi, becq, first, hc0, sc0,
+        jnp.full((nbnd,), jnp.inf, dtype=diagonal.dtype),
     )
 
     state = (
-        psi, hpsi, first, hc0, sc0,        # the subspace and its projections
+        psi, hpsi, becp, becq, first, hc0, sc0,  # the subspace and its projections
         nbnd,                              # where the next block is written
         evc0, hevc0, energies0,            # current estimate, and H applied to it
         correction0, notcnv0,              # what to expand with, decided already
@@ -239,10 +289,10 @@ def davidson_eigensolver(
     )
 
     def unconverged(state):
-        return jnp.logical_and(jnp.logical_not(state[12]), state[11] < max_iterations)
+        return jnp.logical_and(jnp.logical_not(state[14]), state[13] < max_iterations)
 
     def step(state):
-        (psi, hpsi, active, hc_raw, sc_raw, nbase,
+        (psi, hpsi, becp, becq, active, hc_raw, sc_raw, nbase,
          evc, hevc, energies, correction, notcnv, iteration, _) = state
 
         # ... collapse onto the current estimates when the subspace is full,
@@ -252,17 +302,20 @@ def davidson_eigensolver(
         # so the retained block is diag(energies) against the identity.
         full = nbase + nbnd > nvecx
         blank = jnp.zeros_like(hc_raw)
-        psi, hpsi, active, nbase, hc_raw, sc_raw = jax.lax.cond(
+        evc_becp, evc_becq = project(evc)
+        psi, hpsi, becp, becq, active, nbase, hc_raw, sc_raw = jax.lax.cond(
             full,
             lambda: (
                 jnp.zeros_like(psi).at[:nbnd].set(evc),
                 jnp.zeros_like(hpsi).at[:nbnd].set(hevc),
+                jnp.zeros_like(becp).at[:nbnd].set(evc_becp),
+                jnp.zeros_like(becq).at[:nbnd].set(evc_becq),
                 first,
                 nbnd,
                 blank.at[:nbnd, :nbnd].set(jnp.diag(energies.astype(dtype))),
                 blank.at[:nbnd, :nbnd].set(jnp.eye(nbnd, dtype=dtype)),
             ),
-            lambda: (psi, hpsi, active, nbase, hc_raw, sc_raw),
+            lambda: (psi, hpsi, becp, becq, active, nbase, hc_raw, sc_raw),
         )
 
         # ... expand, and only then diagonalise and test. This ordering is
@@ -271,20 +324,23 @@ def davidson_eigensolver(
         # residuals that are all zero because every root has just converged.
         # That was one wasted h_psi per Davidson call -- 7 of the 23 steps a
         # whole eight-atom run takes.
+        new_becp, new_becq = project(correction)
         psi = jax.lax.dynamic_update_slice(psi, correction, (nbase, 0))
         hpsi = jax.lax.dynamic_update_slice(hpsi, hamiltonian.apply(correction, ik), (nbase, 0))
+        becp = jax.lax.dynamic_update_slice(becp, new_becp, (nbase, 0))
+        becq = jax.lax.dynamic_update_slice(becq, new_becq, (nbase, 0))
         active = jax.lax.dynamic_update_slice(active, jnp.arange(nbnd) < notcnv, (nbase,))
-        hc_raw, sc_raw = _extend_projection(hc_raw, sc_raw, psi, hpsi, nbase, nbnd)
+        hc_raw, sc_raw = _extend_projection(hc_raw, sc_raw, psi, hpsi, becp, becq, nbase, nbnd)
         nbase = nbase + notcnv
 
         energies, evc, hevc, correction, notcnv, converged = solve(
-            psi, hpsi, active, hc_raw, sc_raw, energies
+            psi, hpsi, becq, active, hc_raw, sc_raw, energies
         )
-        return (psi, hpsi, active, hc_raw, sc_raw, nbase,
+        return (psi, hpsi, becp, becq, active, hc_raw, sc_raw, nbase,
                 evc, hevc, energies, correction, notcnv, iteration + 1, converged)
 
     final = jax.lax.while_loop(unconverged, step, state)
-    evc, energies = final[6], final[8]
+    evc, energies = final[8], final[10]
     return energies, jnp.where(mask, evc, 0.0)
 
 

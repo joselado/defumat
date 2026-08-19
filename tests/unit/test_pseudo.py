@@ -46,11 +46,32 @@ def test_every_shipped_pseudopotential_parses(pseudo_dir):
         assert pseudo.msh <= pseudo.mesh
 
 
-def test_mesh_truncation_is_odd_and_within_ten_bohr(silicon):
-    msh = mesh_cutoff_index(silicon.r)
-    assert msh % 2 == 1, "Simpson's rule needs an odd number of points"
-    assert silicon.r[msh - 1] <= RCUT
-    assert silicon.r[-1] > RCUT, "this pseudopotential should extend past the cutoff"
+def test_mesh_truncation_reproduces_qes_rule(pseudo_dir):
+    """``msh`` must be QE's, transcribed loop for loop rather than paraphrased.
+
+    QE stops at the **first point beyond** ``rcut`` and rounds *that* index up
+    to an odd number, so the integration range ends one or two points past 10
+    bohr. Taking the last point inside instead is two points short whenever the
+    count is even, which it is for most files -- and it is not harmless: on the
+    ``psl`` and ``rrkj`` sets it moves ``V_loc(G=0)`` in the eighth decimal,
+    shifting every eigenvalue and the total energy by ~1e-6 Ry, at any cutoff.
+    """
+
+    def qe_msh(r, rcut=RCUT):
+        """upflib's loop, in Fortran's 1-based indexing."""
+        msh = len(r)
+        for ir in range(1, len(r) + 1):
+            if r[ir - 1] > rcut:
+                msh = ir
+                break
+        return 2 * ((msh + 1) // 2) - 1
+
+    for path in sorted(pseudo_dir.glob("*.UPF")):
+        r = read_upf(path).r
+        msh = mesh_cutoff_index(r)
+        assert msh % 2 == 1, "Simpson's rule needs an odd number of points"
+        assert msh == qe_msh(r), path.name
+        assert msh <= len(r)
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])

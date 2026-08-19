@@ -23,15 +23,19 @@ outputs for around a hundred cases.
 * **Band structures** along a k-point path.
 * **Metals and insulators**, with every smearing scheme Quantum ESPRESSO offers
   (Gaussian, Methfessel-Paxton, Marzari-Vanderbilt, Fermi-Dirac).
-* **Norm-conserving pseudopotentials** in the UPF format, with LDA.
+* **Norm-conserving, ultrasoft and PAW pseudopotentials** in the UPF format,
+  with LDA.
 * Crystal symmetry, automatic k-point grids reduced to the irreducible wedge,
   and gamma-only calculations.
 
-Not yet: ultrasoft and PAW pseudopotentials, spin polarisation, density of
-states, forces and stress, and GGA functionals. Those are the next things.
+Not yet: GGA functionals, spin polarisation, density of states, and forces and
+stress. Those are the next things. GGA is the one that matters most for the
+ultrasoft and PAW support: the machinery is there and validated, but almost every
+published dataset is generated with PBE, and only the LDA ones can be used until
+the functional exists.
 
 If your calculation needs any of those, use Quantum ESPRESSO — this is not a
-replacement for it, and on anything large it will be slower (about three to four
+replacement for it, and on anything large it will be slower (about two to four
 times, running on one core).
 
 ## Installing
@@ -128,12 +132,15 @@ pip install -e ".[dev]"
 python3 -m pytest
 ```
 
-Silicon's total energy agrees to 1.1e-8 Ry term by term, its band structure to
-0.0002 eV, and metals with every smearing to about 2.5e-8 Ry. The supercells
-agree more tightly still, to around 1e-9 Ry.
+Silicon's total energy agrees to about 1e-9 Ry term by term, its band structure
+to 0.0002 eV, and metals with every smearing to about 2.5e-8 Ry. The ultrasoft
+and PAW cases agree to 3e-9 Ry or better on 2- and 8-atom cells.
 
-The regression tests need Quantum ESPRESSO's `test-suite` directory, which is not
-shipped here; they skip cleanly without it. Everything else runs on its own.
+Most regression tests need Quantum ESPRESSO's `test-suite` directory, which is not
+shipped here; they skip cleanly without it. The ultrasoft and PAW ones do not:
+no benchmark Quantum ESPRESSO ships covers those pseudopotentials, so their
+reference outputs were generated once with `pw.x` and are committed under
+`tests/data/qe/` (regenerate with `tools/generate_reference.py`).
 
 ## Comparing against Quantum ESPRESSO yourself
 

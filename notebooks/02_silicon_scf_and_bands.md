@@ -4,7 +4,7 @@ Part 1 built the plane-wave basis. This notebook does the physics: read the
 pseudopotential, converge the electron density, and compute the band structure — checking
 every number against the Quantum ESPRESSO output committed alongside the same input.
 
-The headline: **silicon's total energy comes out within 1.1e-8 Ry of QE**, term by term,
+The headline: **silicon's total energy comes out within 1e-9 Ry of QE**, term by term,
 and its band structure within 0.0002 eV.
 
 **What this covers:** phases P3–P7 (pseudopotentials, the Hamiltonian, the SCF loop,
@@ -33,7 +33,7 @@ pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.speci
 print(pseudos[0])
 ```
 
-    Pseudopotential(Si, NC, Z=4, 2 projectors (l=[0, 1]), mesh 431 (msh 357), SLA  PZ   NOGX NOGC)
+    Pseudopotential(Si, NC, Z=4, 2 projectors (l=[0, 1]), mesh 431 (msh 359), SLA  PZ   NOGX NOGC)
 
 
 ## 1. What is in a pseudopotential
@@ -192,13 +192,13 @@ print(f"\nconverged: {result.converged} in {result.iterations} iterations")
 ```
 
       iteration   1   ethr was too large; diagonalising again at 7.94e-04
-      iteration   1   E =     -15.81238467 Ry   accuracy = 6.39e-02   ethr = 7.94e-04   |drho| = 3.60e-02
-      iteration   2   E =     -15.79440648 Ry   accuracy = 2.30e-03   ethr = 7.98e-04   |drho| = 7.58e-03
-      iteration   3   E =     -15.79451359 Ry   accuracy = 7.53e-05   ethr = 2.87e-05   |drho| = 9.29e-04
-      iteration   4   E =     -15.79449783 Ry   accuracy = 6.34e-06   ethr = 9.41e-07   |drho| = 2.98e-04
-      iteration   5   E =     -15.79449594 Ry   accuracy = 6.47e-08   ethr = 7.93e-08   |drho| = 3.77e-05
-      iteration   6   E =     -15.79449594 Ry   accuracy = 8.05e-10   ethr = 8.09e-10   |drho| = 4.95e-06
-      iteration   7   E =     -15.79449594 Ry   accuracy = 6.69e-11   ethr = 1.01e-11   |drho| = 1.47e-06
+      iteration   1   E =     -16.03252699 Ry   accuracy = 6.39e-02   ethr = 7.94e-04   |drho| = 3.67e-02
+      iteration   2   E =     -15.81552817 Ry   accuracy = 2.30e-03   ethr = 7.99e-04   |drho| = 7.80e-03
+      iteration   3   E =     -15.78486119 Ry   accuracy = 7.54e-05   ethr = 2.88e-05   |drho| = 8.88e-04
+      iteration   4   E =     -15.79744382 Ry   accuracy = 6.35e-06   ethr = 9.43e-07   |drho| = 3.05e-04
+      iteration   5   E =     -15.79424377 Ry   accuracy = 6.50e-08   ethr = 7.93e-08   |drho| = 3.79e-05
+      iteration   6   E =     -15.79448235 Ry   accuracy = 8.10e-10   ethr = 8.12e-10   |drho| = 5.08e-06
+      iteration   7   E =     -15.79449557 Ry   accuracy = 6.66e-11   ethr = 1.01e-11   |drho| = 1.48e-06
     
     converged: True in 7 iterations
 
@@ -235,7 +235,11 @@ exchange-correlation, minus exactly that double counting.
 
 
 ```python
-reference = read_qe_output(QE / "benchmark.out.git.inp=scf.in")
+# The vendored pw.x re-run of the same input, rather than the file the suite
+# ships: those references are from QE 6.0, which chose a 15^3 FFT grid where the
+# current release chooses 16^3 (notebook 01, section 5), and they stop at
+# conv_thr = 1e-6 where this runs to 1e-10. Both matter at the level compared here.
+reference = read_qe_output(Path("../tests/data/qe/reference.out.pw_scf-scf"))
 
 print("%-16s %18s %18s %12s" % ("term [Ry]", "pypresso", "Quantum ESPRESSO", "difference"))
 print("-" * 68)
@@ -257,20 +261,20 @@ print(f"\nhighest occupied level: {result.homo * 13.605693122994017:.4f} eV"
 
     term [Ry]                  pypresso   Quantum ESPRESSO   difference
     --------------------------------------------------------------------
-    one-electron             4.83372670         4.83378641     -6.0e-05
-    hartree                  1.08438233         1.08429090      9.1e-05
-    xc                      -4.81284640        -4.81281466     -3.2e-05
+    one-electron             4.83371975         4.83371826      1.5e-06
+    hartree                  1.08439441         1.08439697     -2.6e-06
+    xc                      -4.81285115        -4.81285222      1.1e-06
     ewald                  -16.89975858       -16.89975858      2.8e-09
     --------------------------------------------------------------------
-    TOTAL                  -15.79449594       -15.79449593     -1.1e-08
+    TOTAL                  -15.79449557       -15.79449557     -8.7e-10
     
     eigenvalues [eV]
       k1  ours [-4.8705  2.3787  5.5365  5.5365]
-          QE   [-4.8701  2.3792  5.5371  5.5371]
+          QE   [-4.8705  2.3787  5.5366  5.5366]
       k2  ours [-2.917  -0.0658  2.6791  4.035 ]
-          QE   [-2.9165 -0.0653  2.6795  4.0355]
+          QE   [-2.917  -0.0658  2.6792  4.035 ]
     
-    highest occupied level: 5.5365 eV   (QE 5.5371 eV)
+    highest occupied level: 5.5365 eV   (QE 5.5366 eV)
 
 
 ### The converged density
@@ -284,7 +288,7 @@ over.
 from pypresso.basis.fft import r_to_g
 
 # Evaluate the density exactly at arbitrary points from its Fourier components,
-# rather than sampling the 15^3 grid: rho(r) = sum_G rho(G) exp(iG.r). The grid
+# rather than sampling the 16^3 grid: rho(r) = sum_G rho(G) exp(iG.r). The grid
 # holds all the information, but reading it off directly gives a blocky picture.
 rho_g = np.asarray(r_to_g(result.density, basis.dense.fft_index))
 g_cart = np.asarray(basis.dense.cartesian(system.cell))
@@ -335,7 +339,7 @@ print("density at the cell minimum   = %.4f electrons/bohr^3" % density.min())
 
     integral of rho over the cell = 8.00000000 electrons
     density at the bond centre    = 0.0887 electrons/bohr^3
-    density at the cell minimum   = 0.0034 electrons/bohr^3
+    density at the cell minimum   = 0.0033 electrons/bohr^3
 
 
 
@@ -431,7 +435,7 @@ print("  * almost nothing is jitted yet, so the iteration dispatches its operati
 print("    one at a time.")
 ```
 
-    pypresso SCF (warm): 0.11 s
+    pypresso SCF (warm): 0.12 s
     Quantum ESPRESSO    : 0.15 s total, of which 0.02 s in 'electrons'
                           (reported in the reference output; a 2017 machine)
     

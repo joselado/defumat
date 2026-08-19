@@ -74,12 +74,35 @@ def mesh_cutoff_index(r) -> int:
     Points beyond ``RCUT`` carry no information -- the pseudopotential has long
     since reached its asymptotic form -- and including them makes the integral
     depend on how far the tabulation happens to extend.
+
+    The rounding is QE's and has an off-by-one worth spelling out, because
+    getting it wrong is invisible on some files and worth 1e-6 Ry on others.
+    ``upflib``'s loop stops at the **first point beyond** ``RCUT`` and takes
+    *that* index, not the last one inside::
+
+        DO ir = 1, mesh
+           IF ( r(ir) > rcut ) THEN
+              msh = ir            ! one past the last point inside
+              GOTO 5
+           ENDIF
+        ENDDO
+        msh = mesh
+      5 msh = 2*( (msh + 1)/2 ) - 1
+
+    so the mesh QE integrates over includes one point past 10 bohr, and the
+    odd-rounding is applied to that. Taking the last point inside instead gives
+    a mesh **two points shorter** whenever the count is even -- which it is for
+    most files. On a pseudopotential whose local potential has genuinely reached
+    ``-2Z/r`` by 10 bohr (``Si.pz-vbc``) the two answers agree to 1e-11 and
+    nothing shows; on the ``psl`` and ``rrkj`` sets they differ in the eighth
+    decimal of ``V_loc(G=0)``, which is a constant shift of every eigenvalue and
+    a ~1e-6 Ry error in the total energy that no cutoff makes smaller.
     """
     r = np.asarray(r)
     inside = int(np.searchsorted(r, RCUT, side="right"))
-    inside = min(inside, len(r))
-    odd = 2 * ((inside + 1) // 2) - 1
-    return max(odd, 3)
+    first_beyond = inside + 1 if inside < len(r) else len(r)
+    odd = 2 * ((first_beyond + 1) // 2) - 1
+    return max(min(odd, len(r)), 3)
 
 
 def spherical_bessel(l: int, x: jnp.ndarray) -> jnp.ndarray:

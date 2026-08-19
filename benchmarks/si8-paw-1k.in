@@ -1,0 +1,38 @@
+! Silicon, 8 atoms in the conventional cubic cell, PAW, one k-point.
+!
+! The timing counterpart of tests/data/qe/si8-paw.in, cut to a single
+! k-point for the same reason every other benchmark here is: both codes
+! parallelise over k, so a multi-k comparison measures batching rather than the
+! cost of the physics.
+!
+! An PAW run is a different shape of calculation from a norm-conserving one,
+! not just a bigger one. The density lives on a grid with a dual of 8 while the
+! wavefunctions live on one with a dual of 4, so the FFTs come in two sizes; the
+! augmentation charge has to be built on the larger grid every time the density
+! is; and the nonlocal coefficients are rebuilt from the potential every
+! iteration instead of being read once from a file. Where the time goes is
+! therefore worth measuring separately, not extrapolating from si-1k.in.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=1, celldm(1)=10.20, nat=8, ntyp=1,
+    ecutwfc=20.0, ecutrho=160.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-n-kjpaw_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.00 0.50 0.50
+ Si 0.50 0.00 0.50
+ Si 0.50 0.50 0.00
+ Si 0.25 0.25 0.25
+ Si 0.25 0.75 0.75
+ Si 0.75 0.25 0.75
+ Si 0.75 0.75 0.25
+K_POINTS
+  1
+   0.250000  0.250000  0.250000   1.00

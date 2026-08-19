@@ -1,0 +1,28 @@
+! Norm-conserving silicon at dual = 8, so that the smooth and dense grids differ.
+!
+! Nothing here is ultrasoft: the pseudopotential, the density and the energies
+! are the ones the norm-conserving path already reproduces to 1e-8 Ry. What the
+! larger ecutrho changes is only the *plumbing* -- wavefunctions live on the
+! smooth grid, the density and the potential on the dense one, and the potential
+! has to be interpolated between them. That makes this the one case where the
+! two-grid machinery can be validated on its own, with no augmentation charge,
+! no S operator and no D-coefficient rebuild to confuse a discrepancy with.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=12.0, ecutrho=96.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS
+  2
+   0.250000  0.250000  0.250000   1.00
+   0.250000  0.250000  0.750000   3.00

@@ -18,7 +18,7 @@ import jax.numpy as jnp
 from pypresso.basis.fft import g_to_r
 from pypresso.system.cell import Cell
 
-__all__ = ["sum_band", "band_density"]
+__all__ = ["sum_band", "band_density", "becsum"]
 
 
 def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.ndarray, cell: Cell):
@@ -53,3 +53,45 @@ def sum_band(psi, fft_index, grid, weights, cell: Cell) -> jnp.ndarray:
         psi, fft_index, grid, weights, cell
     )
     return jnp.sum(contributions, axis=0)
+
+
+def becsum(psi, vkb, weights, species_channels) -> tuple:
+    """The projector occupation matrices ``becsum``, per species.
+
+    ``PW/src/sum_band.f90``'s ``sum_bec``:
+
+        becsum^a_ij = sum_k sum_b w_kb <psi_kb|beta_i^a> <beta_j^a|psi_kb>
+
+    It is what the augmentation charge is built from -- the density outside the
+    projector subspace comes from ``|psi|^2``, and everything inside it from
+    these numbers.
+
+    Args:
+        psi: ``(nk, nbnd, npwx)`` wavefunctions.
+        vkb: ``(nk, npwx, nkb)`` projectors.
+        weights: ``(nk, nbnd)`` occupation weights.
+        species_channels: for each species, the ``(nat_t, nh_t)`` array of
+            channel columns belonging to each of its atoms, or ``None`` when the
+            species is norm-conserving.
+
+    Returns one real ``(nat_t, nh_t, nh_t)`` array per species. QE stores only
+    the upper triangle, with the off-diagonal entries doubled; the full
+    symmetric matrix is carried here instead, which is the same contraction
+    against a ``Q_ij`` symmetric in the same pair of indices and avoids a packed
+    index that nothing else in this code uses.
+    """
+    projections = jnp.einsum("kgc,kbg->kbc", vkb.conj(), psi)  # <beta_c|psi_kb>
+    return tuple(
+        None if channels is None else _becsum_species(projections, weights, channels)
+        for channels in species_channels
+    )
+
+
+@jax.jit
+def _becsum_species(projections, weights, channels):
+    """One species' ``becsum``, gathering its atoms' channels in one go."""
+    columns = projections[:, :, channels]  # (nk, nbnd, nat, nh)
+    return jnp.real(
+        jnp.einsum("kb,kbai,kbaj->aij", weights.astype(columns.dtype),
+                   columns.conj(), columns)
+    )

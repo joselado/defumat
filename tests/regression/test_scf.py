@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from pypresso.io import read_qe_output
+from tests.conftest import reference_output
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
 from pypresso.scf import run_scf
@@ -53,7 +54,7 @@ def _converged(input_path: Path, pseudo_dir: Path):
 @pytest.mark.parametrize(("directory", "name"), SCF_CASES)
 def test_total_energy_matches_reference(qe_testsuite, pseudo_dir, directory, name):
     _, _, result = _converged(qe_testsuite / directory / name, pseudo_dir)
-    reference = read_qe_output(qe_testsuite / directory / f"benchmark.out.git.inp={name}")
+    reference = read_qe_output(reference_output(directory, name, qe_testsuite))
 
     assert result.converged
     # QE's own runs stop at conv_thr = 1e-6, so its total is only that well
@@ -64,7 +65,7 @@ def test_total_energy_matches_reference(qe_testsuite, pseudo_dir, directory, nam
 @pytest.mark.parametrize(("directory", "name"), SCF_CASES)
 def test_energy_terms_match_reference(qe_testsuite, pseudo_dir, directory, name):
     _, _, result = _converged(qe_testsuite / directory / name, pseudo_dir)
-    reference = read_qe_output(qe_testsuite / directory / f"benchmark.out.git.inp={name}")
+    reference = read_qe_output(reference_output(directory, name, qe_testsuite))
 
     assert set(result.energy_terms) == set(reference.energy_terms)
     for term, value in reference.energy_terms.items():
@@ -80,7 +81,7 @@ def test_energy_terms_match_reference(qe_testsuite, pseudo_dir, directory, name)
 @pytest.mark.parametrize(("directory", "name"), SCF_CASES)
 def test_eigenvalues_match_reference(qe_testsuite, pseudo_dir, directory, name):
     _, _, result = _converged(qe_testsuite / directory / name, pseudo_dir)
-    reference = read_qe_output(qe_testsuite / directory / f"benchmark.out.git.inp={name}")
+    reference = read_qe_output(reference_output(directory, name, qe_testsuite))
 
     if reference.eigenvalues is None:
         pytest.skip("no eigenvalues in this reference")
@@ -96,7 +97,7 @@ def test_ewald_matches_reference_for_every_case(qe_testsuite, pseudo_dir):
     """The Ewald term is independent of the density, so it must be exact."""
     for directory, name in SCF_CASES:
         _, _, result = _converged(qe_testsuite / directory / name, pseudo_dir)
-        reference = read_qe_output(qe_testsuite / directory / f"benchmark.out.git.inp={name}")
+        reference = read_qe_output(reference_output(directory, name, qe_testsuite))
         assert result.energy_terms["ewald"] == pytest.approx(
             reference.energy_terms["ewald"], abs=ENERGY_TERM_RY
         ), f"{directory}/{name}"

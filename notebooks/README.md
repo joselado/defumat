@@ -8,8 +8,9 @@ that way.
 | Notebook | Covers | Phases |
 |---|---|---|
 | [`01_silicon_setup.ipynb`](01_silicon_setup.ipynb) | Reading a `pw.x` input, the fcc cell, k-points, G-vectors and FFT grids, the per-k plane-wave basis, Fourier transforms, and the structure factor — all checked against the committed QE benchmark | P0–P2 |
-| [`02_silicon_scf_and_bands.ipynb`](02_silicon_scf_and_bands.ipynb) | What is in a pseudopotential and how it reaches G space, why symmetry cannot be skipped, the SCF loop, the energy term by term against QE (1.1e-8 Ry), the bonding charge, and the band structure (0.0002 eV) | P3–P7 |
-| [`03_eigensolver_and_performance.ipynb`](03_eigensolver_and_performance.ipynb) | Why the dense solver had to go: the Hamiltonian's matrix elements, the block Davidson solver and the two traps in transcribing it, what compilation costs when the arrays are small, and the single-core comparison against QE (within 5x per SCF iteration) | P4, P10 |
+| [`02_silicon_scf_and_bands.ipynb`](02_silicon_scf_and_bands.ipynb) | What is in a pseudopotential and how it reaches G space, why symmetry cannot be skipped, the SCF loop, the energy term by term against QE (under 1e-9 Ry), the bonding charge, and the band structure (0.0002 eV) | P3–P7 |
+| [`03_eigensolver_and_performance.ipynb`](03_eigensolver_and_performance.ipynb) | Why the dense solver had to go: the Hamiltonian's matrix elements, the block Davidson solver and the two traps in transcribing it, what compilation costs when the arrays are small, and the single-core comparison against QE (within 2-4x per SCF iteration) | P4, P10 |
+| [`04_ultrasoft_and_paw.ipynb`](04_ultrasoft_and_paw.ipynb) | Ultrasoft and PAW: the two FFT grids, the augmentation charge and the exact charge identity it guarantees, the generalised eigenproblem, `D_ij` becoming self-consistent, PAW's radial one-centre terms, and why `becsum` has to be symmetrised by hand — all against QE (≤3e-9 Ry) with the timing | P12 |
 
 ## Conventions
 
@@ -37,7 +38,9 @@ jupyter lab notebooks/
 
 They need the vendored Quantum ESPRESSO tree at `../quantum_espresso/` for the input
 files and reference outputs. That tree is not in the repository (it is 285 MB); the paths
-at the top of each notebook say what it expects.
+at the top of each notebook say what it expects. `04` is the exception: its inputs and its
+QE references are committed under `tests/data/qe/`, because no benchmark QE ships covers
+the ultrasoft and PAW pseudopotentials it uses, so it runs without the vendored tree.
 
 After changing code the notebooks depend on, re-execute them and refresh the exports:
 

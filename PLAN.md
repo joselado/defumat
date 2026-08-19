@@ -187,14 +187,27 @@ Three things this phase settled:
   half-plane `x = 0, y > 0` plus the half-line `x = y = 0, z >= 0` — G = 0 kept once, hence
   `(ngm_full + 1)/2`. The selection is implemented; the *use* of it (real wavefunctions in
   `h_psi`) comes at P4.
-- **One benchmark's FFT grid differs for a machine-dependent reason, not a physical one.**
-  `pw_scf/scf.in` and `pw_scf/scf-cg.in` are the same system at the same cutoffs and both
-  report 1459 G-vectors, but their committed grids are 15³ and 16³. 15 = 3·5 is a valid FFT
-  size everywhere except IBM ESSL, whose `allowed` additionally demands a factor of 2. The
-  references predate the current release (the suite records `REFERENCE_VERSION 6.0`) and
-  were evidently not all produced on one build. The Miller range is identical either way
-  ((15−1)/2 = (16−1)/2 = 7), so the G-vector set is the same; the test checks that instead
-  for this one case.
+- **The FFT grid is not set by the cutoff alone, and the first explanation for that was
+  wrong.** `pw_scf/scf.in` and `pw_scf/scf-cg.in` are the same system at the same cutoffs
+  and both report 1459 G-vectors, but their committed grids are 15³ and 16³. The guess
+  recorded here originally was that 15 is disallowed on IBM ESSL and the two references
+  came from different builds. It is not: **QE requires the FFT dimensions to be a multiple
+  of the denominators of the crystal's fractional translations** (`fft_fact` in
+  `PW/src/symm_base.f90`), because a grid maps onto itself under a translation of `1/n`
+  only if it has a multiple of `n` points along that axis. Diamond silicon's are `1/4`, so
+  15 is rounded up to 16. The rule postdates the committed references
+  (`REFERENCE_VERSION 6.0`); running the vendored `pw.x` on `pw_scf/scf.in` prints 16³
+  today, which is how it was settled.
+
+  It is not cosmetic. `etxc` is evaluated pointwise on the grid, so a different grid is a
+  different exchange-correlation energy in the sixth decimal — ~1e-6 Ry, a hundred times
+  the agreement this project claims. Stacked on it is a second rule: if the identity plus
+  a non-lattice translation already maps the structure onto itself, the cell is a
+  *supercell* and QE disables fractional translations entirely, which for the eight-atom
+  cubic silicon cell means 24 operations rather than 48 and no divisibility constraint.
+  Both are implemented (`Symmetries.fft_factors`, `is_supercell`), and where a committed
+  benchmark predates them the reference is regenerated with the vendored `pw.x`
+  (`tools/generate_reference.py`).
 - **Miller indices are stored, cartesian G is derived.** Storing cartesian components would
   freeze the cell and make stress-by-differentiation impossible; a test confirms
   `grad(|G|²)` w.r.t. the lattice is non-zero (rule D2).
@@ -250,6 +263,10 @@ occupations for every QE smearing plus `from_input`, Anderson mixing, Ewald, and
 driver with QE's energy decomposition. `xc/lda.py` writes only the energy density and
 gets `v_xc` from `jax.grad`. *Check met:* **silicon's total energy matches QE to
 1.1e-8 Ry** and the metals to ~2.5e-8 Ry, term by term, across 8 regression cases.
+*(Since P12 corrected the FFT grid — see the P2 note on `fft_fact` — and the stale QE 6.0
+references for these cases were regenerated with the vendored `pw.x`, silicon agrees to
+**under 1e-9 Ry** and the metals to 5.6e-9. The number above is what P5 measured against
+the references it had.)*
 
 **The traps:** (1) XClib returns **Hartree**, not Rydberg — `v_of_rho` multiplies by
 `e2`, and missing that halves the XC energy. (2) **Density symmetrisation is not
@@ -317,6 +334,47 @@ operation dispatched outside a `jit` is compiled separately at ~50 ms, so setup 
 compiling 81 kernels to do 0.2 s of work. Optimising here means reducing the number of
 compiled units, not the number of flops — which is the opposite of the instinct the
 Fortran encourages.
+
+**P12 — Ultrasoft and PAW. ✅ DONE for LDA.** `basis/interpolate.py` (the smooth/dense
+grid split), NLCC in `v_of_rho`, `pseudo/coupling.py` (real-harmonic Gaunt coefficients),
+`pseudo/augmentation.py` (`qvan2`, `addusdens`, `newd`), the overlap operator and a
+generalised Davidson, and `paw/` (radial Poisson, spherical quadrature, one-centre terms,
+`becsum` symmetrisation). *Check met:* silicon matches QE to **≤3e-9 Ry** on six generated
+references — norm-conserving at dual 8, ultrasoft and PAW at 2 and 8 atoms, and PAW on an
+unreduced k-grid — with `ngm`, both FFT grids, `npw` and the symmetry count matching
+exactly and eigenvalues within 0.05 meV. Timing is **1.8–2.9x serial QE per SCF
+iteration**, the same band the norm-conserving path sits in (`PERFORMANCE.md`).
+
+**The traps, in the order they were found:**
+
+1. **`msh` is off by two if you take the last point inside 10 bohr.** QE's loop stops at
+   the *first point beyond* `rcut` and rounds *that* index up to odd, so the integration
+   range ends one or two points past 10 bohr. On `Si.pz-vbc` the two answers agree to
+   1e-11 and nothing shows; on the `psl`/`rrkj` sets they differ in the eighth decimal of
+   `V_loc(G=0)`, which shifts every eigenvalue and costs ~1e-6 Ry **at any cutoff**. Its
+   cutoff-independence is what identified it: everything basis-related was excluded first.
+2. **`pseudo_type` is free text.** `atomic` writes `USPP` where the format documentation
+   says `US`; matching only `US` reads an ultrasoft file as norm-conserving and silently
+   omits the augmentation charge.
+3. **The FFT grid rules above** (P2), worth 1e-5 Ry on the eight-atom cell through the
+   symmetry count as well as through `etxc`.
+4. **`becsum` must be symmetrised explicitly.** The density is symmetrised in G space,
+   which covers the augmentation charge; `becsum` goes to PAW's radial machinery directly,
+   where there is no grid to act on. On a symmetry-reduced k-set silicon's three `p`
+   channels come out 1.003/1.268/1.268 instead of equal, and the one-centre energy is
+   wrong in the fifth decimal — 3e-5 Ry, the last error to be found and the largest.
+5. **`Q` is integrated over `kkbeta`, not the 10-bohr mesh**, and for PAW `kkbeta` is
+   widened to the augmentation radius, past which the tabulated `beta` is still of order
+   1e-3 because it is truncated rather than tapered.
+6. **The radial Poisson solver is transcribed, not replaced.** The closed-form integral is
+   correct and shorter, but the one-centre energy must agree with QE's to ~1e-8 relative,
+   and two discretisations of one integral do not agree to 1e-8 while one discretisation
+   trivially does.
+
+*Not covered:* GGA (so PBE datasets are out of scope — both the plane-wave and the PAW
+radial XC would need gradients), the pre-2.0 `q_with_l = F` augmentation format, and
+gamma-only storage with an augmentation charge. All three are refused with a clear error
+rather than approximated.
 
 **P11 — Higher-order autodiff quantities (after the first milestone).** Forces are already
 validated at P5; here: stress by differentiation w.r.t. strain, implicit differentiation of

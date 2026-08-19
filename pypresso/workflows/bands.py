@@ -90,7 +90,22 @@ def run_bands(
     calculation = Calculation(system, pseudos)
     nbnd = nbnd or system.nbnd or default_nbnd(calculation.nelec, system.occupations)
 
-    potential = v_of_rho(density, calculation.basis.dense, system.cell)
+    if calculation.is_paw:
+        # A PAW Hamiltonian's nonlocal coefficients are D^(0) + int V Q + ddd_paw,
+        # and only the first two can be rebuilt from the density: ddd_paw comes
+        # from ``becsum``, which is a property of the *wavefunctions* and is not
+        # recoverable from the density that ``run_bands`` is handed. Building the
+        # Hamiltonian without it converges perfectly well and gives eigenvalues
+        # that are wrong by tenths of an eV -- the failure mode this codebase
+        # refuses rather than risks. Threading becsum through ``SCFResult`` is
+        # the fix; it is not written yet.
+        raise NotImplementedError(
+            "band structures with a PAW pseudopotential need the converged becsum "
+            "as well as the density, which run_bands does not yet take; "
+            "ultrasoft and norm-conserving band structures work"
+        )
+
+    potential = v_of_rho(density, calculation.basis.dense, system.cell, calculation.rho_core)
     hamiltonian = calculation.hamiltonian(potential.v_scf)
 
     # There is no SCF here to tighten the threshold over, so ``setup.f90`` picks

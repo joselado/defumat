@@ -24,6 +24,14 @@ ENERGY_TERM_RY = 1e-6
 #: conv_thr = 1e-6 is taken into account.
 DENSITY_DEPENDENT_TERM_RY = 5e-4
 
+#: Energy terms for the ultrasoft and PAW cases, whose references are generated
+#: at conv_thr = 1e-10 on both sides. Both codes are then at the same fixed point
+#: to ~1e-11 in dr2, and the terms agree an order of magnitude better than the
+#: borrowed benchmarks allow -- but not to the total's 1e-9, because the two
+#: mixers approach that fixed point from slightly different directions and the
+#: terms are first-order sensitive to where exactly each one stops.
+USPP_TERM_RY = 1e-5
+
 #: Eigenvalues, printed by pw.x with 4 decimals in eV. Two effects put a floor
 #: under the agreement, both on QE's side: its runs converge only to 1e-6 Ry, and
 #: it interpolates the local potential from a dq = 0.01 table where this code

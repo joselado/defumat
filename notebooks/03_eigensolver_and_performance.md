@@ -1,6 +1,6 @@
 # Silicon, part 3: making it fast, and how fast is fast enough
 
-Parts 1 and 2 got the physics right: silicon's total energy within 1.1e-8 Ry of Quantum
+Parts 1 and 2 got the physics right: silicon's total energy within a few 1e-9 Ry of Quantum
 ESPRESSO, its bands within 0.0002 eV. This notebook is about the other question a
 reimplementation has to answer — **how much does being right in Python cost?**
 
@@ -108,10 +108,10 @@ for label, milliseconds, _ in stages:
 
 ```
 
-      v_of_rho                      0.86 ms
-      diagonalise (Davidson)        1.64 ms
-      occupations                   0.45 ms
-      density + symmetrise          0.78 ms
+      v_of_rho                      0.88 ms
+      diagonalise (Davidson)        1.56 ms
+      occupations                   0.74 ms
+      density + symmetrise          1.06 ms
 
 
 The eigensolver dominates, and before any of this work it dominated far more: building the
@@ -150,9 +150,9 @@ print(f"  by applying H          {applied:7.2f} ms   ({applied / direct:.0f}x sl
 print(f"  largest disagreement   {difference:.2e} Ry")
 ```
 
-      from matrix elements      4.80 ms
-      by applying H            61.55 ms   (13x slower)
-      largest disagreement   3.55e-15 Ry
+      from matrix elements      4.91 ms
+      by applying H            86.18 ms   (18x slower)
+      largest disagreement   1.78e-15 Ry
 
 
 ## 4. The eigensolver: Davidson
@@ -179,10 +179,10 @@ for band, (a, b) in enumerate(zip(np.asarray(exact)[0], np.asarray(iterative)[0]
 ```
 
       band     dense (Ry)     Davidson (Ry)     difference
-         0    -0.390299160    -0.390299160   0.0e+00
-         1     0.140370280     0.140370280   4.0e-15
-         2     0.366613820     0.366613820   1.4e-15
-         3     0.366613820     0.366613820   9.4e-14
+         0    -0.390321364    -0.390321364   7.2e-16
+         1     0.140346328     0.140346328   3.2e-15
+         2     0.366586226     0.366586226   6.7e-15
+         3     0.366586226     0.366586226   9.9e-14
 
 
 The same answer, and the subspace it came from was 16 x 16 rather than 180 x 180.
@@ -233,16 +233,16 @@ for name in ("si-1k.in", "si-1k-ecut40.in"):
               f"   E = {energy:.9f} Ry")
 ```
 
-      si-1k.in          npw   180  dense         11.7 ms/iteration   E = -15.254449448 Ry
+      si-1k.in          npw   180  dense         13.7 ms/iteration   E = -15.254448713 Ry
 
 
-      si-1k.in          npw   180  davidson       5.9 ms/iteration   E = -15.254449448 Ry
+      si-1k.in          npw   180  davidson       7.1 ms/iteration   E = -15.254448713 Ry
 
 
-      si-1k-ecut40.in   npw  1131  dense       1160.6 ms/iteration   E = -15.304610213 Ry
+      si-1k-ecut40.in   npw  1131  dense       1218.1 ms/iteration   E = -15.304610214 Ry
 
 
-      si-1k-ecut40.in   npw  1131  davidson      27.7 ms/iteration   E = -15.304610213 Ry
+      si-1k-ecut40.in   npw  1131  davidson      29.4 ms/iteration   E = -15.304610214 Ry
 
 
 Identical energies, and at 1131 plane waves Davidson is more than ten times faster. The
@@ -277,20 +277,20 @@ for row in result.history:
 ```
 
       iter      total energy      accuracy       ethr
-         1     -15.348107858   1.43e-01   1.00e-02
-         2     -15.304036085   4.21e-03   1.79e-03
-         3     -15.304647211   1.97e-04   5.27e-05
-         4     -15.304618459   2.54e-05   2.46e-06
-         5     -15.304610128   1.24e-08   3.18e-07
-         6     -15.304610214   5.56e-09   1.55e-10
-         7     -15.304610213   3.52e-10   6.95e-11
-         8     -15.304610213   4.37e-11   4.40e-12
+         1     -15.687478084   1.43e-01   1.00e-02
+         2     -15.341932359   4.24e-03   1.79e-03
+         3     -15.287054707   2.00e-04   5.31e-05
+         4     -15.311283530   2.77e-05   2.50e-06
+         5     -15.304504092   1.72e-08   3.46e-07
+         6     -15.304736655   9.71e-09   2.15e-10
+         7     -15.304649306   9.69e-10   1.21e-10
+         8     -15.304610214   6.89e-11   1.21e-11
 
 
 The thresholds track QE's own sequence for the same input (1e-2, 1.6e-3, 7.0e-5, 1.5e-6,
 3.3e-8, 3.4e-10, 1.7e-11, 2.0e-12) closely enough that the two are visibly running the same
 schedule. The effect: **75 Davidson steps become 33**, against QE's 25 — and silicon's
-total energy still matches QE to 1.09e-8 Ry, term by term, exactly as before. The energy is
+total energy still matches QE to under 1e-9 Ry, term by term, exactly as before. The energy is
 variational in the density, so stopping the eigenvalues early costs it nothing.
 
 
@@ -337,10 +337,10 @@ for label, variant in (("full grid", dataclasses.replace(kauto, kpoints=full)),
       48 symmetry operations
 
 
-      full grid          8 k-points     20.4 ms/iteration   E = -15.794495941 Ry
+      full grid          8 k-points     23.6 ms/iteration   E = -15.794495571 Ry
 
 
-      irreducible wedge  2 k-points      8.5 ms/iteration   E = -15.794495941 Ry
+      irreducible wedge  2 k-points     10.9 ms/iteration   E = -15.794495571 Ry
 
 
 Two points instead of eight, and **the total energy is identical to nine decimals**. That
@@ -389,10 +389,10 @@ for band in range(nbnd):
       band      exact        from atomic      from random
 
 
-         0    -0.390299    -0.378360       1.154036
-         1     0.140370     0.162021       1.981284
-         2     0.366614     0.393597       2.628833
-         3     0.366614     0.393597       3.128656
+         0    -0.390321    -0.378273       1.154024
+         1     0.140346     0.162265       1.981277
+         2     0.366586     0.393957       2.628823
+         3     0.366586     0.393957       3.128653
 
 
 A Rayleigh-Ritz rotation inside the atomic orbitals' span already lands within tens of
@@ -447,8 +447,8 @@ print(subprocess.run([sys.executable, "-c", probe], capture_output=True, text=Tr
 
 ```
 
-      first  Calculation   1.091 s
-      second Calculation   0.047 s
+      first  Calculation   1.087 s
+      second Calculation   0.049 s
     
 
 

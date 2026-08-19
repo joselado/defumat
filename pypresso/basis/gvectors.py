@@ -95,6 +95,7 @@ def generate_gvectors(
     ecut: float,
     grid: tuple[int, int, int] | None = None,
     gamma_only: bool = False,
+    fft_factors: tuple[int, int, int] = (1, 1, 1),
 ) -> GVectors:
     """All G with ``|G|^2 <= ecut`` (Ry), sorted by magnitude.
 
@@ -105,6 +106,10 @@ def generate_gvectors(
         grid: FFT dimensions to enumerate within. Computed from the cutoff when
             omitted, which is what a caller normally wants; passing it lets the
             smooth grid be generated inside the dense box.
+        fft_factors: divisibility constraint on the FFT dimensions, from the
+            crystal's fractional translations. It changes the box, never the
+            G-vector set: a larger box only reaches vectors that the cutoff
+            rejects anyway.
         gamma_only: keep only half the sphere. At k = 0 a real wavefunction
             satisfies ``c(-G) = conj(c(G))``, so storing one G of each pair
             halves both memory and work. QE does this whenever the k-point set
@@ -120,7 +125,7 @@ def generate_gvectors(
     gcut = gcut_from_ecut(ecut, cell.alat)
 
     if grid is None:
-        grid = fft_grid_dimensions(at_alat, bg, gcut)
+        grid = fft_grid_dimensions(at_alat, bg, gcut, fft_factors)
 
     ranges = [np.arange(-((n - 1) // 2), (n - 1) // 2 + 1) for n in grid]
     i, j, k = np.meshgrid(*ranges, indexing="ij")

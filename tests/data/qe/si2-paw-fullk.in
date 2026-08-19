@@ -1,0 +1,33 @@
+! Silicon, two atoms, PAW, on the *unreduced* 2x2x2 k-grid.
+!
+! The same physics as si2-paw and a deliberately redundant way to sample it: all
+! eight points of the shifted grid, where two would do. That is the point. With
+! the full star of every k-point present, the projector occupations ``becsum``
+! come out symmetric on their own, so QE's ``PAW_symmetrize`` is the identity
+! and the one-centre terms can be validated without it. si2-paw, on the reduced
+! set, is then the case that tests the symmetrisation and nothing else.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=20.0, ecutrho=160.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-n-kjpaw_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS crystal
+  8
+   0.25 0.25 0.25  1.0
+   0.25 0.25 0.75  1.0
+   0.25 0.75 0.25  1.0
+   0.25 0.75 0.75  1.0
+   0.75 0.25 0.25  1.0
+   0.75 0.25 0.75  1.0
+   0.75 0.75 0.25  1.0
+   0.75 0.75 0.75  1.0

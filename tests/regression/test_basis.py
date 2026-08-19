@@ -19,17 +19,40 @@ from tests.regression.test_geometry import CASES, NEEDS_SPACE_GROUPS
 
 pytestmark = pytest.mark.regression
 
-#: One benchmark disagrees on the FFT dimensions while agreeing on everything
-#: else, and the disagreement is a property of the machine QE ran on rather than
-#: of the physics. pw_scf/scf.in and pw_scf/scf-cg.in are the same system at the
-#: same cutoffs -- both report 1459 G-vectors -- but scf.in's benchmark has a
-#: 15^3 grid and scf-cg.in's a 16^3 one. 15 = 3*5 is a valid FFT size for FFTW
-#: and every other library QE supports, but IBM's ESSL additionally requires a
-#: factor of 2, which would push 15 up to 16. The reference outputs predate the
-#: current release (the suite records REFERENCE_VERSION 6.0) and were evidently
-#: not all produced on the same build. The Miller-index range, and therefore the
-#: G-vector set, is identical either way: (15-1)/2 == (16-1)/2 == 7.
-KNOWN_FFT_GRID_PROVENANCE = {"scf-cg.in"}
+#: Some committed benchmarks disagree with the current QE on the FFT dimensions
+#: while agreeing on every G-vector. pw_scf/scf.in and pw_scf/scf-cg.in are the
+#: same system at the same cutoffs -- both report 1459 G-vectors -- but scf.in's
+#: benchmark has a 15^3 grid and scf-cg.in's a 16^3 one.
+#:
+#: The reason is not the machine, as an earlier version of this file guessed. It
+#: is that QE now requires the FFT dimensions to be a multiple of the
+#: denominators of the crystal's fractional translations (``fft_fact`` in
+#: ``PW/src/symm_base.f90``): diamond silicon's are 1/4, so its grids must be a
+#: multiple of 4, and 15 is rounded up to 16. That rule postdates the committed
+#: references (the suite records REFERENCE_VERSION 6.0). Running the vendored
+#: pw.x on pw_scf/scf.in confirms it: QE 7.5 prints 16^3 today.
+#:
+#: A benchmark is therefore taken at face value only when its grid already
+#: satisfies the constraint. When it does not, what is checked is that ours is
+#: the benchmark's grid rounded up -- and, as always, that ``ngm`` is identical,
+#: which is the part with physical content.
+
+
+def _fft_factors(system):
+    from pypresso.system.symmetry import find_symmetries
+
+    return find_symmetries(system.cell, system.structure).fft_factors()
+
+
+def _assert_grid(ours, reference, factors):
+    from pypresso.basis.fftgrid import good_fft_order
+
+    if all(n % f == 0 for n, f in zip(reference, factors)):
+        assert tuple(ours) == tuple(reference)
+    else:
+        assert tuple(ours) == tuple(
+            good_fft_order(n, f) for n, f in zip(reference, factors)
+        )
 
 
 @lru_cache(maxsize=None)
@@ -51,14 +74,10 @@ def _basis_and_reference(qe_testsuite, directory, name):
 
 @pytest.mark.parametrize(("directory", "name"), CASES)
 def test_dense_grid_matches_reference(qe_testsuite, directory, name):
-    basis, _, ref = _basis_and_reference(qe_testsuite, directory, name)
+    basis, system, ref = _basis_and_reference(qe_testsuite, directory, name)
 
     assert basis.dense.ngm == ref.ngm_dense
-    if name in KNOWN_FFT_GRID_PROVENANCE:
-        # Same G-sphere, different rounding-up of the box: check the content.
-        assert [(n - 1) // 2 for n in basis.dense.grid] == [(n - 1) // 2 for n in ref.fft_dense]
-    else:
-        assert tuple(basis.dense.grid) == tuple(ref.fft_dense)
+    _assert_grid(basis.dense.grid, ref.fft_dense, _fft_factors(system))
 
 
 @pytest.mark.parametrize(("directory", "name"), CASES)
@@ -74,7 +93,7 @@ def test_smooth_grid_matches_reference(qe_testsuite, directory, name):
 
     assert basis.doublegrid
     assert basis.smooth.ngm == ref.ngm_smooth
-    assert tuple(basis.smooth.grid) == tuple(ref.fft_smooth)
+    _assert_grid(basis.smooth.grid, ref.fft_smooth, _fft_factors(system))
     assert basis.smooth.ngm < basis.dense.ngm
 
 

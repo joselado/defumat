@@ -1,0 +1,174 @@
+"""Symmetrising the projector occupations.
+
+The density on the FFT grid is symmetrised in G space, which takes care of
+everything the plane-wave part of an ultrasoft calculation produces -- including
+the augmentation charge, since that is added to the density before the
+symmetrisation runs. ``becsum`` itself is not covered by that: PAW feeds it to
+the one-centre terms directly, on each atom's own radial mesh, where the
+crystal's symmetry has no grid to act on.
+
+It has to be imposed explicitly, and it is not optional for the same reason the
+density's symmetrisation is not (`PLAN.md` P5): a symmetry-reduced k-point set
+gives an unsymmetric ``becsum``, and diamond silicon's three ``p`` channels come
+out with occupations of 1.003, 1.268, 1.268 where symmetry says they must be
+equal. The one-centre energy of that is wrong in the fifth decimal.
+
+``PW/src/paw_symmetry.f90``:
+
+    becsym^a_ij = 1/nsym sum_S D^{l_i}_{m_i m}(S) D^{l_j}_{m_j m'}(S)
+                              becsum^{S(a)}_{(n_i m)(n_j m')}
+
+-- an average over the group, with each pair of channels rotated by the matrices
+that mix real spherical harmonics of the same ``l``, and the atom index following
+where the operation sends the atom. The radial index ``n`` is untouched: a
+rotation cannot mix projectors of different shape.
+
+The same average applies to ``ddd_paw`` (QE's ``PAW_symmetrize_ddd``), which is
+a derivative with respect to ``becsum`` and so transforms the same way.
+"""
+
+from __future__ import annotations
+
+import jax.numpy as jnp
+import numpy as np
+
+from pypresso.pseudo.harmonics import real_spherical_harmonics
+from pypresso.pseudo.projectors import projector_channels
+from pypresso.system.symmetry import Symmetries, atom_mapping, cartesian_rotations
+
+__all__ = ["BecsumSymmetry", "build_becsum_symmetry", "harmonic_rotations"]
+
+
+def harmonic_rotations(cell, symmetries: Symmetries, lmax: int) -> list:
+    """``D^l[s]``: how each operation mixes the ``2l+1`` real harmonics.
+
+    Defined by ``Y_lm(R r) = sum_m' D^l[m, m'] Y_lm'(r)``, and obtained the way
+    ``PW/src/d_matrix.f90`` obtains it -- evaluate both sides at a set of
+    directions and invert -- for the same reason
+    :mod:`pypresso.pseudo.coupling` does it that way: the matrices are defined
+    *by* this project's harmonics, so deriving them from it is the only way they
+    cannot disagree with it. They come out orthogonal, which is the check that
+    the harmonics are properly normalised, and a test asserts it.
+
+    Returns one ``(nsym, 2l+1, 2l+1)`` array per ``l`` from 0 to ``lmax``.
+    """
+    rotations = cartesian_rotations(cell, symmetries)
+    directions = _spread_directions(max(4 * lmax + 2, 8))
+    reference = np.asarray(real_spherical_harmonics(jnp.asarray(directions), lmax))
+
+    matrices = []
+    for l in range(lmax + 1):
+        block = slice(l * l, (l + 1) ** 2)
+        # More directions than unknowns, resolved in the least-squares sense:
+        # the fit is exact (the harmonics span themselves), and the extra rows
+        # only make the inversion better conditioned than a square draw would be.
+        pseudo_inverse = np.linalg.pinv(reference[:, block])  # (2l+1, ndir)
+        matrices.append(
+            np.array([
+                np.asarray(real_spherical_harmonics(
+                    jnp.asarray(directions @ rotation.T), lmax
+                ))[:, block].T @ pseudo_inverse.T
+                for rotation in rotations
+            ])
+        )
+    return matrices
+
+
+def _spread_directions(n: int) -> np.ndarray:
+    """``n`` well-separated unit vectors, deterministically."""
+    index = np.arange(n) + 0.5
+    z = 1.0 - 2.0 * index / n
+    radius = np.sqrt(np.maximum(0.0, 1.0 - z * z))
+    phi = np.pi * (1.0 + 5.0**0.5) * index
+    return np.stack([radius * np.cos(phi), radius * np.sin(phi), z], axis=1)
+
+
+class BecsumSymmetry:
+    """The group average, precomputed as one tensor per species.
+
+    ``operator[t]`` is ``(nsym, nh, nh, nh, nh)`` -- for each operation, the
+    matrix taking a source atom's ``becsum`` to its contribution to the image's.
+    Building it once turns the symmetrisation into a single contraction per
+    iteration, which is what keeps it inside ``jit`` and off the host.
+
+    ``nh`` is a few for every element that exists, so the tensor is small; the
+    number of operations, not the size, is what makes the naive loop expensive.
+    """
+
+    __slots__ = ("operators", "mapping", "species_atoms", "nsym")
+
+    def __init__(self, operators, mapping, species_atoms, nsym):
+        self.operators = operators
+        self.mapping = mapping
+        self.species_atoms = species_atoms
+        self.nsym = nsym
+
+    def apply(self, becsum: tuple) -> tuple:
+        """The symmetrised ``becsum``, in the same per-species layout."""
+        if self.nsym <= 1:
+            return becsum
+        out = []
+        for values, operator, sources in zip(
+            becsum, self.operators, self.mapping
+        ):
+            if values is None or operator is None:
+                out.append(values)
+                continue
+            # sources[s, n] is the index, within this species' atoms, of the
+            # atom that operation s sends atom n to.
+            gathered = values[sources]  # (nsym, nat_t, nh, nh)
+            out.append(
+                jnp.einsum("sijkl,snkl->nij", operator, gathered) / self.nsym
+            )
+        return tuple(out)
+
+
+def build_becsum_symmetry(
+    pseudos, structure, cell, symmetries: Symmetries
+) -> BecsumSymmetry | None:
+    """Precompute the group average. ``None`` when there is nothing to average."""
+    if symmetries.nsym <= 1:
+        return None
+
+    lmax = max((p.lmax for p in pseudos), default=-1)
+    if lmax < 0:
+        return None
+    rotations = harmonic_rotations(cell, symmetries, lmax)
+    mapping = atom_mapping(cell, structure, symmetries)
+
+    types = np.asarray(structure.types)
+    operators, sources_per_species, species_atoms = [], [], []
+    for t, pseudo in enumerate(pseudos):
+        atoms = np.flatnonzero(types == t)
+        species_atoms.append(tuple(int(a) for a in atoms))
+        channels = projector_channels(pseudo)
+        if not pseudo.is_paw or not len(atoms) or not channels:
+            operators.append(None)
+            sources_per_species.append(None)
+            continue
+
+        nh = len(channels)
+        # D acts within an (n, l) block; a channel is (n, l, m), so the operator
+        # is block diagonal in n and l and mixes only m.
+        single = np.zeros((symmetries.nsym, nh, nh))
+        for i, (nb_i, l_i, lm_i) in enumerate(channels):
+            for k, (nb_k, l_k, lm_k) in enumerate(channels):
+                if nb_i != nb_k:
+                    continue
+                single[:, i, k] = rotations[l_i][:, lm_i - l_i**2, lm_k - l_k**2]
+        operators.append(jnp.asarray(np.einsum("sik,sjl->sijkl", single, single)))
+
+        # Where each of this species' atoms is sent, as a position in the
+        # species' own atom list.
+        position = {int(a): n for n, a in enumerate(atoms)}
+        sources_per_species.append(
+            jnp.asarray([[position[int(mapping[s, a])] for a in atoms]
+                         for s in range(symmetries.nsym)])
+        )
+
+    return BecsumSymmetry(
+        operators=tuple(operators),
+        mapping=tuple(sources_per_species),
+        species_atoms=tuple(species_atoms),
+        nsym=symmetries.nsym,
+    )

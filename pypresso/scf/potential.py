@@ -71,22 +71,51 @@ def scf_accuracy(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell) -> jnp
     return hartree(residual_g, gvectors, cell)[1]
 
 
-def exchange_correlation(rho_r: jnp.ndarray, cell: Cell):
-    """XC potential on the grid and its energy."""
-    density = jnp.real(rho_r)
+def exchange_correlation(rho_r: jnp.ndarray, cell: Cell, rho_core: jnp.ndarray | None = None):
+    """XC potential on the grid and its energy.
+
+    ``rho_core`` is the nonlinear core correction (``PP_NLCC``): the frozen core
+    charge a pseudopotential leaves out of the valence density but which the
+    exchange-correlation functional is nonlinear in, so that evaluating ``e_xc``
+    at the valence density alone is wrong wherever the core overlaps the
+    valence. QE's ``v_xc`` handles it in the way transcribed here, and the two
+    halves are deliberately asymmetric (``PW/src/v_of_rho.f90``):
+
+    * the functional -- both ``e_xc`` and ``v_xc`` -- is evaluated at the
+      **total** density ``rho + rho_core``;
+    * the energy integrates ``(rho + rho_core) e_xc`` over the total density,
+      but ``vtxc`` and hence ``deband`` integrate ``v_xc`` against the
+      **valence** density only, because it is only the valence density that the
+      SCF varies.
+
+    Getting the second point backwards leaves the total energy self-consistent
+    and wrong, which is the same failure mode as the ``vloc`` ``G = 0`` trap.
+    """
+    valence = jnp.real(rho_r)
+    density = valence if rho_core is None else valence + jnp.real(rho_core)
     v = xc_potential(density)
     n = density.size
     energy = cell.volume / n * jnp.sum(density * xc_energy_density(density))
     return v, energy
 
 
-def v_of_rho(rho_r: jnp.ndarray, gvectors: GVectors, cell: Cell) -> Potential:
-    """The full self-consistent potential from a real-space density."""
+def v_of_rho(
+    rho_r: jnp.ndarray,
+    gvectors: GVectors,
+    cell: Cell,
+    rho_core: jnp.ndarray | None = None,
+) -> Potential:
+    """The full self-consistent potential from a real-space density.
+
+    The Hartree term sees the valence density alone -- the core charge is a
+    device for the exchange-correlation functional and carries no Hartree
+    energy, since the pseudopotential already contains the core's electrostatics.
+    """
     rho_g = r_to_g(rho_r, gvectors.fft_index)
 
     v_hartree_g, ehart = hartree(rho_g, gvectors, cell)
     v_hartree_r = jnp.real(g_to_r(v_hartree_g, gvectors.fft_index, gvectors.grid))
 
-    v_xc, etxc = exchange_correlation(rho_r, cell)
+    v_xc, etxc = exchange_correlation(rho_r, cell, rho_core)
 
     return Potential(v_scf=v_hartree_r + v_xc, ehart=ehart, etxc=etxc)

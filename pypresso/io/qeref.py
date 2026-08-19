@@ -311,6 +311,7 @@ _ENERGY_TERMS = {
     "ewald": r"ewald contribution\s*=\s*(" + _FLOAT + ")",
     "smearing": r"smearing contrib\. \(-TS\)\s*=\s*(" + _FLOAT + ")",
     "hubbard": r"Hubbard energy\s*=\s*(" + _FLOAT + ")",
+    # PAW's one-centre correction, printed only for a PAW run.
     "one_center_paw": r"one-center paw contrib\.\s*=\s*(" + _FLOAT + ")",
     "dispersion": r"Dispersion Correction\s*=\s*(" + _FLOAT + ")",
     "internal": r"internal energy E=F\+TS\s*=\s*(" + _FLOAT + ")",

@@ -15,36 +15,61 @@ and run with `OMP_NUM_THREADS=1`; pypresso runs with XLA's intra-op thread pool
 pinned to one thread, since otherwise JAX quietly uses all 14 cores and the
 comparison flatters it by the core count. The tool pins both itself.
 
-Two benchmark inputs, both a single k-point (`benchmarks/`):
+The benchmark inputs are all a single k-point (`benchmarks/`):
 
 | Input | | Why |
 |---|---|---|
 | `si-1k.in` | Si, 2 atoms, `ecutwfc = 12`, 180 plane waves | the test suite's silicon, one k-point |
 | `si-1k-ecut40.in` | the same cell at `ecutwfc = 40`, 1131 plane waves | a production cutoff, where scaling starts to show |
+| `si8-1k*.in`, `si16-1k*.in` | the same crystal in 8- and 16-atom cells | where the cost is physics rather than fixed overhead |
+| `si2-us-1k.in`, `si8-us-1k.in` | ultrasoft, `ecutwfc = 20`, dual 8 | a different *shape* of calculation, not just a bigger one |
+| `si2-paw-1k.in`, `si8-paw-1k.in` | PAW, same cutoffs | ultrasoft plus the one-centre radial work |
 
 One k-point on purpose: both codes parallelise over k, so a multi-k comparison
 measures batching rather than the cost of the physics.
 
 ## Where it stands
 
-Single core, this machine, 2026-08-18. `conv_thr = 1e-10` where the input allows
-it, so both codes converge to the same place and the energy agreement doubles as
-a correctness check on every optimisation.
+Single core, this machine, re-measured 2026-08-19. `conv_thr = 1e-10` where the
+input allows it, so both codes converge to the same place and the energy
+agreement doubles as a correctness check on every optimisation.
+
+These numbers were taken again after the FFT-grid rule changed
+(`Symmetries.fft_factors` — the dimensions must be a multiple of the fractional
+translations' denominators, see `PLAN.md` P2). That moved silicon's grids from
+15³/30³ to 16³/32³, so the earlier table was measured on grids neither code uses
+any more and its energy deltas no longer applied. The ratios barely moved; the
+agreement with QE improved.
 
 | | QE 7.5 | pypresso | ratio |
 |---|---|---|---|
-| **`si-1k`** — 2 atoms, 180 PWs, 1 k | 0.003 s | 0.007 s | **2.9x** |
-| **`si-1k-ecut40`** — 2 atoms, 1131 PWs | 0.011 s | 0.035 s | **3.1x** |
-| **`si8-1k`** — 8 atoms, 738 PWs | 0.020 s | 0.057 s | **2.8x** |
-| **`si8-1k-ecut30`** — 8 atoms, 2950 PWs | 0.070 s | 0.265 s | **3.8x** |
-| **`si16-1k`** — 16 atoms, 1476 PWs | 0.079 s | 0.307 s | **3.9x** |
-| **`si16-1k-ecut30`** — 16 atoms, 5900 PWs | 0.278 s | 1.159 s | **4.2x** |
-| **`pw_scf/scf-kauto`** — 2 k, reduced from 8 | 0.003 s | 0.011 s | **4.3x** |
-| **`pw_metal/metal`** — Al, 10 k | 0.013 s | 0.052 s | **3.9x** |
+| **`si-1k`** — 2 atoms, 180 PWs, 1 k | 0.004 s | 0.011 s | **3.0x** |
+| **`si-1k-ecut40`** — 2 atoms, 1131 PWs | 0.011 s | 0.037 s | **3.2x** |
+| **`si8-1k`** — 8 atoms, 738 PWs | 0.031 s | 0.064 s | **2.1x** |
+| **`si8-1k-ecut30`** — 8 atoms, 2950 PWs | 0.071 s | 0.277 s | **3.9x** |
+| **`si16-1k`** — 16 atoms, 1476 PWs | 0.100 s | 0.297 s | **3.0x** |
+| **`si16-1k-ecut30`** — 16 atoms, 5900 PWs | 0.284 s | 1.184 s | **4.2x** |
+| **`pw_scf/scf-kauto`** — 2 k, reduced from 8 | 0.003 s | 0.011 s | **4.6x** |
+| **`pw_metal/metal`** — Al, 10 k | 0.027 s | 0.106 s | **4.0x** |
+
+and, for ultrasoft and PAW (2026-08-19, `ecutwfc = 20`, `ecutrho = 160`):
+
+| | QE 7.5 | pypresso | ratio |
+|---|---|---|---|
+| **`si2-us-1k`** — 2 atoms, 395 PWs, 9185 G | 0.024 s | 0.051 s | **2.2x** |
+| **`si2-paw-1k`** — the same, PAW | 0.044 s | 0.080 s | **1.8x** |
+| **`si8-us-1k`** — 8 atoms, 1607 PWs, 36257 G | 0.124 s | 0.355 s | **2.9x** |
+| **`si8-paw-1k`** — the same, PAW | 0.172 s | 0.477 s | **2.8x** |
 
 Total energies against QE: **9.7e-10 Ry** on the sixteen-atom cell at 30 Ry,
-5.8e-9 at 12 Ry, 3.5e-9 and 1.5e-9 on the eight-atom cell, 2.6e-9 for two atoms
-at 40 Ry, 6.3e-8 for the metal.
+5.8e-9 at 12 Ry, 3.5e-9 and 1.5e-9 on the eight-atom cell, 3.8e-9 for two atoms
+at 40 Ry, 3.0e-9 for two atoms at 12 Ry, 5.6e-9 for the metal.
+
+`scf-kauto` is the one case where the two codes differ by more than that
+(1.0e-6 Ry), and it is not a disagreement about the physics: that input asks for
+`conv_thr = 1e-6`, so QE stops there while this comparison runs pypresso to
+1e-10. The regression suite compares it against a reference regenerated at 1e-10,
+where the two agree to 2e-9.
 
 The supercells are independent checks as well as bigger ones. All of them are the
 same crystal in different cells — the primitive fcc cell has two atoms, the
@@ -53,7 +78,45 @@ energy per atom is known in advance. At 30 Ry the sixteen-atom cell comes out at
 −126.72076070 Ry against exactly twice the eight-atom cell's −63.36038036, which
 is 2e-8 Ry apart on a 126 Ry total.
 
-Best of five runs on each side, and worth taking as ±20%: QE prints its timings
+Ultrasoft and PAW totals against QE: **2.5e-9 Ry** and **3.8e-10 Ry** on the
+two-atom cell, **5.0e-10** and **2.3e-9** on the eight-atom one — the same
+accuracy the norm-conserving path reaches, which is the point of quoting them
+next to the timings rather than only in `PLAN.md`.
+
+Two things in that table are worth reading carefully rather than skimming.
+
+**The ultrasoft ratios are no worse than the norm-conserving ones, and on eight
+atoms slightly better.** That is not because the extra work is free — the
+augmentation charge is built on a 45³ grid every iteration, the nonlocal
+coefficients are rebuilt from the potential, and the wavefunctions and the
+density now live on *different* grids with an interpolation between them. It is
+because all of that is dense array work on the larger of the two grids, which is
+exactly what XLA does well, while the part that was already the bottleneck — the
+eigensolver's many small dispatches — grows only with the number of plane waves,
+and a dual of 8 means there are fewer of those per G-vector than before. QE pays
+the same new costs in Fortran.
+
+**PAW's one-centre terms are radial work, and batching them was worth 35%.**
+Per atom, per iteration, they are nine radial Poisson solves on a 1141-point
+mesh for each of the all-electron and pseudo densities, plus an
+exchange-correlation evaluation on a 28-direction angular grid. On the Fortran
+side that is a handful of tridiagonal solves and some loops, close to free;
+here every one of them is a dispatch, and the arrays are far too small for the
+arithmetic to matter — the same lesson as the rest of this file, that on these
+sizes the cost is the number of compiled units.
+
+Two axes are batched, and the order they were found in is the useful part.
+Atoms were batched from the start (`vmap` over `becsum`). The **multipoles**
+were not: the first version looped over all nine `lm` in Python because the
+solver takes `l` as a static argument. Grouping them by `l` instead -- the
+`2l+1` components of one multipole solve the *same* equation -- turns nine
+dispatches into three and took the eight-atom PAW cell from **3.0x to 2.8x**
+against QE, with the underlying per-iteration time dropping from 0.507 s to
+0.477 s. What is still not batched is the all-electron and pseudo pass, which
+differ only in which tensor and core charge they use and could be one `vmap` of
+width two.
+
+Best of three or five runs on each side, and worth taking as ±20%: QE prints its timings
 to 0.01 s, so on the small cases its per-iteration figure is one significant
 digit and the ratios inherit that. The multi-k cases are the worst because ten
 k-points multiply the per-dispatch overhead that the single-k cases mostly hide.

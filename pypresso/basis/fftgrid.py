@@ -55,13 +55,22 @@ def good_fft_order(n: int, multiple_of: int | None = None) -> int:
     return candidate
 
 
-def fft_grid_dimensions(at_alat: np.ndarray, bg_2pi_alat: np.ndarray, gcut: float) -> tuple[int, int, int]:
+def fft_grid_dimensions(
+    at_alat: np.ndarray,
+    bg_2pi_alat: np.ndarray,
+    gcut: float,
+    fft_factors: tuple[int, int, int] = (1, 1, 1),
+) -> tuple[int, int, int]:
     """The dense FFT grid for a cutoff, following ``realspace_grid_init``.
 
     Args:
         at_alat: lattice vectors in units of alat, rows ``a1, a2, a3``.
         bg_2pi_alat: reciprocal vectors in units of ``2*pi/alat``, rows.
         gcut: cutoff in units of ``(2*pi/alat)^2``.
+        fft_factors: each dimension must be a multiple of its entry. These come
+            from the crystal's fractional translations -- see
+            ``Symmetries.fft_factors``. Diamond silicon's are ``(4, 4, 4)``, and
+            leaving them at 1 gives grids one FFT size below QE's.
 
     The two-step structure is QE's and matters: a first estimate bounds the
     Miller indices via ``|G . a_i| = |n_i| <= |G_max| |a_i|``, then ``grid_set``
@@ -76,7 +85,10 @@ def fft_grid_dimensions(at_alat: np.ndarray, bg_2pi_alat: np.ndarray, gcut: floa
     estimate = (np.sqrt(gcut) * np.linalg.norm(at_alat, axis=1)).astype(int) + 1
 
     nb = _largest_indices_inside(bg_2pi_alat, gcut, estimate)
-    return tuple(good_fft_order(2 * int(n) + 1) for n in nb)
+    return tuple(
+        good_fft_order(2 * int(n) + 1, factor)
+        for n, factor in zip(nb, fft_factors)
+    )
 
 
 def _largest_indices_inside(bg: np.ndarray, gcut: float, bound: np.ndarray) -> np.ndarray:

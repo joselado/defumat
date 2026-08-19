@@ -32,6 +32,10 @@ from pypresso.io.pwin import read_pw_input
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite")
 INPUT = QE / "pw_scf" / "scf.in"
 BENCHMARK = QE / "pw_scf" / "benchmark.out.git.inp=scf.in"
+# ... and the same case re-run with the *vendored* pw.x. The committed
+# benchmark was produced with QE 6.0, which chose a different FFT grid; see
+# section 5. Everything not affected by that is identical in the two.
+REGENERATED = Path("../tests/data/qe/reference.out.pw_scf-scf")
 
 print("pypresso", pypresso.__version__)
 print("input file present:", INPUT.is_file())
@@ -249,8 +253,6 @@ print("nearest-neighbour distance = %.4f bohr  (sqrt(3)/4 * a = %.4f)"
     [[ 0.    0.    0.  ]
      [-0.25  0.75 -0.25]]
     
-
-
     nearest-neighbour distance = 4.4167 bohr  (sqrt(3)/4 * a = 4.4167)
 
 
@@ -280,6 +282,8 @@ print(np.asarray(kpoints.cartesian(cell)))
     k-points (cartesian, units 2*pi/alat):
     [[0.25 0.25 0.25]
      [0.25 0.25 0.75]]
+
+
     weights: [0.5 1.5]  sum = 2.0
     
     the same points in crystal coordinates:
@@ -300,11 +304,26 @@ and potential out to `ecutrho`; the **smooth** set holds wavefunction quantities
 `4 * ecutwfc`. For norm-conserving pseudopotentials these coincide, which is why Quantum
 ESPRESSO prints only one grid here.
 
-The FFT grid is not a free parameter. It has to be large enough that the G-sphere touches
-but does not overlap its periodic image, and it has to factorise into sizes the FFT library
-likes (products of 2, 3 and 5 in practice). Both rules are Quantum ESPRESSO's, reproduced
-exactly, because the grid dimensions determine `ngm` and therefore every subsequent
-number.
+The FFT grid is not a free parameter, and it takes **three** rules rather than the two
+you would guess. It has to be large enough that the G-sphere touches but does not overlap
+its periodic image; it has to factorise into sizes the FFT library likes (products of 2, 3
+and 5 in practice); and — the one that is easy to miss — each dimension has to be a
+multiple of the denominators of the crystal's **fractional translations**.
+
+That last rule is why silicon's grid is 16³ and not the 15³ the cutoff alone would give.
+Diamond is non-symmorphic: half of its 48 operations combine a rotation with a translation
+of a quarter of a lattice vector, and a grid maps onto itself under a translation of 1/4
+only if it has a multiple of 4 points along that axis. Quantum ESPRESSO enforces it in
+`symm_base.f90` as `fft_fact`.
+
+It is not a detail. The exchange-correlation energy is evaluated pointwise on this grid, so
+a different grid is a different `etxc` in the sixth decimal — about 1e-6 Ry, a hundred times
+the agreement this project holds itself to. It is also why the reference used from here on
+is one regenerated with the vendored `pw.x` rather than the file the test suite ships: those
+were produced with Quantum ESPRESSO 6.0, which predates the rule and prints 15³.
+
+All three rules are Quantum ESPRESSO's, reproduced exactly, because the grid dimensions
+determine `ngm` and therefore every subsequent number.
 
 
 ```python
@@ -323,7 +342,7 @@ print()
 print("|G|^2 in units of (2*pi/alat)^2:", np.asarray(gvectors.g2(cell))[:8])
 ```
 
-    dense grid:  1459 G-vectors,  FFT dimensions (15, 15, 15)
+    dense grid:  1459 G-vectors,  FFT dimensions (16, 16, 16)
     smooth grid is the same object: True   (dual = 4.0, so no double grid)
     
     Miller indices of the first few G-vectors:
@@ -336,6 +355,8 @@ print("|G|^2 in units of (2*pi/alat)^2:", np.asarray(gvectors.g2(cell))[:8])
      [ 0  1  0]
      [ 1  0  0]]
     
+
+
     |G|^2 in units of (2*pi/alat)^2: [0. 3. 3. 3. 3. 3. 3. 3.]
 
 
@@ -494,10 +515,8 @@ print("Parseval:  sum|c|^2 = %.6f    (1/N) sum|f(r)|^2 = %.6f"
          float(jnp.sum(jnp.abs(field) ** 2) / n)))
 ```
 
-    field on the grid: (15, 15, 15) complex128
-    round-trip error  : 1.49e-15
-
-
+    field on the grid: (16, 16, 16) complex128
+    round-trip error  : 9.31e-16
     Parseval:  sum|c|^2 = 2896.647973    (1/N) sum|f(r)|^2 = 2896.647973
 
 
@@ -606,7 +625,7 @@ tolerance to hide behind.
 
 
 ```python
-reference = read_qe_output(BENCHMARK)
+reference = read_qe_output(REGENERATED)
 
 rows = [
     ("lattice parameter (bohr)", "%.6f" % cell.alat, "%.6f" % reference.alat),
@@ -637,7 +656,7 @@ print("k-points match:        ", np.allclose(np.asarray(kpoints.coords), referen
     lattice parameter (bohr)     10.200000          10.200000          OK
     cell volume (bohr^3)         265.3020           265.3020           OK
     G-vectors (dense)            1459               1459               OK
-    FFT dimensions               (15, 15, 15)       (15, 15, 15)       OK
+    FFT dimensions               (16, 16, 16)       (16, 16, 16)       OK
     plane waves per k-point      (180, 186)         (180, 186)         OK
     k-points                     2                  2                  OK
     sum of k-point weights       2.0000             2.0000             OK
@@ -667,18 +686,18 @@ print("highest occupied level: %.4f eV" % reference.homo)
 print("pressure              : %.2f kbar" % reference.pressure)
 ```
 
-    total energy      : -15.79449593 Ry   (in 5 SCF iterations)
-        one-electron         4.83378641 Ry
-        hartree              1.08429090 Ry
-        xc                  -4.81281466 Ry
+    total energy      : -15.79449557 Ry   (in 7 SCF iterations)
+        one-electron         4.83371826 Ry
+        hartree              1.08439697 Ry
+        xc                  -4.81285222 Ry
         ewald              -16.89975858 Ry
     
     eigenvalues (eV), shape (1, 2, 4):
-        k1: [-4.8701  2.3792  5.5371  5.5371]
-        k2: [-2.9165 -0.0653  2.6795  4.0355]
+        k1: [-4.8705  2.3787  5.5366  5.5366]
+        k2: [-2.917  -0.0658  2.6792  4.035 ]
     
-    highest occupied level: 5.5371 eV
-    pressure              : -30.30 kbar
+    highest occupied level: 5.5366 eV
+    pressure              : -30.21 kbar
 
 
 ## Where this goes next

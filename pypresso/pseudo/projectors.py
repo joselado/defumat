@@ -68,6 +68,10 @@ class Projectors(eqx.Module):
     vkb: jnp.ndarray  # (nk, npwx, nkb), complex
     dij: jnp.ndarray  # (nkb, nkb), Ry
     atom_of_channel: tuple[int, ...] = eqx.field(static=True)
+    #: ``q_ij``, the integral of the augmentation charge, block diagonal over
+    #: atoms like ``dij``. ``None`` for a purely norm-conserving calculation,
+    #: which is what makes ``S`` the identity there.
+    qq: jnp.ndarray | None = None
 
     @property
     def nkb(self) -> int:

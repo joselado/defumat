@@ -25,19 +25,24 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import partial
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 from pypresso.basis.builder import Basis, build_basis
+from pypresso.basis.interpolate import to_dense, to_smooth
 from pypresso.basis.sticks import build_sticks
 from pypresso.basis.fft import g_to_r, r_to_g
 from pypresso.hamiltonian.operator import Hamiltonian
 from pypresso.pseudo.atomic import atomic_wavefunctions
-from pypresso.pseudo.potentials import local_potential, starting_charge
-from pypresso.pseudo.projectors import build_projectors
+from pypresso.paw.onecenter import build_paw
+from pypresso.paw.symmetry import build_becsum_symmetry
+from pypresso.pseudo.augmentation import build_augmentation
+from pypresso.pseudo.potentials import core_charge, local_potential, starting_charge
+from pypresso.pseudo.projectors import build_projectors, projector_channels
 from pypresso.pseudo.upf import Pseudopotential
-from pypresso.scf.density import sum_band
+from pypresso.scf.density import becsum, sum_band
 from pypresso.scf.ewald import ewald_energy
 from pypresso.scf.mixing import get_mixer
 from pypresso.scf.occupations import (
@@ -82,19 +87,85 @@ def _symmetrize(rho_r, fft_index, grid, maps):
 
 
 @partial(jax.jit, static_argnames=("grid",))
-def _density_of_bands(psi, fft_index, grid, weights, cell, dense_index, maps):
-    """The output density: ``sum_band`` and the symmetrisation, fused.
+def _density_of_bands(psi, fft_index, grid, weights, cell):
+    """``sum_band`` on the smooth grid, in one kernel.
 
-    ``maps`` is ``None`` when the cell has no symmetry beyond the identity;
-    ``None`` is an empty pytree, so the two cases compile separately and neither
-    carries a runtime branch.
+    The symmetrisation used to be fused in here. It cannot be any more: it acts
+    on the dense grid, and with a double grid the density has to be lifted there
+    first.
     """
-    rho = sum_band(psi, fft_index, grid, weights, cell)
-    if maps is None:
-        return rho
-    permutations, phases = maps
-    rho_g = apply_symmetry_maps(r_to_g(rho, dense_index), permutations, phases)
-    return jnp.real(g_to_r(rho_g, dense_index, grid))
+    return sum_band(psi, fft_index, grid, weights, cell)
+
+
+@jax.jit
+def _paw_deband(ddd_paw, augmentation, becsum_):
+    """``sum_a sum_ij ddd_paw^a_ij becsum^a_ij``, out of the block matrix.
+
+    Reading the blocks back out of the assembled ``(nkb, nkb)`` matrix rather
+    than keeping them separately is deliberate: it is the *same* array the
+    Hamiltonian used, so the two cannot drift apart.
+    """
+    total = jnp.asarray(0.0)
+    for values, atoms in zip(becsum_, augmentation.species_atoms):
+        if values is None or not atoms:
+            continue
+        nh = values.shape[-1]
+        for n, atom in enumerate(atoms):
+            start = augmentation.channel_offsets[atom]
+            block = jax.lax.dynamic_slice(ddd_paw, (start, start), (nh, nh))
+            total = total + jnp.sum(block * values[n])
+    return total
+
+
+def _mix(mixer, rho, rho_out, becsum_in, becsum_out):
+    """One mixing step over the density and, for PAW, ``becsum`` with it.
+
+    The two are packed into a single vector so that the extrapolation
+    coefficients Anderson computes from the density residual are applied to both
+    -- they are two views of the same fixed point, and mixing them with
+    different histories makes the iteration inconsistent rather than merely
+    slower.
+    """
+    flat = [np.asarray(rho).ravel()]
+    flat_out = [np.asarray(rho_out).ravel()]
+    for old, new in zip(becsum_in, becsum_out):
+        if old is None:
+            continue
+        flat.append(np.asarray(old).ravel())
+        flat_out.append(np.asarray(new).ravel())
+
+    mixed = mixer.mix(np.concatenate(flat), np.concatenate(flat_out))
+
+    offset = rho.size
+    rho_mixed = jnp.asarray(mixed[:offset].reshape(rho.shape))
+    becsum_mixed = []
+    for old in becsum_in:
+        if old is None:
+            becsum_mixed.append(None)
+            continue
+        becsum_mixed.append(jnp.asarray(mixed[offset : offset + old.size].reshape(old.shape)))
+        offset += old.size
+    return rho_mixed, tuple(becsum_mixed)
+
+
+@jax.jit
+def _paw_onecenter(paw, becsum_):
+    """``PAW_potential``: the one-centre energy and its ``ddd``, in one kernel."""
+    return paw.energy_and_coefficients(becsum_)
+
+
+@jax.jit
+def _newd(potential, fft_index, dij, augmentation):
+    """``D^(0)_ij + int V_eff Q_ij``, as the block matrix the Hamiltonian takes."""
+    potential_g = r_to_g(potential, fft_index)
+    return dij + augmentation.block_matrix(augmentation.integrals(potential_g))
+
+
+@partial(jax.jit, static_argnames=("grid",))
+def _addusdens(rho_r, fft_index, grid, augmentation, becsum_):
+    """The augmentation charge, added to the density on the dense grid."""
+    charge = augmentation.charge(becsum_)
+    return rho_r + jnp.real(g_to_r(charge, fft_index, grid))
 
 
 @partial(jax.jit, static_argnames=("nbnd",))
@@ -112,9 +183,13 @@ def _iteration_scalars(eigenvalues, weights, rho_in, rho_out, v_scf, volume):
     Each ``float()`` on a device array is a host round trip; computing the three
     together and transferring them in one go is the difference between one
     synchronisation per iteration and one per printed number.
+
+    ``deband`` integrates the **output** density against the **input**
+    potential, which is where ``delta_e()`` sits in ``electrons.f90``'s
+    ordering -- see the note in :func:`run_scf`.
     """
     eband = jnp.sum(weights * eigenvalues)
-    deband = -volume / rho_in.size * jnp.sum(rho_in * v_scf)
+    deband = -volume / rho_out.size * jnp.sum(rho_out * v_scf)
     residual = jnp.max(jnp.abs(rho_out - rho_in))
     return jnp.stack([eband, deband, residual])
 
@@ -200,22 +275,59 @@ class Calculation:
         self.nelec = sum(self.pseudos[t].z_valence for t in system.structure.types)
         self.charges = np.array([self.pseudos[t].z_valence for t in system.structure.types])
 
-        gvectors, planewaves = self.basis.dense, self.basis.planewaves
-        self.kinetic = planewaves.kinetic(gvectors, system.kpoints, system.cell)
-        self.fft_index = planewaves.fft_index(gvectors)
+        # Two grids, and which quantity lives on which is QE's split: the
+        # wavefunctions and everything built from them are on the *smooth* grid,
+        # the density and the potential on the *dense* one. They are the same
+        # object unless the input asks for a dual above 4.
+        dense, smooth = self.basis.dense, self.basis.smooth
+        planewaves = self.basis.planewaves
+        self.kinetic = planewaves.kinetic(smooth, system.kpoints, system.cell)
+        self.fft_index = planewaves.fft_index(smooth)
 
         # QE's FFT layout for the wavefunction transforms; see basis/sticks.py.
-        self.sticks = build_sticks(self.fft_index, planewaves.mask, gvectors.grid)
+        self.sticks = build_sticks(self.fft_index, planewaves.mask, smooth.grid)
 
         self.projectors = build_projectors(
-            self.pseudos, system.structure, system.cell, gvectors, planewaves, system.kpoints
+            self.pseudos, system.structure, system.cell, smooth, planewaves, system.kpoints
         )
 
-        vloc_g = local_potential(self.pseudos, system.structure, system.cell, gvectors)
-        self.vltot = jnp.real(g_to_r(vloc_g, gvectors.fft_index, gvectors.grid))
+        # The augmentation charge lives on the *dense* grid: it is sharply
+        # peaked, and holding it is what the second grid is for. Everything
+        # ultrasoft hangs off this object being non-None.
+        self.augmentation = build_augmentation(
+            self.pseudos, system.structure, system.cell, dense
+        )
+        self.species_channels = ()
+        self.paw = None
+        if self.augmentation is not None:
+            self.projectors = eqx.tree_at(
+                lambda p: p.qq,
+                self.projectors,
+                self._per_atom(self.augmentation.qq),
+                is_leaf=lambda x: x is None,
+            )
+            self.species_channels = self._species_channels()
+
+        # PAW adds the one-centre corrections on top of everything ultrasoft
+        # does. They depend on ``becsum`` and on nothing else that changes, so
+        # like ``newd`` they are rebuilt once per SCF iteration.
+        self.paw = build_paw(self.pseudos, system.structure)
+
+        vloc_g = local_potential(self.pseudos, system.structure, system.cell, dense)
+        self.vltot = jnp.real(g_to_r(vloc_g, dense.fft_index, dense.grid))
+
+        # The nonlinear core correction, on the dense grid (``set_rhoc``). It is
+        # ``None`` when no species has a PP_NLCC section, and ``None`` is an
+        # empty pytree, so the two cases compile separately with no runtime
+        # branch in the potential.
+        rho_core_g = core_charge(self.pseudos, system.structure, system.cell, dense)
+        self.rho_core = (
+            None if rho_core_g is None
+            else jnp.real(g_to_r(rho_core_g, dense.fft_index, dense.grid))
+        )
 
         self.ewald = float(
-            ewald_energy(system.cell, system.structure, gvectors, self.charges)
+            ewald_energy(system.cell, system.structure, dense, self.charges)
         )
 
         # The density built from a symmetry-reduced k-point set is not itself
@@ -228,15 +340,108 @@ class Calculation:
         # question is asked rather than assumed. Gamma-only storage keeps half
         # the sphere, so a difference of two stored G's need not be a stored G at
         # all and the gather does not apply however large the dual is.
+        # The gather reads the potential stored on the *smooth* grid, since that
+        # is the grid H|psi> runs on, so the question is whether the smooth
+        # cutoff reaches 4*ecutwfc -- which it does by construction whenever the
+        # dual exceeds 4, and only then depends on ecutrho.
         self.resolves_differences = bool(
-            system.ecutrho >= 4.0 * system.ecutwfc - 1e-8
-            and not self.basis.dense.gamma_only
+            smooth.ecut >= 4.0 * system.ecutwfc - 1e-8 and not smooth.gamma_only
         )
 
         self.symmetries = find_symmetries(system.cell, system.structure)
-        self._symmetry_maps = (
-            symmetry_maps(gvectors, self.symmetries) if self.symmetries.nsym > 1 else None
+        # PAW's projector occupations need the symmetry imposed on them
+        # explicitly -- see pypresso.paw.symmetry. Built after the symmetry
+        # search, which is why it is not up with the rest of the PAW setup.
+        self._becsum_symmetry = (
+            build_becsum_symmetry(self.pseudos, system.structure, system.cell,
+                                  self.symmetries)
+            if self.paw is not None else None
         )
+        self._symmetry_maps = (
+            symmetry_maps(dense, self.symmetries) if self.symmetries.nsym > 1 else None
+        )
+
+    def _per_atom(self, per_species) -> jnp.ndarray:
+        """A per-species ``(nh, nh)`` quantity, as the ``(nkb, nkb)`` block matrix."""
+        blocks = tuple(
+            jnp.broadcast_to(block, (len(atoms),) + block.shape)
+            for block, atoms in zip(per_species, self.augmentation.species_atoms)
+        )
+        return self.augmentation.block_matrix(blocks)
+
+    def _species_channels(self) -> tuple:
+        """For each species, the projector columns of each of its atoms.
+
+        ``None`` for a norm-conserving species: it has projectors, but no
+        augmentation charge, so no ``becsum`` is needed from it.
+        """
+        offsets = self.augmentation.channel_offsets
+        channels = []
+        for t, atoms in enumerate(self.augmentation.species_atoms):
+            nh = self.pseudos[t].nh
+            if not self.pseudos[t].is_ultrasoft or nh == 0 or not atoms:
+                channels.append(None)
+                continue
+            channels.append(
+                jnp.asarray([[offsets[a] + i for i in range(nh)] for a in atoms])
+            )
+        return tuple(channels)
+
+    @property
+    def is_ultrasoft(self) -> bool:
+        return self.augmentation is not None
+
+    @property
+    def is_paw(self) -> bool:
+        return self.paw is not None
+
+    def onecenter(self, becsum_):
+        """``(epaw, ddd_paw)`` for the current ``becsum``, as a block matrix.
+
+        ``(0, None)`` when no species is PAW.
+        """
+        if self.paw is None:
+            return jnp.asarray(0.0), None
+        energy, blocks = _paw_onecenter(self.paw, becsum_)
+        return energy, self.augmentation.block_matrix(blocks)
+
+    def becsum(self, wavefunctions, weights) -> tuple:
+        """``becsum`` for every ultrasoft species, or ``()`` when there are none."""
+        if not self.is_ultrasoft:
+            return ()
+        values = becsum(
+            wavefunctions, self.projectors.vkb, weights, self.species_channels
+        )
+        if self._becsum_symmetry is not None:
+            values = self._becsum_symmetry.apply(values)
+        return values
+
+    def coefficients(self, potential: jnp.ndarray, ddd_paw=None) -> jnp.ndarray | None:
+        """``newd``: the ``D_ij`` the Hamiltonian should use with this potential.
+
+        ``PW/src/newd_acc.f90``. ``D_ij^a = D_ij^(0) + int V_eff(r) Q_ij^a(r) dr``
+        with ``V_eff`` the **total** local potential -- ``vltot`` included, which
+        ``newq_acc`` folds in through its ``skip_vltot = .false.`` argument. The
+        integral is done on the dense grid in G space, where ``Q_ij(G)`` already
+        is. ``None`` means "nothing to rebuild": the norm-conserving case, where
+        the file's ``D_ij`` is the answer for the whole run.
+        """
+        if not self.is_ultrasoft:
+            return None
+        dense = self.basis.dense
+        deeq = _newd(
+            potential, dense.fft_index, self.projectors.dij, self.augmentation
+        )
+        # ``add_paw_to_deeq``: the one-centre coefficients enter the nonlocal
+        # term in exactly the same place the ultrasoft integral does.
+        return deeq if ddd_paw is None else deeq + ddd_paw
+
+    def augmented(self, rho_r: jnp.ndarray, becsum_) -> jnp.ndarray:
+        """``addusdens``: the augmentation charge added to a real-space density."""
+        if not self.is_ultrasoft:
+            return rho_r
+        dense = self.basis.dense
+        return _addusdens(rho_r, dense.fft_index, dense.grid, self.augmentation, becsum_)
 
     def symmetrize(self, rho_r: jnp.ndarray) -> jnp.ndarray:
         """Impose the crystal symmetry on a real-space density."""
@@ -245,21 +450,32 @@ class Calculation:
         gvectors = self.basis.dense
         return _symmetrize(rho_r, gvectors.fft_index, gvectors.grid, self._symmetry_maps)
 
-    def density(self, wavefunctions, weights) -> jnp.ndarray:
-        """The symmetrised output density from the occupied states."""
-        gvectors = self.basis.dense
-        return _density_of_bands(
-            wavefunctions,
-            self.fft_index,
-            gvectors.grid,
-            weights,
-            self.system.cell,
-            gvectors.fft_index,
-            self._symmetry_maps,
-        )
+    def density(self, wavefunctions, weights, becsum_=None) -> jnp.ndarray:
+        """The symmetrised output density from the occupied states.
 
-    def hamiltonian(self, v_scf: jnp.ndarray) -> Hamiltonian:
-        potential = self.vltot + v_scf
+        ``sum_band`` runs on the smooth grid, where the wavefunctions are; the
+        result is lifted to the dense grid before it is symmetrised, because the
+        dense grid is where the density is mixed, where the potential is built
+        from it, and -- once there is an augmentation charge -- where the rest
+        of it is added.
+        """
+        dense, smooth = self.basis.dense, self.basis.smooth
+        if becsum_ is None:
+            becsum_ = self.becsum(wavefunctions, weights)
+        rho = _density_of_bands(
+            wavefunctions, self.fft_index, smooth.grid, weights, self.system.cell
+        )
+        return self.symmetrize(self.augmented(to_dense(rho, smooth, dense), becsum_))
+
+    def hamiltonian(self, v_scf: jnp.ndarray, ddd_paw=None) -> Hamiltonian:
+        # ``set_vrs`` adds the fixed local pseudopotential to the self-consistent
+        # part on the dense grid, and ``interpolate`` hands the wavefunction
+        # transforms a smooth-grid copy. ``newd`` reads the *dense* one, since
+        # the augmentation charge it integrates against is only representable
+        # there.
+        total = self.vltot + v_scf
+        deeq = self.coefficients(total, ddd_paw)
+        potential = to_smooth(total, self.basis.dense, self.basis.smooth)
         return Hamiltonian(
             kinetic=self.kinetic,
             potential=potential,
@@ -270,8 +486,9 @@ class Calculation:
             fft_index=self.fft_index,
             mask=self.basis.planewaves.mask,
             projectors=self.projectors,
-            grid=self.basis.dense.grid,
+            grid=self.basis.smooth.grid,
             resolves_differences=self.resolves_differences,
+            deeq=deeq,
         )
 
     def starting_density(self) -> jnp.ndarray:
@@ -279,6 +496,37 @@ class Calculation:
             self.pseudos, self.system.structure, self.system.cell, self.basis.dense, self.nelec
         )
         return jnp.real(g_to_r(rho_g, self.basis.dense.fft_index, self.basis.dense.grid))
+
+    def starting_becsum(self) -> tuple:
+        """The projector occupations of isolated atoms (``PAW_atomic_becsum``).
+
+        PAW needs a ``becsum`` before there are any wavefunctions, because the
+        one-centre potential enters the very first Hamiltonian. QE takes it from
+        the reference occupations the pseudopotential file records, spread evenly
+        over the ``2l+1`` channels of each projector -- the atom's own ground
+        state, which is the same information the starting density comes from.
+        """
+        if not self.is_ultrasoft:
+            return ()
+        becsum = []
+        for t, atoms in enumerate(self.augmentation.species_atoms):
+            channels = self.species_channels[t]
+            if channels is None or not atoms:
+                becsum.append(None)
+                continue
+            pseudo = self.pseudos[t]
+            occupations = (
+                pseudo.paw.occupations if pseudo.paw is not None
+                else np.zeros(pseudo.nbeta)
+            )
+            diagonal = np.array([
+                occupations[nb] / (2 * l + 1) for nb, l, _ in projector_channels(pseudo)
+            ])
+            becsum.append(
+                jnp.broadcast_to(jnp.diag(jnp.asarray(diagonal)),
+                                 (len(atoms), pseudo.nh, pseudo.nh))
+            )
+        return tuple(becsum)
 
     def starting_wavefunctions(self, hamiltonian: Hamiltonian, nbnd: int) -> jnp.ndarray:
         """The first guess at the wavefunctions, from the atomic orbitals.
@@ -295,7 +543,7 @@ class Calculation:
         """
         atomic = atomic_wavefunctions(
             self.pseudos, self.system.structure, self.system.cell,
-            self.basis.dense, self.basis.planewaves, self.system.kpoints,
+            self.basis.smooth, self.basis.planewaves, self.system.kpoints,
         )
         missing = nbnd - atomic.shape[1]
         if missing > 0:
@@ -372,6 +620,14 @@ def run_scf(
 
     mixer = get_mixer(mixing_mode, beta=mixing_beta)
     rho = calculation.starting_density()
+    # ``becsum`` is mixed alongside the density, not derived from it. For an
+    # ultrasoft run it could be recomputed from the wavefunctions at any point,
+    # but for PAW the one-centre potential is built from it *before* the
+    # Hamiltonian exists, so it has to be part of the mixed state -- which is
+    # why ``mix_rho.f90`` says it mixes "rho in g-space ... and becsum (for
+    # paw)". The starting value is the isolated atoms', matching the starting
+    # density.
+    becsum_state = calculation.starting_becsum()
 
     previous_energy, history = None, []
     converged = False
@@ -381,8 +637,11 @@ def run_scf(
     for iteration in range(1, max_iterations + 1):
         ethr = next_ethr(ethr, accuracy, calculation.nelec, iteration)
 
-        potential = _potential_of_rho(rho, calculation.basis.dense, system.cell)
-        hamiltonian = calculation.hamiltonian(potential.v_scf)
+        potential = _potential_of_rho(
+            rho, calculation.basis.dense, system.cell, calculation.rho_core
+        )
+        epaw, ddd_paw = calculation.onecenter(becsum_state)
+        hamiltonian = calculation.hamiltonian(potential.v_scf, ddd_paw)
 
         # QE's threshold for judging the *first* diagonalisation after the fact:
         # if the density turns out to be better than the eigenvalues, the loose
@@ -396,7 +655,8 @@ def run_scf(
                 hamiltonian, nbnd, wavefunctions, ethr
             )
             wg, levels = calculation.occupations(eigenvalues)
-            rho_out = calculation.density(wavefunctions, wg)
+            becsum_out = calculation.becsum(wavefunctions, wg)
+            rho_out = calculation.density(wavefunctions, wg, becsum_out)
             # On the dense grid, which is the grid the residual lives on. QE
             # sums rho_ddot over the *smooth* set instead (and says so, in a
             # comment noting the change from ngm to ngms); the difference is the
@@ -413,10 +673,46 @@ def run_scf(
                 print(f"  iteration {iteration:3d}   ethr was too large; "
                       f"diagonalising again at {ethr:.2e}")
 
+        # Which density each term is evaluated at is QE's convention, and it is
+        # not uniform (``electrons.f90``, and the comment there justifying
+        # ``descf``):
+        #
+        #   * ``eband``  -- the eigenvalues, hence the potential of the *input*
+        #     density, the one the Hamiltonian was built from;
+        #   * ``deband`` -- ``delta_e()``, which runs *before* ``v_of_rho`` is
+        #     called again, so it pairs the **output** density with the
+        #     **input** potential;
+        #   * ``ehart``/``etxc`` -- ``v_of_rho`` on the density that will be
+        #     used next, which at convergence is the unmixed **output** one.
+        #
+        # ``descf`` is QE's first-order correction for that mismatch, and it is
+        # identically zero at convergence, which is the only iteration whose
+        # terms are compared. Evaluating all of them at the input density
+        # instead leaves each one ~1e-5 Ry away from QE's while the total --
+        # being variational -- still agrees to 1e-9.
         eband, deband, residual = (
             float(x) for x in
-            _iteration_scalars(eigenvalues, wg, rho, rho_out, potential.v_scf, system.cell.volume)
+            _iteration_scalars(
+                eigenvalues, wg, rho, rho_out, potential.v_scf, system.cell.volume
+            )
         )
+
+        converged = accuracy < conv_thr
+        if converged:
+            potential = _potential_of_rho(
+                rho_out, calculation.basis.dense, system.cell, calculation.rho_core
+            )
+            # ... and the one-centre energy with it. ``ddd_paw`` is deliberately
+            # *not* refreshed: ``deband`` below pairs it with the output becsum
+            # exactly as ``delta_e`` does, which runs before QE recomputes it.
+            epaw, _ = calculation.onecenter(becsum_out)
+
+        # PAW's contribution to ``deband``: ``delta_e`` subtracts
+        # ``sum ddd_paw * becsum`` for the same reason it subtracts
+        # ``int rho v_scf`` -- the one-centre potential is already inside every
+        # eigenvalue through ``deeq``, and ``eband`` would double-count it.
+        if calculation.is_paw:
+            deband -= float(_paw_deband(ddd_paw, calculation.augmentation, becsum_out))
 
         terms = {
             "one-electron": eband + deband,
@@ -424,6 +720,8 @@ def run_scf(
             "xc": float(potential.etxc),
             "ewald": calculation.ewald,
         }
+        if calculation.is_paw:
+            terms["one_center_paw"] = float(epaw)
         if "smearing" in levels:
             terms["smearing"] = levels["smearing"]
         total = sum(terms.values())
@@ -437,14 +735,12 @@ def run_scf(
                   f"   accuracy = {accuracy:.2e}   ethr = {ethr:.2e}"
                   f"   |drho| = {residual:.2e}")
 
-        if accuracy < conv_thr:
-            converged = True
-            # One more density from the converged potential, without mixing.
+        if converged:
             rho = rho_out
             break
 
         previous_energy = total
-        rho = jnp.asarray(mixer.mix(np.asarray(rho), np.asarray(rho_out)))
+        rho, becsum_state = _mix(mixer, rho, rho_out, becsum_state, becsum_out)
 
     return SCFResult(
         converged=converged,

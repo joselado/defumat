@@ -1,6 +1,8 @@
 """P0 check: the QE reference parser reads real benchmark outputs correctly.
 
-Expected values are transcribed by hand from the committed benchmark files.
+Expected values are transcribed by hand from the committed benchmark files --
+hence ``committed_benchmark`` rather than ``benchmark``: these tests are about
+what is in a particular file, not about what the current QE would print.
 This is the one place in the test suite where that is appropriate -- everywhere
 else compares computed results against whatever the parser returns, so if the
 parser is wrong every later phase is silently wrong too.
@@ -19,9 +21,9 @@ from pypresso.io import read_qe_output
 pytestmark = pytest.mark.unit
 
 
-def test_scf_silicon(benchmark):
+def test_scf_silicon(committed_benchmark):
     """The canonical first target: Si diamond, LDA, 2 k-points, with stress."""
-    ref = read_qe_output(benchmark("pw_scf", "scf.in"))
+    ref = read_qe_output(committed_benchmark("pw_scf", "scf.in"))
 
     assert ref.calculation == "scf"
     assert (ref.ibrav, ref.nat, ref.ntyp, ref.nbnd) == (2, 2, 1, 4)
@@ -74,9 +76,9 @@ def test_scf_silicon(benchmark):
     assert ref.forces is None  # not requested by this input
 
 
-def test_bands_run(benchmark):
+def test_bands_run(committed_benchmark):
     """`scf-1.in` restarts from scf.in's density: bands only, no energy."""
-    ref = read_qe_output(benchmark("pw_scf", "scf-1.in"))
+    ref = read_qe_output(committed_benchmark("pw_scf", "scf-1.in"))
 
     assert ref.calculation == "bands"
     assert ref.nbnd == 8
@@ -88,9 +90,9 @@ def test_bands_run(benchmark):
     assert np.all(np.diff(ref.eigenvalues, axis=-1) >= -1e-8)
 
 
-def test_nscf_run(benchmark):
+def test_nscf_run(committed_benchmark):
     """`scf-2.in`: same density, a new k-grid, occupations resolved."""
-    ref = read_qe_output(benchmark("pw_scf", "scf-2.in"))
+    ref = read_qe_output(committed_benchmark("pw_scf", "scf-2.in"))
 
     assert ref.calculation == "nscf"
     assert ref.eigenvalues.shape == (1, 10, 8)
@@ -98,8 +100,8 @@ def test_nscf_run(benchmark):
     assert ref.total_energy is None
 
 
-def test_metal_has_fermi_level_and_smearing(benchmark):
-    ref = read_qe_output(benchmark("pw_metal", "metal.in"))
+def test_metal_has_fermi_level_and_smearing(committed_benchmark):
+    ref = read_qe_output(committed_benchmark("pw_metal", "metal.in"))
 
     assert ref.fermi_energy == pytest.approx(8.3513)
     assert ref.homo is None
@@ -108,8 +110,8 @@ def test_metal_has_fermi_level_and_smearing(benchmark):
     assert sum(ref.energy_terms.values()) == pytest.approx(ref.total_energy, abs=1e-8)
 
 
-def test_spin_polarised_gives_two_channels(benchmark):
-    ref = read_qe_output(benchmark("pw_lsda", "lsda.in"))
+def test_spin_polarised_gives_two_channels(committed_benchmark):
+    ref = read_qe_output(committed_benchmark("pw_lsda", "lsda.in"))
 
     assert ref.nspin == 2
     assert ref.eigenvalues.shape[0] == 2

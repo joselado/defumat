@@ -57,7 +57,13 @@ def rayleigh_ritz(hamiltonian, ik, vectors, nbnd: int):
     applied = hamiltonian.apply(vectors, ik)
 
     h = vectors.conj() @ applied.T
-    s = vectors.conj() @ vectors.T
+    # The overlap is <psi|S|psi>, not <psi|psi>. With an ultrasoft
+    # pseudopotential the atomic orbitals are not S-orthonormal -- their
+    # S-norms are off by tens of percent -- so using the plain inner product
+    # here returns combinations that are not even approximately eigenvectors,
+    # and the first Davidson call starts further from the answer than a random
+    # guess would. ``rotate_wfc`` calls ``s_psi`` for exactly this reason.
+    s = vectors.conj() @ hamiltonian.apply_s(vectors, ik).T
     h = 0.5 * (h + h.conj().T)
     s = 0.5 * (s + s.conj().T)
 

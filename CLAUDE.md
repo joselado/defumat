@@ -9,16 +9,19 @@ Fortran QE 7.5 release is vendored here **as reference material only** — it is
 understand algorithms and to validate numerical results, never modified or compiled into
 the deliverable.
 
-**Status: the first milestone is met for silicon.** P0–P5 and P7 are done, P6 is
-partial. A silicon SCF reproduces QE's total energy to **1.1e-8 Ry** term by term, its
-band structure to **0.0002 eV**, and metals with every smearing to ~2.5e-8 Ry.
+**Status: the first milestone is met for silicon, and ultrasoft/PAW work.** P0–P5, P7
+and P12 are done, P6 is partial. A silicon SCF reproduces QE's total energy to
+**~1e-9 Ry** term by term, its band structure to **0.0002 eV**, and metals with every
+smearing to ~2.5e-8 Ry. **Ultrasoft and PAW pseudopotentials are supported for LDA** and
+match QE to **≤3e-9 Ry** on 2- and 8-atom silicon (P12).
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
 read it before writing code. P4 is now complete: a block Davidson eigensolver behind a
 name registry, with the dense solver kept as its reference, seeded from the pseudo-atomic
 orbitals as QE seeds it. P6 is complete too: automatic k-grids are reduced to the
-irreducible wedge. P10's first pass puts pypresso within **3.3x of serial Quantum ESPRESSO
-per SCF iteration** on the same machine — see `PERFORMANCE.md`. **Outstanding:** DOS (P8),
-spin (P9), and the rest of P10 (k-axis sharding and GPU).
+irreducible wedge. P10's first pass puts pypresso within **2–4x of serial Quantum ESPRESSO
+per SCF iteration** on the same machine, ultrasoft and PAW included — see
+`PERFORMANCE.md`. **Outstanding:** DOS (P8), spin (P9), the rest of P10 (k-axis sharding
+and GPU), and GGA/PBE, which is what currently keeps ultrasoft and PAW to LDA datasets.
 
 ## Layout
 
@@ -41,7 +44,12 @@ project that will keep growing, so structure matters more than speed of delivery
 `PLAN.md` for the architecture, the phase breakdown, and the validation strategy. Read it
 before writing code.
 
-Out of scope until the above works: ultrasoft/PAW, EXX, DFT+U, non-collinear/SOC, phonons
+**Ultrasoft and PAW are now in scope and implemented, for LDA** (P12): the two-grid split,
+the augmentation charge, the overlap operator, self-consistent `D_ij`, and PAW's
+one-centre terms. The blocker for the PBE datasets — which is what most published
+ultrasoft/PAW work uses — is GGA, not anything about the pseudopotentials.
+
+Out of scope until the above works: EXX, DFT+U, non-collinear/SOC, phonons
 (`PHonon/`), Car-Parrinello (`CPV/`), and everything in `EPW/`, `TDDFPT/`, `HP/`, `GWW/`.
 The code should nonetheless be shaped so these are additions, not rewrites.
 
@@ -138,9 +146,11 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Hamiltonian application | `h_psi.f90`, `vloc_psi_*.f90`, `add_vuspsi.f90`, `g2_kin.f90`, `s_psi.f90` | the hot path; the natural unit of `jit`/`vmap`; `k` must stay a traced argument, see `PLAN.md` §6 |
 | Iterative diagonalization | `KS_Solvers/Davidson/`, `KS_Solvers/CG/`, `KS_Solvers/PPCG_legacy/`, `KS_Solvers/RMM/` | Davidson is QE's default and is ported (`solvers/davidson.py`); note `c_bands.f90` re-enters `cegterg` up to 5 times, so QE's real budget is 100 steps |
 | FFT / G-vector grids | `FFTXlib/`, `PW/src/data_structure.f90`, `Modules/recvec*.f90` | replace with `jax.numpy.fft`; the sphere-to-box G-vector mapping still has to be reproduced |
-| Pseudopotentials | `upflib/` (`read_upf_new.f90`, `pseudo_types.f90`, `init_us_2.f90`, `sph_bes.f90`, `ylmr2.f90`) | UPF v2 XML parsing + radial→G-space transforms |
+| Pseudopotentials | `upflib/` (`read_upf_new.f90`, `pseudo_types.f90`, `init_us_2.f90`, `sph_bes.f90`, `ylmr2.f90`) | UPF v2 XML parsing + radial→G-space transforms. **`msh` is one or two points *past* 10 bohr** — QE's loop takes the first index beyond the cutoff, not the last inside; getting that wrong is worth 1e-6 Ry on a `psl` dataset and nothing at all on `Si.pz-vbc` |
+| Ultrasoft augmentation | `upflib/qvan2.f90`, `uspp.f90` (`aainit`), `qrad_mod.f90`, `PW/src/addusdens.f90`, `newd_acc.f90`, `s_psi.f90` | `Q_ij(G)`, `becsum`, the overlap operator, and `D_ij` rebuilt each iteration from the potential |
+| PAW one-centre terms | `PW/src/paw_onecenter.f90`, `paw_init.f90`, `paw_symmetry.f90`, `upflib/radial_grids.f90` (`hartree`) | radial Poisson (a Numerov tridiagonal solve — transcribe it, do not substitute the closed form), a Gauss-Legendre×φ spherical quadrature for XC, and `becsum` symmetrisation, which is **not optional** on a reduced k-set |
 | XC functionals | `XClib/` | must be reimplemented in pure JAX — a `libxc` binding is neither differentiable nor GPU-capable (see `PLAN.md` §6) |
-| Structure / symmetry / k-points | `PW/src/symm_base.f90`, `symme.f90`, `kpoint_grid.f90`, `setup.f90`, `Modules/cell_base.f90` | `ibrav` lattice conventions live in `Modules/latgen.f90`. `kpoint_grid` is called with the *lattice* point group and fixed up afterwards; reducing directly with the crystal's symmetries reaches the same orbits |
+| Structure / symmetry / k-points | `PW/src/symm_base.f90`, `symme.f90`, `kpoint_grid.f90`, `setup.f90`, `Modules/cell_base.f90` | `ibrav` lattice conventions live in `Modules/latgen.f90`. `kpoint_grid` is called with the *lattice* point group and fixed up afterwards; reducing directly with the crystal's symmetries reaches the same orbits. Two rules in `symm_base.f90` change the **FFT grid**: dimensions must be a multiple of the fractional translations' denominators (`fft_fact`), and a cell that is a supercell has fractional translations disabled altogether |
 | Starting wavefunctions | `PW/src/wfcinit.f90`, `Modules/atomic_wfc_mod.f90`, `upflib/atwfc_mod.f90` | the projectors' expression with `chi` for `beta` — but the phase is `i^l`, not `(-i)^l` |
 | Ewald / local potential / forces / stress | `PW/src/ewald.f90`, `setlocal.f90`, `forces.f90`, `stress.f90` | forces/stress come after energies are correct, and should come from autodiff rather than the hand-derived Fortran expressions |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]`; here it should fall out of `jacfwd` of `H(k)` w.r.t. `k` |

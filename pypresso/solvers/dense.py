@@ -18,6 +18,7 @@ import jax
 import jax.numpy as jnp
 
 from pypresso.hamiltonian.operator import Hamiltonian
+from pypresso.solvers.subspace import generalised_eigh
 
 __all__ = ["dense_eigensolver", "dense_eigensolver_all"]
 
@@ -41,8 +42,14 @@ def dense_eigensolver(hamiltonian: Hamiltonian, ik: int, nbnd: int):
     matrix = jnp.where(mask[:, None] & mask[None, :], matrix, 0.0)
     matrix = matrix + jnp.diag(jnp.where(mask, 0.0, shift))
 
-    eigenvalues, eigenvectors = jnp.linalg.eigh(matrix)
-    return eigenvalues[:nbnd], eigenvectors[:, :nbnd].T
+    if not hamiltonian.has_overlap:
+        eigenvalues, eigenvectors = jnp.linalg.eigh(matrix)
+        return eigenvalues[:nbnd], eigenvectors[:, :nbnd].T
+
+    # Ultrasoft: the problem is H v = e S v, and S is built explicitly for the
+    # same reason H is -- this solver exists to be obviously right, not fast.
+    eigenvalues, eigenvectors = generalised_eigh(matrix, hamiltonian.overlap_matrix(ik))
+    return eigenvalues[:nbnd].real, eigenvectors[:, :nbnd].T
 
 
 @partial(jax.jit, static_argnames=("nbnd",))

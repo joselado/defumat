@@ -171,17 +171,23 @@ def projector_form_factors(pseudo: Pseudopotential, q, omega: float) -> jnp.ndar
     rather than ``1/Omega`` is because the projectors multiply wavefunctions,
     which carry their own normalisation.
 
-    Each projector is integrated only to its own ``kkbeta``: beyond that radius
-    the tabulated values are zero, and including them adds nothing but noise.
+    Every projector is integrated over the *same* range, the species-wide
+    ``kkbeta`` of ``upflib/beta_mod.f90``, rather than each over its own
+    ``cutoff_radius_index``. The two differ for a PAW dataset, where ``kkbeta``
+    is widened to cover the augmentation sphere -- and the tabulated ``beta``
+    is truncated abruptly rather than tapering to zero, so it is still of order
+    1e-3 at its own cutoff. Integrating over the shorter range would drop a
+    contribution QE keeps.
     """
     prefactor = FPI / np.sqrt(omega)
     q = jnp.atleast_1d(jnp.asarray(q))
 
+    cutoff = pseudo.kkbeta
+    r = jnp.asarray(pseudo.r[:cutoff])
+    weights = simpson_weights(jnp.asarray(pseudo.rab[:cutoff]))
+
     rows = []
     for projector in pseudo.projectors:
-        cutoff = min(projector.cutoff_index, pseudo.mesh)
-        r = jnp.asarray(pseudo.r[:cutoff])
-        weights = simpson_weights(jnp.asarray(pseudo.rab[:cutoff]))
         beta = jnp.asarray(projector.beta[:cutoff])
         l = projector.l
 

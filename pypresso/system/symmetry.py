@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import math
+
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
@@ -35,7 +37,11 @@ from pypresso.system.structure import Structure
 if TYPE_CHECKING:  # only for annotations: importing it eagerly makes a cycle,
     from pypresso.basis.gvectors import GVectors  # basis -> system -> basis
 
-__all__ = ["Symmetries", "lattice_point_group", "find_symmetries", "symmetrize_density",
+__all__ = [
+    "is_supercell",
+    "atom_mapping",
+    "cartesian_rotations",
+    "harmonic_rotations","Symmetries", "lattice_point_group", "find_symmetries", "symmetrize_density",
            "symmetry_maps", "apply_symmetry_maps"]
 
 _TOLERANCE = 1.0e-6
@@ -67,6 +73,35 @@ class Symmetries(eqx.Module):
     @property
     def symmorphic(self) -> bool:
         return bool(np.allclose(self.translation_array(), 0.0, atol=_TOLERANCE))
+
+    def fft_factors(self) -> tuple[int, int, int]:
+        """The FFT dimensions must be a multiple of these (``symm_base.f90``).
+
+        A fractional translation of ``1/n`` along an axis maps a grid onto
+        itself only if the grid has a multiple of ``n`` points along that axis.
+        QE takes the least common multiple over every non-symmorphic operation
+        and forces the FFT dimensions to be divisible by it -- which is why
+        diamond silicon's grids come out at 16 and 32 rather than the 15 and 30
+        the cutoff alone would ask for.
+
+        It is not optional decoration. It changes ``etxc``, which is evaluated
+        pointwise on the grid, in the sixth decimal; matching QE's grid is the
+        difference between agreeing with it to 1e-6 Ry and to 1e-9.
+        """
+        factors = [1, 1, 1]
+        for translation in self.translations:
+            for axis, value in enumerate(translation):
+                # ft is stored folded into [0, 1); a translation of 3/4 is the
+                # same grid constraint as one of 1/4.
+                value = min(abs(value), abs(1.0 - value))
+                if value <= _TOLERANCE:
+                    continue
+                n = int(round(1.0 / value))
+                # QE only accepts translations that are a simple fraction; a
+                # rotation needing anything else is discarded before this point.
+                if n and abs(1.0 / value - n) < 1.0e-4:
+                    factors[axis] = _lcm(factors[axis], n)
+        return tuple(factors)
 
     def rotation_array(self) -> np.ndarray:
         return np.array(self.rotations, dtype=int)
@@ -118,6 +153,38 @@ def lattice_point_group(at: np.ndarray) -> list[np.ndarray]:
     return operations
 
 
+def is_supercell(cell: Cell, structure: Structure) -> bool:
+    """Whether the cell is a supercell of a smaller one (``symm_base.f90``).
+
+    The test is QE's: if the *identity* rotation combined with some non-lattice
+    translation maps the structure onto itself, the cell contains more than one
+    formula unit of a smaller cell. QE then **disables fractional translations
+    entirely** -- every non-symmorphic operation is discarded, and the FFT grid
+    loses its divisibility constraint with them.
+
+    That looks like throwing away real symmetry, and it is; the justification in
+    the Fortran is that a supercell's non-symmorphic operations are artefacts of
+    the choice of cell rather than of the crystal. It has to be reproduced
+    regardless, because it changes what QE computes: the eight-atom cubic cell
+    of diamond silicon keeps 24 operations rather than 48 and gets a 45^3 grid
+    rather than 48^3, and with a k-point set that is not itself symmetric the
+    two symmetrisations give densities differing in the fifth decimal of the
+    energy.
+    """
+    positions = np.asarray(structure.positions_crystal(cell)) % 1.0
+    types = np.asarray(structure.types)
+    if len(positions) < 2:
+        return False
+
+    for candidate in positions[1:] - positions[0]:
+        candidate = candidate - np.rint(candidate)
+        if np.all(np.abs(candidate) < _TOLERANCE):
+            continue
+        if _maps_structure(positions + candidate, positions, types):
+            return True
+    return False
+
+
 def find_symmetries(cell: Cell, structure: Structure) -> Symmetries:
     """The space group operations of the crystal.
 
@@ -125,10 +192,14 @@ def find_symmetries(cell: Cell, structure: Structure) -> Symmetries:
     atom of the same species. Candidate translations are the differences between
     the image of the first atom and every atom of its species -- if any
     translation works, one of those does.
+
+    Fractional translations are dropped altogether when the cell turns out to be
+    a supercell; see :func:`is_supercell`.
     """
     at = np.asarray(cell.at)
     positions = np.asarray(structure.positions_crystal(cell)) % 1.0
     types = np.asarray(structure.types)
+    symmorphic_only = is_supercell(cell, structure)
 
     rotations, translations = [], []
     for rotation in lattice_point_group(at):
@@ -139,6 +210,10 @@ def find_symmetries(cell: Cell, structure: Structure) -> Symmetries:
         rotated = positions @ rotation
 
         for candidate in _candidate_translations(rotated, positions, types):
+            if symmorphic_only and np.any(
+                np.abs(candidate - np.rint(candidate)) > _TOLERANCE
+            ):
+                continue
             if _maps_structure(rotated + candidate, positions, types):
                 rotations.append(rotation)
                 translations.append(np.round(candidate, 10) % 1.0)
@@ -234,3 +309,51 @@ def symmetry_maps(gvectors: "GVectors", symmetries: Symmetries):
         )
     phases = np.exp(-2j * np.pi * (miller @ translations.T)).T
     return jnp.asarray(permutations), jnp.asarray(phases)
+
+
+def _lcm(a: int, b: int) -> int:
+    """QE's ``mcm``, with 0 meaning "no constraint"."""
+    if a == 0 or b == 0:
+        return max(a, b)
+    return abs(a * b) // math.gcd(a, b)
+
+
+def atom_mapping(cell: Cell, structure: Structure, symmetries: Symmetries) -> np.ndarray:
+    """``irt[s, a]``: the atom that operation ``s`` sends atom ``a`` to.
+
+    ``sgam_at`` in ``symm_base.f90`` builds the same table while it is testing
+    the operations. Everything that acts on a per-atom quantity -- ``becsum``
+    for PAW, forces, the density in real space -- needs it, because an operation
+    is only a symmetry of the *crystal*, not of any individual atom.
+    """
+    positions = np.asarray(structure.positions_crystal(cell)) % 1.0
+    types = np.asarray(structure.types)
+    rotations = symmetries.rotation_array()
+    translations = symmetries.translation_array()
+
+    mapping = np.zeros((len(rotations), len(positions)), dtype=int)
+    for s, (rotation, translation) in enumerate(zip(rotations, translations)):
+        images = positions @ rotation + translation
+        for a, image in enumerate(images):
+            difference = image[None, :] - positions
+            difference -= np.rint(difference)
+            matches = np.flatnonzero(
+                (np.abs(difference) < _TOLERANCE).all(axis=1) & (types == types[a])
+            )
+            if matches.size != 1:
+                raise AssertionError(
+                    f"symmetry operation {s} does not map atom {a} onto exactly one atom"
+                )
+            mapping[s, a] = matches[0]
+    return mapping
+
+
+def cartesian_rotations(cell: Cell, symmetries: Symmetries) -> np.ndarray:
+    """The symmetry rotations as cartesian matrices acting on column vectors.
+
+    With ``S a_i = sum_j M_ij a_j`` and the lattice vectors as the rows of
+    ``A``, that reads ``M A = A R^T``, so ``R = (A^-1 M A)^T``.
+    """
+    at = np.asarray(cell.at, dtype=float)
+    inverse = np.linalg.inv(at)
+    return np.array([(inverse @ m @ at).T for m in symmetries.rotation_array()])
