@@ -20,6 +20,15 @@ occupation function the SCF used (see ``w0gauss`` in ``scf/occupations.py``).
 A DOS is an NSCF calculation: the density converges on a coarse grid, but
 resolving structure to a few tens of meV takes an order of magnitude more
 k-points, so the sequence is SCF -> NSCF on a denser grid -> integrate.
+
+**Spin.** Both schemes stay per channel -- neither knows about spin, and neither
+needs to. What a polarized run changes is that there are two of them, plotted
+against each other: ``dos.x`` writes ``dosup(E)`` and ``dosdw(E)`` as separate
+columns and a single ``Int dos(E)`` summing both, and a magnetic material's
+exchange splitting is exactly the offset between the two curves. The one thing
+that is *not* per channel is the Fermi level, which the tetrahedron and smearing
+occupations both find from the two channels together (see
+:func:`pypresso.scf.tetrahedra.tetrahedron_occupations_spin`).
 """
 
 from __future__ import annotations
@@ -65,17 +74,45 @@ class DensityOfStates:
     of valence electrons at the Fermi level, which is the sum rule worth
     checking. ``dos.x`` writes eV instead; that conversion belongs to
     :mod:`pypresso.io.output`.
+
+    With two spin channels ``dos`` and ``integrated`` are ``(2, nE)``; with one
+    the axis is squeezed away, the same convention
+    :class:`~pypresso.scf.driver.SCFResult` uses for the density. The summed
+    quantities are :attr:`total_dos` and :attr:`total_integrated`, and it is the
+    *total* that satisfies the sum rule -- which is why ``dos.x`` prints two
+    ``dos`` columns and only one ``Int dos``.
     """
 
     energies: np.ndarray  # (nE,), Ry
-    dos: np.ndarray  # (nE,), states/Ry
-    integrated: np.ndarray  # (nE,), states
+    dos: np.ndarray  # (nE,) or (2, nE), states/Ry
+    integrated: np.ndarray  # same shape, states
     scheme: str
     fermi_energy: float | None = None  # Ry
+    nspin: int = 1
+    #: Only when ``tot_magnetization`` constrained the channels separately.
+    fermi_energy_up: float | None = None
+    fermi_energy_down: float | None = None
 
     @property
     def energies_ev(self) -> np.ndarray:
         return self.energies * RY_TO_EV
+
+    @property
+    def dos_by_spin(self) -> np.ndarray:
+        """``(nspin, nE)`` whatever ``nspin`` is."""
+        return self.dos if self.nspin == 2 else self.dos[None]
+
+    @property
+    def total_dos(self) -> np.ndarray:
+        """``D(E)`` summed over the channels, ``(nE,)``."""
+        return self.dos if self.nspin == 1 else np.sum(self.dos, axis=0)
+
+    @property
+    def total_integrated(self) -> np.ndarray:
+        """``N(E)`` summed over the channels, ``(nE,)``."""
+        return (
+            self.integrated if self.nspin == 1 else np.sum(self.integrated, axis=0)
+        )
 
     @property
     def dos_ev(self) -> np.ndarray:
@@ -83,12 +120,15 @@ class DensityOfStates:
         return self.dos / RY_TO_EV
 
     def states_below(self, energy: float) -> float:
-        """``N(E)`` at an arbitrary energy, interpolated from the grid."""
-        return float(np.interp(energy, self.energies, self.integrated))
+        """``N(E)`` at an arbitrary energy, interpolated from the grid.
+
+        The total over both channels: that is the quantity the sum rule is about.
+        """
+        return float(np.interp(energy, self.energies, self.total_integrated))
 
     def at(self, energy: float) -> float:
-        """``D(E)`` at an arbitrary energy, in states/Ry."""
-        return float(np.interp(energy, self.energies, self.dos))
+        """``D(E)`` at an arbitrary energy, in states/Ry, summed over channels."""
+        return float(np.interp(energy, self.energies, self.total_dos))
 
 
 # --------------------------------------------------------------------------
@@ -177,10 +217,14 @@ def energy_grid(
     rounding half away from zero.
     """
     eigenvalues = np.asarray(eigenvalues)
+    # ``...`` rather than a leading colon so that a ``(nspin, nk, nbnd)`` array
+    # is spanned across *both* channels, which is what ``dos.f90`` does: its
+    # ``et`` is one array of ``2 nkstot`` k-points and ``MINVAL(et(1,:))`` runs
+    # over all of them.
     if emin is None:
-        emin = float(eigenvalues[:, 0].min()) - (3.0 * degauss if degauss > 0.0 else 0.0)
+        emin = float(eigenvalues[..., 0].min()) - (3.0 * degauss if degauss > 0.0 else 0.0)
     if emax is None:
-        emax = float(eigenvalues[:, -1].max()) + (3.0 * degauss if degauss > 0.0 else 0.0)
+        emax = float(eigenvalues[..., -1].max()) + (3.0 * degauss if degauss > 0.0 else 0.0)
     if delta_e <= 0.0:
         raise ValueError(f"the energy step must be positive, got {delta_e}")
     ndos = int(np.floor((emax - emin) / delta_e + 0.500001 + 0.5))
@@ -201,27 +245,50 @@ def compute_dos(
     tetrahedra: Tetrahedra | None = None,
     fermi_energy: float | None = None,
     chunk: int = ENERGY_CHUNK,
+    fermi_energy_up: float | None = None,
+    fermi_energy_down: float | None = None,
 ) -> DensityOfStates:
     """Integrate a set of eigenvalues into a density of states.
 
-    Per spin channel: ``eigenvalues`` is ``(nk, nbnd)`` and ``weights`` ``(nk,)``,
-    whose sum carries the spin degeneracy exactly as everywhere else.
+    ``eigenvalues`` is ``(nk, nbnd)`` or ``(nspin, nk, nbnd)``; ``weights`` is
+    ``(nk,)``, shared by the channels, and its sum carries the spin degeneracy
+    exactly as everywhere else -- 2 unpolarized, 1 per polarized channel, which
+    is what makes the two curves add up to the total without any factor written
+    down here.
+
+    The schemes themselves stay per channel. This function is the only place
+    that loops over them, which is the whole of what spin costs the DOS.
     """
     energies = jnp.asarray(energies)
-    dos, integrated = get_dos_scheme(scheme)(
-        jnp.asarray(eigenvalues),
-        jnp.asarray(weights),
-        energies,
-        degauss=degauss,
-        tetrahedra=tetrahedra,
-        chunk=chunk,
-    )
+    eigenvalues = jnp.asarray(eigenvalues)
+    weights = jnp.asarray(weights)
+    scheme_function = get_dos_scheme(scheme)
+
+    channels = eigenvalues if eigenvalues.ndim == 3 else eigenvalues[None]
+    results = [
+        scheme_function(
+            channel,
+            weights,
+            energies,
+            degauss=degauss,
+            tetrahedra=tetrahedra,
+            chunk=chunk,
+        )
+        for channel in channels
+    ]
+    nspin = len(results)
+    dos = np.stack([np.asarray(d) for d, _ in results])
+    integrated = np.stack([np.asarray(n) for _, n in results])
+
     return DensityOfStates(
         energies=np.asarray(energies),
-        dos=np.asarray(dos),
-        integrated=np.asarray(integrated),
+        dos=dos if nspin == 2 else dos[0],
+        integrated=integrated if nspin == 2 else integrated[0],
         scheme=scheme.lower(),
         fermi_energy=fermi_energy,
+        nspin=nspin,
+        fermi_energy_up=fermi_energy_up,
+        fermi_energy_down=fermi_energy_down,
     )
 
 
@@ -286,5 +353,7 @@ def run_dos(
         tetrahedra=tetrahedra,
         fermi_energy=nscf.fermi_energy if nscf.fermi_energy is not None else nscf.homo,
         chunk=chunk,
+        fermi_energy_up=nscf.fermi_energy_up,
+        fermi_energy_down=nscf.fermi_energy_down,
     )
     return dos, nscf

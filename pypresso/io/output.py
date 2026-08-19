@@ -46,15 +46,39 @@ def format_dos(dos) -> str:
     ``dos.f90``'s layout: a comment header carrying the Fermi level, then one
     line per energy with ``(f8.3, 2e12.4)`` -- energy in eV, ``D(E)`` in
     states/eV, and the integrated count.
+
+    With two spin channels the format changes in exactly the way ``dos.f90``
+    changes it: the header becomes ``dosup(E)  dosdw(E)  Int dos(E)``, each line
+    is ``(f8.3, 3e12.4)``, and the **one** integrated column is the sum over both
+    channels. There is one integrated column and two differential ones because
+    the sum rule is a statement about the total number of electrons; which
+    channel they are in is what the two ``dos`` columns say. A run with the
+    magnetization constrained prints both Fermi levels, ``2f8.3``, as
+    ``EFermi = <up> <down> eV``.
     """
-    fermi = "" if dos.fermi_energy is None else f" EFermi = {dos.fermi_energy * RY_TO_EV:8.3f} eV"
-    lines = [f"#  E (eV)   dos(E)     Int dos(E){fermi}"]
-    for energy, value, integrated in zip(dos.energies_ev, dos.dos_ev, dos.integrated):
-        lines.append(
-            f"{energy:8.3f}"
-            + fortran_exponential(float(value))
-            + fortran_exponential(float(integrated))
+    if dos.fermi_energy_up is not None:
+        fermi = (
+            f" EFermi = {dos.fermi_energy_up * RY_TO_EV:8.3f}"
+            f"{dos.fermi_energy_down * RY_TO_EV:8.3f} eV"
         )
+    elif dos.fermi_energy is not None:
+        fermi = f" EFermi = {dos.fermi_energy * RY_TO_EV:8.3f} eV"
+    else:
+        fermi = ""
+
+    if dos.nspin == 1:
+        lines = [f"#  E (eV)   dos(E)     Int dos(E){fermi}"]
+        columns = [dos.dos_ev]
+    else:
+        lines = [f"#  E (eV)   dosup(E)     dosdw(E)   Int dos(E){fermi}"]
+        columns = list(dos.dos_ev)
+
+    integrated = dos.total_integrated
+    for index, energy in enumerate(dos.energies_ev):
+        line = f"{energy:8.3f}"
+        for column in columns:
+            line += fortran_exponential(float(column[index]))
+        lines.append(line + fortran_exponential(float(integrated[index])))
     return "\n".join(lines) + "\n"
 
 

@@ -64,7 +64,7 @@ from pypresso.scf.occupations import (
     smearing_entropy,
     spin_electron_counts,
     tetrahedra_for,
-    tetrahedron_occupations,
+    tetrahedron_occupations_spin,
 )
 from pypresso.scf.potential import scf_accuracy, v_of_rho
 from pypresso.xc.functional import resolve_functional
@@ -891,10 +891,17 @@ class Calculation:
                 self._tetrahedra = tetrahedra_for(
                     scheme, self.system.kpoints, self.symmetries, self.system.cell
                 )
-            wg, ef = tetrahedron_occupations(
-                self._tetrahedra, eigenvalues, weights, self.nelec
+            counts = (self.nelup, self.neldw) if self.two_fermi_energies else None
+            wg, ef = tetrahedron_occupations_spin(
+                self._tetrahedra, eigenvalues, weights, self.nelec, counts=counts
             )
-            return wg, {"fermi_energy": float(ef)}
+            if counts is None:
+                return wg, {"fermi_energy": float(ef)}
+            return wg, {
+                "fermi_energy_up": float(ef[0]),
+                "fermi_energy_down": float(ef[1]),
+                "fermi_energy": 0.5 * (float(ef[0]) + float(ef[1])),
+            }
 
         counts = (self.nelup, self.neldw) if self.two_fermi_energies else None
         wg, ef = smeared_occupations(

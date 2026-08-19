@@ -17,7 +17,7 @@ import numpy as np
 from pypresso.config import DEFAULT_PRECISION, Precision
 from pypresso.io.pwin import PwInput, read_pw_input
 from pypresso.system.cell import Cell, celldm_from_abc
-from pypresso.system.kpoints import DEGSPIN, KPoints
+from pypresso.system.kpoints import KPoints, for_spin as kpoints_for_spin
 from pypresso.system.structure import Species, Structure
 from pypresso.system.symmetry import find_symmetries
 from pypresso.units import ANGSTROM_TO_BOHR
@@ -97,16 +97,10 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
             f"nspin = {nspin}: only 1 (unpolarized) and 2 (collinear LSDA) are "
             "implemented; noncollinear magnetism and spin-orbit are out of scope"
         )
-    if nspin == 2:
-        # ``setup.f90`` multiplies the k-point weights by ``degspin`` only in
-        # the LDA branch: with two channels each k-point is diagonalised twice
-        # and the weights sum to one *per channel*, so the two together still
-        # account for two electrons per band. Applying the factor here rather
-        # than inside KPoints keeps the spin-independent k-point code free of a
-        # flag it would otherwise have to be told.
-        kpoints = eqx.tree_at(
-            lambda k: k.weights, kpoints, kpoints.weights / DEGSPIN
-        )
+    # ``setup.f90``'s ``degspin``, applied in the one place that knows the rule
+    # -- a k-set built later, for a denser DOS grid, has to go through the same
+    # function or it counts every electron twice.
+    kpoints = kpoints_for_spin(kpoints, nspin)
 
     ecutwfc = pwin.get("system", "ecutwfc")
     if ecutwfc is None:

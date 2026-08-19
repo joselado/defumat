@@ -27,7 +27,7 @@ from pypresso.scf.driver import Calculation, default_nbnd
 from pypresso.solvers.davidson import ETHR_MIN
 from pypresso.system.builder import System
 from pypresso.system.cell import Cell
-from pypresso.system.kpoints import KPoints
+from pypresso.system.kpoints import KPoints, for_spin as kpoints_for_spin
 from pypresso.units import RY_TO_EV
 
 __all__ = ["NSCFResult", "fixed_density_bands", "run_nscf", "denser_grid"]
@@ -35,18 +35,39 @@ __all__ = ["NSCFResult", "fixed_density_bands", "run_nscf", "denser_grid"]
 
 @dataclass
 class NSCFResult:
-    """Eigenvalues on a fixed density, with whatever occupation statistic applies."""
+    """Eigenvalues on a fixed density, with whatever occupation statistic applies.
+
+    ``eigenvalues`` and ``occupations`` are ``(nk, nbnd)`` for an unpolarized run
+    and ``(2, nk, nbnd)`` for LSDA -- the spin axis is squeezed away when there
+    is only one channel, the same convention
+    :class:`~pypresso.scf.driver.SCFResult` uses, so that everything written
+    against the unpolarized shape keeps working and a polarized result cannot be
+    mistaken for one. :attr:`eigenvalues_by_spin` always has the axis.
+    """
 
     kpoints: KPoints
-    eigenvalues: np.ndarray  # (nk, nbnd), Ry
-    occupations: np.ndarray | None = None  # (nk, nbnd), QE's wg
+    eigenvalues: np.ndarray  # (nk, nbnd) or (2, nk, nbnd), Ry
+    occupations: np.ndarray | None = None  # same shape, QE's wg
     fermi_energy: float | None = None  # Ry
     homo: float | None = None  # Ry
     lumo: float | None = None  # Ry
+    nspin: int = 1
+    #: Only when ``tot_magnetization`` constrained the channels separately.
+    fermi_energy_up: float | None = None
+    fermi_energy_down: float | None = None
 
     @property
     def eigenvalues_ev(self) -> np.ndarray:
         return self.eigenvalues * RY_TO_EV
+
+    @property
+    def eigenvalues_by_spin(self) -> np.ndarray:
+        """``(nspin, nk, nbnd)`` whatever ``nspin`` is."""
+        return self.eigenvalues if self.nspin == 2 else self.eigenvalues[None]
+
+    @property
+    def occupations_by_spin(self) -> np.ndarray:
+        return self.occupations if self.nspin == 2 else self.occupations[None]
 
 
 def fixed_density_bands(
@@ -121,13 +142,17 @@ def run_nscf(
         system, pseudos, density, kpoints, nbnd, conv_thr
     )
     wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
+    nspin = calculation.nspin
     return NSCFResult(
         kpoints=system.kpoints,
-        eigenvalues=eigenvalues,
-        occupations=np.asarray(wg),
+        eigenvalues=eigenvalues if nspin == 2 else eigenvalues[0],
+        occupations=np.asarray(wg if nspin == 2 else wg[0]),
         fermi_energy=levels.get("fermi_energy"),
         homo=levels.get("homo"),
         lumo=levels.get("lumo"),
+        nspin=nspin,
+        fermi_energy_up=levels.get("fermi_energy_up"),
+        fermi_energy_down=levels.get("fermi_energy_down"),
     )
 
 
@@ -143,6 +168,12 @@ def denser_grid(
     Convenience for "SCF on the input's grid, DOS on a denser one": the symmetry
     used to reduce it must be the crystal's, so it is taken from the system
     rather than rediscovered, and the shift defaults to the input's own.
+
+    The weights go through :func:`pypresso.system.kpoints.for_spin`, because
+    every constructor applies the spin degeneracy unconditionally and an LSDA
+    run wants it halved. Skipping that step counts every electron twice on the
+    denser grid, which does not fail -- it moves the Fermi level and integrates
+    to the right electron count at the wrong energy.
     """
     from pypresso.system.symmetry import find_symmetries
 
@@ -151,10 +182,13 @@ def denser_grid(
         rotations = find_symmetries(cell, system.structure).rotation_array()
     if shift is None:
         shift = system.kpoints.shift or (0, 0, 0)
-    return KPoints.automatic(
-        tuple(int(n) for n in grid),
-        tuple(int(s) for s in shift),
-        cell,
-        precision=system.kpoints.precision,
-        rotations=rotations,
+    return kpoints_for_spin(
+        KPoints.automatic(
+            tuple(int(n) for n in grid),
+            tuple(int(s) for s in shift),
+            cell,
+            precision=system.kpoints.precision,
+            rotations=rotations,
+        ),
+        system.nspin,
     )

@@ -9,20 +9,25 @@ Fortran QE 7.5 release is vendored here **as reference material only** — it is
 understand algorithms and to validate numerical results, never modified or compiled into
 the deliverable.
 
-**Status: the first milestone is met for silicon, with ultrasoft/PAW and LDA/GGA.** P0–P5,
-P7, P12 and P13 are done, P6 is partial. A silicon SCF reproduces QE's total energy to
-**~1e-9 Ry** term by term, its band structure to **0.0002 eV**, and metals with every
-smearing to ~2.5e-8 Ry. **Ultrasoft and PAW pseudopotentials are supported** and match QE
-to **≤3e-9 Ry** on 2- and 8-atom silicon (P12). **PBE, revPBE and PBEsol** work on all
-three pseudopotential kinds, matching QE to **≤6e-9 Ry** and 5e-5 eV in the bands (P13).
+**Status: the first milestone — SCF, band structure, DOS — is met**, with ultrasoft/PAW,
+LDA/GGA and collinear spin. P0–P9 and P12–P13 are done bar Wyckoff input in P6; P10 has
+had one pass. A silicon SCF reproduces QE's total energy to **~1e-9 Ry** term by term, its
+band structure to **0.0002 eV**, and metals with every smearing to ~2.5e-8 Ry.
+**Ultrasoft and PAW pseudopotentials are supported** and match QE to **≤3e-9 Ry** on 2-
+and 8-atom silicon (P12). **PBE, revPBE and PBEsol** work on all three pseudopotential
+kinds, matching QE to **≤6e-9 Ry** and 5e-5 eV in the bands (P13). **The density of states**
+(P8) has both the smearing and the tetrahedron families, the latter also as an occupation
+scheme inside the SCF, matching QE's three aluminium benchmarks to 2.5e-8 Ry. **Collinear
+spin** (P9) matches eight LSDA benchmarks — nickel's total energy to **1.2e-9 Ry** and its
+magnetic moment to the two decimals QE prints (0.7280 against 0.73).
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
-read it before writing code. P4 is now complete: a block Davidson eigensolver behind a
-name registry, with the dense solver kept as its reference, seeded from the pseudo-atomic
+read it before writing code. P4 is complete: a block Davidson eigensolver behind a name
+registry, with the dense solver kept as its reference, seeded from the pseudo-atomic
 orbitals as QE seeds it. P6 is complete too: automatic k-grids are reduced to the
 irreducible wedge. P10's first pass puts pypresso within **2–4x of serial Quantum ESPRESSO
 per SCF iteration** on the same machine, ultrasoft and PAW included — see
-`PERFORMANCE.md`. **Outstanding:** DOS (P8), spin (P9), and the rest of P10 (k-axis sharding
-and GPU).
+`PERFORMANCE.md`. **Outstanding:** the projected DOS (`projwfc.x`), Wyckoff input, and the
+rest of P10 (k-axis sharding and GPU). Non-collinear magnetism and spin-orbit stay out.
 
 ## Layout
 
@@ -40,18 +45,33 @@ and GPU).
 ## Scope
 
 First milestone, in this order: **SCF → band structure → DOS**, for `pw.x` with
-norm-conserving pseudopotentials, LDA/PBE, k-point grids and gamma-only. This is a large
-project that will keep growing, so structure matters more than speed of delivery — see
-`PLAN.md` for the architecture, the phase breakdown, and the validation strategy. Read it
-before writing code.
+norm-conserving pseudopotentials, LDA/PBE and k-point grids — **now met**, and extended
+since with ultrasoft/PAW, the PBE family and collinear spin. This is a large project that
+will keep growing, so structure matters more than speed of delivery — see `PLAN.md` for
+the architecture, the phase breakdown, and the validation strategy. Read it before writing
+code.
 
-**Ultrasoft and PAW are now in scope and implemented** (P12): the two-grid split, the
+**Gamma-only is a gap, not a feature.** `K_POINTS gamma` selects the half-sphere storage
+of the gamma-point trick, and that storage is generated but not consumed anywhere:
+`h_psi` would need `vloc_psi_gamma`'s packing, the eigensolver `regterg`'s real overlaps,
+and `addusdens`/`newd` their `fact = 2`. Such a run is silently substituted by an explicit
+k = 0 with the full sphere, which is the same physics at twice the storage, and it says so.
+
+**Ultrasoft and PAW are in scope and implemented** (P12): the two-grid split, the
 augmentation charge, the overlap operator, self-consistent `D_ij`, and PAW's one-centre
 terms. **Gradient-corrected functionals are too** (P13) — PBE, revPBE and PBEsol, on the
 plane-wave grid and on the PAW spheres — so the PBE datasets that most published
 ultrasoft/PAW work uses run here. The functional comes from the pseudopotentials' headers
 unless `input_dft` overrides it, and an unimplemented one is refused rather than silently
 replaced by LDA.
+
+**Collinear spin is in scope and implemented** (P9): `nspin = 2` gives the density, the
+potential, `becsum`, `D_ij`, the eigenvalues and the wavefunctions a leading channel axis,
+and one SCF iteration diagonalises a different Hamiltonian per channel. Whichever
+occupation scheme is in use decides how many Fermi levels there are — one shared between
+the channels, or one each when `tot_magnetization` constrains the magnetisation — and both
+the smearing and the tetrahedron families implement both. Non-collinear magnetism and
+spin-orbit stay out.
 
 Out of scope until the above works: EXX, DFT+U, non-collinear/SOC, phonons
 (`PHonon/`), Car-Parrinello (`CPV/`), and everything in `EPW/`, `TDDFPT/`, `HP/`, `GWW/`.
@@ -138,6 +158,13 @@ spot moves** — including the QE ratio, not only an internal timing. `tools/ben
   wavefunction-shaped array so this stays available. Numba `prange` is the right tool for
   the host-side setup loops only.
 - Rydberg atomic units internally (Ry, bohr), matching QE; convert only in `io/`.
+- **The spin channel is the leading axis, and it is squeezed on the way out.** Densities,
+  potentials and `becsum` are `(nspin, ...)` internally with no special case for one
+  channel; the result objects (`SCFResult`, `NSCFResult`, `DensityOfStates`,
+  `BandStructure`) drop that axis when `nspin = 1` and expose a `*_by_spin` property that
+  always has it. `k` stays the leading *independent* axis inside each channel, which is
+  what the batching and the eventual sharding rest on. `nspin` is static
+  (`eqx.field(static=True)`) because it is an array rank, not a value.
 
 ## Where each subsystem lives in the reference source
 

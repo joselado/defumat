@@ -371,3 +371,114 @@ def test_two_equal_channels_reproduce_the_unpolarized_answer(qe_testsuite, pseud
             assert result.magnetization == pytest.approx(0.0, abs=1e-12)
 
     assert energies["nspin=2"] == pytest.approx(energies["nspin=1"], abs=1e-10)
+
+
+# --------------------------------------------------------------------------
+# LSDA meets P8: the NSCF grid run and the density of states.
+# --------------------------------------------------------------------------
+
+
+def test_nscf_on_a_denser_grid_matches_reference(qe_testsuite, pseudo_dir):
+    """``pw_lsda/lsda-2.in``: nickel's Fermi level on an 8x8x8 grid.
+
+    The second half of the pair QE ships -- ``lsda.in`` converges the density on
+    a 4x4x4 grid and ``lsda-2.in`` is a ``calculation='nscf'`` restarting from it
+    on a grid eight times denser. It is the one case here that exercises the
+    fixed-density path with two spin channels, and the quantity it pins is the
+    one an NSCF exists to produce: a Fermi level converged with respect to the
+    k-point sampling rather than to the density.
+
+    It also pins a trap that only appears when spin meets a *second* k-set. Every
+    ``KPoints`` constructor applies the spin degeneracy unconditionally, and
+    ``build_system`` divides it out again for ``nspin = 2``; a grid built later
+    -- which is exactly what a denser NSCF grid is -- never passed through that
+    step and counted every electron twice. The failure is silent: the density of
+    states still integrates to ten electrons, at a Fermi level 2.3 eV too low.
+    :func:`pypresso.system.kpoints.for_spin` is now the single place that knows
+    the rule, and both callers go through it.
+    """
+    from pypresso.workflows.nscf import run_nscf
+
+    _, _, scf = _converged("pw_lsda", "lsda.in", qe_testsuite, pseudo_dir)
+
+    dense_input = qe_testsuite / "pw_lsda" / "lsda-2.in"
+    system = build_system(read_pw_input(dense_input))
+    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
+    nscf = run_nscf(system, pseudos, scf.density, conv_thr=1e-10)
+
+    reference = read_qe_output(reference_output("pw_lsda", "lsda-2.in", qe_testsuite))
+    assert nscf.nspin == 2
+    assert nscf.kpoints.nk == reference.nk
+    assert nscf.eigenvalues.shape == (2, reference.nk, reference.nbnd)
+    assert nscf.fermi_energy * RY_TO_EV == pytest.approx(
+        reference.fermi_energy, abs=FERMI_EV
+    )
+
+
+def test_the_spin_resolved_density_of_states(qe_testsuite, pseudo_dir):
+    """Nickel's DOS, one curve per channel, on the same denser grid.
+
+    Two things are checked and they are different in kind. The **sum rule** --
+    ``N(E_F) = nelec`` summed over the channels -- is a statement about the
+    integration being right, and it holds to the accuracy of the energy grid.
+    The **exchange splitting** is a statement about the physics: the majority
+    curve is shifted below the minority one, so the two integrate to different
+    numbers of electrons at the same Fermi level, and the difference is the
+    magnetization. Getting the weight convention wrong (see the test above)
+    leaves the first intact and destroys the second, which is why both are here.
+    """
+    from pypresso.workflows.dos import run_dos
+
+    system, pseudos, scf = _converged("pw_lsda", "lsda.in", qe_testsuite, pseudo_dir)
+    nelec = sum(pseudos[t].z_valence for t in system.structure.types)
+
+    dos, nscf = run_dos(system, pseudos, scf.density, grid=(8, 8, 8), conv_thr=1e-10)
+
+    assert dos.nspin == 2
+    assert dos.dos.shape == (2, len(dos.energies))
+    assert dos.states_below(dos.fermi_energy) == pytest.approx(nelec, abs=1e-3)
+
+    # The channels are not the same curve: the majority one is fuller at E_F.
+    up, down = (
+        float(np.interp(dos.fermi_energy, dos.energies, dos.integrated[spin]))
+        for spin in range(2)
+    )
+    assert up + down == pytest.approx(nelec, abs=1e-3)
+    assert up - down > 0.4, "nickel's majority channel must hold more electrons"
+
+    # ... and the total is exactly the two channels added, which is what every
+    # unpolarized-shaped consumer reads.
+    assert dos.total_dos.shape == dos.energies.shape
+    assert dos.total_dos == pytest.approx(dos.dos[0] + dos.dos[1])
+
+    # Not asserted, and worth saying why: this D(E) goes *negative* in places.
+    # Marzari-Vanderbilt occupations overshoot 1 before settling -- the same
+    # property that makes the Fermi search non-monotonic (see
+    # test_two_fermi_levels_match_reference) -- so their derivative, which is
+    # what a smeared DOS is, has negative lobes. QE's dos_g does the same at
+    # ngauss = -1. A tetrahedron DOS is the one that cannot be negative.
+
+
+def test_the_dos_file_gets_two_columns_when_polarized(qe_testsuite, pseudo_dir):
+    """``dos.f90``'s LSDA format: ``dosup``, ``dosdw``, and one ``Int dos``."""
+    from pypresso.io.output import format_dos
+    from pypresso.workflows.dos import compute_dos, energy_grid
+
+    system, pseudos, scf = _converged("pw_lsda", "lsda.in", qe_testsuite, pseudo_dir)
+    eigenvalues = scf.eigenvalues_by_spin
+    energies = energy_grid(eigenvalues, delta_e=0.02, degauss=system.degauss)
+    dos = compute_dos(
+        eigenvalues,
+        system.kpoints.weights,
+        energies,
+        system.smearing,
+        degauss=system.degauss,
+        fermi_energy=scf.fermi_energy,
+    )
+
+    lines = format_dos(dos).splitlines()
+    assert lines[0].startswith("#  E (eV)   dosup(E)     dosdw(E)   Int dos(E)")
+    assert "EFermi" in lines[0]
+    # f8.3 plus three e12.4 fields.
+    assert len(lines[1]) == 8 + 3 * 12
+    assert len(lines) == len(energies) + 1

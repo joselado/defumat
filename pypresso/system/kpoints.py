@@ -26,7 +26,7 @@ from pypresso.system.cell import Cell
 _GRID_EPS = 1.0e-5
 
 __all__ = ["KPoints", "monkhorst_pack", "irreducible_wedge", "grid_equivalence",
-           "expand_band_path"]
+           "expand_band_path", "for_spin"]
 
 #: Spin degeneracy factor applied to weights for an unpolarised calculation.
 DEGSPIN = 2.0
@@ -386,6 +386,28 @@ class KPoints(eqx.Module):
             path_length=precision.as_real(lengths),
             precision=precision,
         )
+
+
+def for_spin(kpoints: "KPoints", nspin: int) -> "KPoints":
+    """The same k-set with the weight convention ``nspin`` asks for.
+
+    ``setup.f90`` multiplies the weights by ``degspin`` **only** in its LDA
+    branch: with two channels each k-point is diagonalised twice and the weights
+    sum to one *per channel*, so the two together still account for two electrons
+    per band. Every constructor here applies the factor of two unconditionally,
+    so this undoes it for a polarized run.
+
+    It exists as a function rather than a line in ``build_system`` because a
+    k-set can be built long after the system is -- a density of states runs on a
+    denser grid than the SCF did (:func:`pypresso.workflows.nscf.denser_grid`),
+    and a grid built there with the unpolarized convention counts every electron
+    twice. That mistake does not look like one: the Fermi level simply comes out
+    somewhere else, and the density of states integrates to the right number of
+    electrons at the wrong energy.
+    """
+    if int(nspin) != 2:
+        return kpoints
+    return eqx.tree_at(lambda k: k.weights, kpoints, kpoints.weights / DEGSPIN)
 
 
 def _fortran_nint(x: np.ndarray) -> np.ndarray:

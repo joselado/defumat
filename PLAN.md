@@ -367,6 +367,30 @@ Transcription traps, in the order they cost time:
    building; the symmetric pairwise mean used here agrees whenever the relation is
    transitive, which at 1e-6 Ry it is, and both preserve the total.
 
+**P8 x P9 — what integrating them needed.** Both schemes stay per channel; the workflow
+loops over them and the `.dos` file grows a `dosup`/`dosdw` pair with one summed
+`Int dos`, as `dos.f90` writes it. Two things were not mechanical:
+
+1. **The tetrahedron Fermi level is found from both channels together, and `sumkt` is
+   where that is written down.** With `is = 0` and `nspin = 2` it loops over both channels
+   accumulating `1/ntetra` from each and applies its factor of two *only* when
+   `nspin == 1`. So the count whose root is `E_F` is the sum over channels weighted by one
+   each — not two independent searches for half the electrons, which is a different
+   physical problem and would fix the magnetization at zero. The degeneracy bookkeeping
+   then needs no special case, because the per-channel core already reads it off
+   `sum(weights)`: 2 unpolarized, 1 per polarized channel, exactly what `sumkt` applies and
+   withholds. Constraining the magnetization *is* two independent searches, and
+   `weights.f90` supports it for tetrahedra as it does for smearing (`is = 1`/`is = 2` with
+   `nelup`/`neldw`), so it is implemented rather than refused.
+2. **A second k-set is where the spin weight convention goes wrong.** Every `KPoints`
+   constructor applies the spin degeneracy unconditionally and `build_system` divides it
+   out again for `nspin = 2`; a grid built *later* — which is precisely what a denser DOS
+   grid is — never passed through that step and counted every electron twice. Nothing
+   raised: the density of states still integrated to ten electrons, at a Fermi level 2.3 eV
+   too low. `system.kpoints.for_spin` is now the one place that knows the rule and both
+   callers go through it. `pw_lsda/lsda-2.in` pins it: nickel's Fermi level on the 8x8x8
+   NSCF grid comes out **15.3379 eV against QE's 15.3379**.
+
 Still out of P8: the projected DOS (`projwfc.x`), which needs atomic-orbital projections
 rather than eigenvalues alone.
 
@@ -487,10 +511,9 @@ broadcast, printed and written back, and never used in a calculation.
 *Not covered:* `occupations='fixed'` with `nspin = 2` (no committed benchmark exercises
 either of QE's two fillings for it, so it is refused rather than guessed), and
 non-collinear magnetism, which stays out of scope. `pw_lsda/lsda-2.in` — an `nscf` run on
-an 8x8x8 grid restarting from `lsda.in`'s density — waits on P8: the fixed-density
-workflow it needs is being lifted out of `workflows/bands.py` there, and threading `nspin`
-through it is the one place the two phases meet. Its reference is generable in a minute
-once that lands. `pw_pawatom/paw-atom_spin.in` is validated but kept out of the test
+an 8x8x8 grid restarting from `lsda.in`'s density — is **done**, at the merge with P8: it
+matches QE's Fermi energy of 15.3379 eV exactly, and it is what found the second trap in
+the P8 x P9 note above. `pw_pawatom/paw-atom_spin.in` is validated but kept out of the test
 suite: QE converges it in 32 iterations and this code's Anderson mixer does not do so
 quickly on a landscape that flat, which is a mixer-robustness item for `PERFORMANCE.md`'s
 backlog rather than a correctness gap — `o-paw-spin-pbe` pins the identical code path.

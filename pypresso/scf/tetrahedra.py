@@ -55,6 +55,8 @@ __all__ = [
     "build_tetrahedra",
     "tetrahedra_for",
     "tetrahedron_occupations",
+    "tetrahedron_occupations_spin",
+    "tetrahedron_weights_at",
     "tetrahedron_fermi_level",
     "tetrahedron_dos",
     "integrated_states",
@@ -597,6 +599,34 @@ def _scatter(tetra: Tetrahedra, order, contributions, nk: int, nbnd: int):
 
 
 @jax.jit
+def tetrahedron_weights_at(
+    tetra: Tetrahedra, eigenvalues: jnp.ndarray, weights: jnp.ndarray, ef
+):
+    """``tetra_weights_only``: the weights of one channel at a *given* ``ef``.
+
+    Split out of :func:`tetrahedron_occupations` because that is how
+    ``tetra.f90`` splits it, and for the same reason: with two spin channels the
+    Fermi level is found once from both of them together and then handed to each
+    channel separately (``tetra_weights`` calls ``efermit`` and then
+    ``tetra_weights_only``). Solving per channel would be a different physical
+    problem -- see :func:`tetrahedron_occupations_spin`.
+    """
+    nk, nbnd = eigenvalues.shape
+    spin = jnp.sum(weights)
+    e_sorted, order = _sorted_corners(tetra, eigenvalues)
+
+    if tetra.kind == "bloechl":
+        contributions = _bloechl_weights(e_sorted, ef)
+    else:
+        contributions = _linear_weights(e_sorted, ef)
+    wg = _scatter(tetra, order, contributions, nk, nbnd) * (spin / tetra.ntetra)
+
+    if tetra.kind != "bloechl":
+        wg = _average_degenerate(wg, eigenvalues)
+    return wg
+
+
+@jax.jit
 def tetrahedron_occupations(
     tetra: Tetrahedra, eigenvalues: jnp.ndarray, weights: jnp.ndarray, nelec
 ):
@@ -607,19 +637,95 @@ def tetrahedron_occupations(
     degeneracy: the tetrahedra already carry the Brillouin-zone measure, which
     is why ``tetra.f90`` never looks at ``wk``.
     """
-    nk, nbnd = eigenvalues.shape
     spin = jnp.sum(weights)
-    e_sorted, order = _sorted_corners(tetra, eigenvalues)
+    e_sorted, _ = _sorted_corners(tetra, eigenvalues)
     ef = _bisect(e_sorted, tetra.ntetra, nelec, spin)
+    return tetrahedron_weights_at(tetra, eigenvalues, weights, ef), ef
 
-    if tetra.kind == "bloechl":
-        contributions = _bloechl_weights(e_sorted, ef)
-    else:
-        contributions = _linear_weights(e_sorted, ef)
-    wg = _scatter(tetra, order, contributions, nk, nbnd) * (spin / tetra.ntetra)
 
-    if tetra.kind != "bloechl":
-        wg = _average_degenerate(wg, eigenvalues)
+# --------------------------------------------------------------------------
+# Two spin channels.
+# --------------------------------------------------------------------------
+#
+# Everything above is per channel, and deliberately so: nothing in the
+# tetrahedron construction or in the weight formulas knows about spin. What spin
+# changes is *how many Fermi levels there are*, and that is decided here.
+#
+# ``sumkt`` is where to read it off. With ``is = 0`` and ``nspin = 2`` it loops
+# over both channels accumulating ``1/ntetra`` per (tetrahedron, band) from
+# each, and applies its factor of two **only** when ``nspin == 1``:
+#
+#     IF ( nspin == 1 ) sumkt = sumkt * 2.0_DP
+#
+# So the count whose root is the Fermi level is the *sum over channels*, with
+# each channel weighted by one. That is not the same as solving each channel for
+# half the electrons: a magnetic metal moves electrons between the channels
+# until one number, not two, is stationary, and the whole magnetization comes
+# out of the imbalance that a single shared level produces.
+#
+# The degeneracy bookkeeping needs no special case, because
+# :func:`tetrahedron_occupations` already reads it off ``sum(weights)``: an
+# unpolarized run's k-point weights sum to 2 and a polarized channel's to 1,
+# which is exactly the factor ``sumkt`` applies and withholds.
+
+
+def _stacked_corners(tetra: Tetrahedra, eigenvalues: jnp.ndarray) -> jnp.ndarray:
+    """Sorted corner energies of every channel, as one array.
+
+    ``integrated_states`` sums over *all* axes of what it is given and ``_bisect``
+    brackets with a global min and max, so stacking the channels turns the
+    per-channel count into the summed one with no arithmetic of its own. That is
+    the whole of ``sumkt``'s ``DO ns = 1, nspin_lsda`` loop.
+    """
+    return jnp.stack([_sorted_corners(tetra, channel)[0] for channel in eigenvalues])
+
+
+def tetrahedron_occupations_spin(
+    tetra: Tetrahedra,
+    eigenvalues: jnp.ndarray,
+    weights: jnp.ndarray,
+    nelec,
+    counts=None,
+):
+    """``wg`` and the Fermi level(s) for ``(nspin, nk, nbnd)`` eigenvalues.
+
+    Args:
+        eigenvalues: ``(nspin, nk, nbnd)``.
+        weights: ``(nk,)`` k-point weights, shared by the channels; their sum is
+            the spin degeneracy (2 unpolarized, 1 per channel polarized).
+        counts: ``(nelup, neldw)`` to constrain the magnetization, or ``None``
+            for the single shared Fermi level of an unconstrained run.
+
+    Returns ``(wg, ef)`` with ``wg`` the shape of ``eigenvalues`` and ``ef``
+    either a scalar or, when constrained, a pair.
+
+    ``weights.f90`` supports both, and which one it takes is ``two_fermi_energies``:
+    unconstrained it calls ``tetra_weights(..., nelec, ef, wg, 0, isk)``, which
+    finds one level from both channels; constrained it calls the same routine
+    twice with ``nelup``/``neldw`` and ``is = 1``/``is = 2``, which is genuinely
+    two independent problems. So a constrained magnetization is *not* refused
+    here -- it is the second branch, and it is the one place where solving each
+    channel separately is right.
+    """
+    eigenvalues = jnp.asarray(eigenvalues)
+    weights = jnp.asarray(weights)
+
+    if counts is not None:
+        solved = [
+            tetrahedron_occupations(tetra, eigenvalues[spin], weights, counts[spin])
+            for spin in range(eigenvalues.shape[0])
+        ]
+        return jnp.stack([wg for wg, _ in solved]), tuple(ef for _, ef in solved)
+
+    ef = _bisect(
+        _stacked_corners(tetra, eigenvalues),
+        tetra.ntetra,
+        nelec,
+        jnp.sum(weights),
+    )
+    wg = jnp.stack([
+        tetrahedron_weights_at(tetra, channel, weights, ef) for channel in eigenvalues
+    ])
     return wg, ef
 
 

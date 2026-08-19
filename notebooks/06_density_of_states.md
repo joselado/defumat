@@ -142,9 +142,9 @@ for ngauss, label in names.items():
 
     Gaussian                   integral = 1.0000000000
     Methfessel-Paxton          integral = 1.0000000000
-
-
     cold (Marzari-Vanderbilt)  integral = 1.0000000000
+
+
     Fermi-Dirac                integral = 1.0000000000
 
 
@@ -508,6 +508,128 @@ print(format_dos(al_dos)[:420])
       
 
 
+## 7. Two channels: the spin-resolved density of states
+
+Everything above is per spin channel, and neither integration scheme knows that spin
+exists. What a polarized calculation changes is that there are **two** curves, and the
+distance between them is the physics: `dos.x` writes `dosup(E)` and `dosdw(E)` as separate
+columns with a single `Int dos(E)` summing both, because the sum rule is a statement about
+the total number of electrons while the splitting is a statement about where they are.
+
+The one thing that is *not* per channel is the Fermi level. `sumkt` makes that explicit:
+with `nspin = 2` it loops over both channels accumulating `1/ntetra` from each, and applies
+its factor of two **only** when `nspin == 1` --
+
+    IF ( nspin == 1 ) sumkt = sumkt * 2.0_DP
+
+-- so the count whose root is `E_F` is the *sum over channels*. A magnetic metal moves
+electrons between the channels until one number is stationary, not two, and the whole
+magnetization comes out of the imbalance that a single shared level produces.
+
+Nickel is the case for it: notebook 7 showed the exchange splitting in its bands, and here
+it is again as two curves.
+
+
+```python
+ni, ni_pseudos = load(QE / "pw_lsda" / "lsda.in")
+ni_scf = run_scf(ni, ni_pseudos, conv_thr=1e-10, max_iterations=200)
+print(f"fcc Ni: nspin = {ni.nspin}, {ni.kpoints.nk} k-points per channel")
+print(f"        E = {ni_scf.total_energy:.8f} Ry, m = {ni_scf.magnetization:.4f} mu_B")
+
+ni_dos, ni_nscf = run_dos(ni, ni_pseudos, ni_scf.density, grid=(12, 12, 12), conv_thr=1e-10)
+ef = ni_dos.fermi_energy
+print(f"        DOS on a 12^3 grid ({ni_nscf.kpoints.nk} k-points), scheme {ni_dos.scheme!r}")
+print(f"        E_F = {ef * RY_TO_EV:.4f} eV   (the SCF's 4^3 grid gave "
+      f"{ni_scf.fermi_energy * RY_TO_EV:.4f} eV)")
+print(f"        dos array is {ni_dos.dos.shape} -- one row per channel")
+```
+
+    fcc Ni: nspin = 2, 10 k-points per channel
+            E = -85.72339901 Ry, m = 0.7280 mu_B
+
+
+            DOS on a 12^3 grid (182 k-points), scheme 'marzari-vanderbilt'
+            E_F = 15.3278 eV   (the SCF's 4^3 grid gave 15.3088 eV)
+            dos array is (2, 4003) -- one row per channel
+
+
+
+```python
+up, down = (
+    float(np.interp(ef, ni_dos.energies, ni_dos.integrated[s])) for s in range(2)
+)
+print(f"N_up(E_F)   = {up:.4f}")
+print(f"N_dw(E_F)   = {down:.4f}")
+print(f"total       = {up + down:.4f}   (nickel has 10 valence electrons)")
+print(f"m from N    = {up - down:+.4f} mu_B")
+print(f"m from rho  = {ni_scf.magnetization:+.4f} mu_B  (the SCF's own 4^3 grid)")
+```
+
+    N_up(E_F)   = 5.3175
+    N_dw(E_F)   = 4.6825
+    total       = 10.0000   (nickel has 10 valence electrons)
+    m from N    = +0.6351 mu_B
+    m from rho  = +0.7280 mu_B  (the SCF's own 4^3 grid)
+
+
+The total is ten to the accuracy of the energy grid -- the sum rule, and it would hold
+just as well if the two channels had been treated identically. The *difference* is the one
+that would not: it is nickel's magnetic moment, recovered from the density of states
+rather than from the density, and the two agree to the extent that a 12³ grid and a 4³ one
+agree about a metal.
+
+**A trap that only appears here.** Every `KPoints` constructor multiplies the weights by
+the spin degeneracy, and `build_system` divides it out again for `nspin = 2`. A grid built
+*later* -- which is exactly what a denser DOS grid is -- never passed through that step and
+counted every electron twice. Nothing raised: the density of states still integrated to
+ten electrons, at a Fermi level 2.3 eV too low. `system.kpoints.for_spin` is now the single
+place that knows the rule, and both callers go through it.
+
+
+```python
+fig, ax = plt.subplots(figsize=(7.5, 4.2))
+energies = (ni_dos.energies - ef) * RY_TO_EV
+ax.fill_between(energies, ni_dos.dos_ev[0], 0, color="C3", alpha=0.35)
+ax.fill_between(energies, -ni_dos.dos_ev[1], 0, color="C0", alpha=0.35)
+ax.plot(energies, ni_dos.dos_ev[0], color="C3", lw=1.2, label="majority")
+ax.plot(energies, -ni_dos.dos_ev[1], color="C0", lw=1.2, label="minority")
+ax.axvline(0.0, color="0.4", ls="--", lw=1)
+ax.axhline(0.0, color="0.6", lw=0.8)
+ax.set_xlim(-10, 5)
+ax.set_xlabel(r"$E - E_F$ (eV)")
+ax.set_ylabel("states/eV   (minority plotted downwards)")
+ax.set_title("fcc Ni, LSDA: the d bands split by exchange")
+ax.legend(loc="upper left")
+fig.tight_layout()
+```
+
+
+    
+![png](06_density_of_states_files/06_density_of_states_26_0.png)
+    
+
+
+The conventional way to plot it, and the conventional way to read it: the majority d block
+sits entirely below `E_F` while the minority one straddles it, so the two channels hold
+different numbers of electrons. That, and not any input variable, is where the moment comes
+from -- `starting_magnetization` only breaks the symmetry so the SCF can find it.
+
+The `.dos` file changes shape to match, exactly as `dos.f90` changes it.
+
+
+```python
+print(format_dos(ni_dos)[:300])
+```
+
+    #  E (eV)   dosup(E)     dosdw(E)   Int dos(E) EFermi =   15.328 eV
+       4.990  0.1629E-07  0.3102E-08  0.7006E-09
+       5.000  0.2120E-07  0.4105E-08  0.9229E-09
+       5.010  0.2752E-07  0.5416E-08  0.1212E-08
+       5.020  0.3561E-07  0.7127E-08  0.1589E-08
+       5.030  0.4596E-07  0.9353E-08  0.2076E-08
+       5.04
+
+
 ## What this phase established
 
 * Both Brillouin-zone integration schemes, behind a name registry: four smearings and
@@ -521,6 +643,10 @@ print(format_dos(al_dos)[:420])
   the derivative is taken rather than transcribed, and where the sum rules then follow by
   construction rather than by luck.
 
+* **Spin**, threaded through the whole of it: the schemes stay per channel, the workflow
+  loops over them, the Fermi level is found from both together (`sumkt`'s `nspin == 1`
+  test), and the `.dos` file grows a second column. Nickel's moment comes back out of the
+  integrated DOS as well as out of the density.
+
 Still to come for the density of states: the projected DOS (`projwfc.x`), which needs the
-atomic-orbital projections and not only the eigenvalues, and spin, which adds a channel
-index to everything above.
+atomic-orbital projections and not only the eigenvalues.

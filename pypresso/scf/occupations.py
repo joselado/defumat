@@ -33,7 +33,8 @@ from pypresso.units import SQRT_PI
 __all__ = ["fixed_occupations", "smeared_occupations", "fermi_level", "bisect_fermi",
            "smearing_entropy", "spin_electron_counts",
            "input_occupations", "wgauss", "w0gauss", "w1gauss",
-           "smearing_order", "tetrahedra_for", "tetrahedron_occupations"]
+           "smearing_order", "tetrahedra_for", "tetrahedron_occupations",
+           "tetrahedron_occupations_spin"]
 
 
 def fixed_occupations(eigenvalues: jnp.ndarray, weights: jnp.ndarray, nelec: float):
@@ -492,10 +493,22 @@ def tetrahedra_for(occupations: str, kpoints, symmetries, cell):
 def tetrahedron_occupations(tetrahedra, eigenvalues, weights, nelec):
     """Occupation weights and the Fermi level by the tetrahedron method.
 
-    Returns ``(wg, ef)`` like :func:`smeared_occupations`, with no ``-TS`` term:
-    the tetrahedron method integrates the true step function, so there is no
-    entropy to subtract and QE prints no "smearing contrib." for these runs.
+    Per spin channel: ``eigenvalues`` is ``(nk, nbnd)``. Returns ``(wg, ef)``
+    like :func:`smeared_occupations`, with no ``-TS`` term: the tetrahedron
+    method integrates the true step function, so there is no entropy to subtract
+    and QE prints no "smearing contrib." for these runs.
     """
     from pypresso.scf.tetrahedra import tetrahedron_occupations as _occupations
 
     return _occupations(tetrahedra, eigenvalues, weights, nelec)
+
+
+def tetrahedron_occupations_spin(tetrahedra, eigenvalues, weights, nelec, counts=None):
+    """The same for ``(nspin, nk, nbnd)`` eigenvalues.
+
+    One Fermi level found from both channels together, or -- when ``counts`` is
+    given -- one per channel, exactly as ``weights.f90`` chooses between them.
+    """
+    from pypresso.scf.tetrahedra import tetrahedron_occupations_spin as _occupations
+
+    return _occupations(tetrahedra, eigenvalues, weights, nelec, counts=counts)
