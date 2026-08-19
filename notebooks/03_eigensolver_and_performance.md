@@ -91,27 +91,30 @@ potential_of_rho = jax.jit(v_of_rho)
 
 rho = calculation.starting_density()
 potential = potential_of_rho(rho, calculation.basis.dense, system.cell)
-hamiltonian = calculation.hamiltonian(potential.v_scf)
+# One Hamiltonian per spin channel since P9; this cell is unpolarized.
+hamiltonian = calculation.hamiltonian(potential.v_scf)[0]
 nbnd = 4
 
 eigenvalues, psi = davidson_eigensolver_all(hamiltonian, nbnd)
-weights, _ = calculation.occupations(eigenvalues)
+# The driver's own entry points take and return a leading channel axis.
+weights, _ = calculation.occupations(eigenvalues[None])
 
 stages = [
     timed("v_of_rho", lambda: potential_of_rho(rho, calculation.basis.dense, system.cell)),
-    timed("diagonalise (Davidson)", lambda: calculation.diagonalize(hamiltonian, nbnd, psi)),
-    timed("occupations", lambda: calculation.occupations(eigenvalues)),
-    timed("density + symmetrise", lambda: calculation.density(psi, weights)),
+    timed("diagonalise (Davidson)",
+          lambda: calculation.diagonalize((hamiltonian,), nbnd, psi[None])),
+    timed("occupations", lambda: calculation.occupations(eigenvalues[None])),
+    timed("density + symmetrise", lambda: calculation.density(psi[None], weights)),
 ]
 for label, milliseconds, _ in stages:
     print(f"  {label:26s} {milliseconds:7.2f} ms")
 
 ```
 
-      v_of_rho                      0.54 ms
-      diagonalise (Davidson)        1.60 ms
-      occupations                   0.74 ms
-      density + symmetrise          1.21 ms
+      v_of_rho                      0.80 ms
+      diagonalise (Davidson)        2.23 ms
+      occupations                   0.78 ms
+      density + symmetrise          1.26 ms
 
 
 The eigensolver dominates, and before any of this work it dominated far more: building the
@@ -150,9 +153,9 @@ print(f"  by applying H          {applied:7.2f} ms   ({applied / direct:.0f}x sl
 print(f"  largest disagreement   {difference:.2e} Ry")
 ```
 
-      from matrix elements      4.71 ms
-      by applying H            90.89 ms   (19x slower)
-      largest disagreement   1.24e-16 Ry
+      from matrix elements      4.56 ms
+      by applying H            79.90 ms   (18x slower)
+      largest disagreement   1.78e-15 Ry
 
 
 ## 4. The eigensolver: Davidson
@@ -179,10 +182,10 @@ for band, (a, b) in enumerate(zip(np.asarray(exact)[0], np.asarray(iterative)[0]
 ```
 
       band     dense (Ry)     Davidson (Ry)     difference
-         0    -0.390321364    -0.390321364   1.7e-15
-         1     0.140346328     0.140346328   2.6e-15
-         2     0.366586226     0.366586226   8.1e-15
-         3     0.366586226     0.366586226   9.8e-14
+         0    -0.390321364    -0.390321364   7.2e-16
+         1     0.140346328     0.140346328   3.2e-15
+         2     0.366586226     0.366586226   6.7e-15
+         3     0.366586226     0.366586226   9.9e-14
 
 
 The same answer, and the subspace it came from was 16 x 16 rather than 180 x 180.
@@ -233,16 +236,16 @@ for name in ("si-1k.in", "si-1k-ecut40.in"):
               f"   E = {energy:.9f} Ry")
 ```
 
-      si-1k.in          npw   180  dense         13.9 ms/iteration   E = -15.254448713 Ry
+      si-1k.in          npw   180  dense         12.7 ms/iteration   E = -15.254448713 Ry
 
 
-      si-1k.in          npw   180  davidson       7.1 ms/iteration   E = -15.254448713 Ry
+      si-1k.in          npw   180  davidson       6.6 ms/iteration   E = -15.254448713 Ry
 
 
-      si-1k-ecut40.in   npw  1131  dense       1227.8 ms/iteration   E = -15.304610214 Ry
+      si-1k-ecut40.in   npw  1131  dense       1178.3 ms/iteration   E = -15.304610214 Ry
 
 
-      si-1k-ecut40.in   npw  1131  davidson      29.9 ms/iteration   E = -15.304610214 Ry
+      si-1k-ecut40.in   npw  1131  davidson      29.1 ms/iteration   E = -15.304610214 Ry
 
 
 Identical energies, and at 1131 plane waves Davidson is more than ten times faster. The
@@ -337,10 +340,10 @@ for label, variant in (("full grid", dataclasses.replace(kauto, kpoints=full)),
       48 symmetry operations
 
 
-      full grid          8 k-points     23.7 ms/iteration   E = -15.794495571 Ry
+      full grid          8 k-points     23.2 ms/iteration   E = -15.794495571 Ry
 
 
-      irreducible wedge  2 k-points      9.9 ms/iteration   E = -15.794495571 Ry
+      irreducible wedge  2 k-points      9.7 ms/iteration   E = -15.794495571 Ry
 
 
 Two points instead of eight, and **the total energy is identical to nine decimals**. That
@@ -445,8 +448,8 @@ print(subprocess.run([sys.executable, "-c", probe], capture_output=True, text=Tr
 
 ```
 
-      first  Calculation   1.093 s
-      second Calculation   0.056 s
+      first  Calculation   1.071 s
+      second Calculation   0.064 s
     
 
 

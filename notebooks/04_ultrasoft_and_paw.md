@@ -268,7 +268,8 @@ for case in ('si2-nc-dual8', 'si2-us', 'si2-paw', 'si8-us', 'si8-paw'):
 print(f'{"case":16s} {"iters":>5s} {"int rho":>14s} {"nelec":>7s}')
 for case, (s, ps, r) in results.items():
     nelec = sum(ps[t].z_valence for t in s.structure.types)
-    charge = float(np.sum(np.asarray(r.density))) * float(s.cell.volume) / r.density.size
+    rho = np.asarray(r.total_density)
+    charge = float(np.sum(rho)) * float(s.cell.volume) / rho.size
     print(f'{case:16s} {r.iterations:5d} {charge:14.12f} {nelec:7.1f}')
 ```
 
@@ -326,10 +327,18 @@ for i, d in enumerate(history, 1):
      [ 0.        0.        0.        0.240817]]
     
     converged D (same block):
-    [[ 1.744154  3.272926  0.        0.      ]
-     [ 3.272926  5.793208  0.        0.      ]
-     [ 0.        0.        0.337418 -0.      ]
-     [ 0.        0.       -0.        0.337418]]
+    [[[ 1.744154  3.272926  0.        0.       -0.        0.        0.
+       -0.        0.        0.        0.        0.        0.        0.
+        0.        0.      ]
+      [ 3.272926  5.793208  0.       -0.       -0.        0.       -0.
+       -0.        0.        0.        0.        0.        0.        0.
+        0.        0.      ]
+      [ 0.        0.        0.337418 -0.       -0.        0.546335 -0.
+       -0.        0.        0.        0.        0.        0.        0.
+        0.        0.      ]
+      [ 0.       -0.       -0.        0.337418  0.       -0.        0.546335
+        0.        0.        0.        0.        0.        0.        0.
+        0.        0.      ]]]
     
       iteration  1: max |D - D_converged| = 4.63e-02 Ry
       iteration  2: max |D - D_converged| = 1.26e-02 Ry
@@ -387,8 +396,6 @@ for l in (0, 1, 2, 3):
        l = 0    1.2e-10
        l = 1    1.1e-09
        l = 2    3.0e-09
-
-
        l = 3    5.6e-09
 
 
@@ -414,11 +421,16 @@ s, ps = load('si2-paw')
 calc = Calculation(s, ps)
 r = run_scf(s, ps, conv_thr=1e-10, calculation=calc)
 
+# becsum takes and returns a leading spin channel since P9; SCFResult squeezes
+# that axis away for an unpolarized run, so it is put back to call in. The
+# indices below are then [species][spin, atom].
+weights = r.occupations[None]
+
 raw = calc._becsum_symmetry
 calc._becsum_symmetry = None
-unsymmetrised = np.asarray(calc.becsum(r.wavefunctions, r.occupations)[0][0])
+unsymmetrised = np.asarray(calc.becsum(r.wavefunctions, weights)[0][0, 0])
 calc._becsum_symmetry = raw
-symmetrised = np.asarray(calc.becsum(r.wavefunctions, r.occupations)[0][0])
+symmetrised = np.asarray(calc.becsum(r.wavefunctions, weights)[0][0, 0])
 
 labels = [f'n={nb+1} l={l} m={lm-l*l}' for nb, l, lm in projector_channels(ps[0])]
 print(f'{"channel":14s} {"as computed":>13s} {"symmetrised":>13s}')
@@ -441,7 +453,7 @@ print(f'they span {unsymmetrised[2,2]:.6f} .. {unsymmetrised[3,3]:.6f}; after, t
     n=4 l=1 m=2       0.00151585    0.00171822
     
     The three l=1 channels must be equal by cubic symmetry. Before symmetrisation
-    they span 1.003357 .. 1.267980; after, they agree to 2.2e-16.
+    they span 1.003357 .. 1.267980; after, they agree to 0.0e+00.
 
 
 Symmetrising `becsum` is the difference between agreeing with QE's one-centre energy to

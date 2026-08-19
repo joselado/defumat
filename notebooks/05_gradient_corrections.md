@@ -227,14 +227,15 @@ from pypresso.basis.gradients import divergence, gradient
 from pypresso.scf.potential import exchange_correlation
 
 dense, cell = calculation.basis.dense, system.cell
-rho = scf.density
+rho = scf.total_density          # (n1, n2, n3): the spin axis summed away
 rho_g = r_to_g(rho, dense.fft_index)
 
 grad = gradient(rho_g, dense, cell)
 sigma = jnp.sum(grad * grad, axis=0)
 v1, v2 = calculation.functional.gradient_potentials(rho, sigma)
 v_divergence = -divergence(v2[None, ...] * grad, dense, cell)
-v_local, _ = exchange_correlation(rho, cell, None, calculation.functional)
+v_local, _ = exchange_correlation(rho[None], cell, None, calculation.functional)
+v_local = v_local[0]
 
 n = dense.grid[0]
 line = (np.arange(n), np.arange(n), np.arange(n))   # the [111] body diagonal, through both atoms
@@ -280,7 +281,7 @@ print(f'largest |v1|:                                {float(jnp.max(jnp.abs(v1))
 print(f'largest |div term|:                          {float(jnp.max(jnp.abs(v_divergence))):.4f} Ry')
 ```
 
-    integral of -div(v2 grad rho) over the cell: -3.109e-15
+    integral of -div(v2 grad rho) over the cell: -1.332e-15
     largest |local part|:                        0.9959 Ry
     largest |v1|:                                0.0693 Ry
     largest |div term|:                          0.4494 Ry

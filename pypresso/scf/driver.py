@@ -736,7 +736,7 @@ class Calculation:
 
         rho_g, magnetization_g = starting_charge(
             self.pseudos, self.system.structure, self.system.cell, dense, self.nelec,
-            magnetization=self.system.starting_magnetization,
+            magnetization=self.spin_weights[0] - self.spin_weights[1],
         )
         channels = jnp.stack([rho_g + magnetization_g, rho_g - magnetization_g]) / 2.0
         return jnp.real(g_to_r(channels, dense.fft_index, dense.grid))
@@ -750,9 +750,12 @@ class Calculation:
         charge -- the two starting guesses have to agree about how polarized the
         atom is or the first iteration contradicts itself.
         """
-        magnetization = np.asarray(self.system.starting_magnetization, dtype=float)
+        ntyp = self.system.structure.ntyp
+        magnetization = np.zeros(ntyp)
+        given = np.asarray(self.system.starting_magnetization, dtype=float)
+        magnetization[: given.size] = given[:ntyp]
         if self.nspin == 1:
-            return np.ones((1, len(magnetization) or 1))
+            return np.ones((1, ntyp))
         return 0.5 * np.stack([1.0 + magnetization, 1.0 - magnetization])
 
     def starting_becsum(self) -> tuple:
