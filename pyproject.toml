@@ -6,7 +6,15 @@ build-backend = "hatchling.build"
 name = "pypresso"
 version = "0.0.1"
 description = "Plane-wave DFT in Python and JAX, validated against Quantum ESPRESSO"
+readme = "README.md"
 requires-python = ">=3.10"
+license = { file = "LICENSE" }
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
 dependencies = [
     "jax>=0.4.30",
     "equinox>=0.11",
