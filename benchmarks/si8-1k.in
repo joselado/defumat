@@ -1,0 +1,36 @@
+! Silicon, eight atoms: the conventional cubic cell of the diamond structure.
+!
+! The same crystal as si-1k.in seen in a different cell -- the primitive fcc cell
+! has two atoms, the cubic one that contains it has eight -- so the physics is
+! known and only the size changes. Four times the atoms, four times the volume,
+! four times the plane waves and four times the bands, which is where the cost
+! of a real calculation starts to look like itself: the two-atom cases are small
+! enough that fixed overheads dominate both codes.
+!
+! One k-point, as in the other benchmarks: both codes parallelise over k, so a
+! multi-k comparison measures batching rather than the cost of the physics.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=1, celldm(1) =10.20,
+    nat=8, ntyp=1,
+    ecutwfc=12.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.00 0.50 0.50
+ Si 0.50 0.00 0.50
+ Si 0.50 0.50 0.00
+ Si 0.25 0.25 0.25
+ Si 0.25 0.75 0.75
+ Si 0.75 0.25 0.75
+ Si 0.75 0.75 0.25
+K_POINTS
+  1
+   0.250000  0.250000  0.250000   1.00

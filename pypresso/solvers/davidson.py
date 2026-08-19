@@ -97,6 +97,35 @@ ETHR_MIN = 1.0e-13
 RESIDUAL_THRESHOLD = None
 
 
+def _extend_projection(hc, sc, psi, hpsi, offset, block):
+    """Add one block of rows and columns to the projected H and overlap.
+
+    The projected matrices grow by a block of vectors per Davidson step, so all
+    but the newest rows are unchanged from the step before. ``cegterg`` computes
+    only the new ones -- its ZGEMM writes into ``hc(nb1, n_start)`` -- and keeps
+    the rest, and so does this.
+
+    It is not a small saving. Recomputing costs ``O(nvecx^2 npw)`` per step
+    against ``O(nvecx nbnd npw)`` for the update, a factor of ``nvecx/nbnd``,
+    four at the default subspace size. On an eight-atom silicon cell at 2950
+    plane waves that is 7.7 ms per step against 2.2; on a two-atom cell it is
+    half a millisecond either way, which is why it took a bigger system to
+    notice.
+
+    The Hermitian counterpart of each new row is written at the same time, so
+    the stored matrices stay full rather than triangular.
+    """
+    rows = jax.lax.dynamic_slice(psi, (offset, 0), (block, psi.shape[1]))
+    row_h = rows.conj() @ hpsi.T
+    row_s = rows.conj() @ psi.T
+
+    hc = jax.lax.dynamic_update_slice(hc, row_h, (offset, 0))
+    sc = jax.lax.dynamic_update_slice(sc, row_s, (offset, 0))
+    hc = jax.lax.dynamic_update_slice(hc, row_h.conj().T, (0, offset))
+    sc = jax.lax.dynamic_update_slice(sc, row_s.conj().T, (0, offset))
+    return hc, sc
+
+
 def _precondition(residual, diagonal, energies):
     """``g_psi.f90``: an approximate inverse of ``H - e`` from its diagonal.
 
@@ -155,44 +184,26 @@ def davidson_eigensolver(
     psi = jnp.zeros((nvecx, npwx), dtype).at[:nbnd].set(start)
     hpsi = jnp.zeros((nvecx, npwx), dtype).at[:nbnd].set(hamiltonian.apply(start, ik))
     first = jnp.arange(nvecx) < nbnd
+    empty = jnp.zeros((nvecx, nvecx), dtype)
+    hc0, sc0 = _extend_projection(empty, empty, psi, hpsi, 0, nbnd)
 
-    state = (
-        psi,
-        hpsi,
-        start,                                    # current eigenvector estimate
-        jnp.full((nbnd,), jnp.inf, dtype=diagonal.dtype),  # previous eigenvalues
-        first,                                    # which rows are in the subspace
-        nbnd,                                     # where the next block is written
-        0,                                        # iteration
-        jnp.array(False),                         # converged
-    )
-
-    def unconverged(state):
-        return jnp.logical_and(jnp.logical_not(state[7]), state[6] < max_iterations)
-
-    def step(state):
-        psi, hpsi, _, previous, active, nbase, iteration, _ = state
-
-        # ... the projection of H and of the overlap onto the current subspace
+    def solve(psi, hpsi, active, hc_raw, sc_raw, previous):
+        """Diagonalise in the current subspace and measure what is left."""
         pair = active[:, None] & active[None, :]
         inactive = jnp.where(active, 0.0, 1.0).astype(dtype)
-        hc = jnp.where(pair, psi.conj() @ hpsi.T, 0.0) + jnp.diag(shift * inactive)
-        sc = jnp.where(pair, psi.conj() @ psi.T, 0.0) + jnp.diag(inactive)
-        hc = 0.5 * (hc + hc.conj().T)
-        sc = 0.5 * (sc + sc.conj().T)
+        hc = jnp.where(pair, hc_raw, 0.0) + jnp.diag(shift * inactive)
+        sc = jnp.where(pair, sc_raw, 0.0) + jnp.diag(inactive)
 
-        values, vectors = generalised_eigh(hc, sc)
+        values, vectors = generalised_eigh(0.5 * (hc + hc.conj().T),
+                                           0.5 * (sc + sc.conj().T))
         energies = values[:nbnd].real
-        coefficients = vectors[:, :nbnd]  # (nvecx, nbnd)
+        coefficients = vectors[:, :nbnd]
 
         # ... the estimate in the plane-wave basis, and H applied to it, both
         # rotations of vectors already computed -- no extra application of H.
         evc = coefficients.T @ psi
         hevc = coefficients.T @ hpsi
 
-        # ... the residual is both what the basis is expanded with and how
-        # convergence is judged; see RESIDUAL_THRESHOLD for why QE's test on the
-        # eigenvalue alone is not enough once the solver is seeded.
         residual = hevc - energies[:, None].astype(dtype) * evc
         settled = jnp.abs(energies - previous) < ethr
         if residual_threshold is not None:
@@ -200,41 +211,80 @@ def davidson_eigensolver(
                 settled,
                 jnp.sqrt(jnp.sum(jnp.abs(residual) ** 2, axis=1)) < residual_threshold,
             )
-        converged = jnp.all(settled)
 
-        residual = _precondition(residual, diagonal, energies)
-        residual = jnp.where(mask, residual, 0.0)
-        norm = jnp.sqrt(jnp.sum(jnp.abs(residual) ** 2, axis=1, keepdims=True))
-        residual = jnp.where(settled[:, None], 0.0, residual / jnp.where(norm > 0.0, norm, 1.0))
+        # ... the preconditioned, normalised correction, with the unconverged
+        # roots sorted to the front so the block written next starts with
+        # exactly the vectors worth keeping. The sort is stable, so roots keep
+        # their relative order.
+        correction = _precondition(residual, diagonal, energies)
+        correction = jnp.where(mask, correction, 0.0)
+        norm = jnp.sqrt(jnp.sum(jnp.abs(correction) ** 2, axis=1, keepdims=True))
+        correction = jnp.where(settled[:, None], 0.0,
+                               correction / jnp.where(norm > 0.0, norm, 1.0))
+        correction = correction[jnp.argsort(settled)]
 
-        # ... unconverged roots first, so that the block written below starts
-        # with exactly the vectors worth keeping and ``notcnv`` of them are
-        # marked active. The sort is stable, so roots keep their relative order.
-        order = jnp.argsort(settled)
-        residual = residual[order]
-        notcnv = jnp.sum(jnp.logical_not(settled))
+        return (energies, evc, hevc, correction,
+                jnp.sum(jnp.logical_not(settled)), jnp.all(settled))
+
+    energies0, evc0, hevc0, correction0, notcnv0, converged0 = solve(
+        psi, hpsi, first, hc0, sc0, jnp.full((nbnd,), jnp.inf, dtype=diagonal.dtype)
+    )
+
+    state = (
+        psi, hpsi, first, hc0, sc0,        # the subspace and its projections
+        nbnd,                              # where the next block is written
+        evc0, hevc0, energies0,            # current estimate, and H applied to it
+        correction0, notcnv0,              # what to expand with, decided already
+        0, converged0,                     # iteration, converged
+    )
+
+    def unconverged(state):
+        return jnp.logical_and(jnp.logical_not(state[12]), state[11] < max_iterations)
+
+    def step(state):
+        (psi, hpsi, active, hc_raw, sc_raw, nbase,
+         evc, hevc, energies, correction, notcnv, iteration, _) = state
 
         # ... collapse onto the current estimates when the subspace is full,
-        # which is the only place the basis ever shrinks (cegterg's "refresh")
+        # which is the only place the basis ever shrinks (cegterg's "refresh").
+        # The projected matrices come along for free: the Ritz vectors
+        # diagonalise H within the span and are S-orthonormal by construction,
+        # so the retained block is diag(energies) against the identity.
         full = nbase + nbnd > nvecx
-        psi, hpsi, active, nbase = jax.lax.cond(
+        blank = jnp.zeros_like(hc_raw)
+        psi, hpsi, active, nbase, hc_raw, sc_raw = jax.lax.cond(
             full,
             lambda: (
                 jnp.zeros_like(psi).at[:nbnd].set(evc),
                 jnp.zeros_like(hpsi).at[:nbnd].set(hevc),
                 first,
                 nbnd,
+                blank.at[:nbnd, :nbnd].set(jnp.diag(energies.astype(dtype))),
+                blank.at[:nbnd, :nbnd].set(jnp.eye(nbnd, dtype=dtype)),
             ),
-            lambda: (psi, hpsi, active, nbase),
+            lambda: (psi, hpsi, active, nbase, hc_raw, sc_raw),
         )
 
-        psi = jax.lax.dynamic_update_slice(psi, residual, (nbase, 0))
-        hpsi = jax.lax.dynamic_update_slice(hpsi, hamiltonian.apply(residual, ik), (nbase, 0))
+        # ... expand, and only then diagonalise and test. This ordering is
+        # cegterg's, and it is not cosmetic: testing after expanding, as an
+        # earlier version did, means every call ends by applying H to a block of
+        # residuals that are all zero because every root has just converged.
+        # That was one wasted h_psi per Davidson call -- 7 of the 23 steps a
+        # whole eight-atom run takes.
+        psi = jax.lax.dynamic_update_slice(psi, correction, (nbase, 0))
+        hpsi = jax.lax.dynamic_update_slice(hpsi, hamiltonian.apply(correction, ik), (nbase, 0))
         active = jax.lax.dynamic_update_slice(active, jnp.arange(nbnd) < notcnv, (nbase,))
+        hc_raw, sc_raw = _extend_projection(hc_raw, sc_raw, psi, hpsi, nbase, nbnd)
+        nbase = nbase + notcnv
 
-        return psi, hpsi, evc, energies, active, nbase + notcnv, iteration + 1, converged
+        energies, evc, hevc, correction, notcnv, converged = solve(
+            psi, hpsi, active, hc_raw, sc_raw, energies
+        )
+        return (psi, hpsi, active, hc_raw, sc_raw, nbase,
+                evc, hevc, energies, correction, notcnv, iteration + 1, converged)
 
-    _, _, evc, energies, *_ = jax.lax.while_loop(unconverged, step, state)
+    final = jax.lax.while_loop(unconverged, step, state)
+    evc, energies = final[6], final[8]
     return energies, jnp.where(mask, evc, 0.0)
 
 

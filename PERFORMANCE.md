@@ -33,18 +33,18 @@ a correctness check on every optimisation.
 
 | | QE 7.5 | pypresso | ratio |
 |---|---|---|---|
-| **`si-1k.in`** — 180 PWs, 1 k-point | | | |
-| per SCF iteration | 0.003 s | 0.007 s | **3.0x** |
-| total energy | −15.25444871 Ry | −15.25444945 Ry | Δ 7e-7 Ry |
-| **`si-1k-ecut40.in`** — 1131 PWs, 1 k-point | | | |
-| per SCF iteration | 0.011 s | 0.038 s | **3.3x** |
-| total energy | −15.30461021 Ry | −15.30461021 Ry | Δ 3e-9 Ry |
-| **`pw_scf/scf-kauto.in`** — 2 k-points, reduced from 8 | | | |
-| per SCF iteration | 0.003 s | 0.012 s | **4.7x** |
-| total energy | −15.79449452 Ry | −15.79449594 Ry | Δ 1e-6 Ry |
-| **`pw_metal/metal.in`** — Al, 10 k-points | | | |
-| per SCF iteration | 0.013 s | 0.061 s | **4.6x** |
-| total energy | −4.18546970 Ry | −4.18546964 Ry | Δ 6e-8 Ry |
+| **`si-1k`** — 2 atoms, 180 PWs, 1 k | 0.003 s | 0.007 s | **2.9x** |
+| **`si-1k-ecut40`** — 2 atoms, 1131 PWs | 0.011 s | 0.035 s | **3.1x** |
+| **`si8-1k`** — 8 atoms, 738 PWs | 0.020 s | 0.057 s | **2.8x** |
+| **`si8-1k-ecut30`** — 8 atoms, 2950 PWs | 0.070 s | 0.265 s | **3.8x** |
+| **`pw_scf/scf-kauto`** — 2 k, reduced from 8 | 0.003 s | 0.011 s | **4.3x** |
+| **`pw_metal/metal`** — Al, 10 k | 0.013 s | 0.052 s | **3.9x** |
+
+Total energies against QE: 3.5e-9 Ry on the eight-atom cell at 30 Ry, 1.5e-9 at
+12 Ry, 2.6e-9 for two atoms at 40 Ry, 6.3e-8 for the metal. The eight-atom cases
+are an independent check as well as a bigger one: the conventional cubic cell is
+the same crystal as the primitive fcc cell of the other benchmarks, seen in a
+different cell with four times the atoms, bands and plane waves.
 
 Best of five runs on each side, and worth taking as ±20%: QE prints its timings
 to 0.01 s, so on the small cases its per-iteration figure is one significant
@@ -339,6 +339,32 @@ k-points, which is exactly why the k index leads every wavefunction-shaped array
 thread pool; sharding them across CPU devices is a factor the thread pool cannot
 give.
 
+## What the eight-atom cell showed
+
+Two-atom cells are small enough that fixed overheads dominate. Going to eight
+atoms -- four times the bands, plane waves and volume -- made the ratio *worse*
+(3.3x to 4.5x), and the two reasons were both real inefficiencies invisible at
+the smaller size.
+
+**The projected matrices were being rebuilt every step.** Davidson's subspace
+grows by a block per step, so all but the newest rows of `<psi|H|psi>` and
+`<psi|psi>` are unchanged -- `cegterg` computes only the new ones and keeps the
+rest. Recomputing costs `O(nvecx^2 npw)` against `O(nvecx nbnd npw)`, a factor of
+four at the default subspace size. On the eight-atom cell that was 7.7 ms per
+step against 2.2; on a two-atom cell it is half a millisecond either way.
+
+**Every Davidson call ended by applying H to a block of zeros.** Convergence was
+tested *after* the expansion, so the last step of every call preconditioned a set
+of residuals that had all just converged -- and therefore were all zero -- and
+applied `H` to them anyway. Reordering the loop so it expands, then
+diagonalises, then tests (which is `cegterg`'s order) removed one full `h_psi`
+per call: 26 expansions became 18 for the two-atom run, 23 became 16 for the
+eight-atom one.
+
+Together: 4.5x to **3.8x** on the eight-atom cell at 30 Ry, and every other
+benchmark improved too. The eight-atom cell remains the worst ratio of the six,
+which is the honest place to look next.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -371,11 +397,14 @@ instinct. None of these may change a validated number.
   Splitting the transform by hand also gives up XLA's fusion: three separate
   passes cost 4.8 ms where the fused `fftn` costs 3.3 ms.
 
-* **Applying `H` only to unconverged bands**, as `cegterg` does. This was second
-  on the backlog until it was measured. Counting the unconverged roots at every
-  Davidson step of a whole run and pricing them with the measured cost of
-  `h_psi` as a function of block size gives a ceiling of **6% (180 PWs) to 8%
-  (1131 PWs)** of `h_psi` time — about 3% of an SCF iteration.
+* **Applying `H` only to unconverged bands**, as `cegterg` does — *the partial
+  blocks*, that is. Counting the unconverged roots at every Davidson step and
+  pricing them with the measured cost of `h_psi` as a function of block size
+  gives a ceiling of a few percent: outside the fully-converged steps, almost
+  every step still has every root unconverged, because the convergence test
+  compares against the previous step and the first step of a call always fails
+  it. (The *fully* converged steps were a different matter and are now gone; see
+  "What the eight-atom cell showed".)
 
   The reason it is so small is that the two changes above it took its value
   away. Davidson calls now last two to four steps rather than eight to
@@ -414,3 +443,4 @@ instinct. None of these may change a validated number.
 | 2026-08-18 | Pseudo-atomic starting wavefunctions and Rayleigh-Ritz (`wfcinit`) | 33 → 21 Davidson steps; first iteration 8 → 3 |
 | 2026-08-18 | Persistent XLA compilation cache, on by default | process wall 9.7 → 4.3 s; test suite 134 → 57 s |
 | 2026-08-19 | Cap XLA's CPU thread pool at four cores by affinity; fix the harness, which had claimed one core while using 1.8 | 1.7x out of the box; 14 cores was the worst setting measured |
+| 2026-08-19 | Davidson: extend the projected matrices a block at a time instead of rebuilding them, and test convergence after expanding rather than before | 4.5x → 3.8x on eight atoms; one wasted `h_psi` per call removed |
