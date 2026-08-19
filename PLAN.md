@@ -310,8 +310,123 @@ exact; the `nscf` run of `scf-2.in` matches on its own grid.
 *Check:* against `dos.x` output on the same grid; the integrated DOS returns the electron
 count.
 
-**P9 — Spin.** LSDA (`nspin=2`), collinear magnetization. Non-collinear/SOC stays out.
-*Check:* `pw_lsda` benchmarks.
+**P9 — Spin. ✅ DONE.** LSDA (`nspin=2`), collinear magnetization; non-collinear/SOC
+stays out. The density, the potential, `becsum`, `D_ij`, the eigenvalues and the
+wavefunctions all grew a leading channel axis, with `k` still the leading *independent*
+axis inside each channel. `xc/` gained the polarized correlation parameterisations (PZ,
+PW92 and PBE's) and nothing for exchange, which the spin-scaling relation supplies
+exactly; `scf/occupations.py` gained `set_nelup_neldw`, two Fermi levels, and — see the
+traps — `efermig`'s root selection; `paw/` grew a spin index through the one-centre terms.
+*Check met:* **eight spin-polarized benchmarks**, all generated with the vendored `pw.x`
+at `conv_thr = 1e-10`:
+
+| case | what it isolates | total energy |
+|---|---|---|
+| `pw_atom/atom-lsda` | the whole plumbing, no Fermi search | **4.8e-9 Ry** |
+| `pw_lsda/lsda` | fcc Ni, one shared Fermi level | **1.2e-9 Ry** |
+| `pw_lsda/lsda-tot_magnetization` | two Fermi levels | **1.2e-9 Ry** |
+| `pw_lsda/lsda-nelup+neldw` | the same constraint, spelled `2.0` | as above, to 1e-10 |
+| `pw_atom/atom-sigmapbe` | spin-polarized PBE | **1.8e-9 Ry** |
+| `o-paw-spin` | PAW one-centre terms per channel | **2.0e-7 Ry** |
+| `o-paw-spin-pbe` | the same with a gradient correction on the sphere | **2.0e-7 Ry** |
+| `pw_pawatom/paw-atom_spin_lda` | the LDA case QE ships | 4.1e-6 Ry |
+
+Magnetizations match the two decimals QE prints them with throughout: oxygen's
+2.0000000001 against 2.00, nickel's **0.7280 against 0.73** with an absolute moment of
+0.7842 against 0.78. Nickel's Fermi energy matches to the 0.0001 eV it is printed with,
+its two constrained Fermi levels likewise, and its `-TS` term to 7.5e-9 Ry. The
+unpolarized path did not move at all: silicon norm-conserving/ultrasoft/PAW and LDA/PBE
+reproduce their references to the identical last digit they did before the spin axis
+existed, and `PERFORMANCE.md` records that a length-one spin axis costs nothing.
+
+**The last two rows need their own paragraph, because the looseness is the cases' and not
+this code's.** `o-paw-spin` and `o-paw-spin-pbe` are new inputs committed under
+`tests/data/qe/`; the two QE ships put the minority channel's electron into *one* of the
+three 2p orbitals — which is why they set `nosym` — and that leaves the state nearly
+degenerate under which orbital it is. QE needs 71 iterations on the LDA one, fails to
+converge at all at `mixing_beta = 0.3`, and moves its own answer by 5.8e-7 Ry between
+`mixing_ndim = 8` and `4`; the PBE one is slow enough in both codes that it is excluded
+from the suite, with `o-paw-spin-pbe` covering the identical code path instead. The two
+new inputs change nothing but the occupations and land at 2e-7.
+
+**And there is a control that settles what the residual is not.** Run the *unpolarized*
+PAW oxygen (`pw_pawatom/paw-atom_lda`, which this code reproduces to 2.2e-9 Ry) with
+`nspin = 2` and the two channels occupied equally. Every spin path executes — two
+Hamiltonians, `becsum` and `D_ij` per channel, the polarized functional evaluated at
+`zeta = 0`, the one-centre terms per channel, the magnetization term in `dr2` — and the
+answer moves by **2.0e-12 Ry**. Whatever the remaining 2e-7 is on a genuinely polarized
+isolated atom, it is not arithmetic in the spin path. The check is committed as a test.
+
+**The traps:**
+
+1. **`efermig` does not bisect with the smearing it is given, and the reason is a
+   non-monotonic occupation.** Cold and Methfessel-Paxton occupations *overshoot* — a
+   cold-smeared level reaches 1.07 before settling at 1 — so `N(E_F) = nelec` has several
+   roots and a plain bisection lands on whichever its bracket selects. QE bisects with a
+   **Gaussian** first, which is monotonic, and then refines with Newton's method on the
+   real occupation function. The unpolarized metals never showed it because their count
+   function is never flat; nickel with `tot_magnetization = 2` has a majority channel that
+   is nearly full, flat to 1e-5 electrons over a whole eV, and the wrong root sits 0.74 eV
+   away — same density, same occupations to 1e-5, `-TS` and the total energy out by
+   3e-4 Ry. (Newton's two derivatives of the count come from `jax.grad` of the count,
+   where QE hand-writes `sumkg1` and `sumkg2`.)
+2. **Three quantities are the *total* density's and three are per channel, and QE's array
+   layout hides which is which.** `rho%of_r(:,1)` is the total and `(:,2)` the
+   magnetization, but `sum_band` accumulates in `(up, down)` and converts afterwards
+   (`rhoz_or_updw`), and `gradcorr` converts back. What is genuinely a functional of the
+   total alone: the Hartree potential (copied to both channels), the PAW one-centre
+   Hartree (`PAW_h_potential` sums over spin before solving), and the gradient
+   correction's *correlation* half — which is why `gcc_spin` takes one `grho` where
+   `gcx_spin` takes two.
+3. **`rho_ddot` grows a second term with no `1/G^2` in it.** The magnetization enters
+   `dr2` with a G-independent weight `e2 4pi/(2pi)^2` and with its `G = 0` component
+   *included*, where the Hartree half excludes it. An error in the total charge is
+   expensive in proportion to its wavelength; an error in the magnetization is expensive
+   at every wavelength equally, and a uniform shift of the magnetization is a real error
+   where a uniform shift of the charge is forbidden by neutrality. This feeds `conv_thr`
+   and the `ethr` schedule, so at `conv_thr = 1e-10` it is not cosmetic.
+4. **`nosym` is a correctness switch, not an optimisation.** An input whose occupations
+   break the crystal's symmetry — an atom with one of its three p channels filled — needs
+   it, and symmetrising the density or `becsum` anyway averages the three and converges
+   somewhere else. Both of the PAW spin benchmarks QE ships set it.
+5. **`set_nelup_neldw` truncates the electron count before splitting it.** With an integer
+   charge *and* an integer magnetization it is `(INT(nelec) ± m)/2`, and the default when
+   `tot_magnetization` is absent is `INT(nelec + 1)/2` rather than `nelec/2` — the odd
+   electron goes up. The LSDA `nbnd` default is then `MAX(nelec/degspin, nelup, neldw)`
+   with `degspin = 1`, so it is the *fuller* channel that decides it.
+6. **`pbec_spin`'s `gamma` is not `pbec`'s.** The unpolarized routine carries
+   `0.0310906908696548950` and the polarized one the rounded `0.031091` — a relative
+   difference of 2e-6 that QE has never reconciled, and that is visible in the sixth
+   decimal of a PBE correlation energy. Reproduced rather than unified.
+7. **`from_input` occupations are halved only when `nspin = 1`.** `wg = f_inp(:, isk) *
+   wk`, and the `/2` is not a normalisation choice: one channel takes occupations in
+   [0, 2] against a weight that already carries the spin degeneracy, two channels take one
+   row each in [0, 1] against a weight that does not (`DEGSPIN` drops to 1).
+
+*What autodiff bought again.* The polarized `v_up`/`v_dw` — QE's `slater_spin` returning
+two potentials and `pz_spin`/`pw_spin` three terms each including an explicit `df/dzeta` —
+are `jax.grad` of one energy expression, and agree with QE's algebra transcribed
+independently to 1.3e-15. The GGA's cross term `v2c_ud`, which exists only because
+correlation depends on the *total* density's gradient and which QE assembles by hand into
+`h`, is not a separate quantity here at all: differentiating with respect to the gradient
+*field* rather than to `|grad rho|^2` produces it, correctly paired with the two channels,
+for free.
+
+*What P9 also had to fix first* (committed separately, since none of it is spin): the
+gamma-point half-sphere storage was generated but never consumed — `h_psi`, the
+eigensolver, `addusdens`/`newd` and the symmetry maps all assume the full sphere, so a
+`K_POINTS gamma` run is now substituted by an explicit k = 0 with the full sphere and says
+so; the Vanderbilt `q_with_l = F` augmentation format was refused outright, though every
+`rrkjus` file in the test set uses it and `set_upf_q` is fifteen lines; and the local
+functional was switched off where the plane-wave density goes slightly negative, where
+`xc_lda` evaluates it at `|rho|` — worth 1.3e-7 Ry on an isolated atom and invisible in a
+crystal. `PP_AUGMENTATION shape='BESSEL'` was refused too, on the assumption that the
+shape needed reconstructing; grepping QE settles it — `upf%paw%augshape` is read,
+broadcast, printed and written back, and never used in a calculation.
+
+*Not covered:* `occupations='fixed'` with `nspin = 2` (no committed benchmark exercises
+either of QE's two fillings for it, so it is refused rather than guessed), and
+non-collinear magnetism, which stays out of scope.
 
 **P10 — Performance and parallelism. 🔶 FIRST PASS DONE.** The metric is single-core
 pypresso against single-core QE on the same machine (`tools/compare_qe.py`, inputs in

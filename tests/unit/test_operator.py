@@ -31,7 +31,7 @@ def silicon(pseudo_dir):
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
     calculation = Calculation(system, pseudos)
     potential = v_of_rho(calculation.starting_density(), calculation.basis.dense, system.cell)
-    return calculation, calculation.hamiltonian(potential.v_scf)
+    return calculation, calculation.hamiltonian(potential.v_scf)[0]
 
 
 def test_the_two_matrix_builds_agree(silicon):
@@ -56,7 +56,7 @@ def test_the_two_matrix_builds_agree_with_padded_plane_waves(qe_testsuite, pseud
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
     calculation = Calculation(system, pseudos)
     potential = v_of_rho(calculation.starting_density(), calculation.basis.dense, system.cell)
-    hamiltonian = calculation.hamiltonian(potential.v_scf)
+    hamiltonian = calculation.hamiltonian(potential.v_scf)[0]
 
     assert len(set(calculation.basis.planewaves.npw)) > 1, "this case should have padding"
     for ik in range(system.kpoints.nk):

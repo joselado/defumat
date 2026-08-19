@@ -69,6 +69,7 @@ RESTAMPED = [
     "pw_lsda/lsda.in",
     "pw_lsda/lsda-tot_magnetization.in",
     "pw_lsda/lsda-nelup+neldw.in",
+    "pw_pawatom/paw-atom_lda.in",
     "pw_pawatom/paw-atom_spin_lda.in",
     "pw_pawatom/paw-atom_spin.in",
 ]

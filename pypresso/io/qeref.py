@@ -73,9 +73,21 @@ class QEReference:
     # --- results ---
     total_energy: float | None = None  # Ry
     energy_terms: dict[str, float] = field(default_factory=dict)  # Ry
+    #: ``E = F + TS`` for a smeared run: the total with the entropy added back.
+    #: Printed alongside the terms but not one of them.
+    internal_energy: float | None = None  # Ry
     eigenvalues: np.ndarray | None = None  # (nspin, nk, nbnd) in eV
     occupations: np.ndarray | None = None  # (nspin, nk, nbnd), if printed
     fermi_energy: float | None = None  # eV
+    #: The two independent Fermi levels of a run with ``tot_magnetization``
+    #: constrained, in eV, or ``None``. pw.x prints them on one line as "the
+    #: spin up/dw Fermi energies are" and prints no single Fermi energy at all.
+    fermi_energy_up: float | None = None
+    fermi_energy_down: float | None = None
+    #: ``int (rho_up - rho_dw)`` and ``int |rho_up - rho_dw|`` in Bohr magnetons
+    #: per cell, as printed at the end of an LSDA run (2 decimals).
+    magnetization: float | None = None
+    absolute_magnetization: float | None = None
     homo: float | None = None  # eV, insulators
     lumo: float | None = None  # eV
     forces: np.ndarray | None = None  # (nat,3) Ry/bohr
@@ -142,9 +154,16 @@ def read_qe_output(path: str | Path) -> QEReference:
         weights=weights,
         total_energy=_scalar(text, r"!\s+total energy\s*=\s*(" + _FLOAT + ")"),
         energy_terms=_parse_energy_terms(text),
+        internal_energy=_scalar(text, _INTERNAL_ENERGY),
         eigenvalues=eigenvalues,
         occupations=occupations,
         fermi_energy=_scalar(text, r"the Fermi energy is\s*(" + _FLOAT + ")"),
+        fermi_energy_up=_spin_fermi(text, 0),
+        fermi_energy_down=_spin_fermi(text, 1),
+        magnetization=_last(text, r"total magnetization\s*=\s*(" + _FLOAT + ")"),
+        absolute_magnetization=_last(
+            text, r"absolute magnetization\s*=\s*(" + _FLOAT + ")"
+        ),
         homo=_parse_homo(text),
         lumo=_parse_lumo(text),
         forces=_parse_forces(text),
@@ -158,6 +177,25 @@ def read_qe_output(path: str | Path) -> QEReference:
 
 def _as_int(value: float | None) -> int | None:
     return None if value is None else int(round(value))
+
+
+def _last(text: str, pattern: str) -> float | None:
+    """The **last** match of a pattern printed once per SCF iteration.
+
+    The magnetization is reported at every iteration and again at the end; what
+    a comparison wants is the converged one, not the first guess.
+    """
+    matches = re.findall(pattern, text)
+    return float(matches[-1]) if matches else None
+
+
+def _spin_fermi(text: str, index: int) -> float | None:
+    """One of the two Fermi levels a constrained-magnetization run prints."""
+    match = re.search(
+        r"the spin up/dw Fermi energies are\s*(" + _FLOAT + r")\s+(" + _FLOAT + ")",
+        text,
+    )
+    return float(match.group(index + 1)) if match else None
 
 
 def _parse_calculation(text: str) -> str | None:
@@ -314,8 +352,14 @@ _ENERGY_TERMS = {
     # PAW's one-centre correction, printed only for a PAW run.
     "one_center_paw": r"one-center paw contrib\.\s*=\s*(" + _FLOAT + ")",
     "dispersion": r"Dispersion Correction\s*=\s*(" + _FLOAT + ")",
-    "internal": r"internal energy E=F\+TS\s*=\s*(" + _FLOAT + ")",
 }
+
+#: ``internal energy E=F+TS`` is **not** one of the terms, although pw.x prints
+#: it in the same block and in the same format. It is the total with the
+#: smearing entropy added back, so counting it as a term makes the decomposition
+#: fail to sum to the total and makes a term-by-term comparison compare a
+#: quantity against itself. It gets its own field.
+_INTERNAL_ENERGY = r"internal energy E=F\+TS\s*=\s*(" + _FLOAT + ")"
 
 
 def _parse_energy_terms(text: str) -> dict[str, float]:

@@ -115,10 +115,13 @@ class BecsumSymmetry:
                 out.append(values)
                 continue
             # sources[s, n] is the index, within this species' atoms, of the
-            # atom that operation s sends atom n to.
-            gathered = values[sources]  # (nsym, nat_t, nh, nh)
+            # atom that operation s sends atom n to. The spin channel is a
+            # spectator: a collinear symmetry operation permutes atoms and
+            # rotates harmonics, and does neither to the spin index -- QE's
+            # PAW_symmetrize loops over ``is`` outside everything else.
+            gathered = values[:, sources]  # (nspin, nsym, nat_t, nh, nh)
             out.append(
-                jnp.einsum("sijkl,snkl->nij", operator, gathered) / self.nsym
+                jnp.einsum("sijkl,zsnkl->znij", operator, gathered) / self.nsym
             )
         return tuple(out)
 

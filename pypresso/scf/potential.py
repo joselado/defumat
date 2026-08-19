@@ -9,11 +9,25 @@ with the ``G = 0`` component set to zero. That divergence is not an error: it
 cancels against the corresponding divergences in the Ewald sum and in the local
 pseudopotential, and the three ``G = 0`` terms are only finite together, for a
 neutral cell.
+
+**The spin axis.** Densities and potentials here are ``(nspin, ...)`` and each
+channel is that spin's own density -- so ``nspin = 1`` is the total density in a
+single channel and needs no special case anywhere. QE instead stores the pair as
+(total, magnetization) and converts back and forth (``rhoz_or_updw``); the two
+conventions meet where its formulas are written in one or the other, which is
+exactly three places: the Hartree term and ``dr2`` want the total, and the
+exchange-correlation functional wants the total and ``zeta``.
+
+The physics of the split is the whole of LSDA: **Hartree is a functional of the
+total density alone** -- an electron does not care about the spin of the charge
+repelling it -- while exchange-correlation is not, and that asymmetry is why the
+two channels see different potentials at all.
 """
 
 from __future__ import annotations
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 
 from pypresso.basis.fft import g_to_r, r_to_g
@@ -40,9 +54,13 @@ class Potential(eqx.Module):
     is what changes from iteration to iteration and what ``deband`` subtracts.
     """
 
-    v_scf: jnp.ndarray  # (n1, n2, n3), Ry -- Hartree + XC
+    v_scf: jnp.ndarray  # (nspin, n1, n2, n3), Ry -- Hartree + XC
     ehart: jnp.ndarray  # Ry
     etxc: jnp.ndarray  # Ry
+
+    @property
+    def nspin(self) -> int:
+        return self.v_scf.shape[0]
 
 
 def hartree(rho_g: jnp.ndarray, gvectors: GVectors, cell: Cell):
@@ -74,9 +92,29 @@ def scf_accuracy(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell) -> jnp
     This is the quantity QE compares against ``conv_thr`` and the quantity its
     diagonalisation threshold is scheduled from, so both of those now mean the
     same thing here as they do there.
+
+    With two spin channels ``rho_ddot`` gains a second piece, and it is not a
+    second Hartree energy: the magnetization enters with a **G-independent**
+    weight ``e2 4 pi / (2 pi)^2`` (QE's comment says ``lambda = 1 a.u.``) and
+    with its ``G = 0`` component *included*, where the Hartree half excludes it.
+    An error in the total charge is expensive in proportion to its wavelength; an
+    error in the magnetization is expensive at every wavelength equally, and a
+    uniform shift of the magnetization is a real error where a uniform shift of
+    the charge is forbidden by neutrality.
     """
     residual_g = r_to_g(residual_r, gvectors.fft_index)
-    return hartree(residual_g, gvectors, cell)[1]
+    total = hartree(jnp.sum(residual_g, axis=0), gvectors, cell)[1]
+    if residual_g.shape[0] == 1:
+        return total
+
+    magnetization = residual_g[0] - residual_g[1]
+    weight = E2 * FPI / (2.0 * jnp.pi) ** 2
+    contribution = jnp.sum(jnp.abs(magnetization) ** 2)
+    if gvectors.gamma_only:
+        # Only half the sphere is stored, and unlike the Hartree half the G = 0
+        # term is counted here -- so the doubling applies to the rest of it.
+        contribution = 2.0 * contribution - jnp.abs(magnetization[0]) ** 2
+    return total + 0.5 * cell.volume * weight * contribution
 
 
 def exchange_correlation(
@@ -110,10 +148,29 @@ def exchange_correlation(
     """
     functional = functional or get_functional(DEFAULT_FUNCTIONAL)
     valence = jnp.real(rho_r)
-    density = valence if rho_core is None else valence + jnp.real(rho_core)
-    v = functional.potential(density)
-    n = density.size
-    energy = cell.volume / n * jnp.sum(density * functional.energy_density(density))
+    nspin = valence.shape[0]
+    # The core charge is unpolarized, so it is shared equally between the
+    # channels -- which is the same thing as adding all of it to the total and
+    # none of it to the magnetization, the form ``v_xc`` writes it in.
+    density = (
+        valence if rho_core is None else valence + jnp.real(rho_core) / nspin
+    )
+    n = density[0].size
+
+    if nspin == 1:
+        v = functional.potential(density[0])[None]
+        energy = (
+            cell.volume / n
+            * jnp.sum(density[0] * functional.energy_density(density[0]))
+        )
+        return v, energy
+
+    v = functional.spin_potential(density)
+    energy = (
+        cell.volume
+        / n
+        * jnp.sum(jnp.sum(density, axis=0) * functional.spin_energy_density(density))
+    )
     return v, energy
 
 
@@ -137,9 +194,17 @@ def gradient_correction(
     one to take the divergence back. QE assembles exactly this, storing the
     vector field ``h = v2 grad rho`` and calling ``fft_graddot`` on it.
 
+    With two channels there is a third term. Correlation depends on the
+    **total** density's gradient, so ``d e / d(grad rho_up)`` picks up
+    ``grad rho_dw`` as well; QE calls that cross term ``v2c_ud`` and adds it by
+    hand. Here ``h`` is the derivative of the energy with respect to the
+    gradient *field* rather than with respect to ``|grad rho|^2``, so the cross
+    term is simply part of it and its pairing with the two channels cannot be
+    got the wrong way round.
+
     Args:
-        density_r: ``rho + rho_core`` on the grid -- the density the functional
-            sees, as in :func:`exchange_correlation`.
+        density_r: ``rho + rho_core/nspin`` on the grid, ``(nspin, ...)`` -- the
+            density the functional sees, as in :func:`exchange_correlation`.
         density_g: the same density on the G-vector sphere. Passed in rather
             than transformed here because the caller already holds ``rho(G)``
             for the Hartree term, and the core charge's own G components come
@@ -148,14 +213,24 @@ def gradient_correction(
     Returns ``(v, energy)`` in Ry and Ry/bohr^3 respectively -- the energy
     already integrated over the cell, so that it adds to ``etxc``.
     """
-    grad = gradient(density_g, gvectors, cell)  # (3, n1, n2, n3)
-    sigma = jnp.sum(grad * grad, axis=0)
+    nspin = density_r.shape[0]
+    grad = jax.vmap(gradient, in_axes=(0, None, None))(density_g, gvectors, cell)
+    n = density_r[0].size
 
-    v1, v2 = functional.gradient_potentials(density_r, sigma)
-    v = v1 - divergence(v2[None, ...] * grad, gvectors, cell)
+    if nspin == 1:
+        sigma = jnp.sum(grad[0] * grad[0], axis=0)
+        v1, v2 = functional.gradient_potentials(density_r[0], sigma)
+        v = v1 - divergence(v2[None, ...] * grad[0], gvectors, cell)
+        energy = (
+            cell.volume / n * jnp.sum(functional.gradient_energy(density_r[0], sigma))
+        )
+        return v[None], energy
 
-    n = density_r.size
-    energy = cell.volume / n * jnp.sum(functional.gradient_energy(density_r, sigma))
+    v1, h = functional.spin_gradient_terms(density_r, grad)
+    v = v1 - jax.vmap(divergence, in_axes=(0, None, None))(h, gvectors, cell)
+    energy = (
+        cell.volume / n * jnp.sum(functional.spin_gradient_energy(density_r, grad))
+    )
     return v, energy
 
 
@@ -179,9 +254,19 @@ def v_of_rho(
     rather than only its transform.
     """
     functional = functional or get_functional(DEFAULT_FUNCTIONAL)
-    rho_g = r_to_g(rho_r, gvectors.fft_index)
+    rho_r = jnp.asarray(rho_r)
+    if rho_r.ndim == 3:
+        # A bare grid means one spin channel. Accepted so that callers holding a
+        # plain density -- the tests, and the band-structure workflow -- do not
+        # have to know about the axis.
+        rho_r = rho_r[None]
+    nspin = rho_r.shape[0]
+    rho_g = jax.vmap(r_to_g, in_axes=(0, None))(rho_r, gvectors.fft_index)
 
-    v_hartree_g, ehart = hartree(rho_g, gvectors, cell)
+    # The Hartree term sees the total charge and nothing else, so it is the same
+    # potential in both channels -- ``v_h`` is called on ``rho%of_g(:,1)`` and
+    # added to every component of ``v%of_r``.
+    v_hartree_g, ehart = hartree(jnp.sum(rho_g, axis=0), gvectors, cell)
     v_hartree_r = jnp.real(g_to_r(v_hartree_g, gvectors.fft_index, gvectors.grid))
 
     v_xc, etxc = exchange_correlation(rho_r, cell, rho_core, functional)
@@ -190,16 +275,17 @@ def v_of_rho(
         density_r = jnp.real(rho_r)
         density_g = rho_g
         if rho_core is not None:
-            density_r = density_r + jnp.real(rho_core)
-            density_g = density_g + (
+            density_r = density_r + jnp.real(rho_core) / nspin
+            core_g = (
                 r_to_g(jnp.real(rho_core), gvectors.fft_index)
                 if rho_core_g is None
                 else rho_core_g
             )
+            density_g = density_g + core_g[None] / nspin
         v_gradient, e_gradient = gradient_correction(
             density_r, density_g, gvectors, cell, functional
         )
         v_xc = v_xc + v_gradient
         etxc = etxc + e_gradient
 
-    return Potential(v_scf=v_hartree_r + v_xc, ehart=ehart, etxc=etxc)
+    return Potential(v_scf=v_hartree_r[None] + v_xc, ehart=ehart, etxc=etxc)

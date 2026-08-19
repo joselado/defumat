@@ -103,13 +103,26 @@ def starting_charge(
     cell: Cell,
     gvectors: GVectors,
     nelec: float | None = None,
-) -> jnp.ndarray:
+    magnetization=None,
+):
     """Superposition of atomic charges, ``rho(G)``, as the SCF starting guess.
 
     QE renormalises this to the exact electron count (``atomic_rho``): the
     tabulated atomic charges are integrated on a mesh truncated at 10 bohr, so
     their sum misses a small fraction of an electron. Without the rescaling the
     first SCF iteration starts from the wrong total charge.
+
+    ``magnetization`` -- ``starting_magnetization`` per species -- asks for the
+    LSDA pair. ``atomic_rho_g`` builds the second component from the *same*
+    radial charges weighted by each species' value, so an atom with
+    ``starting_magnetization = 1`` starts fully polarized and one with 0 starts
+    unpolarized. Both components are then scaled by the one factor that fixes
+    the total charge, which is ``potinit``'s ``rho%of_g = rho%of_g/charge*nelec``
+    applied to the whole array rather than to its first component: the *ratio*
+    of magnetization to charge is what the input asked for and rescaling only
+    one of them would change it.
+
+    Returns ``rho(G)``, or ``(rho(G), m(G))`` when ``magnetization`` is given.
     """
     volume = float(cell.volume)
     rho = _sum_over_species(
@@ -121,13 +134,30 @@ def starting_charge(
 
     if nelec is None:
         nelec = sum(pseudos[t].z_valence for t in structure.types)
-    return _renormalise(rho, cell.volume, nelec)
+
+    if magnetization is None:
+        return _renormalise(rho, cell.volume, nelec)
+
+    weights = jnp.asarray(magnetization, dtype=rho.real.dtype)
+    polarized = _sum_over_species(
+        lambda t, gmod: weights[t] * atomic_charge_of_g(pseudos[t], gmod, volume),
+        structure,
+        cell,
+        gvectors,
+    )
+    scale = _renormalisation(rho, cell.volume, nelec)
+    return rho * scale, polarized * scale
+
+
+@jax.jit
+def _renormalisation(rho, volume, nelec):
+    charge = jnp.real(rho[0]) * volume  # rho(G=0) * Omega = electron count
+    return nelec / charge
 
 
 @jax.jit
 def _renormalise(rho, volume, nelec):
-    charge = jnp.real(rho[0]) * volume  # rho(G=0) * Omega = electron count
-    return rho * (nelec / charge)
+    return rho * _renormalisation(rho, volume, nelec)
 
 
 def core_charge(

@@ -46,6 +46,12 @@ STRESS_RY_BOHR3 = 1e-4
 #: Densities of states, in states/eV.
 DOS_STATES_EV = 1e-3
 
+#: Total and absolute magnetization, in Bohr magnetons per cell. pw.x prints
+#: both with two decimals, so half of the last printed digit is all the
+#: comparison can ask for; where the magnetization is fixed by the occupations
+#: rather than by a Fermi search it agrees to 1e-10 and the test says so.
+MAGNETIZATION_BOHRMAG = 5e-3
+
 #: Structural quantities that must agree exactly in exact arithmetic but are
 #: printed rounded (lattice vectors in units of alat, k-points in 2pi/alat).
 GEOMETRY = 1e-6

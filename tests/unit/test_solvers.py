@@ -43,7 +43,8 @@ def silicon(pseudo_dir):
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
     calculation = Calculation(system, pseudos)
     potential = v_of_rho(calculation.starting_density(), calculation.basis.dense, system.cell)
-    return system, pseudos, calculation.hamiltonian(potential.v_scf)
+    # one Hamiltonian per spin channel; these tests are unpolarized
+    return system, pseudos, calculation.hamiltonian(potential.v_scf)[0]
 
 
 def test_davidson_reproduces_the_exact_eigenvalues(silicon):

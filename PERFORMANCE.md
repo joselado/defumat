@@ -534,6 +534,41 @@ It is a small win for a fair amount of machinery. It is in because the layout is
 also the precondition for anything further here — and because the standing rule
 is now to mirror QE where performance matters, which this is the reason for.
 
+## What the spin axis cost the unpolarized path (P9)
+
+LSDA gave the density, the potential, `becsum`, `D_ij`, the eigenvalues and the
+wavefunctions a leading channel axis, and an unpolarized run now goes through
+that axis with length one: `sum_band` and the symmetrisation are `vmap`ped over
+it, `v_of_rho` transforms each channel, and the Hamiltonian is built in a Python
+loop over `range(nspin)`. The obvious worry is that a length-one batch axis is
+not free.
+
+Measured, 2026-08-19, single core, against the same QE build:
+
+| | QE 7.5 | pypresso | ratio | pypresso before P9 |
+|---|---|---|---|---|
+| **`si-1k`** — 2 atoms, 180 PWs | 0.003 s | 0.010 s | **4.1x** | 0.011 s |
+| **`si8-1k`** — 8 atoms, 738 PWs | 0.027 s | 0.074 s | **2.8x** | 0.064 / 0.074 s |
+
+**Nothing to pay.** `si-1k` came out a millisecond *faster* and `si8-1k` landed
+on the upper of the two numbers the same input has produced in earlier sessions
+(0.064 s and 0.074 s, on the same machine, which is the ~15% spread this
+measurement has). The ratios moved more than the times did, and on `si-1k` that
+is arithmetic on QE's side: 0.004 s became 0.003 s, one significant figure at
+three milliseconds, and 0.011/0.004 = 3.0 while 0.010/0.003 = 4.1 without
+anything about either code having changed by more than a millisecond.
+
+Why a length-one `vmap` costs nothing here: XLA sees the batch dimension at trace
+time, and a batch of one collapses in the same pass that would otherwise fuse the
+elementwise work. The Python loop over channels is host-side and runs once per
+iteration. What *would* have cost something is a `lax.scan` or a dynamic branch
+over the spin index, and neither is there -- `nspin` is static, which is the
+whole reason it is an `eqx.field(static=True)` on `System`.
+
+The polarized path costs what it should: two Hamiltonians and two
+diagonalisations, so roughly twice an unpolarized iteration on the same cell,
+plus one extra reduction for `dr2`'s magnetization term.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -585,3 +620,4 @@ measurements, before being implemented. See "QE's FFT layout" above.)
 | 2026-08-19 | Davidson: extend the projected matrices a block at a time instead of rebuilding them, and test convergence after expanding rather than before | 4.5x → 3.8x on eight atoms; one wasted `h_psi` per call removed |
 | 2026-08-19 | Sixteen-atom benchmark added | 3.9x / 4.2x |
 | 2026-08-19 | QE's stick FFT layout implemented, with the field held xy-contiguous | 1.13x on the local term at eight atoms; ~4% per iteration |
+| 2026-08-19 | LSDA: a leading spin axis on the density, potential, `becsum`, `D_ij` and the wavefunctions | no change to the unpolarized path (`si-1k` 0.011 → 0.010 s, `si8-1k` unchanged) |

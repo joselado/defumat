@@ -1,0 +1,36 @@
+! An oxygen atom with a PAW dataset and two spin channels, occupied
+! *symmetrically*: the minority channel spreads its one electron evenly over the
+! three 2p orbitals instead of putting it in one of them.
+!
+! This exists because the two spin-polarized PAW cases QE ships
+! (pw_pawatom/paw-atom_spin*.in) do the opposite -- they fill one p orbital and
+! set nosym -- which makes their state nearly degenerate under *which* orbital,
+! and leaves both codes pinning the total energy only to about 1e-6 Ry. QE
+! itself needs 71 iterations, fails to converge at mixing_beta = 0.3, and moves
+! its own answer by 6e-7 Ry between mixing_ndim = 8 and 4. That is a fine test
+! of agreement and a poor test of the machinery.
+!
+! Everything else here is theirs: the same dataset, the same 25-bohr cell, the
+! same cutoff. Only the occupations change, and with them the conditioning.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 25.0,
+    nat = 1, ntyp = 1,
+    ecutwfc = 30
+    occupations = 'from_input'
+    nspin = 2
+    nbnd = 6
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ O   1.000  O.pz-kjpaw.UPF
+ATOMIC_POSITIONS {alat}
+O   0.0   0.0   0.0
+K_POINTS {gamma}
+OCCUPATIONS
+1.0 1.0 1.0 1.0 0.0 0.0
+1.0 0.3333333333 0.3333333333 0.3333333333 0.0 0.0

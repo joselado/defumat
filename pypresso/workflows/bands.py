@@ -32,9 +32,17 @@ class BandStructure:
     """Eigenvalues along a path, with everything needed to plot them."""
 
     kpoints: KPoints
-    eigenvalues: np.ndarray  # (nk, nbnd), Ry
+    #: ``(nk, nbnd)`` unpolarized, ``(2, nk, nbnd)`` for LSDA -- the same
+    #: squeeze-when-there-is-one-channel convention as :class:`SCFResult`.
+    eigenvalues: np.ndarray
     fermi_energy: float | None = None
     homo: float | None = None
+    nspin: int = 1
+
+    @property
+    def eigenvalues_by_spin(self) -> np.ndarray:
+        """``(nspin, nk, nbnd)`` whatever ``nspin`` is."""
+        return self.eigenvalues if self.nspin == 2 else self.eigenvalues[None]
 
     @property
     def eigenvalues_ev(self) -> np.ndarray:
@@ -52,8 +60,14 @@ class BandStructure:
     def gap(self, nelec: float) -> float:
         """Direct-plus-indirect band gap in eV, for a system with fixed filling."""
         occupied = int(round(nelec / 2))
+        levels = self.eigenvalues_ev
+        if self.nspin == 2:
+            raise NotImplementedError(
+                "a fixed-filling gap is not defined channel by channel; take it "
+                "from eigenvalues_by_spin with the occupation of each channel"
+            )
         return float(
-            self.eigenvalues_ev[:, occupied].min() - self.eigenvalues_ev[:, occupied - 1].max()
+            levels[:, occupied].min() - levels[:, occupied - 1].max()
         )
 
 
@@ -72,7 +86,8 @@ def run_bands(
     Args:
         system: the system the density was converged for.
         pseudos: its pseudopotentials.
-        density: the converged real-space density from an SCF run.
+        density: the converged real-space density from an SCF run, shaped
+            ``(nspin, n1, n2, n3)``.
         kpoints: the path to evaluate on. Defaults to ``system.kpoints``, which
             is what an input file with ``calculation='bands'`` already carries.
         nbnd: number of bands; a band structure normally wants more than the
@@ -87,7 +102,11 @@ def run_bands(
         system = eqx.tree_at(lambda s: s.kpoints, system, kpoints)
 
     calculation = Calculation(system, pseudos)
-    nbnd = nbnd or system.nbnd or default_nbnd(calculation.nelec, system.occupations)
+    nbnd = nbnd or system.nbnd or default_nbnd(
+        calculation.nelec,
+        system.occupations,
+        *((calculation.nelup, calculation.neldw) if system.nspin == 2 else (None, None)),
+    )
 
     if calculation.is_paw:
         # A PAW Hamiltonian's nonlocal coefficients are D^(0) + int V Q + ddd_paw,
@@ -105,16 +124,18 @@ def run_bands(
         )
 
     potential = calculation.potential(density)
-    hamiltonian = calculation.hamiltonian(potential.v_scf)
+    hamiltonians = calculation.hamiltonian(potential.v_scf)
 
     # There is no SCF here to tighten the threshold over, so ``setup.f90`` picks
     # one up front from the accuracy of the density the bands are computed in.
     ethr = max(ETHR_MIN, 0.1 * min(1.0e-2, conv_thr / max(1.0, calculation.nelec)))
-    eigenvalues, _ = calculation.diagonalize(hamiltonian, nbnd, None, ethr)
+    eigenvalues, _ = calculation.diagonalize(hamiltonians, nbnd, None, ethr)
 
+    nspin = calculation.nspin
     return BandStructure(
         kpoints=system.kpoints,
-        eigenvalues=np.asarray(eigenvalues),
+        eigenvalues=np.asarray(eigenvalues if nspin == 2 else eigenvalues[0]),
         fermi_energy=fermi_energy,
         homo=homo,
+        nspin=nspin,
     )

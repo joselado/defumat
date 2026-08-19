@@ -109,7 +109,12 @@ def build_basis(system: System) -> Basis:
     # The FFT box must be commensurate with the crystal's fractional
     # translations, which is a property of the structure rather than of the
     # basis -- hence the symmetry search here. See ``Symmetries.fft_factors``.
-    factors = find_symmetries(system.cell, system.structure).fft_factors()
+    # With ``nosym`` there are no symmetry operations to be commensurate with:
+    # QE sets ``nsym = 1`` and its ``fft_fact`` is then 1 along every axis.
+    factors = (
+        (1, 1, 1) if system.nosym
+        else find_symmetries(system.cell, system.structure).fft_factors()
+    )
 
     dense = generate_gvectors(
         system.cell, system.ecutrho, gamma_only=gamma_only, fft_factors=factors

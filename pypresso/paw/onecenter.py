@@ -35,6 +35,14 @@ which is what lets ``ddd_paw`` -- defined as the derivative of the one-centre
 energy with respect to ``becsum`` -- be one contraction rather than the
 ``nh(nh+1)/2`` separate density rebuilds ``PAW_potential`` does with its
 ``becfake`` trick. The same tensor serves both directions.
+
+**Spin.** ``becsum`` and therefore ``rho_lm``, the potential and ``ddd`` all
+carry a channel axis. The two one-centre terms split the way they do on the
+grid, and for the same reason: **Hartree is solved once, for the summed
+density, and copied to both channels** (``PAW_h_potential`` sums over
+``nspin_lsda`` before calling the radial Poisson solver, and
+``PAW_potential`` copies its answer into ``savedv_lm`` for every spin), while
+exchange-correlation is evaluated per channel on the sphere.
 """
 
 from __future__ import annotations
@@ -95,9 +103,9 @@ class PawCorrections(eqx.Module):
     def energy_and_coefficients(self, becsum: tuple):
         """``(epaw, ddd)`` from the current ``becsum``.
 
-        ``ddd`` matches ``becsum``'s layout -- one ``(nat_t, nh_t, nh_t)`` array
-        per species -- so it drops straight into the same block assembly the
-        ultrasoft ``int V Q`` term uses.
+        ``ddd`` matches ``becsum``'s layout -- one ``(nspin, nat_t, nh_t, nh_t)``
+        array per species -- so it drops straight into the same block assembly
+        the ultrasoft ``int V Q`` term uses.
         """
         energy = jnp.asarray(0.0)
         coefficients = []
@@ -107,7 +115,11 @@ class PawCorrections(eqx.Module):
                     None if values is None else jnp.zeros_like(values)
                 )
                 continue
-            atom_energy, atom_ddd = jax.vmap(partial(onecenter_species, paw))(values)
+            # over atoms: becsum is (nspin, nat, nh, nh) and the atom axis is
+            # the one that batches, so it is moved to the front for the map.
+            atom_energy, atom_ddd = jax.vmap(
+                partial(onecenter_species, paw), in_axes=1, out_axes=(0, 1)
+            )(values)
             energy = energy + jnp.sum(atom_energy)
             coefficients.append(atom_ddd)
         return energy, tuple(coefficients)
@@ -116,31 +128,35 @@ class PawCorrections(eqx.Module):
 def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray):
     """One atom's one-centre energy and ``ddd``, from its ``becsum``.
 
-    ``becsum`` is the full symmetric ``(nh, nh)`` matrix. QE carries the packed
-    upper triangle with off-diagonals doubled; the two contract identically
-    against a tensor symmetric in the same pair, and the full form is what the
-    rest of this code already holds.
+    ``becsum`` is the full symmetric ``(nspin, nh, nh)`` matrix. QE carries the
+    packed upper triangle with off-diagonals doubled; the two contract
+    identically against a tensor symmetric in the same pair, and the full form is
+    what the rest of this code already holds.
     """
+    nspin = becsum.shape[0]
     energy = jnp.asarray(0.0)
-    ddd = jnp.zeros((paw.nh, paw.nh))
+    ddd = jnp.zeros((nspin, paw.nh, paw.nh))
 
     for tensor, core, sign in (
         (paw.density_ae, paw.core_ae, 1.0),
         (paw.density_ps, paw.core_ps, -1.0),
     ):
-        rho_lm = jnp.einsum("ij,ijlr->lr", becsum, tensor)  # (nlm, mesh), r^2 rho_lm
+        # (nspin, nlm, mesh), holding r^2 rho_lm per channel
+        rho_lm = jnp.einsum("sij,ijlr->slr", becsum, tensor)
 
-        v_hartree, e_hartree = _hartree(rho_lm, paw)
+        v_hartree, e_hartree = _hartree(jnp.sum(rho_lm, axis=0), paw)
         v_xc, e_xc = _exchange_correlation(rho_lm, core, paw)
 
-        potential = v_hartree + v_xc
+        # The Hartree potential is the same in both channels: it is a functional
+        # of the total on-site density and of nothing else.
+        potential = v_hartree[None] + v_xc
         energy = energy + sign * (e_hartree + e_xc)
         # ddd is the derivative of that energy with respect to becsum, and
         # because rho_lm is linear in becsum it is the same tensor contracted
         # against the potential instead of against becsum. QE gets it by
         # rebuilding rho_lm once per (ih, jh) pair with a unit becsum.
         ddd = ddd + sign * jnp.einsum(
-            "ijlr,lr->ij", tensor, potential * paw.weights_core
+            "ijlr,slr->sij", tensor, potential * paw.weights_core[None, None, :]
         )
 
     return energy, ddd
@@ -153,6 +169,10 @@ def _hartree(rho_lm, paw: PawSpecies):
     the equation solved, so the solves are grouped by ``l`` -- inside a group
     they are the same compiled function under ``vmap``, and there are at most
     ``2 lmax + 1`` groups.
+
+    ``rho_lm`` here is already summed over spin: electrostatics does not
+    distinguish the channels, which is why QE sums before calling this and
+    copies the single answer back into both.
     """
     blocks = []
     for l in range(int(np.sqrt(paw.nlm - 1)) + 1):
@@ -181,24 +201,34 @@ def _exchange_correlation(rho_lm, core, paw: PawSpecies):
     while the potential that comes back out is integrated against the valence
     density alone downstream.
     """
+    nspin = rho_lm.shape[0]
     # ... onto the angular grid. rho_lm holds r^2 rho, so dividing by r^2 gives
-    # the density the functional wants; the core charge is tabulated directly.
-    rho_rad = jnp.einsum("xl,lr->xr", paw.angular.ylm[:, : paw.nlm], rho_lm)  # (nx, mesh)
-    density = rho_rad / paw.r2 + core
+    # the density the functional wants; the core charge is tabulated directly
+    # and, being unpolarized, is shared equally between the channels -- which is
+    # what ``arho(:,1) = rho_rad(sum) + rho_core`` says with the magnetization
+    # left alone.
+    rho_rad = jnp.einsum(
+        "xl,slr->sxr", paw.angular.ylm[:, : paw.nlm], rho_lm
+    )  # (nspin, nx, mesh)
+    density = rho_rad / paw.r2 + core / nspin
 
-    potential_rad = paw.functional.potential(density)
-    energy_density = paw.functional.energy_density(density)
+    if nspin == 1:
+        potential_rad = paw.functional.potential(density[0])[None]
+        energy_density = paw.functional.energy_density(density[0])
+    else:
+        potential_rad = paw.functional.spin_potential(density)
+        energy_density = paw.functional.spin_energy_density(density)
 
     # ... the energy integrates e_xc against the total r^2 rho, direction by
     # direction, with the quadrature weights folded in.
-    integrand = energy_density * (rho_rad + core * paw.r2)
+    integrand = energy_density * (jnp.sum(rho_rad, axis=0) + core * paw.r2)
     energy = jnp.sum(
         paw.angular.weights[:, None] * integrand * paw.weights_full[None, :]
     )
 
     # ... and back onto the multipoles.
     potential = jnp.einsum(
-        "xl,xr->lr", paw.angular.weighted_ylm[:, : paw.nlm], potential_rad
+        "xl,sxr->slr", paw.angular.weighted_ylm[:, : paw.nlm], potential_rad
     )
 
     # A gradient-corrected functional adds a second pass over the same sphere,
@@ -235,15 +265,14 @@ def _build_species(pseudo: Pseudopotential, functional: Functional) -> PawSpecie
     augmentation = pseudo.augmentation
     if paw is None or augmentation is None or augmentation.qfuncl is None:
         raise ValueError(f"{pseudo.element}: incomplete PAW data in the UPF file")
-    if paw.augmentation_shape.upper() not in ("", "PSQ"):
-        # 'PSQ' means PP_QIJL *is* the pseudo one-centre augmentation, so the
-        # pseudo on-site density is ptfunc + Q with nothing reconstructed. The
-        # other shapes ('GAUSS', 'BESSEL', ...) tabulate a fitted analytic form
-        # whose reconstruction is not implemented; refusing beats guessing.
-        raise NotImplementedError(
-            f"{pseudo.element}: PP_AUGMENTATION shape={paw.augmentation_shape!r} is "
-            "not implemented; only the tabulated 'PSQ' form is"
-        )
+    # ``PP_AUGMENTATION``'s ``shape`` attribute ('PSQ', 'GAUSS', 'BESSEL', ...)
+    # records how the *generator* pseudized Q, and this used to be refused for
+    # anything but 'PSQ' on the assumption that the other shapes needed a
+    # reconstruction. They do not: grepping the whole of QE, ``upf%paw%augshape``
+    # is read, broadcast, printed by ``summary.f90`` and written back out, and
+    # never used in a calculation. What PW consumes is the tabulated
+    # ``PP_QIJL``, which every shape supplies, so the refusal only kept out
+    # perfectly readable datasets -- ``O.pz-kjpaw.UPF`` among them.
 
     channels = projector_channels(pseudo)
     nh = len(channels)

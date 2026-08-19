@@ -10,6 +10,13 @@ Two regimes, following ``PW/src/weights.f90`` and its callees:
 
 Weights returned here are QE's ``wg``: the k-point weight times the occupation,
 summing to the number of electrons.
+
+**Spin.** Eigenvalues and weights carry a leading channel axis. With one Fermi
+level the search runs over both channels at once -- QE simply passes its
+``2 nks`` k-list, whose weights already sum to one per channel, so nothing about
+the bisection changes. With ``tot_magnetization`` given there are *two*
+independent Fermi levels, one per channel, each solving for its own electron
+count, and the ``-TS`` term is the sum of the two (``weights.f90``).
 """
 
 from __future__ import annotations
@@ -24,7 +31,7 @@ from jax.scipy.special import erf, erfc
 from pypresso.units import SQRT_PI
 
 __all__ = ["fixed_occupations", "smeared_occupations", "fermi_level", "bisect_fermi",
-           "smearing_entropy",
+           "smearing_entropy", "spin_electron_counts",
            "input_occupations", "wgauss", "w1gauss", "smearing_order"]
 
 
@@ -34,7 +41,14 @@ def fixed_occupations(eigenvalues: jnp.ndarray, weights: jnp.ndarray, nelec: flo
     Returns ``(wg, homo, lumo)``. Raises if the electron count is odd, which
     means the system needs either spin polarisation or smearing.
     """
-    nbnd = eigenvalues.shape[1]
+    nspin, _, nbnd = eigenvalues.shape
+    if nspin != 1:
+        raise NotImplementedError(
+            "occupations='fixed' with nspin = 2 is not implemented; QE fills the "
+            "two channels from tot_magnetization or from a shared Fermi level, "
+            "and no committed benchmark exercises either, so it is refused "
+            "rather than guessed. Use occupations='from_input' or 'smearing'"
+        )
     occupied = nelec / 2.0
     if abs(occupied - round(occupied)) > 1e-8:
         raise ValueError(
@@ -45,10 +59,10 @@ def fixed_occupations(eigenvalues: jnp.ndarray, weights: jnp.ndarray, nelec: flo
         raise ValueError(f"{nelec} electrons need {occupied} bands but only {nbnd} were computed")
 
     occupation = jnp.arange(nbnd) < occupied
-    wg = weights[:, None] * occupation[None, :]
+    wg = weights[None, :, None] * occupation[None, None, :]
 
-    homo = jnp.max(eigenvalues[:, occupied - 1])
-    lumo = jnp.min(eigenvalues[:, occupied]) if occupied < nbnd else None
+    homo = jnp.max(eigenvalues[0, :, occupied - 1])
+    lumo = jnp.min(eigenvalues[0, :, occupied]) if occupied < nbnd else None
     return wg, homo, lumo
 
 
@@ -149,6 +163,88 @@ def smearing_order(smearing: str) -> int:
 #: count function and does not depend on this number.
 BISECTION_STEPS = 200
 
+#: Newton steps for the Methfessel-Paxton and cold refinement. QE allows 300;
+#: Newton on a smooth one-dimensional function converges quadratically and a
+#: converged step is a fixed point, so the two counts cannot disagree about
+#: where it lands -- only about how much arithmetic is wasted afterwards.
+NEWTON_STEPS = 100
+
+#: ``efermig``'s two tolerances: ``eps`` on the electron count throughout, and
+#: ``eps_cold_MP`` for deciding that the Newton refinement was good enough.
+FERMI_EPS = 1.0e-10
+FERMI_EPS_COLD_MP = 1.0e-2
+
+
+def _count(eigenvalues, weights, degauss, ngauss, ef):
+    """``sumkg``: the electron count a given Fermi level would give."""
+    occupation = wgauss((ef - eigenvalues) / degauss, ngauss)
+    return jnp.sum(weights[:, None] * occupation)
+
+
+def _bisect(eigenvalues, weights, nelec, degauss, ngauss):
+    """Plain bisection on the count function, as a device-side loop.
+
+    The loop runs a fixed number of steps and its branch is a ``where``, so it
+    is a ``fori_loop`` and never leaves the device. Written as a Python loop
+    with a ``float()`` comparison it cost 200 host round trips *per SCF
+    iteration* -- by far the most expensive thing about a metal.
+
+    The bracket is ``+-10 degauss`` beyond the extreme eigenvalues, which is
+    ``efermig``'s.
+    """
+
+    def step(_, bracket):
+        low, high = bracket
+        middle = 0.5 * (low + high)
+        too_many = _count(eigenvalues, weights, degauss, ngauss, middle) > nelec
+        return jnp.where(too_many, low, middle), jnp.where(too_many, middle, high)
+
+    low = jnp.min(eigenvalues) - 10.0 * degauss
+    high = jnp.max(eigenvalues) + 10.0 * degauss
+    low, high = jax.lax.fori_loop(0, BISECTION_STEPS, step, (low, high))
+    return 0.5 * (low + high)
+
+
+def _newton(eigenvalues, weights, nelec, degauss, ngauss, start):
+    """``efermig``'s ``newton_minimization`` of ``(N(Ef) - nelec)^2``.
+
+    The first and second derivatives of the count -- QE's ``sumkg1`` and
+    ``sumkg2``, each a hand-written sum over its own tabulated ``w0gauss`` /
+    ``w0gauss'`` -- come from ``jax.grad`` of the count itself, so they cannot
+    disagree with the occupation function they are supposed to differentiate.
+
+    The step is Newton's on the *squared* residual with the second derivative's
+    absolute value in the denominator, which is what makes it a descent step
+    towards the nearest root rather than a Newton step on ``N - nelec`` that
+    would run away wherever ``N'`` changes sign -- and ``N'`` changing sign is
+    the whole problem here.
+    """
+    residual = lambda ef: _count(eigenvalues, weights, degauss, ngauss, ef) - nelec
+    first = jax.grad(residual)
+    second = jax.grad(first)
+
+    def step(_, state):
+        x, done = state
+        value, slope, curvature = residual(x), first(x), second(x)
+        numerator = 2.0 * value * slope
+        denominator = jnp.abs(2.0 * (slope**2 + value * curvature))
+        singular = denominator <= FERMI_EPS
+        safe = jnp.where(singular, 1.0, denominator)
+        candidate = x - numerator / safe
+        moved = jnp.where(done | singular, x, candidate)
+        stop = (
+            done
+            | singular
+            | (jnp.abs(moved - x) < FERMI_EPS)
+            | (jnp.abs(residual(moved)) < FERMI_EPS)
+        )
+        return moved, stop
+
+    refined, _ = jax.lax.fori_loop(
+        0, NEWTON_STEPS, step, (start, jnp.zeros((), dtype=bool))
+    )
+    return refined
+
 
 @partial(jax.jit, static_argnames=("ngauss",))
 def bisect_fermi(
@@ -158,34 +254,42 @@ def bisect_fermi(
     degauss: float,
     ngauss: int,
 ) -> jnp.ndarray:
-    """The bisection itself, as a device-side loop.
+    """The Fermi level, by ``PW/src/efermig.f90``'s algorithm.
 
-    Bisection rather than Newton because Methfessel-Paxton and cold occupations
-    are not monotonic in the energy, so a derivative-based search can step out
-    of the bracket entirely.
+    **Bisection alone is not enough, and this is the trap.** Methfessel-Paxton
+    and cold occupations *overshoot*: a cold-smeared level reaches 1.07 before
+    settling at 1, so the electron count is not monotonic in ``E_F`` and
+    ``N(E_F) = nelec`` has several roots. Which one a bisection finds depends on
+    its bracket, and the wrong root gives the same occupations to 1e-5 while
+    putting ``-TS`` out by 3e-4 Ry -- an error that is invisible in the density
+    and shows up only in the total energy. It bites hardest where the count is
+    nearly flat, which is exactly a half-metallic channel: nickel's majority
+    spin, with ``tot_magnetization`` fixing six electrons in it.
 
-    The loop runs a fixed number of steps and its branch is a ``where``, so it
-    is a ``fori_loop`` and never leaves the device. Written as a Python loop
-    with a ``float()`` comparison it cost 200 host round trips *per SCF
-    iteration* -- by far the most expensive thing about a metal.
+    So QE does what is transcribed here: bisect with a **Gaussian**, which is
+    monotonic and has one root, then refine that guess with Newton's method on
+    the actual occupation function. The Gaussian level is what selects the
+    physical root; the refinement moves it to where the real count is right.
+    Bisection with the true function survives only as the fallback QE takes when
+    the refinement misses by more than 1e-2 electrons.
     """
     eigenvalues = jnp.asarray(eigenvalues)
     weights = jnp.asarray(weights)
 
-    def count(ef):
-        occupation = wgauss((ef - eigenvalues) / degauss, ngauss)
-        return jnp.sum(weights[:, None] * occupation)
+    # Fermi-Dirac is monotonic, so its own bisection is both the guess and the
+    # answer; everything else is guessed at with the Gaussian.
+    guess_smearing = ngauss if ngauss == -99 else 0
+    guess = _bisect(eigenvalues, weights, nelec, degauss, guess_smearing)
+    if ngauss in (0, -99):
+        return guess
 
-    def step(_, bracket):
-        low, high = bracket
-        middle = 0.5 * (low + high)
-        too_many = count(middle) > nelec
-        return jnp.where(too_many, low, middle), jnp.where(too_many, middle, high)
-
-    low = jnp.min(eigenvalues) - 20.0 * degauss
-    high = jnp.max(eigenvalues) + 20.0 * degauss
-    low, high = jax.lax.fori_loop(0, BISECTION_STEPS, step, (low, high))
-    return 0.5 * (low + high)
+    refined = _newton(eigenvalues, weights, nelec, degauss, ngauss, guess)
+    missed = (
+        jnp.abs(_count(eigenvalues, weights, degauss, ngauss, refined) - nelec)
+        >= FERMI_EPS_COLD_MP
+    )
+    fallback = _bisect(eigenvalues, weights, nelec, degauss, ngauss)
+    return jnp.where(missed, fallback, refined)
 
 
 def fermi_level(
@@ -205,10 +309,51 @@ def smeared_occupations(
     nelec: float,
     degauss: float,
     smearing: str = "gaussian",
+    counts=None,
 ):
-    """Occupation weights and the Fermi level for a smeared calculation."""
+    """Occupation weights and the Fermi level(s) for a smeared calculation.
+
+    Args:
+        eigenvalues: ``(nspin, nk, nbnd)``.
+        weights: ``(nk,)`` k-point weights, summing to 1 per channel when
+            ``nspin = 2`` and to 2 when it is 1.
+        counts: ``(nelup, neldw)`` to constrain the magnetization -- QE's
+            ``two_fermi_energies``. ``None`` shares one Fermi level between the
+            channels, which is the unconstrained case.
+
+    Returns ``(wg, ef)`` with ``ef`` a scalar, or ``(wg, (ef_up, ef_dw))`` when
+    the magnetization is constrained. The shared search is literally the
+    unpolarized one run on a k-list twice as long, which is how QE gets it: it
+    stores both channels in one array of ``2 nks`` points and never writes a
+    spin-aware Fermi search at all.
+    """
     ngauss = smearing_order(smearing)
-    return _smeared(jnp.asarray(eigenvalues), jnp.asarray(weights), nelec, degauss, ngauss)
+    eigenvalues = jnp.asarray(eigenvalues)
+    weights = jnp.asarray(weights)
+    nspin = eigenvalues.shape[0]
+
+    if counts is None:
+        flat, tiled = _flatten_spin(eigenvalues, weights)
+        wg, ef = _smeared(flat, tiled, nelec, degauss, ngauss)
+        return wg.reshape(eigenvalues.shape), ef
+
+    channels = [
+        _smeared(eigenvalues[spin], weights, counts[spin], degauss, ngauss)
+        for spin in range(nspin)
+    ]
+    return (
+        jnp.stack([wg for wg, _ in channels]),
+        tuple(ef for _, ef in channels),
+    )
+
+
+def _flatten_spin(eigenvalues, weights):
+    """The ``2 nks`` k-list QE builds with ``set_kup_and_kdw``, as arrays."""
+    nspin = eigenvalues.shape[0]
+    return (
+        eigenvalues.reshape(-1, eigenvalues.shape[-1]),
+        jnp.tile(weights, nspin),
+    )
 
 
 @partial(jax.jit, static_argnames=("ngauss",))
@@ -222,7 +367,7 @@ def _smeared(eigenvalues, weights, nelec, degauss, ngauss):
 def smearing_entropy(
     eigenvalues: jnp.ndarray,
     weights: jnp.ndarray,
-    ef: float,
+    ef,
     degauss: float,
     smearing: str = "gaussian",
 ) -> jnp.ndarray:
@@ -230,9 +375,22 @@ def smearing_entropy(
 
     It is what makes a smeared total energy variational: the quantity being
     minimised is a free energy, not the energy at fictitious occupations.
+
+    ``ef`` is a scalar for one shared Fermi level, or a pair for a constrained
+    magnetization -- in which case ``demet`` is ``demet_up + demet_dw``, each
+    channel measured against its own level.
     """
-    return _entropy(jnp.asarray(eigenvalues), jnp.asarray(weights), ef, degauss,
-                    smearing_order(smearing))
+    eigenvalues = jnp.asarray(eigenvalues)
+    weights = jnp.asarray(weights)
+    ngauss = smearing_order(smearing)
+
+    if isinstance(ef, (tuple, list)):
+        return sum(
+            _entropy(eigenvalues[spin], weights, level, degauss, ngauss)
+            for spin, level in enumerate(ef)
+        )
+    flat, tiled = _flatten_spin(eigenvalues, weights)
+    return _entropy(flat, tiled, ef, degauss, ngauss)
 
 
 @partial(jax.jit, static_argnames=("ngauss",))
@@ -243,13 +401,51 @@ def _entropy(eigenvalues, weights, ef, degauss, ngauss):
 def input_occupations(card_values, eigenvalues: jnp.ndarray, weights: jnp.ndarray):
     """Occupations read from an ``OCCUPATIONS`` card (``occupations='from_input'``).
 
-    QE applies the same list at every k-point, and the values are occupations
-    per band in [0, 2] for an unpolarised calculation -- so the weight that
-    multiplies them is the k-point weight divided by the spin degeneracy.
+    ``weights.f90``: ``wg(:,ik) = f_inp(:, isk(ik)) * wk(ik)``, halved **only**
+    when ``nspin == 1``. The halving is not a normalisation choice -- for one
+    channel the card gives occupations in [0, 2] against a k-point weight that
+    already carries the spin degeneracy, while for two it gives one row per
+    channel in [0, 1] against a weight that does not.
+
+    Args:
+        eigenvalues: ``(nspin, nk, nbnd)``.
+        weights: ``(nk,)`` k-point weights.
     """
+    nspin, _, nbnd = eigenvalues.shape
     values = np.asarray(card_values, dtype=float)
-    nbnd = eigenvalues.shape[1]
-    if values.size < nbnd:
-        raise ValueError(f"OCCUPATIONS card gives {values.size} values but {nbnd} bands are computed")
-    occupation = jnp.asarray(values[:nbnd])
-    return weights[:, None] * occupation[None, :] / 2.0
+    if values.size < nspin * nbnd:
+        raise ValueError(
+            f"OCCUPATIONS card gives {values.size} values but {nspin} x {nbnd} "
+            "are needed (one row per spin channel)"
+        )
+    rows = values[: nspin * nbnd].reshape(nspin, nbnd)
+    occupation = jnp.asarray(rows if nspin == 2 else rows / 2.0)
+    return weights[None, :, None] * occupation[:, None, :]
+
+
+def spin_electron_counts(nelec: float, tot_magnetization: float | None):
+    """``(nelup, neldw)`` -- ``set_nelup_neldw`` in ``Modules/electrons_base.f90``.
+
+    Transcribed rather than reasoned out, because of the ``INT(nelec)`` in the
+    constrained branch: with an integer charge *and* an integer magnetization QE
+    truncates the electron count before adding the magnetization, so an input
+    whose two are of opposite parity gets a non-integer split and a warning
+    rather than a refusal. The unconstrained default is likewise not
+    ``nelec/2``: it is ``INT(nelec + 1)/2``, which puts the odd electron in the
+    up channel.
+    """
+    integer_charge = abs(nelec - round(nelec)) < 1e-8
+
+    if tot_magnetization is None:
+        if integer_charge:
+            up = float(int(nelec + 1) // 2)
+            return up, nelec - up
+        return nelec / 2.0, nelec / 2.0
+
+    integer_magnetization = abs(tot_magnetization - round(tot_magnetization)) < 1e-8
+    if integer_charge and integer_magnetization:
+        return (
+            (int(nelec) + tot_magnetization) / 2.0,
+            (int(nelec) - tot_magnetization) / 2.0,
+        )
+    return (nelec + tot_magnetization) / 2.0, (nelec - tot_magnetization) / 2.0

@@ -63,7 +63,7 @@ def benchmark(input_path: Path, pseudo_dir: Path):
 
     rho = calculation.starting_density()
     potential, _ = timer("v_of_rho", lambda: v_of_rho(rho, basis.dense, system.cell), repeats=3)
-    hamiltonian = calculation.hamiltonian(potential.v_scf)
+    hamiltonian = calculation.hamiltonian(potential.v_scf)[0]
 
     nbnd = system.nbnd or max(int(round(calculation.nelec / 2)), 1)
     psi = hamiltonian.apply(
