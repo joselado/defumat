@@ -146,6 +146,11 @@ codes parallelise over k, so a multi-k comparison measures batching rather than 
 of the physics. `si-1k.in` is the test suite's silicon at `ecutwfc = 12`; `si-1k-ecut40.in`
 is the same cell at a production cutoff, where scaling starts to show.
 
+`performance/run_performance.py` runs that comparison over a whole set of inputs and
+typesets it — a PDF with the per-case ratios, what compilation costs, and each case's peak
+memory, regenerable by hand at any time (`performance/README.md`). Each case is a
+subprocess with a 2-minute budget, so a slow one is reported rather than waited on.
+
 `PERFORMANCE.md` is the running log: the comparison, where the time goes, what each change
 was worth, and the backlog. **Add a measurement to it whenever a feature lands or a hot
 spot moves** — including the QE ratio, not only an internal timing. `tools/benchmark.py
