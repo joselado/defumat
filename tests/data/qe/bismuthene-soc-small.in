@@ -1,0 +1,29 @@
+! Bismuthene with spin-orbit coupling, at test-suite size.
+!
+! The same cell as bismuthene-soc.in at a cutoff and k-grid the automated tests
+! can afford: 20 Ry with a dual of 8 and a 6x6x1 grid, against 35 Ry and 12x12x1.
+! It is under-converged as a physical result and says so -- what it is for is a
+! regression check that has the whole spin-orbit path in it (noncollinear
+! spinors, a fully-relativistic ultrasoft dataset, PBE, a 2D cell with vacuum)
+! and runs in minutes. The converged numbers live in notebook 08.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 4, celldm(1) = 10.109950, celldm(3) = 1.978248,
+    nat = 2, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 160.0,
+    noncolin = .true., lspinorb = .true.,
+    starting_magnetization = 0.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.01,
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Bi 208.98 Bi.rel-pbe-dn-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS (crystal)
+ Bi 0.333333333333 0.666666666667 0.0
+ Bi 0.666666666667 0.333333333333 0.0
+K_POINTS AUTOMATIC
+ 6 6 1 0 0 0

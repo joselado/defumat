@@ -260,3 +260,71 @@ def test_relativistic_paw_keeps_the_small_component_separate():
 
     scalar = read_upf(PSEUDO / "Si.pz-n-kjpaw_psl.0.1.UPF")
     assert scalar.paw.ae_wfc_rel is None
+
+
+# --- the spinor operator ------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def spinor_hamiltonian():
+    """A spin-orbit Hamiltonian on QE's platinum cell, at its starting density."""
+    from pypresso.io.pwin import read_pw_input
+    from pypresso.scf.driver import Calculation
+    from pypresso.system import build_system
+
+    benchmark = Path(__file__).resolve().parents[2] / "benchmarks" / "pt-so-1k.in"
+    system = build_system(read_pw_input(benchmark))
+    pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
+    calculation = Calculation(system, pseudos)
+    potential = calculation.potential(calculation.starting_density())
+    return calculation, calculation.hamiltonian(potential.v_scf)[0]
+
+
+def test_the_spinor_state_space_is_twice_as_large(spinor_hamiltonian):
+    calculation, hamiltonian = spinor_hamiltonian
+    assert hamiltonian.npol == 2
+    assert hamiltonian.ndim == 2 * hamiltonian.npwx
+    assert hamiltonian.state_mask.shape == (hamiltonian.nk, hamiltonian.ndim)
+    assert hamiltonian.deeq.shape[:2] == (2, 2)
+    # Nonmagnetic, so the density and the potential stay scalar.
+    assert hamiltonian.nspin_mag == 1
+    assert calculation.nspin_mag == 1
+
+
+def test_the_two_spinor_matrix_builds_agree(spinor_hamiltonian):
+    """The formula and the operator must give the same matrix, to round-off.
+
+    The same check :mod:`tests.unit.test_operator` makes of the collinear
+    Hamiltonian, and it is worth more here: the spin-block structure gives four
+    chances to transpose an index, and three of the four blocks are complex.
+    """
+    _, hamiltonian = spinor_hamiltonian
+    direct = np.asarray(hamiltonian.matrix(0))
+    applied = np.asarray(hamiltonian.matrix_by_application(0))
+    scale = np.abs(applied).max()
+    assert np.abs(direct - applied).max() < 1e-10 * scale
+
+
+def test_the_spinor_hamiltonian_is_hermitian(spinor_hamiltonian):
+    """...and genuinely spin-mixing, which is what makes it a spin-orbit one."""
+    _, hamiltonian = spinor_hamiltonian
+    matrix = np.asarray(hamiltonian.matrix_by_application(0))
+    assert np.abs(matrix - matrix.conj().T).max() < 1e-10 * np.abs(matrix).max()
+
+    npwx = hamiltonian.npwx
+    upper_lower = matrix[:npwx, npwx:]
+    assert np.abs(upper_lower).max() > 1e-6, "the spin blocks do not couple at all"
+
+
+def test_the_spinor_overlap_is_positive_definite(spinor_hamiltonian):
+    """``S`` has to stay positive definite or the Cholesky in ``cdiaghg`` fails.
+
+    Platinum is ultrasoft *and* fully relativistic, so ``S`` is built from
+    ``qq_so`` -- the augmentation integrals put through the spin transform --
+    and a sign error there is not a small perturbation of the answer but a
+    generalised eigenproblem with no solution.
+    """
+    _, hamiltonian = spinor_hamiltonian
+    overlap = np.asarray(hamiltonian.overlap_matrix(0))
+    assert np.abs(overlap - overlap.conj().T).max() < 1e-10
+    assert np.linalg.eigvalsh(overlap).min() > 0.0

@@ -667,7 +667,8 @@ all regenerated with the vendored `pw.x` at `conv_thr = 1e-10`:
 | `pw_spinorbit/spinorbit` | ultrasoft + LDA: `fcoef`, `dvan_so`, `qq_so`, `newd_so` | **1.3e-8 Ry** |
 | `pw_spinorbit/spinorbit-pbe` | the same with a gradient correction | **3.8e-9 Ry** |
 | `pw_spinorbit/spinorbit-paw` | PAW's one-centre terms under the spin transform | **8.4e-9 Ry** |
-| `bismuthene-soc` | the target system: 2D, ultrasoft + PBE, 30 electrons | see below |
+| `bismuthene-soc` / `-nosoc` | the target system: 2D, ultrasoft + PBE, 30 electrons | 3.5e-5 Ry, see below |
+| `bismuthene-soc-small-lda` | the control that says which part owns that 3.5e-5 | **7.1e-9 Ry** |
 
 ...and, ahead of any of them, an identity that needs no reference at all: **a noncollinear
 run with no spin-orbit coupling and no magnetization must reproduce the collinear answer
@@ -677,6 +678,38 @@ on any error in `vloc_psi_nc`, the doubled eigensolver, the spinor `sum_band`, t
 projector occupations or the k-point weights — and it was written and passed *before*
 `fcoef` existed, so the spin-orbit work started from a Hamiltonian already known to be
 right.
+
+*Bismuthene, which is the system the feature exists for.* A planar honeycomb layer of
+bismuth at the SiC(0001) lattice constant, run twice with everything but the
+pseudopotential held fixed: once with the fully-relativistic dataset and `lspinorb`, once
+with the *scalar*-relativistic one and no spin at all. (Not the relativistic dataset with
+the coupling switched off — that asks for `average_pp`, which is a third pseudopotential
+and is refused here.) Without the coupling the frontier bands come within **0.14 eV** of
+each other at a pair of points flanking K along M–K–Γ, and the fundamental gap is the same
+0.14 eV; with it the smallest direct gap on the path is **0.63 eV** and the fundamental gap
+**0.49 eV**. Note *where*: the bands do not meet at K, where they are already split, which
+is why the quantity quoted is the smallest gap on the path rather than the gap at a
+symmetry point. Two sizes are committed with their own QE references — 20 Ry on 6x6x1,
+which is what the tests run and what the numbers above are, and 35 Ry on 12x12x1,
+where the path resolves the near-degeneracy properly: there the gap without the
+coupling is **0.040 eV** and with it **0.508 eV**, both matching QE to the four
+decimals it prints, the bands agree to **0.52 meV** over the whole path, and Kramers
+degeneracy holds to 4e-8 eV. That pair costs 11 minutes of SCF and 10 of bands per
+run at a peak of **9.4 GB** — which it manages at all only because of the k-loop
+(P10): batched over all 19 k-points it was killed at 12.7 GB and still climbing.
+
+**Its total energy agrees to 3.5e-5 Ry, not the 1e-8 the platinum cases reach, and the
+cause is measured rather than argued.** The control is `bismuthene-soc-small-lda`: the same
+cell, the same fully-relativistic dataset, the same grids, the same k-points and the same
+spinor path, with `input_dft = 'PZ'` switching the gradient correction off — and it agrees
+to **7.1e-9 Ry**, four orders better. What is left is therefore the gradient correction
+evaluated over the two thirds of this cell that are vacuum, where XClib's thresholds
+(P13 trap 2) decide whether a point contributes at all: a property of P13 and of the
+geometry, not of P14. The collinear `nosoc` run carries the identical offset with the
+identical sign pattern term by term, and the *difference* between the two runs — which is
+the physical claim — matches QE to **1.6e-6 Ry** on the test-sized pair and
+**1.4e-7 Ry** on the converged one (0.741399926 Ry against 0.741400070). Every PBE case validated before this one
+was a dense bulk crystal, which is why nothing earlier reached it.
 
 `fcoef` itself has an exact characterisation that the unit tests use instead of a
 reference: for each radial projector it is the **orthogonal projector onto that `(l, j)`

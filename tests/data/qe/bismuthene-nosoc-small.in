@@ -1,0 +1,22 @@
+! The control for bismuthene-soc-small: same cell and cutoffs, collinear, with
+! the scalar-relativistic dataset. The pair is what makes the gap attributable to
+! the spin-orbit coupling and to nothing else.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 4, celldm(1) = 10.109950, celldm(3) = 1.978248,
+    nat = 2, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 160.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.01,
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Bi 208.98 Bi.pbe-dn-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS (crystal)
+ Bi 0.333333333333 0.666666666667 0.0
+ Bi 0.666666666667 0.333333333333 0.0
+K_POINTS AUTOMATIC
+ 6 6 1 0 0 0

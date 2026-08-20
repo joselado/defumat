@@ -1,0 +1,29 @@
+! Platinum, fcc, one atom, with spin-orbit coupling -- the P14 benchmark.
+!
+! The cell of QE's pw_spinorbit tests reduced to a single k-point, following the
+! convention of every other input here: both codes parallelise over k, so a
+! multi-k comparison measures batching rather than the cost of the physics.
+!
+! It is an ultrasoft, fully-relativistic dataset with 26 projector channels, so
+! the nonlocal term -- where the spin-orbit coupling lives, as a complex 2x2
+! matrix in spin space -- is a large share of the work, which is the point.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=  2, celldm(1) = 7.42, nat = 1, ntyp = 1,
+    lspinorb = .true., noncolin = .true.,
+    starting_magnetization = 0.0,
+    occupations = 'smearing', degauss = 0.02, smearing = 'mp',
+    ecutwfc = 30.0, ecutrho = 250.0,
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+Pt  195.08    Pt.rel-pz-n-rrkjus.UPF
+ATOMIC_POSITIONS {alat}
+Pt  0.0000000   0.00000000   0.0
+K_POINTS
+  1
+   0.250000  0.250000  0.250000   1.00

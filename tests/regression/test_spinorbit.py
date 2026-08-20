@@ -229,3 +229,209 @@ def test_a_relativistic_dataset_without_lspinorb_is_refused(qe_testsuite, pseudo
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
     with pytest.raises(NotImplementedError, match="average_pp"):
         Calculation(system, pseudos)
+
+
+# --- bismuthene ---------------------------------------------------------------
+#
+# The system the feature exists for. A flat honeycomb layer of bismuth is a
+# near-semimetal: without spin-orbit coupling its frontier bands come within a
+# tenth of an eV of each other along M-K. Bismuth's spin-orbit coupling is
+# enormous, and it opens a gap of half an electronvolt there -- which is what
+# makes bismuthene a two-dimensional topological insulator. So the quantity to
+# check is the gap, and the fact that it is *made* of the coupling.
+#
+# These are the test-sized cells (20 Ry, 6x6x1). The converged ones -- 35 Ry,
+# 12x12x1 -- are committed beside them with their own references, and are what
+# notebook 08 and PLAN.md quote; they are far too slow for a test.
+#
+# **On the total-energy tolerance.** These two agree with QE to ~3e-5 Ry rather
+# than the ~1e-8 every other case here reaches, and the cause is measured rather
+# than assumed: the *same* cell run under LDA (``bismuthene-soc-small-lda``,
+# same dataset, same grids, same k-points, same spinor path, ``input_dft =
+# 'PZ'``) agrees to 7e-9 Ry -- see the test at the end of this file. What is
+# left is the
+# gradient correction evaluated over the two thirds of this cell that are
+# vacuum, where XClib's thresholds decide whether a point contributes at all.
+# It is a property of P13 and of the geometry, not of spin-orbit coupling: the
+# collinear ``nosoc`` run shows the identical offset with the identical sign
+# pattern across the terms, and the *difference* between the two runs -- which is
+# the physical claim -- agrees with QE to 1.6e-6 Ry. Every PBE case validated
+# before this one was a dense bulk crystal, which is why no earlier test could
+# reach it.
+
+#: ``(tag, occupied bands)``. A spinor band holds one electron, a spin-degenerate
+#: one holds two, and bismuthene has 30 valence electrons in the cell.
+BISMUTHENE = [("soc", 30), ("nosoc", 15)]
+
+#: See the note above. Not a claim about this code's accuracy in general.
+VACUUM_GGA_TOTAL_RY = 1e-4
+
+#: How many of the topmost bands neither code converges, per case. Measured
+#: rather than guessed -- the per-band disagreement with QE over the whole path
+#: is at most 0.46 meV below these and jumps by a factor of thirty inside them:
+#: 10.7 meV for the top Kramers pair of the ``soc`` run, and 14.6 / 15.3 / 16.2
+#: meV for the top three of ``nosoc``, which has no Kramers doubling to make the
+#: unconverged states come in twos.
+UNCONVERGED_TOP_BANDS = {"soc": 2, "nosoc": 3}
+
+
+@lru_cache(maxsize=None)
+def _bismuthene(tag: str, pseudo_dir: Path):
+    scf_system = build_system(read_pw_input(GENERATED / f"bismuthene-{tag}-small.in"))
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in scf_system.structure.species
+    )
+    scf = run_scf(scf_system, pseudos, conv_thr=1e-10, max_iterations=100)
+
+    from pypresso.workflows import run_bands
+
+    path_system = build_system(read_pw_input(GENERATED / f"bismuthene-{tag}-small-bands.in"))
+    bands = run_bands(
+        path_system, pseudos, scf.density, nbnd=path_system.nbnd,
+        fermi_energy=scf.fermi_energy,
+    )
+    return scf_system, scf, path_system, bands
+
+
+def _gap(tag: str, occupied: int, pseudo_dir: Path) -> float:
+    """The fundamental gap in eV: lowest conduction minus highest valence."""
+    _, _, _, bands = _bismuthene(tag, pseudo_dir)
+    levels = bands.eigenvalues_ev
+    return float(levels[:, occupied].min() - levels[:, occupied - 1].max())
+
+
+def _reference_gap(tag: str, occupied: int) -> float:
+    reference = read_qe_output(GENERATED / f"reference.out.bismuthene-{tag}-small-bands")
+    levels = np.squeeze(np.asarray(reference.eigenvalues))
+    return float(levels[:, occupied].min() - levels[:, occupied - 1].max())
+
+
+def _skip_without_references():
+    for tag in ("soc", "nosoc"):
+        for suffix in ("", "-bands"):
+            if not (GENERATED / f"reference.out.bismuthene-{tag}-small{suffix}").is_file():
+                pytest.skip("bismuthene references not generated")
+
+
+@pytest.mark.parametrize(("tag", "occupied"), BISMUTHENE)
+def test_bismuthene_total_energy(tag, occupied, pseudo_dir):
+    _skip_without_references()
+    reference = read_qe_output(GENERATED / f"reference.out.bismuthene-{tag}-small")
+    system, scf, _, _ = _bismuthene(tag, pseudo_dir)
+
+    assert scf.converged
+    assert (system.nspin == 4) == (tag == "soc")
+    assert scf.total_energy == pytest.approx(reference.total_energy, abs=VACUUM_GGA_TOTAL_RY)
+    # Geometry alone, so this one has no excuse.
+    assert scf.energy_terms["ewald"] == pytest.approx(
+        reference.energy_terms["ewald"], abs=ENERGY_TERM_RY
+    )
+
+
+def test_the_energy_spin_orbit_costs_matches_reference(pseudo_dir):
+    """The *difference* the coupling makes, where the vacuum offset cancels.
+
+    Both runs carry the same systematic error from the gradient correction in
+    the vacuum (see the note above), and it is the same to five figures, so the
+    difference between them is a far sharper comparison than either total.
+    """
+    _skip_without_references()
+    mine, theirs = [], []
+    for tag, _ in BISMUTHENE:
+        _, scf, _, _ = _bismuthene(tag, pseudo_dir)
+        mine.append(scf.total_energy)
+        theirs.append(read_qe_output(GENERATED / f"reference.out.bismuthene-{tag}-small").total_energy)
+    assert (mine[0] - mine[1]) == pytest.approx(theirs[0] - theirs[1], abs=1e-5)
+
+
+@pytest.mark.parametrize(("tag", "occupied"), BISMUTHENE)
+def test_bismuthene_bands_match_reference(tag, occupied, pseudo_dir):
+    """...and the ``crystal_b`` path expands to exactly QE's k-list.
+
+    Checked explicitly rather than assumed: this is the first band path in the
+    suite given in crystal coordinates, and a path differing from QE's by a
+    reciprocal-lattice vector would give band values that look plausible
+    everywhere while being compared at the wrong k.
+
+    The **topmost** bands are excluded -- see ``UNCONVERGED_TOP_BANDS``. They
+    are the last states an iterative solver converges: they sit at the edge of
+    the subspace in both codes, with nothing above them to mix with, and neither
+    code holds them to the threshold the occupied states meet. Comparing them
+    would measure the two eigensolvers' stopping points rather than the physics.
+    Everything below agrees to 0.46 meV.
+    """
+    _skip_without_references()
+    reference = read_qe_output(GENERATED / f"reference.out.bismuthene-{tag}-small-bands")
+    _, _, path_system, bands = _bismuthene(tag, pseudo_dir)
+
+    mine = np.asarray(path_system.kpoints.cartesian(path_system.cell))
+    mine = mine * path_system.cell.alat / (2.0 * np.pi)  # QE prints 2pi/alat
+    assert np.abs(mine - np.asarray(reference.kpoints)).max() < 1e-5
+
+    got = bands.eigenvalues_ev
+    want = np.squeeze(np.asarray(reference.eigenvalues))
+    n = min(got.shape[1], want.shape[1]) - UNCONVERGED_TOP_BANDS[tag]
+    assert np.abs(got[:, :n] - want[:, :n]).max() < EIGENVALUE_EV
+
+
+@pytest.mark.parametrize(("tag", "occupied"), BISMUTHENE)
+def test_bismuthene_gap_matches_reference(tag, occupied, pseudo_dir):
+    _skip_without_references()
+    assert _gap(tag, occupied, pseudo_dir) == pytest.approx(
+        _reference_gap(tag, occupied), abs=EIGENVALUE_EV
+    )
+
+
+def test_spin_orbit_opens_the_gap(pseudo_dir):
+    """The whole point: the gap is made of the spin-orbit coupling.
+
+    Both runs use the same cell, cutoffs, k-points and functional; they differ
+    only in whether the pseudopotential kept its ``j`` channels apart. So the
+    difference between the two gaps is the spin-orbit coupling and nothing else.
+    """
+    _skip_without_references()
+    gaps = {tag: _gap(tag, occupied, pseudo_dir) for tag, occupied in BISMUTHENE}
+    assert gaps["nosoc"] < 0.2, f"without spin-orbit the gap is already {gaps['nosoc']:.3f} eV"
+    assert gaps["soc"] > 0.4, f"spin-orbit opened only {gaps['soc']:.3f} eV"
+    assert gaps["soc"] > 3.0 * gaps["nosoc"]
+
+
+def test_kramers_degeneracy_on_the_bismuthene_path(pseudo_dir):
+    """Planar bismuthene has inversion, so the spin-orbit bands stay paired.
+
+    Buckle the layer or put it on a substrate and inversion goes, and the same
+    coupling splits them -- that is the Rashba effect. Here it must not.
+    """
+    _skip_without_references()
+    _, _, _, bands = _bismuthene("soc", pseudo_dir)
+    levels = bands.eigenvalues_ev
+    assert np.abs(levels[:, 0::2] - levels[:, 1::2]).max() < 1e-6
+
+
+def test_the_same_cell_under_lda_has_no_such_offset(pseudo_dir):
+    """The control that localises bismuthene's 3e-5 Ry to the functional.
+
+    Everything is held fixed except the gradient correction: the same
+    fully-relativistic dataset, the same 20 Ry / dual 8 grids, the same 6x6x1
+    k-grid, the same noncollinear spinor path with ``lspinorb``. Only
+    ``input_dft = 'PZ'`` differs, and the agreement with QE improves by four
+    orders of magnitude. That is what makes the offset a property of P13's
+    thresholds over this cell's vacuum rather than of P14.
+
+    Running a PBE dataset under LDA is not a physical calculation, and both
+    codes are asked for the same unphysical thing -- which is the point: the
+    comparison is code against code, not either against nature.
+    """
+    reference_path = GENERATED / "reference.out.bismuthene-soc-small-lda"
+    if not reference_path.is_file():
+        pytest.skip("bismuthene LDA control reference not generated")
+    system = build_system(read_pw_input(GENERATED / "bismuthene-soc-small-lda.in"))
+    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
+    scf = run_scf(system, pseudos, conv_thr=1e-10, max_iterations=100)
+
+    reference = read_qe_output(reference_path)
+    assert scf.converged
+    assert scf.total_energy == pytest.approx(reference.total_energy, abs=TOTAL_ENERGY_RY)
+    # ...and it is four orders better than the PBE pair above, not merely inside
+    # a loose tolerance.
+    assert abs(scf.total_energy - reference.total_energy) < 0.01 * VACUUM_GGA_TOTAL_RY

@@ -1,0 +1,28 @@
+! Band structure of bismuthene-soc-small along Gamma - M - K - Gamma.
+!
+! Thirteen points: enough to see the gap at K open, few enough to run in a
+! test. K is path point 7.
+ &control
+    calculation = 'bands'
+ /
+ &system
+    ibrav = 4, celldm(1) = 10.109950, celldm(3) = 1.978248,
+    nat = 2, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 160.0,
+    noncolin = .true., lspinorb = .true.,
+    starting_magnetization = 0.0,
+    nbnd = 36,
+ /
+ &electrons
+ /
+ATOMIC_SPECIES
+ Bi 208.98 Bi.rel-pbe-dn-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS (crystal)
+ Bi 0.333333333333 0.666666666667 0.0
+ Bi 0.666666666667 0.333333333333 0.0
+K_POINTS crystal_b
+  4
+   0.000000 0.000000 0.000000 4
+   0.500000 0.000000 0.000000 3
+   0.333333 0.333333 0.000000 5
+   0.000000 0.000000 0.000000 1

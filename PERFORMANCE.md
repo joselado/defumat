@@ -663,3 +663,5 @@ measurements, before being implemented. See "QE's FFT layout" above.)
 | 2026-08-19 | Sixteen-atom benchmark added | 3.9x / 4.2x |
 | 2026-08-19 | QE's stick FFT layout implemented, with the field held xy-contiguous | 1.13x on the local term at eight atoms; ~4% per iteration |
 | 2026-08-19 | LSDA: a leading spin axis on the density, potential, `becsum`, `D_ij` and the wavefunctions | no change to the unpolarized path (`si-1k` 0.011 → 0.010 s, `si8-1k` unchanged) |
+| 2026-08-20 | Spin-orbit coupling (P14): spinor wavefunctions, `j`-resolved projectors | one Hamiltonian on a doubled space; a nonmagnetic run keeps `nspin_mag = 1`, so the density, potential and XC paths are untouched |
+| 2026-08-20 | The k axis chunked as QE's `k_loop`, default one k-point (`pypresso/batching.py`) | converged bismuthene 44.9 → 22.5 s/iteration and 4.91 → 3.16 GB; 9% slower on `metal.in`'s ten cheap k-points |

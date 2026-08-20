@@ -1,0 +1,36 @@
+! Bismuthene with spin-orbit coupling, at test-suite size, under LDA.
+!
+! The control that explains bismuthene-soc-small's tolerance. That case agrees
+! with QE to ~3e-5 Ry where every other spin-orbit case here reaches 1e-8, and
+! the question is whether the spin-orbit path or the functional owns the
+! difference. This input answers it: the same cell, the same fully-relativistic
+! dataset, the same grids, the same k-points and the same spinor path, with
+! input_dft switching the gradient correction off. What is left agrees to 1e-8.
+!
+! So the offset belongs to the gradient correction evaluated over the two
+! thirds of this cell that are vacuum -- where XClib's thresholds decide whether
+! a point contributes at all (PLAN.md, P13 trap 2) -- and not to P14. Using the
+! PBE dataset under LDA is not a physical calculation and is not meant to be;
+! both codes are asked for the same unphysical thing.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 4, celldm(1) = 10.109950, celldm(3) = 1.978248,
+    nat = 2, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 160.0,
+    noncolin = .true., lspinorb = .true.,
+    starting_magnetization = 0.0,
+    input_dft = 'PZ',
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.01,
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Bi 208.98 Bi.rel-pbe-dn-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS (crystal)
+ Bi 0.333333333333 0.666666666667 0.0
+ Bi 0.666666666667 0.333333333333 0.0
+K_POINTS AUTOMATIC
+ 6 6 1 0 0 0
