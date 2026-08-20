@@ -26,12 +26,20 @@ outputs for around a hundred cases.
 * **Norm-conserving, ultrasoft and PAW pseudopotentials** in the UPF format.
 * **LDA and GGA functionals** — Perdew-Zunger and Perdew-Wang, PBE, revPBE and
   PBEsol — taken from the pseudopotential's own header, or from `input_dft`.
+* **Densities of states**, by smearing or by any of the three tetrahedron
+  methods, which also work as an occupation scheme inside the SCF.
+* **Collinear spin polarisation**, with one Fermi level or two, and
+  **spin-orbit coupling** with two-component spinor wavefunctions.
+* **Forces**, by differentiating the total energy rather than by evaluating
+  hand-derived expressions — and **structural relaxation** on top of them, with
+  the same BFGS, trust radius and line search Quantum ESPRESSO uses.
 * Crystal symmetry, automatic k-point grids reduced to the irreducible wedge,
   and gamma-only calculations.
 
-Not yet: spin polarisation, density of states, and forces and stress. Those are
-the next things. A functional that is not implemented is refused with an error
-naming the terms that are, rather than quietly replaced by one that is.
+Not yet: the stress (and so variable-cell relaxation), the projected density of
+states, DFT+U, and phonons. A functional or a combination that is not
+implemented is refused with an error naming what *is*, rather than quietly
+replaced by something that is.
 
 If your calculation needs any of those, use Quantum ESPRESSO — this is not a
 replacement for it, and on anything large it will be slower (about two to four
@@ -119,6 +127,10 @@ without being run, and each has a plain-text `.md` version beside it.
 | [`03_eigensolver_and_performance`](notebooks/03_eigensolver_and_performance.ipynb) | How the calculation is made fast, and how it compares to Quantum ESPRESSO |
 | [`04_ultrasoft_and_paw`](notebooks/04_ultrasoft_and_paw.ipynb) | Ultrasoft and PAW pseudopotentials: two grids, the augmentation charge, and PAW's one-centre terms |
 | [`05_gradient_corrections`](notebooks/05_gradient_corrections.ipynb) | PBE and its relatives: what a gradient correction adds to the potential, on the grid and inside a PAW sphere |
+| [`06_density_of_states`](notebooks/06_density_of_states.ipynb) | Smearing against tetrahedra, silicon's gap as the thing that separates them, and nickel's spin-resolved DOS |
+| [`07_spin_polarization`](notebooks/07_spin_polarization.ipynb) | LSDA: exchange splitting, nickel's magnetic moment, and constraining the magnetization |
+| [`08_spin_orbit_coupling`](notebooks/08_spin_orbit_coupling.ipynb) | Spinors, `j`-resolved projectors, platinum's 5d splitting, and a quantum spin Hall insulator |
+| [`09_forces_and_relaxation`](notebooks/09_forces_and_relaxation.ipynb) | Forces as one gradient of the energy, checked against Quantum ESPRESSO term by term, and a structure relaxing back onto its lattice site |
 
 `benchmarks/` holds ready-to-run input files, from a two-atom silicon cell up to
 a sixteen-atom one.
@@ -136,7 +148,10 @@ python3 -m pytest
 Silicon's total energy agrees to about 1e-9 Ry term by term, its band structure
 to 0.0002 eV, and metals with every smearing to about 2.5e-8 Ry. The ultrasoft
 and PAW cases agree to 3e-9 Ry or better on 2- and 8-atom cells, and the PBE
-ones to 6e-9 Ry with the band structure within 0.05 meV.
+ones to 6e-9 Ry with the band structure within 0.05 meV. Forces agree to 2e-5
+Ry/bohr or better on five cases spanning all three kinds of pseudopotential and
+a magnetic molecule — term by term, not only in total — and a relaxation ends on
+the same geometry to 1e-6 bohr and the same energy to 3e-10 Ry.
 
 Most regression tests need Quantum ESPRESSO's `test-suite` directory, which is not
 shipped here; they skip cleanly without it. The ultrasoft, PAW and PBE ones do

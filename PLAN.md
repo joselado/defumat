@@ -115,6 +115,14 @@ pypresso/
   hamiltonian/
     terms.py            # kinetic, local, nonlocal as composable term objects
     operator.py         # Hamiltonian pytree; apply_h / apply_s
+  forces/
+    energy.py           # the stationary functional the force is the gradient of
+    autodiff.py         # -grad of it (the default)
+    analytic.py         # QE's six hand-derived terms, as a cross-check
+    registry.py
+  relax/
+    bfgs.py             # bfgs_module.f90: trust radius + Wolfe line search
+    registry.py         # ion_dynamics
   solvers/
     registry.py
     davidson.py         # block Davidson (QE default)
@@ -285,6 +293,34 @@ the reduced count matches QE on all 22 automatic-grid cases in the test suite �
 Bravais lattice, including the triclinic ones — and the eigenvalue comparison for
 `scf-kauto.in`, which used to be skipped for want of this, now runs. Worth 2.8x on that
 input and 8.5x on an 8×8×8 grid. *Still to do:* `crystal_sg` (Wyckoff) input.
+
+**Which operations survive, and what a shifted grid does to them** (measured at P15, on
+the displaced silicon of `tests/data/qe/si2-nc-force.in`). Two facts that look like bugs
+and are not, and one consequence that is worth knowing before trusting the fifth decimal
+of a shifted-grid run:
+
+* **This code keeps symmetry operations QE discards.** QE drops an operation whose
+  fractional translation is not commensurate with the FFT grid, because it symmetrises the
+  density in *real space* and cannot represent such a translation there. This code
+  symmetrises in **G space**, where a translation is a phase and is exact for any value, so
+  it keeps them. On the displaced cell that is 8 operations against QE's printed
+  "4 Sym. Ops.", and 20 irreducible k-points against QE's 40. Neither count is wrong; they
+  are answers to slightly different questions.
+* **A shifted Monkhorst-Pack grid is not invariant under every operation the crystal has.**
+  On the displaced cell, 4 of the 8 map the shifted 4x4x4 grid onto itself and 4 do not.
+  The k-point reduction handles this correctly on both sides -- an operation that carries a
+  point off the grid simply merges nothing -- but the **density symmetrisation** does not
+  ask the question at all, in either code: it applies the crystal's operations to a density
+  built from a sample that does not have all of them.
+* **The consequence is 1e-4 Ry, and it is a choice rather than an error.** Symmetrised, the
+  two codes give -15.80141873 (here, 8 operations) and -15.80131502 (QE, 4). With `nosym`
+  on the full 64-point grid they give **-15.80140078 and -15.80140078** -- identical to
+  every digit either prints, which is what `tests/regression/test_forces.py`'s shifted case
+  pins. So the SCF, the basis and the k-point generation agree exactly and the spread is
+  entirely in which operations each code symmetrises with. Making the symmetrisation use
+  only the subgroup the k-sample respects would make a symmetric run agree with its own
+  `nosym` run exactly; it would also stop matching QE. That trade has not been made, and it
+  should not be made without measuring what it does to the 22 automatic-grid cases.
 
 **The trap:** QE reduces with the point group of the *Bravais lattice* and then remaps the
 representatives into the wedge of the crystal's group, which can carry them off the grid
@@ -775,11 +811,81 @@ and another from time reversal on a magnetic operation) — so `nspin_mag = 4` n
 `{up, down}` rather than QE's `atomic_wfc_so` spin-angle functions: the same span, so the
 same answer after `rotate_wfc`, at the cost of a Davidson step or two.
 
-**P11 — Higher-order autodiff quantities (after the first milestone).** Forces are already
-validated at P5; here: stress by differentiation w.r.t. strain, implicit differentiation of
+**P11 — Higher-order autodiff quantities (after the first milestone).** Forces are done
+(P15); here: stress by differentiation w.r.t. strain, implicit differentiation of
 the SCF fixed point (D3), then polarization/dielectric response and second harmonic
 generation. *Check:* stress matches QE to 1e-4 Ry/bohr³, and every response quantity has a
 finite-difference test.
+
+**P15 — Forces and structural relaxation. ✅ DONE.** `pypresso/forces/` (the stationary
+energy functional, its gradient, and QE's six hand-derived terms behind a name registry),
+`pypresso/relax/bfgs.py` (`bfgs_module.f90`), `workflows/relax.py`, `Calculation.at_positions`,
+`if_pos`, `symvector`, `checkallsym`, and a `pypresso relax` subcommand. *Check met:* forces
+match QE on **five references** — displaced silicon norm-conserving, ultrasoft, PAW and PBE,
+and a spin-polarized O₂ molecule — to **≤2e-5 Ry/bohr** by both methods and to 6e-7 on the
+crystals; the two methods agree with each other to the size of `force_corr`; every *term*
+matches QE's own `verbosity = 'high'` breakdown; a central finite difference of the SCF
+energy reproduces the force to 1e-6; and the relaxations reproduce QE's final geometry to
+**1e-6 bohr** and its final energy to **3e-10 Ry**, on displaced silicon and on QE's own CO
+molecule with a frozen atom.
+
+The force is `-grad` of a functional evaluated at frozen wavefunctions, occupations and
+eigenvalues — *not* of the SCF driver (that would unroll the iteration, D3) and never of an
+eigendecomposition (D4). What makes the partial derivative equal the total one is
+stationarity, and what makes that true for ultrasoft is carrying the orthonormality
+constraint explicitly: `- Σ w f ε (⟨ψ|S(τ)|ψ⟩ - 1)`, zero at the solution with a nonzero
+derivative, which is QE's `ε ⟨ψ|dS|ψ⟩`. `D_ij` is not an input to the functional — its
+self-consistent part is `∫V_eff Q`, already present through the augmentation charge in `ρ` —
+so the nonlocal term takes the **bare** `dion` and nothing is double counted.
+
+**The traps:**
+
+1. **A NaN that exists only in the gradient.** The Ewald real-space sum masks out the self
+   term *after* computing `r = sqrt(Σ(...)²)`. That is enough for the energy and not for its
+   derivative: `sqrt(0)` has an infinite derivative and `0 × inf` is NaN. The mask has to be
+   applied to `r²` before the square root. Every energy test passed; the first force ever
+   computed came back as six NaNs.
+2. **`gradcorr` is called from inside `v_xc`, not beside it.** `force_cc` uses "the
+   exchange-correlation potential", and it reads as though the gradient correction is added
+   separately by `v_of_rho`. It is not — `PW/src/v_of_rho.f90` line 607 is *within* the
+   `v_xc` that starts at line 440, and it is the only call to `gradcorr` in `PW/src`.
+   Building the core-charge force from the local part alone is wrong by 9e-4 Ry/bohr, a
+   thousand times the agreement every other term reaches.
+3. **The density is in `(ρ, m)` outside `sum_band`.** `sum_band.f90` converts on the way
+   out, so the `rho%of_r(:,1)` handed to `force_lc` is the **total charge**, not the up
+   channel — while `force_corr` *averages* its two channels, because a potential is always
+   stored as `(v_up, v_dw)`. This code stores `(up, down)` throughout, so the local force
+   sums and the correction averages. Getting it wrong halves the local force in an LSDA run
+   and changes nothing in any unpolarized test.
+4. **The FFT grid and the symmetry group are chosen once, before the ions move.**
+   `setup.f90` runs before the ionic loop and `move_ions` only ever *checks* the symmetry
+   afterwards (`checkallsym`). Re-deriving either mid-relaxation changes the objective
+   function: the FFT dimensions must divide the fractional translations' denominators, and
+   `etxc` is evaluated pointwise on that grid, so a step that breaks a symmetry would move
+   the energy by ~1e-6 Ry for a reason that is not physics. `Calculation.at_positions`
+   rebuilds exactly what the structure factor multiplies and shares everything else.
+5. **The two force methods must not agree exactly.** What separates them is `force_corr`,
+   the correction for a density that stopped short of the fixed point — which the
+   differentiated force cannot have, since it assumes the fixed point. Their difference
+   tracks that term across four orders of magnitude in `conv_thr`, which is a sharper
+   statement than either agreeing with QE, and it makes `force_corr` a direct measure of
+   convergence in the units of the answer.
+6. **A finite-difference check has to run `nosym`.** Displacing one atom along one axis
+   breaks the starting structure's symmetry, and the group is deliberately held fixed
+   (trap 4), so a symmetrised run would compare against a density symmetrised with
+   operations the displaced structure no longer has. The first FD check "failed" on a
+   component that symmetry forbids, and the force was right.
+
+*Found while doing this, and not caused by it:* a **shifted** Monkhorst-Pack grid does not
+have every symmetry the crystal has, and neither code's density symmetrisation asks whether
+it does. It is worth 1e-4 Ry on a symmetric run and nothing at all with `nosym`, where the
+two codes agree to the last digit. The measurement and what it does and does not mean are
+under P6 above; relaxations meet it routinely, because a shifted grid is an ordinary input.
+
+*Deferred:* `vc-relax` (needs the stress, P11), noncollinear forces (`qq_so`/`dvan_so` in
+the constraint and nonlocal terms — refused rather than approximated), and the ion dynamics
+other than BFGS (`damp`, `fire`, molecular dynamics), which are a file and a registration
+each.
 
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes

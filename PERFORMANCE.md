@@ -611,6 +611,72 @@ the GPU, where the launch overhead the aluminium case shows is an order of
 magnitude worse and thousands of cores want feeding -- which is exactly why this
 is a dial with both ends kept working rather than a rewrite in either direction.
 
+## What a force costs (P15)
+
+Forces are ``jax.grad`` of one energy expression evaluated at the converged
+state (`pypresso/forces/energy.py`), and QE's six hand-derived terms are
+implemented beside them as a cross-check (`analytic.py`). Both are timed against
+the SCF that has to happen first, since that is what decides whether a
+relaxation is affordable, and against QE's own `forces` clock.
+
+Both codes pinned to one core by the affinity mask, as `tools/compare_qe.py`
+does it. 2026-08-20:
+
+| case | | QE 7.5 | autodiff | analytic |
+|---|---|---|---|---|
+| `si8-us` — 8 atoms, 1 k, ultrasoft | force | 80 ms | 308 ms | **102 ms** |
+| | per SCF iteration | 128 ms | 596 ms | — |
+| | force, in its own iterations | 0.63 | 0.52 | **0.17** |
+| `si2-us-force` — 2 atoms, 18 k, ultrasoft | force | 20 ms | 67 ms | **18 ms** |
+| | per SCF iteration | 101 ms | 511 ms | — |
+| | force, in its own iterations | 0.20 | 0.13 | **0.04** |
+
+**A force costs a fraction of an SCF iteration on either path**, so it is free
+next to the ten or twenty iterations that produced the state, and a relaxation
+costs what its ionic steps cost. Against QE: the transcribed force is at parity
+(1.3x and 0.9x — faster than the Fortran on the smaller case), and the
+differentiated one is 3.4-3.8x slower, which is the same factor this code pays
+on the SCF itself (4.7x and 5.1x per iteration here, at the high end of the 2-4x
+recorded above because both cases are ultrasoft at `dual = 8`). Forces add no
+penalty of their own on either path.
+
+Peak RSS for `si8-us` is 1.40 GB including the SCF. The gradient's own working
+set is one reverse-mode tape over the energy — a constant times the
+`(nk, nbnd, npwx)` wavefunctions and the real-space fields of one k-point at a
+time — so the batching dial applies to it unchanged, since it runs through the
+same `map_k`.
+
+### What made the transcription 33x faster
+
+It started at 3392 ms on `si8-us`, eleven times slower than the differentiated
+force and forty times slower than QE. Three changes, in the order they were
+worth:
+
+1. **`force_corr` was integrating the atomic charge once per atom** — 2902 ms of
+   the 3392, 91% of the whole force in one term. The radial transform
+   `rho_atomic(|G|)` depends on the *species*, not on the atom, and this cell
+   has eight atoms of one species, so seven eighths of that was the same
+   integral again. It is now a per-species table built once at setup next to
+   `vloc` and `rho_core` (`species_atomic_charge`), which is what QE does with
+   `init_tab_rhoat`. Cost: `(ntyp, ngm)` floats — 0.3 MB here. **2902 ms -> 5 ms.**
+2. **The six terms are assembled inside one compiled function** rather than
+   evaluated one at a time. Each is a handful of contractions over the G-vector
+   sphere; run eagerly they cost more in dispatch and in intermediates than in
+   arithmetic. The compiled function is cached on the calculation and does not
+   depend on the geometry, so a relaxation compiles it once.
+3. **The density and the total potential come from the converged state** instead
+   of being rebuilt (105 ms and 16 ms of transforms). That is not a shortcut but
+   the faithful reading: `forces.f90` consumes `rho%of_r` and `v%of_r` as the
+   SCF left them. The differentiated force cannot do this and does not — it
+   needs the density as a *function* of the positions, which is the entire point
+   of it, and that difference is most of why it stays the more expensive of the
+   two.
+
+The general lesson is the one this file keeps recording from other directions: a
+factor of thirty was not in the algorithm, the arithmetic or the language. It
+was one radial integration repeated per atom instead of per species, in a term
+whose *value* is ~1e-7 Ry/bohr and which nobody thought to time.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
