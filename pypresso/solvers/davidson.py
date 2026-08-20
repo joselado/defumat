@@ -190,7 +190,8 @@ def davidson_eigensolver(
             value, which starts loose and tightens as the density converges.
 
     Returns ``(eigenvalues, eigenvectors)`` with eigenvalues ascending in Ry and
-    eigenvectors ``(nbnd, npwx)``, matching :func:`~pypresso.solvers.dense`.
+    eigenvectors ``(nbnd, npwx)`` -- bands first, as the rest of the code
+    carries wavefunctions.
     """
     ethr = ETHR if ethr is None else ethr
     ndim = hamiltonian.ndim

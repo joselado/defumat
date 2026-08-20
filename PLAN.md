@@ -239,10 +239,13 @@ calculation still converges beautifully.
 
 **P4 — Hamiltonian and diagonalization. ✅ DONE.**
 `hamiltonian/operator.py` (kinetic + local via FFT + nonlocal, plus `apply_s`),
-`solvers/` — a name registry over `dense.py` and `davidson.py`, the latter transcribed
-from `cegterg.f90` and the default. *Check met:* eigenvalues match QE to <1e-3 eV wherever
-they are printed, and Davidson matches the dense solver to 1e-12 Ry. The dense solver
-stays as correct-by-construction ground truth; `Hamiltonian` likewise keeps two matrix
+`solvers/` — a name registry holding `davidson.py`, transcribed from `cegterg.f90`.
+*Check met:* eigenvalues match QE to <1e-3 eV wherever they are printed, and Davidson
+matches an exact diagonalisation of the same Hamiltonian to 1e-12 Ry. That exact solve is
+a **test fixture** (`tests/exact_reference.py`) and not a solver the package offers:
+`O(npw^2)` memory and `O(npw^3)` time is precisely what an iterative solver exists to
+avoid, correctness here comes from Quantum ESPRESSO input for input, and a name in the
+registry is an invitation to select it. `Hamiltonian` does keep two matrix
 builds, one from matrix elements and one from applying the operator, and the suite asserts
 they agree on the single-k and the padded multi-k silicon cases. The fast build is used
 only where the density grid resolves every `G - G'` (`ecutrho >= 4 ecutwfc`) and the full
@@ -534,7 +537,7 @@ already stopped Davidson calls running long enough for compaction to pay. Still 
 buffer donation, k-axis sharding across CPU-cores-as-devices and across GPUs, Numba
 `prange` on the setup hot spots. *Check met:*
 `PERFORMANCE.md` carries the timing and scaling table; no numerical drift — the full suite
-passes and the two eigensolvers agree to 2e-13 Ry on the total energy.
+passes and a converged SCF sits on the exact eigenvalues of its own converged Hamiltonian.
 
 **The k axis is a dial now, and its default is QE's.** Batching every k-point into one
 `vmap` — which is what R6 exists to allow — was never measured against the alternative

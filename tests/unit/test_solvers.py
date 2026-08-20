@@ -1,10 +1,11 @@
-"""The iterative eigensolver against the exact one.
+"""The iterative eigensolver against an exact answer.
 
-The dense solver forms the matrix and diagonalises it, so it is right by
-construction on any system small enough to try. That makes it the reference for
-Davidson, which is right only if it converged -- and the way an iterative solver
-fails is by *quietly* not converging, returning plausible numbers that are wrong
-in the fourth decimal.
+Davidson is right only if it converged, and the way an iterative solver fails is
+by *quietly* not converging: plausible numbers, wrong in the fourth decimal. On
+a cell of a couple of hundred plane waves the question is settled by forming
+``H`` and handing it to ``eigh``, which is right by construction -- so that is
+what these tests do (``tests/exact_reference.py``). It is a test fixture and not
+a solver the package offers; see ``pypresso/solvers/__init__.py`` for why.
 
 Eigenvalues are compared, not eigenvectors: silicon's bands are degenerate at
 the k-point used here, and any rotation within a degenerate subspace is an
@@ -26,10 +27,10 @@ from pypresso.solvers import (
     DEFAULT_EIGENSOLVER,
     EIGENSOLVERS,
     davidson_eigensolver_all,
-    dense_eigensolver_all,
     get_eigensolver,
 )
 from pypresso.system import build_system
+from tests.exact_reference import exact_eigenpairs_all
 
 pytestmark = pytest.mark.unit
 
@@ -50,7 +51,7 @@ def silicon(pseudo_dir):
 def test_davidson_reproduces_the_exact_eigenvalues(silicon):
     """Asked for machine precision, it delivers machine precision."""
     _, _, hamiltonian = silicon
-    exact, _ = dense_eigensolver_all(hamiltonian, NBND)
+    exact, _ = exact_eigenpairs_all(hamiltonian, NBND)
     iterative, _ = davidson_eigensolver_all(
         hamiltonian, NBND, None, ethr=1e-13, residual_threshold=1e-8, max_iterations=60
     )
@@ -60,7 +61,7 @@ def test_davidson_reproduces_the_exact_eigenvalues(silicon):
 def test_a_looser_threshold_costs_fewer_steps_and_less_accuracy(silicon):
     """The whole point of scheduling ``ethr``: pay only for what is needed."""
     _, _, hamiltonian = silicon
-    exact, _ = dense_eigensolver_all(hamiltonian, NBND)
+    exact, _ = exact_eigenpairs_all(hamiltonian, NBND)
 
     errors = {}
     for ethr in (1e-2, 1e-6, 1e-13):
@@ -86,38 +87,36 @@ def test_davidson_returns_eigenvectors_of_the_hamiltonian(silicon):
 def test_seeding_with_the_answer_converges_immediately(silicon):
     """The SCF's reason for carrying wavefunctions between iterations."""
     _, _, hamiltonian = silicon
-    exact, vectors = dense_eigensolver_all(hamiltonian, NBND)
+    exact, vectors = exact_eigenpairs_all(hamiltonian, NBND)
     seeded, _ = davidson_eigensolver_all(hamiltonian, NBND, vectors, max_iterations=2)
     assert np.asarray(seeded) == pytest.approx(np.asarray(exact), abs=1e-10)
 
 
-def test_the_two_solvers_give_the_same_converged_scf(pseudo_dir, silicon):
-    """End to end: swapping the solver must not move the total energy.
+def test_the_converged_scf_sits_on_the_exact_eigenvalues(pseudo_dir, silicon):
+    """End to end: what the SCF converged to is what the Hamiltonian holds.
 
-    The two bounds are deliberately different. The total energy is variational
-    in the density, so it must agree tightly whatever the solver did. The
-    eigenvalues are only ever converged to the threshold the SCF asked for --
-    ``ethr`` is scheduled against the error in the density, exactly as QE
-    schedules it, so at the end they carry an error of order the last ``ethr``
-    amplified by how weakly a change in an eigenvalue bounds its error. That is
-    a property of QE's method, not a defect of this transcription, and it is
-    four orders of magnitude inside the tolerance the QE comparison uses.
+    The two bounds are deliberately different. Diagonalising the *converged*
+    potential exactly must reproduce the SCF's own eigenvalues -- but only to
+    the threshold the SCF asked for, since ``ethr`` is scheduled against the
+    error in the density, exactly as QE schedules it, and a change in an
+    eigenvalue bounds its error only weakly. That is a property of QE's method,
+    not a defect of this transcription, and it is four orders of magnitude
+    inside the tolerance the QE comparison uses. The total energy, being
+    variational in the density, has no such excuse and is held tightly.
     """
     system, pseudos, _ = silicon
-    results = {
-        name: run_scf(
-            system,
-            pseudos,
-            calculation=Calculation(system, pseudos, diagonalization=name),
-            conv_thr=1e-10,
-        )
-        for name in ("dense", "davidson")
-    }
-    assert results["davidson"].total_energy == pytest.approx(
-        results["dense"].total_energy, abs=1e-9
-    )
-    assert np.asarray(results["davidson"].eigenvalues) == pytest.approx(
-        np.asarray(results["dense"].eigenvalues), abs=1e-5
+    calculation = Calculation(system, pseudos)
+    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-10)
+
+    potential = v_of_rho(result.density, calculation.basis.dense, system.cell)
+    hamiltonian = calculation.hamiltonian(potential.v_scf)[0]
+    exact, _ = exact_eigenpairs_all(hamiltonian, np.asarray(result.eigenvalues).shape[-1])
+
+    assert np.asarray(result.eigenvalues) == pytest.approx(np.asarray(exact), abs=1e-5)
+    # ...and the band energy those eigenvalues carry, which is what the total
+    # energy is built from, to far better than that.
+    assert float(np.asarray(result.eigenvalues).sum()) == pytest.approx(
+        float(np.asarray(exact).sum()), abs=1e-4
     )
 
 
@@ -146,7 +145,10 @@ def test_a_separate_smooth_grid_does_not_break_convergence(pseudo_dir, silicon):
 
 
 def test_the_registry_covers_every_solver():
-    assert set(EIGENSOLVERS) >= {"dense", "davidson"}
+    assert set(EIGENSOLVERS) == {"davidson", "david"}
+    # There is deliberately no dense/exact entry: O(npw^2) memory is not
+    # something a calculation should be able to select by name.
+    assert "dense" not in EIGENSOLVERS and "exact" not in EIGENSOLVERS
     assert get_eigensolver(None) is EIGENSOLVERS[DEFAULT_EIGENSOLVER]
     assert get_eigensolver("DAVIDSON") is EIGENSOLVERS["davidson"]
     with pytest.raises(ValueError, match="unknown diagonalization"):

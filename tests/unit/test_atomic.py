@@ -23,7 +23,7 @@ from pypresso.pseudo.atomic import (
 )
 from pypresso.scf.driver import Calculation
 from pypresso.scf.potential import v_of_rho
-from pypresso.solvers import dense_eigensolver_all
+from tests.exact_reference import exact_eigenpairs_all
 from pypresso.solvers.davidson import starting_vectors
 from pypresso.solvers.subspace import rayleigh_ritz
 from pypresso.system import build_system
@@ -109,7 +109,7 @@ def test_the_atomic_guess_beats_a_random_one(silicon):
     what the crystal's occupied states are.
     """
     system, pseudos, calculation, hamiltonian = silicon
-    exact, _ = dense_eigensolver_all(hamiltonian, NBND)
+    exact, _ = exact_eigenpairs_all(hamiltonian, NBND)
     exact = np.asarray(exact)[0]
 
     atomic = atomic_wavefunctions(
@@ -133,6 +133,6 @@ def test_the_atomic_guess_beats_a_random_one(silicon):
 def test_rayleigh_ritz_is_variational(silicon):
     """Ritz values sit above the true eigenvalues; a lower one means a bug."""
     _, _, _, hamiltonian = silicon
-    exact, vectors = dense_eigensolver_all(hamiltonian, NBND)
+    exact, vectors = exact_eigenpairs_all(hamiltonian, NBND)
     values, _ = rayleigh_ritz(hamiltonian, 0, jnp.asarray(vectors[0]), NBND)
     assert np.all(np.asarray(values) >= np.asarray(exact)[0] - 1e-9)

@@ -26,8 +26,9 @@ norm-conserving, ultrasoft and PAW pseudopotentials, matching QE's three platinu
 benchmarks to **≤1.3e-8 Ry**.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
 read it before writing code. P4 is complete: a block Davidson eigensolver behind a name
-registry, with the dense solver kept as its reference, seeded from the pseudo-atomic
-orbitals as QE seeds it. P6 is complete too: automatic k-grids are reduced to the
+registry, seeded from the pseudo-atomic orbitals as QE seeds it, and the *only* solver the
+package offers — forming `H` costs `O(npw^2)` memory, so a dense solve is a test fixture
+(`tests/exact_reference.py`), never a `diagonalization` a run can select. P6 is complete too: automatic k-grids are reduced to the
 irreducible wedge. P10's first pass puts pypresso within **2–4x of serial Quantum ESPRESSO
 per SCF iteration** on the same machine, ultrasoft and PAW included — see
 `PERFORMANCE.md`. **Outstanding:** the projected DOS (`projwfc.x`), Wyckoff input, and the

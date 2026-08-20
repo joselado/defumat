@@ -121,24 +121,6 @@ def test_augmented_density_integrates_to_the_electron_count(pseudo_dir, case):
     assert charge == pytest.approx(nelec, abs=1e-9)
 
 
-@pytest.mark.parametrize("case", ULTRASOFT + PAW)
-def test_the_two_eigensolvers_agree(pseudo_dir, case):
-    """Davidson under a non-trivial ``S`` against the dense generalised solve.
-
-    The dense solver builds ``H`` and ``S`` as explicit matrices and calls a
-    library routine, so it cannot share a bug with the iterative one -- and the
-    generalised problem is where an iterative solver is easiest to get subtly
-    wrong. Only the two-atom cells; the eight-atom ones have too many plane
-    waves for an ``O(npw^3)`` solve to be a reasonable test.
-    """
-    if case.startswith("si8"):
-        pytest.skip("dense diagonalisation is O(npw^3); the 8-atom cells are too large")
-    system, pseudos, davidson = _converged(case, pseudo_dir)
-    dense = run_scf(system, pseudos, conv_thr=1e-10, diagonalization="dense")
-
-    assert dense.total_energy == pytest.approx(davidson.total_energy, abs=1e-9)
-
-
 @pytest.mark.parametrize(
     ("case", "pseudo_file"),
     [

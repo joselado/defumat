@@ -32,17 +32,40 @@ import time
 from pathlib import Path
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
 from pypresso.scf.driver import Calculation, run_scf
 from pypresso.scf.potential import v_of_rho
-from pypresso.solvers import davidson_eigensolver_all, dense_eigensolver_all
+from pypresso.solvers import davidson_eigensolver_all
 from pypresso.system import build_system
 
 BENCH = Path("../benchmarks")
 PSEUDO = Path("../tests/data/pseudo")
+
+
+def exact_eigenpairs(hamiltonian, ik, nbnd):
+    """Form `H` and diagonalise it: the answer Davidson has to reproduce.
+
+    Ten lines, and they live in this notebook rather than in `pypresso` on
+    purpose. An `npw x npw` matrix is `O(npw^2)` of memory and `O(npw^3)` of
+    time -- precisely what an iterative solver exists to avoid -- so the package
+    offers no dense solver to select by name, and correctness is established
+    against Quantum ESPRESSO instead. Where a check wants an exact answer on a
+    small cell it writes these lines out, here and in `tests/exact_reference.py`.
+
+    The padded plane waves are pushed above the spectrum rather than deleted, so
+    the matrix keeps the static shape JAX needs.
+    """
+    matrix = hamiltonian.matrix(ik)
+    mask = hamiltonian.state_mask[ik]
+    shift = jnp.max(jnp.abs(matrix)) * 1000.0 + 1.0
+    matrix = jnp.where(mask[:, None] & mask[None, :], matrix, 0.0)
+    matrix = matrix + jnp.diag(jnp.where(mask, 0.0, shift))
+    eigenvalues, eigenvectors = jnp.linalg.eigh(matrix)
+    return eigenvalues[:nbnd], eigenvectors[:, :nbnd].T
 
 
 def load(name):
@@ -112,9 +135,9 @@ for label, milliseconds, _ in stages:
 ```
 
       v_of_rho                      0.80 ms
-      diagonalise (Davidson)        2.23 ms
-      occupations                   0.78 ms
-      density + symmetrise          1.26 ms
+      diagonalise (Davidson)        2.09 ms
+      occupations                   0.73 ms
+      density + symmetrise          1.58 ms
 
 
 The eigensolver dominates, and before any of this work it dominated far more: building the
@@ -124,9 +147,10 @@ fixes.
 
 ## 3. The matrix elements: 180 FFTs replaced by one
 
-The dense solver built `H` by applying the operator to every basis vector in turn. That is
-unambiguously correct — it uses no matrix-element formula at all, which is exactly what
-makes it a good reference — but it costs one FFT per plane wave.
+The obvious way to build `H` is to apply the operator to every basis vector in turn. That
+is unambiguously correct — it uses no matrix-element formula at all, which is exactly what
+makes it the reference the fast build is checked against — but it costs one FFT per plane
+wave.
 
 It is not how the matrix has to be built. The local potential is diagonal in real space,
 so in the plane-wave basis it is
@@ -153,8 +177,8 @@ print(f"  by applying H          {applied:7.2f} ms   ({applied / direct:.0f}x sl
 print(f"  largest disagreement   {difference:.2e} Ry")
 ```
 
-      from matrix elements      4.56 ms
-      by applying H            79.90 ms   (18x slower)
+      from matrix elements      5.13 ms
+      by applying H            64.63 ms   (13x slower)
       largest disagreement   1.78e-15 Ry
 
 
@@ -173,15 +197,15 @@ subspace, diagonalise there, and repeat.
 
 
 ```python
-exact, _ = dense_eigensolver_all(hamiltonian, nbnd)
+exact, _ = exact_eigenpairs(hamiltonian, 0, nbnd)
 iterative, _ = davidson_eigensolver_all(hamiltonian, nbnd, None, max_iterations=60)
 
-print("  band     dense (Ry)     Davidson (Ry)     difference")
-for band, (a, b) in enumerate(zip(np.asarray(exact)[0], np.asarray(iterative)[0])):
+print("  band     exact (Ry)     Davidson (Ry)     difference")
+for band, (a, b) in enumerate(zip(np.asarray(exact), np.asarray(iterative)[0])):
     print(f"  {band:4d}   {a:13.9f}   {b:13.9f}   {abs(a - b):.1e}")
 ```
 
-      band     dense (Ry)     Davidson (Ry)     difference
+      band     exact (Ry)     Davidson (Ry)     difference
          0    -0.390321364    -0.390321364   7.2e-16
          1     0.140346328     0.140346328   3.2e-15
          2     0.366586226     0.366586226   6.7e-15
@@ -211,46 +235,48 @@ on the convergence flags and the subspace is masked rather than resized.
 ## 5. What it is worth
 
 The gain from an iterative solver is invisible on a toy system and decisive on a real one.
-Here is the same SCF at two cutoffs, with each solver.
+Here is one diagonalisation of the same Hamiltonian, done both ways, at two cutoffs.
 
 
 ```python
-def scf_time(system, pseudos, solver, repeats=3):
-    calculation = Calculation(system, pseudos, diagonalization=solver)
-    run_scf(system, pseudos, calculation=calculation, conv_thr=1e-10)   # compile
-    best = float("inf")
-    for _ in range(repeats):
-        start = time.perf_counter()
-        result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-10)
-        best = min(best, time.perf_counter() - start)
-    return best / result.iterations * 1e3, result.total_energy, calculation.basis.npwx
-
-
-rows = []
-for name in ("si-1k.in", "si-1k-ecut40.in"):
+def solve_times(name, nbnd=4, repeats=3):
+    """One diagonalisation, exactly and iteratively, on the same Hamiltonian."""
     this_system, these_pseudos = load(name)
-    for solver in ("dense", "davidson"):
-        milliseconds, energy, npwx = scf_time(this_system, these_pseudos, solver)
-        rows.append((name, npwx, solver, milliseconds, energy))
-        print(f"  {name:17s} npw {npwx:5d}  {solver:9s} {milliseconds:8.1f} ms/iteration"
-              f"   E = {energy:.9f} Ry")
+    this_calculation = Calculation(this_system, these_pseudos)
+    this_potential = potential_of_rho(this_calculation.starting_density(),
+                                      this_calculation.basis.dense, this_system.cell)
+    h = this_calculation.hamiltonian(this_potential.v_scf)[0]
+
+    _, exact_ms, exact_values = timed(
+        "exact", lambda: exact_eigenpairs(h, 0, nbnd), repeats)
+    _, davidson_ms, davidson_values = timed(
+        "davidson",
+        lambda: davidson_eigensolver_all(h, nbnd, None, max_iterations=60), repeats)
+    agreement = np.abs(np.asarray(exact_values[0])
+                       - np.asarray(davidson_values[0])[0]).max()
+    return this_calculation.basis.npwx, exact_ms, davidson_ms, agreement
+
+
+for name in ("si-1k.in", "si-1k-ecut40.in"):
+    npwx, exact_ms, davidson_ms, agreement = solve_times(name)
+    print(f"  {name:17s} npw {npwx:5d}   form H + eigh {exact_ms:9.1f} ms   "
+          f"Davidson {davidson_ms:7.1f} ms   ({exact_ms / davidson_ms:5.1f}x)   "
+          f"agree to {agreement:.1e} Ry")
 ```
 
-      si-1k.in          npw   180  dense         12.7 ms/iteration   E = -15.254448713 Ry
+      si-1k.in          npw   180   form H + eigh      13.7 ms   Davidson    16.2 ms   (  0.8x)   agree to 9.9e-14 Ry
 
 
-      si-1k.in          npw   180  davidson       6.6 ms/iteration   E = -15.254448713 Ry
+      si-1k-ecut40.in   npw  1131   form H + eigh    1599.5 ms   Davidson   120.0 ms   ( 13.3x)   agree to 1.2e-13 Ry
 
 
-      si-1k-ecut40.in   npw  1131  dense       1178.3 ms/iteration   E = -15.304610214 Ry
-
-
-      si-1k-ecut40.in   npw  1131  davidson      29.1 ms/iteration   E = -15.304610214 Ry
-
-
-Identical energies, and at 1131 plane waves Davidson is more than ten times faster. The
-ratio grows as `npw` does, because the two are not the same algorithm: one is `O(npw^3)`,
-the other is `nbnd` applications of `H` per step.
+The same eigenvalues, and at the test cutoff the exact solve is *faster* — 180 plane waves
+is a matrix small enough that `eigh` beats an iterative method setting up its subspace.
+That is the trap in benchmarking on a toy system, and it reverses completely by 1131 plane
+waves, because the two are not the same algorithm. Forming and diagonalising the matrix is
+`O(npw^3)`; Davidson is `nbnd` applications of `H` per step, and it never builds the
+matrix at all. At the tens of thousands of plane waves a real calculation needs, the left
+column is not slow but impossible — which is why the package ships only the right one.
 
 ## 6. Asking for only as much accuracy as the density deserves
 
@@ -340,10 +366,10 @@ for label, variant in (("full grid", dataclasses.replace(kauto, kpoints=full)),
       48 symmetry operations
 
 
-      full grid          8 k-points     23.2 ms/iteration   E = -15.794495571 Ry
+      full grid          8 k-points     32.1 ms/iteration   E = -15.794495571 Ry
 
 
-      irreducible wedge  2 k-points      9.7 ms/iteration   E = -15.794495571 Ry
+      irreducible wedge  2 k-points     12.5 ms/iteration   E = -15.794495571 Ry
 
 
 Two points instead of eight, and **the total energy is identical to nine decimals**. That
@@ -373,7 +399,7 @@ from pypresso.pseudo.atomic import atomic_wavefunctions
 from pypresso.solvers.davidson import starting_vectors
 from pypresso.solvers.subspace import rayleigh_ritz
 
-exact, _ = dense_eigensolver_all(hamiltonian, nbnd)
+exact, _ = exact_eigenpairs(hamiltonian, 0, nbnd)
 atomic = atomic_wavefunctions(
     pseudos, system.structure, system.cell, calculation.basis.dense,
     calculation.basis.planewaves, system.kpoints,
@@ -385,7 +411,7 @@ print("  band      exact        from atomic      from random")
 for band in range(nbnd):
     a = float(rayleigh_ritz(hamiltonian, 0, atomic, nbnd)[0][band])
     r = float(rayleigh_ritz(hamiltonian, 0, random, nbnd)[0][band])
-    e = float(np.asarray(exact)[0][band])
+    e = float(np.asarray(exact)[band])
     print(f"  {band:4d}   {e:10.6f}   {a:10.6f}     {r:10.6f}")
 ```
 
@@ -448,8 +474,8 @@ print(subprocess.run([sys.executable, "-c", probe], capture_output=True, text=Tr
 
 ```
 
-      first  Calculation   1.071 s
-      second Calculation   0.064 s
+      first  Calculation   1.273 s
+      second Calculation   0.069 s
     
 
 

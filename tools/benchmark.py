@@ -23,7 +23,7 @@ from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
 from pypresso.scf.driver import Calculation, run_scf
 from pypresso.scf.potential import v_of_rho
-from pypresso.solvers.dense import dense_eigensolver
+from pypresso.solvers.davidson import davidson_eigensolver
 from pypresso.system import build_system
 
 
@@ -70,7 +70,8 @@ def benchmark(input_path: Path, pseudo_dir: Path):
         np.zeros((nbnd, basis.npwx), dtype=complex) + 1e-3, 0
     )
     timer("h_psi (one k, all bands)", lambda: hamiltonian.apply(psi, 0), repeats=10)
-    timer("diagonalise (one k, dense)", lambda: dense_eigensolver(hamiltonian, 0, nbnd))
+    timer("diagonalise (one k, Davidson)",
+          lambda: davidson_eigensolver(hamiltonian, 0, nbnd))
     timer("symmetrize density", lambda: calculation.symmetrize(rho), repeats=3)
 
     start = time.perf_counter()
