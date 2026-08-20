@@ -16,6 +16,7 @@ that way.
 | [`07_spin_polarization.ipynb`](07_spin_polarization.ipynb) | LSDA: which parts of the energy split between the spin channels and which do not, exchange by the spin-scaling relation and correlation by interpolation, an oxygen atom with its occupations fixed by hand, nickel's magnetic moment and the exchange splitting of its d bands, the non-monotonic occupation that makes a spin-polarized metal's Fermi level a trap, and constraining the magnetization with two Fermi levels | P9 |
 | [`08_spin_orbit_coupling.ipynb`](08_spin_orbit_coupling.ipynb) | Spin-orbit coupling: why a spinor needs three spin numbers where a collinear code needs one, the `j`-resolved projectors a fully-relativistic pseudopotential keeps and a scalar one throws away, `fcoef` verified as a shell projector rather than against a reference, the identity that gates the whole spinor path (switch the coupling off and the collinear answer must come back term by term), platinum's 5d splitting and Kramers degeneracy against QE, and **bismuthene** -- a quantum spin Hall insulator whose half-electronvolt gap is made of nothing but the spin-orbit coupling | P14 |
 | [`09_forces_and_relaxation.ipynb`](09_forces_and_relaxation.ipynb) | Forces and structural relaxation: why the force is a *partial* derivative and what makes it one, the energy identity that has to hold before anything is differentiated, the force against QE and against finite differences, QE's six hand-derived terms transcribed beside the gradient — and the two errors that comparison found — the SCF-correction term as the exact difference between the two methods, BFGS with its trust radius putting displaced silicon back on its site (QE's geometry to 1e-6 bohr), and a CO molecule with an atom frozen by `if_pos` | P15 |
+| [`10_topological_invariants.ipynb`](10_topological_invariants.ipynb) | Berry curvature, Chern numbers and Z2: why every invariant is built from one overlap and not from a derivative of the eigenproblem, the wrap at the zone edge measured (0.99 against 0.0096), a Chern number that is an *exact* integer on a 6x6 mesh against a Kubo sum that is 1e-3 off on a 24x24 one, silicon's curvature vanishing pointwise, the Wannier centres switching partners across the Kane-Mele transition, three independent routes agreeing on the doubled Qi-Wu-Zhang model, all four `(nu0; nu1nu2nu3)` phases of the lattice Dirac model, silicon's eight parity products, and **bismuthene** by both routes with an ultrasoft spin-orbit `S` | P16 |
 
 ## Conventions
 
@@ -53,6 +54,13 @@ runs without the vendored tree too, except for one cell -- QE's own CO relaxatio
 *input* lives in the test suite -- which says so and skips itself when the tree is absent. `08`
 is a mixture for the same reason, and its bismuthene half -- input *and* reference -- is
 committed, since QE ships no benchmark for it.
+
+`10` runs without the vendored tree as well -- its two systems are `si2-us.in` and
+`bismuthene-soc-small.in`, both committed. It takes about **nine minutes** on one core and
+peaks at **6.0 GB**, nearly all of it the bismuthene half. It does *not* run the
+Wannier-charge-centre sweep on bismuthene and quotes that measurement instead: an SCF and a
+topology run each build their own gigabyte-scale `Calculation`, and doing both plus the
+sweep in one kernel peaked at 7.8 GB. The notebook says so where it matters.
 
 `08` runs bismuthene at the test-sized cutoff (20 Ry, 6x6x1) rather than the converged
 one (35 Ry, 12x12x1). Both pairs are committed with their own QE references, and the

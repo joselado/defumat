@@ -54,6 +54,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from pypresso.basis.builder import Basis, build_basis
+from pypresso.basis.planewaves import build_plane_wave_basis
 from pypresso.basis.interpolate import to_dense, to_smooth
 from pypresso.basis.sticks import build_sticks
 from pypresso.basis.fft import g_to_r, r_to_g
@@ -860,6 +861,56 @@ class Calculation:
             )
 
         moved.ewald = self.ewald_sum.energy(cell, positions, dense)
+        return moved
+
+    def at_kpoints(self, kpoints) -> "Calculation":
+        """The same calculation on a different k-point list.
+
+        The counterpart of :meth:`at_positions` on the other axis, and it exists
+        for the same reason: **almost nothing depends on which k-points are
+        asked for.** The G-vector sets of both grids, the FFT dimensions, the
+        local potential, the core charge, the augmentation charge, the Ewald
+        sum, the symmetry group, the radial tables, PAW's one-centre setup and
+        the spin-orbit coefficients are all properties of the cell and the
+        atoms. What a new k-list changes is only what carries a ``k`` index --
+        the plane-wave spheres and their padding width, ``|k+G|^2``, the box
+        indices, the stick layout, and the projectors ``vkb(k)``.
+
+        This is what makes a Berry phase affordable. Every quantity in
+        :mod:`pypresso.topology` is built from states on a k-mesh or a loop, and
+        the natural way to write that is one call per row -- which, when each
+        call built a whole :class:`Calculation`, meant rebuilding the dense
+        G set and ``Q_ij(G)`` every time: **~1 GB and 70 s per call** on
+        bismuthene, more than the states of the entire mesh cost to hold. The
+        choice was then between streaming (cheap in memory, ruinous in time) and
+        holding the whole mesh (the opposite). Sharing the setup removes the
+        choice.
+
+        The k-independent arrays are *shared*, not copied, so ``n`` calls hold
+        one copy between them.
+        """
+        system = eqx.tree_at(lambda sys: sys.kpoints, self.system, kpoints)
+        moved = copy.copy(self)
+        moved.system = system
+
+        smooth, cell = self.basis.smooth, self.system.cell
+        planewaves = build_plane_wave_basis(smooth, kpoints, cell, system.ecutwfc)
+        moved.basis = Basis(
+            dense=self.basis.dense, smooth=smooth, planewaves=planewaves
+        )
+        moved.kinetic = planewaves.kinetic(smooth, kpoints, cell)
+        moved.fft_index = planewaves.fft_index(smooth)
+        moved.sticks = build_sticks(moved.fft_index, planewaves.mask, smooth.grid)
+
+        # The projectors are rebuilt whole: their radial half is tabulated
+        # against ``|k+G|``, so unlike a change of position this is not a matter
+        # of a new structure factor over a cached core.
+        moved.projector_core = build_projector_core(
+            self.pseudos, system.structure, cell, smooth, planewaves, kpoints
+        )
+        moved.projectors = moved.projector_core.at_positions(
+            system.structure.positions, qq=self.projectors.qq
+        )
         return moved
 
     @property

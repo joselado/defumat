@@ -815,7 +815,11 @@ same answer after `rotate_wfc`, at the cost of a Davidson step or two.
 (P15); here: stress by differentiation w.r.t. strain, implicit differentiation of
 the SCF fixed point (D3), then polarization/dielectric response and second harmonic
 generation. *Check:* stress matches QE to 1e-4 Ry/bohr³, and every response quantity has a
-finite-difference test.
+finite-difference test. P16 has taken the first bite of the response half of this: the
+velocity operator from `jacfwd` of a model `H(k)` is written and validated against the
+lattice Chern number, and what is left for P11 is the **plane-wave** velocity operator —
+`d(vkb)/dk` and the k-dependence of the sphere — which P16 refuses rather than
+approximates.
 
 **P15 — Forces and structural relaxation. ✅ DONE.** `pypresso/forces/` (the stationary
 energy functional, its gradient, and QE's six hand-derived terms behind a name registry),
@@ -886,6 +890,115 @@ under P6 above; relaxations meet it routinely, because a shifted grid is an ordi
 the constraint and nonlocal terms — refused rather than approximated), and the ion dynamics
 other than BFGS (`damp`, `fire`, molecular dynamics), which are a file and a registration
 each.
+
+**P16 — Berry curvature, Chern numbers and Z2 invariants. ✅ DONE.** `pypresso/topology/`
+(mesh and the reciprocal-lattice wrap, the state sets and their overlap, the augmentation
+charge at an arbitrary wavevector, link variables, Berry curvature behind a name registry,
+Wilson loops, Fu-Kane parities, and the two Z2 methods behind a second registry) and
+`workflows/topology.py`. *Check met:* the Chern number of the Haldane model is an **exact
+integer on a 6x6 mesh** (2e-16); the doubled Qi-Wu-Zhang model reproduces `elkpy`'s four Z2
+values by three independent routes (Wilson, parity, and the parity of a spin Chern number);
+Kane-Mele's transition lands on the analytic `3 sqrt(3) lambda`; the three-dimensional
+lattice Dirac model gives all four `(nu0; nu1 nu2 nu3)` phases in closed-form agreement by
+both routes; and on real Kohn-Sham states silicon's eight parity products give `nu0 = 0`
+with the parity matrix Hermitian to 1e-16 and squaring to the identity to 5e-11.
+
+**Everything is built from `<u_mk|S|u_nk'>` and nothing differentiates an eigendecomposition.**
+Two reasons, and the second is the decisive one. Gauge: a determinant of overlaps is blind
+to any unitary mixing inside a degenerate manifold, which is the freedom the eigensolver
+actually has (D4). Quantisation: the Fukui-Hatsugai-Suzuki lattice field strength sums to
+an *exact* integer on any mesh, where a Riemann sum of a pointwise curvature converges to
+one and never equals it. Measured on Haldane: the lattice construction is exact (2e-16) at
+6x6 and at every finer mesh; the Kubo route through `jacfwd` of `H(k)` — D2's stated
+intent, and registered as `kubo` — is 8.6e-3 off at 6x6, 1.7e-5 at 12x12 and 4.8e-11 at
+24x24, converging spectrally because the integrand is smooth and periodic, and collapsing
+to algebraic convergence wherever the curvature concentrates. So **invariants from overlaps, curvature plots
+from either**, and the choice is recorded in `topology/states.py` rather than assumed.
+
+**The traps:**
+
+1. **The neighbour of the last mesh point is the first one plus a reciprocal lattice
+   vector**, and the periodic gauge `u_{k+b}(G) = u_k(G+b)` makes that a *shift of the
+   Miller index*. Measured on silicon: `|det M|` between k = 0.4 and 0.5 is 0.9904 computed
+   directly and 0.9904 computed from k = -0.5 through `b1`; with the shift omitted it is
+   **0.0096**. On a mesh that becomes a Chern number that is smooth, plausible and not an
+   integer — the failure that reads as a convergence problem.
+2. **Two neighbouring k-points do not share a plane-wave sphere.** The coefficients are
+   aligned by Miller index (a packed integer key and a `searchsorted`), and a plane wave
+   inside one sphere and outside the other contributes nothing rather than being gathered
+   from the wrong slot.
+3. **Ultrasoft `S` between two k-points is not `qq`.** It is `q_ij(b) = ∫ Q_ij(r) e^{-i b r} dr`
+   — Vanderbilt's ultrasoft Berry phase, QE's `bp_c_phase.f90` — and `b` is a *fraction* of
+   a reciprocal lattice vector, so it is not on the dense G set and the radial transforms
+   are evaluated afresh at `|b|`. A uniform mesh has exactly two distinct `b` however many
+   k-points it has, wrap included, so they are computed twice per plane.
+4. **A relativistic dataset needs `q_ij(b)` through `transform_qq_so`.** The `fcoef`
+   sandwich is linear and k-independent, so it applies to the b-dependent integrals
+   unchanged — but using the scalar ones in a spinor run leaves the overlap plausible and
+   the invariant meaningless, which is the silent-wrong class the P14 row warns about. The
+   check is `b -> 0`: 4e-16 against `qq` on ultrasoft silicon, 1e-16 against `qq_so` on
+   bismuthene, and `<u|S|u> = 1` to 5e-15 over thirty spinor bands.
+5. **A cache keyed on the `Calculation` must be weak.** A calculation owns `Q_ij(G)` on the
+   dense grid — a gigabyte on bismuthene — and streaming a Wilson loop one row at a time
+   exists precisely so the previous row's is dropped. An ordinary `lru_cache` on the
+   b-dependent integrals pinned every one of them; the fix is a `WeakKeyDictionary` and the
+   symptom was memory, never a number.
+6. **The parity route is exact and the Wilson route is not.** `elkpy` records two cases
+   where a well-gapped band structure returned a confident *wrong* integer from an
+   unresolved loop mesh. So the manifold's isolation is checked from the eigenvalues the
+   eigensolver has already produced (`gap_tol`), the parity tolerance is 1e-6 rather than
+   the 5e-2 the reference needs for Elk's truncation floor, and the two routes are run
+   against each other wherever there is an inversion centre.
+
+*Memory.* A state set is `nk * nocc * npol * npwx * 16` bytes: 2.6 MB per k-point on
+bismuthene, 63 MB for a 24-point loop, 810 MB for a 24x13 mesh. So the Wilson workflow
+streams one loop at a time by default — `npump` costs time, not space. The plaquette
+layer costs nothing next to that: the links are `(n1, n2)` unit-modulus phases, and
+`StateSet.overlaps` walks the pair axis through `map_k` with the wavefunctions closed
+over, so nothing of size `(npair, nbnd, npol * npwx)` is ever built.
+
+**Streaming was the expensive option until `Calculation.at_kpoints` existed**, and the
+episode is the general lesson rather than a detail of this phase. A `DFTSource` built a
+whole `Calculation` per call, so each row of a mesh rebuilt the dense G set and `Q_ij(G)`
+— **~1 GB and ~4.7 s per row on `si8-us`** — which on any mesh worth taking is more than
+the states of the *entire* mesh cost to hold. That left a choice between a streaming loop
+that was ruinous in time and a resident mesh that was ruinous in memory, and the honest
+thing at the time was to state the dial. It was the wrong dial: a k-list changes only what
+carries a `k` index — the plane-wave spheres, `|k+G|^2`, the stick layout, `vkb(k)` — and
+everything else is a property of the cell and the atoms. Sharing it makes a row **0.16 s,
+29.8x cheaper**, with the dense G set, the augmentation charge and the local potential the
+same objects across calls, so streaming is now simply the cheap option and there is no
+trade to state. `tests/unit/test_at_kpoints.py` pins both halves: identical to a
+calculation built from scratch at those k-points, and *the same objects* for the rest —
+`is`, not `==`, because equality would pass on the full rebuild this exists to avoid.
+
+*What is not validated:* a topological invariant of a real material against a published
+one. `elkpy`'s reference systems need pseudopotentials this repository does not commit
+(graphene with Elk's `soc_scale`, the h-BN slab, caesium dimerized diamond, bulk Bi₂Se₃),
+so what carries over from it is the *conventions* — the sign pins, the TRIM ordering, the
+largest-gap and orientation arithmetic, the six-plane assembly — and the doubled-QWZ
+integers. The bismuthene case is freestanding planar Bi at the test cutoff, which is
+neither `elkpy`'s buckled layer nor the substrate-supported system of the QSH literature.
+On it the two routes **disagree** — parity gives `nu = 0` exactly, the Wilson sweep gives
+1 on a 12x7 mesh — and the Wilson result's own diagnostic says why: the largest-gap
+reference line moves **0.20 of the circle in one pumping step**, so the crossing count is
+a guess. That is `elkpy`'s documented failure mode reproduced from the other side, and
+this crystal is a hard case for the largest-gap method in particular, because inversion
+plus time reversal makes the charge centres symmetric about zero at every step and the
+largest gap two-fold degenerate by symmetry. The answer of record is the parity one, which
+has no mesh; `WannierFlow.gap_step` exists so that this does not have to be noticed by
+eye. A 12x13 refinement (156 k-points) was started and had not finished after 45 minutes
+of the one core this was measured on, so what the Wilson route converges to on this cell is
+recorded as **unknown** rather than guessed. Notebook 10 therefore runs the parity route
+only and quotes the Wilson measurement: an SCF and a topology run each build their own
+gigabyte-scale `Calculation`, and the two together peak at 7.8 GB where the SCF alone is
+4.2 GB — so the sweep belongs in its own process, and even without it the notebook peaks at
+**6.0 GB**, which is over the five it was aimed at.
+
+*Deferred:* the plane-wave velocity operator (P11, above), a nonzero Chern number from a
+DFT run — which needs a magnetization *and* spin-orbit coupling, the one spin regime P14
+refuses — the mirror and spin Chern numbers of a symmetry sector, and the quantum
+geometric tensor's metric half.
 
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes

@@ -11,7 +11,7 @@ the deliverable.
 
 **Status: the first milestone — SCF, band structure, DOS — is met**, with ultrasoft/PAW,
 LDA/GGA and collinear spin, and **forces and structural relaxation** on top of it.
-P0–P9 and P12–P15 are done bar Wyckoff input in P6; P10 has had one pass. A silicon SCF reproduces QE's total energy to **~1e-9 Ry** term by term, its
+P0–P9 and P12–P16 are done bar Wyckoff input in P6; P10 has had one pass. A silicon SCF reproduces QE's total energy to **~1e-9 Ry** term by term, its
 band structure to **0.0002 eV**, and metals with every smearing to ~2.5e-8 Ry.
 **Ultrasoft and PAW pseudopotentials are supported** and match QE to **≤3e-9 Ry** on 2-
 and 8-atom silicon (P12). **PBE, revPBE and PBEsol** work on all three pseudopotential
@@ -29,6 +29,9 @@ frozen wavefunctions — Hellmann-Feynman, Pulay and the augmentation charge's o
 derivative all falling out of one gradient — with QE's six hand-derived terms implemented
 beside it as a cross-check, and a BFGS relaxation on top. They match QE to **≤2e-5 Ry/bohr**
 on five references and reproduce its relaxed geometries to **1e-6 bohr**.
+**Berry curvature, Chern numbers and Z2 invariants** (P16) are in too: the Chern number is
+an exact integer on a 6x6 mesh, and the Z2 has both the Wilson-loop and the Fu-Kane parity
+route, agreeing on every model case with a known answer.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
 read it before writing code. P4 is complete: a block Davidson eigensolver behind a name
 registry, seeded from the pseudo-atomic orbitals as QE seeds it, and the *only* solver the
@@ -99,6 +102,27 @@ all the new physics is in the spinors and in `D_ij` becoming a complex 2x2 matri
 space. Non-collinear *magnetism* (`nspin_mag = 4`) is built but only partly validated —
 `sym_rho`'s vector rotation and `gradcorr`'s local-frame rotation are not written and are
 refused, so such a run needs `nosym` and an LDA functional.
+
+**Berry curvature, Chern numbers and Z2 invariants are in scope and implemented** (P16):
+`pypresso/topology/` and `workflows/topology.py`. Everything is built from one primitive,
+`<u_mk|S|u_nk'>` — the overlap of the occupied manifolds at neighbouring k-points — because
+a determinant of overlaps is blind to the unitary mixing a degenerate eigensolver leaves
+(D4) *and* because the Fukui-Hatsugai-Suzuki lattice sum is an exact integer on any mesh
+where a Riemann sum of a pointwise curvature is not. The velocity-operator route from
+`jacfwd` of `H(k)` (D2) is registered as `kubo` for a smooth `Omega(k)` and is available
+only where `H(k)` is a differentiable function; the plane-wave version needs `d(vkb)/dk`
+and belongs to P11. Z2 has two independent methods — Wannier-charge-centre flow, which
+needs only time-reversal symmetry, and the Fu-Kane parity products, which need an inversion
+centre and cost eight k-points — and running both wherever they both apply is the check.
+**The parity route has no mesh and the Wilson route does**, so where they disagree the
+parity one is the answer; `WannierFlow.gap_step` is the Wilson result's own diagnostic
+(how far the largest-gap reference line moves in one pumping step) and it is the number to
+read before believing the integer.
+**Two things bite in a plane-wave code and both are silent:** neighbouring k-points do not
+share a G-sphere, so coefficients are aligned by Miller index; and the wrap at the zone
+edge is a *shift* of that index (`u_{k+b}(G) = u_k(G+b)`), without which the Chern number
+is smooth and non-integer. Ultrasoft `S` between two k-points is `q_ij(b)`, not `qq`, and a
+relativistic dataset needs it through `transform_qq_so`.
 
 **Forces and ionic relaxation are in scope and implemented** (P15): the force comes from
 differentiating the total energy with respect to the atomic positions at *frozen*
@@ -238,6 +262,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Forces | `PW/src/forces.f90`, `force_lc.f90`, `force_cc.f90`, `force_ew.f90`, `force_us.f90`, `addusforce.f90`, `force_corr.f90`, `symme.f90` (`symvector`) | the default is `jax.grad` of the energy at frozen wavefunctions (`forces/energy.py`); the Fortran expressions are transcribed as a cross-check. `gradcorr` is called from **inside** `v_xc`, so `force_cc` needs it |
 | Structural relaxation | `Modules/bfgs_module.f90`, `PW/src/move_ions.f90`, `run_pwscf.f90`, `update_pot.f90`, `checkallsym.f90` | BFGS in crystal coordinates with the cell metric; the setup (FFT grid, symmetry, k-points) is done **once** and only checked afterwards |
 | Stress | `PW/src/stress.f90` | not written; should come from differentiating with respect to strain rather than from the hand-derived expressions |
+| Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `pypresso/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]`; here it should fall out of `jacfwd` of `H(k)` w.r.t. `k` |
 | Input parsing | `Modules/read_input.f90`, `PW/src/input.f90`, `Modules/input_parameters.f90` | defaults for every input variable are declared in `input_parameters.f90` |
 | Occupations / smearing | `PW/src/gweights.f90`, `Modules/wgauss.f90`, `Modules/w0gauss.f90`, `PW/src/set_occupations.f90` | |
