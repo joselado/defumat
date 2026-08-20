@@ -48,6 +48,7 @@ from pypresso.xc.functional import Functional, get_functional
 
 __all__ = ["Potential", "v_of_rho", "hartree", "exchange_correlation",
            "gradient_correction", "scf_accuracy", "total_charge", "with_core",
+           "as_potential_components",
            "DEFAULT_FUNCTIONAL"]
 
 #: What a calculation uses when nothing names a functional. QE has no such
@@ -261,16 +262,40 @@ def _noncollinear_xc(density: jnp.ndarray, cell: Cell, functional: Functional):
     return v, energy
 
 
+def as_potential_components(scalar: jnp.ndarray, nspin: int) -> jnp.ndarray:
+    """A spin-independent *potential* laid out like an ``nspin``-component one.
+
+    ``set_vrs``: the local pseudopotential is added to **every** channel of an
+    ``(up, down)`` potential -- both spins feel all of it -- and to the **first
+    component only** of an ``(n, m_x, m_y, m_z)`` one, where the other three are
+    a magnetic field and a spin-independent potential contributes nothing to
+    them.
+
+    Not the same rule as :func:`with_core`, and the difference is not cosmetic.
+    A *density* that is unpolarized splits equally between the two channels; a
+    *potential* that is spin-independent is felt in full by both. Sharing the
+    potential would run the whole calculation at half the local
+    pseudopotential -- which converges, and is wrong by tens of eV.
+    """
+    if nspin == 4:
+        zero = jnp.zeros_like(scalar)
+        return jnp.stack([scalar, zero, zero, zero])
+    return jnp.broadcast_to(scalar, (nspin,) + scalar.shape)
+
+
 def with_core(rho_core: jnp.ndarray, nspin: int) -> jnp.ndarray:
     """The core charge laid out like an ``nspin``-component density.
 
-    The core charge is unpolarized, and what that means depends on which
-    representation the components are in. In ``(up, down)`` it is shared
-    equally, half to each; in ``(n, m_x, m_y, m_z)`` it is all charge and no
-    magnetization, so it goes entirely into the first component. Those are the
-    same statement, and dividing by four in the second case -- which is what a
-    single ``/ nspin`` would do -- silently loses three quarters of the core
+    The core charge is unpolarized, and what that means for a *density* depends
+    on which representation the components are in. In ``(up, down)`` it is
+    shared equally, half to each; in ``(n, m_x, m_y, m_z)`` it is all charge and
+    no magnetization, so it goes entirely into the first component. Those are
+    the same statement, and dividing by four in the second case -- which is what
+    a single ``/ nspin`` would do -- silently loses three quarters of the core
     charge from the exchange-correlation energy.
+
+    See :func:`as_potential_components` for the rule a *potential* follows,
+    which is deliberately different.
     """
     if nspin == 4:
         zero = jnp.zeros_like(rho_core)

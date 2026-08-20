@@ -78,7 +78,7 @@ from pypresso.scf.occupations import (
     tetrahedra_for,
     tetrahedron_occupations_spin,
 )
-from pypresso.scf.potential import scf_accuracy, v_of_rho, with_core
+from pypresso.scf.potential import as_potential_components, scf_accuracy, v_of_rho
 from pypresso.xc.functional import resolve_functional
 from pypresso.solvers import get_eigensolver
 from pypresso.solvers.davidson import ETHR_MIN, starting_vectors
@@ -957,12 +957,12 @@ class Calculation:
         # transforms a smooth-grid copy. ``newd`` reads the *dense* one, since
         # the augmentation charge it integrates against is only representable
         # there.
-        # ``set_vrs``. In the ``(up, down)`` representation the local
-        # pseudopotential is added to both channels; in ``(n, m_x, m_y, m_z)``
-        # it is all charge, so it goes into the first component only -- the same
-        # distinction :func:`pypresso.scf.potential.with_core` draws for the core
-        # charge, and the same silent error if it is missed.
-        total = v_scf + with_core(self.vltot, self.nspin_mag)
+        # ``set_vrs``: the local pseudopotential is felt in full by both
+        # channels of an (up, down) potential and only by the charge component
+        # of an (n, m) one. That is *not* the rule an unpolarized density
+        # follows -- see as_potential_components -- and using the density's rule
+        # here halves the local pseudopotential in an LSDA run.
+        total = v_scf + as_potential_components(self.vltot, self.nspin_mag)
         deeq = self.coefficients(total, ddd_paw)
         if self.noncolin:
             return (self._spinor_hamiltonian(total, deeq),)
