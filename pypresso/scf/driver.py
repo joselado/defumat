@@ -66,6 +66,7 @@ from pypresso.pseudo.potentials import core_charge, local_potential, starting_ch
 from pypresso.pseudo.projectors import build_projectors, projector_channels
 from pypresso.pseudo.upf import Pseudopotential
 from pypresso.pseudo.spinorbit import becsum_transform, build_spin_orbit
+from pypresso.batching import map_k, resolve_k_batch
 from pypresso.scf.density import becsum, spinor_becsum, spinor_sum_band, sum_band
 from pypresso.scf.ewald import ewald_energy
 from pypresso.scf.mixing import get_mixer
@@ -125,15 +126,15 @@ def _symmetrize(rho_r, fft_index, grid, maps):
     return jax.vmap(channel)(rho_r)
 
 
-@partial(jax.jit, static_argnames=("grid",))
-def _density_of_bands(psi, fft_index, grid, weights, cell):
+@partial(jax.jit, static_argnames=("grid", "k_batch"))
+def _density_of_bands(psi, fft_index, grid, weights, cell, k_batch):
     """``sum_band`` on the smooth grid, in one kernel.
 
     The symmetrisation used to be fused in here. It cannot be any more: it acts
     on the dense grid, and with a double grid the density has to be lifted there
     first.
     """
-    return sum_band(psi, fft_index, grid, weights, cell)
+    return sum_band(psi, fft_index, grid, weights, cell, k_batch)
 
 
 @jax.jit
@@ -228,18 +229,25 @@ def _addusdens(rho_r, fft_index, grid, augmentation, becsum_):
     return rho_r + jnp.real(g_to_r(charge, fft_index, grid))
 
 
-@partial(jax.jit, static_argnames=("nbnd",))
-def _rotate_all(hamiltonian, vectors, nbnd: int):
-    """Rayleigh-Ritz at every k-point at once."""
-    return jax.vmap(lambda ik, v: rayleigh_ritz(hamiltonian, ik, v, nbnd))(
-        jnp.arange(hamiltonian.nk), vectors
+@partial(jax.jit, static_argnames=("nbnd", "k_batch"))
+def _rotate_all(hamiltonian, vectors, nbnd: int, k_batch):
+    """Rayleigh-Ritz at ``k_batch`` k-points at a time.
+
+    ``wfcinit`` does this inside its own ``DO ik`` loop, and the working set is
+    the same one the eigensolver has: the atomic orbitals of every k-point, plus
+    ``H`` applied to them.
+    """
+    return map_k(
+        lambda pair: rayleigh_ritz(hamiltonian, pair[0], pair[1], nbnd),
+        (jnp.arange(hamiltonian.nk), vectors),
+        batch=resolve_k_batch(k_batch),
     )
 
 
-@partial(jax.jit, static_argnames=("grid", "nspin_mag"))
-def _spinor_density_of_bands(psi, fft_index, grid, weights, cell, nspin_mag):
+@partial(jax.jit, static_argnames=("grid", "nspin_mag", "k_batch"))
+def _spinor_density_of_bands(psi, fft_index, grid, weights, cell, nspin_mag, k_batch):
     """``sum_band`` for spinors, in one kernel."""
-    return spinor_sum_band(psi, fft_index, grid, weights, cell, nspin_mag)
+    return spinor_sum_band(psi, fft_index, grid, weights, cell, nspin_mag, k_batch)
 
 
 @jax.jit
@@ -528,10 +536,16 @@ class Calculation:
         pseudos: tuple[Pseudopotential, ...],
         basis: Basis | None = None,
         diagonalization: str | None = None,
+        k_batch: int | None | str = "default",
     ):
         system = _without_gamma_storage(system)
         self.system = system
         self.eigensolver = get_eigensolver(diagonalization)
+        # How many k-points are in flight at once, everywhere this calculation
+        # touches the k axis. One -- QE's ``k_loop`` -- unless asked otherwise;
+        # ``None`` is a single ``vmap`` over all of them. See
+        # :mod:`pypresso.batching`.
+        self.k_batch = resolve_k_batch(k_batch)
         self.pseudos = tuple(pseudos)
         self.basis = basis if basis is not None else build_basis(system)
         if self.basis.dense.gamma_only:
@@ -800,7 +814,8 @@ class Calculation:
             values = self._noncollinear_becsum(wavefunctions, weights)
         else:
             values = becsum(
-                wavefunctions, self.projectors.vkb, weights, self.species_channels
+                wavefunctions, self.projectors.vkb, weights, self.species_channels,
+                self.k_batch,
             )
         if self._becsum_symmetry is not None:
             values = self._becsum_symmetry.apply(values)
@@ -818,7 +833,8 @@ class Calculation:
         ``j`` shell its occupation belongs to.
         """
         spinors = spinor_becsum(
-            wavefunctions[0], self.projectors.vkb, weights[0], self.species_channels
+            wavefunctions[0], self.projectors.vkb, weights[0], self.species_channels,
+            self.k_batch,
         )
         values = []
         for t, block in enumerate(spinors):
@@ -934,11 +950,12 @@ class Calculation:
         if self.noncolin:
             rho = _spinor_density_of_bands(
                 wavefunctions[0], self.fft_index, smooth.grid, weights[0],
-                self.system.cell, self.nspin_mag,
+                self.system.cell, self.nspin_mag, self.k_batch,
             )
         else:
             rho = _density_of_bands(
-                wavefunctions, self.fft_index, smooth.grid, weights, self.system.cell
+                wavefunctions, self.fft_index, smooth.grid, weights, self.system.cell,
+                self.k_batch,
             )
         return self.symmetrize(self.augmented(to_dense(rho, smooth, dense), becsum_))
 
@@ -1185,18 +1202,21 @@ class Calculation:
             # for six bands; the rest are random, exactly as QE tops up.
             ndim = self.npol * self.basis.npwx
             tiled = jnp.tile(self.basis.planewaves.mask, (1, self.npol))
-            extra = jax.vmap(
-                lambda kinetic, mask: starting_vectors(
-                    None, missing, ndim, kinetic, mask, atomic.dtype
-                )
-            )(jnp.tile(self.kinetic, (1, self.npol)), tiled)
+            extra = map_k(
+                lambda arrays: starting_vectors(
+                    None, missing, ndim, arrays[0], arrays[1], atomic.dtype
+                ),
+                (jnp.tile(self.kinetic, (1, self.npol)), tiled),
+                batch=self.k_batch,
+            )
             atomic = jnp.concatenate([atomic, extra], axis=1)
 
         # The same atomic orbitals seed both channels; what differs is the
         # Hamiltonian they are then diagonalised inside, which is already
         # spin-split at the first iteration because the starting density is.
         return jnp.stack([
-            _rotate_all(hamiltonian, atomic, nbnd)[1] for hamiltonian in hamiltonians
+            _rotate_all(hamiltonian, atomic, nbnd, self.k_batch)[1]
+            for hamiltonian in hamiltonians
         ])
 
     def _as_spinors(self, atomic: jnp.ndarray) -> jnp.ndarray:
@@ -1233,7 +1253,8 @@ class Calculation:
         """
         solved = [
             self.eigensolver(
-                hamiltonian, nbnd, None if psi0 is None else psi0[spin], ethr
+                hamiltonian, nbnd, None if psi0 is None else psi0[spin], ethr,
+                k_batch=self.k_batch,
             )
             for spin, hamiltonian in enumerate(hamiltonians)
         ]
@@ -1333,14 +1354,23 @@ def run_scf(
     calculation: Calculation | None = None,
     diagonalization: str | None = None,
     verbose: bool = False,
+    k_batch: int | None | str = "default",
 ) -> SCFResult:
     """Run the self-consistent field loop to convergence.
 
     ``conv_thr`` is compared against the estimated self-consistency error --
     QE's ``dr2``, the Hartree energy of the density residual, in Ry -- so it
     means the same thing here as in a ``pw.x`` input.
+
+    ``k_batch`` is how many k-points are held in flight at once: 1 is QE's
+    ``k_loop``, ``None`` is one ``vmap`` over the whole axis, and it trades
+    memory against speed without touching the answer
+    (:mod:`pypresso.batching`). It is ignored when ``calculation`` is given,
+    which already carries its own.
     """
-    calculation = calculation or Calculation(system, pseudos, diagonalization=diagonalization)
+    calculation = calculation or Calculation(
+        system, pseudos, diagonalization=diagonalization, k_batch=k_batch
+    )
     nbnd = nbnd or system.nbnd or default_nbnd(
         calculation.nelec,
         system.occupations,

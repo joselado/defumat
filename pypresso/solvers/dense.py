@@ -17,6 +17,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
+from pypresso.batching import map_k, resolve_k_batch
 from pypresso.hamiltonian.operator import Hamiltonian
 from pypresso.solvers.subspace import generalised_eigh
 
@@ -52,9 +53,10 @@ def dense_eigensolver(hamiltonian: Hamiltonian, ik: int, nbnd: int):
     return eigenvalues[:nbnd].real, eigenvectors[:, :nbnd].T
 
 
-@partial(jax.jit, static_argnames=("nbnd",))
-def dense_eigensolver_all(hamiltonian: Hamiltonian, nbnd: int, psi0=None, ethr=None):
-    """Every k-point at once: the same solver, ``vmap``-ed over ``ik``.
+@partial(jax.jit, static_argnames=("nbnd", "k_batch"))
+def dense_eigensolver_all(hamiltonian: Hamiltonian, nbnd: int, psi0=None, ethr=None,
+                          k_batch: int | None | str = "default"):
+    """Every k-point, ``k_batch`` of them at a time.
 
     ``psi0`` and ``ethr`` are accepted and ignored: a direct solve has no use for
     a starting guess and no threshold to converge to, but the registry gives
@@ -62,10 +64,12 @@ def dense_eigensolver_all(hamiltonian: Hamiltonian, nbnd: int, psi0=None, ethr=N
     which kind it is holding.
 
     The k index is the leading axis of every wavefunction-shaped array (rule
-    R6), so batching over it is a ``vmap`` and nothing else. Doing it this way
-    rather than in a Python loop turns ``nk`` separate compilations-and-launches
-    of each kernel into one, which is where most of the loop's cost was: the
-    arithmetic per k-point is unchanged.
+    R6), so how many k-points are in flight is a free choice: ``k_batch`` of
+    them at a time, one ``vmap`` over all of them at ``k_batch=None``. Batching
+    turns ``nk`` separate launches of each kernel into one, and holds ``nk``
+    dense matrices of ``(npwx, npwx)`` while it does -- which for this solver is
+    the whole reason to have the dial (:mod:`pypresso.batching`). The arithmetic
+    per k-point is unchanged either way.
 
     Returns ``(eigenvalues, wavefunctions)`` of shapes ``(nk, nbnd)`` and
     ``(nk, nbnd, npwx)``.
@@ -73,4 +77,4 @@ def dense_eigensolver_all(hamiltonian: Hamiltonian, nbnd: int, psi0=None, ethr=N
     def solve(ik):
         return dense_eigensolver(hamiltonian, ik, nbnd)
 
-    return jax.vmap(solve)(jnp.arange(hamiltonian.nk))
+    return map_k(solve, jnp.arange(hamiltonian.nk), batch=resolve_k_batch(k_batch))

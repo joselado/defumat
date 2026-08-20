@@ -255,6 +255,38 @@ reshaping becomes masks and static shapes. And it does not override differentiab
 where QE's fast path is a table lookup, the differentiable equivalent wins (`PLAN.md`
 D1/D2), and that trade is recorded rather than silently taken.
 
+## Memory is part of the design
+
+**A design is not finished until its peak working set is known.** A plane-wave code is
+memory-bound as often as it is compute-bound, and what decides whether a calculation runs
+at all is usually a working set rather than a flop count. Before landing anything that
+allocates per k-point, per band, or per G-vector, say what the peak costs in terms of
+`nk`, `nbnd`, `npwx`, `npol` and the FFT grid, and put that number against the RAM of a
+real machine — the same reflex the performance rule above asks for with time.
+
+**Where QE spends effort to save memory, copy it unless something better is on offer.**
+Thirty years of running problems larger than the machine is encoded in these choices, and
+none of them is incidental to the algorithm:
+
+- **One k-point at a time.** `c_bands.f90`'s `k_loop` diagonalises a single k-point and
+  `sum_band.f90` accumulates the density inside the same loop, so QE's working set is one
+  k-point's whatever `nks` is; the other k-points' `evc` sits in a buffer that is RAM or
+  disk according to `io_level`/`disk_io`, and the parallelism over k comes from MPI pools.
+  Batching the whole k axis with `vmap` is this code's deliberate deviation — it is what a
+  GPU wants — so it is a **dial** (`pypresso/batching.py`), defaulting to QE's end of it,
+  not a fixed choice. Rule R6 (k leading) is what keeps both available.
+- **The sphere, not the box.** Wavefunctions live on the G-vectors inside the cutoff and
+  are expanded into the FFT box only for the transform, and only over the sticks the
+  sphere occupies (`basis/sticks.py`).
+- **Two grids.** The smooth grid carries the wavefunctions and the dense one only the
+  augmentation charge that needs it, which is most of the point of `ecutrho`.
+
+A deviation is allowed and is sometimes right — this code trades memory for batching the
+way QE trades it for MPI ranks, and `becsum` is carried as a full symmetric matrix where
+QE packs the upper triangle. The rule is that such a trade is **stated, measured, and made
+selectable when it is large**, never arrived at by accident: name it in the module
+docstring, and put the number in `PERFORMANCE.md` beside the timing.
+
 ## Reading beyond the source
 
 The vendored Fortran is the primary reference and transcription from it is the method.
@@ -316,8 +348,13 @@ tools/export_notebooks.sh                     # re-execute notebooks + refresh .
   iteration body (`h_psi` → diagonalize → density → potential → mix). Inside the
   eigensolver, use `lax.while_loop`/`fori_loop` with a fixed subspace size so the solver
   stays on device.
-- Batch over k-points with `vmap` where padded shapes allow, with a Python-loop-over-k
-  fallback (jitted body) when memory forbids — selectable at runtime, not a rewrite.
+- **How many k-points are in flight is `pypresso/batching.py`'s dial, and its default is
+  QE's loop** — one k-point at a time, as `c_bands.f90` and `sum_band.f90` do it. `k_batch`
+  reaches every entry point (`run_scf`, `run_bands`, `run_nscf`, `run_dos`, `Calculation`,
+  `PYPRESSO_K_BATCH`), `None` asks for one `vmap` over the whole axis, and the chunked form
+  is a `lax.map`/`lax.scan` so it stays compiled once and differentiable. Anything new that
+  walks the k axis goes through `map_k`/`sum_k` rather than calling `vmap` itself; the
+  chunk size must never be visible in a result beyond round-off.
 - Use `donate_argnums` for the large wavefunction and density buffers.
 
 `PLAN.md` §1 and §5 hold the full reasoning and the rest of the GPU notes.

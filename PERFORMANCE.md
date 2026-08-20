@@ -569,6 +569,48 @@ The polarized path costs what it should: two Hamiltonians and two
 diagonalisations, so roughly twice an unpolarized iteration on the same cell,
 plus one extra reduction for `dr2`'s magnetization term.
 
+## The k-axis: memory, and what batching it is actually worth (P14)
+
+QE holds **one k-point at a time**. `c_bands.f90`'s `k_loop` calls `diag_bands`
+on a single `ik`, `sum_band.f90` accumulates that k-point's bands into
+`rho%of_r` inside the same loop, and the rest of `evc` sits in a buffer that is
+RAM or disk according to `io_level`. Its parallelism over k is MPI pools. This
+code did the opposite -- one `vmap` over the whole k axis, everywhere -- which
+is what a GPU wants and what made the first Python-loop version slow.
+
+That deviation was never measured until a converged bismuthene run (19
+irreducible k-points, two-component spinors, 35 Ry) died at **12.7 GB**. So the
+k axis is now a dial, `pypresso/batching.py`, default 1 -- QE's loop -- with
+`k_batch=None` for the old behaviour and anything between as a chunk. It is a
+`lax.map`/`lax.scan`, not a Python loop, so the body is compiled once whatever
+the chunk count; the answer is identical to round-off (1.8e-15 Ry) because only
+the order the per-k contributions are summed in changes.
+
+Measured, 2026-08-20, single core except where noted:
+
+| case | k-points | `k_batch=1` (QE's loop) | one `vmap` over all k |
+|---|---|---|---|
+| `pw_scf/scf.in` — 2 atoms, 180 PWs | 2 | 19.6 ms/it, 0.41 GB | 19.3 ms/it, 0.41 GB |
+| `pw_metal/metal.in` — Al, smeared | 10 | 78.4 ms/it, 0.51 GB | 72.1 ms/it, 0.47 GB |
+| `bismuthene-soc-small` — spinors, ultrasoft, PBE | 7 | **14.58 s/it, 4.6 GB** | 17.94 s/it, 5.0 GB |
+| `bismuthene-nosoc` — converged, 35 Ry | 19 | **22.5 s/it, 3.16 GB** | 44.9 s/it, 4.91 GB |
+
+**The loop is not a tax on anything that matters -- it is a win.** It costs 9%
+on aluminium, whose per-k work is a handful of plane waves and six bands, the
+regime where the batch is hiding dispatch overhead, and nothing at all on two
+k-points. On the two cases whose per-k work is a real calculation it is *faster*:
+23% on the small bismuthene cell, and **exactly 2x** on the converged one, at
+two thirds the memory and with the total energy identical to every digit
+(-310.10972823072876 Ry both ways). Each k-point's Davidson subspace and its
+band-by-band real-space fields already saturate XLA's threads on their own;
+stacking 19 of them buys no parallelism and costs cache.
+
+That is the same lesson as the FFT layout above, from the other direction: the
+Fortran's structure was not a limitation of Fortran. What batching still buys is
+the GPU, where the launch overhead the aluminium case shows is an order of
+magnitude worse and thousands of cores want feeding -- which is exactly why this
+is a dial with both ends kept working rather than a rewrite in either direction.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than

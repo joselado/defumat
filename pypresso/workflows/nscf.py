@@ -77,6 +77,7 @@ def fixed_density_bands(
     kpoints: KPoints | None = None,
     nbnd: int | None = None,
     conv_thr: float = 1.0e-6,
+    k_batch: int | None | str = "default",
 ):
     """Diagonalise once at every k-point of ``system`` with ``density`` fixed.
 
@@ -91,7 +92,7 @@ def fixed_density_bands(
     if kpoints is not None:
         system = eqx.tree_at(lambda s: s.kpoints, system, kpoints)
 
-    calculation = Calculation(system, pseudos)
+    calculation = Calculation(system, pseudos, k_batch=k_batch)
     nbnd = nbnd or system.nbnd or default_nbnd(
         calculation.nelec,
         system.occupations,
@@ -131,6 +132,7 @@ def run_nscf(
     kpoints: KPoints | None = None,
     nbnd: int | None = None,
     conv_thr: float = 1.0e-6,
+    k_batch: int | None | str = "default",
 ) -> NSCFResult:
     """A full NSCF run: diagonalise, then occupy by the system's own scheme.
 
@@ -140,7 +142,7 @@ def run_nscf(
     metal consistent with the calculation that produced its density.
     """
     calculation, system, eigenvalues = fixed_density_bands(
-        system, pseudos, density, kpoints, nbnd, conv_thr
+        system, pseudos, density, kpoints, nbnd, conv_thr, k_batch
     )
     wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
     nspin = calculation.nspin

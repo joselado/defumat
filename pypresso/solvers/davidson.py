@@ -65,6 +65,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
+from pypresso.batching import map_k, resolve_k_batch
 from pypresso.hamiltonian.operator import Hamiltonian
 from pypresso.solvers.subspace import generalised_eigh
 
@@ -357,7 +358,7 @@ def starting_vectors(psi0, nbnd, ndim, kinetic, mask, dtype):
     return jnp.where(mask, guess, 0.0)
 
 
-@partial(jax.jit, static_argnames=("nbnd", "david", "max_iterations"))
+@partial(jax.jit, static_argnames=("nbnd", "david", "max_iterations", "k_batch"))
 def davidson_eigensolver_all(
     hamiltonian: Hamiltonian,
     nbnd: int,
@@ -366,8 +367,21 @@ def davidson_eigensolver_all(
     residual_threshold=RESIDUAL_THRESHOLD,
     david: int = DAVID_NDIM,
     max_iterations: int = MAX_ITERATIONS,
+    k_batch: int | None | str = "default",
 ):
-    """Every k-point at once: the same solver under ``vmap`` over ``ik``."""
+    """Every k-point, ``k_batch`` of them at a time.
+
+    This is where the k-axis working set is largest: each k-point in flight
+    holds ``david * nbnd`` subspace vectors of length ``npol * npwx``, three of
+    them (``psi``, ``hpsi``, ``spsi``), plus whatever ``h_psi`` needs to
+    transform a block of bands. Multiplying that by ``nk`` is what a ``vmap``
+    over the whole axis does, and it is why the default here is QE's loop --
+    ``c_bands.f90`` calls ``diag_bands`` on one ``ik`` at a time. See
+    :mod:`pypresso.batching`.
+
+    The chunking cannot change the answer: the k-points are independent here,
+    and each is solved by exactly the same function either way.
+    """
 
     def solve(ik, start):
         return davidson_eigensolver(
@@ -376,7 +390,8 @@ def davidson_eigensolver_all(
             max_iterations=max_iterations,
         )
 
+    batch = resolve_k_batch(k_batch)
     indices = jnp.arange(hamiltonian.nk)
     if psi0 is None:
-        return jax.vmap(lambda ik: solve(ik, None))(indices)
-    return jax.vmap(solve)(indices, psi0)
+        return map_k(lambda ik: solve(ik, None), indices, batch=batch)
+    return map_k(lambda pair: solve(*pair), (indices, psi0), batch=batch)

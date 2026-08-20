@@ -536,6 +536,20 @@ buffer donation, k-axis sharding across CPU-cores-as-devices and across GPUs, Nu
 `PERFORMANCE.md` carries the timing and scaling table; no numerical drift — the full suite
 passes and the two eigensolvers agree to 2e-13 Ry on the total energy.
 
+**The k axis is a dial now, and its default is QE's.** Batching every k-point into one
+`vmap` — which is what R6 exists to allow — was never measured against the alternative
+until a converged bismuthene run needed 12.7 GB for 19 irreducible k-points of
+two-component spinors. `pypresso/batching.py` chunks the axis instead, defaulting to one
+k-point at a time exactly as `c_bands.f90`'s `k_loop` and `sum_band.f90` do, with
+`k_batch=None` for the old behaviour; it is a `lax.map`/`lax.scan`, so the body is still
+compiled once and still differentiable, and the answer moves by round-off alone (1.8e-15
+Ry). The measurement is in `PERFORMANCE.md`, and it is not a trade at all on any case whose
+per-k work is real: the loop costs 9% on aluminium's ten cheap k-points, nothing on
+silicon's two, and is **twice as fast at two thirds the memory** on converged bismuthene's
+nineteen (44.9 → 22.5 s per iteration, 4.91 → 3.16 GB), whose per-k work saturates XLA's
+threads on its own. What batching still
+buys is the GPU, which is why both ends are kept working.
+
 **The trap:** on these array sizes the cost is **compilation, not arithmetic**. Every JAX
 operation dispatched outside a `jit` is compiled separately at ~50 ms, so setup spent 10 s
 compiling 81 kernels to do 0.2 s of work. Optimising here means reducing the number of

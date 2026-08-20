@@ -91,6 +91,7 @@ def run_bands(
     conv_thr: float = 1.0e-6,
     fermi_energy: float | None = None,
     homo: float | None = None,
+    k_batch: int | None | str = "default",
 ) -> BandStructure:
     """Diagonalise at a k-path with the density fixed.
 
@@ -114,7 +115,7 @@ def run_bands(
     produced the density, which is what the two arguments are for.
     """
     calculation, system, eigenvalues = fixed_density_bands(
-        system, pseudos, density, kpoints, nbnd, conv_thr
+        system, pseudos, density, kpoints, nbnd, conv_thr, k_batch
     )
     nspin = calculation.nspin
     return BandStructure(

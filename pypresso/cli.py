@@ -63,7 +63,12 @@ def _dos(args) -> int:
     system = build_system(read_pw_input(input_path))
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
 
-    scf = run_scf(system, pseudos, conv_thr=args.conv_thr, verbose=args.verbose)
+    k_batch = args.k_batch if args.k_batch is None else (
+        None if args.k_batch.lower() in ("all", "0") else int(args.k_batch)
+    )
+    k_batch = "default" if args.k_batch is None else k_batch
+    scf = run_scf(system, pseudos, conv_thr=args.conv_thr, verbose=args.verbose,
+                  k_batch=k_batch)
     if not scf.converged:
         print(f"warning: the SCF stopped at accuracy {scf.accuracy:.2e}", file=sys.stderr)
     print(f"  total energy     {scf.total_energy:.8f} Ry ({scf.iterations} iterations)")
@@ -83,6 +88,7 @@ def _dos(args) -> int:
         emax=None if args.emax is None else args.emax / RY_TO_EV,
         delta_e=args.delta_e / RY_TO_EV,
         conv_thr=args.conv_thr,
+        k_batch=k_batch,
     )
     print(f"  k-points         {nscf.kpoints.nk} irreducible"
           + (f" from a {grid[0]}x{grid[1]}x{grid[2]} grid" if grid else ""))
@@ -120,6 +126,10 @@ def main(argv: list[str] | None = None) -> int:
     dos.add_argument("--conv-thr", type=float, default=1e-8, help="SCF convergence threshold in Ry")
     dos.add_argument("-o", "--output", help="where to write the .dos file")
     dos.add_argument("-v", "--verbose", action="store_true", help="print each SCF iteration")
+    dos.add_argument("--k-batch", metavar="N",
+                     help="k-points held in flight at once: 1 is QE's k_loop (the "
+                          "default), 'all' is one vmap over the whole axis, which is "
+                          "faster and needs proportionally more memory")
 
     args = parser.parse_args(argv)
     if args.command == "inspect":

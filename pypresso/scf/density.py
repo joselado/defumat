@@ -24,6 +24,7 @@ import jax
 import jax.numpy as jnp
 
 from pypresso.basis.fft import g_to_r
+from pypresso.batching import resolve_k_batch, sum_k
 from pypresso.system.cell import Cell
 
 __all__ = ["sum_band", "band_density", "becsum", "spinor_sum_band",
@@ -44,7 +45,8 @@ def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.nd
     return jnp.einsum("b,b...->...", weights, jnp.abs(field) ** 2) / cell.volume
 
 
-def sum_band(psi, fft_index, grid, weights, cell: Cell) -> jnp.ndarray:
+def sum_band(psi, fft_index, grid, weights, cell: Cell,
+             k_batch: int | None | str = "default") -> jnp.ndarray:
     """The density from every k-point, ``(nspin, n1, n2, n3)`` and real.
 
     Args:
@@ -53,23 +55,27 @@ def sum_band(psi, fft_index, grid, weights, cell: Cell) -> jnp.ndarray:
             basis at a k-point does not depend on spin.
         weights: ``(nspin, nk, nbnd)`` occupation weights.
 
-    Batched over k with ``vmap`` rather than accumulated in a Python loop: k is
-    the leading axis of every wavefunction-shaped array precisely so that this
-    is available (rule R6). Inside ``jit`` the sum over the batch fuses with the
-    transforms, so the intermediate ``(nk, nbnd, n1, n2, n3)`` field is not
-    materialised in full.
+    Accumulated ``k_batch`` k-points at a time (:mod:`pypresso.batching`), which
+    is ``sum_band.f90``'s own structure -- it adds each k-point's bands into
+    ``rho%of_r`` inside ``k_loop`` and never holds more than one k-point's
+    real-space fields. The batched end of the dial holds ``(nk, nbnd, n1, n2,
+    n3)`` complex numbers in flight, which on a large cell is the second-largest
+    working set in the code after the Davidson subspace.
     """
+    batch = resolve_k_batch(k_batch)
 
     def channel(states, occupations):
-        contributions = jax.vmap(band_density, in_axes=(0, 0, None, 0, None))(
-            states, fft_index, grid, occupations, cell
-        )
-        return jnp.sum(contributions, axis=0)
+        def one_k(arrays):
+            state, index, occupation = arrays
+            return band_density(state, index, grid, occupation, cell)
+
+        return sum_k(one_k, (states, fft_index, occupations), batch=batch)
 
     return jax.vmap(channel)(psi, weights)
 
 
-def becsum(psi, vkb, weights, species_channels) -> tuple:
+def becsum(psi, vkb, weights, species_channels,
+           k_batch: int | None | str = "default") -> tuple:
     """The projector occupation matrices ``becsum``, per species.
 
     ``PW/src/sum_band.f90``'s ``sum_bec``:
@@ -99,19 +105,37 @@ def becsum(psi, vkb, weights, species_channels) -> tuple:
     self-consistent ``D_ij`` and PAW's one-centre terms all become per-channel
     quantities, and they are all built from this one.
     """
-    projections = jnp.einsum("kgc,skbg->skbc", vkb.conj(), psi)  # <beta_c|psi_kb>
+    batch = resolve_k_batch(k_batch)
+
+    def channel(states, occupations):
+        def one_k(arrays):
+            projectors, state, occupation = arrays
+            projections = jnp.einsum("gc,bg->bc", projectors.conj(), state)
+            return tuple(
+                None if channels is None
+                else _becsum_species(projections, occupation, channels)
+                for channels in species_channels
+            )
+
+        return sum_k(one_k, (vkb, states, occupations), batch=batch)
+
+    # One channel at a time rather than a spin axis through the accumulation:
+    # QE has no spin axis here either -- ``sum_bec`` writes into
+    # ``becsum(:,:,current_spin)`` and its k-list runs over both channels.
+    per_channel = [channel(psi[spin], weights[spin]) for spin in range(psi.shape[0])]
     return tuple(
-        None if channels is None else _becsum_species(projections, weights, channels)
-        for channels in species_channels
+        None if channels is None
+        else jnp.stack([values[species] for values in per_channel])
+        for species, channels in enumerate(species_channels)
     )
 
 
 @jax.jit
 def _becsum_species(projections, weights, channels):
-    """One species' ``becsum``, gathering its atoms' channels in one go."""
-    columns = projections[:, :, :, channels]  # (nspin, nk, nbnd, nat, nh)
+    """One species' ``becsum`` at one k-point, gathering its atoms' channels."""
+    columns = projections[:, channels]  # (nbnd, nat, nh)
     return jnp.real(
-        jnp.einsum("skb,skbai,skbaj->saij", weights.astype(columns.dtype),
+        jnp.einsum("b,bai,baj->aij", weights.astype(columns.dtype),
                    columns.conj(), columns)
     )
 
@@ -150,20 +174,23 @@ def spinor_band_density(psi, fft_index, grid, weights, cell: Cell, nspin_mag: in
     return jnp.einsum("b,cb...->c...", weights, stacked) / cell.volume
 
 
-def spinor_sum_band(psi, fft_index, grid, weights, cell: Cell, nspin_mag: int):
+def spinor_sum_band(psi, fft_index, grid, weights, cell: Cell, nspin_mag: int,
+                    k_batch: int | None | str = "default"):
     """A noncollinear density from every k-point, ``(nspin_mag, n1, n2, n3)``.
 
     Args:
         psi: ``(nk, nbnd, 2 npwx)``.
         weights: ``(nk, nbnd)``.
     """
-    contributions = jax.vmap(
-        spinor_band_density, in_axes=(0, 0, None, 0, None, None)
-    )(psi, fft_index, grid, weights, cell, nspin_mag)
-    return jnp.sum(contributions, axis=0)
+    def one_k(arrays):
+        state, index, occupation = arrays
+        return spinor_band_density(state, index, grid, occupation, cell, nspin_mag)
+
+    return sum_k(one_k, (psi, fft_index, weights), batch=resolve_k_batch(k_batch))
 
 
-def spinor_becsum(psi, vkb, weights, species_channels) -> tuple:
+def spinor_becsum(psi, vkb, weights, species_channels,
+                  k_batch: int | None | str = "default") -> tuple:
     """The spinor projector occupations, per species, before the spin transform.
 
         becsum_nc^a_{i s1, j s2} = sum_kb w_kb <psi_kb|beta_i^a s1>
@@ -185,20 +212,26 @@ def spinor_becsum(psi, vkb, weights, species_channels) -> tuple:
     Returns one complex ``(nat_t, nh_t, 2, nh_t, 2)`` array per species.
     """
     npwx = vkb.shape[-2]
-    components = psi.reshape(psi.shape[:-1] + (2, npwx))
-    projections = jnp.einsum("kgc,kbag->kbac", vkb.conj(), components)
-    return tuple(
-        None if channels is None else _spinor_becsum_species(projections, weights, channels)
-        for channels in species_channels
-    )
+
+    def one_k(arrays):
+        projectors, state, occupation = arrays
+        components = state.reshape(state.shape[:-1] + (2, npwx))
+        projections = jnp.einsum("gc,bag->bac", projectors.conj(), components)
+        return tuple(
+            None if channels is None
+            else _spinor_becsum_species(projections, occupation, channels)
+            for channels in species_channels
+        )
+
+    return sum_k(one_k, (vkb, psi, weights), batch=resolve_k_batch(k_batch))
 
 
 @jax.jit
 def _spinor_becsum_species(projections, weights, channels):
-    """One species' spinor ``becsum``, gathering its atoms' channels in one go."""
-    columns = projections[:, :, :, channels]  # (nk, nbnd, 2, nat, nh)
+    """One species' spinor ``becsum`` at one k-point, gathering its channels."""
+    columns = projections[:, :, channels]  # (nbnd, 2, nat, nh)
     return jnp.einsum(
-        "kb,kbani,kbcnj->niajc",
+        "b,bani,bcnj->niajc",
         weights.astype(columns.dtype),
         columns.conj(),
         columns,

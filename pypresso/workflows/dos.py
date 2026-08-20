@@ -307,6 +307,7 @@ def run_dos(
     delta_e: float = DEFAULT_DELTA_E,
     conv_thr: float = 1.0e-6,
     chunk: int = ENERGY_CHUNK,
+    k_batch: int | None | str = "default",
 ):
     """SCF density in, ``(DensityOfStates, NSCFResult)`` out.
 
@@ -322,7 +323,7 @@ def run_dos(
     if kpoints is None and grid is not None:
         kpoints = denser_grid(system, grid, shift)
 
-    nscf = run_nscf(system, pseudos, density, kpoints, nbnd, conv_thr)
+    nscf = run_nscf(system, pseudos, density, kpoints, nbnd, conv_thr, k_batch)
 
     if scheme is None:
         if is_tetrahedron_scheme(system.occupations):
