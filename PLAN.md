@@ -972,28 +972,61 @@ trade to state. `tests/unit/test_at_kpoints.py` pins both halves: identical to a
 calculation built from scratch at those k-points, and *the same objects* for the rest —
 `is`, not `==`, because equality would pass on the full rebuild this exists to avoid.
 
-*What is not validated:* a topological invariant of a real material against a published
-one. `elkpy`'s reference systems need pseudopotentials this repository does not commit
-(graphene with Elk's `soc_scale`, the h-BN slab, caesium dimerized diamond, bulk Bi₂Se₃),
-so what carries over from it is the *conventions* — the sign pins, the TRIM ordering, the
-largest-gap and orientation arithmetic, the six-plane assembly — and the doubled-QWZ
-integers. The bismuthene case is freestanding planar Bi at the test cutoff, which is
-neither `elkpy`'s buckled layer nor the substrate-supported system of the QSH literature.
-On it the two routes **disagree** — parity gives `nu = 0` exactly, the Wilson sweep gives
-1 on a 12x7 mesh — and the Wilson result's own diagnostic says why: the largest-gap
-reference line moves **0.20 of the circle in one pumping step**, so the crossing count is
-a guess. That is `elkpy`'s documented failure mode reproduced from the other side, and
-this crystal is a hard case for the largest-gap method in particular, because inversion
-plus time reversal makes the charge centres symmetric about zero at every step and the
-largest gap two-fold degenerate by symmetry. The answer of record is the parity one, which
-has no mesh; `WannierFlow.gap_step` exists so that this does not have to be noticed by
-eye. A 12x13 refinement (156 k-points) was started and had not finished after 45 minutes
-of the one core this was measured on, so what the Wilson route converges to on this cell is
-recorded as **unknown** rather than guessed. Notebook 10 therefore runs the parity route
-only and quotes the Wilson measurement: an SCF and a topology run each build their own
-gigabyte-scale `Calculation`, and the two together peak at 7.8 GB where the SCF alone is
-4.2 GB — so the sweep belongs in its own process, and even without it the notebook peaks at
-**6.0 GB**, which is over the five it was aimed at.
+*Validated against the literature, after a false start worth recording.* Two real
+materials now agree with published invariants, and getting there took correcting the
+*geometry*, not the code.
+
+| system | geometry | gap | expected | parity | Wilson |
+|---|---|---|---|---|---|
+| Bi(111) bilayer | a = 4.34 A, buckling 1.74 A | 0.586 eV | `nu = 1` | **1** | **1** (12x7, 16x9) |
+| flat bismuthene | a = 5.35 A, both atoms at z = 0 | 0.505 eV | — | **0** | 0 (12x7, 16x9) |
+| germanene | a = 4.06 A, buckling 0.68 A | **0.0244 eV** | `nu = 1` | **1** | 0 (12x7, 16x9) |
+
+Buckled Bi(111) is the freestanding QSH insulator of Murakami (PRL 97, 236805) and Liu
+(PRB 83, 235401), and it comes out `nu = 1` by both routes with the band inversion at
+Gamma — `N_- = 14` there against 16 at all three M. Germanene's gap is the sharper check
+of P14 than of P16: **24.4 meV against the ~24 meV of Liu, Feng and Yao** (PRL 107,
+076802), and that gap *is* the spin-orbit coupling, since germanene without it is a
+gapless Dirac semimetal. Inputs: `tests/data/qe/bi111-bilayer-soc.in`,
+`germanene-soc.in`.
+
+**The first attempt used flat bismuthene and concluded the two routes disagreed.** They
+do not. Flat Bi at the SiC lattice constant is a *different material* from the buckled
+bilayer — trivial where the buckled one is topological, and neither is the
+substrate-supported system of the QSH literature, where the substrate saturates the p_z
+orbitals. Re-run on the flat cell, parity and Wilson **both** give 0 at two mesh sizes;
+the earlier Wilson `= 1` does not reproduce. Two lessons, and the second is the one that
+generalises: a plausible disagreement between two methods is worth suspecting the
+*inputs* before either method, and this file previously blamed a hard case for the
+largest-gap tie-break when the real fault was a geometry nobody had questioned.
+
+**Wilson is nonetheless the weaker route, and germanene is the proof.** Parity is exact
+on all three systems. Wilson is right on both Bi cells and *wrong on germanene* — 0 where
+the invariant is 1 — and refining 12x7 to 16x9 does not fix it, so this is not simply a
+coarse mesh. A 24 meV gap makes the Wannier centres wind sharply near K, which is where a
+largest-gap crossing count is most fragile, and inversion plus time reversal makes the
+charge centres symmetric about zero so that the largest gap is degenerate by symmetry and
+`argmax`'s tie-break arbitrary. **`WannierFlow.gap_step` does not currently discriminate**:
+it reads 0.30-0.43 on the runs that are right and on the one that is wrong alike, so it is
+a number to eyeball rather than a convergence criterion. Fixing that — a gap-tracking rule
+that follows the *same* branch between pumping steps instead of re-choosing the widest one
+— is the open work here, and until it is done **parity is the answer of record wherever
+there is an inversion centre.** A 24x13 refinement of germanene was started and killed
+before finishing, so whether Wilson converges to 1 on a fine enough mesh is **unknown**.
+
+`elkpy`'s own reference systems remain unvalidated at material level: they need
+pseudopotentials this repository does not commit (graphene with Elk's `soc_scale`, the
+h-BN slab, caesium dimerized diamond, bulk Bi2Se3), so what carries over from it is the
+*conventions* — the sign pins, the TRIM ordering, the largest-gap and orientation
+arithmetic, the six-plane assembly — and the doubled-QWZ integers.
+
+*Memory, and the vacuum that was not needed.* Notebook 10 peaks at **6.0 GB**, over the
+five it was aimed at, because an SCF and a topology run each build their own
+gigabyte-scale `Calculation`. The 2D cells above are also a reminder that **vacuum is not
+free**: the first buckled Bi cell used 18 A of it and cost 5.25 GB and 168 s, and cutting
+it to 13.0 A -- still 11.3 A between images -- moved the gap by 4 meV while costing 4.06 GB
+and 118 s. A 2D cell needs enough vacuum that the images do not see each other and no more;
+every extra angstrom is plane waves and FFT grid along z.
 
 *Deferred:* the plane-wave velocity operator (P11, above), a nonzero Chern number from a
 DFT run — which needs a magnetization *and* spin-orbit coupling, the one spin regime P14

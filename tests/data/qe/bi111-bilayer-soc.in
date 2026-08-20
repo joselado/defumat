@@ -1,0 +1,27 @@
+! Freestanding BUCKLED Bi(111) bilayer -- the geometry predicted to be a QSH
+! insulator (Murakami PRL 97, 236805 (2006); Liu et al. PRB 83, 235401 (2011)):
+! a = 4.34 A, buckling 1.74 A, c = 13.02 A (11.3 A of vacuum -- a 2D cell
+! needs enough that the images do not see each other, not more). This is NOT the flat SiC-matched bismuthene of
+! tests/data/qe/bismuthene-soc*.in (a = 5.35 A, both atoms at z = 0), which is
+! a different system and is metallic when freestanding.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 4, celldm(1) = 8.201308, celldm(3) = 3.000000,
+    nat = 2, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 160.0,
+    noncolin = .true., lspinorb = .true.,
+    starting_magnetization = 0.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.005,
+ /
+ &electrons
+    conv_thr = 1.0d-8
+ /
+ATOMIC_SPECIES
+ Bi 208.98 Bi.rel-pbe-dn-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS (crystal)
+ Bi 0.333333333333 0.666666666667  0.066820276498
+ Bi 0.666666666667 0.333333333333 -0.066820276498
+K_POINTS AUTOMATIC
+ 6 6 1 0 0 0

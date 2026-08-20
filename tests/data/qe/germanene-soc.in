@@ -1,0 +1,26 @@
+! Germanene: low-buckled honeycomb Ge, a = 4.06 A, buckling 0.68 A
+! (Liu, Feng and Yao, PRL 107, 076802 (2011)). A QSH insulator with nu = 1 and
+! an SOC gap of ~24 meV at K -- a deliberately harder test than buckled Bi:
+! the gap is two orders smaller, it sits at K rather than at a TRIM, and the
+! mechanism is Kane-Mele rather than a band inversion at Gamma.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 4, celldm(1) = 7.672288, celldm(3) = 2.955665,
+    nat = 2, ntyp = 1,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    noncolin = .true., lspinorb = .true.,
+    starting_magnetization = 0.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.002,
+ /
+ &electrons
+    conv_thr = 1.0d-8
+ /
+ATOMIC_SPECIES
+ Ge 72.63 Ge.rel-pbe-dn-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS (crystal)
+ Ge 0.333333333333 0.666666666667  0.028333333333
+ Ge 0.666666666667 0.333333333333 -0.028333333333
+K_POINTS AUTOMATIC
+ 12 12 1 0 0 0

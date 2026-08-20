@@ -58,6 +58,24 @@ and bulk Bi2Se3 -- correctly ``(1;000)`` by the parity route -- returning
 mesh until the answer stops moving, and cross-check against the parity route
 wherever there is an inversion centre.** That is what
 :func:`pypresso.topology.parity.fu_kane_z2` is for.
+
+**Known defect: the crossing count can be wrong, and it is not announced.**
+On germanene -- a 24 meV gap at K, inversion plus time reversal -- this route
+returns ``z2 = 0`` where the Fu-Kane parity product returns the literature's 1,
+and refining the mesh from 12x7 to 16x9 does not fix it. The cause is the
+largest-gap reference line: with inversion *and* time reversal the charge
+centres are symmetric about zero at every pumping step, so the widest gap is
+degenerate by symmetry and which one ``argmax`` picks is arbitrary; re-choosing
+it independently at each step can then step across a crossing without counting
+it. ``WannierFlow.gap_step`` was added to make that visible and **does not**: it
+reads 0.30-0.43 on the runs that are right and on the one that is wrong alike.
+
+The fix is to track a branch rather than re-choose one -- follow the same gap
+between consecutive steps, as Soluyanov and Vanderbilt describe -- and until it
+is written, **prefer :mod:`pypresso.topology.parity` wherever the crystal has an
+inversion centre**: it is exact, needs no mesh, and is right on every system
+tried. This route remains the only one available without inversion, which is why
+it is still here. See ``PLAN.md`` P16.
 """
 
 from __future__ import annotations
