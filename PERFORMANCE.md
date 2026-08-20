@@ -35,32 +35,55 @@ Single core, this machine, re-measured 2026-08-19. `conv_thr = 1e-10` where the
 input allows it, so both codes converge to the same place and the energy
 agreement doubles as a correctness check on every optimisation.
 
-These numbers were taken again after the FFT-grid rule changed
-(`Symmetries.fft_factors` — the dimensions must be a multiple of the fractional
-translations' denominators, see `PLAN.md` P2). That moved silicon's grids from
-15³/30³ to 16³/32³, so the earlier table was measured on grids neither code uses
-any more and its energy deltas no longer applied. The ratios barely moved; the
-agreement with QE improved.
+Re-measured 2026-08-20 after the band axis became a dial ("The band a
+transform holds", below). The `before` column is the 2026-08-19 measurement it
+replaces, on the same machine and the same inputs.
 
-| | QE 7.5 | pypresso | ratio |
-|---|---|---|---|
-| **`si-1k`** — 2 atoms, 180 PWs, 1 k | 0.004 s | 0.011 s | **3.0x** |
-| **`si-1k-ecut40`** — 2 atoms, 1131 PWs | 0.011 s | 0.037 s | **3.2x** |
-| **`si8-1k`** — 8 atoms, 738 PWs | 0.031 s | 0.064 s | **2.1x** |
-| **`si8-1k-ecut30`** — 8 atoms, 2950 PWs | 0.071 s | 0.277 s | **3.9x** |
-| **`si16-1k`** — 16 atoms, 1476 PWs | 0.100 s | 0.297 s | **3.0x** |
-| **`si16-1k-ecut30`** — 16 atoms, 5900 PWs | 0.284 s | 1.184 s | **4.2x** |
-| **`pw_scf/scf-kauto`** — 2 k, reduced from 8 | 0.003 s | 0.011 s | **4.6x** |
-| **`pw_metal/metal`** — Al, 10 k | 0.027 s | 0.106 s | **4.0x** |
+| | QE 7.5 | pypresso | ratio | before |
+|---|---|---|---|---|
+| **`si-1k`** — 2 atoms, 180 PWs, 1 k | 0.003 s | 0.008 s | **3.1x** | 3.0x |
+| **`si-1k-ecut40`** — 2 atoms, 1131 PWs | 0.013 s | 0.032 s | **2.6x** | 3.2x |
+| **`si8-1k`** — 8 atoms, 738 PWs | 0.020 s | 0.044 s | **2.2x** | 2.1x |
+| **`si8-1k-ecut30`** — 8 atoms, 2950 PWs | 0.071 s | 0.158 s | **2.2x** | 3.9x |
+| **`si16-1k`** — 16 atoms, 1476 PWs | 0.081 s | 0.185 s | **2.3x** | 3.0x |
+| **`si16-1k-ecut30`** — 16 atoms, 5900 PWs | 0.283 s | 0.722 s | **2.5x** | 4.2x |
+| **`pw_scf/scf-kauto`** — 2 k, reduced from 8 | 0.007 s | 0.020 s | **2.7x** | 4.6x |
+| **`pw_metal/metal`** — Al, 10 k | 0.027 s | 0.133 s | **5.0x** | 4.0x |
+
+Read the first and last rows together, because they say the same thing from
+opposite ends. **The gain is in the box, not in the code paths**: the two cells
+whose real-space grid is small — 180 plane waves, and aluminium's six bands on a
+15 Ry grid — did not move at all, and the two whose grid is large nearly halved.
+Anything else would have been evidence that the change was not what its
+explanation says it is.
+
+`metal` reads worse than it did and it is not this change: at the commit before
+it the same input measures 0.128–0.134 s against 0.133–0.135 s after, so the
+25% is older than this entry and belongs to the spin-orbit or the forces work.
+Ten k-points of six bands each is the regime where nothing is large enough to
+amortise a dispatch, and it is the case backlog item 1 exists for.
+
+**A caution about this table that cost an hour to relearn.** `si8-paw-pbe-1k`
+was measured at 3.5x here and at 1.7x twenty minutes later with neither code
+changed — QE's own time for the same binary swung between 0.51 s and 1.08 s.
+Every ratio in this file is a quotient of two measurements each carrying ±20%,
+so a *pair* of runs taken together is the only comparison that means anything,
+and a ratio that moves without a code change is the machine, not the code.
 
 and, for ultrasoft and PAW (2026-08-19, `ecutwfc = 20`, `ecutrho = 160`):
 
-| | QE 7.5 | pypresso | ratio |
-|---|---|---|---|
-| **`si2-us-1k`** — 2 atoms, 395 PWs, 9185 G | 0.024 s | 0.051 s | **2.2x** |
-| **`si2-paw-1k`** — the same, PAW | 0.044 s | 0.080 s | **1.8x** |
-| **`si8-us-1k`** — 8 atoms, 1607 PWs, 36257 G | 0.124 s | 0.355 s | **2.9x** |
-| **`si8-paw-1k`** — the same, PAW | 0.172 s | 0.477 s | **2.8x** |
+| | QE 7.5 | pypresso | ratio | before |
+|---|---|---|---|---|
+| **`si2-us-1k`** — 2 atoms, 395 PWs, 9185 G | 0.021 s | 0.049 s | **2.3x** | 2.2x |
+| **`si2-paw-1k`** — the same, PAW | 0.034 s | 0.083 s | **2.4x** | 1.8x |
+| **`si8-us-1k`** — 8 atoms, 1607 PWs, 36257 G | 0.121 s | 0.327 s | **2.7x** | 2.9x |
+| **`si8-paw-1k`** — the same, PAW | 0.173 s | 0.484 s | **2.8x** | 2.8x |
+
+None of these four moved by more than the spread. That is what it looks like
+when the box is small: at `dual = 8` the *dense* grid is large but the
+wavefunctions live on the smooth one, and it is the smooth box a band is
+transformed in. The augmentation charge, `newd` and the one-centre terms are
+dense-grid work that no band loop touches.
 
 and, for the gradient-corrected functionals (2026-08-19, PBE). All four rows were
 measured in one session, the local ones re-run alongside the PBE ones, so each
@@ -73,6 +96,13 @@ gradient correction cost" question has an answer:
 | **`si8-pbe-1k`** — the same cell, PBE | 0.025 s | 0.077 s | **3.1x** |
 | **`si8-paw-1k`** — 8 atoms, PAW, LDA | 0.170 s | 0.479 s | **2.8x** |
 | **`si8-paw-pbe-1k`** — the same cell, PBE | 0.529 s | 0.841 s | **1.6x** |
+
+Re-measured 2026-08-20: `si8-pbe-1k` is 0.025 s against 0.049 s, **2.0x**, and
+`si8-paw-pbe-1k` is **1.7x** — from an interleaved pair, because this is the one
+case in the file whose QE side is not reproducible run to run (see the caution
+above the first table). The conclusions below are unchanged; the gradient
+correction is still nearly free on the grid and still cheaper here than in the
+Fortran on a PAW sphere.
 
 (`si8-1k` reads 0.064 s in the table above and 0.074 s here, on the same machine
 and the same input. That ~15% between sessions is the spread this measurement
@@ -394,6 +424,16 @@ The test suite is a side beneficiary: 134 s to 57 s.
 
 ## What the remaining 3x is made of
 
+**Superseded 2026-08-20; kept because point 2 was wrong in an instructive way.**
+This section concluded that FFT *throughput* was near a floor, and it was right
+about that and wrong about what followed from it. The transform was not slow per
+plane; there were simply far more bytes moving through it than there needed to
+be, and no per-plane measurement could see that (see "The band a transform holds
+is the working set"). The lesson is that "we are at the library's floor" is a
+statement about one operation, never about the program — the question left
+unasked was how much memory the operation was being handed. The ratios below are
+also from before that change; the current ones are in the first table.
+
 Everything below the top item has now been either done or measured and rejected,
 so what is left is short. Per Davidson step at 1131 plane waves:
 
@@ -561,7 +601,16 @@ anything about either code having changed by more than a millisecond.
 Why a length-one `vmap` costs nothing here: XLA sees the batch dimension at trace
 time, and a batch of one collapses in the same pass that would otherwise fuse the
 elementwise work. The Python loop over channels is host-side and runs once per
-iteration. What *would* have cost something is a `lax.scan` or a dynamic branch
+iteration.
+
+**That paragraph is true of the spin axis and false in general, and the
+difference cost 37% of a Davidson solve for a day.** What collapses for free is
+a width-one batch over *elementwise* work, which is all the spin axis carries
+here — `sum_band`, `v_of_rho`, the symmetrisation. A width-one batch over a
+matrix product, a `eigh` or a `dynamic_update_slice` does not collapse: XLA
+lowers it to the *batched* kernel, and the batched kernel at width one is much
+slower than the plain one. The Davidson body is nothing but those. See "A batch
+of one is not a batch" below. What *would* have cost something is a `lax.scan` or a dynamic branch
 over the spin index, and neither is there -- `nspin` is static, which is the
 whole reason it is an `eqx.field(static=True)` on `System`.
 
@@ -677,6 +726,108 @@ factor of thirty was not in the algorithm, the arithmetic or the language. It
 was one radial integration repeated per atom instead of per species, in a term
 whose *value* is ~1e-7 Ry/bohr and which nobody thought to time.
 
+## The band a transform holds is the working set
+
+**QE's own clock report is what found this, and it is the reason to read it
+rather than to profile only this side.** `pw.x` prints the call count next to
+every timer, so `h_psi`, `vloc_psi` and `fftw` can be divided out and the two
+codes compared per unit of work instead of per SCF iteration — which is the
+comparison that matters, since the two do not take the same number of iterations
+or the same number of Davidson steps.
+
+| | QE | pypresso, before | |
+|---|---|---|---|
+| `h_psi`, `si8-1k-ecut30`, 16 bands | 14.5 ms | 24.1 ms | 1.7x |
+| `h_psi`, `si16-1k-ecut30`, 32 bands | 51.3 ms | 169.6 ms | **3.3x** |
+| one wave FFT, 8 atoms | 0.43 ms | 0.71 ms | 1.7x |
+| one wave FFT, 16 atoms | 0.72 ms | 2.65 ms | **3.7x** |
+
+**A gap that grows with the box is not an arithmetic gap.** Per plane, XLA's
+36x36 transform is within 1.4x of FFTW and there is no factor of three anywhere
+in it; what changed between the two rows is only how much memory the operation
+touches at once. `vloc_psi_k` walks its bands one at a time — `DO ibnd = 1, m`
+around a single `invfft` — and this code transformed the whole block in one
+call. One band's real-space box on the sixteen-atom cell is 1.5 MB and
+thirty-two of them are 48 MB, so the batched form streamed the array from
+memory on every pass where the looped one stays in cache.
+
+Walking them instead, measured on `h_psi`'s local term:
+
+| case | all bands | one at a time | |
+|---|---|---|---|
+| `si16-1k-ecut30` | 153.9 ms | 62.0 ms | **2.48x** |
+| `si16-1k` | 23.5 ms | 13.9 ms | 1.69x |
+| `si8-1k-ecut30` | 23.1 ms | 13.9 ms | 1.66x |
+| `si8-1k` | 4.2 ms | 3.7 ms | 1.14x |
+| `si-1k` | 0.31 ms | 0.34 ms | 0.91x |
+
+The one case that loses is the 180-plane-wave cell, where the whole box is
+70 kB and the only thing a loop can add is dispatch. That monotone ordering by
+box size is the evidence that the explanation is the right one — no arithmetic
+change produces it. `sum_band` gets the same treatment for the same reason
+(`calc.density` 119 → 47 ms on the sixteen-atom cell), and the band axis is now
+a dial beside the k axis (`pypresso/batching.py`, `PYPRESSO_BAND_BATCH`),
+defaulting to QE's loop, with the batched end kept working for the GPU — which
+wants the batch that a cache does not.
+
+Intermediate profile that made the search finite, `si8-1k-ecut30` per SCF
+iteration before the change: diagonalise 69%, density 9%, potential 8%, the
+first wavefunctions 8%; and inside a Davidson step, `h_psi` 65% and the subspace
+algebra 35%.
+
+### A batch of one is not a batch
+
+Found on the way, and independent of the above. `k_batch = 1` is the default —
+QE's `k_loop` — and it was implemented as a batch axis of width one:
+`jax.vmap` when `nk = 1`, and `lax.map(..., batch_size=1)` otherwise, which
+JAX *defines* as a scan over `vmap(fn)` of one-element chunks. Four ways of
+running one Davidson solve on `si8-1k-ecut30`:
+
+| | |
+|---|---|
+| direct call, no map | **110 ms** |
+| `jax.vmap` over `nk = 1` | 150 ms |
+| `lax.map`, plain scan | **108 ms** |
+| `lax.map(batch_size=1)` | 151 ms |
+
+37%, and it was being paid on every k-point of every run. Not on the FFTs —
+`h_psi` measures 22.1 ms batched and 22.2 ms not — but on the subspace algebra,
+which is a third of a Davidson step and every part of it a small dense
+operation that XLA lowers to a batched kernel the moment there is an axis to
+batch. `batch = 1` now means *no batch axis*: a direct call at one k-point, a
+plain `lax.map` beyond that.
+
+### One evaluation of the functional, not two
+
+`v_xc` is the derivative of `rho e_xc` and `e_xc` is the same expression's
+forward value, and they were being computed by two separate passes over the
+grid — two cube roots, two logs and two square roots per point. `value_and_grad`
+with the energy density as an auxiliary output returns both for the cost of the
+derivative. It is exact rather than an approximation because the local
+functional is a function of `|rho|` alone, so the absolute value the potential
+needs is also where the energy density is wanted. `exchange_correlation`
+7.3 → 3.5 ms, `v_of_rho` 8.0 → 5.5 ms.
+
+### What was tried and rejected
+
+* **`diago_david_ndim` 4 → 3.** Worth 12% of a whole SCF on the eight-atom cell
+  and 7% on the sixteen-atom one, and not landed, for two independent reasons.
+  It changed a validated number: a band-structure run has no SCF around it to
+  re-seed a root left short, and on the bismuthene spin-orbit path the Kramers
+  splitting — degenerate by symmetry, so a pure measure of solver error — went
+  from below 1e-6 eV to 5.9e-6. And by the time that was understood the speed
+  was gone too, because the 12% had been measured before the band loop existed
+  and the two are the same saving: it was in the cache, not in the flop count.
+  The reasoning is kept in `solvers/davidson.py`.
+* **Reshaping `(lead, n3, n1, n2)` to `(lead·n3, n1, n2)` around the 2D pass.**
+  Looked like 1.1–1.4x in two measurements and is 0.93–1.12x across nine grid
+  sizes, i.e. nothing. Both early readings were closures over constants that
+  XLA folded.
+* **Shrinking the `h_psi` block to `notcnv`**, as `cegterg` does. The blocks are
+  genuinely full: instrumenting the run shows 16 nonzero rows of 16 on all but
+  two of nineteen calls, because the SCF's `ethr` schedule means roots converge
+  together rather than one at a time.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -731,3 +882,6 @@ measurements, before being implemented. See "QE's FFT layout" above.)
 | 2026-08-19 | LSDA: a leading spin axis on the density, potential, `becsum`, `D_ij` and the wavefunctions | no change to the unpolarized path (`si-1k` 0.011 → 0.010 s, `si8-1k` unchanged) |
 | 2026-08-20 | Spin-orbit coupling (P14): spinor wavefunctions, `j`-resolved projectors | one Hamiltonian on a doubled space; a nonmagnetic run keeps `nspin_mag = 1`, so the density, potential and XC paths are untouched |
 | 2026-08-20 | The k axis chunked as QE's `k_loop`, default one k-point (`pypresso/batching.py`) | converged bismuthene 44.9 → 22.5 s/iteration and 4.91 → 3.16 GB; 9% slower on `metal.in`'s ten cheap k-points |
+| 2026-08-20 | The band axis chunked as `vloc_psi_k`'s `DO ibnd`, default one band (`map_bands`/`sum_bands`) | `h_psi` local term 2.48x at 16 atoms, 1.66x at 8, 0.91x at 180 PWs; `si16-1k-ecut30` 4.2 → 2.5x against QE |
+| 2026-08-20 | `batch = 1` stops meaning a width-one batch axis: direct call at `nk = 1`, plain `lax.map` beyond | 37% of a Davidson solve, on every k-point of every run |
+| 2026-08-20 | `v_xc` and `e_xc` from one `value_and_grad` pass instead of two evaluations | `exchange_correlation` 7.3 → 3.5 ms |
