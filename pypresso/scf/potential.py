@@ -177,23 +177,22 @@ def exchange_correlation(
     density = valence if rho_core is None else valence + with_core(jnp.real(rho_core), nspin)
     n = density[0].size
 
+    # ``v_xc`` and ``e_xc`` come out of one evaluation of the functional rather
+    # than two: the potential is the derivative of ``rho e_xc`` and its forward
+    # value carries ``e_xc`` along with it. QE gets both from one call to
+    # ``xc_lda`` for the same reason, having written the derivative down by
+    # hand.
     if nspin == 1:
-        v = functional.potential(density[0])[None]
-        energy = (
-            cell.volume / n
-            * jnp.sum(density[0] * functional.energy_density(density[0]))
-        )
+        potential, energy_density = functional.potential_and_energy_density(density[0])
+        v = potential[None]
+        energy = cell.volume / n * jnp.sum(density[0] * energy_density)
         return v, energy
 
     if nspin == 4:
         return _noncollinear_xc(density, cell, functional)
 
-    v = functional.spin_potential(density)
-    energy = (
-        cell.volume
-        / n
-        * jnp.sum(jnp.sum(density, axis=0) * functional.spin_energy_density(density))
-    )
+    v, energy_density = functional.spin_potential_and_energy_density(density)
+    energy = cell.volume / n * jnp.sum(jnp.sum(density, axis=0) * energy_density)
     return v, energy
 
 

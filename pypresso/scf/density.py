@@ -24,7 +24,7 @@ import jax
 import jax.numpy as jnp
 
 from pypresso.basis.fft import g_to_r
-from pypresso.batching import resolve_k_batch, sum_k
+from pypresso.batching import resolve_k_batch, sum_bands, sum_k
 from pypresso.system.cell import Cell
 
 __all__ = ["sum_band", "band_density", "becsum", "spinor_sum_band",
@@ -41,8 +41,13 @@ def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.nd
         weights: ``(nbnd,)`` occupation weights ``wg`` for these bands.
         cell: for the cell volume.
     """
-    field = g_to_r(psi, fft_index, grid)  # (nbnd, n1, n2, n3)
-    return jnp.einsum("b,b...->...", weights, jnp.abs(field) ** 2) / cell.volume
+    def one_band(arrays):
+        state, weight = arrays
+        return weight * jnp.abs(g_to_r(state, fft_index, grid)) ** 2
+
+    # One band at a time, as ``sum_band.f90`` accumulates them: a band's
+    # real-space box is the working set (:mod:`pypresso.batching`).
+    return sum_bands(one_band, (psi, weights)) / cell.volume
 
 
 def sum_band(psi, fft_index, grid, weights, cell: Cell,

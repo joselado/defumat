@@ -75,6 +75,36 @@ __all__ = ["davidson_eigensolver", "davidson_eigensolver_all", "DAVID_NDIM",
 
 #: QE's ``diago_david_ndim``: the subspace may grow to this many times ``nbnd``
 #: before it is collapsed back onto the current eigenvector estimates.
+#:
+#: **Four, as QE has it.** Three was tried, and the episode is worth recording
+#: because both halves of it were surprises. ``INPUT_PW.txt`` says to use four
+#: "if the time spent in subspace diagonalization is small compared to the time
+#: spent in ``h_psi``", and at the time it was not -- that algebra is
+#: ``O(nvecx nbnd npw)`` matrix products sized by ``nvecx``, since the shapes
+#: must be static, where ``cegterg`` sizes its ZGEMMs by the *live* basis. Three
+#: was then worth 12% of a whole SCF on the eight-atom cell and 7% on the
+#: sixteen-atom one.
+#:
+#: It is four anyway, for two independent reasons.
+#:
+#: It **changed a validated number**. A band-structure run has no SCF around it:
+#: the SCF re-seeds this solver from the previous iteration and re-runs it ten
+#: times on a tightening ``ethr``, so a root left slightly short is corrected on
+#: the next pass, while ``non_scf`` gets one attempt. Combined with a
+#: convergence test that watches the *change* in an eigenvalue rather than its
+#: residual -- QE's test, and a weak proxy (see :data:`RESIDUAL_THRESHOLD`) -- a
+#: smaller workspace collapses more often, consecutive estimates sit closer
+#: together, and the test fires while the error is larger. That showed up
+#: exactly where it should: on the bismuthene spin-orbit path, Kramers pairs are
+#: degenerate by symmetry and so measure nothing but solver error, and they went
+#: from below 1e-6 eV to 5.9e-6. Every SCF regression passed; only the one-shot
+#: solve moved.
+#:
+#: And by the time that was understood the **speed was gone too**. The 12% was
+#: measured before ``h_psi`` began walking its bands one at a time
+#: (:mod:`pypresso.batching`); with that in, three and four are within the
+#: run-to-run spread of each other on both cells. The saving had been in the
+#: cache, not in the flop count, and the band loop had already collected it.
 DAVID_NDIM = 4
 
 #: Total budget of Davidson steps, matching QE's.

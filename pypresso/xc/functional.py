@@ -241,6 +241,31 @@ class Functional(eqx.Module):
         potential = jax.grad(lambda r: jnp.sum(r * self.energy_density(r)))(rho)
         return jnp.where(rho > RHO_THRESHOLD, potential, 0.0)
 
+    def potential_and_energy_density(self, rho: jnp.ndarray):
+        """``(v_xc, e_xc)`` from one pass, not two.
+
+        :meth:`potential` differentiates ``sum(rho e_xc(rho))`` and
+        :meth:`energy_density` evaluates ``e_xc`` -- the same transcendentals
+        (a cube root, a log and a square root per grid point) twice over. The
+        forward value of the differentiated expression already contains
+        ``e_xc``, so ``value_and_grad`` with an auxiliary output returns both
+        for the cost of the derivative alone.
+
+        The two are the same numbers the separate methods give, exactly: the
+        local functional is a function of ``|rho|`` alone
+        (:func:`pypresso.xc.lda.wigner_seitz_radius`), so evaluating it at the
+        absolute value the potential needs also gives the energy density the
+        *signed* density is then multiplied by.
+        """
+        rho = jnp.abs(jnp.asarray(rho))
+
+        def total(r):
+            energy_density = self.energy_density(r)
+            return jnp.sum(r * energy_density), energy_density
+
+        (_, energy_density), potential = jax.value_and_grad(total, has_aux=True)(rho)
+        return jnp.where(rho > RHO_THRESHOLD, potential, 0.0), energy_density
+
     # --- the gradient correction ---------------------------------------------
 
     def gradient_energy(self, rho: jnp.ndarray, sigma: jnp.ndarray) -> jnp.ndarray:
@@ -325,6 +350,24 @@ class Functional(eqx.Module):
             return jnp.sum(density * self._spin_energy_density(density, polarization))
 
         return jnp.where(active, jax.grad(total)(channels), 0.0)
+
+    def spin_potential_and_energy_density(self, rho: jnp.ndarray):
+        """``(v_xc, e_xc)`` for the polarized case, from one pass.
+
+        The unpolarized :meth:`potential_and_energy_density`'s reasoning, with
+        the pair of channels in place of the single density.
+        """
+        active, arho, zeta = _spin_channels(rho)
+        channels = jnp.stack([0.5 * arho * (1.0 + zeta), 0.5 * arho * (1.0 - zeta)])
+
+        def total(pair):
+            density = pair[0] + pair[1]
+            polarization = (pair[0] - pair[1]) / jnp.maximum(density, RHO_THRESHOLD)
+            energy_density = self._spin_energy_density(density, polarization)
+            return jnp.sum(density * energy_density), energy_density
+
+        (_, energy_density), potential = jax.value_and_grad(total, has_aux=True)(channels)
+        return jnp.where(active, potential, 0.0), energy_density
 
     def _spin_energy_density(self, arho, zeta):
         """``e_x + e_c`` per electron at a positive density and its polarization.

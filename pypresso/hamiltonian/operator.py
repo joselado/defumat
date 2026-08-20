@@ -36,6 +36,7 @@ import equinox as eqx
 import jax.numpy as jnp
 
 from pypresso.basis.fft import g_to_r, gather_from_box, r_to_sticks, sticks_to_r
+from pypresso.batching import map_bands
 from pypresso.pseudo.projectors import Projectors
 
 __all__ = ["Hamiltonian"]
@@ -181,17 +182,30 @@ class Hamiltonian(eqx.Module):
         contiguous so the 2D pass is cheap. The fallback transforms the whole
         box in one fused call, which is what everything did before the layout
         existed and is still what the dense-grid quantities use.
+
+        **The bands are walked, not batched**, because a band's real-space box
+        is the working set and a block of them is not -- ``vloc_psi_k``'s
+        ``DO ibnd = 1, m`` is worth 2.5x on the sixteen-atom cell for that
+        reason alone. :func:`pypresso.batching.map_bands` is the dial, and it
+        changes nothing but the order the transforms are issued in.
         """
         if self.sticks is None:
-            field = g_to_r(psi, self.fft_index[ik], self.grid)
-            product = field * self.potential
             n = self.grid[0] * self.grid[1] * self.grid[2]
-            box = jnp.fft.fftn(product, axes=(-3, -2, -1)) / n
-            return gather_from_box(box, self.fft_index[ik])
+
+            def block(states):
+                field = g_to_r(states, self.fft_index[ik], self.grid)
+                box = jnp.fft.fftn(field * self.potential, axes=(-3, -2, -1)) / n
+                return gather_from_box(box, self.fft_index[ik])
+
+            return map_bands(block, psi)
 
         columns, index = self.sticks.columns[ik], self.sticks.index[ik]
-        field = sticks_to_r(psi, self.sticks, columns, index)
-        return r_to_sticks(field * self.potential_wave, self.sticks, columns, index)
+
+        def block(states):
+            field = sticks_to_r(states, self.sticks, columns, index)
+            return r_to_sticks(field * self.potential_wave, self.sticks, columns, index)
+
+        return map_bands(block, psi)
 
     def _nonlocal(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``sum_ij |beta_i> D_ij <beta_j|psi>``."""
