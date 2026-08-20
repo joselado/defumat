@@ -14,6 +14,7 @@ that way.
 | [`05_gradient_corrections.ipynb`](05_gradient_corrections.ipynb) | Gradient-corrected functionals: how QE composes a functional out of four slots, PBE's enhancement factor, both potential terms from `jax.grad` against QE's hand-derived algebra, the divergence term on the grid and on a PAW sphere, PBE/revPBE/PBEsol against QE on all three kinds of pseudopotential (≤6e-9 Ry), and the band structure (0.05 meV) | P13 |
 | [`06_density_of_states.ipynb`](06_density_of_states.ipynb) | The density of states: why it is an NSCF run on a denser grid, the smeared delta as `jax.jvp` of the occupation function, `D(E)` as `jax.grad` of `N(E)`, silicon's gap as the thing that separates the two schemes, all three tetrahedron variants against QE's aluminium benchmarks (2.5e-8 Ry, and Fermi levels exact to QE's four decimals), and the NaN that appears only in the gradient; then nickel's spin-resolved DOS, where the Fermi level is found from both channels at once and the moment comes back out of the integrated curves | P8, P9 |
 | [`07_spin_polarization.ipynb`](07_spin_polarization.ipynb) | LSDA: which parts of the energy split between the spin channels and which do not, exchange by the spin-scaling relation and correlation by interpolation, an oxygen atom with its occupations fixed by hand, nickel's magnetic moment and the exchange splitting of its d bands, the non-monotonic occupation that makes a spin-polarized metal's Fermi level a trap, and constraining the magnetization with two Fermi levels | P9 |
+| [`08_spin_orbit_coupling.ipynb`](08_spin_orbit_coupling.ipynb) | Spin-orbit coupling: why a spinor needs three spin numbers where a collinear code needs one, the `j`-resolved projectors a fully-relativistic pseudopotential keeps and a scalar one throws away, `fcoef` verified as a shell projector rather than against a reference, the identity that gates the whole spinor path (switch the coupling off and the collinear answer must come back term by term), platinum's 5d splitting and Kramers degeneracy against QE, and **bismuthene** -- a quantum spin Hall insulator whose half-electronvolt gap is made of nothing but the spin-orbit coupling | P14 |
 
 ## Conventions
 
@@ -46,7 +47,15 @@ inputs and their QE references are committed under `tests/data/qe/`, because no 
 QE ships covers the ultrasoft, PAW and PBE datasets they use, so they run without the
 vendored tree. `07` is a mixture: its inputs come from the vendored tree but every
 reference it compares against is committed, since QE's own benchmarks for those cases stop
-at `conv_thr = 1e-6` and their printed energy terms are only good to about 1e-4 Ry.
+at `conv_thr = 1e-6` and their printed energy terms are only good to about 1e-4 Ry. `08`
+is a mixture for the same reason, and its bismuthene half -- input *and* reference -- is
+committed, since QE ships no benchmark for it.
+
+`08` runs bismuthene at the test-sized cutoff (20 Ry, 6x6x1) rather than the converged
+one (35 Ry, 12x12x1). Both pairs are committed with their own QE references, and the
+small pair is what the regression tests check and what `PLAN.md`'s P14 entry quotes.
+Switching the notebook to the converged pair is one variable, `SIZE`, at the cost of about
+forty minutes in total and a peak of 9.4 GB.
 
 After changing code the notebooks depend on, re-execute them and refresh the exports:
 
