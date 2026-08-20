@@ -26,7 +26,12 @@ import numpy as np
 from pypresso.basis.gvectors import GVectors
 from pypresso.basis.planewaves import PlaneWaveBasis
 from pypresso.pseudo.formfactors import atomic_form_factors
-from pypresso.pseudo.projectors import _angular_part, _assemble, _radial_table
+from pypresso.pseudo.projectors import (
+    _angular_part,
+    _apply_phases,
+    _radial_table,
+    _species_columns,
+)
 from pypresso.pseudo.upf import Pseudopotential
 from pypresso.system.cell import Cell
 from pypresso.system.kpoints import KPoints
@@ -98,16 +103,23 @@ def atomic_wavefunctions(
             l_of.append(l)
             atom_of.append(atom)
 
-    # The same assembly as the projectors, with i^l in place of (-i)^l.
-    wfc = _assemble(
-        kg,
+    # The same assembly as the projectors, with i^l in place of (-i)^l. The
+    # columns are built per *atom* channel here rather than per species channel:
+    # the atomic orbitals are a starting guess built once, so there is nothing
+    # to be saved by keeping the phase separable.
+    columns = _species_columns(
         ylm,
         radial,
-        structure.positions,
-        planewaves.mask,
         jnp.asarray(chi_of),
         jnp.asarray(lm_of),
-        jnp.asarray(atom_of),
         jnp.asarray((1j) ** np.asarray(l_of)),
+    )
+    wfc = _apply_phases(
+        columns,
+        kg,
+        structure.positions,
+        planewaves.mask,
+        jnp.asarray(atom_of),
+        jnp.arange(len(atom_of)),
     )
     return jnp.transpose(wfc, (0, 2, 1)).astype(cell.precision.complex)

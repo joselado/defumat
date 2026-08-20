@@ -79,6 +79,11 @@ RESTAMPED = [
     "pw_spinorbit/spinorbit.in",
     "pw_spinorbit/spinorbit-pbe.in",
     "pw_spinorbit/spinorbit-paw.in",
+    # Structural relaxation (P15). QE's own two-atom relax: a CO molecule with
+    # the oxygen frozen by ``if_pos``, ultrasoft, at Gamma. Its committed
+    # benchmark is a QE 6.1 run, and a relaxation's *final geometry* is what is
+    # compared, so it is regenerated with the vendored pw.x like the rest.
+    "pw_relax/relax.in",
 ]
 
 

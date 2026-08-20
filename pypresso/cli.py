@@ -4,7 +4,9 @@
 fastest way to see what a comparison is being made against. ``dos`` runs the
 sequence a density of states actually is -- SCF, then NSCF on a denser grid,
 then the Brillouin-zone integration -- and writes ``dos.x``'s ``.dos`` file.
-The ``scf``/``bands`` subcommands land with their phases.
+``relax`` runs the SCF/force/move loop of a ``calculation = 'relax'`` input and
+prints the geometry it ends on. The ``scf``/``bands`` subcommands land with
+their phases.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from pypresso.scf import run_scf
 from pypresso.system import build_system
 from pypresso.units import RY_TO_EV
 from pypresso.workflows import run_dos
+from pypresso.workflows.relax import run_relax
 
 
 def _inspect(path: str) -> int:
@@ -104,6 +107,43 @@ def _dos(args) -> int:
     return 0
 
 
+def _relax(args) -> int:
+    """The ionic loop: SCF, forces, move, repeat -- ``calculation = 'relax'``."""
+    input_path = Path(args.input)
+    pseudo_dir = Path(args.pseudo_dir) if args.pseudo_dir else input_path.parent
+    pwin = read_pw_input(input_path)
+    system = build_system(pwin)
+    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
+
+    # The input's own thresholds, unless the command line overrides them: a
+    # relax input carries three, and silently using different ones would make
+    # the run incomparable with the pw.x run of the same file.
+    def _from_input(section, name, fallback):
+        value = pwin.get(section, name)
+        return fallback if value is None else float(value)
+
+    result = run_relax(
+        system,
+        pseudos,
+        conv_thr=args.conv_thr or _from_input("electrons", "conv_thr", 1e-6),
+        etot_conv_thr=args.etot_conv_thr or _from_input("control", "etot_conv_thr", 1e-4),
+        forc_conv_thr=args.forc_conv_thr or _from_input("control", "forc_conv_thr", 1e-3),
+        nstep=args.nstep or int(_from_input("control", "nstep", 50)),
+        force_method=args.force_method,
+        ion_dynamics=args.ion_dynamics,
+        verbose=args.verbose,
+    )
+
+    print(f"  ionic steps      {result.nsteps}"
+          f"{'' if result.converged else '  (NOT converged)'}")
+    print(f"  total energy     {result.total_energy:.8f} Ry")
+    print(f"  max |F|          {np.abs(result.forces).max():.6f} Ry/bohr")
+    print("  final positions (bohr):")
+    for symbol, position in zip(result.system.structure.symbols, result.positions):
+        print(f"    {symbol:<4s} " + " ".join(f"{x:16.10f}" for x in position))
+    return 0 if result.converged else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pypresso", description=__doc__.splitlines()[0])
     parser.add_argument("--version", action="version", version=f"pypresso {__version__}")
@@ -131,11 +171,28 @@ def main(argv: list[str] | None = None) -> int:
                           "default), 'all' is one vmap over the whole axis, which is "
                           "faster and needs proportionally more memory")
 
+    relax = sub.add_parser("relax", help="relax the atomic positions at fixed cell")
+    relax.add_argument("input", help="path to a pw.x input file")
+    relax.add_argument("--pseudo-dir", help="where the UPF files are (default: beside the input)")
+    relax.add_argument("--conv-thr", type=float, help="SCF threshold in Ry (default: the input's)")
+    relax.add_argument("--etot-conv-thr", type=float,
+                       help="energy threshold for the relaxation, Ry (default: the input's)")
+    relax.add_argument("--forc-conv-thr", type=float,
+                       help="force threshold, Ry/bohr (default: the input's)")
+    relax.add_argument("--nstep", type=int, help="maximum ionic steps (default: the input's)")
+    relax.add_argument("--force-method", choices=("autodiff", "analytic"),
+                       help="how the forces are computed (default: autodiff)")
+    relax.add_argument("--ion-dynamics", help="which optimizer moves the ions (default: bfgs)")
+    relax.add_argument("-v", "--verbose", action="store_true",
+                       help="print each SCF iteration and each ionic step")
+
     args = parser.parse_args(argv)
     if args.command == "inspect":
         return _inspect(args.path)
     if args.command == "dos":
         return _dos(args)
+    if args.command == "relax":
+        return _relax(args)
     parser.error(f"unhandled command {args.command}")  # pragma: no cover
 
 

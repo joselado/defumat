@@ -38,7 +38,8 @@ from pypresso.system.cell import Cell
 from pypresso.system.kpoints import KPoints
 from pypresso.system.structure import Structure
 
-__all__ = ["Projectors", "build_projectors", "projector_channels"]
+__all__ = ["Projectors", "ProjectorCore", "build_projectors", "build_projector_core",
+           "projector_channels"]
 
 
 def projector_channels(pseudo: Pseudopotential) -> list[tuple[int, int, int]]:
@@ -82,20 +83,71 @@ class Projectors(eqx.Module):
         return jnp.einsum("...g,gk->...k", psi.conj(), self.vkb[ik]).conj()
 
 
-def build_projectors(
+class ProjectorCore(eqx.Module):
+    """``<k+G|beta>`` with the structure factor left out.
+
+    The angular part, the radial form factor and the ``(-i)^l`` phase depend on
+    the *species* of an atom and not on where it is; only ``e^{-i(k+G).tau}``
+    does. Holding the two apart is what lets a moved geometry rebuild the
+    projectors for the cost of one complex exponential per atom
+    (:meth:`at_positions`), and it is what makes the projectors a
+    differentiable function of the positions without recomputing the radial
+    integrals inside the gradient.
+
+    **Memory.** ``columns`` is ``(nk, npwx, sum_t nh_t)`` complex -- one entry
+    per *species* channel, where ``vkb`` has one per *atom* channel. For a cell
+    with several atoms of the same species it is therefore smaller than the
+    ``vkb`` it builds, by the multiplicity of that species.
+    """
+
+    #: ``(nk, npwx, ncs)``: the phase-free columns, one per species channel.
+    columns: jnp.ndarray
+    #: ``(nk, npwx, 3)``: ``k + G``, which the phase needs.
+    kg: jnp.ndarray
+    mask: jnp.ndarray  # (nk, npwx), which plane waves exist at each k
+    dij: jnp.ndarray  # (nkb, nkb), Ry
+    #: For each of the ``nkb`` channels, which atom it sits on and which column
+    #: of :attr:`columns` it takes its species-dependent part from.
+    atom_of_channel: tuple[int, ...] = eqx.field(static=True)
+    column_of_channel: jnp.ndarray = eqx.field(converter=jnp.asarray)
+    complex_dtype: object = eqx.field(static=True, default=None)
+
+    def at_positions(self, positions: jnp.ndarray, qq=None) -> Projectors:
+        """The projectors for atoms at ``positions`` (cartesian, bohr)."""
+        vkb = _apply_phases(
+            self.columns, self.kg, positions, self.mask,
+            jnp.asarray(self.atom_of_channel), self.column_of_channel,
+        )
+        return Projectors(
+            vkb=vkb.astype(self.complex_dtype),
+            dij=self.dij,
+            atom_of_channel=self.atom_of_channel,
+            qq=qq,
+        )
+
+
+def build_projector_core(
     pseudos: tuple[Pseudopotential, ...],
     structure: Structure,
     cell: Cell,
     gvectors: GVectors,
     planewaves: PlaneWaveBasis,
     kpoints: KPoints,
-) -> Projectors:
-    """Assemble ``<k+G|beta>`` for every k-point, atom and channel."""
+) -> ProjectorCore:
+    """Everything in ``<k+G|beta>`` except where the atoms are."""
     channels_by_species = [projector_channels(p) for p in pseudos]
     nkb = sum(len(channels_by_species[t]) for t in structure.types)
     if nkb == 0:
         empty = jnp.zeros((kpoints.nk, planewaves.npwx, 0), dtype=cell.precision.complex)
-        return Projectors(vkb=empty, dij=jnp.zeros((0, 0)), atom_of_channel=())
+        return ProjectorCore(
+            columns=empty,
+            kg=jnp.zeros((kpoints.nk, planewaves.npwx, 3)),
+            mask=planewaves.mask,
+            dij=jnp.zeros((0, 0)),
+            atom_of_channel=(),
+            column_of_channel=jnp.zeros((0,), dtype=int),
+            complex_dtype=cell.precision.complex,
+        )
 
     lmax = max(p.lmax for p in pseudos)
     kg, kg_norm, ylm = _angular_part(
@@ -112,37 +164,56 @@ def build_projectors(
     radial = _radial_table(form_factors, shape)
     beta_offset = np.cumsum([0] + [f.shape[0] for f in form_factors])
 
-    # One row per projector channel, in QE's order: atoms outermost, then the
-    # channels of that atom's species. Everything the assembly needs is an index
-    # into an already-computed array, so it is three gathers and two products
-    # rather than four operations per channel.
-    beta_of, lm_of, l_of, atom_of = [], [], [], []
-    dij_blocks = []
-    for atom, species in enumerate(structure.types):
-        for nb, l, lm in channels_by_species[species]:
+    # One column per *species* channel, in the order the species are declared;
+    # an atom's channels then select from it by index.
+    beta_of, lm_of, l_of = [], [], []
+    column_offset = [0]
+    for species, channels in enumerate(channels_by_species):
+        for nb, l, lm in channels:
             beta_of.append(beta_offset[species] + nb)
             lm_of.append(lm)
             l_of.append(l)
-            atom_of.append(atom)
-        dij_blocks.append(_expand_dij(pseudos[species], channels_by_species[species]))
+        column_offset.append(len(beta_of))
 
-    vkb = _assemble(
-        kg,
-        ylm,
-        radial,
-        structure.positions,
-        planewaves.mask,
-        jnp.asarray(beta_of),
-        jnp.asarray(lm_of),
-        jnp.asarray(atom_of),
+    columns = _species_columns(
+        ylm, radial,
+        jnp.asarray(beta_of), jnp.asarray(lm_of),
         jnp.asarray((-1j) ** np.asarray(l_of)),
     )
 
-    return Projectors(
-        vkb=vkb.astype(cell.precision.complex),
+    # One row per projector channel, in QE's order: atoms outermost, then the
+    # channels of that atom's species.
+    atom_of, column_of, dij_blocks = [], [], []
+    for atom, species in enumerate(structure.types):
+        for index in range(len(channels_by_species[species])):
+            atom_of.append(atom)
+            column_of.append(column_offset[species] + index)
+        dij_blocks.append(_expand_dij(pseudos[species], channels_by_species[species]))
+
+    return ProjectorCore(
+        columns=columns,
+        kg=kg,
+        mask=planewaves.mask,
         dij=jnp.asarray(_block_diagonal(dij_blocks)),
         atom_of_channel=tuple(atom_of),
+        column_of_channel=jnp.asarray(column_of),
+        complex_dtype=cell.precision.complex,
     )
+
+
+def build_projectors(
+    pseudos: tuple[Pseudopotential, ...],
+    structure: Structure,
+    cell: Cell,
+    gvectors: GVectors,
+    planewaves: PlaneWaveBasis,
+    kpoints: KPoints,
+) -> Projectors:
+    """Assemble ``<k+G|beta>`` for every k-point, atom and channel."""
+    core = build_projector_core(
+        pseudos, structure, cell, gvectors, planewaves, kpoints
+    )
+    return core.at_positions(structure.positions)
 
 
 @partial(jax.jit, static_argnames=("lmax",))
@@ -161,16 +232,24 @@ def _radial_table(form_factors, shape):
 
 
 @jax.jit
-def _assemble(kg, ylm, radial, tau, mask, beta_of, lm_of, atom_of, l_phase):
-    """``<k+G|beta>`` for every channel: angular times radial times structure."""
-    phases = jnp.exp(-1j * jnp.einsum("kgc,ac->akg", kg, tau))  # (nat, nk, npwx)
+def _species_columns(ylm, radial, beta_of, lm_of, l_phase):
+    """The angular times radial part of every species channel, ``(nk, npwx, ncs)``."""
     columns = (
-        l_phase[:, None, None]
-        * jnp.take(ylm, lm_of, axis=-1).transpose(2, 0, 1)
-        * jnp.take(radial, beta_of, axis=-1).transpose(2, 0, 1)
-        * phases[atom_of]
+        jnp.take(ylm, lm_of, axis=-1)
+        * jnp.take(radial, beta_of, axis=-1)
     )
-    vkb = jnp.transpose(columns, (1, 2, 0))  # (nk, npwx, nkb)
+    return columns * l_phase
+
+
+@jax.jit
+def _apply_phases(columns, kg, tau, mask, atom_of, column_of):
+    """``<k+G|beta>``: each channel's column times its atom's structure factor.
+
+    The only place the atomic positions enter the nonlocal pseudopotential, and
+    therefore the only place ``grad`` with respect to them has to reach.
+    """
+    phases = jnp.exp(-1j * jnp.einsum("kgc,ac->kga", kg, tau))  # (nk, npwx, nat)
+    vkb = jnp.take(columns, column_of, axis=-1) * jnp.take(phases, atom_of, axis=-1)
     return jnp.where(mask[..., None], vkb, 0.0)
 
 

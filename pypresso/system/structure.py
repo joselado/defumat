@@ -42,6 +42,13 @@ class Structure(eqx.Module):
     types: tuple[int, ...] = eqx.field(static=True)
     species: tuple[Species, ...] = eqx.field(static=True)
     precision: Precision = eqx.field(static=True, default=DEFAULT_PRECISION)
+    #: ``if_pos``: the optional trailing ``0``/``1`` flags of an
+    #: ``ATOMIC_POSITIONS`` line, one per cartesian component of each atom. A
+    #: zero freezes that component during a relaxation -- QE multiplies the
+    #: force by it, so a frozen coordinate feels no force and never moves.
+    #: ``()`` means every coordinate is free. Static: it is an input flag, not a
+    #: quantity anything differentiates.
+    if_pos: tuple[tuple[int, int, int], ...] = eqx.field(static=True, default=())
 
     def __check_init__(self):
         if self.positions.shape[1:] != (3,):
@@ -50,6 +57,17 @@ class Structure(eqx.Module):
             raise ValueError(f"{len(self.types)} types for {self.positions.shape[0]} atoms")
         if self.types and max(self.types) >= len(self.species):
             raise ValueError("a type index points past the end of the species list")
+        if self.if_pos and len(self.if_pos) != self.positions.shape[0]:
+            raise ValueError(
+                f"{len(self.if_pos)} if_pos rows for {self.positions.shape[0]} atoms"
+            )
+
+    @property
+    def free(self) -> np.ndarray:
+        """``if_pos`` as an ``(nat, 3)`` array of ones and zeros."""
+        if not self.if_pos:
+            return np.ones((self.nat, 3))
+        return np.asarray(self.if_pos, dtype=float)
 
     @property
     def nat(self) -> int:
@@ -78,6 +96,7 @@ class Structure(eqx.Module):
         units: str,
         cell: Cell,
         precision: Precision = DEFAULT_PRECISION,
+        if_pos=(),
     ) -> "Structure":
         """Build from an ``ATOMIC_POSITIONS`` card in any of QE's unit systems.
 
@@ -108,4 +127,5 @@ class Structure(eqx.Module):
             types=tuple(int(t) for t in types),
             species=tuple(species),
             precision=precision,
+            if_pos=tuple(tuple(int(v) for v in row) for row in if_pos),
         )

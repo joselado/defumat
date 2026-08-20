@@ -37,12 +37,10 @@ from pypresso.system.structure import Structure
 if TYPE_CHECKING:  # only for annotations: importing it eagerly makes a cycle,
     from pypresso.basis.gvectors import GVectors  # basis -> system -> basis
 
-__all__ = [
-    "is_supercell",
-    "atom_mapping",
-    "cartesian_rotations",
-    "harmonic_rotations","Symmetries", "lattice_point_group", "find_symmetries", "symmetrize_density",
-           "symmetry_maps", "apply_symmetry_maps"]
+__all__ = ["Symmetries", "lattice_point_group", "find_symmetries", "is_supercell",
+           "symmetrize_density", "symmetry_maps", "apply_symmetry_maps",
+           "atom_mapping", "cartesian_rotations",
+           "symmetrize_vector", "check_symmetry"]
 
 _TOLERANCE = 1.0e-6
 
@@ -357,3 +355,56 @@ def cartesian_rotations(cell: Cell, symmetries: Symmetries) -> np.ndarray:
     at = np.asarray(cell.at, dtype=float)
     inverse = np.linalg.inv(at)
     return np.array([(inverse @ m @ at).T for m in symmetries.rotation_array()])
+
+
+def symmetrize_vector(
+    vectors: jnp.ndarray, cell: Cell, symmetries: Symmetries, mapping: np.ndarray
+) -> jnp.ndarray:
+    """Impose the crystal symmetry on a per-atom vector -- ``symvector``.
+
+    ``symme.f90``. The forces are the case this exists for. Averaging over the
+    group is not cosmetic there: a force computed from a symmetry-reduced
+    k-point set is a *vector* built from a sum that is only exact for scalars,
+    so its component along a direction the crystal's symmetry forbids is a
+    residue of the reduction rather than physics. Symmetrising projects it onto
+    the subspace the symmetry allows, and on an undistorted crystal it is what
+    makes the force come out identically zero.
+
+    The vector is taken to crystal axes first, because that is where the
+    rotations are integers -- QE does the same, for the same reason -- and
+    ``mapping`` is ``irt``, which atom each operation sends an atom to
+    (:func:`atom_mapping`).
+
+    Args:
+        vectors: ``(nat, 3)`` cartesian.
+        mapping: ``(nsym, nat)`` from :func:`atom_mapping`.
+    """
+    if symmetries.nsym <= 1:
+        return vectors
+    at = np.asarray(cell.at, dtype=float)
+    rotations = symmetries.rotation_array().astype(float)
+
+    # Covariant components: work_j = a_j . v, which is what the integer
+    # rotations act on.
+    work = vectors @ at.T
+    rotated = jnp.einsum("sij,snj->ni", rotations, work[mapping])
+    return (rotated / symmetries.nsym) @ np.linalg.inv(at).T
+
+
+def check_symmetry(cell: Cell, structure: Structure, symmetries: Symmetries) -> bool:
+    """Whether ``structure`` still has every operation of ``symmetries``.
+
+    ``checkallsym`` in ``PW/src/checkallsym.f90``. QE finds the symmetry group
+    once, at setup, and from then on only checks it -- because the FFT grid and
+    the k-point set were chosen for that group and cannot change underneath a
+    relaxation. This is that check: after an ionic step the moved structure must
+    still be invariant under the operations the run was set up with.
+    """
+    positions = np.asarray(structure.positions_crystal(cell)) % 1.0
+    types = np.asarray(structure.types)
+    for rotation, translation in zip(
+        symmetries.rotation_array(), symmetries.translation_array()
+    ):
+        if not _maps_structure(positions @ rotation + translation, positions, types):
+            return False
+    return True

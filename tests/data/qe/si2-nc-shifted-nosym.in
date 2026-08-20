@@ -1,0 +1,39 @@
+! The displaced silicon of si2-nc-force.in on a *shifted* grid, with no symmetry.
+!
+! This case exists to separate two things that a shifted Monkhorst-Pack grid
+! mixes together, because the difference between them is 1e-4 Ry and it took a
+! relaxation to notice.
+!
+! A shifted grid is **not invariant under every symmetry operation the crystal
+! has**. For this displaced cell, 4 of the 8 operations map the 4x4x4 shifted
+! grid onto itself and 4 do not. A density built from that k-sample therefore
+! does not have the four symmetries the crystal does -- and both this code and
+! Quantum ESPRESSO symmetrise it with a set of operations that includes some it
+! does not have. They pick *different* sets (see PLAN.md, P6), so their totals
+! differ by ~1e-4 Ry, which is a hundred thousand times the agreement everything
+! else in this suite reaches.
+!
+! With `nosym` there is nothing to disagree about: the same 64 k-points, no
+! symmetrisation, and the two codes agree to the last digit either prints. That
+! is what this case pins. It is the evidence that the SCF, the basis and the
+! k-point generation are identical and that the spread above is a choice about
+! symmetry rather than an error in the physics.
+ &control
+    calculation = 'scf'
+    tprnfor = .true.
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=12.0,
+    nosym = .true., noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.27 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 1 1 1

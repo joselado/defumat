@@ -1,0 +1,34 @@
+! The displaced silicon of si2-nc-force.in, relaxed back onto its site.
+!
+! The relaxation this project's tests are held to: the answer is known in
+! advance -- diamond silicon's second atom sits at (1/4, 1/4, 1/4) and nothing
+! else -- so the final geometry can be checked against the crystal as well as
+! against QE. The starting point is 0.02 alat away along x, which is far enough
+! that BFGS takes several steps and near enough that it cannot end up somewhere
+! else.
+!
+! The atoms both move: the force on them is equal and opposite, so what returns
+! to (1/4, 1/4, 1/4) is their *separation*, while the pair drifts along x by
+! half the displacement. That is not a defect of the relaxation -- a periodic
+! crystal has no preferred origin, and the total force being zero is what says
+! so.
+ &control
+    calculation = 'relax'
+    tprnfor = .true.
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=12.0
+ /
+ &electrons
+    conv_thr = 1.0d-8
+ /
+ &ions
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.27 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0

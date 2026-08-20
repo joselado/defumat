@@ -25,7 +25,9 @@ from pypresso.pseudo.upf import Pseudopotential
 from pypresso.system.cell import Cell
 from pypresso.system.structure import Structure
 
-__all__ = ["structure_factors", "local_potential", "starting_charge", "core_charge"]
+__all__ = ["structure_factors", "local_potential", "starting_charge", "core_charge",
+           "species_local_potential", "species_core_charge", "species_atomic_charge",
+           "combine_species"]
 
 
 def structure_factors(
@@ -64,9 +66,61 @@ def _sum_over_species(radial, structure, cell, gvectors) -> jnp.ndarray:
     instead of one dispatch per species.
     """
     gmod = _gmod(gvectors.cartesian(cell))
-    factors = structure_factors(structure, cell, gvectors)
     values = tuple(radial(t, gmod) for t in range(structure.ntyp))
-    return _contract_species(values, factors)
+    return combine_species(values, structure, cell, gvectors)
+
+
+def combine_species(values, structure: Structure, cell: Cell, gvectors: GVectors):
+    """``sum_t f_t(|G|) S_t(G)``, given the per-species radial transforms.
+
+    Separated from :func:`_sum_over_species` because the radial transforms do
+    not depend on where the atoms are and the structure factors are all that
+    does: a moved geometry reuses the tables and pays only for this contraction
+    (:meth:`pypresso.scf.driver.Calculation.at_positions`).
+    """
+    factors = structure_factors(structure, cell, gvectors)
+    return _contract_species(tuple(values), factors)
+
+
+def species_local_potential(
+    pseudos: tuple[Pseudopotential, ...], cell: Cell, gvectors: GVectors
+) -> tuple[jnp.ndarray, ...]:
+    """``vloc_t(|G|)`` for each species, before any structure factor."""
+    gmod = _gmod(gvectors.cartesian(cell))
+    volume = float(cell.volume)
+    return tuple(local_potential_of_g(p, gmod, volume) for p in pseudos)
+
+
+def species_atomic_charge(
+    pseudos: tuple[Pseudopotential, ...], cell: Cell, gvectors: GVectors
+) -> tuple[jnp.ndarray, ...]:
+    """``rho_atomic_t(|G|)`` for each species, before any structure factor.
+
+    The same radial transform :func:`starting_charge` sums into the SCF's
+    starting guess, kept as a per-species table because two other things want
+    it: nothing about it depends on where the atoms are, and QE tabulates it
+    once for exactly that reason (``init_tab_rhoat`` in ``upflib/rhoat_mod.f90``,
+    read back by ``interp_rhoat``). Evaluating it per *atom* instead costs the
+    multiplicity of the species -- eight radial integrations over 36257
+    G-vectors for one silicon species, which was 91% of the analytic force.
+    """
+    gmod = _gmod(gvectors.cartesian(cell))
+    volume = float(cell.volume)
+    return tuple(atomic_charge_of_g(p, gmod, volume) for p in pseudos)
+
+
+def species_core_charge(
+    pseudos: tuple[Pseudopotential, ...], cell: Cell, gvectors: GVectors
+) -> tuple[jnp.ndarray, ...] | None:
+    """``rho_core_t(|G|)`` for each species, or ``None`` if no species has one."""
+    if not any(p.has_nlcc for p in pseudos):
+        return None
+    gmod = _gmod(gvectors.cartesian(cell))
+    volume = float(cell.volume)
+    return tuple(
+        core_charge_of_g(p, gmod, volume) if p.has_nlcc else jnp.zeros_like(gmod)
+        for p in pseudos
+    )
 
 
 @jax.jit

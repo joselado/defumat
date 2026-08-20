@@ -22,6 +22,8 @@ from pathlib import Path
 
 import numpy as np
 
+from pypresso.units import ANGSTROM_TO_BOHR
+
 __all__ = ["QEReference", "read_qe_output"]
 
 _FLOAT = r"[-+]?\d*\.?\d+(?:[EeDd][-+]?\d+)?"
@@ -91,6 +93,23 @@ class QEReference:
     homo: float | None = None  # eV, insulators
     lumo: float | None = None  # eV
     forces: np.ndarray | None = None  # (nat,3) Ry/bohr
+    #: The force broken into its contributions, which ``pw.x`` prints only with
+    #: ``verbosity = 'high'``: ``nonlocal``, ``ionic``, ``local``, ``core``,
+    #: ``hubbard``, ``scf_correction``, each ``(nat, 3)`` in Ry/bohr. Empty when
+    #: the run did not ask for them. Note that QE's *nonlocal* term already has
+    #: the augmentation charge's contribution in it (``addusforce`` is called
+    #: from inside ``force_us``) and is symmetrised on its own.
+    force_terms: dict = field(default_factory=dict)
+    #: The relaxed geometry of a ``calculation = 'relax'`` run, in **bohr**,
+    #: cartesian -- what pw.x prints between "Begin final coordinates" and "End
+    #: final coordinates", converted out of whatever units the card used.
+    final_positions: np.ndarray | None = None
+    #: The energy at that geometry ("Final energy"), in Ry. It is not the same
+    #: number as :attr:`total_energy`, which is the *first* ionic step's.
+    final_energy: float | None = None
+    #: ``(scf cycles, bfgs steps)`` from "bfgs converged in N scf cycles and M
+    #: bfgs steps", or ``None`` for a run that is not a relaxation.
+    bfgs_steps: tuple[int, int] | None = None
     stress: np.ndarray | None = None  # (3,3) Ry/bohr^3
     pressure: float | None = None  # kbar
     n_iterations: int | None = None
@@ -167,6 +186,10 @@ def read_qe_output(path: str | Path) -> QEReference:
         homo=_parse_homo(text),
         lumo=_parse_lumo(text),
         forces=_parse_forces(text),
+        force_terms=_parse_force_terms(text),
+        final_positions=_parse_final_positions(text),
+        final_energy=_scalar(text, r"Final energy\s*=\s*(" + _FLOAT + ")"),
+        bfgs_steps=_parse_bfgs_steps(text),
         stress=stress,
         pressure=pressure,
         n_iterations=_as_int(
@@ -392,12 +415,104 @@ def _parse_lumo(text: str) -> float | None:
 
 
 def _parse_forces(text: str) -> np.ndarray | None:
-    """``atom    1 type  1   force =  fx  fy  fz`` in Ry/bohr."""
-    block = re.search(r"Forces acting on atoms.*?\n((?:.*force\s*=.*\n)+)", text)
+    """``atom    1 type  1   force =  fx  fy  fz`` in Ry/bohr.
+
+    The *first* such block, which is the one belonging to the run's own
+    geometry; a relaxation prints one per ionic step and
+    :func:`_parse_relaxation` collects those.
+    """
+    return _forces_after(text, 0)
+
+
+def _forces_after(text: str, position: int) -> np.ndarray | None:
+    """The first force block at or after ``position`` in ``text``."""
+    block = re.search(
+        r"Forces acting on atoms[^\n]*\n\s*\n((?:\s*atom.*force\s*=.*\n)+)",
+        text[position:],
+    )
     if block is None:
         return None
-    rows = [_floats(line.split("force", 1)[1])[:3] for line in block.group(1).strip().splitlines()]
+    rows = [
+        _floats(line.split("force", 1)[1])[:3]
+        for line in block.group(1).strip().splitlines()
+    ]
     return np.array(rows, dtype=float)
+
+
+#: The headers ``forces.f90`` prints each contribution under, and the names they
+#: are stored under here.
+_FORCE_TERMS = {
+    "The non-local contrib.  to forces": "nonlocal",
+    "The ionic contribution  to forces": "ionic",
+    "The local contribution  to forces": "local",
+    "The core correction contribution to forces": "core",
+    "The Hubbard contrib.    to forces": "hubbard",
+    "The SCF correction term to forces": "scf_correction",
+}
+
+
+def _parse_force_terms(text: str) -> dict:
+    """The per-contribution forces ``verbosity = 'high'`` prints, keyed by name."""
+    terms = {}
+    for header, name in _FORCE_TERMS.items():
+        block = re.search(
+            re.escape(header) + r"\n((?:\s*atom.*force\s*=.*\n)+)", text
+        )
+        if block is None:
+            continue
+        terms[name] = np.array(
+            [
+                _floats(line.split("force", 1)[1])[:3]
+                for line in block.group(1).strip().splitlines()
+            ],
+            dtype=float,
+        )
+    return terms
+
+
+def _parse_final_positions(text: str) -> np.ndarray | None:
+    """The relaxed geometry, converted to cartesian bohr.
+
+    ``pw.x`` echoes the ``ATOMIC_POSITIONS`` card it would write, in the units
+    the *input* used, so the conversion has to be done here -- and ``crystal``
+    needs the cell, which is why the lattice is read first.
+    """
+    block = re.search(
+        r"Begin final coordinates.*?ATOMIC_POSITIONS\s*\(?(\w+)\)?\s*\n"
+        r"(.*?)End final coordinates",
+        text,
+        re.S,
+    )
+    if block is None:
+        return None
+    units = block.group(1).lower()
+    positions = np.array(
+        [
+            _floats(line)[:3]
+            for line in block.group(2).strip().splitlines()
+            if line.strip()
+        ],
+        dtype=float,
+    )
+    if units == "bohr":
+        return positions
+    if units == "angstrom":
+        return positions * ANGSTROM_TO_BOHR
+    alat = _scalar(text, r"lattice parameter \(alat\)\s*=\s*(" + _FLOAT + ")")
+    if units == "alat":
+        return positions * alat
+    if units == "crystal":
+        at = _parse_axes(text, "crystal axes", "a")
+        return positions @ (at * alat)
+    raise ValueError(f"unknown ATOMIC_POSITIONS units in a final geometry: {units!r}")
+
+
+def _parse_bfgs_steps(text: str) -> tuple[int, int] | None:
+    """``bfgs converged in N scf cycles and M bfgs steps``."""
+    match = re.search(
+        r"bfgs converged in\s*(\d+)\s*scf cycles and\s*(\d+)\s*bfgs steps", text
+    )
+    return None if match is None else (int(match.group(1)), int(match.group(2)))
 
 
 def _parse_stress(text: str) -> tuple[np.ndarray | None, float | None]:

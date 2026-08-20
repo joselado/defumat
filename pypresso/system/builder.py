@@ -303,13 +303,15 @@ def _build_structure(pwin: PwInput, cell: Cell, precision: Precision) -> Structu
         species.append(Species(name=name, mass=float(mass), pseudo_file=pseudo))
 
     positions_card = pwin.require_card("ATOMIC_POSITIONS")
-    names, coordinates = [], []
+    names, coordinates, if_pos = [], [], []
     for line in positions_card.lines:
         tokens = line.split()
         names.append(tokens[0])
-        # Trailing 0/1 flags (if_pos, which freezes a coordinate during
-        # relaxation) may follow the three coordinates; they are not geometry.
         coordinates.append([float(t) for t in tokens[1:4]])
+        # Trailing 0/1 flags -- ``if_pos``, which freezes a coordinate during a
+        # relaxation. Absent means free.
+        flags = tokens[4:7]
+        if_pos.append([int(float(f)) for f in flags] if len(flags) == 3 else [1, 1, 1])
 
     unknown = set(names) - set(index_of)
     if unknown:
@@ -326,6 +328,7 @@ def _build_structure(pwin: PwInput, cell: Cell, precision: Precision) -> Structu
         units=positions_card.option,
         cell=cell,
         precision=precision,
+        if_pos=if_pos,
     )
 
 

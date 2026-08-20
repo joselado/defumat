@@ -1,0 +1,37 @@
+! Silicon with one atom pushed off its site, so that there is a force to compare.
+!
+! The reference case for P15. Everything about it is the two-atom cell of
+! `pw_scf/scf.in` except that the second atom is moved by 0.02 alat along x,
+! which lowers the symmetry from 48 operations to 8 and gives every atom a force
+! along one axis and nothing along the other two -- so the test is not only
+! "does the number match" but "does the symmetry come out right".
+!
+! The k-points are an automatic grid rather than the two explicit ones of
+! scf.in: an explicit list chosen for the undistorted crystal is not an
+! irreducible set for the distorted one, and comparing two codes on a k-set that
+! is wrong for the structure tests the wrongness rather than the force.
+!
+! conv_thr is tightened far past what the answer needs because QE's printed force
+! includes its `force_corr` term, which corrects for a density that has stopped
+! short of self-consistency and which has no counterpart in a force obtained by
+! differentiating the energy at the fixed point. At 1e-10 it is ~1e-8 Ry/bohr and
+! the comparison is between the same two quantities.
+ &control
+    calculation = 'scf'
+    tprnfor = .true.
+    verbosity = 'high'
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=12.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.27 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0

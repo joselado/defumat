@@ -1,0 +1,26 @@
+! The displaced silicon of si2-nc-force.in with an ultrasoft pseudopotential.
+!
+! What this case adds is the augmentation charge's own contribution to the force:
+! Q_ij(r - tau) moves with the atom, so the density does too even at fixed
+! wavefunctions, and the overlap operator S makes the orthonormality constraint
+! position-dependent as well (QE's `addusforce` and the eps-weighted half of
+! `force_us`). A norm-conserving force has neither term.
+ &control
+    calculation = 'scf'
+    tprnfor = .true.
+    verbosity = 'high'
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=20.0, ecutrho=160.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-n-rrkjus_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.27 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0

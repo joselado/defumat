@@ -1,13 +1,15 @@
-"""End-to-end calculations: SCF, band structure, density of states."""
+"""End-to-end calculations: SCF, band structure, density of states, relaxation."""
 
 from pypresso.workflows.bands import BandStructure, run_bands
 from pypresso.workflows.dos import DensityOfStates, compute_dos, energy_grid, run_dos
 from pypresso.workflows.nscf import NSCFResult, denser_grid, fixed_density_bands, run_nscf
+from pypresso.workflows.relax import RelaxResult, run_relax
 
 __all__ = [
     "BandStructure",
     "DensityOfStates",
     "NSCFResult",
+    "RelaxResult",
     "compute_dos",
     "denser_grid",
     "energy_grid",
@@ -15,4 +17,5 @@ __all__ = [
     "run_bands",
     "run_dos",
     "run_nscf",
+    "run_relax",
 ]

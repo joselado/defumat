@@ -43,6 +43,7 @@ one so that occupations, mixing and the result objects need no third case; it is
 
 from __future__ import annotations
 
+import copy
 import warnings
 from dataclasses import dataclass, field
 from functools import partial
@@ -62,13 +63,19 @@ from pypresso.pseudo.atomic import atomic_wavefunctions
 from pypresso.paw.onecenter import build_paw
 from pypresso.paw.symmetry import build_becsum_symmetry
 from pypresso.pseudo.augmentation import build_augmentation
-from pypresso.pseudo.potentials import core_charge, local_potential, starting_charge
-from pypresso.pseudo.projectors import build_projectors, projector_channels
+from pypresso.pseudo.potentials import (
+    combine_species,
+    species_atomic_charge,
+    species_core_charge,
+    species_local_potential,
+    starting_charge,
+)
+from pypresso.pseudo.projectors import build_projector_core, projector_channels
 from pypresso.pseudo.upf import Pseudopotential
 from pypresso.pseudo.spinorbit import becsum_transform, build_spin_orbit
 from pypresso.batching import map_k, resolve_k_batch
 from pypresso.scf.density import becsum, spinor_becsum, spinor_sum_band, sum_band
-from pypresso.scf.ewald import ewald_energy
+from pypresso.scf.ewald import build_ewald
 from pypresso.scf.mixing import get_mixer
 from pypresso.scf.occupations import (
     fixed_occupations,
@@ -458,6 +465,10 @@ class SCFResult:
     wavefunctions: jnp.ndarray  # (nspin, nk, nbnd, npwx)
     density: jnp.ndarray  # (nspin, n1, n2, n3), electrons/bohr^3
     potential: jnp.ndarray  # (nspin, n1, n2, n3), Ry -- the total local potential
+    #: ``V[rho_out] - V[rho_in]`` at the last iteration -- QE's ``vnew``, the
+    #: self-consistency the run did not reach. Zero to the extent that it
+    #: converged, and the only input to ``force_corr``.
+    potential_change: jnp.ndarray | None = None
     fermi_energy: float | None = None
     homo: float | None = None
     lumo: float | None = None
@@ -618,9 +629,16 @@ class Calculation:
         # QE's FFT layout for the wavefunction transforms; see basis/sticks.py.
         self.sticks = build_sticks(self.fft_index, planewaves.mask, smooth.grid)
 
-        self.projectors = build_projectors(
+        # The projectors are built in two halves -- the species-dependent
+        # columns once, the structure factor per geometry -- so that moving the
+        # atoms costs one exponential per atom and so that ``grad`` with respect
+        # to the positions never reaches the radial integrals. See
+        # :class:`pypresso.pseudo.projectors.ProjectorCore` and
+        # :meth:`at_positions`.
+        self.projector_core = build_projector_core(
             self.pseudos, system.structure, system.cell, smooth, planewaves, system.kpoints
         )
+        self.projectors = self.projector_core.at_positions(system.structure.positions)
 
         # The augmentation charge lives on the *dense* grid: it is sharply
         # peaked, and holding it is what the second grid is for. Everything
@@ -677,14 +695,31 @@ class Calculation:
                     [self.spin_orbit[t].qq_so(species_qq(t)) for t in types]
                 ))
 
-        vloc_g = local_potential(self.pseudos, system.structure, system.cell, dense)
+        # Per-species radial transforms, which the structure factor multiplies:
+        # cached so a moved geometry re-contracts them instead of re-integrating
+        # them (``setlocal``/``set_rhoc`` are called afresh by QE each ionic
+        # step, but their ``vloc``/``rhoc`` tables are not rebuilt either).
+        self.vloc_species = species_local_potential(self.pseudos, system.cell, dense)
+        self.rho_core_species = species_core_charge(self.pseudos, system.cell, dense)
+        # The atomic charge, on the same footing: it is what the SCF starts from
+        # and what ``force_corr`` pairs with the potential the last iteration
+        # did not apply. QE tabulates it once (``init_tab_rhoat``) for the same
+        # reason -- the radial integration does not depend on the geometry.
+        self.rho_atomic_species = species_atomic_charge(self.pseudos, system.cell, dense)
+
+        vloc_g = combine_species(self.vloc_species, system.structure, system.cell, dense)
         self.vltot = jnp.real(g_to_r(vloc_g, dense.fft_index, dense.grid))
 
         # The nonlinear core correction, on the dense grid (``set_rhoc``). It is
         # ``None`` when no species has a PP_NLCC section, and ``None`` is an
         # empty pytree, so the two cases compile separately with no runtime
         # branch in the potential.
-        rho_core_g = core_charge(self.pseudos, system.structure, system.cell, dense)
+        rho_core_g = (
+            None if self.rho_core_species is None
+            else combine_species(
+                self.rho_core_species, system.structure, system.cell, dense
+            )
+        )
         self.rho_core = (
             None if rho_core_g is None
             else jnp.real(g_to_r(rho_core_g, dense.fft_index, dense.grid))
@@ -694,8 +729,12 @@ class Calculation:
         # valence density's (``gradcorr`` adds ``rhog_core`` to ``rhogaux``).
         self.rho_core_g = rho_core_g
 
+        # ``alpha`` and the neighbour list are fixed here and the sum is then a
+        # differentiable function of the positions -- which is what makes the
+        # ionic part of the force ``grad`` of it rather than a second expression.
+        self.ewald_sum = build_ewald(system.cell, system.structure, dense, self.charges)
         self.ewald = float(
-            ewald_energy(system.cell, system.structure, dense, self.charges)
+            self.ewald_sum.energy(system.cell, system.structure.positions, dense)
         )
 
         # The density built from a symmetry-reduced k-point set is not itself
@@ -760,6 +799,68 @@ class Calculation:
                 jnp.asarray([[offsets[a] + i for i in range(nh)] for a in atoms])
             )
         return tuple(channels)
+
+    def at_positions(self, positions: jnp.ndarray) -> "Calculation":
+        """The same calculation with the atoms somewhere else.
+
+        Everything that does not depend on where the atoms are is shared with
+        ``self`` rather than rebuilt: the plane-wave basis and both FFT grids,
+        the radial tables of every species, the symmetry group, the PAW and
+        spin-orbit coefficients. What is rebuilt is exactly what the structure
+        factor multiplies -- the local potential, the core charge, the
+        projectors, the augmentation charge's phases -- plus the Ewald sum.
+
+        The method is **traceable**: given traced ``positions`` it returns a
+        calculation whose position-dependent arrays are traced, which is what
+        makes the force ``grad`` of an energy evaluated through it
+        (:mod:`pypresso.forces`). It is also what a relaxation step uses to move
+        the atoms.
+
+        **Two things are deliberately not recomputed**, both following
+        ``setup.f90``, which runs once whatever the ion dynamics does:
+
+        * the **FFT grid**. Its dimensions must be a multiple of the
+          denominators of the crystal's fractional translations, so a geometry
+          that breaks a symmetry would be given a *different grid* -- and the
+          exchange-correlation energy is evaluated pointwise on it, so the
+          energy would jump by ~1e-6 Ry in the middle of a relaxation for a
+          reason that has nothing to do with the physics.
+        * the **symmetry group**. QE finds it once and afterwards only *checks*
+          it (``checkallsym``); re-searching it here would symmetrise a
+          distorted structure with operations it no longer has, or -- worse --
+          quietly stop symmetrising and change the answer between two steps of
+          the same relaxation. :func:`pypresso.system.symmetry.check_symmetry`
+          is the check to run instead.
+        """
+        moved = copy.copy(self)
+        moved.system = eqx.tree_at(
+            lambda sys: sys.structure.positions, self.system, positions
+        )
+        dense = self.basis.dense
+        cell = self.system.cell
+        structure = moved.system.structure
+
+        qq = None if self.projectors.qq is None else self.projectors.qq
+        moved.projectors = self.projector_core.at_positions(positions, qq=qq)
+        if self.augmentation is not None:
+            moved.augmentation = self.augmentation.at_positions(
+                positions, dense.cartesian(cell)
+            )
+
+        vloc_g = combine_species(self.vloc_species, structure, cell, dense)
+        moved.vltot = jnp.real(g_to_r(vloc_g, dense.fft_index, dense.grid))
+        if self.rho_core_species is None:
+            moved.rho_core_g = moved.rho_core = None
+        else:
+            moved.rho_core_g = combine_species(
+                self.rho_core_species, structure, cell, dense
+            )
+            moved.rho_core = jnp.real(
+                g_to_r(moved.rho_core_g, dense.fft_index, dense.grid)
+            )
+
+        moved.ewald = self.ewald_sum.energy(cell, positions, dense)
+        return moved
 
     @property
     def is_ultrasoft(self) -> bool:
@@ -1355,6 +1456,8 @@ def run_scf(
     diagonalization: str | None = None,
     verbose: bool = False,
     k_batch: int | None | str = "default",
+    starting_density: jnp.ndarray | None = None,
+    starting_becsum: tuple | None = None,
 ) -> SCFResult:
     """Run the self-consistent field loop to convergence.
 
@@ -1367,6 +1470,14 @@ def run_scf(
     memory against speed without touching the answer
     (:mod:`pypresso.batching`). It is ignored when ``calculation`` is given,
     which already carries its own.
+
+    ``starting_density`` replaces the superposition of atomic charges the run
+    would otherwise start from. It is what a relaxation hands the next geometry
+    (``PW/src/update_pot.f90``): the density of the previous ionic step is a far
+    better guess than the atomic one and costs several SCF iterations less.
+    ``starting_becsum`` is its ultrasoft/PAW counterpart, and the two belong
+    together -- the mixed state is the pair, and giving one without the other
+    starts the run from two different geometries at once.
     """
     calculation = calculation or Calculation(
         system, pseudos, diagonalization=diagonalization, k_batch=k_batch
@@ -1379,7 +1490,10 @@ def run_scf(
     )
 
     mixer = get_mixer(mixing_mode, beta=mixing_beta)
-    rho = calculation.starting_density()
+    rho = (
+        calculation.starting_density() if starting_density is None
+        else jnp.asarray(starting_density)
+    )
     # ``becsum`` is mixed alongside the density, not derived from it. For an
     # ultrasoft run it could be recomputed from the wavefunctions at any point,
     # but for PAW the one-centre potential is built from it *before* the
@@ -1387,9 +1501,12 @@ def run_scf(
     # why ``mix_rho.f90`` says it mixes "rho in g-space ... and becsum (for
     # paw)". The starting value is the isolated atoms', matching the starting
     # density.
-    becsum_state = calculation.starting_becsum()
+    becsum_state = (
+        calculation.starting_becsum() if starting_becsum is None else starting_becsum
+    )
 
     previous_energy, history = None, []
+    potential_change = None
     converged = False
     wavefunctions = None
     ethr, accuracy = ETHR_INIT, None
@@ -1457,7 +1574,13 @@ def run_scf(
 
         converged = accuracy < conv_thr
         if converged:
+            # QE's ``vnew``: the potential the last step did *not* apply,
+            # V[rho_out] - V[rho_in]. It is zero at exact self-consistency and it
+            # is what ``force_corr`` pairs with the atomic charges to correct a
+            # force for a run that stopped short (``PW/src/force_corr.f90``).
+            v_in = potential.v_scf
             potential = calculation.potential(rho_out)
+            potential_change = potential.v_scf - v_in
             # ... and the one-centre energy with it. ``ddd_paw`` is deliberately
             # *not* refreshed: ``deband`` below pairs it with the output becsum
             # exactly as ``delta_e`` does, which runs before QE recomputes it.
@@ -1474,7 +1597,7 @@ def run_scf(
             "one-electron": eband + deband,
             "hartree": float(potential.ehart),
             "xc": float(potential.etxc),
-            "ewald": calculation.ewald,
+            "ewald": float(calculation.ewald),
         }
         if calculation.is_paw:
             terms["one_center_paw"] = float(epaw)
@@ -1537,6 +1660,7 @@ def run_scf(
         wavefunctions=wavefunctions,
         density=rho,
         potential=calculation.vltot[None] + potential.v_scf,
+        potential_change=potential_change,
         accuracy=accuracy,
         nspin=nspin,
         nspin_mag=calculation.nspin_mag,

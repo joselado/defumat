@@ -123,6 +123,15 @@ class AugmentationCharge(eqx.Module):
             )
         return tuple(result)
 
+    def at_positions(self, positions: jnp.ndarray, gcart: jnp.ndarray):
+        """The same augmentation charge with the atoms somewhere else.
+
+        ``Q_ij(G)`` is a property of the species; only the structure factor
+        moves, so a new geometry costs one complex exponential per atom.
+        """
+        phases = _atom_phases(gcart, positions).astype(self.phases.dtype)
+        return eqx.tree_at(lambda a: a.phases, self, phases)
+
     def block_matrix(self, blocks: tuple) -> jnp.ndarray:
         """Per-atom ``(nh, nh)`` blocks -> the ``(nkb, nkb)`` matrix ``H`` uses.
 

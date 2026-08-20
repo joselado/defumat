@@ -19,6 +19,7 @@ be checked on its own long before there is an SCF to put it in.
 
 from __future__ import annotations
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -30,7 +31,7 @@ from pypresso.system.cell import Cell
 from pypresso.system.structure import Structure
 from pypresso.units import E2, TPI
 
-__all__ = ["ewald_energy", "ewald_alpha"]
+__all__ = ["ewald_energy", "ewald_alpha", "EwaldSum", "build_ewald"]
 
 
 def ewald_alpha(charge: float, gcut: float, tpiba2: float, tolerance: float = 1.0e-7) -> float:
@@ -55,6 +56,69 @@ def ewald_alpha(charge: float, gcut: float, tpiba2: float, tolerance: float = 1.
     raise ValueError("optimal Ewald alpha not found; is the G cutoff absurdly small?")
 
 
+class EwaldSum(eqx.Module):
+    """The Ewald sum with everything but the positions decided in advance.
+
+    Two host-side quantities have to be fixed before the sum can be a
+    differentiable function of the atomic positions: the screening parameter
+    ``alpha``, which depends on the total charge and the G cutoff, and the list
+    of lattice translations the real-space part runs over, which is integer
+    bookkeeping over the cell. Both are settled here, once, so that
+    :meth:`energy` is pure JAX and ``grad`` of it is the ionic part of the force.
+
+    The translation list is built for the **whole cell** rather than for the
+    separation of the atoms it was constructed with (see
+    :func:`_position_independent_radius`), so the same object stays valid as the
+    atoms move during a relaxation. That costs a larger neighbour list -- a few
+    dozen translations rather than a few -- and buys a sum that cannot silently
+    lose an image when an atom moves.
+    """
+
+    charges: jnp.ndarray  # (nat,), valence charge of each atom
+    alpha: float = eqx.field(static=True)
+    rmax: float = eqx.field(static=True)
+    translations: jnp.ndarray  # (ntrans, 3), cartesian bohr
+    gamma_factor: float = eqx.field(static=True)
+
+    def energy(self, cell: Cell, positions: jnp.ndarray, gvectors: GVectors) -> jnp.ndarray:
+        """Electrostatic energy of the ion cores at ``positions``, in Ry."""
+        reciprocal = _reciprocal_kernel(
+            gvectors.cartesian(cell), positions, self.charges,
+            self.alpha, cell.volume, self.gamma_factor,
+        )
+        real = _real_kernel(
+            positions, self.charges, self.translations, self.alpha, self.rmax
+        )
+        return 0.5 * E2 * (reciprocal + real)
+
+
+def build_ewald(
+    cell: Cell,
+    structure: Structure,
+    gvectors: GVectors,
+    charges: np.ndarray,
+) -> EwaldSum:
+    """Fix ``alpha`` and the neighbour list for this cell and charge set."""
+    charges = np.asarray(charges, dtype=float)
+    if len(charges) != structure.nat:
+        raise ValueError(f"{len(charges)} charges for {structure.nat} atoms")
+
+    tpiba2 = cell.tpiba**2
+    gcut = gvectors.ecut / tpiba2
+    alpha = ewald_alpha(float(charges.sum()), gcut, tpiba2)
+    rmax = 4.0 / np.sqrt(alpha)
+
+    at = np.asarray(cell.at)
+    radius = rmax + _position_independent_radius(at, np.asarray(structure.positions))
+    return EwaldSum(
+        charges=jnp.asarray(charges),
+        alpha=float(alpha),
+        rmax=float(rmax),
+        translations=jnp.asarray(_lattice_translations(at, radius)),
+        gamma_factor=2.0 if gvectors.gamma_only else 1.0,
+    )
+
+
 def ewald_energy(
     cell: Cell,
     structure: Structure,
@@ -69,25 +133,8 @@ def ewald_energy(
         gvectors: the dense G-vector set, whose cutoff sets ``alpha``.
         charges: valence charge ``Z`` of each *atom* (not each species).
     """
-    charges = np.asarray(charges, dtype=float)
-    if len(charges) != structure.nat:
-        raise ValueError(f"{len(charges)} charges for {structure.nat} atoms")
-
-    tpiba2 = cell.tpiba**2
-    gcut = gvectors.ecut / tpiba2
-    alpha = ewald_alpha(float(charges.sum()), gcut, tpiba2)
-
-    reciprocal = _reciprocal_term(cell, structure, gvectors, charges, alpha)
-    real = _real_term(cell, structure, charges, alpha)
-    return 0.5 * E2 * (reciprocal + real)
-
-
-def _reciprocal_term(cell, structure, gvectors, charges, alpha) -> jnp.ndarray:
-    """The smooth part, summed over G, plus the two ``G = 0`` constants."""
-    factor = 2.0 if gvectors.gamma_only else 1.0
-    return _reciprocal_kernel(
-        gvectors.cartesian(cell), structure.positions, jnp.asarray(charges),
-        alpha, cell.volume, factor,
+    return build_ewald(cell, structure, gvectors, charges).energy(
+        cell, structure.positions, gvectors
     )
 
 
@@ -112,50 +159,58 @@ def _reciprocal_kernel(g, tau, charges, alpha, volume, factor):
     return total - jnp.sum(charges**2) * jnp.sqrt(8.0 / TPI * alpha)
 
 
-def _real_term(cell, structure, charges, alpha) -> jnp.ndarray:
-    """The short-ranged part: erfc(sqrt(alpha) r)/r over neighbouring images.
-
-    The set of lattice translations is enumerated on the host -- it is integer
-    bookkeeping over a fixed cell, the definition of setup work -- and the sum
-    over ``(atom, atom, translation)`` is then one broadcast kernel rather than a
-    Python double loop over atom pairs. Beyond the speed, this is what makes the
-    term differentiable with respect to the atomic positions, which the forces
-    will need: the neighbour list is a constant, the distances computed from it
-    are not.
-    """
-    at = np.asarray(cell.at)
-    tau = np.asarray(structure.positions)
-    rmax = 4.0 / np.sqrt(alpha)
-
-    translations = _lattice_translations(at, rmax + _max_separation(tau, at))
-    return _real_kernel(structure.positions, jnp.asarray(charges),
-                        jnp.asarray(translations), alpha, rmax)
+#: The real-space part sums ``erfc(sqrt(alpha) r)/r`` over neighbouring images.
+#: The set of lattice translations is enumerated on the host -- it is integer
+#: bookkeeping over a fixed cell, the definition of setup work -- and the sum
+#: over ``(atom, atom, translation)`` is then one broadcast kernel rather than a
+#: Python double loop over atom pairs. Beyond the speed, this is what makes the
+#: term differentiable with respect to the atomic positions, which the forces
+#: need: the neighbour list is a constant, the distances computed from it are not.
 
 
 @jax.jit
 def _real_kernel(tau, charges, translations, alpha, rmax):
     # (nat, nat, ntrans, 3): every pair, every image.
     separations = tau[:, None, None, :] - tau[None, :, None, :] + translations[None, None, :, :]
-    distances = jnp.sqrt(jnp.sum(separations**2, axis=-1))
+    square = jnp.sum(separations**2, axis=-1)
 
     # The self term (r = 0) and images past the cutoff are dropped by weight, not
-    # by indexing, so the shape stays static. The distance fed to the divide is
-    # sanitised first: masking the result of a division by zero afterwards still
-    # leaves a NaN in the gradient.
-    keep = (distances > 1.0e-8) & (distances <= rmax)
-    safe = jnp.where(keep, distances, 1.0)
-    terms = jnp.where(keep, erfc(jnp.sqrt(alpha) * safe) / safe, 0.0)
+    # by indexing, so the shape stays static. The *squared* distance is what is
+    # sanitised, before the square root rather than after it: masking the result
+    # of `sqrt(0)` still leaves an infinite derivative to be multiplied by zero,
+    # and `0 * inf` is NaN. That NaN appears only in the gradient -- the energy
+    # is correct either way -- so it is exactly the kind of thing that survives
+    # until the day the forces are written.
+    keep = (square > 1.0e-16) & (square <= rmax**2)
+    distances = jnp.sqrt(jnp.where(keep, square, 1.0))
+    terms = jnp.where(keep, erfc(jnp.sqrt(alpha) * distances) / distances, 0.0)
 
     pairs = charges[:, None] * charges[None, :]
     return jnp.sum(pairs * jnp.sum(terms, axis=-1))
 
 
-def _max_separation(tau: np.ndarray, at: np.ndarray) -> float:
-    """Largest distance between two atoms, to widen the translation search."""
-    if len(tau) < 2:
-        return 0.0
-    differences = tau[:, None, :] - tau[None, :, :]
-    return float(np.linalg.norm(differences, axis=-1).max())
+def _position_independent_radius(at: np.ndarray, tau: np.ndarray) -> float:
+    """How far apart two atoms can be, whatever the geometry becomes.
+
+    The real-space sum needs every image within ``rmax`` of every *pair*, so the
+    translation list has to reach ``rmax`` plus the largest separation between
+    two atoms. Taking that separation from the current positions would tie the
+    neighbour list to one geometry and quietly drop images once an atom moved
+    far enough, which is exactly what a relaxation does. The diameter of the
+    unit cell -- the longest of its four body diagonals -- bounds the separation
+    of any two atoms inside it, so a list built to that radius stays valid for
+    every geometry the cell can hold. The current positions are still consulted,
+    in case an atom sits outside the cell.
+    """
+    corners = np.array([
+        s0 * at[0] + s1 * at[1] + s2 * at[2]
+        for s0 in (1, -1) for s1 in (1, -1) for s2 in (1, -1)
+    ])
+    diameter = float(np.linalg.norm(corners, axis=1).max())
+    if len(tau) > 1:
+        separations = tau[:, None, :] - tau[None, :, :]
+        diameter = max(diameter, float(np.linalg.norm(separations, axis=-1).max()))
+    return diameter
 
 
 def _lattice_translations(at: np.ndarray, radius: float) -> np.ndarray:
