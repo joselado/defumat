@@ -12,6 +12,9 @@ expression.
 ``sternheimer``
     ``(H - eps S) |dpsi> = -P_c dV|psi>`` by projected conjugate gradient, and
     the independent-particle susceptibility ``chi_0 = drho/dV`` built from it.
+    Ultrasoft and PAW come with it rather than needing a second implementation:
+    ``dbecsum``, the augmentation charge's own response, ``int3`` and
+    ``PAW_dpotential`` are all derivatives of code that already existed.
 ``efield``
     the response to a uniform electric field, and the dielectric tensor and Born
     effective charges it gives.

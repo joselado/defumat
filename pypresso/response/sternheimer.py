@@ -15,12 +15,29 @@ is rule D4's requirement, not a convenience: a crystal is degenerate everywhere
 by symmetry.
 
 ``LR_Modules/cgsolve_all.f90`` (the solver), ``ch_psi_all.f90`` (the operator),
-``orthogonalize.f90`` (the projector), ``h_prec.f90`` (the preconditioner),
-``setup_alpha_pv.f90`` (the level shift) and ``incdrhoscf.f90`` (the density) are
-transcribed here. The Fortran's dynamic repacking of the unconverged bands
-becomes a **mask at a static shape**, following the same rule ``cegterg``
-followed into :mod:`pypresso.solvers.davidson`: a converged band stays in the
-block and takes a zero step.
+``orthogonalize.f90`` (the projector), ``h_prec.f90`` (the preconditioner) and
+``setup_alpha_pv.f90`` (the level shift) are transcribed here. The Fortran's
+dynamic repacking of the unconverged bands becomes a **mask at a static shape**,
+following the same rule ``cegterg`` followed into
+:mod:`pypresso.solvers.davidson`: a converged band stays in the block and takes a
+zero step.
+
+**What is not transcribed is everything the response is *of*.** The density is
+already written down once as a differentiable function of the states, and the
+nonlocal coefficients as one of the potential, so the quantities QE builds a
+routine apiece for are derivatives of code that exists:
+
+===============================================  ==========================================
+QE                                               here
+===============================================  ==========================================
+``incdrhoscf``, ``addusdbec``, ``lr_addusddens``  one ``jvp`` of the density w.r.t. the states
+``newdq``'s ``int3``, ``adddvscf``                one ``jvp`` of ``newd`` w.r.t. the potential
+``PAW_dpotential``                                one ``jvp`` of ``onecenter`` w.r.t. ``becsum``
+===============================================  ==========================================
+
+which is why **ultrasoft and PAW work here without a second implementation**.
+:meth:`SternheimerSolver.response_density` and :func:`local_perturbation` are
+those three lines and the bookkeeping around them.
 
 **What ``alpha Q`` is for, and why it is kept even though the right-hand side is
 already projected.** ``Q = alpha_pv S P_occ S`` shifts the occupied manifold up
