@@ -1,0 +1,27 @@
+! The same stress case with a PAW dataset.
+!
+! PAW's one-centre terms reach the stress the way they reach the energy and the
+! force: through `becsum`, which is measured with projectors that move with the
+! cell, and through `D_ij`. There is no PAW stress routine in QE and none here;
+! what has to be right is that the one-centre energy is *inside* the functional
+! being differentiated, and this is the case that says so.
+ &control
+    calculation = 'scf'
+    tstress = .true.
+    tprnfor = .true.
+    verbosity = 'high'
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=20.0, ecutrho=160.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-n-kjpaw_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.27 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0

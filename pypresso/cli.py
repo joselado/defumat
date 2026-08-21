@@ -5,7 +5,9 @@ fastest way to see what a comparison is being made against. ``dos`` runs the
 sequence a density of states actually is -- SCF, then NSCF on a denser grid,
 then the Brillouin-zone integration -- and writes ``dos.x``'s ``.dos`` file.
 ``relax`` runs the SCF/force/move loop of a ``calculation = 'relax'`` input and
-prints the geometry it ends on. The ``scf``/``bands`` subcommands land with
+prints the geometry it ends on. ``stress`` runs one SCF and prints the stress
+tensor in ``pw.x``'s own layout -- Ry/bohr^3 beside kbar -- which is what
+``tstress = .true.`` asks for. The ``scf``/``bands`` subcommands land with
 their phases.
 """
 
@@ -21,7 +23,7 @@ from pypresso import __version__
 from pypresso.io import read_qe_output, write_dos
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
+from pypresso.scf import Calculation, run_scf
 from pypresso.system import build_system
 from pypresso.units import RY_TO_EV
 from pypresso.workflows import run_dos
@@ -144,6 +146,55 @@ def _relax(args) -> int:
     return 0 if result.converged else 1
 
 
+def _stress(args) -> int:
+    """One SCF, then the stress tensor -- ``tstress = .true.``."""
+    from pypresso.stress import compute_stress, format_stress
+    from pypresso.units import RY_TO_KBAR
+
+    input_path = Path(args.input)
+    pseudo_dir = Path(args.pseudo_dir) if args.pseudo_dir else input_path.parent
+    pwin = read_pw_input(input_path)
+    system = build_system(pwin)
+    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
+
+    # ``tstress`` in the input is what ``pw.x`` obeys, and ``build_system``
+    # carries it; asking for this subcommand at all overrides it, since nobody
+    # types ``pypresso stress`` to be told that the input said no.
+    requested = system.tstress
+    conv_thr = args.conv_thr
+    if conv_thr is None:
+        value = pwin.get("electrons", "conv_thr")
+        conv_thr = 1e-8 if value is None else float(value)
+
+    # The calculation is built here rather than left to ``run_scf`` so that the
+    # term breakdown can be asked for afterwards: it is the object the strain
+    # gradient is taken through.
+    calculation = Calculation(system, pseudos)
+    result = run_scf(system, pseudos, calculation=calculation, conv_thr=conv_thr,
+                     verbose=args.verbose)
+    if not result.converged:
+        print(f"warning: the SCF stopped at accuracy {result.accuracy:.2e}",
+              file=sys.stderr)
+    print(f"  total energy     {result.total_energy:.8f} Ry "
+          f"({result.iterations} iterations)")
+    if not requested:
+        print("  note             the input does not set tstress = .true.")
+
+    stress = compute_stress(calculation, result, terms=args.terms)
+    print(format_stress(stress))
+    if args.terms:
+        # ``iverbosity > 0``'s per-term table, in kbar as QE prints it.
+        print()
+        for name, tensor in sorted(stress.terms.items()):
+            if not np.any(np.abs(tensor) > 0.0):
+                continue
+            for row in range(3):
+                label = f"{name} stress (kbar)" if row == 0 else ""
+                print(f"     {label:<24}"
+                      + "".join(f"{v * RY_TO_KBAR:10.2f}" for v in tensor[row]))
+    return 0 if result.converged else 1
+
+
 def _spiral(args) -> int:
     """``E(q)`` over a line of spin-spiral wavevectors -- ``workflows/spiral.py``."""
     from pypresso.workflows.spiral import run_spiral_scan
@@ -237,6 +288,17 @@ def main(argv: list[str] | None = None) -> int:
     spiral.add_argument("--conv-thr", type=float, help="SCF threshold in Ry (default: the input's)")
     spiral.add_argument("-v", "--verbose", action="store_true", help="print each SCF iteration")
 
+    stress = sub.add_parser("stress", help="one SCF, then the stress tensor")
+    stress.add_argument("input", help="path to a pw.x input file")
+    stress.add_argument("--pseudo-dir",
+                        help="where the UPF files are (default: beside the input)")
+    stress.add_argument("--conv-thr", type=float,
+                        help="SCF threshold in Ry (default: the input's)")
+    stress.add_argument("--terms", action="store_true",
+                        help="also print the contributions, as verbosity='high' does")
+    stress.add_argument("-v", "--verbose", action="store_true",
+                        help="print each SCF iteration")
+
     args = parser.parse_args(argv)
     if args.command == "inspect":
         return _inspect(args.path)
@@ -246,6 +308,8 @@ def main(argv: list[str] | None = None) -> int:
         return _relax(args)
     if args.command == "spiral":
         return _spiral(args)
+    if args.command == "stress":
+        return _stress(args)
     parser.error(f"unhandled command {args.command}")  # pragma: no cover
 
 

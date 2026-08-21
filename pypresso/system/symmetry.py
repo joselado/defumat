@@ -40,7 +40,7 @@ if TYPE_CHECKING:  # only for annotations: importing it eagerly makes a cycle,
 __all__ = ["Symmetries", "lattice_point_group", "find_symmetries", "is_supercell",
            "symmetrize_density", "symmetry_maps", "apply_symmetry_maps",
            "atom_mapping", "cartesian_rotations",
-           "symmetrize_vector", "check_symmetry",
+           "symmetrize_vector", "symmetrize_matrix", "check_symmetry",
            "magnetic_symmetries", "magnetization_signs",
            "symmetrize_magnetization"]
 
@@ -501,6 +501,42 @@ def symmetrize_vector(
     work = vectors @ at.T
     rotated = jnp.einsum("sij,snj->ni", rotations, work[mapping])
     return (rotated / symmetries.nsym) @ np.linalg.inv(at).T
+
+
+def symmetrize_matrix(
+    matrix: np.ndarray, cell: Cell, symmetries: Symmetries
+) -> np.ndarray:
+    """Impose the crystal symmetry on a cartesian rank-2 tensor -- ``symmatrix``.
+
+    ``symme.f90``. The stress is the case this exists for, and it is
+    :func:`symmetrize_vector`'s argument one rank up: a tensor computed from a
+    Brillouin-zone sum over the irreducible wedge is only exact for a scalar, so
+    its components along directions the crystal's symmetry forbids are a residue
+    of the reduction. On cubic silicon the off-diagonal entries come out at 1e-6
+    Ry/bohr^3 before this and identically zero after, and the diagonal's three
+    entries are averaged into agreement -- which is why QE symmetrises **every
+    term and then the total again** (``stress.f90``: ``symmatrix(sigma)`` at the
+    end, on top of the per-term calls in ``stres_knl`` and elsewhere).
+
+    The tensor is taken to crystal axes first, because that is where the
+    rotations are integers -- QE does the same, for the same reason. The two
+    conversions are ``cart_to_crys`` (``M -> A M A^T``, rows of ``A`` the
+    lattice vectors) and ``crys_to_cart`` (``M -> B^T M B``, rows of ``B`` the
+    reciprocal ones), which are inverses because ``A B^T = 1``.
+
+    Args:
+        matrix: ``(3, 3)`` cartesian.
+    """
+    matrix = np.asarray(matrix, dtype=float)
+    if symmetries.nsym <= 1:
+        return matrix
+    at = np.asarray(cell.at_alat, dtype=float)
+    bg = np.asarray(cell.bg_2pi_alat, dtype=float)
+    rotations = symmetries.rotation_array().astype(float)
+
+    crystal = at @ matrix @ at.T
+    averaged = np.einsum("sik,sjl,kl->ij", rotations, rotations, crystal)
+    return bg.T @ (averaged / symmetries.nsym) @ bg
 
 
 def check_symmetry(cell: Cell, structure: Structure, symmetries: Symmetries) -> bool:

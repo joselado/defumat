@@ -15,7 +15,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from pypresso.basis.gvectors import GVectors
+from pypresso.basis.gvectors import GVectors, modulus
 from pypresso.pseudo.formfactors import (
     atomic_charge_of_g,
     core_charge_of_g,
@@ -87,7 +87,7 @@ def species_local_potential(
 ) -> tuple[jnp.ndarray, ...]:
     """``vloc_t(|G|)`` for each species, before any structure factor."""
     gmod = _gmod(gvectors.cartesian(cell))
-    volume = float(cell.volume)
+    volume = cell.volume
     return tuple(local_potential_of_g(p, gmod, volume) for p in pseudos)
 
 
@@ -105,7 +105,7 @@ def species_atomic_charge(
     G-vectors for one silicon species, which was 91% of the analytic force.
     """
     gmod = _gmod(gvectors.cartesian(cell))
-    volume = float(cell.volume)
+    volume = cell.volume
     return tuple(atomic_charge_of_g(p, gmod, volume) for p in pseudos)
 
 
@@ -116,16 +116,16 @@ def species_core_charge(
     if not any(p.has_nlcc for p in pseudos):
         return None
     gmod = _gmod(gvectors.cartesian(cell))
-    volume = float(cell.volume)
+    volume = cell.volume
     return tuple(
         core_charge_of_g(p, gmod, volume) if p.has_nlcc else jnp.zeros_like(gmod)
         for p in pseudos
     )
 
 
-@jax.jit
 def _gmod(g):
-    return jnp.sqrt(jnp.sum(g**2, axis=1))
+    """``|G|``, guarded at the origin -- see :func:`pypresso.basis.gvectors.modulus`."""
+    return modulus(g)
 
 
 @jax.jit
@@ -142,7 +142,7 @@ def local_potential(
     gvectors: GVectors,
 ) -> jnp.ndarray:
     """The local pseudopotential on the dense grid, ``V_loc(G)`` in Ry."""
-    volume = float(cell.volume)
+    volume = cell.volume
     return _sum_over_species(
         lambda t, gmod: local_potential_of_g(pseudos[t], gmod, volume),
         structure,
@@ -178,7 +178,7 @@ def starting_charge(
 
     Returns ``rho(G)``, or ``(rho(G), m(G))`` when ``magnetization`` is given.
     """
-    volume = float(cell.volume)
+    volume = cell.volume
     rho = _sum_over_species(
         lambda t, gmod: atomic_charge_of_g(pseudos[t], gmod, volume),
         structure,
@@ -224,7 +224,7 @@ def core_charge(
     if not any(p.has_nlcc for p in pseudos):
         return None
 
-    volume = float(cell.volume)
+    volume = cell.volume
 
     def radial(t, gmod):
         if not pseudos[t].has_nlcc:

@@ -24,7 +24,6 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 from jax.scipy.special import erf
 
 from pypresso.pseudo.radial import simpson_weights, spherical_bessel
@@ -179,7 +178,11 @@ def projector_form_factors(pseudo: Pseudopotential, q, omega: float) -> jnp.ndar
     1e-3 at its own cutoff. Integrating over the shorter range would drop a
     contribution QE keeps.
     """
-    prefactor = FPI / np.sqrt(omega)
+    # ``jnp`` rather than ``np``, for the reason :func:`atomic_form_factors`
+    # gives: the stress differentiates through this and ``omega`` arrives as a
+    # tracer (P11), and a ``np.sqrt`` of a tracer is a ``TypeError`` at best and
+    # a frozen constant at worst.
+    prefactor = FPI / jnp.sqrt(omega)
     q = jnp.atleast_1d(jnp.asarray(q))
 
     cutoff = pseudo.kkbeta

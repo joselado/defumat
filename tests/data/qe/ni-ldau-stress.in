@@ -1,0 +1,35 @@
+! DFT+U with a stress tensor: the case the Hubbard projectors' strain matters in.
+!
+! `ni-ldau-nospin.in` with `tstress = .true.` and `verbosity = 'high'`. The
+! Hubbard energy depends on the cell exactly the way it depends on the atomic
+! positions -- through projectors that are atomic orbitals at `k + G` -- so the
+! stress reaches it by differentiating through them, which is the whole of QE's
+! `stres_hub.f90` (2291 lines) obtained without transcribing any of it.
+!
+! It is also the case that catches the k-point trap of this phase: `KPoints.coords`
+! are in units of a *static* alat, so under a strain the k-points have to be
+! carried to the new reciprocal cell by hand, and a Hubbard projector built at
+! the old ones is wrong without being an error. QE prints a `hubbard stress`
+! row at this verbosity, so the term is compared on its own.
+ &control
+    calculation='scf'
+    tstress = .true.
+    verbosity = 'high'
+ /
+ &system
+    ibrav=2, celldm(1) =6.48, nat=1, ntyp=1,
+    nspin=1,
+    ecutwfc = 24.0, ecutrho = 288.0,
+    occupations='smearing', smearing='marzari-vanderbilt', degauss=0.02
+ /
+ &electrons
+    conv_thr=1.0e-10
+ /
+ATOMIC_SPECIES
+ Ni 58.69 Ni.pz-nd-rrkjus.UPF
+ATOMIC_POSITIONS {alat}
+ Ni 0.0 0.0 0.0
+K_POINTS {automatic}
+ 4 4 4 1 1 1
+HUBBARD {atomic}
+U Ni-3d 3.0

@@ -29,7 +29,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from pypresso.basis.gvectors import GVectors
+from pypresso.basis.gvectors import GVectors, modulus
 from pypresso.basis.planewaves import PlaneWaveBasis
 from pypresso.pseudo.formfactors import projector_form_factors
 from pypresso.pseudo.harmonics import real_spherical_harmonics
@@ -173,7 +173,7 @@ def build_projector_core(
     shape = kg_norm.shape
     flat = kg_norm.reshape(-1)
     form_factors = tuple(
-        projector_form_factors(p, flat, float(cell.volume)) for p in pseudos
+        projector_form_factors(p, flat, cell.volume) for p in pseudos
     )
     radial = _radial_table(form_factors, shape)
     beta_offset = np.cumsum([0] + [f.shape[0] for f in form_factors])
@@ -234,7 +234,9 @@ def build_projectors(
 def _angular_part(gcart, indices, kcart, lmax):
     """``k+G``, its modulus, and the spherical harmonics on it, in one kernel."""
     kg = kcart[:, None, :] + gcart[indices]  # (nk, npwx, 3), 1/bohr
-    kg_norm = jnp.sqrt(jnp.sum(kg**2, axis=-1))
+    # Guarded at the origin: a k-point at Gamma has ``k + G = 0`` in its sphere,
+    # and ``sqrt``'s derivative there is what makes a strain gradient NaN.
+    kg_norm = modulus(kg)
     return kg, kg_norm, real_spherical_harmonics(kg, lmax)
 
 

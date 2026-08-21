@@ -1,0 +1,41 @@
+! Silicon with one atom pushed off its site, asked for its stress tensor.
+!
+! The norm-conserving LDA reference case for P11. It is `si2-nc-force.in` with
+! `tstress = .true.` added, deliberately: the force and the stress are the same
+! construction along two different coordinates, so validating them on the *same*
+! state is what makes a disagreement attributable to the coordinate rather than
+! to the system.
+!
+! The displaced atom matters here for a reason it did not there. On the ideal
+! crystal the stress is isotropic by symmetry and a tensor that is wrong in its
+! shear components looks perfect; moving the second atom by 0.02 alat along x
+! leaves 8 of the 48 operations, and the surviving group allows a genuinely
+! anisotropic tensor with nonzero off-diagonal entries.
+!
+! conv_thr is tightened far past what the answer needs for the reason the force
+! inputs give: QE's stress is evaluated on a density that has stopped where
+! conv_thr told it to, and at 1e-10 that stopping point costs less than the
+! agreement being claimed.
+!
+! verbosity = 'high' makes pw.x print the tensor term by term, in kbar, which is
+! what the term-by-term comparison in tests/regression/test_stress.py reads.
+ &control
+    calculation = 'scf'
+    tstress = .true.
+    tprnfor = .true.
+    verbosity = 'high'
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=12.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.27 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0

@@ -1028,6 +1028,85 @@ SCF, and the frozen-basis `at_spiral_q` shares both G sets, the local potential,
 the core charge and the Ewald sum with the calculation it came from — it rebuilds
 only `kinetic` and the projectors.
 
+## What a stress costs (P11)
+
+**A stress is not a force.** A force differentiates the *positions*, which enter through
+one complex exponential per atom over a cached radial table; a strain moves `|G|` itself,
+so every radial transform in the setup — `V_loc(|G|)`, `rho_core(|G|)`, `f_l(|k+G|)`,
+`Q^L_nm(|G|)` — is *inside* the gradient and is recomputed forward and differentiated
+backward. That is the whole of the difference between 0.13-0.52 SCF iterations for a force
+and what is below.
+
+`conv_thr = 1e-10`, 2026-08-21. These are **internal ratios** — a stress against an SCF
+iteration of the same run on the same machine — so they are not pinned to one core the way
+`tools/compare_qe.py` pins the QE comparison; there is nothing to compare against, since
+`pw.x` does not report a separate stress timing.
+
+| case | | time | vs one SCF iteration |
+|---|---|---|---|
+| `si2-nc-stress` — 2 atoms NC, 18 k, `npwx = 200`, `ngm = 1459` | SCF iteration | 740 ms | |
+| | stress, warm | **450 ms** | **0.6** |
+| | stress, cold | 1.20 s | |
+| | the term breakdown (`jacfwd`, 9 tangents) | 2.76 s | 3.7 |
+| `si2-paw-stress` — 2 atoms PAW, 18 k, `npwx = 415`, `ngm = 9185` | SCF iteration | 2.59 s | |
+| | stress, warm | **6.49 s** | **2.5** |
+| | the term breakdown | 28.1 s | 10.8 |
+| `si8-us` — 8 atoms ultrasoft, 1 k, `npwx = 1607`, `ngm = 36257` | SCF iteration | 1.90 s | |
+| | stress, warm | **30.3 s** | **16** |
+| | the term breakdown | 173 s | 91 |
+
+The trend is the point and it is not the k-points: from 0.6 iterations on a small
+norm-conserving cell to 16 on a large ultrasoft one, tracking `ngm` and the number of
+augmentation channels rather than `npwx` or `nk`. A stress is still cheap against the ten
+or twenty iterations that produced the state — one evaluation per run, as `run_pwscf` calls
+`stress()` once after `electrons()` — but it is not free the way a force is, and on a big
+cell it is worth about one extra SCF iteration per atom.
+
+**The breakdown is forward mode on purpose.** The total is one scalar of nine inputs, so
+reverse mode gives the whole tensor in one pass. The *decomposition* is eleven scalars of
+the same nine, where reverse mode would cost eleven passes and forward mode costs nine and
+delivers every term at once — hence `jacfwd` in `autodiff_stress_terms`. It is off by
+default (`compute_stress(..., terms=True)`) because nothing but a diagnostic wants it.
+
+### Memory: reverse mode through the setup is the working set
+
+**This is the trade this phase makes and it is a large one.** Peak RSS, same runs:
+
+| case | after the SCF | after a stress | after the breakdown |
+|---|---|---|---|
+| `si2-nc-stress` | 726 MB | 758 MB | 758 MB |
+| `si2-paw-stress` | 4282 MB | 4415 MB | 4415 MB |
+| `si8-us` | 899 MB | **11105 MB** | 11049 MB |
+
+The third column is not a typo and the second one is the story: **the breakdown costs
+nothing over the plain gradient**, so the 11 GB is the *reverse* pass and not the
+forward-mode Jacobian. On the two-atom cells the gradient costs a few tens of MB over the
+SCF, which is nothing; on the eight-atom ultrasoft cell it is the dominant allocation of
+the whole calculation,
+and the reason is the augmentation charge's radial transform: `_qrad_kernel`'s intermediate
+is `(ngm, kkbeta)` — 36257 by ~1100, so 300 MB — with a handful of temporaries inside
+`spherical_bessel` on top and one of them per `L`. Evaluated forward they are transient;
+**taped for a backward pass they are all live at once.** The same is true, more mildly, of
+`_vloc_kernel` and `_beta_kernel`, which are chunked at 4096 `q` values but whose chunks
+are all taped.
+
+In the terms of `CLAUDE.md`'s memory rule, the peak of a stress evaluation is
+
+    O( ngm x kkbeta x nl )  for the augmentation transform, plus the SCF's own set
+
+which is independent of `nbnd` and of `nk` — a stress does not touch the wavefunctions
+beyond one contraction — and grows with the *density* cutoff rather than the wavefunction
+one. `jax.checkpoint` on `_qrad_kernel` was tried and **measured to be worth nothing** on
+this case (11.0 GB against 10.7), so the intermediates are spread across the radial kernels
+rather than concentrated in one; rematerialising all of them, or evaluating the radial
+transforms on `|G|` *shells* under a custom JVP, is the fix and it is in the backlog rather
+than guessed at here.
+
+The practical consequence, stated so that nobody meets it as a surprise: **a stress on a
+cell with `ngm` in the tens of thousands wants ~10 GB**, an order of magnitude more than the
+SCF that produced the state, and `terms=True` on such a cell wants the same again for
+ninety times the time.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -1045,6 +1124,15 @@ instinct. None of these may change a validated number.
 3. **Shell-based radial evaluation** for quantities depending only on `|G|` (~100
    shells vs 1459 G-vectors for Si). Note this is *not* strain-safe: shells split
    under strain, so it must stay off the stress path.
+4. **The stress's reverse-mode tape through the radial transforms** (P11). 11 GB on
+   eight-atom ultrasoft silicon against the SCF's 0.9, and the largest single
+   allocation anywhere in the code. `jax.checkpoint` on the augmentation kernel
+   alone was measured and is worth nothing, so the next thing to try is a
+   `custom_jvp` on each radial transform: `dF/d|G|` has a closed form (one more
+   Bessel integral, which `stress/analytic.py` already writes for `dvloc_of_g` and
+   `drhoc`), so the transform could carry its own derivative and tape a vector of
+   length `ngm` instead of an `(ngm, mesh)` intermediate. That is a ~100x
+   reduction in the dominant term and it makes the gradient *cheaper* as well.
 
 ### Measured and rejected
 

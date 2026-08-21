@@ -71,6 +71,7 @@ def atomic_wavefunctions(
     gvectors: GVectors,
     planewaves: PlaneWaveBasis,
     kpoints: KPoints,
+    kcart: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
     """``(nk, natomwfc, npwx)`` pseudo-atomic orbitals at every k-point.
 
@@ -84,7 +85,8 @@ def atomic_wavefunctions(
 
     lmax = max((l for channels in channels_by_species for _, l, _ in channels), default=0)
     kg, kg_norm, ylm = _angular_part(
-        gvectors.cartesian(cell), planewaves.indices, kpoints.cartesian(cell), lmax
+        gvectors.cartesian(cell), planewaves.indices,
+        kpoints.cartesian(cell) if kcart is None else kcart, lmax
     )
 
     shape = kg_norm.shape

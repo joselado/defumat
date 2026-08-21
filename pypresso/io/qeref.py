@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pypresso.units import ANGSTROM_TO_BOHR
+from pypresso.units import ANGSTROM_TO_BOHR, RY_TO_KBAR
 
 __all__ = ["QEReference", "read_qe_output"]
 
@@ -123,6 +123,12 @@ class QEReference:
     bfgs_steps: tuple[int, int] | None = None
     stress: np.ndarray | None = None  # (3,3) Ry/bohr^3
     pressure: float | None = None  # kbar
+    #: The per-contribution stress ``verbosity = 'high'`` prints, keyed by the
+    #: same names :mod:`pypresso.stress.analytic` uses, **in Ry/bohr^3** -- QE
+    #: prints this table in kbar and nowhere else, so the conversion happens
+    #: here, which is the only layer allowed to do it. Empty for a run that did
+    #: not ask for the breakdown.
+    stress_terms: dict = field(default_factory=dict)
     n_iterations: int | None = None
 
     @property
@@ -208,6 +214,7 @@ def read_qe_output(path: str | Path) -> QEReference:
         bfgs_steps=_parse_bfgs_steps(text),
         stress=stress,
         pressure=pressure,
+        stress_terms=_parse_stress_terms(text),
         n_iterations=_as_int(
             _scalar(text, r"convergence has been achieved in\s*(" + _FLOAT + r")\s*iterations")
         ),
@@ -574,6 +581,49 @@ def _parse_bfgs_steps(text: str) -> tuple[int, int] | None:
         r"bfgs converged in\s*(\d+)\s*scf cycles and\s*(\d+)\s*bfgs steps", text
     )
     return None if match is None else (int(match.group(1)), int(match.group(2)))
+
+
+#: The headers ``stress.f90``'s ``iverbosity > 0`` block prints, mapped onto the
+#: names :mod:`pypresso.stress.analytic` gives the same contributions. Only the
+#: ones with a counterpart here are listed; the dispersion, XDM, vdW and RISM
+#: rows are printed as zeros by every run this project compares against.
+_STRESS_TERMS = {
+    "kinetic stress (kbar)": "kinetic",
+    "local   stress (kbar)": "local",
+    "nonloc. stress (kbar)": "nonlocal",
+    "hartree stress (kbar)": "hartree",
+    "exc-cor stress (kbar)": "xc",
+    "corecor stress (kbar)": "core",
+    "ewald   stress (kbar)": "ewald",
+    "hubbard stress (kbar)": "hubbard",
+}
+
+
+def _parse_stress_terms(text: str) -> dict:
+    """The per-contribution stress ``verbosity = 'high'`` prints, in Ry/bohr^3.
+
+    Each block is a label and three numbers, then two unlabelled rows of three.
+    QE prints the table in kbar only -- unlike the total, which it prints in both
+    -- so this is the one parser here that converts, and it converts *into* the
+    internal unit rather than out of it.
+
+    **``exc-cor`` already contains the gradient correction.** ``stres_gradcorr``
+    is called on ``sigmaxc`` before the table is printed, so a GGA run's
+    ``exc-cor`` row is the diagonal plus the non-diagonal ``v2 grad grad``
+    together and there is no separate row for it. Comparing it against a
+    transcription's diagonal alone is a mistake that looks like a small error on
+    a weakly-inhomogeneous system.
+    """
+    terms = {}
+    for header, name in _STRESS_TERMS.items():
+        block = re.search(re.escape(header) + r"((?:.*\n){3})", text)
+        if block is None:
+            continue
+        rows = [_floats(line)[-3:] for line in block.group(1).splitlines()]
+        if len(rows) != 3 or any(len(row) != 3 for row in rows):
+            continue
+        terms[name] = np.array(rows, dtype=float) / RY_TO_KBAR
+    return terms
 
 
 def _parse_stress(text: str) -> tuple[np.ndarray | None, float | None]:

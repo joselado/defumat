@@ -1,0 +1,32 @@
+! The same stress case with an ultrasoft pseudopotential.
+!
+! What it adds over `si2-nc-stress.in` is the augmentation charge: `Q_ij(G)` is
+! a radial transform against `|G|` like every other, so it carries its own
+! strain derivative, and on QE's side that derivative is a routine of its own
+! (`addusstress.f90`). Here it is inside `rho`, so it arrives through the
+! Hartree, local and exchange-correlation terms rather than as a term of its own
+! -- which is why the two decompositions cannot be compared entry by entry on an
+! ultrasoft cell and the term-by-term test uses the norm-conserving one.
+!
+! This dataset also has a nonlinear core charge, so it is the first case where
+! `stres_cc` is nonzero.
+ &control
+    calculation = 'scf'
+    tstress = .true.
+    tprnfor = .true.
+    verbosity = 'high'
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=20.0, ecutrho=160.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-n-rrkjus_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.27 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0

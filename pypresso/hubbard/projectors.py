@@ -83,12 +83,20 @@ def build_hubbard_projectors(
     planewaves,
     kpoints,
     apply_s,
+    kcart=None,
 ) -> jnp.ndarray:
     """``(nk, npwx, nwfcU)``: the Hubbard projectors at every k-point.
 
     ``apply_s(psi, ik)`` is the overlap operator of the calculation, taking
     ``(..., npwx)`` states -- :meth:`pypresso.hamiltonian.operator.Hamiltonian.apply_s`
     or anything with that signature.
+
+    ``kcart`` replaces the k-points' cartesian coordinates while keeping this
+    basis, exactly as it does for the nonlocal projectors. It exists for the
+    stress: ``KPoints.coords`` are in units of ``2 pi / alat`` and ``alat`` is
+    static, so under a strain the k-points do **not** follow the reciprocal cell
+    on their own -- and a Hubbard projector built at the wrong k is silently
+    wrong rather than an error.
 
     ``orthoUwfc_k``'s ``lflag = .TRUE.`` variant -- ``O^{-1/2} phi``, the
     orthogonalisation without the trailing ``S`` -- is deliberately absent. It
@@ -97,7 +105,7 @@ def build_hubbard_projectors(
     (:mod:`pypresso.forces.energy`), so nothing would consume it.
     """
     atomic = atomic_wavefunctions(
-        pseudos, structure, cell, gvectors, planewaves, kpoints
+        pseudos, structure, cell, gvectors, planewaves, kpoints, kcart
     )  # (nk, natomwfc, npwx)
     nk = atomic.shape[0]
     columns = jnp.asarray(

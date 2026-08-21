@@ -55,8 +55,11 @@ package offers — forming `H` costs `O(npw^2)` memory, so a dense solve is a te
 (`tests/exact_reference.py`), never a `diagonalization` a run can select. P6 is complete too: automatic k-grids are reduced to the
 irreducible wedge. P10's first pass puts pypresso within **2–4x of serial Quantum ESPRESSO
 per SCF iteration** on the same machine, ultrasoft and PAW included — see
-`PERFORMANCE.md`. **Outstanding:** the projected DOS (`projwfc.x`), Wyckoff input, the stress (and with it
-`vc-relax`), and the rest of P10 (k-axis sharding and GPU).
+`PERFORMANCE.md`. **The stress tensor** (P11) is in: `sigma = -(1/Omega) dE/d(epsilon)` from one `jax.grad` of
+the energy at frozen wavefunctions, matching QE to **≤2.7e-7 Ry/bohr³** on thirteen cases
+from norm-conserving LDA up through ultrasoft, PAW, PBE, `nspin = 2` and DFT+U.
+**Outstanding:** the projected DOS (`projwfc.x`), Wyckoff input, `vc-relax`, and the rest of
+P10 (k-axis sharding and GPU).
 
 ## Layout
 
@@ -360,7 +363,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Ewald / local potential | `PW/src/ewald.f90`, `setlocal.f90` | the ion-ion sum and `V_loc(G)`; the Ewald neighbour list is fixed for the *cell*, not the geometry, so it survives a relaxation |
 | Forces | `PW/src/forces.f90`, `force_lc.f90`, `force_cc.f90`, `force_ew.f90`, `force_us.f90`, `addusforce.f90`, `force_corr.f90`, `symme.f90` (`symvector`) | the default is `jax.grad` of the energy at frozen wavefunctions (`forces/energy.py`); the Fortran expressions are transcribed as a cross-check. `gradcorr` is called from **inside** `v_xc`, so `force_cc` needs it |
 | Structural relaxation | `Modules/bfgs_module.f90`, `PW/src/move_ions.f90`, `run_pwscf.f90`, `update_pot.f90`, `checkallsym.f90` | BFGS in crystal coordinates with the cell metric; the setup (FFT grid, symmetry, k-points) is done **once** and only checked afterwards |
-| Stress | `PW/src/stress.f90` | not written; should come from differentiating with respect to strain rather than from the hand-derived expressions |
+| Stress | `PW/src/stress.f90`, `stres_knl.f90`, `stres_har.f90`, `stres_loc.f90`, `stres_cc.f90`, `stres_gradcorr.f90`, `stres_ewa.f90`, `symme.f90` (`symmatrix`) | the default is `jax.grad` of the energy with respect to a strain at frozen wavefunctions (`stress/energy.py`, through `Calculation.at_strain`); the Fortran expressions are transcribed as a cross-check. `stres_us`/`addusstress` are **not** transcribed, so the analytic route offers terms and no total. `ylmr2`'s `atan2` parameterisation is singular on the `z` axis and only a *cell* derivative reaches it |
 | Magnetic symmetry | `PW/src/symm_base.f90` (`sgam_at_mag`), `symme.f90` (`sym_rho`'s `nspin = 4` branch), `PW/src/irrek.f90` | the magnetization is an **axial** vector, so its rotation carries `det(R)` and a further sign for an operation that is a symmetry only with time reversal; `irreducible_BZ` completes an explicit k-list from the lattice's wedge to the crystal's, and runs for every SCF |
 | Fields and constraints | `PW/src/add_bfield.f90`, `make_pointlists.f90`, `get_locals.f90`, `report_mag.f90`, `PW/src/input.f90` (`i_cons`) | the penalty's *energy* is written here and its potential comes from `jax.grad`; QE's five expressions are transcribed as the cross-check. Elk's counterparts: manual §5.2/§5.12/§5.104, `src/bfieldfsm.f90` |
 | Spin spirals | no QE counterpart — Elk's `src/gengkqvec.f90`, `init0.f90`, `findsymlat.f90`, manual §5.146 | up at `k + q/2`, down at `k - q/2`, each with its own `G+k` set; one basis call on the concatenated list gives both a common `npwx` |

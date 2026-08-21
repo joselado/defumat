@@ -47,6 +47,7 @@ point where there is not.
 | **DFT+U** — Dudarev's functional with `U`, `J0`, `alpha`, `beta`, on `atomic`, `ortho-atomic` or `norm-atomic` projectors | `HUBBARD` card | `pw.x` |
 | **Forces**, and their six contributions separately | `compute_forces` | `pw.x` — but computed by differentiating the energy, with QE's hand-derived terms kept beside them as a cross-check |
 | **Structural relaxation** — BFGS with QE's trust radius and line search | `calculation = 'relax'`, `pypresso relax` | `pw.x` |
+| **Stress tensor and pressure**, in Ry/bohr³ and kbar | `tstress = .true.`, `compute_stress`, `pypresso stress` | `pw.x` — but from one strain derivative of the energy, with QE's own term-by-term expressions transcribed beside it as a cross-check |
 | **Fixed-spin-moment**, driven by feedback rather than by a penalty | `constrained_magnetization = 'fsm'` | new — Elk's (`bfieldfsm.f90`) |
 | **A field inside one atom's sphere**, and Elk's `reducebf` | `LOCAL_MAGNETIC_FIELDS` card | new — Elk's `bfcmt`; `pw.x` has no counterpart |
 | **Spin spirals** by the generalized Bloch theorem, at any wavevector, without a supercell | `spiral_q`, `pypresso spiral` | new — Elk has it, `pw.x` does not |
@@ -158,6 +159,7 @@ without being run, and each has a plain-text `.md` version beside it.
 | [`12_spin_spirals`](notebooks/12_spin_spirals.ipynb) | Two plane-wave spheres instead of one, three identities that validate them against calculations that are not spirals, and an `E(q)` magnon dispersion |
 | [`13_dft_plus_u`](notebooks/13_dft_plus_u.ipynb) | The Hubbard correction as a penalty on fractional occupation, nickel four ways, antiferromagnetic FeO, and `force_hub` falling out of the gradient |
 | [`14_spiral_relaxation`](notebooks/14_spiral_relaxation.ipynb) | `dE/dq`: which terms of the energy a spiral's wavevector touches, and a BFGS walking a hydrogen chain to its ground-state pitch |
+| [`15_stress`](notebooks/15_stress.ipynb) | The stress as the strain derivative of the energy, silicon's equation of state, and the pressure against `-dE/dV` |
 
 `benchmarks/` holds ready-to-run input files, from a two-atom silicon cell up to
 a sixteen-atom one.

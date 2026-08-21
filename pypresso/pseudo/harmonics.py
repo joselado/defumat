@@ -15,16 +15,38 @@ The functions are real and orthonormal on the sphere.
 
 This is written to be differentiable in the direction vector, because the
 velocity operator comes from differentiating ``vkb(k)`` with respect to ``k``
-(rule D2), and ``vkb`` contains ``Y_lm(k+G)``. The two places where a naive
-transcription produces NaN gradients rather than wrong numbers -- ``sqrt`` at the
-poles and ``atan`` at the origin -- are handled with sanitised arguments.
+(rule D2), and ``vkb`` contains ``Y_lm(k+G)``, and because the stress
+differentiates the same expression with respect to the cell (P11).
+
+**The azimuthal angle is never formed.** ``ylmr2`` writes ``Y_lm`` as
+``sin^m(theta) * P(cos theta) * {cos, sin}(m phi)`` and gets ``phi`` from an
+``atan2``, which is a parameterisation with a coordinate singularity on the
+``z`` axis: ``sin theta`` has an infinite derivative there and ``phi`` is
+undefined. The *function* is perfectly smooth -- ``r^l Y_lm`` is a polynomial in
+``(x, y, z)`` -- and the singularity is entirely the fault of the spherical
+coordinates, so a gradient taken through them is NaN rather than wrong. That is
+not hypothetical: fcc silicon at ``ecutrho = 48`` has **ten** dense G-vectors
+exactly on the ``z`` axis, and every one of them poisons the whole stress
+tensor.
+
+The two factors are therefore combined before they are evaluated. Writing
+``rho = sqrt(x^2 + y^2)``,
+
+    sin^m(theta) cos(m phi) = Re[(x + iy)^m] / r^m,
+    sin^m(theta) sin(m phi) = Im[(x + iy)^m] / r^m,
+
+both polynomials in ``x`` and ``y`` divided by a power of ``r``, and hence
+smooth wherever ``r > 0``. What is recursed on is then ``Q(l,m) / sin^m theta``,
+a polynomial in ``cos theta``, which obeys exactly ``ylmr2``'s recursion with
+the one ``sent`` factor in the ``m = l`` step removed. The values are the
+Fortran's; only the route to them avoids the pole.
 """
 
 from __future__ import annotations
 
 import jax.numpy as jnp
 
-from pypresso.units import FPI, PI
+from pypresso.units import FPI
 
 __all__ = ["real_spherical_harmonics", "lm_index"]
 
@@ -52,7 +74,9 @@ def real_spherical_harmonics(vectors: jnp.ndarray, lmax: int) -> jnp.ndarray:
 
     The recursion follows ``ylmr2``: build ``Q(l,m) = sqrt((l-m)!/(l+m)!) P(l,m)``
     by upward recursion in ``l``, then attach the ``cos(m phi)`` / ``sin(m phi)``
-    factors and the normalisation.
+    factors and the normalisation. What is stored here is ``Q(l,m)`` divided by
+    ``sin^m theta``, and the missing power is put back by the azimuthal factors,
+    which carry it in the smooth form described in the module docstring.
     """
     if lmax < 0:
         raise ValueError(f"lmax must be non-negative, got {lmax}")
@@ -61,22 +85,24 @@ def real_spherical_harmonics(vectors: jnp.ndarray, lmax: int) -> jnp.ndarray:
     x, y, z = vectors[..., 0], vectors[..., 1], vectors[..., 2]
     norm2 = x * x + y * y + z * z
 
-    # A zero vector has no direction; QE sets cos(theta) = 0 there. Sanitising
-    # the norm keeps the gradient finite instead of NaN.
+    # A zero vector has no direction; QE sets cos(theta) = 0 there. The mask is
+    # applied to ``norm2`` *before* the square root, not to the quotient after
+    # it: ``sqrt`` has an infinite derivative at zero, so guarding the result
+    # leaves the value right and the gradient NaN. That is P15's Ewald trap in
+    # a second place, and it only shows up once the cell is differentiated.
     tiny = norm2 < _EPS**2
     norm = jnp.sqrt(jnp.where(tiny, 1.0, norm2))
     cost = jnp.where(tiny, 0.0, z / norm)
-    sent = jnp.sqrt(jnp.maximum(0.0, 1.0 - cost * cost))
 
     if lmax == 0:
         return jnp.full(vectors.shape[:-1] + (1,), 1.0 / jnp.sqrt(FPI))
 
-    # --- Q(l, m), stored the way ylmr2 stores them: column l^2 + 1 + 2m ---
+    # --- Q(l, m) / sin^m(theta), in the column ylmr2 stores Q(l, m) in ---
     size = (lmax + 1) ** 2
     q = [None] * size
     q[0] = jnp.ones_like(cost)
     q[1] = cost
-    q[3] = -sent / jnp.sqrt(2.0)
+    q[3] = jnp.full_like(cost, -1.0 / jnp.sqrt(2.0))  # ylmr2's -sent/sqrt(2)
 
     for l in range(2, lmax + 1):
         for m in range(0, l - 1):
@@ -88,23 +114,36 @@ def real_spherical_harmonics(vectors: jnp.ndarray, lmax: int) -> jnp.ndarray:
             )
         lm, lm1, lm2 = l**2 + 2 * l, l**2 + 2 * (l - 1), (l - 1) ** 2 + 2 * (l - 1)
         q[lm1] = cost * jnp.sqrt(float(2 * l - 1)) * q[lm2]
-        q[lm] = -jnp.sqrt((2 * l - 1) / (2.0 * l)) * sent * q[lm2]
+        # ``- sqrt((2l-1)/2l) sent Q(l-1,l-1)`` divided through by sin^l theta:
+        # the one place the recursion changes power of ``sent``, and the one
+        # place the division has to be accounted for.
+        q[lm] = -jnp.sqrt((2 * l - 1) / (2.0 * l)) * q[lm2]
 
-    # --- the azimuthal angle, defined modulo pi by atan ---
-    phi = jnp.where(
-        jnp.abs(x) > _EPS,
-        jnp.arctan2(y, jnp.where(jnp.abs(x) > _EPS, x, 1.0)),
-        jnp.sign(y) * PI / 2.0,
-    )
+    # --- sin^m(theta) {cos, sin}(m phi) = Re, Im of ((x + i y) / r)^m ---
+    # Built by the complex-multiplication recursion rather than by forming the
+    # angle: it is the same arithmetic, and it has no branch cut.
+    # A zero vector takes ``ylmr2``'s own values there: it sets ``cos theta = 0``
+    # and leaves ``sent = 1`` and ``phi = 0``, which in this parameterisation is
+    # ``(u, v) = (1, 0)``. Nothing physical reads them -- the radial factor
+    # ``f_l(0)`` vanishes for every ``l > 0`` and ``Y_00`` has no direction --
+    # but reproducing the Fortran there keeps the two codes' arrays comparable
+    # element by element, which is how this one is tested.
+    u = jnp.where(tiny, 1.0, x / norm)
+    v = jnp.where(tiny, 0.0, y / norm)
+    cos_m = [jnp.ones_like(cost)]
+    sin_m = [jnp.zeros_like(cost)]
+    for m in range(1, lmax + 1):
+        cos_m.append(cos_m[-1] * u - sin_m[-1] * v)
+        sin_m.append(sin_m[-1] * u + cos_m[-2] * v)
 
-    # --- attach cos(m phi) / sin(m phi) and normalise ---
+    # --- attach the azimuthal factors and normalise ---
     ylm = [jnp.broadcast_to(q[0] / jnp.sqrt(FPI), cost.shape)]
     for l in range(1, lmax + 1):
         c = jnp.sqrt((2 * l + 1) / FPI)
         ylm.append(c * q[l**2])
         for m in range(1, l + 1):
             base = c * jnp.sqrt(2.0) * q[l**2 + 2 * m]
-            ylm.append(base * jnp.cos(m * phi))
-            ylm.append(base * jnp.sin(m * phi))
+            ylm.append(base * cos_m[m])
+            ylm.append(base * sin_m[m])
 
     return jnp.stack(ylm, axis=-1)
