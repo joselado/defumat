@@ -160,7 +160,17 @@ class VelocityOperator:
         """
         return self._tangent(psi, direction, overlap=True)
 
-    def _tangent(self, psi, direction, overlap: bool) -> jnp.ndarray:
+    def both(self, psi: jnp.ndarray, direction):
+        """``(dH/dk_a |psi>, dS/dk_a |psi>)`` from **one** ``jvp``.
+
+        The two tangents share the whole cost -- rebuilding ``|k+G|^2`` and
+        ``vkb(k)`` as differentiable functions of ``k`` -- so a band velocity,
+        which needs both, asks for them together rather than paying for the
+        rebuild twice per direction.
+        """
+        return self._tangent(psi, direction, overlap=None)
+
+    def _tangent(self, psi, direction, overlap):
         psi = jnp.asarray(psi)
         tangent = jnp.broadcast_to(
             jnp.asarray(direction, dtype=self.kcart.dtype), self.kcart.shape
@@ -172,18 +182,28 @@ class VelocityOperator:
         )
         return out
 
-    def _operator(self, psi, kcart, overlap: bool) -> jnp.ndarray:
-        """``H|psi>`` or ``S|psi>`` at every k-point, as a function of ``kcart``."""
+    def _operator(self, psi, kcart, overlap):
+        """``H|psi>``, ``S|psi>``, or both, at every k-point, as a function of ``kcart``.
+
+        ``overlap = None`` returns the pair, which is what
+        :meth:`both` differentiates in one pass.
+        """
         moved = self.calculation.at_kcart(kcart)
         hubbard = (
             None if self.ns is None else moved.hubbard_terms(self.ns)[2]
         )
         hamiltonians = moved.hamiltonian(self.v_scf, self.ddd_paw, hubbard)
         batch = self.calculation.k_batch
-        return jnp.stack([
-            over_kpoints(ham, psi[spin], batch, overlap)
-            for spin, ham in enumerate(hamiltonians)
-        ])
+
+        def applied(want_overlap):
+            return jnp.stack([
+                over_kpoints(ham, psi[spin], batch, want_overlap)
+                for spin, ham in enumerate(hamiltonians)
+            ])
+
+        if overlap is None:
+            return applied(False), applied(True)
+        return applied(overlap)
 
     # -- what is built from them ------------------------------------------
 
@@ -215,8 +235,11 @@ class VelocityOperator:
 
         columns = []
         for axis in _CARTESIAN:
-            dh = jnp.einsum("skng,skng->skn", psi.conj(), self.apply(psi, axis))
-            ds = jnp.einsum("skng,skng->skn", psi.conj(), self.apply_s(psi, axis))
+            # One ``jvp`` for the pair: the projector rebuild is the whole cost
+            # and both tangents come out of the same one.
+            velocity, overlap = self.both(psi, axis)
+            dh = jnp.einsum("skng,skng->skn", psi.conj(), velocity)
+            ds = jnp.einsum("skng,skng->skn", psi.conj(), overlap)
             columns.append(jnp.real(dh) - eigenvalues * jnp.real(ds))
         return BandVelocities(
             velocities_by_spin=np.asarray(jnp.stack(columns, axis=-1)),

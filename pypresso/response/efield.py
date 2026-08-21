@@ -206,9 +206,11 @@ def dielectric_tensor(
     occupied_eigenvalues = solver.eigenvalues
     bare = []
     for axis in np.eye(3):
+        # ``[H - eps S, r_a] = -i (dH/dk_a - eps dS/dk_a)``, both tangents from
+        # one ``jvp`` -- the projector rebuild they share is the whole cost.
+        derivative, overlap = velocity.both(occupied, axis)
         commutator = -1j * (
-            velocity.apply(occupied, axis)
-            - occupied_eigenvalues[..., None] * velocity.apply_s(occupied, axis)
+            derivative - occupied_eigenvalues[..., None] * overlap
         )
         bare.append(_solve_stored(solver, commutator))
 
@@ -370,9 +372,11 @@ def _born_charges(calculation, solver, v_scf, dpsi) -> np.ndarray:
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
             _, bare = jax.jvp(h_psi, (positions,), (tangent,))
-            for field in range(3):
-                overlap = jnp.einsum("skng,skng->skn", jnp.conj(dpsi[field]), bare)
-                charges[atom, field, cart] = -2.0 * float(
+            for direction in range(3):
+                overlap = jnp.einsum(
+                    "skng,skng->skn", jnp.conj(dpsi[direction]), bare
+                )
+                charges[atom, direction, cart] = -2.0 * float(
                     jnp.sum(weights * jnp.real(overlap))
                 )
     charges += np.eye(3)[None] * valence[:, None, None]
