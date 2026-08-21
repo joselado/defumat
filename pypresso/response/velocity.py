@@ -1,0 +1,261 @@
+"""The velocity operator ``v = dH/dk``, by ``jvp`` at a frozen sphere.
+
+For a local potential the velocity operator would be ``p``, and a plane-wave
+code would need nothing: ``<k+G|p|k+G> = k+G``. A pseudopotential is not local,
+and ``[V_NL, r] != 0`` -- QE hand-codes the correction in
+``PW/src/commutator_Hx_psi.f90``. Rule D2 of ``PLAN.md`` says the whole of
+``H(k)`` is built by differentiable JAX code from ``k`` precisely so that the
+operator falls out of differentiating it, nonlocal contributions and all, with
+nothing derived by hand. This module is that rule being cashed in.
+
+**What carries ``k``, and what visibly does not.** Two terms only:
+``|k+G|^2`` and ``vkb(k)`` -- and ``wfcU(k)`` when there is a Hubbard ``U``,
+whose atomic orbitals live at ``k+G`` as the projectors do. The local potential
+is a field on a real-space box that does not move with ``k``, so its tangent is
+symbolically zero and the ``jvp`` never issues its FFTs.
+:meth:`~pypresso.scf.driver.Calculation.at_kcart` is what rebuilds the two
+traced arrays over shared everything-else.
+
+**The frozen quantity is the coefficient vector, and it is the right one.** In
+the periodic gauge ``H(k) = e^{-ik.r} H e^{ik.r}`` acts on the lattice-periodic
+part ``u_nk``, whose expansion coefficients are exactly what is stored. Holding
+them fixed while ``k`` moves is therefore differentiating ``H(k)`` at fixed
+basis function, which is what the velocity operator *is*. What is held fixed
+besides is which plane waves are in the sphere: that is a host-side decision
+that cannot be traced, it is piecewise constant in ``k``, and on each piece the
+frozen-sphere derivative is the exact one. The jump at the isolated ``k`` where
+a plane wave crosses the cutoff is the Pulay error of a finite basis, the same
+term :mod:`pypresso.forces.spiral` measures for ``dE/dq``.
+
+**Ultrasoft is carried rather than refused, because ``S`` moves too.**
+``S(k) = 1 + sum |beta(k)> q <beta(k)|`` has the same ``k`` in it as ``H``, so
+the band velocity is the *generalised* Hellmann-Feynman derivative
+
+    d(eps_n)/dk_a = <psi_n| dH/dk_a - eps_n dS/dk_a |psi_n>,
+
+which is ``commutator_Hx_psi``'s ultrasoft correction and comes from the same
+``jvp`` -- :meth:`VelocityOperator.apply_s` is that second tangent.
+
+**Nothing dense is ever formed.** ``dH/dk`` as a matrix is ``npw^2``, the same
+reason a dense diagonalisation is a test fixture here and never a solver. One
+``jvp`` per cartesian direction gives ``v_a|psi>`` for every band at every
+k-point, and the matrix elements a Kubo sum needs are contractions of that
+against the states already held.
+
+**Memory.** One direction's tangent doubles the two traced arrays while it is
+live: ``vkb`` is ``(nk, npwx, nkb)`` complex and ``|k+G|^2`` is ``(nk, npwx)``,
+so the peak is one extra ``vkb``. The three directions are separate ``jvp``
+calls for that reason -- a ``jacfwd`` over all three would hold three tangents
+at once, and ``vkb`` is the largest ``k``-indexed array a calculation has after
+the wavefunctions themselves.
+
+**Degeneracies.** Nothing here differentiates an eigendecomposition (rule D4).
+:meth:`VelocityOperator.band_velocities` is a diagonal expectation value, which
+is wrong inside a degenerate manifold in the same way any diagonal element is --
+the eigensolver's arbitrary mixing rotates it -- so what it reports there is one
+particular basis of the manifold. :meth:`VelocityOperator.matrix_elements`
+returns the whole block and is what a degeneracy-safe consumer contracts.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from pypresso.batching import map_k
+
+__all__ = ["VelocityOperator", "BandVelocities", "band_velocities"]
+
+#: The three cartesian directions, as tangents for ``k``.
+_CARTESIAN = jnp.eye(3)
+
+
+@dataclass
+class BandVelocities:
+    """``d(eps_n)/dk`` at every band and k-point, in Ry bohr.
+
+    Rydberg atomic units have ``hbar = 1``, so the group velocity is this number
+    outright; it is reported as the energy derivative rather than as a velocity
+    because that is what is computed and what a finite difference of the band
+    structure checks it against.
+    """
+
+    #: ``(nspin, nk, nbnd, 3)`` in Ry bohr. The spin axis is squeezed on the way
+    #: out by :attr:`velocities`, following the convention of ``SCFResult``.
+    velocities_by_spin: np.ndarray
+    #: ``(nspin, nk, nbnd)`` in Ry -- the eigenvalues these belong to.
+    eigenvalues_by_spin: np.ndarray
+    nspin: int = 1
+
+    @property
+    def velocities(self) -> np.ndarray:
+        """``(nk, nbnd, 3)``, or ``(2, nk, nbnd, 3)`` for a collinear run."""
+        return (
+            self.velocities_by_spin
+            if self.nspin == 2
+            else self.velocities_by_spin[0]
+        )
+
+    @property
+    def speeds(self) -> np.ndarray:
+        """``|d(eps)/dk|``, same shape as the eigenvalues."""
+        return np.linalg.norm(self.velocities_by_spin, axis=-1)
+
+
+class VelocityOperator:
+    """``dH/dk`` and ``dS/dk`` at a fixed potential, applied to states.
+
+    Built from the same three things :meth:`~pypresso.scf.driver.Calculation.
+    hamiltonian` takes -- the self-consistent potential, PAW's one-centre
+    coefficients and the Hubbard occupation matrix -- because the operator is
+    the derivative of *that* Hamiltonian and of no other. The potential is a
+    field on a box that does not move with ``k``, so freezing it is not an
+    approximation: it is what ``dH/dk`` at fixed density means.
+    """
+
+    def __init__(self, calculation, v_scf, ddd_paw=None, ns=None):
+        if calculation.spiral:
+            raise NotImplementedError(
+                "the velocity operator on a spin spiral is not implemented: the "
+                "two spinor components sit on spheres centred at k + q/2 and "
+                "k - q/2, so dH/dk moves both (see Calculation.at_spiral_q)"
+            )
+        if calculation.is_hubbard and ns is None:
+            raise ValueError(
+                "dH/dk with a Hubbard U needs the converged occupation matrix: "
+                "pass ns = scf_result.ns. wfcU is built at k+G and therefore "
+                "carries a velocity of its own, and leaving the term out gives "
+                "a plausible operator that is missing the Hubbard shift"
+            )
+        self.calculation = calculation
+        self.v_scf = v_scf
+        self.ddd_paw = ddd_paw
+        self.ns = None if ns is None else jnp.asarray(ns)
+        self.kcart = jnp.asarray(
+            calculation.system.kpoints.cartesian(calculation.system.cell)
+        )
+
+    # -- the two operators ------------------------------------------------
+
+    def apply(self, psi: jnp.ndarray, direction) -> jnp.ndarray:
+        """``dH/dk_a |psi>`` for a cartesian ``direction``.
+
+        ``psi`` is ``(nspin, nk, nbnd, ndim)`` -- the shape ``SCFResult.
+        wavefunctions`` has -- and the result matches it. ``direction`` is a
+        cartesian 3-vector in the reciprocal-space basis ``k`` is written in
+        (1/bohr); it need not be normalised, and the result is linear in it.
+        """
+        return self._tangent(psi, direction, overlap=False)
+
+    def apply_s(self, psi: jnp.ndarray, direction) -> jnp.ndarray:
+        """``dS/dk_a |psi>``: zero for a norm-conserving dataset.
+
+        ``S`` is built from the same ``vkb(k)`` the nonlocal potential is, so it
+        carries a velocity whenever ``qq`` is not ``None``. Skipping it is what
+        would make an ultrasoft band velocity wrong by the norm's own motion.
+        """
+        return self._tangent(psi, direction, overlap=True)
+
+    def _tangent(self, psi, direction, overlap: bool) -> jnp.ndarray:
+        psi = jnp.asarray(psi)
+        tangent = jnp.broadcast_to(
+            jnp.asarray(direction, dtype=self.kcart.dtype), self.kcart.shape
+        )
+        _, out = jax.jvp(
+            lambda kc: self._operator(psi, kc, overlap),
+            (self.kcart,),
+            (jnp.asarray(tangent),),
+        )
+        return out
+
+    def _operator(self, psi, kcart, overlap: bool) -> jnp.ndarray:
+        """``H|psi>`` or ``S|psi>`` at every k-point, as a function of ``kcart``."""
+        moved = self.calculation.at_kcart(kcart)
+        hubbard = (
+            None if self.ns is None else moved.hubbard_terms(self.ns)[2]
+        )
+        hamiltonians = moved.hamiltonian(self.v_scf, self.ddd_paw, hubbard)
+        batch = self.calculation.k_batch
+        return jnp.stack([
+            _over_kpoints(ham, psi[spin], overlap, batch)
+            for spin, ham in enumerate(hamiltonians)
+        ])
+
+    # -- what is built from them ------------------------------------------
+
+    def matrix_elements(self, psi: jnp.ndarray) -> jnp.ndarray:
+        """``<psi_m| dH/dk_a |psi_n>``, ``(3, nspin, nk, nbnd, nbnd)`` in Ry bohr.
+
+        The whole block, not its diagonal, because this is what survives a
+        degenerate manifold: a Kubo sum contracts off-diagonal elements and the
+        eigensolver's arbitrary rotation inside a manifold cancels between the
+        two factors (rule D4).
+        """
+        psi = jnp.asarray(psi)
+        return jnp.stack([
+            jnp.einsum("skmg,skng->skmn", psi.conj(), self.apply(psi, axis))
+            for axis in _CARTESIAN
+        ])
+
+    def band_velocities(self, psi, eigenvalues) -> BandVelocities:
+        """``d(eps_n)/dk`` by the generalised Hellmann-Feynman theorem.
+
+        ``<psi_n| dH/dk - eps_n dS/dk |psi_n>``. The second term is identically
+        zero for a norm-conserving dataset and is not skipped for one -- the
+        ``jvp`` is what decides that, not a branch here.
+        """
+        psi = jnp.asarray(psi)
+        eigenvalues = jnp.asarray(eigenvalues)
+        if eigenvalues.ndim == 2:  # (nk, nbnd) -- the squeezed unpolarized shape
+            eigenvalues = eigenvalues[None]
+
+        columns = []
+        for axis in _CARTESIAN:
+            dh = jnp.einsum("skng,skng->skn", psi.conj(), self.apply(psi, axis))
+            ds = jnp.einsum("skng,skng->skn", psi.conj(), self.apply_s(psi, axis))
+            columns.append(jnp.real(dh) - eigenvalues * jnp.real(ds))
+        return BandVelocities(
+            velocities_by_spin=np.asarray(jnp.stack(columns, axis=-1)),
+            eigenvalues_by_spin=np.asarray(eigenvalues),
+            nspin=self.calculation.nspin,
+        )
+
+
+def _over_kpoints(hamiltonian, states, overlap: bool, batch):
+    """``H|psi>`` (or ``S|psi>``) at every k-point, through the batching dial.
+
+    ``Hamiltonian.apply`` takes a k *index* rather than a slice, so the mapped
+    quantity is the index and the states are gathered inside -- which is how
+    :mod:`pypresso.solvers.davidson` walks the same axis.
+    """
+    apply = hamiltonian.apply_s if overlap else hamiltonian.apply
+    indices = jnp.arange(states.shape[0])
+    return map_k(lambda ik: apply(states[ik], ik), indices, batch=batch)
+
+
+def band_velocities(calculation, result, kpoints=None) -> BandVelocities:
+    """``d(eps)/dk`` for a converged run, in one call.
+
+    ``result`` is an :class:`~pypresso.scf.driver.SCFResult`; the potential and
+    the states are taken from it. When ``kpoints`` is given the velocities are
+    computed there instead -- a band path, typically -- which is an NSCF
+    diagonalisation followed by the same operator.
+    """
+    from pypresso.workflows.nscf import fixed_density_states
+
+    if kpoints is not None:
+        calculation, _, eigenvalues, psi = fixed_density_states(
+            result.system, calculation.pseudos, result.density,
+            kpoints=kpoints, ns=result.ns,
+        )
+        eigenvalues = jnp.asarray(eigenvalues)
+    else:
+        eigenvalues = jnp.asarray(result.eigenvalues)
+        psi = result.wavefunctions
+
+    potential = calculation.potential(result.density)
+    operator = VelocityOperator(calculation, potential.v_scf, None, result.ns)
+    return operator.band_velocities(psi, eigenvalues)

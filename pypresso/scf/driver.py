@@ -1508,6 +1508,61 @@ class Calculation:
             moved.wfcU = moved._build_hubbard_projectors()
         return moved
 
+    def at_kcart(self, kcart) -> "Calculation":
+        """The same calculation with the k-points moved, at a **frozen sphere**.
+
+        :meth:`at_kpoints` keeps the k-points and rebuilds the basis; this keeps
+        the basis and moves the k-points. It is the ``k`` counterpart of
+        :meth:`at_spiral_q` with ``rebuild_basis = False``, and exists for the same
+        reason: which plane waves satisfy ``|k+G|^2 <= ecutwfc`` is a host-side
+        decision that cannot be traced, while the arithmetic on top of it can.
+        Given a *traced* ``kcart`` -- ``(nk, 3)`` in 1/bohr -- this returns a
+        calculation whose ``k``-dependent arrays are traced, which is what makes
+        the velocity operator a ``jvp`` (:mod:`pypresso.response.velocity`).
+
+        Only two things carry ``k``: ``|k+G|^2`` and ``vkb(k)``, plus ``wfcU``
+        when there is a Hubbard ``U``, whose atomic orbitals live at ``k+G`` as
+        the projectors do. The G sets, the FFT box, the stick layout, the mask,
+        the local potential, the augmentation charge and the Ewald sum are all
+        properties of the cell and the atoms, so they are shared rather than
+        rebuilt.
+
+        **The returned calculation has a** ``system.kpoints`` **that is not where
+        its arrays are**, exactly as :meth:`at_spiral_q` leaves ``spiral_q`` behind:
+        the k-points decide array lengths and so cannot hold a tracer. Every
+        host-side consumer wants the original; the differentiated operator never
+        reads it back. For an actual *move* of the k-list, use
+        :meth:`at_kpoints`, which rebuilds the sphere.
+        """
+        if self.spiral:
+            # A spiral has its spheres centred at ``k +- q/2``, so one cartesian
+            # k-list is not what its arrays are built on. :meth:`at_spiral_q`
+            # moves both halves together and is what a spiral differentiates.
+            raise NotImplementedError(
+                "at_kcart on a spin spiral is not implemented: the basis is "
+                "built at k +- q/2, so moving k means moving both halves "
+                "(see at_spiral_q)"
+            )
+        smooth, cell = self.basis.smooth, self.system.cell
+        planewaves = self.basis.planewaves
+        moved = copy.copy(self)
+        # Both compiled gradients close over the sphere *and* the k-points they
+        # were built with, so neither can follow this.
+        moved.__dict__.pop("_spiral_gradient", None)
+        moved.__dict__.pop("_velocity", None)
+
+        moved.kinetic = planewaves.kinetic(smooth, self.basis_kpoints, cell, kcart)
+        moved.projector_core = build_projector_core(
+            self.pseudos, self.system.structure, cell, smooth, planewaves,
+            self.basis_kpoints, kcart,
+        )
+        moved.projectors = moved.projector_core.at_positions(
+            self.system.structure.positions, qq=self.projectors.qq
+        )
+        if self.hubbard is not None:
+            moved.wfcU = moved._build_hubbard_projectors(kcart)
+        return moved
+
     def at_spiral_q(self, q_crystal, rebuild_basis: bool = True) -> "Calculation":
         """The same calculation at a different spin-spiral wavevector.
 
