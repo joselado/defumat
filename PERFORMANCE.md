@@ -1264,6 +1264,43 @@ CG solve per occupied band instead of a differentiated Davidson. That is the onl
 inner Krylov iteration stops costing a diagonalisation, and it is the same routine DFPT
 needs, which is the argument for writing it.
 
+## How many iterations a continuation saves (P23)
+
+The same currency as P22 -- **iterations, not seconds** -- because a continuation changes
+nothing inside an SCF step and everything about how many steps there are. All pairs at
+`conv_thr = 1e-8` (`1e-9` for platinum), and every pair lands on the same energy, which is
+the check that makes the count meaningful at all:
+
+| case | from the atoms | continued | same answer to |
+|---|---|---|---|
+| Si, `nspin` 1 -> 2 (seeded, decays to zero) | 5 | 4 | 2e-9 Ry |
+| Si, `nspin` 2 -> 4 (nonmagnetic) | 5 | **1** | 1e-9 Ry |
+| bcc Fe, 2 -> 4, moment rotated onto `x` | 25 | **1** | 2e-8 Ry |
+| bcc Fe, 4 -> 2, moment found and laid on `z` | 30 | **1** | 4e-8 Ry |
+| bcc Fe, 1 -> 2, magnetization seeded | 30 | 27 | 5e-9 Ry |
+| Pt, scalar PAW -> relativistic PAW + `lspinorb` | 13 | **7** | 2e-10 Ry |
+
+**The rule the table shows is one rule.** What carries over is the *charge*. Where the
+charge is the whole answer -- a nonmagnetic run rewritten as a spinor one, a converged moment
+merely rotated onto another axis -- the continued run converges on the state it was handed
+and the iteration is the one that builds the result. Where the run has to *find* a
+magnetization the source does not have (Fe 1 -> 2), the saving is three iterations out of
+thirty, because the magnetization is the slow variable and it is exactly what was not
+carried. Platinum is in between: the dataset changes with the spin-orbit coupling, so
+`becsum` is re-seeded and only the density crosses -- and that is still half the iterations.
+
+**What it costs is one promotion**, which is arithmetic on the dense grid: a decomposition
+into `(n, m)`, at most a 3x3 eigendecomposition to find an axis, and a recomposition. It is
+not measurable beside a diagonalisation. The wavefunctions cross as a span for the first
+Rayleigh-Ritz, which costs what `wfcinit` already costs and nothing more.
+
+**Memory is unchanged.** The promoted state is the same three arrays the mixer already holds
+-- `(rho, becsum, ns)` -- and the span is at most `2 nbnd` vectors per k-point, which is what
+`_as_spinors` already builds from the atomic orbitals. Both runs of a pair are separate
+processes' worth of state only if the caller keeps the first `SCFResult` alive for its
+wavefunctions; dropping them (`wavefunctions=False`) leaves a working set no larger than one
+SCF's.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than

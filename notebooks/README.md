@@ -28,6 +28,7 @@ ends with a pointer to both.
 | [`15_stress.ipynb`](15_stress.ipynb) | The stress as one strain derivative of the energy, silicon's equation of state with `-dE/dV` on top, and five references against `pw.x` (≤2.7e-7 Ry/bohr³) | P11 |
 | [`16_projected_density_of_states.ipynb`](16_projected_density_of_states.ipynb) | `<phi|S|psi>` on Löwdin-orthogonalised orbitals, silicon's `s` and `p` densities of state against `projwfc.x`, and the same weights as fat bands | P8 |
 | [`17_reaching_self_consistency.ipynb`](17_reaching_self_consistency.ipynb) | Kerker preconditioning (24 → 14 iterations), the SCF as a root-find, and the unstable magnetic solutions — with and without a Hubbard `U` — that no mixer can hold | P22 |
+| [`18_continuing_a_calculation.ipynb`](18_continuing_a_calculation.ipynb) | Starting one run from another's converged state across a change of spin regime: bcc iron's moment rotated onto `x` in one iteration, the seed that keeps a magnetic run off the symmetric solution, and spin-orbit coupling switched on | P23 |
 
 ## Conventions
 
@@ -58,7 +59,9 @@ jupyter lab notebooks/
 ```
 
 Most run in under a minute on one core. The exceptions are `08` (about five minutes, the
-bismuthene pair), `11` and `12` (a few minutes each) and `13` (its four SCF runs).
+bismuthene pair), `11` and `12` (a few minutes each), `13` (its four SCF runs) and `18`
+(about three minutes: it runs fourteen SCFs, which is the point — every number in it is a
+*pair* of runs, one from the atoms and one continued).
 
 Some need the vendored Quantum ESPRESSO tree at `../quantum_espresso/` for their input files
 and reference outputs; that tree is not in the repository (it is 285 MB) and the paths at the

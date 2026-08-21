@@ -11,6 +11,8 @@ Defaults come from ``Modules/input_parameters.f90``; the rules for combining
 
 from __future__ import annotations
 
+import dataclasses
+
 import equinox as eqx
 import numpy as np
 
@@ -205,6 +207,135 @@ class System(eqx.Module):
             self.structure, self.nspin, self.starting_magnetization,
             self.angle1, self.angle2,
         )
+
+    def with_spin(
+        self,
+        nspin: int | None = None,
+        *,
+        lspinorb: bool | None = None,
+        starting_magnetization=None,
+        angle1=None,
+        angle2=None,
+        nbnd: int | None = None,
+    ) -> "System":
+        """The same crystal in another spin regime, with its k-points rebuilt.
+
+        What an input file would say differently if it asked for a collinear or
+        a noncollinear run of this cell -- ``nspin``, ``lspinorb``,
+        ``starting_magnetization``, ``angle1``/``angle2`` -- with everything the
+        builder derives from them derived again. It exists because
+        ``dataclasses.replace`` is *not* enough and the two ways it is wrong are
+        both silent:
+
+        * **The weights.** ``setup.f90`` multiplies them by ``degspin`` only in
+          the unpolarized branch, so an unpolarized set handed to an ``nspin =
+          2`` run counts every electron twice and the Fermi level comes out
+          somewhere else (:func:`~pypresso.system.kpoints.for_spin`).
+        * **The k-set itself.** A *magnetic* noncollinear run has a smaller
+          symmetry group and no ``-k = k``, so it needs k-points the collinear
+          run never had -- 22 where the input listed 11, in QE's own
+          ``pw_noncolin`` benchmark. An automatic grid is reduced again with the
+          target's group, and an explicit list goes through ``irreducible_BZ``'s
+          expansion, exactly as :func:`build_system` does it.
+
+        ``nbnd`` is doubled crossing into ``nspin = 4`` and halved coming back,
+        because a spinor band holds one electron where a collinear band holds
+        two; pass it explicitly to override. A band path is left alone -- its
+        weights mean nothing and it is not what an SCF runs on.
+
+        Everything else is carried over unchanged, including the fields and the
+        constraints, so a regime change does not quietly drop them. The result
+        goes through the same consistency checks the input does: ``lspinorb``
+        without ``noncolin`` is refused here as it is there.
+        """
+        nspin = int(self.nspin if nspin is None else nspin)
+        if nspin not in (1, 2, 4):
+            raise ValueError(f"nspin = {nspin}: expected 1, 2 or 4")
+        lspinorb = bool(self.lspinorb if lspinorb is None else lspinorb)
+        if lspinorb and nspin != 4:
+            raise ValueError(
+                "lspinorb = .true. needs nspin = 4: the spin-orbit term couples "
+                "the two spin channels, so it has no collinear form"
+            )
+        magnetization = tuple(
+            self.starting_magnetization if starting_magnetization is None
+            else np.asarray(starting_magnetization, dtype=float).ravel().tolist()
+        )
+        angle1 = tuple(self.angle1 if angle1 is None
+                       else np.asarray(angle1, dtype=float).ravel().tolist())
+        angle2 = tuple(self.angle2 if angle2 is None
+                       else np.asarray(angle2, dtype=float).ravel().tolist())
+        if nspin == 1 and any(abs(m) > 1.0e-6 for m in magnetization):
+            raise ValueError(
+                "nspin = 1 with a nonzero starting_magnetization: an unpolarized "
+                "density has nothing for it to split, so it would be ignored "
+                "rather than honoured"
+            )
+        if self.spiral and nspin != 4:
+            raise ValueError(
+                "a spin spiral is a noncollinear calculation by construction "
+                "(the two spinor components live at k +- q/2); drop spiral_q "
+                "before leaving nspin = 4"
+            )
+        if nbnd is None and self.nbnd is not None:
+            # ``setup.f90``: a spinor band holds one electron, a collinear band
+            # two, so the same physical states need twice as many.
+            factor = (2 if nspin == 4 else 1) / (2 if self.nspin == 4 else 1)
+            nbnd = int(round(self.nbnd * factor))
+
+        # ``dataclasses.replace`` rather than ``eqx.tree_at``: most of what
+        # changes here is a *static* field, which is not in the pytree at all.
+        return dataclasses.replace(
+            self,
+            nspin=nspin,
+            lspinorb=lspinorb,
+            starting_magnetization=magnetization,
+            angle1=angle1,
+            angle2=angle2,
+            nbnd=nbnd,
+            kpoints=self._respin_kpoints(nspin, magnetization, angle1, angle2),
+        )
+
+    def _respin_kpoints(self, nspin, magnetization, angle1, angle2) -> KPoints:
+        """The target regime's k-point set, reduced with *its* symmetry group."""
+        kpoints = self.kpoints
+        if kpoints.path_length is not None or kpoints.gamma_only:
+            return kpoints_for_spin(kpoints, nspin)
+
+        moments = local_moments(self.structure, nspin, magnetization, angle1, angle2)
+        magnetic = nspin == 4 and bool(np.any(np.abs(moments) > 1.0e-6))
+        symmetries = find_symmetries(self.cell, self.structure)
+        if magnetic:
+            symmetries = magnetic_symmetries(
+                self.cell, self.structure, symmetries, moments
+            )
+        rotations = None if self.nosym else symmetries.rotation_array()
+        t_rev = None if self.nosym else symmetries.t_rev_array()
+
+        if kpoints.grid is not None:
+            rebuilt = KPoints.automatic(
+                kpoints.grid, kpoints.shift or (0, 0, 0), self.cell,
+                precision=kpoints.precision, rotations=rotations,
+                time_reversal=not magnetic, t_rev=t_rev,
+            )
+            return kpoints_for_spin(rebuilt, nspin)
+
+        # An explicit list is the wedge of the *lattice's* group by QE's
+        # convention, so the same completion ``irreducible_BZ`` performs on it
+        # applies again with the target's -- and does nothing at all when the
+        # target's group is the one it was already reduced with.
+        points = np.asarray(kpoints.crystal(self.cell))
+        weights = np.asarray(kpoints.weights)
+        if rotations is not None and len(rotations):
+            points, weights = expand_to_subgroup(
+                points, weights,
+                np.array(lattice_point_group(np.asarray(self.cell.at))),
+                rotations, time_reversal=not magnetic, t_rev=t_rev,
+            )
+        rebuilt = KPoints.from_crystal(
+            points, weights, self.cell, precision=kpoints.precision
+        )
+        return kpoints_for_spin(rebuilt, nspin)
 
     def symmetry_group(self, nosym: bool | None = None) -> Symmetries:
         """The space group this run symmetrises with -- magnetic if it is.

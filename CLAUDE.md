@@ -11,7 +11,7 @@ the deliverable.
 
 **Status: the first milestone — SCF, band structure, DOS — is met**, with ultrasoft/PAW,
 LDA/GGA and collinear spin, and **forces and structural relaxation** on top of it.
-P0–P9 and P12–P21 are done bar Wyckoff input in P6; P10 has had one pass. A silicon SCF reproduces QE's total energy to **~1e-9 Ry** term by term, its
+P0–P9, P12–P21 and P23 are done bar Wyckoff input in P6; P10 has had one pass. A silicon SCF reproduces QE's total energy to **~1e-9 Ry** term by term, its
 band structure to **0.0002 eV**, and metals with every smearing to ~2.5e-8 Ry.
 **Ultrasoft and PAW pseudopotentials are supported** and match QE to **≤3e-9 Ry** on 2-
 and 8-atom silicon (P12). **PBE, revPBE and PBEsol** work on all three pseudopotential
@@ -48,6 +48,14 @@ through the projectors rather than transcribed — to 4.8e-6 Ry/bohr.
 `jax.grad` of the energy at frozen wavefunctions, and a BFGS on the reciprocal metric takes
 a hydrogen chain from `q = 0.30` to its antiferromagnetic ground state at `0.50003` in six
 SCF runs — validated by identities and finite differences, since `pw.x` has no spiral.
+**One run continues another across a change of spin regime** (P23):
+`run_scf(starting_from=result)` promotes a converged state into the target's variables —
+a non-magnetic density into a collinear run, a collinear one into a noncollinear run, and
+spin-orbit coupling switched on — reaching the *same* self-consistent solution as a fresh
+run (≤4e-8 Ry on six cases) in 1 iteration instead of 25 where the magnetization only has
+to be rotated. **The magnetization is seeded when the source has none**, because nothing in
+the SCF breaks spin symmetry on its own and an unseeded promotion converges straight back to
+the unpolarized solution.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
 read it before writing code. P4 is complete: a block Davidson eigensolver behind a name
 registry, seeded from the pseudo-atomic orbitals as QE seeds it, and the *only* solver the
@@ -220,6 +228,23 @@ are renormalised at read time in the *generalised* metric (`upf_check_atwfc_norm
 `nspin = 1` factor of two is on the **energy**, never on the potential. Refused by name:
 the full (Liechtenstein) formulation, the intersite `V`, background channels, the
 orbital-resolved variant, the `wf`/`pseudo` projector sets, and noncollinear `ns_nc`.
+
+**Continuing one run from another is in scope and implemented** (P23):
+`pypresso/scf/continuation.py` and `System.with_spin`. The three spin regimes are three ways
+of writing the same pair `(n(r), m(r))`, so a promotion is *decompose, decide what `m` should
+be, recompose* — and a demotion is the same function read the other way. The whole mixed
+state crosses together (`rho`, `becsum`, `ns`) plus the wavefunctions, which cross as a
+**span for the first Rayleigh-Ritz** rather than as wavefunctions, so they need not be
+orthonormal in the target's overlap operator or number `nbnd`. **The magnetization is seeded
+from the target's `starting_magnetization` when the source has none**: nothing in the SCF
+breaks spin symmetry on its own, so a promotion that carried only the charge would converge
+back to the unpolarized solution and report success. `with_spin` **rebuilds the k-points**
+rather than relabelling them — the `degspin` factor and the magnetic symmetry group both
+change with `nspin`. Refused rather than approximated: a target whose species point their
+moments along different axes (a collinear source has one scalar field;
+`magnetization="seed"` is the way out), a Hubbard `U` crossing into `nspin = 4`, splitting a
+spinor back into two collinear channels, and a `becsum` from a different pseudopotential,
+which is dropped with a warning instead of being reshaped.
 
 Out of scope until the above works: EXX, phonons
 (`PHonon/`), Car-Parrinello (`CPV/`), and everything in `EPW/`, `TDDFPT/`, `HP/`, `GWW/`.

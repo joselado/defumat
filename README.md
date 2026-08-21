@@ -48,6 +48,7 @@ point where there is not.
 | **Relaxing the spiral wavevector** down `dE/dq` to the ground-state pitch | `relax_spiral_q` | new |
 | **Berry curvature and Chern numbers**, the latter exact integers on any mesh | `run_berry_curvature` | new — QE has the Berry *phase* (`bp_c_phase`), not the curvature |
 | **Z2 invariants** in 2D and 3D, by Wannier charge centres *and* by parities | `run_z2`, `run_z2_3d` | new |
+| **Continuing one run from another across a change of spin regime** — a converged non-magnetic density as the starting point of a magnetic run, a collinear one of a noncollinear run, spin-orbit coupling switched on | `run_scf(starting_from=...)`, `System.with_spin` | partly `pw.x` — `startingpot = 'file'` reads a density whose `nspin` differs but *zero-fills* the missing spin components, so 1 → 2 starts unpolarized and converges back; `nc_magnetization_from_lsda` rotates a collinear moment onto `angle1(1)` only inside the force-theorem path |
 | **Reaching self-consistency** — Anderson/Broyden mixing, Kerker preconditioning, or solving the residual with its own Jacobian | `mixing_mode` in `&electrons`, `run_scf(scf_solver=...)` | `pw.x` has the mixing and `mixing_mode = 'TF'`; the residual solver is new, and it reaches *unstable* SCF solutions that no mixer can hold |
 | **Pseudopotentials**: norm-conserving, ultrasoft and PAW (UPF v2) | `ATOMIC_SPECIES` | `pw.x` |
 | **Functionals**: LDA and GGA — Perdew-Zunger, Perdew-Wang, PBE, revPBE, PBEsol | `input_dft`, or the UPF header | `pw.x` |
@@ -161,6 +162,9 @@ without being run, and each has a plain-text `.md` version beside it.
 | [`13_dft_plus_u`](notebooks/13_dft_plus_u.ipynb) | The Hubbard correction as a penalty on fractional occupation, nickel four ways, antiferromagnetic FeO, and `force_hub` falling out of the gradient |
 | [`14_spiral_relaxation`](notebooks/14_spiral_relaxation.ipynb) | `dE/dq`: which terms of the energy a spiral's wavevector touches, and a BFGS walking a hydrogen chain to its ground-state pitch |
 | [`15_stress`](notebooks/15_stress.ipynb) | The stress as the strain derivative of the energy, silicon's equation of state, and the pressure against `-dE/dV` |
+| [`16_projected_density_of_states`](notebooks/16_projected_density_of_states.ipynb) | `<phi|S|psi>` on Löwdin-orthogonalised orbitals, silicon's `s` and `p` densities of state against `projwfc.x`, and the same weights as fat bands |
+| [`17_reaching_self_consistency`](notebooks/17_reaching_self_consistency.ipynb) | Kerker preconditioning, the SCF as a root-find, and the unstable magnetic solutions that no mixer can hold |
+| [`18_continuing_a_calculation`](notebooks/18_continuing_a_calculation.ipynb) | Starting one run from another's converged state across a change of spin regime: iron's moment rotated onto `x` in one iteration, and spin-orbit coupling switched on |
 
 `benchmarks/` holds ready-to-run input files, from a two-atom silicon cell up to
 a sixteen-atom one.

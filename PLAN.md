@@ -2070,6 +2070,132 @@ solver is a capability (unstable solutions) rather than a speedup.
 
 *Notebook 17.*
 
+**P23 — Continuing a calculation across a change of spin regime. ✅ DONE.** An unpolarized
+run, a collinear one and a noncollinear one are three descriptions of the same electrons,
+and the expensive part of all three — the charge density — is very nearly the same object.
+This phase maps the converged state of one onto the starting state of another. New:
+`scf/continuation.py`, `System.with_spin`, `SCFResult.becsum` and `SCFResult.system`,
+`run_scf(starting_from=..., starting_wavefunctions=...)`, and a `span` argument on
+`Calculation.starting_wavefunctions`.
+
+**One representation, and every direction is the same code.** The three regimes differ only
+in how they write the same pair `(n(r), m(r))`: `[n]`, `[n_up, n_dw]`, `[n, m_x, m_y, m_z]`.
+So a promotion is *decompose, decide what `m` should be, recompose* — `spin_components` and
+`from_spin_components` — and a demotion is the same function read the other way. There is no
+1→2, 2→4 and 4→2 path to keep consistent. The collinear magnetization is placed on `z`,
+which is what makes 2 and 4 one representation and the promotion between them a rotation.
+
+**The decision is taken once and applied to the whole mixed state.** `run_scf` mixes
+`(rho, becsum, ns)` together and its own docstring says that giving one without the others
+starts the run from two states at once; the same applies here, so `_SpinTransfer` is built
+from the *density* — the only part big enough to say reliably whether the source is magnetic
+— and then reused for `becsum`. That is the requirement `_becsum_split` already states for
+the atomic start: the two guesses have to agree about how polarized the atom is, or the
+first iteration contradicts itself.
+
+**The trap, and it is the whole reason the phase is not three lines.** Nothing in the SCF
+breaks spin symmetry on its own. Promote a converged unpolarized density to two identical
+channels and the run converges straight *back* to the unpolarized solution, having found a
+stationary point rather than the magnetic one — and it reports convergence, because it did
+converge. The magnetization has to be put in by hand, exactly as `starting_magnetization`
+puts it into a fresh run, which is what `magnetization="auto"` does: carry the source's when
+it has one (`int |m| > 1e-4 mu_B` — the *absolute* magnetization, since an antiferromagnet's
+signed one is zero), and otherwise seed the target's atomic magnetization on top of the
+converged charge. `"carry"` raises rather than starting on the symmetric solution, `"seed"`
+forces the seed — which is how a *different* magnetic state is reached from the same charge
+— and `"none"` starts unpolarized deliberately.
+
+**What `pw.x` has is two pieces of this and neither is the whole.** `startingpot = 'file'`
+reads a density whose `nspin` need not match, and `read_rhog` handles the mismatch by
+`infomsg('read_rhog', 'some spin components not found')` and zero-filling — so QE's own
+continuation from an `nspin = 1` file into an LSDA run starts *unpolarized* and converges
+back to the non-magnetic solution, silently. And `nc_magnetization_from_lsda`
+(`PW/src/potinit.f90`) does rotate a collinear `m` onto a noncollinear one — but only on the
+`lforcet` path (the force-theorem magnetocrystalline-anisotropy calculation), and it uses
+`angle1(1)`/`angle2(1)`, **species one's angles, for the whole cell**. That restriction is
+real and is kept here rather than papered over: a collinear source carries one scalar field
+and cannot point two ways at once, so a target whose species point along different axes is
+*refused*, with the message naming `magnetization="seed"` as the way to keep the converged
+charge and take the magnetization from the atomic superposition, which does honour
+per-species angles.
+
+**The demotion has to *find* the axis, and the obvious way to find it is wrong.** Going back
+down from `nspin_mag = 4` to 2 means writing a vector field as one scalar on a fixed axis,
+which is only possible if the state is collinear — and QE's `pw_noncolin` benchmark points
+its moment along `x`, so reading `m_z` would give zero. The axis is the dominant eigenvector
+of `M_ab = int m_a(r) m_b(r) dr`, **not of `int m(r) dr`**: an antiferromagnet's signed
+integral vanishes and leaves the axis undefined, while the second moment is blind to the sign
+and finds it. The other two eigenvalues are then the refusal test — a genuinely noncollinear
+state has no collinear form and is refused rather than projected — and the projection is
+`m . n` rather than `|m|`, so the sign structure that makes it an antiferromagnet survives.
+The eigenvector's own sign is arbitrary and would flip which channel is "up" (a global spin
+flip: harmless, and confusing to read), so it is fixed by the signed integral and, where that
+vanishes, by the point carrying the most magnetization.
+
+**The wavefunctions are transferred as a *span*, not as wavefunctions.** What is handed over
+is a set of vectors for the first Rayleigh-Ritz, exactly as `wfcinit` hands over the
+pseudo-atomic orbitals — so the set need not be orthonormal in the target's overlap operator
+(with spin-orbit coupling `S` mixes the components and it is not), need not number `nbnd`,
+and need not be sorted. 1 → 2 seeds both channels with the same states, as the atomic start
+does; 2 → 4 makes the two channels the two components of `2 nbnd` spinors, which is
+`_as_spinors` applied to states that are already self-consistent and is exactly the `nbnd` a
+noncollinear run asks for; 4 → 4 (spin-orbit on or off) carries them untouched. **A spinor is
+not split back into two channels** — its components are not separately normalised and with
+spin-orbit coupling not separately eigenstates — and a *magnetic* noncollinear target usually
+gets no wavefunctions at all, because its smaller symmetry group means `irreducible_BZ` hands
+it k-points the collinear run never had. Dropping them costs a few Davidson steps and is a
+warning, never an error; carrying states belonging to different k-points would be wrong.
+
+**`with_spin` rebuilds the k-points rather than relabelling them, and both ways of not doing
+so are silent.** `dataclasses.replace(system, nspin=2)` leaves the weights with `degspin` in
+them, so every electron is counted twice and the Fermi level comes out somewhere else; and it
+leaves the k-*set* reduced with the wrong group, where a magnetic noncollinear run needs the
+points `irreducible_BZ` adds (22 where the input lists 11, in QE's own `pw_noncolin`
+benchmark). An automatic grid is reduced again with the target's group and an explicit list
+goes through `expand_to_subgroup`, both exactly as `build_system` does them. The demotion
+direction does not re-reduce an explicit list — it is then merely wasteful, not wrong.
+`nbnd` is doubled crossing into `nspin = 4` and halved coming back, since a spinor band holds
+one electron where a collinear band holds two.
+
+**The measurements, all six validated as identities** (`tests/regression/test_continuation.py`)
+— the continued run must reach the *same* self-consistent solution as a fresh one, since a
+starting guess is a guess and nothing else:
+
+| case | fresh | continued | agreement |
+|---|---|---|---|
+| Si, `nspin` 1 → 2 (seeded, decays to zero) | 5 | 4 | 2e-9 Ry |
+| Si, `nspin` 2 → 4 (nonmagnetic, `nspin_mag = 1`) | 5 | **1** | 1e-9 Ry |
+| bcc Fe, 2 → 4 with `angle1 = 90` | 25 | **1** | 2e-8 Ry |
+| bcc Fe, 4 → 2 back again (the axis found, not read) | 30 | **1** | 4e-8 Ry |
+| bcc Fe, 1 → 2, magnetization seeded | 30 | 27 | 5e-9 Ry |
+| Pt, scalar PAW → fully-relativistic PAW + `lspinorb` | 13 | **7** | 2e-10 Ry |
+
+**Where the saving is large and where it is not, and the reason is the same in both.** What
+carries over is the *charge*; when the charge is the whole answer — a nonmagnetic run
+rewritten as a spinor one, a converged moment merely rotated onto another axis — the
+continued run converges on the state it was handed, in one iteration. When the run has to
+*find* a magnetization the source does not have (bcc Fe, 1 → 2), the magnetization is the
+slow variable and the saving is a few iterations out of thirty. What that pair does give for
+free is the **magnetic stabilisation energy** — 21.6 mRy for bcc iron here, two runs of the
+same cell — which is P22's non-magnetic reference state reached by the other route: by
+constraining the regime rather than by out-running the instability with a root-finder.
+
+**Switching spin-orbit coupling off with the same dataset is refused, and the refusal is
+QE's.** For an ultrasoft or PAW pseudopotential `lspinorb = .false.` with a fully-relativistic
+file needs `average_pp`, which QE itself refuses for `tvanp` (and for `lda_plus_u`) in
+`PW/src/average_pp.f90`. So the reversible spin-orbit toggle is a *dataset* swap — scalar
+PAW against fully-relativistic PAW — which the continuation handles by carrying the density
+and re-seeding `becsum`: the projector counts differ (18 against 34 for platinum), and a
+source `becsum` of the wrong shape is dropped with a warning rather than reshaped, because
+that is a different pseudopotential and not a different spin regime.
+
+**Also refused by name:** a Hubbard `U` crossing into `nspin = 4` (`ns_nc` is refused by name
+in P20, so there is nothing to promote into), a grid or an electron count that does not
+match, and a spiral target for the wavefunctions, whose two components live on different
+plane-wave spheres.
+
+*Notebook 18.*
+
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes
 the k-point count.

@@ -92,6 +92,7 @@ from pypresso.pseudo.projectors import build_projector_core, projector_channels
 from pypresso.pseudo.upf import Pseudopotential
 from pypresso.pseudo.spinorbit import becsum_transform, build_spin_orbit
 from pypresso.batching import map_k, resolve_k_batch
+from pypresso.scf.continuation import ContinuedState, continued_state
 from pypresso.scf.density import becsum, spinor_becsum, spinor_sum_band, sum_band
 from pypresso.scf.ewald import build_ewald
 from pypresso.scf.mixing import PRECONDITIONED, get_mixer, kerker_preconditioner
@@ -580,6 +581,19 @@ class SCFResult:
     #: carries. :attr:`hubbard_setup` says which atom each slot is.
     ns: jnp.ndarray | None = None
     hubbard_setup: object | None = None
+    #: The converged projector occupations, one real ``(nspin_mag, nat_t, nh,
+    #: nh)`` array per ultrasoft/PAW species and ``()`` for a norm-conserving
+    #: run. It is here because it is **part of the mixed state**, not a function
+    #: of the density (``mix_rho.f90`` mixes "rho in g-space ... and becsum (for
+    #: paw)"): a run continued from this one has to be given all of ``(rho,
+    #: becsum, ns)`` or it starts from two different states at once.
+    becsum: tuple = ()
+    #: The :class:`~pypresso.system.builder.System` this was computed for. What
+    #: makes the result self-describing enough to continue from -- a
+    #: continuation has to check that the k-points and the electron count of the
+    #: two runs match before carrying anything over
+    #: (:mod:`pypresso.scf.continuation`).
+    system: object | None = None
     #: The stress tensor (:class:`~pypresso.stress.Stress`) when the run was
     #: asked for one, and ``None`` otherwise -- QE's ``tstress``, which is the
     #: same switch: ``stress()`` is called from ``run_pwscf`` after the SCF, not
@@ -2043,7 +2057,7 @@ class Calculation:
         moment = self.starting_magnetization[t] * self.magnetization_directions[t]
         return np.concatenate([[1.0], moment])
 
-    def starting_wavefunctions(self, hamiltonians, nbnd: int) -> jnp.ndarray:
+    def starting_wavefunctions(self, hamiltonians, nbnd: int, span=None) -> jnp.ndarray:
         """The first guess at the wavefunctions, from the atomic orbitals.
 
         QE's ``wfcinit``: build the pseudo-atomic orbitals of every atom, then
@@ -2055,15 +2069,41 @@ class Calculation:
         Falls back to random vectors for a pseudopotential with no ``PP_PSWFC``
         section, and tops up with them when a species has fewer orbitals than
         the calculation has bands.
-        """
-        atomic = atomic_wavefunctions(
-            self.pseudos, self.system.structure, self.system.cell,
-            self.basis.smooth, self.basis.planewaves, self.basis_kpoints,
-        )
-        if self.noncolin:
-            atomic = self._as_spinors(atomic)
 
-        missing = nbnd - atomic.shape[1]
+        ``span`` replaces the atomic orbitals with any other set of vectors --
+        ``(nk, nvec, npol npwx)`` shared by every channel, or one set per channel
+        with a leading axis. **It is a span and not a set of wavefunctions**:
+        what follows is the same Rayleigh-Ritz, so the vectors need not be
+        orthonormal in the target's overlap operator, need not number ``nbnd``,
+        and need not be sorted. That is what makes it safe to hand over the
+        converged states of a *different* spin regime
+        (:mod:`pypresso.scf.continuation`).
+        """
+        if span is None:
+            atomic = atomic_wavefunctions(
+                self.pseudos, self.system.structure, self.system.cell,
+                self.basis.smooth, self.basis.planewaves, self.basis_kpoints,
+            )
+            if self.noncolin:
+                atomic = self._as_spinors(atomic)
+        else:
+            atomic = jnp.asarray(span)
+            expected = self.npol * self.basis.npwx
+            # ``hamiltonians[0].nk`` and not ``basis_kpoints.nk``: a spiral's
+            # basis list is the doubled one (``k +- q/2``) while its *states*
+            # number one per physical k-point.
+            nk = hamiltonians[0].nk
+            if atomic.shape[-1] != expected or atomic.shape[-3] != nk:
+                raise ValueError(
+                    f"span has shape {tuple(atomic.shape)}; this calculation "
+                    f"needs (..., {nk}, nvec, {expected})"
+                )
+
+        # One span per channel, or one shared by all of them -- which is what
+        # the atomic orbitals are, since what splits the channels is the
+        # Hamiltonian they are diagonalised inside and not the vectors.
+        per_channel = atomic.ndim == 4
+        missing = nbnd - atomic.shape[-2]
         if missing > 0:
             # Aluminium has four atomic orbitals and a smeared calculation asks
             # for six bands; the rest are random, exactly as QE tops up.
@@ -2086,14 +2126,21 @@ class Calculation:
                 (kinetic, mask),
                 batch=self.k_batch,
             )
-            atomic = jnp.concatenate([atomic, extra], axis=1)
+            if per_channel:
+                extra = jnp.broadcast_to(extra[None], atomic.shape[:1] + extra.shape)
+            atomic = jnp.concatenate([atomic, extra], axis=-2)
 
-        # The same atomic orbitals seed both channels; what differs is the
-        # Hamiltonian they are then diagonalised inside, which is already
-        # spin-split at the first iteration because the starting density is.
+        # One Rayleigh-Ritz per channel. A shared span -- the atomic orbitals,
+        # or another regime's states -- seeds both channels with the same
+        # vectors, and what splits them is the Hamiltonian they are diagonalised
+        # inside, which is already spin-split at the first iteration because the
+        # starting density is.
         return jnp.stack([
-            _rotate_all(hamiltonian, atomic, nbnd, self.k_batch)[1]
-            for hamiltonian in hamiltonians
+            _rotate_all(
+                hamiltonian, atomic[channel] if per_channel else atomic,
+                nbnd, self.k_batch,
+            )[1]
+            for channel, hamiltonian in enumerate(hamiltonians)
         ])
 
     def _as_spinors(self, atomic: jnp.ndarray) -> jnp.ndarray:
@@ -2371,6 +2418,8 @@ def run_scf(
     starting_density: jnp.ndarray | None = None,
     starting_becsum: tuple | None = None,
     starting_ns: jnp.ndarray | None = None,
+    starting_wavefunctions: jnp.ndarray | None = None,
+    starting_from: object | None = None,
     mixing_fixed_ns: int = 0,
     tstress: bool | None = None,
     scf_solver: str = "mixing",
@@ -2395,6 +2444,23 @@ def run_scf(
     ``starting_becsum`` is its ultrasoft/PAW counterpart, and ``starting_ns``
     its DFT+U one. **The mixed state is all three together**, and giving one
     without the others starts the run from two different states at once.
+
+    ``starting_wavefunctions`` is a *span* for the first Rayleigh-Ritz rather
+    than a set of wavefunctions -- see
+    :meth:`Calculation.starting_wavefunctions`. It replaces the pseudo-atomic
+    orbitals, and it is ignored by a residual solver, which starts its own.
+
+    ``starting_from`` is all four at once, taken from another run's
+    :class:`SCFResult` **and promoted into this run's spin regime**: a converged
+    unpolarized density becomes the starting point of a collinear run, a
+    collinear one of a noncollinear run, and spin-orbit coupling is switched on
+    and off without going back to the atoms
+    (:mod:`pypresso.scf.continuation`). Pass a
+    :class:`~pypresso.scf.continuation.ContinuedState` instead of the result
+    itself to control how the magnetization crosses -- carried, or seeded from
+    this run's ``starting_magnetization``, which is what decides whether a
+    magnetic run started from a non-magnetic one can leave the symmetric
+    solution at all.
 
     ``starting_ns`` also decides *which* self-consistent solution a DFT+U run
     finds, which ``starting_density`` alone does not: ``init_ns`` fills the
@@ -2444,6 +2510,25 @@ def run_scf(
         *((calculation.nelup, calculation.neldw) if system.nspin == 2 else (None, None)),
         noncolin=system.noncolin,
     )
+
+    if starting_from is not None:
+        if any(x is not None for x in (starting_density, starting_becsum,
+                                       starting_ns, starting_wavefunctions)):
+            raise ValueError(
+                "starting_from already carries the density, becsum, ns and the "
+                "wavefunctions; giving one of them separately would start the "
+                "run from two states at once"
+            )
+        state = (
+            starting_from if isinstance(starting_from, ContinuedState)
+            else continued_state(starting_from, calculation)
+        )
+        starting_density = state.density
+        starting_becsum = state.becsum or None
+        starting_ns = state.ns
+        starting_wavefunctions = state.wavefunctions
+        if verbose:
+            print(f"  continuing a previous run: {state.description}")
 
     mixer = get_mixer(mixing_mode, beta=mixing_beta)
     rho = (
@@ -2540,7 +2625,9 @@ def run_scf(
         # starting ethr was a false economy and the iteration is redone.
         floor = ethr * max(1.0, calculation.nelec)
         if wavefunctions is None:
-            wavefunctions = calculation.starting_wavefunctions(hamiltonians, nbnd)
+            wavefunctions = calculation.starting_wavefunctions(
+                hamiltonians, nbnd, span=starting_wavefunctions
+            )
 
         for attempt in range(2):
             eigenvalues, wavefunctions = calculation.diagonalize(
@@ -2724,6 +2811,7 @@ def run_scf(
 
         if converged:
             rho = rho_out
+            becsum_state = becsum_out
             if calculation.is_hubbard:
                 ns_state = ns_out
             break
@@ -2811,6 +2899,8 @@ def run_scf(
         nspin_mag=calculation.nspin_mag,
         ns=ns_state,
         hubbard_setup=calculation.hubbard,
+        becsum=tuple(becsum_state),
+        system=calculation.system,
         stress=stress,
         magnetization=None if magnetization is None else magnetization[0],
         absolute_magnetization=None if magnetization is None else magnetization[1],

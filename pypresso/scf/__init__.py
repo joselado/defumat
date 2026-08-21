@@ -4,8 +4,14 @@ Two ways to reach the fixed point, behind ``run_scf``'s ``scf_solver`` (rule R4)
 the mixing loop in :mod:`~pypresso.scf.driver`, which is the default, and the
 residual of :mod:`~pypresso.scf.residual` solved by
 :mod:`~pypresso.scf.solvers`. See ``PLAN.md`` P22 for which to reach for.
+
+:mod:`~pypresso.scf.continuation` starts one run where another stopped, across a
+change of spin regime -- an unpolarized density as the starting point of a
+collinear run, a collinear one of a noncollinear run, and spin-orbit coupling
+switched on and off without going back to the atoms (``PLAN.md`` P23).
 """
 
+from pypresso.scf.continuation import ContinuedState, continued_state
 from pypresso.scf.density import band_density, sum_band
 from pypresso.scf.driver import Calculation, SCFResult, default_nbnd, run_scf
 from pypresso.scf.ewald import ewald_energy
@@ -17,11 +23,13 @@ from pypresso.scf.solvers import SCF_SOLVERS, get_scf_solver, newton_krylov
 
 __all__ = [
     "Calculation",
+    "ContinuedState",
     "Potential",
     "SCF_SOLVERS",
     "ScfResidual",
     "SCFResult",
     "band_density",
+    "continued_state",
     "default_nbnd",
     "ewald_energy",
     "fermi_level",
