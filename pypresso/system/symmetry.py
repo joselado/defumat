@@ -40,9 +40,9 @@ if TYPE_CHECKING:  # only for annotations: importing it eagerly makes a cycle,
 __all__ = ["Symmetries", "lattice_point_group", "find_symmetries", "is_supercell",
            "symmetrize_density", "symmetry_maps", "apply_symmetry_maps",
            "atom_mapping", "cartesian_rotations",
-           "symmetrize_vector", "symmetrize_matrix", "check_symmetry",
+           "symmetrize_vector", "symmetrize_matrix", "symmetrize_atom_tensor", "check_symmetry",
            "magnetic_symmetries", "magnetization_signs",
-           "symmetrize_magnetization"]
+           "symmetrize_magnetization", "symmetrize_vector_density"]
 
 _TOLERANCE = 1.0e-6
 #: QE compares magnetizations with ``eps2 = 1e-5`` (``sgam_at_mag``), looser than
@@ -333,7 +333,29 @@ def symmetrize_magnetization(
     Args:
         rotations: ``(nsym, 3, 3)`` already multiplied by the signs.
     """
-    gathered = phases[:, None, :] * mag_g[:, permutations].transpose(1, 0, 2)
+    return symmetrize_vector_density(mag_g, permutations, phases, rotations)
+
+
+def symmetrize_vector_density(
+    field_g: jnp.ndarray, permutations, phases, rotations: jnp.ndarray
+) -> jnp.ndarray:
+    """Average a three-component density over the group, components and all.
+
+        f_sym(G) = (1/N) sum_S R_S . e^{-i G . f_S} f(S^T G)
+
+    The scalar rule with the three components rotated into each other as well.
+    Two callers, differing only in what they hand in as ``rotations``:
+    :func:`symmetrize_magnetization`, whose magnetization is **axial** and
+    carries ``det(R)`` and a time-reversal sign, and the electric field's
+    response density (:mod:`pypresso.response.efield`), which is **polar** and
+    carries the plain rotation. Getting that distinction wrong is not a worse
+    average but a different symmetry.
+
+    Args:
+        field_g: ``(3, ngm)`` in cartesian components.
+        rotations: ``(nsym, 3, 3)``, signs already folded in if there are any.
+    """
+    gathered = phases[:, None, :] * field_g[:, permutations].transpose(1, 0, 2)
     return jnp.mean(jnp.einsum("sij,sjg->sig", rotations, gathered), axis=0)
 
 
@@ -537,6 +559,36 @@ def symmetrize_matrix(
     crystal = at @ matrix @ at.T
     averaged = np.einsum("sik,sjl,kl->ij", rotations, rotations, crystal)
     return bg.T @ (averaged / symmetries.nsym) @ bg
+
+
+def symmetrize_atom_tensor(
+    tensors: np.ndarray, cell: Cell, symmetries: Symmetries, mapping: np.ndarray
+) -> np.ndarray:
+    """Impose the crystal symmetry on a per-atom rank-2 tensor -- ``symtensor``.
+
+    ``symme.f90``. :func:`symmetrize_matrix` with :func:`symmetrize_vector`'s
+    atom permutation: an operation both rotates the two cartesian indices and
+    carries the tensor from an atom to the atom it maps onto. The Born effective
+    charges are the case this exists for, and on silicon they are a difference
+    of large numbers -- ``Z_ion = 4`` against an electronic part near ``4.076``
+    -- so the residue the reduction leaves is not small relative to the answer.
+
+    Args:
+        tensors: ``(nat, 3, 3)`` cartesian.
+        mapping: ``(nsym, nat)`` from :func:`atom_mapping`.
+    """
+    tensors = np.asarray(tensors, dtype=float)
+    if symmetries.nsym <= 1:
+        return tensors
+    at = np.asarray(cell.at_alat, dtype=float)
+    bg = np.asarray(cell.bg_2pi_alat, dtype=float)
+    rotations = symmetries.rotation_array().astype(float)
+
+    crystal = np.einsum("ik,nkl,jl->nij", at, tensors, at)
+    averaged = np.einsum(
+        "sik,sjl,snkl->nij", rotations, rotations, crystal[mapping]
+    ) / symmetries.nsym
+    return np.einsum("ki,nkl,lj->nij", bg, averaged, bg)
 
 
 def check_symmetry(cell: Cell, structure: Structure, symmetries: Symmetries) -> bool:

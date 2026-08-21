@@ -67,7 +67,8 @@ import numpy as np
 
 from pypresso.batching import map_k
 
-__all__ = ["VelocityOperator", "BandVelocities", "band_velocities"]
+__all__ = ["VelocityOperator", "BandVelocities", "band_velocities",
+           "over_kpoints"]
 
 #: The three cartesian directions, as tangents for ``k``.
 _CARTESIAN = jnp.eye(3)
@@ -180,7 +181,7 @@ class VelocityOperator:
         hamiltonians = moved.hamiltonian(self.v_scf, self.ddd_paw, hubbard)
         batch = self.calculation.k_batch
         return jnp.stack([
-            _over_kpoints(ham, psi[spin], overlap, batch)
+            over_kpoints(ham, psi[spin], batch, overlap)
             for spin, ham in enumerate(hamiltonians)
         ])
 
@@ -224,7 +225,7 @@ class VelocityOperator:
         )
 
 
-def _over_kpoints(hamiltonian, states, overlap: bool, batch):
+def over_kpoints(hamiltonian, states, batch, overlap: bool = False):
     """``H|psi>`` (or ``S|psi>``) at every k-point, through the batching dial.
 
     ``Hamiltonian.apply`` takes a k *index* rather than a slice, so the mapped

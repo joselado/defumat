@@ -303,3 +303,142 @@ def test_the_regimes_without_a_response_here_are_refused_by_name(case, expected)
     calculation = Calculation(system, pseudos)
     with pytest.raises(NotImplementedError, match=expected):
         make_sternheimer(calculation, None)
+
+
+# ---------------------------------------------------------------------------
+# Stage 3: the electric field -- epsilon_infinity and the Born charges.
+# ---------------------------------------------------------------------------
+
+#: What ``ph_base/si.phG.in``'s committed benchmark prints for this cell, in
+#: cartesian axes. The input is copied to ``si-epsilon.in`` so these tests run
+#: without the vendored tree; the numbers are the benchmark's.
+QE_EPSILON = 13.806375297
+QE_BORN = -0.07568
+QE_TOTAL_ENERGY = -15.84452726
+
+#: How far the dielectric constant may sit from QE's. The measured difference is
+#: 2.7e-4 -- two parts in 1e5 -- and what is left is the same thing that puts a
+#: floor under the eigenvalues (``tests/tolerances.py``): QE interpolates every
+#: radial form factor from a ``dq = 0.01`` table where this code integrates it
+#: directly.
+EPSILON_TOLERANCE = 1e-3
+
+#: The Born charges are printed to five decimals, so this is the last digit.
+BORN_TOLERANCE = 1e-4
+
+#: The tensor is cubic by symmetry and nothing here imposes that, so its
+#: departure from a scalar is round-off.
+CUBIC_TOLERANCE = 1e-9
+
+
+@lru_cache(maxsize=None)
+def _dielectric(case: str):
+    """The electric-field response of one of the committed silicon inputs."""
+    from pypresso.response.efield import dielectric_tensor
+    from pypresso.scf import Calculation
+
+    system = build_system(read_pw_input(CASES / f"{case}.in"))
+    pseudo_dir = Path(__file__).resolve().parents[1] / "data" / "pseudo"
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    calculation = Calculation(system, pseudos)
+    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12,
+                     max_iterations=80)
+    response = dielectric_tensor(
+        calculation, result.wavefunctions, result.eigenvalues, result.density,
+        born_charges=(case == "si-epsilon"),
+    )
+    return result, response
+
+
+def test_the_dielectric_constant_matches_quantum_espresso():
+    """``epsilon_infinity`` of silicon against ``ph_base/si.phG.in``'s benchmark.
+
+    Everything on this side comes from differentiating: the commutator that
+    makes ``P_c r|psi>`` computable is ``dH/dk`` from a ``jvp`` (stage 1), the
+    screening kernel ``dv_of_drho`` is a ``jvp`` of ``v_of_rho``, and the
+    exchange-correlation kernel QE tabulates in ``setup_dmuxc`` is the second
+    derivative of the energy this code writes down once. What is transcribed is
+    the linear solve, the projector and the assembly.
+    """
+    result, response = _dielectric("si-epsilon")
+    assert result.total_energy == pytest.approx(QE_TOTAL_ENERGY, abs=1e-7)
+    assert response.converged
+    assert response.isotropic == pytest.approx(QE_EPSILON, abs=EPSILON_TOLERANCE)
+
+
+def test_the_dielectric_tensor_comes_out_cubic():
+    """Nothing here imposes the crystal class, so this is a measurement.
+
+    ``symmetrize_directional`` and ``symmatrix`` average over the group, which
+    is not the same as projecting onto the cubic form: a wrong rotation
+    convention, a missing fractional translation or an axial sign where a polar
+    one belongs would all survive the average and show up here.
+    """
+    _, response = _dielectric("si-epsilon")
+    assert response.anisotropy < CUBIC_TOLERANCE
+
+
+def test_the_born_charges_match_quantum_espresso():
+    """``Z*`` against the same benchmark -- the sharper of the two numbers.
+
+    Silicon's Born charge is zero by symmetry in a converged calculation, so
+    what ``-0.07568`` measures is the residue of a difference of large numbers:
+    ``Z_val = 4`` against an electronic part near ``4.076``. Reproducing it to
+    the printed digits means the bare displacement perturbation, the
+    self-consistent field response and the weights are all right.
+    """
+    _, response = _dielectric("si-epsilon")
+    charges = response.born_charges
+    assert charges.shape == (2, 3, 3)
+    for atom in range(2):
+        diagonal = np.diag(charges[atom])
+        assert np.allclose(diagonal, QE_BORN, atol=BORN_TOLERANCE)
+        off = charges[atom] - np.diag(diagonal)
+        assert np.abs(off).max() < CUBIC_TOLERANCE
+
+
+@pytest.mark.slow
+def test_the_symmetrised_wedge_and_the_closed_grid_give_one_answer():
+    """The two routes to a response, on the same k-sample and sharing nothing.
+
+    A **shifted** Monkhorst-Pack grid is not closed under the point group, so
+    the wedge route needs ``symdvscf``'s average and a whole-grid route is not
+    available. An **unshifted** grid *is* closed: the same sample can be run
+    reduced to 8 points with the response symmetrised, or whole at 64 points
+    with the symmetrisation switched off entirely. Nothing is shared between the
+    two but the Sternheimer solve, so agreeing is the check on
+    ``symmetrize_directional`` -- and it is the only check there is, since QE
+    computes only the first of them.
+    """
+    reduced, wedge = _dielectric("si-epsilon-unshifted")
+    whole, closed = _dielectric("si-epsilon-unshifted-nosym")
+
+    assert reduced.total_energy == pytest.approx(whole.total_energy, abs=1e-9)
+    assert wedge.isotropic == pytest.approx(closed.isotropic, abs=1e-8)
+    assert wedge.anisotropy < CUBIC_TOLERANCE
+    # The unsymmetrised route has no group to make it cubic; the grid does.
+    assert closed.anisotropy < CUBIC_TOLERANCE
+
+
+def test_a_shifted_grid_with_no_symmetry_is_refused():
+    """The combination that is silently wrong, and how it was found.
+
+    With ``nosym`` there is no group to average the response over, so the grid
+    has to carry the symmetry itself -- and a shifted one does not. Run anyway,
+    this cell gives a dielectric tensor with a diagonal of 13.848 and
+    off-diagonal entries of 3.77 that cubic symmetry forbids. It is P6's trap
+    (``si2-nc-shifted-nosym.in``) in a second place.
+    """
+    from pypresso.response.efield import dielectric_tensor
+    from pypresso.scf import Calculation
+
+    system = build_system(read_pw_input(CASES / "si2-nc-shifted-nosym.in"))
+    pseudo_dir = Path(__file__).resolve().parents[1] / "data" / "pseudo"
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    calculation = Calculation(system, pseudos)
+    with pytest.raises(NotImplementedError, match="shifted"):
+        dielectric_tensor(calculation, None, np.zeros((1, 1, 1)), None)

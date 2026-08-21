@@ -2196,6 +2196,147 @@ plane-wave spheres.
 
 *Notebook 18.*
 
+**P24 — Linear response by autodiff: the velocity operator, the Sternheimer equation,
+and the dielectric constant. ✅ DONE.** `pypresso/response/` — `velocity.py`,
+`sternheimer.py`, `efield.py` — plus `Calculation.at_kcart`,
+`Calculation.symmetrize_directional`, and `symmetrize_vector_density` /
+`symmetrize_atom_tensor` in `system/symmetry.py`. This is P11's remaining half, P22c, and
+D3's backward pass, and it ends on QE's own `ph_base/si.phG.in` benchmark.
+
+**The velocity operator is what never tabulating a form factor was for.** Rule D2 says the
+whole of `H(k)` is built by differentiable JAX code from `k` so that the velocity operator
+falls out of differentiating it; `pseudo/formfactors.py` integrates every radial transform
+directly rather than interpolating QE's `dq = 0.01` table for exactly this reason, and
+`pseudo/harmonics.py` avoids `ylmr2`'s `atan2` for the same. Cashing it in is one
+`jax.jvp` of `H(k)|psi>` at a **frozen sphere** — `at_kcart` is `at_spiral_q`'s
+`rebuild_basis = False` on the `k` axis — and nothing is derived for `[V_NL, r]`, which
+`commutator_Hx_psi.f90` hand-codes term by term from `gen_us_dj` and `gen_us_dy`.
+
+Three things fall out that are not obvious until the gradient is written:
+
+- **The local potential costs nothing.** It is a field on a box that does not move with
+  `k`, so its tangent is symbolically zero and the `jvp` never issues its FFTs.
+- **The overlap carries a velocity too.** `S(k) = 1 + sum |beta(k)> q <beta(k)|` has the
+  same `k` in it, so the band velocity is the *generalised* Hellmann-Feynman derivative
+  `<psi|dH/dk - eps dS/dk|psi>` — `commutator_Hx_psi`'s ultrasoft correction, from the
+  same `jvp`. Ultrasoft comes along rather than being refused.
+- **Nothing dense is ever formed.** `dH/dk` as a matrix is `npw^2`, the same reason a dense
+  diagonalisation is a test fixture here. One `jvp` per cartesian direction gives
+  `v_a|psi>` for every band at every k-point; the three are separate calls because a
+  `jacfwd` would hold three tangents of `vkb` at once.
+
+*Check met:* against a central difference of the band structure at a generic k-point,
+**1.2e-6 Ry bohr** norm-conserving and **8.6e-7** ultrasoft, both at a step where that is
+the difference's own truncation error. `dS/dk` is identically zero for the norm-conserving
+dataset and 1.5e-2 for the ultrasoft one, which is what makes the second case a test of
+anything. (The finite difference has one failure mode of its own, and it is the
+reference's: eigenvalues come back **sorted**, so a step straddling a band crossing
+compares two different bands and disagrees by the band width — 0.21 Ry bohr at `h = 1e-3`
+against 1.2e-6 at `1e-4`.)
+
+**The Sternheimer equation replaces the sum over states, and it is P22c.**
+`(H - eps_n S + alpha Q) |dpsi_n> = -P_c^+ dV |psi_n>`, one projected conjugate gradient
+per occupied band — `cgsolve_all.f90`, `ch_psi_all.f90`, `orthogonalize.f90`,
+`h_prec.f90`, `setup_alpha_pv.f90` and `incdrhoscf.f90` transcribed, with the Fortran's
+repacking of the unconverged bands becoming a **mask at a static shape**, as `cegterg`'s
+did on the way into `solvers/davidson.py`. No empty states, and no division by
+`eps_n - eps_m`, which is rule D4's requirement rather than a convenience: a crystal is
+degenerate everywhere by symmetry.
+
+*Check met, twice, against things sharing no machinery with it.* `chi_0 dV` for a
+symmetry-breaking `cos(G.r)` probe against a central difference of the density under the
+same perturbation: **8e-7 relative**. And `chi_0 K` — the SCF Jacobian, with
+`K = dV_scf/drho` free from one `jvp` of `v_of_rho` — against P22's
+`jvp_finite_difference`: **4.0e-4 relative**.
+
+**That second number came with a finding about P22 rather than about this phase.** The
+agreement is 4.0e-4 only at the finite difference's *own* optimal step. Sweeping it gives
+a textbook U — 0.3 → 8.3e-2, 0.1 → 9.7e-3, 0.03 → 8.0e-4, **0.01 → 4.0e-4**, 0.003 →
+1.0e-3 — with truncation above and noise below. P22's default step is chosen for a
+gradient and sits two orders below the minimum, where the same two numbers disagree by
+**11%**. So P22's Jacobian was noise-limited on this cell and could not have said so on
+its own; its 0.8% agreement between `jax.jvp` and the difference was two noisy numbers
+agreeing. On silicon at `ecutwfc = 12` the Sternheimer solve costs **0.5 s** against the
+`jvp`-through-Davidson route's **3.5 s**, and is exact rather than accurate to `ethr`.
+
+**The electric field is the one perturbation a periodic code cannot write down**, and the
+commutator that makes it computable is the velocity operator again. `V = E.r` is neither
+bounded nor lattice periodic, so what is solved for is `P_c r|psi>` through
+`(H - eps_v S) P_c r|psi_v> = P_c^+ [H - eps_v S, r]|psi_v>` (`dvpsi_e.f90`) — and in the
+periodic gauge `dH/dk_a = i [H, r_a]`, so the right-hand side is stage 1's output with a
+factor of `-i`. The self-consistent loop is `solve_e.f90`'s, and **its kernel needed no
+transcription at all**: `dv_of_drho.f90` is the Hartree kernel with its `G = 0` component
+dropped plus `f_xc`, and `scf/potential.py`'s `hartree` already drops that component while
+`v_of_rho` is already a differentiable function of the density (D1), so `K` is one
+`jax.jvp`. The exchange-correlation kernel QE tabulates in `setup_dmuxc` is the second
+derivative of the energy this code writes down once.
+
+*Check met.* On QE's own `ph_base/si.scf.in` — the ten-point wedge, reproducing its total
+energy to 2.6e-9 Ry — the loop converges `|ddv_scf|^2` to 3.8e-15 in 18 linear-mixing
+iterations at `alpha_mix = 0.7` (QE takes 5 with Broyden; the fixed point is the claim,
+not the trajectory) and gives
+
+    epsilon_infinity = 13.806646105   against QE's   13.806375297
+
+a difference of **2.7e-4**, two parts in 1e5. What is left is the same thing that puts a
+floor under the eigenvalue comparison (`tests/tolerances.py`): QE interpolates every
+radial form factor from a `dq = 0.01` table where this code integrates it directly. The
+tensor comes out **diagonal to 3.6e-15** with nothing imposing the crystal class.
+
+**The Born effective charges come from the same two solutions**, and the bare phonon
+perturbation is not transcribed either: `dV_bare/du |psi>`, which `dvqpsi_us.f90` builds
+term by term, is one `jvp` through `Calculation.at_positions` at frozen `v_scf` — the same
+method the force differentiates, which already moves `vltot` and `vkb` traceably.
+`zstar_eu.f90` pairs it with the self-consistent `dpsi/dE`. Silicon's `Z*` is zero by
+symmetry in a converged calculation, so the benchmark's **-0.07568** is a residue — 4
+against an electronic part near 4.076 — which makes it a sharper check than the dielectric
+constant. *Check met:* **-0.075715** on both atoms, against the five decimals `ph.x`
+prints, with the off-diagonal entries at 1e-17.
+
+**The trap of this phase is P6's, in a second place, and it is silent.** A response is
+direction-dependent, so a symmetry-reduced k-set needs its average put back
+(`symdvscf.f90`) — and what is averaged is not three scalar densities but a **polar vector
+field**, `drho_a <- (1/N) sum_S R_ab drho_b({S|f}^-1 r)`. That is
+`symmetrize_magnetization`'s construction *without* the axial sign, which is why
+`symmetrize_vector_density` now serves both and the distinction is written down in one
+place. The obvious escape — run the whole k-grid, where a reduction has nothing to put
+back — **only works if that grid is closed under the point group, and a shifted
+Monkhorst-Pack grid is not.** Measured on this cell: **2304 of the 3072 rotation images of
+a shifted 4x4x4 grid land off it** (an unshifted grid: zero of 3072). The consequences,
+all of which look like a working calculation:
+
+| shifted 4x4x4, `nosym`, nothing symmetrised | |
+|---|---|
+| total energy against the reduced run | **+3.1e-5 Ry** |
+| density asymmetry `max|rho - sym(rho)| / max|rho|` | **2%** |
+| dielectric tensor diagonal | 13.848 against 13.806 |
+| off-diagonal entries, which cubic symmetry forbids | **3.77** |
+
+The combination is now refused by name. It is the same fact `si2-nc-shifted-nosym.in`
+records for P6 — a shifted grid does not have the crystal's symmetry — reached from the
+other side.
+
+**And the escape *does* work on an unshifted grid, which is the only check
+`symmetrize_directional` has**, since QE computes the wedge route alone. The same
+unshifted 4x4x4 sample run two ways — reduced to 8 points with the response symmetrised,
+and whole at 64 points with the symmetrisation switched off — agrees to every digit
+printed: `E = -15.830647095` Ry and `epsilon = 23.608844285` from both, with anisotropy
+1e-14. (That `epsilon` is nowhere near 13.8 because an unshifted grid includes Gamma,
+where silicon's gap is smallest and the response largest, and 4^3 points do not average it
+away. It is a property of the k-sample, not of the method.)
+
+**Refused rather than approximated**, each by name and each because the missing piece is
+invisible in the answer: **ultrasoft and PAW** (the response density needs `dbecsum` and
+the augmentation charge's own response, `addusdbec`/`lr_addusddens`, and the perturbed
+`D_ij` needs `int3` from `newdq`); **metals** (`orthogonalize`'s smearing branch replaces
+the sharp projector with occupation-difference weights, and the Fermi level itself shifts —
+`ef_shift`; the level's own derivative already exists, since P22 wrote `bisect_fermi`'s
+`custom_jvp`, so this is the projector's gap); **noncollinear magnetism and spin-orbit
+coupling** (`incdrhoscf_nc`, `set_int3_nc`); **DFT+U** (`adddvhubscf` — the induced
+potential carries a `dns` that is not a function of `drho`); and spin spirals.
+
+*Notebook 19.*
+
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes
 the k-point count.

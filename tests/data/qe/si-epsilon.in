@@ -1,0 +1,47 @@
+! The silicon of QE's test-suite/ph_base/si.scf.in, copied here so that the
+! dielectric-response tests run without the vendored tree.
+!
+! It is the ground state `si.phG.in` computes the dielectric constant and the
+! Born effective charges of, with `epsil = .true.`. Its committed benchmark
+! prints, in cartesian axes:
+!
+!     Dielectric constant   13.806375297 on the diagonal, zero off it
+!     Effective charges     -0.07568 on the diagonal, both atoms
+!
+! and a total energy of -15.84452726 Ry.
+!
+! The ten k-points are the irreducible wedge of a shifted 4x4x4 Monkhorst-Pack
+! grid. **That grid is not closed under the point group** -- 2304 of its 3072
+! rotation images land off it -- so the response computed on the wedge has to be
+! symmetrised (`symdvscf`, and `symmatrix` on the assembled tensor). Running the
+! whole grid instead is not an escape here: see si-epsilon-unshifted-nosym.in,
+! which is the grid that *is* closed.
+ &control
+    calculation = 'scf'
+    prefix = 'silicon'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1,
+    ecutwfc = 18.0
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS
+  10
+   0.1250000  0.1250000  0.1250000   1.00
+   0.1250000  0.1250000  0.3750000   3.00
+   0.1250000  0.1250000  0.6250000   3.00
+   0.1250000  0.1250000  0.8750000   3.00
+   0.1250000  0.3750000  0.3750000   3.00
+   0.1250000  0.3750000  0.6250000   6.00
+   0.1250000  0.3750000  0.8750000   6.00
+   0.1250000  0.6250000  0.6250000   3.00
+   0.3750000  0.3750000  0.3750000   1.00
+   0.3750000  0.3750000  0.6250000   3.00

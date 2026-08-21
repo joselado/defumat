@@ -84,6 +84,7 @@ __all__ = [
     "SternheimerResult",
     "local_perturbation",
     "make_sternheimer",
+    "require_a_sternheimer_regime",
 ]
 
 #: ``cgsolve_all``'s own ceiling on the CG iterations.
@@ -373,11 +374,14 @@ def _alpha_pv(eigenvalues, nocc: int) -> float:
     return max(2.0 * (emax - emin), 1.0e-2)
 
 
-def make_sternheimer(calculation, result, threshold: float = THRESHOLD):
-    """A solver for a converged :class:`~pypresso.scf.driver.SCFResult`.
+def require_a_sternheimer_regime(calculation) -> None:
+    """Refuse, by name, every regime whose response needs machinery not here.
 
-    Refuses, by name, every regime whose response needs machinery this module
-    does not have -- see the module docstring for what each one would need.
+    A separate function because two entry points need the same list -- this
+    module's :func:`make_sternheimer` and the electric field's
+    :func:`~pypresso.response.efield.dielectric_tensor` -- and a refusal stated
+    twice is a refusal that will eventually be stated differently. See the
+    module docstring for what each case would need.
     """
     system = calculation.system
     if calculation.is_ultrasoft or calculation.is_paw:
@@ -412,6 +416,10 @@ def make_sternheimer(calculation, result, threshold: float = THRESHOLD):
     if calculation.spiral:
         raise NotImplementedError("the Sternheimer response of a spin spiral is not implemented")
 
+
+def make_sternheimer(calculation, result, threshold: float = THRESHOLD):
+    """A solver for a converged :class:`~pypresso.scf.driver.SCFResult`."""
+    require_a_sternheimer_regime(calculation)
     eigenvalues = jnp.asarray(result.eigenvalues)
     if eigenvalues.ndim == 2:
         eigenvalues = eigenvalues[None]

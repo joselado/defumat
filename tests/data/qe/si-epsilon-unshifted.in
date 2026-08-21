@@ -1,0 +1,32 @@
+! The same silicon on an **unshifted** 4x4x4 grid, reduced to its wedge.
+!
+! Half of a pair. An unshifted Monkhorst-Pack grid *is* closed under the point
+! group -- every one of the 3072 rotation images of this one lands back on it --
+! so the same k-sample can be run two ways: reduced to 8 points with the
+! response symmetrised (this file), or whole at 64 points with no symmetry at
+! all (si-epsilon-unshifted-nosym.in). The two must give the same dielectric
+! tensor, and nothing is shared between the two routes except the Sternheimer
+! solve, so agreeing is the check on `symmetrize_directional`.
+!
+! It is *not* the sampling QE's benchmark uses, and its dielectric constant is
+! nowhere near converged (23.6 against 13.8): an unshifted grid includes Gamma,
+! where silicon's gap is smallest and the response largest, and 4^3 points do
+! not average that away. That is a property of the k-sample, not of the method.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1,
+    ecutwfc = 18.0
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0

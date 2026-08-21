@@ -129,6 +129,7 @@ from pypresso.system.symmetry import (
     magnetization_signs,
     symmetry_maps,
     symmetrize_magnetization,
+    symmetrize_vector_density,
 )
 from pypresso.units import RY_TO_EV
 
@@ -1862,6 +1863,52 @@ class Calculation:
                 self._magnetization_rotations,
             )
         return _symmetrize(rho_r, gvectors.fft_index, gvectors.grid, self._symmetry_maps)
+
+    def symmetrize_directional(self, fields: jnp.ndarray) -> jnp.ndarray:
+        """Impose the crystal symmetry on three densities that form a vector.
+
+        ``LR_Modules/symdvscf.f90`` at ``q = 0``. A linear response to a
+        perturbation along a *direction* is not three scalar densities: a
+        symmetry operation rotates the directions into each other as well, so
+        the average that a symmetry-reduced k-set needs is
+
+            drho_a(r) <- (1/N) sum_S R_ab drho_b({S|f}^-1 r),
+
+        with ``R`` the plain cartesian rotation. It is
+        :func:`~pypresso.system.symmetry.symmetrize_magnetization`'s
+        construction without the axial sign -- an induced charge density is a
+        **polar** vector under the group where a magnetization is an axial one,
+        and applying the wrong one is a different symmetry rather than a worse
+        average.
+
+        **Skipping it entirely is not an option a shifted grid offers**, which
+        is the trap this method exists for. A response is direction-dependent,
+        so the usual escape -- run the *whole* k-grid, where the reduction has
+        nothing to put back -- only works if that grid is closed under the point
+        group, and a **shifted** Monkhorst-Pack grid is not: on fcc silicon
+        2304 of the 3072 rotation images of a shifted 4x4x4 grid land off it.
+        An unshifted grid is closed exactly, and both routes are tested against
+        each other (``tests/regression/test_response.py``).
+
+        Args:
+            fields: ``(3, nspin_mag, n1, n2, n3)`` real, on the dense grid.
+        """
+        if self._symmetry_maps is None:
+            return fields
+        gvectors = self.basis.dense
+        permutations, phases = self._symmetry_maps
+        rotations = jnp.asarray(cartesian_rotations(self.system.cell, self.symmetries))
+
+        def channel(three):
+            in_g = jnp.stack([r_to_g(f, gvectors.fft_index) for f in three])
+            out_g = symmetrize_vector_density(in_g, permutations, phases, rotations)
+            return jnp.stack([
+                jnp.real(g_to_r(component, gvectors.fft_index, gvectors.grid))
+                for component in out_g
+            ])
+
+        moved = jnp.moveaxis(jnp.asarray(fields), 1, 0)  # (nspin, 3, ...)
+        return jnp.moveaxis(jnp.stack([channel(c) for c in moved]), 0, 1)
 
     def density(self, wavefunctions, weights, becsum_=None) -> jnp.ndarray:
         """The symmetrised output density from the occupied states.
