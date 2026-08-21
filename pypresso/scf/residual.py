@@ -37,19 +37,26 @@ Two things had to be written down rather than differentiated:
   direction; it is not the Sternheimer response, which would be exact and is
   what ``PLAN.md`` P22c plans.
 
-**Refused rather than approximated:** DFT+U (``ns`` would need to join the
-packed state and its projectors are rebuilt on the host), external and
-constrained magnetic fields (the field is driven by a secant *outside* the
-density, so ``F`` would not be a function of ``x`` alone), tetrahedron
-occupations (the tetrahedron weights are built on the host) and spin spirals.
-Each raises by name.
+**DFT+U joins the state rather than being refused.** ``ns`` is not a function of
+the density -- the Hubbard potential is built from it before the Hamiltonian
+exists -- so ``mix_rho.f90`` carries it inside ``mix_type`` and the mixing loop
+mixes it alongside ``rho`` and ``becsum``. A root-finder solves for it on the
+same footing, for the same reason, and nothing about the Jacobian action changes:
+``v_hubbard`` is already ``jax.grad`` of the Hubbard energy (P20) and the
+projectors ``wfcU`` are fixed while the atoms are.
 
-Memory: the packed state is ``nspin * dense_grid`` floats plus ``becsum``, and a
-Krylov subspace holds a few tens of those -- tens of MB, negligible beside the
-wavefunctions. One ``jvp`` doubles the wavefunction working set for the duration
-of the call, because the tangent ``psi`` has the same shape as ``psi``; that is
-the number to watch, and it is why the JVP goes through the same ``k_batch``
-dial the primal does.
+**Refused rather than approximated:** external and constrained magnetic fields
+(the field is driven by a secant *outside* the density, so ``F`` would not be a
+function of ``x`` alone), tetrahedron and ``from_input`` occupations (built on
+the host, and the second is not a function of the eigenvalues at all), and spin
+spirals. Each raises by name.
+
+Memory: the packed state is ``nspin * dense_grid`` floats plus ``becsum`` and
+``ns``, and a Krylov subspace holds a few tens of those -- tens of MB,
+negligible beside the wavefunctions. One ``jvp`` doubles the wavefunction
+working set for the duration of the call, because the tangent ``psi`` has the
+same shape as ``psi``; that is the number to watch, and it is why the JVP goes
+through the same ``k_batch`` dial the primal does.
 """
 
 from __future__ import annotations
@@ -82,20 +89,29 @@ class ScfResidual:
     ethr: float
     shapes: tuple
     size: int
+    #: Shape of the DFT+U occupation matrix, or ``None`` without a ``U``.
+    #: ``ns`` is part of the *mixed state* rather than a function of the
+    #: density (``mix_rho.f90`` carries it in ``mix_type`` for that reason), so
+    #: it is part of the state a root-finder solves for on exactly the same
+    #: footing.
+    ns_shape: tuple | None = None
 
     # ---- packing -------------------------------------------------------
-    def pack(self, rho, becsum_) -> np.ndarray:
+    def pack(self, rho, becsum_, ns=None) -> np.ndarray:
         """The mixed state as one flat real vector, exactly ``_mix``'s packing."""
         flat = [np.asarray(rho, dtype=float).ravel()]
         for part in becsum_:
             if part is not None:
                 flat.append(np.asarray(part, dtype=float).ravel())
+        if self.ns_shape is not None:
+            if ns is None:
+                raise ValueError("this calculation has a Hubbard U; ns is part of the state")
+            flat.append(np.asarray(ns, dtype=float).ravel())
         return np.concatenate(flat)
 
     def unpack(self, x):
-        """The inverse of :meth:`pack`."""
+        """The inverse of :meth:`pack`. Returns ``(rho, becsum, ns)``."""
         x = jnp.asarray(x)
-        offset = 0
         rho_shape = self.shapes[0]
         n = int(np.prod(rho_shape))
         rho = x[:n].reshape(rho_shape)
@@ -108,30 +124,41 @@ class ScfResidual:
             n = int(np.prod(shape))
             becsum_.append(x[offset : offset + n].reshape(shape))
             offset += n
-        return rho, tuple(becsum_)
+        ns = None
+        if self.ns_shape is not None:
+            ns = x[offset : offset + int(np.prod(self.ns_shape))].reshape(self.ns_shape)
+        return rho, tuple(becsum_), ns
 
     # ---- the map -------------------------------------------------------
     def step(self, x, psi0):
         """One SCF iteration as a pure function: ``x -> F(x)``, and the ``psi``."""
         calculation = self.calculation
-        rho, becsum_ = self.unpack(x)
+        rho, becsum_, ns = self.unpack(x)
         potential = calculation.potential(rho)
         _, ddd_paw = calculation.onecenter(becsum_)
-        hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw, None)
+        hubbard_terms = None
+        if ns is not None:
+            # ``v_hubbard`` is ``jax.grad`` of the Hubbard energy (P20), so this
+            # whole branch is differentiable without anything being added for it.
+            _, _, hubbard_terms = calculation.hubbard_terms(ns)
+        hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw, hubbard_terms)
         eigenvalues, psi = calculation.diagonalize(
             hamiltonians, self.nbnd, psi0, self.ethr
         )
         wg = _weights(calculation, eigenvalues)
         becsum_out = calculation.becsum(psi, wg)
         rho_out = calculation.density(psi, wg, becsum_out)
-        return self.flatten(rho_out, becsum_out), psi
+        ns_out = None if ns is None else calculation.occupation_matrix(psi, wg)
+        return self.flatten(rho_out, becsum_out, ns_out), psi
 
-    def flatten(self, rho, becsum_):
+    def flatten(self, rho, becsum_, ns=None):
         """:meth:`pack`, inside a trace -- ``jnp`` rather than ``np``."""
         flat = [jnp.reshape(jnp.real(rho), (-1,))]
         for part in becsum_:
             if part is not None:
                 flat.append(jnp.reshape(jnp.real(part), (-1,)))
+        if ns is not None:
+            flat.append(jnp.reshape(jnp.real(ns), (-1,)))
         return jnp.concatenate(flat)
 
     def residual(self, x, psi0):
@@ -210,13 +237,6 @@ def _weights(calculation, eigenvalues):
 def make_residual(calculation, nbnd: int, ethr: float) -> ScfResidual:
     """Build the residual for a calculation, refusing the regimes it cannot hold."""
     system = calculation.system
-    if calculation.is_hubbard:
-        raise NotImplementedError(
-            "DFT+U has no residual form here: the occupation matrix ns is part "
-            "of the mixed state and its projectors are rebuilt outside the "
-            "trace, so F would not be a function of the packed density alone "
-            "(PLAN.md P22)"
-        )
     if calculation.magnetic_field is not None:
         raise NotImplementedError(
             "an external or constraining magnetic field has no residual form "
@@ -232,7 +252,12 @@ def make_residual(calculation, nbnd: int, ethr: float) -> ScfResidual:
     shapes = (tuple(np.shape(rho)),) + tuple(
         None if part is None else tuple(np.shape(part)) for part in becsum_
     )
+    ns_shape = (
+        tuple(np.shape(calculation.starting_ns())) if calculation.is_hubbard else None
+    )
     size = int(np.prod(shapes[0])) + sum(
         int(np.prod(s)) for s in shapes[1:] if s is not None
     )
-    return ScfResidual(calculation, nbnd, ethr, shapes, size)
+    if ns_shape is not None:
+        size += int(np.prod(ns_shape))
+    return ScfResidual(calculation, nbnd, ethr, shapes, size, ns_shape)

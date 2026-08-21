@@ -40,8 +40,11 @@ from pypresso.hubbard.occupations import (
     adjust_ns,
     build_ns_symmetry,
     initial_ns,
+    ns_shape,
     occupation_matrix,
     projections,
+    spin_averaged_ns,
+    uniform_ns,
 )
 from pypresso.hubbard.operator import HubbardTerm, block_potential
 from pypresso.hubbard.projectors import build_hubbard_projectors
@@ -61,8 +64,11 @@ __all__ = [
     "hubbard_potential",
     "initial_ns",
     "ns_ddot",
+    "ns_shape",
     "occupation_matrix",
     "parse_manifold",
     "projections",
+    "uniform_ns",
+    "spin_averaged_ns",
     "qe_hubbard_potential",
 ]

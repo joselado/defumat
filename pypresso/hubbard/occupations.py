@@ -32,6 +32,17 @@ rule (``PW/src/init_ns.f90``) and the adjustment of its *eigenvalues* to what
 ``starting_ns_eigenvalue`` asks for (``PW/src/ns_adj.f90``). The second is not a
 convenience -- an antiferromagnet has more than one self-consistent ``ns``, and
 it is how a run is steered to the one that is wanted.
+
+**Which starting ``ns`` is chosen decides which solution is found, and
+``starting_magnetization`` does not control it.** ``init_ns`` fills the majority
+channel first by Hund's rule, so on a magnetic species the starting matrix is
+strongly spin-polarised however small the starting magnetization is -- on fcc
+nickel it is 1.0 in every majority orbital against 0.8 in every minority one,
+whether ``starting_magnetization`` is 0.7 or 0.05. A run meant to begin near the
+*unpolarised* solution therefore cannot get there by turning
+``starting_magnetization`` down; it has to be handed a different matrix.
+:func:`uniform_ns` and :func:`spin_averaged_ns` build the usual ones, and
+``run_scf(starting_ns=...)`` takes any array of the right shape.
 """
 
 from __future__ import annotations
@@ -46,8 +57,11 @@ __all__ = [
     "adjust_ns",
     "build_ns_symmetry",
     "initial_ns",
+    "ns_shape",
     "occupation_matrix",
     "projections",
+    "spin_averaged_ns",
+    "uniform_ns",
 ]
 
 
@@ -178,6 +192,69 @@ def build_ns_symmetry(setup, cell, structure, symmetries) -> NsSymmetry | None:
         nsym=symmetries.nsym,
         shape=(setup.nslot, setup.ldmx),
     )
+
+
+def ns_shape(setup, nspin: int) -> tuple[int, int, int, int]:
+    """``(nspin, nslot, ldmx, ldmx)`` -- what a ``starting_ns`` has to be.
+
+    One slot per *correlated* atom, not per atom, and manifolds of different
+    ``l`` zero-padded to the largest, so the shape is not something to guess
+    from the structure. :attr:`~pypresso.scf.Calculation.hubbard` carries the
+    slot-to-atom map.
+    """
+    return (nspin, setup.nslot, setup.ldmx, setup.ldmx)
+
+
+def uniform_ns(setup, nspin: int, occupation=None) -> jnp.ndarray:
+    """A diagonal starting ``ns`` with every orbital of every channel equal.
+
+    This is the *orbitally and spin unpolarised* start: the reference occupation
+    of each manifold spread evenly over its ``2l+1`` orbitals and its channels.
+    It is what ``init_ns`` already produces for a species with no starting
+    magnetization, made available for one that has one -- which is the case that
+    cannot be reached any other way, since ``init_ns`` reads Hund's rule off the
+    magnetization rather than off a request.
+
+    The value written is ``occupation / 2 / (2l+1)`` per orbital *per channel*
+    for either ``nspin``, which is ``init_ns``'s own unpolarised branch.
+
+    ``occupation`` overrides the reference occupation, as a scalar for every
+    manifold or one value per slot. It is *not* clamped to ``[0, 2l+1]``: a
+    deliberately over- or under-filled start is a legitimate way to look for
+    another solution, and silently correcting it would hide the request.
+    """
+    shape = ns_shape(setup, nspin)
+    ns = np.zeros(shape)
+    values = None if occupation is None else np.atleast_1d(np.asarray(occupation, dtype=float))
+    for slot, t in enumerate(setup.types):
+        item = setup.species[t]
+        total = item.occupation if values is None else float(
+            values[slot] if values.size > 1 else values[0]
+        )
+        for spin in range(nspin):
+            for m in range(item.ldim):
+                # ``/ 2`` and not ``/ nspin``: ``ns`` is *per spin channel* even
+                # when there is one of them -- ``new_ns`` halves it for
+                # ``nspin = 1`` and the energy carries the factor of two instead
+                # (P20's third trap). ``init_ns`` writes the same ``total / 2``
+                # here, and dividing by ``nspin`` would silently double the
+                # unpolarized start.
+                ns[spin, slot, m, m] = total / 2.0 / item.ldim
+    return jnp.asarray(ns)
+
+
+def spin_averaged_ns(ns) -> jnp.ndarray:
+    """The same occupation matrix in both channels, preserving the total.
+
+    The spin-symmetric neighbour of a given ``ns``: it keeps whatever *orbital*
+    structure the input has and removes only the *spin* polarisation, which is
+    what a run aimed at the non-magnetic solution of a magnetic system wants as
+    a start. For ``nspin = 1`` it is the identity.
+    """
+    ns = jnp.asarray(ns)
+    if ns.shape[0] == 1:
+        return ns
+    return jnp.broadcast_to(jnp.mean(ns, axis=0, keepdims=True), ns.shape)
 
 
 def initial_ns(setup, nspin: int, starting_magnetization) -> jnp.ndarray:

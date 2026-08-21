@@ -43,7 +43,7 @@ point where there is not.
 | **Spin-orbit coupling**, two-component spinors and `j`-resolved projectors | `lspinorb` | `pw.x` |
 | **Magnetic fields and constrained moments** — all four of QE's schemes | `B_field`, `constrained_magnetization` | `pw.x` |
 | **Magnetic fields inside one atom's sphere**, and a field that fades away | `LOCAL_MAGNETIC_FIELDS` card, `reducebf`, `constrained_magnetization = 'fsm'` | new — Elk's `bfcmt`, `reducebf` and `bfieldfsm.f90`; `pw.x` has no counterpart |
-| **DFT+U** — Dudarev's functional with `U`, `J0`, `alpha`, `beta` | `HUBBARD` card | `pw.x` |
+| **DFT+U** — Dudarev's functional with `U`, `J0`, `alpha`, `beta` | `HUBBARD` card, `run_scf(starting_ns=...)` | `pw.x` — plus a custom starting occupation matrix, where `pw.x` offers only `starting_ns_eigenvalue` |
 | **Spin spirals** at any wavevector, without a supercell | `spiral_q`, `pypresso spiral` | new — Elk has it, `pw.x` does not |
 | **Relaxing the spiral wavevector** down `dE/dq` to the ground-state pitch | `relax_spiral_q` | new |
 | **Berry curvature and Chern numbers**, the latter exact integers on any mesh | `run_berry_curvature` | new — QE has the Berry *phase* (`bp_c_phase`), not the curvature |

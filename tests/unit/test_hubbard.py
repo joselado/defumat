@@ -27,7 +27,13 @@ from pypresso.hubbard.manifold import (
     parse_manifold,
     reference_occupation,
 )
-from pypresso.hubbard.occupations import adjust_ns, initial_ns
+from pypresso.hubbard.occupations import (
+    adjust_ns,
+    initial_ns,
+    ns_shape,
+    spin_averaged_ns,
+    uniform_ns,
+)
 from pypresso.hubbard.operator import block_potential
 from pypresso.hubbard.projectors import lowdin_transform
 from pypresso.io.pwin import parse_pw_input
@@ -365,3 +371,80 @@ def test_atomic_orbitals_are_renormalised(pseudo_dir):
             overlaps[i] = float(np.sum(projector.beta[:cut] * chi[:cut] * weights[:cut]))
         norm += float(overlaps @ q @ overlaps)
         assert norm == pytest.approx(1.0, abs=1e-6)
+
+
+# --- a starting occupation matrix that is not Hund's rule -------------------
+#
+# ``init_ns`` reads Hund's rule off ``starting_magnetization``, so on a magnetic
+# species it is strongly spin-polarised however small that number is -- which
+# means the *unpolarised* start, the one a run aimed at the non-magnetic
+# solution needs, cannot be reached by turning a knob down. These are the
+# builders for it; ``tests/regression/test_scf_solvers.py`` is where one is used
+# to reach a saddle.
+
+
+@pytest.mark.unit
+def test_hunds_rule_start_is_polarised_whatever_the_magnetization(feo):
+    _, _, feo = feo
+    """The premise. If this ever stops being true the builders below are
+    pointless, so it is asserted rather than assumed."""
+    strong = np.asarray(initial_ns(feo, 2, [1.0, 1.0]))
+    weak = np.asarray(initial_ns(feo, 2, [0.01, 0.01]))
+    assert np.allclose(strong, weak)
+    assert not np.allclose(strong[0], strong[1])
+
+
+@pytest.mark.unit
+def test_uniform_ns_is_unpolarised_and_keeps_the_electron_count(feo):
+    _, _, feo = feo
+    ns = np.asarray(uniform_ns(feo, 2))
+    assert ns.shape == ns_shape(feo, 2)
+    assert np.allclose(ns[0], ns[1])
+    hund = np.asarray(initial_ns(feo, 2, [1.0, 1.0]))
+    # Same electrons in the manifold, differently arranged.
+    assert np.trace(ns.sum(axis=0)[0]) == pytest.approx(np.trace(hund.sum(axis=0)[0]))
+    # Diagonal, and every orbital of the manifold equal.
+    diagonal = np.diagonal(ns[0, 0])
+    filled = diagonal[diagonal > 0]
+    assert np.allclose(filled, filled[0])
+    assert np.allclose(ns[0, 0] - np.diag(diagonal), 0.0)
+
+
+@pytest.mark.unit
+def test_uniform_ns_takes_an_occupation_override(feo):
+    _, _, feo = feo
+    ns = np.asarray(uniform_ns(feo, 2, occupation=2.0))
+    assert np.trace(ns.sum(axis=0)[0]) == pytest.approx(2.0)
+
+
+@pytest.mark.unit
+def test_uniform_ns_matches_init_ns_where_init_ns_is_unpolarised(feo):
+    """``ns`` is per spin channel even when there is one of them, so the
+    divisor is 2 and not ``nspin``. ``init_ns`` with no magnetization is the
+    same unpolarised matrix, for both ``nspin``, and is the reference here --
+    dividing by ``nspin`` instead would double the ``nspin = 1`` start and
+    nothing else in the suite would notice."""
+    _, _, feo = feo
+    for nspin in (1, 2):
+        assert np.allclose(
+            np.asarray(uniform_ns(feo, nspin)),
+            np.asarray(initial_ns(feo, nspin, [0.0, 0.0])),
+        )
+
+
+@pytest.mark.unit
+def test_spin_averaged_ns_removes_spin_and_keeps_orbital_structure(feo):
+    _, _, feo = feo
+    rng = np.random.default_rng(0)
+    ns = np.asarray(initial_ns(feo, 2, [1.0, -1.0]))
+    ns = ns + 0.01 * rng.normal(size=ns.shape)
+    averaged = np.asarray(spin_averaged_ns(ns))
+    assert np.allclose(averaged[0], averaged[1])
+    assert np.allclose(averaged.sum(axis=0), ns.sum(axis=0))
+
+
+@pytest.mark.unit
+def test_spin_averaged_ns_is_the_identity_without_spin(feo):
+    _, _, feo = feo
+    ns = initial_ns(feo, 1, [0.0, 0.0])
+    assert np.allclose(np.asarray(spin_averaged_ns(ns)), np.asarray(ns))

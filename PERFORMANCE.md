@@ -1250,6 +1250,15 @@ duration of the call; that is why it goes through the same `k_batch` dial the pr
 The dense Jacobian is never formed and the number says why: `(nspin nr)^2` is
 10368 x 10368 on the *smallest* case here.
 
+**DFT+U costs the residual solver nothing extra to support and a great deal to use.** ``ns``
+joins the packed state as ``mix_rho.f90`` puts it in ``mix_type``, and ``v_hubbard`` is already
+``jax.grad`` of the Hubbard energy (P20), so no new Jacobian machinery was needed. On fcc
+nickel with ``U = 3 eV`` (``benchmarks/ni-u-unstable.in``, one k-point) the solver reaches the
+mixer's fixed point on 58 evaluations of ``F`` against 9 -- the same ratio as everywhere else.
+What it buys is again the unstable solution: from a state perturbed 2% off the non-magnetic
+saddle, Anderson runs away to the ferromagnet in 9 evaluations and Newton-Krylov returns to the
+saddle in 31.
+
 **What would change the cost verdict** is P22c -- the Sternheimer `custom_jvp`, a projected
 CG solve per occupied band instead of a differentiated Davidson. That is the only way an
 inner Krylov iteration stops costing a diagonalisation, and it is the same routine DFPT
@@ -1323,3 +1332,4 @@ measurements, before being implemented. See "QE's FFT layout" above.)
 | 2026-08-20 | `v_xc` and `e_xc` from one `value_and_grad` pass instead of two evaluations | `exchange_correlation` 7.3 → 3.5 ms |
 | 2026-08-21 | Kerker/Thomas-Fermi preconditioning in the mixer (`mixing_mode = 'TF'`), with QE's own `q_TF` | Al slab 24 → 14 iterations; 34 → 20 with more vacuum; one FFT per iteration |
 | 2026-08-21 | Newton-Krylov on the SCF residual (`scf_solver`) | **not a speedup** — 19 to 139 `F` evaluations against 14 to 36; it buys unstable SCF solutions, not time |
+| 2026-08-21 | `ns` joins the residual's packed state; `run_scf(starting_ns=...)` | DFT+U reaches the mixer's fixed point (58 `F` against 9) and a saddle the mixer cannot hold (31 against a runaway) |

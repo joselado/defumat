@@ -74,6 +74,7 @@ from pypresso.hubbard.occupations import (
     adjust_ns,
     build_ns_symmetry,
     initial_ns,
+    ns_shape,
     occupation_matrix,
 )
 from pypresso.hubbard.operator import HubbardTerm, block_potential
@@ -2248,7 +2249,7 @@ def _result_for_stress(calculation, eigenvalues, wg, wavefunctions, rho, terms):
 
 
 def _solve_residual(
-    calculation, system, nbnd, rho, becsum_, conv_thr,
+    calculation, system, nbnd, rho, becsum_, ns_, conv_thr,
     scf_solver, options, mixing_beta, verbose,
 ):
     """Find the fixed point with a residual solver, before the mixing loop runs.
@@ -2290,7 +2291,7 @@ def _solve_residual(
     wavefunctions = None
 
     residual = make_residual(calculation, nbnd, ethr)
-    x0 = residual.pack(rho, becsum_)
+    x0 = residual.pack(rho, becsum_, ns_)
     if precondition is True or (precondition is None and options.get("kerker", True)):
         precondition = kerker_preconditioner(
             calculation.basis.dense, system.cell, residual.shapes[0], beta=1.0,
@@ -2305,12 +2306,22 @@ def _solve_residual(
 
     def accuracy_of(r):
         """The mixing loop's own convergence measure, so ``conv_thr`` means one
-        thing in this file. It is defined on the density part of the residual --
-        ``becsum``'s share is ``rho_ddot``'s ``paw`` term, which the loop adds
-        through ``addusdens`` rather than separately."""
-        return float(_accuracy(
+        thing in this file.
+
+        ``rho_ddot`` on the density part -- ``becsum``'s share is the ``paw``
+        term, which the loop adds through ``addusdens`` rather than separately --
+        plus ``ns_ddot`` when there is a Hubbard U, exactly as the loop adds it.
+        A residual solver that converged on a *different* measure than the mixer
+        could not be compared with it at all."""
+        accuracy = _accuracy(
             jnp.asarray(r[:size]).reshape(shape), calculation.basis.dense, system.cell
-        ))
+        )
+        if residual.ns_shape is not None:
+            n = int(np.prod(residual.ns_shape))
+            accuracy = accuracy + calculation.ns_accuracy(
+                jnp.asarray(r[-n:]).reshape(residual.ns_shape)
+            )
+        return float(accuracy)
 
     if warmup:
         # Ordinary mixing, run through the *residual's* own step so that the
@@ -2341,8 +2352,8 @@ def _solve_residual(
         residual, x0, wavefunctions, accuracy_of, conv_thr=conv_thr,
         precondition=precondition, verbose=verbose, **options,
     )
-    rho_out, becsum_out = residual.unpack(result.x)
-    return rho_out, becsum_out, result.psi, result
+    rho_out, becsum_out, ns_out = residual.unpack(result.x)
+    return rho_out, becsum_out, ns_out, result.psi, result
 
 
 def run_scf(
@@ -2359,6 +2370,7 @@ def run_scf(
     k_batch: int | None | str = "default",
     starting_density: jnp.ndarray | None = None,
     starting_becsum: tuple | None = None,
+    starting_ns: jnp.ndarray | None = None,
     mixing_fixed_ns: int = 0,
     tstress: bool | None = None,
     scf_solver: str = "mixing",
@@ -2380,9 +2392,15 @@ def run_scf(
     would otherwise start from. It is what a relaxation hands the next geometry
     (``PW/src/update_pot.f90``): the density of the previous ionic step is a far
     better guess than the atomic one and costs several SCF iterations less.
-    ``starting_becsum`` is its ultrasoft/PAW counterpart, and the two belong
-    together -- the mixed state is the pair, and giving one without the other
-    starts the run from two different geometries at once.
+    ``starting_becsum`` is its ultrasoft/PAW counterpart, and ``starting_ns``
+    its DFT+U one. **The mixed state is all three together**, and giving one
+    without the others starts the run from two different states at once.
+
+    ``starting_ns`` also decides *which* self-consistent solution a DFT+U run
+    finds, which ``starting_density`` alone does not: ``init_ns`` fills the
+    occupation matrix diagonally by **Hund's rule**, so the default start is
+    strongly spin-polarised however small ``starting_magnetization`` is. A run
+    meant to begin near the unpolarised solution has to say so here.
 
     ``mixing_fixed_ns`` is QE's ``&electrons`` variable of the same name: for
     that many iterations the Hubbard occupation matrix is held at its starting
@@ -2445,7 +2463,28 @@ def run_scf(
     # ``init_ns`` + ``ns_adj``. Like ``becsum`` it is part of the mixed state
     # rather than a function of the density: the Hubbard potential is built from
     # it before the Hamiltonian exists.
-    ns_state = calculation.starting_ns() if calculation.is_hubbard else None
+    ns_state = None
+    if calculation.is_hubbard:
+        if starting_ns is None:
+            ns_state = calculation.starting_ns()
+        else:
+            # Through the precision policy, never a literal dtype (config.py).
+            ns_state = system.kpoints.precision.as_real(starting_ns)
+            expected = ns_shape(calculation.hubbard, calculation.nspin)
+            if ns_state.shape != expected:
+                raise ValueError(
+                    f"starting_ns has shape {ns_state.shape}, expected {expected} "
+                    f"= (nspin, nslot, ldmx, ldmx). There is one slot per "
+                    f"*correlated* atom, not per atom, and manifolds of different "
+                    f"l are zero-padded to the largest -- build it with "
+                    f"pypresso.hubbard.uniform_ns / spin_averaged_ns, or start "
+                    f"from Calculation.starting_ns()"
+                )
+    elif starting_ns is not None:
+        raise ValueError(
+            "starting_ns was given but this calculation has no Hubbard U; "
+            "add a HUBBARD card rather than having the matrix silently ignored"
+        )
 
     if mixing_mode.lower() in PRECONDITIONED:
         # Kerker's ``beta`` is an operator on the grid, so it cannot be built
@@ -2476,8 +2515,8 @@ def run_scf(
     # iteration it costs is counted in ``solver.steps`` like any other.
     solver_result = None
     if get_scf_solver(scf_solver) is not None:
-        rho, becsum_state, wavefunctions, solver_result = _solve_residual(
-            calculation, system, nbnd, rho, becsum_state, conv_thr,
+        rho, becsum_state, ns_state, wavefunctions, solver_result = _solve_residual(
+            calculation, system, nbnd, rho, becsum_state, ns_state, conv_thr,
             scf_solver, dict(scf_solver_options or {}), mixing_beta, verbose,
         )
         # The density is converged, so the eigenvalues must be too: the loose
@@ -2520,8 +2559,13 @@ def run_scf(
             accuracy = float(_accuracy(rho_out - rho, calculation.basis.dense, system.cell))
             if calculation.is_hubbard:
                 ns_out = calculation.occupation_matrix(wavefunctions, wg)
-                if iteration == 1 and starting_density is None:
+                if iteration == 1 and starting_density is None and starting_ns is None:
                     # ``IF (first .AND. starting_pot == 'atomic') CALL ns_adj()``:
+                    # skipped when the caller supplied ``starting_ns`` as well:
+                    # ``ns_adj`` exists to steer a *fresh* run towards one of
+                    # several solutions, and overriding an explicitly given
+                    # matrix with ``starting_ns_eigenvalue`` would defeat the
+                    # only mechanism that targets a solution reliably.
                     # the requested eigenvalues are imposed on the *measured*
                     # matrix and become both the output and the input of this
                     # step, so the residual of the ns block is zero here and the

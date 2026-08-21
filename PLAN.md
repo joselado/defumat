@@ -1989,8 +1989,57 @@ on this kind of problem the preconditioner is not a tuning knob for speed — **
 which physics comes out**, and both answers look equally converged. Both are pinned by
 `test_an_inexact_newton_is_only_as_stability_blind_as_its_inner_solve`.
 
-**Refused by name rather than approximated:** DFT+U (`ns` would have to join the packed state
-and its projectors are rebuilt outside the trace), external and constrained magnetic fields
+**DFT+U joins the packed state rather than being refused.** `ns` is not a function of the
+density — the Hubbard potential is built from it before the Hamiltonian exists — which is why
+`mix_rho.f90` carries it inside `mix_type` and the mixing loop mixes it beside `rho` and
+`becsum`. A root-finder solves for it on the same footing, and nothing about the Jacobian
+action had to be added: `v_hubbard` is already `jax.grad` of the Hubbard energy (P20) and
+`wfcU` is fixed while the atoms are. `ns_ddot` joins `accuracy_of` exactly as it joins the
+loop's `dr2`, so `conv_thr` still means one thing. On fcc nickel with `U = 3 eV` the solver
+reaches Anderson's fixed point to every digit printed — `-86.41841670` Ry, and both `ns`
+traces (4.9961, 2.9994) identical — which is the check that the packing is right.
+
+**And DFT+U has a saddle of its own, but reaching it needs something the code did not have.**
+`init_ns` fills the occupation matrix diagonally by **Hund's rule**, read off
+`starting_magnetization` — so on a magnetic species the starting `ns` is 1.0 in every majority
+`d` orbital against 0.8 in every minority one whether `starting_magnetization` is 0.7 or 0.05.
+Turning that knob down does *not* start a run near the unpolarised solution: the density is
+barely polarised and the occupation matrix is already deep in the ferromagnetic basin, and the
+Hubbard potential it generates undoes a kick applied to the density alone. So `run_scf` gains
+**`starting_ns`**, the third member of the mixed state beside `starting_density` and
+`starting_becsum`, with `hubbard.uniform_ns` and `hubbard.spin_averaged_ns` to build one and
+`hubbard.ns_shape` to say what shape it must be. `ns_adj` is skipped when it is given —
+`starting_ns_eigenvalue` exists to steer a *fresh* run towards one of several solutions, and
+overriding an explicitly requested matrix with it would defeat the only mechanism that targets
+a solution reliably.
+
+With that, the saddle is reachable and is demonstrated the way pyqula demonstrated its own:
+**perturb it and see which solver comes back.** On fcc nickel with `U = 3 eV`, from a
+spin-symmetric density and `uniform_ns`, the SCF converges to `-86.20620046` Ry at
+`m = 0` — the non-magnetic solution, confirmed by an independent `nspin = 1` run giving the
+same number. Kick it by 2% along the magnetization direction, in *both* `rho` and `ns`, and
+hand the identical perturbed state to both solvers:
+
+| | E (Ry) | moment (mu_B) | `F` evaluations |
+|---|---|---|---|
+| Anderson | -86.41841670 | **+2.000000** | 9 |
+| Newton-Krylov | **-86.20620046** | +0.000005 | 31 |
+
+Mixing amplifies the kick into the ferromagnet — which is *what makes the state a saddle* —
+and Newton puts it back, to the saddle's own energy to eight decimals. Both forcing terms
+tried (0.1 and 0.5) return to it.
+
+**One finding here is a warning rather than a feature.** Started *far* from the saddle —
+from Hund's rule, the default — which root Newton-Krylov lands on depends on the inner-solve
+accuracy in no systematic way: `forcing = 0.5` gave the ferromagnet, `0.05` gave a third
+solution at `m = -0.343`, and `0.01` gave the ferromagnet again. All three converged and all
+three reported an accuracy below `conv_thr`. That is the same mechanism as the aluminium
+preconditioner trap, seen from the other side, and the conclusion is: **on a problem with
+several solutions the starting state is what targets one, not the solver's tuning.** From a
+perturbed saddle — a genuinely small perturbation — the result is robust; from far away it is
+not, and no setting makes it so.
+
+**Refused by name rather than approximated:** external and constrained magnetic fields
 (the field is driven by a secant *outside* the density, so `F` is not a function of the state
 alone — P18's own convention makes this unavoidable), tetrahedron and `from_input`
 occupations (built on the host, and the second is not a function of the eigenvalues at all),
@@ -2019,7 +2068,7 @@ default and should stay the default**, and the honest summary of this phase is: 
 genuine and nearly free win, `dE_F` is a term the code needed anyway, and the exact-Jacobian
 solver is a capability (unstable solutions) rather than a speedup.
 
-*Notebook 15.*
+*Notebook 17.*
 
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes

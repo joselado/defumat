@@ -254,6 +254,82 @@ print(f"dE_F  rule = {float(tangent):+.10f}   central difference = "
     dE_F  rule = -0.1463561264   central difference = -0.1463561264
 
 
+## The same thing with DFT+U, and the knob that was missing
+
+`ns` is not a function of the density -- the Hubbard potential is built from it before the
+Hamiltonian exists -- so `mix_rho.f90` carries it inside `mix_type` and the mixing loop mixes
+it beside `rho` and `becsum`. A root-finder solves for it on the same footing, and nothing had
+to be added for the Jacobian: `v_hubbard` is already `jax.grad` of the Hubbard energy.
+
+DFT+U has a saddle of its own, and reaching it needed a new input. **`init_ns` fills the
+occupation matrix by Hund's rule**, so on a magnetic species the start is 1.0 in every majority
+`d` orbital against 0.8 in every minority one -- whether `starting_magnetization` is 0.7 or
+0.05. Turning that knob down does not start a run near the unpolarised solution, because the
+polarised `ns` regenerates the Hubbard potential that undoes a kick to the density alone. Hence
+`run_scf(starting_ns=...)`, with `uniform_ns` to build one.
+
+The test is the definition of an unstable fixed point: perturb it, and see which solver comes
+back.
+
+
+```python
+from pypresso.hubbard import uniform_ns
+
+nickel, nickel_pseudos = load("ni-u-unstable.in")
+setup = Calculation(nickel, nickel_pseudos)
+print("init_ns eigenvalues per spin (Hund's rule):",
+      *[np.round(np.linalg.eigvalsh(np.asarray(setup.starting_ns())[s, 0]), 2)
+        for s in range(2)])
+
+# The saddle: a spin-symmetric density and an orbitally uniform ns.
+rho = np.asarray(setup.starting_density())
+start = dict(starting_density=jnp.asarray(np.repeat(rho.mean(0, keepdims=True), 2, axis=0)),
+             starting_becsum=setup.starting_becsum(),
+             starting_ns=uniform_ns(setup.hubbard, setup.nspin))
+saddle = run_scf(nickel, nickel_pseudos, calculation=Calculation(nickel, nickel_pseudos),
+                 conv_thr=1e-9, max_iterations=150, **start)
+print(f"the saddle:  E = {saddle.total_energy:.8f} Ry   m = {float(saddle.magnetization):+.6f}")
+
+# Kick it 2% along the magnetization direction, in both rho and ns.
+scale = np.array([1.02, 0.98])[:, None, None, None]
+kicked = dict(starting_density=jnp.asarray(np.asarray(saddle.density) * scale),
+              starting_becsum=setup.starting_becsum(),
+              starting_ns=jnp.asarray(np.asarray(saddle.ns) * scale))
+
+away = run_scf(nickel, nickel_pseudos, calculation=Calculation(nickel, nickel_pseudos),
+               conv_thr=1e-9, max_iterations=150, **kicked)
+back = run_scf(nickel, nickel_pseudos, calculation=Calculation(nickel, nickel_pseudos),
+               conv_thr=1e-9, max_iterations=150, scf_solver="newton-krylov",
+               scf_solver_options={"forcing": 0.1, "gmres_maxiter": 30, "max_iterations": 15},
+               **kicked)
+print(f"{'from the perturbed saddle':<28} {'E (Ry)':>15} {'m (mu_B)':>11}")
+print(f"{'  Anderson (runs away)':<28} {away.total_energy:15.8f} {float(away.magnetization):11.6f}")
+print(f"{'  Newton-Krylov (returns)':<28} {back.total_energy:15.8f} {float(back.magnetization):11.6f}")
+
+```
+
+    init_ns eigenvalues per spin (Hund's rule): [1. 1. 1. 1. 1.] [0.8 0.8 0.8 0.8 0.8]
+
+
+    the saddle:  E = -86.20620046 Ry   m = +0.000000
+
+
+    from the perturbed saddle             E (Ry)    m (mu_B)
+      Anderson (runs away)          -86.41841670    2.000000
+      Newton-Krylov (returns)       -86.20620046    0.000005
+
+
+Mixing amplifies the kick into the ferromagnet, which is *what makes the state a saddle*, and
+Newton puts it back.
+
+**One caveat, and it is the same one as the preconditioner above.** Started *far* from the
+saddle -- from Hund's rule, the default -- which root Newton-Krylov finds depends on the
+inner-solve accuracy in no systematic way: `forcing = 0.5` gave the ferromagnet, `0.05` a third
+solution at `m = -0.34`, and `0.01` the ferromagnet again, all three converged and all three
+reporting an accuracy below `conv_thr`. **On a problem with several solutions it is the
+starting state that targets one, not the solver's tuning.** From a genuinely small perturbation
+the result is robust; from far away no setting makes it so.
+
 ---
 
 **Where the detail is.** `PLAN.md` P22 — the two negative results inherited from pyqula (the

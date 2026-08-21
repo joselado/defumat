@@ -18,6 +18,7 @@ Three things are checked, in the order they can go wrong:
 from functools import lru_cache
 from pathlib import Path
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -26,6 +27,7 @@ from pypresso.pseudo import read_upf
 from pypresso.scf import Calculation, run_scf
 from pypresso.scf.driver import default_nbnd
 from pypresso.scf.residual import make_residual
+from pypresso.hubbard import uniform_ns
 from pypresso.system import build_system
 from tests.tolerances import TOTAL_ENERGY_RY
 
@@ -40,6 +42,11 @@ SILICON = BENCHMARKS / "si-1k.in"
 #: of them unstable. See ``test_newton_krylov_reaches_an_unstable_solution``.
 IRON = BENCHMARKS / "fe-unstable.in"
 IRON_NONMAGNETIC = BENCHMARKS / "fe-unstable-nonmagnetic.in"
+
+#: fcc nickel with U = 3 eV: the DFT+U counterpart of ``IRON``, and the case
+#: that needs a custom starting occupation matrix to set up at all.
+NICKEL_U = BENCHMARKS / "ni-u-unstable.in"
+NICKEL_U_NONMAGNETIC = BENCHMARKS / "ni-u-nonmagnetic.in"
 
 #: An aluminium slab with vacuum: metallic, so the Fermi level moves and its
 #: ``custom_jvp`` is on the path, and *inhomogeneously screened*, which is the
@@ -241,3 +248,120 @@ def test_an_inexact_newton_is_only_as_stability_blind_as_its_inner_solve():
     )
     assert unpreconditioned.converged
     assert abs(float(unpreconditioned.magnetization)) > 3.0
+
+
+# --- DFT+U ------------------------------------------------------------------
+#
+# ``ns`` joins the packed state exactly as ``mix_rho.f90`` puts it in
+# ``mix_type``: it is not a function of the density, because the Hubbard
+# potential is built from it before the Hamiltonian exists. Two things are
+# checked -- that the solver still lands on the mixer's fixed point with a U in
+# play, and that it reaches a solution the mixer cannot.
+
+
+@pytest.mark.regression
+@pytest.mark.slow
+def test_newton_krylov_matches_the_mixer_with_a_hubbard_u():
+    """The packing check: ``ns`` in the state must not move the answer."""
+    system, pseudos, _, _ = _setup(NICKEL_U)
+    mixed = run_scf(system, pseudos, calculation=Calculation(system, pseudos),
+                    conv_thr=1e-8, max_iterations=150)
+    newton = run_scf(
+        system, pseudos, calculation=Calculation(system, pseudos), conv_thr=1e-8,
+        max_iterations=150, scf_solver="newton-krylov",
+        scf_solver_options={"forcing": 0.5, "gmres_maxiter": 8, "max_iterations": 12},
+    )
+    assert mixed.converged and newton.converged
+    assert newton.total_energy == pytest.approx(mixed.total_energy, abs=TOTAL_ENERGY_RY)
+    # ``ns`` is compared in ``ns_ddot``, the metric the SCF itself converges on,
+    # rather than elementwise. An elementwise tolerance here would be a number
+    # invented for the test: ``conv_thr`` bounds ``U/2 sum |dns|^2``, so at
+    # 1e-8 with U = 3 eV the individual entries are only pinned to about 3e-4,
+    # and the two solvers do differ at 1e-4. Judging them by the convergence
+    # criterion is both the right comparison and one that scales with it.
+    _, _, calculation, _ = _setup(NICKEL_U)
+    assert float(calculation.ns_accuracy(newton.ns - mixed.ns)) < 10.0 * 1e-8
+
+
+@pytest.mark.regression
+@pytest.mark.slow
+def test_a_hubbard_saddle_is_unstable_to_mixing_and_stable_to_newton():
+    """The definition of an unstable fixed point, tested as such.
+
+    Perturb the non-magnetic solution along the magnetization direction and the
+    two solvers do opposite things: damped mixing runs away to the ferromagnet,
+    which is *what makes it a saddle*, and Newton comes back to it. This is
+    pyqula's own check on the solutions it found (``scftk/vjinteraction_jax.py``)
+    and it is stronger than merely landing on an unusual answer, because the
+    same perturbed input is handed to both.
+
+    **It needs the custom starting occupation matrix**, and that is the point of
+    ``uniform_ns``: ``init_ns`` reads Hund's rule off ``starting_magnetization``,
+    so the default start is already deep in the ferromagnetic basin whatever
+    that number is, and the perturbation has to be applied to ``ns`` as well as
+    to the density -- a kick in the density alone is undone by the Hubbard
+    potential the polarised ``ns`` is still generating.
+    """
+    system, pseudos, calculation, _ = _setup(NICKEL_U)
+
+    # The saddle: spin-symmetric density and an orbitally uniform ns, which the
+    # SCF map preserves exactly.
+    rho = np.asarray(calculation.starting_density())
+    symmetric = jnp.asarray(np.repeat(rho.mean(axis=0, keepdims=True), rho.shape[0], axis=0))
+    start = dict(starting_density=symmetric,
+                 starting_becsum=calculation.starting_becsum(),
+                 starting_ns=uniform_ns(calculation.hubbard, calculation.nspin))
+    saddle = run_scf(system, pseudos, calculation=Calculation(system, pseudos),
+                     conv_thr=1e-9, max_iterations=150, **start)
+    assert saddle.converged
+    assert abs(float(saddle.magnetization)) < 1e-6
+
+    # ...and it is the non-magnetic solution, by an independent nspin = 1 run.
+    reference_system, reference_pseudos, _, _ = _setup(NICKEL_U_NONMAGNETIC)
+    reference = run_scf(reference_system, reference_pseudos, conv_thr=1e-9,
+                        max_iterations=150,
+                        calculation=Calculation(reference_system, reference_pseudos))
+    assert saddle.total_energy == pytest.approx(reference.total_energy, abs=1e-6)
+
+    # Kick it 2% along the magnetization direction, in both parts of the state.
+    epsilon = 0.02
+    density = np.asarray(saddle.density)
+    density = density * np.array([1.0 + epsilon, 1.0 - epsilon])[:, None, None, None]
+    ns = np.asarray(saddle.ns) * np.array([1.0 + epsilon, 1.0 - epsilon])[:, None, None, None]
+    kicked = dict(starting_density=jnp.asarray(density),
+                  starting_becsum=calculation.starting_becsum(),
+                  starting_ns=jnp.asarray(ns))
+
+    ran_away = run_scf(system, pseudos, calculation=Calculation(system, pseudos),
+                       conv_thr=1e-9, max_iterations=150, **kicked)
+    came_back = run_scf(
+        system, pseudos, calculation=Calculation(system, pseudos), conv_thr=1e-9,
+        max_iterations=150, scf_solver="newton-krylov",
+        scf_solver_options={"forcing": 0.1, "gmres_maxiter": 30, "max_iterations": 15},
+        **kicked,
+    )
+    assert ran_away.converged and came_back.converged
+    # Mixing amplified the kick into the ferromagnetic solution...
+    assert abs(float(ran_away.magnetization)) > 1.0
+    # ...and Newton put it back.
+    assert abs(float(came_back.magnetization)) < 1e-4
+    assert came_back.total_energy == pytest.approx(saddle.total_energy, abs=1e-7)
+
+
+@pytest.mark.regression
+def test_starting_ns_is_checked_rather_than_broadcast():
+    """A wrong-shaped occupation matrix is a mistake worth a message: the shape
+    has one slot per *correlated* atom and zero-padded manifolds, so it is not
+    something to infer from the structure."""
+    system, pseudos, calculation, _ = _setup(NICKEL_U)
+    with pytest.raises(ValueError, match="nslot"):
+        run_scf(system, pseudos, calculation=Calculation(system, pseudos),
+                max_iterations=1, starting_ns=np.zeros((2, 1, 3, 3)))
+
+
+@pytest.mark.regression
+def test_starting_ns_without_a_u_is_refused():
+    system, pseudos, calculation, _ = _setup(SILICON)
+    with pytest.raises(ValueError, match="no Hubbard U"):
+        run_scf(system, pseudos, calculation=Calculation(system, pseudos),
+                max_iterations=1, starting_ns=np.zeros((1, 1, 5, 5)))

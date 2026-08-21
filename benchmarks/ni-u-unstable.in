@@ -1,0 +1,42 @@
+! fcc nickel with U = 3 eV, started from a small moment -- the DFT+U counterpart
+! of benchmarks/fe-unstable.in, and a capability case rather than a timing one.
+!
+! There are two self-consistent solutions here: a ferromagnetic one and a
+! non-magnetic one that is a *saddle* of the energy in the magnetization
+! direction. Perturb the non-magnetic solution by 2% along that direction and
+! damped mixing runs away to the ferromagnet, while a Newton method returns to
+! it -- which is what "unstable fixed point" means, and what makes the saddle
+! the reference state a magnetic stabilisation energy is quoted against.
+!
+! **Reaching it needs a custom starting occupation matrix, not just a small
+! starting_magnetization.** init_ns fills ns diagonally by Hund's rule, so the
+! default start is 1.0 in every majority d orbital against 0.8 in every minority
+! one whether starting_magnetization is 0.7 or 0.05 -- already deep in the
+! ferromagnetic basin. run_scf(starting_ns=...) with pypresso.hubbard.uniform_ns
+! is how the unpolarised start is asked for. See PLAN.md P22 and
+! tests/regression/test_scf_solvers.py.
+!
+! One k-point and nosym as in ni-ldau-1k.in, so this runs in seconds; no number
+! here is a converged physics claim.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 6.48, nat = 1, ntyp = 1,
+    ecutwfc = 24.0, ecutrho = 288.0,
+    nspin = 2, starting_magnetization(1) = 0.05,
+    occupations = 'smearing', smearing = 'marzari-vanderbilt', degauss = 0.02
+    nosym = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-8
+ /
+ATOMIC_SPECIES
+ Ni 58.69 Ni.pz-nd-rrkjus.UPF
+ATOMIC_POSITIONS (alat)
+ Ni 0.0 0.0 0.0
+K_POINTS
+ 1
+   0.1250000  0.1250000  0.1250000   1.00
+HUBBARD {ortho-atomic}
+U Ni-3d 3.0
