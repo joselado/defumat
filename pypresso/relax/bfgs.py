@@ -55,6 +55,16 @@ class BFGSSettings:
     trust_radius_ini: float = TRUST_RADIUS_INI
     w_1: float = W_1
     w_2: float = W_2
+    #: What the inverse Hessian is reset to, as a multiple of the inverse
+    #: metric. QE has no such variable because for atoms it does not need one:
+    #: the inverse metric means "a curvature of 1 Ry/bohr^2", and Rydberg atomic
+    #: units are chosen so that a chemical bond is of that order, which is why
+    #: the very first ionic step is a sensible length with no Hessian at all.
+    #: A coordinate that is *not* a position has no such coincidence to draw on
+    #: -- a spin spiral's ``q`` is in reciprocal units and its energy scale is
+    #: milli-Rydberg (:mod:`pypresso.workflows.spiral`) -- so the caller has to
+    #: say what one unit of curvature means there. ``1.0`` is QE's, exactly.
+    hessian_scale: float = 1.0
 
 
 @dataclass
@@ -136,7 +146,9 @@ class BFGS:
         size = self.inverse_hessian.shape[0]
         block = np.zeros((size, size))
         for start in range(0, size, 3):
-            block[start : start + 3, start : start + 3] = self.inverse_metric
+            block[start : start + 3, start : start + 3] = (
+                self.settings.hessian_scale * self.inverse_metric
+            )
         self.inverse_hessian = block
 
     # ------------------------------------------------------------- the update

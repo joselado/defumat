@@ -976,6 +976,58 @@ time, because it stores it beside `evc` on disk; here the whole k axis is reside
 (rule R6) and this follows it. The occupation matrix itself is
 `(nspin, nslot, ldmx, ldmx)` -- a few hundred numbers, whatever the system.
 
+## What relaxing a spin spiral costs (P21)
+
+**`dE/dq` is a tenth of an SCF iteration**, because only two terms of the energy
+depend on `q` and neither of them is an FFT. At frozen coefficients the
+rotated-frame density is a lattice-periodic function on a grid that does not
+move, so the Hartree, exchange-correlation, local and Ewald terms have no `q` in
+them at all and reverse-mode differentiation never enters the transforms; what is
+left is `|k ± q/2 + G|²` and `vkb(k ± q/2)`, and the second is the whole cost.
+
+The hydrogen chain of P19, one core, `conv_thr = 1e-10`, 2026-08-21:
+
+| case | | |
+|---|---|---|
+| `ecutwfc = 25`, 4 k, `npwx = 1540` | per SCF iteration | 576 ms |
+| | `dE/dq`, warm | **54 ms** (0.09 iterations) |
+| | `dE/dq`, cold | 253 ms |
+| `ecutwfc = 60`, 8 k, `npwx = 5684` | per SCF iteration | 3573 ms |
+| | `dE/dq`, warm | **440 ms** (0.12 iterations) |
+| | `dE/dq`, cold | 2388 ms |
+
+Same shape as the force (P15, 0.13-0.52 iterations): a gradient is free next to
+the ten or twenty iterations that produced the state, so a relaxation costs what
+its steps cost and nothing else. There is no QE column because `pw.x` has no
+spin spiral to time against.
+
+**The compilation is paid once per step, not once per run, and that is
+deliberate.** A new `q` is a new plane-wave sphere and therefore a new `npwx`, so
+the traced gradient would be retraced anyway; the cache is dropped explicitly in
+`at_spiral_q` rather than left to be silently evaluated at the previous step's
+cutoff. The cold-warm difference above — 200 ms and 1.9 s — is what a step pays
+for it, against the 3-5 SCF iterations the same step needs. That is the one place
+this differs from an ionic relaxation, where the geometry enters through an
+argument and one compiled kernel serves every step.
+
+**What makes a step cheap is the warm start.** The wavefunctions cannot travel
+between steps — they are coefficients on a sphere that no longer exists — but the
+density can, and handing it over is worth most of the SCF: on the chain at
+`ecutwfc = 40` the first wavevector takes **9** iterations from the atomic
+superposition and every one after it takes **4 to 6**. Six steps to walk from
+`q3 = 0.30` to the antiferromagnet at `0.50003`, so the relaxation costs about
+three times what a single SCF costs — against thirteen SCF runs for the `E(q)`
+scan that would locate the same minimum in one dimension, and a cube of that in
+three.
+
+**Memory.** Nothing new is allocated per step. The gradient's working set is one
+reverse-mode tape over the two terms that carry `q`: `vkb` at
+`(2 nk, npwx, nkb)` complex and its cotangent, which is the same array the SCF
+already holds. Peak RSS for the `ecutwfc = 60` case above is 1.02 GB including the
+SCF, and the frozen-basis `at_spiral_q` shares both G sets, the local potential,
+the core charge and the Ewald sum with the calculation it came from — it rebuilds
+only `kinetic` and the projectors.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than

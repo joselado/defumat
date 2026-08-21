@@ -126,6 +126,7 @@ pypresso/
     energy.py           # the stationary functional the force is the gradient of
     autodiff.py         # -grad of it (the default)
     analytic.py         # QE's six hand-derived terms, as a cross-check
+    spiral.py           # P21: the same, with the spiral q as the coordinate
     registry.py
   relax/
     bfgs.py             # bfgs_module.f90: trust radius + Wolfe line search
@@ -147,7 +148,7 @@ pypresso/
     driver.py           # the SCF loop
   workflows/
     scf.py, nscf.py, bands.py, dos.py
-    spiral.py           # P19: an E(q) scan over spin-spiral wavevectors
+    spiral.py           # P19: an E(q) scan; P21: relaxing q down its gradient
   cli.py                # pypresso scf|bands|dos <input>
 tests/
   unit/                 # analytic and self-consistency checks
@@ -1364,6 +1365,114 @@ other). Also not done: `hub_pot_fix`, QE's protocol of freezing `v_hub` when
 and the protocol around it is not.
 
 *Notebook 13.*
+
+**P21 — Relaxing the spin spiral: `dE/dq`. ✅ DONE.** P19 made `q` a coordinate of the
+calculation; this makes it one that can be *optimised*. The ground state of a spiral magnet
+is the minimum of `E(q)`, and for an incommensurate pitch that minimum is a wavevector no
+supercell can represent — so it has to be found by following a gradient, not by scanning a
+grid in three dimensions. New: `forces/spiral.py`, `relax_spiral_q` in `workflows/spiral.py`,
+`Calculation.at_spiral_q(q, rebuild_basis=False)`, `Calculation.state_kinetic`, a `kcart`
+override on `PlaneWaveBasis.kinetic` and `build_projector_core`, and a `hessian_scale` on
+`BFGSSettings`. **No QE counterpart again** — `pw.x` has no spiral, so there is no
+`force_q` to transcribe either.
+
+**It is P15's construction with one coordinate swapped.** The total energy is written down
+as a function of `q` at *frozen* wavefunctions, occupations and eigenvalues, and `jax.grad`
+of it is the gradient. What makes that the total derivative rather than a partial one is the
+same stationarity argument, plus one step P15 does not need: **the frozen quantity is the
+periodic part of the spinor, and that is the right one.** The stored coefficients *are*
+`U_up` and `U_dn` — the sphere carries the `e^{i(k ± q/2).r}` — so freezing them freezes `U`
+and lets the spiral turn, which is exactly what the SCF minimised over. `S` is the identity
+(ultrasoft and PAW spirals are refused), so there is no Pulay term to carry either.
+
+**Two terms out of seven depend on `q`,** and this is worth knowing because it is what makes
+the gradient cheap: at frozen coefficients the rotated-frame density is a lattice-periodic
+function on an FFT box that does not move, so `∫ vltot ρ`, Hartree, exchange-correlation,
+Ewald and the orthonormality constraint are all independent of `q` and `grad` finds zero in
+them without differentiating through a single FFT. Only `|k ± q/2 + G|²` and `vkb(k ± q/2)`
+survive. The energy is written out in full anyway: evaluated at the converged state it must
+reproduce the SCF total energy, and that identity is the only check on the five terms the
+gradient never sees.
+
+*Check met*, on the hydrogen chain of P19 — four identities, since there is no reference:
+
+| identity | what it isolates | agreement |
+|---|---|---|
+| `spiral_energy` at the converged state = `etot` | the functional is the total energy | **2e-16 Ry** |
+| central difference of `spiral_energy` vs `jax.grad` | the differentiation alone | **2e-9**, and `δ`-limited |
+| central difference of a **re-converged SCF** vs the gradient | **stationarity** | 5.2e-5 at `δ = 0.02`, falling by 4 per halving of `δ` |
+| `dE/dq` at `q = 0` and `q = b3/2` | `E(-q) = E(q)` makes both stationary | **1e-9 / 1e-12** |
+| the same three, with the atom off the origin | the **structure factor**'s half of `vkb` | 2e-12 Ry, 1e-7 in `dE/dq` |
+
+...and the relaxation itself, started at `q3 = 0.30`, reaches the antiferromagnet at
+`q3 = 0.50003` in **6 SCF runs** with `max |dE/dq|` falling from 5.1e-3 to 1e-6. The last
+row of the table is the sharpest thing in the phase: nothing about it is a tolerance
+judgement, and it catches the two transverse components that a one-dimensional finite
+difference never exercises.
+
+*Traps:*
+
+1. **The plane-wave sphere has to be frozen while differentiating, and rebuilt to move.**
+   Which plane waves satisfy `|k ± q/2 + G|² ≤ ecutwfc` is a host-side decision that cannot
+   be traced — and is *piecewise constant* in `q`, so freezing it is exact on each piece
+   rather than an approximation. What it does not see is the jump where a plane wave crosses
+   the cutoff, which is the Pulay error of a finite basis. **Measured:** against a
+   sphere-rebuilding finite difference the gradient disagrees by 8.3e-4 at `ecutwfc = 25`
+   and 8.3e-6 at 60 — and by 5.8e-4 at 40, which is *not* between them, and that
+   non-monotonicity is the point. The error is not a truncation error and does not converge
+   smoothly: it is the sum of the jumps that fall inside the particular window of `q` being
+   differenced, and how many plane waves cross in that window depends on where the shells
+   sit relative to the cutoff. Each jump is the size of a coefficient *at* the cutoff, so
+   they all shrink as the basis approaches completeness, and by 60 Ry they have. A *step*
+   of the relaxation rebuilds the sphere; only the derivative freezes it.
+2. **The compiled gradient cannot follow a moved calculation.** It closes over the sphere,
+   the k-list, the local potential, the Ewald sum and the projector positions it was built
+   with, and all three of `at_spiral_q`, `at_positions` and `at_kpoints` go through
+   `copy.copy`, so a cached one would be carried onto the moved object and *evaluated* — at
+   the old cutoff or the old geometry, giving a plausible wrong number rather than an error.
+   All three drop it, and on the `q` axis that costs nothing: a new `q` is a new `npwx` and
+   would force a recompilation anyway. This is the opposite of the force's cache, which is
+   valid at any geometry because the geometry is an *argument* to it.
+3. **Every obvious test system has its atom at the origin, where the structure factor is
+   one for every `q`.** `vkb(k ± q/2)` has two `q`-dependent factors and the second is
+   `e^{-i(k ± q/2 + G).tau}`; with `tau = 0` it is identically one, so a hydrogen chain
+   validates only half of `vkb`. Its contribution turns out to **cancel** — the derivative
+   brings down `∓ i tau/2` on the two components and `dvan_so` is spin-diagonal without
+   spin-orbit coupling, so the two halves of each diagonal term subtract — but that is a
+   fact to *test*, not to assume, and it stops being true the moment `D` gains an
+   off-diagonal block. Translating the crystal is a symmetry of a spiral (a lattice
+   translation with the spin rotation the theorem pairs it with), so `E(q)` and `dE/dq` are
+   both unchanged by it, and that is the check.
+4. **BFGS's initial inverse Hessian is wrong by two orders of magnitude for `q`.** QE's
+   guess is the inverse metric — a curvature of 1 Ry/bohr² — which is the size of a chemical
+   bond only because Rydberg atomic units were chosen to make it so. A magnetic energy
+   surface is milli-Rydberg over a coordinate of order one, so the first Newton step comes
+   out a hundredth of the trust radius and the relaxation crawls (measured: `q3` moving by
+   0.002 a step, and 15+ steps to travel 0.2). `BFGSSettings.hessian_scale` is set so the
+   first step is exactly `trust_radius_ini` long — "with no curvature information, take a
+   steepest-descent step of the length the trust radius allows" — and every step after it
+   uses a measured curvature. Six steps instead of fifteen.
+5. **The trust radius has no natural unit either**, so the three radii are fractions of the
+   Brillouin zone's linear size (the cube root of its volume), not of the shortest reciprocal
+   vector — which in an anisotropic cell is the one along a vacuum direction the physics
+   never uses.
+6. **The energy convergence threshold has to be loose, and the gradient one carries the
+   physics.** Near the minimum the energy differences being resolved are the size of the
+   basis-set jumps of trap 1 (measured at `ecutwfc = 40`: 3e-6 Ry between two wavevectors
+   0.006 apart, where the physics is 8e-7), so `etot_conv_thr` defaults to 1e-5 Ry and the
+   way to tighten anything is to raise `ecutwfc` first.
+7. **A magnetic field is refused rather than corrected.** The field's energy is deliberately
+   outside the reported total (P18), so the converged state is stationary for a *different*
+   functional than the one being differentiated and the missing term would be invisible.
+
+*Warm start.* The wavefunctions cannot travel between steps — a new `q` is a new plane-wave
+sphere, so the coefficients are on a basis that no longer exists — but the density can,
+because in the rotated frame it is lattice periodic on a grid that does not move. That is
+`update_pot.f90`'s `pot_extrapolation = 'file'` rather than its atomic extrapolation:
+nothing has moved for an atomic superposition to follow. It is worth most of the SCF: on the
+chain the first wavevector takes 9 iterations and every one after it takes 2 to 6.
+
+*Notebook 14.*
 
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes

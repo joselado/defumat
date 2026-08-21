@@ -118,7 +118,7 @@ from pypresso.solvers.davidson import ETHR_MIN, starting_vectors
 from pypresso.solvers.subspace import rayleigh_ritz
 from pypresso.system.builder import System
 from pypresso.system.kpoints import KPoints
-from pypresso.system.spiral import spiral_kpoints
+from pypresso.system.spiral import spiral_kcart, spiral_kpoints
 from pypresso.system.symmetry import (
     apply_symmetry_maps,
     cartesian_rotations,
@@ -731,6 +731,13 @@ class Calculation:
         # which is what rule R7's padding, the vmap over k and the stick layout
         # all rest on.
         self.spiral = bool(system.spiral)
+        #: The spiral wavevector this calculation's *arrays* were built at, when
+        #: it is a traced one. ``None`` in every ordinary calculation, where the
+        #: system's static ``spiral_q`` is the whole story; set only by
+        #: ``at_spiral_q(..., rebuild_basis=False)``, which is how the derivative
+        #: with respect to ``q`` reaches the arrays without the static field --
+        #: which decides array lengths -- having to hold a tracer.
+        self.spiral_q_traced = None
         self.basis_kpoints = (
             spiral_kpoints(system.kpoints, system.spiral_q, system.cell)
             if self.spiral else system.kpoints
@@ -1211,6 +1218,12 @@ class Calculation:
           is the check to run instead.
         """
         moved = copy.copy(self)
+        # The spiral gradient's compiled kernel closes over *this* calculation --
+        # its local potential, its Ewald sum, its projector positions -- so it
+        # cannot follow the atoms. Unlike the force's cache, which takes the
+        # geometry as an argument and is therefore valid at any positions, this
+        # one would be silently evaluated at the geometry it was built at.
+        moved.__dict__.pop("_spiral_gradient", None)
         moved.system = eqx.tree_at(
             lambda sys: sys.structure.positions, self.system, positions
         )
@@ -1284,6 +1297,9 @@ class Calculation:
             )
         system = eqx.tree_at(lambda sys: sys.kpoints, self.system, kpoints)
         moved = copy.copy(self)
+        # As in ``at_positions`` and ``at_spiral_q``: a compiled ``dE/dq`` holds
+        # the k-list and the sphere it was built with, so it cannot cross this.
+        moved.__dict__.pop("_spiral_gradient", None)
         moved.system = system
         # The list everything with a ``k`` index is built on. Without a spiral it
         # *is* the system's, and it has to move with it: leaving it stale gives
@@ -1319,7 +1335,7 @@ class Calculation:
             moved.wfcU = moved._build_hubbard_projectors()
         return moved
 
-    def at_spiral_q(self, q_crystal) -> "Calculation":
+    def at_spiral_q(self, q_crystal, rebuild_basis: bool = True) -> "Calculation":
         """The same calculation at a different spin-spiral wavevector.
 
         :meth:`at_kpoints` in the one direction a spiral moves: ``q`` changes
@@ -1328,22 +1344,67 @@ class Calculation:
         augmentation charge, the Ewald sum and the radial tables are all
         independent of it, and an ``E(q)`` scan is a loop over this method for
         that reason (:mod:`pypresso.workflows.spiral`).
+
+        ``rebuild_basis = False`` is the counterpart of :meth:`at_positions`:
+        it keeps *this* calculation's plane-wave spheres -- which plane waves
+        are in them, their padding, their mask, their box indices and their
+        stick layout -- and rebuilds only what is arithmetic on top of them,
+        ``|k+G|^2`` and ``vkb(k +- q/2)``. It is therefore **traceable**: given
+        a traced ``q`` it returns a calculation whose ``q``-dependent arrays are
+        traced, which is what makes ``dE/dq`` a ``grad``
+        (:mod:`pypresso.forces.spiral`). Which plane waves are inside the cutoff
+        is a host-side decision that cannot be traced, and it is also
+        piecewise constant in ``q``, so freezing it loses no derivative except
+        at the isolated wavevectors where a plane wave crosses the cutoff.
+
+        It is the wrong thing to use for an actual *move*: after a step of any
+        size the frozen sphere is no longer the one ``q`` asks for, and the
+        energy it gives is the one a slightly wrong cutoff would give. A
+        relaxation therefore evaluates the gradient with ``rebuild_basis =
+        False`` and moves with ``rebuild_basis = True``.
         """
         if not self.spiral:
             raise ValueError(
                 "at_spiral_q needs a calculation that is already a spiral: "
                 "spiral_q decides the basis, which is built once"
             )
+        smooth, cell = self.basis.smooth, self.system.cell
+        moved = copy.copy(self)
+        # The compiled ``dE/dq`` closes over the sphere it was built with, so it
+        # cannot follow a calculation whose sphere is a different one. Dropping
+        # it here rather than letting ``copy.copy`` carry it across is the whole
+        # of that: a stale one would be silently evaluated at the old cutoff.
+        moved.__dict__.pop("_spiral_gradient", None)
+
+        if not rebuild_basis:
+            # ``spiral_q`` stays a *static* field and static fields cannot hold
+            # a tracer, so the traced wavevector is carried beside the system
+            # rather than inside it. The system's own ``spiral_q`` is left at
+            # the value the frozen basis belongs to, which is what every
+            # host-side consumer of it (array lengths, the ``spiral`` flag,
+            # reporting) should see.
+            moved.spiral_q_traced = q_crystal
+            planewaves = self.basis.planewaves
+            kcart = spiral_kcart(self.system.kpoints, q_crystal, cell)
+            moved.kinetic = planewaves.kinetic(smooth, self.basis_kpoints, cell, kcart)
+            moved.projector_core = build_projector_core(
+                self.pseudos, self.system.structure, cell, smooth, planewaves,
+                self.basis_kpoints, kcart,
+            )
+            moved.projectors = moved.projector_core.at_positions(
+                self.system.structure.positions, qq=self.projectors.qq
+            )
+            return moved
+
         # ``spiral_q`` is a *static* field -- it decides array lengths -- so it
         # is replaced as a dataclass field rather than through ``tree_at``,
         # which only reaches pytree leaves.
         system = dataclasses.replace(
             self.system, spiral_q=tuple(float(v) for v in q_crystal)
         )
-        moved = copy.copy(self)
         moved.system = system
+        moved.spiral_q_traced = None
 
-        smooth, cell = self.basis.smooth, self.system.cell
         moved.basis_kpoints = spiral_kpoints(system.kpoints, system.spiral_q, cell)
         planewaves = build_plane_wave_basis(
             smooth, moved.basis_kpoints, cell, system.ecutwfc
@@ -1545,6 +1606,23 @@ class Calculation:
             return self.fft_index
         nk = self.system.kpoints.nk
         return jnp.stack([self.fft_index[:nk], self.fft_index[nk:]], axis=1)
+
+    @property
+    def state_kinetic(self) -> jnp.ndarray:
+        """``|k+G|^2`` in the layout a whole *spinor* is stored in.
+
+        ``(nk, 2 npwx)``, the sibling of :attr:`state_fft_index` and the same
+        rule: a spiral's two components read different rows of ``kinetic``, so
+        the two blocks are laid end to end along the plane-wave axis rather than
+        one row being used twice. It is ``SpinorHamiltonian._as_state`` written
+        where something that is not the Hamiltonian can reach it -- the energy
+        differentiated for ``dE/dq`` is the caller
+        (:mod:`pypresso.forces.spiral`).
+        """
+        if not self.spiral:
+            return jnp.concatenate([self.kinetic, self.kinetic], axis=-1)
+        nk = self.system.kpoints.nk
+        return jnp.concatenate([self.kinetic[:nk], self.kinetic[nk:]], axis=-1)
 
     def symmetrize(self, rho_r: jnp.ndarray) -> jnp.ndarray:
         """Impose the crystal symmetry on a real-space density."""

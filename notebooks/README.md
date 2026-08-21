@@ -20,6 +20,7 @@ that way.
 | [`11_noncollinear_magnetism_and_fields.ipynb`](11_noncollinear_magnetism_and_fields.ipynb) | Magnetism as a *vector*: why the symmetry group shrinks and half of what is left needs time reversal, the rotation-invariance identity that gates the whole regime (and the 129 Ry bug it found), bcc iron against QE with LDA and with PBE's local spin frame, what "the moment on this atom" means without muffin tins, and fields and constrained moments — five of QE's hand-derived potentials reproduced by one `jax.grad`, three constrained benchmarks, Elk's fixed-spin-moment field beside them, and `reducebf` finding a magnetic state a nonmagnetic start could never reach | P17, P18 |
 | [`12_spin_spirals.ipynb`](12_spin_spirals.ipynb) | Spin spirals by the generalized Bloch theorem: two plane-wave spheres instead of one, the three identities that validate them (`q = 0` against an ordinary noncollinear run, `q = b3/2` against the *collinear* antiferromagnet, `q = b3/4` against a four-cell noncollinear supercell — all to 1e-10 Ry), the shifted supercell k-grid that is the trap of the phase, an `E(q)` magnon dispersion with the exchange constants fitted out of it, and why the rotated-frame moment is a gauge and the energy is not | P19 |
 | [`13_dft_plus_u.ipynb`](13_dft_plus_u.ipynb) | DFT+U: the correction as a penalty on fractional occupation, the two offsets a Hubbard manifold needs, why `Hubbard_projectors = 'atomic'` still applies `S`, the atomic-orbital renormalisation that only `ortho-atomic` feels (and the 7e-4 Ry it is worth), the potential as `jax.grad` against QE's `v_hubbard`, the `nspin = 1` factor of two that is on the energy and not the potential, nickel four ways and antiferromagnetic FeO against QE (≤6.7e-9 Ry), a second self-consistent solution reached with `starting_ns_eigenvalue`, and `force_hub` falling out of the gradient with nothing written down for it (QE's forces to 4.8e-6 Ry/bohr) | P20 |
+| [`14_spiral_relaxation.ipynb`](14_spiral_relaxation.ipynb) | Relaxing a spin spiral: `q` treated as a coordinate the way an atomic position is — which terms of the energy depend on it (two out of seven, and why the density is not one of them), the identity that the differentiated functional *is* the total energy (2e-16 Ry), the gradient against a finite difference of a re-converged SCF, the two wavevectors symmetry pins to zero exactly, what the basis-set jumps in `E(q)` cost and how they fall with the cutoff, and a BFGS on the reciprocal metric taking a hydrogen chain from `q3 = 0.30` to its antiferromagnet at `0.50003` in six SCF runs | P21 |
 
 ## Conventions
 
@@ -77,7 +78,9 @@ under `tests/data/qe/`, for the reason its own text gives: the shipped 2017 outp
 `noncolin-constrain_atomic.in` does not belong to the input beside it. `12` runs without the
 vendored tree entirely; both of its systems (a hydrogen atom and a hydrogen chain, with the
 supercells it is validated against) are committed. `11` takes about **eight minutes** on one
-core and `12` about **five**.
+core and `12` about **five**. `14` runs without the vendored tree too — it is `12`'s chain
+and nothing else — and takes about **twenty**, most of it the cutoff sweep that measures the
+basis-set jumps and the `E(q)` scan the relaxation is drawn against.
 
 `13` is a mixture in the other direction from `07`: its nickel half is committed under
 `tests/data/qe/` (input *and* reference), and its FeO half reads QE's own `pw_lda+U/`

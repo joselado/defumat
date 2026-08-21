@@ -133,8 +133,19 @@ def build_projector_core(
     gvectors: GVectors,
     planewaves: PlaneWaveBasis,
     kpoints: KPoints,
+    kcart: jnp.ndarray | None = None,
 ) -> ProjectorCore:
-    """Everything in ``<k+G|beta>`` except where the atoms are."""
+    """Everything in ``<k+G|beta>`` except where the atoms are.
+
+    ``kcart`` replaces the k-points' cartesian coordinates (``(nk, 3)`` in
+    1/bohr) while keeping ``planewaves`` -- the sphere each point was selected
+    with. It exists so that the projectors can be a *traced* function of a
+    k-point: the whole of ``<k+G|beta>`` is differentiable in ``k`` (the radial
+    form factors are integrated rather than interpolated for exactly that
+    reason), and the only host-side step is choosing which plane waves are in
+    the sphere. A spin spiral's ``dE/dq`` is the caller
+    (:mod:`pypresso.forces.spiral`).
+    """
     channels_by_species = [projector_channels(p) for p in pseudos]
     nkb = sum(len(channels_by_species[t]) for t in structure.types)
     if nkb == 0:
@@ -151,7 +162,10 @@ def build_projector_core(
 
     lmax = max(p.lmax for p in pseudos)
     kg, kg_norm, ylm = _angular_part(
-        gvectors.cartesian(cell), planewaves.indices, kpoints.cartesian(cell), lmax
+        gvectors.cartesian(cell),
+        planewaves.indices,
+        kpoints.cartesian(cell) if kcart is None else kcart,
+        lmax,
     )
 
     # Radial form factors, per species: (nbeta, nk * npwx) -> (nk, npwx, nbeta),

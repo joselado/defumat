@@ -11,7 +11,7 @@ the deliverable.
 
 **Status: the first milestone — SCF, band structure, DOS — is met**, with ultrasoft/PAW,
 LDA/GGA and collinear spin, and **forces and structural relaxation** on top of it.
-P0–P9 and P12–P20 are done bar Wyckoff input in P6; P10 has had one pass. A silicon SCF reproduces QE's total energy to **~1e-9 Ry** term by term, its
+P0–P9 and P12–P21 are done bar Wyckoff input in P6; P10 has had one pass. A silicon SCF reproduces QE's total energy to **~1e-9 Ry** term by term, its
 band structure to **0.0002 eV**, and metals with every smearing to ~2.5e-8 Ry.
 **Ultrasoft and PAW pseudopotentials are supported** and match QE to **≤3e-9 Ry** on 2-
 and 8-atom silicon (P12). **PBE, revPBE and PBEsol** work on all three pseudopotential
@@ -44,6 +44,10 @@ supercell to **1e-12 Ry**, which is the validation they have — `pw.x` has no s
 to **≤6.7e-9 Ry** on seven cases (antiferromagnetic FeO and fcc nickel) with the Hubbard
 term itself to 4.6e-7 Ry, and its forces — QE's `force_hub`, obtained by differentiating
 through the projectors rather than transcribed — to 4.8e-6 Ry/bohr.
+**The spin spiral's wavevector is relaxed** (P21) the way the atoms are: `dE/dq` is
+`jax.grad` of the energy at frozen wavefunctions, and a BFGS on the reciprocal metric takes
+a hydrogen chain from `q = 0.30` to its antiferromagnetic ground state at `0.50003` in six
+SCF runs — validated by identities and finite differences, since `pw.x` has no spiral.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
 read it before writing code. P4 is complete: a block Davidson eigensolver behind a name
 registry, seeded from the pseudo-atomic orbitals as QE seeds it, and the *only* solver the
@@ -135,6 +139,32 @@ refused**: spin-orbit coupling permanently (it breaks the theorem, and Elk refus
 symmetry, until the spin space group is written, so a spiral needs `nosym` and the full
 k-grid; and ultrasoft/PAW, until the augmentation charge *between the two components* —
 `q_ij(q)`, which `topology/augmentation.py` already builds, not `qq` — is threaded through.
+
+**Relaxing the spiral wavevector is in scope and implemented** (P21): `q` is a coordinate
+of the calculation the way the atomic positions are, so it gets the same treatment —
+`forces/spiral.py` writes the total energy as a function of `q` at *frozen* wavefunctions
+and `dE/dq` is `jax.grad` of it, and `workflows/spiral.relax_spiral_q` walks it downhill
+with the same transcribed BFGS, handed the **reciprocal** cell so that its metric is
+`b_i . b_j`. The frozen quantity is the *periodic part* of the spinor, which is what the
+stored coefficients are, so freezing them lets the spiral turn — exactly the variational
+parameter the SCF minimised over. **Only two terms of the energy depend on `q`**:
+`|k +- q/2 + G|^2` and `vkb(k +- q/2)`. At frozen coefficients the rotated-frame density is
+lattice periodic on an FFT box that does not move, so the Hartree, exchange-correlation,
+local and Ewald terms are `q`-independent and the gradient never differentiates through an
+FFT; they are written down anyway, because the identity against the SCF total energy is the
+only check on them. **The plane-wave sphere is frozen while differentiating and rebuilt to
+move** — sphere membership is piecewise constant in `q`, so that is exact between the
+wavevectors where a plane wave crosses the cutoff, and the jump at those is the Pulay error
+of a finite basis (measured against a sphere-rebuilding finite difference: 8.3e-4 Ry per
+unit `q` at `ecutwfc = 25`, 5.8e-4 at 40 and 8.3e-6 at 60 — erratic rather than smoothly
+convergent, because it counts the crossings inside one window rather than truncating a
+series). Two
+traps: the compiled gradient closes over its sphere and is dropped on every `at_spiral_q`;
+and BFGS's initial inverse Hessian, which for atoms is right because a chemical bond is
+1 Ry/bohr^2, is out by two orders of magnitude on a milli-Rydberg magnetic surface, so
+`BFGSSettings.hessian_scale` sets the first step to the trust radius. A magnetic field is
+refused — its energy is outside the reported total (P18), so the state is stationary for a
+different functional than the one being differentiated.
 
 **Berry curvature, Chern numbers and Z2 invariants are in scope and implemented** (P16):
 `pypresso/topology/` and `workflows/topology.py`. Everything is built from one primitive,
@@ -313,6 +343,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Magnetic symmetry | `PW/src/symm_base.f90` (`sgam_at_mag`), `symme.f90` (`sym_rho`'s `nspin = 4` branch), `PW/src/irrek.f90` | the magnetization is an **axial** vector, so its rotation carries `det(R)` and a further sign for an operation that is a symmetry only with time reversal; `irreducible_BZ` completes an explicit k-list from the lattice's wedge to the crystal's, and runs for every SCF |
 | Fields and constraints | `PW/src/add_bfield.f90`, `make_pointlists.f90`, `get_locals.f90`, `report_mag.f90`, `PW/src/input.f90` (`i_cons`) | the penalty's *energy* is written here and its potential comes from `jax.grad`; QE's five expressions are transcribed as the cross-check. Elk's counterparts: manual §5.2/§5.12/§5.104, `src/bfieldfsm.f90` |
 | Spin spirals | no QE counterpart — Elk's `src/gengkqvec.f90`, `init0.f90`, `findsymlat.f90`, manual §5.146 | up at `k + q/2`, down at `k - q/2`, each with its own `G+k` set; one basis call on the concatenated list gives both a common `npwx` |
+| Spiral relaxation | no QE counterpart — `Modules/bfgs_module.f90` reused with the *reciprocal* cell as its lattice | `dE/dq` is `jax.grad` of the energy at frozen wavefunctions and a frozen sphere (`forces/spiral.py`); only the kinetic and nonlocal terms carry `q` |
 | Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `pypresso/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]`; here it should fall out of `jacfwd` of `H(k)` w.r.t. `k` |
 | Input parsing | `Modules/read_input.f90`, `PW/src/input.f90`, `Modules/input_parameters.f90` | defaults for every input variable are declared in `input_parameters.f90` |

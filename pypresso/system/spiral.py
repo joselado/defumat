@@ -48,13 +48,15 @@ how much would be gained by writing the spin space group rather than to be used.
 
 from __future__ import annotations
 
+import jax.numpy as jnp
 import numpy as np
 
 from pypresso.system.cell import Cell
 from pypresso.system.kpoints import KPoints
 from pypresso.system.symmetry import Symmetries
 
-__all__ = ["spiral_kpoints", "invariant_operations", "spiral_cartesian"]
+__all__ = ["spiral_kpoints", "spiral_kcart", "invariant_operations",
+           "spiral_cartesian"]
 
 
 def spiral_cartesian(q_crystal, cell: Cell) -> np.ndarray:
@@ -82,6 +84,26 @@ def spiral_kpoints(kpoints: KPoints, q_crystal, cell: Cell) -> KPoints:
     shifted = np.concatenate([coords + half, coords - half])
     weights = np.concatenate([np.asarray(kpoints.weights)] * 2)
     return KPoints.from_cartesian(shifted, weights, precision=kpoints.precision)
+
+
+def spiral_kcart(kpoints: KPoints, q_crystal, cell: Cell) -> jnp.ndarray:
+    """The same ``2 nk`` shifted points as :func:`spiral_kpoints`, in 1/bohr.
+
+    The difference is that this one is **traceable in** ``q``: it does the
+    arithmetic in JAX and never builds a :class:`KPoints`, whose constructor
+    goes through ``np.asarray``. It is what makes ``|k+G|^2`` and ``vkb`` --
+    and therefore the total energy -- differentiable functions of the spiral
+    wavevector, which is the whole of ``dE/dq`` (:mod:`pypresso.forces.spiral`).
+
+    The *sphere* each point selects is not a function of ``q`` here: it is
+    chosen once, host-side, and held fixed. That is exact rather than an
+    approximation between the discrete values of ``q`` at which a plane wave
+    crosses the cutoff -- see :mod:`pypresso.forces.spiral` for what happens at
+    them.
+    """
+    half = 0.5 * cell.k_to_cartesian(jnp.asarray(q_crystal))
+    coords = jnp.asarray(kpoints.coords)
+    return jnp.concatenate([coords + half, coords - half]) * cell.tpiba
 
 
 def invariant_operations(symmetries: Symmetries, q_crystal) -> Symmetries:

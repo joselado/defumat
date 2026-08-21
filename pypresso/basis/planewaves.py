@@ -57,14 +57,28 @@ class PlaneWaveBasis(eqx.Module):
         """(nk, npwx, 3) Miller indices, padded entries repeating G = 0."""
         return gvectors.miller[self.indices]
 
-    def kinetic(self, gvectors: GVectors, kpoints: KPoints, cell: Cell) -> jnp.ndarray:
+    def kinetic(
+        self,
+        gvectors: GVectors,
+        kpoints: KPoints,
+        cell: Cell,
+        kcart: jnp.ndarray | None = None,
+    ) -> jnp.ndarray:
         """``|k+G|^2`` in Ry for every (k, plane wave), zero on padding.
 
         This is the kinetic energy operator in the plane-wave basis: diagonal,
         and the cheapest part of ``H|psi>``.
+
+        ``kcart`` overrides the k-points' own cartesian coordinates (1/bohr)
+        while keeping *this* basis -- the sphere, its padding and its mask. The
+        selection of plane waves is a host-side decision and cannot be traced;
+        the arithmetic on top of it can, and separating the two is what lets
+        ``|k+G|^2`` be differentiated with respect to a k-point. A spin
+        spiral's ``dE/dq`` is the caller (:mod:`pypresso.forces.spiral`).
         """
-        return _kinetic(gvectors.cartesian(cell), kpoints.cartesian(cell),
-                        self.indices, self.mask)
+        if kcart is None:
+            kcart = kpoints.cartesian(cell)
+        return _kinetic(gvectors.cartesian(cell), kcart, self.indices, self.mask)
 
     def fft_index(self, gvectors: GVectors) -> jnp.ndarray:
         """(nk, npwx) flat FFT-box index for each retained plane wave."""

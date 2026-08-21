@@ -33,6 +33,11 @@ import numpy as np
 from pypresso.forces.analytic import analytic_forces
 from pypresso.forces.autodiff import autodiff_forces
 from pypresso.forces.energy import FrozenState, frozen_energy, state_from_result
+from pypresso.forces.spiral import (
+    SpiralGradient,
+    compute_spiral_gradient,
+    spiral_energy,
+)
 from pypresso.forces.registry import (
     DEFAULT_FORCE_METHOD,
     force_methods,
@@ -42,7 +47,8 @@ from pypresso.forces.registry import (
 from pypresso.system.symmetry import atom_mapping, symmetrize_vector
 
 __all__ = ["Forces", "compute_forces", "FrozenState", "frozen_energy",
-           "state_from_result", "force_methods", "register_force_method"]
+           "state_from_result", "force_methods", "register_force_method",
+           "SpiralGradient", "compute_spiral_gradient", "spiral_energy"]
 
 register_force_method("autodiff", autodiff_forces)
 register_force_method("analytic", analytic_forces)
