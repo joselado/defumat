@@ -27,14 +27,20 @@ frozen-sphere derivative is the exact one. The jump at the isolated ``k`` where
 a plane wave crosses the cutoff is the Pulay error of a finite basis, the same
 term :mod:`pypresso.forces.spiral` measures for ``dE/dq``.
 
-**Ultrasoft is carried rather than refused, because ``S`` moves too.**
+**Ultrasoft and PAW are carried rather than refused, because ``S`` moves
+too.**
 ``S(k) = 1 + sum |beta(k)> q <beta(k)|`` has the same ``k`` in it as ``H``, so
 the band velocity is the *generalised* Hellmann-Feynman derivative
 
     d(eps_n)/dk_a = <psi_n| dH/dk_a - eps_n dS/dk_a |psi_n>,
 
 which is ``commutator_Hx_psi``'s ultrasoft correction and comes from the same
-``jvp`` -- :meth:`VelocityOperator.apply_s` is that second tangent.
+``jvp`` -- :meth:`VelocityOperator.apply_s` is that second tangent. PAW adds
+nothing to the differentiation and one thing to the *setup*: its one-centre
+coefficients ``ddd_paw`` are built from ``becsum`` rather than from the density,
+and since they multiply ``vkb(k)`` they belong to ``dH/dk`` as much as to ``H``.
+They have to be handed in, and a PAW calculation without them raises rather than
+returning the 2% error it would otherwise give.
 
 **Nothing dense is ever formed.** ``dH/dk`` as a matrix is ``npw^2``, the same
 reason a dense diagonalisation is a test fixture here and never a solver. One
@@ -123,6 +129,22 @@ class VelocityOperator:
                 "the velocity operator on a spin spiral is not implemented: the "
                 "two spinor components sit on spheres centred at k + q/2 and "
                 "k - q/2, so dH/dk moves both (see Calculation.at_spiral_q)"
+            )
+        if calculation.is_paw and ddd_paw is None:
+            # The same rule the Hubbard branch below follows, and for the same
+            # reason: a PAW Hamiltonian's nonlocal coefficients are
+            # ``D^(0) + int V Q + ddd_paw``, the last of which comes from
+            # ``becsum`` and cannot be rebuilt from the density. It multiplies
+            # ``vkb(k)``, so it is part of ``dH/dk`` and not only of ``H`` --
+            # leaving it out gives a velocity that is wrong by **2%** and looks
+            # entirely ordinary (measured: 1.7e-2 Ry bohr against 8.7e-7 on
+            # two-atom PAW silicon).
+            raise ValueError(
+                "dH/dk with a PAW pseudopotential needs the one-centre "
+                "coefficients as well as the potential: pass ddd_paw = "
+                "calculation.onecenter(scf_result.becsum)[1]. They are built "
+                "from becsum, not from the density, and they multiply vkb(k), "
+                "so they are part of the velocity operator"
             )
         if calculation.is_hubbard and ns is None:
             raise ValueError(
@@ -271,6 +293,9 @@ def band_velocities(calculation, result, kpoints=None) -> BandVelocities:
     from pypresso.workflows.nscf import fixed_density_states
 
     if kpoints is not None:
+        # A PAW calculation raises here rather than below: an NSCF run at new
+        # k-points needs the converged ``becsum``, which ``fixed_density_states``
+        # does not yet carry across, and it says so.
         calculation, _, eigenvalues, psi = fixed_density_states(
             result.system, calculation.pseudos, result.density,
             kpoints=kpoints, ns=result.ns,
@@ -281,5 +306,9 @@ def band_velocities(calculation, result, kpoints=None) -> BandVelocities:
         psi = result.wavefunctions
 
     potential = calculation.potential(result.density)
-    operator = VelocityOperator(calculation, potential.v_scf, None, result.ns)
+    # PAW's one-centre coefficients come from ``becsum``, which the result
+    # carries for exactly this reason (it is part of the mixed state, not a
+    # function of the density).
+    _, ddd_paw = calculation.onecenter(result.becsum)
+    operator = VelocityOperator(calculation, potential.v_scf, ddd_paw, result.ns)
     return operator.band_velocities(psi, eigenvalues)

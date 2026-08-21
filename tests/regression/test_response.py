@@ -44,7 +44,6 @@ from pypresso.response import (
 from pypresso.scf import run_scf
 from pypresso.system import build_system
 from pypresso.system.kpoints import KPoints
-from pypresso.workflows.nscf import fixed_density_states
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
@@ -76,31 +75,47 @@ def _converged(case: str):
 
 
 def _states_at(case: str, coords, nbnd: int = 8):
-    """Diagonalise at ``coords`` on the converged density."""
+    """Diagonalise at ``coords`` on the converged density.
+
+    Not through :func:`fixed_density_states`, which refuses PAW because *it*
+    cannot rebuild ``becsum`` from a density. Here the converged ``becsum`` is in
+    hand, so the one-centre coefficients are built from it and the same helper
+    serves all three datasets.
+    """
     system, pseudos, result = _converged(case)
+    from pypresso.scf import Calculation
+
+    calculation = Calculation(system, pseudos)
     kpoints = KPoints(coords=jnp.asarray(coords), weights=jnp.ones(len(coords)))
-    calculation, _, eigenvalues, psi = fixed_density_states(
-        system, pseudos, result.density, kpoints=kpoints, nbnd=nbnd,
-        conv_thr=1e-12,
+    moved = calculation.at_kpoints(kpoints)
+    v_scf = moved.potential(result.density).v_scf
+    _, ddd_paw = moved.onecenter(result.becsum)
+    eigenvalues, psi = moved.diagonalize(
+        moved.hamiltonian(v_scf, ddd_paw), nbnd, None, 1e-13
     )
-    return calculation, np.asarray(eigenvalues), psi
+    return moved, np.asarray(eigenvalues), psi
 
 
-@pytest.mark.parametrize("case", ["si2-nc-force", "si2-us"])
+@pytest.mark.parametrize("case", ["si2-nc-force", "si2-us", "si2-paw"])
 def test_band_velocity_matches_a_finite_difference(case):
     """``<psi|dH/dk - eps dS/dk|psi>`` against ``(eps(k+h) - eps(k-h))/2h``.
 
-    Both cases run, and the ultrasoft one is the point of the pair: ``S(k)``
-    is built from the same ``vkb(k)`` the nonlocal potential is, so it carries a
-    velocity of its own, and an operator that dropped it would pass on
-    ``si2-nc-force`` and fail here.
+    Three datasets, each adding one thing. The **ultrasoft** case is the point of
+    the first pair: ``S(k)`` is built from the same ``vkb(k)`` the nonlocal
+    potential is, so it carries a velocity of its own, and an operator that
+    dropped it would pass on ``si2-nc-force`` and fail here. The **PAW** case
+    adds the one-centre coefficients, which are not a function of the density and
+    which multiply ``vkb(k)`` -- see
+    :func:`test_paw_without_its_one_centre_coefficients_is_refused` for what
+    leaving them out costs.
     """
     system, _, result = _converged(case)
     tpiba = float(system.cell.tpiba)
 
     calculation, eigenvalues, psi = _states_at(case, GENERIC_K)
+    _, ddd_paw = calculation.onecenter(result.becsum)
     operator = VelocityOperator(
-        calculation, calculation.potential(result.density).v_scf
+        calculation, calculation.potential(result.density).v_scf, ddd_paw
     )
     velocities = operator.band_velocities(psi, eigenvalues).velocities
 
@@ -128,8 +143,9 @@ def test_the_overlap_carries_a_velocity_only_when_it_is_not_the_identity():
     def largest_ds(case):
         _, _, result = _converged(case)
         calculation, _, psi = _states_at(case, GENERIC_K)
+        _, ddd_paw = calculation.onecenter(result.becsum)
         operator = VelocityOperator(
-            calculation, calculation.potential(result.density).v_scf
+            calculation, calculation.potential(result.density).v_scf, ddd_paw
         )
         return max(
             float(jnp.abs(operator.apply_s(psi, directions[axis])).max())
@@ -165,6 +181,37 @@ def test_the_band_velocity_vanishes_at_gamma():
     gamma = KPoints(coords=jnp.zeros((1, 3)), weights=jnp.ones(1))
     velocities = compute_velocities(calculation, result, kpoints=gamma).velocities
     assert np.abs(velocities).max() < 1e-3
+
+
+def test_paw_without_its_one_centre_coefficients_is_refused():
+    """The silent 2% error the guard exists to prevent, measured.
+
+    PAW's ``ddd_paw`` is built from ``becsum`` -- a property of the
+    wavefunctions, not recoverable from the density -- and it multiplies
+    ``vkb(k)``, so it is part of ``dH/dk`` and not only of ``H``. Omitting it
+    leaves a velocity that is wrong by 2% and looks entirely ordinary, which is
+    why the constructor raises instead. This test does both halves: that it
+    raises, and that what it is refusing is worth refusing.
+    """
+    _, _, result = _converged("si2-paw")
+    calculation, eigenvalues, psi = _states_at("si2-paw", GENERIC_K)
+    v_scf = calculation.potential(result.density).v_scf
+    _, ddd_paw = calculation.onecenter(result.becsum)
+    assert ddd_paw is not None
+
+    with pytest.raises(ValueError, match="one-centre"):
+        VelocityOperator(calculation, v_scf)
+
+    # What the refusal is worth: the same operator built by hand without them.
+    right = VelocityOperator(calculation, v_scf, ddd_paw)
+    wrong = object.__new__(VelocityOperator)
+    wrong.__dict__.update(right.__dict__)
+    wrong.ddd_paw = None
+    difference = np.abs(
+        right.band_velocities(psi, eigenvalues).velocities
+        - wrong.band_velocities(psi, eigenvalues).velocities
+    ).max()
+    assert difference > 1e-3
 
 
 # ---------------------------------------------------------------------------
