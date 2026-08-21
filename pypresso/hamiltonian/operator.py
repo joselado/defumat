@@ -67,6 +67,13 @@ class Hamiltonian(eqx.Module):
     #: ``deeq`` rebuilt by ``newd`` from the current potential. ``None`` means
     #: "use ``projectors.dij``", which is the norm-conserving case.
     deeq: jnp.ndarray | None = None
+    #: The DFT+U term, ``sum |phi> v_ns <phi|`` (``PW/src/vhpsi.f90``), or
+    #: ``None`` when no species carries a Hubbard U. It is separable in exactly
+    #: the way the nonlocal term is and enters in the same three places --
+    #: :meth:`apply`, :meth:`matrix` and :meth:`diagonal`. Leaving it out of
+    #: :meth:`matrix` alone would make the dense reference fixture solve a
+    #: *different* Hamiltonian from the one Davidson solves.
+    hubbard: object | None = None
 
     @property
     def nk(self) -> int:
@@ -151,6 +158,8 @@ class Hamiltonian(eqx.Module):
         result = self.kinetic[ik] * psi
         result = result + self._local(psi, ik)
         result = result + self._nonlocal(psi, ik)
+        if self.hubbard is not None:
+            result = result + self.hubbard.apply(psi, ik)
         return jnp.where(self.mask[ik], result, 0.0)
 
     def apply_s(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
@@ -225,6 +234,8 @@ class Hamiltonian(eqx.Module):
         which is what the mean of the grid values is.
         """
         diagonal = self.kinetic[ik] + jnp.mean(self.potential)
+        if self.hubbard is not None:
+            diagonal = diagonal + self.hubbard.diagonal(ik)
         if self.projectors.nkb:
             vkb = self.projectors.vkb[ik]
             dij = self.coefficients.astype(vkb.dtype)
@@ -307,6 +318,8 @@ class Hamiltonian(eqx.Module):
         if self.projectors.nkb:
             vkb = self.projectors.vkb[ik]
             matrix = matrix + vkb @ self.coefficients.astype(vkb.dtype) @ vkb.conj().T
+        if self.hubbard is not None:
+            matrix = matrix + self.hubbard.matrix(ik)
 
         mask = self.mask[ik]
         matrix = jnp.where(mask[:, None] & mask[None, :], matrix, 0.0)

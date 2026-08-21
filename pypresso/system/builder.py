@@ -15,7 +15,7 @@ import equinox as eqx
 import numpy as np
 
 from pypresso.config import DEFAULT_PRECISION, Precision
-from pypresso.io.pwin import PwInput, read_pw_input
+from pypresso.io.pwin import PwInput, fortran_float, read_pw_input
 from pypresso.system.cell import Cell, celldm_from_abc
 from pypresso.system.kpoints import (
     KPoints,
@@ -29,7 +29,7 @@ from pypresso.system.symmetry import (
     lattice_point_group,
     magnetic_symmetries,
 )
-from pypresso.units import ANGSTROM_TO_BOHR
+from pypresso.units import ANGSTROM_TO_BOHR, RY_TO_EV
 
 __all__ = ["System", "build_system", "system_from_file", "local_moments"]
 
@@ -123,6 +123,10 @@ class System(eqx.Module):
     #: coordinates, as Elk's ``vqlss`` is (P19). ``None`` -- the normal case --
     #: is no spiral. See :mod:`pypresso.system.spiral`.
     spiral_q: tuple | None = eqx.field(static=True, default=None)
+    #: The ``HUBBARD`` card and its namelist companions (P20), or ``None`` for a
+    #: run with no Hubbard correction. Static: it decides array shapes (how many
+    #: projectors, how wide the occupation matrix) and which code paths run.
+    hubbard: object = eqx.field(static=True, default=None)
 
     @property
     def spiral(self) -> bool:
@@ -338,6 +342,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
             float(v) for v in pwin.indexed("system", "r_m", structure.ntyp)
         ) if pwin.get("system", "r_m") is not None else (),
         local_weights=str(pwin.get("system", "local_weights", "qe")).lower(),
+        hubbard=_hubbard(pwin, structure),
         spiral_q=spiral_q,
     )
 
@@ -543,6 +548,108 @@ def _atomic_b_field(pwin: PwInput, nat: int) -> tuple:
             f"LOCAL_MAGNETIC_FIELDS lists {len(rows)} atoms but the cell has {nat}"
         )
     return tuple(tuple(float(v) for v in row[:3]) for row in rows)
+
+
+def _hubbard(pwin: PwInput, structure):
+    """The ``HUBBARD`` card, with ``hubbard_occ`` and ``starting_ns_eigenvalue``.
+
+    ``CARD: HUBBARD`` in ``INPUT_PW.txt``. Each line is a parameter name, a
+    ``label-manifold`` specification and a value:
+
+        HUBBARD (ortho-atomic)
+          U  Fe1-3d 4.3
+          J0 Fe1-3d 1.0
+
+    **The card's energies are in eV** and are converted to Ry here, which is the
+    only place in the code that sees an eV (rule R6). The parameters QE accepts
+    but this does not -- ``J``, ``B``, ``E2``, ``E3`` (the full Liechtenstein
+    formulation) and ``V`` (the intersite term) -- are refused by name rather
+    than ignored, because ignoring one silently runs a different functional.
+    """
+    from pypresso.hubbard.manifold import HubbardInput, parse_manifold
+
+    card = pwin.card("HUBBARD")
+    if card is None:
+        return None
+    projectors = (card.option or "atomic").lower()
+
+    accepted = {"u", "j0", "alpha", "beta"}
+    refused = {
+        "j": "the full (Liechtenstein) formulation, lda_plus_u_kind = 1",
+        "b": "the full (Liechtenstein) formulation, lda_plus_u_kind = 1",
+        "e2": "the full (Liechtenstein) formulation, lda_plus_u_kind = 1",
+        "e3": "the full (Liechtenstein) formulation, lda_plus_u_kind = 1",
+        "v": "the intersite Hubbard V, lda_plus_u_kind = 2",
+    }
+    entries: dict[str, dict] = {}
+    for line in card.lines:
+        fields = line.split()
+        if not fields:
+            continue
+        name = fields[0].lower()
+        if name in refused:
+            raise NotImplementedError(
+                f"HUBBARD parameter {fields[0]!r} selects {refused[name]}, which "
+                "is not implemented; only U, J0, ALPHA and BETA (the simplified "
+                "rotationally-invariant functional, lda_plus_u_kind = 0) are"
+            )
+        if name not in accepted:
+            raise ValueError(f"unknown HUBBARD parameter {fields[0]!r}")
+        if len(fields) < 3:
+            raise ValueError(f"malformed HUBBARD line {line!r}")
+        if len(fields) > 3:
+            raise NotImplementedError(
+                f"HUBBARD line {line!r} carries orbital indices, which select "
+                "the orbital-resolved formulation; that is not implemented"
+            )
+        label, n, l = parse_manifold(fields[1])
+        entry = entries.setdefault(label, {"n": n, "l": l})
+        if (entry["n"], entry["l"]) != (n, l):
+            raise NotImplementedError(
+                f"{label} is given two Hubbard manifolds "
+                f"({entry['n']}{'spdf'[entry['l']]} and {n}{'spdf'[l]}); the "
+                "second (background) channel is not implemented"
+            )
+        entry[name] = fortran_float(fields[2]) / RY_TO_EV
+
+    names = [species.name for species in structure.species]
+    occupations = []
+    raw = pwin.get("system", "hubbard_occ")
+    if raw is not None and not isinstance(raw, dict):
+        raw = {(1, 1): raw}
+    if isinstance(raw, dict):
+        for index, value in raw.items():
+            kind = index[0] - 1
+            channel = index[1] if len(index) > 1 else 1
+            if channel != 1:
+                raise NotImplementedError(
+                    f"hubbard_occ(..., {channel}) sets a background channel's "
+                    "occupation; background channels are not implemented"
+                )
+            if not 0 <= kind < len(names):
+                raise ValueError(f"hubbard_occ{index} out of range")
+            occupations.append((names[kind], float(value)))
+
+    starting_ns = []
+    raw = pwin.get("system", "starting_ns_eigenvalue")
+    if isinstance(raw, dict):
+        for index, value in raw.items():
+            m, spin, kind = (list(index) + [1, 1])[:3]
+            starting_ns.append((kind - 1, spin - 1, m - 1, float(value)))
+
+    return HubbardInput(
+        projectors=projectors,
+        parameters=tuple(
+            (
+                label, entry["n"], entry["l"],
+                entry.get("u", 0.0), entry.get("j0", 0.0),
+                entry.get("alpha", 0.0), entry.get("beta", 0.0),
+            )
+            for label, entry in entries.items()
+        ),
+        occupations=tuple(occupations),
+        starting_ns=tuple(starting_ns),
+    )
 
 
 def _build_kpoints(

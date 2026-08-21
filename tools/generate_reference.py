@@ -99,6 +99,17 @@ RESTAMPED = [
     "pw_noncolin/noncolin-constrain_atomic.in",
     "pw_noncolin/noncolin-constrain_angle.in",
     "pw_noncolin/noncolin-constrain_total.in",
+    # DFT+U (P20). The four cases of QE's ``pw_lda+U/`` whose pseudopotentials
+    # are committed here: antiferromagnetic FeO with a U on both iron
+    # sublattices, the same cell with U set to 1e-8 (which must reproduce the
+    # plain LSDA run and is the null test), the same with
+    # ``starting_ns_eigenvalue`` steering the occupation matrix, and the one
+    # that prints forces. Their committed benchmarks stop at 1e-6 to 1e-9, where
+    # the printed *terms* -- Hubbard energy included -- are worth about 1e-4 Ry.
+    "pw_lda+U/lda+U.in",
+    "pw_lda+U/lda+U-noU.in",
+    "pw_lda+U/lda+U-user_ns.in",
+    "pw_lda+U/lda+U_force.in",
 ]
 
 

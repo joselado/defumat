@@ -74,6 +74,19 @@ def analytic_forces(calculation, state):
             "implemented; nspin = 1 and nspin = 2 are, on norm-conserving, "
             "ultrasoft and PAW pseudopotentials"
         )
+    if calculation.is_hubbard:
+        # ``force_hub`` is 2552 lines of Fortran -- the derivative of ``ns``
+        # with respect to a displacement, which for ortho-atomic projectors
+        # carries the derivative of ``O^{-1/2}`` as well. The autodiff force
+        # gets all of it by differentiating through the projectors, so
+        # transcribing it would be a second implementation of something already
+        # validated; a *silent* omission, on the other hand, would leave the
+        # force wrong by the whole Hubbard term. Hence the refusal.
+        raise NotImplementedError(
+            "the analytic force expressions do not include force_hub; use the "
+            "autodiff method, which differentiates through the Hubbard "
+            "projectors and gets the term for free"
+        )
     terms = _compiled_terms(calculation)(state)
     total = sum(terms.values())
     return total, terms

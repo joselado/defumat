@@ -21,7 +21,12 @@ from pathlib import Path
 
 import numpy as np
 
-from pypresso.pseudo.radial import mesh_cutoff_index
+from pypresso.pseudo.radial import mesh_cutoff_index, simpson_weights
+
+#: QE's ``upf_const`` thresholds, used by :func:`_renormalize_orbitals` exactly
+#: as ``upf_check_atwfc_norm`` uses them.
+_EPS6 = 1.0e-6
+_EPS8 = 1.0e-8
 
 __all__ = ["Pseudopotential", "Projector", "AtomicOrbital", "Augmentation", "PawData",
            "read_upf"]
@@ -253,6 +258,7 @@ def read_upf(path: str | Path) -> Pseudopotential:
     orbitals = _read_orbitals(root)
     projectors, orbitals = _read_spin_orbit(root, path, header, projectors, orbitals)
     paw = _read_paw(root, len(projectors))
+    orbitals = _renormalize_orbitals(orbitals, projectors, augmentation, rab)
 
     rho_atom = _optional_numbers(root, "PP_RHOATOM")
     rho_core = _optional_numbers(root, "PP_NLCC")
@@ -280,6 +286,83 @@ def read_upf(path: str | Path) -> Pseudopotential:
         path=path,
         header=header,
     )
+
+
+def _renormalize_orbitals(orbitals, projectors, augmentation, rab):
+    """``upf_check_atwfc_norm``: rescale the atomic orbitals to unit norm.
+
+    ``Modules/read_pseudo.f90`` calls this on every file as it is read, so
+    everything downstream of QE's reader sees *renormalised* ``chi``, and the
+    generator's own normalisation is discarded. The norm is taken **in the
+    generalised metric**,
+
+        <chi|S|chi> = int (r chi)^2 dr
+                      + sum_ij q_ij <beta_i|chi> <beta_j|chi>
+
+    with the second term present only for an ultrasoft or PAW dataset -- which
+    is why an orbital can be normalised in the file and not here, and vice
+    versa. QE prints the labels it rescaled (``wavefunction(s) 4S
+    renormalized``), and both ``Fe.pz-nd-rrkjus`` and ``Ni.pz-nd-rrkjus``
+    appear in that list.
+
+    **This is not cosmetic and it is silent where it is not.** The starting
+    wavefunctions do not care -- they are rotated afterwards. The DFT+U
+    projectors do: with ``ortho-atomic`` projectors the ``4s`` orbital enters
+    the overlap matrix whose inverse square root orthogonalises the ``3d``
+    manifold, so an unrescaled ``4s`` moves the occupation matrix of the ``3d``
+    shell. On fcc nickel that is 4e-3 in ``Tr[ns]`` and 7e-4 Ry in the total
+    energy -- small enough to look like a convergence difference and large
+    enough to be wrong.
+
+    An orbital whose norm underflows is not rescaled but *dropped*: QE sets its
+    occupation to a small negative number, which is the flag every consumer
+    already reads as "not an atomic wavefunction".
+
+    The one thing it changes outside DFT+U is the *starting wavefunctions*, which
+    are built from the same ``chi``. That is a different seed for the
+    eigensolver and nothing more -- except where an SCF trajectory is itself
+    sensitive to where it starts, which the fixed-spin-moment feedback of P18 is:
+    ``fe-fsm.in`` reaches the same moment and the same field, and takes 746
+    iterations instead of ~350 to stop ringing on the way.
+    """
+    if not orbitals:
+        return orbitals
+    weights = np.asarray(simpson_weights(rab))
+    qqq = None if augmentation is None else np.asarray(augmentation.q)
+
+    renormalized = []
+    for orbital in orbitals:
+        chi = np.asarray(orbital.chi)
+        norm = float(np.sum(chi * chi * weights))
+        if norm < _EPS8:
+            renormalized.append(
+                replace(orbital, occupation=-_EPS8)
+            )
+            continue
+        if orbital.occupation < 0.0:
+            renormalized.append(orbital)
+            continue
+        if qqq is not None and projectors:
+            overlaps = np.zeros(len(projectors))
+            for i, projector in enumerate(projectors):
+                if projector.l != orbital.l:
+                    continue
+                if (
+                    projector.j is not None and orbital.j is not None
+                    and abs(projector.j - orbital.j) >= _EPS6
+                ):
+                    continue
+                cut = projector.cutoff_index
+                overlaps[i] = float(
+                    np.sum(projector.beta[:cut] * chi[:cut] * weights[:cut])
+                )
+            norm += float(overlaps @ qqq @ overlaps)
+        norm = np.sqrt(norm)
+        if abs(norm - 1.0) > _EPS6:
+            renormalized.append(replace(orbital, chi=chi / norm))
+        else:
+            renormalized.append(orbital)
+    return tuple(renormalized)
 
 
 def _read_spin_orbit(root, path: Path, header: dict, projectors, orbitals):

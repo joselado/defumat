@@ -202,7 +202,7 @@ def projector_form_factors(pseudo: Pseudopotential, q, omega: float) -> jnp.ndar
     return jnp.stack(rows, axis=0)
 
 
-def atomic_form_factors(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray:
+def atomic_form_factors(pseudo: Pseudopotential, q, omega) -> jnp.ndarray:
     """Radial parts of the pseudo-atomic orbitals, shaped ``(nwfc, nq)``.
 
     ``upflib/atwfc_mod.f90``. ``PP_CHI`` is tabulated as ``r chi(r)``, exactly as
@@ -212,7 +212,12 @@ def atomic_form_factors(pseudo: Pseudopotential, q, omega: float) -> jnp.ndarray
     own cutoff) and that orbitals with negative occupation are skipped, as QE
     skips them.
     """
-    prefactor = FPI / np.sqrt(omega)
+    # ``jnp`` rather than ``np``: the DFT+U force differentiates through this
+    # (the Hubbard projectors are atomic orbitals, and they move with the
+    # atoms), and inside that trace ``cell.volume`` is a tracer -- a nested
+    # ``jax.jit`` is inlined into the enclosing trace, so even a constant cell
+    # arrives abstract.
+    prefactor = FPI / jnp.sqrt(omega)
     q = jnp.atleast_1d(jnp.asarray(q))
     r, weights, _ = _truncated(pseudo)
 

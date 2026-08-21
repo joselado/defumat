@@ -11,7 +11,7 @@ the deliverable.
 
 **Status: the first milestone — SCF, band structure, DOS — is met**, with ultrasoft/PAW,
 LDA/GGA and collinear spin, and **forces and structural relaxation** on top of it.
-P0–P9 and P12–P19 are done bar Wyckoff input in P6; P10 has had one pass. A silicon SCF reproduces QE's total energy to **~1e-9 Ry** term by term, its
+P0–P9 and P12–P20 are done bar Wyckoff input in P6; P10 has had one pass. A silicon SCF reproduces QE's total energy to **~1e-9 Ry** term by term, its
 band structure to **0.0002 eV**, and metals with every smearing to ~2.5e-8 Ry.
 **Ultrasoft and PAW pseudopotentials are supported** and match QE to **≤3e-9 Ry** on 2-
 and 8-atom silicon (P12). **PBE, revPBE and PBEsol** work on all three pseudopotential
@@ -39,6 +39,11 @@ per-atom fields and all three of QE's constrained-moment schemes match their (re
 benchmarks to **≤2e-7 Ry**; and **spin spirals** by the generalized Bloch theorem
 reproduce the collinear antiferromagnet of a doubled cell and a 90-degree noncollinear
 supercell to **1e-12 Ry**, which is the validation they have — `pw.x` has no spin spiral.
+**DFT+U** (P20) is in: the simplified rotationally-invariant functional with `U`, `J0`,
+`alpha` and `beta`, on `atomic`, `ortho-atomic` and `norm-atomic` projectors, matching QE
+to **≤6.7e-9 Ry** on seven cases (antiferromagnetic FeO and fcc nickel) with the Hubbard
+term itself to 4.6e-7 Ry, and its forces — QE's `force_hub`, obtained by differentiating
+through the projectors rather than transcribed — to 4.8e-6 Ry/bohr.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
 read it before writing code. P4 is complete: a block Davidson eigensolver behind a name
 registry, seeded from the pseudo-atomic orbitals as QE seeds it, and the *only* solver the
@@ -164,7 +169,22 @@ radius and Wolfe line search. **Variable-cell relaxation is not in**: the cell g
 the stress, which is P11's, and a moving cell would also invalidate the rule that the FFT
 grid and the symmetry group are fixed once for the whole run.
 
-Out of scope until the above works: EXX, DFT+U, phonons
+**DFT+U is in scope and implemented** (P20): `pypresso/hubbard/`. QE's
+`lda_plus_u_kind = 0` — Dudarev's simplified rotationally-invariant functional with the
+`J0`/`beta` extension — read from the `HUBBARD` card, whose parameters are **in eV** and
+are converted to Ry at the input boundary. **The energy is written down and `v_ns` is
+`jax.grad` of it**; QE's `v_hubbard` is transcribed as a *test*. The correction enters the
+Hamiltonian as another separable term (`vhpsi.f90`), `ns` joins the mixed state beside
+`becsum`, and the force is `jax.grad` through projectors that move with the atoms — which
+is the whole of `force_hub` without transcribing it. **Three traps, all silent**:
+`Hubbard_projectors = 'atomic'` still applies `S`, so `wfcU = S phi`; the atomic orbitals
+are renormalised at read time in the *generalised* metric (`upf_check_atwfc_norm`), which
+`ortho-atomic` projectors feel through the `4s` and `atomic` ones do not; and the
+`nspin = 1` factor of two is on the **energy**, never on the potential. Refused by name:
+the full (Liechtenstein) formulation, the intersite `V`, background channels, the
+orbital-resolved variant, the `wf`/`pseudo` projector sets, and noncollinear `ns_nc`.
+
+Out of scope until the above works: EXX, phonons
 (`PHonon/`), Car-Parrinello (`CPV/`), and everything in `EPW/`, `TDDFPT/`, `HP/`, `GWW/`.
 The code should nonetheless be shaped so these are additions, not rewrites.
 
@@ -296,6 +316,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `pypresso/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]`; here it should fall out of `jacfwd` of `H(k)` w.r.t. `k` |
 | Input parsing | `Modules/read_input.f90`, `PW/src/input.f90`, `Modules/input_parameters.f90` | defaults for every input variable are declared in `input_parameters.f90` |
+| DFT+U | `PW/src/ldaU.f90`, `hubbard.f90`, `new_ns.f90`, `init_ns.f90`, `ns_adj.f90`, `orthoUwfc.f90`, `offset_atom_wfc.f90`, `vhpsi.f90`, `v_of_rho.f90` (`v_hubbard`), `scf_mod.f90` (`ns_ddot`), `force_hub.f90` | the projectors are `S phi` even for `Hubbard_projectors = 'atomic'`; `ortho-atomic` orthogonalises over **all** `natomwfc`, not the Hubbard manifold alone, so `Modules/read_pseudo.f90`'s `upf_check_atwfc_norm` renormalisation of `chi` reaches the answer through the `4s`. `force_hub.f90` is *not* transcribed: it is `jax.grad` through `Calculation.at_positions` |
 | Occupations / smearing | `PW/src/gweights.f90`, `Modules/wgauss.f90`, `Modules/w0gauss.f90`, `PW/src/set_occupations.f90` | |
 | NSCF / band structure | `PW/src/non_scf.f90`, `PP/src/bands.f90`, `PP/src/plotband.f90` | fixed density, diagonalize once per k on an explicit path |
 | DOS | `PW/src/tetra.f90`, `PP/src/dos.f90`, `PP/src/projwfc.f90` | `tetra.f90` has both the linear and the Bloechl-corrected tetrahedron method; `projwfc.f90` is PDOS, later |

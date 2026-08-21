@@ -57,6 +57,15 @@ whose real-space grid is small — 180 plane waves, and aluminium's six bands on
 Anything else would have been evidence that the change was not what its
 explanation says it is.
 
+A pair added 2026-08-21 with DFT+U (P20), listed apart because they differ only by
+the `HUBBARD` card and the ratio *between them* is the measurement — see "What
+DFT+U costs" below:
+
+| | QE 7.5 | pypresso | ratio |
+|---|---|---|---|
+| **`ni-noldau-1k`** — Ni, ultrasoft, LSDA, 1 k | 0.070 s | 0.134 s | **1.9x** |
+| **`ni-ldau-1k`** — the same with `U = 3 eV` | 0.069 s | 0.155 s | **2.3x** |
+
 `metal` reads worse than it did and it is not this change: at the commit before
 it the same input measures 0.128–0.134 s against 0.133–0.135 s after, so the
 25% is older than this entry and belongs to the spin-orbit or the forces work.
@@ -903,6 +912,69 @@ G-vector sets, the local potential, the core charge and the Ewald sum — the sa
 `2 nk npwx nkb` complex, `kinetic` and the stick tables at `2 nk npwx`. On the notebook's
 chain that is 8 rows of 1532 plane waves instead of 4 — a few megabytes. On a real magnetic
 crystal the number to watch is still `nk`, which the loss of symmetry has already multiplied.
+
+## What DFT+U costs (P20)
+
+**The Hubbard term is a small separable operator, and it prices like one.** The comparison
+is the one this file always makes -- single-core pypresso against single-core QE 7.5 on the
+same input -- with a *pair* of inputs that differ only by the `HUBBARD` card, so the ratio
+between them is the term's own cost. fcc nickel, one k-point, `nosym`, ultrasoft,
+`ortho-atomic` projectors, `U = 3 eV` (`benchmarks/ni-noldau-1k.in` and
+`benchmarks/ni-ldau-1k.in`, `--repeats 3`, 2026-08-21):
+
+| | QE 7.5 | pypresso | ratio |
+|---|---|---|---|
+| per SCF iteration, no U | 0.070 s | 0.134 s | 1.9x |
+| per SCF iteration, `U = 3 eV` | 0.069 s | 0.155 s | 2.3x |
+| **the Hubbard term's own cost** | **1.0x** | **1.16x** | |
+
+Total energies on the same runs: 1.0e-6 Ry apart without the U (both codes at
+`conv_thr = 1e-8`) and **5.1e-9 Ry** with it.
+
+**On QE's side the term is free and on this one it is 16%.** QE's own breakdown for the FeO
+benchmark says so directly: `vhpsi` 0.07 s and `new_ns` 0.02 s out of an 18.54 s
+`electrons`, i.e. **0.4%**. The difference is not the algorithm -- it is the same
+contraction -- it is that this cell is small enough for the fixed cost of one more operator
+inside `h_psi` to show. Measured separately on it:
+
+| | per call |
+|---|---|
+| `occupation_matrix` (`new_ns`), whole k axis, jitted | 0.041 ms |
+| `HubbardTerm.apply` on a 9-band block | 0.293 ms |
+| `build_hubbard_projectors` (`orthoUwfc`), once per geometry | 9 ms |
+
+The occupation matrix runs *once* per SCF iteration and is noise. What the 21 ms is made of
+is the second row, applied as many times per iteration as Davidson calls `h_psi` -- and on
+this cell a state is **138 plane waves** while the projector block is 5 wide, so a rank-5
+correction is a visible fraction of the whole application. On a cell with a real `npwx` the
+projector count per atom is still five or ten and `npwx` is thousands, so the fraction
+falls; the FeO benchmark below is where that shows.
+
+**Four atoms, ultrasoft, `nspin = 2`, symmetry-reduced 2x2x2** -- QE's `pw_lda+U/lda+U.in`
+at `conv_thr = 1e-10` on both sides:
+
+| | QE 7.5 | pypresso |
+|---|---|---|
+| SCF wall | 18.54 s | 81.5 s |
+| iterations | 24 | 53 |
+| **per SCF iteration** | 0.77 s | 1.54 s (**2.0x**) |
+
+**2.0x**, the good end of the 2-4x band P10 established, and pypresso's figure is an upper
+bound: it includes the compilation the first iteration pays for. The iteration *count* is
+the honest difference -- 53 against 24 -- and it is the usual one, two different mixers
+taking different routes to the same fixed point (the total energies agree to 6.7e-9 Ry).
+`ns` being part of the mixed state is what makes those routes comparable at all; mixing the
+density and leaving `ns` at its output value does not converge on this cell.
+
+**Memory.** `wfcU` is `(nk, npwx, nwfcU)` complex, and `nwfcU` is `2l+1` per correlated atom
+-- five for a `d` shell. On the nickel benchmark that is **10.8 kB**; on a 16-atom oxide with
+`npwx = 20000` and eight correlated atoms it is `nk x 20000 x 40 x 16 B` = 12.8 MB per
+k-point, against `nk x npwx x nbnd x 16 B` = 32 MB per k-point for the wavefunctions
+themselves. It is a fixed cost per geometry, rebuilt by `at_positions` and `at_kpoints` and
+by nothing inside the loop. QE keeps the same array in the `iunhub` buffer one k-point at a
+time, because it stores it beside `evc` on disk; here the whole k axis is resident already
+(rule R6) and this follows it. The occupation matrix itself is
+`(nspin, nslot, ldmx, ldmx)` -- a few hundred numbers, whatever the system.
 
 ## Optimisation backlog
 

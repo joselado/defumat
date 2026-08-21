@@ -113,6 +113,12 @@ pypresso/
   xc/
     functional.py       # QE's four slots, composed; name -> functional registry
     lda.py, gga.py      # Slater/PZ/PW, and the PBE family's gradient corrections
+  hubbard/
+    manifold.py         # P20: which orbitals carry U, with what parameters (setup)
+    projectors.py       # P20: wfcU = S phi, or O^{-1/2} S phi (orthoUwfc.f90)
+    occupations.py      # P20: ns from the states, its symmetrisation, init_ns/ns_adj
+    energy.py           # P20: E_U written down; v_ns is its grad (v_hubbard is the check)
+    operator.py         # P20: the separable term vhpsi.f90 adds to H
   hamiltonian/
     terms.py            # kinetic, local, nonlocal as composable term objects
     operator.py         # Hamiltonian pytree; apply_h / apply_s
@@ -1273,6 +1279,91 @@ point group, so an `E(q)` scan is priced as `nq` runs of a `nosym` calculation.
 k-dependent tables is independent of `q`, and P16 measured what rebuilding the rest costs.
 
 *Notebook 12.*
+
+**P20 — DFT+U. ✅ DONE (simplified rotationally-invariant).** `pypresso/hubbard/`, four
+modules and a term in the Hamiltonian. The functional is Dudarev's (PRB **57**, 1505
+(1998)) with the `J0`/`beta` extension of Himmetoglu et al. (PRB **84**, 115108 (2011)) —
+QE's `lda_plus_u_kind = 0`:
+
+    E_U = sum_{I,s} [ (alpha + Ueff/2) Tr n^{Is} - (Ueff/2) Tr (n^{Is} n^{Is}) ]
+        + sum_{I,s} [ sgn(s) beta Tr n^{Is} + (J0/2) Tr (n^{Is} n^{I,-s}) ],   Ueff = U - J0
+
+with `n^{Is}_{m1 m2} = sum_{kv} f_{kvs} <phi_{Im1}|psi_kvs><psi_kvs|phi_{Im2}>` measured on
+a chosen set of localised orbitals. **Only the energy is written down**; `v_ns` is
+`jax.grad` of it and QE's `v_hubbard` is transcribed as the cross-check, which is the
+arrangement P18 established for the magnetic field. The correction reaches the Hamiltonian
+as *another separable term* — structurally `_nonlocal` with `wfcU` in place of `vkb` and a
+block-diagonal `v_ns` in place of `D_ij` (`vhpsi.f90`) — so it costs two small matrix
+products per band and no transform.
+
+`ns` joins the **mixed state** beside `becsum`, because the Hubbard potential is built from
+it before the Hamiltonian exists; `ns_ddot` joins `rho_ddot` so that `dr2` and the `ethr`
+schedule are QE's; and `deband` gains `- sum ns v_ns` for the same reason it has
+`- int rho v_scf`.
+
+*Check met:* seven cases against the vendored `pw.x` at `conv_thr = 1e-10`, total energies
+agreeing to **≤ 6.7e-9 Ry** and the Hubbard term itself to **≤ 4.6e-7 Ry**. Antiferromagnetic
+FeO (QE's `pw_lda+U/`) with `U = 4.3 eV`, the same cell at `U = 1e-8` as the null test, the
+same with `starting_ns_eigenvalue` (which converges to a *different* self-consistent
+solution, -174.5374 against -174.4716 Ry), and the displaced-geometry force case; fcc nickel
+at `nspin = 1`, with `ortho-atomic` projectors, and with `J0 = 1 eV`. `Tr[ns]` matches
+`write_ns` to the last of the five decimals it prints (1e-5) throughout, and the eigenvalues
+of `ns` to the three decimals it prints for those. **Forces come free**: the projectors are atomic orbitals
+centred on the atoms, so `force_hub` — 2552 lines of Fortran, and for ortho-atomic
+projectors it carries `d(O^{-1/2})/d tau` — is what `jax.grad` produces by differentiating
+through `Calculation.at_positions`. Against QE on `lda+U_force.in`: **4.8e-6 Ry/bohr** on a
+force of 0.14, of which the Hubbard term itself is a few percent. The analytic force path has no `force_hub` and refuses rather than returning
+a force short of one term.
+
+*Traps, all silent:*
+
+1. **`Hubbard_projectors = 'atomic'` still applies `S`.** `orthoUwfc` runs `s_psi` on the
+   atomic orbitals unconditionally, so `wfcU = S phi` and the projection is `<phi|S|psi>`.
+   With a norm-conserving dataset `S = 1` and the distinction disappears, which is why
+   testing on silicon would never find it.
+2. **The atomic orbitals are renormalised at read time**, in the *generalised* metric:
+   `upf_check_atwfc_norm` (`Modules/read_pseudo.f90`) rescales `chi` by
+   `sqrt(<chi|chi> + sum q_ij <beta_i|chi><beta_j|chi>)` and QE prints the labels it
+   touched. `Fe.pz-nd-rrkjus` and `Ni.pz-nd-rrkjus` both have an unnormalised `4s`. It does
+   not matter for the starting wavefunctions (they are rotated anyway) and it does not
+   matter for `atomic` projectors on a `3d` manifold — but `ortho-atomic` orthogonalises
+   over **all** the atomic orbitals, so the `4s` enters the transform that produces the `3d`
+   projectors. Cost of getting it wrong on nickel: 4e-3 in `Tr[ns]` and **7e-4 Ry** in the
+   total, which reads exactly like a convergence difference. It has one side effect worth
+   recording, because it is the only thing outside DFT+U that this phase moved: `chi` is
+   also what the *starting wavefunctions* are built from, so every run now seeds its
+   eigensolver slightly differently. Nothing converges anywhere else — but the
+   fixed-spin-moment case (`fe-fsm.in`, P18) is a proportional controller that rings before
+   it settles, and where it starts ringing from is exactly what changed: ~350 iterations
+   before, **746** after, to the same moment and the same field.
+3. **The `nspin = 1` factor of two is on the energy, not the potential.** `new_ns` halves
+   `ns`, so it always means one channel's occupation; `eth` and the `deband` term are
+   doubled at the end and `v_hub` is not. Differentiating the doubled energy gives a
+   potential twice too large — and an SCF that converges perfectly well to the wrong number.
+4. **`ns_adj` runs after the *first* iteration, not on the starting matrix.** QE calls
+   `init_ns` in `potinit` and `ns_adj` in `electrons.f90` after `sum_band`, on the ns
+   *measured* from the first diagonalisation, replacing both the input and the output copy.
+   Applying `starting_ns_eigenvalue` to the Hund's-rule matrix instead steers the first
+   Hamiltonian rather than the second, and lands on the other self-consistent solution.
+5. **The Hubbard term has to reach `Hamiltonian.matrix` as well as `apply`.** The dense
+   reference fixture uses the first and the SCF the second; a term in only one of them makes
+   two solvers disagree about which operator they are diagonalising, and no pre-existing
+   consistency test notices, because none of them switches a U on.
+6. **`ns` is not a function of the density**, so a fixed-density run (`run_nscf`,
+   `run_bands`) needs it passed in — the same situation PAW's `becsum` is in there, and it
+   is a `ValueError` rather than a term quietly left out.
+
+*Refused, by name rather than ignored:* `lda_plus_u_kind = 1` (Liechtenstein's full
+formulation with `J`, `B`, `E2`, `E3`), `lda_plus_u_kind = 2` (the intersite `V`), the
+background channels (`Hubbard_U2`), the orbital-resolved variant, the `wf` and `pseudo`
+projector sets, noncollinear `ns_nc`, DFT+U on a spin spiral, and a symmetry group carrying
+time-reversed operations (`new_ns`'s `colin_mag == 2` spin flip, which no case here
+exercises: FeO's two sublattices are distinct *species*, so no operation maps one to the
+other). Also not done: `hub_pot_fix`, QE's protocol of freezing `v_hub` when
+`Hubbard_alpha` is nonzero for a linear-response U — the `alpha` energy term is implemented
+and the protocol around it is not.
+
+*Notebook 13.*
 
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes

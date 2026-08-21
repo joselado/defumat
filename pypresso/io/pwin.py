@@ -238,6 +238,15 @@ _LOGICAL_TRUE = {".true.", ".t.", "true", ".TRUE."}
 _LOGICAL_FALSE = {".false.", ".f.", "false", ".FALSE."}
 
 
+def fortran_float(token: str) -> float:
+    """A Fortran real literal as a Python float: ``1.d-8``, ``2.5D+3``, ``4.3``.
+
+    The cards need it as much as the namelists do -- ``HUBBARD`` writes
+    ``U Fe1-3d 1.d-8`` -- and ``float()`` does not accept the ``d`` exponent.
+    """
+    return float(re.sub(r"[dD]([-+]?\d)", r"e\1", token.strip()))
+
+
 def _convert(token: str) -> Any:
     """Fortran literal -> Python value."""
     if token[:1] in "'\"" and token[:1] == token[-1:]:

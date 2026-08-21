@@ -30,6 +30,9 @@ outputs for around a hundred cases.
   methods, which also work as an occupation scheme inside the SCF.
 * **Collinear spin polarisation**, with one Fermi level or two, and
   **spin-orbit coupling** with two-component spinor wavefunctions.
+* **DFT+U** — the simplified rotationally-invariant Hubbard correction, with `U`,
+  `J0`, `alpha` and `beta`, on atomic or Löwdin-orthogonalised atomic
+  projectors, read from the same `HUBBARD` card `pw.x` reads.
 * **Forces**, by differentiating the total energy rather than by evaluating
   hand-derived expressions — and **structural relaxation** on top of them, with
   the same BFGS, trust radius and line search Quantum ESPRESSO uses.
@@ -37,7 +40,7 @@ outputs for around a hundred cases.
   and gamma-only calculations.
 
 Not yet: the stress (and so variable-cell relaxation), the projected density of
-states, DFT+U, and phonons. A functional or a combination that is not
+states, and phonons. A functional or a combination that is not
 implemented is refused with an error naming what *is*, rather than quietly
 replaced by something that is.
 

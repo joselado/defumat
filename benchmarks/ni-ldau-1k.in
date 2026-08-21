@@ -1,0 +1,29 @@
+! fcc nickel, one k-point: the single-core comparison case for DFT+U (P20).
+!
+! Two inputs, identical but for the HUBBARD card, so that the ratio between them
+! is what the Hubbard term costs and the ratio against QE is what P10 measures.
+! One k-point and nosym for the reason every other input in this directory has
+! them: both codes parallelise over k, so a multi-k comparison measures batching
+! rather than the cost of the physics.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 6.48, nat = 1, ntyp = 1,
+    ecutwfc = 24.0, ecutrho = 288.0,
+    nspin = 2, starting_magnetization(1) = 0.7,
+    occupations = 'smearing', smearing = 'marzari-vanderbilt', degauss = 0.02
+    nosym = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-8
+ /
+ATOMIC_SPECIES
+ Ni 58.69 Ni.pz-nd-rrkjus.UPF
+ATOMIC_POSITIONS (alat)
+ Ni 0.0 0.0 0.0
+K_POINTS
+ 1
+   0.1250000  0.1250000  0.1250000   1.00
+HUBBARD {ortho-atomic}
+U Ni-3d 3.0

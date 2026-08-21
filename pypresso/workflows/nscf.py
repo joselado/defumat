@@ -78,6 +78,7 @@ def fixed_density_bands(
     nbnd: int | None = None,
     conv_thr: float = 1.0e-6,
     k_batch: int | None | str = "default",
+    ns: jnp.ndarray | None = None,
 ):
     """Diagonalise once at every k-point of ``system`` with ``density`` fixed.
 
@@ -88,6 +89,11 @@ def fixed_density_bands(
 
     The potential is built once from the given density and never updated -- that
     is the whole content of "non self-consistent".
+
+    ``ns`` is the converged Hubbard occupation matrix (``SCFResult.ns``), needed
+    for the same reason PAW's ``becsum`` is below: it is a property of the
+    *wavefunctions*, so it cannot be rebuilt from the density this is handed,
+    and the Hubbard potential is built from it.
     """
     if kpoints is not None:
         system = eqx.tree_at(lambda s: s.kpoints, system, kpoints)
@@ -115,8 +121,20 @@ def fixed_density_bands(
             "ultrasoft and norm-conserving pseudopotentials work"
         )
 
+    hubbard_terms = None
+    if calculation.is_hubbard:
+        if ns is None:
+            raise ValueError(
+                "a fixed-density run with a Hubbard U needs the converged "
+                "occupation matrix as well as the density: pass ns = "
+                "scf_result.ns. It cannot be rebuilt from the density, and "
+                "leaving the term out gives eigenvalues that look plausible "
+                "and are wrong by the whole Hubbard shift"
+            )
+        _, _, hubbard_terms = calculation.hubbard_terms(jnp.asarray(ns))
+
     potential = calculation.potential(density)
-    hamiltonians = calculation.hamiltonian(potential.v_scf)
+    hamiltonians = calculation.hamiltonian(potential.v_scf, None, hubbard_terms)
 
     # There is no SCF here to tighten the threshold over, so ``setup.f90`` picks
     # one up front from the accuracy of the density the bands are computed in.
@@ -133,6 +151,7 @@ def run_nscf(
     nbnd: int | None = None,
     conv_thr: float = 1.0e-6,
     k_batch: int | None | str = "default",
+    ns: jnp.ndarray | None = None,
 ) -> NSCFResult:
     """A full NSCF run: diagonalise, then occupy by the system's own scheme.
 
@@ -142,7 +161,7 @@ def run_nscf(
     metal consistent with the calculation that produced its density.
     """
     calculation, system, eigenvalues = fixed_density_bands(
-        system, pseudos, density, kpoints, nbnd, conv_thr, k_batch
+        system, pseudos, density, kpoints, nbnd, conv_thr, k_batch, ns
     )
     wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
     nspin = calculation.nspin

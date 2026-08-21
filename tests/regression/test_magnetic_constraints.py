@@ -214,17 +214,26 @@ def test_fixed_spin_moment_holds_the_moment(pseudo_dir):
     that field -- and the field it found is a result worth reading, which is why
     Elk prints it and :attr:`SCFResult.magnetic_field` carries it.
 
-    bcc iron held at 2.0 mu_B, where it wants 3.18. **This takes ~350
+    bcc iron held at 2.0 mu_B, where it wants 3.18. **This takes several hundred
     iterations**, which is the scheme rather than this implementation: the
     feedback is only stable for a small ``tau`` (at 0.1 the moment flips and the
     run saturates at 8 mu_B), and Elk's own default is 0.01. It is also why the
     moment is part of the *convergence test* here -- the field is outside the
     density, so ``dr2`` falls below ``conv_thr`` long before the moment arrives.
+
+    **How many hundred is not a stable number.** A proportional controller rings
+    before it settles, and where it starts ringing from depends on the starting
+    wavefunctions: this case took ~350 iterations until P20 made the atomic
+    orbitals go through QE's ``upf_check_atwfc_norm`` renormalisation
+    (:func:`pypresso.pseudo.upf._renormalize_orbitals`), which changed nothing
+    but the eigensolver's seed and moved it to 746. The moment it converges to
+    is the same, and so is the field it finds. The budget below is set with room
+    for that, and the number itself is not a claim about anything.
     """
     from tests.conftest import GENERATED
 
     system, result = _run(
-        GENERATED / "fe-fsm.in", pseudo_dir, conv_thr=1e-8, max_iterations=500
+        GENERATED / "fe-fsm.in", pseudo_dir, conv_thr=1e-8, max_iterations=1200
     )
 
     assert system.constrained_magnetization == "fsm"

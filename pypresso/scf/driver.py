@@ -63,6 +63,21 @@ from pypresso.hamiltonian.noncollinear import SpinorHamiltonian
 from pypresso.hamiltonian.operator import Hamiltonian
 from pypresso.pseudo.atomic import atomic_wavefunctions
 from pypresso.paw.onecenter import build_paw
+from pypresso.hubbard.energy import (
+    coefficients_from_setup,
+    hubbard_energy,
+    hubbard_potential,
+    ns_ddot,
+)
+from pypresso.hubbard.manifold import build_hubbard_setup
+from pypresso.hubbard.occupations import (
+    adjust_ns,
+    build_ns_symmetry,
+    initial_ns,
+    occupation_matrix,
+)
+from pypresso.hubbard.operator import HubbardTerm, block_potential
+from pypresso.hubbard.projectors import build_hubbard_projectors
 from pypresso.paw.symmetry import build_becsum_symmetry
 from pypresso.pseudo.augmentation import build_augmentation
 from pypresso.pseudo.potentials import (
@@ -213,14 +228,18 @@ def _paw_deband(ddd_paw, augmentation, becsum_):
     return total
 
 
-def _mix(mixer, rho, rho_out, becsum_in, becsum_out):
-    """One mixing step over the density and, for PAW, ``becsum`` with it.
+def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None):
+    """One mixing step over the density and, for PAW and DFT+U, its companions.
 
-    The two are packed into a single vector so that the extrapolation
-    coefficients Anderson computes from the density residual are applied to both
-    -- they are two views of the same fixed point, and mixing them with
+    All of them are packed into a single vector so that the extrapolation
+    coefficients Anderson computes from the density residual are applied to
+    every part -- they are views of one fixed point, and mixing them with
     different histories makes the iteration inconsistent rather than merely
-    slower.
+    slower. ``mix_rho.f90`` says the same thing about ``becsum``, and QE's
+    ``mix_type`` carries ``ns`` in the same structure for the same reason: the
+    Hubbard potential is built from ``ns``, so an unmixed ``ns`` would drive the
+    Hamiltonian from the *output* of the previous step while the density came
+    from the mixed one.
     """
     flat = [np.asarray(rho).ravel()]
     flat_out = [np.asarray(rho_out).ravel()]
@@ -229,6 +248,9 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out):
             continue
         flat.append(np.asarray(old).ravel())
         flat_out.append(np.asarray(new).ravel())
+    if ns_in is not None:
+        flat.append(np.asarray(ns_in).ravel())
+        flat_out.append(np.asarray(ns_out).ravel())
 
     mixed = mixer.mix(np.concatenate(flat), np.concatenate(flat_out))
 
@@ -241,7 +263,10 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out):
             continue
         becsum_mixed.append(jnp.asarray(mixed[offset : offset + old.size].reshape(old.shape)))
         offset += old.size
-    return rho_mixed, tuple(becsum_mixed)
+    ns_mixed = None
+    if ns_in is not None:
+        ns_mixed = jnp.asarray(mixed[offset : offset + ns_in.size].reshape(ns_in.shape))
+    return rho_mixed, tuple(becsum_mixed), ns_mixed
 
 
 @jax.jit
@@ -544,7 +569,29 @@ class SCFResult:
     #: 1, 2 or 4: how many components :attr:`density` and :attr:`potential`
     #: have. It is 1 for a *nonmagnetic* spin-orbit run, where ``nspin`` is 4.
     nspin_mag: int = 1
+    #: The converged Hubbard occupation matrix, ``(nspin, nslot, ldmx, ldmx)``
+    #: with one slot per correlated atom, or ``None`` for a run without a U.
+    #: **The spin axis is kept even for** ``nspin = 1``, unlike the density's,
+    #: because ``ns`` is per channel by construction there (it is halved in
+    #: ``new_ns``) and squeezing it would hide the factor of two that the energy
+    #: carries. :attr:`hubbard_setup` says which atom each slot is.
+    ns: jnp.ndarray | None = None
+    hubbard_setup: object | None = None
     history: list = field(default_factory=list)
+
+    @property
+    def hubbard_occupations(self) -> dict:
+        """``{atom: (Tr n_up, Tr n_down, total)}`` -- what ``write_ns`` prints."""
+        if self.ns is None:
+            return {}
+        traces = np.asarray(jnp.einsum("snmm->sn", self.ns))
+        if traces.shape[0] == 1:
+            traces = np.concatenate([traces, traces])
+        return {
+            atom: (float(traces[0, slot]), float(traces[1, slot]),
+                   float(traces[0, slot] + traces[1, slot]))
+            for slot, atom in enumerate(self.hubbard_setup.atoms)
+        }
 
     @property
     def eigenvalues_ev(self) -> np.ndarray:
@@ -896,10 +943,158 @@ class Calculation:
         )
         self._symmetry_maps = symmetry_maps(dense, self.symmetries) if use_symmetry else None
 
+        # DFT+U (P20). Built after the symmetry search, because the occupation
+        # matrix needs the same group average ``becsum`` does, and after the
+        # projectors, because the Hubbard projectors are ``S`` applied to the
+        # atomic orbitals. ``None`` -- the normal case -- costs nothing: the term
+        # is absent from the Hamiltonian rather than added as a zero.
+        self.hubbard = build_hubbard_setup(
+            system.hubbard, system.structure, self.pseudos
+        )
+        self._setup_hubbard(use_symmetry)
+
         # External fields and constrained moments (P18). ``None`` -- the normal
         # case -- costs nothing: the whole term is absent rather than added as a
         # zero to every potential.
         self.magnetic_field = self._build_magnetic_field()
+
+
+    def _setup_hubbard(self, use_symmetry: bool) -> None:
+        """Everything a DFT+U run needs beyond the manifold list.
+
+        The projectors themselves, the static index arrays that move an
+        occupation matrix between its padded per-atom form and the block matrix
+        the Hamiltonian contracts with, the group average, and the parameter
+        coefficients. All of it is fixed for the geometry, so it is built here
+        and rebuilt only where the geometry or the k-list changes
+        (:meth:`at_positions`, :meth:`at_kpoints`).
+        """
+        if self.hubbard is None:
+            self.wfcU = None
+            self.hubbard_coefficients = None
+            self.hubbard_symmetry = None
+            self._hubbard_columns = self._hubbard_mask = None
+            self._hubbard_blocks = None
+            return
+
+        setup = self.hubbard
+        if self.noncolin:
+            # ``new_ns_nc`` measures a 2x2 spin matrix per pair of orbitals and
+            # ``v_hubbard_nc`` builds a potential from it; neither is written
+            # here, and running the collinear expressions on one spinor channel
+            # would apply a correction with the wrong spin structure.
+            raise NotImplementedError(
+                "DFT+U with noncolin = .true. is not implemented: the "
+                "occupation matrix is a 2x2 matrix in spin space (new_ns_nc), "
+                "not one real matrix per channel"
+            )
+        if self.spiral:
+            raise NotImplementedError(
+                "DFT+U together with a spin spiral is not implemented: the two "
+                "spinor components live on different plane-wave spheres, so a "
+                "projector would have to be built on each"
+            )
+        if use_symmetry and np.any(np.asarray(self.symmetries.t_rev_array()) != 0):
+            # ``new_ns`` flips the spin index of an operation that is a symmetry
+            # only with time reversal. Nothing validates that branch here -- see
+            # :func:`pypresso.hubbard.occupations.build_ns_symmetry` -- so it is
+            # refused rather than silently skipped, which would symmetrise the
+            # two channels into each other's frame.
+            raise NotImplementedError(
+                "DFT+U on a symmetry group carrying time-reversed operations "
+                "(t_rev) is not implemented; run with nosym = .true."
+            )
+
+        self.hubbard_coefficients = coefficients_from_setup(setup)
+        columns = np.zeros((setup.nslot, setup.ldmx), dtype=int)
+        mask = setup.slot_mask()
+        for slot, (offset, ldim) in enumerate(zip(setup.offsets, setup.ldims)):
+            columns[slot, :ldim] = np.arange(offset, offset + ldim)
+        self._hubbard_columns = jnp.asarray(columns)
+        self._hubbard_mask = jnp.asarray(mask)
+        slot_index, row, column = setup.block_indices()
+        block_row, block_column = setup.padded_indices()
+        self._hubbard_blocks = (
+            jnp.asarray(slot_index), jnp.asarray(row), jnp.asarray(column),
+            jnp.asarray(block_row), jnp.asarray(block_column), setup.nwfcU,
+        )
+        self.hubbard_symmetry = (
+            build_ns_symmetry(
+                setup, self.system.cell, self.system.structure, self.symmetries
+            ) if use_symmetry else None
+        )
+        self.wfcU = self._build_hubbard_projectors()
+
+    def _overlap(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
+        """``S|psi>`` without a Hamiltonian to hang it on (``s_psi``).
+
+        The Hubbard projectors are built before any potential exists, so they
+        cannot go through :meth:`Hamiltonian.apply_s`; this is the same operator
+        written against the projectors alone.
+        """
+        if self.projectors.qq is None:
+            return psi
+        vkb = self.projectors.vkb[ik]
+        becp = jnp.einsum("gk,...g->...k", vkb.conj(), psi)
+        qq = self.projectors.qq.astype(vkb.dtype)
+        return psi + jnp.einsum("gk,...k->...g", vkb, becp @ qq.T)
+
+    def _build_hubbard_projectors(self) -> jnp.ndarray:
+        """``wfcU`` at every k-point of this calculation."""
+        return build_hubbard_projectors(
+            self.hubbard, self.pseudos, self.system.structure, self.system.cell,
+            self.basis.smooth, self.basis.planewaves, self.basis_kpoints,
+            self._overlap,
+        )
+
+    @property
+    def is_hubbard(self) -> bool:
+        """Whether any species carries a Hubbard U."""
+        return self.hubbard is not None
+
+    def occupation_matrix(self, wavefunctions, weights) -> jnp.ndarray:
+        """``new_ns``: the symmetrised occupation matrix of the current states."""
+        ns = occupation_matrix(
+            self.wfcU, wavefunctions, weights,
+            self._hubbard_columns, self._hubbard_mask, self.k_batch,
+        )
+        if self.hubbard_symmetry is not None:
+            ns = self.hubbard_symmetry.apply(ns)
+        return ns
+
+    def hubbard_terms(self, ns: jnp.ndarray) -> tuple:
+        """``(eth, v_ns, one HubbardTerm per spin channel)`` for an occupation matrix.
+
+        The energy is QE's ``eth``, added to the total energy; ``v_ns`` is its
+        derivative, which ``deband`` pairs with the *output* occupation matrix
+        exactly as it pairs ``v_scf`` with the output density.
+        """
+        energy = hubbard_energy(ns, self.hubbard_coefficients)
+        v_ns = hubbard_potential(ns, self.hubbard_coefficients)
+        blocks = block_potential(v_ns, self._hubbard_blocks)
+        return energy, v_ns, tuple(
+            HubbardTerm(wfcU=self.wfcU, vns=blocks[spin]) for spin in range(ns.shape[0])
+        )
+
+    def starting_ns(self) -> jnp.ndarray:
+        """``init_ns``: the occupation matrix the first potential is built from.
+
+        Diagonal, filled by Hund's rule from the reference occupation. **Not**
+        adjusted by ``starting_ns_eigenvalue`` -- ``ns_adj`` runs at the end of
+        the *first* iteration, on the matrix measured from the first
+        diagonalisation, not on this one (``electrons.f90``, after ``sum_band``).
+        Applying it here instead would steer the first Hamiltonian rather than
+        the second and give a different self-consistent solution.
+        """
+        return initial_ns(self.hubbard, self.nspin, self.starting_magnetization)
+
+    def adjust_ns(self, ns: jnp.ndarray) -> jnp.ndarray:
+        """``ns_adj``: impose ``starting_ns_eigenvalue`` on a measured ``ns``."""
+        return adjust_ns(ns, self.hubbard)
+
+    def ns_accuracy(self, residual: jnp.ndarray) -> jnp.ndarray:
+        """``ns_ddot``: the occupation matrix's share of ``dr2``."""
+        return ns_ddot(residual, self.hubbard_coefficients)
 
     def _build_magnetic_field(self) -> MagneticField | None:
         """``add_bfield``'s inputs, resolved once (``input.f90``'s ``i_cons``)."""
@@ -1043,6 +1238,12 @@ class Calculation:
             )
 
         moved.ewald = self.ewald_sum.energy(cell, positions, dense)
+        # The Hubbard projectors are atomic orbitals centred on the atoms, so
+        # they move with them -- and the fact that they do is the whole of the
+        # Hubbard force (``force_hub``), which falls out of differentiating the
+        # energy through this call rather than from a transcribed expression.
+        if self.hubbard is not None:
+            moved.wfcU = moved._build_hubbard_projectors()
         return moved
 
     def at_kpoints(self, kpoints) -> "Calculation":
@@ -1084,6 +1285,12 @@ class Calculation:
         system = eqx.tree_at(lambda sys: sys.kpoints, self.system, kpoints)
         moved = copy.copy(self)
         moved.system = system
+        # The list everything with a ``k`` index is built on. Without a spiral it
+        # *is* the system's, and it has to move with it: leaving it stale gives
+        # the pseudo-atomic orbitals the old k-points, which is a merely worse
+        # starting guess (they are diagonalised afterwards) and a genuinely wrong
+        # set of Hubbard projectors (they are not).
+        moved.basis_kpoints = kpoints
 
         smooth, cell = self.basis.smooth, self.system.cell
         planewaves = build_plane_wave_basis(smooth, kpoints, cell, system.ecutwfc)
@@ -1103,6 +1310,13 @@ class Calculation:
         moved.projectors = moved.projector_core.at_positions(
             system.structure.positions, qq=self.projectors.qq
         )
+        # ``wfcU`` carries a k index, so a new k-list needs new projectors --
+        # QE rebuilds them in ``orthoUwfc`` at the start of every run for the
+        # same reason. Without this a band-structure run on a converged density
+        # would apply the Hubbard potential through the *old* k-points'
+        # projectors, which is silently wrong rather than an error.
+        if self.hubbard is not None:
+            moved.wfcU = moved._build_hubbard_projectors()
         return moved
 
     def at_spiral_q(self, q_crystal) -> "Calculation":
@@ -1368,7 +1582,7 @@ class Calculation:
             )
         return self.symmetrize(self.augmented(to_dense(rho, smooth, dense), becsum_))
 
-    def hamiltonian(self, v_scf: jnp.ndarray, ddd_paw=None) -> tuple:
+    def hamiltonian(self, v_scf: jnp.ndarray, ddd_paw=None, hubbard=None) -> tuple:
         """One :class:`Hamiltonian` per spin channel.
 
         The kinetic term, the projectors and the local pseudopotential are
@@ -1394,6 +1608,12 @@ class Calculation:
             return (self._spinor_hamiltonian(total, deeq),)
         hamiltonians = []
         for spin in range(self.nspin):
+            # ``vhpsi`` is a separate term, not a contribution to ``deeq``: it
+            # has its own projectors and its own coefficients. QE *does* fold it
+            # into ``deeq`` in ``add_vhub_to_deeq`` -- but only when
+            # ``Hubbard_projectors = 'pseudo'``, where the Hubbard projectors
+            # *are* the beta functions and the two terms therefore share a
+            # separable form. That projector set is refused here.
             potential = to_smooth(total[spin], self.basis.dense, self.basis.smooth)
             hamiltonians.append(Hamiltonian(
                 kinetic=self.kinetic,
@@ -1408,6 +1628,7 @@ class Calculation:
                 grid=self.basis.smooth.grid,
                 resolves_differences=self.resolves_differences,
                 deeq=None if deeq is None else deeq[spin],
+                hubbard=None if hubbard is None else hubbard[spin],
             ))
         return tuple(hamiltonians)
 
@@ -1786,6 +2007,7 @@ def run_scf(
     k_batch: int | None | str = "default",
     starting_density: jnp.ndarray | None = None,
     starting_becsum: tuple | None = None,
+    mixing_fixed_ns: int = 0,
 ) -> SCFResult:
     """Run the self-consistent field loop to convergence.
 
@@ -1806,6 +2028,12 @@ def run_scf(
     ``starting_becsum`` is its ultrasoft/PAW counterpart, and the two belong
     together -- the mixed state is the pair, and giving one without the other
     starts the run from two different geometries at once.
+
+    ``mixing_fixed_ns`` is QE's ``&electrons`` variable of the same name: for
+    that many iterations the Hubbard occupation matrix is held at its starting
+    value while the density relaxes around it. It is how a magnetic insulator is
+    steered towards a particular one of several self-consistent occupations, and
+    it does nothing at all in a run with no Hubbard U.
     """
     calculation = calculation or Calculation(
         system, pseudos, diagonalization=diagonalization, k_batch=k_batch
@@ -1832,6 +2060,10 @@ def run_scf(
     becsum_state = (
         calculation.starting_becsum() if starting_becsum is None else starting_becsum
     )
+    # ``init_ns`` + ``ns_adj``. Like ``becsum`` it is part of the mixed state
+    # rather than a function of the density: the Hubbard potential is built from
+    # it before the Hamiltonian exists.
+    ns_state = calculation.starting_ns() if calculation.is_hubbard else None
 
     previous_energy, history = None, []
     potential_change = None
@@ -1851,7 +2083,11 @@ def run_scf(
 
         potential = calculation.potential(rho, field_scale, field)
         epaw, ddd_paw = calculation.onecenter(becsum_state)
-        hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw)
+        hubbard_terms = v_ns = None
+        eth = 0.0
+        if calculation.is_hubbard:
+            eth, v_ns, hubbard_terms = calculation.hubbard_terms(ns_state)
+        hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw, hubbard_terms)
 
         # QE's threshold for judging the *first* diagonalisation after the fact:
         # if the density turns out to be better than the eigenvalues, the loose
@@ -1875,6 +2111,24 @@ def run_scf(
             # be a silent error whenever they differ: their fft_index addresses
             # a smaller box than the array being gathered from.
             accuracy = float(_accuracy(rho_out - rho, calculation.basis.dense, system.cell))
+            if calculation.is_hubbard:
+                ns_out = calculation.occupation_matrix(wavefunctions, wg)
+                if iteration == 1 and starting_density is None:
+                    # ``IF (first .AND. starting_pot == 'atomic') CALL ns_adj()``:
+                    # the requested eigenvalues are imposed on the *measured*
+                    # matrix and become both the output and the input of this
+                    # step, so the residual of the ns block is zero here and the
+                    # second Hamiltonian is the one that is steered.
+                    ns_out = calculation.adjust_ns(ns_out)
+                    ns_state = ns_out
+                if iteration <= mixing_fixed_ns:
+                    # ``RESET ns to initial values (iter <= mixing_fixed_ns)``:
+                    # the density relaxes around a *frozen* occupation matrix.
+                    ns_out = ns_state
+                # ``rho_ddot`` gains ``ns_ddot`` when there is a Hubbard term,
+                # so that ``dr2`` estimates the error in the whole functional
+                # and the ``ethr`` schedule it drives is QE's.
+                accuracy += float(calculation.ns_accuracy(ns_out - ns_state))
 
             if iteration > 1 or attempt > 0 or accuracy >= floor:
                 break
@@ -1926,6 +2180,12 @@ def run_scf(
             # *not* refreshed: ``deband`` below pairs it with the output becsum
             # exactly as ``delta_e`` does, which runs before QE recomputes it.
             epaw, _ = calculation.onecenter(becsum_out)
+            if calculation.is_hubbard:
+                # ``eth`` is recomputed by ``v_of_rho`` on the density that will
+                # be used next, which at convergence is the unmixed output one.
+                # ``v_ns`` is not refreshed, for the same reason ``ddd_paw`` is
+                # not: ``deband`` pairs it with the output occupations.
+                eth = hubbard_energy(ns_out, calculation.hubbard_coefficients)
 
         # PAW's contribution to ``deband``: ``delta_e`` subtracts
         # ``sum ddd_paw * becsum`` for the same reason it subtracts
@@ -1933,6 +2193,15 @@ def run_scf(
         # eigenvalue through ``deeq``, and ``eband`` would double-count it.
         if calculation.is_paw:
             deband -= float(_paw_deband(ddd_paw, calculation.augmentation, becsum_out))
+        if calculation.is_hubbard:
+            # ``delta_e``'s ``- SUM(rho%ns * v%ns)``, doubled when there is one
+            # spin channel. Same pairing as every other term there: the
+            # **output** occupation matrix against the **input** potential, since
+            # ``delta_e`` runs before ``v_of_rho`` is called again. The Hubbard
+            # potential is inside every eigenvalue through ``vhpsi``, so
+            # ``eband`` double-counts it and this removes exactly that.
+            overlap = float(jnp.sum(ns_out * v_ns))
+            deband -= 2.0 * overlap if calculation.nspin == 1 else overlap
 
         terms = {
             "one-electron": eband + deband,
@@ -1942,6 +2211,8 @@ def run_scf(
         }
         if calculation.is_paw:
             terms["one_center_paw"] = float(epaw)
+        if calculation.is_hubbard:
+            terms["hubbard"] = float(eth)
         if "smearing" in levels:
             terms["smearing"] = levels["smearing"]
         total = sum(terms.values())
@@ -1968,6 +2239,15 @@ def run_scf(
             # :mod:`pypresso.scf.fields`.
             entry["field_energy"] = float(potential.e_field)
             entry["constraint_energy"] = float(potential.e_constraint)
+        if calculation.is_hubbard:
+            entry["hubbard_energy"] = float(eth)
+            # ``write_ns``'s headline number, per correlated atom: the trace of
+            # the occupation matrix in each channel. It is what says whether the
+            # run settled on the intended orbital occupation, and it moves long
+            # after the total energy has stopped moving.
+            entry["hubbard_traces"] = np.asarray(
+                jnp.einsum("snmm->sn", ns_out)
+            ).T.tolist()
         if magnetization is not None:
             entry["magnetization"] = magnetization[0]
             entry["absolute_magnetization"] = magnetization[1]
@@ -1990,10 +2270,16 @@ def run_scf(
 
         if converged:
             rho = rho_out
+            if calculation.is_hubbard:
+                ns_state = ns_out
             break
 
         previous_energy = total
-        rho, becsum_state = _mix(mixer, rho, rho_out, becsum_state, becsum_out)
+        rho, becsum_state, ns_state = _mix(
+            mixer, rho, rho_out, becsum_state, becsum_out,
+            ns_state if calculation.is_hubbard else None,
+            ns_out if calculation.is_hubbard else None,
+        )
         if field is not None:
             # ``reducebf`` (Elk 5.104), and the fixed-spin-moment feedback, both
             # act between iterations -- after the density is mixed and before
@@ -2018,6 +2304,8 @@ def run_scf(
         accuracy=accuracy,
         nspin=nspin,
         nspin_mag=calculation.nspin_mag,
+        ns=ns_state,
+        hubbard_setup=calculation.hubbard,
         magnetization=None if magnetization is None else magnetization[0],
         absolute_magnetization=None if magnetization is None else magnetization[1],
         magnetization_vector=moment,

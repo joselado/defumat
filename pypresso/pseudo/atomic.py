@@ -90,7 +90,7 @@ def atomic_wavefunctions(
     shape = kg_norm.shape
     flat = kg_norm.reshape(-1)
     form_factors = tuple(
-        atomic_form_factors(p, flat, float(cell.volume)) for p in pseudos
+        atomic_form_factors(p, flat, cell.volume) for p in pseudos
     )
     radial = _radial_table(form_factors, shape)
     offset = np.cumsum([0] + [f.shape[0] for f in form_factors])

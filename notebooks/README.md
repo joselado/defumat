@@ -19,6 +19,7 @@ that way.
 | [`10_topological_invariants.ipynb`](10_topological_invariants.ipynb) | Berry curvature, Chern numbers and Z2: why every invariant is built from one overlap and not from a derivative of the eigenproblem, the wrap at the zone edge measured (0.99 against 0.0096), a Chern number that is an *exact* integer on a 6x6 mesh against a Kubo sum that is 1e-3 off on a 24x24 one, silicon's curvature vanishing pointwise, the Wannier centres switching partners across the Kane-Mele transition, three independent routes agreeing on the doubled Qi-Wu-Zhang model, all four `(nu0; nu1nu2nu3)` phases of the lattice Dirac model, silicon's eight parity products, and **bismuthene** by both routes with an ultrasoft spin-orbit `S` | P16 |
 | [`11_noncollinear_magnetism_and_fields.ipynb`](11_noncollinear_magnetism_and_fields.ipynb) | Magnetism as a *vector*: why the symmetry group shrinks and half of what is left needs time reversal, the rotation-invariance identity that gates the whole regime (and the 129 Ry bug it found), bcc iron against QE with LDA and with PBE's local spin frame, what "the moment on this atom" means without muffin tins, and fields and constrained moments — five of QE's hand-derived potentials reproduced by one `jax.grad`, three constrained benchmarks, Elk's fixed-spin-moment field beside them, and `reducebf` finding a magnetic state a nonmagnetic start could never reach | P17, P18 |
 | [`12_spin_spirals.ipynb`](12_spin_spirals.ipynb) | Spin spirals by the generalized Bloch theorem: two plane-wave spheres instead of one, the three identities that validate them (`q = 0` against an ordinary noncollinear run, `q = b3/2` against the *collinear* antiferromagnet, `q = b3/4` against a four-cell noncollinear supercell — all to 1e-10 Ry), the shifted supercell k-grid that is the trap of the phase, an `E(q)` magnon dispersion with the exchange constants fitted out of it, and why the rotated-frame moment is a gauge and the energy is not | P19 |
+| [`13_dft_plus_u.ipynb`](13_dft_plus_u.ipynb) | DFT+U: the correction as a penalty on fractional occupation, the two offsets a Hubbard manifold needs, why `Hubbard_projectors = 'atomic'` still applies `S`, the atomic-orbital renormalisation that only `ortho-atomic` feels (and the 7e-4 Ry it is worth), the potential as `jax.grad` against QE's `v_hubbard`, the `nspin = 1` factor of two that is on the energy and not the potential, nickel four ways and antiferromagnetic FeO against QE (≤6.7e-9 Ry), a second self-consistent solution reached with `starting_ns_eigenvalue`, and `force_hub` falling out of the gradient with nothing written down for it (QE's forces to 4.8e-6 Ry/bohr) | P20 |
 
 ## Conventions
 
@@ -77,6 +78,11 @@ under `tests/data/qe/`, for the reason its own text gives: the shipped 2017 outp
 vendored tree entirely; both of its systems (a hydrogen atom and a hydrogen chain, with the
 supercells it is validated against) are committed. `11` takes about **eight minutes** on one
 core and `12` about **five**.
+
+`13` is a mixture in the other direction from `07`: its nickel half is committed under
+`tests/data/qe/` (input *and* reference), and its FeO half reads QE's own `pw_lda+U/`
+inputs from the vendored tree while comparing against regenerated references that are
+committed. It takes about **eight minutes**, most of it the four FeO runs.
 
 After changing code the notebooks depend on, re-execute them and refresh the exports:
 

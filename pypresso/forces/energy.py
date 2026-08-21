@@ -55,6 +55,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
+from pypresso.hubbard.energy import hubbard_energy
 from pypresso.scf.potential import total_charge
 
 __all__ = ["FrozenState", "frozen_energy", "state_from_result"]
@@ -146,6 +147,17 @@ def frozen_energy(calculation, positions: jnp.ndarray, state: FrozenState):
     volume = calculation.system.cell.volume
     local = volume / rho[0].size * jnp.sum(moved.vltot * total_charge(rho))
 
+    # DFT+U. The occupation matrix is measured through the *moved* projectors,
+    # which is the whole of ``force_hub``: the atomic orbitals are centred on
+    # the atoms, so ``ns`` depends on where they are, and for ortho-atomic
+    # projectors so does the ``O^{-1/2}`` that orthogonalises them. Both
+    # dependences are inside this one call and neither is written down.
+    hubbard = jnp.asarray(0.0)
+    if moved.is_hubbard:
+        hubbard = hubbard_energy(
+            moved.occupation_matrix(psi, weights), moved.hubbard_coefficients
+        )
+
     kinetic = _kinetic_energy(psi, calculation.kinetic, weights)
     nonlocal_, overlap = _projector_energies(
         psi, moved.projectors.vkb, moved.projectors.dij, moved.projectors.qq,
@@ -165,6 +177,7 @@ def frozen_energy(calculation, positions: jnp.ndarray, state: FrozenState):
         + potential.etxc
         + moved.ewald
         + epaw
+        + hubbard
         - overlap
         - norm
         + state.entropy

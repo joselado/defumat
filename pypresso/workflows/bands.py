@@ -92,6 +92,7 @@ def run_bands(
     fermi_energy: float | None = None,
     homo: float | None = None,
     k_batch: int | None | str = "default",
+    ns: jnp.ndarray | None = None,
 ) -> BandStructure:
     """Diagonalise at a k-path with the density fixed.
 
@@ -106,6 +107,9 @@ def run_bands(
             occupied ones.
         conv_thr: the accuracy the density was converged to, which is what sets
             how accurately the bands are worth computing.
+        ns: the converged Hubbard occupation matrix (``SCFResult.ns``), required
+            when the run has a Hubbard U -- the term is built from it and it
+            cannot be recovered from the density.
 
     The potential is built once from the given density and never updated -- that
     is the whole content of "non self-consistent", and it is why this is a thin
@@ -115,7 +119,7 @@ def run_bands(
     produced the density, which is what the two arguments are for.
     """
     calculation, system, eigenvalues = fixed_density_bands(
-        system, pseudos, density, kpoints, nbnd, conv_thr, k_batch
+        system, pseudos, density, kpoints, nbnd, conv_thr, k_batch, ns
     )
     nspin = calculation.nspin
     return BandStructure(
