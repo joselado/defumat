@@ -120,6 +120,10 @@ class System(eqx.Module):
     #: Elk's ``reducebf``: multiply the external fields by this after every SCF
     #: iteration, so a symmetry-breaking field is gone by convergence.
     reducebf: float = eqx.field(static=True, default=1.0)
+    #: Which fixed-spin-moment update rule to use -- a pypresso extension with
+    #: no pw.x counterpart, since the scheme itself has none. See
+    #: :data:`pypresso.scf.fields.FSM_UPDATES`.
+    fsm_update: str = eqx.field(static=True, default="secant")
     #: ``r_m`` per species in bohr, or ``()`` for the radius ``make_pointlists``
     #: derives. A pypresso extension only in being an input at all.
     integration_radii: tuple = eqx.field(static=True, default=())
@@ -355,6 +359,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         b_field=tuple(float(v) for v in pwin.indexed("system", "b_field", 3)),
         atomic_b_field=_atomic_b_field(pwin, structure.nat),
         reducebf=float(pwin.get("system", "reducebf", 1.0)),
+        fsm_update=_fsm_update(pwin),
         integration_radii=tuple(
             float(v) for v in pwin.indexed("system", "r_m", structure.ntyp)
         ) if pwin.get("system", "r_m") is not None else (),
@@ -549,6 +554,19 @@ def _spiral_q(pwin: PwInput, nspin: int, lspinorb: bool, nosym: bool) -> tuple |
             "group, which is not implemented), and time reversal sends q to -q"
         )
     return q
+
+
+
+def _fsm_update(pwin) -> str:
+    """``fsm_update``, refused by name rather than silently substituted."""
+    from pypresso.scf.fields import DEFAULT_FSM_UPDATE, FSM_UPDATES
+
+    name = str(pwin.get("system", "fsm_update", DEFAULT_FSM_UPDATE)).strip().lower()
+    if name not in FSM_UPDATES:
+        raise ValueError(
+            f"fsm_update = {name!r}: implemented are {', '.join(FSM_UPDATES)}"
+        )
+    return name
 
 
 def _atomic_b_field(pwin: PwInput, nat: int) -> tuple:

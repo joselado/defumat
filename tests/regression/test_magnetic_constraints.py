@@ -29,7 +29,7 @@ import numpy as np
 import pytest
 
 from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
+from pypresso.io.pwin import parse_pw_input, read_pw_input
 from pypresso.pseudo import read_upf
 from pypresso.scf import run_scf
 from pypresso.system import build_system
@@ -201,6 +201,23 @@ def test_a_local_field_breaks_the_symmetry_it_should(pseudo_dir, tmp_path_factor
     assert abs(fixed.total_energy - magnetic.total_energy) > 1e-5
 
 
+def _fsm(pseudo_dir, scheme, max_iterations):
+    """``fe-fsm.in`` run with one of the two update rules."""
+    from tests.conftest import GENERATED
+
+    text = (GENERATED / "fe-fsm.in").read_text()
+    marker = text.index("&system") + len("&system")
+    source = text[:marker] + f"\n    fsm_update = '{scheme}'\n" + text[marker:]
+    system = build_system(parse_pw_input(source))
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    return system, run_scf(
+        system, pseudos, conv_thr=1e-8, max_iterations=max_iterations,
+        mixing_beta=float(parse_pw_input(source).get("electrons", "mixing_beta") or 0.7),
+    )
+
+
 def test_fixed_spin_moment_holds_the_moment(pseudo_dir):
     """Elk's ``fsmtype``: a field driven by the moment's error, not a penalty.
 
@@ -209,49 +226,62 @@ def test_fixed_spin_moment_holds_the_moment(pseudo_dir):
     moment -- the constrained state sits wherever the penalty balances the
     functional, which for iron's ``lambda = 0.005`` is 1.68 mu_B against a
     target of 0.5. The feedback scheme instead *searches* for the field at which
-    the unconstrained functional puts the moment where it was asked
-    (``bfieldfsm.f90``), so what converges is a genuine stationary point under
-    that field -- and the field it found is a result worth reading, which is why
-    Elk prints it and :attr:`SCFResult.magnetic_field` carries it.
+    the unconstrained functional puts the moment where it was asked, so what
+    converges is a genuine stationary point under that field -- and the field it
+    found is a result worth reading, which is why Elk prints it and
+    :attr:`SCFResult.magnetic_field` carries it.
 
-    bcc iron held at 2.0 mu_B, where it wants 3.18. **This takes several hundred
-    iterations**, which is the scheme rather than this implementation: the
-    feedback is only stable for a small ``tau`` (at 0.1 the moment flips and the
-    run saturates at 8 mu_B), and Elk's own default is 0.01. It is also why the
-    moment is part of the *convergence test* here -- the field is outside the
-    density, so ``dr2`` falls below ``conv_thr`` long before the moment arrives.
+    bcc iron held at 2.0 mu_B, where it wants 3.18. The moment is part of the
+    *convergence test*: the field is outside the density, so ``dr2`` falls below
+    ``conv_thr`` long before the moment arrives.
 
-    **How many hundred is not a stable number.** A proportional controller rings
-    before it settles, and where it starts ringing from depends on the starting
-    wavefunctions. This case took ~350 iterations until P20 made the atomic
-    orbitals go through QE's ``upf_check_atwfc_norm`` renormalisation
-    (:func:`pypresso.pseudo.upf._renormalize_orbitals`), which changed nothing
-    but the eigensolver's seed and moved it to 746. It moved again at P11, to
-    **1380**, and that instance is worth the detail because the perturbation is
-    as small as a perturbation gets: the stress needs ``Y_lm`` to be
-    differentiable on the ``z`` axis, so ``ylmr2``'s ``sin theta`` is now
-    obtained as ``rho/r`` instead of as ``sqrt(1 - cos^2 theta)``
-    (:mod:`pypresso.pseudo.harmonics`). On *this* case's own vectors that is
-    worth **2.6e-15** on the dense G set and 8.7e-16 on ``k + G``, and it moves
-    accuracy in the right direction -- the old form subtracts two nearly equal
-    numbers, and the worst disagreement is at ``cos theta = -0.994``, exactly
-    where that cancellation bites.
-
-    All three times the moment it converges to is the same, and so is the field
-    it finds. The budget below is set with room for that, and **the number
-    itself is not a claim about anything** -- three data points now say so
-    rather than two.
+    The budget is a **performance guard**, not a tolerance. The default
+    ``secant`` update takes 74 iterations on this case; the interleaved rule it
+    replaced took 1380, and if a change puts this back into the hundreds it is
+    the controller that broke, not the physics.
     """
-    from tests.conftest import GENERATED
-
-    system, result = _run(
-        GENERATED / "fe-fsm.in", pseudo_dir, conv_thr=1e-8, max_iterations=2000
-    )
+    system, result = _fsm(pseudo_dir, "secant", 300)
 
     assert system.constrained_magnetization == "fsm"
+    assert system.fsm_update == "secant"
     assert result.converged
+    assert result.iterations < 200
     assert result.magnetization == pytest.approx(2.0, abs=1e-3)
     # No penalty in the energy -- the constraint is entirely in the field.
     assert result.constraint_energy == pytest.approx(0.0, abs=1e-14)
     # ... and the field is one the run found for itself.
     assert abs(float(np.asarray(result.magnetic_field.uniform)[0])) > 1e-3
+
+
+def test_the_two_fixed_spin_moment_rules_find_the_same_field(pseudo_dir):
+    """``secant`` and ``elk`` are the same answer at different cost.
+
+    The transcription is kept and checked against the scheme that replaced it,
+    the way every pluggable piece here is: what may differ is the path, never
+    the fixed point. Both stop as soon as ``|m - 2|`` is inside 1e-3 and they
+    approach from opposite sides, so the residual difference in the field is
+    that tolerance divided by the susceptibility -- 1.1e-3 mu_B over the
+    45 mu_B/Ry measured on this case, which is the 4e-5 Ry asserted below.
+
+    **Why the interleaved rule is slow, since the number invites the question.**
+    Elk updates the field after *every* SCF iteration, so the controller reads a
+    moment that has not finished responding to the last nudge. Instrumented on
+    this case, the susceptibility it appears to see swings between ``+2591`` and
+    ``-1252`` mu_B/Ry between consecutive iterations, and the ringing takes 1380
+    iterations to damp. The gain is not what is wrong: Elk's ``tau = 0.02``
+    against a measured ``1/chi`` of 0.022 is already a Newton step. At converged
+    density ``m(B)`` is smooth -- 2.499, 2.274, 2.036, 1.837 mu_B at ``B = 0``,
+    -0.005, -0.010, -0.020 Ry -- which is what the secant rule steps on.
+    """
+    _, secant = _fsm(pseudo_dir, "secant", 300)
+    _, elk = _fsm(pseudo_dir, "elk", 2000)
+
+    assert secant.converged and elk.converged
+    field_secant = float(np.asarray(secant.magnetic_field.uniform)[0])
+    field_elk = float(np.asarray(elk.magnetic_field.uniform)[0])
+    assert field_secant == pytest.approx(field_elk, abs=1e-4)
+    assert secant.total_energy == pytest.approx(elk.total_energy, abs=1e-4)
+    assert secant.magnetization == pytest.approx(2.0, abs=1e-3)
+    assert elk.magnetization == pytest.approx(2.0, abs=1e-3)
+    # The point of the exercise.
+    assert secant.iterations * 5 < elk.iterations

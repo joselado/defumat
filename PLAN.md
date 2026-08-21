@@ -1540,8 +1540,25 @@ getting it backwards does not oscillate, it drives the moment to saturation and 
 looking untroubled. **And the moment has to be part of the convergence test**: the field is
 outside the density, so `dr2` falls below `conv_thr` while the moment is still far from its
 target, and a run that stopped there would report an *unconstrained* answer under a
-constrained heading. The scheme is slow — ~350 iterations at `tau = 0.02`, and unstable
-above ~0.1, which is why Elk's own default is 0.01.
+constrained heading. 
+
+**The scheme was slow, and the reason was not the gain.** Elk updates the field after
+*every* SCF iteration, so the controller reads a moment that has not finished responding to
+the last nudge: instrumented on `fe-fsm.in`, the susceptibility it appears to see swings
+between `+2591` and `-1252` mu_B/Ry between consecutive iterations, and the ringing takes
+**1380 iterations** to damp below the 1e-3 the moment is held to. The gain is innocent —
+Elk's `tau = 0.02` against a measured `1/chi` of `0.022` is already a Newton step. What is
+wrong is *when* it is taken.
+
+At converged density `m(B)` is smooth: 2.499, 2.274, 2.036, 1.837 mu_B at `B = 0`, -0.005,
+-0.010 and -0.020 Ry on that case. So `fsm_update = 'secant'` (the default; `'elk'` keeps
+the transcription) holds the field until the inner SCF has converged, then steps by the
+susceptibility measured from the last two *converged* pairs, falling back to Elk's `tau`
+step for the first one and whenever `chi` is not positive and finite, and never moving more
+than `FSM_TRUST` times the previous step. Same field, same moment, same energy, **74
+iterations instead of 1380**. The mixer keeps its history across a step, which is most of
+why the later solves are cheap: the density at the previous field is a far better start
+than the atomic guess, and the steps shrink.
 
 *Notebook 11* (with P17).
 

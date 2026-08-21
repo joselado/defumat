@@ -1165,6 +1165,7 @@ class Calculation:
             penalty=float(system.constraint_lambda),
             constraint=constraint,
             reducebf=float(system.reducebf),
+            fsm_update=system.fsm_update,
         )
 
     def _per_atom(self, per_species) -> jnp.ndarray:
@@ -2425,6 +2426,9 @@ def run_scf(
         )
 
         converged = accuracy < conv_thr
+        # The density is self-consistent *at this field*, which is the state the
+        # secant update is allowed to measure: see ``MagneticField.feedback``.
+        inner_converged = converged
         if converged and field is not None and not field.satisfied(rho_out, system.cell):
             # A fixed-spin-moment run is not converged until the moment is where
             # it was asked to be: the constraining field is outside the density,
@@ -2548,7 +2552,18 @@ def run_scf(
             # act between iterations -- after the density is mixed and before
             # the next potential is built.
             field_scale *= field.reducebf
-            field = field.feedback(rho, system.cell)
+            if field.fsm_update == "elk" or field.constraint != "fsm":
+                field = field.feedback(rho, system.cell)
+            elif inner_converged:
+                # The secant scheme steps on *converged* pairs only. Between
+                # steps the field is held and the SCF is an ordinary one, which
+                # is the whole of why it costs a handful of solves rather than a
+                # thousand interleaved iterations -- ``m(B)`` is smooth where
+                # ``m`` at iteration ``i`` is not. The mixer keeps its history
+                # across the step: the density it holds is a better start for
+                # the next field than the atomic guess, and the field moves by
+                # less each time.
+                field = field.feedback(rho_out, system.cell)
 
     nspin = calculation.nspin
     stress = None

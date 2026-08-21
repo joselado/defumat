@@ -154,14 +154,18 @@ print("        moment %.2f -> %.2f mu_B, which is why a magnetic comparison with
          np.linalg.norm(iron_pbe.magnetization_vector)))
 ```
 
+    /tmp/ipykernel_2423469/417838658.py:34: RuntimeWarning: tstress = .true. in the input, but forces and stress for a noncollinear or spin-orbit calculation are not implemented; nspin = 1 and nspin = 2 are, on norm-conserving, ultrasoft and PAW pseudopotentials. The SCF is unaffected and SCFResult.stress is None.
+      return system, run_scf(system, pseudos, **options)
+
+
     term                       pypresso                 QE   difference
-    one-electron             8.92933181         8.92932731     4.50e-06
-    hartree                  6.13361510         6.13359228     2.28e-05
-    xc                     -26.12190868       -26.12188165     2.70e-05
+    one-electron             8.92933178         8.92932731     4.47e-06
+    hartree                  6.13361506         6.13359228     2.28e-05
+    xc                     -26.12190861       -26.12188165     2.70e-05
     ewald                  -44.64461207       -44.64461207     4.30e-09
-    smearing                 0.00388949         0.00388979     2.95e-07
+    smearing                 0.00388950         0.00388979     2.94e-07
     TOTAL                  -55.69968434       -55.69968434     2.78e-09
-    moment  pypresso [ 3.1763 -0.     -0.    ]   QE (3.18, -0.0, -0.0)
+    moment  pypresso [ 3.1763 -0.      0.    ]   QE (3.18, -0.0, -0.0)
 
 
     
@@ -225,13 +229,13 @@ for name, scheme in (("noncolin-constrain_atomic.in", "atomic"),
     scheme                pypresso (Ry)          QE (Ry) difference
 
 
-    atomic                 -55.69055704     -55.69055687    1.7e-07
+    atomic                 -55.69055703     -55.69055687    1.6e-07
 
 
     atomic direction       -55.69968434     -55.69968434    2.7e-09
 
 
-    total                  -55.54266118     -55.54266124    6.1e-08
+    total                  -55.54266143     -55.54266124    1.9e-07
 
 
 **The constraint's energy is not in the total energy.** `add_bfield` is called from
@@ -291,6 +295,52 @@ ax.legend(fontsize=8); ax.grid(alpha=0.3); fig.tight_layout()
     
 ![png](11_noncollinear_magnetism_and_fields_files/11_noncollinear_magnetism_and_fields_9_1.png)
     
+
+
+## Fixing a moment instead of penalising it
+
+A penalty leaves a residual force: the state sits where `lambda (m - m_fix)^2` balances the
+functional, which is not a stationary point of the functional itself. Elk's fixed-spin-moment
+scheme instead *searches* for the field at which the unconstrained functional puts the moment
+where it was asked — so what converges is a genuine stationary state, and the field it found
+is a result worth reading.
+
+Searching is a control problem, and how it is done is worth more than a factor of ten.
+Elk nudges the field after **every** SCF iteration, which reads a moment that has not
+finished responding to the last nudge: it rings, and takes 1380 iterations here. At
+converged density `m(B)` is smooth, so `fsm_update = 'secant'` holds the field until the
+SCF has converged and then steps by the susceptibility it measures — the same answer in
+**74**.
+
+
+```python
+fsm = (GENERATED / "fe-fsm.in").read_text()
+marker = fsm.index("&system") + len("&system")
+
+print("%-8s %7s %14s %11s %17s"
+      % ("rule", "iters", "B (Ry)", "m (mu_B)", "E (Ry)"))
+for rule in ("secant", "elk"):
+    source = fsm[:marker] + f"\n    fsm_update = '{rule}'\n" + fsm[marker:]
+    _, result = scf(source, conv_thr=1e-8, max_iterations=2000)
+    print("%-8s %7d %14.8f %11.6f %17.9f"
+          % (rule, result.iterations, float(np.asarray(result.magnetic_field.uniform)[0]),
+             result.magnetization, result.total_energy))
+```
+
+    rule       iters         B (Ry)    m (mu_B)            E (Ry)
+
+
+    secant        74    -0.01096091    2.000584     -55.571538200
+
+
+    elk         1380    -0.01099904    1.999459     -55.571525850
+
+
+The same field to 4e-5 Ry and the same energy to 1e-5 Ry — the residual is the 1e-3
+tolerance the moment is held to, divided by the 45 mu_B/Ry susceptibility, since the two
+rules stop on opposite sides of the target. The gain was never the problem: Elk's
+`tau = 0.02` against a measured `1/chi` of 0.022 is already a Newton step, and what is
+wrong in the interleaved rule is *when* the step is taken.
 
 
 ---

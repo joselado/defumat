@@ -53,8 +53,9 @@ point where there is not.
 
 The variants under each row — which smearing or tetrahedron method fixes the
 occupations, which projectors DFT+U uses, which of the four constraint
-schemes — are chosen with the same input variables as in `pw.x`, and
-`PLAN.md` lists them phase by phase.
+schemes, which fixed-spin-moment update (`fsm_update`) — are chosen with the
+same input variables as in `pw.x` where it has them, and `PLAN.md` lists them
+phase by phase.
 
 Not yet: variable-cell relaxation and phonons. `K_POINTS gamma` runs, but at an explicit k = 0 with the
 full G sphere — the half-sphere storage the gamma-point trick exists for is

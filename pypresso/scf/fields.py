@@ -58,6 +58,8 @@ from pypresso.system.cell import Cell
 __all__ = [
     "MagneticField",
     "CONSTRAINTS",
+    "FSM_UPDATES",
+    "DEFAULT_FSM_UPDATE",
     "constraint_targets",
     "magnetization_components",
 ]
@@ -86,6 +88,40 @@ VANISHING_MOMENT = 1.0e-12
 #: from its target and the field is still being driven. A run that stopped there
 #: would report an unconstrained answer under a "constrained" heading.
 FSM_TOLERANCE = 1.0e-3
+
+#: The fixed-spin-moment update rules, by name.
+#:
+#: ``"elk"``
+#:     ``B <- B - tau (m - m_fix)`` after *every* SCF iteration, transcribed
+#:     from ``bfieldfsm.f90``. Correct, and slow for a reason that is worth
+#:     understanding: the field is nudged while the density is still moving, so
+#:     the controller reads a moment that has not finished responding to the
+#:     last nudge and it rings. On ``fe-fsm.in`` the apparent susceptibility it
+#:     sees swings between +2591 and -1252 mu_B/Ry from one iteration to the
+#:     next, and the ringing takes 1380 iterations to damp below 1e-3.
+#: ``"secant"``
+#:     Update only when the inner SCF has converged, and step by the measured
+#:     susceptibility rather than by a fixed gain. At converged density ``m(B)``
+#:     is smooth -- 2.499, 2.274, 2.036, 1.837 mu_B at B = 0, -0.005, -0.010,
+#:     -0.020 Ry on that same case -- so a secant on it is a Newton step, and
+#:     the whole run costs a handful of SCF solves instead.
+#:
+#: **The gain was never the problem.** Elk's ``tau`` of 0.02 against a measured
+#: ``1/chi`` of 0.022 is already the right step size; what makes the difference
+#: is *when* the step is taken.
+FSM_UPDATES: tuple[str, ...] = ("secant", "elk")
+
+#: The default, because it is the same answer for a tenth of the iterations.
+DEFAULT_FSM_UPDATE = "secant"
+
+#: A secant step is refused if the two measurements are this close in field --
+#: below it the susceptibility is a ratio of two round-off differences.
+FSM_MIN_STEP = 1.0e-6
+
+#: ... and it is never longer than this many times the previous step, so a
+#: near-singular chi cannot throw the field across the phase diagram.
+FSM_TRUST = 4.0
+
 
 
 def magnetization_components(rho_r: jnp.ndarray) -> jnp.ndarray:
@@ -196,6 +232,14 @@ class MagneticField(eqx.Module):
     #: effectively zero at the end. 1.0 leaves them alone. Constraints are not
     #: reduced -- a penalty is not a symmetry breaker.
     reducebf: float = eqx.field(static=True, default=1.0)
+    #: Which fixed-spin-moment update to use; see :data:`FSM_UPDATES`.
+    fsm_update: str = eqx.field(static=True, default=DEFAULT_FSM_UPDATE)
+    #: The previous ``(field, moment)`` the secant update measured, or ``None``
+    #: before it has one. Carried on the object because the field *is* the
+    #: state that survives an SCF iteration -- there is nowhere else to put it
+    #: that does not make the driver hold a controller of its own.
+    previous_uniform: jnp.ndarray | None = None
+    previous_moment: jnp.ndarray | None = None
 
     @property
     def has_field(self) -> bool:
@@ -309,9 +353,49 @@ class MagneticField(eqx.Module):
         """
         if self.constraint != "fsm":
             return self
-        error = self.total_moment(rho_r, cell) - jnp.asarray(self.targets)
+        moment = self.total_moment(rho_r, cell)
+        error = moment - jnp.asarray(self.targets)
+        if self.fsm_update == "elk":
+            return eqx.tree_at(
+                lambda field: field.uniform, self, self.uniform - self.penalty * error
+            )
+        return self._secant_step(moment, error)
+
+    def _secant_step(self, moment: jnp.ndarray, error: jnp.ndarray) -> "MagneticField":
+        """``B <- B - (m - m_fix) / chi`` with ``chi`` measured, not assumed.
+
+        The susceptibility comes from the two most recent *converged* pairs, so
+        this is a secant iteration on ``m(B)`` -- the same construction BFGS uses
+        on a gradient, one dimension at a time because the components of a
+        uniform field do not mix in the cases this scheme is for.
+
+        Three guards, in the order they bite. Before there is a second point
+        there is no secant, so the first step is Elk's, which is what ``tau`` is
+        good for -- an order-of-magnitude guess at ``1/chi``. A susceptibility
+        that is not positive and finite is a measurement of noise rather than of
+        physics and is refused the same way. And a step is never longer than
+        :data:`FSM_TRUST` times the last one, because ``chi`` near zero -- a
+        saturated moment -- would otherwise ask for a field that leaves the
+        physics the constraint was posed in.
+        """
+        step = -self.penalty * error
+        if self.previous_uniform is not None:
+            change = self.uniform - self.previous_uniform
+            response = moment - self.previous_moment
+            usable = jnp.abs(change) > FSM_MIN_STEP
+            chi = jnp.where(usable, response / jnp.where(usable, change, 1.0), 0.0)
+            secant = -error / jnp.where(chi > 0.0, chi, 1.0)
+            trusted = FSM_TRUST * jnp.abs(change)
+            secant = jnp.clip(secant, -trusted, trusted)
+            step = jnp.where(usable & (chi > 0.0) & jnp.isfinite(secant), secant, step)
+        updated = eqx.tree_at(lambda field: field.uniform, self, self.uniform + step)
+        updated = eqx.tree_at(
+            lambda field: field.previous_uniform, updated, self.uniform,
+            is_leaf=lambda x: x is None,
+        )
         return eqx.tree_at(
-            lambda field: field.uniform, self, self.uniform - self.penalty * error
+            lambda field: field.previous_moment, updated, moment,
+            is_leaf=lambda x: x is None,
         )
 
     def satisfied(self, rho_r: jnp.ndarray, cell: Cell) -> bool:
