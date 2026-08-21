@@ -223,17 +223,29 @@ def test_fixed_spin_moment_holds_the_moment(pseudo_dir):
 
     **How many hundred is not a stable number.** A proportional controller rings
     before it settles, and where it starts ringing from depends on the starting
-    wavefunctions: this case took ~350 iterations until P20 made the atomic
+    wavefunctions. This case took ~350 iterations until P20 made the atomic
     orbitals go through QE's ``upf_check_atwfc_norm`` renormalisation
     (:func:`pypresso.pseudo.upf._renormalize_orbitals`), which changed nothing
-    but the eigensolver's seed and moved it to 746. The moment it converges to
-    is the same, and so is the field it finds. The budget below is set with room
-    for that, and the number itself is not a claim about anything.
+    but the eigensolver's seed and moved it to 746. It moved again at P11, to
+    **1380**, and that instance is worth the detail because the perturbation is
+    as small as a perturbation gets: the stress needs ``Y_lm`` to be
+    differentiable on the ``z`` axis, so ``ylmr2``'s ``sin theta`` is now
+    obtained as ``rho/r`` instead of as ``sqrt(1 - cos^2 theta)``
+    (:mod:`pypresso.pseudo.harmonics`). On *this* case's own vectors that is
+    worth **2.6e-15** on the dense G set and 8.7e-16 on ``k + G``, and it moves
+    accuracy in the right direction -- the old form subtracts two nearly equal
+    numbers, and the worst disagreement is at ``cos theta = -0.994``, exactly
+    where that cancellation bites.
+
+    All three times the moment it converges to is the same, and so is the field
+    it finds. The budget below is set with room for that, and **the number
+    itself is not a claim about anything** -- three data points now say so
+    rather than two.
     """
     from tests.conftest import GENERATED
 
     system, result = _run(
-        GENERATED / "fe-fsm.in", pseudo_dir, conv_thr=1e-8, max_iterations=1200
+        GENERATED / "fe-fsm.in", pseudo_dir, conv_thr=1e-8, max_iterations=2000
     )
 
     assert system.constrained_magnetization == "fsm"

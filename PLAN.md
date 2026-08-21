@@ -986,6 +986,24 @@ pseudopotential, which on silicon is a third of the pressure — and `compute_st
    `dF/d|G|` in closed form — which `stress/analytic.py` already writes twice, for
    `dvloc_of_g` and `drhoc`. `PERFORMANCE.md` has the numbers and the backlog entry.
 
+7. **An improvement in the last bits of a setup quantity is not a no-op for an iteration
+   count.** Trap 1's rewrite changes `Y_lm` by **2.6e-15** on bcc iron's dense G set and
+   moves accuracy in the right direction. It also pushed
+   `test_fixed_spin_moment_holds_the_moment` from 746 iterations to **1380**, through a
+   ceiling of 1200, and the test failed with nothing wrong with it: the fixed-spin-moment
+   scheme is a *proportional controller*, the eigensolver's starting guess is built from
+   the same `Y_lm`, and where a controller starts ringing from decides how long it rings.
+   The moment it converges to (1.999459 against a target of 2.0) and the field it finds are
+   unchanged. **The rule is the general one, because the instance will not repeat:** a
+   last-bit change anywhere upstream of a feedback loop moves the seed, the seed moves the
+   ringing, and any budget tuned against the old seed is a test of the seed rather than of
+   the physics. That test's docstring had already recorded the same thing happening at P20
+   for QE's `upf_check_atwfc_norm` renormalisation (~350 to 746); this is the third
+   instance, and three of them make the argument that the count is not a claim about
+   anything. Diagnose it by *bisecting the change*, not by reading the failure -- "does not
+   converge in N" and "is wrong" look identical from the outside, and the thing that
+   settles it is whether the converged answer moved.
+
 *Deferred, by name:* **noncollinear and spin-orbit** (`nspin = 4`), refused where the
 functional is written — the constraint term needs `qq_so` and the nonlocal one `dvan_so`,
 and `pw_noncolin/noncolin.in` is therefore the rung this phase did not reach; **spin
