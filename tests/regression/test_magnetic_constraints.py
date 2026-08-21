@@ -267,11 +267,22 @@ def test_the_two_fixed_spin_moment_rules_find_the_same_field(pseudo_dir):
     Elk updates the field after *every* SCF iteration, so the controller reads a
     moment that has not finished responding to the last nudge. Instrumented on
     this case, the susceptibility it appears to see swings between ``+2591`` and
-    ``-1252`` mu_B/Ry between consecutive iterations, and the ringing takes 1380
-    iterations to damp. The gain is not what is wrong: Elk's ``tau = 0.02``
-    against a measured ``1/chi`` of 0.022 is already a Newton step. At converged
-    density ``m(B)`` is smooth -- 2.499, 2.274, 2.036, 1.837 mu_B at ``B = 0``,
-    -0.005, -0.010, -0.020 Ry -- which is what the secant rule steps on.
+    ``-1252`` mu_B/Ry between consecutive iterations. The gain is not what is
+    wrong: Elk's ``tau = 0.02`` against a measured ``1/chi`` of 0.022 is already
+    a Newton step. At converged density ``m(B)`` is smooth -- 2.499, 2.274,
+    2.036, 1.837 mu_B at ``B = 0``, -0.005, -0.010, -0.020 Ry -- which is what
+    the secant rule steps on.
+
+    **How long the ringing takes is itself chaotic, and the assertion below says
+    only what survives that.** Measured at 1380 iterations once and at 288
+    another time, and what separated the two runs was ``|psi|^2`` being evaluated
+    as ``Re(conj(psi) psi)`` rather than ``abs(psi)**2`` -- the same number to
+    **3.5 eps** (:func:`pypresso.scf.density.band_density`). A marginally damped
+    controller has no well-defined damping time at that resolution, so an earlier
+    ``secant.iterations * 5 < elk.iterations`` was asserting a number that does
+    not exist. Every *physics* assertion above is unaffected: both rules reach
+    the same field, the same energy and the same moment, which is what the test
+    is for.
     """
     _, secant = _fsm(pseudo_dir, "secant", 300)
     _, elk = _fsm(pseudo_dir, "elk", 2000)
@@ -283,5 +294,6 @@ def test_the_two_fixed_spin_moment_rules_find_the_same_field(pseudo_dir):
     assert secant.total_energy == pytest.approx(elk.total_energy, abs=1e-4)
     assert secant.magnetization == pytest.approx(2.0, abs=1e-3)
     assert elk.magnetization == pytest.approx(2.0, abs=1e-3)
-    # The point of the exercise.
-    assert secant.iterations * 5 < elk.iterations
+    # The point of the exercise: the secant rule is the cheaper path to the same
+    # fixed point. By how much is not assertable -- see the docstring.
+    assert secant.iterations < elk.iterations

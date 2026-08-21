@@ -41,6 +41,12 @@ SILICON = BENCHMARKS / "si-1k.in"
 #: bcc iron from a *small* starting moment: two self-consistent solutions, one
 #: of them unstable. See ``test_newton_krylov_reaches_an_unstable_solution``.
 IRON = BENCHMARKS / "fe-unstable.in"
+
+#: How far to kick the symmetric iron solution, in the atomic magnetization's
+#: shape. The middle of a *measured* window, not a tuned number: below 0.08
+#: mixing comes back too, above 0.12 Newton stops coming back -- see
+#: :func:`test_newton_krylov_reaches_an_unstable_solution`.
+KICK = 0.10
 IRON_NONMAGNETIC = BENCHMARKS / "fe-unstable-nonmagnetic.in"
 
 #: fcc nickel with U = 3 eV: the DFT+U counterpart of ``IRON``, and the case
@@ -198,32 +204,108 @@ def test_newton_krylov_reaches_an_unstable_solution():
     of the two calculations is shared. The difference between the two roots is
     iron's magnetic stabilisation energy, which is the number such a reference
     state exists to give.
+
+    **The state is perturbed away from the symmetric root and handed to both
+    solvers**, rather than both being started from the atomic superposition.
+    That is the protocol
+    :func:`test_a_hubbard_saddle_is_unstable_to_mixing_and_stable_to_newton`
+    uses, and it is the one ``PLAN.md`` P22 says is robust: from far away,
+    *which* root Newton-Krylov lands on depends on the inner-solve accuracy in
+    no systematic way, and no setting makes it otherwise.
+
+    **Why it had to be rewritten, and what the rewrite measured.** An earlier
+    version started both solvers from the atomic superposition, and it was
+    passing on a knife edge: changing how ``|psi|^2`` is evaluated --
+    ``Re(conj(psi) psi)`` rather than ``abs(psi)**2``, the same number to **3.5
+    eps** (:func:`pypresso.scf.density.band_density`) -- was enough to send
+    Newton to the ferromagnet instead. Rebuilding it around a perturbed root
+    then turned up something about the *physics* that P22 had got slightly
+    wrong. The symmetric solution of this cell is **not a saddle in the linear
+    sense**: it is metastable, with a finite basin, and the kick has to clear it.
+    Measured here, with the kick in the atomic magnetization's own shape (a
+    uniform ``1 +- eps`` scaling of the two channels is the wrong direction and
+    decays by a factor of 300):
+
+    ======  ====================  ====================
+    kick    mixing ends at        Newton ends at
+    ======  ====================  ====================
+    0.05    ``7e-6`` (comes back)  --
+    0.08    ``+3.4052``            ``-0.0003``
+    0.10    ``+3.4052``            ``+0.0007``
+    0.12    ``+3.4053``            ``+0.0009``
+    0.15    ``+3.4053``            ``+3.4052``
+    0.20    ``+3.4052``            ``-3.4052``
+    0.50    ``+3.4051``            ``+3.4052``
+    ======  ====================  ====================
+
+    So the demonstration lives in a **window**, and both of its edges are
+    physical rather than numerical: below ~0.08 the kick is inside the
+    symmetric root's basin and mixing returns to it too, and above ~0.12 the
+    perturbed state is nearer the ferromagnet than the symmetric root and Newton
+    converges on *that* -- which is what "converges on whichever root it started
+    nearest" means, said quantitatively. Three consecutive points in between
+    behave identically, which is what makes 0.10 a reproducible choice rather
+    than another knife edge.
+
+    "A root no mixer can hold" is still exactly true of the Hubbard saddle
+    below, whose 2% kick runs away. For iron the honest statement is a root no
+    mixer *reaches*, which Newton returns to from outside its basin.
     """
-    system, pseudos, _, _ = _setup(IRON)
-    mixed = run_scf(system, pseudos, calculation=Calculation(system, pseudos),
-                    conv_thr=1e-8, max_iterations=200)
-    newton = run_scf(
+    system, pseudos, calculation, _ = _setup(IRON)
+
+    # The saddle itself: a spin-symmetric density, which the SCF map preserves
+    # exactly -- nothing in it breaks spin symmetry on its own.
+    rho = np.asarray(calculation.starting_density())
+    symmetric = jnp.asarray(
+        np.repeat(rho.mean(axis=0, keepdims=True), rho.shape[0], axis=0)
+    )
+    saddle = run_scf(system, pseudos, calculation=Calculation(system, pseudos),
+                     conv_thr=1e-8, max_iterations=200,
+                     starting_density=symmetric)
+    assert saddle.converged
+    assert abs(float(saddle.magnetization)) < 1e-6
+
+    # ...and it is the non-magnetic solution, by an independent nspin = 1 run.
+    reference_system, reference_pseudos, _, _ = _setup(IRON_NONMAGNETIC)
+    reference = run_scf(
+        reference_system, reference_pseudos, conv_thr=1e-8, max_iterations=200,
+        calculation=Calculation(reference_system, reference_pseudos),
+    )
+    assert reference.converged
+    assert saddle.total_energy == pytest.approx(reference.total_energy, abs=1e-6)
+
+    # Kick it along the magnetization direction and hand the *same* perturbed
+    # state to both solvers. Both the **shape** and the **size** of the kick
+    # matter, and measuring them is what this test had to do to become
+    # reproducible -- see the docstring.
+    atomic = np.asarray(calculation.starting_density())
+    shape = atomic[0] - atomic[1]
+    shape = shape / np.abs(shape).max()
+    density = np.asarray(saddle.density)
+    kick = KICK * shape
+    kicked = jnp.asarray(np.stack([density[0] + 0.5 * kick, density[1] - 0.5 * kick]))
+    ran_away = run_scf(system, pseudos, calculation=Calculation(system, pseudos),
+                       conv_thr=1e-8, max_iterations=200,
+                       starting_density=kicked)
+    came_back = run_scf(
         system, pseudos, calculation=Calculation(system, pseudos), conv_thr=1e-8,
         max_iterations=200, scf_solver="newton-krylov",
         # ``kerker`` is load-bearing and not a tuning choice: see
         # ``test_an_inexact_newton_is_only_as_stability_blind_as_its_inner_solve``.
         scf_solver_options={"forcing": 0.5, "gmres_maxiter": 8,
                             "max_iterations": 12, "kerker": True},
-    )
-    reference_system, reference_pseudos, _, _ = _setup(IRON_NONMAGNETIC)
-    reference = run_scf(
-        reference_system, reference_pseudos, conv_thr=1e-8, max_iterations=200,
-        calculation=Calculation(reference_system, reference_pseudos),
+        starting_density=kicked,
     )
 
-    assert mixed.converged and newton.converged and reference.converged
-    # Mixing found the ground state...
-    assert abs(float(mixed.magnetization)) > 3.0
-    # ...and Newton found the saddle, which is a different solution of the same
-    # equations, not a failure to converge: its own residual is below conv_thr.
-    assert abs(float(newton.magnetization)) < 1e-2
-    assert newton.total_energy == pytest.approx(reference.total_energy, abs=1e-6)
-    assert mixed.total_energy < newton.total_energy - 0.02  # the stabilisation energy
+    assert ran_away.converged and came_back.converged
+    # Mixing amplified the kick into the ferromagnetic ground state -- which is
+    # *what makes the symmetric solution a saddle*...
+    assert abs(float(ran_away.magnetization)) > 3.0
+    # ...and Newton put it back, which no mixer can be made to do.
+    assert abs(float(came_back.magnetization)) < 1e-2
+    assert came_back.total_energy == pytest.approx(reference.total_energy, abs=1e-6)
+    # The gap between the two roots is iron's magnetic stabilisation energy.
+    assert ran_away.total_energy < came_back.total_energy - 0.02
 
 
 @pytest.mark.regression

@@ -2364,6 +2364,33 @@ as `tests/data/qe/reference.out.ph-*`. **The first version of this phase compare
 the committed numbers and reported 2.7e-4** — six times worse than the truth, and in the
 direction that hides a real disagreement rather than inventing one.
 
+**One change here reached outside the phase, and what it found was a correction to
+P22.** Writing `|psi|^2` as `Re(conj(psi) psi)` moves every density in this code by **3.5
+eps** — and that was enough to flip two knife-edge regression tests. Both were asserting
+path-dependent outcomes of dynamics P22 itself calls chaotic, and the fix was in the tests;
+but rebuilding one of them measured something P22 had stated slightly wrong.
+
+- **`test_newton_krylov_reaches_an_unstable_solution`** started both solvers from the
+  atomic superposition, which P22's own text says is the regime where *which* root Newton
+  lands on "depends on the inner-solve accuracy in no systematic way". Restructured to the
+  perturbed-root protocol the DFT+U nickel case already used, the iron result is:
+  **the symmetric solution is not a saddle in the linear sense — it is metastable, with a
+  finite basin.** A kick of 0.05 in the atomic magnetization's shape decays back to it, and
+  one of 0.20 runs away. So the demonstration lives in a window whose edges are both
+  physical: below ~0.08 mixing comes back too, above ~0.12 the perturbed state is nearer
+  the ferromagnet and Newton converges on *that*. Three points between behave identically.
+  "A root no mixer can hold" stays exactly true of the Hubbard saddle, whose 2% kick runs
+  away; for iron the honest statement is a root no mixer *reaches*.
+- **`test_the_two_fixed_spin_moment_rules_find_the_same_field`** asserted
+  `secant.iterations * 5 < elk.iterations`. Elk's damping time is itself chaotic at that
+  resolution — 1380 iterations once, 288 another time, separated by nothing but the 3.5 eps
+  — so the ratio was asserting a number that does not exist. Every *physics* assertion in it
+  (same field, same energy, same moment) was unaffected and is kept.
+
+The general lesson, which is P22's own and is now measured at eps scale: **a test that
+asserts which root a stability-blind solver finds, or how long a marginally damped
+controller rings for, is asserting a property of the arithmetic and not of the physics.**
+
 **Three things did have to be written down, and each was a trap.**
 
 - **`|psi|^2` is `Re(conj(psi) psi)`, not `abs(psi)**2`.** `abs`'s derivative is
