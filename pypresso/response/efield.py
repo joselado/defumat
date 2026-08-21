@@ -26,9 +26,9 @@ projectors' angular and radial derivatives -- and none of that is transcribed.
 The induced charge screens the field, so the perturbation seen by a state is the
 bare ``P_c r|psi>`` plus ``dV_scf drho`` applied to it, and the loop is
 
-    dpsi <- Sternheimer(P_c r|psi> + dV_scf |psi>)
-    drho <- sum_kn w_kn 2 Re[psi* dpsi] / Omega
-    dV_scf <- K drho,   mixed with the previous one
+    dpsi    <- Sternheimer(P_c r|psi> + dH_induced |psi>)
+    drho    <- d/dlambda rho[psi + lambda dpsi]
+    dV_scf  <- K drho,   mixed with the previous one
 
 ``K = dV_scf/drho`` is ``dv_of_drho.f90`` -- the Hartree kernel with its ``G=0``
 component dropped, plus ``f_xc`` -- and here it is **one ``jax.jvp`` of
@@ -52,8 +52,11 @@ dataset without a core charge that *is* the bare term.
 
 Silicon's is a difference of large numbers -- 4 against an electronic part near
 4.076 -- and by symmetry the answer would be zero in a converged calculation, so
-what the benchmark's -0.07568 measures is the residue. That makes it a sharper
-check of the machinery than the dielectric constant is.
+what ``ph.x``'s **-0.07571** measures is the residue. That makes it a sharper
+check of the machinery than the dielectric constant is. **It is norm-conserving
+only**, and refused by name otherwise: ``zstar_eu_us.f90`` is five further
+stages, and without them the expression above is wrong in sign as well as size
+(:func:`_require_born_charges`).
 
 The tensor itself is ``dielec.f90``:
 
@@ -81,10 +84,27 @@ dielectric tensor comes out with a diagonal of 13.848 against 13.806 and
 grid is closed exactly, and running one with the symmetrisation switched off is
 how this module is checked against itself.
 
-Everything the Sternheimer solver refuses is refused here for the same reasons
-(ultrasoft/PAW, metals, noncollinear, DFT+U) -- and a metal has no
-``epsilon_infinity`` to compute in any case, which is why ``pw.x`` refuses
-``epsil`` for one too.
+**Ultrasoft and PAW work, and the field is where they cost something extra.**
+Everywhere else in this phase they came free, because the density and ``newd``
+were already differentiable functions of the state and the potential
+(:mod:`pypresso.response.sternheimer`). The *position* operator is different: an
+ultrasoft state's charge is not all in ``|psi|^2``, and the part inside the
+augmentation spheres has a dipole of its own and moves with ``k``. That is
+``adddvepsi_us.f90``, transcribed in :func:`_ultrasoft_position`, and the
+augmentation dipole it needs is
+:func:`~pypresso.pseudo.augmentation.augmentation_dipole`. Two traps come with
+it and both are measured there and in ``PLAN.md`` P24a: the projector derivative
+is the one about the atom's *own centre* (worth 2%), and ``dbecsum`` on a wedge
+is a polar vector like everything else here (worth 1.6e-2 on PAW).
+
+Against the vendored ``ph.x``: **13.806646** against 13.806689 (norm-conserving
+Si), **14.325321** against 14.325270 (ultrasoft Si), **14.320211** against
+14.320177 (PAW Si) and **5.756059** against 5.756182 (ultrasoft C).
+
+What is still refused is what :func:`~pypresso.response.sternheimer.
+require_a_sternheimer_regime` refuses -- metals, noncollinear magnetism, DFT+U,
+spirals -- and a metal has no ``epsilon_infinity`` in any case, which is why
+``pw.x`` refuses ``epsil`` for one too.
 """
 
 from __future__ import annotations
