@@ -271,7 +271,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         raise ValueError(
             "constrained_magnetization requires nspin = 2 or noncolin = .true."
         )
-    if any(float(v) != 0.0 for v in pwin.indexed("system", "B_field", 3)) and (
+    if any(float(v) != 0.0 for v in pwin.indexed("system", "b_field", 3)) and (
         constrained_magnetization != "none"
     ):
         # ``input.f90:1614``: QE refuses the combination rather than deciding
@@ -352,7 +352,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         fixed_magnetization=tuple(
             float(v) for v in pwin.indexed("system", "fixed_magnetization", 3)
         ),
-        b_field=tuple(float(v) for v in pwin.indexed("system", "B_field", 3)),
+        b_field=tuple(float(v) for v in pwin.indexed("system", "b_field", 3)),
         atomic_b_field=_atomic_b_field(pwin, structure.nat),
         reducebf=float(pwin.get("system", "reducebf", 1.0)),
         integration_radii=tuple(

@@ -271,3 +271,75 @@ def test_the_potential_is_the_gradient_of_the_energy(density, cell, regions):
     scale = float(cell.volume) / density[0].size
     analytic = scale * float(jnp.sum(v * direction))
     assert finite == pytest.approx(analytic, rel=1e-6)
+
+
+def test_b_field_survives_the_input_file():
+    """``B_field`` in a namelist reaches ``System.b_field``.
+
+    It did not, for the whole of P18: ``build_system`` asked the parser for
+    ``"B_field"`` while the parser lowercases every namelist key, so the lookup
+    returned zeros and a run that asked for a uniform field quietly got none.
+    Nothing raised, the SCF converged, and the answer was the *unconstrained*
+    one -- which is the same failure mode the fixed-spin-moment docstring warns
+    about for a sign error, arrived at from the other direction.
+
+    Every test of the field machinery until now built :class:`MagneticField` in
+    Python, so the input path had no coverage at all. This is that path.
+    """
+    from pypresso.io.pwin import parse_pw_input
+    from pypresso.system import build_system
+
+    source = """ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 3, celldm(1) = 5.217, nat = 1, ntyp = 1, ecutwfc = 12.0
+    nspin = 2
+    starting_magnetization(1) = 0.5
+    B_field(3) = -0.02
+ /
+ &electrons
+ /
+ATOMIC_SPECIES
+ Fe 55.847 Fe.pz-nd-rrkjus.UPF
+ATOMIC_POSITIONS (alat)
+ Fe 0.0 0.0 0.0
+K_POINTS gamma
+"""
+    assert build_system(parse_pw_input(source)).b_field == (0.0, 0.0, -0.02)
+
+
+def test_b_field_with_a_constraint_is_refused():
+    """``input.f90:1614``'s refusal, which the same typo had disabled.
+
+    QE will not decide which of an external field and a constraint wins, and
+    neither does this -- but the check read the same misspelled key, so the
+    combination it exists to reject went through.
+    """
+    import pytest as _pytest
+
+    from pypresso.io.pwin import parse_pw_input
+    from pypresso.system import build_system
+
+    source = """ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 3, celldm(1) = 5.217, nat = 1, ntyp = 1, ecutwfc = 12.0
+    nspin = 2
+    starting_magnetization(1) = 0.5
+    B_field(3) = -0.02
+    constrained_magnetization = 'total'
+    lambda = 0.1
+    fixed_magnetization(3) = 2.0
+ /
+ &electrons
+ /
+ATOMIC_SPECIES
+ Fe 55.847 Fe.pz-nd-rrkjus.UPF
+ATOMIC_POSITIONS (alat)
+ Fe 0.0 0.0 0.0
+K_POINTS gamma
+"""
+    with _pytest.raises(ValueError, match="B_field"):
+        build_system(parse_pw_input(source))
