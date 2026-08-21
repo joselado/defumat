@@ -12,8 +12,12 @@ expression.
 ``sternheimer``
     ``(H - eps S) |dpsi> = -P_c dV|psi>`` by projected conjugate gradient, and
     the independent-particle susceptibility ``chi_0 = drho/dV`` built from it.
+``efield``
+    the response to a uniform electric field, and the dielectric tensor and Born
+    effective charges it gives.
 """
 
+from pypresso.response.efield import DielectricTensor, dielectric_tensor
 from pypresso.response.sternheimer import (
     SternheimerResult,
     SternheimerSolver,
@@ -28,10 +32,12 @@ from pypresso.response.velocity import (
 
 __all__ = [
     "BandVelocities",
+    "DielectricTensor",
     "SternheimerResult",
     "SternheimerSolver",
     "VelocityOperator",
     "band_velocities",
+    "dielectric_tensor",
     "local_perturbation",
     "make_sternheimer",
 ]

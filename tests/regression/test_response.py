@@ -7,7 +7,16 @@ machinery with it:
   central difference of the band structure. ``dH/dk`` comes from one ``jvp`` of
   ``H(k)`` at a frozen sphere and the reference comes from diagonalising at
   ``k +- h``, so the only thing the two have in common is the Hamiltonian
-  itself.
+  itself. It is checked once more against a *symmetry* statement, which shares
+  nothing with either: at ``Gamma`` an inversion-symmetric crystal has states of
+  definite parity, so every band velocity is exactly zero.
+* **the Sternheimer solve** (:mod:`pypresso.response.sternheimer`) against a
+  central difference of the density under the same perturbation, and its
+  composition with the screening kernel against P22's own finite-difference SCF
+  Jacobian -- at *that* difference's optimal step, which is not its default one.
+* **the electric field** (:mod:`pypresso.response.efield`) against ``ph.x``'s
+  committed ``ph_base/si.phG.in`` benchmark, and against itself on the one
+  k-grid where the symmetrisation it needs can be switched off.
 
 The finite-difference reference has one failure mode worth knowing about, and it
 is the reference's rather than the operator's: eigenvalues come back **sorted**,
@@ -20,11 +29,10 @@ a diagonal expectation value is basis-dependent anyway (rule D4).
 from functools import lru_cache
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-
-import jax
 
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf

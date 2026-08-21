@@ -33,8 +33,12 @@ import numpy as np
 
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
-from pypresso.response import VelocityOperator, local_perturbation, make_sternheimer
-from pypresso.response.efield import dielectric_tensor
+from pypresso.response import (
+    VelocityOperator,
+    dielectric_tensor,
+    local_perturbation,
+    make_sternheimer,
+)
 from pypresso.scf import Calculation, run_scf
 from pypresso.system import build_system
 from pypresso.system.kpoints import KPoints
