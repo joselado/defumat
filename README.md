@@ -18,29 +18,48 @@ outputs for around a hundred cases.
 
 ## What it can do today
 
-* **Self-consistent field calculations** — total energies, broken down the same
-  way `pw.x` prints them.
-* **Band structures** along a k-point path.
-* **Metals and insulators**, with every smearing scheme Quantum ESPRESSO offers
-  (Gaussian, Methfessel-Paxton, Marzari-Vanderbilt, Fermi-Dirac).
-* **Norm-conserving, ultrasoft and PAW pseudopotentials** in the UPF format.
-* **LDA and GGA functionals** — Perdew-Zunger and Perdew-Wang, PBE, revPBE and
-  PBEsol — taken from the pseudopotential's own header, or from `input_dft`.
-* **Densities of states**, by smearing or by any of the three tetrahedron
-  methods, which also work as an occupation scheme inside the SCF.
-* **Collinear spin polarisation**, with one Fermi level or two, and
-  **spin-orbit coupling** with two-component spinor wavefunctions.
-* **DFT+U** — the simplified rotationally-invariant Hubbard correction, with `U`,
-  `J0`, `alpha` and `beta`, on atomic or Löwdin-orthogonalised atomic
-  projectors, read from the same `HUBBARD` card `pw.x` reads.
-* **Forces**, by differentiating the total energy rather than by evaluating
-  hand-derived expressions — and **structural relaxation** on top of them, with
-  the same BFGS, trust radius and line search Quantum ESPRESSO uses.
-* Crystal symmetry, automatic k-point grids reduced to the irreducible wedge,
-  and gamma-only calculations.
+The right-hand column says where each feature comes from. **"`pw.x`"** means
+Quantum ESPRESSO has it and this reproduces its numbers against a reference
+output; **"new"** means it has no counterpart in `pw.x` at all, and is validated
+some other way — against Elk, against a supercell calculation of the same
+physics, or against an identity the answer has to satisfy. In between are the
+rows where the *quantity* is Quantum ESPRESSO's and the *route to it* is not.
+
+The middle column is the input-file variable that controls the feature, where
+there is one — it means what it means in a `pw.x` input — and the Python entry
+point where there is not.
+
+| Feature | How to ask for it | In Quantum ESPRESSO? |
+|---|---|---|
+| **Self-consistent field**, with the energy broken down term by term | `calculation = 'scf'` | `pw.x` |
+| **Band structures** on a k-point path, at fixed density | `run_bands` | `pw.x` + `bands.x` |
+| **Densities of states** — smearing, and all three tetrahedron methods | `run_dos`, `pypresso dos` | `pw.x` + `dos.x` |
+| **Tetrahedron occupations inside the SCF**, not only in the DOS | `occupations = 'tetrahedra'`, `'tetrahedra_lin'`, `'tetrahedra_opt'` | `pw.x` |
+| **Smearing**: Gaussian, Methfessel-Paxton, Marzari-Vanderbilt, Fermi-Dirac | `occupations = 'smearing'`, `smearing`, `degauss` | `pw.x` |
+| **Norm-conserving, ultrasoft and PAW** pseudopotentials (UPF v2 only) | `ATOMIC_SPECIES` | `pw.x` |
+| **LDA and GGA**: Perdew-Zunger, Perdew-Wang, PBE, revPBE, PBEsol | `input_dft`, or the UPF header | `pw.x` |
+| **Crystal symmetry** and k-grids reduced to the irreducible wedge | `K_POINTS automatic` | `pw.x` |
+| **Collinear spin**, with one Fermi level or two | `nspin = 2`, `tot_magnetization` | `pw.x` |
+| **Spin-orbit coupling**, two-component spinors, `j`-resolved projectors | `lspinorb` | `pw.x` |
+| **Noncollinear magnetism** as a vector, with the magnetic symmetry group | `noncolin` | `pw.x` |
+| **Constrained moments** — all four of QE's schemes | `constrained_magnetization` | `pw.x` |
+| **A uniform magnetic field** over the cell | `B_field` | `pw.x` |
+| **DFT+U** — Dudarev's functional with `U`, `J0`, `alpha`, `beta`, on `atomic`, `ortho-atomic` or `norm-atomic` projectors | `HUBBARD` card | `pw.x` |
+| **Forces**, and their six contributions separately | `compute_forces` | `pw.x` — but computed by differentiating the energy, with QE's hand-derived terms kept beside them as a cross-check |
+| **Structural relaxation** — BFGS with QE's trust radius and line search | `calculation = 'relax'`, `pypresso relax` | `pw.x` |
+| **Fixed-spin-moment**, driven by feedback rather than by a penalty | `constrained_magnetization = 'fsm'` | new — Elk's (`bfieldfsm.f90`) |
+| **A field inside one atom's sphere**, and Elk's `reducebf` | `LOCAL_MAGNETIC_FIELDS` card | new — Elk's `bfcmt`; `pw.x` has no counterpart |
+| **Spin spirals** by the generalized Bloch theorem, at any wavevector, without a supercell | `spiral_q`, `pypresso spiral` | new — Elk has it, `pw.x` does not |
+| **Relaxing the spiral wavevector** down `dE/dq` to the ground-state pitch | `relax_spiral_q` | new |
+| **Berry curvature**, on a plane-wave mesh or from `jacfwd` of a model `H(k)` | `run_berry_curvature` | new — QE has the Berry *phase* (`bp_c_phase`), not the curvature |
+| **Chern numbers**, exact integers by the Fukui-Hatsugai-Suzuki lattice sum | `run_berry_curvature` | new |
+| **Z2 invariants** in 2D and 3D, by Wannier-charge-centre flow *and* by Fu-Kane parities | `run_z2`, `run_z2_3d` | new |
 
 Not yet: the stress (and so variable-cell relaxation), the projected density of
-states, and phonons. A functional or a combination that is not
+states, and phonons. `K_POINTS gamma` runs, but at an explicit k = 0 with the
+full G sphere — the half-sphere storage the gamma-point trick exists for is
+generated and not consumed, so the answer is the same and the cost is twice the
+plane waves, and the run says so. A functional or a combination that is not
 implemented is refused with an error naming what *is*, rather than quietly
 replaced by something that is.
 
@@ -134,6 +153,11 @@ without being run, and each has a plain-text `.md` version beside it.
 | [`07_spin_polarization`](notebooks/07_spin_polarization.ipynb) | LSDA: exchange splitting, nickel's magnetic moment, and constraining the magnetization |
 | [`08_spin_orbit_coupling`](notebooks/08_spin_orbit_coupling.ipynb) | Spinors, `j`-resolved projectors, platinum's 5d splitting, and a quantum spin Hall insulator |
 | [`09_forces_and_relaxation`](notebooks/09_forces_and_relaxation.ipynb) | Forces as one gradient of the energy, checked against Quantum ESPRESSO term by term, and a structure relaxing back onto its lattice site |
+| [`10_topological_invariants`](notebooks/10_topological_invariants.ipynb) | Berry curvature from one overlap rather than a derivative, Chern numbers that are exact integers, and Z2 by two independent routes |
+| [`11_noncollinear_magnetism_and_fields`](notebooks/11_noncollinear_magnetism_and_fields.ipynb) | Magnetism as a vector, bcc iron against Quantum ESPRESSO, and magnetic fields and constrained moments |
+| [`12_spin_spirals`](notebooks/12_spin_spirals.ipynb) | Two plane-wave spheres instead of one, three identities that validate them against calculations that are not spirals, and an `E(q)` magnon dispersion |
+| [`13_dft_plus_u`](notebooks/13_dft_plus_u.ipynb) | The Hubbard correction as a penalty on fractional occupation, nickel four ways, antiferromagnetic FeO, and `force_hub` falling out of the gradient |
+| [`14_spiral_relaxation`](notebooks/14_spiral_relaxation.ipynb) | `dE/dq`: which terms of the energy a spiral's wavevector touches, and a BFGS walking a hydrogen chain to its ground-state pitch |
 
 `benchmarks/` holds ready-to-run input files, from a two-atom silicon cell up to
 a sixteen-atom one.

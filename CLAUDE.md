@@ -234,6 +234,27 @@ Two reasons, both of which constrain how code is written:
 Performance matters. It does not have to be optimal in the first version, but no design
 choice should make good performance unreachable without a rewrite.
 
+## The README's feature table
+
+`README.md` carries a table of every implemented feature, with the input variable or entry
+point that reaches it and a column saying whether Quantum ESPRESSO has it at all — `pw.x`,
+or `new` for the ones with no counterpart there (the spin spirals, the spiral relaxation,
+the topological invariants, Elk's fields). It is the only place that distinction is written
+down for a reader who is not going to read `PLAN.md`, and it is what tells someone
+evaluating the code whether it is a reimplementation or an extension.
+
+**Every new feature adds a row, and every removed or renamed one edits its row.** Same
+standing requirement as the notebooks: a phase is not finished until its row exists. Two
+things make the table go stale silently and both have already happened once, so check them:
+
+- **The provenance column is a claim about the Fortran**, not a guess. Before writing
+  `pw.x`, find the routine; before writing `new`, grep the vendored tree for it. "QE
+  probably has this" is how a wrong row gets in.
+- **The entry-point column is a claim about *this* code.** Check the variable is actually
+  read (`grep` it in `io/pwin.py` and `system/builder.py`) and the function actually
+  exported. A row naming `tprnfor` when nothing parses it, or `UPF v1` when the reader
+  refuses anything but v2, is worse than no row — both were in the first draft of the table.
+
 ## Tutorial notebooks
 
 `notebooks/` holds worked examples on concrete systems — the readable counterpart to the
