@@ -1969,8 +1969,19 @@ it on bcc iron. From `starting_magnetization = 0.05`, on the same cell and the s
 Anderson amplifies the small moment into the ferromagnetic ground state, which is the
 *stable* fixed point and the physically right answer for a ground-state calculation.
 Newton-Krylov, given the same start, collapses the moment and converges on the **non-magnetic
-solution** — a fixed point of the SCF that is a saddle of the energy in the magnetization
-direction, and one no mixer can be made to hold. **The validation is free and independent:**
+solution** — a fixed point of the SCF that no mixer *reaches* from a physical start.
+
+> **Corrected at P24a.** This paragraph originally called that solution a saddle "one no
+> mixer can be made to hold". It is not a saddle in the linear sense: it is **metastable,
+> with a finite basin**, and mixing holds it perfectly well once it is in it — a kick of
+> 0.05 in the atomic magnetization's shape decays back to it, and one of 0.20 runs away.
+> The measurement is in P24a, and it was forced by a **3.5 eps** change in how `|psi|^2`
+> is evaluated flipping the test that made this claim. The saddle language *is* right for
+> the DFT+U nickel case below, whose 2% kick runs away. It is also why the table's Newton
+> column is a number this phase should not have asserted from a distant start: P22's own
+> warning, three paragraphs down, says which root that finds is not systematic.
+
+**The validation is free and independent:**
 that `nspin = 2` energy has to equal a plain `nspin = 1` run's on the same cell, and it
 agrees to 4.3e-10 Ry. The 64 mRy between the two rows is iron's magnetic stabilisation
 energy, which is the quantity such a reference state exists to give — on a 2x2x2 k-grid

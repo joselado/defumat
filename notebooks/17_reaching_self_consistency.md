@@ -17,6 +17,7 @@ saddle of the energy and the reference a magnetic stabilisation energy is quoted
 
 ```python
 from pathlib import Path
+import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -160,20 +161,48 @@ So on cost the answer is Kerker, and `mixing` stays the default.
 ## What the Jacobian is worth: an unstable solution
 
 Iron has two self-consistent solutions at this geometry. The ferromagnetic one is the ground
-state; the non-magnetic one is a fixed point of the same equations that happens to be a
-*saddle* of the energy in the magnetization direction. Damped mixing is a relaxation
-dynamics, so from a small starting moment it runs downhill into the stable one and cannot be
-made to stop at the other. Newton is stability-blind: it converges on whichever root it
-started nearest.
+state; the non-magnetic one is a fixed point of the same equations that damped mixing never
+*reaches*, because mixing is a relaxation dynamics and from a physical starting moment it
+runs downhill into the stable one. Newton is stability-blind: it converges on whichever root
+it started nearest.
+
+**"Nearest" is the operative word, and it has to be arranged rather than hoped for.** An
+earlier version of this notebook started both solvers from the atomic superposition and read
+off the two answers. That is the one regime where *which* root Newton finds is not
+reproducible: a **3.5 eps** change in how `|psi|^2` is evaluated was later enough to send it
+to the ferromagnet instead. So the state is perturbed away from the symmetric root and the
+*same* perturbed state is handed to both — which is the protocol the DFT+U case below uses,
+and it makes the two solvers do visibly opposite things rather than merely land in different
+places.
+
+Doing it that way also measures something: this non-magnetic solution is **not a saddle** in
+the linear sense but **metastable, with a finite basin**. A kick of 0.05 (in the atomic
+magnetization's own shape) decays back to it under mixing; 0.20 runs away. The window where
+mixing leaves and Newton returns is 0.08 to 0.12.
 
 
 ```python
 iron, iron_pseudos = load("fe-unstable.in")
 options = dict(conv_thr=1e-8, max_iterations=200)
 
-mixed = run_scf(iron, iron_pseudos, calculation=Calculation(iron, iron_pseudos), **options)
+# The symmetric root: nothing in the SCF breaks spin symmetry on its own.
+calculation = Calculation(iron, iron_pseudos)
+rho = np.asarray(calculation.starting_density())
+symmetric = jnp.asarray(np.repeat(rho.mean(axis=0, keepdims=True), rho.shape[0], axis=0))
+root = run_scf(iron, iron_pseudos, calculation=Calculation(iron, iron_pseudos), **options,
+               starting_density=symmetric)
+
+# Kick it out of its basin, in the direction the instability lives in, and hand the
+# *same* perturbed state to both solvers.
+shape = rho[0] - rho[1]
+shape = shape / np.abs(shape).max()
+base = np.asarray(root.density)
+kicked = jnp.asarray(np.stack([base[0] + 0.05 * shape, base[1] - 0.05 * shape]))
+
+mixed = run_scf(iron, iron_pseudos, calculation=Calculation(iron, iron_pseudos), **options,
+                starting_density=kicked)
 saddle = run_scf(iron, iron_pseudos, calculation=Calculation(iron, iron_pseudos), **options,
-                 scf_solver="newton-krylov",
+                 starting_density=kicked, scf_solver="newton-krylov",
                  scf_solver_options={"forcing": 0.5, "gmres_maxiter": 8,
                                      "max_iterations": 12, "kerker": True})
 
@@ -182,7 +211,7 @@ nonmagnetic, nm_pseudos = load("fe-unstable-nonmagnetic.in")
 reference = run_scf(nonmagnetic, nm_pseudos, **options,
                     calculation=Calculation(nonmagnetic, nm_pseudos))
 
-print(f"{'from starting_magnetization = 0.05':<40} {'E (Ry)':>15} {'m (mu_B)':>10}")
+print(f"{'from the same kicked symmetric root':<40} {'E (Ry)':>15} {'m (mu_B)':>10}")
 print(f"{'  Anderson, nspin = 2':<40} {mixed.total_energy:15.8f} "
       f"{float(mixed.magnetization):10.4f}")
 print(f"{'  Newton-Krylov, nspin = 2':<40} {saddle.total_energy:15.8f} "
@@ -195,12 +224,12 @@ print(f"iron's magnetic stabilisation energy = "
       f"{1000 * (saddle.total_energy - mixed.total_energy):.1f} mRy")
 ```
 
-    from starting_magnetization = 0.05                E (Ry)   m (mu_B)
-      Anderson, nspin = 2                       -55.44642602     3.4053
-      Newton-Krylov, nspin = 2                  -55.38228995    -0.0003
+    from the same kicked symmetric root               E (Ry)   m (mu_B)
+      Anderson, nspin = 2                       -55.44642602     3.4052
+      Newton-Krylov, nspin = 2                  -55.38228996     0.0007
       nspin = 1 (independent reference)         -55.38228995         --
     
-    Newton's root matches the nspin = 1 reference to 4.3e-10 Ry
+    Newton's root matches the nspin = 1 reference to 1.5e-08 Ry
     iron's magnetic stabilisation energy = 64.1 mRy
 
 

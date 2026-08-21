@@ -43,8 +43,11 @@ import numpy as np
 
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
-from pypresso.response import VelocityOperator, local_perturbation, make_sternheimer
-from pypresso.response.efield import dielectric_tensor
+from pypresso.response import (
+    VelocityOperator,
+    dielectric_tensor,
+    make_sternheimer,
+)
 from pypresso.scf import Calculation, run_scf
 from pypresso.system import build_system
 from pypresso.system.kpoints import KPoints
@@ -180,7 +183,7 @@ grid = calculation.basis.dense.grid
 lattice = np.stack(np.meshgrid(*[np.arange(n) / n for n in grid], indexing="ij"), axis=-1)
 probe = jnp.asarray(np.cos(2.0 * np.pi * (lattice @ np.array([1, 0, 0])))[None])
 
-solution = solver.solve(local_perturbation(calculation, probe))
+solution = solver.solve(solver.perturbation(probe))
 response = solver.response_density(solution.dpsi)
 
 print(f"{solution.iterations} CG iterations, residual {solution.residual:.1e}")
