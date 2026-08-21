@@ -243,6 +243,12 @@ the topological invariants, Elk's fields). It is the only place that distinction
 down for a reader who is not going to read `PLAN.md`, and it is what tells someone
 evaluating the code whether it is a reimplementation or an extension.
 
+**The rows are physics, not knobs.** A row is a thing someone would want to compute — total
+energies, bands, densities of states, forces, relaxation, magnetism, DFT+U, the invariants —
+not an implementation setting underneath one. Smearing is the example: it belongs inside the
+row about metals, not in a row of its own. A new feature adds *one* row, named by the
+quantity it produces; its variants, schemes and internal terms go in `PLAN.md`.
+
 **Every new feature adds a row, and every removed or renamed one edits its row.** Same
 standing requirement as the notebooks: a phase is not finished until its row exists. Two
 things make the table go stale silently and both have already happened once, so check them:
@@ -262,7 +268,15 @@ test suite. **Every new feature adds a notebook or extends an existing one; a ph
 finished until its notebook exists.** Demonstrate on the two-atom silicon cell from
 `test-suite/pw_scf/scf.in` wherever possible, compare against the committed QE benchmark
 whenever the reference contains the quantity, and commit the notebook executed so it reads
-without being run. Each notebook also has a `.md` export committed beside it — raw `.ipynb` is unreadable in a
+without being run.
+
+**A notebook is five minutes long, and it has a figure.** Header saying what this computes
+and the headline number against QE; the shortest code that runs it; **one plot that shows
+the physics** — a band structure wherever the feature shows in bands; one comparison table;
+at most one "how it works" cell for the single best idea; a footer pointing at the `PLAN.md`
+phase entry and the test file. About eight code cells. The derivations, the trap catalogue
+and the per-case validation tables belong in `PLAN.md` and in the tests, not here, and an
+expensive sweep is measured once offline and *quoted* rather than run. Each notebook also has a `.md` export committed beside it — raw `.ipynb` is unreadable in a
 plain editor or a diff — regenerated together with the notebook by `tools/export_notebooks.sh`.
 `notebooks/README.md` holds the index and the full conventions.
 

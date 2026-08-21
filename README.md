@@ -31,29 +31,28 @@ point where there is not.
 
 | Feature | How to ask for it | In Quantum ESPRESSO? |
 |---|---|---|
-| **Self-consistent field**, with the energy broken down term by term | `calculation = 'scf'` | `pw.x` |
-| **Band structures** on a k-point path, at fixed density | `run_bands` | `pw.x` + `bands.x` |
-| **Densities of states** — smearing, and all three tetrahedron methods | `run_dos`, `pypresso dos` | `pw.x` + `dos.x` |
-| **Tetrahedron occupations inside the SCF**, not only in the DOS | `occupations = 'tetrahedra'`, `'tetrahedra_lin'`, `'tetrahedra_opt'` | `pw.x` |
-| **Smearing**: Gaussian, Methfessel-Paxton, Marzari-Vanderbilt, Fermi-Dirac | `occupations = 'smearing'`, `smearing`, `degauss` | `pw.x` |
-| **Norm-conserving, ultrasoft and PAW** pseudopotentials (UPF v2 only) | `ATOMIC_SPECIES` | `pw.x` |
-| **LDA and GGA**: Perdew-Zunger, Perdew-Wang, PBE, revPBE, PBEsol | `input_dft`, or the UPF header | `pw.x` |
-| **Crystal symmetry** and k-grids reduced to the irreducible wedge | `K_POINTS automatic` | `pw.x` |
-| **Collinear spin**, with one Fermi level or two | `nspin = 2`, `tot_magnetization` | `pw.x` |
-| **Spin-orbit coupling**, two-component spinors, `j`-resolved projectors | `lspinorb` | `pw.x` |
-| **Noncollinear magnetism** as a vector, with the magnetic symmetry group | `noncolin` | `pw.x` |
-| **Constrained moments** — all four of QE's schemes | `constrained_magnetization` | `pw.x` |
-| **A uniform magnetic field** over the cell | `B_field` | `pw.x` |
-| **DFT+U** — Dudarev's functional with `U`, `J0`, `alpha`, `beta`, on `atomic`, `ortho-atomic` or `norm-atomic` projectors | `HUBBARD` card | `pw.x` |
-| **Forces**, and their six contributions separately | `compute_forces` | `pw.x` — but computed by differentiating the energy, with QE's hand-derived terms kept beside them as a cross-check |
+| **Total energies**, self-consistently, broken down term by term — insulators and metals alike | `calculation = 'scf'` | `pw.x` |
+| **Band structures** along a path through the Brillouin zone | `run_bands` | `pw.x` + `bands.x` |
+| **Densities of states**, by smearing or by tetrahedra | `run_dos`, `pypresso dos` | `pw.x` + `dos.x` |
+| **Forces on the atoms** | `compute_forces` | `pw.x` — but by differentiating the energy, with QE's hand-derived terms kept beside them as a cross-check |
 | **Structural relaxation** — BFGS with QE's trust radius and line search | `calculation = 'relax'`, `pypresso relax` | `pw.x` |
-| **Fixed-spin-moment**, driven by feedback rather than by a penalty | `constrained_magnetization = 'fsm'` | new — Elk's (`bfieldfsm.f90`) |
-| **A field inside one atom's sphere**, and Elk's `reducebf` | `LOCAL_MAGNETIC_FIELDS` card | new — Elk's `bfcmt`; `pw.x` has no counterpart |
-| **Spin spirals** by the generalized Bloch theorem, at any wavevector, without a supercell | `spiral_q`, `pypresso spiral` | new — Elk has it, `pw.x` does not |
+| **Magnetism**, collinear, with one Fermi level or two | `nspin = 2`, `tot_magnetization` | `pw.x` |
+| **Magnetism as a vector** — noncollinear, with the magnetic symmetry group | `noncolin` | `pw.x` |
+| **Spin-orbit coupling**, two-component spinors and `j`-resolved projectors | `lspinorb` | `pw.x` |
+| **Magnetic fields and constrained moments** — all four of QE's schemes | `B_field`, `constrained_magnetization` | `pw.x` |
+| **Magnetic fields inside one atom's sphere**, and a field that fades away | `LOCAL_MAGNETIC_FIELDS` card, `reducebf`, `constrained_magnetization = 'fsm'` | new — Elk's `bfcmt`, `reducebf` and `bfieldfsm.f90`; `pw.x` has no counterpart |
+| **DFT+U** — Dudarev's functional with `U`, `J0`, `alpha`, `beta` | `HUBBARD` card | `pw.x` |
+| **Spin spirals** at any wavevector, without a supercell | `spiral_q`, `pypresso spiral` | new — Elk has it, `pw.x` does not |
 | **Relaxing the spiral wavevector** down `dE/dq` to the ground-state pitch | `relax_spiral_q` | new |
-| **Berry curvature**, on a plane-wave mesh or from `jacfwd` of a model `H(k)` | `run_berry_curvature` | new — QE has the Berry *phase* (`bp_c_phase`), not the curvature |
-| **Chern numbers**, exact integers by the Fukui-Hatsugai-Suzuki lattice sum | `run_berry_curvature` | new |
-| **Z2 invariants** in 2D and 3D, by Wannier-charge-centre flow *and* by Fu-Kane parities | `run_z2`, `run_z2_3d` | new |
+| **Berry curvature and Chern numbers**, the latter exact integers on any mesh | `run_berry_curvature` | new — QE has the Berry *phase* (`bp_c_phase`), not the curvature |
+| **Z2 invariants** in 2D and 3D, by Wannier charge centres *and* by parities | `run_z2`, `run_z2_3d` | new |
+| **Pseudopotentials**: norm-conserving, ultrasoft and PAW (UPF v2) | `ATOMIC_SPECIES` | `pw.x` |
+| **Functionals**: LDA and GGA — Perdew-Zunger, Perdew-Wang, PBE, revPBE, PBEsol | `input_dft`, or the UPF header | `pw.x` |
+
+The variants under each row — which smearing or tetrahedron method fixes the
+occupations, which projectors DFT+U uses, which of the four constraint
+schemes — are chosen with the same input variables as in `pw.x`, and
+`PLAN.md` lists them phase by phase.
 
 Not yet: the stress (and so variable-cell relaxation), the projected density of
 states, and phonons. `K_POINTS gamma` runs, but at an explicit k = 0 with the
