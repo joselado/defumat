@@ -135,7 +135,16 @@ def test_generated_case_matches_qe(pseudo_dir, case):
 
     stress = compute_stress(calculation, result)
     assert stress.tensor == pytest.approx(np.asarray(reference.stress), abs=STRESS)
-    assert stress.pressure_kbar == pytest.approx(reference.pressure, abs=1e-2)
+    # The pressure is the tensor's own trace, so it is held to the *same*
+    # tolerance and not to an invented second one: comparing it against QE's
+    # printed ``P=`` at 0.01 kbar is a bound of 7e-8 Ry/bohr^3, tighter than the
+    # tensor is asked to meet and tighter than the DFT+U case's own floor
+    # (PLAN.md P11 trap 5). What it does check is that ``Stress.pressure``
+    # really is ``tr sigma / 3`` in the unit it claims.
+    assert stress.pressure == pytest.approx(
+        float(np.trace(np.asarray(reference.stress)) / 3.0), abs=STRESS
+    )
+    assert stress.pressure_kbar == pytest.approx(reference.pressure, abs=1.0)
 
 
 @pytest.mark.parametrize(("directory", "name"), BORROWED)
@@ -350,16 +359,33 @@ def test_the_frozen_energy_at_zero_strain_is_the_scf_total(pseudo_dir):
 
 
 def test_tstress_puts_the_tensor_on_the_result(pseudo_dir):
-    """``run_scf(tstress=True)`` is QE's ``&control`` switch, and it is honoured."""
-    system = build_system(read_pw_input(CASES / "si2-nc-stress.in"))
-    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
-    plain = run_scf(system, pseudos, conv_thr=1e-8)
-    assert plain.stress is None
+    """``tstress`` is QE's ``&control`` switch, and all three of its states work.
 
-    asked = run_scf(system, pseudos, conv_thr=1e-8, tstress=True)
+    The input decides by default, an explicit argument overrides it either way.
+    The first version of this test asked whether a run of ``si2-nc-stress.in``
+    with no argument had *no* stress -- which was right before ``run_scf``
+    started reading the input and wrong afterwards, and is exactly the thing
+    worth pinning down now.
+    """
+    system = build_system(read_pw_input(CASES / "si2-nc-stress.in"))
+    assert system.tstress
+    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
     reference = read_qe_output(CASES / "reference.out.si2-nc-stress")
-    assert asked.stress is not None
-    assert asked.stress.tensor == pytest.approx(np.asarray(reference.stress), abs=STRESS)
+
+    # The input says yes and nothing overrides it.
+    from_input = run_scf(system, pseudos, conv_thr=1e-8)
+    assert from_input.stress is not None
+    assert from_input.stress.tensor == pytest.approx(
+        np.asarray(reference.stress), abs=STRESS
+    )
+
+    # An explicit False wins over the input...
+    assert run_scf(system, pseudos, conv_thr=1e-8, tstress=False).stress is None
+
+    # ...and an explicit True wins over an input that does not ask.
+    quiet = dataclasses.replace(system, tstress=False)
+    assert run_scf(quiet, pseudos, conv_thr=1e-8).stress is None
+    assert run_scf(quiet, pseudos, conv_thr=1e-8, tstress=True).stress is not None
 
 
 def test_an_input_asking_for_an_impossible_stress_warns_rather_than_raising(pseudo_dir):
