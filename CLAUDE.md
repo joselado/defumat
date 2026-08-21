@@ -266,6 +266,14 @@ and **Born effective charges** follow, matching `ph.x`'s `ph_base/si.phG.in` ben
 2.7e-4 on `epsilon_infinity` (13.806646 against 13.806375) and to the five decimals it
 prints on `Z*` (-0.075715 against -0.07568).
 
+**The three layers do not share a pseudopotential coverage.** The velocity operator works
+on norm-conserving, ultrasoft *and* PAW datasets — everything ultrasoft adds to `H` and `S`
+is already a differentiable function of `k` — with the one condition that PAW's `ddd_paw`
+is handed in, since it is built from `becsum` and multiplies `vkb(k)`, and a PAW
+calculation without it is refused rather than run 2% wrong. Everything from the Sternheimer
+solve upwards, including the dielectric constant, is **norm-conserving only**: a response
+needs the augmentation charge's *own* response, which is a layer this phase does not have.
+
 **The trap is that a response is direction-dependent and must be symmetrised as a polar
 vector**, and the escape from that does not work where it looks like it should: running the
 *whole* k-grid instead of a wedge is only sound if the grid is closed under the point group,

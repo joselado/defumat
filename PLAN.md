@@ -2219,17 +2219,27 @@ Three things fall out that are not obvious until the gradient is written:
 - **The overlap carries a velocity too.** `S(k) = 1 + sum |beta(k)> q <beta(k)|` has the
   same `k` in it, so the band velocity is the *generalised* Hellmann-Feynman derivative
   `<psi|dH/dk - eps dS/dk|psi>` — `commutator_Hx_psi`'s ultrasoft correction, from the
-  same `jvp`. Ultrasoft comes along rather than being refused.
+  same `jvp`. **Ultrasoft and PAW both come along rather than being refused**, and PAW
+  adds nothing to the differentiation and one thing to the *setup*: `ddd_paw` is built
+  from `becsum` rather than from the density, and since it multiplies `vkb(k)` it belongs
+  to `dH/dk` as much as to `H`. Handing it in is not optional and is not defaulted —
+  the first version of `band_velocities` passed `None` and was **2% wrong** on PAW
+  silicon (1.7e-2 Ry/bohr against 8.7e-7) while printing a velocity that looked
+  ordinary, so the constructor now refuses it, exactly as it refuses a Hubbard `U`
+  without its `ns`.
 - **Nothing dense is ever formed.** `dH/dk` as a matrix is `npw^2`, the same reason a dense
   diagonalisation is a test fixture here. One `jvp` per cartesian direction gives
   `v_a|psi>` for every band at every k-point; the three are separate calls because a
   `jacfwd` would hold three tangents of `vkb` at once.
 
 *Check met:* against a central difference of the band structure at a generic k-point,
-**1.2e-6 Ry bohr** norm-conserving and **8.6e-7** ultrasoft, both at a step where that is
-the difference's own truncation error. `dS/dk` is identically zero for the norm-conserving
-dataset and 1.5e-2 for the ultrasoft one, which is what makes the second case a test of
-anything. (The finite difference has one failure mode of its own, and it is the
+**1.2e-6 Ry bohr** norm-conserving, **8.6e-7** ultrasoft and **8.7e-7** PAW, all at a step
+where that is the difference's own truncation error. `dS/dk` is identically zero for the
+norm-conserving dataset and 1.5e-2 for the ultrasoft one, which is what makes the second
+case a test of anything; the third is what the `ddd_paw` guard above rests on. A fourth
+check shares nothing with any of them: at `Gamma` an inversion-symmetric crystal has states
+of definite parity, so every band velocity is exactly zero, and what comes out is 1e-4 —
+the eigensolver's tolerance. (The finite difference has one failure mode of its own, and it is the
 reference's: eigenvalues come back **sorted**, so a step straddling a band crossing
 compares two different bands and disagrees by the band width — 0.21 Ry bohr at `h = 1e-3`
 against 1.2e-6 at `1e-4`.)
@@ -2324,6 +2334,14 @@ printed: `E = -15.830647095` Ry and `epsilon = 23.608844285` from both, with ani
 1e-14. (That `epsilon` is nowhere near 13.8 because an unshifted grid includes Gamma,
 where silicon's gap is smallest and the response largest, and 4^3 points do not average it
 away. It is a property of the k-sample, not of the method.)
+
+**The three layers do not have the same pseudopotential coverage, and the split is worth
+stating plainly.** The *velocity operator* works on all three kinds — norm-conserving,
+ultrasoft and PAW — because everything ultrasoft adds to `H` and `S` is already a
+differentiable function of `k`. The *Sternheimer solve* and everything above it are
+**norm-conserving only**, because a response is not a state: `chi_0` needs the response of
+the augmentation charge as well as of `|psi|^2`, and that is machinery this phase does not
+have.
 
 **Refused rather than approximated**, each by name and each because the missing piece is
 invisible in the answer: **ultrasoft and PAW** (the response density needs `dbecsum` and

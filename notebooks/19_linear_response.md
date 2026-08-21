@@ -114,6 +114,17 @@ The ultrasoft case is the one that means something. $S(k) = 1 + \sum |\beta(k)\r
 *generalised* Hellmann–Feynman derivative and $dS/dk$ is part of it. It comes out of the
 same `jvp`, without a branch: exactly zero for norm-conserving, 1.5e-2 for ultrasoft.
 
+**PAW works too, at 8.7e-7, with one thing that has to be handed in.** Its one-centre
+coefficients $D^{\rm PAW}_{ij}$ are built from `becsum` rather than from the density, and
+because they multiply $\beta(k)$ they belong to $dH/dk$ as much as to $H$. Leaving them
+out costs 2% — 1.7e-2 Ry bohr on a velocity of 0.90 — while printing a number that looks
+entirely ordinary, so `VelocityOperator` refuses a PAW calculation without them rather
+than returning it.
+
+The layers above are a different story: **the Sternheimer solve and the dielectric
+constant are norm-conserving only**. A response needs the augmentation charge's *own*
+response as well as $|\psi|^2$'s, and that is refused by name rather than approximated.
+
 
 ```python
 x = np.asarray(path.path_length)
