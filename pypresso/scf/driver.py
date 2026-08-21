@@ -731,13 +731,6 @@ class Calculation:
         # which is what rule R7's padding, the vmap over k and the stick layout
         # all rest on.
         self.spiral = bool(system.spiral)
-        #: The spiral wavevector this calculation's *arrays* were built at, when
-        #: it is a traced one. ``None`` in every ordinary calculation, where the
-        #: system's static ``spiral_q`` is the whole story; set only by
-        #: ``at_spiral_q(..., rebuild_basis=False)``, which is how the derivative
-        #: with respect to ``q`` reaches the arrays without the static field --
-        #: which decides array lengths -- having to hold a tracer.
-        self.spiral_q_traced = None
         self.basis_kpoints = (
             spiral_kpoints(system.kpoints, system.spiral_q, system.cell)
             if self.spiral else system.kpoints
@@ -1377,13 +1370,14 @@ class Calculation:
         moved.__dict__.pop("_spiral_gradient", None)
 
         if not rebuild_basis:
-            # ``spiral_q`` stays a *static* field and static fields cannot hold
-            # a tracer, so the traced wavevector is carried beside the system
-            # rather than inside it. The system's own ``spiral_q`` is left at
-            # the value the frozen basis belongs to, which is what every
-            # host-side consumer of it (array lengths, the ``spiral`` flag,
-            # reporting) should see.
-            moved.spiral_q_traced = q_crystal
+            # ``spiral_q`` stays a *static* field -- static fields cannot hold a
+            # tracer, and this one decides array lengths -- so the system is
+            # left at the wavevector the frozen basis belongs to and only the
+            # arrays move. **The returned calculation's ``system.spiral_q`` is
+            # therefore not where its arrays are**, which is exactly right for
+            # every host-side consumer of it (array lengths, the ``spiral``
+            # flag) and wrong for anything that reports it. The caller here is
+            # the differentiated energy, which never reads it back.
             planewaves = self.basis.planewaves
             kcart = spiral_kcart(self.system.kpoints, q_crystal, cell)
             moved.kinetic = planewaves.kinetic(smooth, self.basis_kpoints, cell, kcart)
@@ -1403,8 +1397,6 @@ class Calculation:
             self.system, spiral_q=tuple(float(v) for v in q_crystal)
         )
         moved.system = system
-        moved.spiral_q_traced = None
-
         moved.basis_kpoints = spiral_kpoints(system.kpoints, system.spiral_q, cell)
         planewaves = build_plane_wave_basis(
             smooth, moved.basis_kpoints, cell, system.ecutwfc
