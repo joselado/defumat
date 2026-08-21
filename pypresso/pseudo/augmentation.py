@@ -60,7 +60,8 @@ from pypresso.system.cell import Cell
 from pypresso.system.structure import Structure
 from pypresso.units import FPI
 
-__all__ = ["AugmentationCharge", "build_augmentation", "radial_augmentation_transforms"]
+__all__ = ["AugmentationCharge", "augmentation_dipole", "build_augmentation",
+           "radial_augmentation_transforms"]
 
 
 class AugmentationCharge(eqx.Module):
@@ -160,6 +161,76 @@ def _species_integrals(qgm, potential_g, phases, volume):
     """``Omega * Re sum_G conj(Q_ij(G)) V(G) e^{+i G tau_a}``."""
     shifted = potential_g[None, :] * jnp.conj(phases)  # (nat, ngm)
     return volume * jnp.real(jnp.einsum("ijg,ag->aij", jnp.conj(qgm), shifted))
+
+
+def augmentation_dipole(pseudo: Pseudopotential) -> np.ndarray:
+    """``dpqq``: the augmentation charge's dipole, ``(3, nh, nh)`` in bohr.
+
+    ``PW/src/compute_qdipol.f90``.
+
+        dpqq^a_ij = int Q_ij(r) r_a dr
+
+    about the atom's own centre, in cartesian components. It is zero for a
+    norm-conserving species and is what makes the *position* operator of an
+    ultrasoft calculation differ from ``r``: the charge an ultrasoft state
+    carries is not all in ``|psi|^2``, and the part inside the augmentation
+    sphere has a dipole of its own.
+
+    **Only ``L = 1`` contributes**, which is the whole reason this is a
+    thirty-line function rather than a transform: ``r_a`` is an ``l = 1``
+    harmonic, so the angular integral kills every multipole of ``Q_ij`` but one,
+    and what is left is a single radial moment ``int r^3 Q^{L=1}_{nm}(r) dr``
+    (``qfuncl`` already carrying the ``r^2``) times the harmonic product
+    ``ap[LM, lm_i, lm_j]`` the augmentation charge is built from anyway.
+
+    **It is not a derivative of** :func:`pypresso.topology.augmentation.
+    augmentation_at_q`, though it is one mathematically -- ``dpqq^a =
+    i d/dq_a [int Q(r) e^{-i q.r} dr]`` at ``q = 0``. That form factor is
+    written as a radial function of ``|q|`` times a harmonic of ``q/|q|``, and
+    at the origin those two are ``0`` and ``infinity``: the product is smooth and
+    the factorisation is not, so a ``jvp`` there is ``NaN``. The closed form
+    below is the same number without the coordinate singularity, which is the
+    trap :func:`pypresso.basis.gvectors.modulus` documents, met once more.
+    """
+    channels = projector_channels(pseudo)
+    nh = len(channels)
+    dipole = np.zeros((3, nh, nh))
+    if not pseudo.is_ultrasoft or nh == 0:
+        return dipole
+    augmentation = pseudo.augmentation
+    if augmentation is None or augmentation.qfuncl is None:
+        raise NotImplementedError(
+            f"{pseudo.element}: the augmentation charge is stored in the pre-2.0 "
+            "qfcoef form, which is not implemented"
+        )
+    if augmentation.qfuncl.shape[2] <= 1:
+        return dipole  # no L = 1 channel: every dipole vanishes by parity
+
+    # ``int r^3 Q^{L=1}_{nm}(r) dr``, per pair of radial projectors. The triangle
+    # rule and parity decide which pairs have an L = 1 channel at all.
+    kkbeta = pseudo.kkbeta
+    radius = np.asarray(pseudo.r[:kkbeta])
+    weights = np.asarray(simpson_weights(jnp.asarray(pseudo.rab[:kkbeta])))
+    angular = [projector.l for projector in pseudo.projectors]
+    moment = np.zeros((pseudo.nbeta, pseudo.nbeta))
+    for nb in range(pseudo.nbeta):
+        for mb in range(pseudo.nbeta):
+            l_n, l_m = angular[nb], angular[mb]
+            if abs(l_n - l_m) <= 1 <= l_n + l_m and (1 + l_n + l_m) % 2 == 0:
+                function = np.asarray(augmentation.qfuncl[nb, mb, 1, :kkbeta])
+                moment[nb, mb] = float(np.sum(weights * radius * function))
+
+    ap = harmonic_products(pseudo.lmax)
+    beta_of = np.array([nb for nb, _, _ in channels])
+    lm_of = np.array([lm for _, _, lm in channels])
+    # QE's ``lp`` in 1-based ``lm``: 3 for x, 4 for y, 2 for z -- one less here,
+    # and ``fact`` changes sign for z because ``Y_10`` is the one with no
+    # ``(x + iy)`` in it. ``compute_qdipol``'s ``fact = -sqrt(4 pi / 3)``.
+    factor = -np.sqrt(FPI / 3.0)
+    for axis, (lp, sign) in enumerate(((2, 1.0), (3, 1.0), (1, -1.0))):
+        coefficients = ap[lp][np.ix_(lm_of, lm_of)]
+        dipole[axis] = sign * factor * coefficients * moment[np.ix_(beta_of, beta_of)]
+    return dipole
 
 
 def radial_augmentation_transforms(

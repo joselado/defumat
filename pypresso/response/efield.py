@@ -96,13 +96,14 @@ import jax.numpy as jnp
 import numpy as np
 
 from pypresso.batching import map_k
+from pypresso.pseudo.augmentation import augmentation_dipole
 from pypresso.response.sternheimer import (
     SternheimerSolver,
-    local_perturbation,
+    paw_response,
     require_a_sternheimer_regime,
 )
 from pypresso.response.velocity import VelocityOperator, over_kpoints
-from pypresso.system.symmetry import symmetrize_matrix
+from pypresso.system.symmetry import cartesian_rotations, symmetrize_matrix
 from pypresso.units import FPI
 
 __all__ = ["DielectricTensor", "dielectric_tensor"]
@@ -163,6 +164,7 @@ def dielectric_tensor(
     wavefunctions,
     eigenvalues,
     density,
+    becsum=(),
     alpha_mix: float = ALPHA_MIX,
     tr2: float = TR2,
     max_iterations: int = MAX_ITERATIONS,
@@ -181,6 +183,10 @@ def dielectric_tensor(
         wavefunctions: ``(nspin, nk, nbnd, ndim)`` from the converged run.
         eigenvalues: ``(nspin, nk, nbnd)`` or the squeezed ``(nk, nbnd)``.
         density: the converged density, which the fixed potential is built from.
+        becsum: the converged projector occupations (``SCFResult.becsum``).
+            Required for an ultrasoft or PAW dataset and empty otherwise: PAW's
+            one-centre coefficients are built from it and cannot be rebuilt from
+            the density.
     """
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
@@ -191,56 +197,81 @@ def dielectric_tensor(
     weights, _ = calculation.occupations(eigenvalues)
     nocc = int(round(calculation.nelec / 2))
     potential = calculation.potential(density)
-    hamiltonians = calculation.hamiltonian(potential.v_scf)
+    # PAW's one-centre coefficients are built from ``becsum``, which is why the
+    # caller has to supply it: it is part of the mixed state and not a function
+    # of the density.
+    _, ddd_paw = calculation.onecenter(becsum)
+    hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw)
     solver = SternheimerSolver(
         calculation, hamiltonians, wavefunctions, eigenvalues, jnp.asarray(weights),
-        nocc, threshold,
+        nocc, threshold, v_scf=potential.v_scf, becsum=becsum,
     )
 
     # 1. The bare perturbation, once: ``P_c r_a |psi>`` for the three cartesian
     #    directions. The commutator is computed for the whole k axis in three
     #    ``jvp`` calls and *stored*; taking it inside the per-k callback would
     #    differentiate every k-point's projectors to use one of them.
-    velocity = VelocityOperator(calculation, potential.v_scf)
+    velocity = VelocityOperator(calculation, potential.v_scf, solver.ddd_paw)
     occupied = solver.psi
     occupied_eigenvalues = solver.eigenvalues
+    dipole = _augmentation_dipole(calculation)
     bare = []
-    for axis in np.eye(3):
+    for axis, direction in enumerate(np.eye(3)):
         # ``[H - eps S, r_a] = -i (dH/dk_a - eps dS/dk_a)``, both tangents from
         # one ``jvp`` -- the projector rebuild they share is the whole cost.
-        derivative, overlap = velocity.both(occupied, axis)
+        derivative, overlap = velocity.both(occupied, direction)
         commutator = -1j * (
             derivative - occupied_eigenvalues[..., None] * overlap
         )
-        bare.append(_solve_stored(solver, commutator))
+        position = _solve_stored(solver, commutator)
+        if dipole is not None:
+            position = _ultrasoft_position(
+                solver, velocity, position, direction, dipole[axis]
+            )
+        bare.append(position)
 
     # 2. The self-consistent loop. Only the induced term changes between
     #    iterations; the bare one above is what the whole loop is driven by.
     grid_shape = jnp.asarray(density).shape
     dvscf = jnp.zeros((3,) + grid_shape)
     drho = jnp.zeros((3,) + grid_shape)
+    # PAW's one-centre coefficients respond too, and they are *not* a function
+    # of the density: they come from ``becsum``. They are therefore carried and
+    # mixed beside ``dvscf`` rather than rebuilt from it, exactly as
+    # ``dfpt_kernels`` carries ``int3_paw`` beside ``dvscfin``.
+    onecentre = None if solver.ddd_paw is None else jnp.zeros(
+        (3,) + solver.ddd_paw.shape
+    )
     history, total_iterations, solves = [], 0, 0
     dpsi = [None, None, None]
     converged = False
 
     for iteration in range(max_iterations):
-        response = []
+        response, becsum_response = [], []
         for axis in range(3):
             perturbation = _bare_plus_induced(
-                calculation, bare[axis], dvscf[axis], iteration > 0
+                solver, bare[axis], dvscf[axis],
+                None if onecentre is None else onecentre[axis],
+                iteration > 0,
             )
             solution = solver.solve(perturbation)
             dpsi[axis] = solution.dpsi
             total_iterations += solution.iterations
             solves += 1
             response.append(solver.response_density(solution.dpsi))
+            if onecentre is not None:
+                becsum_response.append(solver.response_becsum(solution.dpsi))
+
 
         # ``psymdvscf(drhop)``: the three responses are symmetrised *together*,
         # after the loop over directions and before the kernel, because a
         # rotation mixes them.
         symmetrised = calculation.symmetrize_directional(jnp.stack(response))
         drho = symmetrised
-        induced = []
+        # ``PAW_dusymmetrize``: the same average one level down, on the three
+        # ``becsum`` responses, which PAW's one-centre potential is built from.
+        becsum_response = _symmetrize_becsum_response(calculation, becsum_response)
+        induced, induced_onecentre = [], []
         for axis in range(3):
             # ``dv_of_drho``: the Hartree kernel without its G = 0 component,
             # plus f_xc -- one jvp of the potential this code already writes.
@@ -250,6 +281,11 @@ def dielectric_tensor(
                 (symmetrised[axis],),
             )
             induced.append(dv)
+            if onecentre is not None:
+                # ``PAW_dpotential``, from the same becsum response.
+                induced_onecentre.append(
+                    paw_response(calculation, becsum_response[axis], solver.becsum)
+                )
 
         proposed = jnp.stack(induced)
         change = float(jnp.sum((proposed - dvscf) ** 2))
@@ -257,15 +293,18 @@ def dielectric_tensor(
         if verbose:
             print(f"  iter {iteration + 1}: |ddv_scf|^2 = {change:.3e}")
         dvscf = dvscf + alpha_mix * (proposed - dvscf)
+        if onecentre is not None:
+            proposed_onecentre = jnp.stack(induced_onecentre)
+            onecentre = onecentre + alpha_mix * (proposed_onecentre - onecentre)
         if change < tr2:
             converged = True
             break
 
     epsilon = _assemble(calculation, solver, bare, dpsi)
-    charges = (
-        _born_charges(calculation, solver, potential.v_scf, dpsi)
-        if born_charges else None
-    )
+    charges = None
+    if born_charges:
+        _require_born_charges(calculation)
+        charges = _born_charges(calculation, solver, potential.v_scf, dpsi)
     return DielectricTensor(
         epsilon=epsilon,
         born_charges=charges,
@@ -295,15 +334,85 @@ def _solve_stored(solver, rhs):
     return jnp.stack(blocks)
 
 
-def _bare_plus_induced(calculation, bare_axis, dv, include_induced: bool):
-    """``P_c r|psi> + dV_scf|psi>``, as ``sternheimer_kernel`` assembles it."""
+def _augmentation_dipole(calculation):
+    """``dpqq`` as the ``(3, nkb, nkb)`` block matrix a projection contracts against.
+
+    ``None`` for a norm-conserving run, where the augmentation charge -- and so
+    its dipole -- does not exist.
+    """
+    if not calculation.is_ultrasoft:
+        return None
+    per_species = [augmentation_dipole(pseudo) for pseudo in calculation.pseudos]
+    blocks = []
+    for values, atoms in zip(per_species, calculation.augmentation.species_atoms):
+        nh = values.shape[-1]
+        blocks.append(jnp.asarray(np.broadcast_to(
+            values[None], (len(atoms), 3, nh, nh)
+        )))
+    # ``block_matrix`` puts one atom's channels on the diagonal; the three
+    # cartesian components ride along as a leading axis of each block.
+    return jnp.stack([
+        calculation.augmentation.block_matrix(
+            tuple(None if b.shape[0] == 0 else b[:, axis] for b in blocks)
+        )
+        for axis in range(3)
+    ])
+
+
+def _ultrasoft_position(solver, velocity, position, direction, dipole):
+    """``dvpsi_e``'s ultrasoft tail: ``S P_c r|psi>`` plus the augmentation dipole.
+
+    ``P_c r|psi>`` is what the linear solve above returns, and for an ultrasoft
+    dataset it is not what the polarization is built from. QE's comment says it
+    plainly: *"In the US case we obtain P_c x |psi>, but we need P_c^+ x |psi>,
+    therefore we apply S again, and then subtract the additional term;
+    furthermore we add the term due to dipole of the augmentation charges."*
+    ``adddvepsi_us.f90``, which is Eq. 10 of Dal Corso and Mauri:
+
+        |chi_a> = S P_c r_a |psi> + sum_ij |beta_i> [ i q_ij <d(beta_j)/dk_a|psi>
+                                                    + dpqq^a_ij <beta_j|psi> ]
+
+    Both new terms exist because an ultrasoft state's charge is not all in
+    ``|psi|^2``: part of it sits in the augmentation spheres, and that part has a
+    dipole (``dpqq``) and moves with ``k`` (``d(beta)/dk``). On a norm-conserving
+    dataset ``q_ij`` and ``dpqq`` are both zero and this whole function is the
+    identity -- which is why it is applied only when ``qq`` exists.
+    """
+    calculation = solver.calculation
+    batch = calculation.k_batch
+    derivative = velocity.projectors(direction)   # (nk, npwx, nkb)
+    vkb = calculation.projectors.vkb
+    dipole = dipole.astype(vkb.dtype)
+    blocks = []
+    for spin, hamiltonian in enumerate(solver.hamiltonians):
+        states = solver.psi[spin]
+
+        def one_k(ik, hamiltonian=hamiltonian, states=states, spin=spin):
+            overlapped = hamiltonian.apply_s(position[spin][ik], ik)
+            qq = hamiltonian.projectors.qq.astype(vkb.dtype)
+            becp1 = jnp.einsum("gk,ng->nk", vkb[ik].conj(), states[ik])
+            becp2 = jnp.einsum("gk,ng->nk", derivative[ik].conj(), states[ik])
+            coefficients = 1j * (becp2 @ qq.T) + becp1 @ dipole.T
+            return overlapped + jnp.einsum("gk,nk->ng", vkb[ik], coefficients)
+
+        blocks.append(map_k(one_k, jnp.arange(states.shape[0]), batch=batch))
+    return jnp.stack(blocks)
+
+
+def _bare_plus_induced(solver, bare_axis, dv, dddd_paw, include_induced: bool):
+    """``P_c r|psi> + dH_induced|psi>``, as ``sternheimer_kernel`` assembles it.
+
+    The induced part is not simply ``dV_scf(r)|psi>`` once the dataset is
+    ultrasoft: it carries ``int3`` and, for PAW, the one-centre response as well
+    (:func:`~pypresso.response.sternheimer.local_perturbation`).
+    """
     if not include_induced:
         return lambda psi, ik, spin: bare_axis[spin][ik]
 
-    local = local_perturbation(calculation, dv)
+    induced = solver.perturbation(dv, dddd_paw)
 
     def perturbation(psi, ik, spin):
-        return bare_axis[spin][ik] + local(psi, ik, spin)
+        return bare_axis[spin][ik] + induced(psi, ik, spin)
 
     return perturbation
 
@@ -358,7 +467,10 @@ def _born_charges(calculation, solver, v_scf, dpsi) -> np.ndarray:
 
     def h_psi(moved_positions):
         moved = calculation.at_positions(moved_positions)
-        hamiltonians = moved.hamiltonian(v_scf)
+        # PAW's one-centre coefficients are constant under a displacement --
+        # ``becsum`` is frozen with the states -- but they have to be *in* the
+        # operator being differentiated, or the bare term is the wrong operator's.
+        hamiltonians = moved.hamiltonian(v_scf, solver.ddd_paw)
         return jnp.stack([
             over_kpoints(hamiltonian, psi[spin], batch)
             for spin, hamiltonian in enumerate(hamiltonians)
@@ -387,6 +499,55 @@ def _born_charges(calculation, solver, v_scf, dpsi) -> np.ndarray:
         charges, calculation.system.cell, calculation.symmetries,
         atom_mapping(calculation.system.cell, structure, calculation.symmetries),
     )
+
+
+def _symmetrize_becsum_response(calculation, per_axis):
+    """``PAW_dusymmetrize`` on the three directions' ``dbecsum``.
+
+    A no-op when there is nothing to symmetrise -- no PAW species, or a run
+    with no symmetry, where the k-grid carries it instead.
+    """
+    if not per_axis or calculation._becsum_symmetry is None:
+        return per_axis
+    rotations = cartesian_rotations(calculation.system.cell, calculation.symmetries)
+    stacked = tuple(
+        None if per_axis[0][species] is None
+        else jnp.stack([per_axis[axis][species] for axis in range(3)])
+        for species in range(len(per_axis[0]))
+    )
+    symmetrised = calculation._becsum_symmetry.apply_directional(stacked, rotations)
+    return [
+        tuple(None if values is None else values[axis] for values in symmetrised)
+        for axis in range(3)
+    ]
+
+
+def _require_born_charges(calculation) -> None:
+    """Born charges are norm-conserving only, and the gap is large enough to see.
+
+    ``zstar_eu.f90`` is the whole story for a norm-conserving dataset, and for an
+    ultrasoft one it is not: ``zstar_eu_us.f90`` adds five stages on top, needing
+    the density response to an *ionic* displacement (``iudrhous``), the pre-``S``
+    position operator (``iucom``), ``dvkb3``, ``psidspsi`` and the ``int1``/
+    ``int2`` integrals. None of that is here.
+
+    It is refused rather than returned because the error is not subtle: on the
+    ultrasoft silicon of ``si-epsilon-us.in`` the norm-conserving expression
+    gives **+0.1625** where ``ph.x`` gives **-0.07945**, so it is wrong in sign
+    as well as size. The dielectric constant on the same run is right to 5e-5 --
+    the two quantities share the field response and nothing else.
+    """
+    if calculation.is_ultrasoft:
+        raise NotImplementedError(
+            "Born effective charges with an ultrasoft or PAW pseudopotential are "
+            "not implemented: zstar_eu_us.f90's five extra stages (the ionic "
+            "displacement's own density response, the pre-S position operator, "
+            "dvkb3, psidspsi, int1/int2) are missing, and without them the "
+            "norm-conserving expression is wrong in sign as well as size "
+            "(+0.1625 against ph.x's -0.07945 on si-epsilon-us.in). Pass "
+            "born_charges=False for the dielectric tensor alone, which *is* "
+            "right for these datasets"
+        )
 
 
 def _require_a_symmetrisable_response(calculation) -> None:

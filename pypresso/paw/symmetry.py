@@ -149,6 +149,45 @@ class BecsumSymmetry:
             )
         return tuple(out)
 
+    def apply_directional(self, becsum, rotations) -> tuple:
+        """``PAW_dusymmetrize``: three ``becsum`` responses that form a vector.
+
+        The counterpart of :meth:`~pypresso.scf.driver.Calculation.
+        symmetrize_directional` one level down. A linear response to a
+        perturbation along a *direction* is not three independent ``becsum``
+        responses: an operation rotates the directions into each other as well as
+        permuting the atoms and rotating the harmonics, so the wedge average is
+
+            dbecsum_a <- (1/N) sum_S R_ab (operator_S . dbecsum_b[S^-1 atom]).
+
+        It is the magnetization branch of :meth:`apply` with the **plain**
+        cartesian rotation in place of the signed one -- an induced charge is a
+        polar vector where a magnetization is axial. Getting that wrong is worth
+        1.6e-2 on the dielectric constant of PAW silicon, against the 5e-5 the
+        rest of the machinery reaches.
+
+        Args:
+            becsum: per species, ``(3, nspin, nat_t, nh, nh)`` -- the cartesian
+                direction leading.
+            rotations: ``(nsym, 3, 3)`` cartesian, unsigned
+                (:func:`~pypresso.system.symmetry.cartesian_rotations`).
+        """
+        if self.nsym <= 1:
+            return becsum
+        rotations = jnp.asarray(rotations)
+        out = []
+        for values, operator, sources in zip(becsum, self.operators, self.mapping):
+            if values is None or operator is None:
+                out.append(values)
+                continue
+            gathered = values[:, :, sources]  # (3, nspin, nsym, nat_t, nh, nh)
+            out.append(
+                jnp.einsum(
+                    "sijkl,scd,dzsnkl->cznij", operator, rotations, gathered
+                ) / self.nsym
+            )
+        return tuple(out)
+
 
 def build_becsum_symmetry(
     pseudos, structure, cell, symmetries: Symmetries, nspin_mag: int = 1

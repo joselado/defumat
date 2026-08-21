@@ -182,6 +182,49 @@ class VelocityOperator:
         """
         return self._tangent(psi, direction, overlap=True)
 
+    def projectors(self, direction) -> jnp.ndarray:
+        """The projectors' derivative **about their own atom**, ``(nk, npwx, nkb)``.
+
+        ``gen_us_dj`` and ``gen_us_dy``, which ``commutator_Hx_psi`` combines by
+        hand into ``dvkb1 + dvkb (k+G).vpol/|k+G|`` -- the angular derivative
+        plus the radial one along the unit vector -- and here the tangent of
+        ``vkb`` under the same ``jvp`` everything else in this module uses, so
+        the split into angular and radial never has to be made.
+
+        **With one term taken back out, and it is a trap.** ``vkb`` carries the
+        structure factor ``e^{-i(k+G).tau}``, so the true ``d(vkb)/dk_a``
+        contains ``-i tau_a vkb``; QE's two routines differentiate the radial and
+        angular parts and leave the structure factor alone, so what they build is
+        the derivative *about the atom's own centre*. Everywhere else that
+        distinction is invisible, because a projector always appears as
+        ``|beta_i> D_ij <beta_j|`` and the two ``tau`` terms cancel between the
+        ket and the bra -- which is why the velocity operator itself never had to
+        care. Here a *single* projector derivative is contracted with a state,
+        the cancellation does not happen, and the ``tau`` term is the difference
+        between the right answer and one that is 2% too large.
+
+        It is wanted only by an ultrasoft electric field, whose position operator
+        carries ``<d(beta)/dk|psi>`` beside the augmentation dipole, and the two
+        are on the same convention: ``dpqq`` is also about the atom's centre.
+        """
+        tangent = jnp.broadcast_to(
+            jnp.asarray(direction, dtype=self.kcart.dtype), self.kcart.shape
+        )
+
+        def build(kcart):
+            moved = self.calculation.at_kcart(kcart)
+            return moved.projectors.vkb
+
+        _, derivative = jax.jvp(build, (self.kcart,), (jnp.asarray(tangent),))
+
+        projectors = self.calculation.projectors
+        if projectors.nkb == 0:
+            return derivative
+        positions = np.asarray(self.calculation.system.structure.positions)
+        along = positions @ np.asarray(direction, dtype=float)  # tau . e_a, bohr
+        shift = jnp.asarray(along[list(projectors.atom_of_channel)])
+        return derivative + 1j * shift * projectors.vkb
+
     def both(self, psi: jnp.ndarray, direction):
         """``(dH/dk_a |psi>, dS/dk_a |psi>)`` from **one** ``jvp``.
 

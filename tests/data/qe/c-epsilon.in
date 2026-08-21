@@ -1,0 +1,31 @@
+! Diamond carbon with an ultrasoft pseudopotential -- QE's own
+! test-suite/ph_base/c.scf.in, the ground state its `c.phG.in` computes a
+! dielectric constant of with `epsil = .true.`.
+!
+! The second ultrasoft case, and the independent one: a different element, a
+! different cutoff pair (27/300 rather than 20/160) and a different lattice
+! constant from si-epsilon-us.in, so agreeing on both is not agreeing twice on
+! the same arithmetic.
+!
+! The `nr1`/`nr2`/`nr3` lines of the original are dropped: they force a 32^3 FFT
+! grid, which is what `ecutrho = 300` gives here anyway, and pypresso does not
+! read them.
+ &control
+    calculation='scf',
+ /
+ &system
+    ibrav = 2, celldm(1) =6.74, nat=  2, ntyp= 1,
+    ecutwfc = 27.0
+    ecutrho = 300.0
+ /
+ &electrons
+    mixing_beta = 0.7
+    conv_thr =  1.0d-9
+ /
+ATOMIC_SPECIES
+ C   12.0107  C.pz-rrkjus.UPF
+ATOMIC_POSITIONS (alat)
+ C  0.00 0.00 0.00
+ C  0.25 0.25 0.25
+K_POINTS AUTOMATIC
+4 4 4 1 1 1

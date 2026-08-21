@@ -361,19 +361,15 @@ def test_the_exact_jacobian_agrees_with_the_finite_difference_one():
     assert relative < JACOBIAN_RELATIVE
 
 
-@pytest.mark.parametrize(
-    "case, expected",
-    [
-        ("si2-us", "ultrasoft"),
-        ("al-tetrahedra", "occupations"),
-    ],
-)
+@pytest.mark.parametrize("case, expected", [("al-tetrahedra", "occupations")])
 def test_the_regimes_without_a_response_here_are_refused_by_name(case, expected):
     """A response this module cannot compute raises rather than approximating.
 
-    Both would otherwise be silently wrong: an ultrasoft ``drho`` missing the
-    augmentation charge's own response looks entirely plausible, and the
-    insulator projector applied to a metal is the wrong operator with no symptom.
+    The insulator projector applied to a metal is the wrong operator with no
+    symptom at all: ``orthogonalize``'s smearing branch replaces the sharp
+    projector with occupation-difference weights, and the Fermi level shifts.
+    (Ultrasoft and PAW *were* on this list and are not any more -- they are
+    implemented and checked above.)
     """
     from pypresso.scf import Calculation
 

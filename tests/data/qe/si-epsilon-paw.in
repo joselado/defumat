@@ -1,0 +1,35 @@
+! The silicon of si-epsilon.in with a PAW pseudopotential.
+!
+! Same cell, same k-grid, same wedge -- only the dataset changes, so the three
+! files together isolate what ultrasoft and PAW add to a linear response: the
+! augmentation charge's own response inside `drho` (`addusdbec`,
+! `lr_addusddens`), the change `int3` that a perturbing potential makes to
+! `D_ij` (`newdq`), the augmentation charge's *dipole* inside the position
+! operator (`compute_qdipol`, `adddvepsi_us`), and -- for PAW -- the
+! one-centre potential's response to `becsum` (`PAW_dpotential`).
+!
+! `ecutrho` is 8 x `ecutwfc` rather than 4: the augmentation charge is sharply
+! peaked and is not representable on a dual-4 grid, and it is exactly that
+! separation of the two grids the norm-conserving case never exercises.
+!
+! The reference is regenerated with the vendored `ph.x` rather than taken from
+! a committed benchmark, because there is no committed `epsil` case on a
+! non-magnetic PAW or ultrasoft silicon at all.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 160.0
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-n-kjpaw_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 1 1 1

@@ -43,7 +43,17 @@ def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.nd
     """
     def one_band(arrays):
         state, weight = arrays
-        return weight * jnp.abs(g_to_r(state, fft_index, grid)) ** 2
+        field = g_to_r(state, fft_index, grid)
+        # ``|psi|^2`` as ``Re(conj(psi) psi)`` and not as ``abs(psi)**2``. The two
+        # are the same number to a rounding, and only one of them is
+        # differentiable: ``abs``'s derivative is ``Re(conj z t)/|z|``, which is
+        # ``0/0`` wherever the field vanishes, and a wavefunction has nodes *on
+        # grid points* by symmetry. One of them poisons the whole density with
+        # NaN. It is :func:`pypresso.basis.gvectors.modulus`'s trap in a second
+        # place, and it is only reachable once the density is differentiated with
+        # respect to the *states* -- which is what a linear response does
+        # (:mod:`pypresso.response.sternheimer`).
+        return weight * jnp.real(jnp.conj(field) * field)
 
     # One band at a time, as ``sum_band.f90`` accumulates them: a band's
     # real-space box is the working set (:mod:`pypresso.batching`).
@@ -185,7 +195,12 @@ def spinor_band_density(psi, fft_index, grid, weights, cell: Cell, nspin_mag: in
         )
     up, down = field[:, 0], field[:, 1]
 
-    charge = jnp.abs(up) ** 2 + jnp.abs(down) ** 2
+    # ``Re(conj(z) z)`` rather than ``abs(z)**2``, for the reason in
+    # :func:`band_density`: the two are the same number and only one has a
+    # derivative at a node.
+    up_density = jnp.real(jnp.conj(up) * up)
+    down_density = jnp.real(jnp.conj(down) * down)
+    charge = up_density + down_density
     if nspin_mag == 1:
         stacked = charge[None]
     else:
@@ -194,7 +209,7 @@ def spinor_band_density(psi, fft_index, grid, weights, cell: Cell, nspin_mag: in
             charge,
             2.0 * jnp.real(cross),
             2.0 * jnp.imag(cross),
-            jnp.abs(up) ** 2 - jnp.abs(down) ** 2,
+            up_density - down_density,
         ])
     return jnp.einsum("b,cb...->c...", weights, stacked) / cell.volume
 

@@ -44,11 +44,6 @@ has not been timed on a cell where the two would separate.
 
 **Refused rather than approximated**, each by name:
 
-* **ultrasoft and PAW.** The response density gains ``dbecsum`` and the
-  augmentation charge's own response (``addusdbec``, ``lr_addusddens``), and the
-  perturbed ``D_ij`` gains ``int3`` (``newdq``). None of it is here, and a
-  norm-conserving-only ``drho`` from an ultrasoft state is wrong by the whole
-  augmentation charge while looking entirely plausible.
 * **metals.** ``orthogonalize``'s smearing branch replaces the sharp projector
   with the occupation-difference weights ``wwg``, and the Fermi level itself
   shifts (``ef_shift``). The insulator projector applied to a metal is silently
@@ -77,15 +72,20 @@ import jax.numpy as jnp
 import numpy as np
 from jax import lax
 
+import jax
+
 from pypresso.basis.fft import g_to_r
 from pypresso.basis.interpolate import to_dense, to_smooth
 from pypresso.batching import map_k
+from pypresso.scf.density import becsum as becsum_of, sum_band
+from pypresso.scf.potential import as_potential_components
 
 __all__ = [
     "SternheimerSolver",
     "SternheimerResult",
     "local_perturbation",
     "make_sternheimer",
+    "paw_response",
     "require_a_sternheimer_regime",
 ]
 
@@ -133,9 +133,19 @@ class SternheimerSolver:
         nocc: int,
         threshold: float = THRESHOLD,
         max_iterations: int = MAX_ITERATIONS,
+        v_scf=None,
+        becsum=(),
     ):
         self.calculation = calculation
         self.hamiltonians = tuple(hamiltonians)
+        # The ground state's potential and projector occupations. Not needed to
+        # *solve* -- the Hamiltonians carry everything for that -- but needed to
+        # build an ultrasoft or PAW perturbation, whose nonlocal part moves with
+        # the potential (``int3``) and whose one-centre part moves with
+        # ``becsum`` (``PAW_dpotential``).
+        self.v_scf = None if v_scf is None else jnp.asarray(v_scf)
+        self.becsum = becsum
+        self.ddd_paw = calculation.onecenter(becsum)[1] if becsum else None
         # Only the occupied bands are solved for. The empty ones are what the
         # sum-over-states form would need and what this form exists to avoid;
         # they are kept out of ``psi`` here so that no shape carries them.
@@ -296,53 +306,129 @@ class SternheimerSolver:
 
     # -- the density it produces -------------------------------------------
 
-    def response_density(self, dpsi) -> jnp.ndarray:
-        """``drho`` from the first-order wavefunctions -- ``incdrhoscf``.
+    def density_at(self, states) -> jnp.ndarray:
+        """``rho`` from a set of occupied states, as the SCF builds it.
 
-        ``drho(r) = sum_kn wg_kn 2 Re[psi*_kn(r) dpsi_kn(r)] / Omega``: the
-        first-order term of ``|psi + dpsi|^2`` with the same ``wg`` and the same
-        volume factor :func:`pypresso.scf.density.band_density` uses, so a
-        response density and a density are on one convention. The factor of two
-        is the ``+ c.c.`` that a Hermitian perturbation makes real.
-
-        On the **dense** grid, like every other density here: the wavefunctions
-        live on the smooth one and the potential is built on the dense one.
+        :meth:`~pypresso.scf.driver.Calculation.density` **without the
+        symmetrisation**: a response is symmetrised as a vector, not as a scalar
+        (:meth:`~pypresso.scf.driver.Calculation.symmetrize_directional`), so the
+        caller does it. Everything else is the same function the SCF uses --
+        including ``becsum`` and the augmentation charge, which is what makes
+        the derivative below carry them.
         """
         calculation = self.calculation
         smooth, dense = calculation.basis.smooth, calculation.basis.dense
-        grid = smooth.grid
-        fft_index = calculation.fft_index
-        volume = calculation.system.cell.volume
-        batch = calculation.k_batch
+        becsum_ = self._raw_becsum(states)
+        rho = sum_band(
+            states, calculation.fft_index, smooth.grid, self.weights,
+            calculation.system.cell, calculation.k_batch,
+        )
+        return calculation.augmented(to_dense(rho, smooth, dense), becsum_)
 
-        def channel(spin):
-            def one_k(ik):
-                index = fft_index[ik]
-                states = g_to_r(self.psi[spin][ik], index, grid)
-                perturbed = g_to_r(dpsi[spin][ik], index, grid)
-                weighted = self.weights[spin][ik][:, None, None, None]
-                return jnp.sum(
-                    weighted * 2.0 * jnp.real(jnp.conj(states) * perturbed), axis=0
-                )
+    def response_density(self, dpsi) -> jnp.ndarray:
+        """``drho``: the first-order density, as one ``jvp`` of :meth:`density_at`.
 
-            per_k = map_k(one_k, jnp.arange(self.psi.shape[1]), batch=batch)
-            return jnp.sum(per_k, axis=0) / volume
+        ``incdrhoscf`` plus ``addusdbec`` plus ``lr_addusddens``, and none of the
+        three is transcribed. The density is a *quadratic* function of the states
+        that this code already writes down once, so its response to
+        ``psi -> psi + lambda dpsi`` is the directional derivative of that
+        function -- and every term QE adds by hand for an ultrasoft dataset comes
+        with it:
 
-        rho = jnp.stack([channel(spin) for spin in range(self.nspin)])
-        return to_dense(rho, smooth, dense)
+        * the smooth part, ``sum_kn wg 2 Re[psi* dpsi]/Omega``, which is the
+          derivative of ``|psi|^2`` (``incdrhoscf``);
+        * ``dbecsum``, the derivative of ``becsum``, which is bilinear in the
+          projections (``addusdbec``);
+        * the augmentation charge's own response, ``sum_ij Q_ij(r) dbecsum_ij``,
+          which is the derivative of ``addusdens`` -- linear in ``becsum``, so it
+          is that same sum with ``dbecsum`` in it (``lr_addusddens``).
+
+        The one thing this needed was for ``|psi|^2`` to be written as
+        ``Re(conj(psi) psi)`` rather than ``abs(psi)**2``, whose derivative is
+        ``0/0`` at a node (:func:`pypresso.scf.density.band_density`).
+
+        On the **dense** grid, like every other density here.
+        """
+        _, drho = jax.jvp(self.density_at, (self.psi,), (jnp.asarray(dpsi),))
+        return drho
+
+    def response_becsum(self, dpsi) -> tuple:
+        """``dbecsum``: the projector occupations' response, on its own.
+
+        The augmentation charge's share of ``drho`` is already inside
+        :meth:`response_density`; this is the same derivative kept separately,
+        because **PAW's one-centre terms are a function of ``becsum`` and not of
+        the density** and there is nowhere else to get them from
+        (``PAW_dpotential``).
+        """
+        _, dbecsum = jax.jvp(
+            self._raw_becsum, (self.psi,), (jnp.asarray(dpsi),)
+        )
+        return dbecsum
+
+    def _raw_becsum(self, states) -> tuple:
+        """``becsum`` **without** the symmetrisation :meth:`Calculation.becsum` applies.
+
+        For PAW that method ends with ``PAW_symmetrize``, and a *response* must
+        not go through it: the three response densities are symmetrised together
+        as a polar vector afterwards
+        (:meth:`~pypresso.scf.driver.Calculation.symmetrize_directional`), and
+        pre-averaging each one as a scalar is the same wrong-symmetry mistake in
+        a place where it is much harder to see. It is worth **1.6e-2** on the
+        dielectric constant of PAW silicon, against the 5e-5 the rest of the
+        machinery reaches.
+        """
+        calculation = self.calculation
+        if not calculation.is_ultrasoft:
+            return ()
+        return becsum_of(
+            states, calculation.projectors.vkb, self.weights,
+            calculation.species_channels, calculation.k_batch,
+        )
+
+    def perturbation(self, dv, dddd_paw=None):
+        """``dH|psi>`` for a change ``dv`` in the potential -- see
+        :func:`local_perturbation`, with this solver's ground state filled in."""
+        return local_perturbation(
+            self.calculation, dv, self.v_scf, self.ddd_paw, dddd_paw
+        )
 
     def chi0(self, dv) -> jnp.ndarray:
         """``chi_0 dV``: the independent-particle density response to a potential.
 
         ``dv`` is ``(nspin, n1, n2, n3)`` real on the **dense** grid, the shape a
         potential has. The result is a density of the same shape.
+
+        **PAW's one-centre response is deliberately not in it.** ``chi_0`` is the
+        response at a *frozen* one-centre potential, which is what an
+        independent-particle susceptibility means; the term that makes
+        ``ddd_paw`` move with ``becsum`` is part of the self-consistent loop and
+        is added there (:mod:`pypresso.response.efield`).
         """
-        perturbation = local_perturbation(self.calculation, dv)
-        return self.response_density(self.solve(perturbation).dpsi)
+        return self.response_density(self.solve(self.perturbation(dv)).dpsi)
 
 
-def local_perturbation(calculation, dv):
-    """``dV(r) |psi>`` for a local potential, as :meth:`SternheimerSolver.solve` wants it.
+def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None):
+    """``dH|psi>`` for a change ``dv`` in the self-consistent potential.
+
+    For a norm-conserving dataset this is ``dV(r)|psi>`` and nothing else. For an
+    ultrasoft one it is not, and the missing piece is invisible in the answer:
+    ``D_ij = D_ij^(0) + int V_eff(r) Q_ij(r) dr`` depends on the potential, so a
+    change in the potential changes the *nonlocal* operator as well,
+
+        dH |psi> = dV(r) |psi> + sum_ij |beta_i> int3_ij <beta_j|psi>,
+        int3_ij  = int dV(r) Q_ij(r) dr,
+
+    which is ``newdq.f90`` and ``adddvscf.f90``. Neither is transcribed:
+    ``int3`` is one ``jvp`` of :meth:`~pypresso.scf.driver.Calculation.
+    coefficients`, which is ``newd`` and is already a differentiable function of
+    the potential.
+
+    ``dddd_paw`` is PAW's one-centre response, which is *not* a function of the
+    potential and so cannot come from the same derivative -- it is
+    ``PAW_dpotential``, obtained from ``becsum``'s response
+    (:func:`paw_response`) and simply added to ``int3`` here, exactly as
+    ``add_paw_to_deeq`` adds ``ddd_paw`` to ``deeq``.
 
     The potential arrives on the dense grid and is interpolated to the smooth one
     exactly as ``Calculation.hamiltonian`` interpolates the self-consistent
@@ -354,19 +440,72 @@ def local_perturbation(calculation, dv):
     fft_index = calculation.fft_index
     mask = calculation.basis.planewaves.mask
     n = grid[0] * grid[1] * grid[2]
+    dv = jnp.asarray(dv)
     fields = jnp.stack([
-        to_smooth(jnp.asarray(dv)[spin], dense, smooth) for spin in range(len(dv))
+        to_smooth(dv[spin], dense, smooth) for spin in range(dv.shape[0])
     ])
+    coefficients = _perturbed_coefficients(
+        calculation, dv, v_scf, ddd_paw, dddd_paw
+    )
+    vkb = calculation.projectors.vkb
 
     def apply(states, ik, spin):
         index = fft_index[ik]
         box = jnp.fft.fftn(
             g_to_r(states, index, grid) * fields[spin], axes=(-3, -2, -1)
         ) / n
-        gathered = jnp.take(box.reshape(box.shape[:-3] + (-1,)), index, axis=-1)
-        return jnp.where(mask[ik], gathered, 0.0)
+        out = jnp.take(box.reshape(box.shape[:-3] + (-1,)), index, axis=-1)
+        if coefficients is not None:
+            projectors = vkb[ik]
+            projections = jnp.einsum("gk,...g->...k", projectors.conj(), states)
+            dij = coefficients[spin].astype(projectors.dtype)
+            out = out + jnp.einsum("gk,...k->...g", projectors, projections @ dij.T)
+        return jnp.where(mask[ik], out, 0.0)
 
     return apply
+
+
+def _perturbed_coefficients(calculation, dv, v_scf, ddd_paw, dddd_paw):
+    """``int3 + d(ddd_paw)``: how ``D_ij`` moves when the potential does.
+
+    ``None`` for a norm-conserving dataset, where ``D_ij`` is the file's and
+    nothing moves it.
+    """
+    if not calculation.is_ultrasoft:
+        return None
+    if v_scf is None:
+        raise ValueError(
+            "an ultrasoft or PAW perturbation needs the ground-state potential "
+            "as well as its change: D_ij depends on V_eff, so dH carries "
+            "int3_ij = int dV Q_ij dr (newdq/adddvscf) and that derivative is "
+            "taken at the converged potential"
+        )
+    components = as_potential_components(calculation.vltot, calculation.nspin_mag)
+    _, int3 = jax.jvp(
+        lambda potential: calculation.coefficients(potential, ddd_paw),
+        (jnp.asarray(v_scf) + components,),
+        (dv,),
+    )
+    return int3 if dddd_paw is None else int3 + dddd_paw
+
+
+def paw_response(calculation, dbecsum, becsum_):
+    """``PAW_dpotential``: the one-centre coefficients' response to ``dbecsum``.
+
+    ``paw_onecenter.f90``. PAW's ``ddd_paw`` is a function of ``becsum`` and of
+    nothing else, so its response is the directional derivative of
+    :meth:`~pypresso.scf.driver.Calculation.onecenter` along ``dbecsum`` -- one
+    ``jvp``, where QE writes a second radial routine beside the first.
+
+    ``None`` when no species is PAW, which is the norm-conserving and plain
+    ultrasoft case both.
+    """
+    if calculation.paw is None:
+        return None
+    _, ddd = jax.jvp(
+        lambda parts: calculation.onecenter(parts)[1], (becsum_,), (dbecsum,)
+    )
+    return ddd
 
 
 def _alpha_pv(eigenvalues, nocc: int) -> float:
@@ -386,14 +525,6 @@ def require_a_sternheimer_regime(calculation) -> None:
     module docstring for what each case would need.
     """
     system = calculation.system
-    if calculation.is_ultrasoft or calculation.is_paw:
-        raise NotImplementedError(
-            "the Sternheimer response with an ultrasoft or PAW dataset is not "
-            "implemented: the response density needs dbecsum and the "
-            "augmentation charge's own response (addusdbec, lr_addusddens) and "
-            "the perturbed D_ij needs int3 (newdq). Use a norm-conserving "
-            "pseudopotential"
-        )
     if calculation.noncolin:
         raise NotImplementedError(
             "the Sternheimer response is not implemented for a noncollinear or "
@@ -430,8 +561,13 @@ def make_sternheimer(calculation, result, threshold: float = THRESHOLD):
 
     nocc = int(round(calculation.nelec / (1 if calculation.noncolin else 2)))
     potential = calculation.potential(result.density)
-    hamiltonians = calculation.hamiltonian(potential.v_scf)
+    # PAW's one-centre coefficients come from ``becsum``, which is part of the
+    # mixed state and not a function of the density -- which is why
+    # ``SCFResult`` carries it and why a fixed-density run without it is refused
+    # elsewhere.
+    _, ddd_paw = calculation.onecenter(result.becsum)
+    hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw)
     return SternheimerSolver(
         calculation, hamiltonians, result.wavefunctions, eigenvalues, weights,
-        nocc, threshold,
+        nocc, threshold, v_scf=potential.v_scf, becsum=result.becsum,
     )
