@@ -1,0 +1,34 @@
+! fcc aluminium with Bloechl's tetrahedron occupations, for the projected DOS.
+!
+! QE's own pw_metal/metal-tetrahedra.in is the *optimised* method
+! (occupations = 'tetrahedra-opt'), and metal-tetrahedra-1.in, which is the
+! plain one, is an NSCF continuation that only exists as part of a three-run
+! sequence sharing an outdir. Neither is a standalone Bloechl SCF, and a
+! standalone one is what pins the substitution this case exists for:
+!
+!   do_projwfc promotes tetra_type = 0 to 1 before it builds any tetrahedra, so
+!   a projected density of states asked for with occupations = 'tetrahedra'
+!   comes out of the *linear* method -- a different decomposition of the
+!   microcell, not merely different weights. The total energy and the Fermi
+!   level are Bloechl's; the PDOS beside them is not.
+!
+! Everything else is QE's aluminium: the same cell, cutoff and 4x4x4 shifted
+! grid, with conv_thr tightened so both codes stop at the same fixed point.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 7.50,
+    nat = 1, ntyp = 1,
+    ecutwfc = 15.0,
+    occupations = 'tetrahedra'
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Al  26.98 Al.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Al 0.00 0.00 0.00
+K_POINTS {automatic}
+ 4 4 4 1 1 1

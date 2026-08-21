@@ -34,6 +34,7 @@ point where there is not.
 | **Self-consistent field**, with the energy broken down term by term | `calculation = 'scf'` | `pw.x` |
 | **Band structures** on a k-point path, at fixed density | `run_bands` | `pw.x` + `bands.x` |
 | **Densities of states** — smearing, and all three tetrahedron methods | `run_dos`, `pypresso dos` | `pw.x` + `dos.x` |
+| **Projected densities of states** — resolved by atom, by `l` and by `m`, with Löwdin charges and the spilling parameter | `run_pdos`, `pypresso pdos` | `pw.x` + `projwfc.x` |
 | **Tetrahedron occupations inside the SCF**, not only in the DOS | `occupations = 'tetrahedra'`, `'tetrahedra_lin'`, `'tetrahedra_opt'` | `pw.x` |
 | **Smearing**: Gaussian, Methfessel-Paxton, Marzari-Vanderbilt, Fermi-Dirac | `occupations = 'smearing'`, `smearing`, `degauss` | `pw.x` |
 | **Norm-conserving, ultrasoft and PAW** pseudopotentials (UPF v2 only) | `ATOMIC_SPECIES` | `pw.x` |
@@ -55,8 +56,7 @@ point where there is not.
 | **Chern numbers**, exact integers by the Fukui-Hatsugai-Suzuki lattice sum | `run_berry_curvature` | new |
 | **Z2 invariants** in 2D and 3D, by Wannier-charge-centre flow *and* by Fu-Kane parities | `run_z2`, `run_z2_3d` | new |
 
-Not yet: the stress (and so variable-cell relaxation), the projected density of
-states, and phonons. `K_POINTS gamma` runs, but at an explicit k = 0 with the
+Not yet: the stress (and so variable-cell relaxation) and phonons. `K_POINTS gamma` runs, but at an explicit k = 0 with the
 full G sphere — the half-sphere storage the gamma-point trick exists for is
 generated and not consumed, so the answer is the same and the cost is twice the
 plane waves, and the run says so. A functional or a combination that is not

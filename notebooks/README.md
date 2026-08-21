@@ -21,6 +21,7 @@ that way.
 | [`12_spin_spirals.ipynb`](12_spin_spirals.ipynb) | Spin spirals by the generalized Bloch theorem: two plane-wave spheres instead of one, the three identities that validate them (`q = 0` against an ordinary noncollinear run, `q = b3/2` against the *collinear* antiferromagnet, `q = b3/4` against a four-cell noncollinear supercell — all to 1e-10 Ry), the shifted supercell k-grid that is the trap of the phase, an `E(q)` magnon dispersion with the exchange constants fitted out of it, and why the rotated-frame moment is a gauge and the energy is not | P19 |
 | [`13_dft_plus_u.ipynb`](13_dft_plus_u.ipynb) | DFT+U: the correction as a penalty on fractional occupation, the two offsets a Hubbard manifold needs, why `Hubbard_projectors = 'atomic'` still applies `S`, the atomic-orbital renormalisation that only `ortho-atomic` feels (and the 7e-4 Ry it is worth), the potential as `jax.grad` against QE's `v_hubbard`, the `nspin = 1` factor of two that is on the energy and not the potential, nickel four ways and antiferromagnetic FeO against QE (≤6.7e-9 Ry), a second self-consistent solution reached with `starting_ns_eigenvalue`, and `force_hub` falling out of the gradient with nothing written down for it (QE's forces to 4.8e-6 Ry/bohr) | P20 |
 | [`14_spiral_relaxation.ipynb`](14_spiral_relaxation.ipynb) | Relaxing a spin spiral: `q` treated as a coordinate the way an atomic position is — which terms of the energy depend on it (two out of seven, and why the density is not one of them), the identity that the differentiated functional *is* the total energy (2e-16 Ry), the gradient against a finite difference of a re-converged SCF, the two wavevectors symmetry pins to zero exactly, what the basis-set jumps in `E(q)` cost and how they fall with the cutoff, and a BFGS on the reciprocal metric taking a hydrogen chain from `q3 = 0.30` to its antiferromagnet at `0.50003` in six SCF runs | P21 |
+| [`15_projected_density_of_states.ipynb`](15_projected_density_of_states.ipynb) | The projected density of states: `<phi|S|psi>` on Löwdin-orthogonalised atomic orbitals and the `S` that is applied even to the plain `atomic` ones, the Löwdin charges and the spilling parameter against `projwfc.x` (5e-5), silicon's `s` and `p` densities of state with QE's own curves on top, and the same weights as fat bands — `s` at the bottom of the valence band, `p` at the top | P8 |
 
 ## Conventions
 
@@ -80,7 +81,11 @@ vendored tree entirely; both of its systems (a hydrogen atom and a hydrogen chai
 supercells it is validated against) are committed. `11` takes about **eight minutes** on one
 core and `12` about **five**. `14` runs without the vendored tree too — it is `12`'s chain
 and nothing else — and takes about **twenty**, most of it the cutoff sweep that measures the
-basis-set jumps and the `E(q)` scan the relaxation is drawn against.
+basis-set jumps and the `E(q)` scan the relaxation is drawn against. `15` runs without the vendored
+tree as well: its input (`si2-us-dense.in`, ultrasoft silicon on an 8x8x8 grid) and the
+`projwfc.x` reference it is compared against are both committed under `tests/data/qe/`,
+because QE's test suite has no `projwfc` case at all. It takes about **two minutes**, nearly
+all of it the 29-k-point SCF.
 
 `13` is a mixture in the other direction from `07`: its nickel half is committed under
 `tests/data/qe/` (input *and* reference), and its FeO half reads QE's own `pw_lda+U/`

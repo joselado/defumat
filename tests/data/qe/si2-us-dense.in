@@ -1,0 +1,30 @@
+! Silicon, ultrasoft, on an 8x8x8 grid with four empty bands: the projected
+! density of states as something to *look* at.
+!
+! si2-us.in is the same cell on the two k-points QE's test suite uses, which is
+! enough to compare numbers against projwfc.x and far too coarse to plot: two
+! k-points give a density of states made of eight deltas. This one converges the
+! same density on 29 irreducible k-points and keeps eight bands, so the
+! conduction band is there as well as the valence band, and the s-like bottom
+! and p-like top of the valence band are visible as what they are.
+!
+! It exists for notebook 15. Its projwfc.x reference is committed beside it, as
+! is every other reference here, so the notebook runs without the vendored tree.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 160.0,
+    nbnd = 8
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-n-rrkjus_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS {automatic}
+ 8 8 8 0 0 0

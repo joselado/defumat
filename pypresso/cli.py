@@ -4,8 +4,10 @@
 fastest way to see what a comparison is being made against. ``dos`` runs the
 sequence a density of states actually is -- SCF, then NSCF on a denser grid,
 then the Brillouin-zone integration -- and writes ``dos.x``'s ``.dos`` file.
-``relax`` runs the SCF/force/move loop of a ``calculation = 'relax'`` input and
-prints the geometry it ends on. The ``scf``/``bands`` subcommands land with
+``pdos`` is the same sequence with ``projwfc.x``'s projection on the end: it
+prints the Löwdin charges and writes the ``filpdos`` files. ``relax`` runs the
+SCF/force/move loop of a ``calculation = 'relax'`` input and prints the geometry
+it ends on. The ``scf``/``bands`` subcommands land with
 their phases.
 """
 
@@ -182,6 +184,60 @@ def _spiral(args) -> int:
     return 0 if all(scan.converged) else 1
 
 
+
+def _pdos(args) -> int:
+    """SCF, then project on the atomic orbitals -- ``pw.x`` plus ``projwfc.x``."""
+    from pypresso.io.output import write_pdos
+    from pypresso.workflows.pdos import run_pdos
+
+    input_path = Path(args.input)
+    pseudo_dir = Path(args.pseudo_dir) if args.pseudo_dir else input_path.parent
+    system = build_system(read_pw_input(input_path))
+    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
+
+    k_batch = "default" if args.k_batch is None else (
+        None if args.k_batch.lower() in ("all", "0") else int(args.k_batch)
+    )
+    scf = run_scf(system, pseudos, conv_thr=args.conv_thr, verbose=args.verbose,
+                  k_batch=k_batch)
+    if not scf.converged:
+        print(f"warning: the SCF stopped at accuracy {scf.accuracy:.2e}", file=sys.stderr)
+    print(f"  total energy     {scf.total_energy:.8f} Ry ({scf.iterations} iterations)")
+
+    grid = tuple(args.kgrid) if args.kgrid else None
+    # Emin/Emax/DeltaE arrive in eV, as projwfc.x takes them.
+    pdos, states = run_pdos(
+        system,
+        pseudos,
+        scf,
+        grid=grid,
+        nbnd=args.nbnd,
+        scheme=args.scheme,
+        degauss=args.degauss,
+        emin=None if args.emin is None else args.emin / RY_TO_EV,
+        emax=None if args.emax is None else args.emax / RY_TO_EV,
+        delta_e=args.delta_e / RY_TO_EV,
+        projectors=args.projectors,
+        symmetrize=not args.no_symmetrize,
+        conv_thr=args.conv_thr,
+        k_batch=k_batch,
+    )
+    print(f"  k-points         {states.kpoints.nk} irreducible"
+          + (f" from a {grid[0]}x{grid[1]}x{grid[2]} grid" if grid else " (the SCF's own)"))
+    print(f"  projectors       {pdos.projectors}, {len(pdos.channels)} atomic states")
+    print(f"  scheme           {pdos.scheme}")
+    print()
+    print(pdos.charges.format(
+        tuple(system.structure.species[t].name for t in system.structure.types)
+    ))
+    print()
+
+    prefix = Path(args.output) if args.output else input_path.with_suffix("")
+    written = write_pdos(prefix, pdos)
+    print(f"  wrote            {len(written)} files, {written[0].name} ... {written[-1].name}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pypresso", description=__doc__.splitlines()[0])
     parser.add_argument("--version", action="version", version=f"pypresso {__version__}")
@@ -208,6 +264,34 @@ def main(argv: list[str] | None = None) -> int:
                      help="k-points held in flight at once: 1 is QE's k_loop (the "
                           "default), 'all' is one vmap over the whole axis, which is "
                           "faster and needs proportionally more memory")
+
+    pdos = sub.add_parser(
+        "pdos", help="SCF, then a projected density of states and Loewdin charges"
+    )
+    pdos.add_argument("input", help="path to a pw.x input file")
+    pdos.add_argument("--pseudo-dir", help="where the UPF files are (default: beside the input)")
+    pdos.add_argument("--kgrid", nargs=3, type=int, metavar=("N1", "N2", "N3"),
+                      help="denser Monkhorst-Pack grid for an NSCF step (default: the "
+                           "SCF's own k-points, which is what projwfc.x projects)")
+    pdos.add_argument("--nbnd", type=int, help="bands to compute (default: the input's)")
+    pdos.add_argument("--scheme", help="integration scheme (default: the input's occupations)")
+    pdos.add_argument("--degauss", type=float, help="smearing width in Ry, for a smearing scheme")
+    pdos.add_argument("--emin", type=float, help="lowest energy in eV (default: the lowest band)")
+    pdos.add_argument("--emax", type=float, help="highest energy in eV (default: the highest band)")
+    pdos.add_argument("--delta-e", type=float, default=0.01,
+                      help="energy step in eV (default 0.01, projwfc.x's own)")
+    pdos.add_argument("--projectors", default="ortho-atomic",
+                      choices=("ortho-atomic", "atomic", "norm-atomic"),
+                      help="which orbitals to project on (default: ortho-atomic, "
+                           "which is what projwfc.x uses)")
+    pdos.add_argument("--no-symmetrize", action="store_true",
+                      help="skip sym_proj_k, projwfc.x's lsym = .false.")
+    pdos.add_argument("--conv-thr", type=float, default=1e-8, help="SCF convergence threshold in Ry")
+    pdos.add_argument("-o", "--output", help="prefix for the .pdos_* files (projwfc.x's filpdos)")
+    pdos.add_argument("-v", "--verbose", action="store_true", help="print each SCF iteration")
+    pdos.add_argument("--k-batch", metavar="N",
+                      help="k-points held in flight at once: 1 is QE's k_loop (the "
+                           "default), 'all' is one vmap over the whole axis")
 
     relax = sub.add_parser("relax", help="relax the atomic positions at fixed cell")
     relax.add_argument("input", help="path to a pw.x input file")
@@ -242,6 +326,8 @@ def main(argv: list[str] | None = None) -> int:
         return _inspect(args.path)
     if args.command == "dos":
         return _dos(args)
+    if args.command == "pdos":
+        return _pdos(args)
     if args.command == "relax":
         return _relax(args)
     if args.command == "spiral":

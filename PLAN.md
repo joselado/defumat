@@ -113,6 +113,9 @@ pypresso/
   xc/
     functional.py       # QE's four slots, composed; name -> functional registry
     lda.py, gga.py      # Slater/PZ/PW, and the PBE family's gradient corrections
+  projwfc/
+    channels.py         # P8: what the natomwfc projection columns are (fill_nlmchi)
+    projections.py      # P8: <phi|S|psi>, and sym_proj_k's group average of it
   hubbard/
     manifold.py         # P20: which orbitals carry U, with what parameters (setup)
     projectors.py       # P20: wfcU = S phi, or O^{-1/2} S phi (orthoUwfc.f90)
@@ -148,6 +151,7 @@ pypresso/
     driver.py           # the SCF loop
   workflows/
     scf.py, nscf.py, bands.py, dos.py
+    pdos.py             # P8: projwfc.x -- the projected DOS and the Lowdin charges
     spiral.py           # P19: an E(q) scan; P21: relaxing q down its gradient
   cli.py                # pypresso scf|bands|dos <input>
 tests/
@@ -442,8 +446,150 @@ loops over them and the `.dos` file grows a `dosup`/`dosdw` pair with one summed
    callers go through it. `pw_lsda/lsda-2.in` pins it: nickel's Fermi level on the 8x8x8
    NSCF grid comes out **15.3379 eV against QE's 15.3379**.
 
-Still out of P8: the projected DOS (`projwfc.x`), which needs atomic-orbital projections
-rather than eigenvalues alone.
+**P8 x projwfc — the projected density of states. ✅ DONE.** The remainder of P8:
+`pypresso/projwfc/` (what the projection columns are, and the projection itself),
+`workflows/pdos.py` (the integration, the Löwdin charges and the workflow), the
+`filpdos` writer in `io/output.py` and a `pypresso pdos` subcommand. What is
+computed is `PP/src/projwfc.f90`'s
+
+    proj[i, n, k] = |<phi_i| S |psi_nk>|^2,   phi = O^{-1/2} S chi,  O_ij = <chi_i|S|chi_j>
+
+resolved by atom, by `l` and by `m`, then integrated by whichever scheme the run's
+own occupations name (`partialdos.f90`), and integrated against the occupations
+instead of a delta to give `print_lowdin`'s charges and Sanchez-Portal's spilling
+parameter.
+
+*Check met:* **seven cases against the vendored `projwfc.x`**, which had to be
+built (`make pp`) and whose references are committed — QE's test-suite has no
+`projwfc` case at all, no input and no `filpdos` file anywhere in the tree, so
+this is the first phase with nothing to borrow. Three quantities per case, at
+increasing distance from the projection:
+
+* **the projections themselves**, band by band and k-point by k-point against
+  `print_proj`'s listing: **≤ 6.9e-4**, which is the resolution of its own
+  three-decimal printout and not a bound on the agreement;
+* **the Löwdin charges** per atom, per `l` and per `m`, and the spilling:
+  **≤ 4.7e-5** and **≤ 4.8e-5** against `f8.4`;
+* **the density of states itself** on `partialdos`'s grid, every `filpdos` column
+  of every file: **≤ 0.8% of the peak**, which is what `e11.3` — three
+  significant digits — supports, and which the eigenvalues put the same floor
+  under anyway (see trap 6).
+
+The cases cover every path through the projection: norm-conserving silicon with
+fixed occupations (`pw_scf/scf.in`), the same cell ultrasoft and PAW (`si2-us`,
+`si2-paw`, where `S` is not the identity), ultrasoft silicon on an 8x8x8 wedge
+(`si2-us-dense`, which is where the symmetrisation has something to do),
+spin-polarized nickel with a Marzari-Vanderbilt smearing (`pw_lsda/lsda.in`), and
+aluminium with **both** tetrahedron families (`pw_metal/metal-tetrahedra.in` and a
+new `al-tetrahedra.in`, which exists for trap 1).
+
+Design decisions, in the pattern the rest of the code follows:
+
+* **A projected density of states is the plain one with a weight in front of the
+  delta**, so it goes through the *same* registry rather than a second
+  implementation: every entry of `DOS_SCHEMES` takes an optional `projections`
+  argument, `(nk, nbnd, nproj)`, and grows a trailing channel axis on both
+  returned arrays. Both families implement it, which is what makes
+  `sum_p D_p = D` exact for a unit weight — asserted to 1e-12 (smearing) and
+  1e-10 (tetrahedra) in `tests/unit/test_projwfc.py` — rather than something to
+  hope for. QE's own `partialdos` is two disjoint code paths for the same reason
+  it has `dosint` and `dost`.
+* **Only the integral is written down here too.** The tetrahedron version
+  resolves the occupation weight *per corner* (`_linear_weights` + `_scatter`,
+  which is `opt_tetra_weights_only`'s machinery) into
+  `N_p(E) = sum_kb w_kb(E) proj[k, b, p]` and takes `jax.jvp` of that in `E` —
+  a vector of `nproj`, so `jvp` and not `value_and_grad`. QE's
+  `opt_tetra_partialdos`, a fourth copy of the same four-branch chain, is never
+  transcribed.
+* **The projectors are DFT+U's.** `orthoUwfc` and `projwave` build the same
+  object, so `build_hubbard_projectors` was generalised into
+  `build_atomic_projectors(..., kind, columns)` and the Hubbard version is now a
+  column selection out of it. `projwfc.x` has only `ortho-atomic`; `atomic` and
+  `norm-atomic` are reachable here because `pw.x` spells them for the Hubbard
+  manifold and they cost nothing extra.
+* **The primary path projects the SCF's own states.** `projwfc.x` reads the
+  wavefunctions `pw.x` left in its `outdir` and diagonalises nothing, and
+  `run_pdos` follows it. That is also the only route open to a PAW dataset,
+  since a fixed-density re-diagonalisation needs a `becsum` that is not carried
+  across (P12) — and it costs nothing, because re-solving the same Hamiltonian
+  at the same k-points gives back the same states. `grid=` still runs an NSCF on
+  a denser grid, for the same reason a DOS does.
+* **`pypresso/projwfc/` sits below the workflows and does not import them**
+  (rule R3). The projection is a `pseudo`/`scf`-level object; the density of
+  states built from it needs `DOS_SCHEMES`, so it lives in `workflows/pdos.py`.
+  Putting both in one package is an import cycle, which is how the layering rule
+  announces itself.
+
+Transcription traps, in the order they cost time:
+
+1. **`do_projwfc` silently promotes `tetra_type = 0` to 1.** A projected density
+   of states asked for with `occupations = 'tetrahedra'` is computed with the
+   **linear** method, never Bloechl's — and the two are not the same weights on
+   the same tetrahedra, they are *different tetrahedra* (P8, trap 2: Bloechl
+   fixes one body diagonal, the linear family picks the shortest of the four).
+   So the substitution has to happen where the tetrahedra are built, and
+   `tetrahedron_projected_dos` refuses a Bloechl decomposition rather than
+   differentiating a curvature correction that is not the derivative of an
+   occupation. `al-tetrahedra.in` exists to pin it: the Löwdin charges there come
+   from Bloechl's occupations and the integrated PDOS from the linear method, and
+   they differ by **0.10 electrons of 3** — QE is inconsistent in exactly the
+   same way and by the same amount.
+2. **`partialdos` writes one energy point more than `dos.f90`.** Both compute
+   `ne = nint((Emax - Emin)/DeltaE + 0.500001)`; `dos.f90` then writes `1..ndos`
+   and `partialdos` writes `0..ne`. A comparison against `filpdos` that reuses
+   the DOS grid is off by a row at one end, and looks like a half-step shift.
+3. **`S` is applied even for `atomic` projectors** — P20's first trap, unchanged
+   and equally silent here, because `projwave` calls `s_psi` on `wfcatom` before
+   anything else. Norm-conserving silicon cannot see it, which is why
+   `si2-us`/`si2-paw` are in the case list.
+4. **The Löwdin charge is weighted by `wg`, which already carries `w_k`.**
+   `print_proj` multiplies by `wg(ibnd, ik)` and by nothing else. Using the
+   occupation `f` without the k-point weight gives a number that is wrong by the
+   size of the irreducible wedge and still looks like a charge.
+5. **`sym_proj_k` is on by default and is not cosmetic.** It averages
+   `|sum_m' D^l_S[m', m] proj0[S(a), m']|^2` over the group — the same
+   `d_matrix` machinery PAW's `becsum` symmetrisation uses
+   (`paw/symmetry.harmonic_rotations`), with the atom index following `irt`.
+   Because `D` is orthogonal the sum over `m` is invariant, so a missing
+   symmetrisation leaves every per-`l` charge and the total *right* and every
+   per-`m` charge wrong: on the 8x8x8 wedge silicon's three `p` channels come out
+   0.9567/0.9201/0.9283 where symmetry says three times 0.9350, and their sum is
+   2.8051 either way. The per-`m` columns of `filpdos` are what catches it.
+6. **Each code sizes the energy grid from its own band extremes.** `Emin` is the
+   lowest eigenvalue less `3 degauss`, and the two codes' lowest eigenvalues
+   differ by 2e-4 eV — so the two curves are sampled at points 5e-4 eV apart, and
+   a 0.05 eV Gaussian whose peak is 17 states/eV has a slope of 200 states/eV^2.
+   That is a 0.13 states/eV difference that is not a disagreement about anything,
+   and it made the first comparison look 1% worse than it is. The regression test
+   pins `emin`/`emax` to the reference file's and says why.
+7. **`opt_tetra_partialdos` has no degenerate-band average**, where
+   `opt_tetra_weights_only` does. Reusing the occupation weights would move
+   weight between two bands that cross inside a tetrahedron and carry *different*
+   projections, which changes the answer rather than symmetrising it. Worth 4e-5
+   electrons on aluminium — small, and in the wrong direction for the wrong
+   reason.
+8. **`fill_nlmchi`'s `n` counts the orbitals in the file, including the skipped
+   ones**, and it is what a file name carries (`pdos_atm#1(Si)_wfc#2(p)`). It is
+   *not* the index among the kept orbitals, which is what indexes the radial
+   tables. A dataset with a negative-occupation channel makes the two differ.
+9. **The `m` order inside a shell is `ylmr2`'s**, so `l = 1` is `(z, x, y)` and
+   `l = 2` is `(z2, xz, yz, x2-y2, xy)`. `print_lowdin`'s `lm_label_global_frame`
+   is the authority and is transcribed; a table headed `px` that holds `pz` is
+   wrong in a way no total ever shows.
+
+*Refused, by name rather than ignored:* noncollinear and spin-orbit projections
+(`atomic_wfc_nc_proj`, `sym_proj_so`, `partialdos_nc` — the projector set is
+spinor and `natomwfc` doubles, so it is a different set rather than a wider one).
+`atomic_projections` raises on `noncolin` before it builds anything, and
+`projection_channels` — which cannot see the flag, taking only the
+pseudopotentials and the structure — names the branch it does not implement in
+its docstring rather than silently labelling half the columns. Not implemented
+and unreachable by any input: `pawproj` (`projwave_paw`, projecting on the PAW
+all-electron partial waves), `tdosinboxes` (`projwave_boxes`, the local DOS in a
+real-space box), `diag_basis` (`rotate_basis`), `kresolveddos`, `lforcet` (the
+force theorem), and the `atomic_proj.xml`/`lwrite_ovp` outputs.
+
+*Notebook 15.*
 
 **P9 — Spin. ✅ DONE.** LSDA (`nspin=2`), collinear magnetization. Non-collinear
 wavefunctions and spin-orbit coupling came later, in P14, and reused this axis rather than

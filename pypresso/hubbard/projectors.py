@@ -49,9 +49,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from pypresso.hubbard.manifold import PROJECTOR_TYPES
 from pypresso.pseudo.atomic import atomic_wavefunctions
 
-__all__ = ["build_hubbard_projectors", "lowdin_transform"]
+__all__ = [
+    "build_hubbard_projectors",
+    "build_atomic_projectors",
+    "lowdin_transform",
+]
 
 
 def lowdin_transform(overlap: jnp.ndarray, normalize_only: bool = False) -> jnp.ndarray:
@@ -95,20 +100,59 @@ def build_hubbard_projectors(
     exists in QE only for the hand-derived force and stress expressions, and the
     force here is ``jax.grad`` of the energy through this function
     (:mod:`pypresso.forces.energy`), so nothing would consume it.
+
+    A thin selection of columns out of :func:`build_atomic_projectors`, which is
+    the same construction over *every* atomic orbital -- the projected density of
+    states (:mod:`pypresso.projwfc`) is the other caller and it keeps them all.
     """
-    atomic = atomic_wavefunctions(
-        pseudos, structure, cell, gvectors, planewaves, kpoints
-    )  # (nk, natomwfc, npwx)
-    nk = atomic.shape[0]
-    columns = jnp.asarray(
+    columns = (
         np.concatenate([
             np.arange(offset, offset + ldim)
             for offset, ldim in zip(setup.atomwfc_offsets, setup.ldims)
         ]) if setup.nwfcU else np.zeros(0, dtype=int)
     )
+    return build_atomic_projectors(
+        pseudos, structure, cell, gvectors, planewaves, kpoints, apply_s,
+        kind=setup.projectors, columns=columns,
+    )
 
-    orthogonalize = setup.projectors in ("ortho-atomic", "norm-atomic")
-    normalize_only = setup.projectors == "norm-atomic"
+
+def build_atomic_projectors(
+    pseudos,
+    structure,
+    cell,
+    gvectors,
+    planewaves,
+    kpoints,
+    apply_s,
+    kind: str = "ortho-atomic",
+    columns=None,
+) -> jnp.ndarray:
+    """``(nk, npwx, ncolumns)``: projector functions built from ``chi``.
+
+    ``kind`` is one of :data:`pypresso.hubbard.manifold.PROJECTOR_TYPES` and
+    ``columns`` selects which of the ``natomwfc`` orbitals to keep *after* the
+    orthogonalisation -- ``None`` keeps all of them, which is what
+    ``projwfc.x`` projects onto and what a Löwdin charge is defined against.
+
+    The orthogonalisation always runs over the whole set whatever is kept, for
+    the reason in the module docstring: restricting ``O`` to a sub-manifold is a
+    different matrix and a different answer.
+    """
+    atomic = atomic_wavefunctions(
+        pseudos, structure, cell, gvectors, planewaves, kpoints
+    )  # (nk, natomwfc, npwx)
+    nk, natomwfc = atomic.shape[0], atomic.shape[1]
+    if columns is None:
+        columns = np.arange(natomwfc)
+    columns = jnp.asarray(np.asarray(columns, dtype=int))
+
+    if kind not in PROJECTOR_TYPES:
+        raise ValueError(
+            f"unknown projector set {kind!r}; expected one of {PROJECTOR_TYPES}"
+        )
+    orthogonalize = kind in ("ortho-atomic", "norm-atomic")
+    normalize_only = kind == "norm-atomic"
 
     def one_kpoint(ik: int) -> jnp.ndarray:
         phi = atomic[ik]  # (natomwfc, npwx)

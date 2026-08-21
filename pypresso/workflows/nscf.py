@@ -30,7 +30,13 @@ from pypresso.system.cell import Cell
 from pypresso.system.kpoints import KPoints, for_spin as kpoints_for_spin
 from pypresso.units import RY_TO_EV
 
-__all__ = ["NSCFResult", "fixed_density_bands", "run_nscf", "denser_grid"]
+__all__ = [
+    "NSCFResult",
+    "fixed_density_bands",
+    "fixed_density_states",
+    "run_nscf",
+    "denser_grid",
+]
 
 
 @dataclass
@@ -70,7 +76,7 @@ class NSCFResult:
         return self.occupations if self.nspin == 2 else self.occupations[None]
 
 
-def fixed_density_bands(
+def fixed_density_states(
     system: System,
     pseudos: tuple[Pseudopotential, ...],
     density: jnp.ndarray,
@@ -82,10 +88,12 @@ def fixed_density_bands(
 ):
     """Diagonalise once at every k-point of ``system`` with ``density`` fixed.
 
-    Returns ``(calculation, system, eigenvalues)``: the caller usually needs the
-    :class:`~pypresso.scf.driver.Calculation` too, because the electron count and
-    the symmetry group live on it and both are needed to turn eigenvalues into
-    occupations.
+    Returns ``(calculation, system, eigenvalues, wavefunctions)``: the caller
+    usually needs the :class:`~pypresso.scf.driver.Calculation` too, because the
+    electron count and the symmetry group live on it and both are needed to turn
+    eigenvalues into occupations. :func:`fixed_density_bands` is this without the
+    wavefunctions, which is all a band structure or a density of states wants;
+    a projection onto atomic orbitals is what needs them kept.
 
     The potential is built once from the given density and never updated -- that
     is the whole content of "non self-consistent".
@@ -139,8 +147,19 @@ def fixed_density_bands(
     # There is no SCF here to tighten the threshold over, so ``setup.f90`` picks
     # one up front from the accuracy of the density the bands are computed in.
     ethr = max(ETHR_MIN, 0.1 * min(1.0e-2, conv_thr / max(1.0, calculation.nelec)))
-    eigenvalues, _ = calculation.diagonalize(hamiltonians, nbnd, None, ethr)
-    return calculation, system, np.asarray(eigenvalues)
+    eigenvalues, wavefunctions = calculation.diagonalize(hamiltonians, nbnd, None, ethr)
+    return calculation, system, np.asarray(eigenvalues), wavefunctions
+
+
+def fixed_density_bands(*args, **kwargs):
+    """:func:`fixed_density_states` without the wavefunctions.
+
+    The wavefunctions are ``(nspin, nk, nbnd, npwx)`` complex -- the largest
+    array a run holds -- so the caller that does not need them says so by
+    calling this, and the buffer is free as soon as this returns.
+    """
+    calculation, system, eigenvalues, _ = fixed_density_states(*args, **kwargs)
+    return calculation, system, eigenvalues
 
 
 def run_nscf(
