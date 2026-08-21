@@ -44,6 +44,7 @@ one so that occupations, mixing and the result objects need no third case; it is
 from __future__ import annotations
 
 import copy
+import dataclasses
 import warnings
 from dataclasses import dataclass, field
 from functools import partial
@@ -87,14 +88,29 @@ from pypresso.scf.occupations import (
     tetrahedra_for,
     tetrahedron_occupations_spin,
 )
-from pypresso.scf.potential import as_potential_components, scf_accuracy, v_of_rho
+from pypresso.scf.fields import MagneticField, constraint_targets
+from pypresso.scf.locals import build_local_regions
+from pypresso.scf.potential import (
+    Potential,
+    as_potential_components,
+    fixed_quantization_axis,
+    scf_accuracy,
+    v_of_rho,
+)
 from pypresso.xc.functional import resolve_functional
 from pypresso.solvers import get_eigensolver
 from pypresso.solvers.davidson import ETHR_MIN, starting_vectors
 from pypresso.solvers.subspace import rayleigh_ritz
 from pypresso.system.builder import System
 from pypresso.system.kpoints import KPoints
-from pypresso.system.symmetry import apply_symmetry_maps, find_symmetries, symmetry_maps
+from pypresso.system.spiral import spiral_kpoints
+from pypresso.system.symmetry import (
+    apply_symmetry_maps,
+    cartesian_rotations,
+    magnetization_signs,
+    symmetry_maps,
+    symmetrize_magnetization,
+)
 from pypresso.units import RY_TO_EV
 
 __all__ = ["SCFResult", "Calculation", "run_scf", "default_nbnd"]
@@ -106,7 +122,15 @@ __all__ = ["SCFResult", "Calculation", "run_scf", "default_nbnd"]
 # decision is one compiled kernel each, so a whole SCF iteration costs three
 # dispatches instead of the hundreds the eager version issued.
 
-_potential_of_rho = jax.jit(v_of_rho)
+@jax.jit
+def _field_potential(field, rho_r, cell, scale):
+    """``add_bfield``: the potential of the external fields and the constraint."""
+    return field.potential(rho_r, cell, scale)
+
+
+#: ``quantization_axis`` is a fixed three-vector or ``None``, so it is static:
+#: it comes from the *input* magnetization and cannot change during a run.
+_potential_of_rho = jax.jit(v_of_rho, static_argnums=(6,))
 _accuracy = jax.jit(scf_accuracy)
 
 
@@ -132,6 +156,27 @@ def _symmetrize(rho_r, fft_index, grid, maps):
         return jnp.real(g_to_r(rho_g, fft_index, grid))
 
     return jax.vmap(channel)(rho_r)
+
+
+@partial(jax.jit, static_argnames=("grid",))
+def _symmetrize_noncollinear(rho_r, fft_index, grid, maps, rotations):
+    """``sym_rho``'s ``nspin = 4`` branch: a scalar and an axial vector field.
+
+    The charge is symmetrised exactly as it is in any other regime; the three
+    magnetization components are *not* three scalars -- a symmetry operation
+    rotates them into each other, with a sign for the axial character and
+    another for time reversal. Doing them independently is not a worse average
+    but a different, wrong, symmetry: on bcc iron with the moment along ``x`` it
+    keeps only the component the operations happen to leave alone.
+    """
+    permutations, phases = maps
+    charge_g = apply_symmetry_maps(r_to_g(rho_r[0], fft_index), permutations, phases)
+    magnetization_g = jnp.stack([r_to_g(rho_r[i], fft_index) for i in (1, 2, 3)])
+    magnetization_g = symmetrize_magnetization(
+        magnetization_g, permutations, phases, rotations
+    )
+    stacked = jnp.concatenate([charge_g[None], magnetization_g], axis=0)
+    return jax.vmap(lambda rho_g: jnp.real(g_to_r(rho_g, fft_index, grid)))(stacked)
 
 
 @partial(jax.jit, static_argnames=("grid", "k_batch"))
@@ -487,6 +532,15 @@ class SCFResult:
     #: noncollinear run has one -- a collinear one has :attr:`magnetization`,
     #: which is the same quantity when the axis is fixed by construction.
     magnetization_vector: tuple | None = None
+    #: ``-int B . m`` and the constraint penalty at the converged density, in
+    #: Ry. **Neither is part of** :attr:`total_energy` -- QE prints ``etcon``
+    #: and never adds it, and Elk excludes its external field's energy by the
+    #: same convention. ``None`` when the run had no field.
+    field_energy: float | None = None
+    constraint_energy: float | None = None
+    #: The field the run ended with, which is not the one it started with when
+    #: ``reducebf`` or the fixed-spin-moment scheme was in use.
+    magnetic_field: object | None = None
     #: 1, 2 or 4: how many components :attr:`density` and :attr:`potential`
     #: have. It is 1 for a *nonmagnetic* spin-orbit run, where ``nspin`` is 4.
     nspin_mag: int = 1
@@ -623,8 +677,32 @@ class Calculation:
         # the density and the potential on the *dense* one. They are the same
         # object unless the input asks for a dual above 4.
         dense, smooth = self.basis.dense, self.basis.smooth
+        # A **spin spiral** (P19) puts the two spinor components on different
+        # spheres, ``k + q/2`` and ``k - q/2``, so everything carrying a k index
+        # is built for a list of ``2 nk`` points -- the up component's first.
+        # One call rather than two is what gives both halves a common ``npwx``,
+        # which is what rule R7's padding, the vmap over k and the stick layout
+        # all rest on.
+        self.spiral = bool(system.spiral)
+        self.basis_kpoints = (
+            spiral_kpoints(system.kpoints, system.spiral_q, system.cell)
+            if self.spiral else system.kpoints
+        )
+        if self.spiral:
+            if basis is not None:
+                raise ValueError(
+                    "a spin spiral builds its own plane-wave basis on the "
+                    "shifted k-points; pass basis = None"
+                )
+            self.basis = Basis(
+                dense=dense,
+                smooth=smooth,
+                planewaves=build_plane_wave_basis(
+                    smooth, self.basis_kpoints, system.cell, system.ecutwfc
+                ),
+            )
         planewaves = self.basis.planewaves
-        self.kinetic = planewaves.kinetic(smooth, system.kpoints, system.cell)
+        self.kinetic = planewaves.kinetic(smooth, self.basis_kpoints, system.cell)
         self.fft_index = planewaves.fft_index(smooth)
 
         # QE's FFT layout for the wavefunction transforms; see basis/sticks.py.
@@ -637,7 +715,8 @@ class Calculation:
         # :class:`pypresso.pseudo.projectors.ProjectorCore` and
         # :meth:`at_positions`.
         self.projector_core = build_projector_core(
-            self.pseudos, system.structure, system.cell, smooth, planewaves, system.kpoints
+            self.pseudos, system.structure, system.cell, smooth, planewaves,
+            self.basis_kpoints,
         )
         self.projectors = self.projector_core.at_positions(system.structure.positions)
 
@@ -657,6 +736,24 @@ class Calculation:
                 is_leaf=lambda x: x is None,
             )
             self.species_channels = self._species_channels()
+
+        if self.spiral and self.augmentation is not None:
+            # The cross-spin block of ``becsum`` pairs projectors at two
+            # *different* k-points, so the augmentation charge it needs is
+            # ``q_ij(q)`` -- the arbitrary-wavevector form
+            # :mod:`pypresso.topology.augmentation` already builds for P16 --
+            # and PAW's transverse one-centre term additionally needs Elk's
+            # per-atom phase ``e^{-i q.tau/2}`` (``zqss``, ``init0.f90``).
+            # Using the plain ``qq`` instead leaves the overlap plausible and
+            # the answer wrong, which is the failure this repository has met
+            # twice already, so the combination is refused rather than
+            # approximated.
+            raise NotImplementedError(
+                "a spin spiral with an ultrasoft or PAW dataset is not "
+                "implemented: the augmentation charge between the two "
+                "components is q_ij(q), not qq; use a norm-conserving "
+                "pseudopotential"
+            )
 
         # PAW adds the one-centre corrections on top of everything ultrasoft
         # does. They depend on ``becsum`` and on nothing else that changes, so
@@ -763,17 +860,102 @@ class Calculation:
         # or ``becsum`` anyway averages the three and converges somewhere else
         # entirely. QE requires ``nosym = .true.`` for those inputs; honouring it
         # is a correctness matter.
-        self.symmetries = find_symmetries(system.cell, system.structure)
+        # The magnetic case has a *smaller* group and operations that are only
+        # symmetries together with time reversal; ``System.symmetry_group`` is
+        # the single place that rule lives, so the group used here is the one
+        # the k-point set was reduced with.
+        # ``compute_ux``: the fixed axis a gradient-corrected noncollinear run
+        # takes the sign of the magnetization along. ``None`` -- QE's
+        # ``lsign = .FALSE.`` -- whenever the starting moments are not all
+        # parallel. A tuple rather than an array because it crosses a ``jit``
+        # boundary as a static argument.
+        axis = (
+            fixed_quantization_axis(system.local_moments)
+            if self.nspin_mag == 4 and not self.spiral else None
+        )
+        self.quantization_axis = None if axis is None else tuple(float(v) for v in axis)
+
+        self.symmetries = system.symmetry_group()
         use_symmetry = not system.nosym and self.symmetries.nsym > 1
+        # The axial-vector rotations, signs folded in, that the magnetization
+        # needs and the charge does not.
+        self._magnetization_rotations = (
+            jnp.asarray(
+                magnetization_signs(system.cell, self.symmetries)[:, None, None]
+                * cartesian_rotations(system.cell, self.symmetries)
+            )
+            if use_symmetry and self.nspin_mag == 4 else None
+        )
         # PAW's projector occupations need the symmetry imposed on them
         # explicitly -- see pypresso.paw.symmetry. Built after the symmetry
         # search, which is why it is not up with the rest of the PAW setup.
         self._becsum_symmetry = (
             build_becsum_symmetry(self.pseudos, system.structure, system.cell,
-                                  self.symmetries)
+                                  self.symmetries, self.nspin_mag)
             if self.paw is not None and use_symmetry else None
         )
         self._symmetry_maps = symmetry_maps(dense, self.symmetries) if use_symmetry else None
+
+        # External fields and constrained moments (P18). ``None`` -- the normal
+        # case -- costs nothing: the whole term is absent rather than added as a
+        # zero to every potential.
+        self.magnetic_field = self._build_magnetic_field()
+
+    def _build_magnetic_field(self) -> MagneticField | None:
+        """``add_bfield``'s inputs, resolved once (``input.f90``'s ``i_cons``)."""
+        system = self.system
+        constraint = system.constrained_magnetization
+        uniform = np.asarray(system.b_field, dtype=float)
+        atomic = (
+            np.asarray(system.atomic_b_field, dtype=float)
+            if system.atomic_b_field else None
+        )
+        if constraint == "none" and not uniform.any() and atomic is None:
+            return None
+        if self.nspin == 1:
+            raise ValueError(
+                "a magnetic field needs nspin = 2 or noncolin = .true.: there is "
+                "no magnetization for it to act on"
+            )
+        # A collinear run has one magnetization component and a noncollinear one
+        # has three, and every array here follows that -- ``npol = nspin - 1`` in
+        # ``add_bfield``.
+        components = 3 if self.nspin_mag == 4 else 1
+        if components == 1:
+            uniform = uniform[2:3]
+            if atomic is not None:
+                atomic = atomic[:, 2:3]
+
+        # The atom-resolved schemes need the integration spheres; the total ones
+        # do not, and building them costs a pass over the dense grid per atom.
+        needs_regions = atomic is not None or constraint in ("atomic", "atomic direction")
+        regions = (
+            build_local_regions(
+                system.cell, system.structure, self.basis.dense.grid,
+                radii=system.integration_radii or None,
+                scheme=system.local_weights,
+            )
+            if needs_regions else None
+        )
+        targets = constraint_targets(
+            constraint,
+            system.structure.types,
+            system.starting_magnetization,
+            system.angle1,
+            system.angle2,
+            system.fixed_magnetization,
+            system.structure.ntyp,
+            self.nspin_mag == 4,
+        )
+        return MagneticField(
+            regions=regions,
+            uniform=jnp.asarray(uniform),
+            atomic=None if atomic is None else jnp.asarray(atomic),
+            targets=jnp.asarray(targets) if len(targets) else None,
+            penalty=float(system.constraint_lambda),
+            constraint=constraint,
+            reducebf=float(system.reducebf),
+        )
 
     def _per_atom(self, per_species) -> jnp.ndarray:
         """A per-species ``(nh, nh)`` quantity, as the ``(nkb, nkb)`` block matrix."""
@@ -889,6 +1071,16 @@ class Calculation:
         The k-independent arrays are *shared*, not copied, so ``n`` calls hold
         one copy between them.
         """
+        if self.spiral:
+            # A spiral's basis is built on the *shifted* list, so replacing the
+            # k-points here would silently rebuild it without the shift. The
+            # counterpart that keeps the shift is :meth:`at_spiral_q`; a new
+            # k-list for a spiral means a new calculation.
+            raise NotImplementedError(
+                "at_kpoints on a spin spiral is not implemented: the basis is "
+                "built at k +- q/2, so a new k-list has to rebuild both halves "
+                "(see at_spiral_q, which does the same for a new q)"
+            )
         system = eqx.tree_at(lambda sys: sys.kpoints, self.system, kpoints)
         moved = copy.copy(self)
         moved.system = system
@@ -913,6 +1105,50 @@ class Calculation:
         )
         return moved
 
+    def at_spiral_q(self, q_crystal) -> "Calculation":
+        """The same calculation at a different spin-spiral wavevector.
+
+        :meth:`at_kpoints` in the one direction a spiral moves: ``q`` changes
+        where the two components' spheres are centred and nothing else. The
+        cell, the atoms, both G sets, the local potential, the core charge, the
+        augmentation charge, the Ewald sum and the radial tables are all
+        independent of it, and an ``E(q)`` scan is a loop over this method for
+        that reason (:mod:`pypresso.workflows.spiral`).
+        """
+        if not self.spiral:
+            raise ValueError(
+                "at_spiral_q needs a calculation that is already a spiral: "
+                "spiral_q decides the basis, which is built once"
+            )
+        # ``spiral_q`` is a *static* field -- it decides array lengths -- so it
+        # is replaced as a dataclass field rather than through ``tree_at``,
+        # which only reaches pytree leaves.
+        system = dataclasses.replace(
+            self.system, spiral_q=tuple(float(v) for v in q_crystal)
+        )
+        moved = copy.copy(self)
+        moved.system = system
+
+        smooth, cell = self.basis.smooth, self.system.cell
+        moved.basis_kpoints = spiral_kpoints(system.kpoints, system.spiral_q, cell)
+        planewaves = build_plane_wave_basis(
+            smooth, moved.basis_kpoints, cell, system.ecutwfc
+        )
+        moved.basis = Basis(
+            dense=self.basis.dense, smooth=smooth, planewaves=planewaves
+        )
+        moved.kinetic = planewaves.kinetic(smooth, moved.basis_kpoints, cell)
+        moved.fft_index = planewaves.fft_index(smooth)
+        moved.sticks = build_sticks(moved.fft_index, planewaves.mask, smooth.grid)
+        moved.projector_core = build_projector_core(
+            self.pseudos, system.structure, cell, smooth, planewaves,
+            moved.basis_kpoints,
+        )
+        moved.projectors = moved.projector_core.at_positions(
+            system.structure.positions, qq=self.projectors.qq
+        )
+        return moved
+
     @property
     def is_ultrasoft(self) -> bool:
         return self.augmentation is not None
@@ -921,7 +1157,7 @@ class Calculation:
     def is_paw(self) -> bool:
         return self.paw is not None
 
-    def potential(self, rho_r: jnp.ndarray):
+    def potential(self, rho_r: jnp.ndarray, field_scale: float = 1.0, field=None):
         """``v_of_rho`` for this calculation: Hartree plus exchange-correlation.
 
         Everything the potential needs and the density does not carry -- the
@@ -929,13 +1165,31 @@ class Calculation:
         here rather than from a default, so that the same density cannot produce
         two different potentials depending on which call site built it.
         """
-        return _potential_of_rho(
+        potential = _potential_of_rho(
             rho_r,
             self.basis.dense,
             self.system.cell,
             self.rho_core,
             self.functional,
             self.rho_core_g,
+            self.quantization_axis,
+        )
+        field = self.magnetic_field if field is None else field
+        if field is None:
+            return potential
+        # ``add_bfield``, and QE calls it from *inside* ``v_of_rho`` for a
+        # reason that is not stylistic: the field is then part of ``v_scf``, so
+        # every eigenvalue feels it and ``deband`` removes it again, which is
+        # what keeps it out of the reported total energy.
+        v_field, e_field, e_constraint = _field_potential(
+            field, rho_r, self.system.cell, field_scale
+        )
+        return Potential(
+            v_scf=potential.v_scf + v_field,
+            ehart=potential.ehart,
+            etxc=potential.etxc,
+            e_field=e_field,
+            e_constraint=e_constraint,
         )
 
     def onecenter(self, becsum_):
@@ -1066,25 +1320,28 @@ class Calculation:
         dense = self.basis.dense
         return _addusdens(rho_r, dense.fft_index, dense.grid, self.augmentation, becsum_)
 
+    @property
+    def state_fft_index(self) -> jnp.ndarray:
+        """The FFT index a whole *spinor* at one k-point needs.
+
+        ``(nk, npwx)`` normally, and ``(nk, 2, npwx)`` for a spin spiral, where
+        the two components are on different spheres.
+        """
+        if not self.spiral:
+            return self.fft_index
+        nk = self.system.kpoints.nk
+        return jnp.stack([self.fft_index[:nk], self.fft_index[nk:]], axis=1)
+
     def symmetrize(self, rho_r: jnp.ndarray) -> jnp.ndarray:
         """Impose the crystal symmetry on a real-space density."""
         if self._symmetry_maps is None:
             return rho_r
-        if self.nspin_mag == 4:
-            # ``sym_rho`` treats the magnetization as an axial vector: a
-            # symmetry operation permutes the grid *and* rotates the three
-            # components into each other, with a sign from the determinant and
-            # a further one from time reversal on a magnetic operation. None of
-            # that is written here, and symmetrising the components
-            # independently -- which is what the collinear path would do -- is
-            # not an approximation but a different, wrong, symmetry.
-            raise NotImplementedError(
-                "symmetrising a noncollinear magnetization is not implemented; "
-                "run with nosym = .true., or with zero starting_magnetization "
-                "(a nonmagnetic spin-orbit run has a scalar density and is "
-                "symmetrised normally)"
-            )
         gvectors = self.basis.dense
+        if self.nspin_mag == 4:
+            return _symmetrize_noncollinear(
+                rho_r, gvectors.fft_index, gvectors.grid, self._symmetry_maps,
+                self._magnetization_rotations,
+            )
         return _symmetrize(rho_r, gvectors.fft_index, gvectors.grid, self._symmetry_maps)
 
     def density(self, wavefunctions, weights, becsum_=None) -> jnp.ndarray:
@@ -1101,7 +1358,7 @@ class Calculation:
             becsum_ = self.becsum(wavefunctions, weights)
         if self.noncolin:
             rho = _spinor_density_of_bands(
-                wavefunctions[0], self.fft_index, smooth.grid, weights[0],
+                wavefunctions[0], self.state_fft_index, smooth.grid, weights[0],
                 self.system.cell, self.nspin_mag, self.k_batch,
             )
         else:
@@ -1164,6 +1421,7 @@ class Calculation:
             kinetic=self.kinetic,
             potential=potential,
             potential_wave=jnp.moveaxis(potential, -1, -3),
+            spiral=self.spiral,
             sticks=self.sticks,
             fft_index=self.fft_index,
             mask=self.basis.planewaves.mask,
@@ -1343,7 +1601,7 @@ class Calculation:
         """
         atomic = atomic_wavefunctions(
             self.pseudos, self.system.structure, self.system.cell,
-            self.basis.smooth, self.basis.planewaves, self.system.kpoints,
+            self.basis.smooth, self.basis.planewaves, self.basis_kpoints,
         )
         if self.noncolin:
             atomic = self._as_spinors(atomic)
@@ -1353,12 +1611,22 @@ class Calculation:
             # Aluminium has four atomic orbitals and a smeared calculation asks
             # for six bands; the rest are random, exactly as QE tops up.
             ndim = self.npol * self.basis.npwx
-            tiled = jnp.tile(self.basis.planewaves.mask, (1, self.npol))
+            # One row per *state*, which for a spiral means the two components'
+            # rows side by side rather than one row used twice.
+            reference = hamiltonians[0]
+            kinetic = (
+                reference.state_kinetic if self.noncolin
+                else jnp.tile(self.kinetic, (1, self.npol))
+            )
+            mask = (
+                reference.state_mask if self.noncolin
+                else jnp.tile(self.basis.planewaves.mask, (1, self.npol))
+            )
             extra = map_k(
                 lambda arrays: starting_vectors(
                     None, missing, ndim, arrays[0], arrays[1], atomic.dtype
                 ),
-                (jnp.tile(self.kinetic, (1, self.npol)), tiled),
+                (kinetic, mask),
                 batch=self.k_batch,
             )
             atomic = jnp.concatenate([atomic, extra], axis=1)
@@ -1383,6 +1651,15 @@ class Calculation:
         what the SCF starts from -- so this is a slower start, not a different
         calculation.
         """
+        if self.spiral:
+            # The two halves of the doubled list are the two components'
+            # orbitals -- at ``k + q/2`` and at ``k - q/2`` -- so each one seeds
+            # its own component and neither seeds the other.
+            nk = self.system.kpoints.nk
+            upper, lower = atomic[:nk], atomic[nk:]
+            up = jnp.concatenate([upper, jnp.zeros_like(upper)], axis=-1)
+            down = jnp.concatenate([jnp.zeros_like(lower), lower], axis=-1)
+            return jnp.concatenate([up, down], axis=1)
         nk, count, npwx = atomic.shape
         zero = jnp.zeros_like(atomic)
         up = jnp.concatenate([atomic, zero], axis=-1)
@@ -1561,11 +1838,18 @@ def run_scf(
     converged = False
     wavefunctions = None
     ethr, accuracy = ETHR_INIT, None
+    # External fields (P18). ``field`` is a loop variable rather than a property
+    # of the calculation because two of its uses change it as the loop runs:
+    # Elk's ``reducebf`` multiplies it down towards zero, and its fixed-spin-
+    # moment scheme drives it from the moment's error. Both leave the
+    # *calculation* untouched, so the same object can be reused afterwards.
+    field = calculation.magnetic_field
+    field_scale = 1.0
 
     for iteration in range(1, max_iterations + 1):
         ethr = next_ethr(ethr, accuracy, calculation.nelec, iteration)
 
-        potential = calculation.potential(rho)
+        potential = calculation.potential(rho, field_scale, field)
         epaw, ddd_paw = calculation.onecenter(becsum_state)
         hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw)
 
@@ -1624,13 +1908,19 @@ def run_scf(
         )
 
         converged = accuracy < conv_thr
+        if converged and field is not None and not field.satisfied(rho_out, system.cell):
+            # A fixed-spin-moment run is not converged until the moment is where
+            # it was asked to be: the constraining field is outside the density,
+            # so ``dr2`` can fall below ``conv_thr`` while the field is still
+            # being driven and the moment is still moving.
+            converged = False
         if converged:
             # QE's ``vnew``: the potential the last step did *not* apply,
             # V[rho_out] - V[rho_in]. It is zero at exact self-consistency and it
             # is what ``force_corr`` pairs with the atomic charges to correct a
             # force for a run that stopped short (``PW/src/force_corr.f90``).
             v_in = potential.v_scf
-            potential = calculation.potential(rho_out)
+            potential = calculation.potential(rho_out, field_scale, field)
             potential_change = potential.v_scf - v_in
             # ... and the one-centre energy with it. ``ddd_paw`` is deliberately
             # *not* refreshed: ``deband`` below pairs it with the output becsum
@@ -1671,6 +1961,13 @@ def run_scf(
         entry = {"iteration": iteration, "total_energy": total,
                  "accuracy": accuracy, "ethr": ethr,
                  "residual": residual, "change": change}
+        if field is not None:
+            # Reported, never added: ``etcon`` is printed by ``add_bfield`` and
+            # never returned to ``electrons.f90``, and Elk keeps its external
+            # field energy out of the total for the same reason. See
+            # :mod:`pypresso.scf.fields`.
+            entry["field_energy"] = float(potential.e_field)
+            entry["constraint_energy"] = float(potential.e_constraint)
         if magnetization is not None:
             entry["magnetization"] = magnetization[0]
             entry["absolute_magnetization"] = magnetization[1]
@@ -1697,6 +1994,12 @@ def run_scf(
 
         previous_energy = total
         rho, becsum_state = _mix(mixer, rho, rho_out, becsum_state, becsum_out)
+        if field is not None:
+            # ``reducebf`` (Elk 5.104), and the fixed-spin-moment feedback, both
+            # act between iterations -- after the density is mixed and before
+            # the next potential is built.
+            field_scale *= field.reducebf
+            field = field.feedback(rho, system.cell)
 
     nspin = calculation.nspin
     return SCFResult(
@@ -1718,6 +2021,9 @@ def run_scf(
         magnetization=None if magnetization is None else magnetization[0],
         absolute_magnetization=None if magnetization is None else magnetization[1],
         magnetization_vector=moment,
+        field_energy=None if field is None else float(potential.e_field),
+        constraint_energy=None if field is None else float(potential.e_constraint),
+        magnetic_field=field,
         fermi_energy=levels.get("fermi_energy"),
         fermi_energy_up=levels.get("fermi_energy_up"),
         fermi_energy_down=levels.get("fermi_energy_down"),

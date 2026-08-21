@@ -610,3 +610,38 @@ def _announce_override(requested: Functional, pseudo_dfts) -> None:
                 stacklevel=3,
             )
             return
+
+
+def local_spin_frame(charge: jnp.ndarray, magnetization: jnp.ndarray):
+    """The ``(up, down)`` pair along the local spin axis of a noncollinear density.
+
+    ``v_xc``'s ``nspin == 4`` branch and ``PAW_xc_potential``'s do the same
+    thing, on the plane-wave grid and on the radial sphere, and this is the part
+    they share: at every point the magnetization picks out an axis, and the
+    density resolved on it is
+
+        rho_up = (n + |m|) / 2,   rho_down = (n - |m|) / 2.
+
+    ``|m|`` is clamped to ``|n|`` because a magnetization larger than the charge
+    is not a physical state and would make one channel negative -- the same
+    clamp ``xc_lsda`` applies to ``zeta``.
+
+    Returns ``(channels, modulus, direction)``: the ``(2, ...)`` pair, the
+    clamped modulus, and the unit vector the splitting is attached to (zero
+    where there is no magnetization to define one, as QE zeroes the vector part
+    of the potential there rather than picking a direction out of rounding
+    error).
+    """
+    modulus = jnp.sqrt(jnp.sum(magnetization**2, axis=0))
+    clamped = jnp.minimum(modulus, jnp.abs(charge))
+    channels = jnp.stack([(charge + clamped) / 2.0, (charge - clamped) / 2.0])
+    safe = jnp.where(modulus > 0.0, modulus, 1.0)
+    direction = jnp.where(modulus > VANISHING_MAGNETIZATION, magnetization / safe, 0.0)
+    return channels, modulus, direction
+
+
+#: Below this magnetization the local spin axis is undefined, so the potential's
+#: vector part is set to zero rather than to a direction picked out of rounding
+#: error. ``vanishing_mag`` in ``PW/src/v_of_rho.f90``, and ``eps12`` in
+#: ``paw_onecenter.f90``.
+VANISHING_MAGNETIZATION = 1.0e-20

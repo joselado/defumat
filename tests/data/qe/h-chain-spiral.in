@@ -1,0 +1,45 @@
+! A hydrogen chain with a spin spiral along it -- the system P19 is validated on.
+!
+! One atom per cell, 5 bohr apart along z and 12 bohr from its images in x and y,
+! so it is a genuinely one-dimensional magnetic chain with a real exchange
+! coupling and a cheap unit cell. The spiral wavevector is in lattice
+! coordinates (Elk's vqlss), so spiral_q(3) = 1/2 is the antiferromagnet and
+! 1/4 turns the moment by 90 degrees from cell to cell.
+!
+! Two choices are deliberate and the tests depend on both:
+!
+!   * degauss = 0.1 rather than the 0.02 a production run would use. This is a
+!     metal with a soft magnetic energy surface, and at a small smearing the SCF
+!     lands in whichever nearby minimum its starting density is closest to --
+!     the spiral and the supercell it is compared against then converge to
+!     *different states* and disagree in the fourth decimal for a reason that
+!     has nothing to do with the spiral machinery. At 0.1 the state is unique
+!     and the two agree to 1e-10.
+!   * the 1x1x4 k-grid is even, so it is invariant under a shift by half a
+!     reciprocal lattice vector -- which is what makes E(q + G) = E(q) hold. See
+!     pypresso/system/spiral.py.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 0.41666666666667,
+    nat = 1, ntyp = 1,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.6
+    angle1(1) = 90.0
+    spiral_q(1) = 0.0, spiral_q(2) = 0.0, spiral_q(3) = 0.25
+    nbnd = 6
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-11
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H 0.0 0.0 0.0
+K_POINTS {automatic}
+ 1 1 4 0 0 0

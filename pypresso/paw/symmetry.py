@@ -34,7 +34,12 @@ import numpy as np
 
 from pypresso.pseudo.harmonics import real_spherical_harmonics
 from pypresso.pseudo.projectors import projector_channels
-from pypresso.system.symmetry import Symmetries, atom_mapping, cartesian_rotations
+from pypresso.system.symmetry import (
+    Symmetries,
+    atom_mapping,
+    cartesian_rotations,
+    magnetization_signs,
+)
 
 __all__ = ["BecsumSymmetry", "build_becsum_symmetry", "harmonic_rotations"]
 
@@ -95,13 +100,16 @@ class BecsumSymmetry:
     number of operations, not the size, is what makes the naive loop expensive.
     """
 
-    __slots__ = ("operators", "mapping", "species_atoms", "nsym")
+    __slots__ = ("operators", "mapping", "species_atoms", "nsym", "rotations")
 
-    def __init__(self, operators, mapping, species_atoms, nsym):
+    def __init__(self, operators, mapping, species_atoms, nsym, rotations=None):
         self.operators = operators
         self.mapping = mapping
         self.species_atoms = species_atoms
         self.nsym = nsym
+        #: ``(nsym, 3, 3)`` signed cartesian rotations, or ``None`` when the
+        #: spin channel is a spectator. Present only for ``nspin_mag = 4``.
+        self.rotations = rotations
 
     def apply(self, becsum: tuple) -> tuple:
         """The symmetrised ``becsum``, in the same per-species layout."""
@@ -115,19 +123,35 @@ class BecsumSymmetry:
                 out.append(values)
                 continue
             # sources[s, n] is the index, within this species' atoms, of the
-            # atom that operation s sends atom n to. The spin channel is a
-            # spectator: a collinear symmetry operation permutes atoms and
-            # rotates harmonics, and does neither to the spin index -- QE's
-            # PAW_symmetrize loops over ``is`` outside everything else.
+            # atom that operation s sends atom n to. In every regime but the
+            # noncollinear magnetic one the spin channel is a spectator: an
+            # operation permutes atoms and rotates harmonics, and does neither
+            # to the spin index -- QE's PAW_symmetrize loops over ``is`` outside
+            # everything else.
             gathered = values[:, sources]  # (nspin, nsym, nat_t, nh, nh)
+            if self.rotations is None:
+                out.append(
+                    jnp.einsum("sijkl,zsnkl->znij", operator, gathered) / self.nsym
+                )
+                continue
+            # ``nspin_mag = 4``: the charge component is a spectator and the
+            # three magnetization components are an axial vector, rotated by
+            # the same signed cartesian matrices the density's symmetrisation
+            # uses (``paw_symmetry.f90``'s ``s(kpol,is,invs(isym)) * segno``).
+            # Doing them as three scalars is a different symmetry, not a
+            # coarser one.
+            charge = jnp.einsum("sijkl,snkl->nij", operator, gathered[0])
+            magnetization = jnp.einsum(
+                "sijkl,scd,dsnkl->cnij", operator, self.rotations, gathered[1:]
+            )
             out.append(
-                jnp.einsum("sijkl,zsnkl->znij", operator, gathered) / self.nsym
+                jnp.concatenate([charge[None], magnetization], axis=0) / self.nsym
             )
         return tuple(out)
 
 
 def build_becsum_symmetry(
-    pseudos, structure, cell, symmetries: Symmetries
+    pseudos, structure, cell, symmetries: Symmetries, nspin_mag: int = 1
 ) -> BecsumSymmetry | None:
     """Precompute the group average. ``None`` when there is nothing to average."""
     if symmetries.nsym <= 1:
@@ -174,4 +198,11 @@ def build_becsum_symmetry(
         mapping=tuple(sources_per_species),
         species_atoms=tuple(species_atoms),
         nsym=symmetries.nsym,
+        rotations=(
+            jnp.asarray(
+                magnetization_signs(cell, symmetries)[:, None, None]
+                * cartesian_rotations(cell, symmetries)
+            )
+            if nspin_mag == 4 else None
+        ),
     )

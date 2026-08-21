@@ -40,9 +40,14 @@ if TYPE_CHECKING:  # only for annotations: importing it eagerly makes a cycle,
 __all__ = ["Symmetries", "lattice_point_group", "find_symmetries", "is_supercell",
            "symmetrize_density", "symmetry_maps", "apply_symmetry_maps",
            "atom_mapping", "cartesian_rotations",
-           "symmetrize_vector", "check_symmetry"]
+           "symmetrize_vector", "check_symmetry",
+           "magnetic_symmetries", "magnetization_signs",
+           "symmetrize_magnetization"]
 
 _TOLERANCE = 1.0e-6
+#: QE compares magnetizations with ``eps2 = 1e-5`` (``sgam_at_mag``), looser than
+#: the position tolerance because ``m_loc`` is a product of input numbers.
+_MAGNETIC_TOLERANCE = 1.0e-5
 
 
 class Symmetries(eqx.Module):
@@ -63,10 +68,25 @@ class Symmetries(eqx.Module):
 
     rotations: tuple = eqx.field(static=True)
     translations: tuple = eqx.field(static=True)
+    #: ``t_rev``: 1 where the operation is a symmetry only when followed by time
+    #: reversal, 0 otherwise. Empty means "none of them", which is the case for
+    #: every nonmagnetic run; see :func:`magnetic_symmetries`.
+    time_reversed: tuple = eqx.field(static=True, default=())
 
     @property
     def nsym(self) -> int:
         return len(self.rotations)
+
+    @property
+    def magnetic(self) -> bool:
+        """Whether any operation needs time reversal to be one."""
+        return any(self.time_reversed)
+
+    def t_rev_array(self) -> np.ndarray:
+        """``(nsym,)`` of 0/1, zeros when the group is an ordinary one."""
+        if not self.time_reversed:
+            return np.zeros(self.nsym, dtype=int)
+        return np.array(self.time_reversed, dtype=int)
 
     @property
     def symmorphic(self) -> bool:
@@ -223,6 +243,98 @@ def find_symmetries(cell: Cell, structure: Structure) -> Symmetries:
         rotations=tuple(tuple(tuple(int(v) for v in row) for row in r) for r in rotations),
         translations=tuple(tuple(float(v) for v in t) for t in translations),
     )
+
+
+def magnetic_symmetries(
+    cell: Cell, structure: Structure, symmetries: Symmetries, moments: np.ndarray
+) -> Symmetries:
+    """Keep only the operations that are symmetries of the magnetization too.
+
+    ``sgam_at_mag`` in ``symm_base.f90``. A magnetic noncollinear run has a
+    *vector* on every atom, and an operation of the space group is a symmetry of
+    the crystal only if it also maps that vector field onto itself. Two things
+    make this different from testing the positions:
+
+    * the magnetization is an **axial** vector, so the rotated moment carries a
+      factor ``det(R)`` -- an inversion leaves it alone where it reverses a
+      position (QE spells this ``sname(1:3) == 'inv'``);
+    * an operation that sends every moment to *minus* its image is still a
+      symmetry, of the crystal followed by **time reversal**. It is kept, with
+      ``t_rev = 1``, and everything downstream that acts on a magnetization owes
+      it a further sign.
+
+    Only operations that do one or the other for *every* atom survive; the rest
+    are dropped. Skipping this filter is not a missed optimisation -- it
+    symmetrises with operations that reverse the magnetization without recording
+    it, which averages the moment to zero and converges to the nonmagnetic
+    solution.
+
+    Args:
+        moments: ``(nat, 3)`` cartesian starting moments (``m_loc`` in
+            ``setup.f90``).
+    """
+    if symmetries.nsym <= 1:
+        return symmetries
+    moments = np.asarray(moments, dtype=float)
+    mapping = atom_mapping(cell, structure, symmetries)
+    rotations = cartesian_rotations(cell, symmetries)
+
+    kept, translations, t_rev = [], [], []
+    for s, rotation in enumerate(rotations):
+        determinant = np.sign(np.linalg.det(rotation))
+        rotated = determinant * (moments @ rotation.T)
+        images = moments[mapping[s]]
+        same = np.all(np.abs(rotated - images) < _MAGNETIC_TOLERANCE)
+        opposite = np.all(np.abs(rotated + images) < _MAGNETIC_TOLERANCE)
+        if not (same or opposite):
+            continue
+        kept.append(symmetries.rotations[s])
+        translations.append(symmetries.translations[s])
+        # ``t1`` wins when both hold, which happens only for a zero moment.
+        t_rev.append(0 if same else 1)
+
+    return Symmetries(
+        rotations=tuple(kept),
+        translations=tuple(translations),
+        time_reversed=tuple(t_rev),
+    )
+
+
+def magnetization_signs(cell: Cell, symmetries: Symmetries) -> np.ndarray:
+    """``det(R) * (-1)^t_rev`` per operation -- the sign an axial vector picks up.
+
+    Split out because three places need the same rule: symmetrising the
+    magnetization density, symmetrising a per-atom moment, and the magnetic
+    filter above.
+    """
+    rotations = cartesian_rotations(cell, symmetries)
+    determinants = np.sign(np.linalg.det(rotations))
+    return determinants * np.where(symmetries.t_rev_array() == 1, -1.0, 1.0)
+
+
+def symmetrize_magnetization(
+    mag_g: jnp.ndarray, permutations, phases, rotations: jnp.ndarray
+) -> jnp.ndarray:
+    """Average a magnetization density over the group -- ``sym_rho``'s ``nspin = 4``.
+
+    ``mag_g`` is ``(3, ngm)`` in **cartesian** components. The scalar rule
+
+        rho_sym(G) = (1/N) sum_S e^{-i G . f_S} rho(S^T G)
+
+    gains one factor: the three components rotate into each other as well, so
+
+        m_sym(G) = (1/N) sum_S d_S R_S . e^{-i G . f_S} m(S^T G)
+
+    with ``R_S`` the cartesian rotation and ``d_S = det(R_S) (-1)^{t_rev}`` the
+    axial-vector sign of :func:`magnetization_signs`. The permutation and the
+    phases are the *same* ones the charge uses -- the rotation matrix is the
+    whole difference — which is why this shares :func:`symmetry_maps`.
+
+    Args:
+        rotations: ``(nsym, 3, 3)`` already multiplied by the signs.
+    """
+    gathered = phases[:, None, :] * mag_g[:, permutations].transpose(1, 0, 2)
+    return jnp.mean(jnp.einsum("sij,sjg->sig", rotations, gathered), axis=0)
 
 
 def _candidate_translations(rotated, positions, types):

@@ -1,0 +1,44 @@
+! bcc iron with its moment held at 2.0 mu_B by Elk's fixed-spin-moment scheme,
+! where it would otherwise be 3.18.
+!
+! Not a penalty: `constrained_magnetization = 'fsm'` adds nothing to the energy
+! and instead *searches* for the uniform field at which the unconstrained
+! functional puts the moment where it was asked, updating it by
+! `B <- B - tau (m - m_fix)` after every SCF iteration (Elk's bfieldfsm.f90,
+! with the sign flipped because this code follows QE's field convention).
+!
+! Three choices are deliberate:
+!
+!   * `lambda` is Elk's `taufsm`, and it has to be small. At 0.1 the feedback
+!     overshoots, the moment flips, and the run saturates at 8 mu_B; at 0.02 it
+!     converges in ~350 iterations. Elk's own default is 0.01.
+!   * one k-point and `nosym`, as in benchmarks/fe-mag-1k.in: this is a test of
+!     the constraint machinery, and a Brillouin-zone integration would only make
+!     it slower.
+!   * collinear. The scheme works in either regime; nspin = 2 is the cheap one,
+!     and it is also the regime QE has no 'total' constraint for at all.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 3, celldm(1) = 5.217, nat = 1, ntyp = 1,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    occupations = 'smearing', smearing = 'marzari-vanderbilt', degauss = 0.05
+    nspin = 2
+    nosym = .true.
+    starting_magnetization(1) = 0.5
+    constrained_magnetization = 'fsm'
+    lambda = 0.02
+    fixed_magnetization(3) = 2.0
+ /
+ &electrons
+    conv_thr = 1.0d-8
+    mixing_beta = 0.3
+ /
+ATOMIC_SPECIES
+ Fe 55.847 Fe.pz-nd-rrkjus.UPF
+ATOMIC_POSITIONS (alat)
+ Fe 0.0 0.0 0.0
+K_POINTS
+ 1
+   0.1875000  0.1875000  0.4375000   1.00

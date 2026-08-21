@@ -1,0 +1,31 @@
+! An oxygen atom with a PAW dataset, spin-polarized, in a small box.
+!
+! The PAW counterpart of h-atom-lsda.in, and used for one thing only: the
+! *rotation* invariance of a noncollinear run. It is deliberately not compared
+! against the collinear run, because this density rings negative over about a
+! fifth of the grid and QE's nspin = 4 exchange-correlation energy integrates
+! against |rho| where its nspin = 2 branch uses the signed density -- 2.6e-4 Ry
+! of difference that belongs to that convention and not to this code. Rotating
+! the moment does not touch the convention, so that check stays exact.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 1, celldm(1) = 10.0,
+    nat = 1, ntyp = 1,
+    ecutwfc = 30.0, ecutrho = 180.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.05
+    nspin = 2
+    starting_magnetization(1) = 0.5
+    nbnd = 8
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ O  15.999  O.pz-kjpaw.UPF
+ATOMIC_POSITIONS (alat)
+ O 0.0 0.0 0.0
+K_POINTS {automatic}
+ 1 1 1 0 0 0

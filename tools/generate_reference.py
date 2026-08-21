@@ -84,6 +84,21 @@ RESTAMPED = [
     # benchmark is a QE 6.1 run, and a relaxation's *final geometry* is what is
     # compared, so it is regenerated with the vendored pw.x like the rest.
     "pw_relax/relax.in",
+    # Noncollinear magnetism and constrained moments (P17, P18). bcc iron with
+    # its moment tilted, which is the only magnetic noncollinear case QE's
+    # suite ships. The constrained ones have a second reason to be regenerated
+    # and it is not the FFT grid: ``noncolin-constrain_atomic.in`` carries a
+    # commented-out ``lambda = 1`` above the ``lambda = 0.005`` it actually
+    # sets, and its committed benchmark prints a constraint energy of 8.022 Ry
+    # at the starting density -- which is the *unscaled* sum of squares, i.e.
+    # what lambda = 1 gives. The committed output does not belong to the
+    # committed input, so comparing against it would be comparing against a run
+    # nobody can reproduce.
+    "pw_noncolin/noncolin.in",
+    "pw_noncolin/noncolin-pbe.in",
+    "pw_noncolin/noncolin-constrain_atomic.in",
+    "pw_noncolin/noncolin-constrain_angle.in",
+    "pw_noncolin/noncolin-constrain_total.in",
 ]
 
 

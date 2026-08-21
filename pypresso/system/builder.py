@@ -17,12 +17,21 @@ import numpy as np
 from pypresso.config import DEFAULT_PRECISION, Precision
 from pypresso.io.pwin import PwInput, read_pw_input
 from pypresso.system.cell import Cell, celldm_from_abc
-from pypresso.system.kpoints import KPoints, for_spin as kpoints_for_spin
+from pypresso.system.kpoints import (
+    KPoints,
+    expand_to_subgroup,
+    for_spin as kpoints_for_spin,
+)
 from pypresso.system.structure import Species, Structure
-from pypresso.system.symmetry import find_symmetries
+from pypresso.system.symmetry import (
+    Symmetries,
+    find_symmetries,
+    lattice_point_group,
+    magnetic_symmetries,
+)
 from pypresso.units import ANGSTROM_TO_BOHR
 
-__all__ = ["System", "build_system", "system_from_file"]
+__all__ = ["System", "build_system", "system_from_file", "local_moments"]
 
 
 class System(eqx.Module):
@@ -88,6 +97,36 @@ class System(eqx.Module):
     #: ``noncolin`` -- a collinear run has nothing to point.
     angle1: tuple[float, ...] = eqx.field(static=True, default=())
     angle2: tuple[float, ...] = eqx.field(static=True, default=())
+    #: ``constrained_magnetization`` and its ``lambda``/``fixed_magnetization``
+    #: (``input.f90``'s ``i_cons``), plus the fields put in by hand. See
+    #: :mod:`pypresso.scf.fields`.
+    constrained_magnetization: str = eqx.field(static=True, default="none")
+    constraint_lambda: float = eqx.field(static=True, default=1.0)
+    fixed_magnetization: tuple[float, float, float] = eqx.field(
+        static=True, default=(0.0, 0.0, 0.0)
+    )
+    #: ``B_field``: a uniform field over the cell, in Ry.
+    b_field: tuple[float, float, float] = eqx.field(static=True, default=(0.0, 0.0, 0.0))
+    #: A pypresso extension with no pw.x counterpart -- Elk's ``bfcmt``: one
+    #: field per atom, applied inside that atom's sphere. ``()`` for none.
+    atomic_b_field: tuple = eqx.field(static=True, default=())
+    #: Elk's ``reducebf``: multiply the external fields by this after every SCF
+    #: iteration, so a symmetry-breaking field is gone by convergence.
+    reducebf: float = eqx.field(static=True, default=1.0)
+    #: ``r_m`` per species in bohr, or ``()`` for the radius ``make_pointlists``
+    #: derives. A pypresso extension only in being an input at all.
+    integration_radii: tuple = eqx.field(static=True, default=())
+    #: Which local-weight scheme the atom-resolved quantities use; see
+    #: :mod:`pypresso.scf.locals`.
+    local_weights: str = eqx.field(static=True, default="qe")
+    #: ``spiral_q``: the wavevector of a spin spiral, in **lattice**
+    #: coordinates, as Elk's ``vqlss`` is (P19). ``None`` -- the normal case --
+    #: is no spiral. See :mod:`pypresso.system.spiral`.
+    spiral_q: tuple | None = eqx.field(static=True, default=None)
+
+    @property
+    def spiral(self) -> bool:
+        return self.spiral_q is not None
 
     @property
     def lsda(self) -> bool:
@@ -138,6 +177,35 @@ class System(eqx.Module):
             return 4 if self.domag else 1
         return self.nspin
 
+    @property
+    def local_moments(self) -> np.ndarray:
+        """``m_loc``: each atom's starting moment, cartesian ``(nat, 3)``.
+
+        The magnetic symmetry group is decided from this and from nothing else
+        (:func:`local_moments`), so it lives on :class:`System` -- the driver and
+        the k-point reduction must not each compute their own version of the
+        rule, or they can disagree about which operations exist.
+        """
+        return local_moments(
+            self.structure, self.nspin, self.starting_magnetization,
+            self.angle1, self.angle2,
+        )
+
+    def symmetry_group(self, nosym: bool | None = None) -> Symmetries:
+        """The space group this run symmetrises with -- magnetic if it is.
+
+        ``find_sym`` is called with ``magnetic_sym = noncolin .AND. domag``
+        (``setup.f90``), and that is the only place the distinction is made.
+        """
+        if nosym is None:
+            nosym = self.nosym
+        symmetries = find_symmetries(self.cell, self.structure)
+        if self.nspin_mag == 4:
+            symmetries = magnetic_symmetries(
+                self.cell, self.structure, symmetries, self.local_moments
+            )
+        return symmetries
+
 
 def system_from_file(path, precision: Precision = DEFAULT_PRECISION) -> System:
     return build_system(read_pw_input(path), precision=precision)
@@ -146,16 +214,6 @@ def system_from_file(path, precision: Precision = DEFAULT_PRECISION) -> System:
 def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> System:
     cell = _build_cell(pwin, precision)
     structure = _build_structure(pwin, cell, precision)
-
-    # An automatic k-grid is reduced to its irreducible wedge here, which is
-    # where QE does it too (``setup.f90``, after the symmetry analysis and
-    # before anything is sized from the k-point count). It needs the crystal's
-    # symmetries, hence the ordering: cell, then structure, then symmetry, then
-    # k-points. Explicit k-point lists are taken as given, as QE takes them.
-    nosym = _logical(pwin.get("system", "nosym", False))
-    symmetries = find_symmetries(cell, structure)
-    rotations = None if nosym else symmetries.rotation_array()
-    kpoints = _build_kpoints(pwin, cell, precision, rotations)
 
     # ``noncolin`` and ``nspin`` say the same thing twice in a pw.x input, and
     # ``input.f90`` resolves it in one direction: noncolin wins and sets
@@ -182,6 +240,60 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
             "lspinorb = .true. needs noncolin = .true.: the spin-orbit term "
             "couples the two spin channels, so it has no collinear form"
         )
+    starting_magnetization = tuple(
+        pwin.indexed("system", "starting_magnetization", structure.ntyp)
+    )
+    # Imported here rather than at module scope: ``pypresso.scf`` imports the
+    # driver, which imports this module, and the cycle is real.
+    from pypresso.scf.fields import CONSTRAINTS
+
+    constrained_magnetization = str(
+        pwin.get("system", "constrained_magnetization", "none")
+    ).lower()
+    if constrained_magnetization not in CONSTRAINTS:
+        raise ValueError(
+            f"constrained_magnetization = {constrained_magnetization!r} is not "
+            f"implemented; available: {sorted(CONSTRAINTS)}"
+        )
+    if constrained_magnetization != "none" and nspin == 1:
+        # QE's own check: there is no magnetization to constrain.
+        raise ValueError(
+            "constrained_magnetization requires nspin = 2 or noncolin = .true."
+        )
+    if any(float(v) != 0.0 for v in pwin.indexed("system", "B_field", 3)) and (
+        constrained_magnetization != "none"
+    ):
+        # ``input.f90:1614``: QE refuses the combination rather than deciding
+        # which of the two fields wins.
+        raise ValueError(
+            "a nonzero B_field together with constrained_magnetization: QE "
+            "refuses this and so does pypresso; use one or the other"
+        )
+    angle1 = tuple(pwin.indexed("system", "angle1", structure.ntyp))
+    angle2 = tuple(pwin.indexed("system", "angle2", structure.ntyp))
+
+    # An automatic k-grid is reduced to its irreducible wedge here, which is
+    # where QE does it too (``setup.f90``, after the symmetry analysis and
+    # before anything is sized from the k-point count). It needs the crystal's
+    # symmetries, hence the ordering: cell, then structure, then the spin
+    # variables -- because a magnetic noncollinear run has a *smaller* group and
+    # no ``-k = k`` (``magnetic_sym`` in ``setup.f90``) -- then symmetry, then
+    # k-points.
+    nosym = _logical(pwin.get("system", "nosym", False))
+    spiral_q = _spiral_q(pwin, nspin, lspinorb, nosym)
+    moments = local_moments(structure, nspin, starting_magnetization, angle1, angle2)
+    magnetic = nspin == 4 and bool(np.any(np.abs(moments) > 1.0e-6))
+    symmetries = find_symmetries(cell, structure)
+    if magnetic:
+        symmetries = magnetic_symmetries(cell, structure, symmetries, moments)
+    rotations = None if nosym else symmetries.rotation_array()
+    kpoints = _build_kpoints(
+        pwin, cell, precision, rotations,
+        time_reversal=not magnetic,
+        t_rev=None if nosym else symmetries.t_rev_array(),
+        lattice_rotations=None if nosym else np.array(lattice_point_group(np.asarray(cell.at))),
+    )
+
     # ``setup.f90``'s ``degspin``, applied in the one place that knows the rule
     # -- a k-set built later, for a denser DOS grid, has to go through the same
     # function or it counts every electron twice.
@@ -208,14 +320,25 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         smearing=str(pwin.get("system", "smearing", "gaussian")).lower(),
         degauss=float(pwin.get("system", "degauss", 0.0)),
         input_occupations=_input_occupations(pwin),
-        starting_magnetization=tuple(
-            pwin.indexed("system", "starting_magnetization", structure.ntyp)
-        ),
+        starting_magnetization=starting_magnetization,
         tot_magnetization=_tot_magnetization(pwin),
         nosym=nosym,
         lspinorb=lspinorb,
-        angle1=tuple(pwin.indexed("system", "angle1", structure.ntyp)),
-        angle2=tuple(pwin.indexed("system", "angle2", structure.ntyp)),
+        angle1=angle1,
+        angle2=angle2,
+        constrained_magnetization=constrained_magnetization,
+        constraint_lambda=float(pwin.get("system", "lambda", 1.0)),
+        fixed_magnetization=tuple(
+            float(v) for v in pwin.indexed("system", "fixed_magnetization", 3)
+        ),
+        b_field=tuple(float(v) for v in pwin.indexed("system", "B_field", 3)),
+        atomic_b_field=_atomic_b_field(pwin, structure.nat),
+        reducebf=float(pwin.get("system", "reducebf", 1.0)),
+        integration_radii=tuple(
+            float(v) for v in pwin.indexed("system", "r_m", structure.ntyp)
+        ) if pwin.get("system", "r_m") is not None else (),
+        local_weights=str(pwin.get("system", "local_weights", "qe")).lower(),
+        spiral_q=spiral_q,
     )
 
 
@@ -332,8 +455,104 @@ def _build_structure(pwin: PwInput, cell: Cell, precision: Precision) -> Structu
     )
 
 
+def local_moments(
+    structure: Structure,
+    nspin: int,
+    starting_magnetization,
+    angle1,
+    angle2,
+) -> np.ndarray:
+    """``m_loc``: the starting moment of every atom, cartesian -- ``setup.f90``.
+
+    It is what decides the magnetic symmetry group, so it is computed here, once,
+    from the input and never from the converged state -- exactly as ``domag`` is
+    (see :attr:`System.domag`). ``angle1``/``angle2`` are the polar and azimuthal
+    angles in degrees, and a collinear run has no angles: its moment is along
+    ``z`` by construction.
+    """
+    types = np.asarray(structure.types, dtype=int)
+    ntyp = structure.ntyp
+    magnitudes = np.zeros(ntyp)
+    given = np.asarray(starting_magnetization, dtype=float)
+    magnitudes[: len(given)] = given
+    if nspin != 4:
+        moments = np.zeros((len(types), 3))
+        moments[:, 2] = magnitudes[types]
+        return moments
+
+    theta = np.zeros(ntyp)
+    phi = np.zeros(ntyp)
+    for target, values in ((theta, angle1), (phi, angle2)):
+        values = np.asarray(values, dtype=float)
+        target[: len(values)] = np.deg2rad(values)
+    directions = np.stack(
+        [np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi), np.cos(theta)],
+        axis=1,
+    )
+    return magnitudes[types, None] * directions[types]
+
+
+def _spiral_q(pwin: PwInput, nspin: int, lspinorb: bool, nosym: bool) -> tuple | None:
+    """``spiral_q``, and the three things a spiral cannot be combined with.
+
+    A pypresso extension -- ``pw.x`` has no spin spiral at all -- with Elk's
+    name for the quantity (``vqlss``) and Elk's units (lattice coordinates).
+    """
+    if "spiral_q" not in pwin.namelists.get("system", {}):
+        return None
+    q = tuple(float(v) for v in pwin.indexed("system", "spiral_q", 3))
+
+    if nspin != 4:
+        # The two spinor components live on different plane-wave spheres, so
+        # there is no collinear or unpolarized form of the calculation.
+        raise ValueError(
+            "spiral_q needs noncolin = .true.: a spin spiral is a two-component "
+            "spinor with a different G-sphere per component"
+        )
+    if lspinorb:
+        # Permanently: spin-orbit coupling ties spin to the lattice, so the
+        # combined translation-plus-spin-rotation the generalized Bloch theorem
+        # rests on is not a symmetry. Elk refuses the same combination
+        # (``init0.f90`` sets ``spinorb = .false.`` when ``spinsprl``).
+        raise ValueError(
+            "spiral_q with lspinorb = .true. is not a calculation: spin-orbit "
+            "coupling breaks the generalized Bloch theorem a spiral rests on"
+        )
+    if not nosym:
+        # The spin space group is not written; see pypresso.system.spiral.
+        raise ValueError(
+            "a spin spiral needs nosym = .true.: only the operations with "
+            "S^T q = q survive at all, they act on the rotated-frame "
+            "magnetization with a spin rotation of their own (the spin space "
+            "group, which is not implemented), and time reversal sends q to -q"
+        )
+    return q
+
+
+def _atomic_b_field(pwin: PwInput, nat: int) -> tuple:
+    """The ``LOCAL_MAGNETIC_FIELDS`` card: one field per atom, cartesian, in Ry.
+
+    Elk's ``bfcmt``. ``()`` when the card is absent, which is the normal case.
+    """
+    card = pwin.card("LOCAL_MAGNETIC_FIELDS")
+    if card is None:
+        return ()
+    rows = [line.split() for line in card.lines if line.strip()]
+    if len(rows) != nat:
+        raise ValueError(
+            f"LOCAL_MAGNETIC_FIELDS lists {len(rows)} atoms but the cell has {nat}"
+        )
+    return tuple(tuple(float(v) for v in row[:3]) for row in rows)
+
+
 def _build_kpoints(
-    pwin: PwInput, cell: Cell, precision: Precision, rotations=None
+    pwin: PwInput,
+    cell: Cell,
+    precision: Precision,
+    rotations=None,
+    time_reversal: bool = True,
+    t_rev=None,
+    lattice_rotations=None,
 ) -> KPoints:
     card = pwin.card("K_POINTS")
     if card is None:
@@ -349,6 +568,7 @@ def _build_kpoints(
         return KPoints.automatic(
             tuple(values[:3]), tuple(values[3:6]), cell,
             precision=precision, rotations=rotations,
+            time_reversal=time_reversal, t_rev=t_rev,
         )
 
     # All remaining forms start with a count, then one line per k-point.
@@ -360,9 +580,21 @@ def _build_kpoints(
     points, fourth = rows[:, :3], rows[:, 3]
 
     if option in ("tpiba", "crystal"):
-        if option == "crystal":
-            return KPoints.from_crystal(points, fourth, cell, precision=precision)
-        return KPoints.from_cartesian(points, fourth, precision=precision)
+        # ``irreducible_BZ`` runs on an explicit list too: QE takes it to be the
+        # wedge of the *lattice's* point group and completes it wherever the
+        # crystal has fewer operations. That is a no-op for most inputs and is
+        # exactly what a magnetic noncollinear run needs -- see
+        # :func:`pypresso.system.kpoints.expand_to_subgroup`.
+        crystal_points = (
+            np.asarray(points, dtype=float) if option == "crystal"
+            else np.asarray(cell.k_to_crystal(np.asarray(points, dtype=float)))
+        )
+        if rotations is not None and lattice_rotations is not None and len(rotations):
+            crystal_points, fourth = expand_to_subgroup(
+                crystal_points, fourth, lattice_rotations, rotations,
+                time_reversal=time_reversal, t_rev=t_rev,
+            )
+        return KPoints.from_crystal(crystal_points, fourth, cell, precision=precision)
 
     if option in ("tpiba_b", "crystal_b"):
         return KPoints.band_path(

@@ -38,13 +38,14 @@ from __future__ import annotations
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from pypresso.basis.fft import g_to_r, r_to_g
 from pypresso.basis.gradients import divergence, gradient
 from pypresso.basis.gvectors import GVectors
 from pypresso.system.cell import Cell
 from pypresso.units import E2, FPI
-from pypresso.xc.functional import Functional, get_functional
+from pypresso.xc.functional import Functional, get_functional, local_spin_frame
 
 __all__ = ["Potential", "v_of_rho", "hartree", "exchange_correlation",
            "gradient_correction", "scf_accuracy", "total_charge", "with_core",
@@ -68,6 +69,13 @@ class Potential(eqx.Module):
     v_scf: jnp.ndarray  # (nspin, n1, n2, n3), Ry -- Hartree + XC
     ehart: jnp.ndarray  # Ry
     etxc: jnp.ndarray  # Ry
+    #: ``-int B . m`` for a field put in by hand, and ``etcon`` for a
+    #: constrained moment. Both are *inside* ``v_scf`` -- ``add_bfield`` is
+    #: called from within ``v_of_rho`` -- and neither is added to the total
+    #: energy, which is QE's convention and Elk's; see
+    #: :mod:`pypresso.scf.fields`.
+    e_field: jnp.ndarray = 0.0
+    e_constraint: jnp.ndarray = 0.0
 
     @property
     def nspin(self) -> int:
@@ -196,10 +204,6 @@ def exchange_correlation(
     return v, energy
 
 
-#: Below this magnetization the local spin axis is undefined, so the potential's
-#: vector part is set to zero rather than to a direction picked out of rounding
-#: error. ``vanishing_mag`` in ``PW/src/v_of_rho.f90``.
-VANISHING_MAGNETIZATION = 1.0e-20
 #: ...and below this charge there is nothing to build a potential from at all.
 VANISHING_CHARGE = 1.0e-10
 
@@ -231,24 +235,16 @@ def _noncollinear_xc(density: jnp.ndarray, cell: Cell, functional: Functional):
     """
     n = density[0].size
     charge = density[0]
-    magnetization = density[1:]
-    modulus = jnp.sqrt(jnp.sum(magnetization**2, axis=0))
     absolute = jnp.abs(charge)
 
-    # |zeta| <= 1: a magnetization larger than the charge is not a physical
-    # state, and ``xc_lsda`` clamps rather than taking a square root of a
-    # negative spin density. Clamping |m| is the same clamp written on the
-    # quantity this code carries.
-    clamped = jnp.minimum(modulus, absolute)
-    channels = jnp.stack([(charge + clamped) / 2.0, (charge - clamped) / 2.0])
+    # The local spin frame is shared with PAW's one-centre XC, which does the
+    # same thing on the radial sphere -- see :func:`pypresso.xc.functional.local_spin_frame`.
+    channels, _, direction = local_spin_frame(charge, density[1:])
 
     potentials = functional.spin_potential(channels)
     v0 = 0.5 * (potentials[0] + potentials[1])
     vs = 0.5 * (potentials[0] - potentials[1])
 
-    direction = jnp.where(
-        modulus > VANISHING_MAGNETIZATION, magnetization / jnp.where(modulus > 0.0, modulus, 1.0), 0.0
-    )
     v = jnp.concatenate([v0[None], vs[None] * direction])
     # Nothing to polarise where there is no charge; QE zeroes all four
     # components there rather than dividing.
@@ -259,6 +255,93 @@ def _noncollinear_xc(density: jnp.ndarray, cell: Cell, functional: Functional):
         * jnp.sum(absolute * functional.spin_energy_density(channels))
     )
     return v, energy
+
+
+def fixed_quantization_axis(moments: np.ndarray) -> np.ndarray | None:
+    """``compute_ux``: a fixed axis to take the sign of the magnetization along.
+
+    A gradient-corrected noncollinear run resolves the density onto the local
+    spin axis before evaluating the functional, and the naive resolution
+    ``(n +- |m|)/2`` has a **kink** wherever ``m`` passes through zero -- an
+    antiferromagnet has one on every plane between two atoms, and a kink in the
+    density is a divergence in its gradient. QE avoids it whenever the starting
+    moments are all parallel to one direction: it then keeps the *signed*
+    projection on that direction, so up stays up across the node.
+
+    Returns the unit axis, or ``None`` when the starting moments are not all
+    parallel (QE's ``lsign = .FALSE.``), in which case ``|m|`` is used and the
+    kink is accepted -- there is no single axis to take a sign along.
+    """
+    moments = np.asarray(moments, dtype=float)
+    norms = np.linalg.norm(moments, axis=1)
+    nonzero = np.flatnonzero(norms > 1.0e-12)
+    if not len(nonzero):
+        return None
+    axis = moments[nonzero[0]] / norms[nonzero[0]]
+    for index in nonzero[1:]:
+        direction = moments[index] / norms[index]
+        if np.linalg.norm(np.cross(axis, direction)) > 1.0e-6:
+            return None
+    return axis
+
+
+def _noncollinear_gradient_correction(
+    rho_r: jnp.ndarray,
+    gvectors: GVectors,
+    cell: Cell,
+    functional: Functional,
+    rho_core: jnp.ndarray | None,
+    axis: jnp.ndarray | None,
+):
+    """``gradcorr``'s ``nspin == 4 .AND. domag`` branch.
+
+    Three steps, and the middle one is the ordinary collinear code:
+
+    1. **Rotate.** ``compute_rho`` resolves ``(n, m)`` onto the local spin axis,
+       ``rho_up/dw = (n +- s |m|) / 2`` with ``s = sign(m . ux)`` when there is a
+       fixed axis (:func:`fixed_quantization_axis`) and ``s = 1`` when there is not.
+       The core charge is added *after* the rotation, half to each channel, as
+       an unpolarized density is in the ``(up, down)`` representation.
+    2. **Evaluate**, with :func:`gradient_correction` and ``nspin = 2``. The
+       rotated density's transform is taken afresh rather than assembled from
+       ``rho(G)``: the rotation involves ``|m|``, which is not linear in the
+       components, so their combination is not the transform of the result.
+    3. **Rotate back.** The charge component gets ``(v_up + v_dw)/2`` and the
+       vector part gets ``s (v_up - v_dw)/2`` along ``m-hat`` -- the same
+       attachment to the direction of ``m`` the LDA part makes, with the sign
+       carried through.
+    """
+    charge = rho_r[0]
+    magnetization = rho_r[1:]
+    modulus = jnp.sqrt(jnp.sum(magnetization**2, axis=0))
+    if axis is None:
+        sign = jnp.ones_like(modulus)
+    else:
+        projection = jnp.tensordot(jnp.asarray(axis), magnetization, axes=(0, 0))
+        sign = jnp.where(projection >= 0.0, 1.0, -1.0)
+
+    signed = sign * modulus
+    rotated = 0.5 * jnp.stack([charge + signed, charge - signed])
+    if rho_core is not None:
+        rotated = rotated + with_core(jnp.real(rho_core), 2)
+    rotated_g = jax.vmap(r_to_g, in_axes=(0, None))(rotated, gvectors.fft_index)
+
+    v, energy = gradient_correction(rotated, rotated_g, gvectors, cell, functional)
+
+    v0 = 0.5 * (v[0] + v[1])
+    vs = 0.5 * (v[0] - v[1])
+    direction = jnp.where(
+        modulus > VANISHING_GRADIENT_MAGNETIZATION,
+        magnetization / jnp.where(modulus > 0.0, modulus, 1.0),
+        0.0,
+    )
+    return jnp.concatenate([v0[None], (sign * vs)[None] * direction]), energy
+
+
+#: ``gradcorr`` leaves the vector part of its potential alone below this
+#: magnetization -- a looser threshold than the LDA part's ``vanishing_mag``,
+#: and QE's.
+VANISHING_GRADIENT_MAGNETIZATION = 1.0e-12
 
 
 def as_potential_components(scalar: jnp.ndarray, nspin: int) -> jnp.ndarray:
@@ -369,6 +452,7 @@ def v_of_rho(
     rho_core: jnp.ndarray | None = None,
     functional: Functional | None = None,
     rho_core_g: jnp.ndarray | None = None,
+    quantization_axis: jnp.ndarray | None = None,
 ) -> Potential:
     """The full self-consistent potential from a real-space density.
 
@@ -401,16 +485,19 @@ def v_of_rho(
 
     if functional.is_gradient:
         if nspin == 4:
-            # ``gradcorr`` for a noncollinear *magnetic* state rotates the
-            # density into the local spin frame, evaluates the collinear GGA
-            # there, and rotates the vector field back. That rotation is not
-            # written here yet, and a GGA run that quietly used the unpolarized
-            # gradient correction would be wrong by the whole gradient part of
-            # the exchange energy.
-            raise NotImplementedError(
-                "a gradient-corrected functional with a noncollinear "
-                "magnetization is not implemented; LDA works, and so does any "
-                "functional when the magnetization is zero (nspin_mag = 1)"
+            # ``gradcorr``'s noncollinear branch: rotate into the local spin
+            # frame, run the *collinear* gradient correction there, rotate the
+            # answer back. Kept in its own function because the rotation is
+            # nonlinear -- the rotated density's transform cannot be assembled
+            # from the components of ``rho(G)`` and has to be taken afresh.
+            v_gradient, e_gradient = _noncollinear_gradient_correction(
+                jnp.real(rho_r), gvectors, cell, functional, rho_core,
+                quantization_axis,
+            )
+            return Potential(
+                v_scf=as_potential_components(v_hartree_r, nspin) + v_xc + v_gradient,
+                ehart=ehart,
+                etxc=etxc + e_gradient,
             )
         density_r = jnp.real(rho_r)
         density_g = rho_g
@@ -428,4 +515,15 @@ def v_of_rho(
         v_xc = v_xc + v_gradient
         etxc = etxc + e_gradient
 
-    return Potential(v_scf=v_hartree_r[None] + v_xc, ehart=ehart, etxc=etxc)
+    # The Hartree potential is spin-independent, so it follows the *potential*
+    # rule and not the density's: both channels of an ``(up, down)`` potential
+    # feel all of it, and only the charge component of an ``(n, m)`` one does
+    # (``v_h``'s own ``IF (nspin == 4)`` at the end of ``v_of_rho.f90``).
+    # Broadcasting it over four components instead adds ``v_H`` to all three
+    # magnetization components -- an enormous spurious magnetic field, which
+    # converges perfectly well and is wrong by more than a Rydberg per electron.
+    return Potential(
+        v_scf=as_potential_components(v_hartree_r, nspin) + v_xc,
+        ehart=ehart,
+        etxc=etxc,
+    )

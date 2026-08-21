@@ -1,0 +1,38 @@
+! A hydrogen atom in a box: the smallest magnetic system there is, and the one
+! the noncollinear-equals-collinear identity is checked on.
+!
+! Why hydrogen and why norm-conserving. The identity "a noncollinear run with
+! every moment along z reproduces the collinear LSDA run" is exact only where
+! the density is non-negative: QE's nspin = 4 exchange-correlation energy uses
+! |rho| as its prefactor (v_of_rho.f90, `arho = ABS(rho%of_r(ir,1))`) where the
+! nspin = 1 and 2 branches use the signed density, so a cell whose truncated
+! density rings negative in the vacuum makes the two conventions differ. This
+! density is strictly positive on the whole grid -- a smooth one-electron
+! charge from a norm-conserving dataset -- so the identity holds to round-off
+! rather than to the size of that convention.
+!
+! The occupation is set by smearing rather than by fixed occupations because a
+! noncollinear band holds one electron and a collinear one holds two, so
+! 'fixed' would fill a different number of bands in the two runs.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 1, celldm(1) = 12.0,
+    nat = 1, ntyp = 1,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.02
+    nspin = 2
+    starting_magnetization(1) = 0.6
+    nbnd = 4
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ H 0.0 0.0 0.0
+K_POINTS {automatic}
+ 1 1 1 0 0 0

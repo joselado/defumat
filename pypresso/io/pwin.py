@@ -40,6 +40,11 @@ CARD_NAMES = frozenset(
         "ADDITIONAL_K_POINTS",
         "SOLVENTS",
         "TOTAL_CHARGE",
+        # A pypresso extension, and the only card here that pw.x does not have:
+        # Elk's per-atom external field (``bfcmt`` in its atoms block), for which
+        # QE has no input at all even though ``add_bfield`` can apply one. One
+        # line per atom, three cartesian components in Ry.
+        "LOCAL_MAGNETIC_FIELDS",
     }
 )
 

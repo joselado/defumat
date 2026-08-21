@@ -62,7 +62,7 @@ from pypresso.pseudo.projectors import projector_channels
 from pypresso.pseudo.radial import simpson_weights
 from pypresso.pseudo.upf import Pseudopotential
 from pypresso.units import E2, FPI
-from pypresso.xc.functional import Functional
+from pypresso.xc.functional import Functional, local_spin_frame
 
 __all__ = ["PawSpecies", "PawCorrections", "build_paw", "onecenter_species"]
 
@@ -144,12 +144,15 @@ def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray):
         # (nspin, nlm, mesh), holding r^2 rho_lm per channel
         rho_lm = jnp.einsum("sij,ijlr->slr", becsum, tensor)
 
-        v_hartree, e_hartree = _hartree(jnp.sum(rho_lm, axis=0), paw)
+        v_hartree, e_hartree = _hartree(_charge_channel(rho_lm), paw)
         v_xc, e_xc = _exchange_correlation(rho_lm, core, paw)
 
         # The Hartree potential is the same in both channels: it is a functional
-        # of the total on-site density and of nothing else.
-        potential = v_hartree[None] + v_xc
+        # of the total on-site density and of nothing else. In the
+        # ``(n, m_x, m_y, m_z)`` representation "both channels" means the charge
+        # component alone -- ``PAW_h_potential`` is called on
+        # ``rho_lm(:,:,1:nspin_lsda)``, and ``nspin_lsda`` is 1 there.
+        potential = _as_potential(v_hartree, nspin) + v_xc
         energy = energy + sign * (e_hartree + e_xc)
         # ddd is the derivative of that energy with respect to becsum, and
         # because rho_lm is linear in becsum it is the same tensor contracted
@@ -160,6 +163,28 @@ def onecenter_species(paw: PawSpecies, becsum: jnp.ndarray):
         )
 
     return energy, ddd
+
+
+def _charge_channel(rho_lm: jnp.ndarray) -> jnp.ndarray:
+    """The charge out of however many spin components ``rho_lm`` carries.
+
+    ``(up, down)`` sums; ``(n, m_x, m_y, m_z)`` is the first component alone.
+    :func:`pypresso.scf.potential.total_charge`'s rule, on the radial mesh.
+    """
+    return rho_lm[0] if rho_lm.shape[0] == 4 else jnp.sum(rho_lm, axis=0)
+
+
+def _as_potential(scalar: jnp.ndarray, nspin: int) -> jnp.ndarray:
+    """A spin-independent potential laid out over ``nspin`` components.
+
+    :func:`pypresso.scf.potential.as_potential_components`' rule, on the radial
+    mesh: every channel of an ``(up, down)`` potential feels it in full, and only
+    the charge component of an ``(n, m)`` one does.
+    """
+    if nspin == 4:
+        zero = jnp.zeros_like(scalar)
+        return jnp.stack([scalar, zero, zero, zero])
+    return jnp.broadcast_to(scalar, (nspin,) + scalar.shape)
 
 
 def _hartree(rho_lm, paw: PawSpecies):
@@ -210,18 +235,36 @@ def _exchange_correlation(rho_lm, core, paw: PawSpecies):
     rho_rad = jnp.einsum(
         "xl,slr->sxr", paw.angular.ylm[:, : paw.nlm], rho_lm
     )  # (nspin, nx, mesh)
-    density = rho_rad / paw.r2 + core / nspin
+    # The core charge is unpolarized, and what that means depends on the
+    # representation: shared equally between ``(up, down)``, all of it in the
+    # charge component of ``(n, m)``. :func:`pypresso.scf.potential.with_core`'s
+    # rule, and dividing by four instead loses three quarters of it.
+    core_weights = (
+        jnp.array([1.0, 0.0, 0.0, 0.0]) if nspin == 4
+        else jnp.full((nspin,), 1.0 / nspin)
+    )
+    density = rho_rad / paw.r2 + core_weights[:, None, None] * core
 
     if nspin == 1:
         potential_rad = paw.functional.potential(density[0])[None]
         energy_density = paw.functional.energy_density(density[0])
+    elif nspin == 4:
+        # The same local spin frame the plane-wave ``v_xc`` uses, on the sphere:
+        # ``PAW_xc_potential`` calls ``xc(..., 4, 2, ...)`` and recombines the
+        # two channel potentials into ``v_0`` and a splitting along ``m-hat``.
+        channels, _, direction = local_spin_frame(density[0], density[1:])
+        potentials = paw.functional.spin_potential(channels)
+        v0 = 0.5 * (potentials[0] + potentials[1])
+        vs = 0.5 * (potentials[0] - potentials[1])
+        potential_rad = jnp.concatenate([v0[None], vs[None] * direction])
+        energy_density = paw.functional.spin_energy_density(channels)
     else:
         potential_rad = paw.functional.spin_potential(density)
         energy_density = paw.functional.spin_energy_density(density)
 
     # ... the energy integrates e_xc against the total r^2 rho, direction by
     # direction, with the quadrature weights folded in.
-    integrand = energy_density * (jnp.sum(rho_rad, axis=0) + core * paw.r2)
+    integrand = energy_density * (_charge_channel(rho_rad) + core * paw.r2)
     energy = jnp.sum(
         paw.angular.weights[:, None] * integrand * paw.weights_full[None, :]
     )
@@ -233,6 +276,21 @@ def _exchange_correlation(rho_lm, core, paw: PawSpecies):
 
     # A gradient-corrected functional adds a second pass over the same sphere,
     # this time needing the density's gradient there (``PAW_gcxc_potential``).
+    if paw.functional.is_gradient and nspin == 4:
+        # The plane-wave ``gradcorr`` *is* written for a noncollinear
+        # magnetization (``_noncollinear_gradient_correction``); PAW's
+        # counterpart is not. ``PAW_gcxc_potential`` needs the same rotation
+        # done on the radial sphere -- ``compute_rho_spin_lm``, which resolves
+        # each multipole onto the local axis and carries a ``segni_rad`` of its
+        # own -- and that is a second implementation rather than a call into the
+        # first. Refused rather than run with the collinear expression, which
+        # would be wrong by the whole gradient part of the one-centre energy.
+        raise NotImplementedError(
+            "a gradient-corrected functional with a noncollinear magnetization "
+            "is not implemented for PAW's one-centre terms "
+            "(PAW_gcxc_potential's compute_rho_spin_lm); ultrasoft and "
+            "norm-conserving datasets do support it, and so does PAW with LDA"
+        )
     if paw.functional.is_gradient:
         v_gradient, e_gradient = onecenter_gradient_correction(rho_lm, rho_rad, core, paw)
         potential = potential + v_gradient

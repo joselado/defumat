@@ -26,7 +26,7 @@ from pypresso.system.cell import Cell
 _GRID_EPS = 1.0e-5
 
 __all__ = ["KPoints", "monkhorst_pack", "irreducible_wedge", "grid_equivalence",
-           "expand_band_path", "for_spin"]
+           "expand_to_subgroup", "expand_band_path", "for_spin"]
 
 #: Spin degeneracy factor applied to weights for an unpolarised calculation.
 DEGSPIN = 2.0
@@ -79,6 +79,7 @@ def irreducible_wedge(
     shift: tuple[int, int, int],
     rotations: np.ndarray,
     time_reversal: bool = True,
+    t_rev: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """The symmetry-reduced Monkhorst-Pack grid: QE's ``kpoint_grid.f90``.
 
@@ -100,8 +101,14 @@ def irreducible_wedge(
         rotations: ``(nsym, 3, 3)`` integer rotations in crystal axes -- the
             crystal's symmetries, not the lattice point group, so that a
             structure with fewer symmetries than its lattice is not over-reduced.
-        time_reversal: whether ``-k`` is equivalent to ``k``. True for everything
-            this code currently supports (no magnetism, no spin-orbit).
+        time_reversal: whether ``-k`` is equivalent to ``k``. ``setup.f90`` sets
+            it to ``.NOT. noinv .AND. .NOT. magnetic_sym``: a magnetic
+            noncollinear run has no ``-k = k`` of its own, and what it has
+            instead is the individual operations flagged in ``t_rev``.
+        t_rev: ``(nsym,)`` of 0/1. Where it is 1 the operation is a symmetry
+            only together with time reversal, so it sends ``k`` to ``-S k``
+            rather than to ``S k`` (``kpoint_grid.f90``: ``IF (t_rev(ns) == 1)
+            xkr = -xkr``).
 
     Returns:
         ``(points, weights)``, points in crystal coordinates folded into the
@@ -118,6 +125,8 @@ def irreducible_wedge(
 
     equivalent = np.arange(len(xkg))
     multiplicity = np.zeros(len(xkg))
+    reversed_ops = (np.zeros(len(rotations), dtype=bool) if t_rev is None
+                    else np.asarray(t_rev, dtype=int) == 1)
 
     def grid_index(rotated):
         """Which grid point ``rotated`` is, or None if it is not on the grid."""
@@ -132,8 +141,10 @@ def irreducible_wedge(
         if equivalent[n] != n:
             continue
         multiplicity[n] = 1.0
-        for rotation in rotations:
+        for s_index, rotation in enumerate(rotations):
             rotated = xkg[n] @ rotation.T
+            if reversed_ops[s_index]:
+                rotated = -rotated
             rotated = rotated - np.rint(rotated)
             images = [rotated, -rotated] if time_reversal else [rotated]
             for image in images:
@@ -156,6 +167,7 @@ def grid_equivalence(
     shift: tuple[int, int, int],
     rotations: np.ndarray,
     time_reversal: bool = True,
+    t_rev: np.ndarray | None = None,
 ) -> np.ndarray:
     """Which irreducible point each point of the *complete* grid reduces to.
 
@@ -190,6 +202,8 @@ def grid_equivalence(
     xkg = (integers + offsets) / counts
 
     equivalent = np.arange(len(xkg))
+    reversed_ops = (np.zeros(len(rotations), dtype=bool) if t_rev is None
+                    else np.asarray(t_rev, dtype=int) == 1)
 
     def grid_index(rotated):
         scaled = rotated * counts - offsets
@@ -202,8 +216,10 @@ def grid_equivalence(
     for n in range(len(xkg)):
         if equivalent[n] != n:
             continue
-        for rotation in rotations:
+        for s_index, rotation in enumerate(rotations):
             rotated = xkg[n] @ rotation.T
+            if reversed_ops[s_index]:
+                rotated = -rotated
             rotated = rotated - np.rint(rotated)
             images = [rotated, -rotated] if time_reversal else [rotated]
             for image in images:
@@ -218,6 +234,88 @@ def grid_equivalence(
     keep = equivalent == np.arange(len(xkg))
     position = np.cumsum(keep) - 1
     return position[equivalent]
+
+
+def expand_to_subgroup(
+    points: np.ndarray,
+    weights: np.ndarray,
+    lattice_rotations: np.ndarray,
+    rotations: np.ndarray,
+    time_reversal: bool = True,
+    t_rev: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Expand an explicit k-list from the lattice's wedge to the crystal's.
+
+    ``irreducible_BZ`` in ``PW/src/irrek.f90``, and it runs for **every** SCF
+    run, an explicit ``K_POINTS`` card included -- QE's comment says why: "input
+    k-points are assumed to be given in the IBZ of the Bravais lattice, with the
+    full point symmetry of the lattice; if some symmetries of the lattice are
+    missing in the crystal, irreducible_BZ computes the missing k-points".
+
+    It does nothing at all when the crystal has the lattice's whole point group,
+    which is why it went unnoticed until a magnetic run: pointing a moment along
+    ``x`` in a cubic crystal is exactly the case where the crystal's group is a
+    proper subgroup, and QE's own `pw_noncolin` benchmark then runs on 22
+    k-points where the input lists 11.
+
+    The construction here is the coset arithmetic of ``irrek`` done the direct
+    way: take each input point's orbit under the *lattice* group, split it into
+    orbits under the crystal's, and give each of those a share of the input
+    weight in proportion to its size. Same points and same weights, chosen
+    representative aside.
+
+    Args:
+        points: ``(nk, 3)`` in crystal coordinates.
+        weights: ``(nk,)``, any normalisation.
+        lattice_rotations: the point group of the Bravais lattice.
+        rotations: the point group of the crystal (magnetic, if it is one).
+        t_rev: as in :func:`irreducible_wedge`.
+
+    Returns:
+        ``(points, weights)`` in crystal coordinates, weights normalised to 1.
+    """
+    points = np.asarray(points, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    reversed_ops = (np.zeros(len(rotations), dtype=bool) if t_rev is None
+                    else np.asarray(t_rev, dtype=int) == 1)
+
+    def key(point):
+        folded = np.round(point % 1.0, 6) % 1.0
+        return tuple(np.round(folded, 6))
+
+    def orbit(point, rots, reversal, flags=None):
+        found = {}
+        for index, rotation in enumerate(rots):
+            image = point @ rotation.T
+            if flags is not None and flags[index]:
+                image = -image
+            candidates = [image, -image] if reversal else [image]
+            for candidate in candidates:
+                found.setdefault(key(candidate), candidate - np.rint(candidate))
+        return found
+
+    out_points, out_weights = [], []
+    for point, weight in zip(points, weights):
+        full = orbit(point, lattice_rotations, time_reversal)
+        # The input point is the representative of its own sub-orbit, so a list
+        # that needs no expansion comes back unchanged -- which is what QE
+        # prints, and what every explicit-list comparison against it expects.
+        ordered = [(key(point), point)]
+        ordered += [item for item in full.items() if item[0] != key(point)]
+        assigned = set()
+        for member_key, member in ordered:
+            if member_key in assigned:
+                continue
+            sub = orbit(member, rotations, time_reversal, reversed_ops)
+            # Only members of the lattice orbit count: a rounding difference
+            # would otherwise leave a stray point with no weight of its own.
+            sub_keys = {k for k in sub if k in full}
+            assigned |= sub_keys
+            out_points.append(member)
+            out_weights.append(weight * len(sub_keys) / len(full))
+
+    out_weights = np.array(out_weights)
+    return np.array(out_points), out_weights / out_weights.sum()
 
 
 def expand_band_path(
@@ -334,15 +432,21 @@ class KPoints(eqx.Module):
         cell: Cell,
         precision: Precision = DEFAULT_PRECISION,
         rotations: np.ndarray | None = None,
+        time_reversal: bool = True,
+        t_rev: np.ndarray | None = None,
     ) -> "KPoints":
         """A Monkhorst-Pack grid, reduced to the irreducible wedge if it can be.
 
         ``rotations`` are the crystal's symmetry operations in crystal axes.
         Without them the complete grid is returned, which is correct but costs a
         factor of up to the size of the point group in diagonalisations.
+        ``time_reversal`` and ``t_rev`` are the magnetic case; see
+        :func:`irreducible_wedge`.
         """
         if rotations is not None and len(rotations):
-            points, weights = irreducible_wedge(grid, shift, rotations)
+            points, weights = irreducible_wedge(
+                grid, shift, rotations, time_reversal=time_reversal, t_rev=t_rev
+            )
         else:
             points, weights = monkhorst_pack(grid, shift)
         return cls.from_crystal(

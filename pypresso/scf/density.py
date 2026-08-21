@@ -159,10 +159,30 @@ def spinor_band_density(psi, fft_index, grid, weights, cell: Cell, nspin_mag: in
     expectation value ``psi^dagger sigma psi`` -- so the *same* wavefunctions
     give one number or four depending only on whether the calculation carries a
     magnetization, and a nonmagnetic spin-orbit run keeps a scalar density.
+
+    ``fft_index`` is ``(npwx,)`` normally and ``(2, npwx)`` for a spin spiral,
+    whose components live on different spheres. In the spiral case what this
+    returns is the **rotated-frame** density: the charge and ``m_z`` are what
+    they always were, and the transverse pair ``(m_x, m_y)`` is measured in the
+    frame that turns with the spiral, which is the frame the potential is built
+    in. The laboratory-frame spiral is recovered on output and nowhere else.
     """
     npwx = psi.shape[-1] // 2
     components = psi.reshape(psi.shape[:-1] + (2, npwx))
-    field = g_to_r(components, fft_index, grid)  # (nbnd, 2, n1, n2, n3)
+    fft_index = jnp.asarray(fft_index)
+    if fft_index.ndim == 1:
+        field = g_to_r(components, fft_index, grid)  # (nbnd, 2, n1, n2, n3)
+    else:
+        # A spin spiral: the two components are on different spheres, so they
+        # are transformed with different index maps. What comes back is the pair
+        # of *periodic* parts ``U_up``, ``U_dn``, and every quantity below is
+        # built from those -- which is the point of the generalized Bloch
+        # theorem: the density it produces is lattice periodic even though the
+        # magnetization it describes turns from cell to cell.
+        field = jnp.stack(
+            [g_to_r(components[:, spin], fft_index[spin], grid) for spin in range(2)],
+            axis=1,
+        )
     up, down = field[:, 0], field[:, 1]
 
     charge = jnp.abs(up) ** 2 + jnp.abs(down) ** 2

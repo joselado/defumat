@@ -65,6 +65,13 @@ class SpinorHamiltonian(eqx.Module):
     #: with nothing to fall back on.
     deeq: jnp.ndarray
     grid: tuple[int, int, int] = eqx.field(static=True)
+    #: A **spin spiral** (P19): the two spinor components live on different
+    #: plane-wave spheres, ``k + q/2`` and ``k - q/2``, so every k-indexed array
+    #: here has ``2 nk`` rows -- the up component's ``nk`` first, the down
+    #: component's after them -- rather than ``nk``. False is the ordinary case,
+    #: where both components share one sphere and the arrays have ``nk`` rows.
+    #: Static, because it decides an array's *length*.
+    spiral: bool = eqx.field(static=True, default=False)
     sticks: object = None
     potential_wave: jnp.ndarray | None = None
     resolves_differences: bool = eqx.field(static=True, default=True)
@@ -74,7 +81,28 @@ class SpinorHamiltonian(eqx.Module):
 
     @property
     def nk(self) -> int:
-        return self.kinetic.shape[0]
+        rows = self.kinetic.shape[0]
+        return rows // 2 if self.spiral else rows
+
+    def _rows(self, ik):
+        """The rows of the k-indexed arrays the two components read.
+
+        The same row twice in the ordinary case -- the two components share a
+        sphere, a kinetic energy and a set of projectors -- and two different
+        ones for a spin spiral, where they do not.
+        """
+        return (ik, ik + self.nk) if self.spiral else (ik, ik)
+
+    def _pair(self, array, ik):
+        """``array[ik]``, or the two components' rows stacked, for a spiral.
+
+        Shaped so that it broadcasts against ``(..., 2, npwx)`` either way:
+        ``(npwx,)`` when the components share a row and ``(2, npwx)`` when they
+        do not.
+        """
+        if not self.spiral:
+            return array[ik]
+        return jnp.stack([array[ik], array[ik + self.nk]])
 
     @property
     def npwx(self) -> int:
@@ -102,11 +130,23 @@ class SpinorHamiltonian(eqx.Module):
 
     @property
     def state_mask(self) -> jnp.ndarray:
-        return jnp.concatenate([self.mask, self.mask], axis=-1)
+        return self._as_state(self.mask)
 
     @property
     def state_kinetic(self) -> jnp.ndarray:
-        return jnp.concatenate([self.kinetic, self.kinetic], axis=-1)
+        return self._as_state(self.kinetic)
+
+    def _as_state(self, array: jnp.ndarray) -> jnp.ndarray:
+        """A ``(nk, npwx)`` (or ``(2 nk, npwx)``) array as ``(nk, 2 npwx)``.
+
+        The solvers index this by k-point and expect one row per spinor, so the
+        spiral's two blocks of rows are concatenated along the plane-wave axis
+        rather than left stacked.
+        """
+        if not self.spiral:
+            return jnp.concatenate([array, array], axis=-1)
+        nk = self.nk
+        return jnp.concatenate([array[:nk], array[nk:]], axis=-1)
 
     # --- the operator ---------------------------------------------------------
 
@@ -118,7 +158,7 @@ class SpinorHamiltonian(eqx.Module):
         to ``npwx`` in its own right, so the same mask applies to both.
         """
         components = psi.reshape(psi.shape[:-1] + (2, self.npwx))
-        return jnp.where(self.mask[ik], components, 0.0)
+        return jnp.where(self._pair(self.mask, ik), components, 0.0)
 
     @staticmethod
     def _join(components: jnp.ndarray) -> jnp.ndarray:
@@ -128,28 +168,43 @@ class SpinorHamiltonian(eqx.Module):
     def apply(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``H|psi>`` for ``psi`` of shape ``(..., 2 npwx)``."""
         components = self._split(psi, ik)
-        result = self.kinetic[ik] * components
+        result = self._pair(self.kinetic, ik) * components
         result = result + self._local(components, ik)
         result = result + self._nonlocal(components, ik)
-        return self._join(jnp.where(self.mask[ik], result, 0.0))
+        return self._join(jnp.where(self._pair(self.mask, ik), result, 0.0))
 
     def apply_s(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``S|psi>``; the identity for a norm-conserving calculation."""
         components = self._split(psi, ik)
         if not self.has_overlap:
-            return self._join(jnp.where(self.mask[ik], components, 0.0))
+            return self._join(jnp.where(self._pair(self.mask, ik), components, 0.0))
         becp = self._project(components, ik)
         becq = jnp.einsum("abij,...bj->...ai", self.qq.astype(self.dtype), becp)
         result = components + self._unproject(becq, ik)
-        return self._join(jnp.where(self.mask[ik], result, 0.0))
+        return self._join(jnp.where(self._pair(self.mask, ik), result, 0.0))
 
     def _project(self, components: jnp.ndarray, ik: int) -> jnp.ndarray:
-        """``<beta_i|psi^a>``, shaped ``(..., 2, nkb)``."""
-        return jnp.einsum("gk,...ag->...ak", self.projectors.vkb[ik].conj(), components)
+        """``<beta_i|psi^a>``, shaped ``(..., 2, nkb)``.
+
+        For a spiral the two components are projected on *different* projectors
+        -- ``vkb(k + q/2)`` and ``vkb(k - q/2)`` -- which is the only way the
+        nonlocal term differs from the ordinary noncollinear one.
+        """
+        if not self.spiral:
+            return jnp.einsum(
+                "gk,...ag->...ak", self.projectors.vkb[ik].conj(), components
+            )
+        up, down = self._rows(ik)
+        vkb = jnp.stack([self.projectors.vkb[up], self.projectors.vkb[down]])
+        return jnp.einsum("agk,...ag->...ak", vkb.conj(), components)
 
     def _unproject(self, coefficients: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``sum_i |beta_i> c^a_i``, shaped ``(..., 2, npwx)``."""
-        return jnp.einsum("gk,...ak->...ag", self.projectors.vkb[ik], coefficients)
+        if not self.spiral:
+            return jnp.einsum("gk,...ak->...ag", self.projectors.vkb[ik], coefficients)
+        up, down = self._rows(ik)
+        vkb = jnp.stack([self.projectors.vkb[up], self.projectors.vkb[down]])
+        return jnp.einsum("agk,...ak->...ag", vkb, coefficients)
 
     def _local(self, components: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``V(r) psi`` with ``V`` a 2x2 matrix at each point of the grid.
@@ -158,17 +213,48 @@ class SpinorHamiltonian(eqx.Module):
         FFT knows nothing about spin -- and mixed pointwise in between, which is
         the only place in ``H|psi>`` where the magnetization enters at all.
         """
+        up, down = self._rows(ik)
         if self.sticks is None:
-            field = g_to_r(components, self.fft_index[ik], self.grid)
+            if not self.spiral:
+                field = g_to_r(components, self.fft_index[ik], self.grid)
+            else:
+                field = jnp.stack([
+                    g_to_r(components[..., 0, :], self.fft_index[up], self.grid),
+                    g_to_r(components[..., 1, :], self.fft_index[down], self.grid),
+                ], axis=-4)
             product = self._multiply(field, self.potential)
             n = self.grid[0] * self.grid[1] * self.grid[2]
             box = jnp.fft.fftn(product, axes=(-3, -2, -1)) / n
-            return gather_from_box(box, self.fft_index[ik])
+            if not self.spiral:
+                return gather_from_box(box, self.fft_index[ik])
+            return jnp.stack([
+                gather_from_box(box[..., 0, :, :, :], self.fft_index[up]),
+                gather_from_box(box[..., 1, :, :, :], self.fft_index[down]),
+            ], axis=-2)
 
-        columns, index = self.sticks.columns[ik], self.sticks.index[ik]
-        field = sticks_to_r(components, self.sticks, columns, index)
+        if not self.spiral:
+            columns, index = self.sticks.columns[ik], self.sticks.index[ik]
+            field = sticks_to_r(components, self.sticks, columns, index)
+            product = self._multiply(field, self.potential_wave)
+            return r_to_sticks(product, self.sticks, columns, index)
+
+        # A spiral transforms each component with its own stick layout. The
+        # layouts are rows of one ``Sticks`` built over the concatenated k-list,
+        # so they share ``nsticks`` -- which is what keeps the compiled shapes
+        # the same for both components.
+        field = jnp.stack([
+            sticks_to_r(components[..., 0, :], self.sticks,
+                        self.sticks.columns[up], self.sticks.index[up]),
+            sticks_to_r(components[..., 1, :], self.sticks,
+                        self.sticks.columns[down], self.sticks.index[down]),
+        ], axis=-4)
         product = self._multiply(field, self.potential_wave)
-        return r_to_sticks(product, self.sticks, columns, index)
+        return jnp.stack([
+            r_to_sticks(product[..., 0, :, :, :], self.sticks,
+                        self.sticks.columns[up], self.sticks.index[up]),
+            r_to_sticks(product[..., 1, :, :, :], self.sticks,
+                        self.sticks.columns[down], self.sticks.index[down]),
+        ], axis=-2)
 
     @staticmethod
     def _multiply(field: jnp.ndarray, potential: jnp.ndarray) -> jnp.ndarray:
@@ -238,27 +324,30 @@ class SpinorHamiltonian(eqx.Module):
         have to be the operator, and the off-diagonal blocks would cost as much
         as they are worth.
         """
-        base = self.kinetic[ik] + jnp.mean(self.potential[0])
-        blocks = [base, base]
+        rows = self._rows(ik)
+        average = jnp.mean(self.potential[0])
+        blocks = [self.kinetic[row] + average for row in rows]
         if self.projectors.nkb:
-            vkb = self.projectors.vkb[ik]
-            for spin in range(2):
+            for spin, row in enumerate(rows):
+                vkb = self.projectors.vkb[row]
                 d = self.deeq[spin, spin].astype(self.dtype)
                 blocks[spin] = blocks[spin] + jnp.real(
                     jnp.einsum("gi,ij,gj->g", vkb, d, vkb.conj())
                 )
-        return jnp.concatenate([jnp.where(self.mask[ik], b, 0.0) for b in blocks])
+        return jnp.concatenate(
+            [jnp.where(self.mask[row], b, 0.0) for row, b in zip(rows, blocks)]
+        )
 
     def overlap_diagonal(self, ik: int) -> jnp.ndarray:
         """``<k+G a|S|k+G a>``, ``s_diag`` in ``usnldiag_nc``."""
         if not self.has_overlap:
             return jnp.where(self.state_mask[ik], 1.0, 0.0)
-        vkb = self.projectors.vkb[ik]
         blocks = []
-        for spin in range(2):
+        for spin, row in enumerate(self._rows(ik)):
+            vkb = self.projectors.vkb[row]
             q = self.qq[spin, spin].astype(self.dtype)
             value = 1.0 + jnp.real(jnp.einsum("gi,ij,gj->g", vkb, q, vkb.conj()))
-            blocks.append(jnp.where(self.mask[ik], value, 0.0))
+            blocks.append(jnp.where(self.mask[row], value, 0.0))
         return jnp.concatenate(blocks)
 
     # --- explicit matrices, for the reference dense solver --------------------
@@ -278,42 +367,53 @@ class SpinorHamiltonian(eqx.Module):
 
         n1, n2, n3 = self.grid
         n = n1 * n2 * n3
-        index = self.fft_index[ik]
-        a, b, c = index // (n2 * n3), (index // n3) % n2, index % n3
-        difference = (
-            (jnp.mod(a[:, None] - a[None, :], n1) * n2
-             + jnp.mod(b[:, None] - b[None, :], n2)) * n3
-            + jnp.mod(c[:, None] - c[None, :], n3)
-        )
+        component_rows = self._rows(ik)
+
+        def unpack(index):
+            return index // (n2 * n3), (index // n3) % n2, index % n3
+
+        def difference(row_index, column_index):
+            """``G - G'`` as a flat box index, between two (possibly different) spheres."""
+            a, b, c = unpack(self.fft_index[row_index])
+            d, e, f = unpack(self.fft_index[column_index])
+            return (
+                (jnp.mod(a[:, None] - d[None, :], n1) * n2
+                 + jnp.mod(b[:, None] - e[None, :], n2)) * n3
+                + jnp.mod(c[:, None] - f[None, :], n3)
+            )
 
         transformed = [
             jnp.fft.fftn(component, axes=(-3, -2, -1)).reshape(n) / n
             for component in self.potential
         ]
-        if self.nspin_mag == 1:
-            local = [[transformed[0][difference], None], [None, transformed[0][difference]]]
-        else:
-            v0, mx, my, mz = (t[difference] for t in transformed)
-            local = [[v0 + mz, mx - 1j * my], [mx + 1j * my, v0 - mz]]
 
-        kinetic = jnp.diag(self.kinetic[ik].astype(self.dtype))
-        vkb = self.projectors.vkb[ik]
-        mask = self.mask[ik]
-        rows = []
-        for row in range(2):
+        def local_block(row, column):
+            """``V_{ab}(G - G')`` for the ``(row, column)`` spin block."""
+            offsets = difference(component_rows[row], component_rows[column])
+            if self.nspin_mag == 1:
+                return transformed[0][offsets] if row == column else None
+            v0, mx, my, mz = (t[offsets] for t in transformed)
+            return [[v0 + mz, mx - 1j * my], [mx + 1j * my, v0 - mz]][row][column]
+
+        blocks = []
+        for row, row_index in enumerate(component_rows):
             columns = []
-            for column in range(2):
-                block = local[row][column]
+            for column, column_index in enumerate(component_rows):
+                block = local_block(row, column)
                 block = jnp.zeros((self.npwx, self.npwx), self.dtype) if block is None \
                     else block.astype(self.dtype)
                 if row == column:
-                    block = block + kinetic
+                    block = block + jnp.diag(self.kinetic[row_index].astype(self.dtype))
                 if self.projectors.nkb:
                     d = self.deeq[row, column].astype(self.dtype)
-                    block = block + vkb @ d @ vkb.conj().T
-                columns.append(jnp.where(mask[:, None] & mask[None, :], block, 0.0))
-            rows.append(jnp.concatenate(columns, axis=1))
-        matrix = jnp.concatenate(rows, axis=0)
+                    block = block + (
+                        self.projectors.vkb[row_index] @ d
+                        @ self.projectors.vkb[column_index].conj().T
+                    )
+                pair = self.mask[row_index][:, None] & self.mask[column_index][None, :]
+                columns.append(jnp.where(pair, block, 0.0))
+            blocks.append(jnp.concatenate(columns, axis=1))
+        matrix = jnp.concatenate(blocks, axis=0)
         return 0.5 * (matrix + matrix.conj().T)
 
     def matrix_by_application(self, ik: int) -> jnp.ndarray:
@@ -327,16 +427,18 @@ class SpinorHamiltonian(eqx.Module):
         identity = jnp.eye(self.ndim, dtype=self.dtype)
         if not self.has_overlap:
             return identity
-        vkb = self.projectors.vkb[ik]
-        mask = self.mask[ik]
-        pair = mask[:, None] & mask[None, :]
-        rows = []
-        for row in range(2):
+        component_rows = self._rows(ik)
+        blocks = []
+        for row, row_index in enumerate(component_rows):
             columns = []
-            for column in range(2):
+            for column, column_index in enumerate(component_rows):
                 q = self.qq[row, column].astype(self.dtype)
-                block = vkb @ q @ vkb.conj().T
+                block = (
+                    self.projectors.vkb[row_index] @ q
+                    @ self.projectors.vkb[column_index].conj().T
+                )
+                pair = self.mask[row_index][:, None] & self.mask[column_index][None, :]
                 columns.append(jnp.where(pair, block, 0.0))
-            rows.append(jnp.concatenate(columns, axis=1))
-        correction = jnp.concatenate(rows, axis=0)
+            blocks.append(jnp.concatenate(columns, axis=1))
+        correction = jnp.concatenate(blocks, axis=0)
         return identity + 0.5 * (correction + correction.conj().T)

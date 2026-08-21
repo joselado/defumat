@@ -98,6 +98,7 @@ pypresso/
     structure.py        # species + positions + cell (the geometry pytree)
     symmetry.py         # symmetry op detection, IBZ reduction, symmetrization
     kpoints.py          # Monkhorst-Pack grids, band paths, weights
+    spiral.py           # P19: the spin-spiral q, the two shifted k-lists, its symmetry
   basis/
     gvectors.py         # G enumeration/sorting, cutoff spheres, per-k index maps
     fft.py              # sphere<->FFT-box gather/scatter, jnp.fft wrappers
@@ -134,9 +135,13 @@ pypresso/
     mixing.py           # simple / Anderson / Broyden, behind the registry
     energy.py           # total-energy decomposition matching QE's printout
     ewald.py            # Ewald sum for the ion-ion term
+    locals.py           # P17: pointlists, local moments, report_mag
+    fields.py           # P18: the external/local field energy (its potential is grad)
+    constraints.py      # P18: constrained magnetization / fixed spin moment, registry
     driver.py           # the SCF loop
   workflows/
     scf.py, nscf.py, bands.py, dos.py
+    spiral.py           # P19: an E(q) scan over spin-spiral wavevectors
   cli.py                # pypresso scf|bands|dos <input>
 tests/
   unit/                 # analytic and self-consistency checks
@@ -1032,6 +1037,242 @@ every extra angstrom is plane waves and FFT grid along z.
 DFT run — which needs a magnetization *and* spin-orbit coupling, the one spin regime P14
 refuses — the mirror and spin Chern numbers of a symmetry sector, and the quantum
 geometric tensor's metric half.
+
+**P17 — Noncollinear magnetism, completed. ✅ DONE.** The ground P18 and P19 stand on, and
+it turned out to be hollow: `nspin_mag = 4` was built in P14 and never *run* against a
+reference, and the first magnetic noncollinear calculation attempted here came out
+**-184.57 Ry against QE's -55.70** on bcc iron. `system/symmetry.py` gained the magnetic
+filter and `t_rev`; `scf/driver.py` the axial-vector symmetrisation of the magnetization;
+`paw/symmetry.py` the same rotation on `becsum`; `paw/onecenter.py` the local spin frame on
+the radial sphere; `scf/potential.py` `gradcorr`'s noncollinear branch; `scf/locals.py` is
+new (`make_pointlists`, `get_locals`); and `system/kpoints.py` gained `expand_to_subgroup`,
+which is `irreducible_BZ` and runs for *every* input k-list.
+
+*Check met:* bcc iron, ultrasoft, LDA, moment along `x` — QE's `pw_noncolin/noncolin.in` —
+to **2.8e-9 Ry**, with the moment `(3.1763, 0, 0)` against the `3.18` QE prints and the
+absolute moment `3.1768` against `3.18`. The same cell with PBE (`noncolin-pbe.in`) to
+**2.8e-9 Ry**, which is the local-frame gradient correction's own check. The magnetic group
+comes out at **16 operations of the lattice's 48, eight of them with time reversal**,
+which is the "16 Sym. Ops., with inversion, found" in QE's header; the input's 11 k-points
+expand to the **22** QE runs, with QE's weights. And ahead of any of them, two identities
+that need no reference: a noncollinear run with the moment along `z` reproduces the
+**collinear LSDA** run (P9's validated path) to 1e-10 Ry, and the total energy does not
+depend on which way the moment points — `x`, `y`, `z` and `(1,1,1)` agree to 1e-10 with
+norm-conserving hydrogen and to 1e-9 with a PAW oxygen atom, one-centre terms included.
+
+*Traps, in the order they cost time:*
+
+1. **The Hartree potential was broadcast over all four components.** `v_h` is added to
+   `v(:,1)` alone when `nspin == 4` (`v_of_rho.f90`'s own `IF`), and to *every* channel of
+   an `(up, down)` potential — the same distinction `as_potential_components` already made
+   for `vltot`, missed one line further down. Broadcasting it puts `v_H` into all three
+   magnetization components: an enormous spurious magnetic field, which converges
+   beautifully. It cost **129 Ry** on iron and was invisible for the whole of P14, because
+   a nonmagnetic spin-orbit run has `nspin_mag = 1` and never reaches the branch.
+2. **PAW's one-centre terms had the same bug twice.** `PAW_h_potential` is called on
+   `rho_lm(:,:,1:nspin_lsda)` — the charge alone, `nspin_lsda` being 1 for `nspin_mag = 4`
+   — and the core charge goes entirely into the charge component rather than `1/nspin` of
+   it into each. Both are the *density* and *potential* rules of P14 trap 5, on the radial
+   mesh instead of the grid.
+3. **The magnetization is an axial vector and a force is a polar one.** `sym_rho` rotates
+   the three components with the cartesian rotation, times `det(R)`, times a further `-1`
+   for a time-reversed operation. Reusing `symvector` — which P15 already had, and which is
+   right for forces — is the plausible-and-wrong version.
+4. **The symmetry group is smaller, and it contains operations that reverse the moment.**
+   `sgam_at_mag` keeps an operation if it maps every moment onto its image *or* onto minus
+   it, the second with `t_rev = 1`. Symmetrising with the full nonmagnetic group averages
+   the magnetization to zero and converges to the nonmagnetic solution — and reducing the
+   k-set with it, or with `-k = k`, is wrong in the same direction (`setup.f90`:
+   `time_reversal = .NOT. noinv .AND. .NOT. magnetic_sym`).
+5. **An explicit k-point list is not taken as given.** `irreducible_BZ` treats it as the
+   wedge of the *lattice's* point group and completes it for the crystal's. It does nothing
+   whenever the two groups agree, which is why it went unnoticed until a moment pointed
+   along `x` in a cubic crystal made them differ — and then QE runs 22 k-points where the
+   input lists 11, and a comparison against it is off by the weight of half the wedge.
+6. **The `nspin = 4` exchange-correlation energy integrates against `|rho|`, not `rho`.**
+   `v_xc`'s own branch (`arho = ABS(rho%of_r(ir,1))`), where the `nspin = 1` and `2`
+   branches use the signed density. In a dense crystal the two agree; in a cell with vacuum
+   they do not, and the identity "noncollinear along `z` equals collinear" then fails by
+   **2.6e-4 Ry** on a PAW oxygen atom whose truncated density is negative on a fifth of the
+   grid. That is QE's convention reproduced, not an error here — but it decides which
+   systems the identity can be *tested* on, which is why the tests use hydrogen and iron.
+
+*Deferred, and refused rather than approximated:* `PAW_gcxc_potential` with a noncollinear
+magnetization — the plane-wave `gradcorr` is written, PAW's radial counterpart needs
+`compute_rho_spin_lm`'s own local-frame rotation and `segni_rad`, so PAW + GGA + magnetic
+noncollinear is refused while ultrasoft and norm-conserving are not; and `with_small_so`,
+PAW's small-component magnetization term, which only a relativistic PAW dataset with
+`nspin_mag = 4` reaches.
+
+*Notebook 11* (with P18).
+
+**P18 — External and local magnetic fields, and constrained moments. ✅ DONE.** Elk's
+`bfieldc` (a field over the whole cell) and `bfcmt` (a field inside one atom's sphere) with
+`reducebf`, and QE's `constrained_magnetization` — the same machinery driven by a target
+rather than by an input field. New: `scf/fields.py` (the energies and, from `jax.grad`,
+their potentials), `scf/locals.py` (shared with P17), a `LOCAL_MAGNETIC_FIELDS` card, and
+the input variables `B_field`, `constrained_magnetization`, `lambda`, `fixed_magnetization`,
+`reducebf`, `r_m`, `local_weights`.
+
+**The energy is the primitive and the potential is its gradient**, which is the rule
+`PLAN.md` §6 states and which paid immediately: QE writes each constraint's potential out
+by hand — five expressions, one of them three lines of quotient rule — and every one is
+exactly the derivative of the penalty. Writing the penalty once gives all five, and the
+Fortran expressions become a *test* rather than a second implementation. All nine of those
+comparisons pass to 1e-10 (`tests/unit/test_magnetic_fields.py`), including a finite
+difference that would catch a missing quadrature weight.
+
+*Check met:* QE's three constrained runs on bcc iron, one per scheme —
+`constrain_atomic` (`i_cons = 1`) to **1.9e-7 Ry**, `constrain_angle` (`i_cons = 2`) to
+**2.7e-9 Ry**, `constrain_total` (`i_cons = 3`) to **1.6e-9 Ry** with the moment
+`(0.3052, 0.4070, 0.5087)` against QE's `(0.31, 0.41, 0.51)`. The constraint energy itself
+agrees at **eight decimals at the starting density** (0.04011011 against 0.04011011), where
+it is decided by the penalty expression and the integration spheres alone, and to 2e-7 at
+convergence, where it also depends on where each SCF stopped. `make_pointlists`' derived
+radius comes out at **1.8637 bohr, QE's printed value exactly**, and the charge and moment
+inside that sphere match `report_mag`'s to the six decimals it prints.
+
+*A constrained total energy is a softer number than an unconstrained one*, which is why
+those tolerances are 1e-7 rather than 1e-9: the penalty holds the moment off its minimum,
+so the energy is first-order sensitive to exactly where it ends up, and QE's own last two
+iterations still move the constraint energy by 1.3e-6 Ry.
+
+*Traps:*
+
+1. **The field's energy is not in the total energy.** `add_bfield` is called from *inside*
+   `v_of_rho`, so the field is felt by every eigenvalue and removed again by `deband`;
+   `etcon` is local to `add_bfield`, which prints it and never returns it — the string does
+   not occur in `electrons.f90` at all. Elk states the same convention from the other side
+   (its manual: the muffin-tin field energy "is always removed from the total", the
+   physical field's "is also not included"). Adding it would be defensible physics and an
+   immediate 1e-2 Ry disagreement with every benchmark, so both numbers are carried and the
+   reported total is QE's.
+2. **`mcons` for `constrained_magnetization = 'atomic'` is compared against a moment in
+   Bohr magnetons although it is built from `starting_magnetization`**, which is a fraction
+   of the valence charge. QE's benchmark shows the consequence plainly: iron's moment falls
+   from 3.06 to 1.61 under a target of 0.5. Transcribed as it is.
+3. **The committed benchmark does not belong to the committed input.**
+   `noncolin-constrain_atomic.in` carries a commented-out `lambda = 1` above the
+   `lambda = 0.005` it sets, and the 2017 output prints a constraint energy of 8.022 Ry at
+   the starting density — the *unscaled* sum of squares, which is what `lambda = 1` gives.
+   All five noncollinear cases are regenerated with the vendored `pw.x` instead.
+4. **`mixing_beta` is not a detail for a total-moment constraint.** It is a uniform field
+   proportional to the moment's error, a stiff global feedback: QE's input asks for 0.3 and
+   still oscillates by several Bohr magnetons per iteration, and at the 0.7 default neither
+   code converges in 150 iterations. The tests read the input's own value.
+5. **A field breaks symmetry, so the symmetry group has to know about it.** A per-atom
+   field alternating along `±z` is *how* an antiferromagnet is set up, and symmetrising with
+   the nonmagnetic group erases exactly what the field was added to create. QE refuses a
+   nonzero `B_field` together with a constraint (`input.f90:1614`) and so does this.
+
+*The taper is a recorded choice, not an accident.* `factlist`/`pointlist` are a host-side
+integer map that depends on the atomic positions, so QE's local field contributes a force QE
+never computes. Two schemes are registered: `qe`, the integer nearest-atom map with the
+linear taper, reproducing `make_pointlists` point for point and the default because it is
+the one that can be compared; and `smooth`, a differentiable partition of unity in which the
+positions stay in the autodiff graph and the constraint's force falls out. Elk's
+fixed-spin-moment scheme is registered as `constrained_magnetization = 'fsm'` and validated
+on its own: bcc iron held at **2.0 mu_B** where it wants 3.18, by a field the run finds for
+itself, with nothing added to the energy. Two things about it are worth recording. **The
+sign is not Elk's**, because the field is not: Elk's Hamiltonian term is `+(g_e/4c) sigma.B`
+where QE's potential takes `-B`, so `B <- B + tau (m - m_fix)` becomes a minus here — and
+getting it backwards does not oscillate, it drives the moment to saturation and converges
+looking untroubled. **And the moment has to be part of the convergence test**: the field is
+outside the density, so `dr2` falls below `conv_thr` while the moment is still far from its
+target, and a run that stopped there would report an *unconstrained* answer under a
+constrained heading. The scheme is slow — ~350 iterations at `tau = 0.02`, and unstable
+above ~0.1, which is why Elk's own default is 0.01.
+
+*Notebook 11* (with P17).
+
+**P19 — Spin spirals by the generalized Bloch theorem. ✅ DONE.** A flat spiral is not a
+supercell calculation: with no spin-orbit coupling, a magnetization that turns by `q . R`
+from cell to cell leaves a Hamiltonian invariant under a *combined* lattice translation and
+spin rotation, so the states are still labelled by `k`. Elk's ansatz (manual §5.146) is the
+one followed here,
+
+    Psi^q_k(r) = ( U_up(r) e^{i(k + q/2).r},  U_dn(r) e^{i(k - q/2).r} )
+    m^q(r)     = ( m_x(r) cos(q.r),  m_y(r) sin(q.r),  m_z(r) )
+
+with `U` and `m_x, m_y, m_z` lattice periodic. New: `system/spiral.py`, `workflows/spiral.py`
+(an `E(q)` scan and a Heisenberg fit), `Calculation.at_spiral_q`, and a `spiral` flag on
+`SpinorHamiltonian`. **There is no QE counterpart** — `pw.x` has no spin spiral and a grep
+of the vendored tree finds nothing — so this is P16's situation, and the references are the
+literature (Sandratskii, *J. Phys. Condens. Matter* **3**, 8565 (1991); Kurz et al., *PRB*
+**69**, 024415 (2004); Marsman and Hafner, *PRB* **66**, 224409 (2002)) plus Elk's source.
+
+**How little it changes is the result.** The up component is built at `k + q/2` and the
+down at `k - q/2`, each with its own `G+k` set (Elk's `gengkqvec.f90`), and one call to
+`build_plane_wave_basis` on the concatenated `2 nk` list gives both a common `npwx` — which
+is what keeps rule R7's padding, the `vmap` over k and the stick layout working unchanged.
+The local term is untouched: in the rotated frame the potential is lattice periodic, so each
+component transforms with its own index map and the 2x2 mixing stays pointwise. What gains a
+component axis is `kinetic`, `fft_index`, `mask`, `vkb` and the stick rows, and nothing else
+in the SCF knows a spiral is happening.
+
+*Check met:* three identities against calculations that are **not** spirals, on a hydrogen
+chain (one atom per cell, 5 bohr apart along `z`, 12 bohr from its images):
+
+| identity | reference | agreement |
+|---|---|---|
+| `q = 0` | the ordinary noncollinear run | **4e-15 Ry** |
+| `q = b3/2` | the **collinear** antiferromagnet of the doubled cell (P9's path) | **7e-13 Ry** |
+| `q = b3/4` | a four-cell noncollinear supercell with moments at 0°, 90°, 180°, 270° | **3e-12 Ry** |
+
+...plus `E(-q) = E(q)` to 1e-12, and `E(q + G) = E(q)` to 1e-12. (The tests assert 1e-9 on
+all of them: the numbers above are what the committed inputs give at `conv_thr = 1e-11`, and
+holding a test to them would be pinning the mixer's path rather than the physics.) The last two rows are the
+sharp ones: they pin the two shifted spheres, the `q/2` split, the cross term between
+components on *different* spheres and the rotated-frame potential together, and nothing else
+does. What is compared is the energy **without** the Ewald term, because two cells of
+different size do not agree on it to better than QE's own `upperbound` tolerance of 1e-7 Ry;
+the Ewald sums are checked separately at the tolerance they deserve.
+
+*Traps:*
+
+1. **The supercell k-set that corresponds to a spiral's is shifted by `q/2`.** A spiral's
+   plane waves sit at `k ± q/2`, not at `k`, so for `q = b3/4` and a primitive 1x1x4 grid
+   the up component's wavevectors are odd multiples of `b3/8` — *not* supercell reciprocal
+   vectors, but the supercell zone-boundary point. Sampling the supercell at Gamma instead
+   compares two different calculations and disagrees in the third decimal, which reads
+   exactly like a bug in the spiral.
+2. **`E(q + G) = E(q)` needs a k-grid invariant under a shift by `G/2`.** Adding `G` to `q`
+   moves one sphere by `+G/2` and the other by `-G/2`, which is the same calculation with
+   every `k` shifted by `G/2` — an identity for the *sum* over the zone only if the k-set
+   survives that shift. Measured: 2e-9 on a 1x1x4 grid, **2e-3 on a 1x1x3 grid**.
+3. **The rotated-frame moment is gauge dependent and the energy is not.** `q` and `q + G`
+   differ by relabelling `G` in each component, which multiplies the transverse
+   magnetization by a lattice-periodic phase: its modulus is unchanged pointwise, so the LDA
+   energy is, but its integral over the cell is not — 0.540 against 0.205 for the identical
+   energy. A spiral's "moment" is an amplitude in a gauge, not an observable on its own.
+4. **A soft magnetic surface will hide all of this.** At `degauss = 0.02` the spiral and its
+   supercell converge to *different* minima and disagree in the fourth decimal; at 0.1 they
+   agree to 1e-10. The same effect makes `E(q + 2G) = E(q)` — which is exact — fail in
+   practice at `q + 2G`, where the magnetic solution lives in a gauge whose transverse
+   magnetization winds twice across the cell and the uniform starting guess falls into the
+   nonmagnetic minimum instead.
+
+*Refused, and each for its own reason.* **Spin-orbit coupling, permanently**: it ties spin
+to the lattice, so the combined translation-and-rotation the theorem rests on is not a
+symmetry, and Elk refuses the same combination (`init0.f90`). **Symmetry, until the spin
+space group is written**: only the operations with `S^T q = q` survive at all
+(`findsymlat.f90`, transcribed as `invariant_operations`), those act on the rotated-frame
+magnetization with a spin rotation of their own, and time reversal sends `q` to `-q` — so a
+spiral run needs `nosym` and the full grid, which is the phase's real cost. **Ultrasoft and
+PAW, until `q_ij(q)` is threaded through**: the cross-spin block of `becsum` pairs projectors
+at two different k-points, so what it needs is the arbitrary-wavevector augmentation charge
+`topology/augmentation.py` already builds for P16, and PAW additionally needs Elk's per-atom
+phase `e^{-i q.tau/2}` (`zqss`). Using the plain `qq` instead leaves the overlap plausible
+and the answer wrong, which is the failure this repository has now met twice.
+
+*Memory and cost.* The spiral doubles what carries both a `k` and a `G` index — `vkb` at
+`2 nk npwx nkb` complex, `kinetic`, the stick tables — but that is not the dominant cost.
+Losing symmetry is: a spiral on a cubic crystal can multiply `nk` by up to the order of the
+point group, so an `E(q)` scan is priced as `nq` runs of a `nosym` calculation.
+`Calculation.at_spiral_q` is what keeps the scan affordable — everything except the
+k-dependent tables is independent of `q`, and P16 measured what rebuilding the rest costs.
+
+*Notebook 12.*
 
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes

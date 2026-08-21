@@ -90,6 +90,17 @@ class QEReference:
     #: per cell, as printed at the end of an LSDA run (2 decimals).
     magnetization: float | None = None
     absolute_magnetization: float | None = None
+    #: The three components a *noncollinear* run prints on the same line, in
+    #: Bohr magnetons per cell. ``magnetization`` then holds the first of them,
+    #: which is what the single-float pattern picks up.
+    magnetization_vector: tuple | None = None
+    #: ``report_mag``'s per-atom integrals: the charge and the moment inside
+    #: each atom's sphere of radius ``r_m``, and that radius in bohr. One row
+    #: per atom, three columns for a noncollinear run and one for a collinear
+    #: one. Empty when the run printed no report.
+    local_charges: np.ndarray | None = None
+    local_moments: np.ndarray | None = None
+    r_m: tuple | None = None
     homo: float | None = None  # eV, insulators
     lumo: float | None = None  # eV
     forces: np.ndarray | None = None  # (nat,3) Ry/bohr
@@ -143,6 +154,7 @@ def read_qe_output(path: str | Path) -> QEReference:
 
     kpoints, weights = _parse_kpoints(text)
     eigenvalues, occupations, npw = _parse_bands(text)
+    local_charges, local_moments = _parse_local_moments(text)
     ngm_dense, fft_dense = _parse_grid(text, "Dense")
     ngm_smooth, fft_smooth = _parse_grid(text, "Smooth")
     stress, pressure = _parse_stress(text)
@@ -183,6 +195,10 @@ def read_qe_output(path: str | Path) -> QEReference:
         absolute_magnetization=_last(
             text, r"absolute magnetization\s*=\s*(" + _FLOAT + ")"
         ),
+        magnetization_vector=_magnetization_vector(text),
+        local_charges=local_charges,
+        local_moments=local_moments,
+        r_m=_parse_r_m(text),
         homo=_parse_homo(text),
         lumo=_parse_lumo(text),
         forces=_parse_forces(text),
@@ -196,6 +212,51 @@ def read_qe_output(path: str | Path) -> QEReference:
             _scalar(text, r"convergence has been achieved in\s*(" + _FLOAT + r")\s*iterations")
         ),
     )
+
+
+def _magnetization_vector(text: str) -> tuple | None:
+    """The last "total magnetization = x y z" line of a noncollinear run."""
+    matches = re.findall(
+        r"total magnetization\s*=\s*(" + _FLOAT + r")\s+(" + _FLOAT + r")\s+("
+        + _FLOAT + r")\s+Bohr",
+        text,
+    )
+    return tuple(float(v) for v in matches[-1]) if matches else None
+
+
+def _parse_r_m(text: str) -> tuple | None:
+    """``new r_m : 0.3572 (alat units) 1.8637 (a.u.) for type 1``, in bohr."""
+    matches = re.findall(
+        r"new r_m :\s*" + _FLOAT + r"\s*\(alat units\)\s*(" + _FLOAT + r")\s*\(a\.u\.\)",
+        text,
+    )
+    return tuple(float(v) for v in matches) if matches else None
+
+
+def _parse_local_moments(text: str):
+    """``report_mag``'s per-atom block, the *last* one printed.
+
+    Every atom appears once per report, and a run reports at the start and at
+    convergence, so the converged values are the last ``nat`` blocks. The
+    collinear form prints one number and the noncollinear three.
+    """
+    blocks = re.findall(
+        r"atom number\s*(\d+)\s*relative position :.*?\n"
+        # 7.5 appends "(integrated on a sphere of radius ...)" to the charge line
+        # and 6.1 does not, so the rest of the line is skipped rather than matched.
+        r"\s*charge :\s*(" + _FLOAT + r")[^\n]*\n"
+        r"\s*magnetization :\s*((?:\s*" + _FLOAT + r"){1,3})",
+        text,
+    )
+    if not blocks:
+        return None, None
+    per_atom: dict[int, tuple] = {}
+    for index, charge, moment in blocks:
+        per_atom[int(index)] = (float(charge), [float(v) for v in moment.split()])
+    atoms = sorted(per_atom)
+    charges = np.array([per_atom[a][0] for a in atoms])
+    moments = np.array([per_atom[a][1] for a in atoms])
+    return charges, moments
 
 
 def _as_int(value: float | None) -> int | None:

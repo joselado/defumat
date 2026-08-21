@@ -1,0 +1,32 @@
+! bcc iron, noncollinear and magnetic, one k-point: the single-core comparison
+! case for the nspin_mag = 4 path (tools/compare_qe.py).
+!
+! One k-point and nosym for the same reason every other input in this directory
+! has them: both codes parallelise over k, so a multi-k comparison measures
+! batching rather than the cost of the physics, and a symmetry-reduced list is
+! not the same list in both codes unless the magnetic group is reproduced
+! exactly -- which is a correctness test (P17), not a timing one.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 3, celldm(1) = 5.217, nat = 1, ntyp = 1,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    occupations = 'smearing', smearing = 'marzari-vanderbilt', degauss = 0.05
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.5
+    angle1(1) = 90.0
+    angle2(1) = 0.0
+ /
+ &electrons
+    conv_thr = 1.0d-8
+    mixing_beta = 0.3
+ /
+ATOMIC_SPECIES
+ Fe 55.847 Fe.pz-nd-rrkjus.UPF
+ATOMIC_POSITIONS (alat)
+ Fe 0.0 0.0 0.0
+K_POINTS
+ 1
+   0.1875000  0.1875000  0.4375000   1.00

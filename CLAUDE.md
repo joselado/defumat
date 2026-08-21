@@ -11,7 +11,7 @@ the deliverable.
 
 **Status: the first milestone — SCF, band structure, DOS — is met**, with ultrasoft/PAW,
 LDA/GGA and collinear spin, and **forces and structural relaxation** on top of it.
-P0–P9 and P12–P16 are done bar Wyckoff input in P6; P10 has had one pass. A silicon SCF reproduces QE's total energy to **~1e-9 Ry** term by term, its
+P0–P9 and P12–P19 are done bar Wyckoff input in P6; P10 has had one pass. A silicon SCF reproduces QE's total energy to **~1e-9 Ry** term by term, its
 band structure to **0.0002 eV**, and metals with every smearing to ~2.5e-8 Ry.
 **Ultrasoft and PAW pseudopotentials are supported** and match QE to **≤3e-9 Ry** on 2-
 and 8-atom silicon (P12). **PBE, revPBE and PBEsol** work on all three pseudopotential
@@ -32,6 +32,13 @@ on five references and reproduce its relaxed geometries to **1e-6 bohr**.
 **Berry curvature, Chern numbers and Z2 invariants** (P16) are in too: the Chern number is
 an exact integer on a 6x6 mesh, and the Z2 has both the Wilson-loop and the Fu-Kane parity
 route, agreeing on every model case with a known answer.
+**Noncollinear magnetism, magnetic fields and spin spirals** (P17-P19) are in: a magnetic
+`nspin_mag = 4` run reproduces QE's bcc-iron benchmarks to **2.8e-9 Ry** with LDA and with
+PBE, the moment and the magnetic symmetry group matching what QE prints; external and
+per-atom fields and all three of QE's constrained-moment schemes match their (regenerated)
+benchmarks to **≤2e-7 Ry**; and **spin spirals** by the generalized Bloch theorem
+reproduce the collinear antiferromagnet of a doubled cell and a 90-degree noncollinear
+supercell to **1e-12 Ry**, which is the validation they have — `pw.x` has no spin spiral.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
 read it before writing code. P4 is complete: a block Davidson eigensolver behind a name
 registry, seeded from the pseudo-atomic orbitals as QE seeds it, and the *only* solver the
@@ -40,10 +47,7 @@ package offers — forming `H` costs `O(npw^2)` memory, so a dense solve is a te
 irreducible wedge. P10's first pass puts pypresso within **2–4x of serial Quantum ESPRESSO
 per SCF iteration** on the same machine, ultrasoft and PAW included — see
 `PERFORMANCE.md`. **Outstanding:** the projected DOS (`projwfc.x`), Wyckoff input, the stress (and with it
-`vc-relax`), and the rest of P10 (k-axis sharding and GPU). Non-collinear *magnetism* — a spin-orbit run whose
-magnetization is nonzero — is partly in: the density, potential and occupations carry it,
-but symmetrising it and gradient-correcting it are not written, so those combinations are
-refused rather than approximated.
+`vc-relax`), and the rest of P10 (k-axis sharding and GPU).
 
 ## Layout
 
@@ -99,9 +103,33 @@ which is **one** for a nonmagnetic spin-orbit run, exactly as for an unpolarized
 is why such a run costs about what a doubled unpolarized one costs: the density, the
 potential, the exchange-correlation functional and the symmetrisation are untouched, and
 all the new physics is in the spinors and in `D_ij` becoming a complex 2x2 matrix in spin
-space. Non-collinear *magnetism* (`nspin_mag = 4`) is built but only partly validated —
-`sym_rho`'s vector rotation and `gradcorr`'s local-frame rotation are not written and are
-refused, so such a run needs `nosym` and an LDA functional.
+space. Non-collinear *magnetism* (`nspin_mag = 4`) is complete and validated as of P17:
+`sym_rho` rotates the magnetization as an axial vector, the magnetic symmetry group keeps
+the operations that need time reversal, and `gradcorr` runs in the local spin frame. The one
+piece still refused is `PAW_gcxc_potential` with a magnetization — PAW plus a GGA plus
+`nspin_mag = 4` — because the radial local-frame rotation (`compute_rho_spin_lm`) is a
+second implementation rather than a call into the plane-wave one.
+
+**Magnetic fields and constrained moments are in scope and implemented** (P18):
+`pypresso/scf/fields.py` and `scf/locals.py`. A uniform field over the cell (QE's
+`B_field`, Elk's `bfieldc`), a field inside one atom's sphere (Elk's `bfcmt`, through a
+`LOCAL_MAGNETIC_FIELDS` card that `pw.x` has no counterpart for), Elk's `reducebf`, and all
+four of QE's `constrained_magnetization` schemes. **The energy is written down and the
+potential is `jax.grad` of it** — QE's five hand-derived expressions in `add_bfield.f90`
+are then a *test*, not a second implementation. **The field's energy is not in the total
+energy**: `add_bfield` is called from inside `v_of_rho`, so `deband` removes it again and
+`etcon` is printed and never added; Elk excludes its external field's energy by the same
+convention, and both numbers are carried separately.
+
+**Spin spirals are in scope and implemented** (P19): `spiral_q` (Elk's `vqlss`, in lattice
+coordinates) makes the up component of the spinor live at `k + q/2` and the down at
+`k - q/2`, each on its own plane-wave sphere, which is the generalized Bloch theorem and the
+whole of the implementation. In the rotated frame the density and the potential are lattice
+periodic, so the SCF, the functional and the mixer are untouched. **Three things are
+refused**: spin-orbit coupling permanently (it breaks the theorem, and Elk refuses it too);
+symmetry, until the spin space group is written, so a spiral needs `nosym` and the full
+k-grid; and ultrasoft/PAW, until the augmentation charge *between the two components* —
+`q_ij(q)`, which `topology/augmentation.py` already builds, not `qq` — is threaded through.
 
 **Berry curvature, Chern numbers and Z2 invariants are in scope and implemented** (P16):
 `pypresso/topology/` and `workflows/topology.py`. Everything is built from one primitive,
@@ -262,6 +290,9 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Forces | `PW/src/forces.f90`, `force_lc.f90`, `force_cc.f90`, `force_ew.f90`, `force_us.f90`, `addusforce.f90`, `force_corr.f90`, `symme.f90` (`symvector`) | the default is `jax.grad` of the energy at frozen wavefunctions (`forces/energy.py`); the Fortran expressions are transcribed as a cross-check. `gradcorr` is called from **inside** `v_xc`, so `force_cc` needs it |
 | Structural relaxation | `Modules/bfgs_module.f90`, `PW/src/move_ions.f90`, `run_pwscf.f90`, `update_pot.f90`, `checkallsym.f90` | BFGS in crystal coordinates with the cell metric; the setup (FFT grid, symmetry, k-points) is done **once** and only checked afterwards |
 | Stress | `PW/src/stress.f90` | not written; should come from differentiating with respect to strain rather than from the hand-derived expressions |
+| Magnetic symmetry | `PW/src/symm_base.f90` (`sgam_at_mag`), `symme.f90` (`sym_rho`'s `nspin = 4` branch), `PW/src/irrek.f90` | the magnetization is an **axial** vector, so its rotation carries `det(R)` and a further sign for an operation that is a symmetry only with time reversal; `irreducible_BZ` completes an explicit k-list from the lattice's wedge to the crystal's, and runs for every SCF |
+| Fields and constraints | `PW/src/add_bfield.f90`, `make_pointlists.f90`, `get_locals.f90`, `report_mag.f90`, `PW/src/input.f90` (`i_cons`) | the penalty's *energy* is written here and its potential comes from `jax.grad`; QE's five expressions are transcribed as the cross-check. Elk's counterparts: manual §5.2/§5.12/§5.104, `src/bfieldfsm.f90` |
+| Spin spirals | no QE counterpart — Elk's `src/gengkqvec.f90`, `init0.f90`, `findsymlat.f90`, manual §5.146 | up at `k + q/2`, down at `k - q/2`, each with its own `G+k` set; one basis call on the concatenated list gives both a common `npwx` |
 | Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `pypresso/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]`; here it should fall out of `jacfwd` of `H(k)` w.r.t. `k` |
 | Input parsing | `Modules/read_input.f90`, `PW/src/input.f90`, `Modules/input_parameters.f90` | defaults for every input variable are declared in `input_parameters.f90` |

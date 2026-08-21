@@ -144,6 +144,44 @@ def _relax(args) -> int:
     return 0 if result.converged else 1
 
 
+def _spiral(args) -> int:
+    """``E(q)`` over a line of spin-spiral wavevectors -- ``workflows/spiral.py``."""
+    from pypresso.workflows.spiral import run_spiral_scan
+
+    input_path = Path(args.input)
+    pseudo_dir = Path(args.pseudo_dir) if args.pseudo_dir else input_path.parent
+    pwin = read_pw_input(input_path)
+    system = build_system(pwin)
+    if not system.spiral:
+        print("the input has no spiral_q; a spiral scan needs one (and nosym, and "
+              "noncolin)", file=sys.stderr)
+        return 2
+    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
+
+    end = np.asarray(args.path if args.path else system.spiral_q, dtype=float)
+    fractions = np.linspace(0.0, 1.0, max(2, args.points))
+    wavevectors = fractions[:, None] * end[None, :]
+
+    scan = run_spiral_scan(
+        system, pseudos, wavevectors,
+        conv_thr=args.conv_thr or float(pwin.get("electrons", "conv_thr") or 1e-8),
+        mixing_beta=float(pwin.get("electrons", "mixing_beta") or 0.7),
+        verbose=args.verbose,
+    )
+
+    print(f"  spiral scan over {len(wavevectors)} wavevectors, "
+          f"{'all converged' if all(scan.converged) else 'SOME DID NOT CONVERGE'}")
+    print(f"  {'q (lattice)':<26} {'E (Ry)':>16} {'E - E(0) (meV)':>16} {'|m| (mu_B)':>12}")
+    for q, energy, moment, ok in zip(
+        scan.wavevectors, scan.energies, scan.moments, scan.converged
+    ):
+        flag = "" if ok else "  (not converged)"
+        print(f"  {np.round(q, 4)!s:<26} {energy:>16.8f}"
+              f" {(energy - scan.energies[0]) * 13605.693122994:>16.3f}"
+              f" {np.linalg.norm(moment):>12.4f}{flag}")
+    return 0 if all(scan.converged) else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pypresso", description=__doc__.splitlines()[0])
     parser.add_argument("--version", action="version", version=f"pypresso {__version__}")
@@ -186,6 +224,19 @@ def main(argv: list[str] | None = None) -> int:
     relax.add_argument("-v", "--verbose", action="store_true",
                        help="print each SCF iteration and each ionic step")
 
+    spiral = sub.add_parser(
+        "spiral", help="scan the total energy over spin-spiral wavevectors E(q)"
+    )
+    spiral.add_argument("input", help="path to a pw.x input file with spiral_q set")
+    spiral.add_argument("--pseudo-dir", help="where the UPF files are (default: beside the input)")
+    spiral.add_argument("--path", nargs=3, type=float, metavar=("Q1", "Q2", "Q3"),
+                        help="scan from the origin to this q, in lattice coordinates "
+                             "(default: the input's own spiral_q)")
+    spiral.add_argument("--points", type=int, default=11,
+                        help="how many wavevectors along the path (default 11)")
+    spiral.add_argument("--conv-thr", type=float, help="SCF threshold in Ry (default: the input's)")
+    spiral.add_argument("-v", "--verbose", action="store_true", help="print each SCF iteration")
+
     args = parser.parse_args(argv)
     if args.command == "inspect":
         return _inspect(args.path)
@@ -193,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
         return _dos(args)
     if args.command == "relax":
         return _relax(args)
+    if args.command == "spiral":
+        return _spiral(args)
     parser.error(f"unhandled command {args.command}")  # pragma: no cover
 
 

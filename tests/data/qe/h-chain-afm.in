@@ -1,0 +1,33 @@
+! The same hydrogen chain in a cell doubled along z, with the two atoms'
+! moments antiparallel: the supercell the spiral at spiral_q = (0, 0, 1/2)
+! must reproduce, computed by the collinear LSDA path that P9 validated.
+!
+! The k-grid is half the primitive one along z (1x1x2 against 1x1x4), which is
+! the exact folding: the doubled cell's reciprocal vector is half the
+! primitive's, so its 2-point grid unfolds onto the primitive 4-point one.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 0.83333333333333,
+    nat = 2, ntyp = 2,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10
+    nspin = 2
+    nosym = .true.
+    starting_magnetization(1) =  0.6
+    starting_magnetization(2) = -0.6
+    nbnd = 12
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-11
+ /
+ATOMIC_SPECIES
+ H1  1.008  H.pz-vbc.UPF
+ H2  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H1 0.0 0.0 0.0
+ H2 0.0 0.0 0.5
+K_POINTS {automatic}
+ 1 1 2 0 0 0

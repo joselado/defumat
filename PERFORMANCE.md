@@ -828,6 +828,82 @@ needs is also where the energy density is wanted. `exchange_correlation`
   two of nineteen calls, because the SCF's `ethr` schedule means roots converge
   together rather than one at a time.
 
+## What magnetism costs when it becomes a vector (P17-P19)
+
+Three features landed on the noncollinear path: a density with four components that
+actually carries a magnetization (P17), fields and constrained moments (P18), and spin
+spirals (P19). Each one was measured against the thing it extends.
+
+**A magnetic noncollinear run against QE, single core.** bcc iron, one k-point, ultrasoft,
+LDA, `nosym` — `benchmarks/fe-mag-1k.in`, which is single-k and symmetry-free for the same
+reason every other input in that directory is: both codes parallelise over k, and a
+symmetry-reduced list is not the same list in both codes unless the *magnetic* group is
+reproduced exactly, which is a correctness question and not a timing one.
+
+| | QE 7.5 | pypresso | ratio |
+|---|---|---|---|
+| setup / `init_run` | 0.550 s | 7.078 s | 12.9x |
+| SCF, cold | 1.420 s | 21.801 s | 15.4x |
+| SCF, warm | 1.420 s | 6.647 s | 4.7x |
+| **per SCF iteration** | 0.118 s | 0.237 s | **2.0x** |
+| iterations | 12 | 28 | |
+
+**2.0x per iteration**, which is the good end of the 2-4x band P10 established, and the
+total energies agree to 3.4e-9 Ry on the same run. The iteration *count* is the honest
+difference: 28 against 12, because this cell's magnetic state is soft and the two codes'
+mixers take different routes to it. That is why the "warm" row is 4.7x where the per-iteration
+row is 2.0x, and why the per-iteration number is the one to read.
+
+**The four-component density is not what costs.** The extra work in `nspin_mag = 4` against
+a nonmagnetic spinor run is four grid arrays instead of one in `v_of_rho`, the mixer and the
+symmetrisation — elementwise work on the dense grid, which is not where the time is. The
+Hamiltonian is unchanged in *shape*: it was already a spinor operator on `2 npwx` for P14.
+
+**Symmetrising a magnetization costs a rotation and a gather, not a second pass.** The
+charge and the three magnetization components share one set of symmetry maps
+(`symmetry_maps`), and the magnetization's extra work is a `(nsym, 3, 3)` einsum against
+arrays that were being gathered anyway. Measured on `pw_noncolin/noncolin.in` — iron's
+16-operation magnetic group on a 24^3 dense grid, 2026-08-21:
+
+| | per call |
+|---|---|
+| four components (`_symmetrize_noncollinear`) | 7.75 ms |
+| one component, same group and grid | 1.04 ms |
+
+Four components cost 7.5x one, which is what four transforms plus the rotation should cost
+and is **0.8% of that run's ~0.99 s iteration** (22 k-points, 18 iterations in 17.9 s). The
+symmetrisation is not where a magnetic run spends its time; the eigensolver is, as always.
+
+**A spin spiral costs 1.3x an ordinary noncollinear iteration.** The hydrogen chain of
+notebook 12, same cell, same k-grid, with and without `spiral_q`:
+
+| | per SCF iteration |
+|---|---|
+| noncollinear, one sphere | 335 ms |
+| spiral, two spheres | 440 ms |
+
+**1.31x**, and the number is worth explaining because a naive guess is 2x. The transform
+count does not change — a spinor has two components either way, so `vloc_psi_nc` does two
+FFTs per state in both cases. What doubles is the *bookkeeping* around them: two `fft_index`
+gathers instead of one shared, two stick layouts, and two `vkb` blocks in the projector
+contraction. The kinetic term and the local potential are unchanged, and the eigensolver
+never learns that anything happened.
+
+**What a spiral really costs is symmetry.** It breaks the space group down to the operations
+with `S^T q = q`, and even those are not usable until the spin space group is written
+(`PLAN.md` P19), so a spiral run needs `nosym` and the *full* k-grid. On a cubic crystal that
+is up to 48x the k-points of the same cell without a spiral — far more than the 1.31x above.
+An `E(q)` scan is therefore priced as `nq` runs of a symmetry-free calculation, and
+`Calculation.at_spiral_q` is what keeps the `nq` factor from also multiplying the setup: it
+rebuilds the two spheres, `|k+G|^2`, the stick layout and `vkb`, and shares the cell, both
+G-vector sets, the local potential, the core charge and the Ewald sum — the same sharing
+`at_kpoints` does, measured at 29.8x on a large cell in P16.
+
+**Memory.** The spiral doubles every array carrying both a `k` and a `G` index: `vkb` at
+`2 nk npwx nkb` complex, `kinetic` and the stick tables at `2 nk npwx`. On the notebook's
+chain that is 8 rows of 1532 plane waves instead of 4 — a few megabytes. On a real magnetic
+crystal the number to watch is still `nk`, which the loss of symmetry has already multiplied.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than

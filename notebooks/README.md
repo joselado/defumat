@@ -17,6 +17,8 @@ that way.
 | [`08_spin_orbit_coupling.ipynb`](08_spin_orbit_coupling.ipynb) | Spin-orbit coupling: why a spinor needs three spin numbers where a collinear code needs one, the `j`-resolved projectors a fully-relativistic pseudopotential keeps and a scalar one throws away, `fcoef` verified as a shell projector rather than against a reference, the identity that gates the whole spinor path (switch the coupling off and the collinear answer must come back term by term), platinum's 5d splitting and Kramers degeneracy against QE, and **bismuthene** -- a quantum spin Hall insulator whose half-electronvolt gap is made of nothing but the spin-orbit coupling | P14 |
 | [`09_forces_and_relaxation.ipynb`](09_forces_and_relaxation.ipynb) | Forces and structural relaxation: why the force is a *partial* derivative and what makes it one, the energy identity that has to hold before anything is differentiated, the force against QE and against finite differences, QE's six hand-derived terms transcribed beside the gradient — and the two errors that comparison found — the SCF-correction term as the exact difference between the two methods, BFGS with its trust radius putting displaced silicon back on its site (QE's geometry to 1e-6 bohr), and a CO molecule with an atom frozen by `if_pos` | P15 |
 | [`10_topological_invariants.ipynb`](10_topological_invariants.ipynb) | Berry curvature, Chern numbers and Z2: why every invariant is built from one overlap and not from a derivative of the eigenproblem, the wrap at the zone edge measured (0.99 against 0.0096), a Chern number that is an *exact* integer on a 6x6 mesh against a Kubo sum that is 1e-3 off on a 24x24 one, silicon's curvature vanishing pointwise, the Wannier centres switching partners across the Kane-Mele transition, three independent routes agreeing on the doubled Qi-Wu-Zhang model, all four `(nu0; nu1nu2nu3)` phases of the lattice Dirac model, silicon's eight parity products, and **bismuthene** by both routes with an ultrasoft spin-orbit `S` | P16 |
+| [`11_noncollinear_magnetism_and_fields.ipynb`](11_noncollinear_magnetism_and_fields.ipynb) | Magnetism as a *vector*: why the symmetry group shrinks and half of what is left needs time reversal, the rotation-invariance identity that gates the whole regime (and the 129 Ry bug it found), bcc iron against QE with LDA and with PBE's local spin frame, what "the moment on this atom" means without muffin tins, and fields and constrained moments — five of QE's hand-derived potentials reproduced by one `jax.grad`, three constrained benchmarks, Elk's fixed-spin-moment field beside them, and `reducebf` finding a magnetic state a nonmagnetic start could never reach | P17, P18 |
+| [`12_spin_spirals.ipynb`](12_spin_spirals.ipynb) | Spin spirals by the generalized Bloch theorem: two plane-wave spheres instead of one, the three identities that validate them (`q = 0` against an ordinary noncollinear run, `q = b3/2` against the *collinear* antiferromagnet, `q = b3/4` against a four-cell noncollinear supercell — all to 1e-10 Ry), the shifted supercell k-grid that is the trap of the phase, an `E(q)` magnon dispersion with the exchange constants fitted out of it, and why the rotated-frame moment is a gauge and the energy is not | P19 |
 
 ## Conventions
 
@@ -67,6 +69,14 @@ one (35 Ry, 12x12x1). Both pairs are committed with their own QE references, and
 small pair is what the regression tests check and what `PLAN.md`'s P14 entry quotes.
 Switching the notebook to the converged pair is one variable, `SIZE`, at the cost of about
 forty minutes in total and a peak of 9.4 GB.
+
+`11` needs the vendored tree for its inputs -- QE's `pw_noncolin` cases, which have no
+committed copy here -- but every reference it compares against is regenerated and committed
+under `tests/data/qe/`, for the reason its own text gives: the shipped 2017 output of
+`noncolin-constrain_atomic.in` does not belong to the input beside it. `12` runs without the
+vendored tree entirely; both of its systems (a hydrogen atom and a hydrogen chain, with the
+supercells it is validated against) are committed. `11` takes about **eight minutes** on one
+core and `12` about **five**.
 
 After changing code the notebooks depend on, re-execute them and refresh the exports:
 

@@ -1,0 +1,44 @@
+! The same hydrogen chain in a cell quadrupled along z, with each atom's moment
+! turned 90 degrees from the one before: the supercell the spiral at
+! spiral_q = (0, 0, 1/4) must reproduce. Noncollinear, four species so that
+! each atom can be given its own angle2, and no symmetry.
+!
+! **The k-grid is shifted, and that is not a detail.** A spiral's plane waves
+! sit at k +- q/2, not at k, so the supercell k-points that correspond to a
+! primitive spiral grid are shifted by q/2. With q = b3/4 and a primitive
+! 1x1x4 grid the up component's wavevectors are odd multiples of b3/8, which
+! are *not* supercell reciprocal vectors: they belong to the supercell point
+! b3'/2, i.e. the grid below. Sampling the supercell at Gamma instead compares
+! two different calculations and disagrees in the third decimal.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 1.66666666666667,
+    nat = 4, ntyp = 4,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.6, angle1(1) = 90.0, angle2(1) =   0.0
+    starting_magnetization(2) = 0.6, angle1(2) = 90.0, angle2(2) =  90.0
+    starting_magnetization(3) = 0.6, angle1(3) = 90.0, angle2(3) = 180.0
+    starting_magnetization(4) = 0.6, angle1(4) = 90.0, angle2(4) = 270.0
+    nbnd = 24
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-11
+ /
+ATOMIC_SPECIES
+ H1  1.008  H.pz-vbc.UPF
+ H2  1.008  H.pz-vbc.UPF
+ H3  1.008  H.pz-vbc.UPF
+ H4  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H1 0.0 0.0 0.00
+ H2 0.0 0.0 0.25
+ H3 0.0 0.0 0.50
+ H4 0.0 0.0 0.75
+K_POINTS {automatic}
+ 1 1 1 0 0 1

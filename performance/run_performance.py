@@ -70,6 +70,7 @@ DEFAULT_CASES = [
     ("si8-smeared-1k", "8 atoms, smeared -- the collinear half of the spinor pair"),
     ("si8-nc-1k", "the same run as spinors: what npol = 2 costs"),
     ("pt-so-1k", "spin-orbit: j-resolved projectors, complex 2x2 D_ij"),
+    ("fe-mag-1k", "a magnetization that is a vector: nspin_mag = 4"),
 ]
 
 
