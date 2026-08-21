@@ -1,0 +1,14 @@
+! The `ph.x` input that generated `reference.out.ph-c-epsilon`.
+!
+!   pw.x -in c-epsilon.in && ph.x -in c-epsilon.ph.in
+!
+! This one is QE's own test-suite/ph_base/c.phG.in verbatim, minus the `prefix`
+! line, which the recipe above does not use.
+phonons of C at Gamma
+ &inputph
+  tr2_ph=1.0d-14,
+  epsil=.true.,
+  fildyn='Cg.dyn',
+  amass(1)=12.0107,
+ /
+0.0 0.0 0.0

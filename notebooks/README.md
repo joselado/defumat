@@ -29,7 +29,7 @@ ends with a pointer to both.
 | [`16_projected_density_of_states.ipynb`](16_projected_density_of_states.ipynb) | `<phi|S|psi>` on Löwdin-orthogonalised orbitals, silicon's `s` and `p` densities of state against `projwfc.x`, and the same weights as fat bands | P8 |
 | [`17_reaching_self_consistency.ipynb`](17_reaching_self_consistency.ipynb) | Kerker preconditioning (24 → 14 iterations), the SCF as a root-find, and the unstable magnetic solutions — with and without a Hubbard `U` — that no mixer can hold | P22 |
 | [`18_continuing_a_calculation.ipynb`](18_continuing_a_calculation.ipynb) | Starting one run from another's converged state across a change of spin regime: bcc iron's moment rotated onto `x` in one iteration, the seed that keeps a magnetic run off the symmetric solution, and spin-orbit coupling switched on | P23 |
-| [`19_linear_response.ipynb`](19_linear_response.ipynb) | The velocity operator from one `jvp` of `H(k)`, the Sternheimer equation instead of a sum over states, and silicon's dielectric constant and Born charges against `ph.x` (13.806646 against 13.806375) | P24 |
+| [`19_linear_response.ipynb`](19_linear_response.ipynb) | The velocity operator from one `jvp` of `H(k)`, the Sternheimer equation instead of a sum over states, and silicon's dielectric constant and Born charges against `ph.x` on norm-conserving, ultrasoft and PAW datasets (agreeing to <= 1.2e-4) | P24, P24a |
 
 ## Conventions
 

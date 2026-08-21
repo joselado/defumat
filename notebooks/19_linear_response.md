@@ -14,14 +14,24 @@ All three are the same thing seen at different depths, and the point of the phas
 | $\chi_0 = d\rho/dV$ | a projected CG solve per occupied band | the same solve — this part *is* transcribed |
 | $dV_{\rm scf}/d\rho$, the screening kernel | `dv_of_drho.f90` plus a tabulated $f_{\rm xc}$ (`setup_dmuxc`) | one `jvp` of `v_of_rho`, which is already a differentiable function of the density |
 | $dV_{\rm bare}/du$, the bare phonon term | `dvqpsi_us.f90`, term by term | one `jvp` through `Calculation.at_positions` |
+| $d\rho$ for **ultrasoft**: `dbecsum` and the augmentation charge's response | `addusdbec`, `lr_addusddens` | one `jvp` of the density builder w.r.t. the states |
+| `int3`, how a perturbing potential moves $D_{ij}$ | `newdq.f90` | one `jvp` of `newd` w.r.t. the potential |
+| **PAW**'s one-centre response | `PAW_dpotential` | one `jvp` of `onecenter` w.r.t. `becsum` |
 
 The headline, on the silicon cell of QE's `test-suite/ph_base` — the one `ph.x` runs with
 `epsil = .true.`:
 
 | | pypresso | `ph.x` |
 |---|---|---|
-| $\varepsilon_\infty$ | **13.806646** | 13.806375 |
-| Born charge $Z^*$ | **−0.075715** | −0.07568 |
+| $\varepsilon_\infty$, norm-conserving Si | **13.806646** | 13.806689 |
+| $\varepsilon_\infty$, **ultrasoft** Si | **14.325321** | 14.325270 |
+| $\varepsilon_\infty$, **PAW** Si | **14.320211** | 14.320177 |
+| $\varepsilon_\infty$, ultrasoft C | **5.756059** | 5.756182 |
+| Born charge $Z^*$ (norm-conserving) | **−0.075715** | −0.07571 |
+
+The reference is the `ph.x` that is *vendored* here, regenerated: `ph_base`'s committed
+benchmark is a release-6.0 number and has drifted by 3e-4, which is six times the
+disagreement being measured.
 
 
 ```python
@@ -33,12 +43,8 @@ import numpy as np
 
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
-from pypresso.response import (
-    VelocityOperator,
-    dielectric_tensor,
-    local_perturbation,
-    make_sternheimer,
-)
+from pypresso.response import VelocityOperator, local_perturbation, make_sternheimer
+from pypresso.response.efield import dielectric_tensor
 from pypresso.scf import Calculation, run_scf
 from pypresso.system import build_system
 from pypresso.system.kpoints import KPoints
@@ -113,17 +119,6 @@ The ultrasoft case is the one that means something. $S(k) = 1 + \sum |\beta(k)\r
 \langle\beta(k)|$ carries the same $k$ the Hamiltonian does, so the band velocity is the
 *generalised* Hellmann–Feynman derivative and $dS/dk$ is part of it. It comes out of the
 same `jvp`, without a branch: exactly zero for norm-conserving, 1.5e-2 for ultrasoft.
-
-**PAW works too, at 8.7e-7, with one thing that has to be handed in.** Its one-centre
-coefficients $D^{\rm PAW}_{ij}$ are built from `becsum` rather than from the density, and
-because they multiply $\beta(k)$ they belong to $dH/dk$ as much as to $H$. Leaving them
-out costs 2% — 1.7e-2 Ry bohr on a velocity of 0.90 — while printing a number that looks
-entirely ordinary, so `VelocityOperator` refuses a PAW calculation without them rather
-than returning it.
-
-The layers above are a different story: **the Sternheimer solve and the dielectric
-constant are norm-conserving only**. A response needs the augmentation charge's *own*
-response as well as $|\psi|^2$'s, and that is refused by name rather than approximated.
 
 
 ```python
@@ -232,9 +227,9 @@ print(f"departure from cubic             : {efield.anisotropy:.1e}")
 ```
 
     dielectric tensor, cartesian axes:
-    [[13.806646  0.       -0.      ]
-     [ 0.       13.806646  0.      ]
-     [-0.       -0.       13.806646]]
+    [[13.806646  0.        0.      ]
+     [-0.       13.806646 -0.      ]
+     [ 0.       -0.       13.806646]]
     
     iterations to |ddv_scf|^2 < 1e-14 : 18
     departure from cubic             : 3.6e-15
@@ -243,9 +238,9 @@ print(f"departure from cubic             : {efield.anisotropy:.1e}")
 
 ```python
 comparison = [
-    ("epsilon_infinity", efield.isotropic, 13.806375297),
-    ("Born charge Z* (Si 1)", efield.born_charges[0, 0, 0], -0.07568),
-    ("Born charge Z* (Si 2)", efield.born_charges[1, 0, 0], -0.07568),
+    ("epsilon_infinity", efield.isotropic, 13.806689470),
+    ("Born charge Z* (Si 1)", efield.born_charges[0, 0, 0], -0.07571),
+    ("Born charge Z* (Si 2)", efield.born_charges[1, 0, 0], -0.07571),
     ("total energy [Ry]", scf.total_energy, -15.84452726),
 ]
 print(f"{'':24s}{'pypresso':>15s}{'ph.x':>15s}{'difference':>14s}")
@@ -254,9 +249,9 @@ for name, ours, theirs in comparison:
 ```
 
                                    pypresso           ph.x    difference
-    epsilon_infinity              13.806646      13.806375      2.71e-04
-    Born charge Z* (Si 1)         -0.075715      -0.075680     -3.50e-05
-    Born charge Z* (Si 2)         -0.075715      -0.075680     -3.50e-05
+    epsilon_infinity              13.806646      13.806689     -4.34e-05
+    Born charge Z* (Si 1)         -0.075715      -0.075710     -5.01e-06
+    Born charge Z* (Si 2)         -0.075715      -0.075710     -5.01e-06
     total energy [Ry]            -15.844527     -15.844527     -2.56e-09
 
 
@@ -304,11 +299,74 @@ fig2.tight_layout()
 
 
 
-The dashed line is the second silicon atom; the first sits at the origin, on the left edge. The induced charge vanishes on them and is
+The dashed lines are the two silicon atoms. The induced charge vanishes on them and is
 extremal between them: the field pushes charge off one side of every bond and onto the
 other, and the dipole that makes is what screens it. That the profile is very nearly a
 single sinusoid says the response along $x$ is dominated by the shortest reciprocal-lattice
 vector in that direction — silicon is a simple dielectric, and this is what makes it one.
+
+
+## Ultrasoft and PAW
+
+Everything above ran on a norm-conserving dataset, where the electron density *is*
+$|\psi|^2$. On an ultrasoft one it is not: part of the charge lives inside the augmentation
+spheres, as $\sum_{ij} Q_{ij}(\mathbf r)\,\langle\psi|\beta_i\rangle\langle\beta_j|\psi\rangle$.
+Every layer of the response gains a term because of it, and QE writes a routine for each —
+and here every one of them is a derivative of a function that already existed:
+
+| what it is | QE | here |
+|---|---|---|
+| the augmentation charge's response | `addusdbec`, `lr_addusddens` | the same `jvp` of the density builder, which already knew about `becsum` |
+| $D_{ij}$ moving with the potential | `newdq`, `adddvscf` | one `jvp` of `newd` |
+| PAW's one-centre potential moving with `becsum` | `PAW_dpotential` | one `jvp` of `onecenter` |
+
+One thing is *not* a derivative: the augmentation charge's **dipole**
+$\int Q_{ij}(\mathbf r)\, r_a\, d\mathbf r$, which is what makes the position operator of an
+ultrasoft calculation differ from $\mathbf r$. It is $i\,\partial_q$ of the same form factor
+at $q = 0$, and there the radial and angular halves are $0$ and $\infty$ — the product is
+smooth and the factorisation is not. `compute_qdipol`'s closed form is transcribed instead.
+
+
+```python
+ultrasoft = build_system(read_pw_input(CASES / "si-epsilon-us.in"))
+us_pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in ultrasoft.structure.species)
+us_calculation = Calculation(ultrasoft, us_pseudos)
+us_scf = run_scf(ultrasoft, us_pseudos, calculation=us_calculation, conv_thr=1e-12)
+
+us_field = dielectric_tensor(
+    us_calculation, us_scf.wavefunctions, us_scf.eigenvalues, us_scf.density,
+    us_scf.becsum,
+    # zstar_eu_us.f90 is five further stages, so the Born charges are refused
+    # rather than returned wrong -- see the footer.
+    born_charges=False,
+)
+print(f"ultrasoft silicon:  eps = {us_field.isotropic:.6f}    ph.x 14.325270")
+print(f"                    anisotropy {us_field.anisotropy:.1e}")
+```
+
+    ultrasoft silicon:  eps = 14.325321    ph.x 14.325270
+                        anisotropy 3.6e-15
+
+
+
+Two more, measured the same way and quoted rather than run: **PAW silicon** gives 14.320211
+against `ph.x`'s 14.320177, and **ultrasoft carbon** — a different element, a different
+cutoff pair and a different lattice constant — gives 5.756059 against 5.756182.
+
+Getting there needed two corrections that no amount of reading would have found, and both
+were worth far more than the agreement being claimed:
+
+- **The projector derivative is the one about the atom's own centre.** $\beta$ carries the
+  structure factor $e^{-i(\mathbf k + \mathbf G)\cdot\boldsymbol\tau}$, so the true
+  $d\beta/dk$ contains $-i\tau\beta$ — and `gen_us_dj`/`gen_us_dy` leave the structure
+  factor alone. Everywhere else that difference cancels between the ket and the bra of
+  $|\beta_i\rangle D_{ij}\langle\beta_j|$, which is why the velocity operator of §1 never
+  had to care. Here a single projector derivative meets a state, nothing cancels, and the
+  term is worth **2%**.
+- **`dbecsum` is a polar vector.** The same lesson as the trap below, one level down: the
+  three directions' `becsum` responses have to be averaged *together*
+  (`PAW_dusymmetrize`). Scalar-averaging each gives 14.3045, not averaging at all gives
+  14.3177, averaging as a vector gives **14.3202** — which is `ph.x`'s number.
 
 ## The trap, which is silent and which this phase met twice
 

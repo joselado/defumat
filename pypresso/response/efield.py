@@ -193,6 +193,17 @@ def dielectric_tensor(
         eigenvalues = eigenvalues[None]
     _require_a_symmetrisable_response(calculation)
     require_a_sternheimer_regime(calculation)
+    if calculation.is_paw and not becsum:
+        # The same rule ``VelocityOperator`` enforces for ``ddd_paw``: PAW's
+        # one-centre coefficients are built from ``becsum``, and a Hamiltonian
+        # without them is a different operator whose response is plausible and
+        # wrong by the whole PAW correction.
+        raise ValueError(
+            "a PAW dielectric response needs the converged projector "
+            "occupations: pass becsum = scf_result.becsum. They are part of the "
+            "mixed state, not a function of the density, and the one-centre "
+            "potential is built from them"
+        )
     if born_charges:
         # Checked here rather than where they are computed: the refusal should
         # not cost a whole self-consistent response first.

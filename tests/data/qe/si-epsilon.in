@@ -2,13 +2,15 @@
 ! dielectric-response tests run without the vendored tree.
 !
 ! It is the ground state `si.phG.in` computes the dielectric constant and the
-! Born effective charges of, with `epsil = .true.`. Its committed benchmark
-! prints, in cartesian axes:
+! Born effective charges of, with `epsil = .true.`, and the total energy is
+! -15.84452726 Ry.
 !
-!     Dielectric constant   13.806375297 on the diagonal, zero off it
-!     Effective charges     -0.07568 on the diagonal, both atoms
-!
-! and a total energy of -15.84452726 Ry.
+! The reference is **not** that input's committed benchmark, which prints
+! 13.806375297 and -0.07568: those are release-6.0 numbers and the vendored
+! `ph.x` gives 13.806689470 and -0.07571 today, a drift six times the
+! disagreement being measured. The regenerated output is committed beside this
+! file as `reference.out.ph-si-epsilon`, following what `tests/conftest.py`
+! already does for `pw.x`.
 !
 ! The ten k-points are the irreducible wedge of a shifted 4x4x4 Monkhorst-Pack
 ! grid. **That grid is not closed under the point group** -- 2304 of its 3072

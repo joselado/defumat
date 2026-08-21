@@ -1,0 +1,16 @@
+! The `ph.x` input that generated `reference.out.ph-si-epsilon-us`, so that the
+! reference is regenerable rather than merely committed.
+!
+!   pw.x -in si-epsilon-us.in && ph.x -in si-epsilon-us.ph.in
+!
+! with `outdir` pointing at the same scratch for both. The dielectric constant
+! and the Born charges are what `epsil = .true.` prints at the end.
+! (ultrasoft silicon.)
+dielectric constant of silicon, ultrasoft
+ &inputph
+  tr2_ph = 1.0d-14,
+  epsil = .true.,
+  fildyn = 'si.dynG',
+  amass(1) = 28.086,
+ /
+0.0 0.0 0.0

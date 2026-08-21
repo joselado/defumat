@@ -14,9 +14,12 @@ machinery with it:
   central difference of the density under the same perturbation, and its
   composition with the screening kernel against P22's own finite-difference SCF
   Jacobian -- at *that* difference's optimal step, which is not its default one.
-* **the electric field** (:mod:`pypresso.response.efield`) against ``ph.x``'s
-  committed ``ph_base/si.phG.in`` benchmark, and against itself on the one
-  k-grid where the symmetrisation it needs can be switched off.
+* **the electric field** (:mod:`pypresso.response.efield`) against the
+  **vendored** ``ph.x``, regenerated -- ``ph_base``'s committed benchmark dates
+  from release 6.0 and has drifted by six times the disagreement being measured
+  -- on norm-conserving, ultrasoft and PAW silicon and on ultrasoft carbon; and
+  against itself on the one k-grid where the symmetrisation it needs can be
+  switched off.
 
 The finite-difference reference has one failure mode worth knowing about, and it
 is the reference's rather than the operator's: eigenvalues come back **sorted**,
@@ -36,11 +39,7 @@ import pytest
 
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
-from pypresso.response import (
-    VelocityOperator,
-    local_perturbation,
-    make_sternheimer,
-)
+from pypresso.response import VelocityOperator, make_sternheimer
 from pypresso.scf import run_scf
 from pypresso.system import build_system
 from pypresso.system.kpoints import KPoints
@@ -226,7 +225,8 @@ def test_paw_without_its_one_centre_coefficients_is_refused():
 PROBE_MILLER = (1, 0, 0)
 
 #: How far ``chi_0 dV`` may sit from a central difference of the density. The
-#: bound is the difference's own floor -- see the test.
+#: bound is the difference's own floor -- measured at 2.6e-7 norm-conserving,
+#: 8.8e-7 ultrasoft and 1.4e-6 PAW.
 CHI0_RELATIVE = 1e-5
 
 #: How far ``chi_0 K`` may sit from P22's finite-difference SCF Jacobian, at
@@ -272,38 +272,68 @@ def _silicon():
     return system, pseudos, calculation, result
 
 
-def test_chi0_matches_a_finite_difference_of_the_density():
+@pytest.mark.parametrize("case", ["si2-nc-force", "si2-us", "si2-paw"])
+def test_chi0_matches_a_finite_difference_of_the_density(case):
     """``chi_0 dV`` against ``(rho[V + h dV] - rho[V - h dV]) / 2h``.
 
     The two share the Hamiltonian and nothing else: one solves a projected
     linear system per occupied band, the other diagonalises twice. Neither side
     symmetrises -- the probe potential breaks the crystal's point group, so a
     symmetrised comparison would be comparing two different quantities.
+
+    All three datasets, and the last two are the point: an ultrasoft response
+    carries ``dbecsum`` and the augmentation charge's own response inside
+    ``drho`` and ``int3`` inside the perturbation, and none of those is
+    transcribed -- they come from differentiating the density builder and
+    ``newd``, which already knew about them. The reference builds its density the
+    same way, so it carries them too.
     """
     from pypresso.basis.interpolate import to_dense
-    from pypresso.scf.density import sum_band
+    from pypresso.scf import Calculation
+    from pypresso.scf.density import becsum as becsum_of, sum_band
 
-    system, _, calculation, result = _silicon()
+    system = build_system(read_pw_input(CASES / f"{case}.in"))
+    pseudo_dir = Path(__file__).resolve().parents[1] / "data" / "pseudo"
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    calculation = Calculation(system, pseudos)
+    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12,
+                     max_iterations=80)
+
     solver = make_sternheimer(calculation, result)
     dv = _probe_potential(calculation)
-
-    solution = solver.solve(local_perturbation(calculation, dv))
+    solution = solver.solve(solver.perturbation(dv))
     assert solution.converged
     drho = np.asarray(solver.response_density(solution.dpsi))
 
     smooth, dense = calculation.basis.smooth, calculation.basis.dense
     v_scf = calculation.potential(result.density).v_scf
+    _, ddd_paw = calculation.onecenter(result.becsum)
     nbnd = result.wavefunctions.shape[2]
+    weights = solver.weights
 
     def density_at(scale):
-        hamiltonians = calculation.hamiltonian(v_scf + scale * dv)
-        eigenvalues, psi = calculation.diagonalize(hamiltonians, nbnd, None, 1e-13)
-        weights, _ = calculation.occupations(eigenvalues)
+        hamiltonians = calculation.hamiltonian(v_scf + scale * dv, ddd_paw)
+        _, psi = calculation.diagonalize(hamiltonians, nbnd, None, 1e-13)
+        psi = psi[:, :, : solver.nocc]
+        # The *unsymmetrised* becsum, which is what the response uses: the probe
+        # potential breaks the crystal's point group, so PAW's ``PAW_symmetrize``
+        # would average this reference over operations the perturbed system does
+        # not have. Comparing against it instead is worth 0.45 relative -- which
+        # is what this line looked like before, and it failed loudly rather than
+        # quietly, because the two sides then compute different quantities.
+        becsum_ = becsum_of(
+            psi, calculation.projectors.vkb, weights,
+            calculation.species_channels, calculation.k_batch,
+        ) if calculation.is_ultrasoft else ()
         rho = sum_band(
-            psi, calculation.fft_index, smooth.grid, jnp.asarray(weights),
+            psi, calculation.fft_index, smooth.grid, weights,
             system.cell, calculation.k_batch,
         )
-        return np.asarray(to_dense(rho, smooth, dense))
+        return np.asarray(
+            calculation.augmented(to_dense(rho, smooth, dense), becsum_)
+        )
 
     step = 1e-4
     reference = (density_at(step) - density_at(-step)) / (2.0 * step)
@@ -340,9 +370,7 @@ def test_the_exact_jacobian_agrees_with_the_finite_difference_one():
         lambda r: calculation.potential(r).v_scf, (rho,), (direction,)
     )
     exact = np.asarray(calculation.symmetrize(
-        solver.response_density(
-            solver.solve(local_perturbation(calculation, kernel)).dpsi
-        )
+        solver.response_density(solver.solve(solver.perturbation(kernel)).dpsi)
     ))
 
     nbnd = result.wavefunctions.shape[2]

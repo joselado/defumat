@@ -1365,6 +1365,32 @@ bands and 20000 plane waves at 64 k-points the same block is **4.1 GB** and the 
 are **25 GB**, which is the number that decides whether such a run happens at all: the CG
 already goes through the `k_batch` dial, and those six do not.
 
+### What ultrasoft and PAW add to it (P24a)
+
+Same cell, same k-grid, same wedge -- only the dataset changes -- so the columns are the
+cost of the augmentation charge and of PAW's one-centre terms and of nothing else. One
+core, `conv_thr = 1e-12`, the self-consistent response run to `|ddv_scf|^2 < 1e-14`:
+
+| case | dataset | iterations | response |
+|---|---|---|---|
+| `si-epsilon` | norm-conserving, `ecutrho = 4 ecutwfc` | 18 | **44 s** |
+| `si-epsilon-us` | ultrasoft, `ecutrho = 8 ecutwfc` | 19 | **82 s** |
+| `si-epsilon-paw` | PAW, `ecutrho = 8 ecutwfc` | 19 | **95 s** |
+| `c-epsilon` | ultrasoft carbon, `ecutrho = 11 ecutwfc` | 17 | **49 s** |
+
+Ultrasoft costs about **1.9x** the norm-conserving run and PAW **2.2x**, and most of that
+is not the response at all: the dual is 8 rather than 4, so every dense-grid quantity is
+twice the size before anything new is computed. The iteration count is unchanged, which is
+the thing worth knowing -- the augmentation charge does not make the response harder to
+converge, only more expensive per step.
+
+**None of the new terms is an extra pass over anything.** `dbecsum` and the augmentation
+charge's response ride inside the `jvp` of the density builder that was already being
+taken; `int3` is a `jvp` of `newd`, which the SCF already evaluates once per iteration; and
+`PAW_dpotential` is a `jvp` of `onecenter`, likewise. What each adds is a tangent alongside
+a primal that was going to be computed anyway -- which is the cost model of forward-mode
+differentiation and the reason this phase is not 2x slower again.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -1435,3 +1461,4 @@ measurements, before being implemented. See "QE's FFT layout" above.)
 | 2026-08-21 | Newton-Krylov on the SCF residual (`scf_solver`) | **not a speedup** — 19 to 139 `F` evaluations against 14 to 36; it buys unstable SCF solutions, not time |
 | 2026-08-21 | `ns` joins the residual's packed state; `run_scf(starting_ns=...)` | DFT+U reaches the mixer's fixed point (58 `F` against 9) and a saddle the mixer cannot hold (31 against a runaway) |
 | 2026-08-21 | Linear response (P24): the velocity operator from one `jvp`, the Sternheimer solve, and `epsilon_infinity` | exact `chi_0 K` at 0.5 s against the differentiated eigensolver's 3.5 s; silicon's dielectric constant in 66 s |
+| 2026-08-21 | Ultrasoft and PAW linear response (P24a): `dbecsum`, the augmentation charge's response, `int3` and `PAW_dpotential`, all as `jvp`s of code that existed | `epsilon_infinity` on four cases at 44-95 s; 1.9x (US) and 2.2x (PAW) the norm-conserving run, mostly the doubled dual |
