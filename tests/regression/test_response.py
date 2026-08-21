@@ -132,6 +132,33 @@ def test_the_overlap_carries_a_velocity_only_when_it_is_not_the_identity():
     assert largest_ds("si2-us") > 1e-3
 
 
+def test_the_band_velocity_vanishes_at_gamma():
+    """A symmetry statement, and the check on the convenience entry point.
+
+    Silicon has an inversion centre, so at ``Gamma`` every eigenstate has a
+    definite parity and ``<psi|v|psi>`` is zero exactly. Nothing in the operator
+    knows that: it is built from ``dH/dk`` at a k-point like any other, and what
+    is left over is the eigensolver's own tolerance. It also exercises
+    :func:`~pypresso.response.band_velocities`, which is the entry point the
+    README names and which the tests above bypass.
+    """
+    from pypresso.response import band_velocities as compute_velocities
+    from pypresso.scf import Calculation
+
+    system = build_system(read_pw_input(CASES / "si2-nc-force.in"))
+    pseudo_dir = Path(__file__).resolve().parents[1] / "data" / "pseudo"
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    calculation = Calculation(system, pseudos)
+    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-10,
+                     max_iterations=80)
+
+    gamma = KPoints(coords=jnp.zeros((1, 3)), weights=jnp.ones(1))
+    velocities = compute_velocities(calculation, result, kpoints=gamma).velocities
+    assert np.abs(velocities).max() < 1e-3
+
+
 # ---------------------------------------------------------------------------
 # Stage 2: the Sternheimer solve, and the susceptibility built from it.
 # ---------------------------------------------------------------------------
