@@ -1,0 +1,27 @@
+! The same stress case with PBE, so that the gradient correction is in it.
+!
+! `stres_gradcorr.f90` is the term this adds: the non-diagonal
+! `v2 (grad rho)_a (grad rho)_b` that a functional of `|grad rho|^2` contributes
+! once the gradient is transformed by the strain. It comes out of `jax.grad`
+! along with everything else, and QE's expression for it is transcribed beside
+! it (`pypresso/stress/analytic.py`).
+ &control
+    calculation = 'scf'
+    tstress = .true.
+    tprnfor = .true.
+    verbosity = 'high'
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=20.0, ecutrho=160.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pbe-n-rrkjus_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.27 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0

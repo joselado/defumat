@@ -26,7 +26,7 @@ import numpy as np
 from pypresso.basis.fftgrid import fft_grid_dimensions, gcut_from_ecut
 from pypresso.system.cell import Cell
 
-__all__ = ["GVectors", "generate_gvectors"]
+__all__ = ["GVectors", "generate_gvectors", "modulus"]
 
 
 class GVectors(eqx.Module):
@@ -79,6 +79,27 @@ class GVectors(eqx.Module):
 @jax.jit
 def _transform(miller, matrix):
     return miller.astype(matrix.dtype) @ matrix
+
+
+#: Below this ``|G|^2`` a G-vector counts as the origin. QE's own ``eps8``.
+_TINY = 1.0e-8
+
+
+@jax.jit
+def modulus(vectors):
+    """``|v|`` for a stack of cartesian vectors, differentiable at the origin.
+
+    The mask goes on ``|v|^2`` **before** the square root, not on the result
+    after it. ``sqrt`` has an infinite derivative at zero, so a guard placed
+    afterwards leaves the value right and the gradient ``0 * inf = NaN`` -- and
+    ``G = 0`` is the first entry of every G-vector set, so the whole stress
+    tensor comes back NaN with every value on the way to it correct. It is P15's
+    Ewald trap in a different module, and it only appears once the cell is what
+    is being differentiated: with respect to the atomic positions ``|G|`` is a
+    constant and no derivative ever reaches this.
+    """
+    norm2 = jnp.sum(vectors**2, axis=-1)
+    return jnp.where(norm2 > _TINY, jnp.sqrt(jnp.where(norm2 > _TINY, norm2, 1.0)), 0.0)
 
 
 @partial(jax.jit, static_argnames=("grid",))

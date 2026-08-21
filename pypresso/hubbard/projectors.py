@@ -88,12 +88,20 @@ def build_hubbard_projectors(
     planewaves,
     kpoints,
     apply_s,
+    kcart=None,
 ) -> jnp.ndarray:
     """``(nk, npwx, nwfcU)``: the Hubbard projectors at every k-point.
 
     ``apply_s(psi, ik)`` is the overlap operator of the calculation, taking
     ``(..., npwx)`` states -- :meth:`pypresso.hamiltonian.operator.Hamiltonian.apply_s`
     or anything with that signature.
+
+    ``kcart`` replaces the k-points' cartesian coordinates while keeping this
+    basis, exactly as it does for the nonlocal projectors. It exists for the
+    stress: ``KPoints.coords`` are in units of ``2 pi / alat`` and ``alat`` is
+    static, so under a strain the k-points do **not** follow the reciprocal cell
+    on their own -- and a Hubbard projector built at the wrong k is silently
+    wrong rather than an error.
 
     ``orthoUwfc_k``'s ``lflag = .TRUE.`` variant -- ``O^{-1/2} phi``, the
     orthogonalisation without the trailing ``S`` -- is deliberately absent. It
@@ -113,7 +121,7 @@ def build_hubbard_projectors(
     )
     return build_atomic_projectors(
         pseudos, structure, cell, gvectors, planewaves, kpoints, apply_s,
-        kind=setup.projectors, columns=columns,
+        kind=setup.projectors, columns=columns, kcart=kcart,
     )
 
 
@@ -127,6 +135,7 @@ def build_atomic_projectors(
     apply_s,
     kind: str = "ortho-atomic",
     columns=None,
+    kcart=None,
 ) -> jnp.ndarray:
     """``(nk, npwx, ncolumns)``: projector functions built from ``chi``.
 
@@ -138,9 +147,13 @@ def build_atomic_projectors(
     The orthogonalisation always runs over the whole set whatever is kept, for
     the reason in the module docstring: restricting ``O`` to a sub-manifold is a
     different matrix and a different answer.
+
+    ``kcart`` replaces the k-points' cartesian coordinates, as it does for the
+    nonlocal projectors, and exists for the stress -- see
+    :func:`build_hubbard_projectors`.
     """
     atomic = atomic_wavefunctions(
-        pseudos, structure, cell, gvectors, planewaves, kpoints
+        pseudos, structure, cell, gvectors, planewaves, kpoints, kcart
     )  # (nk, natomwfc, npwx)
     nk, natomwfc = atomic.shape[0], atomic.shape[1]
     if columns is None:

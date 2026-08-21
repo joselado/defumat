@@ -970,14 +970,221 @@ and another from time reversal on a magnetic operation) — so `nspin_mag = 4` n
 same answer after `rotate_wfc`, at the cost of a Davidson step or two.
 
 **P11 — Higher-order autodiff quantities (after the first milestone).** Forces are done
-(P15); here: stress by differentiation w.r.t. strain, implicit differentiation of
-the SCF fixed point (D3), then polarization/dielectric response and second harmonic
-generation. *Check:* stress matches QE to 1e-4 Ry/bohr³, and every response quantity has a
-finite-difference test. P16 has taken the first bite of the response half of this: the
+(P15); here: stress by differentiation w.r.t. strain — **done, below** — implicit
+differentiation of the SCF fixed point (D3), then polarization/dielectric response and
+second harmonic generation. P16 has taken the first bite of the response half of this: the
 velocity operator from `jacfwd` of a model `H(k)` is written and validated against the
 lattice Chern number, and what is left for P11 is the **plane-wave** velocity operator —
 `d(vkb)/dk` and the k-dependence of the sphere — which P16 refuses rather than
 approximates.
+
+### P11a — The stress tensor. ✅ DONE.
+
+`pypresso/stress/` (the strained energy, its gradient, QE's seven hand-derived terms behind
+a name registry, and the `Stress` object with its two residues), `Calculation.at_strain`,
+`symmetrize_matrix` (`symme.f90`'s `symmatrix`), `tstress` on `System` and on `run_scf`,
+`SCFResult.stress`, and a `pypresso stress` subcommand.
+
+**It is P15's construction with the cell in place of the atoms.** The total energy is
+written down once — `forces/energy.py`'s `energy_at`, which the force and the stress now
+share — and `jax.grad` of it with respect to a strain is the answer:
+
+    σ_ab = −(1/Ω) dE/dε_ab,   h → (1 + ε) h,  τ → (1 + ε) τ,  G → (1 + ε)^−T G
+
+with the atoms carried in *crystal* coordinates and the reciprocal lattice following from
+the Miller indices being what is stored (`basis/gvectors.py` was written that way at P1 for
+exactly this). Nothing is derived for the kinetic term's `(k+G)_a (k+G)_b`, the Hartree
+kernel's `G_a G_b/(G²)²`, `dV_loc/d|G|`, the exchange-correlation diagonal, the gradient
+correction, the core charge, the augmentation charge or the Ewald sum: **one gradient
+produces all of them**, and it produces PAW's one-centre terms and DFT+U's projectors as
+well, neither of which has a stress routine of its own here.
+
+Two things make the partial derivative the total one. The stationarity argument P15 makes,
+and one step it does not need: **the frozen quantity is the coefficient vector, not the
+wavefunction.** A strain moves the plane waves with the cell, so holding the coefficients
+fixed holds the state fixed in crystal coordinates — the variational parameter the SCF
+minimised over. And unlike the force, the orthonormality constraint carries no strain at
+all (`<ψ|ψ>` is a sum over integers, and `qq_ij = ∫Q dr` has no cell in it), so a stress
+has no Pulay term of *that* kind. It has a different one, below.
+
+*Check met* — the target is 1e-4 Ry/bohr³ and the worst of thirteen cases is **6e-6**,
+which is QE's stopping point rather than this code's: every case with a reference
+regenerated at `conv_thr = 1e-10` agrees to **≤4.0e-7**, and the two that do not are
+compared against committed QE 6.x benchmarks that stopped at 1e-6.
+
+| case | what it adds | max \|Δσ\| (Ry/bohr³) |
+|---|---|---|
+| `pw_scf/scf.in` | the canonical insulator, 2 explicit k | **1.2e-9** |
+| `pw_scf/scf-occ.in` | occupations from input | 1.4e-9 |
+| `pw_scf/scf-kcrys.in` | crystal-coordinate k-points | 8.8e-9 |
+| `pw_scf/scf-k0.in` | Γ only | 4.0e-9 |
+| `si2-nc-stress` | a *displaced* atom: anisotropy, and a real shear | 4.3e-8 |
+| `si2-nc-sheared` | a **tilted cell**: 2 operations, every entry of σ free | 1.3e-8 |
+| `si2-us-stress` | ultrasoft — `addusstress`, and the first `stres_cc` | 2.2e-7 |
+| `si2-paw-stress` | PAW's one-centre terms | 2.2e-7 |
+| `si2-us-pbe-stress` | PBE — `stres_gradcorr` | 2.7e-7 |
+| `ni-ldau-stress` | **DFT+U** — `stres_hub`, 2291 lines not transcribed | **4.0e-7** |
+| `pw_lsda/lsda.in` | `nspin = 2`, ultrasoft nickel | 2.4e-7 |
+| `pw_metal/metal.in` | smearing (committed 6.x benchmark) | 5.9e-7 |
+| `pw_uspp/uspp2.in` | ultrasoft molecule (committed 6.x benchmark) | 6.0e-6 |
+
+...and three checks that are sharper than any of those, because they compare things that
+share no machinery:
+
+| check | what it isolates | agreement |
+|---|---|---|
+| **every term** against QE's `verbosity = 'high'` table — kinetic, local, **nonlocal**, Hartree, exc-cor, corecor, ewald | a total right by cancellation | **≤3.8e-8**, which is 0.006 kbar: the precision `pw.x` prints them in |
+| autodiff vs the transcribed `stres_*` expressions, term by term | two implementations | **≤5e-16** |
+| the antisymmetric part of `dE/dε` | rotational invariance, needing no crystal symmetry | **≤1.3e-15** (PAW 2.6e-7, DFT+U 6.2e-6 — trap 5) |
+| `strained_energy(0)` vs the SCF total | that the functional *is* the energy | ≤1e-8 Ry |
+| central difference of `strained_energy` vs `jax.grad` | the differentiation alone | 1e-5 relative |
+| `tr σ/3` vs `−dE/dV` from a **re-converged** SCF | **stationarity**, and the basis | 1.1 kbar at `ecutwfc = 40`, **0.11 at 60** — the Pulay stress, and it converges |
+
+**The Pulay stress is the one real approximation, and it is the cutoff's fault rather than
+the method's.** The plane-wave sphere is held fixed while differentiating — membership is a
+host-side decision that cannot be traced, and it is piecewise constant in ε, so on each
+piece the frozen-sphere derivative is exact. What it misses is the jump where a plane wave
+crosses the cutoff, and unlike a spiral's `q` (P21), where one sphere shifts, a strain moves
+`|k+G|` for *every* plane wave at once. Measured on silicon against a finite difference of
+the SCF energy with the sphere reselected at each volume:
+
+| `ecutwfc` | `tr σ/3` (kbar) | `−dE/dV` (kbar) | Pulay (kbar) |
+|---|---|---|---|
+| 12 | −27.4 | 16.1 | **−43.6** |
+| 20 | 0.7 | 6.0 | −5.3 |
+| 30 | 7.0 | 8.7 | −1.7 |
+| 40 | 7.4 | 8.4 | −1.1 |
+| 60 | 8.2 | 8.3 | **−0.11** |
+
+It falls by a factor of 400 between 12 and 60 Ry, monotonically, which is what says it is a
+basis-set artefact rather than a bug — and the test suite's own `ecutwfc = 12`, chosen for
+speed, is nowhere near enough for a stress to mean anything.
+
+QE makes the same approximation, which is why it agrees with this code to 1e-9 at
+`ecutwfc = 12` while both disagree with the true `−dE/dV` by tens of kbar. Anyone who wants
+a stress to mean something has to converge the cutoff, and that is a property of plane
+waves rather than of either implementation.
+
+**What the analytic route covers, and what it refuses.** `stres_knl` (the kinetic half),
+`stres_har`, `stres_loc` with `dvloc_of_g`, the `−(etxc − vtxc)/Ω` diagonal, `stres_cc` with
+`drhoc`, `stres_gradcorr` and `stres_ewa` are transcribed. **`stres_us` and `addusstress`
+are not**: they need `gen_us_dj` (the radial form factor differentiated with respect to
+`|k+G|`) and `gen_us_dy` (`dylmr2`), which together are a transcription the size of
+everything else in the module, and 632 + 234 lines of Fortran on top. So the analytic route
+offers **no total** — a sum of what is written would be missing the whole nonlocal
+pseudopotential, which on silicon is a third of the pressure — and `compute_stress` refuses
+`method = 'analytic'` by name, pointing at `analytic_terms` for the cross-check.
+
+*The traps:*
+
+1. **A coordinate singularity that only a *cell* derivative reaches.** `ylmr2` writes
+   `Y_lm` as `sin^m θ · P(cos θ) · {cos, sin}(mφ)` with `φ` from an `atan2` — a
+   parameterisation with a singularity on the `z` axis, where `sin θ` has an infinite
+   derivative and `φ` is undefined. The *function* is smooth (`r^l Y_lm` is a polynomial in
+   `x, y, z`); only the spherical coordinates are not. No phase before this one noticed,
+   because a force differentiates the positions and `Y_lm(G)` is a constant there. **fcc
+   silicon at `ecutrho = 48` has ten dense G-vectors exactly on the `z` axis**, and every
+   one of them turns the whole stress tensor into NaN with every value on the way to it
+   correct. The fix is algebraic and exact: `sin^m θ · cos(mφ) = Re[(x + iy)^m]/r^m` is a
+   polynomial over a power of `r`, so the two factors are combined *before* they are
+   evaluated and the recursion runs on `Q(l,m)/sin^m θ`. Values unchanged to 1e-15.
+2. **`sqrt` guarded after the root is a correct value and a NaN gradient.** P15's Ewald
+   trap, in three more places: `|G|` at `G = 0` (the first entry of every G set), `|k+G|` at
+   Γ, and `|G|` in the augmentation charge. Each was `where(cond, ..., 0)` applied to the
+   *result*; `sqrt(0)` has an infinite derivative and `0 × inf` is NaN. `gvectors.modulus`
+   is now the one place the mask goes on `|v|²` before the root.
+3. **The k-points do not follow the reciprocal cell on their own, and nothing says so.**
+   `KPoints.coords` are cartesian in units of `2π/alat` and `alat` is a *static* field, so
+   `kpoints.cartesian(strained_cell)` returns the **unstrained** k-points. What is invariant
+   under a strain is `k` in *crystal* coordinates, exactly as for `G`. This costs nothing at
+   Γ (`scf-k0.in` passes either way) and a k-dependent amount everywhere else. It bit twice:
+   once in `at_strain` itself, where threading `kcart` through `kinetic`,
+   `build_projector_core` and the **Hubbard** projectors fixed it; and once in the
+   finite-difference check, where scaling `cell.at` while leaving `alat` alone produced a
+   "Pulay stress" of 47 kbar **that did not fall with the cutoff** — which is how it was
+   caught. Scale `celldm`, not the lattice vectors.
+4. **`tprnstress` does not exist.** It is a plausible name — `tprnfor` is real — and there
+   is no such variable anywhere in QE 7.5; `INPUT_PW.txt` lists one stress switch and it is
+   `tstress`. Accepting an alias would have been inventing input syntax. `input.f90`'s own
+   rule is worth recording instead: `tstress_ = lmovecell .OR. (tstress .AND. lscf)`, so a
+   variable-cell run turns it on whatever the input says.
+5. **The rotational residue is 1e-15 everywhere except PAW (2.6e-7) and DFT+U (6.2e-6).**
+   The antisymmetric part of `dE/dε` is zero by rotational invariance, which needs no
+   crystal symmetry and no converged density — so it is a check on the gradient that works
+   on any structure, and it is worth reading before the number. Two subsystems do not meet
+   it exactly and both build something from the cell that the plain path does not: PAW's
+   one-centre exchange-correlation is a Gauss-Legendre × φ quadrature exact only to a finite
+   `l`, and DFT+U's `ns` is averaged over the group with orbital rotation matrices rebuilt
+   from the cell. In both cases the residue is the same size as the agreement with QE on
+   that case (0.04 and 0.9 kbar) — i.e. it *is* the accuracy floor for that dataset, and
+   knowing which of the two it is would need a run with the machinery in question switched
+   off, which has not been done.
+6. **Reverse mode through a setup routine is a memory problem before it is a time one.**
+   A force differentiates one complex exponential per atom over a *cached* radial table; a
+   strain moves `|G|` itself, so every radial transform in the setup is inside the gradient.
+   The augmentation charge's is the worst: its intermediate is `(ngm, kkbeta)` — 36257 by
+   ~1100, so 300 MB, one per `L` — transient forward and all live at once on a backward
+   pass. Peak RSS for a stress on eight-atom ultrasoft silicon is **11 GB against the SCF's
+   0.9**, and it is the reverse pass, not the forward-mode term breakdown, which costs
+   nothing extra. `jax.checkpoint` on that kernel was tried and **measured to be worth
+   nothing**, so the intermediates are spread across the radial kernels rather than
+   concentrated in one; the fix that has not been written is a `custom_jvp` carrying
+   `dF/d|G|` in closed form — which `stress/analytic.py` already writes twice, for
+   `dvloc_of_g` and `drhoc`. `PERFORMANCE.md` has the numbers and the backlog entry.
+
+7. **An improvement in the last bits of a setup quantity is not a no-op for an iteration
+   count.** Trap 1's rewrite changes `Y_lm` by **2.6e-15** on bcc iron's dense G set and
+   moves accuracy in the right direction. It also pushed
+   `test_fixed_spin_moment_holds_the_moment` from 746 iterations to **1380**, through a
+   ceiling of 1200, and the test failed with nothing wrong with it: the fixed-spin-moment
+   scheme is a *proportional controller*, the eigensolver's starting guess is built from
+   the same `Y_lm`, and where a controller starts ringing from decides how long it rings.
+   The moment it converges to (1.999459 against a target of 2.0) and the field it finds are
+   unchanged. **The rule is the general one, because the instance will not repeat:** a
+   last-bit change anywhere upstream of a feedback loop moves the seed, the seed moves the
+   ringing, and any budget tuned against the old seed is a test of the seed rather than of
+   the physics. That test's docstring had already recorded the same thing happening at P20
+   for QE's `upf_check_atwfc_norm` renormalisation (~350 to 746); this is the third
+   instance, and three of them make the argument that the count is not a claim about
+   anything. Diagnose it by *bisecting the change*, not by reading the failure -- "does not
+   converge in N" and "is wrong" look identical from the outside, and the thing that
+   settles it is whether the converged answer moved.
+
+*Deferred, by name:* **noncollinear and spin-orbit** (`nspin = 4`), refused where the
+functional is written — the constraint term needs `qq_so` and the nonlocal one `dvan_so`,
+and `pw_noncolin/noncolin.in` is therefore the rung this phase did not reach; **spin
+spirals**, because `spiral_q` is in lattice coordinates so a strain turns the spiral and the
+generalized Bloch theorem's own term would be missing; **magnetic fields and constrained
+moments**, for P21's reason verbatim (the field's energy is outside the reported total, so
+the state is stationary for a different functional); **meta-GGA** (`stres_mgga`), which has
+no functional here to differentiate; and the `stres_us`/`addusstress` transcriptions above.
+
+**What `vc-relax` would need**, since the stress is what was blocking it and the cell
+gradient now exists. It is deliberately *not* started, because it is a design decision about
+the run rather than about the stress:
+
+* **The FFT grid and the symmetry group would have to move, or be pinned.** Both are chosen
+  once from the cell (`setup.f90`, and P15 trap 4): the FFT dimensions must divide the
+  fractional translations' denominators, and `etxc` is evaluated pointwise on that grid. A
+  cell that changes by 10% wants a different grid, and changing it mid-run moves the energy
+  by ~1e-6 Ry for a reason that is not physics. QE's answer is a *fixed* basis chosen at the
+  starting cell and then one more run at the relaxed one with the G-vectors rebuilt
+  (`run_pwscf.f90`'s `reset_gvectors`), and it says the consequence out loud: **"Final scf
+  calculation at the relaxed structure. The G-vectors are recalculated for the final unit
+  cell. Results may differ from those at the preceding step."** That last sentence is the
+  Pulay stress, admitted in the output.
+* **The Pulay stress becomes the error bar of the answer**, not a diagnostic. A cell relaxed
+  at `ecutwfc = 12` would land tens of kbar away from the true minimum; the sweep above is
+  what such a run would have to quote.
+* **The optimizer is a bigger change than it looks.** `bfgs_module.f90` would take a
+  combined `(3 nat + 6)`-dimensional coordinate — positions in crystal coordinates plus the
+  strain — with a metric that mixes them, and `cell_dofree` masks the strain the way
+  `if_pos` masks a position. `relax/bfgs.py` is already written against a general lattice
+  metric (P21 reuses it with the *reciprocal* cell), so the optimizer itself is reachable;
+  what is not written is the coordinate.
+* **The Ewald neighbour list, the plane-wave sphere and `alat`** all follow the cell.
+  `at_strain` freezes the first two on purpose, which is right for a gradient and wrong for
+  a step — the same distinction `at_spiral_q(rebuild_basis=...)` draws for a spiral.
 
 **P15 — Forces and structural relaxation. ✅ DONE.** `pypresso/forces/` (the stationary
 energy functional, its gradient, and QE's six hand-derived terms behind a name registry),

@@ -86,6 +86,13 @@ class System(eqx.Module):
     #: three p channels filled) needs it, and symmetrising anyway converges to a
     #: different state.
     nosym: bool = eqx.field(static=True, default=False)
+    #: ``tstress`` (``&control``): compute the stress tensor once the SCF has
+    #: converged. It is a property of the *run* rather than of the system, and
+    #: it lives here for the same reason :attr:`calculation` does -- this is the
+    #: object an input file becomes, and a switch nothing carries is a switch
+    #: nothing can honour. ``run_scf`` reads it when its own ``tstress``
+    #: argument is left at ``None`` (P11).
+    tstress: bool = eqx.field(static=True, default=False)
     #: ``lspinorb``: use the ``j``-resolved projectors of a fully-relativistic
     #: pseudopotential, which is what puts spin-orbit coupling in the
     #: Hamiltonian. Requires ``noncolin`` -- QE refuses the combination too,
@@ -284,6 +291,15 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     # no ``-k = k`` (``magnetic_sym`` in ``setup.f90``) -- then symmetry, then
     # k-points.
     nosym = _logical(pwin.get("system", "nosym", False))
+    # ``tstress`` and nothing else: there is no ``tprnstress`` in QE 7.5
+    # (``INPUT_PW.txt`` lists one stress switch and a grep of the tree finds no
+    # other spelling), so accepting an alias would be inventing input syntax.
+    # ``input.f90``'s own rule is ``tstress_ = lmovecell .OR. (tstress .AND.
+    # lscf)``: a variable-cell run turns it on whatever the input says, and a
+    # non-self-consistent one turns it off. Neither branch is reachable here --
+    # ``vc-relax`` is not implemented (P11) and an NSCF run does not come
+    # through ``run_scf`` -- so what is read is the input's own value.
+    tstress = _logical(pwin.get("control", "tstress", False))
     spiral_q = _spiral_q(pwin, nspin, lspinorb, nosym)
     moments = local_moments(structure, nspin, starting_magnetization, angle1, angle2)
     magnetic = nspin == 4 and bool(np.any(np.abs(moments) > 1.0e-6))
@@ -327,6 +343,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         starting_magnetization=starting_magnetization,
         tot_magnetization=_tot_magnetization(pwin),
         nosym=nosym,
+        tstress=tstress,
         lspinorb=lspinorb,
         angle1=angle1,
         angle2=angle2,

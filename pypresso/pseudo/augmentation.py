@@ -50,7 +50,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from pypresso.basis.gvectors import GVectors
+from pypresso.basis.gvectors import GVectors, modulus
 from pypresso.pseudo.coupling import harmonic_products
 from pypresso.pseudo.harmonics import real_spherical_harmonics
 from pypresso.pseudo.projectors import projector_channels
@@ -212,7 +212,21 @@ def radial_augmentation_transforms(
 
 @partial(jax.jit, static_argnames=("l",))
 def _qrad_kernel(q, r, weights, functions, prefactor, l):
-    """``4 pi / Omega int dr j_l(q r) [r^2 Q^l(r)]`` for a stack of ``Q``."""
+    """``4 pi / Omega int dr j_l(q r) [r^2 Q^l(r)]`` for a stack of ``Q``.
+
+    **This is where a stress evaluation's memory goes.** The intermediate is
+    ``(ngm, kkbeta)`` -- 36257 by ~1100 on eight-atom ultrasoft silicon, so 300
+    MB, with the temporaries inside ``spherical_bessel`` on top and one of them
+    per ``L``. Evaluated forward they are transient; differentiated in
+    **reverse** mode, as the stress differentiates them (P11), they are all live
+    at once, and the peak working set goes to 11 GB against the SCF's 0.9.
+    ``jax.checkpoint`` here was tried and measured to be worth nothing -- the
+    intermediates are spread across the radial kernels rather than concentrated
+    in this one -- so what is recorded is the measurement and the fix that has
+    not been written: a ``custom_jvp`` carrying ``dF/d|G|`` in closed form, so
+    that the transform tapes a vector of length ``ngm`` instead of a matrix.
+    See `PERFORMANCE.md`.
+    """
     argument = q[:, None] * r[None, :]
     bessel = spherical_bessel(l, argument)  # (nq, mesh)
     return prefactor * jnp.einsum("fm,qm,m->fq", functions, bessel, weights)
@@ -247,9 +261,9 @@ def build_augmentation(
     nl = 2 * lmax + 1
 
     gcart = gvectors.cartesian(cell)
-    gmod = jnp.sqrt(jnp.sum(gcart**2, axis=1))
+    gmod = modulus(gcart)  # guarded at G = 0; see gvectors.modulus
     ylm = real_spherical_harmonics(gcart, 2 * lmax)  # (ngm, (2lmax+1)^2)
-    volume = float(cell.volume)
+    volume = cell.volume
 
     qgm, qq = [], []
     for pseudo in pseudos:

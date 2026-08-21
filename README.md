@@ -37,6 +37,7 @@ point where there is not.
 | **Projected densities of states** — resolved by atom, by `l` and by `m`, with Löwdin charges and the spilling parameter | `run_pdos`, `pypresso pdos` | `pw.x` + `projwfc.x` |
 | **Forces on the atoms** | `compute_forces` | `pw.x` — but by differentiating the energy, with QE's hand-derived terms kept beside them as a cross-check |
 | **Structural relaxation** — BFGS with QE's trust radius and line search | `calculation = 'relax'`, `pypresso relax` | `pw.x` |
+| **Stress tensor and pressure**, in Ry/bohr³ and kbar | `tstress = .true.`, `compute_stress`, `pypresso stress` | `pw.x` — but from one strain derivative of the energy, with QE's own term-by-term expressions transcribed beside it as a cross-check |
 | **Magnetism**, collinear, with one Fermi level or two | `nspin = 2`, `tot_magnetization` | `pw.x` |
 | **Magnetism as a vector** — noncollinear, with the magnetic symmetry group | `noncolin` | `pw.x` |
 | **Spin-orbit coupling**, two-component spinors and `j`-resolved projectors | `lspinorb` | `pw.x` |
@@ -55,7 +56,7 @@ occupations, which projectors DFT+U uses, which of the four constraint
 schemes — are chosen with the same input variables as in `pw.x`, and
 `PLAN.md` lists them phase by phase.
 
-Not yet: the stress (and so variable-cell relaxation) and phonons. `K_POINTS gamma` runs, but at an explicit k = 0 with the
+Not yet: variable-cell relaxation and phonons. `K_POINTS gamma` runs, but at an explicit k = 0 with the
 full G sphere — the half-sphere storage the gamma-point trick exists for is
 generated and not consumed, so the answer is the same and the cost is twice the
 plane waves, and the run says so. A functional or a combination that is not
@@ -157,6 +158,7 @@ without being run, and each has a plain-text `.md` version beside it.
 | [`12_spin_spirals`](notebooks/12_spin_spirals.ipynb) | Two plane-wave spheres instead of one, three identities that validate them against calculations that are not spirals, and an `E(q)` magnon dispersion |
 | [`13_dft_plus_u`](notebooks/13_dft_plus_u.ipynb) | The Hubbard correction as a penalty on fractional occupation, nickel four ways, antiferromagnetic FeO, and `force_hub` falling out of the gradient |
 | [`14_spiral_relaxation`](notebooks/14_spiral_relaxation.ipynb) | `dE/dq`: which terms of the energy a spiral's wavevector touches, and a BFGS walking a hydrogen chain to its ground-state pitch |
+| [`15_stress`](notebooks/15_stress.ipynb) | The stress as the strain derivative of the energy, silicon's equation of state, and the pressure against `-dE/dV` |
 
 `benchmarks/` holds ready-to-run input files, from a two-atom silicon cell up to
 a sixteen-atom one.

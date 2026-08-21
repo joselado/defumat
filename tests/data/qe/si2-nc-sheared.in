@@ -1,0 +1,42 @@
+! Silicon in a sheared cell: the case whose stress tensor is not diagonal.
+!
+! Every other stress reference here has a cell with enough symmetry that the
+! shear components are zero or nearly so, and a sign error or a transposed
+! deformation in `Calculation.at_strain` is invisible in such a tensor -- it
+! moves the diagonal by nothing and the off-diagonal from zero to zero. This
+! cell is the fcc primitive one with `a3` tilted by 4% in the xy plane, given
+! explicitly with `ibrav = 0`, which leaves the crystal with no symmetry
+! operation but the identity and every entry of `sigma` free.
+!
+! Two things follow from `nosym` being effectively true here and both are the
+! point of the case: the tensor is compared to QE *unsymmetrised*, so nothing
+! averages a mistake away, and the finite-difference check in
+! tests/regression/test_stress.py can strain this cell along any of the six
+! independent directions without leaving the group it was set up with.
+!
+! The atom is left on its ideal site: what is being tested is the cell, and a
+! displacement would mix the two.
+ &control
+    calculation = 'scf'
+    tstress = .true.
+    tprnfor = .true.
+    verbosity = 'high'
+ /
+ &system
+    ibrav=0, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=12.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+CELL_PARAMETERS (alat)
+  -0.50   0.00   0.50
+   0.00   0.50   0.50
+  -0.54   0.46   0.00
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0

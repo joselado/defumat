@@ -58,7 +58,8 @@ import jax.numpy as jnp
 from pypresso.hubbard.energy import hubbard_energy
 from pypresso.scf.potential import total_charge
 
-__all__ = ["FrozenState", "frozen_energy", "state_from_result"]
+__all__ = ["FrozenState", "frozen_energy", "energy_at", "reject_spinors",
+           "state_from_result"]
 
 
 class FrozenState(eqx.Module):
@@ -120,31 +121,70 @@ def frozen_energy(calculation, positions: jnp.ndarray, state: FrozenState):
     does. The result is a scalar in Ry and a differentiable function of
     ``positions``.
     """
+    # Refused **before** the calculation is moved, not after. Moving it is real
+    # work -- new projectors, a new local potential, a new Ewald sum -- and a
+    # refusal that arrives on the far side of it is both slower and, for a
+    # caller holding a partially built calculation, a different exception
+    # entirely.
+    reject_spinors(calculation)
+    return energy_at(calculation.at_positions(positions), state)
+
+
+def reject_spinors(calculation) -> None:
+    """The one regime this functional does not cover, refused by name.
+
+    The spinor constraint term needs ``qq_so`` rather than ``qq``, and the
+    nonlocal term ``dvan_so`` rather than ``dij`` -- both complex 2x2 matrices
+    in spin space. Neither is written here, and a force or a stress computed
+    with the scalar expressions would be wrong by the whole spin-orbit part of
+    the nonlocal energy while looking entirely plausible.
+
+    Called from the entry points *before* they move the calculation, and again
+    inside :func:`energy_at` so that a caller reaching it directly cannot slip
+    past.
+    """
     if calculation.noncolin:
-        # The spinor constraint term needs ``qq_so`` rather than ``qq``, and the
-        # nonlocal term ``dvan_so`` rather than ``dij`` -- both complex 2x2
-        # matrices in spin space. Neither is written here, and a force computed
-        # with the scalar expressions would be wrong by the whole spin-orbit
-        # part of the nonlocal energy while looking entirely plausible.
         raise NotImplementedError(
-            "forces for a noncollinear or spin-orbit calculation are not "
-            "implemented; nspin = 1 and nspin = 2 are, on norm-conserving, "
+            "forces and stress for a noncollinear or spin-orbit calculation are "
+            "not implemented; nspin = 1 and nspin = 2 are, on norm-conserving, "
             "ultrasoft and PAW pseudopotentials"
         )
 
-    moved = calculation.at_positions(positions)
+
+def energy_at(moved, state: FrozenState, terms: bool = False):
+    """The frozen-state energy of an already-moved calculation.
+
+    Split out from :func:`frozen_energy` because the *coordinate* being
+    differentiated is the only thing that separates a force from a stress: the
+    functional above is written in terms of a calculation, and which of
+    :meth:`~pypresso.scf.driver.Calculation.at_positions` and
+    :meth:`~pypresso.scf.driver.Calculation.at_strain` produced it is not its
+    business (:mod:`pypresso.stress.energy` is the other caller).
+
+    **Everything here reads ``moved``, never the calculation it came from.**
+    Under a displacement the two share the cell, the kinetic term and the
+    plane-wave basis, so it makes no difference; under a strain they share none
+    of them, and a single ``calculation.`` left in this function is a term
+    silently evaluated at the undeformed cell.
+
+    ``terms = True`` returns the contributions as a dict instead of their sum,
+    which is what makes a term-by-term stress available without writing the
+    decomposition twice.
+    """
+    reject_spinors(moved)
+
     psi, weights = state.wavefunctions, state.weights
 
     # The density: the bands' own charge plus, for an ultrasoft or PAW dataset,
     # the augmentation charge that moves with the atoms. Symmetrised exactly as
     # the SCF symmetrises it -- the functional has to be the same function of
-    # the positions the SCF minimised, not a tidier one.
+    # the coordinate the SCF minimised at, not a tidier one.
     becsum_ = moved.becsum(psi, weights)
     rho = moved.density(psi, weights, becsum_)
     potential = moved.potential(rho)
     epaw, _ = moved.onecenter(becsum_)
 
-    volume = calculation.system.cell.volume
+    volume = moved.system.cell.volume
     local = volume / rho[0].size * jnp.sum(moved.vltot * total_charge(rho))
 
     # DFT+U. The occupation matrix is measured through the *moved* projectors,
@@ -158,7 +198,7 @@ def frozen_energy(calculation, positions: jnp.ndarray, state: FrozenState):
             moved.occupation_matrix(psi, weights), moved.hubbard_coefficients
         )
 
-    kinetic = _kinetic_energy(psi, calculation.kinetic, weights)
+    kinetic = _kinetic_energy(psi, moved.kinetic, weights)
     nonlocal_, overlap = _projector_energies(
         psi, moved.projectors.vkb, moved.projectors.dij, moved.projectors.qq,
         weights, state.eigenvalues,
@@ -166,22 +206,28 @@ def frozen_energy(calculation, positions: jnp.ndarray, state: FrozenState):
     # <psi|psi> - 1 is position-independent (the plane-wave basis does not move
     # with the atoms), so it contributes nothing to the force; it is here
     # because the term is the constraint, and writing half of it would make the
-    # energy identity above only approximately true.
+    # energy identity above only approximately true. Under a *strain* it is
+    # equally inert -- the coefficients are frozen and the basis is a set of
+    # Miller indices -- which is the statement that a norm-conserving stress has
+    # no Pulay term of this kind either.
     norm = jnp.sum(weights * state.eigenvalues * (_norms(psi) - 1.0))
 
-    return (
-        kinetic
-        + nonlocal_
-        + local
-        + potential.ehart
-        + potential.etxc
-        + moved.ewald
-        + epaw
-        + hubbard
-        - overlap
-        - norm
-        + state.entropy
-    )
+    contributions = {
+        "kinetic": kinetic,
+        "nonlocal": nonlocal_,
+        "local": local,
+        "hartree": potential.ehart,
+        "xc": potential.etxc,
+        "ewald": moved.ewald,
+        "onecentre": epaw,
+        "hubbard": hubbard,
+        "overlap": -overlap,
+        "constraint": -norm,
+        "smearing": state.entropy,
+    }
+    if terms:
+        return contributions
+    return sum(contributions.values())
 
 
 @jax.jit

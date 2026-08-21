@@ -577,6 +577,15 @@ class SCFResult:
     #: carries. :attr:`hubbard_setup` says which atom each slot is.
     ns: jnp.ndarray | None = None
     hubbard_setup: object | None = None
+    #: The stress tensor (:class:`~pypresso.stress.Stress`) when the run was
+    #: asked for one, and ``None`` otherwise -- QE's ``tstress``, which is the
+    #: same switch: ``stress()`` is called from ``run_pwscf`` after the SCF, not
+    #: inside it, and it costs a strain gradient whether or not anyone reads it.
+    #: The forces are deliberately *not* here, and the asymmetry is QE's too: a
+    #: relaxation calls ``forces()`` itself every ionic step, so they belong to
+    #: the loop that moves the atoms (:mod:`pypresso.workflows.relax`) rather
+    #: than to one SCF's result.
+    stress: object | None = None
     history: list = field(default_factory=list)
 
     @property
@@ -1039,12 +1048,18 @@ class Calculation:
         qq = self.projectors.qq.astype(vkb.dtype)
         return psi + jnp.einsum("gk,...k->...g", vkb, becp @ qq.T)
 
-    def _build_hubbard_projectors(self) -> jnp.ndarray:
-        """``wfcU`` at every k-point of this calculation."""
+    def _build_hubbard_projectors(self, kcart=None) -> jnp.ndarray:
+        """``wfcU`` at every k-point of this calculation.
+
+        ``kcart`` is for :meth:`at_strain` and for nothing else: the atomic
+        orbitals are built at ``k + G``, and under a strain the k-points move
+        with the reciprocal cell while ``KPoints.coords`` -- being in units of a
+        *static* ``alat`` -- do not.
+        """
         return build_hubbard_projectors(
             self.hubbard, self.pseudos, self.system.structure, self.system.cell,
             self.basis.smooth, self.basis.planewaves, self.basis_kpoints,
-            self._overlap,
+            self._overlap, kcart,
         )
 
     @property
@@ -1251,6 +1266,148 @@ class Calculation:
         if self.hubbard is not None:
             moved.wfcU = moved._build_hubbard_projectors()
         return moved
+
+    def at_strain(self, strain: jnp.ndarray) -> "Calculation":
+        """The same calculation in a cell deformed by ``h -> (1 + epsilon) h``.
+
+        The third member of the family, after :meth:`at_positions` and
+        :meth:`at_spiral_q`, and the one the stress is ``grad`` of (P11,
+        :mod:`pypresso.stress`). ``strain`` is a ``(3, 3)`` array; the
+        lattice vectors become ``a_i -> (1 + eps) a_i``, the atoms are carried
+        along in **crystal** coordinates so ``tau_a -> (1 + eps) tau_a``, and
+        every reciprocal-space quantity follows from ``G -> (1 + eps)^-T G``
+        because the Miller indices are what is stored.
+
+        Like :meth:`at_positions` it is **traceable**: given a traced ``strain``
+        it returns a calculation whose cell-dependent arrays are traced, which is
+        the whole of the stress tensor.
+
+        **What is frozen, and why each is exact or nearly so.**
+
+        * **Which plane waves are in the sphere.** Membership is
+          ``|k + G|^2 <= ecutwfc`` evaluated on the host, so it cannot be traced;
+          it is also piecewise constant in ``epsilon``, so on each piece the
+          frozen-sphere derivative is the exact derivative. What it misses is the
+          jump at the strains where a plane wave crosses the cutoff -- the
+          **Pulay stress**, which is the finite basis's own error and is quoted
+          against the cutoff in `PLAN.md`'s P11 section. This is
+          :meth:`at_spiral_q`'s trade in the other coordinate, and unlike a
+          spiral's it is what makes a stress at a low cutoff disagree with a
+          re-converged finite difference.
+        * **The FFT grid and the symmetry group**, for ``setup.f90``'s reason
+          (:meth:`at_positions`, and the same in reverse: a strained cell would
+          be given different FFT dimensions, and the exchange-correlation energy
+          is evaluated pointwise on them).
+        * **Ewald's ``alpha`` and its neighbour list.** The Ewald split is exact
+          for any ``alpha``, so holding it fixed changes only how the total is
+          divided between the two sums. The list of *images* is held fixed as a
+          set of integer lattice translations and deformed with the cell, so no
+          image is gained or lost; what a strain does change is which of them the
+          ``rmax`` mask keeps, and that boundary is at ``erfc(4) ~ 2e-8``.
+        * **``qq``**, the integral of the augmentation charge. It is
+          ``int Q_ij(r) dr`` over all space and carries no cell at all.
+
+        The atomic starting charge is deliberately *not* rebuilt: nothing in the
+        energy being differentiated uses it (only the SCF's first guess and
+        ``force_corr`` do).
+        """
+        if self.spiral:
+            raise NotImplementedError(
+                "the stress of a spin spiral is not implemented: the two "
+                "components' spheres are centred at k +- q/2, so a strain moves "
+                "q as well and the generalized Bloch theorem's own term would "
+                "be missing"
+            )
+
+        strain = jnp.asarray(strain)
+        deformation = jnp.eye(3, dtype=strain.dtype) + strain
+
+        strained = copy.copy(self)
+        # As in ``at_positions`` and ``at_spiral_q``: any compiled kernel that
+        # closed over *this* cell cannot follow one that has been deformed.
+        strained.__dict__.pop("_spiral_gradient", None)
+        strained.__dict__.pop("_energy_gradient", None)
+        strained.__dict__.pop("_analytic_terms", None)
+
+        # ``at[i]`` is a lattice vector as a *row*, so ``a_i -> D a_i`` is a
+        # right-multiplication by ``D^T``. Getting this transpose wrong is
+        # invisible for an isotropic strain and wrong for every shear.
+        cell = eqx.tree_at(
+            lambda c: c.at, self.system.cell, self.system.cell.at @ deformation.T
+        )
+        positions = self.system.structure.positions @ deformation.T
+        system = eqx.tree_at(
+            lambda sys: (sys.cell.at, sys.structure.positions),
+            self.system,
+            (cell.at, positions),
+        )
+        strained.system = system
+        structure = system.structure
+        dense, smooth = self.basis.dense, self.basis.smooth
+
+        # **The k-points move with the reciprocal cell.** ``KPoints.coords`` are
+        # cartesian in units of ``2 pi / alat`` and ``alat`` is static, so
+        # ``kpoints.cartesian(strained_cell)`` returns the *unstrained* k-points
+        # -- silently, and exactly zero at Gamma. What is fixed under a strain is
+        # k in crystal coordinates, which is the same rule the G-vectors follow.
+        kcart = self.system.kpoints.crystal(self.system.cell) @ cell.bg
+        strained.kinetic = self.basis.planewaves.kinetic(
+            smooth, self.basis_kpoints, cell, kcart
+        )
+
+        # The projectors: rebuilt whole, radial integrals included. Unlike a
+        # change of position, ``|k+G|`` itself moves, so the form factors are
+        # part of the derivative rather than a cached table it multiplies.
+        strained.projector_core = build_projector_core(
+            self.pseudos, structure, cell, smooth, self.basis.planewaves,
+            self.basis_kpoints, kcart,
+        )
+        strained.projectors = strained.projector_core.at_positions(
+            positions, qq=self.projectors.qq
+        )
+
+        if self.augmentation is not None:
+            strained.augmentation = build_augmentation(
+                self.pseudos, structure, cell, dense
+            )
+
+        # The local potential and the core charge: new radial transforms against
+        # the moved ``|G|``, times structure factors that are themselves
+        # invariant (``G . tau`` is integers against crystal coordinates), so
+        # every bit of their strain dependence is in the radial half.
+        vloc_species = species_local_potential(self.pseudos, cell, dense)
+        vloc_g = combine_species(vloc_species, structure, cell, dense)
+        strained.vloc_species = vloc_species
+        strained.vltot = jnp.real(g_to_r(vloc_g, dense.fft_index, dense.grid))
+
+        if self.rho_core_species is None:
+            strained.rho_core_g = strained.rho_core = None
+        else:
+            strained.rho_core_species = species_core_charge(self.pseudos, cell, dense)
+            strained.rho_core_g = combine_species(
+                strained.rho_core_species, structure, cell, dense
+            )
+            strained.rho_core = jnp.real(
+                g_to_r(strained.rho_core_g, dense.fft_index, dense.grid)
+            )
+
+        # The Ewald neighbour list is a set of lattice translations, so it
+        # deforms with the cell exactly as the lattice vectors do.
+        strained.ewald_sum = eqx.tree_at(
+            lambda e: e.translations,
+            self.ewald_sum,
+            self.ewald_sum.translations @ deformation.T,
+        )
+        strained.ewald = strained.ewald_sum.energy(cell, positions, dense)
+
+        if self.hubbard is not None:
+            # The Hubbard projectors are atomic orbitals at ``k + G``, so they
+            # need the *strained* k-points as well as the strained cell -- and
+            # the fact that they move at all is the whole of ``stres_hub``,
+            # which falls out of differentiating through this call rather than
+            # from 2291 lines of transcribed Fortran.
+            strained.wfcU = strained._build_hubbard_projectors(kcart)
+        return strained
 
     def at_kpoints(self, kpoints) -> "Calculation":
         """The same calculation on a different k-point list.
@@ -2063,6 +2220,25 @@ class Calculation:
         return wg, levels
 
 
+def _result_for_stress(calculation, eigenvalues, wg, wavefunctions, rho, terms):
+    """The frozen state the stress is evaluated at, straight from the loop.
+
+    :func:`~pypresso.forces.energy.state_from_result` wants a finished
+    :class:`SCFResult`, which does not exist yet at the point ``tstress`` is
+    honoured -- the stress is what is being put *into* it. This builds the same
+    :class:`~pypresso.forces.energy.FrozenState` out of the loop's own arrays.
+    """
+    from pypresso.forces.energy import FrozenState
+
+    return FrozenState(
+        wavefunctions=wavefunctions,
+        weights=jnp.asarray(wg),
+        eigenvalues=jnp.asarray(eigenvalues),
+        entropy=float(terms.get("smearing", 0.0)),
+        density=rho,
+    )
+
+
 def run_scf(
     system: System,
     pseudos: tuple[Pseudopotential, ...],
@@ -2078,6 +2254,7 @@ def run_scf(
     starting_density: jnp.ndarray | None = None,
     starting_becsum: tuple | None = None,
     mixing_fixed_ns: int = 0,
+    tstress: bool | None = None,
 ) -> SCFResult:
     """Run the self-consistent field loop to convergence.
 
@@ -2104,6 +2281,22 @@ def run_scf(
     value while the density relaxes around it. It is how a magnetic insulator is
     steered towards a particular one of several self-consistent occupations, and
     it does nothing at all in a run with no Hubbard U.
+
+    ``tstress`` is QE's ``&control`` switch of the same name: compute the stress
+    tensor once the density has converged and put it on
+    :attr:`SCFResult.stress`. ``None`` -- the default -- takes it from the
+    input, through :attr:`~pypresso.system.builder.System.tstress`, so that a
+    file carrying ``tstress = .true.`` gets a tensor here exactly as it does
+    from ``pw.x``. It is not on unconditionally because it costs a strain
+    gradient (roughly two SCF iterations, see `PERFORMANCE.md`), which is why
+    ``run_pwscf`` calls ``stress()`` after ``electrons()`` rather than inside it.
+
+    **A stress the input asked for and this code cannot produce is skipped with
+    a warning, not raised.** The regimes P11 does not cover -- noncollinear,
+    spin spirals, an external field -- are common in inputs that also carry
+    ``tstress = .true.``, and an optional diagnostic must not be able to fail
+    the SCF that produced it. Passing ``tstress=True`` explicitly raises
+    instead, because then the caller wants the number.
     """
     calculation = calculation or Calculation(
         system, pseudos, diagonalization=diagonalization, k_batch=k_batch
@@ -2358,6 +2551,46 @@ def run_scf(
             field = field.feedback(rho, system.cell)
 
     nspin = calculation.nspin
+    stress = None
+    asked_by_hand = tstress is not None
+    if system.tstress if tstress is None else tstress:
+        # Imported here rather than at the top of the module: ``pypresso.stress``
+        # sits *above* ``scf`` in the layering (rule R3) because it
+        # differentiates through a whole calculation, so a module-level import
+        # would point the wrong way. The deferral is the price of letting one
+        # switch in ``&control`` reach the result object the way ``pw.x`` does.
+        from pypresso.stress import compute_stress
+
+        state = _result_for_stress(
+            calculation, eigenvalues, wg, wavefunctions, rho, terms
+        )
+        try:
+            stress = compute_stress(calculation, state)
+        except NotImplementedError as unsupported:
+            # **An optional diagnostic must not be able to fail the run that
+            # produced it.** ``tstress = .true.`` is a common thing to leave in
+            # an input -- three of QE's own spin-orbit benchmarks carry it --
+            # and a noncollinear SCF that converged perfectly must not end in an
+            # exception because the *stress* for that regime is not written.
+            #
+            # This is QE's convention, not a softening of the house rule:
+            # ``input.f90`` computes ``tstress_ = lmovecell .OR. (tstress .AND.
+            # lscf)`` and then switches it off again for combinations it cannot
+            # do (``tefield``, ``gate``, ``do_comp_mt``), and ``stress()``
+            # itself opens with an ``infomsg`` and a bare ``RETURN`` for
+            # electric fields with ultrasoft. Asked for by *hand* -- an explicit
+            # ``tstress=True``, or a direct ``compute_stress`` -- it still
+            # raises, because then somebody wants the number rather than having
+            # left a flag in a file.
+            if asked_by_hand:
+                raise
+            warnings.warn(
+                f"tstress = .true. in the input, but {unsupported}. The SCF is "
+                "unaffected and SCFResult.stress is None.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
     return SCFResult(
         converged=converged,
         iterations=iteration,
@@ -2376,6 +2609,7 @@ def run_scf(
         nspin_mag=calculation.nspin_mag,
         ns=ns_state,
         hubbard_setup=calculation.hubbard,
+        stress=stress,
         magnetization=None if magnetization is None else magnetization[0],
         absolute_magnetization=None if magnetization is None else magnetization[1],
         magnetization_vector=moment,
