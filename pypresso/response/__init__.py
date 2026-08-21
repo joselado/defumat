@@ -9,12 +9,29 @@ expression.
 ``velocity``
     ``v = dH/dk`` from a ``jvp`` of ``H(k)`` at a frozen sphere (rule D2), and
     the band velocities it gives.
+``sternheimer``
+    ``(H - eps S) |dpsi> = -P_c dV|psi>`` by projected conjugate gradient, and
+    the independent-particle susceptibility ``chi_0 = drho/dV`` built from it.
 """
 
+from pypresso.response.sternheimer import (
+    SternheimerResult,
+    SternheimerSolver,
+    local_perturbation,
+    make_sternheimer,
+)
 from pypresso.response.velocity import (
     BandVelocities,
     VelocityOperator,
     band_velocities,
 )
 
-__all__ = ["BandVelocities", "VelocityOperator", "band_velocities"]
+__all__ = [
+    "BandVelocities",
+    "SternheimerResult",
+    "SternheimerSolver",
+    "VelocityOperator",
+    "band_velocities",
+    "local_perturbation",
+    "make_sternheimer",
+]
