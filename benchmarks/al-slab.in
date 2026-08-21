@@ -1,0 +1,42 @@
+! An aluminium (100) slab -- five layers and 16 bohr of vacuum -- as the
+! *convergence* benchmark, not a timing one.
+!
+! Everything else in this directory is a single-k-point cost-per-iteration case
+! for tools/compare_qe.py. This one is here for the opposite reason: it is a
+! system where the number of iterations is the interesting quantity, because the
+! screening is inhomogeneous. Half the cell is a metal, where the dielectric
+! function diverges as q^-2 at long wavelength, and half is vacuum, where there
+! is no screening at all. Plain Anderson mixing amplifies the long-wavelength
+! charge transfer between the two and reaches +105 Ry on its second iteration
+! before recovering; Kerker preconditioning helps, and cannot fix it, because a
+! single Thomas-Fermi screening length is wrong in one half of the cell whatever
+! it is set to.
+!
+! It is the case PLAN.md P22's solver comparison is measured on, and the case
+! tests/regression/test_scf_solvers.py checks the residual and its Jacobian on.
+! Five layers and 2x2 k-points are the smallest choice that keeps the physics
+! and runs in a few seconds.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 0, nat = 5, ntyp = 1, ecutwfc = 12.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.05
+ /
+ &electrons
+    conv_thr = 1.0d-8, mixing_beta = 0.7, electron_maxstep = 300
+ /
+ATOMIC_SPECIES
+ Al  26.98  Al.pz-vbc.UPF
+CELL_PARAMETERS bohr
+ 5.303301 0.000000  0.000000
+ 0.000000 5.303301  0.000000
+ 0.000000 0.000000 31.000000
+ATOMIC_POSITIONS crystal
+ Al 0.0000 0.0000 0.258065
+ Al 0.5000 0.5000 0.379032
+ Al 0.0000 0.0000 0.500000
+ Al 0.5000 0.5000 0.620968
+ Al 0.0000 0.0000 0.741935
+K_POINTS automatic
+ 2 2 1 0 0 0

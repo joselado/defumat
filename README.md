@@ -48,6 +48,7 @@ point where there is not.
 | **Relaxing the spiral wavevector** down `dE/dq` to the ground-state pitch | `relax_spiral_q` | new |
 | **Berry curvature and Chern numbers**, the latter exact integers on any mesh | `run_berry_curvature` | new — QE has the Berry *phase* (`bp_c_phase`), not the curvature |
 | **Z2 invariants** in 2D and 3D, by Wannier charge centres *and* by parities | `run_z2`, `run_z2_3d` | new |
+| **Reaching self-consistency** — Anderson/Broyden mixing, Kerker preconditioning, or solving the residual with its own Jacobian | `mixing_mode` in `&electrons`, `run_scf(scf_solver=...)` | `pw.x` has the mixing and `mixing_mode = 'TF'`; the residual solver is new, and it reaches *unstable* SCF solutions that no mixer can hold |
 | **Pseudopotentials**: norm-conserving, ultrasoft and PAW (UPF v2) | `ATOMIC_SPECIES` | `pw.x` |
 | **Functionals**: LDA and GGA — Perdew-Zunger, Perdew-Wang, PBE, revPBE, PBEsol | `input_dft`, or the UPF header | `pw.x` |
 

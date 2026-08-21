@@ -1844,6 +1844,183 @@ chain the first wavevector takes 9 iterations and every one after it takes 2 to 
 
 *Notebook 14.*
 
+**P22 — The SCF as a root-find: the residual, its Jacobian, and Kerker. 🔶 FIRST PASS DONE.**
+The SCF is a fixed point `rho = F(rho)`, and P5 solves it the way `mix_rho.f90` does — by
+iterating `F` and damping the iteration. This phase writes the same fixed point as a
+*residual* `r(rho) = F(rho) - rho` and solves *that*, with a Jacobian rather than a fitted
+one. New: `scf/residual.py` (the pure step and its Jacobian action), `scf/solvers.py`
+(the `scf_solver` registry and Newton-Krylov), Kerker preconditioning in `scf/mixing.py`,
+a `custom_jvp` on `bisect_fermi`, and `benchmarks/al-slab.in`, which is the first entry in
+that directory that is a *convergence* case rather than a timing one.
+
+**Say the calibration first, because this phase is easy to oversell: Anderson mixing already
+is a quasi-Newton method on this residual.** `scf/mixing.py` fits a secant Jacobian to the
+residual history and takes the Newton step inside its span; QE's Broyden is the same idea.
+Nothing here replaces iteration with a closed form. What changes is that the Jacobian is
+computed rather than fitted — and the measurements below say that buys less than it costs.
+
+**What pyqula had already established, and what does not need repeating.** The
+`scftk/densitydensity_jax.py` and `scftk/vjinteraction_jax.py` experiments carry two
+negative results, both transferable and both load-bearing:
+
+1. **Minimising the physical energy off the self-consistency surface fails.** Written down
+   properly — the grand potential of the trial Hamiltonian, minus `Re Tr[x rho]`, minus the
+   double-counting — the gradient is *exactly* right (`jax.grad` ~ 1e-16 at converged fixed
+   points). The Hessian there is nevertheless **indefinite** (6 negative, 13 zero, 13
+   positive of 32 on a dimer): the SCF solution is a **saddle** of the off-shell extension.
+   L-BFGS with a correct gradient walks away from the answer. This is why the residual, and
+   not the energy, is what gets driven to zero here.
+2. **A scalar-loss optimiser on `||r||^2` stalls**, because it sees only `J^T r` and discards
+   the residual *vector*. L-BFGS-B did not reach 1e-6 in 3000 iterations on a 60-orbital
+   chain. What worked there was matrix-free Levenberg-Marquardt and Newton-Krylov, which use
+   the vector — so this is a root-finder, not a minimiser.
+
+**The dense Jacobian is not an option and the number is worth writing down.** It is
+`(nspin * nr)^2`: on the smallest case here, a 12x12x72 grid, that is a 10368 x 10368 matrix
+per spin channel — and `nr` is the *dense* grid, so an ordinary production cell puts it past
+any machine. Everything is matrix-free: GMRES asks only for `J v`.
+
+**The headline technical finding: autodiff through the eigensolver is not the way, and this
+is now measured rather than argued.** `ScfResidual.jvp` differentiates one whole SCF step
+with `jax.jvp` — Davidson's `lax.while_loop` included, which forward mode supports and
+reverse mode does not. `jvp_finite_difference` central-differences the same residual and
+shares no machinery with it. On the aluminium slab:
+
+| starting wavefunctions | `jax.jvp` vs central difference | cost |
+|---|---|---|
+| cold (pseudo-atomic orbitals) | **109% different** | 5.9 s |
+| warm (converged `psi`) | 0.8% different | 2.9 s vs 0.4 s |
+
+The cold-start disagreement is not a tolerance to be tuned: differentiating Davidson's
+trajectory from the atomic orbitals is the derivative of a *different map*, one that merely
+lands in the same place. Warm-started, Davidson exits in one or two steps, so its tangent is
+a one-step approximation to the eigenvector response — good enough to hand a Krylov solver a
+direction, and not the response operator. And it is **4-7x slower** than the finite
+difference, because forward mode through the `while_loop` costs more than two extra primal
+solves do when both start from a converged guess. So `finite-difference` is the default
+backend, `autodiff` is kept and tested, and the whole table is the empirical case for
+writing the response down (P22c below) rather than taking it from the eigensolver.
+
+**One thing did have to be written down already: `dE_F`.** `bisect_fermi` halves a bracket
+and then refines with Newton, and **differentiating a bisection is silently useless** — every
+number in it is a midpoint chosen by a comparison, so the tangent is zero or the derivative
+of the bracket. Worse, it would have been silently *inconsistent*: the Newton refinement
+gives the right answer by accident (differentiating a converged contraction is the implicit
+derivative), so Methfessel-Paxton and cold smearing would have been right while Gaussian and
+Fermi-Dirac, which return the raw bisection, were wrong. It now carries a `custom_jvp` with
+the implicit derivative of `N(E_F) = nelec`, in all four tangent slots, matching central
+differences to 1e-11 on all four smearings. `d(wgauss)/dx` in it comes from `jax.grad` and
+`w0gauss` is the test of it, which is what pins the sign convention. **This term is the
+Fermi-level shift of metallic linear response and outlives the solver that motivated it.**
+
+**Kerker, and the trap in it.** `mixing_mode = 'kerker'`/`'TF'` replaces the scalar `beta`
+with `beta |G|^2/(|G|^2 + q_TF^2)` on the residual in G-space — `mix_rho.f90`'s
+`approx_screening`, and an approximate *inverse Jacobian*: in a metal the dielectric function
+diverges as `q^-2` at long wavelength, and dividing that out is one FFT per iteration.
+**`q_TF` is derived from the cell and must not be picked by hand.** A first version here
+hardcoded 1.5 1/bohr; QE's `rs = (3 Omega/4 pi nelec)^(1/3)`, `q_TF^2 = (12/pi)^(2/3)/rs`
+gives 1.008 for the slab, so the hand-picked value over-screened by 2.2x in `q^2` — and
+over-screening is *worse than not preconditioning*: it cost 15 iterations against 14 at one
+vacuum and 48 against 28 at another. QE's `local-TF` (`approx_screening2`), a
+space-dependent screening length, is refused by name rather than substituted.
+
+**The measurement, on the case built for it.** `benchmarks/al-slab.in` is a five-layer
+Al(100) slab: half the cell is a metal, where screening diverges as `q^-2`, and half is
+vacuum, where there is none. Plain Anderson reaches **+105 Ry on its second iteration**
+before recovering. Evaluations of `F` — i.e. diagonalisations, which is the only currency in
+which a mixer's iteration and a Krylov iteration are comparable — to `conv_thr = 1e-8`:
+
+| vacuum (bohr) | Anderson | Anderson + Kerker | Newton-Krylov |
+|---|---|---|---|
+| 16 | 24 | **14** | 19 |
+| 32 | 34 | **20** | 74 |
+| 48 | 32 | **28** | 139 |
+| 64 | **35** | 36 | 123 |
+
+All twelve runs converge to the same energy, to <= 7e-8 Ry — which is the real result of the
+table, because a solver that reached a *different* fixed point would be a bug in one of them.
+
+**Newton-Krylov does not win on cost, anywhere, and the reason is structural rather than a
+tuning failure.** One outer iteration is one residual evaluation plus one per GMRES iteration
+plus one or two per line-search backtrack, and **every one of those is a diagonalisation** —
+84% of an SCF step (`PERFORMANCE.md`). Anderson spends exactly one diagonalisation per
+iteration and a negligible least-squares solve. So Newton-Krylov must cut the outer count by
+more than the inner Krylov work adds, and it cannot: as the conditioning worsens the inner
+count grows to replace the outer one, which is what the 19 -> 74 -> 139 column is. The
+predicted "outer iteration count is flat in the conditioning" is *true* — it is 1, 4, 5, 5
+across the four rows — and it does not help, because the flatness is bought with GMRES iterations.
+Anderson's own count, meanwhile, is nearly flat too (24, 34, 32, 35): an 8-deep residual
+history is enough to span the few badly-conditioned long-wavelength directions this cell has.
+
+**Where it does win is not speed, and this was the point.** Newton is **stability-blind**: it
+converges to a root whether or not that root is a minimum, while damped mixing is a discrete
+relaxation dynamics that falls into *stable* fixed points. That makes the residual solver the
+only way here to reach an **unstable SCF solution** — the non-magnetic state of a magnetic
+metal, the symmetric structure at the top of a Peierls or Jahn-Teller instability, the
+reference state a stabilisation energy is quoted against. `test_scf_solvers.py` demonstrates
+it on bcc iron. From `starting_magnetization = 0.05`, on the same cell and the same k-grid:
+
+| | E (Ry) | moment (mu_B) | `F` evaluations |
+|---|---|---|---|
+| Anderson, `nspin = 2` | -55.44642602 | **+3.4053** | 44 |
+| Newton-Krylov, `nspin = 2` | **-55.38228995** | -0.0003 | 274 |
+| Anderson, `nspin = 1` (independent reference) | **-55.38228995** | -- | 28 |
+
+Anderson amplifies the small moment into the ferromagnetic ground state, which is the
+*stable* fixed point and the physically right answer for a ground-state calculation.
+Newton-Krylov, given the same start, collapses the moment and converges on the **non-magnetic
+solution** — a fixed point of the SCF that is a saddle of the energy in the magnetization
+direction, and one no mixer can be made to hold. **The validation is free and independent:**
+that `nspin = 2` energy has to equal a plain `nspin = 1` run's on the same cell, and it
+agrees to 4.3e-10 Ry. The 64 mRy between the two rows is iron's magnetic stabilisation
+energy, which is the quantity such a reference state exists to give — on a 2x2x2 k-grid
+chosen to run in seconds, so it is a demonstration of the *capability* and not a converged
+number.
+
+It costs 274 diagonalisations against 44 — but the 44 do not produce this number at all.
+
+**And there is a trap in it, which is silent.** With the Kerker preconditioner *off*, the
+same solver from the same guess converges — reporting an accuracy below `conv_thr`, exactly
+as before — on the **ferromagnetic** solution instead (`-55.44642602`, `m = +3.4052`). A
+Newton method is stability-blind only to the extent that its inner solve actually delivers
+the Newton direction; with a badly conditioned Krylov system the inexact step degrades
+towards a damped-mixing step, and a damped-mixing step flows to the *stable* fixed point. So
+on this kind of problem the preconditioner is not a tuning knob for speed — **it decides
+which physics comes out**, and both answers look equally converged. Both are pinned by
+`test_an_inexact_newton_is_only_as_stability_blind_as_its_inner_solve`.
+
+**Refused by name rather than approximated:** DFT+U (`ns` would have to join the packed state
+and its projectors are rebuilt outside the trace), external and constrained magnetic fields
+(the field is driven by a secant *outside* the density, so `F` is not a function of the state
+alone — P18's own convention makes this unavoidable), tetrahedron and `from_input`
+occupations (built on the host, and the second is not a function of the eigenvalues at all),
+and spin spirals.
+
+**Three driver constraints the solver imposes, all of them costs.** `ethr` is fixed and tight
+for the whole solve — QE's schedule is most of why a mixing run is cheap, and a root-finder
+handed a moving target does not converge, so every `F` here costs what a *converged* mixing
+iteration costs rather than what an early one does. The mixing loop still runs afterwards,
+handed the solution as a starting density: it converges in one iteration and is what builds
+the `SCFResult`, so no energy term has a second implementation. And a warm-up of ordinary
+mixing is allowed (`warmup`), because Newton converges from a good enough guess and wanders
+from a bad one, and the atomic superposition is a bad one for exactly the systems worth using
+this on.
+
+**What is not done, and it is the part that would make the cost case.** `P22c` — replacing
+the differentiated eigensolver with a **Sternheimer `custom_jvp`**: `chi_0 = drho/dV` from
+`(H - eps_n S)|dpsi_n> = -P_c dV|psi_n>`, one projected linear solve per occupied band, with
+`K = dV/drho` already free from `v_of_rho` by D1. That is the exact response instead of a
+0.8% approximation, it is degeneracy-safe in D4's sense (it never divides by
+`eps_n - eps_m`), and — the point — **a projected CG solve is far cheaper than a Davidson
+solve**, which is the only way the inner Krylov iterations stop costing a diagonalisation
+each. It is also D3's implicit-differentiation backward pass and the core of DFPT, so the
+argument for writing it was never really the SCF solver. **Until it exists, `mixing` is the
+default and should stay the default**, and the honest summary of this phase is: Kerker is a
+genuine and nearly free win, `dE_F` is a term the code needed anyway, and the exact-Jacobian
+solver is a capability (unstable solutions) rather than a speedup.
+
+*Notebook 15.*
+
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes
 the k-point count.

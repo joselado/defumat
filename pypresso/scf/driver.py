@@ -93,7 +93,9 @@ from pypresso.pseudo.spinorbit import becsum_transform, build_spin_orbit
 from pypresso.batching import map_k, resolve_k_batch
 from pypresso.scf.density import becsum, spinor_becsum, spinor_sum_band, sum_band
 from pypresso.scf.ewald import build_ewald
-from pypresso.scf.mixing import get_mixer
+from pypresso.scf.mixing import PRECONDITIONED, get_mixer, kerker_preconditioner
+from pypresso.scf.residual import make_residual
+from pypresso.scf.solvers import get_scf_solver
 from pypresso.scf.occupations import (
     fixed_occupations,
     input_occupations,
@@ -586,6 +588,11 @@ class SCFResult:
     #: the loop that moves the atoms (:mod:`pypresso.workflows.relax`) rather
     #: than to one SCF's result.
     stress: object | None = None
+    #: What a residual solver cost, when one was used
+    #: (:class:`~pypresso.scf.solvers.NewtonKrylovResult`). ``None`` for a
+    #: mixing run. Its ``steps`` is the currency to compare against
+    #: :attr:`iterations`: both count diagonalisations.
+    solver: object | None = None
     history: list = field(default_factory=list)
 
     @property
@@ -2240,6 +2247,104 @@ def _result_for_stress(calculation, eigenvalues, wg, wavefunctions, rho, terms):
     )
 
 
+def _solve_residual(
+    calculation, system, nbnd, rho, becsum_, conv_thr,
+    scf_solver, options, mixing_beta, verbose,
+):
+    """Find the fixed point with a residual solver, before the mixing loop runs.
+
+    Returns the converged state in the loop's own variables, plus the solver's
+    own record of what it cost.
+
+    Three choices are made here rather than inside the solver, because they are
+    the driver's to make:
+
+    * **``ethr`` is fixed and tight for the whole solve.** QE's schedule
+      (``next_ethr``) loosens the diagonalisation while the density is still
+      wrong, which is most of why a mixing run is cheap -- but it makes ``F`` a
+      different function at every iteration, and a root-finder handed a moving
+      target does not converge. The price is real and is stated in
+      ``PERFORMANCE.md``: every evaluation of ``F`` here costs what a *converged*
+      mixing iteration costs, not what an early one does.
+    * **The Krylov system is preconditioned with Kerker by default**
+      (``kerker=False`` turns it off), at ``beta = 1``, because a preconditioner
+      for GMRES is an approximate *inverse Jacobian* and not a step length.
+      **On a problem with more than one solution this is not a speed knob: it
+      decides which one is found.** An inexact Newton step is only the Newton
+      direction to the extent the inner solve converges, and a badly conditioned
+      Krylov system degrades it towards a damped-mixing step -- which flows to
+      the *stable* fixed point. On bcc iron the preconditioned solve reaches the
+      non-magnetic saddle and the unpreconditioned one reaches the ferromagnetic
+      ground state, both reporting an accuracy below ``conv_thr`` (``PLAN.md``
+      P22, ``test_scf_solvers.py``).
+    * **A warm-up of ordinary mixing** is allowed and defaults to none. Newton
+      converges from a good enough guess and wanders from a bad one, and the
+      atomic superposition is a bad one for exactly the systems worth using this
+      on -- but a warm-up is a *mixing* step, so it pulls towards the stable
+      solution and should be left at zero when an unstable one is wanted.
+    """
+    solver = get_scf_solver(scf_solver)
+    ethr = options.pop("ethr", max(1.0e-3 * conv_thr, ETHR_MIN))
+    warmup = int(options.pop("warmup", 0))
+    precondition = options.pop("precondition", None)
+    wavefunctions = None
+
+    residual = make_residual(calculation, nbnd, ethr)
+    x0 = residual.pack(rho, becsum_)
+    if precondition is True or (precondition is None and options.get("kerker", True)):
+        precondition = kerker_preconditioner(
+            calculation.basis.dense, system.cell, residual.shapes[0], beta=1.0,
+            nelec=calculation.nelec,
+        )
+    elif precondition is not True and not callable(precondition):
+        precondition = None
+    options.pop("kerker", None)
+
+    shape = residual.shapes[0]
+    size = int(np.prod(shape))
+
+    def accuracy_of(r):
+        """The mixing loop's own convergence measure, so ``conv_thr`` means one
+        thing in this file. It is defined on the density part of the residual --
+        ``becsum``'s share is ``rho_ddot``'s ``paw`` term, which the loop adds
+        through ``addusdens`` rather than separately."""
+        return float(_accuracy(
+            jnp.asarray(r[:size]).reshape(shape), calculation.basis.dense, system.cell
+        ))
+
+    if warmup:
+        # Ordinary mixing, run through the *residual's* own step so that the
+        # ultrasoft and PAW parts of the state come along without a second
+        # unpacking. Newton converges from a good enough guess and wanders from
+        # a bad one, and the superposition of atomic charges is a bad one for
+        # exactly the systems this solver is worth using on.
+        warmup_mixing = options.pop("warmup_mixing", "kerker")
+        warm_mixer = get_mixer(warmup_mixing, beta=mixing_beta)
+        if warmup_mixing.lower() in PRECONDITIONED:
+            # Its own preconditioner at ``mixing_beta``, *not* the Krylov
+            # system's, which is built at beta = 1 because a preconditioner for
+            # GMRES is an approximate inverse Jacobian and not a step length.
+            # Reusing that one here silently ran the warm-up at beta = 1, which
+            # is a different and much more aggressive mixer than the one the
+            # caller asked for -- and converged the slab on its own, hiding the
+            # solver it was supposed to be warming up.
+            warm_mixer.precondition = kerker_preconditioner(
+                calculation.basis.dense, system.cell, residual.shapes[0],
+                beta=mixing_beta, nelec=calculation.nelec,
+            )
+        for _ in range(warmup):
+            fx, wavefunctions = residual.step(x0, wavefunctions)
+            x0 = np.asarray(warm_mixer.mix(x0, np.asarray(fx, dtype=float)), dtype=float)
+        options["steps_already_taken"] = warmup
+
+    result = solver(
+        residual, x0, wavefunctions, accuracy_of, conv_thr=conv_thr,
+        precondition=precondition, verbose=verbose, **options,
+    )
+    rho_out, becsum_out = residual.unpack(result.x)
+    return rho_out, becsum_out, result.psi, result
+
+
 def run_scf(
     system: System,
     pseudos: tuple[Pseudopotential, ...],
@@ -2256,6 +2361,8 @@ def run_scf(
     starting_becsum: tuple | None = None,
     mixing_fixed_ns: int = 0,
     tstress: bool | None = None,
+    scf_solver: str = "mixing",
+    scf_solver_options: dict | None = None,
 ) -> SCFResult:
     """Run the self-consistent field loop to convergence.
 
@@ -2291,6 +2398,17 @@ def run_scf(
     from ``pw.x``. It is not on unconditionally because it costs a strain
     gradient (roughly two SCF iterations, see `PERFORMANCE.md`), which is why
     ``run_pwscf`` calls ``stress()`` after ``electrons()`` rather than inside it.
+
+    ``scf_solver`` chooses *how* the fixed point is found (rule R4, registry in
+    :mod:`pypresso.scf.solvers`). ``"mixing"`` is the loop below and the
+    default. ``"newton-krylov"`` instead solves ``F(rho) - rho = 0`` with an
+    inexact Newton method whose Jacobian action comes from differentiating one
+    SCF step, and then hands its answer to this same loop as a starting density
+    -- which converges in one iteration and is what builds the result, so no
+    energy term has a second implementation. **Anderson mixing is already a
+    quasi-Newton method on that residual**, so the difference is an exact
+    Jacobian against a fitted one, and it pays only where the fit is bad; see
+    :mod:`pypresso.scf.solvers` and ``PLAN.md`` P22.
 
     **A stress the input asked for and this code cannot produce is skipped with
     a warning, not raised.** The regimes P11 does not cover -- noncollinear,
@@ -2329,6 +2447,15 @@ def run_scf(
     # it before the Hamiltonian exists.
     ns_state = calculation.starting_ns() if calculation.is_hubbard else None
 
+    if mixing_mode.lower() in PRECONDITIONED:
+        # Kerker's ``beta`` is an operator on the grid, so it cannot be built
+        # inside ``get_mixer``, which knows only a number. It is installed here,
+        # where the density's shape and the dense G-vectors are both in hand.
+        mixer.precondition = kerker_preconditioner(
+            calculation.basis.dense, system.cell, tuple(np.shape(rho)),
+            beta=mixing_beta, nelec=calculation.nelec,
+        )
+
     previous_energy, history = None, []
     potential_change = None
     converged = False
@@ -2341,6 +2468,22 @@ def run_scf(
     # *calculation* untouched, so the same object can be reused afterwards.
     field = calculation.magnetic_field
     field_scale = 1.0
+
+    # A residual solver runs *before* the loop and hands it a density that is
+    # already self-consistent, so the loop's first iteration is what turns that
+    # density into an ``SCFResult`` -- every energy term, the magnetization, the
+    # stress. Nothing about the result has a second implementation, and the one
+    # iteration it costs is counted in ``solver.steps`` like any other.
+    solver_result = None
+    if get_scf_solver(scf_solver) is not None:
+        rho, becsum_state, wavefunctions, solver_result = _solve_residual(
+            calculation, system, nbnd, rho, becsum_state, conv_thr,
+            scf_solver, dict(scf_solver_options or {}), mixing_beta, verbose,
+        )
+        # The density is converged, so the eigenvalues must be too: the loose
+        # start of the ``ethr`` schedule would otherwise throw the hand-off away
+        # on the very first diagonalisation.
+        ethr = max(0.1 * solver_result.accuracy / max(1.0, calculation.nelec), ETHR_MIN)
 
     for iteration in range(1, max_iterations + 1):
         ethr = next_ethr(ethr, accuracy, calculation.nelec, iteration)
@@ -2637,4 +2780,5 @@ def run_scf(
         homo=levels.get("homo"),
         lumo=levels.get("lumo"),
         history=history,
+        solver=solver_result,
     )

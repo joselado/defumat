@@ -1176,6 +1176,85 @@ cell with `ngm` in the tens of thousands wants ~10 GB**, an order of magnitude m
 SCF that produced the state, and `terms=True` on such a cell wants the same again for
 ninety times the time.
 
+
+## How many iterations, and what a Jacobian costs (P22)
+
+Every other section here measures the cost of *one* SCF iteration. This one measures
+**how many of them there are**, which is the other half of the wall clock and the half a
+per-iteration timing cannot see.
+
+**The case.** `benchmarks/al-slab.in`, a five-layer Al(100) slab, is here for this and
+nothing else: half the cell is a metal, where the dielectric function diverges as `q^-2`,
+and half is vacuum, where there is no screening. Plain Anderson reaches **+105 Ry on its
+second iteration** before recovering. The vacuum is varied to make it harder.
+
+**Evaluations of `F` to `conv_thr = 1e-8`** -- diagonalisations, which is the only currency
+in which a mixer's iteration and a Krylov iteration are comparable, since a diagonalisation
+is 84% of a step:
+
+| vacuum (bohr) | dense grid | Anderson | Anderson + Kerker | Newton-Krylov |
+|---|---|---|---|---|
+| 16 | 12x12x72  | 24 | **14** | 19 |
+| 32 | 12x12x100 | 34 | **20** | 74 |
+| 48 | 12x12x145 | 32 | **28** | 139 |
+| 64 | 12x12x180 | **35** | 36 | 123 |
+
+All twelve runs land on the same energy to <= 7e-8 Ry.
+
+**Kerker is the win, and it is nearly free.** One FFT per iteration for 24 -> 14 and
+34 -> 20. It is `mix_rho.f90`'s `approx_screening`, and the one thing to get right is that
+**`q_TF` is derived from the cell, not chosen.** A first version here hardcoded 1.5 1/bohr
+where QE's `rs = (3 Omega/4 pi nelec)^(1/3)`, `q_TF^2 = (12/pi)^(2/3)/rs` gives 1.008 for
+this slab -- over-screening by 2.2x in `q^2`, which cost **48 iterations against 28** at
+48 bohr of vacuum, i.e. it turned a win into a loss. Over-screening is worse than no
+preconditioning.
+
+Two further details that are only visible on a spin-polarized run: **only the charge channel
+is screened.** QE applies `approx_screening` to `drho%of_g(:,1)`, the *charge*, and the
+magnetization has no `q^-2` divergence to divide out; densities are carried here as
+`(up, down)`, so they are rotated into `(charge, magnetization)` around the screening and
+back. And the `G = 0` factor is identically zero, so a preconditioned step cannot change
+the electron count.
+
+**Newton-Krylov does not win on cost anywhere, and the reason is structural.** One outer
+iteration is one residual evaluation, plus one per GMRES iteration, plus one or two per
+line-search backtrack -- and every one of those is a diagonalisation, where Anderson spends
+exactly one per iteration and a negligible least-squares solve. The predicted flat outer
+count is *real* -- 1, 4, 5, 5 across the four rows, against 3, 29, 61, 53 GMRES iterations -- and it does not help, because the
+flatness is bought with GMRES iterations: the 19 -> 74 -> 139 column is the inner count
+growing to replace the outer one. Anderson's own count, meanwhile, is nearly flat too
+(24, 34, 32, 35): an eight-deep residual history spans the few badly-conditioned
+long-wavelength directions this cell has.
+
+**Where the Jacobian action comes from, and what it costs.** Two backends, measured on the
+16-bohr slab, one `J v` at the converged density:
+
+| backend | agreement with the other | wall |
+|---|---|---|
+| `jax.jvp` through the step, **cold** start | 109% apart | 5.9 s |
+| `jax.jvp` through the step, **warm** start | 0.8% apart | 2.9 s |
+| central difference of `r` (two extra `F`) | -- | 0.4 s |
+
+The finite difference is both more accurate and **4-7x faster**, so it is the default.
+Forward mode through Davidson's `lax.while_loop` costs more than two extra primal solves do
+when both start from a converged guess, and warm-started Davidson exits in one or two steps,
+which makes its tangent a one-step approximation to the eigenvector response rather than the
+response. Reverse mode is not an option at all and the number is worth recording: the tape is
+`n_davidson_steps * nvecx * nbnd * npwx` complex, gigabytes on the eight-atom cell.
+
+**Memory.** The packed state is `nspin * nr` floats -- 83 kB for the 16-bohr slab, 21 MB for
+a 128^3 dense grid with two spin channels -- and a Krylov subspace holds a few tens of them,
+which is negligible beside the wavefunctions. What is not negligible is that a JVP holds a
+tangent `psi` of the same shape as `psi`, doubling the wavefunction working set for the
+duration of the call; that is why it goes through the same `k_batch` dial the primal does.
+The dense Jacobian is never formed and the number says why: `(nspin nr)^2` is
+10368 x 10368 on the *smallest* case here.
+
+**What would change the cost verdict** is P22c -- the Sternheimer `custom_jvp`, a projected
+CG solve per occupied band instead of a differentiated Davidson. That is the only way an
+inner Krylov iteration stops costing a diagonalisation, and it is the same routine DFPT
+needs, which is the argument for writing it.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -1242,3 +1321,5 @@ measurements, before being implemented. See "QE's FFT layout" above.)
 | 2026-08-20 | The band axis chunked as `vloc_psi_k`'s `DO ibnd`, default one band (`map_bands`/`sum_bands`) | `h_psi` local term 2.48x at 16 atoms, 1.66x at 8, 0.91x at 180 PWs; `si16-1k-ecut30` 4.2 → 2.5x against QE |
 | 2026-08-20 | `batch = 1` stops meaning a width-one batch axis: direct call at `nk = 1`, plain `lax.map` beyond | 37% of a Davidson solve, on every k-point of every run |
 | 2026-08-20 | `v_xc` and `e_xc` from one `value_and_grad` pass instead of two evaluations | `exchange_correlation` 7.3 → 3.5 ms |
+| 2026-08-21 | Kerker/Thomas-Fermi preconditioning in the mixer (`mixing_mode = 'TF'`), with QE's own `q_TF` | Al slab 24 → 14 iterations; 34 → 20 with more vacuum; one FFT per iteration |
+| 2026-08-21 | Newton-Krylov on the SCF residual (`scf_solver`) | **not a speedup** — 19 to 139 `F` evaluations against 14 to 36; it buys unstable SCF solutions, not time |

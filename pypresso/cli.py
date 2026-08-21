@@ -135,6 +135,7 @@ def _relax(args) -> int:
         nstep=args.nstep or int(_from_input("control", "nstep", 50)),
         force_method=args.force_method,
         ion_dynamics=args.ion_dynamics,
+        mixing_mode=str(pwin.get("electrons", "mixing_mode") or "anderson"),
         verbose=args.verbose,
     )
 
@@ -173,6 +174,9 @@ def _stress(args) -> int:
     # gradient is taken through.
     calculation = Calculation(system, pseudos)
     result = run_scf(system, pseudos, calculation=calculation, conv_thr=conv_thr,
+                     # As in a ``pw.x`` ``&electrons`` namelist -- ``'TF'`` is
+                     # Kerker preconditioning and ``'local-TF'`` is refused.
+                     mixing_mode=str(pwin.get("electrons", "mixing_mode") or "anderson"),
                      verbose=args.verbose)
     if not result.converged:
         print(f"warning: the SCF stopped at accuracy {result.accuracy:.2e}",
@@ -219,6 +223,11 @@ def _spiral(args) -> int:
         system, pseudos, wavevectors,
         conv_thr=args.conv_thr or float(pwin.get("electrons", "conv_thr") or 1e-8),
         mixing_beta=float(pwin.get("electrons", "mixing_beta") or 0.7),
+        # ``mixing_mode`` means here what it means in a ``pw.x``
+        # ``&electrons`` namelist: an input carrying ``mixing_mode = 'TF'``
+        # gets Kerker preconditioning, and ``'local-TF'`` is refused by name
+        # rather than silently given the uniform screening (PLAN.md P22).
+        mixing_mode=str(pwin.get("electrons", "mixing_mode") or "anderson"),
         verbose=args.verbose,
     )
 

@@ -27,6 +27,7 @@ ends with a pointer to both.
 | [`14_spiral_relaxation.ipynb`](14_spiral_relaxation.ipynb) | `dE/dq` by `jax.grad`, checked by finite differences, and a BFGS that finds the ground-state pitch | P21 |
 | [`15_stress.ipynb`](15_stress.ipynb) | The stress as one strain derivative of the energy, silicon's equation of state with `-dE/dV` on top, and five references against `pw.x` (≤2.7e-7 Ry/bohr³) | P11 |
 | [`16_projected_density_of_states.ipynb`](16_projected_density_of_states.ipynb) | `<phi|S|psi>` on Löwdin-orthogonalised orbitals, silicon's `s` and `p` densities of state against `projwfc.x`, and the same weights as fat bands | P8 |
+| [`17_reaching_self_consistency.ipynb`](17_reaching_self_consistency.ipynb) | Kerker preconditioning (24 → 14 iterations), the SCF as a root-find, and the unstable magnetic solution no mixer can hold | P22 |
 
 ## Conventions
 

@@ -1,0 +1,36 @@
+! bcc iron, LSDA, started from a *small* moment -- the case for the residual
+! solver, and it is a capability case rather than a timing one.
+!
+! Iron has two self-consistent solutions at this geometry: the ferromagnetic
+! ground state, and a non-magnetic one that is a saddle of the energy in the
+! magnetization direction. Damped mixing is a discrete relaxation dynamics, so it
+! falls into the *stable* one -- from starting_magnetization = 0.05 Anderson
+! amplifies the moment to 3.41 mu_B and stops there. A Newton method is
+! stability-blind: it converges on whichever root it started nearest, which from
+! this guess is the non-magnetic one. That solution is the reference state a
+! magnetic stabilisation energy is quoted against, and no mixer can hold it.
+!
+! The check is free and independent: the nspin = 2 non-magnetic energy has to
+! equal a plain nspin = 1 run's on the same cell. See PLAN.md P22 and
+! tests/regression/test_scf_solvers.py.
+!
+! 2x2x2 k-points and this cutoff are chosen to run in seconds, not to converge
+! the moment -- no number here is a physics claim.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 3, celldm(1) = 5.217, nat = 1, ntyp = 1,
+    ecutwfc = 25.0, ecutrho = 200.0, nspin = 2,
+    starting_magnetization(1) = 0.05,
+    occupations = 'smearing', smearing = 'marzari-vanderbilt', degauss = 0.05
+ /
+ &electrons
+    conv_thr = 1.0d-8, mixing_beta = 0.3, electron_maxstep = 200
+ /
+ATOMIC_SPECIES
+ Fe 55.847 Fe.pz-nd-rrkjus.UPF
+ATOMIC_POSITIONS (alat)
+ Fe 0.0 0.0 0.0
+K_POINTS automatic
+ 2 2 2 0 0 0

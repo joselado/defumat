@@ -257,8 +257,8 @@ def _newton(eigenvalues, weights, nelec, degauss, ngauss, start):
     return refined
 
 
-@partial(jax.jit, static_argnames=("ngauss",))
-def bisect_fermi(
+@partial(jax.custom_jvp, nondiff_argnums=(4,))
+def _bisect_fermi(
     eigenvalues: jnp.ndarray,
     weights: jnp.ndarray,
     nelec: float,
@@ -301,6 +301,75 @@ def bisect_fermi(
     )
     fallback = _bisect(eigenvalues, weights, nelec, degauss, ngauss)
     return jnp.where(missed, fallback, refined)
+
+
+@partial(jax.jit, static_argnames=("ngauss",))
+def bisect_fermi(eigenvalues, weights, nelec, degauss, ngauss):
+    """See :func:`_bisect_fermi`; this is that function, compiled."""
+    return _bisect_fermi(eigenvalues, weights, nelec, degauss, ngauss)
+
+
+@_bisect_fermi.defjvp
+def _bisect_fermi_jvp(ngauss, primals, tangents):
+    """``dE_F``, from the implicit function theorem rather than from the search.
+
+    **A bisection has no useful derivative and that failure is silent.** Every
+    number inside ``_bisect`` is a midpoint of a bracket chosen by a comparison,
+    so differentiating the loop propagates a tangent that is either identically
+    zero or the derivative of the *bracket* -- a plausible-looking array with no
+    relation to how the Fermi level actually moves. The Newton refinement above
+    would give the right answer by accident (differentiating a converged
+    contraction is the implicit derivative), which makes it worse: Gaussian and
+    Fermi-Dirac smearing return the raw bisection and would be wrong while
+    Methfessel-Paxton and cold smearing were right.
+
+    So the derivative is written down instead. ``E_F`` is defined by
+
+        N(E_F, e, degauss, w) = sum_kn w_k f((E_F - e_kn)/degauss) = nelec,
+
+    and differentiating that identity at fixed ``N`` gives every tangent at
+    once:
+
+        dE_F = [ degauss (dnelec - sum f dw) + sum w f' de + ddegauss sum w f' x ]
+               / sum w f'
+
+    with ``x = (E_F - e)/degauss`` and ``f' = d(wgauss)/dx``, which is taken
+    from ``wgauss`` by ``jax.grad`` rather than transcribed -- ``w0gauss`` is
+    that same derivative and stands as the test of this one
+    (``test_fermi_response``).
+
+    The denominator is the density of states at the Fermi level times
+    ``degauss``; it vanishes for a gapped system, where the Fermi level is not a
+    differentiable function of the eigenvalues at all, and the tangent is
+    forced to zero there rather than returning an infinity.
+    """
+    eigenvalues, weights, nelec, degauss = primals
+    d_eigenvalues, d_weights, d_nelec, d_degauss = tangents
+
+    ef = _bisect_fermi(eigenvalues, weights, nelec, degauss, ngauss)
+    x = (ef - eigenvalues) / degauss
+    occupation = wgauss(x, ngauss)
+    delta = _wgauss_prime(x, ngauss)
+
+    w = weights[:, None]
+    denominator = jnp.sum(w * delta)
+    numerator = (
+        degauss * (d_nelec - jnp.sum(occupation * d_weights[:, None]))
+        + jnp.sum(w * delta * d_eigenvalues)
+        + d_degauss * jnp.sum(w * delta * x)
+    )
+    tangent = jnp.where(
+        jnp.abs(denominator) > FERMI_EPS, numerator / jnp.where(
+            jnp.abs(denominator) > FERMI_EPS, denominator, 1.0), 0.0
+    )
+    return ef, tangent
+
+
+@partial(jax.jit, static_argnames=("ngauss",))
+def _wgauss_prime(x, ngauss):
+    """``d(wgauss)/dx``, elementwise. ``wgauss`` is elementwise, so the gradient
+    of its sum is the elementwise derivative."""
+    return jax.grad(lambda t: jnp.sum(wgauss(t, ngauss)))(x)
 
 
 def fermi_level(
