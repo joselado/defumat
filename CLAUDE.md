@@ -56,6 +56,12 @@ run (≤4e-8 Ry on six cases) in 1 iteration instead of 25 where the magnetizati
 to be rotated. **The magnetization is seeded when the source has none**, because nothing in
 the SCF breaks spin symmetry on its own and an unseeded promotion converges straight back to
 the unpolarized solution.
+**Linear response by autodiff** (P24) is in: the velocity operator from one `jvp` of `H(k)`
+(rule D2 cashed in), the Sternheimer equation in place of a sum over states, and silicon's
+**dielectric constant and Born effective charges** against `ph.x` — `13.806646` against
+`13.806375` and `-0.075715` against `-0.07568` on QE's own `ph_base` benchmark, with the
+screening kernel, the field's commutator and the bare phonon term all gradients of code that
+was already there.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
 read it before writing code. P4 is complete: a block Davidson eigensolver behind a name
 registry, seeded from the pseudo-atomic orbitals as QE seeds it, and the *only* solver the
@@ -71,7 +77,9 @@ resolution of everything it prints (6.9e-4 on a projection, 4.7e-5 on a charge).
 **The stress tensor** (P11) is in too: `sigma = -(1/Omega) dE/d(epsilon)` from one `jax.grad`
 of the energy at frozen wavefunctions, matching QE to **≤2.7e-7 Ry/bohr³** on thirteen cases
 from norm-conserving LDA up through ultrasoft, PAW, PBE, `nspin = 2` and DFT+U.
-**Outstanding:** Wyckoff input, `vc-relax`, and the rest of P10 (k-axis sharding and GPU).
+**Outstanding:** Wyckoff input, `vc-relax`, phonons (P24's Sternheimer solver is their
+core, and what is left is the ionic perturbation and the dynamical matrix), and the rest
+of P10 (k-axis sharding and GPU).
 
 ## Layout
 
@@ -246,6 +254,29 @@ moments along different axes (a collinear source has one scalar field;
 spinor back into two collinear channels, and a `becsum` from a different pseudopotential,
 which is dropped with a warning instead of being reshaped.
 
+**Linear response is in scope and implemented** (P24): `pypresso/response/`. Three layers,
+and the point of all three is that the *perturbations* are gradients of code that already
+exists rather than expressions derived a second time. The **velocity operator** is one
+`jax.jvp` of `H(k)` at a frozen sphere, because `dH/dk_a = i[H, r_a]` in the periodic gauge
+— which is what rule D2 asked P2-P4 to preserve, and why no radial form factor is ever a
+table lookup. The **Sternheimer equation** `(H - eps_n S + alpha Q)|dpsi_n> = -P_c^+ dV|psi_n>`
+replaces the sum over states with a projected CG solve per occupied band: no empty states,
+and no division by `eps_n - eps_m`, which rule D4 forbids. And the **dielectric constant**
+and **Born effective charges** follow, matching `ph.x`'s `ph_base/si.phG.in` benchmark to
+2.7e-4 on `epsilon_infinity` (13.806646 against 13.806375) and to the five decimals it
+prints on `Z*` (-0.075715 against -0.07568).
+
+**The trap is that a response is direction-dependent and must be symmetrised as a polar
+vector**, and the escape from that does not work where it looks like it should: running the
+*whole* k-grid instead of a wedge is only sound if the grid is closed under the point group,
+and a **shifted** Monkhorst-Pack grid is not — 2304 of the 3072 rotation images of a shifted
+4x4x4 grid on fcc silicon land off it, giving a 2% asymmetric density and a dielectric tensor
+with off-diagonal entries cubic symmetry forbids. That combination is refused by name; an
+unshifted grid is closed exactly and is the independent check on the symmetrisation.
+**Refused** rather than approximated: ultrasoft and PAW (`dbecsum`, the augmentation charge's
+own response, `int3`), metals (`orthogonalize`'s smearing branch and `ef_shift`),
+noncollinear magnetism, DFT+U (`adddvhubscf`) and spin spirals.
+
 Out of scope until the above works: EXX, phonons
 (`PHonon/`), Car-Parrinello (`CPV/`), and everything in `EPW/`, `TDDFPT/`, `HP/`, `GWW/`.
 The code should nonetheless be shaped so these are additions, not rewrites.
@@ -412,7 +443,8 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Spin spirals | no QE counterpart — Elk's `src/gengkqvec.f90`, `init0.f90`, `findsymlat.f90`, manual §5.146 | up at `k + q/2`, down at `k - q/2`, each with its own `G+k` set; one basis call on the concatenated list gives both a common `npwx` |
 | Spiral relaxation | no QE counterpart — `Modules/bfgs_module.f90` reused with the *reciprocal* cell as its lattice | `dE/dq` is `jax.grad` of the energy at frozen wavefunctions and a frozen sphere (`forces/spiral.py`); only the kinetic and nonlocal terms carry `q` |
 | Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `pypresso/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
-| Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]`; here it should fall out of `jacfwd` of `H(k)` w.r.t. `k` |
+| Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]` term by term; here it is one `jvp` of `H(k)` at a frozen sphere (`response/velocity.py`), since `dH/dk_a = i[H, r_a]` in the periodic gauge. The overlap carries a velocity too, so a band velocity is `<psi|dH/dk - eps dS/dk|psi>` |
+| Linear response / DFPT | `LR_Modules/cgsolve_all.f90`, `ch_psi_all.f90`, `orthogonalize.f90`, `h_prec.f90`, `setup_alpha_pv.f90`, `incdrhoscf.f90`, `symdvscf.f90`; `PHonon/PH/solve_e.f90`, `dvpsi_e.f90`, `dvqpsi_us.f90`, `dielec.f90`, `zstar_eu.f90` | the linear solve, the projector and the assembly are transcribed; the *perturbations* are not. `dv_of_drho` is one `jvp` of `v_of_rho` (which already drops the `G = 0` Hartree term), the E-field's commutator is the velocity operator, and `dvqpsi_us` is one `jvp` through `at_positions`. **A response on a reduced k-set is a polar vector field and must be symmetrised as one** |
 | Input parsing | `Modules/read_input.f90`, `PW/src/input.f90`, `Modules/input_parameters.f90` | defaults for every input variable are declared in `input_parameters.f90` |
 | DFT+U | `PW/src/ldaU.f90`, `hubbard.f90`, `new_ns.f90`, `init_ns.f90`, `ns_adj.f90`, `orthoUwfc.f90`, `offset_atom_wfc.f90`, `vhpsi.f90`, `v_of_rho.f90` (`v_hubbard`), `scf_mod.f90` (`ns_ddot`), `force_hub.f90` | the projectors are `S phi` even for `Hubbard_projectors = 'atomic'`; `ortho-atomic` orthogonalises over **all** `natomwfc`, not the Hubbard manifold alone, so `Modules/read_pseudo.f90`'s `upf_check_atwfc_norm` renormalisation of `chi` reaches the answer through the `4s`. `force_hub.f90` is *not* transcribed: it is `jax.grad` through `Calculation.at_positions` |
 | Occupations / smearing | `PW/src/gweights.f90`, `Modules/wgauss.f90`, `Modules/w0gauss.f90`, `PW/src/set_occupations.f90` | |

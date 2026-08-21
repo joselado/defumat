@@ -126,6 +126,11 @@ class DielectricTensor:
     #: ``(nat, 3, 3)`` Born effective charges ``Z*_ij = dF_j/dE_i``, in units of
     #: the electron charge, or ``None`` when they were not asked for.
     born_charges: np.ndarray | None = None
+    #: ``(3, nspin_mag, n1, n2, n3)``: the induced charge density per unit field,
+    #: symmetrised, on the dense grid. It is what screening *is* -- the charge
+    #: that piles up against the field and makes ``epsilon`` 13.8 rather than 1 --
+    #: and it is carried out because nothing else here shows it.
+    induced_density: np.ndarray | None = None
     #: ``|ddv_scf|^2`` at each iteration -- the trajectory ``ph.x`` prints, and
     #: the only intermediate quantity there is a reference for.
     history: list = field(default_factory=list)
@@ -142,8 +147,13 @@ class DielectricTensor:
     def anisotropy(self) -> float:
         """The largest departure from a scalar tensor.
 
-        On a cubic crystal this is zero by symmetry, and since nothing here
-        symmetrises anything it is a measurement rather than a construction.
+        On a cubic crystal this is zero by symmetry, and it is a *measurement*
+        rather than a construction: what the group average
+        (``symmetrize_directional``, ``symmatrix``) imposes is invariance under
+        the operations the crystal has, which is not the same as projecting onto
+        the cubic form. A wrong rotation convention, a missing fractional
+        translation, or an axial sign where a polar one belongs would all survive
+        the average and show up here.
         """
         return float(np.abs(self.epsilon - np.eye(3) * self.isotropic).max())
 
@@ -160,12 +170,14 @@ def dielectric_tensor(
     born_charges: bool = True,
     verbose: bool = False,
 ) -> DielectricTensor:
-    """``epsilon_infinity`` for a converged insulator on a full k-grid.
+    """``epsilon_infinity`` and the Born charges for a converged insulator.
 
     Args:
         calculation: the :class:`~pypresso.scf.driver.Calculation` the states
-            belong to. Its k-points must be the **whole** grid -- see the module
-            docstring; ``nosym`` in the input is what arranges that.
+            belong to. The normal case is an ordinary symmetry-reduced wedge,
+            which the response is symmetrised over; a ``nosym`` run is accepted
+            only on an **unshifted** k-grid, since a shifted one does not carry
+            the symmetry itself (see the module docstring).
         wavefunctions: ``(nspin, nk, nbnd, ndim)`` from the converged run.
         eigenvalues: ``(nspin, nk, nbnd)`` or the squeezed ``(nk, nbnd)``.
         density: the converged density, which the fixed potential is built from.
@@ -204,6 +216,7 @@ def dielectric_tensor(
     #    iterations; the bare one above is what the whole loop is driven by.
     grid_shape = jnp.asarray(density).shape
     dvscf = jnp.zeros((3,) + grid_shape)
+    drho = jnp.zeros((3,) + grid_shape)
     history, total_iterations, solves = [], 0, 0
     dpsi = [None, None, None]
     converged = False
@@ -224,6 +237,7 @@ def dielectric_tensor(
         # after the loop over directions and before the kernel, because a
         # rotation mixes them.
         symmetrised = calculation.symmetrize_directional(jnp.stack(response))
+        drho = symmetrised
         induced = []
         for axis in range(3):
             # ``dv_of_drho``: the Hartree kernel without its G = 0 component,
@@ -253,6 +267,7 @@ def dielectric_tensor(
     return DielectricTensor(
         epsilon=epsilon,
         born_charges=charges,
+        induced_density=np.asarray(drho),
         history=history,
         average_iterations=total_iterations / max(solves, 1),
         converged=converged,

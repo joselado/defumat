@@ -35,9 +35,12 @@ constant.** ``chi_0 = drho/dV`` is the exact independent-particle susceptibility
 and the SCF Jacobian is ``chi_0 K`` with ``K = dV_scf/drho`` already free from
 ``jax.grad`` of ``v_of_rho`` (rule D1). P22 measured the alternative -- forward
 mode straight through Davidson's ``lax.while_loop`` -- at 109% wrong from a cold
-start and 4-7x slower than a finite difference from a warm one; the whole point
-of this module is that a projected CG solve is cheaper than a Davidson solve and
-exact rather than accurate to ``ethr``.
+start and 4-7x slower than a finite difference from a warm one. The solve here is
+exact rather than accurate to ``ethr``, and on two-atom silicon at
+``ecutwfc = 12`` it costs **0.5 s** against that route's **3.5 s**. That it should
+also *scale* better -- a projected CG over the occupied bands against a Davidson
+subspace of ``nvecx = 4 nbnd`` -- is an expectation rather than a measurement: it
+has not been timed on a cell where the two would separate.
 
 **Refused rather than approximated**, each by name:
 

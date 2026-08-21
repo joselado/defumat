@@ -1301,6 +1301,70 @@ processes' worth of state only if the caller keeps the first `SCFResult` alive f
 wavefunctions; dropping them (`wavefunctions=False`) leaves a working set no larger than one
 SCF's.
 
+## What a linear response costs, and what the exact Jacobian bought (P24)
+
+Three quantities, all measured on the two-atom silicon of `test-suite/ph_base/si.scf.in`
+(`ecutwfc = 18`, ten k-points, four occupied bands) on one core.
+
+**The velocity operator is one `jvp`, and it costs about one `h_psi` per direction.**
+`dH/dk_a` and `dS/dk_a` applied to every band at every k-point: 2.9 s for all three
+cartesian directions on a single k-point at `ecutwfc = 12`, most of which is compiling the
+projector rebuild. The local potential contributes nothing — its tangent is symbolically
+zero, so the `jvp` never issues its FFTs — and nothing dense is formed, so the peak working
+set is one extra copy of `vkb`, `(nk, npwx, nkb)` complex.
+
+**The Sternheimer solve against the two routes P22 had.** One `chi_0 K v`, on the same cell
+and from the same converged state:
+
+| route | time | what it is |
+|---|---|---|
+| Sternheimer (`response/sternheimer.py`) | **0.5 s** | exact; 23-28 CG iterations per band |
+| `jax.jvp` through Davidson (`ScfResidual.jvp`) | 3.5 s | a one-step approximation to the eigenvector response |
+| central difference of `F` (`jvp_finite_difference`) | 0.1 s | two evaluations of `F` from a warm start |
+
+The finite difference is the cheapest here and it is *also* the least accurate, which the
+sweep below is the evidence for. That the exact solve should additionally **scale** better —
+a projected CG over `nocc` bands against a Davidson subspace of `nvecx = 4 nbnd` — has not
+been measured: si2 at `ecutwfc = 12` is far too small to separate them, and the case that
+would is a cell where the Sternheimer solver is not yet the bottleneck of anything.
+
+**And the exact Jacobian's first result was about P22 rather than about itself.** Sweeping
+the finite difference's step against `chi_0 K` gives a textbook U between truncation and
+noise:
+
+| step | relative difference from the exact Jacobian |
+|---|---|
+| 0.3 | 8.3e-2 |
+| 0.1 | 9.7e-3 |
+| 0.03 | 8.0e-4 |
+| **0.01** | **4.0e-4** |
+| 0.003 | 1.0e-3 |
+| 1e-6 (`jvp_finite_difference`'s default) | **1.1e-1** |
+
+P22's default step is chosen for a gradient and sits five orders below the minimum, deep in
+the eigensolver's noise. Its reported 0.8% agreement between `jax.jvp` and the difference
+was two noisy numbers agreeing, and there was no way to know that without a third.
+
+**The dielectric constant.** 18 linear-mixing iterations at `alpha_mix = 0.7` to
+`|ddv_scf|^2 < 1e-14`, averaging 28 CG iterations per band, **66 s** on ten k-points — three
+Sternheimer solves per iteration plus three for the bare `P_c r|psi>`. `ph.x` takes 5
+iterations for the same fixed point with Broyden mixing, so the iteration count here is a
+straightforward 3.6x that could be bought back with the mixer the SCF already has. The Born
+charges add six more `jvp`s through `at_positions`, and on this cell their cost is inside
+the run-to-run spread of the loop they follow (66 s with them, 77 s without, on two runs
+that differ in compilation state as much as in work).
+
+**The memory is the CG's four band-blocks** — the gradient, its preconditioning, the search
+direction and the previous one — at `(nk, nocc, npwx)` complex each with the whole k axis in
+flight, which is the Davidson subspace's working set at `nvecx = 4 nbnd`, through the same
+`k_batch` dial. The electric field holds **two sets of three more**, one per direction, for
+the whole self-consistent loop: `bare` and `dpsi` are each `(3, nspin, nk, nocc, npwx)`
+complex. On this cell (`npwx = 350`, `nk = 10`, `nocc = 4`) one band-block is 0.22 MB, the
+CG's four are 0.9 MB and the field's six are 1.3 MB -- nothing. On a cell with 200 occupied
+bands and 20000 plane waves at 64 k-points the same block is **4.1 GB** and the field's six
+are **25 GB**, which is the number that decides whether such a run happens at all: the CG
+already goes through the `k_batch` dial, and those six do not.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -1370,3 +1434,4 @@ measurements, before being implemented. See "QE's FFT layout" above.)
 | 2026-08-21 | Kerker/Thomas-Fermi preconditioning in the mixer (`mixing_mode = 'TF'`), with QE's own `q_TF` | Al slab 24 → 14 iterations; 34 → 20 with more vacuum; one FFT per iteration |
 | 2026-08-21 | Newton-Krylov on the SCF residual (`scf_solver`) | **not a speedup** — 19 to 139 `F` evaluations against 14 to 36; it buys unstable SCF solutions, not time |
 | 2026-08-21 | `ns` joins the residual's packed state; `run_scf(starting_ns=...)` | DFT+U reaches the mixer's fixed point (58 `F` against 9) and a saddle the mixer cannot hold (31 against a runaway) |
+| 2026-08-21 | Linear response (P24): the velocity operator from one `jvp`, the Sternheimer solve, and `epsilon_infinity` | exact `chi_0 K` at 0.5 s against the differentiated eigensolver's 3.5 s; silicon's dielectric constant in 66 s |
