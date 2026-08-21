@@ -2286,12 +2286,14 @@ energy to 2.6e-9 Ry — the loop converges `|ddv_scf|^2` to 3.8e-15 in 18 linear
 iterations at `alpha_mix = 0.7` (QE takes 5 with Broyden; the fixed point is the claim,
 not the trajectory) and gives
 
-    epsilon_infinity = 13.806646105   against QE's   13.806375297
+    epsilon_infinity = 13.806646105   against ph.x's   13.806689470
 
-a difference of **2.7e-4**, two parts in 1e5. What is left is the same thing that puts a
-floor under the eigenvalue comparison (`tests/tolerances.py`): QE interpolates every
-radial form factor from a `dq = 0.01` table where this code integrates it directly. The
-tensor comes out **diagonal to 3.6e-15** with nothing imposing the crystal class.
+a difference of **4.3e-5**. What is left is the same thing that puts a floor under the
+eigenvalue comparison (`tests/tolerances.py`): QE interpolates every radial form factor
+from a `dq = 0.01` table where this code integrates it directly. The tensor comes out
+**diagonal to 3.6e-15** with nothing imposing the crystal class. (The reference is the
+*vendored* `ph.x`, regenerated: `ph_base`'s committed 13.806375297 is a release-6.0 number
+and has drifted — see P24a.)
 
 **The Born effective charges come from the same two solutions**, and the bare phonon
 perturbation is not transcribed either: `dV_bare/du |psi>`, which `dvqpsi_us.f90` builds
@@ -2300,8 +2302,8 @@ method the force differentiates, which already moves `vltot` and `vkb` traceably
 `zstar_eu.f90` pairs it with the self-consistent `dpsi/dE`. Silicon's `Z*` is zero by
 symmetry in a converged calculation, so the benchmark's **-0.07568** is a residue — 4
 against an electronic part near 4.076 — which makes it a sharper check than the dielectric
-constant. *Check met:* **-0.075715** on both atoms, against the five decimals `ph.x`
-prints, with the off-diagonal entries at 1e-17.
+constant. *Check met:* **-0.075715** on both atoms against the vendored `ph.x`'s
+**-0.07571** — every digit it prints — with the off-diagonal entries at 1e-17.
 
 **The trap of this phase is P6's, in a second place, and it is silent.** A response is
 direction-dependent, so a symmetry-reduced k-set needs its average put back
@@ -2335,18 +2337,75 @@ printed: `E = -15.830647095` Ry and `epsilon = 23.608844285` from both, with ani
 where silicon's gap is smallest and the response largest, and 4^3 points do not average it
 away. It is a property of the k-sample, not of the method.)
 
-**The three layers do not have the same pseudopotential coverage, and the split is worth
-stating plainly.** The *velocity operator* works on all three kinds — norm-conserving,
-ultrasoft and PAW — because everything ultrasoft adds to `H` and `S` is already a
-differentiable function of `k`. The *Sternheimer solve* and everything above it are
-**norm-conserving only**, because a response is not a state: `chi_0` needs the response of
-the augmentation charge as well as of `|psi|^2`, and that is machinery this phase does not
-have.
+### P24a — Ultrasoft and PAW linear response. ✅ DONE.
+
+**Almost none of what they add is transcribed**, because the density and the Hamiltonian
+are already written down once as differentiable functions of the things that move:
+
+| QE | here |
+|---|---|
+| `incdrhoscf` + `addusdbec` + `lr_addusddens` | one `jvp` of the density builder w.r.t. the *states* |
+| `newdq`'s `int3`, `adddvscf` | one `jvp` of `newd` w.r.t. the *potential* |
+| `PAW_dpotential` | one `jvp` of `onecenter` w.r.t. `becsum` |
+
+*Check met:* `epsilon_infinity` against the **vendored** `ph.x` — 13.806646 against
+13.806689 (norm-conserving Si, 4.3e-5), 14.325321 against 14.325270 (ultrasoft Si,
+5.2e-5), 14.320211 against 14.320177 (PAW Si, 3.4e-5) and 5.756059 against 5.756182
+(ultrasoft C, 1.2e-4). The carbon case is the independent one — different element, cutoffs
+and lattice constant — so agreeing on it is not agreeing twice on the same arithmetic. And
+`chi_0 dV` against a central difference of the density is 1e-6 relative on all three
+datasets.
+
+**The committed `ph_base` benchmarks are stale and were not used.** They date from release
+6.0: 13.806375297 against the vendored `ph.x`'s 13.806689470 on silicon, 5.756035041
+against 5.756181864 on carbon. This is the staleness `tests/conftest.py` already documents
+for `pw.x`, met for the first time in `PHonon`, and the regenerated outputs are committed
+as `tests/data/qe/reference.out.ph-*`. **The first version of this phase compared against
+the committed numbers and reported 2.7e-4** — six times worse than the truth, and in the
+direction that hides a real disagreement rather than inventing one.
+
+**Three things did have to be written down, and each was a trap.**
+
+- **`|psi|^2` is `Re(conj(psi) psi)`, not `abs(psi)**2`.** `abs`'s derivative is
+  `Re(conj z t)/|z|`, which is `0/0` wherever the field vanishes — and a wavefunction has
+  nodes *on grid points* by symmetry. It is `modulus`'s trap (P11a) in a second place, and
+  it is reachable only once the density is differentiated with respect to the **states**,
+  which nothing before this phase did.
+- **The projector derivative in `adddvepsi_us` is the one about the atom's own centre.**
+  `vkb` carries `e^{-i(k+G).tau}`, so the true `d(vkb)/dk` contains `-i tau vkb`;
+  `gen_us_dj` and `gen_us_dy` differentiate the radial and angular parts and leave the
+  structure factor alone. Everywhere else the distinction is invisible, because a projector
+  appears as `|beta_i> D_ij <beta_j|` and the two `tau` terms cancel between ket and bra —
+  which is why the velocity operator itself never had to care. Here a *single* projector
+  derivative meets a state, nothing cancels, and the term is worth **2%**: 14.620 against
+  14.325.
+- **`dbecsum` on a wedge is a polar vector.** `Calculation.becsum` ends with
+  `PAW_symmetrize`, and a *response* must not go through it: the three directions are
+  averaged together (`PAW_dusymmetrize`, here the magnetization branch of
+  `BecsumSymmetry.apply` with the **unsigned** rotation, exactly as
+  `symmetrize_vector_density` was to `symmetrize_magnetization`). Measured on PAW silicon:
+  **14.3045** scalar-symmetrised, **14.3177** not symmetrised at all, **14.3202**
+  vector-symmetrised, against `ph.x`'s **14.3202**.
+
+**`dpqq` *is* transcribed** (`compute_qdipol.f90`), and the reason is the same coordinate
+singularity: it is `i d/dq [int Q(r) e^{-i q.r} dr]` at `q = 0`, and that form factor is a
+radial function of `|q|` times a harmonic of `q/|q|`, which at the origin are `0` and
+`infinity`. Only `L = 1` survives the angular integral, so the closed form is one radial
+moment times the harmonic product the augmentation charge already uses. Checked against a
+direct real-space integral of `r Q(r)` on the dense grid: **1e-3**, which is that grid's own
+resolution of a sharply peaked charge.
+
+**Born effective charges stay norm-conserving, and are refused by name for the other two.**
+`zstar_eu.f90` is the whole story for a norm-conserving dataset; `zstar_eu_us.f90` adds
+five stages needing the ionic displacement's own density response (`iudrhous`), the pre-`S`
+position operator (`iucom`), `dvkb3`, `psidspsi` and `int1`/`int2`. Without them the
+norm-conserving expression is wrong **in sign as well as size** — `+0.1625` against `ph.x`'s
+`-0.07945` on ultrasoft silicon — while the dielectric constant from the *same* field
+response is right to 5e-5. Two quantities out of one solve, one complete and one not, is
+what a refusal is for.
 
 **Refused rather than approximated**, each by name and each because the missing piece is
-invisible in the answer: **ultrasoft and PAW** (the response density needs `dbecsum` and
-the augmentation charge's own response, `addusdbec`/`lr_addusddens`, and the perturbed
-`D_ij` needs `int3` from `newdq`); **metals** (`orthogonalize`'s smearing branch replaces
+invisible in the answer: **metals** (`orthogonalize`'s smearing branch replaces
 the sharp projector with occupation-difference weights, and the Fermi level itself shifts —
 `ef_shift`; the level's own derivative already exists, since P22 wrote `bisect_fermi`'s
 `custom_jvp`, so this is the projector's gap); **noncollinear magnetism and spin-orbit

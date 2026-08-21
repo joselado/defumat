@@ -387,19 +387,27 @@ def test_the_regimes_without_a_response_here_are_refused_by_name(case, expected)
 # Stage 3: the electric field -- epsilon_infinity and the Born charges.
 # ---------------------------------------------------------------------------
 
-#: What ``ph_base/si.phG.in``'s committed benchmark prints for this cell, in
-#: cartesian axes. The input is copied to ``si-epsilon.in`` so these tests run
-#: without the vendored tree; the numbers are the benchmark's.
-QE_EPSILON = 13.806375297
-QE_BORN = -0.07568
+#: What the **vendored** ``ph.x`` prints for each case, regenerated with
+#: ``epsil = .true.`` and committed as ``reference.out.ph-*``. The committed
+#: ``ph_base`` benchmarks are *not* used: they date from release 6.0 and have
+#: drifted -- 13.806375297 against 13.806689470 on silicon, 5.756035041 against
+#: 5.756181864 on carbon -- which is exactly what
+#: :func:`tests.conftest.reference_output` already documents for ``pw.x``.
+QE_DIELECTRIC = {
+    "si-epsilon": 13.806689470,
+    "si-epsilon-us": 14.325269631,
+    "si-epsilon-paw": 14.320176984,
+    "c-epsilon": 5.756181864,
+}
+QE_BORN = -0.07571
 QE_TOTAL_ENERGY = -15.84452726
 
-#: How far the dielectric constant may sit from QE's. The measured difference is
-#: 2.7e-4 -- two parts in 1e5 -- and what is left is the same thing that puts a
-#: floor under the eigenvalues (``tests/tolerances.py``): QE interpolates every
-#: radial form factor from a ``dq = 0.01`` table where this code integrates it
-#: directly.
-EPSILON_TOLERANCE = 1e-3
+#: How far the dielectric constant may sit from ``ph.x``'s. The measured
+#: differences are 4.3e-5, 5.2e-5, 3.4e-5 and 1.2e-4, and what is left is the
+#: same thing that puts a floor under the eigenvalues
+#: (``tests/tolerances.py``): QE interpolates every radial form factor from a
+#: ``dq = 0.01`` table where this code integrates it directly.
+EPSILON_TOLERANCE = 5e-4
 
 #: The Born charges are printed to five decimals, so this is the last digit.
 BORN_TOLERANCE = 1e-4
@@ -411,7 +419,7 @@ CUBIC_TOLERANCE = 1e-9
 
 @lru_cache(maxsize=None)
 def _dielectric(case: str):
-    """The electric-field response of one of the committed silicon inputs."""
+    """The electric-field response of one of the committed inputs."""
     from pypresso.response.efield import dielectric_tensor
     from pypresso.scf import Calculation
 
@@ -425,36 +433,51 @@ def _dielectric(case: str):
                      max_iterations=80)
     response = dielectric_tensor(
         calculation, result.wavefunctions, result.eigenvalues, result.density,
-        born_charges=(case == "si-epsilon"),
+        result.becsum,
+        # Born charges are norm-conserving only, and refused by name otherwise.
+        born_charges=not calculation.is_ultrasoft,
     )
     return result, response
 
 
-def test_the_dielectric_constant_matches_quantum_espresso():
-    """``epsilon_infinity`` of silicon against ``ph_base/si.phG.in``'s benchmark.
+@pytest.mark.parametrize("case", list(QE_DIELECTRIC))
+def test_the_dielectric_constant_matches_quantum_espresso(case):
+    """``epsilon_infinity`` against the vendored ``ph.x``, on all three datasets.
 
     Everything on this side comes from differentiating: the commutator that
-    makes ``P_c r|psi>`` computable is ``dH/dk`` from a ``jvp`` (stage 1), the
-    screening kernel ``dv_of_drho`` is a ``jvp`` of ``v_of_rho``, and the
-    exchange-correlation kernel QE tabulates in ``setup_dmuxc`` is the second
-    derivative of the energy this code writes down once. What is transcribed is
-    the linear solve, the projector and the assembly.
+    makes ``P_c r|psi>`` computable is ``dH/dk`` from a ``jvp``, the screening
+    kernel ``dv_of_drho`` is a ``jvp`` of ``v_of_rho``, the response density
+    (``incdrhoscf`` + ``addusdbec`` + ``lr_addusddens``) is a ``jvp`` of the
+    density builder, ``int3`` is a ``jvp`` of ``newd``, and ``PAW_dpotential`` is
+    a ``jvp`` of ``onecenter``. What is transcribed is the linear solve, the
+    projector, the augmentation dipole and the assembly.
+
+    The four cases add one thing each: **norm-conserving silicon** is the base;
+    **ultrasoft silicon** adds the augmentation charge to all of `drho`, `D_ij`
+    and the position operator; **PAW silicon** adds the one-centre terms on top;
+    and **ultrasoft carbon** is the independent check -- a different element, a
+    different cutoff pair and a different lattice constant, so agreeing on it is
+    not agreeing twice on the same arithmetic.
     """
-    result, response = _dielectric("si-epsilon")
-    assert result.total_energy == pytest.approx(QE_TOTAL_ENERGY, abs=1e-7)
+    result, response = _dielectric(case)
+    if case == "si-epsilon":
+        assert result.total_energy == pytest.approx(QE_TOTAL_ENERGY, abs=1e-7)
     assert response.converged
-    assert response.isotropic == pytest.approx(QE_EPSILON, abs=EPSILON_TOLERANCE)
+    assert response.isotropic == pytest.approx(
+        QE_DIELECTRIC[case], abs=EPSILON_TOLERANCE
+    )
 
 
-def test_the_dielectric_tensor_comes_out_cubic():
+@pytest.mark.parametrize("case", list(QE_DIELECTRIC))
+def test_the_dielectric_tensor_comes_out_cubic(case):
     """Nothing here imposes the crystal class, so this is a measurement.
 
-    ``symmetrize_directional`` and ``symmatrix`` average over the group, which
-    is not the same as projecting onto the cubic form: a wrong rotation
-    convention, a missing fractional translation or an axial sign where a polar
-    one belongs would all survive the average and show up here.
+    ``symmetrize_directional``, ``PAW_dusymmetrize`` and ``symmatrix`` average
+    over the group, which is not the same as projecting onto the cubic form: a
+    wrong rotation convention, a missing fractional translation, or an axial sign
+    where a polar one belongs would all survive the average and show up here.
     """
-    _, response = _dielectric("si-epsilon")
+    _, response = _dielectric(case)
     assert response.anisotropy < CUBIC_TOLERANCE
 
 
@@ -475,6 +498,32 @@ def test_the_born_charges_match_quantum_espresso():
         assert np.allclose(diagonal, QE_BORN, atol=BORN_TOLERANCE)
         off = charges[atom] - np.diag(diagonal)
         assert np.abs(off).max() < CUBIC_TOLERANCE
+
+
+def test_born_charges_are_refused_for_an_ultrasoft_dataset():
+    """The one thing the ultrasoft path does *not* do, refused rather than returned.
+
+    ``zstar_eu.f90`` is the whole story for a norm-conserving dataset;
+    ``zstar_eu_us.f90`` adds five stages for an ultrasoft one. Without them the
+    norm-conserving expression is wrong in sign as well as size -- **+0.1625**
+    against ``ph.x``'s **-0.07945** on this cell -- while the dielectric constant
+    from the *same* run is right to 5e-5. Two quantities out of one field
+    response, one of them complete and one not, is exactly the situation a
+    refusal is for.
+    """
+    from pypresso.response.efield import dielectric_tensor
+    from pypresso.scf import Calculation
+
+    system = build_system(read_pw_input(CASES / "si-epsilon-us.in"))
+    pseudo_dir = Path(__file__).resolve().parents[1] / "data" / "pseudo"
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    calculation = Calculation(system, pseudos)
+    with pytest.raises(NotImplementedError, match="zstar_eu_us"):
+        dielectric_tensor(
+            calculation, None, np.zeros((1, 1, 1)), None, born_charges=True
+        )
 
 
 @pytest.mark.slow

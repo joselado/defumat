@@ -193,6 +193,10 @@ def dielectric_tensor(
         eigenvalues = eigenvalues[None]
     _require_a_symmetrisable_response(calculation)
     require_a_sternheimer_regime(calculation)
+    if born_charges:
+        # Checked here rather than where they are computed: the refusal should
+        # not cost a whole self-consistent response first.
+        _require_born_charges(calculation)
 
     weights, _ = calculation.occupations(eigenvalues)
     nocc = int(round(calculation.nelec / 2))
@@ -301,10 +305,10 @@ def dielectric_tensor(
             break
 
     epsilon = _assemble(calculation, solver, bare, dpsi)
-    charges = None
-    if born_charges:
-        _require_born_charges(calculation)
-        charges = _born_charges(calculation, solver, potential.v_scf, dpsi)
+    charges = (
+        _born_charges(calculation, solver, potential.v_scf, dpsi)
+        if born_charges else None
+    )
     return DielectricTensor(
         epsilon=epsilon,
         born_charges=charges,

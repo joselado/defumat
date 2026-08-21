@@ -58,8 +58,8 @@ the SCF breaks spin symmetry on its own and an unseeded promotion converges stra
 the unpolarized solution.
 **Linear response by autodiff** (P24) is in: the velocity operator from one `jvp` of `H(k)`
 (rule D2 cashed in), the Sternheimer equation in place of a sum over states, and silicon's
-**dielectric constant and Born effective charges** against `ph.x` — `13.806646` against
-`13.806375` and `-0.075715` against `-0.07568` on QE's own `ph_base` benchmark, with the
+**dielectric constant** against `ph.x` on norm-conserving, ultrasoft *and* PAW datasets
+— agreeing to **≤1.2e-4** — with the
 screening kernel, the field's commutator and the bare phonon term all gradients of code that
 was already there.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
@@ -262,17 +262,25 @@ exists rather than expressions derived a second time. The **velocity operator** 
 table lookup. The **Sternheimer equation** `(H - eps_n S + alpha Q)|dpsi_n> = -P_c^+ dV|psi_n>`
 replaces the sum over states with a projected CG solve per occupied band: no empty states,
 and no division by `eps_n - eps_m`, which rule D4 forbids. And the **dielectric constant**
-and **Born effective charges** follow, matching `ph.x`'s `ph_base/si.phG.in` benchmark to
-2.7e-4 on `epsilon_infinity` (13.806646 against 13.806375) and to the five decimals it
-prints on `Z*` (-0.075715 against -0.07568).
+and **Born effective charges** follow, matching the **vendored** `ph.x` to 4.3e-5 on
+`epsilon_infinity` (13.806646 against 13.806689) and to every digit it prints on `Z*`
+(-0.075715 against -0.07571). The comparison is against a *regenerated* reference, not
+`ph_base`'s committed one, which dates from release 6.0 and has drifted to 13.806375 —
+the same staleness `tests/conftest.py` already documents for `pw.x`.
 
-**The three layers do not share a pseudopotential coverage.** The velocity operator works
-on norm-conserving, ultrasoft *and* PAW datasets — everything ultrasoft adds to `H` and `S`
-is already a differentiable function of `k` — with the one condition that PAW's `ddd_paw`
-is handed in, since it is built from `becsum` and multiplies `vkb(k)`, and a PAW
-calculation without it is refused rather than run 2% wrong. Everything from the Sternheimer
-solve upwards, including the dielectric constant, is **norm-conserving only**: a response
-needs the augmentation charge's *own* response, which is a layer this phase does not have.
+**Ultrasoft and PAW are in scope here too, and almost none of what they add is
+transcribed.** `incdrhoscf` + `addusdbec` + `lr_addusddens` is one `jvp` of the density
+builder with respect to the *states*; `newdq`'s `int3` is one `jvp` of `newd` with respect
+to the potential; `PAW_dpotential` is one `jvp` of `onecenter` with respect to `becsum`.
+The dielectric constant matches the vendored `ph.x` to **≤1.2e-4** on norm-conserving,
+ultrasoft and PAW silicon and on ultrasoft carbon. Three things did have to be written and
+each is a trap: `|psi|^2` must be `Re(conj(psi) psi)` and not `abs(psi)**2`, whose
+derivative is `0/0` at a node; the projector derivative in `adddvepsi_us` is the one about
+the atom's own centre, since `gen_us_dj`/`gen_us_dy` leave the structure factor alone and
+the `tau` term is worth 2%; and `dbecsum` on a wedge is a **polar vector**
+(`PAW_dusymmetrize`), worth 1.6e-2 on PAW. **Born effective charges stay norm-conserving**
+— `zstar_eu_us.f90` is five further stages — and are refused by name for the other two,
+because without them the expression is wrong in sign as well as size.
 
 **The trap is that a response is direction-dependent and must be symmetrised as a polar
 vector**, and the escape from that does not work where it looks like it should: running the
