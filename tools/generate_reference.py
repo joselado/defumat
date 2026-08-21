@@ -10,6 +10,12 @@ which is what `CLAUDE.md` asks for, so that the Fortran build is needed to
     python3 tools/generate_reference.py                 # everything missing
     python3 tools/generate_reference.py --force si2-us  # regenerate one case
 
+The projected density of states is the second case of the same thing and a
+sharper one: QE's test-suite has no ``projwfc`` case at all, so *every* reference
+for it is generated here (see ``PROJWFC`` below). Those need ``projwfc.x``, which
+is not part of a ``make pw`` build -- ``make pp`` inside the vendored tree builds
+it, and without it the pdos cases are skipped rather than failed.
+
 It also re-runs a short list of inputs that *do* have a committed benchmark, for
 a narrower reason: those benchmarks were produced with QE 6.0 (the suite records
 ``REFERENCE_VERSION 6.0``) and QE has since changed the FFT grid it chooses for a
@@ -195,6 +201,134 @@ def _invoke(case: Path, tmp: str, conv_thr: float | None) -> str:
     return result.stdout
 
 
+
+# --------------------------------------------------------------------------
+# projwfc.x
+# --------------------------------------------------------------------------
+#
+# The projected density of states is the one place where QE's test-suite has
+# nothing at all: there is no ``pp_projwfc`` case and no committed ``filpdos``
+# file anywhere in the tree. So its references are generated here, exactly as
+# the ultrasoft and PAW ones are, and stored beside the inputs -- the Fortran
+# build is needed to *create* them and never to use them.
+#
+# Each case is a ``pw.x`` run followed by a ``projwfc.x`` run **in the same
+# outdir**, because that is how the tool works: it reads the wavefunctions the
+# SCF left behind rather than solving anything. What is stored is the standard
+# output (the state table, the per-band projections, the Löwdin charges and the
+# spilling parameter) and every ``filpdos`` file it wrote.
+
+#: ``DeltaE`` in eV, ``projwfc.x``'s own units for it. 0.05 rather than its
+#: default 0.01 keeps the committed files to a few hundred lines apiece; with no
+#: ``degauss`` given, the default broadening *is* ``DeltaE``, so this also sets
+#: the width the comparison runs at.
+PROJWFC_DELTA_E = 0.05
+
+#: ``<stem> -> input``: a path relative to ``test-suite/``, or a bare stem for
+#: one of the dedicated inputs in ``tests/data/qe``. Between them they cover
+#: every path through the projection -- norm-conserving with fixed occupations,
+#: ultrasoft and PAW (where ``S`` is not the identity and even the "atomic"
+#: projectors are ``S phi``), two spin channels with a smearing, and both
+#: tetrahedron families: the optimised one, which the projection uses as it
+#: stands, and Bloechl's, which ``do_projwfc`` silently replaces by the linear
+#: method.
+PROJWFC = {
+    "pw_scf-scf": "pw_scf/scf.in",
+    "si2-us": "si2-us",
+    "si2-us-dense": "si2-us-dense",
+    "si2-paw": "si2-paw",
+    "pw_lsda-lsda": "pw_lsda/lsda.in",
+    "pw_metal-metal-tetrahedra": "pw_metal/metal-tetrahedra.in",
+    "al-tetrahedra": "al-tetrahedra",
+}
+
+#: Cases that ask ``projwfc.x`` for a broadening of their own, in **Ry** --
+#: which is the unit its ``degauss`` is in, unlike its ``DeltaE``. Without one
+#: the default is ``DeltaE`` itself, which on a 29-point wedge resolves every
+#: eigenvalue into its own spike; 0.0147 Ry is 0.2 eV, which is what a density
+#: of states is usually plotted with. Notebook 15 is the consumer.
+PROJWFC_DEGAUSS = {"si2-us-dense": 0.0147}
+
+PROJWFC_X = Path(os.environ.get("PROJWFC_X", QE_ROOT / "bin" / "projwfc.x"))
+
+
+def projwfc_reference(stem: str) -> Path:
+    """Where one case's ``projwfc.x`` standard output is stored."""
+    return CASES / f"reference.projwfc.{stem}"
+
+
+def projwfc_case(source: str) -> Path:
+    """The ``pw.x`` input a projwfc case runs first."""
+    if "/" in source:
+        return QE_ROOT / "test-suite" / source
+    return CASES / f"{source}.in"
+
+
+def run_projwfc(case: Path, conv_thr: float | None, degauss: float | None = None) -> tuple[str, dict]:
+    """``pw.x`` then ``projwfc.x`` in one directory; stdout and the pdos files."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _invoke(case, tmp, conv_thr)
+        namelist = Path(tmp) / "projwfc.in"
+        namelist.write_text(
+            "&projwfc\n"
+            f"    outdir = '{tmp}'\n"
+            "    prefix = 'pwscf'\n"
+            "    filpdos = 'pdos'\n"
+            f"    DeltaE = {PROJWFC_DELTA_E}\n"
+            + (f"    degauss = {degauss}\n" if degauss else "")
+            + "/\n"
+        )
+        result = subprocess.run(
+            [str(PROJWFC_X)],
+            stdin=namelist.open(),
+            capture_output=True,
+            text=True,
+            cwd=tmp,
+            env={**os.environ, "OMP_NUM_THREADS": "1"},
+            timeout=3600,
+        )
+        if "JOB DONE" not in result.stdout:
+            raise RuntimeError(
+                f"{case.name}: projwfc.x did not finish\n{result.stdout[-2000:]}"
+            )
+        files = {
+            path.name: path.read_text()
+            for path in sorted(Path(tmp).glob("pdos.pdos_*"))
+        }
+        return result.stdout, files
+
+
+def generate_projwfc(wanted: set, force: bool) -> None:
+    """Run every projwfc case whose reference is missing."""
+    if not PROJWFC_X.is_file():
+        print(f"  projwfc.x not found at {PROJWFC_X}; skipping the pdos cases"
+              " (build it with 'make pp' inside the vendored tree)")
+        return
+    for stem, source in PROJWFC.items():
+        if wanted and stem not in wanted:
+            continue
+        case = projwfc_case(source)
+        out = projwfc_reference(stem)
+        if not case.is_file():
+            print(f"  {stem}: input not present (QE tree absent?), skipped")
+            continue
+        if out.is_file() and not force:
+            print(f"  {stem}: already generated")
+            continue
+        print(f"  {stem}: running pw.x + projwfc.x ...", flush=True)
+        stdout, files = run_projwfc(
+            case, RESTAMPED_CONV_THR, PROJWFC_DEGAUSS.get(stem)
+        )
+        out.write_text(stdout)
+        for name, text in files.items():
+            # ``pdos.pdos_atm#1(Si)_wfc#1(s)`` keeps its own name behind the
+            # reference prefix, so what each file holds stays readable.
+            (CASES / f"reference.{stem}.{name[len('pdos.'):]}").write_text(text)
+        spilling = re.search(r"Spilling Parameter:\s*(\S+)", stdout)
+        print(f"  {stem}: spilling {spilling.group(1) if spilling else '?'}"
+              f" -> {out.name} + {len(files)} pdos files")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("cases", nargs="*", help="case stems, e.g. si2-us (default: all)")
@@ -207,7 +341,8 @@ def main(argv=None) -> int:
 
     wanted = set(args.cases)
     inputs = sorted(c for c in CASES.glob("*.in") if not wanted or c.stem in wanted)
-    known = {c.stem for c in inputs} | {Path(rel).stem for rel in RESTAMPED}
+    known = ({c.stem for c in inputs} | {Path(rel).stem for rel in RESTAMPED}
+             | set(PROJWFC))
     if wanted - known:
         print(f"no such case: {', '.join(sorted(wanted - known))}", file=sys.stderr)
         return 1
@@ -230,6 +365,8 @@ def main(argv=None) -> int:
         out.write_text(run_case(case, conv_thr))
         energy = re.search(r"^!\s+total energy\s+=\s+(\S+)", out.read_text(), re.M)
         print(f"  {case.stem}: total energy {energy.group(1) if energy else '?'} Ry -> {out.name}")
+
+    generate_projwfc(wanted, args.force)
     return 0
 
 

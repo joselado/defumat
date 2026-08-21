@@ -55,8 +55,13 @@ package offers — forming `H` costs `O(npw^2)` memory, so a dense solve is a te
 (`tests/exact_reference.py`), never a `diagonalization` a run can select. P6 is complete too: automatic k-grids are reduced to the
 irreducible wedge. P10's first pass puts pypresso within **2–4x of serial Quantum ESPRESSO
 per SCF iteration** on the same machine, ultrasoft and PAW included — see
-`PERFORMANCE.md`. **Outstanding:** the projected DOS (`projwfc.x`), Wyckoff input, the stress (and with it
-`vc-relax`), and the rest of P10 (k-axis sharding and GPU).
+`PERFORMANCE.md`. **The projected density of states** (`projwfc.x`) is in as well, completing P8:
+`<phi|S|psi>` on Löwdin-orthogonalised pseudo-atomic orbitals, resolved by atom, `l` and
+`m`, feeding the *same* DOS registry as a per-band weight, with Löwdin charges and the
+spilling parameter — matching a `projwfc.x` built for the purpose on seven cases, to the
+resolution of everything it prints (6.9e-4 on a projection, 4.7e-5 on a charge).
+**Outstanding:** Wyckoff input, the stress (and with it `vc-relax`), and the rest of P10
+(k-axis sharding and GPU).
 
 ## Layout
 
@@ -385,7 +390,8 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | DFT+U | `PW/src/ldaU.f90`, `hubbard.f90`, `new_ns.f90`, `init_ns.f90`, `ns_adj.f90`, `orthoUwfc.f90`, `offset_atom_wfc.f90`, `vhpsi.f90`, `v_of_rho.f90` (`v_hubbard`), `scf_mod.f90` (`ns_ddot`), `force_hub.f90` | the projectors are `S phi` even for `Hubbard_projectors = 'atomic'`; `ortho-atomic` orthogonalises over **all** `natomwfc`, not the Hubbard manifold alone, so `Modules/read_pseudo.f90`'s `upf_check_atwfc_norm` renormalisation of `chi` reaches the answer through the `4s`. `force_hub.f90` is *not* transcribed: it is `jax.grad` through `Calculation.at_positions` |
 | Occupations / smearing | `PW/src/gweights.f90`, `Modules/wgauss.f90`, `Modules/w0gauss.f90`, `PW/src/set_occupations.f90` | |
 | NSCF / band structure | `PW/src/non_scf.f90`, `PP/src/bands.f90`, `PP/src/plotband.f90` | fixed density, diagonalize once per k on an explicit path |
-| DOS | `PW/src/tetra.f90`, `PP/src/dos.f90`, `PP/src/projwfc.f90` | `tetra.f90` has both the linear and the Bloechl-corrected tetrahedron method; `projwfc.f90` is PDOS, later |
+| DOS | `PW/src/tetra.f90`, `PP/src/dos.f90` | `tetra.f90` has both the linear and the Bloechl-corrected tetrahedron method |
+| Projected DOS | `PP/src/projwfc.f90` (`projwave`, `sym_proj_k`, `print_lowdin`), `PP/src/projections_mod.f90` (`fill_nlmchi`), `PP/src/partialdos.f90`, `PW/src/tetra.f90` (`opt_tetra_partialdos`) | the projectors are `orthoUwfc`'s, so `hubbard/projectors.py` builds them for both; the weighted integration goes through the *same* DOS registry, and `do_projwfc` silently runs the **linear** tetrahedron method whatever the SCF used |
 
 Fortran conventions that carry over: arrays are column-major and 1-indexed, so index order
 must be reversed when transcribing loops; internal units are Rydberg atomic units (energy

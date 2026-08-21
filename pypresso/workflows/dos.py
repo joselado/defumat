@@ -42,10 +42,12 @@ from pypresso.pseudo.upf import Pseudopotential
 from pypresso.scf.occupations import SMEARING_ORDER, w0gauss, wgauss
 from pypresso.scf.tetrahedra import (
     ENERGY_CHUNK,
+    PROJECTED_ENERGY_CHUNK,
     TETRAHEDRON_KINDS,
     Tetrahedra,
     tetrahedra_for,
     tetrahedron_dos,
+    tetrahedron_projected_dos,
 )
 from pypresso.system.builder import System
 from pypresso.system.kpoints import KPoints
@@ -54,6 +56,8 @@ from pypresso.workflows.nscf import denser_grid, run_nscf
 
 __all__ = [
     "DensityOfStates",
+    "default_scheme",
+    "is_tetrahedron_scheme",
     "DOS_SCHEMES",
     "get_dos_scheme",
     "energy_grid",
@@ -146,12 +150,24 @@ def _smearing_scheme(ngauss: int):
     orders of magnitude smaller than the tetrahedron one, so it is not chunked.
     """
 
-    def scheme(eigenvalues, weights, energies, *, degauss=None, **_):
+    def scheme(eigenvalues, weights, energies, *, degauss=None, projections=None, **_):
         if not degauss:
             raise ValueError("a smearing density of states needs a positive degauss")
         x = (energies[:, None, None] - eigenvalues[None, :, :]) / degauss
-        dos = jnp.einsum("k,ekb->e", weights, w0gauss(x, ngauss)) / degauss
-        integrated = jnp.einsum("k,ekb->e", weights, wgauss(x, ngauss))
+        if projections is None:
+            dos = jnp.einsum("k,ekb->e", weights, w0gauss(x, ngauss)) / degauss
+            integrated = jnp.einsum("k,ekb->e", weights, wgauss(x, ngauss))
+            return dos, integrated
+        # ``partialdos``: the same delta, weighted by how much of each band sits
+        # in each channel. QE truncates the Gaussian at 5 ``degauss`` to keep the
+        # loop short; the whole grid is evaluated here, which is the same number
+        # to the accuracy the tail is worth and one branch fewer.
+        dos = jnp.einsum(
+            "k,ekb,kbp->ep", weights, w0gauss(x, ngauss), projections
+        ) / degauss
+        integrated = jnp.einsum(
+            "k,ekb,kbp->ep", weights, wgauss(x, ngauss), projections
+        )
         return dos, integrated
 
     scheme.__name__ = f"smearing_dos_ngauss_{ngauss}"
@@ -159,7 +175,14 @@ def _smearing_scheme(ngauss: int):
 
 
 def _tetrahedron_scheme(
-    eigenvalues, weights, energies, *, tetrahedra=None, chunk=ENERGY_CHUNK, **_
+    eigenvalues,
+    weights,
+    energies,
+    *,
+    tetrahedra=None,
+    chunk=ENERGY_CHUNK,
+    projections=None,
+    **_,
 ):
     """``tetra_dos_t`` / ``opt_tetra_dos_t``, via :mod:`pypresso.scf.tetrahedra`."""
     if tetrahedra is None:
@@ -167,13 +190,25 @@ def _tetrahedron_scheme(
             "a tetrahedron density of states needs the tetrahedra of the k-grid; "
             "pass tetrahedra=... or use run_dos, which builds them"
         )
-    return tetrahedron_dos(tetrahedra, eigenvalues, weights, energies, chunk=chunk)
+    if projections is None:
+        return tetrahedron_dos(tetrahedra, eigenvalues, weights, energies, chunk=chunk)
+    return tetrahedron_projected_dos(
+        tetrahedra, eigenvalues, weights, projections, energies,
+        chunk=min(chunk, PROJECTED_ENERGY_CHUNK),
+    )
 
 
 #: Scheme name -> implementation. Every entry has the signature
 #: ``scheme(eigenvalues, weights, energies, **options) -> (dos, integrated)``
 #: with ``eigenvalues`` ``(nk, nbnd)`` and everything in Rydberg atomic units.
 #: Adding a scheme is a registration, not a branch in the workflow (rule R4).
+#:
+#: Every entry also takes ``projections``, ``(nk, nbnd, nproj)``: a weight per
+#: band per k-point, which turns the same integration into a *projected* density
+#: of states with a trailing ``nproj`` axis on both returned arrays
+#: (:mod:`pypresso.projwfc`). It is one implementation per family and not two,
+#: which is what keeps ``sum_p pdos_p == dos`` exact for a complete set of
+#: channels rather than approximately true.
 DOS_SCHEMES = {name: _smearing_scheme(ngauss) for name, ngauss in SMEARING_ORDER.items()}
 DOS_SCHEMES.update({name: _tetrahedron_scheme for name in TETRAHEDRON_KINDS})
 #: ``dos.x`` spells the smearing family this way in its ``bz_sum`` variable.
@@ -292,6 +327,29 @@ def compute_dos(
     )
 
 
+
+def default_scheme(
+    system: System,
+    scheme: str | None,
+    degauss: float | None,
+    delta_e: float = DEFAULT_DELTA_E,
+) -> tuple[str, float | None]:
+    """Which integration scheme a run's own settings ask for, and how wide.
+
+    ``do_projwfc`` and ``dos.f90`` agree on this ladder and it is written once
+    here: the tetrahedron variant the SCF used if it used one, otherwise its
+    smearing at its own ``degauss``, otherwise -- a run with fixed occupations
+    carries no broadening at all -- a Gaussian one energy step wide.
+    """
+    if scheme is not None:
+        return scheme, degauss
+    if is_tetrahedron_scheme(system.occupations):
+        return system.occupations, degauss
+    if system.occupations == "smearing" and system.degauss > 0.0:
+        return system.smearing, degauss or system.degauss
+    return "gaussian", degauss or delta_e
+
+
 def run_dos(
     system: System,
     pseudos: tuple[Pseudopotential, ...],
@@ -325,14 +383,7 @@ def run_dos(
 
     nscf = run_nscf(system, pseudos, density, kpoints, nbnd, conv_thr, k_batch)
 
-    if scheme is None:
-        if is_tetrahedron_scheme(system.occupations):
-            scheme = system.occupations
-        elif system.occupations == "smearing" and system.degauss > 0.0:
-            scheme, degauss = system.smearing, degauss or system.degauss
-        else:
-            # dos.f90's last resort when the run carried no broadening at all.
-            scheme, degauss = "gaussian", degauss or delta_e
+    scheme, degauss = default_scheme(system, scheme, degauss, delta_e)
 
     tetrahedra = None
     if is_tetrahedron_scheme(scheme):

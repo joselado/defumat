@@ -59,6 +59,8 @@ __all__ = [
     "tetrahedron_weights_at",
     "tetrahedron_fermi_level",
     "tetrahedron_dos",
+    "tetrahedron_projected_dos",
+    "PROJECTED_ENERGY_CHUNK",
     "integrated_states",
 ]
 
@@ -777,3 +779,79 @@ def tetrahedron_dos(
     )
     integrated, dos = jax.lax.map(jax.vmap(at), padded.reshape(-1, chunk))
     return dos.reshape(-1)[:n], integrated.reshape(-1)[:n]
+
+
+#: The projected version carries a ``(chunk, ntetra, nbnd, 4)`` intermediate --
+#: four times :func:`tetrahedron_dos`'s, because the corner weights are kept
+#: separately instead of being summed into one fraction. The chunk is smaller by
+#: the same factor so the working set is not.
+PROJECTED_ENERGY_CHUNK = 8
+
+
+def tetrahedron_projected_dos(
+    tetra: Tetrahedra,
+    eigenvalues: jnp.ndarray,
+    weights: jnp.ndarray,
+    projections: jnp.ndarray,
+    energies: jnp.ndarray,
+    chunk: int = PROJECTED_ENERGY_CHUNK,
+):
+    """``(pdos, integrated)``, both ``(nE, nproj)``, in states/Ry and states.
+
+    ``opt_tetra_partialdos``. ``projections[k, b, p]`` is the weight band ``b``
+    at k-point ``k`` carries in channel ``p`` -- ``|<phi_p|S|psi_kb>|^2`` for a
+    projected density of states, but nothing here knows that.
+
+    Only the *integral* is written down, as everywhere else in this module:
+
+        N_p(E) = sum_kb w_kb(E) proj[k, b, p]
+
+    with ``w_kb(E)`` the occupation weights :func:`tetrahedron_weights_at` would
+    give for a Fermi level at ``E``, and ``D_p(E)`` is its derivative. With
+    ``proj = 1`` that is ``integrated_states`` identically, so summing the
+    projected density of states over a *complete* set of channels reproduces the
+    total one to round-off rather than approximately -- which is the sum rule,
+    and it is a property of this construction rather than a coincidence to test.
+
+    Two departures from :func:`tetrahedron_weights_at`, both QE's:
+
+    * **the degenerate-band average is not applied.** ``opt_tetra_partialdos``
+      has no counterpart of ``opt_tetra_weights_only``'s averaging loop, and
+      applying it here would move weight between two crossing bands that carry
+      *different* projections, which is a change to the answer rather than a
+      symmetrisation of it.
+    * **Bloechl's correction is refused.** ``do_projwfc`` silently promotes
+      ``tetra_type = 0`` to 1, i.e. runs the linear method for the projected
+      density of states whatever the SCF used, and the two families do not even
+      cut a microcell into the same tetrahedra -- so the substitution has to
+      happen where the tetrahedra are *built*, not here.
+    """
+    if tetra.kind == "bloechl":
+        raise ValueError(
+            "a projected density of states cannot use Bloechl's corrected "
+            "weights: their curvature term is not the derivative of an "
+            "occupation, and do_projwfc substitutes the linear method for it "
+            "(tetra_type 0 -> 1). Build the tetrahedra with kind='linear'"
+        )
+    energies = jnp.asarray(energies)
+    projections = jnp.asarray(projections)
+    nk, nbnd = eigenvalues.shape
+    e_sorted, order = _sorted_corners(tetra, eigenvalues)
+    scale = jnp.sum(weights) / tetra.ntetra
+
+    def projected(energy):
+        contributions = _linear_weights(e_sorted, energy)
+        wg = _scatter(tetra, order, contributions, nk, nbnd) * scale
+        return jnp.einsum("kb,kbp->p", wg, projections)
+
+    def at(energy):
+        return jax.jvp(projected, (energy,), (jnp.ones_like(energy),))
+
+    n = energies.shape[0]
+    chunk = max(1, min(int(chunk), n))
+    padded = jnp.concatenate(
+        [energies, jnp.full((-n) % chunk, energies[-1], energies.dtype)]
+    )
+    integrated, dos = jax.lax.map(jax.vmap(at), padded.reshape(-1, chunk))
+    nproj = projections.shape[-1]
+    return dos.reshape(-1, nproj)[:n], integrated.reshape(-1, nproj)[:n]

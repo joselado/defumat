@@ -34,6 +34,7 @@ point where there is not.
 | **Total energies**, self-consistently, broken down term by term — insulators and metals alike | `calculation = 'scf'` | `pw.x` |
 | **Band structures** along a path through the Brillouin zone | `run_bands` | `pw.x` + `bands.x` |
 | **Densities of states**, by smearing or by tetrahedra | `run_dos`, `pypresso dos` | `pw.x` + `dos.x` |
+| **Projected densities of states** — resolved by atom, by `l` and by `m`, with Löwdin charges and the spilling parameter | `run_pdos`, `pypresso pdos` | `pw.x` + `projwfc.x` |
 | **Forces on the atoms** | `compute_forces` | `pw.x` — but by differentiating the energy, with QE's hand-derived terms kept beside them as a cross-check |
 | **Structural relaxation** — BFGS with QE's trust radius and line search | `calculation = 'relax'`, `pypresso relax` | `pw.x` |
 | **Magnetism**, collinear, with one Fermi level or two | `nspin = 2`, `tot_magnetization` | `pw.x` |
@@ -54,8 +55,7 @@ occupations, which projectors DFT+U uses, which of the four constraint
 schemes — are chosen with the same input variables as in `pw.x`, and
 `PLAN.md` lists them phase by phase.
 
-Not yet: the stress (and so variable-cell relaxation), the projected density of
-states, and phonons. `K_POINTS gamma` runs, but at an explicit k = 0 with the
+Not yet: the stress (and so variable-cell relaxation) and phonons. `K_POINTS gamma` runs, but at an explicit k = 0 with the
 full G sphere — the half-sphere storage the gamma-point trick exists for is
 generated and not consumed, so the answer is the same and the cost is twice the
 plane waves, and the run says so. A functional or a combination that is not

@@ -4,7 +4,22 @@ parser for QE reference outputs used throughout the test suite.
 This is the only layer allowed to speak in units other than Rydberg atomic units.
 """
 
-from pypresso.io.output import format_dos, write_dos
-from pypresso.io.qeref import QEReference, read_qe_output
+from pypresso.io.output import format_dos, write_dos, write_pdos
+from pypresso.io.qeref import (
+    ProjwfcReference,
+    QEReference,
+    read_pdos_file,
+    read_projwfc_output,
+    read_qe_output,
+)
 
-__all__ = ["QEReference", "format_dos", "read_qe_output", "write_dos"]
+__all__ = [
+    "ProjwfcReference",
+    "QEReference",
+    "format_dos",
+    "read_pdos_file",
+    "read_projwfc_output",
+    "read_qe_output",
+    "write_dos",
+    "write_pdos",
+]

@@ -46,6 +46,23 @@ STRESS_RY_BOHR3 = 1e-4
 #: Densities of states, in states/eV.
 DOS_STATES_EV = 1e-3
 
+#: Projections ``|<phi|S|psi>|^2`` against ``projwfc.x``. Not a statement about
+#: the agreement but about what can be seen of it: ``print_proj`` rounds to three
+#: decimals and drops anything below 0.001, so half of its last digit is the
+#: whole of the information in that listing. Achieved: 6.9e-4 over seven cases.
+PROJECTION = 1e-3
+
+#: Löwdin charges and the spilling parameter, in electrons. ``print_lowdin``
+#: prints ``f8.4``; achieved 4.7e-5.
+LOWDIN_CHARGE = 1e-3
+
+#: A projected density of states against a ``filpdos`` column, **relative to the
+#: peak of that column**. Absolute is the wrong measure twice over: the file is
+#: written in ``e11.3``, three significant digits, and the curves are deltas
+#: centred on eigenvalues the two codes agree on to 2e-4 eV, which a 0.05 eV
+#: Gaussian turns into 0.1 states/eV of slope. Achieved: 0.8% of the peak.
+PDOS_RELATIVE = 2e-2
+
 #: Total and absolute magnetization, in Bohr magnetons per cell. pw.x prints
 #: both with two decimals, so half of the last printed digit is all the
 #: comparison can ask for; where the magnetization is fixed by the occupations

@@ -19,3 +19,6 @@ performance/performance.json
 performance/*.aux
 performance/*.log
 performance/*.out
+
+# Claude Code agent worktrees
+.claude/worktrees/

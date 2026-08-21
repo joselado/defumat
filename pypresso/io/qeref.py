@@ -24,7 +24,13 @@ import numpy as np
 
 from pypresso.units import ANGSTROM_TO_BOHR
 
-__all__ = ["QEReference", "read_qe_output"]
+__all__ = [
+    "QEReference",
+    "ProjwfcReference",
+    "read_qe_output",
+    "read_projwfc_output",
+    "read_pdos_file",
+]
 
 _FLOAT = r"[-+]?\d*\.?\d+(?:[EeDd][-+]?\d+)?"
 
@@ -589,3 +595,175 @@ def _parse_stress(text: str) -> tuple[np.ndarray | None, float | None]:
         return None, None
     rows = [_floats(line)[:3] for line in m.group(2).strip().splitlines()]
     return np.array(rows, dtype=float), float(m.group(1))
+
+
+# --------------------------------------------------------------------------
+# projwfc.x
+# --------------------------------------------------------------------------
+#
+# ``projwfc.x`` is a separate program with its own stdout and its own output
+# files, so it gets its own reader rather than fields on :class:`QEReference`.
+# Two things are read: the standard output, which carries the state table, the
+# per-band projections and the Löwdin charges, and the ``filpdos`` files, which
+# carry the projected density of states itself, in states/eV against eV.
+
+
+@dataclass(frozen=True)
+class ProjwfcReference:
+    """What one ``projwfc.x`` run printed.
+
+    ``projections`` is ``(nk, nbnd, nstate)`` and is **sparse by construction**:
+    ``print_proj`` writes only the projections above 0.001 and rounds them to
+    three decimals, so an entry that is zero here may be anything below that.
+    That is a limit on what can be compared, not a defect -- the array is
+    exactly what QE let out, and 1e-3 is the tolerance it deserves.
+
+    ``charges`` is ``{atom (1-based): {"total": q, "s": q, "pz": q, ...}}``,
+    with ``"up"``, ``"down"`` and ``"polarization"`` sub-dictionaries of the
+    same shape when the run was spin-polarized.
+    """
+
+    path: Path
+    states: tuple[dict, ...] = ()
+    kpoints: np.ndarray | None = None  # (nk, 3), 2pi/alat, spin blocks stacked
+    eigenvalues: np.ndarray | None = None  # (nk, nbnd), eV
+    projections: np.ndarray | None = None  # (nk, nbnd, nstate)
+    psi2: np.ndarray | None = None  # (nk, nbnd): QE's printed |psi|^2
+    charges: dict = field(default_factory=dict)
+    spilling: float | None = None
+    degauss: float | None = None  # Ry
+    ngauss: int | None = None
+    natomwfc: int | None = None
+    nbnd: int | None = None
+
+    @classmethod
+    def from_file(cls, path: str | Path) -> "ProjwfcReference":
+        return read_projwfc_output(path)
+
+
+def read_projwfc_output(path: str | Path) -> ProjwfcReference:
+    """Parse ``projwfc.x``'s standard output."""
+    path = Path(path)
+    text = path.read_text(errors="replace")
+
+    states = tuple(
+        {
+            "index": int(index),
+            "atom": int(atom),
+            "species": species.strip(),
+            "wfc": int(wfc),
+            "l": int(l),
+            "m": int(m),
+        }
+        for index, atom, species, wfc, l, m in re.findall(
+            r"state #\s*(\d+):\s*atom\s*(\d+)\s*\((\S+)\s*\),\s*wfc\s*(\d+)\s*"
+            r"\(l=(\d+)\s*m=\s*(-?\d+)\)",
+            text,
+        )
+    )
+    broadening = re.search(r"ngauss,degauss=\s*(-?\d+)\s*(" + _FLOAT + ")", text)
+    kpoints, eigenvalues, projections, psi2 = _parse_projections(text, len(states))
+
+    return ProjwfcReference(
+        path=path,
+        states=states,
+        kpoints=kpoints,
+        eigenvalues=eigenvalues,
+        projections=projections,
+        psi2=psi2,
+        charges=_parse_lowdin(text),
+        spilling=_scalar(text, r"Spilling Parameter:\s*(" + _FLOAT + ")"),
+        degauss=None if broadening is None else float(broadening.group(2)),
+        ngauss=None if broadening is None else int(broadening.group(1)),
+        natomwfc=_as_int(_scalar(text, r"natomwfc\s*=\s*(" + _FLOAT + ")")),
+        nbnd=_as_int(_scalar(text, r"nbnd\s*=\s*(" + _FLOAT + ")")),
+    )
+
+
+def _parse_projections(text: str, nstate: int):
+    """``print_proj``'s per-k, per-band block."""
+    blocks = re.split(r"\n k =", text)[1:]
+    if not blocks or nstate == 0:
+        return None, None, None, None
+
+    kpoints, energies, weights, norms = [], [], [], []
+    for block in blocks:
+        block = block.split("Lowdin Charges")[0]
+        head, *bands = re.split(r"====\s*e\(", block)
+        kpoints.append(_floats(head.splitlines()[0])[:3])
+        energies.append([])
+        weights.append([])
+        norms.append([])
+        for band in bands:
+            energies[-1].append(_floats(band.split("=")[1])[0])
+            row = np.zeros(nstate)
+            for value, index in re.findall(r"(" + _FLOAT + r")\*\[#\s*(\d+)\]", band):
+                row[int(index) - 1] = float(value)
+            weights[-1].append(row)
+            norm = re.search(r"\|psi\|\^2\s*=\s*(" + _FLOAT + ")", band)
+            norms[-1].append(float(norm.group(1)) if norm else np.nan)
+
+    return np.array(kpoints), np.array(energies), np.array(weights), np.array(norms)
+
+
+#: A ``label = value`` pair inside a Löwdin charge line: ``s =  1.1008`` or
+#: ``pz=  0.9555``. Anchored on the spectroscopic letter so that the ``down`` of
+#: "spin down" and the ``polarization`` of the last line cannot be mistaken for
+#: an ``l`` -- both start with one, which is why the header is stripped first.
+_LOWDIN_PAIR = re.compile(r"\b([spdf][a-z0-9+\-]*)\s*=\s*(" + _FLOAT + ")")
+
+
+def _parse_lowdin(text: str) -> dict:
+    """``print_lowdin``'s block, as ``{atom: {label: charge}}``."""
+    block = text.split("Lowdin Charges:")
+    if len(block) < 2:
+        return {}
+    charges: dict = {}
+    atom = None
+    for line in block[1].splitlines():
+        if "Spilling Parameter" in line:
+            break
+        header = re.match(
+            r"\s*Atom #\s*(\d+):\s*total charge\s*=\s*(" + _FLOAT + ")", line
+        )
+        if header:
+            atom = int(header.group(1))
+            bucket = charges.setdefault(atom, {})
+            bucket["total"] = float(header.group(2))
+            bucket.update(_lowdin_pairs(line))
+            continue
+        spin = re.match(
+            r"\s*(spin up|spin down|polarization)\s*=\s*(" + _FLOAT + ")", line
+        )
+        if spin and atom is not None:
+            key = {"spin up": "up", "spin down": "down"}.get(
+                spin.group(1), "polarization"
+            )
+            bucket = charges[atom].setdefault(key, {})
+            bucket["total"] = float(spin.group(2))
+            bucket.update(_lowdin_pairs(line))
+    return charges
+
+
+def _lowdin_pairs(line: str) -> dict:
+    """The ``l`` and ``lm`` charges on one line, past its ``... = value`` header."""
+    _, _, rest = line.partition("=")
+    return {
+        label: float(value.replace("D", "E"))
+        for label, value in _LOWDIN_PAIR.findall(rest)
+    }
+
+
+def read_pdos_file(path: str | Path) -> tuple[np.ndarray, np.ndarray, tuple[str, ...]]:
+    """One ``filpdos`` file: ``(energies_eV, columns, names)``.
+
+    ``columns`` is ``(ncolumn, nE)`` in states/eV -- ``partialdos`` writes the
+    energy first and then ``ldos`` (and ``pdos``) columns, one per spin channel
+    per ``m``. The names come from the header line, which is the only place the
+    file says what its columns are.
+    """
+    path = Path(path)
+    lines = path.read_text().splitlines()
+    names = tuple(lines[0].lstrip("#").split())
+    values = np.array([_floats(line) for line in lines[1:] if line.strip()])
+    return values[:, 0], values[:, 1:].T, names[2:]

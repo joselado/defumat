@@ -1,0 +1,112 @@
+
+     Program PROJWFC v.7.5 starts on 21Aug2026 at 10:57:39 
+
+     This program is part of the open-source Quantum ESPRESSO suite
+     for quantum simulation of materials; please cite
+         "P. Giannozzi et al., J. Phys.:Condens. Matter 21 395502 (2009);
+         "P. Giannozzi et al., J. Phys.:Condens. Matter 29 465901 (2017);
+         "P. Giannozzi et al., J. Chem. Phys. 152 154105 (2020);
+          URL http://www.quantum-espresso.org", 
+     in publications or presentations arising from this work. More details at
+     http://www.quantum-espresso.org/quote
+
+     Serial version
+     13221 MiB available memory on the printing compute node when the environment starts
+
+
+     Reading xml data from directory:
+
+     /tmp/tmpuoxuboeb/pwscf.save/
+
+     IMPORTANT: XC functional enforced from input :
+     Exchange-correlation= PZ
+                           (   1   1   0   0   0   0   0)
+     Any further DFT definition will be discarded
+     Please, verify this is what you really want
+
+
+     G-vector sticks info
+     --------------------
+     sticks:   dense  smooth     PW     G-vecs:    dense   smooth      PW
+     Sum         163     163     55                 1459     1459     283
+
+     Using Slab Decomposition
+
+
+     Gaussian broadening (default values): ngauss,degauss=   0    0.003675
+
+
+     Calling projwave .... 
+
+  Problem Sizes 
+  natomwfc =            8
+  nbnd     =            4
+  nkstot   =            2
+  npwx     =          186
+  nkb      =            8
+
+
+     Atomic states used for projection
+     (read from pseudopotential files):
+
+     state #   1: atom   1 (Si ), wfc  1 (l=0 m= 1)
+     state #   2: atom   1 (Si ), wfc  2 (l=1 m= 1)
+     state #   3: atom   1 (Si ), wfc  2 (l=1 m= 2)
+     state #   4: atom   1 (Si ), wfc  2 (l=1 m= 3)
+     state #   5: atom   2 (Si ), wfc  1 (l=0 m= 1)
+     state #   6: atom   2 (Si ), wfc  2 (l=1 m= 1)
+     state #   7: atom   2 (Si ), wfc  2 (l=1 m= 2)
+     state #   8: atom   2 (Si ), wfc  2 (l=1 m= 3)
+
+ k =   0.2500000000  0.2500000000  0.2500000000
+==== e(   1) =    -4.87053 eV ==== 
+     psi = 0.376*[#   1]+0.376*[#   5]+0.041*[#   2]+0.041*[#   3]+0.041*[#   4]
+          +0.041*[#   6]+0.041*[#   7]+0.041*[#   8]
+    |psi|^2 = 0.996
+==== e(   2) =     2.37873 eV ==== 
+     psi = 0.134*[#   1]+0.134*[#   5]+0.120*[#   2]+0.120*[#   3]+0.120*[#   4]
+          +0.120*[#   6]+0.120*[#   7]+0.120*[#   8]
+    |psi|^2 = 0.987
+==== e(   3) =     5.53655 eV ==== 
+     psi = 0.164*[#   2]+0.164*[#   3]+0.164*[#   4]+0.164*[#   6]+0.164*[#   7]
+          +0.164*[#   8]
+    |psi|^2 = 0.983
+==== e(   4) =     5.53655 eV ==== 
+     psi = 0.164*[#   2]+0.164*[#   3]+0.164*[#   4]+0.164*[#   6]+0.164*[#   7]
+          +0.164*[#   8]
+    |psi|^2 = 0.983
+
+ k =   0.2500000000  0.2500000000  0.7500000000
+==== e(   1) =    -2.91695 eV ==== 
+     psi = 0.317*[#   1]+0.317*[#   5]+0.060*[#   2]+0.060*[#   3]+0.060*[#   4]
+          +0.060*[#   6]+0.060*[#   7]+0.060*[#   8]
+    |psi|^2 = 0.995
+==== e(   2) =    -0.06581 eV ==== 
+     psi = 0.201*[#   1]+0.201*[#   5]+0.098*[#   2]+0.098*[#   3]+0.098*[#   4]
+          +0.098*[#   6]+0.098*[#   7]+0.098*[#   8]
+    |psi|^2 = 0.992
+==== e(   3) =     2.67915 eV ==== 
+     psi = 0.150*[#   2]+0.150*[#   3]+0.150*[#   4]+0.150*[#   6]+0.150*[#   7]
+          +0.150*[#   8]+0.046*[#   1]+0.046*[#   5]
+    |psi|^2 = 0.994
+==== e(   4) =     4.03503 eV ==== 
+     psi = 0.165*[#   2]+0.165*[#   3]+0.165*[#   4]+0.165*[#   6]+0.165*[#   7]
+          +0.165*[#   8]
+    |psi|^2 = 0.993
+
+Lowdin Charges: 
+
+     Atom #   1: total charge =   3.9673, s =  1.1007, 
+     Atom #   1: total charge =   3.9673, p =  2.8666, pz=  0.9555, px=  0.9555, py=  0.9555, 
+     Atom #   2: total charge =   3.9673, s =  1.1007, 
+     Atom #   2: total charge =   3.9673, p =  2.8666, pz=  0.9555, px=  0.9555, py=  0.9555, 
+     Spilling Parameter:   0.0082
+
+     PROJWFC      :      0.06s CPU      0.06s WALL
+
+
+   This run was terminated on:  10:57:39  21Aug2026            
+
+=------------------------------------------------------------------------------=
+   JOB DONE.
+=------------------------------------------------------------------------------=

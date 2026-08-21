@@ -25,6 +25,7 @@ ends with a pointer to both.
 | [`12_spin_spirals.ipynb`](12_spin_spirals.ipynb) | The generalized Bloch theorem, the three identities that validate it, and an `E(q)` magnon curve | P19 |
 | [`13_dft_plus_u.ipynb`](13_dft_plus_u.ipynb) | The occupation penalty, `S`-weighted projectors, nickel and FeO against QE (≤6.7e-9 Ry) | P20 |
 | [`14_spiral_relaxation.ipynb`](14_spiral_relaxation.ipynb) | `dE/dq` by `jax.grad`, checked by finite differences, and a BFGS that finds the ground-state pitch | P21 |
+| [`16_projected_density_of_states.ipynb`](16_projected_density_of_states.ipynb) | `<phi|S|psi>` on Löwdin-orthogonalised orbitals, silicon's `s` and `p` densities of state against `projwfc.x`, and the same weights as fat bands | P8 |
 
 ## Conventions
 
@@ -70,6 +71,10 @@ Wannier-charge-centre sweep on bismuthene (7.8 GB in one kernel, so it was run i
 process) and `14`'s cutoff sweep of the basis-set jumps in `E(q)`. `08` runs bismuthene at
 the test size (20 Ry, 6x6x1); the converged pair (35 Ry, 12x12x1) is committed beside it with
 its own QE reference and is one variable away, at about forty minutes and a 9.4 GB peak.
+
+`16` runs without the vendored tree as well — its input and the `projwfc.x` reference
+it is compared against are both committed under `tests/data/qe/`, because QE's test
+suite has no `projwfc` case at all — and takes about two minutes.
 
 After changing code the notebooks depend on, re-execute them and refresh the exports:
 

@@ -1028,6 +1028,75 @@ SCF, and the frozen-basis `at_spiral_q` shares both G sets, the local potential,
 the core charge and the Ewald sum with the calculation it came from — it rebuilds
 only `kinetic` and the projectors.
 
+## What a projected density of states costs (P8 x projwfc)
+
+**The projection is a few percent of the SCF that produced the states**, which is
+what it should be: it is one `natomwfc x npwx` times `npwx x nbnd` product per
+k-point, on top of an orthogonalisation that is `natomwfc` cubed and therefore
+nothing. Ultrasoft silicon, one core, `conv_thr = 1e-10`, 2026-08-21:
+
+| case | | |
+|---|---|---|
+| `si2-us-dense`, 29 k, `nbnd = 8`, `npwx = 415`, `natomwfc = 8` | SCF (6 iterations) | 18.7 s |
+| | projection, symmetrised | **1.42 s** (7.6% of the SCF) |
+| | projection, `lsym = .false.` | 1.10 s |
+| | plain DOS, gaussian, 452 energies | 12.6 ms |
+| | projected DOS, same, 8 channels | **42.0 ms** |
+| `al-tetrahedra`, 10 k, `nbnd = 6`, 384 tetrahedra, 584 energies | plain DOS, linear tetrahedra | 228 ms |
+| | projected DOS, 4 channels | **739 ms** |
+
+Three things in those numbers are worth naming.
+
+**The integration costs 3x, not `nproj`x.** The smearing scheme evaluates one
+`(nE, nk, nbnd)` array of deltas and then contracts it with the projections, so
+the delta — the expensive part, an `erfc` and an exponential per entry — is
+evaluated once however
+many channels there are; what grows is one `einsum`. The tetrahedron version pays
+more (3.2x here) for a structural reason: the corner weights have to be kept
+separately instead of being summed into one occupied fraction, which is a factor
+of four on the intermediate, and `PROJECTED_ENERGY_CHUNK = 8` divides the energy
+chunk by the same four so the working set does not move.
+
+**The symmetrisation's cost is setup, not arithmetic.** 0.32 s of it on 29
+k-points — and 0.31 s on *two* — is `build_projection_symmetry`: a least-squares
+fit per `l` for the harmonic rotation matrices, then a Python triple loop over
+`natomwfc x nsym` to build the gather. Host-side, once per geometry, and flat in
+`nk`. The per-k part is a gather of `(nsym, natomwfc, nbnd)` walked over `2l+1`
+steps, which is milliseconds.
+
+**The projector build is the projection's own cost, and it is a Python loop over
+k.** `build_atomic_projectors` — shared with DFT+U (P20) — walks the k axis in
+Python because the eigendecomposition inside it is tiny and batching it would
+hold every k-point's overlap at once. At 29 k-points that loop dispatches ~29
+un-jitted sequences, which is most of the 1.1 s above. Jitting the body is on the
+backlog; it is not on the SCF path, so it has never been worth it.
+
+**Memory.** Nothing here is a new order of magnitude, and every term is small
+beside the wavefunctions the projection is taken *of*:
+
+| array | size | `si2-us-dense` |
+|---|---|---|
+| the projector functions `phi` | `nk x npwx x natomwfc` complex | 1.5 MB |
+| the projections | `nspin x nk x natomwfc x nbnd` real | 15 kB |
+| the symmetrisation's per-k work | `nsym x natomwfc x nbnd` complex | 49 kB |
+| the smearing scheme's deltas | `nE x nk x nbnd` real | 839 kB |
+| the tetrahedron intermediate | `chunk x ntetra x nbnd x 4` real | 590 kB (`al-tetrahedra`) |
+
+The one to watch is the first, because it scales like a fraction
+`natomwfc / nbnd` of one spin channel's wavefunctions — five to ten percent for a
+main-group crystal, and *more than one* for a transition metal with a small band
+window, where nine atomic orbitals per atom meet a `nbnd` chosen for the valence
+states alone. It is held for the whole projection and freed with it; QE keeps the
+same array one k-point at a time in its `swfcatom` buffer, which is the trade
+rule R6 already makes everywhere else.
+
+The `run_pdos` entry point costs about **1 s more than the projection** on these
+cases, and all of it is one avoidable thing: an `SCFResult` does not carry the
+`Calculation` that produced it, so the workflow builds a second one — the basis,
+the projectors and the augmentation tables again. Passing the calculation through
+would remove it; the same applies to `run_dos` and it has never mattered next to
+an SCF.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than

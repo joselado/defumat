@@ -1,6 +1,7 @@
 """Writing results out in the formats QE's post-processing tools produce.
 
-So far: the ``.dos`` file ``PP/src/dos.f90`` writes. Everything here converts
+So far: the ``.dos`` file ``PP/src/dos.f90`` writes and the ``filpdos``
+files ``PP/src/partialdos.f90`` writes. Everything here converts
 out of Rydberg atomic units, which is this layer's privilege and nowhere else's.
 
 The formatting is Fortran's, down to the exponent style, so that a file written
@@ -18,7 +19,15 @@ import numpy as np
 
 from pypresso.units import RY_TO_EV
 
-__all__ = ["write_dos", "format_dos", "fortran_exponential"]
+__all__ = [
+    "write_dos",
+    "format_dos",
+    "fortran_exponential",
+    "write_pdos",
+    "format_pdos_shell",
+    "format_pdos_total",
+    "pdos_file_name",
+]
 
 
 def fortran_exponential(value: float, width: int = 12, decimals: int = 4) -> str:
@@ -87,3 +96,94 @@ def write_dos(path: str | Path, dos) -> Path:
     path = Path(path)
     path.write_text(format_dos(dos))
     return path
+
+
+# --------------------------------------------------------------------------
+# projwfc.x's filpdos files
+# --------------------------------------------------------------------------
+
+
+def pdos_file_name(prefix: str, channel) -> str:
+    """``partialdos``'s file name for one shell: ``<filpdos>.pdos_atm#1(Si)_wfc#2(p)``.
+
+    Built from the same fields the Fortran builds it from -- the atom's index,
+    its ``ATOMIC_SPECIES`` label, the orbital's index *in the pseudopotential
+    file*, and the shell's letter -- so the files can be diffed against
+    ``projwfc.x``'s by name as well as by content.
+    """
+    from pypresso.projwfc.channels import L_LABELS
+
+    return (
+        f"{prefix}.pdos_atm#{channel.atom + 1}({channel.species})"
+        f"_wfc#{channel.wfc}({L_LABELS[channel.l]})"
+    )
+
+
+def format_pdos_shell(pdos, shell) -> str:
+    """One shell's ``filpdos`` file: ``ldos`` and then one ``pdos`` per ``m``.
+
+    ``partialdos``'s layout: ``(f8.3, Ne11.3)`` with the energy in eV and every
+    density in states/eV, the shell's own sum first and the ``m`` resolution
+    after it, spin channels interleaved within each column group.
+    """
+    channels = list(shell)
+    atom, wfc = channels[0].atom, channels[0].wfc
+    nspin = pdos.nspin
+
+    header = "#" + (" E (eV)   ldos(E)  " if nspin == 1
+                    else " E (eV)  ldosup(E)  ldosdw(E)")
+    header += "".join(
+        " pdos(E)   " if nspin == 1 else " pdosup(E)  pdosdw(E) "
+        for _ in channels
+    )
+
+    ldos = np.atleast_2d(pdos.select(atom=atom, wfc=wfc)) / RY_TO_EV
+    columns = [ldos[spin] for spin in range(nspin)]
+    for channel in channels:
+        weight = np.atleast_2d(pdos.pdos_by_spin[:, channel.index]) / RY_TO_EV
+        columns += [weight[spin] for spin in range(nspin)]
+
+    lines = [header]
+    for index, energy in enumerate(pdos.energies_ev):
+        lines.append(
+            f"{energy:8.3f}"
+            + "".join(fortran_exponential(float(c[index]), 11, 3) for c in columns)
+        )
+    return "\n".join(lines) + "\n"
+
+
+def format_pdos_total(pdos) -> str:
+    """``<filpdos>.pdos_tot``: the plain DOS and the sum of every channel."""
+    nspin = pdos.nspin
+    header = "#" + (
+        " E (eV)  dos(E)    pdos(E)" if nspin == 1
+        else " E (eV)  dosup(E)   dosdw(E)  pdosup(E)  pdosdw(E)"
+    )
+    dos = np.atleast_2d(pdos.total.dos) / RY_TO_EV
+    summed = np.atleast_2d(pdos.summed) / RY_TO_EV
+    columns = [dos[s] for s in range(nspin)] + [summed[s] for s in range(nspin)]
+
+    lines = [header]
+    for index, energy in enumerate(pdos.energies_ev):
+        lines.append(
+            f"{energy:8.3f}"
+            + "".join(fortran_exponential(float(c[index]), 11, 3) for c in columns)
+        )
+    return "\n".join(lines) + "\n"
+
+
+def write_pdos(prefix: str | Path, pdos) -> list[Path]:
+    """Write ``projwfc.x``'s whole set of ``filpdos`` files; return the paths.
+
+    One file per ``(atom, shell)`` plus the ``.pdos_tot`` summary, named exactly
+    as ``partialdos`` names them.
+    """
+    prefix = Path(prefix)
+    written = []
+    for shell in pdos.shells():
+        path = prefix.with_name(pdos_file_name(prefix.name, shell[0]))
+        path.write_text(format_pdos_shell(pdos, shell))
+        written.append(path)
+    total = prefix.with_name(f"{prefix.name}.pdos_tot")
+    total.write_text(format_pdos_total(pdos))
+    return written + [total]
