@@ -80,6 +80,7 @@ from pypresso.basis.interpolate import to_dense
 from pypresso.batching import map_k
 from pypresso.response.efield import require_a_symmetrisable_response
 from pypresso.response.phonon import require_norm_conserving
+from pypresso.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
 from pypresso.response.sternheimer import (
     SternheimerSolver,
     require_a_sternheimer_regime,
@@ -91,6 +92,10 @@ __all__ = ["StrainResponse", "strain_response", "strain_tangent",
            "density_of_strained_states"]
 
 #: ``alpha_mix(1)``, as the other two perturbations use it.
+#: QE's ``alpha_mix(1)``: the weight the mixer gives the residual. It is no
+#: longer the *whole* of the mixing -- :mod:`pypresso.response.mixing` builds an
+#: Anderson history on top of it -- which is what makes 0.7 a safe default here
+#: rather than a value each system has to be tuned to.
 ALPHA_MIX = 0.7
 
 #: Convergence on ``|ddv_scf|^2``.
@@ -168,6 +173,7 @@ def strain_response(
     tr2: float = TR2,
     max_iterations: int = MAX_ITERATIONS,
     threshold: float = 1.0e-12,
+    mixing_mode: str = DEFAULT_RESPONSE_MIXING,
     verbose: bool = False,
 ) -> StrainResponse:
     """``solve_linter``'s loop for the six independent homogeneous strains.
@@ -214,7 +220,7 @@ def strain_response(
         _self_consistent_response(
             calculation, solver, bare, frozen_drho, density,
             alpha_mix=alpha_mix, tr2=tr2, max_iterations=max_iterations,
-            verbose=verbose,
+            mixing_mode=mixing_mode, verbose=verbose,
         )
     )
 
@@ -284,7 +290,7 @@ def _frozen_density_response(calculation, solver, weights) -> jnp.ndarray:
 
 def _self_consistent_response(
     calculation, solver, bare, frozen_drho, density,
-    alpha_mix, tr2, max_iterations, verbose,
+    alpha_mix, tr2, max_iterations, verbose, mixing_mode=DEFAULT_RESPONSE_MIXING,
 ):
     """The loop, with the frozen-state density response added at every pass.
 
@@ -299,6 +305,7 @@ def _self_consistent_response(
     dpsi = np.empty((3, 3), dtype=object)
     symmetrised = jnp.zeros_like(dvscf)
     converged = False
+    mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
 
     for iteration in range(max_iterations):
         response = np.empty((3, 3), dtype=object)
@@ -334,7 +341,7 @@ def _self_consistent_response(
         history.append(change)
         if verbose:
             print(f"  iter {iteration + 1}: |ddv_scf|^2 = {change:.3e}")
-        dvscf = dvscf + alpha_mix * (induced - dvscf)
+        dvscf = mixer.mix(dvscf, induced)
         if change < tr2:
             converged = True
             break

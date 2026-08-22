@@ -148,9 +148,10 @@ def elastic_constants(
             f"the strain response did not converge (|ddv_scf|^2 = {last:.3e} "
             f"after {len(response.history)} iterations, against the requested "
             "tr2); the elastic constants built on it would not even be "
-            "symmetric under C_ijkl = C_klij. Lower alpha_mix -- QE's default "
-            "of 0.7 diverges on a slab, 0.3 converges -- and raise "
-            "max_iterations"
+            "symmetric under C_ijkl = C_klij. If this run set "
+            "mixing_mode='linear', try the default Anderson mixer "
+            "(pypresso.response.mixing); otherwise raise max_iterations or "
+            "lower alpha_mix"
         )
     psi = jnp.asarray(wavefunctions)
     eigenvalues = jnp.asarray(eigenvalues)

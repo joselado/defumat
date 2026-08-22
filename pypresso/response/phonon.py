@@ -102,6 +102,7 @@ import numpy as np
 
 from pypresso.forces.energy import FrozenState, frozen_energy
 from pypresso.response.efield import require_a_symmetrisable_response
+from pypresso.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
 from pypresso.response.sternheimer import (
     SternheimerSolver,
     require_a_sternheimer_regime,
@@ -113,8 +114,10 @@ from pypresso.units import AMU_TO_RY, RY_TO_CMM1, RY_TO_THZ
 __all__ = ["Phonons", "dynamical_matrix", "require_norm_conserving",
            "self_consistent_response"]
 
-#: ``alpha_mix(1)``: the linear mixing of the induced potential, as
-#: :mod:`pypresso.response.efield` uses it.
+#: QE's ``alpha_mix(1)``: the weight the mixer gives the residual. It is no
+#: longer the *whole* of the mixing -- :mod:`pypresso.response.mixing` builds an
+#: Anderson history on top of it -- which is what makes 0.7 a safe default here
+#: rather than a value each system has to be tuned to.
 ALPHA_MIX = 0.7
 
 #: Convergence on ``|ddv_scf|^2``. QE's default ``tr2_ph`` is 1e-12.
@@ -293,6 +296,7 @@ def self_consistent_response(
     alpha_mix: float = ALPHA_MIX,
     tr2: float = TR2,
     max_iterations: int = MAX_ITERATIONS,
+    mixing_mode: str = DEFAULT_RESPONSE_MIXING,
     verbose: bool = False,
 ):
     """``solve_linter``'s loop for the ``3 nat`` displacement patterns.
@@ -325,6 +329,7 @@ def self_consistent_response(
     symmetrised = jnp.zeros_like(dvscf)
     converged = False
 
+    mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
     for iteration in range(max_iterations):
         response = []
         for atom in range(nat):
@@ -358,7 +363,7 @@ def self_consistent_response(
         history.append(change)
         if verbose:
             print(f"  iter {iteration + 1}: |ddv_scf|^2 = {change:.3e}")
-        dvscf = dvscf + alpha_mix * (induced - dvscf)
+        dvscf = mixer.mix(dvscf, induced)
         if change < tr2:
             converged = True
             break

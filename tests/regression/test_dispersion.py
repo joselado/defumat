@@ -400,22 +400,30 @@ def test_the_strain_coefficients_move_and_the_stress_ones_do_not():
 # the truth about this k-set rather than an approximation to it; and a mixing
 # parameter for the response loop, which is the subject of the first test below.
 
-#: The strain response needs this, and QE's default of 0.7 diverges. See
-#: :func:`~pypresso.response.electrostriction.require_converged_responses`.
+#: Kept explicit even though the Anderson default (:mod:`pypresso.response.mixing`)
+#: now converges this cell at 0.7 as well: it is what the *linear* mixing these
+#: runs were first done with needed, and the numbers in `PLAN.md` P27 are its.
 SLAB_ALPHA_MIX = 0.3
 
 GRAPHENE_ES = "graphene-bilayer-electrostriction"
 
 
-def test_the_default_mixing_diverges_on_a_slab_and_is_refused():
+def test_linear_mixing_diverges_on_a_slab_and_is_refused():
     """The cheap test of the expensive lesson, and the only one of the guard.
 
-    QE's ``alpha_mix = 0.7`` makes the strain response of this cell *diverge* --
-    ``|ddv_scf|^2`` grows by 1.34 per iteration, 1.7e7 to 8.9e9 in twenty-five.
-    Before the guard, the loop ran out of iterations, returned what it had, and
-    everything downstream consumed it: the elastic tensor that came out was not
-    symmetric under ``C_ijkl = C_klij`` (49817 GPa against -243233 for the same
-    index pair) and nothing about the numbers said so.
+    **``mixing_mode = 'linear'`` is asked for explicitly and that is the point
+    of the test.** It is what the three response loops used to do
+    unconditionally, and on this cell it *diverges* at QE's ``alpha_mix = 0.7``
+    -- ``|ddv_scf|^2`` grows by 1.34 per iteration, 1.7e7 to 8.9e9 in
+    twenty-five. Before the guard, the loop ran out of iterations, returned what
+    it had, and everything downstream consumed it: the elastic tensor that came
+    out was not symmetric under ``C_ijkl = C_klij`` (49817 GPa against -243233
+    for the same index pair) and nothing about the numbers said so.
+
+    The default is now Anderson (:mod:`pypresso.response.mixing`), which takes
+    this same cell from 9.3e6 to 79.8 in the five iterations below -- so the
+    divergence has to be requested to be tested, and the guard is tested on the
+    thing that can still produce it.
 
     Five iterations is enough to have diverged and cheap enough to be a test.
     """
@@ -423,7 +431,7 @@ def test_the_default_mixing_diverges_on_a_slab_and_is_refused():
     eigenvalues, psi = refined_states(calculation, result)
     diverged = strain_response(
         calculation, psi, eigenvalues, jnp.asarray(result.density),
-        alpha_mix=0.7, max_iterations=5,
+        alpha_mix=0.7, max_iterations=5, mixing_mode="linear",
     )
     assert not diverged.converged
     assert diverged.history[-1] > diverged.history[1], "it should be growing"

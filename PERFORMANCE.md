@@ -1543,17 +1543,12 @@ instinct. None of these may change a validated number.
    schedule in a second place, the rule is already quoted in
    `response/sternheimer.py`'s docstring, and the same fix applies to
    `response/efield.py`. Cheapest item on this list by a wide margin.
-5. **Broyden mixing in the response loop** (P25, and now P27's slab). 17
-   linear-mixing iterations against `ph.x`'s 5, whose mixer is
-   `LR_Modules/mix_pot.f90` — a modified Broyden over four previous iterations,
-   printing `alpha_mix` while it does it. `scf/mixing.py`'s history is already
-   written for the SCF density and neither response loop uses it. **This moved
-   up the list when the strain response was run on a slab**: there linear mixing
-   at QE's `alpha_mix = 0.7` does not converge slowly, it *diverges*, and 0.3
-   needs 68 iterations where silicon needs about ten (see "What the response loop
-   costs on a slab"). A Broyden history, or a Kerker preconditioner on the
-   response the way `mixing_mode = 'TF'` preconditions the density, would turn
-   a stability problem back into a speed one.
+5. *(done, 2026-08-22)* **A mixer in the response loop.** Was: 17 linear-mixing
+   iterations against `ph.x`'s 5, whose mixer is `LR_Modules/mix_pot.f90`. It
+   turned out not to be a speed item at all -- linear mixing of a map whose
+   Jacobian has an eigenvalue below -1 **diverges**, which two systems then did
+   (see "What a mixer in the response loop was worth"). `pypresso/response/mixing.py`
+   now wraps `scf/mixing.py`'s Anderson history for all three loops.
 6. **One irreducible representation at a time** (P25), for the *memory* rather
    than the time: it bounds the working set at 3 modes in flight instead of
    `3 nat`, which is 7 GB on a 16-atom cell. It does not reduce the number of
@@ -1641,6 +1636,45 @@ response loop has no preconditioner and pays ~7x in iterations. Preconditioning
 mixer `pypresso/scf/mixing.py` already has, is the obvious next move and is in
 the backlog.
 
+## What a mixer in the response loop was worth (P24 x P25 x P26)
+
+The three response loops -- electric field, displacement, strain -- advanced with
+one line of linear mixing, `dvscf += alpha_mix (induced - dvscf)`, where QE uses
+a modified Broyden over four previous iterations (`LR_Modules/mix_pot.f90`).
+Replacing it with `scf/mixing.py`'s Anderson history, which was already written
+for the SCF density and which neither response loop used:
+
+| case | linear, `alpha_mix = 0.7` | Anderson, same `alpha_mix` |
+|---|---|---|
+| silicon, dielectric response | 19 iterations | **9** |
+| silicon, strain response | 18 | **11** |
+| bilayer graphene, strain response | **diverges** (1.34x per iteration) | -- |
+| bilayer graphene at `alpha_mix = 0.3` | 68 | -- |
+| rhombohedral BN, strain response | **diverges after 61 iterations** | **18** |
+
+**This was filed as a speed item and it is a correctness one.** The induced
+Hartree potential is `4 pi e^2/G^2` against the induced charge, so a cell whose
+smallest nonzero `G` is small has a Jacobian eigenvalue large and negative, and
+linear mixing above `alpha_mix ~ 2/(1 + |lambda|)` walks away from the fixed
+point. Bilayer graphene says so on the first iteration. **Rhombohedral BN says so
+on the sixty-second** -- it converges at 0.625 per pass down to `3.9e-7`, then
+turns around and grows at 1.30, because a subdominant mode with an amplification
+above one is invisible until the dominant one has died. There is no `alpha_mix`
+a caller can be told to use, because whether their system needs a smaller one
+cannot be seen until the run is most of the way through.
+
+Answers are unchanged: silicon's `epsilon_11` is 56.292875149 both ways, and the
+P24, P25 and P26 regression suites (47 tests) pass with the new default.
+
+**What is still on the table is better than this.** The response fixed point is
+**linear** -- `(1 - K chi_0) dV = K chi_0 dV_bare` -- so the right solver is not
+a mixer at all but GMRES on that operator, which is optimal over the Krylov space
+where Anderson with a truncated window approximates it, and which *cannot*
+diverge. One operator application per Krylov vector is exactly one mixing
+iteration, so the currency is the same. P22's `newton_krylov` is not directly
+reusable: it wraps a *nonlinear* residual and its finite-difference Jacobian
+would cost two applications per vector.
+
 ## History
 
 | Date | Change | Effect |
@@ -1674,3 +1708,4 @@ the backlog.
 | 2026-08-22 | Electrostriction (P26): the strain perturbation, the elastic constants and `d(chi)/d(strain)` as a mixed third derivative | 166 s on 8 k-points, of which the strain response is 80 s and the third derivative 36 s; **33x** cheaper than the published sweep of re-converged calculations |
 | 2026-08-22 | Grimme's D2 dispersion (P27): a pair sum over the nuclei with its neighbour list fixed once, the force and the stress `jax.grad` of it | **zero per SCF iteration** -- it never enters `v_of_rho`; 33 ms per geometry and 105 ms per gradient on bilayer graphene at QE's default 200-bohr cutoff |
 | 2026-08-22 | The third derivative on a slab (P27 x P26): bilayer graphene through `electrostriction`, and a guard on a diverged first-order solution | 645 s end to end, of which the strain response is 399 s and 68 iterations; QE's `alpha_mix = 0.7` diverges here at 1.34 per iteration, 0.3 converges at 0.5 |
+| 2026-08-22 | A mixer in the three response loops (`response/mixing.py`), Anderson over the packed state | silicon 19 -> 9 and 18 -> 11 iterations with identical answers; **bilayer graphene and rhombohedral BN converge where linear mixing diverged** -- a correctness fix filed as a speed one |

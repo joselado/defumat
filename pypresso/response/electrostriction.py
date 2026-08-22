@@ -549,14 +549,16 @@ def require_converged_responses(field, strain) -> None:
     against the induced charge, and a cell with 14 bohr of vacuum has its
     smallest nonzero ``G_z`` at ``2 pi/c``, where that kernel is two orders
     larger than anything a compact cell reaches. Simple linear mixing of a map
-    whose Jacobian has an eigenvalue that large is unstable for
-    ``alpha_mix`` above roughly ``2/(1 + |lambda|)``. Measured on this cell:
-    0.7 diverges at 1.34 per iteration, **0.3 converges at 0.5 per iteration**
-    and reaches ``tr2 = 1e-14`` in 68. That is the dial to turn, and
-    it is the same stiffness the ground-state SCF meets on a slab and answers
-    with Kerker preconditioning (`PERFORMANCE.md`); the response loop has no
-    preconditioner of its own, which is why the mixing parameter is the whole of
-    the remedy here.
+    whose Jacobian has an eigenvalue that large is unstable for ``alpha_mix``
+    above roughly ``2/(1 + |lambda|)``.
+
+    **That is why the loops no longer mix linearly**
+    (:mod:`pypresso.response.mixing`): the Anderson default takes this same cell
+    from 9.3e6 to 79.8 in five iterations, and rhombohedral BN -- which linear
+    mixing walks away from after *sixty-one* good ones -- converges in 18. The
+    guard stays because a caller can still ask for linear mixing, because no
+    mixer is a guarantee, and because what it protects against is not the
+    divergence but its silence.
     """
     for name, response, dial in (
         ("the electric-field response", field, "alpha_mix"),
@@ -569,10 +571,11 @@ def require_converged_responses(field, strain) -> None:
             f"{name} did not converge: |ddv_scf|^2 = {last:.3e} after "
             f"{len(response.history)} iterations, against the requested tr2. A "
             "third derivative built on it is meaningless -- and silently so, "
-            "since the answer it produces looks like a tensor. Lower "
-            f"`{dial}` (QE's 0.7 diverges on a slab, 0.3 converges) and raise "
-            "`max_iterations`, or pass allow_unconverged=True if this is a "
-            "diagnostic run"
+            "since the answer it produces looks like a tensor. If this run set "
+            "mixing_mode='linear', the first thing to try is the default "
+            "Anderson mixer (pypresso.response.mixing), which converges cells "
+            f"linear mixing diverges on; otherwise raise `max_iterations`, lower "
+            f"`{dial}`, or pass allow_unconverged=True if this is a diagnostic run"
         )
 
 

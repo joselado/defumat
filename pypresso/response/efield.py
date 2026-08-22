@@ -117,6 +117,7 @@ import numpy as np
 
 from pypresso.batching import map_k
 from pypresso.pseudo.augmentation import augmentation_dipole
+from pypresso.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
 from pypresso.response.sternheimer import (
     SternheimerSolver,
     paw_response,
@@ -129,7 +130,10 @@ from pypresso.units import FPI
 __all__ = ["DielectricTensor", "dielectric_tensor",
            "require_a_symmetrisable_response"]
 
-#: QE's ``alpha_mix(1)`` -- the linear mixing of the induced potential.
+#: QE's ``alpha_mix(1)``: the weight the mixer gives the residual. It is no
+#: longer the *whole* of the mixing -- :mod:`pypresso.response.mixing` builds an
+#: Anderson history on top of it -- which is what makes 0.7 a safe default here
+#: rather than a value each system has to be tuned to.
 ALPHA_MIX = 0.7
 
 #: Convergence on ``|ddv_scf|^2``, the quantity ``dfpt_kernels`` prints and
@@ -198,6 +202,7 @@ def dielectric_tensor(
     tr2: float = TR2,
     max_iterations: int = MAX_ITERATIONS,
     threshold: float = 1.0e-12,
+    mixing_mode: str = DEFAULT_RESPONSE_MIXING,
     born_charges: bool = True,
     keep_internals: bool = False,
     verbose: bool = False,
@@ -291,6 +296,7 @@ def dielectric_tensor(
     dpsi = [None, None, None]
     converged = False
 
+    mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
     for iteration in range(max_iterations):
         response, becsum_response = [], []
         for axis in range(3):
@@ -337,10 +343,15 @@ def dielectric_tensor(
         history.append(change)
         if verbose:
             print(f"  iter {iteration + 1}: |ddv_scf|^2 = {change:.3e}")
-        dvscf = dvscf + alpha_mix * (proposed - dvscf)
-        if onecentre is not None:
-            proposed_onecentre = jnp.stack(induced_onecentre)
-            onecentre = onecentre + alpha_mix * (proposed_onecentre - onecentre)
+        if onecentre is None:
+            dvscf = mixer.mix(dvscf, proposed)
+        else:
+            # **One Anderson problem over both**, not two: the one-centre
+            # potential and ``dV_scf`` are coupled through the same ``dbecsum``,
+            # and ``mix_pot`` concatenates them for exactly this reason.
+            dvscf, onecentre = mixer.mix(
+                [dvscf, onecentre], [proposed, jnp.stack(induced_onecentre)]
+            )
         if change < tr2:
             converged = True
             break
