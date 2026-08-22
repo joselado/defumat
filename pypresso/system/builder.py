@@ -32,6 +32,7 @@ from pypresso.system.symmetry import (
     magnetic_symmetries,
 )
 from pypresso.units import ANGSTROM_TO_BOHR, RY_TO_EV
+from pypresso.vdw.registry import canonical_vdw_corr
 
 __all__ = ["System", "build_system", "system_from_file", "local_moments"]
 
@@ -140,6 +141,23 @@ class System(eqx.Module):
     #: run with no Hubbard correction. Static: it decides array shapes (how many
     #: projectors, how wide the occupation matrix) and which code paths run.
     hubbard: object = eqx.field(static=True, default=None)
+    #: ``vdw_corr``: which van der Waals correction to add, canonicalised by
+    #: :func:`~pypresso.vdw.registry.canonical_vdw_corr`. ``'none'`` -- the
+    #: default -- is no correction. Only ``'grimme-d2'`` is implemented; the
+    #: others are refused by name, since QE's ``set_vdw_corr`` merely warns and
+    #: runs on without one (:mod:`pypresso.vdw`).
+    vdw_corr: str = eqx.field(static=True, default="none")
+    #: ``london_s6``: D2's global scaling factor.
+    london_s6: float = eqx.field(static=True, default=0.75)
+    #: ``london_rcut``: D2's real-space cutoff in bohr. The sum's truncation
+    #: error falls only as ``1/rcut^3``, which is why QE's default is as large
+    #: as it is (:mod:`pypresso.vdw.grimme`).
+    london_rcut: float = eqx.field(static=True, default=200.0)
+    #: ``london_c6`` and ``london_rvdw`` per species, overriding the tabulated
+    #: values. ``()`` -- or QE's -1 sentinel in an entry -- means "use the
+    #: table".
+    london_c6: tuple[float, ...] = eqx.field(static=True, default=())
+    london_rvdw: tuple[float, ...] = eqx.field(static=True, default=())
 
     @property
     def spiral(self) -> bool:
@@ -461,6 +479,18 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     # pseudopotentials (the density has twice the wavefunction's G range).
     ecutrho = pwin.get("system", "ecutrho") or 4.0 * float(ecutwfc)
 
+    # ``vdw_corr``, with ``input.f90``'s obsolescent alias: ``london = .true.``
+    # is the same thing as ``vdw_corr = 'grimme-d2'``, and QE still honours it.
+    # It is read *after* ``vdw_corr`` and only when that was left at its default,
+    # so an input that says both does not have the older spelling win.
+    vdw_corr = canonical_vdw_corr(pwin.get("system", "vdw_corr", "none"))
+    if vdw_corr == "none" and _logical(pwin.get("system", "london", False)):
+        vdw_corr = "grimme-d2"
+    london_c6 = tuple(pwin.indexed("system", "london_c6", structure.ntyp, default=-1.0))
+    london_rvdw = tuple(
+        pwin.indexed("system", "london_rvdw", structure.ntyp, default=-1.0)
+    )
+
     return System(
         cell=cell,
         structure=structure,
@@ -497,6 +527,11 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         local_weights=str(pwin.get("system", "local_weights", "qe")).lower(),
         hubbard=_hubbard(pwin, structure),
         spiral_q=spiral_q,
+        vdw_corr=vdw_corr,
+        london_s6=float(pwin.get("system", "london_s6", 0.75)),
+        london_rcut=float(pwin.get("system", "london_rcut", 200.0)),
+        london_c6=london_c6,
+        london_rvdw=london_rvdw,
     )
 
 

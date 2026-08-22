@@ -153,6 +153,11 @@ def spiral_energy(calculation, q_crystal, state: FrozenState):
         + potential.ehart
         + potential.etxc
         + moved.ewald
+        # Carried for the same reason the density is: a spiral does not move an
+        # atom, so the dispersion energy has no ``q`` dependence and contributes
+        # nothing to the gradient -- but the identity against the SCF total
+        # energy is the only check on the terms that do.
+        + moved.dispersion
         - norm
         + state.entropy
     )

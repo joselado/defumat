@@ -104,6 +104,16 @@ and **clamped-ion**, on an **unshifted** k-grid — a symmetry-reduced wedge is 
 name, because the object being differentiated carries a field label and a strain label at
 once and the rank-3 average that would complete the sum is not written.
 
+**Grimme's D2 van der Waals correction** (P27) is in: `vdw_corr = 'grimme-d2'`, written
+as the Ewald sum's twin — a pair sum over the nuclei whose neighbour list is fixed once, so
+the force and the stress are `jax.grad` of it in the two coordinates and QE's `force_london`
+and `stres_london` are transcribed beside them as the check (they agree to 1e-14). Bilayer
+graphene matches `pw.x` to **3.1e-9 Ry** in the total energy and 3.7e-7 Ry/bohr in the force,
+and **binds at 6.10 bohr (3.23 Å) where PBE alone has no minimum at all**. The correction
+never enters `v_of_rho`, and the test for that is an *equality*: the same cell with and
+without it gives a bit-for-bit identical density, and `d(chi)/d(strain)` is unchanged to
+0.0 while the elastic constants move by exactly the pair sum's own second derivative.
+
 **Outstanding:** Wyckoff input, `vc-relax`, phonons at `q != 0` (the perturbed states live
 at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals, plus
 `q2r`/`matdyn` for a dispersion), and the rest of P10 (k-axis sharding and GPU).
@@ -320,6 +330,16 @@ unshifted grid is closed exactly and is the independent check on the symmetrisat
 own response, `int3`), metals (`orthogonalize`'s smearing branch and `ef_shift`),
 noncollinear magnetism, DFT+U (`adddvhubscf`) and spin spirals.
 
+**Van der Waals corrections are in scope, and one of the five is implemented** (P27):
+`pypresso/vdw/`, behind a name registry that `vdw_corr` selects from. Grimme's **D2** is a
+pair potential over the nuclei and nothing else, so it is `pypresso/scf/ewald.py` again with
+a different radial function — the energy is written down and the force and the stress are
+`jax.grad` of it. The other four are **refused by name**, where `set_vdw_corr` warns and
+silently runs with no correction at all: **D3** because its `C6` depends on each atom's
+coordination number and so has a derivative of its own, and **Tkatchenko-Scheffler**, **MBD**
+and **XDM** because their coefficients are functionals of the self-consistent density, which
+puts them inside `v_of_rho` where D2 is outside it.
+
 Out of scope until the above works: EXX, phonons
 (`PHonon/`), Car-Parrinello (`CPV/`), and everything in `EPW/`, `TDDFPT/`, `HP/`, `GWW/`.
 The code should nonetheless be shaped so these are additions, not rewrites.
@@ -477,6 +497,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Spin-orbit coupling | `upflib/init_us_1.f90` (`fcoef`, `dvan_so`), `upflib/spinor.f90`, `upflib/sph_ind.f90`, `upflib/upf_spinorb.f90` (`transform_qq_so`), `PW/src/newd_acc.f90` (`newd_so`), `PW/src/compute_becsum.f90` (`add_becsum_so`), `PW/src/vloc_psi_acc.f90` (`vloc_psi_nc`), `PW/src/add_vuspsi_acc.f90`, `PW/src/usnldiag.f90` | `init_us_1` builds `fcoef` for every matching `(l, j)` pair, uses it for `dvan_so`, and **then** zeroes the cross-radial entries — everything downstream consumes the *zeroed* array and has no check of its own, so one array used for both is a correct `dvan_so` and a silently wrong `qq_so`/`deeq_nc`/`becsum` |
 | Structure / symmetry / k-points | `PW/src/symm_base.f90`, `symme.f90`, `kpoint_grid.f90`, `setup.f90`, `Modules/cell_base.f90` | `ibrav` lattice conventions live in `Modules/latgen.f90`. `kpoint_grid` is called with the *lattice* point group and fixed up afterwards; reducing directly with the crystal's symmetries reaches the same orbits. Two rules in `symm_base.f90` change the **FFT grid**: dimensions must be a multiple of the fractional translations' denominators (`fft_fact`), and a cell that is a supercell has fractional translations disabled altogether |
 | Starting wavefunctions | `PW/src/wfcinit.f90`, `Modules/atomic_wfc_mod.f90`, `upflib/atwfc_mod.f90` | the projectors' expression with `chi` for `beta` — but the phase is `i^l`, not `(-i)^l` |
+| Van der Waals dispersion | `Modules/mm_dispersion.f90` (`energy_london`, `force_london`, `stres_london`), `Modules/set_vdw_corr.f90`, `Modules/rgen.f90`, `upflib/atomic_number.f90` | the energy is written down (`pypresso/vdw/grimme.py`) and the force and stress are `jax.grad` of it; QE's two expressions are transcribed as the cross-check. `rgen`'s **fold** of the pair separation into the cell is kept, and it is what lets one neighbour list serve every geometry |
 | Ewald / local potential | `PW/src/ewald.f90`, `setlocal.f90` | the ion-ion sum and `V_loc(G)`; the Ewald neighbour list is fixed for the *cell*, not the geometry, so it survives a relaxation |
 | Forces | `PW/src/forces.f90`, `force_lc.f90`, `force_cc.f90`, `force_ew.f90`, `force_us.f90`, `addusforce.f90`, `force_corr.f90`, `symme.f90` (`symvector`) | the default is `jax.grad` of the energy at frozen wavefunctions (`forces/energy.py`); the Fortran expressions are transcribed as a cross-check. `gradcorr` is called from **inside** `v_xc`, so `force_cc` needs it |
 | Structural relaxation | `Modules/bfgs_module.f90`, `PW/src/move_ions.f90`, `run_pwscf.f90`, `update_pot.f90`, `checkallsym.f90` | BFGS in crystal coordinates with the cell metric; the setup (FFT grid, symmetry, k-points) is done **once** and only checked afterwards |

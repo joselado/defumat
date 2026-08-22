@@ -522,6 +522,9 @@ _FORCE_TERMS = {
     "The core correction contribution to forces": "core",
     "The Hubbard contrib.    to forces": "hubbard",
     "The SCF correction term to forces": "scf_correction",
+    # ``force_london``'s own line. Unlike the others it has no "The" and no
+    # column padding -- ``forces.f90`` prints it from a separate statement.
+    "Dispersion contribution to forces:": "dispersion",
 }
 
 
@@ -602,6 +605,9 @@ _STRESS_TERMS = {
     "corecor stress (kbar)": "core",
     "ewald   stress (kbar)": "ewald",
     "hubbard stress (kbar)": "hubbard",
+    # ``stres_london``'s row, which ``stress.f90`` labels by the correction
+    # family rather than by the routine: D2 and D3 share it.
+    "DFT-D   stress (kbar)": "dispersion",
 }
 
 

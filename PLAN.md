@@ -2794,6 +2794,141 @@ is refused here too, and so is `nspin = 2`, for P25's reason.
 
 *Notebook 21.*
 
+### P27 — Van der Waals dispersion: Grimme's D2. ✅ DONE.
+
+`pypresso/vdw/` (`grimme.py`, `registry.py`, `analytic.py`), plus
+`pypresso/system/elements.py`, `Calculation.dispersion_sum`/`dispersion`, and one
+row each in `forces/analytic.py`, `stress/analytic.py` and `io/qeref.py`.
+
+**Why it is needed and why it is cheap.** A semilocal functional has no London
+attraction at all: its correlation energy is a functional of the density *where
+the orbitals are*, and the dispersion force comes from the correlated fluctuations
+of two densities that do not overlap. Grimme's D2
+([J. Comp. Chem. 27, 1787 (2006)](https://doi.org/10.1002/jcc.20495), as QE
+implements it after [Barone et al.](https://doi.org/10.1002/jcc.21112)) adds it
+back as a pair potential over the nuclei,
+
+    E_disp = -(s6/2) sum_{a b R} C6_ab / d^6 f_damp(d)
+    f_damp(d) = 1/(1 + exp(-beta (d/(R_a + R_b) - 1)))     beta = 20
+
+with `C6_ab = sqrt(C6_a C6_b)` from a table indexed by **Z**, up to 86. It is a
+function of the nuclei and of nothing else, so it never enters `v_of_rho`: QE adds
+`elondon` to `etot` after the SCF loop, and `force_london`/`stres_london` at the
+end of `forces`/`stress`.
+
+**This is the Ewald sum's twin and is written as one.** `EwaldSum` and `GrimmeD2`
+are the same object: a pair sum whose neighbour list is fixed on the host once, so
+that the energy is a pure JAX function of the positions and the force is
+`jax.grad` of it; and whose list is a set of *lattice translations*, so a strain
+deforms it and the stress is `jax.grad` in the other coordinate. Nothing about D2
+needed a new idea — which is the point, and is why the two hand-derived Fortran
+routines are here as a **test** (`vdw/analytic.py`) rather than as the
+implementation. They agree with the autodiff route to round-off — 4e-17
+Ry/bohr on the force and 3e-19 Ry/bohr³ on the stress, on a geometry with the
+symmetry broken so that neither is a comparison of two zeros — and with `pw.x`'s
+own printed blocks to 3.9e-9 Ry/bohr and 1.2e-8 Ry/bohr³, which is `pw.x`'s print
+resolution rather than the agreement.
+
+**Four traps, and the first is the one the phase is really about.**
+
+- *The correction must not reach the density, and "agrees to `conv_thr`" is not
+  the test for that.* A pair potential that had leaked into the potential would
+  still give a plausible total energy. So the check is an **equality**: the same
+  cell run with and without the correction must produce a density, an
+  eigenvalue array and four energy terms that are *bit for bit* identical, and two
+  totals differing by exactly the printed `Dispersion Correction`. Both hold. The
+  same statement one derivative up is that `d(chi)/d(strain)` is unchanged to
+  0.0 — the Sternheimer perturbation is built from the Hamiltonian and a pair
+  potential is not in it — which is what will have to change the day a
+  density-dependent correction (Tkatchenko-Scheffler, XDM) is added.
+- *`rgen`'s fold is not cosmetic.* QE reduces each pair's separation into the cell
+  at the origin before building images around it. Doing the same here — one
+  translation list for the whole cell, and the separation folded before the list
+  is added to it — is what lets the list be built to `rcut + fold_radius(at)`, a
+  bound that depends on the **cell alone**. Without the fold the list has to reach
+  `rcut` plus the largest separation the *current* geometry has, which is
+  `EwaldSum`'s choice and is why that one consults the positions it was built
+  with; a `GrimmeD2` built that way loses images the moment an atom is written
+  outside the cell — measured, by moving one carbon of QE's graphite cell by
+  `a_1 - 2 a_3` at `rcut = 45`: **3.1e-6 Ry**, for a shift that changes no
+  distance at all. Silent, and exactly what a relaxation walks into. `jnp.round` has zero
+  derivative, so the fold is invisible to `grad`: the integer is frozen and the
+  lattice vector it multiplies deforms with the cell like the translations do.
+- *Which way the separation points.* `rgen` returns `r = R - (tau_a - tau_b)`; the
+  kernel here broadcasts `s = tau_a - tau_b + R`, its negative. The stress is
+  quadratic in it and does not notice. The force is linear in it, and getting it
+  wrong is a relaxation that walks uphill.
+- *The masking rule now has to survive a **second** derivative.* Sanitise the
+  *squared* distance before the square root, never the result after it: `sqrt(0)`
+  has an infinite derivative and `0 * inf` is NaN. `_real_kernel` already carried
+  that comment for the force; here the elastic constants take one more derivative
+  of the same expression, so it is tested directly.
+
+**The cutoff looks extravagant and is not.** `london_rcut = 200` bohr for a
+`1/r^6` potential invites cutting it, and the shell count is why not: the number
+of pairs at distance `r` grows as `r^2`, so the truncation error falls only as
+`1/rcut^3`. On QE's graphite cell the sum is -0.039133 Ry at 30 bohr, -0.039945 at
+60, -0.039975 at 200 and -0.039975 at 300; reaching the 1e-8 `pw.x` prints takes
+~150 bohr. The default here is QE's so that an input reproduces `pw.x` term for
+term. The **memory** that buys is `(nat, nat, ntrans, 3)` — 1.6e5 translations and
+63 MB of separations for graphite's four atoms, 51 ms for the energy and 153 ms
+for its gradient (`PERFORMANCE.md`). A cell with a vacuum has
+a large `Omega` and therefore *fewer* translations at the same radius, so the
+expensive case is a small dense cell, not a slab.
+
+*Checks met.* On bilayer graphene (PBE, norm-conserving, 12x12x1, `conv_thr =
+1e-10`) against the vendored `pw.x`, and on silicon for the third derivative:
+
+| what | reference | agreement |
+|---|---|---|
+| `energy_london` | QE's **committed** `pw_vdw/vdw-d2.in` benchmark, no SCF at all | 1e-8 Ry, its print resolution |
+| the total energy | `pw.x` | 3.1e-9 Ry |
+| the `Dispersion Correction` term | `pw.x` | 4.9e-9 Ry |
+| the density, the eigenvalues, four energy terms | the *same run without the correction* | **exactly zero** |
+| `force_london` | `pw.x`'s own `Dispersion contribution to forces` block | 3.9e-9 Ry/bohr |
+| `stres_london` | `pw.x`'s own `DFT-D stress (kbar)` row | 1.2e-8 Ry/bohr³ |
+| the total force, analytic | `pw.x` | 3.7e-7 Ry/bohr |
+| the total stress | `pw.x` | 4.1e-8 Ry/bohr³ |
+| `d(chi)/d(strain)` with and against without D2 | itself | **exactly zero** |
+| `C_ijkl(D2) - C_ijkl(none)` | `(1/Omega) d^2 E_disp/dx^2`, computed on its own | 2.2e-18 Ry/bohr³ |
+
+**The relaxation is the interesting one, and the geometry is the wrong thing to
+compare.** Bilayer graphene relaxed from 7.2 bohr: PBE alone has no minimum in
+the interlayer separation, and PBE+D2 settles at **6.10 bohr (3.23 Å)** against a
+measured 3.35 and the ~3.2 that D2's known overbinding gives. `pw.x`'s own BFGS
+on the same input stops at **6.58 bohr**, 0.48 bohr away and 8.3e-4 Ry higher.
+Neither is a bug. The interlayer force constant here is ~2e-4 Ry/bohr² — three
+orders below a chemical bond — so the `forc_conv_thr = 1e-5` both codes stop at
+pins the separation only to a few tenths of a bohr, and what `max |F|` is actually
+measuring is the *stiff* mode, the A/B sublattice buckling inside each layer.
+What settles it is asking `pw.x` about pypresso's geometry
+(`graphene-bilayer-d2-relaxed.in`, committed): it gives the same total energy to
+**1e-8 Ry** and a force of **3e-6 Ry/bohr** there. The two codes walk the same
+surface and pypresso walked further down it. So the comparison the test makes is
+through the **energies and the forces at each other's answers**, never through
+the coordinates.
+
+**What is not here.** The other four corrections `set_vdw_corr` offers, each
+refused by name with what it would take: **D3**, whose `C6` depends on each atom's
+coordination number, so it is a function of the geometry with a derivative of its
+own rather than a table lookup; **Tkatchenko-Scheffler** and **MBD**, whose
+coefficients are rescaled by Hirshfeld volumes — functionals of the
+self-consistent density, so they enter `v_of_rho` and the null test above is
+exactly what would break; and **XDM**, density-dependent for the same reason.
+`set_vdw_corr` warns and runs on with *no* correction for a name it does not know,
+which for an input asking for D3 is 30 meV on a layered crystal and nothing in the
+output that greps as an error; here it stops.
+
+**One thing found on the way that is not this phase's.** pypresso's symmetry
+finder is stricter than `symm_base.f90`'s `accep = 1e-5`: an `ATOMIC_POSITIONS`
+card written with QE's customary six digits (`0.333333`) gives bilayer graphene
+**4** operations here where `pw.x` finds 12, and 43 k-points where `pw.x` uses 19.
+The answers agree; the cost does not. Recorded rather than fixed — changing a
+symmetry tolerance is its own decision — and the committed inputs write twelve
+digits.
+
+*Notebook 22.*
+
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes
 the k-point count.

@@ -52,6 +52,7 @@ from pypresso.scf.potential import (
     with_core,
 )
 from pypresso.units import E2, TPI
+from pypresso.vdw.analytic import dispersion_force
 
 __all__ = ["analytic_forces"]
 
@@ -143,6 +144,13 @@ def _terms(calculation, state) -> dict:
     if calculation.is_ultrasoft:
         terms["augmentation"] = _addusforce(
             calculation, becsum_, potential, gcart, phases, volume
+        )
+    if calculation.dispersion_sum is not None:
+        # ``force_london``, transcribed in :mod:`pypresso.vdw.analytic`. It is
+        # the one term here that does not touch the density or the plane-wave
+        # basis at all.
+        terms["dispersion"] = dispersion_force(
+            calculation.dispersion_sum, structure.positions
         )
     if state.potential_change is not None:
         terms["scf_correction"] = _force_corr(

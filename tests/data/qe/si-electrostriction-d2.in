@@ -1,0 +1,31 @@
+! The same machinery case as `si-electrostriction.in`, with Grimme's D2
+! dispersion correction switched on (P27).
+!
+! Silicon is not a system anyone would apply D2 to -- the point is that the
+! correction is a function of the nuclei and of nothing else, so this input and
+! its neighbour must produce the *same* electronic structure and the same
+! d(chi)/d(strain), and must differ in the total energy, the stress and the
+! elastic constants by exactly the second derivative of one pair sum. That is
+! the cheapest rigorous check there is on D2 reaching the third-derivative
+! machinery, and it costs one extra SCF at ecutwfc = 12.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1,
+    ecutwfc = 12.0
+    vdw_corr = 'grimme-d2'
+    nosym = .true.
+    noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 2 0 0 0

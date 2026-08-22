@@ -32,6 +32,7 @@ ends with a pointer to both.
 | [`19_linear_response.ipynb`](19_linear_response.ipynb) | The velocity operator from one `jvp` of `H(k)`, the Sternheimer equation instead of a sum over states, and silicon's dielectric constant and Born charges against `ph.x` on norm-conserving, ultrasoft and PAW datasets (agreeing to <= 1.2e-4) | P24, P24a |
 | [`20_phonons.ipynb`](20_phonons.ipynb) | The force constants as one more derivative of the gradient that already gives the force -- `dynmat0` and `drhodv` as two halves of one `jvp` -- and silicon's optical mode at Gamma against `ph.x` (510.102 against 510.152 cm-1) | P25 |
 | [`21_electrostriction.ipynb`](21_electrostriction.ipynb) | Differentiating a *response*: `d(eps)/d(strain)` as one `jvp` of the second-order energy at frozen first-order wavefunctions, against the sweep of re-converged calculations it replaces (5e-5 on the figure's component), and the elasto-optic tensor it is the same object as | P26 |
+| [`22_van_der_waals.ipynb`](22_van_der_waals.ipynb) | Grimme's D2: a pair sum over the nuclei that never enters `v_of_rho` -- the same run with and without it gives a bit-for-bit identical density -- and bilayer graphene binding at 6.10 bohr where PBE alone has no minimum at all (3.1e-9 Ry against `pw.x`) | P27 |
 
 ## Conventions
 
@@ -65,6 +66,8 @@ Most run in under a minute on one core. The exceptions are `08` (about five minu
 bismuthene pair), `11` and `12` (a few minutes each), `13` (its four SCF runs) and `18`
 (about three minutes: it runs fourteen SCFs, which is the point — every number in it is a
 *pair* of runs, one from the atoms and one continued).
+
+`22` needs neither: its inputs and its `pw.x` references are committed under `tests/data/qe/`, and its binding curve is quoted from an offline sweep with only the dispersion half recomputed.
 
 Some need the vendored Quantum ESPRESSO tree at `../quantum_espresso/` for their input files
 and reference outputs; that tree is not in the repository (it is 285 MB) and the paths at the

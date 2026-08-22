@@ -81,13 +81,20 @@ from pypresso.scf.potential import (
     with_core,
 )
 from pypresso.units import E2, FPI, TPI
+from pypresso.vdw.analytic import dispersion_stress
 
-__all__ = ["analytic_terms", "ANALYTIC_TERMS"]
+__all__ = ["analytic_terms", "ANALYTIC_TERMS", "OPTIONAL_TERMS"]
 
 #: The contributions this module writes down. Named here so a test can assert
 #: that the list has not silently shrunk, and so the mapping above has something
 #: to refer to.
-ANALYTIC_TERMS = ("kinetic", "hartree", "local", "xc", "core", "gradcorr", "ewald")
+ANALYTIC_TERMS = (
+    "kinetic", "hartree", "local", "xc", "core", "gradcorr", "ewald", "dispersion",
+)
+
+#: ...but ``dispersion`` is there only when the run has a van der Waals
+#: correction, so a test asserting the list has not shrunk has to allow for it.
+OPTIONAL_TERMS = ("gradcorr", "dispersion")
 
 #: QE's ``eps8``: below this a G-vector is the origin.
 _EPS = 1.0e-8
@@ -128,6 +135,15 @@ def analytic_terms(calculation, state) -> dict:
         "local": _local(calculation, rho_g, gcart, factors, volume),
         "ewald": _ewald(calculation, cell, gcart, volume),
     }
+    if calculation.dispersion_sum is not None:
+        # ``stres_london``. The only term here that is not an integral over the
+        # cell at all: a pair sum over the nuclei, transcribed in
+        # :mod:`pypresso.vdw.analytic`.
+        terms["dispersion"] = dispersion_stress(
+            calculation.dispersion_sum,
+            calculation.system.structure.positions,
+            volume,
+        )
     terms.update(
         _exchange_correlation(calculation, rho, gcart, factors, volume)
     )

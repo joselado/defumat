@@ -242,6 +242,11 @@ def energy_at(moved, state: FrozenState, terms: bool = False, density=None):
         "hartree": potential.ehart,
         "xc": potential.etxc,
         "ewald": moved.ewald,
+        # The van der Waals correction, a pair sum over the nuclei and nothing
+        # else (:mod:`pypresso.vdw`). It is a term of the energy like any other
+        # here, which is the whole of ``force_london`` and ``stres_london``:
+        # both are ``grad`` of this entry, in the coordinate the caller chose.
+        "dispersion": moved.dispersion,
         "onecentre": epaw,
         "hubbard": hubbard,
         "overlap": -overlap,

@@ -27,11 +27,18 @@ from jax.scipy.special import erfc
 from scipy.special import erfc as erfc_host
 
 from pypresso.basis.gvectors import GVectors
-from pypresso.system.cell import Cell
+from pypresso.system.cell import Cell, lattice_translations, pair_separation_bound
 from pypresso.system.structure import Structure
 from pypresso.units import E2, TPI
 
 __all__ = ["ewald_energy", "ewald_alpha", "EwaldSum", "build_ewald"]
+
+#: The neighbour-list helpers were general enough that a second pair sum wanted
+#: them (:mod:`pypresso.vdw.grimme`), so they live in :mod:`pypresso.system.cell`
+#: -- they are lattice geometry and know nothing about Ewald's split. Re-exported
+#: under their old private names because this is where they were written.
+_position_independent_radius = pair_separation_bound
+_lattice_translations = lattice_translations
 
 
 def ewald_alpha(charge: float, gcut: float, tpiba2: float, tolerance: float = 1.0e-7) -> float:
@@ -187,44 +194,3 @@ def _real_kernel(tau, charges, translations, alpha, rmax):
 
     pairs = charges[:, None] * charges[None, :]
     return jnp.sum(pairs * jnp.sum(terms, axis=-1))
-
-
-def _position_independent_radius(at: np.ndarray, tau: np.ndarray) -> float:
-    """How far apart two atoms can be, whatever the geometry becomes.
-
-    The real-space sum needs every image within ``rmax`` of every *pair*, so the
-    translation list has to reach ``rmax`` plus the largest separation between
-    two atoms. Taking that separation from the current positions would tie the
-    neighbour list to one geometry and quietly drop images once an atom moved
-    far enough, which is exactly what a relaxation does. The diameter of the
-    unit cell -- the longest of its four body diagonals -- bounds the separation
-    of any two atoms inside it, so a list built to that radius stays valid for
-    every geometry the cell can hold. The current positions are still consulted,
-    in case an atom sits outside the cell.
-    """
-    corners = np.array([
-        s0 * at[0] + s1 * at[1] + s2 * at[2]
-        for s0 in (1, -1) for s1 in (1, -1) for s2 in (1, -1)
-    ])
-    diameter = float(np.linalg.norm(corners, axis=1).max())
-    if len(tau) > 1:
-        separations = tau[:, None, :] - tau[None, :, :]
-        diameter = max(diameter, float(np.linalg.norm(separations, axis=-1).max()))
-    return diameter
-
-
-def _lattice_translations(at: np.ndarray, radius: float) -> np.ndarray:
-    """All lattice vectors ``n . at`` with ``|n . at| <= radius``.
-
-    The search box is bounded by projecting the radius onto each reciprocal
-    direction, which is the smallest box guaranteed to contain the sphere for a
-    skewed cell -- a cubic guess on ``|a_i|`` misses corners of oblique lattices.
-    """
-    reciprocal = np.linalg.inv(at).T  # rows: b_i / 2pi
-    bounds = np.ceil(radius * np.linalg.norm(reciprocal, axis=1)).astype(int) + 1
-
-    ranges = [np.arange(-n, n + 1) for n in bounds]
-    i, j, k = np.meshgrid(*ranges, indexing="ij")
-    integers = np.stack([i.ravel(), j.ravel(), k.ravel()], axis=1)
-    vectors = integers @ at
-    return vectors[np.linalg.norm(vectors, axis=1) <= radius]

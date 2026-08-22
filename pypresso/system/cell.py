@@ -27,7 +27,10 @@ import numpy as np
 from pypresso.config import DEFAULT_PRECISION, Precision
 from pypresso.units import ANGSTROM_TO_BOHR, TPI
 
-__all__ = ["Cell", "latgen", "celldm_from_abc", "IBRAV_NAMES"]
+__all__ = [
+    "Cell", "latgen", "celldm_from_abc", "IBRAV_NAMES",
+    "lattice_translations", "pair_separation_bound", "fold_radius",
+]
 
 _SR2 = math.sqrt(2.0)
 _SR3 = math.sqrt(3.0)
@@ -407,3 +410,61 @@ class Cell(eqx.Module):
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         name = IBRAV_NAMES.get(self.ibrav, "?")
         return f"Cell(ibrav={self.ibrav} [{name}], alat={self.alat:.6f} bohr, volume={self.volume:.4f})"
+
+
+def pair_separation_bound(at: np.ndarray, tau: np.ndarray) -> float:
+    """How far apart two atoms can be, whatever the geometry becomes.
+
+    The real-space sum needs every image within ``rmax`` of every *pair*, so the
+    translation list has to reach ``rmax`` plus the largest separation between
+    two atoms. Taking that separation from the current positions would tie the
+    neighbour list to one geometry and quietly drop images once an atom moved
+    far enough, which is exactly what a relaxation does. The diameter of the
+    unit cell -- the longest of its four body diagonals -- bounds the separation
+    of any two atoms inside it, so a list built to that radius stays valid for
+    every geometry the cell can hold. The current positions are still consulted,
+    in case an atom sits outside the cell.
+    """
+    corners = np.array([
+        s0 * at[0] + s1 * at[1] + s2 * at[2]
+        for s0 in (1, -1) for s1 in (1, -1) for s2 in (1, -1)
+    ])
+    diameter = float(np.linalg.norm(corners, axis=1).max())
+    if len(tau) > 1:
+        separations = tau[:, None, :] - tau[None, :, :]
+        diameter = max(diameter, float(np.linalg.norm(separations, axis=-1).max()))
+    return diameter
+
+
+def fold_radius(at: np.ndarray) -> float:
+    """How far a separation folded into the cell at the origin can reach.
+
+    A vector reduced to fractional coordinates in ``[-1/2, 1/2)`` is
+    ``sum_i f_i a_i`` with ``|f_i| <= 1/2``, so its length is at most half the
+    longest of the cell's four body diagonals. That bound depends on the cell
+    alone -- not on where the atoms are -- which is what makes a neighbour list
+    built to ``cutoff + fold_radius`` complete for *any* geometry, however far
+    outside the cell an atom has been written.
+    """
+    corners = np.array([
+        s0 * at[0] + s1 * at[1] + s2 * at[2]
+        for s0 in (1, -1) for s1 in (1, -1) for s2 in (1, -1)
+    ])
+    return 0.5 * float(np.linalg.norm(corners, axis=1).max())
+
+
+def lattice_translations(at: np.ndarray, radius: float) -> np.ndarray:
+    """All lattice vectors ``n . at`` with ``|n . at| <= radius``.
+
+    The search box is bounded by projecting the radius onto each reciprocal
+    direction, which is the smallest box guaranteed to contain the sphere for a
+    skewed cell -- a cubic guess on ``|a_i|`` misses corners of oblique lattices.
+    """
+    reciprocal = np.linalg.inv(at).T  # rows: b_i / 2pi
+    bounds = np.ceil(radius * np.linalg.norm(reciprocal, axis=1)).astype(int) + 1
+
+    ranges = [np.arange(-n, n + 1) for n in bounds]
+    i, j, k = np.meshgrid(*ranges, indexing="ij")
+    integers = np.stack([i.ravel(), j.ravel(), k.ravel()], axis=1)
+    vectors = integers @ at
+    return vectors[np.linalg.norm(vectors, axis=1) <= radius]

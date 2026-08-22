@@ -135,6 +135,7 @@ from pypresso.system.symmetry import (
     symmetrize_vector_density,
 )
 from pypresso.units import RY_TO_EV
+from pypresso.vdw.registry import build_vdw_correction, vdw_options
 
 __all__ = ["SCFResult", "Calculation", "run_scf", "default_nbnd"]
 
@@ -917,6 +918,26 @@ class Calculation:
             self.ewald_sum.energy(system.cell, system.structure.positions, dense)
         )
 
+        # The van der Waals correction, on exactly the same footing: a pair sum
+        # over the nuclei whose neighbour list is fixed here and whose energy is
+        # then a differentiable function of the positions, so its force and its
+        # stress are ``grad`` of it and not two more expressions
+        # (:mod:`pypresso.vdw`). ``None`` when ``vdw_corr`` is 'none', which is
+        # an empty pytree, so a run without one compiles exactly as before.
+        #
+        # **It never reaches the potential.** ``electrons.f90`` adds ``elondon``
+        # to ``etot`` after the SCF loop, so the density, the eigenvalues and
+        # every response are bit for bit what they would be without it; what it
+        # changes is the total energy, the force, the stress -- and therefore a
+        # relaxation and the elastic constants.
+        self.dispersion_sum = build_vdw_correction(
+            system.vdw_corr, system.cell, system.structure, **vdw_options(system)
+        )
+        self.dispersion = (
+            0.0 if self.dispersion_sum is None
+            else float(self.dispersion_sum.energy(system.structure.positions))
+        )
+
         # The density built from a symmetry-reduced k-point set is not itself
         # symmetric; QE restores the symmetry explicitly and so must we, or
         # degenerate levels split by tens of meV and the energy is wrong in the
@@ -1286,6 +1307,10 @@ class Calculation:
             )
 
         moved.ewald = self.ewald_sum.energy(cell, positions, dense)
+        # The dispersion sum's neighbour list is a property of the cell, so a
+        # displacement only moves where it is evaluated.
+        if self.dispersion_sum is not None:
+            moved.dispersion = self.dispersion_sum.energy(positions)
         # The Hubbard projectors are atomic orbitals centred on the atoms, so
         # they move with them -- and the fact that they do is the whole of the
         # Hubbard force (``force_hub``), which falls out of differentiating the
@@ -1433,6 +1458,11 @@ class Calculation:
             self.ewald_sum.translations @ deformation.T,
         )
         strained.ewald = strained.ewald_sum.energy(cell, positions, dense)
+        # ... and the dispersion sum's list is deformed the same way, for the
+        # same reason: it is a set of lattice translations.
+        if self.dispersion_sum is not None:
+            strained.dispersion_sum = self.dispersion_sum.at_cell(deformation)
+            strained.dispersion = strained.dispersion_sum.energy(positions)
 
         if self.hubbard is not None:
             # The Hubbard projectors are atomic orbitals at ``k + G``, so they
@@ -2959,6 +2989,12 @@ def run_scf(
             "xc": float(potential.etxc),
             "ewald": float(calculation.ewald),
         }
+        if calculation.dispersion_sum is not None:
+            # QE's ``Dispersion Correction`` line. It is a constant of the
+            # geometry -- nothing in the loop above depends on it -- so it is
+            # added to the printed total and to nothing else, exactly as
+            # ``electrons.f90`` adds ``elondon``.
+            terms["dispersion"] = float(calculation.dispersion)
         if calculation.is_paw:
             terms["one_center_paw"] = float(epaw)
         if calculation.is_hubbard:

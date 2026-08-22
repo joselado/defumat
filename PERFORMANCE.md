@@ -1577,6 +1577,37 @@ measurements, before being implemented. See "QE's FFT layout" above.)
   all: XLA already fuses the scaling into the neighbouring elementwise pass at
   any size where it would matter.
 
+## What a van der Waals correction costs (P27)
+
+**Nothing per SCF iteration, which is the whole shape of it.** Grimme's D2 is a pair sum over
+the nuclei and never enters `v_of_rho`, so it is evaluated **once** when the `Calculation` is
+built, once more per geometry in a relaxation, and once per gradient in a force or a stress.
+The SCF loop does not see it at all.
+
+What it does cost is set by `london_rcut`, and QE's default of 200 bohr is large on purpose:
+the number of pairs in a shell grows as `r^2`, so a `1/r^6` sum truncates with an error
+falling only as `1/rcut^3`. The kernel broadcasts to `(nat, nat, ntrans, 3)` and `ntrans`
+grows as `(4 pi/3)(rcut + fold_radius)^3 / Omega`:
+
+| case | `rcut` | `ntrans` | separations | energy | `jax.grad` |
+|---|---|---|---|---|---|
+| graphite, 4 atoms, `Omega` = 227 bohr³ | 60 | 5 675 | 2.2 MB | 5.1 ms | 4.4 ms |
+| graphite, 4 atoms | 200 | 163 685 | 62.9 MB | 51 ms | 153 ms |
+| bilayer graphene + 14 bohr vacuum, 4 atoms | 200 | 104 799 | 40.2 MB | 33 ms | 105 ms |
+| silicon, 2 atoms, `Omega` = 265 bohr³ | 200 | 143 897 | 13.8 MB | 12 ms | 42 ms |
+
+Against a 2-second SCF iteration on the bilayer, 33 ms once is not a cost worth optimising,
+and the 105 ms gradient is paid once per ionic step. **The expensive case is a small dense
+cell, not a slab**: a vacuum makes `Omega` large, and `ntrans` scales as `1/Omega`.
+
+The peak working set is `nat^2 ntrans` doubles for each temporary, so it grows quadratically
+in the atom count where the rest of the code grows linearly or better. A 32-atom cell of
+graphite's density at 200 bohr would be 4 GB of separations, and the fix when it is needed is
+to `lax.scan` the translation axis in chunks — the sum is a scalar reduction, so a chunked
+form is exact and differentiable. It is not written, because nothing has needed it: 60 bohr
+costs 27 times less and is within 3e-5 Ry of the converged value, and the convergence table is
+in `PLAN.md`'s P27 entry.
+
 ## History
 
 | Date | Change | Effect |
@@ -1608,3 +1639,4 @@ measurements, before being implemented. See "QE's FFT layout" above.)
 | 2026-08-22 | Phonons at `Gamma` (P25): the dynamical matrix as one `jvp` of the gradient that already gives the force | silicon's six modes in 57 s against `ph.x`'s ~2.2 s, of which the second derivative itself is 1.4 s; the 26x is 3.4x the linear solves and 3x the CG steps each, both with named causes |
 | 2026-08-21 | Ultrasoft and PAW linear response (P24a): `dbecsum`, the augmentation charge's response, `int3` and `PAW_dpotential`, all as `jvp`s of code that existed | `epsilon_infinity` on four cases at 44-95 s; 1.9x (US) and 2.2x (PAW) the norm-conserving run, mostly the doubled dual |
 | 2026-08-22 | Electrostriction (P26): the strain perturbation, the elastic constants and `d(chi)/d(strain)` as a mixed third derivative | 166 s on 8 k-points, of which the strain response is 80 s and the third derivative 36 s; **33x** cheaper than the published sweep of re-converged calculations |
+| 2026-08-22 | Grimme's D2 dispersion (P27): a pair sum over the nuclei with its neighbour list fixed once, the force and the stress `jax.grad` of it | **zero per SCF iteration** -- it never enters `v_of_rho`; 33 ms per geometry and 105 ms per gradient on bilayer graphene at QE's default 200-bohr cutoff |
