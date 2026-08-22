@@ -221,6 +221,7 @@ def dynamical_matrix(
     require_a_symmetrisable_response(calculation)
     require_a_sternheimer_regime(calculation)
     require_norm_conserving(calculation)
+    _require_one_spin_channel(calculation)
 
     structure = calculation.system.structure
     positions = jnp.asarray(structure.positions)
@@ -515,6 +516,34 @@ def _diagonalize(matrix: np.ndarray, masses: np.ndarray):
     omega2, vectors = np.linalg.eigh(0.5 * (weighted + weighted.T))
     frequencies = np.sign(omega2) * np.sqrt(np.abs(omega2)) * RY_TO_CMM1
     return frequencies, vectors
+
+
+def _require_one_spin_channel(calculation) -> None:
+    """``nspin = 2`` is refused because ``nocc`` is a single number here.
+
+    Everything in this module and in :mod:`pypresso.response.efield` counts the
+    occupied bands as ``nelec / 2`` and slices *both* spin channels to that
+    depth. For an unpolarized insulator that is right. For a magnetic one it is
+    not: the two channels have different occupancies, and a shared count silently
+    solves for the wrong bands in at least one of them -- with no shape error and
+    no failed convergence to show for it.
+
+    Refused here rather than approximated. The same arithmetic is in
+    ``dielectric_tensor`` and is *not* refused there, which is a gap in P24 and
+    not a decision: a magnetic insulator's dielectric constant would have the
+    same problem. Making ``nocc`` per-channel is one change in
+    :class:`~pypresso.response.sternheimer.SternheimerSolver` and would serve
+    both, and it needs a magnetic insulator to validate against -- which is why
+    it is named here and left.
+    """
+    if calculation.nspin == 2:
+        raise NotImplementedError(
+            "the dynamical matrix for a spin-polarized calculation is not "
+            "implemented: the occupied-band count here is one number for both "
+            "channels (nelec/2), and a magnetic insulator's channels are "
+            "occupied to different depths, so the response would be solved for "
+            "the wrong bands in one of them without any sign of it"
+        )
 
 
 def require_norm_conserving(calculation) -> None:

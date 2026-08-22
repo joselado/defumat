@@ -2572,6 +2572,16 @@ one machinery, one complete and one not, is what a refusal is for. Everything
 magnetism, DFT+U, spirals — and so is a `nosym` run on a *shifted* grid, through the same
 `require_a_symmetrisable_response` the electric field uses.
 
+**One more refusal, and it is a gap in P24 rather than in this phase.** `nspin = 2` is
+refused, because the occupied-band count in `response/` is a *single* number
+(`nelec / 2`) applied to both spin channels. That is right for an unpolarized insulator
+and wrong for a magnetic one, whose channels are filled to different depths — the response
+would be solved for the wrong bands in one of them, with no shape error and no failure to
+converge to show for it. The same arithmetic is in `dielectric_tensor` and is **not**
+refused there, which is a gap and not a decision. Making `nocc` per-channel is one change
+in `SternheimerSolver` and would serve both; what it needs is a magnetic insulator to
+validate against.
+
 **Memory.** `3 nat` bare perturbations and `3 nat` first-order wavefunctions are held at
 once, each `(nspin, nk, nocc, npwx)` complex: **2 MB** on this silicon, and **7 GB** on a
 16-atom cell with 100 k-points and 3000 plane waves. The bare terms are stored rather than
