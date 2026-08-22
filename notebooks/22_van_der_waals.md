@@ -269,6 +269,16 @@ and the difference column is reproduced, to **2.2e-18**, by the second derivativ
 sum alone — three lines of `jax.jvp` that share nothing with `elastic_constants`. The cell
 below is that calculation, run on the bilayer instead of on silicon.
 
+**The whole path runs on the bilayer too**, and not only D2's share of it:
+`graphene-bilayer-electrostriction.in` puts this crystal through the third derivative, which
+took a k-grid that misses `K` (graphene is a semimetal, and the response here is the
+insulator one) and a mixing parameter the slab needs — QE's `alpha_mix = 0.7` *diverges*
+there. Clamped ion: $C_{11} = 859.0$, $C_{12} = 26.5$, $C_{33} = 56.6$ GPa, reproducing a
+five-point second difference of the energy to $5.8\times10^{-5}$, and $d\varepsilon/dx$
+reproducing a central difference over re-converged strained cells to $2.2\times10^{-4}$.
+Those are properties of the *supercell* — half of it is vacuum — so what they are quoted for
+is the agreement.
+
 Its **signs are worth a second look**, and they are not a mistake: every entry is negative.
 The D2 pair potential has no minimum of its own — in its attractive tail $E \sim -C_6/r^6$ has
 $d^2E/dr^2 < 0$ everywhere — so what binds the bilayer is D2's *slope* against PBE's, not its

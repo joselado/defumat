@@ -1543,11 +1543,17 @@ instinct. None of these may change a validated number.
    schedule in a second place, the rule is already quoted in
    `response/sternheimer.py`'s docstring, and the same fix applies to
    `response/efield.py`. Cheapest item on this list by a wide margin.
-5. **Broyden mixing in the response loop** (P25). 17 linear-mixing iterations
-   against `ph.x`'s 5, whose mixer is `LR_Modules/mix_pot.f90` — a modified
-   Broyden over four previous iterations, printing `alpha_mix` while it does it.
-   `scf/mixing.py`'s history is already written for the SCF density and neither
-   response loop uses it.
+5. **Broyden mixing in the response loop** (P25, and now P27's slab). 17
+   linear-mixing iterations against `ph.x`'s 5, whose mixer is
+   `LR_Modules/mix_pot.f90` — a modified Broyden over four previous iterations,
+   printing `alpha_mix` while it does it. `scf/mixing.py`'s history is already
+   written for the SCF density and neither response loop uses it. **This moved
+   up the list when the strain response was run on a slab**: there linear mixing
+   at QE's `alpha_mix = 0.7` does not converge slowly, it *diverges*, and 0.3
+   needs 68 iterations where silicon needs about ten (see "What the response loop
+   costs on a slab"). A Broyden history, or a Kerker preconditioner on the
+   response the way `mixing_mode = 'TF'` preconditions the density, would turn
+   a stability problem back into a speed one.
 6. **One irreducible representation at a time** (P25), for the *memory* rather
    than the time: it bounds the working set at 3 modes in flight instead of
    `3 nat`, which is 7 GB on a 16-atom cell. It does not reduce the number of
@@ -1608,6 +1614,33 @@ form is exact and differentiable. It is not written, because nothing has needed 
 costs 27 times less and is within 3e-5 Ry of the converged value, and the convergence table is
 in `PLAN.md`'s P27 entry.
 
+## What the response loop costs on a slab (P27 x P26)
+
+The electrostriction path run on bilayer graphene rather than on silicon, in one
+process, at `ecutwfc = 30` on the 2 x 2 x 1 closed grid (4 k-points, 8 occupied
+bands, ~1100 plane waves, FFT grid 18 x 18 x 72):
+
+| stage | time |
+|---|---|
+| SCF to `conv_thr = 1e-12` | 5 s |
+| strain response, 68 iterations at `alpha_mix = 0.3` | 399 s |
+| the third derivative on top of it (field response + `db/dx` + six `jvp`s) | 241 s |
+| a five-point second difference of the energy, per component | 5 s |
+| a central difference of `epsilon` over re-converged cells | 410 s |
+
+**The strain response is 62% of it and the iteration count is the reason, not
+the cost per iteration.** Silicon's converges in about ten passes at QE's
+`alpha_mix = 0.7`; this cell needs 68 at 0.3, because 0.7 *diverges* — 14 bohr of
+vacuum puts the smallest nonzero `G_z` where `4 pi e^2/G^2` is two orders larger
+than a compact cell reaches, and simple linear mixing of a map with a Jacobian
+eigenvalue that large is unstable (`PLAN.md` P27). So the honest statement of
+this cost is that it is a **mixing** problem: the ground-state SCF answers the
+same stiffness with Kerker preconditioning and pays about 1.7x, where the
+response loop has no preconditioner and pays ~7x in iterations. Preconditioning
+`_self_consistent_response`, or replacing its linear mixing with the Anderson
+mixer `pypresso/scf/mixing.py` already has, is the obvious next move and is in
+the backlog.
+
 ## History
 
 | Date | Change | Effect |
@@ -1640,3 +1673,4 @@ in `PLAN.md`'s P27 entry.
 | 2026-08-21 | Ultrasoft and PAW linear response (P24a): `dbecsum`, the augmentation charge's response, `int3` and `PAW_dpotential`, all as `jvp`s of code that existed | `epsilon_infinity` on four cases at 44-95 s; 1.9x (US) and 2.2x (PAW) the norm-conserving run, mostly the doubled dual |
 | 2026-08-22 | Electrostriction (P26): the strain perturbation, the elastic constants and `d(chi)/d(strain)` as a mixed third derivative | 166 s on 8 k-points, of which the strain response is 80 s and the third derivative 36 s; **33x** cheaper than the published sweep of re-converged calculations |
 | 2026-08-22 | Grimme's D2 dispersion (P27): a pair sum over the nuclei with its neighbour list fixed once, the force and the stress `jax.grad` of it | **zero per SCF iteration** -- it never enters `v_of_rho`; 33 ms per geometry and 105 ms per gradient on bilayer graphene at QE's default 200-bohr cutoff |
+| 2026-08-22 | The third derivative on a slab (P27 x P26): bilayer graphene through `electrostriction`, and a guard on a diverged first-order solution | 645 s end to end, of which the strain response is 399 s and 68 iterations; QE's `alpha_mix = 0.7` diverges here at 1.34 per iteration, 0.3 converges at 0.5 |

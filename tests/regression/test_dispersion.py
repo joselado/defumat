@@ -17,13 +17,16 @@ printed ``Dispersion Correction``. A correction that had leaked into ``v_of_rho`
 would still give a plausible total energy and would fail that comparison in the
 tenth decimal of the Hartree term.
 
-The third-derivative case is silicon rather than graphene, and deliberately so:
-``pypresso.response.electrostriction`` requires a closed unshifted k-grid, an
-insulator and norm-conserving data, and ``si-electrostriction.in`` is the cell
-P26 was checked on. Switching D2 on there is unphysical and is exactly the point
--- what is being measured is that the correction reaches the elastic constants
-through :meth:`~pypresso.scf.driver.Calculation.at_strain` and does *not* reach
-``d(chi)/dx``, which is the same statement as the null test one derivative up.
+The third derivative is checked on **both** cells and the two say different
+things. On silicon (``si-electrostriction-d2.in``, unphysical and exactly the
+point) the statement is an *equality*: D2 reaches the elastic constants through
+:meth:`~pypresso.scf.driver.Calculation.at_strain` by exactly the pair sum's own
+second derivative, and does not reach ``d(chi)/dx`` at all. On bilayer graphene
+(``graphene-bilayer-electrostriction.in``) the statement is that the whole path
+*runs* on the system the correction exists for -- which took a K-avoiding k-grid,
+because graphene is a semimetal and the Sternheimer response here is the
+insulator one, and a mixing parameter the slab needs and the bulk crystal does
+not (:func:`~pypresso.response.electrostriction.require_converged_responses`).
 """
 
 from functools import lru_cache
@@ -38,11 +41,12 @@ from pypresso.forces import compute_forces
 from pypresso.io import read_qe_output
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
-from pypresso.response.elastic import VOIGT
+from pypresso.response.elastic import VOIGT, elastic_constants
 from pypresso.response.electrostriction import electrostriction, refined_states
 from pypresso.response.strain import strain_response, strain_tangent
 from pypresso.scf import Calculation, run_scf
 from pypresso.system import build_system
+from pypresso.system.symmetry import cartesian_rotations, find_symmetries
 from pypresso.vdw.analytic import dispersion_force, dispersion_stress
 from pypresso.workflows.relax import run_relax
 from tests.tolerances import ENERGY_TERM_RY, TOTAL_ENERGY_RY
@@ -385,3 +389,168 @@ def test_the_strain_coefficients_move_and_the_stress_ones_do_not():
     _, _, corrected = _electrostriction("si-electrostriction-d2")
     assert np.abs(plain.M - corrected.M).max() > 1e-6 * np.abs(plain.M).max()
     assert np.abs(plain.Q - corrected.Q).max() > 1e-6 * np.abs(plain.Q).max()
+
+
+# -- the third derivative on graphene itself -----------------------------------
+#
+# ``graphene-bilayer-electrostriction.in``: the same crystal as the rest of this
+# file, put through the path P26 built. Two things had to give before it would
+# run, and both are in the input's own header -- a 2x2x1 grid, which is the
+# largest Gamma-centred one that misses K and so makes ``occupations = 'fixed'``
+# the truth about this k-set rather than an approximation to it; and a mixing
+# parameter for the response loop, which is the subject of the first test below.
+
+#: The strain response needs this, and QE's default of 0.7 diverges. See
+#: :func:`~pypresso.response.electrostriction.require_converged_responses`.
+SLAB_ALPHA_MIX = 0.3
+
+GRAPHENE_ES = "graphene-bilayer-electrostriction"
+
+
+def test_the_default_mixing_diverges_on_a_slab_and_is_refused():
+    """The cheap test of the expensive lesson, and the only one of the guard.
+
+    QE's ``alpha_mix = 0.7`` makes the strain response of this cell *diverge* --
+    ``|ddv_scf|^2`` grows by 1.34 per iteration, 1.7e7 to 8.9e9 in twenty-five.
+    Before the guard, the loop ran out of iterations, returned what it had, and
+    everything downstream consumed it: the elastic tensor that came out was not
+    symmetric under ``C_ijkl = C_klij`` (49817 GPa against -243233 for the same
+    index pair) and nothing about the numbers said so.
+
+    Five iterations is enough to have diverged and cheap enough to be a test.
+    """
+    system, pseudos, calculation, result = _converged(GRAPHENE_ES, 1e-12)
+    eigenvalues, psi = refined_states(calculation, result)
+    diverged = strain_response(
+        calculation, psi, eigenvalues, jnp.asarray(result.density),
+        alpha_mix=0.7, max_iterations=5,
+    )
+    assert not diverged.converged
+    assert diverged.history[-1] > diverged.history[1], "it should be growing"
+
+    with pytest.raises(ValueError, match="did not converge"):
+        elastic_constants(
+            calculation, psi, eigenvalues, jnp.asarray(result.density), diverged
+        )
+    with pytest.raises(ValueError, match="did not converge"):
+        electrostriction(calculation, result, strain=diverged)
+    # ... and the escape hatch exists, because a diagnostic run wants it.
+    elastic_constants(
+        calculation, psi, eigenvalues, jnp.asarray(result.density), diverged,
+        allow_unconverged=True,
+    )
+
+
+@lru_cache(maxsize=None)
+def _graphene_electrostriction():
+    system, pseudos, calculation, result = _converged(GRAPHENE_ES, 1e-12)
+    eigenvalues, psi = refined_states(calculation, result)
+    response = strain_response(
+        calculation, psi, eigenvalues, jnp.asarray(result.density),
+        alpha_mix=SLAB_ALPHA_MIX, max_iterations=120,
+    )
+    return system, calculation, result, response, electrostriction(
+        calculation, result, strain=response,
+        alpha_mix=SLAB_ALPHA_MIX, max_iterations=120,
+    )
+
+
+@pytest.mark.slow
+def test_the_strain_response_of_the_slab_converges():
+    """68 iterations at ``alpha_mix = 0.3``, against 60 that diverge at 0.7."""
+    _, _, _, response, _ = _graphene_electrostriction()
+    assert response.converged
+    assert len(response.history) < 120
+
+
+@pytest.mark.slow
+def test_the_elastic_tensor_is_symmetric_under_pair_exchange():
+    """``C_ijkl = C_klij``, which is what a second derivative of a scalar *is*.
+
+    Imposed nowhere: the six columns are six independent ``jvp``s of the stress,
+    assembled without ever comparing one to another. It is the identity that
+    caught the diverged response, where it failed by a factor of five with the
+    wrong sign -- 49817 GPa against -243233 for the same index pair.
+    """
+    _, _, _, _, result = _graphene_electrostriction()
+    voigt = result.elastic.voigt
+    assert np.abs(voigt - voigt.T).max() / np.abs(voigt).max() < 1e-9
+
+
+@pytest.mark.slow
+def test_the_tensors_carry_the_crystals_own_point_group():
+    """``D_3d`` invariance of the two rank-4 tensors, as a check on the indices.
+
+    AB stacking is **trigonal**, not hexagonal, so this is written as invariance
+    under the twelve operations :func:`find_symmetries` returns rather than as a
+    textbook pattern -- ``C_14`` is nonzero here (-1.18 GPa) and in the trigonal
+    classes that is allowed rather than a bug.
+
+    Weaker than P26's cubic check on silicon and worth saying why: the response
+    loop symmetrises its own ``drho`` over this group, so part of the invariance
+    is imposed. What is *not* imposed is the corollary asserted below --
+    ``C_66 = (C_11 - C_12)/2`` relates three separately assembled columns and
+    follows from the three-fold axis alone.
+    """
+    system, _, _, _, result = _graphene_electrostriction()
+    rotations = cartesian_rotations(
+        system.cell, find_symmetries(system.cell, system.structure)
+    )
+    assert len(rotations) == 12
+    for tensor in (np.asarray(result.elastic.tensor),
+                   np.asarray(result.dchi_dstrain)):
+        scale = np.abs(tensor).max()
+        for rotation in rotations:
+            rotated = np.einsum(
+                "ia,jb,kc,ld,abcd->ijkl", rotation, rotation, rotation, rotation,
+                tensor,
+            )
+            assert np.abs(rotated - tensor).max() / scale < 1e-9
+
+    # ``C_11`` against ``C_22`` is 2.7e-12 relative, measured; the other two
+    # are asserted at the bound rather than at a measurement. All three relate
+    # different columns of six independent ``jvp``s, so what sets the floor is
+    # the CG solves' own thresholds rather than the arithmetic.
+    voigt = result.elastic.voigt
+    assert voigt[5, 5] == pytest.approx((voigt[0, 0] - voigt[0, 1]) / 2, rel=1e-9)
+    assert voigt[0, 0] == pytest.approx(voigt[1, 1], rel=1e-10)
+
+
+@pytest.mark.slow
+def test_the_graphene_elastic_constant_matches_a_second_difference():
+    """``C_1111`` against a five-point second difference of the SCF energy.
+
+    The reference has no convention in it at all -- no volume factor, no sign,
+    no Voigt -- and both sides freeze the same plane-wave sphere, since the
+    reference deforms this calculation with ``at_strain`` rather than building a
+    new cell. **It carries the dispersion too**, so this is the D2 correction
+    checked end to end through a third derivative, on graphene.
+
+    Measured: 859.030 GPa from one ``jvp`` against 859.080 from the difference,
+    5.8e-5 relative. The other two components are in `PLAN.md`'s P27 entry;
+    ``C_3333`` is the loose one at 2.4e-3, which is the softest constant of a
+    slab differenced against a vacuum that carries most of the volume.
+    """
+    system, calculation, converged, _, result = _graphene_electrostriction()
+    pseudos = tuple(
+        read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species
+    )
+    step = 4e-3
+    tangent = strain_tangent(0, 0)
+
+    def energy(offset):
+        moved = Calculation(system, pseudos).at_strain(offset * step * tangent)
+        return run_scf(
+            system, pseudos, calculation=moved, conv_thr=1e-12,
+            max_iterations=250, starting_density=converged.density,
+            starting_wavefunctions=converged.wavefunctions,
+        ).total_energy
+
+    energies = {offset: energy(offset) for offset in (-2, -1, 0, 1, 2)}
+    second = (
+        -energies[2] + 16 * energies[1] - 30 * energies[0]
+        + 16 * energies[-1] - energies[-2]
+    ) / (12 * step**2)
+    reference = second / system.cell.volume
+    ours = result.elastic.tensor[0, 0, 0, 0]
+    assert abs(ours - reference) / abs(reference) < 5e-3

@@ -113,6 +113,13 @@ and **binds at 6.10 bohr (3.23 Å) where PBE alone has no minimum at all**. The 
 never enters `v_of_rho`, and the test for that is an *equality*: the same cell with and
 without it gives a bit-for-bit identical density, and `d(chi)/d(strain)` is unchanged to
 0.0 while the elastic constants move by exactly the pair sum's own second derivative.
+**P26's third derivative runs on the bilayer itself** on a k-grid that misses `K` — graphene
+is a semimetal and the Sternheimer response here is the insulator one — reproducing a
+five-point second difference of the energy to 5.8e-5 and a central difference of `epsilon`
+to 2.2e-4. Getting there found a trap that is P26's rather than P27's: at QE's
+`alpha_mix = 0.7` the strain response of a **slab** diverges, and a diverged first-order
+solution was being consumed in silence, giving a `C_ijkl` that was not even symmetric under
+`C_ijkl = C_klij`. It is refused now (`require_converged_responses`).
 
 **Outstanding:** Wyckoff input, `vc-relax`, phonons at `q != 0` (the perturbed states live
 at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals, plus

@@ -100,7 +100,8 @@ class ElasticConstants:
 
 
 def elastic_constants(
-    calculation, wavefunctions, eigenvalues, density, response: StrainResponse
+    calculation, wavefunctions, eigenvalues, density, response: StrainResponse,
+    allow_unconverged: bool = False,
 ) -> ElasticConstants:
     """``C_ijkl`` from one ``jvp`` of the stress per independent strain.
 
@@ -135,6 +136,22 @@ def elastic_constants(
     functional's scalar symmetrisation would then be in the chain rule. That is
     the condition :mod:`pypresso.response.electrostriction` imposes anyway.
     """
+    if not allow_unconverged and response is not None and not response.converged:
+        # The same refusal :func:`pypresso.response.electrostriction.
+        # require_converged_responses` makes, stated here as well because this
+        # function is a public entry point of its own. What it caught: a
+        # diverged strain response gives a ``C_ijkl`` that is not symmetric
+        # under ``C_ijkl = C_klij``, which no amount of reading the numbers
+        # reveals -- 49817 GPa against -243233 for the same index pair.
+        last = response.history[-1] if response.history else float("nan")
+        raise ValueError(
+            f"the strain response did not converge (|ddv_scf|^2 = {last:.3e} "
+            f"after {len(response.history)} iterations, against the requested "
+            "tr2); the elastic constants built on it would not even be "
+            "symmetric under C_ijkl = C_klij. Lower alpha_mix -- QE's default "
+            "of 0.7 diverges on a slab, 0.3 converges -- and raise "
+            "max_iterations"
+        )
     psi = jnp.asarray(wavefunctions)
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:

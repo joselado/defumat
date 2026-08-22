@@ -135,6 +135,7 @@ from pypresso.units import EPSILON0_SI, FPI
 __all__ = [
     "Electrostriction",
     "electrostriction",
+    "require_converged_responses",
     "refined_states",
     "second_order_energy",
     "susceptibility_strain_derivative",
@@ -531,12 +532,57 @@ def susceptibility_strain_derivative(
     return out
 
 
+def require_converged_responses(field, strain) -> None:
+    """Refuse to build a third derivative on a first-order solution that diverged.
+
+    **This is not defensive programming; it is the lesson of running the phase
+    on a slab.** Bilayer graphene's strain response diverges at QE's default
+    ``alpha_mix = 0.7`` -- ``|ddv_scf|^2`` grows by 1.34 per iteration, from
+    1.7e7 to 8.9e9 in twenty-five -- and the loop then simply runs out of
+    iterations and returns what it has. Everything downstream consumed that
+    without complaint and produced an elastic tensor that was not even symmetric
+    under ``C_ijkl = C_klij``: 49817 GPa against -243233 for the same pair of
+    indices, on a crystal whose stiffest constant is 859. Nothing in the numbers
+    said "unconverged"; only the identity did.
+
+    Why a slab and not silicon: the induced Hartree potential is ``4 pi e^2/G^2``
+    against the induced charge, and a cell with 14 bohr of vacuum has its
+    smallest nonzero ``G_z`` at ``2 pi/c``, where that kernel is two orders
+    larger than anything a compact cell reaches. Simple linear mixing of a map
+    whose Jacobian has an eigenvalue that large is unstable for
+    ``alpha_mix`` above roughly ``2/(1 + |lambda|)``. Measured on this cell:
+    0.7 diverges at 1.34 per iteration, **0.3 converges at 0.5 per iteration**
+    and reaches ``tr2 = 1e-14`` in 68. That is the dial to turn, and
+    it is the same stiffness the ground-state SCF meets on a slab and answers
+    with Kerker preconditioning (`PERFORMANCE.md`); the response loop has no
+    preconditioner of its own, which is why the mixing parameter is the whole of
+    the remedy here.
+    """
+    for name, response, dial in (
+        ("the electric-field response", field, "alpha_mix"),
+        ("the strain response", strain, "alpha_mix"),
+    ):
+        if response is None or response.converged:
+            continue
+        last = response.history[-1] if response.history else float("nan")
+        raise ValueError(
+            f"{name} did not converge: |ddv_scf|^2 = {last:.3e} after "
+            f"{len(response.history)} iterations, against the requested tr2. A "
+            "third derivative built on it is meaningless -- and silently so, "
+            "since the answer it produces looks like a tensor. Lower "
+            f"`{dial}` (QE's 0.7 diverges on a slab, 0.3 converges) and raise "
+            "`max_iterations`, or pass allow_unconverged=True if this is a "
+            "diagnostic run"
+        )
+
+
 def electrostriction(
     calculation,
     result,
     strain: StrainResponse | None = None,
     elastic: bool = True,
     verbose: bool = False,
+    allow_unconverged: bool = False,
     **response_options,
 ) -> Electrostriction:
     """The clamped-ion electrostriction tensors of a converged insulator.
@@ -554,9 +600,16 @@ def electrostriction(
             a stress, which is what experiment quotes. They cost six more
             ``jvp``s of the stress and reuse the same strain response
             (:mod:`pypresso.response.elastic`).
+        allow_unconverged: return an answer even when one of the two
+            self-consistent responses under this one did not converge. Off, and
+            it is off because the alternative is what
+            :func:`require_converged_responses` documents.
         response_options: passed to
             :func:`~pypresso.response.efield.dielectric_tensor` and
-            :func:`~pypresso.response.strain.strain_response`.
+            :func:`~pypresso.response.strain.strain_response`. ``alpha_mix`` is
+            the one to reach for on a **slab**: QE's default of 0.7 diverges
+            where a bulk crystal converges (see
+            :func:`require_converged_responses`).
     """
     require_a_symmetrisable_response(calculation)
     require_a_sternheimer_regime(calculation)
@@ -589,6 +642,9 @@ def electrostriction(
             **response_options,
         )
 
+    if not allow_unconverged:
+        require_converged_responses(field, strain)
+
     depsilon = susceptibility_strain_derivative(
         calculation, solver, density, b, u, strain, verbose=verbose
     )
@@ -620,7 +676,10 @@ def electrostriction(
 
     constants = big_m = big_q = None
     if elastic:
-        constants = elastic_constants(calculation, psi, eigenvalues, density, strain)
+        constants = elastic_constants(
+            calculation, psi, eigenvalues, density, strain,
+            allow_unconverged=allow_unconverged,
+        )
         # ``C : x + m E^2 = 0`` at zero total stress, so ``M = -S : m`` -- and
         # the same relation with ``q`` gives ``Q``, because the polarization
         # enters the elastic Gibbs function exactly where the field enters the

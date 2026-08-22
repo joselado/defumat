@@ -1,0 +1,49 @@
+! The machinery case for P27 x P26: bilayer graphene put through the
+! third-derivative path (`pypresso/response/electrostriction.py`), which is what
+! the D2 phase could not run on a `smearing` input.
+!
+! Three things make this input what it is, and the first two are the same pair
+! `si-electrostriction.in` documents. The grid is **unshifted**, so it is closed
+! under the point group and `nosym` is safe -- which matters more here than
+! anywhere else, because the object being differentiated carries a field label
+! and a strain label at once and there is no rank-3 average written for it. And
+! it is deliberately **small and under-converged**: what is being checked is a
+! set of identities, and both sides of every one of them share this basis and
+! this k-set.
+!
+! The third is specific to graphene and is not a preference. Graphene is a
+! **semimetal** -- its gap closes at K -- and the Sternheimer response here is
+! the insulator one, which is refused for a metal rather than silently applied.
+! A Gamma-centred n x n x 1 grid contains K = (1/3, 1/3, 0) exactly when 3
+! divides n, so **2 x 2 x 1 avoids it**: the sample is Gamma and the three M
+! points, every one of which has a 3.7 eV gap, and `occupations = 'fixed'`
+! is then the truth about this k-set rather than an approximation to it.
+!
+! What that costs is the physics. A 2 x 2 x 1 bilayer is not graphene's band
+! structure, and a slab in vacuum has no bulk dielectric constant at all -- the
+! `epsilon` this case produces is a property of the supercell. The numbers to
+! read from it are the *agreements*, not the values.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 4, celldm(1) = 4.6511, celldm(3) = 4.3, nat = 4, ntyp = 1,
+    ecutwfc = 30.0
+    occupations = 'fixed'
+    nosym = .true.
+    noinv = .true.
+    vdw_corr = 'grimme-d2'
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.5
+ /
+ATOMIC_SPECIES
+ C  12.011  C.pbe-hgh.UPF
+ATOMIC_POSITIONS (crystal)
+ C 0.000000000000 0.000000000000 0.343000000000
+ C 0.333333333333 0.666666666667 0.343000000000
+ C 0.000000000000 0.000000000000 0.657000000000
+ C 0.666666666667 0.333333333333 0.657000000000
+K_POINTS (automatic)
+ 2 2 1 0 0 0

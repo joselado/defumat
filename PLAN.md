@@ -2877,7 +2877,8 @@ a large `Omega` and therefore *fewer* translations at the same radius, so the
 expensive case is a small dense cell, not a slab.
 
 *Checks met.* On bilayer graphene (PBE, norm-conserving, 12x12x1, `conv_thr =
-1e-10`) against the vendored `pw.x`, and on silicon for the third derivative:
+1e-10`) against the vendored `pw.x`, and on silicon for the two D2 *identities*
+at third order:
 
 | what | reference | agreement |
 |---|---|---|
@@ -2918,6 +2919,56 @@ exactly what would break; and **XDM**, density-dependent for the same reason.
 `set_vdw_corr` warns and runs on with *no* correction for a name it does not know,
 which for an input asking for D3 is 30 meV on a layered crystal and nothing in the
 output that greps as an error; here it stops.
+
+**The third derivative runs on graphene itself**
+(`tests/data/qe/graphene-bilayer-electrostriction.in`), and getting there took
+two things, one of which is a trap worth more than the case.
+
+*The k-grid has to miss K.* Graphene is a **semimetal**, and the Sternheimer
+response here is the insulator one — refused for a metal rather than silently
+applied. A `Gamma`-centred `n x n x 1` grid contains `K = (1/3, 1/3, 0)` exactly
+when `3` divides `n`, so **2 x 2 x 1 misses it**: the sample is `Gamma` and the
+three `M` points, each with a 3.7 eV gap, and `occupations = 'fixed'` is then the
+truth about this k-set rather than an approximation to it. What it costs is the
+physics — a 2 x 2 x 1 bilayer is not graphene's band structure, and a slab in
+vacuum has no bulk `epsilon` at all — so the numbers to read are the agreements.
+
+*And a diverged first-order solution was being consumed in silence.* At QE's
+default `alpha_mix = 0.7` the strain response of this cell **diverges**:
+`|ddv_scf|^2` grows by 1.34 per iteration, 1.7e7 to 8.9e9 in twenty-five. The
+loop then ran out of iterations, returned what it had, and every stage above it
+took it — producing an elastic tensor that was not symmetric under the
+`C_ijkl = C_klij` that a second derivative of a scalar *is*: **49817 GPa against
+-243233** for the same index pair, on a crystal whose stiffest constant is 859.
+Nothing in the numbers said "unconverged"; only the identity did.
+`require_converged_responses` (and the same refusal inside `elastic_constants`)
+now stops it, with `allow_unconverged` for a diagnostic run.
+
+Why a slab and not silicon: the induced Hartree potential is `4 pi e^2/G^2`
+against the induced charge, and 14 bohr of vacuum puts the smallest nonzero
+`G_z` at `2 pi/c`, where that kernel is two orders larger than a compact cell
+reaches. Linear mixing of a map with a Jacobian eigenvalue that large is
+unstable above roughly `alpha_mix = 2/(1 + |lambda|)`. Measured: **0.7 diverges
+at 1.34 per iteration, 0.3 converges at 0.5 per iteration** and reaches
+`tr2 = 1e-14` in **68**. It is the same stiffness the ground-state SCF meets on a
+slab and answers with Kerker preconditioning; the response loop has no
+preconditioner, so the mixing parameter is the whole of the remedy.
+
+| what | reference | agreement |
+|---|---|---|
+| `C_ijkl = C_klij` | itself — six independently assembled `jvp` columns | below **1e-9**, the tolerance asserted (and a factor of 5 *with the wrong sign* when the response diverged) |
+| `C_1111`, `C_1212`, `C_3333` | a five-point second difference of the SCF energy, dispersion included | 5.8e-5, 4.1e-5, **2.4e-3** |
+| `d(eps_ij)/dx_11` | a central difference of `epsilon` over re-converged strained cells | **2.2e-4** — P26's own figure on silicon |
+| `C_ijkl` and `d(chi)/dx` under the crystal's twelve operations | `D_3d`, which is **trigonal**: `C_14 = -1.18` GPa is allowed, not a bug | 5.3e-12 and 4.7e-11 |
+| `C_66 = (C_11 - C_12)/2` | the three-fold axis, relating three separately assembled columns | 416.264 against 416.264, below 1e-9; `C_11` against `C_22` is 2.7e-12 |
+
+Clamped-ion, in GPa: `C_11 = C_22 = 859.03`, `C_12 = 26.50`, `C_33 = 56.63`,
+`C_44 = 27.72`, `C_66 = 416.26`, `C_14 = -1.18`. **These are properties of the
+supercell, not of graphite** — the stress is a force per unit volume and half
+this cell is vacuum — so they are quoted for the identities they satisfy and not
+against a measurement. The compliance is healthy (condition number 32, every
+eigenvalue positive from 27.7 to 886.9), so `M` and `Q` are ordinary here rather
+than the slab artefact a near-singular shear would have made them.
 
 **One thing found on the way that is not this phase's.** pypresso's symmetry
 finder is stricter than `symm_base.f90`'s `accep = 1e-5`: an `ATOMIC_POSITIONS`
