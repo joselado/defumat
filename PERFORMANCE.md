@@ -1391,6 +1391,77 @@ taken; `int3` is a `jvp` of `newd`, which the SCF already evaluates once per ite
 a primal that was going to be computed anyway -- which is the cost model of forward-mode
 differentiation and the reason this phase is not 2x slower again.
 
+## What a phonon costs (P25)
+
+Same cell as P24 — the two-atom silicon of `test-suite/ph_base/si.scf.in`, `ecutwfc = 18`,
+ten k-points, four occupied bands — on one core, and this time there is a **direct QE
+number to compare against**, because the `ph.x` run that produced the reference prints its
+own timings and its own iteration counts. That run does `epsil = .true.` as well, so its
+phonon part has to be separated out: its cumulative clock reads 1.9 s when the electric
+field's loop ends and 4.1 s when the second representation does, so the six `Gamma` modes
+cost it about **2.2 s** of its 4.15 s wall.
+
+| | pypresso | `ph.x` |
+|---|---|---|
+| the six `Gamma` modes, after the SCF | **57 s** | ~2.2 s |
+| self-consistency of the response | 17 iterations | 5 per representation |
+| perturbations solved | 6 modes | 6 modes, in 2 irreducible representations of 3 |
+| linear solves | 6 x 17 = **102** | 3 x 5 x 2 = **30** |
+| CG steps per band per solve (`av.it.`) | **27.7** | 9.0 - 9.7 |
+
+**About 26x, and none of it is the second derivative.** The two ratios in the table
+multiply to about 10, which leaves a factor of 2.6 per CG step — the same place the SCF
+sits against `pw.x` (P10), so the arithmetic is not the problem. The two counts are, and
+both have a named cause read out of the Fortran rather than guessed:
+
+- **QE schedules the linear solve's threshold and this does not.** `dfpt_kernels.f90`:
+  `thresh = 1e-2` on the first iteration and `min(0.1 sqrt(dr2), 1e-2)` thereafter, so the
+  early solves — whose right-hand side is about to change anyway — are cheap, and only the
+  last ones are tight. Here `threshold` is fixed at 1e-12 from the start, which is why
+  `av.it.` is 27.7 against 9.3. **This is `electrons.f90`'s `ethr` schedule in a second
+  place**, and it is worth what it was worth there: CLAUDE.md already records "a fixed
+  tight threshold does three times the eigensolver work", and three times is what this is.
+  `response/sternheimer.py`'s docstring quotes the rule; the phonon loop does not use it.
+- **QE mixes the induced potential with Broyden.** `LR_Modules/mix_pot.f90` is a modified
+  Broyden over `nmix_ph = 4` previous iterations — it prints `alpha_mix = 0.700` while
+  doing it, which is easy to misread as plain linear mixing — and reaches 3e-16 in 5
+  iterations where linear mixing here takes 17 to reach 6e-15.
+
+What the **irreducible representations** buy is not fewer solves: `ph.x` perturbs along all
+six modes, exactly as this does. What they buy is that each representation carries its own
+self-consistent loop, so it converges, is stored and is *released* independently — which is
+the memory item below rather than a time one.
+
+**The second derivative is free next to the response.** Timed stage by stage (which costs a
+few extra compilations, so the stages sum to 70 s where the single call takes 57):
+
+| stage | time |
+|---|---|
+| six `jvp`s through `at_positions` — the bare perturbations (`dvqpsi_us`) | 1.4 s |
+| the self-consistent loop, 17 iterations x 6 solves | 67.5 s |
+| six `jvp`s of `jax.grad(frozen_energy)` — the matrix itself | **1.4 s** |
+
+So the derivative that replaces `dynmat0` + `d2ionq` + `drhodv` is **2%** of the run, and
+both autodiff stages together cost less than one iteration of the loop. That is the pattern
+P15 and P11 both measured: an autodiff route pays for the *forward* function, and a second
+derivative of a cheap forward function stays cheap. All of the cost, and all of the
+backlog, is in the linear solves.
+
+**Memory: `3 nat` wavefunction-shaped arrays, twice.** The bare perturbations and the
+first-order wavefunctions are both held for every mode, `(nspin, nk, nocc, npwx)` complex
+each:
+
+| cell | working set |
+|---|---|
+| si2, 10 k-points, 4 bands, ~300 PW | **2 MB** |
+| 16 atoms, 100 k-points, 32 bands, 3000 PW | **7 GB** |
+
+That is the trade named in the module docstring and it is deliberate: the bare terms are
+re-used at every iteration, so recomputing them would cost 17 x 6 `jvp`s through
+`at_positions`. Solving one representation at a time is what bounds it — 3 modes in flight
+instead of `3 nat` — which is what QE's representation loop is doing to its memory while
+this holds all of them.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -1408,7 +1479,23 @@ instinct. None of these may change a validated number.
 3. **Shell-based radial evaluation** for quantities depending only on `|G|` (~100
    shells vs 1459 G-vectors for Si). Note this is *not* strain-safe: shells split
    under strain, so it must stay off the stress path.
-4. **The stress's reverse-mode tape through the radial transforms** (P11). 11 GB on
+4. **Schedule the response solver's threshold** (P25). `dfpt_kernels.f90` uses
+   `thresh = min(0.1 sqrt(dr2), 1e-2)` where `response/phonon.py` holds a fixed
+   1e-12, and the cost is `av.it. = 27.7` against `ph.x`'s 9.3 — a factor of
+   three, on the stage that is 96% of the run. It is `electrons.f90`'s `ethr`
+   schedule in a second place, the rule is already quoted in
+   `response/sternheimer.py`'s docstring, and the same fix applies to
+   `response/efield.py`. Cheapest item on this list by a wide margin.
+5. **Broyden mixing in the response loop** (P25). 17 linear-mixing iterations
+   against `ph.x`'s 5, whose mixer is `LR_Modules/mix_pot.f90` — a modified
+   Broyden over four previous iterations, printing `alpha_mix` while it does it.
+   `scf/mixing.py`'s history is already written for the SCF density and neither
+   response loop uses it.
+6. **One irreducible representation at a time** (P25), for the *memory* rather
+   than the time: it bounds the working set at 3 modes in flight instead of
+   `3 nat`, which is 7 GB on a 16-atom cell. It does not reduce the number of
+   solves — `ph.x` perturbs along all `3 nat` modes too.
+7. **The stress's reverse-mode tape through the radial transforms** (P11). 11 GB on
    eight-atom ultrasoft silicon against the SCF's 0.9, and the largest single
    allocation anywhere in the code. `jax.checkpoint` on the augmentation kernel
    alone was measured and is worth nothing, so the next thing to try is a
@@ -1461,4 +1548,5 @@ measurements, before being implemented. See "QE's FFT layout" above.)
 | 2026-08-21 | Newton-Krylov on the SCF residual (`scf_solver`) | **not a speedup** — 19 to 139 `F` evaluations against 14 to 36; it buys unstable SCF solutions, not time |
 | 2026-08-21 | `ns` joins the residual's packed state; `run_scf(starting_ns=...)` | DFT+U reaches the mixer's fixed point (58 `F` against 9) and a saddle the mixer cannot hold (31 against a runaway) |
 | 2026-08-21 | Linear response (P24): the velocity operator from one `jvp`, the Sternheimer solve, and `epsilon_infinity` | exact `chi_0 K` at 0.5 s against the differentiated eigensolver's 3.5 s; silicon's dielectric constant in 66 s |
+| 2026-08-22 | Phonons at `Gamma` (P25): the dynamical matrix as one `jvp` of the gradient that already gives the force | silicon's six modes in 57 s against `ph.x`'s ~2.2 s, of which the second derivative itself is 1.4 s; the 26x is 3.4x the linear solves and 3x the CG steps each, both with named causes |
 | 2026-08-21 | Ultrasoft and PAW linear response (P24a): `dbecsum`, the augmentation charge's response, `int3` and `PAW_dpotential`, all as `jvp`s of code that existed | `epsilon_infinity` on four cases at 44-95 s; 1.9x (US) and 2.2x (PAW) the norm-conserving run, mostly the doubled dual |

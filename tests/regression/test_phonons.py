@@ -147,6 +147,11 @@ def test_the_acoustic_modes_are_the_basis_sets_own_error():
     _, _, phonons = _phonons("si-epsilon")
     assert phonons.acoustic_residue < ACOUSTIC_CEILING
     assert phonons.acoustic_residue > 0.0, "the sum rule must not have been imposed"
+    # Both residues are the same size and neither is small next to the other:
+    # 4.09 here against QE_ACOUSTIC's 2.05, which is 1.3e-4 of the force
+    # constants against 6.5e-5. Asserting one against the other would be
+    # asserting a property of two truncated basis sets.
+    assert phonons.acoustic_residue < 20 * QE_ACOUSTIC
 
 
 def test_the_acoustic_sum_rule_can_be_imposed():
@@ -156,7 +161,11 @@ def test_the_acoustic_sum_rule_can_be_imposed():
         calculation, result.wavefunctions, result.eigenvalues, result.density,
         result.becsum, acoustic_sum_rule=True,
     )
-    assert phonons.acoustic_residue < 1e-6
+    # Not smaller than 1e-4 cm^-1, and the reason is the square root: a
+    # frequency is sqrt(eigenvalue), so a matrix entry left at round-off --
+    # 1e-16 Ry/bohr^2, which is what the sum rule leaves -- surfaces as about
+    # 1e-5 cm^-1. Measured: 6.5e-6.
+    assert phonons.acoustic_residue < 1e-4
     assert phonons.frequencies[3] == pytest.approx(QE_OPTICAL, abs=OPTICAL_TOLERANCE)
 
 

@@ -2452,6 +2452,154 @@ potential carries a `dns` that is not a function of `drho`); and spin spirals.
 
 *Notebook 19.*
 
+### P25 — Phonons at `Gamma`: the dynamical matrix. ✅ DONE.
+
+`pypresso/response/phonon.py`, plus `Calculation.symmetrize_atom_displacement`,
+`symmetrize_atom_displacement_density` and `symmetrize_atom_pair_tensor` in
+`system/symmetry.py`, and one new argument on `forces/energy.py`'s functional. It is
+what P24 was built toward — the electric field's response gave `epsilon_infinity` and
+the Born charges, and the *ionic* perturbation gives the force constants — and it ends on
+the frequencies of the same regenerated `ph.x` run.
+
+**The second derivative is one `jvp` of the gradient the force already is.** P15 wrote
+the total energy as a function `L(u, psi)` of the coordinate and the state, carrying the
+orthonormality constraint with its multipliers so that `L` is *stationary* in `psi` at
+the solution — which is why the force is `grad_u L` at frozen wavefunctions rather than a
+total derivative. Differentiate once more and
+
+    d^2E/du_i du_j = d_i d_j L + (d_psi d_j L) . dpsi_i
+
+with no second-order wavefunction, no `<dpsi|H - eps S|dpsi>` term and no factor to get
+right. Both pieces are components of *one* tangent vector, so **one `jvp` per mode
+returns a whole column of the matrix**. `dynmat0`, `d2ionq`, the local potential's and
+the projectors' second derivatives are the `u` half; `drhodv` is the `psi` half; and
+neither is written down. What is transcribed is `solve_linter`'s loop, `symdvscf`,
+`symdynph_gq` and `dyndia`. The bare perturbation `dvqpsi_us` was already there: it is the
+`jvp` through `at_positions` that P24 built for `Z*`.
+
+*Check met.* Silicon's optical mode on the ten-point wedge of `si-epsilon.in`:
+
+    510.102374 cm^-1   against   ph.x's   510.151844
+
+a difference of **0.049 cm^-1**, 9.7e-5 relative — the same floor as the dielectric
+constant's 4.3e-5 and the same cause, QE's `dq = 0.01` form-factor table against direct
+integration here. The mode is triply degenerate to 1e-6 with nothing imposing the crystal
+class, and the on-site block is isotropic to 1e-9.
+
+**Three further checks, each sharing no machinery with the assembly.**
+
+- **A rigid translation of the crystal is a translation of its density.** Sum the response
+  densities of all the atoms along one direction and the answer must be `-d(rho)/dx`,
+  which is got by differentiating the converged density in G-space. Measured: **6.5e-5
+  relative**, on all three axes. It holds only for the *screened* response — the bare one
+  is **52%** off — so it tests the linear solve, the kernel and the symmetrisation at once.
+- **Finite-differenced forces.** Displace an atom by `+-h`, re-converge, difference the
+  symmetrised forces, and compare whole columns. This is the only check that reaches the
+  *response* half of the derivative: `jacfwd` of the force with respect to the positions
+  alone is the frozen Hessian and is checking itself. Measured on the unshifted `nosym`
+  grid: **2.55e-5** Ry/bohr^2 at `h = 1e-2` and **2.14e-5** at `3e-3`, against force
+  constants of 0.2865 — improving with the step, so what is left is the floor rather than
+  truncation.
+- **The wedge against the whole closed grid.** The same unshifted 4x4x4 sample, once
+  reduced to 8 points with the response symmetrised and once whole at 64 with the
+  symmetrisation idle: **2.7e-14** on the matrix and 1.5e-9 cm^-1 on the frequencies. It
+  is the only check the two new symmetrisations have, exactly as it was the only one
+  `symmetrize_directional` had in P24, and diamond is the right cell for it because half
+  the operations exchange the two sublattices.
+
+**The acoustic modes are the diagnostic and not a target.** Translating the crystal costs
+nothing, so three frequencies are zero exactly and what comes out instead is the finite
+basis's own error — the energy depends slightly on where the atoms sit relative to a grid
+that does not follow them. `ph.x` prints **2.045258** and this code prints **4.088**;
+both are 1e-4 of the force constants (`D_00 + D_01 = 3.6e-5` against `D_00 = 0.2766`) and
+neither is physics. QE does **not** impose the sum rule in `ph.x`, so `acoustic_sum_rule`
+defaults to `False` here and the residue stays visible; switching it on gives 3e-6 cm^-1
+and moves the optical mode by 0.016.
+
+**The trap of the phase was the symmetrisation, and it cost the whole answer.**
+`frozen_energy` builds its density with the SCF's own **scalar** symmetrisation, which is
+right for the ground state — it is how a wedge sum is completed to the whole Brillouin
+zone, and the functional has to be the one the SCF minimised. It is wrong for a
+*response*: displacing one atom breaks the crystal's symmetry, and averaging that
+perturbation over the full group of the *undisplaced* crystal projects most of it away. A
+second derivative differentiates the functional with respect to the **states**, so the
+chain rule pushes the state tangent straight through that average. What that produced was
+not an obviously broken number:
+
+| | |
+|---|---|
+| optical mode, chain rule through the scalar average | **667.0 cm^-1** against 510.2 |
+| acoustic sum rule `D_00 + D_01` | **-0.716 Ry/bohr^2**, i.e. 580 cm^-1 where the answer is 2 |
+| the matrix's symmetry and cubic form | perfect, both before and after |
+
+The fix is that the density becomes an **independent argument** of `energy_at`, so the
+caller supplies both it and its tangent: the ground state's symmetrised density, and the
+response density already averaged the way `symdvscf` averages one. It is
+`SternheimerSolver.density_at`'s rule ("`Calculation.density` **without** the
+symmetrisation, because the caller symmetrises it as a vector") one level up, met for the
+first time in a *second* derivative. The confirming control was free and is what located
+it: the `nosym` run, which symmetrises nothing at all, satisfied the sum rule to 4e-5
+throughout.
+
+**Two smaller traps.** `frozen_energy` still wrote `jnp.abs(psi)**2` in its kinetic and
+constraint terms, which was harmless while only the positions were differentiated and is
+`0/0` the moment the states are — P24a's trap in a **third** place, and this time the
+symptom is a NaN in every force constant rather than a wrong number. And the asymmetry
+`max|D - D^T|` is worth exposing but only *after* the group average: before it, a column
+is a wedge sum and the raw asymmetry is **5.1e-2** against force constants of 0.28, which
+says nothing; after it, it is 2e-16 on every case here and reports the linear solves.
+
+**Refused by name: ultrasoft and PAW, and the gap is in the formula rather than in a
+missing routine.** The identity holds because `L` is stationary in `psi` at *fixed*
+multipliers, and those multipliers sit on the constraint `<psi|S(u)|psi> - 1`.
+Differentiating twice leaves a term `-<psi|dS/du_j|psi> deps_i` which vanishes identically
+when `S` does not move with the atoms — a norm-conserving dataset — and does not otherwise;
+beside it, the augmentation charge `Q_ij(r - tau)` moves at frozen `becsum`, which
+`addusdynmat` and `drhodvus` account for. With the guard lifted the measurement is
+`zstar_eu_us`'s shape, **wrong in sign as well as size**:
+
+| | ours | `ph.x` |
+|---|---|---|
+| ultrasoft Si, optical | **-504.32** | +513.28 |
+| PAW Si, optical | **-503.63** | +513.40 |
+| ultrasoft Si, acoustic residue | 618.4 | 6.13 |
+
+— an imaginary frequency where the crystal is stable, from a run that converges in 17
+iterations and gives a matrix that is cubic and symmetric to 1e-16. The **dielectric
+constant** from the same solver is right for both datasets to 5e-5; two quantities out of
+one machinery, one complete and one not, is what a refusal is for. Everything
+`require_a_sternheimer_regime` refuses is refused here too — metals, noncollinear
+magnetism, DFT+U, spirals — and so is a `nosym` run on a *shifted* grid, through the same
+`require_a_symmetrisable_response` the electric field uses.
+
+**Memory.** `3 nat` bare perturbations and `3 nat` first-order wavefunctions are held at
+once, each `(nspin, nk, nocc, npwx)` complex: **2 MB** on this silicon, and **7 GB** on a
+16-atom cell with 100 k-points and 3000 plane waves. The bare terms are stored rather than
+recomputed because the loop re-uses them every iteration, which is
+`response/efield.py`'s trade for its three. The way down is QE's and is the backlog item:
+solve one irreducible representation at a time, which cuts the count as well as the
+storage.
+
+**One finding that is about the cost rather than the answer**, and it is a rule this
+project already wrote down once. `ph.x` does the same six modes in about 2.2 s where this
+takes 57, and the reference output says why: `dfpt_kernels.f90` schedules the linear
+solve's threshold against the self-consistency of the response
+(`thresh = min(0.1 sqrt(dr2), 1e-2)`) while `response/phonon.py` holds a fixed 1e-12, which
+costs `av.it. = 27.7` against 9.3; and `LR_Modules/mix_pot.f90` is a modified Broyden over
+four iterations, which is why 5 iterations do what 17 of linear mixing do here. It is
+`electrons.f90`'s `ethr` schedule met a second time, on the stage that is 96% of the run.
+What the irreducible representations buy is *not* fewer solves — `ph.x` perturbs along all
+six modes too — but a bounded working set, since each representation is converged and
+released on its own. All three are in `PERFORMANCE.md`'s backlog.
+
+**What is left for phonons proper** is `q != 0`: the up and down components of a
+displacement pattern live at `k` and `k + q`, so it needs two plane-wave spheres per
+k-point, which is machinery P19 already built for the spin spirals and which nothing here
+reuses yet. With that and `q2r`/`matdyn`'s Fourier interpolation there is a dispersion;
+without it there is one point of it.
+
+*Notebook 20.*
+
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes
 the k-point count.

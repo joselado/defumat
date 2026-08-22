@@ -71,9 +71,11 @@ move with the atoms -- that is, for a norm-conserving dataset, where ``S = 1``.
 For an ultrasoft or PAW one it does not vanish, and there is a second gap beside
 it: the augmentation charge ``Q_ij(r - tau)`` moves at frozen ``becsum``, which
 ``addusdynmat`` and ``drhodvus`` account for. Both are refused by name
-(:func:`require_norm_conserving`) with the size of the error measured in
-``PLAN.md`` P25, exactly as ``zstar_eu_us``'s five stages are refused for the
-Born charges.
+(:func:`require_norm_conserving`), and the measurement behind the refusal is the
+same shape as ``zstar_eu_us``'s: with the guard lifted, ultrasoft silicon's
+optical mode comes out at **-504.3 cm^-1** against ``ph.x``'s **+513.3** --
+imaginary where the crystal is stable -- from a run that converges and gives a
+cubic, symmetric matrix.
 
 **What this costs in memory**, since a design is not finished until its peak
 working set is known: ``3 nat`` bare perturbations and ``3 nat`` first-order
@@ -256,8 +258,10 @@ def dynamical_matrix(
     # ``(a i) <-> (b j)`` until the group has put back what the reduction left
     # out -- on the ten-point wedge of ``si-epsilon.in`` the raw asymmetry is
     # 5.1e-2 against force constants of 0.28, and essentially all of it is that.
-    # Once symmetrised the matrix is symmetric exactly, so what is left measures
-    # the linear solves instead.
+    # After the average it is 2e-16 on every case here, shifted wedge included,
+    # so the hermitisation has nothing left to do and what it would have removed
+    # is a report on the linear solves. Whether the average *must* leave a
+    # symmetric matrix is not claimed -- it is measured.
     matrix = symmetrize_atom_pair_tensor(
         matrix, calculation.system.cell, calculation.symmetries,
         atom_mapping(calculation.system.cell, structure, calculation.symmetries),
@@ -530,10 +534,18 @@ def require_norm_conserving(calculation) -> None:
 
     Refused rather than returned for the same reason
     :func:`~pypresso.response.efield._require_born_charges` refuses ``Z*`` on
-    these datasets: the missing terms are invisible in the answer, which comes
-    out looking like an ordinary phonon spectrum. The measured size is in
-    ``PLAN.md`` P25. The **dielectric constant** from the same solver is right
-    for ultrasoft and PAW and is not affected by this.
+    these datasets, and the measurement is the same shape: **wrong in sign as
+    well as size**. With the guard lifted, the norm-conserving expression gives
+    ultrasoft silicon an optical mode of **-504.3 cm^-1** against ``ph.x``'s
+    **+513.3** -- an imaginary frequency where the crystal is stable -- and an
+    acoustic residue of 618 where ``ph.x`` prints 6.1. PAW is the same to a
+    Rydberg: -503.6 against +513.4. What makes it a refusal rather than a
+    warning is that the run *converges*, the matrix comes out cubic and
+    symmetric to 1e-16, and everything except the numbers looks correct.
+
+    The **dielectric constant** from the same solver is right for both datasets
+    to 5e-5 and is not affected by any of this: the two quantities share the
+    Sternheimer solve and nothing else.
     """
     if calculation.is_ultrasoft:
         raise NotImplementedError(
@@ -541,8 +553,10 @@ def require_norm_conserving(calculation) -> None:
             "not implemented: the overlap operator moves with the atoms, so the "
             "orthonormality multipliers contribute a term of their own to the "
             "second derivative, and the augmentation charge Q_ij(r - tau) moves "
-            "at frozen becsum (addusdynmat, drhodvus). Neither is here, and "
-            "neither is visible in the frequencies that come out. The "
-            "dielectric constant from the same solver is unaffected and is "
-            "right for these datasets"
+            "at frozen becsum (addusdynmat, drhodvus). Without them the "
+            "norm-conserving expression gives ultrasoft silicon -504.3 cm^-1 "
+            "against ph.x's +513.3 -- imaginary where the crystal is stable -- "
+            "while converging cleanly and coming out cubic. The dielectric "
+            "constant from the same solver is unaffected and is right for these "
+            "datasets"
         )

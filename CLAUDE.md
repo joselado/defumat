@@ -11,7 +11,7 @@ the deliverable.
 
 **Status: the first milestone — SCF, band structure, DOS — is met**, with ultrasoft/PAW,
 LDA/GGA and collinear spin, and **forces and structural relaxation** on top of it.
-P0–P9, P12–P21 and P23 are done bar Wyckoff input in P6; P10 has had one pass. A silicon SCF reproduces QE's total energy to **~1e-9 Ry** term by term, its
+P0–P9, P12–P21, P23 and P25 are done bar Wyckoff input in P6; P10 has had one pass. A silicon SCF reproduces QE's total energy to **~1e-9 Ry** term by term, its
 band structure to **0.0002 eV**, and metals with every smearing to ~2.5e-8 Ry.
 **Ultrasoft and PAW pseudopotentials are supported** and match QE to **≤3e-9 Ry** on 2-
 and 8-atom silicon (P12). **PBE, revPBE and PBEsol** work on all three pseudopotential
@@ -77,9 +77,20 @@ resolution of everything it prints (6.9e-4 on a projection, 4.7e-5 on a charge).
 **The stress tensor** (P11) is in too: `sigma = -(1/Omega) dE/d(epsilon)` from one `jax.grad`
 of the energy at frozen wavefunctions, matching QE to **≤2.7e-7 Ry/bohr³** on thirteen cases
 from norm-conserving LDA up through ultrasoft, PAW, PBE, `nspin = 2` and DFT+U.
-**Outstanding:** Wyckoff input, `vc-relax`, phonons (P24's Sternheimer solver is their
-core, and what is left is the ionic perturbation and the dynamical matrix), and the rest
-of P10 (k-axis sharding and GPU).
+**Phonons at `Gamma`** (P25) are in: the force constants are `jax.grad` of the total
+energy differentiated *once more*, along a tangent that carries the positions, the states
+and the density together — so QE's `dynmat0`/`d2ionq` (the frozen second derivative) and
+`drhodv` (the electronic response) are two halves of one `jvp` of the gradient that
+already gives the force. Silicon's optical mode is **510.102 cm⁻¹** against the vendored
+`ph.x`'s 510.152, checked three further ways that share nothing with the assembly: a rigid
+translation reproduces `-drho/dx` to 6.5e-5, finite-differenced forces reproduce whole
+columns of the matrix to 2.1e-5 Ry/bohr², and the reduced wedge agrees with the whole
+closed grid to 2.7e-14. **Norm-conserving only, and refused by name otherwise**, because
+with `S` moving the orthonormality multipliers contribute a term of their own.
+
+**Outstanding:** Wyckoff input, `vc-relax`, phonons at `q != 0` (the perturbed states live
+at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals, plus
+`q2r`/`matdyn` for a dispersion), and the rest of P10 (k-axis sharding and GPU).
 
 ## Layout
 

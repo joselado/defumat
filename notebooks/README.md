@@ -30,6 +30,7 @@ ends with a pointer to both.
 | [`17_reaching_self_consistency.ipynb`](17_reaching_self_consistency.ipynb) | Kerker preconditioning (24 → 14 iterations), the SCF as a root-find, and the magnetic solutions no mixer reaches -- with and without a Hubbard `U` | P22 |
 | [`18_continuing_a_calculation.ipynb`](18_continuing_a_calculation.ipynb) | Starting one run from another's converged state across a change of spin regime: bcc iron's moment rotated onto `x` in one iteration, the seed that keeps a magnetic run off the symmetric solution, and spin-orbit coupling switched on | P23 |
 | [`19_linear_response.ipynb`](19_linear_response.ipynb) | The velocity operator from one `jvp` of `H(k)`, the Sternheimer equation instead of a sum over states, and silicon's dielectric constant and Born charges against `ph.x` on norm-conserving, ultrasoft and PAW datasets (agreeing to <= 1.2e-4) | P24, P24a |
+| [`20_phonons.ipynb`](20_phonons.ipynb) | The force constants as one more derivative of the gradient that already gives the force -- `dynmat0` and `drhodv` as two halves of one `jvp` -- and silicon's optical mode at Gamma against `ph.x` (510.102 against 510.152 cm-1) | P25 |
 
 ## Conventions
 
@@ -77,6 +78,10 @@ Wannier-charge-centre sweep on bismuthene (7.8 GB in one kernel, so it was run i
 process) and `14`'s cutoff sweep of the basis-set jumps in `E(q)`. `08` runs bismuthene at
 the test size (20 Ry, 6x6x1); the converged pair (35 Ry, 12x12x1) is committed beside it with
 its own QE reference and is one variable away, at about forty minutes and a 9.4 GB peak.
+
+`19` and `20` run without it too — their inputs and the regenerated `ph.x` outputs they
+are compared against are both committed under `tests/data/qe/`, because `ph_base`'s own
+benchmark dates from release 6.0 and has drifted. `20` takes about a minute.
 
 `16` runs without the vendored tree as well — its input and the `projwfc.x` reference
 it is compared against are both committed under `tests/data/qe/`, because QE's test
