@@ -965,7 +965,23 @@ and another from time reversal on a magnetic operation) — so `nspin_mag = 4` n
 `nosym`; `gradcorr` in the local spin frame — so `nspin_mag = 4` needs an LDA functional;
 `average_pp`, QE's `j`-averaging of a relativistic dataset asked for with
 `lspinorb = .false.`; and PAW's `with_small_so` magnetization term, which only
-`nspin_mag = 4` reaches. The atomic starting guess is the scalar orbitals tensored with
+`nspin_mag = 4` reaches.
+
+**The `average_pp` refusal was written one condition too narrow, and that is a
+trap worth recording because the refusal existing is what made it invisible.**
+It read `noncolin and not lspinorb` — the case a reader thinks of, a spin-orbit
+run with the coupling switched off — where `setup.f90` calls `average_pp` in the
+*else* branch of `IF (lspinorb)` and so reaches **every** run without spin-orbit
+coupling. The one it therefore missed is the common one: an ordinary `nspin = 1`
+calculation with a `rel-` dataset picked off a pseudopotential table, which used
+the two `j = l +- 1/2` channels as though they were one, converged, and reported
+a total energy wrong by **20 Ry** — measured on rhombohedral BN with ONCVPSP's
+`B-PBE`/`N-PBE` against `pw.x`, -100.42 against -80.16, with the Ewald and
+dispersion terms — the only two that touch no projector — still agreeing to
+4e-9. The condition is now `not lspinorb`, and
+`tests/unit/test_spinorbit_coefficients.py` covers both halves of it. The lesson
+generalises past this case: a guard written for the *interesting* instance of a
+condition and not for the *general* one reads, in review, exactly like a guard. The atomic starting guess is the scalar orbitals tensored with
 `{up, down}` rather than QE's `atomic_wfc_so` spin-angle functions: the same span, so the
 same answer after `rotate_wfc`, at the cost of a Davidson step or two.
 

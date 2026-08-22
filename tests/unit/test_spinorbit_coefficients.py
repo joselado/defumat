@@ -328,3 +328,56 @@ def test_the_spinor_overlap_is_positive_definite(spinor_hamiltonian):
     overlap = np.asarray(hamiltonian.overlap_matrix(0))
     assert np.abs(overlap - overlap.conj().T).max() < 1e-10
     assert np.linalg.eigvalsh(overlap).min() > 0.0
+
+
+# -- using a relativistic dataset where there is no spin-orbit coupling --------
+
+
+def _bismuth_system(**overrides):
+    """A two-atom cell with the committed fully-relativistic bismuth dataset."""
+    import dataclasses
+
+    import jax.numpy as jnp
+
+    from pypresso.system.builder import System
+    from pypresso.system.cell import Cell, latgen
+    from pypresso.system.kpoints import KPoints
+    from pypresso.system.structure import Species, Structure
+
+    cell = Cell.from_vectors(latgen(1, [9.0, 0, 0, 0, 0, 0]), alat=9.0)
+    structure = Structure(
+        positions=jnp.asarray([[0.0, 0.0, 0.0]]),
+        types=(0,),
+        species=(Species(name="Bi", mass=209.0,
+                         pseudo_file="Bi.rel-pbe-dn-rrkjus_psl.1.0.0.UPF"),),
+    )
+    system = System(
+        cell=cell, structure=structure,
+        kpoints=KPoints(coords=np.zeros((1, 3)), weights=np.ones(1)),
+        ecutwfc=12.0, ecutrho=48.0, nosym=True,
+    )
+    return dataclasses.replace(system, **overrides) if overrides else system
+
+
+@pytest.mark.parametrize(
+    "spin", [{}, {"nspin": 4}], ids=["nspin=1", "noncolin without lspinorb"]
+)
+def test_a_relativistic_dataset_without_spin_orbit_is_refused(spin):
+    """``average_pp`` is not implemented, so the combination must not run.
+
+    **The ``nspin = 1`` half of this is the one that matters** and it is the one
+    that used to slip through: the refusal was written as ``noncolin and not
+    lspinorb``, where ``setup.f90`` calls ``average_pp`` in the *else* branch of
+    ``IF (lspinorb)`` and so reaches every run without spin-orbit coupling.
+    Picking a ``rel-`` dataset off a pseudopotential table and running an
+    ordinary scalar calculation with it is the common way to meet this, and it
+    used to converge and report a total energy wrong by **20 Ry** -- measured on
+    rhombohedral BN against ``pw.x``, with the Ewald and dispersion terms, the
+    only two that touch no projector, still agreeing to 4e-9.
+    """
+    from pypresso.scf import Calculation
+
+    pseudo = read_upf(PSEUDO / "Bi.rel-pbe-dn-rrkjus_psl.1.0.0.UPF")
+    assert pseudo.has_so, "this test needs a fully-relativistic dataset"
+    with pytest.raises(NotImplementedError, match="fully-relativistic"):
+        Calculation(_bismuth_system(**spin), (pseudo,))

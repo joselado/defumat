@@ -733,18 +733,34 @@ class Calculation:
                 "lspinorb = .true. but no pseudopotential is fully relativistic; "
                 "a spin-orbit run needs a rel- dataset with a PP_SPIN_ORB section"
             )
-        if self.noncolin and not self.lspinorb:
+        if not self.lspinorb:
             for pseudo in self.pseudos:
                 if pseudo.has_so:
                     # ``average_pp``: QE j-averages the projectors back to the
                     # scalar-relativistic ones. That is a different
                     # pseudopotential from the one in the file, so it is refused
                     # rather than done silently.
+                    #
+                    # **The condition is ``not lspinorb`` and not ``noncolin and
+                    # not lspinorb``**, which is what it used to say and what
+                    # ``setup.f90`` does not say: QE calls ``average_pp`` in the
+                    # *else* branch of ``IF (lspinorb)``, so every run without
+                    # spin-orbit coupling gets it -- an ordinary ``nspin = 1``
+                    # one above all, which is the common way to pick a `rel-`
+                    # dataset off a table by accident. Written the narrow way,
+                    # such a run consumed the ``j``-resolved projectors as
+                    # though they were ``l``-resolved, converged, and reported a
+                    # total energy wrong by **20 Ry** on rhombohedral BN with
+                    # ONCVPSP's B and N -- with the Ewald and dispersion terms,
+                    # the two that touch no projector, still agreeing to 4e-9.
                     raise NotImplementedError(
-                        f"{pseudo.element}: a fully-relativistic pseudopotential "
-                        "with lspinorb = .false. asks for QE's j-averaging "
-                        "(average_pp), which is not implemented; use "
-                        "lspinorb = .true. or a scalar-relativistic dataset"
+                        f"{pseudo.element}: this is a fully-relativistic "
+                        "pseudopotential (has_so, a PP_SPIN_ORB section) and the "
+                        "run has no spin-orbit coupling, so its two j = l +- 1/2 "
+                        "channels would be used as though they were one. QE "
+                        "averages them here (average_pp); that is not "
+                        "implemented, so it is refused rather than done wrong. "
+                        "Use lspinorb = .true., or a scalar-relativistic dataset"
                     )
 
         self.nelec = sum(self.pseudos[t].z_valence for t in system.structure.types)
