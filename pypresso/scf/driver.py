@@ -2486,7 +2486,8 @@ def _solve_residual(
     x0 = residual.pack(rho, becsum_, ns_)
     if precondition is True or (precondition is None and options.get("kerker", True)):
         precondition = kerker_preconditioner(
-            calculation.basis.dense, system.cell, residual.shapes[0], beta=1.0,
+            calculation.basis.dense, calculation.system.cell, residual.shapes[0],
+            beta=1.0,
             nelec=calculation.nelec,
         )
     elif precondition is not True and not callable(precondition):
@@ -2506,7 +2507,7 @@ def _solve_residual(
         A residual solver that converged on a *different* measure than the mixer
         could not be compared with it at all."""
         accuracy = _accuracy(
-            jnp.asarray(r[:size]).reshape(shape), calculation.basis.dense, system.cell
+            jnp.asarray(r[:size]).reshape(shape), calculation.basis.dense, calculation.system.cell
         )
         if residual.ns_shape is not None:
             n = int(np.prod(residual.ns_shape))
@@ -2532,7 +2533,7 @@ def _solve_residual(
             # caller asked for -- and converged the slab on its own, hiding the
             # solver it was supposed to be warming up.
             warm_mixer.precondition = kerker_preconditioner(
-                calculation.basis.dense, system.cell, residual.shapes[0],
+                calculation.basis.dense, calculation.system.cell, residual.shapes[0],
                 beta=mixing_beta, nelec=calculation.nelec,
             )
         for _ in range(warmup):
@@ -2721,7 +2722,7 @@ def run_scf(
         # inside ``get_mixer``, which knows only a number. It is installed here,
         # where the density's shape and the dense G-vectors are both in hand.
         mixer.precondition = kerker_preconditioner(
-            calculation.basis.dense, system.cell, tuple(np.shape(rho)),
+            calculation.basis.dense, calculation.system.cell, tuple(np.shape(rho)),
             beta=mixing_beta, nelec=calculation.nelec,
         )
 
@@ -2788,7 +2789,9 @@ def run_scf(
             # the conservative direction. Using the smooth GVectors here would
             # be a silent error whenever they differ: their fft_index addresses
             # a smaller box than the array being gathered from.
-            accuracy = float(_accuracy(rho_out - rho, calculation.basis.dense, system.cell))
+            accuracy = float(_accuracy(
+                rho_out - rho, calculation.basis.dense, calculation.system.cell
+            ))
             if calculation.is_hubbard:
                 ns_out = calculation.occupation_matrix(wavefunctions, wg)
                 if iteration == 1 and starting_density is None and starting_ns is None:
@@ -2840,7 +2843,18 @@ def run_scf(
         eband, deband, residual = (
             float(x) for x in
             _iteration_scalars(
-                eigenvalues, wg, rho, rho_out, potential.v_scf, system.cell.volume
+                eigenvalues, wg, rho, rho_out, potential.v_scf,
+                # ``calculation.system``, never the ``system`` argument. They are
+                # the same object for every ordinary call and *not* for one that
+                # supplies its own ``calculation`` -- which is exactly what a run
+                # on a deformed cell does (:meth:`Calculation.at_strain`). With
+                # the caller's volume here, ``deband`` is scaled wrongly and the
+                # reported total energy acquires a slope in the strain of
+                # **3.9 Ry per unit strain** on two-atom silicon, against a true
+                # ``dE/d(eps)`` of 0.09. The density, the potential and every
+                # response are unaffected, which is why it survived: only the
+                # number printed at the end is wrong.
+                calculation.system.cell.volume
             )
         )
 
@@ -2848,7 +2862,9 @@ def run_scf(
         # The density is self-consistent *at this field*, which is the state the
         # secant update is allowed to measure: see ``MagneticField.feedback``.
         inner_converged = converged
-        if converged and field is not None and not field.satisfied(rho_out, system.cell):
+        if converged and field is not None and not field.satisfied(
+            rho_out, calculation.system.cell
+        ):
             # A fixed-spin-moment run is not converged until the moment is where
             # it was asked to be: the constraining field is outside the density,
             # so ``dr2`` can fall below ``conv_thr`` while the field is still
@@ -2907,11 +2923,13 @@ def run_scf(
         magnetization = moment = None
         if calculation.nspin == 2:
             magnetization = [
-                float(x) for x in _magnetization(rho_out, system.cell.volume)
+                float(x) for x in _magnetization(rho_out, calculation.system.cell.volume)
             ]
         elif calculation.nspin_mag == 4:
             values = [
-                float(x) for x in _noncollinear_magnetization(rho_out, system.cell.volume)
+                float(x) for x in _noncollinear_magnetization(
+                    rho_out, calculation.system.cell.volume
+                )
             ]
             moment, magnetization = tuple(values[:3]), [None, values[3]]
 
@@ -2973,7 +2991,7 @@ def run_scf(
             # the next potential is built.
             field_scale *= field.reducebf
             if field.fsm_update == "elk" or field.constraint != "fsm":
-                field = field.feedback(rho, system.cell)
+                field = field.feedback(rho, calculation.system.cell)
             elif inner_converged:
                 # The secant scheme steps on *converged* pairs only. Between
                 # steps the field is held and the SCF is an ordinary one, which
@@ -2983,7 +3001,7 @@ def run_scf(
                 # across the step: the density it holds is a better start for
                 # the next field than the atomic guess, and the field moves by
                 # less each time.
-                field = field.feedback(rho_out, system.cell)
+                field = field.feedback(rho_out, calculation.system.cell)
 
     nspin = calculation.nspin
     stress = None
