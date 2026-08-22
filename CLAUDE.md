@@ -87,6 +87,22 @@ translation reproduces `-drho/dx` to 6.5e-5, finite-differenced forces reproduce
 columns of the matrix to 2.1e-5 Ry/bohr², and the reduced wedge agrees with the whole
 closed grid to 2.7e-14. **Norm-conserving only, and refused by name otherwise**, because
 with `S` moving the orthonormality multipliers contribute a term of their own.
+**Electrostriction** (P26) is in, and it is the first **third** derivative of the energy
+here: `d(chi)/d(strain)` — the elasto-optic tensor, and through the thermodynamic identity
+of Tanner, Bousquet and Janolin the four electrostriction tensors `m`, `q`, `M` and `Q` —
+from **one `jvp` of the second-order energy at frozen first-order wavefunctions**, which is
+the 2n+1 theorem and is the envelope argument P15 and P25 already make, one order up. The
+strain perturbation it stands on (`dpsi/dx`, `drho/dx`) is Abinit's metric-tensor
+formulation obtained for nothing, because `at_strain` was already written in reduced
+coordinates; the **elastic constants** come with it, as one more `jvp` of the stress, and
+reproduce a five-point second difference of the energy to five significant figures
+(converged silicon: `C_11` = 198.5 GPa against a measured 165.7, `C_12` = 68.9 against 63.9).
+The three independent components of `d(eps)/dx` match a central difference of `epsilon`
+over re-converged strained cells to **2e-4**, the difference's own floor, and the whole
+rank-4 tensor is cubic to 3e-14 with nothing imposing it. Norm-conserving, `nspin = 1`, insulators
+and **clamped-ion**, on an **unshifted** k-grid — a symmetry-reduced wedge is refused by
+name, because the object being differentiated carries a field label and a strain label at
+once and the rank-3 average that would complete the sum is not written.
 
 **Outstanding:** Wyckoff input, `vc-relax`, phonons at `q != 0` (the perturbed states live
 at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals, plus

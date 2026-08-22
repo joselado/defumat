@@ -42,7 +42,8 @@ __all__ = ["Symmetries", "lattice_point_group", "find_symmetries", "is_supercell
            "atom_mapping", "cartesian_rotations",
            "symmetrize_vector", "symmetrize_matrix", "symmetrize_atom_tensor", "check_symmetry",
            "magnetic_symmetries", "magnetization_signs",
-           "symmetrize_magnetization", "symmetrize_vector_density"]
+           "symmetrize_magnetization", "symmetrize_vector_density",
+           "symmetrize_tensor_density"]
 
 _TOLERANCE = 1.0e-6
 #: QE compares magnetizations with ``eps2 = 1e-5`` (``sgam_at_mag``), looser than
@@ -400,6 +401,46 @@ def symmetrize_atom_displacement_density(
         permutations[:, None, None, :],
     ]
     return jnp.mean(jnp.einsum("sij,sajg->saig", rotations, gathered), axis=0)
+
+
+def symmetrize_tensor_density(
+    field_g: jnp.ndarray, permutations, phases, rotations: jnp.ndarray
+) -> jnp.ndarray:
+    """Average nine response densities labelled by a **rank-2** perturbation.
+
+    :func:`symmetrize_vector_density` with one more cartesian index, and the
+    perturbation it exists for is a homogeneous **strain**
+    (:mod:`pypresso.response.strain`). A strain is not three directions but a
+    tensor, so an operation rotates both of its indices:
+
+        drho_ab(r) <- (1/N) sum_S R_ai R_bj drho_ij({S|f}^-1 r).
+
+    The reasoning is the same one line as for the vector case, written out
+    because getting it backwards is a different symmetry rather than a worse
+    average. The response to a general strain ``eps`` is
+    ``drho[eps](r) = sum_ab G_ab(r) eps_ab``; a symmetry operation of the
+    crystal satisfies ``drho[R eps R^T](R r) = drho[eps](r)``, and matching
+    coefficients of ``eps_ab`` gives exactly the average above.
+
+    **The convention is :func:`symmetrize_vector_density`'s, index for index**
+    -- ``out_i = R_ij f_j`` there becomes ``out_ij = R_ik R_jl f_kl`` here --
+    and it is *checked* rather than asserted: an unshifted Monkhorst-Pack grid
+    is closed under the point group, so the same response can be computed on the
+    reduced wedge with this average and on the whole grid without it, and the
+    two must agree (``tests/regression/test_electrostriction.py``).
+
+    Args:
+        field_g: ``(3, 3, ngm)`` in cartesian components.
+        rotations: ``(nsym, 3, 3)`` cartesian, polar (no ``det(R)`` sign): a
+            strain is built from two polar vectors, so it carries no sign of its
+            own even under an improper operation.
+    """
+    flat = field_g.reshape((9,) + field_g.shape[2:])
+    gathered = (phases[:, None, :] * flat[:, permutations].transpose(1, 0, 2))
+    gathered = gathered.reshape((-1, 3, 3) + field_g.shape[2:])
+    return jnp.mean(
+        jnp.einsum("sik,sjl,sklg->sijg", rotations, rotations, gathered), axis=0
+    )
 
 
 def _candidate_translations(rotated, positions, types):

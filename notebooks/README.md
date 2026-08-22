@@ -31,6 +31,7 @@ ends with a pointer to both.
 | [`18_continuing_a_calculation.ipynb`](18_continuing_a_calculation.ipynb) | Starting one run from another's converged state across a change of spin regime: bcc iron's moment rotated onto `x` in one iteration, the seed that keeps a magnetic run off the symmetric solution, and spin-orbit coupling switched on | P23 |
 | [`19_linear_response.ipynb`](19_linear_response.ipynb) | The velocity operator from one `jvp` of `H(k)`, the Sternheimer equation instead of a sum over states, and silicon's dielectric constant and Born charges against `ph.x` on norm-conserving, ultrasoft and PAW datasets (agreeing to <= 1.2e-4) | P24, P24a |
 | [`20_phonons.ipynb`](20_phonons.ipynb) | The force constants as one more derivative of the gradient that already gives the force -- `dynmat0` and `drhodv` as two halves of one `jvp` -- and silicon's optical mode at Gamma against `ph.x` (510.102 against 510.152 cm-1) | P25 |
+| [`21_electrostriction.ipynb`](21_electrostriction.ipynb) | Differentiating a *response*: `d(eps)/d(strain)` as one `jvp` of the second-order energy at frozen first-order wavefunctions, against the sweep of re-converged calculations it replaces (5e-5 on the figure's component), and the elasto-optic tensor it is the same object as | P26 |
 
 ## Conventions
 

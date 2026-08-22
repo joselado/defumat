@@ -130,6 +130,7 @@ from pypresso.system.symmetry import (
     magnetization_signs,
     symmetry_maps,
     symmetrize_atom_displacement_density,
+    symmetrize_tensor_density,
     symmetrize_magnetization,
     symmetrize_vector_density,
 )
@@ -1377,6 +1378,13 @@ class Calculation:
         # -- silently, and exactly zero at Gamma. What is fixed under a strain is
         # k in crystal coordinates, which is the same rule the G-vectors follow.
         kcart = self.system.kpoints.crystal(self.system.cell) @ cell.bg
+        # Recorded because *nothing else can recover it*: ``KPoints.coords`` are
+        # cartesian in units of ``2 pi / alat``, so
+        # ``kpoints.cartesian(strained_cell)`` gives the unstrained k-points back
+        # (the paragraph above). Anything that needs ``k`` in 1/bohr at this cell
+        # -- the velocity operator, and so the position operator a dielectric
+        # response is built from -- has to read this rather than recompute it.
+        strained._kcart = kcart
         strained.kinetic = self.basis.planewaves.kinetic(
             smooth, self.basis_kpoints, cell, kcart
         )
@@ -1951,6 +1959,46 @@ class Calculation:
             return back.reshape(patterns.shape)
 
         moved = jnp.moveaxis(jnp.asarray(fields), 2, 0)  # (nspin, nat, 3, ...)
+        return jnp.moveaxis(jnp.stack([channel(c) for c in moved]), 0, 2)
+
+    def symmetrize_strain_response(self, fields: jnp.ndarray) -> jnp.ndarray:
+        """:meth:`symmetrize_directional` for the nine **strain** perturbations.
+
+        ``symdvscf`` again, for the perturbation P26 adds. A strain is a rank-2
+        tensor, so an operation rotates *both* of its indices
+        (:func:`~pypresso.system.symmetry.symmetrize_tensor_density`); the
+        electric field's version rotates one and the phonon's rotates one and
+        permutes the atoms.
+
+        The escape hatch is the same one and so is the trap: a response computed
+        on a symmetry-reduced k-set is not what the whole grid would give, and
+        running the whole grid instead is only sound when that grid is closed
+        under the point group -- true of an unshifted Monkhorst-Pack grid and
+        false of a shifted one.
+
+        Args:
+            fields: ``(3, 3, nspin_mag, n1, n2, n3)`` real, on the dense grid.
+        """
+        if self._symmetry_maps is None:
+            return fields
+        gvectors = self.basis.dense
+        permutations, phases = self._symmetry_maps
+        rotations = jnp.asarray(cartesian_rotations(self.system.cell, self.symmetries))
+
+        def channel(patterns):
+            """``patterns``: (3, 3, n1, n2, n3) for one spin channel."""
+            flat = patterns.reshape((9,) + patterns.shape[2:])
+            in_g = jnp.stack([r_to_g(f, gvectors.fft_index) for f in flat])
+            out_g = symmetrize_tensor_density(
+                in_g.reshape((3, 3, -1)), permutations, phases, rotations
+            )
+            back = jnp.stack([
+                jnp.real(g_to_r(component, gvectors.fft_index, gvectors.grid))
+                for component in out_g.reshape((9, -1))
+            ])
+            return back.reshape(patterns.shape)
+
+        moved = jnp.moveaxis(jnp.asarray(fields), 2, 0)  # (nspin, 3, 3, ...)
         return jnp.moveaxis(jnp.stack([channel(c) for c in moved]), 0, 2)
 
     def density(self, wavefunctions, weights, becsum_=None) -> jnp.ndarray:

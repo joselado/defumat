@@ -2610,6 +2610,190 @@ without it there is one point of it.
 
 *Notebook 20.*
 
+### P26 — Electrostriction: `d(chi)/d(strain)` as a mixed third derivative. ✅ DONE.
+
+`pypresso/response/strain.py`, `elastic.py` and `electrostriction.py`, plus
+`Calculation.symmetrize_strain_response` and `symmetrize_tensor_density` in
+`system/symmetry.py`, a `kcart` argument on `VelocityOperator`, and a `keep_internals`
+flag on `dielectric_tensor`. It is the first quantity in this project that is a **third**
+derivative of the energy, and the first perturbation whose label is a rank-2 tensor.
+
+**Why a derivative of `chi` and not a field.** Electrostriction is the quadratic
+electromechanical coupling every dielectric has, and Tanner, Bousquet and Janolin
+([arXiv:2012.03841](https://arxiv.org/abs/2012.03841), Eqs. 2) is the current method: by a
+thermodynamic identity the four tensors are derivatives of the dielectric susceptibility
+with respect to a mechanical variable,
+
+    eps0 d(chi_ij)/d(X_kl) =  2 M_ijkl        (1/eps0) d(eta_ij)/d(X_kl) = -2 Q_ijkl
+    eps0 d(chi_ij)/d(x_kl) = -2 m_ijkl        (1/eps0) d(eta_ij)/d(x_kl) =  2 q_ijkl
+
+with `eta = chi^-1`. The alternative — optimising under a finite `E` or `D` field and
+fitting a parabola — puts a band-gap-dependent ceiling on the k-point density, entangles
+electrostriction with non-linear piezoelectricity in a non-centrosymmetric crystal, and
+needs a constrained relaxation. **The literature was consulted before the design and not
+during the debugging**, which is the standing rule this phase was asked to follow.
+
+**The whole of it is the 2n+1 theorem in one sentence: the second-order energy is
+stationary in the first-order wavefunctions, so it may be differentiated with them held
+fixed.** That is P15's envelope argument at the next order and P25's sentence about the
+force one order up. Write
+
+    F_ij[x; psi, rho, b, u] = sum_kn w [ <u_i|H(x)|u_j> - Lambda_mn <u_i,n|u_j,m>
+                                        + 2 Re <u_i|P_c b_j> ] + (1/2) int drho_i K(x) drho_j
+
+whose stationary point in `u` is the self-consistent Sternheimer solution P24 already
+computes and whose stationary *value* is `sum w Re <b_i|u_j>` — the expression
+`dielec.f90` assembles. Then `d(eps)/dx` is **one `jvp`** along
+`(e_x, dpsi/dx, drho/dx, db/dx)` with no tangent for `u` at all.
+
+**Three tangents, and none of them is transcribed.** `dpsi/dx` and `drho/dx` are a strain
+perturbation, which in Abinit is a phase of its own — the metric-tensor formulation of
+Hamann, Wu and Vanderbilt ([cond-mat/0409269](https://arxiv.org/abs/cond-mat/0409269),
+[cond-mat/0501548](https://arxiv.org/abs/cond-mat/0501548)), whose difficulty is that a
+strain moves the plane-wave basis so the nonlocal projectors' strain derivative has to be
+derived by hand in reduced coordinates. `Calculation.at_strain` is already written in
+exactly those coordinates — what is stored is a set of **Miller indices** and the sphere is
+frozen while differentiating (P11) — so the bare perturbation is one `jvp` through it, the
+way `dvqpsi_us` became one `jvp` through `at_positions`. `db/dx` is one further Sternheimer
+solve, because `b = P_c r|psi>` is the one argument with no closed form: it is *defined* by
+a linear equation, so its equation is what gets differentiated.
+
+**The trap of the phase, and it is worth 2%.** `u` is frozen; the space it is constrained
+to live in is not. The Sternheimer solution is orthogonal to the occupied manifold and that
+manifold moves with the strain, so the variable of the functional is `P_c(psi) u` and never
+the stored array. Writing `u` changes **no value** — `P_c u = u` where everything is
+evaluated — and destroys the stationarity the construction rests on: an unrestricted
+variation gives `A u + P_c b + (K drho) psi = 0` where the loop solves the same equation
+with the screening term projected too, and the difference is the occupied component of
+`(K drho) psi`. It survived the value identity against `dielec.f90`, the cubic form of the
+rank-4 tensor, *and* a finite-difference check of each of the four tangents separately.
+What found it was splitting the disagreement in two — the `jvp` against a difference of
+`F` at frozen `u`, and that against the true `epsilon` — where the first pair agreed to
+1e-4 and the second did not.
+
+**Two more traps, both of them index orders that are right in value and wrong in
+derivative.**
+
+- *The multiplier is a matrix.* `Lambda_mn = <psi_m|H|psi_n>` in place of `eps_n`, and
+  contracted as `sum_mn Lambda_mn <u_i,n|u_j,m>` — which is `Tr(Lambda Ov)`, invariant
+  under the unitary mixing a degenerate multiplet is defined only up to. The transposed
+  form `Lambda_mn <u_i,m|u_j,n>` is `Tr(Lambda Ov^T)`, gives the identical number whenever
+  `Lambda` is diagonal, and leaves **11%** of the scale in components cubic symmetry
+  forbids. The same matrix form is what makes `d(eps_n)/dx` not be an input at all, and
+  what makes the `G = 0` deformation-potential ambiguity cancel: a constant added to `dH`
+  enters `<u|dH|u>` and `dLambda <u|u>` with opposite signs.
+- *The SCF's wavefunctions are eigenvectors of the previous iteration's Hamiltonian.*
+  `<psi_m|H[rho_out]|psi_n>` is diagonal only to 1.6e-7 Ry on silicon at
+  `conv_thr = 1e-12`, and the quantity that multiplies that error is `<u|u> ~ 10^3`, so the
+  variational identity fails by 7e-7 *relative* — systematically, and without shrinking
+  when the response's own thresholds are tightened. `refined_states` re-diagonalises at the
+  converged density and takes it to 3.5e-15.
+
+**A wedge is refused.** The object being differentiated carries a field label *and* a
+strain label, so completing a symmetry-reduced sum needs a rank-3 average
+(`R_ai R_bk R_cl`) that is not written; P24 wrote the rank-1 case and P25 the
+rank-1-plus-atom case. An **unshifted** Monkhorst-Pack grid is closed under the point group
+and needs no average at all, which is the route P24 already uses as its independent check,
+so that is what P26 requires. The rank-2 symmetriser *is* written and is what
+`strain_response` uses on its own — `symmetrize_tensor_density`, checked by running the
+same k-sample reduced and whole.
+
+*Checks met.* Six, each against something sharing no machinery with it:
+
+| what | reference | agreement |
+|---|---|---|
+| `drho/dx`, `deps/dx` | central difference of a re-converged SCF | 1.6e-5 relative at the step's optimum, falling as `h^2` above it |
+| `F_ij` at the stationary point | `dielec.f90`'s own assembly | 9e-10 relative |
+| `d(chi)/dx` | cubic symmetry, imposed nowhere | 3e-14 of the scale in forbidden components |
+| `d(eps)/dx`, all three independent components | central difference of `epsilon` over re-converged strained cells | **2e-4 relative** |
+| `C_ijkl` | a five-point second difference of the SCF energy at the same frozen sphere | **209.38 against 209.38 GPa** |
+| the unit chain `m, q -> M, Q` | Tanner et al.'s MgO table | reproduces their `M_11`, `M_12`, `Q_11`, `Q_12` |
+
+**The elasto-optic tensor is the same object, and it is the one a laboratory has
+measured.** `d(eps)/dx` inverted twice is the photoelastic tensor,
+`p = -eps^-1 (d eps/dx) eps^-1`, which costs nothing and gives the phase a reference
+outside the DFPT literature entirely: silicon's `p_11 = -0.094`, `p_12 = +0.017`,
+`p_44 = -0.051` (Biegelsen, [PRL 32, 1196 (1974)](https://doi.org/10.1103/PhysRevLett.32.1196)).
+The symmetry story decides which of the three is a fair comparison and it is the *same*
+story the elastic constants have: in the diamond structure no internal displacement is
+compatible with a tetragonal strain, so `p_11` and `p_12` are complete at clamped ion where
+`p_44` is not.
+
+**Clamped-ion, and the elastic constants came with it.** What is computed is the
+electronic susceptibility's strain derivative, so `m` and `q` are clamped-ion. `M` and `Q`
+— the coefficients giving a *strain*, which is what experiment quotes — need the elastic
+compliance, and with `dpsi/dx` in hand that is one more `jvp` of the stress along the same
+tangent (`response/elastic.py`): P25's construction with the cell in place of the atoms,
+and a capability of its own that `pw.x` has no counterpart for.
+
+They are *clamped-ion*, so `C_44` is expected above the measured 79.6 GPa while `C_11` and
+`C_12` are complete by symmetry. `M` and `Q` inherit that through the compliance; `m`, `q`
+and the elasto-optic tensor do not. On two-atom silicon at `ecutwfc = 12` this gives
+**`C_11` = 209.38 GPa** against a five-point second difference of the energy's **209.38** —
+five significant figures, at the same frozen sphere — with a measured 166.
+
+**And getting there cost two bugs, both of them silent and one of them not in this phase.**
+
+- *The density cannot be an argument here.* `_force_constants` hands the density in as an
+  independent argument, because the functional symmetrises its own as a *scalar* — right for
+  a ground state, wrong for a response. Doing the same for a strain makes `jax.grad` of the
+  functional a partial derivative at fixed `rho` rather than the **stress**, and the two
+  differ by `(dE/drho).(drho/dx)|_psi`, which vanishes for a displacement (moving an atom
+  does not change `sum w |psi|^2` at frozen coefficients) and does not for a strain (the
+  density carries a `1/Omega`). Worth a factor of **three**: 671 GPa against 209. The fix is
+  to let the functional build its own density, which puts the term back through the chain
+  rule — and the price is that a symmetry-reduced k-set is then refused here too.
+- *`run_scf` was reading the wrong cell.* The SCF loop's energy assembly, its convergence
+  measure and its Kerker preconditioner all read the `system` **argument**'s cell rather
+  than `calculation.system`'s. They are the same object for every ordinary call and not for
+  one that supplies its own `calculation` — which is exactly what a run on a deformed cell
+  does. The reported total energy then acquires a slope in the strain of **3.9 Ry per unit
+  strain** against a true `dE/d(eps)` of 0.09, while the density, the potential and every
+  response stay correct: only the number printed at the end is wrong, which is why nothing
+  had caught it. It is a `vc-relax` waiting to happen, and it is fixed.
+
+*Convergence, and it is two different stories.* Two-atom silicon on the whole unshifted
+2x2x2 grid, `nosym`, at four cutoffs:
+
+| `ecutwfc` | npw | `eps` | `dchi_11` | `dchi_12` | `dchi_44` | `C_11` | `C_12` | `C_44` | `B` |
+|---|---|---|---|---|---|---|---|---|---|
+| 12 | 190 | 56.29 | 108.11 | 8.10 | 197.02 | 209.4 | 68.0 | 134.0 | 115.1 |
+| 18 | 344 | 58.70 | 119.94 | 30.43 | 202.45 | 205.2 | 69.1 | 132.2 | 114.5 |
+| 30 | 754 | 58.66 | 117.63 | 31.65 | 197.82 | 198.6 | 68.7 | 129.3 | 112.0 |
+| 45 | 1363 | 58.89 | 118.28 | 33.11 | 198.72 | 198.5 | 68.9 | 129.2 | 112.1 |
+| measured | | 13.8 | | | | 165.7 | 63.9 | 79.6 (relaxed) | 97.9 |
+
+The **elastic constants are converged in the basis by `ecutwfc = 30`** and are within 5% of
+their converged values already at 12 — 30 and 45 agree to 0.1%. So the ~20% that separates
+`C_11` from the measured value is not the basis: it is LDA at the *experimental* lattice
+constant (where LDA silicon is slightly compressed, hence stiff), the pseudopotential, and
+for `C_44` the missing internal relaxation. `C_12` is 68-69 against 63.9 throughout.
+
+The **susceptibility derivative is not converged at 12** and is by 18-30: `dchi_11` moves
+11% from 12 to 18 and 2% after, and `dchi_12` — a small number and a difference of larger
+ones — moves by a factor of four and then settles near 32. `eps` itself is 58.7 rather than
+silicon's 13.8, and that is the **k-sample**, not the cutoff: this grid is the smallest one
+closed under the point group, and the closed-grid requirement above is what forces it.
+**The elasto-optic `p_12` comes out negative here where experiment has +0.017**, and that
+does not move with the cutoff either; a converged unshifted grid is what it would take to
+settle, and it is not claimed. `p_11` has the right sign and is within a factor of three.
+
+The **machinery numbers in the checks table are independent of all of this**, because both
+sides of every comparison use the same basis and the same k-set.
+
+**What is not here.** The *relaxed-ion* coefficients add the lattice's contribution to
+`chi` — `chi_ion ~ (1/Omega) sum_m (Z* e_m)^2/omega_m^2` — and its strain derivative needs
+`dZ*/dx` and `d(omega^2)/dx`, two more third derivatives of the same family, each again a
+`jvp` of an assembly that exists (P24's `Z*`, P25's force constants) along the strain
+tangent this phase already builds. The internal-strain tensor `Lambda_ij,ak` that turns the
+clamped-ion elastic constants into relaxed-ion ones is the same kind of object. Ultrasoft
+and PAW are refused: `Q_ij(r)` is a function of the cell, so `dbecsum` acquires a strain
+term of its own beside the one the `jvp` gives. Everything
+`require_a_sternheimer_regime` refuses — metals, noncollinear magnetism, DFT+U, spirals —
+is refused here too, and so is `nspin = 2`, for P25's reason.
+
+*Notebook 21.*
+
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes
 the k-point count.

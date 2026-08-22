@@ -123,7 +123,7 @@ class VelocityOperator:
     approximation: it is what ``dH/dk`` at fixed density means.
     """
 
-    def __init__(self, calculation, v_scf, ddd_paw=None, ns=None):
+    def __init__(self, calculation, v_scf, ddd_paw=None, ns=None, kcart=None):
         if calculation.spiral:
             raise NotImplementedError(
                 "the velocity operator on a spin spiral is not implemented: the "
@@ -157,9 +157,19 @@ class VelocityOperator:
         self.v_scf = v_scf
         self.ddd_paw = ddd_paw
         self.ns = None if ns is None else jnp.asarray(ns)
-        self.kcart = jnp.asarray(
-            calculation.system.kpoints.cartesian(calculation.system.cell)
-        )
+        # **Not always ``kpoints.cartesian(cell)``.** That expression reads
+        # ``KPoints.coords``, which are cartesian in units of ``2 pi / alat``
+        # and therefore do *not* move when the cell is strained -- so on a
+        # calculation from :meth:`~pypresso.scf.driver.Calculation.at_strain` it
+        # silently returns the undeformed k-points and this would be ``dH/dk``
+        # at the wrong ``k``. Such a calculation records the ``kcart`` it was
+        # built with and it is preferred here; ``kcart`` may also be given
+        # outright, which is what a *traced* strain needs.
+        if kcart is None:
+            kcart = getattr(calculation, "_kcart", None)
+        if kcart is None:
+            kcart = calculation.system.kpoints.cartesian(calculation.system.cell)
+        self.kcart = jnp.asarray(kcart)
 
     # -- the two operators ------------------------------------------------
 

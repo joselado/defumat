@@ -29,6 +29,11 @@ RYDBERG_SI = HARTREE_SI / 2.0  # J
 BOHR_RADIUS_SI = 0.529177210903e-10  # m
 AMU_SI = 1.66053906660e-27  # kg
 C_SI = 2.99792458e8  # m / s
+#: The vacuum permittivity, F/m. Wanted only where a *quadratic* response is
+#: reported in SI -- Tanner et al.'s electrostriction coefficients
+#: (:mod:`pypresso.response.electrostriction`) -- since nothing internal to a
+#: Rydberg-atomic-unit code has an ``eps0`` in it.
+EPSILON0_SI = 8.8541878128e-12
 
 # --- conversions out of Rydberg atomic units ----------------------------------
 HARTREE_TO_EV = HARTREE_SI / ELECTRONVOLT_SI

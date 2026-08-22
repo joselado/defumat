@@ -159,6 +159,14 @@ class DielectricTensor:
     #: Mean CG iterations per band per solve, QE's ``av.it.``.
     average_iterations: float = 0.0
     converged: bool = False
+    #: ``{"solver", "bare", "dpsi", "dvscf", "v_scf"}`` when the caller asked
+    #: for them, and ``None`` otherwise. The self-consistent response *is* the
+    #: expensive part of this calculation, and a **third** derivative needs the
+    #: same first-order wavefunctions rather than a second solve of them
+    #: (:mod:`pypresso.response.electrostriction`). Kept behind a flag because
+    #: they are large -- ``3 (nspin, nk, nocc, npwx)`` complex -- and no ordinary
+    #: caller wants them.
+    internals: dict | None = None
 
     @property
     def isotropic(self) -> float:
@@ -191,6 +199,7 @@ def dielectric_tensor(
     max_iterations: int = MAX_ITERATIONS,
     threshold: float = 1.0e-12,
     born_charges: bool = True,
+    keep_internals: bool = False,
     verbose: bool = False,
 ) -> DielectricTensor:
     """``epsilon_infinity`` and the Born charges for a converged insulator.
@@ -341,9 +350,16 @@ def dielectric_tensor(
         _born_charges(calculation, solver, potential.v_scf, dpsi)
         if born_charges else None
     )
+    internals = None
+    if keep_internals:
+        internals = {
+            "solver": solver, "bare": bare, "dpsi": dpsi,
+            "dvscf": dvscf, "v_scf": potential.v_scf,
+        }
     return DielectricTensor(
         epsilon=epsilon,
         born_charges=charges,
+        internals=internals,
         induced_density=np.asarray(drho),
         history=history,
         average_iterations=total_iterations / max(solves, 1),

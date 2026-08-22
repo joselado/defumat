@@ -1,0 +1,27 @@
+! The wedge half of the pair that checks the rank-2 response symmetriser.
+!
+! The same silicon and the same *unshifted* 2x2x2 sample as
+! si-electrostriction.in, reduced by symmetry to its irreducible wedge. A strain
+! response computed here needs `symdvscf`'s average with both cartesian indices
+! rotated (`symmetrize_tensor_density`); computed on the closed grid it needs
+! none at all. The two must agree, and nothing is shared between the routes but
+! the Sternheimer solve -- which is the only check that average has, since
+! `ph.x` has no strain perturbation to compare against.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1,
+    ecutwfc = 12.0
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 2 0 0 0

@@ -1,0 +1,36 @@
+! The machinery case for P26 (electrostriction): silicon on a small **closed**
+! k-grid, with the symmetrisation switched off.
+!
+! Two things make this input what it is. The grid is **unshifted**, so it is
+! closed under the point group and `nosym` is safe -- which matters more here
+! than anywhere else, because the object P26 differentiates carries a field
+! label and a strain label at once and there is no average written for it
+! (`pypresso/response/electrostriction.py` refuses a reduced wedge by name).
+! And it is deliberately **small and under-converged**: 2x2x2 at ecutwfc = 12
+! gives an epsilon_infinity of 56 rather than silicon's 13.8, which is useless
+! as physics and perfectly good for the identities the tests here check --
+! the variational energy against `dielec.f90`, the cubic form of a rank-4
+! tensor, and a third derivative against a finite difference of a second one.
+!
+! The physics numbers come from si-epsilon-unshifted-nosym.in, which is the
+! same cell on a 4x4x4 grid at ecutwfc = 18 and reproduces ph.x's 13.8067.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1,
+    ecutwfc = 12.0
+    nosym = .true.
+    noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 2 0 0 0

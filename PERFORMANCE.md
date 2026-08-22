@@ -1462,6 +1462,63 @@ re-used at every iteration, so recomputing them would cost 17 x 6 `jvp`s through
 instead of `3 nat` — which is what QE's representation loop is doing to its memory while
 this holds all of them.
 
+## What a third derivative costs (P26)
+
+`tests/data/qe/si-electrostriction.in` — two-atom silicon, `ecutwfc = 12`, the **whole
+unshifted 2x2x2 grid** with `nosym`, 8 k-points and 190 plane waves. The grid is the
+smallest one closed under the point group, which is what P26 requires (`PLAN.md`), so it
+is also the cheapest case the phase has. One core.
+
+| stage | 8 k-points | solves | what it is |
+|---|---|---|---|
+| SCF | 1.9 s | — | |
+| `refined_states` | 0.03 s | — | one Davidson pass from an excellent guess |
+| field response (P24) | 38.5 s | 60 | 3 perturbations x 19 iterations, plus 3 for `P_c r|psi>` |
+| **strain response** | **80.1 s** | **108** | 6 perturbations x 18 iterations |
+| third derivative | 36.2 s | 18 | `db/dx`, plus 6 `jvp`s of the functional |
+| elastic constants | 9.7 s | 0 | 6 `jvp`s of the stress gradient |
+| total | **166 s** | 186 | |
+
+One run, one machine, so the rows are comparable with each other; the absolute numbers
+carry whatever else the machine was doing.
+
+**The strain response is the expensive half and the reason is counting, not physics.** A
+strain has six independent components where a field has three, and each is driven to
+self-consistency by the same `solve_linter` loop at the same 22 CG steps per band per
+solve. It is P24's cost times two and P25's (six modes on this cell) times one; nothing
+about it is new, which is the point.
+
+**The third derivative itself is cheap.** 36 s for six columns, and half of that is
+the `db/dx` solves — the position operator's own strain derivative, one Sternheimer
+solve per (direction, strain). The six `jvp`s of the functional are ~3 s each: each is
+forward-over-forward through `at_strain`, three Hamiltonian applications over the whole
+k axis, three density `jvp`s and three kernel `jvp`s. **A `jvp` of a second derivative is
+not more expensive than the second derivative** — which is the whole economic argument for
+the 2n+1 route over the published one. The alternative is a sweep: five re-converged
+SCF-plus-DFPT calculations per independent strain, which on this cell is 5 x 6 x 40 s
+against 36 s, a factor of **33**.
+
+**The elastic constants are nearly free** — 9.7 s, six percent of the run — because they
+reuse the strain response the third derivative already paid for. Standing alone they would
+cost the 80 s as well.
+
+**Memory, and it scales better than the phonon's.** Six bare strain perturbations and six
+first-order wavefunctions at `(nspin, nk, nocc, npwx)` complex each, plus P24's three of
+each and the three `db` columns of the strain being assembled: **21 blocks**, about 3 MB on
+this silicon. The number is **six**, not `3 nat` — a strain has six components whatever the
+cell contains — so on P25's 16-atom yardstick (100 k-points, 32 bands, 3000 plane waves)
+this is *below* the phonon's 7 GB rather than above it, and the gap widens with every atom
+added. The way down, if one is wanted, is P25's: the six strains are independent except
+through the symmetrisation, so they can be run one at a time at the cost of re-entering the
+loop — and on a `nosym` grid, which this phase requires anyway, nothing couples them at
+all.
+
+**Backlog, and it is P25's verbatim.** The linear solve holds a fixed 1e-12 threshold where
+`dfpt_kernels.f90` schedules it against the self-consistency of the response, and the
+induced potential is mixed linearly where `mix_pot.f90` uses a modified Broyden over four
+iterations. 18 iterations at 22 CG steps is what that costs; QE reaches its answers in 5
+iterations at 9. Both fixes serve P24, P25 and P26 together and neither has been made.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -1550,3 +1607,4 @@ measurements, before being implemented. See "QE's FFT layout" above.)
 | 2026-08-21 | Linear response (P24): the velocity operator from one `jvp`, the Sternheimer solve, and `epsilon_infinity` | exact `chi_0 K` at 0.5 s against the differentiated eigensolver's 3.5 s; silicon's dielectric constant in 66 s |
 | 2026-08-22 | Phonons at `Gamma` (P25): the dynamical matrix as one `jvp` of the gradient that already gives the force | silicon's six modes in 57 s against `ph.x`'s ~2.2 s, of which the second derivative itself is 1.4 s; the 26x is 3.4x the linear solves and 3x the CG steps each, both with named causes |
 | 2026-08-21 | Ultrasoft and PAW linear response (P24a): `dbecsum`, the augmentation charge's response, `int3` and `PAW_dpotential`, all as `jvp`s of code that existed | `epsilon_infinity` on four cases at 44-95 s; 1.9x (US) and 2.2x (PAW) the norm-conserving run, mostly the doubled dual |
+| 2026-08-22 | Electrostriction (P26): the strain perturbation, the elastic constants and `d(chi)/d(strain)` as a mixed third derivative | 166 s on 8 k-points, of which the strain response is 80 s and the third derivative 36 s; **33x** cheaper than the published sweep of re-converged calculations |
