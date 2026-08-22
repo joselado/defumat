@@ -45,7 +45,7 @@ from pypresso.basis.fft import g_to_r, r_to_g
 from pypresso.forces import compute_forces
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
-from pypresso.response.phonon import dynamical_matrix
+from pypresso.response.phonon import _require_one_spin_channel, dynamical_matrix
 from pypresso.scf import Calculation, run_scf
 from pypresso.system import build_system
 
@@ -310,3 +310,24 @@ def test_ultrasoft_and_paw_are_refused(case, expected):
     system, pseudos, calculation = _build(case)
     with pytest.raises(NotImplementedError, match=expected):
         dynamical_matrix(calculation, None, jnp.zeros((1, 1, 1)), None)
+
+
+def test_a_spin_polarized_calculation_is_refused():
+    """``nspin = 2``, and the reason is a shared occupied-band count.
+
+    ``nocc`` here is a single ``nelec / 2`` applied to both channels, which is
+    right for an unpolarized insulator and wrong for a magnetic one -- and wrong
+    invisibly, since the shapes still fit and the solve still converges. The same
+    line is in ``dielectric_tensor`` and is not refused there; ``PLAN.md`` P25
+    names that as a gap in P24 rather than a decision.
+
+    The guard is exercised directly rather than through
+    :func:`dynamical_matrix`, because every ``nspin = 2`` input committed here is
+    a *metal* and the smearing refusal fires first. Reaching this one through the
+    front door needs a magnetic insulator -- which is the same thing the fix
+    needs, and neither is here.
+    """
+    _, _, calculation = _build("h-atom-lsda")
+    assert calculation.nspin == 2
+    with pytest.raises(NotImplementedError, match="spin-polarized"):
+        _require_one_spin_channel(calculation)
