@@ -359,6 +359,49 @@ def symmetrize_vector_density(
     return jnp.mean(jnp.einsum("sij,sjg->sig", rotations, gathered), axis=0)
 
 
+def symmetrize_atom_displacement_density(
+    field_g: jnp.ndarray, permutations, phases, rotations: jnp.ndarray, mapping
+) -> jnp.ndarray:
+    """Average ``3 nat`` response densities over the group -- ``symdvscf`` at ``q = 0``.
+
+    :func:`symmetrize_vector_density` carries one more index. A perturbation
+    that displaces **atom a along direction i** is not labelled by a direction
+    alone: an operation rotates the direction *and* carries the perturbation to
+    the atom it maps onto, so the average is
+
+        drho_{a,i}(r) <- (1/N) sum_S R_ij drho_{S(a),j}({S|f}^-1 r).
+
+    That is :func:`symmetrize_vector`'s atom permutation -- ``irt``, the same
+    table the forces use -- on top of the polar-vector rotation the electric
+    field's response already needed. **Both indices have to move together**: a
+    displacement of one atom is not a symmetry-adapted object, and averaging its
+    three directions while leaving it on its own atom is an average over a group
+    the perturbation does not have.
+
+    On a crystal with one atom in the cell ``mapping`` is the identity and this
+    reduces to :func:`symmetrize_vector_density` exactly. On diamond silicon it
+    does not: the operations that exchange the two sublattices are half the
+    group, and they are why the two atoms' response densities are not
+    independent quantities.
+
+    Args:
+        field_g: ``(nat, 3, ngm)`` in cartesian components.
+        rotations: ``(nsym, 3, 3)`` cartesian, polar (no ``det(R)`` sign).
+        mapping: ``(nsym, nat)`` from :func:`atom_mapping`.
+    """
+    mapping = jnp.asarray(mapping)
+    # (nsym, nat, 3, ngm) by broadcasting three index arrays against each other:
+    # ``gathered[s, a, j, g] = phase[s, g] * field_g[irt[s, a], j, S^T G_g]``.
+    # The atom gather and the G-vector gather are independent, so they are one
+    # indexing expression rather than two passes over the array.
+    gathered = phases[:, None, None, :] * field_g[
+        mapping[:, :, None, None],
+        jnp.arange(field_g.shape[1])[None, None, :, None],
+        permutations[:, None, None, :],
+    ]
+    return jnp.mean(jnp.einsum("sij,sajg->saig", rotations, gathered), axis=0)
+
+
 def _candidate_translations(rotated, positions, types):
     """Translations that at least map the first atom onto one of its own kind."""
     same_species = np.flatnonzero(types == types[0])
@@ -589,6 +632,48 @@ def symmetrize_atom_tensor(
         "sik,sjl,snkl->nij", rotations, rotations, crystal[mapping]
     ) / symmetries.nsym
     return np.einsum("ki,nkl,lj->nij", bg, averaged, bg)
+
+
+def symmetrize_atom_pair_tensor(
+    tensors: np.ndarray, cell: Cell, symmetries: Symmetries, mapping: np.ndarray
+) -> np.ndarray:
+    """Impose the crystal symmetry on a force-constant matrix -- ``symdynph_gq``.
+
+    ``PHonon/PH/symdynph_gq.f90`` at ``q = 0``. :func:`symmetrize_atom_tensor`
+    with **two** atom indices instead of one: an operation rotates both
+    cartesian indices and carries the pair ``(a, b)`` to the pair
+    ``(S(a), S(b))``, so
+
+        D_(a i)(b j) <- (1/N) sum_S R_ik R_jl D_(S(a) k)(S(b) l).
+
+    It is needed for exactly the reason :func:`symmetrize_vector` is needed for
+    the forces and :func:`symmetrize_matrix` for the stress, one rank further
+    up: a Brillouin-zone sum over the irreducible wedge is exact for a scalar
+    and not for anything with a free index, so the components the crystal
+    forbids are a residue of the reduction rather than physics. **Symmetrising
+    the response density inside the self-consistent loop does not do this job**
+    -- that fixes the screening each perturbation sees, and this fixes the wedge
+    sum in the assembled matrix.
+
+    Args:
+        tensors: ``(nat, 3, nat, 3)`` cartesian, in Ry/bohr^2.
+        mapping: ``(nsym, nat)`` from :func:`atom_mapping`.
+    """
+    tensors = np.asarray(tensors, dtype=float)
+    if symmetries.nsym <= 1:
+        return tensors
+    at = np.asarray(cell.at_alat, dtype=float)
+    bg = np.asarray(cell.bg_2pi_alat, dtype=float)
+    rotations = symmetries.rotation_array().astype(float)
+
+    # To crystal axes, where the rotations are integers -- the same conversion
+    # pair as ``symmatrix``, applied to each of the two cartesian indices.
+    crystal = np.einsum("ik,akbl,jl->aibj", at, tensors, at)
+    gathered = crystal[mapping[:, :, None], :, mapping[:, None, :], :]
+    averaged = np.einsum(
+        "sik,sjl,sabkl->aibj", rotations, rotations, gathered
+    ) / symmetries.nsym
+    return np.einsum("ki,akbl,lj->aibj", bg, averaged, bg)
 
 
 def check_symmetry(cell: Cell, structure: Structure, symmetries: Symmetries) -> bool:

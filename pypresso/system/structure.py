@@ -22,8 +22,12 @@ __all__ = ["Species", "Structure"]
 class Species(eqx.Module):
     """One atomic type as declared in ``ATOMIC_SPECIES``.
 
-    ``mass`` is in atomic mass units, as written in the input file; it is unused
-    until molecular dynamics and is carried only so nothing is lost in parsing.
+    ``mass`` is in atomic mass units, as written in the input file, and it is
+    what a *dynamical* property needs: nothing in the ground state, a force or a
+    stress depends on it -- the Born-Oppenheimer energy surface is a function of
+    where the nuclei are and not of what they weigh -- so it went unread until
+    the phonons (:mod:`pypresso.response.phonon`), which divide the force
+    constants by it. :attr:`Structure.masses` is the per-atom view.
     """
 
     name: str = eqx.field(static=True)
@@ -80,6 +84,20 @@ class Structure(eqx.Module):
     @property
     def symbols(self) -> tuple[str, ...]:
         return tuple(self.species[t].name for t in self.types)
+
+    @property
+    def masses(self) -> np.ndarray:
+        """``(nat,)`` atomic masses in **amu**, the unit the input file uses.
+
+        QE's ``amass`` is per *type* and is indexed through ``ityp`` at every
+        use (``dyndia``: ``amass(ityp(na))``); this is that indexing done once.
+        The conversion to Rydberg units is
+        :data:`~pypresso.units.AMU_TO_RY` and belongs where the mass meets an
+        energy, not here -- ``ph.x``'s ``amass`` is in amu too, and keeping the
+        same unit is what makes an input's ``amass(1) = 28.086`` comparable
+        without arithmetic.
+        """
+        return np.array([self.species[t].mass for t in self.types], dtype=float)
 
     def positions_crystal(self, cell: Cell) -> jnp.ndarray:
         return cell.to_crystal(self.positions)

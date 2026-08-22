@@ -18,9 +18,15 @@ expression.
 ``efield``
     the response to a uniform electric field, and the dielectric tensor and Born
     effective charges it gives.
+``phonon``
+    the response to an atomic displacement, and the force constants at
+    ``Gamma``. The second derivative of the energy is one ``jvp`` of the
+    gradient the force already is, so ``dynmat0`` and ``drhodv`` are two halves
+    of one tangent rather than two routines.
 """
 
 from pypresso.response.efield import DielectricTensor, dielectric_tensor
+from pypresso.response.phonon import Phonons, dynamical_matrix
 from pypresso.response.sternheimer import (
     SternheimerResult,
     SternheimerSolver,
@@ -36,11 +42,13 @@ from pypresso.response.velocity import (
 __all__ = [
     "BandVelocities",
     "DielectricTensor",
+    "Phonons",
     "SternheimerResult",
     "SternheimerSolver",
     "VelocityOperator",
     "band_velocities",
     "dielectric_tensor",
+    "dynamical_matrix",
     "local_perturbation",
     "make_sternheimer",
 ]

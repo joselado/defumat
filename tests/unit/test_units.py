@@ -55,6 +55,15 @@ def test_derived_conversions():
     assert units.ANGSTROM_TO_BOHR * units.BOHR_TO_ANGSTROM == pytest.approx(1.0)
     # RY_KBAR, the factor QE uses to print stress in kbar.
     assert units.RY_TO_KBAR == pytest.approx(147105.07846, abs=1e-4)
+    # The phonon pair. RY_TO_CMM1 is the Rydberg constant in cm^-1, which is
+    # what makes it checkable against something other than QE's own arithmetic:
+    # a frequency in Ry and a wavenumber are the same quantity, so the factor
+    # *is* R_infinity = 109737.31568 cm^-1 (CODATA).
+    assert units.RY_TO_CMM1 == pytest.approx(109737.31568, abs=1e-5)
+    assert units.RY_TO_THZ == pytest.approx(3289.8419602, abs=1e-6)
+    # AMU_RY: a nucleon in units of twice the electron mass, since the Rydberg
+    # unit of mass is 2 m_e.
+    assert units.AMU_TO_RY == pytest.approx(911.44424310, abs=1e-7)
 
 
 def test_e2_is_rydberg_convention():

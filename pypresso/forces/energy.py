@@ -113,13 +113,18 @@ def state_from_result(result) -> FrozenState:
     )
 
 
-def frozen_energy(calculation, positions: jnp.ndarray, state: FrozenState):
+def frozen_energy(
+    calculation, positions: jnp.ndarray, state: FrozenState, density=None
+):
     """The total energy at ``positions``, with the electronic state frozen.
 
     ``calculation`` supplies everything that does not depend on where the atoms
     are; :meth:`~pypresso.scf.driver.Calculation.at_positions` rebuilds what
     does. The result is a scalar in Ry and a differentiable function of
     ``positions``.
+
+    ``density`` overrides the density this would otherwise build from ``state``
+    -- see :func:`energy_at`, which is where the reason lives.
     """
     # Refused **before** the calculation is moved, not after. Moving it is real
     # work -- new projectors, a new local potential, a new Ewald sum -- and a
@@ -127,7 +132,7 @@ def frozen_energy(calculation, positions: jnp.ndarray, state: FrozenState):
     # caller holding a partially built calculation, a different exception
     # entirely.
     reject_spinors(calculation)
-    return energy_at(calculation.at_positions(positions), state)
+    return energy_at(calculation.at_positions(positions), state, density=density)
 
 
 def reject_spinors(calculation) -> None:
@@ -151,7 +156,7 @@ def reject_spinors(calculation) -> None:
         )
 
 
-def energy_at(moved, state: FrozenState, terms: bool = False):
+def energy_at(moved, state: FrozenState, terms: bool = False, density=None):
     """The frozen-state energy of an already-moved calculation.
 
     Split out from :func:`frozen_energy` because the *coordinate* being
@@ -170,6 +175,24 @@ def energy_at(moved, state: FrozenState, terms: bool = False):
     ``terms = True`` returns the contributions as a dict instead of their sum,
     which is what makes a term-by-term stress available without writing the
     decomposition twice.
+
+    **``density`` makes the density an independent argument** instead of a
+    function of ``state``, and exists for the *second* derivative
+    (:mod:`pypresso.response.phonon`). The reason is the symmetrisation. The
+    density built below is symmetrised as a **scalar**, which is right for the
+    ground state -- it is how a wedge sum is completed to the whole Brillouin
+    zone, and the functional has to be the one the SCF minimised. It is wrong
+    for a *response*: displacing one atom breaks the crystal's symmetry, and
+    averaging that perturbation over the full group of the undisplaced crystal
+    projects most of it away. A second derivative differentiates this functional
+    with respect to the **states**, so the chain rule would push the state
+    tangent straight through that scalar average. Supplying the density (and
+    hence its tangent) from outside is what lets the caller symmetrise the
+    response the way a response must be symmetrised -- ``symdvscf``, as a
+    displacement-labelled vector field -- and hand in the result. It is
+    :meth:`~pypresso.response.sternheimer.SternheimerSolver.density_at`'s rule
+    one level up, and it changes nothing for a force or a stress, where the
+    argument is left at ``None``.
     """
     reject_spinors(moved)
 
@@ -180,7 +203,7 @@ def energy_at(moved, state: FrozenState, terms: bool = False):
     # the SCF symmetrises it -- the functional has to be the same function of
     # the coordinate the SCF minimised at, not a tidier one.
     becsum_ = moved.becsum(psi, weights)
-    rho = moved.density(psi, weights, becsum_)
+    rho = moved.density(psi, weights, becsum_) if density is None else density
     potential = moved.potential(rho)
     epaw, _ = moved.onecenter(becsum_)
 
@@ -239,13 +262,22 @@ def _kinetic_energy(psi, kinetic, weights):
     the functional has to *be* the total energy before it is differentiated --
     that identity is the only check there is on the rest of it.
     """
-    density = jnp.abs(psi) ** 2  # (nspin, nk, nbnd, npwx)
+    # ``Re(conj(psi) psi)`` and not ``abs(psi)**2`` -- the two are the same
+    # number to a rounding and only one is differentiable, ``abs``'s derivative
+    # being ``0/0`` at a coefficient that vanishes. It does not matter for a
+    # force, which differentiates this with respect to the *positions*; it
+    # matters the moment the same functional is differentiated with respect to
+    # the **states**, which is what the second derivative does
+    # (:mod:`pypresso.response.phonon`). The trap is
+    # :func:`pypresso.scf.density.band_density`'s, in a third place.
+    density = jnp.real(jnp.conj(psi) * psi)  # (nspin, nk, nbnd, npwx)
     return jnp.sum(weights * jnp.einsum("skbg,kg->skb", density, kinetic))
 
 
 @jax.jit
 def _norms(psi):
-    return jnp.sum(jnp.abs(psi) ** 2, axis=-1)
+    """``<psi|psi>``, with :func:`_kinetic_energy`'s rule about ``abs``."""
+    return jnp.sum(jnp.real(jnp.conj(psi) * psi), axis=-1)
 
 
 @jax.jit

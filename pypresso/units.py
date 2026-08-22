@@ -39,6 +39,19 @@ AMU_TO_RY = (AMU_SI / ELECTRONMASS_SI) / 2.0
 K_BOLTZMANN_RY = K_BOLTZMANN_SI / RYDBERG_SI
 RY_TO_KELVIN = RYDBERG_SI / K_BOLTZMANN_SI
 
+# --- frequency: what a phonon is printed in ------------------------------------
+#: The atomic unit of time, in seconds, and in picoseconds. ``AU_TERAHERTZ`` is
+#: ``AU_PS`` under another name in ``constants.f90``, kept there because a
+#: frequency in THz and a time in ps are the same number.
+AU_SEC = H_PLANCK_SI / TPI / HARTREE_SI
+AU_PS = AU_SEC * 1.0e12
+#: A frequency in Ry (energy, with hbar = 1) as THz and as cm^-1 -- the two
+#: units ``dyndia`` prints a phonon in. The ``4 pi`` is not decoration: an
+#: angular frequency in Hartree a.u. is ``1/AU_SEC``, and the two factors of two
+#: that take it to an ordinary frequency in Rydberg units are exactly that.
+RY_TO_THZ = 1.0 / AU_PS / FPI
+RY_TO_CMM1 = 1.0e10 * RY_TO_THZ / C_SI
+
 _AU_GPA = HARTREE_SI / BOHR_RADIUS_SI**3 / 1.0e9
 RY_TO_KBAR = 10.0 * _AU_GPA / 2.0  # Ry/bohr^3 -> kbar, as QE prints stress
 

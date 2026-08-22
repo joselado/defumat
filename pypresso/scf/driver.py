@@ -125,9 +125,11 @@ from pypresso.system.kpoints import KPoints
 from pypresso.system.spiral import spiral_kcart, spiral_kpoints
 from pypresso.system.symmetry import (
     apply_symmetry_maps,
+    atom_mapping,
     cartesian_rotations,
     magnetization_signs,
     symmetry_maps,
+    symmetrize_atom_displacement_density,
     symmetrize_magnetization,
     symmetrize_vector_density,
 )
@@ -1909,6 +1911,47 @@ class Calculation:
 
         moved = jnp.moveaxis(jnp.asarray(fields), 1, 0)  # (nspin, 3, ...)
         return jnp.moveaxis(jnp.stack([channel(c) for c in moved]), 0, 1)
+
+    def symmetrize_atom_displacement(self, fields: jnp.ndarray) -> jnp.ndarray:
+        """:meth:`symmetrize_directional` for the ``3 nat`` displacement patterns.
+
+        ``LR_Modules/symdvscf.f90`` at ``q = 0``, for the *phonon* perturbation
+        rather than the electric field's. The difference is one index and it is
+        not cosmetic: an operation rotates the displacement direction **and**
+        carries it to the atom it maps onto, so the average runs over both
+        (:func:`~pypresso.system.symmetry.symmetrize_atom_displacement_density`).
+        On diamond silicon the operations that exchange the two sublattices are
+        half the group.
+
+        Args:
+            fields: ``(nat, 3, nspin_mag, n1, n2, n3)`` real, on the dense grid.
+        """
+        if self._symmetry_maps is None:
+            return fields
+        gvectors = self.basis.dense
+        permutations, phases = self._symmetry_maps
+        rotations = jnp.asarray(cartesian_rotations(self.system.cell, self.symmetries))
+        mapping = atom_mapping(
+            self.system.cell, self.system.structure, self.symmetries
+        )
+
+        def channel(patterns):
+            """``patterns``: (nat, 3, n1, n2, n3) for one spin channel."""
+            nat, ncart = patterns.shape[:2]
+            flat = patterns.reshape((nat * ncart,) + patterns.shape[2:])
+            in_g = jnp.stack([r_to_g(f, gvectors.fft_index) for f in flat])
+            out_g = symmetrize_atom_displacement_density(
+                in_g.reshape((nat, ncart, -1)), permutations, phases,
+                rotations, mapping,
+            )
+            back = jnp.stack([
+                jnp.real(g_to_r(component, gvectors.fft_index, gvectors.grid))
+                for component in out_g.reshape((nat * ncart, -1))
+            ])
+            return back.reshape(patterns.shape)
+
+        moved = jnp.moveaxis(jnp.asarray(fields), 2, 0)  # (nspin, nat, 3, ...)
+        return jnp.moveaxis(jnp.stack([channel(c) for c in moved]), 0, 2)
 
     def density(self, wavefunctions, weights, becsum_=None) -> jnp.ndarray:
         """The symmetrised output density from the occupied states.

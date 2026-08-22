@@ -126,7 +126,8 @@ from pypresso.response.velocity import VelocityOperator, over_kpoints
 from pypresso.system.symmetry import cartesian_rotations, symmetrize_matrix
 from pypresso.units import FPI
 
-__all__ = ["DielectricTensor", "dielectric_tensor"]
+__all__ = ["DielectricTensor", "dielectric_tensor",
+           "require_a_symmetrisable_response"]
 
 #: QE's ``alpha_mix(1)`` -- the linear mixing of the induced potential.
 ALPHA_MIX = 0.7
@@ -211,7 +212,7 @@ def dielectric_tensor(
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
         eigenvalues = eigenvalues[None]
-    _require_a_symmetrisable_response(calculation)
+    require_a_symmetrisable_response(calculation)
     require_a_sternheimer_regime(calculation)
     if calculation.is_paw and not becsum:
         # The same rule ``VelocityOperator`` enforces for ``ddd_paw``: PAW's
@@ -585,7 +586,7 @@ def _require_born_charges(calculation) -> None:
         )
 
 
-def _require_a_symmetrisable_response(calculation) -> None:
+def require_a_symmetrisable_response(calculation) -> None:
     """Either the group can restore the response, or the grid must be closed.
 
     With symmetry on there is nothing to check: the wedge sum is completed by
@@ -599,7 +600,7 @@ def _require_a_symmetrisable_response(calculation) -> None:
     shift = getattr(calculation.system.kpoints, "shift", None)
     if shift is not None and any(shift):
         raise NotImplementedError(
-            "a dielectric response with nosym on a *shifted* k-grid is refused: "
+            "a directional response with nosym on a *shifted* k-grid is refused: "
             "a shifted Monkhorst-Pack grid is not closed under the point group "
             "(2304 of 3072 rotation images leave a shifted 4x4x4 grid on fcc "
             "silicon), so the response it gives is asymmetric and no "
