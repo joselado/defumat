@@ -25,10 +25,17 @@
 ! the 155.7 the unguarded assembly returned was the measurement behind that
 ! refusal. P28 lifted it -- the electronic half of the `jvp` takes `wk` where
 ! the frozen Hessian keeps `wg`, because a metal's `dpsi` already carries its
-! occupation -- and the same six modes now come out at 1.088, 1.559, 1.559,
-! 146.711240, 146.711240 and 311.033545, which is 0.003 cm^-1 on the three real
-! ones. So this is the phase's *check met* rather than its target
+! occupation -- and the same six modes now come out at 0.700, 1.607, 1.725,
+! 146.7093, 146.7132 and 311.0335, which is 0.0019 cm^-1 on the three real ones.
+! So this is the phase's *check met* rather than its target
 ! (`tests/regression/test_phonons.py`).
+!
+! The folded pair splits by 0.0039 here and by 0.0039 in `ph.x`, and that
+! near-degeneracy is the sharp part: this input is `nosym`, so nothing
+! symmetrises the assembled matrix and the splitting has to come out of the
+! calculation. It read as an *exact* degeneracy (146.711240 twice) until P28a
+! found that `symdynph_gq` was being applied to a `nosym` run after all, and a
+! group average flattens precisely this.
  &control
     calculation='scf'
  /

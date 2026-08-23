@@ -156,8 +156,27 @@ def _reciprocal_kernel(g, tau, charges, alpha, volume, factor):
 
     # G = 0 is index 0 by construction and is excluded from the sum.
     nonzero = g2[1:]
+    # ``Re(conj(rho) rho)`` and **not** ``abs(rho)**2``: ``abs``'s derivative is
+    # ``Re(conj(z) dz)/|z|``, which is ``0/0`` where the structure factor
+    # vanishes -- and in a cell that is a supercell it vanishes *exactly*, not
+    # to round-off. The conventional cubic cell of fcc aluminium puts its atoms
+    # at 0 and 1/2, so every phase is exactly +-1 and the fcc extinction rule
+    # (mixed-parity Miller indices) is exact in floating point: **92 of its 3287
+    # G-vectors have |rho| == 0.0**, where two-atom aluminium and diamond
+    # silicon reach 4e-16 and never zero. The energy is right either way and the
+    # *second* derivative is not -- ``jvp(grad)`` disagreed with a finite
+    # difference of the same gradient by 3.0e-4 Ry/bohr^2 at that geometry while
+    # agreeing to 3e-8 as soon as the atoms were displaced off it, and it was
+    # worth 1.3 cm^-1 on the cell's phonon spectrum.
+    #
+    # This is :func:`pypresso.scf.density.band_density`'s trap, and
+    # :func:`pypresso.basis.gvectors.modulus`'s, and
+    # :mod:`pypresso.forces.energy`'s, in a **fourth** place. What is new here is
+    # the way in: the other three are ``0/0`` at a node of a wavefunction, which
+    # is a measure-zero accident, and this one is forced by the crystal's own
+    # symmetry on every cell that is a supercell.
     total = total + factor * jnp.sum(
-        jnp.abs(rho[1:]) ** 2 * jnp.exp(-nonzero / alpha / 4.0) / nonzero
+        jnp.real(rho[1:] * jnp.conj(rho[1:])) * jnp.exp(-nonzero / alpha / 4.0) / nonzero
     )
 
     total = 2.0 * TPI / volume * total

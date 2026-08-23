@@ -1000,7 +1000,20 @@ class Calculation:
         self.quantization_axis = None if axis is None else tuple(float(v) for v in axis)
 
         self.symmetries = system.symmetry_group()
-        use_symmetry = not system.nosym and self.symmetries.nsym > 1
+        #: Whether this run actually symmetrises with :attr:`symmetries`.
+        #:
+        #: **The group is kept whole and the switch sits beside it**, because
+        #: the group is a property of the crystal and is wanted in places an
+        #: input's ``nosym`` has no say over -- ``basis/builder.py`` needs the
+        #: fractional translations to size the FFT box whatever the input says.
+        #: The consequence is that ``calculation.symmetries`` is **not** the
+        #: group a run symmetrises with, and every consumer has to say so; the
+        #: ``symmetrize_*`` methods on this class are where that is said, which
+        #: is why a caller should reach for them rather than for the group.
+        #: Three places in ``response/`` reached for the group instead and so
+        #: symmetrised a ``nosym`` run (``PLAN.md`` P28a).
+        self.use_symmetry = bool(not system.nosym and self.symmetries.nsym > 1)
+        use_symmetry = self.use_symmetry
         if self.spiral and use_symmetry:
             # The reader refuses this pair too (``_spiral_q``), but a ``System``
             # can be built without going through it -- directly, or through the
@@ -2042,6 +2055,48 @@ class Calculation:
 
         moved = jnp.moveaxis(jnp.asarray(fields), 1, 0)  # (nspin, 3, ...)
         return jnp.moveaxis(jnp.stack([channel(c) for c in moved]), 0, 1)
+
+    def symmetrize_atom_tensor(self, tensors) -> np.ndarray:
+        """``symtensor``: a rank-2 tensor per atom, carried between atoms.
+
+        Born effective charges. Here rather than at the two call sites in
+        :mod:`pypresso.response.efield` and :mod:`pypresso.response.born`
+        because both of them reached for :attr:`symmetries` directly and so
+        **symmetrised a ``nosym`` run** -- the group is kept whole beside
+        :attr:`use_symmetry` and is not by itself the group a run uses. The
+        stress and the forces got this right by writing the same two-clause
+        guard a third and fourth time; writing it once is what this method is
+        for.
+        """
+        from pypresso.system.symmetry import atom_mapping, symmetrize_atom_tensor
+
+        tensors = np.asarray(tensors)
+        if not self.use_symmetry:
+            return tensors
+        return np.asarray(symmetrize_atom_tensor(
+            tensors, self.system.cell, self.symmetries,
+            atom_mapping(self.system.cell, self.system.structure, self.symmetries),
+        ))
+
+    def symmetrize_atom_pair_tensor(self, tensors) -> np.ndarray:
+        """``symdynph_gq`` at ``q = 0``: the force constants' two atom indices.
+
+        The companion of :meth:`symmetrize_atom_displacement` and **not** its
+        mirror image: this one carries two atom labels and no spatial argument,
+        so it uses ``irt`` where the displacement density needs ``irt^-1``
+        (``PLAN.md`` P28a, and the docstrings of both functions in
+        :mod:`pypresso.system.symmetry`). Guarded on :attr:`use_symmetry` for
+        the reason :meth:`symmetrize_atom_tensor` is.
+        """
+        from pypresso.system.symmetry import atom_mapping, symmetrize_atom_pair_tensor
+
+        tensors = np.asarray(tensors)
+        if not self.use_symmetry:
+            return tensors
+        return np.asarray(symmetrize_atom_pair_tensor(
+            tensors, self.system.cell, self.symmetries,
+            atom_mapping(self.system.cell, self.system.structure, self.symmetries),
+        ))
 
     def symmetrize_atom_displacement(self, fields: jnp.ndarray) -> jnp.ndarray:
         """:meth:`symmetrize_directional` for the ``3 nat`` displacement patterns.

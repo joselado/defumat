@@ -94,9 +94,11 @@ FD_TOLERANCE = 5e-5
 QE_AL2 = (1.108857, 1.827469, 1.924700, 146.710511, 146.714378, 311.035401)
 
 #: How far aluminium's three real modes may sit from ``ph.x``'s, in cm^-1.
-#: Measured: **0.0031** on the worst of them, an order tighter than silicon's
-#: 0.049 -- the folded pair at 146.711240 against 146.710511 and 146.714378,
-#: and the zone-centre mode at 311.033545 against 311.035401. The looser
+#: Measured: **0.0019** on the worst of them, an order tighter than silicon's
+#: 0.049 -- the folded pair at 146.7093 and 146.7132 against 146.710511 and
+#: 146.714378, and the zone-centre mode at 311.0335 against 311.035401.
+#: (Before P28a stopped symmetrising this ``nosym`` run it read 0.0031, with
+#: the pair flattened to an exact degeneracy at 146.711240.) The looser
 #: tolerance is kept because the floor is the same one (QE's ``dq = 0.01``
 #: form-factor table against direct integration) and there is no reason for
 #: this cell to hold it more tightly than silicon on another day.
@@ -110,6 +112,19 @@ AL2_OPTICAL_TOLERANCE = 0.05
 #: frequencies themselves, because it is the quantity that separates a weight
 #: error from the basis error every code makes.
 AL2_SUM_RULE = 5e-5
+
+#: What the **vendored** ``ph.x`` prints for ``al4-metal.in`` -- the four-atom
+#: conventional cubic cell of fcc aluminium, twelve modes in four triply
+#: degenerate multiplets. The two in the middle are 0.014 cm^-1 apart and are
+#: *different irreducible representations* (T_1u and T_2u), which nothing on
+#: this side imposes.
+QE_AL4 = (4.013795, 200.373700, 200.387839, 305.432658)
+
+#: Measured against those: **0.020, 0.034 and 0.026** cm^-1 on the three optical
+#: multiplets -- the same floor as silicon's 0.049 and al2's 0.003, and the same
+#: cause. Before the two bugs this cell found (``PLAN.md`` P28a) the middle pair
+#: came out at 199.04 and the wedge at 184.85/345.76/578.36.
+AL4_TOLERANCE = 0.2
 
 #: The wedge and the whole grid must agree to arithmetic. Measured: 2.7e-14 on
 #: the matrix, which is what an exact group average of an exactly closed grid
@@ -238,10 +253,18 @@ def test_the_gamma_phonon_of_a_metal_matches_quantum_espresso():
     _, _, phonons = _phonons("al2-metal")
     assert phonons.converged
     optical = phonons.frequencies[3:]
-    # The folded pair is degenerate and nothing here imposes it -- the cell is
-    # a doubling and the degeneracy is the zone-boundary point's, so this is a
-    # statement about the assembly and not about the input.
-    assert optical[1] - optical[0] == pytest.approx(0.0, abs=1e-6)
+    # **The folded pair is *nearly* degenerate, not exactly so**, and the
+    # near-miss is the sharp part of this test. This input carries
+    # ``nosym = .true.``, so nothing symmetrises the assembled matrix and the
+    # 0.0039 cm^-1 by which the pair splits has to come out of the calculation;
+    # ``ph.x`` splits it by 0.0039 too. It was asserted as an *exact*
+    # degeneracy until P28a, and passed, because ``symdynph_gq`` was being
+    # applied to a ``nosym`` run and a group average flattens precisely this --
+    # the artifact read as a *stronger* result than the truth, which is how
+    # that kind of error usually presents.
+    assert optical[1] - optical[0] == pytest.approx(
+        QE_AL2[4] - QE_AL2[3], abs=1e-3
+    ), "the folded pair's splitting is physical, not a degeneracy"
     for computed, reference in zip(optical, QE_AL2[3:]):
         assert computed == pytest.approx(reference, abs=AL2_OPTICAL_TOLERANCE)
 
@@ -291,6 +314,49 @@ def test_a_metals_rigid_translation_reproduces_the_density_gradient():
         translated = phonons.induced_density[:, axis, 0].sum(axis=0)
         scale = float(jnp.abs(exact).max())
         assert float(jnp.abs(translated - exact).max()) / scale < 1e-3
+
+
+def test_the_gamma_phonon_of_a_supercell_metal_matches_quantum_espresso():
+    """Four-atom fcc aluminium: a **supercell**, and a symmetry-reduced wedge.
+
+    Two things make this a different case from ``al2-metal.in`` rather than a
+    bigger one, and each hid a bug that no other committed cell could see
+    (``PLAN.md`` P28a).
+
+    Its 48 operations permute the three face-centring atoms in **3-cycles**,
+    where every other cell here permutes atoms only in involutions -- so
+    ``symdvscf``'s atom mapping and its inverse coincide everywhere else and
+    differ here. And its atoms sit at exact fractions, so the structure factor
+    vanishes **exactly** on 92 G-vectors rather than cancelling to 4e-16, which
+    is where ``abs(rho)**2`` in the Ewald sum had a ``0/0`` derivative.
+
+    This is also the **first metal phonon on a reduced wedge**: ``ph.x`` accepts
+    this cell's symmetry where it refuses al2's, so both codes work from the
+    same 10 k-points.
+    """
+    _, _, phonons = _phonons("al4-metal")
+    assert phonons.converged
+    multiplets = phonons.frequencies.reshape(4, 3)
+    for multiplet in multiplets:
+        assert multiplet.max() - multiplet.min() < 1e-3, "each multiplet is a triplet"
+    for computed, reference in zip(multiplets[1:, 0], QE_AL4[1:]):
+        assert computed == pytest.approx(reference, abs=AL4_TOLERANCE)
+
+
+def test_a_supercells_acoustic_sum_rule_holds():
+    """The diagnostic, and the one that was *blind* to this cell's second bug.
+
+    Both of P25's independent checks -- this and the rigid translation -- are
+    sums over atoms, and the Ewald error was a **transfer** between the on-site
+    block and one neighbour. It summed to 2.1e-5 and left the sum rule looking
+    healthy while the matrix was wrong by 5.5e-4, which is why the finite
+    difference of forces had to be the arbiter. Asserted anyway, because it is
+    still the cheapest thing that would catch a gross error.
+    """
+    _, _, phonons = _phonons("al4-metal")
+    residue = float(np.abs(phonons.matrix.sum(axis=2)).max())
+    assert residue < 5e-5, f"{residue} against on-site "\
+                           f"{np.abs(phonons.matrix[0, :, 0, :]).max()}"
 
 
 # ---------------------------------------------------------------------------

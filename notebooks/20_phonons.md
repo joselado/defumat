@@ -114,16 +114,16 @@ print(f"acoustic sum rule D_00 + D_01   {on_site[0, 0] + between[0, 0]:.3e}")
 ```
 
     D[Si_1, Si_1] =
-     [[ 0.276582 -0.        0.      ]
-     [-0.        0.276582  0.      ]
-     [ 0.        0.        0.276582]]
+     [[ 0.276582  0.        0.      ]
+     [ 0.        0.276582 -0.      ]
+     [ 0.       -0.        0.276582]]
     D[Si_1, Si_2] =
-     [[-0.27654648 -0.         -0.        ]
-     [-0.         -0.27654648  0.        ]
-     [ 0.          0.         -0.27654648]]
+     [[-0.27654648  0.         -0.        ]
+     [-0.         -0.27654648 -0.        ]
+     [-0.          0.         -0.27654648]]
     
-    isotropic on-site block to      6.9e-17
-    asymmetry max|D - D^T|          2.8e-16
+    isotropic on-site block to      1.1e-16
+    asymmetry max|D - D^T|          1.4e-16
     acoustic sum rule D_00 + D_01   3.552e-05
 
 
@@ -231,7 +231,7 @@ print("with it            :", np.array2string(imposed.frequencies, precision=3))
 ```
 
     without the sum rule: [  4.088   4.088   4.088 510.102 510.102 510.102]
-    with it            : [-5.091e-06 -2.812e-06  4.893e-06  5.101e+02  5.101e+02  5.101e+02]
+    with it            : [-8.084e-06 -1.191e-06  7.752e-06  5.101e+02  5.101e+02  5.101e+02]
 
 
 ## 5. A metal, where the same machinery needs a different weight
@@ -278,19 +278,22 @@ print(f"constants of       {np.abs(metal.matrix[0, :, 0, :]).max():.4f}")
 ```
 
             here        ph.x
-          1.0878      1.1089
-          1.5592      1.8275
-          1.5592      1.9247
-        146.7112    146.7105
-        146.7112    146.7144
+          0.6997      1.1089
+          1.6067      1.8275
+          1.7247      1.9247
+        146.7093    146.7105
+        146.7132    146.7144
         311.0335    311.0354
     
     acoustic sum rule  1.06e-05 Ry/bohr^2, against on-site force
     constants of       0.0476
 
 
-The three real modes land within **0.003 cm⁻¹** of `ph.x` — tighter than silicon's 0.05 —
-and the folded pair is degenerate to $10^{-14}$ with nothing imposing it.
+The three real modes land within **0.0019 cm⁻¹** of `ph.x` — tighter than silicon's 0.05 —
+and the folded pair splits by 0.0039 where `ph.x` splits it by 0.0039. That near-degeneracy
+is the sharper statement: this cell is run with `nosym`, so nothing symmetrises the
+assembled matrix and the splitting has to come out of the calculation rather than be
+imposed on it.
 
 The acoustic sum rule is the number to watch, and it is why this was a refusal for a phase
 before it was a feature. With the single $w_g$-weighted `jvp` the optical modes came out at

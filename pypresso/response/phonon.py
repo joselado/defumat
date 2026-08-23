@@ -121,7 +121,6 @@ from pypresso.response.sternheimer import (
     smearing_of,
 )
 from pypresso.response.velocity import over_kpoints
-from pypresso.system.symmetry import atom_mapping, symmetrize_atom_pair_tensor
 from pypresso.units import AMU_TO_RY, RY_TO_CMM1, RY_TO_THZ
 
 __all__ = ["Phonons", "dynamical_matrix", "require_norm_conserving",
@@ -286,10 +285,7 @@ def dynamical_matrix(
     # so the hermitisation has nothing left to do and what it would have removed
     # is a report on the linear solves. Whether the average *must* leave a
     # symmetric matrix is not claimed -- it is measured.
-    matrix = symmetrize_atom_pair_tensor(
-        matrix, calculation.system.cell, calculation.symmetries,
-        atom_mapping(calculation.system.cell, structure, calculation.symmetries),
-    )
+    matrix = calculation.symmetrize_atom_pair_tensor(matrix)
     asymmetry = float(np.abs(matrix - matrix.transpose(2, 3, 0, 1)).max())
     matrix = 0.5 * (matrix + matrix.transpose(2, 3, 0, 1))
     if acoustic_sum_rule:

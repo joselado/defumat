@@ -3335,17 +3335,23 @@ ground state this reproduces to 1e-9 Ry (−8.332103799 against −8.33210381):
 
 | mode | before (P25's assembly) | after | `ph.x` |
 |---|---|---|---|
-| acoustic | 155.74, 155.74, 155.74 | 1.088, 1.559, 1.559 | 1.109, 1.827, 1.925 |
-| folded pair | 197.96, 197.96 | **146.711240**, 146.711240 | 146.710511, 146.714378 |
-| zone centre | 309.26 | **311.033545** | 311.035401 |
+| acoustic | 155.74, 155.74, 155.74 | 0.700, 1.607, 1.725 | 1.109, 1.827, 1.925 |
+| folded pair | 197.96, 197.96 | **146.7093**, **146.7132** | 146.710511, 146.714378 |
+| zone centre | 309.26 | **311.0335** | 311.035401 |
 
-in cm⁻¹. The worst of the three real modes is **0.0031** from `ph.x` — an order tighter
+in cm⁻¹. The worst of the three real modes is **0.0019** from `ph.x` — an order tighter
 than silicon's 0.049, and the same floor either way (QE's `dq = 0.01` form-factor table
-against direct integration here). The folded pair is degenerate to **2.8e-14** with nothing
-imposing it: the cell is a doubling and that degeneracy belongs to the zone-boundary point,
-so it is a statement about the assembly rather than about the input. From a run that
-converges in 9 iterations to `|ddv_scf|^2 = 8.7e-17` at `av.it. = 23.0`, and returns a
-matrix symmetric to 1.25e-9.
+against direct integration here). From a run that converges in 9 iterations to
+`|ddv_scf|^2 = 8.7e-17` at `av.it. = 23.0`, and whose matrix is symmetric to **1.26e-9**
+with nothing imposing it — this input is `nosym`, so nothing symmetrises the assembled
+matrix and that figure is the free report on the linear solves it was always meant to be.
+
+**The folded pair is *nearly* degenerate and not exactly so, and the near-miss is the
+sharper statement.** It splits by **0.0039**, and `ph.x` splits it by 0.0039 too. This
+table read `146.711240` twice when P28 landed, with the pair flat to 2.8e-14 and the
+agreement 0.0031 — because `symdynph_gq` was being applied to a `nosym` run (the third
+bug in P28a below) and a group average flattens exactly this. The artifact read as a
+*stronger* result than the truth, which is the way that kind of error usually presents.
 
 **The acoustic sum rule is the diagnostic and it is the reason this was ever a refusal.**
 `sum_b D_(a i)(b j) = 0` exactly, and it now holds to **1.06e-5 Ry/bohr²** against on-site
@@ -3379,6 +3385,129 @@ and the dynamical matrix that would was refused. It does now, so the phonon row 
 metals and P24c is the layer under it.
 
 *Notebook 20 extended.*
+
+### P28a — A supercell is a regime, and it found two bugs. ✅ DONE.
+
+`pypresso/scf/ewald.py`, `pypresso/system/symmetry.py`, and
+`tests/data/qe/al4-metal.in` with its `ph.x` reference. This phase has no new
+feature in it: it is P28 run on a **bigger cell** — the four-atom conventional
+cubic cell of fcc aluminium instead of the two-atom one — and the whole of its
+content is what that turned up.
+
+**Why a supercell is a regime and not a bigger case.** Its atoms sit at exact
+fractions of the cell, and two things that are otherwise approximate become
+*exact*. The structure factor vanishes identically on a whole set of G-vectors —
+the extinction rule — rather than cancelling to round-off: **92 of al4's 3287
+G-vectors have `|rho|` exactly `0.0`**, where `al2-metal.in` and `si-epsilon.in`
+bottom out at 4e-16 and never reach it. And the point group's atom permutations
+acquire cycles longer than a transposition: al4's 48 operations contain
+**3-cycles** on the three face-centring atoms, where every other cell committed
+here permutes atoms only in involutions — one atom in the cell gives the
+identity, and diamond silicon and two-atom aluminium only ever swap in pairs.
+The first breaks `abs`; the second breaks anything pairing an atom label with a
+spatial one. Neither had a cell that could see it.
+
+**Bug 1: `symdvscf` averaged over the atom each operation moves, not the one it
+moves onto.** `symmetrize_atom_displacement_density` gathered at `irt[s, a]`
+where the derivation gives `irt^-1[s, a]` — an operation carries a displacement
+of atom `a` along `i` into one of atom `irt[s,a]` along `R i`, so labelling the
+average by the atom it lands *on* puts `S^-1` under the sum. It is 2d7d9d5's
+mistake in a second function. **`symmetrize_atom_pair_tensor` is right as it
+stands** and does not share the direction, because it carries two atom labels
+and *no spatial argument* — that is the thing that fixes it, and both are now
+asserted. Measured on al4: **0.33** on a field invariant by construction, and
+the wedge at 184.85/345.76/578.36 cm⁻¹ against the whole grid's 199.04/305.41.
+
+**Bug 2: `abs(rho)**2` in the reciprocal Ewald sum.** `abs`'s derivative is
+`Re(conj(z) dz)/|z|`, which is `0/0` at `z = 0`, and the extinction rule puts it
+there exactly. **The energy and the forces are right either way and the second
+derivative is not.** This is `band_density`'s trap, and `modulus`'s, and
+`forces/energy.py`'s, in a **fourth** place — and what is new is the way in: the
+other three are a node of a wavefunction, a measure-zero accident, and this one
+is *forced by the crystal's symmetry* on every cell that is a supercell.
+
+**How it was found, because the route is the lesson.** The assembled matrix
+disagreed with a finite difference of forces by 5.5e-4 Ry/bohr² where `ph.x`
+agreed with it to 2.3e-5. Eliminated in turn, each by measurement: the
+symmetrisation (the unreduced route showed the same error), the ground state
+(total energy and Fermi level match `pw.x` exactly), `ef_shift` (`ph.x` prints
+1e-25 here — this cell's modes move no charge), the band count (`nbnd` 10 and 16
+agree to 1.6e-7), the near-degenerate projector branch (al2 already exercises it
+15 times), and the per-mode response density (9.1e-5 against its own finite
+difference, its floor). What was left was `jvp(grad)` disagreeing with a finite
+difference *of that same gradient* — no SCF, no solve, no symmetrisation on
+either side — which a per-term split put entirely on `ewald` (3.037e-4, every
+other term ≤ 7e-7). The mechanism was then pinned by the step scaling: **constant
+in `h` from 1e-2 to 1e-5 at the symmetric geometry, and 3.2e-8 as soon as the
+atoms were displaced 0.05 bohr off it.**
+
+**The identities P25 rests on are blind to this, and that is the finding to
+carry forward.** The Ewald error was a *transfer* between the on-site block and
+one neighbour — `[-5.47e-4, +5.24e-4, +2.2e-5, +2.2e-5]`, summing to 2.1e-5. The
+**acoustic sum rule and the rigid-translation identity are both sums over
+atoms**, so a transfer cancels in each and both stayed healthy while the matrix
+was wrong by half a percent. The first check here that is not an atom-sum is the
+per-mode response density against a finite difference, and it is what cleared
+the response and left the energy functional as the only suspect.
+
+*Check met.* `al4-metal.in` against the vendored `ph.x` on the same input, both
+codes reducing the 4x4x4 grid to the same 10 k-points — **the first metal phonon
+computed on a symmetry-reduced wedge**, since `ph.x` accepts this cell's
+symmetry where it refuses al2's:
+
+| multiplet | before (both bugs) | after | `ph.x` |
+|---|---|---|---|
+| acoustic | 3.18 | 3.1841 | 4.013795 |
+| optical `T_1u` | 184.85 | **200.3534** | 200.373700 |
+| optical `T_2u` | 345.76 | **200.3538** | 200.387839 |
+| optical `T_1u` | 578.36 | **305.4065** | 305.432658 |
+
+**0.020, 0.034 and 0.026 cm⁻¹** on the three optical multiplets — silicon's
+floor. Each is a triplet to below 1e-3 with nothing imposing the crystal class,
+and the two middle ones are *different irreducible representations* split by
+0.014 in `ph.x`, which is the sharpest thing this cell asserts.
+
+**Tests, and they need no reference.** `tests/unit/test_supercell_derivatives.py`
+— twelve of them, in 11 s, no SCF anywhere. Both bugs are pinned by identities
+the code must satisfy against itself: a displacement field invariant by
+construction must survive the average unchanged; a group average must be a
+**projector**, `P(P(x)) = P(x)`; and `jvp(grad E_ewald)` must converge to its own
+finite difference as `h^2`. Each is parametrised over al4 *and* the two
+primitive cells, and the primitive ones pass with the bugs reintroduced — which
+is asserted directly (`test_the_supercell_is_the_only_case_with_a_non_involutive_permutation`)
+so that the suite states *why* the old cells were blind rather than leaving it
+to be rediscovered.
+
+**A third bug, found while writing the two above up, and fixed with them.**
+`Calculation.symmetries` returns the full group *even under `nosym`*, which is
+deliberate — the group is a property of the crystal and `basis/builder.py` sizes
+the FFT box from its fractional translations whatever the input says — and the
+switch beside it is `use_symmetry`. Three places in `response/` read the group
+instead of the switch and so **symmetrised a `nosym` run**: `symdynph_gq` on the
+force constants, and `symtensor` on the Born charges in both `efield.py` and
+`born.py`. The stress and the forces write the same two-clause guard by hand and
+get it right, which is exactly why the asymmetry survived — there was no single
+place for it to be wrong in. `al2-metal.in` is the case it mattered on: it
+carries `nosym = .true.`, its header says its response is not symmetrised, and
+its twelve operations were being applied to a random matrix to the tune of 2.0.
+
+The fix is structural rather than three guards: `use_symmetry` is public, and
+`Calculation.symmetrize_atom_tensor` and `symmetrize_atom_pair_tensor` join
+`symmetrize_atom_displacement` as the methods that read it once. **The answers
+do not move** — al2's grid is closed under its group, so symmetrising it was a
+no-op numerically — which is why this was invisible in every number and is a
+correctness fix rather than a change of result.
+
+**Left open, and named rather than fixed.** `abs(...)**2` survives in five other
+places: the Hartree energy
+and `stres_har` (`rho_g` has *no* exact zeros — 4.9e-17 is its floor here — so
+they are latent rather than firing), and `stress/analytic.py`'s and
+`forces/spiral.py`'s `abs(psi)**2`, which do meet exact zeros from the `npwx`
+padding but are only ever differentiated with respect to a **strain** or `q` at
+frozen states, never with respect to the states, which is the direction that
+makes a node bite.
+
+*No notebook: this phase adds no feature. Notebook 20 keeps P28's metal section.*
 
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes

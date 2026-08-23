@@ -105,7 +105,6 @@ from pypresso.basis.interpolate import to_dense
 from pypresso.batching import map_k
 from pypresso.forces.energy import FrozenState, frozen_energy
 from pypresso.scf.density import becsum as becsum_of, sum_band
-from pypresso.system.symmetry import atom_mapping, symmetrize_atom_tensor
 
 __all__ = ["born_effective_charges", "require_born_charges"]
 
@@ -229,10 +228,7 @@ def born_effective_charges(
 
     # ``symtensor``: a wedge sum is exact for a scalar and not for a rank-2
     # tensor the group carries between atoms.
-    return symmetrize_atom_tensor(
-        charges, calculation.system.cell, calculation.symmetries,
-        atom_mapping(calculation.system.cell, structure, calculation.symmetries),
-    )
+    return calculation.symmetrize_atom_tensor(charges)
 
 
 def _ground_state_multipliers(weights, eigenvalues, dtype):

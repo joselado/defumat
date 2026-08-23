@@ -559,7 +559,6 @@ def born_charges_zstar_eu(calculation, solver, v_scf, dpsi) -> np.ndarray:
     to the *displacement* with no sign of its own -- so the transcription is
     literal.
     """
-    from pypresso.system.symmetry import atom_mapping, symmetrize_atom_tensor
 
     structure = calculation.system.structure
     positions = jnp.asarray(structure.positions)
@@ -598,10 +597,7 @@ def born_charges_zstar_eu(calculation, solver, v_scf, dpsi) -> np.ndarray:
 
     # ``symtensor``: the wedge sum is exact for a scalar and not for a rank-2
     # tensor carried between atoms by the group.
-    return symmetrize_atom_tensor(
-        charges, calculation.system.cell, calculation.symmetries,
-        atom_mapping(calculation.system.cell, structure, calculation.symmetries),
-    )
+    return calculation.symmetrize_atom_tensor(charges)
 
 
 def _symmetrize_becsum_response(calculation, per_axis):

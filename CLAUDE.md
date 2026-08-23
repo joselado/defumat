@@ -78,13 +78,29 @@ routine: a metal's `dpsi` already carries its occupation, so contracting it agai
 energy functional weighted by `wg` counts that occupation twice, and QE's own layout says
 so — `dynmat_us.f90` reads `wg` for the frozen Hessian and `drhodvnl.f90` reads `2 wk` for
 the electronic term. Splitting P25's single `jvp` along those lines puts two-atom
-aluminium's modes at **146.711240** and **311.033545** cm⁻¹ against `ph.x`'s 146.710511 /
-146.714378 and 311.035401 — **0.003 cm⁻¹**, an order tighter than silicon's 0.05 — where
+aluminium's modes at **146.7093**, **146.7132** and **311.0335** cm⁻¹ against `ph.x`'s
+146.710511 / 146.714378 and 311.035401 — **0.0019 cm⁻¹**, an order tighter than silicon's
+0.05, the folded pair's real 0.0039 splitting reproduced rather than flattened — where
 the unsplit assembly gave 197.96 and 309.26 and put the acoustic modes at 155.7 against
 1.9. The acoustic sum rule is the diagnostic that said so and now holds to 1.06e-5
 Ry/bohr². **The `df_n` term the refusal predicted is not needed**: it is already inside
 `dpsi`, being the `(f_i - f_j)/(eps_i - eps_j)` structure of the smeared projector, which
 vanishes identically for an insulator.
+**A supercell is a regime of its own** (P28a), which running P28 on the four-atom
+conventional cell of fcc aluminium established by finding two bugs no other committed
+cell could see. Its atoms sit at exact fractions, so the structure factor vanishes
+*exactly* (92 of 3287 G-vectors, against a 4e-16 floor on primitive cells) and the point
+group's atom permutations acquire **3-cycles** where every other cell here has only
+involutions. The first made `abs(rho)**2` in the reciprocal Ewald sum a `0/0` derivative —
+the `abs` trap in a **fourth** place, and the first one *forced by symmetry* rather than
+by an accidental node — and the second made `symdvscf` average over the atom each
+operation moves instead of the one it moves onto. Both leave the energy and the forces
+right and damage only the second derivative. **The two identities P25 rests on are blind
+to the first**, because the acoustic sum rule and the rigid-translation test are both sums
+over *atoms* and the error was a transfer between them; the first check that is not an
+atom-sum is the per-mode response density against a finite difference. Four-atom aluminium
+now matches `ph.x` to **0.020-0.034 cm⁻¹** on the first metal phonon computed on a
+symmetry-reduced wedge.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
 read it before writing code. P4 is complete: a block Davidson eigensolver behind a name
 registry, seeded from the pseudo-atomic orbitals as QE seeds it, and the *only* solver the

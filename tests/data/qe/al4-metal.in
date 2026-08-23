@@ -1,0 +1,59 @@
+! The **conventional cubic cell** of fcc aluminium -- four atoms, so twelve modes
+! at `Gamma`: the primitive cell's acoustic triplet and the nine the cell folds in
+! from the three X points. Same pseudopotential, cutoff and smearing as
+! `al2-metal.in`, so what this adds over that file is the cell and nothing else.
+!
+! It is here because it is a **supercell**, and that turned out to be a regime of
+! its own rather than just a bigger case. Two bugs were invisible on every other
+! committed cell and are exposed by this one:
+!
+!   * `symdvscf` averaged the response density over the atom each operation
+!     *moves* rather than the one it moves *onto*. The two agree whenever every
+!     operation's atom permutation is an involution -- one atom in the cell, or
+!     diamond silicon and `al2-metal.in`, where atoms only swap in pairs. The 48
+!     operations here contain 3-cycles on the three face-centring atoms, and the
+!     wedge came out at 184.85/345.76/578.36 cm^-1 against the whole grid's
+!     199.04/305.41.
+!
+!   * the reciprocal Ewald sum used `abs(rho)**2`, whose derivative is `0/0`
+!     where the structure factor vanishes. In a supercell it vanishes *exactly*:
+!     the atoms sit at 0 and 1/2, every phase is exactly +-1, and the fcc
+!     extinction rule is exact in floating point -- **92 of 3287 G-vectors have
+!     |rho| == 0.0** here, where `al2-metal.in` and silicon bottom out at 4e-16
+!     and never reach zero. The energy and the forces are right either way; the
+!     *second* derivative was out by 1.3 cm^-1.
+!
+! `ph.x` gives 4.013795 (x3), 200.373700 (x3), 200.387839 (x3) and 305.432658
+! (x3) cm^-1 -- two nearly-degenerate optical triplets that are different
+! irreducible representations (T_1u and T_2u), split by 0.014 cm^-1, which
+! nothing on this side imposes. This code gives 3.1841, 200.3534, 200.3538 and
+! 305.4065: **0.020-0.034 cm^-1** on the nine real modes, the same floor as
+! silicon's 0.049. The reference is `reference.out.ph-al4-metal`, from
+!
+!   pw.x -in al4-metal.in && ph.x -in al4-metal.ph.in
+!
+! Symmetry is **on** here, unlike `al2-metal.in`: the cubic cell is one `ph.x`
+! accepts with its symmetry (it refuses al2's outright), so both codes reduce the
+! 4x4x4 grid to the same 10 k-points and this is the first metal phonon computed
+! on a symmetry-reduced wedge.
+ &control
+    calculation='scf'
+ /
+ &system
+    ibrav=1, celldm(1)=7.50,
+    nat=4, ntyp=1,
+    ecutwfc=15.0,
+    occupations='smearing', smearing='marzari-vanderbilt', degauss=0.05
+ /
+ &electrons
+    conv_thr = 1.0d-12
+ /
+ATOMIC_SPECIES
+ Al  26.98 Al.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Al  0.00  0.00  0.00
+ Al  0.00  0.50  0.50
+ Al  0.50  0.00  0.50
+ Al  0.50  0.50  0.00
+K_POINTS automatic
+ 4 4 4 0 0 0

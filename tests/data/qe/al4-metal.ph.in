@@ -1,0 +1,17 @@
+! The `ph.x` input that generated `reference.out.ph-al4-metal`, from the ground
+! state of `al4-metal.in`:
+!
+!   pw.x -in al4-metal.in && ph.x -in al4-metal.ph.in
+!
+! `outdir` and `fildyn` are rewritten by whoever regenerates it. `ph.x` splits
+! the twelve modes into four irreducible representations of three here, and its
+! `Fermi energy shift` prints as 1e-25 -- this cell's modes move no charge, so
+! `ef_shift` is inactive and is *not* what this case tests.
+Al4 Gamma phonons
+ &inputph
+  prefix='al4',
+  outdir='OUTDIR/tmp',
+  tr2_ph=1.0d-14,
+  fildyn='OUTDIR/al4.dynG',
+ /
+0.0 0.0 0.0
