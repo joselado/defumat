@@ -238,9 +238,21 @@ def test_the_unimplemented_corrections_are_refused_by_name(name, reason):
         build_vdw_correction(name, None, None)
 
 
-def test_an_unknown_vdw_corr_is_an_error():
-    with pytest.raises(ValueError, match="unknown vdw_corr"):
-        canonical_vdw_corr("grimme-d4")
+def test_an_unknown_vdw_corr_warns_and_applies_no_correction():
+    """``set_vdw_corr``'s ``CASE DEFAULT``, which QE's own test suite needs.
+
+    ``pw_scf/scf-gth.in`` asks for ``vdw_corr = 'dft-d2'`` -- not one of the four
+    spellings D2 answers to -- and its benchmark is a run with no dispersion and
+    a ``WARNING: unknown vdw correction`` in the header. Raising here made that
+    input unreadable, and with it six geometry and basis regressions that have
+    nothing to do with dispersion.
+    """
+    with pytest.warns(UserWarning, match="unknown vdw correction"):
+        assert canonical_vdw_corr("grimme-d4") == "none"
+    with pytest.warns(UserWarning, match="unknown vdw correction"):
+        assert canonical_vdw_corr("dft-d2") == "none"
+    with pytest.warns(UserWarning, match="unknown vdw correction"):
+        assert build_vdw_correction("dft-d2", None, None) is None
 
 
 def test_no_correction_is_the_default():

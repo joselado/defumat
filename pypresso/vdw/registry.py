@@ -5,16 +5,29 @@ QE offers five and selects between them with one string
 project's standard registry so that adding D3 or Tkatchenko-Scheffler is a new
 file plus a registration rather than an edit to a branch in the driver.
 
-**The unimplemented ones are refused by name.** ``set_vdw_corr`` warns and
-carries on with no correction at all for a name it does not recognise, which for
-an input asking for ``grimme-d3`` means silently getting plain PBE -- a 30 meV
-error on a layered crystal and no message in the output that survives a grep for
-"Error". Here an unimplemented correction stops the run and says what would have
-to be written.
+**The unimplemented ones are refused by name.** For a correction QE *does*
+recognise and this code does not implement -- D3, Tkatchenko-Scheffler, MBD, XDM
+-- falling through to no correction at all would give an input asking for
+``grimme-d3`` plain PBE instead: a 30 meV error on a layered crystal and no
+message in the output that survives a grep for "Error". Those stop the run and
+say what would have to be written.
+
+**A name QE does not recognise follows QE**, which is the opposite choice and is
+made for the opposite reason. ``set_vdw_corr``'s ``CASE DEFAULT`` warns and runs
+on with no correction, and QE's own test suite depends on it: ``pw_scf/
+scf-gth.in`` asks for ``vdw_corr = 'dft-d2'``, which is *not* one of the four
+spellings D2 answers to, and its committed benchmark is a run with no dispersion
+and a ``WARNING: unknown vdw correction`` in the header. Raising there makes that
+input unreadable, and reading QE's inputs and reproducing QE's numbers is the
+whole validation method -- so the warning is reproduced instead, loudly enough to
+survive (:class:`UserWarning`) but not fatally. Note what this means: adding
+``dft-d2`` as an alias of ``grimme-d2`` would be *wrong*, because ``pw.x`` does
+not apply a correction for it either.
 """
 
 from __future__ import annotations
 
+import warnings
 from typing import Callable
 
 __all__ = [
@@ -78,16 +91,23 @@ def register_vdw(name: str):
 def canonical_vdw_corr(name: str | None) -> str:
     """QE's spelling of a ``vdw_corr`` value reduced to the canonical one.
 
-    Unlike ``set_vdw_corr``, an unknown name is an error rather than a warning
-    followed by no correction: a typo in ``vdw_corr`` should not silently give a
-    different functional.
+    A name ``set_vdw_corr`` does not recognise is ``'none'`` here as it is
+    there, with the same warning -- see the module docstring for why this one
+    case follows QE rather than stopping the run.
     """
     if name is None:
         return "none"
     key = name.strip().lower()
     if key not in _ALIASES:
         known = ", ".join(sorted(set(_ALIASES.values()) - {"none"}))
-        raise ValueError(f"unknown vdw_corr = {name!r}; pw.x has {known}")
+        warnings.warn(
+            f"unknown vdw correction (vdw_corr): {name!r}. No vdw correction "
+            f"used. pw.x has {known}; this is set_vdw_corr's CASE DEFAULT and "
+            "pw.x would run without a correction too",
+            UserWarning,
+            stacklevel=2,
+        )
+        return "none"
     return _ALIASES[key]
 
 
