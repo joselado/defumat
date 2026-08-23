@@ -72,3 +72,27 @@ def test_positions_are_traceable():
 
     gradient = jax.grad(lambda p: (p**2).sum())(structure.positions)
     assert np.asarray(gradient) == pytest.approx(2.0 * np.asarray(structure.positions))
+
+
+def test_a_structure_card_written_in_fortran_double_literals():
+    """The mass, the coordinates and ``if_pos`` all come off a card as text.
+
+    ``pw_uspp/uspp1.in`` writes ``O  16.D0  O_US.van`` and QE inputs write
+    positions as ``0.0d0`` just as freely; every one of those went through a bare
+    ``float()``, which accepts none of them.
+    """
+    from pypresso.io.pwin import parse_pw_input
+    from pypresso.config import DEFAULT_PRECISION
+    from pypresso.system.builder import _build_structure
+
+    inp = parse_pw_input(
+        "&system\n ibrav=2, celldm(1)=10.2, nat=2, ntyp=1\n/\n"
+        "ATOMIC_SPECIES\n Si 28.086d0 Si.pz-vbc.UPF\n"
+        "ATOMIC_POSITIONS crystal\n"
+        " Si 0.0d0 0.0D0 0.d0 1 1 1\n"
+        " Si 2.5d-1 0.25 0.25\n"
+    )
+    structure = _build_structure(inp, CELL, DEFAULT_PRECISION)
+    assert structure.species[0].mass == pytest.approx(28.086)
+    assert np.allclose(structure.positions_crystal(CELL)[1], [0.25, 0.25, 0.25])
+    assert np.array_equal(structure.if_pos, np.ones((2, 3), dtype=int))

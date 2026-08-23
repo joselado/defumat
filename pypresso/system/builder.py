@@ -567,6 +567,22 @@ def _input_occupations(pwin: PwInput) -> tuple[float, ...] | None:
 def _build_cell(pwin: PwInput, precision: Precision) -> Cell:
     ibrav = pwin.get("system", "ibrav")
     if ibrav is None:
+        if pwin.get("system", "space_group") is not None:
+            # ``input.f90``'s ``sup_spacegroup`` derives ``ibrav`` from the space
+            # group and expands the Wyckoff letters into a full basis, so such an
+            # input is legal QE and simply omits ``ibrav``. Saying "ibrav is
+            # required" of it names the wrong thing -- the gap is the Wyckoff
+            # input PLAN.md's P6 still lists as outstanding, and
+            # ``Structure.from_card_units`` refuses ``crystal_sg`` a step later
+            # for the same reason.
+            raise NotImplementedError(
+                f"{pwin.path or 'input'}: space_group = "
+                f"{pwin.get('system', 'space_group')} selects Wyckoff input, "
+                "which is not implemented (Modules/space_group.f90's "
+                "sup_spacegroup derives ibrav from the group and expands the "
+                "Wyckoff letters into a basis). Give ibrav and the full "
+                "ATOMIC_POSITIONS instead"
+            )
         raise ValueError(f"{pwin.path or 'input'}: ibrav is required")
     ibrav = int(ibrav)
 
@@ -616,18 +632,18 @@ def _build_structure(pwin: PwInput, cell: Cell, precision: Precision) -> Structu
     for line in species_card.lines:
         name, mass, pseudo = line.split()[:3]
         index_of[name] = len(species)
-        species.append(Species(name=name, mass=float(mass), pseudo_file=pseudo))
+        species.append(Species(name=name, mass=fortran_float(mass), pseudo_file=pseudo))
 
     positions_card = pwin.require_card("ATOMIC_POSITIONS")
     names, coordinates, if_pos = [], [], []
     for line in positions_card.lines:
         tokens = line.split()
         names.append(tokens[0])
-        coordinates.append([float(t) for t in tokens[1:4]])
+        coordinates.append([fortran_float(t) for t in tokens[1:4]])
         # Trailing 0/1 flags -- ``if_pos``, which freezes a coordinate during a
         # relaxation. Absent means free.
         flags = tokens[4:7]
-        if_pos.append([int(float(f)) for f in flags] if len(flags) == 3 else [1, 1, 1])
+        if_pos.append([int(fortran_float(f)) for f in flags] if len(flags) == 3 else [1, 1, 1])
 
     unknown = set(names) - set(index_of)
     if unknown:
@@ -748,7 +764,7 @@ def _atomic_b_field(pwin: PwInput, nat: int) -> tuple:
         raise ValueError(
             f"LOCAL_MAGNETIC_FIELDS lists {len(rows)} atoms but the cell has {nat}"
         )
-    return tuple(tuple(float(v) for v in row[:3]) for row in rows)
+    return tuple(tuple(fortran_float(v) for v in row[:3]) for row in rows)
 
 
 def _hubbard(pwin: PwInput, structure):
@@ -872,7 +888,7 @@ def _build_kpoints(
         return KPoints.gamma(precision=precision)
 
     if option == "automatic":
-        values = [int(v) for v in card.lines[0].split()[:6]]
+        values = [int(fortran_float(v)) for v in card.lines[0].split()[:6]]
         return KPoints.automatic(
             tuple(values[:3]), tuple(values[3:6]), cell,
             precision=precision, rotations=rotations,
@@ -880,7 +896,7 @@ def _build_kpoints(
         )
 
     # All remaining forms start with a count, then one line per k-point.
-    rows = np.array([[float(t) for t in line.split()[:4]] for line in card.lines[1:]])
+    rows = np.array([[fortran_float(t) for t in line.split()[:4]] for line in card.lines[1:]])
     declared = int(card.lines[0].split()[0])
     if len(rows) != declared:
         raise ValueError(f"K_POINTS declares {declared} points but lists {len(rows)}")

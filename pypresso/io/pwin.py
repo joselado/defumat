@@ -48,11 +48,29 @@ CARD_NAMES = frozenset(
     }
 )
 
+#: One ``name = value`` assignment inside a namelist body.
+#:
+#: The bare-token alternative is *tempered*: it consumes anything that is not a
+#: comma, a newline or a comment, **except** where the next thing is another
+#: assignment. Fortran's value separator is "a comma or one or more blanks"
+#: (F2018 13.11.3), so ``ecutrho = 100.0  nbnd = 8`` is two assignments and QE's
+#: own test suite writes it that way (``pw_uspp/uspp-hyb-k.in``). Without the
+#: lookahead the first value swallows the second assignment whole, and the
+#: failure is *silent* wherever the swallowed text still converts: ``nosym =
+#: .true. noinv = .true.`` gave ``nosym`` the string ``'.true. noinv = .true.'``,
+#: which is not one of the spellings ``_logical`` accepts, so it read as **False**
+#: and the run symmetrised a calculation that had asked it not to.
 _ENTRY = re.compile(
     r"""(?P<key>[A-Za-z_]\w*)              # variable name
         (?:\s*\(\s*(?P<index>[\d,\s]+)\s*\))?   # optional (i) or (i,j)
         \s*=\s*
-        (?P<value>'[^']*'|"[^"]*"|[^,\n!#]+)    # quoted string or bare token
+        (?P<value>
+            '[^']*'|"[^"]*"                # a quoted string, spaces and all
+          | (?:                            # or a bare token, blank-separated
+                (?!\s+[A-Za-z_]\w*\s*(?:\(\s*[\d,\s]+\s*\))?\s*=)
+                [^,\n!#]
+            )+
+        )
     """,
     re.VERBOSE,
 )
@@ -68,8 +86,7 @@ class Card:
 
     def floats(self) -> list[list[float]]:
         """Every data line as a list of floats. Convenient for numeric cards."""
-        return [[float(tok.replace("d", "e").replace("D", "E")) for tok in line.split()]
-                for line in self.lines]
+        return [[fortran_float(tok) for tok in line.split()] for line in self.lines]
 
 
 @dataclass(frozen=True)

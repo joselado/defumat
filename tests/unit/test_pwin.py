@@ -96,3 +96,59 @@ def test_get_returns_default_without_inventing_physics():
     inp = parse_pw_input("&system\n ibrav=2\n/\n")
     assert inp.get("system", "ecutrho") is None
     assert inp.get("system", "ecutrho", 48.0) == 48.0
+
+
+def test_blank_separated_assignments_are_two_assignments():
+    """Fortran's value separator is a comma *or* one or more blanks.
+
+    ``pw_uspp/uspp-hyb-k.in`` writes ``ecutrho=100.0  nbnd = 8,`` on one line and
+    ``pw.x`` reads it as two variables. Without the lookahead in ``_ENTRY`` the
+    first value swallowed the second assignment whole.
+    """
+    inp = parse_pw_input(
+        "&system\n"
+        " ibrav=2, celldm(1)=10.2 ecutwfc=18.0, ecutrho=100.0  nbnd = 8,\n"
+        " starting_magnetization(1) = 0.5 starting_magnetization(2)=-0.5\n"
+        "/\n"
+    )
+    assert inp.get("system", "ecutwfc") == pytest.approx(18.0)
+    assert inp.get("system", "ecutrho") == pytest.approx(100.0)
+    assert inp.get("system", "nbnd") == 8
+    assert inp.get("system", "celldm") == {(1,): 10.2}
+    assert inp.namelists["system"]["starting_magnetization"] == {(1,): 0.5, (2,): -0.5}
+
+
+def test_a_swallowed_logical_would_have_been_silently_false():
+    """The failure mode that makes the one above worth a test of its own.
+
+    ``.true. noinv = .true.`` is not one of the spellings a Fortran logical is
+    written in, so a swallowed value read as **False** -- an input asking for no
+    symmetry got a symmetrised run, with nothing anywhere saying so.
+    """
+    inp = parse_pw_input("&system\n nosym = .true. noinv = .true.\n/\n")
+    assert inp.get("system", "nosym") is True
+    assert inp.get("system", "noinv") is True
+
+
+def test_a_quoted_value_still_keeps_its_spaces_and_commas():
+    """The lookahead must not cut a string; the quoted alternative comes first."""
+    inp = parse_pw_input(
+        "&control\n title = 'two words, one comma' , prefix = 'si'\n/\n"
+    )
+    assert inp.get("control", "title") == "two words, one comma"
+    assert inp.get("control", "prefix") == "si"
+
+
+def test_cards_take_fortran_double_literals_too():
+    """``d``-exponents are not confined to the namelists.
+
+    ``pw_uspp/uspp1.in`` writes the mass as ``16.D0`` and ``pw_b3lyp/b3lyp-h2o.in``
+    as ``16.0d0``; ``float()`` accepts neither, and both are QE inputs.
+    """
+    inp = parse_pw_input(
+        "ATOMIC_SPECIES\n O 16.D0 O_US.van\n H 1.00d0 H_US.van\n"
+        "CELL_PARAMETERS bohr\n 1.d0 0 0\n 0 1.0D0 0\n 0 0 1.d0\n"
+    )
+    assert inp.require_card("CELL_PARAMETERS").floats() == [
+        [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]
+    ]
