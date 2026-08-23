@@ -145,3 +145,48 @@ def test_form_factors_are_differentiable_in_q(silicon):
         lambda q: projector_form_factors(silicon, q[None], 265.302)[1, 0]
     )(np.array(0.5))
     assert np.isfinite(float(derivative)) and float(derivative) != 0.0
+
+
+# -- what the reader will and will not read, and how it says so ----------------
+
+
+def test_a_stray_ampersand_is_repaired_rather_than_refused(tmp_path, pseudo_dir):
+    """``ld1.x`` writes its own namelist into ``PP_INPUTFILE`` and older releases
+    did not escape it: ``qe-7.5/pseudo/Fe.pz-n-nc.UPF`` carries a bare ``&input``
+    and is not well-formed XML. QE reads it -- ``upflib/xmltools.f90`` is a
+    scanner, not an XML parser -- and `ET.parse` said only ``not well-formed
+    (invalid token): line 27, column 7``.
+
+    The substitution is safe because it rewrites exactly the ``&`` no XML parser
+    would accept: on every UPF committed here it is a no-op.
+    """
+    from pypresso.pseudo.upf import _STRAY_AMPERSAND
+
+    original = (pseudo_dir / "Si.pz-vbc.UPF").read_bytes()
+    assert _STRAY_AMPERSAND.sub(b"&amp;", original) == original
+
+    broken = tmp_path / "broken.UPF"
+    broken.write_bytes(original.replace(
+        b"<PP_HEADER", b"<PP_INPUTFILE>\n &input\n   title='Si', ntyp=1\n /\n"
+                       b"</PP_INPUTFILE>\n  <PP_HEADER", 1))
+    assert read_upf(broken).element == read_upf(pseudo_dir / "Si.pz-vbc.UPF").element
+
+
+@pytest.mark.parametrize(
+    "first_line,expected",
+    [
+        (b"<PP_INFO>\nGenerated using Fritz-Haber code\n", "UPF version 1"),
+        (b"    7    3    2   26    9 2002\nhydrogen\n", "Vanderbilt"),
+    ],
+)
+def test_a_format_this_reader_does_not_read_is_refused_by_name(
+    tmp_path, first_line, expected
+):
+    """``ET.parse`` on a v1 file says ``junk after document element: line 14``,
+    which names neither the file's format nor this reader's. Six of the files in
+    ``qe-7.5/pseudo`` are v1, ``.van`` or ``.RRKJ3``, and QE reads all of them.
+    """
+    path = tmp_path / "legacy.UPF"
+    path.write_bytes(first_line)
+    with pytest.raises(NotImplementedError, match=expected):
+        read_upf(path)

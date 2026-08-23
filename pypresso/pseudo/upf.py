@@ -15,6 +15,7 @@ radial tables are constants that later phases transform into G space (rule R2).
 
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -235,10 +236,61 @@ class Pseudopotential:
         )
 
 
+#: An ``&`` that is not the start of an XML entity. ``ld1.x`` writes the
+#: generator's own namelist input into ``PP_INPUTFILE`` verbatim, and older
+#: releases did not escape it -- ``qe-7.5/pseudo/Fe.pz-n-nc.UPF`` carries a bare
+#: ``&input`` on line 27 and is not well-formed XML because of it. QE reads such
+#: a file: ``upflib/xmltools.f90`` is a hand-written scanner, not an XML parser,
+#: and never looks at an entity. See :func:`_upf_document`.
+_STRAY_AMPERSAND = re.compile(rb"&(?!(?:amp|lt|gt|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);)")
+
+#: What the first non-blank line of each format this reader does *not* read looks
+#: like, so the refusal can name the format instead of leaking a parse error.
+_FOREIGN_FORMATS = (
+    ("<PP_INFO", "UPF version 1, whose elements are bare tags with no <UPF> root"),
+    ("<PP_HEADER", "UPF version 1, whose elements are bare tags with no <UPF> root"),
+)
+
+
+def _upf_document(path: Path) -> ET.Element:
+    """The file's root element, with the two things that are not XML dealt with.
+
+    **A stray ``&`` is repaired rather than refused.** It only ever appears
+    inside ``PP_INPUTFILE``, which nothing here reads, and the substitution
+    cannot turn a well-formed document into a malformed one -- it rewrites
+    exactly those ``&`` that no XML parser would accept.
+
+    **A file that is not UPF v2 is refused by name.** ``ET.parse`` on a v1 file
+    says ``junk after document element: line 14, column 0``, which names neither
+    the file's format nor this reader's, and the same goes for the Vanderbilt
+    ``.van`` and ``.RRKJ3`` tables QE still reads. The version attribute is
+    checked below for the files that *do* have a root element; this catches the
+    ones that have none.
+    """
+    text = path.read_bytes()
+    if b"<UPF" not in text[:4096]:
+        head = next(
+            (line.strip() for line in text[:4096].splitlines() if line.strip()), b""
+        ).decode("latin-1")[:60]
+        for marker, description in _FOREIGN_FORMATS:
+            if head.startswith(marker):
+                raise NotImplementedError(
+                    f"{path}: this looks like {description}. Only UPF v2 is read "
+                    "here; convert it with upflib/upfconv.x"
+                )
+        raise NotImplementedError(
+            f"{path}: not a UPF v2 file -- it has no <UPF> root element and "
+            f"starts {head!r}. QE also reads the Vanderbilt (.van), RRKJ3 and "
+            "UPF v1 tables; this reader does not. Convert it with "
+            "upflib/upfconv.x"
+        )
+    return ET.fromstring(_STRAY_AMPERSAND.sub(b"&amp;", text))
+
+
 def read_upf(path: str | Path) -> Pseudopotential:
     """Parse a UPF v2 file."""
     path = Path(path)
-    root = ET.parse(path).getroot()
+    root = _upf_document(path)
 
     header = dict(_require(root, "PP_HEADER").attrib)
     version = root.attrib.get("version", "")
