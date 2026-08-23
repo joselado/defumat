@@ -231,11 +231,39 @@ def _collect_card(lines: list[str], start: int, name: str) -> tuple[Card, int]:
     return Card(name=name, option=option, lines=tuple(data)), i
 
 
+#: The option keywords ``read_cards.f90`` looks for, longest first so that
+#: ``crystal_b`` is not read as ``crystal``.
+_CARD_OPTIONS = (
+    "crystal_sg",
+    "crystal_b",
+    "crystal_c",
+    "tpiba_b",
+    "tpiba_c",
+    "automatic",
+    "angstrom",
+    "crystal",
+    "tpiba",
+    "gamma",
+    "bohr",
+    "alat",
+)
+
+
 def _card_option(header: str, name: str) -> str | None:
     """``K_POINTS {crystal}``, ``K_POINTS (crystal)`` and ``K_POINTS crystal``."""
     rest = header[len(name) :].strip().strip(",").strip()
-    rest = rest.strip("{}()").strip()
-    return rest.lower() or None
+    rest = rest.strip("{}()").strip().lower()
+    if not rest:
+        return None
+    if not rest.isidentifier():
+        # ``CELL_PARAMETERS (alat=  7.01033620)``, which is how ``pw.x`` writes
+        # the relaxed cell it expects to read back. ``read_cards.f90`` picks the
+        # option with ``matches()`` -- a *substring* test -- and ignores
+        # everything else on the line, including that number.
+        for keyword in _CARD_OPTIONS:
+            if keyword in rest:
+                return keyword
+    return rest
 
 
 def _parse_namelist_body(body: str) -> dict[str, Any]:

@@ -169,18 +169,22 @@ def build_ns_symmetry(setup, cell, structure, symmetries) -> NsSymmetry | None:
         slots = [slot for slot, kind in enumerate(setup.types) if kind == t]
         l = setup.species[t].l
         ldim = 2 * l + 1
-        # ``D[s, i, k]`` in this project's convention is QE's ``d(k, i, s)`` --
-        # source index first in the Fortran, target first here. PAW's
-        # symmetrisation fixes that convention and is validated against QE, so
-        # reusing it is what keeps the two from disagreeing.
+        # ``D[s, i, k]`` here has ``d_matrix.f90``'s own index order -- it is
+        # built the same way and comes out the same matrix -- so the contraction
+        # below is ``D ns D^T`` where ``new_ns.f90`` writes ``d(m0,m1) *
+        # nr(m0,m00) * d(m00,m2)``, which is ``D^T ns D``. The two agree once
+        # the atom is taken from the *inverse* permutation: ``D`` is orthogonal,
+        # so ``D_s^T = D_{s^-1}``, and summing over the group with ``irt(s^-1,
+        # na)`` beside ``D_s`` is QE's sum re-indexed by ``s -> s^-1``.
         d = np.asarray(rotations[l])
         operators.append(jnp.asarray(np.einsum("sik,sjl->sikjl", d, d)))
         position = {slot: n for n, slot in enumerate(slots)}
-        sources.append(jnp.asarray([
-            [position[slot_of_atom[int(mapping[s, setup.atoms[slot]])]]
-             for slot in slots]
-            for s in range(symmetries.nsym)
-        ]))
+        inverse = np.zeros((symmetries.nsym, len(slots)), dtype=int)
+        for s in range(symmetries.nsym):
+            for n, slot in enumerate(slots):
+                image = position[slot_of_atom[int(mapping[s, setup.atoms[slot]])]]
+                inverse[s, image] = n
+        sources.append(jnp.asarray(inverse))
         groups.append(jnp.asarray(slots))
         ldims.append(ldim)
 

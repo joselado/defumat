@@ -66,8 +66,9 @@ def analytic_forces(calculation, state):
     evaluated one at a time. That is not a detail: each of them is a handful of
     contractions over the G-vector sphere, and run eagerly they cost more in
     dispatch and in intermediate buffers than in arithmetic. The compiled
-    version is cached on the calculation and keyed on nothing that a relaxation
-    changes, so every geometry after the first reuses it.
+    version is cached on the calculation, keyed on the calculation it closed
+    over, so a moved or strained one recompiles instead of answering at the old
+    geometry.
     """
     if calculation.noncolin:
         raise NotImplementedError(
@@ -94,12 +95,20 @@ def analytic_forces(calculation, state):
 
 
 def _compiled_terms(calculation):
-    """``jit`` of :func:`_terms` with the calculation captured, cached on it."""
-    cached = getattr(calculation, "_analytic_terms", None)
-    if cached is None:
-        cached = jax.jit(partial(_terms, calculation))
+    """``jit`` of :func:`_terms` with the calculation captured, cached on it.
+
+    The captured calculation is a *constant* of the compiled function -- its
+    positions, its projectors, its local potential -- so the cache is only valid
+    for the calculation it was built from. ``at_positions`` copies the instance
+    dict, so the entry carries the calculation it belongs to and is rebuilt when
+    it does not match; without that the force of every geometry after the first
+    is the first one's, silently.
+    """
+    cached = calculation.__dict__.get("_analytic_terms")
+    if cached is None or cached[0] is not calculation:
+        cached = (calculation, jax.jit(partial(_terms, calculation)))
         calculation._analytic_terms = cached
-    return cached
+    return cached[1]
 
 
 def _terms(calculation, state) -> dict:

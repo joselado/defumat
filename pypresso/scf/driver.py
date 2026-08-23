@@ -671,6 +671,11 @@ def _spin_block_diagonal(per_atom) -> np.ndarray:
     return out
 
 
+def _is_traced(x) -> bool:
+    """Is this array a JAX tracer rather than a value the host can read?"""
+    return isinstance(x, jax.core.Tracer)
+
+
 class Calculation:
     """Everything that stays fixed while the density changes.
 
@@ -996,6 +1001,23 @@ class Calculation:
 
         self.symmetries = system.symmetry_group()
         use_symmetry = not system.nosym and self.symmetries.nsym > 1
+        if self.spiral and use_symmetry:
+            # The reader refuses this pair too (``_spiral_q``), but a ``System``
+            # can be built without going through it -- directly, or through the
+            # ``dataclasses.replace`` that ``at_spiral_q`` and
+            # ``workflows/spiral`` use -- and then nothing else here looks at the
+            # combination. Symmetrising a spiral averages the rotated-frame
+            # magnetization over operations of the *crystal* point group, which
+            # are not symmetries of the spiral, and reduces the k-set to the same
+            # wrong wedge; the run converges and reports an energy that is
+            # silently wrong. The spin space group is what would make it right.
+            raise NotImplementedError(
+                "a spin spiral needs nosym = .true.: the symmetry group here is "
+                "the crystal's, and an operation that is a symmetry of the "
+                "lattice need not be one of the spiral -- the spin space group "
+                "is not implemented, so the density symmetrisation and the "
+                "k-point reduction would both be wrong"
+            )
         # The axial-vector rotations, signs folded in, that the magnetization
         # needs and the charge does not.
         self._magnetization_rotations = (
@@ -1231,6 +1253,41 @@ class Calculation:
             fsm_update=system.fsm_update,
         )
 
+    def _moved_magnetic_field(self, system):
+        """The field's integration spheres, rebuilt for a geometry that moved.
+
+        ``make_pointlists`` assigns every dense-grid point to the atom whose
+        sphere it falls in, so the spheres are a function of the positions and
+        of the cell -- and ``at_positions``/``at_strain`` move both. Only the
+        ``regions`` depend on the geometry; the uniform field, the per-atom
+        fields and the constraint targets do not.
+
+        **Frozen while differentiating, rebuilt when the atoms actually move.**
+        ``build_local_regions`` is host-side NumPy and cannot run on a traced
+        geometry -- and it does not need to: the assignment is piecewise
+        constant in the positions, since a grid point changes owner discretely,
+        so its derivative vanishes away from the crossings and freezing it is
+        exact between them. That is the trade the spiral's plane-wave sphere
+        makes (P21), for the same reason. What is *not* allowed is carrying a
+        stale assignment across a concrete move, which is what a relaxation
+        under ``constrained_magnetization = 'atomic'`` did: the penalty was
+        integrated over spheres centred where the atoms started.
+        """
+        field = self.magnetic_field
+        if field is None or field.regions is None:
+            return field
+        if _is_traced(system.structure.positions) or _is_traced(system.cell.at):
+            return field
+        return eqx.tree_at(
+            lambda f: f.regions,
+            field,
+            build_local_regions(
+                system.cell, system.structure, self.basis.dense.grid,
+                radii=system.integration_radii or None,
+                scheme=system.local_weights,
+            ),
+        )
+
     def _per_atom(self, per_species) -> jnp.ndarray:
         """A per-species ``(nh, nh)`` quantity, as the ``(nkb, nkb)`` block matrix."""
         blocks = tuple(
@@ -1292,9 +1349,12 @@ class Calculation:
         moved = copy.copy(self)
         # The spiral gradient's compiled kernel closes over *this* calculation --
         # its local potential, its Ewald sum, its projector positions -- so it
-        # cannot follow the atoms. Unlike the force's cache, which takes the
-        # geometry as an argument and is therefore valid at any positions, this
-        # one would be silently evaluated at the geometry it was built at.
+        # cannot follow the atoms, and would otherwise be evaluated in silence at
+        # the geometry it was built at. The analytic force's and the stress's
+        # kernels close over the calculation the same way; they do not need a pop
+        # here because they are keyed on the calculation they captured and the
+        # copy below is a different object, which is the invalidation this one
+        # gets by name.
         moved.__dict__.pop("_spiral_gradient", None)
         moved.system = eqx.tree_at(
             lambda sys: sys.structure.positions, self.system, positions
@@ -1333,6 +1393,7 @@ class Calculation:
         # energy through this call rather than from a transcribed expression.
         if self.hubbard is not None:
             moved.wfcU = moved._build_hubbard_projectors()
+        moved.magnetic_field = moved._moved_magnetic_field(moved.system)
         return moved
 
     def at_strain(self, strain: jnp.ndarray) -> "Calculation":
@@ -1396,6 +1457,7 @@ class Calculation:
         strained.__dict__.pop("_spiral_gradient", None)
         strained.__dict__.pop("_energy_gradient", None)
         strained.__dict__.pop("_analytic_terms", None)
+        strained.__dict__.pop("_tetrahedra", None)
 
         # ``at[i]`` is a lattice vector as a *row*, so ``a_i -> D a_i`` is a
         # right-multiplication by ``D^T``. Getting this transpose wrong is
@@ -1487,6 +1549,9 @@ class Calculation:
             # which falls out of differentiating through this call rather than
             # from 2291 lines of transcribed Fortran.
             strained.wfcU = strained._build_hubbard_projectors(kcart)
+        # ``build_local_regions`` takes its minimum-image distances in the cell's
+        # own metric, so a deformed cell measures the spheres differently.
+        strained.magnetic_field = strained._moved_magnetic_field(strained.system)
         return strained
 
     def at_kpoints(self, kpoints) -> "Calculation":
@@ -1530,6 +1595,16 @@ class Calculation:
         # As in ``at_positions`` and ``at_spiral_q``: a compiled ``dE/dq`` holds
         # the k-list and the sphere it was built with, so it cannot cross this.
         moved.__dict__.pop("_spiral_gradient", None)
+        # The tetrahedra are the k-grid's own object -- corner indices into the
+        # irreducible list, built from this grid's equivalence -- so on a
+        # different k-set they index the new eigenvalues with the old grid's
+        # corners. A JAX gather clamps rather than raising, so the Fermi level
+        # and the weights would come out wrong in silence.
+        moved.__dict__.pop("_tetrahedra", None)
+        # The force's gradient takes the positions as an argument, so it crosses
+        # ``at_positions`` legitimately -- but it closes over this k-set and its
+        # weights, which is what changes here.
+        moved.__dict__.pop("_energy_gradient", None)
         moved.system = system
         # The list everything with a ``k`` index is built on. Without a spiral it
         # *is* the system's, and it has to move with it: leaving it stale gives
@@ -1607,6 +1682,8 @@ class Calculation:
         # were built with, so neither can follow this.
         moved.__dict__.pop("_spiral_gradient", None)
         moved.__dict__.pop("_velocity", None)
+        moved.__dict__.pop("_tetrahedra", None)
+        moved.__dict__.pop("_energy_gradient", None)
 
         moved.kinetic = planewaves.kinetic(smooth, self.basis_kpoints, cell, kcart)
         moved.projector_core = build_projector_core(
@@ -3155,7 +3232,11 @@ def run_scf(
         occupations=np.asarray(wg if nspin == 2 else wg[0]),
         wavefunctions=wavefunctions,
         density=rho,
-        potential=calculation.vltot[None] + potential.v_scf,
+        # ``set_vrs`` again: the local pseudopotential belongs to the charge
+        # component alone once the potential is ``(n, m)``, so it cannot be
+        # broadcast onto the magnetic components.
+        potential=as_potential_components(calculation.vltot, calculation.nspin_mag)
+        + potential.v_scf,
         potential_change=potential_change,
         accuracy=accuracy,
         nspin=nspin,

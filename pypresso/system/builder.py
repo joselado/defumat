@@ -89,6 +89,11 @@ class System(eqx.Module):
     #: three p channels filled) needs it, and symmetrising anyway converges to a
     #: different state.
     nosym: bool = eqx.field(static=True, default=False)
+    #: ``noinv``: switch off the ``k -> -k`` reduction of the k-grid.
+    #: ``setup.f90`` sets ``time_reversal = .NOT. noinv .AND. .NOT.
+    #: magnetic_sym``, so it is independent of :attr:`nosym` -- a run may keep
+    #: the rotations and still want both halves of the star.
+    noinv: bool = eqx.field(static=True, default=False)
     #: ``tstress`` (``&control``): compute the stress tensor once the SCF has
     #: converged. It is a property of the *run* rather than of the system, and
     #: it lives here for the same reason :attr:`calculation` does -- this is the
@@ -334,7 +339,7 @@ class System(eqx.Module):
             rebuilt = KPoints.automatic(
                 kpoints.grid, kpoints.shift or (0, 0, 0), self.cell,
                 precision=kpoints.precision, rotations=rotations,
-                time_reversal=not magnetic, t_rev=t_rev,
+                time_reversal=not self.noinv and not magnetic, t_rev=t_rev,
             )
             return kpoints_for_spin(rebuilt, nspin)
 
@@ -348,7 +353,8 @@ class System(eqx.Module):
             points, weights = expand_to_subgroup(
                 points, weights,
                 np.array(lattice_point_group(np.asarray(self.cell.at))),
-                rotations, time_reversal=not magnetic, t_rev=t_rev,
+                rotations, time_reversal=not self.noinv and not magnetic,
+                t_rev=t_rev,
             )
         rebuilt = KPoints.from_crystal(
             points, weights, self.cell, precision=kpoints.precision
@@ -398,6 +404,7 @@ def system_from_file(path, precision: Precision = DEFAULT_PRECISION) -> System:
 
 def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> System:
     _refuse_unimplemented_switches(pwin)
+    _check_calculation(pwin)
     cell = _build_cell(pwin, precision)
     structure = _build_structure(pwin, cell, precision)
 
@@ -466,6 +473,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     # no ``-k = k`` (``magnetic_sym`` in ``setup.f90``) -- then symmetry, then
     # k-points.
     nosym = _logical(pwin.get("system", "nosym", False))
+    noinv = _logical(pwin.get("system", "noinv", False))
     # ``tstress`` and nothing else: there is no ``tprnstress`` in QE 7.5
     # (``INPUT_PW.txt`` lists one stress switch and a grep of the tree finds no
     # other spelling), so accepting an alias would be inventing input syntax.
@@ -484,7 +492,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     rotations = None if nosym else symmetries.rotation_array()
     kpoints = _build_kpoints(
         pwin, cell, precision, rotations,
-        time_reversal=not magnetic,
+        time_reversal=not noinv and not magnetic,
         t_rev=None if nosym else symmetries.t_rev_array(),
         lattice_rotations=None if nosym else np.array(lattice_point_group(np.asarray(cell.at))),
     )
@@ -547,6 +555,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         starting_magnetization=starting_magnetization,
         tot_magnetization=_tot_magnetization(pwin),
         nosym=nosym,
+        noinv=noinv,
         tstress=tstress,
         lspinorb=lspinorb,
         angle1=angle1,
@@ -620,9 +629,72 @@ _REFUSED_SWITCHES = (
     ("system", "twochem", "logical",
      "two chemical potentials, one for the valence and one for the conduction "
      "bands (PW/src/weights.f90's twochem branch)"),
+    # ``INPUT_PW.txt`` documents ``twochem`` in ``&system``, but QE's own
+    # ``pw_twochem/vc-relax_twochem.in`` puts it in ``&control`` and ``pw.x``
+    # honours it there. Looking in one namelist only meant that input was read,
+    # accepted and run with a single Fermi level -- the switch it named ignored.
+    ("control", "twochem", "logical",
+     "two chemical potentials, one for the valence and one for the conduction "
+     "bands (PW/src/weights.f90's twochem branch)"),
     ("system", "one_atom_occupations", "logical",
      "per-orbital occupations of an isolated atom (PW/src/weights.f90)"),
+    # Not a feature branch but a number: these pin the FFT grid that
+    # ``basis/fftgrid.py`` otherwise derives from the cutoffs, so ignoring them
+    # runs the whole calculation on a different grid than the input asked for --
+    # no error, no warning, and a total energy that will not match a benchmark
+    # generated from the same file. Refused until they are threaded through
+    # ``fft_grid_dimensions`` (QE: dense from nr1..nr3, smooth from nr1s..nr3s,
+    # ``realspace_grid_init`` in PW/src/input.f90).
+    ("system", "nr1", "nonzero", "a hand-pinned dense FFT grid (nr1/nr2/nr3)"),
+    ("system", "nr2", "nonzero", "a hand-pinned dense FFT grid (nr1/nr2/nr3)"),
+    ("system", "nr3", "nonzero", "a hand-pinned dense FFT grid (nr1/nr2/nr3)"),
+    ("system", "nr1s", "nonzero", "a hand-pinned smooth FFT grid (nr1s/nr2s/nr3s)"),
+    ("system", "nr2s", "nonzero", "a hand-pinned smooth FFT grid (nr1s/nr2s/nr3s)"),
+    ("system", "nr3s", "nonzero", "a hand-pinned smooth FFT grid (nr1s/nr2s/nr3s)"),
 )
+
+
+#: What ``calculation`` may say. ``pw.x`` stops on anything else
+#: (``input.f90``'s ``CASE DEFAULT`` on ``calculation``), and so does this.
+_CALCULATIONS = ("scf", "nscf", "bands", "relax", "md", "vc-relax", "vc-md")
+
+#: ...and the ones with no driver here, each named with what it would need.
+_UNIMPLEMENTED_CALCULATIONS = {
+    "md": "Born-Oppenheimer molecular dynamics (PW/src/dynamics_module.f90)",
+    "vc-md": "variable-cell molecular dynamics (Modules/wavefunctions, vc-md)",
+    "vc-relax": (
+        "variable-cell relaxation: the cell gradient is the stress (P11) and a "
+        "moving cell would also invalidate the rule that the FFT grid and the "
+        "symmetry group are fixed once for the whole run"
+    ),
+}
+
+
+def _check_calculation(pwin: PwInput) -> None:
+    """``calculation`` must name a run this package can actually perform.
+
+    The field was parsed onto :attr:`System.calculation` and read by nothing, so
+    every mode without a driver here -- and every typo -- was accepted and then
+    run as a plain SCF, which reports success for a calculation that never
+    happened. ``pw.x`` stops on an unknown value, and the modes it has that this
+    package does not are refused by name like every other missing feature.
+
+    ``scf``, ``nscf``, ``bands`` and ``relax`` are the four that have one; which
+    of them is in force is still the caller's choice of entry point, exactly as
+    before, so this only rejects what nothing could have run.
+    """
+    value = str(pwin.get("control", "calculation", "scf")).strip().strip("'\"").lower()
+    if value not in _CALCULATIONS:
+        raise ValueError(
+            f"calculation = {value!r} is not one of {', '.join(_CALCULATIONS)}"
+        )
+    if value in _UNIMPLEMENTED_CALCULATIONS:
+        raise NotImplementedError(
+            f"calculation = {value!r} is not implemented -- "
+            f"{_UNIMPLEMENTED_CALCULATIONS[value]}. It is refused rather than "
+            "run as a plain SCF, which is what happened before: the requested "
+            "calculation never took place and the run reported success"
+        )
 
 
 def _refuse_unimplemented_switches(pwin: PwInput) -> None:
