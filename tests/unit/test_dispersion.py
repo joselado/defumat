@@ -300,11 +300,34 @@ def test_the_input_variables_are_read():
     assert system.london_rvdw == (3.0,)
 
 
-def test_the_obsolescent_london_switch_still_works():
-    """``input.f90`` still honours ``london = .true.``; so does this."""
-    assert build_system(parse_pw_input(
-        INPUT.format(extra="london = .true.")
-    )).vdw_corr == "grimme-d2"
+@pytest.mark.parametrize(
+    "flag,expected",
+    [("london", "grimme-d2"), ("xdm", "xdm"), ("ts_vdw", "ts"), ("mbd_vdw", "mbd")],
+)
+def test_every_obsolescent_switch_iosys_honours_is_honoured_here(flag, expected):
+    """``iosys`` turns all four logicals into a ``vdw_corr``; so does this.
+
+    Reading only ``london`` left the three unimplemented corrections a way in
+    through the back door. ``vdw_corr = 'xdm'`` is refused by name so that an
+    input asking for XDM cannot silently get plain PBE -- and ``xdm = .true.``,
+    which QE treats as the very same request, went through as no correction at
+    all and said nothing.
+    """
+    system = build_system(parse_pw_input(INPUT.format(extra=f"{flag} = .true.")))
+    assert system.vdw_corr == expected
+
+
+def test_the_modern_spelling_wins_over_an_obsolescent_one():
+    system = build_system(parse_pw_input(
+        INPUT.format(extra="vdw_corr = 'grimme-d2', xdm = .true.")
+    ))
+    assert system.vdw_corr == "grimme-d2"
+
+
+def test_two_obsolescent_switches_at_once_are_an_error():
+    """``iosys`` stops on more than one correction; so does this."""
+    with pytest.raises(ValueError, match="more than one"):
+        build_system(parse_pw_input(INPUT.format(extra="xdm = .true. ts_vdw = .true.")))
 
 
 def test_no_vdw_corr_means_none():

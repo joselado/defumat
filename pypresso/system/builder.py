@@ -479,13 +479,30 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     # pseudopotentials (the density has twice the wavefunction's G range).
     ecutrho = pwin.get("system", "ecutrho") or 4.0 * float(ecutwfc)
 
-    # ``vdw_corr``, with ``input.f90``'s obsolescent alias: ``london = .true.``
-    # is the same thing as ``vdw_corr = 'grimme-d2'``, and QE still honours it.
-    # It is read *after* ``vdw_corr`` and only when that was left at its default,
-    # so an input that says both does not have the older spelling win.
+    # ``vdw_corr``, with ``iosys``'s four obsolescent aliases. Each of
+    # ``london``, ``xdm``, ``ts_vdw`` and ``mbd_vdw`` is a logical that
+    # ``input.f90`` turns into the corresponding ``vdw_corr`` string (with an
+    # ``infomsg`` saying so), and QE still honours all four. They are read
+    # *after* ``vdw_corr`` and only when that was left at its default, so an
+    # input that says both does not have the older spelling win.
+    #
+    # All four, not just ``london``, and that is the point: the three that are
+    # not implemented are refused by name under their modern spelling
+    # (:mod:`pypresso.vdw.registry`) precisely so that an input asking for XDM
+    # cannot silently get plain PBE. Honouring only ``london`` left the older
+    # spelling as a way around that refusal -- ``xdm = .true.`` ran with no
+    # correction at all and said nothing.
     vdw_corr = canonical_vdw_corr(pwin.get("system", "vdw_corr", "none"))
-    if vdw_corr == "none" and _logical(pwin.get("system", "london", False)):
-        vdw_corr = "grimme-d2"
+    if vdw_corr == "none":
+        for flag, spelling in _OBSOLESCENT_VDW.items():
+            if _logical(pwin.get("system", flag, False)):
+                if vdw_corr != "none":
+                    raise ValueError(
+                        "more than one van der Waals correction selected: "
+                        f"{flag} together with an earlier one. QE's iosys stops "
+                        "here too"
+                    )
+                vdw_corr = canonical_vdw_corr(spelling)
     london_c6 = tuple(pwin.indexed("system", "london_c6", structure.ntyp, default=-1.0))
     london_rvdw = tuple(
         pwin.indexed("system", "london_rvdw", structure.ntyp, default=-1.0)
@@ -533,6 +550,16 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         london_c6=london_c6,
         london_rvdw=london_rvdw,
     )
+
+
+#: ``input.f90``'s obsolescent logicals and the ``vdw_corr`` each stands for.
+#: Kept in QE's own order, which is the order ``iosys`` tests them in.
+_OBSOLESCENT_VDW = {
+    "london": "grimme-d2",
+    "xdm": "xdm",
+    "ts_vdw": "ts",
+    "mbd_vdw": "mbd",
+}
 
 
 def _logical(value) -> bool:
