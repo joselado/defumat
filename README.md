@@ -65,7 +65,10 @@ schemes, which fixed-spin-moment update (`fsm_update`) — are chosen with the
 same input variables as in `pw.x` where it has them, and `PLAN.md` lists them
 phase by phase.
 
-Not yet: variable-cell relaxation and phonons. `K_POINTS gamma` runs, but at an explicit k = 0 with the
+Not yet: variable-cell relaxation, and phonons away from `Gamma` — the ones *at* `Gamma` are
+in the table above, for insulators on norm-conserving datasets; a metal's and an ultrasoft
+one's are refused by name, with the measurement behind each refusal in `PLAN.md`.
+`K_POINTS gamma` runs, but at an explicit k = 0 with the
 full G sphere — the half-sphere storage the gamma-point trick exists for is
 generated and not consumed, so the answer is the same and the cost is twice the
 plane waves, and the run says so. A functional or a combination that is not

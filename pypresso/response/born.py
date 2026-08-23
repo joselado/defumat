@@ -104,7 +104,6 @@ import numpy as np
 from pypresso.basis.interpolate import to_dense
 from pypresso.batching import map_k
 from pypresso.forces.energy import FrozenState, frozen_energy
-from pypresso.pseudo.augmentation import augmentation_dipole
 from pypresso.scf.density import becsum as becsum_of, sum_band
 from pypresso.system.symmetry import atom_mapping, symmetrize_atom_tensor
 

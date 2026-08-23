@@ -1519,6 +1519,42 @@ induced potential is mixed linearly where `mix_pot.f90` uses a modified Broyden 
 iterations. 18 iterations at 22 CG steps is what that costs; QE reaches its answers in 5
 iterations at 9. Both fixes serve P24, P25 and P26 together and neither has been made.
 
+## P24b and P24c — what the Born charges and the metal branch cost
+
+**The Born charges are a derivative of the force, and the expensive part of that is three
+calls.** P24b replaced the transcribed `zstar_eu` contraction with one `jvp` of
+`jax.grad(frozen_energy)` per *field* direction — three in all, whatever the cell contains,
+because the position tangent is zero and a single call returns the whole `3 nat` column.
+Two smaller terms beside them do scale with the cell; the paragraph below counts them.
+**Measured** on the ultrasoft silicon of `si-epsilon-us.in`, which is the case the
+correctness claim rests on: the field response alone is **25.0 s** and the response plus the
+charges is **31.9 s**, so they cost **6.9 s**, 28% on top. That is more than "free" and less
+than the second self-consistent loop the alternative would have been.
+
+**Where those 6.9 s go is a count of tangent evaluations, and only one of the three terms
+scales with the cell.** Three `jvp`s of `jax.grad(frozen_energy)` — one per field direction,
+independent of `nat`, and individually the expensive ones, since each carries the density
+builder and the potential. One `jacfwd` of the frozen polarization over the `3 nat`
+positions. And `3 nat` `jvp`s *per field direction* inside `constraint_position_term`, which
+is `9 nat` in all — each cheap (a projector sandwich, no FFT) and each a separately
+dispatched compilation, which on these array sizes is the cost that matters (the standing
+observation of this file). **Backlog:** that last one is a `jacfwd` over the positions
+written as a loop, for no reason but that it was written before the shape was clear;
+collapsing it removes `9 nat - 3` dispatches. It has not been made, because 6.9 s on a
+two-atom cell is not where the time is.
+
+**A metal's solve pays the empty bands' share of the CG.** `orthogonalize`'s smearing branch
+sums over every band (`nbnd_eff = nbnd`), and where QE truncates the *solve* at
+`setup_nbnd_occ`'s per-k count, this keeps the block whole — a per-k count is a dynamic
+shape and rule R2 does not allow one inside a compiled loop. The bands past the cutoff carry
+an occupation of zero, so the answer is exact and the cost is `nbnd/nbnd_occ`. Measured on
+`al-metal.in`: 8 bands against a per-k `nbnd_occ` of 1 to 3, so this cell pays between two
+and eight times the block it needs — the worst ratio a cell can have, since `nbnd` is chosen
+a fixed *margin* above the occupied count and one aluminium atom occupies barely more than a
+band. It shrinks with every atom added. **Backlog**, not a fix made: the way down is `cegterg`'s — compact with a
+mask rather than change a shape — and it is the same item the response loop's fixed 1e-12
+threshold already sits in.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than

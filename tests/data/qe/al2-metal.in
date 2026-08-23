@@ -1,0 +1,47 @@
+! fcc aluminium with its cell doubled along `a3`, so that two atoms sit in it
+! and the `Gamma`-point dynamical matrix has something in it: the modes of this
+! cell at `Gamma` are the primitive cell's at `Gamma` **and** at the zone-boundary
+! point the doubling folds in, so three of the six frequencies are acoustic and
+! three are not.
+!
+! Same pseudopotential, cutoff and smearing as `al-metal.in`, which is QE's own
+! `pw_metal/metal.in` -- only the cell and the k-grid differ, so what this adds
+! over that file is the *second atom* and nothing else.
+!
+! `nosym` on an **unshifted** grid, which is the combination a response can be
+! computed on without symmetrising it (`si-epsilon-unshifted-nosym.in` records
+! the same choice for silicon). It is also what `ph.x` needs here: with the
+! symmetry on it refuses the cell outright -- "FFT grid incompatible with
+! symmetry" out of `phq_setup` -- so the reference in
+! `reference.out.ph-al2-metal` is a `nosym` run and this input is the one that
+! generated it.
+!
+! `ph.x` gives 1.1, 1.8, 1.9, 146.7, 146.7 and 311.0 cm^-1: three acoustic modes
+! at the sum rule's own residue and three the doubling folds in from the zone
+! boundary. It is the reference for the *next* phase rather than for this one --
+! the dynamical matrix of a metal is refused here
+! (`pypresso.response.phonon.require_a_metallic_assembly`), and 1.9 against the
+! 155.7 the unguarded assembly returns is the measurement behind the refusal.
+ &control
+    calculation='scf'
+ /
+ &system
+    ibrav=0, celldm(1)=7.50,
+    nat=2, ntyp=1,
+    ecutwfc=15.0, nosym=.true., noinv=.true.,
+    occupations='smearing', smearing='marzari-vanderbilt', degauss=0.05
+ /
+ &electrons
+    conv_thr = 1.0d-12
+ /
+CELL_PARAMETERS alat
+  -0.50  0.00  0.50
+   0.00  0.50  0.50
+  -1.00  1.00  0.00
+ATOMIC_SPECIES
+ Al  26.98 Al.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Al  0.00  0.00  0.00
+ Al -0.50  0.50  0.00
+K_POINTS automatic
+ 4 4 2 0 0 0

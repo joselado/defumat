@@ -103,6 +103,18 @@ preconditioning, the search direction and the previous one -- at
 k-point's worth at ``k_batch = 1``. That is the same working set the Davidson
 subspace has at ``nvecx = 4 nbnd``, and it goes through the same dial
 (:mod:`pypresso.batching`).
+
+**A metal pays ``nbnd`` where an insulator pays ``nbnd_occ``**, and that is a
+deliberate trade rather than an oversight: QE truncates the solve at
+``setup_nbnd_occ``'s per-k count, and a per-k count is a dynamic shape, which
+rule R2 does not allow inside a compiled loop. So the block stays whole and the
+bands past the cutoff carry an occupation of zero -- exact, and paying their
+share of the CG for nothing. On the aluminium of ``al-metal.in`` that is 8 bands
+against a per-k ``nbnd_occ`` of 1 to 3, so the factor is real; it is bounded by
+``nbnd/nbnd_occ`` and it shrinks as a cell grows, because ``nbnd`` is chosen a
+fixed margin above the occupied count rather than a multiple of it. The way down
+if it ever matters is the same as ``cegterg``'s: a mask that compacts, not a
+shape that changes.
 """
 
 from __future__ import annotations
@@ -469,7 +481,7 @@ class SternheimerSolver:
 
     # -- the density it produces -------------------------------------------
 
-    def density_at(self, states) -> jnp.ndarray:
+    def density_at(self, states, weights=None) -> jnp.ndarray:
         """``rho`` from a set of occupied states, as the SCF builds it.
 
         :meth:`~pypresso.scf.driver.Calculation.density` **without the
@@ -481,9 +493,10 @@ class SternheimerSolver:
         """
         calculation = self.calculation
         smooth, dense = calculation.basis.smooth, calculation.basis.dense
-        becsum_ = self._raw_becsum(states)
+        weights = self.density_weights if weights is None else weights
+        becsum_ = self._raw_becsum(states, weights)
         rho = sum_band(
-            states, calculation.fft_index, smooth.grid, self.density_weights,
+            states, calculation.fft_index, smooth.grid, weights,
             calculation.system.cell, calculation.k_batch,
         )
         return calculation.augmented(to_dense(rho, smooth, dense), becsum_)
@@ -529,7 +542,7 @@ class SternheimerSolver:
         )
         return dbecsum
 
-    def _raw_becsum(self, states) -> tuple:
+    def _raw_becsum(self, states, weights=None) -> tuple:
         """``becsum`` **without** the symmetrisation :meth:`Calculation.becsum` applies.
 
         For PAW that method ends with ``PAW_symmetrize``, and a *response* must
@@ -545,9 +558,85 @@ class SternheimerSolver:
         if not calculation.is_ultrasoft:
             return ()
         return becsum_of(
-            states, calculation.projectors.vkb, self.density_weights,
+            states, calculation.projectors.vkb,
+            self.density_weights if weights is None else weights,
             calculation.species_channels, calculation.k_batch,
         )
+
+    def local_density_of_states(self):
+        """``localdos``: ``(ldos, becsum1, dos_ef)`` at the Fermi level.
+
+        ``ldos(r) = sum_kn w_k delta(ef - eps_kn) |psi_kn(r)|^2`` and
+        ``dos_ef = sum_kn w_k delta(ef - eps_kn)``. **It is the same density
+        builder with a different weight** -- the smeared delta in place of the
+        smeared step -- so ``localdos.f90``'s hundred lines, including its
+        ``becsum1``, are :meth:`density_at` called once more.
+
+        Only a metal has one; an insulator raises, because ``delta(ef - eps)``
+        is zero everywhere there and the caller asking for it has confused two
+        regimes.
+        """
+        if self.smearing is None:
+            raise ValueError(
+                "a local density of states at the Fermi level is a metallic "
+                "quantity: this run has occupations='fixed' and no Fermi surface"
+            )
+        weights = self._delta_weights()
+        return self.density_at(self.psi, weights), float(jnp.sum(weights))
+
+    def _delta_weights(self):
+        """``w_k delta(ef - eps_kn)``, the weight :meth:`local_density_of_states` uses."""
+        smearing = self.smearing
+        x = (smearing.ef - self.eigenvalues) / smearing.degauss
+        return self.density_weights * w0gauss(x, smearing.ngauss) / smearing.degauss
+
+    def fermi_level_shift(self, drho):
+        """``ef_shift``: the Fermi level moves, and the response density with it.
+
+        ``PW/src`` has no counterpart; this is ``LR_Modules/efermi_shift.f90``.
+        A perturbation at ``q = 0`` is not orthogonal to the identity, so it
+        changes the number of states below the Fermi level and the level itself
+        has to move to keep the electron count. The shift is fixed by that count,
+
+            def = - (integral of drho) / N(ef),
+
+        and what it does to the density is fill or empty the Fermi surface:
+        ``drho <- drho + def ldos``. Both pieces come from
+        :meth:`local_density_of_states`.
+
+        Returns ``(corrected, def)``. **The corrected density integrates to
+        zero**, which is the identity this is checked against and is not
+        imposed: ``ldos`` integrates to ``dos_ef`` by construction, so the
+        correction removes exactly the charge the uncorrected response invented.
+
+        ``drho`` is ``(..., nspin_mag, n1, n2, n3)`` with any number of leading
+        perturbation axes; the shift is computed per perturbation.
+        """
+        ldos, dos_ef = self.local_density_of_states()
+        calculation = self.calculation
+        cell = calculation.system.cell
+        element = cell.volume / int(np.prod(ldos.shape[1:]))
+        leading = drho.ndim - ldos.ndim
+        axes = tuple(range(leading, drho.ndim))
+        delta_n = jnp.sum(drho, axis=axes) * element
+        shift = jnp.where(jnp.abs(dos_ef) > 1.0e-18, -delta_n / dos_ef, 0.0)
+        return drho + shift[(...,) + (None,) * ldos.ndim] * ldos, shift
+
+    def fermi_level_shift_states(self, dpsi, shift):
+        """``ef_shift_wfc``: the same shift applied to the first-order states.
+
+        ``dpsi_n <- dpsi_n + (1/2) def delta(ef - eps_n) psi_n``. The half is
+        QE's and is not a typo: the density is quadratic in the states, so half
+        the shift on each of ``psi`` and its conjugate reproduces the whole of
+        the ``def ldos`` that :meth:`fermi_level_shift` added to the density.
+        It matters only where ``dpsi`` is consumed as a *tangent* rather than
+        through the density it already carries -- which is the second derivative
+        (:mod:`pypresso.response.phonon`), not ``chi_0``.
+        """
+        smearing = self.smearing
+        x = (smearing.ef - self.eigenvalues) / smearing.degauss
+        delta = w0gauss(x, smearing.ngauss) / smearing.degauss
+        return dpsi + 0.5 * shift * delta[..., None] * self.psi
 
     def perturbation(self, dv, dddd_paw=None):
         """``dH|psi>`` for a change ``dv`` in the potential -- see
@@ -764,11 +853,16 @@ def require_a_sternheimer_regime(calculation, metals: bool = False) -> None:
 def smearing_of(calculation, result) -> Smearing | None:
     """The :class:`Smearing` of a converged run, or ``None`` if it is an insulator.
 
-    The Fermi level comes from the run rather than being recomputed: it is what
-    the occupations the density was built from were evaluated at, and a level
-    re-derived from the eigenvalues would be a different number by the bisection
-    tolerance -- which the projector would then feel as an inconsistency between
-    ``wg1`` and the ``wg`` the ground state used.
+    ``result`` is anything carrying a ``fermi_energy``. The level is **taken
+    from the run and not re-derived**: it is what the occupations the density was
+    built from were evaluated at, and re-deriving it would differ by the
+    bisection tolerance -- which the projector would feel as an inconsistency
+    between its ``wg1`` and the ``wg`` the ground state used. Where a caller has
+    no ``SCFResult`` to hand (:func:`pypresso.response.phonon.dynamical_matrix`
+    is given a density and eigenvalues instead) it re-runs
+    :meth:`~pypresso.scf.driver.Calculation.occupations` on those same
+    eigenvalues, which is the same call the SCF made on the same numbers and so
+    the same level, not an independent bisection.
     """
     scheme = calculation.system.occupations
     if scheme == "fixed":

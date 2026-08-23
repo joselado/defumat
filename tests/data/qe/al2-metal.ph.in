@@ -1,0 +1,14 @@
+! The `ph.x` input that generated `reference.out.ph-al2-metal`, from the ground
+! state of `al2-metal.in`:
+!
+!   pw.x -in al2-metal.in && ph.x -in al2-metal.ph.in
+!
+! `outdir` and `fildyn` are rewritten by whoever regenerates it.
+Al2 Gamma phonons
+ &inputph
+  prefix='al2',
+  outdir='OUTDIR/tmp',
+  tr2_ph=1.0d-14,
+  fildyn='OUTDIR/al2.dynG',
+ /
+0.0 0.0 0.0

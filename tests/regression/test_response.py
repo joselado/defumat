@@ -341,6 +341,194 @@ def test_chi0_matches_a_finite_difference_of_the_density(case):
     assert relative < CHI0_RELATIVE
 
 
+#: fcc aluminium's ``chi_0`` against the same finite difference, and the step it
+#: is measured at. The error scales as ``h^2`` -- 2.5e-7, 1.4e-6, 1.3e-5 at
+#: 3e-4, 1e-3, 3e-3 -- so this is the difference's truncation and not the
+#: solve's.
+METAL_CHI0_STEP = 3.0e-4
+METAL_CHI0_RELATIVE = 1e-6
+
+
+@lru_cache(maxsize=None)
+def _metal():
+    """The converged aluminium of ``al-metal.in`` -- QE's own ``pw_metal`` cell."""
+    from pypresso.scf import Calculation
+
+    system = build_system(read_pw_input(CASES / "al-metal.in"))
+    pseudo_dir = Path(__file__).resolve().parents[1] / "data" / "pseudo"
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    calculation = Calculation(system, pseudos)
+    result = run_scf(system, pseudos, nbnd=METAL_NBND, calculation=calculation,
+                     conv_thr=1e-12, max_iterations=100)
+    return system, calculation, result
+
+
+#: Enough bands that the smearing tail is resolved: at ``degauss = 0.05`` the
+#: occupation is below 1e-4 well before the eighth band, so both sides of the
+#: comparison see the same Fermi surface.
+METAL_NBND = 8
+
+
+def test_chi0_matches_a_finite_difference_for_a_metal():
+    """P24c: ``orthogonalize``'s smearing branch, against a difference of densities.
+
+    The reference re-occupies at the **same** Fermi level rather than
+    re-converging it, and that is not a shortcut -- it is what the quantity being
+    computed is. The Sternheimer response of a metal is the response at fixed
+    ``ef``; the level's own motion is a separate correction
+    (:meth:`~pypresso.response.sternheimer.SternheimerSolver.fermi_level_shift`,
+    ``ef_shift``), and testing the two together would test neither.
+
+    What the metal branch changes, and what this therefore checks at once: the
+    sharp projector becomes the occupation-difference weights ``wwg``, with the
+    ``0/0`` at a degeneracy taken to its limit; every band stays in the block
+    with ``nbnd_occ`` a mask rather than a count; ``alpha_pv`` is measured to
+    ``ef + xmax degauss``; and the density is accumulated with ``wk`` and not
+    ``wg``, because the occupation is already inside ``dpsi``. Any one of the
+    four wrong moves this by far more than the truncation error below -- the
+    weight convention alone would double-count the occupations.
+    """
+    from pypresso.basis.interpolate import to_dense
+    from pypresso.scf.density import sum_band
+    from pypresso.scf.occupations import smearing_order, wgauss
+
+    system, calculation, result = _metal()
+    solver = make_sternheimer(calculation, result, metals=True)
+    assert solver.smearing is not None
+    dv = _probe_potential(calculation)
+
+    solution = solver.solve(solver.perturbation(dv))
+    assert solution.converged
+    drho = np.asarray(solver.response_density(solution.dpsi))
+
+    smooth, dense = calculation.basis.smooth, calculation.basis.dense
+    v_scf = calculation.potential(result.density).v_scf
+    ngauss = smearing_order(system.smearing)
+    kweights = jnp.asarray(system.kpoints.weights)
+
+    def density_at(scale):
+        hamiltonians = calculation.hamiltonian(v_scf + scale * dv, None)
+        eigenvalues, psi = calculation.diagonalize(hamiltonians, METAL_NBND, None, 1e-13)
+        occupation = wgauss(
+            (result.fermi_energy - eigenvalues) / system.degauss, ngauss
+        )
+        rho = sum_band(
+            psi, calculation.fft_index, smooth.grid,
+            occupation * kweights[None, :, None], system.cell, calculation.k_batch,
+        )
+        return np.asarray(to_dense(rho, smooth, dense))
+
+    step = METAL_CHI0_STEP
+    reference = (density_at(step) - density_at(-step)) / (2.0 * step)
+    relative = np.abs(drho - reference).max() / np.abs(drho).max()
+    assert relative < METAL_CHI0_RELATIVE
+
+
+def test_the_fermi_level_shift_restores_charge_neutrality():
+    """``ef_shift``, checked against an identity rather than against a number.
+
+    A perturbation at ``q = 0`` is not orthogonal to the identity, so the
+    independent-particle response moves charge in or out of the cell: the
+    uncorrected ``drho`` integrates to 0.21 electrons on this probe, which is
+    not a response at all but a change in the electron count. Letting the Fermi
+    level move by ``def = -(integral) / N(ef)`` and filling the Fermi surface
+    with ``def ldos`` removes exactly that, because ``ldos`` integrates to
+    ``N(ef)`` by construction -- so the corrected density integrating to zero is
+    an identity the two halves satisfy together and neither imposes.
+
+    Two probes, because one of them could be zero by accident: the ``(1,0,0)``
+    and ``(1,1,1)`` cosines give shifts of opposite sign (-0.036 and +0.009 Ry)
+    and both come back neutral.
+    """
+    system, calculation, result = _metal()
+    solver = make_sternheimer(calculation, result, metals=True)
+    ldos, dos_ef = solver.local_density_of_states()
+    element = system.cell.volume / int(np.prod(np.asarray(ldos).shape[1:]))
+    # ``ldos`` integrates to the density of states at the Fermi level, which is
+    # what makes the correction exact rather than approximate.
+    assert abs(float(jnp.sum(ldos)) * element - dos_ef) < 1e-10
+
+    for miller in ((1, 0, 0), (1, 1, 1)):
+        grid = calculation.basis.dense.grid
+        axes = [np.arange(n) / n for n in grid]
+        coordinates = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1)
+        dv = jnp.asarray(np.cos(2.0 * np.pi * (coordinates @ np.asarray(miller)))[None])
+        drho = solver.response_density(solver.solve(solver.perturbation(dv)).dpsi)
+        before = float(jnp.sum(drho)) * element
+        corrected, shift = solver.fermi_level_shift(drho)
+        assert abs(before) > 1e-3, "the probe has to move charge for this to test anything"
+        assert abs(float(jnp.sum(corrected)) * element) < 1e-12
+
+
+def test_a_metal_is_refused_the_quantities_it_does_not_have():
+    """The solve handles a metal; ``epsilon_infinity`` and ``Z*`` do not exist for one.
+
+    ``pw.x`` refuses ``epsil`` for a metal for the same reason, and the refusal
+    is here rather than three times over because
+    :func:`~pypresso.response.sternheimer.require_a_sternheimer_regime` takes a
+    flag saying whether the *caller's* quantity survives a Fermi surface.
+    """
+    from pypresso.response.efield import dielectric_tensor
+
+    _, calculation, _ = _metal()
+    with pytest.raises(NotImplementedError, match="epsilon_infinity"):
+        dielectric_tensor(
+            calculation, None, np.zeros((1, 1, 1)), None, born_charges=False
+        )
+
+
+def test_ef_shift_on_the_states_reproduces_its_effect_on_the_density():
+    """``ef_shift_wfc`` against ``ef_shift``, which is where its factor of a half lives.
+
+    The Fermi level's motion has to reach the first-order *states* as well as
+    the density, because the second derivative consumes ``dpsi`` as a tangent
+    rather than through the density it builds. QE writes the correction as
+    ``dpsi_n += (1/2) def delta(ef - eps_n) psi_n`` and the half is not
+    decoration: the density is quadratic in the states, so half on each of
+    ``psi`` and its conjugate is what reproduces the whole ``def ldos`` that the
+    density correction adds. Asserting that equality is what pins the factor --
+    the two routines share the shift and nothing else, one going through the
+    density builder and one not.
+    """
+    system, calculation, result = _metal()
+    solver = make_sternheimer(calculation, result, metals=True)
+    dv = _probe_potential(calculation)
+    dpsi = solver.solve(solver.perturbation(dv)).dpsi
+
+    ldos, _ = solver.local_density_of_states()
+    _, shift = solver.fermi_level_shift(solver.response_density(dpsi))
+    corrected = solver.fermi_level_shift_states(dpsi, shift)
+    through_states = (
+        solver.response_density(corrected) - solver.response_density(dpsi)
+    )
+    through_density = shift * ldos
+    scale = float(jnp.abs(through_density).max())
+    assert float(jnp.abs(through_states - through_density).max()) < 1e-10 * scale
+
+
+def test_the_dynamical_matrix_of_a_metal_is_refused():
+    """The solve handles a metal; the *second derivative* built on it does not.
+
+    A metal's ``dpsi`` carries its own occupation -- that is what the ``wk``
+    weight in the density response encodes -- and the energy functional the
+    force constants differentiate weights the states by ``wg = wk f``, so the
+    same tangent enters carrying ``f`` twice. With the guard lifted, two-atom
+    aluminium comes out at 155.7, 155.7, 155.7, 198.0, 198.0, 309.3 cm^-1
+    against the vendored ``ph.x``'s 1.1, 1.8, 1.9, 146.7, 146.7, 311.0 on the
+    same input -- from a run that converges to ``|ddv_scf|^2 = 8.7e-17``,
+    returns a matrix symmetric to 4.3e-8 and whose ground state reproduces
+    ``pw.x``'s total energy to 1e-9 Ry. Nothing but the reference says it is
+    wrong, which is what makes a refusal the right answer rather than a caveat.
+    """
+    from pypresso.response.phonon import dynamical_matrix
+
+    _, calculation, _ = _metal()
+    with pytest.raises(NotImplementedError, match="acoustic sum rule"):
+        dynamical_matrix(calculation, None, np.zeros((1, 1, 1)), None)
+
+
 def test_the_exact_jacobian_agrees_with_the_finite_difference_one():
     """P22c: ``chi_0 K`` is the SCF Jacobian P22 could only difference.
 

@@ -62,6 +62,20 @@ the unpolarized solution.
 — agreeing to **≤1.2e-4** — with the
 screening kernel, the field's commutator and the bare phonon term all gradients of code that
 was already there.
+**The Born effective charges are ultrasoft now too** (P24b), because `Z* = dF/dE` is a mixed
+second derivative and is computed as one: a single `jvp` of the force along the field's
+response, per field direction, which turns four of the five stages `zstar_eu_us.f90` adds
+into terms of the same derivative. Against `ph.x`: **-0.0757150** norm-conserving silicon
+(every printed digit), **-0.0794417** ultrasoft silicon (8.3e-6) and **+0.0415594** ultrasoft
+carbon, whose sign is the *opposite* one. PAW is refused by name at 1.3e-3, with the missing
+term identified (`int3_paw` against `becsumort`) rather than fitted.
+**Metals are in the response** (P24c): `orthogonalize`'s smearing branch, `setup_alpha_pv`'s
+metal value, `localdos` and `ef_shift`, with `chi_0` on fcc aluminium matching a finite
+difference of the density to **2.5e-7** and the Fermi-level correction restoring charge
+neutrality to 1e-15. **The dynamical matrix of a metal is refused by name**: a metal's `dpsi`
+carries its own occupation, and contracting it against an energy functional weighted by `wg`
+counts that occupation twice — the acoustic modes of two-atom aluminium come out at 155.7
+cm⁻¹ against `ph.x`'s 1.9, from a run that converges and returns a symmetric matrix.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
 read it before writing code. P4 is complete: a block Davidson eigensolver behind a name
 registry, seeded from the pseudo-atomic orbitals as QE seeds it, and the *only* solver the
@@ -121,7 +135,8 @@ to 2.2e-4. Getting there found a trap that is P26's rather than P27's: at QE's
 solution was being consumed in silence, giving a `C_ijkl` that was not even symmetric under
 `C_ijkl = C_klij`. It is refused now (`require_converged_responses`).
 
-**Outstanding:** Wyckoff input, `vc-relax`, phonons at `q != 0` (the perturbed states live
+**Outstanding:** Wyckoff input, `vc-relax`, the dynamical matrix of a metal and of an
+ultrasoft dataset, PAW Born charges, phonons at `q != 0` (the perturbed states live
 at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals, plus
 `q2r`/`matdyn` for a dispersion), and the rest of P10 (k-axis sharding and GPU).
 

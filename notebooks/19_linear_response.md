@@ -230,12 +230,12 @@ print(f"departure from cubic             : {efield.anisotropy:.1e}")
 ```
 
     dielectric tensor, cartesian axes:
-    [[13.806646  0.        0.      ]
-     [-0.       13.806646 -0.      ]
+    [[13.806646 -0.        0.      ]
+     [ 0.       13.806646 -0.      ]
      [ 0.       -0.       13.806646]]
     
-    iterations to |ddv_scf|^2 < 1e-14 : 18
-    departure from cubic             : 3.6e-15
+    iterations to |ddv_scf|^2 < 1e-14 : 8
+    departure from cubic             : 2.7e-15
 
 
 
@@ -339,16 +339,43 @@ us_scf = run_scf(ultrasoft, us_pseudos, calculation=us_calculation, conv_thr=1e-
 us_field = dielectric_tensor(
     us_calculation, us_scf.wavefunctions, us_scf.eigenvalues, us_scf.density,
     us_scf.becsum,
-    # zstar_eu_us.f90 is five further stages, so the Born charges are refused
-    # rather than returned wrong -- see the footer.
-    born_charges=False,
 )
+us_born = np.diag(us_field.born_charges[0])[0]
 print(f"ultrasoft silicon:  eps = {us_field.isotropic:.6f}    ph.x 14.325270")
 print(f"                    anisotropy {us_field.anisotropy:.1e}")
+print(f"                    Z*  = {us_born:.6f}      ph.x -0.07945")
 ```
 
     ultrasoft silicon:  eps = 14.325321    ph.x 14.325270
                         anisotropy 3.6e-15
+                        Z*  = -0.079442      ph.x -0.07945
+
+
+
+## The Born charges, which are a *second* derivative
+
+$Z^*_{a,ij} = \partial F_{a\,j}/\partial E_i$ is a mixed second derivative of the energy,
+and computing it as one is what makes the ultrasoft number above possible. The force is
+already `jax.grad` of the total energy at frozen states (notebook 09); differentiate that
+gradient once more, along the field's response instead of along a displacement, and one
+`jvp` per field direction returns a whole $3 n_{\rm at}$ column:
+
+$$\frac{\partial^2 E}{\partial u_j\,\partial E_i}
+  = \partial_E \partial_j L
+  + (\partial_\psi \partial_j L)\cdot d\psi_i
+  + (\partial_\Lambda \partial_j L)\cdot d\Lambda_i .$$
+
+`zstar_eu_us.f90` adds five stages to the norm-conserving expression for an ultrasoft
+dataset, and four of them are terms of that one derivative — the augmentation charge's
+share of the density, the screening it feels, the constraint's multipliers moving, and the
+augmentation charge's dipole riding along with the atom. The norm-conserving formula on
+this cell gives **+0.1625**, wrong in sign as well as size.
+
+Why this works here and an ultrasoft phonon is still refused: for a phonon *both* legs of
+the second derivative move the overlap operator $S$, so the multipliers' response has to be
+solved for; for a Born charge only the displacement does, and the field's $d\Lambda$ is a
+matrix element of a perturbation the solve already built.
+
 
 
 
@@ -393,6 +420,12 @@ symmetrisation switched off entirely, agree on every digit printed.
 
 ---
 
-**Where the detail lives.** `PLAN.md` §3, phase P24 — the transcription traps, the
-refusals (ultrasoft, metals, noncollinear, DFT+U) and what each one would need. The tests
-are `tests/regression/test_response.py`; the code is `pypresso/response/`.
+**Where the detail lives.** `PLAN.md` §3, phases P24, P24a (ultrasoft and PAW), P24b (the
+Born charges as a mixed derivative) and P24c (metals) — the transcription traps, what each
+refusal would need, and the measurement behind it. Still refused, each by name: **PAW** Born
+charges, at 1.3e-3 with the missing term identified; the **dynamical matrix of a metal**,
+whose `dpsi` carries its own occupation and would have it counted twice; **noncollinear
+magnetism**, **DFT+U** and **spin spirals**. Metals themselves are *not* refused any more:
+`chi_0` on fcc aluminium matches a finite difference of the density to 2.5e-7, and the
+Fermi level's own shift restores charge neutrality to 1e-15. The tests are
+`tests/regression/test_response.py`; the code is `pypresso/response/`.

@@ -1,0 +1,41 @@
+! QE's own `test-suite/pw_metal/metal.in`, copied here so that the metallic
+! linear-response tests run without the vendored tree.
+!
+! fcc aluminium, one atom, Marzari-Vanderbilt cold smearing at
+! `degauss = 0.05` Ry, on the ten-point irreducible wedge of a shifted 4x4x4
+! grid -- the same wedge `si-epsilon.in` uses, which is not a coincidence: it is
+! the k-set QE's own metal benchmark uses and the one `pw_metal`'s reference
+! output was generated on.
+!
+! It is a *metal*, and that is the whole point of it here: the Sternheimer
+! projector has a second branch for one (`orthogonalize`'s smearing branch,
+! `PLAN.md` P24c), where the sharp occupied/empty partition becomes a pair of
+! occupation weights and every band stays in the block.
+ &control
+    calculation='scf'
+ /
+ &system
+    ibrav=2, celldm(1) =7.50,
+    nat=1, ntyp=1,
+    ecutwfc =15.0,
+    occupations='smearing', smearing='marzari-vanderbilt', degauss=0.05
+ /
+ &electrons
+    conv_thr = 1.0d-12
+ /
+ATOMIC_SPECIES
+ Al  26.98 Al.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Al 0.00 0.00 0.00
+K_POINTS
+  10
+   0.1250000  0.1250000  0.1250000   1.00
+   0.1250000  0.1250000  0.3750000   3.00
+   0.1250000  0.1250000  0.6250000   3.00
+   0.1250000  0.1250000  0.8750000   3.00
+   0.1250000  0.3750000  0.3750000   3.00
+   0.1250000  0.3750000  0.6250000   6.00
+   0.1250000  0.3750000  0.8750000   6.00
+   0.1250000  0.6250000  0.6250000   3.00
+   0.3750000  0.3750000  0.3750000   1.00
+   0.3750000  0.3750000  0.6250000   3.00

@@ -106,13 +106,14 @@ from pypresso.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
 from pypresso.response.sternheimer import (
     SternheimerSolver,
     require_a_sternheimer_regime,
+    smearing_of,
 )
 from pypresso.response.velocity import over_kpoints
 from pypresso.system.symmetry import atom_mapping, symmetrize_atom_pair_tensor
 from pypresso.units import AMU_TO_RY, RY_TO_CMM1, RY_TO_THZ
 
-__all__ = ["Phonons", "dynamical_matrix", "require_norm_conserving",
-           "self_consistent_response"]
+__all__ = ["Phonons", "dynamical_matrix", "require_a_metallic_assembly",
+           "require_norm_conserving", "self_consistent_response"]
 
 #: QE's ``alpha_mix(1)``: the weight the mixer gives the residual. It is no
 #: longer the *whole* of the mixing -- :mod:`pypresso.response.mixing` builds an
@@ -222,7 +223,11 @@ def dynamical_matrix(
     if eigenvalues.ndim == 2:
         eigenvalues = eigenvalues[None]
     require_a_symmetrisable_response(calculation)
-    require_a_sternheimer_regime(calculation)
+    # ``metals = True``: a Fermi surface does not stop a dynamical matrix
+    # existing, and the solve handles one (``PLAN.md`` P24c). What it adds is
+    # ``ef_shift``, inside the loop below.
+    require_a_sternheimer_regime(calculation, metals=True)
+    require_a_metallic_assembly(calculation)
     require_norm_conserving(calculation)
     _require_one_spin_channel(calculation)
 
@@ -238,6 +243,8 @@ def dynamical_matrix(
     solver = SternheimerSolver(
         calculation, hamiltonians, wavefunctions, eigenvalues, weights,
         nocc, threshold, v_scf=potential.v_scf, becsum=becsum,
+        smearing=smearing_of(calculation, _fermi_level(calculation, eigenvalues)),
+        kpoint_weights=calculation.system.kpoints.weights,
     )
 
     # 1. The bare perturbation ``dV_bare/du |psi>``, once per mode and stored:
@@ -254,7 +261,7 @@ def dynamical_matrix(
     # 3. The second derivative, one jvp of the force's own gradient per mode.
     matrix = _force_constants(
         calculation, positions, jnp.asarray(wavefunctions), weights,
-        eigenvalues, jnp.asarray(density), dpsi, drho, nocc,
+        eigenvalues, jnp.asarray(density), dpsi, drho, solver.nocc,
     )
     # ``symdynph_gq`` first and the hermitisation second, which is the order
     # that makes the second one a *measurement*. A column of the raw matrix is a
@@ -288,6 +295,26 @@ def dynamical_matrix(
     )
 
 
+class _Levels:
+    """The one field :func:`~pypresso.response.sternheimer.smearing_of` reads.
+
+    :func:`dynamical_matrix` is handed a density and eigenvalues rather than an
+    ``SCFResult``, so the Fermi level is recomputed from the occupations the
+    calculation itself would assign -- the same call the SCF made, on the same
+    eigenvalues, so it is the same number.
+    """
+
+    def __init__(self, fermi_energy):
+        self.fermi_energy = fermi_energy
+
+
+def _fermi_level(calculation, eigenvalues):
+    if calculation.system.occupations == "fixed":
+        return _Levels(None)
+    _, levels = calculation.occupations(eigenvalues)
+    return _Levels(levels["fermi_energy"])
+
+
 def self_consistent_response(
     calculation,
     solver,
@@ -318,6 +345,15 @@ def self_consistent_response(
     symmetrisation, which is why they are iterated together rather than one
     after another.
 
+    **It handles a metal and :func:`dynamical_matrix` refuses one at the door**,
+    which is deliberate rather than leftover: the response density of a metal
+    computed here *is* right -- ``ef_shift`` and all -- and it is the assembly
+    above it that counts the occupation twice
+    (:func:`require_a_metallic_assembly`). Keeping the loop metallic is what let
+    the refusal be *measured* rather than asserted, and it is where the phase
+    that lifts it starts. The path is reached by lifting that guard and nothing
+    else.
+
     Returns ``(dpsi, drho, history, average_iterations, converged)``, with
     ``dpsi`` an object array of shape ``(nat, 3)``.
     """
@@ -343,6 +379,19 @@ def self_consistent_response(
                 solves += 1
                 response.append(solver.response_density(solution.dpsi))
 
+        # ``ef_shift``: a displacement at ``q = 0`` moves charge in and out of
+        # the cell, so a metal's Fermi level moves with it and the response
+        # density has to be corrected by ``def ldos`` before it screens
+        # anything. Applied to the raw per-mode densities and *before* the
+        # symmetrisation, which is where QE applies it too -- ``ldos`` is a
+        # scalar under the group, so symmetrising ``def ldos`` as part of the
+        # displacement-labelled vector field is ``sym_def`` by another route.
+        shifts = None
+        if solver.smearing is not None:
+            corrected = [solver.fermi_level_shift(r) for r in response]
+            response = [r for r, _ in corrected]
+            shifts = [float(d) for _, d in corrected]
+
         # ``symdvscf``: the 3 nat responses are symmetrised *together*, after
         # the loop over modes and before the kernel, because an operation mixes
         # them -- rotating the direction and permuting the atom.
@@ -367,6 +416,19 @@ def self_consistent_response(
         if change < tr2:
             converged = True
             break
+
+    # ``ef_shift_wfc``: the level's motion belongs to the first-order *states*
+    # as well, and it is applied once at the end, as QE applies it -- the loop
+    # itself is driven by the density, which already carries the correction.
+    # It matters because the second derivative consumes ``dpsi`` as a tangent
+    # rather than through the density it builds.
+    if solver.smearing is not None and shifts is not None:
+        for index, (atom, cart) in enumerate(
+            (a, c) for a in range(nat) for c in range(3)
+        ):
+            dpsi[atom, cart] = solver.fermi_level_shift_states(
+                dpsi[atom, cart], shifts[index]
+            )
 
     return (dpsi, symmetrised, history,
             total_iterations / max(solves, 1), converged)
@@ -548,6 +610,69 @@ def _require_one_spin_channel(calculation) -> None:
             "channels (nelec/2), and a magnetic insulator's channels are "
             "occupied to different depths, so the response would be solved for "
             "the wrong bands in one of them without any sign of it"
+        )
+
+
+def require_a_metallic_assembly(calculation) -> None:
+    """A metal's *response* is implemented; its second derivative is not.
+
+    P24c put ``orthogonalize``'s smearing branch and ``ef_shift`` in, so a
+    metal's ``chi_0`` and its self-consistent response density are right --
+    measured against a finite difference of the density to 2.5e-7, and the
+    ``ef_shift`` correction against charge neutrality to 1e-15. **The dynamical
+    matrix does not follow from them**, and what stops it is a weight convention
+    rather than a missing routine.
+
+    In the metal branch the occupation lives *inside* ``dpsi``: the right-hand
+    side is scaled by ``wg1`` and the density is accumulated with ``wk``, so
+    ``drho = sum_k wk 2 Re[psi* dpsi]``. The second derivative here is a ``jvp``
+    of ``jax.grad(frozen_energy)``, and that functional weights the states by
+    ``wg = wk f`` -- so the same tangent enters the energy carrying ``f`` twice.
+    Dividing it back out band by band is not the fix: it diverges at the Fermi
+    surface, and more to the point the metal response **is not a plain
+    wavefunction response** -- the ``(f_i - f_j)`` structure is inside it, which
+    is why ``drhodv`` has its own ``wgg``-weighted contraction in QE rather than
+    reusing the insulator assembly. The occupations' own first-order change has
+    to enter the energy as ``df_n`` against ``d(eps_n)/du`` and the entropy's
+    derivative, not folded into ``dpsi``.
+
+    **The Hartree and exchange-correlation half is already right**, which is why
+    the answer is wrong by half the spectrum rather than nonsense: ``drho`` is
+    handed to the assembly as a separate tangent and is built with the right
+    weights. The double count sits only in the direct contractions against the
+    states -- the kinetic, nonlocal and constraint terms. The way in is a split
+    assembly: the frozen Hessian at ``wg``, the electronic response with the
+    metal's own weights, which is de Gironcoli's Eq. (B19) structure.
+
+    *Measured with the guard lifted*, on the two-atom aluminium of
+    ``al2-metal.in`` against the vendored ``ph.x`` on the same input
+    (``reference.out.ph-al2-metal``), whose ground state this reproduces to
+    1e-9 Ry:
+
+    =========  ========================  ====================
+    mode       here                      ``ph.x``
+    =========  ========================  ====================
+    acoustic   155.74, 155.74, 155.74    1.1, 1.8, **1.9**
+    optical    197.96, 197.96, 309.26    146.7, 146.7, 311.0
+    =========  ========================  ====================
+
+    in cm^-1 -- the acoustic sum rule violated by half the spectrum, and the
+    folded zone-boundary doublet out by 35%, from a calculation that converges
+    to ``|ddv_scf|^2 = 8.7e-17`` and returns a matrix symmetric to 4.3e-8.
+    Nothing in the numbers says it is wrong; only the reference and the sum rule
+    do, which is exactly what a refusal is for.
+    """
+    if calculation.system.occupations != "fixed":
+        raise NotImplementedError(
+            "the dynamical matrix of a metal is not implemented. The Sternheimer "
+            "solve handles one (PLAN.md P24c: orthogonalize's smearing branch "
+            "and ef_shift are in, and chi_0 matches a finite difference to "
+            "2.5e-7), but the second derivative here contracts dpsi against an "
+            "energy functional weighted by wg, and a metal's dpsi already "
+            "carries its occupation -- so the acoustic sum rule comes out "
+            "violated by 155.7 cm^-1 on two-atom aluminium, half its optical "
+            "mode, from a run that converges and looks ordinary. It needs a "
+            "split assembly with the metal's own weights on the electronic half"
         )
 
 

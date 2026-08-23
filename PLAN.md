@@ -2630,6 +2630,129 @@ from the same run is right to 3.4e-5 and is not.
 
 *Notebook 19.*
 
+### P24c — Metals in linear response. ✅ DONE (the solve and `ef_shift`).
+
+`pypresso/response/sternheimer.py` — `Smearing`, `SternheimerSolver._smeared_projection`,
+`local_density_of_states`, `fermi_level_shift`, `fermi_level_shift_states` — plus two new
+test inputs, `tests/data/qe/al-metal.in` (QE's own `pw_metal/metal.in`, copied so the tests
+run without the vendored tree) and `al2-metal.in` with its regenerated `ph.x` reference.
+P24 refused a metal by name: the
+insulator projector applied to one is silently wrong, and the Fermi level moves.
+Both are here now.
+
+**What a metal changes is the projector, not the solve.** For an insulator
+`P_c^+` is a projector — a band is occupied or it is not. For a metal there is
+no such partition, and `orthogonalize.f90`'s smearing branch replaces the sharp
+step with a pair of *weights* (Rev. Mod. Phys. 73, 515, Eq. 75):
+
+    dvpsi_i  <-  wg1_i dvpsi_i
+    ps_(j,i) <-  wwg_(j,i) <psi_j|dvpsi_i>
+    wwg_(j,i) = wg1_i (1 - t) + wg1_j t + alpha_pv t (wg1_j - wg1_i)/(eps_j - eps_i)
+
+with `t` a *second* smeared step, this one of the energy difference. Three
+consequences run through the module and each is a place the answer could be
+silently wrong:
+
+- **Every band stays in the block**, because `nbnd_eff = nbnd` there. QE
+  truncates the solve at `setup_nbnd_occ`'s count; here the block is whole at a
+  static shape (rule R2) and the bands past that point carry an occupation of
+  zero. `nbnd_occ` survives as a **mask** — it is still needed, because
+  `orthogonalize`'s `alpha_pv` correction and `ch_psi_all`'s level shift both
+  admit only `j` inside it.
+- **`alpha_pv` is measured to where the smearing dies**, `ef + xmax degauss`,
+  since the occupied manifold has no top (`setup_alpha_pv`).
+- **The density response is accumulated with `wk`, not `wg`.** The occupation is
+  applied to `dpsi` itself, so weighting the density by it again counts it twice.
+  The two coincide for an insulator — a filled band has `wg = wk` — which is
+  exactly why nothing before this had to tell them apart, and why the mistake
+  would have passed every case in the suite.
+
+The `0/0` at a degeneracy is taken to its limit `-alpha_pv t w0gauss_i` rather
+than guarded, which is rule D4's requirement and not a nicety: a crystal is
+degenerate everywhere by symmetry. It is written with `jnp.where` on a *safe*
+denominator, so the unused branch never makes a NaN the gradient would carry.
+
+**`localdos` is the density builder with a different weight.** `ldos(r) =
+sum_kn w_k delta(ef - eps_kn) |psi_kn|^2` is `density_at` called once more with
+the smeared delta in place of the smeared step, so `localdos.f90` — a hundred
+lines, `becsum1` included — is not transcribed. And `ef_shift` stands on it: a
+perturbation at `q = 0` is not orthogonal to the identity, so it changes the
+number of states below the Fermi level, the level moves by
+`def = -(integral of drho)/N(ef)`, and the response fills the Fermi surface,
+`drho <- drho + def ldos`.
+
+*Check met, twice, against things that share no machinery with the solve.*
+
+| what | reference | agreement |
+|---|---|---|
+| `chi_0 dV` on fcc aluminium | a central difference of the density, **re-occupied at the same `ef`** | **2.5e-7** relative at the difference's own optimal step; 1.4e-6 at `1e-3` and 1.3e-5 at `3e-3`, so it is `h^2` and the floor is the reference's |
+| `ldos` | its own integral against `dos_ef` | 1e-10 |
+| `drho` after `ef_shift` | **zero**, on two probes with shifts of opposite sign (-0.036 and +0.009 Ry) | 1e-15, where the uncorrected response moves 0.21 and -0.053 electrons |
+| `ef_shift_wfc` | `ef_shift` — the corrected *states* rebuilt into a density must give back `def ldos` | 1e-10 relative, which is what pins its factor of one half |
+
+The finite difference re-occupies at the **same** Fermi level rather than
+re-converging it, and that is not a shortcut — it is what the quantity is. The
+Sternheimer response of a metal is the response at fixed `ef`; the level's own
+motion is `ef_shift` and is a separate correction, so testing the two together
+would test neither.
+
+**The dynamical matrix of a metal is refused, and the reason is a weight
+convention rather than a missing routine.** In the metal branch the occupation
+lives *inside* `dpsi`; the second derivative here is a `jvp` of
+`jax.grad(frozen_energy)`, and that functional weights the states by `wg = wk f`,
+so the same tangent enters the energy carrying `f` twice. Dividing it back out
+band by band is not the fix — it diverges at the Fermi surface, and the metal
+response is not a plain wavefunction response in the first place: the
+`(f_i - f_j)` structure is inside it, which is why QE's `drhodv` has its own
+`wgg`-weighted contraction instead of reusing the insulator assembly. The
+occupations' own first-order change has to enter as `df_n` against `d(eps_n)/du`
+and the entropy's derivative, not folded into `dpsi` — `ef_shift_wfc` reproduces
+it correctly in the *density* (tested: `response_density` of the corrected states
+equals `def ldos` to 1e-10 relative) and cannot in the energy.
+
+**The Hartree and exchange-correlation half is already right**, which is why the
+answer is wrong by half the spectrum rather than nonsense: `drho` is handed to
+the assembly as a separate tangent, built with the right weights. The double
+count sits only in the direct contractions against the states — kinetic,
+nonlocal, constraint. The way in is a split assembly: the frozen Hessian at `wg`,
+the electronic response with the metal's own weights, which is de Gironcoli's
+Eq. (B19) structure.
+
+*Measured with the guard lifted*, on the two-atom aluminium of `al2-metal.in`
+against the vendored `ph.x` on the *same* input — whose ground state this
+reproduces to 1e-9 Ry (−8.332103799 against −8.33210381):
+
+| mode | here | `ph.x` |
+|---|---|---|
+| acoustic | 155.74, 155.74, 155.74 | 1.1, 1.8, **1.9** |
+| optical (the doubling's folded pair, and the zone-centre mode) | 197.96, 197.96, 309.26 | 146.7, 146.7, 311.0 |
+
+in cm⁻¹, from a run that converges to `|ddv_scf|^2 = 8.7e-17` and returns a
+matrix symmetric to 4.3e-8. Nothing in the numbers says it is wrong; the
+reference and the sum rule do. `reference.out.ph-al2-metal` is committed, so the
+phase that lifts this refusal has its target already. (`ph.x` will not run this
+cell with the symmetry on — "FFT grid incompatible with symmetry" out of
+`phq_setup` — so the input is `nosym` on an **unshifted** grid, which is the
+combination a response can be computed on without symmetrising it anyway.)
+
+**Refused rather than approximated.** The **tetrahedron** occupations, whose
+`orthogonalize` branch reads `dfpt_tetra_beta` — a response weight per band
+*pair*, which the tetrahedron machinery here does not build; the smearing family
+is what is implemented, and the refusal says so by name. And
+`occupations='from_input'`, whose occupations are not a differentiable function
+of a Fermi level at all. **`epsilon_infinity` and the Born charges stay refused
+for a metal**, not because the solve cannot do it but because the quantities do
+not exist there — `pw.x` refuses `epsil` for a metal for the same reason. That
+distinction is now one flag on `require_a_sternheimer_regime` rather than three
+separate refusals.
+
+**No README row, and that is the honest answer rather than an oversight.** The
+table's rows are quantities someone would want to compute, and this phase
+produces none that is new: `epsilon_infinity` and `Z*` do not exist for a metal,
+and the dynamical matrix that would is refused above. What P24c is is the *layer
+under* a row — the metallic response every one of those quantities will stand
+on. It gets its row when the second derivative does.
+
 ### P25 — Phonons at `Gamma`: the dynamical matrix. ✅ DONE.
 
 `pypresso/response/phonon.py`, plus `Calculation.symmetrize_atom_displacement`,
