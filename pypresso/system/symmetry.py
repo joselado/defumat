@@ -370,7 +370,7 @@ def symmetrize_atom_displacement_density(
     alone: an operation rotates the direction *and* carries the perturbation to
     the atom it maps onto, so the average is
 
-        drho_{a,i}(r) <- (1/N) sum_S R_ij drho_{S(a),j}({S|f}^-1 r).
+        drho_{a,i}(r) <- (1/N) sum_S R_ij drho_{S^-1(a),j}({S|f}^-1 r).
 
     That is :func:`symmetrize_vector`'s atom permutation -- ``irt``, the same
     table the forces use -- on top of the polar-vector rotation the electric
@@ -378,6 +378,26 @@ def symmetrize_atom_displacement_density(
     displacement of one atom is not a symmetry-adapted object, and averaging its
     three directions while leaving it on its own atom is an average over a group
     the perturbation does not have.
+
+    **The atom index is the INVERSE permutation, and that is forced rather than
+    chosen.** ``{S|f}`` carries a displacement of atom ``a`` along ``i`` into a
+    displacement of atom ``irt[s,a]`` along ``R i``, so labelling the result by
+    the atom it lands *on* puts ``S^-1`` under the sum. Written with ``irt``
+    itself the average runs over a set that is not this object's group action,
+    and the result is **not even a projector** -- which is how it is testable
+    without a reference. The error is invisible wherever every operation's
+    permutation is an involution: one atom in the cell (identity), and diamond
+    silicon and two-atom aluminium, where atoms only ever swap in pairs. That
+    was every cell this was checked on until the **four-atom conventional cell
+    of fcc aluminium**, whose 48 operations contain 3-cycles on the three
+    face-centring atoms; there it is worth **0.33** on a field that is invariant
+    by construction (``PLAN.md`` P28).
+
+    :func:`symmetrize_atom_pair_tensor` is the companion and does **not** share
+    the direction: it carries two atom labels and no spatial argument, so
+    ``irt`` is right there. The two are checked separately, because the thing
+    that fixes the direction is whether an atom label travels with a spatial
+    one.
 
     On a crystal with one atom in the cell ``mapping`` is the identity and this
     reduces to :func:`symmetrize_vector_density` exactly. On diamond silicon it
@@ -390,13 +410,17 @@ def symmetrize_atom_displacement_density(
         rotations: ``(nsym, 3, 3)`` cartesian, polar (no ``det(R)`` sign).
         mapping: ``(nsym, nat)`` from :func:`atom_mapping`.
     """
-    mapping = jnp.asarray(mapping)
+    # ``argsort`` of a permutation is its inverse: ``inverse[s, irt[s,a]] = a``.
+    # Inverted here rather than at the call site so that callers keep passing
+    # :func:`atom_mapping`'s table unchanged and the reason sits by the
+    # derivation above.
+    inverse = jnp.asarray(np.argsort(np.asarray(mapping), axis=1))
     # (nsym, nat, 3, ngm) by broadcasting three index arrays against each other:
-    # ``gathered[s, a, j, g] = phase[s, g] * field_g[irt[s, a], j, S^T G_g]``.
+    # ``gathered[s, a, j, g] = phase[s, g] * field_g[irt^-1[s, a], j, S^T G_g]``.
     # The atom gather and the G-vector gather are independent, so they are one
     # indexing expression rather than two passes over the array.
     gathered = phases[:, None, None, :] * field_g[
-        mapping[:, :, None, None],
+        inverse[:, :, None, None],
         jnp.arange(field_g.shape[1])[None, None, :, None],
         permutations[:, None, None, :],
     ]
