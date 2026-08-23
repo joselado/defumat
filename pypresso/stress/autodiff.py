@@ -61,28 +61,32 @@ def _zero() -> jnp.ndarray:
 def _energy_gradient(calculation):
     """``grad`` of the strained energy, compiled once per calculation.
 
-    Cached on the calculation the way the force's gradient is, and for the same
-    reason -- but with one difference that matters: the strain is an *argument*,
-    so the cache survives :meth:`~pypresso.scf.driver.Calculation.at_positions`
-    (the atoms are rebuilt inside) and does **not** survive
-    :meth:`~pypresso.scf.driver.Calculation.at_strain`, which drops it, because
-    the closure holds the sphere and the FFT grid the gradient was compiled with.
+    Cached on the calculation the way the force's gradient is, and **keyed on
+    the calculation it closed over**. The strain is an argument, but the cell it
+    strains and the positions it moves are the captured calculation's, so an
+    entry inherited through :meth:`~pypresso.scf.driver.Calculation.at_strain`
+    or :meth:`~pypresso.scf.driver.Calculation.at_positions` -- both of which
+    copy the instance dict -- would answer at the geometry it was compiled at
+    and say nothing. Rebuilt when the entry does not belong to this calculation.
     """
     cached = calculation.__dict__.get("_strain_gradient")
-    if cached is None:
-        cached = jax.jit(jax.grad(
+    if cached is None or cached[0] is not calculation:
+        cached = (calculation, jax.jit(jax.grad(
             lambda eps, state: strained_energy(calculation, eps, state)
-        ))
+        )))
         calculation._strain_gradient = cached
-    return cached
+    return cached[1]
 
 
 def _term_gradients(calculation):
-    """``jacfwd`` of the term dict, compiled once per calculation."""
+    """``jacfwd`` of the term dict, compiled once per calculation.
+
+    Keyed on that calculation for the reason :func:`_energy_gradient` gives.
+    """
     cached = calculation.__dict__.get("_strain_term_gradients")
-    if cached is None:
-        cached = jax.jit(jax.jacfwd(
+    if cached is None or cached[0] is not calculation:
+        cached = (calculation, jax.jit(jax.jacfwd(
             lambda eps, state: strained_energy_terms(calculation, eps, state)
-        ))
+        )))
         calculation._strain_term_gradients = cached
-    return cached
+    return cached[1]

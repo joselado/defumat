@@ -565,6 +565,21 @@ def require_a_sternheimer_regime(calculation) -> None:
         )
     if calculation.spiral:
         raise NotImplementedError("the Sternheimer response of a spin spiral is not implemented")
+    if calculation.nspin == 2:
+        # ``SternheimerSolver`` takes *one* occupied-band count and slices
+        # ``psi[:, :, :nocc]`` across the spin axis with it. Both callers derive
+        # it as ``nelec / 2``, which is right for an unpolarized insulator and
+        # wrong for a magnetic one -- its channels are occupied to different
+        # depths, so ``P_c^+`` and ``alpha_pv`` would be built for the wrong
+        # manifold in at least one of them, with no shape error and no failed
+        # convergence to show for it.
+        raise NotImplementedError(
+            "the Sternheimer response is not implemented for nspin = 2: the "
+            "occupied-band count here is one number for both spin channels "
+            "(nelec/2), and a spin-polarized insulator's channels are occupied "
+            "to different depths, so the response would be solved for the wrong "
+            "bands in one of them without any sign of it"
+        )
 
 
 def make_sternheimer(calculation, result, threshold: float = THRESHOLD):

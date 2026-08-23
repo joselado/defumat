@@ -123,8 +123,11 @@ class BecsumSymmetry:
                 out.append(values)
                 continue
             # sources[s, n] is the index, within this species' atoms, of the
-            # atom that operation s sends atom n to. In every regime but the
-            # noncollinear magnetic one the spin channel is a spectator: an
+            # atom that operation s sends *onto* atom n -- the inverse
+            # permutation, which is what pairs the harmonic rotation of s with
+            # the atom QE's ``D(isym)^T becsum(irt(isym,ia)) D(isym)`` pairs it
+            # with, once that sum is relabelled S -> S^-1. In every regime but
+            # the noncollinear magnetic one the spin channel is a spectator: an
             # operation permutes atoms and rotates harmonics, and does neither
             # to the spin index -- QE's PAW_symmetrize loops over ``is`` outside
             # everything else.
@@ -224,13 +227,20 @@ def build_becsum_symmetry(
                 single[:, i, k] = rotations[l_i][:, lm_i - l_i**2, lm_k - l_k**2]
         operators.append(jnp.asarray(np.einsum("sik,sjl->sijkl", single, single)))
 
-        # Where each of this species' atoms is sent, as a position in the
-        # species' own atom list.
+        # Which of this species' atoms is sent *onto* each of them, as a
+        # position in the species' own atom list -- the inverse of ``irt``.
+        # ``PAW_symmetrize`` contracts ``D(isym)`` on the *source* channel of
+        # ``becsum(irt(isym,ia))``; this code contracts it on the target one, so
+        # the two are the same sum with S relabelled S^-1, and the atom has to
+        # be relabelled with it. They coincide whenever every orbit permutation
+        # is its own inverse, which is every cell validated so far, and come
+        # apart on the first three-fold orbit.
         position = {int(a): n for n, a in enumerate(atoms)}
-        sources_per_species.append(
-            jnp.asarray([[position[int(mapping[s, a])] for a in atoms]
-                         for s in range(symmetries.nsym)])
-        )
+        inverse = np.empty((symmetries.nsym, len(atoms)), dtype=int)
+        for s in range(symmetries.nsym):
+            for n, a in enumerate(atoms):
+                inverse[s, position[int(mapping[s, a])]] = n
+        sources_per_species.append(jnp.asarray(inverse))
 
     return BecsumSymmetry(
         operators=tuple(operators),

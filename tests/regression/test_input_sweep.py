@@ -61,6 +61,36 @@ EXPECTED_REFUSALS = {
     "lda+U_kind1_noncollin.in": "Liechtenstein",
     "lda+U_background_one_channel.in": "background",
     "lda+U_orbital_resolved.in": "orbital-resolved",
+    # Modes of ``calculation`` with no driver here (P15 has ``relax``; ``md``
+    # and the variable-cell pair do not exist). Before they were refused they
+    # were accepted and run as a plain SCF, so the run reported success for a
+    # calculation that never took place.
+    "md.in": "calculation = 'md'",
+    "md-pot_extrap1.in": "calculation = 'md'",
+    "md-pot_extrap2.in": "calculation = 'md'",
+    "md-wfc_extrap1.in": "calculation = 'md'",
+    "md-wfc_extrap2.in": "calculation = 'md'",
+    "md_restart_verlet.in": "calculation = 'md'",
+    "vc-md1.in": "calculation = 'vc-md'",
+    "vc-md2.in": "calculation = 'vc-md'",
+    "vc-relax1.in": "calculation = 'vc-relax'",
+    "vc-relax2.in": "calculation = 'vc-relax'",
+    "vc-relax3.in": "calculation = 'vc-relax'",
+    "vc-relax4.in": "calculation = 'vc-relax'",
+    "vc-relax5.in": "calculation = 'vc-relax'",
+    "vc-relax6.in": "calculation = 'vc-relax'",
+    "vc-relax-dos-1.in": "calculation = 'vc-relax'",
+    "vc-relax-scf-1.in": "calculation = 'vc-relax'",
+    "paw-vcbfgs.in": "calculation = 'vc-relax'",
+    "vdW-DF3-opt1.in": "calculation = 'vc-relax'",
+    "vdw-mbd-vc-relax.in": "calculation = 'vc-relax'",
+    # ``twochem`` in ``&control`` rather than ``&system``: the switch was looked
+    # for in one namelist and this input puts it in the other, so it was read
+    # and ignored.
+    "vc-relax_twochem.in": "twochem",
+    "scf_twochem.in": "twochem",
+    "nscf_twochem.in": "twochem",
+    "relax_twochem.in": "twochem",
     # The seven &control/&system switches that change the physics.
     "atom-occ1.in": "one_atom_occupations",
     "atom-occ2.in": "one_atom_occupations",

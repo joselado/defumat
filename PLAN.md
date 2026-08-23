@@ -79,6 +79,36 @@ on a concrete system (silicon by default), executed with outputs committed, endi
 comparison against the QE reference where one exists. A phase is finished when its
 notebook exists, not when its tests pass. See `notebooks/README.md`.
 
+**R10 — A derived `Calculation` owns what it inherits.** `at_positions`, `at_strain`,
+`at_kpoints`, `at_kcart` and `at_spiral_q` are `copy.copy` plus a rebuild of the parts that
+moved, so *everything not explicitly rebuilt or dropped is silently shared* — including
+attributes cached long after the method was written. Every such bug found so far has the
+same signature: no exception, no shape error, a plausible number computed for the wrong
+geometry. The audit that found them is mechanical and worth repeating whenever one of these
+methods gains a line — list every `self._x = ...` assignment on `Calculation` and, for each,
+say which derivations must drop it:
+
+* a **compiled kernel that closed over the calculation** must be dropped by every derivation,
+  because `jit` baked the captured arrays in as constants. `_analytic_terms` and the stress's
+  `_strain_gradient`/`_strain_term_gradients` were not — the latter because `at_strain`
+  popped `_energy_gradient`, which is the *force's* cache under a similar name, so the
+  docstring's claimed invariant had never been true. They are keyed on the calculation they
+  captured now, which is invalidation by identity rather than by remembering to add a pop.
+* a kernel that takes the moving quantity as an **argument** is the exception and must not be
+  keyed that way, or a relaxation recompiles at every step: `forces/autodiff.py` takes the
+  positions, so it crosses `at_positions` legitimately — but it still closes over the k-set,
+  which is why it is dropped by `at_kpoints`/`at_kcart`.
+* a **host-side table** cannot be rebuilt under tracing at all. `_tetrahedra` is the k-grid's
+  own object and was dropped by nothing; the magnetic field's `LocalRegions` are the atoms'
+  and were built once in `__init__`. The rule for those is the spiral sphere's (P21): rebuild
+  on a concrete move, freeze while differentiating, which is exact because the assignment is
+  piecewise constant in the geometry.
+
+The same reasoning applies to **refusals**: a guard in `io/` only protects inputs that came
+through `io/`. `spiral_q` is installed by `dataclasses.replace` in `at_spiral_q` and in
+`workflows/spiral`, and a `System` can simply be constructed, so the spiral-needs-`nosym`
+refusal had to move to `Calculation.__init__` where the symmetry decision is actually made.
+
 ---
 
 ## 2. Package layout
@@ -792,6 +822,23 @@ iteration**, the same band the norm-conserving path sits in (`PERFORMANCE.md`).
 *Not covered:* the pre-2.0 `q_with_l = F` augmentation format, and gamma-only storage with
 an augmentation charge. Both are refused with a clear error rather than approximated. (GGA
 was the third such gap and is now closed — P13.)
+
+*A later trap, and it hid behind every benchmark this project has.* `PAW_symmetrize`
+contracts the harmonic rotation on the **source** index of `becsum(irt(isym,ia))` —
+`becsym[ia] = sum_S D_S^T becsum[irt(S,ia)] D_S` — while `paw/symmetry.py` contracts it on
+the target one. The two are the same sum with `S` relabelled `S^-1`, so the atom index has
+to be relabelled with it: the gather needs `irt(S^-1, a)`, the atom sent **onto** `a`, not
+the one `a` is sent to. Pairing the rotation of `S` with the forward permutation is not a
+subtler average, it is not an average at all — the maps stop composing, so the result is
+not invariant and the operator is not idempotent. `hubbard/occupations.py` had the identical
+pairing against `new_ns.f90`. **Neither shows on any validated cell**, because a two-atom
+silicon, an eight-atom silicon, fcc nickel and antiferromagnetic FeO all have atom orbits on
+which every operation's permutation is its own inverse, and there the two orderings coincide
+exactly. Three atoms on the faces of a cube separate them — 16 of the 48 operations then
+cycle the orbit — and the error is O(1), not a tolerance. The test is that the group average
+is a **projector** (`tests/unit/test_symmetrisation_projector.py`): `P(P x) = P x` holds iff
+`{M_S}` is a representation, it needs no opinion about whose index convention is whose, and
+it fails by 1.9 on a result of size 1.4 when the pairing is wrong.
 
 **P13 — Gradient-corrected functionals. ✅ DONE.** `xc/` restructured into QE's four
 independently chosen slots — local exchange, local correlation, and a gradient correction
