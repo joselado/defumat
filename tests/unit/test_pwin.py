@@ -152,3 +152,61 @@ def test_cards_take_fortran_double_literals_too():
     assert inp.require_card("CELL_PARAMETERS").floats() == [
         [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]
     ]
+
+
+# -- physics an input can ask for that this code does not have -----------------
+
+_MINIMAL = """&control
+{control}
+/
+&system
+ ibrav=2, celldm(1)=10.2, nat=2, ntyp=1, ecutwfc=12.0
+ {system}
+/
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS alat
+ Si 0 0 0
+ Si 0.25 0.25 0.25
+K_POINTS gamma
+"""
+
+
+@pytest.mark.parametrize(
+    "control,system,expected",
+    [
+        ("", "tot_charge = 1.0", "tot_charge"),
+        ("tefield = .true.", "", "tefield"),
+        ("dipfield = .true.", "", "dipfield"),
+        ("lelfield = .true.", "", "lelfield"),
+        ("", "assume_isolated = 'martyna-tuckerman'", "assume_isolated"),
+        ("", "twochem = .true.", "twochem"),
+        ("", "one_atom_occupations = .true.", "one_atom_occupations"),
+    ],
+)
+def test_physics_this_code_does_not_have_is_refused_not_ignored(
+    control, system, expected
+):
+    """Listing every variable QE's own ``pw_*`` inputs set and grepping the
+    package for its name finds 61 of 99 named nowhere. Most are out-of-scope
+    features or performance knobs; these seven change the physics of a run that
+    is otherwise supported, so ignoring one runs a *different calculation* and
+    says nothing.
+
+    ``tot_charge`` is the sharpest: ``nelec`` is ``sum(Z)`` here, so
+    ``pw_cluster/cluster2.in``'s singly-charged cell would have run neutral.
+    """
+    from pypresso.system.builder import build_system
+
+    with pytest.raises(NotImplementedError, match=expected):
+        build_system(parse_pw_input(_MINIMAL.format(control=control, system=system)))
+
+
+def test_the_defaults_of_all_seven_are_silent():
+    """An ordinary input must not go anywhere near the refusal."""
+    from pypresso.system.builder import build_system
+
+    build_system(parse_pw_input(_MINIMAL.format(
+        control="tefield = .false., dipfield = .false.",
+        system="tot_charge = 0.0, assume_isolated = 'none'",
+    )))

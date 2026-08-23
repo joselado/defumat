@@ -397,6 +397,7 @@ def system_from_file(path, precision: Precision = DEFAULT_PRECISION) -> System:
 
 
 def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> System:
+    _refuse_unimplemented_switches(pwin)
     cell = _build_cell(pwin, precision)
     structure = _build_structure(pwin, cell, precision)
 
@@ -581,6 +582,72 @@ _OBSOLESCENT_VDW = {
     "ts_vdw": "ts",
     "mbd_vdw": "mbd",
 }
+
+
+#: Input switches that change the physics of a run this code otherwise supports,
+#: and that nothing here implements. Each entry is
+#: ``(namelist, variable, kind, what it would take)``; ``kind`` says what counts
+#: as "asked for", because QE's sentinels differ -- a logical is on when true, a
+#: charge when it is nonzero, ``assume_isolated`` when it is anything but
+#: ``'none'``.
+#:
+#: **They are refused rather than ignored**, which is the same argument
+#: :mod:`pypresso.vdw.registry` makes for the corrections it does not implement.
+#: An input that asks for a saw-tooth field and gets a run without one, or for a
+#: charged cell and gets a neutral one, is wrong by more than the numbers this
+#: project quotes agreement to, and there is nothing in the output that greps as
+#: an error. Found by listing every variable QE's own ``pw_*`` inputs set and
+#: grepping this package for its name: 61 of the 99 appear nowhere, and these six
+#: are the ones that are not simply out-of-scope features (EXX, MD, vc-relax,
+#: Berry phase) or performance knobs.
+_REFUSED_SWITCHES = (
+    ("system", "tot_charge", "nonzero",
+     "a charged cell: nelec is sum(Z) here, so the run would be neutral. QE's "
+     "setup.f90 subtracts tot_charge and the compensating jellium then rides on "
+     "the G = 0 terms every Coulomb sum already drops"),
+    ("control", "tefield", "logical",
+     "the saw-tooth external field (PW/src/add_efield.f90), which also needs "
+     "edir/eamp/emaxpos/eopreg and reduces the symmetry group to the operations "
+     "that preserve the field's direction"),
+    ("control", "dipfield", "logical",
+     "the dipole correction (PW/src/add_efield.f90), which rides on tefield"),
+    ("control", "lelfield", "logical",
+     "the finite electric field by Berry phase (PW/src/bp_c_phase.f90), which "
+     "makes the SCF a nested loop over nberrycyc"),
+    ("system", "assume_isolated", "not-none",
+     "the isolated-system corrections -- Makov-Payne, Martyna-Tuckerman, 2D and "
+     "ESM (Modules/martyna_tuckerman.f90, PW/src/esm.f90)"),
+    ("system", "twochem", "logical",
+     "two chemical potentials, one for the valence and one for the conduction "
+     "bands (PW/src/weights.f90's twochem branch)"),
+    ("system", "one_atom_occupations", "logical",
+     "per-orbital occupations of an isolated atom (PW/src/weights.f90)"),
+)
+
+
+def _refuse_unimplemented_switches(pwin: PwInput) -> None:
+    """Stop on an input asking for physics this code does not have.
+
+    See :data:`_REFUSED_SWITCHES`. Anything QE defaults to is silent, so an
+    ordinary input never reaches the raise.
+    """
+    for namelist, name, kind, explanation in _REFUSED_SWITCHES:
+        value = pwin.get(namelist, name)
+        if value is None:
+            continue
+        if kind == "logical":
+            asked = _logical(value)
+        elif kind == "nonzero":
+            asked = abs(float(value)) > 0.0
+        else:  # not-none
+            asked = str(value).strip().lower() not in ("none", "")
+        if asked:
+            raise NotImplementedError(
+                f"{pwin.path or 'input'}: {name} = {value!r} is not implemented "
+                f"-- {explanation}. It is refused rather than ignored, because a "
+                "run that quietly drops it is wrong by far more than the "
+                "agreement with pw.x this code is checked to"
+            )
 
 
 def _logical(value) -> bool:

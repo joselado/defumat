@@ -66,10 +66,16 @@ def _cached(input_path: Path, benchmark_path: Path):
 def _basis_and_reference(qe_testsuite, directory, name):
     if name in NEEDS_SPACE_GROUPS:
         pytest.skip("crystal_sg (Wyckoff) positions need space-group expansion (P6)")
-    return _cached(
-        qe_testsuite / directory / name,
-        qe_testsuite / directory / f"benchmark.out.git.inp={name}",
-    )
+    try:
+        return _cached(
+            qe_testsuite / directory / name,
+            qe_testsuite / directory / f"benchmark.out.git.inp={name}",
+        )
+    except NotImplementedError as refusal:
+        # As in ``test_geometry._build``: an input refused by name has no System
+        # to build a basis on, and skipping on the refusal keeps the sweep from
+        # needing an edit whenever one is added.
+        pytest.skip(str(refusal).split(" -- ")[0])
 
 
 @pytest.mark.parametrize(("directory", "name"), CASES)

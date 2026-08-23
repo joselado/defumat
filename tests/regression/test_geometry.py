@@ -54,7 +54,16 @@ NEEDS_SPACE_GROUPS = {"lattice-wyckoff-sio2.in"}
 def _build(path):
     if path.name in NEEDS_SPACE_GROUPS:
         pytest.skip("crystal_sg (Wyckoff) positions need space-group expansion (P6)")
-    return build_system(read_pw_input(path))
+    try:
+        return build_system(read_pw_input(path))
+    except NotImplementedError as refusal:
+        # An input asking for physics this code refuses by name -- a saw-tooth
+        # field, a charged cell, ``one_atom_occupations``. Its *cell* is still a
+        # perfectly good thing to check, but ``build_system`` is the boundary the
+        # refusal is made at, so there is no System to check it on. Skipping on
+        # the refusal rather than listing the names keeps this sweep from having
+        # to be edited every time one is added.
+        pytest.skip(str(refusal).split(" -- ")[0])
 
 
 @pytest.mark.parametrize(("directory", "name"), CASES)
