@@ -1,0 +1,51 @@
+! Bulk **rhombohedral** boron nitride (3R polytype, space group R3m) in its
+! hexagonal setting: three layers and six atoms per cell, each layer slid by
+! (1/3, 2/3) from the one below so that every boron sits over a nitrogen.
+!
+! Unlike the graphene and silicon cases this one is **polar**: R3m has no
+! inversion centre, and `pw.x` finds 6 operations (C_3v) rather than 12. That is
+! the reason the material is interesting here -- a non-centrosymmetric crystal
+! has piezoelectricity as well as electrostriction, and the two are entangled in
+! any measurement made by optimising under a finite field. The route P26 takes
+! is immune to that: `d(chi)/d(strain)` at zero field is the electrostrictive
+! response by construction (Tanner, Bousquet and Janolin, arXiv:2012.03841).
+!
+! `nosym`/`noinv` with an **unshifted** grid, for the reason every case in this
+! family carries: the object being differentiated has a field label and a strain
+! label at once, and no rank-3 average is written for it, so the k-set has to be
+! closed under the point group rather than reduced.
+!
+! The lattice constants are the measured ones (a = 2.504 A, c = 9.99 A), not a
+! relaxed geometry, so there is a residual stress; `vdw_corr` is on because the
+! interlayer binding is van der Waals and PBE alone does not have it.
+!
+! **This grid is not converged and the header of any result must say so.** 2x2x2
+! is the smallest closed grid there is; see PLAN.md P28 for the convergence
+! study and for what a comparison with a measurement actually needs.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 4, celldm(1) = 4.73175, celldm(3) = 3.98946, nat = 6, ntyp = 2,
+    ecutwfc = 80.0
+    occupations = 'fixed'
+    nosym = .true.
+    noinv = .true.
+    vdw_corr = 'grimme-d2'
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ B  10.811  B.pbe-hgh.UPF
+ N  14.007  N.pbe-hgh.UPF
+ATOMIC_POSITIONS (crystal)
+ B 0.000000000000 0.000000000000 0.000000000000
+ N 0.333333333333 0.666666666667 0.000000000000
+ B 0.333333333333 0.666666666667 0.333333333333
+ N 0.666666666667 0.333333333333 0.333333333333
+ B 0.666666666667 0.333333333333 0.666666666667
+ N 0.000000000000 0.000000000000 0.666666666667
+K_POINTS (automatic)
+ 2 2 2 0 0 0
