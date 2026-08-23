@@ -1,0 +1,44 @@
+! `h10-chain-lsda.in` in the **noncollinear** regime: the same ten-site chain
+! and the same antiferromagnetic order, but written as `nspin = 4` with the
+! moments lying in the xy plane (`angle1 = 90`) and antiparallel to each other
+! (`angle2 = 0` and `180`).
+!
+! Two things are being compared at once. Against QE, it is a `nspin_mag = 4`
+! run at ten sites -- the spinor Hamiltonian, the axial-vector symmetrisation
+! of the magnetization and the magnetic symmetry group. Against its own
+! collinear neighbour, it is the statement that a rotation of every moment by
+! the same angle costs nothing: the total energy of the two files must agree to
+! the convergence threshold, and QE gives that identity as well.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 4.16666666666667,
+    nat = 10, ntyp = 2,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10,
+    noncolin = .true.,
+    starting_magnetization(1) = 0.6, angle1(1) = 90.0, angle2(1) =   0.0,
+    starting_magnetization(2) = 0.6, angle1(2) = 90.0, angle2(2) = 180.0,
+    nbnd = 28
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ H1  1.008  H.pz-vbc.UPF
+ H2  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H1 0.0 0.0 0.0
+ H2 0.0 0.0 0.1
+ H1 0.0 0.0 0.2
+ H2 0.0 0.0 0.3
+ H1 0.0 0.0 0.4
+ H2 0.0 0.0 0.5
+ H1 0.0 0.0 0.6
+ H2 0.0 0.0 0.7
+ H1 0.0 0.0 0.8
+ H2 0.0 0.0 0.9
+K_POINTS {automatic}
+ 1 1 2 0 0 0

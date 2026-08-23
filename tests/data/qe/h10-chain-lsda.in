@@ -1,0 +1,47 @@
+! **Ten sites and two spin channels.** The hydrogen chain of `h-chain-afm.in`
+! with five times as many atoms: ten hydrogens 5 bohr apart along z, their
+! moments alternating, in a 12 bohr transverse box.
+!
+! The chain is stretched far past the H2 bond, so the antiferromagnetic state is
+! the ground state by a wide margin and both codes reach the same one from the
+! same seed -- which is what makes the *magnetization* comparable and not only
+! the energy. What ten sites add over two is that the cell is now a supercell of
+! the two-atom one and its symmetry group is found by the same search the
+! silicon case exposed.
+!
+! `nosym` is **not** set here, unlike the two-atom spiral family, because there
+! is no spiral: the collinear LSDA path symmetrises normally and the two codes'
+! wedges can be compared.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 4.16666666666667,
+    nat = 10, ntyp = 2,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10,
+    nspin = 2,
+    starting_magnetization(1) =  0.6,
+    starting_magnetization(2) = -0.6,
+    nbnd = 14
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ H1  1.008  H.pz-vbc.UPF
+ H2  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H1 0.0 0.0 0.0
+ H2 0.0 0.0 0.1
+ H1 0.0 0.0 0.2
+ H2 0.0 0.0 0.3
+ H1 0.0 0.0 0.4
+ H2 0.0 0.0 0.5
+ H1 0.0 0.0 0.6
+ H2 0.0 0.0 0.7
+ H1 0.0 0.0 0.8
+ H2 0.0 0.0 0.9
+K_POINTS {automatic}
+ 1 1 2 0 0 0

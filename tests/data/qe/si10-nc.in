@@ -1,0 +1,51 @@
+! **Ten sites.** Diamond silicon, five primitive cells stacked along `a3` --
+! 10 atoms, which is the size at which a comparison against QE stops measuring
+! fixed overheads and starts measuring the physics, and which no committed case
+! here reached (the largest were the 8-atom cubic cells).
+!
+! The cell is `(a1, a2, 5 a3)` on the standard fcc primitive vectors, so it is a
+! **supercell** in QE's sense -- `is_supercell` fires, fractional translations
+! are discarded, and what is left is the 6-operation C_3v the [111] axis
+! survives with. That group is the whole reason this case exists: the images of
+! `a3` under those rotations need coefficients of **five** in the supercell
+! basis (`s(2) = ((0,-1,0),(1,-1,0),(0,-5,1))` as `pw.x -v high` prints it), and
+! the lattice point group was searched over a hardcoded `range(-3, 4)` window,
+! which found 2 operations where QE finds 6. Both codes converge; the two
+! densities are symmetrised over different groups and the total energies part
+! company at **3.2e-6 Ry**. With the window replaced by the exact metric bound
+! (`|n_j| <= max_i |a_i| |b_j|`) they agree to **3e-9 Ry**, and the SCF is
+! twice as fast because it symmetrises over six operations instead of two.
+!
+! `ecutwfc` and the pseudopotential are `pw_scf/scf.in`'s, so what this case
+! adds over that one is the cell and nothing else. The 4x4x1 grid is the
+! primitive 4x4x5 folded: `A3` is five times longer, so its reciprocal vector is
+! a fifth as long.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 0, celldm(1) = 10.20, nat = 10, ntyp = 1,
+    ecutwfc = 12.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+CELL_PARAMETERS alat
+  -0.50  0.00  0.50
+   0.00  0.50  0.50
+  -2.50  2.50  0.00
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si    0.0000    0.0000    0.0000
+ Si    0.2500    0.2500    0.2500
+ Si   -0.5000    0.5000    0.0000
+ Si   -0.2500    0.7500    0.2500
+ Si   -1.0000    1.0000    0.0000
+ Si   -0.7500    1.2500    0.2500
+ Si   -1.5000    1.5000    0.0000
+ Si   -1.2500    1.7500    0.2500
+ Si   -2.0000    2.0000    0.0000
+ Si   -1.7500    2.2500    0.2500
+K_POINTS automatic
+ 4 4 1 0 0 0

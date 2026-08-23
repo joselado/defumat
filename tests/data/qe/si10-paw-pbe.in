@@ -1,0 +1,32 @@
+! The ten-site silicon supercell, **PAW and PBE** together: the gradient
+! correction on the plane-wave grid and on the PAW spheres at once, which is the
+! most machinery any single silicon case here puts in one run.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 0, celldm(1) = 10.20, nat = 10, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 160.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+CELL_PARAMETERS alat
+  -0.50  0.00  0.50
+   0.00  0.50  0.50
+  -2.50  2.50  0.00
+ATOMIC_SPECIES
+ Si  28.086  Si.pbe-n-kjpaw_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si    0.0000    0.0000    0.0000
+ Si    0.2500    0.2500    0.2500
+ Si   -0.5000    0.5000    0.0000
+ Si   -0.2500    0.7500    0.2500
+ Si   -1.0000    1.0000    0.0000
+ Si   -0.7500    1.2500    0.2500
+ Si   -1.5000    1.5000    0.0000
+ Si   -1.2500    1.7500    0.2500
+ Si   -2.0000    2.0000    0.0000
+ Si   -1.7500    2.2500    0.2500
+K_POINTS automatic
+ 4 4 1 0 0 0

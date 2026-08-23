@@ -145,8 +145,22 @@ def lattice_point_group(at: np.ndarray) -> list[np.ndarray]:
     metric = at @ at.T
 
     # Candidate images of each basis vector: lattice vectors of the same length.
-    ranges = np.arange(-3, 4)
-    i, j, k = np.meshgrid(ranges, ranges, ranges, indexing="ij")
+    #
+    # How far the search has to reach is a property of the cell and is bounded
+    # exactly rather than guessed. An image ``v`` of ``a_i`` has ``|v| = |a_i|``
+    # and integer coordinates ``n_j = v . b_j`` in the reciprocal basis
+    # (``a_i . b_j = delta_ij``, no 2 pi), so ``|n_j| <= max_i |a_i| |b_j|``.
+    # A fixed window instead of this is wrong the moment the cell is a
+    # **supercell**: five primitive cells stacked along one axis need
+    # coefficients of five, and a window of three silently drops the three-fold
+    # axis of a 10-atom silicon supercell -- pypresso found 2 operations where
+    # QE found 6, and the two densities were symmetrised differently enough to
+    # move the total energy by 3e-6 Ry. The cost of the honest bound is a
+    # slightly larger candidate list built once per run on the host.
+    reciprocal = np.linalg.inv(at).T
+    extent = np.linalg.norm(at, axis=1).max() * np.linalg.norm(reciprocal, axis=1)
+    ranges = [np.arange(-n, n + 1) for n in np.floor(extent + _TOLERANCE).astype(int)]
+    i, j, k = np.meshgrid(*ranges, indexing="ij")
     integers = np.stack([i.ravel(), j.ravel(), k.ravel()], axis=1)
     vectors = integers @ at
     lengths = np.linalg.norm(vectors, axis=1)
@@ -232,6 +246,8 @@ def find_symmetries(cell: Cell, structure: Structure) -> Symmetries:
             if symmorphic_only and np.any(
                 np.abs(candidate - np.rint(candidate)) > _TOLERANCE
             ):
+                continue
+            if not _crystallographic_translation(candidate):
                 continue
             if _maps_structure(rotated + candidate, positions, types):
                 rotations.append(rotation)
@@ -465,6 +481,47 @@ def symmetrize_tensor_density(
     return jnp.mean(
         jnp.einsum("sik,sjl,sklg->sijg", rotations, rotations, gathered), axis=0
     )
+
+
+#: Denominators QE accepts in a fractional translation (``symm_base.f90``,
+#: ``sgam_at``: "ft_ is in crystal axis and is a valid fractional translation
+#: only if ft_(i)=0 or ft_(i)=1/n, with n=2,3,4,6"). Those are the orders a
+#: screw axis or a glide plane can have in three dimensions.
+_CRYSTALLOGRAPHIC_DENOMINATORS = (2, 3, 4, 6)
+
+
+def _crystallographic_translation(candidate) -> bool:
+    """QE's filter on a fractional translation, transcribed.
+
+    **It rejects operations that really are symmetries**, and that is the point
+    of transcribing it rather than improving on it. The test is on the
+    *components* of the translation in crystal axes, so it depends on where the
+    origin sits: a mirror plane at ``z = 2/5`` of a five-layer cell is written
+    with ``ft = (0, 0, 4/5)`` when the origin is at a layer, and 5 is not one of
+    the orders a screw or a glide can have -- so QE drops it, keeping 6
+    operations of the 12 that map five-layer graphite onto itself.
+
+    Keeping the other six is not more correct, it is a **different
+    calculation**: the extra operations carry a translation with a denominator
+    of five, ``fft_fact`` then forces the FFT dimensions to be multiples of
+    five, and ``c10-graphite-d2`` gets a 20x20x**135** grid where ``pw.x``
+    chooses 20x20x**128**. The exchange-correlation energy is evaluated
+    pointwise on that grid, so the two totals differ by **1.7e-4 Ry** -- an
+    order of magnitude more than any tolerance here -- and neither code is
+    wrong. The rule is `CLAUDE.md`'s: what QE computes is the target, and a
+    divergence in the symmetry group is a divergence in everything downstream
+    of it.
+    """
+    for component in np.asarray(candidate):
+        residue = component - np.rint(component)
+        if abs(residue) < _TOLERANCE:
+            continue
+        order = int(np.rint(1.0 / abs(residue)))
+        if abs(1.0 / abs(residue) - order) > _TOLERANCE:
+            return False
+        if order not in _CRYSTALLOGRAPHIC_DENOMINATORS:
+            return False
+    return True
 
 
 def _candidate_translations(rotated, positions, types):
