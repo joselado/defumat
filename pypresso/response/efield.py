@@ -38,25 +38,22 @@ that ``G = 0`` term (:func:`pypresso.scf.potential.hartree`). The exchange-
 correlation kernel that QE tabulates in ``setup_dmuxc`` is the second derivative
 of the energy this code writes down once.
 
-**The Born charges come from the same two solutions, and the bare phonon
-perturbation is not transcribed either.** ``zstar_eu.f90`` pairs the
-self-consistent ``dpsi/dE`` with the *bare* displacement perturbation
-``dV_bare/du |psi>``, which ``dvqpsi_us.f90`` builds term by term from
-``dvloc/dtau`` and the projectors' derivatives. Here it is one ``jvp`` through
-:meth:`~pypresso.scf.driver.Calculation.at_positions` at frozen ``v_scf`` --
-the same method the force differentiates -- because ``at_positions`` already
-moves the local potential and ``vkb`` traceably, and for a norm-conserving
-dataset without a core charge that *is* the bare term.
-
-    Z*_(a)ij = Z_val delta_ij - 2 sum_kn w_kn Re <dpsi_i | dV_bare/du_(a)j psi_n>
-
-Silicon's is a difference of large numbers -- 4 against an electronic part near
-4.076 -- and by symmetry the answer would be zero in a converged calculation, so
-what ``ph.x``'s **-0.07571** measures is the residue. That makes it a sharper
-check of the machinery than the dielectric constant is. **It is norm-conserving
-only**, and refused by name otherwise: ``zstar_eu_us.f90`` is five further
-stages, and without them the expression above is wrong in sign as well as size
-(:func:`_require_born_charges`).
+**The Born charges come from the same two solutions**, and they are a *mixed
+second derivative* rather than a formula: ``Z* = dF/dE`` is one ``jvp`` of the
+force along the field's response, which is :mod:`pypresso.response.born` and is
+P25's machinery with a different tangent. What that buys is **ultrasoft**
+datasets, where ``zstar_eu_us.f90`` adds five stages on top of ``zstar_eu.f90``
+and the norm-conserving expression is wrong in sign as well as size (+0.1625
+against ``ph.x``'s -0.07945). Four of the five are terms of the same
+derivative once the mixed state stays a function of the positions and the
+constraint's multipliers get a matrix tangent; the fifth,
+``add_for_charges``, is transcribed because it contains the position operator's
+occupied-occupied block, which is finite only in the combination it appears in.
+Against the vendored ``ph.x``: **-0.075715** norm-conserving (every digit of its
+-0.07571) and **-0.079442** ultrasoft (8e-6 from its -0.07945). PAW is refused by
+name -- :func:`~pypresso.response.born.require_born_charges` carries the
+measurement. ``zstar_eu.f90`` itself is transcribed beside it as the cross-check
+(:func:`born_charges_zstar_eu`), and the two agree to 1.3e-14 where both apply.
 
 The tensor itself is ``dielec.f90``:
 
@@ -117,6 +114,7 @@ import numpy as np
 
 from pypresso.batching import map_k
 from pypresso.pseudo.augmentation import augmentation_dipole
+from pypresso.response.born import born_effective_charges, require_born_charges
 from pypresso.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
 from pypresso.response.sternheimer import (
     SternheimerSolver,
@@ -228,6 +226,11 @@ def dielectric_tensor(
         eigenvalues = eigenvalues[None]
     require_a_symmetrisable_response(calculation)
     require_a_sternheimer_regime(calculation)
+    if born_charges:
+        # Checked first of all: the refusal is a statement about the dataset, so
+        # it should not cost a whole self-consistent response -- nor a converged
+        # ``becsum`` the caller only needs for the quantity being refused.
+        require_born_charges(calculation)
     if calculation.is_paw and not becsum:
         # The same rule ``VelocityOperator`` enforces for ``ddd_paw``: PAW's
         # one-centre coefficients are built from ``becsum``, and a Hamiltonian
@@ -239,11 +242,11 @@ def dielectric_tensor(
             "mixed state, not a function of the density, and the one-centre "
             "potential is built from them"
         )
-    if born_charges:
-        # Checked here rather than where they are computed: the refusal should
-        # not cost a whole self-consistent response first.
-        _require_born_charges(calculation)
-
+    # After the refusals: they are checked on the *calculation* and must not
+    # need a state, so that a caller can ask "is this supported?" cheaply.
+    wavefunctions = jnp.asarray(wavefunctions)
+    if wavefunctions.ndim == 3:
+        wavefunctions = wavefunctions[None]
     weights, _ = calculation.occupations(eigenvalues)
     nocc = int(round(calculation.nelec / 2))
     potential = calculation.potential(density)
@@ -265,7 +268,7 @@ def dielectric_tensor(
     occupied = solver.psi
     occupied_eigenvalues = solver.eigenvalues
     dipole = _augmentation_dipole(calculation)
-    bare = []
+    bare, commutators, projector_velocities = [], [], []
     for axis, direction in enumerate(np.eye(3)):
         # ``[H - eps S, r_a] = -i (dH/dk_a - eps dS/dk_a)``, both tangents from
         # one ``jvp`` -- the projector rebuild they share is the whole cost.
@@ -274,9 +277,16 @@ def dielectric_tensor(
             derivative - occupied_eigenvalues[..., None] * overlap
         )
         position = _solve_stored(solver, commutator)
+        # ``iucom``: ``P_c r|psi>`` *before* ``S`` and before the augmentation
+        # dipole. QE stores it separately because the Born charges need it
+        # (``add_for_charges``), and so does
+        # :func:`pypresso.response.born.constraint_position_term`.
+        commutators.append(position)
         if dipole is not None:
+            derivative = velocity.projectors(direction)
+            projector_velocities.append(derivative)
             position = _ultrasoft_position(
-                solver, velocity, position, direction, dipole[axis]
+                solver, velocity, position, direction, dipole[axis], derivative
             )
         bare.append(position)
 
@@ -357,15 +367,30 @@ def dielectric_tensor(
             break
 
     epsilon = _assemble(calculation, solver, bare, dpsi)
-    charges = (
-        _born_charges(calculation, solver, potential.v_scf, dpsi)
-        if born_charges else None
-    )
+    charges = None
+    if born_charges:
+        # ``dLambda`` is a matrix element of the *same* perturbation the last
+        # solve was driven by, rebuilt here at the converged ``dV_scf``.
+        perturbations = [
+            _bare_plus_induced(
+                solver, bare[axis], dvscf[axis],
+                None if onecentre is None else onecentre[axis], True,
+            )
+            for axis in range(3)
+        ]
+        charges = born_effective_charges(
+            calculation, solver, jnp.asarray(wavefunctions), eigenvalues,
+            jnp.asarray(weights), jnp.asarray(density), becsum, dpsi,
+            perturbations, commutators,
+            projector_velocities=projector_velocities or None,
+        )
     internals = None
     if keep_internals:
         internals = {
-            "solver": solver, "bare": bare, "dpsi": dpsi,
+            "calculation": calculation, "solver": solver, "bare": bare, "dpsi": dpsi,
             "dvscf": dvscf, "v_scf": potential.v_scf,
+            "onecentre": onecentre, "weights": weights, "nocc": nocc,
+            "commutators": commutators,
         }
     return DielectricTensor(
         epsilon=epsilon,
@@ -422,7 +447,8 @@ def _augmentation_dipole(calculation):
     ])
 
 
-def _ultrasoft_position(solver, velocity, position, direction, dipole):
+def _ultrasoft_position(solver, velocity, position, direction, dipole,
+                        derivative=None):
     """``dvpsi_e``'s ultrasoft tail: ``S P_c r|psi>`` plus the augmentation dipole.
 
     ``P_c r|psi>`` is what the linear solve above returns, and for an ultrasoft
@@ -443,7 +469,8 @@ def _ultrasoft_position(solver, velocity, position, direction, dipole):
     """
     calculation = solver.calculation
     batch = calculation.k_batch
-    derivative = velocity.projectors(direction)   # (nk, npwx, nkb)
+    if derivative is None:
+        derivative = velocity.projectors(direction)   # (nk, npwx, nkb)
     vkb = calculation.projectors.vkb
     dipole = dipole.astype(vkb.dtype)
     blocks = []
@@ -509,8 +536,21 @@ def _assemble(calculation, solver, bare, dpsi) -> np.ndarray:
     )
 
 
-def _born_charges(calculation, solver, v_scf, dpsi) -> np.ndarray:
-    """``zstar_eu.f90``: the self-consistent field response against the bare one.
+def born_charges_zstar_eu(calculation, solver, v_scf, dpsi) -> np.ndarray:
+    """``zstar_eu.f90`` transcribed: the cross-check on the mixed derivative.
+
+    **This is not how the Born charges are computed here.** They come from
+    differentiating the force along the field's response
+    (:mod:`pypresso.response.born`), and this is the Fortran expression put
+    beside it, in the project's usual arrangement -- the two share the field
+    response ``dpsi`` and nothing else, and they agree to **1.3e-14** on
+    norm-conserving silicon.
+
+    It is **norm-conserving only** and is not guarded, because nothing calls it
+    but the test: on ultrasoft silicon it gives +0.1625 where ``ph.x`` gives
+    -0.07945, wrong in sign as well as size, which is the five stages
+    ``zstar_eu_us.f90`` adds and :mod:`pypresso.response.born` gets from one more
+    tangent.
 
     The bare perturbation is ``dV_bare/du |psi>`` at frozen ``v_scf``, which is
     one ``jvp`` through :meth:`~pypresso.scf.driver.Calculation.at_positions`
@@ -583,34 +623,6 @@ def _symmetrize_becsum_response(calculation, per_axis):
         tuple(None if values is None else values[axis] for values in symmetrised)
         for axis in range(3)
     ]
-
-
-def _require_born_charges(calculation) -> None:
-    """Born charges are norm-conserving only, and the gap is large enough to see.
-
-    ``zstar_eu.f90`` is the whole story for a norm-conserving dataset, and for an
-    ultrasoft one it is not: ``zstar_eu_us.f90`` adds five stages on top, needing
-    the density response to an *ionic* displacement (``iudrhous``), the pre-``S``
-    position operator (``iucom``), ``dvkb3``, ``psidspsi`` and the ``int1``/
-    ``int2`` integrals. None of that is here.
-
-    It is refused rather than returned because the error is not subtle: on the
-    ultrasoft silicon of ``si-epsilon-us.in`` the norm-conserving expression
-    gives **+0.1625** where ``ph.x`` gives **-0.07945**, so it is wrong in sign
-    as well as size. The dielectric constant on the same run is right to 5e-5 --
-    the two quantities share the field response and nothing else.
-    """
-    if calculation.is_ultrasoft:
-        raise NotImplementedError(
-            "Born effective charges with an ultrasoft or PAW pseudopotential are "
-            "not implemented: zstar_eu_us.f90's five extra stages (the ionic "
-            "displacement's own density response, the pre-S position operator, "
-            "dvkb3, psidspsi, int1/int2) are missing, and without them the "
-            "norm-conserving expression is wrong in sign as well as size "
-            "(+0.1625 against ph.x's -0.07945 on si-epsilon-us.in). Pass "
-            "born_charges=False for the dielectric tensor alone, which *is* "
-            "right for these datasets"
-        )
 
 
 def require_a_symmetrisable_response(calculation) -> None:

@@ -59,14 +59,38 @@ also *scale* better -- a projected CG over the occupied bands against a Davidson
 subspace of ``nvecx = 4 nbnd`` -- is an expectation rather than a measurement: it
 has not been timed on a cell where the two would separate.
 
+**Metals are in** (``PLAN.md`` P24c), and what they change is the projector
+rather than the solve. For an insulator ``P_c^+`` is a projector: a band is
+occupied or it is not. For a metal there is no such partition, and
+``orthogonalize``'s smearing branch replaces the sharp step with a pair of
+weights -- one on the right-hand side and one, ``wwg``, on each overlap, built
+from the *difference* of two occupations
+(:meth:`SternheimerSolver._smeared_projection`). Three consequences run through
+this module:
+
+* **every band is kept**, because ``nbnd_eff = nbnd`` there. QE truncates the
+  solve at ``setup_nbnd_occ``'s count; here the block stays whole at a static
+  shape and the bands past it carry an occupation of zero.
+* **``alpha_pv`` is measured to where the smearing dies**, ``ef + xmax
+  degauss``, since the occupied manifold has no top (``setup_alpha_pv``).
+* **the density response is accumulated with ``wk``, not ``wg``.** The
+  occupation is applied to ``dpsi`` itself, so weighting the density by it again
+  would count it twice. The two coincide for an insulator, which is why nothing
+  before this had to tell them apart -- and why getting it wrong would have been
+  invisible on every case in the suite.
+
+What a metal still needs from its *caller* is ``ef_shift``: a perturbation at
+``q = 0`` changes the number of states below the Fermi level, so the level moves
+and the response density has to be corrected by the local density of states at
+it. That is :func:`fermi_level_shift`, and it belongs to the self-consistent
+loop rather than to the solve.
+
 **Refused rather than approximated**, each by name:
 
-* **metals.** ``orthogonalize``'s smearing branch replaces the sharp projector
-  with the occupation-difference weights ``wwg``, and the Fermi level itself
-  shifts (``ef_shift``). The insulator projector applied to a metal is silently
-  wrong, so a smeared run raises here. (The Fermi-level term itself already
-  exists -- P22 wrote ``bisect_fermi``'s ``custom_jvp`` -- so this is the
-  projector's gap, not the level's.)
+* **the tetrahedron occupations**, whose ``orthogonalize`` branch reads
+  ``dfpt_tetra_beta`` -- a response weight per band *pair*, which the
+  tetrahedron machinery here does not build. The smearing family is what is
+  implemented.
 * **noncollinear magnetism and spin-orbit coupling**, whose ``incdrhoscf_nc``
   and ``set_int3_nc`` are a second implementation rather than a spin axis on
   this one.
@@ -95,15 +119,18 @@ from pypresso.basis.fft import g_to_r
 from pypresso.basis.interpolate import to_dense, to_smooth
 from pypresso.batching import map_k
 from pypresso.scf.density import becsum as becsum_of, sum_band
+from pypresso.scf.occupations import smearing_order, w0gauss, wgauss
 from pypresso.scf.potential import as_potential_components
 
 __all__ = [
+    "Smearing",
     "SternheimerSolver",
     "SternheimerResult",
     "local_perturbation",
     "make_sternheimer",
     "paw_response",
     "require_a_sternheimer_regime",
+    "smearing_of",
 ]
 
 #: ``cgsolve_all``'s own ceiling on the CG iterations.
@@ -114,6 +141,37 @@ MAX_ITERATIONS = 400
 #: ``thresh = min(0.1 sqrt(dr2), 1e-2)``); a solver used on its own, as
 #: ``chi_0``, wants it tight from the start.
 THRESHOLD = 1.0e-11
+
+
+#: ``setup_nbnd_occ``/``setup_alpha_pv``'s cutoff on the smeared occupation: a
+#: band is "occupied" for the response if ``eps < ef + xmax degauss``, where
+#: ``xmax`` is where the smearing function has fallen to ``small``.
+_SMALL = 6.9626525973374e-5
+
+
+@dataclass(frozen=True)
+class Smearing:
+    """The ground state's smearing, which the metal branch of the projector needs.
+
+    ``ef`` and ``degauss`` in Ry, ``ngauss`` QE's integer smearing order (the
+    same one :func:`pypresso.scf.occupations.wgauss` takes). Present on a
+    :class:`SternheimerSolver` exactly when the run is a metal; ``None`` selects
+    ``orthogonalize``'s insulator branch, where the projector is sharp.
+    """
+
+    ef: float
+    degauss: float
+    ngauss: int
+
+    @property
+    def cutoff(self) -> float:
+        """``ef + xmax degauss`` -- ``setup_nbnd_occ``'s ``target``."""
+        if self.ngauss == -99:
+            factor = 1.0 / np.sqrt(_SMALL)
+            xmax = 2.0 * np.log(0.5 * (factor + np.sqrt(factor * factor - 4.0)))
+        else:
+            xmax = np.sqrt(-np.log(np.sqrt(np.pi) * _SMALL))
+        return self.ef + xmax * self.degauss
 
 
 @dataclass
@@ -152,6 +210,8 @@ class SternheimerSolver:
         max_iterations: int = MAX_ITERATIONS,
         v_scf=None,
         becsum=(),
+        smearing: Smearing | None = None,
+        kpoint_weights=None,
     ):
         self.calculation = calculation
         self.hamiltonians = tuple(hamiltonians)
@@ -166,13 +226,44 @@ class SternheimerSolver:
         # Only the occupied bands are solved for. The empty ones are what the
         # sum-over-states form would need and what this form exists to avoid;
         # they are kept out of ``psi`` here so that no shape carries them.
-        self.psi = jnp.asarray(psi)[:, :, :nocc]
-        self.eigenvalues = jnp.asarray(eigenvalues)[:, :, :nocc]
-        self.weights = jnp.asarray(weights)[:, :, :nocc]
-        self.nocc = int(nocc)
+        #
+        # **A metal keeps all of them**, because "occupied" is not a count there:
+        # ``orthogonalize``'s smearing branch sums over every band (its
+        # ``nbnd_eff = nbnd``) and the occupation rides inside ``dpsi`` as a
+        # weight rather than deciding which bands exist. QE truncates the *solve*
+        # at ``setup_nbnd_occ``'s ``nbnd_occ``; here the block stays whole and
+        # the bands past that point are multiplied by an occupation of zero,
+        # which is the same answer at a static shape (rule R2) and costs the
+        # empty bands' share of the CG.
+        self.smearing = smearing
+        keep = psi.shape[2] if smearing is not None else nocc
+        self.psi = jnp.asarray(psi)[:, :, :keep]
+        self.eigenvalues = jnp.asarray(eigenvalues)[:, :, :keep]
+        self.weights = jnp.asarray(weights)[:, :, :keep]
+        self.nocc = int(keep)
         self.threshold = float(threshold)
         self.max_iterations = int(max_iterations)
-        self.alpha_pv = _alpha_pv(np.asarray(eigenvalues), nocc)
+        self.alpha_pv = _alpha_pv(np.asarray(eigenvalues), nocc, smearing)
+        # ``nbnd_occ``: which bands the ``alpha_pv`` projector runs over, and
+        # which ones ``orthogonalize``'s ``jbnd <= nbnd_occ(ikq)`` admits into
+        # the level-shift correction. A boolean mask rather than a per-k count,
+        # for the same reason ``cegterg``'s repacking became one.
+        if smearing is None:
+            self.projector_mask = jnp.ones(self.eigenvalues.shape, dtype=bool)
+        else:
+            self.projector_mask = self.eigenvalues < smearing.cutoff
+        # **The weight the density response is built with is not ``wg``.** In the
+        # smearing branch the occupation is applied to ``dpsi`` itself
+        # (``dvpsi = wg1 dvpsi``), so accumulating ``drho`` with ``wg`` on top
+        # would count it twice; ``incdrhoscf`` is called with ``wk`` and this is
+        # that ``wk``. For an insulator the two coincide -- a filled band has
+        # ``wg = wk`` -- which is why nothing before this had to tell them apart.
+        if smearing is None or kpoint_weights is None:
+            self.density_weights = self.weights
+        else:
+            self.density_weights = jnp.broadcast_to(
+                jnp.asarray(kpoint_weights)[None, :, None], self.weights.shape
+            )
 
     @property
     def nspin(self) -> int:
@@ -193,22 +284,77 @@ class SternheimerSolver:
         # The level shift. ``S P_occ S``: project the *overlapped* vector onto
         # the occupied manifold, then apply ``S`` again -- which for a
         # norm-conserving dataset is the identity twice and the plain projector.
+        # ``ch_psi_all`` runs this sum over ``nbnd_occ``, which for a metal is
+        # not every band in the block -- hence the mask.
         overlaps = jnp.einsum("mg,ng->mn", jnp.conj(occupied), s)
+        overlaps = jnp.where(self.projector_mask[spin][ik][:, None], overlaps, 0.0)
         lifted = jnp.einsum("mn,mg->ng", overlaps, occupied)
         return out + self.alpha_pv * hamiltonian.apply_s(lifted, ik)
 
     def project(self, rhs, ik, spin):
         """``-P_c^+ rhs`` where ``P_c^+ = 1 - S |psi_occ><psi_occ|``.
 
-        ``orthogonalize.f90``'s insulator branch, **including its sign**: the
-        routine returns minus the projected vector, because the right-hand side
-        of the Sternheimer equation is ``-P_c^+ dV|psi>``.
+        ``orthogonalize.f90``, **including its sign**: the routine returns minus
+        the projected vector, because the right-hand side of the Sternheimer
+        equation is ``-P_c^+ dV|psi>``. The insulator branch is the sharp
+        projector above; :meth:`_smeared_projection` is the other one.
         """
         hamiltonian = self.hamiltonians[spin]
         occupied = self.psi[spin][ik]
         overlaps = jnp.einsum("mg,ng->mn", jnp.conj(occupied), rhs)
         s_occupied = hamiltonian.apply_s(occupied, ik)
+        if self.smearing is not None:
+            rhs, overlaps = self._smeared_projection(rhs, overlaps, ik, spin)
         return -(rhs - jnp.einsum("mn,mg->ng", overlaps, s_occupied))
+
+    def _smeared_projection(self, rhs, overlaps, ik, spin):
+        """``orthogonalize``'s metal branch: the sharp step becomes ``wwg``.
+
+        For an insulator ``P_c^+`` is a projector -- a band is in the occupied
+        manifold or it is not. For a metal there is no such partition, and what
+        replaces it is a pair of *weights* (``PRB 51, 6773 (1995)``, Eq. 75):
+
+            dvpsi_i  <-  wg1_i dvpsi_i
+            ps_(j,i) <-  wwg_(j,i) <psi_j|dvpsi_i>
+
+        with ``wg1_i = theta(ef - eps_i)`` the smeared occupation of the band
+        being solved for, and
+
+            wwg_(j,i) = wg1_i (1 - t) + wg1_j t
+                        + alpha_pv t (wg1_j - wg1_i) / (eps_j - eps_i)
+
+        where ``t = theta((eps_j - eps_i)/degauss)`` is a *second* smeared step,
+        this one of the energy difference. Two things about that expression are
+        worth keeping in view. The ``0/0`` at a degeneracy is taken to its limit
+        ``-alpha_pv t w0gauss_i`` rather than guarded, which matters because a
+        crystal is degenerate everywhere by symmetry (rule D4) -- and the branch
+        is written with :func:`jnp.where` on a *safe* denominator, so the unused
+        side never produces a NaN that would poison the gradient. And the
+        ``alpha_pv`` piece is admitted only for ``j`` inside ``nbnd_occ``, which
+        is :attr:`projector_mask`; without that cut the empty bands contribute a
+        term QE does not have.
+
+        Everything here reduces to the insulator branch when the smearing is
+        narrow: ``wg1`` becomes a step, ``t`` becomes a step, and ``wwg`` becomes
+        the sharp ``1`` on the occupied block that :meth:`project` applies above.
+        """
+        smearing = self.smearing
+        eps = self.eigenvalues[spin][ik]
+        degauss, ngauss = smearing.degauss, smearing.ngauss
+        occupation = wgauss((smearing.ef - eps) / degauss, ngauss)      # wg1
+        delta = w0gauss((smearing.ef - eps) / degauss, ngauss) / degauss
+
+        difference = eps[:, None] - eps[None, :]                        # eps_j - eps_i
+        step = wgauss(difference / degauss, 0)                          # theta
+        mixed = occupation[None, :] * (1.0 - step) + occupation[:, None] * step
+
+        close = jnp.abs(difference) <= 1.0e-5
+        safe = jnp.where(close, 1.0, difference)
+        ratio = (occupation[:, None] - occupation[None, :]) / safe
+        shift = self.alpha_pv * step * jnp.where(close, -delta[None, :], ratio)
+        weights = mixed + jnp.where(self.projector_mask[spin][ik][:, None], shift, 0.0)
+
+        return occupation[:, None] * rhs, weights * overlaps
 
     def _preconditioner(self, ik, spin):
         """``h_prec``: ``1 / max(1, |k+G|^2 / eprec_n)``, ``eprec = 1.35 <T>``."""
@@ -337,7 +483,7 @@ class SternheimerSolver:
         smooth, dense = calculation.basis.smooth, calculation.basis.dense
         becsum_ = self._raw_becsum(states)
         rho = sum_band(
-            states, calculation.fft_index, smooth.grid, self.weights,
+            states, calculation.fft_index, smooth.grid, self.density_weights,
             calculation.system.cell, calculation.k_batch,
         )
         return calculation.augmented(to_dense(rho, smooth, dense), becsum_)
@@ -399,7 +545,7 @@ class SternheimerSolver:
         if not calculation.is_ultrasoft:
             return ()
         return becsum_of(
-            states, calculation.projectors.vkb, self.weights,
+            states, calculation.projectors.vkb, self.density_weights,
             calculation.species_channels, calculation.k_batch,
         )
 
@@ -525,21 +671,36 @@ def paw_response(calculation, dbecsum, becsum_):
     return ddd
 
 
-def _alpha_pv(eigenvalues, nocc: int) -> float:
-    """``setup_alpha_pv``'s insulator value: ``2 (eps_max^occ - eps_min)``."""
+def _alpha_pv(eigenvalues, nocc: int, smearing=None) -> float:
+    """``setup_alpha_pv``: the level shift that makes the operator positive definite.
+
+    Insulator: ``2 (eps_max^occ - eps_min)``. **Metal**: ``emax - emin`` with
+    ``emax = ef + xmax degauss``, the same cutoff ``setup_nbnd_occ`` uses -- the
+    occupied manifold has no top there, so the shift is measured to where the
+    smearing function has died instead. Both are floored at 1e-2, as QE floors
+    them.
+    """
+    if smearing is not None:
+        emin = float(np.min(eigenvalues))
+        return max(smearing.cutoff - emin, 1.0e-2)
     emin = float(np.min(eigenvalues))
     emax = float(np.max(eigenvalues[..., :nocc]))
     return max(2.0 * (emax - emin), 1.0e-2)
 
 
-def require_a_sternheimer_regime(calculation) -> None:
+def require_a_sternheimer_regime(calculation, metals: bool = False) -> None:
     """Refuse, by name, every regime whose response needs machinery not here.
 
-    A separate function because two entry points need the same list -- this
-    module's :func:`make_sternheimer` and the electric field's
-    :func:`~pypresso.response.efield.dielectric_tensor` -- and a refusal stated
-    twice is a refusal that will eventually be stated differently. See the
-    module docstring for what each case would need.
+    A separate function because several entry points need the same list -- this
+    module's :func:`make_sternheimer`, the electric field's
+    :func:`~pypresso.response.efield.dielectric_tensor`, the phonons' -- and a
+    refusal stated twice is a refusal that will eventually be stated
+    differently. See the module docstring for what each case would need.
+
+    ``metals = True`` says the *caller's* quantity exists for a metal. The solve
+    does: ``orthogonalize``'s smearing branch is implemented
+    (:meth:`SternheimerSolver._smeared_projection`). ``epsilon_infinity`` and
+    the Born charges do not, and are refused here rather than in three places.
     """
     system = calculation.system
     if calculation.noncolin:
@@ -554,14 +715,32 @@ def require_a_sternheimer_regime(calculation) -> None:
             "induced potential carries a dns of its own (adddvhubscf.f90), "
             "which is not a function of drho"
         )
-    if system.occupations != "fixed":
+    scheme = system.occupations
+    if scheme.startswith("tetrahedra"):
+        # ``orthogonalize``'s other metallic branch reads ``dfpt_tetra_beta``,
+        # a per-pair weight the tetrahedron machinery builds for the response
+        # and which nothing here computes. The smearing family is implemented;
+        # this one is refused rather than silently run with a smeared weight.
         raise NotImplementedError(
-            f"occupations={system.occupations!r}: the Sternheimer response here "
-            "is the insulator one. A metal needs orthogonalize's smearing "
-            "branch, where the sharp projector becomes the occupation-difference "
-            "weights, and the Fermi level shifts with the perturbation "
-            "(ef_shift). Applying the insulator projector to a metal is "
-            "silently wrong, so it is refused"
+            f"occupations={scheme!r}: the Sternheimer response of a metal is "
+            "implemented for the smearing family only. The tetrahedron branch "
+            "needs dfpt_tetra_beta -- a response weight per band *pair*, which "
+            "the tetrahedron occupations here do not build. Re-run the ground "
+            "state with a smearing"
+        )
+    if scheme == "from_input":
+        raise NotImplementedError(
+            "occupations='from_input': the response projector needs occupations "
+            "that are a differentiable function of a Fermi level, and an "
+            "OCCUPATIONS card is neither"
+        )
+    if scheme != "fixed" and not metals:
+        raise NotImplementedError(
+            f"occupations={scheme!r}: this response is refused for a metal. "
+            "The Sternheimer solve itself handles one (orthogonalize's smearing "
+            "branch is implemented), but the quantity being asked for is not "
+            "defined there -- a metal has no epsilon_infinity and no Born "
+            "effective charge, which is why pw.x refuses epsil for one too"
         )
     if calculation.spiral:
         raise NotImplementedError("the Sternheimer response of a spin spiral is not implemented")
@@ -582,9 +761,29 @@ def require_a_sternheimer_regime(calculation) -> None:
         )
 
 
-def make_sternheimer(calculation, result, threshold: float = THRESHOLD):
+def smearing_of(calculation, result) -> Smearing | None:
+    """The :class:`Smearing` of a converged run, or ``None`` if it is an insulator.
+
+    The Fermi level comes from the run rather than being recomputed: it is what
+    the occupations the density was built from were evaluated at, and a level
+    re-derived from the eigenvalues would be a different number by the bisection
+    tolerance -- which the projector would then feel as an inconsistency between
+    ``wg1`` and the ``wg`` the ground state used.
+    """
+    scheme = calculation.system.occupations
+    if scheme == "fixed":
+        return None
+    return Smearing(
+        ef=float(result.fermi_energy),
+        degauss=float(calculation.system.degauss),
+        ngauss=smearing_order(calculation.system.smearing),
+    )
+
+
+def make_sternheimer(calculation, result, threshold: float = THRESHOLD,
+                     metals: bool = False):
     """A solver for a converged :class:`~pypresso.scf.driver.SCFResult`."""
-    require_a_sternheimer_regime(calculation)
+    require_a_sternheimer_regime(calculation, metals=metals)
     eigenvalues = jnp.asarray(result.eigenvalues)
     if eigenvalues.ndim == 2:
         eigenvalues = eigenvalues[None]
@@ -602,4 +801,6 @@ def make_sternheimer(calculation, result, threshold: float = THRESHOLD):
     return SternheimerSolver(
         calculation, hamiltonians, result.wavefunctions, eigenvalues, weights,
         nocc, threshold, v_scf=potential.v_scf, becsum=result.becsum,
+        smearing=smearing_of(calculation, result),
+        kpoint_weights=calculation.system.kpoints.weights,
     )

@@ -2515,6 +2515,121 @@ potential carries a `dns` that is not a function of `drho`); and spin spirals.
 
 *Notebook 19.*
 
+### P24b — Born effective charges for ultrasoft pseudopotentials. ✅ DONE.
+
+`pypresso/response/born.py`, plus two generalisations of
+`forces/energy.py`: the mixed state may be handed in as a **builder** rather than
+an array (`_mixed_state_part`), and the orthonormality constraint's multipliers
+may be a **matrix** (`_constraint_energy`). P24a left `Z*` norm-conserving and
+refused the other two by name, because `zstar_eu_us.f90` is five further stages
+and without them the norm-conserving expression is wrong in sign as well as size
+(+0.1625 against `ph.x`'s −0.07945). Four of those five stages are terms of one
+derivative.
+
+**`Z*` is a mixed second derivative, so it is computed as one.**
+`Z*_(a)ij = dF_(a)j/dE_i = −d²E/du_(a)j dE_i`, and P25 already differentiates the
+force along a tangent: one `jvp` of `jax.grad(frozen_energy)` per **field**
+direction, along the electric field's response, returns a whole `3 nat` column.
+Three `jvp` calls and the tensor is complete — the position tangent is zero, so
+only the electronic one is switched on.
+
+    d²E/du_j dE_i = d_E d_j L + (d_psi d_j L).dpsi_i + (d_Lambda d_j L).dLambda_i
+
+| QE | here |
+|---|---|
+| `zstar_eu`'s main term | the `dpsi` half of the `jvp` |
+| `iudrhous` × `dv_of_drho` (stage 1) | the `dLambda` half, screening part |
+| `psidspsi` (stage 2) | the `dLambda` half, bare part |
+| `add_dkmds` (stage 3b) | `jax.grad` of `frozen_polarization` |
+| `add_for_charges` (stage 3a) | **transcribed** — `constraint_position_term` |
+
+**Why this is affordable and an ultrasoft `Gamma` phonon is still not.** P25's
+identity leaves over `−<psi|dS/du_j|psi>·dLambda_i`, which vanishes when `S` does
+not move with the atoms. For a *phonon* both legs move `S` and `dLambda` is a
+response that has to be solved for; for a Born charge only the `u` leg does, and
+the `E` leg's `dLambda_mn = w_n <psi_m|dV_E|psi_n>` is a matrix element of the
+same perturbation the Sternheimer solve was already driven by. Nothing new is
+computed for it — the perturbation is contracted differently.
+
+**Four things had to be supplied to the tangent, and three of them were traps.**
+
+- **The mixed state has to stay a *function* of where the atoms are.** P25 could
+  hand `density` in as a constant array, because a norm-conserving density does
+  not move at frozen states. An ultrasoft one does — `Q_ij(r − tau)` is part of
+  it — and freezing it deletes exactly the dependence the second derivative is
+  made of. So `energy_at` now takes a *builder* for both the density and
+  `becsum`; the builder rebuilds the raw, unsymmetrised quantity at the moved
+  calculation and adds a constant offset, so the value is the converged
+  symmetrised one and the tangent is the wedge's own. That is `zstar_eu`'s
+  convention and `symtensor` completes it at the end. Leaving the SCF's *scalar*
+  symmetrisation in the chain rule gives **−3.96** where the answer is −0.0757,
+  so it is not subtle — but it is invisible in a force, which is why nothing
+  before this needed the hook.
+- **The multipliers are a matrix and the index order is not a convention.**
+  Stationarity gives `Lambda_mn = w_n <psi_m|H|psi_n>` — diagonal at the ground
+  state, and *not* diagonal to first order, so a diagonal-only tangent (which
+  `FrozenState.eigenvalues` already admits) drops the off-diagonal block, which
+  is `psidspsi`. `Lambda_mn` pairs with `<psi_n|S|psi_m>`, so the weight belongs
+  to the **column**; transposing it costs 0.28 on ultrasoft silicon and *nothing*
+  on a norm-conserving one, where the term is zero either way. That is the class
+  of error the norm-conserving gate below cannot catch, and it was made.
+- **The frozen polarization's operator is `adddvepsi_us`', not the moment of the
+  augmentation charge.** At frozen coefficients the smooth charge does not move
+  at all, so the only electronic term that survives is the augmentation's, and
+  writing it as the obvious `tau_a q_ij + dpqq^a_ij` is **wrong by 0.38**. The
+  right operator is the one the position operator already carries,
+  `i q_ij <d(beta_j)/dk_a| + dpqq^a_ij <beta_j|`: the own-centre derivative
+  deliberately excludes the structure factor's `−i tau` (P24a's 2% trap), so
+  `i q <dbeta/dk|` is not `tau q <beta|` and the difference — the projector's
+  internal `k` dependence — is a real part of the position operator of a periodic
+  crystal. `jax.grad` of `−sum w <psi|A_a|psi>` is the whole of `add_dkmds`,
+  three hundred lines of Fortran, and the projectors' motion is written as a
+  phase rather than rebuilt, because `vkb` and `d(vkb)/dk` about the atom's own
+  centre carry the *same* structure factor.
+- **One term is transcribed, and the reason is a coordinate singularity** — the
+  same exception `dpqq` already is. `dLambda` wants the occupied-occupied block
+  of the position operator, and `<psi_m|r|psi_n>` is the Berry connection: not a
+  matrix element at all in a periodic cell. It is finite only in the combination
+  it enters, contracted with `<psi_n|dS/du|psi_m>`, because `dS/du` is localised
+  on one atom. `add_for_charges.f90` is that combination and
+  `constraint_position_term` is it, worth **0.55** on ultrasoft silicon — the
+  difference between +0.47 and −0.079.
+
+*Check met.* Against the **vendored** `ph.x`, regenerated:
+
+| case | here | `ph.x` | difference |
+|---|---|---|---|
+| norm-conserving Si | −0.0757150 | −0.07571 | every digit |
+| ultrasoft Si | −0.0794417 | −0.07945 | **8.3e-6** |
+| ultrasoft C | +0.0415594 | +0.04179 | 2.3e-4 |
+
+Carbon is the independent case — different element, cutoffs and lattice
+constant, and the **opposite sign** — and its 2.3e-4 is where its dielectric
+constant already is (1.2e-4 against silicon's 4.3e-5, the radial form factors'
+interpolation floor), arriving amplified because `Z*` is the residue of 4 against
+3.958. And the norm-conserving number agrees with the transcribed `zstar_eu.f90`
+beside it to **1.3e-14**, which is the phase's regression gate: every term added
+here has to switch itself off when `S = 1`, and that equality is what says it
+does.
+
+**PAW is refused by name**, and the gap is one term rather than a method.
+Everything above reaches **1.3e-3** on it — −0.078293 against `ph.x`'s −0.07961 —
+and what is left is QE's fifth stage, `int3_paw` against `becsumort`: the
+one-centre twin of `add_for_charges`, pairing the field's response of the
+one-centre coefficients (which `paw_response` already produces) with the
+displacement's orthogonality `becsum`. It has no counterpart in the plane-wave
+part because `<psi|S|psi> = 1` carries the whole of `becsum`'s share of the
+energy for an ultrasoft dataset and not for a PAW one, whose one-centre energy is
+a second, independent function of it. Its factor was not settled from the
+Fortran: `compute_drhous` builds its `dbecsum` without the one-half the
+orthogonality correction carries, and `addusdbec` accumulates one of the two
+cross terms rather than both, so the coefficient is a product of two conventions.
+Fitting it to −0.07961 would make the number a measurement of `ph.x`. 1.3e-3 is
+sixteen times the last digit it prints, so it is refused; the dielectric constant
+from the same run is right to 3.4e-5 and is not.
+
+*Notebook 19.*
+
 ### P25 — Phonons at `Gamma`: the dynamical matrix. ✅ DONE.
 
 `pypresso/response/phonon.py`, plus `Calculation.symmetrize_atom_displacement`,

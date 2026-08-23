@@ -114,7 +114,8 @@ def state_from_result(result) -> FrozenState:
 
 
 def frozen_energy(
-    calculation, positions: jnp.ndarray, state: FrozenState, density=None
+    calculation, positions: jnp.ndarray, state: FrozenState, density=None,
+    becsum=None, multipliers=None,
 ):
     """The total energy at ``positions``, with the electronic state frozen.
 
@@ -123,8 +124,9 @@ def frozen_energy(
     does. The result is a scalar in Ry and a differentiable function of
     ``positions``.
 
-    ``density`` overrides the density this would otherwise build from ``state``
-    -- see :func:`energy_at`, which is where the reason lives.
+    ``density`` and ``becsum`` override the two members of the mixed state this
+    would otherwise build from ``state`` -- see :func:`_mixed_state_part` and
+    :func:`energy_at`, which is where the reason lives.
     """
     # Refused **before** the calculation is moved, not after. Moving it is real
     # work -- new projectors, a new local potential, a new Ewald sum -- and a
@@ -132,7 +134,10 @@ def frozen_energy(
     # caller holding a partially built calculation, a different exception
     # entirely.
     reject_spinors(calculation)
-    return energy_at(calculation.at_positions(positions), state, density=density)
+    return energy_at(
+        calculation.at_positions(positions), state, density=density, becsum=becsum,
+        multipliers=multipliers,
+    )
 
 
 def reject_spinors(calculation) -> None:
@@ -156,7 +161,29 @@ def reject_spinors(calculation) -> None:
         )
 
 
-def energy_at(moved, state: FrozenState, terms: bool = False, density=None):
+def _mixed_state_part(override, build, moved, *arguments):
+    """One member of the mixed state -- the density or ``becsum`` -- built or given.
+
+    ``None`` builds it the way the SCF builds it. An **array** (or, for
+    ``becsum``, a tuple) replaces it with a constant, which is
+    :mod:`pypresso.response.phonon`'s use: the response has already been
+    symmetrised outside and is handed in whole. A **callable** replaces the
+    *builder* instead, and is called as ``f(moved, ...)`` -- which is what a
+    mixed derivative with respect to the positions needs, because the part of
+    the mixed state that moves with the atoms (the augmentation charge, and
+    ``becsum`` through the projectors) has to stay a function of ``moved`` for
+    the chain rule to reach it. A constant cannot: it freezes exactly the
+    dependence an ultrasoft second derivative is made of.
+    """
+    if override is None:
+        return build(*arguments)
+    if callable(override):
+        return override(moved, *arguments)
+    return override
+
+
+def energy_at(moved, state: FrozenState, terms: bool = False, density=None,
+              becsum=None, multipliers=None):
     """The frozen-state energy of an already-moved calculation.
 
     Split out from :func:`frozen_energy` because the *coordinate* being
@@ -193,6 +220,20 @@ def energy_at(moved, state: FrozenState, terms: bool = False, density=None):
     :meth:`~pypresso.response.sternheimer.SternheimerSolver.density_at`'s rule
     one level up, and it changes nothing for a force or a stress, where the
     argument is left at ``None``.
+
+    **``becsum`` is the same argument for the other half of the mixed state**,
+    and it exists because :meth:`~pypresso.scf.driver.Calculation.becsum` ends
+    with ``PAW_symmetrize``. That average is right for the ground state and
+    wrong for a response for exactly the reason above, one level down --
+    ``PAW_dusymmetrize`` against ``PAW_symmetrize``, worth 1.6e-2 on PAW
+    silicon's dielectric constant where the rest of the machinery reaches 5e-5
+    (``PLAN.md`` P24a). Nothing before
+    :mod:`pypresso.response.born` needed it, because P25's second derivative is
+    norm-conserving and a norm-conserving dataset has no ``becsum`` at all.
+
+    Both arguments accept a **callable** as well as a constant, and for a
+    coordinate derivative that distinction is the whole of the matter: see
+    :func:`_mixed_state_part`.
     """
     reject_spinors(moved)
 
@@ -202,8 +243,10 @@ def energy_at(moved, state: FrozenState, terms: bool = False, density=None):
     # the augmentation charge that moves with the atoms. Symmetrised exactly as
     # the SCF symmetrises it -- the functional has to be the same function of
     # the coordinate the SCF minimised at, not a tidier one.
-    becsum_ = moved.becsum(psi, weights)
-    rho = moved.density(psi, weights, becsum_) if density is None else density
+    becsum_ = _mixed_state_part(becsum, moved.becsum, moved, psi, weights)
+    rho = _mixed_state_part(
+        density, moved.density, moved, psi, weights, becsum_
+    )
     potential = moved.potential(rho)
     epaw, _ = moved.onecenter(becsum_)
 
@@ -234,6 +277,14 @@ def energy_at(moved, state: FrozenState, terms: bool = False, density=None):
     # Miller indices -- which is the statement that a norm-conserving stress has
     # no Pulay term of this kind either.
     norm = jnp.sum(weights * state.eigenvalues * (_norms(psi) - 1.0))
+    if multipliers is not None:
+        # The same constraint with the multipliers off the diagonal -- see
+        # :func:`_constraint_energy`. Identical at the ground state, where
+        # ``Lambda = diag(w eps)``, and the two terms above are what it replaces.
+        overlap = jnp.zeros(())
+        norm = _constraint_energy(
+            psi, moved.projectors.vkb, moved.projectors.qq, multipliers
+        )
 
     contributions = {
         "kinetic": kinetic,
@@ -283,6 +334,41 @@ def _kinetic_energy(psi, kinetic, weights):
 def _norms(psi):
     """``<psi|psi>``, with :func:`_kinetic_energy`'s rule about ``abs``."""
     return jnp.sum(jnp.real(jnp.conj(psi) * psi), axis=-1)
+
+
+@jax.jit
+def _constraint_energy(psi, vkb, qq, multipliers):
+    """``Tr[Lambda (<psi|S|psi> - 1)]``: the constraint with a *matrix* multiplier.
+
+    The diagonal form it replaces is the same expression at
+    ``Lambda_mn = delta_mn w_n eps_n``, which is what the multipliers are at a
+    converged ground state -- so a force, a stress and a ``Gamma`` phonon never
+    need this one and do not pay for it (an ``nbnd x nbnd`` Gram matrix per
+    k-point where the diagonal form is a vector).
+
+    **What needs it is a second derivative in which the multipliers themselves
+    move**, which is ``psidspsi`` in ``zstar_eu_us.f90``. Stationarity gives
+    ``Lambda_mp = w_m <psi_p|H|psi_m>``, diagonal at the ground state and *not*
+    diagonal to first order in a perturbation, so a diagonal-only tangent drops
+    the off-diagonal block of ``dLambda`` -- and that block multiplies
+    ``<psi_m|dS/du|psi_p>``, which vanishes only for a norm-conserving dataset.
+    Writing the constraint with the full matrix is what lets one ``jvp`` carry
+    the term instead of a second routine computing it
+    (:mod:`pypresso.response.born`).
+
+    ``Lambda`` is ``(nspin, nk, nbnd, nbnd)`` and Hermitian, and it is
+    contracted as a trace -- ``sum_mn Lambda_mn (G - 1)_nm`` -- so the result is
+    real for any Hermitian pair and the index order is the one stationarity
+    fixes rather than a convention.
+    """
+    gram = jnp.einsum("skmg,skng->skmn", psi.conj(), psi)
+    if vkb.shape[-1] != 0 and qq is not None:
+        becp = jnp.einsum("skbg,kgc->skbc", psi.conj(), vkb).conj()
+        gram = gram + jnp.einsum(
+            "skmi,ij,sknj->skmn", becp.conj(), qq.astype(becp.dtype), becp
+        )
+    identity = jnp.eye(gram.shape[-1], dtype=gram.dtype)
+    return jnp.real(jnp.einsum("skmn,sknm->", multipliers, gram - identity))
 
 
 @jax.jit
