@@ -110,3 +110,30 @@ def test_a_symmetric_density_is_unchanged():
     factors = structure_factors(structure, SILICON_CELL, gvectors)[0]
     symmetrized = symmetrize_density(factors, gvectors, symmetries)
     assert np.asarray(symmetrized) == pytest.approx(np.asarray(factors), abs=1e-10)
+
+
+def test_symmetry_group_honours_the_nosym_it_takes():
+    """The parameter used to be accepted, assigned and never read.
+
+    ``symmetry_group(nosym=True)`` returned the full group and said nothing, so
+    a caller asking for ``setup.f90``'s ``nsym = 1`` silently got 48. It
+    defaults to ``False`` rather than to ``system.nosym`` on purpose: the group
+    is a property of the crystal, and ``basis.builder`` needs the fractional
+    translations to size the FFT box whatever the input said about symmetrising.
+    """
+    from pypresso.io.pwin import parse_pw_input
+    from pypresso.system.builder import build_system
+
+    system = build_system(parse_pw_input(
+        "&system\n ibrav=2, celldm(1)=10.2, nat=2, ntyp=1, ecutwfc=12.0,"
+        " nosym = .true.\n/\n"
+        "ATOMIC_SPECIES\n Si 28.086 Si.pz-vbc.UPF\n"
+        "ATOMIC_POSITIONS alat\n Si 0 0 0\n Si 0.25 0.25 0.25\n"
+        "K_POINTS gamma\n"
+    ))
+    assert system.nosym is True
+    assert system.symmetry_group().nsym == 48
+    trivial = system.symmetry_group(nosym=True)
+    assert trivial.nsym == 1
+    assert trivial.symmorphic
+    assert np.array_equal(trivial.rotation_array()[0], np.eye(3, dtype=int))

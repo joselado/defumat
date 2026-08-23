@@ -355,14 +355,35 @@ class System(eqx.Module):
         )
         return kpoints_for_spin(rebuilt, nspin)
 
-    def symmetry_group(self, nosym: bool | None = None) -> Symmetries:
-        """The space group this run symmetrises with -- magnetic if it is.
+    def symmetry_group(self, nosym: bool = False) -> Symmetries:
+        """The space group of the crystal -- magnetic if the run is.
 
         ``find_sym`` is called with ``magnetic_sym = noncolin .AND. domag``
         (``setup.f90``), and that is the only place the distinction is made.
+
+        **``nosym`` is the caller's decision, not this method's**, which is why
+        it defaults to ``False`` and not to ``self.nosym``. The group is a
+        property of the crystal and is wanted whole in places an input's
+        ``nosym`` has no say over -- :func:`pypresso.basis.builder` needs the
+        fractional translations to size the FFT box, and
+        :class:`~pypresso.scf.driver.Calculation` keeps the full group beside a
+        ``use_symmetry`` switch rather than losing it. Passing ``nosym=True``
+        asks for ``setup.f90``'s ``nsym = 1`` instead.
+
+        The parameter used to be ``nosym: bool | None = None``, defaulting to
+        ``self.nosym`` -- and then never read, so ``symmetry_group(nosym=True)``
+        returned the full group and said nothing. Sweeping every QE benchmark's
+        printed ``N Sym. Ops.`` against this is what surfaced it: the twelve
+        cases where QE prints ``1`` are twelve inputs carrying ``nosym =
+        .true.``.
         """
-        if nosym is None:
-            nosym = self.nosym
+        if nosym:
+            # ``setup.f90``'s ``nsym = 1``: the identity alone, with no
+            # fractional translation and no time reversal.
+            return Symmetries(
+                rotations=(((1, 0, 0), (0, 1, 0), (0, 0, 1)),),
+                translations=((0.0, 0.0, 0.0),),
+            )
         symmetries = find_symmetries(self.cell, self.structure)
         if self.nspin_mag == 4:
             symmetries = magnetic_symmetries(
