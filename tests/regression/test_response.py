@@ -508,25 +508,35 @@ def test_ef_shift_on_the_states_reproduces_its_effect_on_the_density():
     assert float(jnp.abs(through_states - through_density).max()) < 1e-10 * scale
 
 
-def test_the_dynamical_matrix_of_a_metal_is_refused():
-    """The solve handles a metal; the *second derivative* built on it does not.
+def test_the_dynamical_matrix_of_a_metal_is_not_refused_any_more():
+    """P28 lifted it, and this asserts the *door* rather than the answer.
 
-    A metal's ``dpsi`` carries its own occupation -- that is what the ``wk``
-    weight in the density response encodes -- and the energy functional the
-    force constants differentiate weights the states by ``wg = wk f``, so the
-    same tangent enters carrying ``f`` twice. With the guard lifted, two-atom
-    aluminium comes out at 155.7, 155.7, 155.7, 198.0, 198.0, 309.3 cm^-1
-    against the vendored ``ph.x``'s 1.1, 1.8, 1.9, 146.7, 146.7, 311.0 on the
-    same input -- from a run that converges to ``|ddv_scf|^2 = 8.7e-17``,
-    returns a matrix symmetric to 4.3e-8 and whose ground state reproduces
-    ``pw.x``'s total energy to 1e-9 Ry. Nothing but the reference says it is
-    wrong, which is what makes a refusal the right answer rather than a caveat.
+    This was a refusal for one phase and the reason was a weight: a metal's
+    ``dpsi`` carries its own occupation -- which is what the ``wk`` in the
+    density response encodes -- while the energy functional the force constants
+    differentiate weights its states by ``wg = wk f``, so a single ``jvp``
+    counted ``f`` twice. Two-atom aluminium came out at 155.7, 155.7, 155.7,
+    198.0, 198.0, 309.3 cm^-1 against ``ph.x``'s 1.1, 1.8, 1.9, 146.7, 146.7,
+    311.0, from a run that converged and returned a symmetric matrix.
+    Splitting the ``jvp`` -- the frozen Hessian at ``wg``, the electronic half
+    at ``wk``, which is what ``dynmat_us.f90`` and ``drhodvnl.f90`` are --
+    puts them at 1.088, 1.559, 1.559, 146.711240, 146.711240 and 311.033545.
+
+    What is asserted here is only that **neither guard the front door runs
+    raises for a smeared metal**. The frequencies themselves belong to
+    ``tests/regression/test_phonons.py``, which has the ``ph.x`` reference and
+    the acoustic sum rule beside them; repeating them here would be a second
+    place for the same numbers to go stale. The tetrahedron occupations stay
+    refused and are covered by
+    :func:`test_the_regimes_without_a_response_here_are_refused_by_name`.
     """
-    from pypresso.response.phonon import dynamical_matrix
+    from pypresso.response.phonon import require_norm_conserving
+    from pypresso.response.sternheimer import require_a_sternheimer_regime
 
     _, calculation, _ = _metal()
-    with pytest.raises(NotImplementedError, match="acoustic sum rule"):
-        dynamical_matrix(calculation, None, np.zeros((1, 1, 1)), None)
+    assert calculation.system.occupations != "fixed", "this cell must be a metal"
+    require_a_sternheimer_regime(calculation, metals=True)
+    require_norm_conserving(calculation)
 
 
 def test_the_exact_jacobian_agrees_with_the_finite_difference_one():

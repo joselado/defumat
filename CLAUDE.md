@@ -72,10 +72,19 @@ term identified (`int3_paw` against `becsumort`) rather than fitted.
 **Metals are in the response** (P24c): `orthogonalize`'s smearing branch, `setup_alpha_pv`'s
 metal value, `localdos` and `ef_shift`, with `chi_0` on fcc aluminium matching a finite
 difference of the density to **2.5e-7** and the Fermi-level correction restoring charge
-neutrality to 1e-15. **The dynamical matrix of a metal is refused by name**: a metal's `dpsi`
-carries its own occupation, and contracting it against an energy functional weighted by `wg`
-counts that occupation twice — the acoustic modes of two-atom aluminium come out at 155.7
-cm⁻¹ against `ph.x`'s 1.9, from a run that converges and returns a symmetric matrix.
+neutrality to 1e-15.
+**The dynamical matrix of a metal is in** (P28), and it cost one weight rather than a
+routine: a metal's `dpsi` already carries its occupation, so contracting it against an
+energy functional weighted by `wg` counts that occupation twice, and QE's own layout says
+so — `dynmat_us.f90` reads `wg` for the frozen Hessian and `drhodvnl.f90` reads `2 wk` for
+the electronic term. Splitting P25's single `jvp` along those lines puts two-atom
+aluminium's modes at **146.711240** and **311.033545** cm⁻¹ against `ph.x`'s 146.710511 /
+146.714378 and 311.035401 — **0.003 cm⁻¹**, an order tighter than silicon's 0.05 — where
+the unsplit assembly gave 197.96 and 309.26 and put the acoustic modes at 155.7 against
+1.9. The acoustic sum rule is the diagnostic that said so and now holds to 1.06e-5
+Ry/bohr². **The `df_n` term the refusal predicted is not needed**: it is already inside
+`dpsi`, being the `(f_i - f_j)/(eps_i - eps_j)` structure of the smeared projector, which
+vanishes identically for an insulator.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
 read it before writing code. P4 is complete: a block Davidson eigensolver behind a name
 registry, seeded from the pseudo-atomic orbitals as QE seeds it, and the *only* solver the
@@ -135,7 +144,7 @@ to 2.2e-4. Getting there found a trap that is P26's rather than P27's: at QE's
 solution was being consumed in silence, giving a `C_ijkl` that was not even symmetric under
 `C_ijkl = C_klij`. It is refused now (`require_converged_responses`).
 
-**Outstanding:** Wyckoff input, `vc-relax`, the dynamical matrix of a metal and of an
+**Outstanding:** Wyckoff input, `vc-relax`, the dynamical matrix of an
 ultrasoft dataset, PAW Born charges, phonons at `q != 0` (the perturbed states live
 at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals, plus
 `q2r`/`matdyn` for a dispersion), and the rest of P10 (k-axis sharding and GPU).

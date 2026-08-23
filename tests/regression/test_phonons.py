@@ -86,6 +86,31 @@ CUBIC_TOLERANCE = 1e-9
 #: the same 1e-4 relative as everything else here.
 FD_TOLERANCE = 5e-5
 
+#: What the **vendored** ``ph.x`` prints for ``al2-metal.in`` -- two-atom fcc
+#: aluminium, `marzari-vanderbilt` smearing, committed as
+#: ``reference.out.ph-al2-metal``. Three acoustic modes at the basis residue and
+#: three the cell doubling folds in from the zone boundary. This is the metal
+#: reference P24c measured its *refusal* against and P28 lifted it with.
+QE_AL2 = (1.108857, 1.827469, 1.924700, 146.710511, 146.714378, 311.035401)
+
+#: How far aluminium's three real modes may sit from ``ph.x``'s, in cm^-1.
+#: Measured: **0.0031** on the worst of them, an order tighter than silicon's
+#: 0.049 -- the folded pair at 146.711240 against 146.710511 and 146.714378,
+#: and the zone-centre mode at 311.033545 against 311.035401. The looser
+#: tolerance is kept because the floor is the same one (QE's ``dq = 0.01``
+#: form-factor table against direct integration) and there is no reason for
+#: this cell to hold it more tightly than silicon on another day.
+AL2_OPTICAL_TOLERANCE = 0.05
+
+#: ``max|sum_b D_(a i)(b j)|`` in Ry/bohr^2, against on-site force constants of
+#: 0.0476. This is the number the refusal was about: the ``wg``-weighted
+#: assembly gave the acoustic modes 155.7 cm^-1 here, half the optical
+#: spectrum, and the split one gives **1.06e-5** -- 2.2e-4 relative, which is
+#: silicon's own basis residue on this cell. Asserted rather than the acoustic
+#: frequencies themselves, because it is the quantity that separates a weight
+#: error from the basis error every code makes.
+AL2_SUM_RULE = 5e-5
+
 #: The wedge and the whole grid must agree to arithmetic. Measured: 2.7e-14 on
 #: the matrix, which is what an exact group average of an exactly closed grid
 #: gives and is why this number is not a tolerance so much as an assertion that
@@ -187,6 +212,85 @@ def test_the_force_constants_are_symmetric_and_cubic():
         diagonal = np.diag(block)
         assert np.allclose(diagonal, diagonal[0], atol=CUBIC_TOLERANCE)
         assert np.abs(block - np.diag(diagonal)).max() < CUBIC_TOLERANCE
+
+
+# ---------------------------------------------------------------------------
+# A metal (P28): the same machinery with the electronic half reweighted.
+# ---------------------------------------------------------------------------
+
+def test_the_gamma_phonon_of_a_metal_matches_quantum_espresso():
+    """Two-atom aluminium against the vendored ``ph.x``.
+
+    The Sternheimer solve was already metallic one phase before this
+    (``PLAN.md`` P24c: ``orthogonalize``'s smearing branch, ``ef_shift``); what
+    P28 adds is the **weight the assembled matrix contracts ``dpsi`` with**. The
+    frozen energy weights its states by ``wg = wk f``, and a metal's ``dpsi``
+    already carries ``f`` from the smeared right-hand side, so a single ``jvp``
+    counted the occupation twice. QE never does: ``dynmat_us.f90`` reads ``wg``
+    for the frozen Hessian and ``drhodvnl.f90`` reads ``2 wk`` for the
+    electronic term, in two routines. Splitting the ``jvp`` accordingly is the
+    whole of the change (:func:`pypresso.response.phonon._state_weights`).
+
+    Three of the six modes are the primitive cell's at the zone-boundary point
+    the doubling folds in; the other three are acoustic and are the diagnostic
+    below rather than a target.
+    """
+    _, _, phonons = _phonons("al2-metal")
+    assert phonons.converged
+    optical = phonons.frequencies[3:]
+    # The folded pair is degenerate and nothing here imposes it -- the cell is
+    # a doubling and the degeneracy is the zone-boundary point's, so this is a
+    # statement about the assembly and not about the input.
+    assert optical[1] - optical[0] == pytest.approx(0.0, abs=1e-6)
+    for computed, reference in zip(optical, QE_AL2[3:]):
+        assert computed == pytest.approx(reference, abs=AL2_OPTICAL_TOLERANCE)
+
+
+def test_a_metals_acoustic_sum_rule_is_the_basis_residue_and_not_a_weight_error():
+    """``sum_b D_(a i)(b j) = 0``, and it is what the refusal was measured on.
+
+    Translating the crystal costs nothing, so this sum is zero exactly and what
+    survives is the finite basis. It is the sharpest diagnostic there is for the
+    weight convention, because a factor of ``f`` on the electronic half leaves
+    the *optical* modes looking plausible while the acoustic ones absorb the
+    error: with the ``wg``-weighted assembly they came out at **155.7 cm^-1**
+    against ``ph.x``'s 1.9, from a run that converged to
+    ``|ddv_scf|^2 = 8.7e-17`` and returned a symmetric, cubic matrix. Nothing
+    but this identity and the reference said so.
+
+    The frequencies are not compared to ``ph.x``'s 1.1/1.8/1.9 digit for digit:
+    both are the same basis-set error made slightly differently, exactly as on
+    silicon, where this code prints 4.09 against ``ph.x``'s 2.05.
+    """
+    _, _, phonons = _phonons("al2-metal")
+    residue = float(np.abs(phonons.matrix.sum(axis=2)).max())
+    onsite = float(np.abs(phonons.matrix[0, :, 0, :]).max())
+    assert residue < AL2_SUM_RULE, f"{residue} against on-site {onsite}"
+    assert phonons.acoustic_residue < ACOUSTIC_CEILING
+
+
+def test_a_metals_rigid_translation_reproduces_the_density_gradient():
+    """The metal's response density, against a quantity built no other way.
+
+    Same identity as the insulator's below and the same reason for it, run here
+    because a metal's response density is the one carrying ``ef_shift``: a
+    displacement at ``q = 0`` moves charge in and out of the cell, so the Fermi
+    level moves with it and ``def ldos`` has to be in ``drho`` before it screens
+    anything. If that correction were wrong or missing, the sum over atoms would
+    not be a pure translation of the ground-state density.
+    """
+    calculation, result, phonons = _phonons("al2-metal")
+    gvectors = calculation.basis.dense
+    rho_g = r_to_g(jnp.asarray(result.density)[0], gvectors.fft_index)
+    cartesian = gvectors.cartesian(calculation.system.cell)
+
+    for axis in range(3):
+        exact = -jnp.real(
+            g_to_r(1j * cartesian[:, axis] * rho_g, gvectors.fft_index, gvectors.grid)
+        )
+        translated = phonons.induced_density[:, axis, 0].sum(axis=0)
+        scale = float(jnp.abs(exact).max())
+        assert float(jnp.abs(translated - exact).max()) / scale < 1e-3
 
 
 # ---------------------------------------------------------------------------
@@ -323,8 +427,11 @@ def test_a_spin_polarized_calculation_is_refused():
 
     The guard is exercised directly rather than through
     :func:`dynamical_matrix`, because every ``nspin = 2`` input committed here is
-    a *metal* and the smearing refusal fires first. Reaching this one through the
-    front door needs a magnetic insulator -- which is the same thing the fix
+    a *metal*, and what fires first through the front door is
+    ``require_a_sternheimer_regime``'s own ``nspin = 2`` refusal -- the same fact
+    stated one layer down, where every response entry point inherits it. (Before
+    P28 it was the metal refusal that fired first; that one is gone.) Reaching
+    *this* message needs a magnetic insulator, which is the same thing the fix
     needs, and neither is here.
     """
     _, _, calculation = _build("h-atom-lsda")

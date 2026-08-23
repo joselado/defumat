@@ -2730,7 +2730,9 @@ reproduces to 1e-9 Ry (−8.332103799 against −8.33210381):
 in cm⁻¹, from a run that converges to `|ddv_scf|^2 = 8.7e-17` and returns a
 matrix symmetric to 4.3e-8. Nothing in the numbers says it is wrong; the
 reference and the sum rule do. `reference.out.ph-al2-metal` is committed, so the
-phase that lifts this refusal has its target already. (`ph.x` will not run this
+phase that lifts this refusal has its target already. **P28 lifted it**, and the
+split assembly guessed at here is what it turned out to be — except that the
+`df_n` term this paragraph predicts is not needed, being already inside `dpsi`. (`ph.x` will not run this
 cell with the symmetry on — "FFT grid incompatible with symmetry" out of
 `phq_setup` — so the input is `nosym` on an **unshifted** grid, which is the
 combination a response can be computed on without symmetrising it anyway.)
@@ -2746,12 +2748,13 @@ not exist there — `pw.x` refuses `epsil` for a metal for the same reason. That
 distinction is now one flag on `require_a_sternheimer_regime` rather than three
 separate refusals.
 
-**No README row, and that is the honest answer rather than an oversight.** The
-table's rows are quantities someone would want to compute, and this phase
-produces none that is new: `epsilon_infinity` and `Z*` do not exist for a metal,
-and the dynamical matrix that would is refused above. What P24c is is the *layer
-under* a row — the metallic response every one of those quantities will stand
-on. It gets its row when the second derivative does.
+**No README row of its own, and that was the honest answer rather than an
+oversight.** The table's rows are quantities someone would want to compute, and
+this phase produced none that was new: `epsilon_infinity` and `Z*` do not exist
+for a metal, and the dynamical matrix that would was refused above. What P24c is
+is the *layer under* a row — the metallic response every one of those quantities
+stands on. **P28 gave it that row**: the second derivative works now, and the
+phonon row covers metals.
 
 ### P25 — Phonons at `Gamma`: the dynamical matrix. ✅ DONE.
 
@@ -2878,10 +2881,11 @@ refused, because the occupied-band count in `response/` is a *single* number
 (`nelec / 2`) applied to both spin channels. That is right for an unpolarized insulator
 and wrong for a magnetic one, whose channels are filled to different depths — the response
 would be solved for the wrong bands in one of them, with no shape error and no failure to
-converge to show for it. The same arithmetic is in `dielectric_tensor` and is **not**
-refused there, which is a gap and not a decision. Making `nocc` per-channel is one change
-in `SternheimerSolver` and would serve both; what it needs is a magnetic insulator to
-validate against.
+converge to show for it. The same arithmetic is in `dielectric_tensor`, and since 2d7d9d5
+the refusal lives in `require_a_sternheimer_regime` so that every entry point — the field,
+the displacement, the strain, the third derivative — inherits it rather than restating it.
+Making `nocc` per-channel is one change in `SternheimerSolver` and would serve all of them;
+what it needs is a magnetic insulator to validate against.
 
 **Memory.** `3 nat` bare perturbations and `3 nat` first-order wavefunctions are held at
 once, each `(nspin, nk, nocc, npwx)` complex: **2 MB** on this silicon, and **7 GB** on a
@@ -3280,6 +3284,101 @@ symmetry tolerance is its own decision — and the committed inputs write twelve
 digits.
 
 *Notebook 22.*
+
+### P28 — The dynamical matrix of a metal. ✅ DONE.
+
+`pypresso/response/phonon.py` — `_state_weights` and the split in `_force_constants` — and
+the deletion of `require_a_metallic_assembly`, which P24c wrote and this phase closes. It
+is the smallest phase here in lines changed and it is the one with the sharpest before and
+after, because the refusal it lifts had a committed reference sitting beside it
+(`reference.out.ph-al2-metal`) and a diagnostic that said "wrong" without saying "how".
+
+**The bug was a weight, and QE's own layout is the proof.** P25 assembles the second
+derivative as *one* `jvp` of `grad_u L` along the tangent that carries the coordinate, the
+states and the density together — which is right, and which silently assumes that the
+weight `L` puts on its states is the weight the *state tangent* wants. For an insulator it
+is. For a metal it is not: `orthogonalize`'s smearing branch scales the right-hand side by
+`wg1 = f` (P24c), so the occupation is already inside `dpsi`, and `L` weights its states by
+`wg = wk f`. The same `f` twice. QE never meets this because its two halves are two
+routines and they read different arrays — `dynmat_us.f90:172` takes `wg(ibnd, ikk)` for the
+frozen Hessian, `drhodvnl.f90:181` takes `2 wk(ikk)` for the electronic term, and
+`drhodvloc` contracts the response *density* against the bare `dvloc`. So the fix is to
+split the one `jvp` into the two those routines are:
+
+    D[:, i] = jvp_(u, rho)( grad_u L[wg] )(e_i, drho_i)
+            + jvp_psi(     grad_u L[wk] )(dpsi_i)
+
+which is de Gironcoli's Eq. (B19) structure — the frozen Hessian at `wg`, the electronic
+response with the metal's own weights. The density tangent can go in either half, because
+the terms it reaches (`int vltot(tau) rho`, `E_xc[rho + rho_core(tau)]`) carry no state
+weight at all.
+
+**The `df` term the refusal predicted is not needed, and that is the finding of the
+phase.** `require_a_metallic_assembly` said the occupations' own first-order change "has to
+enter the energy as `df_n` against `d(eps_n)/du` and the entropy's derivative". It does
+enter — but it is already inside `dpsi` and needs no term of its own. The
+`(f_i - f_j)/(eps_i - eps_j)` structure of `orthogonalize`'s `wwg` *is* the valence-valence
+block that generates `df`, and it vanishes identically for an insulator where every
+occupied `f` is 1; `ef_shift_wfc` supplies the Fermi level's own motion. Two things
+confirm it rather than one: the identity this code already tested (`wk 2 Re[psi* dpsi]`
+equals the corrected response density to 1e-10, so for a *local* perturbation contracting
+the tangent **is** `int drho dV_bare`, which is `drhodvloc`); and `dfpt_kernels.f90`, where
+after the loop QE does exactly two metal-specific things — subtract `def` from `dvscf`,
+which the matrix assembly never reads, and run `ef_shift_wfc` on `dpsi`, which this code
+already did. Nothing else reaches `dyn`. The prediction was a reasonable reading of
+`drhodv` having "its own `wgg`-weighted contraction"; what that contraction actually is, is
+the weight swap.
+
+*Check met.* Two-atom fcc aluminium (`al2-metal.in`, `marzari-vanderbilt`, `degauss = 0.05`,
+`nosym` on an unshifted 4x4x2 grid) against the vendored `ph.x` on the same input, whose
+ground state this reproduces to 1e-9 Ry (−8.332103799 against −8.33210381):
+
+| mode | before (P25's assembly) | after | `ph.x` |
+|---|---|---|---|
+| acoustic | 155.74, 155.74, 155.74 | 1.088, 1.559, 1.559 | 1.109, 1.827, 1.925 |
+| folded pair | 197.96, 197.96 | **146.711240**, 146.711240 | 146.710511, 146.714378 |
+| zone centre | 309.26 | **311.033545** | 311.035401 |
+
+in cm⁻¹. The worst of the three real modes is **0.0031** from `ph.x` — an order tighter
+than silicon's 0.049, and the same floor either way (QE's `dq = 0.01` form-factor table
+against direct integration here). The folded pair is degenerate to **2.8e-14** with nothing
+imposing it: the cell is a doubling and that degeneracy belongs to the zone-boundary point,
+so it is a statement about the assembly rather than about the input. From a run that
+converges in 9 iterations to `|ddv_scf|^2 = 8.7e-17` at `av.it. = 23.0`, and returns a
+matrix symmetric to 1.25e-9.
+
+**The acoustic sum rule is the diagnostic and it is the reason this was ever a refusal.**
+`sum_b D_(a i)(b j) = 0` exactly, and it now holds to **1.06e-5 Ry/bohr²** against on-site
+force constants of 0.0476 — 2.2e-4 relative, which is the finite basis and nothing else.
+Before, it was violated by half the optical spectrum. What makes the identity worth
+asserting instead of the acoustic *frequencies* is that a factor of `f` on the electronic
+half leaves the optical modes looking plausible — 198 against 147 is a 35% error that reads
+like a converged answer — while the acoustic modes absorb the rest. `ph.x` prints 1.1/1.8/1.9
+and this prints 1.088/1.559/1.559; neither is physics, exactly as on silicon, where this
+code prints 4.09 against `ph.x`'s 2.05.
+
+**Three checks, and the insulator is one of them.** The split is unconditional — there is no
+metal branch in `_force_constants` — so on an insulator, where `wk = wg` on every occupied
+band and `dpsi` is zero on the rest, the two `jvp` must sum to the one they replace.
+Silicon's optical mode is unchanged and P25's eleven regressions pass untouched, which is
+the whole of the evidence that the refactor is an identity. Beside it, the rigid-translation
+identity (`sum_a drho_(a i) = -d(rho)/dr_i`) runs on aluminium too and shares no machinery
+with the assembly — it is also the only check on `ef_shift`'s place in the loop, since a
+displacement at `q = 0` moves charge in and out of the cell.
+
+**What stays refused, and none of it is this phase's.** The **tetrahedron** occupations
+(`dfpt_tetra_beta`, a response weight per band *pair*) and `occupations='from_input'`, both
+through `require_a_sternheimer_regime`, which fires whatever the `metals` flag says.
+`epsilon_infinity` and the Born charges stay refused for a metal because the quantities do
+not exist there, which is why `pw.x` refuses `epsil` for one. Ultrasoft and PAW stay refused
+by `require_norm_conserving` for P25's reason, which is orthogonal to this one.
+
+**P24c gets its README row now.** The phase deliberately took none — "it gets its row when
+the second derivative does" — because `epsilon_infinity` and `Z*` do not exist for a metal
+and the dynamical matrix that would was refused. It does now, so the phonon row covers
+metals and P24c is the layer under it.
+
+*Notebook 20 extended.*
 
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes

@@ -85,11 +85,11 @@ print()
 print("  ph.x:      2.045258 x3,   510.151844 x3")
 ```
 
-    converged in 17 iterations, 28 CG steps per band per solve
+    converged in 9 iterations, 28 CG steps per band per solve
     
-      freq (1) =     4.087868 cm-1
-      freq (2) =     4.087868 cm-1
-      freq (3) =     4.087868 cm-1
+      freq (1) =     4.087839 cm-1
+      freq (2) =     4.087839 cm-1
+      freq (3) =     4.087839 cm-1
       freq (4) =   510.102374 cm-1
       freq (5) =   510.102374 cm-1
       freq (6) =   510.102374 cm-1
@@ -114,16 +114,16 @@ print(f"acoustic sum rule D_00 + D_01   {on_site[0, 0] + between[0, 0]:.3e}")
 ```
 
     D[Si_1, Si_1] =
-     [[ 0.276582  0.       -0.      ]
-     [ 0.        0.276582 -0.      ]
-     [-0.       -0.        0.276582]]
+     [[ 0.276582 -0.        0.      ]
+     [-0.        0.276582  0.      ]
+     [ 0.        0.        0.276582]]
     D[Si_1, Si_2] =
-     [[-0.27654648  0.          0.        ]
-     [ 0.         -0.27654648 -0.        ]
-     [-0.         -0.         -0.27654648]]
+     [[-0.27654648 -0.         -0.        ]
+     [-0.         -0.27654648  0.        ]
+     [ 0.          0.         -0.27654648]]
     
-    isotropic on-site block to      4.2e-17
-    asymmetry max|D - D^T|          2.2e-16
+    isotropic on-site block to      6.9e-17
+    asymmetry max|D - D^T|          2.8e-16
     acoustic sum rule D_00 + D_01   3.552e-05
 
 
@@ -231,10 +231,81 @@ print("with it            :", np.array2string(imposed.frequencies, precision=3))
 ```
 
     without the sum rule: [  4.088   4.088   4.088 510.102 510.102 510.102]
-    with it            : [-3.053e-06  2.921e-06  6.547e-06  5.101e+02  5.101e+02  5.101e+02]
+    with it            : [-5.091e-06 -2.812e-06  4.893e-06  5.101e+02  5.101e+02  5.101e+02]
 
 
-## 5. The trap, which cost the entire answer
+## 5. A metal, where the same machinery needs a different weight
+
+Everything above is an insulator. A metal changes exactly one thing in the assembly, and
+it is not a routine — it is which weight the electronic half is contracted with.
+
+The frozen energy weights its states by $w_g = w_k f$. That is right for the frozen
+Hessian. It is wrong for the state tangent, because a metal's $|d\psi\rangle$ *already*
+carries its occupation: the Sternheimer right-hand side is scaled by $f$ (there is no
+sharp occupied manifold to project onto, so the step function becomes a pair of weights).
+Contract such a tangent against a $w_g$-weighted functional and $f$ appears twice.
+
+Quantum ESPRESSO never meets this, because its two halves are two routines reading two
+arrays — `dynmat_us.f90` takes `wg`, `drhodvnl.f90` takes `2 wk`. So the one `jvp` becomes
+two:
+
+$$ D_{:,i} \;=\; \mathrm{jvp}_{(u,\rho)}\big(\nabla_u L[w_g]\big)(e_i, d\rho_i)
+\;+\; \mathrm{jvp}_{\psi}\big(\nabla_u L[w_k]\big)(d\psi_i) $$
+
+The cell below is two-atom aluminium — fcc with its cell doubled, so three of the six modes
+are acoustic and three are folded in from the zone boundary.
+
+
+```python
+al2 = build_system(read_pw_input(CASES / "al2-metal.in"))
+al2_pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in al2.structure.species)
+al2_calculation = Calculation(al2, al2_pseudos)
+al2_scf = run_scf(al2, al2_pseudos, calculation=al2_calculation, conv_thr=1e-12)
+
+metal = dynamical_matrix(
+    al2_calculation, al2_scf.wavefunctions, al2_scf.eigenvalues,
+    al2_scf.density, al2_scf.becsum,
+)
+
+QE = np.array([1.108857, 1.827469, 1.924700, 146.710511, 146.714378, 311.035401])
+print("        here        ph.x")
+for here, there in zip(metal.frequencies, QE):
+    print(f"  {here:10.4f}  {there:10.4f}")
+
+residue = np.abs(metal.matrix.sum(axis=2)).max()
+print(f"\nacoustic sum rule  {residue:.2e} Ry/bohr^2, against on-site force")
+print(f"constants of       {np.abs(metal.matrix[0, :, 0, :]).max():.4f}")
+```
+
+            here        ph.x
+          1.0878      1.1089
+          1.5592      1.8275
+          1.5592      1.9247
+        146.7112    146.7105
+        146.7112    146.7144
+        311.0335    311.0354
+    
+    acoustic sum rule  1.06e-05 Ry/bohr^2, against on-site force
+    constants of       0.0476
+
+
+The three real modes land within **0.003 cm⁻¹** of `ph.x` — tighter than silicon's 0.05 —
+and the folded pair is degenerate to $10^{-14}$ with nothing imposing it.
+
+The acoustic sum rule is the number to watch, and it is why this was a refusal for a phase
+before it was a feature. With the single $w_g$-weighted `jvp` the optical modes came out at
+198 and 309 cm⁻¹ — wrong by 35% and entirely plausible-looking — while the acoustic modes
+absorbed the rest and sat at **155.7 cm⁻¹**, from a run that converged to
+$|\Delta V_{\rm scf}|^2 = 9\times10^{-17}$ and returned a symmetric matrix. Nothing in the
+output said so. Only this identity and the reference did.
+
+One thing that did *not* need writing: the occupations' own first-order change. It looks
+like a missing term — $df_n$ against $d\varepsilon_n/du$, plus the entropy's derivative —
+and it is already inside $|d\psi\rangle$, because the $(f_i - f_j)/(\varepsilon_i -
+\varepsilon_j)$ structure of the smeared projector *is* that term. It vanishes identically
+for an insulator, where every occupied $f$ is 1.
+
+## 6. The trap, which cost the entire answer
 
 `frozen_energy` — the functional notebook 09 differentiates for the force — builds its
 density with the SCF's own **scalar** symmetrisation. That is right for a ground state: it
@@ -262,7 +333,7 @@ symmetrises it as a vector"), met for the first time in a **second** derivative.
 The control that located it was free: the `nosym` run, which symmetrises nothing at all,
 satisfied the sum rule to 4e-5 the whole time.
 
-## 6. What is refused
+## 7. What is refused
 
 Ultrasoft and PAW, and not because a routine is missing. The identity in the header holds
 because $L$ is stationary in $\psi$ at *fixed* multipliers, and those multipliers sit on the
@@ -291,7 +362,7 @@ except NotImplementedError as refusal:
 
 ---
 
-**Where the detail lives.** `PLAN.md` §3, phase P25 — the derivation, the two
+**Where the detail lives.** `PLAN.md` §3, phases P25 and P28 — the derivation, the two
 symmetrisations, the traps and every refusal with the number behind it. The tests are
 `tests/regression/test_phonons.py`; the code is `pypresso/response/phonon.py`.
 

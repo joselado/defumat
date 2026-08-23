@@ -62,6 +62,18 @@ atom indices and needs
 -- the same argument that makes ``symvector`` non-cosmetic for a force, two
 ranks up. Both are measured in ``PLAN.md`` P25.
 
+**Insulators and metals, and the metal is one weight rather than a routine.**
+The frozen energy weights its states by ``wg = wk f``, which is right for the
+frozen Hessian and wrong for the electronic half, because a metal's ``dpsi``
+already carries ``f`` from ``orthogonalize``'s smeared right-hand side. So the
+one ``jvp`` above is two: the coordinate and the density at ``wg``, the states
+at ``wk``. That is what ``dynmat_us.f90`` (``wg``) and ``drhodvnl.f90``
+(``2 wk``) are, and it is the whole of ``PLAN.md`` P28 --
+:func:`_state_weights`. Two-atom aluminium's modes come out at 146.711240 and
+311.033545 cm^-1 against ``ph.x``'s 146.710511/146.714378 and 311.035401, and
+the acoustic sum rule holds to 1.06e-5 Ry/bohr^2 where the unsplit assembly
+violated it by half the spectrum.
+
 **Norm-conserving only, and the reason is in the formula rather than in a
 missing routine.** The identity above holds because ``L`` is stationary in
 ``psi`` at *fixed* multipliers, and the multipliers are attached to the
@@ -112,8 +124,8 @@ from pypresso.response.velocity import over_kpoints
 from pypresso.system.symmetry import atom_mapping, symmetrize_atom_pair_tensor
 from pypresso.units import AMU_TO_RY, RY_TO_CMM1, RY_TO_THZ
 
-__all__ = ["Phonons", "dynamical_matrix", "require_a_metallic_assembly",
-           "require_norm_conserving", "self_consistent_response"]
+__all__ = ["Phonons", "dynamical_matrix", "require_norm_conserving",
+           "self_consistent_response"]
 
 #: QE's ``alpha_mix(1)``: the weight the mixer gives the residual. It is no
 #: longer the *whole* of the mixing -- :mod:`pypresso.response.mixing` builds an
@@ -227,7 +239,6 @@ def dynamical_matrix(
     # existing, and the solve handles one (``PLAN.md`` P24c). What it adds is
     # ``ef_shift``, inside the loop below.
     require_a_sternheimer_regime(calculation, metals=True)
-    require_a_metallic_assembly(calculation)
     require_norm_conserving(calculation)
     _require_one_spin_channel(calculation)
 
@@ -258,10 +269,12 @@ def dynamical_matrix(
         verbose=verbose,
     )
 
-    # 3. The second derivative, one jvp of the force's own gradient per mode.
+    # 3. The second derivative, two jvp of the force's own gradient per mode:
+    #    the frozen Hessian at ``wg`` and the electronic response at ``wk``.
     matrix = _force_constants(
         calculation, positions, jnp.asarray(wavefunctions), weights,
-        eigenvalues, jnp.asarray(density), dpsi, drho, solver.nocc,
+        _state_weights(solver, weights), eigenvalues, jnp.asarray(density),
+        dpsi, drho, solver.nocc,
     )
     # ``symdynph_gq`` first and the hermitisation second, which is the order
     # that makes the second one a *measurement*. A column of the raw matrix is a
@@ -345,14 +358,15 @@ def self_consistent_response(
     symmetrisation, which is why they are iterated together rather than one
     after another.
 
-    **It handles a metal and :func:`dynamical_matrix` refuses one at the door**,
-    which is deliberate rather than leftover: the response density of a metal
-    computed here *is* right -- ``ef_shift`` and all -- and it is the assembly
-    above it that counts the occupation twice
-    (:func:`require_a_metallic_assembly`). Keeping the loop metallic is what let
-    the refusal be *measured* rather than asserted, and it is where the phase
-    that lifts it starts. The path is reached by lifting that guard and nothing
-    else.
+    **A metal goes through this loop unchanged**, and that was true one phase
+    before the matrix above could consume the result: P24c put ``ef_shift`` and
+    ``orthogonalize``'s smearing branch here and the assembly still counted the
+    occupation twice, so the loop was kept metallic while
+    ``dynamical_matrix`` refused one at the door. That is what let the refusal
+    be *measured* against ``ph.x`` rather than asserted, and lifting it (P28)
+    changed nothing in this function: the fix was the weight the **matrix**
+    contracts ``dpsi`` with, not anything the loop produces
+    (:func:`_state_weights`).
 
     Returns ``(dpsi, drho, history, average_iterations, converged)``, with
     ``dpsi`` an object array of shape ``(nat, 3)``.
@@ -492,10 +506,34 @@ def _bare_plus_induced(solver, bare_mode, dv, include_induced: bool):
     return perturbation
 
 
+def _state_weights(solver, weights):
+    """The weight the *state* tangent is contracted with -- ``wg`` or ``wk``.
+
+    An insulator's ``dpsi`` is a plain wavefunction response and the functional's
+    own ``wg`` is right for it. A metal's is not: ``orthogonalize``'s smearing
+    branch scales the right-hand side by ``wg1 = f``, so the occupation is
+    already inside the tangent and contracting against ``wg = wk f`` would apply
+    it twice. ``incdrhoscf`` is called with ``wk`` for the same reason, which is
+    what :attr:`SternheimerSolver.density_weights` holds -- and reusing that
+    array rather than rebuilding the broadcast is deliberate: it is the one the
+    ``response_density == def ldos`` identity was measured against, so a
+    normalisation convention cannot differ between the density and the matrix.
+
+    It is ``nocc``-sliced for an insulator and full-length for a metal (where
+    ``keep = nbnd``), which is why the insulator branch returns ``weights``
+    whole instead: :func:`_force_constants` contracts a tangent padded to
+    ``nbnd``, and the padding is zero exactly where the two would disagree.
+    """
+    if solver.smearing is None:
+        return weights
+    return jnp.broadcast_to(solver.density_weights[:, :, :1], weights.shape)
+
+
 def _force_constants(
-    calculation, positions, psi, weights, eigenvalues, density, dpsi, drho, nocc
+    calculation, positions, psi, weights, state_weights, eigenvalues, density,
+    dpsi, drho, nocc,
 ) -> np.ndarray:
-    """``d^2E/du_i du_j``: one ``jvp`` of the force's gradient per mode.
+    """``d^2E/du_i du_j``: two ``jvp`` of the force's gradient per mode.
 
     The frozen-state energy is a function of three things that move -- where the
     atoms are, what the states are and what the density is -- and the total
@@ -507,8 +545,45 @@ def _force_constants(
     The ``e_i`` half is the frozen Hessian (``dynmat0``, ``d2ionq``, the local
     potential's and the projectors' second derivatives); the ``dpsi_i`` and
     ``drho_i`` halves are the electronic response (``drhodv``). Nothing
-    separates them here because nothing separates them in the mathematics: they
-    are components of one tangent vector.
+    separates them in the mathematics: they are components of one tangent
+    vector, and for an insulator one ``jvp`` is what this was.
+
+    **The state tangent is contracted with a different weight from the rest,
+    and that is the whole of what a metal adds.** ``L`` weights the states by
+    ``wg = wk f``, which is right for the frozen Hessian -- ``dynmat_us.f90``
+    reads ``wg(ibnd, ikk)`` -- and wrong for the electronic half, because a
+    metal's ``dpsi`` already carries its occupation: ``orthogonalize``'s
+    smearing branch scales the right-hand side by ``wg1 = f`` and
+    ``incdrhoscf`` then accumulates with ``wk``. Contracting such a tangent
+    against a ``wg``-weighted functional counts ``f`` twice. QE never does,
+    because its two halves are two routines: ``drhodvnl.f90`` contracts with
+    ``2 wk(ikk)`` while ``dynmat_us.f90`` uses ``wg``. So the ``jvp`` is split
+    in two and the state tangent is taken against ``L[wk]``:
+
+        D[:, i] = jvp_(u, rho)( grad_u L[wg] )(e_i, drho_i)
+                + jvp_psi(     grad_u L[wk] )(dpsi_i)
+
+    which is de Gironcoli's Eq. (B19) structure -- the frozen Hessian at ``wg``,
+    the electronic response with the metal's own weights.
+
+    **The occupations' own first-order change needs no term of its own**, which
+    is the part of this that is not obvious. ``df_n`` and the Fermi level's
+    motion are already inside ``dpsi``: the ``(f_i - f_j)/(eps_i - eps_j)``
+    structure of ``orthogonalize``'s ``wwg`` is what puts the valence-valence
+    block there -- it vanishes identically for an insulator, where every
+    occupied ``f`` is 1 -- and ``ef_shift_wfc`` puts the rest. The check that
+    it is complete is one this code already makes: ``wk 2 Re[psi* dpsi]`` equals
+    the corrected response density to 1e-10, and for a local perturbation
+    contracting the tangent *is* ``int drho dV_bare``, which is ``drhodvloc``.
+
+    **The split is unconditional and an insulator is the proof of it.** There
+    ``wk = wg`` on every occupied band and ``dpsi`` is zero on the rest, so the
+    two ``jvp`` sum to exactly the one they replace -- silicon's optical mode is
+    unchanged to round-off, which is the regression that guards this refactor.
+    The density tangent goes with the frozen Hessian rather than with the
+    states because the terms it reaches -- ``int vltot(tau) rho``,
+    ``E_xc[rho + rho_core(tau)]`` -- carry no state weight at all, so it makes
+    no difference which half it is put in.
 
     **The density is a separate argument rather than a function of the states,
     and that is not a convenience.** ``L`` builds its density with the SCF's own
@@ -522,34 +597,45 @@ def _force_constants(
     :func:`self_consistent_response`, already symmetrised the way ``symdvscf``
     symmetrises a response, and is handed in.
 
-    ``dpsi`` carries only the occupied bands, which is all the Sternheimer
-    equation solves for; the tangent is padded with zeros for the rest. That is
-    exact rather than an approximation -- the empty bands have zero weight in
-    every term of ``L``, so no derivative of ``L`` can see them.
+    **Which bands the tangent carries differs between the two regimes**, and
+    the padding is exact in both for different reasons. For an insulator
+    ``dpsi`` holds the ``nocc`` bands the Sternheimer equation solves for and
+    the rest is padded with zero: the empty bands have ``wg = 0`` in every term
+    of ``L``, so no derivative of it could see them anyway. For a metal
+    ``solver.nocc`` is ``nbnd`` -- ``orthogonalize``'s smearing branch keeps
+    every band, since "occupied" is not a count there -- and nothing is padded.
+    The bands above the smearing carry ``wg1 = 0`` inside ``dpsi`` instead,
+    which is what makes them harmless against a ``wk`` that is *not* zero there.
     """
     nat = positions.shape[0]
 
-    def energy(pos, states, rho):
+    def energy(pos, states, rho, w):
         return frozen_energy(
             calculation, pos,
-            FrozenState(
-                wavefunctions=states, weights=weights, eigenvalues=eigenvalues
-            ),
+            FrozenState(wavefunctions=states, weights=w, eigenvalues=eigenvalues),
             density=rho,
         )
 
     gradient = jax.grad(energy, argnums=0)
+
+    def frozen(pos, rho):
+        """The coordinate and the density, at ``wg``."""
+        return gradient(pos, psi, rho, weights)
+
+    def electronic(states):
+        """The states, at ``wk`` -- the weight ``drhodvnl`` contracts with."""
+        return gradient(positions, states, density, state_weights)
 
     matrix = np.zeros((nat, 3, nat, 3))
     for atom in range(nat):
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
             states = jnp.zeros_like(psi).at[:, :, :nocc].set(dpsi[atom, cart])
-            _, column = jax.jvp(
-                gradient, (positions, psi, density),
-                (tangent, states, drho[atom, cart]),
+            _, hessian = jax.jvp(
+                frozen, (positions, density), (tangent, drho[atom, cart])
             )
-            matrix[atom, cart] = np.asarray(column)
+            _, response = jax.jvp(electronic, (psi,), (states,))
+            matrix[atom, cart] = np.asarray(hessian + response)
     return matrix
 
 
@@ -595,11 +681,12 @@ def _require_one_spin_channel(calculation) -> None:
     solves for the wrong bands in at least one of them -- with no shape error and
     no failed convergence to show for it.
 
-    Refused here rather than approximated. The same arithmetic is in
-    ``dielectric_tensor`` and is *not* refused there, which is a gap in P24 and
-    not a decision: a magnetic insulator's dielectric constant would have the
-    same problem. Making ``nocc`` per-channel is one change in
-    :class:`~pypresso.response.sternheimer.SternheimerSolver` and would serve
+    Refused here rather than approximated, and refused again -- for the same
+    reason and with its own message -- in
+    :func:`~pypresso.response.sternheimer.require_a_sternheimer_regime`, which
+    every other entry point goes through. This one stays because the message
+    names the dynamical matrix. Making ``nocc`` per-channel is one change in
+    :class:`~pypresso.response.sternheimer.SternheimerSolver` and would lift
     both, and it needs a magnetic insulator to validate against -- which is why
     it is named here and left.
     """
@@ -610,69 +697,6 @@ def _require_one_spin_channel(calculation) -> None:
             "channels (nelec/2), and a magnetic insulator's channels are "
             "occupied to different depths, so the response would be solved for "
             "the wrong bands in one of them without any sign of it"
-        )
-
-
-def require_a_metallic_assembly(calculation) -> None:
-    """A metal's *response* is implemented; its second derivative is not.
-
-    P24c put ``orthogonalize``'s smearing branch and ``ef_shift`` in, so a
-    metal's ``chi_0`` and its self-consistent response density are right --
-    measured against a finite difference of the density to 2.5e-7, and the
-    ``ef_shift`` correction against charge neutrality to 1e-15. **The dynamical
-    matrix does not follow from them**, and what stops it is a weight convention
-    rather than a missing routine.
-
-    In the metal branch the occupation lives *inside* ``dpsi``: the right-hand
-    side is scaled by ``wg1`` and the density is accumulated with ``wk``, so
-    ``drho = sum_k wk 2 Re[psi* dpsi]``. The second derivative here is a ``jvp``
-    of ``jax.grad(frozen_energy)``, and that functional weights the states by
-    ``wg = wk f`` -- so the same tangent enters the energy carrying ``f`` twice.
-    Dividing it back out band by band is not the fix: it diverges at the Fermi
-    surface, and more to the point the metal response **is not a plain
-    wavefunction response** -- the ``(f_i - f_j)`` structure is inside it, which
-    is why ``drhodv`` has its own ``wgg``-weighted contraction in QE rather than
-    reusing the insulator assembly. The occupations' own first-order change has
-    to enter the energy as ``df_n`` against ``d(eps_n)/du`` and the entropy's
-    derivative, not folded into ``dpsi``.
-
-    **The Hartree and exchange-correlation half is already right**, which is why
-    the answer is wrong by half the spectrum rather than nonsense: ``drho`` is
-    handed to the assembly as a separate tangent and is built with the right
-    weights. The double count sits only in the direct contractions against the
-    states -- the kinetic, nonlocal and constraint terms. The way in is a split
-    assembly: the frozen Hessian at ``wg``, the electronic response with the
-    metal's own weights, which is de Gironcoli's Eq. (B19) structure.
-
-    *Measured with the guard lifted*, on the two-atom aluminium of
-    ``al2-metal.in`` against the vendored ``ph.x`` on the same input
-    (``reference.out.ph-al2-metal``), whose ground state this reproduces to
-    1e-9 Ry:
-
-    =========  ========================  ====================
-    mode       here                      ``ph.x``
-    =========  ========================  ====================
-    acoustic   155.74, 155.74, 155.74    1.1, 1.8, **1.9**
-    optical    197.96, 197.96, 309.26    146.7, 146.7, 311.0
-    =========  ========================  ====================
-
-    in cm^-1 -- the acoustic sum rule violated by half the spectrum, and the
-    folded zone-boundary doublet out by 35%, from a calculation that converges
-    to ``|ddv_scf|^2 = 8.7e-17`` and returns a matrix symmetric to 4.3e-8.
-    Nothing in the numbers says it is wrong; only the reference and the sum rule
-    do, which is exactly what a refusal is for.
-    """
-    if calculation.system.occupations != "fixed":
-        raise NotImplementedError(
-            "the dynamical matrix of a metal is not implemented. The Sternheimer "
-            "solve handles one (PLAN.md P24c: orthogonalize's smearing branch "
-            "and ef_shift are in, and chi_0 matches a finite difference to "
-            "2.5e-7), but the second derivative here contracts dpsi against an "
-            "energy functional weighted by wg, and a metal's dpsi already "
-            "carries its occupation -- so the acoustic sum rule comes out "
-            "violated by 155.7 cm^-1 on two-atom aluminium, half its optical "
-            "mode, from a run that converges and looks ordinary. It needs a "
-            "split assembly with the metal's own weights on the electronic half"
         )
 
 

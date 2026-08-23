@@ -423,9 +423,11 @@ symmetrisation switched off entirely, agree on every digit printed.
 **Where the detail lives.** `PLAN.md` §3, phases P24, P24a (ultrasoft and PAW), P24b (the
 Born charges as a mixed derivative) and P24c (metals) — the transcription traps, what each
 refusal would need, and the measurement behind it. Still refused, each by name: **PAW** Born
-charges, at 1.3e-3 with the missing term identified; the **dynamical matrix of a metal**,
-whose `dpsi` carries its own occupation and would have it counted twice; **noncollinear
-magnetism**, **DFT+U** and **spin spirals**. Metals themselves are *not* refused any more:
+charges, at 1.3e-3 with the missing term identified; **noncollinear
+magnetism**, **DFT+U** and **spin spirals**. The **dynamical matrix of a metal** was on that
+list and is not any more (P28): its `dpsi` does carry its own occupation, and the answer was
+to contract it with `wk` rather than the functional's `wg` — notebook 20. Metals themselves
+are *not* refused any more:
 `chi_0` on fcc aluminium matches a finite difference of the density to 2.5e-7, and the
 Fermi level's own shift restores charge neutrality to 1e-15. The tests are
 `tests/regression/test_response.py`; the code is `pypresso/response/`.

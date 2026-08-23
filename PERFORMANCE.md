@@ -1409,6 +1409,19 @@ cost it about **2.2 s** of its 4.15 s wall.
 | linear solves | 6 x 17 = **102** | 3 x 5 x 2 = **30** |
 | CG steps per band per solve (`av.it.`) | **27.7** | 9.0 - 9.7 |
 
+**A metal costs what the same cell would cost without one** (P28). Two-atom
+aluminium's six modes take **78 s** here against a `ph.x` whose whole `PHONON`
+clock is 4.73 s wall (11.10 s CPU -- that reference was not run pinned to one
+core, so it is not the single-core comparison this document otherwise insists
+on, and the ratio is quoted only as an order). The structural comparison is the
+one that transfers, and it is P25's unchanged: **9** self-consistent iterations
+against `ph.x`'s 7 per representation, at `av.it. = 23.0` against 3.3-6.3. Both
+gaps are the two backlog items below and neither is metallic -- the smearing
+branch adds a weight to a projector and a `def ldos` to a density, and nothing
+in either scales with anything. The **split assembly P28 introduced is free**:
+it is one more `jvp` of `grad_u L` per mode, against a stage that is already
+96% linear solves.
+
 **About 26x, and none of it is the second derivative.** The two ratios in the table
 multiply to about 10, which leaves a factor of 2.6 per CG step — the same place the SCF
 sits against `pw.x` (P10), so the arithmetic is not the problem. The two counts are, and
@@ -1744,4 +1757,5 @@ would cost two applications per vector.
 | 2026-08-22 | Electrostriction (P26): the strain perturbation, the elastic constants and `d(chi)/d(strain)` as a mixed third derivative | 166 s on 8 k-points, of which the strain response is 80 s and the third derivative 36 s; **33x** cheaper than the published sweep of re-converged calculations |
 | 2026-08-22 | Grimme's D2 dispersion (P27): a pair sum over the nuclei with its neighbour list fixed once, the force and the stress `jax.grad` of it | **zero per SCF iteration** -- it never enters `v_of_rho`; 33 ms per geometry and 105 ms per gradient on bilayer graphene at QE's default 200-bohr cutoff |
 | 2026-08-22 | The third derivative on a slab (P27 x P26): bilayer graphene through `electrostriction`, and a guard on a diverged first-order solution | 645 s end to end, of which the strain response is 399 s and 68 iterations; QE's `alpha_mix = 0.7` diverges here at 1.34 per iteration, 0.3 converges at 0.5 |
+| 2026-08-23 | The dynamical matrix of a metal (P28): the `jvp` split so the electronic half takes `wk` where the frozen Hessian keeps `wg` | two-atom aluminium's six modes in **78 s**, 9 response iterations at `av.it. = 23.0` against `ph.x`'s 7 and 3.3-6.3; the extra `jvp` per mode is not measurable against the linear solves, and the iteration gap is P25's two backlog items unchanged |
 | 2026-08-22 | A mixer in the three response loops (`response/mixing.py`), Anderson over the packed state | silicon 19 -> 9 and 18 -> 11 iterations with identical answers; **bilayer graphene and rhombohedral BN converge where linear mixing diverged** -- a correctness fix filed as a speed one |

@@ -18,10 +18,17 @@
 !
 ! `ph.x` gives 1.1, 1.8, 1.9, 146.7, 146.7 and 311.0 cm^-1: three acoustic modes
 ! at the sum rule's own residue and three the doubling folds in from the zone
-! boundary. It is the reference for the *next* phase rather than for this one --
-! the dynamical matrix of a metal is refused here
-! (`pypresso.response.phonon.require_a_metallic_assembly`), and 1.9 against the
-! 155.7 the unguarded assembly returns is the measurement behind the refusal.
+! boundary.
+!
+! This file was committed for a phase that had not happened yet: P24c put the
+! metallic *response* in and left the second derivative refused, and 1.9 against
+! the 155.7 the unguarded assembly returned was the measurement behind that
+! refusal. P28 lifted it -- the electronic half of the `jvp` takes `wk` where
+! the frozen Hessian keeps `wg`, because a metal's `dpsi` already carries its
+! occupation -- and the same six modes now come out at 1.088, 1.559, 1.559,
+! 146.711240, 146.711240 and 311.033545, which is 0.003 cm^-1 on the three real
+! ones. So this is the phase's *check met* rather than its target
+! (`tests/regression/test_phonons.py`).
  &control
     calculation='scf'
  /
