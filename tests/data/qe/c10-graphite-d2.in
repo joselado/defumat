@@ -1,0 +1,52 @@
+! **Ten sites held together by a van der Waals correction.** Five graphene
+! layers in AB stacking -- graphite, ten carbons -- with `vdw_corr =
+! 'grimme-d2'`, the pseudopotential, cutoff and smearing of
+! `graphene-bilayer-d2.in`.
+!
+! It is the bilayer case at five times the thickness, and the reason to run it
+! is that D2 is a *pair sum over the nuclei* whose neighbour list is fixed once
+! for the cell: a bilayer has one interlayer distance and a five-layer stack has
+! four, one of which wraps through the periodic boundary. The energy, the force
+! and the stress are `jax.grad` of that one sum, so a neighbour list that is
+! short by an image shows up in all three at once, and `pw.x` prints all three.
+!
+! The interlayer spacing is 3.35 A (`celldm(3) = 6.805` on `alat = 4.6511` bohr),
+! which is experiment rather than a relaxed value -- the comparison is between
+! two codes at one geometry, so the geometry only has to be the same on both
+! sides.
+ &control
+    calculation = 'scf'
+    tprnfor = .true.
+    tstress = .true.
+ /
+ &system
+    ibrav = 4
+    celldm(1) = 4.6511
+    celldm(3) = 6.805468080128
+    nat = 10
+    ntyp = 1
+    ecutwfc = 40
+    occupations = 'smearing'
+    smearing = 'marzari-vanderbilt'
+    degauss = 0.02
+    vdw_corr = 'grimme-d2'
+ /
+ &electrons
+    conv_thr = 1.0d-10
+    mixing_beta = 0.5
+ /
+ATOMIC_SPECIES
+ C 12.011 C.pbe-hgh.UPF
+ATOMIC_POSITIONS crystal
+ C 0.000000000000 0.000000000000 0.000000000000
+ C 0.333333333333 0.666666666667 0.000000000000
+ C 0.000000000000 0.000000000000 0.200000000000
+ C 0.666666666667 0.333333333333 0.200000000000
+ C 0.000000000000 0.000000000000 0.400000000000
+ C 0.333333333333 0.666666666667 0.400000000000
+ C 0.000000000000 0.000000000000 0.600000000000
+ C 0.666666666667 0.333333333333 0.600000000000
+ C 0.000000000000 0.000000000000 0.800000000000
+ C 0.333333333333 0.666666666667 0.800000000000
+K_POINTS automatic
+ 6 6 1 0 0 0
