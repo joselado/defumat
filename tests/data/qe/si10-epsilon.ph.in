@@ -1,0 +1,9 @@
+ten-site silicon: dielectric constant, Born charges and the Gamma dynamical matrix
+ &inputph
+  prefix = 'si10',
+  tr2_ph = 1.0d-14,
+  epsil = .true.,
+  fildyn = 'si10.dynG',
+  amass(1) = 28.086,
+ /
+0.0 0.0 0.0

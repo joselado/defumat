@@ -530,7 +530,20 @@ def _assemble(calculation, solver, bare, dpsi) -> np.ndarray:
     # wedge is exact for a scalar and not for a rank-2 tensor, so the components
     # the crystal's symmetry forbids are a residue of the reduction. On cubic
     # silicon they are what this removes.
+    #
+    # **Under ``nosym`` there is nothing to put back and it must not be done**,
+    # which is the guard :meth:`Calculation.symmetrize_atom_tensor` was written
+    # to hold in one place and this call site was still missing. It is invisible
+    # on every cell committed before P28b, because there the k-grid is closed
+    # under the point group and the raw tensor is already symmetric -- a no-op
+    # applied to a tensor that does not need it. On the ten-site supercell,
+    # whose 4x4x1 grid the three-fold does *not* preserve, it is worth 0.97 in
+    # the off-diagonal entries and 1.06 in the diagonal against ``ph.x``'s
+    # ``nosym`` run, with the isotropic average -- the part symmetrisation
+    # cannot move -- agreeing to 5e-6.
     identity = np.eye(3)
+    if not calculation.use_symmetry:
+        return epsilon
     return identity + symmetrize_matrix(
         epsilon - identity, calculation.system.cell, calculation.symmetries
     )
