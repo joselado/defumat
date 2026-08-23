@@ -193,6 +193,16 @@ def _invoke(case: Path, tmp: str, conv_thr: float | None) -> str:
         stdin=stdin.open(),
         capture_output=True,
         text=True,
+        # In the run directory, not the caller's. Reading its input from
+        # standard input, ``pw.x`` copies it to a scratch file named
+        # ``input_tmp.in`` **in the working directory**
+        # (``Modules/open_close_input_file.f90``), so two runs sharing a
+        # directory overwrite each other's input and one of them silently
+        # computes the other's system. That is not hypothetical: generating
+        # five of these references concurrently produced a hydrogen chain whose
+        # stdout was silicon's, and the failure only surfaced at all because
+        # the crossed input had a different ``ATOMIC_SPECIES`` count.
+        cwd=tmp,
         env={**os.environ, "OMP_NUM_THREADS": "1"},
         timeout=3600,
     )
@@ -240,6 +250,10 @@ PROJWFC = {
     "pw_lsda-lsda": "pw_lsda/lsda.in",
     "pw_metal-metal-tetrahedra": "pw_metal/metal-tetrahedra.in",
     "al-tetrahedra": "al-tetrahedra",
+    # Ten sites, where the projection has ten atoms to resolve rather than two
+    # and ``fill_nlmchi``'s ordering is the thing being compared as much as the
+    # numbers are.
+    "si10-nc": "si10-nc",
 }
 
 #: Cases that ask ``projwfc.x`` for a broadening of their own, in **Ry** --
