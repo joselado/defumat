@@ -46,6 +46,17 @@ def _scalar(text: str, pattern: str) -> float | None:
     return None if m is None else _floats(m.group(1))[0]
 
 
+def _last_scalar(text: str, pattern: str) -> float | None:
+    """The **last** float captured by ``pattern``.
+
+    A relaxation prints its quantities once per ionic step, so ``_scalar`` reads
+    the *starting* geometry's -- which is right for the SCF runs everything else
+    here compares and wrong for the one number a relaxation exists to produce.
+    """
+    matches = re.findall(pattern, text)
+    return None if not matches else _floats(matches[-1])[0]
+
+
 @dataclass(frozen=True)
 class QEReference:
     """Everything a pypresso run can be checked against, from one QE output."""
@@ -132,6 +143,16 @@ class QEReference:
     #: The energy at that geometry ("Final energy"), in Ry. It is not the same
     #: number as :attr:`total_energy`, which is the *first* ionic step's.
     final_energy: float | None = None
+    #: The **last** ``!  total energy`` in the file, which for a relaxation is
+    #: the answer: the final SCF's for a ``vc-relax`` that runs one, and the
+    #: last ionic step's for a ``treinit_gvecs`` run, which does not (every step
+    #: already had its own grids). :attr:`total_energy` is the *first*, i.e. the
+    #: starting geometry's, and comparing a relaxed result against that is a
+    #: mistake with no shape error to announce it.
+    final_total_energy: float | None = None
+    #: ``Final enthalpy``, in Ry -- what a ``vc-relax`` minimises. ``None`` for
+    #: a fixed-cell run, which prints ``Final energy`` instead.
+    final_enthalpy: float | None = None
     #: ``(scf cycles, bfgs steps)`` from "bfgs converged in N scf cycles and M
     #: bfgs steps", or ``None`` for a run that is not a relaxation.
     bfgs_steps: tuple[int, int] | None = None
@@ -229,6 +250,10 @@ def read_qe_output(path: str | Path) -> QEReference:
             text, r"new unit-cell volume\s*=\s*(" + _FLOAT + r")\s*a\.u\.\^3"
         ),
         final_energy=_scalar(text, r"Final energy\s*=\s*(" + _FLOAT + ")"),
+        final_total_energy=_last_scalar(
+            text, r"!\s+total energy\s*=\s*(" + _FLOAT + ")"
+        ),
+        final_enthalpy=_scalar(text, r"Final enthalpy\s*=\s*(" + _FLOAT + ")"),
         bfgs_steps=_parse_bfgs_steps(text),
         stress=stress,
         pressure=pressure,

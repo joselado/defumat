@@ -11,11 +11,17 @@
 ! neighbour list large enough that an image lost to compression is a real term
 ! rather than an erfc tail below the comparison floor.
 !
-! The starting cell is the *relaxed zero-pressure* one, so the whole of the
-! relaxation is the response to the pressure and the answer is a number both
-! codes have to find rather than one either could start at. Cubic symmetry
-! survives the trajectory, so the relaxed cell must still be cubic -- which is
-! the free check `check_lattice_symmetry` makes every step.
+! `celldm(1) = 10.20` is silicon's zero-pressure lattice constant to within
+! what this functional relaxes it to (10.19 with `Si.pz-vbc`), so the whole of
+! the trajectory is the response to the pressure: `pw.x` takes it to 9.252 bohr,
+! a 25% compression. Diamond silicon is metastable against beta-tin above ~110
+! kbar and this run does not know that -- which is fine, because what is being
+! compared is two codes on one well-defined energy surface, not a phase diagram.
+!
+! Cubic symmetry survives the trajectory, so the relaxed cell must still be
+! cubic. Nothing imposes it -- `cell_dofree` is `'all'`, so every entry of `h`
+! is free to move -- which makes the off-diagonal entries returning to zero a
+! check on the symmetrised stress that shares nothing with `pw.x`.
  &control
     calculation = 'vc-relax'
     tprnfor = .true.

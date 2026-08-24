@@ -3812,18 +3812,38 @@ fictitious cell mass, a different optimizer rather than a different setting — 
 are refused by name, as are the four `cell_dofree` values that impose a
 constraint beyond their mask (`shape`, `2Dshape`, `volume`, `ibrav`).
 
-**`vc-relax3` is not compared to `pw.x`, and the reason is QE's.**
-`symm_base.f90` tests a fixed catalogue of rotation matrices written in a
-canonical cartesian frame, so it finds a symmetry only when the crystal is
-presented in one of those frames; `lattice_point_group` here searches for lattice
-vectors of matching lengths and angles, which is orientation-free and is what the
-module docstring has always claimed. `vc-relax3` and `vc-relax4` are the *same*
-rhombohedral arsenic in two settings, and QE finds **2** operations for the first
-and **12** for the second where this code finds 12 for both — 32 k-points against
-10. That is P28b's unequal-grid finding in another guise: neither code is wrong,
-they are integrating different sums. What is asserted instead is the thing that
-does not depend on the group — that each setting relaxes to a cell carrying the
-pressure it was asked for.
+**`vc-relax3` runs with a different symmetry group on each side, and it is the
+sharpest case here because of it.** `symm_base.f90` tests a fixed catalogue of
+rotation matrices written in a canonical cartesian frame, so QE finds a symmetry
+only when the crystal is presented in one of those frames; `lattice_point_group`
+here searches for lattice vectors of matching lengths and angles, which is
+orientation-free and is what its module docstring has always claimed.
+`vc-relax3` and `vc-relax4` are the *same* rhombohedral arsenic in two settings,
+and QE finds **2** operations for the first and **12** for the second where this
+code finds 12 for both. So on `vc-relax3` the two codes reduce the same 4x4x4
+grid to **32** points and to **10**, symmetrise over groups of 2 and of 12 — and
+agree on the relaxed volume to **3e-5 bohr³** and on the final energy to
+**1e-8 Ry**. It was expected to be the case that could not be compared, on P28b's
+unequal-grid reasoning; it is instead the statement that this grid *is* closed
+under the larger group, which P28b established is not automatic. The case where
+it fails is a grid with unequal divisions, and this is not one.
+
+**The bigger cells, and what the second of them refused to be.** Eight-atom
+cubic silicon at 500 kbar is the supercell regime (P28a) applied to a cell
+gradient: eight atoms and nine cell coordinates in one Hessian, and a structure
+factor that vanishes *exactly* wherever the conventional cell's exact fractions
+kill it. Ten-atom five-layer graphite was chosen for the opposite property —
+`a` is a covalent bond and `c` is held only by the D2 correction, so they must
+move independently — and it is the case that had to be **constrained** to be a
+test at all. With the whole cell free it **collapses by 26% in volume**, and the
+collapse is not physics: `pw.x` run that way ends at an interlayer spacing of
+2.68 Å with a `Final enthalpy` of -113.0741 Ry, while its own final SCF at that
+cell gives **-112.6281** — *above* the -112.7747 the starting geometry had. The
+relaxation went downhill in the frozen basis and uphill in reality, in both
+codes and for the same reason, and it is the clearest statement available of
+what `pulay_error` is measuring and why `treinit_gvecs` exists. Constrained with
+`cell_dofree = 'z'`, only `c` moves, the cell changes by ~3%, and the case
+becomes what it was meant to be — while also being the only test of the mask.
 
 **The 500 kbar cases are not harder versions of the 0 kbar one.** At zero
 pressure the enthalpy is the energy and `P Omega` is identically absent; at 500

@@ -17,9 +17,17 @@
 ! stacking axis -- P28a's regime, with the stress and the cell gradient as the
 ! new consumers of it.
 !
-! `cell_dofree = 'all'`: the hexagonal symmetry is what keeps `a = b` and the
-! angles fixed, not a constraint in the input, so the run is also a check that
-! the symmetrised stress cannot break its own point group.
+! `cell_dofree = 'z'` frees `h(3,3)` and nothing else, so `c` is the only thing
+! that moves. That is not a convenience: with the whole cell free this crystal
+! **collapses by 26% in volume**, and the collapse is an artifact of relaxing in
+! a basis enumerated for the starting cell rather than physics. `pw.x` run that
+! way ends at an interlayer spacing of 2.68 A and a "Final enthalpy" of
+! -113.0741 Ry, while its own final SCF at that cell -- in a basis that belongs
+! to it -- gives -112.6281, *above* the -112.7747 the starting geometry had. The
+! relaxation went downhill in the frozen basis and uphill in reality, and it did
+! so in both codes for the same reason. Constrained to `z` the cell moves ~3%,
+! which is inside what a fixed basis can be trusted for; `VCRelaxResult.pulay_error`
+! is the number that says so, and P29's entry in `PLAN.md` records the collapse.
  &control
     calculation = 'vc-relax'
     tprnfor = .true.
@@ -46,6 +54,7 @@
  &cell
     cell_dynamics = 'bfgs'
     press = 0.0
+    cell_dofree = 'z'
  /
 ATOMIC_SPECIES
  C 12.011 C.pbe-hgh.UPF

@@ -34,9 +34,13 @@ once the geometry is close enough for that to be worth paying for.
 the force after it is reported, so a frozen atom still has a force to look at and
 simply is not allowed to follow it.
 
-Variable-cell relaxation (``calculation = 'vc-relax'``) is not here: the cell
-gradient is the stress, which is P11's, and a cell that moves would also invalidate
-point 1 above.
+Variable-cell relaxation (``calculation = 'vc-relax'``) is
+:mod:`pypresso.workflows.vc_relax`, which is this loop with nine more
+coordinates. It does not break point 1, and the reason is worth reading there:
+QE keeps the same G-vectors for the whole relaxation too (``scale_h.f90``
+re-expresses their Miller indices against the new reciprocal cell and changes
+nothing else) and then runs one *further* SCF, from scratch, at the relaxed
+cell. Two runs, each with its setup done once.
 """
 
 from __future__ import annotations
