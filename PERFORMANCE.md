@@ -1570,63 +1570,79 @@ threshold already sits in.
 
 ## What a variable-cell relaxation costs (P29)
 
-**The comparison, single core on both sides, on QE's own `pw_vc-relax` inputs.** `pw.x`
-is the vendored serial build and the numbers are its own `PWSCF ... WALL`; pypresso is
-pinned to one CPU by the affinity mask, as `tools/compare_qe.py` pins it.
+**The comparison, single core on both sides, best of three.** `pw.x` is the vendored
+serial build and the number is its own `PWSCF ... WALL`; pypresso is pinned to one CPU by
+the affinity mask, as `tools/compare_qe.py` pins it. On QE's `pw_vc-relax/vc-relax4.in`
+(rhombohedral arsenic at 500 kbar, 2 atoms, 10 k-points, 10 ionic steps on both sides):
 
-| case | `pw.x` | pypresso | ratio | ionic steps |
-|---|---|---|---|---|
-| `vc-relax4` (500 kbar, 2 atoms, 10 k-points) | **7.8 s** | **222 s** | **28x** | 10 both |
+| | best of 3 | samples |
+|---|---|---|
+| `pw.x` | **4.39 s** | 4.4, 4.5, 4.4 |
+| pypresso | **32.36 s** | 39.0, 33.1, 32.4 |
+| ratio | **7.4x** | |
 
-That is an order of magnitude worse than P10's ~3.3x per SCF iteration, and **it is not
-the SCF**. The breakdown on the same case:
+**Best of three and not a single sample, and this is the finding to read first.** This
+machine is shared, and a single timing of the same run an hour earlier gave **222 s** --
+a factor of **6.9** out. Both codes are pinned, but they are pinned to the *lowest-numbered
+available core*, which four of someone else's processes were also using, so the pin does
+not isolate. The first version of this section reported the resulting **28x** as the
+headline and built an analysis on it that did not survive re-measurement: the stress's
+retrace, which looked like 10.8 s per ionic step and "half the run", is **0.6 s**. Nothing
+about the code changed between the two measurements. The rule this file already states
+about benchmarking on a two-atom cell has a companion: **a single wall-clock sample on a
+shared machine is not a measurement**, and the repeat-and-take-the-minimum that
+`compare_qe.py --repeats` exists for is not optional.
+
+**Where the 7.4x goes.** The per-piece costs, measured the same way:
 
 | | seconds |
 |---|---|
-| setup (`Calculation`) | 1.58 |
-| first SCF, 6 iterations | 2.81 (0.47 per iteration) |
-| force | 0.38 |
+| setup (`Calculation`) | 1.53 |
+| first SCF, 6 iterations | 2.89 (0.48 per iteration) |
+| force | 0.38 first call, 0.02 after |
+| stress | 1.93 first call, **0.57** after |
 | `at_cell` | 0.27 |
-| whole relaxation: 10 ionic steps, 57 SCF iterations | 222 |
+| whole relaxation: 10 ionic steps, 57 SCF iterations | 32.4 |
 
-57 SCF iterations at 0.47 s is **27 s**, and ten forces are 4 s. The other **190 s** is the
-stress — and the stress on the base cell takes 0.70 s once it is compiled.
+57 SCF iterations at 0.48 s is **27 s**, which is 85% of the run: **a variable-cell
+relaxation costs what its SCFs cost**, and the ratio against `pw.x` is P10's ordinary
+per-iteration ratio rather than anything the cell introduced. The force, the stress and
+`at_cell` together are about 1.2 s a step.
 
-**It is retracing, which is this file's standing observation arriving in a new place.**
-Timing `compute_stress` twice on the *same* moved calculation separates the two:
+**The one thing the cell *does* add is a retrace, and it is a fifth of the run.**
+`at_strain` drops `_energy_gradient` on every call -- it has to, since the compiled
+gradient closes over the cell it was traced at -- so every ionic step compiles the strain
+derivative again:
 
 | | first call | second call | retrace |
 |---|---|---|---|
-| base cell | 2.02 s | 0.70 s | 1.32 |
-| moved cell (x0.99) | 1.24 | 0.59 | 0.66 |
-| moved cell (x0.98) | **11.40** | 0.58 | **10.82** |
-| moved cell (x0.97) | **11.31** | 0.58 | **10.73** |
+| base cell | 1.93 s | 0.57 s | 1.36 |
+| moved cell (x0.99) | 1.18 | 0.55 | 0.63 |
+| moved cell (x0.98) | 1.17 | 0.57 | 0.60 |
+| moved cell (x0.97) | 1.27 | 0.57 | 0.71 |
 
-Ten ionic steps at ~11 s of retracing is 110 s — half the run — for arithmetic that takes
-0.58 s. `at_strain` drops `_energy_gradient` on every call (it has to: the compiled
-gradient closes over the cell it was traced at), so every ionic step compiles the whole
-strain derivative again. The 0.66 s row is the same call *before* XLA's cache has been
-invalidated by a second distinct cell; from the third cell on, every step pays in full.
-
-**The way down is to stop closing over the cell.** `at_strain` is
-`f(strain) -> Calculation`, and the gradient is taken of `strain -> energy(at_strain(...))`
-with everything else captured; making the *cell* an argument of the traced function rather
-than a constant folded into it would let one compilation serve every geometry, exactly as
-`at_positions` already lets one compiled force serve a whole fixed-cell relaxation (which
-is why a `relax` run does not show this and a `vc-relax` does). It is a change to
-`stress/energy.py`'s signature, it is not made, and it is worth about **half** of a
-variable-cell run. **Backlog item.**
+0.6 s of compilation for 0.57 s of arithmetic, ten times over: **6 s of 32**. A fixed-cell
+`relax` does not pay it, because `at_positions` keeps its compiled force and one
+compilation serves the whole trajectory. Making the cell an *argument* of the traced
+function rather than a constant folded into it would do the same here. **Backlog item 4**,
+and it is worth about 20%, not the 50% the contaminated measurement claimed.
 
 **What the ionic step count says, and it is the good news.** Both codes take **10** steps
 on `vc-relax4`, `vc-relax5` and `vc-relax6` and **11** on `vc-relax3`: the transcribed
 BFGS, its trust radius and its Wolfe line search reproduce QE's trajectory step for step
-even with the cell in the coordinate vector. None of the 28x is the optimizer taking a
+even with the cell in the coordinate vector. None of the 7.4x is the optimizer taking a
 worse path.
 
-**Memory.** A variable-cell step holds what a stress holds and nothing more --
-`at_cell` returns a new `Calculation` whose k-independent arrays are rebuilt rather than
-added to, and the previous one is dropped as soon as the density has been extrapolated
-off it. On `vc-relax4` the peak is the stress gradient's, unchanged from P11.
+**What a `treinit_gvecs` run costs, and when it is not affordable at all.** Rebuilding the
+grids every step is a full setup per step -- 1.53 s on this two-atom cell, and it grows
+with the cell rather than with the step count. `vc-relax6` is the affordable end of it. The
+unaffordable end is a case that does not converge: five-layer graphite with
+`cell_dofree = 'z'` and `treinit_gvecs` ran **50 ionic steps in 18 minutes of `pw.x`** and
+stopped with "The maximum number of steps has been reached", because rebuilding the grids
+makes the energy surface *discontinuous* -- the FFT dimension along `c` changes as `c`
+does, and `etxc` is evaluated pointwise on it -- so a line search with Wolfe conditions
+has nothing to converge to. That is the trade `treinit_gvecs` makes: it removes the Pulay
+error and buys a surface the optimizer cannot walk. `PLAN.md`'s P29 entry has the case.
 
 ## Optimisation backlog
 
@@ -1645,12 +1661,15 @@ instinct. None of these may change a validated number.
 3. **Shell-based radial evaluation** for quantities depending only on `|G|` (~100
    shells vs 1459 G-vectors for Si). Note this is *not* strain-safe: shells split
    under strain, so it must stay off the stress path.
-4. **Stop closing over the cell in the stress gradient** (P29). Half of a
-   variable-cell relaxation is XLA compiling the strain derivative again at
-   every ionic step -- 10.8 s of retracing for 0.58 s of arithmetic, measured
-   above. Making the cell an argument of the traced function rather than a
-   constant folded into it is the fix, and it costs a signature change in
-   `stress/energy.py`.
+4. **Stop closing over the cell in the stress gradient** (P29). `at_strain`
+   drops `_energy_gradient` on every call, because the compiled gradient closes
+   over the cell it was traced at, so a variable-cell relaxation compiles the
+   strain derivative again at every ionic step: **0.6 s of retracing for 0.57 s
+   of arithmetic**, about a fifth of the run. Making the cell an argument of the
+   traced function rather than a constant folded into it is the fix, and it
+   costs a signature change in `stress/energy.py`. A fixed-cell `relax` does not
+   pay it -- `at_positions` already keeps its compiled force -- which is why this
+   surfaced only here.
 5. **Schedule the response solver's threshold** (P25). `dfpt_kernels.f90` uses
    `thresh = min(0.1 sqrt(dr2), 1e-2)` where `response/phonon.py` holds a fixed
    1e-12, and the cost is `av.it. = 27.7` against `ph.x`'s 9.3 — a factor of

@@ -3863,26 +3863,50 @@ failed it is silently the last ionic step's, in the relaxation's own basis rathe
 than the rebuilt one. `QEReference.scf_converged` now says so and the tests
 assert it before comparing anything to it.
 
-**Ten-atom five-layer graphite** was chosen for the opposite property — `a` is a
-covalent bond and `c` is held only by the D2 correction, so they respond to
-different physics — and it is the case that needs **`treinit_gvecs`**. With the
-whole cell free it collapses by 26% in volume; constrained with
-`cell_dofree = 'z'` so that only `c` can move, it *still* collapses, 31.65 → 25.35
-bohr. That was the prediction that failed: the constraint was expected to keep the
-cell inside what a fixed basis can be trusted for, and it does not, because the
-soft axis is exactly the one that moves. The collapse is not physics — `pw.x` run
-that way prints a `Final enthalpy` of -113.0268 Ry while its own final SCF at that
-cell gives **-112.7102**, *above* the -112.7747 the starting geometry had. The
-relaxation went downhill in the frozen basis and uphill in reality, in both codes
-and for the same reason: a 20% contraction along the soft axis makes the frozen
-sphere over-complete in exactly that direction, and `C.pbe-hgh` at
-`ecutwfc = 40` is far enough from converged that the basis gain outweighs the
-physics being minimised. **Silicon compressed 25% and paid 8.7e-5 Ry for it; this
-pays 0.32.** It is the clearest statement available of what `pulay_error` measures
-and why `treinit_gvecs` exists, and it is the number to have in mind before
-trusting a relaxed cell of a layered crystal at a modest cutoff. The committed
-case rebuilds the grids every step; `cell_dofree = 'z'` stays, because the physics
-is in `c` and because it is the only test of the mask.
+**Ten-atom five-layer graphite is not a variable-cell relaxation at this cutoff,
+and finding that out is what it contributed.** It was chosen for the property no
+cubic cell has -- `a` is a covalent bond and `c` is held only by the D2
+correction, so the two respond to different physics and a cell block that got
+them wrong together could not hide. It failed three ways, each of which is worth
+having written down:
+
+* **Whole cell free, basis frozen: it collapses by 26% in volume.** Not physics.
+  `pw.x` prints a `Final enthalpy` of -113.0741 Ry and its own final SCF at that
+  cell gives **-112.6281** — *above* the -112.7747 the starting geometry had.
+* **Constrained with `cell_dofree = 'z'` so that only `c` can move: it still
+  collapses**, 31.65 → 25.35 bohr, `Final enthalpy` -113.0268 against a final SCF
+  of **-112.7102**. The prediction was that constraining it would keep the cell
+  inside what a fixed basis can be trusted for; the constraint leaves free
+  exactly the soft axis, which is the one that runs away. A 20% contraction along
+  `c` makes the frozen sphere over-complete in precisely that direction, and
+  `C.pbe-hgh` at `ecutwfc = 40` is far enough from converged that the basis gain
+  outweighs the physics being minimised. **Silicon compressed 25% and paid
+  8.7e-5 Ry for it; this pays 0.32.**
+* **`treinit_gvecs` removes the Pulay error and the run then does not converge at
+  all.** 50 ionic steps, 18 minutes of `pw.x`, and "The maximum number of steps
+  has been reached" with the volume still oscillating around 555-560 bohr³.
+  Rebuilding the grids every step makes the energy surface *discontinuous* — the
+  FFT dimension along `c` changes as `c` does and `etxc` is evaluated pointwise on
+  it — so a line search with Wolfe conditions has nothing to converge to. That is
+  the trade `treinit_gvecs` makes, and it is the reason it is not simply the
+  better setting.
+
+Three failures in a row on one crystal is a statement about `vc-relax` rather
+than about this code, and both codes make it identically: **a layered crystal at
+a modest cutoff has no trustworthy relaxed cell by either route**, and
+`VCRelaxResult.pulay_error` is the number that says which route you are on. The
+case is not committed as an agreement test, because there is nothing converged to
+agree about.
+
+**The ten-atom case that works is silicon**, and it is the same cell P28b used:
+five primitive cells stacked along `a3`, so the crystal is as far from cubic as
+graphite is and the three directions have no symmetry obliging them to respond
+alike, without a soft axis held together by a dispersion correction. It runs on
+`4 4 4` rather than the `4 4 1` its shape suggests, for P28b's reason — on a grid
+with unequal divisions the two codes build genuinely different irreducible sets
+and the totals differ by 6.9e-5 Ry with neither wrong — and at `ecutwfc = 20`
+rather than the 12 the other si10 cases use, because what a vc-relax needs small
+is not the basis error but its *derivative* with respect to the cell.
 
 **The 500 kbar cases are not harder versions of the 0 kbar one.** At zero
 pressure the enthalpy is the energy and `P Omega` is identically absent; at 500

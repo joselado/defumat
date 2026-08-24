@@ -258,39 +258,42 @@ def test_the_relaxed_cubic_cell_is_still_cubic(pseudo_dir):
 
 
 def test_ten_atoms_and_a_cell_that_changes_shape(pseudo_dir):
-    """Five-layer graphite relaxed along ``c``, with the grids rebuilt each step.
+    """P28b's five-cell silicon stack under 100 kbar, against ``pw.x``.
 
-    Two things at once that no other case here has: ``cell_dofree`` actually
-    masking something (only ``h(3,3)`` may move, so this is the only test that a
-    frozen cell component stays frozen through a whole *run* rather than through
-    the optimizer alone), and ``treinit_gvecs``, which this crystal needs --
-    relaxed in a fixed basis it collapses by 20% along ``c`` in **both** codes,
-    and ``pw.x``'s own final SCF at the collapsed cell comes out *above* the
-    energy the starting geometry had. The input's header has that measurement;
-    it is what ``VCRelaxResult.pulay_error`` exists to report.
+    The case the cell's *nine* coordinates exist for, and the reason is geometry
+    rather than chemistry: ``a3`` is five primitive cells long where ``a1`` and
+    ``a2`` are one, so the crystal is far from cubic and nothing obliges the
+    three directions to respond alike. A cubic cell under pressure moves one
+    coordinate and the other eight ride along.
+
+    Five-layer graphite was written for this slot first, being the case where
+    ``a`` and ``c`` are held by different physics entirely. It is not here
+    because it is not a variable-cell relaxation at ``ecutwfc = 40`` by any
+    route -- frozen basis it collapses 20% along ``c`` in both codes, and with
+    ``treinit_gvecs`` ``pw.x`` runs 50 ionic steps and reports "The maximum
+    number of steps has been reached". `PLAN.md`'s P29 entry has the three
+    measurements; there is nothing converged there to agree about.
     """
-    result = _relaxed("c10-graphite-d2-vc-relax", pseudo_dir, False)
-    reference = _reference("c10-graphite-d2-vc-relax", False)
+    result = _relaxed("si10-vc-relax", pseudo_dir, False)
+    reference = _reference("si10-vc-relax", False)
     assert result.converged
     assert np.abs(result.cell - reference.final_cell).max() < CELL_BOHR
 
 
-def test_graphites_layers_move_and_its_bonds_do_not(pseudo_dir):
-    """``a`` is held by the mask and ``c`` is not, so only ``c`` may move.
+def test_the_ten_atom_cell_relaxes_anisotropically(pseudo_dir):
+    """The long axis and the short ones do not scale together.
 
-    Not a physics claim -- ``cell_dofree = 'z'`` imposes it -- but the check
-    that the mask survives ten ionic steps of an accumulated Hessian, which is
-    the same failure ``test_a_frozen_cell_component_stays_frozen_through_the_hessian``
-    tests at the level of the optimizer alone.
+    What separates this from every cubic case here: if the relaxation were
+    secretly isotropic -- a volume scaling wearing nine coordinates -- the three
+    lattice vectors would each change by the same fraction. They do not, and
+    ``cell_dofree`` is ``'all'``, so nothing imposes either outcome.
     """
-    result = _relaxed("c10-graphite-d2-vc-relax", pseudo_dir, False)
-    system = build_system(read_pw_input(CASES / "c10-graphite-d2-vc-relax.in"))
+    result = _relaxed("si10-vc-relax", pseudo_dir, False)
+    system = build_system(read_pw_input(CASES / "si10-vc-relax.in"))
     start = np.asarray(system.cell.at)
-    # Every entry of ``h`` but ``h(3,3)`` is frozen, so the whole in-plane block
-    # has to come back bit for bit, not merely nearly. A leak through the
-    # Hessian would be small and would look like a converged answer.
-    frozen = np.abs(result.cell - start)
-    moved = frozen[2, 2]
-    frozen[2, 2] = 0.0
-    assert frozen.max() < 1e-12, "cell_dofree = 'z' let something else move"
-    assert moved / np.linalg.norm(start[2]) > 0.01, "c did not move at all"
+    ratios = np.linalg.norm(result.cell, axis=1) / np.linalg.norm(start, axis=1)
+    assert ratios.max() < 1.0, "100 kbar has to compress every axis"
+    assert ratios.max() - ratios.min() > 1e-4, (
+        f"the cell scaled isotropically ({ratios}), so the shape degrees of "
+        "freedom were never exercised"
+    )
