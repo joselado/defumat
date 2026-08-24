@@ -153,6 +153,15 @@ class QEReference:
     #: ``Final enthalpy``, in Ry -- what a ``vc-relax`` minimises. ``None`` for
     #: a fixed-cell run, which prints ``Final energy`` instead.
     final_enthalpy: float | None = None
+    #: False when the output contains ``convergence NOT achieved``. Worth
+    #: having because ``pw.x`` prints its total energy with a leading ``!``
+    #: **only** when the SCF converged, so :attr:`final_total_energy` -- "the
+    #: last one" -- is really "the last *converged* one", and on a run whose
+    #: final SCF failed that is a different quantity from the one its name
+    #: suggests: the last ionic step's, in the relaxation's own basis. That is
+    #: exactly what a ``vc-relax`` that closes a gap under pressure produces,
+    #: and comparing against it silently compares two different calculations.
+    scf_converged: bool = True
     #: ``(scf cycles, bfgs steps)`` from "bfgs converged in N scf cycles and M
     #: bfgs steps", or ``None`` for a run that is not a relaxation.
     bfgs_steps: tuple[int, int] | None = None
@@ -254,6 +263,7 @@ def read_qe_output(path: str | Path) -> QEReference:
             text, r"!\s+total energy\s*=\s*(" + _FLOAT + ")"
         ),
         final_enthalpy=_scalar(text, r"Final enthalpy\s*=\s*(" + _FLOAT + ")"),
+        scf_converged="convergence NOT achieved" not in text,
         bfgs_steps=_parse_bfgs_steps(text),
         stress=stress,
         pressure=pressure,

@@ -11,12 +11,19 @@
 ! neighbour list large enough that an image lost to compression is a real term
 ! rather than an erfc tail below the comparison floor.
 !
-! `celldm(1) = 10.20` is silicon's zero-pressure lattice constant to within
-! what this functional relaxes it to (10.19 with `Si.pz-vbc`), so the whole of
-! the trajectory is the response to the pressure: `pw.x` takes it to 9.252 bohr,
-! a 25% compression. Diamond silicon is metastable against beta-tin above ~110
-! kbar and this run does not know that -- which is fine, because what is being
-! compared is two codes on one well-defined energy surface, not a phase diagram.
+! `celldm(1) = 10.20` is silicon's zero-pressure lattice constant to within what
+! this functional relaxes it to (10.19 with `Si.pz-vbc`), so the whole of the
+! trajectory is the response to the pressure.
+!
+! **100 kbar and not 500, because 500 closes the gap.** At 500 kbar this cell
+! compresses by 25%, diamond silicon becomes metallic, and a run with the default
+! fixed occupations is then not a calculation at all: `pw.x` relaxes happily in
+! the frozen basis and then reports `convergence NOT achieved after 100
+! iterations` in its final SCF at the relaxed cell, while pypresso converges the
+! same ill-posed problem to a fixed-occupation solution 7.3e-3 Ry away. Two codes
+! disagreeing about a system neither should be describing is not a test. At 100
+! kbar the cell moves ~9%, which is as much as the arsenic cases move, and the
+! crystal stays an insulator on both sides.
 !
 ! Cubic symmetry survives the trajectory, so the relaxed cell must still be
 ! cubic. Nothing imposes it -- `cell_dofree` is `'all'`, so every entry of `h`
@@ -41,7 +48,7 @@
  /
  &cell
     cell_dynamics = 'bfgs'
-    press = 500.0
+    press = 100.0
  /
 ATOMIC_SPECIES
  Si  28.086  Si.pz-vbc.UPF

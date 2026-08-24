@@ -1568,6 +1568,66 @@ band. It shrinks with every atom added. **Backlog**, not a fix made: the way dow
 mask rather than change a shape — and it is the same item the response loop's fixed 1e-12
 threshold already sits in.
 
+## What a variable-cell relaxation costs (P29)
+
+**The comparison, single core on both sides, on QE's own `pw_vc-relax` inputs.** `pw.x`
+is the vendored serial build and the numbers are its own `PWSCF ... WALL`; pypresso is
+pinned to one CPU by the affinity mask, as `tools/compare_qe.py` pins it.
+
+| case | `pw.x` | pypresso | ratio | ionic steps |
+|---|---|---|---|---|
+| `vc-relax4` (500 kbar, 2 atoms, 10 k-points) | **7.8 s** | **222 s** | **28x** | 10 both |
+
+That is an order of magnitude worse than P10's ~3.3x per SCF iteration, and **it is not
+the SCF**. The breakdown on the same case:
+
+| | seconds |
+|---|---|
+| setup (`Calculation`) | 1.58 |
+| first SCF, 6 iterations | 2.81 (0.47 per iteration) |
+| force | 0.38 |
+| `at_cell` | 0.27 |
+| whole relaxation: 10 ionic steps, 57 SCF iterations | 222 |
+
+57 SCF iterations at 0.47 s is **27 s**, and ten forces are 4 s. The other **190 s** is the
+stress — and the stress on the base cell takes 0.70 s once it is compiled.
+
+**It is retracing, which is this file's standing observation arriving in a new place.**
+Timing `compute_stress` twice on the *same* moved calculation separates the two:
+
+| | first call | second call | retrace |
+|---|---|---|---|
+| base cell | 2.02 s | 0.70 s | 1.32 |
+| moved cell (x0.99) | 1.24 | 0.59 | 0.66 |
+| moved cell (x0.98) | **11.40** | 0.58 | **10.82** |
+| moved cell (x0.97) | **11.31** | 0.58 | **10.73** |
+
+Ten ionic steps at ~11 s of retracing is 110 s — half the run — for arithmetic that takes
+0.58 s. `at_strain` drops `_energy_gradient` on every call (it has to: the compiled
+gradient closes over the cell it was traced at), so every ionic step compiles the whole
+strain derivative again. The 0.66 s row is the same call *before* XLA's cache has been
+invalidated by a second distinct cell; from the third cell on, every step pays in full.
+
+**The way down is to stop closing over the cell.** `at_strain` is
+`f(strain) -> Calculation`, and the gradient is taken of `strain -> energy(at_strain(...))`
+with everything else captured; making the *cell* an argument of the traced function rather
+than a constant folded into it would let one compilation serve every geometry, exactly as
+`at_positions` already lets one compiled force serve a whole fixed-cell relaxation (which
+is why a `relax` run does not show this and a `vc-relax` does). It is a change to
+`stress/energy.py`'s signature, it is not made, and it is worth about **half** of a
+variable-cell run. **Backlog item.**
+
+**What the ionic step count says, and it is the good news.** Both codes take **10** steps
+on `vc-relax4`, `vc-relax5` and `vc-relax6` and **11** on `vc-relax3`: the transcribed
+BFGS, its trust radius and its Wolfe line search reproduce QE's trajectory step for step
+even with the cell in the coordinate vector. None of the 28x is the optimizer taking a
+worse path.
+
+**Memory.** A variable-cell step holds what a stress holds and nothing more --
+`at_cell` returns a new `Calculation` whose k-independent arrays are rebuilt rather than
+added to, and the previous one is dropped as soon as the density has been extrapolated
+off it. On `vc-relax4` the peak is the stress gradient's, unchanged from P11.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -1585,24 +1645,30 @@ instinct. None of these may change a validated number.
 3. **Shell-based radial evaluation** for quantities depending only on `|G|` (~100
    shells vs 1459 G-vectors for Si). Note this is *not* strain-safe: shells split
    under strain, so it must stay off the stress path.
-4. **Schedule the response solver's threshold** (P25). `dfpt_kernels.f90` uses
+4. **Stop closing over the cell in the stress gradient** (P29). Half of a
+   variable-cell relaxation is XLA compiling the strain derivative again at
+   every ionic step -- 10.8 s of retracing for 0.58 s of arithmetic, measured
+   above. Making the cell an argument of the traced function rather than a
+   constant folded into it is the fix, and it costs a signature change in
+   `stress/energy.py`.
+5. **Schedule the response solver's threshold** (P25). `dfpt_kernels.f90` uses
    `thresh = min(0.1 sqrt(dr2), 1e-2)` where `response/phonon.py` holds a fixed
    1e-12, and the cost is `av.it. = 27.7` against `ph.x`'s 9.3 — a factor of
    three, on the stage that is 96% of the run. It is `electrons.f90`'s `ethr`
    schedule in a second place, the rule is already quoted in
    `response/sternheimer.py`'s docstring, and the same fix applies to
    `response/efield.py`. Cheapest item on this list by a wide margin.
-5. *(done, 2026-08-22)* **A mixer in the response loop.** Was: 17 linear-mixing
+6. *(done, 2026-08-22)* **A mixer in the response loop.** Was: 17 linear-mixing
    iterations against `ph.x`'s 5, whose mixer is `LR_Modules/mix_pot.f90`. It
    turned out not to be a speed item at all -- linear mixing of a map whose
    Jacobian has an eigenvalue below -1 **diverges**, which two systems then did
    (see "What a mixer in the response loop was worth"). `pypresso/response/mixing.py`
    now wraps `scf/mixing.py`'s Anderson history for all three loops.
-6. **One irreducible representation at a time** (P25), for the *memory* rather
+7. **One irreducible representation at a time** (P25), for the *memory* rather
    than the time: it bounds the working set at 3 modes in flight instead of
    `3 nat`, which is 7 GB on a 16-atom cell. It does not reduce the number of
    solves — `ph.x` perturbs along all `3 nat` modes too.
-7. **The stress's reverse-mode tape through the radial transforms** (P11). 11 GB on
+8. **The stress's reverse-mode tape through the radial transforms** (P11). 11 GB on
    eight-atom ultrasoft silicon against the SCF's 0.9, and the largest single
    allocation anywhere in the code. `jax.checkpoint` on the augmentation kernel
    alone was measured and is worth nothing, so the next thing to try is a

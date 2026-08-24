@@ -105,7 +105,19 @@ def _reference(name: str, suite: bool):
     path = CASES / f"reference.out.{stem}"
     if not path.is_file():
         pytest.skip(f"no generated reference for {stem}; run tools/generate_reference.py")
-    return read_qe_output(path)
+    reference = read_qe_output(path)
+    # ``pw.x`` prints ``!  total energy`` only when the SCF converged, so on a
+    # run whose *final* SCF failed, ``final_total_energy`` is silently the last
+    # ionic step's -- in the relaxation's own basis -- rather than the final
+    # SCF's. An earlier version of ``si8-vc-relax.in`` applied 500 kbar, which
+    # closes silicon's gap and makes a fixed-occupation run ill-posed: ``pw.x``
+    # stopped with "convergence NOT achieved after 100 iterations" and the
+    # comparison would have been against a quantity with the wrong name.
+    assert reference.scf_converged, (
+        f"{stem}: the reference's own SCF did not converge, so there is no "
+        "number in it to compare against; fix the input, not the tolerance"
+    )
+    return reference
 
 
 def _crystal(positions, cell):
