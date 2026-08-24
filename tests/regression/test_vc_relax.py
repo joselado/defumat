@@ -139,7 +139,8 @@ def test_the_relaxed_cell_matches_pw_x(name, pseudo_dir):
     result = _relaxed(name, pseudo_dir, True)
     reference = _reference(name, True)
     assert result.converged, f"{name}: pypresso did not converge"
-    assert np.abs(result.cell - reference.final_cell).max() < CELL_BOHR
+    difference = np.abs(result.cell - reference.final_cell).max()
+    assert difference < CELL_BOHR, f"{name}: cell differs by {difference:.2e} bohr"
 
 
 @pytest.mark.parametrize("name", QE_CASES)
@@ -148,7 +149,8 @@ def test_the_relaxed_volume_matches_pw_x(name, pseudo_dir):
     result = _relaxed(name, pseudo_dir, True)
     reference = _reference(name, True)
     expected = abs(float(np.linalg.det(reference.final_cell)))
-    assert abs(result.volume - expected) / expected < VOLUME_FRACTION
+    fraction = abs(result.volume - expected) / expected
+    assert fraction < VOLUME_FRACTION, f"{name}: volume differs by {fraction:.2e}"
 
 
 @pytest.mark.parametrize("name", QE_CASES)
@@ -163,7 +165,7 @@ def test_the_relaxed_positions_match_pw_x(name, pseudo_dir):
     reference = _reference(name, True)
     expected = _crystal(reference.final_positions, reference.final_cell)
     moved = np.abs(result.positions_crystal - expected).max()
-    assert moved < POSITION_CRYSTAL
+    assert moved < POSITION_CRYSTAL, f"{name}: positions differ by {moved:.2e}"
 
 
 @pytest.mark.parametrize("name", QE_CASES)
@@ -183,7 +185,8 @@ def test_the_final_scf_energy_matches_pw_x(name, pseudo_dir):
     """
     result = _relaxed(name, pseudo_dir, True)
     reference = _reference(name, True)
-    assert abs(result.total_energy - reference.final_total_energy) < ENERGY_RY
+    difference = abs(result.total_energy - reference.final_total_energy)
+    assert difference < ENERGY_RY, f"{name}: energy differs by {difference:.2e} Ry"
 
 
 @pytest.mark.parametrize("name", QE_CASES)
@@ -244,7 +247,8 @@ def test_eight_atoms_and_a_cell_under_pressure(pseudo_dir):
     result = _relaxed("si8-vc-relax", pseudo_dir, False)
     reference = _reference("si8-vc-relax", False)
     assert result.converged
-    assert np.abs(result.cell - reference.final_cell).max() < BIG_CELL_BOHR
+    difference = np.abs(result.cell - reference.final_cell).max()
+    assert difference < BIG_CELL_BOHR, f"cell differs by {difference:.2e} bohr"
 
 
 def test_the_relaxed_cubic_cell_is_still_cubic(pseudo_dir):
@@ -281,7 +285,8 @@ def test_ten_atoms_and_a_cell_both_relaxing(pseudo_dir):
     result = _relaxed("si10-vc-relax", pseudo_dir, False)
     reference = _reference("si10-vc-relax", False)
     assert result.converged
-    assert np.abs(result.cell - reference.final_cell).max() < BIG_CELL_BOHR
+    difference = np.abs(result.cell - reference.final_cell).max()
+    assert difference < BIG_CELL_BOHR, f"cell differs by {difference:.2e} bohr"
 
 
 def test_the_displaced_atom_goes_back_while_the_cell_compresses(pseudo_dir):
