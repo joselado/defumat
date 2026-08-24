@@ -3925,6 +3925,21 @@ symmetry operations), so this is the first case in the set where the cell's
 the comparison against `pw.x` is over all nine entries rather than effectively
 over one.
 
+**What the two big cells agree to, and why the numbers differ by four orders of
+magnitude.** Eight-atom cubic silicon matches `pw.x`'s relaxed cell to
+**2.65e-7 bohr**; the ten-atom stack to **2.28e-3**. Neither is a defect and the
+gap is not accuracy: what `press_conv_thr = 0.5` kbar permits is a *linear
+strain*, `0.5/(3 B)` with silicon's bulk modulus about 980 kbar, so 1.7e-4 — and
+that is 1.7e-3 bohr on a 9.9-bohr cubic axis and **5.9e-3** on the 34.9-bohr long
+axis of a five-cell stack. si8 stops 6300x tighter than its own allowance
+because it is cubic with 24 operations, so the cell has effectively one free
+parameter and both codes converge it hard; si10 stops at 40% of its allowance
+because two operations and 39 coupled coordinates let the two BFGS trajectories
+separate before both satisfy the same thresholds. Tightening si10's bound means
+tightening `press_conv_thr` on both sides rather than fixing anything, so the
+test asserts the volume and the energy beside it — neither of which inherits the
+long axis's amplification.
+
 **The 500 kbar cases are not harder versions of the 0 kbar one.** At zero
 pressure the enthalpy is the energy and `P Omega` is identically absent; at 500
 kbar arsenic compresses by 10% *and* its two atoms move from 0.2722 to 0.2500 —

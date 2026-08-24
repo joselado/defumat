@@ -70,10 +70,23 @@ CELL_BOHR = 6e-4
 POSITION_CRYSTAL = 1e-5
 #: The volume, as a fraction. Worst measured: 3.7e-3 bohr^3 on 190.9, i.e. 2e-5.
 VOLUME_FRACTION = 6e-5
-#: The relaxed cell of the two bigger cases, in bohr. Set from measurement once
-#: each has run; they are larger cells at looser cutoffs than the arsenic set and
-#: do not inherit its bound.
-BIG_CELL_BOHR = 6e-4
+# The two bigger cases get bounds of their own, and they differ by four orders
+# of magnitude for a reason worth stating. What ``press_conv_thr = 0.5`` kbar
+# permits is a *linear strain* -- 0.5/(3 B) with silicon's B about 980 kbar, so
+# 1.7e-4 -- and that is a different number of bohr on a 9.9-bohr cubic axis
+# (1.7e-3) than on the 34.9-bohr long axis of a five-cell stack (5.9e-3).
+#
+#: The eight-atom cubic cell. Measured: **2.65e-7 bohr**, which is 6300x tighter
+#: than its own stopping allowance -- it is cubic with 24 operations, so the cell
+#: has effectively one free parameter and both codes converge it hard.
+SI8_CELL_BOHR = 5e-6
+#: The ten-atom stack. Measured: **2.28e-3 bohr**, which is 40% of its allowance
+#: and is therefore *threshold*-limited rather than accuracy-limited. Two
+#: symmetry operations and 39 coupled coordinates let the two BFGS trajectories
+#: separate before both satisfy the same thresholds, and the long axis turns that
+#: into more bohr than the same strain would on a small cell. Tightening this
+#: bound means tightening ``press_conv_thr`` on both sides, not fixing anything.
+SI10_CELL_BOHR = 5e-3
 #: The final SCF's total energy, in Ry. Worst measured: 1.5e-5 (``vc-relax6``,
 #: whose grids are rebuilt every step so the two codes' trajectories separate
 #: further than they do at a fixed basis).
@@ -248,7 +261,7 @@ def test_eight_atoms_and_a_cell_under_pressure(pseudo_dir):
     reference = _reference("si8-vc-relax", False)
     assert result.converged
     difference = np.abs(result.cell - reference.final_cell).max()
-    assert difference < BIG_CELL_BOHR, f"cell differs by {difference:.2e} bohr"
+    assert difference < SI8_CELL_BOHR, f"cell differs by {difference:.2e} bohr"
 
 
 def test_the_relaxed_cubic_cell_is_still_cubic(pseudo_dir):
@@ -286,7 +299,17 @@ def test_ten_atoms_and_a_cell_both_relaxing(pseudo_dir):
     reference = _reference("si10-vc-relax", False)
     assert result.converged
     difference = np.abs(result.cell - reference.final_cell).max()
-    assert difference < BIG_CELL_BOHR, f"cell differs by {difference:.2e} bohr"
+    assert difference < SI10_CELL_BOHR, f"cell differs by {difference:.2e} bohr"
+
+    # Two more, because on this case the cell bound is threshold-limited and a
+    # single loose number is not much of an assertion. The volume and the energy
+    # are the quantities a relaxation is actually run for, and neither inherits
+    # the long axis's amplification of the stopping allowance.
+    expected = abs(float(np.linalg.det(reference.final_cell)))
+    fraction = abs(result.volume - expected) / expected
+    assert fraction < 1e-3, f"volume differs by {fraction:.2e}"
+    energy = abs(result.total_energy - reference.final_total_energy)
+    assert energy < 1e-3, f"energy differs by {energy:.2e} Ry"
 
 
 def test_the_displaced_atom_goes_back_while_the_cell_compresses(pseudo_dir):
