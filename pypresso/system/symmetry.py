@@ -145,6 +145,22 @@ def lattice_point_group(at: np.ndarray) -> list[np.ndarray]:
     at = np.asarray(at, dtype=float)
     metric = at @ at.T
 
+    # **The comparison is scale-free, and QE's is too.** ``symm_base.f90``
+    # tests its candidate rotations against ``at``, which is in units of
+    # ``alat``, with an absolute ``eps1 = 1e-6``; doing the same arithmetic in
+    # bohr makes the *same crystal* lose operations as its lattice constant
+    # grows, because the residue being tested against a fixed number is a
+    # length or a length squared. On the rhombohedral arsenic of QE's
+    # ``pw_vc-relax/vc-relax4.in``, whose cell is written to eight decimals,
+    # the metric's off-diagonals are spread by 1.7e-7 alat^2 -- inside QE's
+    # threshold -- and by **8.5e-6 bohr^2**, outside a bare 1e-6: eight of the
+    # twelve operations were dropped and the k-set came out twice too large.
+    # A variable-cell relaxation makes this worse than a fixed setting, since
+    # the cell it applies to changes size during the run.
+    length_scale = float(np.linalg.norm(at, axis=1).max())
+    length_tolerance = _TOLERANCE * length_scale
+    metric_tolerance = _TOLERANCE * length_scale**2
+
     # Candidate images of each basis vector: lattice vectors of the same length.
     #
     # How far the search has to reach is a property of the cell and is bounded
@@ -167,18 +183,19 @@ def lattice_point_group(at: np.ndarray) -> list[np.ndarray]:
     lengths = np.linalg.norm(vectors, axis=1)
 
     candidates = [
-        integers[np.abs(lengths - np.linalg.norm(at[axis])) < _TOLERANCE] for axis in range(3)
+        integers[np.abs(lengths - np.linalg.norm(at[axis])) < length_tolerance]
+        for axis in range(3)
     ]
 
     operations = []
     for first in candidates[0]:
         for second in candidates[1]:
-            if abs(first @ metric @ second - metric[0, 1]) > _TOLERANCE:
+            if abs(first @ metric @ second - metric[0, 1]) > metric_tolerance:
                 continue
             for third in candidates[2]:
-                if abs(first @ metric @ third - metric[0, 2]) > _TOLERANCE:
+                if abs(first @ metric @ third - metric[0, 2]) > metric_tolerance:
                     continue
-                if abs(second @ metric @ third - metric[1, 2]) > _TOLERANCE:
+                if abs(second @ metric @ third - metric[1, 2]) > metric_tolerance:
                     continue
                 rotation = np.array([first, second, third], dtype=int)
                 if abs(abs(round(np.linalg.det(rotation))) - 1) > _TOLERANCE:

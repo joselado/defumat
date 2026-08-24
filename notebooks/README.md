@@ -33,6 +33,7 @@ ends with a pointer to both.
 | [`20_phonons.ipynb`](20_phonons.ipynb) | The force constants as one more derivative of the gradient that already gives the force -- `dynmat0` and `drhodv` as two halves of one `jvp` -- silicon's optical mode at Gamma against `ph.x` (510.102 against 510.152 cm-1), and a **metal**, where that one `jvp` becomes two because its `dpsi` already carries the occupation (aluminium to 0.0019 cm-1) | P25, P28, P28a |
 | [`21_electrostriction.ipynb`](21_electrostriction.ipynb) | Differentiating a *response*: `d(eps)/d(strain)` as one `jvp` of the second-order energy at frozen first-order wavefunctions, against the sweep of re-converged calculations it replaces (5e-5 on the figure's component), and the elasto-optic tensor it is the same object as | P26 |
 | [`22_van_der_waals.ipynb`](22_van_der_waals.ipynb) | Grimme's D2: a pair sum over the nuclei that never enters `v_of_rho` -- the same run with and without it gives a bit-for-bit identical density -- and bilayer graphene binding at 6.10 bohr where PBE alone has no minimum at all (3.1e-9 Ry against `pw.x`) | P27 |
+| [`23_variable_cell_relaxation.ipynb`](23_variable_cell_relaxation.ipynb) | The cell as nine more coordinates of the same BFGS, whose gradient is the stress rearranged into `Omega (P I - sigma) h^-T`: rhombohedral arsenic at 500 kbar compressing 10% and going simple cubic, against `pw.x`'s own relaxed cell to 1e-3 bohr, and the stale-k-point trap a moving cell is the first thing to reach | P29 |
 
 ## Conventions
 

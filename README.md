@@ -37,6 +37,7 @@ point where there is not.
 | **Projected densities of states** — resolved by atom, by `l` and by `m`, with Löwdin charges and the spilling parameter | `run_pdos`, `pypresso pdos` | `pw.x` + `projwfc.x` |
 | **Forces on the atoms** | `compute_forces` | `pw.x` — but by differentiating the energy, with QE's hand-derived terms kept beside them as a cross-check |
 | **Structural relaxation** — BFGS with QE's trust radius and line search | `calculation = 'relax'`, `pypresso relax` | `pw.x` |
+| **Variable-cell relaxation** — the cell and the atoms relaxed together, at an applied pressure | `calculation = 'vc-relax'`, `run_vc_relax` | `pw.x` |
 | **Stress tensor and pressure**, in Ry/bohr³ and kbar | `tstress = .true.`, `compute_stress`, `pypresso stress` | `pw.x` — but from one strain derivative of the energy, with QE's own term-by-term expressions transcribed beside it as a cross-check |
 | **Magnetism**, collinear, with one Fermi level or two | `nspin = 2`, `tot_magnetization` | `pw.x` |
 | **Magnetism as a vector** — noncollinear, with the magnetic symmetry group | `noncolin` | `pw.x` |
@@ -65,7 +66,7 @@ schemes, which fixed-spin-moment update (`fsm_update`) — are chosen with the
 same input variables as in `pw.x` where it has them, and `PLAN.md` lists them
 phase by phase.
 
-Not yet: variable-cell relaxation, and phonons away from `Gamma` — the ones *at* `Gamma` are
+Not yet: phonons away from `Gamma` — the ones *at* `Gamma` are
 in the table above, for insulators **and metals** on norm-conserving datasets; an ultrasoft
 dataset's is refused by name, with the measurement behind the refusal in `PLAN.md`.
 `K_POINTS gamma` runs, but at an explicit k = 0 with the
@@ -178,6 +179,7 @@ without being run, and each has a plain-text `.md` version beside it.
 | [`20_phonons`](notebooks/20_phonons.ipynb) | The force constants as one more derivative of the gradient that already gives the force, and silicon's optical mode at Gamma against `ph.x` |
 | [`21_electrostriction`](notebooks/21_electrostriction.ipynb) | Differentiating a *response*: `d(eps)/d(strain)` as a third derivative of the energy, the elastic constants that come with it, and the elasto-optic tensor |
 | [`22_van_der_waals`](notebooks/22_van_der_waals.ipynb) | Grimme's D2 dispersion: a pair sum over the nuclei that never touches the density, and bilayer graphene binding where PBE alone has no minimum |
+| [`23_variable_cell_relaxation`](notebooks/23_variable_cell_relaxation.ipynb) | The cell as nine more coordinates in the same BFGS, arsenic squeezed to simple cubic at 500 kbar against `pw.x`, and why a relaxed crystal carries the applied pressure rather than no stress |
 
 `benchmarks/` holds ready-to-run input files, from a two-atom silicon cell up to
 a sixteen-atom one.

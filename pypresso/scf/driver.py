@@ -934,6 +934,24 @@ class Calculation:
         # ``alpha`` and the neighbour list are fixed here and the sum is then a
         # differentiable function of the positions -- which is what makes the
         # ionic part of the force ``grad`` of it rather than a second expression.
+        # **The k-points in crystal coordinates, which is the invariant.**
+        # ``KPoints.coords`` are cartesian in units of ``2 pi / alat``, so they
+        # describe a k-set only together with the cell they were built for.
+        # Every mover that deforms the cell at a frozen sphere -- ``at_strain``,
+        # and ``at_cell`` on top of it -- leaves ``k`` fixed *here* and moves
+        # the cartesian ones, so this is what those must rebuild from.
+        # ``at_strain`` used to recompute it as
+        # ``system.kpoints.crystal(system.cell)`` at the point of use, which is
+        # the same number only while the two are consistent: after one cell
+        # move they are not, and a *second* ``at_strain`` -- which is what a
+        # stress on a moved cell is -- differentiated at k-points 0.031 (in
+        # crystal units) away from the ones the SCF had just run at. The energy
+        # was right and its derivative was not, which put 64 kbar into the
+        # stress of a variable-cell step and moved the relaxed volume of QE's
+        # ``vc-relax4`` by 2%. Host-side and concrete: it is a property of the
+        # run, decided once.
+        self._kcrystal = np.asarray(system.kpoints.crystal(system.cell))
+
         self.ewald_sum = build_ewald(system.cell, system.structure, dense, self.charges)
         self.ewald = float(
             self.ewald_sum.energy(system.cell, system.structure.positions, dense)
@@ -1461,6 +1479,20 @@ class Calculation:
         moved.rho_atomic_species = species_atomic_charge(
             moved.pseudos, cell, dense
         )
+        # ``at_strain`` leaves ``system.kpoints`` holding the *starting* cell's
+        # cartesian coordinates, which is harmless while it is only ever a
+        # tangent (nothing reads them inside a derivative) and is a stale
+        # k-point list the moment the cell has actually moved. Everything on the
+        # compute path goes through ``_kcart``, but a caller that asks the
+        # system what its k-points are deserves the truth -- and
+        # ``with_cell`` at the end of a relaxation reads exactly that.
+        moved.system = eqx.tree_at(
+            lambda sys: sys.kpoints.coords,
+            moved.system,
+            moved.system.cell.precision.as_real(
+                np.asarray(self._kcrystal) @ np.asarray(cell.bg) / float(cell.tpiba)
+            ),
+        )
         return moved
 
     def at_strain(self, strain: jnp.ndarray) -> "Calculation":
@@ -1547,7 +1579,7 @@ class Calculation:
         # ``kpoints.cartesian(strained_cell)`` returns the *unstrained* k-points
         # -- silently, and exactly zero at Gamma. What is fixed under a strain is
         # k in crystal coordinates, which is the same rule the G-vectors follow.
-        kcart = self.system.kpoints.crystal(self.system.cell) @ cell.bg
+        kcart = jnp.asarray(self._kcrystal) @ cell.bg
         # Recorded because *nothing else can recover it*: ``KPoints.coords`` are
         # cartesian in units of ``2 pi / alat``, so
         # ``kpoints.cartesian(strained_cell)`` gives the unstrained k-points back
@@ -1679,6 +1711,11 @@ class Calculation:
         # starting guess (they are diagonalised afterwards) and a genuinely wrong
         # set of Hubbard projectors (they are not).
         moved.basis_kpoints = kpoints
+        # A genuinely different k-set, so the crystal coordinates that
+        # ``at_strain`` rebuilds from are a different list too. Carrying the old
+        # one over -- which ``copy.copy`` does by itself -- would give a stress
+        # or a velocity on a band path the SCF grid's k-points.
+        moved._kcrystal = np.asarray(kpoints.crystal(self.system.cell))
 
         smooth, cell = self.basis.smooth, self.system.cell
         planewaves = build_plane_wave_basis(smooth, kpoints, cell, system.ecutwfc)

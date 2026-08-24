@@ -121,6 +121,14 @@ class QEReference:
     #: cartesian -- what pw.x prints between "Begin final coordinates" and "End
     #: final coordinates", converted out of whatever units the card used.
     final_positions: np.ndarray | None = None
+    #: The relaxed **cell** of a ``calculation = 'vc-relax'`` run, in bohr, with
+    #: the lattice vectors as rows -- what pw.x prints as ``CELL_PARAMETERS``
+    #: inside the same block. ``None`` for a fixed-cell run, which prints none.
+    final_cell: np.ndarray | None = None
+    #: ``new unit-cell volume``, in bohr^3. Read rather than derived from
+    #: :attr:`final_cell`, so that the two are an independent check on each
+    #: other -- pw.x prints both and a transposed cell reproduces the volume.
+    final_volume: float | None = None
     #: The energy at that geometry ("Final energy"), in Ry. It is not the same
     #: number as :attr:`total_energy`, which is the *first* ionic step's.
     final_energy: float | None = None
@@ -216,6 +224,10 @@ def read_qe_output(path: str | Path) -> QEReference:
         forces=_parse_forces(text),
         force_terms=_parse_force_terms(text),
         final_positions=_parse_final_positions(text),
+        final_cell=_parse_final_cell(text),
+        final_volume=_scalar(
+            text, r"new unit-cell volume\s*=\s*(" + _FLOAT + r")\s*a\.u\.\^3"
+        ),
         final_energy=_scalar(text, r"Final energy\s*=\s*(" + _FLOAT + ")"),
         bfgs_steps=_parse_bfgs_steps(text),
         stress=stress,
@@ -547,6 +559,45 @@ def _parse_force_terms(text: str) -> dict:
     return terms
 
 
+def _last_final_block(text: str) -> str | None:
+    """The **last** "Begin final coordinates" block, which is the answer.
+
+    An ``nspin = 2`` run that converges to zero magnetization prints one, then
+    restarts with a nonzero moment to check (``ions_status = 2``,
+    ``reset_magn``) and prints another; a ``vc-relax`` prints one before its
+    final SCF and QE's own is the later of them. Taking the first -- which a
+    non-greedy match over the whole file does -- reads a geometry the run
+    subsequently moved away from.
+    """
+    blocks = re.findall(
+        r"Begin final coordinates(.*?)End final coordinates", text, re.S
+    )
+    return blocks[-1] if blocks else None
+
+
+def _parse_final_cell(text: str) -> np.ndarray | None:
+    """``CELL_PARAMETERS (alat= ...)`` from the final-coordinates block, in bohr.
+
+    The ``alat`` in the header is the run's own and is what the three rows are
+    in units of; it is *not* recomputed from the relaxed cell, which is why a
+    ``vc-relax``'s printed ``CELL_PARAMETERS`` can have rows of length far from
+    one.
+    """
+    block = _last_final_block(text)
+    if block is None:
+        return None
+    match = re.search(
+        r"CELL_PARAMETERS\s*\(\s*alat\s*=\s*(" + _FLOAT + r")\s*\)\s*\n"
+        r"((?:\s*" + _FLOAT + r"\s+" + _FLOAT + r"\s+" + _FLOAT + r"\s*\n){3})",
+        block,
+    )
+    if match is None:
+        return None
+    alat = float(match.group(1))
+    rows = [_floats(line)[:3] for line in match.group(2).strip().splitlines()]
+    return np.array(rows, dtype=float) * alat
+
+
 def _parse_final_positions(text: str) -> np.ndarray | None:
     """The relaxed geometry, converted to cartesian bohr.
 
@@ -554,15 +605,16 @@ def _parse_final_positions(text: str) -> np.ndarray | None:
     the *input* used, so the conversion has to be done here -- and ``crystal``
     needs the cell, which is why the lattice is read first.
     """
-    block = re.search(
-        r"Begin final coordinates.*?ATOMIC_POSITIONS\s*\(?(\w+)\)?\s*\n"
-        r"(.*?)End final coordinates",
-        text,
-        re.S,
-    )
+    block = _last_final_block(text)
     if block is None:
         return None
-    units = block.group(1).lower()
+    match = re.search(
+        r"ATOMIC_POSITIONS\s*\(?(\w+)\)?\s*\n(.*)", block, re.S
+    )
+    if match is None:
+        return None
+    units = match.group(1).lower()
+    block = match
     positions = np.array(
         [
             _floats(line)[:3]
@@ -579,7 +631,14 @@ def _parse_final_positions(text: str) -> np.ndarray | None:
     if units == "alat":
         return positions * alat
     if units == "crystal":
-        at = _parse_axes(text, "crystal axes", "a")
+        # **The final cell, not the starting one.** For a fixed-cell relaxation
+        # they are the same array and this distinction is invisible; for a
+        # ``vc-relax`` the starting cell is the wrong one by however much the
+        # relaxation moved it, and the error is a plausible geometry rather
+        # than a shape mismatch. QE prints ``CELL_PARAMETERS`` in the same
+        # block precisely because the coordinates are relative to it.
+        final = _parse_final_cell(text)
+        at = final / alat if final is not None else _parse_axes(text, "crystal axes", "a")
         return positions @ (at * alat)
     raise ValueError(f"unknown ATOMIC_POSITIONS units in a final geometry: {units!r}")
 

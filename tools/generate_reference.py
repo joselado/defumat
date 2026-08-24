@@ -116,6 +116,20 @@ RESTAMPED = [
     "pw_lda+U/lda+U-noU.in",
     "pw_lda+U/lda+U-user_ns.in",
     "pw_lda+U/lda+U_force.in",
+    # Variable-cell relaxation (P29). The four cases of ``pw_vc-relax/`` that
+    # use BFGS: rhombohedral arsenic at zero pressure and at 500 kbar, the same
+    # at ``nspin = 2``, and the same again with ``treinit_gvecs``, which rebuilds
+    # the grids on every accepted step instead of once. ``vc-relax1`` and
+    # ``vc-relax2`` are ``cell_dynamics = 'damp-w'`` -- Wentzcovitch damped
+    # dynamics, a different optimizer -- and are refused by name rather than run.
+    #
+    # A relaxation's reference is its **final** geometry and the energy of the
+    # final SCF, so it is regenerated with the vendored pw.x for the same reason
+    # ``pw_relax/relax.in`` is.
+    "pw_vc-relax/vc-relax3.in",
+    "pw_vc-relax/vc-relax4.in",
+    "pw_vc-relax/vc-relax5.in",
+    "pw_vc-relax/vc-relax6.in",
 ]
 
 

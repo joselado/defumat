@@ -1,0 +1,52 @@
+! **Eight atoms and a cell under 500 kbar.** The conventional cubic cell of
+! diamond silicon -- a supercell of the primitive one, which P28a established is
+! a regime rather than a size -- compressed by an applied pressure and relaxed
+! back with `calculation = 'vc-relax'`.
+!
+! What it adds over the two-atom arsenic of QE's own `pw_vc-relax` cases is
+! everything that scales with the cell: eight atoms whose forces and nine cell
+! coordinates share one Hessian, a structure factor that vanishes *exactly* at
+! the G-vectors the cubic cell's exact fractions kill (P28a's `abs` trap, whose
+! consumer here is the stress rather than the second derivative), and a
+! neighbour list large enough that an image lost to compression is a real term
+! rather than an erfc tail below the comparison floor.
+!
+! The starting cell is the *relaxed zero-pressure* one, so the whole of the
+! relaxation is the response to the pressure and the answer is a number both
+! codes have to find rather than one either could start at. Cubic symmetry
+! survives the trajectory, so the relaxed cell must still be cubic -- which is
+! the free check `check_lattice_symmetry` makes every step.
+ &control
+    calculation = 'vc-relax'
+    tprnfor = .true.
+    tstress = .true.
+ /
+ &system
+    ibrav = 1
+    celldm(1) = 10.20
+    nat = 8
+    ntyp = 1
+    ecutwfc = 24.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ &ions
+ /
+ &cell
+    cell_dynamics = 'bfgs'
+    press = 500.0
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ Si 0.00 0.00 0.00
+ Si 0.00 0.50 0.50
+ Si 0.50 0.00 0.50
+ Si 0.50 0.50 0.00
+ Si 0.25 0.25 0.25
+ Si 0.25 0.75 0.75
+ Si 0.75 0.25 0.75
+ Si 0.75 0.75 0.25
+K_POINTS automatic
+ 4 4 4 0 0 0

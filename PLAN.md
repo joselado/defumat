@@ -3688,6 +3688,152 @@ for **every** committed reference, in twelve seconds. All three bugs above were
 visible in one of those two numbers long before any energy was.*
 
 
+### P29 — Variable-cell relaxation: the cell as nine more coordinates. ✅ DONE.
+
+`pypresso/relax/cell.py`, `pypresso/relax/settings.py`, `pypresso/workflows/vc_relax.py`,
+`Calculation.at_cell`, `System.with_cell`, `check_lattice_symmetry`, and the variable-cell
+half of `pypresso/relax/bfgs.py`. `calculation = 'vc-relax'`.
+
+**The objection this phase was refused on is QE's own and QE answers it.** The
+entry above read "a moving cell would also invalidate the rule that the FFT grid
+and the symmetry group are fixed once for the whole run". It does not.
+`scale_h.f90` re-expresses the **same** G-vectors — the same Miller indices, the
+same sphere membership, the same FFT dimensions, the same k-points in crystal
+coordinates — against the new reciprocal cell, and `igk_k` is not regenerated
+either: QE prints the rising "New effective cutoffs" rather than changing the
+basis. That is exactly `Calculation.at_strain`, which P11 already wrote. So the
+relaxation is **one run** under the fixed-setup rule from beginning to end. When
+it converges, `reset_gvectors` throws the setup away and runs **one more SCF
+from scratch** — "Final scf calculation at the relaxed structure. The G-vectors
+are recalculated for the final unit cell. Results may differ from those at the
+preceding step." Two runs, each obeying the rule, and the difference between
+their energies is the Pulay error of having relaxed in a basis chosen for a
+different cell (`VCRelaxResult.pulay_error`), reported rather than left to be
+noticed. `treinit_gvecs` is QE's escape hatch and is here too: rebuild
+everything on every accepted step, pay a full setup per step, and the error is
+zero — and, as QE does, skip the final SCF, because every step already was one.
+
+**The cell gradient is the stress rearranged, and the rearrangement is exact.**
+With `h` the matrix whose *columns* are the lattice vectors, `h -> (1+eps) h`
+gives `eps = dh h^-1`, so `dE/dh = (dE/d eps) h^-T`; with
+`sigma = -(1/Omega) dE/d eps` and `d Omega/dh = Omega h^-T`, the gradient of the
+**enthalpy** `H = E + P Omega` is
+
+    dH/dh = Omega (P I - sigma) h^-T,
+
+which is `cell_base.f90`'s `cell_force` line for line. Two things fall out and
+both are used: the stationary point is **`sigma = P I`** — a relaxed crystal
+carries the applied pressure, it does not have zero stress — and
+`(dH/dh) h^T / Omega = P I - sigma` recovers the stress from the gradient, which
+is how the cell's convergence is measured and why QE prints it in kbar.
+
+**Three transcription details, each of which is silent if dropped.** The metric
+is rebuilt **every step** and the Hessian is not: QE allocates `metric`,
+`inv_metric` and `hinv_block` inside `bfgs()` from the `h` it was passed while
+`inv_hess` is read back untouched, and computing the metric once in the
+constructor is exact at fixed cell and wrong at variable cell. `iforceh` is
+re-applied after **every** product with the inverse Hessian, not once to the
+gradient, because `inv_hess` stops being block diagonal after the first update
+and mixes a free component back into a frozen one. And the cell block's metric
+is `0.04 omega g^-1` where an atom's is `g` — a factor with no derivation in the
+Fortran, whose job is to make one `trust_radius_max` govern both, carried over
+verbatim because a different value is a different optimizer.
+
+**The bug this phase found, and it is P28a's shape exactly: the energy was right
+and its derivative was not.** `at_strain` rebuilt the k-points as
+`system.kpoints.crystal(system.cell)`. `KPoints.coords` are cartesian in units
+of `2 pi/alat`, so they describe a k-set only together with the cell they were
+built for — and `at_strain` updates the cell without updating them. That is the
+same number only while the two are consistent, which is true of every caller
+P11, P24 and P26 ever had, and false the moment a cell has actually *moved*. A
+**second** `at_strain` — which is what a stress on a stepped cell is —
+differentiated at k-points **0.031 away in crystal coordinates** from the ones
+the SCF had just run at. Measured on `vc-relax4` at QE's own relaxed cell, with
+both codes holding the same 4159 G-vectors on the same 24³ grid:
+
+| | frozen basis | fresh basis |
+|---|---|---|
+| `pw.x` | 500.04 kbar | 502.03 |
+| pypresso, before | **564.05** | 502.03 |
+| pypresso, after | **500.04** | 502.03 |
+| a central difference of the energy | **500.12** | 510.30 |
+
+The finite difference is what settled it: 64 kbar is not a Pulay term that
+autodiff sees and QE's analytic expressions miss — a defensible-sounding story —
+because the frozen-basis energy's own derivative is 500.12. `Calculation` now
+carries `_kcrystal`, decided once, and every frozen-sphere mover rebuilds from
+it. The relaxed volume of `vc-relax4` moved from 194.52 to QE's 190.79 bohr³,
+**2%**.
+
+**The second finding is a tolerance, and it is dimensional.** The lattice point
+group was searched with an absolute `1e-6` applied to lengths in **bohr** and to
+metric entries in **bohr²**, where `symm_base.f90`'s `eps1 = 1e-6` is applied to
+`at`, which is in units of `alat`. The same crystal therefore loses operations
+as its lattice constant grows — a factor of `alat²` ≈ 49 on this cell. QE's own
+`vc-relax4.in`, whose cell is written to eight decimals, has its metric
+off-diagonals spread by 1.7e-7 alat² (inside QE's threshold) and **8.5e-6 bohr²**
+(outside a bare 1e-6): eight of twelve operations dropped, and a k-set of 20
+where `pw.x` builds 10. A variable-cell run makes this worse than a fixed
+setting, since the cell it applies to changes size during the run. The
+comparison is scale-free now, and `test_shapes_against_qe.py`'s 91 cases are
+unchanged by it.
+
+**Two things `at_strain` leaves stale that a moving cell makes live**, and both
+are `at_cell`'s job rather than `at_strain`'s — the pair being `at_spiral_q`'s
+"frozen while differentiating, rebuilt to move". The **Ewald and dispersion
+neighbour lists**: freezing them is right for a derivative at one geometry, where
+no image is gained or lost and the `rmax`/`rcut` boundary sits where the terms are
+1e-8 and 1e-12 Ry, and wrong for a *step*, which can shrink the cell by per cent
+so that an image outside the enumeration radius is inside `rmax` and simply
+missing — an `erfc` tail that converges and reports success. `rgen` and `ewald`
+run afresh on every ionic step in QE for this reason. And **`rho_atomic_species`**,
+which only the analytic `force_corr` reads and which a relaxation asking for the
+analytic force as a cross-check does read.
+
+**`check_symmetry` needed a second half.** It works in crystal coordinates, so a
+deformation of the cell leaves every one of its numbers untouched: a cubic
+crystal stretched tetragonal passes it unchanged with four rotations that are no
+longer symmetries of anything. `check_lattice_symmetry` checks the metric,
+`R g R^T = g`, which is where `symm_base.f90` finds the group in the first place.
+
+**P28b's stated gap is closed on the way past.** `RelaxSettings` reads
+`&control`'s `etot_conv_thr`/`forc_conv_thr`/`nstep`, `&ions`'s
+`ion_dynamics`/`upscale` and `&cell`'s
+`cell_dynamics`/`press`/`press_conv_thr`/`cell_dofree`/`treinit_gvecs` onto
+`System`, so a file asking for a tighter threshold is honoured rather than parsed
+and ignored — which is what left `pw.x` taking 26 BFGS steps to this code's 11 on
+`si10-nc-relax.in`, the geometries 0.057 bohr apart and both codes reporting
+success. `press` and `press_conv_thr` are in **kbar** in the input and are
+converted once, at the point of use.
+
+**What the cases measure.** `pw_vc-relax/` has six inputs; `vc-relax1` and
+`vc-relax2` are `cell_dynamics = 'damp-w'` — Wentzcovitch damped dynamics with a
+fictitious cell mass, a different optimizer rather than a different setting — and
+are refused by name, as are the four `cell_dofree` values that impose a
+constraint beyond their mask (`shape`, `2Dshape`, `volume`, `ibrav`).
+
+**`vc-relax3` is not compared to `pw.x`, and the reason is QE's.**
+`symm_base.f90` tests a fixed catalogue of rotation matrices written in a
+canonical cartesian frame, so it finds a symmetry only when the crystal is
+presented in one of those frames; `lattice_point_group` here searches for lattice
+vectors of matching lengths and angles, which is orientation-free and is what the
+module docstring has always claimed. `vc-relax3` and `vc-relax4` are the *same*
+rhombohedral arsenic in two settings, and QE finds **2** operations for the first
+and **12** for the second where this code finds 12 for both — 32 k-points against
+10. That is P28b's unequal-grid finding in another guise: neither code is wrong,
+they are integrating different sums. What is asserted instead is the thing that
+does not depend on the group — that each setting relaxes to a cell carrying the
+pressure it was asked for.
+
+**The 500 kbar cases are not harder versions of the 0 kbar one.** At zero
+pressure the enthalpy is the energy and `P Omega` is identically absent; at 500
+kbar arsenic compresses by 10% *and* its two atoms move from 0.2722 to 0.2500 —
+the rhombohedral-to-simple-cubic transition — so the cell and the atoms are both
+doing something and doing it at once.
+
+*Notebook 23.*
+
+
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes
 the k-point count.

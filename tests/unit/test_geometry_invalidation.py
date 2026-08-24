@@ -133,12 +133,32 @@ def test_a_spiral_built_without_the_reader_still_refuses_symmetry(pseudo_dir):
         Calculation(spiral, pseudos)
 
 
-@pytest.mark.parametrize("mode", ["md", "vc-relax", "vc-md"])
+@pytest.mark.parametrize("mode", ["md", "vc-md"])
 def test_a_calculation_without_a_driver_is_refused(mode):
     """Not run as a plain SCF, which reported success for a run that never was."""
     text = _CONSTRAINED.replace("calculation = 'scf'", f"calculation = '{mode}'")
     with pytest.raises(NotImplementedError, match="calculation"):
         build_system(parse_pw_input(text))
+
+
+def test_vc_relax_has_a_driver_now_and_reads_its_cell_namelist():
+    """P29 gave ``vc-relax`` a driver, so it must stop being refused.
+
+    The other half of the same statement, and the half that would rot
+    silently: the ``&cell`` namelist has to reach
+    :attr:`System.relax`. A ``vc-relax`` that parsed and then ignored its
+    ``press`` would relax to the zero-pressure cell and report the pressure it
+    was asked for -- which is P28b's ``forc_conv_thr`` gap one namelist over.
+    """
+    text = _CONSTRAINED.replace("calculation = 'scf'", "calculation = 'vc-relax'")
+    text += "\n &cell\n   press = 250.0\n   cell_dofree = 'xyz'\n /\n"
+    system = build_system(parse_pw_input(text))
+    assert system.calculation == "vc-relax"
+    assert system.relax.press == 250.0
+    assert system.relax.cell_dofree == "xyz"
+    # ``read_namelists.f90`` resets ``cell_dynamics`` to 'bfgs' for a pw.x
+    # vc-relax, where the bare namelist default is 'none'.
+    assert system.relax.cell_dynamics == "bfgs"
 
 
 def test_an_unknown_calculation_is_rejected():
