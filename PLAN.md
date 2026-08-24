@@ -3914,6 +3914,17 @@ the two codes build genuinely different irreducible sets and the totals differ b
 si10 cases use, because what a vc-relax needs small is not the basis error but
 its *derivative* with respect to the cell.
 
+**And it relaxes anisotropically, which is the property the case exists for.**
+`pw.x` takes the volume to 91.6% — the same 8.4% compression si8 gets at the same
+pressure, as it should, being the same material — but the three lattice vectors
+do *not* scale together: **0.975595, 0.975595, 0.966743**. The long axis
+contracts by a third more than the short ones. Nothing imposes either the
+anisotropy or its absence (`cell_dofree` is `'all'` and the crystal has two
+symmetry operations), so this is the first case in the set where the cell's
+*shape* degrees of freedom are doing something a volume scaling could not, and
+the comparison against `pw.x` is over all nine entries rather than effectively
+over one.
+
 **The 500 kbar cases are not harder versions of the 0 kbar one.** At zero
 pressure the enthalpy is the energy and `P Omega` is identically absent; at 500
 kbar arsenic compresses by 10% *and* its two atoms move from 0.2722 to 0.2500 —
