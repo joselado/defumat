@@ -3675,6 +3675,11 @@ bohr apart. At QE's defaults on both sides they take 11 SCF cycles each and agre
 **6.8e-6 bohr**. `si10-nc-relax.in` says so in its header; threading the `&ions` namelist
 through `System` is the fix and is not done here.
 
+**Status of the sweep itself:** `tests/regression/test_ten_site.py` is **27 passed in
+1:28:39** with a peak of 22.8 GB, measured end to end on an idle machine, and
+`tests/regression/test_shapes_against_qe.py` is 90 passed in twelve seconds. Every number
+in the table above is enforced by one of those rather than measured once and written down.
+
 *No notebook and no README row: this phase adds no feature. What it adds to the
 test suite is `tests/regression/test_ten_site.py` -- the ten-site sweep itself --
 and `tests/regression/test_shapes_against_qe.py`, which compares the two numbers
