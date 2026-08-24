@@ -116,9 +116,9 @@ def run_relax(
     *,
     nbnd: int | None = None,
     conv_thr: float = 1.0e-6,
-    etot_conv_thr: float = 1.0e-4,
-    forc_conv_thr: float = 1.0e-3,
-    nstep: int = 50,
+    etot_conv_thr: float | None = None,
+    forc_conv_thr: float | None = None,
+    nstep: int | None = None,
     ion_dynamics: str | None = None,
     force_method: str | None = None,
     calculation: Calculation | None = None,
@@ -136,7 +136,24 @@ def run_relax(
     (1e-4 Ry) and ``forc_conv_thr`` (1e-3 Ry/bohr) must *both* be satisfied,
     ``conv_thr`` is the SCF's starting threshold, and ``nstep`` caps the ionic
     steps.
+
+    **They come from the input file unless given here.** ``None`` -- the
+    default -- reads :attr:`System.relax`, which carries what ``&control`` and
+    ``&ions`` said or QE's defaults if they said nothing
+    (:class:`~pypresso.relax.settings.RelaxSettings`). Before that existed
+    these arguments defaulted to QE's numbers directly and a file asking for
+    anything else was parsed and ignored, so the two codes stopped at different
+    points on the same curve and both reported success (`PLAN.md` P28b).
     """
+    settings = system.relax
+    etot_conv_thr = (
+        settings.etot_conv_thr if etot_conv_thr is None else etot_conv_thr
+    )
+    forc_conv_thr = (
+        settings.forc_conv_thr if forc_conv_thr is None else forc_conv_thr
+    )
+    nstep = settings.nstep if nstep is None else nstep
+    ion_dynamics = settings.ion_dynamics if ion_dynamics is None else ion_dynamics
     calculation = calculation or Calculation(
         system, pseudos, diagonalization=diagonalization, k_batch=k_batch
     )
@@ -147,6 +164,7 @@ def run_relax(
         settings=BFGSSettings(),
     )
 
+    upscale = settings.upscale
     free = system.structure.free
     starting_threshold = conv_thr
     threshold = conv_thr
@@ -196,11 +214,11 @@ def run_relax(
         # derivative and is more sensitive to the density than the energy is.
         if getattr(optimizer, "step_accepted", False):
             threshold = max(
-                starting_threshold / UPSCALE,
+                starting_threshold / upscale,
                 starting_threshold * min(
                     1.0,
-                    optimizer.energy_error / (etot_conv_thr * UPSCALE),
-                    optimizer.gradient_error / (forc_conv_thr * UPSCALE),
+                    optimizer.energy_error / (etot_conv_thr * upscale),
+                    optimizer.gradient_error / (forc_conv_thr * upscale),
                 ),
             )
 

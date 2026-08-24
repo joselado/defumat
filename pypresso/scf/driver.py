@@ -1409,6 +1409,60 @@ class Calculation:
         moved.magnetic_field = moved._moved_magnetic_field(moved.system)
         return moved
 
+    def at_cell(self, at: jnp.ndarray) -> "Calculation":
+        """The same calculation in a different cell, host-side lists rebuilt.
+
+        :meth:`at_strain`'s counterpart for a cell that has *moved* rather than
+        been differentiated, and the pair is exactly :meth:`at_spiral_q`'s:
+        **frozen while differentiating, rebuilt to move**. A stress is a
+        derivative at one geometry, so freezing the Ewald and dispersion
+        neighbour lists there is right -- no image is gained or lost, and the
+        ``rmax``/``rcut`` boundary sits where the terms are 1e-8 and 1e-12 Ry.
+        A variable-cell *step* is not a derivative: the cell can shrink by
+        several per cent, and an image that was outside the enumeration radius
+        at the starting cell is then inside ``rmax`` and simply missing. The
+        error is an ``erfc`` tail rather than a shape mismatch, so it converges
+        and reports success -- ``erfc(3.6) = 3.6e-7`` against a 1e-9 Ry
+        comparison. ``rgen`` and ``ewald`` run afresh on every ionic step in
+        QE for this reason, and so do they here.
+
+        What stays frozen is what makes the run one run: the FFT grid, the
+        G-sphere's Miller indices, the symmetry group and the k-points in
+        crystal coordinates -- ``scale_h.f90`` exactly, which re-expresses the
+        *same* G-vectors against the new reciprocal cell and changes nothing
+        else. That is what lets a whole variable-cell relaxation be a single
+        setup, with the basis rebuilt once at the end
+        (:mod:`pypresso.workflows.vc_relax`).
+        """
+        at = jnp.asarray(at)
+        current = self.system.cell.at
+        # ``at_strain`` deforms by ``a_i -> D a_i``, i.e. ``at -> at @ D.T``.
+        deformation = jnp.asarray(at).T @ jnp.linalg.inv(jnp.asarray(current)).T
+        moved = self.at_strain(deformation - jnp.eye(3, dtype=deformation.dtype))
+
+        cell, structure = moved.system.cell, moved.system.structure
+        dense = moved.basis.dense
+        moved.ewald_sum = build_ewald(cell, structure, dense, moved.charges)
+        moved.ewald = float(
+            moved.ewald_sum.energy(cell, structure.positions, dense)
+        )
+        if moved.dispersion_sum is not None:
+            moved.dispersion_sum = build_vdw_correction(
+                moved.system.vdw_corr, cell, structure,
+                **vdw_options(moved.system),
+            )
+            moved.dispersion = float(
+                moved.dispersion_sum.energy(structure.positions)
+            )
+        # Used only by the analytic ``force_corr`` (:mod:`pypresso.forces`), and
+        # left stale by ``at_strain`` because nothing on the differentiated path
+        # reads it. A relaxation does read it, whenever it is asked for the
+        # analytic force as a cross-check.
+        moved.rho_atomic_species = species_atomic_charge(
+            moved.pseudos, cell, dense
+        )
+        return moved
+
     def at_strain(self, strain: jnp.ndarray) -> "Calculation":
         """The same calculation in a cell deformed by ``h -> (1 + epsilon) h``.
 

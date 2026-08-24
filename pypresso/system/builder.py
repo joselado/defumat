@@ -18,6 +18,7 @@ import numpy as np
 
 from pypresso.config import DEFAULT_PRECISION, Precision
 from pypresso.io.pwin import PwInput, fortran_float, read_pw_input
+from pypresso.relax.settings import RelaxSettings
 from pypresso.system.cell import Cell, celldm_from_abc
 from pypresso.system.kpoints import (
     KPoints,
@@ -163,6 +164,13 @@ class System(eqx.Module):
     #: table".
     london_c6: tuple[float, ...] = eqx.field(static=True, default=())
     london_rvdw: tuple[float, ...] = eqx.field(static=True, default=())
+    #: The ``&control``, ``&ions`` and ``&cell`` variables an optimisation
+    #: reads (:class:`~pypresso.relax.settings.RelaxSettings`). Static, and a
+    #: value rather than ``None``, so that a caller never has to ask whether the
+    #: input said anything: it always holds either the file's numbers or QE's
+    #: defaults. Read by :func:`~pypresso.workflows.relax.run_relax` and
+    #: :func:`~pypresso.workflows.vc_relax.run_vc_relax`.
+    relax: RelaxSettings = eqx.field(static=True, default_factory=RelaxSettings)
 
     @property
     def spiral(self) -> bool:
@@ -318,6 +326,77 @@ class System(eqx.Module):
             nbnd=nbnd,
             kpoints=self._respin_kpoints(nspin, magnetization, angle1, angle2),
         )
+
+    def with_cell(self, at, positions=None) -> "System":
+        """The same crystal in a relaxed cell, with its k-points rebuilt.
+
+        What :meth:`with_spin` is to a change of spin regime, this is to a
+        change of *cell* -- and it exists for the same reason, that
+        ``dataclasses.replace`` would be silently wrong. :class:`KPoints`
+        stores its coordinates as cartesian in units of ``2 pi / alat``, so
+        replacing the cell alone leaves the k-points sitting at the **old**
+        reciprocal lattice's points: an automatic grid stops being a grid of
+        the cell it is supposed to sample, and nothing about the run's shapes
+        changes to say so. An automatic grid is therefore generated again from
+        its ``nk1 nk2 nk3`` and its shift, and an explicit list is carried in
+        *crystal* coordinates, which is what is fixed under a deformation.
+
+        This is what a variable-cell relaxation's **final** SCF is built from
+        (``reset_gvectors`` in ``run_pwscf.f90``, and ``treinit_gvecs`` at every
+        step): a whole new run at the relaxed geometry, with the FFT grid, the
+        G-sphere, the symmetry group and the k-points all chosen for it. The
+        relaxation itself does *not* go through here -- it keeps one setup and
+        moves the cell underneath it with
+        :meth:`~pypresso.scf.driver.Calculation.at_cell`.
+
+        ``positions`` are cartesian in bohr; omitted, the atoms keep their
+        **crystal** coordinates, which is what a pure cell deformation does.
+        """
+        # ``precision.as_real`` and not a literal dtype: rule R4, and the cell
+        # is one of the arrays a float32 run would carry in float32.
+        precision = self.cell.precision
+        cell = eqx.tree_at(
+            lambda c: c.at, self.cell, precision.as_real(np.asarray(at, dtype=float))
+        )
+        if positions is None:
+            crystal = np.asarray(self.structure.positions_crystal(self.cell))
+            positions = precision.as_real(crystal @ np.asarray(cell.at))
+        else:
+            positions = precision.as_real(np.asarray(positions, dtype=float))
+
+        moved = eqx.tree_at(
+            lambda sys: (sys.cell.at, sys.structure.positions),
+            self, (cell.at, positions),
+        )
+        return dataclasses.replace(
+            moved, kpoints=moved._recelled_kpoints()
+        )
+
+    def _recelled_kpoints(self) -> KPoints:
+        """The k-set of :meth:`with_cell`'s new cell, at its own symmetry."""
+        kpoints = self.kpoints
+        if kpoints.path_length is not None or kpoints.gamma_only:
+            return kpoints
+
+        symmetries = self.symmetry_group()
+        rotations = None if self.nosym else symmetries.rotation_array()
+        t_rev = None if self.nosym else symmetries.t_rev_array()
+        magnetic = self.nspin == 4 and self.domag
+        if kpoints.grid is not None:
+            rebuilt = KPoints.automatic(
+                kpoints.grid, kpoints.shift or (0, 0, 0), self.cell,
+                precision=kpoints.precision, rotations=rotations,
+                time_reversal=not self.noinv and not magnetic, t_rev=t_rev,
+            )
+        else:
+            # Crystal coordinates are what a deformation leaves alone; the
+            # cartesian ones this object stores are not.
+            rebuilt = KPoints.from_crystal(
+                np.asarray(kpoints.crystal(self.cell)),
+                np.asarray(kpoints.weights), self.cell,
+                precision=kpoints.precision,
+            )
+        return kpoints_for_spin(rebuilt, self.nspin)
 
     def _respin_kpoints(self, nspin, magnetization, angle1, angle2) -> KPoints:
         """The target regime's k-point set, reduced with *its* symmetry group."""
@@ -580,6 +659,49 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         london_rcut=float(pwin.get("system", "london_rcut", 200.0)),
         london_c6=london_c6,
         london_rvdw=london_rvdw,
+        relax=_relax_settings(pwin),
+    )
+
+
+def _relax_settings(pwin: PwInput) -> RelaxSettings:
+    """``&control``, ``&ions`` and ``&cell``, with ``read_namelists.f90``'s
+    defaults -- including the two that depend on ``calculation``.
+
+    ``cell_dynamics`` defaults to ``'none'`` in the namelist and is *reset* to
+    ``'bfgs'`` for a ``pw.x`` ``vc-relax`` before the input is read back, which
+    is why the default here is conditional rather than the namelist's literal
+    one. Reading ``'none'`` off a plain vc-relax input would refuse the very
+    calculation QE runs by default.
+    """
+    calculation = str(pwin.get("control", "calculation", "scf")).strip().strip("'\"")
+    variable_cell = calculation.lower().startswith("vc-")
+    defaults = RelaxSettings()
+    return RelaxSettings(
+        etot_conv_thr=float(
+            pwin.get("control", "etot_conv_thr", defaults.etot_conv_thr)
+        ),
+        forc_conv_thr=float(
+            pwin.get("control", "forc_conv_thr", defaults.forc_conv_thr)
+        ),
+        nstep=int(pwin.get("control", "nstep", defaults.nstep)),
+        ion_dynamics=str(
+            pwin.get("ions", "ion_dynamics", defaults.ion_dynamics)
+        ).strip().strip("'\"").lower(),
+        upscale=float(pwin.get("ions", "upscale", defaults.upscale)),
+        cell_dynamics=str(
+            pwin.get("cell", "cell_dynamics",
+                     defaults.cell_dynamics if variable_cell else "none")
+        ).strip().strip("'\"").lower(),
+        press=float(pwin.get("cell", "press", defaults.press)),
+        press_conv_thr=float(
+            pwin.get("cell", "press_conv_thr", defaults.press_conv_thr)
+        ),
+        cell_dofree=str(
+            pwin.get("cell", "cell_dofree", defaults.cell_dofree)
+        ).strip().strip("'\""),
+        treinit_gvectors=_logical(
+            pwin.get("cell", "treinit_gvecs", defaults.treinit_gvectors)
+        ),
     )
 
 
@@ -662,11 +784,6 @@ _CALCULATIONS = ("scf", "nscf", "bands", "relax", "md", "vc-relax", "vc-md")
 _UNIMPLEMENTED_CALCULATIONS = {
     "md": "Born-Oppenheimer molecular dynamics (PW/src/dynamics_module.f90)",
     "vc-md": "variable-cell molecular dynamics (Modules/wavefunctions, vc-md)",
-    "vc-relax": (
-        "variable-cell relaxation: the cell gradient is the stress (P11) and a "
-        "moving cell would also invalidate the rule that the FFT grid and the "
-        "symmetry group are fixed once for the whole run"
-    ),
 }
 
 
@@ -679,7 +796,8 @@ def _check_calculation(pwin: PwInput) -> None:
     happened. ``pw.x`` stops on an unknown value, and the modes it has that this
     package does not are refused by name like every other missing feature.
 
-    ``scf``, ``nscf``, ``bands`` and ``relax`` are the four that have one; which
+    ``scf``, ``nscf``, ``bands``, ``relax`` and ``vc-relax`` are the five that
+    have one; which
     of them is in force is still the caller's choice of entry point, exactly as
     before, so this only rejects what nothing could have run.
     """

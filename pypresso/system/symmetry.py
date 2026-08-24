@@ -40,7 +40,8 @@ if TYPE_CHECKING:  # only for annotations: importing it eagerly makes a cycle,
 __all__ = ["Symmetries", "lattice_point_group", "find_symmetries", "is_supercell",
            "symmetrize_density", "symmetry_maps", "apply_symmetry_maps",
            "atom_mapping", "cartesian_rotations",
-           "symmetrize_vector", "symmetrize_matrix", "symmetrize_atom_tensor", "check_symmetry",
+           "symmetrize_vector", "symmetrize_matrix", "symmetrize_atom_tensor",
+           "check_symmetry", "check_lattice_symmetry",
            "magnetic_symmetries", "magnetization_signs",
            "symmetrize_magnetization", "symmetrize_vector_density",
            "symmetrize_tensor_density"]
@@ -796,6 +797,38 @@ def symmetrize_atom_pair_tensor(
         "sik,sjl,sabkl->aibj", rotations, rotations, gathered
     ) / symmetries.nsym
     return np.einsum("ki,akbl,lj->aibj", bg, averaged, bg)
+
+
+def check_lattice_symmetry(
+    cell: Cell, symmetries: Symmetries, tolerance: float = 1.0e-6
+) -> bool:
+    """Whether ``cell`` still admits every rotation of ``symmetries``.
+
+    :func:`check_symmetry`'s missing half, and it is missing for a reason that
+    stops holding the moment the cell can move. That check works in *crystal*
+    coordinates, so a deformation of the cell leaves every one of its numbers
+    untouched -- a cubic crystal stretched into a tetragonal one passes it
+    unchanged, with four of its rotations no longer symmetries of anything. A
+    rotation is stored as an integer matrix acting on crystal row vectors, so
+    what it has to preserve is the *metric*:
+
+        R g R^T = g,   g_ij = a_i . a_j,
+
+    which is ``checkallsym``'s lattice half (``symm_base.f90`` finds the group
+    from the metric in the first place). A variable-cell relaxation needs both
+    checks and needs them for the same reason as a fixed-cell one: the FFT grid
+    and the k-point set were chosen for a group, and a step that leaves that
+    group has invalidated them. A stress symmetrised over the group cannot do
+    this in exact arithmetic, exactly as a symmetrised force cannot move an
+    atom off its site, so a failure here is a bug rather than a physical event.
+    """
+    metric = np.asarray(cell.at) @ np.asarray(cell.at).T
+    scale = max(float(np.abs(metric).max()), 1.0)
+    for rotation in symmetries.rotation_array():
+        rotation = np.asarray(rotation, dtype=float)
+        if np.abs(rotation @ metric @ rotation.T - metric).max() > tolerance * scale:
+            return False
+    return True
 
 
 def check_symmetry(cell: Cell, structure: Structure, symmetries: Symmetries) -> bool:

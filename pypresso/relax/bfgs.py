@@ -19,12 +19,27 @@ code (rule R2), and putting it under ``jit`` would buy nothing and cost every
 branch. The gradient it consumes is where JAX belongs
 (:mod:`pypresso.forces`).
 
-**What is left out.** ``bfgs_ndim > 1`` (the GDIIS extrapolation), the
-variable-cell degrees of freedom, and the FCP block. QE carries the latter two
-as ten extra entries appended to the same vectors; with a fixed cell and no FCP
-their gradients are identically zero and their metric blocks are diagonal, so
-``n = 3 nat`` here is the same arithmetic as QE's ``n = 3 nat + 10``. Variable
-cell needs the stress, and is deferred with it.
+**The cell is nine more coordinates** (P29). QE appends ten entries to the same
+vectors -- the nine of ``h`` and the FCP charge -- and ``lmovecell`` is the whole
+of the difference: the gradient of the extra nine is ``cell_force``'s
+``dH/dh``, their metric block is ``0.04 omega g^-1`` where an atom's is ``g``,
+and ``scnorm`` measures them with the same trust radius. So this optimizer takes
+``nat + 3`` blocks of three rather than ``nat``, the last three being the rows of
+``h``, and everything between is unchanged arithmetic.
+
+**The metric is rebuilt every step and the Hessian is not.** QE allocates
+``metric``, ``inv_metric`` and ``hinv_block`` inside ``bfgs()`` from the ``h``
+it was passed, on every ionic step, while ``inv_hess`` is read back from file
+untouched. That asymmetry is the point: the metric says what a length *is* in
+the current cell and has to follow it, whereas the accumulated curvature is the
+history being carried. Computing the metric once in the constructor is exact at
+fixed cell and silently wrong at variable cell, which is why
+:meth:`_rebuild_metric` runs at the top of every :meth:`step`.
+
+**What is left out.** ``bfgs_ndim > 1`` (the GDIIS extrapolation) and the FCP
+block. With no FCP its gradient is identically zero and its metric block is
+diagonal, so ``n = 3 (nat + 3)`` here is the same arithmetic as QE's
+``n = 3 nat + 10``.
 """
 
 from __future__ import annotations
@@ -32,6 +47,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+
+from pypresso.relax.cell import cell_force
+from pypresso.units import RY_TO_KBAR
 
 __all__ = ["BFGS", "BFGSSettings"]
 
@@ -44,6 +62,15 @@ W_2 = 0.50
 
 _EPS8 = 1.0e-8
 _EPS16 = 1.0e-16
+
+#: The cell block's metric is ``0.04 * omega * g^-1`` where an atom's is ``g``
+#: (``bfgs_module.f90``, the ``FORALL(k=nat:nat+2)`` lines). The factor has no
+#: derivation in the Fortran and is not a unit conversion: it is what makes a
+#: change of the cell of "the same size" as an atom moving by the trust radius
+#: come out the same length under ``scnorm``, so that one ``trust_radius_max``
+#: can govern both. Carried over verbatim, because a different value is a
+#: different optimizer and would not reproduce QE's trajectory.
+CELL_METRIC_SCALE = 0.04
 
 
 @dataclass
@@ -85,12 +112,33 @@ class BFGS:
     energy_thr: float = 1.0e-4
     grad_thr: float = 1.0e-3
     settings: BFGSSettings = field(default_factory=BFGSSettings)
+    #: ``lmovecell``: whether the cell is nine more coordinates. When it is,
+    #: :meth:`step` needs a stress as well as a force, and the relaxed cell is
+    #: read back from :attr:`at`, which this object updates in place -- QE
+    #: passes ``h`` in and out of ``bfgs()`` for the same reason.
+    variable_cell: bool = False
+    #: ``press``, in **Ry/bohr^3**. The quantity minimised is then the enthalpy
+    #: ``E + P Omega`` and not the energy.
+    pressure: float = 0.0
+    #: ``epsp``/``press_conv_thr``, in **Ry/bohr^3**: how close the stress has
+    #: to come to the target pressure. Only read when :attr:`variable_cell`.
+    cell_thr: float = 0.5 / RY_TO_KBAR
+    #: ``iforceh``, the ``(3, 3)`` mask ``cell_dofree`` builds
+    #: (:mod:`pypresso.relax.cell`). ``None`` is ``cell_dofree = 'all'``.
+    cell_mask: np.ndarray | None = None
 
     def __post_init__(self):
         self.at = np.asarray(self.at, dtype=float)
-        self.metric = self.at @ self.at.T  # g_ij = a_i . a_j
-        self.inverse_metric = np.linalg.inv(self.metric)
+        self.cell_mask = (
+            np.ones((3, 3)) if self.cell_mask is None
+            else np.asarray(self.cell_mask, dtype=float)
+        )
+        self.blocks = 0
+        self._rebuild_metric(0)
         self.inverse_hessian = None
+        #: ``cell_error``: ``max |P I - sigma|`` over the free components, in
+        #: Ry/bohr^3. Infinite until the first variable-cell step.
+        self.cell_error = np.inf
 
         self.positions_previous = None
         self.gradient_previous = None
@@ -117,6 +165,30 @@ class BFGS:
         self.step_accepted = False
         self.failed = False
 
+    def _rebuild_metric(self, nat: int) -> None:
+        """The metric of the *current* cell, and the block layout it implies.
+
+        ``bfgs_module.f90`` builds ``metric``, ``inv_metric`` and ``hinv_block``
+        from the ``h`` it was handed, every call. An atom's block is
+        ``g_ij = a_i . a_j``, because its coordinates are crystal ones; a cell
+        row's is ``0.04 omega g^-1``, because its coordinates are lengths in
+        the *reciprocal* index (:data:`CELL_METRIC_SCALE`).
+        """
+        self.h = self.at.T  # QE's ``h``: lattice vectors as *columns*
+        self.metric = self.at @ self.at.T  # g_ij = a_i . a_j
+        self.inverse_metric = np.linalg.inv(self.metric)
+        self.omega = abs(float(np.linalg.det(self.at)))
+
+        self.blocks = nat + 3 if self.variable_cell else nat
+        metric = np.repeat(self.metric[None], self.blocks, axis=0)
+        inverse = np.repeat(self.inverse_metric[None], self.blocks, axis=0)
+        if self.variable_cell:
+            scale = CELL_METRIC_SCALE * self.omega
+            metric[nat:] = self.inverse_metric * scale
+            inverse[nat:] = self.metric / scale
+        self.metric_blocks = metric
+        self.inverse_metric_blocks = inverse
+
     # ------------------------------------------------------------------ norms
     def to_crystal(self, cartesian: np.ndarray) -> np.ndarray:
         return np.asarray(cartesian) @ np.linalg.inv(self.at)
@@ -135,19 +207,38 @@ class BFGS:
         reason a trust radius is a distance in bohr rather than a number that
         grows with the number of atoms.
         """
-        lengths = np.einsum("ai,ij,aj->a", vector, self.metric, vector)
+        lengths = np.einsum("ai,aij,aj->a", vector, self.metric_blocks, vector)
         return float(np.sqrt(np.maximum(lengths, 0.0)).max())
 
     def _newton_step(self, gradient: np.ndarray) -> np.ndarray:
-        return -(self.inverse_hessian @ gradient.reshape(-1)).reshape(gradient.shape)
+        """``-H grad``, with the frozen cell components masked back out.
+
+        The mask has to be applied *after* every product with the inverse
+        Hessian and not only once to the gradient: ``inv_hess`` is not block
+        diagonal after the first update, so it mixes a free component back into
+        a frozen one and the constraint would leak. QE re-masks at each of its
+        four ``step(:) = -(inv_hess .times. grad)`` sites for this reason.
+        """
+        step = -(self.inverse_hessian @ gradient.reshape(-1)).reshape(gradient.shape)
+        return self._mask(step)
+
+    def _mask(self, vector: np.ndarray) -> np.ndarray:
+        """``iforceh`` on the cell rows; the atoms are masked by ``if_pos``
+        upstream, where QE applies it (to the force, not to the step)."""
+        if not self.variable_cell:
+            return vector
+        vector = np.array(vector, dtype=float)
+        vector[-3:] *= self.cell_mask
+        return vector
 
     def _reset(self) -> None:
         """``reset_bfgs``: forget the history; the guess is the inverse metric."""
         size = self.inverse_hessian.shape[0]
         block = np.zeros((size, size))
-        for start in range(0, size, 3):
+        for index, inverse in enumerate(self.inverse_metric_blocks):
+            start = 3 * index
             block[start : start + 3, start : start + 3] = (
-                self.settings.hessian_scale * self.inverse_metric
+                self.settings.hessian_scale * inverse
             )
         self.inverse_hessian = block
 
@@ -225,27 +316,54 @@ class BFGS:
         self.trust_radius = min(settings.trust_radius_min, self.step_length)
 
     # ------------------------------------------------------------------ driver
-    def step(self, positions, energy: float, force):
+    def step(self, positions, energy: float, force, stress=None):
         """One ionic step.
 
         Args:
             positions: ``(nat, 3)`` cartesian, bohr.
-            energy: the total energy there, in Ry.
+            energy: the total energy there, in Ry. With :attr:`variable_cell`
+                this is still the *energy*: the enthalpy ``E + P Omega`` is
+                formed here, as ``move_ions.f90`` forms it just before calling
+                ``bfgs``, so that a caller cannot pass one where the other is
+                meant.
             force: ``(nat, 3)`` cartesian force in Ry/bohr, already masked by
                 ``if_pos`` -- QE freezes a coordinate by zeroing its force and
                 nothing else, so that is where the constraint has to be applied.
+            stress: ``(3, 3)`` cartesian stress in Ry/bohr^3, required when
+                :attr:`variable_cell` and ignored otherwise.
 
-        Returns ``(next positions, converged)``. When it has converged the
-        positions come back unchanged.
+        Returns ``(next positions, converged)``, the positions cartesian **in
+        the new cell**; with :attr:`variable_cell` the new cell is left on
+        :attr:`at`, which is QE's ``h`` being passed in and out. When it has
+        converged both come back unchanged.
         """
-        positions = self.to_crystal(positions)
+        positions = np.asarray(positions, dtype=float)
+        self._rebuild_metric(positions.shape[0])
+        crystal = self.to_crystal(positions)
         gradient = self.gradient_from_force(force)
         energy = float(energy)
 
+        if self.variable_cell:
+            if stress is None:
+                raise ValueError(
+                    "a variable-cell BFGS step needs the stress: the cell's "
+                    "nine coordinates have no gradient without it"
+                )
+            energy += self.pressure * self.omega  # the enthalpy
+            cell_gradient = self._mask(
+                np.vstack([np.zeros_like(crystal), cell_force(
+                    np.asarray(stress, dtype=float), self.h, self.omega,
+                    self.pressure,
+                )])
+            )[-3:]
+            crystal = np.vstack([crystal, self.h])
+            gradient = np.vstack([gradient, cell_gradient])
+
         if self.inverse_hessian is None:
-            self.inverse_hessian = np.zeros((positions.size, positions.size))
+            self.inverse_hessian = np.zeros((crystal.size, crystal.size))
             self._reset()
 
+        positions = crystal
         self.iterations += 1
         self.energy_error = self._energy_error(gradient, energy)
         self.gradient_error = float(np.abs(force).max())
@@ -253,13 +371,20 @@ class BFGS:
         converged = (
             self.energy_error < self.energy_thr and self.gradient_error < self.grad_thr
         )
+        if self.variable_cell:
+            # ``cell_error``: the masked cell gradient carried back onto a
+            # stress, which is ``max |P I - sigma|`` when nothing is frozen.
+            self.cell_error = float(
+                np.abs(gradient[-3:] @ self.h.T).max() / self.omega
+            )
+            converged = converged and self.cell_error < self.cell_thr
         if not converged and self.trust_radius_floor_hits > 1:
             # The line search has reset its history twice running and is not
             # going anywhere. QE stops here rather than reporting convergence.
             self.failed = True
             converged = True
         if converged:
-            return self.to_cartesian(positions), True
+            return self.to_cartesian(self._split(positions)), True
 
         if self.iterations > 1 and not self._energy_wolfe(energy):
             positions, energy, gradient = self._reject(positions, energy, gradient)
@@ -269,7 +394,7 @@ class BFGS:
             # step-length unreasonably short"); there is nowhere to move, so
             # this is a stationary point whether or not the energy criterion
             # has caught up, and stopping is the honest answer.
-            return self.to_cartesian(positions), True
+            return self.to_cartesian(self._split(positions)), True
 
         # Saved *before* the positions move, as QE's write_bfgs_file is called.
         self.positions_previous = positions
@@ -278,7 +403,21 @@ class BFGS:
         self.direction_previous = self.direction
         self.trust_radius_previous = self.trust_radius
 
-        return self.to_cartesian(positions + self.trust_radius * self.direction), False
+        moved = self._split(positions + self.trust_radius * self.direction)
+        # ``move_ions.f90`` sets ``at = h/alat`` *before* ``cryst_to_cart``, so
+        # the crystal coordinates that come out of the optimizer are placed in
+        # the **new** cell. Using the old one here is a silent error of the size
+        # of the cell step, and it is invisible at zero pressure on a cell that
+        # barely moves.
+        return self.to_cartesian(moved), False
+
+    def _split(self, vector: np.ndarray) -> np.ndarray:
+        """Undo :meth:`step`'s packing, leaving the new cell on :attr:`at`."""
+        if not self.variable_cell:
+            return vector
+        self.at = np.array(vector[-3:], dtype=float).T  # rows of h -> rows of at
+        self._rebuild_metric(vector.shape[0] - 3)
+        return vector[:-3]
 
     def _energy_error(self, gradient, energy: float) -> float:
         """``|E - E_prev|``, or on the first step the predicted reduction.
@@ -290,10 +429,12 @@ class BFGS:
         """
         if self.iterations > 1:
             return abs(self.energy_previous - energy)
-        trial = -self._newton_step(gradient)  # inv_metric . grad
+        trial = -self._newton_step(gradient)  # inv_metric . grad, masked
         return abs(
             float(gradient.reshape(-1) @ trial.reshape(-1))
-            + 0.5 * float(np.einsum("ai,ij,aj->", trial, self.metric, trial))
+            + 0.5 * float(
+                np.einsum("ai,aij,aj->", trial, self.metric_blocks, trial)
+            )
         )
 
     def _reject(self, positions, energy, gradient):
