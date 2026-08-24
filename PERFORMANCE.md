@@ -1748,12 +1748,13 @@ The bismuthene row is the SCF alone -- no derivative at all -- and its 18.4 GB i
 
 Three practical consequences, stated so nobody meets them as a surprise:
 
-* **`tests/regression/test_ten_site.py` peaks at the largest single case, not at their
-  sum** -- about 2 GB through the light cases and ~17 GB while one ultrasoft or PAW force
-  case runs. That is a property of the file rather than of the physics: `_converged` is
-  bounded to two entries and each case makes all of its assertions in one function, so a
-  converged ten-site state is released before the next one is built. With an unbounded
-  cache the same file reached **22 GB** and was killed.
+* **`tests/regression/test_ten_site.py` runs in 1:28:39 and peaks at 22.8 GB**, measured
+  end to end with `/usr/bin/time -v` on an otherwise idle machine: about 2 GB through the
+  light cases and the rest during the ultrasoft, PAW and spin-orbit ones. The file caches
+  at most two converged states (`_converged`'s `lru_cache(maxsize=2)`) and makes all of a
+  case's assertions in one function, so states are released as it goes; with an unbounded
+  cache the same file was **killed** before finishing. The bound is what makes it complete,
+  not what makes it small -- the peak is the largest single case and that case is large.
 * A machine with 16 GB runs the norm-conserving ten-site set and not the ultrasoft one.
 * Attributing the 16 GB to a *route* -- `addusforce`'s transcription against the `jax.grad`
   one -- was measured as a total and not decomposed; both routes ran in the same process.
