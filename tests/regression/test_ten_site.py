@@ -88,7 +88,14 @@ TIGHT_TERMS = {"si10-us", "si10-paw", "si10-paw-pbe"}
 FORCE_CASES = ["si10-nc-force", "si10-us-force", "si10-paw-force"]
 
 
-@lru_cache(maxsize=None)
+#: **Two entries, not all of them, and that is a memory decision.** A converged
+#: state here carries the wavefunctions of a ten-atom cell -- up to 24 k-points
+#: on a 30 x 30 x 150 grid -- and an ultrasoft force on top of one peaks at 16 GB
+#: (`PERFORMANCE.md`, P28b). Caching all ten while computing the eleventh is how
+#: this file used to exceed the machine. Two is what the one test that compares
+#: *two* cases against each other needs; every other test asks for one case and
+#: makes all of its assertions in one function, so each SCF still runs once.
+@lru_cache(maxsize=2)
 def _converged(case: str, pseudo_dir: Path):
     system = build_system(read_pw_input(CASES / f"{case}.in"))
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
@@ -141,87 +148,72 @@ def _matching_kpoints(system, reference):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("case", SCF_CASES)
-def test_total_energy_matches_qe(pseudo_dir, case):
-    _, _, result = _converged(case, pseudo_dir)
-    reference = _reference(case)
+def test_the_ground_state_matches_qe(pseudo_dir, case):
+    """Shapes, total energy, energy terms, eigenvalues and the Fermi level.
 
+    **All of it in one function per case, on purpose.** A converged ten-site
+    state is a large object and the cache above holds two of them, so splitting
+    these into five parametrized tests would either re-run every SCF five times
+    or keep ten alive at once -- and the second is what used to run this file
+    out of memory.
+
+    The order is the order a disagreement is usually found in: the shapes both
+    codes chose *before* any number, because that is where the P28b bugs were
+    visible; then the variational total; then the terms, which are first-order
+    sensitive to the density where the total is second-order; then the bands.
+    """
+    system, calculation, result = _converged(case, pseudo_dir)
+    reference = _reference(case)
+    text = (CASES / f"reference.out.{case}").read_text()
+
+    # --- the shapes ---
+    import re
+
+    printed = re.search(r"(\d+)\s+Sym\. Ops\.", text)
+    assert printed is not None, "pw.x did not print a symmetry count"
+    assert calculation.symmetries.nsym == int(printed.group(1))
+    assert len(system.kpoints.coords) == reference.nk
+    order = _matching_kpoints(system, reference)
+    assert order is not None, "different k-sets"
+    assert tuple(calculation.basis.dense.grid) == tuple(reference.fft_dense)
+    assert int(calculation.basis.dense.ngm) == reference.ngm_dense
+
+    # --- the energy ---
     assert result.converged
     assert result.total_energy == pytest.approx(reference.total_energy, abs=TOTAL_ENERGY_RY)
 
-
-@pytest.mark.parametrize("case", SCF_CASES)
-def test_energy_terms_match_qe(pseudo_dir, case):
-    _, _, result = _converged(case, pseudo_dir)
-    reference = _reference(case)
-
     assert set(result.energy_terms) == set(reference.energy_terms)
     for term, value in reference.energy_terms.items():
-        if term == "ewald" or term == "Dispersion Correction":
-            # Neither depends on the density at all, so both must match to the
-            # tight tolerance. The dispersion term is a pair sum over the nuclei
-            # and is the whole of what ``vdw_corr = 'grimme-d2'`` adds.
+        if term in ("ewald", "Dispersion Correction"):
+            # Neither depends on the density at all. The dispersion term is a
+            # pair sum over the nuclei and is the whole of what
+            # ``vdw_corr = 'grimme-d2'`` adds.
             tolerance = ENERGY_TERM_RY
         elif case in TIGHT_TERMS:
             tolerance = USPP_TERM_RY
         else:
             tolerance = DENSITY_DEPENDENT_TERM_RY
         assert result.energy_terms[term] == pytest.approx(value, abs=tolerance), term
-
     assert sum(result.energy_terms.values()) == pytest.approx(result.total_energy, abs=1e-10)
 
-
-@pytest.mark.parametrize("case", SCF_CASES)
-def test_the_two_codes_choose_the_same_shapes(pseudo_dir, case):
-    """The symmetry group, the k-set, the FFT grid and the G-sphere.
-
-    These are compared *before* any number is, because they are what a
-    disagreement in the numbers usually turns out to be. The symmetry count is
-    the one that failed: on these supercells the lattice point group needs
-    rotation matrices with entries of five, and a fixed search window found two
-    operations where QE finds six.
-    """
-    system, calculation, _ = _converged(case, pseudo_dir)
-    reference = _reference(case)
-    text = (CASES / f"reference.out.{case}").read_text()
-
-    import re
-    printed = re.search(r"(\d+)\s+Sym\. Ops\.", text)
-    assert printed is not None, "pw.x did not print a symmetry count"
-    assert calculation.symmetries.nsym == int(printed.group(1))
-
-    assert len(system.kpoints.coords) == reference.nk
-    assert _matching_kpoints(system, reference) is not None, "different k-sets"
-    assert tuple(calculation.basis.dense.grid) == tuple(reference.fft_dense)
-    assert int(calculation.basis.dense.ngm) == reference.ngm_dense
-
-
-@pytest.mark.parametrize("case", SCF_CASES)
-def test_eigenvalues_match_qe(pseudo_dir, case):
-    """Every band at every k-point, **except the topmost one**.
-
-    The highest band a Davidson run computes is the least converged, in both
-    codes and for the same reason: ``cegterg`` and this solver both stop on the
-    accuracy the density needs, and a band above the occupied window is carried
-    along rather than converged. It shows here on ``c10-graphite-d2``, where
-    bands 1 to 23 agree to 5e-5 eV and band 24 -- occupied to 0.0017 -- differs
-    by 0.016. ``test_pdos.py`` drops the same band for the same reason.
-    """
-    system, _, result = _converged(case, pseudo_dir)
-    reference = _reference(case)
-
-    order = _matching_kpoints(system, reference)
+    # --- the bands, minus the topmost one ---
+    #
+    # The highest band a Davidson run computes is the least converged, in both
+    # codes and for the same reason: both stop on the accuracy the density
+    # needs, and a band above the occupied window is carried along rather than
+    # converged. It shows on ``c10-graphite-d2``, where bands 1 to 23 agree to
+    # 5e-5 eV and band 24 -- occupied to 0.0017 -- differs by 0.016.
+    # ``test_pdos.py`` drops the same band for the same reason.
     ours = np.asarray(result.eigenvalues_by_spin) * RY_TO_EV
     theirs = np.asarray(reference.eigenvalues)[:, order]
     nbnd = min(ours.shape[-1], theirs.shape[-1]) - 1
     assert ours[..., :nbnd] == pytest.approx(theirs[..., :nbnd], abs=EIGENVALUE_EV)
 
-
-@pytest.mark.parametrize("case", ["al10-metal", "al10-metal-tetra", "h10-chain-lsda",
-                                 "h10-chain-noncolin", "c10-graphite-d2"])
-def test_fermi_level_matches_qe(pseudo_dir, case):
-    _, _, result = _converged(case, pseudo_dir)
-    reference = _reference(case)
-    assert result.fermi_energy * RY_TO_EV == pytest.approx(reference.fermi_energy, abs=FERMI_EV)
+    # --- the Fermi level, where there is one ---
+    if reference.fermi_energy is not None and result.fermi_energy is not None:
+        assert result.fermi_energy * RY_TO_EV == pytest.approx(
+            reference.fermi_energy, abs=FERMI_EV
+        )
 
 
 def test_the_magnetization_of_the_ten_site_chain(pseudo_dir):
