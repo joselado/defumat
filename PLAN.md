@@ -3509,6 +3509,180 @@ makes a node bite.
 
 *No notebook: this phase adds no feature. Notebook 20 keeps P28's metal section.*
 
+### P28b — Ten sites: the whole feature set at ten atoms per cell. ✅ DONE.
+
+`pypresso/system/symmetry.py`, `pypresso/response/efield.py`,
+`tools/generate_reference.py`, twenty `pw.x` inputs and one `ph.x` one under
+`tests/data/qe`, with their `pw.x`, `projwfc.x` and `ph.x` references, and
+`tests/regression/test_ten_site.py`. Like P28a this phase adds **no feature**:
+it is every comparable feature run at ten atoms per cell, and its content is
+what that turned up.
+
+Everything committed before ran on one, two, four or eight atoms, and eight was
+the largest. Ten cannot be the primitive cell of anything here, so **every
+ten-atom cell is a supercell** -- which P28a established is a regime and not a
+size. Four things diverged from `pw.x`, three of them bugs on this side, and
+none of the four was reachable from a smaller cell.
+
+**Bug 1: the lattice point group was searched over a fixed window.**
+`lattice_point_group` looks for the images of each basis vector among lattice
+vectors of the same length, and it enumerated candidates over `range(-3, 4)` in
+each direction. Five primitive cells stacked along `a3` need a coefficient of
+**five**: `pw.x -v high` prints the three-fold of `si10-nc.in` as
+`s(2) = ((0,-1,0), (1,-1,0), (0,-5,1))`, and no fixed window smaller than the
+supercell multiplicity can hold it. The search found **2 operations where QE
+found 6**, symmetrised the density over the wrong group and put the total energy
+**3.2e-6 Ry** away from `pw.x`'s -- with both codes converged to 1e-10 and both
+reporting success. The window is now the exact bound the geometry gives: an
+image `v` of `a_i` has `|v| = |a_i|` and integer coordinates `n_j = v . b_j`, so
+`|n_j| <= max_i |a_i| |b_j|`. The same cell then agrees to **3e-9 Ry**, and the
+SCF is *twice as fast* because it symmetrises over six operations instead of
+two. Nothing in the committed test set could see this: every cell there is
+either primitive or a doubling, where a window of three is enough.
+
+**Bug 2: `dielectric_tensor` symmetrised a `nosym` run.** The guard
+`Calculation.symmetrize_atom_tensor` exists to hold in one place -- its
+docstring names `response/efield.py` as one of the two call sites that reached
+for `self.symmetries` directly -- and the dielectric tensor's own `symmatrix`
+call at the end of `dielec.f90` was still missing it. It is invisible wherever
+the k-grid is closed under the point group, because there the raw tensor is
+already symmetric and the symmetrisation is a no-op applied to something that
+does not need it. On `si10-epsilon.in`, whose 4x4x1 grid the three-fold does not
+preserve, it is worth **0.97** in the off-diagonal entries against `ph.x` --
+while the isotropic average, the part symmetrisation cannot move, agrees to
+**5e-6**.
+
+**Bug 3: a fractional translation was accepted whatever its denominator.**
+`sgam_at` accepts `ft` only when every component is `0` or `1/n` with
+`n in {2, 3, 4, 6}` -- the orders a screw axis or a glide plane can have in
+three dimensions -- and `find_symmetries` had no such test. Five-layer graphite
+has a mirror plane at `z = 2/5`, which with the origin at a layer is written
+`ft = (0, 0, 4/5)`: a real symmetry that QE **drops**, and keeping it is not a
+better calculation but a different one. `fft_fact` then wants the FFT dimensions
+to be multiples of five, and `c10-graphite-d2` came out on a 20x20x**135** grid
+where `pw.x` chooses 20x20x**128**. The exchange-correlation energy is evaluated
+pointwise on that grid, so the totals differed by **1.7e-4 Ry** with neither
+code wrong. QE's filter is transcribed now; the grid, the operation count and
+the energy all follow.
+
+**Not a bug, and the one worth knowing about: an unequal k-grid is not closed
+under the lattice point group, and the two codes then build genuinely different
+reduced sets.** `kpoint_grid` reduces with the *lattice*'s group, keeping only
+rotations that map the grid onto itself, and `irreducible_BZ` (`irrek.f90`) then
+completes that list for the crystal's smaller group by coset decomposition --
+generating `S k` for coset representatives `S` of the **lattice** group. On a
+`4 x 4 x 1` grid those images leave the grid: displacing one atom of
+`si10-nc.in` drops the group from six operations to two, and seven of the
+fourteen points `pw.x` ends with have a third crystal coordinate of `1/4`, which
+a grid with one division along that axis has no points at. pypresso reduces the
+*requested* grid with the crystal's own operations, so its seven points are grid
+points and their weights are the orbit sizes. The totals differ by **6.9e-5 Ry**
+and `pw.x`'s own `nosym` run over the same grid says which is which: it gives
+-78.97348341, which is pypresso's reduced answer to nine digits and not QE's own
+reduced -78.97341444. On `4 x 4 x 4` -- closed under every integer rotation --
+`pw.x` reproduces its `nosym` total exactly and the two codes agree to 2e-9. The
+committed pair `si10-nc-anisotropic.in` and `si10-nc-anisotropic-nosym.in` is
+that experiment; the force cases run on `4 x 4 x 4` because of it.
+
+**Two things `ph.x` will not do on such a cell, and both are its own limits.**
+`phq_setup` requires every symmetry operation to map the FFT grid onto itself
+and stops with "FFT grid incompatible with symmetry" on the 15 x 15 x 80 grid of
+the five-cell stack, so `si10-epsilon.in` runs `nosym` -- which is the
+configuration `pypresso.response` accepts on an unshifted grid, and which makes
+the comparison exact rather than a comparison of two wedges. And with
+`occupations = 'tetrahedra'` (Bloechl's) `pw.x` never converges the elongated
+metallic supercell at all -- 100 iterations with the total energy stable in the
+eighth decimal and the scf accuracy stalled at 1.3e-4 -- where the optimised
+method converges in 55, which is why `al10-metal-tetra.in` says `tetrahedra_opt`.
+
+**What ten sites cost the comparison itself, and it is a real limit rather than
+a defect:** a five-cell supercell folds the primitive bands onto each other, so
+nearly every level is degenerate, and `|<phi|S|psi_n>|^2` for a single band is
+not a well-defined number inside a degenerate subspace (rule D4). The two
+codes' projections differ by **0.138** band by band on `si10-nc` and by 0.0017
+once each degenerate group is summed -- which is what `print_proj`'s three
+decimals are worth over a group of five. The invariant quantities are compared
+instead and agree: the Löwdin charges to **4.8e-5**, the spilling parameter to
+the four decimals it is printed with, and every one of the twenty `filpdos`
+columns to 0.3% of its peak.
+
+**A trap in the tooling, not in the physics.** `pw.x` reading its input from
+standard input copies it to a scratch file named `input_tmp.in` **in the working
+directory** (`Modules/open_close_input_file.f90`), so two runs sharing a
+directory overwrite each other's input and one of them silently computes the
+other's system. Generating five of these references concurrently produced a
+hydrogen chain whose stdout was silicon's, and it only surfaced at all because
+the crossed input had a different `ATOMIC_SPECIES` count. `_invoke` now runs
+each `pw.x` in its own directory, as `run_projwfc` already did.
+
+**What the seventeen cases measure.** Every row is one `pw.x` input run through both codes
+at the same threshold; `dE` is the total energy in Ry, and the symmetry count, the k-set,
+the FFT dimensions and the G-vector count agree exactly on every one of them.
+
+| case | what it adds | dE (Ry) | bands (eV) | other |
+|---|---|---|---|---|
+| `si10-nc` | LDA norm-conserving | 3.1e-9 | 4.9e-5 | HOMO 1.6e-5 eV |
+| `si10-nc-pbe` | the gradient correction | 1.7e-9 | 5.5e-5 | |
+| `si10-us` | ultrasoft: two grids, `Q_ij`, `D_ij` | 1.1e-9 | 5.5e-5 | |
+| `si10-paw` | the one-centre terms | 3.5e-9 | 5.1e-5 | |
+| `si10-paw-pbe` | PAW and PBE together | 2.1e-9 | 4.8e-5 | |
+| `al10-metal` | a metal, `marzari-vanderbilt` | 1.9e-9 | 5.0e-5 | `E_F` 2.3e-5 eV, stress 3.0e-9 |
+| `al10-metal-tetra` | optimised tetrahedra | 4.7e-9 | 5.0e-5 | `E_F` 5.4e-6 eV |
+| `h10-chain-lsda` | `nspin = 2`, antiferromagnetic | 4.3e-9 | 1.0e-4 | `\|m\|` 7.1043 against 7.10 |
+| `h10-chain-noncolin` | the same state as spinors | 4.4e-9 | 2.9e-4 | equals the collinear total both sides |
+| `c10-graphite-d2` | Grimme D2, five layers | 3.2e-10 | 5e-5 (bar the empty top band) | dispersion term 6e-9, force 4.1e-7 |
+| `ni10-ldau` | DFT+U, ten `ns` matrices | 1.8e-8 | 5.4e-5 | `m` 5.9036 against 5.90 |
+| `bi10-soc` | spin-orbit, 150 spinor bands | **1.9e-4** | 1.6e-2 | the one that does not close; see below |
+| `si10-nc-force` | one atom displaced | 2.2e-9 | 5.4e-5 | force 2.4e-7, stress 4.8e-9 |
+| `si10-us-force` | the same, `addusforce` | 6.3e-9 | 5.7e-5 | force 7.9e-7, stress 9.4e-8 |
+| `si10-paw-force` | the same, PAW | 9.8e-9 | 5.3e-5 | force 4.8e-7, stress 9.6e-8 |
+| `si10-nc-bands` | an explicit band path | -- | 5.8e-5 | 19 k-points x 26 bands |
+| `si10-nc-relax` | BFGS with ten moving atoms | 5.2e-9 | -- | geometry 6.8e-6 bohr, 11 SCF cycles each |
+
+On top of those: `si10-epsilon` against `ph.x` gives **7.0e-6** on every component of
+`epsilon_infinity` (a tensor of order 19) and **1.1e-5** on the mean `Z*` of all ten atoms,
+which is the resolution `ph.x` prints them at; and `projwfc.x` gives forty channels in QE's
+order, Löwdin charges to 4.8e-5 electrons, a spilling parameter of 0.0083 to its four
+printed decimals, and all twenty `filpdos` columns to 0.3% of their peak.
+
+**`bi10-soc` is the one case that does not reach 1e-6 Ry, and it is recorded rather than
+explained.** Ten bismuth atoms with a fully-relativistic `dn` dataset is 150 valence
+electrons, 150 occupied spinor bands and 30 empty ones on a 216 x 45 x 81 grid. Both codes
+choose the same 8 operations, the same single k-point, the same grid and the same 302569
+G-vectors, and both converge; the totals sit **1.9e-4 Ry** apart on -1477.737, which is
+1.3e-7 relative. The signature is two slightly different converged densities -- the
+one-electron and Hartree terms are 3.4e-3 and 3.6e-3 apart and cancel into the total, while
+the Ewald term, which depends on no density at all, agrees to 4.6e-9. What it is not: a
+geometry, a unit, a k-set or a grid. The test asserts the bound that was measured (5e-4 Ry)
+rather than one that was hoped for, and this is the open item the phase leaves behind.
+
+**Two more things ten sites cost, both stated rather than fixed.** The *memory*: a force and
+a stress on the displaced cell at 24 k-points peak at 1.5 GB norm-conserving and **16 GB**
+ultrasoft or PAW, and the spin-orbit SCF alone at 18.4 GB -- the augmentation charge on the
+dense grid, kept live by the reverse pass, which is P11's `si8-us` measurement one cell size
+up (`PERFORMANCE.md`). And the *degeneracy*: a five-cell supercell folds the primitive bands
+onto each other, so `|<phi|S|psi_n>|^2` for a single band is not a well-defined number
+(rule D4) -- the two codes differ by 0.138 band by band on `si10-nc` and by 0.0017 once each
+degenerate group is summed, so the projection is compared through its invariants instead.
+
+**A third thing, and it is a gap rather than a cost:** `run_relax` takes `etot_conv_thr`,
+`forc_conv_thr` and `nstep` as arguments and **does not read them from the input** --
+`System` carries no `&ions` field. A `pw.x` input asking for a tighter `forc_conv_thr` is
+therefore honoured by `pw.x` and ignored here, and the two stop at different points on the
+same curve: with `forc_conv_thr = 1e-4` in the file, `pw.x` took 26 BFGS steps to a residual
+force under 1e-4 while this code stopped after 11 at 9.5e-4 and the geometries were 0.057
+bohr apart. At QE's defaults on both sides they take 11 SCF cycles each and agree to
+**6.8e-6 bohr**. `si10-nc-relax.in` says so in its header; threading the `&ions` namelist
+through `System` is the fix and is not done here.
+
+*No notebook and no README row: this phase adds no feature. What it adds to the
+test suite is `tests/regression/test_ten_site.py` -- the ten-site sweep itself --
+and `tests/regression/test_shapes_against_qe.py`, which compares the two numbers
+`pw.x` prints before it starts iterating (`N Sym. Ops.` and the FFT dimensions)
+for **every** committed reference, in twelve seconds. All three bugs above were
+visible in one of those two numbers long before any energy was.*
+
+
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes
 the k-point count.

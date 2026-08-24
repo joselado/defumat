@@ -1724,6 +1724,43 @@ iteration, so the currency is the same. P22's `newton_krylov` is not directly
 reusable: it wraps a *nonlinear* residual and its finite-difference Jacobian
 would cost two applications per vector.
 
+## What ten sites cost (P28b)
+
+Ten atoms per cell is the first size at which the working set of a *force* is the number
+that decides whether a case runs at all. Same displaced silicon cell, same 4x4x4 grid (24
+k-points in the wedge), forces and stress in one process, single machine, `/usr/bin/time -v`:
+
+| case | dataset | peak RSS | wall |
+|---|---|---|---|
+| `si10-nc-force` | norm-conserving | **1.5 GB** | 0:37 |
+| `si10-us-force` (forces only) | ultrasoft | **16.2 GB** | 2:19 |
+| `si10-us-force` (stress only) | ultrasoft | **16.4 GB** | 2:29 |
+| `si10-paw-force` | PAW | **16.6 GB** | 2:11 |
+| `bi10-soc` (SCF only) | relativistic ultrasoft | **18.4 GB** | 46:22 |
+
+**An order of magnitude between the first row and the rest, and it is the augmentation
+charge.** The norm-conserving cell has no `Q_ij(G)` at all; the other two build it on a
+dense grid of ~68000 G-vectors for `nh (nh+1) / 2` projector pairs per atom, and the
+reverse pass keeps it live. It is the same trade P11 measured on `si8-us` (11 GB for a
+stress against 899 MB for the SCF), one cell size up and with the k-axis in it as well.
+The bismuthene row is the SCF alone -- no derivative at all -- and its 18.4 GB is
+`Q_ij(G)` on 302569 G-vectors for a `dn` dataset with a `j`-resolved projector set.
+
+Three practical consequences, stated so nobody meets them as a surprise:
+
+* **`tests/regression/test_ten_site.py` wants ~20 GB** to run end to end, and its two
+  ultrasoft/PAW force cases are what that is for.
+* A machine with 16 GB runs the norm-conserving ten-site set and not the ultrasoft one.
+* Attributing the 16 GB to a *route* -- `addusforce`'s transcription against the `jax.grad`
+  one -- was measured as a total and not decomposed; both routes ran in the same process.
+  Decomposing it is in the backlog, next to P11's shell-wise radial transform, which is the
+  fix both of them want.
+
+What the symmetry fix was worth in *time*, on the same machine: `si10-nc`'s SCF went from
+10.7 s to 5.6 s when the lattice point group search stopped missing four of the six
+operations -- the density is symmetrised over six operations instead of two, and the
+k-point set is unchanged. A bug that costs accuracy usually costs time as well.
+
 ## History
 
 | Date | Change | Effect |

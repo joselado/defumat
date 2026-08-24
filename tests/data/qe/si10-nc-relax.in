@@ -1,0 +1,58 @@
+! **Ten sites relaxed.** `si10-nc-force.in` handed to BFGS: the displaced atom
+! walks back onto the site symmetry put it on, and what is compared is the
+! *geometry* the two codes stop at rather than an energy at a geometry both were
+! given.
+!
+! It is the first relaxation here with more than two moving atoms, and the thing
+! ten sites add is that the symmetry group changes as the atom moves. QE fixes
+! the group, the FFT grid and the k-points **once** (`run_pwscf.f90` sets up
+! before the first step and only `checkallsym` afterwards), so a relaxation that
+! recovers a *higher* symmetry keeps computing on the displaced cell's wedge --
+! and this code does the same, which is why the two end at the same geometry
+! rather than at two different exactly-symmetric ones.
+!
+! The k-grid is 4x4x4 for `si10-nc-force.in`'s reason: on the 4x4x1 grid the two
+! codes' reduced sets are not the same set.
+!
+! **The `&ions` thresholds are left at QE's defaults on purpose.** `etot_conv_thr`
+! (1e-4 Ry) and `forc_conv_thr` (1e-3 Ry/bohr) must *both* be met before either
+! code stops, and `pypresso.workflows.relax.run_relax` takes them as arguments
+! rather than reading them from the input -- `System` carries no `&ions` field.
+! Writing a tighter one here would therefore be honoured by `pw.x` and ignored
+! by this code, and the two would stop at different points on the same curve:
+! with `forc_conv_thr = 1e-4` in the file, `pw.x` took 26 BFGS steps to a
+! residual force under 1e-4 while this code stopped after 11 at 9.5e-4, which
+! is its default and not a disagreement about anything.
+ &control
+    calculation = 'relax'
+    tprnfor = .true.
+    tstress = .true.
+ /
+ &system
+    ibrav = 0, celldm(1) = 10.20, nat = 10, ntyp = 1,
+    ecutwfc = 12.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ &ions
+ /
+CELL_PARAMETERS alat
+  -0.50  0.00  0.50
+   0.00  0.50  0.50
+  -2.50  2.50  0.00
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si    0.0000    0.0000    0.0000
+ Si    0.2500    0.2500    0.2900
+ Si   -0.5000    0.5000    0.0000
+ Si   -0.2500    0.7500    0.2500
+ Si   -1.0000    1.0000    0.0000
+ Si   -0.7500    1.2500    0.2500
+ Si   -1.5000    1.5000    0.0000
+ Si   -1.2500    1.7500    0.2500
+ Si   -2.0000    2.0000    0.0000
+ Si   -1.7500    2.2500    0.2500
+K_POINTS automatic
+ 4 4 4 0 0 0

@@ -101,6 +101,21 @@ over *atoms* and the error was a transfer between them; the first check that is 
 atom-sum is the per-mode response density against a finite difference. Four-atom aluminium
 now matches `ph.x` to **0.020-0.034 cm⁻¹** on the first metal phonon computed on a
 symmetry-reduced wedge.
+**Ten atoms per cell is where the whole feature set was run against `pw.x` at once**
+(P28b), and it found three more bugs of the same family — things only a supercell can
+see. The **lattice point group was searched over a fixed `range(-3, 4)` window**, which
+cannot hold the entries of five that five stacked primitive cells put in a rotation
+matrix: 2 operations found where QE finds 6, and a total energy 3.2e-6 Ry out with both
+codes converged to 1e-10 and both reporting success. **A fractional translation was
+accepted whatever its denominator**, where `sgam_at` takes only `1/n` with `n` in
+{2,3,4,6}: five-layer graphite kept a real mirror plane QE drops, `fft_fact` then wanted a
+20x20x**135** grid where `pw.x` chooses 128, and the totals differed by 1.7e-4 Ry with
+neither code wrong. And **`dielectric_tensor` symmetrised a `nosym` run**, which is
+invisible wherever the k-grid is closed under the point group and worth 0.97 in the
+off-diagonal entries where it is not. A fourth divergence is nobody's bug and is worth
+knowing: on a k-grid with **unequal divisions** the two codes build genuinely different
+irreducible sets — QE completes the lattice wedge with `irreducible_BZ`, whose star
+members leave such a grid — and `pw.x`'s own `nosym` run says which one is the grid's.
 `PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
 read it before writing code. P4 is complete: a block Davidson eigensolver behind a name
 registry, seeded from the pseudo-atomic orbitals as QE seeds it, and the *only* solver the

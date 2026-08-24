@@ -1,0 +1,48 @@
+! **Ten sites with a Hubbard U.** Ferromagnetic fcc nickel as a `2 x 1 x 5`
+! supercell of its one-atom primitive cell -- the cell shape of `al10-metal.in`
+! with nickel's pseudopotential, cutoffs and smearing from `ni-ldau-j0.in`, and
+! `U = 3 eV` on the `3d` shell through the `HUBBARD` card.
+!
+! Everything the DFT+U path has is in one run at ten sites: ultrasoft
+! projectors that need `S`, a spin-polarized metal whose Fermi level moves with
+! the occupation matrix, and **ten** occupation matrices rather than one. The
+! last is the point of the case. `ns` is per atom, so a ten-site cell is the
+! first one here where the Hubbard term's symmetrisation has anything to do --
+! the operations of the group permute the ten atoms among themselves and their
+! occupation matrices have to follow, which a one-atom cell cannot test.
+!
+! The k-grid is deliberately coarse (4x4x1, the primitive 8x4x5) because what is
+! being compared is two codes at one sampling, not nickel's magnetism.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 0, celldm(1) = 6.48, nat = 10, ntyp = 1,
+    nspin = 2, starting_magnetization(1) = 0.7,
+    ecutwfc = 24.0, ecutrho = 288.0,
+    occupations = 'smearing', smearing = 'marzari-vanderbilt', degauss = 0.02
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+CELL_PARAMETERS alat
+  -1.00  0.00  1.00
+   0.00  0.50  0.50
+  -2.50  2.50  0.00
+ATOMIC_SPECIES
+ Ni 58.69 Ni.pz-nd-rrkjus.UPF
+ATOMIC_POSITIONS (alat)
+ Ni   0.0000   0.0000   0.0000
+ Ni  -0.5000   0.5000   0.0000
+ Ni  -1.0000   1.0000   0.0000
+ Ni  -1.5000   1.5000   0.0000
+ Ni  -2.0000   2.0000   0.0000
+ Ni  -0.5000   0.0000   0.5000
+ Ni  -1.0000   0.5000   0.5000
+ Ni  -1.5000   1.0000   0.5000
+ Ni  -2.0000   1.5000   0.5000
+ Ni  -2.5000   2.0000   0.5000
+K_POINTS {automatic}
+ 4 4 1 0 0 0
+HUBBARD {atomic}
+U Ni-3d 3.0

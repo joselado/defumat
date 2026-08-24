@@ -1,0 +1,48 @@
+! `si10-nc-force.in` with the **ultrasoft** dataset: the same displaced ten-site
+! cell, so that the augmentation charge's own force (`addusforce`) and the Pulay
+! term are the difference between the two files. The stress is asked for as
+! well.!
+! **The k-grid is 4x4x4, not the 4x4x1 the undisplaced cases use, and that is a
+! correctness requirement rather than a sampling preference.** A Monkhorst-Pack
+! grid with unequal divisions is not closed under a point group whose operations
+! mix the axes -- and the [111] three-fold of this cell does. QE reduces such a
+! grid with the *lattice* group and then completes the list to the crystal's
+! with `irreducible_BZ` (`PW/src/irrek.f90`), which builds the star of each
+! wedge point under the lattice rotations: on a 4x4x1 grid those stars leave the
+! grid, and the 14 points it ends with include seven that are not grid points at
+! all. The result differs from `pw.x`'s own `nosym` run over the same grid by
+! **6.9e-5 Ry** (`si10-nc-anisotropic.in` is that case, kept for the record). An
+! `n x n x n` grid is invariant under every integer rotation, so both codes'
+! wedges are exact there and `pw.x` reproduces its own `nosym` total to the last
+! digit it prints.
+ &control
+    calculation = 'scf'
+    tprnfor = .true.
+    tstress = .true.
+ /
+ &system
+    ibrav = 0, celldm(1) = 10.20, nat = 10, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 160.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+CELL_PARAMETERS alat
+  -0.50  0.00  0.50
+   0.00  0.50  0.50
+  -2.50  2.50  0.00
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-n-rrkjus_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si    0.0000    0.0000    0.0000
+ Si    0.2500    0.2500    0.2900
+ Si   -0.5000    0.5000    0.0000
+ Si   -0.2500    0.7500    0.2500
+ Si   -1.0000    1.0000    0.0000
+ Si   -0.7500    1.2500    0.2500
+ Si   -1.5000    1.5000    0.0000
+ Si   -1.2500    1.7500    0.2500
+ Si   -2.0000    2.0000    0.0000
+ Si   -1.7500    2.2500    0.2500
+K_POINTS automatic
+ 4 4 4 0 0 0

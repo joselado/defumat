@@ -1,0 +1,54 @@
+! **Ten sites with spin-orbit coupling.** Bismuthene -- the buckled-free flat
+! honeycomb monolayer of `bismuthene-soc-small.in` -- in a cell five times as
+! long along `a1`, so ten bismuth atoms, two-component spinors and the
+! `j`-resolved projectors of a fully-relativistic ultrasoft dataset.
+!
+! The cell is written with `CELL_PARAMETERS` rather than `ibrav = 4` because it
+! is no longer hexagonal: stretching one of the two in-plane vectors by five
+! leaves a monoclinic lattice whose point group is what the two codes have to
+! agree on. That is the same question `si10-nc.in` asks, in the regime where a
+! wrong answer also rotates spinors.
+!
+! **One k-point**, where the two-atom cell uses 6x6x1. That is a budget and it
+! is stated rather than hidden. A fully-relativistic `dn` dataset carries
+! fifteen valence electrons per atom, so ten atoms is 150 electrons and --
+! being noncollinear -- 150 *spinor* bands, on the 216 x 45 x 81 grid that
+! stretching an already-large 2D cell by five forces. `pw.x` spends 200 seconds
+! on one SCF iteration here with four k-points. What is being compared is two
+! codes on one sampling of one geometry, and every path spin-orbit coupling
+! adds -- the `j`-resolved projectors, `fcoef`, the 2x2 `D_ij` in spin space,
+! the spinor density and its symmetrisation -- is exercised at one k-point
+! exactly as at forty.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 0, celldm(1) = 10.109950,
+    nat = 10, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 160.0,
+    noncolin = .true., lspinorb = .true.,
+    starting_magnetization = 0.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.01,
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+CELL_PARAMETERS alat
+   5.000000000000  0.000000000000  0.000000000000
+  -0.500000000000  0.866025403784  0.000000000000
+   0.000000000000  0.000000000000  1.978248000000
+ATOMIC_SPECIES
+ Bi 208.98 Bi.rel-pbe-dn-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS (crystal)
+ Bi 0.066666666667 0.666666666667 0.0
+ Bi 0.133333333333 0.333333333333 0.0
+ Bi 0.266666666667 0.666666666667 0.0
+ Bi 0.333333333333 0.333333333333 0.0
+ Bi 0.466666666667 0.666666666667 0.0
+ Bi 0.533333333333 0.333333333333 0.0
+ Bi 0.666666666667 0.666666666667 0.0
+ Bi 0.733333333333 0.333333333333 0.0
+ Bi 0.866666666667 0.666666666667 0.0
+ Bi 0.933333333333 0.333333333333 0.0
+K_POINTS AUTOMATIC
+ 1 1 1 0 0 0

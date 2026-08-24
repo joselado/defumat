@@ -64,6 +64,18 @@ CASES = {
     "al-tetrahedra": "al-tetrahedra",
 }
 
+#: The ten-site cell of P28b is deliberately **not** in this list, and the
+#: reason is the projection's own definition rather than its implementation. A
+#: five-cell supercell folds the primitive bands onto each other, so nearly
+#: every band is degenerate -- and ``|<phi|S|psi_n>|^2`` for a single ``n`` is
+#: not a well-defined number inside a degenerate subspace (rule D4): the two
+#: eigensolvers return different unitary mixtures of the same manifold. Measured
+#: on ``si10-nc``: 0.138 band by band, and **0.0017** once each degenerate group
+#: is summed, which is what ``print_proj``'s three-decimal rounding is worth
+#: over a group of five. The invariant quantities -- the state table, the Löwdin
+#: charges, the spilling parameter and the projected DOS itself -- are compared
+#: in ``test_ten_site.py``.
+
 #: ``projwfc.x``'s ``DeltaE`` for those runs, in eV.
 DELTA_E = 0.05
 
