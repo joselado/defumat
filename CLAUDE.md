@@ -175,7 +175,24 @@ to 2.2e-4. Getting there found a trap that is P26's rather than P27's: at QE's
 solution was being consumed in silence, giving a `C_ijkl` that was not even symmetric under
 `C_ijkl = C_klij`. It is refused now (`require_converged_responses`).
 
-**Outstanding:** Wyckoff input, `vc-relax`, the dynamical matrix of an
+**Variable-cell relaxation** (P29) is in: the cell relaxes with the atoms in one BFGS over
+`3 nat + 9` coordinates at an applied pressure, matching `pw.x` on all four of its
+`pw_vc-relax` BFGS cases — arsenic at 500 kbar compressing 10% and going simple cubic
+(0.2722 → 0.2500) agrees on the relaxed volume to **7e-4 bohr³** and on the final energy to
+**2.4e-6 Ry**, in the same number of ionic steps. Getting there found two bugs, both of the
+P28a family — the energy right and something else not. **`at_strain` rebuilt its k-points
+from `system.kpoints`**, whose cartesian coordinates describe a k-set only together with the
+cell they were built for; every earlier caller deformed a cell whose k-points had just been
+built for it, and a cell that has actually *moved* separates them, so a stress on a stepped
+cell was differentiated **0.031 away in crystal coordinates** from where the SCF had run —
+64 kbar, and 2% of the relaxed volume. A finite difference of the frozen-basis energy is
+what settled it against the plausible story that autodiff was seeing a Pulay term QE misses.
+And **the lattice symmetry tolerance was dimensional**: an absolute 1e-6 applied to bohr and
+bohr² where `symm_base.f90`'s `eps1` applies to `at` in units of `alat`, so the same crystal
+loses operations as its lattice constant grows — eight of twelve dropped on QE's own
+`vc-relax4.in`.
+
+**Outstanding:** Wyckoff input, the dynamical matrix of an
 ultrasoft dataset, PAW Born charges, phonons at `q != 0` (the perturbed states live
 at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals, plus
 `q2r`/`matdyn` for a dispersion), and the rest of P10 (k-axis sharding and GPU).
@@ -317,9 +334,22 @@ explicitly so that ultrasoft's Pulay term is part of the same gradient. QE's `fo
 behind the same registry, because the two implementations share no machinery and checking
 one against the other is what found the augmentation force's sign and the gradient
 correction missing from `force_cc`. `calculation = 'relax'` runs QE's BFGS with its trust
-radius and Wolfe line search. **Variable-cell relaxation is not in**: the cell gradient is
-the stress, which is P11's, and a moving cell would also invalidate the rule that the FFT
-grid and the symmetry group are fixed once for the whole run.
+radius and Wolfe line search.
+
+**Variable-cell relaxation is in too** (P29): `calculation = 'vc-relax'`. The cell is nine
+more coordinates of the same BFGS, its gradient is `cell_force`'s
+`dH/dh = Omega (P I - sigma) h^-T`, and what is minimised is the **enthalpy** — so the
+stationary point is `sigma = P I` and a relaxed crystal carries the applied pressure rather
+than having no stress. **A vc-relax is two runs and that is what makes it obey the
+fixed-setup rule**: `scale_h.f90` re-expresses the *same* G-vectors against the new
+reciprocal cell and changes nothing else (`Calculation.at_cell`), so the relaxation is one
+run with one setup; then `reset_gvectors` throws it away and runs **one more SCF from
+scratch** at the relaxed geometry, which is a second run with a second setup. The gap
+between their energies is the Pulay error of the frozen basis and is reported
+(`VCRelaxResult.pulay_error`) rather than left to be noticed — on QE's own five-layer
+graphite with the whole cell free it is **0.45 Ry**, and the relaxation goes downhill in the
+frozen basis and uphill in reality. `treinit_gvecs` rebuilds everything per step and makes
+it zero.
 
 **DFT+U is in scope and implemented** (P20): `pypresso/hubbard/`. QE's
 `lda_plus_u_kind = 0` — Dudarev's simplified rotationally-invariant functional with the

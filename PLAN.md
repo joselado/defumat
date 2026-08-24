@@ -1224,7 +1224,12 @@ no functional here to differentiate; and the `stres_us`/`addusstress` transcript
 
 **What `vc-relax` would need**, since the stress is what was blocking it and the cell
 gradient now exists. It is deliberately *not* started, because it is a design decision about
-the run rather than about the stress:
+the run rather than about the stress. **P29 did it, and this forecast was right about
+everything but one thing** — the coordinate is the cell matrix `h` itself, nine numbers,
+not the six of a symmetric strain, because `bfgs_module.f90` appends `h(i,j)` and lets
+`iforceh` mask the entries; a strain would have needed the rotational gauge fixed by hand.
+Everything else below is what happened, including the last bullet, which named the bug P29
+had to fix:
 
 * **The FFT grid and the symmetry group would have to move, or be pinned.** Both are chosen
   once from the cell (`setup.f90`, and P15 trap 4): the FFT dimensions must divide the
@@ -1248,6 +1253,9 @@ the run rather than about the stress:
 * **The Ewald neighbour list, the plane-wave sphere and `alat`** all follow the cell.
   `at_strain` freezes the first two on purpose, which is right for a gradient and wrong for
   a step — the same distinction `at_spiral_q(rebuild_basis=...)` draws for a spiral.
+  *(P29: `Calculation.at_cell` is that distinction, and the neighbour list is the half of it
+  that had to be rebuilt. The sphere is **not** — QE freezes it too, for the whole
+  relaxation, and rebuilds it only in the final SCF.)*
 
 **P15 — Forces and structural relaxation. ✅ DONE.** `pypresso/forces/` (the stationary
 energy functional, its gradient, and QE's six hand-derived terms behind a name registry),
@@ -1314,10 +1322,10 @@ it does. It is worth 1e-4 Ry on a symmetric run and nothing at all with `nosym`,
 two codes agree to the last digit. The measurement and what it does and does not mean are
 under P6 above; relaxations meet it routinely, because a shifted grid is an ordinary input.
 
-*Deferred:* `vc-relax` (needs the stress, P11), noncollinear forces (`qq_so`/`dvan_so` in
+*Deferred:* noncollinear forces (`qq_so`/`dvan_so` in
 the constraint and nonlocal terms — refused rather than approximated), and the ion dynamics
 other than BFGS (`damp`, `fire`, molecular dynamics), which are a file and a registration
-each.
+each. `vc-relax` was deferred here and is **P29**.
 
 **P16 — Berry curvature, Chern numbers and Z2 invariants. ✅ DONE.** `pypresso/topology/`
 (mesh and the reciprocal-lattice wrap, the state sets and their overlap, the augmentation

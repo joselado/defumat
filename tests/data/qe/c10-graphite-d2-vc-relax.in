@@ -18,16 +18,22 @@
 ! new consumers of it.
 !
 ! `cell_dofree = 'z'` frees `h(3,3)` and nothing else, so `c` is the only thing
-! that moves. That is not a convenience: with the whole cell free this crystal
-! **collapses by 26% in volume**, and the collapse is an artifact of relaxing in
-! a basis enumerated for the starting cell rather than physics. `pw.x` run that
-! way ends at an interlayer spacing of 2.68 A and a "Final enthalpy" of
-! -113.0741 Ry, while its own final SCF at that cell -- in a basis that belongs
-! to it -- gives -112.6281, *above* the -112.7747 the starting geometry had. The
-! relaxation went downhill in the frozen basis and uphill in reality, and it did
-! so in both codes for the same reason. Constrained to `z` the cell moves ~3%,
-! which is inside what a fixed basis can be trusted for; `VCRelaxResult.pulay_error`
-! is the number that says so, and P29's entry in `PLAN.md` records the collapse.
+! that moves -- which is both the physics and the only test of the mask.
+!
+! **`treinit_gvecs = .true.` is not optional here, and finding that out is worth
+! more than the case itself.** Relaxed in a basis enumerated for the starting
+! cell -- QE's default, and correct for arsenic and for silicon -- this crystal
+! *collapses*: `pw.x` takes `c` from 31.65 to 25.35 bohr (an interlayer spacing
+! of 2.68 A against experiment's 3.35) and prints a `Final enthalpy` of -113.0268
+! Ry, while its own final SCF at that cell gives **-112.7102** -- *above* the
+! -112.7747 the starting geometry had. The relaxation went downhill in the frozen
+! basis and uphill in reality. It is not a defect of either code: a 20%
+! contraction along `c` makes the frozen sphere 20% over-complete in exactly the
+! soft direction, and `C.pbe-hgh` at `ecutwfc = 40` is far enough from converged
+! that the gain is worth more than the physics being minimised. Silicon
+! compressed by 25% in `si8-vc-relax.in` and paid 8.7e-5 Ry for it; this pays
+! 0.32 Ry. Rebuilding the grids every step removes it entirely, at the cost of a
+! full setup per step, and it is what a layered crystal at a modest cutoff needs.
  &control
     calculation = 'vc-relax'
     tprnfor = .true.
@@ -55,6 +61,7 @@
     cell_dynamics = 'bfgs'
     press = 0.0
     cell_dofree = 'z'
+    treinit_gvecs = .true.
  /
 ATOMIC_SPECIES
  C 12.011 C.pbe-hgh.UPF

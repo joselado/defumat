@@ -55,15 +55,25 @@ pytestmark = [pytest.mark.regression, pytest.mark.slow]
 CASES = Path(__file__).resolve().parents[1] / "data" / "qe"
 QE_SUITE = "pw_vc-relax"
 
-#: How closely the two codes must agree on the relaxed cell, in bohr. Both stop
-#: when ``|P I - sigma|`` is under ``press_conv_thr = 0.5`` kbar, and arsenic's
-#: bulk modulus near 500 kbar is about 700 kbar, so half a kbar of residual
-#: stress is worth ~0.07% in a linear dimension -- 4e-3 bohr on a 5.5 bohr cell.
-CELL_BOHR = 6e-3
-#: The same for the atoms, which sit in a much stiffer potential.
-POSITION_CRYSTAL = 2e-4
-#: And for the volume, which is three times a linear dimension's error.
-VOLUME_FRACTION = 3e-3
+# The bounds are the ones that were *measured*, not the ones the thresholds
+# would allow. Both codes stop when ``|P I - sigma|`` is under
+# ``press_conv_thr = 0.5`` kbar, which on arsenic near 500 kbar would permit
+# ~4e-3 bohr in a linear dimension; what the four cases actually give is 2.2e-4
+# bohr on the cell, 2.4e-6 on a crystal coordinate and 1.5e-5 Ry on the energy,
+# so those are what is asserted, with a factor of two or three of margin. A
+# bound set from the thresholds instead would pass through a regression that
+# moved the answer by an order of magnitude.
+
+#: The relaxed cell, in bohr. Worst measured: 2.2e-4 (``vc-relax6``).
+CELL_BOHR = 6e-4
+#: A crystal coordinate. Worst measured: 2.4e-6.
+POSITION_CRYSTAL = 1e-5
+#: The volume, as a fraction. Worst measured: 3.7e-3 bohr^3 on 190.9, i.e. 2e-5.
+VOLUME_FRACTION = 6e-5
+#: The final SCF's total energy, in Ry. Worst measured: 1.5e-5 (``vc-relax6``,
+#: whose grids are rebuilt every step so the two codes' trajectories separate
+#: further than they do at a fixed basis).
+ENERGY_RY = 5e-5
 
 
 @lru_cache(maxsize=None)
@@ -148,7 +158,7 @@ def test_the_final_scf_energy_matches_pw_x(name, pseudo_dir):
     for the starting cell and is not variational in the cell it is reported at,
     so it is not the number either code quotes.
 
-    The bound is 1e-4 Ry rather than the suite's 1e-6, and it is not slack: the
+    The bound is 5e-5 Ry rather than the suite's 1e-6, and it is not slack: the
     two codes stop at slightly different cells (both within ``press_conv_thr``
     of the target pressure) and this is the energy *at* those cells, so what is
     being compared carries the curvature of the enthalpy over that gap. On
@@ -157,7 +167,7 @@ def test_the_final_scf_energy_matches_pw_x(name, pseudo_dir):
     """
     result = _relaxed(name, pseudo_dir, True)
     reference = _reference(name, True)
-    assert abs(result.total_energy - reference.final_total_energy) < 1e-4
+    assert abs(result.total_energy - reference.final_total_energy) < ENERGY_RY
 
 
 @pytest.mark.parametrize("name", QE_CASES)
