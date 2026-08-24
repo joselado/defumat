@@ -1,29 +1,33 @@
-! **Ten atoms and a cell that has to change shape.** The five-cell silicon stack
-! of `si10-nc.in` -- P28b's ten-site regime, where every cell is a supercell --
-! relaxed under 100 kbar with `calculation = 'vc-relax'`.
+! **Ten atoms and a cell, both relaxing, on a crystal with almost no symmetry.**
+! `si10-nc-force.in`'s geometry -- P28b's five-cell silicon stack with its second
+! atom pushed from 0.25 to 0.29 along `z` -- relaxed under 100 kbar with
+! `calculation = 'vc-relax'`.
 !
-! It is the case the cell's *nine* coordinates exist for, and the reason is the
-! geometry rather than the chemistry: `a3` is five primitive cells long and `a1`
-! and `a2` are one, so the crystal is far from cubic and the three directions
-! have no symmetry obliging them to respond alike. A cubic cell under pressure
-! moves one coordinate, the volume, and the other eight are along for the ride;
-! this one has to get the shape right as well.
+! The displaced atom is deliberate and is what makes this the hardest case here.
+! It drops the group from six operations to **two** (P28b measured that), so
+! nothing imposes the answer: the atoms must find their way back to the ideal
+! stack while the cell finds its way to the applied pressure, and the two are
+! coupled through one Hessian over `3 nat + 9 = 39` coordinates. Every other case
+! in this set is either two atoms or cubic.
 !
-! **`4 4 4` and not `4 4 1`, which the cell's shape would otherwise suggest.**
-! P28b's finding: on a grid with unequal divisions the two codes build genuinely
-! different irreducible sets -- `kpoint_grid` reduces with the lattice's group and
-! `irreducible_BZ` completes it by coset decomposition, whose star members leave
-! such a grid -- and the totals then differ by 6.9e-5 Ry with neither code wrong.
-! The `si10-nc-force.in` cases run on `4 4 4` for exactly this reason and so does
-! this one; a relaxation would otherwise be comparing two different sums at every
-! step.
+! It is also the case that exercises the cell's *shape*: `a3` is five primitive
+! cells long where `a1` and `a2` are one, so the three directions are not
+! equivalent and none of the nine coordinates is along for the ride by symmetry.
 !
-! `ecutwfc = 20` rather than the 12 the other si10 cases use. A vc-relax is
-! relaxing in a basis chosen for the starting cell, so what has to be small is
-! not the basis error but its *derivative* with respect to the cell, and 12 is a
-! debugging cutoff. At 20 the relaxation moves the cell by 8% and the final SCF
-! in its own basis lands within 2 kbar of the applied pressure; the run's own
-! `VCRelaxResult.pulay_error` is what says whether that held.
+! **`4 4 4` and not the `4 4 1` this cell's shape suggests.** P28b's finding: on a
+! grid with unequal divisions the two codes build genuinely different irreducible
+! sets -- `kpoint_grid` reduces with the lattice's group and `irreducible_BZ`
+! completes it by coset decomposition, whose star members leave such a grid -- and
+! the totals then differ by 6.9e-5 Ry with neither code wrong. `si10-nc-force.in`
+! runs on `4 4 4` for exactly this reason and so does this; a relaxation would
+! otherwise be comparing two different sums at every step.
+!
+! `ecutwfc = 20` rather than the 12 the other si10 cases use, because what a
+! vc-relax needs small is not the basis error but its *derivative* with respect to
+! the cell: the relaxation happens in a basis chosen for the starting cell, and 12
+! is a debugging cutoff. Whether 20 was enough is not asserted here -- the run's
+! own `VCRelaxResult.pulay_error` and the residual stress of the final SCF are what
+! report it.
  &control
     calculation = 'vc-relax'
     tprnfor = .true.

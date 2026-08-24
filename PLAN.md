@@ -3898,15 +3898,21 @@ a modest cutoff has no trustworthy relaxed cell by either route**, and
 case is not committed as an agreement test, because there is nothing converged to
 agree about.
 
-**The ten-atom case that works is silicon**, and it is the same cell P28b used:
-five primitive cells stacked along `a3`, so the crystal is as far from cubic as
-graphite is and the three directions have no symmetry obliging them to respond
-alike, without a soft axis held together by a dispersion correction. It runs on
-`4 4 4` rather than the `4 4 1` its shape suggests, for P28b's reason — on a grid
-with unequal divisions the two codes build genuinely different irreducible sets
-and the totals differ by 6.9e-5 Ry with neither wrong — and at `ecutwfc = 20`
-rather than the 12 the other si10 cases use, because what a vc-relax needs small
-is not the basis error but its *derivative* with respect to the cell.
+**The ten-atom case that works is silicon**, and it is P28b's own geometry: five
+primitive cells stacked along `a3` **with the second atom displaced**, which is
+`si10-nc-force.in`'s crystal. The displacement is the point rather than an
+accident of where the file came from — it drops the group from six operations to
+**two**, so nothing imposes the answer, and the ten atoms have to find their way
+back to the ideal stack while the cell finds its way to the applied pressure,
+coupled through one Hessian over `3 nat + 9 = 39` coordinates. Every other case
+in the set is two atoms or cubic. The cell is as far from cubic as graphite is —
+`a3` is five primitive cells where `a1` and `a2` are one — without a soft axis
+held together by a dispersion correction. It runs on `4 4 4` rather than the
+`4 4 1` its shape suggests, for P28b's reason: on a grid with unequal divisions
+the two codes build genuinely different irreducible sets and the totals differ by
+6.9e-5 Ry with neither wrong. And at `ecutwfc = 20` rather than the 12 the other
+si10 cases use, because what a vc-relax needs small is not the basis error but
+its *derivative* with respect to the cell.
 
 **The 500 kbar cases are not harder versions of the 0 kbar one.** At zero
 pressure the enthalpy is the energy and `P Omega` is identically absent; at 500
