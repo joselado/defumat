@@ -226,12 +226,16 @@ def test_a_different_symmetry_group_reaches_the_same_answer(pseudo_dir):
 
 # --------------------------------------------------------------- bigger cells
 def test_eight_atoms_and_a_cell_under_pressure(pseudo_dir):
-    """The conventional cubic cell of silicon at 500 kbar, against ``pw.x``.
+    """The conventional cubic cell of silicon at 100 kbar, against ``pw.x``.
 
     Eight atoms is where the cell block and the atom block share a Hessian that
     is not nearly diagonal, and where the exact fractional coordinates make the
     structure factor vanish exactly at a set of G-vectors (P28a) whose new
     consumer here is the cell gradient.
+
+    **100 kbar and not 500**: at 500 this cell compresses 25%, silicon's gap
+    closes, and a run at the default fixed occupations is not a calculation --
+    ``pw.x`` fails its final SCF outright. The input's header has the numbers.
     """
     result = _relaxed("si8-vc-relax", pseudo_dir, False)
     reference = _reference("si8-vc-relax", False)
@@ -254,11 +258,16 @@ def test_the_relaxed_cubic_cell_is_still_cubic(pseudo_dir):
 
 
 def test_ten_atoms_and_a_cell_that_changes_shape(pseudo_dir):
-    """Five-layer graphite, where ``c`` relaxes and ``a`` barely does.
+    """Five-layer graphite relaxed along ``c``, with the grids rebuilt each step.
 
-    The case the cell's *nine* coordinates exist for: ``a`` is a covalent bond
-    and ``c`` is held only by the D2 correction, so a relaxation that moved
-    them together would be wrong in a way no cubic cell can show.
+    Two things at once that no other case here has: ``cell_dofree`` actually
+    masking something (only ``h(3,3)`` may move, so this is the only test that a
+    frozen cell component stays frozen through a whole *run* rather than through
+    the optimizer alone), and ``treinit_gvecs``, which this crystal needs --
+    relaxed in a fixed basis it collapses by 20% along ``c`` in **both** codes,
+    and ``pw.x``'s own final SCF at the collapsed cell comes out *above* the
+    energy the starting geometry had. The input's header has that measurement;
+    it is what ``VCRelaxResult.pulay_error`` exists to report.
     """
     result = _relaxed("c10-graphite-d2-vc-relax", pseudo_dir, False)
     reference = _reference("c10-graphite-d2-vc-relax", False)
@@ -267,13 +276,21 @@ def test_ten_atoms_and_a_cell_that_changes_shape(pseudo_dir):
 
 
 def test_graphites_layers_move_and_its_bonds_do_not(pseudo_dir):
-    """The physics of the previous test, stated as the thing it is for."""
+    """``a`` is held by the mask and ``c`` is not, so only ``c`` may move.
+
+    Not a physics claim -- ``cell_dofree = 'z'`` imposes it -- but the check
+    that the mask survives ten ionic steps of an accumulated Hessian, which is
+    the same failure ``test_a_frozen_cell_component_stays_frozen_through_the_hessian``
+    tests at the level of the optimizer alone.
+    """
     result = _relaxed("c10-graphite-d2-vc-relax", pseudo_dir, False)
     system = build_system(read_pw_input(CASES / "c10-graphite-d2-vc-relax.in"))
     start = np.asarray(system.cell.at)
-    a_start, c_start = np.linalg.norm(start[0]), np.linalg.norm(start[2])
-    a_end, c_end = np.linalg.norm(result.cell[0]), np.linalg.norm(result.cell[2])
-    assert abs(a_end - a_start) / a_start < 0.02, "the in-plane bond moved"
-    assert abs(c_end - c_start) / c_start > abs(a_end - a_start) / a_start, (
-        "the interlayer spacing has to be the soft direction"
-    )
+    # Every entry of ``h`` but ``h(3,3)`` is frozen, so the whole in-plane block
+    # has to come back bit for bit, not merely nearly. A leak through the
+    # Hessian would be small and would look like a converged answer.
+    frozen = np.abs(result.cell - start)
+    moved = frozen[2, 2]
+    frozen[2, 2] = 0.0
+    assert frozen.max() < 1e-12, "cell_dofree = 'z' let something else move"
+    assert moved / np.linalg.norm(start[2]) > 0.01, "c did not move at all"

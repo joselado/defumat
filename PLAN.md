@@ -3836,22 +3836,53 @@ unequal-grid reasoning; it is instead the statement that this grid *is* closed
 under the larger group, which P28b established is not automatic. The case where
 it fails is a grid with unequal divisions, and this is not one.
 
-**The bigger cells, and what the second of them refused to be.** Eight-atom
-cubic silicon at 500 kbar is the supercell regime (P28a) applied to a cell
+**The bigger cells, and both of them refused the case they were written for.**
+
+**Eight-atom cubic silicon** is the supercell regime (P28a) applied to a cell
 gradient: eight atoms and nine cell coordinates in one Hessian, and a structure
-factor that vanishes *exactly* wherever the conventional cell's exact fractions
-kill it. Ten-atom five-layer graphite was chosen for the opposite property —
-`a` is a covalent bond and `c` is held only by the D2 correction, so they must
-move independently — and it is the case that had to be **constrained** to be a
-test at all. With the whole cell free it **collapses by 26% in volume**, and the
-collapse is not physics: `pw.x` run that way ends at an interlayer spacing of
-2.68 Å with a `Final enthalpy` of -113.0741 Ry, while its own final SCF at that
-cell gives **-112.6281** — *above* the -112.7747 the starting geometry had. The
-relaxation went downhill in the frozen basis and uphill in reality, in both
-codes and for the same reason, and it is the clearest statement available of
-what `pulay_error` is measuring and why `treinit_gvecs` exists. Constrained with
-`cell_dofree = 'z'`, only `c` moves, the cell changes by ~3%, and the case
-becomes what it was meant to be — while also being the only test of the mask.
+factor that vanishes *exactly* wherever the conventional cell's fractions kill
+it. It was written at **500 kbar and is not a test there**, and the failure looks
+like a bug in the SCF, which is what made it take a while to see: the two codes'
+relaxed geometries agree to **5e-5 bohr** and their final energies are **7.3e-3
+Ry** apart, on identical setups — 12557 G-vectors, a 30³ grid, 24 operations, 10
+k-points — and pypresso reproduces its own 7.3e-3 discrepancy at *QE's* cell,
+which rules the geometry out. The reference says what it is: `convergence NOT
+achieved after 100 iterations`. 500 kbar compresses this cell by 25% and closes
+silicon's gap, so a run at the default fixed occupations is ill-posed; `pw.x`
+relaxes happily in the frozen basis and then fails its final SCF, while pypresso
+converges the same ill-posed problem to a fixed-occupation solution QE never
+reaches. Two codes disagreeing about a system neither should be describing is not
+a comparison. **At 100 kbar** the cell moves 8.4% — as much as the arsenic cases
+— stays an insulator on both sides, and the two agree on the relaxed volume to
+**1.1e-4 bohr³** and on the final energy to **5e-8 Ry**.
+
+That left a trap in the *parser* worth more than the case: `pw.x` prints
+`!  total energy` **only** when the SCF converged, so `final_total_energy` — "the
+last one" — is really "the last *converged* one", and on a run whose final SCF
+failed it is silently the last ionic step's, in the relaxation's own basis rather
+than the rebuilt one. `QEReference.scf_converged` now says so and the tests
+assert it before comparing anything to it.
+
+**Ten-atom five-layer graphite** was chosen for the opposite property — `a` is a
+covalent bond and `c` is held only by the D2 correction, so they respond to
+different physics — and it is the case that needs **`treinit_gvecs`**. With the
+whole cell free it collapses by 26% in volume; constrained with
+`cell_dofree = 'z'` so that only `c` can move, it *still* collapses, 31.65 → 25.35
+bohr. That was the prediction that failed: the constraint was expected to keep the
+cell inside what a fixed basis can be trusted for, and it does not, because the
+soft axis is exactly the one that moves. The collapse is not physics — `pw.x` run
+that way prints a `Final enthalpy` of -113.0268 Ry while its own final SCF at that
+cell gives **-112.7102**, *above* the -112.7747 the starting geometry had. The
+relaxation went downhill in the frozen basis and uphill in reality, in both codes
+and for the same reason: a 20% contraction along the soft axis makes the frozen
+sphere over-complete in exactly that direction, and `C.pbe-hgh` at
+`ecutwfc = 40` is far enough from converged that the basis gain outweighs the
+physics being minimised. **Silicon compressed 25% and paid 8.7e-5 Ry for it; this
+pays 0.32.** It is the clearest statement available of what `pulay_error` measures
+and why `treinit_gvecs` exists, and it is the number to have in mind before
+trusting a relaxed cell of a layered crystal at a modest cutoff. The committed
+case rebuilds the grids every step; `cell_dofree = 'z'` stays, because the physics
+is in `c` and because it is the only test of the mask.
 
 **The 500 kbar cases are not harder versions of the 0 kbar one.** At zero
 pressure the enthalpy is the energy and `P Omega` is identically absent; at 500
