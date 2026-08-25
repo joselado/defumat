@@ -1,0 +1,103 @@
+"""Pair the GPU and CPU phase-0 records and read GPU.md's checks off them.
+
+    python3 tools/gpu/phase0_compare.py out/gpu-*.json --against out/cpu-*.json
+
+Check 2 -- "the total energy against the CPU run, to the committed tolerance" --
+is a comparison between two *runs*, so it cannot live inside either of them.
+This is where it happens, and it is also where §2.3's metric is finally stated:
+the ratio is GPU pypresso against CPU pypresso, per SCF iteration, with compile
+time as its own column rather than folded into it.
+
+**The tolerance is the case's own ``conv_thr`` and not a round number.** An SCF
+converged to ``dr2 < conv_thr`` does not define its total energy more tightly
+than that, so two platforms agreeing to better than the threshold they were both
+asked to reach is agreement, and a round 1e-8 asserted over a case converged to
+1e-10 would be the looser test dressed as the stricter one.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+
+def load(paths: list[Path]) -> dict[str, dict]:
+    """Keyed by (case, k_batch, band_batch), which is what makes two runs a pair."""
+    records = {}
+    for path in paths:
+        record = json.loads(path.read_text())
+        key = (record["run"]["case"], record["dials"]["k_batch"], record["dials"]["band_batch"])
+        records["|".join(key)] = record
+    return records
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("gpu", nargs="+", type=Path, help="GPU-side JSON records")
+    parser.add_argument("--against", nargs="+", type=Path, required=True,
+                        help="CPU-side JSON records")
+    arguments = parser.parse_args(argv)
+
+    gpu, cpu = load(arguments.gpu), load(arguments.against)
+    first = next(iter(gpu.values()), None)
+    if first:
+        provenance = first["provenance"]
+        print(f"GPU: {provenance['device_kind']}  jax {provenance['jax']}  "
+              f"plugin {provenance['cuda_plugin']}")
+        print(f"     {provenance['nvidia_smi']}")
+        print(f"     commit {str(provenance['git_commit'])[:8]}"
+              f"{' DIRTY' if provenance['git_dirty'] else ''}")
+    baseline = next(iter(cpu.values()), None)
+    if baseline:
+        print(f"CPU: {baseline['provenance']['device_kind']}  "
+              f"{baseline['provenance']['cpus_per_task']} cores allocated")
+
+    header = (f"\n{'case / dials':<34}{'dE (Ry)':>12}{'GPU ms/it':>11}{'CPU ms/it':>11}"
+              f"{'ratio':>8}{'compile':>9}{'peak GB':>9}  determinism")
+    print(header)
+    print("-" * len(header))
+
+    worst = 0.0
+    failures = []
+    for key, record in sorted(gpu.items()):
+        run = record["run"]
+        label = f"{run['case']} k={record['dials']['k_batch']} b={record['dials']['band_batch']}"
+        other = cpu.get(key)
+        if other is None:
+            print(f"{label:<34}{'no CPU pair':>12}")
+            continue
+        difference = run["total_energy"] - other["run"]["total_energy"]
+        worst = max(worst, abs(difference))
+        gpu_iter = run["per_iteration_s"] or float("nan")
+        cpu_iter = other["run"]["per_iteration_s"] or float("nan")
+        verdict = record["determinism"]["verdict"]
+        print(f"{label:<34}{difference:>12.2e}{gpu_iter * 1e3:>11.0f}{cpu_iter * 1e3:>11.0f}"
+              f"{cpu_iter / gpu_iter:>7.2f}x{record['run']['compile_s'] or 0:>8.1f}s"
+              f"{record['memory']['peak_gb']:>9.2f}  {verdict}")
+
+        if abs(difference) > run["conv_thr"]:
+            failures.append(f"{label}: {difference:.2e} Ry exceeds conv_thr {run['conv_thr']:.1e}")
+        if verdict != "bit-identical":
+            failures.append(f"{label}: not reproducible run to run")
+        if not record["precision"]["float64_survives"]:
+            failures.append(f"{label}: x64 did not reach the device")
+
+    print(f"\nworst energy difference: {worst:.2e} Ry")
+    slowdowns = {k: v for record in gpu.values() for k, v in record["precision"].items()
+                 if k.endswith("_fp64_slowdown")}
+    for kernel, value in slowdowns.items():
+        print(f"{kernel.replace('_fp64_slowdown', ''):>24} fp64 is {value:.2f}x fp32 "
+              f"-- GPU.md check 1, and what Phase 3's rank waits on")
+
+    if failures:
+        print("\nFAILED:")
+        for line in failures:
+            print(f"  {line}")
+        return 1
+    print("\nall checks pass")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
