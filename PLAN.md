@@ -759,7 +759,17 @@ irreducible wedge. Applying `H` only to unconverged bands was measured and dropp
 ceiling is 3% of an iteration, because scheduling `ethr` and starting from atomic orbitals
 already stopped Davidson calls running long enough for compaction to pay. Still to do:
 buffer donation, k-axis sharding across CPU-cores-as-devices and across GPUs, Numba
-`prange` on the setup hot spots. *Check met:*
+`prange` on the setup hot spots.
+
+**`GPU.md` is the roadmap for the GPU half of this phase** — what is already GPU-ready by
+design and needs no work, what is blocked on first contact with real hardware, and what
+can be done here without any. Read it before starting that work. Three of its points
+change how this entry should be read: **nothing here is a port** (JAX emits GPU code from
+this source already; what is missing is evidence, not a backend), **the single-core metric
+above does not transfer** and a GPU number must never be quoted against it, and there is no
+GPU on the development machine, so every measurement is made on a cluster and the cluster's
+own rules govern how.
+*Check met:*
 `PERFORMANCE.md` carries the timing and scaling table; no numerical drift — the full suite
 passes and a converged SCF sits on the exact eigenvalues of its own converged Hamiltonian.
 
@@ -4404,74 +4414,18 @@ work and reviewed before being written down, so that the session which picks it
 up does not re-derive it — and does not repeat the two mistakes the review
 caught.
 
-**What it is for, and what it is not for.** A single pypresso job gains little
-from a cluster. There is no MPI: parallelism is XLA's threading over the cores of
-one node plus the `k_batch` dial, and sharding over the k axis is designed for
-(rule R6) and not implemented (P10). One job on a fat node buys maybe 4-16x and,
-more usefully, memory headroom — the ferromagnetic NiI2 of P31/P32 peaks around
-7.4 GB, comfortable here and a ceiling on anything larger.
+**The cluster's rules are not this project's to set, and they are recorded outside this
+repository.** A shared HPC system's access policy, account paths and site-specific limits
+belong in the private notes beside this checkout rather than in a public tracker; read
+those before implementing any of what follows, because they fix several things this entry
+leaves open — which login host, where output may be written, how often the queue may be
+polled, and which operations are proposed to the user rather than run.
 
-The win is **twenty to forty independent single-node jobs at once**:
-
-- convergence studies — cutoff and k-grid, of the kind run serially and quoted
-  for diamond (P30) and still owed for NiI2;
-- parameter scans — Tran-Blaha's `mbj_c`, minutes each and a dozen values;
-- and the one that changes what the project can claim: a **multi-material gap
-  benchmark**, twenty to forty solids each an independent SCF plus band
-  structure, which turns "TB09 reproduces the published gap on silicon, diamond
-  and NiI2" into a validation table of the kind P13 and P20 have.
-
-Hours serially; minutes in parallel, because the jobs do not talk to each other.
-
-**The remote filesystem is the record; the manifest is a cache of it.** The first
-draft had this backwards, with `manifest.json` as the authority and `sacct` as
-the status source. Both are wrong in the same way — they put the truth somewhere
-that can be lost or expire:
-
-- **Each run directory is keyed by a content hash of its case** (input file plus
-  options JSON). Submission is then *idempotent*: a lost manifest costs one `ls`,
-  not a duplicate job charged to a shared allocation.
-- **The job wrapper writes its own `DONE` / `FAILED` sentinel carrying the exit
-  code.** Status is derived from sentinels, never stored — a stored status is a
-  stale status. `sacct` is a fallback and not a dependency: on real clusters it
-  is sometimes restricted, and its retention is short.
-- **The manifest is append-only JSONL**, not a rewritten blob, so two sessions
-  cannot lose each other's entries.
-- **Twenty to forty cases is one `sbatch --array`**, not twenty submissions: one
-  confirmation gate, one id to track, and it sidesteps per-user submission
-  throttles.
-
-**Provenance is the biggest risk, because it is the one that fails silently.**
-Results accumulate across sessions while the code is actively evolving. Without
-the **git commit, the environment hash and the input hash recorded in every
-result JSON**, a convergence table quietly mixes code versions and nothing
-errors. Everything else on this page fails loudly — an expired ticket, a wrong
-walltime, an untested path all stop and say so. Version-mixed science does not,
-and this project has already been bitten by the general form of it: P28b's
-divergences were setups differing in ways neither code reported.
-
-**What bites on first contact with a real SLURM cluster**, in the order it will
-happen:
-
-- **A batch shell does not source `.bashrc`.** `module load` and the conda
-  activation go in the sbatch script explicitly.
-- **XLA takes every core it can see.** Pin the thread pool to
-  `--cpus-per-task`, or the job oversubscribes and the accounting is wrong. This
-  is the cluster form of a lesson `PERFORMANCE.md` already records for this
-  workstation, where capping XLA at four cores by affinity was worth 1.7x.
-- **The compile cache.** `PYPRESSO_CACHE_DIR` belongs on shared scratch or every
-  job pays minutes of recompilation; its concurrent-writer behaviour on NFS has
-  to be checked rather than assumed.
-- **Conda environments exhaust *inode* quotas** on home filesystems. Decide
-  `conda-pack` or a container during the interactive environment build, not
-  after.
-- **Walltime and memory are guesses the first time**, so a case must write its
-  results *incrementally* rather than at exit — a TIMEOUT or an OOM otherwise
-  costs the whole run instead of its tail.
-- **A Kerberos ticket is shorter-lived than a queued job.** "Passwordless" SSH
-  expires in hours; fetching has to be resumable across a human re-authenticating.
-- **Fetching must be sentinel-gated.** Rsyncing a directory whose job is still
-  running hands back torn results.
+Two of their rules sharpen items below rather than adding to them. A small-files policy
+applies to "every case writes JSON plus `.npz`": one pair per *case* is what is meant, and
+one pair per SCF iteration is what must not happen. And the thread pinning below is the
+same rule such systems state for BLAS — pin XLA to the CPUs the job asked for, and set
+`MKL_NUM_THREADS=1 OMP_NUM_THREADS=1` for anything that does not genuinely use more.
 
 **Design, kept thin on purpose.**
 
@@ -4647,6 +4601,139 @@ constraints (the field's absence from `H`, the broken reference, and the k-conve
 of a third derivative) that shape the order they should be taken in.
 
 *Notebook 25.*
+
+---
+
+### P36 — Raman and infrared spectra, and the rank-3 symmetriser. ✅ DONE.
+
+Two things, and the second one is why the first is cheap.
+
+**The symmetriser first.** `pypresso/system/symmetry.py`,
+`symmetrize_cartesian_tensor` and `symmetrize_atom_cartesian_tensor` —
+`symme.f90`'s `symmatrix3` and `symtensor3`, written **at any rank** rather than
+at rank 3, because Fortran wrote the rank-2 case out in four nested loops and
+the rank-3 case again in six, and P26's object has **four** cartesian labels and
+so has no QE counterpart at all. `symmetrize_matrix` and
+`symmetrize_atom_tensor` delegate to them and keep their own names, which are
+the ones `symme.f90` uses.
+
+It lifts the closed-grid refusal P26 introduced and P35 inherited. A wedge sum
+is exact for a scalar and for nothing else, so an object with three or four free
+cartesian indices needs the group average afterwards; until this it was refused
+by name and both phases escaped by running an unshifted grid whole.
+
+*Check met*, and both are the same construction one rank apart:
+
+| | wedge | closed | agreement | cost |
+|---|---|---|---|---|
+| P35 `d(eps)/d(tau)`, AlAs, rank 3 + atom | 8 k-points | 64 | **8.7e-14** relative | 51 s against 112 |
+| P26 `d(eps)/d(strain)`, silicon, rank 4 | 8 k-points | 64 | **7.9e-14** relative | 73 s against 205 |
+
+**The average alone is not enough, and the reason is the finding of this phase.**
+Applied to P35's assembled tensor it left AlAs at **-3.195188** against the
+closed grid's -3.118279 — 2.5% — with the translational sum rule at 1.0e-2
+where the closed grid gives 2.8e-4. The average completes a wedge sum only when
+the tensor is a **linear** k-sum of a covariant per-k quantity, since then
+`T_true = (1/N) sum_S R⊗R⊗R T_wedge` follows from `t(Sk) = R⊗R⊗R t(k)` term by
+term. Every piece of `F_ij` is such a sum except **the screening term**, which
+is `int drho_i K drho_j` — *quadratic* in one. A product of two incomplete sums
+is not the incomplete version of the product.
+
+What repairs it is a **split between the value and the derivative**: the value
+of each density-response factor must be the full-zone object and its derivative
+must stay the raw wedge sum. Then for a covariant `X` and a raw `Y`,
+
+    (1/N) sum_S R R R [ int X_i K Y_jc ] = int X_i K Y^true_jc,
+
+by changing variables in the integral and using `X`'s own covariance — so the
+assembled tensor's average completes this term with the rest. In code that is
+three lines around `jax.lax.stop_gradient` in `_second_order_energy_at`, and on
+a closed grid it is a bit-for-bit no-op (the closed-grid numbers are unchanged:
+-3.118279, +3.119166, 8.878e-4).
+
+**Symmetrising the derivative too is the plausible wrong answer** and it is
+worse than doing nothing: it puts an *extra*, independent group average on the
+displacement label, giving `d(eps_yz)/d(tau_As)` = **3.009778** against 3.119166
+and a sum-rule residue **115x** the closed grid's, where applying no average at all costs
+37x. Measured, relative to the tensors' own scale: **2.8e-4** right, **1.0e-2** with no
+average, **3.3e-2** with the wrong one. The **sum rule is what caught
+both**, which is P35's lesson in a second place: the tensor stayed exactly
+zincblende, exactly permutation-symmetric and exactly cubic through all three
+variants.
+
+**One refusal is *not* lifted and it is a different one.** The clamped-ion
+elastic constants still need the whole grid, because `elastic_constants` has to
+let the energy functional build its own density — so that its gradient is the
+stress and not a partial derivative at fixed `rho` — and that functional
+symmetrises the density it builds as a **scalar**. No average of the assembled
+tensor undoes one applied inside the chain rule. `electrostriction(elastic=False)`
+is the wedge route and the refusal says so.
+
+**Then the spectra**, `pypresso/response/spectra.py`. P35's Raman tensors are
+per *atom* and what an experiment resolves is a *mode*, so this is the
+contraction with the phonon eigendisplacement — `R^(nu) = sum_(a,c) dchi/dtau z`,
+`p^(nu) = sum_(a,c) Z* z` — followed by Placzek's two rotational invariants
+and the standard `45 alpha^2 + 7 beta^2` and `3 beta^2/(45 alpha^2 + 4 beta^2)`.
+Every ingredient existed: P35's tensors, P25's modes, P24b's Born charges.
+
+**This phase has a working reference, which P35 did not.** QE reaches the same
+table through `dynmat.x`, whose `RamanIR` (`LR_Modules/dynmat_sub.f90`) is *pure
+post-processing* — it reads `dchi_dtau`, `zstar` and `eps0` off a file and
+contracts them — and shares nothing with the `lraman` branch P35 established has
+regressed. `pypresso/io/dynmat.py` writes the file `ph.x` would have written and
+the test runs the vendored binary on it.
+
+*Check met*, against the vendored `dynmat.x` on tensors this code computed:
+
+| | pypresso | `dynmat.x` |
+|---|---|---|
+| AlAs optical triplet | 353.25 cm⁻¹, IR 5.9262, Raman **446.8854**, depol 0.7500 | every digit |
+| silicon `T_2g` | 519.20 cm⁻¹, IR **0.0000**, Raman **9815.5635**, depol 0.7500 | every digit |
+| AlAs polarizability | 41.722971 Å³, `cmfac` 0.200435 | every digit |
+
+Silicon's **519.2 cm⁻¹** is against an experimental 520, and the structure of
+its table is the check that needs no reference at all: one Raman-active triplet,
+and **no infrared activity whatever**, because an operation carries one silicon
+onto the other and so gives them the same `Z*` — the optical mode moves them
+against each other and has no dipole. That is why silicon is transparent in the
+infrared, and it holds at any cutoff.
+
+**A degenerate multiplet is comparable only as a sum, and running the test is
+what demonstrated it.** `alpha`, `beta^2` and the depolarisation ratio of a
+single mode are not invariant under the orthogonal mixing the eigensolver is
+free to apply inside a multiplet (rule D4); the multiplet's *sum* is, both
+invariants being quadratic in `R`. On silicon's acoustic triplet the two
+eigensolvers land in different bases and print
+**0.3544/0.7163/0.4065** here against **0.5873/0.2446/0.7264** from `dynmat.x`
+— on modes whose Raman activity *both* codes print as 0.0000, so the ratio is
+`0/0` amplified out of a sum-rule residue. The frequencies and the summed
+activities agree exactly. `VibrationalSpectrum.by_manifold` is the comparable
+form; AlAs's triplets happen to be per-mode invariant too and that is an
+accident of zincblende, not a licence.
+
+**The displacement response is solved once.** A Raman tensor and a dynamical
+matrix need the *same* `solve_linter` output and it is the dominant cost of
+both, so `raman_tensors(keep_internals=True)` hands back a `DisplacementResponse`
+and `dynamical_matrix(response=...)` takes it: the phonons then cost **1-2 s**
+against 50. It is an optimisation, so the test is an equality against a matrix
+built from a solve of its own (1e-12).
+
+**A new polar `Z*`.** Every Born-charge case here was silicon or carbon, where
+the answer is a residue near 0.05 and agreeing is a statement about precision.
+AlAs's are **1.924598** and **-3.181161** against the vendored `ph.x`'s 1.92461
+and -3.18098 on the same input — and they do **not** sum to zero. At
+`ecutwfc = 10` charge neutrality is violated by -1.256; `ph.x` reports the same
+violation and prints an ASR-corrected ±2.5528 beside it. Reproducing the
+uncorrected pair *including* its violation is the check.
+
+**Not implemented, and named rather than approximated:** the **non-analytic**
+LO-TO term (`rigid.f90`'s `nonanal`), so an optical triplet comes out unsplit
+and the `dynmat.x` comparison is run with its `q` at zero for the same reason;
+and the mode-resolved ionic permittivity (`polar_mode_permittivity`). Both are
+arithmetic of the same kind as this module's and both have their ingredients
+here already.
+
+*Notebook 26.*
 
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes

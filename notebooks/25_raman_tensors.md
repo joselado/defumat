@@ -48,9 +48,11 @@ PSEUDO = Path("../tests/data/pseudo")
 
 # AlAs, because zincblende has no inversion centre and silicon does -- and because it is
 # the system of QE's own Raman example. The k-grid is **unshifted** and run whole under
-# `nosym`: a Raman tensor carries two field labels and an atom, so a symmetry-reduced sum
-# would need a rank-3 average that is not written, and an unshifted grid is closed under
-# the point group and needs none.
+# `nosym`, which is how this phase shipped: a Raman tensor carries two field labels and an
+# atom, so a symmetry-reduced sum is incomplete in all three until the rank-3 average
+# (`symtensor3`) completes it. P36 wrote that average -- notebook 26 runs the same case on
+# 8 k-points instead of 64 -- and the closed grid is kept here because it is what the
+# comparison in section 3 was made against.
 system = build_system(read_pw_input(CASES / "alas-raman.in"))
 pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
 calculation = Calculation(system, pseudos)

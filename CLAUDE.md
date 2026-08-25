@@ -154,9 +154,10 @@ reproduce a five-point second difference of the energy to five significant figur
 The three independent components of `d(eps)/dx` match a central difference of `epsilon`
 over re-converged strained cells to **2e-4**, the difference's own floor, and the whole
 rank-4 tensor is cubic to 3e-14 with nothing imposing it. Norm-conserving, `nspin = 1`, insulators
-and **clamped-ion**, on an **unshifted** k-grid — a symmetry-reduced wedge is refused by
-name, because the object being differentiated carries a field label and a strain label at
-once and the rank-3 average that would complete the sum is not written.
+and **clamped-ion**, on an **unshifted** k-grid — which is closed under the point group where a
+shifted one is not. A symmetry-reduced wedge of it works as of P36; the *elastic constants*
+still need the whole grid, and for a different reason (their functional builds its own density
+and symmetrises it as a scalar, inside the chain rule).
 
 **Grimme's D2 van der Waals correction** (P27) is in: `vdw_corr = 'grimme-d2'`, written
 as the Ewald sum's twin — a pair sum over the nuclei whose neighbour list is fixed once, so
@@ -240,11 +241,31 @@ build it from — and it is **42% of the answer**, measured on its displacement 
 the tensor still vanishes identically in a centrosymmetric crystal, still comes out exactly
 zincblende, and is still symmetric under every permutation of its three labels to 2.5e-13.
 
+**Raman and infrared spectra are in** (P36), and so is **the rank-3 symmetriser** that
+made them cheap. `symme.f90`'s `symmatrix3`/`symtensor3` are written here **at any rank**,
+which lifts the closed-grid refusal P26 introduced and P35 inherited: AlAs's eight-point
+wedge reproduces its sixty-four-point closed grid to **8.7e-14** and silicon's rank-4
+elasto-optic tensor to **7.9e-14**, at half the cost. The average alone is not enough,
+and that is the phase's finding: it completes a wedge sum only where the tensor is a
+*linear* k-sum of a covariant per-k quantity, and the screening term of `F` is **quadratic**
+in one — so the *value* of the density response inside the functional must be the full-zone
+object while its *derivative* stays the raw wedge sum. Getting that wrong is worth 2.5%, is
+worse than doing nothing, and **no symmetry check sees it** — the sum rule is what caught
+it, one more time. On top of that the spectra themselves: P35's per-atom tensors contracted
+with P25's modes and P24b's `Z*` into per-mode activities, matching the vendored `dynmat.x`
+on every digit it prints, with silicon's `T_2g` at **519.2 cm⁻¹** against an experimental
+520 — Raman-active and infrared-silent, which is a symmetry statement rather than a fit.
+**`dynmat.x` is the one reference above second order that still works**, because `RamanIR`
+is post-processing and never touches the branch that regressed. **A degenerate multiplet is
+comparable only as a sum**: the two eigensolvers land in different bases inside silicon's
+acoustic triplet and print depolarisation ratios of 0.3544/0.7163/0.4065 against
+0.5873/0.2446/0.7264, on modes whose activity both codes give as 0.0000.
+
 **Outstanding:** Wyckoff input, the dynamical matrix of an
 ultrasoft dataset, PAW Born charges, `chi^(2)` and the electro-optic tensor (the second-order
-response `solve_e2` is, which P35 refuses for), a rank-3 symmetriser
-(`symtensor3`/`symmatrix3`, which would lift the closed-grid refusal P26 and P35
-share), phonons at `q != 0` (the perturbed states live
+response `solve_e2` is, which P35 refuses for), the **non-analytic LO-TO term**
+(`rigid.f90`'s `nonanal`, whose two ingredients — `Z*` and `eps` — are both here),
+phonons at `q != 0` (the perturbed states live
 at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals, plus
 `q2r`/`matdyn` for a dispersion), and the rest of P10 (k-axis sharding and GPU).
 
@@ -666,7 +687,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `pypresso/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]` term by term; here it is one `jvp` of `H(k)` at a frozen sphere (`response/velocity.py`), since `dH/dk_a = i[H, r_a]` in the periodic gauge. The overlap carries a velocity too, so a band velocity is `<psi|dH/dk - eps dS/dk|psi>` |
 | Linear response / DFPT | `LR_Modules/cgsolve_all.f90`, `ch_psi_all.f90`, `orthogonalize.f90`, `h_prec.f90`, `setup_alpha_pv.f90`, `incdrhoscf.f90`, `symdvscf.f90`; `PHonon/PH/solve_e.f90`, `dvpsi_e.f90`, `dvqpsi_us.f90`, `dielec.f90`, `zstar_eu.f90` | the linear solve, the projector and the assembly are transcribed; the *perturbations* are not. `dv_of_drho` is one `jvp` of `v_of_rho` (which already drops the `G = 0` Hartree term), the E-field's commutator is the velocity operator, and `dvqpsi_us` is one `jvp` through `at_positions`. **A response on a reduced k-set is a polar vector field and must be symmetrised as one** |
-| Non-linear response (Raman) | `PHonon/PH/raman.f90`, `raman_mat.f90`, `el_opt.f90`, `dhdrhopsi.f90`, `dvpsi_e2.f90`, `solve_e2.f90`, `d2mxc.f90`, `write_ramtns.f90`, `symme.f90` (`symtensor3`, `symmatrix3`) | none of it is transcribed: `d(eps)/d(tau)` is one `jvp` of the second-order energy P26 already differentiates, and `d2mxc`'s third derivative of `E_xc` is a `jvp` of the kernel rather than a parameterisation, so a GGA works where `phq_setup.f90` stops. **The vendored 7.5 build's `lraman`/`elop` branch does not reproduce QE's own v6.0 example and fails its own internal check** -- use it as evidence, not as a reference |
+| Non-linear response (Raman) | `PHonon/PH/raman.f90`, `raman_mat.f90`, `el_opt.f90`, `dhdrhopsi.f90`, `dvpsi_e2.f90`, `solve_e2.f90`, `d2mxc.f90`, `write_ramtns.f90`, `symme.f90` (`symtensor3`, `symmatrix3`) | none of it is transcribed: `d(eps)/d(tau)` is one `jvp` of the second-order energy P26 already differentiates, and `d2mxc`'s third derivative of `E_xc` is a `jvp` of the kernel rather than a parameterisation, so a GGA works where `phq_setup.f90` stops. **The vendored 7.5 build's `lraman`/`elop` branch does not reproduce QE's own v6.0 example and fails its own internal check** -- use it as evidence, not as a reference. `dynmat_sub.f90`'s `RamanIR` (reached by `dynmat.x`) is the exception and *is* a reference: it is post-processing, reads `dchi_dtau` off a file, and shares nothing with that branch. `symtensor3`/`symmatrix3` are implemented (P36), at any rank |
 | Input parsing | `Modules/read_input.f90`, `PW/src/input.f90`, `Modules/input_parameters.f90` | defaults for every input variable are declared in `input_parameters.f90` |
 | DFT+U | `PW/src/ldaU.f90`, `hubbard.f90`, `new_ns.f90`, `init_ns.f90`, `ns_adj.f90`, `orthoUwfc.f90`, `offset_atom_wfc.f90`, `vhpsi.f90`, `v_of_rho.f90` (`v_hubbard`), `scf_mod.f90` (`ns_ddot`), `force_hub.f90` | the projectors are `S phi` even for `Hubbard_projectors = 'atomic'`; `ortho-atomic` orthogonalises over **all** `natomwfc`, not the Hubbard manifold alone, so `Modules/read_pseudo.f90`'s `upf_check_atwfc_norm` renormalisation of `chi` reaches the answer through the `4s`. `force_hub.f90` is *not* transcribed: it is `jax.grad` through `Calculation.at_positions` |
 | Occupations / smearing | `PW/src/gweights.f90`, `Modules/wgauss.f90`, `Modules/w0gauss.f90`, `PW/src/set_occupations.f90` | |

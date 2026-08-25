@@ -281,8 +281,19 @@ def refined_states(calculation, result, ethr: float = REFINE_ETHR):
 # -- the variational second-order energy -------------------------------------
 
 
-def _second_order_energy_at(moved, psi, rho, b, u, weights):
-    """``F_ij`` on an already-strained calculation. See :func:`second_order_energy`."""
+def _second_order_energy_at(moved, psi, rho, b, u, weights, reference=None):
+    """``F_ij`` on an already-strained calculation. See :func:`second_order_energy`.
+
+    Args:
+        reference: the **unperturbed** calculation, which is where the crystal's
+            point group lives. ``moved`` cannot supply it under a strain: its
+            lattice vectors are traced, and the group is found from the metric
+            they build. It is the right object anyway -- the symmetrisation
+            below acts on a value evaluated at zero displacement and zero
+            strain, so it is the unperturbed group that applies. Defaults to
+            ``moved``, which is correct whenever the geometry variable leaves
+            the cell alone.
+    """
     batch = moved.k_batch
     hamiltonians = moved.hamiltonian(moved.potential(rho).v_scf, None)
     nspin = psi.shape[0]
@@ -332,6 +343,32 @@ def _second_order_energy_at(moved, psi, rho, b, u, weights):
     drho = jnp.stack([
         jax.jvp(raw_density, (psi,), (pcu[axis],))[1] for axis in range(3)
     ])
+    # **The screening term is the one place a wedge sum cannot be repaired
+    # afterwards, and this is where it is repaired instead.** Every other term
+    # of ``F`` is a linear Brillouin-zone sum of a covariant per-k quantity, so
+    # a wedge sum of it differs from the true one by exactly the group average
+    # that ``symtensor3`` applies to the assembled tensor at the end. This term
+    # is *quadratic* in a k-sum -- ``drho_i K drho_j`` -- and a product of two
+    # incomplete sums is not the incomplete version of the product.
+    #
+    # What makes the final average work again is a split: the **value** of each
+    # factor has to be the full-zone response and its **derivative** has to stay
+    # the raw wedge sum. Then for a true covariant ``X`` and a raw ``Y``,
+    #
+    #     (1/N) sum_S R R R [ int X_i K Y_jc ] = int X_i K Y^true_jc,
+    #
+    # by changing variables in the integral and using ``X``'s own covariance --
+    # so the assembled tensor's average completes this term along with the rest.
+    # Symmetrising the *derivative* as well is what does not work, and it is not
+    # a small error: it puts an extra group average on the displacement label,
+    # which on AlAs moves ``d(eps_yz)/d(tau_As)`` from 3.1192 to 3.0098 and
+    # makes the translational sum rule **115x** worse rather than better --
+    # worse than applying no average at all, which costs 37x.
+    #
+    # On a closed grid the two branches are the same array and this is a no-op.
+    frozen = jax.lax.stop_gradient(drho)
+    group = moved if reference is None else reference
+    drho = group.symmetrize_directional(frozen) + (drho - frozen)
     # ``dv_of_drho``, rebuilt at the **strained** cell: the Hartree kernel's
     # ``4 pi / G^2`` moves with it and ``f_xc`` moves with ``rho``, so both
     # belong inside the derivative rather than in a table computed once.
@@ -393,7 +430,7 @@ def second_order_energy(calculation, strain, psi, rho, b, u, weights):
         weights: ``(nspin, nk, nocc)`` -- ``wg`` for the occupied bands.
     """
     return _second_order_energy_at(
-        calculation.at_strain(strain), psi, rho, b, u, weights
+        calculation.at_strain(strain), psi, rho, b, u, weights, calculation
     )
 
 
@@ -405,7 +442,7 @@ def _epsilon_at(calculation, strain, psi, rho, b, u, weights):
     through ``Omega`` as well as through ``F``.
     """
     moved = calculation.at_strain(strain)
-    energies = _second_order_energy_at(moved, psi, rho, b, u, weights)
+    energies = _second_order_energy_at(moved, psi, rho, b, u, weights, calculation)
     return jnp.eye(3) - 4.0 * FPI * energies / moved.system.cell.volume
 
 
@@ -596,8 +633,11 @@ def electrostriction(
 
     Args:
         calculation: the :class:`~pypresso.scf.driver.Calculation` the run used.
-            A symmetry-reduced k-set is **refused**: see the module docstring
-            for the rank-3 symmetriser that would be needed.
+            A symmetry-reduced k-set is fine for the elasto-optic tensor -- the
+            wedge sum is completed by
+            :func:`~pypresso.system.symmetry.symmetrize_cartesian_tensor` -- and
+            is refused when ``elastic`` is on, for the different reason
+            :func:`_require_closed_for_elastic` gives.
         result: the converged :class:`~pypresso.scf.driver.SCFResult`. Its
             states are re-diagonalised first (:func:`refined_states`).
         strain: a strain response computed earlier, if there is one. Recomputed
@@ -621,7 +661,17 @@ def electrostriction(
     require_a_symmetrisable_response(calculation)
     require_a_sternheimer_regime(calculation)
     require_norm_conserving(calculation)
-    _require_a_closed_grid(calculation)
+    if elastic:
+        # **The two halves of this function are refused for different reasons,
+        # and only one of them has been lifted.** The elasto-optic tensor needed
+        # a rank-4 average and now has one; the elastic constants need the
+        # energy functional to build its own density (so that its gradient is
+        # the stress rather than a partial derivative at fixed ``rho``), and
+        # that functional symmetrises the density it builds as a *scalar*,
+        # which is right for a ground state and wrong inside a chain rule. No
+        # average of the assembled tensor repairs that, so a wedge run has to
+        # ask for ``elastic=False``.
+        _require_closed_for_elastic(calculation)
 
     eigenvalues, psi = refined_states(calculation, result)
     density = jnp.asarray(result.density)
@@ -655,6 +705,10 @@ def electrostriction(
     depsilon = susceptibility_strain_derivative(
         calculation, solver, density, b, u, strain, verbose=verbose
     )
+    # ``symmatrix3`` one rank further up: two field labels and two strain
+    # labels. A no-op on a ``nosym`` run, which is what every case this phase
+    # was validated on is.
+    depsilon = calculation.symmetrize_cartesian_tensor(depsilon)
 
     # Gaussian ``eps = 1 + 4 pi chi_G`` to SI ``eps_r = 1 + chi``: the
     # susceptibility Tanner et al.'s equations are written in is the SI one, and
@@ -759,23 +813,33 @@ def _to_voigt(tensor: np.ndarray) -> np.ndarray:
     return out
 
 
-def _require_a_closed_grid(calculation, what: str = "electrostriction") -> None:
-    """Refuse a symmetry-reduced k-set, which is what P26 has no average for.
+def _require_closed_for_elastic(calculation) -> None:
+    """Refuse the *elastic* half on a wedge -- and only that half.
 
-    ``what`` names the caller, because P35's two tensors are refused here for
-    exactly the same reason and a refusal that names the wrong phase is worse
-    than one that names none.
+    What used to stand here refused everything third-order on a symmetry-reduced
+    k-set, because completing a wedge sum with more than one free cartesian
+    index needs an average this code did not have. It has one now
+    (:func:`~pypresso.system.symmetry.symmetrize_cartesian_tensor`, ``symmatrix3``
+    at any rank), so the elasto-optic tensor and P35's Raman tensors run on a
+    wedge and are checked against the closed-grid numbers they were validated
+    with.
+
+    The elastic constants are a separate refusal with a separate cause, which is
+    why lifting the first did not lift this one:
+    :func:`~pypresso.response.elastic.elastic_constants` has to let the energy
+    functional build its own density, and the functional symmetrises that
+    density as a scalar. A response must not go through a scalar
+    symmetrisation, and no average applied afterwards can undo one applied
+    inside the chain rule.
     """
-    # The condition is the one the symmetrisers themselves test -- ``nosym``
-    # leaves ``symmetries`` in place (the group is wanted for other things) and
-    # sets the density maps to ``None``, which is what says no average happens.
     if getattr(calculation, "_symmetry_maps", None) is not None:
         raise NotImplementedError(
-            f"{what} on a symmetry-reduced k-set is not implemented: "
-            "the object being differentiated carries a field label and a strain "
-            "label at once, so completing the wedge sum needs a rank-3 average "
-            "(R_ai R_bk R_cl) that is not written. Run the whole grid instead -- "
-            "an **unshifted** Monkhorst-Pack grid with nosym is closed under the "
-            "point group and needs no average at all, which is the route P24 "
-            "already uses as its independent check"
+            "the clamped-ion elastic constants on a symmetry-reduced k-set are "
+            "not implemented: the energy functional has to build its own "
+            "density here (so that its gradient is the stress and not a "
+            "partial derivative at fixed rho), and it symmetrises that density "
+            "as a *scalar*, which a response must not go through. Pass "
+            "elastic=False for the elasto-optic tensor alone -- that half does "
+            "run on a wedge now -- or run the whole grid, which an unshifted "
+            "Monkhorst-Pack grid with nosym does exactly"
         )

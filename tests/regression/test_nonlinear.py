@@ -288,15 +288,61 @@ def test_chi2_is_refused_by_name():
         require_a_complete_third_derivative()
 
 
-def test_a_symmetry_reduced_kset_is_refused():
-    """Two field labels and an atom need a rank-3 average that is not written.
+def test_the_wedge_reproduces_the_closed_grid():
+    """P36 lifted the refusal this phase shipped with, and this is its check.
 
-    P26's refusal, reached through the same function and for the same reason:
-    ``symme.f90`` has ``symtensor3`` for exactly this, and until it is here the
-    wedge sum is incomplete. The escape is the one P24 already uses -- an
-    unshifted grid is closed under the point group, so running it whole needs no
-    average at all.
+    A Raman tensor carries two field labels and an atom, so a Brillouin-zone sum
+    over the irreducible wedge is incomplete in every one of them and has to be
+    averaged over the point group afterwards -- ``symme.f90``'s ``symtensor3``,
+    here
+    :func:`~pypresso.system.symmetry.symmetrize_atom_cartesian_tensor`. Until
+    P36 that average did not exist and this phase refused a reduced k-set by
+    name; the closed-grid numbers above are what it now has to reproduce from
+    **8 k-points instead of 64**.
+
+    Getting there needed one thing beyond the average, and it is the finding of
+    that phase: the assembled-tensor average completes a wedge sum only when
+    every term is a *linear* k-sum of a covariant per-k quantity, and the
+    screening term of ``F`` is **quadratic** in one -- ``drho_i K drho_j``. A
+    product of two incomplete sums is not the incomplete version of the product,
+    and with the average alone this case came out at -3.195 against -3.118, 2.5%
+    wrong, with the translational sum rule 37x worse. What repairs it is
+    symmetrising the *value* of the density response inside the functional while
+    leaving its *derivative* the raw wedge sum
+    (:func:`~pypresso.response.electrostriction._second_order_energy_at`), after
+    which the two routes agree to round-off.
     """
-    _, _, calculation, result = _converged("si-epsilon")
-    with pytest.raises(NotImplementedError, match="rank-3"):
-        raman_tensors(calculation, result)
+    wedge = _raman("alas-raman-wedge")
+    closed = _raman("alas-raman")
+    _, _, wedge_calculation, _ = _converged("alas-raman-wedge")
+    _, _, closed_calculation, _ = _converged("alas-raman")
+    assert wedge_calculation.use_symmetry and not closed_calculation.use_symmetry
+    assert len(wedge_calculation.system.kpoints.weights) == 8
+    assert len(closed_calculation.system.kpoints.weights) == 64
+
+    scale = np.abs(closed.raman).max()
+    assert np.abs(wedge.raman - closed.raman).max() < 1e-10 * scale
+    assert np.abs(wedge.epsilon - closed.epsilon).max() < 1e-10
+
+
+def test_the_wedge_obeys_the_sum_rule_as_well_as_the_closed_grid_does():
+    """The check that discriminates against the wrong way of repairing the wedge.
+
+    The translational sum rule shares nothing with the assembly it checks, and
+    it is what caught the plausible-looking version of P36's repair. Averaging
+    the density response's *derivative* as well as its value -- the obvious
+    thing to write, and wrong because it puts an extra group average on the
+    displacement label -- leaves a Raman tensor 2.5% off the closed grid's and a
+    sum-rule residue of **3.3e-2**, a hundred times the closed grid's 2.9e-4,
+    while every symmetry statement about the tensor stays exact: it is still
+    zincblende, still permutation-symmetric, still cubic.
+
+    That is P35's lesson in a second place (``NONLINEAR.md`` 5): the symmetry
+    checks are blind and the sum rules bite.
+    """
+    wedge = _raman("alas-raman-wedge")
+    closed = _raman("alas-raman")
+    assert wedge.sum_rule_relative < SUM_RULE_TOLERANCE
+    assert wedge.sum_rule_relative == pytest.approx(
+        closed.sum_rule_relative, rel=1e-6
+    )

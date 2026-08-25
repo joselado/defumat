@@ -123,8 +123,8 @@ from pypresso.response.sternheimer import (
 from pypresso.response.velocity import over_kpoints
 from pypresso.units import AMU_TO_RY, RY_TO_CMM1, RY_TO_THZ
 
-__all__ = ["Phonons", "dynamical_matrix", "require_norm_conserving",
-           "self_consistent_response"]
+__all__ = ["Phonons", "DisplacementResponse", "dynamical_matrix",
+           "require_norm_conserving", "self_consistent_response"]
 
 #: QE's ``alpha_mix(1)``: the weight the mixer gives the residual. It is no
 #: longer the *whole* of the mixing -- :mod:`pypresso.response.mixing` builds an
@@ -198,6 +198,26 @@ class Phonons:
         return float(np.max(np.abs(self.frequencies[:3])))
 
 
+@dataclass
+class DisplacementResponse:
+    """``solve_linter``'s output: the ``3 nat`` first-order states and densities.
+
+    A carrier, so that a caller which has already solved these does not solve
+    them again -- which is the expensive half of both a dynamical matrix and a
+    Raman tensor, and they are the *same* half.
+    :class:`~pypresso.response.strain.StrainResponse` is the same idea for the
+    strain perturbation.
+    """
+
+    #: ``(nat, 3, nspin, nk, nocc, ndim)`` -- ``dpsi`` per mode.
+    dpsi: object
+    #: ``(nat, 3, nspin_mag, n1, n2, n3)`` -- the induced density per mode.
+    drho: object
+    #: ``|ddv_scf|^2`` per iteration.
+    history: list
+    converged: bool = True
+
+
 def dynamical_matrix(
     calculation,
     wavefunctions,
@@ -209,6 +229,7 @@ def dynamical_matrix(
     max_iterations: int = MAX_ITERATIONS,
     threshold: float = 1.0e-12,
     acoustic_sum_rule: bool = False,
+    response: "DisplacementResponse | None" = None,
     verbose: bool = False,
 ) -> Phonons:
     """The ``Gamma``-point force constants and phonon frequencies.
@@ -229,6 +250,11 @@ def dynamical_matrix(
             diagonalising. **Off by default, because ``ph.x`` does not impose
             it** and the residue is the diagnostic described in
             :attr:`Phonons.acoustic_residue`.
+        response: a :class:`DisplacementResponse` solved earlier, if there is
+            one. It is steps 1 and 2 below and the whole cost of this function;
+            :func:`~pypresso.response.nonlinear.raman_tensors` solves the same
+            object and hands it back through its ``keep_internals``, which is
+            what lets a spectrum cost one displacement response rather than two.
     """
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
@@ -257,16 +283,23 @@ def dynamical_matrix(
         kpoint_weights=calculation.system.kpoints.weights,
     )
 
-    # 1. The bare perturbation ``dV_bare/du |psi>``, once per mode and stored:
-    #    the self-consistent loop below drives on it at every iteration.
-    bare = _bare_displacements(calculation, solver, potential.v_scf, positions)
+    if response is None:
+        # 1. The bare perturbation ``dV_bare/du |psi>``, once per mode and
+        #    stored: the loop below drives on it at every iteration.
+        bare = _bare_displacements(calculation, solver, potential.v_scf, positions)
 
-    # 2. ``solve_linter``'s loop, one perturbation per (atom, direction).
-    dpsi, drho, history, average_iterations, converged = self_consistent_response(
-        calculation, solver, bare, density,
-        alpha_mix=alpha_mix, tr2=tr2, max_iterations=max_iterations,
-        verbose=verbose,
-    )
+        # 2. ``solve_linter``'s loop, one perturbation per (atom, direction).
+        dpsi, drho, history, average_iterations, converged = (
+            self_consistent_response(
+                calculation, solver, bare, density,
+                alpha_mix=alpha_mix, tr2=tr2, max_iterations=max_iterations,
+                verbose=verbose,
+            )
+        )
+    else:
+        dpsi, drho = response.dpsi, response.drho
+        history, converged = response.history, response.converged
+        average_iterations = float("nan")
 
     # 3. The second derivative, two jvp of the force's own gradient per mode:
     #    the frozen Hessian at ``wg`` and the electronic response at ``wk``.

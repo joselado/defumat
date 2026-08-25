@@ -81,12 +81,24 @@ of those properties itself. That is why
 it is what those tests measure.
 
 **Refusals, inherited rather than restated.** Norm-conserving, ``nspin = 1``,
-insulators, ``Gamma``, and an **unshifted** k-grid run in full: everything P25
-and P26 refuse is refused here, through the same functions. The k-set is worth
-naming again -- a Raman tensor carries two field labels and an atom, so a
-symmetry-reduced wedge would need the rank-3 average ``symme.f90``'s
-``symtensor3`` performs, which is not written, and a *shifted* grid is not
-closed under the point group so running it whole is not an escape either (P24).
+insulators, ``Gamma`` and an **unshifted** k-grid: everything P25 and P26 refuse
+is refused here, through the same functions. A *shifted* grid is refused because
+it is not closed under the point group, so neither running it whole nor
+symmetrising a wedge of it is sound (P24).
+
+**A symmetry-reduced wedge is not refused any more** (``PLAN.md`` P36). A Raman
+tensor carries two field labels and an atom, so its wedge sum is incomplete in
+all three and is completed by ``symme.f90``'s ``symtensor3`` --
+:func:`~pypresso.system.symmetry.symmetrize_atom_cartesian_tensor`, applied to
+the assembled tensor at the end of :func:`raman_tensors`. On AlAs the eight-point
+wedge reproduces the sixty-four-point closed grid to **8.7e-14** relative.
+
+That average is exact only because every term of ``F`` is a *linear*
+Brillouin-zone sum of a covariant per-k quantity -- and one is not. The screening
+term is quadratic in a k-sum, and what makes it fit the same argument is
+described where it is done
+(:func:`~pypresso.response.electrostriction._second_order_energy_at`); getting it
+wrong is worth 2.5% here and no symmetry check sees it.
 """
 
 from __future__ import annotations
@@ -104,11 +116,11 @@ from pypresso.response.efield import (
 from pypresso.response.electrostriction import (
     _position_response,
     _project_conduction,
-    _require_a_closed_grid,
     _second_order_energy_at,
     refined_states,
 )
 from pypresso.response.phonon import (
+    DisplacementResponse,
     _bare_displacements,
     require_norm_conserving,
     self_consistent_response,
@@ -149,8 +161,16 @@ class RamanTensors:
     #: against tensors of 3.1 on AlAs; the vendored ``ph.x`` gives 1.11.
     translational_residue: float
     #: The field response the two ``eps`` labels came from, carried so that its
-    #: convergence history is available.
+    #: convergence history -- and, when it was asked for, its Born effective
+    #: charges -- are available.
     field: object | None = None
+    #: The :class:`~pypresso.response.phonon.DisplacementResponse` this was
+    #: built on, when ``keep_internals`` asked for it. It is the same object a
+    #: dynamical matrix needs and the expensive half of both, so handing it back
+    #: is what lets a vibrational spectrum cost one solve rather than two.
+    #: ``None`` otherwise, because ``dpsi`` is ``3 nat`` wavefunction-sized
+    #: arrays and holding them is a real working set.
+    displacement: object | None = None
     #: ``|ddv_scf|^2`` per iteration of the displacement response.
     phonon_history: list = _field(default_factory=list)
     converged: bool = True
@@ -161,14 +181,14 @@ class RamanTensors:
         return float(self.translational_residue / np.abs(self.raman).max())
 
 
-def _epsilon_at(moved, psi, rho, b, u, weights):
+def _epsilon_at(moved, psi, rho, b, u, weights, reference=None):
     """``eps_ij = delta_ij - 16 pi F_ij / Omega`` on an already-moved calculation.
 
     :func:`~pypresso.response.electrostriction._epsilon_at` with the geometry
     already applied, so that the same expression can be differentiated along a
     displacement, along a field, or not at all.
     """
-    energies = _second_order_energy_at(moved, psi, rho, b, u, weights)
+    energies = _second_order_energy_at(moved, psi, rho, b, u, weights, reference)
     return jnp.eye(3) - 4.0 * FPI * energies / moved.system.cell.volume
 
 
@@ -203,7 +223,9 @@ def susceptibility_displacement_derivative(
 
     def epsilon(moved_positions, states, density, position):
         moved = calculation.at_positions(moved_positions)
-        return _epsilon_at(moved, states, density, position, u, weights)
+        return _epsilon_at(
+            moved, states, density, position, u, weights, calculation
+        )
 
     out = np.zeros((nat, 3, 3, 3))
     for atom in range(nat):
@@ -259,7 +281,9 @@ def susceptibility_field_derivative(
     rho = jnp.asarray(rho)
 
     def epsilon(states, density, position):
-        return _epsilon_at(calculation, states, density, position, u, weights)
+        return _epsilon_at(
+            calculation, states, density, position, u, weights, calculation
+        )
 
     out = np.zeros((3, 3, 3))
     for axis in range(3):
@@ -337,6 +361,8 @@ def translational_residue(raman: np.ndarray) -> float:
 def raman_tensors(
     calculation,
     result,
+    born_charges: bool = False,
+    keep_internals: bool = False,
     verbose: bool = False,
     allow_unconverged: bool = False,
     **response_options,
@@ -351,6 +377,14 @@ def raman_tensors(
             states are re-diagonalised first
             (:func:`~pypresso.response.electrostriction.refined_states`), which
             is not optional for a third derivative.
+        born_charges: also assemble the Born effective charges from the field
+            response, which costs nothing beyond what is already solved and is
+            what an *infrared* activity needs beside the Raman one. They arrive
+            on ``field.born_charges``.
+        keep_internals: hand back the displacement response on
+            :attr:`RamanTensors.displacement`, so that a dynamical matrix can be
+            built without solving it a second time
+            (:func:`~pypresso.response.phonon.dynamical_matrix` takes it).
         allow_unconverged: return an answer even when a first-order response did
             not converge. Off, and for the reason
             :func:`~pypresso.response.electrostriction.require_converged_responses`
@@ -361,14 +395,13 @@ def raman_tensors(
     require_a_symmetrisable_response(calculation)
     require_a_sternheimer_regime(calculation)
     require_norm_conserving(calculation)
-    _require_a_closed_grid(calculation, "a Raman tensor")
 
     eigenvalues, psi = refined_states(calculation, result)
     density = jnp.asarray(result.density)
 
     field = dielectric_tensor(
         calculation, psi, eigenvalues, density,
-        born_charges=False, keep_internals=True, verbose=verbose,
+        born_charges=born_charges, keep_internals=True, verbose=verbose,
         **response_options,
     )
     internals = field.internals
@@ -397,6 +430,11 @@ def raman_tensors(
     tensors = susceptibility_displacement_derivative(
         calculation, solver, density, b, u, positions, dpsi, drho, verbose=verbose,
     )
+    # ``symtensor3``, and it is a no-op on the closed-grid runs this phase was
+    # validated on -- :meth:`~pypresso.scf.driver.Calculation.symmetrize_atom_cartesian_tensor`
+    # returns its argument when the run set ``nosym``. On a wedge it is what
+    # completes the sum (module docstring).
+    tensors = calculation.symmetrize_atom_cartesian_tensor(tensors)
     volume = float(calculation.system.cell.volume)
     return RamanTensors(
         raman=tensors,
@@ -404,6 +442,9 @@ def raman_tensors(
         epsilon=np.asarray(field.epsilon),
         translational_residue=translational_residue(tensors),
         field=field,
+        displacement=None if not keep_internals else DisplacementResponse(
+            dpsi=dpsi, drho=drho, history=history, converged=phonon_converged,
+        ),
         phonon_history=history,
         converged=bool(field.converged and phonon_converged),
     )

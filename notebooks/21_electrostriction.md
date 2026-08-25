@@ -54,10 +54,13 @@ from pypresso.system import build_system
 CASES = Path("../tests/data/qe")
 PSEUDO = Path("../tests/data/pseudo")
 
-# An **unshifted** k-grid with `nosym`. That is not a preference: the object being
-# differentiated carries a field label and a strain label at once, so completing a
-# symmetry-reduced sum would need a rank-3 average that is not written. An unshifted
-# Monkhorst-Pack grid is closed under the point group and needs no average at all.
+# An **unshifted** k-grid with `nosym`. The grid has to be unshifted -- a shifted one is
+# not closed under the point group, so it can neither be run whole nor be symmetrised from
+# its wedge. `nosym` is now a choice rather than a requirement: the object differentiated
+# here carries a field label and a strain label at once, and P36's rank-4 average
+# (`symmatrix3` generalised) completes such a sum on the wedge, agreeing with this run to
+# 7.9e-14. The elastic constants below still need the whole grid, for a different reason --
+# their functional builds its own density and symmetrises it as a scalar.
 system = build_system(read_pw_input(CASES / "si-electrostriction.in"))
 pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
 calculation = Calculation(system, pseudos)

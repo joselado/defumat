@@ -1684,6 +1684,56 @@ history. On these cases that is under 1 GB; on the 16-atom cell P25 already
 records for the dynamical matrix it is the same 7 GB, since the Raman tensors add
 three field responses and nothing per atom.
 
+## What the wedge saved a third derivative (P36)
+
+The rank-3 average lifted the closed-grid refusal P26 and P35 shipped with, so
+the same k-sample can now be run reduced. Both pairs are the *identical*
+Monkhorst-Pack sample, unshifted, one run whole under `nosym` and one reduced to
+its irreducible wedge:
+
+| | k-points | closed grid | wedge | ratio |
+|---|---|---|---|---|
+| `raman_tensors`, AlAs `ecutwfc = 10` | 64 -> 8 | 112 s | **51 s** | 2.2x |
+| `electrostriction`, silicon `ecutwfc = 18` | 64 -> 8 | 205 s | **73 s** | 2.8x |
+
+**Not 8x, and the shortfall is not overhead**: the cost is per *perturbation* as
+well as per k-point, and the `3 nat + 3` perturbation set does not shrink with
+the k-set. What does shrink is every projected CG solve inside it. The wedge run
+also does more work per iteration -- `symmetrize_directional` and
+`symmetrize_atom_displacement` run on the induced densities, and the value/derivative
+split P36 added puts one more `symmetrize_directional` inside the functional -- and
+that is inside the 2.2x.
+
+The agreement is 8.7e-14 and 7.9e-14 respectively (`PLAN.md` P36), so this is a
+free factor of two on every case either phase runs, and more on a crystal whose
+group is larger relative to its k-grid.
+
+## What sharing the displacement response saved (P36)
+
+A Raman tensor and a dynamical matrix need the same `solve_linter` output, and
+before P36 a spectrum solved it twice. `raman_tensors(keep_internals=True)` hands
+it over and `dynamical_matrix(response=...)` takes it:
+
+| stage | solved again | reused |
+|---|---|---|
+| `dynamical_matrix` after `raman_tensors`, silicon | 104 s | **1.4 s** |
+
+What is left is the force constants themselves -- the two `jvp`s per mode -- and
+the diagonalisation. The equality against a matrix built from its own solve is a
+committed test (1e-12), because an optimisation that changes a number is not one.
+
+The **memory** trade is stated rather than taken silently: `keep_internals` holds
+`3 nat` arrays of `(nspin, nk, nocc, npwx)` complex alive after `raman_tensors`
+returns, which is the same working set the response loop already had at its peak
+and so does not raise it -- but it does *hold* it, where the default drops it. It
+is off by default for that reason.
+
+## What a spectrum costs (P36)
+
+Nothing worth a table: `mode_activities` is a contraction of `(nat, 3, 3, 3)`
+with `(3 nat, nat, 3)` and runs in under a millisecond. The whole of
+`vibrational_spectrum` is the two responses above.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than

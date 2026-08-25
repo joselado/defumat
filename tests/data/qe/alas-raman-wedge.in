@@ -1,0 +1,35 @@
+! AlAs at Gamma on the **irreducible wedge** of the same closed grid as
+! `alas-raman.in`, which is the pair that validates the rank-3 symmetriser.
+!
+! Same cell, same cutoff, same unshifted 4x4x4 Monkhorst-Pack grid -- and no
+! `nosym`, so the 64 points reduce to 8 and every response is symmetrised on
+! the way through. The Raman tensor assembled from those 8 points is a wedge
+! sum with three free cartesian indices, so it is *not* the answer until
+! `symtensor3` completes it (`symme.f90`; here
+! `pypresso.system.symmetry.symmetrize_atom_cartesian_tensor`). Agreeing with
+! the closed-grid run is the only check that average has, and P35's committed
+! numbers -- -3.118279 and +3.119166 -- are what it has to reproduce.
+!
+! This is the same construction as the pair `si-epsilon-unshifted.in` /
+! `si-epsilon-unshifted-nosym.in` at rank 2, one rank up.
+
+ &control
+    calculation = 'scf'
+    prefix = 'alas'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.575, nat = 2, ntyp = 2,
+    ecutwfc = 10.0
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Al  26.98  Al.pz-vbc.UPF
+ As  74.92  As.pz-bhs.UPF
+ATOMIC_POSITIONS (alat)
+ Al 0.00 0.00 0.00
+ As 0.25 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0

@@ -208,6 +208,7 @@ def _require_a_closed_grid(calculation) -> None:
             "rho), and it symmetrises that density as a *scalar*, which a "
             "response must not go through. Run the whole grid instead -- an "
             "unshifted Monkhorst-Pack grid with nosym is closed under the point "
-            "group, which is what pypresso.response.electrostriction requires "
-            "anyway"
+            "group. This is the one refusal a rank-4 average does not lift: "
+            "pypresso.response.electrostriction's own half runs on a wedge now, "
+            "and takes elastic=False to leave this one out"
         )

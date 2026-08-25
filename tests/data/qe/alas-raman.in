@@ -7,13 +7,14 @@
 !
 !   * the k-grid is `4 4 4 0 0 0` where the example's is `4 4 4 1 1 1`. A
 !     **shifted** Monkhorst-Pack grid is not closed under the point group, so a
-!     response computed on it cannot be run whole and has to be symmetrised --
-!     and the rank-3 average `chi^(2)` would need (`symmatrix3`) is not written
-!     here. The unshifted grid is closed exactly, which is P24's own escape.
+!     response computed on it can neither be run whole nor be symmetrised from
+!     its wedge. The unshifted grid is closed exactly, which is P24's own escape.
 !   * `nosym`/`noinv`, so that the whole closed grid is used rather than its
 !     wedge. `ph.x` reads the same setting from the ground state, so both codes
 !     run the same 64 k-points and the comparison is of the assemblies rather
-!     than of two symmetrisations.
+!     than of two symmetrisations. This is now one half of a *pair*:
+!     `alas-raman-wedge.in` is the same sample reduced to 8 points with the
+!     rank-3 average applied (P36), and the two agree to 8.7e-14.
 !
 ! AlAs is zincblende and therefore **non-centrosymmetric**, which is why the
 ! case is not silicon: chi^(2) vanishes identically in every centrosymmetric

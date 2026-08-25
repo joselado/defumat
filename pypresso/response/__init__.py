@@ -43,6 +43,13 @@ expression.
     atoms as its geometry variable instead of the cell, so the phase is an
     assembly of tangents the two modules above already produce. ``chi^(2)`` and
     the electro-optic tensor are refused there, with the term they need named.
+``spectra``
+    what a spectroscopist reads: the tensors above are per *atom* and an
+    experiment resolves a *mode*, so this contracts them with the phonon
+    eigendisplacements into per-mode Raman and infrared activities. It solves
+    nothing, and it is the one thing here with a QE reference that still works
+    -- ``dynmat.x``'s ``RamanIR`` is post-processing and shares nothing with the
+    third-derivative branch that regressed.
 """
 
 from pypresso.response.born import born_effective_charges
@@ -52,6 +59,11 @@ from pypresso.response.electrostriction import Electrostriction, electrostrictio
 from pypresso.response.nonlinear import RamanTensors, raman_tensors
 from pypresso.response.strain import StrainResponse, strain_response
 from pypresso.response.phonon import Phonons, dynamical_matrix
+from pypresso.response.spectra import (
+    VibrationalSpectrum,
+    mode_activities,
+    vibrational_spectrum,
+)
 from pypresso.response.sternheimer import (
     SternheimerResult,
     SternheimerSolver,
@@ -75,6 +87,7 @@ __all__ = [
     "SternheimerSolver",
     "StrainResponse",
     "VelocityOperator",
+    "VibrationalSpectrum",
     "band_velocities",
     "born_effective_charges",
     "dielectric_tensor",
@@ -83,6 +96,8 @@ __all__ = [
     "electrostriction",
     "local_perturbation",
     "make_sternheimer",
+    "mode_activities",
     "raman_tensors",
     "strain_response",
+    "vibrational_spectrum",
 ]

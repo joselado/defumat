@@ -423,14 +423,48 @@ def test_the_elasto_optic_tensor_matches_experiment_where_it_should():
     assert 0.01 < abs(voigt[0, 0]) < 0.30
 
 
-def test_a_symmetry_reduced_kset_is_refused():
-    """The combination with no average written for it, refused by name.
+@pytest.mark.slow
+def test_the_wedge_reproduces_the_closed_grid():
+    """P36 lifted this phase's closed-grid refusal, and this is the check on it.
 
-    A response carrying a field label *and* a strain label needs a rank-3
-    average to complete a wedge sum. P24 wrote the rank-1 case and P25 the
-    rank-1-plus-atom case; this one is not written, and an unshifted grid needs
-    none of them.
+    ``d(eps)/d(strain)`` carries **four** cartesian labels, so a Brillouin-zone
+    sum over the irreducible wedge is incomplete in all four and the tensor has
+    to be averaged over the point group afterwards
+    (:func:`~pypresso.system.symmetry.symmetrize_cartesian_tensor`, which is
+    ``symmatrix3`` at whatever rank the object has -- rank 4 is one QE has no
+    counterpart for, because QE does not compute this tensor). Until P36 that
+    average did not exist and the phase refused a reduced k-set by name.
+
+    The same unshifted 2x2x2 sample two ways, which is the pair
+    :func:`test_the_symmetrised_wedge_and_the_closed_grid_give_one_strain_response`
+    already uses at first order: reduced with the average applied, and whole
+    with no average at all. **The tolerance is not round-off and the reason is
+    not the average**: the two runs have different FFT grids, because symmetry
+    with fractional translations forces the grid to a multiple of their
+    denominators (``fft_fact``) and ``nosym`` does not, so one is 15^3 and the
+    other 16^3. On a pair that shares its grid the two agree to **7.9e-14**
+    (``PLAN.md`` P36).
+    """
+    _, _, wedge_calculation, wedge_result, _, _ = _converged("si-strain-wedge")
+    _, _, calculation, result, _, _ = _converged("si-electrostriction")
+    assert wedge_calculation.use_symmetry and not calculation.use_symmetry
+
+    wedge = electrostriction(wedge_calculation, wedge_result, elastic=False)
+    closed = electrostriction(calculation, result, elastic=False)
+    scale = np.abs(closed.photoelastic).max()
+    assert np.abs(wedge.photoelastic - closed.photoelastic).max() < 1e-4 * scale
+
+
+def test_the_elastic_constants_are_still_refused_on_a_wedge():
+    """The refusal P36 did **not** lift, and it is a different one.
+
+    :func:`~pypresso.response.elastic.elastic_constants` has to let the energy
+    functional build its own density, so that its gradient is the stress rather
+    than a partial derivative at fixed ``rho`` -- and the functional symmetrises
+    that density as a *scalar*, which a response must not go through. No average
+    applied to the assembled tensor undoes one applied inside the chain rule, so
+    this half needs the whole grid however good the rank-4 average is.
     """
     _, _, calculation, result, _, _ = _converged("si-strain-wedge")
-    with pytest.raises(NotImplementedError, match="rank-3"):
-        electrostriction(calculation, result)
+    with pytest.raises(NotImplementedError, match="scalar"):
+        electrostriction(calculation, result, elastic=True)

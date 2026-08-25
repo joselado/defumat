@@ -2334,6 +2334,50 @@ class Calculation:
             atom_mapping(self.system.cell, self.system.structure, self.symmetries),
         ))
 
+    def symmetrize_cartesian_tensor(self, tensor) -> np.ndarray:
+        """``symmatrix3`` and its rank-4 sibling: a tensor of any rank.
+
+        The third derivatives are what this is for. P26's elasto-optic tensor
+        carries two field labels and two strain labels and P35's ``chi^(2)``
+        three field labels, so both are wedge sums with more than one free
+        index -- which is the *same* statement that makes the stress need
+        ``symmatrix`` and the forces ``symvector``, at a rank Fortran had to
+        write out again and this does not.
+
+        Guarded on :attr:`use_symmetry` for the reason
+        :meth:`symmetrize_atom_tensor` is.
+        """
+        from pypresso.system.symmetry import symmetrize_cartesian_tensor
+
+        tensor = np.asarray(tensor)
+        if not self.use_symmetry:
+            return tensor
+        return np.asarray(symmetrize_cartesian_tensor(
+            tensor, self.system.cell, self.symmetries
+        ))
+
+    def symmetrize_atom_cartesian_tensor(self, tensors) -> np.ndarray:
+        """``symtensor3``: a rank-3 tensor per atom, carried between atoms.
+
+        The Raman tensors. :meth:`symmetrize_atom_tensor` at the rank P35's
+        object has, and it uses ``irt`` rather than its inverse for the reason
+        that one does -- there is no spatial argument here, only labels.
+
+        Args:
+            tensors: ``(nat, 3, ..., 3)``, the atom axis leading.
+        """
+        from pypresso.system.symmetry import (
+            atom_mapping, symmetrize_atom_cartesian_tensor,
+        )
+
+        tensors = np.asarray(tensors)
+        if not self.use_symmetry:
+            return tensors
+        return np.asarray(symmetrize_atom_cartesian_tensor(
+            tensors, self.system.cell, self.symmetries,
+            atom_mapping(self.system.cell, self.system.structure, self.symmetries),
+        ))
+
     def symmetrize_atom_displacement(self, fields: jnp.ndarray) -> jnp.ndarray:
         """:meth:`symmetrize_directional` for the ``3 nat`` displacement patterns.
 

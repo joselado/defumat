@@ -26,6 +26,8 @@ The organising fact is stated once and applies to everything below:
 | strain response | elastic constants, `d(chi)/d(strain)` | P26 |
 | the variational second-order energy `F_ij` | the object every third derivative differentiates | P26 |
 | `d(eps)/d(tau)` | **Raman tensors** | P35 |
+| the group average at any rank (`symmatrix3`/`symtensor3`) | a wedge sum with 3 or 4 free cartesian labels | P36 |
+| the mode projection of `dchi/dtau` and `Z*` | **Raman and IR spectra** | P36 |
 | `<u_mk|S|u_nk'>` between neighbouring k, with the zone-edge `G` shift | Berry phases, Chern numbers, Wilson loops | P16 |
 
 Two of those are load-bearing in ways that are easy to miss. `F_ij` is a *functional*
@@ -68,26 +70,32 @@ about which one a converged number is cheap in. It bears directly on §3.1.
 
 These are assemblies. Each is days rather than a phase, and each adds a README row.
 
-### 3.1 Raman and infrared spectra *(do this first)*
+### 3.1 Raman and infrared spectra — **DONE (P36)**
 
-**What.** The Raman tensors are per-atom; what an experiment measures is per-*mode*.
-Project `d(chi)/d(tau)` on the phonon eigenvectors, form the two rotational invariants
-`alpha = tr(R)/3` and `beta^2`, and the powder Raman activity `45 alpha^2 + 7 beta^2`
-with its depolarisation ratio; the infrared activity is the same projection of `Z*`.
+`pypresso/response/spectra.py`, `vibrational_spectrum`. Placzek's two invariants of the
+per-mode Raman tensor and the mode projection of `Z*`, in the units `dynmat.x` prints them.
 
-**What exists.** All three ingredients: P35's tensors, P25's `Phonons.eigenvectors`,
-P24's Born charges.
+`RamanIR` turned out to be more than a transcription check: it is **the only working QE
+reference above second order**, because it is post-processing and never enters the
+`lraman` branch. `pypresso/io/dynmat.py` writes the `fildyn` `ph.x` would have written and
+the test runs the vendored binary on our tensors — every digit either code prints, on AlAs
+(353.25 cm⁻¹, Raman 446.8854) and on silicon (519.20 cm⁻¹, Raman 9815.5635, IR 0.0000).
 
-**What to write.** About forty lines, and QE has the routine to transcribe beside it:
-`LR_Modules/dynmat_sub.f90`'s `RamanIR` (reached by `dynmat.x`), which is *post-processing
-only* and therefore untouched by the 7.5 regression — it reads `dchi_dtau` from a file and
-does arithmetic. Feeding it our tensors and comparing to our own assembly is a clean
-transcription check of the kind this project runs everywhere else.
+Two things came out of it that were not in the plan:
 
-**Validation.** `dynmat.x` on a dynamical-matrix file we write; then silicon's single
-Raman-active `T_2g` mode at ~520 cm⁻¹ with the correct depolarisation ratio, and AlAs's
-TO/LO pair. **Highest visibility per unit of work in this document** — it turns a rank-3
-tensor into the plot a spectroscopist recognises.
+* **A degenerate multiplet is comparable only as a sum.** Per-mode `alpha`, `beta²` and the
+  depolarisation ratio are not invariant under the orthogonal mixing the eigensolver is free
+  to apply inside one; the multiplet's sum is. Silicon's acoustic triplet prints
+  0.3544/0.7163/0.4065 here against `dynmat.x`'s 0.5873/0.2446/0.7264 — both meaningless,
+  on modes whose activity is 0.0000. This is rule D4 arriving in the *output* rather than in
+  a solver.
+* **The displacement response is the expensive half of a Raman tensor and of a dynamical
+  matrix, and it is the same object.** `raman_tensors(keep_internals=True)` hands it over
+  and `dynamical_matrix(response=...)` takes it, so the phonons cost 1-2 s instead of 50.
+
+Not done and named: the **non-analytic LO-TO term** (`rigid.f90`'s `nonanal`) and the
+mode-resolved ionic permittivity (`polar_mode_permittivity`). Both need only `Z*` and `eps`,
+which are already here.
 
 ### 3.2 Grüneisen parameters and quasi-harmonic thermal expansion
 
@@ -159,17 +167,34 @@ Sternheimer solver's gauge.
 * **Second-order Born charges**, `d(Z*)/dE`, and the rest of the field-field-displacement
   family.
 
-### 4.3 The infrastructure item that goes with it
+### 4.3 The infrastructure item that goes with it — **DONE (P36)**
 
-**A rank-3 symmetriser** — `symme.f90`'s `symtensor3` (atom-indexed) and `symmatrix3`
-(pure cartesian). P26 and P35 both refuse a symmetry-reduced k-set because the wedge sum
-of an object with three direction labels is incomplete without it, and both escape by
-running an unshifted closed grid whole. That escape costs the factor the wedge would have
-saved, and it is the reason P35's cases are 64 k-points rather than 10. Forty lines,
-following `symmetrize_atom_pair_tensor`'s pattern exactly, and it lifts the refusal in
-both phases.
+**The rank-3 symmetriser is in**, and at any rank:
+`pypresso.system.symmetry.symmetrize_cartesian_tensor` and
+`symmetrize_atom_cartesian_tensor`. P26 and P35 both run on a symmetry-reduced wedge now —
+AlAs to 8.7e-14 of its closed grid on 8 k-points instead of 64, silicon's rank-4
+elasto-optic tensor to 7.9e-14 — at roughly half the cost. Rank 4 has no QE counterpart,
+because QE does not compute that tensor.
 
----
+**It was not forty lines, and the extra part is the thing to carry forward.** The group
+average completes a wedge sum only where the tensor is a *linear* Brillouin-zone sum of a
+covariant per-k quantity, because then `T_true = (1/N) Σ_S R⊗R⊗R T_wedge` follows term by
+term. The screening term of the second-order energy is **quadratic** in a k-sum
+(`∫ drho_i K drho_j`), and a product of two incomplete sums is not the incomplete version
+of the product. The repair is a split — the *value* of each density-response factor must be
+the full-zone object and its *derivative* must stay the raw wedge sum, after which
+`∫ X_i K Y_jc` averages correctly by a change of variables in the integral. Symmetrising the
+derivative too, which is the obvious thing to write, is **worse than doing nothing**: it puts
+an extra independent group average on the displacement label.
+
+Sizes, in the order they were measured: no average, -3.195188; the wrong repair, 3.009778 on
+the other atom against 3.119166; the right one, exact. **Every symmetry check passed all
+three** — zincblende form, permutation symmetry, cubic — and the translational sum rule
+(2.8e-4 / 1.0e-2 / 3.3e-2) is what separated them. §5's first two bullets, again.
+
+**One refusal did not lift**: the clamped-ion elastic constants, because their functional has
+to build its own density and symmetrises it as a *scalar*, inside the chain rule. No average
+applied afterwards undoes that. `electrostriction(elastic=False)` is the wedge route.
 
 ## 5. What P35 learned about checking any of this
 
@@ -251,12 +276,22 @@ be a `new` row rather than a reimplementation.
 
 ## 8. Suggested order
 
-1. **Raman and IR spectra** (§3.1) — days, high visibility, closes P35 into something an
-   experimentalist reads.
-2. **Grüneisen parameters** (§3.2) — nearly free, and owed.
-3. **The rank-3 symmetriser** (§4.3) — small, unblocks the wedge for two existing phases.
+1. ~~**Raman and IR spectra** (§3.1)~~ — **done, P36.**
+2. ~~**The rank-3 symmetriser** (§4.3)~~ — **done, P36**, and it was done first, because its
+   check is decisive today (the wedge must reproduce P35's committed closed-grid numbers)
+   and it halves the cost of every third-derivative run after it.
+3. **Grüneisen parameters** (§3.2) — nearly free, and still owed. Note that at `Gamma` the
+   negative-`gamma` physics check is unavailable: it lives on the *transverse acoustic*
+   modes, which are zero at `Gamma`. Until `q != 0` the only check is a finite difference of
+   the frequencies over re-converged strained cells.
 4. **The missing `<u_i|r_k|u_j>` term** (§4) — the real phase, and the one that lifts a
-   refusal rather than adding a quantity. Look at the PEAD route first.
+   refusal rather than adding a quantity. Look at the PEAD route first, but note what §4.1
+   understates: P16 supplies the *primitive* `<u_mk|S|u_nk+b>`, not the assembly. Individual
+   matrix elements from a finite difference in k are gauge-dependent — the gauge cancels only
+   in the full discretised Berry-phase expression — so what gets written is
+   Veithen-Gonze-Ghosez's PEAD third-order formulas, not a substitution into the existing
+   one. Route (a) is the fallback and it buys something PEAD does not: `dpsi^(2)` is what
+   makes `chi^(3)` reachable at all (§7).
 5. **Third-order force constants** (§3.3) — after `q != 0` phonons, which is where their
    payoff is.
 6. Then choose between **frequency dependence** and **the geometric family** (§7) — they

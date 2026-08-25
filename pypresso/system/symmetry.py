@@ -41,6 +41,8 @@ __all__ = ["Symmetries", "lattice_point_group", "find_symmetries", "is_supercell
            "symmetrize_density", "symmetry_maps", "apply_symmetry_maps",
            "atom_mapping", "cartesian_rotations",
            "symmetrize_vector", "symmetrize_matrix", "symmetrize_atom_tensor",
+           "symmetrize_atom_pair_tensor", "symmetrize_cartesian_tensor",
+           "symmetrize_atom_cartesian_tensor",
            "check_symmetry", "check_lattice_symmetry",
            "magnetic_symmetries", "magnetization_signs",
            "symmetrize_magnetization", "symmetrize_vector_density",
@@ -729,19 +731,14 @@ def symmetrize_matrix(
     lattice vectors) and ``crys_to_cart`` (``M -> B^T M B``, rows of ``B`` the
     reciprocal ones), which are inverses because ``A B^T = 1``.
 
+    The three steps are :func:`symmetrize_cartesian_tensor`'s at rank 2; this
+    name is kept because it is the one ``symme.f90`` uses and the one the
+    stress, the dielectric tensor and the forces reach for.
+
     Args:
         matrix: ``(3, 3)`` cartesian.
     """
-    matrix = np.asarray(matrix, dtype=float)
-    if symmetries.nsym <= 1:
-        return matrix
-    at = np.asarray(cell.at_alat, dtype=float)
-    bg = np.asarray(cell.bg_2pi_alat, dtype=float)
-    rotations = symmetries.rotation_array().astype(float)
-
-    crystal = at @ matrix @ at.T
-    averaged = np.einsum("sik,sjl,kl->ij", rotations, rotations, crystal)
-    return bg.T @ (averaged / symmetries.nsym) @ bg
+    return symmetrize_cartesian_tensor(matrix, cell, symmetries)
 
 
 def symmetrize_atom_tensor(
@@ -756,22 +753,14 @@ def symmetrize_atom_tensor(
     of large numbers -- ``Z_ion = 4`` against an electronic part near ``4.076``
     -- so the residue the reduction leaves is not small relative to the answer.
 
+    :func:`symmetrize_atom_cartesian_tensor` at rank 2, under ``symtensor``'s
+    own name.
+
     Args:
         tensors: ``(nat, 3, 3)`` cartesian.
         mapping: ``(nsym, nat)`` from :func:`atom_mapping`.
     """
-    tensors = np.asarray(tensors, dtype=float)
-    if symmetries.nsym <= 1:
-        return tensors
-    at = np.asarray(cell.at_alat, dtype=float)
-    bg = np.asarray(cell.bg_2pi_alat, dtype=float)
-    rotations = symmetries.rotation_array().astype(float)
-
-    crystal = np.einsum("ik,nkl,jl->nij", at, tensors, at)
-    averaged = np.einsum(
-        "sik,sjl,snkl->nij", rotations, rotations, crystal[mapping]
-    ) / symmetries.nsym
-    return np.einsum("ki,nkl,lj->nij", bg, averaged, bg)
+    return symmetrize_atom_cartesian_tensor(tensors, cell, symmetries, mapping)
 
 
 def symmetrize_atom_pair_tensor(
@@ -814,6 +803,90 @@ def symmetrize_atom_pair_tensor(
         "sik,sjl,sabkl->aibj", rotations, rotations, gathered
     ) / symmetries.nsym
     return np.einsum("ki,akbl,lj->aibj", bg, averaged, bg)
+
+
+def _transform_axes(tensor: np.ndarray, matrix: np.ndarray, axes) -> np.ndarray:
+    """Contract ``matrix``'s second index with each of ``axes`` of ``tensor``."""
+    for axis in axes:
+        tensor = np.moveaxis(np.tensordot(matrix, tensor, axes=([1], [axis])), 0, axis)
+    return tensor
+
+
+def symmetrize_cartesian_tensor(
+    tensor: np.ndarray, cell: Cell, symmetries: Symmetries
+) -> np.ndarray:
+    """Impose the crystal symmetry on a cartesian tensor of any rank.
+
+    ``symme.f90``'s ``symmatrix`` (rank 2) and ``symmatrix3`` (rank 3) are the
+    same three steps at two ranks -- to crystal axes, average over the group,
+    back to cartesian -- and this is those steps written once::
+
+        T_(i1...in) <- (1/N) sum_S R_(i1 l1) ... R_(in ln) T_(l1...ln)
+
+    It is :func:`symmetrize_vector`'s argument at whatever rank the object has,
+    and the argument does not change with the rank: a Brillouin-zone sum over
+    the irreducible wedge is exact for a *scalar* and for nothing else, so every
+    free index leaves a residue in the components the point group forbids. The
+    stress needs it at rank 2, ``chi^(2)`` and the Raman tensor at rank 3, and
+    ``d(eps)/d(strain)`` -- P26's elasto-optic tensor -- at **rank 4**, which has
+    no QE counterpart because QE does not compute that tensor.
+
+    **The rank is the reason this exists rather than a third transcription.**
+    ``symmatrix3`` was written out in six nested loops because Fortran has no
+    other way to say it; here the same expression at rank 4 is the same call.
+
+    Args:
+        tensor: cartesian, with **every** axis a cartesian direction of length 3.
+    """
+    tensor = np.asarray(tensor, dtype=float)
+    if symmetries.nsym <= 1:
+        return tensor
+    axes = range(tensor.ndim)
+    at = np.asarray(cell.at_alat, dtype=float)
+    bg = np.asarray(cell.bg_2pi_alat, dtype=float)
+
+    crystal = _transform_axes(tensor, at, axes)
+    averaged = sum(
+        _transform_axes(crystal, np.asarray(rotation, dtype=float), axes)
+        for rotation in symmetries.rotation_array()
+    ) / symmetries.nsym
+    return _transform_axes(averaged, bg.T, axes)
+
+
+def symmetrize_atom_cartesian_tensor(
+    tensors: np.ndarray, cell: Cell, symmetries: Symmetries, mapping: np.ndarray
+) -> np.ndarray:
+    """:func:`symmetrize_cartesian_tensor` with a leading atom axis carried too.
+
+    ``symme.f90``'s ``symtensor`` (rank 2 per atom -- the Born effective
+    charges) and ``symtensor3`` (rank 3 per atom -- the Raman tensor), which
+    differ from their pure-cartesian counterparts by one thing: an operation
+    rotates the cartesian indices **and** carries the tensor from the atom it
+    maps onto to the atom it belongs to,
+
+        T_(a, i1...in) <- (1/N) sum_S R_(i1 l1) ... R_(in ln) T_(S(a), l1...ln).
+
+    ``irt`` and not its inverse, exactly as ``symtensor`` uses it -- the mirror
+    trap is :func:`symmetrize_atom_displacement_density`'s, which carries a
+    *spatial* argument as well and therefore needs ``irt^-1`` (``PLAN.md`` P28a).
+
+    Args:
+        tensors: ``(nat, 3, ..., 3)`` cartesian, the atom axis leading.
+        mapping: ``(nsym, nat)`` from :func:`atom_mapping`.
+    """
+    tensors = np.asarray(tensors, dtype=float)
+    if symmetries.nsym <= 1:
+        return tensors
+    axes = range(1, tensors.ndim)
+    at = np.asarray(cell.at_alat, dtype=float)
+    bg = np.asarray(cell.bg_2pi_alat, dtype=float)
+
+    crystal = _transform_axes(tensors, at, axes)
+    averaged = sum(
+        _transform_axes(crystal[image], np.asarray(rotation, dtype=float), axes)
+        for rotation, image in zip(symmetries.rotation_array(), mapping)
+    ) / symmetries.nsym
+    return _transform_axes(averaged, bg.T, axes)
 
 
 def check_lattice_symmetry(
