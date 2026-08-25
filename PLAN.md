@@ -4641,6 +4641,11 @@ closed-grid refusal that P26 introduced and this phase inherits: two
 field labels and an atom make a wedge sum incomplete, and an unshifted grid run
 whole is the escape both phases take.
 
+**`NONLINEAR.md`** is the roadmap for everything above third order that this phase
+makes reachable — what each item costs, what it is blocked on, and the three
+constraints (the field's absence from `H`, the broken reference, and the k-convergence
+of a third derivative) that shape the order they should be taken in.
+
 *Notebook 25.*
 
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since

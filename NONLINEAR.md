@@ -1,0 +1,263 @@
+# Non-linear response: what is here, what is next, and what each one costs
+
+A roadmap for the third-order-and-beyond half of `pypresso/response/`, written after
+P35 so that the session which picks any of it up does not re-derive the constraints.
+`PLAN.md` is the phase tracker and stays the authority on what is *done*; this file is
+about what is *reachable*, in what order, and at what price.
+
+The organising fact is stated once and applies to everything below:
+
+> **The 2n+1 theorem with first-order wavefunctions reaches third derivatives and
+> stops.** Every quantity in Tier A is a third derivative and needs nothing new.
+> Everything in Tier B is also a third derivative but has an *electric field* in a
+> place this code cannot differentiate. Tier C and D need either a frequency or a
+> second-order wavefunction, which are two different new machines.
+
+---
+
+## 1. Where the code stands
+
+| built | what it gives | phase |
+|---|---|---|
+| velocity operator, one `jvp` of `H(k)` | `dH/dk`, hence `[H, r]` | P24 |
+| Sternheimer solve, projected CG | first-order `dpsi` for any perturbation | P24 |
+| field response `u`, `drho`, `b = P_c r|psi>` | `epsilon`, `Z*` | P24, P24b |
+| displacement response | the dynamical matrix at `Gamma` | P25, P28 |
+| strain response | elastic constants, `d(chi)/d(strain)` | P26 |
+| the variational second-order energy `F_ij` | the object every third derivative differentiates | P26 |
+| `d(eps)/d(tau)` | **Raman tensors** | P35 |
+| `<u_mk|S|u_nk'>` between neighbouring k, with the zone-edge `G` shift | Berry phases, Chern numbers, Wilson loops | P16 |
+
+Two of those are load-bearing in ways that are easy to miss. `F_ij` is a *functional*
+whose stationary value is `epsilon`, so differentiating it once more along any tangent
+is a third derivative for free — that is what P26 and P35 both are. And P16's
+k-to-k overlap machinery is the discretised Berry-phase apparatus, which is exactly what
+the "PEAD" formulation of §3.1 needs and which nothing in `response/` currently uses.
+
+## 2. Three constraints that shape the whole roadmap
+
+**2.1 The field enters only through the source term.** `H` is built from `rho`; there
+is no `dH/dE` anywhere. The position operator exists only as `b = P_c r|psi>`, obtained
+from a commutator solve that uses `psi`'s own eigenvalue and therefore does not apply to
+a general first-order state. So the 2n+1 term with the perturbing operator between two
+first-order wavefunctions, `<u_i|r_k|u_j>`, has nothing to build it from. This is why
+P35 delivers the Raman tensor and refuses `chi^(2)`: a *displacement* tangent carries
+its `dH/d(tau)` through `at_positions`, and a field tangent carries nothing. **It is
+42% of the answer**, measured on the displacement counterpart, and no symmetry check
+sees its absence (P35).
+
+**2.2 The reference is broken above second order.** The vendored `ph.x` 7.5's
+`lraman`/`elop` branch does not reproduce QE's own committed `PHonon/examples/example05`
+(v6.0, 2016) and fails its own internal consistency check. Anything in Tiers B–D that
+would be validated against `ph.x`'s third-order output must instead be validated the way
+P35 was — see §6. Second-order `ph.x` (`epsil`, `trans`, `zeu`) is *fine* and remains the
+reference for everything linear.
+
+**2.3 Third-order quantities converge slowly in k, and the formulation decides how
+slowly.** Veithen, Gonze and Ghosez ([arXiv:cond-mat/0409067](https://arxiv.org/abs/cond-mat/0409067),
+Fig. 1) measure `d123` of AlAs on `n x n x n` grids in both formulations: discretising
+the Brillouin-zone sum *after* the perturbation expansion (DAPE — the analytic `d/dk`
+route, which is what the velocity operator and the Sternheimer solves here are) is still
+climbing at `n = 20` where discretising *before* it (PEAD — the finite-difference Berry
+phase) is flat by `n = 6`. This is not an accuracy claim about either; it is a statement
+about which one a converged number is cheap in. It bears directly on §3.1.
+
+---
+
+## 3. Tier A — third derivatives that need nothing new
+
+These are assemblies. Each is days rather than a phase, and each adds a README row.
+
+### 3.1 Raman and infrared spectra *(do this first)*
+
+**What.** The Raman tensors are per-atom; what an experiment measures is per-*mode*.
+Project `d(chi)/d(tau)` on the phonon eigenvectors, form the two rotational invariants
+`alpha = tr(R)/3` and `beta^2`, and the powder Raman activity `45 alpha^2 + 7 beta^2`
+with its depolarisation ratio; the infrared activity is the same projection of `Z*`.
+
+**What exists.** All three ingredients: P35's tensors, P25's `Phonons.eigenvectors`,
+P24's Born charges.
+
+**What to write.** About forty lines, and QE has the routine to transcribe beside it:
+`LR_Modules/dynmat_sub.f90`'s `RamanIR` (reached by `dynmat.x`), which is *post-processing
+only* and therefore untouched by the 7.5 regression — it reads `dchi_dtau` from a file and
+does arithmetic. Feeding it our tensors and comparing to our own assembly is a clean
+transcription check of the kind this project runs everywhere else.
+
+**Validation.** `dynmat.x` on a dynamical-matrix file we write; then silicon's single
+Raman-active `T_2g` mode at ~520 cm⁻¹ with the correct depolarisation ratio, and AlAs's
+TO/LO pair. **Highest visibility per unit of work in this document** — it turns a rank-3
+tensor into the plot a spectroscopist recognises.
+
+### 3.2 Grüneisen parameters and quasi-harmonic thermal expansion
+
+**What.** `gamma_m = -(V/omega_m) d(omega_m)/dV`: how a mode stiffens under compression,
+and through it the thermal expansion coefficient.
+
+**How.** One more `jvp` of the dynamical matrix along the **strain** tangent P26 already
+builds — the same relationship P35 has to P26, with the roles of the two geometry
+variables swapped. Mode Grüneisens come from the eigenvector projection of `dD/d(strain)`.
+
+**Validation.** Finite-difference the phonon frequencies over re-converged strained cells;
+silicon's negative `gamma` for the transverse acoustic modes is the physics check, and it
+is one no assembly error is likely to reproduce by accident. At `Gamma` only until
+`q != 0` lands, which limits it to optical modes — say so rather than quoting a thermal
+expansion from three modes.
+
+**Cost.** Nearly free, and it was promised and not delivered in P35.
+
+### 3.3 Third-order force constants at `Gamma`
+
+**What.** `d^3 E/d(tau)^3` — the cubic anharmonicity: mode-mixing coefficients, the
+frequency shift of an excited mode, and (once `q != 0` exists) phonon linewidths and
+lattice thermal conductivity.
+
+**How.** One more `jvp` of the dynamical matrix along a *displacement* tangent, which
+already exists. The `3 nat` tangents make it `(3 nat)^2` `jvp`s, so it is the first item
+here whose cost is quadratic in the cell — bound it by symmetry or by the irreducible set
+before running anything larger than eight atoms.
+
+**Validation.** Finite differences of the force constants over displaced geometries
+(P25's route, one order up), and the permutation symmetry of the rank-3 object, which for
+*displacements* is a real check rather than a blind one (§5).
+
+**Note.** QE reaches this only through `d3q.x`/`thirdorder`-style external tools; there is
+no vendored counterpart, so this is a `new` row.
+
+---
+
+## 4. Tier B — the third derivatives with a field in the wrong place
+
+All of these are blocked on the same missing object, `<u_i|r_k|u_j>`, and unblocking it
+unblocks all of them at once. **This is the single highest-value item in the file.**
+
+### 4.1 The two routes to the missing term
+
+| | route | what it needs | k-convergence |
+|---|---|---|---|
+| (a) | **second-order response** — QE's `dvpsi_e2` + `solve_e2` | a second self-consistent response loop, driven by a source quadratic in the first-order states | DAPE: slow (§2.3) |
+| (b) | **PEAD / discretised Berry phase** — Nunes and Gonze | the position operator as a finite difference in k, i.e. **P16's overlap machinery** | fast (§2.3) |
+
+Route (b) deserves the first look and this document exists partly to say so. It needs
+`<u_mk|u_nk+b>` with the Miller-index alignment and the zone-edge `G` shift — which
+`pypresso/topology/` already implements and validates against exactly-integer Chern
+numbers. It converges faster in k, it is what ABINIT actually ships, and it avoids
+writing a second response loop. Its cost is that the field perturbation stops being an
+analytic derivative and becomes a finite difference over the k-mesh, which is a different
+kind of error to characterise (and one this project has never had to). Route (a) is the
+literal transcription and is the safer estimate if (b) turns out to fight the
+Sternheimer solver's gauge.
+
+### 4.2 What falls out once it exists
+
+* **`chi^(2)` and the electro-optic tensor** — P35's refusal lifted. Immediately
+  comparable to QE v6.0's committed `example05` numbers (40.4578 and -0.78497) and to
+  Veithen's published table (AlAs `d123 = 35` pm/V, AlP 21).
+* **The full Pockels tensor `r_ijk`** — electronic (`chi^(2)`) plus the ionic term, which
+  is the Raman tensors divided by the mode frequencies and contracted with `Z*`. Every
+  piece of the ionic half exists *today*; only the electronic half is missing.
+* **Second-order Born charges**, `d(Z*)/dE`, and the rest of the field-field-displacement
+  family.
+
+### 4.3 The infrastructure item that goes with it
+
+**A rank-3 symmetriser** — `symme.f90`'s `symtensor3` (atom-indexed) and `symmatrix3`
+(pure cartesian). P26 and P35 both refuse a symmetry-reduced k-set because the wedge sum
+of an object with three direction labels is incomplete without it, and both escape by
+running an unshifted closed grid whole. That escape costs the factor the wedge would have
+saved, and it is the reason P35's cases are 64 k-points rather than 10. Forty lines,
+following `symmetrize_atom_pair_tensor`'s pattern exactly, and it lifts the refusal in
+both phases.
+
+---
+
+## 5. What P35 learned about checking any of this
+
+Carry these into every item above; they were paid for once.
+
+* **Kleinman/permutation symmetry is a weak check.** The static third derivative of one
+  scalar with respect to three components of the same field is symmetric under every
+  permutation, and P35's *incomplete* tensor satisfies it to 2.5e-13 — because the
+  omitted term is symmetric too. Same for vanishing in a centrosymmetric crystal and for
+  coming out in the exact crystal class. **None of the three sees a missing symmetric
+  term.** For a *displacement* rank-3 object the permutation check is stronger, because
+  the three labels are not interchangeable a priori.
+* **Sum rules are the checks that bite.** The translational sum rule on the Raman tensors
+  (`sum_atoms = 0`) held to 2.8e-4 here and is violated by 43% by the broken `ph.x` — it
+  is what found the regression. Every third derivative has one: the acoustic sum rule for
+  the anharmonic constants, charge neutrality for `Z*`.
+* **The envelope theorem's hypothesis is fragile and its failure is invisible.** P26's
+  frozen `u` had to be projected onto the *moving* conduction manifold, worth 2%, and it
+  survived every value check. A diverged first-order response consumed by a third
+  derivative is wrong at **first** order — `require_converged_responses` applies to every
+  new tangent.
+* **Zero the tangent to size a term.** The cheapest diagnostic in P35 was recomputing the
+  Raman tensor with the geometry tangent zeroed, which put a number (42%) on what the
+  field derivative was missing. Any new assembly can be interrogated the same way.
+
+---
+
+## 6. Validation without a working `ph.x`
+
+In rough order of how much they are worth:
+
+1. **Finite-difference a second derivative.** `epsilon`, the force constants and the
+   stress are all computed from scratch at any geometry, so their derivatives have a
+   reference that shares only the linear response. This is what validated P26 and P35
+   (1.0e-5), and it works for every item in Tier A.
+2. **QE v6.0's committed example outputs.** The numbers in
+   `PHonon/examples/example05/reference/` predate the regression and agree with the
+   literature; they are usable as *numbers* even though the binary that produced them is
+   not available. Cite them as v6.0.
+3. **Published tables.** Veithen et al. for `chi^(2)`, Raman efficiencies and electro-optic
+   coefficients of AlAs, AlP, LiNbO3, BaTiO3, PbTiO3.
+4. **Model Hamiltonians with known answers** — P16's route, and the right one for the
+   geometric quantities of §7 where no plane-wave reference exists.
+5. **Sum rules and symmetry**, with §5's caveat about what they cannot see.
+
+---
+
+## 7. Tier C and D — the two genuinely new machines
+
+Listed so the boundary is explicit, not because either is next.
+
+**Frequency dependence (a new solver).** `alpha(omega)`, resonant Raman, and true SHG
+`chi^(2)(-2 omega; omega, omega)` all need the Sternheimer operator at `H - eps +- omega`,
+which is **indefinite**, and non-Hermitian once a broadening `eta` is added. The projected
+CG breaks; a shifted/complex solver (BiCGStab, or QE's own `solve_e_fpol.f90`) is new
+machinery. QE's `fpol` (`polariz.f90`, `PHonon/examples/example09`) is the validation
+target for the linear frequency-dependent case and **should be checked for the same
+regression before being trusted**. The LDA gap error stops being a scale factor here and
+starts moving resonance positions.
+
+**`chi^(3)` and beyond (second-order wavefunctions).** A fourth derivative is out of
+reach of 2n+1 with first-order wavefunctions; it needs `dpsi^(2)`, i.e. differentiating
+through the linear solve. That is the same object route (a) of §4.1 builds, so if that
+route is taken, `chi^(3)` becomes reachable rather than impossible.
+
+**The geometric family — and it is the best fit for this codebase.** Shift current and
+the bulk photovoltaic effect, the Berry-curvature dipole and the non-linear Hall effect
+are second-order responses governed by quantum geometry rather than by a self-consistent
+loop. **QE has none of it** (`grep` finds neither term in the vendored tree), the
+published route is Wannier interpolation, and the two ingredients here are the velocity
+operator (one `jvp` of `H(k)`) and P16's Berry connection — so the curvature dipole in
+particular is one more `jvp` of a quantity that already exists. It is the most cited
+corner of non-linear optics right now
+([2507.00864](https://arxiv.org/abs/2507.00864), [2412.16477](https://arxiv.org/abs/2412.16477)),
+it is validated against model Hamiltonians rather than against another code, and it would
+be a `new` row rather than a reimplementation.
+
+---
+
+## 8. Suggested order
+
+1. **Raman and IR spectra** (§3.1) — days, high visibility, closes P35 into something an
+   experimentalist reads.
+2. **Grüneisen parameters** (§3.2) — nearly free, and owed.
+3. **The rank-3 symmetriser** (§4.3) — small, unblocks the wedge for two existing phases.
+4. **The missing `<u_i|r_k|u_j>` term** (§4) — the real phase, and the one that lifts a
+   refusal rather than adding a quantity. Look at the PEAD route first.
+5. **Third-order force constants** (§3.3) — after `q != 0` phonons, which is where their
+   payoff is.
+6. Then choose between **frequency dependence** and **the geometric family** (§7) — they
+   are unrelated machines, and the second one is the more distinctive.
