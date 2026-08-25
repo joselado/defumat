@@ -39,7 +39,7 @@ REPO=/scratch/work/ladovj1/apps/pypresso
 mkdir -p "$WORK/out" "$WORK/cache-cpu"
 cd "$REPO" || exit 1
 
-module load scicomp-python-env/2025.2
+# A self-contained venv, no module -- see phase0-gpu.sbatch for why.
 source "$WORK/venv/bin/activate"
 
 # Its own cache: a CPU kernel and a GPU kernel are different compilations, and
@@ -48,7 +48,10 @@ source "$WORK/venv/bin/activate"
 export MKL_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export PYPRESSO_CACHE_DIR="$WORK/cache-cpu"
-export PYTHONPATH="$REPO:$PYTHONPATH"
+# The venv is isolated, so this is the only thing that makes the
+# checkout importable; pypresso is deliberately not pip-installed into
+# it, so the code that runs is the checkout at the commit logged below.
+export PYTHONPATH="$REPO"
 export JAX_PLATFORMS=cpu   # a CPU node has no device; say so rather than discover it
 
 echo "=== node ==="; hostname; date

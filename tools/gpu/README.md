@@ -26,38 +26,50 @@ carries a comment saying which constraint it came from.
 Do it interactively on the login node, not through the queue: iterating on a
 broken environment one queue round-trip at a time is the slowest possible way.
 
-`scicomp-python-env/2025.2` already carries the whole stack — **jax 0.7.1 with a
-working `jax-cuda12-plugin`**, numpy, scipy, numba — and everything but
-`equinox`. So the overlay is one package on top of the module, not a second
-copy of JAX:
+**The obvious plan does not work, and `pip install --dry-run` is what says so.**
+`scicomp-python-env/2025.2` carries a complete stack — jax 0.7.1 with a working
+`jax-cuda12-plugin`, numpy, scipy, numba — and everything but `equinox`, so a
+`--system-site-packages` venv adding one package looks like the cheap answer.
+It is not: **equinox blocklists that jax by version** (`jax!=0.7.0,!=0.7.1`), so
+pip resolves to jax 0.11.1 and installs `jaxlib` 0.11.1 into the venv while
+leaving the module's `jax-cuda12-plugin` **0.7.1** visible behind it. That is a
+version-mismatched CUDA plugin, and it is the kind of breakage that surfaces as
+a confusing runtime failure on a GPU node half an hour into a queue rather than
+as an error at install time. Run the dry run; read what it would install.
+
+So the environment is a **self-contained venv**, and no module is loaded by
+either job script:
 
 ```bash
-module load scicomp-python-env/2025.2
-python3 -m venv --system-site-packages /scratch/work/ladovj1/calculations/pypresso-gpu/venv
-source /scratch/work/ladovj1/calculations/pypresso-gpu/venv/bin/activate
-pip install --no-cache-dir equinox     # ← an install: propose it, do not run it
+module load scicomp-python-env/2025.2     # only to get a python3 to build from
+W=/scratch/work/ladovj1/calculations/pypresso-gpu
+python3 -m venv "$W/venv"                 # NOT --system-site-packages
+"$W/venv/bin/pip" install --no-cache-dir "jax[cuda12]==0.11.1" equinox numba scipy pytest
 ```
 
-`--system-site-packages` is what keeps this cheap in **inodes**, which is the
-quota that bites on a shared filesystem long before disk does (a full
-`jax[cuda12]` venv is tens of thousands of files; this is a few hundred).
+That lands jax / jaxlib / `jax-cuda12-pjrt` / `jax-cuda12-plugin` all at
+**0.11.1**, one consistent set, with equinox 0.13.8 — the workstation's exact
+version — beside jax 0.11.0 there. It costs **5.7 GB and 12k inodes**, which is
+the price of not having the overlay; inodes are the quota that bites first on a
+shared filesystem, and 12k against a 1048k limit is affordable where a careless
+install is not.
 
-**The version gap is the risk, and it is settled before any job is submitted.**
-The workstation runs jax 0.11.0 and every validated number in this project was
-produced under it; the cluster module has 0.7.1. `pyproject.toml` declares
-`jax>=0.4.30`, so 0.7.1 is inside the supported range — but *declared* and
-*exercised* are different claims. The gate is a login-node smoke test before the
-first `sbatch`:
+`pypresso` itself is **not** pip-installed into the venv. The job scripts put
+the checkout on `PYTHONPATH` instead, so the code that runs is the working tree
+at the commit the job logs, and there is no second copy to drift.
+
+**The gate is a login-node smoke test before the first `sbatch`:**
 
 ```bash
-python3 -m pytest -m unit -q            # the fast tier
-python3 tools/gpu/phase0.py si-1k --k-batch 1 --band-batch 1
+export PYTHONPATH=/scratch/work/ladovj1/apps/pypresso JAX_PLATFORMS=cpu
+taskset -c 0-3 "$W/venv/bin/python3" tools/gpu/phase0.py si-1k --k-batch 1 --band-batch 1
+taskset -c 0-3 "$W/venv/bin/python3" -m pytest -m unit -q
 ```
 
-If 0.7.1 does not carry pypresso, the fallback is a full venv on scratch with
-`jax[cuda12]==0.11.0` — second choice, because it costs the inodes the overlay
-was written to avoid, and because the module's plugin is the one the cluster
-supports.
+`taskset` because a login node is shared and pypresso otherwise takes four cores
+on import. Measured 2026-08-25: the cluster reproduces the workstation's
+`si-1k` total energy **bit for bit** at `-15.2544487130 Ry`, across jax 0.11.0
+and 0.11.1 on different hardware.
 
 ## Both dials are set explicitly, and there is no default
 

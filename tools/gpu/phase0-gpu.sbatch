@@ -43,12 +43,18 @@ REPO=/scratch/work/ladovj1/apps/pypresso
 mkdir -p "$WORK/out" "$WORK/cache-gpu"
 cd "$REPO" || exit 1
 
-# A batch shell does not source .bashrc, so the environment is built here.
-module load scicomp-python-env/2025.2
-# No cuda module: JAX's CUDA libraries come from the nvidia-* wheels inside that
-# environment, and loading a second CUDA on LD_LIBRARY_PATH is a way to break
-# them. (Verified on the login node: the plugin loads and reaches cuInit, which
-# then fails with 303 only because a login node has no device.)
+# A batch shell does not source .bashrc, so the environment is named here -- and
+# it is a *self-contained* venv, not an overlay on scicomp-python-env, so no
+# module is loaded at all. The overlay was the plan and `pip install --dry-run`
+# killed it: equinox blocklists the module's jax by version (jax!=0.7.0,!=0.7.1),
+# so pip would have put jaxlib 0.11.1 in front of the module's
+# jax-cuda12-plugin 0.7.1 -- a version-mismatched CUDA plugin, which is the
+# silent breakage that dry run exists to catch.
+#
+# No cuda module either: JAX's CUDA libraries come from the venv's own nvidia-*
+# wheels, and a second CUDA on LD_LIBRARY_PATH is a way to break them. Verified
+# on the login node with an empty environment -- the plugin loads and reaches
+# cuInit, which then fails with 303 only because a login node has no device.
 source "$WORK/venv/bin/activate"
 
 # Not what the sibling dmrgpy job sets. XLA preallocating the bulk of the device
@@ -60,7 +66,10 @@ unset XLA_PYTHON_CLIENT_PREALLOCATE
 export MKL_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export PYPRESSO_CACHE_DIR="$WORK/cache-gpu"
-export PYTHONPATH="$REPO:$PYTHONPATH"
+# The venv is isolated, so this is the only thing that makes the
+# checkout importable; pypresso is deliberately not pip-installed into
+# it, so the code that runs is the checkout at the commit logged below.
+export PYTHONPATH="$REPO"
 
 echo "=== node ==="; hostname; date
 nvidia-smi
