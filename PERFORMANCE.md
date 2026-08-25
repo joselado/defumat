@@ -1956,11 +1956,102 @@ dial-induced difference measured anywhere here, it is GPU-only, and it is on the
 largest cell, which is the direction that matters. It should be re-measured on a
 bigger cell before the batched dial is called answer-preserving on a GPU.
 
+## Sixty-four atoms: pypresso on a GPU against Quantum ESPRESSO on CPUs
+
+**Read the baseline column before the ratio.** `GPU.md` §2.3 rules this
+comparison out by default and the reason is not pedantry: the project's metric
+is single-core against single-core so that a ratio measures *code*, and a GPU
+number against a CPU number measures code *and* hardware at once and cannot be
+decomposed afterwards. It is run here because it was asked for, with `pw.x` at
+**four core counts** and pypresso-on-CPU included as the middle corner, so that
+the reader can take whichever comparison they actually mean.
+
+Run 2026-08-25/26. **pypresso on one NVIDIA H200**, jax 0.11.1; **Quantum
+ESPRESSO 7.2** (the cluster module — the 7.5 vendored in this repo is gitignored
+and not on the cluster) on **AMD EPYC Milan** cores, one node, `disk_io='none'`
+so neither code is timed doing I/O the other skips. `benchmarks/si64-1k*.in`:
+64 atoms, 256 electrons, 128 bands.
+
+### The clean case: `si64-1k`, everything converged to `conv_thr = 1e-10`
+
+Both codes agree on the answer first — **QE -505.71932000 Ry, pypresso
+-505.71932002 Ry**, 2e-8 apart — which is what makes the timings comparable at
+all.
+
+| code | hardware | iterations | ms/iteration | whole SCF |
+|---|---|---|---|---|
+| **pypresso** | **H200, `band_batch=all`** | 8 | **39** | **0.31 s** |
+| pypresso | H200, `band_batch=1` | 8 | 342 | 2.74 s |
+| pypresso | 4 Milan cores | 8 | 1975 | 15.8 s |
+| QE 7.2 | 1 core | 16 | 1352 | 21.6 s |
+| QE 7.2 | 4 cores | 16 | 531 | 8.50 s |
+| QE 7.2 | 16 cores | 17 | 223 | 3.79 s |
+| QE 7.2 | 32 cores | 17 | 214 | 3.64 s |
+
+**So the number depends entirely on which QE you mean**: **34.7x** per iteration
+against one core, **5.5x** against thirty-two. The honest one-line answer is the
+second: one H200 is worth about **5.5x a 32-core Milan node** on this cell,
+per iteration.
+
+**Whole-SCF is a different ratio again — 70x and 11.7x — and the gap is not the
+GPU.** pypresso converges in **8** iterations where QE takes **16-17**, which is
+a difference of starting guess and mixing, not of hardware, and it would show
+identically on a CPU. Time-to-answer is what a user feels, so it is quoted; it
+just must not be filed as a GPU speedup.
+
+**QE's own scaling caps out**: 1 → 32 cores buys 6.3x from 32 cores, and 16 → 32
+buys 4%. A single k-point leaves QE only plane-wave and FFT parallelism, and it
+saturates. That is the real reason the GPU comparison looks the way it does.
+
+**And pypresso is still the slower code per core** — 1975 ms/iteration on four
+cores against QE's 531, i.e. **3.7x slower**, consistent with the ~3.3x this
+file records elsewhere. The accelerator is doing the work, not the
+implementation.
+
+### The case that did not converge, which matters more than any of the above
+
+**`si64-1k-ecut30` on the GPU reaches `conv_thr = 1e-8` and gives the right
+answer; asked for `1e-10` it runs 100 iterations and returns `NaN`.**
+
+| | iterations | result |
+|---|---|---|
+| GPU, `conv_thr = 1e-8` | 7 | **-507.16606166 Ry** — matches QE's -507.16606164 |
+| GPU, `conv_thr = 1e-10` | 100 (max) | **NaN, not converged** |
+| CPU 4 cores, `conv_thr = 1e-10` | 9 | -507.16606166 Ry, `dr2` = 5.2e-12 |
+
+Same cell, same card, same code, same dials — **only the threshold differs**, and
+the CPU reaches 1e-10 on the identical input in nine iterations. So this is not
+a hard case, it is a **GPU-specific numerical robustness failure at the largest
+cell measured here**, and it is new at 64 atoms: `si32-1k-ecut30` converged to
+1e-10 on a GPU in eight iterations. It is deterministic — the twice-run check
+reproduced the same `NaN` bit for bit — and it is not memory (3.28 GB peak of
+141 GB).
+
+**This is the first thing on the GPU backlog and it outranks every speedup in
+this section.** A code that is fast and silently stops converging at a
+production threshold is worse than a slow one. The diagnosis is not done; what
+is known is that it appears between 32 and 64 atoms, at the higher cutoff, and
+only on the device.
+
+**The stage timings for that cell are still good** (they come from the
+converging 1e-8 run): `h_psi` **0.012 s**, Davidson **0.640 s**, `v_of_rho`
+**0.019 s**, whole SCF **83 ms/iteration** — against QE's 378 ms/iteration on 32
+cores at the tighter threshold, which is *not* a matched comparison and is
+recorded here only so the next session does not have to re-run it.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
 instinct. None of these may change a validated number.
 
+0. **The 64-atom GPU `NaN`, which is a correctness item and not an optimisation
+   one, and is listed here because it is where a GPU session will look.**
+   `si64-1k-ecut30` converges to `conv_thr = 1e-8` on an H200 and gives QE's
+   answer; asked for `1e-10` it runs to the 100-iteration limit and returns
+   `NaN`, where four CPU cores converge in nine. New between 32 and 64 atoms,
+   deterministic, not memory. **Nothing else in the GPU roadmap should be
+   believed on a cell this size until it is explained** — a code that is fast
+   and stops converging at a production threshold is worse than a slow one.
 1. **`jax.sharding` over the k-axis**, and GPU. Now measured to be the *only*
    parallelism worth having on CPU: the thread pool gives 15% between one core
    and four and loses badly beyond that, while `metal.in`'s ten k-points are

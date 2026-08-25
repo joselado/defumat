@@ -153,6 +153,18 @@ whether a cell runs at all.
 
 ## 3. The phases
 
+> **Open defect, found 2026-08-26 and outranking every phase below.**
+> `si64-1k-ecut30` — 64 atoms, `ecutwfc = 30` — converges on an H200 at
+> `conv_thr = 1e-8` and reproduces QE's total energy, and at `1e-10` runs to the
+> 100-iteration limit and returns **`NaN`**. Four CPU cores converge the same
+> input to 1e-10 in nine iterations, and `si32-1k-ecut30` converges on a GPU to
+> 1e-10 in eight. So it is device-specific, it appears between 32 and 64 atoms,
+> it is deterministic (the twice-run check reproduced the same `NaN` bit for
+> bit), and it is not memory (3.28 GB of 141 GB). **§5's first rule is that no
+> phase may change a validated number; this changes one into `NaN`.** It is
+> diagnosed before any further GPU number on a cell of this size is believed.
+> Measurements in `PERFORMANCE.md`.
+
 ### Phase 0 — first contact: does it run, and does it give the same number? ✅ DONE (bar check 5's cross-job form)
 
 **Run 2026-08-25**, Tesla V100-SXM2-16GB on Aalto's Triton, jax 0.11.1 with
