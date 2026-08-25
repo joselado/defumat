@@ -23,7 +23,7 @@ from pypresso.basis.fft import g_to_r, r_to_g
 from pypresso.basis.gvectors import GVectors
 from pypresso.system.cell import Cell
 
-__all__ = ["gradient", "divergence"]
+__all__ = ["gradient", "divergence", "laplacian"]
 
 
 def gradient(field_g: jnp.ndarray, gvectors: GVectors, cell: Cell) -> jnp.ndarray:
@@ -59,6 +59,22 @@ def divergence(field_r: jnp.ndarray, gvectors: GVectors, cell: Cell) -> jnp.ndar
     components = r_to_g(field_r, gvectors.fft_index)  # (3, ngm)
     divergence_g = jnp.sum(1j * g.T * components, axis=0)
     return jnp.real(g_to_r(divergence_g, gvectors.fft_index, gvectors.grid))
+
+
+def laplacian(field_g: jnp.ndarray, gvectors: GVectors, cell: Cell) -> jnp.ndarray:
+    """``lap f`` on the real-space grid, from the field's G components.
+
+    ``-|G|^2 f_G``, one transform -- against the three a gradient costs and the
+    four a divergence of a gradient would. QE has no counterpart, and the reason
+    is worth recording: ``XClib/xc_wrapper_mgga.f90`` declares its Laplacian
+    argument "not used in QE" and passes zeros to every libxc meta-GGA call, so
+    a functional that needs one (Becke-Roussel, and Tran-Blaha on top of it) is
+    evaluated there without it. In a plane-wave basis it is the cheapest
+    derivative there is, which is why :mod:`pypresso.xc.mgga` can have it.
+    """
+    _reject_gamma_only(gvectors)
+    g2 = jnp.sum(gvectors.cartesian(cell) ** 2, axis=1)  # (ngm,), 1/bohr^2
+    return jnp.real(g_to_r(-g2 * field_g, gvectors.fft_index, gvectors.grid))
 
 
 def _reject_gamma_only(gvectors: GVectors) -> None:

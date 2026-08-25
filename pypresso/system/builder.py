@@ -70,6 +70,14 @@ class System(eqx.Module):
     #: the pseudopotentials were generated with. ``None`` -- the normal case --
     #: means the pseudopotentials decide.
     input_dft: str | None = eqx.field(static=True, default=None)
+    #: ``mbj_c``: the Tran-Blaha coefficient, imposed rather than averaged over
+    #: the cell. **Not a ``pw.x`` variable** -- QE has no way to set it, which is
+    #: why its ``input_dft = 'tb09'`` is Becke-Johnson (libxc's default ``c = 1``)
+    #: rather than Tran-Blaha. WIEN2k and VASP both expose the same knob, and it
+    #: is what lets a pseudopotential run be compared with an all-electron one:
+    #: ``c`` is an average of ``|grad rho|/rho``, which a pseudised core makes
+    #: too small.
+    mbj_c: float | None = eqx.field(static=True, default=None)
     smearing: str = eqx.field(static=True, default="gaussian")
     degauss: float = eqx.field(static=True, default=0.0)
     #: Occupations read from an OCCUPATIONS card, for occupations='from_input'.
@@ -628,6 +636,10 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         nbnd=pwin.get("system", "nbnd"),
         occupations=str(pwin.get("system", "occupations", "fixed")).lower(),
         input_dft=pwin.get("system", "input_dft"),
+        mbj_c=(
+            None if pwin.get("system", "mbj_c") is None
+            else float(pwin.get("system", "mbj_c"))
+        ),
         smearing=str(pwin.get("system", "smearing", "gaussian")).lower(),
         degauss=float(pwin.get("system", "degauss", 0.0)),
         input_occupations=_input_occupations(pwin),

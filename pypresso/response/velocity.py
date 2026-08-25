@@ -362,6 +362,6 @@ def band_velocities(calculation, result, kpoints=None) -> BandVelocities:
     # PAW's one-centre coefficients come from ``becsum``, which the result
     # carries for exactly this reason (it is part of the mixed state, not a
     # function of the density).
-    _, ddd_paw = calculation.onecenter(result.becsum)
+    _, ddd_paw = calculation.onecenter(result.becsum, getattr(result, "meta_c", None))
     operator = VelocityOperator(calculation, potential.v_scf, ddd_paw, result.ns)
     return operator.band_velocities(psi, eigenvalues)

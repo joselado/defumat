@@ -70,10 +70,12 @@ from pypresso.xc.lda import (
     pz_correlation_spin,
     slater_exchange,
 )
+from pypresso.xc.mgga import tb09_coefficient, tb09_potential
 
 __all__ = ["Functional", "get_functional", "resolve_functional", "FUNCTIONALS",
            "EXCHANGE", "CORRELATION", "GRADIENT_EXCHANGE", "GRADIENT_CORRELATION",
-           "CORRELATION_SPIN", "GRADIENT_CORRELATION_SPIN",
+           "CORRELATION_SPIN", "GRADIENT_CORRELATION_SPIN", "META",
+           "META_FUNCTIONALS",
            "RHO_THRESHOLD_GGA", "SIGMA_THRESHOLD_GGA", "SMALL_SPIN_GGA"]
 
 #: ``rho_threshold_gga`` and ``grho_threshold_gga`` of
@@ -178,6 +180,36 @@ FUNCTIONALS: dict[str, tuple[str, str, str, str]] = {
     "PBC": ("SLA", "PW", "NOGX", "PBC"),
 }
 
+#: The **potential-only** meta-GGA exchange slot, which the other four do not
+#: reach: a name here replaces exchange entirely with a potential that is not
+#: the derivative of any energy (:mod:`pypresso.xc.mgga`). The value is the
+#: fixed Tran-Blaha coefficient ``c``, or ``None`` where ``c`` is a cell average
+#: of the density and therefore cannot be a constant.
+#:
+#: ``BJ06`` is listed for a reason beyond completeness: it is what ``pw.x``
+#: actually runs when asked for ``tb09``. QE hands libxc its default parameter
+#: list and libxc's default is ``c = 1``, so QE's Tran-Blaha is Becke-Johnson.
+#: Having both here makes that difference measurable rather than a footnote.
+META: dict[str, float | None] = {
+    "TB09": None,
+    "BJ06": 1.0,
+}
+
+#: The meta names as fillings of the other four slots. Exchange is ``NOX``
+#: because the meta potential *is* the exchange -- adding Slater on top would
+#: double it -- and correlation is the local Perdew-Wang one, which is what
+#: Tran and Blaha pair the potential with ("the correlation potential is the
+#: LDA one"). QE's libxc route pairs it with TPSS correlation instead
+#: (``imetac = 231`` in ``dft_setting_routines.f90``), which is a meta-GGA
+#: correlation and would need a ``tau`` derivative in the Hamiltonian; that is
+#: a different functional and is not offered.
+META_FUNCTIONALS: dict[str, tuple[tuple[str, str, str, str], str]] = {
+    "TB09": (("NOX", "PW", "NOGX", "NOGC"), "TB09"),
+    "MBJ": (("NOX", "PW", "NOGX", "NOGC"), "TB09"),
+    "BJ06": (("NOX", "PW", "NOGX", "NOGC"), "BJ06"),
+    "BJ": (("NOX", "PW", "NOGX", "NOGC"), "BJ06"),
+}
+
 #: The legacy spellings, resolved to the term they mean, per slot. QE does the
 #: same fixup by index (``IF (igcx == 14) igcx = 3``); doing it here is what
 #: makes an old ``SLA PW PBE PBE`` header come out named ``PBE`` rather than as
@@ -208,6 +240,81 @@ class Functional(eqx.Module):
     #: run, so an unsupported combination is refused before any work is done.
     correlation_spin: Callable | None = eqx.field(static=True, default=None)
     gradient_correlation_spin: Callable | None = eqx.field(static=True, default=None)
+    #: The potential-only meta-GGA exchange slot: a key of :data:`META`, or
+    #: ``None``. Static like the rest -- it changes the compiled code, and a
+    #: calculation does not change functional halfway through.
+    meta: str | None = eqx.field(static=True, default=None)
+    #: An explicit Tran-Blaha ``c``, overriding the cell average. WIEN2k and
+    #: VASP both expose the same knob, and it is not only a convenience: ``c``
+    #: is an average of ``|grad rho|/rho`` over the cell, and a *pseudopotential*
+    #: density has no core region, which is where that ratio is largest. A
+    #: norm-conserving silicon gives ``c = 1.033`` where an all-electron
+    #: calculation gives ``1.12``, so being able to impose the all-electron
+    #: value is how the two are compared on equal footing. Reached from an input
+    #: file as ``mbj_c`` in ``&system``. Named ``imposed_c`` and not ``meta_c``
+    #: because :meth:`meta_c` is the method that *evaluates* the coefficient,
+    #: and an ``equinox`` field of the same name shadows it silently.
+    imposed_c: float | None = eqx.field(static=True, default=None)
+
+    @property
+    def is_meta(self) -> bool:
+        """Whether exchange is a potential rather than an energy derivative.
+
+        The single most consequential property in this class, because it makes
+        the *total energy* meaningless: with no ``E_x`` there is nothing for
+        the reported total to be the value of, and every quantity that is a
+        derivative of the total -- forces, stress, the dynamical matrix, the
+        response -- is a derivative of an expression the SCF did not minimise.
+        Those are refused by name where they are computed, not here.
+        """
+        return self.meta is not None
+
+    @property
+    def meta_coefficient(self) -> float | None:
+        """The fixed ``c``, or ``None`` when it is a cell average."""
+        if self.meta is None:
+            return None
+        return META[self.meta] if self.imposed_c is None else self.imposed_c
+
+    def with_meta_coefficient(self, c: float | None) -> "Functional":
+        """The same functional with ``c`` imposed rather than averaged."""
+        if c is None:
+            return self
+        if not self.is_meta:
+            raise ValueError(
+                f"mbj_c sets the Tran-Blaha coefficient and {self.name} is not a "
+                "meta-GGA; it is read only by input_dft = 'tb09'"
+            )
+        return Functional(
+            name=self.name,
+            exchange=self.exchange,
+            correlation=self.correlation,
+            gradient_exchange=self.gradient_exchange,
+            gradient_correlation=self.gradient_correlation,
+            correlation_spin=self.correlation_spin,
+            gradient_correlation_spin=self.gradient_correlation_spin,
+            meta=self.meta,
+            imposed_c=float(c),
+        )
+
+    def meta_exchange_potential(self, rho, sigma, laplacian, tau, c):
+        """``v_x`` for one spin channel, Ry -- see :func:`pypresso.xc.mgga.tb09_potential`.
+
+        Args:
+            rho: ``rho_sigma``, the channel density.
+            sigma: ``|grad rho_sigma|^2``.
+            laplacian: ``lap rho_sigma``.
+            tau: ``tau_sigma`` in **Hartree**.
+            c: the Tran-Blaha coefficient.
+        """
+        return tb09_potential(rho, sigma, laplacian, tau, c)
+
+    def meta_c(self, rho, grad_rho):
+        """``c`` for this functional: the cell average, or the fixed value."""
+        fixed = self.meta_coefficient
+        if fixed is not None:
+            return jnp.asarray(fixed)
+        return tb09_coefficient(rho, grad_rho)
 
     @property
     def is_gradient(self) -> bool:
@@ -513,6 +620,12 @@ def get_functional(name: str) -> Functional:
         raise ValueError("empty exchange-correlation functional name")
 
     upper = [token.upper() for token in tokens]
+    if len(upper) == 1 and upper[0] in META_FUNCTIONALS:
+        # Checked before the four-slot table: a meta name stands for a filling
+        # of those slots *and* for the potential that replaces exchange, and
+        # dropping the second half would leave a bare Perdew-Wang correlation
+        # run that converges and means nothing.
+        return _from_slots(*META_FUNCTIONALS[upper[0]])
     if len(upper) == 1 and upper[0] in FUNCTIONALS:
         return _from_slots(FUNCTIONALS[upper[0]])
 
@@ -524,7 +637,7 @@ def get_functional(name: str) -> Functional:
             raise ValueError(
                 f"unknown exchange-correlation term {token!r} in {name!r}; "
                 f"implemented terms are {sorted(set().union(*tables))} and the "
-                f"composite names {sorted(FUNCTIONALS)}"
+                f"composite names {sorted(set(FUNCTIONALS) | set(META_FUNCTIONALS))}"
             )
         for index in found:
             slots[index] = _CANONICAL_TERM.get((index, token), token)
@@ -532,10 +645,11 @@ def get_functional(name: str) -> Functional:
     return _from_slots(tuple(slots))
 
 
-def _from_slots(slots: tuple[str, str, str, str]) -> Functional:
+def _from_slots(slots: tuple[str, str, str, str], meta: str | None = None) -> Functional:
     exchange, correlation, gradient_exchange, gradient_correlation = slots
     return Functional(
-        name=_SHORTNAMES.get(slots, "-".join(slots)),
+        name=meta or _SHORTNAMES.get(slots, "-".join(slots)),
+        meta=meta,
         exchange=EXCHANGE[exchange],
         correlation=CORRELATION[correlation],
         gradient_exchange=GRADIENT_EXCHANGE[gradient_exchange],

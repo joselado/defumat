@@ -93,6 +93,8 @@ def run_bands(
     homo: float | None = None,
     k_batch: int | None | str = "default",
     ns: jnp.ndarray | None = None,
+    tau: jnp.ndarray | None = None,
+    becsum: tuple = (),
 ) -> BandStructure:
     """Diagonalise at a k-path with the density fixed.
 
@@ -110,6 +112,14 @@ def run_bands(
         ns: the converged Hubbard occupation matrix (``SCFResult.ns``), required
             when the run has a Hubbard U -- the term is built from it and it
             cannot be recovered from the density.
+        tau: the converged kinetic energy density (``SCFResult.tau``), required
+            under a meta-GGA for the same reason and a stronger one: a band path
+            has no occupations, so there is nothing here to build one from at
+            all. It is the SCF's zone-wide ``tau`` that is held fixed, exactly
+            as the density is.
+        becsum: the converged projector occupations (``SCFResult.becsum``),
+            required for a PAW dataset -- ``ddd_paw`` is built from it and, like
+            ``tau``, it is a property of the states rather than of the density.
 
     The potential is built once from the given density and never updated -- that
     is the whole content of "non self-consistent", and it is why this is a thin
@@ -119,7 +129,7 @@ def run_bands(
     produced the density, which is what the two arguments are for.
     """
     calculation, system, eigenvalues = fixed_density_bands(
-        system, pseudos, density, kpoints, nbnd, conv_thr, k_batch, ns
+        system, pseudos, density, kpoints, nbnd, conv_thr, k_batch, ns, tau, becsum
     )
     nspin = calculation.nspin
     return BandStructure(

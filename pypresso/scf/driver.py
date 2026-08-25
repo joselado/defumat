@@ -93,7 +93,14 @@ from pypresso.pseudo.upf import Pseudopotential
 from pypresso.pseudo.spinorbit import becsum_transform, build_spin_orbit
 from pypresso.batching import map_k, resolve_k_batch
 from pypresso.scf.continuation import ContinuedState, continued_state
-from pypresso.scf.density import becsum, spinor_becsum, spinor_sum_band, sum_band
+from pypresso.scf.density import (
+    becsum,
+    kinetic_energy_density,
+    spinor_becsum,
+    spinor_kinetic_energy_density,
+    spinor_sum_band,
+    sum_band,
+)
 from pypresso.scf.ewald import build_ewald
 from pypresso.scf.mixing import PRECONDITIONED, get_mixer, kerker_preconditioner
 from pypresso.scf.residual import make_residual
@@ -116,6 +123,7 @@ from pypresso.scf.potential import (
     scf_accuracy,
     v_of_rho,
 )
+from pypresso.xc.mgga import thomas_fermi_tau
 from pypresso.xc.functional import resolve_functional
 from pypresso.solvers import get_eigensolver
 from pypresso.solvers.davidson import ETHR_MIN, starting_vectors
@@ -214,6 +222,21 @@ def _density_of_bands(psi, fft_index, grid, weights, cell, k_batch):
     return sum_band(psi, fft_index, grid, weights, cell, k_batch)
 
 
+@partial(jax.jit, static_argnames=("grid", "k_batch"))
+def _kinetic_of_bands(psi, fft_index, grid, weights, cell, kplusg, k_batch):
+    """``sum_band``'s meta-GGA branch on the smooth grid, in one kernel."""
+    return kinetic_energy_density(psi, fft_index, grid, weights, cell, kplusg, k_batch)
+
+
+@partial(jax.jit, static_argnames=("grid", "nspin_mag", "k_batch"))
+def _spinor_kinetic_of_bands(psi, fft_index, grid, weights, cell, kplusg,
+                             nspin_mag, k_batch):
+    """The same for spinors: ``tau`` on the Pauli basis."""
+    return spinor_kinetic_energy_density(
+        psi, fft_index, grid, weights, cell, kplusg, nspin_mag, k_batch
+    )
+
+
 @jax.jit
 def _paw_deband(ddd_paw, augmentation, becsum_):
     """``sum_s sum_a sum_ij ddd_paw^a_ij becsum^a_ij``, out of the block matrix.
@@ -279,9 +302,9 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None):
 
 
 @jax.jit
-def _paw_onecenter(paw, becsum_):
+def _paw_onecenter(paw, becsum_, meta_c=None, axis=None):
     """``PAW_potential``: the one-centre energy and its ``ddd``, in one kernel."""
-    return paw.energy_and_coefficients(becsum_)
+    return paw.energy_and_coefficients(becsum_, meta_c, axis)
 
 
 @jax.jit
@@ -469,6 +492,33 @@ def _without_gamma_storage(system: System) -> System:
     return eqx.tree_at(lambda s: s.kpoints, system, replacement)
 
 
+def _meta_c(potential):
+    """The Tran-Blaha ``c`` a potential was built with, or ``None``.
+
+    ``Potential.meta_c`` is ``0`` for every functional that is not a meta-GGA,
+    and the PAW one-centre terms want ``None`` there rather than a coefficient
+    that means nothing.
+    """
+    c = potential.meta_c
+    return None if np.ndim(c) == 0 and float(c) == 0.0 else c
+
+
+def _starting_tau(rho, calculation) -> jnp.ndarray:
+    """``potinit.f90``'s Thomas-Fermi ``rho%kin_r``, per spin channel, Ry.
+
+    ``(3/5)(3 pi^2)^(2/3) rho^(5/3)`` for one channel, and the spin-scaled form
+    for two. The density and ``tau`` are in the *same* layout here -- the total
+    when unpolarized, ``(up, down)`` when not -- so no conversion happens, which
+    is worth stating because QE's do not: ``potinit.f90`` carries a comment
+    saying "for LSDA rho is (tot,magn), rho_kin is (up,down)" and converts
+    between them at this exact point. This package stores ``(up, down)`` for
+    both (:func:`pypresso.scf.potential.with_core`), so the conversion would be
+    a bug rather than a transcription.
+    """
+    rho = jnp.real(jnp.asarray(rho))
+    return thomas_fermi_tau(rho, 1 if calculation.nspin == 1 else 2)
+
+
 def next_ethr(ethr: float, accuracy: float, nelec: float, iteration: int) -> float:
     """QE's diagonalisation-threshold schedule (``PW/src/electrons.f90``).
 
@@ -599,6 +649,17 @@ class SCFResult:
     #: two runs match before carrying anything over
     #: (:mod:`pypresso.scf.continuation`).
     system: object | None = None
+    #: The kinetic energy density, ``(nspin, n1, n2, n3)`` in Ry and per spin
+    #: *channel*, or ``None`` when the functional is not a meta-GGA. Carried on
+    #: the result because it is part of the converged state: an NSCF run or a
+    #: band-structure path under a meta-GGA rebuilds the potential from the
+    #: density *and* this, and a fixed density alone does not determine it.
+    tau: jnp.ndarray | None = None
+    #: The Tran-Blaha coefficient the converged potential used, or ``None``.
+    #: The headline number of a TB09 run after the gap itself -- it is a
+    #: property of the material and the published values (Si ~1.1, wide-gap
+    #: insulators ~1.3-1.6) are what a new implementation is checked against.
+    meta_c: float | None = None
     #: The stress tensor (:class:`~pypresso.stress.Stress`) when the run was
     #: asked for one, and ``None`` otherwise -- QE's ``tstress``, which is the
     #: same switch: ``stress()`` is called from ``run_pwscf`` after the SCF, not
@@ -715,7 +776,7 @@ class Calculation:
         # dataset cannot end up running under LDA by omission.
         self.functional = resolve_functional(
             [pseudo.functional for pseudo in self.pseudos], system.input_dft
-        )
+        ).with_meta_coefficient(getattr(system, "mbj_c", None))
 
         # QE's three spin numbers, kept apart (``set_spin_vars``): how many
         # regimes there are, how many components a *state* has, and how many a
@@ -733,6 +794,8 @@ class Calculation:
             # needs it for the same reason -- the functional is evaluated along
             # the local spin axis, which is the polarized one.
             self.functional.require_spin()
+        if self.functional.is_meta:
+            self._require_meta_supported(system)
         if self.lspinorb and not any(p.has_so for p in self.pseudos):
             raise ValueError(
                 "lspinorb = .true. but no pseudopotential is fully relativistic; "
@@ -808,6 +871,14 @@ class Calculation:
         planewaves = self.basis.planewaves
         self.kinetic = planewaves.kinetic(smooth, self.basis_kpoints, system.cell)
         self.fft_index = planewaves.fft_index(smooth)
+        # ``k + G`` itself, and only where a meta-GGA needs it: it is
+        # ``(nk, npwx, 3)`` doubles, three times the size of ``kinetic``, and
+        # every other consumer wants the modulus. ``None`` otherwise, so that
+        # the allocation is not paid for by runs that cannot use it.
+        self.kplusg = (
+            planewaves.kplusg(smooth, self.basis_kpoints, system.cell)
+            if self.functional.is_meta else None
+        )
 
         # QE's FFT layout for the wavefunction transforms; see basis/sticks.py.
         self.sticks = build_sticks(self.fft_index, planewaves.mask, smooth.grid)
@@ -1083,6 +1154,63 @@ class Calculation:
         # zero to every potential.
         self.magnetic_field = self._build_magnetic_field()
 
+
+    def _require_meta_supported(self, system) -> None:
+        """What a potential-only meta-GGA cannot be combined with, refused by name.
+
+        Each of these is refused because the *implementation* is missing, not
+        because the physics is:
+
+        * **Ultrasoft**, but not PAW. ``tau`` on the grid is the smooth
+          states' and needs a one-centre correction inside the spheres; a PAW
+          dataset carries the partial waves that supply it (``PLAN.md`` P32)
+          and a plain ultrasoft one does not.
+        Noncollinear magnetism and spin-orbit coupling **are** supported
+        (``PLAN.md`` P31), which is where this implementation goes beyond
+        ``pw.x``: ``setup.f90`` raises "Non-collinear Meta-GGA not implemented"
+        and stops. Here ``tau`` is carried as the 2x2 matrix it is and resolved
+        onto the density's local spin axis
+        (:func:`~pypresso.scf.potential._noncollinear_meta_exchange`).
+        * **Spin spirals.** The two spinor components live on different spheres,
+          so ``grad psi`` carries two different ``k + q/2`` sets and the sum is
+          not the kinetic energy density of anything periodic.
+        """
+        if any(p.is_ultrasoft and not p.is_paw for p in self.pseudos):
+            # **Ultrasoft, but not PAW.** The distinction is the partial waves:
+            # a PAW dataset carries the all-electron and pseudo pairs that let
+            # ``tau`` be reconstructed inside the sphere (``PLAN.md`` P32), and
+            # a plain ultrasoft one carries only the augmentation charge, which
+            # is a correction to the *density* with no kinetic counterpart
+            # anywhere -- not here and not in QE. Running it would pair a full
+            # density with a smooth tau, and their ratio is what the whole
+            # Becke-Roussel fit is built on.
+            raise NotImplementedError(
+                f"{self.functional.name} is a meta-GGA and needs the kinetic "
+                "energy density tau inside the augmentation spheres; an "
+                "ultrasoft dataset has no partial waves to reconstruct it from, "
+                "where a PAW one does. Use a PAW or norm-conserving dataset -- "
+                "pw.x refuses both (setup.f90: 'Meta-GGA not implemented with "
+                "USPP/PAW')"
+            )
+        if getattr(system, "spiral_q", None) is not None:
+            raise NotImplementedError(
+                f"{self.functional.name} with a spin spiral is not implemented: "
+                "the two spinor components live on different plane-wave spheres, "
+                "so their gradients do not add to a lattice-periodic tau"
+            )
+        if getattr(system, "hubbard", None):
+            # Nothing in the physics forbids it -- ``vhpsi`` is a separate term
+            # and does not touch ``tau``. What forbids it is that the
+            # combination is unvalidated, and one concrete thing breaks with it:
+            # ``_solve_residual``'s convergence measure reads the Hubbard block
+            # off the *end* of the packed state, and with tau packed after it
+            # that slice is tau.
+            raise NotImplementedError(
+                f"{self.functional.name} with a Hubbard U is not implemented: "
+                "the combination is unvalidated here, and the residual solver's "
+                "convergence measure reads ns off the end of the packed state, "
+                "which tau now occupies"
+            )
 
     def _setup_hubbard(self, use_symmetry: bool) -> None:
         """Everything a DFT+U run needs beyond the manifold list.
@@ -1897,7 +2025,8 @@ class Calculation:
     def is_paw(self) -> bool:
         return self.paw is not None
 
-    def potential(self, rho_r: jnp.ndarray, field_scale: float = 1.0, field=None):
+    def potential(self, rho_r: jnp.ndarray, field_scale: float = 1.0, field=None,
+                  tau: jnp.ndarray | None = None):
         """``v_of_rho`` for this calculation: Hartree plus exchange-correlation.
 
         Everything the potential needs and the density does not carry -- the
@@ -1913,6 +2042,7 @@ class Calculation:
             self.functional,
             self.rho_core_g,
             self.quantization_axis,
+            tau,
         )
         field = self.magnetic_field if field is None else field
         if field is None:
@@ -1930,9 +2060,10 @@ class Calculation:
             etxc=potential.etxc,
             e_field=e_field,
             e_constraint=e_constraint,
+            meta_c=potential.meta_c,
         )
 
-    def onecenter(self, becsum_):
+    def onecenter(self, becsum_, meta_c=None):
         """``(epaw, ddd_paw)`` for the current ``becsum``, as a block matrix.
 
         ``(0, None)`` when no species is PAW. ``ddd_paw`` is
@@ -1944,7 +2075,21 @@ class Calculation:
         """
         if self.paw is None:
             return jnp.asarray(0.0), None
-        energy, blocks = _paw_onecenter(self.paw, becsum_)
+        if self.functional.is_meta and meta_c is None:
+            # ``c`` is an average over the *cell*, so no sphere can compute its
+            # own and the plane-wave part has to hand it down. Refused rather
+            # than defaulted: silently using 1 here while the grid used 1.03
+            # would make the two halves of the same potential belong to two
+            # different functionals, and the only symptom would be a slightly
+            # wrong gap.
+            raise ValueError(
+                f"{self.functional.name} needs its cell-averaged c passed to "
+                "onecenter(): the PAW spheres and the plane-wave grid must use "
+                "the same one. Potential.meta_c is where it comes from"
+            )
+        energy, blocks = _paw_onecenter(
+            self.paw, becsum_, meta_c, self.quantization_axis
+        )
         return energy, jnp.stack([
             self.augmentation.block_matrix(
                 tuple(None if b is None else b[spin] for b in blocks)
@@ -2293,6 +2438,53 @@ class Calculation:
                 self.k_batch,
             )
         return self.symmetrize(self.augmented(to_dense(rho, smooth, dense), becsum_))
+
+    def kinetic_energy_density(self, wavefunctions, weights,
+                               symmetrize: bool = True) -> jnp.ndarray:
+        """``tau`` from the occupied states, on the **dense** grid, Ry.
+
+        ``sum_band.f90``'s meta-GGA branch, lifted to the dense grid the same
+        way the density is -- and for the same reason: the potential is built
+        there. QE lifts it through G space too (``rho_r2g`` on the smooth grid,
+        ``rho_g2r`` on the dense one, at the end of ``sum_band``).
+
+        **Symmetrised, and it is not optional.** ``sum_band.f90`` calls
+        ``sym_rho`` on ``rho%kin_g`` immediately after it calls it on
+        ``rho%of_g``, with ``nspin`` and in the ``(up, down)`` representation --
+        which is exactly this call. ``tau(r)`` is a scalar field of the crystal
+        and has the crystal's symmetry; a sum over an irreducible wedge does
+        not, and the gap between the two is not small. On QE's own silicon the
+        unsymmetrised ``tau`` is **11% asymmetric** and running with it moves the
+        eigenvalues by **0.47 eV** and the total energy by 1.3e-2 Ry
+        (``tests/regression/test_mbj.py``). ``symmetrize = False`` exists so
+        that number can be measured rather than asserted; nothing should use it.
+
+        ``tau`` is a scalar under the point group in every regime this
+        functional runs in, so the density's own ``sym_rho`` serves without a
+        new routine -- unlike a *response*, which is a polar vector and needs
+        :meth:`symmetrize_directional`.
+        """
+        if self.kplusg is None:
+            raise ValueError(
+                "this calculation's functional is not a meta-GGA, so k + G was "
+                "never built; tau has no consumer here"
+            )
+        dense, smooth = self.basis.dense, self.basis.smooth
+        if self.noncolin:
+            # ``tau`` is a 2x2 matrix in spin space, carried on the Pauli basis
+            # exactly as the density is -- a trace and an axial vector, and the
+            # same ``nspin_mag`` decides whether the vector part exists at all.
+            tau = _spinor_kinetic_of_bands(
+                wavefunctions[0], self.state_fft_index, smooth.grid, weights[0],
+                self.system.cell, self.kplusg, self.nspin_mag, self.k_batch,
+            )
+        else:
+            tau = _kinetic_of_bands(
+                wavefunctions, self.fft_index, smooth.grid, weights,
+                self.system.cell, self.kplusg, self.k_batch,
+            )
+        tau = to_dense(tau, smooth, dense)
+        return self.symmetrize(tau) if symmetrize else tau
 
     def hamiltonian(self, v_scf: jnp.ndarray, ddd_paw=None, hubbard=None) -> tuple:
         """One :class:`Hamiltonian` per spin channel.
@@ -2759,7 +2951,7 @@ def _result_for_stress(calculation, eigenvalues, wg, wavefunctions, rho, terms):
 
 def _solve_residual(
     calculation, system, nbnd, rho, becsum_, ns_, conv_thr,
-    scf_solver, options, mixing_beta, verbose,
+    scf_solver, options, mixing_beta, verbose, tau_=None,
 ):
     """Find the fixed point with a residual solver, before the mixing loop runs.
 
@@ -2800,7 +2992,11 @@ def _solve_residual(
     wavefunctions = None
 
     residual = make_residual(calculation, nbnd, ethr)
-    x0 = residual.pack(rho, becsum_, ns_)
+    x0 = residual.pack(
+        rho, becsum_, ns_,
+        None if residual.tau_shape is None
+        else (tau_ if tau_ is not None else _starting_tau(rho, calculation)),
+    )
     if precondition is True or (precondition is None and options.get("kerker", True)):
         precondition = kerker_preconditioner(
             calculation.basis.dense, calculation.system.cell, residual.shapes[0],
@@ -2827,10 +3023,12 @@ def _solve_residual(
             jnp.asarray(r[:size]).reshape(shape), calculation.basis.dense, calculation.system.cell
         )
         if residual.ns_shape is not None:
-            n = int(np.prod(residual.ns_shape))
-            accuracy = accuracy + calculation.ns_accuracy(
-                jnp.asarray(r[-n:]).reshape(residual.ns_shape)
-            )
+            # Sliced by ``unpack`` and not off the end of the vector: ``ns`` is
+            # the last block only while nothing follows it, and ``tau`` does
+            # (:class:`ScfResidual`). ``tau`` itself is deliberately *not* in
+            # this measure -- ``conv_thr`` has to mean the same thing here as it
+            # means in the mixing loop, which converges on the density alone.
+            accuracy = accuracy + calculation.ns_accuracy(residual.unpack(r)[2])
         return float(accuracy)
 
     if warmup:
@@ -2862,8 +3060,8 @@ def _solve_residual(
         residual, x0, wavefunctions, accuracy_of, conv_thr=conv_thr,
         precondition=precondition, verbose=verbose, **options,
     )
-    rho_out, becsum_out, ns_out = residual.unpack(result.x)
-    return rho_out, becsum_out, ns_out, result.psi, result
+    rho_out, becsum_out, ns_out, tau_out = residual.unpack(result.x)
+    return rho_out, becsum_out, ns_out, tau_out, result.psi, result
 
 
 def run_scf(
@@ -2883,6 +3081,7 @@ def run_scf(
     starting_ns: jnp.ndarray | None = None,
     starting_wavefunctions: jnp.ndarray | None = None,
     starting_from: object | None = None,
+    starting_tau: jnp.ndarray | None = None,
     mixing_fixed_ns: int = 0,
     tstress: bool | None = None,
     scf_solver: str = "mixing",
@@ -2990,6 +3189,17 @@ def run_scf(
         starting_becsum = state.becsum or None
         starting_ns = state.ns
         starting_wavefunctions = state.wavefunctions
+        # ``tau`` crosses only when the two runs agree about what shape it is.
+        # A promotion between spin regimes reshapes the density through
+        # :mod:`pypresso.scf.continuation` and there is no counterpart for the
+        # kinetic energy density, so rather than reshape it here the guess is
+        # dropped and the Thomas-Fermi one is used -- which costs iterations and
+        # cannot be wrong.
+        source_tau = getattr(starting_from, "tau", None)
+        if starting_tau is None and source_tau is not None:
+            expected = (calculation.nspin,) + tuple(np.shape(calculation.starting_density()))[1:]
+            if tuple(np.shape(source_tau)) == expected:
+                starting_tau = source_tau
         if verbose:
             print(f"  continuing a previous run: {state.description}")
 
@@ -3061,22 +3271,59 @@ def run_scf(
     # density into an ``SCFResult`` -- every energy term, the magnetization, the
     # stress. Nothing about the result has a second implementation, and the one
     # iteration it costs is counted in ``solver.steps`` like any other.
+    if calculation.functional.is_meta:
+        warnings.warn(
+            f"{calculation.functional.name} is a potential and not the "
+            "derivative of an energy: the total energy this run reports is the "
+            "band term plus the electrostatics plus *correlation only*, and is "
+            "not the value of any functional the SCF minimised. It is not "
+            "comparable with a total energy from any other functional, and "
+            "forces, stress and response are refused for it. The eigenvalues, "
+            "the band gap and the density are what this functional is for",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     solver_result = None
+    solved_tau = None
     if get_scf_solver(scf_solver) is not None:
-        rho, becsum_state, ns_state, wavefunctions, solver_result = _solve_residual(
+        (
+            rho, becsum_state, ns_state, solved_tau, wavefunctions, solver_result
+        ) = _solve_residual(
             calculation, system, nbnd, rho, becsum_state, ns_state, conv_thr,
             scf_solver, dict(scf_solver_options or {}), mixing_beta, verbose,
+            starting_tau,
         )
         # The density is converged, so the eigenvalues must be too: the loose
         # start of the ``ethr`` schedule would otherwise throw the hand-off away
         # on the very first diagonalisation.
         ethr = max(0.1 * solver_result.accuracy / max(1.0, calculation.nelec), ETHR_MIN)
 
+    # ``potinit.f90``'s Thomas-Fermi guess. The first iteration has no states to
+    # build ``tau`` from and the meta-GGA potential cannot be evaluated without
+    # one; from the second iteration on it comes from the states. It is **not
+    # mixed** -- ``mix_rho.f90`` does not touch ``kin_r`` -- so what the
+    # potential sees at iteration ``i`` is the previous iteration's output
+    # ``tau`` against the *mixed* density, which is QE's pairing and is the
+    # reason a meta-GGA SCF converges differently from a GGA one.
+    tau_state = None
+    if calculation.functional.is_meta:
+        # In order of how much is known about ``tau``: a residual solver has
+        # already found the joint fixed point in ``(rho, tau)``, so its answer
+        # wins; then a converged ``tau`` handed in by the caller (another run at
+        # a nearby geometry, ``starting_from``); then ``potinit.f90``'s
+        # Thomas-Fermi guess, which costs iterations and cannot be wrong.
+        if solver_result is not None and solved_tau is not None:
+            tau_state = solved_tau
+        elif starting_tau is not None:
+            tau_state = jnp.asarray(starting_tau)
+        else:
+            tau_state = _starting_tau(rho, calculation)
+
     for iteration in range(1, max_iterations + 1):
         ethr = next_ethr(ethr, accuracy, calculation.nelec, iteration)
 
-        potential = calculation.potential(rho, field_scale, field)
-        epaw, ddd_paw = calculation.onecenter(becsum_state)
+        potential = calculation.potential(rho, field_scale, field, tau=tau_state)
+        epaw, ddd_paw = calculation.onecenter(becsum_state, _meta_c(potential))
         hubbard_terms = v_ns = None
         eth = 0.0
         if calculation.is_hubbard:
@@ -3099,6 +3346,8 @@ def run_scf(
             wg, levels = calculation.occupations(eigenvalues)
             becsum_out = calculation.becsum(wavefunctions, wg)
             rho_out = calculation.density(wavefunctions, wg, becsum_out)
+            if tau_state is not None:
+                tau_out = calculation.kinetic_energy_density(wavefunctions, wg)
             # On the dense grid, which is the grid the residual lives on. QE
             # sums rho_ddot over the *smooth* set instead (and says so, in a
             # comment noting the change from ngm to ngms); the difference is the
@@ -3193,12 +3442,15 @@ def run_scf(
             # is what ``force_corr`` pairs with the atomic charges to correct a
             # force for a run that stopped short (``PW/src/force_corr.f90``).
             v_in = potential.v_scf
-            potential = calculation.potential(rho_out, field_scale, field)
+            potential = calculation.potential(
+                rho_out, field_scale, field,
+                tau=tau_out if tau_state is not None else None,
+            )
             potential_change = potential.v_scf - v_in
             # ... and the one-centre energy with it. ``ddd_paw`` is deliberately
             # *not* refreshed: ``deband`` below pairs it with the output becsum
             # exactly as ``delta_e`` does, which runs before QE recomputes it.
-            epaw, _ = calculation.onecenter(becsum_out)
+            epaw, _ = calculation.onecenter(becsum_out, _meta_c(potential))
             if calculation.is_hubbard:
                 # ``eth`` is recomputed by ``v_of_rho`` on the density that will
                 # be used next, which at convergence is the unmixed output one.
@@ -3259,6 +3511,12 @@ def run_scf(
         entry = {"iteration": iteration, "total_energy": total,
                  "accuracy": accuracy, "ethr": ethr,
                  "residual": residual, "change": change}
+        if tau_state is not None:
+            # ``c`` is a cell average of the density, so it moves with the SCF
+            # and settling is part of convergence: a run whose density has
+            # stopped moving but whose ``c`` has not is not converged, and the
+            # only way to see that is to have the number per iteration.
+            entry["meta_c"] = float(potential.meta_c)
         if field is not None:
             # Reported, never added: ``etcon`` is printed by ``add_bfield`` and
             # never returned to ``electrons.f90``, and Elk keeps its external
@@ -3298,11 +3556,16 @@ def run_scf(
         if converged:
             rho = rho_out
             becsum_state = becsum_out
+            if tau_state is not None:
+                tau_state = tau_out
             if calculation.is_hubbard:
                 ns_state = ns_out
             break
 
         previous_energy = total
+        if tau_state is not None:
+            # Replaced, not mixed. See the Thomas-Fermi comment above.
+            tau_state = tau_out
         rho, becsum_state, ns_state = _mix(
             mixer, rho, rho_out, becsum_state, becsum_out,
             ns_state if calculation.is_hubbard else None,
@@ -3405,4 +3668,6 @@ def run_scf(
         lumo=levels.get("lumo"),
         history=history,
         solver=solver_result,
+        tau=tau_state,
+        meta_c=None if tau_state is None else float(potential.meta_c),
     )

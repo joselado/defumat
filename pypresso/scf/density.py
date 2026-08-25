@@ -28,7 +28,9 @@ from pypresso.batching import resolve_k_batch, sum_bands, sum_k
 from pypresso.system.cell import Cell
 
 __all__ = ["sum_band", "band_density", "becsum", "spinor_sum_band",
-           "spinor_band_density", "spinor_becsum"]
+           "spinor_band_density", "spinor_becsum",
+           "band_kinetic_density", "kinetic_energy_density",
+           "spinor_band_kinetic_density", "spinor_kinetic_energy_density"]
 
 
 def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.ndarray, cell: Cell):
@@ -87,6 +89,151 @@ def sum_band(psi, fft_index, grid, weights, cell: Cell,
         return sum_k(one_k, (states, fft_index, occupations), batch=batch)
 
     return jax.vmap(channel)(psi, weights)
+
+
+def band_kinetic_density(psi, fft_index, grid, weights, cell: Cell, kplusg):
+    """One k-point's contribution to ``tau``, in **Rydberg**.
+
+    Args:
+        psi: ``(nbnd, npwx)``.
+        kplusg: ``(npwx, 3)`` in 1/bohr, zero on padding.
+
+    ``tau(r) = sum_i w_i |grad psi_i(r)|^2`` -- three more transforms per band
+    than the density costs, since ``grad psi`` has to be built one cartesian
+    direction at a time in G space (``i(k+G) c_G``) and brought back. This is
+    ``sum_band.f90``'s meta-GGA branch exactly: it forms ``kplusgi *
+    evc(i,ibnd)`` for ``j = 1, 3`` and calls ``get_rho`` on each, accumulating
+    into ``rho%kin_r`` with the *same* weights the density uses.
+
+    **Rydberg, and no factor of one half.** QE's ``rho%kin_r`` is this sum as
+    written and ``v_xc_meta`` divides it by ``e2`` to get the Hartree ``tau``
+    the functionals want; the same division happens here, in
+    :func:`pypresso.scf.potential.meta_exchange`, so that what flows through the
+    SCF is in the package's units and only the functional sees Hartree.
+
+    ``|grad psi|^2`` is ``Re(conj z z)`` summed over the three directions and
+    not ``abs(z)**2``, for :func:`band_density`'s reason and with more of an
+    edge: a *derivative* of a state has nodes wherever the state has extrema,
+    which on a symmetric cell is a great many grid points exactly.
+    """
+    def one_band(arrays):
+        state, weight = arrays
+        components = 1j * kplusg.T * state[None, :]  # (3, npwx)
+        field = g_to_r(components, fft_index, grid)  # (3, n1, n2, n3)
+        return weight * jnp.sum(jnp.real(jnp.conj(field) * field), axis=0)
+
+    return sum_bands(one_band, (psi, weights)) / cell.volume
+
+
+def kinetic_energy_density(psi, fft_index, grid, weights, cell: Cell, kplusg,
+                           k_batch: int | None | str = "default") -> jnp.ndarray:
+    """``tau`` from every k-point, ``(nspin, n1, n2, n3)`` and real, Ry.
+
+    Args:
+        psi: ``(nspin, nk, nbnd, npwx)``.
+        kplusg: ``(nk, npwx, 3)``.
+
+    The channel axis means what it means in the density -- QE's
+    ``rho%kin_r(:, current_spin)``, and this package's ``(up, down)`` for
+    ``nspin = 2``. **QE's own storage differs from its density's there**, since
+    ``sum_band`` converts ``rho`` to ``(total, magnetization)`` at the end and
+    leaves ``kin_r`` alone; ``potinit.f90`` says so in a comment ("for LSDA rho
+    is (tot,magn), rho_kin is (up,down)"). Here the two agree, so nothing
+    converts between them -- and a transcribed conversion would be a bug.
+    """
+    batch = resolve_k_batch(k_batch)
+
+    def channel(states, occupations):
+        def one_k(arrays):
+            state, index, vectors, occupation = arrays
+            return band_kinetic_density(state, index, grid, occupation, cell, vectors)
+
+        return sum_k(one_k, (states, fft_index, kplusg, occupations), batch=batch)
+
+    return jax.vmap(channel)(psi, weights)
+
+
+def spinor_band_kinetic_density(psi, fft_index, grid, weights, cell: Cell,
+                                kplusg, nspin_mag: int):
+    """One k-point's contribution to a **noncollinear** ``tau``, Ry.
+
+    Args:
+        psi: ``(nbnd, 2 npwx)`` spinors, the two components stored one after
+            the other, as :func:`spinor_band_density` takes them.
+        kplusg: ``(npwx, 3)`` in 1/bohr.
+        nspin_mag: 1 for the trace alone, 4 for ``(tau, tau_x, tau_y, tau_z)``.
+
+    **The kinetic energy density of a spinor is a 2x2 matrix**, not a number and
+    not two numbers:
+
+        tau_ab(r) = sum_i w_i grad psi_ia^* . grad psi_ib,
+
+    and it decomposes on the Pauli basis exactly as the density does -- a trace
+    and an axial three-vector. This is :func:`spinor_band_density` with
+    ``grad psi`` in place of ``psi``, and the *only* difference beyond that is
+    that every product is a dot product over the three cartesian directions
+    before the spin algebra happens. Getting that order wrong -- taking the spin
+    structure of each direction and summing afterwards -- gives the same trace
+    and a different vector part.
+
+    The sign conventions are the density's, so that the two arrays can be
+    resolved onto the same local axis: ``m = psi^dagger sigma psi`` with
+    ``cross = conj(up) down``, ``m_x = 2 Re(cross)``, ``m_y = 2 Im(cross)``.
+    """
+    npwx = psi.shape[-1] // 2
+    fft_index = jnp.asarray(fft_index)
+    if fft_index.ndim != 1:
+        raise NotImplementedError(
+            "a spin spiral's two spinor components live on different "
+            "plane-wave spheres, so their gradients do not add to a "
+            "lattice-periodic tau; meta-GGA with spiral_q is refused"
+        )
+
+    def one_band(arrays):
+        state, weight = arrays
+        components = state.reshape((2, npwx))
+        # ``(2, 3, npwx)`` -> ``(2, 3, n1, n2, n3)``: the spin component, then
+        # the cartesian direction of the gradient.
+        gradients = 1j * kplusg.T[None, :, :] * components[:, None, :]
+        field = g_to_r(gradients, fft_index, grid)
+        up, down = field[0], field[1]
+
+        # Summed over the cartesian axis *first*: these are dot products of
+        # gradients, and the spin algebra acts on the result.
+        up_density = jnp.sum(jnp.real(jnp.conj(up) * up), axis=0)
+        down_density = jnp.sum(jnp.real(jnp.conj(down) * down), axis=0)
+        trace = up_density + down_density
+        if nspin_mag == 1:
+            return weight * trace[None]
+        cross = jnp.sum(jnp.conj(up) * down, axis=0)
+        return weight * jnp.stack([
+            trace,
+            2.0 * jnp.real(cross),
+            2.0 * jnp.imag(cross),
+            up_density - down_density,
+        ])
+
+    return sum_bands(one_band, (psi, weights)) / cell.volume
+
+
+def spinor_kinetic_energy_density(psi, fft_index, grid, weights, cell: Cell,
+                                  kplusg, nspin_mag: int,
+                                  k_batch: int | None | str = "default"):
+    """Noncollinear ``tau`` from every k-point, ``(nspin_mag, n1, n2, n3)``, Ry.
+
+    Args:
+        psi: ``(nk, nbnd, 2 npwx)``.
+        kplusg: ``(nk, npwx, 3)``.
+        weights: ``(nk, nbnd)``.
+    """
+    def one_k(arrays):
+        state, index, vectors, occupation = arrays
+        return spinor_band_kinetic_density(
+            state, index, grid, occupation, cell, vectors, nspin_mag
+        )
+
+    return sum_k(one_k, (psi, fft_index, kplusg, weights),
+                 batch=resolve_k_batch(k_batch))
 
 
 def becsum(psi, vkb, weights, species_channels,

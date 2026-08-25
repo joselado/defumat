@@ -58,7 +58,7 @@ import jax.numpy as jnp
 from pypresso.hubbard.energy import hubbard_energy
 from pypresso.scf.potential import total_charge
 
-__all__ = ["FrozenState", "frozen_energy", "energy_at", "reject_spinors",
+__all__ = ["FrozenState", "frozen_energy", "energy_at", "reject_spinors", "reject_potential_only",
            "state_from_result"]
 
 
@@ -158,6 +158,37 @@ def reject_spinors(calculation) -> None:
             "forces and stress for a noncollinear or spin-orbit calculation are "
             "not implemented; nspin = 1 and nspin = 2 are, on norm-conserving, "
             "ultrasoft and PAW pseudopotentials"
+        )
+    reject_potential_only(calculation)
+
+
+def reject_potential_only(calculation) -> None:
+    """A potential-only functional has no energy to differentiate.
+
+    Refused rather than approximated, and it is not a missing term: with
+    Tran-Blaha there is no ``E_x[rho]`` at all, so the quantity this module
+    differentiates is the *correlation* energy plus the electrostatics and the
+    band term -- an expression the SCF did not minimise. Its gradient would be a
+    smooth, plausible, entirely meaningless force, and the run would report it
+    without complaint.
+
+    This is the one refusal in the package that cannot be lifted by writing more
+    code: a force under this functional needs a definition of the total energy
+    that Tran and Blaha's potential does not come with. (There is a literature
+    on assigning one -- fitting a functional whose derivative approximates the
+    potential -- and none of it is implemented.)
+
+    Reached from every consumer, because they all come through
+    :func:`energy_at`: forces, the stress tensor, the dynamical matrix, the
+    elastic constants and the Sternheimer response alike.
+    """
+    if getattr(calculation, "functional", None) is not None and calculation.functional.is_meta:
+        raise NotImplementedError(
+            f"the {calculation.functional.name} functional is a potential and "
+            "not the derivative of an energy, so there is no total energy to "
+            "differentiate: forces, stress, phonons and linear response are "
+            "refused for it. The band structure, the density of states and the "
+            "density itself are unaffected -- they are what it is for"
         )
 
 

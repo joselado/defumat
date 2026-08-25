@@ -366,12 +366,18 @@ def run_dos(
     conv_thr: float = 1.0e-6,
     chunk: int = ENERGY_CHUNK,
     k_batch: int | None | str = "default",
+    tau: jnp.ndarray | None = None,
 ):
     """SCF density in, ``(DensityOfStates, NSCFResult)`` out.
 
     ``grid`` asks for a denser Monkhorst-Pack grid than the one the density was
     converged on, reduced with the same crystal symmetries; without it the
     calculation's own k-points are reused, which is rarely enough for a DOS.
+
+    ``tau`` is the converged kinetic energy density (``SCFResult.tau``), which a
+    meta-GGA needs here for the same reason a band structure does: it is a
+    property of the occupied states over the whole zone, so a *denser* grid
+    cannot rebuild it and the SCF's own is what is held fixed.
 
     ``scheme`` defaults to whatever the calculation itself used to occupy its
     bands -- the tetrahedron variant if it ran with one, otherwise its smearing
@@ -381,7 +387,8 @@ def run_dos(
     if kpoints is None and grid is not None:
         kpoints = denser_grid(system, grid, shift)
 
-    nscf = run_nscf(system, pseudos, density, kpoints, nbnd, conv_thr, k_batch)
+    nscf = run_nscf(system, pseudos, density, kpoints, nbnd, conv_thr, k_batch,
+                    tau=tau)
 
     scheme, degauss = default_scheme(system, scheme, degauss, delta_e)
 

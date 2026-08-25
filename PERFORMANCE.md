@@ -1851,6 +1851,66 @@ What the symmetry fix was worth in *time*, on the same machine: `si10-nc`'s SCF 
 operations -- the density is symmetrised over six operations instead of two, and the
 k-point set is unchanged. A bug that costs accuracy usually costs time as well.
 
+## What the Tran-Blaha potential costs (P30)
+
+Silicon, `ecutwfc = 30`, a 6x6x6 grid reduced to 16 k-points, a 32^3 dense grid,
+one core. Timed per call, warm:
+
+| | LDA (PZ) | TB09 |
+|---|---|---|
+| `sum_band` (the density) | 148 ms | 200 ms |
+| `tau` from the states | — | **1125 ms** |
+| `v_of_rho` | 9.3 ms | 86 ms |
+| SCF iterations to `conv_thr = 1e-9` | 6 | 10 |
+
+**`tau` is the cost, and it is 7.6x the density it sits beside.** It should be
+3x: it transforms `i(k+G) c_G` for three cartesian directions where the density
+transforms `c_G` once, and `sum_band.f90`'s meta branch has exactly that
+structure. The extra factor is that each direction is scattered into the FFT box
+separately, so the gather of `fft_index` and the zero-fill of the box are paid
+three times per band instead of once for a `(3, ...)` batch. **Backlog**: build
+the three components as one `(3, npwx)` array and transform them together, the
+way `basis/gradients.py:gradient` already does for a scalar field — the same
+change, one level up.
+
+`v_of_rho` going 9.3 -> 86 ms is the 80-step bisection of the Becke-Roussel
+inversion over every grid point, plus four transforms (a gradient and a
+Laplacian per channel). The bisection is 80 exponentials per point per channel
+and is the obvious thing to shorten: the bracket is wide only where `Q` is
+large, so a Newton polish after ~30 halvings would do, and libxc's Brent takes
+50-60 iterations for the same tolerance. Left at 80 because it is branch-free
+and fixed-length, which is what `lax.fori_loop` wants, and because it is a
+quarter of what `tau` costs.
+
+**Nothing else changes.** The Hamiltonian, the eigensolver and the mixer are
+untouched: mBJ is a multiplicative potential, so unlike an energy-carrying
+meta-GGA (TPSS, SCAN) it needs no `dE/dtau` term acting on the wavefunction and
+no `h_psi_meta` counterpart. What the functional costs is the two builds above
+and the 1.8x in iterations.
+
+## What spin-orbit and PAW add to the Tran-Blaha potential (P31-P33)
+
+Neither is a new cost model, which is the useful part:
+
+* **Spinors (P31).** `tau` becomes four components instead of one, but they come
+  from the *same* three transforms per band -- the spin algebra happens on
+  `grad psi` after it is on the grid, not before -- so a noncollinear `tau`
+  costs what a collinear one costs per band, and the band count doubles for the
+  usual reason rather than for a meta-GGA reason.
+* **PAW (P32).** `becsum -> tau_lm` is the same einsum as `becsum -> rho_lm`
+  against a tensor of the same shape, so the one-centre `tau` is free relative to
+  the one-centre density. What is not free is the extra `_meta_exchange_onecenter`
+  pass over the sphere: it evaluates the Becke-Roussel inversion at every
+  (direction, radius) of the quadrature, `nx * mesh` points against the grid's
+  `n1 n2 n3`, and on silicon that is 120 x 1200 = 1.4e5 against 32^3 = 3.3e4 --
+  **four times the grid's own bisection work, per atom**. It is the one place
+  where the 80-step fixed-length bisection is worth revisiting first (see the
+  backlog note under P30).
+* **The noncollinear PAW gradient correction (P33)** adds one multipole
+  round-trip per channel -- `PAW_rad2lm` on the rotated densities -- over what
+  the collinear branch does. Two einsums against the harmonic table; not
+  measurable beside the quadrature it feeds.
+
 ## History
 
 | Date | Change | Effect |
@@ -1886,3 +1946,5 @@ k-point set is unchanged. A bug that costs accuracy usually costs time as well.
 | 2026-08-22 | The third derivative on a slab (P27 x P26): bilayer graphene through `electrostriction`, and a guard on a diverged first-order solution | 645 s end to end, of which the strain response is 399 s and 68 iterations; QE's `alpha_mix = 0.7` diverges here at 1.34 per iteration, 0.3 converges at 0.5 |
 | 2026-08-23 | The dynamical matrix of a metal (P28): the `jvp` split so the electronic half takes `wk` where the frozen Hessian keeps `wg` | two-atom aluminium's six modes in **78 s**, 9 response iterations at `av.it. = 23.0` against `ph.x`'s 7 and 3.3-6.3; the extra `jvp` per mode is not measurable against the linear solves, and the iteration gap is P25's two backlog items unchanged |
 | 2026-08-22 | A mixer in the three response loops (`response/mixing.py`), Anderson over the packed state | silicon 19 -> 9 and 18 -> 11 iterations with identical answers; **bilayer graphene and rhombohedral BN converge where linear mixing diverged** -- a correctness fix filed as a speed one |
+| 2026-08-24 | The Tran-Blaha potential (P30): `tau` from the states, the Laplacian as `-G^2 rho(G)`, the Becke-Roussel inversion as a fixed-length bisection with an implicit `custom_jvp` | silicon's gap 0.49 -> 1.13 eV for **1.8x the SCF iterations**; `tau` costs 1125 ms an iteration against the density's 200, which is 7.6x where the algorithm says 3x -- three separate box scatters, and the backlog item |
+| 2026-08-24 | Spin-orbit (P31) and PAW (P32, P33) for the Tran-Blaha potential | `tau` as a 2x2 spin matrix costs the same three transforms per band; PAW's one-centre `tau` is free (same einsum as the density) but its Becke-Roussel inversion runs on `nx * mesh` = 1.4e5 points per atom against the grid's 3.3e4 |

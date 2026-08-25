@@ -41,15 +41,15 @@ import jax.numpy as jnp
 import numpy as np
 
 from pypresso.basis.fft import g_to_r, r_to_g
-from pypresso.basis.gradients import divergence, gradient
+from pypresso.basis.gradients import divergence, gradient, laplacian
 from pypresso.basis.gvectors import GVectors
 from pypresso.system.cell import Cell
 from pypresso.units import E2, FPI
 from pypresso.xc.functional import Functional, get_functional, local_spin_frame
 
 __all__ = ["Potential", "v_of_rho", "hartree", "exchange_correlation",
-           "gradient_correction", "scf_accuracy", "total_charge", "with_core",
-           "as_potential_components",
+           "gradient_correction", "meta_exchange", "scf_accuracy", "total_charge",
+           "with_core", "as_potential_components",
            "DEFAULT_FUNCTIONAL"]
 
 #: What a calculation uses when nothing names a functional. QE has no such
@@ -76,6 +76,12 @@ class Potential(eqx.Module):
     #: :mod:`pypresso.scf.fields`.
     e_field: jnp.ndarray = 0.0
     e_constraint: jnp.ndarray = 0.0
+    #: The Tran-Blaha coefficient this potential was built with, or ``0`` when
+    #: the functional is not a meta one. Carried on the potential rather than
+    #: recomputed by whoever wants to print it, because it is a *cell average*
+    #: of the density: two call sites recomputing it from two densities is how
+    #: a reported ``c`` stops describing the run it is reported for.
+    meta_c: jnp.ndarray = 0.0
 
     @property
     def nspin(self) -> int:
@@ -445,6 +451,159 @@ def gradient_correction(
     return v, energy
 
 
+def meta_exchange(
+    density_r: jnp.ndarray,
+    density_g: jnp.ndarray,
+    tau_r: jnp.ndarray,
+    gvectors: GVectors,
+    cell: Cell,
+    functional: Functional,
+):
+    """The Tran-Blaha exchange potential on the grid, and the ``c`` it used.
+
+    Args:
+        density_r: ``(nspin, ...)`` -- the total density when unpolarized, and
+            the ``(up, down)`` pair when not, which is this package's storage in
+            both regimes (:func:`with_core`, :func:`exchange_correlation`) -- with
+            the core charge already folded in, as :func:`exchange_correlation`
+            folds it.
+        density_g: the same density on the sphere.
+        tau_r: ``(nspin, ...)`` kinetic energy density in **Ry**, per spin
+            channel, in the same layout: the whole of ``tau`` when unpolarized
+            and ``(tau_up, tau_down)`` when not.
+
+    Returns ``(v, c)``: the potential per channel in Ry, and the coefficient.
+
+    **The unpolarized case still halves.** One stored channel is the *total*
+    density, and this functional -- like every exchange functional -- acts on
+    one spin channel at a time, so what it is handed is ``rho/2`` and
+    ``tau/2``, and the potential that comes back is already the one both
+    channels feel. It is the spin-scaling relation
+    ``E_x[n_up, n_dw] = (E_x[2 n_up] + E_x[2 n_dw])/2`` in its potential form,
+    and it is the same halving :meth:`Functional._spin_energy_density` does for
+    exchange.
+
+    **There is no energy to return**, which is the whole character of this
+    branch. :func:`gradient_correction` hands back a potential *and* the energy
+    it is the derivative of; here the second is absent, ``etxc`` keeps only the
+    correlation term, and the run's total energy is not the value of a
+    functional the SCF minimised. Everything downstream that differentiates the
+    total energy is refused rather than allowed to return a plausible number.
+
+    **The Laplacian is what QE does not have.** ``xc_wrapper_mgga.f90`` passes
+    zeros for it to every libxc call, and it enters Becke-Roussel's ``Q``
+    directly. Here it is ``-G^2 rho(G)``, one transform per channel.
+    """
+    nspin = density_r.shape[0]
+    tau_r = jnp.asarray(tau_r)
+    if nspin > 2:
+        raise ValueError(
+            "the noncollinear branch is _noncollinear_meta_exchange, which "
+            "rotates into the local spin frame before calling this"
+        )
+
+    # One channel means the total density, so the functional's argument is half
+    # of it; two channels are already the pair it wants.
+    scale = 0.5 if nspin == 1 else 1.0
+    channels_g = scale * density_g
+    channels_r = scale * jnp.real(density_r)
+    channels_tau = scale * tau_r
+    total_r = jnp.real(density_r[0]) if nspin == 1 else jnp.sum(jnp.real(density_r), axis=0)
+
+    grad = jax.vmap(gradient, in_axes=(0, None, None))(channels_g, gvectors, cell)
+    lap = jax.vmap(laplacian, in_axes=(0, None, None))(channels_g, gvectors, cell)
+    sigma = jnp.sum(grad * grad, axis=1)
+    # The total density's gradient without a fourth transform: the gradient is
+    # linear and the channels already carry it, so it is twice one channel's
+    # when unpolarized and their sum when not. Three FFTs per potential build.
+    total_grad = 2.0 * grad[0] if nspin == 1 else grad[0] + grad[1]
+
+    # ``c`` is an average over the cell of the **total** density's ratio, so it
+    # is one number for the whole calculation and not one per channel -- and it
+    # is the total, not the majority channel: Tran and Blaha's Eq. (3) has no
+    # spin index on it, and giving each channel its own ``c`` would make the two
+    # potentials belong to different functionals.
+    c = functional.meta_c(total_r, total_grad)
+
+    v = jax.vmap(functional.meta_exchange_potential, in_axes=(0, 0, 0, 0, None))(
+        channels_r, sigma, lap, channels_tau / E2, c
+    )
+    return v, c
+
+
+def _noncollinear_meta_exchange(
+    rho_r, gvectors, cell, functional, rho_core, tau_r, axis,
+):
+    """``meta_exchange`` for ``nspin_mag = 4``: the local spin frame again.
+
+    The same three steps as :func:`_noncollinear_gradient_correction`, and
+    deliberately the same three: rotate onto the local axis, run the *collinear*
+    functional there, rotate the answer back. What is new is only that a second
+    field rotates with the density.
+
+    1. **Rotate.** The density gives the axis -- ``m-hat`` and the sign against a
+       fixed quantization axis, if there is one -- and both fields are resolved
+       on it:
+
+           rho_up/dw = (n +- s|m|) / 2,
+           tau_up/dw = (tau_0 +- s (tau_vec . m-hat)) / 2.
+
+       **The axis is the density's, not ``tau``'s.** They are not parallel in
+       general -- ``tau_vec`` is the Pauli expectation of a *gradient*, and
+       nothing makes it collinear with the magnetization -- so the projection
+       ``tau_vec . m-hat`` is a genuine projection and its transverse part is
+       discarded. That is not an approximation this code invents: it is what
+       "evaluate the collinear functional in the local frame" means, and the
+       LSDA and GGA branches discard the same transverse information (a
+       functional of ``|m|`` alone cannot produce a torque). It is stated here
+       because for ``tau`` it is easier to miss.
+
+    2. **Evaluate**, with ``nspin = 2``. The rotated channel densities are
+       transformed afresh -- the rotation involves ``|m|`` and is not linear in
+       the components, so the gradient *and the Laplacian* have to be taken from
+       the rotated field's own transform rather than assembled from ``rho(G)``.
+       That trap is ``gradcorr``'s, and the Laplacian inherits it unchanged.
+
+    3. **Rotate back**, attaching the splitting to ``m-hat``:
+       ``v = v_0 I + s (v_up - v_dw)/2 m-hat . sigma``.
+
+    Returns ``(v, c)`` with ``v`` of shape ``(4, ...)``.
+    """
+    charge = rho_r[0]
+    magnetization = rho_r[1:]
+    modulus = jnp.sqrt(jnp.sum(magnetization**2, axis=0))
+    if axis is None:
+        sign = jnp.ones_like(modulus)
+    else:
+        projection = jnp.tensordot(jnp.asarray(axis), magnetization, axes=(0, 0))
+        sign = jnp.where(projection >= 0.0, 1.0, -1.0)
+    safe = jnp.where(modulus > 0.0, modulus, 1.0)
+    direction = jnp.where(
+        modulus > VANISHING_GRADIENT_MAGNETIZATION, magnetization / safe, 0.0
+    )
+
+    signed = sign * modulus
+    rotated = 0.5 * jnp.stack([charge + signed, charge - signed])
+    if rho_core is not None:
+        rotated = rotated + with_core(jnp.real(rho_core), 2)
+    rotated_g = jax.vmap(r_to_g, in_axes=(0, None))(rotated, gvectors.fft_index)
+
+    tau_r = jnp.asarray(tau_r)
+    if tau_r.shape[0] == 1:
+        # A nonmagnetic spin-orbit run: the density has one component and so
+        # does tau, and the "rotation" is the unpolarized halving.
+        rotated_tau = 0.5 * jnp.stack([tau_r[0], tau_r[0]])
+    else:
+        projected = sign * jnp.sum(tau_r[1:] * direction, axis=0)
+        rotated_tau = 0.5 * jnp.stack([tau_r[0] + projected, tau_r[0] - projected])
+
+    v, c = meta_exchange(rotated, rotated_g, rotated_tau, gvectors, cell, functional)
+
+    v0 = 0.5 * (v[0] + v[1])
+    vs = 0.5 * (v[0] - v[1])
+    return jnp.concatenate([v0[None], (sign * vs)[None] * direction]), c
+
+
 def v_of_rho(
     rho_r: jnp.ndarray,
     gvectors: GVectors,
@@ -453,6 +612,7 @@ def v_of_rho(
     functional: Functional | None = None,
     rho_core_g: jnp.ndarray | None = None,
     quantization_axis: jnp.ndarray | None = None,
+    tau: jnp.ndarray | None = None,
 ) -> Potential:
     """The full self-consistent potential from a real-space density.
 
@@ -464,6 +624,12 @@ def v_of_rho(
     gradient-corrected functional: its gradient is taken in G space along with
     the valence density's, which is why ``set_rhoc`` keeps ``rhog_core`` around
     rather than only its transform.
+
+    ``tau`` is the kinetic energy density in Ry, per spin channel, and is
+    required by -- and only by -- a meta-GGA functional. It is the one
+    ingredient of the potential that is not a function of the density: it comes
+    from the *states*, so a run under such a functional carries it beside the
+    density all the way through the SCF.
     """
     functional = functional or get_functional(DEFAULT_FUNCTIONAL)
     rho_r = jnp.asarray(rho_r)
@@ -482,6 +648,46 @@ def v_of_rho(
     v_hartree_r = jnp.real(g_to_r(v_hartree_g, gvectors.fft_index, gvectors.grid))
 
     v_xc, etxc = exchange_correlation(rho_r, cell, rho_core, functional)
+    meta_c = jnp.asarray(0.0)
+
+    if functional.is_meta:
+        if tau is None:
+            raise ValueError(
+                f"the {functional.name} functional is a meta-GGA: its potential "
+                "depends on the kinetic energy density, which has to be passed "
+                "as tau (Ry, per spin channel). Calculation.potential supplies "
+                "it from the states; a bare v_of_rho call has to as well"
+            )
+        # The same density the local part saw -- core charge folded in, because
+        # the functional is as nonlinear in it here as it is there. QE's meta
+        # branch is *not* consistent about this: ``v_xc_meta`` adds the core to
+        # the gradient it builds and passes ``rho%of_r`` -- valence only -- as
+        # the density. That asymmetry is visible only with a nonlinear core
+        # correction and is not reproduced.
+        density_r = jnp.real(rho_r)
+        density_g = rho_g
+        if rho_core is not None and nspin != 4:
+            density_r = density_r + with_core(jnp.real(rho_core), nspin)
+            core_g = (
+                r_to_g(jnp.real(rho_core), gvectors.fft_index)
+                if rho_core_g is None
+                else rho_core_g
+            )
+            density_g = density_g + with_core(core_g, nspin)
+        if nspin == 4:
+            # The local spin frame, exactly as the gradient correction does it.
+            # The core charge is added *inside*, after the rotation, so it is
+            # passed rather than folded in above.
+            v_meta, meta_c = _noncollinear_meta_exchange(
+                jnp.real(rho_r), gvectors, cell, functional, rho_core, tau,
+                quantization_axis,
+            )
+        else:
+            v_meta, meta_c = meta_exchange(
+                density_r, density_g, tau, gvectors, cell, functional
+            )
+        # No ``etxc`` term: there is no exchange *energy* to add.
+        v_xc = v_xc + v_meta
 
     if functional.is_gradient:
         if nspin == 4:
@@ -498,6 +704,7 @@ def v_of_rho(
                 v_scf=as_potential_components(v_hartree_r, nspin) + v_xc + v_gradient,
                 ehart=ehart,
                 etxc=etxc + e_gradient,
+                meta_c=meta_c,
             )
         density_r = jnp.real(rho_r)
         density_g = rho_g
@@ -526,4 +733,5 @@ def v_of_rho(
         v_scf=as_potential_components(v_hartree_r, nspin) + v_xc,
         ehart=ehart,
         etxc=etxc,
+        meta_c=meta_c,
     )

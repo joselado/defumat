@@ -85,6 +85,8 @@ def fixed_density_states(
     conv_thr: float = 1.0e-6,
     k_batch: int | None | str = "default",
     ns: jnp.ndarray | None = None,
+    tau: jnp.ndarray | None = None,
+    becsum: tuple = (),
 ):
     """Diagonalise once at every k-point of ``system`` with ``density`` fixed.
 
@@ -114,19 +116,20 @@ def fixed_density_states(
         noncolin=system.noncolin,
     )
 
-    if calculation.is_paw:
+    if calculation.is_paw and not becsum:
         # A PAW Hamiltonian's nonlocal coefficients are D^(0) + int V Q + ddd_paw,
         # and only the first two can be rebuilt from the density: ddd_paw comes
         # from ``becsum``, which is a property of the *wavefunctions* and is not
         # recoverable from the density this function is handed. Building the
         # Hamiltonian without it converges perfectly well and gives eigenvalues
         # that are wrong by tenths of an eV -- the failure mode this codebase
-        # refuses rather than risks. Threading becsum through ``SCFResult`` is
-        # the fix; it is not written yet.
+        # refuses rather than risks. ``SCFResult.becsum`` carries it, so passing
+        # it is the fix, and the refusal now only catches *not* passing it.
         raise NotImplementedError(
             "a fixed-density run with a PAW pseudopotential needs the converged "
-            "becsum as well as the density, which is not yet carried across; "
-            "ultrasoft and norm-conserving pseudopotentials work"
+            "becsum as well as the density: pass becsum = scf_result.becsum. It "
+            "cannot be rebuilt from the density, and leaving it out is wrong by "
+            "tenths of an eV"
         )
 
     hubbard_terms = None
@@ -141,8 +144,25 @@ def fixed_density_states(
             )
         _, _, hubbard_terms = calculation.hubbard_terms(jnp.asarray(ns))
 
-    potential = calculation.potential(density)
-    hamiltonians = calculation.hamiltonian(potential.v_scf, None, hubbard_terms)
+    if calculation.functional.is_meta and tau is None:
+        # The same argument the PAW branch above makes, for the same kind of
+        # quantity. ``tau`` is a property of the *occupied states over the whole
+        # Brillouin zone* and this function is handed a k-set that is usually a
+        # different one -- a band path has no occupations at all. It cannot be
+        # rebuilt here and leaving it out is not an approximation but a
+        # different functional.
+        raise NotImplementedError(
+            f"a fixed-density run under {calculation.functional.name} needs the "
+            "converged kinetic energy density as well as the density: pass "
+            "tau = scf_result.tau. It is a property of the occupied states over "
+            "the whole zone and cannot be rebuilt from a band path"
+        )
+    potential = calculation.potential(density, tau=tau)
+    _, ddd_paw = (
+        calculation.onecenter(becsum, None if tau is None else potential.meta_c)
+        if becsum else (None, None)
+    )
+    hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw, hubbard_terms)
 
     # There is no SCF here to tighten the threshold over, so ``setup.f90`` picks
     # one up front from the accuracy of the density the bands are computed in.
@@ -171,6 +191,8 @@ def run_nscf(
     conv_thr: float = 1.0e-6,
     k_batch: int | None | str = "default",
     ns: jnp.ndarray | None = None,
+    tau: jnp.ndarray | None = None,
+    becsum: tuple = (),
 ) -> NSCFResult:
     """A full NSCF run: diagonalise, then occupy by the system's own scheme.
 
@@ -180,7 +202,7 @@ def run_nscf(
     metal consistent with the calculation that produced its density.
     """
     calculation, system, eigenvalues = fixed_density_bands(
-        system, pseudos, density, kpoints, nbnd, conv_thr, k_batch, ns
+        system, pseudos, density, kpoints, nbnd, conv_thr, k_batch, ns, tau, becsum
     )
     wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
     nspin = calculation.nspin

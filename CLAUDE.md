@@ -192,6 +192,32 @@ bohr² where `symm_base.f90`'s `eps1` applies to `at` in units of `alat`, so the
 loses operations as its lattice constant grows — eight of twelve dropped on QE's own
 `vc-relax4.in`.
 
+**The Tran-Blaha potential is in** (P30), and it is the one functional here whose
+*potential* is written down and whose energy does not exist: `input_dft = 'tb09'` gives the
+modified Becke-Johnson meta-GGA, so silicon's gap goes from LDA's **0.49 eV to 1.13 eV**
+against an experimental 1.17 and the published all-electron mBJ's 1.17, and diamond's from
+3.89 to 4.43. There is nothing to transcribe — `pw.x` reaches TB09 only through libxc, and
+then **passes a zero Laplacian** (`xc_wrapper_mgga.f90` calls the argument "not used in QE")
+and **never sets `c`**, so what it runs under that name is Becke-Johnson without a Laplacian.
+Both ingredients are here: the Laplacian is `-G^2 rho(G)`, one transform, and `c` is Tran and
+Blaha's cell average, with `mbj_c` to impose it instead. Validated against two *analytic*
+limits rather than another code's floating point — the hydrogen atom, where Becke-Roussel is
+the exact Slater potential of the 1s orbital to 1e-6 and `E_x` is exactly -5/16 Ha, and the
+uniform gas, where Becke-Johnson reproduces `v_x^LDA` to 6e-4 (which is the model's own error
+at `gamma = 0.8`, and measuring it showed that 0.8 *is* the uniform-gas fit, to four digits).
+The **total energy is not variational**, so forces, stress, phonons and response are refused
+by name. **PAW works** (P32) and is what makes the difference: its one-centre `tau` comes from
+the partial waves, and it recovers `c = 1.107` against the all-electron 1.12 where a
+norm-conserving silicon measures 1.000 — the pseudised core is exactly what the average of
+`|grad rho|/rho` misses. **Noncollinear magnetism and spin-orbit coupling work too** (P31),
+with `tau` carried as the 2x2 matrix in spin space it is and resolved onto the density's local
+axis. `pw.x` refuses both combinations outright (`setup.f90`: 'Meta-GGA not implemented with
+USPP/PAW', 'Non-collinear Meta-GGA not implemented'). Plain **ultrasoft** stays refused: it
+has no partial waves to reconstruct `tau` from inside the sphere, where PAW does. One thing a
+UPF cannot supply is a **core kinetic energy density**, so the one-centre term sees the
+valence density alone on both sides — including the all-electron core in `rho` with no `tau`
+to match it inverts the functional's `c` dependence, measurably (`PLAN.md` P32).
+
 **Outstanding:** Wyckoff input, the dynamical matrix of an
 ultrasoft dataset, PAW Born charges, phonons at `q != 0` (the perturbed states live
 at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals, plus
@@ -422,6 +448,19 @@ unshifted grid is closed exactly and is the independent check on the symmetrisat
 own response, `int3`), metals (`orthogonalize`'s smearing branch and `ef_shift`),
 noncollinear magnetism, DFT+U (`adddvhubscf`) and spin spirals.
 
+**Meta-GGA is in scope for the potential-only branch of it** (P30, P31, P32):
+`pypresso/xc/mgga.py`. Tran-Blaha (`tb09`) and Becke-Johnson (`bj06`) are potentials, not
+energy functionals, so they invert the rule above — nothing is differentiated, the expression
+*is* `v_x`, and there is no `E_x` for the total energy to contain. The consequences are
+enforced rather than documented: `run_scf` warns that its total is not the value of any
+functional it minimised, and every consumer of `forces/energy.py:energy_at` refuses. The SCF
+carries a second field, `tau`, which comes from the states rather than the density (three
+extra transforms per band, `sum_band.f90`'s meta branch) and is **not mixed**, exactly as
+`mix_rho.f90` leaves `kin_r` alone. **Energy-carrying meta-GGAs — TPSS, SCAN, M06L — are not
+in**: their potential has a `dE/dtau` piece that acts on the wavefunction through
+`h_psi_meta.f90`, and none of that is written; a potential-only functional needs no such term,
+which is why this branch and not that one.
+
 **Van der Waals corrections are in scope, and one of the five is implemented** (P27):
 `pypresso/vdw/`, behind a name registry that `vdw_corr` selects from. Grimme's **D2** is a
 pair potential over the nuclei and nothing else, so it is `pypresso/scf/ewald.py` again with
@@ -589,6 +628,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Spin-orbit coupling | `upflib/init_us_1.f90` (`fcoef`, `dvan_so`), `upflib/spinor.f90`, `upflib/sph_ind.f90`, `upflib/upf_spinorb.f90` (`transform_qq_so`), `PW/src/newd_acc.f90` (`newd_so`), `PW/src/compute_becsum.f90` (`add_becsum_so`), `PW/src/vloc_psi_acc.f90` (`vloc_psi_nc`), `PW/src/add_vuspsi_acc.f90`, `PW/src/usnldiag.f90` | `init_us_1` builds `fcoef` for every matching `(l, j)` pair, uses it for `dvan_so`, and **then** zeroes the cross-radial entries — everything downstream consumes the *zeroed* array and has no check of its own, so one array used for both is a correct `dvan_so` and a silently wrong `qq_so`/`deeq_nc`/`becsum` |
 | Structure / symmetry / k-points | `PW/src/symm_base.f90`, `symme.f90`, `kpoint_grid.f90`, `setup.f90`, `Modules/cell_base.f90` | `ibrav` lattice conventions live in `Modules/latgen.f90`. `kpoint_grid` is called with the *lattice* point group and fixed up afterwards; reducing directly with the crystal's symmetries reaches the same orbits. Two rules in `symm_base.f90` change the **FFT grid**: dimensions must be a multiple of the fractional translations' denominators (`fft_fact`), and a cell that is a supercell has fractional translations disabled altogether |
 | Starting wavefunctions | `PW/src/wfcinit.f90`, `Modules/atomic_wfc_mod.f90`, `upflib/atwfc_mod.f90` | the projectors' expression with `chi` for `beta` — but the phase is `i^l`, not `(-i)^l` |
+| Meta-GGA (potential-only) | no QE counterpart to transcribe — `XClib/dft_setting_routines.f90` maps `tb09` to libxc 208; `PW/src/sum_band.f90` (the `kin_r` branch and its `sym_rho`), `PW/src/v_of_rho.f90` (`v_xc_meta`), `PW/src/potinit.f90` (the Thomas-Fermi `tau` guess), `PW/src/setup.f90` (what it refuses) | the functional itself follows libxc's own definition (`maple/mgga_vxc/mgga_x_tb09.mpl`, `maple/mgga_exc/mgga_x_br89.mpl`, `src/mgga_x_br89.c`), because QE has no native implementation. **QE passes a zero Laplacian and never sets `c`**, so its `tb09` is BJ06; both are here separately. `tau` is symmetrised — `sum_band` does it too, and skipping it is worth 0.47 eV in the eigenvalues |
 | Van der Waals dispersion | `Modules/mm_dispersion.f90` (`energy_london`, `force_london`, `stres_london`), `Modules/set_vdw_corr.f90`, `Modules/rgen.f90`, `upflib/atomic_number.f90` | the energy is written down (`pypresso/vdw/grimme.py`) and the force and stress are `jax.grad` of it; QE's two expressions are transcribed as the cross-check. `rgen`'s **fold** of the pair separation into the cell is kept, and it is what lets one neighbour list serve every geometry |
 | Ewald / local potential | `PW/src/ewald.f90`, `setlocal.f90` | the ion-ion sum and `V_loc(G)`; the Ewald neighbour list is fixed for the *cell*, not the geometry, so it survives a relaxation |
 | Forces | `PW/src/forces.f90`, `force_lc.f90`, `force_cc.f90`, `force_ew.f90`, `force_us.f90`, `addusforce.f90`, `force_corr.f90`, `symme.f90` (`symvector`) | the default is `jax.grad` of the energy at frozen wavefunctions (`forces/energy.py`); the Fortran expressions are transcribed as a cross-check. `gradcorr` is called from **inside** `v_xc`, so `force_cc` needs it |

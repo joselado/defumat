@@ -187,11 +187,15 @@ def kerker_preconditioner(gvectors, cell, shape, beta=0.7, screening=None, nelec
     :func:`thomas_fermi_screening` of the cell, which is QE's choice.
 
     ``shape`` is the density's own shape; anything past it in the flat vector is
-    ``becsum`` (and, for DFT+U, ``ns``), which lives on the atoms rather than on
-    the grid and gets the plain scalar ``beta``. Mixing them with two different
-    factors is consistent because the preconditioner is an approximate inverse
-    Jacobian, not a step length -- the parts of the state whose Jacobian block is
-    already well conditioned want no preconditioning.
+    ``becsum`` (for DFT+U, ``ns``; for a meta-GGA, ``tau``) and gets the plain
+    scalar ``beta``. Mixing them with two different factors is consistent
+    because the preconditioner is an approximate inverse Jacobian, not a step
+    length -- the parts of the state whose Jacobian block is already well
+    conditioned want no preconditioning. ``becsum`` and ``ns`` live on the atoms
+    rather than on the grid, so Kerker has nothing to say about them; ``tau``
+    does live on the grid, but the ``q^-2`` divergence Kerker cancels is a
+    property of the *charge* response and ``tau`` has no such divergence, so it
+    is treated as the magnetization is.
 
     **The G = 0 component is annihilated**, which is what preserves the electron
     count: ``|G|^2/(|G|^2 + q_TF^2)`` is zero there, so a preconditioned step can

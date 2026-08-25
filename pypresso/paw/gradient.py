@@ -72,7 +72,7 @@ def radial_derivative(f: jnp.ndarray, r: jnp.ndarray) -> jnp.ndarray:
     return jnp.concatenate([first, interior, outer], axis=-1)
 
 
-def onecenter_gradient_correction(rho_lm, rho_rad, core, paw):
+def onecenter_gradient_correction(rho_lm, rho_rad, core, paw, axis=None):
     """``(v_lm, energy)``: what a GGA adds to one on-site potential and energy.
 
     Args:
@@ -84,11 +84,19 @@ def onecenter_gradient_correction(rho_lm, rho_rad, core, paw):
         core: ``(mesh,)`` core charge, spherical, shared equally between the
             channels (``co2 = rho_core / nspin_gga`` in ``PAW_gcxc_potential``).
         paw: the species' precomputed tables.
+        axis: the fixed quantization axis (``compute_ux``), or ``None``. Read
+            only by the ``nspin = 4`` branch, and there for the reason
+            :func:`pypresso.scf.potential.fixed_quantization_axis` gives: the
+            naive ``(n +- |m|)/2`` has a kink wherever ``m`` passes through
+            zero, and a kink in the density is a divergence in its gradient.
     """
     nlm = paw.nlm
     r2 = paw.r2
     nspin = rho_lm.shape[0]
     weighted = paw.angular.weighted_ylm
+
+    if nspin == 4:
+        return _noncollinear_gradient(rho_lm, rho_rad, core, paw, axis)
 
     if nspin == 1:
         # ``rho_full(ixk,1) = ABS(...)``: QE takes the absolute value in the
@@ -137,6 +145,91 @@ def onecenter_gradient_correction(rho_lm, rho_rad, core, paw):
         paw.angular.weights[:, None] * energy_density * (r2 * paw.weights_full)[None, :]
     )
     return potential, energy
+
+
+def _noncollinear_gradient(rho_lm, rho_rad, core, paw, axis):
+    """``PAW_gcxc_potential``'s ``nspin = 4`` branch, on the radial sphere.
+
+    ``compute_rho_spin_lm`` in, ``compute_pot_nonc`` out, and between them the
+    ordinary two-channel code -- the same three steps
+    :func:`pypresso.scf.potential._noncollinear_gradient_correction` takes on
+    the plane-wave grid, which is the point: there is one local-spin-frame
+    construction and the sphere calls into it rather than restating it.
+
+    1. **Rotate.** ``rho_up/dw = (n +- s|m|)/2`` at every (direction, radius) of
+       the quadrature, with ``s = sign(m . ux)`` where there is a fixed axis and
+       ``+1`` where ``|m|`` vanishes. The frozen core is unpolarized, so it goes
+       wholly into the charge before the split and half lands in each channel --
+       QE's ``co2 = rho_core / nspin_gga``.
+
+    2. **Project back afresh, and this is what the refusal that stood here was
+       about.** The rotated channels' *multipoles* are recomputed by quadrature
+       from their grid values (``PAW_rad2lm``) rather than assembled from
+       ``rho_lm``: the rotation runs through ``|m|`` and is not linear in the
+       components, so no combination of the stored multipoles is the expansion
+       of the result. The angular part of the gradient and the divergence both
+       read those.
+
+    3. **Rotate back** on the radial grid, where the direction lives:
+       ``v_0 = (v_up + v_dw)/2`` in the charge component and
+       ``s (v_up - v_dw)/2 m-hat`` in the other three, then one last projection
+       onto the multipoles the caller wants.
+
+    **Not reproduced: ``add_small_mag``.** A fully-relativistic dataset's small
+    component carries magnetization of its own, and QE folds it in here and in
+    ``compute_pot_nonc``. The *local* part of this package's one-centre XC does
+    not fold it in either, so leaving it out keeps the two halves consistent;
+    putting it in one and not the other would be worse than in neither.
+    """
+    nlm = paw.nlm
+    r2 = paw.r2
+    weighted = paw.angular.weighted_ylm
+    eps = VANISHING_RADIAL_MAGNETIZATION
+
+    charge = rho_rad[0] / r2 + core
+    magnetization = rho_rad[1:] / r2
+    modulus = jnp.sqrt(jnp.sum(magnetization**2, axis=0))
+    if axis is None:
+        sign = jnp.ones_like(modulus)
+    else:
+        projection = jnp.tensordot(jnp.asarray(axis), magnetization, axes=(0, 0))
+        sign = jnp.where(projection >= 0.0, 1.0, -1.0)
+    sign = jnp.where(modulus < eps, 1.0, sign)
+
+    signed = sign * modulus
+    channels = 0.5 * jnp.stack([charge + signed, charge - signed])  # (2, nx, mesh)
+    channel_lm = jnp.einsum("xl,sxr->slr", weighted[:, :nlm], channels * r2)
+
+    grad = jnp.stack([
+        _gradient(channel_lm[s], channels[s], paw) for s in range(2)
+    ])  # (2, 3, nx, mesh)
+    v1, h = paw.functional.spin_gradient_terms(channels, grad)
+    energy_density = paw.functional.spin_gradient_energy(channels, grad)
+
+    h = h * r2
+    h = h.at[:, 2].divide(paw.angular.sin_theta[:, None])
+    v_lm = jnp.einsum("xl,sxr->slr", weighted[:, :nlm], v1)
+    h_lm = jnp.einsum("xl,scxr->sclr", weighted, h)
+    out_lm = v_lm - jax.vmap(_divergence, in_axes=(0, None))(h_lm, paw)
+
+    out_rad = jnp.einsum("xl,slr->sxr", paw.angular.ylm[:, :nlm], out_lm)
+    v0 = 0.5 * (out_rad[0] + out_rad[1])
+    vs = 0.5 * (out_rad[0] - out_rad[1])
+    safe = jnp.where(modulus > 0.0, modulus, 1.0)
+    direction = jnp.where(modulus > eps, magnetization / safe, 0.0)
+    potential_rad = jnp.concatenate([v0[None], (sign * vs)[None] * direction])
+    potential = jnp.einsum("xl,sxr->slr", weighted[:, :nlm], potential_rad)
+
+    energy = jnp.sum(
+        paw.angular.weights[:, None] * energy_density * (r2 * paw.weights_full)[None, :]
+    )
+    return potential, energy
+
+
+#: ``eps12`` in ``compute_rho_spin_lm``: below this magnetization the local axis
+#: is undefined, the sign is taken as ``+1`` and the vector part of the
+#: potential is left at zero.
+VANISHING_RADIAL_MAGNETIZATION = 1.0e-12
 
 
 def _gradient(rho_lm, density, paw):

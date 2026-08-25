@@ -80,6 +80,30 @@ class PlaneWaveBasis(eqx.Module):
             kcart = kpoints.cartesian(cell)
         return _kinetic(gvectors.cartesian(cell), kcart, self.indices, self.mask)
 
+    def kplusg(
+        self,
+        gvectors: GVectors,
+        kpoints: KPoints,
+        cell: Cell,
+        kcart: jnp.ndarray | None = None,
+    ) -> jnp.ndarray:
+        """``k + G`` in 1/bohr for every (k, plane wave), zero on padding.
+
+        ``(nk, npwx, 3)``. The vector whose square :meth:`kinetic` returns, kept
+        separately because a *gradient* of a state needs the vector and not its
+        modulus: ``grad psi = sum_G i(k+G) c_G e^{i(k+G)r}``, which is how the
+        kinetic energy density is built
+        (:func:`pypresso.scf.density.kinetic_energy_density`) and how
+        ``sum_band.f90`` builds it (``kplusgi``, three times per band).
+
+        Zeroed on padding for the same reason ``kinetic`` is: a padded entry
+        points at ``G = 0`` and would otherwise contribute ``k`` itself to every
+        band's gradient.
+        """
+        if kcart is None:
+            kcart = kpoints.cartesian(cell)
+        return _kplusg(gvectors.cartesian(cell), kcart, self.indices, self.mask)
+
     def fft_index(self, gvectors: GVectors) -> jnp.ndarray:
         """(nk, npwx) flat FFT-box index for each retained plane wave."""
         return gvectors.fft_index[self.indices]
@@ -92,6 +116,12 @@ class PlaneWaveBasis(eqx.Module):
 def _kinetic(gcart, kcart, indices, mask):
     kinetic = jnp.sum((kcart[:, None, :] + gcart[indices]) ** 2, axis=-1)
     return jnp.where(mask, kinetic, 0.0)
+
+
+@jax.jit
+def _kplusg(gcart, kcart, indices, mask):
+    vectors = kcart[:, None, :] + gcart[indices]
+    return jnp.where(mask[..., None], vectors, 0.0)
 
 
 def build_plane_wave_basis(

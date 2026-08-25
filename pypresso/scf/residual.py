@@ -95,9 +95,20 @@ class ScfResidual:
     #: it is part of the state a root-finder solves for on exactly the same
     #: footing.
     ns_shape: tuple | None = None
+    #: Shape of the kinetic energy density, or ``None`` when the functional is
+    #: not a meta-GGA. ``tau`` joins the state for a reason the mixing loop does
+    #: not have to face: the loop *lags* it (QE recomputes ``kin_r`` from the
+    #: output states and never mixes it), which is a perfectly good iteration
+    #: but makes ``F`` depend on something outside its argument. A root-finder
+    #: needs ``F`` to be a function, so ``tau`` is packed with the density and
+    #: the fixed point is sought in ``(rho, tau)`` jointly. **This is a
+    #: deviation from QE and it is the point**: the Jacobian then contains the
+    #: ``d v / d tau`` block, which is where a meta-GGA's convergence trouble
+    #: lives and which no density mixer can model.
+    tau_shape: tuple | None = None
 
     # ---- packing -------------------------------------------------------
-    def pack(self, rho, becsum_, ns=None) -> np.ndarray:
+    def pack(self, rho, becsum_, ns=None, tau=None) -> np.ndarray:
         """The mixed state as one flat real vector, exactly ``_mix``'s packing."""
         flat = [np.asarray(rho, dtype=float).ravel()]
         for part in becsum_:
@@ -107,10 +118,16 @@ class ScfResidual:
             if ns is None:
                 raise ValueError("this calculation has a Hubbard U; ns is part of the state")
             flat.append(np.asarray(ns, dtype=float).ravel())
+        if self.tau_shape is not None:
+            if tau is None:
+                raise ValueError(
+                    "this calculation runs a meta-GGA; tau is part of the state"
+                )
+            flat.append(np.asarray(tau, dtype=float).ravel())
         return np.concatenate(flat)
 
     def unpack(self, x):
-        """The inverse of :meth:`pack`. Returns ``(rho, becsum, ns)``."""
+        """The inverse of :meth:`pack`. Returns ``(rho, becsum, ns, tau)``."""
         x = jnp.asarray(x)
         rho_shape = self.shapes[0]
         n = int(np.prod(rho_shape))
@@ -126,16 +143,26 @@ class ScfResidual:
             offset += n
         ns = None
         if self.ns_shape is not None:
-            ns = x[offset : offset + int(np.prod(self.ns_shape))].reshape(self.ns_shape)
-        return rho, tuple(becsum_), ns
+            n = int(np.prod(self.ns_shape))
+            ns = x[offset : offset + n].reshape(self.ns_shape)
+            offset += n
+        tau = None
+        if self.tau_shape is not None:
+            n = int(np.prod(self.tau_shape))
+            tau = x[offset : offset + n].reshape(self.tau_shape)
+        return rho, tuple(becsum_), ns, tau
 
     # ---- the map -------------------------------------------------------
     def step(self, x, psi0):
         """One SCF iteration as a pure function: ``x -> F(x)``, and the ``psi``."""
         calculation = self.calculation
-        rho, becsum_, ns = self.unpack(x)
-        potential = calculation.potential(rho)
-        _, ddd_paw = calculation.onecenter(becsum_)
+        rho, becsum_, ns, tau = self.unpack(x)
+        potential = calculation.potential(rho, tau=tau)
+        # The spheres must use the *same* Tran-Blaha ``c`` the grid used, and
+        # only the grid can compute it.
+        _, ddd_paw = calculation.onecenter(
+            becsum_, None if tau is None else potential.meta_c
+        )
         hubbard_terms = None
         if ns is not None:
             # ``v_hubbard`` is ``jax.grad`` of the Hubbard energy (P20), so this
@@ -149,9 +176,10 @@ class ScfResidual:
         becsum_out = calculation.becsum(psi, wg)
         rho_out = calculation.density(psi, wg, becsum_out)
         ns_out = None if ns is None else calculation.occupation_matrix(psi, wg)
-        return self.flatten(rho_out, becsum_out, ns_out), psi
+        tau_out = None if tau is None else calculation.kinetic_energy_density(psi, wg)
+        return self.flatten(rho_out, becsum_out, ns_out, tau_out), psi
 
-    def flatten(self, rho, becsum_, ns=None):
+    def flatten(self, rho, becsum_, ns=None, tau=None):
         """:meth:`pack`, inside a trace -- ``jnp`` rather than ``np``."""
         flat = [jnp.reshape(jnp.real(rho), (-1,))]
         for part in becsum_:
@@ -159,6 +187,8 @@ class ScfResidual:
                 flat.append(jnp.reshape(jnp.real(part), (-1,)))
         if ns is not None:
             flat.append(jnp.reshape(jnp.real(ns), (-1,)))
+        if tau is not None:
+            flat.append(jnp.reshape(jnp.real(tau), (-1,)))
         return jnp.concatenate(flat)
 
     def residual(self, x, psi0):
@@ -255,9 +285,16 @@ def make_residual(calculation, nbnd: int, ethr: float) -> ScfResidual:
     ns_shape = (
         tuple(np.shape(calculation.starting_ns())) if calculation.is_hubbard else None
     )
+    tau_shape = None
+    if calculation.functional.is_meta:
+        # Same shape as the density's, and the same storage convention: one
+        # channel unpolarized, ``(up, down)`` when not.
+        tau_shape = (calculation.nspin,) + tuple(np.shape(rho))[1:]
     size = int(np.prod(shapes[0])) + sum(
         int(np.prod(s)) for s in shapes[1:] if s is not None
     )
     if ns_shape is not None:
         size += int(np.prod(ns_shape))
-    return ScfResidual(calculation, nbnd, ethr, shapes, size, ns_shape)
+    if tau_shape is not None:
+        size += int(np.prod(tau_shape))
+    return ScfResidual(calculation, nbnd, ethr, shapes, size, ns_shape, tau_shape)

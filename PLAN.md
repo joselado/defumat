@@ -3949,6 +3949,568 @@ doing something and doing it at once.
 *Notebook 23.*
 
 
+### P30 — The Tran-Blaha potential: a functional that is not a derivative. ✅ DONE.
+
+`pypresso/xc/mgga.py`, the meta slot of `pypresso/xc/functional.py`,
+`meta_exchange` in `pypresso/scf/potential.py`, `kinetic_energy_density` in
+`pypresso/scf/density.py`, `laplacian` in `pypresso/basis/gradients.py`,
+`PlaneWaveBasis.kplusg`, and `tau` threaded through `Calculation.potential`,
+`run_scf`, `run_bands`/`run_nscf` and `ScfResidual`. `input_dft = 'tb09'`,
+`'bj06'`, and `mbj_c`.
+
+**This phase runs the project's own rule backwards, and that is the whole of
+what makes it different.** Every functional before it is written as an *energy*
+and its potential comes from `jax.grad` (rule D1). Tran and Blaha's modified
+Becke-Johnson potential is a **potential**: there is no `E_x[rho]` whose
+functional derivative it is, and the 2009 Letter says so. What that costs is
+that the SCF has no variational total energy — the number `run_scf` reports is
+the band term plus the electrostatics plus *correlation only* — and therefore
+forces, the stress, the dynamical matrix and the whole of linear response are
+refused by name (`forces/energy.py:reject_potential_only`, reached by all of
+them through `energy_at`). What it buys is a band gap: silicon goes from LDA's
+0.49 eV to 1.13 eV against an experimental 1.17, at the cost of a
+gradient-corrected functional and not of a hybrid or of `GW`.
+
+**There is no Fortran to transcribe, and finding that out is half the phase.**
+QE reaches TB09 only through libxc — `dft_setting_routines.f90` maps `imeta = 3`
+to libxc's 208 under `#if defined(__LIBXC)`, and `qe_drivers_mgga.f90`'s native
+`SELECT CASE` has entries for TPSS and M06L and nothing else. So the reference
+followed here is libxc's own definition (`maple/mgga_vxc/mgga_x_tb09.mpl`,
+`maple/mgga_exc/mgga_x_br89.mpl`, and the bracketing in `src/mgga_x_br89.c`),
+and two things about QE's route mean a `pw.x` number is **not a reference for
+this functional**:
+
+- **QE passes a zero Laplacian.** `XClib/xc_wrapper_mgga.f90` declares
+  `lapl_rho` with the comment `! not used in QE` and sets it to zero before
+  every `xc_f03_mgga_vxc` call. `XC_MGGA_X_TB09` is flagged
+  `XC_FLAGS_NEEDS_LAPLACIAN`, and the Laplacian is *the* ingredient of the
+  Becke-Roussel fit — it is what `Q` is built from. In a plane-wave basis it is
+  the cheapest derivative there is, `-G^2 rho(G)`, one transform per channel,
+  which is why it is here.
+- **QE never sets `c`.** `set_ext_params` is called with libxc's default
+  parameter list, and libxc's own description of the parameter says why it has
+  to be: *"This parameter involves an average over the unit cell and must be
+  calculated by the calling program."* The default is `c = 1`. So
+  `input_dft = 'tb09'` in `pw.x` is **Becke-Johnson, not Tran-Blaha**, and
+  without a Laplacian at that. Both are offered here (`'bj06'` is the `c = 1`
+  row) precisely so the difference is a measurement rather than a footnote: on
+  converged silicon it is 1.018 eV against 1.134 eV, a fifth of the gap the
+  functional opens.
+
+**The validation is analytic, and it is stronger than a cross-code float
+comparison would have been.** Two limits pin the whole chain — the sign of `Q`,
+which branch of the nonlinear solve is taken, the `rho^(1/3)` prefactor, the
+Hartree `tau` convention and the spin scaling:
+
+- **The hydrogen atom.** For a one-orbital density `D = 2 tau - |grad rho|^2/(4
+  rho)` vanishes identically, so `Q = lap rho / 6` whatever `gamma` is, and
+  Becke-Roussel reduces to the exact Slater potential of the 1s orbital,
+  `-(1/r)[1 - (1+r) e^(-2r)]`. It does, **to 6e-13 pointwise** — machine
+  precision for arithmetic that runs through an exponential, a cube root and a
+  bisection — everywhere the density is clear of the functional's own threshold,
+  and `E_x = (1/2) int rho v_x^BR` comes out **-0.3125 Ha = -5/16**, the exact
+  value, to 1e-5. Becke and Roussel's model *is* exact for a one-orbital
+  density, so this is a transcription check with no tolerance to argue about.
+- **The uniform electron gas.** Becke-Johnson's `sqrt(5/12)/pi` is fixed by
+  requiring `v_x^BJ = v_x^LDA` there — the second term evaluates to exactly
+  `+(1/2)(6 rho_s/pi)^(1/3)`, since `sqrt(5/12) sqrt(3/5) = 1/2` identically,
+  and the Slater potential to `-(3/2)(6 rho_s/pi)^(1/3)`. The identity therefore
+  holds *if and only if* Becke-Roussel reproduces the uniform gas's Slater
+  potential, and it does not quite: the result here is **6.0e-4 relative, at
+  every density**, scale-free. That residue is the model's, not the code's, and
+  measuring it identified what `gamma = 0.8` actually is: the ratio
+  `v_x^BR / v_x^Slater` in the uniform limit is 1.0281 at `gamma = 0.6`,
+  **0.99960 at 0.8** and 0.9745 at 1.0, so Becke and Roussel's constant is the
+  uniform-gas fit to four digits, and no member of the family does better than
+  about 4e-4.
+
+**`tau` is the second thing the SCF carries, and it is not a function of the
+density.** It comes from the states — `sum_band.f90`'s meta branch, three extra
+transforms per band, `i(k+G) c_G` one cartesian direction at a time — so a run
+under this functional carries `(rho, tau)` where every other run carries `rho`.
+The identity that pins it is exact and cheap: `int tau dr = sum_i w_i sum_G
+|k+G|^2 |c_G|^2`, the band kinetic energy, which agrees to **1.8e-15 Ry**.
+QE mixes `rho` and does *not* mix `kin_r` (`mix_rho.f90` never mentions it) —
+`tau` is simply recomputed from the output states and used in the next
+iteration's potential, and that is what the mixing loop here does too. The first
+iteration has no states, so it starts from `potinit.f90`'s Thomas-Fermi guess
+`(3/5)(3 pi^2)^(2/3) rho^(5/3)`.
+
+**Traps, in the order they cost time:**
+
+- **An `equinox` field silently shadows a method of the same name.** Adding
+  `meta_c: float | None` to `Functional` — which already had a `meta_c(rho,
+  grad_rho)` method — made the *method* the field's default value, so the
+  dataclass carried a function as a pytree leaf and `jit` tried to trace it as
+  an array. The error surfaced two frames away, inside `v_of_rho`, as "the
+  problematic value is of type `<class 'function'>`". The field is `imposed_c`
+  now, and the general rule is that a frozen-dataclass field name and a method
+  name occupy the same namespace.
+- **`nspin = 2` is stored as `(up, down)` here and as `(total, magnetization)`
+  in QE**, and the meta branch was written for QE's. The result was an
+  unpolarized silicon whose two channels came out **7.4 eV apart**, with a
+  perfectly converged SCF reporting success. Nothing an unpolarized run does can
+  see it: the `nspin = 1` path takes half the total density and is right either
+  way. The test that catches it is the cheapest one available — `nspin = 2` with
+  zero starting magnetization must reproduce `nspin = 1`, and it now does to
+  **1e-12 in `c`, 3.6e-15 Ry in the energy and 6.3e-14 eV in the eigenvalues**,
+  with `tau_up + tau_down = tau` to 1.9e-16. QE's own comment in `potinit.f90`
+  ("for LSDA rho is (tot,magn), rho_kin is (up,down)") is about *its* two
+  conventions and is exactly the thing not to transcribe.
+- **`tau` must be symmetrised and it is easy to believe QE does not.**
+  `sum_band.f90` calls `sym_rho` on `rho%of_g`, then twenty lines later calls it
+  again on `rho%kin_g` inside the meta branch — the second call is easy to miss,
+  and `mix_rho.f90`'s silence about `kin_r` makes the wrong conclusion look
+  confirmed. It matters: on an irreducible wedge the unsymmetrised `tau` is
+  **11% asymmetric**, and running with it moves the eigenvalues by **0.47 eV**
+  and the total by 1.3e-2 Ry. `Calculation.kinetic_energy_density(symmetrize =
+  False)` exists only so that number can be measured.
+- **The highest band of an `nbnd` window does not converge under this
+  functional where it does under LDA.** On QE's own silicon at `nbnd = 8`, band
+  8 comes out **4.9e-3 Ry** from a dense diagonalisation of the *same*
+  Hamiltonian while every band below it is within 5e-7; at `nbnd = 10` the whole
+  window is within 1e-6. Davidson resolves the top of its window last, and the
+  mBJ potential — which carries the structure of `|grad rho|/rho` and
+  `sqrt(tau/rho)` — mixes that band with the ones just outside it far more than
+  a local potential does. It is invisible in the SCF, because the density is
+  built from the occupied bands: `c` and the total energy agree to every digit
+  either way, and only a gap read off the top of the window is wrong. **How it
+  surfaced is the part worth keeping**: a band structure rebuilt from the
+  converged density disagreed with the SCF's own eigenvalues by exactly that
+  4.9e-3, and it was the *band structure* that was right — it diagonalises from
+  scratch at a tight `ethr`, where the SCF carries a subspace that was never
+  asked to resolve its top. The first reading of that disagreement was that
+  `tau` had gone stale, and it had not.
+- **A band path cannot rebuild `tau`.** It is a property of the occupied states
+  over the whole zone and a band path has no occupations at all, so
+  `run_bands`/`run_nscf` take it as an argument and refuse without it — the same
+  argument, and the same refusal, as PAW's `becsum`.
+- **The nonlinear solve's derivative is not the bisection's.** `x` comes from a
+  fixed-length bisection (branch-free, static shape, `lax.fori_loop`), whose
+  tangent is zero; the implicit derivative `dx/dQ = -(2/3) pi^(2/3) / (Q^2
+  f'(x))` is attached as a `custom_jvp`, which is what libxc's Maple
+  `diff/br89_x` is. Without it the Newton-Krylov solver's Jacobian is missing
+  the entire `d v / d tau` block and the SCF residual's derivative is wrong in a
+  way that still converges.
+- **Everything here is a ratio to a power of the density**, so the vacuum is not
+  merely inaccurate but `0/0`, and one NaN poisons the SCF. The gate is the
+  *GGA* threshold (1e-6) and not the LDA one (1e-10), with the masked points
+  evaluated on substitute values so that `grad` sees no singular arithmetic
+  through the `where`.
+- **QE's own meta branch is inconsistent about the core charge.** `v_xc_meta`
+  builds `grho` from `rhog_core + rho%of_g` and then passes `rho%of_r` — valence
+  only — as the density. `setup.f90` prints "BEWARE: nonlinear core correction is
+  not consistent with meta-GGA" and leaves it there. Here the core is folded into
+  both, as the GGA path folds it, and the asymmetry is not reproduced.
+
+**What is refused as this phase lands.** `PW/src/setup.f90` raises
+`'Meta-GGA not implemented with USPP/PAW'` and `'Non-collinear Meta-GGA not
+implemented'`, and both are refused here too, for the reasons stated in
+`Calculation._require_meta_supported`: `tau` from the pseudo-states is not the
+all-electron kinetic energy density and there is no `addustau` to write against;
+and with spinors `tau` is a 2x2 matrix in spin space rather than two scalars,
+whose local spin frame `gradcorr` supplies for a gradient and nothing supplies
+for a Laplacian. Spin spirals are refused because the two spinor components live
+on different plane-wave spheres, so their gradients do not add to a
+lattice-periodic `tau`. A Hubbard `U` is refused as unvalidated, and because
+`_solve_residual`'s convergence measure reads `ns` off the *end* of the packed
+state, which `tau` now occupies.
+
+**Two of those four did not survive contact with a real target.** P31 lifts the
+noncollinear and spin-orbit refusal and P32 the PAW one, so what remains refused
+here is plain ultrasoft, spin spirals and DFT+U. The wording above is kept as it
+stood because the reasons it gives are the work those phases had to do.
+
+**The numbers.** Silicon, `Si.pz-vbc.UPF`, `ecutwfc = 30`, a 6x6x6 grid reduced
+to its wedge, gaps from a band path `L-Γ-X-W-K-Γ` at 30 points a segment:
+
+| run | `c` | indirect gap | direct gap | SCF iterations |
+|---|---|---|---|---|
+| LDA (PZ) | — | 0.493 eV | 2.567 eV | 6 |
+| BJ06 — *what `pw.x` runs when asked for `tb09`* | 1.000 | 1.018 eV | 3.075 eV | 11 |
+| **TB09** | **1.0331** | **1.134 eV** | **3.168 eV** | 10 |
+| TB09, `mbj_c = 1.12` | 1.120 | 1.455 eV | 3.429 eV | 21 |
+| TB09, `mbj_c = 1.20` | 1.200 | 1.776 eV | 3.696 eV | 23 |
+| TB09, `mbj_c = 1.30` | 1.300 | 2.215 eV | 4.067 eV | 24 |
+| experiment | | 1.17 eV | 3.40 eV | |
+| published mBJ (WIEN2k, all-electron, `c` = 1.12) | | 1.17 eV | | |
+
+and diamond, `C.pbe-hgh.UPF`, `ecutwfc = 60`, the same grid and path:
+
+| run | `c` | indirect gap | direct gap | SCF iterations |
+|---|---|---|---|---|
+| LDA (PZ) | — | 3.890 eV | 5.556 eV | 5 |
+| PBE | — | 4.112 eV | 5.625 eV | 6 |
+| **TB09** | **1.1777** | **4.428 eV** | **6.453 eV** | 9 |
+| TB09, `mbj_c = 1.20` | 1.200 | 4.497 eV | 6.517 eV | 18 |
+| experiment | | 5.48 eV | ~7.3 eV | |
+| published mBJ (WIEN2k) | | 4.93 eV | | |
+
+Diamond's cutoff was checked rather than assumed: at `ecutwfc = 90` instead of
+60 the LDA gap moves 3.890 -> 3.923 eV, TB09's 4.428 -> 4.417 and `c` 1.1777 ->
+1.1748, so the basis is converged to about 0.03 eV and the 0.5 eV shortfall
+against the all-electron mBJ is not it.
+
+**Silicon lands on the published mBJ number and diamond falls 0.5 eV short,
+and `c` explains neither on its own.** Tran and Blaha's `c` averages
+`|grad rho|/rho` over the cell, and that ratio is largest *in the core*, which
+is exactly what a pseudopotential removes: norm-conserving silicon measures
+`c = 1.033` where the all-electron calculation measures 1.12. The gap
+nonetheless comes out right, because the density is not the all-electron one
+either and the two departures are not independent — which is why imposing the
+all-electron `c` on a pseudopotential density is **not** a correction: at
+`mbj_c = 1.12` the same cell overshoots to 1.455 eV, and the sensitivity is
+steep (2.215 eV at `c = 1.30`). Diamond's `c` is measured at 1.178 and its gap
+is still 0.5 eV under the all-electron mBJ at any `c` near it (4.497 eV at
+1.20), and the basis is not the cause either, so what is missing there is the
+core the pseudopotential removed from `tau` and from the Laplacian as well as
+from `c`. **The reproducible statement is the shift**: +0.64 eV on silicon and
++0.54 eV on diamond, against published all-electron shifts of +0.67 and +0.82.
+An all-electron `c` is available as `mbj_c` for anyone who wants to test that
+reading, and the phase does not claim to have settled it.
+
+**What symmetrising `tau` is worth**, measured by running the same cell with
+`symmetrize = False`: the unsymmetrised `tau` is 11% asymmetric relative to its
+own maximum, `c` moves by 1.1e-3, the total energy by 1.3e-2 Ry and the
+eigenvalues by up to **0.47 eV** — at `ecutwfc = 12` and at 30 alike, and with
+the iteration count unchanged, so nothing about the convergence would have said
+anything was wrong.
+
+**Does a gradient-based route converge it more easily? No, and the reason is
+worth stating.** The comparison, on silicon at 30 Ry, in *evaluations of `F`* —
+one diagonalisation each, which is the only currency in which a mixer's
+iteration count and a Krylov solver's step count are the same thing:
+
+| | LDA | TB09 |
+|---|---|---|
+| Anderson mixing, `beta = 0.7` | 6 | 11 |
+| Anderson mixing, `beta = 0.3` | 7 | 19 |
+| Newton-Krylov on the residual (P22) | 40 | 75 |
+| Newton-Krylov after 3 mixing steps | 17 | 59 |
+
+Mixing wins by a factor of six, and that is not a defect of the residual solver.
+**Anderson mixing already is a quasi-Newton method on this residual** — it fits
+the Jacobian from the iteration history for nothing — and TB09's fixed point is
+not ill-enough conditioned for an *exact* Jacobian to be worth what a step
+costs — 5 Newton steps here spent 52 evaluations of `F` and 23 Jacobian-vector
+products, so about fifteen apiece. What P22 established remains the place that route
+earns its cost: a problem with more than one solution, where the mixer flows to
+the stable one. TB09 is not such a problem; it is merely a slower one, by a
+factor of about **1.8 in iterations** over LDA, growing with `c` (23 iterations
+at `c = 1.20`, against 10 at the self-consistent 1.033) because a larger `c`
+strengthens the coupling between `tau` and the potential.
+
+Making the comparison possible at all needed one change, and it is the phase's
+one deliberate deviation from QE: **`tau` joins the packed state**. The mixing
+loop may lag it — a loop is allowed to depend on whatever it likes — but a
+root-finder needs `F` to be a function of its argument, so the fixed point is
+sought in `(rho, tau)` jointly. That is what puts the `d v / d tau` block into
+the Jacobian, and that block runs through the implicit derivative of the
+Becke-Roussel inversion, which is why the `custom_jvp` is not optional.
+
+*Notebook 24.*
+
+
+### P31 — The Tran-Blaha potential with spin-orbit coupling. ✅ DONE.
+
+`spinor_band_kinetic_density` and `spinor_kinetic_energy_density` in
+`pypresso/scf/density.py`, `_noncollinear_meta_exchange` in
+`pypresso/scf/potential.py`, and the noncollinear branch of
+`Calculation.kinetic_energy_density`. `noncolin = .true.` and `lspinorb = .true.`
+with `input_dft = 'tb09'`.
+
+**`pw.x` stops here and this does not.** `PW/src/setup.f90` raises
+`'Non-collinear Meta-GGA not implemented'` and returns; the refusal P30 wrote for
+the same combination gave the reason, and the reason turned out to be a
+description of the work rather than an obstacle to it.
+
+**The kinetic energy density of a spinor is a 2x2 matrix.** Not a number and not
+two numbers:
+
+    tau_ab(r) = sum_i w_i grad psi_ia^* . grad psi_ib,
+
+which decomposes on the Pauli basis exactly as the density does — a trace and an
+axial three-vector, with the same `nspin_mag` deciding whether the vector part
+exists at all. So `spinor_band_kinetic_density` *is* `spinor_band_density` with
+`grad psi` in place of `psi`, and the one thing that is not a substitution is
+that every product becomes a dot product over the three cartesian directions
+**before** the spin algebra. Taking the spin structure of each direction and
+summing afterwards gives the same trace and a different vector part.
+
+**Everything after that is the local spin frame, which was already written
+twice.** `_noncollinear_meta_exchange` is `_noncollinear_gradient_correction`
+with a second field along for the ride: rotate `(n, m)` onto `m-hat` with
+`fixed_quantization_axis`'s sign, project `tau` onto the *same* axis, run the
+collinear functional, attach the splitting back to `m-hat`. Two things are worth
+saying out loud:
+
+- **The axis is the density's, not `tau`'s.** They are not parallel in general —
+  `tau_vec` is the Pauli expectation of a *gradient*, and nothing makes it
+  collinear with the magnetization — so `tau_vec . m-hat` is a real projection
+  and its transverse part is discarded. That is not an approximation invented
+  here: it is what "evaluate the collinear functional in the local frame" means,
+  and the LSDA and GGA branches discard the same transverse information. It is
+  stated because for `tau` it is easier to miss than for `m`.
+- **The rotated channels' gradient *and Laplacian* need their own transform.**
+  The rotation runs through `|m|` and is not linear in the components. That trap
+  is `gradcorr`'s, and the Laplacian inherits it unchanged.
+
+**Validated as algebra, not as agreement.** Three identities, each of which a
+plausible sign error breaks:
+
+| check | result |
+|---|---|
+| two spinor bands `(psi, 0)`, `(0, psi)` at half weight give the scalar `tau` | **3e-17** |
+| a magnetization along `z` reproduces the collinear branch's `v_0` and `v_z` | **1.8e-15**, transverse identically 0 |
+| turning `m` to an arbitrary axis turns `v` with it | **2e-14**, transverse 2e-16 |
+
+and end to end, a spin-orbit silicon reproduces the Kramers-doubled scalar
+eigenvalues to **5e-5 eV** rather than to machine precision. That gap is
+measured, not excused: `tau` weights the wavefunction by `|k+G|^2`, so it
+amplifies whatever the two eigensolver paths leave differing, and mBJ is
+nonlinear in `tau` on top. The same comparison under PZ agrees to 3.6e-12, and
+the algebraic test above is what says the builders agree exactly while the two
+*SCFs* do not quite.
+
+*Notebook 24.*
+
+### P32 — The Tran-Blaha potential on PAW spheres. ✅ DONE.
+
+`_kinetic_tensor`, `_radial_laplacian` and `_meta_exchange_onecenter` in
+`pypresso/paw/onecenter.py`, `PawSpecies.kinetic_ae`/`kinetic_ps`, and `becsum`
+threaded through `fixed_density_states`/`run_bands`/`run_nscf`/`run_dos`.
+
+**The obstacle was supposed to be the coefficients and it was not.** A
+potential-only functional has no `dE/dbecsum`, so what the Hamiltonian must
+receive from each sphere is the *matrix element*
+`<phi_i|v|phi_j> - <phi~_i|v~|phi~_j>` — and that is the contraction
+`onecenter_species` already performs. For a local functional `ddd = dE/dbecsum`
+happens to equal that matrix element, because `rho_lm` is linear in `becsum`;
+here only the second reading survives, and the same line of code implements it.
+Nothing had to be added, which is the whole reason PAW is reachable for this
+functional at all.
+
+**What did have to be written is `tau` inside the sphere.** Its two halves do
+*not* share an angular structure:
+
+    grad phi_i . grad phi_j = R'_i R'_j Y_i Y_j
+                            + (R_i R_j / r^2) (grad_Omega Y_i . grad_Omega Y_j),
+
+with `R_i = u_i / r`. The first term expands on exactly the multipoles the
+*density* does — it is `Y_i Y_j` again — so it reuses the same Clebsch-Gordan
+table. The second does not, and its expansion is computed once per species by
+quadrature. Both fold into one `(nh, nh, nlm, mesh)` tensor holding
+`r^2 tau_lm`, so `becsum -> tau_lm` is the same einsum `becsum -> rho_lm` is, and
+`_radial_laplacian` is the third ingredient: diagonal in `lm`, two radial
+derivatives and a `-l(l+1)/r^2`, with no QE counterpart because nothing QE
+evaluates on a sphere asks for one.
+
+**Which angular table carries the `1/sin(theta)` is not inferable from the
+variable names**, and the module docstring of `pypresso/paw/gradient.py` says
+one thing while the code does another. Settled by the exact identity
+`int |grad_Omega Y_lm|^2 dOmega = l(l+1)`: `dylmt^2 + dylmp^2` reproduces it to
+every digit on two grid sizes and `dylmt^2 + dylmp^2/sin^2` does not (4.58
+against 2 for `Y_1,+-1`). The lone `divide(sin_theta)` in the gradient
+correction belongs to the *divergence*'s input convention, not to the modulus.
+
+**The finding: a UPF has no core kinetic energy density, and pretending
+otherwise inverts the functional.** Every other one-centre term here sees
+`rho_valence + rho_core`. This one cannot: the format carries a core *charge*
+(`PP_AE_NLCC`) and nothing for `tau`, QE has no `tau_core` anywhere, and inside a
+sphere the all-electron core dominates `rho` and `lap rho` while contributing
+nothing to `tau` — so `2 tau - |grad rho|^2/4 rho` and `sqrt(2 tau/rho)` are both
+evaluated on mismatched halves. The symptom is not noise, it is the wrong sign of
+`d(gap)/dc`:
+
+| `mbj_c` | core in the sphere term | core left out |
+|---|---|---|
+| 1.00 | 1.249 eV | 0.917 eV |
+| 1.10 | 0.934 eV | 1.260 eV |
+| 1.28 | 0.348 eV | 1.991 eV |
+
+Every norm-conserving cell has the gap *rise* with `c` (P30). So the one-centre
+term sees the valence density alone on both sides, and the frozen core reaches
+it only through the shape of the all-electron partial waves. (VASP's meta-GGA
+PAW datasets tabulate the core kinetic energy density for exactly this reason;
+no UPF has it to read.)
+
+**What PAW buys, in one number.** Tran and Blaha's `c` averages `|grad rho|/rho`
+over the cell, and that ratio is largest in the core — which a norm-conserving
+pseudopotential removes and a PAW augmentation charge puts back:
+
+| silicon, same cell and grid | `c` | LDA gap | TB09 gap |
+|---|---|---|---|
+| norm-conserving `Si.pz-vbc` | 1.000 | 0.645 eV | 1.163 eV |
+| **PAW** `Si.pz-n-kjpaw` | **1.107** | 0.589 eV | **1.285 eV** |
+| all-electron (published) | 1.12 | | 1.17 (experiment) |
+
+P30 explained the norm-conserving shortfall by the pseudised core and could not
+test it. This is the test: put the core back and `c` moves to within 0.013 of
+the all-electron value.
+
+**`c` is passed down, never recomputed.** It is an average over the *cell*, so a
+sphere that computed its own would give each atom a different functional;
+`Calculation.onecenter` takes it from `Potential.meta_c` and refuses to default
+it, because using 1 on the spheres while the grid used 1.03 is a wrong gap with
+no other symptom.
+
+**A PAW band structure works now, and that was a two-line change.** `nscf`
+refused PAW outright because `ddd_paw` cannot be rebuilt from a density;
+`SCFResult.becsum` has carried it since P12, so passing it is the fix and the
+refusal now only catches *not* passing it. Still refused: plain **ultrasoft**,
+which has the augmentation charge but no partial waves to reconstruct `tau`
+from.
+
+### P33 — PAW's one-centre gradient correction, noncollinear. ✅ DONE.
+
+`_noncollinear_gradient` in `pypresso/paw/gradient.py`, and the quantization axis
+threaded from `Calculation` down to `onecenter_species`.
+
+P12 refused this and named the reason precisely: `PAW_gcxc_potential` needs the
+local-frame rotation done on the radial sphere, `compute_rho_spin_lm`, "and that
+is a second implementation rather than a call into the first". It is not — it is
+the same three steps `_noncollinear_gradient_correction` takes on the plane-wave
+grid, with `PAW_rad2lm` where the grid version takes an FFT:
+
+1. `rho_up/dw = (n +- s|m|)/2` at every (direction, radius), `s = sign(m . ux)`
+   and `+1` where `|m|` vanishes — QE's `segni_rad`. The frozen core is
+   unpolarized, so it goes wholly into the charge before the split and half
+   lands in each channel.
+2. **Project the rotated channels back to multipoles afresh.** This is what the
+   refusal was really about: the rotation runs through `|m|`, so no combination
+   of the stored `rho_lm` is the expansion of the result, and the angular part of
+   the gradient and the divergence both read those multipoles.
+3. Rotate back on the radial grid, where `m-hat` lives — `compute_pot_nonc`.
+
+**Validated against the collinear branch as algebra.** Fed `(n, 0, 0, m)` and
+`(up, down)` — the same physical state — it returns a **bit-identical energy**, a
+potential agreeing to **5.5e-11 relative** (the residue is the multipole
+round-trip the noncollinear branch does and the collinear one does not), and
+transverse components that are exactly zero. End to end, a magnetic oxygen atom
+polarises to 2 mu_B either way and the two totals agree to 2.8e-6 Ry — which is
+*not* this branch's error, since the same comparison under LDA, which never
+enters it, differs by 3.1e-6.
+
+**Not reproduced: `add_small_mag`.** A fully-relativistic dataset's small
+component carries magnetization of its own and QE folds it in here. The *local*
+part of this package's one-centre XC does not fold it in either, so leaving it
+out of both keeps them consistent; putting it in one and not the other would be
+worse than in neither.
+
+### P34 — Running on a cluster: a submit/fetch harness for sweeps. 📋 PLANNED.
+
+`tools/cluster/`. Not started. This entry is the design, written down before the
+work and reviewed before being written down, so that the session which picks it
+up does not re-derive it — and does not repeat the two mistakes the review
+caught.
+
+**What it is for, and what it is not for.** A single pypresso job gains little
+from a cluster. There is no MPI: parallelism is XLA's threading over the cores of
+one node plus the `k_batch` dial, and sharding over the k axis is designed for
+(rule R6) and not implemented (P10). One job on a fat node buys maybe 4-16x and,
+more usefully, memory headroom — the ferromagnetic NiI2 of P31/P32 peaks around
+7.4 GB, comfortable here and a ceiling on anything larger.
+
+The win is **twenty to forty independent single-node jobs at once**:
+
+- convergence studies — cutoff and k-grid, of the kind run serially and quoted
+  for diamond (P30) and still owed for NiI2;
+- parameter scans — Tran-Blaha's `mbj_c`, minutes each and a dozen values;
+- and the one that changes what the project can claim: a **multi-material gap
+  benchmark**, twenty to forty solids each an independent SCF plus band
+  structure, which turns "TB09 reproduces the published gap on silicon, diamond
+  and NiI2" into a validation table of the kind P13 and P20 have.
+
+Hours serially; minutes in parallel, because the jobs do not talk to each other.
+
+**The remote filesystem is the record; the manifest is a cache of it.** The first
+draft had this backwards, with `manifest.json` as the authority and `sacct` as
+the status source. Both are wrong in the same way — they put the truth somewhere
+that can be lost or expire:
+
+- **Each run directory is keyed by a content hash of its case** (input file plus
+  options JSON). Submission is then *idempotent*: a lost manifest costs one `ls`,
+  not a duplicate job charged to a shared allocation.
+- **The job wrapper writes its own `DONE` / `FAILED` sentinel carrying the exit
+  code.** Status is derived from sentinels, never stored — a stored status is a
+  stale status. `sacct` is a fallback and not a dependency: on real clusters it
+  is sometimes restricted, and its retention is short.
+- **The manifest is append-only JSONL**, not a rewritten blob, so two sessions
+  cannot lose each other's entries.
+- **Twenty to forty cases is one `sbatch --array`**, not twenty submissions: one
+  confirmation gate, one id to track, and it sidesteps per-user submission
+  throttles.
+
+**Provenance is the biggest risk, because it is the one that fails silently.**
+Results accumulate across sessions while the code is actively evolving. Without
+the **git commit, the environment hash and the input hash recorded in every
+result JSON**, a convergence table quietly mixes code versions and nothing
+errors. Everything else on this page fails loudly — an expired ticket, a wrong
+walltime, an untested path all stop and say so. Version-mixed science does not,
+and this project has already been bitten by the general form of it: P28b's
+divergences were setups differing in ways neither code reported.
+
+**What bites on first contact with a real SLURM cluster**, in the order it will
+happen:
+
+- **A batch shell does not source `.bashrc`.** `module load` and the conda
+  activation go in the sbatch script explicitly.
+- **XLA takes every core it can see.** Pin the thread pool to
+  `--cpus-per-task`, or the job oversubscribes and the accounting is wrong. This
+  is the cluster form of a lesson `PERFORMANCE.md` already records for this
+  workstation, where capping XLA at four cores by affinity was worth 1.7x.
+- **The compile cache.** `PYPRESSO_CACHE_DIR` belongs on shared scratch or every
+  job pays minutes of recompilation; its concurrent-writer behaviour on NFS has
+  to be checked rather than assumed.
+- **Conda environments exhaust *inode* quotas** on home filesystems. Decide
+  `conda-pack` or a container during the interactive environment build, not
+  after.
+- **Walltime and memory are guesses the first time**, so a case must write its
+  results *incrementally* rather than at exit — a TIMEOUT or an OOM otherwise
+  costs the whole run instead of its tail.
+- **A Kerberos ticket is shorter-lived than a queued job.** "Passwordless" SSH
+  expires in hours; fetching has to be resumable across a human re-authenticating.
+- **Fetching must be sentinel-gated.** Rsyncing a directory whose job is still
+  running hands back torn results.
+
+**Design, kept thin on purpose.**
+
+- `tools/cluster/env/` — builds the environment on a login node (JAX 0.11, NumPy
+  2.4, equinox, Numba, x64). This is the real cost of the phase and is done
+  **interactively, not through the queue**: iterating on a broken environment one
+  queue round-trip at a time is the slowest possible way to do it.
+- A **case** is a directory: a `pw.x`-style input plus a small JSON of run
+  options (functional, cutoffs, k-grid, `nbnd`, whether to follow with a band
+  path).
+- `submit.py` — cases to one array job. Carries `--dry-run`, which prints the
+  sbatch script and submits nothing, and **enforces the sweep-size cap itself**
+  rather than leaving it to convention.
+- `fetch.py` — sentinel-gated rsync back, **including stdout and stderr on
+  failure**, which is the difference between debugging locally and debugging
+  over SSH.
+- `scancel` tooling, because a wrong sweep will be launched eventually.
+- **Every case writes JSON plus `.npz`** — scalars (energies, gaps,
+  coefficients, iteration counts, timings) and arrays (eigenvalues, k-point
+  coordinates) — with the provenance triple above. Nothing should ever have to be
+  re-run to re-derive a number, and that rule has already paid for itself: the
+  first NiI2 script computed its gap at the wrong band index, and because the
+  eigenvalues were on disk the fix cost a re-read rather than three hours.
+- **Analysis and plotting stay local.** The cluster runs pypresso and nothing
+  else.
+
+**Build the thin path first.** Polling and fetch machinery written blind against
+a cluster nobody has touched will mostly be wrong. One case, submitted by hand
+through the harness and fetched back, settles the environment, the sentinel and
+the thread pinning; the array job and the sweep cap come after first contact.
+
+**Two things are the user's and not the agent's.** Interactive authentication —
+`kinit`, 2FA — cannot come from a tool call; key-only SSH can. And a cluster
+allocation is a shared, accounted resource: key access is not standing permission
+to spend it, so the first submission and any large sweep are confirmed rather
+than assumed. (The agent's shell is also sandboxed by default, and SSH needs that
+relaxed explicitly, as the pseudopotential downloads of P30 did.)
+
+
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes
 the k-point count.
