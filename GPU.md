@@ -314,8 +314,29 @@ FFTs took their 6.8x and the subspace solve took nothing. The consequence:
 iterations suggest**, and any GPU speedup quoted here has to say which
 `conv_thr` produced it.
 
-That makes the subspace algebra, not the FFT, the first thing worth attacking —
-which reorders Phase 2 behind it.
+**Thirty-two atoms changes the size of the answer, and softens the second
+finding.** On `si32-1k-ecut30` (11781 plane waves, 64 bands) at `band_batch =
+all`: `h_psi` **17.9x**, Davidson **13.5x**, `v_of_rho` **1.3x** — the
+diagonalisation's advantage more than triples for one doubling of the cell, and
+the potential, which lost at 16 atoms, wins. The `ethr` tax falls from 3.6x to
+**1.2x** over the same step: the subspace algebra has not got faster, it is just
+a smaller share of a bigger cell. So the whole-SCF ladder is **not** monotonic
+(2.35x, 1.80x, 13.5x for 8, 16, 32 atoms) because it inherits each case's own
+SCF path — **quote the per-stage ratios, which scale cleanly**.
+
+That still makes the subspace algebra the first thing worth attacking, and it
+still reorders Phase 2 behind it — but the case for it is "this is what caps a
+mid-sized cell", not "this is what caps the GPU".
+
+**A practical finding for anyone running this:** at 32 atoms the default band
+dial is not a slowdown, it is a wall — the GPU did not finish two SCF runs at
+`band_batch = 1` in the fifteen minutes it had, where four CPU cores do one in
+eleven seconds. **The dials are a correctness-of-configuration matter on a GPU,
+not tuning.**
+
+**And the 2.6e-09 Ry outlier did not grow**: the same configuration on twice the
+cell agrees with the CPU to **-7.4e-13 Ry**. It was particular to
+`si16-1k-ecut30`, not a scaling defect in the batched dial.
 
 ---
 

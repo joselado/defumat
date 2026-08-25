@@ -1892,6 +1892,56 @@ The consequence for the headline number is direct: **at a production
 iterations suggest.** Quoting a GPU speedup without saying which `conv_thr`
 produced it would be off by 3.6x on this cell.
 
+### Thirty-two atoms, and the advantage grows
+
+Run 2026-08-25 on the same V100-SXM2-32GB and the same four Milan cores.
+`si32-1k-ecut30` is **32 atoms, 11781 plane waves, 64 bands, FFT 36x36x144** —
+the largest case in `benchmarks/`, added for this measurement and verified by
+the folding identity in its own header (si32 at Gamma reproduces si16 sampled at
+{Gamma, (0,0,1/2)} to 8.9e-16 Ry/atom).
+
+| stage, `band_batch = all` | GPU | CPU | ratio | at 16 atoms |
+|---|---|---|---|---|
+| `h_psi` | 0.019 s | 0.340 s | **17.9x** | 6.8x |
+| `diagonalise` (Davidson) | 0.554 s | 7.457 s | **13.5x** | 3.9x |
+| `v_of_rho` | 0.037 s | 0.047 s | **1.3x** | 0.74x |
+| whole SCF, `conv_thr = 1e-10` | 82 ms/it | 1109 ms/it | **13.5x** | 1.80x |
+
+**The diagonalisation's advantage grows sharply with the cell** — Davidson goes
+3.9x to 13.5x for one doubling — and `v_of_rho`, which *lost* at 16 atoms, wins
+at 32. Both point the same way: what a GPU needs is enough work per kernel, and
+16 atoms was not yet enough.
+
+**The `ethr` endgame penalty largely disappears here, and that revises the
+paragraph above.** At 16 atoms the ratio collapsed from 6.5x at `conv_thr = 1e-8`
+to 1.80x at 1e-10 — a 3.6x tax. At 32 atoms it is 16.5x to 13.5x, a 1.2x tax.
+The small dense subspace algebra has not got any faster; it is simply a much
+smaller share of a much larger cell's work. So "a GPU speedup has to say which
+`conv_thr` produced it" is true at 16 atoms and nearly irrelevant at 32.
+
+**Which means the whole-SCF ladder is not monotonic: 2.35x (8 atoms), 1.80x
+(16), 13.5x (32).** That is not measurement noise. The number of expensive
+tight-`ethr` iterations varies case by case and `si16-1k-ecut30` happened to hit
+it hard — its last two iterations cost 459 ms each against 36 for the first
+seven. **The per-stage ratios are the trustworthy measurement and they scale
+cleanly; the whole-SCF ratio inherits the SCF's own path.** Quote the stages.
+
+**And the band dial's cost at this size is no longer a ratio but a wall.** The
+GPU run at `band_batch = 1` on `si32-1k-ecut30` **did not complete two SCF runs
+in the ~15 minutes it had**, where the CPU does one in 11 s (1380 ms/iteration,
+8 iterations) — the job timed out with that section's header printed and nothing
+under it. So the 0.20x measured at 16 atoms understates what the default costs
+at 32; the precise figure is unmeasured and wants a longer job. Everything else
+in this ladder says the same thing more mildly: **the band dial is not a tuning
+knob on a GPU, it is a correctness-of-configuration matter.**
+
+**The 2.6e-09 anomaly did not grow, which was the thing to check.** On twice the
+cell the same configuration — `si32-1k-ecut30`, `band_batch = all` — agrees with
+the CPU to **-7.4e-13 Ry**, back at the round-off floor every other case sits on.
+So the 16-atom outlier was particular to that case rather than a scaling defect
+in the batched dial, and the dial's "moves the answer by round-off" claim
+survives the largest cell here.
+
 **One correctness flag, and it is not round-off in the sense the other rows
 are.** On `si16-1k-ecut30` at `b=all` the GPU converged to **-126.720760703578
 Ry** where CPU `b=1`, CPU `b=all` and GPU `b=1` all give **-126.720760700971**

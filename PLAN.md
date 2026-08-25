@@ -771,7 +771,23 @@ change costs 1.2x the *wrong* way on a CPU — and `k=all, b=1` is worse than ei
 2075, because batching k while looping bands buys the batched mode's memory with the looped
 mode's launch count. fp64 costs 1.78-1.98x on a matmul and 0.85-1.44x on an FFT, which
 ranks `GPU.md`'s float32 phase **after** its sharding phase rather than before. Harness in
-`tools/gpu/`, numbers in `PERFORMANCE.md`. Phases 1-5 are unrun.
+`tools/gpu/`, numbers in `PERFORMANCE.md`.
+
+**Phase 1 has had a first pass** on a ladder of single-k cells — 8, 16 and 32
+atoms — chosen so that no k-parallelism exists and every ratio belongs to the
+per-k path. The diagonalisation *does* win and its advantage **grows with the
+cell**: Davidson 3.9x at 16 atoms and **13.5x at 32**, `h_psi` 6.8x and
+**17.9x**, with `v_of_rho` crossing from a loss to a win. Two things came with
+it. QE's adaptive `ethr` schedule taxes a GPU where it costs a CPU nothing —
+the last iterations of a 16-atom SCF cost 459 ms against 36 for the first
+seven, because a tighter threshold is more Davidson steps and a Davidson step is
+small dense algebra in a `lax.while_loop` — though that tax falls from 3.6x to
+1.2x by 32 atoms. And the band dial at 32 atoms is a wall rather than a
+slowdown: the GPU did not finish two SCF runs at `band_batch = 1` in fifteen
+minutes where four CPU cores do one in eleven seconds. `benchmarks/si32-1k*.in`
+were added for this and are verified by a folding identity rather than by an
+energy-per-atom comparison, which single-k sampling makes invalid across these
+cells. Phases 2-5 are unrun.
 
 **`GPU.md` is the roadmap for the GPU half of this phase** — what is already GPU-ready by
 design and needs no work, what is blocked on first contact with real hardware, and what
