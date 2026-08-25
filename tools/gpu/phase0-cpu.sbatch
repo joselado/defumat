@@ -14,9 +14,14 @@
 #
 # ---- the #SBATCH values ----
 #
-# partition   batch-csl (Cascade Lake Xeon), which is the same class of host CPU
-#             as the GPU nodes carry, so the comparison is not also a comparison
-#             of two CPU generations.
+# partition   batch-milan (AMD EPYC Milan). batch-csl was the first choice --
+#             Cascade Lake is the same class of host CPU the GPU nodes carry, so
+#             the comparison would not also be a comparison of two CPU
+#             generations -- but `sbatch --test-only` put its start ~1h50m out
+#             on 2026-08-25 where batch-milan was immediate, and the metric asks
+#             for a CPU side pinned to a *stated* core count on a *stated* part,
+#             not for a particular part. So: four cores of an EPYC Milan, said
+#             out loud, and re-check the queue rather than inheriting this.
 # time        40 min: the batched dial settings are the slow ones on a CPU
 #             (al10-metal at k_batch=all was measured at 2.2x the loop on the
 #             development workstation) and this side has no device to make them
@@ -27,7 +32,7 @@
 #             optimum (PERFORMANCE.md: 1.7x over XLA's every-core default, and
 #             8 and 14 cores are both worse than 1).
 #SBATCH --job-name=pypresso-cpu-phase0
-#SBATCH --partition=batch-csl
+#SBATCH --partition=batch-milan
 #SBATCH --time=00:40:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
