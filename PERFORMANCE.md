@@ -1734,6 +1734,100 @@ Nothing worth a table: `mode_activities` is a contraction of `(nat, 3, 3, 3)`
 with `(3 nat, nat, 3)` and runs in under a millisecond. The whole of
 `vibrational_spectrum` is the two responses above.
 
+## First contact with a GPU (P10 / GPU.md Phase 0)
+
+**A different metric, and it is never mixed with the one above.** Everything
+else in this file is single-core pypresso against single-core Quantum ESPRESSO.
+This section is **GPU pypresso against CPU pypresso, same input, same code, per
+SCF iteration**, with compile time as its own column — `GPU.md` §2.3, and the
+reason the two must not share a table. The QE comparison stays a CPU claim.
+
+Run 2026-08-25 on Aalto's Triton: **Tesla V100-SXM2-16GB** (driver 580.173.02),
+jax 0.11.1 with `jax-cuda12-plugin` 0.11.1, against **four pinned cores of an
+AMD EPYC Milan**, both sides `tools/gpu/phase0.py` at commit `ed14741`.
+`al10-metal` is ten atoms and **ten k-points** with a committed QE reference;
+the `si` cells are one k-point, where `k_batch` is a no-op by construction.
+
+| case | dials | GPU ms/it | CPU ms/it | ratio | peak device |
+|---|---|---|---|---|---|
+| `al10-metal` | `k=1, b=1` (the defaults) | 801 | 793 | 0.99x | 0.10 GB |
+| `al10-metal` | `k=all, b=1` | 2075 | 931 | 0.45x | 0.15 GB |
+| `al10-metal` | **`k=all, b=all`** | **177** | 963 | **5.44x** | 0.40 GB |
+| `si8-1k` | `k=1, b=1` | 75 | 27 | 0.35x | 0.09 GB |
+| `si8-1k` | `k=1, b=all` | 19 | 22 | 1.13x | 0.05 GB |
+| `si-1k` | `k=1, b=1` | 16 | 5 | 0.33x | 0.14 GB |
+
+**Nothing was ported to produce this.** The same source, unmodified, on a CUDA
+device — which `GPU.md` predicted and which had never been evidence.
+
+**The dials invert, and that is the measurement.** On the GPU, `al10-metal` goes
+**801 → 177 ms** between QE's loop and the fully batched mode, a factor of
+**4.5**; on the CPU the same change goes 793 → 963, i.e. 1.2x the *wrong* way.
+The defaults are cache-shaped and a GPU has no such cache, exactly as
+`batching.py`'s own docstring says — so **a GPU run left on the defaults gives
+up 4.5x**, and both dials are part of a GPU job's configuration rather than a
+tuning afterthought.
+
+**`k=all, b=1` is worse than either end, and that is the finding worth
+carrying.** 2075 ms, against 801 for the loop and 177 for the batch. Batching k
+while looping bands does not interpolate between the two: it multiplies the
+per-band kernel launches by `nk`, so it buys the batched mode's memory and the
+looped mode's launch count. **A dial is not a slider here** — the two axes have
+to move together, and a plausible half-measure is the worst setting available.
+
+**Small cells lose on a GPU and that is not a defect.** `si-1k` at 0.33x and
+`si8-1k` at 0.35x are launch-overhead dominated; `si8-1k` recovers to 1.13x on
+the band dial alone. This is the standing rule ("a two-atom cell will not show
+you any of this") in its GPU form, and the reason `benchmarks/` — single
+k-point *on purpose* — cannot be the whole first-contact set.
+
+**fp64 costs 1.78–1.98x on a matmul and 0.85–1.44x on a batched 3D FFT**, over
+the six records. Measured on the two kernels this code is made of rather than on
+a generic FLOPs probe. The V100 is a 1:2 fp64 part and the matmul reproduces
+that ratio; **the FFT's cost is grid-dependent and must be quoted as a range**,
+1.44x on `al10-metal`'s 27x15x72 down to 0.85x on `si-1k`'s 16³ — where double
+came out *faster*, which is a latency-bound transform whose timing is noise
+rather than an inversion of the hardware. The first draft of this table quoted a
+single "1.01x" because the comparison tool collapsed six measurements into
+whichever record sorted last; `phase0_compare.py` reports the spread now, and
+the flattering end of a spread presented as the number is exactly the failure
+mode this file exists to prevent.
+
+**This is the datum `GPU.md` Phase 3's rank waits on and it settles it** — the
+range does not change the conclusion: single precision's ceiling is ≤2x on the
+dense algebra and at most ~1.4x on the transforms, so float32 belongs *after*
+Phase 4's sharding, not before it. `GPU.md` declined to guess this and flagged
+the ordering as provisional; it is now measured.
+
+**Memory is not the binding constraint at this scale** — 0.40 GB peak against
+the allocator's 11.8 GB limit, read from `jax.Device.memory_stats` and never
+from `nvidia-smi`, which reports the preallocated pool. The dial's cost *is*
+visible and is the §2.4 trade in miniature: 0.10 → 0.40 GB for the 4.5x. It is
+`GPU.md`'s bismuthene case at 12.7 GB, not these, that will find the edge of a
+16 GB card.
+
+**Correctness, which is what Phase 0 was actually for:**
+
+* the total energy agrees with the CPU run to **1.6e-13 Ry** worst case over all
+  six configurations — round-off, and three orders inside the `conv_thr` all
+  three cases were run at (1e-10);
+* `al10-metal` on the GPU reproduces the **committed QE reference to 1.88e-09 Ry**,
+  which is the identical figure the development workstation gets. Not "matches
+  the other run" — matches the external reference to the same digit;
+* **determinism holds bit for bit**, on every case, run twice in one process.
+  `basis/fft.py`'s accumulating scatter over deliberately duplicated indices was
+  the named hazard — XLA lowering it through atomics with an irreproducible
+  summation order — and on this hardware it did not materialise. That is a
+  measurement on a V100 with this plugin, not a guarantee; §4a's rerun triggers
+  are what keep it true;
+* compile time is **3.7–14.3 s**, reported and never amortised.
+
+The cross-job form of the determinism check — the identical *job* twice, which
+catches a compilation that is not itself reproducible where one process cannot —
+is not yet run. `phase0_compare.py`'s `across` column is what reads it, and it
+is asserted only between records from the same platform (cuFFT and pocketfft sum
+in different orders, so a GPU/CPU pair is expected to differ and does).
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -2037,4 +2131,5 @@ Neither is a new cost model, which is the useful part:
 | 2026-08-23 | The dynamical matrix of a metal (P28): the `jvp` split so the electronic half takes `wk` where the frozen Hessian keeps `wg` | two-atom aluminium's six modes in **78 s**, 9 response iterations at `av.it. = 23.0` against `ph.x`'s 7 and 3.3-6.3; the extra `jvp` per mode is not measurable against the linear solves, and the iteration gap is P25's two backlog items unchanged |
 | 2026-08-22 | A mixer in the three response loops (`response/mixing.py`), Anderson over the packed state | silicon 19 -> 9 and 18 -> 11 iterations with identical answers; **bilayer graphene and rhombohedral BN converge where linear mixing diverged** -- a correctness fix filed as a speed one |
 | 2026-08-24 | The Tran-Blaha potential (P30): `tau` from the states, the Laplacian as `-G^2 rho(G)`, the Becke-Roussel inversion as a fixed-length bisection with an implicit `custom_jvp` | silicon's gap 0.49 -> 1.13 eV for **1.8x the SCF iterations**; `tau` costs 1125 ms an iteration against the density's 200, which is 7.6x where the algorithm says 3x -- three separate box scatters, and the backlog item |
+| 2026-08-25 | **First contact with a GPU** (GPU.md Phase 0): the same source, unmodified, on a V100 | `al10-metal` **5.44x** the four-core CPU baseline at `k=all, b=all` — and **0.99x on the defaults**, because the cache-shaped dials invert on a GPU (801 → 177 ms). Energy agrees to 1.6e-13 Ry, determinism bit-identical, fp64 costs 1.78-1.98x on a matmul and 0.85-1.44x on an FFT (grid-dependent) |
 | 2026-08-24 | Spin-orbit (P31) and PAW (P32, P33) for the Tran-Blaha potential | `tau` as a 2x2 spin matrix costs the same three transforms per band; PAW's one-centre `tau` is free (same einsum as the density) but its Becke-Roussel inversion runs on `nx * mesh` = 1.4e5 points per atom against the grid's 3.3e4 |

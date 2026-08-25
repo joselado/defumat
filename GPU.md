@@ -10,11 +10,18 @@ The organising fact is stated once and everything below follows from it:
 > **Nothing here is a port.** JAX already emits GPU code from the same source, and the
 > rules that made that true — D1, D2, R6, R7, the `Precision` policy, the two batching
 > dials —
-> have been binding since P0. What is missing is not a backend but **evidence**: no line of
-> this code has ever run on a GPU, the choices that were tuned against a CPU were measured
+> have been binding since P0. What was missing was not a backend but **evidence**: no line of
+> this code had ever run on a GPU, the choices that were tuned against a CPU were measured
 > against a CPU, and the metric this project reports is a single-core CPU comparison that
 > means nothing on an accelerator. The work is to establish the first, revisit the second
 > and define the third.
+
+**Phase 0 is done as of 2026-08-25** and the first of those three is settled: the same
+source, unmodified, runs on a Tesla V100 and reproduces the CPU energy to 1.6e-13 Ry. It
+also returned the two numbers this file was written without — **fp64 costs 1.78–1.98x on a
+matmul and 0.85–1.44x on an FFT**, which fixes Phase 3's rank, and **the defaults cost
+4.5x**, which turns §1's warning into a measurement. Everything below Phase 0 is still
+unrun.
 
 ---
 
@@ -46,8 +53,9 @@ the batch that a cache does not."* **A GPU run left on the defaults serialises e
 into a per-band kernel launch** — close to the worst execution mode available — so both
 dials are part of Phase 0's configuration, not a tuning afterthought.
 
-**One consequence worth stating plainly**: the first GPU run is expected to *work*. If it
-does not, that is information about JAX or about the machine, not about a missing port.
+**One consequence worth stating plainly**: the first GPU run is expected to *work*. (It
+did — Phase 0, 2026-08-25.) If it does not, that is information about JAX or about the
+machine, not about a missing port.
 That is a claim about *crashing*, and it is well supported. It is **not** a claim about the
 numbers: §3's Phase 0 has to earn that separately, and the two ways it could fail quietly
 are a nondeterministic accumulation (Phase 0, check 5) and a memory reading that measures
@@ -66,9 +74,12 @@ Access policy, account paths, partitions and site limits live in the private not
 this checkout (untracked, alongside `CLAUDE.md`'s committed content); read them before
 proposing any job. Two consequences bind every phase below: a job is **proposed to the
 user rather than submitted**, and **every scheduler value is looked up rather than
-remembered**. This file deliberately names no GPU model, memory size or fp64 rate,
-because it does not know them and guessing one would poison every measurement that
-followed.
+remembered**. This file deliberately named no GPU model, memory size or fp64 rate while it
+did not know them, because guessing one would have poisoned every measurement that
+followed. Phase 0 has since measured them **on one card** — a V100-SXM2-16GB — and they are
+recorded there and in `PERFORMANCE.md` as a property of that card, not of GPUs: the same
+cluster offers A100, H100, H200, B300 and GH200 partitions, whose fp64 rates and memory
+differ by an order of magnitude, so a later phase re-measures rather than inherits.
 
 **2.2 What was measured on a CPU was measured on a CPU.** The standing rule is to mirror
 QE's implementation in the performance-critical path, and it has been right more than once.
@@ -142,7 +153,52 @@ whether a cell runs at all.
 
 ## 3. The phases
 
-### Phase 0 — first contact: does it run, and does it give the same number?
+### Phase 0 — first contact: does it run, and does it give the same number? ✅ DONE (bar check 5's cross-job form)
+
+**Run 2026-08-25**, Tesla V100-SXM2-16GB on Aalto's Triton, jax 0.11.1 with
+`jax-cuda12-plugin` 0.11.1, against four pinned cores of an EPYC Milan.
+`tools/gpu/` is the harness; the table and the reasoning are in `PERFORMANCE.md`
+under "First contact with a GPU". What the five checks returned:
+
+1. **x64 works**, asserted on a device array. fp64 costs **1.78–1.98x on a
+   matmul** and **0.85–1.44x on a batched 3D FFT** over the six records — the
+   V100 is a 1:2 fp64 part and the matmul reproduces that, while the transform's
+   cost is **grid-dependent** and has to be quoted as a range (1.44x on
+   `al10-metal`'s 27x15x72, 0.85x on a 16³ box where the transform is
+   latency-bound and the timing is noise). **This settles Phase 3's rank**,
+   which this file declined to guess and flagged as provisional: single
+   precision's ceiling is ≤2x on the dense algebra and at most ~1.4x on the
+   transforms, so Phase 3 goes **after Phase 4**, and the missing float32 *tier*
+   stays owed by `PLAN.md` §5 on its own ground rather than as a GPU performance
+   item.
+2. **The energy matches**, to **1.6e-13 Ry** against the CPU run worst case, and
+   `al10-metal` reproduces the **committed QE reference to 1.88e-09 Ry** — the
+   same digit the development workstation gets.
+3. **Compile is 3.7–14.3 s**, reported as its own line. `PYPRESSO_CACHE_DIR` on
+   scratch: one writer per job, so the concurrent-writer question is *still
+   open* rather than answered.
+4. **Peak device memory 0.40 GB** against an 11.8 GB allocator limit, from
+   `memory_stats`. Not binding at this scale; the dial's cost is visible
+   (0.10 → 0.40 GB) and is §2.4's trade in miniature.
+5. **Determinism holds bit for bit**, every case, run twice in one process. The
+   scatter-add-through-atomics hazard did not materialise on this hardware.
+   **The cross-job form is not yet run** — the identical *job* twice, which
+   catches an irreproducible compilation where one process cannot.
+
+**And the headline, which is §1's prediction turned into a number.** On the GPU
+`al10-metal` runs at **801 ms/iteration on the defaults and 177 at `k=all,
+b=all`** — 4.5x — where the same change on a CPU costs 1.2x the wrong way. **A
+GPU run left on the cache-shaped defaults gives up 4.5x.** One thing the file
+did not predict: **`k=all, b=1` is worse than either end** (2075 ms), because
+batching k while looping bands multiplies the per-band launches by `nk` and buys
+the batched mode's memory with the looped mode's launch count. The two axes move
+together or not at all.
+
+**The expectation in §1 held**: the first GPU run worked, and nothing was ported
+to make it. Small cells lose (`si-1k` 0.33x, `si8-1k` 0.35x) on launch overhead,
+which is the standing two-atom-cell rule in its GPU form.
+
+---
 
 **What.** One SCF, float64, both batching dials set explicitly, on a cluster GPU node,
 reproducing the CPU result to the tolerance that case is already committed against.
@@ -231,7 +287,7 @@ here, and the first is the one that decides whether any of this roadmap is reach
 
 The private cluster notes carry the site-specific answers where they are known.
 
-**Testable without a GPU:** no. This is the gate.
+**Testable without a GPU:** no. This was the gate, and it is open.
 
 ### Phase 1 — where the time actually goes
 

@@ -98,11 +98,22 @@ def main(argv=None) -> int:
             failures.append(f"{label}: x64 did not reach the device")
 
     print(f"\nworst energy difference: {worst:.2e} Ry")
-    slowdowns = {k: v for record in gpu.values() for k, v in record["precision"].items()
-                 if k.endswith("_fp64_slowdown")}
-    for kernel, value in slowdowns.items():
-        print(f"{kernel.replace('_fp64_slowdown', ''):>24} fp64 is {value:.2f}x fp32 "
-              f"-- GPU.md check 1, and what Phase 3's rank waits on")
+    # A *range* over the records, not a dict comprehension over them: the FFT's
+    # cost in double depends on the grid, and collapsing six measurements into
+    # whichever one happened to sort last reports the flattering end of a spread
+    # as if it were the number. (It did, once: 1.01x quoted from a 16^3 box where
+    # the al10 grid measures 1.44x.)
+    slowdowns: dict[str, list] = {}
+    for record in gpu.values():
+        for key, value in record["precision"].items():
+            if key.endswith("_fp64_slowdown"):
+                slowdowns.setdefault(key, []).append(value)
+    for kernel, values in slowdowns.items():
+        low, high = min(values), max(values)
+        spread = f"{low:.2f}x" if high - low < 0.05 else f"{low:.2f}-{high:.2f}x"
+        print(f"{kernel.replace('_fp64_slowdown', ''):>24} fp64 is {spread} fp32 "
+              f"over {len(values)} records -- GPU.md check 1, and what Phase 3's rank "
+              f"waits on")
 
     if failures:
         print("\nFAILED:")

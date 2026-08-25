@@ -761,6 +761,18 @@ already stopped Davidson calls running long enough for compaction to pay. Still 
 buffer donation, k-axis sharding across CPU-cores-as-devices and across GPUs, Numba
 `prange` on the setup hot spots.
 
+**Phase 0 of the GPU half is done (2026-08-25) and it ran on a Tesla V100.** The same
+source, unmodified — nothing was ported, which is what `GPU.md` predicted and what had
+never been evidence. `al10-metal` reproduces the committed QE reference to **1.88e-09 Ry**
+on the device, agrees with the CPU run to **1.6e-13 Ry**, and is **bit-identical run to
+run**. The measurement is that **the two batching dials invert**: 801 ms/iteration on the
+cache-shaped defaults against **177 at `k=all, b=all`**, a factor of 4.5, where the same
+change costs 1.2x the *wrong* way on a CPU — and `k=all, b=1` is worse than either end at
+2075, because batching k while looping bands buys the batched mode's memory with the looped
+mode's launch count. fp64 costs 1.78-1.98x on a matmul and 0.85-1.44x on an FFT, which
+ranks `GPU.md`'s float32 phase **after** its sharding phase rather than before. Harness in
+`tools/gpu/`, numbers in `PERFORMANCE.md`. Phases 1-5 are unrun.
+
 **`GPU.md` is the roadmap for the GPU half of this phase** — what is already GPU-ready by
 design and needs no work, what is blocked on first contact with real hardware, and what
 can be done here without any. Read it before starting that work. Three of its points
