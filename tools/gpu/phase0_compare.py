@@ -53,8 +53,14 @@ def main(argv=None) -> int:
         print(f"CPU: {baseline['provenance']['device_kind']}  "
               f"{baseline['provenance']['cpus_per_task']} cores allocated")
 
+    same_platform = bool(first and baseline
+                         and first["provenance"]["platform"] == baseline["provenance"]["platform"])
+    if same_platform:
+        print("\nboth sides are the same platform: this is check 5's *cross-job* form -- "
+              "the identical job twice, which catches what one process cannot")
+
     header = (f"\n{'case / dials':<34}{'dE (Ry)':>12}{'GPU ms/it':>11}{'CPU ms/it':>11}"
-              f"{'ratio':>8}{'compile':>9}{'peak GB':>9}  determinism")
+              f"{'ratio':>8}{'compile':>9}{'peak GB':>9}  {'in-run':<15}across")
     print(header)
     print("-" * len(header))
 
@@ -72,14 +78,22 @@ def main(argv=None) -> int:
         gpu_iter = run["per_iteration_s"] or float("nan")
         cpu_iter = other["run"]["per_iteration_s"] or float("nan")
         verdict = record["determinism"]["verdict"]
+        # Bit-for-bit across the two records. Two *different* platforms are not
+        # expected to agree here -- cuFFT and pocketfft sum in different orders --
+        # so it is reported for both and asserted only when the platforms match,
+        # which is check 5's cross-job form.
+        across = ("identical" if record["run"]["runs"][0]["density_checksum"]
+                  == other["run"]["runs"][0]["density_checksum"] else "differs")
         print(f"{label:<34}{difference:>12.2e}{gpu_iter * 1e3:>11.0f}{cpu_iter * 1e3:>11.0f}"
               f"{cpu_iter / gpu_iter:>7.2f}x{record['run']['compile_s'] or 0:>8.1f}s"
-              f"{record['memory']['peak_gb']:>9.2f}  {verdict}")
+              f"{record['memory']['peak_gb']:>9.2f}  {verdict:<15}{across}")
 
         if abs(difference) > run["conv_thr"]:
             failures.append(f"{label}: {difference:.2e} Ry exceeds conv_thr {run['conv_thr']:.1e}")
         if verdict != "bit-identical":
             failures.append(f"{label}: not reproducible run to run")
+        if same_platform and across != "identical":
+            failures.append(f"{label}: the same job on the same platform gave different bits")
         if not record["precision"]["float64_survives"]:
             failures.append(f"{label}: x64 did not reach the device")
 

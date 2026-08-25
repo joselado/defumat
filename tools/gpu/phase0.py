@@ -177,8 +177,12 @@ def check_precision(grid: tuple[int, int, int] | None) -> dict:
 
     probe = jnp.zeros(4, dtype=jnp.float64) + 1.0
     complex_probe = probe.astype(jnp.complex128)
+    try:
+        x64_flag = bool(jax.config.read("jax_enable_x64"))
+    except (AttributeError, KeyError, ValueError):   # older jax spells it as an attribute
+        x64_flag = bool(getattr(jax.config, "jax_enable_x64", False))
     record = {
-        "x64_enabled": bool(jax.config.read("jax_enable_x64")),
+        "x64_enabled": x64_flag,
         "float64_survives": str(probe.dtype) == "float64",
         "complex128_survives": str(complex_probe.dtype) == "complex128",
         "device_of_probe": str(list(probe.devices())[0]),
@@ -289,7 +293,8 @@ def run_case(case: Path, repeats: int, threshold: float) -> dict:
             "iterations": int(result.iterations),
             "converged": bool(result.converged),
             "accuracy": float(result.accuracy) if result.accuracy is not None else None,
-            "eigenvalue_checksum": repr(_bits(result.eigenvalues)),
+            "eigenvalue_checksum": _bits(result.eigenvalues),
+            "density_checksum": _bits(result.density),
         })
         last = result
 
@@ -318,10 +323,20 @@ def run_case(case: Path, repeats: int, threshold: float) -> dict:
     }
 
 
-def _bits(array) -> int:
-    """A bit-exact fingerprint of an array: hash of its raw bytes."""
+def _bits(array) -> str:
+    """A bit-exact fingerprint of an array: SHA-256 of its raw bytes.
+
+    **Not** Python's ``hash``, which is salted per process: a fingerprint that
+    changes with ``PYTHONHASHSEED`` compares fine inside one run and is
+    meaningless the moment it is written to JSON. GPU.md check 5 is literally
+    "run the identical *job* twice and diff bit for bit", which is two
+    submissions -- and two submissions is what catches the failure one process
+    cannot, a compilation that is not itself reproducible.
+    """
+    import hashlib
+
     import numpy as np
-    return hash(np.asarray(array).tobytes())
+    return hashlib.sha256(np.ascontiguousarray(array).tobytes()).hexdigest()
 
 
 def _grid_of(calculation) -> tuple[tuple | None, tuple | None]:

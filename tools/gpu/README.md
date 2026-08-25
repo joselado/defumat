@@ -119,3 +119,19 @@ decoration:
 * **`peak GB`** — from JAX's own allocator accounting, never `nvidia-smi`, which
   reports the preallocated pool. Reading the pool would give a *wrong number
   rather than a failed check*, which is the worse of the two outcomes.
+
+## Check 5 has two forms and this runs both
+
+*Inside* one process, the SCF runs twice and is compared bit for bit — that is
+`phase0.py`'s `determinism` line. *Across* two jobs, the density and eigenvalue
+fingerprints in the JSON are compared — that is `phase0_compare.py`'s `across`
+column, and it catches the failure one process cannot: a compilation that is not
+itself reproducible. The fingerprint is a **SHA-256** of the raw bytes and not
+Python's `hash`, which is salted per process and would have compared fine inside
+one run and meant nothing the moment it was written to a file.
+
+Two different platforms are *not* expected to agree bit for bit — cuFFT and
+pocketfft sum in different orders — so `across` is reported for a GPU/CPU pair
+and asserted only when the two records come from the same platform. Rerunning
+the GPU job and comparing it against itself is therefore a real check and costs
+one extra job.
