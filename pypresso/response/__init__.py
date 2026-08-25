@@ -38,12 +38,18 @@ expression.
     ``d(chi)/d(strain)`` as a **third** derivative, from the 2n+1 theorem in the
     one form it takes here -- the second-order energy is stationary in the
     first-order wavefunctions, so it may be differentiated with them held fixed.
+``nonlinear``
+    the Raman tensors, ``d(eps)/d(tau)``: the same third derivative with the
+    atoms as its geometry variable instead of the cell, so the phase is an
+    assembly of tangents the two modules above already produce. ``chi^(2)`` and
+    the electro-optic tensor are refused there, with the term they need named.
 """
 
 from pypresso.response.born import born_effective_charges
 from pypresso.response.efield import DielectricTensor, dielectric_tensor
 from pypresso.response.elastic import ElasticConstants, elastic_constants
 from pypresso.response.electrostriction import Electrostriction, electrostriction
+from pypresso.response.nonlinear import RamanTensors, raman_tensors
 from pypresso.response.strain import StrainResponse, strain_response
 from pypresso.response.phonon import Phonons, dynamical_matrix
 from pypresso.response.sternheimer import (
@@ -64,6 +70,7 @@ __all__ = [
     "ElasticConstants",
     "Electrostriction",
     "Phonons",
+    "RamanTensors",
     "SternheimerResult",
     "SternheimerSolver",
     "StrainResponse",
@@ -76,5 +83,6 @@ __all__ = [
     "electrostriction",
     "local_perturbation",
     "make_sternheimer",
+    "raman_tensors",
     "strain_response",
 ]

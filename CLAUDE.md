@@ -218,8 +218,33 @@ UPF cannot supply is a **core kinetic energy density**, so the one-centre term s
 valence density alone on both sides — including the all-electron core in `rho` with no `tau`
 to match it inverts the functional's `c` dependence, measurably (`PLAN.md` P32).
 
+**The Raman tensor is in** (P35), and it is P26's third derivative with the atoms as its
+geometry variable rather than the cell: `d(eps)/d(tau)` is one `jvp` of the *same*
+variational second-order energy, so the phase is an assembly of tangents that already
+existed — the displacement response P25 solves for the dynamical matrix, the field response
+P24 solves for `epsilon`, and P26's own extra Sternheimer solve for the position operator.
+**The reference for it is broken and establishing that came first**: the vendored `ph.x`
+7.5 does not reproduce QE's committed `PHonon/examples/example05` (v6.0, 2016) — -1.8681
+against -0.78497 on the Raman tensor — and fails its *own* internal check, printing a
+finite-difference dielectric constant of -0.288 beside its analytic 8.8143 where v6.0 has
+8.8116 beside 8.8147. So the validation is a **finite difference of `epsilon` over
+re-converged displaced cells**: **-3.118279** against **-3.118310**, 1.0e-5. What `pw.x`
+cannot do at all is a **GGA** — `phq_setup.f90` stops on "third order derivatives not
+implemented with GGA" because its third derivative of `E_xc` is a hardcoded Perdew-Zunger
+parameterisation (`d2mxc.f90`), where here it is one more `jvp` of a kernel that already
+exists. **`chi^(2)` and the electro-optic tensor are refused by name**, with the missing
+term identified rather than fitted: the field enters only through the source term, so the
+`<u_i|r_k|u_j>` piece of the 2n+1 expression (QE's `dvpsi_e2`/`solve_e2`) has nothing to
+build it from — and it is **42% of the answer**, measured on its displacement counterpart.
+**No symmetry check catches its absence**, which is the finding worth carrying: without it
+the tensor still vanishes identically in a centrosymmetric crystal, still comes out exactly
+zincblende, and is still symmetric under every permutation of its three labels to 2.5e-13.
+
 **Outstanding:** Wyckoff input, the dynamical matrix of an
-ultrasoft dataset, PAW Born charges, phonons at `q != 0` (the perturbed states live
+ultrasoft dataset, PAW Born charges, `chi^(2)` and the electro-optic tensor (the second-order
+response `solve_e2` is, which P35 refuses for), a rank-3 symmetriser
+(`symtensor3`/`symmatrix3`, which would lift the closed-grid refusal P26 and P35
+share), phonons at `q != 0` (the perturbed states live
 at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals, plus
 `q2r`/`matdyn` for a dispersion), and the rest of P10 (k-axis sharding and GPU).
 
@@ -641,6 +666,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `pypresso/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]` term by term; here it is one `jvp` of `H(k)` at a frozen sphere (`response/velocity.py`), since `dH/dk_a = i[H, r_a]` in the periodic gauge. The overlap carries a velocity too, so a band velocity is `<psi|dH/dk - eps dS/dk|psi>` |
 | Linear response / DFPT | `LR_Modules/cgsolve_all.f90`, `ch_psi_all.f90`, `orthogonalize.f90`, `h_prec.f90`, `setup_alpha_pv.f90`, `incdrhoscf.f90`, `symdvscf.f90`; `PHonon/PH/solve_e.f90`, `dvpsi_e.f90`, `dvqpsi_us.f90`, `dielec.f90`, `zstar_eu.f90` | the linear solve, the projector and the assembly are transcribed; the *perturbations* are not. `dv_of_drho` is one `jvp` of `v_of_rho` (which already drops the `G = 0` Hartree term), the E-field's commutator is the velocity operator, and `dvqpsi_us` is one `jvp` through `at_positions`. **A response on a reduced k-set is a polar vector field and must be symmetrised as one** |
+| Non-linear response (Raman) | `PHonon/PH/raman.f90`, `raman_mat.f90`, `el_opt.f90`, `dhdrhopsi.f90`, `dvpsi_e2.f90`, `solve_e2.f90`, `d2mxc.f90`, `write_ramtns.f90`, `symme.f90` (`symtensor3`, `symmatrix3`) | none of it is transcribed: `d(eps)/d(tau)` is one `jvp` of the second-order energy P26 already differentiates, and `d2mxc`'s third derivative of `E_xc` is a `jvp` of the kernel rather than a parameterisation, so a GGA works where `phq_setup.f90` stops. **The vendored 7.5 build's `lraman`/`elop` branch does not reproduce QE's own v6.0 example and fails its own internal check** -- use it as evidence, not as a reference |
 | Input parsing | `Modules/read_input.f90`, `PW/src/input.f90`, `Modules/input_parameters.f90` | defaults for every input variable are declared in `input_parameters.f90` |
 | DFT+U | `PW/src/ldaU.f90`, `hubbard.f90`, `new_ns.f90`, `init_ns.f90`, `ns_adj.f90`, `orthoUwfc.f90`, `offset_atom_wfc.f90`, `vhpsi.f90`, `v_of_rho.f90` (`v_hubbard`), `scf_mod.f90` (`ns_ddot`), `force_hub.f90` | the projectors are `S phi` even for `Hubbard_projectors = 'atomic'`; `ortho-atomic` orthogonalises over **all** `natomwfc`, not the Hubbard manifold alone, so `Modules/read_pseudo.f90`'s `upf_check_atwfc_norm` renormalisation of `chi` reaches the answer through the `4s`. `force_hub.f90` is *not* transcribed: it is `jax.grad` through `Calculation.at_positions` |
 | Occupations / smearing | `PW/src/gweights.f90`, `Modules/wgauss.f90`, `Modules/w0gauss.f90`, `PW/src/set_occupations.f90` | |

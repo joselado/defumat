@@ -1644,6 +1644,46 @@ does, and `etxc` is evaluated pointwise on it -- so a line search with Wolfe con
 has nothing to converge to. That is the trade `treinit_gvecs` makes: it removes the Pulay
 error and buys a surface the optimizer cannot walk. `PLAN.md`'s P29 entry has the case.
 
+## What a Raman tensor costs (P35)
+
+The third derivative of P26 with the atoms as its geometry variable, on AlAs
+(`ecutwfc = 10`, 2 atoms, the unshifted 4x4x4 grid run whole under `nosym`, so
+64 k-points and ~110 plane waves) and on the silicon of `si-epsilon-unshifted-nosym`
+(`ecutwfc = 18`, 64 k-points):
+
+| stage | AlAs | silicon |
+|---|---|---|
+| SCF to `conv_thr = 1e-12` | 5.2 s | 2.8 s |
+| field response, 3 perturbations, 9 iterations | 41 s | 63 s |
+| displacement response, `3 nat` perturbations, 9 iterations | 71 s | 104 s |
+| `3 nat` `jvp`s plus their `db` solves | 33 s | 35 s |
+| **total** `raman_tensors` | **145 s** | **202 s** |
+
+**No ratio against QE here, and the reason is the phase's own finding**: the
+`ph.x` branch that would be the other side of it does not reproduce QE's own
+committed example and fails its internal consistency check (`PLAN.md` P35), so
+its timings measure a calculation that is not the same calculation. Every other
+stage in this table has a QE counterpart timed elsewhere -- the SCF in the tables
+above, the two response loops in P24's and P25's entries.
+
+**The two self-consistent responses are 78% of it and the third derivative is 23%**,
+which is the same shape P26 measured and for the same reason: a `jvp` of an
+assembly costs about what the assembly costs, and the assembly is cheap beside a
+projected CG solve. The consequence is that a Raman tensor costs roughly *twice*
+a dynamical matrix rather than more -- the displacement response is shared with
+it, and the field response is P24's.
+
+Backlog item 5 (scheduling the response solver's threshold against the
+self-consistency of the response, `dfpt_kernels.f90`'s
+`thresh = min(0.1 sqrt(dr2), 1e-2)`) applies here at full strength: 78% of this
+phase is in the two loops it would speed up.
+
+The peak working set is the responses': `(3 + 3 nat)` arrays of
+`(nspin, nk, nocc, npwx)` complex, plus the same again in the mixer's Anderson
+history. On these cases that is under 1 GB; on the 16-atom cell P25 already
+records for the dynamical matrix it is the same 7 GB, since the Raman tensors add
+three field responses and nothing per atom.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than

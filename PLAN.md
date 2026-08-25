@@ -4511,6 +4511,138 @@ than assumed. (The agent's shell is also sandboxed by default, and SSH needs tha
 relaxed explicitly, as the pseudopotential downloads of P30 did.)
 
 
+### P35 — Raman tensors: two fields and a displacement. ✅ DONE.
+
+`pypresso/response/nonlinear.py`, `raman_tensors`. The third derivative of the
+energy with respect to **two electric fields and one atomic displacement** —
+`d(eps)/d(tau)`, which is what a non-resonant Raman intensity is computed from.
+It is P26's construction with one substitution: the *same* variational
+second-order energy `F_ij`, differentiated once more at frozen first-order
+wavefunctions (the 2n+1 theorem), along the atomic positions where P26 went
+along a strain.
+
+    d(eps_ij)/d(tau_c) = jvp(F_ij)( tau, psi, rho, b ; e_c, dpsi_c, drho_c, db_c )
+
+**Every tangent already existed**, which is the point of the phase: `dpsi_c` and
+`drho_c` are the displacement response P25 solves for the dynamical matrix, `b`
+and `u` are the field response P24 hands back through `keep_internals`, and
+`db_c` is the further Sternheimer solve P26 wrote — reached here through the
+same function, with `at_positions` as its geometry variable instead of
+`at_strain`. The only edit outside the new module is that
+`_position_response` and `_require_a_closed_grid` take what moves as an
+argument. **The whole phase is an assembly**, and P26's machinery went from one
+consumer to two, which is what makes the second one worth having: machinery with
+one consumer is unproven.
+
+*Check met*, on AlAs (zincblende, LDA norm-conserving, `ecutwfc = 10`, the
+unshifted 4x4x4 grid run whole under `nosym`):
+
+| quantity | pypresso | reference | |
+|---|---|---|---|
+| `d(eps_yz)/d(tau_(Al,x))` | **-3.118279** | -3.118310 | central difference of `eps` over re-converged displaced cells, **1.0e-5** relative |
+| `d(eps_yz)/d(tau_(As,x))` | **+3.119166** | +3.119194 | the same, 9e-6 |
+| translational sum rule | **8.9e-4** | 0 | 2.8e-4 of the tensor; `ph.x` gives 1.11 (43%) |
+| zincblende form | all nine forbidden entries **< 1e-13** | 0 | nothing imposes it — `nosym`, no average |
+| `eps` | 12.9674206 | 12.9673215 (`ph.x`) | P24's own agreement, unchanged |
+
+**The reference for this phase is broken, and establishing that had to come
+first.** QE reaches the same tensor through `ph.x` with `lraman = .true.`, and
+the vendored 7.5 build **does not reproduce its own committed example**. On
+`PHonon/examples/example05`'s own input it gives a Raman tensor of **-1.8681**
+where the reference (generated with v6.0 in 2016) says **-0.78497**, and an
+electro-optic tensor of **157.87** against **40.4578**. Its *own* internal
+consistency check fails too: `dhdrhopsi` obtains the k-derivative of the
+wavefunctions by finite differences and prints the dielectric constant they
+imply beside the analytic one, and where the v6.0 reference has 8.8116 against
+8.8147, the vendored build gives **-0.288** against 8.8143. Tightening
+`eth_rps` and `eth_ns` by four orders moves it by 1e-2, so it is not a
+threshold. Reading the two literature values the same way — the v6.0 number is
+consistent with Veithen, Gonze and Ghosez's ABINIT table for AlAs and the 7.5
+one is four times it — says which of the two is the regression.
+
+The obvious objection is answered rather than left: **the pseudopotentials are not
+the same files.** The MD5s the example's own output prints (`614279c8…`,
+`451cd336…`) are not the committed ones here (`f06ceae8…`, `2c53d869…`) — they
+are the same two pseudopotentials from a different distribution. That cannot be
+the explanation, for two reasons. `eps` agrees to **4e-4** between the two runs
+(8.8147 against 8.8143), so the datasets are equivalent everywhere the ground
+state and the linear response can see. And the decisive evidence is *internal to
+a single run*: `dhdrhopsi`'s own finite-difference dielectric constant against
+the analytic one built from the same wavefunctions, which no choice of
+pseudopotential enters.
+
+So the validation is **a finite difference of the dielectric tensor over
+re-converged displaced geometries**, which shares nothing with the third
+derivative but the linear response underneath both — the route P26 already used
+for `d(chi)/d(strain)`, and available here because `eps` is a quantity this code
+computes from scratch at any geometry.
+
+**What `pw.x` refuses and this does not.** `phq_readin.f90` and `phq_setup.f90`
+refuse, by name: PAW, ultrasoft, noncollinear magnetism, Hubbard `U`, `lsda`,
+metals, `q != 0` — and
+
+    IF (xclib_dft_is('gradient').and.(lraman.or.elop)) call errore('phq_setup', &
+       'third order derivatives not implemented with GGA', 1)
+
+because `PHonon/PH/d2mxc.f90` is the third derivative of `E_xc` hand-coded as a
+Perdew-Zunger parameterisation and nothing else. Here that object is never
+written: `dv_of_drho` is one `jvp` of `v_of_rho` (P24), the screening term of
+`F` contracts two density responses against it, and differentiating `F` a third
+time differentiates *that*. `delta^3 E_Hxc/delta n^3` is whatever the loaded
+functional's is, and no third derivative is transcribed. **This is the phase
+where D1 pays the most**: the ratio of what had to be written to what came out
+is the smallest anywhere in this code.
+
+**`chi^(2)` and the electro-optic tensor are refused by name, and the missing
+term is identified rather than fitted.** They are the same functional
+differentiated along a *third field*, every tangent for it exists, and the
+result is wrong — because **the field enters this code only through the source
+term** `b = P_c r|psi>` and through the density. `H` is built from `rho` and
+carries no field at all, so the term of the 2n+1 expression in which the
+perturbing operator sits between two first-order wavefunctions (`<u_i|r_k|u_j>`,
+which QE builds by going to *second*-order response in `dvpsi_e2`/`solve_e2`)
+has nothing here to build it from: the position operator exists only as
+`P_c r|psi>`, through a commutator solve that uses `psi`'s own eigenvalue and
+does not apply to a general first-order state.
+
+**How large that term is, is a measurement rather than an estimate**, because
+its displacement counterpart *is* computed here. Zeroing the geometry tangent in
+the Raman derivative — which puts it in exactly the position the field
+derivative is in — moves `d(eps_yz)/d(tau)` from **-3.118279** to
+**-1.809983**: the explicit `dH/d(parameter)` term is **42% of the answer**.
+
+**And no symmetry check catches its absence**, which is the finding worth
+carrying forward. Without that term the field tensor still
+
+* vanishes identically in a centrosymmetric crystal — silicon gives **1.2e-13**;
+* comes out in the exact zincblende form on AlAs, eight zeros per block at
+  1e-13, with nothing imposing it;
+* is symmetric under **every permutation of its three labels to 2.5e-13**,
+
+because the omitted term has all three properties itself. Kleinman's condition
+is the check this phase expected to be decisive and it is not: `F_ij` is
+symmetric in its own two labels by construction, so what the permutation test
+measures is real but blind to anything symmetric. The tensor is roughly an order of
+magnitude below the published `chi^(2)` of AlAs and moves *away* from it as the
+k-grid is refined, and every symmetry statement about it is exact —
+which is the same shape of trap as P28a's, one order up. It is kept in the code
+(`susceptibility_field_derivative`) precisely so that the tests can measure it,
+and refused at the entry point.
+
+**Two backlog items, and the first is the phase after this one.** The
+`<u_i|r_k|u_j>` term needs the second-order response `solve_e2` is; with it,
+`chi^(2)`, the electro-optic tensor and — with the Raman tensors and P25's modes
+and P24's `Z*`, all of which exist — the full Pockels tensor are an assembly.
+**Grüneisen parameters** are the cheapest thing adjacent to this and were not
+attempted: one more `jvp` of the dynamical matrix along the strain tangent P26 already
+builds, checked by finite-differencing phonon frequencies over strained cells. And a
+**rank-3 symmetriser** (`symme.f90`'s `symtensor3` and `symmatrix3`) would lift the
+closed-grid refusal that P26 introduced and this phase inherits: two
+field labels and an atom make a wedge sum incomplete, and an unshifted grid run
+whole is the escape both phases take.
+
+*Notebook 25.*
+
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes
 the k-point count.

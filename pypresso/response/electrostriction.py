@@ -412,7 +412,8 @@ def _epsilon_at(calculation, strain, psi, rho, b, u, weights):
 # -- the position operator's own strain derivative ---------------------------
 
 
-def _position_response(calculation, solver, rho, b, tangent, dpsi, drho):
+def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
+                       moved_at=None, geometry=None):
     """``P_c db/dx``: one further Sternheimer solve per cartesian direction.
 
     ``b_a = P_c r_a|psi>`` is not written down anywhere -- it is *defined* by a
@@ -454,13 +455,16 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho):
     under a strain, so the operator is built on the ``kcart``
     :meth:`~pypresso.scf.driver.Calculation.at_strain` recorded.
     """
-    calculation_zero = jnp.zeros((3, 3))
+    if moved_at is None:
+        # The strain path this function was written for: the geometry variable
+        # is a ``(3, 3)`` strain and ``tangent`` one of the six Voigt patterns.
+        moved_at, geometry = calculation.at_strain, jnp.zeros((3, 3))
     psi = solver.psi
     frozen_b = b
     directions = np.eye(3)
 
-    def residual(strain, states, density):
-        moved = calculation.at_strain(strain)
+    def residual(geometry, states, density):
+        moved = moved_at(geometry)
         v_scf = moved.potential(density).v_scf
         velocity = VelocityOperator(moved, v_scf, None)
         hamiltonians = moved.hamiltonian(v_scf, None)
@@ -488,7 +492,7 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho):
         return jnp.stack(out)
 
     _, rhs = jax.jvp(
-        residual, (calculation_zero, psi, rho), (tangent, dpsi, drho)
+        residual, (geometry, psi, rho), (tangent, dpsi, drho)
     )
     # One solve per cartesian direction: ``_solve_stored`` takes a right-hand
     # side that is already an array and applies ``orthogonalize``'s sign, which
@@ -755,14 +759,19 @@ def _to_voigt(tensor: np.ndarray) -> np.ndarray:
     return out
 
 
-def _require_a_closed_grid(calculation) -> None:
-    """Refuse a symmetry-reduced k-set, which is what P26 has no average for."""
+def _require_a_closed_grid(calculation, what: str = "electrostriction") -> None:
+    """Refuse a symmetry-reduced k-set, which is what P26 has no average for.
+
+    ``what`` names the caller, because P35's two tensors are refused here for
+    exactly the same reason and a refusal that names the wrong phase is worse
+    than one that names none.
+    """
     # The condition is the one the symmetrisers themselves test -- ``nosym``
     # leaves ``symmetries`` in place (the group is wanted for other things) and
     # sets the density maps to ``None``, which is what says no average happens.
     if getattr(calculation, "_symmetry_maps", None) is not None:
         raise NotImplementedError(
-            "electrostriction on a symmetry-reduced k-set is not implemented: "
+            f"{what} on a symmetry-reduced k-set is not implemented: "
             "the object being differentiated carries a field label and a strain "
             "label at once, so completing the wedge sum needs a rank-3 average "
             "(R_ai R_bk R_cl) that is not written. Run the whole grid instead -- "

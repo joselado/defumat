@@ -1,0 +1,36 @@
+! The `ph.x` input that generated `reference.out.ph-alas-raman`:
+!
+!   pw.x -in alas-raman.in && ph.x -in alas-raman.ph.in
+!
+! `PHonon/examples/example05`'s response input, on the ground state of
+! `alas-raman.in`. It prints the electro-optic tensor (`el_opt.f90`, dε/dE in
+! Rydberg a.u.) and the Raman tensor (`raman_mat.f90`, dε/dτ in inverse bohr),
+! which are the two quantities P35 computes.
+!
+! **The committed output of this run is evidence, not a reference.** The vendored
+! ph.x 7.5 does not reproduce QE's own committed example05 (generated with v6.0):
+! -1.8681 against -0.78497 for the Raman tensor and 157.87 against 40.4578 for the
+! electro-optic one, and its own internal check -- the "dielectric constant from
+! finite-differences" that dhdrhopsi prints beside the analytic one -- gives -0.288
+! against 8.8143 where v6.0 has 8.8116 against 8.8147. Tightening eth_rps and
+! eth_ns by four orders moves it by 1e-2. Nothing in the test suite compares
+! against the numbers in this file; P35 is validated against a finite difference
+! of the dielectric tensor instead, and this output is kept so that the claim
+! about ph.x can be checked without a Fortran build. The pseudopotentials
+! committed here are a different distribution of the same two (their MD5s differ
+! from the ones example05 downloads), which is not the explanation: eps agrees to
+! 4e-4 between the runs, and the check that fails is internal to a single run.
+phonons of AlAs at Gamma
+ &inputph
+  tr2_ph=1.0d-12,
+  prefix='alas',
+  epsil=.true.,
+  trans=.true.,
+  lraman=.true.,
+  elop=.true.,
+  zeu=.true.,
+  amass(1)=26.98,
+  amass(2)=74.92,
+  fildyn='alas.dynG',
+ /
+0.0 0.0 0.0

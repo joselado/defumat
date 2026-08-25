@@ -1,0 +1,42 @@
+! AlAs at Gamma: the ground state of `PHonon/examples/example05`, whose `ph.x`
+! run with `lraman = .true.` and `elop = .true.` is the only reference in QE for
+! a third derivative of the energy (P35). The example is Lazzeri and Mauri's
+! second-order-response route, PRL 90, 036401 (2003).
+!
+! Two changes from the example, both forced and both recorded:
+!
+!   * the k-grid is `4 4 4 0 0 0` where the example's is `4 4 4 1 1 1`. A
+!     **shifted** Monkhorst-Pack grid is not closed under the point group, so a
+!     response computed on it cannot be run whole and has to be symmetrised --
+!     and the rank-3 average `chi^(2)` would need (`symmatrix3`) is not written
+!     here. The unshifted grid is closed exactly, which is P24's own escape.
+!   * `nosym`/`noinv`, so that the whole closed grid is used rather than its
+!     wedge. `ph.x` reads the same setting from the ground state, so both codes
+!     run the same 64 k-points and the comparison is of the assemblies rather
+!     than of two symmetrisations.
+!
+! AlAs is zincblende and therefore **non-centrosymmetric**, which is why the
+! case is not silicon: chi^(2) vanishes identically in every centrosymmetric
+! crystal, and silicon is the test that it does.
+ &control
+    calculation = 'scf'
+    prefix = 'alas'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.575, nat = 2, ntyp = 2,
+    ecutwfc = 10.0
+    nosym = .true.
+    noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Al  26.98  Al.pz-vbc.UPF
+ As  74.92  As.pz-bhs.UPF
+ATOMIC_POSITIONS (alat)
+ Al 0.00 0.00 0.00
+ As 0.25 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0
