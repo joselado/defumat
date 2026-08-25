@@ -1,0 +1,71 @@
+! Silicon, thirty-two atoms: the cubic cell of si8-1k.in stacked four deep.
+!
+! Twice si16-1k.in -- 128 electrons, 64 bands -- in a tetragonal cell with
+! c/a = 4, built by the same rule that made si16 from si8.
+!
+! **The energy per atom is NOT the same as si16's here, and that is sampling
+! rather than a bad cell.** Doubling along z halves the zone along kz, so one
+! k-point of this cell folds *two* of si16's -- k_z and k_z + 1/2 -- and a
+! single-k run therefore samples a different set of states. Measured: si8 and
+! si16 agree on E/atom to 4.3e-7 Ry at their shared k-point and this cell is
+! 4.3e-6 away, which is that folding and not a defect. The cell was verified two
+! ways instead: every atom is 4-coordinated at exactly the diamond bond length
+! (a*sqrt(3)/4), and **si32 at Gamma reproduces si16 sampled at {Gamma,
+! (0,0,1/2)} to 8.9e-16 Ry/atom**, which is the folding identity made exact.
+!
+! Added 2026-08-25 for the GPU work: si16 was the largest cell here, and the
+! question a GPU raises is what happens as the cell grows, which needs a rung
+! above it. This is that rung at the cheap cutoff.
+!
+! Single k-point, like every other file here, and for the same reason: both
+! codes parallelise over k, so a multi-k comparison measures batching rather
+! than the cost of the physics.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=6, celldm(1) =10.20, celldm(3) =4.0,
+    nat=32, ntyp=1,
+    ecutwfc=12.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ Si  0.00000  0.00000  0.00000
+ Si  0.00000  0.50000  0.12500
+ Si  0.50000  0.00000  0.12500
+ Si  0.50000  0.50000  0.00000
+ Si  0.25000  0.25000  0.06250
+ Si  0.25000  0.75000  0.18750
+ Si  0.75000  0.25000  0.18750
+ Si  0.75000  0.75000  0.06250
+ Si  0.00000  0.00000  0.25000
+ Si  0.00000  0.50000  0.37500
+ Si  0.50000  0.00000  0.37500
+ Si  0.50000  0.50000  0.25000
+ Si  0.25000  0.25000  0.31250
+ Si  0.25000  0.75000  0.43750
+ Si  0.75000  0.25000  0.43750
+ Si  0.75000  0.75000  0.31250
+ Si  0.00000  0.00000  0.50000
+ Si  0.00000  0.50000  0.62500
+ Si  0.50000  0.00000  0.62500
+ Si  0.50000  0.50000  0.50000
+ Si  0.25000  0.25000  0.56250
+ Si  0.25000  0.75000  0.68750
+ Si  0.75000  0.25000  0.68750
+ Si  0.75000  0.75000  0.56250
+ Si  0.00000  0.00000  0.75000
+ Si  0.00000  0.50000  0.87500
+ Si  0.50000  0.00000  0.87500
+ Si  0.50000  0.50000  0.75000
+ Si  0.25000  0.25000  0.81250
+ Si  0.25000  0.75000  0.93750
+ Si  0.75000  0.25000  0.93750
+ Si  0.75000  0.75000  0.81250
+K_POINTS
+  1
+   0.250000  0.250000  0.250000   1.00
