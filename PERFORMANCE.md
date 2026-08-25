@@ -1828,6 +1828,84 @@ is not yet run. `phase0_compare.py`'s `across` column is what reads it, and it
 is asserted only between records from the same platform (cuFFT and pocketfft sum
 in different orders, so a GPU/CPU pair is expected to differ and does).
 
+## Does the diagonalisation win on a GPU? (P10 / GPU.md Phase 1, 16 atoms)
+
+Phase 0's 5.44x was on `al10-metal`, which has **ten k-points**, so it could not
+say how much was k-parallelism and how much was the per-k path. These three
+cells are **single k-point by construction**, so no k-parallelism exists to find
+and every ratio below belongs to the diagonalisation path itself.
+
+Run 2026-08-25, **Tesla V100-SXM2-32GB** (`dgx3`, pinned `--gpus=v100:1` so the
+card generation is held fixed against Phase 0's) versus four pinned EPYC Milan
+cores. `tools/gpu/phase1-si16.sbatch`. Per-stage numbers from
+`tools/benchmark.py`, which already breaks `h_psi` and Davidson out separately.
+
+**Per stage, `si16-1k-ecut30` — 16 atoms, 5900 plane waves, 32 bands, FFT
+36x36x72 — at `band_batch = all`:**
+
+| stage | GPU | CPU (4 cores) | ratio |
+|---|---|---|---|
+| `h_psi` (one k, all bands) | 0.015 s | 0.102 s | **6.8x** |
+| `diagonalise` (one k, Davidson) | 0.386 s | 1.490 s | **3.9x** |
+| `v_of_rho` | 0.039 s | 0.029 s | **0.74x** — the GPU *loses* |
+| `symmetrize density` | 0.000 s | 0.002 s | — |
+
+**So yes, the diagonalisation wins — but only with the bands batched, and the
+band dial is worth more than the device.** On the same case and card, Davidson
+costs **2.632 s at `band_batch = 1` and 0.386 s at `all`**, a factor of 6.8;
+on the CPU the same change goes 1.224 → 1.490 s, i.e. *the wrong way*, which is
+the cache argument `batching.py` was written around. A GPU run on the default
+band dial does not merely fail to win, it loses outright — whole-SCF 0.20x on
+this cell.
+
+**Whole SCF, both dials, all three cells:**
+
+| case | `b=1` | `b=all` |
+|---|---|---|
+| `si16-1k-ecut30` (5900 PW) | 0.20x | **1.80x** |
+| `si16-1k` (1476 PW) | 0.70x | **2.67x** |
+| `si8-1k-ecut30` (2950 PW) | 0.40x | **2.35x** |
+
+**And the whole-SCF ratio is much worse than the stage ratios, for a reason
+worth having.** `benchmark.py` converges to `conv_thr = 1e-8` and reports
+**0.036 s/iteration** on the GPU; `phase0.py` runs the input's own **1e-10** and
+reports **0.130**. The same case, the same dials, the same process warmth — only
+the threshold differs. Splitting it:
+
+| | first 7 iterations | the last 2, to 1e-10 |
+|---|---|---|
+| **GPU** | 36 ms each | **459 ms each — 13x** |
+| **CPU** | 233 ms each | 237 ms each — **1.0x, flat** |
+
+**Tightening `ethr` is nearly free on a CPU and costs 13x per iteration on a
+GPU.** That is the accelerator pathology `GPU.md` Phase 1 named in advance and
+the one this section was meant to find: QE's adaptive `ethr` schedule tightens
+as `dr2` falls, a tighter threshold means more Davidson steps, and each step is
+**small dense linear algebra — an `nvecx x nvecx` `eigh` and its matmuls —
+inside a `lax.while_loop`**. `batching.py` already measures that algebra at
+about a third of a Davidson step on CPU. On a GPU it is what the endgame of
+every SCF is made of, and it does not vectorise: the FFTs got 6.8x and the
+subspace solve got nothing.
+
+The consequence for the headline number is direct: **at a production
+`conv_thr` the 16-atom cell keeps 1.80x, not the 6.5x its loose-threshold
+iterations suggest.** Quoting a GPU speedup without saying which `conv_thr`
+produced it would be off by 3.6x on this cell.
+
+**One correctness flag, and it is not round-off in the sense the other rows
+are.** On `si16-1k-ecut30` at `b=all` the GPU converged to **-126.720760703578
+Ry** where CPU `b=1`, CPU `b=all` and GPU `b=1` all give **-126.720760700971**
+— agreeing with each other to every printed digit, across platforms. The odd
+one out differs by **2.6e-09 Ry** (2e-11 relative), and its `dr2` at
+convergence differs too (2.525e-12 against 2.161e-12). Every other case in both
+jobs agrees to 1e-13 or better, so this is the one configuration where the band
+dial's "moves the answer by round-off" claim is visibly strained. It is far
+below any physical tolerance and far below this project's own QE agreements
+(~1e-9 to 1e-8 Ry), so it changes no conclusion — but it is the largest
+dial-induced difference measured anywhere here, it is GPU-only, and it is on the
+largest cell, which is the direction that matters. It should be re-measured on a
+bigger cell before the batched dial is called answer-preserving on a GPU.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than

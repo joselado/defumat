@@ -8,11 +8,16 @@ This is where it happens, and it is also where §2.3's metric is finally stated:
 the ratio is GPU pypresso against CPU pypresso, per SCF iteration, with compile
 time as its own column rather than folded into it.
 
-**The tolerance is the case's own ``conv_thr`` and not a round number.** An SCF
-converged to ``dr2 < conv_thr`` does not define its total energy more tightly
-than that, so two platforms agreeing to better than the threshold they were both
-asked to reach is agreement, and a round 1e-8 asserted over a case converged to
-1e-10 would be the looser test dressed as the stricter one.
+**The tolerance is the case's own ``conv_thr``**, used as a *flag* rather than
+as a derived bound. ``conv_thr`` is a threshold on ``dr2`` -- the Hartree energy
+of the density residual -- not on the total energy, and the two are not the same
+quantity, so passing this test is not a proof that the energies agree to any
+particular accuracy. What it is good for is the thing it was built for: every
+case that agrees does so by 1e-13 or better, so anything that lands near the
+threshold is anomalous by the standard of its own peers and is worth looking at.
+It has already earned that once (`PERFORMANCE.md`, Phase 1's 2.6e-09 on
+``si16-1k-ecut30`` at ``band_batch=all``). A round number would not have flagged
+it and a derived bound would have been a fiction.
 """
 
 from __future__ import annotations

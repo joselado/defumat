@@ -289,7 +289,35 @@ The private cluster notes carry the site-specific answers where they are known.
 
 **Testable without a GPU:** no. This was the gate, and it is open.
 
-### Phase 1 — where the time actually goes
+### Phase 1 — where the time actually goes 🔶 FIRST PASS DONE (16 atoms, single-k)
+
+**Run 2026-08-25** on a V100-SXM2-32GB against four EPYC Milan cores, on
+`si8-1k-ecut30`, `si16-1k` and `si16-1k-ecut30` — **single-k cells on purpose**,
+so that no k-parallelism is available and every ratio belongs to the per-k path.
+Numbers in `PERFORMANCE.md`; the two findings:
+
+**The diagonalisation does win, and the FFTs win more.** On `si16-1k-ecut30` at
+`band_batch = all`: `h_psi` **6.8x**, Davidson **3.9x**, and `v_of_rho` **0.74x**
+— the GPU loses on the potential. But the band dial is worth more than the
+device is: Davidson goes 2.632 → 0.386 s between `b=1` and `b=all` on the *same*
+card, while the same change costs the CPU 1.224 → 1.490 s. On the default band
+dial a GPU run does not merely fail to win, it loses at **0.20x**.
+
+**The named pathology is real and it is the SCF's endgame.** This file predicted
+that "the small dense `eigh` and matmuls inside a `lax.while_loop`" would be an
+accelerator pathology. Measured: tightening `conv_thr` from 1e-8 to 1e-10 costs
+the CPU **nothing per iteration** (233 → 237 ms, flat) and costs the GPU **13x**
+(36 → 459 ms). QE's adaptive `ethr` schedule means a tighter threshold is more
+Davidson steps, each one small dense algebra that does not vectorise — so the
+FFTs took their 6.8x and the subspace solve took nothing. The consequence:
+**16 atoms keeps 1.80x at a production `conv_thr`, not the 6.5x its loose
+iterations suggest**, and any GPU speedup quoted here has to say which
+`conv_thr` produced it.
+
+That makes the subspace algebra, not the FFT, the first thing worth attacking —
+which reorders Phase 2 behind it.
+
+---
 
 **What.** A per-op profile of one SCF iteration on the GPU, on `si8-1k` and `si16-1k`.
 
