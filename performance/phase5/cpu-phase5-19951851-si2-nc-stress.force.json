@@ -1,0 +1,115 @@
+{
+  "dials": {
+    "k_batch": "1",
+    "band_batch": "1",
+    "given": null,
+    "source": "platform default"
+  },
+  "provenance": {
+    "hostname": "milan1.int.triton.aalto.fi",
+    "python": "3.12.11",
+    "jax": "0.11.1",
+    "jaxlib": "0.11.1",
+    "numpy": "2.5.2",
+    "platform": "cpu",
+    "device_kind": "cpu",
+    "device_count": 1,
+    "slurm_job_id": "19951851",
+    "slurm_partition": "batch-milan",
+    "cpus_per_task": "4",
+    "git_commit": "e562427f85f51c036803f10fdf5c7dd299c84811",
+    "git_dirty": false,
+    "xla_flags": null,
+    "xla_preallocate": null,
+    "pypresso_cache_dir": "/scratch/work/ladovj1/calculations/pypresso-gpu/cache-cpu",
+    "cuda_plugin": "present",
+    "nvidia_smi": null
+  },
+  "property": "force",
+  "mode": "reverse",
+  "what": "dE/d(tau) at frozen wavefunctions (P15)",
+  "refuses": "",
+  "case": "si2-nc-stress.in",
+  "setup_s": 2.5865989710000576,
+  "memory_after_setup": {
+    "host_peak_gb": 0.4588737487792969,
+    "device_peak_gb": null,
+    "device_source": "host RSS (no device allocator)"
+  },
+  "scf_s": 8.122256716000265,
+  "scf": {
+    "total_energy": -15.787403708656289,
+    "iterations": 7,
+    "converged": true
+  },
+  "scf_per_iteration_s": 1.160322388000038,
+  "memory_after_scf": {
+    "host_peak_gb": 0.9051780700683594,
+    "device_peak_gb": null,
+    "device_source": "host RSS (no device allocator)"
+  },
+  "parameters": {
+    "nat": 2,
+    "nk": 18,
+    "nbnd": 4,
+    "nspin": 1,
+    "npol": 1,
+    "ecutwfc": 12.0,
+    "npwx": 200,
+    "ngm": 1459,
+    "ngms": 1459,
+    "doublegrid": false,
+    "fft_grid": [
+      15,
+      15,
+      15
+    ],
+    "dense_grid": [
+      15,
+      15,
+      15
+    ],
+    "max_kkbeta": 359,
+    "ultrasoft": false,
+    "paw": false
+  },
+  "runs": [
+    {
+      "wall_s": 1.1474890899989987,
+      "max_force_ry_bohr": 0.06039735601644462,
+      "checksum": "04f16205f1945e267249afa0495913293a928d8211ab2b457a8752a147f6bb0c"
+    },
+    {
+      "wall_s": 0.008295007006381638,
+      "max_force_ry_bohr": 0.06039735601644462,
+      "checksum": "04f16205f1945e267249afa0495913293a928d8211ab2b457a8752a147f6bb0c"
+    }
+  ],
+  "summary": {
+    "max_force_ry_bohr": 0.06039735601644462,
+    "checksum": "04f16205f1945e267249afa0495913293a928d8211ab2b457a8752a147f6bb0c"
+  },
+  "cold_s": 1.1474890899989987,
+  "warm_s": 0.008295007006381638,
+  "compile_s": 1.139194082992617,
+  "vs_scf_iteration": 0.007148881286931927,
+  "memory_after_property": {
+    "host_peak_gb": 0.9051780700683594,
+    "device_peak_gb": null,
+    "device_source": "host RSS (no device allocator)"
+  },
+  "tape": {
+    "host_gb_over_scf": 0.0,
+    "host_peak_gb": 0.9051780700683594,
+    "device_gb_over_scf": null,
+    "device_peak_gb": null,
+    "note": "peaks are high-water marks: a stage that peaked below an earlier one reports a delta of ~0, which is a bound and not a measurement of that stage in isolation"
+  },
+  "determinism": {
+    "verdict": "bit-identical",
+    "checksums": [
+      "04f16205f1945e267249afa0495913293a928d8211ab2b457a8752a147f6bb0c"
+    ]
+  },
+  "verdict": "ok"
+}

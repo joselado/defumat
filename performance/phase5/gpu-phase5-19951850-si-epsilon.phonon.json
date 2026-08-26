@@ -1,0 +1,116 @@
+{
+  "dials": {
+    "k_batch": "None",
+    "band_batch": "None",
+    "given": null,
+    "source": "platform default"
+  },
+  "provenance": {
+    "hostname": "gpu63.int.triton.aalto.fi",
+    "python": "3.12.11",
+    "jax": "0.11.1",
+    "jaxlib": "0.11.1",
+    "numpy": "2.5.2",
+    "platform": "gpu",
+    "device_kind": "NVIDIA H200",
+    "device_count": 1,
+    "slurm_job_id": "19951850",
+    "slurm_partition": "gpu-h200-141g-short",
+    "cpus_per_task": "4",
+    "git_commit": "e562427f85f51c036803f10fdf5c7dd299c84811",
+    "git_dirty": false,
+    "xla_flags": null,
+    "xla_preallocate": null,
+    "pypresso_cache_dir": "/scratch/work/ladovj1/calculations/pypresso-gpu/cache-gpu",
+    "cuda_plugin": "present",
+    "nvidia_smi": "NVIDIA H200, 580.173.02, 143771 MiB"
+  },
+  "property": "phonon",
+  "mode": "forward-over-reverse",
+  "what": "the Gamma dynamical matrix, one jvp of the force (P25)",
+  "refuses": "norm-conserving only",
+  "case": "si-epsilon.in",
+  "setup_s": 0.6165589339943836,
+  "memory_after_setup": {
+    "host_peak_gb": 3.8517379760742188,
+    "device_peak_gb": 0.0058612823486328125,
+    "device_source": "jax.Device.memory_stats"
+  },
+  "scf_s": 1.3872388329909882,
+  "scf": {
+    "total_energy": -15.84452726256031,
+    "iterations": 10,
+    "converged": true
+  },
+  "scf_per_iteration_s": 0.13872388329909882,
+  "memory_after_scf": {
+    "host_peak_gb": 3.990997314453125,
+    "device_peak_gb": 0.04412221908569336,
+    "device_source": "jax.Device.memory_stats"
+  },
+  "parameters": {
+    "nat": 2,
+    "nk": 10,
+    "nbnd": 4,
+    "nspin": 1,
+    "npol": 1,
+    "ecutwfc": 18.0,
+    "npwx": 350,
+    "ngm": 2733,
+    "ngms": 2733,
+    "doublegrid": false,
+    "fft_grid": [
+      20,
+      20,
+      20
+    ],
+    "dense_grid": [
+      20,
+      20,
+      20
+    ],
+    "max_kkbeta": 359,
+    "ultrasoft": false,
+    "paw": false
+  },
+  "runs": [
+    {
+      "wall_s": 34.55660480201186,
+      "max_frequency_cm1": 510.1023399450095,
+      "checksum": "6611a0ae798dd95ba40d46ac7a2a8167954b586f30d0bc5339e4532dcf261c33"
+    },
+    {
+      "wall_s": 28.008116497003357,
+      "max_frequency_cm1": 510.10233994500936,
+      "checksum": "0f7057f27a6422a8027c54b23c772cbce1ddeb101f25ac4c92f4a40ec2317705"
+    }
+  ],
+  "summary": {
+    "max_frequency_cm1": 510.10233994500936,
+    "checksum": "0f7057f27a6422a8027c54b23c772cbce1ddeb101f25ac4c92f4a40ec2317705"
+  },
+  "cold_s": 34.55660480201186,
+  "warm_s": 28.008116497003357,
+  "compile_s": 6.5484883050085045,
+  "vs_scf_iteration": 201.8983020870012,
+  "memory_after_property": {
+    "host_peak_gb": 4.893852233886719,
+    "device_peak_gb": 0.15244698524475098,
+    "device_source": "jax.Device.memory_stats"
+  },
+  "tape": {
+    "host_gb_over_scf": 0.9028549194335938,
+    "host_peak_gb": 4.893852233886719,
+    "device_gb_over_scf": 0.10832476615905762,
+    "device_peak_gb": 0.15244698524475098,
+    "note": "peaks are high-water marks: a stage that peaked below an earlier one reports a delta of ~0, which is a bound and not a measurement of that stage in isolation"
+  },
+  "determinism": {
+    "verdict": "DIFFERS",
+    "checksums": [
+      "6611a0ae798dd95ba40d46ac7a2a8167954b586f30d0bc5339e4532dcf261c33",
+      "0f7057f27a6422a8027c54b23c772cbce1ddeb101f25ac4c92f4a40ec2317705"
+    ]
+  },
+  "verdict": "ok"
+}

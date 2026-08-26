@@ -814,8 +814,26 @@ tapes the inner reverse pass and could have behaved like the other end. The othe
 the *reverse* stress through the radial transforms, which is where the 11 GB lives. So the
 response path fits a card comfortably except on the one axis P11 already flagged, and that
 axis has a fix in the backlog (a `custom_jvp` on each radial transform) rather than a
-guess. Numbers in `PERFORMANCE.md`; the job pair for the GPU half is written
-(`tools/gpu/phase5-{gpu,cpu}.sbatch`) and **unrun**.
+guess. Numbers in `PERFORMANCE.md`.
+
+**And the GPU half ran the same day** (one H200 against four EPYC Milan cores,
+commit `e562427`), which returned three things. **The mode decides the speedup
+exactly as it decided the tape**: a Sternheimer solve gets **1.0x** from the card
+— 1.0 on `epsilon`, 1.0 on the dynamical matrix, 1.2-1.4 on the rest — where a
+reverse-mode gradient gets 24x and **339x**, because a projected CG over occupied
+bands is P10's small-dense-algebra pathology and a gradient through the radial
+transforms is one enormous dense graph. **That 339x is warm and nothing pays it**:
+`stress()` is called once per run, and cold the GPU costs **26.20 s against
+10.71** — it compiles for 26 s what it then runs in 9 ms. **The card holds a
+quarter of what the host figure suggested** — the 10.56 GB tape is 2.73 GB of HBM,
+every response under 0.25 GB — so feasibility is answered by two orders of
+magnitude. And **three rows are not bit-reproducible on the device where none is
+on the CPU**, at 1e-13 to 1e-16 relative: `GPU.md` check 5's atomics hazard, absent
+from the SCF, present in the response, which means a GPU regression set compares a
+response to a stated tolerance rather than diffing bytes. Two open items: the
+`alas-raman` row died with a `MemoryError` on the CPU node that this workstation
+does not reproduce at 2.59 GB, and every response case here is a two-atom cell,
+which the standing rule says shows none of this.
 
 **`GPU.md` is the roadmap for the GPU half of this phase** — what is already GPU-ready by
 design and needs no work, what is blocked on first contact with real hardware, and what

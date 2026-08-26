@@ -2244,6 +2244,96 @@ pair run the same driver over the same eight rows, with `si8-us stress` last
 because 11 GB of tape in HBM is the row the phase exists to bound. Per
 `CLAUDE.local.md`, an `sbatch` is proposed rather than submitted.
 
+## The response path on a GPU (P10 / GPU.md Phase 5, the GPU half)
+
+Run 2026-08-26 at commit `e562427`. **One NVIDIA H200** (`gpu63`, 143771 MiB,
+driver 580.173.02, jax 0.11.1) against **four EPYC Milan cores** (`milan1`, same
+jax, same commit) — §2.3's metric, GPU pypresso against CPU pypresso on the same
+input and the same code, with the CPU side pinned to a stated core count. Both
+jobs ran `tools/gpu/phase5.py` twice per property, so every row carries its own
+determinism check. Warm times, the cold ones beside them:
+
+| property | mode | GPU cold/warm | CPU cold/warm | warm ratio | device peak | GPU vs CPU value |
+|---|---|---|---|---|---|---|
+| force `si2-nc-stress` | reverse | 1.67 / **0.004** s | 1.15 / 0.01 s | 1.8x | 0.11 GB | 4.6e-12 |
+| stress `si2-nc-stress` | reverse | 0.36 / **0.004** s | 0.61 / 0.09 s | **24x** | 0.08 GB | 2.1e-11 |
+| dielectric `si-epsilon` | forward | 24.97 / 12.40 s | 19.73 / 12.48 s | **1.0x** | 0.13 GB | 5.4e-12 |
+| Born `si-epsilon` | forward | 20.53 / 10.81 s | 18.28 / 13.04 s | **1.2x** | 0.12 GB | 2.0e-10 |
+| dielectric `si-epsilon-us` | forward | 28.72 / 17.14 s | 31.50 / 23.67 s | **1.4x** | 0.21 GB | 4.6e-12 |
+| dynamical matrix `si-epsilon` | fwd-over-rev | 34.56 / 28.01 s | 36.81 / 28.88 s | **1.0x** | 0.15 GB | 2.4e-12 |
+| Raman `alas-raman` | fwd-over-rev | 123.50 / 100.01 s | **failed** | — | 0.25 GB | — |
+| stress `si8-us` | reverse | 26.20 / **0.009** s | 10.71 / 3.14 s | **339x** | **2.73 GB** | 9.0e-12 |
+
+**The mode decides the speedup exactly as it decided the tape, and this is the
+finding.** A **Sternheimer solve gets nothing from an H200** — 1.0x on the
+dielectric constant, 1.0x on the dynamical matrix, 1.2-1.4x on the other two —
+while a **reverse-mode gradient flies**: 24x on a small stress and **339x** on
+eight-atom ultrasoft silicon. The two are different shapes and the ratios say so.
+A projected CG over occupied bands is small dense algebra inside a device loop,
+which is Phase 1's named pathology (`ethr`'s 13x tax) arriving in the response;
+a gradient through the radial transforms is one enormous dense graph — `ngm` x
+`kkbeta` is 36257 x ~1100 — which is what a card eats and a cache-bound CPU
+chokes on.
+
+**And 339x is the warm number, which nothing here actually pays.** A run calls
+`stress()` **once**, as `run_pwscf` does, and the cold column is what that costs:
+**26.20 s on the GPU against 10.71 on four CPU cores.** The device spends 26 s
+compiling a graph it then runs in 9 ms. So for the calculation people actually do,
+the GPU *loses* on this row by 2.4x, and it would take four stress evaluations of
+the same cell to break even. The same reading applies to the response rows, where
+compile is 6-12 s on either side. **Quote the cold column for a one-shot property
+and the warm one only where something iterates** — a relaxation, a `q`-loop, a
+finite-difference check.
+
+**Memory: the card holds a quarter of what the host figure suggested.** The
+reverse tape that costs **10.56 GB of host RSS** on the CPU node needs **2.73 GB
+of HBM** on the device, and every response property sits **under 0.25 GB**. Against
+a 141 GB card that is not a constraint at any point, which answers Phase 5's
+feasibility question in the affirmative and by two orders of magnitude. Host RSS
+on the GPU side is a flat 4.1-5.5 GB across every row — the CUDA context and the
+setup, not the physics.
+
+**The platform default works in production, and this job is its first end-to-end
+test.** Neither job passes a dial. The GPU records resolve
+`k_batch=None, band_batch=None` and the CPU records `1, 1` — same commit, same
+driver, same script — which is what §1's change was for.
+
+**Three rows are not bit-reproducible on the device, and none is on the CPU.**
+`GPU.md` Phase 0 check 5 named this hazard — `basis/fft.py` scatters plane waves
+into the box with an accumulating scatter over deliberately duplicated indices,
+and XLA may lower that through atomics whose summation order is not reproducible
+— and Phase 0 did not see it in the SCF. **It is here, in the response path**:
+
+| row | run-to-run spread | relative |
+|---|---|---|
+| stress `si2-nc-stress` | 2.8e-14 kbar on -23.576594906741 | 1.2e-15 |
+| dynamical matrix `si-epsilon` | 1.1e-13 cm-1 on 510.10233994501 | 2.2e-16 |
+| stress `si8-us` | 1.2e-12 kbar on 3.870512510214 | 3.1e-13 |
+
+That is round-off, not a defect: the phonon wobbles in its **fourteenth**
+significant figure where the number is quoted against `ph.x` to 0.05 cm-1. But it
+is a **property of the platform, not of the code** — the identical rows are
+bit-identical on the CPU node — so "bit-identical run to run", which Phase 0 could
+assert of an SCF, **cannot be asserted of a response on a device**. A GPU
+regression set (§4a) has to compare a response to a tolerance and say which
+tolerance, rather than diffing bytes.
+
+**One row failed on the CPU node and it is unexplained.** `alas-raman raman` died
+with a `MemoryError` raised inside the JAX computation, on a node where 160 G was
+granted and the same job's largest sampled RSS was 11.7 GB (`si8-us`, which ran
+after it and succeeded). **This workstation runs that exact case in 2.59 GB**, and
+the GPU node — same jax 0.11.1, same commit — ran it in 5.45 GB of host RSS. So it
+is not the case being too large, and the two cluster nodes differ in what they did
+with it. Unexplained is the accurate word; the diagnostic is one more short job
+with `JAX_TRACEBACK_FILTERING=off` and a memory profile, and it is **not** run.
+
+**The standing caveat applies and is worth stating plainly**: the response cases
+here are **two-atom cells**, and `CLAUDE.md`'s rule is that a two-atom cell shows
+none of this. The SCF sweep needed ten atoms to move from 3x to 115x. So the
+1.0-1.4x on the Sternheimer rows is a fact about *these* cells, not a ceiling for
+the response path — the next measurement is `si10-epsilon` or larger, where the
+per-k work is real.
+
 ## The dials default to the platform now (P10 / GPU.md §1)
 
 **Every GPU number above was produced by a dial set by hand in an sbatch

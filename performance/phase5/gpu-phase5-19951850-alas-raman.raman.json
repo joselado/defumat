@@ -1,0 +1,115 @@
+{
+  "dials": {
+    "k_batch": "None",
+    "band_batch": "None",
+    "given": null,
+    "source": "platform default"
+  },
+  "provenance": {
+    "hostname": "gpu63.int.triton.aalto.fi",
+    "python": "3.12.11",
+    "jax": "0.11.1",
+    "jaxlib": "0.11.1",
+    "numpy": "2.5.2",
+    "platform": "gpu",
+    "device_kind": "NVIDIA H200",
+    "device_count": 1,
+    "slurm_job_id": "19951850",
+    "slurm_partition": "gpu-h200-141g-short",
+    "cpus_per_task": "4",
+    "git_commit": "e562427f85f51c036803f10fdf5c7dd299c84811",
+    "git_dirty": false,
+    "xla_flags": null,
+    "xla_preallocate": null,
+    "pypresso_cache_dir": "/scratch/work/ladovj1/calculations/pypresso-gpu/cache-gpu",
+    "cuda_plugin": "present",
+    "nvidia_smi": "NVIDIA H200, 580.173.02, 143771 MiB"
+  },
+  "property": "raman",
+  "mode": "forward-over-reverse",
+  "what": "d(eps)/d(tau), a third derivative (P35)",
+  "refuses": "norm-conserving, nspin=1, insulators, unshifted grid",
+  "case": "alas-raman.in",
+  "setup_s": 10.16271201201016,
+  "memory_after_setup": {
+    "host_peak_gb": 4.094764709472656,
+    "device_peak_gb": 0.09704089164733887,
+    "device_source": "jax.Device.memory_stats"
+  },
+  "scf_s": 6.864944707005634,
+  "scf": {
+    "total_energy": -16.8836844584197,
+    "iterations": 10,
+    "converged": true
+  },
+  "scf_per_iteration_s": 0.6864944707005634,
+  "memory_after_scf": {
+    "host_peak_gb": 4.248859405517578,
+    "device_peak_gb": 0.11918473243713379,
+    "device_source": "jax.Device.memory_stats"
+  },
+  "parameters": {
+    "nat": 2,
+    "nk": 64,
+    "nbnd": 4,
+    "nspin": 1,
+    "npol": 1,
+    "ecutwfc": 10.0,
+    "npwx": 169,
+    "ngm": 1243,
+    "ngms": 1243,
+    "doublegrid": false,
+    "fft_grid": [
+      15,
+      15,
+      15
+    ],
+    "dense_grid": [
+      15,
+      15,
+      15
+    ],
+    "max_kkbeta": 433,
+    "ultrasoft": false,
+    "paw": false
+  },
+  "runs": [
+    {
+      "wall_s": 123.49721888700151,
+      "epsilon_xx": 12.967420573400604,
+      "checksum": "4bab0a7949aa24f2cc67684f8ded81c2e6b7887298f2c5998f0f93ee25aa40bc"
+    },
+    {
+      "wall_s": 100.00937044600141,
+      "epsilon_xx": 12.967420573400604,
+      "checksum": "4bab0a7949aa24f2cc67684f8ded81c2e6b7887298f2c5998f0f93ee25aa40bc"
+    }
+  ],
+  "summary": {
+    "epsilon_xx": 12.967420573400604,
+    "checksum": "4bab0a7949aa24f2cc67684f8ded81c2e6b7887298f2c5998f0f93ee25aa40bc"
+  },
+  "cold_s": 123.49721888700151,
+  "warm_s": 100.00937044600141,
+  "compile_s": 23.487848441000096,
+  "vs_scf_iteration": 145.6812468481246,
+  "memory_after_property": {
+    "host_peak_gb": 5.452415466308594,
+    "device_peak_gb": 0.24749445915222168,
+    "device_source": "jax.Device.memory_stats"
+  },
+  "tape": {
+    "host_gb_over_scf": 1.2035560607910156,
+    "host_peak_gb": 5.452415466308594,
+    "device_gb_over_scf": 0.1283097267150879,
+    "device_peak_gb": 0.24749445915222168,
+    "note": "peaks are high-water marks: a stage that peaked below an earlier one reports a delta of ~0, which is a bound and not a measurement of that stage in isolation"
+  },
+  "determinism": {
+    "verdict": "bit-identical",
+    "checksums": [
+      "4bab0a7949aa24f2cc67684f8ded81c2e6b7887298f2c5998f0f93ee25aa40bc"
+    ]
+  },
+  "verdict": "ok"
+}

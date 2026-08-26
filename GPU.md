@@ -490,7 +490,7 @@ process topology that changes the code rather than its speed: one process holdin
 local devices, or `jax.distributed` across Slurm tasks. Decide that before writing the
 mesh, not after.
 
-### Phase 5 — the response path, which is the reason JAX was chosen at all 🔶 THE CPU HALF IS MEASURED
+### Phase 5 — the response path, which is the reason JAX was chosen at all ✅ RUN, BOTH HALVES
 
 **The CPU half is measured (2026-08-26)** and it answers §4 item 3 — the tape
 per property, which is the number that decides the phase. `tools/gpu/phase5.py`
@@ -521,9 +521,35 @@ is". What it returned:
   510.1023 — which is what says the driver measures the calculation the tests
   validate rather than a cheaper one.
 
-**The GPU half is written and unrun**: `phase5-gpu.sbatch` and `phase5-cpu.sbatch`
-run the same driver over the same eight rows, and per the private cluster notes
-an `sbatch` is proposed to the user rather than submitted.
+**The GPU half ran the same day** — one H200 (`gpu63`) against four EPYC Milan
+cores, commit `e562427`, both halves through `phase5.py` twice per property.
+`PERFORMANCE.md`, "The response path on a GPU". Four results, and the first is
+the one this file would not have guessed:
+
+* **the mode decides the speedup exactly as it decided the tape.** A Sternheimer
+  solve gets **1.0x** from an H200 — 1.0 on `epsilon`, 1.0 on the dynamical
+  matrix, 1.2-1.4 on the other two — while a reverse-mode gradient gets **24x**
+  on a small stress and **339x** on eight-atom ultrasoft silicon. A projected CG
+  over occupied bands is Phase 1's small-dense-algebra pathology arriving in the
+  response; a gradient through the radial transforms is one enormous dense graph;
+* **339x is the warm number and nothing pays it.** A run calls `stress()` once,
+  and cold the GPU takes **26.20 s against the CPU's 10.71** — it spends 26 s
+  compiling a graph it runs in 9 ms, so on the calculation people actually do it
+  **loses by 2.4x**. Quote the cold column for a one-shot property;
+* **the card holds a quarter of what the host figure suggested**: the 10.56 GB
+  reverse tape is **2.73 GB of HBM**, and every response property is under 0.25
+  GB. Against 141 GB, feasibility is answered by two orders of magnitude;
+* **three rows are not bit-reproducible on the device** and none is on the CPU —
+  check 5's atomics hazard, absent from the SCF in Phase 0, present in the
+  response at 1e-13 to 1e-16 relative. Round-off rather than a defect, but it
+  means §4a's regression set must compare a response **to a stated tolerance**
+  rather than diffing bytes.
+
+**Two things this run did not settle.** `alas-raman raman` died with a
+`MemoryError` on the CPU node where 160 G was granted and this workstation runs
+the same case in 2.59 GB — unexplained, and the diagnostic job is not run. And
+every response case here is a **two-atom cell**, which the standing rule says
+shows none of this: the 1.0-1.4x is a fact about these cells, not a ceiling.
 
 **This is the phase that was missing from the first draft of this file, and its absence was
 a category error rather than an omission.** `CLAUDE.md`'s "Why JAX" lists autodiff response
