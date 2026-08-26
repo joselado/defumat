@@ -122,7 +122,7 @@ stress (13 cases) & $\le$2.7e-7 Ry/bohr$^3$ \\
 \bottomrule
 \end{tabular}
 \column{0.42\textwidth}
-\includegraphics[width=\textwidth]{figs/02_silicon_scf_and_bands.png}
+\includegraphics[width=\textwidth,height=0.62\textheight,keepaspectratio]{figs/02_silicon_scf_and_bands.png}
 \\[2pt]
 \footnotesize Silicon bands against the committed \qe\ benchmark.
 \end{columns}
@@ -132,9 +132,9 @@ stress (13 cases) & $\le$2.7e-7 Ry/bohr$^3$ \\
 \begin{frame}{Densities of states, projected and total}
 \begin{columns}[c]
 \column{0.5\textwidth}
-\includegraphics[width=\textwidth]{figs/06_density_of_states.png}
+\includegraphics[width=\textwidth,height=0.56\textheight,keepaspectratio]{figs/06_density_of_states.png}
 \column{0.5\textwidth}
-\includegraphics[width=\textwidth]{figs/16_projected_density_of_states.png}
+\includegraphics[width=\textwidth,height=0.56\textheight,keepaspectratio]{figs/16_projected_density_of_states.png}
 \end{columns}
 \vspace{2pt}
 \footnotesize Both smearing and tetrahedron families, the latter also as an
@@ -148,9 +148,9 @@ four printed decimals.
 \begin{frame}{Magnetism: collinear, noncollinear, spin-orbit}
 \begin{columns}[c]
 \column{0.5\textwidth}
-\includegraphics[width=\textwidth]{figs/07_spin_polarization.png}
+\includegraphics[width=\textwidth,height=0.56\textheight,keepaspectratio]{figs/07_spin_polarization.png}
 \column{0.5\textwidth}
-\includegraphics[width=\textwidth]{figs/08_spin_orbit_coupling.png}
+\includegraphics[width=\textwidth,height=0.56\textheight,keepaspectratio]{figs/08_spin_orbit_coupling.png}
 \end{columns}
 \vspace{2pt}
 \footnotesize
@@ -165,28 +165,28 @@ spin-orbit run allocating a magnetization it does not have. Nickel's moment:
 \begin{frame}{Forces, stress and relaxation --- one gradient, not six terms}
 \begin{columns}[c]
 \column{0.5\textwidth}
-\includegraphics[width=\textwidth]{figs/09_forces_and_relaxation.png}
+\includegraphics[width=\textwidth,height=0.50\textheight,keepaspectratio]{figs/09_forces_and_relaxation.png}
 \column{0.5\textwidth}
-\includegraphics[width=\textwidth]{figs/15_stress.png}
+\includegraphics[width=\textwidth,height=0.50\textheight,keepaspectratio]{figs/15_stress.png}
 \end{columns}
 \vspace{2pt}
 \footnotesize
 The force is \texttt{jax.grad} of the total energy at frozen wavefunctions:
 Hellmann-Feynman, Pulay \emph{and} the augmentation charge's own derivative all
-fall out of one gradient. QE's six hand-derived terms are implemented beside it
-\textbf{as a cross-check} --- which is what found the augmentation force's sign
-and a missing gradient correction. Relaxed geometries reproduce \qe\ to 1e-6 bohr.
+fall out of one gradient. QE's six terms are implemented beside it \textbf{as a
+cross-check} --- which found the augmentation force's sign. Relaxed geometries
+reproduce \qe\ to 1e-6 bohr.
 \end{frame}
 
 % ---------------------------------------------------------------- 8
 \begin{frame}{Response: dielectric, phonons, Raman}
 \begin{columns}[c]
 \column{0.33\textwidth}
-\includegraphics[width=\textwidth]{figs/19_linear_response.png}
+\includegraphics[width=\textwidth,height=0.50\textheight,keepaspectratio]{figs/19_linear_response.png}
 \column{0.33\textwidth}
-\includegraphics[width=\textwidth]{figs/20_phonons.png}
+\includegraphics[width=\textwidth,height=0.50\textheight,keepaspectratio]{figs/20_phonons.png}
 \column{0.33\textwidth}
-\includegraphics[width=\textwidth]{figs/26_raman_and_infrared_spectra.png}
+\includegraphics[width=\textwidth,height=0.50\textheight,keepaspectratio]{figs/26_raman_and_infrared_spectra.png}
 \end{columns}
 \vspace{3pt}
 \footnotesize
@@ -224,12 +224,11 @@ the 1s orbital to 1e-6 and $E_x$ is exactly $-5/16$\,Ha, and the uniform gas,
 where the model reproduces $v_x^{\rm LDA}$ to 6e-4.
 \vspace{4pt}
 
-\footnotesize \textbf{PAW is what makes it work}: its one-centre $\tau$ comes
-from the partial waves and recovers $c=1.107$ against an all-electron 1.12,
-where a norm-conserving silicon measures 1.000 --- the pseudised core is exactly
-what the cell average of $|\nabla\rho|/\rho$ misses.
+\footnotesize \textbf{PAW is what makes it work}: its one-centre $\tau$ recovers
+$c=1.107$ against an all-electron 1.12, where norm-conserving silicon measures
+1.000.
 \column{0.43\textwidth}
-\includegraphics[width=\textwidth]{figs/24_tran_blaha_band_gaps.png}
+\includegraphics[width=\textwidth,height=0.52\textheight,keepaspectratio]{figs/24_tran_blaha_band_gaps.png}
 \\[3pt]
 \footnotesize
 The consequences are enforced rather than documented: the total energy is
@@ -241,20 +240,19 @@ The consequences are enforced rather than documented: the total energy is
 % ---------------------------------------------------------------- 10
 \begin{frame}{GPU: nothing was ported --- what was missing was evidence}
 \begin{center}
-\includegraphics[width=0.93\textwidth]{figs/gpu-vs-cpu-fig.png}
+\includegraphics[width=0.80\textwidth,height=0.70\textheight,keepaspectratio]{figs/gpu-vs-cpu-fig.png}
 \end{center}
 \vspace{-4pt}
 \footnotesize
-JAX already emitted GPU code from this source; the rules that made that true have
-bound since day one. \textbf{The finding is that the two batching dials invert}:
-tuned for a CPU cache they cost \textbf{4.5x} on a GPU, and the plausible
-half-measure (\texttt{k=all, b=1}) is the \emph{worst} setting available.
+JAX already emitted GPU code from this source. \textbf{The finding is that the two
+batching dials invert}: tuned for a CPU cache they cost \textbf{4.5x} on a GPU,
+and the plausible half-measure (\texttt{k=all, b=1}) is the \emph{worst} setting.
 \end{frame}
 
 % ---------------------------------------------------------------- 11
 \begin{frame}{GPU across the physics --- 12 cases, 10--40 atoms}
 \begin{center}
-\includegraphics[width=0.95\textwidth]{figs/gpu-sweep-fig.png}
+\includegraphics[width=0.95\textwidth,height=0.66\textheight,keepaspectratio]{figs/gpu-sweep-fig.png}
 \end{center}
 \vspace{-4pt}
 \footnotesize
