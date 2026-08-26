@@ -2039,6 +2039,77 @@ converging 1e-8 run): `h_psi` **0.012 s**, Davidson **0.640 s**, `v_of_rho`
 cores at the tighter threshold, which is *not* a matched comparison and is
 recorded here only so the next session does not have to re-run it.
 
+## The physics sweep on a GPU, against serial QE (P10 / GPU.md)
+
+**The baseline is one CPU core and the table says so in every row.** `GPU.md`
+§2.3 rules this comparison out by default — the project's metric is single-core
+against single-core so that a ratio measures *code*, and a GPU number against a
+serial CPU number measures code *and* hardware at once. It is here because it
+was asked for. Two bounds travel with it: **one core is the softest baseline**
+(`pw.x` on a single-k cell has only plane-wave parallelism and saturates by ~16
+cores, where the same silicon comparison falls to about 1x), and **the iteration
+counts differ in both directions** — fewer than QE on silicon, five times more
+on `ni10-ldau` — which is mixing and starting guess, not hardware.
+
+Everything before this measured *one* kind of calculation, unpolarised silicon,
+at several sizes. That is a claim about `h_psi` on a norm-conserving insulator
+and nothing else. This is the other axis. Run 2026-08-26 at commit `c5dc7d4`:
+**one NVIDIA H200** (jax 0.11.1, `k_batch=all`, `band_batch=all`) against
+**Quantum ESPRESSO 7.2 on one core**, every case to `conv_thr = 1e-10`.
+Typeset with the figure in `performance/gpu-sweep.tex`; raw numbers in
+`performance/gpu-sweep.json`.
+
+| case | physics | at. | k | QE it | QE ms/it | GPU it | GPU ms/it | per-it | ΔE (Ry) | peak GB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `si10-nc` | norm-conserving | 10 | 7 | 14 | 98 | 8 | 30 | **3.3x** | -3.1e-09 | 0.18 |
+| `si10-nc-pbe` | GGA (PBE) | 10 | 7 | 16 | 221 | 8 | 44 | **5.0x** | -1.7e-09 | 0.39 |
+| `si10-paw` | PAW | 10 | 7 | 14 | 644 | 8 | 57 | **11.3x** | -3.5e-09 | 0.66 |
+| `si10-us` | ultrasoft | 10 | 7 | 15 | 595 | 8 | 43 | **13.8x** | -1.1e-09 | 0.65 |
+| `al10-metal` | metal, smearing | 10 | 10 | 47 | 266 | 10 | 127 | **2.1x** | -1.9e-09 | 0.40 |
+| `h10-chain-lsda` | collinear magnetic | 10 | 2 | 12 | 1219 | 17 | 130 | **9.4x** | -4.3e-09 | 0.55 |
+| `h10-chain-noncolin` | noncollinear | 10 | 2 | 13 | 2942 | 17 | 161 | **18.2x** | -4.4e-09 | 1.37 |
+| `ni10-ldau` | DFT+U, magnetic | 10 | 10 | 29 | 3191 | 151 | 321 | **9.9x** | +2.4e-09 | 1.60 |
+| `h20-chain-lsda` | collinear magnetic | 20 | 1 | 15 | 2991 | 33 | 140 | **21.4x** | +3.7e-09 | 1.10 |
+| `h40-chain-lsda` | collinear magnetic | 40 | 1 | 22 | 12669 | 104 | 414 | **30.6x** | +4.6e-09 | 4.06 |
+| `bi10-soc` | spin-orbit | 10 | 1 | 14 | 21686 | 17 | 260 | **83.3x** | -1.9e-04 † | 16.92 |
+| `bi20-soc` | spin-orbit | 20 | 1 | 20 | 105350 | 20 | 912 | **115.5x** | -3.7e-04 † | 34.70 |
+
+† **The bismuth rows are a pre-existing pypresso/QE difference, not a GPU one.**
+`PLAN.md` records exactly 1.9e-4 Ry for `bi10-soc` as "the one that does not
+close", and QE 7.5 and 7.2 agree with each other to 1e-8 on that case, so it is
+not a version effect either. The GPU reproduces it.
+
+**Every non-spin-orbit case agrees to 4.6e-09 Ry or better, and those figures
+reproduce the *CPU* agreements already in `PLAN.md`** — 1.9e-9 on `al10-metal`,
+4.3e-9 on `h10-chain-lsda`, 4.4e-9 on `h10-chain-noncolin`, 1.8e-8 on
+`ni10-ldau`. That is the finding: **the GPU reproduces pypresso's behaviour
+including its known imperfections, rather than having a numerical character of
+its own.** A further check that costs nothing: `h10-chain-lsda` and
+`h10-chain-noncolin` return the same total to all eight digits (-9.56782281), so
+the noncollinear path reproduces the collinear one on the device.
+
+**The speedup spans two decades and tracks work per k-point**, which is what a
+GPU needs to fill: 2.1x on `al10-metal`, where a single core is already
+efficient; 3-5x on cheap norm-conserving silicon; 9-21x once there is an
+augmentation charge, a GGA or a magnetization; and **83-115x on spin-orbit**,
+where QE serial spends 22-105 **seconds per iteration** on two-component spinors
+with a fully-relativistic ultrasoft dataset and the GPU spends 0.26-0.91.
+
+**Memory is the constraint that bites, and spin-orbit is where it bites.**
+`bi20-soc` peaked at **34.7 GB**. It fits a 141 GB H200 with room to spare and
+**would not fit a 32 GB V100** — the sort of fact that decides whether a
+calculation exists rather than how fast it is. Everything else in the sweep sits
+under 2 GB.
+
+**An iteration cap is not a convergence failure**, and this sweep's first run
+reported one as the other. `ni10-ldau` and `h40-chain-lsda` came back "not
+converged in 100" — which is `run_scf`'s default, where
+`tests/regression/test_ten_site.py` has always used **200** for exactly those
+cases. `ni10-ldau` reproduces the same non-convergence on a CPU at 100, which is
+what settled it; both converge at 200, in 151 and 104 iterations.
+`tools/gpu/phase0.py` takes `--max-iterations` now so the driver cannot report
+the one as the other again.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than

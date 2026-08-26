@@ -58,3 +58,33 @@ own measurement — `pypresso/batching.py`, and the k-axis section of
 The generated `performance.tex`, `.pdf` and `.json` are **not committed** — they
 describe one machine on one day. Keep a copy yourself if you want to diff two
 runs, or re-run on the machine that matters.
+
+## `gpu-sweep.*` — the GPU report
+
+A second, hand-run report beside the single-core one, and **a different metric**:
+pypresso on one GPU against Quantum ESPRESSO on one CPU core, across twelve
+cases spanning the pseudopotential kinds, a GGA, a metal, collinear and
+noncollinear magnetism, spin-orbit coupling and DFT+U, at 10-40 atoms.
+
+```bash
+python3 performance/plot_gpu_sweep.py     # figure from gpu-sweep.json
+cd performance && pdflatex gpu-sweep.tex  # twice, for the reference
+```
+
+| file | what |
+|---|---|
+| `gpu-sweep.json` | the measurements, one record per case |
+| `plot_gpu_sweep.py` | the figure: speedup by physics, and the agreement |
+| `gpu-sweep-fig.pdf` / `.png` | that figure |
+| `gpu-sweep.tex` / `.pdf` | the report |
+
+**Nothing here re-measures.** The runs are cluster jobs (`tools/gpu/sweep-*.sbatch`)
+because this machine has no GPU; `gpu-sweep.json` is what came back, and both the
+figure and the report are typeset from it. To refresh it, rerun those jobs and
+rebuild the JSON — do not edit the numbers in place.
+
+**Read `PERFORMANCE.md`'s section of the same name before quoting a ratio.**
+`GPU.md` §2.3 forbids this comparison by default: one core is the softest
+baseline available, `pw.x` saturates by ~16 cores on a single-k cell, and the
+two codes take different numbers of SCF iterations. The per-iteration column is
+the code comparison; the total is time-to-answer.
