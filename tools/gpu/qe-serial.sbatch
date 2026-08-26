@@ -30,12 +30,12 @@ export OMP_NUM_THREADS=1
 export ESPRESSO_TMPDIR="$RUN/tmp"; mkdir -p "$ESPRESSO_TMPDIR"
 pw.x -h </dev/null 2>&1 | grep -m1 PWSCF
 
-for case in si64-1k si64-1k-ecut30 si128-1k si128-1k-ecut30; do
+for case in si64-1k-ecut30 si128-1k-ecut30; do
   sed "s|^ &control|\&control\n    disk_io = 'none'\n    outdir = '$ESPRESSO_TMPDIR'|" \
       "$REPO/benchmarks/$case.in" > "$RUN/$case.qe.in"
 done
 for n in 1; do
-  for case in si64-1k si64-1k-ecut30 si128-1k si128-1k-ecut30; do
+  for case in si64-1k-ecut30 si128-1k-ecut30; do
     echo; echo "########## QE $case on $n core(s) ##########"
     srun --ntasks=$n --cpus-per-task=1 --mpi=pmix \
         pw.x -in "$RUN/$case.qe.in" > "$WORK/out/qeser-${SLURM_JOB_ID}-$case-n$n.out" 2>&1

@@ -40,9 +40,10 @@ nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 python3 -c "import jax; print('jax', jax.__version__, jax.devices())"
 git -C "$REPO" rev-parse HEAD
 
-# Cheapest first here, not decisive-first: each case is a prerequisite for
-# believing the next one, and 128 atoms at 30 Ry is the one that might not fit.
-for case in si64-1k si64-1k-ecut30 si128-1k si128-1k-ecut30; do
+# Production cutoff only: ecutwfc = 30 is the one worth comparing, and 12 Ry
+# on these cells is small enough that fixed overheads move the ratio.
+# 64 atoms first, because 128 at 30 Ry is the case that might not fit.
+for case in si64-1k-ecut30 si128-1k-ecut30; do
   echo; echo "########## $case ##########"
   python3 tools/gpu/phase0.py $case --k-batch 1 --band-batch all --repeats 2 \
           --skip-precision-probe \
