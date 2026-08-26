@@ -91,6 +91,11 @@ class AndersonMixer(Mixer):
 
     beta: float = 0.7
     history: int = 8
+    #: Above this, the newest-first history is trimmed rather than solved. Four
+    #: orders above the worst conditioning measured on any cell here (1.7e8, on
+    #: sixty-four atoms at ``ecutwfc = 30``), so it does not fire on a run that
+    #: was already working.
+    condition_limit: float = 1.0e12
     _densities: list = field(default_factory=list, repr=False)
     _residuals: list = field(default_factory=list, repr=False)
 
@@ -113,26 +118,92 @@ class AndersonMixer(Mixer):
             return (rho_in + self.step(residual)).reshape(np.asarray(rho_out).shape)
 
         # Minimise |sum_i c_i r_i| subject to sum_i c_i = 1, by solving the
-        # constrained least-squares problem in the residual basis.
-        overlap = np.empty((n + 1, n + 1))
-        overlap[:n, :n] = [[float(a @ b) for b in self._residuals] for a in self._residuals]
-        overlap[:n, n] = 1.0
-        overlap[n, :n] = 1.0
-        overlap[n, n] = 0.0
+        # constrained least-squares problem in the residual basis -- **in the
+        # basis of unit-norm residuals**, which is the whole of what keeps this
+        # solvable near convergence.
+        #
+        # The Gram matrix ``r_i . r_j`` built from the raw residuals spans the
+        # square of their magnitudes, and over a converging history those
+        # magnitudes cover many orders: on the 16-atom cell at ``ecutwfc = 30``
+        # they run 5e-1 down to 5e-5 by the eighth iteration, so the bordered
+        # system's condition number reaches **1.1e11 and grows about two orders
+        # per iteration**. ``np.linalg.solve`` does not raise on that -- it
+        # raises only on an exactly singular matrix -- so past about 1e16 it
+        # returns coefficients that are silently garbage, the mixed density
+        # explodes, and the run ends in ``NaN`` having reported nothing wrong.
+        # That is not hypothetical: it is what 64 atoms at ``ecutwfc = 30`` did
+        # on a GPU, converging happily to ``conv_thr = 1e-8`` and dying on the
+        # way to 1e-10 (`PERFORMANCE.md`).
+        #
+        # Writing ``c_i = e_i / |r_i|`` makes the Gram matrix unit-diagonal, so
+        # its conditioning reflects only how *aligned* the residuals are and no
+        # longer how their sizes differ. Measured on the same histories:
+        # **1.1e11 -> 2.7e4**, with coefficients identical to every digit. The
+        # substitution is exact, so this changes no converged result; it changes
+        # which ones are reachable.
+        norms = np.array([float(np.sqrt(r @ r)) for r in self._residuals])
+        if not np.all(norms > 0.0):
+            self.reset()
+            return (rho_in + self.step(residual)).reshape(np.asarray(rho_out).shape)
 
-        rhs = np.zeros(n + 1)
-        rhs[n] = 1.0
+        gram = np.array([[float(a @ b) for b in self._residuals] for a in self._residuals])
+
+        # Normalising removes the conditioning that came from the residuals'
+        # *spread*; it cannot remove what comes from their *alignment*, and that
+        # grows with the cell -- the same measurement gives 2.7e4 on sixteen
+        # atoms and 1.7e8 on sixty-four. So the oldest entries are dropped until
+        # what is left is solvable, which is standard DIIS practice and is a
+        # bound rather than a hope. The cap sits four orders above the worst
+        # value ever measured here, so it never fires on anything already
+        # working, and it keeps the coefficients' relative error near 1e-4 in
+        # the regime where it does.
+        keep = n
+        while keep > 1:
+            trimmed = self._build_overlap(gram, norms, keep)
+            if np.linalg.cond(trimmed) < self.condition_limit:
+                break
+            keep -= 1
+        overlap = self._build_overlap(gram, norms, keep)
+        used = slice(n - keep, n)
+
+        rhs = np.zeros(keep + 1)
+        rhs[keep] = 1.0
         try:
-            coefficients = np.linalg.solve(overlap, rhs)[:n]
+            coefficients = np.linalg.solve(overlap, rhs)[:keep] / norms[used]
         except np.linalg.LinAlgError:
             # A degenerate history means the residuals are linearly dependent;
             # drop it and take a plain linear step rather than failing.
             self.reset()
             return (rho_in + self.step(residual)).reshape(np.asarray(rho_out).shape)
 
+        # The belt to the braces above. Normalising fixes the conditioning that
+        # comes from the *spread* of the residuals; it cannot fix a history whose
+        # members have become genuinely parallel, and a solve that survived
+        # ``LinAlgError`` can still return non-finite coefficients. Falling back
+        # to a linear step costs one slow iteration; not checking costs the run.
+        if not np.all(np.isfinite(coefficients)):
+            self.reset()
+            return (rho_in + self.step(residual)).reshape(np.asarray(rho_out).shape)
+
         mixed = sum(c * (d + self.step(r)) for c, d, r in
-                    zip(coefficients, self._densities, self._residuals))
+                    zip(coefficients, self._densities[used], self._residuals[used]))
         return np.asarray(mixed).reshape(np.asarray(rho_out).shape)
+
+    @staticmethod
+    def _build_overlap(gram, norms, keep):
+        """The bordered system over the newest ``keep`` residuals, normalised.
+
+        ``c_i = e_i / |r_i|`` makes the Gram block unit-diagonal; the constraint
+        ``sum_i c_i = 1`` becomes ``sum_i e_i / |r_i| = 1``, which is the border.
+        """
+        gram = gram[-keep:, -keep:]
+        norms = norms[-keep:]
+        overlap = np.empty((keep + 1, keep + 1))
+        overlap[:keep, :keep] = gram / np.outer(norms, norms)
+        overlap[:keep, keep] = 1.0 / norms
+        overlap[keep, :keep] = 1.0 / norms
+        overlap[keep, keep] = 0.0
+        return overlap
 
 
 #: Name -> mixer, as written in an input file's ``mixing_mode``.
