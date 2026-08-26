@@ -789,6 +789,35 @@ were added for this and are verified by a folding identity rather than by an
 energy-per-atom comparison, which single-k sampling makes invalid across these
 cells. Phases 2-4 are unrun; Phase 5's CPU half is measured (below).
 
+**Phase 1's second pass went one level in, and found a trap of the same family
+as the `abs` one — a JAX *lowering* that is invisible in the source.**
+`tools/gpu/davidson_profile.py` profiles the parts of a Davidson step at a
+case's own shapes, and the first thing it measured was a regression nobody had
+looked for: **`lax.cond` under `vmap` executes both branches.** A conditional
+whose predicate is batched has no branch to take — JAX lowers it to `select_n`
+over the results of both sides — so the guard the 64-atom `NaN` fix put inside
+`generalised_eigh` was computing canonical orthogonalisation on every step of
+every k-point of every multi-k run, in exactly the mode `k_batch=None` puts an
+accelerator into by default. **2.85x of the subspace solve**, measured at
+`si10-nc`'s shapes on a CPU, because it is a lowering fact and not a hardware
+one. The fix is where the predicate is evaluated rather than what it tests: the
+batched solve takes the Cholesky route unconditionally and
+`davidson_eigensolver_all` asks once, outside `map_k`, whether the eigenvalues
+*and* the eigenvectors came back finite. Bit-for-bit unchanged (`si10-nc`:
+same energy to twelve digits, same eigenvalue SHA-256).
+
+**The trap generalises and it constrains the next two changes.** `lax.switch` is
+`lax.cond`'s twin and runs every branch under `vmap` too — which is precisely
+the mechanism the two remaining `cegterg` behaviours would need (sizing the
+projected solve by the live `nbase`, and the expansion by `notcnv`). Both are
+therefore *unbatched-path* changes, and that is less of a restriction than it
+sounds: the large single-k cells, where the subspace algebra is ~80% of a
+Davidson solve, never go through a `vmap` at all. Ranked and measured in
+`PERFORMANCE.md`'s backlog, items 2 and 3; the premise for the second one had to
+be measured rather than assumed, because the live-root count falls 20 → 13 → 10
+→ 0 in the seeded regime the SCF runs and does not fall at all from a cold
+start.
+
 **Two things landed 2026-08-26, and the first is a configuration bug rather than an
 optimisation.** `batching.py` defaulted both dials to `1` on *every* platform, so a bare
 `run_scf` on a card inherited the cache-shaped end of both — the mode measured at 4.5x on

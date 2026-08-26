@@ -205,6 +205,7 @@ def davidson_eigensolver(
     residual_threshold=RESIDUAL_THRESHOLD,
     david: int = DAVID_NDIM,
     max_iterations: int = MAX_ITERATIONS,
+    robust: bool = False,
 ):
     """The ``nbnd`` lowest eigenpairs at k-point ``ik``, iteratively.
 
@@ -218,6 +219,13 @@ def davidson_eigensolver(
         ethr: convergence threshold on the change in each eigenvalue, in Ry.
             ``None`` uses :data:`ETHR`; the SCF driver passes its scheduled
             value, which starts loose and tightens as the density converges.
+        robust: which route the subspace solve takes, *statically*. ``False`` is
+            the Cholesky one, which is what every validated number here was
+            produced with; ``True`` is canonical orthogonalisation, for an
+            overlap that has gone indefinite. The choice is not made per step
+            because this function is ``vmap``ped over k, where a ``cond`` runs
+            both branches -- see :func:`davidson_eigensolver_all`, which makes
+            it outside the batch.
 
     Returns ``(eigenvalues, eigenvectors)`` with eigenvalues ascending in Ry and
     eigenvectors ``(nbnd, npwx)`` -- bands first, as the rest of the code
@@ -267,7 +275,8 @@ def davidson_eigensolver(
         sc = jnp.where(pair, sc_raw, 0.0) + jnp.diag(inactive)
 
         values, vectors = generalised_eigh(0.5 * (hc + hc.conj().T),
-                                           0.5 * (sc + sc.conj().T))
+                                           0.5 * (sc + sc.conj().T),
+                                           robust=robust)
         energies = values[:nbnd].real
         coefficients = vectors[:, :nbnd]
 
@@ -315,7 +324,18 @@ def davidson_eigensolver(
     )
 
     def unconverged(state):
-        return jnp.logical_and(jnp.logical_not(state[14]), state[13] < max_iterations)
+        # ... and stop the moment the eigenvalues stop being finite. Without
+        # this a subspace solve that has returned ``NaN`` runs the full budget
+        # of steps before the retry outside can see it, since ``settled`` --
+        # a comparison against ``NaN`` -- is false for every root forever.
+        # It costs one reduction over ``nbnd`` per step and it is what makes
+        # the retry in :func:`davidson_eigensolver_all` cheap enough to be the
+        # guard rather than a ``cond`` inside the batch.
+        alive = jnp.all(jnp.isfinite(state[10]))
+        return jnp.logical_and(
+            jnp.logical_and(jnp.logical_not(state[14]), state[13] < max_iterations),
+            alive,
+        )
 
     def step(state):
         (psi, hpsi, becp, becq, active, hc_raw, sc_raw, nbase,
@@ -389,7 +409,8 @@ def starting_vectors(psi0, nbnd, ndim, kinetic, mask, dtype):
     return jnp.where(mask, guess, 0.0)
 
 
-@partial(jax.jit, static_argnames=("nbnd", "david", "max_iterations", "k_batch"))
+@partial(jax.jit, static_argnames=("nbnd", "david", "max_iterations", "k_batch",
+                                   "robust_retry"))
 def davidson_eigensolver_all(
     hamiltonian: Hamiltonian,
     nbnd: int,
@@ -399,6 +420,7 @@ def davidson_eigensolver_all(
     david: int = DAVID_NDIM,
     max_iterations: int = MAX_ITERATIONS,
     k_batch: int | None | str = "default",
+    robust_retry: bool = True,
 ):
     """Every k-point, ``k_batch`` of them at a time.
 
@@ -412,17 +434,56 @@ def davidson_eigensolver_all(
 
     The chunking cannot change the answer: the k-points are independent here,
     and each is solved by exactly the same function either way.
+
+    **This is also where the indefinite-overlap guard lives, and it is here
+    rather than inside the solve for a reason that is entirely about batching.**
+    ``generalised_eigh``'s ``lax.cond`` between the Cholesky route and canonical
+    orthogonalisation is a real branch only where its predicate is a scalar; one
+    level down, inside a ``vmap`` over k, the predicate is batched and JAX
+    lowers the ``cond`` to a ``select_n`` over **both** branches. That is 2.85x
+    of the subspace solve on ``si10-nc``'s shapes, paid on every step of every
+    multi-k run in the mode an accelerator defaults to.
+
+    So the batched solve takes the Cholesky route with no ``cond`` in it at all,
+    and the guard is applied *here*, where ``jnp.all(jnp.isfinite(...))`` over
+    the whole k-set -- of the eigenvalues **and** of the wavefunctions -- is one
+    scalar and ``lax.cond`` is a branch again. A clean
+    solve pays one reduction; a solve that has gone non-finite -- the 64-atom
+    ``NaN`` -- is repeated for every k-point with canonical orthogonalisation,
+    which is strictly more work than the old per-step ``cond`` in exactly the
+    case that was already broken. The per-step loop exits as soon as the
+    eigenvalues stop being finite (see ``unconverged``), so the wasted half of
+    that retry is a few steps rather than the whole budget.
+
+    The values returned are bit-for-bit what the guarded version returned
+    whenever the guard passed, because the guard passing *is* the Cholesky
+    route: ``select_n`` chose between two computed arrays and took that one.
     """
 
-    def solve(ik, start):
+    def solve(ik, start, robust):
         return davidson_eigensolver(
             hamiltonian, ik, nbnd, start, ethr=ethr,
             residual_threshold=residual_threshold, david=david,
-            max_iterations=max_iterations,
+            max_iterations=max_iterations, robust=robust,
         )
 
     batch = resolve_k_batch(k_batch)
     indices = jnp.arange(hamiltonian.nk)
-    if psi0 is None:
-        return map_k(lambda ik: solve(ik, None), indices, batch=batch)
-    return map_k(lambda pair: solve(*pair), (indices, psi0), batch=batch)
+
+    def over_k(robust):
+        if psi0 is None:
+            return map_k(lambda ik: solve(ik, None, robust), indices, batch=batch)
+        return map_k(lambda pair: solve(*pair, robust), (indices, psi0), batch=batch)
+
+    fast = over_k(False)
+    if not robust_retry:
+        return fast
+    # Both halves, not just the eigenvalues. A Cholesky factor that has gone
+    # non-finite does not necessarily poison every root -- the first regression
+    # test written for the 64-atom NaN passed on the *unfixed* code precisely
+    # because the failure sat in a triangle nothing read -- so a guard that
+    # watches only the energies can pass a wavefunction with a NaN in it
+    # straight into the density. Two reductions against a solve is not a cost.
+    finite = jnp.logical_and(jnp.all(jnp.isfinite(fast[0])),
+                             jnp.all(jnp.isfinite(fast[1])))
+    return jax.lax.cond(finite, lambda: fast, lambda: over_k(True))

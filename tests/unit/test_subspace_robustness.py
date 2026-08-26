@@ -138,3 +138,50 @@ def test_the_parked_direction_sorts_above_every_physical_root():
     h, s = _hermitian(12, 3), _indefinite(12, 7)
     values = np.asarray(generalised_eigh(h, s)[0])
     assert values[-1] > 100.0 * np.abs(values[:-1]).max()
+
+
+# ------------------------------------------------------ the guard's own cost
+
+def test_the_static_routes_are_the_guard_taken_apart():
+    """``robust=False`` is bit-for-bit what the guard returns when it passes.
+
+    That equality is what lets the batched Davidson path drop the ``cond``
+    without changing a validated number: the guard passing *is* the Cholesky
+    route, and ``select_n`` chose between two computed arrays and took that one.
+    """
+    h, s = _hermitian(12, 3), _positive(12, 5)
+    guarded = [np.asarray(a) for a in generalised_eigh(h, s)]
+    fast = [np.asarray(a) for a in generalised_eigh(h, s, robust=False)]
+    assert np.array_equal(guarded[0], fast[0])
+    assert np.array_equal(guarded[1], fast[1])
+
+
+def test_the_robust_route_survives_an_overlap_the_fast_one_does_not():
+    """And the two disagree exactly where they should: on an indefinite ``S``."""
+    h, s = _hermitian(12, 3), _indefinite(12, 7)
+    assert not np.isfinite(np.asarray(_cholesky_route(h, s)[0])).all()
+    assert np.isfinite(np.asarray(generalised_eigh(h, s, robust=True)[0])).all()
+
+
+def test_a_batched_guard_has_no_branch_to_take():
+    """Why the guard cannot live inside a ``vmap`` over k, as a structural fact.
+
+    ``lax.cond`` with a *batched* predicate is lowered to ``select_n`` over the
+    results of both branches -- there is no per-element branch on a device -- so
+    a guarded solve inside ``map_k``'s ``vmap`` computes canonical
+    orthogonalisation on every step of every k-point in addition to the Cholesky
+    route it uses. Measured at ``si10-nc``'s shapes: 2.85x. This test pins the
+    mechanism rather than the ratio, which is a property of the machine.
+    """
+    import jax
+
+    h, s = _hermitian(12, 3), _positive(12, 5)
+    stack = (jnp.broadcast_to(h, (3, 12, 12)), jnp.broadcast_to(s, (3, 12, 12)))
+
+    guarded = str(jax.make_jaxpr(jax.vmap(generalised_eigh))(*stack))
+    fast = str(jax.make_jaxpr(jax.vmap(
+        lambda a, b: generalised_eigh(a, b, robust=False)))(*stack))
+
+    assert "cond[" in guarded, "the guarded route should carry a conditional"
+    assert "select_n" in guarded, "which under vmap becomes a select over both branches"
+    assert "cond[" not in fast, "the fast route must have no conditional at all"

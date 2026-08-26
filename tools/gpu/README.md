@@ -15,6 +15,9 @@ emits GPU code from this source. What is missing is evidence.
 | `phase5.py` | **the response driver**: one property per process, its derivative mode, its working set and its value |
 | `phase5-gpu.sbatch` | the GPU job for the response path |
 | `phase5-cpu.sbatch` | the same driver on a CPU node — §2.3's baseline, *and* GPU.md §4 item 3's tape measurement, which needs no card |
+| `davidson_profile.py` | **inside** a Davidson step: the parts of one, at a case's own shapes, on either platform — Phase 1 one level in |
+| `davidson-gpu.sbatch`, `davidson-cpu.sbatch` | that profile on a card and on four pinned Milan cores; the GPU half also re-runs the sweep's own invocation, so the sweep's committed ms/iteration is the before column |
+| `phase5-si10-gpu.sbatch`, `phase5-si10-cpu.sbatch` | the response on a **ten-atom** cell, which is what the first Phase 5 run said it owed; the CPU half also carries the unexplained `alas-raman` diagnostic |
 | `sweep-gpu.sbatch`, `sweep-qe.sbatch`, `h200-ladder*.sbatch`, `qe64-*.sbatch`, `qe-serial.sbatch` | the physics sweep and the size ladders, against QE |
 
 ## The cluster's rules are not this project's
@@ -184,3 +187,33 @@ python3 tools/gpu/phase5.py alas-raman --property all --json-dir records/
 A property that is refused for a case — a PAW `born`, an ultrasoft `phonon` —
 is reported as `REFUSED` with the reason rather than as a failure, because the
 refusals are part of what the phase is documenting.
+
+## Phase 1, one level in: `davidson_profile.py`
+
+Phase 1 profiled the SCF by *stage* — `h_psi`, Davidson, `v_of_rho` — and named
+what a stage timing cannot resolve: "the small dense `eigh` and matmuls inside a
+`lax.while_loop`". `davidson_profile.py` measures the parts of a Davidson step
+at a case's own shapes, so that a change is chosen by the size of its target:
+
+```bash
+python3 tools/gpu/davidson_profile.py si16-1k-ecut30 --json out.json
+python3 tools/gpu/davidson_profile.py si10-nc --trajectory   # multi-k
+```
+
+It reports the projected eigenproblem at each width from `nbnd` to `nvecx`, the
+same batched over k, the two Ritz rotations, `h_psi` against the block's width,
+and the whole solve at three thresholds — **cold and seeded**, which are two
+different regimes and the seeded one is the SCF's.
+
+**Two things it is built to answer, and both are about `vmap`.** A `lax.cond`
+with a batched predicate runs *both* branches, and so does a `lax.switch`; the
+first was a live 2.85x regression in `generalised_eigh` (fixed, `PERFORMANCE.md`)
+and the second is what constrains the two `cegterg` behaviours still on the
+backlog. The batched rows in the table are how either is seen at all.
+
+**The step trajectory needs no instrumentation of the solver**, which matters
+because instrumenting a `lax.while_loop` would change what is measured. Capping
+the solver at `m` steps for successive `m` and differencing the eigenvalues
+outside it reconstructs the solver's own convergence flags. It recompiles once
+per step, so it is a diagnostic and never a timing — `--trajectory` is opt-in
+for that reason.

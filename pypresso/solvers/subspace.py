@@ -70,7 +70,7 @@ def _canonical_route(h, s):
     return values, x @ vectors
 
 
-def generalised_eigh(h, s):
+def generalised_eigh(h, s, robust: bool | None = None):
     """Eigenpairs of ``H v = e S v`` for Hermitian ``H`` and positive ``S``.
 
     **``S`` stops being positive, and when it does JAX does not say so.** As
@@ -96,7 +96,36 @@ def generalised_eigh(h, s):
     validated number here was produced with, and it is taken bit-for-bit
     whenever it works -- and the canonical-orthogonalisation route is used only
     when it has failed. ``lax.cond`` traces both and runs one.
+
+    **Except under ``vmap``, where it runs both, and that is what ``robust``
+    exists for.** A ``cond`` whose predicate is batched has no branch to take:
+    JAX's batching rule lowers it to ``select_n`` over the results of *both*
+    branches. ``k_batch=None`` -- the default on an accelerator since the dials
+    became per-platform -- is exactly a ``vmap`` over the k axis, so on a GPU
+    every multi-k Davidson step has been paying the canonical route as well as
+    the Cholesky one, on top of the solve it actually uses. Measured on this
+    workstation at ``si10-nc``'s own shapes (80 x 80, seven k-points):
+    **42.5 ms against 14.9 for the Cholesky route alone, 2.85x**, where
+    unbatched the two are within a percent of each other. It is a lowering fact
+    rather than a hardware one, which is why a CPU can measure it.
+
+    ``robust`` therefore selects the route **statically**, so that a caller in a
+    batched hot loop can take the fast one with no ``cond`` in the graph at all
+    and handle the failure where the predicate is *not* batched -- which is what
+    :func:`~pypresso.solvers.davidson.davidson_eigensolver_all` does, one level
+    outside ``map_k``:
+
+    * ``None`` (the default) keeps the guard, for callers that solve once --
+      ``rayleigh_ritz``, the exact-reference fixture -- where 2.85x of one small
+      solve per SCF is not worth a second code path;
+    * ``False`` is the Cholesky route alone, and is bit-for-bit what the guarded
+      version returns whenever the guard passes;
+    * ``True`` is canonical orthogonalisation alone, which is the retry.
     """
+    if robust is True:
+        return _canonical_route(h, s)
+    if robust is False:
+        return _cholesky_route(h, s)
     factor = jnp.linalg.cholesky(s)
     return jax.lax.cond(
         jnp.all(jnp.isfinite(factor)),

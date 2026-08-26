@@ -179,6 +179,12 @@ whether a cell runs at all.
 > when the factor comes back non-finite (`solvers/subspace.py`). Verified on the
 > device: 9 iterations, QE's energy to 1.6e-8 Ry. Measurements in
 > `PERFORMANCE.md`.
+>
+> **The guard was a `lax.cond` *inside* the per-k solve until 2026-08-26, and
+> that cost 2.85x of every multi-k subspace solve on the GPU's own default
+> dials** — a `cond` under `vmap` has no branch to take and runs both sides. It
+> is now one predicate over the whole k-set, outside `map_k`, returning
+> bit-for-bit the same values. Phase 1's continuation below.
 
 ### Phase 0 — first contact: does it run, and does it give the same number? ✅ DONE (bar check 5's cross-job form)
 
@@ -366,6 +372,37 @@ not tuning.**
 cell agrees with the CPU to **-7.4e-13 Ry**. It was particular to
 `si16-1k-ecut30`, not a scaling defect in the batched dial.
 
+**Second pass, 2026-08-26: the profile goes one level in, and it found a
+regression the first pass could not see.** `tools/gpu/davidson_profile.py`
+measures the *parts* of a Davidson step at a case's own shapes, on either
+platform. The CPU half is run; the GPU half is `davidson-gpu.sbatch`, proposed
+and not submitted. What it returned:
+
+* **the guard the 64-atom `NaN` fix added was inside the k batch, and a `cond`
+  under `vmap` is not a branch.** JAX lowers a conditional with a batched
+  predicate to `select_n` over *both* branches, and `k_batch=None` — the GPU
+  default this file argued for in §1 — is a `vmap` over k. So every multi-k GPU
+  subspace solve since `a351005` has computed canonical orthogonalisation as
+  well as the Cholesky route it uses: **2.85x** at `si10-nc`'s shapes. The guard
+  now lives outside `map_k`, where its predicate is one scalar, and the values
+  are bit-for-bit unchanged. The physics sweep ran *downstream* of that commit,
+  so its committed ms/iteration is the before column of the fix's own
+  measurement, on the same card and the same dials;
+* **two more candidates, ranked and not implemented**: sizing the projected
+  solve by the live basis (`cegterg`'s `nbase`; ~7% of a step at sixteen atoms,
+  aimed at the ~80% the subspace algebra is of a 64-atom solve) and expanding by
+  `notcnv` rather than `nbnd` (measured premise: the live roots fall 20 → 13 →
+  10 → 0 in the *seeded* regime and never fall at all from a cold start).
+  **`lax.switch` is the same trap as `lax.cond`** — every branch runs under
+  `vmap` — so both are unbatched-path changes, which is where the large single-k
+  cells are;
+* **the profile itself is the deliverable that outlives the numbers**: the CPU
+  half can be re-run on this workstation whenever a solver change lands, and the
+  GPU half is one job.
+
+Numbers in `PERFORMANCE.md`, "The guard was inside the k batch" and "Inside a
+Davidson step".
+
 ---
 
 **What.** A per-op profile of one SCF iteration on the GPU, on `si8-1k` and `si16-1k`.
@@ -551,6 +588,18 @@ the same case in 2.59 GB — unexplained, and the diagnostic job is not run. And
 every response case here is a **two-atom cell**, which the standing rule says
 shows none of this: the 1.0-1.4x is a fact about these cells, not a ceiling.
 
+**The ten-atom half is measured on a CPU, 2026-08-26, and the GPU job for it is
+proposed.** `si10-epsilon.in` — ten silicon atoms, sixteen k-points, `nosym`,
+already validated against the vendored `ph.x` to 7.0e-6 — costs **245 s** for
+the dielectric constant and **302 s** for the Born charges on four pinned cores,
+against 12.5 s and 13.0 s for the two-atom cell. That is the twentyfold larger
+response the caveat above asked for, and its **tape does not grow with it**:
++1.30 and +1.58 GB over its own SCF against +0.79 and +0.85 on two atoms, which
+is a forward response taping nothing, holding at a size that could have broken
+it. `phase5-si10-gpu.sbatch` and its CPU pair are the job; the second one also
+carries the `alas-raman` diagnostic, with `JAX_TRACEBACK_FILTERING=off` and the
+same 160 G the failure happened under.
+
 **This is the phase that was missing from the first draft of this file, and its absence was
 a category error rather than an omission.** `CLAUDE.md`'s "Why JAX" lists autodiff response
 as reason *one* and GPU as reason *two*. Everything above is about the SCF. A GPU roadmap
@@ -607,8 +656,15 @@ In the order they pay off if first contact slips:
    needed no card to obtain.
 4. **Phase 4's sharding logic**, against forced host devices.
 5. **Phase 2's backend equivalence test**, which needs only the second backend written.
-6. **The CPU side of Phase 1's profile**, as the pinned baseline the GPU number is quoted
-   against (§2.3).
+6. ✅ **The CPU side of Phase 1's profile**, as the pinned baseline the GPU number is
+   quoted against (§2.3) — *done 2026-08-26*, `tools/gpu/davidson_profile.py`, and it went
+   one level further than this item asked: the sub-stage profile is what found the
+   `cond`-under-`vmap` regression, which needed no card either.
+7. **Sizing the subspace solve by the live basis, and the expansion by `notcnv`**
+   (`PERFORMANCE.md`'s backlog items 2 and 3). Both are unbatched-path changes, both are
+   *implementable and correctness-testable today*, and both are worth measuring on a CPU
+   before a card decides whether they are worth taking — but their payoff is a GPU one, so
+   the order is: measure on the device first, then write.
 
 ## 4a. Keeping a GPU number true after the machine goes away
 

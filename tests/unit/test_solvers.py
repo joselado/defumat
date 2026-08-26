@@ -153,3 +153,52 @@ def test_the_registry_covers_every_solver():
     assert get_eigensolver("DAVIDSON") is EIGENSOLVERS["davidson"]
     with pytest.raises(ValueError, match="unknown diagonalization"):
         get_eigensolver("no-such-solver")
+
+
+def test_a_cholesky_that_returns_nan_is_rescued_outside_the_k_batch(silicon,
+                                                                    monkeypatch):
+    """The 64-atom ``NaN``, end to end, with the guard where batching allows it.
+
+    ``generalised_eigh``'s conditional cannot live inside the solve any more:
+    one level down it is inside ``map_k``'s ``vmap``, where a batched predicate
+    lowers to ``select_n`` and both branches run on every step (2.85x of the
+    subspace solve, measured on ``si10-nc``). So the batched solve takes the
+    Cholesky route unconditionally and
+    :func:`~pypresso.solvers.davidson.davidson_eigensolver_all` retries the
+    whole k-set with canonical orthogonalisation when the eigenvalues come back
+    non-finite -- which is one scalar predicate, outside the batch, and a real
+    branch again.
+
+    Forcing the failure is the only way to test the retry: the overlap goes
+    indefinite by round-off on cells far larger than anything a unit test may
+    run, and which side of zero it lands on is a coin flip (see
+    ``tests/unit/test_subspace_robustness.py``). Replacing the fast route with
+    one that returns ``NaN`` exercises the identical path deterministically.
+    """
+    from pypresso.solvers import davidson, subspace
+
+    _, _, hamiltonian = silicon
+    exact, _ = exact_eigenpairs_all(hamiltonian, NBND)
+
+    real_route = subspace._cholesky_route
+
+    def nan_route(h, s):
+        values, vectors = real_route(h, s)
+        return values * np.nan, vectors * np.nan
+
+    monkeypatch.setattr(subspace, "_cholesky_route", nan_route)
+    davidson.davidson_eigensolver_all.clear_cache()
+    try:
+        values, _ = davidson_eigensolver_all(hamiltonian, NBND, None, ethr=1e-13,
+                                             max_iterations=60)
+        values = np.asarray(values)
+        assert np.isfinite(values).all(), "the retry did not fire"
+        assert values == pytest.approx(np.asarray(exact), abs=1e-8)
+
+        # ... and with the retry switched off, the NaN is what comes back --
+        # which is what says the rescue above was the retry and not the route.
+        unguarded, _ = davidson_eigensolver_all(hamiltonian, NBND, None, ethr=1e-13,
+                                                max_iterations=60, robust_retry=False)
+        assert not np.isfinite(np.asarray(unguarded)).all()
+    finally:
+        davidson.davidson_eigensolver_all.clear_cache()

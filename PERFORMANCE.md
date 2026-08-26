@@ -2041,6 +2041,13 @@ parks the round-off-floor directions above the spectrum rather than inverting
 them. The GPU now matches the CPU's iteration count exactly, which is the sign
 the SCF path is the same on both platforms rather than diverging at the endgame.
 
+**Where that guard lives moved on 2026-08-26 and the mechanism above is no
+longer where to read it** — see "The guard was inside the k batch, where a
+`cond` is not a branch". It was a `lax.cond` inside the per-k solve, which under
+`k_batch=None` is inside a `vmap`, where a batched predicate runs **both**
+branches on every step. The test is the same test and the values are bit-for-bit
+the same; the choice is now made once over the whole k-set, outside `map_k`.
+
 **Two wrong turns, recorded because both were nearly committed.** The Anderson
 mixer was the first suspect — its Gram matrix spans the square of the residual
 magnitudes and reaches cond 1.1e11 by the eighth iteration. That is a real defect
@@ -2379,6 +2386,181 @@ that walks the k axis goes through `map_k`/`sum_k`, so a Sternheimer solve on a
 card gets the batched mode without a dial being passed down through
 `dielectric_tensor` or `dynamical_matrix`.
 
+## The guard was inside the k batch, where a `cond` is not a branch (P10 / GPU.md Phase 1)
+
+**A `lax.cond` under `vmap` has no branch to take.** JAX's batching rule for a
+conditional whose predicate is batched lowers it to `select_n` over the results
+of *both* branches — there is no per-element branch on a device — and
+`k_batch=None`, the default on an accelerator since "The dials default to the
+platform now", is exactly a `vmap` over the k axis. So the guard the 64-atom
+`NaN` fix put inside `generalised_eigh` has been computing canonical
+orthogonalisation on **every step of every k-point of every multi-k run**, in
+addition to the Cholesky route it actually uses.
+
+Measured on the development workstation, four pinned cores, at `si10-nc`'s own
+subspace shapes (80 x 80, seven k-points), by `tools/gpu/davidson_profile.py`:
+
+| | unbatched | batched over 7 k |
+|---|---|---|
+| `generalised_eigh` (guarded) | 3.683 ms | **42.546 ms** |
+| `_cholesky_route` alone | 3.424 ms | **14.940 ms** |
+| ratio | 1.08x — the guard is free | **2.85x** |
+
+Unbatched the two are within the spread of each other, which is what a real
+branch looks like. Batched they are not, and the factor is **2.85x** — a second
+measurement in a separate process put it at 3.26x, so quote it as "about three".
+**It is a lowering fact rather than a hardware one**, which is why a CPU can
+measure it at all: the same `vmap` costs the same extra work on either platform,
+in a different ratio.
+
+**The fix is where the predicate is a scalar, not what the predicate is.**
+`davidson_eigensolver_all` now takes the Cholesky route unconditionally inside
+`map_k` — no conditional in the batched graph at all — and asks once, over the
+whole k-set and outside the batch, whether the eigenvalues *and* the
+eigenvectors came back finite; if they did not, every k-point is re-solved with
+canonical orthogonalisation. Three things make that safe rather than merely
+faster:
+
+* **the values are bit-for-bit unchanged**, because the guard passing *was* the
+  Cholesky route: `select_n` chose between two computed arrays and took that
+  one. Verified end to end — `si10-nc` at `k=all, b=all` gives
+  `-78.997489763108 Ry` in 8 iterations with eigenvalue SHA-256 `98dc1c570b6c…`
+  before and after, identical;
+* **the per-k loop exits the moment the eigenvalues stop being finite**, so a
+  solve that has failed costs a few steps rather than the whole 100-step budget
+  before the retry outside can see it. Without that the retry would be worse
+  than the `cond` in exactly the case that was already broken;
+* **the guard watches the wavefunctions too, not only the energies.** The first
+  regression test written for the 64-atom `NaN` passed on the *unfixed* code
+  because Cholesky left its `NaN` in a triangle nothing read — a guard that
+  watches only the eigenvalues can pass a wavefunction with a `NaN` in it
+  straight into the density.
+
+**What it is worth, on a CPU, which is not where it matters.** Same machine,
+four pinned cores, `si10-nc` at `k=all, b=all`, the Davidson stage alone:
+
+| | before | after | |
+|---|---|---|---|
+| cold-start solve, `ethr = 1e-13` | 6820.5 ms | 5852.4 ms | **1.17x** |
+| seeded solve, `ethr = 1e-13` | 869.6 ms | 761.5 ms | **1.14x** |
+| seeded solve, `ethr = 1e-10` | 453.8 ms | 413.3 ms | **1.10x** |
+| whole SCF | 1138 ms/it | 1037 ms/it | **1.10x** |
+| compile, cold-start solve | 3.69 s | 4.79 s | **+1.10 s** |
+
+The 2.85x on the operation becomes 1.1-1.17x on the stage because on a CPU
+`h_psi` is most of a Davidson step — 146 ms for a 32-band block against 19 ms
+for the whole 128-wide subspace solve, on `si16-1k-ecut30`. **On a device that
+ratio inverts**, and by a lot: Phase 1 measured `h_psi` at 6.8-17.9x faster on a
+GPU while the subspace algebra took nothing, and the committed 64-atom stage
+timings are `h_psi` 0.012 s against Davidson 0.640 s. That is a *prediction*
+this change is expected to cash in, not a measurement — `tools/gpu/davidson-gpu.sbatch`
+is the job that tests it, and it re-runs the physics sweep's own invocation so
+that the sweep's committed ms/iteration is the before column on the same card.
+
+**And the compile cost is real and is not amortised away here**: the retry
+branch is a second copy of the solver in the graph, +1.10 s on the cold-start
+variant and +0.58 s on the seeded one. That is paid once per shape; the 2.85x
+was paid per Davidson step.
+
+## Inside a Davidson step: what each part costs (P10 / GPU.md Phase 1)
+
+Phase 1 profiled the SCF by *stage* and named what it could not resolve there —
+"the small dense `eigh` and matmuls inside a `lax.while_loop`". This is that
+level, from `tools/gpu/davidson_profile.py`, on the development workstation at
+four pinned cores. Two cells, chosen for what each can show: `si16-1k-ecut30`
+is single-k and large-basis, `si10-nc` is seven k-points and small.
+
+**`si16-1k-ecut30`** — 16 atoms, 1 k, `nbnd` 32, `ndim` 5900, `nvecx` 128:
+
+| operation | width | ms |
+|---|---|---|
+| `h_psi` | 32 bands | **146.3** |
+| `h_psi` | 1 band | 6.8 |
+| the subspace solve | 128 | 18.8 |
+| the subspace solve | 96 / 64 / 32 | 5.5 / 2.1 / 0.6 |
+| a Ritz rotation | 128 | 11.7 |
+| a Ritz rotation | 96 / 64 / 32 | 9.0 / 5.9 / 3.2 |
+| `_extend_projection` | 32 | 11.3 |
+
+**`si10-nc`** — 10 atoms, 7 k, `nbnd` 20, `ndim` 952, `nvecx` 80:
+
+| operation | width | ms |
+|---|---|---|
+| `h_psi` | 20 bands | **18.6** |
+| the subspace solve | 80 / 60 / 40 / 20 | 3.4 / 2.8 / 1.2 / 0.3 |
+| a Ritz rotation | 80 / 60 / 40 / 20 | 1.1 / 1.1 / 0.8 / 0.6 |
+
+Three things follow, and they are the ranking the next change is chosen from.
+
+**`h_psi` is exactly linear in the block's width** — 1.08 / 4.98 / 9.63 / 18.58
+ms at 1 / 5 / 10 / 20 bands — which is what a CPU walking its bands one at a
+time looks like. Whether it is linear on a device at `band_batch = all`, where a
+narrow block may be launch-bound, is the question `davidson-gpu.sbatch` asks.
+
+**The solve at the live basis is a third of the solve at `nvecx`.** `cegterg`
+sizes its `cdiaghg` and its ZGEMMs by `nbase`; static shapes made this code size
+them by `nvecx = 4 nbnd` always, and the four widths above say what that costs:
+over one fill of the subspace, 4 x 18.8 ms of solve against 0.6 + 2.1 + 5.5 +
+18.8, and 4 x 11.7 of rotation against 3.2 + 5.9 + 9.0 + 11.7. About 7% of a
+Davidson step here — and aimed at ~80% of one on the 64-atom cell, where the
+committed device timings put `h_psi` at 0.012 s and Davidson at 0.640.
+**`lax.switch` is `lax.cond`'s twin under `vmap`** and runs every branch, so
+this can only ever be taken on the unbatched path — which is where the large
+single-k cells live, so that is not the obstacle it sounds like.
+
+**Roots settle, but only in the regime the SCF actually runs.** The number of
+unconverged roots is reconstructed without instrumenting the `while_loop`, by
+capping it at `m` steps for successive `m` and differencing the eigenvalues
+outside — which is the solver's own test. At `ethr = 1e-13` on `si10-nc`:
+
+| | step 2 | 3 | 4 | 5 |
+|---|---|---|---|---|
+| cold start | 20/20 | 20/20 | 20/20 | 20/20 |
+| seeded from the converged states | 20/20 | 13/20 | 10/20 | **0/20** |
+
+So expanding by `notcnv` rather than by `nbnd` — which is again `cegterg`'s
+behaviour and again lost to static shapes — is worth about half the `h_psi` of
+the endgame steps *in the SCF*, and nothing at all on a cold band-structure
+solve. The cold column is why the premise had to be measured rather than
+assumed: a profile of the wrong regime would have said the opposite.
+
+**And the `ethr` tax is here in its CPU form**: the whole seeded solve costs
+58.4 / 111.9 / 161.4 ms at `ethr` 1e-6 / 1e-10 / 1e-13, i.e. **2.77x**, where
+the same tightening on a device cost 13x at sixteen atoms. Same shape, different
+size, and the difference is the subspace algebra's share.
+
+## The response at ten atoms, not two (P10 / GPU.md Phase 5)
+
+`PERFORMANCE.md`'s own caveat on the first Phase 5 run was that every case in it
+was a two-atom cell, "and `CLAUDE.md`'s rule is that a two-atom cell shows none
+of this ... the next measurement is `si10-epsilon` or larger". This is the CPU
+half of that measurement — development workstation, four pinned cores, jax
+0.11.0, `k_batch=1, band_batch=1`, `tools/gpu/phase5.py`:
+
+| property | mode | cold / warm | tape over SCF | value | against `ph.x` |
+|---|---|---|---|---|---|
+| dielectric `si10-epsilon` | forward | 256.3 / **245.3** s | +1.30 GB | `eps_xx` 19.111965069 | 19.111968489 → **3.4e-6** |
+| Born `si10-epsilon` | forward | 298.3 / **302.0** s | +1.58 GB | `Z*_xx` -0.723689217 | -0.72368 → **9.2e-6** |
+
+The cell is 10 atoms, 16 k-points, `nbnd` 20, `npwx` 952, `ngm` 7373; its SCF is
+9 iterations at 1472 ms each. Three things worth carrying:
+
+* **it is twentyfold the two-atom response** — 245 s against the committed 12.48
+  s for `si-epsilon`'s dielectric on four Milan cores — so it is the first
+  response case where the per-k work is real. Whether the H200's 1.0x on a
+  Sternheimer solve survives that is what `tools/gpu/phase5-si10-gpu.sbatch`
+  asks;
+* **the tape does not scale with the response's size**: +1.30 and +1.58 GB
+  against +0.79 and +0.85 on the two-atom cell, for twenty times the work. A
+  forward response carries a tangent and tapes nothing, and this is that
+  statement holding at a size that could have broken it;
+* **both are bit-identical run to run on the CPU**, which is the comparison the
+  device could not make on three of its eight rows.
+
+The `born_xx` figure is the one component quoted; `tests/regression/test_ten_site.py`
+already checks the whole tensor against this reference, and `PLAN.md` records
+7.0e-6 across every component.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -2390,13 +2572,27 @@ instinct. None of these may change a validated number.
    independent and are currently run through a single pool. This is where the
    remaining structural factor is, and the k-axis already leads every
    wavefunction-shaped array so that it can be taken.
-2. **Fold `dr2` into the iteration's other reductions.** It costs a transform and
+2. **Size the Davidson subspace solve by the live basis**, and the two Ritz
+   rotations with it (`cegterg`'s `nbase`, lost here to static shapes). Measured
+   at about 7% of a Davidson step on `si16-1k-ecut30` and aimed at ~80% of one
+   on the 64-atom cell, where the device stage timings are `h_psi` 0.012 s
+   against Davidson 0.640 s. **Unbatched path only** — `lax.switch` runs every
+   branch under `vmap`, exactly as `lax.cond` does — which is where the large
+   single-k cells are anyway. See "Inside a Davidson step".
+3. **Expand by `notcnv` rather than by `nbnd`.** In the seeded regime the SCF
+   runs, the live roots fall 20 -> 13 -> 10 -> 0 over four steps at
+   `ethr = 1e-13`, and `h_psi` is exactly linear in the block's width on a CPU —
+   so this is about half the expansion cost of the endgame steps. It is worth
+   **nothing** on a cold band-structure solve, where no root settles at all, and
+   whether it is worth anything on a device depends on whether a narrow block is
+   launch-bound there. Same `vmap` restriction as the item above.
+4. **Fold `dr2` into the iteration's other reductions.** It costs a transform and
    a dispatch of its own (~3% of an iteration) for a quantity the loop already
    computes a residual for. Mixing in G space would save another transform.
-3. **Shell-based radial evaluation** for quantities depending only on `|G|` (~100
+5. **Shell-based radial evaluation** for quantities depending only on `|G|` (~100
    shells vs 1459 G-vectors for Si). Note this is *not* strain-safe: shells split
    under strain, so it must stay off the stress path.
-4. **Stop closing over the cell in the stress gradient** (P29). `at_strain`
+6. **Stop closing over the cell in the stress gradient** (P29). `at_strain`
    drops `_energy_gradient` on every call, because the compiled gradient closes
    over the cell it was traced at, so a variable-cell relaxation compiles the
    strain derivative again at every ionic step: **0.6 s of retracing for 0.57 s
@@ -2405,24 +2601,24 @@ instinct. None of these may change a validated number.
    costs a signature change in `stress/energy.py`. A fixed-cell `relax` does not
    pay it -- `at_positions` already keeps its compiled force -- which is why this
    surfaced only here.
-5. **Schedule the response solver's threshold** (P25). `dfpt_kernels.f90` uses
+7. **Schedule the response solver's threshold** (P25). `dfpt_kernels.f90` uses
    `thresh = min(0.1 sqrt(dr2), 1e-2)` where `response/phonon.py` holds a fixed
    1e-12, and the cost is `av.it. = 27.7` against `ph.x`'s 9.3 — a factor of
    three, on the stage that is 96% of the run. It is `electrons.f90`'s `ethr`
    schedule in a second place, the rule is already quoted in
    `response/sternheimer.py`'s docstring, and the same fix applies to
    `response/efield.py`. Cheapest item on this list by a wide margin.
-6. *(done, 2026-08-22)* **A mixer in the response loop.** Was: 17 linear-mixing
+8. *(done, 2026-08-22)* **A mixer in the response loop.** Was: 17 linear-mixing
    iterations against `ph.x`'s 5, whose mixer is `LR_Modules/mix_pot.f90`. It
    turned out not to be a speed item at all -- linear mixing of a map whose
    Jacobian has an eigenvalue below -1 **diverges**, which two systems then did
    (see "What a mixer in the response loop was worth"). `pypresso/response/mixing.py`
    now wraps `scf/mixing.py`'s Anderson history for all three loops.
-7. **One irreducible representation at a time** (P25), for the *memory* rather
+9. **One irreducible representation at a time** (P25), for the *memory* rather
    than the time: it bounds the working set at 3 modes in flight instead of
    `3 nat`, which is 7 GB on a 16-atom cell. It does not reduce the number of
    solves — `ph.x` perturbs along all `3 nat` modes too.
-8. **The stress's reverse-mode tape through the radial transforms** (P11). 11 GB on
+10. **The stress's reverse-mode tape through the radial transforms** (P11). 11 GB on
    eight-atom ultrasoft silicon against the SCF's 0.9, and the largest single
    allocation anywhere in the code. `jax.checkpoint` on the augmentation kernel
    alone was measured and is worth nothing, so the next thing to try is a
