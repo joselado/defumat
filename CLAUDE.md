@@ -789,8 +789,8 @@ none of them is incidental to the algorithm:
   k-point's whatever `nks` is; the other k-points' `evc` sits in a buffer that is RAM or
   disk according to `io_level`/`disk_io`, and the parallelism over k comes from MPI pools.
   Batching the whole k axis with `vmap` is this code's deliberate deviation — it is what a
-  GPU wants — so it is a **dial** (`pypresso/batching.py`), defaulting to QE's end of it,
-  not a fixed choice. Rule R6 (k leading) is what keeps both available.
+  GPU wants — so it is a **dial** (`pypresso/batching.py`), defaulting to QE's end of it
+  on a CPU and to the batch on an accelerator, not a fixed choice. Rule R6 (k leading) is what keeps both available.
 - **The sphere, not the box.** Wavefunctions live on the G-vectors inside the cutoff and
   are expanded into the FFT box only for the transform, and only over the sticks the
   sphere occupies (`basis/sticks.py`).
@@ -864,8 +864,12 @@ tools/export_notebooks.sh                     # re-execute notebooks + refresh .
   iteration body (`h_psi` → diagonalize → density → potential → mix). Inside the
   eigensolver, use `lax.while_loop`/`fori_loop` with a fixed subspace size so the solver
   stays on device.
-- **How many k-points are in flight is `pypresso/batching.py`'s dial, and its default is
-  QE's loop** — one k-point at a time, as `c_bands.f90` and `sum_band.f90` do it. `k_batch`
+- **How many k-points are in flight is `pypresso/batching.py`'s dial, and its default
+  follows the platform** — QE's loop on a CPU, one k-point at a time as `c_bands.f90` and
+  `sum_band.f90` do it, and the whole axis at once on an accelerator, where the cache
+  argument behind that loop does not exist and inheriting it gives up 4.5x. The band dial
+  moves with it, never separately: `k=all, b=1` is measured to be worse than either end.
+  `k_batch`
   reaches every entry point (`run_scf`, `run_bands`, `run_nscf`, `run_dos`, `Calculation`,
   `PYPRESSO_K_BATCH`), `None` asks for one `vmap` over the whole axis, and the chunked form
   is a `lax.map`/`lax.scan` so it stays compiled once and differentiable. Anything new that

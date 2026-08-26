@@ -17,7 +17,8 @@ every k-point's band-by-band real-space field, are live at once. On a cell with
 many irreducible k-points and two-component spinors that is tens of gigabytes
 where QE needs one k-point's worth.
 
-This module is the dial between the two, and the default is QE's end of it:
+This module is the dial between the two, and on a CPU the default is QE's
+end of it:
 
 * ``batch = 1`` -- QE's loop, one k-point resident.
 * ``batch = n`` -- n k-points at a time, the compromise.
@@ -79,10 +80,39 @@ The gain grows with the box, and the one case that loses is the 180-plane-wave
 cell where the whole calculation is fixed overhead. So the band axis is a dial
 too, with the same default as the k axis -- QE's loop -- and the same escape
 hatch for a GPU, which wants the batch that a cache does not.
+
+**Both defaults are per platform, because both arguments above are arguments
+about a cache and an accelerator has none.** On a CPU each dial defaults to 1
+and every number in this docstring says why; on anything else both default to
+``None``, the whole axis at once. That is not a preference, it is what was
+measured on the device (``PERFORMANCE.md``, "First contact with a GPU"):
+``al10-metal`` runs at **801 ms/iteration on the CPU defaults and 177 at
+``k=all, b=all``** -- **4.5x given up** by inheriting them -- 16-atom silicon
+runs at **0.20x**, an outright loss against four CPU cores, and at 32 atoms
+``band_batch = 1`` did not finish two SCF runs in the fifteen minutes four CPU
+cores need eleven seconds for. **The two axes move together or not at all**:
+``k=all, b=1`` is *worse than either end* (2075 ms), because batching k while
+looping bands multiplies the per-band launches by ``nk``, so ``_platform_default``
+answers for both dials at once rather than per axis.
+
+``GPU.md`` §5's rule is that a platform-dependent choice is "a dial with a
+per-platform default and both settings tested", never a rewrite -- so nothing
+here changes on a CPU, both ends stay reachable everywhere, and the order of
+precedence is unchanged: an explicit argument beats
+``PYPRESSO_K_BATCH``/``PYPRESSO_BAND_BATCH``, which beat the platform. And the
+default is not visible in a result under any of them: the chunk size changes
+only the order the k contributions are *added* in (~1e-15 Ry), which is what
+``tests/unit/test_batching.py`` pins.
+
+**A single k-point is unaffected either way.** :func:`map_k` and :func:`sum_k`
+short-circuit ``nk == 1`` to a direct call before they look at the chunk size,
+so the new default does not put a width-one batch axis on the single-k
+benchmark cells -- the case "a batch of one is not a batch" above is about.
 """
 
 from __future__ import annotations
 
+import functools
 import os
 import warnings
 
@@ -94,50 +124,79 @@ __all__ = ["DEFAULT_K_BATCH", "resolve_k_batch", "map_k", "sum_k",
            "DEFAULT_BAND_BATCH", "map_bands", "sum_bands"]
 
 
-def _default_from_environment() -> int | None:
-    """``PYPRESSO_K_BATCH``: an integer, or ``all``/``0`` for one ``vmap``."""
-    setting = os.environ.get("PYPRESSO_K_BATCH", "").strip().lower()
+_UNSET = object()
+
+
+def _from_environment(name: str) -> int | None | object:
+    """``name`` read as a chunk size: an integer, or ``all``/``0`` for a ``vmap``.
+
+    Returns :data:`_UNSET` when the variable is not set, which is *not* the same
+    as ``None``: ``None`` is a meaningful setting here -- every k-point at once
+    -- so it cannot double as "nothing was said" and let the platform decide.
+    """
+    setting = os.environ.get(name, "").strip().lower()
     if not setting:
-        return 1
+        return _UNSET
     if setting in ("all", "0", "off", "none"):
         return None
     try:
         value = int(setting)
     except ValueError:
-        warnings.warn(f"ignoring PYPRESSO_K_BATCH={setting!r}: not a number",
+        warnings.warn(f"ignoring {name}={setting!r}: not a number",
                       RuntimeWarning, stacklevel=2)
-        return 1
-    if value < 1:
-        return None
-    return value
-
-
-#: How many k-points are processed at once when nothing says otherwise. One, as
-#: QE does it. ``PYPRESSO_K_BATCH`` overrides it for a whole process; every
-#: entry point takes a ``k_batch`` argument that overrides it for one call.
-DEFAULT_K_BATCH = _default_from_environment()
-
-
-def _band_default_from_environment() -> int | None:
-    """``PYPRESSO_BAND_BATCH``: an integer, or ``all``/``0`` for one block."""
-    setting = os.environ.get("PYPRESSO_BAND_BATCH", "").strip().lower()
-    if not setting:
-        return 1
-    if setting in ("all", "0", "off", "none"):
-        return None
-    try:
-        value = int(setting)
-    except ValueError:
-        warnings.warn(f"ignoring PYPRESSO_BAND_BATCH={setting!r}: not a number",
-                      RuntimeWarning, stacklevel=2)
-        return 1
+        return _UNSET
     return None if value < 1 else value
 
 
-#: How many bands are transformed at once. One, as ``vloc_psi_k`` and
-#: ``sum_band`` do it -- see the module docstring. ``PYPRESSO_BAND_BATCH``
-#: overrides it for a whole process.
-DEFAULT_BAND_BATCH = _band_default_from_environment()
+@functools.cache
+def _backend() -> str:
+    """The platform JAX will run on -- ``cpu``, ``gpu``, ``tpu``.
+
+    Asked lazily and cached, because asking *initialises* the backend and on a
+    GPU node that allocates device memory: importing this module must not do
+    that as a side effect. Anything that is not ``cpu`` counts as an
+    accelerator, so a name this was never tested against (``cuda``, ``rocm``)
+    lands on the accelerator default rather than on neither.
+    """
+    try:
+        return jax.default_backend()
+    except Exception:       # no backend at all: there is nothing to batch for
+        return "cpu"
+
+
+def _platform_default() -> int | None:
+    """QE's loop on a CPU, the whole axis at once on an accelerator.
+
+    This is the one place the two ends of both dials are chosen, and it is a
+    *default* rather than a rule: every entry point takes ``k_batch`` and
+    ``band_batch``, and ``PYPRESSO_K_BATCH``/``PYPRESSO_BAND_BATCH`` override a
+    whole process. See the module docstring for what each end costs where.
+    """
+    return 1 if _backend() == "cpu" else None
+
+
+def _k_default() -> int | None:
+    setting = _from_environment("PYPRESSO_K_BATCH")
+    return _platform_default() if setting is _UNSET else setting
+
+
+def _band_default() -> int | None:
+    setting = _from_environment("PYPRESSO_BAND_BATCH")
+    return _platform_default() if setting is _UNSET else setting
+
+
+def __getattr__(name: str):
+    """``DEFAULT_K_BATCH`` and ``DEFAULT_BAND_BATCH``, resolved when read.
+
+    Attributes (PEP 562) rather than module constants, because the platform
+    half of the answer costs a backend initialisation to obtain and the
+    environment half may be set after this module is imported.
+    """
+    if name == "DEFAULT_K_BATCH":
+        return _k_default()
+    if name == "DEFAULT_BAND_BATCH":
+        return _band_default()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def resolve_k_batch(requested: int | None | str = "default") -> int | None:
@@ -149,7 +208,7 @@ def resolve_k_batch(requested: int | None | str = "default") -> int | None:
     """
     if isinstance(requested, str):
         if requested == "default":
-            return DEFAULT_K_BATCH
+            return _k_default()
         return _named(requested)
     if requested is None:
         return None
@@ -288,7 +347,7 @@ def map_bands(fn, states, *, batch: int | None | str = "default"):
 def _resolve_band_batch(requested: int | None | str = "default") -> int | None:
     if isinstance(requested, str):
         if requested == "default":
-            return DEFAULT_BAND_BATCH
+            return _band_default()
         return _named(requested)
     if requested is None:
         return None

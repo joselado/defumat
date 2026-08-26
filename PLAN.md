@@ -787,7 +787,35 @@ slowdown: the GPU did not finish two SCF runs at `band_batch = 1` in fifteen
 minutes where four CPU cores do one in eleven seconds. `benchmarks/si32-1k*.in`
 were added for this and are verified by a folding identity rather than by an
 energy-per-atom comparison, which single-k sampling makes invalid across these
-cells. Phases 2-5 are unrun.
+cells. Phases 2-4 are unrun; Phase 5's CPU half is measured (below).
+
+**Two things landed 2026-08-26, and the first is a configuration bug rather than an
+optimisation.** `batching.py` defaulted both dials to `1` on *every* platform, so a bare
+`run_scf` on a card inherited the cache-shaped end of both — the mode measured at 4.5x on
+`al10-metal`, at an outright loss (0.20x) on sixteen atoms, and at a wall on thirty-two.
+Every GPU number above was produced by a dial set by hand in an sbatch script, and nothing
+in the code said so. The default now follows the platform (`_platform_default`): QE's loop
+on a CPU, the whole of both axes on anything else, with an explicit argument beating
+`PYPRESSO_*_BATCH` beating the platform, both dials moving together because `k=all, b=1` is
+worse than either end, and the CPU default bit-identical to what it was. The accelerator
+branch is tested here by substituting the backend, so it needs no card. `GPU.md` §5's rule
+is what shapes it: a platform-dependent choice is a dial with a per-platform default, never
+a rewrite.
+
+**And `GPU.md` Phase 5's tape is measured, which is the number that says whether the
+response path fits on a card at all.** `tools/gpu/phase5.py` runs one converged SCF and one
+response property per process — peak RSS is a high-water mark, so two properties in one
+process report the larger twice — and reports the working set over the SCF's beside the
+parameters it should scale with. The finding is that **the mode, not the property, decides
+the tape**: a *forward* response (the Sternheimer solves behind `epsilon` and `Z*`) costs
+0.7-1.0 GB over its SCF, and so does a *forward-over-reverse* one (the dynamical matrix,
+the Raman tensors), which is what `GPU.md` guessed but did not know — a `jvp` of a gradient
+tapes the inner reverse pass and could have behaved like the other end. The other end is
+the *reverse* stress through the radial transforms, which is where the 11 GB lives. So the
+response path fits a card comfortably except on the one axis P11 already flagged, and that
+axis has a fix in the backlog (a `custom_jvp` on each radial transform) rather than a
+guess. Numbers in `PERFORMANCE.md`; the job pair for the GPU half is written
+(`tools/gpu/phase5-{gpu,cpu}.sbatch`) and **unrun**.
 
 **`GPU.md` is the roadmap for the GPU half of this phase** — what is already GPU-ready by
 design and needs no work, what is blocked on first contact with real hardware, and what

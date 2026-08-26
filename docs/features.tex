@@ -643,9 +643,10 @@ functional than the one being differentiated.
 % =====================================================================
 \section{Performance: dials, memory and GPUs}
 
-\textbf{Two batching dials} control how much is in flight, and both default to
-QE's loop --- one $k$-point and one band at a time, which is what a \emph{cache}
-wants:
+\textbf{Two batching dials} control how much is in flight, and both defaults
+follow the platform: on a CPU, QE's loop --- one $k$-point and one band at a
+time, which is what a \emph{cache} wants --- and on a GPU the whole of both
+axes, which is what a card wants. Either end is reachable everywhere:
 
 \begin{shcode}
 PYPRESSO_K_BATCH=all PYPRESSO_BAND_BATCH=all python3 run.py
@@ -654,11 +655,16 @@ PYPRESSO_K_BATCH=all PYPRESSO_BAND_BATCH=all python3 run.py
 or per call, \code{run\_scf(..., k\_batch=...)}. The chunk size changes the order
 contributions are summed in and nothing else --- round-off, $\sim$1e-15 Ry.
 
-\textbf{On a GPU both defaults are wrong.} A GPU has no cache to fit in and
+\textbf{Why the default is per platform.} A GPU has no cache to fit in and
 inverts the conclusion: on a ten-atom metal, \code{k=1,b=1} costs \textbf{4.5x}
-what \code{k=all,b=all} does on the same card. Set both. The plausible
-half-measure \code{k=all,b=1} is the \emph{worst} setting available, because it
-buys the batched mode's memory with the looped mode's kernel launches.
+what \code{k=all,b=all} does on the same card, sixteen-atom silicon runs at
+\textbf{0.20x} --- an outright loss against four CPU cores --- and at
+thirty-two atoms \code{b=1} did not finish at all. So a run on a device gets
+both batched unless it says otherwise, and the plausible half-measure
+\code{k=all,b=1} is never the default: it is the \emph{worst} setting
+available, because it buys the batched mode's memory with the looped mode's
+kernel launches. An explicit argument beats the environment variables, which
+beat the platform.
 
 \textbf{Measured GPU speedups} (one H200 against one CPU core, per SCF
 iteration): 2x on a cheap metal, 3--5x on norm-conserving silicon, 9--21x with
@@ -669,6 +675,16 @@ Energies agree to $\sim$1e-9 Ry --- the same agreements the CPU already has.
 relativistic ultrasoft dataset peaks at \textbf{34.7~GB}, which fits a 141~GB
 card and does not fit a 32~GB one. Everything else in that sweep sits under
 2~GB.
+
+\textbf{A response costs memory according to how it is differentiated}, which is
+worth knowing before starting one. A \emph{forward} response --- the Sternheimer
+solves behind $\epsilon$ and $Z^*$ --- costs 0.7--1.0~GB over the SCF that
+produced the state, and a \emph{forward-over-reverse} one --- the dynamical
+matrix, the Raman tensors --- 1--2~GB. The \emph{stress} is the exception and it
+is a \emph{reverse} derivative through the radial transforms: \textbf{10.5~GB}
+on eight-atom ultrasoft silicon, ten times any of the others, and an order more
+than the SCF it came from. Measure your own with
+\code{tools/gpu/phase5.py <case> -{}-property <name>}.
 
 \textbf{Precision.} Every dtype comes from \code{config.Precision}; x64 is
 enabled before any array exists, and all validation is float64. float32 is a

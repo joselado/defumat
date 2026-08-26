@@ -2159,6 +2159,132 @@ what settled it; both converge at 200, in 151 and 104 iterations.
 `tools/gpu/phase0.py` takes `--max-iterations` now so the driver cannot report
 the one as the other again.
 
+## What each response property's working set is (P10 / GPU.md Phase 5)
+
+**`GPU.md` §4 item 3: "the number that says whether the response path fits on a
+card at all, and it needs no card to obtain."** Everything measured on a GPU so
+far is the ground state, and `CLAUDE.md`'s "Why JAX" lists autodiff response as
+reason *one*. This is the CPU half of that phase, run 2026-08-26 on the
+development workstation with `tools/gpu/phase5.py` — one converged SCF and
+**one** response property per process, because peak RSS is a high-water mark
+that cannot be reset and two properties in one process report the larger of the
+two twice.
+
+Peak RSS, the same measurement "What a stress costs (P11)" is built from, so
+these rows extend that table rather than starting a new scale:
+
+| property | mode | case | cell | property time | peak RSS | over the SCF | value |
+|---|---|---|---|---|---|---|---|
+| force | reverse | `si2-nc-stress` | 2 at, 18 k, `npwx` 200, `ngm` 1459 | 0.01 s warm | 0.71 GB | **+0.00** | max F 0.0604 Ry/bohr |
+| stress | reverse | `si2-nc-stress` | the same | 0.14 s warm | 0.79 GB | **+0.03** | P = -23.58 kbar |
+| dielectric | forward | `si-epsilon` | 2 at, 10 k, `npwx` 350, `ngm` 2733 | 13.3 s warm | 1.34 GB | **+0.79** | eps 13.806646 |
+| Born charges | forward, `jvp` of the force | `si-epsilon` | the same | 16.3 s warm | 1.42 GB | **+0.96** | Z* -0.0757150 |
+| dynamical matrix | forward-over-reverse | `si-epsilon` | the same | 42.1 s cold | 1.52 GB | **+1.06** | 510.1023 cm-1 |
+| dielectric | forward | `si-epsilon-us` | 2 at, 10 k, `npwx` 407, `ngm` **9185** | 39.8 s cold | 1.50 GB | **+0.66** | eps 14.3253 |
+| Raman tensors | forward-over-reverse | `alas-raman` | 2 at, **64 k**, `npwx` 169, `ngm` 1243 | 151.1 s cold | 2.59 GB | **+2.01** | eps 12.9674 |
+| stress | reverse | `si8-us` | 8 at, 1 k, `npwx` 1607, `ngm` **36257** | 16.2 s cold | **10.49 GB** | **+9.53** | P = 3.87 kbar |
+
+**Every value reproduces the number already committed for it** — 13.806646
+against P24's 13.806646, -0.0757150 against P24b's every printed digit, 510.1023
+against P25's 510.102 — which is what says the driver is measuring the same
+calculation the tests validate and not a cheaper one.
+
+**The mode decides the tape, not the property, and that is the finding.**
+`GPU.md` predicted that "the forward-mode paths that P25, P26 and P35 are built
+from are much better behaved" but explicitly declined to assert it. Measured: a
+forward response costs **0.7-1.0 GB** over its own SCF, and a
+**forward-over-reverse** one — a `jvp` of a gradient, which tapes the inner
+reverse pass and could have behaved like the other end — costs **1.0-2.1 GB**,
+the same order rather than the other one. The dynamical matrix and the Raman
+tensors are not memory problems.
+
+**And the spread inside that range is the property, not the k-count**, which is
+worth stating because the two cases in the table above invite the opposite
+reading: `alas-raman` has 64 k-points where `si-epsilon` has 10, so 1.06 against
+2.01 GB looks like it scales with `nk`. It does not. The same third derivative on
+**eighteen** k-points (`si2-nc-stress`, a control run for this) costs **+2.13 GB**
+— more than the sixty-four-point cell — so what separates a dynamical matrix from
+a Raman tensor here is how many first-order responses each solves, and the
+k-count is not the term that matters at these sizes.
+What is a memory problem is the *reverse* stress through the radial transforms:
+**10.49 GB on eight-atom ultrasoft silicon, +9.53 over its own SCF** — an
+independent reproduction, by a different driver, of the 11.1 GB the P11 section
+records — which is **ten times the largest response tape here** and is what a
+card has to hold. It has a fix in the backlog (item 8, a `custom_jvp` on each
+radial transform, ~100x on the dominant term) rather than a guess.
+
+**The batching dial does not bound the response's k-dependent state**, and that
+is structural rather than measured: `SternheimerResult.dpsi` is
+`(nspin, nk, nbnd_occ, ndim)` and is stacked over the whole axis
+(`response/sternheimer.py:477`), because it is what the next iteration's `drho`
+is built from — so `map_k` chunks the *work* and not that state. Every row above
+was measured at the CPU default of one k-point at a time, and **the measurement
+did not show that term dominating**: the two Raman cases put 18 and 64 k-points
+within 6% of each other. On a card at `k_batch = None` the SCF's own set grows as
+well, which is §2.4's memory-versus-parallelism trade arriving in the response
+path exactly as it does in the ground state — and it is unmeasured here.
+
+**The ultrasoft row is the one worth reading twice.** `si-epsilon-us` has
+**3.4x the `ngm`** of the norm-conserving cell and its response costs *less*
+memory over the SCF (+0.66 against +0.79), because the augmentation charge is
+paid for in the SCF's own working set rather than in the tape: a forward
+response does not tape the setup at all. That is the same asymmetry from the
+other side.
+
+**Two caveats on the timings, which are not this phase's headline.** The
+`vs SCF iteration` ratio `phase5.py` prints divides by an SCF that carries its
+own compilation, so it is a lower bound; and a response solve is 35-220 SCF
+iterations here, which is P24's and P25's own measurement (the Sternheimer stage
+is 96% of a phonon) and is what backlog item 5 — scheduling the response
+threshold, `av.it. 27.7` against `ph.x`'s 9.3 — is for. That item is
+platform-independent and pays before any hardware does.
+
+**The GPU half is written and unrun**: `tools/gpu/phase5-gpu.sbatch` and its CPU
+pair run the same driver over the same eight rows, with `si8-us stress` last
+because 11 GB of tape in HBM is the row the phase exists to bound. Per
+`CLAUDE.local.md`, an `sbatch` is proposed rather than submitted.
+
+## The dials default to the platform now (P10 / GPU.md §1)
+
+**Every GPU number above was produced by a dial set by hand in an sbatch
+script.** That is the finding this entry closes: `batching.py` defaulted both
+dials to `1` on every platform, so a bare `run_scf` on a card inherited the
+cache-shaped end of both — measured at **4.5x** on `al10-metal`, at **0.20x**
+on `si16-1k-ecut30` (a loss against four CPU cores), and at 32 atoms at a wall,
+where `band_batch = 1` did not finish two SCF runs in the fifteen minutes four
+cores need eleven seconds for. Nothing in the code said so; the knowledge lived
+in `GPU.md` and in the job scripts.
+
+`_platform_default()` now answers for both dials at once — `1` on a CPU, `None`
+on anything else — under `GPU.md` §5's rule that a platform-dependent choice is
+"a dial with a per-platform default and both settings tested". What did *not*
+change is the reason to trust it:
+
+* **the CPU default is bit-identical to what it was**, so no validated number
+  moves. The whole suite is the check;
+* **the order of precedence is unchanged**: an explicit `k_batch`/`band_batch`
+  beats `PYPRESSO_K_BATCH`/`PYPRESSO_BAND_BATCH`, which beat the platform;
+* **the two axes move together**, because `k=all, b=1` was measured at 2075 ms
+  against 177 and 801 — worse than either end, since batching k while looping
+  bands multiplies the per-band launches by `nk`;
+* **a single k-point is untouched** either way: `map_k`/`sum_k` short-circuit
+  `nk == 1` before they look at the chunk size, so the benchmark cells — single
+  k on purpose — do not acquire a width-one batch axis, which the module
+  docstring measures at 37% of a Davidson solve.
+
+Two implementation notes worth having: the platform is asked **lazily and
+cached**, because asking initialises the backend and on a GPU node that
+allocates device memory — importing `pypresso.batching` must not do that — and
+the two constants are module attributes (PEP 562) rather than values frozen at
+import, which also fixes a smaller bug of its own: `PYPRESSO_K_BATCH` set after
+the import used to be ignored. `tests/unit/test_batching.py` substitutes the
+backend, so the accelerator branch is tested on this CPU-only workstation.
+
+**The response path inherits it for free**, which is the point of R6: everything
+that walks the k axis goes through `map_k`/`sum_k`, so a Sternheimer solve on a
+card gets the batched mode without a dial being passed down through
+`dielectric_tensor` or `dynamical_matrix`.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than

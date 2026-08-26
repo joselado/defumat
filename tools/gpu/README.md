@@ -1,8 +1,8 @@
-# Phase 0: first contact with a GPU
+# The GPU jobs: first contact, and the response path
 
 `GPU.md` is the roadmap and `PLAN.md` P10 the phase entry; this directory is the
 thin path Phase 0 asks for — **one job, run by hand, not gated on P34 being
-built** — and nothing more. Read `GPU.md` §2 first: it is what decides how these
+built** — and, since 2026-08-26, Phase 5's counterpart for the response. Read `GPU.md` §2 first: it is what decides how these
 scripts are shaped, and above all that *nothing here is a port*. JAX already
 emits GPU code from this source. What is missing is evidence.
 
@@ -12,6 +12,10 @@ emits GPU code from this source. What is missing is evidence.
 | `phase0-gpu.sbatch` | the GPU job |
 | `phase0-cpu.sbatch` | **the same driver on a CPU node** — §2.3's baseline, and a separate job because CPU-only work does not belong on a GPU partition |
 | `phase0_compare.py` | pairs the two sets of JSON and reads the checks off them |
+| `phase5.py` | **the response driver**: one property per process, its derivative mode, its working set and its value |
+| `phase5-gpu.sbatch` | the GPU job for the response path |
+| `phase5-cpu.sbatch` | the same driver on a CPU node — §2.3's baseline, *and* GPU.md §4 item 3's tape measurement, which needs no card |
+| `sweep-gpu.sbatch`, `sweep-qe.sbatch`, `h200-ladder*.sbatch`, `qe64-*.sbatch`, `qe-serial.sbatch` | the physics sweep and the size ladders, against QE |
 
 ## The cluster's rules are not this project's
 
@@ -71,17 +75,21 @@ on import. Measured 2026-08-25: the cluster reproduces the workstation's
 `si-1k` total energy **bit for bit** at `-15.2544487130 Ry`, across jax 0.11.0
 and 0.11.1 on different hardware.
 
-## Both dials are set explicitly, and there is no default
+## The dials: required in `phase0.py`, and a platform default since
 
-`phase0.py` **requires** `--k-batch` and `--band-batch`. `batching.py` reads
-them from the environment at import time and defaults both to one, which is
-QE's loop and what a *cache* wants; a GPU has no such cache and inverts the
-conclusion. A GPU run left on the defaults serialises every FFT into a per-band
-kernel launch — close to the worst execution mode available — so the setting is
-part of the job, not a tuning afterthought.
+`phase0.py` **requires** `--k-batch` and `--band-batch`, because a measurement
+must say which setting produced it. What has changed underneath it (2026-08-26)
+is what a run that says *nothing* gets: `batching.py` used to default both dials
+to one on every platform — QE's loop, which is what a *cache* wants — so a GPU
+run left alone serialised every FFT into a per-band kernel launch, close to the
+worst execution mode available. Both defaults now follow the platform, so
+`phase5.py` takes the dials as *optional* and records what it resolved them to.
+The job scripts for it deliberately pass nothing, which makes them a test of the
+default as well as of the response path.
 
-That also means **one process per dial setting**: the dials cannot be changed
-after import, so each row of the job script is its own `python3` invocation.
+That also means **one process per dial setting**: the scripts put the setting
+into the environment before pypresso is imported, so each row of a job script is
+its own `python3` invocation.
 
 ## The cases, and why the benchmarks alone are the wrong first inputs
 
@@ -147,3 +155,32 @@ pocketfft sum in different orders — so `across` is reported for a GPU/CPU pair
 and asserted only when the two records come from the same platform. Rerunning
 the GPU job and comparing it against itself is therefore a real check and costs
 one extra job.
+
+## Phase 5: the response path, where the question is memory before speed
+
+`phase5.py` runs one converged SCF and then **one** response property, and
+reports the property's working set over the SCF's. One property per process is
+not a convenience: peak RSS and `peak_bytes_in_use` are both high-water marks
+that cannot be reset, so two properties in one process report the larger of the
+two twice.
+
+The column that decides the phase is the **derivative mode**, because it is what
+the tape follows:
+
+* `reverse` — a `jax.grad` pass over the setup, everything the forward pass
+  computed live at once. The stress on eight-atom ultrasoft silicon is 11 GB of
+  it, the largest single allocation anywhere in this code;
+* `forward` — a `jvp`, which carries a tangent and tapes nothing. The
+  Sternheimer solves behind `epsilon` and `Z*` are this;
+* `forward-over-reverse` — a `jvp` *of* a gradient, which is P25's dynamical
+  matrix and P35's Raman tensors. It tapes the inner reverse pass, so it is not
+  free the way a plain `jvp` is, and how much it costs is what this measures.
+
+```bash
+python3 tools/gpu/phase5.py si-epsilon --property dielectric --repeats 2
+python3 tools/gpu/phase5.py alas-raman --property all --json-dir records/
+```
+
+A property that is refused for a case — a PAW `born`, an ultrasoft `phonon` —
+is reported as `REFUSED` with the reason rather than as a failure, because the
+refusals are part of what the phase is documenting.

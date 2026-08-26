@@ -20,8 +20,10 @@ The organising fact is stated once and everything below follows from it:
 source, unmodified, runs on a Tesla V100 and reproduces the CPU energy to 1.6e-13 Ry. It
 also returned the two numbers this file was written without — **fp64 costs 1.78–1.98x on a
 matmul and 0.85–1.44x on an FFT**, which fixes Phase 3's rank, and **the defaults cost
-4.5x**, which turns §1's warning into a measurement. Everything below Phase 0 is still
-unrun.
+4.5x**, which turns §1's warning into a measurement. Since then Phase 1 has had a first
+pass, the dials' defaults have been made per-platform (§1), and Phase 5's CPU half — the
+tape per response property — is measured; **Phases 2, 3 and 4 are unrun**, as is Phase 5's
+GPU half.
 
 ---
 
@@ -41,17 +43,25 @@ actually missing.
 | **State objects are frozen `equinox.Module` pytrees with `eqx.field(static=True)` config** | `jit`/`grad` boundaries are already clean; no mutable module globals to thread to a device | conventions |
 | **The SCF's only host sync is its convergence test**, once per iteration | a device stall per iteration is affordable; one per inner step is not | `PLAN.md` §5 |
 
-**Both dials default to QE's loop, and on a GPU both defaults are wrong.** This is the
-single most important line in this table and it is easy to read past. `k_batch` defaults to
+**Both dials used to default to QE's loop whatever the platform, and on a GPU both
+defaults were wrong. Fixed 2026-08-26: the default now follows the platform** — QE's loop
+on a CPU, the whole of both axes on anything else (`batching.py`'s `_platform_default`,
+tested against a substituted backend so it needs no card). This was the single most
+important line in this table, and what made it so is that `k_batch` defaulted to
 one k-point at a time and `band_batch` to one band at a time, because that is what a *cache*
 wants: `batching.py` measures the band loop at **2.48x faster than the batch** on
 `si16-1k-ecut30`, for a reason with nothing to do with JAX — one band's real-space box is
 1.5 MB and thirty-two of them are 48 MB, so the batched transform streams from memory where
 the looped one stays in cache. A GPU has no such cache and inverts the conclusion, which
 that module's own docstring already says: *"the same escape hatch for a GPU, which wants
-the batch that a cache does not."* **A GPU run left on the defaults serialises every FFT
-into a per-band kernel launch** — close to the worst execution mode available — so both
-dials are part of Phase 0's configuration, not a tuning afterthought.
+the batch that a cache does not."* **A GPU run left on the *old* defaults serialised every
+FFT into a per-band kernel launch** — close to the worst execution mode available — which
+is why this is now a per-platform default rather than a line in a job script. §5's rule is
+what shapes the fix: a dial with a per-platform default and both settings tested, never a
+rewrite, so nothing moves on a CPU and an explicit argument or `PYPRESSO_*_BATCH` still
+beats the platform. Every GPU number below this line was produced with the dials set by
+hand in an sbatch script; the same settings are what a bare `run_scf` on a card now picks
+on its own.
 
 **One consequence worth stating plainly**: the first GPU run is expected to *work*. (It
 did — Phase 0, 2026-08-25.) If it does not, that is information about JAX or about the
@@ -242,8 +252,9 @@ a no-op, and the axis §1 calls the GPU execution mode is not exercised at all. 
   k-points, or the bismuthene of P14 at nineteen — because that is the first input on which
   either dial means anything.
 
-**Set both dials explicitly**, `k_batch` and `band_batch`, rather than inheriting the
-cache-shaped defaults (§1). Expect to run the multi-k case at more than one setting of
+**Set both dials explicitly**, `k_batch` and `band_batch` — the platform default now
+picks the right end on its own (§1), but a measurement says which setting produced it
+rather than inheriting one. Expect to run the multi-k case at more than one setting of
 each: §2.4 says the fully-batched end is the one already measured to exhaust 12.7 GB.
 
 **What to actually check, in order** — each one can fail independently:
@@ -479,7 +490,40 @@ process topology that changes the code rather than its speed: one process holdin
 local devices, or `jax.distributed` across Slurm tasks. Decide that before writing the
 mesh, not after.
 
-### Phase 5 — the response path, which is the reason JAX was chosen at all
+### Phase 5 — the response path, which is the reason JAX was chosen at all 🔶 THE CPU HALF IS MEASURED
+
+**The CPU half is measured (2026-08-26)** and it answers §4 item 3 — the tape
+per property, which is the number that decides the phase. `tools/gpu/phase5.py`
+runs one converged SCF and one response property per process (peak RSS is a
+high-water mark, so two properties in one process report the larger twice); the
+table is in `PERFORMANCE.md` under "What each response property's working set
+is". What it returned:
+
+* **the mode decides the tape, not the property.** A *forward* response — the
+  Sternheimer solves behind `epsilon` and `Z*` — costs **0.7-1.0 GB** over its
+  own SCF, and a **forward-over-reverse** one — a `jvp` of a gradient, which
+  tapes the inner reverse pass — costs **1.0-2.1 GB**. This file predicted the
+  first and explicitly declined to assert the second; it is the same order, not
+  the other one. **The dynamical matrix and the Raman tensors are not memory
+  problems**, and the spread inside that range is the *property* rather than the
+  k-count — the same third derivative costs 2.13 GB on 18 k-points and 2.01 on
+  64;
+* **the reverse stress still is**: **10.49 GB** on eight-atom ultrasoft silicon,
+  +9.53 over its own SCF, measured again here by a different driver than the one
+  that recorded 11.1 GB for P11 — **ten times the largest response tape** in the
+  table. It is the one row with a fix already in `PERFORMANCE.md`'s backlog
+  (item 8) rather than an open question;
+* **an ultrasoft response is not worse.** `si-epsilon-us` has 3.4x the `ngm` of
+  the norm-conserving cell and costs *less* over its SCF (+0.66 against +0.79),
+  because a forward response does not tape the setup at all — the augmentation
+  charge is paid for in the SCF's own working set;
+* **every value reproduces its committed number** — 13.806646, -0.0757150,
+  510.1023 — which is what says the driver measures the calculation the tests
+  validate rather than a cheaper one.
+
+**The GPU half is written and unrun**: `phase5-gpu.sbatch` and `phase5-cpu.sbatch`
+run the same driver over the same eight rows, and per the private cluster notes
+an `sbatch` is proposed to the user rather than submitted.
 
 **This is the phase that was missing from the first draft of this file, and its absence was
 a category error rather than an omission.** `CLAUDE.md`'s "Why JAX" lists autodiff response
@@ -531,8 +575,10 @@ In the order they pay off if first contact slips:
    own targets, and is the cheapest memory win available.
 2. **Phase 3's missing float32 test tier** — owed by `PLAN.md` §5 regardless of GPUs. (The
    *tier*; not Phase 3's rank, which waits on Phase 0's fp64 datum.)
-3. **Phase 5's tape measurement**, per response property. It is the number that says whether
-   the response path fits on a card at all, and it needs no card to obtain.
+3. ✅ **Phase 5's tape measurement**, per response property — *done 2026-08-26*,
+   `tools/gpu/phase5.py` and `PERFORMANCE.md`'s "What each response property's working set
+   is". It is the number that says whether the response path fits on a card at all, and it
+   needed no card to obtain.
 4. **Phase 4's sharding logic**, against forced host devices.
 5. **Phase 2's backend equivalence test**, which needs only the second backend written.
 6. **The CPU side of Phase 1's profile**, as the pinned baseline the GPU number is quoted

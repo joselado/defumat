@@ -20,8 +20,9 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from pypresso.batching import (DEFAULT_BAND_BATCH, DEFAULT_K_BATCH, map_bands,
-                               map_k, resolve_k_batch, sum_bands, sum_k)
+from pypresso import batching
+from pypresso.batching import (DEFAULT_BAND_BATCH, DEFAULT_K_BATCH, _resolve_band_batch,
+                               map_bands, map_k, resolve_k_batch, sum_bands, sum_k)
 
 pytestmark = pytest.mark.unit
 
@@ -200,3 +201,97 @@ def test_h_psi_is_the_same_operator_whatever_the_band_chunk(batch):
     reference = local(psi, None)
     np.testing.assert_allclose(local(psi, batch), reference, rtol=0, atol=1e-13)
     assert _resolve_band_batch("default") == DEFAULT_BAND_BATCH
+
+
+# ---------------------------------------------------------------------------
+# The default is per platform, and that is the whole of what a GPU run has to
+# get right. ``PERFORMANCE.md`` measures the cache-shaped defaults at 4.5x on
+# ``al10-metal`` and at an outright loss (0.20x) on sixteen atoms, and at
+# thirty-two ``band_batch = 1`` did not finish at all -- so on an accelerator
+# both dials default to the whole axis. Nothing here needs a GPU: the platform
+# is one function and these substitute for it.
+
+
+def _on(monkeypatch, platform: str):
+    """Answer as if JAX had initialised on ``platform``."""
+    monkeypatch.setattr(batching, "_backend", lambda: platform)
+
+
+@pytest.mark.parametrize("platform, expected", [
+    ("cpu", 1),          # QE's loop: one k-point, one band, cache-sized
+    ("gpu", None),       # the whole axis at once
+    ("tpu", None),
+    ("cuda", None),      # a name this was never tested against still lands
+])                       # on the accelerator end rather than on neither
+def test_both_defaults_follow_the_platform(monkeypatch, platform, expected):
+    _on(monkeypatch, platform)
+    assert batching.DEFAULT_K_BATCH == expected
+    assert batching.DEFAULT_BAND_BATCH == expected
+    assert resolve_k_batch("default") == expected
+    assert _resolve_band_batch("default") == expected
+
+
+def test_the_two_axes_move_together(monkeypatch):
+    """``k=all, b=1`` is worse than either end (2075 ms against 177 and 801).
+
+    So the platform answers for both dials at once; a default that flipped one
+    axis and not the other is the mode measured to be the worst available.
+    """
+    for platform in ("cpu", "gpu"):
+        _on(monkeypatch, platform)
+        assert batching.DEFAULT_K_BATCH == batching.DEFAULT_BAND_BATCH
+
+
+@pytest.mark.parametrize("platform", ["cpu", "gpu"])
+def test_the_environment_beats_the_platform(monkeypatch, platform):
+    _on(monkeypatch, platform)
+    monkeypatch.setenv("PYPRESSO_K_BATCH", "2")
+    monkeypatch.setenv("PYPRESSO_BAND_BATCH", "all")
+    assert resolve_k_batch("default") == 2
+    assert _resolve_band_batch("default") is None
+
+
+@pytest.mark.parametrize("platform", ["cpu", "gpu"])
+def test_an_explicit_argument_beats_the_environment_and_the_platform(
+        monkeypatch, platform):
+    _on(monkeypatch, platform)
+    monkeypatch.setenv("PYPRESSO_K_BATCH", "2")
+    assert resolve_k_batch(3) == 3
+    assert resolve_k_batch(None) is None
+    assert _resolve_band_batch(5) == 5
+
+
+def test_the_environment_is_read_when_it_is_asked_for(monkeypatch):
+    """Set after the import, and it still counts.
+
+    The defaults used to be module constants evaluated once at import time, so
+    a process that configured its dials afterwards silently kept the old ones.
+    """
+    _on(monkeypatch, "cpu")
+    assert resolve_k_batch("default") == 1
+    monkeypatch.setenv("PYPRESSO_K_BATCH", "all")
+    assert resolve_k_batch("default") is None
+
+
+@pytest.mark.parametrize("platform, expected", [("cpu", 1), ("gpu", None)])
+def test_a_malformed_setting_warns_and_falls_back_to_the_platform(
+        monkeypatch, platform, expected):
+    _on(monkeypatch, platform)
+    monkeypatch.setenv("PYPRESSO_K_BATCH", "lots")
+    with pytest.warns(RuntimeWarning, match="not a number"):
+        assert resolve_k_batch("default") == expected
+
+
+def test_a_single_k_point_is_the_same_computation_under_the_new_default():
+    """``nk == 1`` short-circuits before the chunk size is looked at.
+
+    Which is why flipping the default to ``None`` cannot put a width-one batch
+    axis on the single-k benchmark cells -- the case the module docstring's "a
+    batch of one is not a batch" is about.
+    """
+    xs = jnp.arange(4.0)[None, :]
+    for batch in (1, None, 7):
+        np.testing.assert_array_equal(map_k(lambda a: 2 * a, xs, batch=batch),
+                                      2 * xs)
+        np.testing.assert_array_equal(sum_k(lambda a: 2 * a, xs, batch=batch),
+                                      2 * xs[0])
