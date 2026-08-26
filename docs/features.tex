@@ -1,0 +1,916 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\PassOptionsToPackage{dvipsnames,svgnames,x11names}{xcolor}
+\documentclass[
+  11pt,
+  a4paper,
+]{article}
+\usepackage{xcolor}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb}
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{color}
+\usepackage{fancyvrb}
+\newcommand{\VerbBar}{|}
+\newcommand{\VERB}{\Verb[commandchars=\\\{\}]}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\{\}}
+% Add ',fontsize=\small' for more characters per line
+\usepackage{framed}
+\definecolor{shadecolor}{RGB}{248,248,248}
+\newenvironment{Shaded}{\begin{snugshade}}{\end{snugshade}}
+\newcommand{\AlertTok}[1]{\textcolor[rgb]{0.94,0.16,0.16}{#1}}
+\newcommand{\AnnotationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\AttributeTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{#1}}
+\newcommand{\BaseNTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\BuiltInTok}[1]{#1}
+\newcommand{\CharTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\CommentTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textit{#1}}}
+\newcommand{\CommentVarTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\ConstantTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{#1}}
+\newcommand{\ControlFlowTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\DataTypeTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{#1}}
+\newcommand{\DecValTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\DocumentationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\ErrorTok}[1]{\textcolor[rgb]{0.64,0.00,0.00}{\textbf{#1}}}
+\newcommand{\ExtensionTok}[1]{#1}
+\newcommand{\FloatTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\FunctionTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\ImportTok}[1]{#1}
+\newcommand{\InformationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\KeywordTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\NormalTok}[1]{#1}
+\newcommand{\OperatorTok}[1]{\textcolor[rgb]{0.81,0.36,0.00}{\textbf{#1}}}
+\newcommand{\OtherTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{#1}}
+\newcommand{\PreprocessorTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textit{#1}}}
+\newcommand{\RegionMarkerTok}[1]{#1}
+\newcommand{\SpecialCharTok}[1]{\textcolor[rgb]{0.81,0.36,0.00}{\textbf{#1}}}
+\newcommand{\SpecialStringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\StringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\VariableTok}[1]{\textcolor[rgb]{0.00,0.00,0.00}{#1}}
+\newcommand{\VerbatimStringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\WarningTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\usepackage{longtable,booktabs,array}
+\usepackage{calc} % for calculating minipage widths
+% Correct order of tables after \paragraph or \subparagraph
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+% Allow footnotes in longtable head/foot
+\IfFileExists{footnotehyper.sty}{\usepackage{footnotehyper}}{\usepackage{footnote}}
+\makesavenoteenv{longtable}
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\usepackage{bookmark}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  colorlinks=true,
+  linkcolor={Maroon},
+  filecolor={Maroon},
+  citecolor={Blue},
+  urlcolor={Blue},
+  pdfcreator={LaTeX via pandoc}}
+
+\title{pypresso: what it computes, and how to ask for it}
+\usepackage{etoolbox}
+\makeatletter
+\providecommand{\subtitle}[1]{% add subtitle to \maketitle
+  \apptocmd{\@title}{\par {\large #1 \par}}{}{}
+}
+\makeatother
+\subtitle{Plane-wave DFT in Python and JAX, validated against Quantum ESPRESSO}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+{
+\setcounter{tocdepth}{2}
+\tableofcontents
+}
+\section{pypresso: what it computes, and how to ask for
+it}\label{pypresso-what-it-computes-and-how-to-ask-for-it}
+
+User documentation for the feature set. \texttt{README.md} is the short
+tour and the quickstart this is the reference --- every capability, the
+entry point that reaches it, what it was validated against, and
+\textbf{what it refuses}.
+
+Two conventions run through the whole document and are worth reading
+first.
+
+\textbf{Everything is validated against Quantum ESPRESSO on the same
+input}, and the agreement is quoted per feature below rather than
+claimed in general. Where a number is missing it is because the
+comparison does not exist, and that is said rather than hidden.
+
+\textbf{Anything not implemented is refused by name}, with an error that
+says what is missing --- never silently approximated or replaced by
+something close. The "Refuses" lines below are as much a part of the
+documentation as the features: they are the promise that a run which
+starts is a run whose physics is there.
+
+\textbf{One equation is written down and the rest are derived from it.}
+Almost everything below is a derivative of the total energy, taken by
+the compiler rather than by hand:
+
+\[
+E[\{\psi\}, \tau, \varepsilon] = T_s + E_{\rm H} + E_{xc} + E_{\rm loc} + E_{\rm nl} + E_{\rm Ewald}
+\]
+
+\begin{longtable}[]{@{}lll@{}}
+\toprule\noalign{}
+quantity & what it is & how it is obtained \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\(v_{xc}(\mathbf r)\) & \(\delta E_{xc}/\delta n\) & \texttt{jax.grad}
+of the energy density \\
+\(\mathbf F_I\) & \(-\partial E/\partial \boldsymbol\tau_I\) &
+\texttt{jax.grad} at frozen \(\psi\) \\
+\(\sigma_{ij}\) & \(-\Omega^{-1} \partial E/\partial \varepsilon_{ij}\)
+& \texttt{jax.grad} along a strain \\
+\(C_{I\alpha,J\beta}\) &
+\(\partial^2 E/\partial\tau_{I\alpha}\partial\tau_{J\beta}\) &
+\texttt{jvp} of the force \\
+\(Z^{\ast}_{I,\alpha\beta}\) &
+\(\partial F_{I\alpha}/\partial \mathcal E_\beta\) & \texttt{jvp} of the
+force along the field response \\
+\(\partial\epsilon_{ij}/\partial\tau\) & Raman & \texttt{jvp} of the
+second-order energy \\
+\end{longtable}
+
+The "frozen \(\psi\)" is what makes this exact rather than approximate:
+at self-consistency the energy is stationary with respect to the
+wavefunctions, so the terms that would come from
+\(\partial\psi/\partial\lambda\) vanish. That is the Hellmann-Feynman
+argument, and taking it one order up is the 2n+1 theorem, which is why a
+\emph{third} derivative needs only first-order wavefunctions.
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{1. Input and invocation}\label{1-input-and-invocation}
+
+pypresso reads \textbf{\texttt{pw.x} input files}. The same file that
+runs in Quantum ESPRESSO runs here, which is what makes every comparison
+in this document possible.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\ImportTok{from}\NormalTok{ pypresso.io.pwin }\ImportTok{import}\NormalTok{ read\_pw\_input}
+\ImportTok{from}\NormalTok{ pypresso.pseudo }\ImportTok{import}\NormalTok{ read\_upf}
+\ImportTok{from}\NormalTok{ pypresso.scf.driver }\ImportTok{import}\NormalTok{ Calculation, run\_scf}
+\ImportTok{from}\NormalTok{ pypresso.system }\ImportTok{import}\NormalTok{ build\_system}
+
+\NormalTok{system }\OperatorTok{=}\NormalTok{ build\_system(read\_pw\_input(}\StringTok{"scf.in"}\NormalTok{))}
+\NormalTok{pseudos }\OperatorTok{=} \BuiltInTok{tuple}\NormalTok{(read\_upf(}\SpecialStringTok{f"pseudo/}\SpecialCharTok{\{}\NormalTok{s}\SpecialCharTok{.}\NormalTok{pseudo\_file}\SpecialCharTok{\}}\SpecialStringTok{"}\NormalTok{) }\ControlFlowTok{for}\NormalTok{ s }\KeywordTok{in}\NormalTok{ system.structure.species)}
+\NormalTok{result }\OperatorTok{=}\NormalTok{ run\_scf(system, pseudos, conv\_thr}\OperatorTok{=}\FloatTok{1.0e{-}8}\NormalTok{)}
+
+\BuiltInTok{print}\NormalTok{(result.total\_energy, }\StringTok{"Ry in"}\NormalTok{, result.iterations, }\StringTok{"iterations"}\NormalTok{)}
+\end{Highlighting}
+\end{Shaded}
+
+\texttt{conv\_thr} means what it means in a \texttt{pw.x} input: it is
+compared against QE\textquotesingle s \texttt{dr2}, the Hartree energy
+of the density residual.
+
+A command line covers the common workflows:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\ExtensionTok{python3} \AttributeTok{{-}m}\NormalTok{ pypresso.cli inspect  }\OperatorTok{\textless{}}\NormalTok{qe{-}output}\OperatorTok{\textgreater{}}   \CommentTok{\# summarise what the parser reads}
+\ExtensionTok{python3} \AttributeTok{{-}m}\NormalTok{ pypresso.cli dos      }\OperatorTok{\textless{}}\NormalTok{input}\OperatorTok{\textgreater{}}       \CommentTok{\# density of states}
+\ExtensionTok{python3} \AttributeTok{{-}m}\NormalTok{ pypresso.cli pdos     }\OperatorTok{\textless{}}\NormalTok{input}\OperatorTok{\textgreater{}}       \CommentTok{\# projected DOS}
+\ExtensionTok{python3} \AttributeTok{{-}m}\NormalTok{ pypresso.cli relax    }\OperatorTok{\textless{}}\NormalTok{input}\OperatorTok{\textgreater{}}       \CommentTok{\# structural relaxation}
+\ExtensionTok{python3} \AttributeTok{{-}m}\NormalTok{ pypresso.cli stress   }\OperatorTok{\textless{}}\NormalTok{input}\OperatorTok{\textgreater{}}       \CommentTok{\# stress tensor}
+\ExtensionTok{python3} \AttributeTok{{-}m}\NormalTok{ pypresso.cli spiral   }\OperatorTok{\textless{}}\NormalTok{input}\OperatorTok{\textgreater{}}       \CommentTok{\# spin{-}spiral scan}
+\end{Highlighting}
+\end{Shaded}
+
+\textbf{Units are Rydberg atomic units throughout} (Ry, bohr), matching
+QE. The only layer that speaks anything else is \texttt{io/} --- Hubbard
+\texttt{U} in the \texttt{HUBBARD} card is in eV and is converted at the
+boundary, as \texttt{pw.x} does it.
+
+\textbf{Refuses:} \texttt{K\_POINTS\ gamma} selects the half-sphere
+storage of the gamma-point trick, which is generated but not consumed
+such a run is substituted by an explicit \texttt{k\ =\ 0} on the full
+sphere --- the same physics at twice the storage --- and it says so.
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{2. Ground state}\label{2-ground-state}
+
+\begin{longtable}[]{@{}ll@{}}
+\toprule\noalign{}
+what & entry point \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+self-consistent total energy, term by term & \texttt{run\_scf},
+\texttt{calculation\ =\ \textquotesingle{}scf\textquotesingle{}} \\
+the converged density, potential, wavefunctions & \texttt{SCFResult}
+fields \\
+a run continued from another &
+\texttt{run\_scf(starting\_from=result)} \\
+\end{longtable}
+
+\texttt{SCFResult} carries \texttt{total\_energy},
+\texttt{energy\_terms} (QE\textquotesingle s own split),
+\texttt{eigenvalues}, \texttt{occupations}, \texttt{wavefunctions},
+\texttt{density}, \texttt{potential}, \texttt{fermi\_energy},
+\texttt{homo}/\texttt{lumo}, and the magnetization fields when there is
+one.
+
+\textbf{Metals} are supported with every smearing QE has
+(\texttt{gaussian}, \texttt{marzari-vanderbilt},
+\texttt{methfessel-paxton}, \texttt{fermi-dirac}) and with the
+tetrahedron family --- both the linear and the Bloechl-corrected forms
+--- usable as an occupation scheme \emph{inside} the SCF, not only for a
+density of states.
+
+\textbf{Continuation across a change of spin regime}
+(\texttt{starting\_from=}) promotes a converged state into a
+target\textquotesingle s variables: non-magnetic into collinear,
+collinear into noncollinear, spin-orbit switched on. It reaches the
+\emph{same} self-consistent solution as a fresh run (≤4e-8 Ry on six
+cases) in as little as one iteration. The magnetization is
+\textbf{seeded} from the target\textquotesingle s
+\texttt{starting\_magnetization} when the source has none, because
+nothing in the SCF breaks spin symmetry on its own and an unseeded
+promotion would converge back to the unpolarized solution and report
+success.
+
+\textbf{Convergence.} \texttt{mixing\_mode} selects \texttt{anderson}
+(default), \texttt{linear} or Kerker/Thomas-Fermi preconditioning
+(\texttt{TF}) \texttt{scf\_solver} offers a Newton-Krylov alternative to
+mixing, which is slower but reaches solutions the mixer cannot hold.
+\texttt{max\_iterations} defaults to 100 --- \textbf{a hard SCF may need
+more}, and hitting the cap is reported as not converged rather than as
+an answer.
+
+\subsubsection{The equations}\label{the-equations}
+
+The Kohn-Sham problem, generalised because ultrasoft and PAW make the
+overlap non-trivial:
+
+\[
+\hat H |\psi_{n\mathbf k}\rangle = \epsilon_{n\mathbf k} \hat S |\psi_{n\mathbf k}\rangle , \qquad \hat S = 1 + \sum_{I,ij} q_{ij} |\beta_i^I\rangle\langle\beta_j^I|
+\]
+
+\[
+\hat H = -\nabla^2 + v_{\rm loc}(\mathbf r) + v_{\rm H}[n] + v_{xc}[n] + \sum_{I,ij} D_{ij}^I |\beta_i^I\rangle\langle\beta_j^I|
+\]
+
+with \(n(\mathbf r) = \sum_{n\mathbf k} w_{\mathbf k} f_{n\mathbf k}
+\big(|\psi_{n\mathbf k}|^2 + \sum_{ij} Q_{ij}^I \langle\psi|\beta_i\rangle\langle\beta_j|\psi\rangle\big)\),
+the augmentation term being what ultrasoft adds. \(D_{ij}\) is rebuilt
+from the potential every iteration, which is why the SCF is a fixed
+point in \((n, D)\) and not in \(n\) alone.
+
+Convergence is measured as QE measures it --- the Hartree energy of the
+residual:
+
+\[
+dr^2 = \int\int \frac{\delta n(\mathbf r) \delta n(\mathbf r')} {|\mathbf r - \mathbf r'|} d\mathbf r d\mathbf r' < \texttt{conv\_thr}
+\]
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{result }\OperatorTok{=}\NormalTok{ run\_scf(system, pseudos, conv\_thr}\OperatorTok{=}\FloatTok{1.0e{-}10}\NormalTok{, mixing\_mode}\OperatorTok{=}\StringTok{"anderson"}\NormalTok{)}
+\BuiltInTok{print}\NormalTok{(result.total\_energy, result.energy\_terms)      }\CommentTok{\# QE\textquotesingle{}s own term{-}by{-}term split}
+\BuiltInTok{print}\NormalTok{(result.fermi\_energy, result.homo, result.lumo)}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{3. Bands, densities of states,
+projections}\label{3-bands-densities-of-states-projections}
+
+\begin{longtable}[]{@{}ll@{}}
+\toprule\noalign{}
+what & entry point \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+band structure on a path & \texttt{run\_bands} \\
+non-self-consistent run at fixed density & \texttt{run\_nscf} \\
+density of states & \texttt{run\_dos}, \texttt{compute\_dos} \\
+projected DOS, Löwdin charges, spilling & \texttt{run\_pdos},
+\texttt{lowdin\_charges} \\
+\end{longtable}
+
+The DOS schemes live behind a name registry (\texttt{DOS\_SCHEMES}) ---
+smearing and both tetrahedron variants --- and the projected DOS feeds
+\emph{the same} registry as a per-band weight, so a PDOS and a DOS are
+the same integration.
+
+Projections are
+\texttt{\textless{}phi\textbar{}S\textbar{}psi\textgreater{}} on
+Löwdin-orthogonalised pseudo-atomic orbitals, resolved by atom,
+\texttt{l} and \texttt{m}. Validated against a purpose-built
+\texttt{projwfc.x} on seven cases: \textbf{6.9e-4} on a projection,
+\textbf{4.7e-5} on a Löwdin charge, and the spilling parameter to all
+four decimals it prints.
+
+\subsubsection{The equations}\label{the-equations-1}
+
+A band structure is one diagonalisation per k on a fixed density a DOS
+is
+
+\[
+g(E) = \sum_{n\mathbf k} w_{\mathbf k} \delta(E - \epsilon_{n\mathbf k})
+\]
+
+with \(\delta\) replaced by a smearing function or evaluated by
+tetrahedron interpolation. The projected DOS weights each term by the
+overlap with an orthogonalised atomic orbital,
+\(\ \big|\langle \phi_{\mu}|\hat S|\psi_{n\mathbf k}\rangle\big|^2\),
+and the spilling parameter is what is \emph{not} captured:
+\(\ \sum_{n\mathbf k} w_{\mathbf k} f_{n\mathbf k} (1 - \sum_\mu |\langle\phi_\mu|S|\psi\rangle|^2)\).
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\ImportTok{from}\NormalTok{ pypresso.workflows.bands }\ImportTok{import}\NormalTok{ run\_bands}
+\ImportTok{from}\NormalTok{ pypresso.workflows.dos }\ImportTok{import}\NormalTok{ run\_dos}
+\ImportTok{from}\NormalTok{ pypresso.workflows.pdos }\ImportTok{import}\NormalTok{ run\_pdos}
+
+\NormalTok{bands }\OperatorTok{=}\NormalTok{ run\_bands(system, pseudos, scf.density, kpoints}\OperatorTok{=}\NormalTok{path)   }\CommentTok{\# a k{-}path}
+\NormalTok{dos, \_ }\OperatorTok{=}\NormalTok{ run\_dos(system, pseudos, scf.density, grid}\OperatorTok{=}\NormalTok{(}\DecValTok{12}\NormalTok{, }\DecValTok{12}\NormalTok{, }\DecValTok{12}\NormalTok{),}
+\NormalTok{                 scheme}\OperatorTok{=}\StringTok{"tetrahedra\_opt"}\NormalTok{)     }\CommentTok{\# returns (DensityOfStates, NSCFResult)}
+\NormalTok{pdos, \_ }\OperatorTok{=}\NormalTok{ run\_pdos(system, pseudos, scf)     }\CommentTok{\# returns (ProjectedDOS, NSCFResult)}
+\BuiltInTok{print}\NormalTok{(pdos.channels[}\DecValTok{0}\NormalTok{])                      }\CommentTok{\# resolved by atom, l and m}
+\BuiltInTok{print}\NormalTok{(pdos.charges.charges, pdos.charges.spilling)   }\CommentTok{\# Lowdin charges, spilling}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{4. Pseudopotentials and
+functionals}\label{4-pseudopotentials-and-functionals}
+
+\textbf{Pseudopotential kinds:} norm-conserving, \textbf{ultrasoft}, and
+\textbf{PAW} --- the two-grid split, the augmentation charge, the
+overlap operator, self-consistent \texttt{D\_ij}, and
+PAW\textquotesingle s one-centre terms including its radial Poisson
+solve and spherical quadrature. UPF v2 is read \textbf{UPF v1 is
+refused}.
+
+\textbf{Functionals:} LDA (PZ), \textbf{PBE}, \textbf{revPBE},
+\textbf{PBEsol}, on the plane-wave grid and on the PAW spheres. The
+functional is taken from the pseudopotential headers unless
+\texttt{input\_dft} overrides it, and \textbf{an unimplemented one is
+refused rather than silently replaced by LDA}. QE composes a functional
+from four independently chosen slots and the UPF headers name all four,
+so pypresso does the same.
+
+Only the \textbf{energy} of a functional is written down \texttt{v\_xc},
+and a GGA\textquotesingle s \texttt{v1} and \texttt{v2}, come from
+\texttt{jax.grad} of it.
+
+\textbf{Meta-GGA, potential-only branch:}
+\texttt{input\_dft\ =\ \textquotesingle{}tb09\textquotesingle{}}
+(Tran-Blaha) and \texttt{\textquotesingle{}bj06\textquotesingle{}}
+(Becke-Johnson). These invert the rule above --- they \emph{are}
+potentials, there is no energy --- so the consequences are enforced
+rather than documented: \texttt{run\_scf} warns that its total is not
+the value of any functional it minimised, and \textbf{forces, stress,
+phonons and response all refuse}. Silicon\textquotesingle s gap goes
+from LDA\textquotesingle s 0.49 eV to \textbf{1.13 eV} against an
+experimental 1.17. Works with PAW, with noncollinear magnetism and with
+spin-orbit coupling \textbf{plain ultrasoft is refused}, because it has
+no partial waves to reconstruct \texttt{tau} from inside the sphere.
+
+\textbf{Refuses:} energy-carrying meta-GGAs (TPSS, SCAN, M06L) --- their
+potential has a \texttt{dE/dtau} piece acting on the wavefunction that
+is not written EXX.
+
+\textbf{Van der Waals:} Grimme \textbf{D2}
+(\texttt{vdw\_corr\ =\ \textquotesingle{}grimme-d2\textquotesingle{}}).
+Bilayer graphene matches \texttt{pw.x} to \textbf{3.1e-9 Ry} and binds
+at 3.23 Å where PBE alone has no minimum. \textbf{D3,
+Tkatchenko-Scheffler, MBD and XDM are refused by name} --- where
+\texttt{pw.x} warns and silently runs with no correction at all.
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{5. Spin, magnetism and
+spin-orbit}\label{5-spin-magnetism-and-spin-orbit}
+
+\begin{longtable}[]{@{}lll@{}}
+\toprule\noalign{}
+regime & how to ask & note \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+unpolarised & default & \\
+collinear & \texttt{nspin\ =\ 2}, \texttt{starting\_magnetization} & one
+Fermi level, or two under \texttt{tot\_magnetization} \\
+noncollinear & \texttt{noncolin\ =\ .true.} & magnetization is a vector
+magnetic symmetry group \\
+spin-orbit & \texttt{noncolin} + \texttt{lspinorb\ =\ .true.} &
+\texttt{j}-resolved projectors, NC/US/PAW \\
+\end{longtable}
+
+\textbf{Three spin numbers are kept apart}, and the distinction is
+exposed on \texttt{System}: \texttt{nspin} says which regime is in
+force, \texttt{npol} is the number of spinor components of a
+\emph{wavefunction}, and \texttt{nspin\_mag} the number of components of
+a \emph{density}. They coincide at 1 and 2 and come apart at 4, where
+\texttt{npol\ =\ 2} but \texttt{nspin\_mag} is \textbf{one} for a
+nonmagnetic spin-orbit run.
+
+\textbf{Magnetic fields and constraints:} a uniform field over the cell,
+a field inside one atom\textquotesingle s sphere (through a
+\texttt{LOCAL\_MAGNETIC\_FIELDS} card that \texttt{pw.x} has no
+counterpart for), Elk\textquotesingle s \texttt{reducebf}, and all four
+of QE\textquotesingle s \texttt{constrained\_magnetization} schemes.
+\textbf{The field\textquotesingle s energy is not part of the reported
+total} --- QE prints \texttt{etcon} and never adds it, and Elk excludes
+its external field\textquotesingle s energy by the same convention both
+numbers are carried separately.
+
+\textbf{DFT+U:} QE\textquotesingle s \texttt{lda\_plus\_u\_kind\ =\ 0}
+(Dudarev) with the \texttt{J0}/\texttt{beta} extension, on
+\texttt{atomic}, \texttt{ortho-atomic} and \texttt{norm-atomic}
+projectors, read from the \texttt{HUBBARD} card. Forces through the
+Hubbard term come from differentiating through projectors that move with
+the atoms. \textbf{Refused:} the full (Liechtenstein) formulation,
+intersite \texttt{V}, background channels, the orbital-resolved variant,
+the \texttt{wf}/\texttt{pseudo} projector sets, and noncollinear
+\texttt{ns\_nc}.
+
+\textbf{Refuses:} PAW + GGA + a noncollinear magnetization together
+(\texttt{PAW\_gcxc\_potential} with \texttt{nspin\_mag\ =\ 4}).
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{6. Forces, stress and
+relaxation}\label{6-forces-stress-and-relaxation}
+
+\begin{longtable}[]{@{}ll@{}}
+\toprule\noalign{}
+what & entry point \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+forces & \texttt{compute\_forces}, \texttt{tprnfor\ =\ .true.} \\
+stress and pressure & \texttt{compute\_stress},
+\texttt{tstress\ =\ .true.} \\
+structural relaxation & \texttt{run\_relax},
+\texttt{calculation\ =\ \textquotesingle{}relax\textquotesingle{}} \\
+variable-cell relaxation & \texttt{run\_vc\_relax},
+\texttt{calculation\ =\ \textquotesingle{}vc-relax\textquotesingle{}} \\
+\end{longtable}
+
+\textbf{The force is \texttt{jax.grad} of the total energy} at frozen
+wavefunctions, with the orthonormality constraint carried explicitly so
+ultrasoft\textquotesingle s Pulay term is part of the same gradient.
+QE\textquotesingle s \texttt{force\_lc}, \texttt{force\_cc},
+\texttt{force\_ew}, \texttt{force\_us}, \texttt{addusforce} and
+\texttt{force\_corr} are transcribed too, behind the same registry
+(\texttt{force\_methods}) --- \textbf{as a cross-check, not as the
+implementation}. The two share no machinery, which is what makes
+disagreement informative it is how the augmentation
+force\textquotesingle s sign and a missing gradient correction were
+found.
+
+Stress is the same construction in the other coordinate:
+\texttt{sigma\ =\ -(1/Omega)\ dE/d(epsilon)}. \texttt{stress\_methods}
+offers the analytic terms beside it note
+\texttt{stres\_us}/\texttt{addusstress} are \textbf{not} transcribed, so
+the analytic route offers terms and no total.
+
+\textbf{Variable-cell} relaxes the cell and atoms together over
+\texttt{3\ nat\ +\ 9} coordinates at an applied pressure, minimising the
+\textbf{enthalpy} --- so a relaxed crystal carries the applied pressure
+rather than having no stress. The gap between the frozen-basis energy
+and a fresh SCF at the relaxed geometry is the Pulay error of the basis
+and is \textbf{reported} (\texttt{VCRelaxResult.pulay\_error}) rather
+than left to be noticed \texttt{treinit\_gvecs} rebuilds the basis per
+step and makes it zero.
+
+\subsubsection{The equations}\label{the-equations-2}
+
+\[
+\mathbf F_I = -\frac{\partial E}{\partial\boldsymbol\tau_I}\bigg|_{\psi\ \rm fixed}, \qquad \sigma_{ij} = -\frac{1}{\Omega} \frac{\partial E}{\partial \varepsilon_{ij}}\bigg|_{\psi\ \rm fixed}
+\]
+
+Both are one gradient. With ultrasoft the orthonormality constraint
+\(\langle\psi_n|\hat S|\psi_m\rangle=\delta_{nm}\) is carried
+explicitly, so its multiplier term --- QE\textquotesingle s Pulay
+contribution --- falls out of the same derivative rather than being
+added afterwards.
+
+A variable-cell relaxation minimises the \textbf{enthalpy}, which is why
+a relaxed crystal carries the applied pressure rather than having zero
+stress:
+
+\[
+H = E + P \Omega, \qquad \frac{\partial H}{\partial h} = \Omega (P \mathbf{1} - \sigma) h^{-T}
+\]
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\ImportTok{from}\NormalTok{ pypresso.forces }\ImportTok{import}\NormalTok{ compute\_forces}
+\ImportTok{from}\NormalTok{ pypresso.stress }\ImportTok{import}\NormalTok{ compute\_stress}
+\ImportTok{from}\NormalTok{ pypresso.workflows.relax }\ImportTok{import}\NormalTok{ run\_relax}
+\ImportTok{from}\NormalTok{ pypresso.workflows.vc\_relax }\ImportTok{import}\NormalTok{ run\_vc\_relax}
+
+\NormalTok{forces }\OperatorTok{=}\NormalTok{ compute\_forces(calculation, result)              }\CommentTok{\# method=... for QE\textquotesingle{}s terms}
+\BuiltInTok{print}\NormalTok{(forces.forces)                                      }\CommentTok{\# (nat, 3) in Ry/bohr}
+\NormalTok{stress }\OperatorTok{=}\NormalTok{ compute\_stress(calculation, result, terms}\OperatorTok{=}\VariableTok{True}\NormalTok{)  }\CommentTok{\# kbar and Ry/bohr\^{}3}
+\BuiltInTok{print}\NormalTok{(stress.pressure)}
+
+\NormalTok{relaxed }\OperatorTok{=}\NormalTok{ run\_relax(system, pseudos, forc\_conv\_thr}\OperatorTok{=}\FloatTok{1.0e{-}4}\NormalTok{)}
+\NormalTok{cell    }\OperatorTok{=}\NormalTok{ run\_vc\_relax(system, pseudos, press}\OperatorTok{=}\FloatTok{500.0}\NormalTok{)      }\CommentTok{\# kbar}
+\BuiltInTok{print}\NormalTok{(cell.pulay\_error)      }\CommentTok{\# the frozen{-}basis error, reported not hidden}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{7. Response: dielectric, phonons,
+Raman}\label{7-response-dielectric-phonons-raman}
+
+All of this is built on the \textbf{Sternheimer equation} --- a
+projected conjugate- gradient solve per occupied band --- rather than a
+sum over states. There are no empty states to converge and no division
+by \texttt{eps\_n\ -\ eps\_m}.
+
+\begin{longtable}[]{@{}ll@{}}
+\toprule\noalign{}
+what & entry point \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+velocity / position operator & \texttt{band\_velocities},
+\texttt{VelocityOperator} \\
+dielectric tensor & \texttt{dielectric\_tensor} \\
+Born effective charges & \texttt{born\_effective\_charges} \\
+dynamical matrix, phonons at Γ & \texttt{dynamical\_matrix},
+\texttt{Phonons} \\
+elastic constants & \texttt{elastic\_constants} \\
+electrostriction, elasto-optic & \texttt{electrostriction} \\
+Raman tensors & \texttt{raman\_tensors} \\
+Raman/IR spectra, mode activities & \texttt{vibrational\_spectrum},
+\texttt{mode\_activities} \\
+\end{longtable}
+
+The \textbf{perturbations are gradients of code that already exists}:
+\texttt{dv\_of\_drho} is one \texttt{jvp} of \texttt{v\_of\_rho}, the
+field\textquotesingle s commutator is the velocity operator,
+\texttt{dvqpsi\_us} is one \texttt{jvp} through \texttt{at\_positions},
+and \texttt{PAW\_dpotential} is one \texttt{jvp} of the one-centre
+terms.
+
+\textbf{Ultrasoft and PAW work} for the dielectric constant (≤1.2e-4
+against \texttt{ph.x} on four cases). \textbf{Metals work} for the
+response and the dynamical matrix. Phonons on a symmetry-reduced wedge
+work as of the rank-\texttt{n} symmetriser.
+
+\textbf{Refuses, by name:} Born charges for PAW (\texttt{int3\_paw}
+against \texttt{becsumort} is missing, and the expression is wrong in
+sign as well as size without it) \texttt{chi\^{}(2)} and the
+electro-optic tensor (the second-order source term
+\texttt{dvpsi\_e2}/\texttt{solve\_e2} has nothing to build the
+\texttt{\textless{}u\_i\textbar{}r\_k\textbar{}u\_j\textgreater{}} piece
+from --- and it is \textbf{42\%} of the answer, measured) the
+non-analytic LO-TO term phonons at \texttt{q\ !=\ 0} the dynamical
+matrix of an ultrasoft dataset and any response under a potential-only
+meta-GGA.
+
+\textbf{A trap worth knowing:} a response on a reduced k-set is a
+\emph{polar vector field} and must be symmetrised as one. Running the
+whole k-grid instead is only sound if the grid is closed under the point
+group --- a \textbf{shifted} Monkhorst-Pack grid is not, and that
+combination is refused by name.
+
+\subsubsection{The equations}\label{the-equations-3}
+
+Every first-order quantity comes from the Sternheimer equation --- the
+linear response of an occupied orbital to a perturbation \(\Delta V\),
+projected outside the occupied manifold so no empty states and no energy
+denominators appear:
+
+\[
+\big(\hat H - \epsilon_n \hat S + \alpha \hat Q\big) |\Delta\psi_n\rangle = - \hat P_c^{+} \Delta V |\psi_n\rangle
+\]
+
+It is solved self-consistently, because \(\Delta V\) contains the
+response of the potential to the response of the density --- see below
+--- and the kernel \(K\) in it is one \texttt{jvp} of
+\texttt{v\_of\_rho} rather than a second implementation:
+
+\[
+\Delta V_{\rm scf} = \Delta V_{\rm ext} + \int K(\mathbf r,\mathbf r') \Delta n(\mathbf r')  d\mathbf r'
+\]
+
+From its solutions:
+
+\[
+\epsilon_{\alpha\beta}^\infty = \delta_{\alpha\beta} + \frac{8\pi}{\Omega}\sum_{n\mathbf k} w_{\mathbf k} \langle \Delta_\alpha\psi_n | \partial_\beta \psi_n \rangle, \qquad Z^{\ast}_{I,\alpha\beta} = \frac{\partial F_{I\alpha}}{\partial\mathcal E_\beta}
+\]
+
+\[
+C_{I\alpha,J\beta} = \frac{\partial^2 E}{\partial\tau_{I\alpha} \partial\tau_{J\beta}}, \qquad \omega^2 \mathbf e = \frac{1}{\sqrt{M_I M_J}} C \mathbf e , \qquad \frac{\partial \epsilon_{ij}}{\partial \tau_{I\gamma}}\ \ \text{(Raman)}
+\]
+
+The Raman tensor is the second-order energy differentiated once more
+along a displacement, at \emph{frozen first-order} wavefunctions --- the
+2n+1 theorem, which is why a third derivative costs one more
+\texttt{jvp} and not a new solve.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\ImportTok{from}\NormalTok{ pypresso.response }\ImportTok{import}\NormalTok{ (dielectric\_tensor, dynamical\_matrix,}
+\NormalTok{                               raman\_tensors, vibrational\_spectrum)}
+
+\NormalTok{eps }\OperatorTok{=}\NormalTok{ dielectric\_tensor(calculation, scf.wavefunctions, scf.eigenvalues, scf.density)}
+\BuiltInTok{print}\NormalTok{(eps.epsilon)                                   }\CommentTok{\# 3x3, cartesian}
+
+\NormalTok{ph }\OperatorTok{=}\NormalTok{ dynamical\_matrix(calculation, scf.wavefunctions, scf.eigenvalues,}
+\NormalTok{                      scf.density, scf.becsum)}
+\BuiltInTok{print}\NormalTok{(ph.frequencies)                                }\CommentTok{\# cm\^{}{-}1}
+
+\NormalTok{raman    }\OperatorTok{=}\NormalTok{ raman\_tensors(calculation, scf, born\_charges}\OperatorTok{=}\VariableTok{True}\NormalTok{, keep\_internals}\OperatorTok{=}\VariableTok{True}\NormalTok{)}
+\NormalTok{spectrum }\OperatorTok{=}\NormalTok{ vibrational\_spectrum(calculation, scf)     }\CommentTok{\# per{-}mode Raman + IR activity}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{8. Topological invariants}\label{8-topological-invariants}
+
+\begin{longtable}[]{@{}ll@{}}
+\toprule\noalign{}
+what & entry point \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Berry curvature & \texttt{run\_berry\_curvature},
+\texttt{berry\_curvature} \\
+Chern number & \texttt{chern\_number} \\
+Z2, Wilson loop / Wannier charge centres & \texttt{run\_z2},
+\texttt{wilson\_z2} \\
+Z2, Fu-Kane parities & \texttt{fu\_kane\_z2}, \texttt{parity\_z2} \\
+Z2 in 3D & \texttt{run\_z2\_3d}, \texttt{z2\_invariant\_3d} \\
+\end{longtable}
+
+Everything is built from one primitive --- the overlap of occupied
+manifolds at neighbouring k-points --- because a determinant of overlaps
+is blind to the unitary mixing a degenerate eigensolver leaves,
+\emph{and} because the Fukui-Hatsugai-Suzuki lattice sum is an exact
+integer on any mesh where a Riemann sum of a pointwise curvature is not.
+
+\textbf{Z2 has two independent methods and running both is the check.}
+Where they disagree the parity route is the answer, because it has no
+mesh and the Wilson route does \texttt{WannierFlow.gap\_step} is the
+Wilson result\textquotesingle s own diagnostic and is the number to read
+before believing the integer.
+
+\textbf{Two things bite in a plane-wave code and both are silent:}
+neighbouring k-points do not share a G-sphere, so coefficients are
+aligned by Miller index and the wrap at the zone edge is a \emph{shift}
+of that index, without which the Chern number comes out smooth and
+non-integer.
+
+\subsubsection{The equations}\label{the-equations-4}
+
+Everything is built from the overlap of occupied manifolds at
+neighbouring k-points,
+\(\ M^{(\mathbf b)}_{mn} = \langle u_{m\mathbf k}|\hat S|u_{n,\mathbf k+\mathbf b}\rangle\).
+The Berry curvature is the phase of a plaquette of them and the Chern
+number their lattice sum, which is an \textbf{exact integer on any
+mesh}:
+
+\[
+F_{12}(\mathbf k) = \ln\big[ U_1(\mathbf k) U_2(\mathbf k{+}\hat 1) U_1(\mathbf k{+}\hat 2)^{-1} U_2(\mathbf k)^{-1}\big], \qquad C = \frac{1}{2\pi i}\sum_{\mathbf k} F_{12}(\mathbf k)
+\]
+
+\(Z_2\) has two independent routes --- the flow of Wannier charge
+centres, and, when there is an inversion centre, the parity product over
+the eight TRIM points:
+
+\[
+(-1)^{\nu} = \prod_{i=1}^{8}\ \prod_{n\ \rm occ}^{\rm Kramers} \xi_{2n}(\Gamma_i)
+\]
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\ImportTok{from}\NormalTok{ pypresso.workflows.topology }\ImportTok{import}\NormalTok{ run\_z2, run\_berry\_curvature}
+
+\NormalTok{z2 }\OperatorTok{=}\NormalTok{ run\_z2(system, pseudos, scf.density, axis}\OperatorTok{=}\DecValTok{2}\NormalTok{)     }\CommentTok{\# Wilson loop by default}
+\BuiltInTok{print}\NormalTok{(z2.z2, z2.gap\_step)   }\CommentTok{\# read gap\_step before believing the integer}
+\NormalTok{chern }\OperatorTok{=}\NormalTok{ run\_berry\_curvature(system, pseudos, scf.density, shape}\OperatorTok{=}\NormalTok{(}\DecValTok{12}\NormalTok{, }\DecValTok{12}\NormalTok{))}
+\BuiltInTok{print}\NormalTok{(chern)                }\CommentTok{\# an exact integer on any mesh}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{\texorpdfstring{9. Things with no \texttt{pw.x}
+counterpart}{9. Things with no pw.x counterpart}}\label{9-things-with-no-pwx-counterpart}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Spin spirals} (\texttt{spiral\_q}, Elk\textquotesingle s
+  \texttt{vqlss}) by the generalized Bloch theorem: the up component
+  lives at \texttt{k\ +\ q/2} and the down at \texttt{k\ -\ q/2}, each
+  on its own plane-wave sphere. In the rotated frame the density is
+  lattice periodic, so the SCF, the functional and the mixer are
+  untouched. \textbf{Refused:} spin-orbit coupling permanently (it
+  breaks the theorem, and Elk refuses it too), symmetry until the spin
+  space group is written (so a spiral needs \texttt{nosym}), and
+  ultrasoft/PAW.
+\item
+  \textbf{Relaxing the spiral wavevector} (\texttt{relax\_spiral\_q}):
+  \texttt{q} is a coordinate like an atomic position, \texttt{dE/dq} is
+  \texttt{jax.grad} at frozen wavefunctions, and BFGS walks it downhill
+  on the reciprocal metric. A magnetic field is refused here --- its
+  energy is outside the reported total, so the state is stationary for a
+  different functional than the one being differentiated.
+\item
+  \textbf{Per-atom magnetic fields} through a
+  \texttt{LOCAL\_MAGNETIC\_FIELDS} card.
+\item
+  \textbf{Topological invariants} (§8).
+\item
+  \textbf{Rank-\texttt{n} tensor symmetrisation} ---
+  \texttt{symme.f90}\textquotesingle s
+  \texttt{symmatrix3}/\texttt{symtensor3} written at any rank.
+\end{itemize}
+
+\subsubsection{The spin-spiral
+equations}\label{the-spin-spiral-equations}
+
+The generalized Bloch theorem: a spiral of wavevector \(\mathbf q\) is a
+spinor whose two components live on \emph{different} plane-wave spheres,
+
+\[
+\psi_{\mathbf k}(\mathbf r) = \begin{pmatrix} e^{i(\mathbf k - \mathbf q/2)\cdot\mathbf r} u^{\uparrow}(\mathbf r) \\[2pt] e^{i(\mathbf k + \mathbf q/2)\cdot\mathbf r} u^{\downarrow}(\mathbf r) \end{pmatrix}
+\]
+
+so in the rotated frame the density is lattice periodic and the SCF, the
+functional and the mixer are untouched. Only two terms carry
+\(\mathbf q\) --- \(|\mathbf k \mp \mathbf q/2 + \mathbf G|^2\) and
+\(v_{\rm nl}\) --- and \(dE/d\mathbf q\) at frozen coefficients is
+\texttt{jax.grad} of them.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\ImportTok{from}\NormalTok{ pypresso.workflows.spiral }\ImportTok{import}\NormalTok{ run\_spiral\_scan, relax\_spiral\_q}
+
+\NormalTok{scan }\OperatorTok{=}\NormalTok{ run\_spiral\_scan(system, pseudos, wavevectors)   }\CommentTok{\# E(q)}
+\NormalTok{best }\OperatorTok{=}\NormalTok{ relax\_spiral\_q(system, pseudos)                 }\CommentTok{\# BFGS on the reciprocal metric}
+\BuiltInTok{print}\NormalTok{(best.wavevector, best.scf.total\_energy)}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{10. Performance: dials, memory and
+GPUs}\label{10-performance-dials-memory-and-gpus}
+
+\textbf{Two batching dials} control how much is in flight, and both
+default to QE\textquotesingle s loop --- one k-point and one band at a
+time, which is what a \emph{cache} wants:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\VariableTok{PYPRESSO\_K\_BATCH}\OperatorTok{=}\NormalTok{all }\VariableTok{PYPRESSO\_BAND\_BATCH}\OperatorTok{=}\NormalTok{all }\ExtensionTok{python3}\NormalTok{ run.py}
+\end{Highlighting}
+\end{Shaded}
+
+or per call, \texttt{run\_scf(...,\ k\_batch=...)}. \texttt{all} means
+one \texttt{vmap} over the whole axis. The chunk size changes the order
+contributions are summed in and nothing else --- round-off,
+\textasciitilde1e-15 Ry.
+
+\textbf{On a GPU both defaults are wrong.} A GPU has no cache to fit in
+and inverts the conclusion: on a ten-atom metal, \texttt{k=1,b=1} costs
+\textbf{4.5x} what \texttt{k=all,b=all} does on the same card. Set both.
+The plausible half-measure \texttt{k=all,\ b=1} is the \emph{worst}
+setting available, because it buys the batched mode\textquotesingle s
+memory with the looped mode\textquotesingle s kernel launches.
+
+\textbf{Measured GPU speedups} (one H200 against one CPU core, per SCF
+iteration): 2x on a cheap metal, 3--5x on norm-conserving silicon,
+9--21x with an augmentation charge or a magnetization, and
+\textbf{83--115x on spin-orbit}. Energies agree to \textasciitilde1e-9
+Ry --- the same agreements the CPU already has. See
+\texttt{performance/gpu-sweep.pdf} and \texttt{PERFORMANCE.md}.
+
+\textbf{Memory.} Spin-orbit is where it bites: a 20-atom bismuth cell
+with a relativistic ultrasoft dataset peaks at \textbf{34.7 GB}, which
+fits a 141 GB card and does not fit a 32 GB one. Everything else in that
+sweep sits under 2 GB.
+
+\textbf{Precision.} Every dtype comes from \texttt{config.Precision} x64
+is enabled before any array exists, and all validation is float64.
+float32 is a performance mode and \textbf{never one a correctness claim
+is made in}.
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{11. Accuracy summary}\label{11-accuracy-summary}
+
+Against Quantum ESPRESSO on the same input:
+
+\begin{longtable}[]{@{}ll@{}}
+\toprule\noalign{}
+quantity & agreement \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+total energy, norm-conserving LDA & \textasciitilde1e-9 Ry \\
+ultrasoft, PAW & ≤3e-9 Ry \\
+PBE / revPBE / PBEsol & ≤6e-9 Ry \\
+metals, every smearing and tetrahedra & 2.5e-8 Ry \\
+collinear spin & 1.2e-9 Ry \\
+noncollinear magnetism & 2.8e-9 Ry \\
+spin-orbit coupling & ≤1.3e-8 Ry \\
+DFT+U & ≤6.7e-9 Ry \\
+band structure & 0.0002 eV \\
+forces & ≤2e-5 Ry/bohr \\
+stress (13 cases) & ≤2.7e-7 Ry/bohr³ \\
+relaxed geometry & 1e-6 bohr \\
+dielectric constant (NC, US, PAW) & ≤1.2e-4 \\
+Born effective charges (NC) & every printed digit \\
+phonons at Γ, silicon & 0.05 cm⁻¹ \\
+phonons at Γ, aluminium (metal) & 0.002 cm⁻¹ \\
+Raman/IR spectra vs \texttt{dynmat.x} & every printed digit \\
+\end{longtable}
+
+\textbf{One case does not close and is recorded rather than explained:}
+\texttt{bi10-soc}, ten bismuth atoms with a fully-relativistic dataset,
+sits \textbf{1.9e-4 Ry} from QE on a total of -1477.737 --- 1.3e-7
+relative. Both codes choose the same symmetry operations, the same
+k-point, the same grid and the same G-vectors, and both converge. It is
+in the test suite at that tolerance, not hidden.
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{Where to go next}\label{where-to-go-next}
+
+\begin{itemize}
+\tightlist
+\item
+  \texttt{README.md} --- the short tour and a first calculation
+\item
+  \texttt{notebooks/} --- 26 worked examples, each on a concrete system,
+  executed and committed with a \texttt{.md} export beside it
+\item
+  \texttt{PERFORMANCE.md} --- the running performance log, CPU and GPU
+\item
+  \texttt{PLAN.md} --- the architecture, the phase breakdown, and the
+  trap catalogue
+\item
+  \texttt{GPU.md} --- the GPU roadmap
+\end{itemize}
+
+\end{document}

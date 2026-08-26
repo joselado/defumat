@@ -1,7 +1,7 @@
 # pypresso: what it computes, and how to ask for it
 
 User documentation for the feature set. `README.md` is the short tour and the
-quickstart; this is the reference — every capability, the entry point that
+quickstart  this is the reference — every capability, the entry point that
 reaches it, what it was validated against, and **what it refuses**.
 
 Two conventions run through the whole document and are worth reading first.
@@ -21,15 +21,17 @@ they are the promise that a run which starts is a run whose physics is there.
 everything below is a derivative of the total energy, taken by the compiler
 rather than by hand:
 
-$$E[\{\psi\}, \tau, \varepsilon] \;=\; T_s + E_{\rm H} + E_{xc} + E_{\rm loc} + E_{\rm nl} + E_{\rm Ewald}$$
+```math
+E[\{\psi\}, \tau, \varepsilon] = T_s + E_{\rm H} + E_{xc} + E_{\rm loc} + E_{\rm nl} + E_{\rm Ewald}
+```
 
 | quantity | what it is | how it is obtained |
 |---|---|---|
 | $v_{xc}(\mathbf r)$ | $\delta E_{xc}/\delta n$ | `jax.grad` of the energy density |
 | $\mathbf F_I$ | $-\partial E/\partial \boldsymbol\tau_I$ | `jax.grad` at frozen $\psi$ |
-| $\sigma_{ij}$ | $-\Omega^{-1}\,\partial E/\partial \varepsilon_{ij}$ | `jax.grad` along a strain |
+| $\sigma_{ij}$ | $-\Omega^{-1} \partial E/\partial \varepsilon_{ij}$ | `jax.grad` along a strain |
 | $C_{I\alpha,J\beta}$ | $\partial^2 E/\partial\tau_{I\alpha}\partial\tau_{J\beta}$ | `jvp` of the force |
-| $Z^*_{I,\alpha\beta}$ | $\partial F_{I\alpha}/\partial \mathcal E_\beta$ | `jvp` of the force along the field response |
+| $Z^{\ast}_{I,\alpha\beta}$ | $\partial F_{I\alpha}/\partial \mathcal E_\beta$ | `jvp` of the force along the field response |
 | $\partial\epsilon_{ij}/\partial\tau$ | Raman | `jvp` of the second-order energy |
 
 The "frozen $\psi$" is what makes this exact rather than approximate: at
@@ -94,7 +96,7 @@ layer that speaks anything else is `io/` — Hubbard `U` in the `HUBBARD` card i
 in eV and is converted at the boundary, as `pw.x` does it.
 
 **Refuses:** `K_POINTS gamma` selects the half-sphere storage of the gamma-point
-trick, which is generated but not consumed; such a run is substituted by an
+trick, which is generated but not consumed  such a run is substituted by an
 explicit `k = 0` on the full sphere — the same physics at twice the storage —
 and it says so.
 
@@ -127,7 +129,7 @@ breaks spin symmetry on its own and an unseeded promotion would converge back to
 the unpolarized solution and report success.
 
 **Convergence.** `mixing_mode` selects `anderson` (default), `linear` or
-Kerker/Thomas-Fermi preconditioning (`TF`); `scf_solver` offers a Newton-Krylov
+Kerker/Thomas-Fermi preconditioning (`TF`)  `scf_solver` offers a Newton-Krylov
 alternative to mixing, which is slower but reaches solutions the mixer cannot
 hold. `max_iterations` defaults to 100 — **a hard SCF may need more**, and
 hitting the cap is reported as not converged rather than as an answer.
@@ -137,22 +139,28 @@ hitting the cap is reported as not converged rather than as an answer.
 The Kohn-Sham problem, generalised because ultrasoft and PAW make the overlap
 non-trivial:
 
-$$\hat H\,|\psi_{n\mathbf k}\rangle \;=\; \epsilon_{n\mathbf k}\,\hat S\,|\psi_{n\mathbf k}\rangle ,
-\qquad \hat S = 1 + \sum_{I,ij} q_{ij}\,|\beta_i^I\rangle\langle\beta_j^I|$$
+```math
+\hat H |\psi_{n\mathbf k}\rangle = \epsilon_{n\mathbf k} \hat S |\psi_{n\mathbf k}\rangle ,
+\qquad \hat S = 1 + \sum_{I,ij} q_{ij} |\beta_i^I\rangle\langle\beta_j^I|
+```
 
-$$\hat H = -\nabla^2 + v_{\rm loc}(\mathbf r) + v_{\rm H}[n] + v_{xc}[n]
-  + \sum_{I,ij} D_{ij}^I\,|\beta_i^I\rangle\langle\beta_j^I|$$
+```math
+\hat H = -\nabla^2 + v_{\rm loc}(\mathbf r) + v_{\rm H}[n] + v_{xc}[n]
+  + \sum_{I,ij} D_{ij}^I |\beta_i^I\rangle\langle\beta_j^I|
+```
 
 with $n(\mathbf r) = \sum_{n\mathbf k} w_{\mathbf k} f_{n\mathbf k}
-\big(|\psi_{n\mathbf k}|^2 + \sum_{ij} Q_{ij}^I\,\langle\psi|\beta_i\rangle\langle\beta_j|\psi\rangle\big)$,
+\big(|\psi_{n\mathbf k}|^2 + \sum_{ij} Q_{ij}^I \langle\psi|\beta_i\rangle\langle\beta_j|\psi\rangle\big)$,
 the augmentation term being what ultrasoft adds. $D_{ij}$ is rebuilt from the
 potential every iteration, which is why the SCF is a fixed point in $(n, D)$
 and not in $n$ alone.
 
 Convergence is measured as QE measures it — the Hartree energy of the residual:
 
-$$dr^2 \;=\; \int\!\!\int \frac{\delta n(\mathbf r)\,\delta n(\mathbf r')}
-  {|\mathbf r - \mathbf r'|}\,d\mathbf r\,d\mathbf r' \;<\; \texttt{conv\_thr}$$
+```math
+dr^2 = \int\int \frac{\delta n(\mathbf r) \delta n(\mathbf r')}
+  {|\mathbf r - \mathbf r'|} d\mathbf r d\mathbf r' < \texttt{conv\_thr}
+```
 
 ```python
 result = run_scf(system, pseudos, conv_thr=1.0e-10, mixing_mode="anderson")
@@ -182,16 +190,18 @@ spilling parameter to all four decimals it prints.
 
 ### The equations
 
-A band structure is one diagonalisation per k on a fixed density; a DOS is
+A band structure is one diagonalisation per k on a fixed density  a DOS is
 
-$$g(E) \;=\; \sum_{n\mathbf k} w_{\mathbf k}\,\delta(E - \epsilon_{n\mathbf k})$$
+```math
+g(E) = \sum_{n\mathbf k} w_{\mathbf k} \delta(E - \epsilon_{n\mathbf k})
+```
 
 with $\delta$ replaced by a smearing function or evaluated by tetrahedron
 interpolation. The projected DOS weights each term by the overlap with an
 orthogonalised atomic orbital,
-$\;\big|\langle \phi_{\mu}|\hat S|\psi_{n\mathbf k}\rangle\big|^2$, and the
+$\ \big|\langle \phi_{\mu}|\hat S|\psi_{n\mathbf k}\rangle\big|^2$, and the
 spilling parameter is what is *not* captured:
-$\;\sum_{n\mathbf k} w_{\mathbf k} f_{n\mathbf k}\,(1 - \sum_\mu |\langle\phi_\mu|S|\psi\rangle|^2)$.
+$\ \sum_{n\mathbf k} w_{\mathbf k} f_{n\mathbf k} (1 - \sum_\mu |\langle\phi_\mu|S|\psi\rangle|^2)$.
 
 ```python
 from pypresso.workflows.bands import run_bands
@@ -213,7 +223,7 @@ print(pdos.charges.charges, pdos.charges.spilling)   # Lowdin charges, spilling
 **Pseudopotential kinds:** norm-conserving, **ultrasoft**, and **PAW** — the
 two-grid split, the augmentation charge, the overlap operator, self-consistent
 `D_ij`, and PAW's one-centre terms including its radial Poisson solve and
-spherical quadrature. UPF v2 is read; **UPF v1 is refused**.
+spherical quadrature. UPF v2 is read  **UPF v1 is refused**.
 
 **Functionals:** LDA (PZ), **PBE**, **revPBE**, **PBEsol**, on the plane-wave
 grid and on the PAW spheres. The functional is taken from the pseudopotential
@@ -222,7 +232,7 @@ rather than silently replaced by LDA**. QE composes a functional from four
 independently chosen slots and the UPF headers name all four, so pypresso does
 the same.
 
-Only the **energy** of a functional is written down; `v_xc`, and a GGA's `v1`
+Only the **energy** of a functional is written down  `v_xc`, and a GGA's `v1`
 and `v2`, come from `jax.grad` of it.
 
 **Meta-GGA, potential-only branch:** `input_dft = 'tb09'` (Tran-Blaha) and
@@ -231,12 +241,12 @@ there is no energy — so the consequences are enforced rather than documented:
 `run_scf` warns that its total is not the value of any functional it minimised,
 and **forces, stress, phonons and response all refuse**. Silicon's gap goes from
 LDA's 0.49 eV to **1.13 eV** against an experimental 1.17. Works with PAW, with
-noncollinear magnetism and with spin-orbit coupling; **plain ultrasoft is
+noncollinear magnetism and with spin-orbit coupling  **plain ultrasoft is
 refused**, because it has no partial waves to reconstruct `tau` from inside the
 sphere.
 
 **Refuses:** energy-carrying meta-GGAs (TPSS, SCAN, M06L) — their potential has
-a `dE/dtau` piece acting on the wavefunction that is not written; EXX.
+a `dE/dtau` piece acting on the wavefunction that is not written  EXX.
 
 **Van der Waals:** Grimme **D2** (`vdw_corr = 'grimme-d2'`). Bilayer graphene
 matches `pw.x` to **3.1e-9 Ry** and binds at 3.23 Å where PBE alone has no
@@ -251,7 +261,7 @@ minimum. **D3, Tkatchenko-Scheffler, MBD and XDM are refused by name** — where
 |---|---|---|
 | unpolarised | default | |
 | collinear | `nspin = 2`, `starting_magnetization` | one Fermi level, or two under `tot_magnetization` |
-| noncollinear | `noncolin = .true.` | magnetization is a vector; magnetic symmetry group |
+| noncollinear | `noncolin = .true.` | magnetization is a vector  magnetic symmetry group |
 | spin-orbit | `noncolin` + `lspinorb = .true.` | `j`-resolved projectors, NC/US/PAW |
 
 **Three spin numbers are kept apart**, and the distinction is exposed on
@@ -265,7 +275,7 @@ inside one atom's sphere (through a `LOCAL_MAGNETIC_FIELDS` card that `pw.x` has
 no counterpart for), Elk's `reducebf`, and all four of QE's
 `constrained_magnetization` schemes. **The field's energy is not part of the
 reported total** — QE prints `etcon` and never adds it, and Elk excludes its
-external field's energy by the same convention; both numbers are carried
+external field's energy by the same convention  both numbers are carried
 separately.
 
 **DFT+U:** QE's `lda_plus_u_kind = 0` (Dudarev) with the `J0`/`beta` extension,
@@ -295,12 +305,12 @@ orthonormality constraint carried explicitly so ultrasoft's Pulay term is part
 of the same gradient. QE's `force_lc`, `force_cc`, `force_ew`, `force_us`,
 `addusforce` and `force_corr` are transcribed too, behind the same registry
 (`force_methods`) — **as a cross-check, not as the implementation**. The two
-share no machinery, which is what makes disagreement informative; it is how the
+share no machinery, which is what makes disagreement informative  it is how the
 augmentation force's sign and a missing gradient correction were found.
 
 Stress is the same construction in the other coordinate:
 `sigma = -(1/Omega) dE/d(epsilon)`. `stress_methods` offers the analytic terms
-beside it; note `stres_us`/`addusstress` are **not** transcribed, so the analytic
+beside it  note `stres_us`/`addusstress` are **not** transcribed, so the analytic
 route offers terms and no total.
 
 **Variable-cell** relaxes the cell and atoms together over `3 nat + 9`
@@ -308,14 +318,16 @@ coordinates at an applied pressure, minimising the **enthalpy** — so a relaxed
 crystal carries the applied pressure rather than having no stress. The gap
 between the frozen-basis energy and a fresh SCF at the relaxed geometry is the
 Pulay error of the basis and is **reported** (`VCRelaxResult.pulay_error`)
-rather than left to be noticed; `treinit_gvecs` rebuilds the basis per step and
+rather than left to be noticed  `treinit_gvecs` rebuilds the basis per step and
 makes it zero.
 
 ### The equations
 
-$$\mathbf F_I \;=\; -\frac{\partial E}{\partial\boldsymbol\tau_I}\bigg|_{\psi\ \rm fixed},
+```math
+\mathbf F_I = -\frac{\partial E}{\partial\boldsymbol\tau_I}\bigg|_{\psi\ \rm fixed},
 \qquad
-\sigma_{ij} \;=\; -\frac{1}{\Omega}\,\frac{\partial E}{\partial \varepsilon_{ij}}\bigg|_{\psi\ \rm fixed}$$
+\sigma_{ij} = -\frac{1}{\Omega} \frac{\partial E}{\partial \varepsilon_{ij}}\bigg|_{\psi\ \rm fixed}
+```
 
 Both are one gradient. With ultrasoft the orthonormality constraint
 $\langle\psi_n|\hat S|\psi_m\rangle=\delta_{nm}$ is carried explicitly, so its
@@ -325,7 +337,9 @@ rather than being added afterwards.
 A variable-cell relaxation minimises the **enthalpy**, which is why a relaxed
 crystal carries the applied pressure rather than having zero stress:
 
-$$H \;=\; E + P\,\Omega, \qquad \frac{\partial H}{\partial h} = \Omega\,(P\mathbb{1} - \sigma)\,h^{-T}$$
+```math
+H = E + P \Omega, \qquad \frac{\partial H}{\partial h} = \Omega (P \mathbf{1} - \sigma) h^{-T}
+```
 
 ```python
 from pypresso.forces import compute_forces
@@ -372,11 +386,11 @@ on four cases). **Metals work** for the response and the dynamical matrix.
 Phonons on a symmetry-reduced wedge work as of the rank-`n` symmetriser.
 
 **Refuses, by name:** Born charges for PAW (`int3_paw` against `becsumort` is
-missing, and the expression is wrong in sign as well as size without it);
+missing, and the expression is wrong in sign as well as size without it) 
 `chi^(2)` and the electro-optic tensor (the second-order source term
 `dvpsi_e2`/`solve_e2` has nothing to build the `<u_i|r_k|u_j>` piece from — and
-it is **42%** of the answer, measured); the non-analytic LO-TO term; phonons at
-`q != 0`; the dynamical matrix of an ultrasoft dataset; and any response under a
+it is **42%** of the answer, measured)  the non-analytic LO-TO term  phonons at
+`q != 0`  the dynamical matrix of an ultrasoft dataset  and any response under a
 potential-only meta-GGA.
 
 **A trap worth knowing:** a response on a reduced k-set is a *polar vector field*
@@ -390,27 +404,37 @@ Every first-order quantity comes from the Sternheimer equation — the linear
 response of an occupied orbital to a perturbation $\Delta V$, projected outside
 the occupied manifold so no empty states and no energy denominators appear:
 
-$$\big(\hat H - \epsilon_n \hat S + \alpha \hat Q\big)\,|\Delta\psi_n\rangle
-  \;=\; -\,\hat P_c^{+}\,\Delta V\,|\psi_n\rangle$$
+```math
+\big(\hat H - \epsilon_n \hat S + \alpha \hat Q\big) |\Delta\psi_n\rangle
+   = - \hat P_c^{+} \Delta V |\psi_n\rangle
+```
 
 It is solved self-consistently, because $\Delta V$ contains the response of the
-potential to the response of the density, $\Delta V_{\rm scf} = \Delta V_{\rm ext}
-+ \int K(\mathbf r,\mathbf r')\,\Delta n(\mathbf r')$, and the kernel $K$ is one
-`jvp` of `v_of_rho` rather than a second implementation.
+potential to the response of the density — see below — and the kernel $K$ in it
+is one `jvp` of `v_of_rho` rather than a second implementation:
+
+```math
+\Delta V_{\rm scf} = \Delta V_{\rm ext} + \int K(\mathbf r,\mathbf r') \Delta n(\mathbf r')  d\mathbf r'
+```
+
 
 From its solutions:
 
-$$\epsilon_{\alpha\beta}^\infty = \delta_{\alpha\beta}
-  + \frac{8\pi}{\Omega}\sum_{n\mathbf k} w_{\mathbf k}\,
-  \langle \Delta_\alpha\psi_n | \, \partial_\beta \psi_n \rangle,
+```math
+\epsilon_{\alpha\beta}^\infty = \delta_{\alpha\beta}
+  + \frac{8\pi}{\Omega}\sum_{n\mathbf k} w_{\mathbf k} 
+  \langle \Delta_\alpha\psi_n | \partial_\beta \psi_n \rangle,
 \qquad
-Z^*_{I,\alpha\beta} = \frac{\partial F_{I\alpha}}{\partial\mathcal E_\beta}$$
+Z^{\ast}_{I,\alpha\beta} = \frac{\partial F_{I\alpha}}{\partial\mathcal E_\beta}
+```
 
-$$C_{I\alpha,J\beta} = \frac{\partial^2 E}{\partial\tau_{I\alpha}\,\partial\tau_{J\beta}},
+```math
+C_{I\alpha,J\beta} = \frac{\partial^2 E}{\partial\tau_{I\alpha} \partial\tau_{J\beta}},
 \qquad
-\omega^2 \mathbf e = \frac{1}{\sqrt{M_I M_J}}\,C\,\mathbf e ,
+\omega^2 \mathbf e = \frac{1}{\sqrt{M_I M_J}} C \mathbf e ,
 \qquad
-\frac{\partial \epsilon_{ij}}{\partial \tau_{I\gamma}}\ \ \text{(Raman)}$$
+\frac{\partial \epsilon_{ij}}{\partial \tau_{I\gamma}}\ \ \text{(Raman)}
+```
 
 The Raman tensor is the second-order energy differentiated once more along a
 displacement, at *frozen first-order* wavefunctions — the 2n+1 theorem, which is
@@ -451,29 +475,33 @@ sum of a pointwise curvature is not.
 
 **Z2 has two independent methods and running both is the check.** Where they
 disagree the parity route is the answer, because it has no mesh and the Wilson
-route does; `WannierFlow.gap_step` is the Wilson result's own diagnostic and is
+route does  `WannierFlow.gap_step` is the Wilson result's own diagnostic and is
 the number to read before believing the integer.
 
 **Two things bite in a plane-wave code and both are silent:** neighbouring
-k-points do not share a G-sphere, so coefficients are aligned by Miller index;
+k-points do not share a G-sphere, so coefficients are aligned by Miller index 
 and the wrap at the zone edge is a *shift* of that index, without which the Chern
 number comes out smooth and non-integer.
 
 ### The equations
 
 Everything is built from the overlap of occupied manifolds at neighbouring
-k-points, $\;M^{(\mathbf b)}_{mn} = \langle u_{m\mathbf k}|\hat S|u_{n,\mathbf k+\mathbf b}\rangle$.
+k-points, $\ M^{(\mathbf b)}_{mn} = \langle u_{m\mathbf k}|\hat S|u_{n,\mathbf k+\mathbf b}\rangle$.
 The Berry curvature is the phase of a plaquette of them and the Chern number
 their lattice sum, which is an **exact integer on any mesh**:
 
-$$F_{12}(\mathbf k) = \ln\!\big[\,U_1(\mathbf k)\,U_2(\mathbf k{+}\hat 1)\,
+```math
+F_{12}(\mathbf k) = \ln\big[ U_1(\mathbf k) U_2(\mathbf k{+}\hat 1) 
    U_1(\mathbf k{+}\hat 2)^{-1} U_2(\mathbf k)^{-1}\big],
-\qquad C = \frac{1}{2\pi i}\sum_{\mathbf k} F_{12}(\mathbf k)$$
+\qquad C = \frac{1}{2\pi i}\sum_{\mathbf k} F_{12}(\mathbf k)
+```
 
 $Z_2$ has two independent routes — the flow of Wannier charge centres, and, when
 there is an inversion centre, the parity product over the eight TRIM points:
 
-$$(-1)^{\nu} \;=\; \prod_{i=1}^{8}\ \prod_{n\ \rm occ}^{\rm Kramers} \xi_{2n}(\Gamma_i)$$
+```math
+(-1)^{\nu} = \prod_{i=1}^{8}\ \prod_{n\ \rm occ}^{\rm Kramers} \xi_{2n}(\Gamma_i)
+```
 
 ```python
 from pypresso.workflows.topology import run_z2, run_berry_curvature
@@ -510,10 +538,12 @@ print(chern)                # an exact integer on any mesh
 The generalized Bloch theorem: a spiral of wavevector $\mathbf q$ is a spinor
 whose two components live on *different* plane-wave spheres,
 
-$$\psi_{\mathbf k}(\mathbf r) =
-  \begin{pmatrix} e^{i(\mathbf k - \mathbf q/2)\cdot\mathbf r}\,u^{\uparrow}(\mathbf r) \\[2pt]
-                  e^{i(\mathbf k + \mathbf q/2)\cdot\mathbf r}\,u^{\downarrow}(\mathbf r)
-  \end{pmatrix}$$
+```math
+\psi_{\mathbf k}(\mathbf r) =
+  \begin{pmatrix} e^{i(\mathbf k - \mathbf q/2)\cdot\mathbf r} u^{\uparrow}(\mathbf r) \\[2pt]
+                  e^{i(\mathbf k + \mathbf q/2)\cdot\mathbf r} u^{\downarrow}(\mathbf r)
+  \end{pmatrix}
+```
 
 so in the rotated frame the density is lattice periodic and the SCF, the
 functional and the mixer are untouched. Only two terms carry $\mathbf q$ —
@@ -559,7 +589,7 @@ charge or a magnetization, and **83–115x on spin-orbit**. Energies agree to
 relativistic ultrasoft dataset peaks at **34.7 GB**, which fits a 141 GB card and
 does not fit a 32 GB one. Everything else in that sweep sits under 2 GB.
 
-**Precision.** Every dtype comes from `config.Precision`; x64 is enabled before
+**Precision.** Every dtype comes from `config.Precision`  x64 is enabled before
 any array exists, and all validation is float64. float32 is a performance mode
 and **never one a correctness claim is made in**.
 

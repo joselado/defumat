@@ -83,9 +83,11 @@ If your calculation needs any of those, use Quantum ESPRESSO — this is not a
 replacement for it, and on anything large it will be slower (about two to four
 times, running on one core).
 
-**Full feature reference:** [`docs/features.md`](docs/features.md) — every
-capability, the entry point that reaches it, what it was validated against, and
-what it refuses. The table above is the summary; that is the detail.
+**Full feature reference:** [`docs/features.md`](docs/features.md), or
+[`docs/features.pdf`](docs/features.pdf) if you want the equations typeset —
+every capability, the equations behind it, a snippet that runs it, what it was
+validated against, and what it refuses. The table above is the summary; that is
+the detail. Rebuild the PDF with `tools/build_features_pdf.sh`.
 
 ## Installing
 
