@@ -2256,13 +2256,17 @@ determinism check. Warm times, the cold ones beside them:
 | property | mode | GPU cold/warm | CPU cold/warm | warm ratio | device peak | GPU vs CPU value |
 |---|---|---|---|---|---|---|
 | force `si2-nc-stress` | reverse | 1.67 / **0.004** s | 1.15 / 0.01 s | 1.8x | 0.11 GB | 4.6e-12 |
-| stress `si2-nc-stress` | reverse | 0.36 / **0.004** s | 0.61 / 0.09 s | **24x** | 0.08 GB | 2.1e-11 |
+| stress `si2-nc-stress` | reverse | 0.36 / **0.004** s | 0.61 / 0.09 s | ~24x † | 0.08 GB | 2.1e-11 |
 | dielectric `si-epsilon` | forward | 24.97 / 12.40 s | 19.73 / 12.48 s | **1.0x** | 0.13 GB | 5.4e-12 |
 | Born `si-epsilon` | forward | 20.53 / 10.81 s | 18.28 / 13.04 s | **1.2x** | 0.12 GB | 2.0e-10 |
 | dielectric `si-epsilon-us` | forward | 28.72 / 17.14 s | 31.50 / 23.67 s | **1.4x** | 0.21 GB | 4.6e-12 |
 | dynamical matrix `si-epsilon` | fwd-over-rev | 34.56 / 28.01 s | 36.81 / 28.88 s | **1.0x** | 0.15 GB | 2.4e-12 |
 | Raman `alas-raman` | fwd-over-rev | 123.50 / 100.01 s | **failed** | — | 0.25 GB | — |
 | stress `si8-us` | reverse | 26.20 / **0.009** s | 10.71 / 3.14 s | **339x** | **2.73 GB** | 9.0e-12 |
+
+† **The small stress's ratio divides 4 ms by 90 ms and is near timer resolution
+on the GPU side** — it is quoted as an order of magnitude and nothing finer. The
+339x below has a real denominator (3.14 s) and does not depend on it.
 
 **The mode decides the speedup exactly as it decided the tape, and this is the
 finding.** A **Sternheimer solve gets nothing from an H200** — 1.0x on the
