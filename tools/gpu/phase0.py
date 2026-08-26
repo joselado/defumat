@@ -260,7 +260,8 @@ def memory_stats() -> dict:
 
 # ------------------------------------------------------------------- the run
 
-def run_case(case: Path, repeats: int, threshold: float) -> dict:
+def run_case(case: Path, repeats: int, threshold: float,
+             max_iterations: int = 100) -> dict:
     """Set up once, then run the SCF ``repeats`` times in the same process.
 
     The first call compiles and the rest do not, which is what makes check 3 a
@@ -285,7 +286,8 @@ def run_case(case: Path, repeats: int, threshold: float) -> dict:
     runs = []
     for _ in range(max(1, repeats)):
         start = time.perf_counter()
-        result = run_scf(system, pseudos, calculation=calculation, conv_thr=threshold)
+        result = run_scf(system, pseudos, calculation=calculation, conv_thr=threshold,
+                         max_iterations=max_iterations)
         jax.block_until_ready(result.density)
         runs.append({
             "wall_s": time.perf_counter() - start,
@@ -307,6 +309,7 @@ def run_case(case: Path, repeats: int, threshold: float) -> dict:
         "ecutwfc": float(system.ecutwfc),
         "nspin": int(system.nspin),
         "conv_thr": threshold,
+        "max_iterations": max_iterations,
         "fft_grid": smooth_grid,
         "dense_grid": dense_grid,
         "npwx": int(calculation.basis.npwx),
@@ -385,6 +388,11 @@ def main(argv=None) -> int:
                         help="SCF runs in one process; 2 is what check 5 needs")
     parser.add_argument("--conv-thr", type=float, default=None,
                         help="override the input's own conv_thr")
+    parser.add_argument("--max-iterations", type=int, default=100,
+                        help="SCF iteration cap. 100 is run_scf's default and is too low "
+                             "for a hard SCF: tests/regression/test_ten_site.py uses 200, "
+                             "and ni10-ldau and h40-chain-lsda need it on CPU as well as "
+                             "GPU -- a cap hit is not a convergence failure")
     parser.add_argument("--json", type=Path, default=None, help="where to write the record")
     parser.add_argument("--skip-precision-probe", action="store_true",
                         help="skip check 1's fp64/fp32 timing (the assertion still runs)")
@@ -402,7 +410,7 @@ def main(argv=None) -> int:
     print(f"# dials: k_batch={dials['k_batch']} band_batch={dials['band_batch']}")
 
     threshold = arguments.conv_thr if arguments.conv_thr is not None else conv_thr(case)
-    timing = run_case(case, arguments.repeats, threshold)
+    timing = run_case(case, arguments.repeats, threshold, arguments.max_iterations)
     result = timing.pop("_result")
     record["run"] = timing
 
