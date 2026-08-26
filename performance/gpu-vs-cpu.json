@@ -1,0 +1,276 @@
+{
+  "meta": {
+    "metric": "pypresso GPU against pypresso CPU, same input and same code, per SCF iteration (GPU.md section 2.3)",
+    "cpu_baseline": "4 pinned AMD EPYC Milan cores",
+    "qe_baseline": "Quantum ESPRESSO 7.2, 1 core",
+    "note": "best of repeated runs on both sides, as tools/compare_qe.py does",
+    "date": "2026-08-25/26"
+  },
+  "pairs": [
+    {
+      "case": "si-1k",
+      "k_batch": "1",
+      "band_batch": "1",
+      "card": "V100-16GB",
+      "nat": 2,
+      "nk": 1,
+      "ecut": 12.0,
+      "gpu_ms": 16.22465585725357,
+      "cpu_ms": 5.3773419999093415,
+      "ratio": 0.3314302655920612,
+      "gpu_peak": 0.14463543891906738,
+      "gpu_runs": 1,
+      "cpu_runs": 1
+    },
+    {
+      "case": "si8-1k",
+      "k_batch": "1",
+      "band_batch": "1",
+      "card": "V100-16GB",
+      "nat": 8,
+      "nk": 1,
+      "ecut": 12.0,
+      "gpu_ms": 75.33854425014397,
+      "cpu_ms": 26.663691500289133,
+      "ratio": 0.3539183264778597,
+      "gpu_peak": 0.0882115364074707,
+      "gpu_runs": 1,
+      "cpu_runs": 1
+    },
+    {
+      "case": "si8-1k",
+      "k_batch": "1",
+      "band_batch": "all",
+      "card": "V100-16GB",
+      "nat": 8,
+      "nk": 1,
+      "ecut": 12.0,
+      "gpu_ms": 19.37564549984927,
+      "cpu_ms": 21.91110187459344,
+      "ratio": 1.130857904825101,
+      "gpu_peak": 0.05126810073852539,
+      "gpu_runs": 1,
+      "cpu_runs": 1
+    },
+    {
+      "case": "si8-1k-ecut30",
+      "k_batch": "1",
+      "band_batch": "1",
+      "card": "V100-32GB",
+      "nat": 8,
+      "nk": 1,
+      "ecut": 30.0,
+      "gpu_ms": 145.1521239999108,
+      "cpu_ms": 57.54172485727135,
+      "ratio": 0.39642358149238455,
+      "gpu_peak": 0.05359482765197754,
+      "gpu_runs": 1,
+      "cpu_runs": 2
+    },
+    {
+      "case": "si8-1k-ecut30",
+      "k_batch": "1",
+      "band_batch": "all",
+      "card": "V100-32GB",
+      "nat": 8,
+      "nk": 1,
+      "ecut": 30.0,
+      "gpu_ms": 24.414343143039982,
+      "cpu_ms": 57.3629255715267,
+      "ratio": 2.349558422909267,
+      "gpu_peak": 0.06992340087890625,
+      "gpu_runs": 1,
+      "cpu_runs": 2
+    },
+    {
+      "case": "al10-metal",
+      "k_batch": "1",
+      "band_batch": "1",
+      "card": "V100-16GB",
+      "nat": 10,
+      "nk": 10,
+      "ecut": 15.0,
+      "gpu_ms": 801.3388259998464,
+      "cpu_ms": 793.2607180002378,
+      "ratio": 0.9899192354875238,
+      "gpu_peak": 0.10053348541259766,
+      "gpu_runs": 1,
+      "cpu_runs": 1
+    },
+    {
+      "case": "al10-metal",
+      "k_batch": "all",
+      "band_batch": "1",
+      "card": "V100-16GB",
+      "nat": 10,
+      "nk": 10,
+      "ecut": 15.0,
+      "gpu_ms": 2075.4144979000557,
+      "cpu_ms": 931.464093500108,
+      "ratio": 0.44880870517315036,
+      "gpu_peak": 0.14777922630310059,
+      "gpu_runs": 1,
+      "cpu_runs": 1
+    },
+    {
+      "case": "al10-metal",
+      "k_batch": "all",
+      "band_batch": "all",
+      "card": "V100-16GB",
+      "nat": 10,
+      "nk": 10,
+      "ecut": 15.0,
+      "gpu_ms": 176.9801574999292,
+      "cpu_ms": 962.519975000032,
+      "ratio": 5.43857564936576,
+      "gpu_peak": 0.40459370613098145,
+      "gpu_runs": 1,
+      "cpu_runs": 1
+    },
+    {
+      "case": "si16-1k",
+      "k_batch": "1",
+      "band_batch": "1",
+      "card": "V100-32GB",
+      "nat": 16,
+      "nk": 1,
+      "ecut": 12.0,
+      "gpu_ms": 133.26766425007008,
+      "cpu_ms": 93.38111712486352,
+      "ratio": 0.7007034876040038,
+      "gpu_peak": 0.052201032638549805,
+      "gpu_runs": 1,
+      "cpu_runs": 2
+    },
+    {
+      "case": "si16-1k",
+      "k_batch": "1",
+      "band_batch": "all",
+      "card": "V100-32GB",
+      "nat": 16,
+      "nk": 1,
+      "ecut": 12.0,
+      "gpu_ms": 23.31832050003868,
+      "cpu_ms": 62.258635874968604,
+      "ratio": 2.669945113537029,
+      "gpu_peak": 0.06463432312011719,
+      "gpu_runs": 1,
+      "cpu_runs": 2
+    },
+    {
+      "case": "si16-1k-ecut30",
+      "k_batch": "1",
+      "band_batch": "1",
+      "card": "V100-32GB",
+      "nat": 16,
+      "nk": 1,
+      "ecut": 30.0,
+      "gpu_ms": 882.539008444534,
+      "cpu_ms": 179.48091022238563,
+      "ratio": 0.20336881260208417,
+      "gpu_peak": 0.09378528594970703,
+      "gpu_runs": 1,
+      "cpu_runs": 2
+    },
+    {
+      "case": "si16-1k-ecut30",
+      "k_batch": "1",
+      "band_batch": "all",
+      "card": "V100-32GB",
+      "nat": 16,
+      "nk": 1,
+      "ecut": 30.0,
+      "gpu_ms": 129.82956111106128,
+      "cpu_ms": 233.4035213332552,
+      "ratio": 1.7977687002545801,
+      "gpu_peak": 0.2312910556793213,
+      "gpu_runs": 1,
+      "cpu_runs": 2
+    },
+    {
+      "case": "si32-1k-ecut30",
+      "k_batch": "1",
+      "band_batch": "all",
+      "card": "V100-32GB",
+      "nat": 32,
+      "nk": 1,
+      "ecut": 30.0,
+      "gpu_ms": 82.21491012500337,
+      "cpu_ms": 1109.359004624821,
+      "ratio": 13.493404091035313,
+      "gpu_peak": 0.8824481964111328,
+      "gpu_runs": 1,
+      "cpu_runs": 1
+    }
+  ],
+  "stages": [
+    {
+      "case": "si16-1k-ecut30",
+      "nat": 16,
+      "dials": "b=all",
+      "card": "V100-32GB",
+      "gpu": {
+        "h_psi": 0.015,
+        "davidson": 0.386,
+        "v_of_rho": 0.039
+      },
+      "cpu": {
+        "h_psi": 0.102,
+        "davidson": 1.49,
+        "v_of_rho": 0.029
+      }
+    },
+    {
+      "case": "si16-1k-ecut30",
+      "nat": 16,
+      "dials": "b=1",
+      "card": "V100-32GB",
+      "gpu": {
+        "h_psi": 0.122,
+        "davidson": 2.632,
+        "v_of_rho": 0.036
+      },
+      "cpu": {
+        "h_psi": 0.064,
+        "davidson": 1.224,
+        "v_of_rho": 0.023
+      }
+    },
+    {
+      "case": "si32-1k-ecut30",
+      "nat": 32,
+      "dials": "b=all",
+      "card": "V100-32GB",
+      "gpu": {
+        "h_psi": 0.019,
+        "davidson": 0.554,
+        "v_of_rho": 0.037
+      },
+      "cpu": {
+        "h_psi": 0.34,
+        "davidson": 7.457,
+        "v_of_rho": 0.047
+      }
+    }
+  ],
+  "against_qe_serial": [
+    {
+      "case": "si64-1k-ecut30",
+      "nat": 64,
+      "card": "H200",
+      "gpu_ms": 380.3,
+      "qe_ms": 5155.0,
+      "gpu_it": 9,
+      "qe_it": 17
+    },
+    {
+      "case": "si128-1k-ecut30",
+      "nat": 128,
+      "card": "H200",
+      "gpu_ms": 1526.2,
+      "qe_ms": 29982.0,
+      "gpu_it": 10,
+      "qe_it": 24
+    }
+  ]
+}
