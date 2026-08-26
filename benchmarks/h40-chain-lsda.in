@@ -1,0 +1,80 @@
+! Antiferromagnetic hydrogen chain, 40 atoms -- h10-chain-lsda.in stacked
+! 4 deep along the chain, for the GPU size sweep. Same crystal, same
+! alternating moments; the k-grid folds with the cell.
+! **Ten sites and two spin channels.** The hydrogen chain of `h-chain-afm.in`
+! with five times as many atoms: ten hydrogens 5 bohr apart along z, their
+! moments alternating, in a 12 bohr transverse box.
+!
+! The chain is stretched far past the H2 bond, so the antiferromagnetic state is
+! the ground state by a wide margin and both codes reach the same one from the
+! same seed -- which is what makes the *magnetization* comparable and not only
+! the energy. What ten sites add over two is that the cell is now a supercell of
+! the two-atom one and its symmetry group is found by the same search the
+! silicon case exposed.
+!
+! `nosym` is **not** set here, unlike the two-atom spiral family, because there
+! is no spiral: the collinear LSDA path symmetrises normally and the two codes'
+! wedges can be compared.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 16.66666666666668,
+    nat = 40, ntyp = 2,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10,
+    nspin = 2,
+    starting_magnetization(1) =  0.6,
+    starting_magnetization(2) = -0.6,
+    nbnd = 56
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ H1  1.008  H.pz-vbc.UPF
+ H2  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H1 0.0 0.0 0.000000
+ H2 0.0 0.0 0.025000
+ H1 0.0 0.0 0.050000
+ H2 0.0 0.0 0.075000
+ H1 0.0 0.0 0.100000
+ H2 0.0 0.0 0.125000
+ H1 0.0 0.0 0.150000
+ H2 0.0 0.0 0.175000
+ H1 0.0 0.0 0.200000
+ H2 0.0 0.0 0.225000
+ H1 0.0 0.0 0.250000
+ H2 0.0 0.0 0.275000
+ H1 0.0 0.0 0.300000
+ H2 0.0 0.0 0.325000
+ H1 0.0 0.0 0.350000
+ H2 0.0 0.0 0.375000
+ H1 0.0 0.0 0.400000
+ H2 0.0 0.0 0.425000
+ H1 0.0 0.0 0.450000
+ H2 0.0 0.0 0.475000
+ H1 0.0 0.0 0.500000
+ H2 0.0 0.0 0.525000
+ H1 0.0 0.0 0.550000
+ H2 0.0 0.0 0.575000
+ H1 0.0 0.0 0.600000
+ H2 0.0 0.0 0.625000
+ H1 0.0 0.0 0.650000
+ H2 0.0 0.0 0.675000
+ H1 0.0 0.0 0.700000
+ H2 0.0 0.0 0.725000
+ H1 0.0 0.0 0.750000
+ H2 0.0 0.0 0.775000
+ H1 0.0 0.0 0.800000
+ H2 0.0 0.0 0.825000
+ H1 0.0 0.0 0.850000
+ H2 0.0 0.0 0.875000
+ H1 0.0 0.0 0.900000
+ H2 0.0 0.0 0.925000
+ H1 0.0 0.0 0.950000
+ H2 0.0 0.0 0.975000
+K_POINTS {automatic}
+ 1 1 1 0 0 0
