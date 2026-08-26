@@ -83,6 +83,10 @@ If your calculation needs any of those, use Quantum ESPRESSO — this is not a
 replacement for it, and on anything large it will be slower (about two to four
 times, running on one core).
 
+**Full feature reference:** [`docs/features.md`](docs/features.md) — every
+capability, the entry point that reaches it, what it was validated against, and
+what it refuses. The table above is the summary; that is the detail.
+
 ## Installing
 
 ```bash
