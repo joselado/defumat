@@ -200,30 +200,41 @@ symmetry statement rather than a fit.
 \end{frame}
 
 % ---------------------------------------------------------------- 9
-\begin{frame}{Where the reference itself was wrong}
+\begin{frame}{Band gaps: the Tran-Blaha meta-GGA}
 \begin{columns}[T]
-\column{0.55\textwidth}
+\column{0.54\textwidth}
 \small
-\textbf{Validation cuts both ways.} Several findings here are about \qe, not
-about pypresso:
-\begin{itemize}\itemsep3pt
-  \item \texttt{ph.x} 7.5's Raman branch does \textbf{not} reproduce QE's own
-    committed example, and fails its \emph{own} internal check. Validation fell
-    back to a finite difference of $\epsilon$ over re-converged displaced cells:
-    \textbf{-3.118279} against \textbf{-3.118310}.
-  \item \texttt{pw.x} reaches TB09 only through libxc, then passes a
-    \textbf{zero Laplacian} and \textbf{never sets $c$} --- so what it runs
-    under that name is Becke-Johnson.
-  \item Committed benchmarks date from release 6.0 and have drifted;
-    references are regenerated against the vendored build.
-\end{itemize}
-\column{0.42\textwidth}
+\textbf{A functional whose \emph{potential} is written down and whose energy does
+not exist.} \texttt{input\_dft = 'tb09'} gives the modified Becke-Johnson
+meta-GGA, which fixes the gap without the cost of a hybrid.
+\vspace{4pt}
+\begin{tabular}{lrrr}
+\toprule
+ & LDA & TB09 & experiment \\
+\midrule
+silicon & 0.49 & \textbf{1.13} & 1.17 \\
+diamond & 3.89 & \textbf{4.43} & 5.5 \\
+\bottomrule
+\end{tabular}
+\vspace{5pt}
+
+Validated against \emph{analytic} limits rather than another code's floating
+point: the hydrogen atom, where Becke-Roussel is the exact Slater potential of
+the 1s orbital to 1e-6 and $E_x$ is exactly $-5/16$\,Ha, and the uniform gas,
+where the model reproduces $v_x^{\rm LDA}$ to 6e-4.
+\vspace{4pt}
+
+\footnotesize \textbf{PAW is what makes it work}: its one-centre $\tau$ comes
+from the partial waves and recovers $c=1.107$ against an all-electron 1.12,
+where a norm-conserving silicon measures 1.000 --- the pseudised core is exactly
+what the cell average of $|\nabla\rho|/\rho$ misses.
+\column{0.43\textwidth}
 \includegraphics[width=\textwidth]{figs/24_tran_blaha_band_gaps.png}
-\\[2pt]
+\\[3pt]
 \footnotesize
-\textbf{TB09 meta-GGA:} silicon's gap 0.49\,eV (LDA) $\rightarrow$
-\textbf{1.13\,eV}, against experiment 1.17. Validated against \emph{analytic}
-limits, not another code's floating point.
+The consequences are enforced rather than documented: the total energy is
+\textbf{not variational}, so forces, stress, phonons and response are
+\textbf{refused by name} for this functional.
 \end{columns}
 \end{frame}
 
