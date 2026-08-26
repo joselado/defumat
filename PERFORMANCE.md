@@ -2008,7 +2008,56 @@ cores against QE's 531, i.e. **3.7x slower**, consistent with the ~3.3x this
 file records elsewhere. The accelerator is doing the work, not the
 implementation.
 
-### The case that did not converge, which matters more than any of the above
+### The case that did not converge, and the one line that was wrong
+
+**`si64-1k-ecut30` reached `conv_thr = 1e-8` on the GPU and gave the right
+answer; asked for `1e-10` it ran 100 iterations and returned `NaN`.** Four CPU
+cores converged the identical input in nine. **Fixed** — the table above is the
+run before the fix and is kept because the diagnosis is the useful part.
+
+| | iterations | result |
+|---|---|---|
+| GPU, `conv_thr = 1e-8` | 7 | -507.16606166 Ry — matches QE |
+| GPU, `conv_thr = 1e-10`, before | 100 (max) | **NaN** |
+| GPU, `conv_thr = 1e-10`, after | 9 | **-507.16606180 Ry**, 1.6e-8 from QE |
+| CPU 4 cores, `conv_thr = 1e-10` | 9 | -507.16606166 Ry |
+
+**The cause was not the GPU.** As Davidson's subspace fills it expands with
+normalised residuals of roots that have *already converged* — amplified
+round-off — which go linearly dependent, so the overlap's smallest eigenvalue
+lands on the round-off floor and **its sign is arbitrary**. Measured on the
+device at the ninetieth `generalised_eigh` call: `min eig(S) = -4.3e-16` against
+`max|S| = 1.0`. `jnp.linalg.cholesky` of a matrix with a tiny negative
+eigenvalue takes the square root of a negative pivot and **returns `NaN` rather
+than raising**, and it travelled into the wavefunctions, the density, the mixer
+and the total energy with nothing reporting a problem — `S` arrived non-finite
+452 times afterwards. QE's `cdiaghg` hits the same wall and *stops* with
+"problems computing cholesky"; returning `NaN` is strictly worse than stopping.
+The CPU landed on the positive side of the same coin flip.
+
+Cholesky remains the fast path and is taken **bit-for-bit** whenever it works;
+canonical orthogonalisation runs only when the factor comes back non-finite, and
+parks the round-off-floor directions above the spectrum rather than inverting
+them. The GPU now matches the CPU's iteration count exactly, which is the sign
+the SCF path is the same on both platforms rather than diverging at the endgame.
+
+**Two wrong turns, recorded because both were nearly committed.** The Anderson
+mixer was the first suspect — its Gram matrix spans the square of the residual
+magnitudes and reaches cond 1.1e11 by the eighth iteration. That is a real defect
+and is fixed too (writing `c_i = e_i/|r_i|` gives *identical* coefficients at
+cond 2.7e4), but it is **not** the `NaN`: the mixer *receives* a non-finite
+density, and a synthetic history at cond 1e53 still solves to `max|c| = 1` under
+partial pivoting. And the first regression test written for the fix passed on the
+*unfixed* code, because it built a rank-deficient Gram matrix — only
+semidefinite, smallest eigenvalue `+7e-16` — where Cholesky survives and leaves
+its `NaN` in the unused triangle. **A test that passes before the fix is not a
+regression test**; it builds a genuinely indefinite overlap now and carries the
+old routine verbatim to assert that it fails.
+
+**The stage timings for that cell** (from the converging run): `h_psi` 0.012 s,
+Davidson 0.640 s, `v_of_rho` 0.019 s.
+
+## The case that did not converge, which matters more than any of the above
 
 **`si64-1k-ecut30` on the GPU reaches `conv_thr = 1e-8` and gives the right
 answer; asked for `1e-10` it runs 100 iterations and returns `NaN`.**
@@ -2115,14 +2164,6 @@ the one as the other again.
 Ordered by expected gain per unit of effort, and by measurement rather than
 instinct. None of these may change a validated number.
 
-0. **The 64-atom GPU `NaN`, which is a correctness item and not an optimisation
-   one, and is listed here because it is where a GPU session will look.**
-   `si64-1k-ecut30` converges to `conv_thr = 1e-8` on an H200 and gives QE's
-   answer; asked for `1e-10` it runs to the 100-iteration limit and returns
-   `NaN`, where four CPU cores converge in nine. New between 32 and 64 atoms,
-   deterministic, not memory. **Nothing else in the GPU roadmap should be
-   believed on a cell this size until it is explained** — a code that is fast
-   and stops converging at a production threshold is worse than a slow one.
 1. **`jax.sharding` over the k-axis**, and GPU. Now measured to be the *only*
    parallelism worth having on CPU: the thread pool gives 15% between one core
    and four and loses badly beyond that, while `metal.in`'s ten k-points are

@@ -153,17 +153,22 @@ whether a cell runs at all.
 
 ## 3. The phases
 
-> **Open defect, found 2026-08-26 and outranking every phase below.**
-> `si64-1k-ecut30` — 64 atoms, `ecutwfc = 30` — converges on an H200 at
-> `conv_thr = 1e-8` and reproduces QE's total energy, and at `1e-10` runs to the
-> 100-iteration limit and returns **`NaN`**. Four CPU cores converge the same
-> input to 1e-10 in nine iterations, and `si32-1k-ecut30` converges on a GPU to
-> 1e-10 in eight. So it is device-specific, it appears between 32 and 64 atoms,
-> it is deterministic (the twice-run check reproduced the same `NaN` bit for
-> bit), and it is not memory (3.28 GB of 141 GB). **§5's first rule is that no
-> phase may change a validated number; this changes one into `NaN`.** It is
-> diagnosed before any further GPU number on a cell of this size is believed.
-> Measurements in `PERFORMANCE.md`.
+> **Fixed 2026-08-26 — and worth reading before trusting a GPU number.**
+> `si64-1k-ecut30` converged on an H200 at `conv_thr = 1e-8`, reproducing QE's
+> total energy, and returned **`NaN`** at `1e-10`, where four CPU cores converge
+> in nine iterations. **The cause was one line, and it was not the GPU's.** As
+> Davidson's subspace fills, the vectors it expands with are normalised residuals
+> of roots that have *already converged* — amplified round-off — so they go
+> linearly dependent, the overlap's smallest eigenvalue lands on the round-off
+> floor, and its **sign is arbitrary**: measured on the device,
+> `min eig(S) = -4.3e-16` against `max|S| = 1.0`. `jnp.linalg.cholesky` of that
+> takes the square root of a negative pivot and **returns `NaN` rather than
+> raising**. The CPU landed on the positive side of the same coin flip, which is
+> the whole of why it looked device-specific. Cholesky is still the fast path and
+> is taken bit-for-bit whenever it works; canonical orthogonalisation runs only
+> when the factor comes back non-finite (`solvers/subspace.py`). Verified on the
+> device: 9 iterations, QE's energy to 1.6e-8 Ry. Measurements in
+> `PERFORMANCE.md`.
 
 ### Phase 0 — first contact: does it run, and does it give the same number? ✅ DONE (bar check 5's cross-job form)
 
