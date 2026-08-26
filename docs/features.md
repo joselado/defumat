@@ -16,6 +16,28 @@ missing — never silently approximated or replaced by something close. The
 "Refuses" lines below are as much a part of the documentation as the features:
 they are the promise that a run which starts is a run whose physics is there.
 
+
+**One equation is written down and the rest are derived from it.** Almost
+everything below is a derivative of the total energy, taken by the compiler
+rather than by hand:
+
+$$E[\{\psi\}, \tau, \varepsilon] \;=\; T_s + E_{\rm H} + E_{xc} + E_{\rm loc} + E_{\rm nl} + E_{\rm Ewald}$$
+
+| quantity | what it is | how it is obtained |
+|---|---|---|
+| $v_{xc}(\mathbf r)$ | $\delta E_{xc}/\delta n$ | `jax.grad` of the energy density |
+| $\mathbf F_I$ | $-\partial E/\partial \boldsymbol\tau_I$ | `jax.grad` at frozen $\psi$ |
+| $\sigma_{ij}$ | $-\Omega^{-1}\,\partial E/\partial \varepsilon_{ij}$ | `jax.grad` along a strain |
+| $C_{I\alpha,J\beta}$ | $\partial^2 E/\partial\tau_{I\alpha}\partial\tau_{J\beta}$ | `jvp` of the force |
+| $Z^*_{I,\alpha\beta}$ | $\partial F_{I\alpha}/\partial \mathcal E_\beta$ | `jvp` of the force along the field response |
+| $\partial\epsilon_{ij}/\partial\tau$ | Raman | `jvp` of the second-order energy |
+
+The "frozen $\psi$" is what makes this exact rather than approximate: at
+self-consistency the energy is stationary with respect to the wavefunctions, so
+the terms that would come from $\partial\psi/\partial\lambda$ vanish. That is the
+Hellmann-Feynman argument, and taking it one order up is the 2n+1 theorem, which
+is why a *third* derivative needs only first-order wavefunctions.
+
 ---
 
 ## Contents
@@ -110,6 +132,34 @@ alternative to mixing, which is slower but reaches solutions the mixer cannot
 hold. `max_iterations` defaults to 100 — **a hard SCF may need more**, and
 hitting the cap is reported as not converged rather than as an answer.
 
+### The equations
+
+The Kohn-Sham problem, generalised because ultrasoft and PAW make the overlap
+non-trivial:
+
+$$\hat H\,|\psi_{n\mathbf k}\rangle \;=\; \epsilon_{n\mathbf k}\,\hat S\,|\psi_{n\mathbf k}\rangle ,
+\qquad \hat S = 1 + \sum_{I,ij} q_{ij}\,|\beta_i^I\rangle\langle\beta_j^I|$$
+
+$$\hat H = -\nabla^2 + v_{\rm loc}(\mathbf r) + v_{\rm H}[n] + v_{xc}[n]
+  + \sum_{I,ij} D_{ij}^I\,|\beta_i^I\rangle\langle\beta_j^I|$$
+
+with $n(\mathbf r) = \sum_{n\mathbf k} w_{\mathbf k} f_{n\mathbf k}
+\big(|\psi_{n\mathbf k}|^2 + \sum_{ij} Q_{ij}^I\,\langle\psi|\beta_i\rangle\langle\beta_j|\psi\rangle\big)$,
+the augmentation term being what ultrasoft adds. $D_{ij}$ is rebuilt from the
+potential every iteration, which is why the SCF is a fixed point in $(n, D)$
+and not in $n$ alone.
+
+Convergence is measured as QE measures it — the Hartree energy of the residual:
+
+$$dr^2 \;=\; \int\!\!\int \frac{\delta n(\mathbf r)\,\delta n(\mathbf r')}
+  {|\mathbf r - \mathbf r'|}\,d\mathbf r\,d\mathbf r' \;<\; \texttt{conv\_thr}$$
+
+```python
+result = run_scf(system, pseudos, conv_thr=1.0e-10, mixing_mode="anderson")
+print(result.total_energy, result.energy_terms)      # QE's own term-by-term split
+print(result.fermi_energy, result.homo, result.lumo)
+```
+
 ---
 
 ## 3. Bands, densities of states, projections
@@ -129,6 +179,32 @@ Projections are `<phi|S|psi>` on Löwdin-orthogonalised pseudo-atomic orbitals,
 resolved by atom, `l` and `m`. Validated against a purpose-built `projwfc.x` on
 seven cases: **6.9e-4** on a projection, **4.7e-5** on a Löwdin charge, and the
 spilling parameter to all four decimals it prints.
+
+### The equations
+
+A band structure is one diagonalisation per k on a fixed density; a DOS is
+
+$$g(E) \;=\; \sum_{n\mathbf k} w_{\mathbf k}\,\delta(E - \epsilon_{n\mathbf k})$$
+
+with $\delta$ replaced by a smearing function or evaluated by tetrahedron
+interpolation. The projected DOS weights each term by the overlap with an
+orthogonalised atomic orbital,
+$\;\big|\langle \phi_{\mu}|\hat S|\psi_{n\mathbf k}\rangle\big|^2$, and the
+spilling parameter is what is *not* captured:
+$\;\sum_{n\mathbf k} w_{\mathbf k} f_{n\mathbf k}\,(1 - \sum_\mu |\langle\phi_\mu|S|\psi\rangle|^2)$.
+
+```python
+from pypresso.workflows.bands import run_bands
+from pypresso.workflows.dos import run_dos
+from pypresso.workflows.pdos import run_pdos
+
+bands = run_bands(system, pseudos, scf.density, kpoints=path)   # a k-path
+dos, _ = run_dos(system, pseudos, scf.density, grid=(12, 12, 12),
+                 scheme="tetrahedra_opt")     # returns (DensityOfStates, NSCFResult)
+pdos, _ = run_pdos(system, pseudos, scf)     # returns (ProjectedDOS, NSCFResult)
+print(pdos.channels[0])                      # resolved by atom, l and m
+print(pdos.charges.charges, pdos.charges.spilling)   # Lowdin charges, spilling
+```
 
 ---
 
@@ -235,6 +311,38 @@ Pulay error of the basis and is **reported** (`VCRelaxResult.pulay_error`)
 rather than left to be noticed; `treinit_gvecs` rebuilds the basis per step and
 makes it zero.
 
+### The equations
+
+$$\mathbf F_I \;=\; -\frac{\partial E}{\partial\boldsymbol\tau_I}\bigg|_{\psi\ \rm fixed},
+\qquad
+\sigma_{ij} \;=\; -\frac{1}{\Omega}\,\frac{\partial E}{\partial \varepsilon_{ij}}\bigg|_{\psi\ \rm fixed}$$
+
+Both are one gradient. With ultrasoft the orthonormality constraint
+$\langle\psi_n|\hat S|\psi_m\rangle=\delta_{nm}$ is carried explicitly, so its
+multiplier term — QE's Pulay contribution — falls out of the same derivative
+rather than being added afterwards.
+
+A variable-cell relaxation minimises the **enthalpy**, which is why a relaxed
+crystal carries the applied pressure rather than having zero stress:
+
+$$H \;=\; E + P\,\Omega, \qquad \frac{\partial H}{\partial h} = \Omega\,(P\mathbb{1} - \sigma)\,h^{-T}$$
+
+```python
+from pypresso.forces import compute_forces
+from pypresso.stress import compute_stress
+from pypresso.workflows.relax import run_relax
+from pypresso.workflows.vc_relax import run_vc_relax
+
+forces = compute_forces(calculation, result)              # method=... for QE's terms
+print(forces.forces)                                      # (nat, 3) in Ry/bohr
+stress = compute_stress(calculation, result, terms=True)  # kbar and Ry/bohr^3
+print(stress.pressure)
+
+relaxed = run_relax(system, pseudos, forc_conv_thr=1.0e-4)
+cell    = run_vc_relax(system, pseudos, press=500.0)      # kbar
+print(cell.pulay_error)      # the frozen-basis error, reported not hidden
+```
+
 ---
 
 ## 7. Response: dielectric, phonons, Raman
@@ -276,6 +384,53 @@ and must be symmetrised as one. Running the whole k-grid instead is only sound i
 the grid is closed under the point group — a **shifted** Monkhorst-Pack grid is
 not, and that combination is refused by name.
 
+### The equations
+
+Every first-order quantity comes from the Sternheimer equation — the linear
+response of an occupied orbital to a perturbation $\Delta V$, projected outside
+the occupied manifold so no empty states and no energy denominators appear:
+
+$$\big(\hat H - \epsilon_n \hat S + \alpha \hat Q\big)\,|\Delta\psi_n\rangle
+  \;=\; -\,\hat P_c^{+}\,\Delta V\,|\psi_n\rangle$$
+
+It is solved self-consistently, because $\Delta V$ contains the response of the
+potential to the response of the density, $\Delta V_{\rm scf} = \Delta V_{\rm ext}
++ \int K(\mathbf r,\mathbf r')\,\Delta n(\mathbf r')$, and the kernel $K$ is one
+`jvp` of `v_of_rho` rather than a second implementation.
+
+From its solutions:
+
+$$\epsilon_{\alpha\beta}^\infty = \delta_{\alpha\beta}
+  + \frac{8\pi}{\Omega}\sum_{n\mathbf k} w_{\mathbf k}\,
+  \langle \Delta_\alpha\psi_n | \, \partial_\beta \psi_n \rangle,
+\qquad
+Z^*_{I,\alpha\beta} = \frac{\partial F_{I\alpha}}{\partial\mathcal E_\beta}$$
+
+$$C_{I\alpha,J\beta} = \frac{\partial^2 E}{\partial\tau_{I\alpha}\,\partial\tau_{J\beta}},
+\qquad
+\omega^2 \mathbf e = \frac{1}{\sqrt{M_I M_J}}\,C\,\mathbf e ,
+\qquad
+\frac{\partial \epsilon_{ij}}{\partial \tau_{I\gamma}}\ \ \text{(Raman)}$$
+
+The Raman tensor is the second-order energy differentiated once more along a
+displacement, at *frozen first-order* wavefunctions — the 2n+1 theorem, which is
+why a third derivative costs one more `jvp` and not a new solve.
+
+```python
+from pypresso.response import (dielectric_tensor, dynamical_matrix,
+                               raman_tensors, vibrational_spectrum)
+
+eps = dielectric_tensor(calculation, scf.wavefunctions, scf.eigenvalues, scf.density)
+print(eps.epsilon)                                   # 3x3, cartesian
+
+ph = dynamical_matrix(calculation, scf.wavefunctions, scf.eigenvalues,
+                      scf.density, scf.becsum)
+print(ph.frequencies)                                # cm^-1
+
+raman    = raman_tensors(calculation, scf, born_charges=True, keep_internals=True)
+spectrum = vibrational_spectrum(calculation, scf)     # per-mode Raman + IR activity
+```
+
 ---
 
 ## 8. Topological invariants
@@ -304,6 +459,31 @@ k-points do not share a G-sphere, so coefficients are aligned by Miller index;
 and the wrap at the zone edge is a *shift* of that index, without which the Chern
 number comes out smooth and non-integer.
 
+### The equations
+
+Everything is built from the overlap of occupied manifolds at neighbouring
+k-points, $\;M^{(\mathbf b)}_{mn} = \langle u_{m\mathbf k}|\hat S|u_{n,\mathbf k+\mathbf b}\rangle$.
+The Berry curvature is the phase of a plaquette of them and the Chern number
+their lattice sum, which is an **exact integer on any mesh**:
+
+$$F_{12}(\mathbf k) = \ln\!\big[\,U_1(\mathbf k)\,U_2(\mathbf k{+}\hat 1)\,
+   U_1(\mathbf k{+}\hat 2)^{-1} U_2(\mathbf k)^{-1}\big],
+\qquad C = \frac{1}{2\pi i}\sum_{\mathbf k} F_{12}(\mathbf k)$$
+
+$Z_2$ has two independent routes — the flow of Wannier charge centres, and, when
+there is an inversion centre, the parity product over the eight TRIM points:
+
+$$(-1)^{\nu} \;=\; \prod_{i=1}^{8}\ \prod_{n\ \rm occ}^{\rm Kramers} \xi_{2n}(\Gamma_i)$$
+
+```python
+from pypresso.workflows.topology import run_z2, run_berry_curvature
+
+z2 = run_z2(system, pseudos, scf.density, axis=2)     # Wilson loop by default
+print(z2.z2, z2.gap_step)   # read gap_step before believing the integer
+chern = run_berry_curvature(system, pseudos, scf.density, shape=(12, 12))
+print(chern)                # an exact integer on any mesh
+```
+
 ---
 
 ## 9. Things with no `pw.x` counterpart
@@ -324,6 +504,29 @@ number comes out smooth and non-integer.
 - **Topological invariants** (§8).
 - **Rank-`n` tensor symmetrisation** — `symme.f90`'s `symmatrix3`/`symtensor3`
   written at any rank.
+
+### The spin-spiral equations
+
+The generalized Bloch theorem: a spiral of wavevector $\mathbf q$ is a spinor
+whose two components live on *different* plane-wave spheres,
+
+$$\psi_{\mathbf k}(\mathbf r) =
+  \begin{pmatrix} e^{i(\mathbf k - \mathbf q/2)\cdot\mathbf r}\,u^{\uparrow}(\mathbf r) \\[2pt]
+                  e^{i(\mathbf k + \mathbf q/2)\cdot\mathbf r}\,u^{\downarrow}(\mathbf r)
+  \end{pmatrix}$$
+
+so in the rotated frame the density is lattice periodic and the SCF, the
+functional and the mixer are untouched. Only two terms carry $\mathbf q$ —
+$|\mathbf k \mp \mathbf q/2 + \mathbf G|^2$ and $v_{\rm nl}$ — and
+$dE/d\mathbf q$ at frozen coefficients is `jax.grad` of them.
+
+```python
+from pypresso.workflows.spiral import run_spiral_scan, relax_spiral_q
+
+scan = run_spiral_scan(system, pseudos, wavevectors)   # E(q)
+best = relax_spiral_q(system, pseudos)                 # BFGS on the reciprocal metric
+print(best.wavevector, best.scf.total_energy)
+```
 
 ---
 
