@@ -171,6 +171,25 @@ python3 -m pypresso.cli stress  <input>       # stress tensor
 python3 -m pypresso.cli spiral  <input>       # spin-spiral scan
 \end{shcode}
 
+Standard \code{pw.x} variables --- \code{ecutwfc}, \code{ecutrho}, \code{ibrav},
+\code{nbnd}, \code{occupations}, \code{degauss} and the rest --- mean what they
+mean there and are not re-documented here. A handful of knobs are worth knowing
+because they are specific to this code or to a feature below:
+
+\begin{center}
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+\code{mbj\_c} & fixes Tran--Blaha's $c$ instead of taking the cell average \\
+\code{london\_s6}, \code{london\_rcut} & Grimme D2's scaling and real-space cutoff \\
+\code{cell\_dofree} & which cell degrees of freedom a vc-relax may move \\
+\code{starting\_ns\_eigenvalue} & seeds the DFT+U occupation matrix \\
+\code{spiral\_q} & the spin-spiral wavevector, in lattice coordinates \\
+\code{LOCAL\_MAGNETIC\_FIELDS} & a card with no \code{pw.x} counterpart \\
+\bottomrule
+\end{tabular}
+\end{center}
+
 \textbf{Units are Rydberg atomic units throughout} (Ry, bohr), matching QE. The
 only layer that speaks anything else is \code{io/}: Hubbard $U$ in the
 \code{HUBBARD} card is in eV and is converted at the boundary, as \code{pw.x}
@@ -217,8 +236,9 @@ print(result.fermi_energy, result.homo, result.lumo)
 with the tetrahedron family --- both linear and Bloechl-corrected --- usable as
 an occupation scheme \emph{inside} the SCF, not only for a density of states.
 
-\textbf{Continuation across a change of spin regime}
-(\code{run\_scf(starting\_from=result)}) promotes a converged state into a
+\textbf{Continuation across a change of spin regime.} Give \code{run\_scf} a
+previous result as \code{starting\_from} --- \code{System.with\_spin}
+underneath --- and it promotes a converged state into a
 target's variables: non-magnetic into collinear, collinear into noncollinear,
 spin-orbit switched on. It reaches the \emph{same} solution as a fresh run
 ($\le$4e-8 Ry on six cases) in as little as one iteration. The magnetization is
@@ -237,8 +257,9 @@ reported as not converged rather than as an answer.
 % =====================================================================
 \section{Bands, densities of states, projections}
 
-A band structure is one diagonalisation per $\mathbf k$ on a fixed density; a
-density of states is
+A band structure is one diagonalisation per $\mathbf k$ on a fixed density ---
+\code{run\_bands}, or \code{run\_nscf} for a non-self-consistent run on a grid
+rather than a path. A density of states is
 \begin{equation*}
 g(E) = \sum_{n\mathbf k} w_{\mathbf k}\,\delta(E - \epsilon_{n\mathbf k})
 \end{equation*}
@@ -397,7 +418,14 @@ augmentation force's sign and a missing gradient correction were found.
 % =====================================================================
 \section{Response: dielectric, phonons, Raman}
 
-Every first-order quantity comes from the Sternheimer equation --- the response
+The \textbf{velocity operator} comes first and everything else uses it: it is one
+\code{jvp} of $\hat H(\mathbf k)$ at a frozen sphere, because
+$\partial\hat H/\partial k_\alpha = i[\hat H, r_\alpha]$ in the periodic gauge.
+\code{band\_velocities} exposes it, and because the overlap carries a velocity
+too, a band velocity is
+$\langle\psi|\partial_k\hat H - \epsilon\,\partial_k\hat S|\psi\rangle$.
+
+Every first-order quantity then comes from the Sternheimer equation --- the response
 of an occupied orbital to a perturbation, projected outside the occupied
 manifold so that no empty states and no energy denominators appear:
 \begin{equation*}
@@ -444,7 +472,13 @@ print(ph.frequencies)                  # cm^-1
 
 raman = raman_tensors(calculation, scf, born_charges=True, keep_internals=True)
 spectrum = vibrational_spectrum(calculation, scf)   # per-mode Raman and IR
+print(spectrum.raman_activity, spectrum.depolarisation)
 \end{pycode}
+
+\code{born\_effective\_charges} gives $Z^{\ast}$ on its own, and
+\code{mode\_activities} is the bare assembly --- a transcription of
+\code{dynmat.x}'s \code{RamanIR}, kept a pure function of arrays so it is
+testable without a self-consistent run.
 
 Ultrasoft and PAW work for the dielectric constant ($\le$1.2e-4 against
 \code{ph.x} on four cases); metals work for the response and the dynamical
@@ -463,6 +497,54 @@ source term has nothing to build the $\langle u_i|r_k|u_j\rangle$ piece from ---
 and it is \textbf{42\%} of the answer, measured); the non-analytic LO--TO term;
 phonons at $q\neq0$; the dynamical matrix of an ultrasoft dataset; any response
 under a potential-only meta-GGA; and a shifted grid with a reduced $k$-set.
+\end{refuses}
+
+\subsection*{Elastic constants, electrostriction and the elasto-optic tensor}
+
+The same machinery in the \emph{strain} coordinate rather than the atomic one.
+\code{strain\_response} solves the first-order problem for a strain --- Abinit's
+metric-tensor formulation, obtained for nothing here because the cell was
+already written in reduced coordinates --- and two things follow from it:
+\begin{equation*}
+C_{ijkl} = \frac{\partial\sigma_{ij}}{\partial\varepsilon_{kl}},
+\qquad
+\frac{\partial\chi_{ij}}{\partial\varepsilon_{kl}}\ \ \text{(elasto-optic)}
+\end{equation*}
+The second is a \textbf{third} derivative of the energy, and it comes from one
+\code{jvp} of the second-order energy at frozen first-order wavefunctions ---
+the $2n{+}1$ theorem again. Through the thermodynamic identity of Tanner,
+Bousquet and Janolin it gives the four electrostriction tensors $m$, $q$, $M$
+and $Q$.
+
+\begin{pycode}
+from pypresso.response import elastic_constants, electrostriction
+
+es = electrostriction(calculation, scf)     # solves the strain response itself
+print(es.m, es.q, es.M, es.Q)              # the four electrostriction tensors
+print(es.photoelastic)                      # the elasto-optic tensor
+print(es.elastic.voigt)                     # C_ij in Voigt notation, GPa
+
+# or the elastic constants alone, from a strain response you already have
+C = elastic_constants(calculation, scf.wavefunctions, scf.eigenvalues,
+                      scf.density, es.strain)
+print(C.tensor.shape, C.voigt)
+\end{pycode}
+
+Converged silicon gives $C_{11}$ = 198.5 GPa and $C_{12}$ = 68.9, against a
+measured 165.7 and 63.9; the three independent components of
+$\partial\epsilon/\partial\varepsilon$ match a central difference over
+re-converged strained cells to \textbf{2e-4}, which is that difference's own
+floor, and the rank-4 tensor is cubic to 3e-14 with nothing imposing it.
+
+\begin{refuses}
+\textbf{Refuses.} Both are norm-conserving, \code{nspin = 1}, insulators and
+\textbf{clamped-ion}. A diverged first-order solution is refused rather than
+consumed in silence (\code{require\_converged\_responses}) --- at QE's
+\code{alpha\_mix = 0.7} the strain response of a \emph{slab} diverges, and
+consuming it gave a $C_{ijkl}$ that was not even symmetric under
+$C_{ijkl} = C_{klij}$. The elastic constants additionally need the whole
+$k$-grid rather than a wedge, because their functional builds its own density
+and symmetrises it as a scalar inside the chain rule.
 \end{refuses}
 
 % =====================================================================
@@ -491,13 +573,17 @@ points:
 \end{equation*}
 
 \begin{pycode}
-from pypresso.workflows.topology import run_z2, run_berry_curvature
+from pypresso.workflows.topology import (run_z2, run_z2_3d,
+                                         run_berry_curvature)
 
 z2 = run_z2(system, pseudos, scf.density, axis=2)   # Wilson loop by default
 print(z2.z2, z2.gap_step)   # read gap_step before believing the integer
 
 chern = run_berry_curvature(system, pseudos, scf.density, shape=(12, 12))
 print(chern)                # an exact integer on any mesh
+
+nu = run_z2_3d(system, pseudos, scf.density)   # the four 3D indices
+print(nu)                   # (nu0; nu1 nu2 nu3)
 \end{pycode}
 
 \textbf{Running both $Z_2$ routes is the check.} Where they disagree the parity
@@ -525,12 +611,20 @@ $|\mathbf k \mp \mathbf q/2 + \mathbf G|^2$ and $v_{\mathrm{nl}}$ --- and
 $dE/d\mathbf q$ at frozen coefficients is \code{jax.grad} of them.
 
 \begin{pycode}
-from pypresso.workflows.spiral import run_spiral_scan, relax_spiral_q
+from pypresso.workflows.spiral import (run_spiral_scan, relax_spiral_q,
+                                       heisenberg_exchange)
 
 scan = run_spiral_scan(system, pseudos, wavevectors)   # E(q)
 best = relax_spiral_q(system, pseudos)   # BFGS on the reciprocal metric
 print(best.wavevector, best.scf.total_energy)
+
+J = heisenberg_exchange(scan, shells)    # fit E(q) for the exchange constants
 \end{pycode}
+
+\code{heisenberg\_exchange} fits
+$E(\mathbf q) - E(0) = m^2 \sum_{\mathbf R} J(\mathbf R)\,[1 - \cos(\mathbf q\cdot\mathbf R)]$
+over a set of lattice shells, which is how a spiral scan becomes a spin model.
+\code{compute\_spiral\_gradient} gives $dE/d\mathbf q$ on its own.
 
 Also here: \textbf{per-atom magnetic fields}, the \textbf{topological
 invariants} of the previous section, and \textbf{rank-$n$ tensor

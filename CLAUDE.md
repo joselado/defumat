@@ -564,6 +564,45 @@ things make the table go stale silently and both have already happened once, so 
   exported. A row naming `tprnfor` when nothing parses it, or `UPF v1` when the reader
   refuses anything but v2, is worse than no row — both were in the first draft of the table.
 
+## The user guide
+
+`docs/features.tex` is the user-facing reference — every capability, the
+equation behind it, a snippet that runs it, what it was validated against, and
+what it refuses. `docs/features.pdf` is built from it with
+`xelatex docs/features.tex` (twice, for the table of contents); there is no
+markdown copy and none should be added, because two copies drift.
+
+**Every new feature adds an entry, and a phase is not finished until it does.**
+Same standing requirement as the README table and the notebooks, and it goes
+stale the same way. A feature the code has and the guide does not is a feature
+nobody can find.
+
+An entry is four things, and the last two are the ones that get skipped:
+
+- **what it computes**, as an equation where there is one — this is a physics
+  document, not an API listing;
+- **the entry point**, checked by `grep` rather than remembered;
+- **a snippet that has been run.** Checking that a name exists is not enough:
+  an audit that only checked `dir()` passed six broken snippets, because
+  `run_dos` and `run_pdos` return `(result, states)` tuples, `ProjectedDOS`
+  has no `spilling` (it is on the nested `charges`), `run_berry_curvature`
+  already *is* the Chern number, and `SpiralRelaxResult` has no `.energy`.
+  Execute it;
+- **what it refuses**, in the amber box. The refusals are the promise that a run
+  which starts is a run whose physics is there, and that promise is only usable
+  if its edges are written down.
+
+**The audit that catches drift** is a set difference, not a read-through: list
+the workflow, response, force and stress entry points the package exports and
+check each appears in the `.tex`. Run it when a phase lands. It found ten
+missing at once — including *elastic constants and electrostriction*, a whole
+implemented feature with no mention at all.
+
+**Do not re-document standard `pw.x` variables.** `ecutwfc`, `ibrav`, `nbnd`
+and the rest mean what they mean in QE and the guide says so once. Document the
+knobs that are this code's own — `mbj_c`, `spiral_q`,
+`LOCAL_MAGNETIC_FIELDS` — and the ones that gate a feature below.
+
 ## Tutorial notebooks
 
 `notebooks/` holds worked examples on concrete systems — the readable counterpart to the
