@@ -41,9 +41,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.system import build_system
+from pypresso import Calculator
 from pypresso.scf import Calculation, run_scf
 from pypresso.units import RY_TO_EV
 
@@ -53,11 +51,12 @@ DATA = Path("..") / "tests" / "data"
 # G indices, and symmetrising it would rotate both at once -- which nothing here
 # does -- so this phase needs the whole grid, and an unshifted one is what makes
 # running it without symmetry sound in the first place.
-system = build_system(read_pw_input(DATA / "qe" / "si-epsilon-unshifted-nosym.in"))
-pseudos = tuple(read_upf(DATA / "pseudo" / s.pseudo_file)
-                for s in system.structure.species)
+silicon = Calculator.from_file(DATA / "qe" / "si-epsilon-unshifted-nosym.in",
+                               pseudo_dir=DATA / "pseudo", announce=False,
+                               conv_thr=1e-12)
+system, pseudos = silicon.system, silicon.pseudos
 
-scf = run_scf(system, pseudos, conv_thr=1e-12, max_iterations=80)
+scf = silicon.get_scf(max_iterations=80)
 print(f"{system.kpoints.nk} k-points, E = {float(scf.total_energy):.8f} Ry")
 ```
 
@@ -107,16 +106,16 @@ for kernel in ("rpa", "alda", "bootstrap"):
           f"{solutions[kernel].iterations} pass(es)")
 ```
 
-    chi_0: 115 x 115 at 151 frequencies, 224 pairs per k-point, 9 s
+    chi_0: 115 x 115 at 151 frequencies, 224 pairs per k-point, 4 s
 
 
-      rpa         1.30 s   alpha = -0.0000   1 pass(es)
+      rpa         0.56 s   alpha = -0.0000   1 pass(es)
 
 
-      alda        0.66 s   alpha = -0.0000   1 pass(es)
+      alda        0.45 s   alpha = -0.0000   1 pass(es)
 
 
-      bootstrap   4.03 s   alpha = +0.0232   9 pass(es)
+      bootstrap   2.80 s   alpha = +0.0232   9 pass(es)
 
 
 ## The figure
