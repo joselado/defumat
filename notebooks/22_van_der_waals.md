@@ -28,6 +28,15 @@ dispersion term to **4.9e-9 Ry**, the force to **3.7e-7 Ry/bohr** and the stress
 **4.1e-8 Ry/bohr³**. And the relaxation binds the bilayer at **6.10 bohr (3.23 Å)**, against
 a measured 3.35 Å.
 
+D2 is a pair sum over the **nuclei** and nothing else -- it never sees the density, which
+is why the force and the stress are `jax.grad` of it in the two coordinates:
+
+$$E_{\rm disp} = -\frac{s_6}{2} \sum_{i \neq j} \sum_{\mathbf L}
+   \frac{C_6^{ij}}{|\mathbf r_{ij} + \mathbf L|^6}\;
+   f_{\rm damp}\!\big(|\mathbf r_{ij} + \mathbf L|\big),
+\qquad
+f_{\rm damp}(R) = \frac{1}{1 + e^{-d\,(R/R_{\rm vdW} - 1)}}$$
+
 
 ```python
 from pathlib import Path
@@ -37,19 +46,17 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import Calculation, run_scf
-from pypresso.system import build_system
 from pypresso.vdw.analytic import dispersion_force, dispersion_stress
 
 CASES = Path("..") / "tests" / "data" / "qe"
 PSEUDO = Path("..") / "tests" / "data" / "pseudo"
 
-system = build_system(read_pw_input(CASES / "graphene-bilayer-d2.in"))
-pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-calculation = Calculation(system, pseudos)
+bilayer = Calculator.from_file(CASES / "graphene-bilayer-d2.in", pseudo_dir=PSEUDO,
+                               announce=False, conv_thr=1e-10)
+system, pseudos = bilayer.system, bilayer.pseudos
+calculation = bilayer.calculation
 reference = read_qe_output(CASES / "reference.out.graphene-bilayer-d2")
 
 print(f"vdw_corr = {system.vdw_corr!r}, london_s6 = {system.london_s6}, "
@@ -78,9 +85,10 @@ plausible total energy and would fail this in the tenth decimal of the Hartree t
 
 
 ```python
-plain_system = build_system(read_pw_input(CASES / "graphene-bilayer.in"))
-plain = run_scf(plain_system, pseudos, conv_thr=1e-10)
-corrected = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-10)
+# The same cell with `vdw_corr` absent -- a different input, so a different calculator.
+plain = Calculator.from_file(CASES / "graphene-bilayer.in", pseudo_dir=PSEUDO,
+                             announce=False, conv_thr=1e-10).get_scf()
+corrected = bilayer.get_scf()
 
 print("max |rho(D2) - rho(none)|        ",
       np.abs(np.asarray(plain.density) - np.asarray(corrected.density)).max())

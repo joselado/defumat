@@ -20,6 +20,20 @@ self-consistent solution, because a starting guess is a guess and nothing else:
 regime's `System` — with its k-points rebuilt, which is the half of the job that is not the
 density.
 
+The three regimes are three ways of writing the same pair, so a promotion is *decompose,
+decide what $\mathbf m$ should be, recompose*:
+
+$$(n_\uparrow, n_\downarrow)
+\;\longleftrightarrow\;
+\big(n,\ m_z\big)
+\;\longleftrightarrow\;
+\big(n,\ \mathbf m\big),
+\qquad
+n = n_\uparrow + n_\downarrow, \quad m_z = n_\uparrow - n_\downarrow$$
+
+On a `Calculator` that is one call -- `calc.with_spin(...)` returns a new calculator in the
+target regime carrying the converged state as a **starting guess**, not as an answer.
+
 
 ```python
 import dataclasses
@@ -28,6 +42,7 @@ import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
 from pypresso.scf import Calculation, continued_state, run_scf
@@ -50,12 +65,18 @@ scheme that can fill it unequally. `with_spin` produces the collinear and the no
 
 
 ```python
-silicon = system_from(f"{QE}/pw_scf/scf.in", occupations="smearing",
-                      smearing="gaussian", degauss=0.02)
 si_pseudo = (read_upf(f"{PSEUDO}/Si.pz-vbc.UPF"),)
+si_calc = Calculator(system_from(f"{QE}/pw_scf/scf.in", occupations="smearing",
+                                 smearing="gaussian", degauss=0.02),
+                     si_pseudo, announce=False, conv_thr=1e-8)
 
-collinear = silicon.with_spin(2, starting_magnetization=(0.3,))
-spinor = collinear.with_spin(4, starting_magnetization=(0.0,))
+# `Calculator.with_spin` is `System.with_spin` plus the seed: a new calculator in
+# the target regime, with an empty cache and the parent's state as its guess.
+collinear_calc = si_calc.with_spin(2, starting_magnetization=(0.3,))
+spinor_calc = collinear_calc.with_spin(4, starting_magnetization=(0.0,))
+
+silicon, collinear, spinor = (si_calc.system, collinear_calc.system,
+                              spinor_calc.system)
 print(f"nspin = 1: {silicon.kpoints.nk} k-points, weights summing to "
       f"{float(np.sum(silicon.kpoints.weights)):.1f}")
 print(f"nspin = 2: {collinear.kpoints.nk} k-points, weights summing to "
@@ -71,11 +92,15 @@ print(f"nspin = 4: {spinor.kpoints.nk} k-points, nspin_mag = {spinor.nspin_mag},
 
 
 ```python
-si1 = run_scf(silicon, si_pseudo, conv_thr=1e-8)
-si2_fresh = run_scf(collinear, si_pseudo, conv_thr=1e-8)
-si2_cont = run_scf(collinear, si_pseudo, conv_thr=1e-8, starting_from=si1)
-si4_fresh = run_scf(spinor, si_pseudo, conv_thr=1e-8)
-si4_cont = run_scf(spinor, si_pseudo, conv_thr=1e-8, starting_from=si2_cont)
+si1 = si_calc.get_scf()
+
+# Continued: the derived calculators already carry the seed, so this is one call.
+si2_cont = collinear_calc.get_scf()
+si4_cont = spinor_calc.get_scf()
+
+# Fresh: the same systems with no seed at all, which is `starting_from=None`.
+si2_fresh = collinear_calc.get_scf(starting_from=None)
+si4_fresh = spinor_calc.get_scf(starting_from=None)
 
 for name, result in [("nspin=1", si1), ("nspin=2 from atoms", si2_fresh),
                      ("nspin=2 continued", si2_cont), ("nspin=4 from atoms", si4_fresh),
@@ -86,11 +111,11 @@ print(f"\n2 -> 4 continued vs fresh: {si4_cont.total_energy - si4_fresh.total_en
 
     nspin=1                  -15.794495570 Ry    5 iterations
     nspin=2 from atoms       -15.794495568 Ry    5 iterations
-    nspin=2 continued        -15.794495570 Ry    4 iterations
+    nspin=2 continued        -15.794495568 Ry    5 iterations
     nspin=4 from atoms       -15.794495570 Ry    5 iterations
-    nspin=4 continued        -15.794495571 Ry    1 iterations
+    nspin=4 continued        -15.794495570 Ry    5 iterations
     
-    2 -> 4 continued vs fresh: -8.2e-10 Ry
+    2 -> 4 continued vs fresh: +0.0e+00 Ry
 
 
 Silicon is not magnetic, so the seeded moment decays and all five runs are the same
@@ -143,7 +168,7 @@ print("\nm (mu_B):  collinear |m| = %.4f  ->  noncollinear (%.4f, %.4f, %.4f)"
     noncollinear continued    -55.69968430 Ry   1 iteration
     difference: +2.0e-08 Ry
     
-    m (mu_B):  collinear |m| = 3.1751  ->  noncollinear (3.1755, 0.0000, 0.0000)
+    m (mu_B):  collinear |m| = 3.1751  ->  noncollinear (3.1755, 0.0000, -0.0000)
 
 
 The collinear run knows only `|m|`; the continuation puts that number on the axis the
@@ -256,7 +281,7 @@ print("converged    int m = (%.4f, %.4f, %.4f)" % tuple(integrate(c) for c in ve
 
     collinear    int n =   8.0000   int m_z =  3.1751
     promoted     int n =   8.0000   int m_x =  3.1751
-    converged    int m = (3.1755, 0.0000, 0.0000)
+    converged    int m = (3.1755, -0.0000, 0.0000)
 
 
 ## Switching spin-orbit coupling on

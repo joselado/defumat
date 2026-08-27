@@ -9,7 +9,21 @@ runs**.
 `pw.x` has no spiral, so as in notebook 12 the validation is identities and finite
 differences. **Only two terms of the energy depend on `q`** — $|k \pm q/2 + G|^2$ and
 $v_{kb}(k \pm q/2)$ — because at frozen coefficients the rotated-frame density is lattice
-periodic on an FFT box that does not move. Phase P21.
+periodic on an FFT box that does not move.
+
+$\mathbf q$ is a coordinate like an atomic position, so its gradient is the same kind of
+partial derivative the force is -- taken at frozen periodic parts $u$ and a frozen sphere:
+
+$$\frac{dE}{d\mathbf q} = \left.
+   \frac{\partial E_{\rm tot}[\{u\}, \mathbf q]}{\partial \mathbf q}
+   \right|_{\{u\}\ \rm fixed},
+\qquad
+\mathbf q^{\,\rm new} = \mathbf q - s\,H^{-1}\frac{dE}{d\mathbf q}$$
+
+with BFGS run on the **reciprocal** metric $b_i\cdot b_j$, since that is the space
+$\mathbf q$ lives in.
+
+Phase P21.
 
 
 ```python
@@ -19,14 +33,10 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.forces.energy import state_from_result
 from pypresso.forces.spiral import compute_spiral_gradient, spiral_energy
-from pypresso.io.pwin import parse_pw_input
-from pypresso.pseudo import read_upf
 from pypresso.scf import run_scf
-from pypresso.scf.driver import Calculation
-from pypresso.system import build_system
-from pypresso.workflows.spiral import relax_spiral_q, run_spiral_scan
 
 PSEUDO, GENERATED = Path("../tests/data/pseudo"), Path("../tests/data/qe")
 CHAIN = (GENERATED / "h-chain-spiral.in").read_text()
@@ -35,19 +45,18 @@ CHAIN = (GENERATED / "h-chain-spiral.in").read_text()
 def chain_at(q3, ecutwfc=25.0):
     text = CHAIN.replace("spiral_q(3) = 0.25", f"spiral_q(3) = {q3}")
     text = text.replace("ecutwfc = 25.0", f"ecutwfc = {ecutwfc}")
-    system = build_system(parse_pw_input(text))
-    return system, tuple(read_upf(PSEUDO / s.pseudo_file)
-                         for s in system.structure.species)
-
-
-def converge(q3, ecutwfc=25.0):
-    system, pseudos = chain_at(q3, ecutwfc)
-    calculation = Calculation(system, pseudos)
-    return calculation, run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12,
+    return Calculator.from_text(text, PSEUDO, announce=False, conv_thr=1e-12,
                                 mixing_beta=0.3, max_iterations=300)
 
 
-calculation, result = converge(0.3)
+def converge(q3, ecutwfc=25.0):
+    calc = chain_at(q3, ecutwfc)
+    calc.get_scf()
+    return calc
+
+
+chain = converge(0.3)
+calculation, result = chain.calculation, chain.scf_result
 gradient = compute_spiral_gradient(calculation, result)
 
 # The identity that has to hold before the derivative means anything: the functional being
@@ -63,7 +72,7 @@ print("the chain runs along z, so the transverse components are zero by symmetry
 
     spiral_energy at the converged state  -0.95523772122865 Ry
     the SCF's own total energy            -0.95523772122865 Ry
-    difference                            1.1e-15 Ry
+    difference                            4.4e-16 Ry
     
     dE/dq (lattice coordinates)   [ 0.         -0.         -0.01090176]
     the chain runs along z, so the transverse components are zero by symmetry: 6.3e-11
@@ -89,7 +98,7 @@ finite = (float(spiral_energy(calculation, jnp.asarray(plus), state))
 print("differentiating the functional:  finite difference %.12f   jax.grad %.12f   (%.1e)"
       % (finite, gradient.gradient[2], finite - gradient.gradient[2]))
 
-_, pseudos = chain_at(0.3)
+pseudos = chain.pseudos
 print("\n%8s %20s %20s %13s"
       % ("delta", "re-converged FD", "jax.grad", "difference"))
 for step in (0.04, 0.02):
@@ -104,7 +113,7 @@ for step in (0.04, 0.02):
           % (step, finite, gradient.gradient[2], finite - gradient.gradient[2]))
 ```
 
-    differentiating the functional:  finite difference -0.010901763214   jax.grad -0.010901763190   (-2.4e-11)
+    differentiating the functional:  finite difference -0.010901763164   jax.grad -0.010901763190   (2.6e-11)
     
        delta      re-converged FD             jax.grad    difference
 
@@ -127,8 +136,9 @@ offline; it is nine SCF runs.)
 
 ```python
 for q3 in (0.0, 0.5):
-    c, r = converge(q3)
-    g = compute_spiral_gradient(c, r)
+    edge = converge(q3)
+    r = edge.scf_result
+    g = compute_spiral_gradient(edge.calculation, r)
     print("q3 = %4.1f   E = %.10f Ry   |m| = %.4f mu_B   max |dE/dq| = %.1e"
           % (q3, r.total_energy, np.linalg.norm(r.magnetization_vector),
              np.abs(g.gradient).max()))
@@ -152,8 +162,8 @@ and it is two orders of magnitude out on a milli-Rydberg magnetic surface — so
 
 
 ```python
-system, pseudos = chain_at(0.30, ecutwfc=40.0)
-relaxed = relax_spiral_q(system, pseudos, mixing_beta=0.3, free=(0, 0, 1), nstep=20)
+downhill = chain_at(0.30, ecutwfc=40.0)
+relaxed = downhill.get_spiral_relaxation(free=(0, 0, 1), nstep=20)
 
 print("%5s %10s %16s %13s %8s" % ("step", "q3", "E (Ry)", "max |dE/dq|", "SCF its"))
 for step in relaxed.steps:
@@ -165,23 +175,22 @@ print("\nconverged = %s   q = %s   (the answer it had to find is q3 = 0.5)"
 ```
 
      step         q3           E (Ry)   max |dE/dq|  SCF its
-        1    0.30000    -0.9620586875      5.08e-03        9
-        2    0.34463    -0.9625849398      4.76e-03        6
-        3    0.39372    -0.9630968967      3.77e-03        6
-        4    0.46736    -0.9635797030      1.29e-03        6
-        5    0.50563    -0.9636328653      2.21e-04        4
-        6    0.50003    -0.9636298145      1.32e-06        4
+        1    0.30000    -0.9620589569      5.03e-03       14
+        2    0.34463    -0.9625849405      4.76e-03        8
+        3    0.39372    -0.9630968974      3.77e-03        8
+        4    0.46736    -0.9635797035      1.29e-03        8
+        5    0.50559    -0.9636329038      2.20e-04        8
+        6    0.50001    -0.9636298167      5.57e-07        8
     
-    converged = True   q = [0.       0.       0.500026]   (the answer it had to find is q3 = 0.5)
+    converged = True   q = [0.       0.       0.500014]   (the answer it had to find is q3 = 0.5)
 
 
 
 ```python
 scan_q = np.linspace(0.0, 0.6, 13)
-scan = run_spiral_scan(chain_at(0.0, ecutwfc=40.0)[0], pseudos,
-                       np.column_stack([np.zeros_like(scan_q), np.zeros_like(scan_q),
-                                        scan_q]),
-                       conv_thr=1e-10, mixing_beta=0.3, max_iterations=300)
+scan = chain_at(0.0, ecutwfc=40.0).get_spiral_scan(
+    np.column_stack([np.zeros_like(scan_q), np.zeros_like(scan_q), scan_q]),
+    conv_thr=1e-10)
 
 fig, (top, bottom) = plt.subplots(2, 1, figsize=(7, 7), sharex=True,
                                   gridspec_kw={"height_ratios": [2, 1]})

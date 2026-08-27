@@ -14,6 +14,19 @@ it costs 22 to 139 diagonalisations where Kerker costs 14 to 36. What it does th
 can is converge on an **unstable** SCF solution: bcc iron's non-magnetic state, which is a
 saddle of the energy and the reference a magnetic stabilisation energy is quoted against.
 
+Self-consistency is a fixed point, and a root of the residual is the same statement:
+
+$$\rho = F[\rho]
+\qquad\Longleftrightarrow\qquad
+r[\rho] \equiv F[\rho] - \rho = 0$$
+
+Mixing iterates the first; `scf_solver = 'newton-krylov'` solves the second. Kerker
+preconditioning divides out the $q^{-2}$ divergence of a metal's dielectric function
+before the residual is mixed:
+
+$$\beta \;\longrightarrow\; \beta\,
+   \frac{|\mathbf G|^2}{|\mathbf G|^2 + q_{\rm TF}^2}$$
+
 
 ```python
 from pathlib import Path
@@ -21,18 +34,17 @@ import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
+from pypresso import Calculator
 from pypresso.scf import Calculation, run_scf
-from pypresso.system import build_system
 
 PSEUDO = Path("../tests/data/pseudo")
 
 def load(name):
-    system = build_system(read_pw_input(Path("../benchmarks") / name))
-    return system, tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
+    return Calculator.from_file(Path("../benchmarks") / name, pseudo_dir=PSEUDO,
+                                announce=False, conv_thr=1e-8, max_iterations=200)
 
-slab, slab_pseudos = load("al-slab.in")
+aluminium = load("al-slab.in")
+slab, slab_pseudos = aluminium.system, aluminium.pseudos
 print(f"Al(100), {len(slab.structure.positions)} layers, "
       f"c = {slab.cell.at[2, 2]:.1f} bohr, {slab.kpoints.coords.shape[0]} k-points")
 ```
@@ -49,8 +61,7 @@ and it is visible in the first few iterations of a plain Anderson run.
 
 
 ```python
-anderson = run_scf(slab, slab_pseudos, calculation=Calculation(slab, slab_pseudos),
-                   conv_thr=1e-8, max_iterations=200)
+anderson = aluminium.get_scf()
 energies = [h["total_energy"] for h in anderson.history]
 print(f"Anderson: {anderson.iterations} iterations, E = {anderson.total_energy:.8f} Ry")
 print(f"  worst total energy along the way: {max(energies):+.2f} Ry  "
@@ -78,13 +89,12 @@ divergence to divide out, so a spin-polarized density is rotated into
 ```python
 from pypresso.scf.mixing import thomas_fermi_screening
 
-nelec = Calculation(slab, slab_pseudos).nelec
+nelec = aluminium.calculation.nelec
 q_tf = thomas_fermi_screening(float(slab.cell.volume), nelec) ** 0.5
 print(f"q_TF from the cell = {q_tf:.3f} 1/bohr   (a hand-picked 1.5 over-screens by "
       f"{(1.5/q_tf)**2:.1f}x in q^2)")
 
-kerker = run_scf(slab, slab_pseudos, calculation=Calculation(slab, slab_pseudos),
-                 conv_thr=1e-8, max_iterations=200, mixing_mode="kerker")
+kerker = aluminium.get_scf(mixing_mode="kerker")
 print(f"Anderson          {anderson.iterations:3d} iterations")
 print(f"Anderson + Kerker {kerker.iterations:3d} iterations   "
       f"(same answer to {abs(kerker.total_energy - anderson.total_energy):.1e} Ry)")
@@ -110,9 +120,8 @@ Krylov step are comparable, since a diagonalisation is 84% of an SCF step.
 
 
 ```python
-newton = run_scf(slab, slab_pseudos, calculation=Calculation(slab, slab_pseudos),
-                 conv_thr=1e-8, max_iterations=200, scf_solver="newton-krylov",
-                 scf_solver_options={"forcing": 0.5})
+newton = aluminium.get_scf(scf_solver="newton-krylov",
+                           scf_solver_options={"forcing": 0.5})
 
 fig, ax = plt.subplots(figsize=(7.0, 4.2))
 for label, result, colour in [("Anderson", anderson, "tab:blue"),
@@ -182,11 +191,12 @@ mixing leaves and Newton returns is 0.08 to 0.12.
 
 
 ```python
-iron, iron_pseudos = load("fe-unstable.in")
+ferrum = load("fe-unstable.in")
+iron, iron_pseudos = ferrum.system, ferrum.pseudos
 options = dict(conv_thr=1e-8, max_iterations=200)
 
 # The symmetric root: nothing in the SCF breaks spin symmetry on its own.
-calculation = Calculation(iron, iron_pseudos)
+calculation = ferrum.calculation
 rho = np.asarray(calculation.starting_density())
 symmetric = jnp.asarray(np.repeat(rho.mean(axis=0, keepdims=True), rho.shape[0], axis=0))
 root = run_scf(iron, iron_pseudos, calculation=Calculation(iron, iron_pseudos), **options,
@@ -207,9 +217,7 @@ saddle = run_scf(iron, iron_pseudos, calculation=Calculation(iron, iron_pseudos)
                                      "max_iterations": 12, "kerker": True})
 
 # The check is free and shares nothing with either run above.
-nonmagnetic, nm_pseudos = load("fe-unstable-nonmagnetic.in")
-reference = run_scf(nonmagnetic, nm_pseudos, **options,
-                    calculation=Calculation(nonmagnetic, nm_pseudos))
+reference = load("fe-unstable-nonmagnetic.in").get_scf()
 
 print(f"{'from the same kicked symmetric root':<40} {'E (Ry)':>15} {'m (mu_B)':>10}")
 print(f"{'  Anderson, nspin = 2':<40} {mixed.total_energy:15.8f} "
@@ -226,10 +234,10 @@ print(f"iron's magnetic stabilisation energy = "
 
     from the same kicked symmetric root               E (Ry)   m (mu_B)
       Anderson, nspin = 2                       -55.44642602     3.4052
-      Newton-Krylov, nspin = 2                  -55.38228996     0.0007
+      Newton-Krylov, nspin = 2                  -55.38228995     0.0002
       nspin = 1 (independent reference)         -55.38228995         --
     
-    Newton's root matches the nspin = 1 reference to 1.5e-08 Ry
+    Newton's root matches the nspin = 1 reference to 1.6e-09 Ry
     iron's magnetic stabilisation energy = 64.1 mRy
 
 
@@ -304,8 +312,9 @@ back.
 ```python
 from pypresso.hubbard import uniform_ns
 
-nickel, nickel_pseudos = load("ni-u-unstable.in")
-setup = Calculation(nickel, nickel_pseudos)
+nickel_calc = load("ni-u-unstable.in")
+nickel, nickel_pseudos = nickel_calc.system, nickel_calc.pseudos
+setup = nickel_calc.calculation
 print("init_ns eigenvalues per spin (Hund's rule):",
       *[np.round(np.linalg.eigvalsh(np.asarray(setup.starting_ns())[s, 0]), 2)
         for s in range(2)])
