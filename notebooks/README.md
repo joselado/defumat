@@ -45,11 +45,19 @@ ends with a pointer to both.
 - **Every new feature adds a notebook, or extends one.** A phase is not finished until its
   notebook exists. This is a standing requirement, not a per-phase decision.
 - **Drive it with a `Calculator`.** `Calculator.from_file(input, pseudo_dir=...)` and its
-  `get_*` methods (notebook 28) are the short form, and a new notebook should open with
-  them rather than with the `read_pw_input` / `read_upf` / `build_system` trio. The
-  functional entry points are unchanged and are what the notebooks written before P38
-  still use, so both spellings appear here; either is correct, and neither should be
-  mixed inside one notebook without saying why.
+  `get_*` methods (notebook 28) are how every notebook here opens, and a new one should
+  do the same rather than reach for the `read_pw_input` / `read_upf` / `build_system`
+  trio. The functional entry points are unchanged and still correct; a notebook that
+  drops back to one **says why in place**, and there are only four reasons so far: a
+  *timing* has to defeat the cache the calculator exists to provide (03); a run that
+  reads one system at *another's* converged density is not something one calculator can
+  express (06); a finite difference of the **frozen-basis** energy needs
+  `Calculation.at_positions`, since a new calculator would rebuild the setup (09); and a
+  refusal is sometimes the thing being demonstrated (20).
+- **State the observable.** Every notebook heads with the equation of the quantity it
+  computes, in display maths -- the thing a reader wants before any code. Where the
+  quantity is a derivative, say *of what, holding what fixed*: that distinction is the
+  content of half these phases.
 - **Five minutes.** Header saying what this computes and the headline number; the shortest
   code that runs it; **one figure that shows the physics** — a band structure wherever the
   feature shows in bands; one table against Quantum ESPRESSO; at most one "how it works"

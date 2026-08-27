@@ -41,6 +41,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
 from pypresso.response import (
@@ -58,10 +59,11 @@ from pypresso.workflows.nscf import fixed_density_states
 CASES = Path("../tests/data/qe")
 PSEUDO = Path("../tests/data/pseudo")
 
-system = build_system(read_pw_input(CASES / "si-epsilon.in"))
-pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-calculation = Calculation(system, pseudos)
-scf = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12)
+silicon = Calculator.from_file(CASES / "si-epsilon.in", pseudo_dir=PSEUDO,
+                              announce=False, conv_thr=1e-12)
+system, pseudos = silicon.system, silicon.pseudos
+calculation = silicon.calculation
+scf = silicon.get_scf()
 
 print(f"total energy   {scf.total_energy:.9f} Ry")
 print(f"pw.x           -15.84452726 Ry")
@@ -218,9 +220,7 @@ Then the induced charge screens the field, and the loop that follows is `solve_e
 
 
 ```python
-efield = dielectric_tensor(
-    calculation, scf.wavefunctions, scf.eigenvalues, scf.density,
-)
+efield = silicon.get_dielectric_tensor()
 
 np.set_printoptions(precision=6, suppress=True)
 print("dielectric tensor, cartesian axes:")
@@ -230,12 +230,12 @@ print(f"departure from cubic             : {efield.anisotropy:.1e}")
 ```
 
     dielectric tensor, cartesian axes:
-    [[13.806646 -0.        0.      ]
-     [ 0.       13.806646 -0.      ]
-     [ 0.       -0.       13.806646]]
+    [[13.806646  0.       -0.      ]
+     [ 0.       13.806646  0.      ]
+     [-0.       -0.       13.806646]]
     
     iterations to |ddv_scf|^2 < 1e-14 : 8
-    departure from cubic             : 2.7e-15
+    departure from cubic             : 4.4e-15
 
 
 
@@ -331,15 +331,11 @@ smooth and the factorisation is not. `compute_qdipol`'s closed form is transcrib
 
 
 ```python
-ultrasoft = build_system(read_pw_input(CASES / "si-epsilon-us.in"))
-us_pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in ultrasoft.structure.species)
-us_calculation = Calculation(ultrasoft, us_pseudos)
-us_scf = run_scf(ultrasoft, us_pseudos, calculation=us_calculation, conv_thr=1e-12)
-
-us_field = dielectric_tensor(
-    us_calculation, us_scf.wavefunctions, us_scf.eigenvalues, us_scf.density,
-    us_scf.becsum,
-)
+# The ultrasoft `becsum` is what an ultrasoft response needs and what a
+# hand-written call forgets; the calculator passes it.
+us_calc = Calculator.from_file(CASES / "si-epsilon-us.in", pseudo_dir=PSEUDO,
+                               announce=False, conv_thr=1e-12)
+us_field = us_calc.get_dielectric_tensor()
 us_born = np.diag(us_field.born_charges[0])[0]
 print(f"ultrasoft silicon:  eps = {us_field.isotropic:.6f}    ph.x 14.325270")
 print(f"                    anisotropy {us_field.anisotropy:.1e}")

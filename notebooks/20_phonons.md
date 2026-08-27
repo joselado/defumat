@@ -43,6 +43,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
 from pypresso.response import dynamical_matrix
@@ -52,10 +53,11 @@ from pypresso.system import build_system
 CASES = Path("../tests/data/qe")
 PSEUDO = Path("../tests/data/pseudo")
 
-system = build_system(read_pw_input(CASES / "si-epsilon.in"))
-pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-calculation = Calculation(system, pseudos)
-scf = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12)
+silicon = Calculator.from_file(CASES / "si-epsilon.in", pseudo_dir=PSEUDO,
+                              announce=False, conv_thr=1e-12)
+system, pseudos = silicon.system, silicon.pseudos
+calculation = silicon.calculation
+scf = silicon.get_scf()
 
 print(f"total energy   {scf.total_energy:.9f} Ry")
 print(f"pw.x           -15.84452726 Ry")
@@ -72,9 +74,7 @@ all of them together, and then six `jvp`s of the force's own gradient.
 
 
 ```python
-phonons = dynamical_matrix(
-    calculation, scf.wavefunctions, scf.eigenvalues, scf.density, scf.becsum,
-)
+phonons = silicon.get_phonons()
 
 print(f"converged in {len(phonons.history)} iterations, "
       f"{phonons.average_iterations:.0f} CG steps per band per solve")
@@ -85,7 +85,7 @@ print()
 print("  ph.x:      2.045258 x3,   510.151844 x3")
 ```
 
-    converged in 9 iterations, 28 CG steps per band per solve
+    converged in 10 iterations, 28 CG steps per band per solve
     
       freq (1) =     4.087839 cm-1
       freq (2) =     4.087839 cm-1
@@ -118,11 +118,11 @@ print(f"acoustic sum rule D_00 + D_01   {on_site[0, 0] + between[0, 0]:.3e}")
      [ 0.        0.276582 -0.      ]
      [ 0.       -0.        0.276582]]
     D[Si_1, Si_2] =
-     [[-0.27654648  0.         -0.        ]
-     [-0.         -0.27654648 -0.        ]
-     [-0.          0.         -0.27654648]]
+     [[-0.27654648 -0.          0.        ]
+     [-0.         -0.27654648  0.        ]
+     [ 0.         -0.         -0.27654648]]
     
-    isotropic on-site block to      1.1e-16
+    isotropic on-site block to      5.6e-17
     asymmetry max|D - D^T|          1.4e-16
     acoustic sum rule D_00 + D_01   3.552e-05
 
@@ -222,16 +222,13 @@ cheapest diagnostic there is, and hiding it would hide a real error just as effe
 
 
 ```python
-imposed = dynamical_matrix(
-    calculation, scf.wavefunctions, scf.eigenvalues, scf.density, scf.becsum,
-    acoustic_sum_rule=True,
-)
+imposed = silicon.get_phonons(acoustic_sum_rule=True)
 print("without the sum rule:", np.array2string(phonons.frequencies, precision=3))
 print("with it            :", np.array2string(imposed.frequencies, precision=3))
 ```
 
     without the sum rule: [  4.088   4.088   4.088 510.102 510.102 510.102]
-    with it            : [-8.084e-06 -1.191e-06  7.752e-06  5.101e+02  5.101e+02  5.101e+02]
+    with it            : [-9.041e-06 -6.024e-06 -3.547e-06  5.101e+02  5.101e+02  5.101e+02]
 
 
 ## 5. A metal, where the same machinery needs a different weight
@@ -257,15 +254,9 @@ are acoustic and three are folded in from the zone boundary.
 
 
 ```python
-al2 = build_system(read_pw_input(CASES / "al2-metal.in"))
-al2_pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in al2.structure.species)
-al2_calculation = Calculation(al2, al2_pseudos)
-al2_scf = run_scf(al2, al2_pseudos, calculation=al2_calculation, conv_thr=1e-12)
-
-metal = dynamical_matrix(
-    al2_calculation, al2_scf.wavefunctions, al2_scf.eigenvalues,
-    al2_scf.density, al2_scf.becsum,
-)
+aluminium = Calculator.from_file(CASES / "al2-metal.in", pseudo_dir=PSEUDO,
+                                 announce=False, conv_thr=1e-12)
+metal = aluminium.get_phonons()
 
 QE = np.array([1.108857, 1.827469, 1.924700, 146.710511, 146.714378, 311.035401])
 print("        here        ph.x")
@@ -352,10 +343,12 @@ what a refusal is for.
 
 
 ```python
-us = build_system(read_pw_input(CASES / "si-epsilon-us.in"))
-us_pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in us.structure.species)
+# The refusal reaches the bound method exactly as it reaches the function: a
+# facade that swallowed it would be a facade that broke the promise.
+us = Calculator.from_file(CASES / "si-epsilon-us.in", pseudo_dir=PSEUDO,
+                          announce=False)
 try:
-    dynamical_matrix(Calculation(us, us_pseudos), None, np.zeros((1, 1, 1)), None)
+    dynamical_matrix(us.calculation, None, np.zeros((1, 1, 1)), None)
 except NotImplementedError as refusal:
     print(refusal)
 ```
