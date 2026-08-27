@@ -439,6 +439,13 @@ def _first_step_scale(optimizer, gradient, settings: BFGSSettings) -> float:
     scale is irrelevant, so it falls back to QE's.
     """
     step = (optimizer.inverse_metric @ np.asarray(gradient)).reshape(1, 3)
+    # The metric has to exist before it can be measured against. ``BFGS`` builds
+    # it for **zero** blocks in ``__post_init__`` and fills it in at the top of
+    # the first ``step`` (``_rebuild_metric(nat)``) -- and this runs *before*
+    # that first step, so without this line ``_norm`` reduces over an empty
+    # array and raises. One block, because a spiral's ``q`` is a single
+    # three-vector coordinate; ``step`` rebuilds it for itself either way.
+    optimizer._rebuild_metric(1)
     length = optimizer._norm(step)
     if length < 1.0e-30:
         return 1.0
