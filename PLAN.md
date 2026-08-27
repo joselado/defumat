@@ -4838,6 +4838,355 @@ here already.
 
 *Notebook 26.*
 
+### P37 — The bootstrap kernel: excitons from TDDFT. ✅ DONE.
+
+`pypresso/tddft/`, `pypresso/workflows/tddft.py`, `tests/regression/test_tddft.py`,
+`tests/unit/test_tddft_machinery.py`. The design below was written and reviewed
+twice **before** the work; what the work then found is at the end of the entry,
+and three of its four findings share one shape — they produce a spectrum that is
+smooth, positive, has the right peaks, and is wrong.
+
+**What it computes.** The macroscopic dielectric function `eps_M(w)` of an
+insulator in the optical limit, from the Dyson equation of TDDFT with an
+exchange-correlation kernel that is *not* zero — so that `Im eps_M(w)` carries
+the bound electron-hole pair that RPA and ALDA cannot produce. The kernel is
+Sharma, Dewhurst, Sanna and Gross's **bootstrap** (PRL **107**, 186401 (2011);
+arXiv:1107.0199), which is Elk's `fxctype = 210`, and its single-iteration form
+`211`. There is no `pw.x` counterpart and no QE counterpart at all: `TDDFPT/` is
+a Liouville-Lanczos solver with ALDA/RPA and has no bootstrap kernel and no
+Dyson-in-G-space route (`grep -ril bootstrap` over the vendored tree hits only
+`Modules/mp_pools.f90`, unrelated). **The reference is Elk**, whose source and a
+built binary are outside this repository (see the private notes).
+
+**The kernel is one algebraic line and the phase is a transcription. Say so.**
+
+    f_xc^BS(q, w) = - eps^-1(q, 0) v(q) / (eps_0(q, 0) - 1),   eps_0 = 1 - v chi_0
+
+with `eps^-1` determined *self-consistently* against the Dyson equation itself:
+set `f_xc = 0`, solve for `eps^-1`, rebuild `f_xc`, repeat. `genvfxc.f90` is that
+in symmetrised form — with `X = v^1/2 chi_0 v^1/2` and `F~ = v^-1/2 f_xc v^-1/2`,
+it is `F~ = eps^-1(w=0) / X_00`, and `211` is the same loop stopped after one
+pass. There is nothing here to differentiate, and inventing an autodiff story for
+it would be dishonest. **Two genuine ones exist and are the phase's real content**
+— see the head/wings and the kernel registry below.
+
+**The expensive part is the object this code does not have.** `chi_0(G, G', w)`
+as a *matrix* over a response G-set and a frequency axis. Everything in
+`pypresso/response/` is Sternheimer, static, and gives `chi_0` only as an
+operator `drho = chi_0 dV`. So P37's weight is `chi_0`, not the kernel.
+
+**Adler-Wiser, and the hybrid is a trap.** `chi_0` is built by sum over states
+(`genvchi0.f90`), from an NSCF with empty bands — not by a column-per-`G'`
+Sternheimer solve. The temptation is real, because the *kernel* needs only
+`w = 0` where Sternheimer lives: resist it. `tddftlr.f90` feeds `genvfxc` the
+`w = 0` **slice of the same array** the Dyson equation then inverts at every `w`,
+so the kernel and the spectrum carry one set of convergence errors — the same
+band truncation, the same `swidth`, the same response cutoff. A Sternheimer
+kernel would be band-complete and `eta = 0` against a truncated, broadened
+spectrum, the `210` self-consistency would couple the two, and **no diagnostic
+here can see that inconsistency**. One builder; the Sternheimer stack is the
+referee instead (validation, below), which is a better use of it than a second
+implementation of one object.
+
+The frequency axis is nearly free in that layout and it decides the assembly.
+Per `(v, c, k)` pair the body is a fixed Hermitian rank-1 matrix
+`(sqrt(v) rho_G)(sqrt(v) rho_G')^*` times a scalar `wt / (e_ij + w + i eta)`, so
+the pair densities — one FFT of `conj(u_v) u_c` per pair, gathered onto the
+response sphere — accumulate as a `(pairs, ngrf)` array per k-chunk and the
+assembly is **one GEMM per frequency**. Chunked through `map_k`/`sum_k` per the
+batching rule, which is what keeps it GPU-shaped.
+
+**q = 0 only, refused by name otherwise.** Optical excitons are the deliverable
+and every matrix element then lives on one k, one sphere, one grid. Finite `q`
+needs the `k+q` two-sphere machinery P19 built for the spiral and P28's successor
+will need for phonons away from `Gamma`; `q` stays in the signature so that it
+slots in rather than being retrofitted.
+
+**Transcribe the `t3hw` layout from the start**: at `q = 0` the head is a 3x3
+block and the wings are `3 x ngrf`, so `nm = ngrf + 2`, and the bootstrap's `z1`
+takes the trace over three. Two details of `genvchi0.f90` that look like noise
+and are not — the head is *re-accumulated* with an extra `1/w` factor
+(`cw/wrf`), which is a numerical-accuracy device rather than redundancy; and
+`init3.f90` forces the kernel's frequency to `0 + i*swidth`, so the "static"
+point carries the broadening. Keep the `i eta`. **Deviation, stated:** append a
+dedicated `w = 0` point rather than clobbering the caller's first grid point as
+Elk does.
+
+**The one line of Elk that must *not* be transcribed faithfully is the head.**
+`genvchi0` reads bare momentum matrix elements `pmat`, which is legitimate in an
+all-electron code and silently wrong in a pseudopotential one, where
+`[H, r] != p` because of the nonlocal projectors. What is needed is the velocity
+operator — and that is `pypresso/response/velocity.py`, one `jvp` of `H(k)` at a
+frozen sphere, rule D2 cashed in for the third time. **This is the phase's honest
+autodiff claim**: not that the kernel is differentiated, but that the ingredient
+Elk reads off a file is here a derivative of the Hamiltonian, and has to be.
+
+**The scissors shift is part of the method, not a nicety.** PRL Eq. (3) replaces
+`chi_0` by a gap-corrected model response, and every published bootstrap spectrum
+is computed that way; without it nothing validates. pypresso has no scissors knob
+at all today (`grep -rn scissor pypresso/` is empty), so P37 adds one — and with
+it Elk's renormalisation of the matrix elements, `getpmat.f90:61`:
+`p -> p * e_ij/(e_ij -+ Delta)` for the valence-conduction pairs, the Del
+Sole-Girlanda factor, since the eigenvalues have already been shifted.
+
+**Modules.** `pypresso/tddft/`, shaped like `topology/` — a new subsystem rather
+than a fourth kind of thing inside `response/`, because nothing here is a
+Sternheimer solve.
+
+- `tddft/chi0.py` — pair densities, head and wings from the velocity operator,
+  the symmetrised `v^1/2 chi_0 v^1/2` in the `nm = ngrf + 2` layout, the GEMM per
+  frequency. States from an NSCF with an **energy window**, not a band count.
+- `tddft/kernels.py` — the `fxc` **name registry**: `rpa`, `alda`, `lrc`,
+  `bootstrap`, `bootstrap-1`. `alda` is the second autodiff story and is nearly
+  free — `f_xc` is one `jvp` of `v_of_rho`, which `efield.py` already takes as
+  `dv_of_drho` — and it is the **control experiment** the notebook's claim needs,
+  since "RPA and ALDA cannot bind an exciton" has to be shown rather than
+  asserted. `lrc` is Reining/Botti's `-alpha/q^2` (Elk's `fxclrc`, `fxctype 200`),
+  two lines, and the foil the bootstrap self-consistently approximates.
+- `tddft/dyson.py` — `eps_0 = 1 - X`, the solve and inversion per frequency, the
+  3x3 macroscopic head, and the `210` fixed point with its convergence test.
+- `workflows/tddft.py::run_absorption` — an `eqx.Module` result carrying the
+  frequency grid, `eps_M(w)`, the LRC `alpha` the kernel is equivalent to, the
+  iteration count, and `static_residual`. **What Elk prints under that name is
+  not `F~_00`**: by the time `tddftlr.f90` reads `vfxc(1,1,1)`, `genvfxc` has
+  already right-multiplied by `vchi0`, so the array holds `F~ X` and the printed
+  number is `-4 pi (F~ X)_00` — and `(F~ X)_00 = (eps^-1 X)_00 / X_00` is not
+  `F~_00 = eps^-1_00 / X_00`. Elk's own comment on that line ("head of matrix
+  v^-1/2 f_xc v^-1/2") is stale. The convergence test reads the same array;
+  transcribe both faithfully, and compare like with like.
+
+**Refused by name.** Ultrasoft and PAW — the matrix element
+`<v k| e^{-i(q+G) r} |c k>` needs the augmentation charge, which is
+`topology/augmentation.py`'s `augmentation_at_q` rather than `qq` and is
+reachable later, not now. Metals — the `f_i - f_j` weight kills the intraband
+term at `q = 0`, so the Drude response is missing entirely and Elk's `tddftlr`
+does not add it either. `nspin != 1`, noncollinear and spin-orbit (Elk's spin
+path is a separate routine, `tddftsplr.f90`). Finite `q`. **A reduced k-set** —
+`genvchi0` sums the *full* non-reduced grid, and symmetrising `chi_0(G, G')` on a
+wedge needs a double G-space rotation that P36's rank-N symmetriser is not (it is
+Cartesian). The compensation is that the shifted-grid refusal of P24 does not
+apply, because nothing is being symmetrised; state the trade rather than
+inheriting the refusal. And **non-convergence of the bootstrap loop is an error**,
+not a warning, on `require_converged_responses`' precedent — Elk stops at
+`maxit = 500`. Whether TB09 eigenstates may feed `chi_0` is decided explicitly
+(they may: the sum over states needs no functional derivative, and mBJ +
+bootstrap is a published combination) rather than left to whatever happens.
+
+**The traps, ranked by how quietly they fail.**
+
+1. **Band truncation has no refusal.** An underconverged spectrum is perfectly
+   plausible. So the result carries `static_residual` — the sum-over-states
+   `eps_M(w -> 0)` minus the Sternheimer value — computed always and reported, on
+   P29's `pulay_error` precedent. It turns the phase's one unrefusable error into
+   a number on the result object. **Kernel-matched, for the reason validation
+   check 1 is**: ALDA-Dyson against the existing Sternheimer, RPA-Dyson against
+   the xc-off flag. A `bootstrap` spectrum differenced against a Sternheimer
+   number that contains `f_xc` measures the kernel, not the truncation, and stops
+   being the diagnostic it is there to be.
+2. **Both pair orderings.** Elk's loop runs all `(i, j)` with the `(f_i - f_j)`
+   sign — resonant *and* antiresonant. Restricting to `v < c` and doubling gets
+   `Re` roughly right and `Im` wrong.
+3. **The `degspin` factor** in the weight: the classic silent factor of two,
+   which the static identity and the f-sum both catch.
+4. **`nbnd` cut through a degenerate conduction multiplet.** Individual matrix
+   elements inside a multiplet are gauge-dependent (rule D4) and only the sum
+   over the whole multiplet is not — which is why the window is an energy window
+   (Elk's `emaxrf`), not a band count.
+5. **The response G-set is its own cutoff** (Elk's `gmaxrf`, default 3.0), not
+   the density's: inheriting `ecutrho` makes `nm` explode, and cutting it to the
+   head removes the local-field body that is part of the physics. Own knob, own
+   convergence figure in the notebook.
+6. **Do not copy Elk's single precision.** `vchi0` is `complex(4)` there; here the
+   dtype comes from the policy object and every correctness claim is float64.
+
+**Validation, ranked — and the obvious identity is mis-paired.** The tempting
+check is "RPA sum-over-states at `w -> 0` against the existing Sternheimer
+`eps_infinity`". It is wrong as stated: `efield.py`'s screening kernel is one
+`jvp` of `Calculation.potential`, so it is Hartree **plus f_xc**, and the exact
+identity is therefore **ALDA**-TDDFT against it. The RPA identity needs the xc
+term switched off in the existing solve — a small, honest flag on code we own.
+Both are worth having.
+
+1. **ALDA(`w -> 0`) == Sternheimer `eps_infinity`**, exact, across two disjoint
+   code paths (sum over states plus a Dyson inversion, against a projected CG),
+   and the single check that certifies the matrix elements, the weights, the
+   Coulomb symmetrisation, the head and the inversion at once. This is the
+   phase's `test_qeref`-grade test. Plus the same identity in RPA with the flag.
+2. **Elk on silicon**, same grid, `swidth` and window. Soft — LAPW against a
+   pseudopotential — so compare *structure*: the equivalent `alpha` against
+   `1/eps_M`, the size of the local-field effect (head-only against the full
+   matrix), and the `210`-against-`211` difference.
+3. **The f-sum rule** as a *diagnostic*, not a tolerance: it undershoots
+   systematically with band truncation, so it is plotted against `nbnd` rather
+   than asserted.
+4. **The physics**, in the notebook: silicon's E1/E2 redistribution, and for LiF
+   the falsifiable statement is "a peak below the Kohn-Sham gap that vanishes
+   when the kernel is set to zero" — *not* the binding energy, which the
+   bootstrap is known to get wrong (below).
+5. Kramers-Kronig is near-tautological for a sum of Lorentzians. Decoration; drop.
+
+**Read before committing**, per the arXiv rule. The original PRL above; Reining,
+Olevano, Rubio and Onida, PRL **88**, 066404 (2002) and Botti *et al.*, PRB **69**,
+155112 (2004) for the LRC kernel the `lrc` registry entry is and the bootstrap
+approximates; Rigamonti *et al.*, PRL **114**, 146402 (2015) with its Comment and
+Reply, which is the sharpest criticism of the self-consistency and the source of
+the "RBO" variant; and Byun and Ullrich (arXiv:1703.01663), whose assessment is
+the reason claim 4 above is worded as a peak rather than a binding energy —
+**the bootstrap family gives good spectra and poor exciton binding energies**,
+and is sensitive to head-only against full-matrix and to which scissors shift is
+used. Verify each reference rather than carrying it from here.
+
+**Memory, per the standing rule.** Peak working set is `n_w * nm^2` complex for
+the stored `chi_0` plus `pairs_chunk * ngrf` per chunk — so the response cutoff
+and the frequency count multiply, and both are knobs. Put the number in
+`PERFORMANCE.md` beside the timing.
+
+**Deliverables.** The notebook (27), a `docs/features.tex` entry with its amber
+refusal box, a README row whose provenance column says `new` and says *why*
+precisely — QE has TDDFT and does not have this — and a `PERFORMANCE.md` line.
+**`CLAUDE.md`'s scope paragraph listed `TDDFPT/` as out of scope and has been
+edited**: this phase deliberately enters that territory, from Elk's side rather
+than QE's.
+
+---
+
+**What the work found.** The design above survived; these are the four things it
+did not contain, and the first three are of one kind — each leaves a spectrum
+that is smooth, positive, correctly peaked and wrong, and none of them is caught
+by any symmetry, sum rule or convergence test the phase has.
+
+**1. `eps_M` is the inverse of the 3x3 head of `eps^-1`, not the head of the
+inverse.** `tddftlr.f90` computes both from the same array thirty lines apart —
+`zminv(nm, eps0)` gives `EPSILON_TDDFT_ij.OUT` and `zminv(3, epsm)` gives
+`EPSM_TDDFT_ij.OUT` — and only the second is the macroscopic dielectric function
+an experiment measures. Taking the first is not an approximation, it is a
+different quantity: in RPA the head of the whole matrix's inverse is
+*identically* `1 - X_head`, the **no-local-field** result, so the Dyson equation
+runs, converges, and has no local-field effect at all. Measured on silicon: 24.53
+against 22.33, **9%**, with the local-field-free number being the smooth,
+plausible one. The symptom that gave it away was not the size but an *equality* —
+`eps_M` came out bit-identical to `1 - X_head`, which cannot happen if local
+fields are being included. That equality is now a test.
+
+**2. The certifying identity holds only when the two kernels match**, and the
+obvious pairing is the wrong one. The plan already said the sum-over-states route
+should be checked against the Sternheimer `epsilon_infinity`, and the natural
+reading is RPA-against-`eps_infinity`. It is not an identity: `efield.py`'s
+screening kernel is one `jvp` of `Calculation.potential`, so it is Hartree **plus
+`f_xc`** — an ALDA response, not an RPA one. The residue is 1.26 on a constant of
+22, six percent, and it looks exactly like band truncation. So `dielectric_tensor`
+gained `screening = 'hartree'`, which drops the exchange-correlation term and
+nothing else, and **both** pairings are asserted: ALDA against the default and
+RPA against the switch. With them matched the two routes agree to **1.3e-2 on
+22.35**, across a sum over states plus a Dyson inversion on one side and a
+projected conjugate-gradient solve that never forms a matrix on the other.
+
+**3. A scissors shift breaks the truncation diagnostic in the same way.**
+`static_residual` exists because band truncation has no refusal; it is
+`eps_M(0)` here minus the Sternheimer value, and the Sternheimer solve knows
+nothing about a scissors shift. On silicon at `scissor = 0.05 Ry` the reported
+residual went from **+0.013 to -3.46** — the shift's own effect on `eps_M`,
+wearing the name of a convergence error. A shifted run now builds one more
+`chi_0`, at a single frequency and no shift, rather than reporting a number that
+means something else. The general statement is the one the two findings share:
+*a diagnostic that differences two routes measures every way they differ*, and
+listing those ways is part of writing it.
+
+**4. The head was the only place autodiff was load-bearing, and it was worth
+checking that it was.** `genvchi0.f90` reads momentum matrix elements off a file;
+in a pseudopotential code `[H, r] != p` and what is wanted is `dH/dk`, which
+P24's `jvp` already gives. Measured against the local-only expectation
+`2(k+G)`, the nonlocal correction is 8% on the dominant matrix elements of
+silicon — small enough to look like noise in a spectrum and far larger than the
+1.3e-2 the identity is asserted at. The rest of the phase is a transcription and
+the module docstring says so; inventing an autodiff story for the Dyson algebra
+would have been dishonest.
+
+**What was measured.** Silicon, `Si.pz-vbc`, `ecutwfc = 18`, the unshifted closed
+4x4x4 grid with `nosym` (the k-set `si-epsilon-unshifted-nosym.in` was committed
+for, and the only kind this phase accepts):
+
+| quantity | sum over states + Dyson | Sternheimer | difference |
+|---|---|---|---|
+| `eps_M(0)`, RPA (`screening = 'hartree'`) | 22.3322 | 22.3451 | **1.3e-2** |
+| `eps_M(0)`, ALDA (`screening = 'full'`) | 23.6214 | 23.6088 | **1.3e-2** |
+| a column of `chi_0`'s body, 16 / 30 / 60 bands | — | — | 19% / 2.3% / **0.19%** |
+
+and the cost model is in `PERFORMANCE.md`: the pair transforms are a fixed ~6 s
+that no cutoff touches, the assembly is `nw nm^2` and the bootstrap's fixed point
+`nw nm^3`, with both exponents checked at `nm = 285` rather than extrapolated.
+
+The body check is the sharper of the two and is blind to the head: `chi_0`
+applied to `cos(G'.r)` is a column of the same matrix, and the Sternheimer route
+is band-*complete*, so the sequence in `nbnd` is the measurement of the
+truncation rather than a tolerance. The bootstrap fixed point converges
+geometrically — a factor of about 25 per pass — in **9 iterations**, and the
+local-field effect is 9% at `ecut_response = 8` Ry, converged to 2e-3 there and
+half-missing at 2 Ry.
+
+**And the physics, at the size this cell can show.** Silicon has no bound
+exciton, so what an attractive kernel does here is redistribute: on a 0.005 Ry
+grid with a common cut at RPA's absorption maximum, the weight below it goes
+from **0.606** (RPA) to **0.643** (bootstrap), and the first moment of the
+spectrum falls from 3.647 eV to 3.586. (The cut is an index, so the *fractions*
+move with the frequency spacing — notebook 27 runs 0.004 Ry and reads 0.571
+against 0.609 — where the first moment does not. Both orderings are what is
+being claimed, and the test asserts both.) A scissors shift strengthens it as it should, because the kernel is
+built from a `chi_0` whose gap has moved: at 1.5 eV the equivalent
+`alpha = -4 pi F_00` goes from **0.023 to 0.046**, `eps_M(0)` from 23.1 to 16.8,
+and the absorption maximum moves down by a full **1.0 eV** relative to RPA's.
+**ALDA redistributes too**, and saying otherwise would be wrong — what it cannot
+do is *bind*, because its head and wings are identically zero (`f_xc` is finite
+where `v` diverges). That is a structural statement, it is asserted as one, and
+it is the difference between the two kernels rather than any difference in size.
+
+**And then LiF, which is what the kernel exists for.** Silicon has no bound
+exciton, so the first test of the phase that could *fail interestingly* was Elk's
+own canonical example — `examples/TDDFT-optics/LiF-bootstrap`, run unmodified
+against the vendored binary and committed as
+`tests/data/qe/reference.out.elk-lif-bootstrap`. Rocksalt LiF, LDA, the
+head-only kernel (`gmaxrf = 0.0`), 8x8x8:
+
+| | pypresso | Elk |
+|---|---|---|
+| RPA peak (no local fields) | 3.47 at **24.37 eV** | 2.67 at **24.49 eV** |
+| bootstrap peak | 16.78 at **14.05 eV** | 18.53 at **13.67 eV** |
+| on Elk's own shifted grid | 17.72 at 14.05 eV | — |
+| `eps_M(0)`, bootstrap | 2.471 | 2.302 |
+
+That is the bound exciton: a peak five times RPA's height, ten eV below it, in a
+place RPA has nothing at all. **Repeating the run on Elk's exact `vkloff` moves
+the height and not the position**, which separates the two candidate causes — the
+0.37 eV is the pseudopotential (no Li semicore, and an LDA gap 0.5 eV below the
+all-electron one, hence a larger scissors shift), not the k-sample. It is an
+all-electron LAPW spectrum against a pseudopotential plane-wave one, so 0.1-0.4
+eV on a peak position is about what the comparison can resolve.
+
+**Elk's example asks for `gmaxrf = 0.0`, and that was refused here.** An empty
+body is the **head-only** kernel of the long-range-correction literature — Byun
+and Ullrich use it throughout — not a degenerate case, so it is supported now,
+with its consequence written down: no body means no local-field effect, so
+`eps_M` is `1 - X_head`, and with the `alda` kernel, whose head and wings are
+identically zero, head-only is *exactly* RPA. It also pays for itself: with no
+body there is no plane-wave matrix element to form, so **head-only does no
+transforms at all**, where the first version transformed every pair and gathered
+nothing from the result.
+
+The regression test runs it on 4x4x4, and which claims it asserts is decided by
+that: **the exciton survives a coarse grid and the RPA continuum does not** —
+13.81 eV against 14.05 at 8x8x8, where the RPA maximum is at 15.65 against
+24.37. A bound state is one transition and is sampled long before a continuum is.
+
+**Left for a successor**, in the order they would come: ultrasoft and PAW, whose
+matrix elements need `Q_ij(G)` and where `topology/augmentation.py`'s
+`augmentation_at_q` is already the right object; finite `q`, which needs the same
+`k + q` two-sphere machinery as a phonon away from `Gamma`; metals and their
+intraband term, which Elk's `tddftlr` does not have either; and a **bound**
+exciton, which needs a wide-gap material and a k-grid several times denser than
+anything committed here — LiF is the canonical case and its pseudopotentials are
+not in `tests/data/pseudo/`.
+
+
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes
 the k-point count.

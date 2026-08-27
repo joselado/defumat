@@ -261,6 +261,29 @@ comparable only as a sum**: the two eigensolvers land in different bases inside 
 acoustic triplet and print depolarisation ratios of 0.3544/0.7163/0.4065 against
 0.5873/0.2446/0.7264, on modes whose activity both codes give as 0.0000.
 
+**Optical spectra with excitons are in** (P37), and they are the first thing here built on
+a **sum over states**: an absorption spectrum needs `chi_0` as a matrix over reciprocal
+lattice vectors at every frequency, where the Sternheimer stack produces it as a static
+operator. `run_absorption` solves the Dyson equation with a kernel from a registry —
+`rpa`, `alda`, `lrc`, `bootstrap` (Elk's `fxctype = 210`) and `bootstrap-1` — the bootstrap
+being a fixed point of the Dyson equation and its own definition, parameter-free and
+convergent in **9 iterations** on silicon. **The reference is Elk and it is validated by an
+identity instead**, because an all-electron LAPW spectrum is not a comparable number: the
+same `eps_M(0)` reached by this sum over states plus a Dyson inversion and by the projected
+CG solve of `dielectric_tensor` — which shares no machinery with it and never sees an empty
+state — agree to **1.3e-2 on a constant of 22**, and that residue is the band truncation,
+which is reported (`static_residual`) rather than tuned away. Three traps, all of them
+producing a smooth, positive, plausible spectrum: **`eps_M` is the inverse of the 3x3 head
+of `eps^-1`, not the head of the inverse** (Elk writes both from one array thirty lines
+apart; the wrong one is exactly the no-local-field result, 9% high); the **identity holds
+only when the two kernels match**, so `dielectric_tensor` gained a `screening = 'hartree'`
+switch, since its own kernel is `dv_of_drho` and therefore ALDA; and **the diagnostic is
+broken by a scissors shift** the same way, which turns a `+0.013` residual into `-3.46`.
+**The head is the one line of Elk that must not be transcribed** — it reads momentum matrix
+elements, right in an all-electron code and wrong with a nonlocal pseudopotential — so
+`dH/dk` from P24's `jvp` takes their place, and it is this phase's only load-bearing
+autodiff. Everything else is a transcription and says so.
+
 **Outstanding:** Wyckoff input, the dynamical matrix of an
 ultrasoft dataset, PAW Born charges, `chi^(2)` and the electro-optic tensor (the second-order
 response `solve_e2` is, which P35 refuses for), the **non-analytic LO-TO term**
@@ -517,9 +540,22 @@ coordination number and so has a derivative of its own, and **Tkatchenko-Scheffl
 and **XDM** because their coefficients are functionals of the self-consistent density, which
 puts them inside `v_of_rho` where D2 is outside it.
 
-Out of scope until the above works: EXX, phonons
-(`PHonon/`), Car-Parrinello (`CPV/`), and everything in `EPW/`, `TDDFPT/`, `HP/`, `GWW/`.
-The code should nonetheless be shaped so these are additions, not rewrites.
+**Optical spectra and excitons are in scope and implemented** (P37): `pypresso/tddft/`.
+This is the one place a **sum over states** earns its keep — an absorption spectrum needs
+the frequency axis and needs `chi_0` as a *matrix* over reciprocal lattice vectors, where
+everything in `pypresso/response/` produces it as an operator from a Sternheimer solve. The
+Dyson equation is then solved with an exchange-correlation kernel from a name registry, and
+the one that matters is Sharma, Dewhurst, Sanna and Gross's **bootstrap** (PRL 107, 186401
+(2011); Elk's `fxctype = 210`), which is parameter-free, self-consistent with the Dyson
+equation it feeds, and divergent as `1/q^2` — which is what binds an electron-hole pair
+where ALDA's head and wings vanish identically. **This deliberately enters territory the
+line below used to exclude**, and from Elk's side rather than QE's: `TDDFPT/` is a
+Liouville-Lanczos solver with RPA and ALDA, has no bootstrap kernel and never forms a Dyson
+equation in G space, so there is nothing there to transcribe.
+
+Out of scope until the above works: EXX, real-time propagation and the Liouville-Lanczos
+route to a spectrum (`TDDFPT/`), Car-Parrinello (`CPV/`), and everything in `EPW/`, `HP/`,
+`GWW/`. The code should nonetheless be shaped so these are additions, not rewrites.
 
 ## Why JAX (this drives the design)
 
@@ -726,6 +762,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `pypresso/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]` term by term; here it is one `jvp` of `H(k)` at a frozen sphere (`response/velocity.py`), since `dH/dk_a = i[H, r_a]` in the periodic gauge. The overlap carries a velocity too, so a band velocity is `<psi|dH/dk - eps dS/dk|psi>` |
 | Linear response / DFPT | `LR_Modules/cgsolve_all.f90`, `ch_psi_all.f90`, `orthogonalize.f90`, `h_prec.f90`, `setup_alpha_pv.f90`, `incdrhoscf.f90`, `symdvscf.f90`; `PHonon/PH/solve_e.f90`, `dvpsi_e.f90`, `dvqpsi_us.f90`, `dielec.f90`, `zstar_eu.f90` | the linear solve, the projector and the assembly are transcribed; the *perturbations* are not. `dv_of_drho` is one `jvp` of `v_of_rho` (which already drops the `G = 0` Hartree term), the E-field's commutator is the velocity operator, and `dvqpsi_us` is one `jvp` through `at_positions`. **A response on a reduced k-set is a polar vector field and must be symmetrised as one** |
+| TDDFT: `chi_0`, the Dyson equation, the bootstrap kernel | no QE counterpart — Elk's `src/tddftlr.f90` (the driver and the fixed point), `genvchi0.f90` (Adler-Wiser, the `t3hw` head/wing layout), `genvfxc.f90` (the kernels), `init3.f90` (`ngrf`, and `wrf(1) = 0 + i swidth`), `getpmat.f90` (the scissors renormalisation), manual `fxctype`/`gmaxrf`/`swidth` | the head is the one line **not** to transcribe: Elk reads momentum matrix elements, which is right in LAPW and wrong with a nonlocal pseudopotential, so `response/velocity.py`'s `dH/dk` takes their place. `eps_M` is the inverse of the **3x3 head** of `eps^-1`, not the head of the inverse — Elk writes both, thirty lines apart, and the wrong one is 9% too large and otherwise perfect |
 | Non-linear response (Raman) | `PHonon/PH/raman.f90`, `raman_mat.f90`, `el_opt.f90`, `dhdrhopsi.f90`, `dvpsi_e2.f90`, `solve_e2.f90`, `d2mxc.f90`, `write_ramtns.f90`, `symme.f90` (`symtensor3`, `symmatrix3`) | none of it is transcribed: `d(eps)/d(tau)` is one `jvp` of the second-order energy P26 already differentiates, and `d2mxc`'s third derivative of `E_xc` is a `jvp` of the kernel rather than a parameterisation, so a GGA works where `phq_setup.f90` stops. **The vendored 7.5 build's `lraman`/`elop` branch does not reproduce QE's own v6.0 example and fails its own internal check** -- use it as evidence, not as a reference. `dynmat_sub.f90`'s `RamanIR` (reached by `dynmat.x`) is the exception and *is* a reference: it is post-processing, reads `dchi_dtau` off a file, and shares nothing with that branch. `symtensor3`/`symmatrix3` are implemented (P36), at any rank |
 | Input parsing | `Modules/read_input.f90`, `PW/src/input.f90`, `Modules/input_parameters.f90` | defaults for every input variable are declared in `input_parameters.f90` |
 | DFT+U | `PW/src/ldaU.f90`, `hubbard.f90`, `new_ns.f90`, `init_ns.f90`, `ns_adj.f90`, `orthoUwfc.f90`, `offset_atom_wfc.f90`, `vhpsi.f90`, `v_of_rho.f90` (`v_hubbard`), `scf_mod.f90` (`ns_ddot`), `force_hub.f90` | the projectors are `S phi` even for `Hubbard_projectors = 'atomic'`; `ortho-atomic` orthogonalises over **all** `natomwfc`, not the Hubbard manifold alone, so `Modules/read_pseudo.f90`'s `upf_check_atwfc_norm` renormalisation of `chi` reaches the answer through the `4s`. `force_hub.f90` is *not* transcribed: it is `jax.grad` through `Calculation.at_positions` |

@@ -112,6 +112,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from pypresso.basis.fft import g_to_r, r_to_g
 from pypresso.batching import map_k
 from pypresso.pseudo.augmentation import augmentation_dipole
 from pypresso.response.born import born_effective_charges, require_born_charges
@@ -122,6 +123,7 @@ from pypresso.response.sternheimer import (
     require_a_sternheimer_regime,
 )
 from pypresso.response.velocity import VelocityOperator, over_kpoints
+from pypresso.scf.potential import hartree, total_charge
 from pypresso.system.symmetry import cartesian_rotations, symmetrize_matrix
 from pypresso.units import FPI
 
@@ -201,6 +203,7 @@ def dielectric_tensor(
     max_iterations: int = MAX_ITERATIONS,
     threshold: float = 1.0e-12,
     mixing_mode: str = DEFAULT_RESPONSE_MIXING,
+    screening: str = "full",
     born_charges: bool = True,
     keep_internals: bool = False,
     verbose: bool = False,
@@ -220,6 +223,14 @@ def dielectric_tensor(
             Required for an ultrasoft or PAW dataset and empty otherwise: PAW's
             one-centre coefficients are built from it and cannot be rebuilt from
             the density.
+        screening: which kernel screens the field. ``"full"`` is
+            ``dv_of_drho`` -- Hartree plus ``f_xc``, which is what QE's
+            ``solve_e`` uses and what ``epsilon_infinity`` means. ``"hartree"``
+            drops the exchange-correlation term and gives the **RPA** dielectric
+            constant instead, which is not a physical improvement but is the
+            only way to compare this solve with a sum-over-states response run
+            in RPA (:mod:`pypresso.tddft`): the two routes are identities of
+            each other only when their kernels match.
     """
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:
@@ -306,6 +317,7 @@ def dielectric_tensor(
     dpsi = [None, None, None]
     converged = False
 
+    screen = _screening_kernel(calculation, density, screening)
     mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
     for iteration in range(max_iterations):
         response, becsum_response = [], []
@@ -336,12 +348,7 @@ def dielectric_tensor(
         for axis in range(3):
             # ``dv_of_drho``: the Hartree kernel without its G = 0 component,
             # plus f_xc -- one jvp of the potential this code already writes.
-            _, dv = jax.jvp(
-                lambda r: calculation.potential(r).v_scf,
-                (jnp.asarray(density),),
-                (symmetrised[axis],),
-            )
-            induced.append(dv)
+            induced.append(screen(symmetrised[axis]))
             if onecentre is not None:
                 # ``PAW_dpotential``, from the same becsum response.
                 induced_onecentre.append(
@@ -401,6 +408,54 @@ def dielectric_tensor(
         average_iterations=total_iterations / max(solves, 1),
         converged=converged,
     )
+
+
+def _screening_kernel(calculation, density, screening: str):
+    """``dV_scf/drho``: the kernel the induced density is screened by.
+
+    ``"full"`` is ``dv_of_drho.f90`` -- one ``jvp`` of ``v_of_rho``, so Hartree
+    *and* ``f_xc``, which is what ``solve_e`` screens with and therefore what
+    ``epsilon_infinity`` means here.
+
+    ``"hartree"`` keeps the Hartree term alone. That is the **RPA** kernel, and
+    it exists for one reason: a sum-over-states response (:mod:`pypresso.tddft`)
+    solved in RPA is an *identity* of this solve only when the two kernels
+    match, and the physical one does not match RPA. Comparing an RPA spectrum
+    against the ``"full"`` dielectric constant measures ``f_xc``, not the
+    agreement of two routes -- so the referee needs this switch to be honest.
+    The exchange-correlation term is dropped, not approximated: nothing else
+    about the solve changes.
+    """
+    density = jnp.asarray(density)
+    if screening == "full":
+        def screen(drho):
+            _, dv = jax.jvp(
+                lambda r: calculation.potential(r).v_scf, (density,), (drho,)
+            )
+            return dv
+
+        return screen
+    if screening != "hartree":
+        raise ValueError(
+            f"unknown screening kernel {screening!r}: 'full' is Hartree plus "
+            "f_xc (dv_of_drho, the physical one) and 'hartree' is RPA"
+        )
+
+    gvectors = calculation.basis.dense
+    cell = calculation.system.cell
+
+    def screen(drho):
+        # ``hartree`` already drops the G = 0 component, which is the same
+        # reason ``dv_of_drho`` may be a plain jvp of the potential: a response
+        # carries no net charge and the divergent term is not there to remove.
+        drho_g = jax.vmap(r_to_g, in_axes=(0, None))(drho, gvectors.fft_index)
+        v_g, _ = hartree(total_charge(drho_g), gvectors, cell)
+        v_r = jnp.real(g_to_r(v_g, gvectors.fft_index, gvectors.grid))
+        # The Hartree potential is built from the total charge and is the same
+        # in every channel, exactly as ``_potential_of_rho`` adds it.
+        return jnp.broadcast_to(v_r, drho.shape)
+
+    return screen
 
 
 def _solve_stored(solver, rhs):

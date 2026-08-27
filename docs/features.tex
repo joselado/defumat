@@ -548,6 +548,112 @@ and symmetrises it as a scalar inside the chain rule.
 \end{refuses}
 
 % =====================================================================
+\section{Optical spectra and excitons: TDDFT}
+
+The response above is a \emph{static} one, solved orbital by orbital. An
+absorption spectrum needs the frequency axis and needs the susceptibility as a
+\textbf{matrix} in reciprocal lattice vectors, so this is the one place where a
+sum over states earns its keep. \code{run\_absorption} builds
+\begin{equation*}
+\chi^0_{\mathbf{GG}'}(\omega) = \frac{1}{\Omega}\sum_{\mathbf k}\sum_{ij}
+  \frac{(f_i - f_j)\,\rho^{ij}_{\mathbf G}\,\rho^{ij\,*}_{\mathbf G'}}
+       {\epsilon_i - \epsilon_j + \omega + i\eta},
+\qquad
+\rho^{ij}_{\mathbf G} = \langle u_i|e^{-i\mathbf G\cdot\mathbf r}|u_j\rangle
+\end{equation*}
+and solves the Dyson equation with an exchange-correlation kernel:
+\begin{equation*}
+\epsilon^{-1} = 1 + X\big(1 - X - \tilde f_{\mathrm{xc}} X\big)^{-1},
+\qquad X = v^{1/2}\chi^0 v^{1/2},
+\qquad \tilde f_{\mathrm{xc}} = v^{-1/2} f_{\mathrm{xc}} v^{-1/2}
+\end{equation*}
+The \textbf{bootstrap} kernel of Sharma, Dewhurst, Sanna and Gross
+(\emph{PRL} \textbf{107}, 186401 (2011); Elk's \code{fxctype = 210}) is that
+equation's other half, so the two are solved together to self-consistency:
+\begin{equation*}
+f^{\mathrm{BS}}_{\mathrm{xc}}
+  = -\,\frac{\epsilon^{-1}(\mathbf q, 0)\,v(\mathbf q)}{\epsilon_0(\mathbf q,0)-1},
+\qquad \epsilon_0 = 1 - v\chi^0
+\end{equation*}
+It is parameter-free and diverges as $1/q^2$, which is what binds an
+electron--hole pair; ALDA's kernel is finite at $\mathbf q = 0$ where $v$
+diverges, so its head and wings vanish \emph{identically} and no amount of it
+can bind one.
+
+\textbf{Quantum ESPRESSO has no counterpart.} \code{TDDFPT/} is a
+Liouville--Lanczos solver with RPA and ALDA; it has no bootstrap kernel and no
+Dyson equation in $\mathbf G$ space. The reference is Elk.
+
+\begin{pycode}
+from pypresso.workflows import run_absorption
+import numpy as np
+
+omega = np.arange(0.0, 0.6, 0.005)          # Ry
+spectrum = run_absorption(system, pseudos, scf.density, omega,
+                          kernel="bootstrap",   # or rpa / alda / lrc / bootstrap-1
+                          nbnd=60, ecut_response=8.0,
+                          broadening=0.012, scissor=0.05)
+
+print(spectrum.absorption)                  # Im eps_M, isotropic average
+print(spectrum.frequencies_ev)              # the same grid in eV
+print(spectrum.alpha, spectrum.iterations)  # the LRC-equivalent head, and the
+                                            # bootstrap's fixed-point count
+print(spectrum.static_residual)             # how far the band truncation reaches
+\end{pycode}
+
+\code{chi\_0} is the whole cost and the kernel is nearly free, so comparing
+kernels means building it once: \code{independent\_response} returns it and
+\code{solve\_dyson} screens it, which is what \code{run\_absorption} does
+internally and what the notebook shows.
+
+Three knobs here are this code's own. \code{ecut\_response} (Elk's
+\code{gmaxrf}) selects the $\mathbf G$-set the matrix is built over and has its
+own convergence: too small and the local-field effect is missing, and the cost
+is quadratic in it. \code{scissor} is \emph{part of the method} rather than a
+convenience --- the paper's Eq.~(3) replaces $\chi^0$ by a gap-corrected model
+response, and the velocity matrix elements are renormalised by
+$e_{ij}/(e_{ij}\mp\Delta)$ along with it. And \code{static\_residual} is the
+diagnostic for the one error this phase cannot refuse: how many empty states
+the sum ran over. It is $\epsilon_M(0)$ from this run, in RPA, minus the same
+quantity from the Sternheimer solve, which is band-\emph{complete}; it is
+kernel-matched on purpose, since differencing a bootstrap number against a
+Sternheimer one that contains $f_{\mathrm{xc}}$ would measure the kernel
+instead.
+
+\textbf{A trap that is invisible in the answer:} the macroscopic dielectric
+function is the inverse of the $3\times3$ \emph{head} of $\epsilon^{-1}$, not
+the head of the inverse of the whole matrix. The second is the microscopic
+$\epsilon$, whose head in RPA is exactly the no-local-field result; it is
+smooth, positive, has the right peaks and is 9\% too large on silicon. Both are
+returned (\code{epsilon} and \code{epsilon\_no\_local\_fields}), because the gap
+between them \emph{is} the local-field effect.
+
+Validated by an identity rather than against another code's spectrum: the same
+$\epsilon_M(0)$ is reached by this sum over states plus a Dyson inversion and by
+the projected conjugate-gradient solve of \code{dielectric\_tensor}, which
+shares no machinery with it and never sees an empty state. On silicon the two
+agree to \textbf{1.3e-2} on a constant of 22 --- and that residue is the band
+truncation, which is why it is reported rather than tuned away. The
+\code{screening = "hartree"} switch on \code{dielectric\_tensor} exists for
+this comparison: the identity holds only when both sides use the same kernel.
+
+\begin{refuses}
+\textbf{Refuses.} Finite $\mathbf q$ (the perturbed states would live at
+$\mathbf k + \mathbf q$); ultrasoft and PAW (every matrix element gains the
+augmentation charge $Q_{ij}(\mathbf G)$); metals (the $f_i - f_j$ weight kills
+the $i=j$ term, so the intraband Drude response is absent entirely --- Elk's
+\code{tddftlr} does not add it either); \code{nspin} $\neq$ 1, noncollinear
+magnetism, spin--orbit coupling, spin spirals and a Hubbard $U$; a
+symmetry-reduced $k$-set, because symmetrising $\chi^0_{\mathbf{GG}'}$ rotates
+\emph{two} $\mathbf G$ indices at once and the rank-$n$ symmetriser is
+Cartesian; the \code{alda} kernel with a gradient-corrected functional, since
+ALDA's kernel is pointwise in the density and a GGA's is not; and
+\textbf{non-convergence of the bootstrap fixed point is an error}, as it is in
+\code{tddftlr.f90}, because a spectrum from a kernel still in motion is the
+spectrum of nothing.
+\end{refuses}
+
+% =====================================================================
 \section{Topological invariants}
 
 Everything is built from one primitive --- the overlap of occupied manifolds at

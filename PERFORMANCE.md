@@ -2842,6 +2842,70 @@ Neither is a new cost model, which is the useful part:
   the collinear branch does. Two einsums against the harmonic table; not
   measurable beside the quadrature it feeds.
 
+## What an optical spectrum costs (P37)
+
+**There is no QE ratio for this one and there cannot be**, which is worth saying
+before the numbers: `pw.x` has no counterpart, and `TDDFPT/` reaches a spectrum
+by Liouville-Lanczos rather than by a Dyson equation in G space, so the two do
+not compute the same intermediate. The reference is Elk, which is all-electron
+LAPW. What follows is therefore a cost *model* rather than a comparison.
+
+Silicon, `Si.pz-vbc`, `ecutwfc = 18`, the unshifted 4x4x4 grid (64 k-points),
+`nbnd = 60`, a 20^3 grid, one core, warm:
+
+| stage | | |
+|---|---|---|
+| fixed-density run, 60 bands x 64 k | **58.0 s** | the largest single cost |
+| `chi_0`, `ecut_response = 4` (`nm = 29`), 1 frequency | 6.5 s | |
+| `chi_0`, `ecut_response = 4`, 121 frequencies | 7.4 s | |
+| `chi_0`, `ecut_response = 8` (`nm = 115`), 1 frequency | 6.1 s | |
+| `chi_0`, `ecut_response = 8`, 121 frequencies | **23.0 s** | |
+| Dyson, RPA, 121 frequencies, `nm = 115` | 0.45 s | one solve per frequency |
+| Dyson, bootstrap, the same | 2.29 s | 9 passes of the fixed point |
+| `chi_0`, `ecut_response = 16` (`nm = 285`), 121 frequencies | 107.1 s | |
+| Dyson, RPA / bootstrap at `nm = 285` | 5.68 s / 37.6 s | |
+
+**The two halves scale differently and the table is arranged to show it.** The
+pair transforms are a *fixed* ~6 s — one FFT per occupied-empty pair per
+k-point, `64 x 224` of them here — and they do not care about the response
+cutoff or the frequency count at all. The assembly is `nw nm^2` and is
+everything else: `(115/29)^2 = 15.7` against a measured 17.0/1.0 in the
+frequency-dependent part. So the response cutoff is quadratic and the frequency
+grid is linear, and neither touches the transforms.
+
+Which means the **`nbnd` that the physics needs is what a spectrum costs**, not
+the matrix it is a spectrum of. Going from 30 to 60 bands doubles the pair count
+and therefore the 6 s floor; going from `ecut_response = 4` to 8 quadruples
+`nm^2` and costs 16 s once. The convergence they buy is not symmetric either:
+60 bands takes the static residual from 0.67 to **0.013**, and
+`ecut_response = 8` takes the local-field effect from half-missing to converged
+at 2e-3. Both are needed and neither substitutes for the other.
+
+**Peak working set: ~1.0 GB** for the case above, and it is the assembly rather
+than the answer. The stored matrix is `nw nm^2` complex = **24.4 MB**; the
+`einsum` that builds it holds `nw (2 npairs) nm` in flight per k-chunk, which is
+124 MB, and the rest is the fixed-density run's own wavefunction buffer
+(`64 x 60 x 360` complex). The trade is stated in `tddft/chi0.py`'s docstring
+rather than taken silently: one matrix product per frequency instead of one
+batched `einsum` would cut the 124 MB to 0.4 MB and halve the flop rate on CPU.
+**Backlog**: make the frequency axis a chunking dial the way `batching.py` makes
+the k axis one — the same shape of change, and it only becomes worth doing when
+`nw nm^2` stops fitting.
+
+**The bootstrap's self-consistency is free at this size** and will not stay that
+way: 9 passes cost 2.29 s against RPA's single 0.45 s, because each pass is one
+`nm x nm` inversion per frequency. That is `O(nw nm^3)`, and the `nm = 285` row
+is there to check the exponent rather than to be quoted: **37.6 s against 2.29,
+a factor of 16.4 where `(285/115)^3 = 15.2`**. The `chi_0` row checks the other
+one — 107.1 s against a 6 s floor plus `17.0 x (285/115)^2 = 104`, so 110
+predicted against 107 measured. Both scalings are as written, which is the only
+reason to trust the model at a size nobody has run.
+
+Nothing here needs `ecut_response = 16`: it moves `eps_M(0)` by **1.9e-3** from
+the value at 8, where 8 against 2 is worth half the local-field effect. A system
+that does need it should expect the *kernel* rather than `chi_0` to be the bill,
+and its peak working set to be **2.9 GB** rather than 1.0.
+
 ## History
 
 | Date | Change | Effect |

@@ -1,0 +1,34 @@
+! Rocksalt LiF -- the cell of Elk's examples/TDDFT-optics/LiF-bootstrap, which
+! is the canonical demonstration of the bootstrap TDDFT kernel (Sharma,
+! Dewhurst, Sanna and Gross, PRL 107, 186401 (2011)). LiF has a strongly bound
+! exciton: a sharp peak below the gap that RPA does not produce at all.
+!
+! avec there is 3.80402 bohr on the fcc primitive vectors, so alat = 7.60804.
+! LDA (pz) to match Elk's xctype = 3; norm-conserving HGH, the only LDA
+! norm-conserving Li and F in the Quantum ESPRESSO library. Li has no semicore,
+! so this has 4 occupied bands where Elk's all-electron run has 6 -- the two
+! extra are the 1s cores, which no optical transition here touches.
+!
+! The k-grid below is what an SCF needs. A *spectrum* needs the whole grid
+! rather than a wedge, which is what run_absorption's `kpoints` argument is for.
+! Elk's reference output is committed beside this file as
+! reference.out.elk-lif-bootstrap.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 7.60804, nat = 2, ntyp = 2,
+    ecutwfc = 80.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Li  6.941   Li.pz-hgh.UPF
+ F   18.998  F.pz-hgh.UPF
+ATOMIC_POSITIONS (crystal)
+ Li 0.00 0.00 0.00
+ F  0.50 0.50 0.50
+K_POINTS (automatic)
+ 8 8 8 0 0 0
