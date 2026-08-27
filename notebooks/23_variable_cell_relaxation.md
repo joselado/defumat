@@ -22,19 +22,17 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.system import build_system
 from pypresso.units import RY_TO_KBAR
-from pypresso.workflows.vc_relax import run_vc_relax
 
 CASES = Path("../tests/data/qe")
 PSEUDO = Path("../tests/data/pseudo")
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_vc-relax")
 
-system = build_system(read_pw_input(QE / "vc-relax4.in"))
-pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
+arsenic = Calculator.from_file(QE / "vc-relax4.in", pseudo_dir=PSEUDO,
+                               announce=False, conv_thr=1e-10)
+system, pseudos = arsenic.system, arsenic.pseudos
 print(f"{system.structure.nat} atoms, applied pressure {system.relax.press} kbar, "
       f"starting volume {float(system.cell.volume):.2f} bohr^3")
 ```
@@ -50,7 +48,7 @@ pressure — have to be satisfied together.
 
 
 ```python
-result = run_vc_relax(system, pseudos, conv_thr=1e-10)
+result = arsenic.get_relax(variable_cell=True)
 
 print(f"converged in {result.nsteps} ionic steps")
 print(f"volume   {result.steps[0].volume:8.2f}  ->  {result.volume:8.2f} bohr^3")

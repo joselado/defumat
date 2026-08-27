@@ -7,7 +7,28 @@ combined with time reversal. And there is a direction to constrain or to push on
 is what magnetic fields and constrained moments are for.
 
 bcc iron matches Quantum ESPRESSO to **2.8e-9 Ry** with LDA and with PBE; fields and all
-of QE's constrained-moment schemes to **≤2e-7 Ry**. Phases P17 and P18.
+of QE's constrained-moment schemes to **≤2e-7 Ry**.
+
+The density is a $2\times 2$ matrix in spin space, and the magnetization is its
+projection onto the Pauli matrices:
+
+$$n_{\alpha\beta}(\mathbf r) = \tfrac{1}{2}\Big[
+   n(\mathbf r)\,\delta_{\alpha\beta}
+   + \mathbf m(\mathbf r)\cdot\boldsymbol\sigma_{\alpha\beta} \Big],
+\qquad
+\mathbf m(\mathbf r) = \sum_{n\mathbf k} f_{n\mathbf k}\,
+   \psi^{\dagger}_{n\mathbf k}(\mathbf r)\,
+   \boldsymbol\sigma\,\psi_{n\mathbf k}(\mathbf r)$$
+
+A constraint is a **penalty on that vector**, and its field is the gradient of the
+penalty -- written here once, so QE's five hand-derived expressions in `add_bfield.f90`
+become a test:
+
+$$E_{\rm pen} = \lambda \sum_I \big(\mathbf m_I - \mathbf m^{\rm fix}_I\big)^2,
+\qquad
+\mathbf B_I = -\frac{\partial E_{\rm pen}}{\partial \mathbf m_I}$$
+
+Phases P17 and P18.
 
 
 ```python
@@ -17,11 +38,9 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io import read_qe_output
 from pypresso.io.pwin import parse_pw_input, read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.scf.driver import Calculation
 from pypresso.scf.fields import MagneticField
 from pypresso.scf.locals import LocalRegions
 from pypresso.system import build_system
@@ -33,18 +52,16 @@ PSEUDO, GENERATED = Path("../tests/data/pseudo"), Path("../tests/data/qe")
 
 
 def load(text):
-    system = build_system(parse_pw_input(text))
-    return system, tuple(read_upf(PSEUDO / s.pseudo_file)
-                         for s in system.structure.species)
+    """A calculator carrying the input's own mixing, ready to run."""
+    pwin = parse_pw_input(text)
+    return Calculator.from_text(
+        text, PSEUDO, announce=False, conv_thr=1e-10, max_iterations=200,
+        mixing_beta=float(pwin.get("electrons", "mixing_beta") or 0.7))
 
 
 def scf(text, **options):
-    system, pseudos = load(text)
-    pwin = parse_pw_input(text)
-    options.setdefault("conv_thr", 1e-10)
-    options.setdefault("max_iterations", 200)
-    options.setdefault("mixing_beta", float(pwin.get("electrons", "mixing_beta") or 0.7))
-    return system, run_scf(system, pseudos, **options)
+    calc = load(text)
+    return calc, calc.get_scf(**options)
 
 
 def namelist(text, extra):
@@ -55,7 +72,7 @@ def namelist(text, extra):
 # The references are regenerated with the vendored pw.x: the shipped 2017 output of
 # noncolin-constrain_atomic.in does not belong to the input beside it.
 text = (NONCOLIN / "noncolin.in").read_text()
-system, _ = load(text)
+system = load(text).system
 full = find_symmetries(system.cell, system.structure)
 moments = local_moments(system.structure, 4, system.starting_magnetization,
                         system.angle1, system.angle2)
@@ -109,9 +126,9 @@ print("noncollinear along z vs collinear  %.1e Ry"
 ```
 
     moment along    total energy (Ry)   moment (mu_B)
-    z                 -0.946064951880   [ 0. -0.  1.]
-    x                 -0.946064951862   [1. 0. 0.]
-    y                 -0.946064951904   [0. 1. 0.]
+    z                 -0.946064951880   [-0.  0.  1.]
+    x                 -0.946064951862   [ 1. -0. -0.]
+    y                 -0.946064951904   [ 0.  1. -0.]
     (1,1,1)           -0.946064951911   [0.5774 0.5774 0.5774]
     collinear         -0.946064951854   1.0000 (along z by construction)
     
@@ -130,7 +147,7 @@ there, and rotating the potential back.
 
 
 ```python
-system, iron = scf(text)
+_, iron = scf(text)
 print("%-16s %18s %18s %12s" % ("term", "pypresso", "QE", "difference"))
 for term, value in reference.energy_terms.items():
     if term in iron.energy_terms:
@@ -154,8 +171,8 @@ print("        moment %.2f -> %.2f mu_B, which is why a magnetic comparison with
          np.linalg.norm(iron_pbe.magnetization_vector)))
 ```
 
-    /tmp/ipykernel_2423469/417838658.py:34: RuntimeWarning: tstress = .true. in the input, but forces and stress for a noncollinear or spin-orbit calculation are not implemented; nspin = 1 and nspin = 2 are, on norm-conserving, ultrasoft and PAW pseudopotentials. The SCF is unaffected and SCFResult.stress is None.
-      return system, run_scf(system, pseudos, **options)
+    /u/40/ladovj1/data/Documents/programs/claude/pypresso/pypresso/calculator.py:312: RuntimeWarning: tstress = .true. in the input, but forces and stress for a noncollinear or spin-orbit calculation are not implemented; nspin = 1 and nspin = 2 are, on norm-conserving, ultrasoft and PAW pseudopotentials. The SCF is unaffected and SCFResult.stress is None.
+      self._scf = run_scf(self.system, self.pseudos,
 
 
     term                       pypresso                 QE   difference
@@ -165,7 +182,7 @@ print("        moment %.2f -> %.2f mu_B, which is why a magnetic comparison with
     ewald                  -44.64461207       -44.64461207     4.30e-09
     smearing                 0.00388950         0.00388979     2.94e-07
     TOTAL                  -55.69968434       -55.69968434     2.78e-09
-    moment  pypresso [ 3.1763 -0.      0.    ]   QE (3.18, -0.0, -0.0)
+    moment  pypresso [ 3.1763  0.     -0.    ]   QE (3.18, -0.0, -0.0)
 
 
     
@@ -235,7 +252,7 @@ for name, scheme in (("noncolin-constrain_atomic.in", "atomic"),
     atomic direction       -55.69968434     -55.69968434    2.7e-09
 
 
-    total                  -55.54266143     -55.54266124    1.9e-07
+    total                  -55.54266107     -55.54266124    1.7e-07
 
 
 **The constraint's energy is not in the total energy.** `add_bfield` is called from
@@ -288,7 +305,7 @@ ax.legend(fontsize=8); ax.grid(alpha=0.3); fig.tight_layout()
     nonmagnetic + fading field       -0.946064952   1.00000
     nonmagnetic + field held on      -0.946014192   1.00000
     
-    the fading field lands on the magnetic answer to 5.6e-11 Ry; a field left on is 5.1e-05 Ry away
+    the fading field lands on the magnetic answer to 5.0e-11 Ry; a field left on is 5.1e-05 Ry away
 
 
 
@@ -330,10 +347,10 @@ for rule in ("secant", "elk"):
     rule       iters         B (Ry)    m (mu_B)            E (Ry)
 
 
-    secant        74    -0.01096091    2.000584     -55.571538200
+    secant        73    -0.01096610    2.000220     -55.571534200
 
 
-    elk         1380    -0.01099904    1.999459     -55.571525850
+    elk          246    -0.01096471    2.000541     -55.571537734
 
 
 The same field to 4e-5 Ry and the same energy to 1e-5 Ry — the residual is the 1e-3

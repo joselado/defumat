@@ -8,8 +8,23 @@ each on its own plane-wave sphere, and in the rotated frame the density and the 
 are lattice periodic again — so the SCF, the functional and the mixer are untouched.
 
 `pw.x` has no spin spiral, so the validation is **identities**: at the wavevectors where a
-supercell *is* possible, the spiral must reproduce it. It does, to 1e-12 Ry. Phase P19,
-following Elk.
+supercell *is* possible, the spiral must reproduce it. It does, to 1e-12 Ry.
+
+The generalized Bloch theorem: a spiral is a *gauge*, and in the rotated frame the
+density is lattice periodic again. What it costs is that the two spinor components live
+on **different** plane-wave spheres,
+
+$$\psi_{n\mathbf k}(\mathbf r) = e^{i\mathbf k\cdot\mathbf r}
+  \begin{pmatrix}
+    e^{-i\mathbf q\cdot\mathbf r/2}\; u^{\uparrow}_{n\mathbf k}(\mathbf r) \\[3pt]
+    e^{+i\mathbf q\cdot\mathbf r/2}\; u^{\downarrow}_{n\mathbf k}(\mathbf r)
+  \end{pmatrix}
+\qquad\Longrightarrow\qquad
+\uparrow \text{ at } \mathbf k + \tfrac{\mathbf q}{2},
+\quad
+\downarrow \text{ at } \mathbf k - \tfrac{\mathbf q}{2}$$
+
+and that is the whole of the implementation. Phase P19, following Elk.
 
 
 ```python
@@ -18,13 +33,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io.pwin import parse_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.scf.driver import Calculation
-from pypresso.system import build_system
 from pypresso.system.spiral import spiral_kpoints
-from pypresso.workflows.spiral import heisenberg_exchange, run_spiral_scan
+from pypresso.workflows.spiral import heisenberg_exchange
 
 PSEUDO, GENERATED = Path("../tests/data/pseudo"), Path("../tests/data/qe")
 RY_TO_MEV = 13.605693122994 * 1000.0
@@ -32,18 +44,17 @@ CHAIN = (GENERATED / "h-chain-spiral.in").read_text()
 
 
 def load(text):
-    system = build_system(parse_pw_input(text))
-    return system, tuple(read_upf(PSEUDO / s.pseudo_file)
-                         for s in system.structure.species)
+    """A calculator carrying the input's own convergence settings."""
+    pwin = parse_pw_input(text)
+    return Calculator.from_text(
+        text, PSEUDO, announce=False, max_iterations=200,
+        conv_thr=float(pwin.get("electrons", "conv_thr") or 1e-10),
+        mixing_beta=float(pwin.get("electrons", "mixing_beta") or 0.7))
 
 
 def scf(text, **options):
-    system, pseudos = load(text)
-    pwin = parse_pw_input(text)
-    options.setdefault("conv_thr", float(pwin.get("electrons", "conv_thr") or 1e-10))
-    options.setdefault("mixing_beta", float(pwin.get("electrons", "mixing_beta") or 0.7))
-    options.setdefault("max_iterations", 200)
-    return system, run_scf(system, pseudos, **options)
+    calc = load(text)
+    return calc, calc.get_scf(**options)
 
 
 def at_q(q3):
@@ -56,9 +67,10 @@ def electronic(result):
 
 
 # A hydrogen chain, one atom per cell, spiralling along z.
-system, pseudos = load(at_q(0.25))
+chain = load(at_q(0.25))
+system = chain.system
 doubled = spiral_kpoints(system.kpoints, system.spiral_q, system.cell)
-calculation = Calculation(system, pseudos)
+calculation = chain.calculation
 npw, nk = calculation.basis.planewaves.npw, system.kpoints.nk
 
 print("%26s  %10s %12s" % ("k (2pi/alat)", "centre", "plane waves"))
@@ -119,7 +131,7 @@ print("q = b3/4 against a four-cell 90-degree supercell %.1e Ry"
       % abs(electronic(spiral_quarter) - electronic(ninety) / 4))
 ```
 
-    q = 0 against an ordinary noncollinear run   5.6e-16 Ry
+    q = 0 against an ordinary noncollinear run   2.1e-15 Ry
 
 
     q = b3/2 against the collinear antiferromagnet 7.4e-13 Ry
@@ -141,9 +153,10 @@ antiferromagnet; fitting a Heisenberg model to it gives the exchange constants.
 
 
 ```python
-system, pseudos = load(at_q(0.0))
-scan = run_spiral_scan(system, pseudos, [[0.0, 0.0, q] for q in np.linspace(0, 0.5, 11)],
-                       conv_thr=1e-10, mixing_beta=0.3, max_iterations=200)
+spirals = load(at_q(0.0))
+system = spirals.system
+scan = spirals.get_spiral_scan([[0.0, 0.0, q] for q in np.linspace(0, 0.5, 11)],
+                               conv_thr=1e-10, mixing_beta=0.3, max_iterations=200)
 
 q = scan.wavevectors[:, 2]
 fig, (left, right) = plt.subplots(1, 2, figsize=(11, 4))
