@@ -30,27 +30,23 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
+from pypresso import Calculator
 from pypresso.response.spectra import mode_activities, vibrational_spectrum
-from pypresso.scf import Calculation, run_scf
-from pypresso.system import build_system
 
 CASES = Path("../tests/data/qe")
 PSEUDO = Path("../tests/data/pseudo")
 
 
 def converged(case):
-    system = build_system(read_pw_input(CASES / f"{case}.in"))
-    pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-    calculation = Calculation(system, pseudos)
-    scf = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12)
-    return system, calculation, scf
+    calc = Calculator.from_file(CASES / f"{case}.in", pseudo_dir=PSEUDO,
+                                announce=False, conv_thr=1e-12)
+    return calc.system, calc, calc.get_scf()
 
 
 # The same AlAs as notebook 25 and the same unshifted 4x4x4 sample -- but reduced to its
 # irreducible wedge, which that notebook had to refuse.
-system, calculation, scf = converged("alas-raman-wedge")
+system, alas, scf = converged("alas-raman-wedge")
+calculation = alas.calculation      # the three calls below still take one
 print(f"AlAs   {len(system.kpoints.weights)} k-points (notebook 25 needed 64)")
 print(f"       total energy {scf.total_energy:.8f} Ry   pw.x -16.88368446")
 ```
@@ -69,7 +65,7 @@ about fifty seconds to one.
 
 
 ```python
-spectrum = vibrational_spectrum(calculation, scf)
+spectrum = alas.get_vibrational_spectrum()
 print(spectrum.table())
 ```
 
@@ -156,23 +152,23 @@ of its statements are pure symmetry:
 
 
 ```python
-si_system, si_calculation, si_scf = converged("si-epsilon-unshifted")
-si = vibrational_spectrum(si_calculation, si_scf)
+si_system, si_calc, si_scf = converged("si-epsilon-unshifted")
+si = si_calc.get_vibrational_spectrum()
 print(si.table())
 print(f"\nsilicon T_2g   {si.frequencies[-1]:.1f} cm^-1   (experiment: 520)")
 print(f"infrared activity of the optical triplet   {np.abs(si.infrared[3:]).max():.2e}")
 ```
 
     # mode   [cm-1]    [THz]      IR          Raman   depol.fact
-        1      4.32    0.1295    2.3510         0.0000    0.3544
-        2      4.32    0.1295    2.3510         0.0000    0.7163
-        3      4.32    0.1295    2.3510         0.0000    0.4065
+        1      4.32    0.1295    2.3510         0.0000    0.7499
+        2      4.32    0.1295    2.3510         0.0000    0.4967
+        3      4.32    0.1295    2.3510         0.0000    0.3834
         4    519.20   15.5654    0.0000      9815.5635    0.7500
         5    519.20   15.5654    0.0000      9815.5635    0.7500
         6    519.20   15.5654    0.0000      9815.5635    0.7500
     
     silicon T_2g   519.2 cm^-1   (experiment: 520)
-    infrared activity of the optical triplet   4.52e-31
+    infrared activity of the optical triplet   3.61e-31
 
 
 ## 4. The figure
@@ -248,7 +244,7 @@ for freq, raman_sum, ir_sum in si.by_manifold():
 ```
 
     silicon's acoustic triplet, depolarisation ratio, activity 0.0000 in both:
-      pypresso   0.3544  0.7163  0.4065
+      pypresso   0.7499  0.4967  0.3834
       dynmat.x   0.5873  0.2446  0.7264
     
     and the quantities that survive the mixing:

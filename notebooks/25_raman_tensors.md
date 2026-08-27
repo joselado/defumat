@@ -35,6 +35,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import jax.numpy as jnp
 
+from pypresso import Calculator
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
 from pypresso.response.efield import dielectric_tensor
@@ -53,10 +54,11 @@ PSEUDO = Path("../tests/data/pseudo")
 # (`symtensor3`) completes it. P36 wrote that average -- notebook 26 runs the same case on
 # 8 k-points instead of 64 -- and the closed grid is kept here because it is what the
 # comparison in section 3 was made against.
-system = build_system(read_pw_input(CASES / "alas-raman.in"))
-pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-calculation = Calculation(system, pseudos)
-scf = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12)
+alas = Calculator.from_file(CASES / "alas-raman.in", pseudo_dir=PSEUDO,
+                            announce=False, conv_thr=1e-12)
+system, pseudos = alas.system, alas.pseudos
+calculation = alas.calculation
+scf = alas.get_scf()
 
 print(f"AlAs   {len(system.kpoints.weights)} k-points, "
       f"total energy {scf.total_energy:.8f} Ry")
@@ -76,7 +78,7 @@ second-order energy.
 
 
 ```python
-raman = raman_tensors(calculation, scf)
+raman = alas.get_raman_tensors()
 
 print(f"epsilon_infinity        {np.trace(raman.epsilon) / 3:.6f}")
 print(f"ph.x                    12.967322")
@@ -87,7 +89,7 @@ print(f"displacement response   {len(raman.phonon_history)} iterations")
     epsilon_infinity        12.967421
     ph.x                    12.967322
     field response          9 iterations
-    displacement response   9 iterations
+    displacement response   10 iterations
 
 
 ## 2. The tensor, and the two things nothing imposed
@@ -121,15 +123,15 @@ print(f"translational sum rule      {raman.sum_rule_relative:.1e} of the scale")
 ```
 
       atom 0 (Al), displaced along x:
-             -0.000000    0.000000   -0.000000
-              0.000000   -0.000000   -3.118279
-             -0.000000   -3.118279   -0.000000
-      atom 1 (As), displaced along x:
              -0.000000    0.000000    0.000000
-              0.000000   -0.000000    3.119166
-              0.000000    3.119166   -0.000000
+              0.000000   -0.000000   -3.118279
+              0.000000   -3.118279   -0.000000
+      atom 1 (As), displaced along x:
+             -0.000000   -0.000000   -0.000000
+             -0.000000    0.000000    3.119166
+             -0.000000    3.119166   -0.000000
     
-    largest entry T_d forbids   8.7e-14 of the scale
+    largest entry T_d forbids   1.6e-13 of the scale
     translational sum rule      2.8e-04 of the scale
 
 
