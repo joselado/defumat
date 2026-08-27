@@ -45,6 +45,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
 from pypresso.response import electrostriction
@@ -61,10 +62,11 @@ PSEUDO = Path("../tests/data/pseudo")
 # (`symmatrix3` generalised) completes such a sum on the wedge, agreeing with this run to
 # 7.9e-14. The elastic constants below still need the whole grid, for a different reason --
 # their functional builds its own density and symmetrises it as a scalar.
-system = build_system(read_pw_input(CASES / "si-electrostriction.in"))
-pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-calculation = Calculation(system, pseudos)
-scf = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12)
+silicon = Calculator.from_file(CASES / "si-electrostriction.in", pseudo_dir=PSEUDO,
+                              announce=False, conv_thr=1e-12)
+system, pseudos = silicon.system, silicon.pseudos
+calculation = silicon.calculation
+scf = silicon.get_scf()
 
 print(f"silicon, {len(system.kpoints.weights)} k-points, "
       f"{calculation.basis.planewaves.npwx} plane waves")
@@ -84,7 +86,7 @@ and then six `jvp`s of the second-order energy.
 
 
 ```python
-result = electrostriction(calculation, scf)
+result = silicon.get_electrostriction()
 
 print(f"epsilon_infinity      {np.trace(result.epsilon) / 3:.6f}")
 print(f"strain response       {len(result.strain.history)} iterations, "
@@ -92,7 +94,7 @@ print(f"strain response       {len(result.strain.history)} iterations, "
 ```
 
     epsilon_infinity      56.292875
-    strain response       18 iterations, 22 CG steps per band per solve
+    strain response       11 iterations, 22 CG steps per band per solve
 
 
 ## 2. $d\chi/dx$, and the check that nothing imposed it
@@ -125,13 +127,13 @@ print(f"\nlargest component cubic symmetry forbids: "
     d(chi_ij)/dx_kl, Voigt rows x columns
                  11       22       33       23       13       12
       11   108.1081   8.1021   8.1021  -0.0000   0.0000   0.0000
-      22     8.1021 108.1081   8.1021  -0.0000   0.0000   0.0000
-      33     8.1021   8.1021 108.1081  -0.0000  -0.0000   0.0000
-      23     0.0000  -0.0000  -0.0000 197.0154   0.0000  -0.0000
-      13     0.0000  -0.0000   0.0000  -0.0000 197.0154  -0.0000
-      12     0.0000   0.0000  -0.0000   0.0000  -0.0000 197.0154
+      22     8.1021 108.1081   8.1021  -0.0000  -0.0000   0.0000
+      33     8.1021   8.1021 108.1081  -0.0000   0.0000  -0.0000
+      23     0.0000  -0.0000  -0.0000 197.0154  -0.0000   0.0000
+      13     0.0000  -0.0000  -0.0000  -0.0000 197.0154   0.0000
+      12    -0.0000   0.0000   0.0000  -0.0000  -0.0000 197.0154
     
-    largest component cubic symmetry forbids: 3.1e-14 of the scale
+    largest component cubic symmetry forbids: 5.2e-14 of the scale
 
 
 ## 3. The derivative *is* the slope

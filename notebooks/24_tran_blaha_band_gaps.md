@@ -44,9 +44,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io.pwin import Card, read_pw_input
 from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
 from pypresso.system import build_system
 from pypresso.system.kpoints import KPoints
 from pypresso.units import RY_TO_EV
@@ -65,7 +65,7 @@ def silicon(dft=None, ecutwfc=30.0, grid=(6, 6, 6)):
                                   (f"{grid[0]} {grid[1]} {grid[2]} 0 0 0",))
     system = build_system(data)
     pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-    return system, pseudos
+    return Calculator(system, pseudos, announce=False, nbnd=10, conv_thr=1e-9)
 
 
 functional = get_functional("tb09")
@@ -124,9 +124,9 @@ for n in (0.01, 1.0, 50.0):
 ```
 
     hydrogen 1s:  max |v_BR - v_Slater| = 1.11e-13 Ha
-
-
     uniform gas rho_s =  0.01:  v_BJ = -0.267141   v_LDA = -0.267301   rel = 6.00e-04
+
+
     uniform gas rho_s =  1.00:  v_BJ = -1.239957   v_LDA = -1.240701   rel = 6.00e-04
     uniform gas rho_s = 50.00:  v_BJ = -4.568041   v_LDA = -4.570781   rel = 6.00e-04
 
@@ -144,14 +144,14 @@ import warnings
 
 results = {}
 for label, dft in (("LDA (PZ)", None), ("TB09", "tb09"), ("BJ06 (c = 1)", "bj06")):
-    system, pseudos = silicon(dft)
+    calc = silicon(dft)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        results[label] = (system, pseudos,
-                          run_scf(system, pseudos, nbnd=10, conv_thr=1e-9,
-                                  max_iterations=90, tstress=False))
+        results[label] = calc
+        calc.get_scf(max_iterations=90, tstress=False)
 
-for label, (_, _, scf) in results.items():
+for label, calc in results.items():
+    scf = calc.scf_result
     c = "    -    " if scf.meta_c is None else f"{scf.meta_c:9.5f}"
     print(f"{label:14s}  {scf.iterations:3d} iterations   c = {c}   "
           f"E = {scf.total_energy:14.8f} Ry")
@@ -181,14 +181,15 @@ FCC = {"L": (.5, .5, .5), "G": (0., 0., 0.), "X": (0., 0., 1.),
 PATH = ["L", "G", "X", "W", "K", "G"]
 NOCC = 4
 
-system, pseudos, _ = results["LDA (PZ)"]
 COUNTS = [25] * (len(PATH) - 1) + [1]
-kpath = KPoints.band_path([FCC[p] for p in PATH], COUNTS, system.cell, crystal=False)
+kpath = KPoints.band_path([FCC[p] for p in PATH], COUNTS,
+                          results["LDA (PZ)"].system.cell, crystal=False)
 
 bands, gaps = {}, {}
-for label, (system, pseudos, scf) in results.items():
-    b = run_bands(system, pseudos, scf.density, kpoints=kpath, nbnd=10,
-                  conv_thr=1e-9, tau=scf.tau)
+for label, calc in results.items():
+    # `tau` is a property of the states, not of the density, so a meta-GGA band
+    # path needs it as well -- and the calculator carries it across.
+    b = calc.get_bands(kpoints=kpath)
     ev = np.asarray(b.eigenvalues) * RY_TO_EV
     ev = ev - ev[:, :NOCC].max()                   # valence-band maximum at zero
     bands[label] = ev
@@ -220,11 +221,11 @@ ax.legend(loc="lower right", fontsize=9, framealpha=0.95)
 fig.tight_layout()
 ```
 
-    /u/40/ladovj1/data/Documents/programs/claude/pypresso/pypresso/scf/driver.py:756: UserWarning: input_dft asks for TB09 but the pseudopotentials were generated with PZ; running them together is inconsistent, as it is in QE
+    /u/40/ladovj1/data/Documents/programs/claude/pypresso/pypresso/scf/driver.py:804: UserWarning: input_dft asks for TB09 but the pseudopotentials were generated with PZ; running them together is inconsistent, as it is in QE
       self.functional = resolve_functional(
 
 
-    /u/40/ladovj1/data/Documents/programs/claude/pypresso/pypresso/scf/driver.py:756: UserWarning: input_dft asks for BJ06 but the pseudopotentials were generated with PZ; running them together is inconsistent, as it is in QE
+    /u/40/ladovj1/data/Documents/programs/claude/pypresso/pypresso/scf/driver.py:804: UserWarning: input_dft asks for BJ06 but the pseudopotentials were generated with PZ; running them together is inconsistent, as it is in QE
       self.functional = resolve_functional(
 
 
@@ -249,7 +250,7 @@ for label in results:
     print(f"{label:16s}{gaps[label][0]:15.3f}{gaps[label][1]:14.3f}")
 print(f"{'experiment':16s}{EXPERIMENT['indirect']:15.3f}{EXPERIMENT['direct']:14.3f}")
 print(f"\npublished all-electron mBJ (c = 1.12): {PUBLISHED_MBJ:.2f} eV")
-print(f"this run's c: {results['TB09'][2].meta_c:.4f}   "
+print(f"this run's c: {results['TB09'].scf_result.meta_c:.4f}   "
       f"(a pseudopotential has no core, and the core is where |grad rho|/rho is largest)")
 ```
 
