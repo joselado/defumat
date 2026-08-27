@@ -61,10 +61,13 @@ EXPECTED_REFUSALS = {
     "lda+U_kind1_noncollin.in": "Liechtenstein",
     "lda+U_background_one_channel.in": "background",
     "lda+U_orbital_resolved.in": "orbital-resolved",
-    # Modes of ``calculation`` with no driver here (P15 has ``relax``; ``md``
-    # and the variable-cell pair do not exist). Before they were refused they
-    # were accepted and run as a plain SCF, so the run reported success for a
-    # calculation that never took place.
+    # Modes of ``calculation`` with no driver here. ``relax`` arrived with P15
+    # and ``vc-relax`` with P29 -- and the eleven ``vc-relax`` inputs that used
+    # to sit in this block went with it, which is what this test is for: a case
+    # that starts building again fails until its entry goes. ``md`` and
+    # ``vc-md`` are still absent. Before they were refused they were accepted
+    # and run as a plain SCF, so the run reported success for a calculation
+    # that never took place.
     "md.in": "calculation = 'md'",
     "md-pot_extrap1.in": "calculation = 'md'",
     "md-pot_extrap2.in": "calculation = 'md'",
@@ -73,17 +76,6 @@ EXPECTED_REFUSALS = {
     "md_restart_verlet.in": "calculation = 'md'",
     "vc-md1.in": "calculation = 'vc-md'",
     "vc-md2.in": "calculation = 'vc-md'",
-    "vc-relax1.in": "calculation = 'vc-relax'",
-    "vc-relax2.in": "calculation = 'vc-relax'",
-    "vc-relax3.in": "calculation = 'vc-relax'",
-    "vc-relax4.in": "calculation = 'vc-relax'",
-    "vc-relax5.in": "calculation = 'vc-relax'",
-    "vc-relax6.in": "calculation = 'vc-relax'",
-    "vc-relax-dos-1.in": "calculation = 'vc-relax'",
-    "vc-relax-scf-1.in": "calculation = 'vc-relax'",
-    "paw-vcbfgs.in": "calculation = 'vc-relax'",
-    "vdW-DF3-opt1.in": "calculation = 'vc-relax'",
-    "vdw-mbd-vc-relax.in": "calculation = 'vc-relax'",
     # ``twochem`` in ``&control`` rather than ``&system``: the switch was looked
     # for in one namelist and this input puts it in the other, so it was read
     # and ignored.

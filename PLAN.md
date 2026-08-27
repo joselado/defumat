@@ -4729,7 +4729,7 @@ by name and both phases escaped by running an unshifted grid whole.
 
 | | wedge | closed | agreement | cost |
 |---|---|---|---|---|
-| P35 `d(eps)/d(tau)`, AlAs, rank 3 + atom | 8 k-points | 64 | **8.7e-14** relative | 51 s against 112 |
+| P35 `d(eps)/d(tau)`, AlAs, rank 3 + atom | 8 k-points | 64 | **3.3e-9** relative (8.7e-14 at the time; see below) | 51 s against 112 |
 | P26 `d(eps)/d(strain)`, silicon, rank 4 | 8 k-points | 64 | **7.9e-14** relative | 73 s against 205 |
 
 **The average alone is not enough, and the reason is the finding of this phase.**
@@ -5281,6 +5281,49 @@ had been failing since P29 landed. One line in `_first_step_scale` fixes it. The
 is the one this file keeps recording in other forms: **a cross-phase regression is
 invisible to the phase that causes it**, and the only thing that finds one is running
 everything, which is what a front end makes cheap enough to do.
+
+**Running the whole regression suite found fourteen failures and none of them was
+P38's.** They are recorded here because each had a different cause and two were not what
+they looked like.
+
+**Eleven were `test_input_sweep`, and P29 left them.** The eleven `vc-relax` inputs stayed
+in `EXPECTED_REFUSALS` after P29 implemented the feature, so the sweep failed with "now
+builds; drop its EXPECTED_REFUSALS entry" — exactly what that test exists to say. Same
+shape as the `relax_spiral_q` regression above: **P29 landed its own feature and left a
+sibling's expectations stale**, twice.
+
+**One was `chi_0`'s finite difference, and it was not a tolerance.** `si2-us` missed by
+6.0e-5 against a 1e-5 bound — but only in a *window* of steps around `h = 1e-4`, and it was
+fine at 5e-5 and at 2e-4 and above, which is why it read as noise. The reference
+diagonalises the perturbed Hamiltonian asking for **exactly** the bands the density needs,
+and Davidson converges its *topmost* root worst — nothing above it to push it down — so the
+badly converged highest occupied state went straight into the reference density. Four
+buffer bands, discarded after, make it 9e-7 at every step from 5e-5 to 4e-4 and stop
+`|ref|max` depending on `h` at all; `si2-nc-force` improves from 4.3e-6 to 4.6e-7 at its
+worst step. **Two plausible fixes are wrong and were measured**: widening the bound hides
+it, and seeding Davidson with the SCF wavefunctions makes it *ten times worse* (1e-3),
+because the solver stops early against a guess it believes.
+
+**Two were the Raman wedge against the closed grid, and the cause is a good commit.**
+Bisection put the first bad commit at `a351005` (the GPU Cholesky NaN), and `git show` then
+cleared the half everyone would suspect: `_cholesky_route`'s **body is unchanged** across
+it, so the fast path really is bit-for-bit as that commit claimed. What moved is the other
+half — the Anderson mixer's Gram normalisation, cond 1.1e11 → 2.7e4. A third derivative
+multiplies the difference between two converged densities by `<u|u>`, of order 10^3, so the
+wedge and the closed grid agree only to what their two SCFs agree to; the old mixer drove
+both k-sets to the same fixed point bit for bit and the new one does not. Convergence-
+limited and measured: **3.3e-9 at `conv_thr = 1e-12`, 6.5e-10 at 1e-14**. The bounds are the
+measured floor now (1e-8 and `rel=1e-4`), with the measurement written into the test, and
+they still catch what the assertion exists for — the wrong wedge repair missed by 3.3e-2,
+four orders above the new bound. `CLAUDE.md`, `NONLINEAR.md` and the table above carried
+8.7e-14 and now carry the truth. **The silicon rank-4 7.9e-14 beside it is from a
+grid-sharing pair no test exercises and has not been re-measured.**
+
+The lesson for the suite rather than for any phase: 1477 regression tests take hours, so
+they were not being run, and three separate phases' claims drifted without anyone seeing
+it. `tools/` has no runner for them; the one written for this pass
+(one file per invocation, a durable summary line each, resumable) is the shape that
+survives being interrupted.
 
 **Not done.** The functional API is untouched and every existing call site stands; the
 CLI still has its five copies of the `read_upf` loop. Migrating it is the obvious next

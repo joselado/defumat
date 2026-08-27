@@ -320,9 +320,21 @@ def test_the_wedge_reproduces_the_closed_grid():
     assert len(wedge_calculation.system.kpoints.weights) == 8
     assert len(closed_calculation.system.kpoints.weights) == 64
 
+    # **The bound is the SCF's convergence footprint, amplified.** These two
+    # runs converge to densities that agree only to ``conv_thr``, and a *third*
+    # derivative multiplies that difference by the norm of a first-order
+    # wavefunction -- of order 10^3 here, which ``refined_states`` documents.
+    # Measured on this pair: 3.3e-9 relative at ``conv_thr = 1e-12`` and 6.5e-10
+    # at 1e-14, so the residue is convergence-limited and not an error in the
+    # assembly. It used to sit at 8.7e-14 because the Anderson mixer then drove
+    # both k-sets to the *same* fixed point bit for bit; `a351005` normalised the
+    # mixer's Gram block (cond 1.1e11 -> 2.7e4, and a real NaN fixed with it) and
+    # that coincidence went with it. Both routes remain right: each gives 3.119,
+    # against the -3.1183 a finite difference of `epsilon` over re-converged
+    # displaced cells gives (notebook 25).
     scale = np.abs(closed.raman).max()
-    assert np.abs(wedge.raman - closed.raman).max() < 1e-10 * scale
-    assert np.abs(wedge.epsilon - closed.epsilon).max() < 1e-10
+    assert np.abs(wedge.raman - closed.raman).max() < 1e-8 * scale
+    assert np.abs(wedge.epsilon - closed.epsilon).max() < 1e-8
 
 
 def test_the_wedge_obeys_the_sum_rule_as_well_as_the_closed_grid_does():
@@ -343,6 +355,10 @@ def test_the_wedge_obeys_the_sum_rule_as_well_as_the_closed_grid_does():
     wedge = _raman("alas-raman-wedge")
     closed = _raman("alas-raman")
     assert wedge.sum_rule_relative < SUM_RULE_TOLERANCE
+    # ``rel`` for the same reason as the bound above, and measured the same way:
+    # 1.9e-5 at ``conv_thr = 1e-12``, 4.2e-6 at 1e-14. What this assertion is for
+    # is the *hundredfold* miss the wrong repair produced (3.3e-2 against
+    # 2.9e-4), which no plausible convergence residue reaches.
     assert wedge.sum_rule_relative == pytest.approx(
-        closed.sum_rule_relative, rel=1e-6
+        closed.sum_rule_relative, rel=1e-4
     )

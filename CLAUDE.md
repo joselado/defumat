@@ -244,8 +244,17 @@ zincblende, and is still symmetric under every permutation of its three labels t
 **Raman and infrared spectra are in** (P36), and so is **the rank-3 symmetriser** that
 made them cheap. `symme.f90`'s `symmatrix3`/`symtensor3` are written here **at any rank**,
 which lifts the closed-grid refusal P26 introduced and P35 inherited: AlAs's eight-point
-wedge reproduces its sixty-four-point closed grid to **8.7e-14** and silicon's rank-4
-elasto-optic tensor to **7.9e-14**, at half the cost. The average alone is not enough,
+wedge reproduces its sixty-four-point closed grid to **3.3e-9** and silicon's rank-4
+elasto-optic tensor to 7.9e-14, at half the cost. **The AlAs number was 8.7e-14 when the
+phase landed and is not any more, for a reason that is not P36's**: a third derivative
+multiplies the difference between two converged densities by the norm of a first-order
+wavefunction (order 10^3), so what the wedge and the closed grid agree to is what their
+SCFs agree to — and the mixer normalisation in `a351005` (Gram block cond 1.1e11 → 2.7e4,
+and a NaN fixed with it) stopped the two k-sets landing on the same fixed point bit for
+bit. It is convergence-limited and measured as such: 3.3e-9 at `conv_thr = 1e-12`, 6.5e-10
+at 1e-14. Both routes are still right — each gives 3.119 against the -3.1183 of a finite
+difference over re-converged displaced cells. The silicon 7.9e-14 is from a grid-sharing
+pair that no test exercises and has **not** been re-measured since. The average alone is not enough,
 and that is the phase's finding: it completes a wedge sum only where the tensor is a
 *linear* k-sum of a covariant per-k quantity, and the screening term of `F` is **quadratic**
 in one — so the *value* of the density response inside the functional must be the full-zone

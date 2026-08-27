@@ -172,7 +172,10 @@ Sternheimer solver's gauge.
 **The rank-3 symmetriser is in**, and at any rank:
 `pypresso.system.symmetry.symmetrize_cartesian_tensor` and
 `symmetrize_atom_cartesian_tensor`. P26 and P35 both run on a symmetry-reduced wedge now —
-AlAs to 8.7e-14 of its closed grid on 8 k-points instead of 64, silicon's rank-4
+AlAs to 3.3e-9 of its closed grid on 8 k-points instead of 64 (8.7e-14 when the
+phase landed; the residue is the two SCFs' convergence footprint amplified by a third
+derivative, and it moved with the mixer normalisation in `a351005` -- see `CLAUDE.md`),
+silicon's rank-4
 elasto-optic tensor to 7.9e-14 — at roughly half the cost. Rank 4 has no QE counterpart,
 because QE does not compute that tensor.
 

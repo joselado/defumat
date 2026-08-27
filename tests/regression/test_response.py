@@ -229,6 +229,11 @@ PROBE_MILLER = (1, 0, 0)
 #: 8.8e-7 ultrasoft and 1.4e-6 PAW.
 CHI0_RELATIVE = 1e-5
 
+#: Extra bands the finite-difference reference diagonalises and throws away.
+#: See :func:`test_chi0_matches_a_finite_difference_of_the_density`; without
+#: them the *reference* is what fails, not ``chi_0``.
+REFERENCE_BUFFER = 4
+
 #: How far ``chi_0 K`` may sit from P22's finite-difference SCF Jacobian, at
 #: that difference's own optimal step. The two share no machinery at all.
 JACOBIAN_RELATIVE = 2e-3
@@ -315,7 +320,19 @@ def test_chi0_matches_a_finite_difference_of_the_density(case):
 
     def density_at(scale):
         hamiltonians = calculation.hamiltonian(v_scf + scale * dv, ddd_paw)
-        _, psi = calculation.diagonalize(hamiltonians, nbnd, None, 1e-13)
+        # **Buffer bands, and they are not optional.** Davidson converges its
+        # *topmost* requested root worst -- it is the one with no state above it
+        # to push it down -- so asking for exactly the bands the density needs
+        # puts the badly converged one straight into that density. On `si2-us`
+        # that was worth 1.5e-5 in the reference and up to **6e-5 relative** in
+        # this comparison, in a window of steps around 1e-4 and nowhere else,
+        # which is why it read as a tolerance problem and is not one: with the
+        # buffer the agreement is 9e-7 at *every* step from 5e-5 to 4e-4 and the
+        # reference stops depending on `h` at all. `si2-nc-force` improves too
+        # (4.3e-6 to 4.6e-7 at its worst step). QE carries spare bands in an SCF
+        # for the same reason.
+        _, psi = calculation.diagonalize(hamiltonians, nbnd + REFERENCE_BUFFER,
+                                         None, 1e-13)
         psi = psi[:, :, : solver.nocc]
         # The *unsymmetrised* becsum, which is what the response uses: the probe
         # potential breaks the crystal's point group, so PAW's ``PAW_symmetrize``

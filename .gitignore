@@ -26,3 +26,4 @@ performance/*.out
 # Machine- and site-specific working context: cluster access policy, account
 # paths, private notes. Kept beside the checkout, never in a public repository.
 *.local.md
+regression-results/
