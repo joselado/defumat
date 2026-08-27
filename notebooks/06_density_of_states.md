@@ -7,6 +7,17 @@ which interpolate the bands linearly and integrate exactly. Both are here, both 
 as occupation schemes inside the SCF, and QE's three aluminium benchmarks come out to
 **2.5e-8 Ry** with the Fermi levels agreeing to a fraction of a meV.
 
+What is wanted is a Brillouin-zone integral of a delta function, and what a smearing
+scheme actually writes down is its *integral* -- the count of states below $E$ -- with
+the density of states as the derivative:
+
+$$D(E) = \sum_n \int_{\rm BZ} \frac{d\mathbf k}{(2\pi)^3}\,
+        \delta(E - \varepsilon_{n\mathbf k})
+\qquad\Longleftarrow\qquad
+N(E) = \sum_{n\mathbf k} w_{\mathbf k}\,
+       f\!\left(\frac{E - \varepsilon_{n\mathbf k}}{\sigma}\right),
+\quad D = \frac{dN}{dE}$$
+
 Phases P8 and P9.
 
 
@@ -16,36 +27,31 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
 from pypresso.scf.occupations import w0gauss, wgauss
-from pypresso.system import build_system
 from pypresso.units import RY_TO_EV
-from pypresso.workflows import denser_grid, run_dos, run_nscf
+from pypresso.workflows import denser_grid, run_nscf
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite")
 PSEUDO = Path("../tests/data/pseudo")
 
 
 def load(path):
-    system = build_system(read_pw_input(path))
-    return system, tuple(read_upf(PSEUDO / s.pseudo_file)
-                         for s in system.structure.species)
+    return Calculator.from_file(path, pseudo_dir=PSEUDO, announce=False)
 
 
 # A DOS is a *non-self-consistent* run: converge the density on the coarse SCF grid, then
 # diagonalise once on a much denser one at fixed potential. Nothing is self-consistent
 # about that second step, which is why it can afford ten times the k-points.
-si, si_pseudos = load(QE / "pw_scf" / "scf.in")
-si_scf = run_scf(si, si_pseudos, conv_thr=1e-10)
-nscf = run_nscf(si, si_pseudos, si_scf.density, kpoints=denser_grid(si, (12, 12, 12)),
-                nbnd=8)
+si = load(QE / "pw_scf" / "scf.in")
+si_scf = si.get_scf(conv_thr=1e-10)
+nscf = si.get_nscf(kpoints=denser_grid(si.system, (12, 12, 12)), nbnd=8)
 
 valence_top = nscf.eigenvalues[:, 3].max()
 conduction_bottom = nscf.eigenvalues[:, 4].min()
-print("SCF: %d k-points, E = %.8f Ry" % (si.kpoints.nk, si_scf.total_energy))
+print("SCF: %d k-points, E = %.8f Ry"
+      % (si.system.kpoints.nk, si_scf.total_energy))
 print("DOS: 12x12x12 -> %d irreducible k-points, %d bands"
       % (nscf.kpoints.nk, nscf.eigenvalues.shape[1]))
 print("indirect gap %.4f eV" % ((conduction_bottom - valence_top) * RY_TO_EV))
@@ -87,9 +93,9 @@ for ngauss, label in names.items():
 
     Gaussian                   integral = 1.0000000000
     Methfessel-Paxton          integral = 1.0000000000
-
-
     cold (Marzari-Vanderbilt)  integral = 1.0000000000
+
+
     Fermi-Dirac                integral = 1.0000000000
 
 
@@ -108,10 +114,8 @@ integrable — which is why both families exist and neither is a default for eve
 
 
 ```python
-dos_tetra, _ = run_dos(si, si_pseudos, si_scf.density, grid=(12, 12, 12), nbnd=8,
-                       scheme="tetrahedra")
-dos_gauss, _ = run_dos(si, si_pseudos, si_scf.density, grid=(12, 12, 12), nbnd=8,
-                       scheme="gaussian", degauss=0.02)
+dos_tetra = si.get_dos(grid=(12, 12, 12), nbnd=8, scheme="tetrahedra")
+dos_gauss = si.get_dos(grid=(12, 12, 12), nbnd=8, scheme="gaussian", degauss=0.02)
 
 fig, ax = plt.subplots(figsize=(7.5, 4.2))
 ax.plot(dos_gauss.energies_ev, dos_gauss.dos_ev, lw=1.4,
@@ -149,11 +153,12 @@ SCF here uses the same scheme it reports.
 
 
 ```python
-al, al_pseudos = load(QE / "pw_metal" / "metal-tetrahedra.in")
-al_scf = run_scf(al, al_pseudos, conv_thr=1e-10)
+al = load(QE / "pw_metal" / "metal-tetrahedra.in")
+al_scf = al.get_scf(conv_thr=1e-10)
 al_ref = read_qe_output(QE / "pw_metal" / "benchmark.out.git.inp=metal-tetrahedra.in")
 
-print("occupations = %r, %d irreducible k-points" % (al.occupations, al.kpoints.nk))
+print("occupations = %r, %d irreducible k-points"
+      % (al.system.occupations, al.system.kpoints.nk))
 print("%-24s%16s%20s%14s" % ("", "pypresso", "Quantum ESPRESSO", "difference"))
 print("%-24s%16.8f%20.8f%14.2e"
       % ("total energy (Ry)", al_scf.total_energy, al_ref.total_energy,
@@ -165,8 +170,11 @@ print("%-24s%16.4f%20.4f%14.2e"
 print("\n%-26s%18s%14s%12s" % ("the other two variants", "occupations",
                                "E_F pypresso", "QE E_F"))
 for name in ("metal-tetrahedra-1.in", "metal-tetrahedra-2.in"):
-    system, _ = load(QE / "pw_metal" / name)
-    result = run_nscf(system, al_pseudos, al_scf.density, nbnd=4)
+    # A *different* system -- another tetrahedron variant -- read at the density
+    # `al` converged. One calculator cannot say that, so this is the functional
+    # call, which is what it is still for.
+    system = load(QE / "pw_metal" / name).system
+    result = run_nscf(system, al.pseudos, al_scf.density, nbnd=4)
     theirs = read_qe_output(QE / "pw_metal" / f"benchmark.out.git.inp={name}")
     print("%-26s%18s%14.4f%12.4f"
           % (name, system.occupations, result.fermi_energy * RY_TO_EV,
@@ -189,8 +197,9 @@ for name in ("metal-tetrahedra-1.in", "metal-tetrahedra-2.in"):
 
 
 ```python
-al_dos, al_nscf = run_dos(al, al_pseudos, al_scf.density, grid=(16, 16, 16), nbnd=6)
-ef, bottom = al_dos.fermi_energy, al_nscf.eigenvalues.min()
+al_dos = al.get_dos(grid=(16, 16, 16), nbnd=6)
+# The states it integrated are left on the calculator; the DOS itself is returned.
+ef, bottom = al_dos.fermi_energy, al.dos_states.eigenvalues.min()
 
 window = (al_dos.energies > bottom + 0.03) & (al_dos.energies < bottom + 0.30)
 slope, intercept = np.polyfit(al_dos.energies[window], al_dos.dos[window] ** 2, 1)

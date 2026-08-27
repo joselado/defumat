@@ -5,6 +5,18 @@ grow a leading spin axis, and one SCF iteration diagonalises a different Hamilto
 channel. What couples them is the exchange-correlation functional — and the Fermi level,
 which is **one** number shared by both unless `tot_magnetization` fixes the imbalance.
 
+The density is a pair, and the moment is the integral of its difference:
+
+$$n_\sigma(\mathbf r) = \sum_{n\mathbf k} f_{n\mathbf k\sigma}\,
+   |\psi_{n\mathbf k\sigma}(\mathbf r)|^2,
+\qquad
+m(\mathbf r) = n_\uparrow(\mathbf r) - n_\downarrow(\mathbf r),
+\qquad
+M = \int m(\mathbf r)\, d\mathbf r$$
+
+The two channels see different potentials,
+$v_{xc}^\sigma = \delta E_{xc}[n_\uparrow, n_\downarrow] / \delta n_\sigma$.
+
 Eight LSDA benchmarks match Quantum ESPRESSO here; nickel's total energy to **2e-9 Ry**
 and its moment to the two decimals QE prints. Phase P9.
 
@@ -15,24 +27,23 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io import read_qe_output
 from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.system import build_system
 from pypresso.system.kpoints import KPoints
 from pypresso.units import RY_TO_EV
-from pypresso.workflows import run_bands, run_dos
 
 SUITE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite")
 REFERENCE, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
 
 def load(directory, name):
-    pwin = read_pw_input(SUITE / directory / name)
-    system = build_system(pwin)
-    pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-    return system, pseudos, float(pwin.get("electrons", "mixing_beta", 0.7))
+    path = SUITE / directory / name
+    beta = float(read_pw_input(path).get("electrons", "mixing_beta", 0.7))
+    # The input's own mixing_beta becomes this calculator's, so every method
+    # that runs an SCF here uses it without being reminded.
+    return Calculator.from_file(path, pseudo_dir=PSEUDO, announce=False,
+                                conv_thr=1e-10, mixing_beta=beta)
 
 
 def qe(directory, name):
@@ -43,8 +54,7 @@ def qe(directory, name):
 
 # An isolated oxygen atom, whose occupations the input fixes by hand -- the case where
 # the two channels differ most.
-system, pseudos, beta = load("pw_atom", "atom-lsda.in")
-oxygen = run_scf(system, pseudos, conv_thr=1e-10, max_iterations=200, mixing_beta=beta)
+oxygen = load("pw_atom", "atom-lsda.in").get_scf(max_iterations=200)
 ref = qe("pw_atom", "atom-lsda.in")
 
 print("oxygen: converged in %d iterations" % oxygen.iterations)
@@ -57,8 +67,8 @@ print("  2s exchange splitting %.4f eV, 2p %.4f eV"
       % (levels[1, 0] - levels[0, 0], levels[1, 1] - levels[0, 1]))
 ```
 
-    /u/40/ladovj1/data/Documents/programs/claude/pypresso/pypresso/scf/driver.py:2108: UserWarning: K_POINTS gamma asks for the half-sphere storage of the gamma-point trick, which is not implemented; running at an explicit k = 0 with the full G sphere instead. The result is the same, the cost is twice the plane waves
-      calculation = calculation or Calculation(
+    /u/40/ladovj1/data/Documents/programs/claude/pypresso/pypresso/calculator.py:226: UserWarning: K_POINTS gamma asks for the half-sphere storage of the gamma-point trick, which is not implemented; running at an explicit k = 0 with the full G sphere instead. The result is the same, the cost is twice the plane waves
+      self._calculation = Calculation(
 
 
     oxygen: converged in 12 iterations
@@ -76,12 +86,12 @@ reproduces.
 
 
 ```python
-system, pseudos, beta = load("pw_lsda", "lsda.in")
-nickel = run_scf(system, pseudos, conv_thr=1e-10, max_iterations=200, mixing_beta=beta)
+ni = load("pw_lsda", "lsda.in")
+nickel = ni.get_scf(max_iterations=200)
 ref = qe("pw_lsda", "lsda.in")
 
 print("fcc Ni: %d k-points per channel, converged in %d iterations"
-      % (system.kpoints.nk, nickel.iterations))
+      % (ni.system.kpoints.nk, nickel.iterations))
 print("  total energy   %.9f Ry   QE %.8f   difference %.1e"
       % (nickel.total_energy, ref.total_energy,
          abs(nickel.total_energy - ref.total_energy)))
@@ -112,9 +122,8 @@ path = np.array([[0.5, 0.25, 0.75], [0.5, 0.5, 0.5], [0.0, 0.0, 0.0],
 counts = np.array([12, 16, 16, 12, 8, 0])
 labels = ["W", "L", r"$\Gamma$", "X", "W", "K"]
 
-bands = run_bands(system, pseudos, nickel.density,
-                  kpoints=KPoints.band_path(path, counts, system.cell, crystal=False),
-                  nbnd=9, conv_thr=1e-10, fermi_energy=nickel.fermi_energy)
+bands = ni.get_bands(
+    kpoints=KPoints.band_path(path, counts, ni.system.cell, crystal=False), nbnd=9)
 
 x = bands.path_length
 levels = bands.eigenvalues_by_spin * RY_TO_EV - nickel.fermi_energy * RY_TO_EV
@@ -155,7 +164,7 @@ one number is stationary, and the moment is the imbalance that produces.
 
 
 ```python
-dos, dos_nscf = run_dos(system, pseudos, nickel.density, grid=(12, 12, 12), conv_thr=1e-10)
+dos = ni.get_dos(grid=(12, 12, 12))
 ef = dos.fermi_energy
 up, down = (float(np.interp(ef, dos.energies, dos.integrated[s])) for s in range(2))
 
