@@ -11,6 +11,19 @@ Everything below is silicon with an ultrasoft dataset, and every number is compa
 three-decimal printout allows — the **Löwdin charges to 5e-5**, and the curves to **0.3% of
 their peak**.
 
+Each Kohn-Sham state is resolved onto orbitals that are Löwdin-orthogonalised over
+*every* atomic orbital in the crystal, which is what makes the weights sum to at most
+one:
+
+$$\rho_i(E) = \sum_{n\mathbf k} w_{\mathbf k}\,
+   \big|\langle \tilde\phi_i | \hat S | \psi_{n\mathbf k}\rangle\big|^2\,
+   \delta(E - \varepsilon_{n\mathbf k}),
+\qquad
+|\tilde\phi\rangle = O^{-1/2}\,\hat S\,|\phi\rangle,
+\quad O_{ij} = \langle \phi_i | \hat S | \phi_j \rangle$$
+
+$$\text{spilling} = 1 - \frac{1}{N_{\rm elec}} \sum_i \int^{E_F} \rho_i(E)\, dE$$
+
 
 ```python
 from pathlib import Path
@@ -18,24 +31,20 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
+from pypresso import Calculator
 from pypresso.io import read_pdos_file, read_projwfc_output
-from pypresso.io.pwin import read_pw_input
 from pypresso.projwfc import atomic_projections
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.scf.driver import Calculation
-from pypresso.system import build_system
 from pypresso.system.kpoints import KPoints
 from pypresso.units import RY_TO_EV
 from pypresso.workflows.nscf import fixed_density_states
-from pypresso.workflows.pdos import run_pdos
 
 CASES = Path("../tests/data/qe")
 PSEUDO = Path("../tests/data/pseudo")
 
-system = build_system(read_pw_input(CASES / "si2-us-dense.in"))
-pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-scf = run_scf(system, pseudos, conv_thr=1e-10)
+silicon = Calculator.from_file(CASES / "si2-us-dense.in", pseudo_dir=PSEUDO,
+                               announce=False, conv_thr=1e-10)
+system, pseudos = silicon.system, silicon.pseudos
+scf = silicon.get_scf()
 print(f"silicon, ultrasoft: {system.kpoints.nk} irreducible k-points, "
       f"E = {scf.total_energy:.8f} Ry")
 ```
@@ -59,8 +68,7 @@ differ in the fourth decimal of an eV.
 reference = read_projwfc_output(CASES / "reference.projwfc.si2-us-dense")
 energies_ev = read_pdos_file(CASES / "reference.si2-us-dense.pdos_tot")[0]
 
-pdos, states = run_pdos(
-    system, pseudos, scf,
+pdos = silicon.get_pdos(
     delta_e=0.05 / RY_TO_EV,   # projwfc.x's DeltaE and degauss for the committed run
     degauss=0.0147,            # 0.2 eV -- its degauss is in Ry, its DeltaE is not
     emin=energies_ev[0] / RY_TO_EV,
@@ -116,7 +124,7 @@ for label, mine, theirs in rows:
 # band but the topmost, which is the one neither eigensolver converges: both stop on
 # the accuracy of the states the density needs, and an empty band at the top of the
 # window is carried along rather than converged.
-projections = atomic_projections(Calculation(system, pseudos), scf.wavefunctions)
+projections = atomic_projections(silicon.calculation, scf.wavefunctions)
 stacked = np.concatenate(list(np.transpose(projections, (0, 1, 3, 2))), axis=0)[:, :-1]
 theirs = reference.projections[:, :-1]
 printed = theirs > 0.0

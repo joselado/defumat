@@ -8,7 +8,24 @@ pushed towards filled and empty orbitals.
 QE's `lda_plus_u_kind = 0`, read from the `HUBBARD` card, with `U`, `J0`, `alpha` and
 `beta` on `atomic`, `ortho-atomic` or `norm-atomic` projectors. Seven cases match Quantum
 ESPRESSO to **≤6.7e-9 Ry**, the Hubbard term itself to 4.6e-7 Ry, and `force_hub` — which
-is not transcribed, only differentiated through — to 4.8e-6 Ry/bohr. Phase P20.
+is not transcribed, only differentiated through — to 4.8e-6 Ry/bohr.
+
+Dudarev's simplified rotationally-invariant functional, written in terms of the
+occupation matrix of each correlated shell:
+
+$$E_U = \sum_{I,\sigma} \frac{U^I - J^I_0}{2}\,
+   \mathrm{Tr}\Big[ n^{I\sigma} \big( 1 - n^{I\sigma} \big) \Big],
+\qquad
+n^{I\sigma}_{mm'} = \sum_{n\mathbf k} f_{n\mathbf k\sigma}
+   \langle \psi_{n\mathbf k\sigma} | \varphi^I_{m'}\rangle
+   \langle \varphi^I_{m} | \psi_{n\mathbf k\sigma}\rangle$$
+
+It is zero at every integer occupation and positive between, so its potential
+$v^{I\sigma} = \partial E_U / \partial n^{I\sigma}$ pushes empty levels up and full
+ones down. **Only $E_U$ is written here** and $v$ is `jax.grad` of it, which makes QE's
+`v_hubbard` a test rather than a second implementation.
+
+Phase P20.
 
 
 ```python
@@ -21,13 +38,10 @@ import numpy as np
 from pypresso.hubbard.energy import (coefficients_from_setup, hubbard_potential,
                                      qe_hubbard_potential)
 from pypresso.hubbard.manifold import build_hubbard_setup
+from pypresso import Calculator
 from pypresso.io import read_qe_output
 from pypresso.io.pwin import parse_pw_input
-from pypresso.pseudo import read_upf
 from pypresso.pseudo.atomic import atomic_wavefunctions
-from pypresso.scf import run_scf
-from pypresso.scf.driver import Calculation
-from pypresso.system import build_system
 from pypresso.units import RY_TO_EV
 
 PSEUDO, GENERATED = Path("../tests/data/pseudo"), Path("../tests/data/qe")
@@ -36,21 +50,18 @@ plt.rcParams.update({"figure.dpi": 110, "font.size": 9})
 
 
 def load(text):
+    """A calculator carrying the input's own mixing settings.
+
+    These are the cases that need them: a Hubbard SCF is stiff, and
+    `mixing_fixed_ns` holds the occupation matrix still for the first few
+    iterations. Put on the calculator once, they reach every method.
+    """
     pwin = parse_pw_input(text)
-    system = build_system(pwin)
-    return pwin, system, tuple(read_upf(PSEUDO / s.pseudo_file)
-                               for s in system.structure.species)
-
-
-def scf(text, **options):
-    pwin, system, pseudos = load(text)
-    calculation = Calculation(system, pseudos)
-    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-10,
-                     max_iterations=250,
-                     mixing_beta=float(pwin.get("electrons", "mixing_beta", 0.7)),
-                     mixing_fixed_ns=int(pwin.get("electrons", "mixing_fixed_ns", 0)),
-                     **options)
-    return system, calculation, result
+    return Calculator.from_text(
+        text, PSEUDO, announce=False, conv_thr=1e-10, max_iterations=250,
+        mixing_beta=float(pwin.get("electrons", "mixing_beta", 0.7)),
+        mixing_fixed_ns=int(pwin.get("electrons", "mixing_fixed_ns", 0)),
+    )
 
 
 u = 4.3 / RY_TO_EV                                   # the FeO benchmark's U, in Ry
@@ -68,7 +79,8 @@ fig.tight_layout()
 
 feo_input = (TESTSUITE / "pw_lda+U" / "lda+U.in").read_text()
 print(feo_input[feo_input.index("HUBBARD"):])
-pwin_feo, system_feo, pseudos_feo = load(feo_input)
+feo = load(feo_input)
+system_feo, pseudos_feo = feo.system, feo.pseudos
 setup = build_hubbard_setup(system_feo.hubbard, system_feo.structure, pseudos_feo)
 for slot, kind in enumerate(setup.types):
     item, name = setup.species[kind], system_feo.structure.species[kind].name
@@ -102,8 +114,9 @@ at a single k-point, and $O^{-1/2}$ over **all** `natomwfc` is what fixes that.
 
 
 ```python
-_, system_ni, pseudos_ni = load((GENERATED / "ni-ldau-ortho.in").read_text())
-calc_ni = Calculation(system_ni, pseudos_ni)
+nickel = load((GENERATED / "ni-ldau-ortho.in").read_text())
+system_ni, pseudos_ni = nickel.system, nickel.pseudos
+calc_ni = nickel.calculation
 phi = atomic_wavefunctions(pseudos_ni, system_ni.structure, system_ni.cell,
                            calc_ni.basis.smooth, calc_ni.basis.planewaves,
                            system_ni.kpoints)[0]
@@ -175,7 +188,7 @@ for label, source in (
         ("FeO, U -> 0", (TESTSUITE / "pw_lda+U" / "lda+U-noU.in").read_text()),
         ("FeO, U = 4.3 eV", (TESTSUITE / "pw_lda+U" / "lda+U.in").read_text())):
     started = time.time()
-    system, calculation, result = scf(source)
+    result = load(source).get_scf()
     stem = {"Ni, U = 3 eV, ortho": "ni-ldau-ortho",
             "FeO, U -> 0": "pw_lda+U-lda+U-noU",
             "FeO, U = 4.3 eV": "pw_lda+U-lda+U"}.get(label)
@@ -197,22 +210,22 @@ for label, (result, reference) in runs.items():
                  result.total_energy - reference.total_energy, hubbard))
 ```
 
-      Ni, U -> 0              37.3 s   13 iterations
+      Ni, U -> 0              21.8 s   13 iterations
 
 
-      Ni, U = 3 eV, ortho     26.9 s   12 iterations
+      Ni, U = 3 eV, ortho     14.2 s   12 iterations
 
 
-      FeO, U -> 0            238.4 s   35 iterations
+      FeO, U -> 0            148.9 s   39 iterations
 
 
-      FeO, U = 4.3 eV        267.3 s   53 iterations
+      FeO, U = 4.3 eV        123.1 s   56 iterations
     
                                       E (Ry)           QE (Ry) difference     E_U (Ry)
     Ni, U -> 0                 -85.723399012                 -          -   0.00000000
     Ni, U = 3 eV, ortho        -85.628386898     -85.628386900   2.03e-09   0.09119025
-    FeO, U -> 0               -174.824657947    -174.824657950   3.44e-09   0.00000000
-    FeO, U = 4.3 eV           -174.471560677    -174.471560670  -6.70e-09   0.31370493
+    FeO, U -> 0               -174.824657947    -174.824657950   3.41e-09   0.00000000
+    FeO, U = 4.3 eV           -174.471560677    -174.471560670  -6.65e-09   0.31370412
 
 
 ## What the correction actually does to the occupations

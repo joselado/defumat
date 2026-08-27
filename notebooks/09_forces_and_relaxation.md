@@ -7,6 +7,17 @@ hand-derived. QE's six force routines are transcribed beside it as a cross-check
 two agree with `pw.x` to **≤2e-5 Ry/bohr** on five references; a BFGS relaxation
 reproduces QE's geometry to **1e-6 bohr**.
 
+The force is a *partial* derivative -- the states are held fixed, which is what makes it
+Hellmann-Feynman plus Pulay rather than a chain rule through the whole SCF:
+
+$$\mathbf F_I = -\left.\frac{\partial E_{\rm tot}
+   [\{\psi\}, \{f\}, \boldsymbol\tau]}
+   {\partial \boldsymbol\tau_I}\right|_{\psi,\, f,\, \varepsilon\ \rm fixed}$$
+
+The energy is stationary in the wavefunctions at the converged state, so freezing them
+loses nothing; the terms QE derives by hand -- `force_lc`, `force_cc`, `force_ew`,
+`force_us`, `addusforce`, `force_corr` -- are what this one derivative expands into.
+
 Phase P15. Inputs and references are committed under `tests/data/qe/`.
 
 
@@ -17,22 +28,17 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.forces import compute_forces, frozen_energy, state_from_result
 from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.scf.driver import Calculation
-from pypresso.system import build_system
-from pypresso.workflows import run_relax
+from pypresso.scf import run_scf          # the finite difference below needs it
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
 
 def load(case):
-    system = build_system(read_pw_input(CASES / f"{case}.in"))
-    return system, tuple(read_upf(PSEUDO / s.pseudo_file)
-                         for s in system.structure.species)
+    return Calculator.from_file(CASES / f"{case}.in", pseudo_dir=PSEUDO,
+                                announce=False, conv_thr=1e-10)
 
 
 def reference(case):
@@ -45,10 +51,10 @@ def reference(case):
 print("%-18s %18s %18s %12s"
       % ("case", "SCF total (Ry)", "frozen functional", "difference"))
 for case in ("si2-nc-force", "si2-us-force", "si2-paw-force", "si2-us-pbe-force"):
-    system, pseudos = load(case)
-    calculation = Calculation(system, pseudos)
-    scf = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-10)
-    energy = float(frozen_energy(calculation, system.structure.positions,
+    calc = load(case)
+    scf = calc.get_scf()
+    energy = float(frozen_energy(calc.calculation,
+                                 calc.system.structure.positions,
                                  state_from_result(scf)))
     print("%-18s %18.10f %18.10f %12.1e"
           % (case, scf.total_energy, energy, energy - scf.total_energy))
@@ -57,16 +63,16 @@ for case in ("si2-nc-force", "si2-us-force", "si2-paw-force", "si2-us-pbe-force"
     case                   SCF total (Ry)  frozen functional   difference
 
 
-    si2-nc-force           -15.7874037087     -15.7874037086      1.0e-10
+    si2-nc-force           -15.7874037087     -15.7874037087      1.8e-15
 
 
-    si2-us-force           -22.7454400458     -22.7454400458      3.5e-13
+    si2-us-force           -22.7454400458     -22.7454400458      3.6e-15
 
 
-    si2-paw-force          -89.2668867248     -89.2668867248      1.3e-12
+    si2-paw-force          -89.2668867248     -89.2668867248      1.0e-12
 
 
-    si2-us-pbe-force       -22.8143892009     -22.8143892001      7.8e-10
+    si2-us-pbe-force       -22.8143892008     -22.8143892008      0.0e+00
 
 
 ## The force on a displaced silicon cell
@@ -79,10 +85,8 @@ implementation, run with symmetry switched off so that nothing is projected out.
 ```python
 import dataclasses
 
-system, pseudos = load("si2-nc-force")
-calculation = Calculation(system, pseudos)
-scf = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-10)
-forces = compute_forces(calculation, scf)                       # autodiff, the default
+calc = load("si2-nc-force")
+forces = calc.get_forces()                       # autodiff, the default
 qe = reference("si2-nc-force")
 
 print("%4s %38s %38s" % ("atom", "pypresso (Ry/bohr)", "Quantum ESPRESSO"))
@@ -91,10 +95,14 @@ for atom, (ours, theirs) in enumerate(zip(forces.forces, qe.forces)):
                             " ".join("% .8f" % v for v in theirs)))
 print("largest difference %.2e Ry/bohr" % np.abs(forces.forces - qe.forces).max())
 
-unsymmetric = dataclasses.replace(system, nosym=True)
-plain = Calculation(unsymmetric, pseudos)
-autodiff = compute_forces(plain, run_scf(unsymmetric, pseudos, calculation=plain,
-                                         conv_thr=1e-12)).forces
+nosym = Calculator(dataclasses.replace(calc.system, nosym=True), calc.pseudos,
+                   announce=False, conv_thr=1e-12)
+autodiff = nosym.get_forces().forces
+
+# The finite difference is of the *same* fixed setup, so it steps the positions
+# through `at_positions` rather than building a new calculator each time: that is
+# what keeps the basis frozen and the difference free of Pulay error.
+plain, pseudos = nosym.calculation, nosym.pseudos
 
 
 def energy_at(positions):
@@ -102,7 +110,7 @@ def energy_at(positions):
     return run_scf(moved.system, pseudos, calculation=moved, conv_thr=1e-12).total_energy
 
 
-h, origin = 2.0e-3, np.asarray(unsymmetric.structure.positions)
+h, origin = 2.0e-3, np.asarray(nosym.system.structure.positions)
 print("\n%12s %20s %16s %13s"
       % ("coordinate", "finite difference", "autodiff", "difference"))
 for atom, direction in ((0, 0), (0, 1), (1, 2)):
@@ -116,8 +124,8 @@ for atom, direction in ((0, 0), (0, 1), (1, 2)):
 ```
 
     atom                     pypresso (Ry/bohr)                       Quantum ESPRESSO
-       0   0.06039736  0.00000000 -0.00000000    0.06039673  0.00000000  0.00000000
-       1  -0.06039736 -0.00000000  0.00000000   -0.06039673  0.00000000  0.00000000
+       0   0.06039736 -0.00000000  0.00000000    0.06039673  0.00000000  0.00000000
+       1  -0.06039736  0.00000000 -0.00000000   -0.06039673  0.00000000  0.00000000
     largest difference 6.26e-07 Ry/bohr
 
 
@@ -148,13 +156,12 @@ already down at 1e-7 Ry/bohr.
 
 
 ```python
-system_us, pseudos_us = load("si2-us-force")
-calc_us = Calculation(system_us, pseudos_us)
-scf_us = run_scf(system_us, pseudos_us, calculation=calc_us, conv_thr=1e-10)
+us = load("si2-us-force")
+system_us, calc_us = us.system, us.calculation
 qe_us = reference("si2-us-force")
 
-analytic = compute_forces(calc_us, scf_us, method="analytic")
-autodiff_us = compute_forces(calc_us, scf_us, method="autodiff")
+analytic = us.get_forces(method="analytic")
+autodiff_us = us.get_forces(method="autodiff")
 
 from pypresso.system.symmetry import atom_mapping, symmetrize_vector
 
@@ -179,9 +186,9 @@ print("total, autodiff vs QE   %.1e Ry/bohr"
 
                 term   pypresso (x, atom 1)     Quantum ESPRESSO   difference
                ewald             0.10209222           0.10209221      1.1e-08
-               local            -0.10041989          -0.10042054      6.5e-07
-                core            -0.00600235          -0.00600313      7.8e-07
-            nonlocal             0.06307401           0.06307509      1.1e-06
+               local            -0.10042023          -0.10042054      3.1e-07
+                core            -0.00600309          -0.00600313      4.5e-08
+            nonlocal             0.06307452           0.06307509      5.7e-07
       scf_correction             0.00000007          -0.00000028      4.0e-07
     
     total, analytic vs QE   2.0e-07 Ry/bohr
@@ -197,10 +204,10 @@ the symmetry of the crystal and `checkallsym` complains if the geometry tries to
 
 
 ```python
-system_relax, pseudos_relax = load("si2-nc-relax")
-relaxed = run_relax(system_relax, pseudos_relax, conv_thr=1e-10)
+relax = load("si2-nc-relax")
+relaxed = relax.get_relax()
 qe_relax = reference("si2-nc-relax")
-alat = float(system_relax.cell.alat)
+alat = float(relax.system.cell.alat)
 
 print("%5s %20s %19s %19s" % ("step", "total energy (Ry)", "max |F| (Ry/bohr)",
                               "separation (alat)"))
@@ -233,7 +240,7 @@ fig.tight_layout()
         4         -15.79359610            0.000001   (0.2500, 0.2500, 0.2500)
     
     final energy   pypresso -15.7935961045   QE -15.7935961042   difference -2.8e-10 Ry
-    final geometry differs from QE by 3.0e-07 bohr
+    final geometry differs from QE by 3.4e-07 bohr
 
 
 

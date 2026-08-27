@@ -11,7 +11,24 @@ the coupling.
 spin-orbit run allocate a magnetization it does not have: `nspin` says which regime (1, 2
 or 4), `npol` how many components a *wavefunction* has, and `nspin_mag` how many a
 *density* has — which is **one** for a nonmagnetic spin-orbit run, exactly as for an
-unpolarized one. Phase P14.
+unpolarized one.
+
+A state is a two-component spinor and the nonlocal term is a matrix in spin space, built
+from the $j$-resolved projectors of the dataset:
+
+$$|\psi_{n\mathbf k}\rangle =
+  \begin{pmatrix} \psi^{\uparrow}_{n\mathbf k} \\[2pt]
+                   \psi^{\downarrow}_{n\mathbf k} \end{pmatrix},
+\qquad
+\hat V_{\rm NL} = \sum_{I}\sum_{ij}\sum_{\alpha\beta}
+   D^{I,\,\alpha\beta}_{ij}\;
+   |\beta^I_i\rangle\langle\beta^I_j| \otimes |\alpha\rangle\langle\beta|$$
+
+$D^{\alpha\beta}_{ij}$ is assembled from the Clebsch-Gordan coefficients that couple
+$(l, m_l, \sigma)$ to $(j, m_j)$ -- QE's `fcoef` -- which is the whole of where the
+coupling enters.
+
+Phase P14.
 
 
 ```python
@@ -20,13 +37,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.system import build_system
 from pypresso.units import RY_TO_EV
-from pypresso.workflows import run_bands
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite")
 PSEUDO, CASES = Path("../tests/data/pseudo"), Path("../tests/data/qe")
@@ -35,9 +49,8 @@ plt.rcParams.update({"figure.dpi": 120, "font.size": 9, "axes.grid": True,
 
 
 def load(path):
-    system = build_system(read_pw_input(path))
-    return system, tuple(read_upf(PSEUDO / s.pseudo_file)
-                         for s in system.structure.species)
+    return Calculator.from_file(path, pseudo_dir=PSEUDO, announce=False,
+                                conv_thr=1e-10)
 
 
 # A fully-relativistic dataset keeps two projectors where a scalar one keeps their average:
@@ -98,15 +111,16 @@ work = Path(tempfile.mkdtemp())
 (work / "noncollinear.in").write_text(
     smeared[:marker] + "\n    noncolin = .true.,\n" + smeared[marker:])
 
-collinear_system, pseudos = load(work / "collinear.in")
-spinor_system, _ = load(work / "noncollinear.in")
-print("collinear:     nspin=%d npol=%d nspin_mag=%d"
-      % (collinear_system.nspin, collinear_system.npol, collinear_system.nspin_mag))
-print("noncollinear:  nspin=%d npol=%d nspin_mag=%d   <- one: no magnetization to carry"
-      % (spinor_system.nspin, spinor_system.npol, spinor_system.nspin_mag))
+collinear_calc = load(work / "collinear.in")
+spinor_calc = load(work / "noncollinear.in")
+for label, s in (("collinear   ", collinear_calc.system),
+                 ("noncollinear", spinor_calc.system)):
+    print("%s:  nspin=%d npol=%d nspin_mag=%d"
+          % (label, s.nspin, s.npol, s.nspin_mag))
+print("             ^ nspin_mag is one: there is no magnetization to carry")
 
-collinear = run_scf(collinear_system, pseudos, conv_thr=1e-10, max_iterations=80)
-spinor = run_scf(spinor_system, pseudos, conv_thr=1e-10, max_iterations=80)
+collinear = collinear_calc.get_scf(max_iterations=80)
+spinor = spinor_calc.get_scf(max_iterations=80)
 print("\n%14s %18s %18s %12s" % ("term", "collinear", "noncollinear", "difference"))
 for term, value in collinear.energy_terms.items():
     print("%14s %18.12f %18.12f %12.1e"
@@ -122,20 +136,25 @@ print("\neigenvalues: %d bands -> %d, max |difference from doubling| = %.2e eV"
          np.abs(spinor.eigenvalues[:, :n] - doubled).max() * RY_TO_EV))
 ```
 
-    collinear:     nspin=1 npol=1 nspin_mag=1
-    noncollinear:  nspin=4 npol=2 nspin_mag=1   <- one: no magnetization to carry
+    collinear   :  nspin=1 npol=1 nspin_mag=1
+    noncollinear:  nspin=4 npol=2 nspin_mag=1
+                 ^ nspin_mag is one: there is no magnetization to carry
 
 
     
               term          collinear       noncollinear   difference
-      one-electron     4.833721601574     4.833721601574      0.0e+00
-           hartree     1.084391608208     1.084391608208     -4.4e-16
-                xc    -4.812850203017    -4.812850203017      4.4e-15
+      one-electron     4.833721601574     4.833721601574     -6.2e-15
+           hartree     1.084391608208     1.084391608208      2.4e-15
+                xc    -4.812850203017    -4.812850203017      0.0e+00
              ewald   -16.899758577223   -16.899758577223      0.0e+00
           smearing    -0.000000000418    -0.000000000418     -1.0e-19
-             TOTAL   -15.794495570876   -15.794495570876      3.6e-15
+             TOTAL   -15.794495570876   -15.794495570876     -3.6e-15
     
-    eigenvalues: 8 bands -> 16, max |difference from doubling| = 4.83e-14 eV
+    eigenvalues: 8 bands -> 16, max |difference from doubling| = 5.44e-14 eV
+
+
+    /u/40/ladovj1/data/Documents/programs/claude/pypresso/pypresso/calculator.py:312: RuntimeWarning: tstress = .true. in the input, but forces and stress for a noncollinear or spin-orbit calculation are not implemented; nspin = 1 and nspin = 2 are, on norm-conserving, ultrasoft and PAW pseudopotentials. The SCF is unaffected and SCFResult.stress is None.
+      self._scf = run_scf(self.system, self.pseudos,
 
 
 ## Platinum, against Quantum ESPRESSO
@@ -150,9 +169,8 @@ for name, stem, label in (("spinorbit.in", "pw_spinorbit-spinorbit", "ultrasoft,
                           ("spinorbit-pbe.in", "pw_spinorbit-spinorbit-pbe",
                            "ultrasoft, PBE"),
                           ("spinorbit-paw.in", "pw_spinorbit-spinorbit-paw", "PAW, PBE")):
-    system, pt_pseudos = load(QE / "pw_spinorbit" / name)
     reference = read_qe_output(CASES / f"reference.out.{stem}")
-    result = run_scf(system, pt_pseudos, conv_thr=1e-10, max_iterations=100)
+    result = load(QE / "pw_spinorbit" / name).get_scf(max_iterations=100)
     eigen = np.abs(np.asarray(result.eigenvalues) * RY_TO_EV
                    - np.squeeze(np.asarray(reference.eigenvalues))).max()
     rows.append((label, result, reference, eigen))
@@ -177,7 +195,7 @@ print("(inversion and time reversal both hold, so every level is doubly degenera
       ultrasoft, PBE      -90.199533906      -90.199533910    3.8e-09      2.4e-04
             PAW, PBE     -753.342691622     -753.342691630    8.4e-09      1.0e-04
     
-    max Kramers splitting over all k: 1.3e-13 eV
+    max Kramers splitting over all k: 1.1e-13 eV
     (inversion and time reversal both hold, so every level is doubly degenerate)
 
 
@@ -198,14 +216,15 @@ CORNERS = {"Gamma": 0, "M": 4, "K": 7, "Gamma'": 12}
 
 results, bands = {}, {}
 for tag in ("nosoc", "soc"):
-    system, bi_pseudos = load(CASES / f"bismuthene-{tag}{SIZE}.in")
-    results[tag] = run_scf(system, bi_pseudos, conv_thr=1e-10, max_iterations=100)
-    path_system, _ = load(CASES / f"bismuthene-{tag}{SIZE}-bands.in")
-    bands[tag] = run_bands(path_system, bi_pseudos, results[tag].density,
-                           nbnd=path_system.nbnd,
-                           fermi_energy=results[tag].fermi_energy)
+    calc = load(CASES / f"bismuthene-{tag}{SIZE}.in")
+    system = calc.system
+    results[tag] = calc.get_scf(max_iterations=100)
+    # Only the k-path comes from the bands input; the density is already here,
+    # and so is the Fermi level the plot puts at zero.
+    path_system = load(CASES / f"bismuthene-{tag}{SIZE}-bands.in").system
+    bands[tag] = calc.get_bands(kpoints=path_system.kpoints, nbnd=path_system.nbnd)
     reference = read_qe_output(CASES / f"reference.out.bismuthene-{tag}{SIZE}")
-    nelec = sum(bi_pseudos[t].z_valence for t in system.structure.types)
+    nelec = sum(calc.pseudos[t].z_valence for t in system.structure.types)
     occupied = int(round(nelec / (1 if system.nspin == 4 else 2)))
     levels = bands[tag].eigenvalues_ev
     direct = levels[:, occupied] - levels[:, occupied - 1]

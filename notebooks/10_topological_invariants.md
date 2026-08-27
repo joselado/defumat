@@ -9,7 +9,28 @@ of a pointwise curvature is not.
 
 **Two things bite in a plane-wave code and both are silent:** neighbouring k-points do not
 share a G-sphere, so coefficients are aligned by Miller index; and the wrap at the zone
-edge is a *shift* of that index, $u_{k+b}(G) = u_k(G+b)$. Phase P16.
+edge is a *shift* of that index, $u_{k+b}(G) = u_k(G+b)$.
+
+The curvature and its integral, and the lattice form that makes the integral exact:
+
+$$\Omega_{n}(\mathbf k) = i\,\nabla_{\mathbf k} \times
+   \langle u_{n\mathbf k}|\nabla_{\mathbf k} u_{n\mathbf k}\rangle,
+\qquad
+C = \frac{1}{2\pi}\int_{\rm BZ} \Omega(\mathbf k)\; d^2k \in \mathbb{Z}$$
+
+$$C = \frac{1}{2\pi}\sum_{\square}
+  \arg \Big[
+   \det M^{(\mathbf k,\mathbf k+\mathbf b_1)}\;
+   \det M^{(\mathbf k+\mathbf b_1,\mathbf k+\mathbf b_1+\mathbf b_2)}\;
+   \det M^{(\cdots)}\;\det M^{(\cdots)} \Big],
+\qquad
+M^{(\mathbf k,\mathbf k')}_{mn} =
+  \langle u_{m\mathbf k}|\hat S|u_{n\mathbf k'}\rangle$$
+
+The second is Fukui-Hatsugai-Suzuki: a sum of plaquette phases, each in $(-\pi,\pi]$,
+which is an **exact integer on any mesh** where a Riemann sum of the first is not.
+
+Phase P16.
 
 
 ```python
@@ -19,10 +40,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo.upf import read_upf
-from pypresso.scf.driver import run_scf
-from pypresso.system.builder import build_system
+from pypresso import Calculator
 from pypresso.system.symmetry import find_symmetries
 from pypresso.topology import (ModelSource, chern_number, plane_mesh, trim_points,
                                z2_invariant, z2_invariant_3d)
@@ -35,9 +53,10 @@ sys.path.insert(0, str(REPO))
 plt.rcParams.update({"figure.dpi": 120, "font.size": 9, "axes.grid": True,
                      "grid.alpha": 0.3, "figure.autolayout": True})
 
-system = build_system(read_pw_input(CASES / "si2-us.in"))
-pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-si = run_scf(system, pseudos, conv_thr=1e-10)
+silicon = Calculator.from_file(CASES / "si2-us.in", pseudo_dir=PSEUDO,
+                               announce=False, conv_thr=1e-10)
+system, pseudos = silicon.system, silicon.pseudos
+si = silicon.get_scf()
 source = DFTSource(system=system, pseudos=pseudos, density=si.density, nocc=4)
 
 # The zone-edge wrap, measured: k = 0.4 -> 0.5 directly, and the same step taken as
@@ -217,7 +236,7 @@ for index, point in enumerate(points):
 print("  product over the eight TRIM = %+d   ->   nu0 = %d"
       % (product, 0 if product == 1 else 1))
 
-curvature = run_berry_curvature(system, pseudos, si.density, shape=(6, 6), nocc=4)
+curvature = silicon.get_berry_curvature(shape=(6, 6), nocc=4)
 print("\nsilicon's Berry curvature (6x6 plane at k3 = 0): Chern number %.1e, "
       "largest plaquette phase %.1e"
       % (curvature.chern_number, curvature.max_flux))
@@ -240,6 +259,8 @@ print("\nsilicon's Berry curvature (6x6 plane at k3 = 0): Chern number %.1e, "
 
     
     silicon, on Kohn-Sham states:
+
+
        (0.0, 0.0, 0.0)  parities [1 1 1 1]  delta = +1
        (0.0, 0.0, 0.5)  parities [-1 -1 -1  1]  delta = -1
        (0.0, 0.5, 0.0)  parities [-1 -1 -1  1]  delta = -1
@@ -247,14 +268,12 @@ print("\nsilicon's Berry curvature (6x6 plane at k3 = 0): Chern number %.1e, "
        (0.5, 0.0, 0.0)  parities [-1 -1 -1  1]  delta = -1
        (0.5, 0.0, 0.5)  parities [-1 -1  1  1]  delta = +1
        (0.5, 0.5, 0.0)  parities [-1 -1  1  1]  delta = +1
-
-
        (0.5, 0.5, 0.5)  parities [-1  1  1  1]  delta = -1
       product over the eight TRIM = +1   ->   nu0 = 0
 
 
     
-    silicon's Berry curvature (6x6 plane at k3 = 0): Chern number -3.7e-17, largest plaquette phase 4.9e-07
+    silicon's Berry curvature (6x6 plane at k3 = 0): Chern number 2.7e-17, largest plaquette phase 8.7e-08
 
 
 Silicon is inversion-symmetric *and* time-reversal-symmetric, so its curvature vanishes

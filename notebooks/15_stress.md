@@ -6,6 +6,16 @@ function of a strain at frozen wavefunctions — the same construction the force
 (notebook `09`) with the cell in place of the atoms — so no expression is derived for the
 kinetic, Hartree, local, exchange-correlation, augmentation or Ewald contributions.
 
+The strain is a deformation of every cell vector, and the stress is the energy's
+derivative with respect to it -- taken, like the force, at frozen wavefunctions:
+
+$$\mathbf a_i \;\to\; (\delta_{ab} + \epsilon_{ab})\,\mathbf a_i,
+\qquad
+\sigma_{ab} = -\frac{1}{\Omega}
+  \left.\frac{\partial E_{\rm tot}}{\partial \epsilon_{ab}}\right|_{\psi\ \rm fixed},
+\qquad
+P = \tfrac{1}{3}\,\mathrm{tr}\,\sigma$$
+
 On the five silicon references generated for this phase it reproduces `pw.x` to
 **≤2.7e-7 Ry/bohr³**, and every one of the seven terms `pw.x` prints separately matches to
 the precision it prints them in.
@@ -18,11 +28,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io import read_qe_output
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
-from pypresso.scf import Calculation, run_scf
-from pypresso.stress import compute_stress, format_stress
+from pypresso.stress import format_stress
 from pypresso.system import build_system
 from pypresso.units import RY_TO_KBAR
 
@@ -31,12 +41,11 @@ PSEUDO = Path("../tests/data/pseudo")
 
 
 def converged(name, conv_thr=1e-10):
-    system = build_system(read_pw_input(CASES / f"{name}.in"))
-    pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-    calculation = Calculation(system, pseudos)
-    result = run_scf(system, pseudos, calculation=calculation,
-                     conv_thr=conv_thr, max_iterations=100)
-    return system, calculation, result
+    """A calculator whose ground state is already in hand."""
+    calc = Calculator.from_file(CASES / f"{name}.in", pseudo_dir=PSEUDO,
+                                announce=False, conv_thr=conv_thr)
+    calc.get_scf(max_iterations=100)
+    return calc
 ```
 
 ## Run it
@@ -48,18 +57,19 @@ two symmetry operations and every entry of `sigma` is free.
 
 
 ```python
-system, calculation, result = converged("si2-nc-sheared")
-stress = compute_stress(calculation, result, terms=True)
+sheared = converged("si2-nc-sheared")
+result = sheared.scf_result
+stress = sheared.get_stress(terms=True)
 
 print(f"E = {result.total_energy:.8f} Ry")
 print(format_stress(stress))
 ```
 
-    E = -15.78818221 Ry
+    E = -15.78818268 Ry
               total   stress  (Ry/bohr**3)                   (kbar)     P=      -31.13
       -0.00050526  -0.00000855  -0.00013061          -74.33       -1.26      -19.21
       -0.00000855   0.00002509  -0.00014744           -1.26        3.69      -21.69
-      -0.00013061  -0.00014744  -0.00015475          -19.21      -21.69      -22.76
+      -0.00013061  -0.00014744  -0.00015476          -19.21      -21.69      -22.77
 
 
 ## The equation of state
@@ -106,19 +116,20 @@ def at_scale(scale, ecutwfc=ECUT):
     system = eqx.tree_at(lambda s: s.structure.positions, system,
                          jnp.asarray(positions))
     pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-    calculation = Calculation(system, pseudos)
-    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-10,
-                     max_iterations=120)
-    return calculation, result
+    # Built from a System rather than a file: the cell has been edited in place,
+    # so there is no input to read it back from.
+    calc = Calculator(system, pseudos, announce=False, conv_thr=1e-10)
+    calc.get_scf(max_iterations=120)
+    return calc
 
 
 scales = np.linspace(0.96, 1.04, 7)
 volumes, energies, pressures = [], [], []
 for scale in scales:
-    calc, res = at_scale(scale)
+    calc = at_scale(scale)
     volumes.append(float(calc.system.cell.volume))
-    energies.append(res.total_energy)
-    pressures.append(compute_stress(calc, res).pressure_kbar)
+    energies.append(calc.scf_result.total_energy)
+    pressures.append(calc.get_stress().pressure_kbar)
 
 volumes = np.array(volumes)
 energies = np.array(energies)
@@ -185,8 +196,7 @@ rows = []
 for case in ["si2-nc-stress", "si2-nc-sheared", "si2-us-stress",
              "si2-paw-stress", "si2-us-pbe-stress"]:
     reference = read_qe_output(CASES / f"reference.out.{case}")
-    _, calc, res = converged(case)
-    ours = compute_stress(calc, res)
+    ours = converged(case).get_stress()
     rows.append((
         case,
         ours.pressure_kbar,
@@ -201,7 +211,7 @@ for name, mine, theirs, diff in rows:
 
     case                  P ours (kbar)  P QE (kbar)   max |dsigma|
     si2-nc-stress                -23.58       -23.58       4.31e-08
-    si2-nc-sheared               -31.13       -31.13       1.30e-08
+    si2-nc-sheared               -31.13       -31.13       1.64e-08
     si2-us-stress                 10.53        10.53       2.18e-07
     si2-paw-stress                10.95        10.95       2.19e-07
     si2-us-pbe-stress             47.08        47.08       2.68e-07
@@ -251,9 +261,9 @@ print(f"\nworst per-term disagreement with pw.x: {worst:.1e} Ry/bohr^3 "
          local  diag(kbar) =  -1594.37   -1198.47   -1410.62
       nonlocal  diag(kbar) =   2854.30    2828.38    2842.76
             xc  diag(kbar) =   -810.60    -810.60    -810.60
-         total  diag(kbar) =    -74.33       3.69     -22.76
+         total  diag(kbar) =    -74.33       3.69     -22.77
     
-    worst per-term disagreement with pw.x: 3.8e-08 Ry/bohr^3 (0.006 kbar, which is how finely pw.x prints them)
+    worst per-term disagreement with pw.x: 4.0e-08 Ry/bohr^3 (0.006 kbar, which is how finely pw.x prints them)
 
 
 ---
