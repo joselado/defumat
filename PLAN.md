@@ -5187,6 +5187,108 @@ anything committed here — LiF is the canonical case and its pseudopotentials a
 not in `tests/data/pseudo/`.
 
 
+### P38 — The calculator: one object, bound methods. ✅ DONE.
+
+**What.** `pypresso/calculator.py`. A `Calculator` is a `System` together with its
+pseudopotentials, and every workflow, force, stress, response and invariant in the
+package is a method on it. `Calculator.from_file("scf.in")` reads the input and loads
+the pseudopotentials the `ATOMIC_SPECIES` card names; `get_scf()` runs and caches the
+ground state; every other method consumes that cache. `from pypresso import Calculator`
+is the one import a script needs, resolved lazily through a module `__getattr__` so that
+`import pypresso` does not pull the whole package into a process that wanted `units`.
+
+**Why it is a facade and not methods on `System`.** Two reasons, the second decisive.
+`System` is an `eqx.Module` crossing `jit`/`grad` — `at_positions`, `at_strain` and
+`at_spiral_q` all differentiate through it — so a `pseudos` field would change the
+pytree every compiled path sees, as a static field it would become a jit cache key
+hashing radial tables, and a cached `SCFResult` cannot live on a frozen module at all.
+And **`System` does not have the pseudopotentials**: it carries the file *names*, so a
+`system.get_bands()` would still need them as an argument, which is the API this exists
+to shorten. The unit that can compute is `system + pseudos`, which is exactly what
+`Calculation.__init__` already takes. `System.calculator()` is a constructor and nothing
+more.
+
+**The three rules, which are the design.**
+
+- **Nothing mutates.** `with_positions`, `with_cell`, `with_spin` return a *new*
+  calculator with an empty cache. pyqula's `h.add_swave(...)` is safe there because
+  nothing expensive is cached on `h`; here a mutated cell under a cached `SCFResult`
+  would answer for the geometry it was converged at — which is exactly the defect
+  `test_geometry_invalidation` records one layer down. The converged state crosses as a
+  **starting guess** (`starting_from`, P23) rather than as a cache, which is what makes
+  a promotion cost one SCF iteration instead of twenty-five.
+- **The implicit SCF announces itself**, on stderr, and `get_scf()` is the same code, so
+  there is one behaviour rather than two. `scf_result` reads the slot without triggering
+  anything — a property that ran the SCF in order to say whether one had been run would
+  be useless in an `if`. An unconverged state is refused rather than differentiated.
+- **The cache is one slot**, holding the result and the options that produced it. Not a
+  dictionary keyed by option sets: what it holds is the wavefunctions, the largest arrays
+  in the process, and the memory rule applies to the front end too. Options are compared
+  defensively — an array-valued `starting_density` has no scalar `==` — and a comparison
+  that cannot be made counts as a miss, so the failure mode is recomputing rather than
+  serving the wrong state.
+
+**Option routing.** Shared options (`SHARED_OPTIONS`: `nbnd`, `conv_thr`, `k_batch`,
+`diagonalization`, the mixing knobs, `verbose`) are given once to the constructor and
+forwarded to each entry point **by named parameter**, never by a `**kwargs` catch-all —
+`electrostriction` has one and forwards it to the Sternheimer solvers, which have no
+`nbnd` and would raise. An unknown constructor keyword is a `TypeError` naming the
+allowed set, because the ergonomic risk of `**defaults` is a typo becoming a silently
+ignored setting. The one special case is `run_spiral_scan`, whose SCF options *do* go
+through a `**kwargs` to `run_scf`, so its filter is `run_scf`'s signature.
+
+**What the threading actually costs, stated exactly.** The state carried beside the
+density is `becsum` (PAW), `ns` (Hubbard) and `tau` (meta-GGA), none of them recoverable
+from the density. The package was already careful here: `fixed_density_bands`,
+`run_nscf` and `dielectric_tensor` all **refuse** without them rather than computing
+something else. So the facade does not close a silent-wrong-number hole — that hole was
+already closed — it removes a stopped run and a puzzle. Worth writing down, because the
+first draft of this entry claimed the stronger thing and the refusals disprove it.
+
+**It found one real gap.** `run_dos` did not forward `becsum` or `ns` to the `run_nscf`
+it calls, so a **PAW or DFT+U density of states on a denser grid stopped on that
+refusal** — the feature was unreachable rather than wrong, which is why no test saw it.
+Both are parameters of `run_dos` now. The facade is what exposed it: it passes what each
+entry point *names*, and this one named too little.
+
+**Sugar that shipped with it, because that is where the remaining verbosity was.**
+`.plot()` on `BandStructure`, `DensityOfStates`, `ProjectedDOS` and `OpticalSpectrum`
+(matplotlib imported inside the method, so it stays out of a calculation's dependencies),
+returning the axes; the band and DOS plots take their zero from the SCF's own Fermi level
+and **name it after what it is** — an insulator has no Fermi level and gets `E_HOMO`.
+`SCFResult.__repr__`, because the generated dataclass one prints the wavefunctions, the
+density and the potential in full. `get_stress()` returns `SCFResult.stress` when
+`tstress` already produced it rather than differentiating twice.
+
+**Validation.** `tests/unit/test_calculator.py`, 19 tests. The load-bearing ones: the
+bound method reproduces the functional entry point to 1e-10 on the same input; the cache
+is one slot and options key it; reading the cache builds no basis; a derived calculator
+does not serve its parent's ground state and *does* carry it as a seed; a PAW band
+structure through the facade equals the hand-threaded one **and** the call that omits
+`becsum` raises; and `get_dos(grid=...)` now works on PAW at all. One test is
+structural — every `get_*` method is short enough to be a delegation — because a method
+here that grew a computation of its own would be a second implementation of something
+already validated against QE.
+
+**It also found a broken feature that is nobody's front end.** Sweeping every method once
+— because a signature checked by `grep` is not a call that works — reached
+`relax_spiral_q` (P21) and it **raised before taking a step**, for everyone, through the
+plain functional API. P29 gave `BFGS.__post_init__` a `_rebuild_metric(0)`, so the metric
+is `(0, 3, 3)` until the first `step` fills it in; `_first_step_scale` measures a trial
+step *before* that first step, and `_norm` then reduces over an empty array.
+`tests/regression/test_spiral_relaxation.py::test_relaxation_finds_the_antiferromagnet`
+had been failing since P29 landed. One line in `_first_step_scale` fixes it. The lesson
+is the one this file keeps recording in other forms: **a cross-phase regression is
+invisible to the phase that causes it**, and the only thing that finds one is running
+everything, which is what a front end makes cheap enough to do.
+
+**Not done.** The functional API is untouched and every existing call site stands; the
+CLI still has its five copies of the `read_upf` loop. Migrating it is the obvious next
+step and is not in this phase. Notebooks 01 and 03-27 still open with the functional
+form; `notebooks/README.md` permits both and asks new ones to use the calculator.
+
+---
+
 Ordering note: P6 (symmetry) can slip after P7/P8 if band structures come first, since
 `nosym` runs are fully testable — but it must land before any timing claims, as it changes
 the k-point count.

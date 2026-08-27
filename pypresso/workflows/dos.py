@@ -123,6 +123,38 @@ class DensityOfStates:
         """States per eV, which is what a DOS is conventionally plotted in."""
         return self.dos / RY_TO_EV
 
+    def plot(self, ax=None, ev: bool = True, zero: bool = True, **kwargs):
+        """Draw the density of states, and return the axes.
+
+        A spin-polarized DOS is drawn the way it is read: the two channels
+        mirrored about zero, which is the only presentation in which the
+        exchange splitting is a shape rather than two overlapping curves.
+        matplotlib is imported inside the method, so it stays out of the
+        dependencies of a calculation.
+        """
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            _, ax = plt.subplots()
+        reference = self.fermi_energy if (zero and self.fermi_energy is not None) else 0.0
+        energies = (self.energies - reference) * (RY_TO_EV if ev else 1.0)
+        scale = 1.0 / RY_TO_EV if ev else 1.0
+        if self.nspin == 2:
+            up, down = self.dos_by_spin
+            ax.plot(energies, up * scale, label="up", **kwargs)
+            ax.plot(energies, -down * scale, label="down", **kwargs)
+            ax.axhline(0.0, color="0.6", lw=0.8)
+            ax.legend()
+        else:
+            ax.plot(energies, self.total_dos * scale, **kwargs)
+            ax.set_ylim(bottom=0.0)
+        if reference:
+            ax.axvline(0.0, color="0.6", lw=0.8, ls="--")
+        unit = "eV" if ev else "Ry"
+        ax.set_xlabel(f"E - E$_F$ ({unit})" if reference else f"Energy ({unit})")
+        ax.set_ylabel("DOS (states/eV)" if ev else "DOS (states/Ry)")
+        return ax
+
     def states_below(self, energy: float) -> float:
         """``N(E)`` at an arbitrary energy, interpolated from the grid.
 
@@ -367,6 +399,8 @@ def run_dos(
     chunk: int = ENERGY_CHUNK,
     k_batch: int | None | str = "default",
     tau: jnp.ndarray | None = None,
+    ns: jnp.ndarray | None = None,
+    becsum: tuple = (),
 ):
     """SCF density in, ``(DensityOfStates, NSCFResult)`` out.
 
@@ -374,10 +408,14 @@ def run_dos(
     converged on, reduced with the same crystal symmetries; without it the
     calculation's own k-points are reused, which is rarely enough for a DOS.
 
-    ``tau`` is the converged kinetic energy density (``SCFResult.tau``), which a
-    meta-GGA needs here for the same reason a band structure does: it is a
-    property of the occupied states over the whole zone, so a *denser* grid
-    cannot rebuild it and the SCF's own is what is held fixed.
+    ``tau``, ``ns`` and ``becsum`` are the rest of the converged state, and they
+    are carried for one reason: a *denser* grid is an NSCF run, and none of the
+    three can be rebuilt from the density it is handed. ``tau`` is a property of
+    the occupied states over the whole zone, ``ns`` builds the Hubbard term and
+    ``becsum`` builds ``ddd_paw``. ``run_nscf`` refuses without them rather than
+    computing something else, so a PAW or DFT+U density of states on a denser
+    grid needs all of ``SCFResult``, not its density
+    (:class:`~pypresso.calculator.Calculator` passes them for the caller).
 
     ``scheme`` defaults to whatever the calculation itself used to occupy its
     bands -- the tetrahedron variant if it ran with one, otherwise its smearing
@@ -388,7 +426,7 @@ def run_dos(
         kpoints = denser_grid(system, grid, shift)
 
     nscf = run_nscf(system, pseudos, density, kpoints, nbnd, conv_thr, k_batch,
-                    tau=tau)
+                    ns=ns, tau=tau, becsum=becsum)
 
     scheme, degauss = default_scheme(system, scheme, degauss, delta_e)
 

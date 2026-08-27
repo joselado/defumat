@@ -113,4 +113,24 @@ from pypresso.config import DOUBLE, SINGLE, Precision  # noqa: E402
 
 __version__ = "0.0.1"
 __all__ = ["config", "units", "Precision", "DOUBLE", "SINGLE", "DEFAULT_THREADS",
-           "__version__"]
+           "Calculator", "__version__"]
+
+
+def __getattr__(name):
+    """Resolve :class:`~pypresso.calculator.Calculator` on first use.
+
+    ``from pypresso import Calculator`` is meant to be the only import a script
+    needs, and importing it eagerly here would pull the whole package -- the
+    SCF driver, the response layer, every workflow -- into any process that
+    merely wanted ``pypresso.units``. PEP 562 lets the short spelling cost
+    nothing until it is actually asked for.
+    """
+    if name == "Calculator":
+        from pypresso.calculator import Calculator
+
+        return Calculator
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(__all__)

@@ -97,6 +97,40 @@ class OpticalSpectrum(eqx.Module):
         """
         return np.imag(np.trace(np.asarray(self.epsilon), axis1=1, axis2=2)) / 3.0
 
+    def plot(self, ax=None, part: str = "imaginary", ev: bool = True, **kwargs):
+        """Draw the spectrum, and return the axes.
+
+        ``part`` selects ``"imaginary"`` (absorption, the usual one),
+        ``"real"``, or ``"both"``. The curve is the *macroscopic* dielectric
+        function -- the inverse of the head of ``eps^-1``, not the head of the
+        inverse -- so what is drawn already carries the local fields.
+        """
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            _, ax = plt.subplots()
+        x = self.frequencies_ev if ev else np.asarray(self.frequencies)
+        # The isotropic average, as :attr:`absorption` takes it: ``epsilon`` is
+        # the full ``(nw, 3, 3)`` tensor and a curve is one number per
+        # frequency. Anything anisotropic is plotted from that tensor by hand.
+        trace = np.trace(np.asarray(self.epsilon), axis1=1, axis2=2) / 3.0
+        kwargs.setdefault("label", self.kernel)
+        if part in ("imaginary", "both"):
+            ax.plot(x, trace.imag, **kwargs)
+        if part in ("real", "both"):
+            style = dict(kwargs)
+            if part == "both":
+                style["label"] = f"{kwargs['label']} (real)"
+                style["ls"] = "--"
+            ax.plot(x, trace.real, **style)
+        if part == "both":
+            ax.axhline(0.0, color="0.6", lw=0.8)
+        ax.set_xlabel("Energy (eV)" if ev else "Energy (Ry)")
+        ax.set_ylabel({"real": r"Re $\epsilon_M$",
+                       "imaginary": r"Im $\epsilon_M$"}.get(part, r"$\epsilon_M$"))
+        ax.legend()
+        return ax
+
     @property
     def refraction(self) -> np.ndarray:
         """``Re eps_M``, averaged the same way."""

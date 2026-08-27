@@ -284,6 +284,14 @@ elements, right in an all-electron code and wrong with a nonlocal pseudopotentia
 `dH/dk` from P24's `jvp` takes their place, and it is this phase's only load-bearing
 autodiff. Everything else is a transcription and says so.
 
+**The whole of it is reachable from one object** (P38): `Calculator.from_file("scf.in")`
+loads the input and the pseudopotentials it names, `get_scf()` caches the ground state,
+and every quantity above is a method consuming that cache — with nothing mutating, the
+refusals passing through untouched, and the functional API unchanged beneath it. It found
+one real gap on the way in: `run_dos` never forwarded `becsum` or `ns`, so a **PAW or
+DFT+U density of states on a denser grid was unreachable**, stopping on `run_nscf`'s own
+refusal rather than being wrong.
+
 **Outstanding:** Wyckoff input, the dynamical matrix of an
 ultrasoft dataset, PAW Born charges, `chi^(2)` and the electro-optic tensor (the second-order
 response `solve_e2` is, which P35 refuses for), the **non-analytic LO-TO term**
@@ -572,6 +580,40 @@ Two reasons, both of which constrain how code is written:
 
 Performance matters. It does not have to be optimal in the first version, but no design
 choice should make good performance unreachable without a rewrite.
+
+## The front door is `Calculator`
+
+`pypresso/calculator.py` (P38). A `Calculator` is a `System` together with its
+pseudopotentials, and every workflow, force, stress, response and invariant is a method
+on it — `Calculator.from_file("scf.in")`, then `get_scf()`, `get_bands()`,
+`get_dielectric_tensor()`. It is what the README, the user guide and new notebooks use,
+and `from pypresso import Calculator` is the one import a script needs.
+
+**It is a facade and nothing else.** No physics lives there: every method is a one-line
+delegation to the functional entry point, which is unchanged and still the way anything
+managing its own state is driven. A `get_*` that grew a computation of its own would be
+a second implementation of something already validated against QE, and there is a test
+asserting that none has.
+
+Three things about it bind anything added to it:
+
+- **State cannot move onto `System`.** `System` is an `eqx.Module` crossing `jit`/`grad`,
+  so a `pseudos` field would change the pytree every compiled path sees and a cached
+  result cannot live on a frozen module at all — and `System` does not *have* the
+  pseudopotentials, only the file names. `System.calculator()` is a constructor, not a
+  place to hang calculations.
+- **Nothing mutates.** `with_positions`/`with_cell`/`with_spin` return a *new* calculator
+  with an empty cache; the converged state crosses as a `starting_from` seed
+  (`starting_state`), never as an answer. A cached result under a moved atom is the
+  `test_geometry_invalidation` defect one layer up.
+- **The refusals pass through untouched**, and the implicit SCF announces itself. The
+  cache is one slot keyed by the options that filled it, because it holds the
+  wavefunctions.
+
+A new feature adds a `get_*` method in the same pass that adds its entry point. Shared
+options go in `SHARED_OPTIONS` and are forwarded **by named parameter only** — a
+`**kwargs` in a signature is not permission to pass everything, since several response
+entry points forward theirs to solvers that would raise on `nbnd`.
 
 ## The README's feature table
 

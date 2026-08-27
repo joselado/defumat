@@ -448,6 +448,29 @@ class System(eqx.Module):
         )
         return kpoints_for_spin(rebuilt, nspin)
 
+    def calculator(self, pseudos=None, **options):
+        """A :class:`~pypresso.calculator.Calculator` on this system.
+
+        The bound-method front end: everything a run can compute, reachable
+        from one object without importing a workflow per quantity::
+
+            calc = system.calculator(pseudo_dir="tests/data/pseudo")
+            bands = calc.get_bands(kpoints=path)
+
+        The pseudopotentials live on the calculator rather than here because a
+        ``System`` is a frozen pytree that crosses ``jit`` and ``grad``, and
+        because it does not have them: it carries the *names* the input file
+        gave, which is why this method takes either the loaded objects or a
+        ``pseudo_dir`` to read them from.
+
+        Imported inside the method: :mod:`pypresso.calculator` imports this
+        module, and the front end must not be a dependency of the setup it is
+        built on.
+        """
+        from pypresso.calculator import Calculator
+
+        return Calculator(self, pseudos, **options)
+
     def symmetry_group(self, nosym: bool = False) -> Symmetries:
         """The space group of the crystal -- magnetic if the run is.
 

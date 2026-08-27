@@ -4,7 +4,9 @@ The canonical run: read a `pw.x` input, converge the density, diagonalise along 
 Silicon's total energy comes out **within 1e-9 Ry of Quantum ESPRESSO** term by term and
 its bands within **0.0002 eV** — on the same input file, `test-suite/pw_scf/scf.in`.
 
-Notebook 01 builds the plane-wave basis this stands on. Phases P3-P7.
+Notebook 01 builds the plane-wave basis this stands on, and notebook 28 is about the
+`Calculator` used here — one object carrying the system and its pseudopotentials, with a
+method per calculation. Phases P3-P7.
 
 
 ```python
@@ -13,21 +15,20 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io import read_qe_output
 from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
 from pypresso.system import build_system
-from pypresso.workflows import run_bands
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_scf")
 PSEUDO = Path("../tests/data/pseudo")
 
-system = build_system(read_pw_input(QE / "scf.in"))
-pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
+calc = Calculator.from_file(QE / "scf.in", pseudo_dir=PSEUDO)
+system, pseudos = calc.system, calc.pseudos
 
 print(system.structure)
 print(pseudos[0])
+
 ```
 
     Structure(
@@ -53,8 +54,9 @@ straight back in diverges, charge sloshing across the cell amplified by the Hart
 
 
 ```python
-result = run_scf(system, pseudos, conv_thr=1e-10, verbose=True)
+result = calc.get_scf(conv_thr=1e-10, verbose=True)
 print(f"\nconverged: {result.converged} in {result.iterations} iterations")
+
 ```
 
       iteration   1   ethr was too large; diagonalising again at 7.94e-04
@@ -65,6 +67,8 @@ print(f"\nconverged: {result.converged} in {result.iterations} iterations")
       iteration   5   E =     -15.79424377 Ry   accuracy = 6.50e-08   ethr = 7.93e-08   |drho| = 3.79e-05
       iteration   6   E =     -15.79448235 Ry   accuracy = 8.10e-10   ethr = 8.12e-10   |drho| = 5.08e-06
       iteration   7   E =     -15.79449557 Ry   accuracy = 6.66e-11   ethr = 1.01e-11   |drho| = 1.48e-06
+
+
     
     converged: True in 7 iterations
 
@@ -104,12 +108,13 @@ With the density converged the potential is frozen and the Hamiltonian is diagon
 along a path — nothing self-consistent about it, which is why it can use k-points that
 would make no sense as an integration grid. The path is `scf-1.in`'s, and that input runs
 after `scf.in` sharing its output directory, so its reference bands belong to precisely
-the density converged above.
+the density converged above — which here is the one already cached on `calc`, so
+`get_bands` only has to be told which k-points to use.
 
 
 ```python
 band_system = build_system(read_pw_input(QE / "scf-1.in"))
-bands = run_bands(band_system, pseudos, result.density)
+bands = calc.get_bands(kpoints=band_system.kpoints, nbnd=8)
 theirs = read_qe_output(QE / "benchmark.out.git.inp=scf-1.in").eigenvalues[0]
 ours = bands.eigenvalues_ev
 

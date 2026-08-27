@@ -31,7 +31,9 @@ rows where the *quantity* is Quantum ESPRESSO's and the *route to it* is not.
 
 The middle column is the input-file variable that controls the feature, where
 there is one — it means what it means in a `pw.x` input — and the Python entry
-point where there is not.
+point where there is not. Every one of them is also a method on a `Calculator`
+(`calc.get_bands()`, `calc.get_dielectric_tensor()`), which is the short way to
+drive any of this and is what the examples below use.
 
 | Feature | How to ask for it | In Quantum ESPRESSO? |
 |---|---|---|
@@ -106,16 +108,10 @@ and `pip` will fetch them.
 Silicon, from the input file in `benchmarks/`:
 
 ```python
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.system import build_system
+from pypresso import Calculator
 
-system = build_system(read_pw_input("benchmarks/si-1k.in"))
-pseudos = tuple(read_upf("tests/data/pseudo/" + s.pseudo_file)
-                for s in system.structure.species)
-
-result = run_scf(system, pseudos)
+calc = Calculator.from_file("benchmarks/si-1k.in", pseudo_dir="tests/data/pseudo")
+result = calc.get_scf()
 
 print(f"converged in {result.iterations} iterations")
 print(f"total energy   {result.total_energy:.8f} Ry")
@@ -125,17 +121,32 @@ for name, value in result.energy_terms.items():
 
 ```
 converged in 5 iterations
-total energy   -15.25444941 Ry
-  one-electron       5.26833739 Ry
-  hartree            1.26305386 Ry
-  xc                -4.88608209 Ry
+total energy   -15.25444866 Ry
+  one-electron       5.26858903 Ry
+  hartree            1.26263517 Ry
+  xc                -4.88591428 Ry
   ewald            -16.89975858 Ry
 ```
 
 `benchmarks/si-1k.in` is an ordinary `pw.x` input file. So is anything else you
-point `read_pw_input` at — the `&control`, `&system` and `&electrons` namelists,
-`ATOMIC_SPECIES`, `ATOMIC_POSITIONS` and `K_POINTS` cards all mean what they mean
-in Quantum ESPRESSO, and `conv_thr` is compared against the same quantity.
+point `Calculator.from_file` at — the `&control`, `&system` and `&electrons`
+namelists, `ATOMIC_SPECIES`, `ATOMIC_POSITIONS` and `K_POINTS` cards all mean
+what they mean in Quantum ESPRESSO, and `conv_thr` is compared against the same
+quantity. The pseudopotentials are read from the names the `ATOMIC_SPECIES` card
+gives; `pseudo_dir` defaults to the input file's own directory.
+
+Every other calculation is a method on the same object, and each runs the SCF
+first if none is cached:
+
+```python
+calc.get_forces()             # and get_stress(), get_relax(), get_dos()
+calc.get_dielectric_tensor()  # and get_phonons(), get_raman_tensors()
+calc.get_chern()              # and get_z2(), get_berry_curvature()
+```
+
+The functional entry points named in the table above — `run_scf(system,
+pseudos, ...)` and the rest — are unchanged and are still there for a script
+that manages its own state.
 
 ## A band structure
 
@@ -143,19 +154,21 @@ Carrying on from the density that SCF converged:
 
 ```python
 from pypresso.system.kpoints import KPoints
-from pypresso.workflows import run_bands
 
 path = KPoints.band_path(
     [[0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],   # L - Gamma - X
-    [20, 20, 1], system.cell, crystal=False,
+    [20, 20, 1], calc.system.cell, crystal=False,
 )
-bands = run_bands(system, pseudos, result.density, kpoints=path, nbnd=8)
+bands = calc.get_bands(kpoints=path, nbnd=8)
 
 print(f"indirect gap   {bands.gap(8):.3f} eV")
+bands.plot()
 ```
 
 `bands.eigenvalues_ev` is `(k-points, bands)` in eV and `bands.path_length` is
-the x-axis for a plot. (The gap comes out small because LDA underestimates
+the x-axis for a plot; `bands.plot()` draws one and returns the axes, with the
+zero at the Fermi level the SCF found. `DensityOfStates`, `ProjectedDOS` and
+`OpticalSpectrum` have the same method. (The gap comes out small because LDA underestimates
 gaps — that is the functional, not the code; Quantum ESPRESSO gives the same
 answer, and so does PBE.)
 

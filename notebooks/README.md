@@ -38,11 +38,18 @@ ends with a pointer to both.
 | [`25_raman_tensors.ipynb`](25_raman_tensors.ipynb) | The dielectric tensor differentiated with respect to *where an atom is*: `d(eps)/d(tau)` as one `jvp` of the same second-order energy notebook 21 differentiates along a strain, checked against a finite difference of `eps` over re-converged displaced cells (1.0e-5) because the vendored `ph.x` no longer reproduces its own committed example -- and the `chi^(2)` that is refused, with the 42% term it is missing measured rather than estimated | P35 |
 | [`26_raman_and_infrared_spectra.ipynb`](26_raman_and_infrared_spectra.ipynb) | The per-atom tensors of notebook 25 contracted with the phonon modes into what an experiment measures: silicon's `T_2g` at 519.2 cm^-1, Raman-active and infrared-silent, against the vendored `dynmat.x` run on our own tensors -- the one QE reference above second order that still works. Plus the rank-3 average that lets the same case run on 8 k-points instead of 64, and the rule that a degenerate multiplet is comparable only as a sum | P36 |
 | [`27_excitons_and_tddft.ipynb`](27_excitons_and_tddft.ipynb) | The Dyson equation of TDDFT with a **bootstrap** kernel -- `chi_0` as a matrix over reciprocal lattice vectors rather than the operator a Sternheimer solve gives, built by sum over states because a spectrum needs the frequency axis. Validated by an identity instead of another code's spectrum: the same `eps_M(0)` from this route and from notebook 19's projected CG solve, which never sees an empty state, to 1.3e-2 on 22 -- and only when the two kernels are matched, which is what `screening = 'hartree'` is for. Silicon's absorption weight moves downhill where RPA leaves it, and ALDA's kernel has an identically zero head, which is why no adiabatic local kernel binds an exciton | P37 |
+| [`28_the_calculator.ipynb`](28_the_calculator.ipynb) | One object with a method per calculation: `Calculator.from_file` reads the input and its pseudopotentials, `get_scf` caches the ground state, and everything else — forces, stress, the dielectric tensor, phonons, bands and a DOS that draw themselves — is a method consuming that cache. Plus the two rules that keep it honest: nothing mutates, so a derived calculator carries its parent's state as a *starting guess* rather than as an answer, and every refusal in the package passes through untouched | P38 |
 
 ## Conventions
 
 - **Every new feature adds a notebook, or extends one.** A phase is not finished until its
   notebook exists. This is a standing requirement, not a per-phase decision.
+- **Drive it with a `Calculator`.** `Calculator.from_file(input, pseudo_dir=...)` and its
+  `get_*` methods (notebook 28) are the short form, and a new notebook should open with
+  them rather than with the `read_pw_input` / `read_upf` / `build_system` trio. The
+  functional entry points are unchanged and are what the notebooks written before P38
+  still use, so both spellings appear here; either is correct, and neither should be
+  mixed inside one notebook without saying why.
 - **Five minutes.** Header saying what this computes and the headline number; the shortest
   code that runs it; **one figure that shows the physics** — a band structure wherever the
   feature shows in bands; one table against Quantum ESPRESSO; at most one "how it works"

@@ -146,6 +146,66 @@ pypresso reads \textbf{\code{pw.x} input files}. The same file that runs in
 \qe\ runs here, which is what makes every comparison in this document possible.
 
 \begin{pycode}
+from pypresso import Calculator
+
+calc = Calculator.from_file("scf.in", pseudo_dir="pseudo", conv_thr=1.0e-8)
+result = calc.get_scf()
+
+print(result.total_energy, "Ry in", result.iterations, "iterations")
+\end{pycode}
+
+\code{conv\_thr} means what it means in a \code{pw.x} input: it is compared
+against QE's \code{dr2}, the Hartree energy of the density residual.
+
+\subsection*{One object, bound methods}
+
+A \code{Calculator} is a system together with its pseudopotentials, and every
+calculation in this document is a method on it. The pseudopotentials are read
+from the names the \code{ATOMIC\_SPECIES} card gave, resolved against
+\code{pseudo\_dir} --- which \code{from\_file} defaults to the input file's own
+directory --- so a script names an input and then names physics:
+
+\begin{pycode}
+calc = Calculator.from_file("scf.in", pseudo_dir="pseudo")
+
+bands = calc.get_bands(kpoints=path)      # runs the SCF first if none is cached
+dos = calc.get_dos(grid=(8, 8, 8))
+forces = calc.get_forces()
+epsilon = calc.get_dielectric_tensor()
+phonons = calc.get_phonons()
+
+bands.plot()                              # and each result draws itself
+\end{pycode}
+
+Three properties are worth knowing before relying on it.
+
+\textbf{The ground state is cached, and computed on demand.} A method that needs
+one and finds no cache runs an SCF, printing a line to stderr saying so;
+\code{get\_scf()} is the explicit path and is the same code. The cache is a
+\emph{single slot} holding the result together with the options that produced
+it --- calling \code{get\_scf} again with different options reruns and replaces
+it --- because what it holds is the wavefunctions, and a cache keyed by option
+sets would quietly hold several sets of them. \code{calc.scf\_result} reads the
+slot without triggering anything, and a state that did not converge is refused
+rather than differentiated.
+
+\textbf{Nothing mutates.} \code{with\_positions}, \code{with\_cell} and
+\code{with\_spin} return a \emph{new} calculator with an empty cache; the
+converged state crosses as a starting guess where that is sound, which for
+\code{with\_spin} is the spin-regime continuation described under
+\emph{Spin, magnetism and spin-orbit} and converges in one iteration rather
+than twenty-five. A cached result under a moved atom
+would otherwise answer for the geometry it was converged at.
+
+\textbf{The refusals pass through untouched.} Every restriction in this document
+--- PAW Born charges, a metal's Raman tensor, a spiral with spin-orbit coupling
+--- raises through the bound method exactly as through the function beneath it.
+
+The functional entry points the rest of this document names --- \code{run\_scf},
+\code{run\_bands}, \code{dielectric\_tensor} and the others --- are unchanged and
+remain the way to drive a calculation whose state is being managed by hand:
+
+\begin{pycode}
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
 from pypresso.scf.driver import Calculation, run_scf
@@ -154,13 +214,15 @@ from pypresso.system import build_system
 system = build_system(read_pw_input("scf.in"))
 pseudos = tuple(read_upf(f"pseudo/{s.pseudo_file}") for s in system.structure.species)
 result = run_scf(system, pseudos, conv_thr=1.0e-8)
-
-print(result.total_energy, "Ry in", result.iterations, "iterations")
 \end{pycode}
 
-\code{conv\_thr} means what it means in a \code{pw.x} input: it is compared
-against QE's \code{dr2}, the Hartree energy of the density residual. A command
-line covers the common workflows:
+What such a call has to carry with the density is the rest of the converged
+state --- \code{becsum} for a PAW dataset, \code{ns} under a Hubbard $U$,
+\code{tau} under a meta-GGA. None of the three can be rebuilt from the density,
+and the entry points refuse without them rather than computing something else.
+The calculator passes them.
+
+A command line covers the common workflows:
 
 \begin{shcode}
 python3 -m pypresso.cli inspect <qe-output>   # summarise what the parser reads

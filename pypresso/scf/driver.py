@@ -710,6 +710,33 @@ class SCFResult:
 
         return total_charge(self.density)
 
+    def __repr__(self) -> str:
+        """What the object is, rather than every array it holds.
+
+        The generated dataclass ``__repr__`` prints the wavefunctions, the
+        density and the potential in full, which in a REPL is several screens
+        of numbers in place of the four facts anyone wants. ``@dataclass`` does
+        not overwrite a ``__repr__`` defined in the body, so this one stands.
+        """
+        state = (f"converged in {self.iterations} iterations"
+                 if self.converged else
+                 f"NOT converged after {self.iterations} iterations")
+        parts = [state, f"E = {self.total_energy:.8f} Ry"]
+        if self.accuracy is not None:
+            parts.append(f"accuracy = {self.accuracy:.2g} Ry")
+        if self.fermi_energy is not None:
+            parts.append(f"E_F = {self.fermi_energy * RY_TO_EV:.4f} eV")
+        elif self.homo is not None:
+            parts.append(f"HOMO = {self.homo * RY_TO_EV:.4f} eV")
+        if self.magnetization is not None:
+            parts.append(f"M = {self.magnetization:.4f} mu_B")
+        elif self.magnetization_vector is not None:
+            parts.append("M = ({:.4f}, {:.4f}, {:.4f}) mu_B".format(
+                *self.magnetization_vector))
+        if self.nspin != 1:
+            parts.append(f"nspin = {self.nspin}")
+        return f"<SCFResult: {', '.join(parts)}>"
+
 
 def _spin_block_diagonal(per_atom) -> np.ndarray:
     """Per-atom ``(nh, nh, 2, 2)`` blocks -> one ``(2, 2, nkb, nkb)`` matrix.

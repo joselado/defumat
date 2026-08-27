@@ -57,6 +57,55 @@ class BandStructure:
         steps = np.linalg.norm(np.diff(coords, axis=0), axis=1)
         return np.concatenate([[0.0], np.cumsum(steps)])
 
+    def plot(self, ax=None, ev: bool = True, zero: bool = True, **kwargs):
+        """Draw the bands, and return the axes.
+
+        A band structure is looked at far more often than it is tabulated, and
+        the five lines of matplotlib that follow every call to this workflow
+        are five lines of the script that are not about physics. ``ev`` plots
+        in electronvolts, ``zero`` puts the Fermi level (or the HOMO, for an
+        insulator) at zero where the run knows one -- which it does, since
+        :meth:`~pypresso.calculator.Calculator.get_bands` carries both across
+        from the SCF.
+
+        matplotlib is imported here rather than at module scope: it is not a
+        dependency of any calculation, and a headless run should not need it.
+        """
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            _, ax = plt.subplots()
+        reference, zero_label = 0.0, None
+        if zero:
+            if self.fermi_energy is not None:
+                reference, zero_label = self.fermi_energy, "E$_F$"
+            elif self.homo is not None:
+                # An insulator has no Fermi level and the top of the valence
+                # band is the zero every published band plot uses; saying so
+                # keeps the axis honest about which one it is.
+                reference, zero_label = self.homo, "E$_{HOMO}$"
+        scale = RY_TO_EV if ev else 1.0
+        x = self.path_length
+        kwargs.setdefault("lw", 1.0)
+        for spin, channel in enumerate(self.eigenvalues_by_spin):
+            style = dict(kwargs)
+            if self.nspin == 2:
+                style.setdefault("color", "C0" if spin == 0 else "C3")
+                style.setdefault("label", "up" if spin == 0 else "down")
+            for band in range(channel.shape[1]):
+                ax.plot(x, (channel[:, band] - reference) * scale, **style)
+                style.pop("label", None)
+        if zero and reference:
+            ax.axhline(0.0, color="0.6", lw=0.8, ls="--")
+        ax.set_xlim(float(x[0]), float(x[-1]))
+        ax.set_xlabel("k-path")
+        unit = "eV" if ev else "Ry"
+        ax.set_ylabel(f"E - {zero_label} ({unit})" if zero_label
+                      else f"Energy ({unit})")
+        if self.nspin == 2:
+            ax.legend()
+        return ax
+
     def gap(self, nelec: float) -> float:
         """Fundamental band gap in eV, for a system with fixed filling.
 

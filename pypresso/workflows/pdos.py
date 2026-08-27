@@ -303,6 +303,54 @@ class ProjectedDOS:
             groups.setdefault((channel.atom, channel.wfc), []).append(channel)
         return tuple(tuple(group) for group in groups.values())
 
+    def plot(self, ax=None, ev: bool = True, zero: bool = True, by: str = "shell",
+             total: bool = True, **kwargs):
+        """Draw the projected density of states, and return the axes.
+
+        ``by`` groups the curves: ``"shell"`` gives one per ``(atom, l)`` --
+        what ``projwfc.x`` writes one file per -- ``"species"`` sums the
+        equivalent atoms together, and ``"l"`` keeps only the angular momentum.
+        ``total`` overlays the unprojected DOS, which is the sum rule made
+        visible: where the coloured curves fall short of it, that weight is the
+        spilling.
+        """
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            _, ax = plt.subplots()
+        reference = self.fermi_energy if (zero and self.fermi_energy is not None) else 0.0
+        energies = (self.energies - reference) * (RY_TO_EV if ev else 1.0)
+        scale = 1.0 / RY_TO_EV if ev else 1.0
+
+        curves: dict[str, np.ndarray] = {}
+        summed = self.pdos_by_spin.sum(axis=0)
+        for group in self.shells():
+            channel = group[0]
+            # ``shell`` is already "Si1 3S" -- the atom label is in it, so
+            # only the coarser groupings have to build a key of their own.
+            if by == "species":
+                key = f"{channel.species} {channel.label or channel.l_label}"
+            elif by == "l":
+                key = channel.l_label
+            else:
+                key = channel.shell
+            weight = sum(summed[c.index] for c in group)
+            curves[key] = curves.get(key, 0.0) + weight
+
+        if total:
+            ax.plot(energies, self.total.total_dos * scale, color="0.4", lw=1.0,
+                    label="total")
+        for label, curve in curves.items():
+            ax.plot(energies, curve * scale, label=label, **kwargs)
+        if reference:
+            ax.axvline(0.0, color="0.6", lw=0.8, ls="--")
+        ax.set_ylim(bottom=0.0)
+        unit = "eV" if ev else "Ry"
+        ax.set_xlabel(f"E - E$_F$ ({unit})" if reference else f"Energy ({unit})")
+        ax.set_ylabel("PDOS (states/eV)" if ev else "PDOS (states/Ry)")
+        ax.legend()
+        return ax
+
     def at(self, energy: float, **selection) -> float:
         """The selected channels' ``D(E)`` at one energy, in states/Ry."""
         values = self.select(**selection)
