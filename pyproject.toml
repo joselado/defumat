@@ -38,7 +38,12 @@ testpaths = ["tests"]
 markers = [
     "unit: fast, self-contained checks (no QE reference run needed)",
     "regression: compares a full pypresso run against a QE reference output",
-    "slow: takes more than a few seconds",
+    # `slow` is the line between the two groups, and the line is what gets run
+    # when. `pytest -m "not slow"` is the gate -- 1634 tests in 4.5 minutes, and
+    # it is what runs before a push. `pytest -m slow` is the other 588, over two
+    # hours of them, and is run when asked for. See `tools/test-fast.sh` and
+    # `tools/run_regression.sh`.
+    "slow: outside the pre-push gate -- run on request, not before every push",
     "float32: also exercised under the single-precision policy",
 ]
 

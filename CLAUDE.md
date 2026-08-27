@@ -934,12 +934,31 @@ process pays for them; `PYPRESSO_CACHE_DIR` moves it and `PYPRESSO_CACHE_DIR=off
 it.
 
 ```
-python3 -m pytest                      # whole suite
-python3 -m pytest -m unit              # fast checks only (markers: unit, regression, slow)
+tools/test-fast.sh                     # THE GATE: everything not marked slow, ~4.5 min
+python3 -m pytest -m slow              # the other 588, over two hours
+tools/run_regression.sh                # the same slow set, resumably, one file at a time
 python3 -m pytest tests/unit/test_qeref.py::test_scf_silicon   # a single test
 python3 -m pypresso.cli inspect <qe-output>   # summarise what the parser reads
 tools/export_notebooks.sh                     # re-execute notebooks + refresh .md exports
 ```
+
+**The suite is two groups and `slow` is the line.** `tools/test-fast.sh` is
+`pytest -m "not slow"`: **1634 tests in 4.5 minutes**, and it is what runs before
+a push. The slow set is 588 tests and **over two hours** — it runs when it is
+asked for, not on every change. The split cuts across `unit` and `regression`
+both, because it is about cost and not about kind: a cheap regression case
+against a two-atom reference is in the gate, and an expensive unit test is not.
+
+**The slow set is not optional, it is just not per-push.** Run it before a
+release, after touching anything in the SCF, the eigensolver or the response
+stack, and whenever a number in this file changes. It is two hours precisely
+because it is the part that catches what the gate cannot, and the one time it
+was run end to end it found **three phases' claims had drifted** — P29's stale
+refusal list and its broken BFGS metric, P36's 8.7e-14 wedge agreement, and two
+notebooks whose committed outputs no longer matched their code (`PLAN.md` P38).
+`tools/run_regression.sh` exists for running it in pieces: one pytest invocation
+per file, a durable summary line each, and a file already in the summary is
+skipped, so an interrupted run resumes instead of restarting.
 
 ## JAX rules
 
