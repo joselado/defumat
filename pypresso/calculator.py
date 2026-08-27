@@ -74,6 +74,7 @@ which is exactly what :class:`~pypresso.scf.driver.Calculation` already takes.
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 import sys
 from pathlib import Path
@@ -638,6 +639,23 @@ class Calculator:
         cell that has moved is a different grid.
         """
         return self._derived(self.system.with_cell(at, positions))
+
+    def with_kpoints(self, kpoints) -> "Calculator":
+        """A calculator on the same crystal, sampled differently.
+
+        A k-set is part of the ``System``, so a different one is a different
+        system and gets its own calculator rather than an argument. The density
+        crosses as a starting guess -- the crystal has not moved, so the
+        previous sampling's density is a good one -- but not as an answer,
+        since it is a *different* integral over the zone.
+
+        The unreduced grid beside its irreducible wedge is the usual reason to
+        want this, and comparing the two is the check on the symmetry
+        reduction: same energy, fewer k-points.
+        """
+        return self._derived(
+            dataclasses.replace(self.system, kpoints=kpoints), seed=True
+        )
 
     def with_spin(self, nspin=None, **options) -> "Calculator":
         """A calculator in another spin regime, warm-started from this one.

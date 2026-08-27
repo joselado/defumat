@@ -5,7 +5,14 @@ the k-points and the G-vectors, and cut the basis at the energy cutoff. Everythi
 is checked against the Quantum ESPRESSO output committed beside the same input —
 `test-suite/pw_scf/scf.in`, two-atom fcc silicon.
 
-Phases P0-P2. Notebook 02 runs the SCF on top of it.
+A wavefunction at $\mathbf k$ is expanded in the plane waves inside a sphere, and
+in Rydberg units the cutoff is a length:
+
+$$\psi_{n\mathbf k}(\mathbf r) = \sum_{|\mathbf k + \mathbf G|^2 < E_{\rm cut}}
+  c_{n\mathbf k}(\mathbf G)\, e^{i(\mathbf k + \mathbf G)\cdot\mathbf r}$$
+
+Phases P0-P2. Notebook 02 runs the SCF on top of it, and notebook 28 is about the
+`Calculator` used here.
 
 
 ```python
@@ -14,15 +21,14 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso.basis.builder import build_basis
+from pypresso import Calculator
 from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.system import build_system
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_scf")
+PSEUDO = Path("../tests/data/pseudo")
 
-pwin = read_pw_input(QE / "scf.in")
-system = build_system(pwin)
+calc = Calculator.from_file(QE / "scf.in", pseudo_dir=PSEUDO)
+system = calc.system
 cell, structure, kpoints = system.cell, system.structure, system.kpoints
 
 print(QE.joinpath("scf.in").read_text())
@@ -35,6 +41,7 @@ print("atoms   = %s at crystal %s"
          np.asarray(structure.positions_crystal(cell)).round(3).tolist()))
 print("k-points (cartesian, 2pi/alat) =\n%s\nweights = %s"
       % (np.asarray(kpoints.coords).round(4), np.asarray(kpoints.weights)))
+
 ```
 
      &control
@@ -76,7 +83,8 @@ batched, and the mask is what keeps the padding out of every sum.
 
 
 ```python
-basis = build_basis(system)
+# The calculator already owns the basis -- it is part of the fixed setup.
+basis = calc.calculation.basis
 gvectors, planewaves = basis.dense, basis.planewaves
 
 print("dense grid : %d G-vectors, FFT dimensions %s" % (gvectors.ngm, gvectors.grid))

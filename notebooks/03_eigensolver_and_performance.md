@@ -5,6 +5,18 @@ performance story. Forming `H` and calling `eigh` is `O(npw^3)` and `O(npw^2)` o
 a block Davidson gets the same eigenvalues to 1e-13 Ry at a fraction of the cost, and
 with it pypresso runs **within 2-4x of serial Quantum ESPRESSO per SCF iteration**.
 
+What is solved at every k-point is a *generalised* eigenproblem, because ultrasoft
+and PAW make the overlap non-trivial:
+
+$$\hat H\,|\psi_{n\mathbf k}\rangle
+ = \varepsilon_{n\mathbf k}\,\hat S\,|\psi_{n\mathbf k}\rangle ,
+\qquad
+\hat S = 1 + \sum_{I,ij} q^I_{ij}\,|\beta^I_i\rangle\langle\beta^I_j|$$
+
+Davidson never forms $\hat H$: it applies it to a block of vectors, adds the
+preconditioned residuals $|r_n\rangle = (\hat H - \varepsilon_n \hat S)|\psi_n\rangle$
+to the subspace, and diagonalises there.
+
 Phases P4 and P10. Every timing here is single core — the only honest comparison against
 a serial `pw.x`.
 
@@ -24,20 +36,16 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf.driver import Calculation, run_scf
+from pypresso import Calculator
+from pypresso.scf.driver import run_scf
 from pypresso.scf.potential import v_of_rho
 from pypresso.solvers import davidson_eigensolver_all
-from pypresso.system import build_system
 
 BENCH, PSEUDO = Path("../benchmarks"), Path("../tests/data/pseudo")
 
 
 def load(name):
-    system = build_system(read_pw_input(BENCH / name))
-    return system, tuple(read_upf(PSEUDO / s.pseudo_file)
-                         for s in system.structure.species)
+    return Calculator.from_file(BENCH / name, pseudo_dir=PSEUDO, announce=False)
 
 
 def timed(function, repeats=5):
@@ -74,10 +82,10 @@ gap in cost opens with the size of the basis, which is the entire point.
 potential_of_rho = jax.jit(v_of_rho)
 rows = []
 for name in ("si-1k.in", "si-1k-ecut40.in"):
-    system, pseudos = load(name)
-    calculation = Calculation(system, pseudos)
+    calc = load(name)
+    calculation = calc.calculation
     potential = potential_of_rho(calculation.starting_density(),
-                                 calculation.basis.dense, system.cell)
+                                 calculation.basis.dense, calc.system.cell)
     h = calculation.hamiltonian(potential.v_scf)[0]        # one per spin channel
 
     exact_ms, exact = timed(lambda: exact_eigenpairs(h, 4), 3)
@@ -90,10 +98,10 @@ for name in ("si-1k.in", "si-1k-ecut40.in"):
                                    exact_ms / dav_ms, agreement))
 ```
 
-      si-1k.in          npw   180   form H + eigh     16.6 ms   Davidson   12.9 ms  ( 1.3x)   agree to 1e-13 Ry
+      si-1k.in          npw   180   form H + eigh     17.3 ms   Davidson   11.4 ms  ( 1.5x)   agree to 1e-13 Ry
 
 
-      si-1k-ecut40.in   npw  1131   form H + eigh   1265.0 ms   Davidson   87.1 ms  (14.5x)   agree to 1e-13 Ry
+      si-1k-ecut40.in   npw  1131   form H + eigh   1246.4 ms   Davidson   82.9 ms  (15.0x)   agree to 1e-13 Ry
 
 
 ## Asking for only as much accuracy as the density deserves
@@ -106,8 +114,7 @@ schedule is why `conv_thr` here means what it means in a `pw.x` input.
 
 
 ```python
-system40, pseudos40 = load("si-1k-ecut40.in")
-result = run_scf(system40, pseudos40, conv_thr=1e-10)
+result = load("si-1k-ecut40.in").get_scf(conv_thr=1e-10)
 history = result.history
 
 fig, ax = plt.subplots(figsize=(6.4, 4))
@@ -145,35 +152,38 @@ in `~/.cache/pypresso/jax` then removes most of what is left on the second run.
 
 
 ```python
-import dataclasses
-
 from pypresso.system.kpoints import KPoints
 from pypresso.system.symmetry import find_symmetries
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_scf")
-kauto = build_system(read_pw_input(QE / "scf-kauto.in"))
-kpseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in kauto.structure.species)
-full = KPoints.automatic((2, 2, 2), (1, 1, 1), kauto.cell)      # unreduced
+wedge = Calculator.from_file(QE / "scf-kauto.in", pseudo_dir=PSEUDO, announce=False)
+# ``with_kpoints`` is not a thing: the unreduced grid is a different System, and a
+# calculator is built on one. This is what the *derived* constructors exist for.
+full = wedge.with_kpoints(
+    KPoints.automatic((2, 2, 2), (1, 1, 1), wedge.system.cell))
 
-print("  %d symmetry operations" % find_symmetries(kauto.cell, kauto.structure).nsym)
-for label, variant in (("full grid", dataclasses.replace(kauto, kpoints=full)),
-                       ("irreducible wedge", kauto)):
-    calc = Calculation(variant, kpseudos)
-    run_scf(variant, kpseudos, calculation=calc, conv_thr=1e-10)      # compile
-    best = min(timed(lambda: run_scf(variant, kpseudos, calculation=calc,
-                                     conv_thr=1e-10), 1)[0] for _ in range(3))
-    run = run_scf(variant, kpseudos, calculation=calc, conv_thr=1e-10)
+print("  %d symmetry operations"
+      % find_symmetries(wedge.system.cell, wedge.system.structure).nsym)
+for label, variant in (("full grid", full), ("irreducible wedge", wedge)):
+    # A timing has to defeat the cache the calculator exists to provide, so this
+    # one cell calls the function underneath it. Everything fixed -- the basis,
+    # the projectors, the symmetry -- is still built once, on the calculator.
+    setup = variant.calculation
+    run_once = lambda: run_scf(variant.system, variant.pseudos,
+                               calculation=setup, conv_thr=1e-10)
+    run = run_once()                                                  # compile
+    best = min(timed(run_once, 1)[0] for _ in range(3))
     print("  %-18s %d k-points   %6.1f ms/iteration   E = %.9f Ry"
-          % (label, variant.kpoints.nk, best / run.iterations, run.total_energy))
+          % (label, variant.system.kpoints.nk, best / run.iterations, run.total_energy))
 ```
 
       48 symmetry operations
 
 
-      full grid          8 k-points     21.4 ms/iteration   E = -15.794495571 Ry
+      full grid          8 k-points     22.6 ms/iteration   E = -15.794495571 Ry
 
 
-      irreducible wedge  2 k-points      9.3 ms/iteration   E = -15.794495571 Ry
+      irreducible wedge  2 k-points     10.2 ms/iteration   E = -15.794495571 Ry
 
 
 ## Against Quantum ESPRESSO, single core

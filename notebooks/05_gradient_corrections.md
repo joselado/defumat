@@ -5,6 +5,21 @@ costs one new term in the potential — a divergence — and buys most of what p
 plane-wave work is done with. PBE, revPBE and PBEsol run here on all three kinds of
 pseudopotential and match Quantum ESPRESSO to **≤6e-9 Ry**, with bands to **0.05 meV**.
 
+A GGA multiplies the local exchange energy by an enhancement factor of the reduced
+gradient, and the potential is the functional derivative of that -- which is where the
+second term comes from:
+
+$$E_x^{\rm GGA}[\rho] = \int \rho(\mathbf r)\,\epsilon_x^{\rm LDA}(\rho)\,
+  F(s)\; d\mathbf r,
+\qquad s = \frac{|\nabla\rho|}{2 k_F \rho},
+\qquad k_F = (3\pi^2\rho)^{1/3}$$
+
+$$v_{xc}(\mathbf r) = \frac{\partial E_{xc}}{\partial \rho}
+  - \nabla\cdot\frac{\partial E_{xc}}{\partial \nabla\rho}
+  \;\equiv\; v_1 - \nabla\cdot\!\left(v_2 \nabla\rho\right)$$
+
+Only $E_{xc}$ is written down here; $v_1$ and $v_2$ are `jax.grad` of it.
+
 Phase P13. Inputs and references are committed under `tests/data/qe/`, so this runs
 without the vendored QE tree.
 
@@ -17,21 +32,19 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 
+from pypresso import Calculator
 from pypresso.io import read_qe_output
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
 from pypresso.system import build_system
-from pypresso.workflows import run_bands
 from pypresso.xc.functional import get_functional, resolve_functional
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
 
 def load(case):
-    system = build_system(read_pw_input(CASES / f"{case}.in"))
-    return system, tuple(read_upf(PSEUDO / s.pseudo_file)
-                         for s in system.structure.species)
+    return Calculator.from_file(CASES / f"{case}.in", pseudo_dir=PSEUDO,
+                                announce=False)
 
 
 def reference(case):
@@ -148,22 +161,21 @@ import warnings
 
 print("%-16s %18s %18s %14s" % ("case", "pypresso (Ry)", "QE (Ry)", "difference"))
 for case in ("si2-nc-pbe", "si2-us-pbe", "si2-paw-pbe"):
-    system, pseudos = load(case)
-    result = run_scf(system, pseudos, conv_thr=1e-10, max_iterations=80)
+    calc = load(case)
+    result = calc.get_scf(conv_thr=1e-10, max_iterations=80)
     ref = reference(case)
     print("%-16s %18.9f %18.9f %14.2e"
           % (case, result.total_energy, ref.total_energy,
              result.total_energy - ref.total_energy))
     if case == "si2-nc-pbe":
-        pbe_scf, pbe_pseudos = result, pseudos
+        pbe = calc
 
 print()
 for case, label in (("si2-nc-pbe", "PBE"), ("si2-nc-revpbe", "revPBE"),
                     ("si2-nc-pbesol", "PBEsol")):
-    system, pseudos = load(case)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")     # input_dft overriding the dataset, on purpose
-        result = run_scf(system, pseudos, conv_thr=1e-10, max_iterations=80)
+        result = load(case).get_scf(conv_thr=1e-10, max_iterations=80)
     ref = reference(case)
     print("%-16s %18.9f %18.9f %14.2e"
           % (label, result.total_energy, ref.total_energy,
@@ -201,8 +213,10 @@ energetics, which is why it is what structures and forces are computed with.
 
 
 ```python
+# The band path comes from QE's own bands input; the density is the one already
+# converged on `pbe`, so only the k-points have to be handed over.
 band_system = build_system(read_pw_input(CASES / "si2-nc-pbe-bands.in"))
-bands = run_bands(band_system, pbe_pseudos, pbe_scf.density)
+bands = pbe.get_bands(kpoints=band_system.kpoints, nbnd=8)
 theirs = reference("si2-nc-pbe-bands").eigenvalues[0]
 ours = bands.eigenvalues_ev
 homo = ours[:, 3].max()

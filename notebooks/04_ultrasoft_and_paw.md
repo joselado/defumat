@@ -6,6 +6,18 @@ can be. Ultrasoft drops that constraint and puts the missing charge back as an
 **augmentation charge** $Q_{ij}(r)$; PAW keeps a full radial description of each sphere
 on top. Both match Quantum ESPRESSO here to **≤3e-9 Ry**.
 
+The density gains a second piece that lives only inside the spheres, and the
+eigenproblem gains an overlap:
+
+$$n(\mathbf r) = \sum_{n\mathbf k} f_{n\mathbf k}\,|\psi_{n\mathbf k}(\mathbf r)|^2
+  \;+\; \sum_{I,ij} \rho^I_{ij}\,Q^I_{ij}(\mathbf r),
+\qquad
+\rho^I_{ij} = \sum_{n\mathbf k} f_{n\mathbf k}
+  \langle\psi_{n\mathbf k}|\beta^I_i\rangle\langle\beta^I_j|\psi_{n\mathbf k}\rangle$$
+
+$$\hat S = 1 + \sum_{I,ij} q^I_{ij}\,|\beta^I_i\rangle\langle\beta^I_j|,
+\qquad q^I_{ij} = \int Q^I_{ij}(\mathbf r)\,d\mathbf r$$
+
 Phase P12. Inputs and references are committed under `tests/data/qe/`, so this runs
 without the vendored QE tree.
 
@@ -16,20 +28,16 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso.basis.builder import build_basis
+from pypresso import Calculator
 from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.system import build_system
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
 
 def load(case):
-    system = build_system(read_pw_input(CASES / f"{case}.in"))
-    return system, tuple(read_upf(PSEUDO / s.pseudo_file)
-                         for s in system.structure.species)
+    return Calculator.from_file(CASES / f"{case}.in", pseudo_dir=PSEUDO,
+                                announce=False)
 
 
 def reference(case):
@@ -60,10 +68,11 @@ which makes moving a field between them a slice one way and a zero-pad the other
 
 
 ```python
-system, pseudos = load("si2-us")
-basis, ref = build_basis(system), reference("si2-us")
+calc = load("si2-us")
+basis, ref = calc.calculation.basis, reference("si2-us")
 
-print("dual = ecutrho/ecutwfc = %g" % (system.ecutrho / system.ecutwfc))
+print("dual = ecutrho/ecutwfc = %g"
+      % (calc.system.ecutrho / calc.system.ecutwfc))
 print("%-8s %26s   %26s" % ("", "pypresso", "Quantum ESPRESSO"))
 print("%-8s %6d G  FFT %14s   %6d G  FFT %14s"
       % ("dense", basis.dense.ngm, basis.dense.grid, ref.ngm_dense, ref.fft_dense))
@@ -114,18 +123,19 @@ it is exact rather than approximate.
 
 
 ```python
-results = {}
-for case in ("si2-nc-dual8", "si2-us", "si2-paw", "si8-paw"):
-    s, ps = load(case)
-    results[case] = (s, ps, run_scf(s, ps, conv_thr=1e-10, max_iterations=80))
+cases = {case: load(case)
+         for case in ("si2-nc-dual8", "si2-us", "si2-paw", "si8-paw")}
+results = {case: c.get_scf(conv_thr=1e-10, max_iterations=80)
+           for case, c in cases.items()}
 
 print("%-16s %5s %16s %8s" % ("case", "iters", "integral of rho", "nelec"))
-for case, (s, ps, r) in results.items():
+for case, r in results.items():
+    system, pseudos = cases[case].system, cases[case].pseudos
     rho = np.asarray(r.total_density)
     print("%-16s %5d %16.12f %8.1f"
           % (case, r.iterations,
-             float(np.sum(rho)) * float(s.cell.volume) / rho.size,
-             sum(ps[t].z_valence for t in s.structure.types)))
+             float(np.sum(rho)) * float(system.cell.volume) / rho.size,
+             sum(pseudos[t].z_valence for t in system.structure.types)))
 ```
 
     case             iters  integral of rho    nelec
@@ -145,12 +155,12 @@ Poisson solve and a spherical quadrature inside each sphere.
 
 ```python
 print("%-16s %16s %16s %12s" % ("case", "pypresso (Ry)", "QE 7.5 (Ry)", "difference"))
-for case, (s, ps, r) in results.items():
+for case, r in results.items():
     q = reference(case)
     print("%-16s %16.8f %16.8f %12.1e"
           % (case, r.total_energy, q.total_energy, r.total_energy - q.total_energy))
 
-s, ps, r = results["si2-paw"]
+r = results["si2-paw"]
 q = reference("si2-paw")
 print("\nsi2-paw, term by term:")
 for term, value in q.energy_terms.items():
@@ -158,7 +168,7 @@ for term, value in q.energy_terms.items():
           % (term, r.energy_terms[term], value, r.energy_terms[term] - value))
 
 for case in ("si2-us", "si2-paw"):
-    s, ps, r = results[case]
+    r = results[case]
     theirs = reference(case).eigenvalues[0][:, : r.eigenvalues.shape[1]]
     print("\n%s: max |pypresso - QE| = %.3f meV over %d eigenvalues"
           % (case, np.abs(r.eigenvalues_ev - theirs).max() * 1000, theirs.size))
