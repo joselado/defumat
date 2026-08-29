@@ -338,14 +338,29 @@ partial derivatives and each can be measured against its own finite difference**
 agreed to 7e-4 and two did not, which localised the bug instead of guessing at it. A third
 thing had to change before either was reachable: `VelocityOperator.projectors` read the
 atoms with `np.asarray`, so `d(beta)/dk` about the atom's own centre was not
-differentiable in the geometry at all and the term vanished silently. The **strain**
-coordinate's third derivatives — elastic constants, electrostriction, the elasto-optic
-tensor — stay norm-conserving: they share `_position_response` and would inherit its tail,
-but the occupied block's analogue under a strain has not been measured, and this phase's
-lesson is that one of the pair alone is worse than neither.
+differentiable in the geometry at all and the term vanished silently.
+
+**The same third derivative in the *strain* coordinate is measured and still refused**
+(P44) — the elastic constants, electrostriction and the elasto-optic tensor. Two of P43's
+ingredients transfer and are wired in behind the guard (`dpsi + ort` and
+`stored = commutators`), taking `d(eps)/d(strain)` from **4.6e-2 to 1.3e-2** on ultrasoft
+and 5.5e-2 to 1.3e-2 on PAW against a central difference of `epsilon` over re-converged
+strained cells, where the norm-conserving control on the same script is 2.3e-4 and does
+not move. Thirty times better and fifty times the control, so the refusal stays. **The
+decomposition says the whole residue is the `b` partial** — `ort` takes the `psi`
+partial's error from +5.94 to +0.032 and the other three agree to 1.4e-3 — and it is
+**−1.72 of 112, the same number on ultrasoft and on PAW**, which is what makes it
+structural rather than a dataset's physics. **One candidate is excluded by measurement,
+and that is the finding**: `_position_response`'s commutator *source* holds `eps_n` as a
+frozen scalar where the operator beside it has carried the multiplier matrix since P26,
+and removing that asymmetry — at no change of value — takes the strain to **1.7e-4** and
+takes the *Raman* tensor from 1.2e-4 to **1.14e-3**, in every operator/source pairing
+tried. One of the two coordinates has a compensating term; adopting this one on the
+strain column alone would be a fit that regresses a validated result.
 
 **Outstanding:** Wyckoff input, the dynamical matrix of an
-ultrasoft or PAW *metal*, PAW Born charges, `chi^(2)` and the electro-optic tensor (the second-order
+ultrasoft or PAW *metal*, the strain coordinate's third derivatives on ultrasoft and PAW
+(P44 localised what is missing), PAW Born charges, `chi^(2)` and the electro-optic tensor (the second-order
 response `solve_e2` is, which P35 refuses for), the **non-analytic LO-TO term**
 (`rigid.f90`'s `nonanal`, whose two ingredients — `Z*` and `eps` — are both here),
 phonons at `q != 0` (the perturbed states live

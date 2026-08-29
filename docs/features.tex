@@ -609,11 +609,17 @@ distinction rather than a term: a \emph{state} is projected with
 $1 - \sum|\psi\rangle\langle\psi|S$ and a \emph{right-hand side} with
 $1 - \sum S|\psi\rangle\langle\psi|$, and collapsing the two --- which is exact
 at $S = 1$ --- costs a factor of fourteen. The third derivative in this
-\emph{strain} coordinate is what stays norm-conserving: it shares
-\code{\_position\_response} with the Raman tensor and would inherit the tail
-that closed it, but the occupied block's analogue under a strain has not been
-measured, and that phase's lesson is that one of the pair alone is worse than
-neither.
+\emph{strain} coordinate is what stays norm-conserving, and how far off it is
+has been measured rather than left unknown: both of the tangents that closed
+the Raman tensor transfer, and take it from \textbf{4.6e-2} to
+\textbf{1.3e-2} against a central difference over re-converged strained cells,
+where the norm-conserving control on the same script is \textbf{2.3e-4}. What
+is left is entirely the $db$ term --- the same $-1.72$ of $112$ on ultrasoft
+and on PAW, which is what says it is structural. One candidate for it is
+excluded by measurement: writing the commutator that sources $db$ with the
+multiplier matrix rather than the frozen scalar eigenvalue closes this
+coordinate (1.7e-4) and breaks the \emph{displacement} one, taking the Raman
+tensor from 1.2e-4 to 1.14e-3.
 \code{strain\_response} solves the first-order problem for a strain --- Abinit's
 metric-tensor formulation, obtained for nothing here because the cell was
 already written in reduced coordinates --- and two things follow from it:

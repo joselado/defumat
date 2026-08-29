@@ -5698,8 +5698,96 @@ share `_position_response` with the Raman tensor and would inherit its tail, but
 the occupied block's analogue under a strain nor the tail's behaviour there has been
 measured, and P43's own lesson is that one of these terms alone is worse than neither.
 The *strain response* (P41), the *dynamical matrix* (P39) and now the *Raman tensor* are
-implemented on all three kinds.
+implemented on all three kinds. **P44 measured how far off it is** and wired in the two
+tangents that do transfer, without lifting the refusal.
 
+
+### P44 — The strain coordinate's third derivative: measured, still refused.
+
+**What this phase produced is a measurement and an exclusion, not a lifted refusal.**
+P43 closed `d(eps)/d(tau)` on ultrasoft and PAW with two tangents that are only right
+together. This phase carried the same decomposition into the *strain* coordinate, where
+the same functional `F` gives the elasto-optic tensor and the electrostriction
+coefficients, and found the same two tangents transfer -- and are not enough.
+
+**The five-partial decomposition, on `si-us-nosym`, `d(eps_00)/dx_00`.** `F` is a
+function of `(strain, psi, rho, b, u)`, so the derivative is a sum of five partials and
+each is measurable against its own finite difference over a *re-converged strained* cell
+(`psi(±h)` aligned by the unitary polar factor, `b` and `u` rotated with it -- legitimate
+because `F` is invariant under that rotation). Three agreed and two did not, exactly as
+in the displacement coordinate:
+
+| | analytic | finite difference | |
+|---|---|---|---|
+| geometry | +47.6371 | +47.6357 | ✅ |
+| `psi` | +3.4501 | **−2.4855** | ❌ |
+| `rho` | −28.8586 | −28.8575 | ✅ |
+| `b` | +100.2647 | **+112.1054** | ❌ |
+| `u` | 0 (frozen) | −0.0191 | envelope residue |
+
+**Two of P43's ingredients transfer, and they are wired in behind the refusal**
+(`susceptibility_strain_derivative`), because they are established and whatever closes
+this will need them:
+
+- **the state tangent is `dpsi + ort`** -- `StrainResponse.ort`, which P41 already built
+  and the assembly was not using. It takes the `psi` partial's error from **+5.94 to
+  +0.032**. It also removes an inconsistency between two arguments of one `jvp`:
+  `_frozen_density_response` already puts that block's density contribution *into*
+  `response.drho`, so the committed code handed `F` a density tangent containing a piece
+  its state tangent left out.
+- **`b` is not the solution of its own linear equation**, so `_position_response` is
+  handed `internals["commutators"]` as `stored`.
+
+| | ultrasoft | PAW | norm-conserving control |
+|---|---|---|---|
+| neither | 4.58e-2 | 5.53e-2 | 2.3e-4 |
+| both | **1.30e-2** | **1.30e-2** | 2.3e-4, unmoved |
+
+-- where the reference is the **sum of the five partial** central differences
+above rather than the end-to-end difference of `epsilon` the committed test
+uses. The two agree to O(h^2) because `F` is invariant under the alignment
+rotation, and the norm-conserving control in that column is computed the same
+way, so the comparison is like for like; `scratchpad/strain_b.py` prints it.
+
+A thirty-fold improvement, fifty times the control, and past the phase's own
+`THIRD_DERIVATIVE_TOLERANCE` of 5e-3 -- so **the refusal stays**. Either tangent alone is
+worse than neither, one more time: on the `b` partial against its measured +112.105, the
+occupied block alone gives −27.27 and the tail alone +14.25 where both give −1.72.
+
+**What is left is entirely `b`, and it is −1.72 of 112 -- the *same* number on ultrasoft
+and on PAW**, which is what says it is structural rather than a dataset's physics.
+
+**And one candidate for it is excluded by measurement, which is this phase's finding.**
+`_position_response` writes its *operator* with the multiplier matrix (`H b_n - sum_m b_m
+Lambda_mn`) and has since P26, for a gauge reason its docstring gives -- but its
+*source*, `c_a = -i (dH/dk_a - eps_n dS/dk_a)|psi_n>`, holds `eps_n` as a **frozen
+scalar**, so `d(eps_n)` is absent from the differentiated equation on one side and
+present on the other. Removing that asymmetry changes no value and:
+
+| | strain (US / PAW) | Raman (US / PAW) |
+|---|---|---|
+| committed (operator matrix, source frozen) | 1.30e-2 / 1.30e-2 | **1.2e-4** / 1.2e-4 |
+| source as the matrix | **1.72e-4** / **1.71e-4** | 1.14e-3 / — |
+| source as a traced diagonal | 9.60e-4 / — | 1.25e-3 / 5.53e-4 |
+| operator *and* source as traced diagonals | — | fails (US) |
+
+**It closes the strain coordinate and breaks the displacement one**, in every pairing
+tried. So one of the two coordinates carries a further term that compensates it, and
+finding *that* is what closes this phase; adopting the term on the strength of the strain
+column alone would be a fit, and would regress a validated result. The Raman tensor is
+therefore untouched and the strain third derivative stays refused.
+
+**A plumbing gap found on the way in and fixed**: `electrostriction` called
+`dielectric_tensor` and `strain_response` without `result.becsum`, so an ultrasoft or PAW
+run reached them correctly only when the caller supplied a `strain=` computed elsewhere.
+
+**Where to start next time.** The `b` partial is the whole of the residue and it is
+measurable on its own -- `scratchpad/strain_b.py` prints it against its own finite
+difference in about half an hour, and `scratchpad/strain_tail.py` carries
+`_position_response` with the source form as a flag. The question to answer is which
+coordinate has the compensating term, and the cheapest discriminator is that the
+displacement's Raman check is a five-minute pytest run
+(`test_nonlinear.py -k moving_overlap`) where the strain's is an hour.
 
 ## 3a. Environment decisions (settled)
 

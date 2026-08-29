@@ -104,10 +104,26 @@ force constants) along the strain tangent this module already builds. They are a
 phase, not a function, and until they are here the coefficients reported are the
 clamped-ion ones and say so.
 
-Norm-conserving, ``nspin = 1``, insulators: everything
-:mod:`pypresso.response.strain` and
+``nspin = 1`` and insulators: everything :mod:`pypresso.response.strain` and
 :func:`~pypresso.response.sternheimer.require_a_sternheimer_regime` refuse is
 refused here too.
+
+**Ultrasoft and PAW are refused, and P44 measured how far off they are rather
+than leaving it unknown.** Two of P43's tangents transfer and are wired in
+here: the state tangent is ``dpsi + ort``, the strain response's occupied
+block, and ``db`` is the tangent of a *composition*, so
+:func:`_position_response` is given ``internals["commutators"]`` rather than
+``b``. Together they take ``d(eps)/d(strain)`` on ultrasoft silicon from 4.6e-2
+to 1.3e-2 against a central difference of ``epsilon`` over re-converged
+strained cells (PAW: 5.5e-2 to 1.3e-2), where the norm-conserving control on
+the same script is 2.3e-4 -- a large improvement and still fifty times the
+control, so the refusal stays. **The five-partial decomposition says where the
+rest is**: the ``geometry``, ``rho`` and ``u`` partials agree to 1.4e-3, ``ort``
+takes the ``psi`` partial's error from +5.94 to +0.032, and what is left is
+``b``, at -1.72 of 112 -- the *same* number on ultrasoft and on PAW, which is
+what says it is structural rather than a dataset's physics. One candidate for
+it is excluded by measurement and is recorded at
+:func:`_position_response`'s commutator.
 """
 
 from __future__ import annotations
@@ -544,6 +560,12 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
     how this was found. In the matrix form the off-diagonal ``dLambda_mn b_m``
     terms are there and the tensor comes out cubic to 1e-4.
 
+    **The source term is written with the scalar and that is measured, not
+    overlooked** -- see where it is built, and ``PLAN.md`` P44: making it
+    consistent with this rule closes the strain coordinate and breaks the
+    displacement one, so it is an excluded candidate rather than a missing
+    term.
+
     ``c_a`` is the direction-``a`` cartesian velocity at the strained cell, and
     the strained ``kcart`` is the trap there: ``KPoints.coords`` do not move
     under a strain, so the operator is built on the ``kcart``
@@ -615,6 +637,26 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
             # ``[H - eps S, r] = -i (dH/dk - eps dS/dk)``: the same commutator
             # :mod:`pypresso.response.efield` builds, and its second half is
             # zero only when ``S`` does not move with ``k``.
+            #
+            # **``eps_n`` is a frozen scalar here and that is a measurement,
+            # not an oversight** (``PLAN.md`` P44). The operator below carries
+            # the multiplier *matrix*, so its tangent contains ``dLambda``
+            # while this source's contains no ``d(eps_n)`` at all -- an
+            # asymmetry, and writing the source as
+            # ``sum_m dS/dk|psi_m> Lambda_mn`` removes it at no change of
+            # value. That is the single largest term left in the *strain*
+            # coordinate: it takes ``d(eps)/d(strain)`` on ultrasoft silicon
+            # from 1.3e-2 against a finite difference to **1.7e-4**, and PAW
+            # from 1.3e-2 to 1.7e-4. It also **breaks the displacement
+            # coordinate**, where the Raman tensor goes from 1.2e-4 to 1.14e-3
+            # (ultrasoft) and 5.5e-4 (PAW) against its own finite difference --
+            # and it does so in all three pairings tried, with the operator's
+            # half written as a matrix or as a traced diagonal and this one as
+            # either. So the term is *excluded* rather than adopted: one of the
+            # two coordinates has a further term that compensates it, and until
+            # that one is found this stays as it is and the strain-coordinate
+            # third derivative stays refused
+            # (:func:`~pypresso.response.phonon.require_norm_conserving`).
             derivative, overlap = velocity.both(states, directions[axis])
             commutator = -1j * (derivative - eigenvalues[..., None] * overlap)
             overlaps = jnp.einsum("skmg,skng->skmn", jnp.conj(states), commutator)
@@ -660,12 +702,44 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
 
 
 def susceptibility_strain_derivative(
-    calculation, solver, rho, b, u, response: StrainResponse, verbose: bool = False
+    calculation, solver, rho, b, u, response: StrainResponse,
+    verbose: bool = False, stored=None,
 ):
     """``d(eps_ij)/dx_kl``: one ``jvp`` of ``F`` per independent strain.
 
     Returns ``(3, 3, 3, 3)``, symmetric in its last two indices by construction
     -- the six Voigt strains are computed and mirrored.
+
+    **The state tangent is ``dpsi + ort``** where the strain response carries an
+    occupied block (:attr:`~pypresso.response.strain.StrainResponse.ort`, and
+    ``None`` for a norm-conserving dataset, where ``S`` does not deform). It is
+    :func:`~pypresso.response.nonlinear.susceptibility_displacement_derivative`'s
+    rule in the strain coordinate and it is not an option: with ``S`` moving,
+    the orthonormality constraint fixes a piece of the first-order state the
+    Sternheimer solve does not produce, and the density response already
+    contains that piece (``_frozen_density_response`` adds it), so leaving it
+    out of the states is an inconsistency between two tangents of the same
+    ``jvp``.
+
+    Args:
+        stored: the pre-tail electric-field solution,
+            ``internals["commutators"]``, threaded to
+            :func:`_position_response` so that ``db`` carries
+            ``adddvepsi_us``'s tail as well as the linear equation. Defaults to
+            ``b``, which is the same array for a norm-conserving dataset and
+            wrong for any other.
+
+    **Both are needed and neither is sufficient** (``PLAN.md`` P44). Against a
+    central difference of ``epsilon`` over re-converged strained cells, on
+    ultrasoft silicon: 4.6e-2 with neither and **1.3e-2** with both, where
+    either alone is worse than neither -- on the ``b`` partial against its
+    measured +112.105, the occupied block alone gives -27.27 and the tail alone
+    +14.25 where both give -1.72. Both are identically zero when ``S`` is the
+    identity, so the norm-conserving answer does not move by a digit. **They
+    are not enough**, which is why an ultrasoft or PAW run does not reach this
+    function at all (:func:`~pypresso.response.phonon.require_norm_conserving`):
+    the norm-conserving control on the same script is 2.3e-4, and the whole of
+    the difference is the ``b`` partial's remaining -1.72.
     """
     psi = solver.psi
     weights = solver.weights
@@ -681,8 +755,12 @@ def susceptibility_strain_derivative(
     for (k, l) in VOIGT:
         tangent = strain_tangent(k, l)
         dpsi = jnp.asarray(response.dpsi[k, l])
+        if response.ort is not None:
+            dpsi = dpsi + jnp.asarray(response.ort[k, l])
         drho = jnp.asarray(response.drho[k, l])
-        db = _position_response(calculation, solver, rho, b, tangent, dpsi, drho)
+        db = _position_response(
+            calculation, solver, rho, b, tangent, dpsi, drho, stored=stored,
+        )
         _, column = jax.jvp(
             epsilon, (zero, psi, rho, b), (tangent, dpsi, drho, db)
         )
@@ -795,8 +873,12 @@ def electrostriction(
     eigenvalues, psi = refined_states(calculation, result)
     density = jnp.asarray(result.density)
 
+    # ``becsum`` reaches both responses, and it is not optional for an
+    # ultrasoft or PAW dataset: PAW's one-centre coefficients are built from it
+    # and cannot be rebuilt from the density.
+    becsum = result.becsum
     field = dielectric_tensor(
-        calculation, psi, eigenvalues, density,
+        calculation, psi, eigenvalues, density, becsum,
         born_charges=False, keep_internals=True, verbose=verbose,
         **response_options,
     )
@@ -820,7 +902,7 @@ def electrostriction(
 
     if strain is None:
         strain = strain_response(
-            calculation, psi, eigenvalues, density, verbose=verbose,
+            calculation, psi, eigenvalues, density, becsum, verbose=verbose,
             **response_options,
         )
 
@@ -828,7 +910,8 @@ def electrostriction(
         require_converged_responses(field, strain)
 
     depsilon = susceptibility_strain_derivative(
-        calculation, solver, density, b, u, strain, verbose=verbose
+        calculation, solver, density, b, u, strain, verbose=verbose,
+        stored=jnp.stack(internals["commutators"]),
     )
     # ``symmatrix3`` one rank further up: two field labels and two strain
     # labels. A no-op on a ``nosym`` run, which is what every case this phase
