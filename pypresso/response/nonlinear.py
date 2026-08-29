@@ -78,7 +78,12 @@ comes out in the exact zincblende form, and is still symmetric under every
 permutation of its three labels to 2.5e-13 -- because the missing term has all
 of those properties itself. That is why
 :func:`susceptibility_field_derivative` is kept and refused rather than deleted:
-it is what those tests measure.
+it is what those tests measure. **The refusal is a default argument, not the
+first line of the function** -- ``allow_incomplete=True`` is how the tests reach
+the incomplete tensor, and every other caller gets
+:func:`require_a_complete_third_derivative`. It was documented as refused and
+was not: the function is in ``__all__``, and until this was fixed the only call
+to that refusal in the package was in a test asserting that it raises.
 
 **Refusals, inherited rather than restated.** Norm-conserving, ``nspin = 1``,
 insulators, ``Gamma`` and an **unshifted** k-grid: everything P25 and P26 refuse
@@ -293,9 +298,16 @@ def susceptibility_displacement_derivative(
 
 
 def susceptibility_field_derivative(
-    calculation, solver, rho, b, u, drho, verbose: bool = False
+    calculation, solver, rho, b, u, drho, verbose: bool = False,
+    allow_incomplete: bool = False,
 ) -> np.ndarray:
     """``d(eps_ij)/dE_k`` **without its explicit field term** -- see the module.
+
+    ``allow_incomplete`` is the opt-in, and without it this raises
+    :func:`require_a_complete_third_derivative`. The tensor is missing a term
+    that no symmetry check can see, so a caller has to say in the call that it
+    wants the incomplete quantity; the measurements that establish *how* wrong
+    it is are the only things that do.
 
     Kept, and refused by :func:`require_a_complete_third_derivative` rather than
     exposed, because it is what measures the thing it is missing: the tensor it
@@ -310,6 +322,8 @@ def susceptibility_field_derivative(
     code is nowhere -- ``H`` is built from ``rho``, and the field lives only in
     the source term.
     """
+    if not allow_incomplete:
+        require_a_complete_third_derivative()
     psi, weights = solver.psi, solver.weights
     rho = jnp.asarray(rho)
 

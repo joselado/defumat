@@ -39,11 +39,27 @@ NOCC = 4
 
 
 def _system(testsuite: Path, pseudo_dir: Path, **overrides):
-    """QE's own two-atom silicon, with ``&system`` variables overridden."""
+    """QE's own two-atom silicon, with ``&system`` variables overridden.
+
+    An **indexed** override (``starting_magnetization(1)``) is translated into
+    the representation :func:`~pypresso.io.pwin.parse_pw_input` produces --
+    a dict of index tuples under the *base* key -- rather than injected as a
+    literal string key, which is a key nothing reads. That was a silent no-op:
+    an override was written in the test, was never applied, and the run used the
+    default.
+    """
     data = read_pw_input(testsuite / "pw_scf" / "scf.in")
-    data.namelists["system"].update(
-        {key: value for key, value in overrides.items() if value is not None}
-    )
+    namelist = data.namelists["system"]
+    for key, value in overrides.items():
+        if value is None:
+            continue
+        if key.endswith(")") and "(" in key:
+            name, _, index = key[:-1].partition("(")
+            entries = dict(namelist.get(name) or {})
+            entries[tuple(int(i) for i in index.split(","))] = value
+            namelist[name] = entries
+        else:
+            namelist[key] = value
     system = build_system(data)
     pseudos = tuple(
         read_upf(pseudo_dir / species.pseudo_file)
@@ -139,6 +155,11 @@ def test_the_two_spin_regimes_agree(qe_testsuite, pseudo_dir):
     """
     smearing = dict(occupations="smearing", smearing="gaussian", degauss=0.02)
     _, _, one = _converged(qe_testsuite, pseudo_dir, "tb09", **smearing)
+    # Zero, explicitly: an unpolarized ``nspin = 2`` run reproducing
+    # ``nspin = 1`` is the whole point of the test, and ``build_system``
+    # requires an LSDA input to say which it wants. ``_system`` translates the
+    # indexed spelling into the parser's own representation -- it used to inject
+    # the string as a key, which nothing read.
     _, _, two = _converged(
         qe_testsuite, pseudo_dir, "tb09", nspin=2,
         **{"starting_magnetization(1)": 0.0}, **smearing
@@ -427,6 +448,15 @@ def test_forces_and_stress_are_refused(qe_testsuite, pseudo_dir):
     for compute in (compute_forces, compute_stress):
         with pytest.raises(NotImplementedError, match="not the derivative of an energy"):
             compute(calculation, state)
+
+    # **And the analytic route, which this test did not cover and which had no
+    # check at all.** ``analytic_forces`` is a transcription of QE's six
+    # expressions and never touches ``energy_at``, where the refusal lives, so
+    # ``method='analytic'`` under a potential-only functional came back with a
+    # force -- smooth, translation-corrected, symmetrised and meaningless.
+    # ``compute_forces`` makes the check before dispatching now.
+    with pytest.raises(NotImplementedError, match="not the derivative of an energy"):
+        compute_forces(calculation, state, method="analytic")
 
 
 @pytest.mark.parametrize(

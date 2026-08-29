@@ -51,6 +51,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from pypresso.forces.energy import FrozenState, energy_at
+from pypresso.response.phonon import require_norm_conserving
 from pypresso.response.strain import StrainResponse, strain_tangent
 from pypresso.units import RY_TO_KBAR
 
@@ -153,6 +154,19 @@ def elastic_constants(
             "(pypresso.response.mixing); otherwise raise max_iterations or "
             "lower alpha_mix"
         )
+    # **The refusal this function documented and did not make.**
+    # :func:`~pypresso.response.phonon.require_norm_conserving`'s own docstring
+    # says it guards "the elastic constants, electrostriction and the
+    # elasto-optic tensor", and
+    # :mod:`~pypresso.response.electrostriction` calls it before reaching here
+    # -- but :meth:`pypresso.calculator.Calculator.get_elastic_constants` calls
+    # this function directly, and that path had no check at all. P44 measured
+    # what comes back without one: the strain coordinate's third derivative is
+    # 1.3e-2 against a finite difference on ultrasoft and PAW where the
+    # norm-conserving control on the same script is 2.3e-4, and the residue is
+    # structural rather than a dataset's physics. A ``C_ijkl`` built on it is
+    # plausible, symmetric, and wrong.
+    require_norm_conserving(calculation)
     psi = jnp.asarray(wavefunctions)
     eigenvalues = jnp.asarray(eigenvalues)
     if eigenvalues.ndim == 2:

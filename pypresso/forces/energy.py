@@ -59,6 +59,7 @@ from pypresso.hubbard.energy import hubbard_energy
 from pypresso.scf.potential import total_charge
 
 __all__ = ["FrozenState", "frozen_energy", "energy_at", "reject_spinors", "reject_potential_only",
+           "reject_magnetic_field",
            "state_from_result"]
 
 
@@ -178,9 +179,14 @@ def reject_potential_only(calculation) -> None:
     on assigning one -- fitting a functional whose derivative approximates the
     potential -- and none of it is implemented.)
 
-    Reached from every consumer, because they all come through
-    :func:`energy_at`: forces, the stress tensor, the dynamical matrix, the
-    elastic constants and the Sternheimer response alike.
+    Reached from every consumer that comes through :func:`energy_at` -- the
+    stress tensor, the dynamical matrix, the elastic constants and the
+    Sternheimer response. **The analytic force expressions do not**: they are a
+    transcription of ``force_lc``/``force_cc``/``force_ew``/... and share no
+    machinery with this functional, so ``method='analytic'`` reached a
+    Tran-Blaha run and returned a number until
+    :func:`pypresso.forces.compute_forces` was made to call this before
+    dispatching. That is why the call is in three places and not one.
     """
     if getattr(calculation, "functional", None) is not None and calculation.functional.is_meta:
         raise NotImplementedError(
@@ -189,6 +195,37 @@ def reject_potential_only(calculation) -> None:
             "differentiate: forces, stress, phonons and linear response are "
             "refused for it. The band structure, the density of states and the "
             "density itself are unaffected -- they are what it is for"
+        )
+
+
+def reject_magnetic_field(calculation) -> None:
+    """A field or a constrained moment makes the frozen state non-stationary.
+
+    The twin of :func:`pypresso.stress.energy.require_a_differentiable_cell`'s
+    second check, which has refused the same combination for the *stress* since
+    P18 and states the reason: ``add_bfield`` is called from inside
+    ``v_of_rho``, so ``deband`` removes the field's energy again and ``etcon``
+    is printed and never added (Elk excludes its external field's energy by the
+    same convention). The converged state is therefore stationary for a
+    *different* functional than :func:`energy_at` writes down, and the missing
+    term -- ``-int B . dm/dtau``, plus the penalty's own derivative -- is
+    silent: the force comes back finite, sums to zero over the atoms, and
+    obeys the symmetry of the crystal.
+
+    The force path had no such check while the stress path did, which is the
+    same guard-on-one-sibling shape as the rest of this pass. Lifting it means
+    writing the constraint's energy into ``energy_at`` and its derivative with
+    it -- :mod:`pypresso.scf.fields` already has the energy, so it is a real
+    term rather than a structural obstacle.
+    """
+    if getattr(calculation, "magnetic_field", None) is not None:
+        raise NotImplementedError(
+            "forces with a magnetic field or a constrained moment are not "
+            "implemented: the field's energy is deliberately outside the "
+            "reported total (see pypresso.scf.fields), so the converged state "
+            "is stationary for a different functional than the one being "
+            "differentiated and the missing term would be silent. The stress "
+            "refuses the same combination for the same reason"
         )
 
 

@@ -315,6 +315,13 @@ def test_b_field_with_a_constraint_is_refused():
     QE will not decide which of an external field and a constraint wins, and
     neither does this -- but the check read the same misspelled key, so the
     combination it exists to reject went through.
+
+    **Noncollinear, and it has to be**: ``constrained_magnetization = 'total'``
+    is ``i_cons = 3``, which ``input.f90`` allows only for ``nspin = 4``
+    (``fixed_magnetization`` is a vector). The case was written collinear and
+    reached this refusal only because that one was missing -- QE stops on the
+    same input one check earlier. See
+    ``tests/unit/test_sibling_refusals.py``.
     """
     import pytest as _pytest
 
@@ -326,7 +333,7 @@ def test_b_field_with_a_constraint_is_refused():
  /
  &system
     ibrav = 3, celldm(1) = 5.217, nat = 1, ntyp = 1, ecutwfc = 12.0
-    nspin = 2
+    noncolin = .true.
     starting_magnetization(1) = 0.5
     B_field(3) = -0.02
     constrained_magnetization = 'total'

@@ -44,6 +44,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from pypresso.basis.fft import r_to_g
+from pypresso.forces.energy import reject_potential_only
 from pypresso.scf.potential import (
     as_potential_components,
     exchange_correlation,
@@ -76,6 +77,9 @@ def analytic_forces(calculation, state):
             "implemented; nspin = 1 and nspin = 2 are, on norm-conserving, "
             "ultrasoft and PAW pseudopotentials"
         )
+    # The functional's own refusal, reached here too: these expressions do not
+    # come through ``energy_at``, so nothing else in this module would make it.
+    reject_potential_only(calculation)
     if calculation.is_hubbard:
         # ``force_hub`` is 2552 lines of Fortran -- the derivative of ``ns``
         # with respect to a displacement, which for ortho-atomic projectors

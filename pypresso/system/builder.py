@@ -12,6 +12,7 @@ Defaults come from ``Modules/input_parameters.f90``; the rules for combining
 from __future__ import annotations
 
 import dataclasses
+import warnings
 
 import equinox as eqx
 import numpy as np
@@ -515,6 +516,7 @@ def system_from_file(path, precision: Precision = DEFAULT_PRECISION) -> System:
 def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> System:
     _refuse_unimplemented_switches(pwin)
     _check_calculation(pwin)
+    _check_occupations(pwin)
     cell = _build_cell(pwin, precision)
     structure = _build_structure(pwin, cell, precision)
 
@@ -563,6 +565,86 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         raise ValueError(
             "constrained_magnetization requires nspin = 2 or noncolin = .true."
         )
+    # ``input.f90``'s ``SELECT CASE( constrained_magnetization )``, the three
+    # per-scheme checks it makes and this reader did not. Each one guards a
+    # branch that otherwise runs and returns a number:
+    #
+    # * ``'atomic direction'`` is ``i_cons = 2``, and ``add_bfield.f90`` stops
+    #   on it unless ``noncolin`` -- "this magnetic constraint only applies to
+    #   non collinear calculations". Here it did not stop: the penalty is
+    #   ``(m_z/|m| - cos theta)^2`` and ``_polar_cosine`` reads the *last*
+    #   component, which for a collinear moment of one component is the moment
+    #   itself, so the cosine is +-1 whatever the density does and the whole
+    #   constraint is a no-op with a vanishing gradient;
+    # * ``'total'`` is ``i_cons = 3`` and QE requires ``nspin = 4``, because
+    #   ``fixed_magnetization`` is a vector. A collinear run has a one-component
+    #   moment, which NumPy broadcasts against the ``(3,)`` target instead of
+    #   failing;
+    # * every scheme that constrains an atomic moment needs some
+    #   ``starting_magnetization``, for the reason below.
+    if constrained_magnetization == "atomic direction" and nspin != 4:
+        raise ValueError(
+            "constrained_magnetization = 'atomic direction' requires "
+            "noncolin = .true.: the constrained quantity is the angle between "
+            "the local moment and z, and a collinear moment has no angle. QE "
+            "refuses the same combination in add_bfield.f90"
+        )
+    if constrained_magnetization == "total" and nspin != 4:
+        raise ValueError(
+            "constrained_magnetization = 'total' requires noncolin = .true.: "
+            "fixed_magnetization is a vector and a collinear run has one "
+            "component to compare it against (input.f90's i_cons = 3)"
+        )
+    given_magnetization = pwin.get("system", "starting_magnetization") is not None
+    # ``input.f90:1506``, in the ``'none'`` branch of the same SELECT CASE:
+    # ``lscf .AND. lsda .AND. (.NOT. tfixed_occ) .AND. (.not.
+    # two_fermi_energies) .AND. sm_wasnt_set`` is an error. **Nothing in the
+    # SCF breaks spin symmetry on its own**, which
+    # ``Calculation.starting_density`` writes out: with every
+    # ``starting_magnetization`` at zero the two channels start identical, stay
+    # identical, and the run converges to the unpolarized solution and reports
+    # success. That is the same failure ``pypresso.scf.continuation`` guards
+    # against on the *promotion* path (a non-magnetic source promoted into a
+    # collinear run is seeded rather than carried) -- the guard existed there
+    # and not on the equivalent fresh-run path.
+    #
+    # The test is *presence*, not value: an explicit ``0.0`` is set as far as
+    # QE is concerned and stays accepted, because asking for the unpolarized
+    # solution in a two-channel run is a legitimate thing to ask for.
+    # ``two_fermi_energies`` is ``tot_magnetization`` being given, and
+    # ``tfixed_occ`` is ``occupations = 'from_input'``; either one fixes the
+    # magnetization by another route, and a non-self-consistent run is not
+    # converging anything.
+    scf_like = str(
+        pwin.get("control", "calculation", "scf")
+    ).strip().strip("'\"").lower() in ("scf", "relax", "md", "vc-relax", "vc-md")
+    occupations = str(pwin.get("system", "occupations", "fixed")).lower()
+    if (
+        scf_like
+        and nspin == 2
+        and constrained_magnetization == "none"
+        and occupations != "from_input"
+        and _tot_magnetization(pwin) is None
+        and not given_magnetization
+    ):
+        raise ValueError(
+            "nspin = 2 with no starting_magnetization: nothing in the SCF "
+            "breaks the spin symmetry on its own, so the two channels stay "
+            "identical and the run converges to the unpolarized solution and "
+            "reports success. Set starting_magnetization for at least one "
+            "species (an explicit 0.0 is accepted and means the unpolarized "
+            "solution was asked for), or constrain the magnetization with "
+            "tot_magnetization or constrained_magnetization. QE stops on the "
+            "same input"
+        )
+    if constrained_magnetization in ("atomic", "atomic direction") and not given_magnetization:
+        # ``input.f90``: "constrained atomic magnetizations require that some
+        # starting_magnetization is set". The targets *are* built from it.
+        raise ValueError(
+            f"constrained_magnetization = {constrained_magnetization!r} needs "
+            "some starting_magnetization: the constraint targets are built "
+            "from it, so without one every target is zero"
+        )
     if any(float(v) != 0.0 for v in pwin.indexed("system", "b_field", 3)) and (
         constrained_magnetization != "none"
     ):
@@ -572,6 +654,33 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
             "a nonzero B_field together with constrained_magnetization: QE "
             "refuses this and so does pypresso; use one or the other"
         )
+    # ``input.f90:1612``: with nspin = 2 there is one magnetization component
+    # and only ``B_field(3)`` can act on it. What happened without this check is
+    # in ``Calculation._build_magnetic_field``, which slices ``uniform[2:3]``
+    # for a collinear run: the x and y components were dropped in silence, so a
+    # run asking to tilt a collinear moment converged, reported the z
+    # component's field energy, and said nothing about the other two.
+    if nspin == 2 and any(
+        float(v) != 0.0 for v in pwin.indexed("system", "b_field", 3)[:2]
+    ):
+        raise ValueError(
+            "only B_field(3) can be specified with nspin = 2: a collinear "
+            "magnetization has one component, so an x or y field has nothing "
+            "to act on. Use noncolin = .true. for a field off the z axis"
+        )
+    # The same rule for LOCAL_MAGNETIC_FIELDS, which is this package's own card
+    # (Elk's ``bfcmt``; ``pw.x`` has no counterpart, so there is no QE check to
+    # transcribe) and reaches the same ``atomic[:, 2:3]`` slice.
+    if nspin == 2:
+        atomic_fields = _atomic_b_field(pwin, structure.nat)
+        if atomic_fields and any(
+            float(row[0]) != 0.0 or float(row[1]) != 0.0 for row in atomic_fields
+        ):
+            raise ValueError(
+                "a LOCAL_MAGNETIC_FIELDS card with an x or y component and "
+                "nspin = 2: as for B_field, a collinear magnetization has only "
+                "a z component for a field to act on"
+            )
     angle1 = tuple(pwin.indexed("system", "angle1", structure.ntyp))
     angle2 = tuple(pwin.indexed("system", "angle2", structure.ntyp))
 
@@ -820,6 +929,65 @@ _UNIMPLEMENTED_CALCULATIONS = {
     "md": "Born-Oppenheimer molecular dynamics (PW/src/dynamics_module.f90)",
     "vc-md": "variable-cell molecular dynamics (Modules/wavefunctions, vc-md)",
 }
+
+
+#: ``occupations`` values that reach an implementation here. ``fixed``,
+#: ``smearing`` and ``from_input`` are dispatched by
+#: :meth:`pypresso.scf.driver.Calculation.occupations`; the tetrahedron
+#: spellings come from :data:`pypresso.scf.tetrahedra.TETRAHEDRON_KINDS`, which
+#: carries QE's hyphen and underscore variants both.
+_OCCUPATIONS = (
+    "fixed", "smearing", "from_input",
+    "tetrahedra", "tetrahedra_lin", "tetrahedra-lin",
+    "tetrahedra_opt", "tetrahedra-opt",
+)
+
+
+def _check_occupations(pwin: PwInput) -> None:
+    """``set_occupations.f90``'s two checks, neither of which was made here.
+
+    :meth:`pypresso.scf.driver.Calculation.occupations` dispatches ``fixed``,
+    ``from_input`` and anything starting with ``tetrahedra``, and then **falls
+    through to the smearing branch unconditionally** -- there is no ``else``.
+    So a typo (``tetrahedron``, ``smering``, a stray capital that survives the
+    ``lower()``) selected Gaussian smearing rather than what was asked for, and
+    the run reported success. QE's ``CASE DEFAULT`` stops.
+
+    The second check is the pair to it. ``degauss`` defaults to 0.0 and
+    ``occupations = 'smearing'`` without one gives ``x = (ef - e)/degauss``, a
+    ``0/0`` at whichever band the Fermi bisection lands on: the occupation
+    weights come back with a ``nan`` in them and it propagates into the density.
+    QE's ``lgauss = ( degauss > 0.0_dp )`` refuses it. Note the asymmetry this
+    closes -- the *smearing function's* name was already validated
+    (:func:`pypresso.scf.occupations.smearing_order` raises on an unknown one),
+    so one half of the pair stopped and the other did not.
+
+    ``fixed`` **with** a ``degauss`` is QE's one warning here rather than an
+    error (``errore(..., -1)`` is a negative severity: it prints and zeroes the
+    value), so it is a warning here too.
+    """
+    occupations = str(pwin.get("system", "occupations", "fixed")).strip().strip("'\"").lower()
+    if occupations not in _OCCUPATIONS:
+        raise ValueError(
+            f"occupations = {occupations!r} is not one of "
+            f"{', '.join(_OCCUPATIONS)}. Refused rather than accepted, because "
+            "the occupation dispatch has no default branch: an unrecognised "
+            "value silently selected smearing"
+        )
+    degauss = float(pwin.get("system", "degauss", 0.0))
+    if occupations == "smearing" and not degauss > 0.0:
+        raise ValueError(
+            "occupations = 'smearing' with no degauss: the smearing width is "
+            "the denominator of (ef - e)/degauss, so a zero one gives NaN "
+            "occupation weights rather than the fixed occupations it looks "
+            "like it should. Set degauss, or ask for occupations = 'fixed'"
+        )
+    if occupations == "fixed" and degauss != 0.0:
+        warnings.warn(
+            "occupations = 'fixed' with a nonzero degauss: the broadening is "
+            "ignored, exactly as set_occupations.f90 ignores it",
+            stacklevel=2,
+        )
 
 
 def _check_calculation(pwin: PwInput) -> None:

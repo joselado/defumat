@@ -113,8 +113,11 @@ def _first_order(case: str):
 @lru_cache(maxsize=None)
 def _field_derivative(case: str):
     calculation, density, solver, b, u, drho, _ = _first_order(case)
+    # ``allow_incomplete``: this tensor is missing the ``<u_i|r_k|u_j>`` term
+    # and the public path refuses it by name. What these tests measure is
+    # precisely how invisible the omission is, so they opt in.
     return susceptibility_field_derivative(
-        calculation, solver, density, b, u, drho
+        calculation, solver, density, b, u, drho, allow_incomplete=True
     )
 
 

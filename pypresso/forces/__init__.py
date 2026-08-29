@@ -32,7 +32,13 @@ import numpy as np
 
 from pypresso.forces.analytic import analytic_forces
 from pypresso.forces.autodiff import autodiff_forces
-from pypresso.forces.energy import FrozenState, frozen_energy, state_from_result
+from pypresso.forces.energy import (
+    FrozenState,
+    frozen_energy,
+    reject_magnetic_field,
+    reject_potential_only,
+    state_from_result,
+)
 from pypresso.forces.spiral import (
     SpiralGradient,
     compute_spiral_gradient,
@@ -99,6 +105,14 @@ def compute_forces(calculation, result_or_state, method: str | None = None) -> F
         else state_from_result(result_or_state)
     )
     name = (method or DEFAULT_FORCE_METHOD).lower()
+    # **Before dispatch, so that every method is covered by one check.** The
+    # autodiff route reaches these through :func:`~pypresso.forces.energy.
+    # energy_at`; the analytic route is a transcription of QE's six expressions
+    # and shares nothing with it, so a refusal written into the functional did
+    # not reach ``method='analytic'`` at all -- a Tran-Blaha run came back with
+    # a force, and a run under a magnetic field came back with one from either.
+    reject_potential_only(calculation)
+    reject_magnetic_field(calculation)
     raw = get_force_method(name)(calculation, state)
 
     terms = {}
