@@ -543,8 +543,33 @@ print(spectrum.raman_activity, spectrum.depolarisation)
 testable without a self-consistent run.
 
 Ultrasoft and PAW work for the dielectric constant ($\le$1.2e-4 against
-\code{ph.x} on four cases); metals work for the response and the dynamical
-matrix; and a symmetry-reduced wedge works as of the rank-$n$ symmetriser.
+\code{ph.x} on four cases) \emph{and for the dynamical matrix} --- silicon's
+optical mode comes out at \textbf{513.295} and \textbf{513.378}~cm$^{-1}$
+against \code{ph.x}'s 513.275 and 513.404, which is tighter than the
+norm-conserving case's 0.05. Four things make the difference and all four
+switch themselves off when $S$ is the identity: the source term is
+$(\mathrm{d}H/\mathrm{d}u - \varepsilon\,\mathrm{d}S/\mathrm{d}u)|\psi\rangle$;
+the first-order state has an occupied block the Sternheimer solve does not
+produce; the mixed state changes at \emph{frozen} states, because the
+augmentation charge and the projectors travel with their atom; and the
+orthonormality multipliers are variables of the functional that move --- as a
+\textbf{matrix}, since a diagonal one is not invariant under the
+occupied-manifold rotation the state tangent is free in. Metals work for the
+response and for a norm-conserving dynamical matrix; and a symmetry-reduced
+wedge works as of the rank-$n$ symmetriser.
+
+\textbf{The Raman tensor is ultrasoft and PAW as well}, at \textbf{1.2e-4} on
+both against a central difference of $\epsilon$ over re-converged displaced
+cells, where the norm-conserving control on the same script is 6.8e-4. It took
+\textbf{two tangents that are only right together}, and either alone is worse
+than neither: the state tangent is $P_c\,\mathrm{d}\psi + \psi^{\mathrm{ort}}$,
+the occupied block again; and $|b\rangle = P_c\,\mathbf r|\psi\rangle$ is
+\emph{not} the solution of its own linear equation once \code{adddvepsi\_us}
+has applied $S$ to it and added the augmentation dipole, so $\mathrm{d}b$ is
+the tangent of a \emph{composition} rather than of a solve. What located them
+is that $\partial\epsilon/\partial\tau$ is a sum of five partial derivatives
+and each one can be finite-differenced on its own against a re-converged run:
+three agreed to 7e-4 and two did not.
 
 \textbf{A trap worth knowing:} a response on a reduced $k$-set is a \emph{polar
 vector field} and must be symmetrised as one. Running the whole grid instead is
@@ -557,13 +582,38 @@ Monkhorst--Pack grid is not.
 well as size); $\chi^{(2)}$ and the electro-optic tensor (the second-order
 source term has nothing to build the $\langle u_i|r_k|u_j\rangle$ piece from ---
 and it is \textbf{42\%} of the answer, measured); the non-analytic LO--TO term;
-phonons at $q\neq0$; the dynamical matrix of an ultrasoft dataset; any response
-under a potential-only meta-GGA; and a shifted grid with a reduced $k$-set.
+phonons at $q\neq0$; the dynamical matrix of an ultrasoft or PAW \emph{metal}
+(the \code{wg}/\code{wk} weight split was derived for a response whose
+\code{becsum} dependence is entirely inside \code{dpsi}, and an insulator cannot
+say which weight the three further tangents belong with); any response under a
+potential-only meta-GGA; and a shifted grid with a reduced $k$-set.
 \end{refuses}
 
 \subsection*{Elastic constants, electrostriction and the elasto-optic tensor}
 
 The same machinery in the \emph{strain} coordinate rather than the atomic one.
+\textbf{The strain \emph{response} itself works on all three pseudopotential kinds}
+(\code{strain\_response}): the augmentation charge $Q_{ij}(\mathbf r)$ is a
+function of the \emph{cell}, so a homogeneous strain deforms the table it is
+tabulated on where a displacement only translates it, and on top of that come
+the four terms the dynamical matrix needed. Against a central difference of
+\emph{re-converged} strained runs --- which needs no \code{ph.x}, since
+\code{ph.x} has no strain perturbation --- it agrees to \textbf{4.6e-4}
+(ultrasoft) and \textbf{4.7e-4} (PAW) against a norm-conserving 1.9e-4 on the
+same cell. The \emph{derivatives} below are norm-conserving still --- but the variational
+second-order energy they all stand on is not: it reproduces \code{dielec.f90}'s
+dielectric constant to \textbf{3.4e-10} (ultrasoft) and \textbf{6.9e-11} (PAW)
+against a norm-conserving 8.4e-10, which took four terms that each vanish when
+$S$ is the identity. One of them is worth stating on its own, because it is a
+distinction rather than a term: a \emph{state} is projected with
+$1 - \sum|\psi\rangle\langle\psi|S$ and a \emph{right-hand side} with
+$1 - \sum S|\psi\rangle\langle\psi|$, and collapsing the two --- which is exact
+at $S = 1$ --- costs a factor of fourteen. The third derivative in this
+\emph{strain} coordinate is what stays norm-conserving: it shares
+\code{\_position\_response} with the Raman tensor and would inherit the tail
+that closed it, but the occupied block's analogue under a strain has not been
+measured, and that phase's lesson is that one of the pair alone is worse than
+neither.
 \code{strain\_response} solves the first-order problem for a strain --- Abinit's
 metric-tensor formulation, obtained for nothing here because the cell was
 already written in reduced coordinates --- and two things follow from it:
@@ -754,6 +804,20 @@ nu = run_z2_3d(system, pseudos, scf.density)   # the four 3D indices
 print(nu)                   # (nu0; nu1 nu2 nu3)
 \end{pycode}
 
+\begin{refuses}
+\textbf{Refuses.} A collinear spin-polarized run (two Hamiltonians, so two
+independent sets of invariants and no statement of which is meant); a $Z_2$
+without spin--orbit coupling, where every invariant is zero for a reason that
+has nothing to do with the band structure; the parity route without an
+inversion centre; and a manifold that is not separated from the band above it
+(\code{gap\_tol}). A PAW run needs the converged \code{becsum} passed beside
+the density --- \code{run\_z2(..., becsum = scf.becsum)}, which
+\code{Calculator} does for you --- because \code{ddd\_paw} is a property of the
+wavefunctions and cannot be rebuilt from a density; leaving it out is worth
+1.03~eV in the eigenvalues, and an invariant computed from those is still an
+integer.
+\end{refuses}
+
 \textbf{Running both $Z_2$ routes is the check.} Where they disagree the parity
 one is the answer, because it has no mesh and the Wilson route does.
 \textbf{Two things bite in a plane-wave code and both are silent:} neighbouring
@@ -886,6 +950,7 @@ relaxed geometry & 1e-6 bohr \\
 dielectric constant (NC, US, PAW) & $\le$1.2e-4 \\
 Born effective charges (NC) & every printed digit \\
 phonons at $\Gamma$, silicon & 0.05 cm$^{-1}$ \\
+phonons at $\Gamma$, silicon (US, PAW) & 0.02--0.03 cm$^{-1}$ \\
 phonons at $\Gamma$, aluminium (metal) & 0.002 cm$^{-1}$ \\
 Raman/IR spectra vs \code{dynmat.x} & every printed digit \\
 \bottomrule

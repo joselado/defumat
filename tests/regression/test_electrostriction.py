@@ -93,7 +93,10 @@ def _converged(case: str):
 def _strain(case: str):
     _, _, calculation, result, eigenvalues, psi = _converged(case)
     return strain_response(
-        calculation, psi, eigenvalues, jnp.asarray(result.density)
+        calculation, psi, eigenvalues, jnp.asarray(result.density),
+        # ``becsum`` is what a PAW dataset's one-centre coefficients are built
+        # from, and an ultrasoft one needs it for the same ``deeq``.
+        result.becsum,
     )
 
 
@@ -152,6 +155,37 @@ def test_the_strain_response_matches_a_finite_difference(component):
     ours = np.asarray(_strain("si-electrostriction").drho[a, b])
     error = np.abs(ours - reference).max() / np.abs(reference).max()
     assert error < STRAIN_DENSITY_TOLERANCE
+
+
+@pytest.mark.parametrize("case", ["si-us-nosym", "si-paw-nosym"])
+@pytest.mark.parametrize("component", [(0, 0), (0, 1)])
+def test_a_moving_overlap_strain_response_matches_a_finite_difference(case, component):
+    """``PLAN.md`` P41: the strain response with ``S`` deforming with the cell.
+
+    The augmentation charge ``Q_ij(r)`` is a function of the *cell*, so a
+    homogeneous strain changes it in a way an atomic displacement does not --
+    and on top of that come the three P39 wrote for a displacement: the source
+    term's ``-eps dS``, the occupied block of the first-order state, and PAW's
+    one-centre response inside the loop. All four vanish when ``S`` is the
+    identity, which is what keeps the norm-conserving case above unchanged.
+
+    The reference is the same one P26 uses and it needs no ``ph.x``: a central
+    difference of the *converged* density over a cell deformed either way.
+    Measured -- 4.6e-4 (ultrasoft) and 4.7e-4 (PAW) on the (0,0) strain against
+    the norm-conserving control's 1.9e-4 on the same cell, and 5.8e-5 / 5.7e-5
+    against 3.2e-5 on the shear.
+    """
+    system, pseudos, calculation, result, _, _ = _converged(case)
+    response = _strain(case)
+    a, b = component
+    tangent = strain_tangent(a, b)
+    step = 3e-3
+    plus = _reconverged(case, step * tangent)[1].density
+    minus = _reconverged(case, -step * tangent)[1].density
+    difference = (jnp.asarray(plus) - jnp.asarray(minus)) / (2 * step)
+    here = jnp.asarray(response.drho[a, b])
+    scale = float(jnp.abs(difference).max())
+    assert float(jnp.abs(here - difference).max()) / scale < STRAIN_DENSITY_TOLERANCE
 
 
 def test_the_strain_response_converges():
@@ -230,6 +264,44 @@ def test_the_variational_energy_reproduces_the_dielectric_assembly():
     u = _project_conduction(solver.psi, jnp.stack(field.internals["dpsi"]))
     ours = np.asarray(_epsilon_at(
         calculation, jnp.zeros((3, 3)), solver.psi, density, b, u, solver.weights
+    ))
+    assert np.abs(ours - field.epsilon).max() / np.abs(field.epsilon).max() < 1e-8
+
+
+@pytest.mark.parametrize("case", ["si-us-nosym", "si-paw-nosym"])
+def test_the_variational_energy_is_the_dielectric_assembly_with_a_moving_overlap(case):
+    """``PLAN.md`` P43: the same identity above, with ``S`` not the identity.
+
+    It is the anchor the whole strain-derivative stack stands on, and it took
+    four terms that are each zero when ``S`` is the identity:
+
+    * ``becsum`` inside the functional's own density -- the augmentation charge
+      is part of ``rho`` and was passed as an empty tuple literally;
+    * ``ddd_paw`` in its Hamiltonian;
+    * the ``S`` metric in the projectors and in the multiplier's
+      ``<u_i|S|u_j>`` -- and, separately, the fact that a **state** takes
+      ``1 - sum |psi><psi| S`` while a **right-hand side** takes
+      ``1 - sum S|psi><psi|``, which is why the callers now hand ``b`` and
+      ``u`` over unprojected;
+    * PAW's one-centre screening, because its one-centre energy is a second
+      nonlinear functional of ``becsum`` and so contributes its own
+      ``1/2 dx K dx``.
+
+    The staircase they were found on: **21% -> 2.2e-3 -> 1.6e-4 -> 3.4e-10**.
+    """
+    from pypresso.response.efield import dielectric_tensor
+
+    _, _, calculation, result, eigenvalues, psi = _converged(case)
+    density = jnp.asarray(result.density)
+    field = dielectric_tensor(
+        calculation, psi, eigenvalues, density, result.becsum,
+        born_charges=False, keep_internals=True,
+    )
+    solver = field.internals["solver"]
+    ours = np.asarray(_epsilon_at(
+        calculation, jnp.zeros((3, 3)), solver.psi, density,
+        jnp.stack(field.internals["bare"]), jnp.stack(field.internals["dpsi"]),
+        solver.weights,
     ))
     assert np.abs(ours - field.epsilon).max() / np.abs(field.epsilon).max() < 1e-8
 

@@ -83,6 +83,15 @@ class DFTSource:
     pseudos: tuple[Pseudopotential, ...]
     density: jnp.ndarray
     nocc: int
+    #: The converged ``becsum`` (``SCFResult.becsum``), needed by a PAW dataset
+    #: and ignored by any other. A PAW Hamiltonian's nonlocal coefficients are
+    #: ``D^(0) + int V Q + ddd_paw``, and only the first two can be rebuilt from
+    #: the density: ``ddd_paw`` comes from ``becsum``, which is a property of the
+    #: *wavefunctions*. Leaving it out is the same tenths-of-an-eV error
+    #: :func:`~pypresso.workflows.nscf.fixed_density_states` refuses, and here it
+    #: would move the invariant only by moving a band across the manifold's gap
+    #: -- silently, since the integer would still be an integer.
+    becsum: tuple = ()
     nbnd: int | None = None
     conv_thr: float = 1.0e-8
     k_batch: int | None | str = "default"
@@ -121,6 +130,22 @@ class DFTSource:
             )
         return self._calculation
 
+    def _ddd_paw(self):
+        """PAW's one-centre coefficients, built once and kept.
+
+        A function of ``becsum`` alone, so it is k-independent and belongs with
+        the rest of the shared setup rather than inside the per-call
+        diagonalisation: a streaming Wilson loop calls :meth:`states` once per
+        k-point, and rebuilding the radial one-centre terms there would put a
+        Gauss-Legendre quadrature over every sphere in the inner loop.
+        """
+        if not self.becsum:
+            return None
+        if getattr(self, "_ddd", None) is None:
+            _, ddd = self._base().onecenter(self.becsum)
+            object.__setattr__(self, "_ddd", ddd)
+        return self._ddd
+
     def states(self, points, keep_projectors: bool = False):
         """Occupied states at the given crystal k-points, in the given order."""
         points = np.asarray(points, dtype=float).reshape(-1, 3)
@@ -132,12 +157,17 @@ class DFTSource:
         )
         calculation = self._base().at_kpoints(kpoints)
         system = calculation.system
-        if calculation.is_paw:
+        if calculation.is_paw and not self.becsum:
+            # The same refusal ``workflows.nscf`` makes, and for the same
+            # reason: ``ddd_paw`` is a function of ``becsum`` and ``becsum`` is
+            # a property of the wavefunctions, so it cannot be rebuilt from the
+            # density this source is handed. It is passed rather than derived,
+            # and the refusal now only catches *not* passing it.
             raise NotImplementedError(
                 "a fixed-density run with a PAW pseudopotential needs the "
-                "converged becsum as well as the density, which is not yet "
-                "carried across (the same gap as workflows.nscf); ultrasoft "
-                "and norm-conserving pseudopotentials work"
+                "converged becsum as well as the density: pass "
+                "becsum = scf_result.becsum. It cannot be rebuilt from the "
+                "density, and leaving it out is wrong by tenths of an eV"
             )
         nbnd = self.nbnd or max(
             self.nocc + 2,
@@ -147,7 +177,7 @@ class DFTSource:
             ),
         )
         potential = calculation.potential(self.density)
-        hamiltonians = calculation.hamiltonian(potential.v_scf)
+        hamiltonians = calculation.hamiltonian(potential.v_scf, self._ddd_paw())
         ethr = max(
             ETHR_MIN,
             0.1 * min(1.0e-2, self.conv_thr / max(1.0, calculation.nelec)),
@@ -189,7 +219,8 @@ class DFTSource:
             )
 
 
-def _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch) -> DFTSource:
+def _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
+            becsum=()) -> DFTSource:
     if nocc is None:
         nocc = _occupied_bands(system, pseudos)
     return DFTSource(
@@ -197,6 +228,7 @@ def _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch) -> DFTSourc
         pseudos=tuple(pseudos),
         density=density,
         nocc=int(nocc),
+        becsum=tuple(becsum or ()),
         nbnd=nbnd,
         conv_thr=conv_thr,
         k_batch=k_batch,
@@ -248,6 +280,7 @@ def run_berry_curvature(
     method: str | None = None,
     conv_thr: float = 1.0e-8,
     k_batch: int | None | str = "default",
+    becsum: tuple = (),
 ) -> BerryCurvature:
     """Berry curvature and the Chern number on one plane of the zone.
 
@@ -260,7 +293,8 @@ def run_berry_curvature(
         method: ``"fhs"`` (default) or ``"kubo"``; see
             :mod:`pypresso.topology.berry`.
     """
-    source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch)
+    source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
+                     becsum=becsum)
     return _chern_number(
         source, shape=shape, axis=axis, offset=offset, method=method,
         k_batch=k_batch,
@@ -281,6 +315,7 @@ def run_z2(
     stream: bool = True,
     conv_thr: float = 1.0e-8,
     k_batch: int | None | str = "default",
+    becsum: tuple = (),
 ):
     """The 2D Z2 invariant of one plane of the zone.
 
@@ -294,7 +329,8 @@ def run_z2(
     making: they share no machinery beyond the state set.
     """
     _require_spinors(system, "the Z2 invariant")
-    source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch)
+    source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
+                     becsum=becsum)
     kwargs = dict(axis=axis, offset=offset)
     if (method or "wilson").lower() == "parity":
         kwargs.update(dimension=2, centre=_centre(system))
@@ -315,6 +351,7 @@ def run_z2_3d(
     stream: bool = True,
     conv_thr: float = 1.0e-8,
     k_batch: int | None | str = "default",
+    becsum: tuple = (),
 ):
     """The four three-dimensional indices ``(nu0; nu1 nu2 nu3)``.
 
@@ -323,7 +360,8 @@ def run_z2_3d(
     nothing without it -- they are not invariant under a change of cell.
     """
     _require_spinors(system, "the Z2 invariants")
-    source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch)
+    source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
+                     becsum=becsum)
     kwargs = {}
     if (method or "wilson").lower() == "parity":
         kwargs["centre"] = _centre(system)

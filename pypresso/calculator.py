@@ -571,8 +571,8 @@ class Calculator:
 
         result = self._ground_state("the Berry curvature")
         return run_berry_curvature(self.system, self.pseudos, result.density,
-                                   **self._defaults_for(run_berry_curvature,
-                                                        options))
+                                   **self._call_options(run_berry_curvature,
+                                                        result, options))
 
     def get_chern(self, **options) -> float:
         """The Chern number of one plane -- an exact integer on any mesh."""
@@ -584,7 +584,7 @@ class Calculator:
 
         result = self._ground_state("the Z2 invariant")
         return run_z2(self.system, self.pseudos, result.density,
-                      **self._defaults_for(run_z2, options))
+                      **self._call_options(run_z2, result, options))
 
     def get_z2_3d(self, **options):
         """The four Z2 indices of a three-dimensional crystal."""
@@ -592,7 +592,7 @@ class Calculator:
 
         result = self._ground_state("the 3D Z2 invariants")
         return run_z2_3d(self.system, self.pseudos, result.density,
-                         **self._defaults_for(run_z2_3d, options))
+                         **self._call_options(run_z2_3d, result, options))
 
     # ------------------------------------------------------------------
     # spin spirals

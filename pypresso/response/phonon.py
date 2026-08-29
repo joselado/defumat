@@ -99,6 +99,17 @@ storage. The bare perturbations are stored rather than recomputed because the
 self-consistent loop re-uses them at every iteration, which is the same trade
 :mod:`pypresso.response.efield` makes for its three.
 
+**An ultrasoft or PAW run adds three more arrays of that same shape and two
+smaller ones**, and they are all built once rather than per iteration: the
+occupied block ``dpsi^ort`` (``3 nat`` of ``(nspin, nk, nocc, npwx)``, so the
+state storage goes from two such sets to three), the mixed state's own change
+``drhous`` (``3 nat`` dense grids, which is the *density* shape and an order
+smaller), and ``becsumort`` plus ``dLambda``, which are ``nh^2`` and ``nbnd^2``
+per mode and negligible beside either. Held together the ultrasoft peak is
+about **1.5x** the norm-conserving one at the same cell -- 3 MB on
+``si-epsilon-us.in``. PAW adds the one-centre response beside ``dvscf`` in the
+mixer, ``3 nat`` times ``(nspin_mag, nkb, nkb)``, which is kilobytes.
+
 References for the method rather than the code: Baroni, de Gironcoli, Dal Corso
 and Giannozzi, *Rev. Mod. Phys.* **73**, 515 (2001), whose Eq. (14) is the
 identity above.
@@ -117,14 +128,20 @@ from pypresso.response.efield import require_a_symmetrisable_response
 from pypresso.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
 from pypresso.response.sternheimer import (
     SternheimerSolver,
+    paw_response,
     require_a_sternheimer_regime,
     smearing_of,
 )
 from pypresso.response.velocity import over_kpoints
+from pypresso.batching import map_k
+from pypresso.system.symmetry import atom_mapping, cartesian_rotations
 from pypresso.units import AMU_TO_RY, RY_TO_CMM1, RY_TO_THZ
 
 __all__ = ["Phonons", "DisplacementResponse", "dynamical_matrix",
-           "require_norm_conserving", "self_consistent_response"]
+           "require_norm_conserving", "self_consistent_response",
+           "orthogonality_states", "non_variational_response",
+           "multiplier_response", "overlap_derivatives",
+           "symmetrize_becsum_modes"]
 
 #: QE's ``alpha_mix(1)``: the weight the mixer gives the residual. It is no
 #: longer the *whole* of the mixing -- :mod:`pypresso.response.mixing` builds an
@@ -216,6 +233,14 @@ class DisplacementResponse:
     #: ``|ddv_scf|^2`` per iteration.
     history: list
     converged: bool = True
+    #: The bare perturbations, kept only because an ultrasoft or PAW assembly
+    #: needs to rebuild ``dLambda`` from the converged perturbation and cannot
+    #: do that from ``dpsi`` alone. ``None`` on the norm-conserving path, where
+    #: the term it feeds is zero.
+    bare: object = None
+    #: ``{"dvscf", "onecentre", "dbecsum"}`` at convergence, for the same
+    #: reason.
+    extras: dict | None = None
 
 
 def dynamical_matrix(
@@ -264,7 +289,7 @@ def dynamical_matrix(
     # existing, and the solve handles one (``PLAN.md`` P24c). What it adds is
     # ``ef_shift``, inside the loop below.
     require_a_sternheimer_regime(calculation, metals=True)
-    require_norm_conserving(calculation)
+    _require_a_moving_overlap_regime(calculation)
     _require_one_spin_channel(calculation)
 
     structure = calculation.system.structure
@@ -283,30 +308,68 @@ def dynamical_matrix(
         kpoint_weights=calculation.system.kpoints.weights,
     )
 
+    # 0. What ``S`` moving with the atoms adds, and all of it is zero for a
+    #    norm-conserving dataset: the occupied block of the first-order state,
+    #    and the mixed state's own change at frozen states (``drho.f90``).
+    derivatives = overlap_derivatives(calculation, solver, positions)
+    ort = orthogonality_states(calculation, solver, positions)
+    (rho_moved, bec_moved), (rho_ort, bec_ort) = non_variational_response(
+        calculation, positions, jnp.asarray(wavefunctions), weights,
+        jnp.asarray(density), becsum, ort,
+    )
+    drhous_stacked = moved_stacked = becsumort = bec_moved_sym = None
+    if rho_moved is not None:
+        moved_stacked = _stack_modes(_symmetrize_modes(calculation, rho_moved))
+        drhous_stacked = moved_stacked + _stack_modes(
+            _symmetrize_modes(calculation, rho_ort)
+        )
+        bec_moved_sym = symmetrize_becsum_modes(calculation, bec_moved)
+        becsumort = _add_becsum(
+            bec_moved_sym, symmetrize_becsum_modes(calculation, bec_ort)
+        )
+
     if response is None:
-        # 1. The bare perturbation ``dV_bare/du |psi>``, once per mode and
-        #    stored: the loop below drives on it at every iteration.
+        # 1. The bare perturbation ``(dH/du - eps dS/du)|psi>``, once per mode
+        #    and stored: the loop below drives on it at every iteration.
         bare = _bare_displacements(calculation, solver, potential.v_scf, positions)
 
         # 2. ``solve_linter``'s loop, one perturbation per (atom, direction).
-        dpsi, drho, history, average_iterations, converged = (
+        dpsi, drho, history, average_iterations, converged, extras = (
             self_consistent_response(
-                calculation, solver, bare, density,
+                calculation, solver, bare, density, positions=positions,
                 alpha_mix=alpha_mix, tr2=tr2, max_iterations=max_iterations,
-                verbose=verbose,
+                becsumort=becsumort, drhous=drhous_stacked, verbose=verbose,
             )
         )
     else:
         dpsi, drho = response.dpsi, response.drho
         history, converged = response.history, response.converged
         average_iterations = float("nan")
+        bare, extras = response.bare, response.extras
+
+    # 2b. The three tangents ``S``'s motion adds to the assembly. ``dLambda``
+    #     is a matrix element of the *same* perturbation the last solve was
+    #     driven by, rebuilt at the converged ``dV_scf`` --
+    #     :func:`~pypresso.response.born._multiplier_response`'s argument, with
+    #     a displacement in place of the field.
+    multipliers = dbecsum = None
+    if calculation.is_ultrasoft and bare is not None:
+        multipliers = multiplier_response(
+            calculation, solver, bare, extras, weights,
+            jnp.asarray(wavefunctions).shape[2], derivatives,
+        )
+        # The assembly rebuilds the raw mixed-state response itself, so what
+        # it is handed is the *symmetrised* total; the difference between the
+        # two is the wedge sum's own correction and is zero on a closed grid.
+        dbecsum = extras.get("dbecsum")
 
     # 3. The second derivative, two jvp of the force's own gradient per mode:
     #    the frozen Hessian at ``wg`` and the electronic response at ``wk``.
     matrix = _force_constants(
         calculation, positions, jnp.asarray(wavefunctions), weights,
         _state_weights(solver, weights), eigenvalues, jnp.asarray(density),
-        dpsi, drho, solver.nocc,
+        dpsi, drho, solver.nocc, becsum=becsum, dbecsum=dbecsum,
+        multipliers=multipliers, ort=ort,
     )
     # ``symdynph_gq`` first and the hermitisation second, which is the order
     # that makes the second one a *measurement*. A column of the raw matrix is a
@@ -362,10 +425,13 @@ def self_consistent_response(
     solver,
     bare,
     density,
+    positions=None,
     alpha_mix: float = ALPHA_MIX,
     tr2: float = TR2,
     max_iterations: int = MAX_ITERATIONS,
     mixing_mode: str = DEFAULT_RESPONSE_MIXING,
+    becsumort=None,
+    drhous=None,
     verbose: bool = False,
 ):
     """``solve_linter``'s loop for the ``3 nat`` displacement patterns.
@@ -402,25 +468,36 @@ def self_consistent_response(
     """
     nat = calculation.system.structure.nat
     grid_shape = jnp.asarray(density).shape
+    core = _core_charge_response(calculation, density, positions)
     dvscf = jnp.zeros((nat, 3) + grid_shape)
     history, total_iterations, solves = [], 0, 0
     dpsi = np.empty((nat, 3), dtype=object)
     symmetrised = jnp.zeros_like(dvscf)
     converged = False
+    # PAW's one-centre coefficients respond too, and they are *not* a function
+    # of the density -- they come from ``becsum``. Carried and mixed beside
+    # ``dvscf`` exactly as :mod:`pypresso.response.efield` carries its three,
+    # which is ``dfpt_kernels``' ``int3_paw`` beside ``dvscfin``.
+    onecentre = None if solver.ddd_paw is None else jnp.zeros(
+        (nat, 3) + solver.ddd_paw.shape
+    )
 
     mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
     for iteration in range(max_iterations):
-        response = []
+        response, becsum_response = [], []
         for atom in range(nat):
             for cart in range(3):
                 perturbation = _bare_plus_induced(
-                    solver, bare[atom, cart], dvscf[atom, cart], iteration > 0
+                    solver, bare[atom, cart], dvscf[atom, cart], iteration > 0,
+                    None if onecentre is None else onecentre[atom, cart],
                 )
                 solution = solver.solve(perturbation)
                 dpsi[atom, cart] = solution.dpsi
                 total_iterations += solution.iterations
                 solves += 1
                 response.append(solver.response_density(solution.dpsi))
+                if onecentre is not None:
+                    becsum_response.append(solver.response_becsum(solution.dpsi))
 
         # ``ef_shift``: a displacement at ``q = 0`` moves charge in and out of
         # the cell, so a metal's Fermi level moves with it and the response
@@ -439,6 +516,13 @@ def self_consistent_response(
         # the loop over modes and before the kernel, because an operation mixes
         # them -- rotating the direction and permuting the atom.
         stacked = jnp.stack(response).reshape((nat, 3) + grid_shape)
+        if drhous is not None:
+            # The first-order density the potential responds to is the *whole*
+            # of it, and for an ultrasoft or PAW dataset the variational part is
+            # not the whole: the augmentation charge moves with its atom and the
+            # occupied block of ``dpsi`` is not zero, so ``drho.f90``'s
+            # "change at fixed wavefunctions" screens beside it.
+            stacked = stacked + drhous
         symmetrised = calculation.symmetrize_atom_displacement(stacked)
 
         # ``dv_of_drho``: one jvp of the potential this code already writes.
@@ -451,11 +535,53 @@ def self_consistent_response(
             for atom in range(nat) for cart in range(3)
         ]).reshape(dvscf.shape)
 
+        induced_onecentre = None
+        if onecentre is not None:
+            # ``dfpt_kernels``: for a *phonon* the one-centre potential
+            # responds to ``2 dbecsum + becsumort`` and not to the variational
+            # part alone -- the orthogonality correction changes the one-centre
+            # occupations, and PAW's energy is a second, independent functional
+            # of them. (The grid density is the other way round: ``drhop``
+            # there is the variational response only, and ``drhous`` is carried
+            # separately into the assembly.) The factor of two in QE's line is
+            # a storage convention rather than a term: ``addusdbec``
+            # accumulates one of the two cross terms and
+            # :meth:`SternheimerSolver.response_becsum` -- a ``jvp``, so
+            # ``2 Re`` -- accumulates both.
+            per_mode = np.empty((nat, 3), dtype=object)
+            index = 0
+            for atom in range(nat):
+                for cart in range(3):
+                    per_mode[atom, cart] = becsum_response[index]
+                    index += 1
+            if becsumort is not None:
+                per_mode = _add_becsum(per_mode, becsumort)
+            per_mode = symmetrize_becsum_modes(calculation, per_mode)
+            induced_onecentre = jnp.stack([
+                paw_response(calculation, per_mode[atom, cart], solver.becsum)
+                for atom in range(nat) for cart in range(3)
+            ]).reshape(onecentre.shape)
+
+        if core is not None:
+            # ``addcore``/``drhoc``: the core charge travels with its atom, so
+            # ``v_xc`` changes even at a frozen valence density. It is
+            # independent of the iteration -- it is not a response to anything
+            # -- so it is built once and added to the induced potential here.
+            induced = induced + core
+
         change = float(jnp.sum((induced - dvscf) ** 2))
         history.append(change)
         if verbose:
             print(f"  iter {iteration + 1}: |ddv_scf|^2 = {change:.3e}")
-        dvscf = mixer.mix(dvscf, induced)
+        if onecentre is None:
+            dvscf = mixer.mix(dvscf, induced)
+        else:
+            # **One Anderson problem over both.** The one-centre potential and
+            # ``dV_scf`` are coupled through the same ``dbecsum``, which is why
+            # ``mix_pot`` concatenates them rather than mixing them apart.
+            dvscf, onecentre = mixer.mix(
+                [dvscf, onecentre], [induced, induced_onecentre]
+            )
         if change < tr2:
             converged = True
             break
@@ -473,8 +599,67 @@ def self_consistent_response(
                 dpsi[atom, cart], shifts[index]
             )
 
+    extras = {
+        "dvscf": dvscf,
+        "onecentre": onecentre,
+        "dbecsum": None if onecentre is None else per_mode,
+    }
     return (dpsi, symmetrised, history,
-            total_iterations / max(solves, 1), converged)
+            total_iterations / max(solves, 1), converged, extras)
+
+
+def _core_charge_response(calculation, density, positions):
+    """``dv_xc`` from the core charge travelling with its atom -- ``addcore``.
+
+    ``(nat, 3, nspin_mag, n1, n2, n3)``, or ``None`` when no species has a
+    nonlinear core correction.
+
+    **This is not an ultrasoft term and it was missing before the ultrasoft
+    ones.** :func:`_bare_displacements` builds ``dV_bare|psi>`` at a *frozen*
+    ``v_scf``, which is right for the local potential and the projectors and
+    wrong for the exchange-correlation potential: ``rho_core(r - tau)`` moves
+    with the atom, so ``v_xc[rho + rho_core]`` changes even at a frozen valence
+    density. QE keeps it as ``drhoc`` and hands it to ``dv_of_drho`` beside the
+    response density (``solve_linter.f90``'s ``addcore``); here it is one
+    ``jvp`` of the potential through
+    :meth:`~pypresso.scf.driver.Calculation.at_positions` at a *fixed* density,
+    which is the same object and needs no second expression.
+
+    It is independent of the self-consistent iteration -- nothing responds to
+    it -- so it is built once and added to the induced potential every step.
+
+    **Every committed phonon case before this had no core charge**, which is
+    why it went unnoticed: ``Si.pz-vbc`` and ``Al.pz-vbc`` are
+    ``core_correction="false"`` and the ultrasoft and PAW silicon datasets that
+    first exercised it are ``"T"``. Its size, on ``si-epsilon-us``: leaving it
+    out puts the response density **45%** away from a finite difference of
+    re-converged densities, and the optical mode at 785 cm^-1 against
+    ``ph.x``'s 513. It is the same omission ``force_cc`` exists for one
+    derivative down, and :func:`~pypresso.forces.energy.frozen_energy` already
+    carries it there -- so the assembly was right and only the response was not.
+    """
+    if calculation.rho_core is None:
+        return None
+    if positions is None:
+        raise ValueError(
+            "the displacement response of a dataset with a nonlinear core "
+            "correction needs the positions: the core charge travels with its "
+            "atom, so v_xc changes at a frozen valence density (addcore). "
+            "Pass positions=... to self_consistent_response"
+        )
+    positions = jnp.asarray(positions)
+    nat = positions.shape[0]
+    rho = jnp.asarray(density)
+
+    def potential_at(pos):
+        return calculation.at_positions(pos).potential(rho).v_scf
+
+    fields = []
+    for atom in range(nat):
+        for cart in range(3):
+            tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
+            fields.append(jax.jvp(potential_at, (positions,), (tangent,))[1])
+    return jnp.stack(fields).reshape((nat, 3) + rho.shape)
 
 
 def _bare_displacements(calculation, solver, v_scf, positions) -> np.ndarray:
@@ -499,13 +684,28 @@ def _bare_displacements(calculation, solver, v_scf, positions) -> np.ndarray:
     psi = solver.psi
     nat = positions.shape[0]
 
+    eigenvalues = solver.eigenvalues
+
     def h_psi(moved_positions):
         moved = calculation.at_positions(moved_positions)
         hamiltonians = moved.hamiltonian(v_scf, solver.ddd_paw)
-        return jnp.stack([
-            over_kpoints(hamiltonian, psi[spin], batch)
-            for spin, hamiltonian in enumerate(hamiltonians)
-        ])
+        applied = []
+        for spin, hamiltonian in enumerate(hamiltonians):
+            values = over_kpoints(hamiltonian, psi[spin], batch)
+            if hamiltonian.has_overlap:
+                # ``compute_deff``: the right-hand side of the Sternheimer
+                # equation for a *displacement* is ``(dH/du - eps dS/du)|psi>``,
+                # which ``dvqpsi_us_only`` builds from
+                # ``deff = deeq - et qq`` rather than from ``deeq``. The second
+                # half is identically zero when ``S`` is the identity, so this
+                # branch is the ultrasoft and PAW one and nothing else here
+                # changes. Leaving it out solves a different equation whose
+                # solution is still orthogonal to the occupied manifold and
+                # still converges.
+                overlap = over_kpoints(hamiltonian, psi[spin], batch, overlap=True)
+                values = values - eigenvalues[spin][..., None] * overlap
+            applied.append(values)
+        return jnp.stack(applied)
 
     bare = np.empty((nat, 3), dtype=object)
     for atom in range(nat):
@@ -515,7 +715,309 @@ def _bare_displacements(calculation, solver, v_scf, positions) -> np.ndarray:
     return bare
 
 
-def _bare_plus_induced(solver, bare_mode, dv, include_induced: bool):
+def orthogonality_states(calculation, solver, positions) -> np.ndarray | None:
+    """``dpsi^ort_n = -1/2 sum_m psi_m <psi_m|dS/du|psi_n>``, one per mode.
+
+    ``compute_drhous.f90``'s ingredient, and the piece of the first-order
+    wavefunction the Sternheimer solve does **not** produce. ``solve``'s answer
+    is orthogonal to the occupied manifold in the ``S`` metric -- that is what
+    ``orthogonalize``'s projector imposes -- but the physical first-order state
+    is not, because the constraint it has to satisfy is
+    ``<psi + dpsi|S(u + du)|psi + dpsi> = 1`` and ``S`` itself has moved. The
+    occupied-occupied block is therefore fixed rather than free, and this is it.
+
+    ``None`` for a norm-conserving dataset, where ``S`` does not move and the
+    block is zero. Returns an object array of shape ``(nat, 3)`` whose entries
+    have ``dpsi``'s own shape.
+    """
+    derivatives = overlap_derivatives(calculation, solver, positions)
+    if derivatives is None:
+        return None
+    psi = solver.psi
+    out = np.empty(derivatives.shape, dtype=object)
+    for index in np.ndindex(derivatives.shape):
+        out[index] = -0.5 * jnp.einsum("skmg,skmn->skng", psi, derivatives[index])
+    return out
+
+
+def overlap_derivatives(calculation, solver, positions) -> np.ndarray | None:
+    """``S'_mn = <psi_m|dS/du|psi_n>`` over the occupied block, per mode.
+
+    ``None`` for a norm-conserving dataset. The object two other things are
+    built from -- :func:`orthogonality_states` and the gauge correction in
+    :func:`multiplier_response` -- so it is computed once and shared.
+    """
+    if not calculation.is_ultrasoft:
+        return None
+    psi = solver.psi
+    nat = positions.shape[0]
+    batch = calculation.k_batch
+
+    def overlap_matrix(pos):
+        """``<psi_m|S(u)|psi_n>`` -- only the augmentation half moves."""
+        moved = calculation.at_positions(pos)
+        vkb = moved.projectors.vkb
+        qq = moved.projectors.qq.astype(psi.dtype)
+        blocks = []
+        for spin in range(psi.shape[0]):
+            def one_k(ik, spin=spin):
+                becp = jnp.einsum("gc,ng->nc", vkb[ik].conj(), psi[spin][ik])
+                return jnp.einsum("mi,ij,nj->mn", becp.conj(), qq, becp)
+
+            blocks.append(map_k(one_k, jnp.arange(psi.shape[1]), batch=batch))
+        return jnp.stack(blocks)
+
+    out = np.empty((nat, 3), dtype=object)
+    for atom in range(nat):
+        for cart in range(3):
+            tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
+            out[atom, cart] = jax.jvp(overlap_matrix, (positions,), (tangent,))[1]
+    return out
+
+
+def non_variational_response(calculation, positions, psi, weights, density,
+                             becsum, ort):
+    """``drhous`` and ``becsumort``: the mixed state's change at frozen ``dpsi``.
+
+    ``PHonon/PH/drho.f90``, whose own summary is the definition -- "the change
+    of the charge density due to the displacement, at fixed wavefunctions; the
+    orthogonality part is included in the computed change". Two things move it
+    and neither exists for a norm-conserving dataset:
+
+    * the augmentation charge ``Q_ij(r - tau)`` and the projectors ``beta(r -
+      tau)`` travel with their atom, so ``rho`` and ``becsum`` depend on the
+      positions explicitly (``addusddens``'s ``alpha bb`` term and
+      ``alphasum``);
+    * the occupied block of the first-order state is not zero
+      (:func:`orthogonality_states`), and it changes both.
+
+    Both fall out of ``jvp`` of the raw mixed-state builders --
+    :func:`~pypresso.response.born._raw_mixed_state`'s, reused rather than
+    restated -- and **the two halves are returned apart**, because they are
+    consumed in different places. Their sum is what screens
+    (:func:`self_consistent_response`) and what the assembly's density tangent
+    has to carry; but the ``moved`` half is *also* generated by the assembly's
+    own position tangent, since :func:`_force_constants` hands the mixed state
+    to :func:`~pypresso.forces.energy.frozen_energy` as a function of where the
+    atoms are rather than as an array -- which it must, because the gradient
+    being differentiated is otherwise not the force at all. It would then be
+    counted twice.
+
+    **That is the term ``addusforce`` is**, one derivative down: at a frozen
+    density the ultrasoft force is missing the augmentation charge's own
+    motion, and P25 could freeze it because a norm-conserving ``rho`` has no
+    explicit position dependence. Measured on ultrasoft silicon, freezing it
+    puts a whole column of the force constants at **0.26** of a
+    finite-differenced one, with the acoustic sum rule holding throughout --
+    which is P28a's lesson again, that an atom-sum is blind to a transfer
+    between atoms.
+
+    Returns ``((drho_moved, becsum_moved), (drho_ort, becsum_ort))`` as object
+    arrays of shape ``(nat, 3)``, or ``(None, None)`` for a norm-conserving
+    dataset.
+    """
+    if ort is None:
+        return (None, None), (None, None)
+    from pypresso.response.born import _raw_mixed_state
+
+    density_of, becsum_of = _raw_mixed_state(
+        calculation, positions, psi, weights, density, becsum
+    )
+
+    def mixed(pos, states):
+        moved = calculation.at_positions(pos)
+        parts = becsum_of(moved, states, weights)
+        return density_of(moved, states, weights, parts), parts
+
+    nat = positions.shape[0]
+    zero_p, zero_s = jnp.zeros_like(positions), jnp.zeros_like(psi)
+    halves = {}
+    for name in ("moved", "ort"):
+        halves[name] = (np.empty((nat, 3), dtype=object),
+                        np.empty((nat, 3), dtype=object))
+    for atom in range(nat):
+        for cart in range(3):
+            tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
+            for name, pair in (("moved", (tangent, zero_s)),
+                               ("ort", (zero_p, ort[atom, cart]))):
+                _, (rho, parts) = jax.jvp(mixed, (positions, psi), pair)
+                halves[name][0][atom, cart] = rho
+                halves[name][1][atom, cart] = parts
+    return halves["moved"], halves["ort"]
+
+
+def symmetrize_becsum_modes(calculation, per_mode):
+    """``PAW_dusymmetrize`` on the ``3 nat`` displacement patterns.
+
+    The counterpart of :meth:`~pypresso.scf.driver.Calculation.
+    symmetrize_atom_displacement` one level down, and the reason it is not
+    optional is P24a's: a ``becsum`` response on a reduced k-set is a **polar**
+    object carrying a direction, so a wedge sum of it is not the crystal's until
+    the group has put back what the reduction left out. Worth 1.6e-2 on the
+    dielectric constant of PAW silicon.
+
+    ``per_mode`` is an object array of shape ``(nat, 3)`` whose entries are
+    per-species ``becsum`` tuples; the result has the same layout. A no-op when
+    there is no PAW species or no symmetry to average over.
+    """
+    if per_mode is None or calculation._becsum_symmetry is None:
+        return per_mode
+    nat, ncart = per_mode.shape
+    sample = per_mode[0, 0]
+    if not sample:
+        return per_mode
+    stacked = tuple(
+        None if sample[species] is None else jnp.stack([
+            jnp.stack([per_mode[atom, cart][species] for cart in range(ncart)])
+            for atom in range(nat)
+        ])
+        for species in range(len(sample))
+    )
+    rotations = cartesian_rotations(calculation.system.cell, calculation.symmetries)
+    mapping = atom_mapping(
+        calculation.system.cell, calculation.system.structure, calculation.symmetries
+    )
+    symmetrised = calculation._becsum_symmetry.apply_atom_displacement(
+        stacked, rotations, mapping
+    )
+    out = np.empty((nat, ncart), dtype=object)
+    for atom in range(nat):
+        for cart in range(ncart):
+            out[atom, cart] = tuple(
+                None if values is None else values[atom, cart]
+                for values in symmetrised
+            )
+    return out
+
+
+def _symmetrize_modes(calculation, per_mode):
+    """``symdvscf`` on an object array of ``3 nat`` grid responses."""
+    nat, ncart = per_mode.shape
+    stacked = jnp.stack([
+        jnp.stack([per_mode[atom, cart] for cart in range(ncart)])
+        for atom in range(nat)
+    ])
+    symmetrised = calculation.symmetrize_atom_displacement(stacked)
+    out = np.empty((nat, ncart), dtype=object)
+    for atom in range(nat):
+        for cart in range(ncart):
+            out[atom, cart] = symmetrised[atom, cart]
+    return out
+
+
+def _ground_state_multipliers(weights, eigenvalues, dtype):
+    """``Lambda_mn = delta_mn w_n eps_n``: the multipliers at the solution.
+
+    :func:`~pypresso.response.born._ground_state_multipliers`, and the same
+    argument for passing it explicitly: it is what puts the matrix on the
+    tangent's argument list, so that ``dLambda`` can be a tangent of it.
+    """
+    identity = jnp.eye(weights.shape[-1], dtype=dtype)
+    return (weights * eigenvalues)[..., :, None].astype(dtype) * identity
+
+
+def multiplier_response(calculation, solver, bare, extras, weights, nbnd,
+                        derivatives):
+    """``dLambda_mn``: the multipliers' own tangent, in the gauge ``ort`` fixes.
+
+    **The multipliers are variables of the functional and they move.** P15
+    writes the energy with the orthonormality constraint carried explicitly and
+    its multipliers among the *frozen* variables, which is what makes the force
+    a partial derivative. Differentiating that gradient a second time needs
+    their tangent beside the states' and the density's:
+
+        d^2E/du_i du_j = d_i d_j L + (d_psi d_j L).dpsi_i + (d_Lambda d_j L).dLambda_i
+
+    and ``d_Lambda d_j L = -<psi|dS/du_j|psi>``, which vanishes identically when
+    ``S`` is the identity. That is the whole of why P25 was norm-conserving: not
+    a missing routine, a missing tangent.
+
+    **It is a matrix and not a diagonal, and the reason is a gauge.** Write the
+    constraint with a diagonal multiplier ``w_n eps_n`` and the functional stops
+    being invariant under a unitary mixing of the occupied states -- the
+    eigenvalues weight the bands differently -- while the *state* tangent is
+    only defined up to exactly such a mixing: the constraint fixes
+    ``c + c^dagger = -S'`` and leaves the antihermitian part of ``c`` free.
+    :func:`orthogonality_states` picks the hermitian representative; the
+    physical branch picks another; and a diagonal multiplier can tell them
+    apart. **The acoustic sum rule is what says so**: with the diagonal form it
+    stops at 1.7e-2 Ry/bohr^2 on ultrasoft silicon whatever else is switched on,
+    where the matrix form takes it to the basis-set floor. Carrying the full
+    ``Lambda_mn`` restores the invariance, because the pair ``(dpsi, dLambda)``
+    then transforms together and the gauge cancels between them.
+
+    In that gauge, differentiating ``Lambda_mn = w_n <psi_m|H|psi_n>`` along the
+    branch gives
+
+        dLambda_mn = w_n [ <psi_m|dH|psi_n> - 1/2 (eps_m + eps_n) S'_mn ]
+
+    -- the ``1/2 (eps_m + eps_n)`` and not ``eps_n``, which is
+    :func:`~pypresso.response.born._multiplier_response`'s expression and is
+    right *there* because a field leaves ``dpsi`` orthogonal to the occupied
+    manifold, so the two terms carrying it drop out. A displacement does not,
+    and using the field's expression here is wrong by ``(eps_n - eps_m)/2`` on
+    every off-diagonal entry. Since the perturbation handed in already carries
+    ``-eps_n dS`` (``compute_deff``), what has to be added back is
+    ``+1/2 (eps_n - eps_m) S'_mn``.
+    """
+    from pypresso.response.born import _multiplier_response
+
+    nat = bare.shape[0]
+    dvscf, onecentre = extras["dvscf"], extras["onecentre"]
+    nocc = solver.nocc
+    eps = solver.eigenvalues[..., :nocc]
+    # ``(nspin, nk, nocc, nocc)``: (eps_n - eps_m) with m the row.
+    gaps = eps[..., None, :] - eps[..., :, None]
+    out = np.empty((nat, 3), dtype=object)
+    for atom in range(nat):
+        for cart in range(3):
+            perturbation = _bare_plus_induced(
+                solver, bare[atom, cart], dvscf[atom, cart], True,
+                None if onecentre is None else onecentre[atom, cart],
+            )
+            matrix = _multiplier_response(
+                solver, perturbation, weights, nbnd, nocc
+            )
+            correction = 0.5 * gaps * derivatives[atom, cart] * (
+                weights[:, :, None, :nocc]
+            )
+            out[atom, cart] = matrix.at[:, :, :nocc, :nocc].add(correction)
+    return out
+
+
+def _stack_modes(per_mode):
+    """``(nat, 3)`` object array of grid fields -> one stacked array."""
+    nat, ncart = per_mode.shape
+    return jnp.stack([
+        jnp.stack([per_mode[atom, cart] for cart in range(ncart)])
+        for atom in range(nat)
+    ])
+
+
+def _subtract_becsum(left, right):
+    """``left - right`` on two ``(nat, 3)`` object arrays of ``becsum`` tuples."""
+    out = np.empty(left.shape, dtype=object)
+    for index in np.ndindex(left.shape):
+        out[index] = tuple(
+            None if a is None else a - b
+            for a, b in zip(left[index], right[index])
+        )
+    return out
+
+
+def _add_becsum(left, right):
+    """Add two ``(nat, 3)`` object arrays of per-species ``becsum`` tuples."""
+    out = np.empty(left.shape, dtype=object)
+    for index in np.ndindex(left.shape):
+        out[index] = tuple(
+            None if a is None else a + b
+            for a, b in zip(left[index], right[index])
+        )
+    return out
+
+
+def _bare_plus_induced(solver, bare_mode, dv, include_induced: bool,
+                       dddd_paw=None):
     """``dV_bare|psi> + dV_scf|psi>`` as the solver's callback wants it.
 
     The sign convention is :meth:`SternheimerSolver.chi0`'s and not
@@ -527,7 +1029,7 @@ def _bare_plus_induced(solver, bare_mode, dv, include_induced: bool):
     if not include_induced:
         return lambda psi, ik, spin: bare_mode[spin][ik]
 
-    induced = solver.perturbation(dv)
+    induced = solver.perturbation(dv, dddd_paw)
 
     def perturbation(psi, ik, spin):
         return bare_mode[spin][ik] + induced(psi, ik, spin)
@@ -560,7 +1062,7 @@ def _state_weights(solver, weights):
 
 def _force_constants(
     calculation, positions, psi, weights, state_weights, eigenvalues, density,
-    dpsi, drho, nocc,
+    dpsi, drho, nocc, becsum=(), dbecsum=None, multipliers=None, ort=None,
 ) -> np.ndarray:
     """``d^2E/du_i du_j``: two ``jvp`` of the force's gradient per mode.
 
@@ -637,35 +1139,140 @@ def _force_constants(
     which is what makes them harmless against a ``wk`` that is *not* zero there.
     """
     nat = positions.shape[0]
+    ultrasoft = calculation.is_ultrasoft
 
-    def energy(pos, states, rho, w):
+    ground = (
+        _ground_state_multipliers(weights, eigenvalues, psi.dtype)
+        if ultrasoft else None
+    )
+    if ultrasoft:
+        from pypresso.response.born import _raw_mixed_state
+
+        raw_density, raw_becsum = _raw_mixed_state(
+            calculation, positions, psi, weights, density, becsum
+        )
+
+        def raw_mixed(pos, states):
+            """The unsymmetrised mixed state, as a function of both."""
+            moved = calculation.at_positions(pos)
+            parts = raw_becsum(moved, states, weights)
+            return raw_density(moved, states, weights, parts), parts
+
+    def energy(pos, states, rho, parts, lambdas, w):
+        """``L(u, psi, Lambda)`` with the mixed state where it belongs.
+
+        For an ultrasoft or PAW dataset the mixed state stays a **function of
+        both the positions and the states**, and ``rho``/``parts`` carry only
+        the correction from the wedge sum to the symmetrised response. Freezing
+        it as an array -- right for a norm-conserving run, and P25's choice --
+        costs two different things: the gradient loses ``addusforce``, so what
+        is differentiated is not the force; and the second derivative loses the
+        cross term ``d^2 rho / du dpsi . dpsi``, the augmentation charge's own
+        position dependence applied to the state response, which is what
+        ``addusdynmat`` and ``drhodvus`` are.
+        """
+        if not ultrasoft:
+            return frozen_energy(
+                calculation, pos,
+                FrozenState(wavefunctions=states, weights=w,
+                            eigenvalues=eigenvalues),
+                density=rho, becsum=parts, multipliers=lambdas,
+            )
+
+        def becsum_builder(moved, built_states, occupations):
+            return tuple(
+                None if raw is None else raw + extra
+                for raw, extra in zip(
+                    raw_becsum(moved, built_states, occupations), parts
+                )
+            )
+
+        def density_builder(moved, built_states, occupations, built):
+            return raw_density(moved, built_states, occupations, built) + rho
+
         return frozen_energy(
             calculation, pos,
             FrozenState(wavefunctions=states, weights=w, eigenvalues=eigenvalues),
-            density=rho,
+            density=density_builder, becsum=becsum_builder, multipliers=lambdas,
         )
 
     gradient = jax.grad(energy, argnums=0)
 
-    def frozen(pos, rho):
-        """The coordinate and the density, at ``wg``."""
-        return gradient(pos, psi, rho, weights)
+    def frozen(pos, rho, parts, lambdas):
+        """The coordinate, the mixed state and the multipliers, at ``wg``."""
+        return gradient(pos, psi, rho, parts, lambdas, weights)
 
     def electronic(states):
         """The states, at ``wk`` -- the weight ``drhodvnl`` contracts with."""
-        return gradient(positions, states, density, state_weights)
+        return gradient(positions, states, zero_density, zero_becsum, ground,
+                        state_weights)
+
+    def energy_gradient(pos, states, rho, parts, lambdas):
+        """Everything in one call, which an ultrasoft cross term needs."""
+        return gradient(pos, states, rho, parts, lambdas, weights)
+
+    # For a norm-conserving dataset there is no ``becsum`` and no multiplier
+    # term with any position dependence, so the extra primals are dropped
+    # rather than carried at zero -- which keeps that path the two-argument
+    # ``jvp`` it was, bit for bit.
+    zero_becsum = tuple(None if b is None else jnp.zeros_like(b) for b in becsum)
+    zero_density = jnp.zeros_like(jnp.asarray(density))
+    if not ultrasoft:
+        zero_density = jnp.asarray(density)
+
+        def frozen(pos, rho):  # noqa: F811 -- the norm-conserving signature
+            return gradient(pos, psi, rho, becsum, None, weights)
 
     matrix = np.zeros((nat, 3, nat, 3))
     for atom in range(nat):
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
             states = jnp.zeros_like(psi).at[:, :, :nocc].set(dpsi[atom, cart])
-            _, hessian = jax.jvp(
-                frozen, (positions, density), (tangent, drho[atom, cart])
+            if ort is not None:
+                # The occupied block, which the Sternheimer solve does not
+                # produce and the identity this module rests on needs: ``dpsi``
+                # in ``d^2E = ... + (d_psi d_j L).dpsi_i`` is the *whole*
+                # first-order state, and for an ultrasoft or PAW dataset its
+                # occupied part is fixed by the constraint rather than free.
+                states = states + ort[atom, cart]
+            if not ultrasoft:
+                _, hessian = jax.jvp(
+                    frozen, (positions, density), (tangent, drho[atom, cart])
+                )
+                _, response = jax.jvp(electronic, (psi,), (states,))
+                matrix[atom, cart] = np.asarray(hessian + response)
+                continue
+
+            # **One ``jvp`` and not two, and that is what an ultrasoft dataset
+            # forces.** The metal's weight split (``PLAN.md`` P28) puts the
+            # coordinate in one call and the states in another, which is exact
+            # only while the two do not meet -- and here they do: ``rho``
+            # depends on the positions *and* on the states, so the cross term
+            # ``d^2 rho / du dpsi`` exists and a split jvp cannot see it. It is
+            # ``addusdynmat``, it is 0.49 Ry/bohr^2 on two-atom ultrasoft
+            # silicon against force constants of 0.37, and the acoustic sum
+            # rule is what says so. An ultrasoft *metal* is refused for exactly
+            # this reason (:func:`_require_a_moving_overlap_regime`).
+            raw = jax.jvp(raw_mixed, (positions, psi), (tangent, states))[1]
+            correction = drho[atom, cart] - raw[0]
+            parts = (
+                tuple(None if b is None else jnp.zeros_like(b) for b in becsum)
+                if dbecsum is None else
+                tuple(
+                    None if a is None else a - b
+                    for a, b in zip(dbecsum[atom, cart], raw[1])
+                )
             )
-            _, response = jax.jvp(electronic, (psi,), (states,))
-            matrix[atom, cart] = np.asarray(hessian + response)
+            _, whole = jax.jvp(
+                energy_gradient,
+                (positions, psi, zero_density, zero_becsum, ground),
+                (tangent, states, correction, parts,
+                 jnp.zeros_like(ground) if multipliers is None
+                 else multipliers[atom, cart]),
+            )
+            matrix[atom, cart] = np.asarray(whole)
     return matrix
+
 
 
 def _impose_acoustic_sum_rule(matrix: np.ndarray) -> np.ndarray:
@@ -729,46 +1336,88 @@ def _require_one_spin_channel(calculation) -> None:
         )
 
 
+def _require_a_moving_overlap_regime(calculation) -> None:
+    """What is still refused once ``S`` is allowed to move with the atoms.
+
+    ``PLAN.md`` P39. The norm-conserving restriction P25 introduced is gone --
+    the two terms it named are implemented
+    (:func:`orthogonality_states` for the multipliers' own motion,
+    :func:`non_variational_response` for ``Q_ij(r - tau)`` at frozen
+    ``becsum``) -- and what is left is one combination rather than one dataset.
+
+    **An ultrasoft or PAW metal is refused.** The weight split
+    :func:`_state_weights` makes is between a state tangent at ``wk`` and
+    everything else at ``wg``, and it was derived for a response whose whole
+    ``becsum`` dependence goes through ``dpsi``. With ``S`` moving there are
+    three further tangents -- ``dpsi^ort``, ``becsumort`` and ``dLambda`` --
+    and which weight each belongs with is a question the insulating case cannot
+    answer, because there the two weights are equal. Refused rather than
+    guessed: the symptom would be an acoustic sum rule that is violated by a
+    plausible amount, and P28 is the record of how long that took to find once.
+    """
+    if calculation.is_ultrasoft and calculation.system.occupations != "fixed":
+        raise NotImplementedError(
+            "the dynamical matrix of a *metal* with an ultrasoft or PAW "
+            "pseudopotential is not implemented: the wg/wk weight split of "
+            "PLAN.md P28 was derived for a response whose becsum dependence is "
+            "entirely inside dpsi, and an ultrasoft one has three further "
+            "tangents (dpsi^ort, becsumort, dLambda) whose weight an insulator "
+            "cannot distinguish. Insulators are implemented on all three "
+            "pseudopotential kinds; a norm-conserving metal is too"
+        )
+
+
 def require_norm_conserving(calculation) -> None:
-    """The dynamical matrix is norm-conserving only, and it is refused by name.
+    """Norm-conserving only, for the responses in the **strain** coordinate.
 
-    Two things go missing at once when ``S`` moves with the atoms, and neither
-    is a routine that could simply be added beside the others:
+    **This no longer guards the dynamical matrix.** P39 lifted that: with ``S``
+    moving there are four further tangents and all four are written, and what
+    :func:`dynamical_matrix` checks now is
+    :func:`_require_a_moving_overlap_regime`, which refuses one *combination*
+    -- an ultrasoft or PAW metal -- rather than a dataset. What still calls
+    this is the strain-coordinate stack built on top of it:
+    :mod:`pypresso.response.strain`, :mod:`pypresso.response.electrostriction`
+    and :mod:`pypresso.response.nonlinear`.
 
-    * **The multipliers move.** The identity this module rests on holds because
-      the frozen-state energy is stationary in ``psi`` at *fixed* Lagrange
-      multipliers. Differentiating it a second time leaves a term
-      ``-<psi|dS/du_j|psi> deps_i/du``, which is identically zero when ``S`` is
-      the identity and is not otherwise.
-    * **The augmentation charge moves at frozen ``becsum``.** ``Q_ij(r - tau)``
-      is a function of the positions in its own right, which ``addusdynmat`` and
-      ``drhodvus`` account for and the response density here does not.
+    **And it no longer guards the Raman tensor either** (``PLAN.md`` P43). The
+    second-order energy ``F`` these phases differentiate is exact on all three
+    pseudopotential kinds -- it reproduces ``dielec.f90``'s dielectric constant
+    to **3.4e-10** (ultrasoft) and **6.9e-11** (PAW) against a norm-conserving
+    8.4e-10 -- and the ``jvp`` of it in the *displacement* coordinate is right
+    too, at **1.2e-4** on both against a finite difference where the
+    norm-conserving control is 6.8e-4. That took two tangents which are only
+    correct together: the state tangent is ``P_c dpsi + ort``, and ``db`` is
+    the tangent of a *composition*, because ``adddvepsi_us`` applies ``S`` to
+    the linear solve's answer and adds the augmentation dipole after it
+    (:func:`~pypresso.response.efield.ultrasoft_position`).
 
-    Refused rather than returned for the same reason
-    :func:`~pypresso.response.efield._require_born_charges` refuses ``Z*`` on
-    these datasets, and the measurement is the same shape: **wrong in sign as
-    well as size**. With the guard lifted, the norm-conserving expression gives
-    ultrasoft silicon an optical mode of **-504.3 cm^-1** against ``ph.x``'s
-    **+513.3** -- an imaginary frequency where the crystal is stable -- and an
-    acoustic residue of 618 where ``ph.x`` prints 6.1. PAW is the same to a
-    Rydberg: -503.6 against +513.4. What makes it a refusal rather than a
-    warning is that the run *converges*, the matrix comes out cubic and
-    symmetric to 1e-16, and everything except the numbers looks correct.
+    **What is left is the same third derivative in the *strain* coordinate** --
+    the elastic constants, electrostriction and the elasto-optic tensor. They
+    share :func:`~pypresso.response.electrostriction._position_response` with
+    the Raman tensor and would inherit the tail that closed it, but the
+    occupied block's analogue under a strain has not been measured, and P43's
+    own lesson is that one of the pair alone is *worse* than neither -- the
+    block by itself moved the Raman tensor from 3.0e-2 to 8.0e-2.
 
-    The **dielectric constant** from the same solver is right for both datasets
-    to 5e-5 and is not affected by any of this: the two quantities share the
-    Sternheimer solve and nothing else.
+    The measurement behind the original refusal is kept, because it is what
+    makes the case for refusing rather than warning: with the guard lifted and
+    none of the terms written, the norm-conserving expression gave ultrasoft
+    silicon an optical mode of **-504.3 cm^-1** against ``ph.x``'s **+513.3**
+    -- imaginary where the crystal is stable -- from a run that converged and
+    gave a cubic, symmetric matrix. Nothing but the numbers looked wrong.
     """
     if calculation.is_ultrasoft:
         raise NotImplementedError(
-            "the dynamical matrix with an ultrasoft or PAW pseudopotential is "
-            "not implemented: the overlap operator moves with the atoms, so the "
-            "orthonormality multipliers contribute a term of their own to the "
-            "second derivative, and the augmentation charge Q_ij(r - tau) moves "
-            "at frozen becsum (addusdynmat, drhodvus). Without them the "
-            "norm-conserving expression gives ultrasoft silicon -504.3 cm^-1 "
-            "against ph.x's +513.3 -- imaginary where the crystal is stable -- "
-            "while converging cleanly and coming out cubic. The dielectric "
-            "constant from the same solver is unaffected and is right for these "
-            "datasets"
+            "this third derivative in the *strain* coordinate with an "
+            "ultrasoft or PAW pseudopotential is not implemented: the "
+            "second-order energy under it is exact on all three dataset kinds "
+            "and so is its jvp in the *displacement* coordinate, so "
+            "raman_tensors works (PLAN.md P43, 1.2e-4 against a finite "
+            "difference), but the two tangents that made it work -- the "
+            "occupied block of the state and adddvepsi_us's tail on db -- have "
+            "not been measured under a strain, and one of the pair alone is "
+            "worse than neither. The strain *response*, the dynamical matrix "
+            "and the Raman tensor are implemented on all three kinds "
+            "(P39, P41, P43); it is the elastic constants, electrostriction "
+            "and the elasto-optic tensor that are refused here"
         )

@@ -1,0 +1,34 @@
+! Small ultrasoft silicon with no symmetry at all, for the checks that need a
+! *fixed* FFT grid under a displacement.
+!
+! `nosym` is what makes it usable as a finite-difference reference: displacing
+! one atom breaks the crystal's symmetry, and with symmetry on the displaced
+! cell is given a different FFT grid (`fft_fact` follows the fractional
+! translations), so the two densities are not comparable point by point. It is
+! also the pair of `si-epsilon-us.in` for the wedge check -- an *unshifted*
+! grid is closed under the point group, so the same k-sample can be run reduced
+! and whole.
+!
+! Deliberately small: `ecutwfc = 12` and a 2x2x2 grid make a response solve
+! about thirty seconds, which is what a check that runs four extra SCFs needs.
+! Nothing here is converged and nothing here is compared to `pw.x`.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1,
+    ecutwfc = 12.0, ecutrho = 96.0
+    nosym = .true.
+    noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-n-rrkjus_psl.0.1.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 2 0 0 0

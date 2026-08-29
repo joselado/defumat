@@ -119,15 +119,26 @@ import jax.numpy as jnp
 import numpy as np
 
 from pypresso.basis.interpolate import to_dense
+from pypresso.batching import map_k
 from pypresso.response.elastic import elastic_constants
 from pypresso.response.efield import (
+    _augmentation_dipole,
     _solve_stored,
     dielectric_tensor,
     require_a_symmetrisable_response,
+    ultrasoft_position,
 )
 from pypresso.response.phonon import require_norm_conserving
-from pypresso.response.sternheimer import require_a_sternheimer_regime
-from pypresso.response.strain import StrainResponse, strain_response, strain_tangent
+from pypresso.response.sternheimer import (
+    paw_response,
+    require_a_sternheimer_regime,
+)
+from pypresso.response.strain import (
+    StrainResponse,
+    mixed_becsum,
+    strain_response,
+    strain_tangent,
+)
 from pypresso.response.velocity import VelocityOperator, over_kpoints
 from pypresso.scf.density import sum_band
 from pypresso.units import EPSILON0_SI, FPI
@@ -295,7 +306,13 @@ def _second_order_energy_at(moved, psi, rho, b, u, weights, reference=None):
             the cell alone.
     """
     batch = moved.k_batch
-    hamiltonians = moved.hamiltonian(moved.potential(rho).v_scf, None)
+    # ``becsum`` at the *moved* geometry, from the ground-state states: it is
+    # what the augmentation charge inside ``rho`` is built from and what PAW's
+    # one-centre coefficients come from, and freezing either as an array would
+    # delete the dependence a second derivative is made of.
+    parts = mixed_becsum(moved, psi, weights)
+    _, ddd_paw = moved.onecenter(parts)
+    hamiltonians = moved.hamiltonian(moved.potential(rho).v_scf, ddd_paw)
     nspin = psi.shape[0]
 
     def apply_h(states):
@@ -313,8 +330,15 @@ def _second_order_energy_at(moved, psi, rho, b, u, weights, reference=None):
     # ``P_c b``. Its value equals ``b`` and so does its derivative once both
     # ``<psi|u> = 0`` and ``<psi|b> = 0``; it is written because that is the
     # functional, not because the two terms are large.
+    # **``b`` is a right-hand side and ``u`` is a state, and they take
+    # different projectors.** ``orthogonalize`` builds
+    # ``P_c^+ = 1 - sum S|psi><psi|`` for the source of the Sternheimer
+    # equation, while what makes a *state* orthogonal to the occupied manifold
+    # is ``P_c = 1 - sum |psi><psi| S``. The two coincide when ``S`` is the
+    # identity, which is why one expression served both until now.
+    overlapped = _apply_overlap(psi, hamiltonians, batch)
     overlaps = jnp.einsum("skmg,askng->askmn", jnp.conj(psi), b)
-    pcb = b - jnp.einsum("askmn,skmg->askng", overlaps, psi)
+    pcb = b - jnp.einsum("askmn,skmg->askng", overlaps, overlapped)
 
     # **``u`` is frozen, but the subspace it is constrained to live in is not.**
     # The Sternheimer solution is required to be orthogonal to the occupied
@@ -328,9 +352,39 @@ def _second_order_energy_at(moved, psi, rho, b, u, weights, reference=None):
     # failing, not a small term: it is worth **2%** of ``d(eps)/dx`` on silicon,
     # it is invisible at zeroth order, and it survives every check that does not
     # difference the functional itself at a *re-converged* strained cell.
-    pcu = _project_conduction(psi, u)
+    pcu = _project_conduction(psi, u, hamiltonians, batch)
 
     hu = jnp.stack([apply_h(pcu[axis]) for axis in range(3)])
+    # ``S|u>``: the multiplier term contracts ``<u_i|S|u_j>`` and not
+    # ``<u_i|u_j>``, for the same reason the projector above carries ``S``.
+    su = _apply_overlap(pcu, hamiltonians, batch)
+
+    # **PAW's one-centre energy is a second, independent functional of
+    # ``becsum``**, so the second-order energy has a one-centre screening term
+    # beside the grid one -- the same ``1/2 dx K dx`` shape with
+    # ``d^2 E_onecentre / d becsum^2`` in place of ``dv_of_drho``. It is
+    # ``PAW_dpotential`` contracted against the ``becsum`` response rather than
+    # added to a potential, and without it ``F`` reproduces ``dielec.f90``'s
+    # dielectric constant to 1.8e-3 where an ultrasoft dataset reaches 3e-10.
+    onecentre = None
+    if moved.paw is not None:
+        dbecsum = [
+            jax.jvp(lambda states: mixed_becsum(moved, states, weights),
+                    (psi,), (pcu[axis],))[1]
+            for axis in range(3)
+        ]
+        blocks = [
+            jnp.stack([
+                moved.augmentation.block_matrix(
+                    tuple(None if b is None else b[spin] for b in dbecsum[axis])
+                )
+                for spin in range(moved.nspin_mag)
+            ])
+            for axis in range(3)
+        ]
+        induced = [paw_response(moved, dbecsum[axis], parts) for axis in range(3)]
+        onecentre = [[0.5 * jnp.sum(blocks[i] * induced[j]) for j in range(3)]
+                     for i in range(3)]
 
     def raw_density(states):
         smooth, dense = moved.basis.smooth, moved.basis.dense
@@ -338,7 +392,8 @@ def _second_order_energy_at(moved, psi, rho, b, u, weights, reference=None):
             states, moved.fft_index, smooth.grid, weights,
             moved.system.cell, moved.k_batch,
         )
-        return moved.augmented(to_dense(density, smooth, dense), ())
+        return moved.augmented(to_dense(density, smooth, dense),
+                               mixed_becsum(moved, states, weights))
 
     drho = jnp.stack([
         jax.jvp(raw_density, (psi,), (pcu[axis],))[1] for axis in range(3)
@@ -398,13 +453,15 @@ def _second_order_energy_at(moved, psi, rho, b, u, weights, reference=None):
             # The same order is what makes the stationary equation the standard
             # ``H u_n - sum_m u_m Lambda_mn = -P_c source_n``.
             multiplier = jnp.sum(weights * jnp.real(
-                jnp.einsum("skmn,skng,skmg->skn", lambdas, jnp.conj(pcu[i]), pcu[j])
+                jnp.einsum("skmn,skng,skmg->skn", lambdas, jnp.conj(pcu[i]), su[j])
             ))
             source = jnp.sum(weights * jnp.real(
                 jnp.einsum("skng,skng->skn", jnp.conj(pcu[i]), pcb[j])
                 + jnp.einsum("skng,skng->skn", jnp.conj(pcu[j]), pcb[i])
             ))
             screening = 0.5 * measure * jnp.sum(drho[i] * kernel[j])
+            if onecentre is not None:
+                screening = screening + onecentre[i][j]
             row.append(band - multiplier + source + screening)
         rows.append(jnp.stack(row))
     return jnp.stack(rows)
@@ -450,7 +507,7 @@ def _epsilon_at(calculation, strain, psi, rho, b, u, weights):
 
 
 def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
-                       moved_at=None, geometry=None):
+                       moved_at=None, geometry=None, stored=None):
     """``P_c db/dx``: one further Sternheimer solve per cartesian direction.
 
     ``b_a = P_c r_a|psi>`` is not written down anywhere -- it is *defined* by a
@@ -491,20 +548,48 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
     the strained ``kcart`` is the trap there: ``KPoints.coords`` do not move
     under a strain, so the operator is built on the ``kcart``
     :meth:`~pypresso.scf.driver.Calculation.at_strain` recorded.
+
+    **And for an ultrasoft or PAW dataset the linear equation is not the whole
+    of ``b``**, which is what made this the second of P43's two wrong tangents.
+    ``dvpsi_e`` solves for ``P_c r|psi>`` and then ``adddvepsi_us`` applies
+    ``S`` to it and adds the augmentation dipole
+    (:func:`~pypresso.response.efield.ultrasoft_position`, Dal Corso and Mauri
+    Eq. 10), whose ``beta``, ``qq``, ``dpqq`` and ``d(beta)/dk`` all travel with
+    their atom. So ``db`` is the tangent of a **composition**: the equation
+    above gives ``d(P_c r|psi>)``, and one ``jvp`` of the tail along the
+    geometry, the states and that solution gives ``db``. Both halves are
+    identically zero when ``S`` is the identity, where ``stored`` *is* ``b`` and
+    the tail is the identity map -- the norm-conserving answer is bit-identical
+    with this in place, which is the check that the plumbing is right.
+
+    Args:
+        stored: the **pre-tail** solution, ``internals["commutators"]`` -- the
+            thing the linear equation is actually about. Defaults to ``b``,
+            which is the same array for a norm-conserving dataset and wrong for
+            any other, so a caller that can supply it should.
     """
     if moved_at is None:
         # The strain path this function was written for: the geometry variable
         # is a ``(3, 3)`` strain and ``tangent`` one of the six Voigt patterns.
         moved_at, geometry = calculation.at_strain, jnp.zeros((3, 3))
     psi = solver.psi
-    frozen_b = b
+    frozen_b = b if stored is None else stored
     directions = np.eye(3)
 
-    def residual(geometry, states, density):
+    weights = solver.weights
+    eigenvalues = solver.eigenvalues
+
+    def operators(geometry, states, density):
+        """The moved cell and the two operators both halves are built from."""
         moved = moved_at(geometry)
         v_scf = moved.potential(density).v_scf
-        velocity = VelocityOperator(moved, v_scf, None)
-        hamiltonians = moved.hamiltonian(v_scf, None)
+        parts = mixed_becsum(moved, states, weights)
+        _, ddd_paw = moved.onecenter(parts)
+        return (moved, VelocityOperator(moved, v_scf, ddd_paw),
+                moved.hamiltonian(v_scf, ddd_paw))
+
+    def residual(geometry, states, density):
+        moved, velocity, hamiltonians = operators(geometry, states, density)
         batch = moved.k_batch
 
         def apply_h(block):
@@ -513,17 +598,31 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
                 for spin in range(block.shape[0])
             ])
 
+        def apply_s(block):
+            return jnp.stack([
+                over_kpoints(hamiltonians[spin], block[spin], batch, overlap=True)
+                for spin in range(block.shape[0])
+            ])
+
         lambdas = jnp.einsum("skmg,skng->skmn", jnp.conj(states), apply_h(states))
+        # ``S|psi>`` once: the right-hand side's projector puts it on the left
+        # (``orthogonalize``), and the operator's multiplier term needs it on
+        # ``b``. Both are the identity for a norm-conserving dataset.
+        s_states = apply_s(states)
 
         out = []
         for axis in range(3):
-            commutator = -1j * velocity.apply(states, directions[axis])
+            # ``[H - eps S, r] = -i (dH/dk - eps dS/dk)``: the same commutator
+            # :mod:`pypresso.response.efield` builds, and its second half is
+            # zero only when ``S`` does not move with ``k``.
+            derivative, overlap = velocity.both(states, directions[axis])
+            commutator = -1j * (derivative - eigenvalues[..., None] * overlap)
             overlaps = jnp.einsum("skmg,skng->skmn", jnp.conj(states), commutator)
             projected = commutator - jnp.einsum(
-                "skmn,skmg->skng", overlaps, states
+                "skmn,skmg->skng", overlaps, s_states
             )
             applied = apply_h(frozen_b[axis]) - jnp.einsum(
-                "skmn,skmg->skng", lambdas, frozen_b[axis]
+                "skmn,skmg->skng", lambdas, apply_s(frozen_b[axis])
             )
             out.append(projected - applied)
         return jnp.stack(out)
@@ -534,7 +633,27 @@ def _position_response(calculation, solver, rho, b, tangent, dpsi, drho,
     # One solve per cartesian direction: ``_solve_stored`` takes a right-hand
     # side that is already an array and applies ``orthogonalize``'s sign, which
     # is the projection onto the conduction space the derivation above needs.
-    return jnp.stack([_solve_stored(solver, rhs[axis]) for axis in range(3)])
+    solution = jnp.stack([_solve_stored(solver, rhs[axis]) for axis in range(3)])
+    if _augmentation_dipole(calculation) is None:
+        return solution
+
+    def tail(geometry, states, density, position):
+        """``adddvepsi_us`` as a function of everything that moves."""
+        moved, velocity, hamiltonians = operators(geometry, states, density)
+        dipoles = _augmentation_dipole(moved)
+        return jnp.stack([
+            ultrasoft_position(
+                moved, hamiltonians, states, position[axis], dipoles[axis],
+                velocity.projectors(directions[axis]),
+            )
+            for axis in range(3)
+        ])
+
+    _, out = jax.jvp(
+        tail, (geometry, psi, rho, frozen_b),
+        (tangent, dpsi, drho, solution),
+    )
+    return out
 
 
 # -- the third derivative ----------------------------------------------------
@@ -690,8 +809,14 @@ def electrostriction(
     # about 1e-6 of ``|b|``. Nothing at first order notices; here the leakage
     # multiplies ``<u|dpsi>``, and it is cheaper to remove it than to argue
     # about how large the product is.
-    b = _project_conduction(solver.psi, jnp.stack(internals["bare"]))
-    u = _project_conduction(solver.psi, jnp.stack(internals["dpsi"]))
+    # **Handed over unprojected.** ``F`` projects both itself, and with the
+    # *right* projector for each: a state takes ``1 - sum |psi><psi| S`` and a
+    # right-hand side takes ``1 - sum S|psi><psi|``. Pre-projecting here applied
+    # the state form to both, which for an ultrasoft dataset is not idempotent
+    # against the other and undoes it -- measured on the identity below,
+    # 2.2e-3 against 3.4e-10.
+    b = jnp.stack(internals["bare"])
+    u = jnp.stack(internals["dpsi"])
 
     if strain is None:
         strain = strain_response(
@@ -767,10 +892,41 @@ def electrostriction(
     )
 
 
-def _project_conduction(psi, block):
-    """``P_c`` applied to a ``(3, nspin, nk, nocc, npwx)`` block. ``S = 1``."""
-    overlaps = jnp.einsum("skmg,askng->askmn", jnp.conj(psi), block)
+def _project_conduction(psi, block, hamiltonians=None, batch="default"):
+    """``P_c`` applied to a ``(3, nspin, nk, nocc, npwx)`` block.
+
+    ``P_c = 1 - sum_m |psi_m><psi_m| S``, and the ``S`` is not decoration: what
+    "orthogonal to the occupied manifold" means is fixed by the *metric*, which
+    for an ultrasoft or PAW dataset is not the identity. ``hamiltonians = None``
+    is the norm-conserving case and is the same expression with ``S = 1``,
+    written that way so the two paths cannot drift apart.
+
+    Measured on the functional this feeds: with ``S`` left out,
+    :func:`_epsilon_at` reproduces ``dielec.f90``'s dielectric constant to
+    **21%** rather than to 8e-10.
+    """
+    if hamiltonians is None:
+        overlaps = jnp.einsum("skmg,askng->askmn", jnp.conj(psi), block)
+        return block - jnp.einsum("askmn,skmg->askng", overlaps, psi)
+    overlapped = _apply_overlap(psi, hamiltonians, batch)
+    overlaps = jnp.einsum("skmg,askng->askmn", jnp.conj(overlapped), block)
     return block - jnp.einsum("askmn,skmg->askng", overlaps, psi)
+
+
+def _apply_overlap(block, hamiltonians, batch="default"):
+    """``S|block>`` for a ``(..., nspin, nk, nocc, npwx)`` array."""
+    leading = block.shape[:-4]
+    flat = block.reshape((-1,) + block.shape[-4:]) if leading else block[None]
+    out = []
+    for one in flat:
+        out.append(jnp.stack([
+            map_k(lambda ik, spin=spin, one=one: hamiltonians[spin].apply_s(
+                one[spin][ik], ik
+            ), jnp.arange(one.shape[1]), batch=batch)
+            for spin in range(one.shape[0])
+        ]))
+    stacked = jnp.stack(out)
+    return stacked.reshape(leading + stacked.shape[1:]) if leading else stacked[0]
 
 
 def _compliance_tensor(voigt: np.ndarray) -> np.ndarray:

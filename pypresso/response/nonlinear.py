@@ -121,9 +121,15 @@ from pypresso.response.electrostriction import (
 )
 from pypresso.response.phonon import (
     DisplacementResponse,
+    _add_becsum,
     _bare_displacements,
-    require_norm_conserving,
+    _stack_modes,
+    _symmetrize_modes,
+    non_variational_response,
+    orthogonality_states,
+    _require_a_moving_overlap_regime,
     self_consistent_response,
+    symmetrize_becsum_modes,
 )
 from pypresso.response.sternheimer import require_a_sternheimer_regime
 from pypresso.units import BOHR_TO_ANGSTROM, FPI
@@ -197,7 +203,8 @@ def _epsilon_at(moved, psi, rho, b, u, weights, reference=None):
 
 def susceptibility_displacement_derivative(
     calculation, solver, rho, b, u, positions, dpsi, drho,
-    geometry_tangent: bool = True, verbose: bool = False,
+    geometry_tangent: bool = True, verbose: bool = False, ort=None,
+    stored=None,
 ) -> np.ndarray:
     """``d(eps_ij)/d(tau_(a, c))``: the Raman tensors, one ``jvp`` per mode.
 
@@ -206,6 +213,16 @@ def susceptibility_displacement_derivative(
     :func:`~pypresso.response.electrostriction.susceptibility_strain_derivative`.
 
     Args:
+        ort: the occupied block of the first-order state
+            (:func:`~pypresso.response.phonon.orthogonality_states`). **Part of
+            the state tangent**, not an option: with ``S`` moving, the
+            orthonormality constraint fixes a piece of ``dpsi`` that the
+            Sternheimer solve does not produce, and it is identically zero for
+            a norm-conserving dataset.
+        stored: the pre-tail electric-field solution,
+            ``internals["commutators"]``, threaded to
+            :func:`~pypresso.response.electrostriction._position_response` so
+            that ``db`` carries ``adddvepsi_us`` as well as the linear equation.
         geometry_tangent: whether to carry the displacement's own tangent
             through :meth:`~pypresso.scf.driver.Calculation.at_positions`, which
             is the ``dH/d(parameter)`` term of the 2n+1 expression. **Always
@@ -237,12 +254,28 @@ def susceptibility_displacement_derivative(
             # occupied manifold in the solution, which nothing at first order
             # notices and a triple product does.
             mode_psi = _project_conduction(
-                psi, jnp.asarray(dpsi[atom, cart])[None]
+                psi, jnp.asarray(dpsi[atom, cart])[None],
+                solver.hamiltonians, calculation.k_batch,
             )[0]
+            if ort is not None:
+                # **The occupied block, and it only works with its partner.**
+                # With ``S`` moving, the orthonormality constraint fixes a piece
+                # of the first-order state that the Sternheimer solve does not
+                # produce, so the state tangent is ``P_c dpsi + ort`` -- this is
+                # P39's lesson, and P39's warning with it: the block *alone*
+                # moves ``d(eps)/d(tau)`` from 3.0e-2 to 8.0e-2 against a finite
+                # difference. Its partner in this coordinate is the tail
+                # ``db`` acquires below, and the two were found by measuring
+                # ``F``'s five partial derivatives against their own finite
+                # differences one at a time: with both, the ultrasoft answer is
+                # **1.2e-4** and PAW's 1.2e-4, against a norm-conserving control
+                # of 6.8e-4 that does not move at all (``PLAN.md`` P43).
+                mode_psi = mode_psi + jnp.asarray(ort[atom, cart])
             mode_rho = jnp.asarray(drho[atom, cart])
             db = _position_response(
                 calculation, solver, rho, b, tangent, mode_psi, mode_rho,
                 moved_at=calculation.at_positions, geometry=positions,
+                stored=stored,
             )
             carried = tangent if geometry_tangent else jnp.zeros_like(tangent)
             _, column = jax.jvp(
@@ -394,20 +427,33 @@ def raman_tensors(
     """
     require_a_symmetrisable_response(calculation)
     require_a_sternheimer_regime(calculation)
-    require_norm_conserving(calculation)
+    # **Ultrasoft and PAW are in as of P43**, so what is checked here is the
+    # same *combination* the dynamical matrix refuses -- a metal with a moving
+    # overlap -- and not the dataset. The strain-coordinate third derivatives
+    # (elastic constants, electrostriction, the elasto-optic tensor) still
+    # carry ``require_norm_conserving``: they share ``_position_response`` with
+    # this one, but neither the occupied block's analogue under a strain nor
+    # the tail's behaviour there has been measured.
+    _require_a_moving_overlap_regime(calculation)
 
     eigenvalues, psi = refined_states(calculation, result)
     density = jnp.asarray(result.density)
 
     field = dielectric_tensor(
-        calculation, psi, eigenvalues, density,
+        calculation, psi, eigenvalues, density, result.becsum,
         born_charges=born_charges, keep_internals=True, verbose=verbose,
         **response_options,
     )
     internals = field.internals
     solver = internals["solver"]
-    b = _project_conduction(solver.psi, jnp.stack(internals["bare"]))
-    u = _project_conduction(solver.psi, jnp.stack(internals["dpsi"]))
+    # **Handed over unprojected.** ``F`` projects both itself, and with the
+    # *right* projector for each: a state takes ``1 - sum |psi><psi| S`` and a
+    # right-hand side takes ``1 - sum S|psi><psi|``. Pre-projecting here applied
+    # the state form to both, which for an ultrasoft dataset is not idempotent
+    # against the other and undoes it -- measured on the identity below,
+    # 2.2e-3 against 3.4e-10.
+    b = jnp.stack(internals["bare"])
+    u = jnp.stack(internals["dpsi"])
     if not (field.converged or allow_unconverged):
         raise ValueError(
             "the electric-field response did not converge, and a third "
@@ -418,8 +464,21 @@ def raman_tensors(
 
     positions = jnp.asarray(calculation.system.structure.positions)
     bare = _bare_displacements(calculation, solver, internals["v_scf"], positions)
-    dpsi, drho, history, _, phonon_converged = self_consistent_response(
-        calculation, solver, bare, density, verbose=verbose, **response_options,
+    ort = orthogonality_states(calculation, solver, positions)
+    (rho_moved, bec_moved), (rho_ort, bec_ort) = non_variational_response(
+        calculation, positions, psi, solver.weights, density, result.becsum, ort,
+    )
+    drhous = becsumort = None
+    if rho_moved is not None:
+        drhous = _stack_modes(_symmetrize_modes(calculation, rho_moved)) + \
+            _stack_modes(_symmetrize_modes(calculation, rho_ort))
+        becsumort = _add_becsum(
+            symmetrize_becsum_modes(calculation, bec_moved),
+            symmetrize_becsum_modes(calculation, bec_ort),
+        )
+    dpsi, drho, history, _, phonon_converged, _ = self_consistent_response(
+        calculation, solver, bare, density, positions=positions,
+        becsumort=becsumort, drhous=drhous, verbose=verbose, **response_options,
     )
     if not (phonon_converged or allow_unconverged):
         raise ValueError(
@@ -428,7 +487,9 @@ def raman_tensors(
         )
 
     tensors = susceptibility_displacement_derivative(
-        calculation, solver, density, b, u, positions, dpsi, drho, verbose=verbose,
+        calculation, solver, density, b, u, positions, dpsi, drho,
+        verbose=verbose, ort=ort,
+        stored=jnp.stack(internals["commutators"]),
     )
     # ``symtensor3``, and it is a no-op on the closed-grid runs this phase was
     # validated on -- :meth:`~pypresso.scf.driver.Calculation.symmetrize_atom_cartesian_tensor`

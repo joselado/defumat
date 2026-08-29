@@ -191,6 +191,102 @@ class BecsumSymmetry:
             )
         return tuple(out)
 
+    def apply_strain(self, becsum, rotations) -> tuple:
+        """``PAW_dusymmetrize`` for a **rank-2** perturbation: a strain.
+
+        :meth:`apply_directional` with one more cartesian index, and the same
+        rule ``symmetrize_strain_response`` uses on the grid one level up: a
+        homogeneous strain is not two directions but a tensor, so an operation
+        rotates *both* of its indices:
+
+            dbecsum_ab <- (1/N) sum_S R_ac R_bd (op_S . dbecsum_cd[S^-1 n]).
+
+        **It is not two applications of the vector case.** Averaging over the
+        group twice would apply the harmonic operator and the atom permutation
+        twice as well, which is a different projector and not a finer one.
+
+        Args:
+            becsum: per species, ``(3, 3, nspin, nat_t, nh, nh)``.
+            rotations: ``(nsym, 3, 3)`` cartesian, unsigned -- a strain is built
+                from two polar vectors and carries no sign of its own.
+        """
+        if self.nsym <= 1:
+            return becsum
+        rotations = jnp.asarray(rotations)
+        out = []
+        for values, operator, sources in zip(becsum, self.operators, self.mapping):
+            if values is None or operator is None:
+                out.append(values)
+                continue
+            gathered = values[:, :, :, sources]  # (3, 3, nspin, nsym, nat_t, nh, nh)
+            out.append(
+                jnp.einsum(
+                    "sijkl,sac,sbd,cdzsnkl->abznij",
+                    operator, rotations, rotations, gathered
+                ) / self.nsym
+            )
+        return tuple(out)
+
+    def apply_atom_displacement(self, becsum, rotations, mapping) -> tuple:
+        """``PAW_dusymmetrize`` for the ``3 nat`` **displacement** patterns.
+
+        :meth:`apply_directional` carries one more index, and it is the same
+        index :meth:`~pypresso.scf.driver.Calculation.symmetrize_atom_displacement`
+        adds to ``symdvscf``'s electric-field version: a perturbation that moves
+        **atom a along direction i** is not labelled by a direction alone, so an
+        operation rotates the direction *and* carries the perturbation to the
+        atom it maps onto:
+
+            dbecsum_{a,i} <- (1/N) sum_S R_ij (op_S . dbecsum_{S^-1(a),j}[S^-1 n]).
+
+        **Two atom labels move here and they are different labels.** ``a`` is
+        the atom that was *displaced* and ``n`` is the atom whose ``becsum``
+        block this is; both are permuted, both by the inverse of ``irt``, and
+        they are permuted independently because the two are unrelated -- moving
+        atom 0 changes the one-centre occupations of atom 1.
+
+        Args:
+            becsum: per species, ``(nat, 3, nspin, nat_t, nh, nh)`` -- the
+                displaced atom leading, then its cartesian direction.
+            rotations: ``(nsym, 3, 3)`` cartesian, unsigned. An induced
+                ``becsum`` is a polar object, exactly as in
+                :meth:`apply_directional`.
+            mapping: ``(nsym, nat)`` from
+                :func:`~pypresso.system.symmetry.atom_mapping` -- ``irt``
+                itself, inverted here so that call sites keep passing it
+                unchanged.
+        """
+        if self.nsym <= 1:
+            return becsum
+        rotations = jnp.asarray(rotations)
+        # ``argsort`` of a permutation is its inverse. The same inversion
+        # :func:`~pypresso.system.symmetry.symmetrize_atom_displacement_density`
+        # makes, and for the same reason: labelling the average by the atom the
+        # perturbation lands *on* puts ``S^-1`` under the sum. It is invisible
+        # wherever every operation's permutation is an involution, which is
+        # every cell in this test suite but the four-atom aluminium one.
+        inverse = np.argsort(np.asarray(mapping), axis=1)
+        out = []
+        for values, operator, sources in zip(becsum, self.operators, self.mapping):
+            if values is None or operator is None:
+                out.append(values)
+                continue
+            sources = np.asarray(sources)
+            # One gather per operation rather than one fancy-indexing
+            # expression over both atom axes: ``nsym`` is at most 48 and this
+            # runs once per response iteration, where the readable form is
+            # worth more than the fused one.
+            gathered = jnp.stack([
+                values[jnp.asarray(inverse[s])][:, :, :, jnp.asarray(sources[s])]
+                for s in range(self.nsym)
+            ])  # (nsym, nat, 3, nspin, nat_t, nh, nh)
+            out.append(
+                jnp.einsum(
+                    "sijkl,scd,sadznkl->acznij", operator, rotations, gathered
+                ) / self.nsym
+            )
+        return tuple(out)
+
 
 def build_becsum_symmetry(
     pseudos, structure, cell, symmetries: Symmetries, nspin_mag: int = 1

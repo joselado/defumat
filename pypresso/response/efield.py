@@ -502,6 +502,40 @@ def _augmentation_dipole(calculation):
     ])
 
 
+def ultrasoft_position(calculation, hamiltonians, states, position, dipole,
+                       projector_velocity):
+    """``dvpsi_e``'s ultrasoft tail, as a function of everything that moves.
+
+    :func:`_ultrasoft_position` is this called with the solver's own frozen
+    objects, which is what the primal path wants. **A third derivative in the
+    displacement coordinate wants the other form**, because every ingredient
+    here -- ``beta``, ``qq``, ``dpqq`` and ``d(beta)/dk`` -- travels with its
+    atom, so the tangent of ``b`` is the tangent of *this* composed with the
+    tangent of the linear solve underneath it
+    (:func:`~pypresso.response.electrostriction._position_response`). The two
+    callers share one expression rather than two, which is the whole reason
+    this is a function and not the body of the one below.
+    """
+    batch = calculation.k_batch
+    vkb = calculation.projectors.vkb
+    dipole = dipole.astype(vkb.dtype)
+    blocks = []
+    for spin, hamiltonian in enumerate(hamiltonians):
+        occupied = states[spin]
+
+        def one_k(ik, hamiltonian=hamiltonian, occupied=occupied, spin=spin):
+            overlapped = hamiltonian.apply_s(position[spin][ik], ik)
+            qq = hamiltonian.projectors.qq.astype(vkb.dtype)
+            becp1 = jnp.einsum("gk,ng->nk", vkb[ik].conj(), occupied[ik])
+            becp2 = jnp.einsum("gk,ng->nk",
+                               projector_velocity[ik].conj(), occupied[ik])
+            coefficients = 1j * (becp2 @ qq.T) + becp1 @ dipole.T
+            return overlapped + jnp.einsum("gk,nk->ng", vkb[ik], coefficients)
+
+        blocks.append(map_k(one_k, jnp.arange(occupied.shape[0]), batch=batch))
+    return jnp.stack(blocks)
+
+
 def _ultrasoft_position(solver, velocity, position, direction, dipole,
                         derivative=None):
     """``dvpsi_e``'s ultrasoft tail: ``S P_c r|psi>`` plus the augmentation dipole.
@@ -522,26 +556,12 @@ def _ultrasoft_position(solver, velocity, position, direction, dipole,
     dataset ``q_ij`` and ``dpqq`` are both zero and this whole function is the
     identity -- which is why it is applied only when ``qq`` exists.
     """
-    calculation = solver.calculation
-    batch = calculation.k_batch
     if derivative is None:
         derivative = velocity.projectors(direction)   # (nk, npwx, nkb)
-    vkb = calculation.projectors.vkb
-    dipole = dipole.astype(vkb.dtype)
-    blocks = []
-    for spin, hamiltonian in enumerate(solver.hamiltonians):
-        states = solver.psi[spin]
-
-        def one_k(ik, hamiltonian=hamiltonian, states=states, spin=spin):
-            overlapped = hamiltonian.apply_s(position[spin][ik], ik)
-            qq = hamiltonian.projectors.qq.astype(vkb.dtype)
-            becp1 = jnp.einsum("gk,ng->nk", vkb[ik].conj(), states[ik])
-            becp2 = jnp.einsum("gk,ng->nk", derivative[ik].conj(), states[ik])
-            coefficients = 1j * (becp2 @ qq.T) + becp1 @ dipole.T
-            return overlapped + jnp.einsum("gk,nk->ng", vkb[ik], coefficients)
-
-        blocks.append(map_k(one_k, jnp.arange(states.shape[0]), batch=batch))
-    return jnp.stack(blocks)
+    return ultrasoft_position(
+        solver.calculation, solver.hamiltonians, solver.psi, position, dipole,
+        derivative,
+    )
 
 
 def _bare_plus_induced(solver, bare_axis, dv, dddd_paw, include_induced: bool):

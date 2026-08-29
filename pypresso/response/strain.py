@@ -82,10 +82,13 @@ from pypresso.response.efield import require_a_symmetrisable_response
 from pypresso.response.phonon import require_norm_conserving
 from pypresso.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
 from pypresso.response.sternheimer import (
+    paw_response,
     SternheimerSolver,
     require_a_sternheimer_regime,
 )
 from pypresso.response.velocity import over_kpoints
+from pypresso.scf.density import becsum as becsum_of
+from pypresso.system.symmetry import cartesian_rotations
 from pypresso.scf.density import sum_band
 
 __all__ = ["StrainResponse", "strain_response", "strain_tangent",
@@ -140,6 +143,22 @@ class StrainResponse:
     history: list = field(default_factory=list)
     average_iterations: float = 0.0
     converged: bool = False
+    #: The occupied block of the first-order state, ``(3, 3)`` object array, or
+    #: ``None`` for a norm-conserving dataset where ``S`` does not deform.
+    ort: np.ndarray | None = None
+    #: ``<psi_m|dS/d(eps)|psi_n>``, which the multipliers' own tangent is built
+    #: from. ``None`` for the same reason.
+    overlap_derivatives: np.ndarray | None = None
+    #: The ``moved`` half of the frozen-state response -- the mixed state's
+    #: change at frozen *states*, without the orthogonality block. A consumer
+    #: that hands the mixed state to an energy as a function of the strain
+    #: generates this half itself and has to subtract it; one that freezes the
+    #: density as an array does not. ``PLAN.md`` P39 records what happens when
+    #: the distinction is missed.
+    moved_drho: jnp.ndarray | None = None
+    #: The same split for ``becsum``: ``(total, moved)`` per strain.
+    becsum: np.ndarray | None = None
+    moved_becsum: np.ndarray | None = None
 
 
 def density_of_strained_states(calculation, states, weights, strain):
@@ -160,7 +179,26 @@ def density_of_strained_states(calculation, states, weights, strain):
         states, moved.fft_index, smooth.grid, weights,
         moved.system.cell, moved.k_batch,
     )
-    return moved.augmented(to_dense(rho, smooth, dense), ())
+    return moved.augmented(to_dense(rho, smooth, dense),
+                           mixed_becsum(moved, states, weights))
+
+
+def mixed_becsum(moved, states, weights) -> tuple:
+    """``becsum`` at the strained cell, unsymmetrised -- ``()`` for a NC dataset.
+
+    **The augmentation charge is a function of the cell**, which is what makes a
+    strain different from a displacement one level deeper than it looks: a
+    displacement moves ``Q_ij(r - tau)`` rigidly, and a strain deforms the
+    reciprocal-space table it is tabulated on. Both fall out of the same ``jvp``
+    through :meth:`~pypresso.scf.driver.Calculation.at_strain`, which is why
+    this is a builder and not an array.
+    """
+    if not moved.is_ultrasoft:
+        return ()
+    return becsum_of(
+        states, moved.projectors.vkb, weights, moved.species_channels,
+        moved.k_batch,
+    )
 
 
 def strain_response(
@@ -195,25 +233,32 @@ def strain_response(
         eigenvalues = eigenvalues[None]
     require_a_symmetrisable_response(calculation)
     require_a_sternheimer_regime(calculation)
-    require_norm_conserving(calculation)
     _require_one_spin_channel(calculation)
 
     weights, _ = calculation.occupations(eigenvalues)
     weights = jnp.asarray(weights)
     nocc = int(round(calculation.nelec / 2))
     potential = calculation.potential(density)
-    hamiltonians = calculation.hamiltonian(potential.v_scf, None)
+    _, ddd_paw = calculation.onecenter(becsum)
+    hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw)
     solver = SternheimerSolver(
         calculation, hamiltonians, wavefunctions, eigenvalues, weights,
-        nocc, threshold, v_scf=potential.v_scf,
+        nocc, threshold, v_scf=potential.v_scf, becsum=becsum,
     )
     density = jnp.asarray(density)
+
+    # 0. What a deforming ``S`` adds, and all of it is zero for a
+    #    norm-conserving dataset (``PLAN.md`` P41).
+    derivatives = overlap_derivatives(calculation, solver)
+    ort = orthogonality_states(calculation, solver, derivatives)
 
     # 1. The bare perturbation and the frozen-state half of ``drho``, both from
     #    ``at_strain`` and both stored: the loop below drives on them at every
     #    iteration and neither changes.
     bare = _bare_strains(calculation, solver, density)
-    frozen_drho = _frozen_density_response(calculation, solver, weights)
+    frozen_drho, moved_drho, frozen_becsum, moved_becsum = (
+        _frozen_density_response(calculation, solver, weights, ort)
+    )
 
     # 2. ``solve_linter``'s loop.
     dpsi, drho, dvscf, history, average_iterations, converged = (
@@ -221,6 +266,7 @@ def strain_response(
             calculation, solver, bare, frozen_drho, density,
             alpha_mix=alpha_mix, tr2=tr2, max_iterations=max_iterations,
             mixing_mode=mixing_mode, verbose=verbose,
+            frozen_becsum=frozen_becsum,
         )
     )
 
@@ -235,6 +281,10 @@ def strain_response(
         history=history,
         average_iterations=average_iterations,
         converged=converged,
+        ort=ort,
+        overlap_derivatives=derivatives,
+        moved_drho=moved_drho,
+        moved_becsum=moved_becsum,
     )
 
 
@@ -249,13 +299,25 @@ def _bare_strains(calculation, solver, density) -> np.ndarray:
     psi = solver.psi
     zero = jnp.zeros((3, 3))
 
+    eigenvalues = solver.eigenvalues
+
     def h_psi(strain):
         moved = calculation.at_strain(strain)
-        hamiltonians = moved.hamiltonian(moved.potential(density).v_scf, None)
-        return jnp.stack([
-            over_kpoints(hamiltonian, psi[spin], batch)
-            for spin, hamiltonian in enumerate(hamiltonians)
-        ])
+        hamiltonians = moved.hamiltonian(
+            moved.potential(density).v_scf, solver.ddd_paw
+        )
+        applied = []
+        for spin, hamiltonian in enumerate(hamiltonians):
+            values = over_kpoints(hamiltonian, psi[spin], batch)
+            if hamiltonian.has_overlap:
+                # ``compute_deff`` again (``PLAN.md`` P39): the source term of
+                # the Sternheimer equation is ``(dH - eps dS)|psi>`` whenever
+                # ``S`` moves with the perturbation, and a strain deforms the
+                # augmentation charge exactly as a displacement translates it.
+                overlap = over_kpoints(hamiltonian, psi[spin], batch, overlap=True)
+                values = values - eigenvalues[spin][..., None] * overlap
+            applied.append(values)
+        return jnp.stack(applied)
 
     bare = np.empty((3, 3), dtype=object)
     for a in range(3):
@@ -265,32 +327,124 @@ def _bare_strains(calculation, solver, density) -> np.ndarray:
     return bare
 
 
-def _frozen_density_response(calculation, solver, weights) -> jnp.ndarray:
-    """``drho/d(eps)`` at ``dpsi = 0``: what the changing volume alone does.
+def overlap_derivatives(calculation, solver) -> np.ndarray | None:
+    """``S'_mn = <psi_m|dS/d(eps_ab)|psi_n>`` for the six strains, or ``None``.
+
+    ``PLAN.md`` P39's object in the strain coordinate. ``None`` for a
+    norm-conserving dataset, where ``S`` is the identity and does not deform.
+    """
+    if not calculation.is_ultrasoft:
+        return None
+    psi = solver.psi
+    batch = calculation.k_batch
+    zero = jnp.zeros((3, 3))
+
+    def overlap_matrix(strain):
+        moved = calculation.at_strain(strain)
+        vkb = moved.projectors.vkb
+        qq = moved.projectors.qq.astype(psi.dtype)
+        blocks = []
+        for spin in range(psi.shape[0]):
+            def one_k(ik, spin=spin):
+                becp = jnp.einsum("gc,ng->nc", vkb[ik].conj(), psi[spin][ik])
+                return jnp.einsum("mi,ij,nj->mn", becp.conj(), qq, becp)
+
+            blocks.append(map_k(one_k, jnp.arange(psi.shape[1]), batch=batch))
+        return jnp.stack(blocks)
+
+    out = np.empty((3, 3), dtype=object)
+    for a in range(3):
+        for b in range(a, 3):
+            out[a, b] = out[b, a] = jax.jvp(
+                overlap_matrix, (zero,), (strain_tangent(a, b),)
+            )[1]
+    return out
+
+
+def orthogonality_states(calculation, solver, derivatives) -> np.ndarray | None:
+    """``dpsi^ort = -1/2 sum_m psi_m <psi_m|dS/d(eps)|psi_n>``, per strain.
+
+    The occupied block the Sternheimer solve does not produce, because
+    ``orthogonalize``'s projector makes its answer orthogonal to the occupied
+    manifold while the physical first-order state satisfies
+    ``<psi + dpsi|S(eps + deps)|psi + dpsi> = 1`` with ``S`` itself deformed.
+    ``PLAN.md`` P39, and the identity that checks it is the same one: the
+    first-order constraint residual has to vanish.
+    """
+    if derivatives is None:
+        return None
+    psi = solver.psi
+    out = np.empty((3, 3), dtype=object)
+    for a in range(3):
+        for b in range(a, 3):
+            out[a, b] = out[b, a] = -0.5 * jnp.einsum(
+                "skmg,skmn->skng", psi, derivatives[a, b]
+            )
+    return out
+
+
+def _frozen_density_response(calculation, solver, weights, ort=None):
+    """``drho/d(eps)`` at frozen *variational* states -- ``drho.f90``'s twin.
 
     Zero for a displacement and not for a strain, which is the trap the module
-    docstring names. Computed here rather than folded into the loop because it
-    does not change between iterations.
+    docstring names: the volume changes even when nothing else does. Computed
+    here rather than folded into the loop because it does not change between
+    iterations.
+
+    **For an ultrasoft or PAW dataset it carries two more things**, and they are
+    the same two ``PLAN.md`` P39 adds one coordinate over: the augmentation
+    charge deforms with the cell (so ``becsum`` and ``Q_ij`` both move, which
+    :func:`density_of_strained_states` now differentiates), and the occupied
+    block of the first-order state is not zero. Returns
+    ``(total, moved_half, becsum_total, becsum_moved)`` -- the ``moved`` halves
+    apart because a consumer that hands the mixed state to the energy as a
+    *function* of the strain generates them itself and would count them twice.
     """
     zero = jnp.zeros((3, 3))
     psi = solver.psi
-    return jnp.stack([
-        jnp.stack([
-            jax.jvp(
-                lambda s: density_of_strained_states(
-                    calculation, psi, solver.weights, s
-                ),
-                (zero,), (strain_tangent(a, b),),
-            )[1]
-            for b in range(3)
-        ])
-        for a in range(3)
-    ])
+    zero_states = jnp.zeros_like(psi)
+
+    def mixed(strain, states):
+        moved = calculation.at_strain(strain)
+        parts = mixed_becsum(moved, states, solver.weights)
+        smooth, dense = moved.basis.smooth, moved.basis.dense
+        rho = sum_band(
+            states, moved.fft_index, smooth.grid, solver.weights,
+            moved.system.cell, moved.k_batch,
+        )
+        return moved.augmented(to_dense(rho, smooth, dense), parts), parts
+
+    grids, moved_grids = [], []
+    parts_total = np.empty((3, 3), dtype=object)
+    parts_moved = np.empty((3, 3), dtype=object)
+    for a in range(3):
+        row, moved_row = [], []
+        for b in range(3):
+            tangent = strain_tangent(a, b)
+            rho_m, bec_m = jax.jvp(mixed, (zero, psi), (tangent, zero_states))[1]
+            if ort is None:
+                rho_t, bec_t = rho_m, bec_m
+            else:
+                rho_o, bec_o = jax.jvp(
+                    mixed, (zero, psi), (jnp.zeros((3, 3)), ort[a, b])
+                )[1]
+                rho_t = rho_m + rho_o
+                bec_t = tuple(
+                    None if x is None else x + y for x, y in zip(bec_m, bec_o)
+                )
+            row.append(rho_t)
+            moved_row.append(rho_m)
+            parts_total[a, b] = bec_t
+            parts_moved[a, b] = bec_m
+        grids.append(jnp.stack(row))
+        moved_grids.append(jnp.stack(moved_row))
+    return (jnp.stack(grids), jnp.stack(moved_grids), parts_total, parts_moved)
 
 
 def _self_consistent_response(
     calculation, solver, bare, frozen_drho, density,
     alpha_mix, tr2, max_iterations, verbose, mixing_mode=DEFAULT_RESPONSE_MIXING,
+    frozen_becsum=None,
 ):
     """The loop, with the frozen-state density response added at every pass.
 
@@ -307,12 +461,18 @@ def _self_consistent_response(
     converged = False
     mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
 
+    onecentre = None if solver.ddd_paw is None else jnp.zeros(
+        (3, 3) + solver.ddd_paw.shape
+    )
+
     for iteration in range(max_iterations):
         response = np.empty((3, 3), dtype=object)
+        becsum_response = np.empty((3, 3), dtype=object)
         for a in range(3):
             for b in range(a, 3):
                 perturbation = _bare_plus_induced(
-                    solver, bare[a, b], dvscf[a, b], iteration > 0
+                    solver, bare[a, b], dvscf[a, b], iteration > 0,
+                    None if onecentre is None else onecentre[a, b],
                 )
                 solution = solver.solve(perturbation)
                 dpsi[a, b] = dpsi[b, a] = solution.dpsi
@@ -320,6 +480,14 @@ def _self_consistent_response(
                 solves += 1
                 value = solver.response_density(solution.dpsi)
                 response[a, b] = response[b, a] = value
+                if onecentre is not None:
+                    parts = solver.response_becsum(solution.dpsi)
+                    if frozen_becsum is not None:
+                        parts = tuple(
+                            None if x is None else x + y
+                            for x, y in zip(parts, frozen_becsum[a, b])
+                        )
+                    becsum_response[a, b] = becsum_response[b, a] = parts
 
         stacked = jnp.stack([
             jnp.stack([response[a, b] for b in range(3)]) for a in range(3)
@@ -337,11 +505,33 @@ def _self_consistent_response(
             for a in range(3)
         ])
 
+        induced_onecentre = None
+        if onecentre is not None:
+            # ``PAW_dpotential``, from the ``becsum`` response -- the
+            # variational part plus the cell's own, exactly as the phonon loop
+            # adds ``becsumort`` (``PLAN.md`` P39).
+            symmetrised_becsum = _symmetrize_becsum_strain(
+                calculation, becsum_response
+            )
+            induced_onecentre = jnp.stack([
+                jnp.stack([
+                    paw_response(calculation, symmetrised_becsum[a, b],
+                                 solver.becsum)
+                    for b in range(3)
+                ])
+                for a in range(3)
+            ])
+
         change = float(jnp.sum((induced - dvscf) ** 2))
         history.append(change)
         if verbose:
             print(f"  iter {iteration + 1}: |ddv_scf|^2 = {change:.3e}")
-        dvscf = mixer.mix(dvscf, induced)
+        if onecentre is None:
+            dvscf = mixer.mix(dvscf, induced)
+        else:
+            dvscf, onecentre = mixer.mix(
+                [dvscf, onecentre], [induced, induced_onecentre]
+            )
         if change < tr2:
             converged = True
             break
@@ -350,12 +540,39 @@ def _self_consistent_response(
             total_iterations / max(solves, 1), converged)
 
 
-def _bare_plus_induced(solver, bare_component, dv, include_induced: bool):
+def _symmetrize_becsum_strain(calculation, per_strain):
+    """``PAW_dusymmetrize`` on the six strains -- :meth:`BecsumSymmetry.apply_strain`.
+
+    A no-op when there is no PAW species or no symmetry to average over.
+    """
+    sample = per_strain[0, 0]
+    if calculation._becsum_symmetry is None or not sample:
+        return per_strain
+    rotations = cartesian_rotations(calculation.system.cell, calculation.symmetries)
+    stacked = tuple(
+        None if sample[species] is None else jnp.stack([
+            jnp.stack([per_strain[a, b][species] for b in range(3)])
+            for a in range(3)
+        ])
+        for species in range(len(sample))
+    )
+    symmetrised = calculation._becsum_symmetry.apply_strain(stacked, rotations)
+    out = np.empty((3, 3), dtype=object)
+    for a in range(3):
+        for b in range(3):
+            out[a, b] = tuple(
+                None if values is None else values[a, b] for values in symmetrised
+            )
+    return out
+
+
+def _bare_plus_induced(solver, bare_component, dv, include_induced: bool,
+                       dddd_paw=None):
     """``dH_bare|psi> + dV_scf|psi>`` -- :mod:`pypresso.response.phonon`'s."""
     if not include_induced:
         return lambda psi, ik, spin: bare_component[spin][ik]
 
-    induced = solver.perturbation(dv)
+    induced = solver.perturbation(dv, dddd_paw)
 
     def perturbation(psi, ik, spin):
         return bare_component[spin][ik] + induced(psi, ik, spin)

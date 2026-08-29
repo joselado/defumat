@@ -128,6 +128,22 @@ def require_born_charges(calculation) -> None:
     an ultrasoft dataset and not for a PAW one, whose one-centre energy is a
     second, independent function of ``becsum``.
 
+    **Two candidates were measured and both were rejected**, which is what makes
+    this a refusal with a shape rather than an open question (``PLAN.md`` P39a).
+    QE's fifth stage assembled directly from the objects P39 built --
+    ``paw_response`` along the field's ``dbecsum`` for ``int3_paw``,
+    :func:`~pypresso.response.phonon.non_variational_response` for
+    ``becsumort`` -- comes to **0.004882**, where the gap to close is 0.001317:
+    3.7 times too large in either sign, so what is missing here is not that
+    term, and the reason is that the Lagrangian already carries it through the
+    multiplier tangent. And symmetrising the ``becsum`` response before it
+    enters the one-centre energy -- P36's "the value inside a nonlinear
+    functional must be the full-zone object", where the raw and symmetrised
+    field responses differ by **19 to 46 per cent** -- moves PAW the *wrong*
+    way, from 1.3e-3 to **2.8e-3**, while leaving the norm-conserving case
+    exact to every digit and the ultrasoft one at 1.0e-5. The raw chain-rule
+    tangent is the better one and ``symtensor`` really does complete it.
+
     It is refused rather than returned because 1.3e-3 is sixteen times the last
     digit ``ph.x`` prints, and because the sign of that term could not be settled
     from the Fortran with confidence: ``compute_drhous`` builds its ``dbecsum``

@@ -5338,6 +5338,367 @@ the k-point count.
 
 ---
 
+### P39 — The dynamical matrix when `S` moves with the atoms. ✅ DONE.
+
+**What.** P25's norm-conserving restriction is lifted: `dynamical_matrix` runs on
+ultrasoft and PAW datasets. Two-atom silicon's optical mode comes out at **513.2947**
+(ultrasoft) and **513.3776** (PAW) cm⁻¹ against the vendored `ph.x`'s 513.275287 and
+513.404419 — **0.019** and **0.027** cm⁻¹, tighter than the norm-conserving case's 0.05,
+which is not a claim about the physics: both are the same `dq = 0.01` radial-table floor
+landing on different sides of it. The acoustic residue is 6.1 and 6.2 cm⁻¹ against the
+norm-conserving 4.1, and the raw force-constant sum is below 2e-4 Ry/bohr².
+
+**Four terms, and every one of them switches itself off when `S` is the identity** —
+which is the regression that guards the whole phase, since the norm-conserving silicon
+and aluminium cases have to come out unchanged to round-off:
+
+- **The source term is `(dH/du - eps dS/du)|psi>`.** `dvqpsi_us_only` builds it from
+  `deff = deeq - et qq` (`compute_deff`) and not from `deeq`. Worth little on its own —
+  0.9% on the response density — and wrong to leave out.
+- **The first-order state has an occupied block the solve does not produce.**
+  `orthogonalize`'s projector makes `dpsi` orthogonal to the occupied manifold in the
+  `S` metric, but the physical first-order state is not: the constraint it satisfies is
+  `<psi + dpsi|S(u + du)|psi + dpsi> = 1` and `S` has moved. `orthogonality_states`
+  is `-1/2 sum_m psi_m <psi_m|dS/du|psi_n>` (`compute_drhous`), and the check on it is
+  an *identity*: the first-order constraint residual is **1.6e-16** against a `dS/du` of
+  6.7e-2.
+- **The mixed state changes at frozen states** (`drho.f90`: "the change of the charge
+  density due to the displacement, at fixed wavefunctions; the orthogonality part is
+  included"). It is one `jvp` of the raw mixed-state builders along `(e_i, dpsi^ort)`,
+  and it is consumed in **two** places — it screens inside the self-consistent loop, and
+  it enters the assembly, where the builder generates its own half so only the rest is
+  handed in.
+- **The multipliers move, and as a matrix.** `d_Lambda d_j L = -<psi|dS/du_j|psi>`
+  vanishes identically when `S` is the identity, and that — not a missing routine — is
+  the whole of why P25 was norm-conserving. Written with a *diagonal* multiplier the
+  functional stops being invariant under a unitary mixing of the occupied states, while
+  the state tangent is only defined up to exactly such a mixing; the sum rule stops at
+  1.7e-2 Ry/bohr² whatever else is switched on. `dLambda_mn = w_n[<psi_m|dH|psi_n> -
+  1/2 (eps_m + eps_n) S'_mn]` — the `1/2 (eps_m + eps_n)` and not `eps_n`, which is
+  `born.py`'s expression and is right *there* because a field leaves `dpsi` orthogonal
+  to the occupied manifold. **Two independent formulations were built and agree to the
+  last digit** on the residual they left: the hermitian gauge with a matrix `dLambda`,
+  and the perturbation-theory gauge with a diagonal one, which is what said the gauge
+  machinery was finished and the remaining error was elsewhere.
+
+**Two bugs found on the way, and neither is an ultrasoft term.**
+
+- **`addcore` was missing, for every dataset.** `_bare_displacements` builds the source
+  at a *frozen* `v_scf`, which is right for the local potential and the projectors and
+  wrong for `v_xc`: `rho_core(r - tau)` travels with its atom, so the exchange-correlation
+  potential changes at a frozen valence density. QE keeps it as `drhoc` and hands it to
+  `dv_of_drho`; here it is one `jvp` of the potential through `at_positions` at a fixed
+  density. **Every committed phonon case before this had no core charge** — `Si.pz-vbc`
+  and `Al.pz-vbc` are `core_correction="false"` — so a norm-conserving dataset *with*
+  one had the same bug and nothing could see it. Leaving it out put the response density
+  **45%** away from a finite difference of re-converged densities and the optical mode at
+  785 cm⁻¹.
+- **`addusforce` was missing from the differentiated gradient.** P25 hands the density to
+  `frozen_energy` as a frozen array, which is right for a norm-conserving run — `rho` has
+  no explicit position dependence there — and for an ultrasoft one deletes the
+  augmentation charge's own force. The gradient being differentiated was then not the
+  force: measured on displaced ultrasoft silicon, `-grad` gives **0.0198** against
+  `compute_forces`' **0.0752**.
+
+**And the term the sum rule could not see.** With all of the above the acoustic sum rule
+held and a whole column of the force constants was still at **0.26** of a
+finite-differenced one — P28a's lesson exactly, that an atom-sum is blind to a transfer
+*between* atoms. The missing piece is the density's **cross derivative**
+`d^2 rho / du dpsi . dpsi`: the augmentation charge's position dependence applied to the
+state response, which is `addusdynmat`/`drhodvus`. It exists only when both tangents are
+in the *same* `jvp`, and P28's `wg`/`wk` weight split had deliberately put them in two.
+So for an ultrasoft dataset the assembly is **one** `jvp` again — which is exactly why an
+ultrasoft **metal** is refused: there the two weights differ and the split cannot be
+undone. Feeding the assembly an *exact* rigid translation, where every tangent is known
+in closed form, is what isolated it: the norm-conserving functional returned 0 and the
+ultrasoft one returned 0.494106, term by term in `local`, `hartree` and `xc`.
+
+**Validation, in the order it was used.** The constraint identity on `ort` (1.6e-16); the
+source term against a finite difference (1.7e-8); the response density against a central
+difference of re-converged SCF densities on a small `nosym` cell (**2.3e-5**, with a
+norm-conserving control at 6.6e-6); the acoustic sum rule, which caught three bugs at 758,
+99 and 7 cm⁻¹ and then went quiet; a finite difference of the *forces*, which caught the
+two it could not (**2.6e-4** on a column of 0.371); and finally `ph.x`.
+
+**The strain response does not have the same hole, and checking rather than assuming
+is the point.** `strain.py`'s screening `jvp` is the phonon loop's, so the suspicion was
+natural; but its *bare* perturbation is not. `_bare_strains` rebuilds the potential from
+the moved cell inside the traced function -- `moved.potential(density).v_scf`, where
+`at_strain` has already rebuilt `rho_core` -- so the core charge's deformation is
+differentiated there, in the one place the phonon path had frozen it
+(`_bare_displacements` takes `v_scf` as an argument and holds it). Same omission, two
+coordinates, and only one of them had it.
+
+**Refused:** an ultrasoft or PAW **metal**, by name. The strain response, the elastic
+constants, electrostriction and the Raman tensor still refuse ultrasoft and PAW through
+`require_norm_conserving`, which is unchanged — each adds a `dbecsum` term of its own in
+the strain coordinate on top of what this phase writes.
+
+
+### P39a — PAW Born charges: two candidates, both measured, both rejected. 📋 OPEN.
+
+**Where it stands.** Everything in `born.py` works for a PAW dataset up to **1.3e-3**
+(-0.078293 against the vendored `ph.x`'s -0.07961), where the ultrasoft case of the same
+assembly reaches 8e-6 and the norm-conserving one is exact to every printed digit. The
+refusal stays; what is new is that the two obvious explanations are now *excluded* rather
+than untried, and the machinery to try them exists as tested functions.
+
+**Candidate 1 — QE's fifth stage, `int3_paw` against `becsumort`.** Both objects exist
+after P39: `paw_response` along the field's `dbecsum` is `int3_paw` (`efield`'s
+`internals["onecentre"]`), and `non_variational_response` gives the displacement's
+`becsumort`, constraint-verified to 1.6e-16. Contracted in this code's full-matrix
+convention the term is **0.004882** where the gap is **0.001317** — **3.7 times too
+large**, in either sign, so no sign choice lands on `ph.x`. The reading that fits is that
+the Lagrangian *already contains* it: the u-leg's orthogonality correction reaches the
+one-centre energy through the multiplier tangent `d_Lambda d_j L`, which
+`_multiplier_response` builds from a perturbation that already carries `dddd_paw`.
+Adding QE's term on top would count it twice, and scaling it to fit would make the
+number a measurement of `ph.x`.
+
+**Candidate 2 — the wedge sum inside a nonlinear functional.** P36's finding says the
+*value* fed to a nonlinear functional must be the full-zone object while its *derivative*
+stays the raw wedge sum, and PAW's one-centre energy is exactly such a functional of
+`becsum`. The raw and symmetrised field responses of `becsum` differ by **19 to 46 per
+cent** on PAW silicon, so the effect is not small. Implemented (the symmetrised response
+handed over from `efield`'s loop, with the chain rule's raw tangent corrected to it) it
+moves PAW **the wrong way — 1.3e-3 to 2.8e-3** — while leaving norm-conserving silicon
+exact to every digit and ultrasoft at 1.0e-5. Reverted. The norm-conserving invariance is
+itself the useful half of the result: it confirms that for everything *linear* in the
+response, `symtensor` on the assembled tensor really does complete the wedge, which is
+the convention `born.py` was written on.
+
+**Worth knowing before the next attempt.** Silicon's `Z*` is **zero by symmetry**; the
+-0.0757 both codes print is a basis-set residue. So this comparison is between two codes'
+*errors*, and that they agree to 8e-6 for ultrasoft and to every digit for
+norm-conserving is what makes the PAW disagreement meaningful rather than noise. A polar
+PAW crystal — AlAs with a PAW dataset, against `ph.x` — would say whether 1.3e-3 on a
+residue is 1.3e-3 on a real charge, and that measurement does not exist yet.
+
+
+### P40 — Ultrasoft and PAW in the sum-over-states `chi_0`. 📋 OPEN, two findings banked.
+
+**Attempted and reverted**, because the identity it is validated by did not close and a
+half-right spectrum is worse than a refusal: with the augmentation charge in every matrix
+element and the head's dipole generalised, ultrasoft silicon's `eps_M(0)` still sits
+**2.1%** from the Sternheimer solve where the norm-conserving control on the same
+machinery sits at **0.06%** (-1.20 on 55.5 against -0.0129 on 22.3, both at 60 bands and
+`ecut_response = 8`, both in RPA against `screening="hartree"`). The refusal is unchanged.
+Two things were established and are worth more than the code that was thrown away.
+
+**Finding 1 — the `1/Omega`, and it is measurable.** `AugmentationCharge.qgm` is tabulated
+for the *density*, where `addusdens` pairs it with `becsum` and the result is a charge per
+unit volume. A matrix element `<u_i|e^{-iG.r}|u_j>` is dimensionless and carries none, so
+the table has to be multiplied by the cell volume before it can be paired with
+`<beta|psi>` — the same restoration `topology/augmentation.py` makes for the overlap
+between two k-points, and the check is `qq = Omega Q_ij(G = 0)`, which is what `s_psi`
+contracts with. Leaving it out is a factor of **265** on this silicon, and the symptom is
+an augmentation term that changes the answer by 0.008 in 55: it reads exactly like a
+dataset whose augmentation charge happens to be small. With the factor in, the residual
+halves (-2.45 to -1.20), which is how it was found.
+
+**Finding 2 — the body is not where the augmentation lives.** With the body's `Q_ij(G)`
+correct, adding the head's `q`-linear part (`adddvepsi_us`'s `dpqq` and
+`i q_kl <d(beta_l)/dk|psi>`, Eq. 10 of Dal Corso and Mauri) moves `eps_M(0)` by **0.0015**
+— nothing. So neither the body's augmentation nor the head's dipole accounts for the 1.2,
+and the next attempt should not start with either. What is *not* excluded: the pair
+density's normalisation against `sum_band`'s (the plane-wave half and the augmentation
+half were matched by the `qq` identity at `G = 0`, but never by an independent check at
+`G != 0`), and the `f_i - f_j` weight, which for an ultrasoft dataset multiplies a
+generalised density whose norm is `<psi|S|psi>` rather than `<psi|psi>`.
+
+**Kept for the next attempt** (all reverted, all reconstructible from this entry):
+`SphereAugmentation`, a gather of `Q_ij(G)` from the dense table onto the response sphere
+by Miller index; `VelocityOperator.dipole_elements`, which is
+`<m|dH/dk - eps_n dS/dk|n>` with the **column** eigenvalue -- fixed by differentiating
+`H|n> = eps_n S|n>` and projecting on `<m|`, and checkable on the diagonal against
+`band_velocities`' generalised Hellmann--Feynman term.
+
+**The validation to use is the one that worked here**: `run_absorption` in RPA against
+`dielectric_tensor(screening="hartree")` on the same states, on a small `nosym` cell
+(`si-us-nosym.in`, committed for P39) with a norm-conserving control beside it. It is
+sharp — 0.06% on the control — and it needs no reference beyond this code.
+
+
+### P41 — The strain response when `S` deforms with the cell. ✅ DONE.
+
+**What.** `strain_response` runs on ultrasoft and PAW datasets. The density response
+`drho/d(eps)` matches a central difference of *re-converged* strained SCF runs to
+**4.6e-4** (ultrasoft) and **4.7e-4** (PAW) on the (0,0) strain, against a
+norm-conserving control of 1.9e-4 on the same cell, and to 5.8e-5 / 5.7e-5 / 3.2e-5 on
+the shear. The reference needs no `ph.x` -- `ph.x` has no strain perturbation at all --
+and it is the same one P26 already used.
+
+**It is P39 in the other coordinate, plus one term of its own.** The augmentation charge
+`Q_ij(r)` is a function of the *cell*, so a homogeneous strain deforms the reciprocal-space
+table it is tabulated on where a displacement only translates it; `at_strain` already
+rebuilds `build_augmentation`, so that term is a `jvp` and not an expression. On top of it
+come P39's, transferred: the source term is `(dH/d(eps) - eps dS/d(eps))|psi>`
+(`compute_deff`); the first-order state has an occupied block the solve does not produce;
+the mixed state changes at frozen states, which for a strain was *already* carried
+(`_frozen_density_response`) and now carries its `becsum` too; and PAW's one-centre
+response is mixed beside `dvscf`, which needed a rank-2 `PAW_dusymmetrize`
+(`BecsumSymmetry.apply_strain` -- **not** two applications of the vector case, which would
+average over the group twice).
+
+**A suspicion checked and dismissed, which is why P39's `addcore` note here was wrong.**
+The phonon loop froze `v_scf` in its bare perturbation and so never saw the core charge
+move; `_bare_strains` rebuilds the potential from the *moved* cell inside the traced
+function, where `at_strain` has already rebuilt `rho_core`, so the strain coordinate had
+the term all along. Same omission, two coordinates, one of them clean.
+
+**Still refused:** the strain *derivatives* -- deformation potentials' consumers, elastic
+constants, electrostriction and the Raman tensor -- on ultrasoft and PAW. They stand on
+P26's second-order functional `F`, which is norm-conserving in three places that a lift
+has to write rather than inherit: `_project_conduction` is `1 - sum |psi><psi|` where the
+`S` metric wants `1 - sum |psi><psi| S`; the multiplier term contracts `<u_i|u_j>` where
+it wants `<u_i|S|u_j>`; and its `raw_density` passes an **empty** `becsum` literally
+(`electrostriction.py:341`), which is what a Raman run on an ultrasoft dataset raises on
+today. PAW adds a fourth: the one-centre energy is a second nonlinear functional of
+`becsum`, so `F` gains a one-centre screening term beside the grid one.
+
+### P42 — An ultrasoft spin spiral. 📋 OPEN, attempted and reverted, four findings banked.
+
+**Reverted rather than shipped**, because the identity that discriminates did not close:
+`E(q + G) = E(q)` came out **5.9e-3 Ry** against a norm-conserving control of
+**9.6e-13** on the same script and the same cell. What was learned is worth more than the
+code.
+
+**Finding 1 -- `spinor_becsum` used one sphere's projectors for both components.** It
+takes `vkb` as `(nk, npwx, nkb)` and contracts `"gc,bag->bac"`, applying the *same*
+projector to the up and down halves of the spinor. For a spiral they live at `k + q/2`
+and `k - q/2`, so the down component was projected on the wrong sphere. It is the same
+class of bug `_project` avoids in the Hamiltonian, and the fix is one einsum
+(`"agc,bag->bac"` on a paired `(nk, 2, npwx, nkb)`).
+
+**Finding 2 -- the transverse table, and where its phase goes.** The cross-spin block of
+`becsum` pairs the two spheres, so its augmentation charge lives at `G + q` rather than
+`G`: a second `build_augmentation` with a cartesian `shift`. Whether the structure factor
+moves with the shift or stays at `G` is **not** decidable on a cell whose atom is at the
+origin -- both give the identical energy -- which is why the O chain used here could not
+settle it and a two-atom cell is needed.
+
+**Finding 3 -- the assembly, and its sign.** `becsum` is hermitian under exchanging its
+two `(channel, spin)` labels, so the down-up block is the conjugate of the up-down one
+and the pair is one complex field: `A(G) = sum Q_ij(G + q) (becsum_x - i becsum_y)_ij`,
+giving `m_x <- Re A(r)` and `m_y <- -Im A(r)`, with `newd`'s partner the same way round.
+The sign is settled rather than guessed: flipping it degrades `E(-q) = E(q)` from
+**1.4e-14** to **4.6e-7** and periodicity from 5.9e-3 to 2.5e-2.
+
+**Finding 4, and it is the one to carry -- `q = 0` is blind to all of this.** A spiral at
+`q = 0` reproduces the ordinary noncollinear ultrasoft total energy to **0.0e+00 Ry**,
+which reads as a complete validation of the two-sphere machinery and is not one: at
+`q = 0` the moment lies along `z`, so `m_x = m_y = 0` and the transverse assembly is
+never evaluated. It is a gate worth having -- it does check `becsum`'s pairing, `s_psi`,
+`newd` and `addusdens` -- but it cannot see the term the phase actually lives in. The
+identity that can is periodicity, and it is cheap.
+
+**For the next attempt:** the sign and the layout above are settled; what is missing is a
+term that periodicity sees and `E(-q) = E(q)` does not. Use a **two-atom** spiral cell so
+that the structure factor's placement is observable, and put the periodicity identity
+first rather than last. PAW is a further step again: its transverse one-centre term needs
+Elk's `zqss = e^{-i q.tau/2}` inside the radial quadrature.
+
+
+### P43 — The second-order energy with a moving overlap, and its third derivative. ✅ DONE.
+
+**What landed.** P26's variational second-order energy `F` -- the object the elastic
+constants, electrostriction, the elasto-optic tensor and P35's Raman tensor all stand on
+-- is now exact on all three pseudopotential kinds. The check is the identity that
+already pinned it for norm-conserving silicon: `F` at its stationary point is
+`dielec.f90`'s single overlap, so `_epsilon_at` must reproduce `dielectric_tensor`'s
+`epsilon`.
+
+| | `F` route | `dielec.f90` | relative |
+|---|---|---|---|
+| norm-conserving | 56.29287520 | 56.29287515 | 8.4e-10 |
+| **ultrasoft** | 61.52645643 | 61.52645641 | **3.4e-10** |
+| **PAW** | 61.45827346 | 61.45827346 | **6.9e-11** |
+
+**Four terms, found on a staircase — 21% → 2.2e-3 → 1.6e-4 → 3.4e-10** — and each is
+identically zero when `S` is the identity:
+
+- **`becsum` inside the functional's own density.** `raw_density` passed an empty tuple
+  *literally* (`moved.augmented(..., ())`), which is what a Raman run on an ultrasoft
+  dataset raised on: the augmentation charge is part of `rho` and was simply absent.
+  `ddd_paw` in its Hamiltonian is the same omission one level over.
+- **The `S` metric in the projector and the multiplier.** `<u_i|u_j>` becomes
+  `<u_i|S|u_j>`, and "orthogonal to the occupied manifold" is a statement about the
+  metric. Worth the first and biggest step, 21% → 2.2e-3.
+- **A state and a right-hand side take *different* projectors**, and collapsing them is
+  worth 2.2e-3 → 1.6e-4. `orthogonalize` builds `P_c^+ = 1 - sum S|psi><psi|` for the
+  *source* of a Sternheimer equation; what makes a *state* orthogonal to the occupied
+  manifold is `P_c = 1 - sum |psi><psi| S`. They coincide at `S = 1`, which is why one
+  expression served both. The consequence reached the callers: `raman_tensors` and
+  `electrostriction` pre-projected `b` and `u` with the state form before handing them
+  over, which for an ultrasoft dataset *undoes* the right one -- they hand both over
+  unprojected now and `F` projects each correctly itself.
+- **PAW's one-centre screening**, 1.6e-4 → 6.9e-11 on PAW. Its one-centre energy is a
+  second, independent nonlinear functional of `becsum`, so the second-order energy has a
+  one-centre `1/2 dx K dx` beside the grid one -- `PAW_dpotential` contracted against the
+  `becsum` response rather than added to a potential.
+
+**And the third derivative closed too, with two tangents that are only right
+together.** The Raman tensor -- one `jvp` of that same `F` -- was **3.0e-2** (ultrasoft)
+and **3.2e-2** (PAW) from a central difference of `epsilon` over re-converged *displaced*
+cells, where the norm-conserving control on the same script is **6.8e-4**. It is
+**1.2e-4** (ultrasoft) and **1.2e-4** (PAW) now, tighter than the control, which does not
+move by a single digit -- both terms are identically zero when `S` is the identity, and
+that bit-identity is the check that the plumbing is right.
+
+**What found them is a decomposition, not a guess.** `d(eps)/d(tau)` is a total derivative
+of `F(geometry, psi, rho, b, u)`, so it is the sum of five partials and **each one can be
+measured on its own** -- analytically as the `jvp` with one tangent non-zero, and by
+finite difference as `[F(A(+h), rest frozen) - F(A(-h), rest frozen)]/2h` with `A` taken
+from a re-converged run (`psi(±h)` aligned onto `psi(0)` by the unitary polar factor of
+their overlap, with `b` and `u` rotated by the same matrix, which is legitimate exactly
+because `F` is invariant under that rotation -- the `Tr(Lambda Ov)` order above). Three
+partials agreed to 7e-4 and two did not:
+
+| | analytic | finite difference | |
+|---|---|---|---|
+| geometry | -29.7019 | -29.7012 | ✅ |
+| `psi` | -0.5308 | **+0.6274** | ❌ |
+| `rho` | +7.9261 | +7.9257 | ✅ |
+| `b` | -44.7790 | **-47.9855** | ❌ |
+| `u` | 0 (frozen) | +0.0984 | envelope residue |
+
+- **The state tangent is `P_c dpsi + ort`.** With `S` moving the orthonormality
+  constraint fixes a piece of the first-order state that the Sternheimer solve does not
+  produce, and it is P39's occupied block. Alone it gives +0.5856 against the measured
+  +0.6274 -- right -- while making the *total* worse, 3.0e-2 to 8.0e-2, which is what the
+  previous pass measured and read as an exclusion.
+- **`b` is not the solution of its own linear equation.** `dvpsi_e` solves for
+  `P_c r|psi>` and then `adddvepsi_us` applies `S` to it and adds the augmentation
+  dipole (Dal Corso and Mauri Eq. 10), whose `beta`, `qq`, `dpqq` and `d(beta)/dk` all
+  travel with their atom. So `db` is the tangent of a **composition**, and the frozen
+  solution the differentiated residual is written about is `commutators`, not `b`. With
+  the tail and the corrected state tangent the `b` partial is -48.0123 against the
+  measured -47.9855.
+
+**A third thing had to change for either to be reachable**: `VelocityOperator.projectors`
+read the atoms with `np.asarray(positions)`, so `d(beta)/dk` about the atom's own centre
+was **not differentiable in the geometry at all** -- the term simply vanished from any
+derivative taken through it, silently.
+
+**Checked past the one column that found it.** Atom 1 agrees with its own finite
+difference to 1.2e-4 as well and the translational sum rule holds at 9.7e-15 of the
+scale, which is the check that is *not* an atom-sum's blind spot; and on the symmetric
+`si-epsilon-us.in` the tensor comes out exactly zincblende (forbidden components 3.9e-16)
+with a sum rule at 5.8e-16, so the symmetry-reduced path works too.
+
+**The `u` partial is left frozen and is the envelope residue**, 0.098 of 69. It is inside
+the O(h^2) noise of the decomposition itself (the five finite-difference partials sum to
+-69.035 against the total's -69.194), and the end-to-end 1.2e-4 is the authority.
+
+**Still refused**, by name: the *strain*-coordinate third derivatives -- the elastic
+constants, electrostriction and the elasto-optic tensor -- on ultrasoft and PAW. They
+share `_position_response` with the Raman tensor and would inherit its tail, but neither
+the occupied block's analogue under a strain nor the tail's behaviour there has been
+measured, and P43's own lesson is that one of these terms alone is worse than neither.
+The *strain response* (P41), the *dynamical matrix* (P39) and now the *Raman tensor* are
+implemented on all three kinds.
+
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

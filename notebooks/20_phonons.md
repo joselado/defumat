@@ -38,6 +38,7 @@ constant of notebook 19, and the same cause. The acoustic residue is *not* a tar
 
 
 ```python
+import tempfile
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -327,40 +328,72 @@ symmetrises it as a vector"), met for the first time in a **second** derivative.
 The control that located it was free: the `nosym` run, which symmetrises nothing at all,
 satisfied the sum rule to 4e-5 the whole time.
 
-## 7. What is refused
+## 7. Ultrasoft and PAW, and what is still refused
 
-Ultrasoft and PAW, and not because a routine is missing. The identity in the header holds
-because $L$ is stationary in $\psi$ at *fixed* multipliers, and those multipliers sit on the
-constraint $\langle\psi|S(u)|\psi\rangle = 1$. Differentiating twice leaves a term in
-$d\varepsilon/du$ that vanishes identically when $S$ does not move with the atoms — a
-norm-conserving dataset — and does not otherwise. The augmentation charge moves at frozen
-`becsum` besides.
+This section used to be a refusal. The identity in the header holds because $L$ is
+stationary in $\psi$ at *fixed* multipliers, and those multipliers sit on the
+constraint $\langle\psi|S(u)|\psi\rangle = 1$; differentiating twice leaves a term that
+vanishes when $S$ does not move with the atoms and does not otherwise. Writing that term
+— and the three that come with it — is P39, and the numbers below are the whole of it.
 
-With the guard lifted, ultrasoft silicon's optical mode comes out at **−504.3 cm⁻¹**
-against `ph.x`'s **+513.3**: imaginary where the crystal is stable, from a run that
-converges cleanly and gives a matrix that is cubic and symmetric to $10^{-16}$. That is
-what a refusal is for.
+| | pypresso | `ph.x` |
+|---|---|---|
+| norm-conserving | **510.102** cm⁻¹ | 510.152 |
+| **ultrasoft** | **513.295** | 513.275 |
+| **PAW** | **513.378** | 513.404 |
+
+Four things had to be supplied and **every one of them is zero when $S$ is the
+identity**, which is what keeps the norm-conserving number above unchanged to
+round-off:
+
+- the source term is $(\mathrm{d}H/\mathrm{d}u - \varepsilon\,\mathrm{d}S/\mathrm{d}u)|\psi\rangle$ — QE's `compute_deff`;
+- the first-order state has an occupied block the Sternheimer solve does not produce,
+  $-\tfrac12\sum_m |\psi_m\rangle\langle\psi_m|\mathrm{d}S/\mathrm{d}u|\psi_n\rangle$;
+- the mixed state changes at *frozen* states, because the augmentation charge and the
+  projectors travel with their atom;
+- the multipliers move, **as a matrix** — a diagonal one is not invariant under the
+  occupied-manifold rotation the state tangent is free in.
+
+**Two of the bugs found on the way were not ultrasoft bugs at all.** The response loop
+froze $v_{xc}$, so the core charge travelling with its atom was never seen (QE's
+`addcore`) — and no committed phonon case has a core correction, so a *norm-conserving*
+dataset with one was wrong too. And the density was handed to the energy as a frozen
+array, which for an ultrasoft dataset deletes `addusforce`: what was being
+differentiated was not the force.
+
+What is still refused is one *combination* rather than a dataset — an ultrasoft or PAW
+**metal**, because the `wg`/`wk` weight split of section 5 was derived for a response
+whose whole `becsum` dependence sits inside `dpsi`, and an insulator cannot say which
+weight the three new tangents belong with.
+
 
 
 ```python
-# The refusal reaches the bound method exactly as it reaches the function: a
-# facade that swallowed it would be a facade that broke the promise.
-us = Calculator.from_file(CASES / "si-epsilon-us.in", pseudo_dir=PSEUDO,
-                          announce=False)
+# The refusal that is left, and it reaches the bound method exactly as it
+# reaches the function: a facade that swallowed it would break the promise.
+smeared = (CASES / "si-epsilon-us.in").read_text().replace(
+    "    ecutwfc = 20.0", "    occupations = 'smearing'\n    degauss = 0.02\n"
+    "    ecutwfc = 20.0")
+deck = Path(tempfile.mkdtemp()) / "si-epsilon-us-metal.in"
+deck.write_text(smeared)
 try:
-    dynamical_matrix(us.calculation, None, np.zeros((1, 1, 1)), None)
+    dynamical_matrix(Calculator.from_file(deck, pseudo_dir=PSEUDO,
+                                          announce=False).calculation,
+                     None, np.zeros((1, 1, 1)), None)
 except NotImplementedError as refusal:
     print(refusal)
+
 ```
 
-    the dynamical matrix with an ultrasoft or PAW pseudopotential is not implemented: the overlap operator moves with the atoms, so the orthonormality multipliers contribute a term of their own to the second derivative, and the augmentation charge Q_ij(r - tau) moves at frozen becsum (addusdynmat, drhodvus). Without them the norm-conserving expression gives ultrasoft silicon -504.3 cm^-1 against ph.x's +513.3 -- imaginary where the crystal is stable -- while converging cleanly and coming out cubic. The dielectric constant from the same solver is unaffected and is right for these datasets
+    the dynamical matrix of a *metal* with an ultrasoft or PAW pseudopotential is not implemented: the wg/wk weight split of PLAN.md P28 was derived for a response whose becsum dependence is entirely inside dpsi, and an ultrasoft one has three further tangents (dpsi^ort, becsumort, dLambda) whose weight an insulator cannot distinguish. Insulators are implemented on all three pseudopotential kinds; a norm-conserving metal is too
 
 
 ---
 
-**Where the detail lives.** `PLAN.md` §3, phases P25 and P28 — the derivation, the two
-symmetrisations, the traps and every refusal with the number behind it. The tests are
-`tests/regression/test_phonons.py`; the code is `pypresso/response/phonon.py`.
+**Where the detail lives.** `PLAN.md` §3, phases P25, P28 and **P39** — the derivation,
+the two symmetrisations, the traps and every refusal with the number behind it. The
+tests are `tests/regression/test_phonons.py`; the code is
+`pypresso/response/phonon.py`.
 
 **What is left.** This is $\Gamma$ only. A phonon at $q \neq 0$ needs the perturbed states
 at $k + q$ as well as at $k$ — two plane-wave spheres per k-point, which is machinery the

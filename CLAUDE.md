@@ -139,8 +139,20 @@ already gives the force. Silicon's optical mode is **510.102 cm⁻¹** against t
 `ph.x`'s 510.152, checked three further ways that share nothing with the assembly: a rigid
 translation reproduces `-drho/dx` to 6.5e-5, finite-differenced forces reproduce whole
 columns of the matrix to 2.1e-5 Ry/bohr², and the reduced wedge agrees with the whole
-closed grid to 2.7e-14. **Norm-conserving only, and refused by name otherwise**, because
-with `S` moving the orthonormality multipliers contribute a term of their own.
+closed grid to 2.7e-14. **Ultrasoft and PAW are in as of P39**: with `S` moving, the source term becomes
+`(dH/du - eps dS/du)|psi>`, the first-order state acquires an occupied block the solve
+does not produce, the mixed state changes at *frozen* states (`drho.f90`), and the
+orthonormality multipliers move as a **matrix** — a diagonal one is not invariant under
+the occupied-manifold rotation the state tangent is free in, and the sum rule says so.
+Ultrasoft silicon is **513.2947** cm⁻¹ against `ph.x`'s 513.275287 and PAW **513.3776**
+against 513.404419 — 0.019 and 0.027, tighter than the norm-conserving 0.05. Getting
+there found two bugs that are **not** ultrasoft terms: `addcore` was missing for every
+dataset (no committed phonon case had a core charge, so a norm-conserving pseudopotential
+with one was wrong too), and `addusforce` was missing from the differentiated gradient,
+so what was being differentiated was not the force. And one the sum rule could not see —
+the density's cross derivative `d^2 rho/du dpsi`, `addusdynmat`, which needs both tangents
+in one `jvp` where P28's weight split had put them in two. An ultrasoft or PAW **metal**
+is refused for exactly that reason.
 **Electrostriction** (P26) is in, and it is the first **third** derivative of the energy
 here: `d(chi)/d(strain)` — the elasto-optic tensor, and through the thermodynamic identity
 of Tanner, Bousquet and Janolin the four electrostriction tensors `m`, `q`, `M` and `Q` —
@@ -301,8 +313,39 @@ one real gap on the way in: `run_dos` never forwarded `becsum` or `ns`, so a **P
 DFT+U density of states on a denser grid was unreachable**, stopping on `run_nscf`'s own
 refusal rather than being wrong.
 
+**The strain response is ultrasoft and PAW too** (P41): `Q_ij(r)` is a function of the
+*cell*, so a strain deforms the table where a displacement translates it, and `at_strain`
+already rebuilds it — the four terms P39 wrote transfer across, and `drho/d(eps)` matches a
+central difference of re-converged strained runs to **4.6e-4** (US) and **4.7e-4** (PAW)
+against a norm-conserving 1.9e-4. **And the functional the strain derivatives stand on is
+ultrasoft and PAW too** (P43): P26's second-order energy reproduces `dielec.f90`'s dielectric
+constant to **3.4e-10** (US) and **6.9e-11** (PAW), which took `becsum` inside its density,
+`ddd_paw` in its Hamiltonian, the `S` metric in its projector and multiplier — including
+the distinction that a *state* takes `1 - Σ|psi><psi|S` and a *right-hand side* takes
+`1 - Σ S|psi><psi|` — and PAW's one-centre screening term.
+
+**The Raman tensor is ultrasoft and PAW now as well** (P43), at **1.2e-4** against a
+finite difference of `epsilon` over re-converged displaced cells where the norm-conserving
+control is 6.8e-4 — and it took **two tangents that are only right together**, which is why
+one of them had already been measured and read as an exclusion. The state tangent is
+`P_c dpsi + ort`, P39's occupied block; and **`b` is not the solution of its own linear
+equation**, because `dvpsi_e` solves for `P_c r|psi>` and `adddvepsi_us` then applies `S`
+and adds the augmentation dipole, so `db` is the tangent of a *composition* and the frozen
+solution the residual is written about is `commutators`, not `b`. Either alone is worse
+than neither (3.0e-2 → 8.0e-2 for the block, 2.1 apart for the tail); both together land
+on the finite difference. What found them is that **`d(eps)/d(tau)` is a sum of five
+partial derivatives and each can be measured against its own finite difference** — three
+agreed to 7e-4 and two did not, which localised the bug instead of guessing at it. A third
+thing had to change before either was reachable: `VelocityOperator.projectors` read the
+atoms with `np.asarray`, so `d(beta)/dk` about the atom's own centre was not
+differentiable in the geometry at all and the term vanished silently. The **strain**
+coordinate's third derivatives — elastic constants, electrostriction, the elasto-optic
+tensor — stay norm-conserving: they share `_position_response` and would inherit its tail,
+but the occupied block's analogue under a strain has not been measured, and this phase's
+lesson is that one of the pair alone is worse than neither.
+
 **Outstanding:** Wyckoff input, the dynamical matrix of an
-ultrasoft dataset, PAW Born charges, `chi^(2)` and the electro-optic tensor (the second-order
+ultrasoft or PAW *metal*, PAW Born charges, `chi^(2)` and the electro-optic tensor (the second-order
 response `solve_e2` is, which P35 refuses for), the **non-analytic LO-TO term**
 (`rigid.f90`'s `nonanal`, whose two ingredients — `Z*` and `eps` — are both here),
 phonons at `q != 0` (the perturbed states live
@@ -365,10 +408,10 @@ potential, the exchange-correlation functional and the symmetrisation are untouc
 all the new physics is in the spinors and in `D_ij` becoming a complex 2x2 matrix in spin
 space. Non-collinear *magnetism* (`nspin_mag = 4`) is complete and validated as of P17:
 `sym_rho` rotates the magnetization as an axial vector, the magnetic symmetry group keeps
-the operations that need time reversal, and `gradcorr` runs in the local spin frame. The one
-piece still refused is `PAW_gcxc_potential` with a magnetization — PAW plus a GGA plus
-`nspin_mag = 4` — because the radial local-frame rotation (`compute_rho_spin_lm`) is a
-second implementation rather than a call into the plane-wave one.
+the operations that need time reversal, and `gradcorr` runs in the local spin frame. `PAW_gcxc_potential` with a magnetization — PAW plus a GGA plus `nspin_mag = 4` — is in
+as of P33: the radial local-frame rotation calls into the plane-wave one rather than
+restating it, and the rotated channels' multipoles are recomputed by quadrature, because
+the rotation runs through `|m|` and is not linear in the stored components.
 
 **Magnetic fields and constrained moments are in scope and implemented** (P18):
 `pypresso/scf/fields.py` and `scf/locals.py`. A uniform field over the cell (QE's

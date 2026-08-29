@@ -217,3 +217,66 @@ def test_bismuthene_parity_invariant_is_well_formed_and_reproducible():
         assert int(np.sum(values < 0)) % 2 == 0
     assert set(result.deltas.values()) == {-1}
     assert result.nu0 == 0
+
+
+# --- PAW: the one-centre coefficients have to cross with the density --------
+
+@lru_cache(maxsize=2)
+def _converged_result(name: str):
+    """The whole :class:`SCFResult`, not just its density.
+
+    ``becsum`` is the part of the mixed state a fixed-density run cannot
+    rebuild, so the PAW tests below need the result object rather than
+    :func:`converged`'s density alone.
+    """
+    system = build_system(read_pw_input(CASES / name))
+    pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
+    return system, pseudos, run_scf(system, pseudos, conv_thr=1.0e-10)
+
+
+def test_a_paw_source_without_becsum_is_refused():
+    """The refusal that replaced the blanket one, and it is the useful half.
+
+    ``ddd_paw`` is a function of ``becsum``, which is a property of the
+    *wavefunctions*: a source handed only the density would build a PAW
+    Hamiltonian missing its one-centre coefficients, converge cleanly, and give
+    eigenvalues wrong by tenths of an eV -- which for an invariant means an
+    integer that is still an integer and no longer the crystal's.
+    """
+    system, pseudos, result = _converged_result("si2-paw.in")
+    with pytest.raises(NotImplementedError, match="becsum"):
+        DFTSource(system=system, pseudos=pseudos, density=result.density,
+                  nocc=4).states(np.array([[0.0, 0.0, 0.0]]))
+
+
+def test_a_paw_fixed_density_run_reproduces_the_scf_eigenvalues():
+    """The sharp check, and the one the refusal above names the failure mode of.
+
+    At the SCF's *own* k-points a fixed-density diagonalisation is the last SCF
+    iteration over again, so its eigenvalues must be the converged ones. The
+    error that removing ``ddd_paw`` makes is tenths of an eV -- four orders
+    above this tolerance -- so the assertion is a direct measurement of whether
+    the one-centre coefficients crossed with the density.
+    """
+    system, pseudos, result = _converged_result("si2-paw.in")
+    points = np.asarray(system.kpoints.crystal(system.cell))
+    states = DFTSource(system=system, pseudos=pseudos, density=result.density,
+                       becsum=result.becsum, nocc=4).states(points)
+
+    reference = np.asarray(result.eigenvalues)[:, :4]
+    assert np.max(np.abs(np.asarray(states.energies)[:, :4] - reference)) < 1.0e-6
+
+
+def test_a_paw_chern_number_is_an_exact_integer():
+    """Silicon is trivial, so the number is zero; that it is an *integer* is
+    the statement about the machinery.
+
+    The Fukui-Hatsugai-Suzuki sum is a lattice quantity and comes out exactly
+    integral on any mesh where the manifold is gapped -- including one whose
+    overlaps carry PAW's augmentation charge, which is what this adds to the
+    ultrasoft case already covered above.
+    """
+    system, pseudos, result = _converged_result("si2-paw.in")
+    curvature = run_berry_curvature(system, pseudos, result.density,
+                                    becsum=result.becsum, nocc=4, shape=(6, 6))
+    assert abs(curvature.chern_number) < 1.0e-8

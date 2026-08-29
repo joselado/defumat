@@ -2906,6 +2906,58 @@ the value at 8, where 8 against 2 is worth half the local-field effect. A system
 that does need it should expect the *kernel* rather than `chi_0` to be the bill,
 and its peak working set to be **2.9 GB** rather than 1.0.
 
+## What an ultrasoft or PAW phonon costs (P39)
+
+Measured on `si-epsilon-us.in` and `si-epsilon-paw.in` against `si-epsilon.in` --
+the same two-atom silicon, the same 4x4x4 shifted grid, one core.
+
+| | norm-conserving | ultrasoft | PAW |
+|---|---|---|---|
+| SCF | 1.8 s | 3.2 s | 3.8 s |
+| dynamical matrix | **37.7 s** | **77.5 s** | **90.8 s** |
+| response iterations to `tr2 = 1e-14` | 10 | 11 | 11 |
+
+**2.1x for ultrasoft and 2.4x for PAW, and it is not the linear solves.** The
+Sternheimer iteration count moves by one, and the cost of each solve is
+unchanged to within the augmentation's own `s_psi`. What the factor buys is the
+one-time work P39 adds, all of it outside the loop: `3 nat` extra `jvp` through
+`at_positions` for the overlap derivatives, `3 nat` more for the mixed state's
+own change (`drhous`), the same again for the core-charge term (`addcore`), and
+a `map_k` per mode for `dLambda`. Each of those rebuilds the projectors and the
+augmentation phases, which is what `at_positions` costs, so it is the *count* of
+those calls that matters rather than the arithmetic inside any one of them.
+
+PAW's further 17% is the one-centre response inside the loop: `3 nat`
+`PAW_dpotential` per iteration where the electric field pays for three, and each
+is a radial quadrature over every sphere.
+
+The SCF column is there for scale: the response is 20x the ground state it
+starts from, on every dataset.
+
+**The way down, when it is wanted, is the one QE already takes** -- solve one
+irreducible representation at a time rather than all `3 nat` modes, which cuts
+the one-time work by the same factor as the storage.
+
+### And what P43's third derivative adds on top of it: nothing measurable
+
+The two tangents that made the Raman tensor work on a moving overlap are both
+`jvp`s and neither is a solve. The tail on `db`
+(`efield.ultrasoft_position`) is one extra `jvp` per mode per cartesian
+direction through `at_positions` -- `9 nat` of them over the whole tensor,
+against the `3 nat` linear solves the same loop is already paying for -- and the
+occupied block is an array that `orthogonality_states` has already built for the
+dynamical matrix.
+
+Counted rather than timed, and said that way on purpose: over a whole tensor the
+tail is `9 nat` `jvp`s through `at_positions` against the `3 nat` **linear
+solves** the same loop already pays for, and the occupied block is free. **The
+memory is unchanged**, because nothing new is stored per k-point -- the tail is
+evaluated and contracted inside the `jvp`, and the peak is still the `3 nat`
+first-order states the dynamical matrix already holds. A separate before/after
+timing of `raman_tensors` has *not* been taken; the ratio above for the
+dynamical matrix is the one to reason from, since the added work is of the same
+kind and a third of the count.
+
 ## History
 
 | Date | Change | Effect |

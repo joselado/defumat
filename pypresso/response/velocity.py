@@ -230,9 +230,16 @@ class VelocityOperator:
         projectors = self.calculation.projectors
         if projectors.nkb == 0:
             return derivative
-        positions = np.asarray(self.calculation.system.structure.positions)
-        along = positions @ np.asarray(direction, dtype=float)  # tau . e_a, bohr
-        shift = jnp.asarray(along[list(projectors.atom_of_channel)])
+        # **``tau`` stays traced.** This was ``np.asarray(positions)``, which
+        # reads the atoms off the host and so silently drops them from any
+        # derivative taken *through* this expression -- and a third derivative
+        # in the displacement coordinate takes exactly that one (``PLAN.md``
+        # P43). The channel index is static and stays a Python list.
+        positions = jnp.asarray(self.calculation.system.structure.positions)
+        along = positions @ jnp.asarray(  # tau . e_a, bohr
+            direction, dtype=positions.dtype
+        )
+        shift = along[np.asarray(list(projectors.atom_of_channel))]
         return derivative + 1j * shift * projectors.vkb
 
     def both(self, psi: jnp.ndarray, direction):

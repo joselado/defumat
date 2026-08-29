@@ -59,10 +59,11 @@ drive any of this and is what the examples below use.
 | **Reaching self-consistency** — Anderson/Broyden mixing, Kerker preconditioning, or solving the residual with its own Jacobian | `run_scf(mixing_mode=...)`, `run_scf(scf_solver=...)` | `pw.x` has the mixing; the residual solver is new, and reaches solutions no mixer does |
 | **Band velocities** `d(eps)/dk`, with the nonlocal pseudopotential's own contribution — norm-conserving, ultrasoft and PAW | `band_velocities`, `VelocityOperator` | partly — `fermi_velocity.x` finite-differences eigenvalues and reports only the magnitude |
 | **Dielectric constant** `epsilon_infinity` — insulators, norm-conserving, ultrasoft and PAW — **and Born effective charges** (norm-conserving and ultrasoft; PAW refused by name) | `dielectric_tensor` | `ph.x` with `epsil = .true.` |
-| **Phonons at `Gamma`** — the force constants and their frequencies, insulators **and metals**, norm-conserving | `dynamical_matrix` | `ph.x`. Away from `Gamma`, and on ultrasoft datasets, they are refused |
+| **Phonons at `Gamma`** — the force constants and their frequencies, insulators **and metals**, on norm-conserving, **ultrasoft and PAW** datasets | `dynamical_matrix` | `ph.x`. Away from `Gamma` they are refused, and so is an ultrasoft or PAW *metal* |
+| **The strain response** `dpsi/d(eps)`, `drho/d(eps)` and the deformation potentials, on norm-conserving, **ultrasoft and PAW** datasets | `strain_response` | **new** — `ph.x` has no strain perturbation |
 | **Elastic constants** `C_ijkl` and the compliance and bulk modulus that follow, clamped-ion, insulators, norm-conserving | `elastic_constants` | **new** — nothing in `pw.x` or `ph.x` computes them |
 | **Electrostriction coefficients** `m`, `q`, `M` and `Q` — the quadratic electromechanical coupling — clamped-ion, insulators, norm-conserving | `electrostriction` | **new** — no counterpart in `pw.x` or `ph.x` |
-| **Raman tensors** `d(eps)/d(tau)` — the derivative of the dielectric tensor with respect to an atomic coordinate, insulators, norm-conserving | `raman_tensors` | partly `ph.x` (`lraman = .true.`), which refuses a gradient-corrected functional where this does not. `chi^(2)` and the electro-optic tensor are refused |
+| **Raman tensors** `d(eps)/d(tau)` — the derivative of the dielectric tensor with respect to an atomic coordinate, insulators, norm-conserving/ultrasoft/PAW | `raman_tensors` | partly `ph.x` (`lraman = .true.`), which refuses a gradient-corrected functional where this does not. `chi^(2)` and the electro-optic tensor are refused |
 | **Raman and infrared spectra** — the per-mode activities, depolarisation ratios and electronic polarizability at `Gamma`, insulators, norm-conserving | `vibrational_spectrum` | `dynmat.x`. The non-analytic LO-TO splitting is not included, so an optical triplet comes out unsplit |
 | **Optical absorption spectra with excitons** — `Im eps_M(omega)` from TDDFT, local-field effects included, on a **bootstrap** exchange-correlation kernel | `run_absorption`, `kernel = 'bootstrap'` (also `rpa`, `alda`, `lrc`, `bootstrap-1`), `ecut_response`, `scissor`, `broadening` | **new** — Elk has it (`fxctype = 210`); `pw.x` has nothing, and `TDDFPT/` is a different method with no bootstrap kernel. Needs the whole k-grid rather than a wedge |
 | **Van der Waals dispersion** — Grimme's D2 pair correction, in the energy, the forces, the stress and the elastic constants | `vdw_corr = 'grimme-d2'`, `london_s6`, `london_rcut`, `london_c6`, `london_rvdw` | `pw.x`. D3, Tkatchenko-Scheffler, MBD and XDM are refused by name |
@@ -242,6 +243,7 @@ its number. Some of the headline agreements:
 | stress | 2.7e-7 Ry/bohr³ |
 | the dielectric constant, and Born effective charges | 1.2e-4; every digit `ph.x` prints |
 | phonons at `Gamma` — silicon, and a metal | 0.05 and 0.0019 cm⁻¹ |
+| phonons at `Gamma` — ultrasoft and PAW silicon | 0.019 and 0.027 cm⁻¹ |
 | Raman and infrared activities | every digit `dynmat.x` prints |
 
 **The features marked "new" have no such reference**, since nothing can be

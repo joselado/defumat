@@ -128,8 +128,12 @@ def _epsilon_displaced(case: str, atom: int, cart: int, step: float):
     result = run_scf(system, pseudos, calculation=moved, conv_thr=1e-12,
                      max_iterations=200)
     eigenvalues, psi = refined_states(moved, result)
+    # ``becsum`` is part of the mixed state and not a function of the density,
+    # so a PAW response needs it handed over: the one-centre potential is built
+    # from it. Harmless for the norm-conserving cases, where it is ``()``.
     tensor = dielectric_tensor(
-        moved, psi, eigenvalues, jnp.asarray(result.density), born_charges=False,
+        moved, psi, eigenvalues, jnp.asarray(result.density), result.becsum,
+        born_charges=False,
     )
     return np.asarray(tensor.epsilon)
 
@@ -179,6 +183,58 @@ def test_the_raman_tensor_matches_a_finite_difference(atom):
         f"analytic {analytic[1, 2]:.6f} against finite difference "
         f"{reference[1, 2]:.6f} ({error:.2e} relative)"
     )
+
+
+#: The ultrasoft and PAW cells the finite difference is run on. They are
+#: ``nosym`` because a displaced *symmetric* cell is given a different FFT grid
+#: (``fft_fact`` follows the fractional translations), and two densities on
+#: different grids are not comparable point by point.
+MOVING_OVERLAP_CASES = ["si-us-nosym", "si-paw-nosym"]
+
+#: Measured 1.2e-4 (ultrasoft) and 1.2e-4 (PAW) against a norm-conserving
+#: control of 6.8e-4 on the same script, so the tolerance is the same one the
+#: norm-conserving cases carry -- deliberately, because the point of P43 is that
+#: a moving overlap is no longer the loose case.
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("case", MOVING_OVERLAP_CASES)
+def test_the_raman_tensor_matches_a_finite_difference_with_a_moving_overlap(case):
+    """``d(eps)/d(tau)`` on an ultrasoft and a PAW dataset (``PLAN.md`` P43).
+
+    The same end-to-end check as above, on the two dataset kinds whose overlap
+    operator moves with the atoms. It is the test for **two** tangents that are
+    only right together, and it was 3.0e-2 with either one alone:
+
+    * the state tangent is ``P_c dpsi + ort`` -- with ``S`` moving, the
+      orthonormality constraint fixes a piece of the first-order state that the
+      Sternheimer solve does not produce;
+    * ``db`` is the tangent of a *composition*, because ``b`` is not the
+      solution of its own linear equation once ``adddvepsi_us`` has applied
+      ``S`` to it and added the augmentation dipole.
+
+    Both are identically zero for a norm-conserving dataset, and the check that
+    the plumbing is right is that the norm-conserving answers above did not move
+    by a single digit.
+    """
+    _, _, calculation, result = _converged(case)
+    tensors = raman_tensors(calculation, result)
+    plus = _epsilon_displaced(case, 0, 0, FD_STEP)
+    minus = _epsilon_displaced(case, 0, 0, -FD_STEP)
+    reference = (plus - minus) / (2 * FD_STEP)
+
+    analytic = np.asarray(tensors.raman)[0, 0]
+    scale = np.abs(analytic).max()
+    assert scale > 1.0
+    error = np.abs(analytic - reference).max() / scale
+    assert error < FINITE_DIFFERENCE_TOLERANCE, (
+        f"{case}: analytic {analytic[1, 2]:.6f} against finite difference "
+        f"{reference[1, 2]:.6f} ({error:.2e} relative)"
+    )
+    # An atom-sum is blind to a transfer *between* atoms, which is how P28a's
+    # bug survived three checks -- so the second column is held to the first.
+    assert translational_residue(np.asarray(tensors.raman)) < \
+        SUM_RULE_TOLERANCE * np.abs(tensors.raman).max()
 
 
 def test_the_raman_tensors_obey_the_translational_sum_rule():

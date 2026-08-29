@@ -249,9 +249,15 @@ def require_a_sum_over_states_regime(calculation) -> None:
     ultrasoft and PAW
         ``<u_i| e^{-iG.r} |u_j>`` is not the plane-wave overlap when the charge
         is not all in ``|psi|^2``: the augmentation charge ``Q_ij(q+G)`` enters
-        every matrix element. :func:`~pypresso.topology.augmentation.
-        augmentation_at_q` already builds it, which is why this is a later
-        phase and not a wall.
+        every matrix element. **It has been tried and it does not close**
+        (``PLAN.md`` P40): with ``Q_ij(G)`` in the body -- gathered from the
+        dense table by Miller index, and multiplied by the cell volume, which
+        is a factor of 265 and was the first thing wrong -- and the head's
+        ``q``-linear ``dpqq`` term beside it, ultrasoft silicon's ``eps_M(0)``
+        is still **2.1%** from the Sternheimer solve where a norm-conserving
+        control on the same machinery is at **0.06%**. So a third term is
+        missing and the refusal stands until it is found; what is *excluded* is
+        worth as much as what is not.
     metals
         the ``f_i - f_j`` weight kills the ``i = j`` term, so the intraband
         (Drude) response is missing entirely at ``q = 0``. Elk's ``tddftlr``

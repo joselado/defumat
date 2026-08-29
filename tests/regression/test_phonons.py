@@ -457,29 +457,125 @@ def test_the_wedge_and_the_whole_grid_give_the_same_matrix():
     assert np.abs(wedge.frequencies - whole.frequencies).max() < 1e-3
 
 
+#: What the **vendored** ``ph.x`` prints for the same silicon with an ultrasoft
+#: and with a PAW dataset -- ``reference.out.ph-si-epsilon-us`` and
+#: ``reference.out.ph-si-epsilon-paw``. Both are ``core_correction="T"``, which
+#: is what first exercised ``addcore``; ``Si.pz-vbc`` is not, which is why no
+#: case before these could see it missing.
+QE_ULTRASOFT = {"si-epsilon-us": 513.275287, "si-epsilon-paw": 513.404419}
+
+
+@pytest.mark.parametrize("case", list(QE_ULTRASOFT))
+def test_the_gamma_phonon_of_a_moving_overlap_matches_quantum_espresso(case):
+    """``PLAN.md`` P39: the dynamical matrix with ``S`` moving with the atoms.
+
+    Four things go into this and every one of them switches itself off for a
+    norm-conserving dataset, which is the regression the case above guards:
+
+    * the source term is ``(dH/du - eps dS/du)|psi>`` (``compute_deff``);
+    * the first-order state has an occupied block the solve does not produce
+      (:func:`~pypresso.response.phonon.orthogonality_states`);
+    * the mixed state changes at *frozen* states -- the augmentation charge and
+      the projectors travel with their atom (``drho.f90``) -- and that change
+      both screens and enters the assembly;
+    * the multipliers are variables of the functional and move with it, as a
+      **matrix** rather than a diagonal, because the constraint is otherwise not
+      invariant under the occupied-manifold rotation the state tangent is free
+      in.
+
+    The measured agreement is **tighter than the norm-conserving case's**,
+    which is not a claim about the physics: both are the same ``dq = 0.01``
+    radial-table floor, landing on different sides of it.
+    """
+    _, _, phonons = _phonons(case)
+    assert phonons.converged
+    optical = np.sort(phonons.frequencies)[3:]
+    assert optical.max() - optical.min() < 1e-4
+    assert optical[0] == pytest.approx(QE_ULTRASOFT[case], abs=OPTICAL_TOLERANCE)
+
+
+@pytest.mark.parametrize("case", list(QE_ULTRASOFT))
+def test_a_moving_overlap_keeps_the_acoustic_sum_rule(case):
+    """The diagnostic that found every bug in this phase, one at a time.
+
+    It caught the core-charge term at 758 cm^-1, the multipliers' gauge at 99
+    and the augmentation force at 7 -- and then stopped, which is the point at
+    which the *other* check had to take over: the sum rule is an atom-sum and is
+    blind to a transfer between atoms, which is what
+    :func:`test_the_force_constants_of_a_moving_overlap_reproduce_a_finite_difference`
+    is for (``PLAN.md`` P28a).
+    """
+    _, _, phonons = _phonons(case)
+    assert phonons.acoustic_residue < ACOUSTIC_CEILING
+    matrix = np.asarray(phonons.matrix)
+    assert np.abs(matrix.sum(axis=2)).max() < 2.0e-4
+
+
+def test_the_force_constants_of_a_moving_overlap_reproduce_a_finite_difference():
+    """The check that is **not** an atom-sum, on an ultrasoft dataset.
+
+    ``PLAN.md`` P28a's lesson and this phase's: the acoustic sum rule and the
+    rigid-translation test are both sums over atoms, so an error that *moves*
+    force constants between atoms leaves both intact. Two of the four bugs in
+    this phase were exactly that shape -- the augmentation charge's own force
+    (``addusforce``, missing from the differentiated gradient) put a whole
+    column at 0.26 of its true value with the sum rule holding throughout, and
+    the cross term ``d^2 rho / du dpsi`` at 1.3 with the same silence. A
+    finite difference of the *forces*, which are validated independently for an
+    ultrasoft dataset (P15), is what sees them.
+
+    Run on the small ``nosym`` cell so that the displaced calculation keeps the
+    undisplaced one's FFT grid: with symmetry on it would be given a different
+    one and the two force sets would not be comparable.
+    """
+    system, pseudos, calculation = _build("si-us-nosym")
+    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12,
+                     max_iterations=100)
+    phonons = dynamical_matrix(calculation, result.wavefunctions,
+                               result.eigenvalues, result.density, result.becsum)
+    positions = np.asarray(system.structure.positions)
+    step, forces = 5.0e-3, []
+    for sign in (+1, -1):
+        moved = positions.copy()
+        moved[0, 0] += sign * step
+        shifted = eqx.tree_at(lambda s: s.structure.positions, system,
+                              jnp.asarray(moved))
+        other = Calculation(shifted, pseudos)
+        state = run_scf(shifted, pseudos, calculation=other, conv_thr=1e-12,
+                        max_iterations=100)
+        forces.append(np.asarray(compute_forces(other, state).forces))
+    difference = -(forces[0] - forces[1]) / (2 * step)
+    column = np.asarray(phonons.matrix)[0, 0]
+    assert np.abs(column - difference).max() < 1.0e-3
+
+
 # ---------------------------------------------------------------------------
 # What is refused, and by name.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("case,expected", [
-    ("si-epsilon-us", "ultrasoft or PAW"),
-    ("si-epsilon-paw", "ultrasoft or PAW"),
-])
-def test_ultrasoft_and_paw_are_refused(case, expected):
-    """Not a missing routine but a term missing from the formula.
+def test_an_ultrasoft_metal_is_refused(tmp_path):
+    """What is left of P25's norm-conserving restriction, and it is one
+    combination rather than one dataset.
 
-    The identity the assembly rests on holds because the frozen energy is
-    stationary in the states at *fixed* Lagrange multipliers, and those
-    multipliers sit on the constraint ``<psi|S(u)|psi> - 1``. When ``S`` moves
-    with the atoms the second derivative acquires a term in ``deps/du`` that is
-    identically zero for a norm-conserving dataset; and the augmentation charge
-    moves at frozen ``becsum`` besides. The measured cost of ignoring both is in
-    ``PLAN.md`` P25 -- and, as with ``zstar_eu_us``, it is invisible in the
-    answer, which comes out looking like an ordinary phonon spectrum.
+    ``_state_weights``' split between ``wg`` and ``wk`` was derived for a
+    response whose whole ``becsum`` dependence sits inside ``dpsi``. With ``S``
+    moving there are three further tangents -- the orthogonality block,
+    ``becsumort`` and ``dLambda`` -- and which weight each belongs with is a
+    question an insulator cannot answer, because there the two weights are
+    equal. Refused rather than guessed.
     """
-    system, pseudos, calculation = _build(case)
-    with pytest.raises(NotImplementedError, match=expected):
-        dynamical_matrix(calculation, None, jnp.zeros((1, 1, 1)), None)
+    text = (CASES / "si-epsilon-us.in").read_text().replace(
+        "    ecutwfc = 20.0", "    occupations = 'smearing'\n    degauss = 0.02\n"
+        "    ecutwfc = 20.0"
+    )
+    deck = tmp_path / "si-epsilon-us-metal.in"
+    deck.write_text(text)
+    system = build_system(read_pw_input(deck))
+    pseudos = tuple(read_upf(PSEUDO / sp.pseudo_file)
+                    for sp in system.structure.species)
+    with pytest.raises(NotImplementedError, match="metal"):
+        dynamical_matrix(Calculation(system, pseudos), None,
+                         jnp.zeros((1, 1, 1)), None)
 
 
 def test_a_spin_polarized_calculation_is_refused():
