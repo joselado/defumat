@@ -61,6 +61,51 @@ SLAB = BENCHMARKS / "al-slab.in"
 
 
 @lru_cache(maxsize=None)
+@lru_cache(maxsize=1)
+def _kicked_iron():
+    """The iron saddle, and it displaced by ``KICK`` along the magnetization.
+
+    **Both tests below start here rather than from the input's own
+    ``starting_magnetization``**, and that is the difference between a
+    demonstration and a knife edge. From the bare 0.05 seed which root an
+    *unpreconditioned* inexact Newton reaches is decided by round-off: measured
+    on this machine, the same commit gives ``M = -3.4050`` with the default
+    thread pool and ``M = -0.0003`` -- the saddle -- under
+    ``OMP_NUM_THREADS=1``, because a different reduction order is a different
+    perturbation and the seed is small enough for that to choose. From the
+    kicked state, which is a *measured* distance outside the saddle's basin,
+    both arithmetics give -3.405 and -3.405.
+
+    Returns ``(system, pseudos, saddle, kicked)``.
+    """
+    system, pseudos, calculation, _ = _setup(IRON)
+
+    # The saddle itself: a spin-symmetric density, which the SCF map preserves
+    # exactly -- nothing in it breaks spin symmetry on its own.
+    rho = np.asarray(calculation.starting_density())
+    symmetric = jnp.asarray(
+        np.repeat(rho.mean(axis=0, keepdims=True), rho.shape[0], axis=0)
+    )
+    saddle = run_scf(system, pseudos, calculation=Calculation(system, pseudos),
+                     conv_thr=1e-8, max_iterations=200,
+                     starting_density=symmetric)
+    assert saddle.converged
+    assert abs(float(saddle.magnetization)) < 1e-6
+
+    # Kick it along the magnetization direction. Both the **shape** and the
+    # **size** of the kick matter, and measuring them is what made this
+    # reproducible -- see the docstring of the test below.
+    atomic = np.asarray(calculation.starting_density())
+    shape = atomic[0] - atomic[1]
+    shape = shape / np.abs(shape).max()
+    density = np.asarray(saddle.density)
+    kick = KICK * shape
+    kicked = jnp.asarray(
+        np.stack([density[0] + 0.5 * kick, density[1] - 0.5 * kick])
+    )
+    return system, pseudos, saddle, kicked
+
+
 def _setup(path, ethr=1.0e-11):
     system = build_system(read_pw_input(path))
     pseudos = tuple(
@@ -251,21 +296,9 @@ def test_newton_krylov_reaches_an_unstable_solution():
     below, whose 2% kick runs away. For iron the honest statement is a root no
     mixer *reaches*, which Newton returns to from outside its basin.
     """
-    system, pseudos, calculation, _ = _setup(IRON)
+    system, pseudos, saddle, kicked = _kicked_iron()
 
-    # The saddle itself: a spin-symmetric density, which the SCF map preserves
-    # exactly -- nothing in it breaks spin symmetry on its own.
-    rho = np.asarray(calculation.starting_density())
-    symmetric = jnp.asarray(
-        np.repeat(rho.mean(axis=0, keepdims=True), rho.shape[0], axis=0)
-    )
-    saddle = run_scf(system, pseudos, calculation=Calculation(system, pseudos),
-                     conv_thr=1e-8, max_iterations=200,
-                     starting_density=symmetric)
-    assert saddle.converged
-    assert abs(float(saddle.magnetization)) < 1e-6
-
-    # ...and it is the non-magnetic solution, by an independent nspin = 1 run.
+    # The saddle is the non-magnetic solution, by an independent nspin = 1 run.
     reference_system, reference_pseudos, _, _ = _setup(IRON_NONMAGNETIC)
     reference = run_scf(
         reference_system, reference_pseudos, conv_thr=1e-8, max_iterations=200,
@@ -274,16 +307,7 @@ def test_newton_krylov_reaches_an_unstable_solution():
     assert reference.converged
     assert saddle.total_energy == pytest.approx(reference.total_energy, abs=1e-6)
 
-    # Kick it along the magnetization direction and hand the *same* perturbed
-    # state to both solvers. Both the **shape** and the **size** of the kick
-    # matter, and measuring them is what this test had to do to become
-    # reproducible -- see the docstring.
-    atomic = np.asarray(calculation.starting_density())
-    shape = atomic[0] - atomic[1]
-    shape = shape / np.abs(shape).max()
-    density = np.asarray(saddle.density)
-    kick = KICK * shape
-    kicked = jnp.asarray(np.stack([density[0] + 0.5 * kick, density[1] - 0.5 * kick]))
+    # The *same* perturbed state goes to both solvers (:func:`_kicked_iron`).
     ran_away = run_scf(system, pseudos, calculation=Calculation(system, pseudos),
                        conv_thr=1e-8, max_iterations=200,
                        starting_density=kicked)
@@ -320,13 +344,28 @@ def test_an_inexact_newton_is_only_as_stability_blind_as_its_inner_solve():
     inexact step degrades towards a damped-mixing step, and a damped-mixing step
     flows to the *stable* fixed point. So the preconditioner here is not a
     tuning knob for speed -- it decides the answer.
+
+    **It starts from the kicked state and not from the input's own
+    ``starting_magnetization``**, which is the whole of what made this
+    reproducible. From the bare 0.05 seed the answer is decided by round-off:
+    the same commit gives ``M = -3.4050`` with the default thread pool and
+    ``M = -0.0003`` -- the saddle, so the assertion fails -- under
+    ``OMP_NUM_THREADS=1``, since a different reduction order is a different
+    perturbation and a seed that small lets it choose. Nothing regressed when
+    that was first seen; the suite had simply never been run single-threaded
+    before. From the kicked state both arithmetics give **-3.405**.
+
+    Starting both runs from the same state is also what makes this a
+    *comparison*: the preconditioner is then the only difference between this
+    run and ``came_back`` above, which reaches the saddle from that same start.
     """
-    system, pseudos, _, _ = _setup(IRON)
+    system, pseudos, _, kicked = _kicked_iron()
     options = {"forcing": 0.5, "gmres_maxiter": 8, "max_iterations": 12}
     unpreconditioned = run_scf(
         system, pseudos, calculation=Calculation(system, pseudos), conv_thr=1e-8,
         max_iterations=200, scf_solver="newton-krylov",
         scf_solver_options={**options, "kerker": False},
+        starting_density=kicked,
     )
     assert unpreconditioned.converged
     assert abs(float(unpreconditioned.magnetization)) > 3.0
