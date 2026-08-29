@@ -33,6 +33,7 @@ looser one: at ten atoms the two codes agree exactly as well as they do at two.
 from functools import lru_cache
 from pathlib import Path
 
+import jax
 import numpy as np
 import pytest
 
@@ -95,7 +96,31 @@ FORCE_CASES = ["si10-nc-force", "si10-us-force", "si10-paw-force"]
 #: this file used to be killed before finishing. Two is what the one test that
 #: compares *two* cases against each other needs; every other test asks for one
 #: case and makes all of its assertions in one function, so each SCF still runs
-#: once. Measured end to end afterwards: **27 passed in 1:28:39, peak 22.8 GB.**
+#: once. Measured end to end afterwards: 27 passed in 1:28:39, peak 22.8 GB --
+#: and **42:55 with a sampled peak of 11.4 GB** once
+#: :func:`_release_compiled_code` stopped the compiled executables
+#: accumulating beside the states.
+@pytest.fixture(autouse=True)
+def _release_compiled_code():
+    """Drop XLA's compiled executables between cases.
+
+    **Nothing here is shared between two cases**, which is what makes this file
+    different from every other: each has its own ``npwx``, ``nbnd``, FFT grid
+    and spin rank, so every one compiles a fresh set of executables for the
+    whole SCF stack and XLA keeps them for the life of the process. Measured
+    over the first ten cases, resident memory goes 0.55 GB, 0.81, 1.27, 1.47,
+    1.60, 1.77, 1.82, 2.14, 2.47, **3.67** -- monotonic, and none of it is the
+    converged states, which ``_converged`` already caps at two.
+
+    The *results* stay cached; only the code is dropped. That trades
+    recompilation time for a peak the machine can actually afford, and this
+    file is the one place in the suite where the trade is clearly right -- it
+    was killed before finishing twice on a machine with 30 GB.
+    """
+    yield
+    jax.clear_caches()
+
+
 @lru_cache(maxsize=2)
 def _converged(case: str, pseudo_dir: Path):
     system = build_system(read_pw_input(CASES / f"{case}.in"))

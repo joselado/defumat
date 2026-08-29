@@ -2764,13 +2764,22 @@ The bismuthene row is the SCF alone -- no derivative at all -- and its 18.4 GB i
 
 Three practical consequences, stated so nobody meets them as a surprise:
 
-* **`tests/regression/test_ten_site.py` runs in 1:28:39 and peaks at 22.8 GB**, measured
-  end to end with `/usr/bin/time -v` on an otherwise idle machine: about 2 GB through the
-  light cases and the rest during the ultrasoft, PAW and spin-orbit ones. The file caches
-  at most two converged states (`_converged`'s `lru_cache(maxsize=2)`) and makes all of a
-  case's assertions in one function, so states are released as it goes; with an unbounded
-  cache the same file was **killed** before finishing. The bound is what makes it complete,
-  not what makes it small -- the peak is the largest single case and that case is large.
+* **`tests/regression/test_ten_site.py` runs in 42:55 and peaks around 11.4 GB.** It ran
+  in **1:28:39 at 22.8 GB** until the compiled code was released between cases, and the
+  bound on converged states was only half the story. The file caches at most two of those
+  (`_converged`'s `lru_cache(maxsize=2)`) and makes all of a case's assertions in one
+  function, so states are released as it goes; with an unbounded cache it was **killed**
+  before finishing. But **the executables were unbounded**, and nothing here shares them:
+  every case has its own `npwx`, `nbnd`, FFT grid and spin rank, so each compiles the whole
+  SCF stack afresh and XLA keeps it for the life of the process. Measured over the first
+  ten cases, resident memory went 0.55, 0.81, 1.27, 1.47, 1.60, 1.77, 1.82, 2.14, 2.47,
+  **3.67 GB** -- monotonic, and none of it the states. With `jax.clear_caches()` between
+  tests the same ten are 0.52, 0.65, 0.94, 1.09, 1.22, 1.17, 1.13, 1.28, 1.45, **1.45 GB**:
+  flat. **It got faster as well as smaller**, which is the tell that it was paging rather
+  than recompiling -- the recompilation the clear costs is worth less than the pressure it
+  removes. The remaining peak is the largest single case, and that case is large.
+  (11.4 GB is a sampled maximum from `ps` during the spin-orbit case, not `/usr/bin/time`'s
+  true high-water mark; the post-test resident maximum is 7.7 GB.)
 * A machine with 16 GB runs the norm-conserving ten-site set and not the ultrasoft one.
 * Attributing the 16 GB to a *route* -- `addusforce`'s transcription against the `jax.grad`
   one -- was measured as a total and not decomposed; both routes ran in the same process.

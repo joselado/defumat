@@ -3797,7 +3797,9 @@ bohr apart. At QE's defaults on both sides they take 11 SCF cycles each and agre
 through `System` is the fix and is not done here.
 
 **Status of the sweep itself:** `tests/regression/test_ten_site.py` is **27 passed in
-1:28:39** with a peak of 22.8 GB, measured end to end on an idle machine, and
+42:55** with a sampled peak of 11.4 GB -- it was 1:28:39 and 22.8 GB until the *compiled
+executables* were released between cases as well as the converged states, since nothing in
+this file shares a shape with anything else in it (`PERFORMANCE.md`) -- and
 `tests/regression/test_shapes_against_qe.py` is 90 passed in twelve seconds. Every number
 in the table above is enforced by one of those rather than measured once and written down.
 
