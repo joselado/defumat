@@ -112,6 +112,21 @@ print(velocity.velocities.shape, "  (nk, nbnd, 3), in Ry bohr")
     (61, 8, 3)   (nk, nbnd, 3), in Ry bohr
 
 
+Threading `fixed_density_states` and `VelocityOperator` by hand is what the cell above does, and it is worth seeing once because it is where the `jvp` actually happens. It is not how a script should ask for this: `Calculator` has the same call as one method, and it forwards the whole mixed state — `becsum` for a PAW dataset, `tau` for a meta-GGA, the converged field — which the hand-written version has to remember to do.
+
+
+```python
+same = silicon.get_band_velocities(kpoints=path, nbnd=8)
+
+print(same.velocities.shape, "  the same array, in one call")
+print(f"max difference   "
+      f"{float(np.max(np.abs(np.asarray(same.velocities) - np.asarray(velocity.velocities)))):.2e}")
+```
+
+    (61, 8, 3)   the same array, in one call
+    max difference   0.00e+00
+
+
 
 The check that it is the right operator is a central difference of the band structure
 itself: $\langle\psi|\,dH/dk - \varepsilon\, dS/dk\,|\psi\rangle$ against
@@ -150,7 +165,7 @@ fig.tight_layout()
 
 
     
-![png](19_linear_response_files/19_linear_response_5_0.png)
+![png](19_linear_response_files/19_linear_response_7_0.png)
     
 
 
@@ -297,7 +312,7 @@ fig2.tight_layout()
 
 
     
-![png](19_linear_response_files/19_linear_response_12_0.png)
+![png](19_linear_response_files/19_linear_response_14_0.png)
     
 
 

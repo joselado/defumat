@@ -21,6 +21,14 @@ The cases build on each other and each isolates one thing:
   magnetization constrained, which means **two** independent Fermi levels and a
   ``-TS`` summed over both. The two inputs differ only in how they spell the
   constraint and must give the same answer.
+* ``o-atom-fixed-lsda`` -- the same oxygen atom at ``occupations = 'fixed'``
+  with ``tot_magnetization = 2``, which is the *only* shape fixed occupations
+  have under LSDA: ``input.f90:784-800`` refuses the combination without a
+  ``tot_magnetization`` and requires an integer one, so there is no shared-Fermi
+  fixed branch to test. Each channel is then filled by ``iweights_only`` with
+  ``degspin = 1`` -- four bands up and two down -- and the answer is the atom's
+  Hund's-rule ground state, the same configuration ``atom-lsda`` reaches by
+  writing the occupations out by hand.
 * ``atom-sigmapbe`` -- spin-polarized PBE. Exchange by the spin-scaling
   relation, correlation by the PW92 spin interpolation, and a gradient
   correction whose cross term ``v2c_ud`` exists because correlation depends on
@@ -81,6 +89,7 @@ CASES = [
     ("pw_lsda", "lsda-tot_magnetization.in", None),
     ("pw_lsda", "lsda-nelup+neldw.in", None),
     ("pw_atom", "atom-sigmapbe.in", 4),
+    (None, "o-atom-fixed-lsda.in", 4),
     (None, "o-paw-spin.in", 4),
     (None, "o-paw-spin-pbe.in", 4),
     ("pw_pawatom", "paw-atom_spin_lda.in", 4),
@@ -264,6 +273,42 @@ def test_two_fermi_levels_match_reference(case, name):
     assert result.fermi_energy_down * RY_TO_EV == pytest.approx(
         reference.fermi_energy_down, abs=FERMI_EV
     )
+
+
+def test_fixed_occupations_fill_each_channel_to_its_own_count(case):
+    """``iweights_only`` per channel: four bands up, two down, and no Fermi search.
+
+    The check that the *band counts* are right and not only the total. Six
+    valence electrons with ``tot_magnetization = 2`` give ``nelup = 4`` and
+    ``neldw = 2``, so the occupation weights are the k-point weight on the first
+    four bands of channel 0 and the first two of channel 1, exactly -- there is
+    no level to solve for and nothing fractional anywhere.
+
+    The two reported levels are QE's own convention and they **coincide** here,
+    which is the case's second point: the majority channel's highest occupied
+    level is -9.64 eV and the minority channel's is -6.63, so the HOMO over both
+    channels is -6.63 -- and the minority 2p shell is threefold degenerate with
+    one electron in it, so the LUMO is that same -6.63. A fixed occupation that
+    cuts a degenerate multiplet is what this combination is *for*, and it is also
+    why the residual solver cannot take it (``test_scf_solvers``).
+    """
+    (_, _, result), reference = case(None, "o-atom-fixed-lsda.in")
+    weights = np.asarray(result.occupations)
+    assert weights.shape[0] == 2
+    per_channel = (weights > 0).sum(axis=-1)
+    assert list(per_channel[0]) == [4]
+    assert list(per_channel[1]) == [2]
+    # Full bands, not fractions: every nonzero weight is the k-point's own.
+    nonzero = weights[weights > 0]
+    assert np.allclose(nonzero, nonzero[0])
+
+    assert result.fermi_energy is None
+    assert result.homo * RY_TO_EV == pytest.approx(reference.homo, abs=FERMI_EV)
+    assert result.lumo * RY_TO_EV == pytest.approx(reference.lumo, abs=FERMI_EV)
+    # ...and each channel's own highest occupied level is carried beside them,
+    # which is what ``iweights`` returns as ef_up and ef_dw.
+    assert result.fermi_energy_up * RY_TO_EV == pytest.approx(-9.6440, abs=1e-3)
+    assert result.fermi_energy_down * RY_TO_EV == pytest.approx(-6.6339, abs=1e-3)
 
 
 def test_the_two_spellings_of_the_constraint_agree(case):

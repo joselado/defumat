@@ -79,7 +79,8 @@ def test_a_denser_grid_still_carries_the_spin_weight_convention():
     weights = denser_grid(_system(), (4, 4, 4)).weights
     assert float(np.asarray(weights).sum()) == pytest.approx(2.0)
     polarized = denser_grid(
-        _system(", nspin = 2, starting_magnetization(1) = 0.1"), (4, 4, 4)
+        _system(", nspin = 2, starting_magnetization(1) = 0.1"
+                ", occupations = 'smearing', degauss = 0.02"), (4, 4, 4)
     )
     assert float(np.asarray(polarized.weights).sum()) == pytest.approx(1.0)
 
@@ -126,7 +127,8 @@ def test_with_kpoints_normalizes_a_raw_k_set_and_leaves_a_normalized_one(pseudo_
     """
     from pypresso.pseudo import read_upf
 
-    system = _system(", nspin = 2, starting_magnetization(1) = 0.1")
+    system = _system(", nspin = 2, starting_magnetization(1) = 0.1"
+                     ", occupations = 'smearing', degauss = 0.02")
     pseudos = tuple(
         read_upf(pseudo_dir / species.pseudo_file)
         for species in system.structure.species

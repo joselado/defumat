@@ -38,7 +38,8 @@ __all__ = ["fixed_occupations", "smeared_occupations", "fermi_level", "bisect_fe
 
 
 def fixed_occupations(
-    eigenvalues: jnp.ndarray, weights: jnp.ndarray, nelec: float, degeneracy: int = 2
+    eigenvalues: jnp.ndarray, weights: jnp.ndarray, nelec: float,
+    degeneracy: int = 2, counts: tuple[float, float] | None = None,
 ):
     """Fill the lowest ``nelec / degeneracy`` bands completely.
 
@@ -48,17 +49,40 @@ def fixed_occupations(
     factor the k-point weights already carry (``for_spin``), which is why it
     only has to appear here, in the *count* of filled bands.
 
-    Returns ``(wg, homo, lumo)``. Raises if the electron count does not fill a
-    whole number of bands, which means the system needs either spin
-    polarisation or smearing.
+    ``counts`` is ``(nelup, neldw)`` and turns this into ``weights.f90``'s
+    polarized branch: ``iweights_only`` called **once per channel** with
+    ``degspin = 1``, so channel 0 fills ``NINT(nelup)`` bands and channel 1
+    ``NINT(neldw)``, each against its own electron count. There is no shared
+    Fermi level to fall back on and there is no fallback here either, because
+    ``pw.x`` has none: ``input.f90:797`` refuses ``occupations = 'fixed'`` with
+    LSDA and no ``tot_magnetization`` outright ("fixed occupations and lsda need
+    tot_magnetization"), and then requires that magnetization -- and the total
+    charge -- to be an integer. So the fixed LSDA branch is *always* the
+    two-Fermi-level one.
+
+    ``NINT`` and not a floor, which is the detail worth copying rather than
+    reasoning out: an odd electron count with an even magnetization gives a
+    half-integer ``nelup``, and QE rounds it up rather than refusing (see
+    :func:`spin_electron_counts`, which has the same shape).
+
+    Returns ``(wg, homo, lumo)``. With ``counts`` the two levels come back **per
+    channel**, as ``(2,)`` arrays -- the same widening :func:`smeared_occupations`
+    does to its Fermi level, and for the same reason: each channel's highest
+    occupied state is its own ``ef_up`` / ``ef_dw`` in ``iweights``. Raises if the
+    electron count does not fill a whole number of bands, which means the system
+    needs either spin polarisation or smearing.
     """
     nspin, _, nbnd = eigenvalues.shape
+    if counts is not None:
+        return _fixed_occupations_spin(eigenvalues, weights, counts)
     if nspin != 1:
         raise NotImplementedError(
-            "occupations='fixed' with nspin = 2 is not implemented; QE fills the "
-            "two channels from tot_magnetization or from a shared Fermi level, "
-            "and no committed benchmark exercises either, so it is refused "
-            "rather than guessed. Use occupations='from_input' or 'smearing'"
+            "occupations='fixed' with nspin = 2 needs tot_magnetization, which "
+            "is not set. This is pw.x's own rule and not a gap here: input.f90 "
+            "refuses the combination with 'fixed occupations and lsda need "
+            "tot_magnetization', because without it there is nothing to say how "
+            "the electrons divide between the channels. Give an integer "
+            "tot_magnetization, or use occupations='from_input' or 'smearing'"
         )
     occupied = nelec / degeneracy
     if abs(occupied - round(occupied)) > 1e-8:
@@ -75,6 +99,46 @@ def fixed_occupations(
     homo = jnp.max(eigenvalues[0, :, occupied - 1])
     lumo = jnp.min(eigenvalues[0, :, occupied]) if occupied < nbnd else None
     return wg, homo, lumo
+
+
+def _fixed_occupations_spin(eigenvalues, weights, counts):
+    """``iweights_only`` per spin channel -- ``weights.f90:330-333``.
+
+    Each channel is filled independently against its own electron count with
+    ``degspin = 1`` (``iweights_only`` sets it so whenever ``is /= 0``), and each
+    reports its own highest occupied level, which is what ``iweights`` returns as
+    ``ef_up`` and ``ef_dw``.
+    """
+    nspin, nk, nbnd = eigenvalues.shape
+    if nspin != 2:
+        raise ValueError(
+            f"per-channel fixed occupations need two spin channels, got {nspin}"
+        )
+
+    occupancies, homos, lumos = [], [], []
+    for channel, count in enumerate(counts):
+        # ``NINT``: Fortran rounds half away from zero, which for a positive
+        # electron count is ``floor(n + 1/2)``.
+        occupied = int(np.floor(float(count) + 0.5))
+        if occupied > nbnd:
+            raise ValueError(
+                f"spin channel {channel} holds {count} electrons and so needs "
+                f"{occupied} bands, but only {nbnd} were computed; raise nbnd"
+            )
+        if occupied < 1:
+            raise ValueError(
+                f"spin channel {channel} is empty ({count} electrons): a "
+                "tot_magnetization that large leaves a channel with no occupied "
+                "band, which fixed occupations cannot express"
+            )
+        occupancies.append(jnp.arange(nbnd) < occupied)
+        homos.append(jnp.max(eigenvalues[channel, :, occupied - 1]))
+        lumos.append(
+            jnp.min(eigenvalues[channel, :, occupied]) if occupied < nbnd else jnp.nan
+        )
+
+    wg = weights[None, :, None] * jnp.stack(occupancies)[:, None, :]
+    return wg, jnp.stack(homos), jnp.stack(lumos)
 
 
 def wgauss(x: jnp.ndarray, ngauss: int) -> jnp.ndarray:

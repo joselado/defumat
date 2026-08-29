@@ -415,6 +415,20 @@ where \code{npol = 2} but \code{nspin\_mag} is \textbf{one} for a nonmagnetic
 spin-orbit run --- which is why such a run costs about what a doubled
 unpolarized one costs.
 
+\textbf{Fixed occupations under \code{nspin = 2}} fill each channel to its own
+count rather than searching for a level: \code{tot\_magnetization} gives
+\code{nelup} and \code{neldw}, and \code{iweights\_only} fills
+$\mathrm{NINT}(n_\uparrow)$ bands in one channel and $\mathrm{NINT}(n_\downarrow)$
+in the other. That is the \emph{only} shape the combination has ---
+\code{pw.x} refuses fixed-occupation LSDA without a \code{tot\_magnetization},
+and requires an integer one --- and this package makes the same two refusals at
+input, before anything is allocated. Each channel's highest occupied level is
+reported as \code{fermi\_energy\_up} / \code{fermi\_energy\_down} beside the
+overall \code{homo} and \code{lumo}, which is what \code{iweights} returns.
+Validated on an oxygen atom at \code{tot\_magnetization = 2}, whose four-up /
+two-down filling is the Hund's-rule ground state: \textbf{4.9e-9 Ry} against
+\code{pw.x}.
+
 \textbf{Magnetic fields and constraints:} a uniform field over the cell, a field
 inside one atom's sphere (through a \code{LOCAL\_MAGNETIC\_FIELDS} card that
 \code{pw.x} has no counterpart for), Elk's \code{reducebf}, and all four of QE's
@@ -432,6 +446,24 @@ from differentiating through projectors that move with the atoms.
 background channels, the orbital-resolved variant, the \code{wf}/\code{pseudo}
 projector sets, and noncollinear \code{ns\_nc}; and PAW $+$ GGA $+$ a
 noncollinear magnetization together.
+
+A \textbf{magnetic field in a noncollinear run with no starting moment} is
+refused rather than run. \code{domag} comes from \code{starting\_magnetization}
+and from nothing else (\code{setup.f90}), so such a run has
+\code{nspin\_mag = 1} and a density with no magnetization channels for the field
+to act on. Set \code{starting\_magnetization} for one species --- any nonzero
+value will do, the field decides where the moment goes. Worth knowing:
+\code{pw.x} \emph{accepts} this input and silently drops the field, because
+\code{add\_bfield} writes it into the potential's magnetization channels and
+\code{vloc\_psi\_nc} applies those only \code{IF (domag)}.
+
+The \textbf{residual solver} cannot take a fixed occupation whose filled/empty
+boundary cuts a \textbf{degenerate multiplet} --- which is exactly what an
+atom's Hund's-rule filling does. Which member of the multiplet the eigensolver
+returns is arbitrary, so the density map is not a function of the density and a
+Newton step has nothing to converge on; it is diagnosed by name rather than left
+as a \code{NaN}. The mixer damps its way past it, and a \emph{gapped}
+fixed-occupation LSDA cell agrees between the two solvers to 5e-12~Ry.
 \end{refuses}
 
 % =====================================================================
@@ -483,9 +515,17 @@ augmentation force's sign and a missing gradient correction were found.
 The \textbf{velocity operator} comes first and everything else uses it: it is one
 \code{jvp} of $\hat H(\mathbf k)$ at a frozen sphere, because
 $\partial\hat H/\partial k_\alpha = i[\hat H, r_\alpha]$ in the periodic gauge.
-\code{band\_velocities} exposes it, and because the overlap carries a velocity
-too, a band velocity is
+\code{band\_velocities} exposes it --- \code{Calculator.get\_band\_velocities}
+is the short way --- and because the overlap carries a velocity too, a band
+velocity is
 $\langle\psi|\partial_k\hat H - \epsilon\,\partial_k\hat S|\psi\rangle$.
+
+\begin{pycode}
+calc = Calculator.from_file("scf.in", pseudo_dir="pseudo")
+
+velocities = calc.get_band_velocities()          # .velocities is (nk, nbnd, 3)
+elsewhere = calc.get_band_velocities(kpoints=path)
+\end{pycode}
 
 Every first-order quantity then comes from the Sternheimer equation --- the response
 of an occupied orbital to a perturbation, projected outside the occupied

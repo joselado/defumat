@@ -1,0 +1,42 @@
+! An oxygen atom in a box at **fixed** occupations with nspin = 2, which is the
+! only shape that combination has: `input.f90:784-800` refuses
+! `occupations = 'fixed'` with LSDA unless `tot_magnetization` is given, and
+! then requires it -- and the total charge -- to be an integer. So there is no
+! "shared Fermi level with integer fillings" case to validate; the fixed LSDA
+! branch is always the two-Fermi-level one, and it is `iweights_only` called
+! once per channel with `degspin = 1` (`weights.f90:170-171`).
+!
+! Oxygen because the answer is known without computing it: six valence
+! electrons and tot_magnetization = 2 give nelup = 4 and neldw = 2, which is
+! 2s2 2p4 split as (2s, 2px, 2py, 2pz) up and (2s, 2px) down -- the atom's
+! Hund's-rule ground state, and the configuration QE's own `pw_atom/atom-lsda.in`
+! reaches by writing those occupations out by hand on an OCCUPATIONS card.
+! Getting the same numbers from `tot_magnetization` alone is the check that the
+! band counts, and not just the total, are right.
+!
+! An explicit k = 0 rather than `K_POINTS gamma`, so that both codes run the
+! full sphere and the comparison is not against the gamma-point trick.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 1, celldm(1) = 10.0,
+    nat = 1, ntyp = 1,
+    nbnd = 6,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    occupations = 'fixed',
+    nspin = 2,
+    tot_magnetization = 2,
+    starting_magnetization(1) = 0.5
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ O  15.99994  O.pz-rrkjus.UPF
+ATOMIC_POSITIONS (alat)
+ O 0.0 0.0 0.0
+K_POINTS tpiba
+ 1
+ 0.0 0.0 0.0 1.0

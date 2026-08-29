@@ -524,6 +524,27 @@ class Calculator:
     # linear response
     # ------------------------------------------------------------------
 
+    def get_band_velocities(self, kpoints=None, **options):
+        """``d(eps)/dk`` for every band, from one ``jvp`` of ``H(k)``.
+
+        The velocity operator is P24's first layer and the thing a Fermi
+        velocity or an effective mass is read off. ``kpoints`` computes them
+        somewhere other than the ground state's own grid -- a band path,
+        typically -- which is an NSCF diagonalisation followed by the same
+        operator.
+
+        The overlap carries a velocity too, so what is returned is
+        ``<psi|dH/dk - eps dS/dk|psi>`` and not the bare ``dH/dk``.
+        """
+        from pypresso.response.velocity import band_velocities
+
+        result = self._ground_state("the band velocities")
+        return band_velocities(
+            self.calculation, result, kpoints=kpoints,
+            **self._defaults_for(band_velocities, options,
+                                 exclude=SCF_ONLY_OPTIONS),
+        )
+
     def get_dielectric_tensor(self, **options):
         """``epsilon_infinity`` by the Sternheimer route -- no empty states."""
         from pypresso.response.efield import dielectric_tensor

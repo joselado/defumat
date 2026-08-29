@@ -3,9 +3,13 @@
 Combinations of features that do not work, from the sweep of 2026-08-29 — four
 agents over the SCF/spin matrix, the response stack, the `Calculator`/workflow
 plumbing, and a repo-wide hunt for silent failure. The nine that were bugs with a
-*refusal* for a fix are closed (`tests/unit/test_sibling_refusals.py`), and so
-are the seven of §1 whose fix was a term or a forwarding
-(`tests/unit/test_state_across_boundaries.py`). What is left is §2 and §3.
+*refusal* for a fix are closed (`tests/unit/test_sibling_refusals.py`), so are
+the seven of §1 whose fix was a term or a forwarding
+(`tests/unit/test_state_across_boundaries.py`), and so is the whole of §2 plus
+**one** entry of §3 — `occupations = 'fixed'` with `nspin = 2`, the fourth
+(`tests/unit/test_unreachable_combinations.py`). What is left is the rest of §3,
+and the widest of them is still the first one listed there: the Sternheimer
+response with `nspin = 2`, which is untouched.
 
 This is not `PLAN.md`. That file is the phase record and says what was built and
 what each phase's traps were; this one is a list of what a user can ask for and
@@ -65,14 +69,52 @@ PAW/meta-GGA projected DOS on a denser grid. `run_pdos` passed nine positional
 arguments into a longer signature; it now forwards the whole mixed state off the
 `result` it already had.
 
-## 2. Unreachable — the physics works, the plumbing cannot express it
+## 2. Unreachable — **closed 2026-08-29**
+
+All four are fixed; `tests/unit/test_unreachable_combinations.py` holds the
+tests. Kept for the same reason §1 is: what each one *was* is the useful part.
+
+| gap | what it did | fix |
+|---|---|---|
+| `Calculator.get_band_velocities` did not exist | a Fermi velocity needed `Calculation` and `SCFResult` threaded by hand, against a README that says every feature is a method | three lines of delegation (`calculator.py`) — **and** the mixed state forwarded inside `band_velocities`, which passed only `ns` into its NSCF branch and so refused every PAW run (`response/velocity.py`) |
+| `tau` sized as `nspin` where it is `nspin_mag` | four channels asked of a quantity produced with one, for a *nonmagnetic* spin-orbit meta-GGA: the residual solver died on the reshape and a `starting_from` promotion dropped its converged `tau` in silence | the density's own shape, read off rather than rebuilt (`scf/residual.py`, `scf/driver.py` twice) |
+| a field could not induce a moment in a nonmagnetic noncollinear run | `nspin_mag = 1`, so the potential build died on a shape mismatch rather than a message | refused by name, pointing at `starting_magnetization` (`scf/driver.py`) |
+| `occupations = 'fixed'` + `nspin = 2` | refused for want of a benchmark | one generated (`o-atom-fixed-lsda`), then implemented — see §3 |
+
+Three of them are worth a note beyond the table.
+
+**The band-velocity gap was two gaps and the second was the worse one.**
+`band_velocities` forwards into `fixed_density_states` for its `kpoints=` branch
+and passed `ns` alone, with a comment saying PAW "raises here rather than below"
+— which was true when it was written and stopped being true when the previous
+pass gave that function `becsum`, `tau`, `field` and `field_scale`. Adding a
+facade over it without the forwarding would have shipped P38's own defect
+through a new front door.
+
+**`pw.x` does not support a field on a nonmagnetic noncollinear run either, and
+its failure is the worse one.** `setup.f90:219` decides `domag` from
+`starting_magnetization` and from nothing else, but `scf_mod.f90:140` allocates
+the density with `nspin = 4` whatever `domag` says — so `add_bfield` has
+channels 2:4 to write the field into and writes it there, and then
+`vloc_psi_nc` applies those channels only `IF (domag)` (`vloc_psi_acc.f90:331`).
+The field never reaches a wavefunction. Such a run converges, reports success,
+and is the field-free calculation. GAPS' original suggestion — "force `domag`
+when a field is present" — would have been a deviation from QE dressed as a
+transcription; the refusal names the one input variable that fixes it.
+
+**`nspin_mag` is not a spelling of `nspin`, and the fix is to stop spelling it at
+all.** All three sites rebuilt a channel count from a spin number where the
+density beside them already had it. Reading it off the density is correct in all
+three regimes at once and cannot come apart again.
+
+## 2b. Unreachable — the original list
 
 ### ~~PAW or meta-GGA projected DOS on a denser grid~~ — **closed**
 
 `run_pdos` now forwards `tau`, `becsum`, `field` and `field_scale` off the
 `result` it already receives, beside the `ns` it always passed. See §1.
 
-### `Calculator.get_band_velocities` does not exist — *verified*
+### ~~`Calculator.get_band_velocities` does not exist~~ — **closed**
 
 `response/velocity.py:345` exports `band_velocities(calculation, result,
 kpoints=None)` — already the facade's calling convention — and there is no
@@ -84,7 +126,7 @@ CLAUDE.md's own rule ("a new feature adds a `get_*` method in the same pass that
 adds its entry point") was not met when P24 landed the velocity operator. Three
 lines.
 
-### `nspin` where `nspin_mag` was meant, for a meta-GGA spinor run
+### ~~`nspin` where `nspin_mag` was meant, for a meta-GGA spinor run~~ — **closed**
 
 `scf/residual.py:290`: `tau_shape = (calculation.nspin,) + ...`, which is 4 for a
 nonmagnetic spin-orbit run — but `tau` is produced with `nspin_mag` channels,
@@ -98,7 +140,7 @@ together they die on a reshape from inside the residual packing. On the
 shapes unequal, drops the converged `tau` without a word and falls back to
 Thomas-Fermi.
 
-### A field cannot induce a moment in a nonmagnetic noncollinear run
+### ~~A field cannot induce a moment in a nonmagnetic noncollinear run~~ — **closed**
 
 `driver.py:1395` guards only `nspin == 1`, so a `noncolin` run with a `B_field`
 and every `starting_magnetization` at zero passes — and then `nspin_mag` is 1,
@@ -170,17 +212,46 @@ split between the frozen-Hessian weight `wg` and the electronic `2 wk`.
 metal path is validated (P24c, `chi_0` on fcc aluminium to 2.5e-7). No QE
 counterpart to transcribe: `ph.x` has no strain perturbation.
 
-### `occupations = 'fixed'` + `nspin = 2` + `tot_magnetization`
+### ~~`occupations = 'fixed'` + `nspin = 2` + `tot_magnetization`~~ — **closed**
 
-`scf/occupations.py:55`, and `residual.py:262` forwards the same call, so no
-route reaches it. An LSDA insulator or a fixed-moment magnet at fixed
-occupations — QE's own supported combination — stops outright.
+Implemented, and the refusal it replaced was wrong about QE in a way that made
+the job half the size. `fixed_occupations` takes `counts` now, `residual.py`
+forwards it beside the smeared branch's, and the builder makes QE's two
+input-time checks.
 
-**Missing:** `iweights_only` per channel with `degspin = 1`: fill
-`floor(nelup)` bands in channel 0 and `floor(neldw)` in channel 1, report the
-highest occupied level of each (`PW/src/iweights.f90:82-129`). No new physics.
-`spin_electron_counts` already returns `(nelup, neldw)` and is computed
-unconditionally; `fixed_occupations` already takes a `degeneracy` argument.
+**The old refusal said QE "fills the two channels from `tot_magnetization` or
+from a shared Fermi level".** It does not. `input.f90:784-800` refuses
+`occupations = 'fixed'` with LSDA outright unless `tot_magnetization` is given
+("fixed occupations and lsda need tot_magnetization"), and then requires it —
+and the total charge — to be an **integer**. So there is no shared-Fermi fixed
+branch to write, in either code, and both refusals are made here now, at input,
+where QE makes them. They are checked in QE's order too, which matters because
+both fire on a bare `nspin = 2`: the fixed rule is at line 784 and the
+`starting_magnetization` one at 1507.
+
+**`NINT` and not `floor`**, which is what the entry above guessed: an odd
+electron count with an even magnetization gives a half-integer `nelup` and QE
+rounds it up rather than refusing.
+
+**The reference had to be generated** (`tests/data/qe/o-atom-fixed-lsda.in`),
+because QE's test-suite has no fixed-occupation LSDA case anywhere — that is
+what the old refusal's "no committed benchmark" meant and it was accurate. An
+oxygen atom at `tot_magnetization = 2` fills four bands up and two down, which is
+the Hund's-rule ground state and the configuration `pw_atom/atom-lsda.in`
+reaches by writing the occupations out by hand. Against the vendored `pw.x`:
+**4.9e-9 Ry** in the total energy, 2.0000 in the moment, and every occupied
+eigenvalue to the four decimals QE prints.
+
+**One thing it cannot do, and it is the physics rather than the implementation.**
+A fixed occupation whose filled/empty boundary cuts a **degenerate multiplet** —
+which is exactly what a Hund's-rule atom is — makes the density map multivalued:
+which member of the multiplet the eigensolver returns is arbitrary, so `F` is not
+a function of the density and the **residual solver** has nothing to converge on.
+Measured rather than assumed: the same atom with a smearing converges in four
+Newton steps, and a *gapped* fixed LSDA cell agrees between the mixer and the
+Newton solve to **5.3e-12 Ry**. The mixer damps its way past it. It is diagnosed
+by name in `solvers.py` now instead of surfacing as a scipy "RHS must contain
+only finite numbers".
 
 ### Projected DOS + noncollinear / spin-orbit
 

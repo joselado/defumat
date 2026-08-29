@@ -255,7 +255,17 @@ def _weights(calculation, eigenvalues):
     weights = system.kpoints.weights
 
     if scheme == "fixed":
-        return fixed_occupations(eigenvalues, weights, calculation.nelec, degeneracy)[0]
+        # The same ``counts`` the smeared branch below takes, for the same
+        # reason: with ``tot_magnetization`` the two channels are filled
+        # independently, and forwarding it on one path and not the other is the
+        # sibling-guard shape this file is a mirror of.
+        counts = (
+            (calculation.nelup, calculation.neldw)
+            if calculation.two_fermi_energies else None
+        )
+        return fixed_occupations(
+            eigenvalues, weights, calculation.nelec, degeneracy, counts=counts
+        )[0]
     counts = (calculation.nelup, calculation.neldw) if calculation.two_fermi_energies else None
     wg, _ = smeared_occupations(
         eigenvalues, weights, calculation.nelec, system.degauss,
@@ -287,9 +297,13 @@ def make_residual(calculation, nbnd: int, ethr: float) -> ScfResidual:
     )
     tau_shape = None
     if calculation.functional.is_meta:
-        # Same shape as the density's, and the same storage convention: one
-        # channel unpolarized, ``(up, down)`` when not.
-        tau_shape = (calculation.nspin,) + tuple(np.shape(rho))[1:]
+        # Exactly the density's shape, read off the density rather than rebuilt
+        # from a spin number. The channel count of ``tau`` is ``nspin_mag`` and
+        # never ``nspin``, and the two come apart at 4: a *nonmagnetic*
+        # spin-orbit run has spinor wavefunctions and a one-channel density, so
+        # ``(calculation.nspin,) + ...`` asked for four channels of a quantity
+        # produced with one and the packing died on the reshape.
+        tau_shape = tuple(np.shape(rho))
     size = int(np.prod(shapes[0])) + sum(
         int(np.prod(s)) for s in shapes[1:] if s is not None
     )

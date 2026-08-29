@@ -516,7 +516,12 @@ def _starting_tau(rho, calculation) -> jnp.ndarray:
     a bug rather than a transcription.
     """
     rho = jnp.real(jnp.asarray(rho))
-    return thomas_fermi_tau(rho, 1 if calculation.nspin == 1 else 2)
+    # ``nspin_mag`` and not ``nspin``: the spin scaling belongs to how many
+    # channels the *density* has, and a nonmagnetic spin-orbit run has one of
+    # them while its ``nspin`` is 4. Keying off ``nspin`` applied the two-channel
+    # form ``|2 rho|^(5/3) / 2`` to a total density and started such a run from a
+    # guess too large by ``2^(2/3)``.
+    return thomas_fermi_tau(rho, 1 if calculation.nspin_mag == 1 else 2)
 
 
 def next_ethr(ethr: float, accuracy: float, nelec: float, iteration: int) -> float:
@@ -1406,6 +1411,30 @@ class Calculation:
             raise ValueError(
                 "a magnetic field needs nspin = 2 or noncolin = .true.: there is "
                 "no magnetization for it to act on"
+            )
+        if self.noncolin and self.nspin_mag != 4:
+            # ``domag`` is decided by ``starting_magnetization`` and by nothing
+            # else (``setup.f90:219``), so a noncollinear run with a field and no
+            # starting moment has ``nspin_mag = 1``: a one-channel density and a
+            # one-channel potential, with nowhere to put a field that is three
+            # components wide. **``pw.x`` does not do this either, and the way it
+            # fails is worse.** It allocates ``rho%of_r`` with ``nspin = 4``
+            # whatever ``domag`` says (``scf_mod.f90:140``), so ``add_bfield``
+            # has channels 2:4 to write into and writes the field there -- and
+            # then ``vloc_psi_nc`` applies the magnetization channels only
+            # ``IF (domag)`` (``vloc_psi_acc.f90:331``), so the field never
+            # reaches a wavefunction. Such a run converges, reports success, and
+            # is the field-free calculation.
+            raise ValueError(
+                "a magnetic field in a noncollinear run needs a magnetization to "
+                "act on, and this run has none: every starting_magnetization is "
+                "zero, so nspin_mag = 1 and the density has no magnetization "
+                "channels (setup.f90's domag). Set starting_magnetization for at "
+                "least one species -- any nonzero value will do, the field is "
+                "what decides where the moment ends up. Note that pw.x accepts "
+                "this input and silently ignores the field (vloc_psi_nc applies "
+                "the magnetization channels only if domag), so its answer for it "
+                "is the field-free one"
             )
         # A collinear run has one magnetization component and a noncollinear one
         # has three, and every array here follows that -- ``npol = nspin - 1`` in
@@ -2955,10 +2984,27 @@ class Calculation:
         degeneracy = 1 if self.noncolin else 2
 
         if scheme == "fixed":
+            counts = (self.nelup, self.neldw) if self.two_fermi_energies else None
             wg, homo, lumo = fixed_occupations(
-                eigenvalues, weights, self.nelec, degeneracy
+                eigenvalues, weights, self.nelec, degeneracy, counts=counts
             )
-            return wg, {"homo": float(homo), "lumo": None if lumo is None else float(lumo)}
+            if counts is None:
+                return wg, {"homo": float(homo),
+                            "lumo": None if lumo is None else float(lumo)}
+            # ``iweights`` returns one level per channel and QE prints the pair
+            # as ``ef_up``/``ef_dw``; the scalar HOMO and LUMO it also prints are
+            # the extremes over both channels, which is why they can coincide --
+            # a partly-filled degenerate shell in one channel puts its HOMO and
+            # the other channel's LUMO at the same energy (the oxygen atom of
+            # ``o-atom-fixed-lsda`` does exactly that).
+            homo, lumo = np.asarray(homo), np.asarray(lumo)
+            finite = lumo[np.isfinite(lumo)]
+            return wg, {
+                "homo": float(np.max(homo)),
+                "lumo": float(np.min(finite)) if finite.size else None,
+                "fermi_energy_up": float(homo[0]),
+                "fermi_energy_down": float(homo[1]),
+            }
 
         if scheme == "from_input":
             if self.system.input_occupations is None:
@@ -3277,7 +3323,10 @@ def run_scf(
         # cannot be wrong.
         source_tau = getattr(starting_from, "tau", None)
         if starting_tau is None and source_tau is not None:
-            expected = (calculation.nspin,) + tuple(np.shape(calculation.starting_density()))[1:]
+            # The density's own shape, whole: ``tau`` has ``nspin_mag`` channels
+            # and rebuilding the count from ``nspin`` made every promotion into a
+            # spin-orbit run drop its converged ``tau`` without a word.
+            expected = tuple(np.shape(calculation.starting_density()))
             if tuple(np.shape(source_tau)) == expected:
                 starting_tau = source_tau
         if verbose:

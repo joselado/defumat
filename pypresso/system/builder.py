@@ -1000,6 +1000,47 @@ def _check_occupations(pwin: PwInput) -> None:
             stacklevel=2,
         )
 
+    # ``input.f90:784-800``: fixed occupations with LSDA are the two-Fermi-level
+    # branch or nothing. Without ``tot_magnetization`` there is no rule for how
+    # the electrons divide between the channels -- a shared Fermi level would
+    # have to be *found*, which is what smearing is for -- and with one, both it
+    # and the total charge must be integers, since a channel fills a whole
+    # number of bands. Checked here rather than at the first diagonalisation so
+    # that the message names the input variable.
+    lsda = int(pwin.get("system", "nspin", 1)) == 2 and not bool(
+        pwin.get("system", "noncolin", False)
+    )
+    # ``.AND. lscf``, which is the third conjunct of QE's own condition and not
+    # a softening of it: an ``nscf`` or ``bands`` run reads a density that some
+    # earlier SCF converged and never fills anything, so it has no channel split
+    # to be missing. Leaving it out would refuse a band structure of a magnet
+    # for the shape of a rule that does not apply to it.
+    lscf = str(
+        pwin.get("control", "calculation", "scf")
+    ).strip().strip("'\"").lower() not in ("nscf", "bands")
+    if occupations == "fixed" and lsda and lscf:
+        tot_magnetization = pwin.get("system", "tot_magnetization", None)
+        if tot_magnetization is None:
+            raise ValueError(
+                "occupations = 'fixed' with nspin = 2 needs tot_magnetization: "
+                "the two channels are filled independently and nothing else says "
+                "how many electrons each gets. This is pw.x's own refusal "
+                "(input.f90: 'fixed occupations and lsda need "
+                "tot_magnetization'). Set an integer tot_magnetization, or use "
+                "occupations = 'smearing' to let a shared Fermi level decide"
+            )
+        # QE requires an integer ``tot_charge`` here too; that half of its check
+        # is unreachable, because a charged cell is refused outright by
+        # ``_refuse_unimplemented_switches`` whatever the occupations are.
+        value = float(tot_magnetization)
+        if abs(value - round(value)) > 1.0e-8:
+            raise ValueError(
+                "occupations = 'fixed' with nspin = 2 needs an integer "
+                f"tot_magnetization, and this one is {value}: each channel fills "
+                "a whole number of bands, so a fractional split has no fixed "
+                "occupation to express it. pw.x refuses the same input"
+            )
+
 
 def _check_calculation(pwin: PwInput) -> None:
     """``calculation`` must name a run this package can actually perform.

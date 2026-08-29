@@ -408,7 +408,18 @@ potential, `becsum`, `D_ij`, the eigenvalues and the wavefunctions a leading cha
 and one SCF iteration diagonalises a different Hamiltonian per channel. Whichever
 occupation scheme is in use decides how many Fermi levels there are — one shared between
 the channels, or one each when `tot_magnetization` constrains the magnetisation — and both
-the smearing and the tetrahedron families implement both.
+the smearing and the tetrahedron families implement both. **`occupations = 'fixed'`
+implements only the second**, and that is `pw.x`'s rule rather than a gap:
+`input.f90:784-800` refuses fixed-occupation LSDA without a `tot_magnetization` and
+requires an integer one, so each channel fills `NINT(nelup)` and `NINT(neldw)` bands
+(`iweights_only` with `degspin = 1`) and there is no level to search for. Both refusals
+are made at input here too, in QE's order. An oxygen atom at `tot_magnetization = 2`
+matches `pw.x` to **4.9e-9 Ry**. What the *residual solver* cannot take is a fixed
+occupation cutting a **degenerate multiplet** — a Hund's-rule atom, which is most of what
+this combination is for: which member the eigensolver returns is arbitrary, so `F` is not
+a function of the density and there is nothing for a Newton step to converge on. It is
+diagnosed by name; the mixer is unaffected, and a *gapped* fixed LSDA cell agrees between
+the two solvers to 5.3e-12 Ry.
 
 **Spin-orbit coupling is in scope and implemented** (P14): `noncolin = .true.` makes a
 wavefunction a two-component spinor of length `2 npwx`, so there is *one* Hamiltonian on a

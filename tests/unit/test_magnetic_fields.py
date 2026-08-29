@@ -297,6 +297,7 @@ def test_b_field_survives_the_input_file():
     nspin = 2
     starting_magnetization(1) = 0.5
     B_field(3) = -0.02
+    occupations = 'smearing', degauss = 0.02
  /
  &electrons
  /

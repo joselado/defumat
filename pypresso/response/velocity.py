@@ -342,23 +342,51 @@ def over_kpoints(hamiltonian, states, batch, overlap: bool = False):
     return map_k(lambda ik: apply(states[ik], ik), indices, batch=batch)
 
 
-def band_velocities(calculation, result, kpoints=None) -> BandVelocities:
+def band_velocities(calculation, result, kpoints=None, nbnd=None,
+                    conv_thr: float = 1.0e-6, k_batch="default") -> BandVelocities:
     """``d(eps)/dk`` for a converged run, in one call.
 
     ``result`` is an :class:`~pypresso.scf.driver.SCFResult`; the potential and
     the states are taken from it. When ``kpoints`` is given the velocities are
     computed there instead -- a band path, typically -- which is an NSCF
-    diagonalisation followed by the same operator.
+    diagonalisation followed by the same operator, and ``nbnd`` then says how
+    many bands that diagonalisation resolves. A path is usually drawn with more
+    bands than the ground state carried, so it is a parameter rather than the
+    ground state's count; on the SCF's own k-points there is nothing to
+    re-diagonalise and it does not apply.
+
+    ``conv_thr`` is that diagonalisation's threshold, and it is worth setting
+    rather than leaving at the default: a band velocity inside a **degenerate
+    multiplet** is not a property of a band at all, so where two bands touch --
+    which along silicon's Lambda axis is most of the path -- a loosely converged
+    eigensolver mixes them differently from a tight one, and the per-band
+    velocities then differ by order one while the multiplet's *set* of them does
+    not. Measured: 1e-6 against 1e-12 on that path moves an individual band's
+    velocity by 0.5 Ry bohr.
     """
     from pypresso.workflows.nscf import fixed_density_states
 
+    if kpoints is None and nbnd is not None:
+        raise ValueError(
+            "nbnd applies to the NSCF diagonalisation this does at new "
+            "kpoints, and none was asked for: on the ground state's own "
+            "k-points the velocities come off the states it converged. Pass "
+            "kpoints=, or raise nbnd on the SCF itself"
+        )
+
     if kpoints is not None:
-        # A PAW calculation raises here rather than below: an NSCF run at new
-        # k-points needs the converged ``becsum``, which ``fixed_density_states``
-        # does not yet carry across, and it says so.
+        # The whole mixed state crosses, not just ``ns``. ``becsum`` for a PAW
+        # dataset, ``tau`` for a meta-GGA and the converged ``field`` /
+        # ``field_scale`` are properties of the *states* and cannot be rebuilt
+        # from the density this hands over -- forwarding one of them and not the
+        # rest is the defect P38 closed in ``run_dos`` and ``run_pdos``, in a
+        # third place.
         calculation, _, eigenvalues, psi = fixed_density_states(
             result.system, calculation.pseudos, result.density,
-            kpoints=kpoints, ns=result.ns,
+            kpoints=kpoints, nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
+            ns=result.ns, tau=getattr(result, "tau", None),
+            becsum=result.becsum or (),
+            field=result.magnetic_field, field_scale=result.field_scale,
         )
         eigenvalues = jnp.asarray(eigenvalues)
     else:

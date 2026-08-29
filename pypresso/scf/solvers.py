@@ -173,6 +173,28 @@ def newton_krylov(
                 residual.jvp_finite_difference(x, v, warm), dtype=float
             )
 
+        if not np.all(np.isfinite(r)):
+            # The *residual* rather than the direction, which the guard below
+            # catches. What puts a NaN here is a step that left the region where
+            # ``F`` is a function of the density at all, and the reproducible way
+            # to do that is fixed occupations whose filled/empty boundary cuts a
+            # **degenerate multiplet**: which member of the multiplet the
+            # eigensolver hands back is arbitrary, so two evaluations at the same
+            # density give different densities back and there is no map to solve.
+            # An oxygen atom at ``tot_magnetization = 2`` is exactly that -- one
+            # electron in a threefold 2p shell -- and it dies here at the first
+            # line search, where the same atom with a smearing converges in four
+            # Newton steps and a *gapped* fixed LSDA cell agrees with the mixer
+            # to 5e-12. The mixer damps its way past it; a Newton solve cannot.
+            raise FloatingPointError(
+                "the SCF residual is not finite, so there is no Newton step to "
+                "take. The reproducible cause is an occupation rule that splits "
+                "a degenerate multiplet -- occupations='fixed' whose highest "
+                "occupied and lowest unoccupied levels coincide -- which makes "
+                "the density map multivalued rather than merely stiff. Check "
+                "homo against lumo, and use a smearing or scf_solver='mixing' "
+                "if they are equal"
+            )
         operator = LinearOperator((x.size, x.size), matvec=matvec, dtype=float)
         # ``-P`` rather than ``P``: the Jacobian of ``r = F - x`` is close to
         # ``-1`` where the iteration is well behaved, so the approximate inverse

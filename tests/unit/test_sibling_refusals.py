@@ -75,15 +75,19 @@ def test_lsda_without_a_starting_magnetization_is_refused():
     *promotion* path and has had it since P23.
     """
     with pytest.raises(ValueError, match="no starting_magnetization"):
-        _system("nspin = 2")
+        _system("nspin = 2, occupations = 'smearing', degauss = 0.02")
 
 
 @pytest.mark.parametrize(
     "extra",
     [
         # Presence, not value: QE's test is ``sm_wasnt_set``, so an explicit
-        # zero is a request for the unpolarized solution and is honoured.
-        "nspin = 2, starting_magnetization(1) = 0.0",
+        # zero is a request for the unpolarized solution and is honoured. The
+        # smearing is not incidental: ``input.f90`` checks fixed-occupation LSDA
+        # *first* (line 784, against 1507 for this one), so a default-occupation
+        # input never reaches this rule in either code.
+        "nspin = 2, starting_magnetization(1) = 0.0, "
+        "occupations = 'smearing', degauss = 0.02",
         # ``two_fermi_energies``: the magnetization is fixed by another route.
         "nspin = 2, tot_magnetization = 1.0",
         # ``tfixed_occ``.
@@ -141,13 +145,15 @@ def test_an_off_axis_b_field_is_refused_for_a_collinear_run(component):
     with pytest.raises(ValueError, match="only B_field"):
         _system(
             "nspin = 2, starting_magnetization(1) = 0.1, "
+            "occupations = 'smearing', degauss = 0.02, "
             f"b_field({component}) = 0.01"
         )
 
 
 def test_the_z_component_alone_is_still_accepted():
     assert _system(
-        "nspin = 2, starting_magnetization(1) = 0.1, b_field(3) = 0.01"
+        "nspin = 2, starting_magnetization(1) = 0.1, b_field(3) = 0.01, "
+        "occupations = 'smearing', degauss = 0.02"
     ).b_field[2] == 0.01
 
 
@@ -162,6 +168,7 @@ def test_a_direction_constraint_is_refused_for_a_collinear_run():
     with pytest.raises(ValueError, match="atomic direction"):
         _system(
             "nspin = 2, starting_magnetization(1) = 0.1, "
+            "occupations = 'smearing', degauss = 0.02, "
             "constrained_magnetization = 'atomic direction'"
         )
 
@@ -175,6 +182,7 @@ def test_a_total_moment_constraint_needs_a_vector_to_constrain():
     with pytest.raises(ValueError, match="'total' requires"):
         _system(
             "nspin = 2, starting_magnetization(1) = 0.1, "
+            "occupations = 'smearing', degauss = 0.02, "
             "constrained_magnetization = 'total'"
         )
 
@@ -182,7 +190,8 @@ def test_a_total_moment_constraint_needs_a_vector_to_constrain():
 def test_an_atomic_constraint_needs_something_to_build_its_targets_from():
     """``input.f90``: the targets *are* ``starting_magnetization``."""
     with pytest.raises(ValueError, match="needs some starting_magnetization"):
-        _system("nspin = 2, constrained_magnetization = 'atomic'")
+        _system("nspin = 2, constrained_magnetization = 'atomic', "
+                "occupations = 'smearing', degauss = 0.02")
 
 
 # --- the response and force paths -------------------------------------------
