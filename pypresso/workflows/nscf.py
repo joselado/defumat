@@ -87,6 +87,8 @@ def fixed_density_states(
     ns: jnp.ndarray | None = None,
     tau: jnp.ndarray | None = None,
     becsum: tuple = (),
+    field=None,
+    field_scale: float | None = None,
 ):
     """Diagonalise once at every k-point of ``system`` with ``density`` fixed.
 
@@ -104,6 +106,21 @@ def fixed_density_states(
     for the same reason PAW's ``becsum`` is below: it is a property of the
     *wavefunctions*, so it cannot be rebuilt from the density this is handed,
     and the Hubbard potential is built from it.
+
+    ``field`` and ``field_scale`` are the pair ``SCFResult.magnetic_field`` and
+    ``SCFResult.field_scale``, and they are state rather than input for the same
+    reason. A fresh :class:`~pypresso.scf.driver.Calculation` rebuilds the field
+    from the *input*'s ``B_field`` / ``constrained_magnetization``, and two
+    schemes make that the wrong field: Elk's ``reducebf`` (manual 5.104) exists
+    so a symmetry-breaking field can drive the SCF off the unpolarized solution
+    and then be multiplied down towards zero -- after ~25 iterations at 0.9 it
+    is 7% of its input value and the converged state is very nearly a field-free
+    one -- and the fixed-spin-moment scheme drives its field from the moment's
+    error, so its converged value is not in any input at all. Re-applying the
+    input field to a band structure or a DOS afterwards shifts every eigenvalue
+    by a Zeeman term the ground state does not have. **This has no ``pw.x``
+    counterpart**: ``reducebf`` is Elk's, and QE's ``i_cons = 3`` field is
+    likewise a converged quantity rather than a namelist variable.
     """
     if kpoints is not None:
         system = eqx.tree_at(lambda s: s.kpoints, system, kpoints)
@@ -157,7 +174,26 @@ def fixed_density_states(
             "tau = scf_result.tau. It is a property of the occupied states over "
             "the whole zone and cannot be rebuilt from a band path"
         )
-    potential = calculation.potential(density, tau=tau)
+    if calculation.magnetic_field is not None and field is None:
+        # The same argument as ``becsum`` and ``ns``, one field along: what the
+        # run converged under is not what the input asked for. It is refused
+        # rather than approximated because the difference is a rigid Zeeman
+        # shift of every eigenvalue, which looks exactly like a band structure.
+        raise ValueError(
+            "a fixed-density run of a calculation with a magnetic field or a "
+            "constrained moment needs the field the SCF ended with: pass "
+            "field = scf_result.magnetic_field and field_scale = "
+            "scf_result.field_scale. Rebuilding it from the input re-applies a "
+            "field that reducebf or the fixed-spin-moment scheme had already "
+            "changed, which shifts every eigenvalue and still looks like a band "
+            "structure"
+        )
+    potential = calculation.potential(
+        density,
+        1.0 if field_scale is None else float(field_scale),
+        field,
+        tau=tau,
+    )
     _, ddd_paw = (
         calculation.onecenter(becsum, None if tau is None else potential.meta_c)
         if becsum else (None, None)
@@ -193,6 +229,8 @@ def run_nscf(
     ns: jnp.ndarray | None = None,
     tau: jnp.ndarray | None = None,
     becsum: tuple = (),
+    field=None,
+    field_scale: float | None = None,
 ) -> NSCFResult:
     """A full NSCF run: diagonalise, then occupy by the system's own scheme.
 
@@ -202,7 +240,8 @@ def run_nscf(
     metal consistent with the calculation that produced its density.
     """
     calculation, system, eigenvalues = fixed_density_bands(
-        system, pseudos, density, kpoints, nbnd, conv_thr, k_batch, ns, tau, becsum
+        system, pseudos, density, kpoints, nbnd, conv_thr, k_batch, ns, tau,
+        becsum, field, field_scale,
     )
     wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
     nspin = calculation.nspin
@@ -237,12 +276,35 @@ def denser_grid(
     run wants it halved. Skipping that step counts every electron twice on the
     denser grid, which does not fail -- it moves the Fermi level and integrates
     to the right electron count at the wrong energy.
-    """
-    from pypresso.system.symmetry import find_symmetries
 
+    **The symmetry is the run's, not the crystal's**, and that is a different
+    thing three ways. This used to call ``find_symmetries`` and reduce with
+    whatever the lattice and the basis allow, which reduces a grid the SCF ran
+    unreduced:
+
+    * ``nosym`` means ``nsym = 1`` (``setup.f90``), and a **spin spiral is
+      required to be nosym** -- the spin space group is not written, so the
+      crystal's operations are not the spiral's. Reducing with them folds
+      k-points the run deliberately kept apart;
+    * a **magnetic** noncollinear run has the smaller group
+      ``magnetic_symmetries`` returns, the magnetization being an axial vector,
+      and has no ``-k = k``: ``time_reversal`` is off (``magnetic_sym`` in
+      ``setup.f90``);
+    * ``noinv`` turns time reversal off on its own.
+
+    These are the four lines of :meth:`pypresso.system.builder.System.
+    _recelled_kpoints`, and they are duplicated rather than shared because that
+    method rebuilds *this* system's grid where this builds a denser one. An
+    explicit ``rotations`` keeps its own meaning: the caller owns it, and it is
+    used as given.
+    """
     cell = cell if cell is not None else system.cell
+    magnetic = system.nspin == 4 and system.domag
+    t_rev = None
     if rotations is None:
-        rotations = find_symmetries(cell, system.structure).rotation_array()
+        symmetries = system.symmetry_group()
+        rotations = None if system.nosym else symmetries.rotation_array()
+        t_rev = None if system.nosym else symmetries.t_rev_array()
     if shift is None:
         shift = system.kpoints.shift or (0, 0, 0)
     return kpoints_for_spin(
@@ -252,6 +314,8 @@ def denser_grid(
             cell,
             precision=system.kpoints.precision,
             rotations=rotations,
+            time_reversal=not system.noinv and not magnetic,
+            t_rev=t_rev,
         ),
         system.nspin,
     )

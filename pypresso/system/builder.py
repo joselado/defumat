@@ -895,6 +895,17 @@ _REFUSED_SWITCHES = (
     ("system", "twochem", "logical",
      "two chemical potentials, one for the valence and one for the conduction "
      "bands (PW/src/weights.f90's twochem branch)"),
+    ("system", "qcutz", "nonzero",
+     "the constant-cutoff modified kinetic functional (PW/src/g2_kin.f90: "
+     "g2kin += qcutz * (1 + erf((g2kin - ecfixed)/q2sigma))), which smooths the "
+     "basis-set discontinuity a variable-cell relaxation runs into. It is one "
+     "erf in basis/planewaves.py:kinetic and the stress would come free -- QE "
+     "needs a separately hand-derived kfac in stres_knl.f90 and here the stress "
+     "is jax.grad of the energy -- but every input in the vendored test-suite "
+     "that sets it is a CPV/ case, so there is no pw.x benchmark to validate it "
+     "against and it is refused rather than written blind. It is the documented "
+     "mitigation for the frozen-basis Pulay error PLAN.md P29 measures at "
+     "0.45 Ry on five-layer graphite"),
     # ``INPUT_PW.txt`` documents ``twochem`` in ``&system``, but QE's own
     # ``pw_twochem/vc-relax_twochem.in`` puts it in ``&control`` and ``pw.x``
     # honours it there. Looking in one namelist only meant that input was read,

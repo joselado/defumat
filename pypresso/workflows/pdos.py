@@ -592,9 +592,21 @@ def run_pdos(
             "fermi_energy_down": result.fermi_energy_down,
         }
     else:
+        # **The whole of the mixed state, not one member of it.** This passed
+        # nine positional arguments into a signature that takes more, so ``tau``
+        # and ``becsum`` were dropped and a PAW or meta-GGA projected DOS on a
+        # denser grid stopped on ``fixed_density_states``' own refusal -- with
+        # no argument through which to satisfy it. That is ``PLAN.md`` P38's
+        # defect (``run_dos`` never forwarded ``becsum`` or ``ns``) surviving in
+        # the sibling workflow P38 did not touch. Every one of these is sitting
+        # on ``result`` and always was.
         calculation, system, eigenvalues, wavefunctions = fixed_density_states(
             system, pseudos, result.density, kpoints, nbnd, conv_thr, k_batch,
-            getattr(result, "ns", None),
+            ns=getattr(result, "ns", None),
+            tau=getattr(result, "tau", None),
+            becsum=tuple(getattr(result, "becsum", ()) or ()),
+            field=getattr(result, "magnetic_field", None),
+            field_scale=getattr(result, "field_scale", None),
         )
         eigenvalues = jnp.asarray(eigenvalues)
         wg, levels = calculation.occupations(eigenvalues)

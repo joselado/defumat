@@ -3,8 +3,9 @@
 Combinations of features that do not work, from the sweep of 2026-08-29 — four
 agents over the SCF/spin matrix, the response stack, the `Calculator`/workflow
 plumbing, and a repo-wide hunt for silent failure. The nine that were bugs with a
-*refusal* for a fix are closed (`tests/unit/test_sibling_refusals.py`); what is
-left is here.
+*refusal* for a fix are closed (`tests/unit/test_sibling_refusals.py`), and so
+are the seven of §1 whose fix was a term or a forwarding
+(`tests/unit/test_state_across_boundaries.py`). What is left is §2 and §3.
 
 This is not `PLAN.md`. That file is the phase record and says what was built and
 what each phase's traps were; this one is a list of what a user can ask for and
@@ -18,144 +19,58 @@ wrong. Check before building on one.
 
 ---
 
-## 1. Still bugs
+## 1. Still bugs — **closed 2026-08-29**
 
-A run that starts and returns a plausible number. Unlike the nine that were
-fixed, none of these has a refusal for a fix — each is a term or a forwarding
-that should be there.
+All seven are fixed; `tests/unit/test_state_across_boundaries.py` holds the
+tests. Kept here rather than deleted, because what each one *was* is the useful
+part.
 
-### The denser k-grid ignores `nosym` and the magnetic group — *verified*
+| bug | what it did | fix |
+|---|---|---|
+| `denser_grid` ignored `nosym`, `noinv` and the magnetic group | reduced a DOS/PDOS grid with operations the SCF did not use — worst on a spin spiral, which is *required* to be `nosym` | mirrors `System._recelled_kpoints`' four lines (`workflows/nscf.py`) |
+| the PDOS symmetrised a `nosym` run | `sym_proj_k`'s average over a group the states do not share; P28b's `dielectric_tensor` defect in a second place | `symmetrize and calculation.use_symmetry` (`projwfc/projections.py`) |
+| DFT+U reached the topology workflows without its Hubbard term | `hamiltonian` called with two positional arguments of three, so the invariant came off eigenvalues wrong by the whole Hubbard shift — and `_check_gap` certified the manifold with them | `ns` on `DFTSource` and the three `run_*`, refused when absent; meta-GGA refused by name at the boundary (`workflows/topology.py`) |
+| `with_kpoints` skipped `degspin` | counted every electron twice on exactly the comparison its own docstring recommends | `for_spin` made **idempotent** via `KPoints.spin_normalized`, then applied on the way in (`system/kpoints.py`, `calculator.py`) |
+| `SHARED_OPTIONS` documented as universal | nine methods dropped them; the one that forwarded was capping a **Dyson** iteration with the SCF's `max_iterations` | `SCF_ONLY_OPTIONS` split out and `_defaults_for(exclude=)`; the nine forward the rest (`calculator.py`) |
+| `qcutz`/`ecfixed`/`q2sigma` read by nothing | ran with the plain `G^2` and converged elsewhere | `_REFUSED_SWITCHES` — see below (`system/builder.py`) |
+| the converged field did not cross into a fixed-density run | `reducebf` scales the field towards zero as the SCF runs, and a band structure afterwards re-applied the **input** field | `SCFResult.field_scale` added beside `magnetic_field`, `field`/`field_scale` on `fixed_density_states`/`run_nscf`/`run_bands`/`run_dos`, injected by `_call_options` (`scf/driver.py`, `workflows/`, `calculator.py`) |
 
-`workflows/nscf.py:241`, `denser_grid`, calls `find_symmetries(cell, structure)`
-directly and reduces the grid with the whole crystal group. `System.
-_recelled_kpoints` (`system/builder.py:385-407`) is the correct four lines and
-does consult `nosym`, `noinv` and the magnetic group, and `System.
-symmetry_group()` already applies `magnetic_symmetries` for `nspin_mag == 4`.
+Three of them are worth a note beyond the table.
 
-So `get_dos(grid=...)` / `run_dos(grid=...)` / `run_pdos(grid=...)` reduce with
-symmetries the run said not to use. It bites a spin spiral hardest, because a
-spiral is *required* to be `nosym` (the spin space group is not written), and a
-noncollinear magnet next, because the magnetic group is smaller than the
-crystal's and there is no `-k = k`.
+**`for_spin` needed a flag, not a call.** The division by `degspin` is not
+idempotent and a k-set reaches a polarized run by four routes — `build_system`,
+`_recelled_kpoints`, `denser_grid`, `with_kpoints` — none of which can see where
+the set came from. `KPoints.spin_normalized` is set **only** when the division
+happens, so a set built for `nspin = 1` is still normalised when it later
+reaches a polarized run.
 
-**Fix:** mirror `_recelled_kpoints`. `KPoints.automatic` already takes
-`time_reversal` and `t_rev`. Cheap.
+**`qcutz` is refused rather than implemented, and that is the whole fix.** It is
+one `erf` in `basis/planewaves.py:kinetic` and the stress would come free — the
+stress here is `jax.grad` of the energy where QE needs a separately hand-derived
+`kfac` in `stres_knl.f90`. But every vendored input that sets it is a `CPV/`
+case, so there is no `pw.x` benchmark to validate against, and an unvalidated
+`erf` term does not close a silent bug, it moves it. The refusal does close it.
+Implementing it needs a generated reference first.
 
-### The PDOS symmetrises a `nosym` run — *verified (site)*
+**`SHARED_OPTIONS` was wrong in both directions and forwarding everything would
+have spread the worse half.** `max_iterations` is the SCF's loop in `run_scf`,
+the self-consistent *response's* in `dielectric_tensor`, and the *Dyson fixed
+point's* in `run_absorption` — three loops, one word. What stays shared is what
+means the same thing wherever it is named: `nbnd`, `conv_thr`, `k_batch`,
+`diagonalization`, `verbose`. An SCF-only option is still reachable per call,
+where the name is unambiguous.
 
-`projwfc/projections.py:192` gates the projection symmetrisation on the
-`symmetrize` keyword (default `True`) and never on `calculation.use_symmetry`,
-which exists at `scf/driver.py:1131` for exactly this. QE gets it for free:
-`sym_proj_k` reads `nsym`, which `setup.f90` has already collapsed to 1.
-
-This is the shape of the `dielectric_tensor` bug P28b found — symmetrising a
-`nosym` run — in a second place.
-
-**Fix:** `if symmetrize and calculation.use_symmetry`, at
-`projections.py:192` and `workflows/pdos.py:523`. One boolean.
-
-### DFT+U reaches the topology workflows without its Hubbard term
-
-`workflows/topology.py:178-180`: `DFTSource.states` builds
-`calculation.hamiltonian(potential.v_scf, self._ddd_paw())` — two positional
-arguments into a signature whose third is `hubbard=None` (`scf/driver.py:2560`).
-So `run_berry_curvature` / `run_z2` / `run_z2_3d` diagonalise the **un-Hubbard**
-Hamiltonian, and `DFTSource._check_gap` then certifies the occupied manifold as
-isolated using those eigenvalues. A confident integer off the wrong bands.
-
-**Fix:** an `ns` field on `DFTSource` threaded the way `becsum` already is, plus
-`calculation.hubbard_terms(ns)`, plus a refusal at the boundary when it is
-absent. `Calculator._call_options` would supply `ns` the moment `run_z2` names
-it. The meta-GGA half of the same hole is at least loud — `v_of_rho` raises —
-but the message lands deep in the potential builder rather than at the workflow
-boundary.
-
-### `with_kpoints` does not apply `degspin`
-
-`calculator.py:656`: the k-set is substituted raw. `system/kpoints.py`'s
-`for_spin` halves the weights for `nspin` in (2, 4) and every constructor applies
-the spin degeneracy unconditionally, so an LSDA or noncollinear user handing in
-a `KPoints.automatic` — the thing `with_kpoints`'s own docstring advertises,
-"the unreduced grid beside its irreducible wedge … same energy, fewer
-k-points" — counts every electron twice. It does not fail; it moves the Fermi
-level and integrates to the right electron count at the wrong energy.
-
-**Fix is not a blind wrap:** `for_spin` is **not idempotent**, so a k-set that
-came out of `denser_grid` must not be halved again. It needs a convention —
-normalise at the boundary and stop doing it in `denser_grid`, or carry a flag on
-`KPoints`.
-
-### `SHARED_OPTIONS` are documented as universal and are not forwarded
-
-`calculator.py:129` promises "any of `SHARED_OPTIONS`, applied to every method
-that names them", and nine response methods (`get_dielectric_tensor`,
-`get_phonons`, `get_strain_response`, `get_raman_tensors`,
-`get_electrostriction`, `get_elastic_constants`, `get_forces`, `get_stress`) do
-not call `_defaults_for`. A `Calculator(system, verbose=True,
-max_iterations=200)` gets a verbose 200-iteration relaxation and a silently
-default, silently quiet dielectric solve.
-
-**And the one method that *does* forward is the sharper problem.**
-`get_absorption` forwards, and `run_absorption`'s `max_iterations`
-(`workflows/tddft.py:159`) is the **bootstrap Dyson fixed point's** limit, not
-the SCF's — so a calculator built with `max_iterations=12` to cap the SCF
-silently caps the Dyson iteration at 12. `mixing_mode`/`mixing_beta` collide the
-same way between the SCF mixer and `response/mixing.py`.
-
-**Fix:** forward in the nine, *or* narrow `SHARED_OPTIONS` so the docstring is
-true. Whichever is chosen, the name collision needs deciding first — it is the
-part that is currently wrong rather than merely absent.
-
-### `qcutz` / `ecfixed` / `q2sigma` are read by nothing
-
-Zero hits in the package, and not in `_REFUSED_SWITCHES` either
-(`system/builder.py:768-810`), whose stated criterion — "input switches that
-change the physics of a run this code otherwise supports … refused rather than
-ignored" — covers them exactly. An input using QE's smoothed constant-cutoff
-kinetic functional runs with the plain `G^2` and converges somewhere else.
-
-It matters where P29 already records the problem it exists to solve: the 0.45 Ry
-frozen-basis Pulay error on five-layer graphite in a variable-cell relaxation.
-
-**Fix:** one `erf` term in `basis/planewaves.py:116`
-(`g2_kin.f90:43-53`), three `&system` variables, and the pass-through. **The
-stress comes free** — QE needs a separately hand-derived `kfac`
-(`stres_knl.f90:63-66`) and here the stress is `jax.grad` of the energy. Cheap,
-and the alternative (a `_REFUSED_SWITCHES` entry) is cheaper still.
-
-### The converged field does not cross into a fixed-density run
-
-`workflows/nscf.py:111` builds a fresh `Calculation`, whose `__init__` rebuilds
-the magnetic field from the *input's* `b_field` / `constrained_magnetization`.
-`SCFResult.magnetic_field` carries the converged object and is dropped.
-
-That is wrong in both directions and `reducebf` is why. Elk's `reducebf`
-(manual §5.104) exists so a symmetry-breaking field can drive the SCF off the
-unpolarized solution and then be scaled to nothing — after ~25 iterations at
-0.9 the field is 7% of its input value, and the converged state is a field-free
-one. A band structure or DOS afterwards re-applies the **full** input field. The
-fixed-spin-moment case is the same: `i_cons = 3`'s converged field is state, not
-input.
-
-**Fix:** a `field`/`field_scale` parameter on `fixed_density_states` and the
-three workflows above — `Calculation.potential` already takes both — and
-`Calculator._call_options` injecting `result.magnetic_field` the way it already
-injects `ns`, `tau` and `becsum`.
-
----
+**One entry from §2 closed with them**, because it was on the same line: the
+PAW/meta-GGA projected DOS on a denser grid. `run_pdos` passed nine positional
+arguments into a longer signature; it now forwards the whole mixed state off the
+`result` it already had.
 
 ## 2. Unreachable — the physics works, the plumbing cannot express it
 
-### PAW or meta-GGA projected DOS on a denser grid — *verified*
+### ~~PAW or meta-GGA projected DOS on a denser grid~~ — **closed**
 
-`workflows/pdos.py:595` passes nine positional arguments into
-`fixed_density_states`' ten-argument signature: `ns` goes, `tau` and `becsum` do
-not. They are sitting on the `result` argument the function already has.
-
-This is P38's defect — "`run_dos` never forwarded `becsum` or `ns`, so a PAW or
-DFT+U density of states on a denser grid was unreachable" — surviving in the
-sibling workflow that P38 did not touch. `run_dos` shows the exact fix, two
-parameters and a call.
+`run_pdos` now forwards `tau`, `becsum`, `field` and `field_scale` off the
+`result` it already receives, beside the `ns` it always passed. See §1.
 
 ### `Calculator.get_band_velocities` does not exist — *verified*
 

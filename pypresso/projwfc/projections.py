@@ -155,6 +155,18 @@ def atomic_projections(
     :class:`~pypresso.scf.driver.SCFResult`'s or an NSCF run's, on the k-points
     ``calculation`` was built with. Nothing is diagonalised here: ``projwfc.x``
     reads the states a ``pw.x`` run left behind and so does this.
+
+    ``symmetrize`` asks for ``sym_proj_k``'s average over the point group, and
+    it is **and**-ed with :attr:`~pypresso.scf.driver.Calculation.use_symmetry`:
+    a run that set ``nosym`` did not use those operations, so averaging over
+    them here averages a quantity the states do not share. ``projwfc.x`` gets
+    this for free -- it reaches ``sym_proj_k`` through ``nsym``, which
+    ``setup.f90`` has already collapsed to 1 -- and this code has the group
+    whole beside a switch, so it has to make the test. It is the shape of the
+    ``dielectric_tensor``-symmetrising-a-``nosym``-run defect ``PLAN.md`` P28b
+    found, in a second place; the failure is silent both times, because an
+    average over the wrong group is still a smooth, normalised, plausible
+    projection.
     """
     if kind not in PROJECTION_KINDS:
         raise ValueError(
@@ -193,7 +205,7 @@ def atomic_projections(
     symmetry = (
         build_projection_symmetry(
             channels, system.cell, system.structure, calculation.symmetries
-        ) if symmetrize else None
+        ) if symmetrize and calculation.use_symmetry else None
     )
 
     def one_kpoint(state):

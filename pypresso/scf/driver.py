@@ -625,6 +625,15 @@ class SCFResult:
     #: The field the run ended with, which is not the one it started with when
     #: ``reducebf`` or the fixed-spin-moment scheme was in use.
     magnetic_field: object | None = None
+    #: The accumulated ``reducebf`` factor the field was applied with at the
+    #: last iteration. **It is not on the field object**: ``reducebf`` multiplies
+    #: a loop variable and leaves the field itself alone, so the converged
+    #: potential is reproducible only from the pair. Elk's field exists to break
+    #: a symmetry and then be scaled away -- after ~25 iterations at 0.9 it is
+    #: 7% of its input value -- so a fixed-density run afterwards that rebuilt
+    #: the field from the *input* would apply a field the SCF had almost
+    #: switched off.
+    field_scale: float = 1.0
     #: 1, 2 or 4: how many components :attr:`density` and :attr:`potential`
     #: have. It is 1 for a *nonmagnetic* spin-orbit run, where ``nspin`` is 4.
     nspin_mag: int = 1
@@ -3732,6 +3741,7 @@ def run_scf(
         field_energy=None if field is None else float(potential.e_field),
         constraint_energy=None if field is None else float(potential.e_constraint),
         magnetic_field=field,
+        field_scale=float(field_scale),
         fermi_energy=levels.get("fermi_energy"),
         fermi_energy_up=levels.get("fermi_energy_up"),
         fermi_energy_down=levels.get("fermi_energy_down"),

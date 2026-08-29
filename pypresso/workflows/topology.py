@@ -92,6 +92,14 @@ class DFTSource:
     #: would move the invariant only by moving a band across the manifold's gap
     #: -- silently, since the integer would still be an integer.
     becsum: tuple = ()
+    #: The converged Hubbard occupation matrix (``SCFResult.ns``), needed for
+    #: the same reason ``becsum`` is: ``v_ns`` is built from it and it is a
+    #: property of the *wavefunctions*, so it cannot be rebuilt from the
+    #: density. Without it the manifold is diagonalised on the **un-Hubbard**
+    #: Hamiltonian -- and then :meth:`_check_gap` certifies it isolated using
+    #: those eigenvalues, so the invariant is a confident integer taken off the
+    #: wrong bands.
+    ns: jnp.ndarray | None = None
     nbnd: int | None = None
     conv_thr: float = 1.0e-8
     k_batch: int | None | str = "default"
@@ -169,6 +177,38 @@ class DFTSource:
                 "becsum = scf_result.becsum. It cannot be rebuilt from the "
                 "density, and leaving it out is wrong by tenths of an eV"
             )
+        hubbard_terms = None
+        if calculation.is_hubbard:
+            if self.ns is None:
+                # ``workflows.nscf``'s refusal again, and it had no counterpart
+                # here at all: ``hamiltonian`` was called with two positional
+                # arguments into a signature whose third is ``hubbard=None``,
+                # so a DFT+U crystal was diagonalised without its Hubbard term
+                # and the invariant came off eigenvalues wrong by the whole
+                # Hubbard shift.
+                raise ValueError(
+                    "a topological invariant of a DFT+U calculation needs the "
+                    "converged occupation matrix as well as the density: pass "
+                    "ns = scf_result.ns. It cannot be rebuilt from the density, "
+                    "and leaving the term out gives eigenvalues that look "
+                    "plausible, are wrong by the whole Hubbard shift, and still "
+                    "produce an integer"
+                )
+            _, _, hubbard_terms = calculation.hubbard_terms(jnp.asarray(self.ns))
+        if calculation.functional.is_meta:
+            # Refused at the boundary rather than threaded. ``tau`` could be
+            # carried the way ``ns`` and ``becsum`` are, and then a Tran-Blaha
+            # invariant would run -- unvalidated, on a functional whose total
+            # energy is not the value of anything it minimised. The refusal is
+            # the honest state of it; what it replaces is ``v_of_rho`` raising
+            # about a missing keyword deep inside the potential builder.
+            raise NotImplementedError(
+                f"a topological invariant under {calculation.functional.name} "
+                "is not implemented: the functional is a potential rather than "
+                "the derivative of an energy, and the combination is "
+                "unvalidated. The band structure and the density of states are "
+                "unaffected"
+            )
         nbnd = self.nbnd or max(
             self.nocc + 2,
             default_nbnd(
@@ -177,7 +217,9 @@ class DFTSource:
             ),
         )
         potential = calculation.potential(self.density)
-        hamiltonians = calculation.hamiltonian(potential.v_scf, self._ddd_paw())
+        hamiltonians = calculation.hamiltonian(
+            potential.v_scf, self._ddd_paw(), hubbard_terms
+        )
         ethr = max(
             ETHR_MIN,
             0.1 * min(1.0e-2, self.conv_thr / max(1.0, calculation.nelec)),
@@ -220,7 +262,7 @@ class DFTSource:
 
 
 def _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
-            becsum=()) -> DFTSource:
+            becsum=(), ns=None) -> DFTSource:
     if nocc is None:
         nocc = _occupied_bands(system, pseudos)
     return DFTSource(
@@ -229,6 +271,7 @@ def _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
         density=density,
         nocc=int(nocc),
         becsum=tuple(becsum or ()),
+        ns=ns,
         nbnd=nbnd,
         conv_thr=conv_thr,
         k_batch=k_batch,
@@ -281,6 +324,7 @@ def run_berry_curvature(
     conv_thr: float = 1.0e-8,
     k_batch: int | None | str = "default",
     becsum: tuple = (),
+    ns: jnp.ndarray | None = None,
 ) -> BerryCurvature:
     """Berry curvature and the Chern number on one plane of the zone.
 
@@ -294,7 +338,7 @@ def run_berry_curvature(
             :mod:`pypresso.topology.berry`.
     """
     source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
-                     becsum=becsum)
+                     becsum=becsum, ns=ns)
     return _chern_number(
         source, shape=shape, axis=axis, offset=offset, method=method,
         k_batch=k_batch,
@@ -316,6 +360,7 @@ def run_z2(
     conv_thr: float = 1.0e-8,
     k_batch: int | None | str = "default",
     becsum: tuple = (),
+    ns: jnp.ndarray | None = None,
 ):
     """The 2D Z2 invariant of one plane of the zone.
 
@@ -330,7 +375,7 @@ def run_z2(
     """
     _require_spinors(system, "the Z2 invariant")
     source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
-                     becsum=becsum)
+                     becsum=becsum, ns=ns)
     kwargs = dict(axis=axis, offset=offset)
     if (method or "wilson").lower() == "parity":
         kwargs.update(dimension=2, centre=_centre(system))
@@ -352,6 +397,7 @@ def run_z2_3d(
     conv_thr: float = 1.0e-8,
     k_batch: int | None | str = "default",
     becsum: tuple = (),
+    ns: jnp.ndarray | None = None,
 ):
     """The four three-dimensional indices ``(nu0; nu1 nu2 nu3)``.
 
@@ -361,7 +407,7 @@ def run_z2_3d(
     """
     _require_spinors(system, "the Z2 invariants")
     source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
-                     becsum=becsum)
+                     becsum=becsum, ns=ns)
     kwargs = {}
     if (method or "wilson").lower() == "parity":
         kwargs["centre"] = _centre(system)

@@ -84,8 +84,9 @@ import numpy as np
 from pypresso.pseudo.upf import Pseudopotential, read_upf
 from pypresso.scf.driver import Calculation, SCFResult, run_scf
 from pypresso.system.builder import System, build_system, system_from_file
+from pypresso.system.kpoints import for_spin
 
-__all__ = ["Calculator", "SHARED_OPTIONS"]
+__all__ = ["Calculator", "SHARED_OPTIONS", "SCF_ONLY_OPTIONS"]
 
 
 #: Options a :class:`Calculator` accepts once, at construction, and forwards to
@@ -110,6 +111,55 @@ SHARED_OPTIONS = frozenset({
     "verbose",
 })
 
+#: The subset of :data:`SHARED_OPTIONS` that describes the **SCF loop** and
+#: nothing else, and is therefore *not* forwarded past it.
+#:
+#: The name is the whole problem: ``max_iterations`` is the SCF's iteration
+#: count in :func:`~pypresso.scf.driver.run_scf`, the **self-consistent
+#: response's** in :func:`~pypresso.response.efield.dielectric_tensor`
+#: (``response/efield.py:322``, whose default comes from
+#: :mod:`pypresso.response.mixing`) and the **Dyson fixed point's** in
+#: :func:`~pypresso.workflows.run_absorption` (``tddft/dyson.py``'s 500). Three
+#: loops, one word. ``mixing_mode``/``mixing_beta`` collide the same way between
+#: the density mixer and the response mixer.
+#:
+#: So this was wrong in both directions at once. Nine response methods dropped
+#: the shared options entirely -- a calculator built with ``verbose=True`` got a
+#: silent dielectric solve, against a docstring promising otherwise -- and the
+#: one method that did forward, ``get_absorption``, was silently capping a Dyson
+#: iteration with a number chosen for the SCF. Forwarding *everything* would
+#: have spread the second bug to the other nine rather than fixing the first.
+#:
+#: What stays shared is what means the same thing wherever it is named: how many
+#: bands, how tightly to diagonalise, how many k-points in flight, which
+#: eigensolver, and whether to print. An SCF-only option is still reachable per
+#: call -- ``get_absorption(max_iterations=...)`` is unambiguous *at the call
+#: site*, which is exactly what a constructor default is not.
+SCF_ONLY_OPTIONS = frozenset({
+    "mixing_mode",
+    "mixing_beta",
+    "mixing_fixed_ns",
+    "max_iterations",
+    "scf_solver",
+    "scf_solver_options",
+})
+
+
+#: Parameter name -> the :class:`~pypresso.scf.driver.SCFResult` attribute that
+#: fills it. All five are properties of the converged *state* that cannot be
+#: rebuilt from the density, so an entry point that names one is supplied it
+#: rather than left to refuse. ``field``/``field_scale`` are the pair the SCF
+#: ended with, which is not the input's whenever ``reducebf`` or the
+#: fixed-spin-moment scheme was in use -- hence the mapping rather than a plain
+#: attribute lookup.
+_STATE_ARGUMENTS = {
+    "ns": "ns",
+    "tau": "tau",
+    "becsum": "becsum",
+    "field": "magnetic_field",
+    "field_scale": "field_scale",
+}
+
 
 class Calculator:
     """A system, its pseudopotentials, and every calculation they support.
@@ -127,10 +177,16 @@ class Calculator:
         announce: print a line to stderr when a method runs an SCF that the
             caller did not ask for by name.
         **defaults: any of :data:`SHARED_OPTIONS`, applied to every method that
-            names them. A per-call keyword overrides them for that call --
-            except :data:`SETUP_OPTIONS` (``diagonalization``, ``k_batch``),
-            which do not describe a *run* but the ``Calculation`` every run
-            goes through, so giving one per call rebuilds it and it stays.
+            names them -- **except** :data:`SCF_ONLY_OPTIONS`, which stop at the
+            SCF, because past it the same spelling means a different loop
+            (``max_iterations`` is the SCF's, the self-consistent response's and
+            the Dyson fixed point's, in three different callees). A per-call
+            keyword overrides both for that call, and is the way to reach an
+            SCF-only option elsewhere -- at the call site the name is
+            unambiguous. The exception to *that* is :data:`SETUP_OPTIONS`
+            (``diagonalization``, ``k_batch``), which do not describe a *run*
+            but the ``Calculation`` every run goes through, so giving one per
+            call rebuilds it and it stays.
 
     A minimal script::
 
@@ -473,9 +529,12 @@ class Calculator:
         from pypresso.response.efield import dielectric_tensor
 
         result = self._ground_state("the dielectric tensor")
-        return dielectric_tensor(self.calculation, result.wavefunctions,
-                                 result.eigenvalues, result.density,
-                                 result.becsum, **options)
+        return dielectric_tensor(
+            self.calculation, result.wavefunctions, result.eigenvalues,
+            result.density, result.becsum,
+            **self._defaults_for(dielectric_tensor, options,
+                                 exclude=SCF_ONLY_OPTIONS),
+        )
 
     def get_born_charges(self, **options):
         """The Born effective charges ``Z* = dF/dE``, as a ``(nat, 3, 3)``.
@@ -497,23 +556,34 @@ class Calculator:
         from pypresso.response.phonon import dynamical_matrix
 
         result = self._ground_state("the dynamical matrix")
-        return dynamical_matrix(self.calculation, result.wavefunctions,
-                                result.eigenvalues, result.density,
-                                result.becsum, **options)
+        return dynamical_matrix(
+            self.calculation, result.wavefunctions, result.eigenvalues,
+            result.density, result.becsum,
+            **self._defaults_for(dynamical_matrix, options,
+                                 exclude=SCF_ONLY_OPTIONS),
+        )
 
     def get_raman_tensors(self, **options):
         """``d(epsilon)/d(tau)``: the Raman tensor of each atom."""
         from pypresso.response.nonlinear import raman_tensors
 
         result = self._ground_state("the Raman tensors")
-        return raman_tensors(self.calculation, result, **options)
+        return raman_tensors(
+            self.calculation, result,
+            **self._defaults_for(raman_tensors, options,
+                                 exclude=SCF_ONLY_OPTIONS),
+        )
 
     def get_vibrational_spectrum(self, **options):
         """Per-mode Raman and infrared activities -- what a spectrum plots."""
         from pypresso.response.spectra import vibrational_spectrum
 
         result = self._ground_state("a vibrational spectrum")
-        return vibrational_spectrum(self.calculation, result, **options)
+        return vibrational_spectrum(
+            self.calculation, result,
+            **self._defaults_for(vibrational_spectrum, options,
+                                 exclude=SCF_ONLY_OPTIONS),
+        )
 
     def get_strain_response(self, **options):
         """The first-order response to a homogeneous strain.
@@ -527,7 +597,9 @@ class Calculator:
         if self._strain_response is None or options:
             self._strain_response = strain_response(
                 self.calculation, result.wavefunctions, result.eigenvalues,
-                result.density, result.becsum, **options
+                result.density, result.becsum,
+                **self._defaults_for(strain_response, options,
+                                     exclude=SCF_ONLY_OPTIONS),
             )
         return self._strain_response
 
@@ -537,9 +609,12 @@ class Calculator:
 
         result = self._ground_state("the elastic constants")
         response = self.get_strain_response()
-        return elastic_constants(self.calculation, result.wavefunctions,
-                                 result.eigenvalues, result.density, response,
-                                 **options)
+        return elastic_constants(
+            self.calculation, result.wavefunctions, result.eigenvalues,
+            result.density, response,
+            **self._defaults_for(elastic_constants, options,
+                                 exclude=SCF_ONLY_OPTIONS),
+        )
 
     def get_electrostriction(self, **options):
         """``d(chi)/d(strain)`` and the four electrostriction tensors."""
@@ -547,7 +622,11 @@ class Calculator:
 
         result = self._ground_state("the electrostriction tensors")
         options.setdefault("strain", self._strain_response)
-        return electrostriction(self.calculation, result, **options)
+        return electrostriction(
+            self.calculation, result,
+            **self._defaults_for(electrostriction, options,
+                                 exclude=SCF_ONLY_OPTIONS),
+        )
 
     def get_absorption(self, frequencies, **options):
         """An optical absorption spectrum, by a sum over states plus a Dyson
@@ -557,7 +636,8 @@ class Calculator:
         result = self._ground_state("an absorption spectrum")
         return run_absorption(
             self.system, self.pseudos, result.density, frequencies,
-            **self._call_options(run_absorption, result, options)
+            **self._call_options(run_absorption, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
         )
 
     # ------------------------------------------------------------------
@@ -652,9 +732,24 @@ class Calculator:
         The unreduced grid beside its irreducible wedge is the usual reason to
         want this, and comparing the two is the check on the symmetry
         reduction: same energy, fewer k-points.
+
+        **The weights are normalised on the way in**
+        (:func:`pypresso.system.kpoints.for_spin`), because every ``KPoints``
+        constructor applies the spin degeneracy unconditionally and a polarized
+        run wants it halved -- ``setup.f90`` applies ``degspin`` only in its LDA
+        branch. Substituting a raw ``KPoints.automatic`` here used to skip that
+        step, which counts every electron twice and does not fail: the Fermi
+        level moves and the run integrates to the right electron count at the
+        wrong energy, on exactly the comparison the paragraph above recommends.
+        A k-set that has already been normalised -- one from
+        :func:`~pypresso.workflows.nscf.denser_grid`, say -- is left alone, the
+        division being idempotent through ``KPoints.spin_normalized``.
         """
         return self._derived(
-            dataclasses.replace(self.system, kpoints=kpoints), seed=True
+            dataclasses.replace(
+                self.system, kpoints=for_spin(kpoints, self.system.nspin)
+            ),
+            seed=True,
         )
 
     def with_spin(self, nspin=None, **options) -> "Calculator":
@@ -692,20 +787,27 @@ class Calculator:
     # plumbing
     # ------------------------------------------------------------------
 
-    def _defaults_for(self, func, options=None) -> dict:
+    def _defaults_for(self, func, options=None, exclude=frozenset()) -> dict:
         """This calculator's shared options that ``func`` actually names.
 
         Filtering is strictly by named parameter. A ``**kwargs`` in the
         signature is *not* taken as permission to pass everything: several
         entry points forward theirs to the Sternheimer solvers, which have no
         ``nbnd`` and would raise on one.
+
+        ``exclude`` drops names whose *meaning* differs in the callee even
+        though the spelling matches -- :data:`SCF_ONLY_OPTIONS`, which is where
+        the reasoning lives. It applies to the calculator's defaults only:
+        anything the caller passed in ``options`` was written at the call site
+        and is honoured.
         """
         parameters = inspect.signature(func).parameters
         shared = {name: value for name, value in self.defaults.items()
-                  if name in parameters}
+                  if name in parameters and name not in exclude}
         return {**shared, **(options or {})}
 
-    def _call_options(self, func, result: SCFResult, options) -> dict:
+    def _call_options(self, func, result: SCFResult, options,
+                      exclude=frozenset()) -> dict:
         """``_defaults_for`` plus the pieces of the mixed state ``func`` needs.
 
         This is the method that makes the error class go away: ``ns`` under a
@@ -714,10 +816,10 @@ class Calculator:
         density, and are supplied together or not at all.
         """
         parameters = inspect.signature(func).parameters
-        merged = self._defaults_for(func, options)
-        for name in ("ns", "tau", "becsum"):
+        merged = self._defaults_for(func, options, exclude=exclude)
+        for name, attribute in _STATE_ARGUMENTS.items():
             if name in parameters and name not in merged:
-                value = getattr(result, name, None)
+                value = getattr(result, attribute, None)
                 if value is not None and not (name == "becsum" and not value):
                     merged[name] = value
         return merged

@@ -15,6 +15,8 @@ compared against QE with ``nosym=.true., noinv=.true.``.
 
 from __future__ import annotations
 
+import dataclasses
+
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
@@ -372,6 +374,18 @@ class KPoints(eqx.Module):
     grid: tuple[int, int, int] | None = eqx.field(static=True, default=None)
     shift: tuple[int, int, int] | None = eqx.field(static=True, default=None)
     precision: Precision = eqx.field(static=True, default=DEFAULT_PRECISION)
+    #: Whether :func:`for_spin` has already divided the weights by ``degspin``.
+    #: The flag exists because that division is **not** idempotent and a k-set
+    #: reaches a polarized run by more than one route -- built by
+    #: :func:`~pypresso.system.builder.build_system`, rebuilt by
+    #: ``System._recelled_kpoints``, produced by
+    #: :func:`~pypresso.workflows.nscf.denser_grid`, or handed in whole to
+    #: :meth:`pypresso.calculator.Calculator.with_kpoints`. Without it the
+    #: boundary that normalises has to know which of those it is looking at,
+    #: and applying the factor twice is as silent as not applying it once: the
+    #: Fermi level moves and the run integrates to the right electron count at
+    #: the wrong energy.
+    spin_normalized: bool = eqx.field(static=True, default=False)
 
     @property
     def nk(self) -> int:
@@ -513,10 +527,24 @@ def for_spin(kpoints: "KPoints", nspin: int) -> "KPoints":
     twice. That mistake does not look like one: the Fermi level simply comes out
     somewhere else, and the density of states integrates to the right number of
     electrons at the wrong energy.
+
+    **It is idempotent**, through :attr:`KPoints.spin_normalized`, and it has to
+    be: the division reaches a k-set from several directions at once and each
+    one of them is a boundary that cannot see where the set came from. Applying
+    it twice is the same silent error as not applying it, in the other
+    direction. The flag is set **only** when the division actually happens, so a
+    set built for ``nspin = 1`` and later handed to a polarized run is still
+    normalised then; and nothing else about which k-set gets the factor has
+    changed -- ``setup.f90`` applies ``degspin`` to ``wk`` whatever the sampling
+    is, a Gamma-only run included.
     """
-    if int(nspin) not in (2, 4):
+    if int(nspin) not in (2, 4) or kpoints.spin_normalized:
         return kpoints
-    return eqx.tree_at(lambda k: k.weights, kpoints, kpoints.weights / DEGSPIN)
+    return dataclasses.replace(
+        kpoints,
+        weights=kpoints.weights / DEGSPIN,
+        spin_normalized=True,
+    )
 
 
 def _fortran_nint(x: np.ndarray) -> np.ndarray:

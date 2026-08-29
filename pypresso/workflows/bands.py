@@ -144,6 +144,8 @@ def run_bands(
     ns: jnp.ndarray | None = None,
     tau: jnp.ndarray | None = None,
     becsum: tuple = (),
+    field=None,
+    field_scale: float | None = None,
 ) -> BandStructure:
     """Diagonalise at a k-path with the density fixed.
 
@@ -169,6 +171,11 @@ def run_bands(
         becsum: the converged projector occupations (``SCFResult.becsum``),
             required for a PAW dataset -- ``ddd_paw`` is built from it and, like
             ``tau``, it is a property of the states rather than of the density.
+        field: the field the SCF ended with (``SCFResult.magnetic_field``),
+            with ``field_scale`` (``SCFResult.field_scale``) beside it. Required
+            when the input carries one: ``reducebf`` and the fixed-spin-moment
+            scheme both change the field as the loop runs, so rebuilding it from
+            the input applies a field the ground state does not have.
 
     The potential is built once from the given density and never updated -- that
     is the whole content of "non self-consistent", and it is why this is a thin
@@ -178,7 +185,8 @@ def run_bands(
     produced the density, which is what the two arguments are for.
     """
     calculation, system, eigenvalues = fixed_density_bands(
-        system, pseudos, density, kpoints, nbnd, conv_thr, k_batch, ns, tau, becsum
+        system, pseudos, density, kpoints, nbnd, conv_thr, k_batch, ns, tau,
+        becsum, field, field_scale,
     )
     nspin = calculation.nspin
     return BandStructure(

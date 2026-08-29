@@ -401,6 +401,8 @@ def run_dos(
     tau: jnp.ndarray | None = None,
     ns: jnp.ndarray | None = None,
     becsum: tuple = (),
+    field=None,
+    field_scale: float | None = None,
 ):
     """SCF density in, ``(DensityOfStates, NSCFResult)`` out.
 
@@ -426,15 +428,22 @@ def run_dos(
         kpoints = denser_grid(system, grid, shift)
 
     nscf = run_nscf(system, pseudos, density, kpoints, nbnd, conv_thr, k_batch,
-                    ns=ns, tau=tau, becsum=becsum)
+                    ns=ns, tau=tau, becsum=becsum, field=field,
+                    field_scale=field_scale)
 
     scheme, degauss = default_scheme(system, scheme, degauss, delta_e)
 
     tetrahedra = None
     if is_tetrahedron_scheme(scheme):
-        from pypresso.system.symmetry import find_symmetries
-
-        symmetries = find_symmetries(system.cell, system.structure)
+        # **The same group the k-set was reduced with**, which is the run's and
+        # not the crystal's. ``build_tetrahedra`` maps every corner of the full
+        # grid onto a point of the *list* it is given, using these rotations to
+        # find it -- so a group larger than the one that built the list sends a
+        # corner to a symmetry-equivalent point whose eigenvalues, in a run that
+        # set ``nosym`` precisely because its states are not equivalent, are the
+        # wrong ones. The pair has to be decided once: see
+        # :func:`~pypresso.workflows.nscf.denser_grid`.
+        symmetries = system.symmetry_group(nosym=system.nosym)
         tetrahedra = tetrahedra_for(scheme, nscf.kpoints, symmetries, system.cell)
         degauss = 0.0
     elif degauss is None:
