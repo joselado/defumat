@@ -6762,7 +6762,7 @@ against 25), or reaching past the facade (up to 7 imports).
 
 Rewritten and passing the enforcement test: `00` (which already complied), `02`,
 `09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`, `15`, `24`, `29`, `26`, `25`, `04`,
-`05`, `06`, `07`.
+`05`, `06`, `07`, `12`, `14`, `16`, `20`.
 
 **The Raman merge is done**, which is the first of the two structural jobs.
 `25_raman_tensors` is deleted and `26_raman_and_infrared_spectra` carries both:
@@ -6795,6 +6795,10 @@ arbitrary, and the activity beside them reads 0.0000 in every version.
 | `05` | 98 → 59 | 5 → 4 | 10 s |
 | `06` | 93 → 80 | 5 → 5 | 23 s |
 | `07` | 82 → 63 | 4 → 4 | 22 s |
+| `12` | 84 → 29 | 3 → 3 | 27 s |
+| `14` | 91 → 46 | 5 → 3 | 89 s |
+| `16` | 92 → 58 | 5 → 5 | 9 s |
+| `20` | 73 → 54 | 6 → 4 | 57 s |
 | `19` | 143 → 47 | 11 → 5 | 46 s |
 | `10` | 134 → 46 | 5 → 5 | 50 s |
 | `13` | 123 → 43 | 5 → 3 | 66 s |
@@ -6818,11 +6822,10 @@ at 0.85 of $\Gamma$X, on none of those grids. A gap is read off a band structure
 and the two differ by 0.024 eV here (4.1305 against 4.1541). The notebook says so
 now, which is the best content in it and was not in the plan.
 
-**Fourteen notebooks are left**, in rough order of how badly they miss the
-budgets: `17` (105 lines), `05` (98), `06` (93), `16` (92), `27` (92), `14` (91),
-`12` (84), `07` (82), `21` (81), `01` (79), `04` (74), `20` (73), `03` (72),
-`23` (72). Three of those — `01`, `03`, `17` — are the under-the-hood tier and
-are not held to the skeleton, so it is eleven conversions and three trims. `01`, `03` and `17` are
+**Six notebooks are left**: `27` (92 lines), `21` (81), `23` (72) as skeleton
+conversions, and `01` (79), `03` (72), `17` (105) as the under-the-hood tier,
+which is **not** held to the skeleton and is trimmed toward the everywhere-rules
+instead. `01`, `03` and `17` are
 the "under the hood" tier and are **not** held to the skeleton — trim them toward
 the everywhere-rules and leave them out of `REWRITTEN`.
 

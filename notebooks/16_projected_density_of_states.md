@@ -3,83 +3,72 @@
 Which atom, and which orbital, does a band belong to? The answer is the projection of every
 Kohn-Sham state onto the pseudo-atomic orbitals the pseudopotential file already carries.
 Summed against a delta function it gives the density of states resolved by atom, by $l$ and
-by $m$; summed against the occupations it gives the Löwdin charges, which are one way of
+by $m$; summed against the occupations it gives the **Löwdin charges**, which are one way of
 saying how many electrons sit on an atom.
 
 $$\rho_i(E) = \sum_{n\mathbf k} w_{\mathbf k}\,
    \big|\langle \tilde\phi_i | \hat S | \psi_{n\mathbf k}\rangle\big|^2\,
    \delta(E - \varepsilon_{n\mathbf k}),
 \qquad
-|\tilde\phi\rangle = O^{-1/2}\,\hat S\,|\phi\rangle,
+|\tilde\phi\rangle = O^{-1/2}\,|\phi\rangle,
 \quad O_{ij} = \langle \phi_i | \hat S | \phi_j \rangle$$
 
 $$\text{spilling} = 1 - \frac{1}{N_{\rm elec}} \sum_i \int^{E_F} \rho_i(E)\, dE$$
 
+The projection carries the **overlap operator**, so on an ultrasoft dataset it is
+$\langle\phi|S|\psi\rangle$ and not $\langle\phi|\psi\rangle$ -- which is what an amplitude
+on an atom means once the norm has been given up inside the core.
+
 Everything below is silicon with an ultrasoft dataset, against `projwfc.x` run on the same
-input: the **projections agree to 5e-4**, which is all its three-decimal printout allows,
-the **Löwdin charges to 5e-5**, and the curves to **0.3% of their peak**.
+input:
+
+| | agreement |
+|---|---|
+| the projections themselves, band by band | **6.9e-4**, which is all its three decimals allow |
+| the Löwdin charges | **4.6e-5** |
+| the curves | 0.3% of their peak |
 
 
 ```python
 from pathlib import Path
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 from pypresso import Calculator
-from pypresso.io import read_pdos_file, read_projwfc_output
-from pypresso.projwfc import atomic_projections
-from pypresso.system.kpoints import KPoints
+from pypresso.io import comparison_table, read_pdos_file, read_projwfc_output
 from pypresso.units import RY_TO_EV
-from pypresso.workflows.nscf import fixed_density_states
 
-CASES = Path("../tests/data/qe")
-PSEUDO = Path("../tests/data/pseudo")
+CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
 silicon = Calculator.from_file(CASES / "si2-us-dense.in", pseudo_dir=PSEUDO,
-                               announce=False, conv_thr=1e-10)
-system, pseudos = silicon.system, silicon.pseudos
-scf = silicon.get_scf()
-print(f"silicon, ultrasoft: {system.kpoints.nk} irreducible k-points, "
-      f"E = {scf.total_energy:.8f} Ry")
+                               announce=False)
 ```
 
-    silicon, ultrasoft: 29 irreducible k-points, E = -22.76589933 Ry
-
-
-## Running it
-
 What gets projected is the *wavefunctions*, so the converged run itself is the input and
-nothing is re-diagonalised. Passing a denser `grid=` re-solves the bands on it first,
-exactly as a non-self-consistent run would.
+nothing is re-diagonalised; passing a denser `grid=` re-solves the bands on it first, exactly
+as a non-self-consistent run would.
 
-The energy window is pinned to the reference file's so that the two curves are sampled at
-the same energies; left alone, each code sizes its own grid from its own band extremes,
-which differ in the fourth decimal of an eV.
+The energy window below is pinned to the reference file's, so that the two codes' curves are
+sampled at the same energies. Left alone each sizes its own grid from its own band extremes,
+which differ in the fourth decimal of an electronvolt.
 
 
 ```python
-reference = read_projwfc_output(CASES / "reference.projwfc.si2-us-dense")
-energies_ev = read_pdos_file(CASES / "reference.si2-us-dense.pdos_tot")[0]
+grid_ev = read_pdos_file(CASES / "reference.si2-us-dense.pdos_tot")[0]
+theirs = read_projwfc_output(CASES / "reference.projwfc.si2-us-dense")
 
-pdos = silicon.get_pdos(
-    delta_e=0.05 / RY_TO_EV,   # projwfc.x's DeltaE and degauss for the committed run
-    degauss=0.0147,            # 0.2 eV -- its degauss is in Ry, its DeltaE is not
-    emin=energies_ev[0] / RY_TO_EV,
-    emax=energies_ev[-1] / RY_TO_EV,
-)
+pdos = silicon.get_pdos(delta_e=0.05 / RY_TO_EV,     # projwfc.x's DeltaE, which is in eV
+                        degauss=0.0147,              # and its degauss, which is in Ry
+                        emin=grid_ev[0] / RY_TO_EV, emax=grid_ev[-1] / RY_TO_EV)
 
-print(f"{len(pdos.channels)} atomic states: "
-      + ", ".join(str(c) for c in pdos.channels[:4]) + ", ...")
-print(f"projectors: {pdos.projectors}   scheme: {pdos.scheme}")
-print()
-print(pdos.charges.format(
-    tuple(system.structure.species[t].name for t in system.structure.types)))
+print("%d atomic states, projectors %r, scheme %r"
+      % (len(pdos.channels), pdos.projectors, pdos.scheme))
+print(pdos.charges.format(tuple(silicon.system.structure.species[t].name
+                                for t in silicon.system.structure.types)))
 ```
 
-    8 atomic states: #1 Si1 s, #2 Si1 pz, #3 Si1 px, #4 Si1 py, ...
-    projectors: ortho-atomic   scheme: gaussian
-    
+    8 atomic states, projectors 'ortho-atomic', scheme 'gaussian'
     Lowdin Charges:
     
          Atom #   1 (Si): total charge =   3.9647
@@ -99,137 +88,90 @@ the comparison rather than the limit of the agreement.
 
 ```python
 rows = []
-for atom, printed in reference.charges.items():
+for atom, printed in theirs.charges.items():
     mine = pdos.charges.charges[atom - 1]
-    rows.append((f"Si {atom} total", pdos.charges.total[atom - 1], printed["total"]))
+    rows.append(("Si %d total" % atom, pdos.charges.total[atom - 1], printed["total"]))
     for l, letter in enumerate("spd"[: mine.size]):
         if letter in printed:
-            rows.append((f"Si {atom}  {letter}", mine[l], printed[letter]))
+            rows.append(("Si %d  %s" % (atom, letter), mine[l], printed[letter]))
     for m, label in enumerate(("pz", "px", "py")):
-        rows.append((f"Si {atom}  {label}", pdos.charges.charges_lm[atom - 1, 1, m],
-                     printed[label]))
-rows.append(("spilling", pdos.charges.spilling, reference.spilling))
+        rows.append(("Si %d  %s" % (atom, label),
+                     pdos.charges.charges_lm[atom - 1, 1, m], printed[label]))
+rows.append(("spilling", pdos.charges.spilling, theirs.spilling))
 
-print(f"{'':14s} {'pypresso':>10s} {'projwfc.x':>10s} {'difference':>12s}")
-for label, mine, theirs in rows:
-    print(f"{label:14s} {mine:10.4f} {theirs:10.4f} {abs(mine - theirs):12.1e}")
-
-# The projections themselves, band by band, against print_proj's listing -- every
-# band but the topmost, which is the one neither eigensolver converges: both stop on
-# the accuracy of the states the density needs, and an empty band at the top of the
-# window is carried along rather than converged.
-projections = atomic_projections(silicon.calculation, scf.wavefunctions)
-stacked = np.concatenate(list(np.transpose(projections, (0, 1, 3, 2))), axis=0)[:, :-1]
-theirs = reference.projections[:, :-1]
-printed = theirs > 0.0
-print(f"\nprojections, where projwfc.x printed one: max difference "
-      f"{np.abs(stacked - theirs)[printed].max():.1e} (it prints three decimals)")
+print(comparison_table(rows, fmt="{:.4f}",
+                       headers=("", "pypresso", "projwfc.x", "difference")))
 ```
 
-                     pypresso  projwfc.x   difference
-    Si 1 total         3.9647     3.9647      3.7e-05
-    Si 1  s            1.1596     1.1596      9.4e-06
-    Si 1  p            2.8051     2.8051      4.6e-05
-    Si 1  pz           0.9350     0.9350      1.8e-05
-    Si 1  px           0.9350     0.9350      1.8e-05
-    Si 1  py           0.9350     0.9350      1.8e-05
-    Si 2 total         3.9647     3.9647      3.7e-05
-    Si 2  s            1.1596     1.1596      9.4e-06
-    Si 2  p            2.8051     2.8051      4.6e-05
-    Si 2  pz           0.9350     0.9350      1.8e-05
-    Si 2  px           0.9350     0.9350      1.8e-05
-    Si 2  py           0.9350     0.9350      1.8e-05
-    spilling           0.0088     0.0088      3.4e-05
+                pypresso  projwfc.x  difference
+    Si 1 total    3.9647     3.9647     3.7e-05
+    Si 1  s       1.1596     1.1596     9.4e-06
+    Si 1  p       2.8051     2.8051     4.6e-05
+    Si 1  pz      0.9350     0.9350     1.8e-05
+    Si 1  px      0.9350     0.9350     1.8e-05
+    Si 1  py      0.9350     0.9350     1.8e-05
+    Si 2 total    3.9647     3.9647     3.7e-05
+    Si 2  s       1.1596     1.1596     9.4e-06
+    Si 2  p       2.8051     2.8051     4.6e-05
+    Si 2  pz      0.9350     0.9350     1.8e-05
+    Si 2  px      0.9350     0.9350     1.8e-05
+    Si 2  py      0.9350     0.9350     1.8e-05
+    spilling      0.0088     0.0088     3.4e-05
 
 
-    
-    projections, where projwfc.x printed one: max difference 5.0e-04 (it prints three decimals)
-
-
-## What the projection means
-
-The orbitals are Löwdin-orthogonalised over every atomic orbital in the crystal, which is
-what makes the weights add up to at most one per band, by Bessel's inequality. The deficit
-is the **spilling parameter**: how much of the occupied subspace the atomic basis cannot
-describe at all. Silicon's is 0.009, so the projected curves sum to the total density of
-states to about a percent, by construction rather than by error. A large spilling is a
-warning that the atomic language is a poor description of the bonding, which is a physical
-statement about the material and not a numerical problem.
-
-The projection carries the overlap operator, so for an ultrasoft dataset it is
-$\langle\phi|S|\psi\rangle$ and not $\langle\phi|\psi\rangle$: that is what an amplitude on
-an atom means once the norm has been given up inside the core.
-
-
-```python
-maximum = float(np.max(np.sum(stacked, axis=-1)))
-print(f"max over bands of sum_i |<phi_i|S|psi>|^2 = {maximum:.4f}   (Bessel: <= 1)")
-print(f"spilling = 1 - sum(charges)/nelec        = {pdos.charges.spilling:.4f}")
-```
-
-    max over bands of sum_i |<phi_i|S|psi>|^2 = 0.9971   (Bessel: <= 1)
-    spilling = 1 - sum(charges)/nelec        = 0.0088
-
+The orbitals are Löwdin-orthogonalised over **every** atomic orbital in the crystal, which is
+what makes the weights add up to at most one per band, by Bessel's inequality. The deficit is
+the **spilling parameter**: how much of the occupied subspace the atomic basis cannot describe
+at all. Silicon's is 0.009, so the projected curves sum to the total density of states to
+about a percent, by construction rather than by error. A large spilling is a warning that the
+atomic language is a poor description of the bonding -- a physical statement about the
+material, not a numerical problem.
 
 ## The picture
 
-Left: the total density of states with the $s$ and $p$ channels underneath it, and
-`projwfc.x`'s own curves dashed on top, at 29 k-points with a 0.2 eV Gaussian. Right: the
-same weights on the band structure, each band coloured by how $s$-like or $p$-like it is,
-which is what fat bands means. Silicon's valence band is $s$ at the bottom and $p$ at the
-top, and the two mix where the bonding states form.
-
-The dashed curves lie on the solid ones everywhere below about +8 eV, 0.3% of the peak at
-worst. Above that they separate for a reason that is not about the projection: the eighth
-band is the topmost one either code computes, and neither eigensolver converges it, since
-both stop on the accuracy the density needs. It is left in the picture rather than trimmed
-out of it, because that is what the two codes actually produce.
+**Left**, the total density of states with the $s$ and $p$ channels underneath it, and
+`projwfc.x`'s own curves dashed on top. **Right**, the same weights on the band structure,
+each band drawn with a marker sized by how $s$-like or $p$-like it is, which is what fat
+bands means.
 
 
 ```python
-band_path = KPoints.band_path(
-    [(0.5, 0.5, 0.5), (0.0, 0.0, 0.0), (1.0, 0.0, 0.0)], [20, 20, 0],
-    system.cell, crystal=False,
-)
-calculation, _, band_energies, band_states = fixed_density_states(
-    system, pseudos, scf.density, kpoints=band_path, nbnd=8,
-)
-band_projections = atomic_projections(calculation, band_states)[0]  # (nk, nproj, nbnd)
+from pypresso.projwfc import atomic_projections           # no facade route to fat bands
+from pypresso.workflows.nscf import fixed_density_states   # ... nor to the states behind them
+from pypresso.system.kpoints import KPoints
 
-s_weight = band_projections[:, [c.index for c in pdos.channels if c.l == 0]].sum(axis=1)
-p_weight = band_projections[:, [c.index for c in pdos.channels if c.l == 1]].sum(axis=1)
+path = KPoints.band_path([(0.5, 0.5, 0.5), (0.0, 0.0, 0.0), (1.0, 0.0, 0.0)], [20, 20, 0],
+                         silicon.system.cell, crystal=False)
+calculation, _, levels, states = fixed_density_states(
+    silicon.system, silicon.pseudos, silicon.scf_result.density, kpoints=path, nbnd=8)
+weights = atomic_projections(calculation, states)[0]
+fermi = silicon.scf_result.homo * RY_TO_EV
 
-figure, (left, right) = plt.subplots(1, 2, figsize=(11.5, 4.2))
+x = path.path_length
+```
 
-qe_total = read_pdos_file(CASES / "reference.si2-us-dense.pdos_tot")[1][0]
-qe_s = sum(read_pdos_file(CASES / f"reference.si2-us-dense.pdos_atm#{a}(Si)_wfc#1(s)")[1][0]
-           for a in (1, 2))
-qe_p = sum(read_pdos_file(CASES / f"reference.si2-us-dense.pdos_atm#{a}(Si)_wfc#2(p)")[1][0]
-           for a in (1, 2))
-n = energies_ev.size
-fermi = scf.homo * RY_TO_EV
+And the picture:
 
-left.fill_between(pdos.energies_ev[:n] - fermi, pdos.total.dos[:n] / RY_TO_EV,
-                  color="0.85", label="total")
-left.plot(pdos.energies_ev[:n] - fermi, pdos.select(l="s")[:n] / RY_TO_EV, color="C0", label="s")
-left.plot(pdos.energies_ev[:n] - fermi, pdos.select(l="p")[:n] / RY_TO_EV, color="C3", label="p")
-for curve, colour in ((qe_total, "0.4"), (qe_s, "C0"), (qe_p, "C3")):
-    left.plot(energies_ev - fermi, curve, ls="--", lw=1.0, color=colour)
-left.axvline(0.0, color="k", lw=0.8, ls=":")
-left.set_xlabel("E - E$_F$ (eV)"); left.set_ylabel("states / eV / cell")
-left.set_title("projected DOS (dashed: projwfc.x)"); left.legend(frameon=False)
 
-x = band_path.path_length
-for band in range(band_energies.shape[-1]):
-    energy = band_energies[0, :, band] * RY_TO_EV - fermi
-    right.scatter(x, energy, s=60 * p_weight[:, band] + 1, color="C3", alpha=0.8)
-    right.scatter(x, energy, s=60 * s_weight[:, band] + 1, color="C0", alpha=0.8)
+```python
+fig, (left, right) = plt.subplots(1, 2, figsize=(11.5, 4.2))
+pdos.plot(ax=left, by="l")
+left.plot(grid_ev - fermi, read_pdos_file(CASES / "reference.si2-us-dense.pdos_tot")[1][0],
+          "--", lw=1.0, color="0.4", label="projwfc.x, total")
+left.legend(fontsize=8, frameon=False)
+left.set_title("projected density of states")
+
+for band in range(levels.shape[-1]):
+    energy = levels[0, :, band] * RY_TO_EV - fermi
+    for channel, colour in ((1, "C3"), (0, "C0")):
+        share = weights[:, [c.index for c in pdos.channels if c.l == channel], band]
+        right.scatter(x, energy, s=60 * share.sum(axis=1) + 1, color=colour, alpha=0.8)
     right.plot(x, energy, color="0.8", lw=0.6, zorder=0)
 right.axhline(0.0, color="k", lw=0.8, ls=":")
-right.set_xticks([x[0], x[20], x[-1]]); right.set_xticklabels(["L", "$\\Gamma$", "X"])
-right.set_ylabel("E - E$_F$ (eV)"); right.set_title("fat bands: s (blue) and p (red)")
-right.set_xlim(x[0], x[-1])
-figure.tight_layout()
+right.set(xticks=[x[0], x[20], x[-1]], xticklabels=["L", r"$\Gamma$", "X"],
+          xlim=(x[0], x[-1]), ylabel=r"$E - E_F$   [eV]",
+          title="fat bands: $s$ (blue) and $p$ (red)")
+fig.tight_layout()
 ```
 
 
@@ -239,9 +181,24 @@ figure.tight_layout()
 
 
 The $s$ weight collapses onto the lowest valence band and the $p$ weight onto the upper
-three, degenerate at $\Gamma$, which is the textbook picture of an $sp^3$ semiconductor
-read off the projections rather than asserted.
+three, degenerate at $\Gamma$, which is the textbook picture of an $sp^3$ semiconductor read
+**off** the projections rather than asserted about them.
+
+The dashed curve lies on the solid one everywhere below about +8 eV. Above that they separate
+for a reason that is not about the projection: the eighth band is the topmost one either code
+computes, and neither eigensolver converges it, since both stop on the accuracy the *density*
+needs. It is left in the picture rather than trimmed out of it, because that is what the two
+codes actually produce.
+
+## What it refuses
+
+The weighted integration goes through the **same** density-of-states registry the total does,
+so every scheme of notebook 06 is available here -- with one caveat inherited from QE rather
+than added: `projwfc.x` silently runs the **linear** tetrahedron method whatever the
+self-consistent run used, and this reproduces that only when asked to.
 
 ---
-The tests behind this notebook: `tests/regression/test_pdos.py`,
-`tests/unit/test_projwfc.py`.
+The tests behind this notebook: `tests/regression/test_pdos.py`, which holds the projections,
+the Löwdin charges and the spilling against `projwfc.x` on seven cases; and
+`tests/unit/test_projwfc.py`, which holds Bessel's inequality on the projections and the
+orthogonalisation over the whole `natomwfc` manifold rather than the Hubbard one.

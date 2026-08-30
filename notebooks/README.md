@@ -215,8 +215,9 @@ jupyter lab notebooks/
 
 The ones rewritten to the shape above are timed, and all of them are far inside
 the ten-minute ceiling: **`02` 7 s, `09` 6 s, `22` 12 s, `18` 29 s, `15` 31 s,
-`05` 10 s, `04` 12 s, `06` 23 s, `07` 22 s, `24` 31 s, `25` 28 s, `19` 46 s, `10` 50 s,
-`29` 59 s, `11` 79 s, `13` about a minute, `26` 107 s,
+`16` 9 s, `05` 10 s, `04` 12 s, `07` 22 s, `06` 23 s, `12` 27 s, `25` 28 s, `24` 31 s,
+`19` 46 s, `10` 50 s, `20` 57 s, `29` 59 s, `11` 79 s, `14` 89 s, `13` about a minute,
+`26` 107 s,
 `08` 174 s**. Three of those used to
 be much slower. `19` lost two hand-built linear solves and a second
 self-consistent run that were demonstrating machinery rather than physics; `18`
@@ -226,8 +227,7 @@ the ceiling** -- about 25 minutes -- which it no longer is: what went was a
 five-run finite-difference sweep and a two-run identity check, both of them
 already in the test suite.
 
-Most of the rest run in under a minute on one core. The exception is `12` (a few
-minutes).
+Most of the rest run in under a minute on one core.
 
 `22` needs neither the vendored tree nor much time: its input and its `pw.x`
 reference are committed under `tests/data/qe/`, and its binding curve is quoted
