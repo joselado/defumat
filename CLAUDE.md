@@ -855,6 +855,31 @@ expensive sweep is measured once offline and *quoted* rather than run. Each note
 plain editor or a diff — regenerated together with the notebook by `tools/export_notebooks.sh`.
 `notebooks/README.md` holds the index and the full conventions.
 
+**Ten minutes is the hard ceiling on executing one**, and it is a ceiling rather than a
+target — the five minutes above is still what to aim for. A notebook is re-executed every
+time the code under it changes, by `tools/export_notebooks.sh` and by anyone checking that
+it still reads true, so its runtime is paid over and over by people who are not doing
+physics at the time. **Time it before committing it**, the same way a peak working set is
+sized before it is landed:
+
+```bash
+time jupyter nbconvert --to notebook --execute --inplace notebooks/<n>.ipynb
+```
+
+If it does not fit, the cell to cut is the *sweep*, not the physics: measure the expensive
+series once offline and quote its numbers in prose, which is the same rule as the
+per-case validation tables and for the same reason. A figure that needs ten SCF runs to
+draw is a figure whose points belong in a test.
+
+**One notebook is measured to be over that ceiling today.**
+`08_spin_orbit_coupling` takes about **25 minutes**, nearly all of it the bismuthene
+section — a spinor SCF on a slab is 281 s on its own, and the notebook runs one with
+spin-orbit coupling and one without, plus a band structure for each. That is the shape to
+watch for: a cell that was cheap when it was written and grew with the feature under it.
+Trimming it to a quoted measurement is worth doing, is not any phase's own work, and is
+written down here rather than done silently in passing. **The rest are unmeasured** — the
+ceiling arrived after them, and nobody has timed the set.
+
 ## Performance
 
 **The measurement is single-core pypresso against single-core Quantum ESPRESSO on the

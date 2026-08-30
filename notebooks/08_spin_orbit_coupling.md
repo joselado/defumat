@@ -153,10 +153,6 @@ print("\neigenvalues: %d bands -> %d, max |difference from doubling| = %.2e eV"
     eigenvalues: 8 bands -> 16, max |difference from doubling| = 5.44e-14 eV
 
 
-    /u/40/ladovj1/data/Documents/programs/claude/pypresso/pypresso/calculator.py:312: RuntimeWarning: tstress = .true. in the input, but forces and stress for a noncollinear or spin-orbit calculation are not implemented; nspin = 1 and nspin = 2 are, on norm-conserving, ultrasoft and PAW pseudopotentials. The SCF is unaffected and SCFResult.stress is None.
-      self._scf = run_scf(self.system, self.pseudos,
-
-
 ## Platinum, against Quantum ESPRESSO
 
 Three of QE's own benchmarks, on the three kinds of dataset that carry `j`. Note the
@@ -198,6 +194,98 @@ print("(inversion and time reversal both hold, so every level is doubly degenera
     max Kramers splitting over all k: 1.1e-13 eV
     (inversion and time reversal both hold, so every level is doubly degenerate)
 
+
+## Forces and the stress of a spinor
+
+Until P46 none of the above could be differentiated: `noncolin` had a validated ground state
+and no force, no stress and no relaxation. `GAPS.md` sized the fix at two substitutions —
+the nonlocal quadratic form with `dvan_so` and the orthonormality constraint with `qq_so`,
+both complex $2\times2$ matrices in spin space. That was right about the physics and wrong
+about the size, for a reason this project states as a convention: **`nspin`, `npol` and
+`nspin_mag` are three different numbers.** A spinor is *one* coefficient vector of length
+$2n_{\rm pw}$, so the frozen state is `(1, nk, nbnd, 2 npwx)` and even the kinetic term has
+to read the coefficient vector's own $|k+G|^2$. The layout was the larger half.
+
+`dvan_so` is the **bare** $D$, for the same reason the collinear branch takes `dion` and not
+`deeq`: `newd_nc` sandwiches the self-consistent $\int V_{\rm eff} Q_{ij}$ between `fcoef`
+and *adds* it, so the split survives one spin index up. Taking `deeq_nc` double-counts — and
+the only thing that catches it is the identity that `energy_at` reproduces the SCF total,
+because a finite difference of the wrong functional agrees with its own gradient perfectly.
+
+The figure is that identity's derivative: the force from one `jax.grad` against a central
+difference of the *converged* energy, along a bond of doubled fcc platinum.
+
+
+```python
+platinum = Calculator.from_file(CASES / "pt2-soc-force.in", pseudo_dir=PSEUDO,
+                                announce=False, conv_thr=1e-10)
+p0 = np.asarray(platinum.system.structure.positions)
+
+shifts = np.array([0.0, 0.04, 0.08, 0.12, 0.16])
+energies, forces = [], []
+for u in shifts:
+    moved = p0.copy()
+    moved[1, 0] += u
+    here = platinum.with_positions(moved)
+    energies.append(here.get_scf().total_energy)
+    forces.append(float(np.asarray(here.get_forces().forces)[1, 0]))
+energies, forces = np.array(energies), np.array(forces)
+
+# -dE/du by a central difference of the converged energies, at the interior points.
+fd = -(energies[2:] - energies[:-2]) / (shifts[2:] - shifts[:-2])
+print("   u      F (autodiff)     -dE/du        difference")
+for u, f, d in zip(shifts[1:-1], forces[1:-1], fd):
+    print("%5.2f    %+11.6f    %+11.6f    %9.1e" % (u, f, d, abs(f - d)))
+
+fig, ax = plt.subplots(figsize=(4.4, 3.2))
+ax.plot(shifts, forces, "-o", ms=4, label=r"$F$, one $\nabla$ of the energy")
+ax.plot(shifts[1:-1], fd, "kd", ms=7, mfc="none", mew=1.2,
+        label=r"$-dE/du$, converged runs")
+ax.axhline(0.0, lw=0.8, color="0.6")
+ax.set_xlabel("displacement of atom 2 along $a_1$  [bohr]")
+ax.set_ylabel("force on atom 2  [Ry/bohr]")
+ax.set_title("Pt$_2$ with spin-orbit coupling:\nthe spinor force is the energy's derivative")
+ax.legend(fontsize=8)
+fig.tight_layout()
+plt.show()
+```
+
+       u      F (autodiff)     -dE/du        difference
+     0.04      +0.046206      +0.046195      1.1e-05
+     0.08      +0.040065      +0.040081      1.5e-05
+     0.12      +0.033999      +0.034043      4.4e-05
+
+
+
+    
+![png](08_spin_orbit_coupling_files/08_spin_orbit_coupling_7_1.png)
+    
+
+
+The two agree to about $10^{-5}$ Ry/bohr, which is the central difference's own floor at
+this step — and neither side involves Quantum ESPRESSO. Against `pw.x`, which computes both
+quantities for a spinor run, the force agrees to **8.9e-7 Ry/bohr** on a four-atom
+noncollinear hydrogen chain, **7.5e-6** on this ultrasoft platinum and **7.3e-7** on its PAW
+twin, with the stress on those three plus the three `pw_spinorbit` cases above to
+**$\le 1.2\times10^{-6}$ Ry/bohr³**. Three of those needed no new reference: QE's own
+spin-orbit inputs already carry `tstress`, so a PAW spin-orbit stress had been sitting there
+all along and the refusal was the only thing in the way.
+
+Relaxation came with the force and needed nothing — P15's BFGS puts this displaced platinum
+back in **8 ionic steps**, to `max|F|` = 8.96e-5 Ry/bohr and the two atoms 0.499945 of a cell
+apart, against the half symmetry requires. What is asserted there is the *separation*:
+subtracting the mean force leaves a rigid translation of the whole crystal free, and the
+optimizer uses it.
+
+**What stays refused, each naming its own missing term.** `method='analytic'` — QE's
+`force_us`/`stres_knl` are transcriptions with no spinor form. Anything through the
+Sternheimer solver, so no spinor phonons. The elastic constants and electrostriction, which
+reach the energy functional *directly* rather than through the Sternheimer guard — which is
+why the spinor path is opt-in (`spinors=True`) rather than merely allowed, since deleting
+the refusal would have opened a third derivative for a regime whose first-order
+wavefunctions do not exist. And the force on an atom of a **spin spiral**: its two components
+live on different plane-wave spheres, so the nonlocal term needs the projectors of both, and
+$dE/dq$ is what a spiral has instead.
 
 ## Bismuthene: a gap made entirely of spin-orbit coupling
 
@@ -261,12 +349,12 @@ fig.tight_layout()
 
 
     
-![png](08_spin_orbit_coupling_files/08_spin_orbit_coupling_8_0.png)
+![png](08_spin_orbit_coupling_files/08_spin_orbit_coupling_11_0.png)
     
 
 
 ---
-**The detail:** `PLAN.md` §3 P14 — `fcoef` and why `init_us_1` zeroes its cross-radial
+**The detail:** `PLAN.md` §3 P14, and P46 for the forces and the stress — `fcoef` and why `init_us_1` zeroes its cross-radial
 entries *after* building `dvan_so` (one array used for both is a correct `dvan_so` and a
 silently wrong `qq_so`), `transform_qq_so`, and `vloc_psi_nc`.
 **The tests:** `tests/regression/test_spinorbit.py`,

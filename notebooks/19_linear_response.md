@@ -442,3 +442,126 @@ are *not* refused any more:
 `chi_0` on fcc aluminium matches a finite difference of the density to 2.5e-7, and the
 Fermi level's own shift restores charge neutrality to 1e-15. The tests are
 `tests/regression/test_response.py`; the code is `pypresso/response/`.
+
+
+## The same solve with two spin channels
+
+Everything above is one spin channel. Until P45 that was the *only* thing this stack could
+do: a single refusal blocked every response quantity for every `nspin = 2` system — no
+dielectric tensor, no phonons, no Raman for nickel, iron, NiO or FeO, all of which have
+converged ground states here.
+
+What it was guarding is one number. `SternheimerSolver` took a single occupied-band count
+and sliced `psi[:, :, :nocc]` with it across the spin axis, which is right for an
+unpolarized insulator and wrong for a magnetic one — **the two channels are filled to
+different depths**. Quantum ESPRESSO never meets the problem because LSDA doubles `nks`
+there, so its spin channels are separate k-points and each carries its own count.
+
+Triplet O$_2$ is the picture: seven bands occupied in the majority channel and five in the
+minority, both gapped.
+
+
+
+```python
+oxygen = Calculator.from_file(CASES / "o2-fixed-lsda.in", pseudo_dir=PSEUDO,
+                              announce=False, conv_thr=1e-10)
+o2 = oxygen.get_scf()
+
+eigenvalues = np.asarray(o2.eigenvalues_by_spin)[:, 0] * RY_TO_EV   # (2, nbnd), Gamma
+counts = (7, 5)                                                     # NINT(nelup), NINT(neldw)
+
+print(f"total energy    {o2.total_energy:.8f} Ry     (pw.x -63.36308378)")
+print(f"magnetization   {float(o2.magnetization):.4f}")
+for s, (label, n) in enumerate(zip(("up", "down"), counts)):
+    gap = eigenvalues[s, n] - eigenvalues[s, n - 1]
+    print(f"{label:>5}: {n} occupied, gap above the cut {gap:7.3f} eV")
+
+fig, ax = plt.subplots(figsize=(3.4, 4.0))
+for s, (label, n) in enumerate(zip(("up", "down"), counts)):
+    for b, e in enumerate(eigenvalues[s, :10]):
+        ax.hlines(e, s - 0.32, s + 0.32, lw=2.2,
+                  color="C0" if b < n else "0.75")
+    ax.hlines(0.5 * (eigenvalues[s, n] + eigenvalues[s, n - 1]), s - 0.42, s + 0.42,
+              lw=1.0, ls="--", color="C3")
+ax.set_xticks([0, 1]); ax.set_xticklabels(["up", "down"])
+ax.set_ylabel("eigenvalue (eV)")
+ax.set_title("triplet O$_2$: two channels,\ntwo different fillings")
+ax.grid(False)
+plt.show()
+```
+
+    total energy    -63.36308378 Ry     (pw.x -63.36308378)
+    magnetization   2.0000
+       up: 7 occupied, gap above the cut   5.961 eV
+     down: 5 occupied, gap above the cut   7.032 eV
+
+
+
+    
+![png](19_linear_response_files/19_linear_response_20_1.png)
+    
+
+
+
+The dashed lines are where each channel is cut. A count per channel is the whole of the
+change — plus the two masks that go with it, which is the one idea worth unpacking: the
+projector's **column** mask keeps $P_c$ on this channel's own manifold, and its **row** mask
+keeps the CG off an empty band, whose $H - \varepsilon_n S$ is singular.
+
+$\chi_0$ is block diagonal in spin, so the probe has to differ between the channels or the
+two blocks are never told apart:
+
+
+
+```python
+solver2 = make_sternheimer(oxygen.calculation, o2, spin_polarized=True)
+
+grid2 = oxygen.calculation.basis.dense.grid
+lattice2 = np.stack(np.meshgrid(*[np.arange(n) / n for n in grid2], indexing="ij"), axis=-1)
+wave = np.cos(2.0 * np.pi * (lattice2 @ np.array([1, 0, 0])))
+probe2 = jnp.asarray(np.stack([1.0 * wave, -0.5 * wave]))     # (2, n1, n2, n3)
+
+solution2 = solver2.solve(solver2.perturbation(probe2))
+response2 = np.asarray(solver2.response_density(solution2.dpsi))
+
+print(f"{solution2.iterations} CG iterations, residual {solution2.residual:.1e}")
+for s, label in enumerate(("up", "down")):
+    print(f"max |chi_0 dV|  {label:>5}  {np.abs(response2[s]).max():.4e} electrons/bohr^3")
+print("\nagainst a central difference of the density, measured in the test file:")
+print("  O2 (this cell's solve, the sliced branch)      1.1e-06")
+print("  antiferromagnetic H chain (a smeared metal)    1.8e-06")
+```
+
+    22 CG iterations, residual 9.2e-12
+    max |chi_0 dV|     up  7.9416e-02 electrons/bohr^3
+    max |chi_0 dV|   down  2.2815e-02 electrons/bohr^3
+    
+    against a central difference of the density, measured in the test file:
+      O2 (this cell's solve, the sliced branch)      1.1e-06
+      antiferromagnetic H chain (a smeared metal)    1.8e-06
+
+
+
+The two channels respond differently, which is what a spin-resolved $\chi_0$ is for. The
+identity that catches a factor of two in the spin sum is not a reference at all: silicon's
+$\varepsilon_\infty$ run as `nspin = 1` and as `nspin = 2` with no magnetization comes out
+**13.806646105 both ways, 6.2e-14 apart**.
+
+**Two things behind this refusal fail silently, and both are refused by name now.** A filling
+whose boundary cuts a *degenerate multiplet* — a Hund's-rule atom, which is most of what
+fixed-occupation LSDA is for — does not stall the solve: the CG converges to a 3e-12
+residual and returns a $\chi_0$ that is **100 % wrong**, because a finite difference
+re-selects which member of the multiplet falls below the cut while the solve keeps the
+arbitrary one the eigensolver handed it. And the *screened* response of a magnetic system
+with vacuum does not exist: for `nspin = 2` the kernel `dv_of_drho` is the second derivative
+of the LSDA energy in the two channel densities, which **diverges** where a channel density
+reaches zero — on this O$_2$, 1504 of 91125 grid points have $|m| \ge n$ and `dv_of_drho`
+has exactly 1504 NaN. So $\chi_0$ above is the part that is unconditionally validated;
+$\varepsilon_\infty$ for `nspin = 2` needs a cell whose magnetization stays below its
+charge everywhere. Also refused: `tot_magnetization` with a smearing (two Fermi levels, and
+`Smearing` carries one scalar `ef`), and the second-derivative assemblies — $Z^*$, the
+dynamical matrix, the strain response.
+
+---
+**The detail:** `PLAN.md` P45. **The tests:** `tests/regression/test_lsda_response.py`.
+

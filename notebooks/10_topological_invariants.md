@@ -259,8 +259,6 @@ print("\nsilicon's Berry curvature (6x6 plane at k3 = 0): Chern number %.1e, "
 
     
     silicon, on Kohn-Sham states:
-
-
        (0.0, 0.0, 0.0)  parities [1 1 1 1]  delta = +1
        (0.0, 0.0, 0.5)  parities [-1 -1 -1  1]  delta = -1
        (0.0, 0.5, 0.0)  parities [-1 -1 -1  1]  delta = -1
@@ -275,6 +273,90 @@ print("\nsilicon's Berry curvature (6x6 plane at k3 = 0): Chern number %.1e, "
     
     silicon's Berry curvature (6x6 plane at k3 = 0): Chern number 2.7e-17, largest plaquette phase 8.7e-08
 
+
+## The curvature as a map, not as an integer
+
+Everything above reads the curvature as a *flux* — the Fukui-Hatsugai-Suzuki lattice sum,
+which is an exact integer on any mesh. The other thing anyone wants from $\Omega(\mathbf k)$
+is the **map**: where in the zone the curvature lives, which is what an anomalous-Hall or a
+valley-Hall argument is made of. That is the Kubo route,
+
+$$\Omega_n^{12}(\mathbf k) = -2\,\mathrm{Im} \sum_{m \neq n}
+\frac{A^{1}_{nm} A^{2}_{mn}}{(\varepsilon_n - \varepsilon_m)^2},
+\qquad A^{a}_{nm} = \langle \psi_n |\, \partial_{k_a} H - \varepsilon_n \partial_{k_a} S \,| \psi_m \rangle,$$
+
+and its velocity operator is one `jvp` of $H(\mathbf k)$ at a frozen sphere — no dense
+$H(\mathbf k)$ is ever formed, which for a plane-wave basis would be $O(n_{\rm pw}^2)$.
+
+**AlAs is the cell to show it on.** It has time-reversal symmetry but no inversion centre,
+so $\Omega(\mathbf k)$ is nonzero pointwise while the Chern number is zero — the map has
+structure and the integer does not.
+
+
+```python
+alas = Calculator.from_file(CASES / "alas-raman.in", pseudo_dir=PSEUDO,
+                            announce=False, conv_thr=1e-10)
+al = alas.get_scf()
+
+kubo = run_berry_curvature(alas.system, alas.pseudos, al.density, shape=(24, 24),
+                           nocc=4, nbnd=20, method="kubo")
+fhs = run_berry_curvature(alas.system, alas.pseudos, al.density, shape=(24, 24),
+                          nocc=4, method="fhs")
+omega = np.asarray(kubo.curvature)
+
+# Silicon has an inversion centre as well, which forces the curvature to vanish
+# *pointwise* -- a stronger statement than the Chern number being zero. The
+# norm-conserving cell, because the Kubo route refuses an augmented dataset.
+si_nc = Calculator.from_file(CASES / "si-epsilon.in", pseudo_dir=PSEUDO,
+                             announce=False, conv_thr=1e-10)
+si_kubo = run_berry_curvature(si_nc.system, si_nc.pseudos, si_nc.get_scf().density,
+                              shape=(8, 8), nocc=4, nbnd=16, method="kubo")
+
+print("AlAs     max|Omega|        %8.4f" % abs(omega).max())
+print("         truncation of the sum over empty states  %.1f %%"
+      % (100 * kubo.truncation))
+print("         Chern, FHS        %9.2e   <- exact by construction"
+      % np.asarray(fhs.flux).sum())
+print("         Chern, Kubo sum   %9.2e   <- a Riemann sum, near zero and not zero"
+      % (omega.sum() / omega.size))
+print("silicon  max|Omega|        %9.2e   <- inversion + T, vanishes pointwise"
+      % abs(np.asarray(si_kubo.curvature)).max())
+
+fig, ax = plt.subplots(figsize=(4.2, 3.4))
+image = ax.imshow(omega.T, origin="lower", extent=(0, 1, 0, 1),
+                  cmap="RdBu_r", vmin=-abs(omega).max(), vmax=abs(omega).max())
+ax.set_xlabel("$k_1$  (crystal)")
+ax.set_ylabel("$k_2$  (crystal)")
+ax.set_title(r"AlAs: $\Omega(\mathbf{k})$, occupied manifold")
+ax.grid(False)
+fig.colorbar(image, ax=ax, label=r"$\Omega$")
+plt.show()
+```
+
+    AlAs     max|Omega|          1.3605
+             truncation of the sum over empty states  2.0 %
+             Chern, FHS         2.51e-15   <- exact by construction
+             Chern, Kubo sum    1.18e-05   <- a Riemann sum, near zero and not zero
+    silicon  max|Omega|         3.29e-06   <- inversion + T, vanishes pointwise
+
+
+
+    
+![png](10_topological_invariants_files/10_topological_invariants_9_1.png)
+    
+
+
+The map is what the Kubo route is for and the integer is what it is *not* for: its
+denominator $(\varepsilon_n-\varepsilon_m)^{-2}$ is singular at a degeneracy, and its
+Brillouin-zone sum is an ordinary Riemann sum — near zero above, where the FHS flux is zero
+to $10^{-15}$ because a determinant of overlaps cannot be anything else. Two things it
+reports rather than hides: the truncation of the sum over empty states
+(`BerryCurvature.truncation`, tightened by raising `nbnd`), and that `curvature_by_band` is
+gauge invariant only for a non-degenerate band — inside a degenerate multiplet only the sum
+over the members is defined. **Ultrasoft and PAW are refused for this route**, because the
+$\varepsilon_n \partial_k S$ term is identically zero for a norm-conserving dataset and so
+nothing that validates the rest can see whether its convention is right; `fhs` carries the
+augmentation correctly and runs on all three kinds.
 
 Silicon is inversion-symmetric *and* time-reversal-symmetric, so its curvature vanishes
 pointwise rather than on average — the 6x6 plane above says so — and its parity product
@@ -304,7 +386,7 @@ step. Where they disagree, the parity one is the answer.
 
 ---
 **The detail:** `PLAN.md` §3 P16 — the alignment by Miller index, the zone-edge shift,
-ultrasoft $S$ between two k-points being $q_{ij}(b)$ rather than `qq`, and why the
-plane-wave velocity operator is refused rather than approximated (it needs
-$d(\mathrm{vkb})/dk$, which belongs to P11).
+ultrasoft $S$ between two k-points being $q_{ij}(b)$ rather than `qq`, and P47 for the
+Kubo route above, whose refusal used to name $d(\mathrm{vkb})/dk$ as belonging to P11 --
+P24 had already written it.
 **The tests:** `tests/regression/test_topology.py`, `tests/unit/test_topology_*.py`.
