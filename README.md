@@ -232,7 +232,6 @@ to compute, which is the way to arrive at them. In file order:
 | [`22_van_der_waals`](notebooks/22_van_der_waals.ipynb) | Grimme's D2 dispersion, and bilayer graphene binding where PBE alone has no minimum |
 | [`23_variable_cell_relaxation`](notebooks/23_variable_cell_relaxation.ipynb) | Relaxing the cell and the atoms together: arsenic squeezed to simple cubic at 500 kbar, against `pw.x` |
 | [`24_tran_blaha_band_gaps`](notebooks/24_tran_blaha_band_gaps.ipynb) | Band gaps from the modified Becke-Johnson potential: silicon from LDA's 0.49 eV to 1.13, against an experimental 1.17 |
-| [`25_raman_tensors`](notebooks/25_raman_tensors.ipynb) | Raman tensors — how the dielectric tensor changes when an atom moves |
 | [`26_raman_and_infrared_spectra`](notebooks/26_raman_and_infrared_spectra.ipynb) | Raman and infrared activities per mode: silicon's 519.2 cm⁻¹ line, and why it is infrared-silent |
 | [`27_excitons_and_tddft`](notebooks/27_excitons_and_tddft.ipynb) | Optical absorption from TDDFT with a bootstrap kernel, and the excitonic peak RPA does not have |
 | [`29_effective_mass_and_angular_momenta`](notebooks/29_effective_mass_and_angular_momenta.ipynb) | Effective masses as one difference of an analytic velocity, against the all-electron Elk binary, and where a spin-orbit magnet's orbital moment sits |

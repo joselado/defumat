@@ -6761,7 +6761,23 @@ against 25), or reaching past the facade (up to 7 imports).
 **Phase 5 is the sweep and it is partly done. Pick it up here.**
 
 Rewritten and passing the enforcement test: `00` (which already complied), `02`,
-`09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`, `15`, `24`, `29`.
+`09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`, `15`, `24`, `29`, `26`.
+
+**The Raman merge is done**, which is the first of the two structural jobs.
+`25_raman_tensors` is deleted and `26_raman_and_infrared_spectra` carries both:
+the spectrum first, because "give me the Raman spectrum" is the question, and
+the tensor as its "how it works". 167 code lines across thirteen cells become
+43 across four. Both index rows point at `26` now, and `25` is the free number
+the "your own crystal" notebook takes, so the set stays at 29 with no gap that
+was not already there. What went: the `dynmat.x` subprocess cell (it is
+`test_the_mode_table_matches_dynmat_x`), the five-run finite difference over
+displaced cells (`test_the_raman_tensor_matches_a_finite_difference`), the
+`ph.x`-regression table, and the hand-rolled Lorentzian broadening, which is
+`VibrationalSpectrum.plot` since phase 2. **The depolarisation ratios of
+silicon's acoustic triplet moved between the old committed output and this
+one** — 0.3544/0.7163/0.4065 became 0.5899/0.3964/0.5132 — which is the
+multiplet rule demonstrating itself: the basis inside a degenerate manifold is
+arbitrary, and the activity beside them reads 0.0000 in every version.
 
 | | code lines | code cells | runtime |
 |---|---|---|---|
@@ -6772,19 +6788,19 @@ Rewritten and passing the enforcement test: `00` (which already complied), `02`,
 | `15` | 109 → 60 | 6 → 5 | 31 s |
 | `24` | 103 → 48 | 5 → 3 | 31 s |
 | `29` | 102 → 46 | 6 → 4 | 59 s |
+| `25`+`26` | 167 → 43 | 13 → 4 | 107 s |
 | `19` | 143 → 47 | 11 → 5 | 46 s |
 | `10` | 134 → 46 | 5 → 5 | 50 s |
 | `13` | 123 → 43 | 5 → 3 | 66 s |
 | `11` | 147 → 54 | 6 → 5 | 79 s |
 | `08` | 149 → 56 | 6 → 4 | **25 min → 171 s** |
 
-**Fourteen notebooks are left**, plus the two structural jobs: merging `25` and
-`26` into one Raman notebook (spectrum first, tensor as its "how it works"), and
-adding the **"your own crystal"** notebook, which is the highest-value single
-artifact in the phase and still unwritten. In rough order of how badly they miss
-the budgets: `17` (105 lines), `05` (98), `06` (93), `16` (92), `27` (92),
-`14` (91), `12` (84), `26` (84), `25` (83), `07` (82), `21` (81), `01` (79),
-`04` (74), `20` (73), `03` (72), `23` (72). `01`, `03` and `17` are
+**Twelve notebooks are left**, plus the one remaining structural job: the
+**"your own crystal"** notebook, which is the highest-value single artifact in the
+phase and takes the number `25` the merge freed. In rough order of how badly they
+miss the budgets: `17` (105 lines), `05` (98), `06` (93), `16` (92), `27` (92),
+`14` (91), `12` (84), `07` (82), `21` (81), `01` (79), `04` (74), `20` (73),
+`03` (72), `23` (72). `01`, `03` and `17` are
 the "under the hood" tier and are **not** held to the skeleton — trim them toward
 the everywhere-rules and leave them out of `REWRITTEN`.
 

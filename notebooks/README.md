@@ -59,7 +59,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Born effective charges | `get_born_charges()` | [19](19_linear_response.ipynb) |
 | Band velocities | `get_band_velocities()` | [19](19_linear_response.ipynb) |
 | Phonon frequencies at `Gamma` | `get_phonons()` | [20](20_phonons.ipynb) |
-| Raman tensors | `get_raman_tensors()` | [25](25_raman_tensors.ipynb) |
+| Raman tensors | `get_raman_tensors()` | [26](26_raman_and_infrared_spectra.ipynb) |
 | Raman and infrared activities per mode | `get_vibrational_spectrum()` | [26](26_raman_and_infrared_spectra.ipynb) |
 | An optical absorption spectrum, with excitons | `get_absorption()` | [27](27_excitons_and_tddft.ipynb) |
 | Elastic constants | `get_elastic_constants()` | [21](21_electrostriction.ipynb) |
@@ -124,8 +124,7 @@ want a number.
 | [`22_van_der_waals.ipynb`](22_van_der_waals.ipynb) | Grimme's D2, and bilayer graphene binding at 3.23 A where PBE alone has no minimum at all |
 | [`23_variable_cell_relaxation.ipynb`](23_variable_cell_relaxation.ipynb) | Relaxing the cell at an applied pressure: arsenic at 500 kbar going simple cubic |
 | [`24_tran_blaha_band_gaps.ipynb`](24_tran_blaha_band_gaps.ipynb) | A functional that is a potential and not an energy: silicon's gap from 0.49 to 1.13 eV |
-| [`25_raman_tensors.ipynb`](25_raman_tensors.ipynb) | The Raman tensor as the polarizability's derivative in an atomic position, against a finite difference |
-| [`26_raman_and_infrared_spectra.ipynb`](26_raman_and_infrared_spectra.ipynb) | Modes, activities and depolarisation ratios: silicon's 519 cm-1 line, Raman-active and infrared-silent |
+| [`26_raman_and_infrared_spectra.ipynb`](26_raman_and_infrared_spectra.ipynb) | Modes, activities and depolarisation ratios: silicon's 519 cm-1 line, Raman-active and infrared-silent, and the tensor underneath them |
 | [`27_excitons_and_tddft.ipynb`](27_excitons_and_tddft.ipynb) | Absorption spectra and the bootstrap kernel, and why no adiabatic local kernel binds an exciton |
 | [`29_effective_mass_and_angular_momenta.ipynb`](29_effective_mass_and_angular_momenta.ipynb) | Band curvature as an effective mass, and site-resolved `<L>`, `<S>` and `<J>` against Elk |
 
@@ -210,8 +209,8 @@ jupyter lab notebooks/
 
 The ones rewritten to the shape above are timed, and all of them are far inside
 the ten-minute ceiling: **`02` 7 s, `09` 6 s, `22` 12 s, `18` 29 s, `15` 31 s,
-`24` 31 s, `19` 46 s, `10` 50 s, `11` 79 s, `13` about a minute, `08` 174 s**. Three of
-those used to
+`24` 31 s, `19` 46 s, `10` 50 s, `29` 59 s, `11` 79 s, `13` about a minute, `26` 107 s,
+`08` 174 s**. Three of those used to
 be much slower. `19` lost two hand-built linear solves and a second
 self-consistent run that were demonstrating machinery rather than physics; `18`
 ran fourteen self-consistent calculations where two pairs make its point and the
@@ -221,9 +220,7 @@ five-run finite-difference sweep and a two-run identity check, both of them
 already in the test suite.
 
 Most of the rest run in under a minute on one core. The exception is `12` (a few
-minutes). `29` takes **59 s**, most of it the one spinor SCF on nickel; its Elk
-comparison and its moment-rotation check are quoted from offline runs rather
-than executed.
+minutes).
 
 `22` needs neither the vendored tree nor much time: its input and its `pw.x`
 reference are committed under `tests/data/qe/`, and its binding curve is quoted
@@ -237,11 +234,12 @@ QE ships covers those cases. `07`, `08`, `11` and `13` are mixtures: the inputs 
 vendored tree and the references are regenerated and committed, since QE's own benchmarks for
 those cases stop at `conv_thr = 1e-6` and their printed terms are only good to about 1e-4 Ry.
 
-Four notebooks quote a measurement rather than running it, and say so where they do: `10`'s
+Six notebooks quote a measurement rather than running it, and say so where they do: `10`'s
 Wannier-charge-centre sweep on bismuthene (7.8 GB in one kernel, so it was run in its own
 process), `14`'s cutoff sweep of the basis-set jumps in `E(q)`, `18`'s silicon and platinum
-pairs, and `22`'s eleven-point binding curve, whose dispersion half is recomputed live
-because it is a pair sum over four nuclei. `08` runs bismuthene at
+pairs, `22`'s eleven-point binding curve, whose dispersion half is recomputed live because it
+is a pair sum over four nuclei, `29`'s Elk comparison and moment rotation, and `26`'s
+finite difference over re-converged displaced cells. `08` runs bismuthene at
 the test size (20 Ry, 6x6x1); the converged pair (35 Ry, 12x12x1) is committed beside it with
 its own QE reference and is one variable away, at about forty minutes and a 9.4 GB peak.
 
