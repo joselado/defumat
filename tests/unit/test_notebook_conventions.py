@@ -38,9 +38,12 @@ REWRITTEN = {
     "02_silicon_scf_and_bands",
     "08_spin_orbit_coupling",
     "09_forces_and_relaxation",
+    "10_topological_invariants",
     "11_noncollinear_magnetism_and_fields",
     "13_dft_plus_u",
+    "18_continuing_a_calculation",
     "19_linear_response",
+    "22_van_der_waals",
 }
 
 #: Notebooks that still say ``jvp`` in a plot label or a code cell. Prose debt
@@ -48,7 +51,6 @@ REWRITTEN = {
 #: them. **This set only shrinks.**
 JVP_DEBT = {
     "21_electrostriction",
-    "22_van_der_waals",
     "25_raman_tensors",
 }
 
@@ -98,6 +100,9 @@ HAS_A_FACADE_METHOD = {
     "elastic_constants": "get_elastic_constants",
     "electrostriction": "get_electrostriction",
     "effective_mass": "get_effective_mass",
+    "run_berry_curvature": "get_berry_curvature",
+    "run_z2": "get_z2",
+    "run_z2_3d": "get_z2_3d",
     "VelocityOperator": "get_band_velocities",
 }
 

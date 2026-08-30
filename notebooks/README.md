@@ -209,22 +209,24 @@ jupyter lab notebooks/
 ```
 
 The ones rewritten to the shape above are timed, and all of them are far inside
-the ten-minute ceiling: **`02` 7 s, `09` 6 s, `19` 46 s, `11` 79 s, `13` about a
-minute, `08` 174 s**. Two of those used to be much slower. `19` lost two
-hand-built linear solves and a second self-consistent run that were
-demonstrating machinery rather than physics, and **`08` was the one notebook
-measured over the ceiling** -- about 25 minutes -- which it no longer is: what
-went was a five-run finite-difference sweep and a two-run identity check, both
-of them already in the test suite.
+the ten-minute ceiling: **`02` 7 s, `09` 6 s, `22` 12 s, `18` 29 s, `19` 46 s,
+`10` 50 s, `11` 79 s, `13` about a minute, `08` 174 s**. Three of those used to
+be much slower. `19` lost two hand-built linear solves and a second
+self-consistent run that were demonstrating machinery rather than physics; `18`
+ran fourteen self-consistent calculations where two pairs make its point and the
+other ten are in the test suite; and **`08` was the one notebook measured over
+the ceiling** -- about 25 minutes -- which it no longer is: what went was a
+five-run finite-difference sweep and a two-run identity check, both of them
+already in the test suite.
 
-Most of the rest run in under a minute on one core. The exceptions are `12` (a
-few minutes) and `18` (about three minutes: it runs fourteen SCFs, which is the
-point, since every number in it is a *pair* of runs, one from the atoms and one
-continued). `29` takes **63 s**, most of it the one spinor SCF on nickel; its Elk
+Most of the rest run in under a minute on one core. The exception is `12` (a few
+minutes). `29` takes **63 s**, most of it the one spinor SCF on nickel; its Elk
 comparison and its moment-rotation check are quoted from offline runs rather
 than executed.
 
-`22` needs neither: its inputs and its `pw.x` references are committed under `tests/data/qe/`, and its binding curve is quoted from an offline sweep with only the dispersion half recomputed.
+`22` needs neither the vendored tree nor much time: its input and its `pw.x`
+reference are committed under `tests/data/qe/`, and its binding curve is quoted
+from an offline sweep with only the dispersion half recomputed.
 
 Some need the vendored Quantum ESPRESSO tree at `../quantum_espresso/` for their input files
 and reference outputs; that tree is not in the repository (it is 285 MB) and the paths at the
@@ -234,9 +236,11 @@ QE ships covers those cases. `07`, `08`, `11` and `13` are mixtures: the inputs 
 vendored tree and the references are regenerated and committed, since QE's own benchmarks for
 those cases stop at `conv_thr = 1e-6` and their printed terms are only good to about 1e-4 Ry.
 
-Two notebooks quote a measurement rather than running it, and say so where they do: `10`'s
+Four notebooks quote a measurement rather than running it, and say so where they do: `10`'s
 Wannier-charge-centre sweep on bismuthene (7.8 GB in one kernel, so it was run in its own
-process) and `14`'s cutoff sweep of the basis-set jumps in `E(q)`. `08` runs bismuthene at
+process), `14`'s cutoff sweep of the basis-set jumps in `E(q)`, `18`'s silicon and platinum
+pairs, and `22`'s eleven-point binding curve, whose dispersion half is recomputed live
+because it is a pair sum over four nuclei. `08` runs bismuthene at
 the test size (20 Ry, 6x6x1); the converged pair (35 Ry, 12x12x1) is committed beside it with
 its own QE reference and is one variable away, at about forty minutes and a 9.4 GB peak.
 

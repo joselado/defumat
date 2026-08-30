@@ -6761,30 +6761,54 @@ against 25), or reaching past the facade (up to 7 imports).
 **Phase 5 is the sweep and it is partly done. Pick it up here.**
 
 Rewritten and passing the enforcement test: `00` (which already complied), `02`,
-`09`, `19`, `11`, `13`, `08`. `08`'s last outstanding item is closed: its first
-code cell ran the three platinum benchmarks in a loop, 19 lines against the
-budget of 12, and the loop is now a cell of its own that reuses the first run's
-result rather than repeating it — so the split cost no execution time (171 s,
-against the 174 s measured before it).
+`09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`.
 
 | | code lines | code cells | runtime |
 |---|---|---|---|
 | `02` | 66 → 53 | 5 → 4 | 7 s |
 | `09` | 98 → 26 | 4 → 2 | 6 s |
+| `22` | 111 → 50 | 5 → 4 | 12 s |
+| `18` | 114 → 56 | 9 → 4 | 3 min → **29 s** |
 | `19` | 143 → 47 | 11 → 5 | 46 s |
+| `10` | 134 → 46 | 5 → 5 | 50 s |
 | `13` | 123 → 43 | 5 → 3 | 66 s |
 | `11` | 147 → 54 | 6 → 5 | 79 s |
-| `08` | 149 → 56 | 6 → 4 | **25 min → 174 s** |
+| `08` | 149 → 56 | 6 → 4 | **25 min → 171 s** |
 
-**Twenty notebooks are left**, plus the two structural jobs: merging `25` and
+**Seventeen notebooks are left**, plus the two structural jobs: merging `25` and
 `26` into one Raman notebook (spectrum first, tensor as its "how it works"), and
 adding the **"your own crystal"** notebook, which is the highest-value single
 artifact in the phase and still unwritten. In rough order of how badly they miss
-the budgets: `10` (134 lines), `18` (114, and its first cell does not build a
-`Calculator`), `22` (111), `15` (109), `17` (105), `24` (103, first cell likewise),
-`29` (102), `05` (98), `06` (93), `16` (92), `27` (92), `14` (91), `12` (84),
-`26` (84), `25` (83), `07` (82), `21` (81), `01` (79), `04` (74), `20` (73),
-`03` (72), `23` (72).
+the budgets: `15` (109 lines), `17` (105), `24` (103, first cell does not build a
+`Calculator`), `29` (102), `05` (98), `06` (93), `16` (92), `27` (92), `14` (91),
+`12` (84), `26` (84), `25` (83), `07` (82), `21` (81), `01` (79), `04` (74),
+`20` (73), `03` (72), `23` (72). `01`, `03` and `17` are the "under the hood"
+tier and are **not** held to the skeleton — trim them toward the everywhere-rules
+and leave them out of `REWRITTEN`.
+
+**What the four in this pass cost and found.** `08` was one cell split, and the
+loop now reuses the first run's result rather than repeating it, so it cost no
+execution time. `10` lost four validation cells that were already in the tests
+verbatim — the zone-edge wrap, the Haldane mesh sweep, the Wilson-fermion closed
+forms and silicon's TRIM parity table — keeping the AlAs curvature map and one
+model cell, because no crystal in this repository carries a nonzero invariant
+that can be run in a notebook. `18` ran fourteen self-consistent calculations
+where two pairs make the point; the silicon and platinum rows of its table are
+quoted and named to the tests that run them. `22` lost its
+transcribed-against-differentiated force and stress table, which the conventions
+ban outright, and its elastic-constant cell, which was the last of the three
+`jvp` debts but one.
+
+**Three corrections the re-execution caught**, which is checklist item 3 doing its
+job. `10`'s "the hot spots sit where the gap is smallest" was a claim the figure
+does not support; what the figure *does* show is that `Omega(k)` is odd under
+`k -> -k`, which is time reversal without an inversion centre, and that is the
+sentence now. `18`'s figure was titled "the moment is the slow variable" and its
+own right-hand panel says otherwise — both runs have most of the moment after one
+iteration. And `22`'s header table carried two **fabricated** energies, written
+from memory rather than from the run; they are -45.10439956 and -0.02305929, and
+the rule that catches this is to fill a headline number in *after* executing, not
+before.
 
 **The per-notebook checklist, learned the hard way.** Each of these was missed at
 least once and each cost a correction:
