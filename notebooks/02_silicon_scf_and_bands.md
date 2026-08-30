@@ -141,8 +141,8 @@ free-electron metal.
 
 
 ```python
-from pypresso.basis.builder import build_basis        # no facade route to rho(G)
-from pypresso.basis.fft import r_to_g
+from pypresso.basis.builder import build_basis   # no facade route to rho(G)
+from pypresso.basis.fft import r_to_g           # nor to the transform onto it
 
 system = silicon.system
 basis = build_basis(system)

@@ -176,6 +176,13 @@ want a number.
 
 ## The shape of a notebook
 
+`tests/unit/test_notebook_conventions.py` enforces what follows, on the
+notebook's JSON and without executing it. It is a ratchet: every notebook is
+checked for the export being current and for implementation vocabulary, and the
+ones listed in its `REWRITTEN` set are held to the whole skeleton. A notebook
+joins that set in the commit that rewrites it.
+
+
 Nine cells, 60 to 70 lines of code, and no code cell over 25 lines. The second cell is the
 one the whole notebook is for.
 

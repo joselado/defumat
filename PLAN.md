@@ -6487,7 +6487,7 @@ which is what nickel above is.
 `(nk, npwx, natomwfc)` array a projected DOS or a Hubbard `U` already holds, and
 the site matrices are `(natom, nshell, 2l+1, 2, 2l+1, 2)`, which is nothing.
 
-### P49 — The notebooks, rewritten for someone computing a property. 🚧 PHASES 1-3 DONE.
+### P49 — The notebooks, rewritten for someone computing a property. 🚧 PHASES 1-4 DONE.
 
 `notebooks/`, `notebooks/README.md`, `pypresso/calculator.py`, and one new test.
 Not started. This entry is the design, written before the work and reviewed
@@ -6722,6 +6722,41 @@ delegates to `get_dielectric_tensor` and hits the same cache.
 caches its converged states with `lru_cache(maxsize=None)` over five cells,
 which is the exact leak this file's memory rule names. Changing it alters what
 the slow suite holds and belongs to a pass that is about memory.
+
+**Phase 4, the enforcement, has landed**: `tests/unit/test_notebook_conventions.py`,
+**107 tests in 0.07 s**, in the fast gate, parsing the `.ipynb` JSON and executing
+nothing.
+
+It is a **ratchet rather than a wall**, which is what stops it being deleted the
+first time it is inconvenient. Every notebook is checked for the things that are
+cheap to keep true everywhere — the `.md` export having one fenced block per code
+cell, and no implementation vocabulary (`jvp`, a `.f90` name, a `PLAN.md`
+reference, a phase number, an em dash). Only the four in `REWRITTEN` are held to
+the whole skeleton: the first code cell building a `Calculator` in twelve lines,
+the 80-line and 25-line budgets, the facade import allowlist with its cap of two
+*justified* exceptions, no `load()`/`scf()`/`namelist()` plumbing helper, and no
+use of an entry point whose `get_*` wrapper exists. `REWRITTEN` only grows and
+`JVP_DEBT` only shrinks, and the file says so.
+
+**It caught a real defect on its first run**, which is the argument for it: the
+rewrite of `02` had put `# no facade route to rho(G)` on the `build_basis` line
+and nothing on the `r_to_g` line beside it, so one of the two deep imports was
+unjustified and no human reading had noticed. **And it is not vacuous** —
+adding `13_dft_plus_u` to `REWRITTEN` fires four of the five skeleton checks
+immediately.
+
+Two of its choices are worth keeping written down. The phase-number pattern
+`\bP\d{1,2}[a-c]?\b` **would** false-positive on a space group written
+`P4/mmm`, though not on `P6_3/mmc`, whose underscore is a word character; it
+fires on none of the 29 today, and the fix when it does is to name that notebook
+in an allowlist rather than to weaken the pattern. And the deep-import budget is
+**two** rather than zero, because the two figures that survived the rewrites of
+`02` and `19` both need `r_to_g` and there is genuinely no facade route to
+`rho(G)`: a budget of zero would delete the best figures in the set.
+
+The baseline it recorded: **4 of 29 notebooks pass the full skeleton**, and the
+other 25 fail on code volume (up to 149 lines against 80), cell length (up to 48
+against 25), or reaching past the facade (up to 7 imports).
 
 **The skeleton, which every property notebook is held to.** Nine cells, 60 to 70
 non-comment code lines, no cell over 25.
