@@ -48,9 +48,9 @@ so `moke.f90` is pure post-processing; all the work is the **full tensor**
 `sigma_ab(omega)`, interband plus an intraband Drude term.
 
 **What QE has, precisely.** `PP/src/epsilon.f90` does have an `offdiag_calc`
-that forms the whole tensor, so the README column for this row would be
-**partly**, not `new`. But it refuses ultrasoft outright (`okvan` →
-`errore('grid_build', 'USPP are not implemented')`), computes no Kerr angle,
+that forms the whole tensor, so this row's README ticks would be **(✓) for QE
+and ✓ for Elk**, not blank in both. But it refuses ultrasoft outright (`okvan`
+→ `errore('grid_build', 'USPP are not implemented')`), computes no Kerr angle,
 and builds the dipole from momentum matrix elements `<psi|p|psi>` — which is
 the one line `CLAUDE.md` already records as *not* to be transcribed, because it
 is wrong with a nonlocal pseudopotential. `dH/dk` replaces it, as it already
@@ -106,7 +106,7 @@ make alone.
 **Validation.** The free-electron Lindhard function analytically; the Elk binary
 on Cr or a one-dimensional chain; internal agreement with `relax_spiral_q`.
 
-**README column:** `new`.
+**README ticks:** blank for QE, ✓ for Elk (task 105).
 
 ---
 
@@ -135,8 +135,9 @@ the physics content of the comparison. `wsfac` (Elk's energy window on which
 states contribute) is worth having for the same reason: it is what makes the
 quantity a probe of bonding rather than of the whole density.
 
-**README column:** `new`. It is the only output in the package that a
-diffraction experiment can be held against directly.
+**README ticks:** blank for QE, ✓ for Elk (tasks 195/196). It is the only
+output in the package that a diffraction experiment can be held against
+directly.
 
 ---
 
@@ -215,7 +216,7 @@ produce a wrong claim:
 
 - **"QE does not have it" is a `grep` over the vendored tree**, not a memory.
   Two of the original candidates died this way (ELF, STM) and one changed its
-  README column from `new` to `partly` (the conductivity tensor, because
+  README tick from blank to `(✓)` (the conductivity tensor, because
   `epsilon.x` has an `offdiag_calc` nobody remembered).
 - **"It is cheap" is a claim about the algorithm, checked against Elk's own
   implementation.** The piezoelectric tensor looks cheap in Elk's task list and

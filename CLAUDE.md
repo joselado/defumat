@@ -809,11 +809,17 @@ entry points forward theirs to solvers that would raise on `nbnd`.
 ## The README's feature table
 
 `README.md` carries a table of every implemented feature, with the input variable or entry
-point that reaches it and a column saying whether Quantum ESPRESSO has it at all — `pw.x`,
-or `new` for the ones with no counterpart there (the spin spirals, the spiral relaxation,
-the topological invariants, Elk's fields). It is the only place that distinction is written
-down for a reader who is not going to read `PLAN.md`, and it is what tells someone
-evaluating the code whether it is a reimplementation or an extension.
+point that reaches it and **two tick columns — `QE` and `Elk` — saying whether either
+established code computes that quantity at all**. A tick means it is there, `(✓)` with a
+numbered note means it is there only partly, and **blank in both columns is the mark of a
+quantity neither code has** (the spiral relaxation, the topological invariants, the strain
+response, the elastic and electrostriction constants). It is the only place that
+distinction is written down for a reader who is not going to read `PLAN.md`, and it is what
+tells someone evaluating the code whether it is a reimplementation or an extension.
+
+**The table names quantities, not routines.** Which Fortran file a feature corresponds to,
+what is transcribed and what is differentiated, belongs in this file and in `PLAN.md`; the
+README says what the physics is and whether the other codes have it.
 
 **The rows are physics, not knobs.** A row is a thing someone would want to compute — total
 energies, bands, densities of states, forces, relaxation, magnetism, DFT+U, the invariants —
@@ -825,9 +831,12 @@ quantity it produces; its variants, schemes and internal terms go in `PLAN.md`.
 standing requirement as the notebooks: a phase is not finished until its row exists. Two
 things make the table go stale silently and both have already happened once, so check them:
 
-- **The provenance column is a claim about the Fortran**, not a guess. Before writing
-  `pw.x`, find the routine; before writing `new`, grep the vendored tree for it. "QE
-  probably has this" is how a wrong row gets in.
+- **Each tick is a claim about someone else's source**, not a guess. Before ticking `QE`,
+  find the routine in the vendored tree; before ticking `Elk`, find it in the task list of
+  `docs/elk_manual.txt` (§5.127) or in `vendor/elk/src/` in the user's `elkpy` checkout;
+  before leaving both blank, grep both. "QE probably has this" is how a wrong row gets in,
+  and Elk is the easier of the two to get wrong — its `z2*.f90` files are complex-matrix
+  helpers and have nothing to do with the Z2 invariant.
 - **The entry-point column is a claim about *this* code.** Check the variable is actually
   read (`grep` it in `io/pwin.py` and `system/builder.py`) and the function actually
   exported. A row naming `tprnfor` when nothing parses it, or `UPF v1` when the reader

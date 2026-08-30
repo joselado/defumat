@@ -18,60 +18,78 @@ outputs for around a hundred cases.
 
 It also computes things `pw.x` cannot: spin spirals without a supercell,
 topological invariants, elastic and electrostriction constants, optical spectra
-with excitonic effects. The table below says which is which.
+with excitonic effects. The table below ticks off, quantity by quantity, what
+Quantum ESPRESSO and the all-electron code Elk compute as well.
 
 ## What it can do today
 
-The right-hand column says where each feature comes from. **"`pw.x`"** means
-Quantum ESPRESSO has it and this reproduces its numbers against a reference
-output; **"new"** means it has no counterpart in `pw.x` at all, and is validated
-some other way — against Elk, against a supercell calculation of the same
-physics, or against an identity the answer has to satisfy. In between are the
-rows where the *quantity* is Quantum ESPRESSO's and the *route to it* is not.
+Each row is a physical quantity you can compute. The two right-hand columns say
+whether the established plane-wave and all-electron codes compute it as well:
+**QE** is Quantum ESPRESSO (`pw.x` and its post-processing tools) and **Elk** is
+the all-electron LAPW code. A tick means the quantity is there; **(✓)** means it
+is there only partly, and the note under the table says how; **blank in both
+columns is a quantity neither code computes**, and which is therefore pinned by
+an identity or by an independent second route rather than by a reference output.
 
-The middle column is the input-file variable that controls the feature, where
-there is one — it means what it means in a `pw.x` input — and the Python entry
-point where there is not. Every one of them is also a method on a `Calculator`
+The middle column is the input-file variable that asks for it, where there is
+one — it means what it means in a `pw.x` input — and the Python entry point
+where there is not. Every one of them is also a method on a `Calculator`
 (`calc.get_bands()`, `calc.get_dielectric_tensor()`), which is the short way to
 drive any of this and is what the examples below use.
 
-| Feature | How to ask for it | In Quantum ESPRESSO? |
-|---|---|---|
-| **Total energies**, self-consistently, broken down term by term — insulators and metals alike | `calculation = 'scf'` | `pw.x` |
-| **Band structures** along a path through the Brillouin zone | `run_bands` | `pw.x` + `bands.x` |
-| **Densities of states**, by smearing or by tetrahedra | `run_dos`, `pypresso dos` | `pw.x` + `dos.x` |
-| **Projected densities of states** — resolved by atom, by `l` and by `m`, with Löwdin charges and the spilling parameter | `run_pdos`, `pypresso pdos` | `pw.x` + `projwfc.x` |
-| **Forces on the atoms** — unpolarized, collinear spin and **noncollinear/spin-orbit**, on norm-conserving, ultrasoft and PAW | `compute_forces` | `pw.x`. A spinor force is the autodiff route only; `method='analytic'` has no spinor form and is refused |
-| **Structural relaxation** — BFGS with QE's trust radius and line search | `calculation = 'relax'`, `pypresso relax` | `pw.x` |
-| **Variable-cell relaxation** — the cell and the atoms relaxed together, at an applied pressure | `calculation = 'vc-relax'`, `run_vc_relax` | `pw.x` |
-| **Stress tensor and pressure**, in Ry/bohr³ and kbar — the same three spin regimes as the force | `tstress = .true.`, `compute_stress`, `pypresso stress` | `pw.x` |
-| **Magnetism**, collinear, with one Fermi level or two | `nspin = 2`, `tot_magnetization` | `pw.x` |
-| **Magnetism as a vector** — noncollinear, with the magnetic symmetry group | `noncolin` | `pw.x` |
-| **Spin-orbit coupling**, two-component spinors and `j`-resolved projectors | `lspinorb` | `pw.x` |
-| **Magnetic fields and constrained moments** — all four of QE's schemes | `B_field`, `constrained_magnetization` | `pw.x` |
-| **Magnetic fields inside one atom's sphere**, and a field that fades away | `LOCAL_MAGNETIC_FIELDS` card, `reducebf`, `constrained_magnetization = 'fsm'` | **new** — Elk has it, `pw.x` does not |
-| **DFT+U** — Dudarev's functional with `U`, `J0`, `alpha`, `beta` | `HUBBARD` card, `run_scf(starting_ns=...)` | `pw.x`. Dudarev's simplified functional; the full Liechtenstein form, the intersite `V` and noncollinear runs are refused by name |
-| **Spin spirals** at any wavevector, without a supercell | `spiral_q`, `pypresso spiral` | **new** — Elk has it, `pw.x` does not. Needs `nosym`; ultrasoft, PAW and spin-orbit coupling are refused |
-| **Relaxing the spiral wavevector** down `dE/dq` to the ground-state pitch | `relax_spiral_q` | **new** |
-| **Berry curvature and Chern numbers**, the latter exact integers on any mesh — the lattice (Fukui-Hatsugai-Suzuki) construction for the integers, and a pointwise `Omega(k)` map by the Kubo/velocity-operator route with the sum's truncation reported | `run_berry_curvature`, `method="kubo"` for the map | **new** — QE has the Berry *phase*, not the curvature |
-| **Z2 invariants** in 2D and 3D, by Wannier charge centres *and* by parities | `run_z2`, `run_z2_3d` | **new** |
-| **Continuing one run from another across a change of spin regime** — a converged non-magnetic density as the starting point of a magnetic run, a collinear one of a noncollinear run, spin-orbit coupling switched on | `run_scf(starting_from=...)`, `System.with_spin` | partly `pw.x` — `startingpot = 'file'` reads a density across a change of `nspin`, but zero-fills the missing components, so a magnetic run started that way converges back to the unpolarized answer |
-| **Reaching self-consistency** — Anderson/Broyden mixing, Kerker preconditioning, or solving the residual with its own Jacobian | `run_scf(mixing_mode=...)`, `run_scf(scf_solver=...)` | `pw.x` has the mixing; the residual solver is new, and reaches solutions no mixer does |
-| **Band velocities** `d(eps)/dk`, with the nonlocal pseudopotential's own contribution — norm-conserving, ultrasoft and PAW | `band_velocities`, `VelocityOperator` | partly — `fermi_velocity.x` finite-differences eigenvalues and reports only the magnitude |
-| **Effective mass tensor** `m*_ij` at any k-point, with the principal masses and the density-of-states mass | `effective_mass`, `Calculator.get_effective_mass` | **new** — Elk has it (task 25), nothing in `pw.x` or its post-processing computes one. Bands inside a degenerate multiplet are refused individually and reported as the multiplet's invariant sum |
-| **Orbital, spin and total angular momentum on each atom** — `<L>`, `<S>`, `<J>`, which is where the orbital moment of a spin-orbit magnet actually sits | `angular_momenta`, `Calculator.get_angular_momenta` | partly `pw.x` — `lorbm` gives the **cell's** orbital magnetization (`orbm_kubo.f90`) and nothing per atom. Elk has the site decomposition (tasks 15/16). Needs the whole k-grid; a relativistic ultrasoft or PAW dataset is refused |
-| **Dielectric constant** `epsilon_infinity` — insulators, norm-conserving, ultrasoft and PAW — **and Born effective charges** (norm-conserving and ultrasoft; PAW refused by name). The Sternheimer solve underneath it runs for **collinear spin** too, `chi_0` at `nspin = 2` validated against a finite difference of the density | `dielectric_tensor` | `ph.x` with `epsil = .true.` |
-| **Phonons at `Gamma`** — the force constants and their frequencies, insulators **and metals**, on norm-conserving, **ultrasoft and PAW** datasets | `dynamical_matrix` | `ph.x`. Away from `Gamma` they are refused, and so is an ultrasoft or PAW *metal* |
-| **The strain response** `dpsi/d(eps)`, `drho/d(eps)` and the deformation potentials, on norm-conserving, **ultrasoft and PAW** datasets | `strain_response` | **new** — `ph.x` has no strain perturbation |
-| **Elastic constants** `C_ijkl` and the compliance and bulk modulus that follow, clamped-ion, insulators, norm-conserving | `elastic_constants` | **new** — nothing in `pw.x` or `ph.x` computes them |
-| **Electrostriction coefficients** `m`, `q`, `M` and `Q` — the quadratic electromechanical coupling — clamped-ion, insulators, norm-conserving | `electrostriction` | **new** — no counterpart in `pw.x` or `ph.x` |
-| **Raman tensors** `d(eps)/d(tau)` — the derivative of the dielectric tensor with respect to an atomic coordinate, insulators, norm-conserving/ultrasoft/PAW | `raman_tensors` | partly `ph.x` (`lraman = .true.`), which refuses a gradient-corrected functional where this does not. `chi^(2)` and the electro-optic tensor are refused |
-| **Raman and infrared spectra** — the per-mode activities, depolarisation ratios and electronic polarizability at `Gamma`, insulators, norm-conserving | `vibrational_spectrum` | `dynmat.x`. The non-analytic LO-TO splitting is not included, so an optical triplet comes out unsplit |
-| **Optical absorption spectra with excitons** — `Im eps_M(omega)` from TDDFT, local-field effects included, on a **bootstrap** exchange-correlation kernel | `run_absorption`, `kernel = 'bootstrap'` (also `rpa`, `alda`, `lrc`, `bootstrap-1`), `ecut_response`, `scissor`, `broadening` | **new** — Elk has it (`fxctype = 210`); `pw.x` has nothing, and `TDDFPT/` is a different method with no bootstrap kernel. Needs the whole k-grid rather than a wedge |
-| **Van der Waals dispersion** — Grimme's D2 pair correction, in the energy, the forces, the stress and the elastic constants | `vdw_corr = 'grimme-d2'`, `london_s6`, `london_rcut`, `london_c6`, `london_rvdw` | `pw.x`. D3, Tkatchenko-Scheffler, MBD and XDM are refused by name |
-| **Band gaps from the Tran-Blaha potential** (mBJ) — the modified Becke-Johnson meta-GGA, on norm-conserving **and PAW** datasets, unpolarized, collinear, and noncollinear **with spin-orbit coupling** | `input_dft = 'tb09'` (or `'bj06'`), `mbj_c` | partly `pw.x` — which reaches it only through libxc, and then passes a zero Laplacian and never sets the functional's coefficient, so what it runs under that name is a different functional. **The total energy is not variational**, so forces, stress and response are refused |
-| **Pseudopotentials**: norm-conserving, ultrasoft and PAW (UPF v2) | `ATOMIC_SPECIES` | `pw.x` |
-| **Functionals**: LDA and GGA — Perdew-Zunger, Perdew-Wang, PBE, revPBE, PBEsol | `input_dft`, or the UPF header | `pw.x` |
+| Feature | How to ask for it | QE | Elk |
+|---|---|:-:|:-:|
+| **Total energies**, self-consistently, broken down term by term — insulators and metals alike | `calculation = 'scf'` | ✓ | ✓ |
+| **Band structures** along a path through the Brillouin zone | `run_bands` | ✓ | ✓ |
+| **Densities of states**, by smearing or by tetrahedra | `run_dos`, `pypresso dos` | ✓ | ✓ |
+| **Projected densities of states** — resolved by atom, by `l` and by `m`, with Löwdin charges and the spilling parameter | `run_pdos`, `pypresso pdos` | ✓ | ✓ |
+| **Forces on the atoms** — unpolarized, collinear spin and noncollinear/spin-orbit, on norm-conserving, ultrasoft and PAW. For a spinor the hand-derived cross-check has no counterpart and `method='analytic'` is refused | `compute_forces` | ✓ | ✓ |
+| **Structural relaxation** — the atoms moved downhill to their equilibrium positions | `calculation = 'relax'`, `pypresso relax` | ✓ | ✓ |
+| **Variable-cell relaxation** — the cell and the atoms relaxed together, at an applied pressure | `calculation = 'vc-relax'`, `run_vc_relax` | ✓ | ✓ |
+| **Stress tensor and pressure**, in Ry/bohr³ and kbar — the same three spin regimes as the force | `tstress = .true.`, `compute_stress`, `pypresso stress` | ✓ | ✓ |
+| **Magnetism**, collinear, with one Fermi level or two | `nspin = 2`, `tot_magnetization` | ✓ | ✓ |
+| **Magnetism as a vector** — noncollinear, with the magnetic symmetry group | `noncolin` | ✓ | ✓ |
+| **Spin-orbit coupling**, two-component spinors and `j`-resolved projectors | `lspinorb` | ✓ | ✓ |
+| **Magnetic fields and constrained moments** — a uniform field, and four ways of holding a moment where you put it | `B_field`, `constrained_magnetization` | ✓ | ✓ |
+| **Magnetic fields inside one atom's sphere**, and a field that fades away as the run converges | `LOCAL_MAGNETIC_FIELDS` card, `reducebf`, `constrained_magnetization = 'fsm'` | | ✓ |
+| **DFT+U** — Dudarev's functional with `U`, `J0`, `alpha`, `beta`. The full Liechtenstein form, the intersite `V` and noncollinear `ns` are refused by name | `HUBBARD` card, `run_scf(starting_ns=...)` | ✓ | ✓ |
+| **Spin spirals** at any wavevector, without a supercell. Needs `nosym`; ultrasoft, PAW and spin-orbit coupling are refused | `spiral_q`, `pypresso spiral` | | ✓ |
+| **Relaxing the spiral wavevector** down `dE/dq` to the ground-state pitch | `relax_spiral_q` | | |
+| **Berry curvature and Chern numbers** — exact integers on any mesh, and a smooth `Omega(k)` map with the truncation of its band sum reported | `run_berry_curvature`, `method="kubo"` for the map | | |
+| **Z2 invariants** in 2D and 3D, by Wannier charge centres *and* by parities | `run_z2`, `run_z2_3d` | | |
+| **Continuing one run from another across a change of spin regime** — a converged non-magnetic density as the starting point of a magnetic run, a collinear one of a noncollinear run, spin-orbit coupling switched on | `run_scf(starting_from=...)`, `System.with_spin` | (✓)¹ | |
+| **Reaching self-consistency** — Anderson/Broyden mixing, Kerker preconditioning, or solving the residual with its own Jacobian, which reaches magnetic solutions no mixer does | `run_scf(mixing_mode=...)`, `run_scf(scf_solver=...)` | (✓)² | (✓)² |
+| **Band velocities** `d(eps)/dk`, with the nonlocal pseudopotential's own contribution — norm-conserving, ultrasoft and PAW | `band_velocities`, `VelocityOperator` | (✓)³ | |
+| **Effective mass tensor** `m*_ij` at any k-point, with the principal masses and the density-of-states mass. Bands inside a degenerate multiplet are reported as the multiplet's invariant sum | `effective_mass`, `Calculator.get_effective_mass` | | ✓ |
+| **Orbital, spin and total angular momentum on each atom** — `<L>`, `<S>`, `<J>`, which is where the orbital moment of a spin-orbit magnet actually sits. Needs the whole k-grid; a relativistic ultrasoft or PAW dataset is refused | `angular_momenta`, `Calculator.get_angular_momenta` | (✓)⁴ | ✓ |
+| **Dielectric constant** `epsilon_infinity` and **Born effective charges** — insulators, norm-conserving, ultrasoft and PAW (PAW `Z*` refused). The response solver underneath runs for collinear spin too | `dielectric_tensor` | ✓ | ✓ |
+| **Phonons at `Gamma`** — the force constants and their frequencies, insulators and metals, on norm-conserving, ultrasoft and PAW datasets. Away from `Gamma`, and an ultrasoft or PAW metal, are refused | `dynamical_matrix` | ✓ | ✓ |
+| **The strain response** `dpsi/d(eps)`, `drho/d(eps)` and the deformation potentials, on norm-conserving, ultrasoft and PAW datasets | `strain_response` | | |
+| **Elastic constants** `C_ijkl` and the compliance and bulk modulus that follow — clamped-ion, insulators, norm-conserving | `elastic_constants` | | |
+| **Electrostriction coefficients** `m`, `q`, `M` and `Q` — the quadratic electromechanical coupling, clamped-ion, insulators, norm-conserving | `electrostriction` | | |
+| **Raman tensors** `d(eps)/d(tau)` — how the dielectric tensor changes when an atom moves. Insulators, norm-conserving/ultrasoft/PAW; `chi^(2)` and the electro-optic tensor are refused | `raman_tensors` | (✓)⁵ | |
+| **Raman and infrared spectra** — the per-mode activities, depolarisation ratios and electronic polarizability at `Gamma`. The non-analytic LO-TO splitting is not included, so an optical triplet comes out unsplit | `vibrational_spectrum` | ✓ | |
+| **Optical absorption spectra with excitons** — `Im eps_M(omega)` from TDDFT, local-field effects included, on a bootstrap exchange-correlation kernel. Needs the whole k-grid rather than a wedge | `run_absorption`, `kernel = 'bootstrap'` (also `rpa`, `alda`, `lrc`, `bootstrap-1`), `ecut_response`, `scissor`, `broadening` | | ✓ |
+| **Van der Waals dispersion** — Grimme's D2 pair correction, in the energy, the forces, the stress and the elastic constants. D3, Tkatchenko-Scheffler, MBD and XDM are refused by name | `vdw_corr = 'grimme-d2'`, `london_s6`, `london_rcut`, `london_c6`, `london_rvdw` | ✓ | |
+| **Band gaps from the Tran-Blaha potential** (mBJ) — the modified Becke-Johnson meta-GGA, on norm-conserving and PAW datasets, unpolarized, collinear, and noncollinear with spin-orbit coupling. The total energy is not variational, so forces, stress and response are refused | `input_dft = 'tb09'` (or `'bj06'`), `mbj_c` | (✓)⁶ | ✓ |
+| **Pseudopotentials**: norm-conserving, ultrasoft and PAW (UPF v2) | `ATOMIC_SPECIES` | ✓ | |
+| **Functionals**: LDA and GGA — Perdew-Zunger, Perdew-Wang, PBE, revPBE, PBEsol | `input_dft`, or the UPF header | ✓ | ✓ |
+
+Where the tick is qualified:
+
+- ¹ `startingpot = 'file'` reads a density across a change of `nspin`, but
+  zero-fills the missing components, so a magnetic run started that way
+  converges back to the unpolarized answer.
+- ² both codes have the mixing; the residual solver, which is what reaches the
+  extra solutions, is in neither.
+- ³ `fermi_velocity.x` finite-differences eigenvalues and reports only the
+  magnitude.
+- ⁴ `lorbm` gives the **cell's** orbital magnetization and nothing per atom;
+  Elk has the site decomposition.
+- ⁵ `ph.x` refuses a gradient-corrected functional here, where this does not.
+- ⁶ Quantum ESPRESSO reaches it only through libxc, and then passes a zero
+  Laplacian and never sets the functional's coefficient, so what it runs under
+  that name is a different functional.
 
 The variants under each row — which smearing or tetrahedron method fixes the
 occupations, which projectors DFT+U uses, which constraint scheme — are chosen
@@ -249,8 +267,8 @@ its number. Some of the headline agreements:
 | phonons at `Gamma` — ultrasoft and PAW silicon | 0.019 and 0.027 cm⁻¹ |
 | Raman and infrared activities | every digit `dynmat.x` prints |
 
-**The features marked "new" have no such reference**, since nothing can be
-compared against a code that does not compute it. Each is pinned instead by a
+**The rows with no tick in either column have no such reference**, since
+nothing can be compared against a code that does not compute it. Each is pinned instead by a
 statement the answer has to satisfy independently of how it was computed — a
 Chern number that has to come out an exact integer, a spin spiral that has to
 reproduce the supercell calculation of the same magnetic order (it does, to
