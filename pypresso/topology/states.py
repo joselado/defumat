@@ -306,6 +306,17 @@ class PlaneWaveStates(StateSet):
     #: ``(nk, nband)`` eigenvalues in Ry, *including* the empty bands above the
     #: manifold -- which is what makes the gap above it checkable.
     energies: jnp.ndarray | None = None
+    #: ``(nk, nband, npol * npwx)`` -- **every** diagonalised band, where
+    #: :attr:`coefficients` is the occupied manifold alone. Kept only for the
+    #: ``kubo`` curvature, which is a sum over empty states and is the one
+    #: thing here that needs them; it doubles the state set's memory, so it is
+    #: off unless asked for.
+    all_coefficients: jnp.ndarray | None = None
+    #: The :class:`~pypresso.response.velocity.VelocityOperator` built on
+    #: :attr:`calculation` at *these* k-points, for the ``kubo`` curvature.
+    #: Static: it holds the frozen potential and the calculation, neither of
+    #: which is traced through a state set.
+    velocity: object = eqx.field(static=True, default=None)
 
     @property
     def nk(self) -> int:
@@ -479,6 +490,14 @@ class PlaneWaveStates(StateSet):
             calculation=self.calculation,
             vkb=None if self.vkb is None else self.vkb[jnp.asarray(index)],
             energies=None if self.energies is None else self.energies[jnp.asarray(index)],
+            # **Dropped, not sliced.** The velocity operator is built on a
+            # ``Calculation`` at the *whole* k-list -- its ``vkb(k)`` and
+            # ``|k+G|^2`` are indexed by the original k-axis -- so a selected
+            # subset no longer lines up with it. A later ``kubo`` call on the
+            # selection then refuses by name rather than differentiating at the
+            # wrong k-points, which is the failure that would be silent.
+            all_coefficients=None,
+            velocity=None,
         )
 
     @property
@@ -564,6 +583,7 @@ def build_plane_wave_states(
     nbnd: int | None = None,
     keep_projectors: bool = False,
     energies: jnp.ndarray | None = None,
+    velocity=None,
 ) -> PlaneWaveStates:
     """Wrap a diagonalisation's output as a :class:`PlaneWaveStates`.
 
@@ -576,6 +596,13 @@ def build_plane_wave_states(
     nothing else does. It is ``(nk, npwx, nkb)`` complex -- megabytes per
     k-point on a real cell -- so it is off by default and the four TRIM of a
     parity calculation are the only place it is worth paying.
+
+    ``velocity`` is a :class:`~pypresso.response.velocity.VelocityOperator`
+    built on the same ``calculation``; passing one also retains the *whole*
+    band set as :attr:`PlaneWaveStates.all_coefficients`, because the ``kubo``
+    curvature is a sum over empty states and the truncation is exactly the
+    bands the eigensolver did not resolve. Both are off by default for the same
+    memory reason ``keep_projectors`` is.
     """
     basis = calculation.basis
     gvectors = basis.smooth if hasattr(basis, "smooth") else basis.dense
@@ -590,6 +617,10 @@ def build_plane_wave_states(
     keys = _pack(miller)
     order = np.argsort(keys, axis=1, kind="stable")
 
+    # The whole diagonalised set is kept only where a sum over empty states
+    # asks for it; ``nbnd`` is the occupied manifold and everything else here
+    # is a property of that alone.
+    all_coefficients = coefficients if velocity is not None else None
     coefficients = coefficients[:, :nbnd] if nbnd is not None else coefficients
     npol = int(calculation.npol)
 
@@ -615,4 +646,6 @@ def build_plane_wave_states(
         calculation=calculation,
         vkb=vkb,
         energies=energies,
+        all_coefficients=all_coefficients,
+        velocity=velocity,
     )

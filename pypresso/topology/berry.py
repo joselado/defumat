@@ -41,13 +41,19 @@ curvature concentrates and the convergence collapses to algebraic, exactly
 where an invariant matters most. The lattice construction does not have an
 error to converge.
 
-**Why ``kubo`` is not offered for a plane-wave calculation.** ``v = dH/dk``
-needs ``d vkb/dk``, the derivative of the nonlocal projectors, and the
-plane-wave basis itself changes with ``k`` -- the sphere ``|k + G| < G_cut``
-gains and loses members. Both are tractable (the first is differentiable by
-construction, D2; the second is a fixed set within a mesh cell) and neither is
-written. It belongs with the velocity operator and the polarization under P11,
-so the method refuses rather than approximating.
+**``kubo`` runs on a plane-wave calculation too**, as of P47 --
+:mod:`pypresso.topology.kubo`. What it once refused for ("``v = dH/dk`` needs
+``d vkb/dk``, and the sphere gains and loses members with ``k``") is what P24
+wrote: :class:`~pypresso.response.velocity.VelocityOperator` is one ``jvp`` of
+``H(k)`` at a **frozen** sphere, which is exact on each piece of a membership
+that is piecewise constant in ``k``. The sum is written as band matrix elements
+between the states an NSCF already produced -- ``H`` is never formed as a
+matrix, which for a plane-wave basis would be the ``npw^2`` a dense solve is a
+test fixture for. It carries the ``e_n dS/dk`` term of the generalised
+eigenproblem, and an ultrasoft or PAW dataset is nonetheless **refused by
+name**, because that term is identically zero for a norm-conserving one and so
+no norm-conserving validation can see it. The truncation of the sum over empty
+states is reported rather than tuned away.
 """
 
 from __future__ import annotations
@@ -85,6 +91,27 @@ class BerryCurvature:
     #: the curvature times the plaquette area, each in ``(-pi, pi]``.
     flux: np.ndarray | None = None
     method: str = "fhs"
+    #: ``(n1, n2, nocc)`` the curvature band by band, for the ``kubo`` method.
+    #: **Gauge invariant only for a non-degenerate band**: inside a degenerate
+    #: multiplet the eigensolver's arbitrary rotation moves the members'
+    #: values and only their sum is defined. :attr:`curvature` never has that
+    #: problem -- it is built from occupied/empty pairs alone.
+    curvature_by_band: np.ndarray | None = None
+    #: How many bands the ``kubo`` sum over empty states ran over.
+    nbnd: int | None = None
+    #: How many of them are occupied.
+    nocc: int | None = None
+    #: The ``kubo`` sum's truncation, as P37 reports ``static_residual``: the
+    #: largest shift in ``Omega(k)`` when the **highest** empty band is dropped
+    #: from the sum, divided by ``max |Omega|``. A number to read, not a knob:
+    #: the sum stops where the eigensolver stopped, and this says what that
+    #: cost. ``None`` for ``fhs``, which has no sum over states. Where
+    #: symmetry forces ``Omega`` to vanish the ratio is noise over noise and
+    #: means nothing -- read :attr:`truncation_abs` there instead (measured on
+    #: silicon: ``truncation = 0.98`` beside a ``truncation_abs`` of 3.4e-5).
+    truncation: float | None = None
+    #: The same shift, unnormalised, in the units of :attr:`curvature`.
+    truncation_abs: float | None = None
 
     @property
     def chern_number(self) -> float:
@@ -180,23 +207,37 @@ def plaquette_flux(u1: jnp.ndarray, u2: jnp.ndarray) -> np.ndarray:
 
 
 def kubo_curvature(states, mesh: PlaneMesh, nocc: int | None = None, **_) -> BerryCurvature:
-    """Berry curvature from the velocity operator, by ``jacfwd`` of ``H(k)``.
+    """Berry curvature from the velocity operator, band by band.
 
-    Needs a state set that carries its Hamiltonian as a differentiable function
-    of ``k`` -- :class:`~pypresso.topology.states.ModelStates`. See the module
-    docstring for why a plane-wave calculation is not one of those yet.
+    Two routes, one expression. A :class:`~pypresso.topology.states.ModelStates`
+    carries ``H(k)`` as a differentiable dense matrix, so the whole thing is
+    ``jacfwd`` plus an ``eigh``. A :class:`~pypresso.topology.states.
+    PlaneWaveStates` carries a :class:`~pypresso.response.velocity.
+    VelocityOperator` instead and nothing dense is formed --
+    :mod:`pypresso.topology.kubo`.
+
+    ``k_batch`` and the rest of the caller's keywords are swallowed by ``**_``
+    on the model path, which has no k-axis walk of its own.
     """
+    axes = _plane_directions(mesh)
     hamiltonian = getattr(states, "hamiltonian", None)
     if hamiltonian is None:
+        from pypresso.topology.kubo import plane_wave_kubo
+        from pypresso.topology.states import PlaneWaveStates
+
+        if isinstance(states, PlaneWaveStates):
+            # No dense ``H(k)`` to differentiate, and none is built:
+            # :mod:`pypresso.topology.kubo` contracts one ``jvp`` of the
+            # Hamiltonian against the states instead.
+            return plane_wave_kubo(states, mesh, axes, nocc=nocc, **_)
         raise NotImplementedError(
-            "the Kubo route needs H(k) as a differentiable function, which "
-            "a plane-wave calculation does not yet expose: the velocity "
-            "operator needs d(vkb)/dk and the k-dependence of the plane-wave "
-            "sphere. Use the 'fhs' method, which is what an invariant needs "
-            "anyway; the velocity operator is P11"
+            "the Kubo route needs either H(k) as a differentiable function of "
+            "k (ModelStates) or the velocity operator of a plane-wave "
+            "calculation (PlaneWaveStates); a bare coefficient array is "
+            "neither, since nothing in it says how the states depend on k. "
+            "Use the 'fhs' method, which needs only the overlaps"
         )
     nocc = states.nbnd if nocc is None else int(nocc)
-    axes = _plane_directions(mesh)
     points = jnp.asarray(mesh.points.reshape(-1, 3))
     values = jax.vmap(lambda k: _kubo_point(hamiltonian, k, nocc, axes))(points)
     curvature = np.asarray(values).reshape(mesh.shape)

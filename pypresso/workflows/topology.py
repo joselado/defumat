@@ -154,8 +154,18 @@ class DFTSource:
             object.__setattr__(self, "_ddd", ddd)
         return self._ddd
 
-    def states(self, points, keep_projectors: bool = False):
-        """Occupied states at the given crystal k-points, in the given order."""
+    def states(self, points, keep_projectors: bool = False,
+               keep_velocity: bool = False):
+        """Occupied states at the given crystal k-points, in the given order.
+
+        ``keep_velocity`` additionally builds the
+        :class:`~pypresso.response.velocity.VelocityOperator` of *this*
+        fixed-density Hamiltonian and keeps the whole diagonalised band set --
+        what the ``kubo`` Berry curvature is a sum over. It costs the empty
+        bands' coefficients (the manifold alone is what everything else here
+        needs) and nothing else: the operator holds the frozen potential and
+        the shared setup by reference and does no work until it is applied.
+        """
         points = np.asarray(points, dtype=float).reshape(-1, 3)
         kpoints = KPoints.from_crystal(
             points,
@@ -228,12 +238,24 @@ class DFTSource:
             hamiltonians, nbnd, None, ethr
         )
         self._check_gap(np.asarray(eigenvalues[0]), points)
+        velocity = None
+        if keep_velocity:
+            from pypresso.response.velocity import VelocityOperator
+
+            # The same three things ``calculation.hamiltonian`` was just given,
+            # because ``dH/dk`` is the derivative of *that* Hamiltonian and of
+            # no other: the frozen potential, PAW's one-centre coefficients and
+            # the Hubbard occupation matrix.
+            velocity = VelocityOperator(
+                calculation, potential.v_scf, self._ddd_paw(), self.ns
+            )
         return build_plane_wave_states(
             calculation,
             wavefunctions[0],
             nbnd=self.nocc,
             keep_projectors=keep_projectors,
             energies=eigenvalues[0],
+            velocity=velocity,
         )
 
     def _check_gap(self, eigenvalues: np.ndarray, points: np.ndarray) -> None:
@@ -325,6 +347,7 @@ def run_berry_curvature(
     k_batch: int | None | str = "default",
     becsum: tuple = (),
     ns: jnp.ndarray | None = None,
+    **kwargs,
 ) -> BerryCurvature:
     """Berry curvature and the Chern number on one plane of the zone.
 
@@ -335,13 +358,17 @@ def run_berry_curvature(
         nocc: how many bands are occupied. Defaults to the electron count
             divided by one or two according to whether a band is a spinor.
         method: ``"fhs"`` (default) or ``"kubo"``; see
-            :mod:`pypresso.topology.berry`.
+            :mod:`pypresso.topology.berry`. ``"kubo"`` gives the pointwise
+            curvature and reports the truncation of its sum over empty states;
+            ``"fhs"`` is the only one a Chern *number* should be read from.
+        kwargs: forwarded to the curvature method -- ``degeneracy_tol`` for
+            ``"kubo"``.
     """
     source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
                      becsum=becsum, ns=ns)
     return _chern_number(
         source, shape=shape, axis=axis, offset=offset, method=method,
-        k_batch=k_batch,
+        k_batch=k_batch, **kwargs,
     )
 
 

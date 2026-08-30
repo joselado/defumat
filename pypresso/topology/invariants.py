@@ -13,7 +13,12 @@ A **state source** is anything with
     ``states(points, keep_projectors=False) -> StateSet``
 
 for ``points`` a ``(n, 3)`` array of crystal k-points, plus an ``nocc``
-attribute. Two exist: :class:`ModelSource` here, for a tight-binding model, and
+attribute. One optional extension: a source that can also answer
+``keep_velocity=True`` returns a state set carrying the velocity operator and
+the whole diagonalised band set, which is what the ``kubo`` curvature needs and
+what nothing else here does. It is passed only when it is asked for, so a
+source implementing the two-argument signature alone still satisfies the
+protocol. Two exist: :class:`ModelSource` here, for a tight-binding model, and
 ``pypresso.workflows.topology.DFTSource``, which runs a fixed-density
 diagonalisation. Everything in this module is written against the protocol and
 neither knows the other exists.
@@ -85,7 +90,10 @@ class ModelSource:
     orbital_positions: np.ndarray | None = None
     inversion: np.ndarray | None = None
 
-    def states(self, points, keep_projectors: bool = False) -> ModelStates:
+    def states(self, points, keep_projectors: bool = False,
+               keep_velocity: bool = False) -> ModelStates:
+        # ``keep_velocity`` is accepted and ignored: a model state set already
+        # carries ``H(k)`` itself, which is what its Kubo route differentiates.
         return ModelStates.solve(
             self.hamiltonian,
             points,
@@ -111,7 +119,17 @@ def chern_number(
     choice is the stacking axis at ``offset = 0``, which is the default.
     """
     mesh = plane_mesh(shape, axis=axis, offset=offset)
-    states = source.states(mesh.flat())
+    # The ``kubo`` route is a sum over *empty* states through a velocity
+    # operator, so it needs more of the source than the occupied manifold every
+    # other quantity here is a property of. Asked for by name rather than
+    # always, because it doubles what a mesh of states costs to hold.
+    from pypresso.topology.registry import DEFAULT_CURVATURE_METHOD
+
+    wants_velocity = (method or DEFAULT_CURVATURE_METHOD).lower() == "kubo"
+    # Passed only when it is wanted, so that a source written to the protocol's
+    # two-argument signature still satisfies it.
+    extra = {"keep_velocity": True} if wants_velocity else {}
+    states = source.states(mesh.flat(), **extra)
     return berry_curvature(states, mesh, method=method, k_batch=k_batch, **kwargs)
 
 

@@ -12,6 +12,7 @@ sum of a pointwise curvature is not.
     ``augmentation``  ultrasoft's ``S`` between two different k-points
     ``links``         determinants, polar decompositions, and the sign convention
     ``berry``         Berry curvature and the Chern number (``fhs``, ``kubo``)
+    ``kubo``          the velocity-operator curvature of a plane-wave run
     ``wilson``        Z2 from Wannier-charge-centre flow
     ``parity``        Z2 from the Fu-Kane parity products at the TRIM
     ``invariants``    which k-points each invariant needs, and the Z2 registry
@@ -23,6 +24,11 @@ sum of a pointwise curvature is not.
 from __future__ import annotations
 
 from pypresso.topology.berry import BerryCurvature, berry_curvature
+from pypresso.topology.kubo import (
+    kubo_from_matrices,
+    plane_wave_kubo,
+    velocity_matrices,
+)
 from pypresso.topology.invariants import (
     ModelSource,
     chern_number,
@@ -68,10 +74,13 @@ __all__ = [
     "get_curvature_method",
     "get_z2_method",
     "inversion_centre",
+    "kubo_from_matrices",
     "parity_z2",
     "plane_mesh",
+    "plane_wave_kubo",
     "pumping_mesh",
     "trim_points",
+    "velocity_matrices",
     "wilson_z2",
     "z2_invariant",
     "z2_invariant_3d",
