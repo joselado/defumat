@@ -940,14 +940,22 @@ series once offline and quote its numbers in prose, which is the same rule as th
 per-case validation tables and for the same reason. A figure that needs ten SCF runs to
 draw is a figure whose points belong in a test.
 
-**One notebook is measured to be over that ceiling today.**
-`08_spin_orbit_coupling` takes about **25 minutes**, nearly all of it the bismuthene
-section — a spinor SCF on a slab is 281 s on its own, and the notebook runs one with
-spin-orbit coupling and one without, plus a band structure for each. That is the shape to
-watch for: a cell that was cheap when it was written and grew with the feature under it.
-Trimming it to a quoted measurement is worth doing, is not any phase's own work, and is
-written down here rather than done silently in passing. **The rest are unmeasured** — the
-ceiling arrived after them, and nobody has timed the set.
+**No notebook is over that ceiling now**, and the one that was is worth reading as a
+case study. `08_spin_orbit_coupling` took about **25 minutes**; it takes **174 s** (P49).
+Two things were true at once and only one of them was the expensive part. The bismuthene
+section was blamed, and the figure it draws — a Dirac point gapped by nothing but the
+coupling — is the best physics in the notebook and was never the problem: as notebook 08 runs it,
+at the default band count, that spinor SCF is **48 s**. The 281 s recorded here is the
+same cell under `notebooks/10`, which asks for thirty spinor bands to build a curvature
+from, and generalising it to "a spinor SCF on a slab" is what made the section look
+unfixable. What actually cost the
+time was a five-run finite-difference sweep of the spinor force and a two-run
+noncollinear-equals-collinear identity, **both of them already in the test suite**
+(`test_the_force_is_a_finite_difference_of_the_frozen_energy`,
+`test_spinors_reproduce_the_collinear_answer`). The lesson is the one P49 is built on: a
+notebook that is too slow is usually a notebook doing the tests' job, and the cell to cut
+is the sweep rather than the physics. **The rest are still unmeasured** except the
+rewritten ones, whose times are in `notebooks/README.md`.
 
 ## Performance
 

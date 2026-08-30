@@ -6487,7 +6487,7 @@ which is what nickel above is.
 `(nk, npwx, natomwfc)` array a projected DOS or a Hubbard `U` already holds, and
 the site matrices are `(natom, nshell, 2l+1, 2, 2l+1, 2)`, which is nothing.
 
-### P49 — The notebooks, rewritten for someone computing a property. 🚧 PHASES 1-4 DONE.
+### P49 — The notebooks, rewritten for someone computing a property. 🚧 PHASES 1-4 DONE, PHASE 5 IN PROGRESS (6 of 29).
 
 `notebooks/`, `notebooks/README.md`, `pypresso/calculator.py`, and one new test.
 Not started. This entry is the design, written before the work and reviewed
@@ -6757,6 +6757,65 @@ in an allowlist rather than to weaken the pattern. And the deep-import budget is
 The baseline it recorded: **4 of 29 notebooks pass the full skeleton**, and the
 other 25 fail on code volume (up to 149 lines against 80), cell length (up to 48
 against 25), or reaching past the facade (up to 7 imports).
+
+**Phase 5 is the sweep and it is partly done. Pick it up here.**
+
+Rewritten and passing the enforcement test: `00` (which already complied), `02`,
+`09`, `19`, `11`, `13`. Rewritten, executed and committed but **not yet in
+`REWRITTEN`**: `08` — its first code cell is 19 lines against the budget of 12,
+because it runs the three platinum benchmarks in a loop. Split that loop out of
+the first cell, re-execute (174 s), add `"08_spin_orbit_coupling"` to
+`REWRITTEN`, done. That is the only outstanding item on a notebook already
+rewritten.
+
+| | code lines | code cells | runtime |
+|---|---|---|---|
+| `02` | 66 → 53 | 5 → 4 | 7 s |
+| `09` | 98 → 26 | 4 → 2 | 6 s |
+| `19` | 143 → 47 | 11 → 5 | 46 s |
+| `13` | 123 → 43 | 5 → 3 | 66 s |
+| `11` | 147 → 54 | 6 → 5 | 79 s |
+| `08` | 149 → 56 | 6 → 4 | **25 min → 174 s** |
+
+**Twenty notebooks are left**, plus the two structural jobs: merging `25` and
+`26` into one Raman notebook (spectrum first, tensor as its "how it works"), and
+adding the **"your own crystal"** notebook, which is the highest-value single
+artifact in the phase and still unwritten. In rough order of how badly they miss
+the budgets: `10` (134 lines), `18` (114, and its first cell does not build a
+`Calculator`), `22` (111), `15` (109), `17` (105), `24` (103, first cell likewise),
+`29` (102), `05` (98), `06` (93), `16` (92), `27` (92), `14` (91), `12` (84),
+`26` (84), `25` (83), `07` (82), `21` (81), `01` (79), `04` (74), `20` (73),
+`03` (72), `23` (72).
+
+**The per-notebook checklist, learned the hard way.** Each of these was missed at
+least once and each cost a correction:
+
+1. **Grep the tests before evicting anything.** Every eviction so far has been
+   pure deletion — the check was already in `tests/`, better written. The one
+   real gap found (`09`'s identity on four datasets against the suite's one) took
+   one parametrisation. Do not assume: `08`'s finite difference is of the
+   **frozen** energy in the suite and was of the **converged** energy in the
+   notebook, which are different claims.
+2. **The build script is the only source of truth.** Patching a `.ipynb`'s JSON
+   directly to fix prose and then rebuilding from the script silently reverts it.
+   That happened to `13` and was committed.
+3. **Re-execute, and look at the output.** It is what catches prose that is false
+   against its own numbers (`19`'s "near-zero entries are band extrema" on a grid
+   shifted off the high-symmetry points; `19`'s caption claiming two dashed atoms
+   where one is at the plot edge), and it is the only thing that renders mathtext
+   (`\mathbf` without braces is a fatal error that no assertion sees).
+4. **Edit the index rows in the same commit.** Both `README.md` tables and the
+   runtime paragraph in `notebooks/README.md`. Missed three times.
+5. **Sweep the orphaned figures.** Cell indices move, so `nbconvert` leaves the
+   old `_files/*.png` behind and they get committed.
+6. **Drop `conv_thr` where the input file already states it** — that is the
+   boilerplate phase 2 exists to delete — and keep it, with the reason on the
+   line, only where the notebook genuinely tightens the input.
+
+**A stale-warning sweep over all 29 committed outputs found exactly one** and it
+is fixed (`11` claimed spinor forces and stress were unimplemented, which P46
+implemented). Worth re-running after any refusal changes: grep the `.md` exports
+for warning text and check each string still exists in `pypresso/`.
 
 **The skeleton, which every property notebook is held to.** Nine cells, 60 to 70
 non-comment code lines, no cell over 25.

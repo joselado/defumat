@@ -145,10 +145,11 @@ from 0.1998 to 0.1476. One of them crosses the midpoint to do it, going from
 0.439 to 0.594, which is closer to 1 than 0.439 was to 0.
 
 The two iron atoms carry opposite moments, which is what antiferromagnetic
-means: atom 3's majority shell is nearly full and its minority nearly half
-empty, and atom 4 is the mirror image. Turning `U` on drives the full shell
-closer to 5 and the partly filled one further from half, which is the penalty
-doing exactly what it is written to do.
+means: atom 3 holds 4.99 of a possible 5 in its majority shell and 1.85 in its
+minority, and atom 4 is its mirror image. Turning `U` on moved the majority from
+4.9703 to 4.9911 and the minority from 1.9687 to 1.8454, both of them further
+from a half-filled shell, which is the penalty doing exactly what it is written
+to do.
 
 ## The projectors are part of the definition of `U`
 

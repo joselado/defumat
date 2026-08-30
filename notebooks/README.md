@@ -107,12 +107,12 @@ want a number.
 | [`05_gradient_corrections.ipynb`](05_gradient_corrections.ipynb) | PBE, revPBE and PBEsol, what each is fitted for, and the bands they give |
 | [`06_density_of_states.ipynb`](06_density_of_states.ipynb) | Smearing and tetrahedra, silicon's gap as what separates them, and free-electron aluminium |
 | [`07_spin_polarization.ipynb`](07_spin_polarization.ipynb) | LSDA: nickel's moment as an output, the exchange splitting behind it, and the spin-resolved DOS |
-| [`08_spin_orbit_coupling.ipynb`](08_spin_orbit_coupling.ipynb) | Spinors and `j`-resolved projectors, platinum against QE, spinor forces, and bismuthene's spin-orbit gap |
+| [`08_spin_orbit_coupling.ipynb`](08_spin_orbit_coupling.ipynb) | Spinors and `j`-resolved projectors, platinum against QE, and bismuthene's gap opening from 0.14 to 0.63 eV |
 | [`09_forces_and_relaxation.ipynb`](09_forces_and_relaxation.ipynb) | Hellmann-Feynman and Pulay in one derivative, against Quantum ESPRESSO, then relaxation |
 | [`10_topological_invariants.ipynb`](10_topological_invariants.ipynb) | Chern numbers as exact integers, Wannier-centre flow, Fu-Kane parities, and the curvature as a map |
-| [`11_noncollinear_magnetism_and_fields.ipynb`](11_noncollinear_magnetism_and_fields.ipynb) | Magnetism as a vector field, bcc iron against QE, constrained moments, and a fixed-spin-moment search |
+| [`11_noncollinear_magnetism_and_fields.ipynb`](11_noncollinear_magnetism_and_fields.ipynb) | Magnetism as a vector field, bcc iron against QE, constrained moments, and the direction the energy cannot depend on |
 | [`12_spin_spirals.ipynb`](12_spin_spirals.ipynb) | The generalized Bloch theorem, the limits that validate it, and a frozen-magnon `E(q)` curve |
-| [`13_dft_plus_u.ipynb`](13_dft_plus_u.ipynb) | The occupation penalty that opens FeO's gap, the projectors it is defined by, and nickel and FeO against QE |
+| [`13_dft_plus_u.ipynb`](13_dft_plus_u.ipynb) | The occupation penalty that opens FeO's gap, against QE, and the natural occupations it drives to 0 and 1 |
 | [`14_spiral_relaxation.ipynb`](14_spiral_relaxation.ipynb) | `dE/dq`, and a relaxation that finds a magnet's ground-state pitch in six SCF runs |
 | [`15_stress.ipynb`](15_stress.ipynb) | The stress tensor, silicon's equation of state, and the Pulay stress a low cutoff carries |
 | [`16_projected_density_of_states.ipynb`](16_projected_density_of_states.ipynb) | Which atom and which orbital a band belongs to, as a projected DOS, Löwdin charges and fat bands |
@@ -208,17 +208,21 @@ pip install -e ".[notebooks]"    # from the repository root: jupyter, matplotlib
 jupyter lab notebooks/
 ```
 
-The three rewritten to the shape above are timed: **`02` in 7 s, `09` in 6 s and
-`19` in 46 s**, all of them far inside the ten-minute ceiling. `19` used to be much
-slower, and what it lost was two hand-built linear solves and a second
-self-consistent run that were demonstrating machinery rather than physics.
+The ones rewritten to the shape above are timed, and all of them are far inside
+the ten-minute ceiling: **`02` 7 s, `09` 6 s, `19` 46 s, `11` 79 s, `13` about a
+minute, `08` 174 s**. Two of those used to be much slower. `19` lost two
+hand-built linear solves and a second self-consistent run that were
+demonstrating machinery rather than physics, and **`08` was the one notebook
+measured over the ceiling** -- about 25 minutes -- which it no longer is: what
+went was a five-run finite-difference sweep and a two-run identity check, both
+of them already in the test suite.
 
-Most of the rest run in under a minute on one core. The exceptions are `08` (about five minutes, the
-bismuthene pair), `11` and `12` (a few minutes each), `13` (its four SCF runs) and `18`
-(about three minutes: it runs fourteen SCFs, which is the point, since every number in it
-is a *pair* of runs, one from the atoms and one continued). `29` takes **63 s**, most of it the
-one spinor SCF on nickel; its Elk comparison and its moment-rotation check are quoted from
-offline runs rather than executed.
+Most of the rest run in under a minute on one core. The exceptions are `12` (a
+few minutes) and `18` (about three minutes: it runs fourteen SCFs, which is the
+point, since every number in it is a *pair* of runs, one from the atoms and one
+continued). `29` takes **63 s**, most of it the one spinor SCF on nickel; its Elk
+comparison and its moment-rotation check are quoted from offline runs rather
+than executed.
 
 `22` needs neither: its inputs and its `pw.x` references are committed under `tests/data/qe/`, and its binding curve is quoted from an offline sweep with only the dispersion half recomputed.
 
