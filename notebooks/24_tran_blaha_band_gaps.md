@@ -37,42 +37,35 @@ Laplacian and never sets $c$, so what it runs under that name is Becke-Johnson.
 
 
 ```python
+import warnings
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-import numpy as np
-
 from pypresso import Calculator
-from pypresso.units import RY_TO_EV
+
+# The TB09 runs emit two warnings, both quoted just below; silenced by name here
+# so that what this notebook prints is its numbers.
+warnings.filterwarnings("ignore", message="input_dft asks for TB09")
+warnings.filterwarnings("ignore", message="TB09 is a potential")
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
-
 runs = {label: Calculator.from_file(CASES / f"si2-{stem}.in", pseudo_dir=PSEUDO,
         announce=False) for label, stem in (("LDA", "lda-gap"), ("TB09", "tb09"))}
-for label, calc in runs.items():
-    scf = calc.get_scf()
-    c = "  -  " if scf.meta_c is None else "%.4f" % scf.meta_c
-    print("%-5s %2d iterations   c = %s" % (label, scf.iterations, c))
+
+scf = runs["TB09"].get_scf()
+print("silicon, TB09:   c = %.4f after %d iterations" % (scf.meta_c, scf.iterations))
 ```
 
-    LDA    6 iterations   c =   -  
+    silicon, TB09:   c = 1.0331 after 10 iterations
 
 
-    /u/40/ladovj1/data/Documents/programs/claude/pypresso/pypresso/scf/driver.py:818: UserWarning: input_dft asks for TB09 but the pseudopotentials were generated with PZ; running them together is inconsistent, as it is in QE
-      self.functional = resolve_functional(
-    /u/40/ladovj1/data/Documents/programs/claude/pypresso/pypresso/calculator.py:438: RuntimeWarning: TB09 is a potential and not the derivative of an energy: the total energy this run reports is the band term plus the electrostatics plus *correlation only*, and is not the value of any functional the SCF minimised. It is not comparable with a total energy from any other functional, and forces, stress and response are refused for it. The eigenvalues, the band gap and the density are what this functional is for
-      self._scf = run_scf(self.system, self.pseudos,
+The two inputs differ by `input_dft = 'tb09'` and by nothing else.
 
-
-    TB09  10 iterations   c = 1.0331
-
-
-The two inputs differ by `input_dft = 'tb09'` and by nothing else. Both warnings are worth
-reading. The first is that this pseudopotential was generated with PZ, which `pw.x` says too
-and which every published mBJ pseudopotential calculation lives with, there being no such
-thing as an mBJ-generated dataset. The second is the package refusing in advance: that total
-energy is not the value of anything that was minimised, so nothing downstream of it may be
-differentiated.
+The TB09 run emits two warnings, silenced by name above only to keep the output short. The first
+is that this pseudopotential was generated with PZ, which `pw.x` says too and which every
+published mBJ pseudopotential calculation lives with, there being no such thing as an
+mBJ-generated dataset. The second is the package refusing in advance: the total energy this
+run reports is not the value of anything that was minimised, so forces, stress and response
+are refused for it, and it is not comparable with a total energy from any other functional.
 
 $c$ is not a parameter of the functional but an output of the run, measured from the density
 it converged to, and it has to converge along with everything else. On this cell it settles
@@ -87,7 +80,11 @@ the density itself sets, rather than one applied by hand.
 
 
 ```python
+import matplotlib.pyplot as plt
+import numpy as np
+
 from pypresso.system.kpoints import KPoints
+from pypresso.units import RY_TO_EV
 
 FCC = {"L": (.5, .5, .5), "G": (0., 0., 0.), "X": (0., 0., 1.),
        "W": (.5, 0., 1.), "K": (.75, .75, 0.)}
@@ -162,9 +159,11 @@ value, as WIEN2k and VASP allow. Measured once, offline, on this cell:
 At the all-electron $c$ this cell *overshoots*, which says the pseudopotential's $c$ and its
 density are not two independent errors: what the core removed is missing from $\tau$ and from
 the Laplacian as well as from $c$, and imposing one without the others is not a correction.
-**PAW recovers most of it**, because its partial waves reconstruct $\tau$ inside the sphere:
-$c$ comes out at 1.107 against the all-electron 1.12, where norm-conserving silicon measures
-1.000 on the same comparison.
+**PAW recovers most of it**, because its partial waves reconstruct $\tau$ inside the sphere.
+On one cell and grid run both ways, a PAW dataset gives $c = 1.107$ against the all-electron
+1.12 where the norm-conserving one gives 1.000 -- put the core back and $c$ moves to within
+0.013 of the all-electron value. (Those two are a comparison of their own, at a different
+cutoff and grid from this notebook's, which is why its $c$ is 1.033 and not 1.000.)
 
 Diamond shows the other half of the story: its $c$ comes out at 1.178, its gap goes from
 LDA's 3.89 eV to 4.43 eV, and it stays about 0.5 eV under the all-electron mBJ at any $c$
