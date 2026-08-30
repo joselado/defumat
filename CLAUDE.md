@@ -1037,6 +1037,36 @@ QE packs the upper triangle. The rule is that such a trade is **stated, measured
 selectable when it is large**, never arrived at by accident: name it in the module
 docstring, and put the number in `PERFORMANCE.md` beside the timing.
 
+**A test file that sweeps many cells is a memory liability, and splitting the file is not
+the fix.** Every such file has been killed on this machine eventually — `test_ten_site.py`
+in P28b, `test_spinor_forces.py` in P46, and the second one did not inherit the first one's
+cure. The mechanism is accumulation, not any one peak: cells that share no shape each
+compile the whole SCF (and, for a derivative, the gradient) stack afresh and **XLA keeps
+every executable for the life of the process**, while an unbounded `lru_cache` of converged
+states holds their wavefunctions beside it. Both grow monotonically through the file.
+
+Two bounds, and they belong on any file that runs more than about three distinct cells:
+
+- **`jax.clear_caches()` in an autouse fixture**, after the `yield`. The results stay
+  cached; only the compiled code is dropped, which trades recompilation for a peak the
+  machine can afford.
+- **`lru_cache(maxsize=2)` on the converged-state helper**, never `maxsize=None` — 2 is
+  what a comparison between two cells needs and is the largest that is not a leak.
+
+**Splitting the file only pays off under one of the three runners, which is why it is the
+weaker lever.** `tools/run_regression.sh` invokes pytest once per file, so a file boundary
+there *is* a process boundary and splitting does cap the peak. `tools/test-fast.sh` and a
+plain `pytest -m slow` run everything in **one** process, where splitting changes nothing at
+all. The two bounds above work under all three, so they are the rule and splitting is a
+judgement call about what belongs together.
+
+What neither bound touches is the peak *inside* one test, which is a real cost to be sized
+in advance rather than discovered: the backward pass of an ultrasoft or PAW derivative
+carries the augmentation table `Q_ij(G)` — `nh^2 x ngm` per atom, and `nh` is in the
+twenties for a fully-relativistic dataset. On a **slab** that is tens of GB and is why a
+bismuthene spinor force does not run here at all (P46), while the same physics on a small
+bulk cell runs in 33 seconds.
+
 ## Reading beyond the source
 
 The vendored Fortran is the primary reference and transcription from it is the method.
