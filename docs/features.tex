@@ -1013,6 +1013,122 @@ is defined, and \code{curvature} (the manifold total) always is.
 \end{refuses}
 
 % =====================================================================
+\section{Effective masses and site angular momenta}
+
+Two quantities Elk computes and \code{pw.x} does not, both at the cost of one
+NSCF at a single k-point.
+
+\subsection{The effective mass tensor}
+
+\begin{equation*}
+  \left(\frac{1}{m^*}\right)_{ab}
+  = \frac{1}{2}\,\frac{\partial^2 \varepsilon_n(\mathbf k)}
+                      {\partial k_a \partial k_b},
+\end{equation*}
+in units of $1/m_e$. The factor of a half is Rydberg atomic units and not a
+normalisation: $\hbar^2/2m_e$ is exactly $1$~Ry~bohr$^2$, so a free electron has
+$\varepsilon = |\mathbf k|^2$ and the tensor is the identity.
+
+\textbf{The first derivative is analytic and only the second is a difference.}
+$\partial \varepsilon_n/\partial k$ is the generalised Hellmann--Feynman
+expression built from one \code{jvp} of $H(\mathbf k)$; its second derivative is
+not reachable the same way, because an individual band's $|\partial_k \psi_n
+\rangle$ is not what the Sternheimer projector produces (it removes the whole
+occupied manifold, and the band whose mass is wanted is usually empty). So the
+construction is one central difference of an \emph{exact} first derivative ---
+six stencil points against Elk's twenty-seven, and no polynomial fit. Elk's
+route, differencing eigenvalues, is kept beside it as \code{method="eigenvalue"}
+because it shares nothing with the velocity operator.
+
+\begin{pycode}
+from pypresso import Calculator
+
+calc = Calculator.from_file("si.scf.in")
+mass = calc.get_effective_mass((0.0, 0.0, 0.0), nbnd=10)  # crystal coordinates
+
+mass.inverse_mass          # (nbnd, 3, 3) in 1/m_e, cartesian
+mass.principal(band=7)     # the three principal masses and their axes
+mass.density_of_states_mass(band=7)   # (m_x m_y m_z)^(1/3)
+mass.truncation            # the O(h^2) the Richardson step removed
+mass.multiplets            # per multiplet, including the degenerate ones
+\end{pycode}
+
+On two-atom silicon at $\Gamma$ against the vendored \textbf{Elk} binary
+(all-electron LAPW, PBE, $a = 10.26$~bohr) with a PAW dataset here: the
+non-degenerate $\Gamma_{1v}$ agrees to \textbf{0.02\%} ($0.8600902$ against
+$0.8603044$, i.e.\ $m^* = 1.16267\,m_e$ against $1.16238$) and $\Gamma_{2'c}$ to
+0.36\% ($m^* = 0.170439\,m_e$). The two routes here agree with each other to
+$1.2\times10^{-5}$, and the tensors come out isotropic to $2.9\times10^{-8}$
+with nothing imposing cubic symmetry.
+
+\begin{refuses}
+\textbf{Refuses.} A band inside a \textbf{degenerate multiplet} has no tensor of
+its own --- the eigensolver's arbitrary rotation within the manifold rotates it
+--- so those bands come back as \code{nan} and what is reported instead is the
+multiplet's \emph{summed} inverse mass, which is the trace and is invariant.
+Silicon's threefold $\Gamma_{25'}$ is the case, and Elk's own output is the
+evidence: it prints $-5.8938$, $-3.7690$, $-3.7690$ for three states whose
+energies agree to $5\times10^{-8}$~Ha. A \textbf{spin spiral} is refused, since
+a k-stencil moves both spheres. \code{delta} is the stencil's outermost
+displacement in both routes; the $O(h^2)$ truncation is removed by a Richardson
+step and then \emph{reported} in \code{truncation} rather than tuned away.
+\end{refuses}
+
+\subsection{\texorpdfstring{$\langle L\rangle$, $\langle S\rangle$ and $\langle J\rangle$ on each atom}{L, S and J on each atom}}
+
+Where the orbital moment of a spin-orbit magnet actually sits. From one site
+density matrix per atom and shell, built out of the same projection a projected
+density of states uses,
+\begin{equation*}
+  \rho^a_{(ms),(m's')} = \sum_{n\mathbf k} w_{n\mathbf k}\,
+     c^a_{ms,n\mathbf k}\, \overline{c^a_{m's',n\mathbf k}},
+  \qquad c = \langle \phi | S | \psi \rangle,
+\end{equation*}
+and then $\langle L_i\rangle = \sum_s \mathrm{Tr}_m (L_i \rho_{ss})$ and
+$\langle S_i \rangle = \tfrac12 \sum_m \mathrm{Tr}_s (\sigma_i \rho_{mm})$, with
+$J = L + S$. The $L$ matrices are the complex-basis ones conjugated into the
+\emph{real} spherical harmonics the code works in, using the same \code{rot\_ylm}
+unitary the spin-orbit projectors are built from.
+
+\begin{pycode}
+from pypresso import Calculator
+
+calc = Calculator.from_file("ni.scf.in")   # noncolin, lspinorb, nosym
+momenta = calc.get_angular_momenta()
+
+print(momenta.table())      # what Elk writes to LSJ.OUT
+momenta.atoms[0].l          # <L> on atom 1, cartesian, units of hbar
+momenta.atoms[0].j          # <J> = <L> + <S>
+momenta.total_orbital       # summed over the cell
+\end{pycode}
+
+\textbf{Validated by identities, not by another code's number} --- Elk
+integrates over a muffin tin of a stated radius and this projects onto an
+orbital set, so the two differ by definition the way Löwdin and muffin-tin
+charges do. $\langle L\rangle$ is \emph{quenched to zero} without spin-orbit
+coupling, measured at $1.7\times10^{-16}$ on silicon; with the coupling on,
+fully-relativistic nickel gives $\langle L_z\rangle = 0.0364767\,\hbar$ against a
+measured orbital moment of about $0.05\,\mu_B$, with
+$|L|/|S| = 0.11665$ against an experimental $m_L/m_S \approx 0.1$ and $\langle
+L\rangle \parallel \langle S\rangle$ (Hund's third rule). Driving the moment
+along $z$, $x$ and $y$ gives $|\langle L\rangle| = 0.0364767$ in all three,
+with a spread of 7.3e-11 over the three cubic axes, with nothing imposing that a magnitude is a scalar.
+
+\begin{refuses}
+\textbf{Refuses.} A \textbf{symmetry-reduced k-set}: $\langle L\rangle$ and
+$\langle S \rangle$ are vectors, and summing a wedge sums a wedge --- the
+axial-vector group average with $\det(R)$ and the time-reversal sign is not
+written here. Run the whole grid with \code{nosym = .true.}, unshifted so that
+it is closed under the point group. A \textbf{fully-relativistic ultrasoft or
+PAW} dataset, because the spinor overlap's off-diagonal spin blocks are
+\code{qq\_so} and the projection here applies the scalar $S$ to each component;
+a fully-relativistic \emph{norm-conserving} dataset has $S = 1$ and is exact. And
+a \textbf{spin spiral}, whose two components do not share a set of atomic
+orbitals. \code{pw.x}'s \code{lorbm} computes the \emph{cell's} orbital
+magnetization and has no per-atom counterpart to check this against.
+\end{refuses}
+
+% =====================================================================
 \section{Things with no \texorpdfstring{\code{pw.x}}{pw.x} counterpart}
 
 \textbf{Spin spirals} by the generalized Bloch theorem: a spiral of wavevector

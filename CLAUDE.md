@@ -404,6 +404,42 @@ takes the *Raman* tensor from 1.2e-4 to **1.14e-3**, in every operator/source pa
 tried. One of the two coordinates has a compensating term; adopting this one on the
 strain column alone would be a fit that regresses a validated result.
 
+**Two things Elk has and `pw.x` does not are in** (P48), chosen from a survey of Elk's
+task list against QE 7.5 that `ELK-FEATURES.md` keeps — the four not taken are recorded
+there with the validation route each would need, because that is what decides whether a
+phase is worth starting. **The effective mass tensor** is `(1/2) d^2 eps_n/dk_a dk_b`, and
+the honest construction is **the first derivative by `jvp` and the second by one central
+difference of it**: differentiating the Hellmann-Feynman expression again at frozen states
+drops the whole `k.p` sum, the Sternheimer solver cannot supply an individual band's
+`|dpsi/dk>` (its `P_c` removes the occupied manifold, and the band whose mass is wanted is
+usually empty), and rule D4 forbids the eigensolver. That still beats Elk's difference of
+*eigenvalues* — six stencil points against twenty-seven, and no fit. Against the vendored
+all-electron Elk binary on silicon at `Gamma`: the non-degenerate `Gamma_1` curvature to
+**0.02%** and `Gamma_2'` to 0.36% (`m* = 0.170` `m_e`), with the two routes here agreeing
+to 1.2e-5 and the tensors isotropic to 2.9e-8 with nothing imposing cubic symmetry.
+**The finding is that a stencil must not contain its own centre**: the plane-wave sphere is
+rebuilt at every `k`, and a high-symmetry point is exactly where a shell sits on the cutoff
+— `Gamma` holds **725** plane waves where every displaced point holds 733, so the centre
+eigenvalue is variationally high by a fixed 1.2e-6 Ry and the second difference inherits
+`-delta/h^2`, an error that *grows* as the stencil shrinks (measured growing fourfold per
+halving). It is the **cutoff and not the pseudopotential** — norm-conserving LDA at the
+same `ecutwfc = 30` has the identical 725/733 split and the same cell at 12 has none —
+and **Elk has it too**: its own `Gamma_1` drifts 0.8583, 0.8595, 0.8603, 0.8642, 0.8697 as
+`deltaem` shrinks, rising to a minimum-error point at its default and then diverging, so
+only one of the two codes converges. **Site-resolved `<L>`, `<S>` and `<J>`** are the
+second: the projection a projected DOS is made of, contracted with `L` (written in the
+*real* harmonic basis by conjugating with `rot_ylm`) and with `sigma` instead of squared.
+`pw.x` has `lorbm` — the **cell's** orbital magnetization — and nothing per atom. Validated
+by identities rather than by Elk's number, since a muffin-tin expectation value and a
+projector one differ by definition: `<L>` is **quenched to 1.7e-16** without spin-orbit
+coupling, nickel's is **0.0364767** hbar with it (`|L|/|S| = 0.11665` against an experimental
+0.1, `L` parallel to `S`), and driving the moment along `z`, `x` and `y` gives the same
+`|<L>|` to 7.3e-11 with nothing imposing that a magnitude is a scalar. Refused by
+name: a degenerate multiplet's *per-band* mass (the invariant multiplet sum is reported
+instead), a symmetry-reduced k-set for the angular momenta (they are axial vectors; the
+whole unshifted grid is the escape), a fully-relativistic **ultrasoft or PAW** dataset
+there (`qq_so`'s off-diagonal spin blocks), and a spin spiral for both.
+
 **Outstanding:** Wyckoff input, the dynamical matrix of an
 ultrasoft or PAW *metal*, the strain coordinate's third derivatives on ultrasoft and PAW
 (P44 localised what is missing), the *second derivatives* of a spin-polarized system (P45 put

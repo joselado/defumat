@@ -39,6 +39,7 @@ ends with a pointer to both.
 | [`26_raman_and_infrared_spectra.ipynb`](26_raman_and_infrared_spectra.ipynb) | The per-atom tensors of notebook 25 contracted with the phonon modes into what an experiment measures: silicon's `T_2g` at 519.2 cm^-1, Raman-active and infrared-silent, against the vendored `dynmat.x` run on our own tensors -- the one QE reference above second order that still works. Plus the rank-3 average that lets the same case run on 8 k-points instead of 64, and the rule that a degenerate multiplet is comparable only as a sum | P36 |
 | [`27_excitons_and_tddft.ipynb`](27_excitons_and_tddft.ipynb) | The Dyson equation of TDDFT with a **bootstrap** kernel -- `chi_0` as a matrix over reciprocal lattice vectors rather than the operator a Sternheimer solve gives, built by sum over states because a spectrum needs the frequency axis. Validated by an identity instead of another code's spectrum: the same `eps_M(0)` from this route and from notebook 19's projected CG solve, which never sees an empty state, to 1.3e-2 on 22 -- and only when the two kernels are matched, which is what `screening = 'hartree'` is for. Silicon's absorption weight moves downhill where RPA leaves it, and ALDA's kernel has an identically zero head, which is why no adiabatic local kernel binds an exciton | P37 |
 | [`28_the_calculator.ipynb`](28_the_calculator.ipynb) | One object with a method per calculation: `Calculator.from_file` reads the input and its pseudopotentials, `get_scf` caches the ground state, and everything else — forces, stress, the dielectric tensor, phonons, bands and a DOS that draw themselves — is a method consuming that cache. Plus the two rules that keep it honest: nothing mutates, so a derived calculator carries its parent's state as a *starting guess* rather than as an answer, and every refusal in the package passes through untouched | P38 |
+| [`29_effective_mass_and_angular_momenta.ipynb`](29_effective_mass_and_angular_momenta.ipynb) | Two things Elk computes and `pw.x` does not, both at one NSCF's cost. The effective mass as one central difference of an *analytic* first derivative — silicon's `Gamma_2'` at 0.1886 m_e, drawn as a parabola over the bands it came from, and against the vendored all-electron Elk binary to 0.02% on the non-degenerate curvature. Plus the stencil that must not contain its own centre, because a high-symmetry k-point holds fewer plane waves (725 against 733) than any displaced one, which makes the error *grow* as the stencil shrinks — Elk's own number drifts for exactly that reason. Then `<L>`, `<S>`, `<J>` per atom: quenched to 1e-16 without spin-orbit coupling and 0.0365 hbar on nickel with it, `|L|/|S| = 0.117` against an experimental 0.1 | P48 |
 
 ## Conventions
 
@@ -85,7 +86,9 @@ jupyter lab notebooks/
 Most run in under a minute on one core. The exceptions are `08` (about five minutes, the
 bismuthene pair), `11` and `12` (a few minutes each), `13` (its four SCF runs) and `18`
 (about three minutes: it runs fourteen SCFs, which is the point — every number in it is a
-*pair* of runs, one from the atoms and one continued).
+*pair* of runs, one from the atoms and one continued). `29` takes **63 s**, most of it the
+one spinor SCF on nickel; its Elk comparison and its moment-rotation check are quoted from
+offline runs rather than executed.
 
 `22` needs neither: its inputs and its `pw.x` references are committed under `tests/data/qe/`, and its binding curve is quoted from an offline sweep with only the dispersion half recomputed.
 

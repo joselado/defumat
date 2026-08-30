@@ -545,6 +545,42 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS),
         )
 
+    def get_effective_mass(self, kpoint, **options):
+        """``(1/m*)_ab = (1/2) d^2 eps_n/dk_a dk_b`` at one k-point, in 1/m_e.
+
+        ``kpoint`` is in crystal coordinates and the tensor that comes back is
+        cartesian. The first derivative is the velocity operator's ``jvp`` and
+        the second is one central difference of it, so this costs an NSCF over
+        a thirteen-point stencil and nothing else. Bands inside a degenerate
+        multiplet are refused individually and reported as the multiplet's
+        invariant sum.
+        """
+        from pypresso.response.effmass import effective_mass
+
+        result = self._ground_state("the effective mass")
+        return effective_mass(
+            self.calculation, result, kpoint,
+            **self._defaults_for(effective_mass, options,
+                                 exclude=SCF_ONLY_OPTIONS),
+        )
+
+    def get_angular_momenta(self, **options):
+        """``<L>``, ``<S>`` and ``<J>`` on every atom, in units of ``hbar``.
+
+        The site decomposition ``pw.x`` has no counterpart for -- ``lorbm``
+        gives the *cell's* orbital magnetization and nothing per atom. ``<L>``
+        is quenched to zero without spin-orbit coupling, so a nonzero one is a
+        statement about the coupling rather than about the projector set.
+        """
+        from pypresso.projwfc.angular_momentum import angular_momenta
+
+        result = self._ground_state("the site angular momenta")
+        return angular_momenta(
+            self.calculation, result,
+            **self._defaults_for(angular_momenta, options,
+                                 exclude=SCF_ONLY_OPTIONS),
+        )
+
     def get_dielectric_tensor(self, **options):
         """``epsilon_infinity`` by the Sternheimer route -- no empty states."""
         from pypresso.response.efield import dielectric_tensor

@@ -2967,6 +2967,48 @@ timing of `raman_tensors` has *not* been taken; the ratio above for the
 dynamical matrix is the one to reason from, since the added work is of the same
 kind and a third of the count.
 
+## What an effective mass and a set of site angular momenta cost (P48)
+
+Both are riders on a run that already happened, and this is the first entry here
+with an **all-electron code on the other side** rather than `pw.x`.
+
+Two-atom silicon, PAW PBE at `ecutwfc = 30` / `ecutrho = 180`, `a = 10.26` bohr,
+one k-point stencil at `Gamma`. One core on both sides, the affinity mask set
+before JAX is imported (the mechanism `tools/compare_qe.py` documents), Elk with
+`OMP_NUM_THREADS=1`.
+
+| | | |
+|---|---|---|
+| pypresso SCF (4x4x4, `conv_thr = 1e-12`) | **4.3 s** | the thing both quantities ride on |
+| `effective_mass`, velocity route | **4.3 s** warm, 4.8 s cold | 13 NSCF k-points |
+| `effective_mass`, eigenvalue route | **6.0 s** warm, 6.4 s cold | 49 NSCF k-points |
+| Elk ground state (LAPW, same cell, PBE) | 1.36 s | |
+| Elk task 25 (`effmass`) | **1.08 s** | 27 k-points, all states |
+| `angular_momenta` on a converged run | **1.2-1.4 s** | measured on the nickel case below: 64 k-points, `natomwfc = 18` |
+
+**About 4x on the mass step, and the comparison is not like-for-like** — 733
+plane waves against LAPW's much smaller basis, and 13 stencil points against 27.
+The number worth keeping is the absolute one: **both codes do this in seconds**,
+which is what makes the effective mass the cheapest derived quantity in the
+package. The eigenvalue route costs 40% more than the velocity route for 3.8x the
+k-points, because a stencil point's cost is one Davidson solve either way and the
+velocity route adds three `jvp`s per point on top.
+
+**Compilation is 0.4-0.5 s of the cold figure**, which is small here because the
+stencil re-uses the SCF's own shapes: an NSCF at 13 k-points where the ground
+state ran 64 compiles nothing new but the k axis.
+
+**Memory** is one NSCF's, `(nspin, nk, nbnd, npwx)` with `nk` the stencil size —
+13 or 49 k-points against the ground state's own count, so the peak is *below*
+the SCF's on any cell whose k-grid is larger than the stencil. `angular_momenta`
+adds `(nk, npwx, natomwfc)`, the same array a projected DOS or a Hubbard `U`
+already holds, and **that array is where its 1.2-1.4 s goes** — building the
+Löwdin-orthogonalised orbitals at 64 k-points, not the contraction, which is a
+few `einsum`s on `(18, 2, 18, 2)`.
+
+**The notebook is 63 s**, most of it the one spinor SCF on nickel (60 Ry, 64
+k-points, `noncolin` + `lspinorb`), well inside the ten-minute ceiling.
+
 ## History
 
 | Date | Change | Effect |

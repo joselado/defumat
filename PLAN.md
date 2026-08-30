@@ -6275,6 +6275,218 @@ in it for a partially filled band).
 ---
 
 
+### P48 — Two things Elk has and `pw.x` does not: the effective mass, and site-resolved `<L>`, `<S>`, `<J>`.
+
+Chosen from a survey of Elk's task list against QE 7.5 (`ELK-FEATURES.md`, which
+keeps the four that were not taken and the validation route each would need).
+The filter was: no counterpart in `pw.x` or its post-processing tools **verified
+by grep over the vendored Fortran**, NSCF cost or less, and an assembly of
+machinery that already exists rather than a second implementation of something
+validated.
+
+---
+
+#### P48a — The effective mass tensor. ✅ DONE.
+
+`pypresso/response/effmass.py`. Elk's task 25 (`effmass.f90`); QE has nothing —
+`grep -ri "effective mass"` over `PW/src` and `PP/src` is empty.
+
+    (1/m*)_ab = (1/2) d^2 eps_n(k) / dk_a dk_b,
+
+in units of `1/m_e`, the half being Rydberg atomic units: a free electron has
+`eps = |k|^2` because `hbar^2/2m_e` is exactly 1 Ry bohr^2, so the free-electron
+tensor is the identity and nothing normalises it.
+
+**The autodiff route stops one derivative short, and saying where is the point.**
+The *first* derivative is exact and analytic — `d(eps_n)/dk` is the generalised
+Hellmann-Feynman expression built from one `jvp` of `H(k)` at a frozen sphere
+(P24, rule D2). The *second* is not available the same way, for three reasons
+that each had to be checked rather than assumed:
+
+- differentiating that expression again **at frozen states** gives only
+  `<n|d^2H/dk_a dk_b|n>` and drops the whole `k.p` sum, which for silicon's
+  `Gamma_2'` band is most of the answer rather than a correction;
+- the first-order state `|dn/dk>` is what the Sternheimer solver produces, and
+  it **cannot supply this one**: `P_c` removes the whole occupied manifold,
+  which is right for a density response — the occupied-occupied pairs cancel
+  there — and wrong for one eigenvalue's second derivative, where they do not.
+  And the band whose mass is wanted is usually **empty**, where `H - eps_n S` is
+  indefinite and the projected CG has nothing to converge to;
+- differentiating through the eigensolver is rule D4 and P22's 109%.
+
+So the construction is **the first derivative by `jvp` and the second by one
+central difference of it**, which is strictly better than Elk's difference of
+*eigenvalues*: six stencil points against twenty-seven, `O(h^2)` on a quantity
+exact at each point, and no Vandermonde fit. Elk's route is implemented beside
+it (`method="eigenvalue"`) because it shares **nothing** with the velocity
+operator, which makes it the independent check on the operator itself.
+
+**The finding is a stencil that must not contain its own centre**, and it is a
+plane-wave trap rather than a numerical-analysis one. The obvious three-point
+second difference `[eps(+h) - 2 eps(0) + eps(-h)]/h^2` is wrong at a
+high-symmetry k-point because the **sphere is rebuilt at every k** and that is
+exactly where a shell of `G` sits on the cutoff. Measured on two-atom silicon at
+`ecutwfc = 30`: `Gamma` holds **725** plane waves and *every* displaced point
+holds **733**, whatever the displacement. The centre eigenvalue is therefore
+variationally high by a fixed basis-set offset `delta ~ 1.2e-6 Ry`, and the
+curvature inherits `-delta/h^2` — an error that **grows** as the stencil
+shrinks. Measured growing by exactly four per halving, 2.1e-4 at `h = 0.05` to
+**3.0e-2** at `h = 0.00625`, while the velocity route converged over the same
+range. It is **not a PAW effect**, which is how it first presented: a
+norm-conserving LDA silicon at the same `ecutwfc = 30` has the identical 725/733
+split, and the same cell at `ecutwfc = 12` has none, which is why every earlier
+test was clean.
+
+The cure is a stencil in which every point is displaced — the diagonal entries
+from the four axial points at `+-h` and `+-2h`,
+`[eps(2h) + eps(-2h) - eps(h) - eps(-h)]/3h^2`, and the off-diagonal ones from
+the four-point mixed difference, which was already centre-free. **`delta` is
+then the stencil's outermost displacement rather than its step**, so that both
+routes sample the same range of `k` and their agreement is about the operator
+rather than about how far each one reached: leaving that out is worth **0.16**
+on silicon's `Gamma_1`, where `+-0.05` is far enough to leave the parabolic
+region, and the truncation estimate is what said so. With that the
+two routes converge together at `O(h^2)`: their difference on `Gamma_1v` falls
+7.8e-4 → 1.9e-4 → 3.8e-5 → **8.6e-6** over the same four halvings. **The
+velocity route never had the problem** — its `jvp` freezes the sphere and its
+difference is between two *displaced* points holding the same 733 — which is one
+more reason it is the default.
+
+**The truncation is removed and then reported.** Both routes are `O(h^2)`, and at
+Elk's own `deltaem = 0.025` that error is not small: silicon's `Gamma_2'`
+conduction band comes out at 5.131 against a converged 5.303, **3 per cent**.
+So the stencil is run at `h` and `h/2` and combined as `(4 M(h/2) - M(h))/3`,
+and what the two levels differ by is kept as `EffectiveMass.truncation` — P47's
+rule, and P37's before it.
+
+**Degeneracies are refused by name and the multiplet sum is offered instead.**
+A per-band second derivative is not a property of the band inside a degenerate
+multiplet; the eigensolver's arbitrary rotation rotates it (rule D4). `sum_n
+d^2 eps_n/dk_a dk_b` over the manifold is the trace and is invariant, so that is
+what is reported. Elk prints the per-band numbers regardless, and its own output
+is the evidence: silicon's threefold `Gamma_25'` gets **-5.8938, -3.7690,
+-3.7690** from Elk, three different tensors for three states whose energies
+agree to 5e-8 Ha.
+
+**Against Elk** — the vendored binary, all-electron LAPW, PBE, same cell
+(`a = 10.26` bohr), against pypresso on the **PAW** `Si.pbe-n-kjpaw_psl.0.1`
+dataset at `ecutwfc = 30`, both at Elk's default stencil. The quantity compared
+is Elk's `d` matrix, which is in Hartree atomic units and is therefore
+`inverse_mass` exactly:
+
+| at `Gamma` | Elk (LAPW) | velocity | eigenvalue | agrees |
+|---|---|---|---|---|
+| `Gamma_1v`, band 1 | 0.8603044 | 0.8600902 | 0.8600781 | **0.02%** |
+| `Gamma_25'v`, bands 2-4 (sum) | -13.4317801 | -13.6015326 | -13.6040409 | 1.26% |
+| `Gamma_15c`, bands 5-7 (sum) | 7.7424153 | 7.5886921 | 7.5892084 | 1.99% |
+| `Gamma_2'c`, band 8 | 5.8460134 | 5.8671956 | 5.8682740 | 0.36% |
+
+as masses, `Gamma_1v` is **1.16267** `m_e` against Elk's 1.16238 and
+`Gamma_2'c` **0.170439** against 0.171057. The two pypresso routes agree with
+each other to **1.2e-5** on `Gamma_1v` and 1.1e-3 on `Gamma_2'c` — the same
+distance from Elk on every row, which is what says the residual is Elk's drift
+and the pseudopotential rather than either route's arithmetic — and the
+tensors are isotropic to **2.9e-8** with nothing imposing it — the cubic
+symmetry check, which neither route is told about.
+
+**Elk's own number is not converged, and that is the finding the comparison
+produced.** Scanning `deltaem` at `Gamma`, Elk's `Gamma_1v` goes 0.8583470,
+0.8594683, **0.8603044**, 0.8642146, 0.8696507 for `h` = 0.1, 0.05, 0.025,
+0.0125, 0.00625 — rising toward a minimum-error point at its **default** and
+then **diverging**, which is the `delta/h^2` signature above. `Gamma_2'c` is
+worse: 4.5966, 5.5284, 5.8460, 6.0222, 5.9158, non-monotone with no limit.
+`effmass.f90`'s stencil includes its centre and Elk's APW basis is `|G+k| <
+gkmax`, so it has the same trap; fitting the offset gives `delta ~ 1e-6` Ha,
+the same order measured here. pypresso's velocity route over the same range is
+0.8596006, 0.8599815, 0.8600630, 0.8600562 — monotone, converged to five
+digits. **So the 0.02% agreement at Elk's default is partly luck about where the
+drift has got to**, and the honest statement is that the two codes agree to
+0.02-2% while only one of them converges.
+
+The residual 1-2% on the multiplet sums is not pypresso's basis: `ecutwfc` 30 →
+40 → 50 moves `Gamma_1v` by 4.6e-5 and the `Gamma_25'` sum by 3.6e-3, so it is
+Elk's own drift plus the genuine pseudopotential-against-all-electron
+difference.
+
+**Timing**, one core each, same machine. Elk: 1.36 s for the ground state and
+**1.08 s** for task 25 (27 k-points, all states). pypresso PAW: 4.3 s for the
+SCF, **4.3 s** for the velocity route warm (4.9 s cold, compilation included)
+and 6.0 s warm for the eigenvalue route. About 4x, and the comparison is not
+like-for-like — a 733-plane-wave basis against LAPW's much smaller one, and 13
+k-points against 27. The statement worth keeping is the absolute one: **both
+codes compute this in seconds**, which is what makes it the cheapest derived
+quantity in the package.
+
+---
+
+#### P48b — Site-resolved `<L>`, `<S>` and `<J>`. ✅ DONE, two regimes refused.
+
+`pypresso/projwfc/angular_momentum.py`. Elk's tasks 15/16 (`writelsj.f90`,
+`dmatls.f90`, `gendmat.f90`). **QE has `lorbm`** — `PW/src/orbm_kubo.f90`, the
+*cell's* orbital magnetization by the modern theory — and nothing resolved by
+atom, so the README column is `partly` and the new part is the site
+decomposition: which atom carries the orbital moment, which `lorbm` cannot say.
+
+One site density matrix per atom and per shell,
+
+    rho^a_{(m s),(m' s')} = sum_{nk} wg_{nk} c^a_{ms,nk} conj(c^a_{m's',nk}),
+
+with `c = <phi|S|psi>` the projection `projwfc.x` already builds, and then the
+two traces `dmatls` takes of it: `<L_i> = sum_s Tr_m (L_i rho_ss)` and
+`<S_i> = (1/2) sum_m Tr_s (sigma_i rho_mm)`. Everything before the traces
+existed — the orbitals are `build_atomic_projectors`'s Löwdin-orthogonalised
+set, the same one DFT+U measures `ns` with, and `S` is the calculation's own.
+
+**`L` had to be written in the basis the code actually uses.** `L_z` is diagonal
+on `Y_lm` and is *not* diagonal on the real harmonics `ylmr2` builds, so the
+matrices are the complex ones conjugated with `rot_ylm` — the unitary
+`pypresso/pseudo/spinorbit.py` already builds for `fcoef` —
+`L^real = A^T L^complex conj(A)`. The result is **purely imaginary and
+antisymmetric**, which is a consequence rather than a convention (`L` Hermitian,
+the harmonics real) and is therefore the cheapest test that the transform is
+right; `[L_x, L_y] = i L_z` and `L^2 = l(l+1)` are the others, and all four hold
+to **1e-13** for `l = 0..3`.
+
+**The validation is identities and rotations, not another code's floating
+point**, and deliberately: Elk integrates over a muffin tin of a stated radius
+and this projects onto an orbital set, so the two differ *by definition* the way
+Löwdin and muffin-tin charges do. What is checked instead:
+
+- **`<L>` is quenched to zero without spin-orbit coupling** — nothing in a
+  scalar-relativistic Hamiltonian locks the orbital moment to the lattice.
+  Measured at **1.7e-16** on silicon, which is the "vanishes pointwise" check of
+  P47's curvature and is what would catch an `L` built in the wrong basis: a
+  wrong unitary gives a *small* non-zero answer, not an obviously wrong one.
+- **Nickel's orbital moment appears when the coupling does**: `<L_z>` =
+  **0.0364767** hbar on a fully-relativistic norm-conserving dataset, against a
+  measured 0.05 mu_B — the underestimate GGA is known for. The ratio is the
+  better number: `|L|/|S| = 0.11665` against an experimental `m_L/m_S` of about
+  0.1, and `<L>` is parallel to `<S>`, which is Hund's third rule for a
+  more-than-half-filled shell.
+- **`<L>` rotates with the magnetization and its magnitude does not.** Driving
+  the moment along `z`, `x` and `y` gives `|<L>|` = **0.0364767 in all three**,
+  a spread of **7.3e-11**, with `L.S/|L||S| = 1.00000000`. Nothing in the code
+  imposes that a magnitude is a scalar — and the threshold is part of the claim:
+  at `conv_thr = 1e-8` that spread is 1e-5, which is the SCF's own scatter.
+- `<S_z>` against the SCF's own magnetization: 0.312699 against 0.61701/2, the
+  gap being what the projector set does not capture (its charge is 17.90 of 18).
+
+**Refused by name.** A **symmetry-reduced k-set**: `<L>` and `<S>` are vectors
+and a wedge sum is a wedge sum — the axial-vector symmetrisation P24 records for
+a response, one index up and with `det(R)` and the time-reversal sign on top, is
+not written. The escape is the whole unshifted grid, which is closed under the
+point group, and it is the same escape `dielectric_tensor` documents. And a
+**fully-relativistic ultrasoft or PAW** dataset, because the spinor overlap's
+off-diagonal spin blocks are `qq_so` (`transform_qq_so`) where the projection
+here applies the *scalar* `S` to each component — which is `projwfc.x`'s
+validated path in every other regime and is missing exactly that term in this
+one. A fully-relativistic **norm-conserving** dataset has `S = 1` and is exact,
+which is what nickel above is.
+
+**Cost** is a rider on a run that already happened: the orbitals are the
+`(nk, npwx, natomwfc)` array a projected DOS or a Hubbard `U` already holds, and
+the site matrices are `(natom, nshell, 2l+1, 2, 2l+1, 2)`, which is nothing.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

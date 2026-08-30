@@ -27,6 +27,13 @@ expression.
     ``Gamma``. The second derivative of the energy is one ``jvp`` of the
     gradient the force already is, so ``dynmat0`` and ``drhodv`` are two halves
     of one tangent rather than two routines.
+``effmass``
+    the effective mass tensor ``(1/m*)_ab = (1/2) d^2 eps_n/dk_a dk_b``. The
+    first derivative is ``velocity``'s ``jvp``; the second is one central
+    difference of it, because an individual band's ``|dpsi/dk>`` is not what
+    the Sternheimer projector produces and the band is usually empty anyway.
+    Elk's eigenvalue-differencing route is kept beside it as the check that
+    shares no machinery with the operator.
 ``strain``
     the response to a homogeneous strain -- the third perturbation, and the one
     that carries a rank-2 label. Abinit's metric-tensor formulation is not
@@ -54,6 +61,7 @@ expression.
 
 from pypresso.response.born import born_effective_charges
 from pypresso.response.efield import DielectricTensor, dielectric_tensor
+from pypresso.response.effmass import EffectiveMass, Multiplet, effective_mass
 from pypresso.response.elastic import ElasticConstants, elastic_constants
 from pypresso.response.electrostriction import Electrostriction, electrostriction
 from pypresso.response.nonlinear import RamanTensors, raman_tensors
@@ -79,8 +87,10 @@ from pypresso.response.velocity import (
 __all__ = [
     "BandVelocities",
     "DielectricTensor",
+    "EffectiveMass",
     "ElasticConstants",
     "Electrostriction",
+    "Multiplet",
     "Phonons",
     "RamanTensors",
     "SternheimerResult",
@@ -92,6 +102,7 @@ __all__ = [
     "born_effective_charges",
     "dielectric_tensor",
     "dynamical_matrix",
+    "effective_mass",
     "elastic_constants",
     "electrostriction",
     "local_perturbation",
