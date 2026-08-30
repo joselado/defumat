@@ -96,6 +96,21 @@ loop rather than to the solve.
   this one.
 * **DFT+U**, whose induced potential has a ``dns`` of its own
   (``adddvhubscf.f90``) that is not a function of ``drho``.
+* **a potential-only meta-GGA** (``tb09``, ``bj06``), which has no total energy
+  and so nothing for the response to be the second derivative of. The refusal
+  is :func:`pypresso.forces.energy.reject_potential_only`, reused rather than
+  restated.
+* **a ``tot_magnetization`` with a smearing** -- two Fermi levels, where
+  :class:`Smearing` carries one scalar ``ef``.
+* **a ``nspin = 2`` filling that cuts a degenerate multiplet**
+  (:data:`DEGENERATE_CUT_RY`).
+
+**Collinear spin is *not* on that list any more.** The occupied-band count is
+one number per channel (:func:`occupied_counts`), the sharp projector masks the
+deficient channel's extra bands, and ``chi_0`` is validated against a central
+difference of the density for a spin-polarized metal and a spin-polarized
+insulator alike. What the *callers* do with it is a separate claim and is what
+``spin_polarized`` in :func:`require_a_sternheimer_regime` gates.
 
 **Memory.** The CG carries four band-blocks -- the gradient, its
 preconditioning, the search direction and the previous one -- at
@@ -132,6 +147,7 @@ from pypresso.basis.interpolate import to_dense, to_smooth
 from pypresso.batching import map_k
 from pypresso.scf.density import becsum as becsum_of, sum_band
 from pypresso.scf.occupations import smearing_order, w0gauss, wgauss
+from pypresso.forces.energy import reject_potential_only
 from pypresso.scf.potential import as_potential_components
 
 __all__ = [
@@ -140,6 +156,7 @@ __all__ = [
     "SternheimerResult",
     "local_perturbation",
     "make_sternheimer",
+    "occupied_counts",
     "paw_response",
     "require_a_sternheimer_regime",
     "smearing_of",
@@ -153,6 +170,32 @@ MAX_ITERATIONS = 400
 #: ``thresh = min(0.1 sqrt(dr2), 1e-2)``); a solver used on its own, as
 #: ``chi_0``, wants it tight from the start.
 THRESHOLD = 1.0e-11
+
+#: The smallest gap, in Ry, between the last occupied and the first empty band
+#: of a spin channel that the sliced (insulator) branch will accept for
+#: ``nspin = 2``. Below it the occupied manifold *cuts a degenerate multiplet*
+#: and there is no response to compute: which member of the multiplet the
+#: eigensolver returned is arbitrary, so ``P_c`` is built for an arbitrary
+#: subspace of a degenerate shell and the answer is a property of the
+#: eigensolver rather than of the density. It is the same multivaluedness the
+#: *residual* solver is diagnosed for (``GAPS.md`` section 3, the closed
+#: ``occupations = 'fixed'`` + ``nspin = 2`` entry), one layer up.
+#:
+#: **And it fails silently, which is why this is a refusal and not a warning.**
+#: Measured on the oxygen atom of ``o-atom-fixed-lsda`` (``neldw = 2``, cutting
+#: the triply degenerate 2p shell, the two levels 1.4e-14 Ry apart): the CG
+#: *converges* -- 42 iterations to a residual of 5e-12 against a 1e-11
+#: threshold -- and ``chi_0`` then disagrees with a central difference of the
+#: density by **100 per cent** (1.24, 1.02, 1.01 and 1.01 relative for probes
+#: at Miller (1,0,0), (0,0,1), (1,1,0) and (1,1,1)). The difference re-selects
+#: which member of the shell falls below the cut, because the perturbation
+#: splits it at first order; the solve keeps the member it was handed. Nothing
+#: in the solve can see that, which is exactly why it is refused here.
+#:
+#: Checked only for ``nspin = 2``, which is the branch this rule is new for --
+#: an unpolarized insulator's fillings have been validated for many phases and
+#: are left bit-for-bit alone.
+DEGENERATE_CUT_RY = 1.0e-5
 
 
 #: ``setup_nbnd_occ``/``setup_alpha_pv``'s cutoff on the smeared occupation: a
@@ -217,7 +260,7 @@ class SternheimerSolver:
         psi,
         eigenvalues,
         weights,
-        nocc: int,
+        nocc,
         threshold: float = THRESHOLD,
         max_iterations: int = MAX_ITERATIONS,
         v_scf=None,
@@ -248,20 +291,36 @@ class SternheimerSolver:
         # which is the same answer at a static shape (rule R2) and costs the
         # empty bands' share of the CG.
         self.smearing = smearing
-        keep = psi.shape[2] if smearing is not None else nocc
+        # **The occupied-band count is one number per spin channel**, because a
+        # magnetic insulator's channels are filled to different depths. QE never
+        # meets this: LSDA doubles ``nks`` there, so its spin channels are
+        # separate k-points and ``setup_nbnd_occ`` writes one ``nbnd_occ(ik)``
+        # per k-point that already carries the channel. Here the channel is an
+        # axis of one array, so what QE gets from its k index is got from a
+        # per-channel count and a mask (rule R2: the shape stays static and the
+        # deficient channel's extra bands are masked, not removed).
+        counts = _normalized_counts(nocc, psi.shape[0])
+        self.occupied_counts = counts
+        keep = psi.shape[2] if smearing is not None else max(counts)
         self.psi = jnp.asarray(psi)[:, :, :keep]
         self.eigenvalues = jnp.asarray(eigenvalues)[:, :, :keep]
         self.weights = jnp.asarray(weights)[:, :, :keep]
         self.nocc = int(keep)
         self.threshold = float(threshold)
         self.max_iterations = int(max_iterations)
-        self.alpha_pv = _alpha_pv(np.asarray(eigenvalues), nocc, smearing)
+        self.alpha_pv = _alpha_pv(np.asarray(eigenvalues), counts, smearing)
         # ``nbnd_occ``: which bands the ``alpha_pv`` projector runs over, and
         # which ones ``orthogonalize``'s ``jbnd <= nbnd_occ(ikq)`` admits into
         # the level-shift correction. A boolean mask rather than a per-k count,
         # for the same reason ``cegterg``'s repacking became one.
         if smearing is None:
-            self.projector_mask = jnp.ones(self.eigenvalues.shape, dtype=bool)
+            bands = jnp.arange(self.eigenvalues.shape[2])
+            self.projector_mask = jnp.broadcast_to(
+                (bands[None, :] < jnp.asarray(counts)[:, None])[:, None, :],
+                self.eigenvalues.shape,
+            )
+            if len(counts) > 1:
+                _require_a_gap_at_the_cut(np.asarray(eigenvalues), counts)
         else:
             self.projector_mask = self.eigenvalues < smearing.cutoff
         # **The weight the density response is built with is not ``wg``.** In the
@@ -313,10 +372,29 @@ class SternheimerSolver:
         """
         hamiltonian = self.hamiltonians[spin]
         occupied = self.psi[spin][ik]
-        overlaps = jnp.einsum("mg,ng->mn", jnp.conj(occupied), rhs)
         s_occupied = hamiltonian.apply_s(occupied, ik)
         if self.smearing is not None:
+            overlaps = jnp.einsum("mg,ng->mn", jnp.conj(occupied), rhs)
             rhs, overlaps = self._smeared_projection(rhs, overlaps, ik, spin)
+            return -(rhs - jnp.einsum("mn,mg->ng", overlaps, s_occupied))
+        # The sharp branch, and the mask is the identity except in the deficient
+        # channel of a magnetic insulator. It does two different jobs there, and
+        # only the first is about conditioning:
+        #
+        # * the **row** mask zeroes the right-hand side of a band this channel
+        #   does not occupy, so the CG returns ``dpsi = 0`` at iteration zero
+        #   instead of solving ``H - eps_n S`` for an *empty* ``n``, where the
+        #   operator is not positive definite and the level shift does not make
+        #   it so;
+        # * the **column** mask (over ``m``) keeps ``P_c^+`` projecting out this
+        #   channel's own occupied manifold. Without it the projector would also
+        #   remove the bands the *other* channel fills -- which is precisely the
+        #   subspace the deficient channel's response lives in.
+        keep = self.projector_mask[spin][ik][:, None]
+        rhs = jnp.where(keep, rhs, 0.0)
+        overlaps = jnp.where(
+            keep, jnp.einsum("mg,ng->mn", jnp.conj(occupied), rhs), 0.0
+        )
         return -(rhs - jnp.einsum("mn,mg->ng", overlaps, s_occupied))
 
     def _smeared_projection(self, rhs, overlaps, ik, spin):
@@ -760,7 +838,99 @@ def paw_response(calculation, dbecsum, becsum_):
     return ddd
 
 
-def _alpha_pv(eigenvalues, nocc: int, smearing=None) -> float:
+def _nint(value) -> int:
+    """Fortran's ``NINT`` for a non-negative count: half rounds *away* from zero.
+
+    Python's :func:`round` is banker's rounding -- ``round(2.5)`` is 2 -- and
+    ``_fixed_occupations_spin`` fills ``int(floor(count + 1/2))`` bands, so the
+    two disagree at exactly a half electron. That happens: an **odd** electron
+    count with an **even** ``tot_magnetization`` gives a half-integer ``nelup``,
+    and QE rounds it up rather than refusing (``GAPS.md`` section 3). Using
+    ``round`` here would build a mask one band shallower than the weights the
+    density was made with, in exactly that case and no other.
+    """
+    return int(np.floor(float(value) + 0.5))
+
+
+def _normalized_counts(nocc, nspin: int) -> tuple:
+    """``nocc`` as one count per spin channel.
+
+    Accepts a single number -- every earlier caller passes one -- and repeats it
+    across the channels, which is what an unpolarized run and a shared-Fermi
+    metal both want. A sequence is taken as it stands and must have one entry
+    per channel.
+    """
+    if np.ndim(nocc) == 0:
+        return (_nint(nocc),) * nspin
+    counts = tuple(_nint(n) for n in nocc)
+    if len(counts) == 1:
+        return counts * nspin
+    if len(counts) != nspin:
+        raise ValueError(
+            f"the Sternheimer solver was given {len(counts)} occupied-band "
+            f"counts for {nspin} spin channels"
+        )
+    return counts
+
+
+def occupied_counts(calculation) -> tuple:
+    """How many bands each spin channel occupies -- ``setup_nbnd_occ``'s ``nbnd_occ``.
+
+    One number per channel, because a magnetic insulator's channels are filled
+    to different depths and the three perturbation modules used to derive
+    ``nelec / 2`` themselves. The rule follows
+    :func:`~pypresso.scf.occupations.spin_electron_counts`, which is QE's
+    ``set_nelup_neldw``:
+
+    * ``nspin = 1``: ``nelec / 2`` (``nelec`` for a spinor, whose band holds one
+      electron rather than two);
+    * ``nspin = 2``: ``(NINT(nelup), NINT(neldw))``. With ``occupations =
+      'fixed'`` those are what ``iweights_only`` fills -- QE refuses fixed LSDA
+      without ``tot_magnetization`` and requires an integer one
+      (``input.f90:784-800``), so the pair is always defined and always integral
+      on the branch that slices. With a smearing they are ``nelec / 2`` twice
+      and unused: the metal branch keeps every band and masks by ``eps <
+      ef + xmax degauss`` instead.
+
+    Returned as a tuple so that a caller can pass it straight to
+    :class:`SternheimerSolver`.
+    """
+    if calculation.nspin != 2:
+        degeneracy = 1 if calculation.noncolin else 2
+        # ``fixed_occupations``' unpolarized branch uses ``round`` here and
+        # refuses a non-integral filling outright, so the two agree.
+        return (int(round(calculation.nelec / degeneracy)),)
+    return (_nint(calculation.nelup), _nint(calculation.neldw))
+
+
+def _require_a_gap_at_the_cut(eigenvalues, counts) -> None:
+    """Refuse a filling whose boundary lands inside a degenerate multiplet.
+
+    See :data:`DEGENERATE_CUT_RY`. The check needs a band above the cut to
+    measure against; where the run carries exactly ``nbnd = max(counts)`` there
+    is nothing to compare and the caller is trusted, as it was before.
+    """
+    for spin, count in enumerate(counts):
+        if count <= 0 or count >= eigenvalues.shape[2]:
+            continue
+        gap = float(np.min(eigenvalues[spin][:, count] - eigenvalues[spin][:, count - 1]))
+        if gap < DEGENERATE_CUT_RY:
+            raise NotImplementedError(
+                f"spin channel {spin} occupies {count} bands and the gap to the "
+                f"first empty one is {gap:.2e} Ry: the filling cuts a degenerate "
+                "multiplet, so there is no response to compute. Which member of "
+                "the multiplet the eigensolver returned is arbitrary, so P_c is "
+                "built for an arbitrary subspace of a degenerate shell and the "
+                "answer is a property of the eigensolver rather than of the "
+                "density -- measured at 100 per cent against a finite difference "
+                "on the oxygen atom, with the CG converging normally, which is "
+                "why this is refused rather than warned about. It is the physics "
+                "rather than a missing term (a Hund's-rule atom is exactly this "
+                "case); occupy the whole shell, or use a smearing"
+            )
+
+
+def _alpha_pv(eigenvalues, counts, smearing=None) -> float:
     """``setup_alpha_pv``: the level shift that makes the operator positive definite.
 
     Insulator: ``2 (eps_max^occ - eps_min)``. **Metal**: ``emax - emin`` with
@@ -768,16 +938,27 @@ def _alpha_pv(eigenvalues, nocc: int, smearing=None) -> float:
     occupied manifold has no top there, so the shift is measured to where the
     smearing function has died instead. Both are floored at 1e-2, as QE floors
     them.
+
+    ``counts`` is one occupied-band count per spin channel, and the insulator's
+    ``emax`` is the largest over the channels -- which is what QE's own
+    ``setup_alpha_pv`` computes, since its LSDA ``et`` array runs over ``nks``
+    k-points that already include both channels. The metal branch does not read
+    it at all: ``ef + xmax degauss`` is one number for a shared Fermi level.
     """
     if smearing is not None:
         emin = float(np.min(eigenvalues))
         return max(smearing.cutoff - emin, 1.0e-2)
     emin = float(np.min(eigenvalues))
-    emax = float(np.max(eigenvalues[..., :nocc]))
+    emax = max(
+        float(np.max(eigenvalues[spin][..., :count]))
+        for spin, count in enumerate(counts) if count > 0
+    )
     return max(2.0 * (emax - emin), 1.0e-2)
 
 
-def require_a_sternheimer_regime(calculation, metals: bool = False) -> None:
+def require_a_sternheimer_regime(
+    calculation, metals: bool = False, spin_polarized: bool = False
+) -> None:
     """Refuse, by name, every regime whose response needs machinery not here.
 
     A separate function because several entry points need the same list -- this
@@ -790,8 +971,18 @@ def require_a_sternheimer_regime(calculation, metals: bool = False) -> None:
     does: ``orthogonalize``'s smearing branch is implemented
     (:meth:`SternheimerSolver._smeared_projection`). ``epsilon_infinity`` and
     the Born charges do not, and are refused here rather than in three places.
+
+    ``spin_polarized = True`` says the same thing about ``nspin = 2``: the
+    *solve* now takes one occupied-band count per channel
+    (:func:`occupied_counts`) and is validated for both regimes, but a caller's
+    **assembly** on top of it is a separate claim -- the third derivatives of
+    :mod:`pypresso.response.electrostriction` and
+    :mod:`pypresso.response.nonlinear` have never been run with a spin axis and
+    are still refused here. The flag is deliberately opt-in for that reason,
+    exactly as ``metals`` is.
     """
     system = calculation.system
+    reject_potential_only(calculation)
     if calculation.noncolin:
         raise NotImplementedError(
             "the Sternheimer response is not implemented for a noncollinear or "
@@ -834,20 +1025,34 @@ def require_a_sternheimer_regime(calculation, metals: bool = False) -> None:
     if calculation.spiral:
         raise NotImplementedError("the Sternheimer response of a spin spiral is not implemented")
     if calculation.nspin == 2:
-        # ``SternheimerSolver`` takes *one* occupied-band count and slices
-        # ``psi[:, :, :nocc]`` across the spin axis with it. Both callers derive
-        # it as ``nelec / 2``, which is right for an unpolarized insulator and
-        # wrong for a magnetic one -- its channels are occupied to different
-        # depths, so ``P_c^+`` and ``alpha_pv`` would be built for the wrong
-        # manifold in at least one of them, with no shape error and no failed
-        # convergence to show for it.
-        raise NotImplementedError(
-            "the Sternheimer response is not implemented for nspin = 2: the "
-            "occupied-band count here is one number for both spin channels "
-            "(nelec/2), and a spin-polarized insulator's channels are occupied "
-            "to different depths, so the response would be solved for the wrong "
-            "bands in one of them without any sign of it"
-        )
+        # **The solve is spin-polarized now** (:func:`occupied_counts`), and
+        # what is left is a per-quantity claim rather than the old blanket one.
+        if not spin_polarized:
+            raise NotImplementedError(
+                "this response quantity is not implemented for nspin = 2. The "
+                "Sternheimer *solve* is -- it takes one occupied-band count per "
+                "spin channel (occupied_counts) and chi_0 is validated against a "
+                "finite difference of the density in both regimes -- but the "
+                "assembly on top of it in this module has never been run with a "
+                "spin axis, so it is refused rather than reported"
+            )
+        if calculation.two_fermi_energies and scheme != "fixed":
+            # ``smearing_of`` would build a :class:`Smearing` from
+            # ``result.fermi_energy``, which for a constrained magnetization is
+            # the **mean** of the two levels -- a number QE prints only so that
+            # the field is not NaN. Every weight in ``_smeared_projection``
+            # would then be evaluated at a level neither channel has, and the
+            # result would be smooth, plausible and wrong.
+            raise NotImplementedError(
+                "the Sternheimer response with tot_magnetization and a smearing "
+                "is not implemented: the two channels have separate Fermi levels "
+                "there and Smearing carries a single scalar ef, so the projector "
+                "would be evaluated at the mean of the two -- which is the number "
+                "QE prints only to avoid a NaN. Giving Smearing.ef a spin axis "
+                "(and smearing_of the pair off the result) is the missing piece. "
+                "Drop tot_magnetization for a shared Fermi level, or use "
+                "occupations='fixed', whose channels need no level at all"
+            )
 
 
 def smearing_of(calculation, result) -> Smearing | None:
@@ -875,16 +1080,18 @@ def smearing_of(calculation, result) -> Smearing | None:
 
 
 def make_sternheimer(calculation, result, threshold: float = THRESHOLD,
-                     metals: bool = False):
+                     metals: bool = False, spin_polarized: bool = False):
     """A solver for a converged :class:`~pypresso.scf.driver.SCFResult`."""
-    require_a_sternheimer_regime(calculation, metals=metals)
+    require_a_sternheimer_regime(
+        calculation, metals=metals, spin_polarized=spin_polarized
+    )
     eigenvalues = jnp.asarray(result.eigenvalues)
     if eigenvalues.ndim == 2:
         eigenvalues = eigenvalues[None]
     weights, _ = calculation.occupations(eigenvalues)
     weights = jnp.asarray(weights)
 
-    nocc = int(round(calculation.nelec / (1 if calculation.noncolin else 2)))
+    nocc = occupied_counts(calculation)
     potential = calculation.potential(result.density)
     # PAW's one-centre coefficients come from ``becsum``, which is part of the
     # mixed state and not a function of the density -- which is why

@@ -131,6 +131,7 @@ from pypresso.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
 from pypresso.response.sternheimer import (
     SternheimerSolver,
     paw_response,
+    occupied_counts,
     require_a_sternheimer_regime,
     smearing_of,
 )
@@ -290,16 +291,17 @@ def dynamical_matrix(
     # ``metals = True``: a Fermi surface does not stop a dynamical matrix
     # existing, and the solve handles one (``PLAN.md`` P24c). What it adds is
     # ``ef_shift``, inside the loop below.
+    # Before the generic guard, so that the message names the dynamical matrix.
+    _require_one_spin_channel(calculation)
     require_a_sternheimer_regime(calculation, metals=True)
     _require_a_moving_overlap_regime(calculation)
-    _require_one_spin_channel(calculation)
 
     structure = calculation.system.structure
     positions = jnp.asarray(structure.positions)
 
     weights, _ = calculation.occupations(eigenvalues)
     weights = jnp.asarray(weights)
-    nocc = int(round(calculation.nelec / 2))
+    nocc = occupied_counts(calculation)
     potential = calculation.potential(density)
     _, ddd_paw = calculation.onecenter(becsum)
     hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw)
@@ -1310,31 +1312,39 @@ def _diagonalize(matrix: np.ndarray, masses: np.ndarray):
 
 
 def _require_one_spin_channel(calculation) -> None:
-    """``nspin = 2`` is refused because ``nocc`` is a single number here.
+    """``nspin = 2``: the *solve* is spin-polarized now; this assembly is not.
 
-    Everything in this module and in :mod:`pypresso.response.efield` counts the
-    occupied bands as ``nelec / 2`` and slices *both* spin channels to that
-    depth. For an unpolarized insulator that is right. For a magnetic one it is
-    not: the two channels have different occupancies, and a shared count silently
-    solves for the wrong bands in at least one of them -- with no shape error and
-    no failed convergence to show for it.
+    **The reason this refusal used to give is gone.** It was that the occupied
+    band count is one number for both channels; it is one number *per* channel
+    now (:func:`~pypresso.response.sternheimer.occupied_counts`), the solver
+    masks the deficient channel's extra bands, and ``chi_0`` is validated
+    against a finite difference of the density for a spin-polarized metal and
+    for a spin-polarized insulator alike
+    (``tests/regression/test_lsda_response.py``). The ``nocc`` this module
+    derives is that pair.
 
-    Refused here rather than approximated, and refused again -- for the same
-    reason and with its own message -- in
-    :func:`~pypresso.response.sternheimer.require_a_sternheimer_regime`, which
-    every other entry point goes through. This one stays because the message
-    names the dynamical matrix. Making ``nocc`` per-channel is one change in
-    :class:`~pypresso.response.sternheimer.SternheimerSolver` and would lift
-    both, and it needs a magnetic insulator to validate against -- which is why
-    it is named here and left.
+    What is left is the second-derivative *assembly* above the solve, and it is
+    a term rather than a count: :func:`non_variational_response` and
+    :func:`_multiplier_response` contract ``dpsi`` against ``becsum`` and
+    against the orthonormality multipliers, both of which acquire a spin axis
+    that nothing here has been run with -- and P28's split between the frozen
+    Hessian's ``wg`` and the electronic term's ``2 wk`` is a statement about
+    *one* channel's occupation, so a two-channel run needs it checked per
+    channel rather than inherited. No committed reference exists to check it
+    against either: the vendored ``ph.x`` has LSDA phonons, so one can be
+    generated, and that is the work this refusal names.
     """
     if calculation.nspin == 2:
         raise NotImplementedError(
             "the dynamical matrix for a spin-polarized calculation is not "
-            "implemented: the occupied-band count here is one number for both "
-            "channels (nelec/2), and a magnetic insulator's channels are "
-            "occupied to different depths, so the response would be solved for "
-            "the wrong bands in one of them without any sign of it"
+            "implemented. The Sternheimer solve is spin-polarized (the "
+            "occupied-band count is per channel now, and chi_0 for nspin = 2 is "
+            "validated against a finite difference of the density); what is not "
+            "is the second-derivative assembly on top of it -- becsum and the "
+            "orthonormality multipliers carry a spin axis here, and P28's split "
+            "between the frozen Hessian's wg and the electronic term's 2 wk has "
+            "not been checked per channel. A generated ph.x LSDA reference is "
+            "what it needs"
         )
 
 

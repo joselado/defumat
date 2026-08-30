@@ -84,6 +84,7 @@ from pypresso.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
 from pypresso.response.sternheimer import (
     paw_response,
     SternheimerSolver,
+    occupied_counts,
     require_a_sternheimer_regime,
 )
 from pypresso.response.velocity import over_kpoints
@@ -232,12 +233,13 @@ def strain_response(
     if eigenvalues.ndim == 2:
         eigenvalues = eigenvalues[None]
     require_a_symmetrisable_response(calculation)
-    require_a_sternheimer_regime(calculation)
+    # Before the generic guard, so that the message names the strain response.
     _require_one_spin_channel(calculation)
+    require_a_sternheimer_regime(calculation)
 
     weights, _ = calculation.occupations(eigenvalues)
     weights = jnp.asarray(weights)
-    nocc = int(round(calculation.nelec / 2))
+    nocc = occupied_counts(calculation)
     potential = calculation.potential(density)
     _, ddd_paw = calculation.onecenter(becsum)
     hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw)
@@ -614,11 +616,20 @@ def _eigenvalue_response(solver, bare, dvscf) -> np.ndarray:
 
 
 def _require_one_spin_channel(calculation) -> None:
-    """``nspin = 1`` only, for :mod:`pypresso.response.phonon`'s reason."""
+    """``nspin = 1`` only, for :func:`pypresso.response.phonon._require_one_spin_channel`'s reason.
+
+    The occupied-band count is no longer part of it: it is per channel now
+    (:func:`~pypresso.response.sternheimer.occupied_counts`) and the ``nocc``
+    this module derives is that pair. What stays is the assembly -- the strain
+    coordinate's own ``dpsi + ort`` block and its multiplier matrix, whose spin
+    axis has never been run -- and there is no reference at all here to run it
+    against, since ``ph.x`` has no strain perturbation.
+    """
     if calculation.nspin != 1:
         raise NotImplementedError(
             f"nspin = {calculation.nspin}: the strain response here is the "
-            "unpolarized one. Nothing in the construction is spin-specific, "
-            "but nothing has been checked against a reference either, so it is "
-            "refused rather than run"
+            "unpolarized one. The Sternheimer solve is spin-polarized (the "
+            "occupied-band count is per channel now); the assembly above it is "
+            "not, and ph.x has no strain perturbation to generate a reference "
+            "from, so it is refused rather than run"
         )

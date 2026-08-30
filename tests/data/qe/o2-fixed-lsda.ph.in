@@ -1,0 +1,31 @@
+! The `ph.x` input that generated `reference.out.ph-o2-fixed-lsda`.
+!
+!   pw.x -in o2-fixed-lsda.in && ph.x -in o2-fixed-lsda.ph.in
+!
+! `epsil = .true.` with `trans = .false.`: the dielectric constant alone, on a
+! spin-polarized ground state. `ph.x` allows LSDA here -- `phq_readin.f90:546`
+! refuses an electric field only for *noncollinear* magnetism, and
+! `phq_readin.f90:957` only for a smeared or tetrahedron metal -- so this is a
+! real Fortran reference for the nspin = 2 dielectric response, not a
+! finite difference.
+dielectric constant of triplet O2, LSDA
+ &inputph
+  tr2_ph = 1.0d-14,
+  epsil = .true.,
+  trans = .false.,
+  fildyn = 'o2.dyn',
+  amass(1) = 15.99994,
+ /
+0.0 0.0 0.0
+!
+! It gives diag(1.110915996, 1.110915996, 1.198004867). pypresso cannot yet
+! reproduce it, and the reason is neither the occupied count nor anything in
+! `pypresso/response/`: `dv_of_drho` is one `jvp` of `v_of_rho`, so for
+! nspin = 2 it is the *second* derivative of the LSDA exchange-correlation
+! energy in the two channel densities, and that diverges wherever a channel
+! density reaches zero -- which a plane-wave magnetization does in vacuum.
+! 1504 of this cell's 91125 grid points have |m| >= |n|, and `dv_of_drho` has
+! exactly 1504 NaN. `chi_0` on the same cell is validated against a central
+! difference of the density to 1.1e-6. The reference is committed now so that
+! it is there the day the kernel is made twice differentiable at a fully
+! polarized point.

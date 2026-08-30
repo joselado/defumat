@@ -120,6 +120,7 @@ from pypresso.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
 from pypresso.response.sternheimer import (
     SternheimerSolver,
     paw_response,
+    occupied_counts,
     require_a_sternheimer_regime,
 )
 from pypresso.response.velocity import VelocityOperator, over_kpoints
@@ -236,7 +237,29 @@ def dielectric_tensor(
     if eigenvalues.ndim == 2:
         eigenvalues = eigenvalues[None]
     require_a_symmetrisable_response(calculation)
-    require_a_sternheimer_regime(calculation)
+    # ``spin_polarized = True``: this assembly *is* spin-summed already. The
+    # weights ``dielec.f90`` contracts with are the ground state's own ``wg``,
+    # which carries the spin degeneracy the way ``sum_band``'s do -- one channel
+    # whose ``wk`` sums to two, or two channels whose ``wk`` sum to one each --
+    # so no factor appears here that is not in the density builder. The identity
+    # that says so is the same cell run as ``nspin = 1`` and as ``nspin = 2``
+    # with no magnetization (``tests/regression/test_lsda_response.py``).
+    require_a_sternheimer_regime(calculation, spin_polarized=True)
+    if born_charges and calculation.nspin == 2:
+        # The dielectric constant above is a spin *sum*; a Born charge is not.
+        # ``pypresso.response.born`` differentiates the force along the field's
+        # response, and the force functional's nonlocal and constraint terms are
+        # contracted per channel through ``becsum`` -- which has a spin axis of
+        # its own that nothing in that module has been run with. Refused by name
+        # rather than reported: there is no ``ph.x`` LSDA ``Z*`` committed here
+        # to have caught it.
+        raise NotImplementedError(
+            "Born effective charges are not implemented for nspin = 2: the "
+            "dielectric constant is a spin sum and is validated, but the mixed "
+            "derivative dF/dE goes through the force functional's becsum, whose "
+            "spin axis pypresso.response.born has never been run with. Pass "
+            "born_charges=False for the dielectric constant alone"
+        )
     if born_charges:
         # Checked first of all: the refusal is a statement about the dataset, so
         # it should not cost a whole self-consistent response -- nor a converged
@@ -259,7 +282,7 @@ def dielectric_tensor(
     if wavefunctions.ndim == 3:
         wavefunctions = wavefunctions[None]
     weights, _ = calculation.occupations(eigenvalues)
-    nocc = int(round(calculation.nelec / 2))
+    nocc = occupied_counts(calculation)
     potential = calculation.potential(density)
     # PAW's one-centre coefficients are built from ``becsum``, which is why the
     # caller has to supply it: it is part of the mixed state and not a function
@@ -356,6 +379,7 @@ def dielectric_tensor(
                 )
 
         proposed = jnp.stack(induced)
+        _require_a_finite_kernel(calculation, proposed, density)
         change = float(jnp.sum((proposed - dvscf) ** 2))
         history.append(change)
         if verbose:
@@ -407,6 +431,66 @@ def dielectric_tensor(
         history=history,
         average_iterations=total_iterations / max(solves, 1),
         converged=converged,
+    )
+
+
+def _require_a_finite_kernel(calculation, induced, density) -> None:
+    """Refuse a screening kernel that came back non-finite, and say where.
+
+    **Measured, and it is what stopped the screened response on every
+    magnetic-insulator cell available here** -- which is one cell, so read the
+    claim as a diagnosis of that cell rather than of the regime.
+    ``dv_of_drho`` is one ``jvp`` of ``v_of_rho``,
+    so for ``nspin = 2`` it is the *second* derivative of the LSDA
+    exchange-correlation energy with respect to the two channel densities --
+    and that diverges wherever a channel density reaches zero, which in a
+    plane-wave calculation is any point where the magnetization is as large as
+    the charge. On triplet O2 in a 10-bohr box the two counts agree exactly:
+    **1504 of 91125 grid points have** ``|zeta| >= 1``, **and dv_of_drho has
+    1504 NaN**. The value of ``v_xc`` is fine there -- ``xc_lsda`` clips
+    ``zeta`` to [-1, 1] and QE does the same -- but the clip's own tangent is
+    zero and ``rho^(4/3)``'s second derivative is infinite at the channel it
+    zeroes, so the product is ``inf * 0``. It is the ``abs`` trap of
+    ``PLAN.md`` P28a in a fifth place, one derivative further out, and the two
+    obvious repairs do not fix it: pulling the clip inside to ``1 - eps`` for
+    ``eps`` of 1e-12, 1e-10 and 1e-8 leaves all 1504 points NaN and turns the
+    largest entry into ``inf``, so what diverges is the kernel itself and not
+    only the clip.
+
+    Nothing downstream can see it: a NaN ``|ddv_scf|^2`` never satisfies
+    ``change < tr2``, so the loop would run its whole budget and report
+    ``converged = False`` on a tensor that is not a number. Raised here instead,
+    with the term named.
+
+    An unpolarized run cannot reach this -- there is no ``zeta`` -- and neither
+    can a polarized run whose magnetization is zero everywhere, which is why the
+    ``nspin = 1`` / ``nspin = 2`` identity on silicon passes.
+    """
+    if bool(jnp.all(jnp.isfinite(induced))):
+        return
+    density = jnp.asarray(density)
+    where = ""
+    if density.shape[0] == 2:
+        total = jnp.abs(density[0] + density[1])
+        magnetization = jnp.abs(density[0] - density[1])
+        count = int(jnp.sum(magnetization >= total))
+        where = (
+            f" The density has {count} of {total.size} grid points where the "
+            "magnetization is at least the charge, which is where the LSDA "
+            "kernel's second derivative diverges."
+        )
+    raise NotImplementedError(
+        "the screened response of this system is not computable here: the "
+        "screening kernel dv_of_drho came back non-finite." + where +
+        " For nspin = 2 that kernel is the second derivative of the LSDA "
+        "exchange-correlation energy in the two channel densities, and it is "
+        "infinite wherever a channel density reaches zero -- which a plane-wave "
+        "magnetization does in vacuum. The value of v_xc is finite there "
+        "because xc_lsda clips zeta to [-1, 1], but the clip's own tangent is "
+        "zero and the product is inf * 0. Making pypresso.xc's spin branch "
+        "twice differentiable at a fully polarized point is the missing piece; "
+        "chi_0 itself is unaffected and is validated for nspin = 2, and so is "
+        "a polarized cell with no magnetization"
     )
 
 
