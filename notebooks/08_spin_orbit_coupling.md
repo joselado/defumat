@@ -39,16 +39,27 @@ from pypresso.units import RY_TO_EV
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_spinorbit")
 PSEUDO, CASES = Path("../tests/data/pseudo"), Path("../tests/data/qe")
 
-rows, platinum = [], None
-for name, stem, label in (("spinorbit", "pw_spinorbit-spinorbit", "ultrasoft, LDA"),
-                          ("spinorbit-pbe", "pw_spinorbit-spinorbit-pbe", "ultrasoft, PBE"),
-                          ("spinorbit-paw", "pw_spinorbit-spinorbit-paw", "PAW, PBE")):
-    # the input asks for 1e-8; the reference was generated at 1e-10
-    result = Calculator.from_file(QE / f"{name}.in", pseudo_dir=PSEUDO,
-                                  conv_thr=1e-10).get_scf(max_iterations=100)
-    theirs = read_qe_output(CASES / f"reference.out.{stem}")
-    rows.append((label, result.total_energy, theirs.total_energy))
-    platinum = platinum or result
+# the input asks for 1e-8; the reference was generated at 1e-10
+platinum = Calculator.from_file(QE / "spinorbit.in", pseudo_dir=PSEUDO,
+                                conv_thr=1e-10).get_scf(max_iterations=100)
+print("fcc platinum, ultrasoft LDA:   E = %.9f Ry" % platinum.total_energy)
+```
+
+    fcc platinum, ultrasoft LDA:   E = -69.491529507 Ry
+
+
+The same run on the other two kinds of fully relativistic dataset, against the
+reference `pw.x` output for each:
+
+
+```python
+rows = [("ultrasoft, LDA", platinum.total_energy,
+         read_qe_output(CASES / "reference.out.pw_spinorbit-spinorbit").total_energy)]
+for name, label in (("spinorbit-pbe", "ultrasoft, PBE"), ("spinorbit-paw", "PAW, PBE")):
+    scf = Calculator.from_file(QE / f"{name}.in", pseudo_dir=PSEUDO,
+                               conv_thr=1e-10).get_scf(max_iterations=100)
+    theirs = read_qe_output(CASES / f"reference.out.pw_spinorbit-{name}")
+    rows.append((label, scf.total_energy, theirs.total_energy))
 
 print(comparison_table(rows, fmt="{:.9f}",
                        headers=("dataset", "pypresso [Ry]", "pw.x", "difference")))
@@ -142,7 +153,7 @@ fig.tight_layout()
 
 
     
-![png](08_spin_orbit_coupling_files/08_spin_orbit_coupling_6_0.png)
+![png](08_spin_orbit_coupling_files/08_spin_orbit_coupling_8_0.png)
     
 
 

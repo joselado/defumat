@@ -6761,12 +6761,11 @@ against 25), or reaching past the facade (up to 7 imports).
 **Phase 5 is the sweep and it is partly done. Pick it up here.**
 
 Rewritten and passing the enforcement test: `00` (which already complied), `02`,
-`09`, `19`, `11`, `13`. Rewritten, executed and committed but **not yet in
-`REWRITTEN`**: `08` — its first code cell is 19 lines against the budget of 12,
-because it runs the three platinum benchmarks in a loop. Split that loop out of
-the first cell, re-execute (174 s), add `"08_spin_orbit_coupling"` to
-`REWRITTEN`, done. That is the only outstanding item on a notebook already
-rewritten.
+`09`, `19`, `11`, `13`, `08`. `08`'s last outstanding item is closed: its first
+code cell ran the three platinum benchmarks in a loop, 19 lines against the
+budget of 12, and the loop is now a cell of its own that reuses the first run's
+result rather than repeating it — so the split cost no execution time (171 s,
+against the 174 s measured before it).
 
 | | code lines | code cells | runtime |
 |---|---|---|---|
