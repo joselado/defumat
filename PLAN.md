@@ -6761,7 +6761,7 @@ against 25), or reaching past the facade (up to 7 imports).
 **Phase 5 is the sweep and it is partly done. Pick it up here.**
 
 Rewritten and passing the enforcement test: `00` (which already complied), `02`,
-`09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`, `15`.
+`09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`, `15`, `24`.
 
 | | code lines | code cells | runtime |
 |---|---|---|---|
@@ -6770,22 +6770,33 @@ Rewritten and passing the enforcement test: `00` (which already complied), `02`,
 | `22` | 111 → 50 | 5 → 4 | 12 s |
 | `18` | 114 → 56 | 9 → 4 | 3 min → **29 s** |
 | `15` | 109 → 60 | 6 → 5 | 31 s |
+| `24` | 103 → 48 | 5 → 3 | 31 s |
 | `19` | 143 → 47 | 11 → 5 | 46 s |
 | `10` | 134 → 46 | 5 → 5 | 50 s |
 | `13` | 123 → 43 | 5 → 3 | 66 s |
 | `11` | 147 → 54 | 6 → 5 | 79 s |
 | `08` | 149 → 56 | 6 → 4 | **25 min → 171 s** |
 
-**Sixteen notebooks are left**, plus the two structural jobs: merging `25` and
+**Fifteen notebooks are left**, plus the two structural jobs: merging `25` and
 `26` into one Raman notebook (spectrum first, tensor as its "how it works"), and
 adding the **"your own crystal"** notebook, which is the highest-value single
 artifact in the phase and still unwritten. In rough order of how badly they miss
-the budgets: `17` (105 lines), `24` (103, first cell does not build a
-`Calculator`), `29` (102), `05` (98), `06` (93), `16` (92), `27` (92), `14` (91),
-`12` (84), `26` (84), `25` (83), `07` (82), `21` (81), `01` (79), `04` (74),
-`20` (73), `03` (72), `23` (72). `01`, `03` and `17` are the "under the hood"
-tier and are **not** held to the skeleton — trim them toward the everywhere-rules
-and leave them out of `REWRITTEN`.
+the budgets: `17` (105 lines), `29` (102), `05` (98), `06` (93), `16` (92),
+`27` (92), `14` (91), `12` (84), `26` (84), `25` (83), `07` (82), `21` (81),
+`01` (79), `04` (74), `20` (73), `03` (72), `23` (72). `01`, `03` and `17` are
+the "under the hood" tier and are **not** held to the skeleton — trim them toward
+the everywhere-rules and leave them out of `REWRITTEN`.
+
+**Two of them needed a new input file, and that is the shape of the remaining
+work.** `&electrons` is adopted, but `ecutwfc`, `K_POINTS` and `input_dft` are
+not `Calculator` options and never should be — they describe the *system*. A
+notebook that needs a cell at a different cutoff or a different functional was
+therefore reaching for `read_pw_input` + `build_system` + `read_upf`, which is
+three deep imports and a `def` helper. Committing the input instead costs one
+small text file, deletes all of that, and makes the notebook reproducible from
+the command line: `si2-nc-eos.in` for `15`, and `si2-lda-gap.in` /
+`si2-tb09.in` for `24`, the last two differing by `input_dft` and nothing else.
+Neither has a `pw.x` reference and neither needs one, which their comments say.
 
 **What the four in this pass cost and found.** `08` was one cell split, and the
 loop now reuses the first run's result rather than repeating it, so it cost no

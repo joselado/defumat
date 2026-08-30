@@ -1,0 +1,34 @@
+! Silicon under the Tran-Blaha potential, against the LDA control beside it.
+!
+! It is `si2-lda-gap.in` with `input_dft = 'tb09'` added and nothing else, so that
+! the two band structures differ by the functional and by nothing else. That
+! file's comment explains the three ways both of them depart from QE's own
+! two-atom cell, all three of which a band gap needs and a total energy does not.
+!
+! There is no `pw.x` reference beside either file and for this one none is
+! possible: `pw.x` reaches TB09 only through libxc, and then passes a zero
+! Laplacian and never sets `c`, so what it runs under that name is Becke-Johnson.
+! The validation of this functional is against analytic limits -- the hydrogen
+! atom and the uniform gas -- and lives in tests/unit/test_mgga.py.
+!
+! The total energy of this run is not the value of any functional that was
+! minimised, and the run says so. The eigenvalues are the point.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=30.0, nbnd=10
+    input_dft = 'tb09'
+ /
+ &electrons
+    conv_thr = 1.0d-9
+    electron_maxstep = 90
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 6 6 6 0 0 0

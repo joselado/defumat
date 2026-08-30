@@ -45,6 +45,7 @@ REWRITTEN = {
     "18_continuing_a_calculation",
     "19_linear_response",
     "22_van_der_waals",
+    "24_tran_blaha_band_gaps",
 }
 
 #: Notebooks that still say ``jvp`` in a plot label or a code cell. Prose debt

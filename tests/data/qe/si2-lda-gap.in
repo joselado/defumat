@@ -1,0 +1,36 @@
+! Silicon at a converged cutoff and a real k-grid, as the LDA control for TB09.
+!
+! QE's own two-atom cell (`test-suite/pw_scf/scf.in`) with three things changed,
+! each of which the band gap needs and the SCF reference does not:
+!
+!   ecutwfc  12 -> 30    the gap is a difference of eigenvalues, not a total, and
+!                        moves by more than 0.1 eV between the two
+!   K_POINTS 2 -> 6x6x6  scf.in's two points are neither at Gamma nor near the
+!                        conduction-band minimum along Delta, so no gap can be
+!                        read off them at all
+!   nbnd     -> 10       mBJ mixes the highest band of an `nbnd` window with the
+!                        ones just outside it far more than a local potential
+!                        does, so the window is opened past what is read
+!
+! There is no `pw.x` reference beside this one and none is possible for its
+! partner `si2-tb09.in`: `pw.x` reaches TB09 only through libxc, passes a zero
+! Laplacian and never sets `c`, so what it runs under that name is a different
+! functional. This file exists so that the two runs differ by `input_dft` alone.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=30.0, nbnd=10
+ /
+ &electrons
+    conv_thr = 1.0d-9
+    electron_maxstep = 90
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 6 6 6 0 0 0
