@@ -15,8 +15,10 @@
 !                     needs where a norm-conserving one takes four.
 !   nbnd = 8          four occupied bands and four empty ones, so that there is a
 !                     conduction band to measure the gap against.
-!   6 6 6             the k-grid. Denser than an insulator strictly needs, and
-!                     the notebook shows what happens at 2, 4 and 8.
+!   6 6 6             the k-grid, and it is not converged either: the notebook
+!                     sweeps 2, 4, 6 and 8 and finds this one 6e-4 Ry from the
+!                     8x8x8 run, which is the same distance 40 Ry is from 50 and
+!                     costs far more to close. The k-grid is where the cost is.
 !
 ! The pseudopotential is one of QE's own LDA ultrasoft carbon datasets. Where to
 ! get one for an element this repository does not ship is in the notebook.

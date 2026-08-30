@@ -6983,11 +6983,13 @@ Cell 2 is the anchor the enforcement test below is written around.
   value single artifact in the phase.
 
 **The cost is wall clock, not thinking.** Every rewritten notebook is re-executed
-and re-exported through `tools/export_notebooks.sh`. `08` alone is 25 minutes and
-the rest of the set has never been timed, so phase 5 is paced by execution. Make
-`export_notebooks.sh` print per-notebook wall time and fail over the ten-minute
-ceiling while it is being touched anyway: that measures the unmeasured set as a
-side effect of the first full re-export.
+and re-exported through `tools/export_notebooks.sh`, and **that script times each
+one and fails over the ten-minute ceiling now**, printing the whole set sorted by
+wall time at the end. It also takes notebook paths as arguments, so a single
+rewrite does not re-execute the other twenty-eight, and `CEILING=` moves the
+limit for a deliberate experiment. What it is for is that the unmeasured set gets
+measured as a side effect of the first full re-export rather than by anyone
+remembering to time it.
 
 **Why the count stays at 29.** Renumbering is roughly ninety file renames plus a
 hunt through prose cross-references ("notebook 17 could only difference...") and

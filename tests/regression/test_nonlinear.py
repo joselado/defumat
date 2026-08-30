@@ -390,7 +390,7 @@ def test_the_wedge_reproduces_the_closed_grid():
     # mixer's Gram block (cond 1.1e11 -> 2.7e4, and a real NaN fixed with it) and
     # that coincidence went with it. Both routes remain right: each gives 3.119,
     # against the -3.1183 a finite difference of `epsilon` over re-converged
-    # displaced cells gives (notebook 25).
+    # displaced cells gives (notebook 26).
     scale = np.abs(closed.raman).max()
     assert np.abs(wedge.raman - closed.raman).max() < 1e-8 * scale
     assert np.abs(wedge.epsilon - closed.epsilon).max() < 1e-8
