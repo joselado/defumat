@@ -46,6 +46,7 @@ REWRITTEN = {
     "19_linear_response",
     "22_van_der_waals",
     "24_tran_blaha_band_gaps",
+    "25_your_own_crystal",
     "26_raman_and_infrared_spectra",
     "29_effective_mass_and_angular_momenta",
 }

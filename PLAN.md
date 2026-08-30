@@ -6761,7 +6761,7 @@ against 25), or reaching past the facade (up to 7 imports).
 **Phase 5 is the sweep and it is partly done. Pick it up here.**
 
 Rewritten and passing the enforcement test: `00` (which already complied), `02`,
-`09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`, `15`, `24`, `29`, `26`.
+`09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`, `15`, `24`, `29`, `26`, `25`.
 
 **The Raman merge is done**, which is the first of the two structural jobs.
 `25_raman_tensors` is deleted and `26_raman_and_infrared_spectra` carries both:
@@ -6789,18 +6789,35 @@ arbitrary, and the activity beside them reads 0.0000 in every version.
 | `24` | 103 → 48 | 5 → 3 | 31 s |
 | `29` | 102 → 46 | 6 → 4 | 59 s |
 | `25`+`26` | 167 → 43 | 13 → 4 | 107 s |
+| `25` (new) | — → 66 | — → 5 | 28 s |
 | `19` | 143 → 47 | 11 → 5 | 46 s |
 | `10` | 134 → 46 | 5 → 5 | 50 s |
 | `13` | 123 → 43 | 5 → 3 | 66 s |
 | `11` | 147 → 54 | 6 → 5 | 79 s |
 | `08` | 149 → 56 | 6 → 4 | **25 min → 171 s** |
 
-**Twelve notebooks are left**, plus the one remaining structural job: the
-**"your own crystal"** notebook, which is the highest-value single artifact in the
-phase and takes the number `25` the merge freed. In rough order of how badly they
-miss the budgets: `17` (105 lines), `05` (98), `06` (93), `16` (92), `27` (92),
-`14` (91), `12` (84), `07` (82), `21` (81), `01` (79), `04` (74), `20` (73),
-`03` (72), `23` (72). `01`, `03` and `17` are
+**Both structural jobs are done.** `25_your_own_crystal` is written and is the
+only notebook in the set that does not open on a file QE shipped: diamond from a
+lattice constant and a fetched pseudopotential, the input printed with its own
+comments as the teaching material, the two convergence sweeps, then bands and a
+density of states. It is linked second in `notebooks/README.md`, after `00`.
+
+**Writing it found the trap it now teaches.** The first draft claimed "the k-grid
+converges much faster than the cutoff" and "35 Ry for 1e-4 Ry", and the executed
+figure said neither: at 35 Ry the total energy is **7.7e-4 Ry** from the 50 Ry
+run, and the $6^3$ grid is **6.1e-4 Ry** from $8^3$, which is the same distance
+40 Ry is from 50 and costs far more to close. Worse, the "gap" plotted against
+the k-grid never settles — and that is not a convergence failure: it is the
+smallest gap *among the k-points of the run*, and diamond's conduction minimum is
+at 0.85 of $\Gamma$X, on none of those grids. A gap is read off a band structure,
+and the two differ by 0.024 eV here (4.1305 against 4.1541). The notebook says so
+now, which is the best content in it and was not in the plan.
+
+**Fourteen notebooks are left**, in rough order of how badly they miss the
+budgets: `17` (105 lines), `05` (98), `06` (93), `16` (92), `27` (92), `14` (91),
+`12` (84), `07` (82), `21` (81), `01` (79), `04` (74), `20` (73), `03` (72),
+`23` (72). Three of those — `01`, `03`, `17` — are the under-the-hood tier and
+are not held to the skeleton, so it is eleven conversions and three trims. `01`, `03` and `17` are
 the "under the hood" tier and are **not** held to the skeleton — trim them toward
 the everywhere-rules and leave them out of `REWRITTEN`.
 

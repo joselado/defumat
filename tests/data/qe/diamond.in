@@ -1,0 +1,43 @@
+! Diamond -- the worked example of notebook 25, "your own crystal".
+!
+! Nothing about this file came from QE's test suite. It is what someone writes
+! for a material they looked up, and every line of it is a decision:
+!
+!   ibrav = 2         the fcc Bravais lattice. Diamond is two carbon atoms in an
+!                     fcc cell, which is the same lattice silicon is on.
+!   celldm(1) = 6.74  the lattice parameter in bohr. Diamond's cubic lattice
+!                     constant is 3.567 A = 6.74 bohr.
+!   ecutwfc = 35      chosen by the convergence test the notebook runs, not by
+!                     habit: the band gap is settled to 0.001 eV there, while the
+!                     total energy is still 8e-4 Ry above its value at 50 Ry.
+!                     Which of those matters is a property of the question.
+!   ecutrho = 280     eight times ecutwfc, which is what an ultrasoft dataset
+!                     needs where a norm-conserving one takes four.
+!   nbnd = 8          four occupied bands and four empty ones, so that there is a
+!                     conduction band to measure the gap against.
+!   6 6 6             the k-grid. Denser than an insulator strictly needs, and
+!                     the notebook shows what happens at 2, 4 and 8.
+!
+! The pseudopotential is one of QE's own LDA ultrasoft carbon datasets. Where to
+! get one for an element this repository does not ship is in the notebook.
+!
+! There is no `pw.x` reference beside this file. It is not a validation case; it
+! is the file a new user writes, and what it is for is that the workflow around it
+! can be shown end to end.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 6.74, nat = 2, ntyp = 1,
+    ecutwfc = 35.0, ecutrho = 280.0, nbnd = 8
+ /
+ &electrons
+    conv_thr = 1.0d-8
+ /
+ATOMIC_SPECIES
+ C  12.011  C.pz-rrkjus.UPF
+ATOMIC_POSITIONS crystal
+ C 0.00 0.00 0.00
+ C 0.25 0.25 0.25
+K_POINTS (automatic)
+ 6 6 6 0 0 0

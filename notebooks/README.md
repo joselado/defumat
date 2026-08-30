@@ -5,6 +5,10 @@ object built from a `pw.x` input file, with a method per quantity. Everything el
 one of those methods, on a concrete crystal, with the number it produces put beside
 Quantum ESPRESSO's.
 
+**Then [`25_your_own_crystal`](25_your_own_crystal.ipynb)**, which is the one notebook that
+does not open on a file QE shipped: a material you looked up, a pseudopotential you fetched,
+and the two convergence tests that have to be run before any number means anything.
+
 Each notebook is meant to be read in about **five minutes**: what the quantity is, the code
 that computes it, one figure, and the comparison against QE. They are the readable
 counterpart to the test suite — the tests assert that a number matches QE, the notebooks
@@ -23,6 +27,7 @@ instead, which means the physics is selected in the input file rather than at th
 
 | To compute | Call | Notebook |
 |---|---|---|
+| A crystal of your own, start to finish | `Calculator.from_file()` | [25](25_your_own_crystal.ipynb) |
 | Total energy and charge density | `get_scf()` | [02](02_silicon_scf_and_bands.ipynb) |
 | Band structure | `get_bands()` | [02](02_silicon_scf_and_bands.ipynb) |
 | Density of states | `get_dos()` | [06](06_density_of_states.ipynb) |
@@ -124,6 +129,7 @@ want a number.
 | [`22_van_der_waals.ipynb`](22_van_der_waals.ipynb) | Grimme's D2, and bilayer graphene binding at 3.23 A where PBE alone has no minimum at all |
 | [`23_variable_cell_relaxation.ipynb`](23_variable_cell_relaxation.ipynb) | Relaxing the cell at an applied pressure: arsenic at 500 kbar going simple cubic |
 | [`24_tran_blaha_band_gaps.ipynb`](24_tran_blaha_band_gaps.ipynb) | A functional that is a potential and not an energy: silicon's gap from 0.49 to 1.13 eV |
+| [`25_your_own_crystal.ipynb`](25_your_own_crystal.ipynb) | Diamond from a lattice constant and a fetched pseudopotential: the cutoff and k-grid tests, then bands and a density of states |
 | [`26_raman_and_infrared_spectra.ipynb`](26_raman_and_infrared_spectra.ipynb) | Modes, activities and depolarisation ratios: silicon's 519 cm-1 line, Raman-active and infrared-silent, and the tensor underneath them |
 | [`27_excitons_and_tddft.ipynb`](27_excitons_and_tddft.ipynb) | Absorption spectra and the bootstrap kernel, and why no adiabatic local kernel binds an exciton |
 | [`29_effective_mass_and_angular_momenta.ipynb`](29_effective_mass_and_angular_momenta.ipynb) | Band curvature as an effective mass, and site-resolved `<L>`, `<S>` and `<J>` against Elk |
@@ -209,7 +215,8 @@ jupyter lab notebooks/
 
 The ones rewritten to the shape above are timed, and all of them are far inside
 the ten-minute ceiling: **`02` 7 s, `09` 6 s, `22` 12 s, `18` 29 s, `15` 31 s,
-`24` 31 s, `19` 46 s, `10` 50 s, `29` 59 s, `11` 79 s, `13` about a minute, `26` 107 s,
+`24` 31 s, `25` 28 s, `19` 46 s, `10` 50 s, `29` 59 s, `11` 79 s, `13` about a minute,
+`26` 107 s,
 `08` 174 s**. Three of those used to
 be much slower. `19` lost two hand-built linear solves and a second
 self-consistent run that were demonstrating machinery rather than physics; `18`
