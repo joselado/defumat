@@ -881,13 +881,25 @@ finished until its notebook exists.** Demonstrate on the two-atom silicon cell f
 whenever the reference contains the quantity, and commit the notebook executed so it reads
 without being run.
 
+**A notebook is about the physics, and nothing else.** What the quantity is, the equation
+that defines it, what the number means, how it compares with experiment or with Quantum
+ESPRESSO. **The implementation is not the subject and must not appear**: no `PLAN.md` phase
+numbers, no QE Fortran file names, no transcribed-versus-differentiated tables, no `jvp`,
+tangents, frozen spheres, padding or compilation, no catalogue of traps, and no account of
+how something was developed or debugged. That material is exactly what `PLAN.md` and the
+tests are for, and a reader who wants the physics should not have to wade through it. Two
+things survive from that side because they are claims about capability rather than about
+code: one sentence saying a derivative is taken of the energy itself rather than derived by
+hand, and one sentence where a reference is unusual and the reader would otherwise not trust
+the comparison. **No em dashes** anywhere in a notebook.
+
 **A notebook is five minutes long, and it has a figure.** Header saying what this computes
 and the headline number against QE; the shortest code that runs it; **one plot that shows
-the physics** — a band structure wherever the feature shows in bands; one comparison table;
-at most one "how it works" cell for the single best idea; a footer pointing at the `PLAN.md`
-phase entry and the test file. About eight code cells. The derivations, the trap catalogue
-and the per-case validation tables belong in `PLAN.md` and in the tests, not here, and an
-expensive sweep is measured once offline and *quoted* rather than run. Each notebook also has a `.md` export committed beside it — raw `.ipynb` is unreadable in a
+the physics**, a band structure wherever the feature shows in bands; one comparison table;
+at most one "how it works" cell for the single best idea, and it is a *physical* idea. About
+eight code cells. The derivations, the trap catalogue and the per-case validation tables
+belong in `PLAN.md` and in the tests, not here, and an expensive sweep is measured once
+offline and *quoted* rather than run. Each notebook also has a `.md` export committed beside it — raw `.ipynb` is unreadable in a
 plain editor or a diff — regenerated together with the notebook by `tools/export_notebooks.sh`.
 `notebooks/README.md` holds the index and the full conventions.
 

@@ -1,24 +1,22 @@
 # The density of states: smearing and tetrahedra
 
-How many states per unit energy the crystal has — a Brillouin-zone integral of a delta
-function, which is the one integral a finite k-grid is bad at. Two families answer it:
-**smearing**, which replaces the delta by something of finite width, and **tetrahedra**,
-which interpolate the bands linearly and integrate exactly. Both are here, both also work
+How many states per unit energy the crystal has: a Brillouin-zone integral of a delta
+function, which is the one integral a finite k-grid is bad at. Two families answer it.
+**Smearing** replaces the delta by something of finite width; **tetrahedra** interpolate
+the bands linearly between k-points and integrate exactly. Both are here, both also work
 as occupation schemes inside the SCF, and QE's three aluminium benchmarks come out to
 **2.5e-8 Ry** with the Fermi levels agreeing to a fraction of a meV.
 
-What is wanted is a Brillouin-zone integral of a delta function, and what a smearing
-scheme actually writes down is its *integral* -- the count of states below $E$ -- with
-the density of states as the derivative:
+What is wanted is
 
 $$D(E) = \sum_n \int_{\rm BZ} \frac{d\mathbf k}{(2\pi)^3}\,
-        \delta(E - \varepsilon_{n\mathbf k})
-\qquad\Longleftarrow\qquad
-N(E) = \sum_{n\mathbf k} w_{\mathbf k}\,
-       f\!\left(\frac{E - \varepsilon_{n\mathbf k}}{\sigma}\right),
-\quad D = \frac{dN}{dE}$$
+        \delta(E - \varepsilon_{n\mathbf k}),$$
 
-Phases P8 and P9.
+and what a smearing scheme writes down is its integral, the count of states below $E$,
+
+$$N(E) = \sum_{n\mathbf k} w_{\mathbf k}\,
+       f\!\left(\frac{E - \varepsilon_{n\mathbf k}}{\sigma}\right),
+\qquad D(E) = \frac{dN}{dE}.$$
 
 
 ```python
@@ -64,10 +62,10 @@ print("indirect gap %.4f eV" % ((conduction_bottom - valence_top) * RY_TO_EV))
 
 ## The smeared delta is the derivative of the occupation function
 
-Only $N(E)$, the number of states below $E$, is written down here — as a sum of occupation
-functions — and $D(E)$ is `jax.grad` of it. That is not a trick: `w0gauss` *is*
-`d(wgauss)/dx` in QE too, hand-differentiated, and the four smearing families differ only
-in which occupation function they use. Each one integrates to exactly 1, however shaped.
+Only $N(E)$ is written down here and $D(E)$ is its derivative, which is not a trick but
+the definition: a smearing scheme is a choice of occupation function, and the smeared
+delta is that function differentiated. The four families differ only in which one they
+use, and each integrates to exactly 1 however shaped.
 
 
 ```python
@@ -107,10 +105,11 @@ for ngauss, label in names.items():
 
 ## Silicon: the gap is what separates the two schemes
 
-Inside a gap the true DOS is exactly zero. Tetrahedra reproduce that; a Gaussian of width
-0.02 Ry smears occupied states into it and leaves a floor five orders of magnitude
-higher. For a metal the ordering is reversed — smearing is what makes the Fermi surface
-integrable — which is why both families exist and neither is a default for everything.
+Inside a gap the true density of states is exactly zero. Tetrahedra reproduce that; a
+Gaussian of width 0.02 Ry smears occupied states into the gap and leaves a floor five
+orders of magnitude higher. For a metal the ordering is reversed, since smearing is what
+makes a partially filled band integrable on a finite grid, which is why both families
+exist and neither is a default for everything.
 
 
 ```python
@@ -146,10 +145,10 @@ print("N above the highest band = %.10f   (8 bands x 2)" % dos_tetra.integrated[
 
 ## Aluminium, against Quantum ESPRESSO
 
-A metal is where the scheme decides the answer rather than the picture: the occupations
-themselves depend on it, so the total energy does. QE's `pw_metal` benchmarks cover all
-three tetrahedron variants — linear, Bloechl-corrected, and the optimised one — and the
-SCF here uses the same scheme it reports.
+In a metal the scheme decides the answer and not merely the picture: the occupations
+themselves depend on it, so the total energy does. QE's benchmarks cover all three
+tetrahedron variants, linear, Bloechl-corrected and optimised, and the SCF here uses the
+same scheme it reports.
 
 
 ```python
@@ -234,13 +233,9 @@ print("D(E_F)           = %.4f states/eV/cell" % (al_dos.at(ef) / RY_TO_EV))
 Aluminium is the textbook free-electron metal and the calculation says so: $\sqrt{E}$
 almost all the way to $E_F$, and the integrated states come back as three electrons.
 
-The spin-resolved version of this plot — nickel's two channels and the moment read off
-the integrated curves — is in notebook 07.
+The spin-resolved version of this plot, nickel's two channels with the moment read off
+the integrated curves, is in notebook 07.
 
 ---
-**The detail:** `PLAN.md` §3 P8 — the three tetrahedron variants, the occupation schemes
-inside the SCF, and the NaN that appears only in the gradient (a degenerate tetrahedron
-whose zero-weighted branch is still differentiated, which is why every denominator is
-clamped before the division rather than after).
-**The tests:** `tests/regression/test_dos.py`, `tests/regression/test_tetrahedra.py`,
-`tests/unit/test_bz_integration.py`.
+The tests behind this notebook: `tests/regression/test_dos.py`,
+`tests/regression/test_tetrahedra.py`, `tests/unit/test_bz_integration.py`.

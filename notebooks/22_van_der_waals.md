@@ -1,41 +1,30 @@
-# 22 — Van der Waals dispersion: Grimme's D2
+# Van der Waals dispersion: Grimme's D2
 
 A semilocal functional cannot see a van der Waals bond. Its correlation energy is a
 functional of the density *where the orbitals are*, and the London force comes from the
-correlated fluctuations of two densities that do not overlap at all. Bilayer graphene is the
-canonical demonstration: **PBE alone gives it no minimum in the interlayer separation**, and
-the two layers drift apart.
+correlated fluctuations of two charge distributions that do not overlap at all. Bilayer
+graphene is the canonical demonstration: **PBE alone gives it no minimum in the interlayer
+separation**, and the two layers drift apart.
 
 Grimme's D2 ([J. Comp. Chem. **27**, 1787 (2006)](https://doi.org/10.1002/jcc.20495)) puts
 the attraction back as a pair potential over the nuclei,
-
-$$E_\mathrm{disp} = -\frac{s_6}{2}\sum_{ab\mathbf{R}}
-   \frac{C_6^{ab}}{d_{ab\mathbf{R}}^{6}}\,f_\mathrm{damp}(d_{ab\mathbf{R}}),
-\qquad
-f_\mathrm{damp}(d) = \frac{1}{1 + e^{-\beta\,(d/(R_a + R_b) - 1)}},$$
-
-with $C_6^{ab} = \sqrt{C_6^a C_6^b}$ from a table indexed by atomic number and $\beta = 20$.
-
-**In this code it is the Ewald sum with a different radial function.** Both are a pair sum
-over the nuclei and their periodic images; both fix their neighbour list on the host once, so
-that the energy is a pure JAX function of the positions and the force is `jax.grad` of it;
-both deform that list with the cell, so the stress is `jax.grad` in the other coordinate.
-Nothing about D2 needed a new idea — which is why QE's two hand-derived routines
-(`force_london`, `stres_london`) are here as a *test* rather than as the implementation.
-
-Against the vendored `pw.x` on the same input: the total energy to **3.1e-9 Ry**, the
-dispersion term to **4.9e-9 Ry**, the force to **3.7e-7 Ry/bohr** and the stress to
-**4.1e-8 Ry/bohr³**. And the relaxation binds the bilayer at **6.10 bohr (3.23 Å)**, against
-a measured 3.35 Å.
-
-D2 is a pair sum over the **nuclei** and nothing else -- it never sees the density, which
-is why the force and the stress are `jax.grad` of it in the two coordinates:
 
 $$E_{\rm disp} = -\frac{s_6}{2} \sum_{i \neq j} \sum_{\mathbf L}
    \frac{C_6^{ij}}{|\mathbf r_{ij} + \mathbf L|^6}\;
    f_{\rm damp}\!\big(|\mathbf r_{ij} + \mathbf L|\big),
 \qquad
 f_{\rm damp}(R) = \frac{1}{1 + e^{-d\,(R/R_{\rm vdW} - 1)}}$$
+
+with $C_6^{ij} = \sqrt{C_6^i C_6^j}$ from a table indexed by atomic number. The damping
+function switches the $R^{-6}$ tail off where the two densities begin to overlap and the
+functional is already describing the interaction.
+
+It is the Ewald sum with a different radial function: a pair sum over the nuclei and their
+periodic images, so the force and the stress are derivatives of it in the two coordinates.
+
+Against `pw.x` on the same input: the total energy to **3.1e-9 Ry**, the dispersion term to
+**4.9e-9 Ry**, the force to **3.7e-7 Ry/bohr** and the stress to **4.1e-8 Ry/bohr³**. And
+the relaxation binds the bilayer at **6.10 bohr (3.23 Å)**, against a measured 3.35 Å.
 
 
 ```python
@@ -76,12 +65,12 @@ print(f"\n  E_disp   {calculation.dispersion:.8f} Ry"
 
 ## 1. It is a function of the nuclei, and of nothing else
 
-That sentence is the whole design, and it has a test sharper than any tolerance.
-`electrons.f90` adds `elondon` to the total *after* the SCF loop, so the density, the
-eigenvalues and the potential of a run with the correction must be **bit for bit** what the
-same run without it produces — and the two totals must differ by exactly the printed
-`Dispersion Correction`. A correction that had leaked into `v_of_rho` would still give a
-plausible total energy and would fail this in the tenth decimal of the Hartree term.
+D2 never sees the electron density, which has a consequence sharper than any tolerance: the
+density, the eigenvalues and the potential of a run with the correction are **bit for bit**
+what the same run without it produces, and the two total energies differ by exactly the
+dispersion energy. That is what distinguishes a correction of this kind from one that
+enters the self-consistent potential, and it is what makes the electronic and the
+dispersion energies separately meaningful below.
 
 
 ```python
@@ -128,19 +117,18 @@ print(f"{'total':<16}{corrected.total_energy:>16.8f}{reference.total_energy:>16.
 
 ## 2. The figure: what the correction is for
 
-The electronic energy and the dispersion energy are **separately meaningful here**, which is
-exactly the point above — the SCF never sees the correction, so one sweep of self-consistent
-runs gives both curves at once. The PBE energies below were measured offline (thirteen SCF
-runs, about six minutes); the dispersion energy at each separation is recomputed in this
-cell, because it costs nothing.
+Because the SCF never sees the correction, one sweep of self-consistent runs gives both
+curves at once. The PBE energies were measured offline; the dispersion energy at each
+separation is recomputed here, because it costs nothing.
 
-PBE alone is repulsive all the way out. Adding $E_\mathrm{disp}$ — which is *monotonic*, with
-no minimum of its own — produces one.
+PBE alone is repulsive all the way out. Adding $E_{\rm disp}$, which is *monotonic* and has
+no minimum of its own, produces one: the binding is the balance between an attractive tail
+and the functional's own wall.
 
-The sweep stops at 10 bohr and the curves are referred to that point, **not to infinity**:
-the cell is 20 bohr tall, so at a separation of 10 bohr each layer is equidistant from its
-neighbour and from its own periodic image, and past that the two swap roles and the curve
-turns back up. The binding energy below is therefore a *lower* bound on the well depth.
+The sweep stops at 10 bohr and the curves are referred to that point rather than to
+infinity, because the cell is 20 bohr tall: at a separation of 10 bohr each layer is
+equidistant from its neighbour and from its own periodic image, and past that the two swap
+roles. The binding energy below is therefore a lower bound on the well depth.
 
 
 ```python
@@ -199,14 +187,12 @@ print(f"minimum at       {minimum:.2f} bohr on this sweep "
     
 
 
-## 3. The force and the stress are one gradient each
+## 3. The force and the stress
 
-`force_london` and `stres_london` are 200 lines of Fortran between them. Here they are
-`jax.grad` of the same scalar in two different coordinates: the positions, and the strain that
-deforms the lattice translations the neighbour list is made of. QE's expressions *are*
-transcribed — in `pypresso/vdw/analytic.py` — but only so that the two can be compared, and
-`pw.x` at `verbosity = 'high'` prints both as blocks of their own, so the comparison is
-against QE's own numbers rather than against a total.
+Both are derivatives of the same pair sum, in the positions and in the strain that deforms
+the lattice translations. `pw.x` prints each of them as a block of its own, so the
+comparison below is against QE's own dispersion force and dispersion stress rather than
+against a total.
 
 
 ```python
@@ -253,18 +239,16 @@ print(f"max |stres_london - pw.x|       "
     max |stres_london - pw.x|       1.2e-08
 
 
-## 4. One more derivative: the elastic constants
+## 4. What it does to the elastic constants, and what it cannot touch
 
-Because the correction reaches the stress through `Calculation.at_strain`, it reaches
-everything built on top of that — including the **elastic constants**, which are one `jvp` of
-the stress (notebook 21). And because it does *not* reach the Hamiltonian, it reaches nothing
-built on the electronic response: $d\chi/dx$ is unchanged to **0.0**.
+Because the correction reaches the stress, it reaches everything built on the stress,
+including the **elastic constants**. Because it does not reach the Hamiltonian, it reaches
+nothing built on the electronic response: $d\chi/dx$ is unchanged to **0.0**.
 
-So the whole of what a van der Waals correction does to an electrostriction tensor is
-predictable in advance: $m$ and $q$ — the *stress* coefficients — do not move at all, and $M$
-and $Q$ — the *strain* ones — move only through the elastic compliance that converts them.
-Measured on the silicon case P26 was checked on, with D2 switched on (unphysical, and exactly
-the point: it isolates the machinery):
+So the effect of a dispersion correction on an electrostriction tensor is predictable in
+advance. The stress coefficients $m$ and $q$ do not move at all, and the strain ones $M$ and
+$Q$ move only through the elastic compliance that converts them. Measured on the silicon
+case of notebook 21 with D2 switched on, which is unphysical and exactly the point:
 
 | | no D2 | with D2 | difference |
 |---|---|---|---|
@@ -273,26 +257,21 @@ the point: it isolates the machinery):
 | $C_{44}$ (GPa) | 133.962 | 134.628 | +0.666 |
 | $d\chi_{11}/dx_{11}$ | 197.015 | 197.015 | **0.0** |
 
-and the difference column is reproduced, to **2.2e-18**, by the second derivative of the pair
-sum alone — three lines of `jax.jvp` that share nothing with `elastic_constants`. The cell
-below is that calculation, run on the bilayer instead of on silicon.
+The difference column is reproduced to 2.2e-18 by the second derivative of the pair sum
+alone. The cell below is that calculation, run on the bilayer.
 
-**The whole path runs on the bilayer too**, and not only D2's share of it:
-`graphene-bilayer-electrostriction.in` puts this crystal through the third derivative, which
-took a k-grid that misses `K` (graphene is a semimetal, and the response here is the
-insulator one) and a mixing parameter the slab needs — QE's `alpha_mix = 0.7` *diverges*
-there. Clamped ion: $C_{11} = 859.0$, $C_{12} = 26.5$, $C_{33} = 56.6$ GPa, reproducing a
-five-point second difference of the energy to $5.8\times10^{-5}$, and $d\varepsilon/dx$
-reproducing a central difference over re-converged strained cells to $2.2\times10^{-4}$.
-Those are properties of the *supercell* — half of it is vacuum — so what they are quoted for
-is the agreement.
+The whole third-derivative path runs on the bilayer too. Clamped ion: $C_{11} = 859.0$,
+$C_{12} = 26.5$, $C_{33} = 56.6$ GPa, reproducing a five-point second difference of the
+energy to $5.8\times10^{-5}$, and $d\varepsilon/dx$ reproducing a central difference over
+re-converged strained cells to $2.2\times10^{-4}$. Those are properties of the supercell,
+half of which is vacuum, so what they are quoted for is the agreement.
 
-Its **signs are worth a second look**, and they are not a mistake: every entry is negative.
-The D2 pair potential has no minimum of its own — in its attractive tail $E \sim -C_6/r^6$ has
-$d^2E/dr^2 < 0$ everywhere — so what binds the bilayer is D2's *slope* against PBE's, not its
-curvature, and its contribution to the elastic constants is a **softening**. The positive
-$C_{33}$ of the relaxed bilayer comes from PBE's repulsive wall; D2 moves where that wall is
-met, and takes a couple of GPa off the stiffness once it is.
+**Every entry is negative, and that is not a mistake.** The D2 pair potential has no minimum
+of its own: in its attractive tail $E \sim -C_6/R^6$ has $d^2E/dR^2 < 0$ everywhere. What
+binds the bilayer is D2's slope against PBE's, not its curvature, so its contribution to the
+elastic constants is a softening. The positive $C_{33}$ of the relaxed bilayer comes from
+PBE's repulsive wall; D2 moves where that wall is met and takes a couple of GPa off the
+stiffness once it is.
 
 
 ```python
@@ -326,19 +305,14 @@ for row, name in enumerate(names):
 
 ## What is not here
 
-Four of the five corrections `set_vdw_corr` offers are **refused by name**, and the reason
-splits them cleanly in two. **D3**'s $C_6$ depends on each atom's coordination number, so it
-is a function of the geometry with a derivative of its own rather than a table lookup.
-**Tkatchenko-Scheffler**, **MBD** and **XDM** rescale their coefficients by quantities built
-from the self-consistent density — Hirshfeld volumes, the exchange hole — which puts them
-*inside* `v_of_rho`, where D2 is outside it, and the null test in §1 is precisely what would
-break. QE's `set_vdw_corr` prints a warning and runs on with no correction at all for a name
-it does not recognise; an input asking for D3 and silently getting plain PBE is 30 meV on a
-layered crystal with nothing in the output that greps as an error.
+Four of the five corrections are refused rather than silently substituted, and the reason
+splits them cleanly in two. **D3**'s $C_6$ coefficients depend on each atom's coordination
+number, so they are functions of the geometry with derivatives of their own rather than
+table entries. **Tkatchenko-Scheffler**, **MBD** and **XDM** rescale their coefficients by
+quantities built from the self-consistent density, Hirshfeld volumes or the exchange hole,
+which puts them inside the self-consistent potential where D2 sits outside it, and the
+identity in section 1 is precisely what would stop holding.
 
 ---
-
-`PLAN.md` §3, phase **P27** — the traps (`rgen`'s fold, the sign of the separation vector,
-and why a $1/r^6$ sum needs a 200-bohr cutoff), the convergence table, and why the two codes'
-relaxations stop 0.48 bohr apart on a surface this flat.
-Tests: `tests/unit/test_dispersion.py` and `tests/regression/test_dispersion.py`.
+The tests behind this notebook: `tests/unit/test_dispersion.py`,
+`tests/regression/test_dispersion.py`.

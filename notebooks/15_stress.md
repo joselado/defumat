@@ -1,13 +1,8 @@
-# 15 — The stress tensor
+# The stress tensor
 
-The stress is `sigma_ab = -(1/Omega) dE/d(epsilon_ab)`: how the total energy responds to
-deforming the cell. Here it comes from **one `jax.grad`** of the energy written as a
-function of a strain at frozen wavefunctions — the same construction the forces use
-(notebook `09`) with the cell in place of the atoms — so no expression is derived for the
-kinetic, Hartree, local, exchange-correlation, augmentation or Ewald contributions.
-
-The strain is a deformation of every cell vector, and the stress is the energy's
-derivative with respect to it -- taken, like the force, at frozen wavefunctions:
+The stress says how the total energy responds to deforming the cell, and it is what tells
+a calculation whether a crystal is at its equilibrium lattice constant, under pressure, or
+unstable:
 
 $$\mathbf a_i \;\to\; (\delta_{ab} + \epsilon_{ab})\,\mathbf a_i,
 \qquad
@@ -16,10 +11,11 @@ $$\mathbf a_i \;\to\; (\delta_{ab} + \epsilon_{ab})\,\mathbf a_i,
 \qquad
 P = \tfrac{1}{3}\,\mathrm{tr}\,\sigma$$
 
-On the five silicon references generated for this phase it reproduces `pw.x` to
-**≤2.7e-7 Ry/bohr³**, and every one of the seven terms `pw.x` prints separately matches to
-the precision it prints them in.
-
+Like the force, it is a derivative of the energy taken at frozen wavefunctions, which is
+legitimate because the energy is stationary in them; the cell takes the place of the
+atoms. On the five silicon references generated for it, it reproduces `pw.x` to
+**2.7e-7 Ry/bohr³ or better**, and every one of the seven contributions `pw.x` prints
+separately matches to the precision it prints them in.
 
 
 ```python
@@ -50,10 +46,10 @@ def converged(name, conv_thr=1e-10):
 
 ## Run it
 
-`si2-nc-sheared.in` is the two-atom silicon cell with `a3` tilted by 4% in the *xy*
-plane. The tilt is deliberate: on the ideal cubic cell the stress is a multiple of the
-identity and a tensor with the wrong shear components looks perfect. Here the crystal has
-two symmetry operations and every entry of `sigma` is free.
+`si2-nc-sheared.in` is the two-atom silicon cell with `a3` tilted by 4% in the *xy* plane.
+The tilt is deliberate: on the ideal cubic cell the stress is a multiple of the identity,
+and a tensor with the wrong shear components would look perfect. Here the crystal has two
+symmetry operations and every entry of $\sigma$ is free.
 
 
 ```python
@@ -74,11 +70,11 @@ print(format_stress(stress))
 
 ## The equation of state
 
-The pressure is a thermodynamic derivative, `P = -dE/dV`, and nothing in the calculation
-above knows that: `sigma` comes from a gradient taken at **one** volume with the
+The pressure is a thermodynamic derivative, $P = -dE/dV$, and nothing in the calculation
+above knows that: $\sigma$ comes from a derivative taken at **one** volume with the
 wavefunctions frozen. Computing `E(V)` by re-converging the SCF at a series of lattice
-constants and differentiating the curve is therefore an independent check — and the one
-that says the gradient is the derivative of the energy the SCF actually minimises.
+constants and differentiating the curve is therefore an independent check, and the one
+that says the stress is the derivative of the energy the SCF actually minimises.
 
 The cutoff matters here and nowhere else in this notebook. Expanding the cell at fixed
 `ecutwfc` lets *more* plane waves inside the cutoff, so the basis improves as the volume
@@ -177,18 +173,19 @@ print(f"...against a pressure that spans {pressures.min():.0f} to {pressures.max
 
 
 The two curves are the same function computed two ways that share nothing: one is a
-derivative of the code, the other a derivative of its output. What separates them is the
-Pulay stress, and it is measured: 1.1 kbar at 40 Ry, 44 kbar at 12, 0.11 at 60.
+derivative taken at a single volume, the other a derivative of a sequence of separate
+calculations. What separates them is the Pulay stress, and it is measured here: 1.1 kbar
+at 40 Ry, 44 kbar at 12, 0.11 at 60. Any published pressure is only as good as that
+number, which is why a convergence test on the cutoff is not optional for a cell under
+stress.
 
-The volume where the red curve crosses zero is LDA silicon's equilibrium, which is what a
-`vc-relax` would find. That is deliberately **not** implemented (`PLAN.md`, P11): a moving
-cell would invalidate the rule that the FFT grid and the symmetry group are fixed once for
-the whole run.
+The volume where the red curve crosses zero is LDA silicon's equilibrium, and relaxing the
+cell down to it is what notebook 23 does.
 
 ## Against Quantum ESPRESSO
 
-Five references, generated with the vendored `pw.x`, each adding one thing to the one
-before: a displaced cell, a sheared one, ultrasoft, PAW, and PBE.
+Five references, each adding one thing to the one before: a displaced cell, a sheared one,
+ultrasoft, PAW, and PBE.
 
 
 ```python
@@ -217,22 +214,17 @@ for name, mine, theirs, diff in rows:
     si2-us-pbe-stress             47.08        47.08       2.68e-07
 
 
-## How it works
+## Why the terms come for free
 
-The whole method is one function. `Calculation.at_strain(eps)` rebuilds every
-cell-dependent array — the reciprocal lattice from the stored **Miller indices**, the
-radial form factors against the moved `|G|`, the projectors, the augmentation charge, the
-Ewald images — as a *traced* function of the strain; the energy is then evaluated at frozen
-wavefunctions, occupations and eigenvalues, and `jax.grad` does the rest.
+The stress is the derivative of one expression for the energy, so the decomposition into
+kinetic, Hartree, local, exchange-correlation, augmentation and Ewald contributions is
+obtained by differentiating each term instead of their sum, with no expression derived
+separately for any of them.
 
-Two things make the partial derivative the total one. Stationarity at the SCF solution,
-which is what lets the wavefunctions be frozen at all; and the fact that the frozen
-quantity is the **coefficient vector**, not the wavefunction — a strain moves the plane
-waves with the cell, so holding the coefficients fixed holds the state fixed in *crystal*
-coordinates, which is the variational parameter the SCF minimised over.
-
-Because the energy is written down once and differentiated, the decomposition comes free:
-differentiate each term instead of their sum and the tensor arrives term by term.
+One subtlety makes the frozen-state derivative the right one. What is held fixed is the
+*coefficient vector*: a strain carries the plane waves along with the cell, so freezing the
+coefficients freezes the state in crystal coordinates, which is the variational parameter
+the SCF minimised over.
 
 
 ```python
@@ -267,12 +259,5 @@ print(f"\nworst per-term disagreement with pw.x: {worst:.1e} Ry/bohr^3 "
 
 
 ---
-
-`PLAN.md` §3, **P11** has the phase entry: what was built, the numbers, and the
-transcription traps — the coordinate singularity in the spherical harmonics that only a
-cell derivative reaches, the k-points that must follow the reciprocal cell, and the Pulay
-stress measured against the cutoff.
-
-`tests/regression/test_stress.py` and `tests/unit/test_stress_machinery.py` are the checks
-this notebook illustrates.
-
+The tests behind this notebook: `tests/regression/test_stress.py`,
+`tests/unit/test_stress_machinery.py`.

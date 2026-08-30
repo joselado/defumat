@@ -1,16 +1,13 @@
 # Noncollinear magnetism, magnetic fields and constrained moments
 
-With `nspin_mag = 4` the magnetization is a **vector field**, not a number per point. Two
-things follow. The symmetry group shrinks — a rotation must map the moments onto
-themselves as an *axial* vector, carrying $\det(R)$, and some operations survive only
-combined with time reversal. And there is a direction to constrain or to push on, which
-is what magnetic fields and constrained moments are for.
+With `nspin_mag = 4` the magnetization is a **vector field** rather than a number per
+point. Two things follow. The symmetry group shrinks, because a rotation must map the
+moments onto themselves as an *axial* vector and some operations survive only when
+combined with time reversal. And there is now a direction to constrain or to push on,
+which is what magnetic fields and constrained moments are for.
 
-bcc iron matches Quantum ESPRESSO to **2.8e-9 Ry** with LDA and with PBE; fields and all
-of QE's constrained-moment schemes to **≤2e-7 Ry**.
-
-The density is a $2\times 2$ matrix in spin space, and the magnetization is its
-projection onto the Pauli matrices:
+The density is a $2\times 2$ matrix in spin space, and the magnetization is its projection
+onto the Pauli matrices:
 
 $$n_{\alpha\beta}(\mathbf r) = \tfrac{1}{2}\Big[
    n(\mathbf r)\,\delta_{\alpha\beta}
@@ -20,15 +17,15 @@ $$n_{\alpha\beta}(\mathbf r) = \tfrac{1}{2}\Big[
    \psi^{\dagger}_{n\mathbf k}(\mathbf r)\,
    \boldsymbol\sigma\,\psi_{n\mathbf k}(\mathbf r)$$
 
-A constraint is a **penalty on that vector**, and its field is the gradient of the
-penalty -- written here once, so QE's five hand-derived expressions in `add_bfield.f90`
-become a test:
+A constraint is a penalty on that vector, and the field it exerts is the gradient of the
+penalty:
 
 $$E_{\rm pen} = \lambda \sum_I \big(\mathbf m_I - \mathbf m^{\rm fix}_I\big)^2,
 \qquad
 \mathbf B_I = -\frac{\partial E_{\rm pen}}{\partial \mathbf m_I}$$
 
-Phases P17 and P18.
+bcc iron matches Quantum ESPRESSO to **2.8e-9 Ry** with LDA and with PBE; fields and all
+of QE's constrained-moment schemes to **2e-7 Ry or better**.
 
 
 ```python
@@ -94,11 +91,12 @@ print("k-points: input %d -> pypresso %d, QE %d"
     k-points: input 11 -> pypresso 22, QE 22
 
 
-## The identity that gates the regime
+## The limit that has to come out right
 
-A noncollinear run whose moments all point along $z$ **is** the collinear run, and
-turning them all together must change nothing at all. A hydrogen atom, its moment placed
-along four different directions:
+A noncollinear run whose moments all point along $z$ *is* the collinear run, and rotating
+them all together must change nothing at all: without spin-orbit coupling the spin and the
+lattice are not tied to each other, so the energy cannot depend on the direction. A
+hydrogen atom, its moment placed along four different directions:
 
 
 ```python
@@ -136,14 +134,11 @@ print("noncollinear along z vs collinear  %.1e Ry"
     noncollinear along z vs collinear  2.6e-11 Ry
 
 
-This identity is what found a 129 Ry bug: nothing else in the regime has an answer known
-in advance.
-
 ## bcc iron, against Quantum ESPRESSO
 
-LDA first, then PBE — which needs `gradcorr` run in the **local spin frame**, rotating the
-vector density onto its own axis at each point, taking the collinear gradient correction
-there, and rotating the potential back.
+LDA first, then PBE. A gradient correction to a vector density is taken in the **local
+spin frame**: at each point the density matrix is rotated onto its own magnetization axis,
+the collinear expression is applied there, and the potential is rotated back.
 
 
 ```python
@@ -190,16 +185,17 @@ print("        moment %.2f -> %.2f mu_B, which is why a magnetic comparison with
             moment 3.18 -> 3.47 mu_B, which is why a magnetic comparison with the literature needs the gradient correction
 
 
-"The moment on this atom" has no exact meaning without muffin tins: it is the
-magnetization integrated over a sphere of QE's `r_m`, and about 60% of iron's valence
-charge is inside it. What is reported is that integral, matching QE's.
+"The moment on this atom" has no exact meaning in a plane-wave code, since there are no
+muffin tins to integrate over. What is reported is the magnetization integrated over a
+sphere of the radius QE uses, which for iron holds about 60% of the valence charge, and it
+matches QE's.
 
-## Constraints: the energy is written down and the potential is `jax.grad` of it
+## Constraints
 
-QE's `add_bfield.f90` carries five hand-derived potentials, one per constraint scheme.
-Here the *penalty energy* is written down and its potential is the gradient — so QE's
-algebra becomes a **test**, not a second implementation. Below: the atomic-direction
-scheme, compared against `add_bfield`'s expression on a synthetic density.
+A constraint scheme adds a penalty for the moment being in the wrong place, and the field
+it produces is the derivative of that penalty. Four schemes are available, constraining the
+total moment, the moment on each atom, its direction only, or the total direction. Below is
+the atomic-direction scheme.
 
 
 ```python
@@ -255,18 +251,17 @@ for name, scheme in (("noncolin-constrain_atomic.in", "atomic"),
     total                  -55.54266107     -55.54266124    1.7e-07
 
 
-**The constraint's energy is not in the total energy.** `add_bfield` is called from
-inside `v_of_rho`, so `deband` removes it again and `etcon` is printed separately; Elk
-excludes its external field's energy by the same convention, and both numbers are carried
-apart here for that reason.
+**The constraint's energy is not part of the reported total energy.** The penalty is a
+device for reaching a state, not a term in the material's energy, so it is carried and
+printed separately. Elk excludes its external field's energy by the same convention.
 
-## `reducebf`: a field whose job is to leave
+## A field whose job is to leave
 
-Elk's trick for reaching a magnetic state a nonmagnetic start would never find: apply a
-field, halve it every iteration, and let it vanish. The hydrogen atom started
-unpolarized stays unpolarized forever; with a fading field it lands on the magnetic
-answer to 1e-10 Ry, and a field left switched **on** does not — it is still there in the
-potential.
+The trick for reaching a magnetic state that a nonmagnetic starting guess would never
+find: apply a field, halve it every iteration, and let it vanish. Nothing in the SCF breaks
+spin symmetry on its own, so the hydrogen atom started unpolarized stays unpolarized
+forever. With a fading field it lands on the magnetic solution to 1e-10 Ry, and what is
+left at the end is a genuine zero-field state, which a field left switched on would not be.
 
 
 ```python
@@ -316,18 +311,17 @@ ax.legend(fontsize=8); ax.grid(alpha=0.3); fig.tight_layout()
 
 ## Fixing a moment instead of penalising it
 
-A penalty leaves a residual force: the state sits where `lambda (m - m_fix)^2` balances the
-functional, which is not a stationary point of the functional itself. Elk's fixed-spin-moment
-scheme instead *searches* for the field at which the unconstrained functional puts the moment
-where it was asked — so what converges is a genuine stationary state, and the field it found
-is a result worth reading.
+A penalty leaves a residual force: the state sits where the penalty balances the
+functional, which is not a stationary point of the functional itself. The fixed-spin-moment
+scheme instead *searches* for the field at which the unconstrained functional puts the
+moment where it was asked, so what converges is a genuine stationary state and the field it
+found is itself a result, the field that would be needed to hold the material there.
 
-Searching is a control problem, and how it is done is worth more than a factor of ten.
-Elk nudges the field after **every** SCF iteration, which reads a moment that has not
-finished responding to the last nudge: it rings, and takes 1380 iterations here. At
-converged density `m(B)` is smooth, so `fsm_update = 'secant'` holds the field until the
-SCF has converged and then steps by the susceptibility it measures — the same answer in
-**74**.
+How the search is run is worth more than a factor of ten. Nudging the field after every SCF
+iteration reads a moment that has not finished responding to the previous nudge, and it
+rings: 1380 iterations here. At converged density the moment is a smooth function of the
+field, so holding the field until the SCF has converged and then stepping by the measured
+susceptibility gives the same answer in **74**.
 
 
 ```python
@@ -353,17 +347,10 @@ for rule in ("secant", "elk"):
     elk          246    -0.01096471    2.000541     -55.571537734
 
 
-The same field to 4e-5 Ry and the same energy to 1e-5 Ry — the residual is the 1e-3
-tolerance the moment is held to, divided by the 45 mu_B/Ry susceptibility, since the two
-rules stop on opposite sides of the target. The gain was never the problem: Elk's
-`tau = 0.02` against a measured `1/chi` of 0.022 is already a Newton step, and what is
-wrong in the interleaved rule is *when* the step is taken.
-
+The same field to 4e-5 Ry and the same energy to 1e-5 Ry. The residue is the tolerance the
+moment is held to divided by the 45 $\mu_B$/Ry susceptibility, since the two rules stop on
+opposite sides of the target.
 
 ---
-**The detail:** `PLAN.md` §3 P17 and P18 — `sym_rho`'s `nspin = 4` branch, `sgam_at_mag`,
-the local spin frame in `gradcorr`, QE's four `constrained_magnetization` schemes and
-Elk's `bfcmt`/`reducebf`. The one piece refused is `PAW_gcxc_potential` with a
-magnetization.
-**The tests:** `tests/regression/test_noncollinear_magnetism.py`,
+The tests behind this notebook: `tests/regression/test_noncollinear_magnetism.py`,
 `tests/regression/test_magnetic_constraints.py`, `tests/unit/test_magnetic_fields.py`.

@@ -1,19 +1,19 @@
-# 23 — Variable-cell relaxation
+# Variable-cell relaxation
 
-`calculation = 'vc-relax'` relaxes the **cell** as well as the atoms. The cell is nine
-more coordinates in the same BFGS, its gradient is the stress rearranged,
+`calculation = 'vc-relax'` relaxes the **cell** as well as the atoms. What is minimised is
+the enthalpy $H = E + P\Omega$, so the stationary point is $\sigma = P\,\mathbf 1$: a
+relaxed crystal carries the applied pressure rather than having no stress. The cell is nine
+more coordinates of the same optimisation, and its gradient is the stress rearranged,
 
-    dH/dh = Omega (P I - sigma) h^-T,     H = E + P Omega,
+$$\frac{\partial H}{\partial h} = \Omega\,(P\,\mathbf 1 - \sigma)\,h^{-T},$$
 
-and the two things that fall out of that expression are the whole of the physics: what is
-minimised is the **enthalpy**, and the stationary point is `sigma = P I` — a relaxed
-crystal carries the applied pressure rather than having no stress.
+where $h$ is the matrix whose columns are the lattice vectors.
 
-The case below is QE's own `pw_vc-relax/vc-relax4.in`: rhombohedral arsenic squeezed at
-**500 kbar**, where the cell compresses by 10% *and* the two atoms move from 0.2722 to
-0.2500 — the rhombohedral-to-simple-cubic transition. Against `pw.x` the relaxed volume
-agrees to **7e-4 bohr³**, the atoms to **2.4e-6** in crystal coordinates and the final
-energy to **2.4e-6 Ry**, in the same ten ionic steps.
+The case below is QE's own `vc-relax4.in`: rhombohedral arsenic squeezed at **500 kbar**,
+where the cell compresses by 10% *and* the two atoms move from 0.2722 to 0.2500, which is
+the rhombohedral to simple-cubic transition. Against `pw.x` the relaxed volume agrees to
+**7e-4 bohr³**, the atoms to **2.4e-6** in crystal coordinates and the final energy to
+**2.4e-6 Ry**, in the same ten ionic steps.
 
 
 ```python
@@ -42,9 +42,9 @@ print(f"{system.structure.nat} atoms, applied pressure {system.relax.press} kbar
 
 ## Run it
 
-Everything the run needs is in the input: `press`, `press_conv_thr` and `cell_dofree` come
-off the `&cell` namelist, and all three convergence thresholds — energy, force **and**
-pressure — have to be satisfied together.
+Everything the run needs is in the input: the pressure, its convergence threshold and which
+degrees of freedom of the cell are free. All three thresholds, energy, force **and**
+pressure, have to be satisfied together.
 
 
 ```python
@@ -67,13 +67,12 @@ print(f"pressure {np.trace(result.stress) / 3 * RY_TO_KBAR:.2f} kbar "
 
 ## Against `pw.x`
 
-What is compared is the relaxed geometry and the energy of the **final SCF** — the extra
-run QE does at the relaxed cell with the G-vectors recalculated for it. The relaxation
-itself runs in a basis chosen for the *starting* cell (`scale_h.f90` re-expresses the same
-Miller indices against the new reciprocal cell and changes nothing else), so its own last
-energy is not variational in the cell it is reported at. The gap between the two is the
-Pulay error of the frozen basis, and it is the number to read before believing a relaxed
-volume from a low cutoff.
+What is compared is the relaxed geometry and the energy of the **final SCF**, the extra run
+done at the relaxed cell with its plane-wave basis rebuilt for it. The relaxation itself
+runs in a basis chosen for the *starting* cell, so its own last energy is not variational in
+the cell it is reported at. The gap between the two is the Pulay error of a fixed basis
+under a changing volume, and it is the number to read before believing a relaxed volume
+computed at a low cutoff.
 
 
 ```python
@@ -107,10 +106,11 @@ print(f"\nPulay error of the frozen basis: {result.pulay_error:.2e} Ry")
 
 ## The physics: the cell and the atoms are doing different things
 
-Arsenic's rhombohedral structure is a distorted simple cubic one — the two atoms sit at
-`±u(1,1,1)` with `u = 0.2722` instead of the `0.25` that would make every bond equal.
-Pressure removes the distortion. The plot is that transition happening: the volume falls
-and `u` climbs to a quarter, and neither is imposed.
+Arsenic's rhombohedral structure is a distorted simple cubic one: the two atoms sit at
+$\pm u(1,1,1)$ with $u = 0.2722$ instead of the $0.25$ that would make every bond equal.
+Pressure removes the distortion, and the plot is that transition happening. The volume falls
+and $u$ climbs to a quarter, and neither is imposed. This is the structural phase transition
+of arsenic under pressure, obtained from nothing but the enthalpy and its gradient.
 
 
 ```python
@@ -149,15 +149,13 @@ fig.tight_layout()
     
 
 
-## How it works: the cell gradient is the stress, rearranged
+## Where the cell gradient comes from
 
-Write the cell as `h`, the matrix whose *columns* are the lattice vectors. A deformation
-`h -> (1 + eps) h` gives `eps = dh h^-1`, so `dE/dh = (dE/d eps) h^-T`; with
-`sigma = -(1/Omega) dE/d eps` and `d Omega/dh = Omega h^-T`, the enthalpy's gradient is
-`Omega (P I - sigma) h^-T`. That is `cell_base.f90`'s `cell_force`, and contracting it
-back with `h^T` returns `P I - sigma`, which is why the cell's convergence is reported in
-kbar. Nothing new is differentiated: the stress it is built from is P11's single
-`jax.grad` of the energy along a strain.
+A deformation $h \to (1 + \epsilon)h$ gives $\epsilon = dh\,h^{-1}$, so
+$dE/dh = (dE/d\epsilon)\,h^{-T}$; with $\sigma = -(1/\Omega)\,dE/d\epsilon$ and
+$d\Omega/dh = \Omega h^{-T}$, the enthalpy's gradient is the expression in the header.
+Contracting it back with $h^{T}$ returns $P\,\mathbf 1 - \sigma$, which is why the cell's
+convergence is reported in kbar: what has to go to zero is a pressure difference.
 
 
 ```python
@@ -184,16 +182,14 @@ print("\ncontracted back, max |P I - sigma| =",
     contracted back, max |P I - sigma| = 2.271 kbar
 
 
-## The trap: a moving cell makes stale k-points reachable
+## What a moving cell does to the k-points
 
-`KPoints.coords` are cartesian in units of `2 pi / alat`, so they describe a k-set only
-together with the cell they were built for. What is fixed under a deformation is `k` in
-**crystal** coordinates. Every caller before this phase deformed a cell whose k-points had
-just been built for it, where the distinction cannot be seen; a cell that has actually
-*moved* separates them, and a stress taken there was differentiated at k-points 0.031 away
-in crystal units from the ones the SCF had run at — the energy right, its derivative wrong
-by 64 kbar and the relaxed volume by 2%. A finite difference of the frozen-basis energy is
-what settled it, and it is the check below.
+A k-point is fixed in **crystal** coordinates, not in cartesian ones: deforming the cell
+carries the reciprocal lattice with it, and the same physical k-point acquires different
+cartesian components. That is invisible in a calculation whose cell has not moved, and it is
+the first thing a variable-cell relaxation reaches. Getting it wrong leaves the energy right
+and its derivative wrong, here by 64 kbar and by 2% of the relaxed volume. The check is a
+finite difference of the frozen-basis energy, below.
 
 
 ```python
@@ -214,9 +210,6 @@ print(f"\nmax difference after the cell moved: {np.abs(base - final).max():.2e}"
 
 
 ---
-
-The phase entry is `PLAN.md` §3, **P29** — including the two bugs this case found (the
-stale k-points above, and a symmetry tolerance that was absolute in bohr where QE's is in
-units of `alat`). The tests are `tests/regression/test_vc_relax.py`: QE's three comparable
-`pw_vc-relax` cases plus an eight-atom cubic silicon supercell under pressure and the
+The tests behind this notebook: `tests/regression/test_vc_relax.py`, which carries QE's
+three comparable cases plus an eight-atom cubic silicon supercell under pressure and the
 ten-atom graphite whose `c` and `a` have to move independently.

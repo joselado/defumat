@@ -1,24 +1,21 @@
 # Forces and structural relaxation
 
-The force is `jax.grad` of the total energy with respect to the atomic positions, taken
-at **frozen** wavefunctions, occupations and eigenvalues — Hellmann-Feynman, Pulay and the
-augmentation charge's own derivative all falling out of one gradient, with nothing
-hand-derived. QE's six force routines are transcribed beside it as a cross-check, and the
-two agree with `pw.x` to **≤2e-5 Ry/bohr** on five references; a BFGS relaxation
-reproduces QE's geometry to **1e-6 bohr**.
-
-The force is a *partial* derivative -- the states are held fixed, which is what makes it
-Hellmann-Feynman plus Pulay rather than a chain rule through the whole SCF:
+The force on an atom is minus the derivative of the total energy with respect to its
+position, taken at **frozen** wavefunctions, occupations and eigenvalues:
 
 $$\mathbf F_I = -\left.\frac{\partial E_{\rm tot}
    [\{\psi\}, \{f\}, \boldsymbol\tau]}
    {\partial \boldsymbol\tau_I}\right|_{\psi,\, f,\, \varepsilon\ \rm fixed}$$
 
-The energy is stationary in the wavefunctions at the converged state, so freezing them
-loses nothing; the terms QE derives by hand -- `force_lc`, `force_cc`, `force_ew`,
-`force_us`, `addusforce`, `force_corr` -- are what this one derivative expands into.
+Freezing the states loses nothing because the energy is stationary in them at the
+converged solution, which is the Hellmann-Feynman theorem; what remains beyond the bare
+electrostatics is the Pulay contribution from a basis that moves with the atoms, and, for
+an ultrasoft dataset, the augmentation charge's own displacement.
 
-Phase P15. Inputs and references are committed under `tests/data/qe/`.
+The derivative is taken of the energy itself rather than from hand-derived expressions,
+and the six terms Quantum ESPRESSO writes out separately are what it expands into. Against
+`pw.x`: **2e-5 Ry/bohr or better** on five references, and a BFGS relaxation that
+reproduces QE's geometry to **1e-6 bohr**.
 
 
 ```python
@@ -45,9 +42,8 @@ def reference(case):
     return read_qe_output(CASES / f"reference.out.{case}")
 
 
-# The gate: the functional that gets differentiated must *be* the total energy at the
-# converged state. If it is not, its derivative is the force of some other calculation --
-# and every term below would still look plausible.
+# What is differentiated below must be the SCF's own total energy at the converged state,
+# since otherwise its derivative is the force of some other calculation.
 print("%-18s %18s %18s %12s"
       % ("case", "SCF total (Ry)", "frozen functional", "difference"))
 for case in ("si2-nc-force", "si2-us-force", "si2-paw-force", "si2-us-pbe-force"):
@@ -77,9 +73,9 @@ for case in ("si2-nc-force", "si2-us-force", "si2-paw-force", "si2-us-pbe-force"
 
 ## The force on a displaced silicon cell
 
-Two atoms pushed off their sites, so there is a force to compute at all. Against QE, and
-against a finite difference of the SCF energy itself — the check that trusts neither
-implementation, run with symmetry switched off so that nothing is projected out.
+Two atoms pushed off their sites, so that there is a force to compute at all. Against QE,
+and against a finite difference of the SCF energy itself, which is the check that trusts
+neither implementation. Symmetry is switched off so that nothing is projected out.
 
 
 ```python
@@ -142,17 +138,16 @@ for atom, direction in ((0, 0), (0, 1), (1, 2)):
       atom 1 z             0.01005466       0.01005364       1.0e-06
 
 
-## The same force, the way Quantum ESPRESSO computes it
+## The same force, term by term
 
-`force_lc`, `force_cc`, `force_ew`, `force_us`, `addusforce` and `force_corr`,
-transcribed behind the same registry. The two implementations share no machinery, which
-is what makes the comparison worth having: it is what found the augmentation force's sign
-and the gradient correction missing from `force_cc`.
+The force splits into the pieces a textbook derives separately: the local potential's
+electrostatic pull, the nonlinear core correction, the Ewald sum between the nuclei, the
+nonlocal projectors' Pulay term and, for ultrasoft, the augmentation charge. Computing it
+both ways is worth doing because the two routes share nothing.
 
-They differ by exactly one term. `force_corr` is a correction for the density not being
-quite converged, which the gradient does not have because it differentiates the energy
-*of the state it was given*; it vanishes as `conv_thr` tightens, and at 1e-10 Ry it is
-already down at 1e-7 Ry/bohr.
+They differ by exactly one term. The extra one is a correction for the density not being
+quite converged, and it vanishes as `conv_thr` tightens: at 1e-10 Ry it is already down at
+1e-7 Ry/bohr.
 
 
 ```python
@@ -197,10 +192,10 @@ print("total, autodiff vs QE   %.1e Ry/bohr"
 
 ## Relaxation
 
-`calculation = 'relax'` runs QE's BFGS with its trust radius and Wolfe line search, in
-crystal coordinates with the cell metric. The setup — FFT grid, symmetry group, k-points
-— is done **once** and only checked afterwards, which is why a relaxation cannot change
-the symmetry of the crystal and `checkallsym` complains if the geometry tries to.
+`calculation = 'relax'` walks downhill with BFGS, a trust radius and a Wolfe line search,
+in crystal coordinates with the cell metric so that the step is measured in the geometry
+the crystal actually has. The symmetry group is fixed at the start and checked afterwards,
+so a relaxation moves the atoms within their symmetry and cannot silently lower it.
 
 
 ```python
@@ -249,14 +244,9 @@ fig.tight_layout()
     
 
 
-QE's own CO relaxation runs here too, with the oxygen frozen by `if_pos` — its input is
-in the vendored tree (`pw_relax/relax.in`) and the regression test carries it.
+QE's own CO relaxation runs here too, with the oxygen frozen by `if_pos`, which is how a
+constrained geometry, a surface adsorbate or a reaction coordinate is set up.
 
 ---
-**The detail:** `PLAN.md` §3 P15 — why the force is a *partial* derivative, the
-orthonormality constraint that makes ultrasoft's Pulay term part of the same gradient,
-and the three traps (the Ewald neighbour list belongs to the cell and not the geometry;
-`gradcorr` is called from inside `v_xc`, so `force_cc` needs it; `symvector` is not
-optional).
-**The tests:** `tests/regression/test_forces.py`, `tests/regression/test_relax.py`,
-`tests/unit/test_force_machinery.py`.
+The tests behind this notebook: `tests/regression/test_forces.py`,
+`tests/regression/test_relax.py`, `tests/unit/test_force_machinery.py`.

@@ -2,11 +2,18 @@
 
 The canonical run: read a `pw.x` input, converge the density, diagonalise along a path.
 Silicon's total energy comes out **within 1e-9 Ry of Quantum ESPRESSO** term by term and
-its bands within **0.0002 eV** — on the same input file, `test-suite/pw_scf/scf.in`.
+its bands within **0.0002 eV**, on the same input file, `test-suite/pw_scf/scf.in`.
+
+What is being minimised is the Kohn-Sham total energy as a functional of the density,
+
+$$E[n] = T_s[n] + \int v_{\rm ext}(\mathbf r)\, n(\mathbf r)\, d\mathbf r
+        + E_{\rm H}[n] + E_{\rm xc}[n] + E_{\rm ion-ion},$$
+
+and self-consistency is the statement that the density built from the eigenstates of the
+potential $v[n]$ is the same $n$ that produced it.
 
 Notebook 01 builds the plane-wave basis this stands on, and notebook 28 is about the
-`Calculator` used here — one object carrying the system and its pseudopotentials, with a
-method per calculation. Phases P3-P7.
+`Calculator` used here.
 
 
 ```python
@@ -48,9 +55,9 @@ density from the occupied states and symmetrise it, mix it into the old one, rep
 
 Two of those steps are easy to skip and neither fails loudly. **Symmetrisation:** two
 k-points stand in for the whole zone only because of symmetry, and the density built from
-them alone does not have the crystal's — the total then comes out wrong in the third
-decimal with degeneracies split by tens of meV. **Mixing:** feeding the output density
-straight back in diverges, charge sloshing across the cell amplified by the Hartree term.
+them alone does not have the crystal's, so the total comes out wrong in the third decimal
+with degeneracies split by tens of meV. **Mixing:** feeding the output density straight
+back in diverges, charge sloshing across the cell amplified by the Hartree term.
 
 
 ```python
@@ -81,9 +88,8 @@ it is wrong. The decomposition localises an error to one piece of physics.
 
 
 ```python
-# The vendored pw.x re-run of this input rather than the shipped reference: that one is
-# from QE 6.0, which chose a 15^3 FFT grid where the current release chooses 16^3, and it
-# stops at conv_thr = 1e-6. Both matter at the level compared here.
+# A re-run of pw.x on this input rather than the shipped reference, which dates from
+# QE 6.0 and stops at conv_thr = 1e-6, well above the level compared here.
 reference = read_qe_output(Path("../tests/data/qe/reference.out.pw_scf-scf"))
 
 print("%-14s %16s %18s %12s" % ("term [Ry]", "pypresso", "Quantum ESPRESSO", "difference"))
@@ -105,11 +111,10 @@ print("%-14s %16.8f %18.8f %12.1e" % ("TOTAL", result.total_energy, reference.to
 ## The band structure
 
 With the density converged the potential is frozen and the Hamiltonian is diagonalised
-along a path — nothing self-consistent about it, which is why it can use k-points that
+along a path. Nothing about that is self-consistent, which is why it can use k-points that
 would make no sense as an integration grid. The path is `scf-1.in`'s, and that input runs
 after `scf.in` sharing its output directory, so its reference bands belong to precisely
-the density converged above — which here is the one already cached on `calc`, so
-`get_bands` only has to be told which k-points to use.
+the density converged above.
 
 
 ```python
@@ -148,14 +153,15 @@ print("indirect gap: %.4f eV   (LDA underestimates; experiment is ~1.1 eV)" % ba
 
 
 The curves and the circles lie on top of each other to 0.2 meV, and the threefold
-degeneracies at $\Gamma$ are exact rather than approximate — the visible payoff of
-symmetrising the density.
+degeneracies at $\Gamma$ are exact rather than approximate, which is the visible payoff of
+symmetrising the density. The gap is indirect, running from $\Gamma$ to a point most of
+the way out to X, and LDA puts it well below the experimental 1.17 eV: the band gap
+problem, in one number.
 
 ## What the density looks like
 
-The physical content of the run, evaluated straight from its Fourier components rather
-than read off the 16^3 grid: charge piled up between the two atoms, which is the covalent
-bond of diamond silicon.
+The physical content of the run, evaluated straight from its Fourier components: charge
+piled up between the two atoms, which is the covalent bond of diamond silicon.
 
 
 ```python
@@ -199,6 +205,5 @@ print("integral over the cell = %.8f electrons"
 
 
 ---
-**The detail:** `PLAN.md` §3, phases P3-P7 — what each term is, the transcription traps
-(the `G = 0` term of `V_loc`, `msh`, the non-symmorphic FFT grid), and the numbers.
-**The tests:** `tests/regression/test_scf.py`, `tests/unit/test_qeref.py`.
+The tests behind this notebook: `tests/regression/test_scf.py`,
+`tests/unit/test_qeref.py`.

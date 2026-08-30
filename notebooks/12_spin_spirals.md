@@ -1,18 +1,10 @@
 # Spin spirals, without a supercell
 
-A flat spiral turns the moment by $\mathbf q\cdot\mathbf R$ from cell to cell, so it is
-periodic only if $\mathbf q$ is commensurate — and a supercell large enough for a general
-one is out of reach. The generalized Bloch theorem removes the need: the up component of
-the spinor lives at $\mathbf k + \mathbf q/2$ and the down at $\mathbf k - \mathbf q/2$,
-each on its own plane-wave sphere, and in the rotated frame the density and the potential
-are lattice periodic again — so the SCF, the functional and the mixer are untouched.
-
-`pw.x` has no spin spiral, so the validation is **identities**: at the wavevectors where a
-supercell *is* possible, the spiral must reproduce it. It does, to 1e-12 Ry.
-
-The generalized Bloch theorem: a spiral is a *gauge*, and in the rotated frame the
-density is lattice periodic again. What it costs is that the two spinor components live
-on **different** plane-wave spheres,
+A flat spiral turns the moment by $\mathbf q\cdot\mathbf R$ from one cell to the next, so
+it is periodic only when $\mathbf q$ is commensurate, and a supercell large enough for a
+general wavevector is out of reach. The generalized Bloch theorem removes the need: the
+spiral is a gauge, and in the rotated frame the density and the potential are lattice
+periodic again.
 
 $$\psi_{n\mathbf k}(\mathbf r) = e^{i\mathbf k\cdot\mathbf r}
   \begin{pmatrix}
@@ -24,7 +16,12 @@ $$\psi_{n\mathbf k}(\mathbf r) = e^{i\mathbf k\cdot\mathbf r}
 \quad
 \downarrow \text{ at } \mathbf k - \tfrac{\mathbf q}{2}$$
 
-and that is the whole of the implementation. Phase P19, following Elk.
+The up component of the spinor lives at $\mathbf k + \mathbf q/2$ and the down at
+$\mathbf k - \mathbf q/2$, each on its own plane-wave sphere. Any wavevector in the zone is
+then a one-cell calculation, which is what makes a magnon dispersion affordable.
+
+`pw.x` has no spin spiral, so the validation is a set of limits: at the wavevectors where a
+supercell *is* possible, the spiral must reproduce it. It does, to 1e-12 Ry.
 
 
 ```python
@@ -97,12 +94,12 @@ print("\nthe two components differ by up to %d plane waves at the same k-point; 
     the two components differ by up to 8 plane waves at the same k-point; both are padded to npwx = 1532 and masked.
 
 
-## The three identities that validate it
+## The three limits that validate it
 
-**$q = 0$** is not a spiral and must not behave like one: it has to reproduce an ordinary
-noncollinear run exactly. **$q = b_3/2$** turns the moment by 180 degrees per cell, which
-is the antiferromagnet the *collinear* code can do in a doubled cell. **$q = b_3/4$** is a
-quarter turn, which is a four-cell noncollinear supercell.
+**$q = 0$** is not a spiral at all and must reproduce an ordinary noncollinear run exactly.
+**$q = b_3/2$** turns the moment by 180 degrees per cell, which is the antiferromagnet a
+collinear calculation does in a doubled cell. **$q = b_3/4$** is a quarter turn, which is a
+four-cell noncollinear supercell.
 
 Only the electronic energy is compared for the last two: the Ewald sum of a one-atom cell
 and of its supercell are genuinely different numbers, and per atom they agree anyway.
@@ -140,16 +137,12 @@ print("q = b3/4 against a four-cell 90-degree supercell %.1e Ry"
     q = b3/4 against a four-cell 90-degree supercell 2.9e-12 Ry
 
 
-**The trap of the phase.** A supercell built to hold the spiral has its own k-grid, and
-the two calculations only agree if that grid is the *shifted* one the folding demands —
-comparing against the unshifted grid gives a plausible number that is wrong in the fourth
-decimal.
-
 ## `E(q)`: the frozen-magnon dispersion
 
-Scanning $q$ costs one SCF per point and no supercell at all, which is the whole reason
-the theorem is worth implementing. The curve falls away from $q = 0$, so the chain is an
-antiferromagnet; fitting a Heisenberg model to it gives the exchange constants.
+Scanning $\mathbf q$ costs one SCF per point and no supercell at all, which is the whole
+reason the theorem is worth having. The curve falls away from $q = 0$, so the chain is an
+antiferromagnet, and fitting a Heisenberg model to it gives the exchange constants that a
+spin model would be built from.
 
 
 ```python
@@ -198,15 +191,14 @@ print("all %d points converged: %s" % (len(q), bool(np.all(scan.converged))))
 A negative $J_1$ is antiferromagnetic in the convention $H = -\sum J_{ij}\,
 \mathbf e_i\cdot\mathbf e_j$, which is what a curve falling away from $q = 0$ must give.
 
-**The moment is a gauge and the energy is not.** Running at $q$ and at $q + b_3$ gives the
-same energy to 1e-10 Ry and a different cell-integrated moment: the rotated frame is a
-choice, and only frame-independent quantities are physical.
+**The moment is a gauge and the energy is not.** Running at $\mathbf q$ and at
+$\mathbf q + \mathbf b_3$ gives the same energy to 1e-10 Ry and a different cell-integrated
+moment: the rotated frame is a choice, and only frame-independent quantities are physical.
 
-**Three things a spiral refuses.** Spin-orbit coupling, permanently — it breaks the
-theorem, and Elk refuses it too. Symmetry, until the spin space group is written, so a
-spiral needs `nosym` and the full k-grid. And ultrasoft/PAW, until the augmentation charge
-*between the two components* is threaded through.
+A spiral refuses three things. Spin-orbit coupling, permanently, because it ties the spin
+to the lattice and breaks the theorem. Symmetry, so a spiral runs on the full k-grid.
+And ultrasoft or PAW datasets.
 
 ---
-**The detail:** `PLAN.md` §3 P19. Notebook 14 relaxes $q$ itself down `dE/dq`.
-**The tests:** `tests/regression/test_spin_spirals.py`.
+Notebook 14 relaxes $\mathbf q$ itself downhill. The tests behind this notebook:
+`tests/regression/test_spin_spirals.py`.

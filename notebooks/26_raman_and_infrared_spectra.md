@@ -1,27 +1,21 @@
-# 26 — Raman and infrared spectra
+# Raman and infrared spectra
 
-Notebook 25 computed the **Raman tensors**: `d(eps)/d(tau)`, one rank-3 tensor per atom.
-Notebook 20 computed the **phonon modes**, and notebook 19 the **Born effective charges**.
-None of those is what a spectroscopist reads. An experiment resolves a **mode** — a
-frequency, an intensity, a depolarisation ratio — and getting there is a contraction of
-all three with the phonon eigendisplacement.
+Notebook 25 computed the Raman tensors, notebook 20 the phonon modes and notebook 19 the
+Born effective charges. None of those is what a spectroscopist reads. An experiment
+resolves a **mode**: a frequency, an intensity and a depolarisation ratio. Getting there is
+a contraction of all three quantities with the phonon eigendisplacement,
 
-That contraction is arithmetic, and it is where QE finally offers a **working reference**
-again. Notebook 25 had to build its own, because the vendored `ph.x`'s third-derivative
-branch has regressed. But `dynmat.x` is not that code: `RamanIR`
-(`LR_Modules/dynmat_sub.f90`) reads `dchi_dtau`, `zstar` and `eps0` off a file and does
-the contraction, and shares nothing with the branch that broke. So this notebook writes
-the dynamical-matrix file `ph.x` would have written and runs the vendored binary on
-**our** tensors.
+$$ R^{\nu}_{ij} = \sum_{a,k} \frac{\partial \chi_{ij}}{\partial \tau_{a,k}}\, z^{\nu}_{a,k},
+\qquad
+p^{\nu}_i = \sum_{a,k} Z^{*}_{a,ik}\, z^{\nu}_{a,k}, $$
 
-Headline: silicon's `T_2g` at **519.2 cm⁻¹** against an experimental 520 — Raman-active,
-infrared-silent — and every digit `dynmat.x` prints.
+with the Raman activity built from the two Placzek invariants of $R^\nu$ and the infrared
+activity from $|p^\nu|^2$. A mode is Raman-active if it modulates the polarizability and
+infrared-active if it carries a dipole, and those are independent questions.
 
-One more thing landed with this phase and it shows up in the very first cell: a
-**symmetry-reduced k-set works now**. A Raman tensor has three free cartesian labels, so
-its Brillouin-zone sum over the wedge is incomplete in all three; `symme.f90`'s
-`symtensor3` completes it, and notebook 25's 64 k-points become 8 here.
-
+Silicon's optical triplet comes out at **519.2 cm⁻¹** against an experimental 520, Raman
+active and infrared silent, and every digit agrees with the vendored `dynmat.x` run on the
+same tensors.
 
 
 ```python
@@ -58,10 +52,13 @@ print(f"       total energy {scf.total_energy:.8f} Ry   pw.x -16.88368446")
 ## 1. One call
 
 Inside it: the field response, the displacement response, the Raman tensors, the Born
-effective charges and the dynamical matrix. The two responses are the expensive part and
-**the displacement one is shared** — a Raman tensor and a dynamical matrix need the same
-`solve_linter` output, so it is solved once and threaded, which takes the phonons from
-about fifty seconds to one.
+effective charges and the dynamical matrix. The two responses are the expensive part, and
+the displacement one is shared between the Raman tensors and the phonons, which is why the
+whole spectrum costs little more than the phonons alone.
+
+The k-set is the irreducible wedge. A Raman tensor has three free cartesian labels, so a
+sum over the wedge is incomplete in all three and the point group has to complete it; with
+that, notebook 25's 64 k-points become 8 here.
 
 
 ```python
@@ -80,13 +77,13 @@ print(spectrum.table())
 
 ## 2. What `dynmat.x` says about the same tensors
 
-`pypresso.io.dynmat.write_dynamical_matrix` writes the `fildyn` file `ph.x` writes, with
-the force constants, `eps`, `Z*` and the Raman block in it. The vendored `dynmat.x` then
-re-reads them, re-diagonalises the dynamical matrix with its own Fortran eigensolver, and
-prints its own table.
+The dynamical matrix, $\varepsilon$, $Z^*$ and the Raman block are written out in the format
+QE's post-processing reads, and the vendored `dynmat.x` re-reads them, re-diagonalises the
+matrix with its own eigensolver and prints its own table. This is the one Quantum ESPRESSO
+reference above second order that still works, because it is post-processing and never
+touches the branch that computes the tensors.
 
-`q` is left at zero on purpose: that keeps the **non-analytic** LO-TO term out, which the
-`Gamma` dynamical matrix here does not carry either.
+$q$ is left at zero on purpose, which keeps the non-analytic LO-TO term out of both codes.
 
 
 ```python
@@ -135,20 +132,18 @@ print("\n".join(line for line in output.splitlines()
         6    353.25   10.5902    5.9262       446.8854    0.7500
 
 
-Identical. Which is the point: the two share the tensors and nothing else — one contracts
-them in JAX and the other in Fortran, after a round trip through a text file.
+Identical, from two contractions that share the tensors and nothing else.
 
 ## 3. Silicon: one Raman line, and silence in the infrared
 
 AlAs is polar, so it is active in both channels. Silicon is the interesting case, and both
 of its statements are pure symmetry:
 
-* the optical triplet is **Raman active** — diamond's `T_2g`, the line at 520 cm⁻¹ that
+* the optical triplet is **Raman active**, diamond's $T_{2g}$, the line at 520 cm⁻¹ that
   every Raman spectrometer is calibrated on;
-* it is **infrared silent**, because an operation of the group carries one silicon onto
-  the other and therefore gives them the same `Z*`. The optical mode moves them against
-  each other, so it has no dipole at all. That is why silicon is transparent in the
-  infrared.
+* it is **infrared silent**, because an operation of the group carries one silicon onto the
+  other and so gives them the same $Z^*$. The optical mode moves them against each other,
+  so it carries no dipole at all, and that is why silicon is transparent in the infrared.
 
 
 ```python
@@ -174,8 +169,8 @@ print(f"infrared activity of the optical triplet   {np.abs(si.infrared[3:]).max(
 ## 4. The figure
 
 The two spectra, as a spectrometer would record them: each mode a Lorentzian of its
-activity, on a shared axis. Silicon has one line and AlAs has one, at very different
-places — and only AlAs has anything in the infrared.
+activity on a shared axis. Silicon has one line and AlAs has one, at very different places,
+and only AlAs has anything in the infrared.
 
 
 ```python
@@ -222,16 +217,15 @@ fig.tight_layout()
 
 ## 5. The one rule about reading these numbers
 
-A degenerate multiplet has no preferred basis: the eigensolver may return any orthogonal
-mixing of its members, and it does (rule D4, the same reason nothing here differentiates
-through `eigh`). Both Placzek invariants are **quadratic** in the mode's Raman tensor, so
-the multiplet's *sum* of activities survives that mixing and its individual entries do
-not.
+A degenerate multiplet has no preferred basis: any orthogonal mixing of its members is as
+good an answer, and two eigensolvers will return different ones. Both Placzek invariants are
+**quadratic** in the mode's Raman tensor, so the multiplet's *sum* of activities survives
+that mixing and its individual entries do not. A degenerate multiplet is comparable only as
+a sum, between two codes and between two runs.
 
-This is not a caveat that had to be looked for. It is what running the comparison above on
-silicon produced: on the acoustic triplet the two eigensolvers land in different bases,
-and both codes print activities of `0.0000` with wildly different depolarisation ratios
-beside them.
+That is not a caveat that had to be looked for. On silicon's acoustic triplet the two
+eigensolvers land in different bases, and both codes print activities of 0.0000 with wildly
+different depolarisation ratios beside them.
 
 
 ```python
@@ -252,12 +246,11 @@ for freq, raman_sum, ir_sum in si.by_manifold():
         519.20 cm^-1   Raman   29446.6904   IR    0.0000
 
 
-## 6. How it works: the whole assembly
+## 6. The contraction itself
 
-`mode_activities` is a pure function of arrays — a transcription of `RamanIR` — so it can
-be shown in full. `z` is the eigendisplacement, `u/sqrt(M)`, normalised by `<z|M|z> = 1`.
+`z` is the eigendisplacement $u/\sqrt{M}$, normalised by $\langle z|M|z\rangle = 1$:
 
-```python
+```
 R[nu]   = sum over (atom, cart) of  dchi_dtau[atom, cart, i, j] * z[nu, atom, cart]
 p[nu]   = sum over (atom, cart) of  Zstar[atom, i, cart]        * z[nu, atom, cart]
 
@@ -268,15 +261,15 @@ Raman   = 45 alpha^2 + 7 beta^2          depolarisation = 3 beta^2 / (45 alpha^2
 IR      = 2 |p|^2
 ```
 
-Everything else in this notebook is the machinery of notebooks 19, 20 and 25.
+$\alpha$ is the isotropic part of the polarizability change and $\beta^2$ its anisotropy,
+which is why the depolarisation ratio distinguishes a totally symmetric mode from every
+other one.
 
 ---
+Not implemented and named rather than approximated: the **non-analytic LO-TO term**, so
+AlAs's optical triplet comes out unsplit where a real measurement finds a TO/LO pair, and
+the mode-resolved ionic permittivity. Both need only $Z^*$ and $\varepsilon$, which this
+notebook has already computed.
 
-**Not implemented and named rather than approximated:** the **non-analytic** LO-TO term
-(`rigid.f90`'s `nonanal`), so AlAs's optical triplet comes out unsplit where a real
-measurement finds a TO/LO pair; and the mode-resolved ionic permittivity. Both need only
-`Z*` and `eps`, which this notebook has already computed.
-
-`PLAN.md` P36 · `pypresso/response/spectra.py` · `pypresso/io/dynmat.py` ·
-`tests/regression/test_spectra.py` · `tests/unit/test_spectra.py`
-
+The tests behind this notebook: `tests/regression/test_spectra.py`,
+`tests/unit/test_spectra.py`.

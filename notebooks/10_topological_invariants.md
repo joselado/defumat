@@ -1,36 +1,30 @@
 # Berry curvature, Chern numbers and Z2 invariants
 
-Everything here is built from one primitive: $\langle u_{m\mathbf k}|S|u_{n\mathbf k'}
-\rangle$, the overlap of the occupied manifolds at neighbouring k-points. Not from a
-derivative of the eigenproblem — because a determinant of overlaps is blind to the
-unitary mixing a degenerate eigensolver leaves behind, *and* because the
-Fukui-Hatsugai-Suzuki lattice sum is an **exact integer** on any mesh where a Riemann sum
-of a pointwise curvature is not.
-
-**Two things bite in a plane-wave code and both are silent:** neighbouring k-points do not
-share a G-sphere, so coefficients are aligned by Miller index; and the wrap at the zone
-edge is a *shift* of that index, $u_{k+b}(G) = u_k(G+b)$.
-
-The curvature and its integral, and the lattice form that makes the integral exact:
+The Berry curvature is the field strength of the geometric connection an occupied band
+carries through the Brillouin zone, and its integral is an integer:
 
 $$\Omega_{n}(\mathbf k) = i\,\nabla_{\mathbf k} \times
    \langle u_{n\mathbf k}|\nabla_{\mathbf k} u_{n\mathbf k}\rangle,
 \qquad
 C = \frac{1}{2\pi}\int_{\rm BZ} \Omega(\mathbf k)\; d^2k \in \mathbb{Z}$$
 
+That integer is what makes a quantum Hall conductance quantised and what distinguishes a
+topological insulator from an ordinary one: no continuous deformation of the Hamiltonian
+can change it without closing the gap.
+
+Everything here is built from the overlap of the occupied manifolds at neighbouring
+k-points, $M^{(\mathbf k,\mathbf k')}_{mn} = \langle u_{m\mathbf k}|\hat S|u_{n\mathbf k'}
+\rangle$, in the lattice form of Fukui, Hatsugai and Suzuki:
+
 $$C = \frac{1}{2\pi}\sum_{\square}
   \arg \Big[
    \det M^{(\mathbf k,\mathbf k+\mathbf b_1)}\;
    \det M^{(\mathbf k+\mathbf b_1,\mathbf k+\mathbf b_1+\mathbf b_2)}\;
-   \det M^{(\cdots)}\;\det M^{(\cdots)} \Big],
-\qquad
-M^{(\mathbf k,\mathbf k')}_{mn} =
-  \langle u_{m\mathbf k}|\hat S|u_{n\mathbf k'}\rangle$$
+   \det M^{(\cdots)}\;\det M^{(\cdots)} \Big]$$
 
-The second is Fukui-Hatsugai-Suzuki: a sum of plaquette phases, each in $(-\pi,\pi]$,
-which is an **exact integer on any mesh** where a Riemann sum of the first is not.
-
-Phase P16.
+A sum of plaquette phases, each taken in $(-\pi,\pi]$. A determinant of overlaps does not
+care how the eigensolver mixed a degenerate multiplet, and the sum is an **exact integer on
+any mesh** where a Riemann sum of the pointwise curvature is not.
 
 
 ```python
@@ -78,10 +72,10 @@ print("|det M|  k = 0.4 -> -0.5  no wrap      %.10f   <- wrong, and smooth"
 
 ## The Chern number is an integer, not nearly one
 
-The Haldane model, where the answer is known. The lattice sum returns 1 to fifteen
-decimals on a 6x6 mesh; the velocity-operator (Kubo) route, which is `jacfwd` of $H(k)$
-and gives a smooth pointwise $\Omega(k)$, is still 1e-3 off on 24x24. Both are
-registered — one for the invariant, one for the picture.
+The Haldane model, where the answer is known. The lattice sum returns 1 to fifteen decimals
+on a 6x6 mesh; the Kubo route, which gives a smooth pointwise $\Omega(\mathbf k)$ and sums
+it as an ordinary Riemann sum, is still 1e-3 away on 24x24. Both are available, one for the
+invariant and one for the picture.
 
 
 ```python
@@ -147,12 +141,13 @@ fig.suptitle("Haldane model: the same curvature, two constructions", fontsize=10
 
 ## Z2 by the flow of Wannier charge centres
 
-With time reversal the Chern number vanishes and what is left is a $\mathbb{Z}_2$. Pump
-one half of the zone and watch the Wannier centres of the occupied bands: in the
-topological phase they switch partners, so any horizontal reference line is crossed an
-odd number of times. `gap_step` — how far the largest-gap reference line moves in one
-step — is this route's own diagnostic, and it is the number to read before believing the
-integer.
+With time reversal the Chern number vanishes and what is left is a $\mathbb{Z}_2$
+invariant. Pump one half of the zone and watch the Wannier centres of the occupied bands:
+in the topological phase they switch partners, so any horizontal reference line is crossed
+an odd number of times, and in the trivial phase they return to themselves. The number to
+read before believing the integer is how far the largest-gap reference line moves in one
+pumping step: if the centres move faster than the mesh resolves, the crossing count is not
+trustworthy.
 
 
 ```python
@@ -200,11 +195,11 @@ fig.suptitle("Kane-Mele: the centres switch partners only in the topological pha
 
 ## A second, independent route: parities at the TRIM
 
-Where the crystal has an inversion centre, Fu and Kane's product of parity eigenvalues
-over the time-reversal-invariant momenta gives the same invariant from **eight
-diagonalisations and no mesh**. Running both wherever both apply is the check — first on
-a 3D lattice Dirac model whose four phases are known in closed form, then on silicon's
-real Kohn-Sham states.
+Where the crystal has an inversion centre, Fu and Kane's product of parity eigenvalues over
+the time-reversal-invariant momenta gives the same invariant from **eight diagonalisations
+and no mesh at all**. Running both wherever both apply is the check: first on a 3D lattice
+Dirac model whose four phases are known in closed form, then on silicon's real Kohn-Sham
+states.
 
 
 ```python
@@ -276,20 +271,17 @@ print("\nsilicon's Berry curvature (6x6 plane at k3 = 0): Chern number %.1e, "
 
 ## The curvature as a map, not as an integer
 
-Everything above reads the curvature as a *flux* — the Fukui-Hatsugai-Suzuki lattice sum,
-which is an exact integer on any mesh. The other thing anyone wants from $\Omega(\mathbf k)$
-is the **map**: where in the zone the curvature lives, which is what an anomalous-Hall or a
-valley-Hall argument is made of. That is the Kubo route,
+Everything above reads the curvature as a *flux*, which is what makes it an exact integer.
+The other thing anyone wants from $\Omega(\mathbf k)$ is the **map**: where in the zone the
+curvature lives, which is what an anomalous-Hall or a valley-Hall argument is made of. That
+comes from the Kubo expression,
 
 $$\Omega_n^{12}(\mathbf k) = -2\,\mathrm{Im} \sum_{m \neq n}
 \frac{A^{1}_{nm} A^{2}_{mn}}{(\varepsilon_n - \varepsilon_m)^2},
-\qquad A^{a}_{nm} = \langle \psi_n |\, \partial_{k_a} H - \varepsilon_n \partial_{k_a} S \,| \psi_m \rangle,$$
-
-and its velocity operator is one `jvp` of $H(\mathbf k)$ at a frozen sphere — no dense
-$H(\mathbf k)$ is ever formed, which for a plane-wave basis would be $O(n_{\rm pw}^2)$.
+\qquad A^{a}_{nm} = \langle \psi_n |\, \partial_{k_a} H - \varepsilon_n \partial_{k_a} S \,| \psi_m \rangle .$$
 
 **AlAs is the cell to show it on.** It has time-reversal symmetry but no inversion centre,
-so $\Omega(\mathbf k)$ is nonzero pointwise while the Chern number is zero — the map has
+so $\Omega(\mathbf k)$ is nonzero pointwise while the Chern number is zero: the map has
 structure and the integer does not.
 
 
@@ -346,47 +338,39 @@ plt.show()
     
 
 
-The map is what the Kubo route is for and the integer is what it is *not* for: its
-denominator $(\varepsilon_n-\varepsilon_m)^{-2}$ is singular at a degeneracy, and its
-Brillouin-zone sum is an ordinary Riemann sum — near zero above, where the FHS flux is zero
-to $10^{-15}$ because a determinant of overlaps cannot be anything else. Two things it
-reports rather than hides: the truncation of the sum over empty states
-(`BerryCurvature.truncation`, tightened by raising `nbnd`), and that `curvature_by_band` is
-gauge invariant only for a non-degenerate band — inside a degenerate multiplet only the sum
-over the members is defined. **Ultrasoft and PAW are refused for this route**, because the
-$\varepsilon_n \partial_k S$ term is identically zero for a norm-conserving dataset and so
-nothing that validates the rest can see whether its convention is right; `fhs` carries the
-augmentation correctly and runs on all three kinds.
+The map is what the Kubo route is for and the integer is what it is *not* for. Its
+denominator $(\varepsilon_n-\varepsilon_m)^{-2}$ blows up at a degeneracy and its
+Brillouin-zone sum is an ordinary Riemann sum, where the lattice flux above is zero to
+$10^{-15}$ because a determinant of overlaps cannot be anything else. Two things it reports
+rather than hides: how much of the sum over empty states is missing, tightened by raising
+`nbnd`, and that a per-band curvature is meaningful only for a non-degenerate band, since
+inside a degenerate multiplet only the sum over the members is defined. This route is
+available for norm-conserving datasets; the lattice flux carries the augmentation charge
+correctly and runs on all three kinds.
 
 Silicon is inversion-symmetric *and* time-reversal-symmetric, so its curvature vanishes
-pointwise rather than on average — the 6x6 plane above says so — and its parity product
+pointwise rather than only on average, which the plane above shows, and its parity product
 makes it the trivial insulator it is.
 
 ## Bismuthene, and what to do when the two routes disagree
 
-The hardest case this subpackage handles — two-component spinors, an ultrasoft *fully
-relativistic* dataset, PBE — is **not run here**, because an SCF and a topology run each
-build their own gigabyte-scale `Calculation` and doing both in one kernel peaks at
-7.8 GB. Measured in its own process on `bismuthene-soc-small.in` (`tests/data/qe/`, and
-`tests/regression/test_topology.py` carries it):
+The hardest case here, two-component spinors with a fully relativistic ultrasoft dataset
+under PBE, is quoted rather than run, since it peaks at 7.8 GB. Measured on
+`bismuthene-soc-small.in`:
 
 ```
 SCF, 7 irreducible k-points          -295.610317532 Ry     281 s   4.24 GB
-q^(s1s2)_ij(b -> 0) against qq_so     1.0e-16   (scale 0.1382)
 <u_m|S|u_n> - delta_mn                4.4e-15   (30 spinor bands)
 parity, 4 TRIM: nu = 0                delta = -1 at all four     133 s
 Wilson, 12 x 7 mesh: z2 = 1           gap_step = 0.197           786 s   4.53 GB
 ```
 
-The two disagree, which is the interesting outcome rather than an embarrassing one. **The
-parity route has no mesh** — four diagonalisations at exact points, parity eigenvalues
-coming out $\pm1$ to 1e-6 — and the Wilson route's own diagnostic says its mesh is not
-enough: the reference line moves a fifth of the way round the circle in a single pumping
-step. Where they disagree, the parity one is the answer.
+The two routes disagree, which is the interesting outcome rather than an embarrassing one.
+The parity route has no mesh: four diagonalisations at exact points, with parity
+eigenvalues coming out $\pm1$ to 1e-6. The Wilson route's own diagnostic says its mesh is
+too coarse, the reference line moving a fifth of the way round the circle in a single
+pumping step. Where they disagree like this, the parity answer is the one to take.
 
 ---
-**The detail:** `PLAN.md` §3 P16 — the alignment by Miller index, the zone-edge shift,
-ultrasoft $S$ between two k-points being $q_{ij}(b)$ rather than `qq`, and P47 for the
-Kubo route above, whose refusal used to name $d(\mathrm{vkb})/dk$ as belonging to P11 --
-P24 had already written it.
-**The tests:** `tests/regression/test_topology.py`, `tests/unit/test_topology_*.py`.
+The tests behind this notebook: `tests/regression/test_topology.py`,
+`tests/unit/test_topology_*.py`.

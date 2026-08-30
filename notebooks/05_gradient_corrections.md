@@ -1,12 +1,13 @@
 # Gradient corrections: PBE, revPBE and PBEsol
 
 An LDA functional sees only the density at a point; a GGA also sees its gradient. That
-costs one new term in the potential — a divergence — and buys most of what published
+costs one new term in the potential, a divergence, and buys most of what published
 plane-wave work is done with. PBE, revPBE and PBEsol run here on all three kinds of
-pseudopotential and match Quantum ESPRESSO to **≤6e-9 Ry**, with bands to **0.05 meV**.
+pseudopotential and match Quantum ESPRESSO to **6e-9 Ry or better**, with bands to
+**0.05 meV**.
 
 A GGA multiplies the local exchange energy by an enhancement factor of the reduced
-gradient, and the potential is the functional derivative of that -- which is where the
+gradient, and the potential is the functional derivative of that, which is where the
 second term comes from:
 
 $$E_x^{\rm GGA}[\rho] = \int \rho(\mathbf r)\,\epsilon_x^{\rm LDA}(\rho)\,
@@ -18,10 +19,8 @@ $$v_{xc}(\mathbf r) = \frac{\partial E_{xc}}{\partial \rho}
   - \nabla\cdot\frac{\partial E_{xc}}{\partial \nabla\rho}
   \;\equiv\; v_1 - \nabla\cdot\!\left(v_2 \nabla\rho\right)$$
 
-Only $E_{xc}$ is written down here; $v_1$ and $v_2$ are `jax.grad` of it.
-
-Phase P13. Inputs and references are committed under `tests/data/qe/`, so this runs
-without the vendored QE tree.
+Only the energy functional is written down; both potentials are obtained by
+differentiating it.
 
 
 ```python
@@ -79,7 +78,8 @@ for name in ("Si.pz-vbc.UPF", "Si.pbe-rrkj.UPF", "Si.pbe-n-kjpaw_psl.0.1.UPF"):
 
 All of them multiply the local exchange energy by an enhancement factor $F(s)$ of the
 reduced gradient $s$. The three differ only in how fast it saturates and where: revPBE
-raises the ceiling (better atomic energies), PBEsol lowers the slope (better solids).
+raises the ceiling, which improves atomic and molecular energies, and PBEsol lowers the
+slope, which improves lattice constants and surface energies of solids.
 
 
 ```python
@@ -106,12 +106,11 @@ ax.legend(); ax.grid(alpha=0.3); fig.tight_layout()
     
 
 
-## Only the energy is written down
+## The potential is the derivative of the energy
 
-QE's `XClib` carries hand-derived expressions for `v1` and `v2` beside each energy. Here
-the energy is the only thing written down and both potentials are `jax.grad` of it — so
-a new functional is an energy expression and a registration, with no algebra to get
-wrong. The check is against QE's `pbex`, transcribed into this cell and nowhere else.
+Only the energy is written down, and $v_1$ and $v_2$ are obtained by differentiating it,
+so a functional is defined by one expression with no accompanying algebra. The cell below
+checks it against the closed form of the PBE exchange potential.
 
 
 ```python
@@ -144,16 +143,15 @@ for r, sig in ((0.05, 0.01), (0.5, 0.3), (2.0, 5.0)):
       2.00   5.00 |   0.011017096   0.011017096 |  -0.006647590  -0.006647590
 
 
-The second potential enters as $-\nabla\cdot(v_2\nabla\rho)$, a divergence taken on the
-FFT grid, which integrates to zero over the cell and so moves no charge — it only moves
-it around. On a PAW sphere the same term is a radial derivative plus an angular one, the
-quadrature grows by two multipoles, and the $\theta$ component is divided by
-$\sin\theta$ before projection.
+The second potential enters as $-\nabla\cdot(v_2\nabla\rho)$, a divergence, so it
+integrates to zero over the cell and moves no charge: it only redistributes it, sharpening
+the potential where the density is varying fastest. That is exactly where LDA is worst,
+which is why a GGA helps most at surfaces, in bonds and around light atoms.
 
 ## Against Quantum ESPRESSO
 
-Three pseudopotential kinds under PBE, then three functionals on the same
-norm-conserving cell.
+Three pseudopotential kinds under PBE, then three functionals on the same norm-conserving
+cell.
 
 
 ```python
@@ -206,10 +204,11 @@ for case, label in (("si2-nc-pbe", "PBE"), ("si2-nc-revpbe", "revPBE"),
 
 ## The bands, and what a gradient correction does not fix
 
-PBE moves silicon's bands by tens of meV against LDA and its gap by about 0.1 eV — still
-half of experiment's 1.17 eV. The band gap of a Kohn-Sham calculation is not the thing
-experiment measures, and no gradient correction repairs that; what PBE does repair is the
-energetics, which is why it is what structures and forces are computed with.
+PBE moves silicon's bands by tens of meV against LDA and its gap by about 0.1 eV, still
+half of experiment's 1.17 eV. The band gap of a Kohn-Sham calculation is not the quantity
+experiment measures, and no gradient correction repairs that. What PBE does repair is the
+energetics, which is why it is what structures, binding energies and forces are computed
+with.
 
 
 ```python
@@ -248,6 +247,4 @@ print("PBE gap: %.3f eV   (experiment 1.17 eV)" % bands.gap(8))
 
 
 ---
-**The detail:** `PLAN.md` §3 P13 — the four functional slots, `gradcorr` on the grid and
-`PAW_gcxc_potential` on the spheres, and why only the energy is written down.
-**The tests:** `tests/regression/test_gga.py`, `tests/unit/test_xc.py`.
+The tests behind this notebook: `tests/regression/test_gga.py`, `tests/unit/test_xc.py`.

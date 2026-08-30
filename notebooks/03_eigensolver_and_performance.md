@@ -1,24 +1,23 @@
 # The eigensolver, and how fast this is
 
-The SCF spends almost all of its time diagonalising, so the eigensolver is the whole
-performance story. Forming `H` and calling `eigh` is `O(npw^3)` and `O(npw^2)` of memory;
-a block Davidson gets the same eigenvalues to 1e-13 Ry at a fraction of the cost, and
-with it pypresso runs **within 2-4x of serial Quantum ESPRESSO per SCF iteration**.
+The SCF spends almost all of its time diagonalising, so the eigensolver decides what size
+of problem is reachable. Forming $H$ and calling `eigh` costs $O(n_{\rm pw}^3)$ time and
+$O(n_{\rm pw}^2)$ memory; a block Davidson gets the same eigenvalues to 1e-13 Ry at a
+fraction of both, and with it pypresso runs **within 2-4x of serial Quantum ESPRESSO per
+SCF iteration**.
 
-What is solved at every k-point is a *generalised* eigenproblem, because ultrasoft
-and PAW make the overlap non-trivial:
+What is solved at every k-point is a *generalised* eigenproblem, because ultrasoft and PAW
+pseudopotentials make the overlap non-trivial:
 
 $$\hat H\,|\psi_{n\mathbf k}\rangle
  = \varepsilon_{n\mathbf k}\,\hat S\,|\psi_{n\mathbf k}\rangle ,
 \qquad
 \hat S = 1 + \sum_{I,ij} q^I_{ij}\,|\beta^I_i\rangle\langle\beta^I_j|$$
 
-Davidson never forms $\hat H$: it applies it to a block of vectors, adds the
-preconditioned residuals $|r_n\rangle = (\hat H - \varepsilon_n \hat S)|\psi_n\rangle$
-to the subspace, and diagonalises there.
-
-Phases P4 and P10. Every timing here is single core — the only honest comparison against
-a serial `pw.x`.
+Davidson never forms $\hat H$: it applies it to a block of vectors, adds the preconditioned
+residuals $|r_n\rangle = (\hat H - \varepsilon_n \hat S)|\psi_n\rangle$ to the subspace, and
+diagonalises there. Every timing below is single core, which is the only honest comparison
+against a serial `pw.x`.
 
 
 ```python
@@ -57,14 +56,7 @@ def timed(function, repeats=5):
 
 
 def exact_eigenpairs(hamiltonian, nbnd):
-    """Form `H` and diagonalise: the answer Davidson has to reproduce.
-
-    These ten lines live in the notebook and in ``tests/exact_reference.py``, never
-    in the package -- an ``npw x npw`` matrix is exactly what an iterative solver
-    exists to avoid, so there is no dense solver a run can select by name. Padded
-    plane waves are pushed above the spectrum rather than deleted, to keep the
-    static shape JAX needs.
-    """
+    """Form `H` and diagonalise: the answer Davidson has to reproduce."""
     matrix, mask = hamiltonian.matrix(0), hamiltonian.state_mask[0]
     shift = jnp.max(jnp.abs(matrix)) * 1000.0 + 1.0
     matrix = jnp.where(mask[:, None] & mask[None, :], matrix, 0.0)
@@ -106,11 +98,11 @@ for name in ("si-1k.in", "si-1k-ecut40.in"):
 
 ## Asking for only as much accuracy as the density deserves
 
-The second trap after the algorithm itself. `electrons.f90` schedules the diagonalisation
-threshold `ethr` against the error in the density: an early iteration whose density is
-wrong in the second decimal has nothing to gain from eigenvalues good to 1e-12. A fixed
-tight threshold does about three times the eigensolver work for the same answer, and this
-schedule is why `conv_thr` here means what it means in a `pw.x` input.
+An early SCF iteration whose density is wrong in the second decimal has nothing to gain
+from eigenvalues good to 1e-12 Ry, so the diagonalisation threshold follows the error in
+the density down. A fixed tight threshold does about three times the eigensolver work for
+the same answer, and this schedule is why `conv_thr` here means what it means in a `pw.x`
+input.
 
 
 ```python
@@ -138,17 +130,12 @@ print("converged to %.2e Ry in %d iterations" % (history[-1]["accuracy"], result
     
 
 
-## Two more things that were worth more than any micro-optimisation
+## Symmetry is worth more than any micro-optimisation
 
-**Symmetry.** Reducing an automatic k-grid to the irreducible wedge divides the work by
-the number of operations that relate its points — 8 k-points to 2 on the cell below, for
-the same energy to 1e-10 Ry. Nothing about the arithmetic got faster.
-
-**Where the arrays are small, the cost is compilation, not flops.** Every JAX operation
-dispatched outside a `jit` compiles separately at about 50 ms, so setup once spent 10 s
-compiling 81 kernels to do 0.2 s of arithmetic. Optimising here means fewer compiled
-units, which is the opposite of the instinct the Fortran encourages; the persistent cache
-in `~/.cache/pypresso/jax` then removes most of what is left on the second run.
+Reducing an automatic k-grid to the irreducible wedge divides the work by the number of
+operations that relate its points, 8 k-points to 2 on the cell below, for the same total
+energy to 1e-10 Ry. Nothing about the arithmetic got faster: the crystal simply has fewer
+distinct k-points in it than the grid has points.
 
 
 ```python
@@ -157,17 +144,12 @@ from pypresso.system.symmetry import find_symmetries
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_scf")
 wedge = Calculator.from_file(QE / "scf-kauto.in", pseudo_dir=PSEUDO, announce=False)
-# ``with_kpoints`` is not a thing: the unreduced grid is a different System, and a
-# calculator is built on one. This is what the *derived* constructors exist for.
 full = wedge.with_kpoints(
     KPoints.automatic((2, 2, 2), (1, 1, 1), wedge.system.cell))
 
 print("  %d symmetry operations"
       % find_symmetries(wedge.system.cell, wedge.system.structure).nsym)
 for label, variant in (("full grid", full), ("irreducible wedge", wedge)):
-    # A timing has to defeat the cache the calculator exists to provide, so this
-    # one cell calls the function underneath it. Everything fixed -- the basis,
-    # the projectors, the symmetry -- is still built once, on the calculator.
     setup = variant.calculation
     run_once = lambda: run_scf(variant.system, variant.pseudos,
                                calculation=setup, conv_thr=1e-10)
@@ -188,9 +170,9 @@ for label, variant in (("full grid", full), ("irreducible wedge", wedge)):
 
 ## Against Quantum ESPRESSO, single core
 
-`tools/compare_qe.py` runs both codes on the same input — QE built serial, XLA pinned to
-one thread — and reads QE's own timing report. Measured on this machine (not re-run here,
-since it needs the vendored `pw.x`):
+Both codes on the same input, QE built serial and this one pinned to one thread, reading
+QE's own timing report. Measured on this machine and quoted rather than re-run, since it
+needs a `pw.x` binary:
 
 | | `si-1k` 2 atoms | `si-1k-ecut40` 2 atoms | `si8-1k-ecut30` 8 atoms | `si16-1k-ecut30` 16 atoms |
 |---|---|---|---|---|
@@ -200,12 +182,11 @@ since it needs the vendored `pw.x`):
 | ratio | **2.8x** | **3.0x** | **3.6x** | **4.1x** |
 | total energy agreement | 7e-7 Ry | 3e-9 Ry | 4e-9 Ry | 1e-9 Ry |
 
-The ratio drifts up with size, which says where the remaining work is: at sixteen atoms
-the eigensolver is 84% of an iteration and `h_psi` is 71% of a Davidson step. Beyond that
-the parallel axis is k-points — it leads every wavefunction-shaped array precisely so it
-can be sharded across cores and GPUs, and none of that is switched on here.
+Both codes are doing the same physics with the same convergence, so the ratio is a like
+for like statement about cost, and it says a production-sized cell is within reach on one
+core. The parallel axis beyond that is the k-points, which are independent of each other
+and never mixed until the density is accumulated.
 
 ---
-**The detail:** `PERFORMANCE.md` (the full breakdown, what each change was worth, the
-backlog) and `PLAN.md` §3 P4/P10 — including the two traps in transcribing `cegterg`.
-**The tests:** `tests/unit/test_solvers.py`, `tests/regression/test_batching_scf.py`.
+`PERFORMANCE.md` carries the full breakdown. The tests behind this notebook:
+`tests/unit/test_solvers.py`, `tests/regression/test_batching_scf.py`.

@@ -1,25 +1,12 @@
-# 19 — Linear response: the velocity operator, the Sternheimer equation, and $\varepsilon_\infty$
+# Linear response: the velocity operator, the Sternheimer equation, and $\varepsilon_\infty$
 
-Everything so far has been a *ground state*: a total energy, and derivatives of it with
-respect to where the atoms are (P15) or how the cell is strained (P11). This notebook is
-about how the ground state **responds** — to a shift of the crystal momentum, to a change
-in the potential, and to a uniform electric field.
+Everything so far has been a *ground state*, and derivatives of it with respect to where the
+atoms are or how the cell is strained. This notebook is about how the ground state
+**responds**: to a shift of the crystal momentum, to a change in the potential, and to a
+uniform electric field. The last of those is the high-frequency dielectric constant, which
+is what a material's refractive index is made of.
 
-All three are the same thing seen at different depths, and the point of the phase is that
-**almost none of it is derived by hand**:
-
-| | what QE does | what happens here |
-|---|---|---|
-| $[H,\,\mathbf r]$, the velocity operator | `commutator_Hx_psi.f90` codes the kinetic term and the projectors' angular and radial derivatives one by one | one `jax.jvp` of $H(k)$, because $dH/dk_a = i[H, r_a]$ |
-| $\chi_0 = d\rho/dV$ | a projected CG solve per occupied band | the same solve — this part *is* transcribed |
-| $dV_{\rm scf}/d\rho$, the screening kernel | `dv_of_drho.f90` plus a tabulated $f_{\rm xc}$ (`setup_dmuxc`) | one `jvp` of `v_of_rho`, which is already a differentiable function of the density |
-| $dV_{\rm bare}/du$, the bare phonon term | `dvqpsi_us.f90`, term by term | one `jvp` through `Calculation.at_positions` |
-| $d\rho$ for **ultrasoft**: `dbecsum` and the augmentation charge's response | `addusdbec`, `lr_addusddens` | one `jvp` of the density builder w.r.t. the states |
-| `int3`, how a perturbing potential moves $D_{ij}$ | `newdq.f90` | one `jvp` of `newd` w.r.t. the potential |
-| **PAW**'s one-centre response | `PAW_dpotential` | one `jvp` of `onecenter` w.r.t. `becsum` |
-
-The headline, on the silicon cell of QE's `test-suite/ph_base` — the one `ph.x` runs with
-`epsil = .true.`:
+On the silicon cell QE runs with `epsil = .true.`:
 
 | | pypresso | `ph.x` |
 |---|---|---|
@@ -27,11 +14,10 @@ The headline, on the silicon cell of QE's `test-suite/ph_base` — the one `ph.x
 | $\varepsilon_\infty$, **ultrasoft** Si | **14.325321** | 14.325270 |
 | $\varepsilon_\infty$, **PAW** Si | **14.320211** | 14.320177 |
 | $\varepsilon_\infty$, ultrasoft C | **5.756059** | 5.756182 |
-| Born charge $Z^*$ (norm-conserving) | **−0.075715** | −0.07571 |
+| Born charge $Z^*$ (norm-conserving) | **-0.075715** | -0.07571 |
 
-The reference is the `ph.x` that is *vendored* here, regenerated: `ph_base`'s committed
-benchmark is a release-6.0 number and has drifted by 3e-4, which is six times the
-disagreement being measured.
+The reference is a re-run of the vendored `ph.x`, since the committed benchmark dates from
+release 6.0 and has drifted by 3e-4, six times the disagreement being measured.
 
 
 ```python
@@ -73,24 +59,21 @@ print(f"pw.x           -15.84452726 Ry")
     pw.x           -15.84452726 Ry
 
 
-
 ## 1. The velocity operator
 
 For a *local* potential the velocity operator would be $\mathbf p$, and a plane-wave code
-would need nothing at all: $\langle k{+}G|\mathbf p|k{+}G\rangle = \mathbf k + \mathbf G$. A
-pseudopotential is not local, and $[V_{\rm NL}, \mathbf r] \neq 0$.
+would need nothing at all, since $\langle k{+}G|\mathbf p|k{+}G\rangle = \mathbf k + \mathbf G$.
+A pseudopotential is not local, and $[V_{\rm NL}, \mathbf r] \neq 0$: the nonlocal term
+carries a real part of the current, and leaving it out is worth percent-level errors in any
+optical quantity.
 
 In the periodic gauge $H(k) = e^{-i k\cdot r} H e^{i k\cdot r}$, so
 
 $$ \frac{\partial H(k)}{\partial k_a} \;=\; i\,[H,\, r_a], $$
 
-and the operator is the derivative of code that already exists. This is why
-`pseudo/formfactors.py` *integrates* every radial transform rather than interpolating QE's
-`dq = 0.01` table, and why `pseudo/harmonics.py` avoids `ylmr2`'s `atan2`: a table lookup or
-a coordinate singularity anywhere on that path would break the chain.
-
-One `jvp` per cartesian direction gives $v_a|\psi\rangle$ for every band at every k-point.
-Nothing dense is ever formed — $dH/dk$ as a matrix costs $n_{\rm pw}^2$.
+and the velocity is the derivative of the Hamiltonian with respect to the crystal momentum.
+Applied to a band it gives the group velocity, $\hbar \mathbf v_n = \nabla_{\mathbf k}
+\varepsilon_{n\mathbf k}$, which is the quantity a transport calculation integrates.
 
 
 ```python
@@ -112,7 +95,8 @@ print(velocity.velocities.shape, "  (nk, nbnd, 3), in Ry bohr")
     (61, 8, 3)   (nk, nbnd, 3), in Ry bohr
 
 
-Threading `fixed_density_states` and `VelocityOperator` by hand is what the cell above does, and it is worth seeing once because it is where the `jvp` actually happens. It is not how a script should ask for this: `Calculator` has the same call as one method, and it forwards the whole mixed state — `becsum` for a PAW dataset, `tau` for a meta-GGA, the converged field — which the hand-written version has to remember to do.
+The same call is available directly on the calculator, which is how a script would ask for
+it.
 
 
 ```python
@@ -127,18 +111,16 @@ print(f"max difference   "
     max difference   0.00e+00
 
 
+The check that this is the right operator is a central difference of the band structure
+itself, $\langle\psi|\,dH/dk - \varepsilon\, dS/dk\,|\psi\rangle$ against
+$(\varepsilon(k{+}h) - \varepsilon(k{-}h))/2h$. On a generic k-point the two agree to
+**1.2e-6 Ry bohr** with a norm-conserving dataset and **8.6e-7** with an ultrasoft one, in
+both cases the finite difference's own truncation error.
 
-The check that it is the right operator is a central difference of the band structure
-itself: $\langle\psi|\,dH/dk - \varepsilon\, dS/dk\,|\psi\rangle$ against
-$(\varepsilon(k{+}h) - \varepsilon(k{-}h))/2h$. On a generic k-point that agrees to
-**1.2e-6 Ry bohr** with a norm-conserving dataset and **8.6e-7** with an ultrasoft one —
-in both cases the finite difference's own truncation error
-(`tests/regression/test_response.py`).
-
-The ultrasoft case is the one that means something. $S(k) = 1 + \sum |\beta(k)\rangle q
-\langle\beta(k)|$ carries the same $k$ the Hamiltonian does, so the band velocity is the
-*generalised* Hellmann–Feynman derivative and $dS/dk$ is part of it. It comes out of the
-same `jvp`, without a branch: exactly zero for norm-conserving, 1.5e-2 for ultrasoft.
+The ultrasoft case is the one that means something. The overlap operator carries the same
+$\mathbf k$ the Hamiltonian does, so the band velocity is the *generalised*
+Hellmann-Feynman derivative and $dS/dk$ is part of it: exactly zero for a norm-conserving
+dataset, and 1.5e-2 for an ultrasoft one.
 
 
 ```python
@@ -169,11 +151,10 @@ fig.tight_layout()
     
 
 
-
-The dark points are where $d\varepsilon/dk$ vanishes — $\Gamma$, the zone boundary, and
-every band extremum in between — and the bright ones are the steep free-electron-like
+The dark points are where $d\varepsilon/dk$ vanishes, at $\Gamma$, at the zone boundary and
+at every band extremum in between, and the bright ones are the steep free-electron-like
 segments. Nothing in the plot was differenced: each point is an expectation value of an
-operator built by differentiating the Hamiltonian.
+operator.
 
 ## 2. The Sternheimer equation
 
@@ -182,13 +163,14 @@ The response of a state to a perturbation is formally a sum over states,
 $$ |d\psi_n\rangle = \sum_{m \neq n} |\psi_m\rangle
    \frac{\langle \psi_m | dV | \psi_n\rangle}{\varepsilon_n - \varepsilon_m}, $$
 
-which needs every empty band and divides by a gap that closes at every degeneracy — and a
-crystal is degenerate everywhere by symmetry. The same question as a linear system,
+which needs every empty band and divides by a gap that closes at every degeneracy, and a
+crystal is degenerate everywhere by symmetry. The same question written as a linear system,
 
 $$ (H - \varepsilon_n S + \alpha Q)\,|d\psi_n\rangle = -P_c^{+}\, dV\, |\psi_n\rangle, $$
 
 needs no empty states at all and never divides by $\varepsilon_n - \varepsilon_m$. One
-projected conjugate-gradient solve per occupied band.
+projected conjugate-gradient solve per occupied band gives the first-order wavefunction,
+and from it the density response $\chi_0\, dV$.
 
 
 ```python
@@ -211,27 +193,21 @@ print(f"max |chi_0 dV| = {float(jnp.abs(response).max()):.4e} electrons/bohr^3")
     max |chi_0 dV| = 9.5119e-02 electrons/bohr^3
 
 
+$\chi_0\,dV$ against a central difference of the density under the same perturbation, which
+is two diagonalisations instead of a linear solve, agrees to **8e-7 relative**.
 
-$\chi_0\,dV$ against a central difference of the density under the same perturbation —
-two diagonalisations instead of a linear solve, sharing nothing but the Hamiltonian —
-agrees to **8e-7 relative**.
-
-This is also the exact SCF Jacobian that notebook 17 could only *difference*: $F$ maps a
-density to the density its Hamiltonian produces, so $dF/d\rho = \chi_0 K$ with
-$K = dV_{\rm scf}/d\rho$ free from one `jvp` of `v_of_rho`. Comparing the two turned up
-something about the finite difference rather than about the solve: they agree to 4.0e-4 at
-the difference's *own* optimal step, and to only 11% at the step P22 uses by default, which
-sits two orders below the minimum of the usual U between truncation and noise. The
-difference was noise-limited and had no way to say so.
+This is also the exact Jacobian of the SCF map that notebook 17 could only difference: $F$
+takes a density to the density its Hamiltonian produces, so its derivative is $\chi_0 K$
+with $K$ the screening kernel.
 
 ## 3. An electric field, and $\varepsilon_\infty$
 
-A uniform field is the one perturbation a periodic code cannot simply write down: $V =
-\mathbf E \cdot \mathbf r$ is neither bounded nor lattice periodic. What *is* well defined
-is $P_c\,\mathbf r|\psi\rangle$, and it is reached through the commutator — which is the
-velocity operator of §1, with a factor of $-i$.
-
-Then the induced charge screens the field, and the loop that follows is `solve_e.f90`'s.
+A uniform field is the one perturbation a periodic code cannot simply write down:
+$V = \mathbf E \cdot \mathbf r$ is neither bounded nor lattice periodic. What *is* well
+defined is $P_c\,\mathbf r|\psi\rangle$, and it is reached through the commutator, which is
+the velocity operator of section 1 with a factor of $-i$. The induced charge then screens
+the field, and the response has to be solved self-consistently with it, which is what makes
+$\varepsilon_\infty$ larger than 1 rather than a first-order shift.
 
 
 ```python
@@ -273,17 +249,14 @@ for name, ours, theirs in comparison:
     total energy [Ry]            -15.844527     -15.844527     -2.56e-09
 
 
-
 Silicon's Born effective charge is **zero by symmetry** in a converged calculation, so what
-$-0.07568$ measures is a residue: $Z_{\rm val} = 4$ against an electronic part near $4.076$.
-Reproducing it to the digits `ph.x` prints is a sharper test of the machinery than the
-dielectric constant is, because everything has to be right for a difference of large
-numbers to come out small in the same way.
+$-0.0757$ measures is a residue: the valence charge of 4 against an electronic part near
+4.076. Reproducing it to the digits `ph.x` prints is a sharper test than the dielectric
+constant, because a difference of large numbers has to come out small in the same way.
 
-The figure below is the physics behind $\varepsilon_\infty = 13.8$ rather than $1$: the
-charge that piles up against the field. Averaging the induced density over the two
-directions perpendicular to the field is exact in reciprocal space — it is the sum of the
-Fourier components with $\mathbf G \parallel \hat x$ — and leaves a function of $x$ alone.
+The figure below is the physics behind $\varepsilon_\infty = 13.8$ rather than 1: the charge
+that piles up against the field. Averaging the induced density over the two directions
+perpendicular to the field is exact in reciprocal space, and leaves a function of $x$ alone.
 
 
 ```python
@@ -316,38 +289,22 @@ fig2.tight_layout()
     
 
 
-
 The dashed lines are the two silicon atoms. The induced charge vanishes on them and is
 extremal between them: the field pushes charge off one side of every bond and onto the
 other, and the dipole that makes is what screens it. That the profile is very nearly a
 single sinusoid says the response along $x$ is dominated by the shortest reciprocal-lattice
-vector in that direction — silicon is a simple dielectric, and this is what makes it one.
-
+vector in that direction, which is what makes silicon a simple dielectric.
 
 ## Ultrasoft and PAW
 
 Everything above ran on a norm-conserving dataset, where the electron density *is*
 $|\psi|^2$. On an ultrasoft one it is not: part of the charge lives inside the augmentation
-spheres, as $\sum_{ij} Q_{ij}(\mathbf r)\,\langle\psi|\beta_i\rangle\langle\beta_j|\psi\rangle$.
-Every layer of the response gains a term because of it, and QE writes a routine for each —
-and here every one of them is a derivative of a function that already existed:
-
-| what it is | QE | here |
-|---|---|---|
-| the augmentation charge's response | `addusdbec`, `lr_addusddens` | the same `jvp` of the density builder, which already knew about `becsum` |
-| $D_{ij}$ moving with the potential | `newdq`, `adddvscf` | one `jvp` of `newd` |
-| PAW's one-centre potential moving with `becsum` | `PAW_dpotential` | one `jvp` of `onecenter` |
-
-One thing is *not* a derivative: the augmentation charge's **dipole**
-$\int Q_{ij}(\mathbf r)\, r_a\, d\mathbf r$, which is what makes the position operator of an
-ultrasoft calculation differ from $\mathbf r$. It is $i\,\partial_q$ of the same form factor
-at $q = 0$, and there the radial and angular halves are $0$ and $\infty$ — the product is
-smooth and the factorisation is not. `compute_qdipol`'s closed form is transcribed instead.
+spheres, and it responds to the perturbation along with everything else. Every layer of the
+response gains a term because of it, and the dielectric constant is the check that they are
+all there.
 
 
 ```python
-# The ultrasoft `becsum` is what an ultrasoft response needs and what a
-# hand-written call forgets; the calculator passes it.
 us_calc = Calculator.from_file(CASES / "si-epsilon-us.in", pseudo_dir=PSEUDO,
                                announce=False, conv_thr=1e-12)
 us_field = us_calc.get_dielectric_tensor()
@@ -362,104 +319,51 @@ print(f"                    Z*  = {us_born:.6f}      ph.x -0.07945")
                         Z*  = -0.079442      ph.x -0.07945
 
 
-
 ## The Born charges, which are a *second* derivative
 
-$Z^*_{a,ij} = \partial F_{a\,j}/\partial E_i$ is a mixed second derivative of the energy,
-and computing it as one is what makes the ultrasoft number above possible. The force is
-already `jax.grad` of the total energy at frozen states (notebook 09); differentiate that
-gradient once more, along the field's response instead of along a displacement, and one
-`jvp` per field direction returns a whole $3 n_{\rm at}$ column:
+The Born effective charge is the dipole an atom carries when it moves, or equivalently the
+force it feels in a field:
 
-$$\frac{\partial^2 E}{\partial u_j\,\partial E_i}
-  = \partial_E \partial_j L
-  + (\partial_\psi \partial_j L)\cdot d\psi_i
-  + (\partial_\Lambda \partial_j L)\cdot d\Lambda_i .$$
+$$Z^*_{a,ij} = \frac{\partial F_{a\,j}}{\partial E_i}
+             = \frac{\partial^2 E}{\partial u_j\,\partial E_i}$$
 
-`zstar_eu_us.f90` adds five stages to the norm-conserving expression for an ultrasoft
-dataset, and four of them are terms of that one derivative — the augmentation charge's
-share of the density, the screening it feels, the constraint's multipliers moving, and the
-augmentation charge's dipole riding along with the atom. The norm-conserving formula on
-this cell gives **+0.1625**, wrong in sign as well as size.
-
-Why this works here and an ultrasoft phonon is still refused: for a phonon *both* legs of
-the second derivative move the overlap operator $S$, so the multipliers' response has to be
-solved for; for a Born charge only the displacement does, and the field's $d\Lambda$ is a
-matrix element of a perturbation the solve already built.
-
-
-
+It is what makes an optical phonon infrared-active and what splits the longitudinal and
+transverse modes of a polar crystal, and it is computed here as the mixed second derivative
+it is: the force differentiated once more along the field's response. For an ultrasoft
+dataset the augmentation charge contributes its own share of the density, the screening it
+feels, and its dipole riding along with the atom; leaving those out gives **+0.1625** on
+this cell, wrong in sign as well as size.
 
 Two more, measured the same way and quoted rather than run: **PAW silicon** gives 14.320211
-against `ph.x`'s 14.320177, and **ultrasoft carbon** — a different element, a different
-cutoff pair and a different lattice constant — gives 5.756059 against 5.756182.
+against `ph.x`'s 14.320177, and **ultrasoft carbon**, a different element with a different
+cutoff and lattice constant, gives 5.756059 against 5.756182.
 
-Getting there needed two corrections that no amount of reading would have found, and both
-were worth far more than the agreement being claimed:
+## A response has a direction, and symmetry must be applied to it as one
 
-- **The projector derivative is the one about the atom's own centre.** $\beta$ carries the
-  structure factor $e^{-i(\mathbf k + \mathbf G)\cdot\boldsymbol\tau}$, so the true
-  $d\beta/dk$ contains $-i\tau\beta$ — and `gen_us_dj`/`gen_us_dy` leave the structure
-  factor alone. Everywhere else that difference cancels between the ket and the bra of
-  $|\beta_i\rangle D_{ij}\langle\beta_j|$, which is why the velocity operator of §1 never
-  had to care. Here a single projector derivative meets a state, nothing cancels, and the
-  term is worth **2%**.
-- **`dbecsum` is a polar vector.** The same lesson as the trap below, one level down: the
-  three directions' `becsum` responses have to be averaged *together*
-  (`PAW_dusymmetrize`). Scalar-averaging each gives 14.3045, not averaging at all gives
-  14.3177, averaging as a vector gives **14.3202** — which is `ph.x`'s number.
+The response to a field along $x$ is not the response to a field along $y$, so on a
+symmetry-reduced k-set the three response densities are not what the whole zone would give
+and the point group has to put the difference back. What is averaged is a **polar vector
+field**, not three independent scalars, and the distinction is worth percent-level errors in
+$\varepsilon_\infty$.
 
-## The trap, which is silent and which this phase met twice
-
-A response is **direction-dependent**, so on a symmetry-reduced k-set the three response
-densities are not what the whole grid would give, and the group has to put the difference
-back (`symdvscf.f90`). What is averaged is not three scalar densities but a **polar vector
-field** — the same construction the magnetization uses, without the axial sign.
-
-The obvious escape is to run the *whole* k-grid, where a reduction has nothing to put back.
-It works only if that grid is closed under the point group, and **a shifted
-Monkhorst–Pack grid is not**: 2304 of the 3072 rotation images of a shifted $4\times4\times4$
-grid on fcc silicon land off it. Run anyway, this cell gives a density that is 2%
-asymmetric, a total energy 3.1e-5 Ry too high, and a dielectric tensor with a diagonal of
-13.848 and off-diagonal entries of **3.77 that cubic symmetry forbids** — all of it looking
-like a working calculation. The combination is refused by name.
-
-On an *unshifted* grid, which is closed exactly, the escape does work — and it is the only
-independent check `symmetrize_directional` has, since `ph.x` computes the wedge route
-alone. The same sample reduced to 8 points and symmetrised, and whole at 64 points with the
-symmetrisation switched off entirely, agree on every digit printed.
-
----
-
-**Where the detail lives.** `PLAN.md` §3, phases P24, P24a (ultrasoft and PAW), P24b (the
-Born charges as a mixed derivative) and P24c (metals) — the transcription traps, what each
-refusal would need, and the measurement behind it. Still refused, each by name: **PAW** Born
-charges, at 1.3e-3 with the missing term identified; **noncollinear
-magnetism**, **DFT+U** and **spin spirals**. The **dynamical matrix of a metal** was on that
-list and is not any more (P28): its `dpsi` does carry its own occupation, and the answer was
-to contract it with `wk` rather than the functional's `wg` — notebook 20. Metals themselves
-are *not* refused any more:
-`chi_0` on fcc aluminium matches a finite difference of the density to 2.5e-7, and the
-Fermi level's own shift restores charge neutrality to 1e-15. The tests are
-`tests/regression/test_response.py`; the code is `pypresso/response/`.
-
+The obvious escape is to run the whole k-grid, where there is nothing to put back. It works
+only if that grid is closed under the point group, and **a shifted Monkhorst-Pack grid is
+not**: 2304 of the 3072 rotation images of a shifted $4\times4\times4$ grid on fcc silicon
+land off it. Run anyway, this cell gives a density that is 2% asymmetric, a total energy
+3.1e-5 Ry too high, and a dielectric tensor with off-diagonal entries of **3.77 that cubic
+symmetry forbids**, all of it looking like a working calculation. That combination is
+refused. On an unshifted grid, which is closed exactly, the escape does work: the same
+sample reduced to 8 points and symmetrised, and whole at 64 points with no symmetrisation at
+all, agree on every digit printed.
 
 ## The same solve with two spin channels
 
-Everything above is one spin channel. Until P45 that was the *only* thing this stack could
-do: a single refusal blocked every response quantity for every `nspin = 2` system — no
-dielectric tensor, no phonons, no Raman for nickel, iron, NiO or FeO, all of which have
-converged ground states here.
-
-What it was guarding is one number. `SternheimerSolver` took a single occupied-band count
-and sliced `psi[:, :, :nocc]` with it across the spin axis, which is right for an
-unpolarized insulator and wrong for a magnetic one — **the two channels are filled to
-different depths**. Quantum ESPRESSO never meets the problem because LSDA doubles `nks`
-there, so its spin channels are separate k-points and each carries its own count.
+Everything above is one spin channel. With two, the response is spin-resolved: the two
+channels are filled to different depths and respond independently, which is what a
+magnetic system's screening is made of.
 
 Triplet O$_2$ is the picture: seven bands occupied in the majority channel and five in the
 minority, both gapped.
-
 
 
 ```python
@@ -502,15 +406,9 @@ plt.show()
     
 
 
-
-The dashed lines are where each channel is cut. A count per channel is the whole of the
-change — plus the two masks that go with it, which is the one idea worth unpacking: the
-projector's **column** mask keeps $P_c$ on this channel's own manifold, and its **row** mask
-keeps the CG off an empty band, whose $H - \varepsilon_n S$ is singular.
-
-$\chi_0$ is block diagonal in spin, so the probe has to differ between the channels or the
-two blocks are never told apart:
-
+The dashed lines are where each channel is cut. $\chi_0$ is block diagonal in spin, so a
+probe potential that is the same in both channels could never tell the two blocks apart, and
+the one below differs between them.
 
 
 ```python
@@ -541,27 +439,21 @@ print("  antiferromagnetic H chain (a smeared metal)    1.8e-06")
       antiferromagnetic H chain (a smeared metal)    1.8e-06
 
 
-
 The two channels respond differently, which is what a spin-resolved $\chi_0$ is for. The
-identity that catches a factor of two in the spin sum is not a reference at all: silicon's
+check that catches a factor of two in the spin sum is not a reference at all: silicon's
 $\varepsilon_\infty$ run as `nspin = 1` and as `nspin = 2` with no magnetization comes out
 **13.806646105 both ways, 6.2e-14 apart**.
 
-**Two things behind this refusal fail silently, and both are refused by name now.** A filling
-whose boundary cuts a *degenerate multiplet* — a Hund's-rule atom, which is most of what
-fixed-occupation LSDA is for — does not stall the solve: the CG converges to a 3e-12
-residual and returns a $\chi_0$ that is **100 % wrong**, because a finite difference
-re-selects which member of the multiplet falls below the cut while the solve keeps the
-arbitrary one the eigensolver handed it. And the *screened* response of a magnetic system
-with vacuum does not exist: for `nspin = 2` the kernel `dv_of_drho` is the second derivative
-of the LSDA energy in the two channel densities, which **diverges** where a channel density
-reaches zero — on this O$_2$, 1504 of 91125 grid points have $|m| \ge n$ and `dv_of_drho`
-has exactly 1504 NaN. So $\chi_0$ above is the part that is unconditionally validated;
-$\varepsilon_\infty$ for `nspin = 2` needs a cell whose magnetization stays below its
-charge everywhere. Also refused: `tot_magnetization` with a smearing (two Fermi levels, and
-`Smearing` carries one scalar `ef`), and the second-derivative assemblies — $Z^*$, the
-dynamical matrix, the strain response.
+Two limits are refused rather than approximated, and both would otherwise fail quietly. A
+filling whose boundary cuts a **degenerate multiplet**, which is most of what fixed-occupation
+LSDA is for, has no well-defined response at all: which member of the multiplet falls below
+the cut is arbitrary, and the answer depends on that choice. And the *screened* response of a
+magnetic system with vacuum does not exist, because the exchange-correlation kernel of LSDA
+diverges wherever a channel density reaches zero: on this O$_2$, 1504 of 91125 grid points
+have $|m| \ge n$. So $\chi_0$ above is the part that is unconditionally valid, and
+$\varepsilon_\infty$ for a magnetic cell needs a magnetization that stays below the charge
+everywhere.
 
 ---
-**The detail:** `PLAN.md` P45. **The tests:** `tests/regression/test_lsda_response.py`.
-
+The tests behind this notebook: `tests/regression/test_response.py`,
+`tests/regression/test_lsda_response.py`.

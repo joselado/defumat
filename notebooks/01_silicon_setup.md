@@ -1,18 +1,19 @@
 # From a `pw.x` input file to a plane-wave basis
 
-What a plane-wave code does before it does any physics: read the input, build the cell,
-the k-points and the G-vectors, and cut the basis at the energy cutoff. Everything here
-is checked against the Quantum ESPRESSO output committed beside the same input —
+What a plane-wave code sets up before it computes anything: the cell, the k-points, the
+reciprocal lattice, and the sphere of plane waves the energy cutoff selects. Everything
+here is checked against the Quantum ESPRESSO output committed beside the same input,
 `test-suite/pw_scf/scf.in`, two-atom fcc silicon.
 
-A wavefunction at $\mathbf k$ is expanded in the plane waves inside a sphere, and
-in Rydberg units the cutoff is a length:
+A Bloch state at $\mathbf k$ is expanded in the plane waves inside a sphere, and in
+Rydberg units the cutoff is the square of a wavevector:
 
 $$\psi_{n\mathbf k}(\mathbf r) = \sum_{|\mathbf k + \mathbf G|^2 < E_{\rm cut}}
   c_{n\mathbf k}(\mathbf G)\, e^{i(\mathbf k + \mathbf G)\cdot\mathbf r}$$
 
-Phases P0-P2. Notebook 02 runs the SCF on top of it, and notebook 28 is about the
-`Calculator` used here.
+The cutoff is the only convergence parameter of the basis: raising it adds shells of
+$\mathbf G$ and nothing else. Notebook 02 runs the SCF on top of this basis, and notebook
+28 is about the `Calculator` used here.
 
 
 ```python
@@ -76,14 +77,15 @@ print("k-points (cartesian, 2pi/alat) =\n%s\nweights = %s"
 
 ## The basis is a sphere, and it is a different sphere at every k-point
 
-The density lives on all G-vectors inside `ecutrho`; a wavefunction at k lives on those
-with $|k+G|^2 <$ `ecutwfc`. That set changes with k, so the arrays are padded to a common
-width `npwx` and carry a mask — a fixed shape is what lets the inner loop be compiled and
-batched, and the mask is what keeps the padding out of every sum.
+The density lives on all $\mathbf G$ inside `ecutrho`; a state at $\mathbf k$ lives on
+those with $|\mathbf k + \mathbf G|^2 <$ `ecutwfc`. Because the sphere is centred on
+$\mathbf k$ and the reciprocal lattice is not, the two k-points of this cell hold slightly
+different numbers of plane waves. That is a property of the crystal, not of the code: it
+is why a plane-wave total energy converges from above and why two k-points are never
+exactly equally well described at a finite cutoff.
 
 
 ```python
-# The calculator already owns the basis -- it is part of the fixed setup.
 basis = calc.calculation.basis
 gvectors, planewaves = basis.dense, basis.planewaves
 
@@ -121,9 +123,11 @@ ax.legend(fontsize=8); ax.grid(alpha=0.3); fig.tight_layout()
 
 ## What that basis can represent
 
-A sum over the G-vectors of the structure factor $S(G) = \sum_a e^{-iG\cdot\tau_a}$ is a
-delta function at each atom, band-limited to the cutoff. It is the sharpest object the
-basis holds, and how much it rings is the visual statement of what a cutoff costs.
+The structure factor $S(\mathbf G) = \sum_a e^{-i\mathbf G\cdot\tau_a}$ summed back over
+the $\mathbf G$ inside the cutoff is a delta function at each atom, band-limited to the
+basis. It is the sharpest object the basis holds, so the rings around each site are the
+visual statement of what a finite cutoff costs: a plane-wave calculation can never
+represent anything sharper than this.
 
 
 ```python
@@ -162,11 +166,10 @@ print("S(G=0) = %.1f  (the number of atoms)" % structure_factor[0].real)
 
 ## Against Quantum ESPRESSO
 
-Every one of these numbers is printed in `pw.x`'s output header, which makes the setup
-checkable before a single energy is computed. The reference is the vendored `pw.x` re-run
-rather than the shipped 2016 one: QE has since started forcing the FFT dimensions to be a
-multiple of the fractional translations' denominators, and silicon's grid went from 15^3
-to 16^3 because of it.
+Every one of these numbers is printed in `pw.x`'s output header, which makes the geometry
+checkable before a single energy is computed: the lattice vectors, the cell volume, the
+number of reciprocal lattice vectors inside `ecutrho`, the FFT dimensions that hold them,
+and the number of plane waves at each k-point.
 
 
 ```python
@@ -207,6 +210,5 @@ print("k-points match:        ",
 
 
 ---
-**The detail:** `PLAN.md` §3, phases P0-P2 — `ibrav` conventions, the FFT-dimension rules,
-gamma-only storage, and the `NINT` rounding trap in the Monkhorst-Pack fold.
-**The tests:** `tests/regression/test_geometry.py`, `tests/regression/test_basis.py`.
+The tests behind this notebook: `tests/regression/test_geometry.py`,
+`tests/regression/test_basis.py`.

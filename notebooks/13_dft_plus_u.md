@@ -1,17 +1,9 @@
 # DFT+U
 
 LDA and GGA are too happy with fractional occupation of a localised shell, which is why
-they make a metal out of an insulating transition-metal oxide. Dudarev's correction adds
-a penalty that is zero at every integer occupation and positive in between, so the SCF is
-pushed towards filled and empty orbitals.
-
-QE's `lda_plus_u_kind = 0`, read from the `HUBBARD` card, with `U`, `J0`, `alpha` and
-`beta` on `atomic`, `ortho-atomic` or `norm-atomic` projectors. Seven cases match Quantum
-ESPRESSO to **≤6.7e-9 Ry**, the Hubbard term itself to 4.6e-7 Ry, and `force_hub` — which
-is not transcribed, only differentiated through — to 4.8e-6 Ry/bohr.
-
-Dudarev's simplified rotationally-invariant functional, written in terms of the
-occupation matrix of each correlated shell:
+they make a metal out of an insulating transition-metal oxide. Dudarev's correction adds a
+penalty that is zero at every integer occupation and positive in between, so the SCF is
+pushed towards orbitals that are filled or empty rather than partly both:
 
 $$E_U = \sum_{I,\sigma} \frac{U^I - J^I_0}{2}\,
    \mathrm{Tr}\Big[ n^{I\sigma} \big( 1 - n^{I\sigma} \big) \Big],
@@ -20,12 +12,13 @@ n^{I\sigma}_{mm'} = \sum_{n\mathbf k} f_{n\mathbf k\sigma}
    \langle \psi_{n\mathbf k\sigma} | \varphi^I_{m'}\rangle
    \langle \varphi^I_{m} | \psi_{n\mathbf k\sigma}\rangle$$
 
-It is zero at every integer occupation and positive between, so its potential
-$v^{I\sigma} = \partial E_U / \partial n^{I\sigma}$ pushes empty levels up and full
-ones down. **Only $E_U$ is written here** and $v$ is `jax.grad` of it, which makes QE's
-`v_hubbard` a test rather than a second implementation.
+Its potential pushes empty levels up and full ones down by roughly $U/2$ each way, which
+is the Mott physics the underlying functional is missing.
 
-Phase P20.
+`U`, `J0`, `alpha` and `beta` are read from the `HUBBARD` card, on `atomic`,
+`ortho-atomic` or `norm-atomic` projectors. Seven cases match Quantum ESPRESSO to
+**6.7e-9 Ry or better**, the Hubbard term itself to 4.6e-7 Ry, and the Hubbard force to
+4.8e-6 Ry/bohr.
 
 
 ```python
@@ -92,25 +85,25 @@ for slot, kind in enumerate(setup.types):
     U Fe1-3d 4.3
     U Fe2-3d 4.3
     
-
-
     Fe1: 3d   U = 4.30 eV = 0.316044 Ry   (the card is in eV; Ry from here on)
     Fe2: 3d   U = 4.30 eV = 0.316044 Ry   (the card is in eV; Ry from here on)
 
 
 
     
-![png](13_dft_plus_u_files/13_dft_plus_u_1_2.png)
+![png](13_dft_plus_u_files/13_dft_plus_u_1_1.png)
     
 
 
-## Two traps in the word "atomic"
+## What "atomic" means, and why the choice matters
 
-`Hubbard_projectors = 'atomic'` still applies the overlap operator — the projectors are
-$S\varphi$, not $\varphi$. And the atomic orbitals are renormalised at read time in the
-**generalised** metric (`upf_check_atwfc_norm`), which `ortho-atomic` feels through the
-`4s` while `atomic` does not: nickel's `4s` and `3d` on the same atom are not orthogonal
-at a single k-point, and $O^{-1/2}$ over **all** `natomwfc` is what fixes that.
+The occupation matrix is defined by a projection, so the answer depends on what is
+projected onto. The projectors carry the overlap operator, $S\varphi$ rather than
+$\varphi$, since that is what an occupation is in a pseudopotential calculation. And the
+atomic orbitals of one atom are not orthogonal to each other at a single k-point: nickel's
+`4s` overlaps its `3d`. The `ortho-atomic` set removes that by orthogonalising over all the
+atomic orbitals in the cell, and the resulting occupations differ visibly from the plain
+atomic ones, which is why the choice is part of the definition of `U`.
 
 
 ```python
@@ -137,11 +130,11 @@ print("largest off-diagonal of <phi|S|phi>: %.4f"
     largest off-diagonal of <phi|S|phi>: 0.1857
 
 
-## The potential is `jax.grad` of the energy
+## The potential is the derivative of the energy
 
-$E_U$ is written down once and $v_{ns}$ is its gradient, so QE's `v_hubbard` becomes a
-**test** rather than a second implementation. Below, with `U`, `J0`, `alpha` and `beta`
-all switched on, against a random symmetric occupation matrix.
+$E_U$ is written down once and the potential is its derivative, with `U`, `J0`, `alpha` and
+`beta` all switched on, checked below against the closed form on a random symmetric
+occupation matrix.
 
 
 ```python
@@ -156,24 +149,19 @@ coefficients = coefficients_from_setup(check)
 rng = np.random.default_rng(0)
 block = rng.normal(size=(2, check.nslot, check.ldmx, check.ldmx))
 ns = jnp.asarray(0.5 * (block + block.transpose(0, 1, 3, 2)))
-print("max |jax.grad(E_U) - v_hubbard.f90| = %.3e"
+print("max |derivative of E_U  -  closed form| = %.3e"
       % np.abs(np.asarray(hubbard_potential(ns, coefficients))
                - qe_hubbard_potential(ns, check)).max())
-print("\n(The `nspin = 1` factor of two is on the *energy* and never on the potential --"
-      "\n one of three traps here that are silent when they are wrong.)")
 ```
 
-    max |jax.grad(E_U) - v_hubbard.f90| = 1.110e-16
-    
-    (The `nspin = 1` factor of two is on the *energy* and never on the potential --
-     one of three traps here that are silent when they are wrong.)
+    max |derivative of E_U  -  closed form| = 1.110e-16
 
 
 ## Against Quantum ESPRESSO
 
 Nickel, a metal where `U` is a perturbation, and antiferromagnetic FeO, which is what
-DFT+U exists for. Each is run twice: once with `U` set to 1e-8 eV — the null test, where
-every line of the machinery runs and must change nothing — and once for real.
+DFT+U exists for. Each is run twice: once with `U` set to 1e-8 eV, where the whole
+machinery runs and must change nothing, and once for real.
 
 
 ```python
@@ -210,16 +198,16 @@ for label, (result, reference) in runs.items():
                  result.total_energy - reference.total_energy, hubbard))
 ```
 
-      Ni, U -> 0              21.8 s   13 iterations
+      Ni, U -> 0               3.3 s   13 iterations
 
 
-      Ni, U = 3 eV, ortho     14.2 s   12 iterations
+      Ni, U = 3 eV, ortho      2.1 s   12 iterations
 
 
-      FeO, U -> 0            148.9 s   39 iterations
+      FeO, U -> 0             26.7 s   39 iterations
 
 
-      FeO, U = 4.3 eV        123.1 s   56 iterations
+      FeO, U = 4.3 eV         35.7 s   56 iterations
     
                                       E (Ry)           QE (Ry) difference     E_U (Ry)
     Ni, U -> 0                 -85.723399012                 -          -   0.00000000
@@ -230,9 +218,14 @@ for label, (result, reference) in runs.items():
 
 ## What the correction actually does to the occupations
 
-The eigenvalues of $n^{Is}$ are the occupations of the *natural* orbitals of the shell.
-Without `U` they sit wherever the band structure puts them; with it they are pushed to 0
-and 1 — which is the entire mechanism, and in FeO it is what opens the gap.
+The eigenvalues of the occupation matrix are the occupations of the *natural* orbitals of
+the shell. Without `U` they sit wherever the band structure puts them; with it they are
+pushed towards 0 and 1. That is the entire mechanism, and in FeO it is what opens the gap
+and turns a wrongly metallic calculation into the antiferromagnetic insulator the material
+is.
+
+Refused rather than approximated: the full Liechtenstein formulation, the intersite `V`,
+and a Hubbard `U` on a noncollinear density.
 
 
 ```python
@@ -272,9 +265,5 @@ for label in runs:
 
 
 ---
-**The detail:** `PLAN.md` §3 P20 — the two offsets a Hubbard manifold needs (`offsetU`
-into the Hubbard orbitals, `oatwfc` into *all* the atomic ones), `starting_ns_eigenvalue`
-for steering the SCF to a second solution, `force_hub` as `jax.grad` through projectors
-that move with the atoms, and what is refused by name (the full Liechtenstein
-formulation, the intersite `V`, `ns_nc`).
-**The tests:** `tests/regression/test_ldau.py`, `tests/unit/test_hubbard.py`.
+The tests behind this notebook: `tests/regression/test_ldau.py`,
+`tests/unit/test_hubbard.py`.

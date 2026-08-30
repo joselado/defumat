@@ -1,10 +1,8 @@
-# 27 — Excitons and TDDFT: the bootstrap kernel
+# Excitons and TDDFT: the bootstrap kernel
 
-Everything in notebook 19 was a **static** response, solved orbital by orbital with the
-Sternheimer equation. An *absorption spectrum* needs two things that construction does not
-give: a frequency axis, and the susceptibility as a **matrix** over reciprocal lattice
-vectors rather than as an operator. So this is the one place in pypresso where a sum over
-states earns its keep.
+An absorption spectrum is the imaginary part of the macroscopic dielectric function as a
+function of frequency, and getting it means building the independent-particle
+susceptibility as a **matrix** over reciprocal lattice vectors,
 
 $$\chi^0_{\mathbf{GG}'}(\omega)=\frac{1}{\Omega}\sum_{\mathbf k}\sum_{ij}
 \frac{(f_i-f_j)\,\rho^{ij}_{\mathbf G}\rho^{ij*}_{\mathbf G'}}
@@ -12,28 +10,29 @@ $$\chi^0_{\mathbf{GG}'}(\omega)=\frac{1}{\Omega}\sum_{\mathbf k}\sum_{ij}
 \qquad
 \rho^{ij}_{\mathbf G}=\langle u_i|e^{-i\mathbf G\cdot\mathbf r}|u_j\rangle$$
 
-and then the Dyson equation, with an exchange-correlation kernel that is not zero:
+and then solving the Dyson equation with an exchange-correlation kernel:
 
 $$\epsilon^{-1}=1+X\left(1-X-\tilde f_{\rm xc}X\right)^{-1},\qquad X=v^{1/2}\chi^0v^{1/2}$$
 
-The kernel here is the **bootstrap** of Sharma, Dewhurst, Sanna and Gross
-([PRL **107**, 186401 (2011)](https://arxiv.org/abs/1107.0199)), which is Elk's
-`fxctype = 210`. It is parameter-free and it is defined *by* the equation it feeds:
+The kernel decides whether the calculation can describe an **exciton**, a bound
+electron-hole pair. The one used here is the **bootstrap** of Sharma, Dewhurst, Sanna and
+Gross ([PRL **107**, 186401 (2011)](https://arxiv.org/abs/1107.0199)), which is
+parameter-free and defined *by* the equation it feeds:
 
 $$f^{\rm BS}_{\rm xc}=-\frac{\epsilon^{-1}(\mathbf q,0)\,v(\mathbf q)}{\epsilon_0(\mathbf q,0)-1},
 \qquad \epsilon_0=1-v\chi^0$$
 
-so the two are solved together until they stop moving. It diverges as $1/q^2$, and that is
-what binds an electron–hole pair. **Quantum ESPRESSO has no counterpart**: `TDDFPT/` is a
-Liouville–Lanczos solver with RPA and ALDA, with no bootstrap kernel and no Dyson equation
-in $\mathbf G$ space.
+so the two are solved together until they stop moving, which takes nine iterations on
+silicon. It diverges as $1/q^2$ as the wavevector goes to zero, and that long-ranged
+attraction is what binds the pair. Quantum ESPRESSO has no counterpart to it.
 
-**Headline number.** There is no other code's spectrum to compare against — Elk is
-all-electron LAPW where this is a pseudopotential plane wave — so the validation is an
-*identity*: the same $\epsilon_M(0)$ reached by this sum over states plus a Dyson
-inversion, and by the projected conjugate-gradient solve of notebook 19, which shares no
-machinery with it and never sees an empty state. They agree to **1.3e-2 on a constant of
-22**, and what is left is the band truncation, which is reported rather than tuned away.
+**How this is validated.** There is no other code's spectrum to compare against, since an
+all-electron LAPW spectrum is not the same number as a pseudopotential plane-wave one. The
+check is an identity instead: the same $\epsilon_M(0)$ reached by this sum over states plus
+a Dyson inversion, and by the projected conjugate-gradient solve of notebook 19, which
+shares no machinery with it and never sees an empty state. They agree to **1.3e-2 on a
+constant of 22**, and what is left is the truncation of the sum over empty bands, which is
+reported rather than tuned away.
 
 
 ```python
@@ -65,10 +64,8 @@ print(f"{system.kpoints.nk} k-points, E = {float(scf.total_energy):.8f} Ry")
 
 ## The spectrum, three kernels
 
-`run_absorption` is the one-call entry point and does everything: a fixed-density run with
-empty states, `chi_0`, and the Dyson equation. But `chi_0` is the whole cost and the kernel
-is nearly free, so comparing kernels means building it **once** and solving the Dyson
-equation three times — which is also the clearest way to see where the expense is.
+Building $\chi^0$ is the whole cost and the kernel is nearly free, so the three spectra
+below share one $\chi^0$ and differ only in the Dyson equation solved on top of it.
 
 
 ```python
@@ -120,10 +117,10 @@ for kernel in ("rpa", "alda", "bootstrap"):
 
 ## The figure
 
-An attractive kernel moves oscillator strength **downhill**. Silicon has no *bound*
-exciton — there is no peak below the gap to find — so what shows here is the
-redistribution, which is what the bootstrap paper's silicon panel shows too (an enhanced
-$E_1$ shoulder at the expense of $E_2$).
+An attractive kernel moves oscillator strength **downhill**, towards the absorption edge.
+Silicon has no bound exciton, so there is no peak below the gap to find; what shows here is
+the redistribution, an enhanced $E_1$ shoulder at the expense of $E_2$, which is what the
+bootstrap paper's silicon panel shows.
 
 
 ```python
@@ -166,26 +163,24 @@ for name in style:
     
 
 
-The cut has to be **common**. Measuring each spectrum's weight below *its own* maximum
-moves the window with the spectrum and reverses the answer — 0.594 for the bootstrap
-against 0.606 for RPA on its own peak, and 0.643 against 0.606 on a shared one.
+The energy window the weight is measured in has to be **common** to all three spectra.
+Measuring each one below its own maximum moves the window with the spectrum and reverses
+the answer.
 
-ALDA moves weight too, and it would be wrong to say otherwise. What it cannot do is
-*bind*, and the reason is structural rather than a matter of size — see below.
+ALDA moves weight too, and it would be wrong to say otherwise. What it cannot do is bind,
+and the reason is structural rather than a matter of size.
 
 ## The identity that certifies it
 
-Two routes to $\epsilon_M(0)$ that share the ground state and nothing else. The
-sum over states builds a matrix from occupied–empty pairs and inverts a Dyson equation;
-the Sternheimer route never forms a matrix, never sees an empty state, and solves
-$(\hat H-\epsilon_n\hat S)|\Delta\psi\rangle=-\hat P_c\,\mathbf r|\psi\rangle$ by
-conjugate gradient.
+Two routes to $\epsilon_M(0)$ that share the ground state and nothing else. The sum over
+states builds a matrix from occupied-empty pairs and inverts a Dyson equation; the
+Sternheimer route never forms a matrix, never sees an empty state, and solves
+$(\hat H-\epsilon_n\hat S)|\Delta\psi\rangle=-\hat P_c\,\mathbf r|\psi\rangle$ by conjugate
+gradient.
 
-**The pairing is the content of the check.** `dielectric_tensor`'s screening kernel is one
-`jvp` of `v_of_rho`, so it is Hartree *plus* $f_{xc}$: it is the **ALDA** answer, not the
-RPA one. Comparing an RPA sum over states against it is not an identity at all, and the
-residue — six percent here — looks exactly like band truncation. Hence the
-`screening` switch.
+The two kernels have to match for the comparison to mean anything. The static route's
+screening includes $f_{xc}$, so it is the ALDA answer and not the RPA one, and comparing an
+RPA sum over states against it leaves a residue that looks exactly like band truncation.
 
 
 ```python
@@ -233,10 +228,11 @@ print("not a convergence error. That is what the `screening` switch is for.")
 ## Why ALDA cannot bind, in one line of output
 
 The symmetrised kernel is $\tilde f_{xc}=v^{-1/2}f_{xc}v^{-1/2}$. ALDA's $f_{xc}$ is
-**finite** at $\mathbf q=0$ while $v$ **diverges**, so its head and wings vanish
-identically — the optical limit never feels it. The bootstrap's does not vanish, because
-its numerator carries $v(\mathbf q)$ itself. That is the entire difference between the two,
-and it is a statement about shape rather than about magnitude.
+**finite** at $\mathbf q=0$ while the Coulomb interaction $v$ **diverges**, so its head and
+wings vanish identically and the optical limit never feels it. The bootstrap's do not
+vanish, because its numerator carries $v(\mathbf q)$ itself. That is the entire difference
+between the two, and it is a statement about shape rather than about magnitude: no
+adiabatic local kernel binds an exciton, however strong it is made.
 
 
 ```python
@@ -263,27 +259,23 @@ print("                   broadening=0.012, scissor=0.05)")
                        broadening=0.012, scissor=0.05)
 
 
-## Two traps, both of which leave a perfectly plausible spectrum
+## Two things that leave a perfectly plausible spectrum
 
-**$\epsilon_M$ is the inverse of the $3\times3$ head of $\epsilon^{-1}$, not the head of
-the inverse of the whole matrix.** Elk writes both from one array thirty lines apart
-(`EPSILON_TDDFT_ij.OUT` against `EPSM_TDDFT_ij.OUT`). Taking the wrong one is not an
-approximation: in RPA it is *identically* the no-local-field result — smooth, positive,
-right peaks, and 9% too large.
+**$\epsilon_M$ is the inverse of the $3\times3$ head of $\epsilon^{-1}$, not the head of the
+inverse of the whole matrix.** The two are different physics: the second is exactly the
+no-local-field result, smooth, positive, with the right peaks and 9% too large. Local field
+effects are the difference between them.
 
-**Band truncation has no refusal.** An undersized sum gives a spectrum that looks fine, so
-`static_residual` measures it against the band-complete Sternheimer route. It is
-kernel-matched *and* scissor-matched, because differencing two routes measures every way
-they differ: a 0.05 Ry scissors shift turns a `+0.013` residual into `-3.46` if the other
-side does not have one.
+**Truncating the sum over empty bands has no symptom.** An undersized sum gives a spectrum
+that looks fine, so the residue against the band-complete static route is reported. It has
+to be compared kernel for kernel and scissors for scissors, since differencing two routes
+measures every way they differ: a 0.05 Ry scissors shift on one side alone turns a residual
+of $+0.013$ into $-3.46$.
 
 ---
+The tests behind this notebook: `tests/regression/test_tddft.py`,
+`tests/unit/test_tddft_machinery.py`.
 
-**Where the detail is.** `PLAN.md` P37 has the derivation, the four findings and the
-per-case table; `tests/regression/test_tddft.py` has the identities and
-`tests/unit/test_tddft_machinery.py` the refusals. The reference is Elk's `tddftlr.f90`,
-`genvchi0.f90` and `genvfxc.f90`.
-
-**Refused by name:** finite $\mathbf q$, ultrasoft and PAW, metals, spin in any form, a
-symmetry-reduced k-set, ALDA with a gradient-corrected functional, and a bootstrap fixed
-point that has not converged.
+Refused rather than approximated: finite $\mathbf q$, ultrasoft and PAW, metals, spin in any
+form, a symmetry-reduced k-set, ALDA with a gradient-corrected functional, and a bootstrap
+fixed point that has not converged.

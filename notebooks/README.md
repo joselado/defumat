@@ -1,80 +1,85 @@
 # Tutorial notebooks
 
 One notebook per capability, in the order the code gained them. Each is meant to be read in
-about **five minutes**: what the calculation is, the code that runs it, one figure, and the
-comparison against Quantum ESPRESSO. They are the readable counterpart to the test suite —
+about **five minutes**: what the quantity is, the code that computes it, one figure, and the
+comparison against Quantum ESPRESSO. They are the readable counterpart to the test suite:
 the tests assert that a number matches QE, the notebooks show what the number *is*.
 
-The detail behind each one — the derivations, the transcription traps, the per-case
-validation tables — lives in `PLAN.md`'s phase entry and in the tests, and every notebook
-ends with a pointer to both.
+They are about the physics. The derivations, the implementation notes and the per-case
+validation tables live in `PLAN.md` and in the tests, and are deliberately kept out of here.
 
-| Notebook | Covers | Phases |
-|---|---|---|
-| [`01_silicon_setup.ipynb`](01_silicon_setup.ipynb) | Input file → cell → k-points → G-vectors → the plane-wave basis, against QE's printed header | P0–P2 |
-| [`02_silicon_scf_and_bands.ipynb`](02_silicon_scf_and_bands.ipynb) | The SCF loop, the energy term by term (1e-9 Ry), and silicon's band structure (0.0002 eV) | P3–P7 |
-| [`03_eigensolver_and_performance.ipynb`](03_eigensolver_and_performance.ipynb) | Davidson against a dense solve, the `ethr` schedule, and the single-core comparison with QE | P4, P10 |
-| [`04_ultrasoft_and_paw.ipynb`](04_ultrasoft_and_paw.ipynb) | Two grids, the augmentation charge, the exact charge identity, and PAW's one-centre terms (≤3e-9 Ry) | P12 |
-| [`05_gradient_corrections.ipynb`](05_gradient_corrections.ipynb) | PBE, revPBE and PBEsol, both potentials from `jax.grad`, and the bands they give (0.05 meV) | P13 |
-| [`06_density_of_states.ipynb`](06_density_of_states.ipynb) | Smearing and tetrahedra, silicon's gap as what separates them, aluminium against QE | P8 |
-| [`07_spin_polarization.ipynb`](07_spin_polarization.ipynb) | LSDA: nickel's moment, its exchange-split bands, and the same thing as a spin-resolved DOS | P9 |
-| [`08_spin_orbit_coupling.ipynb`](08_spin_orbit_coupling.ipynb) | Spinors and `j`-resolved projectors, platinum against QE, bismuthene's spin-orbit gap, and the spinor force against `-dE/du` from converged runs | P14, P46 |
-| [`09_forces_and_relaxation.ipynb`](09_forces_and_relaxation.ipynb) | The force as one gradient, against QE's six terms and against finite differences, then BFGS | P15 |
-| [`10_topological_invariants.ipynb`](10_topological_invariants.ipynb) | Chern numbers as exact integers, Wannier-centre flow, Fu-Kane parities, when they disagree, and the curvature as a pointwise `Omega(k)` map by the Kubo route | P16, P47 |
-| [`11_noncollinear_magnetism_and_fields.ipynb`](11_noncollinear_magnetism_and_fields.ipynb) | Magnetism as a vector, bcc iron against QE, constrained moments, and Elk's fading field | P17, P18 |
-| [`12_spin_spirals.ipynb`](12_spin_spirals.ipynb) | The generalized Bloch theorem, the three identities that validate it, and an `E(q)` magnon curve | P19 |
-| [`13_dft_plus_u.ipynb`](13_dft_plus_u.ipynb) | The occupation penalty, `S`-weighted projectors, nickel and FeO against QE (≤6.7e-9 Ry) | P20 |
-| [`14_spiral_relaxation.ipynb`](14_spiral_relaxation.ipynb) | `dE/dq` by `jax.grad`, checked by finite differences, and a BFGS that finds the ground-state pitch | P21 |
-| [`15_stress.ipynb`](15_stress.ipynb) | The stress as one strain derivative of the energy, silicon's equation of state with `-dE/dV` on top, and five references against `pw.x` (≤2.7e-7 Ry/bohr³) | P11 |
-| [`16_projected_density_of_states.ipynb`](16_projected_density_of_states.ipynb) | `<phi|S|psi>` on Löwdin-orthogonalised orbitals, silicon's `s` and `p` densities of state against `projwfc.x`, and the same weights as fat bands | P8 |
-| [`17_reaching_self_consistency.ipynb`](17_reaching_self_consistency.ipynb) | Kerker preconditioning (24 → 14 iterations), the SCF as a root-find, and the magnetic solutions no mixer reaches -- with and without a Hubbard `U` | P22 |
-| [`18_continuing_a_calculation.ipynb`](18_continuing_a_calculation.ipynb) | Starting one run from another's converged state across a change of spin regime: bcc iron's moment rotated onto `x` in one iteration, the seed that keeps a magnetic run off the symmetric solution, and spin-orbit coupling switched on | P23 |
-| [`19_linear_response.ipynb`](19_linear_response.ipynb) | The velocity operator from one `jvp` of `H(k)`, the Sternheimer equation instead of a sum over states, silicon's dielectric constant against `ph.x` on norm-conserving, ultrasoft and PAW datasets (agreeing to <= 1.2e-4), and the Born charges as the mixed second derivative `dF/dE` -- which is what makes the ultrasoft ones (-0.079442 against -0.07945) cost one more tangent instead of five more routines; and the same solve with two spin channels, on triplet O2 | P24, P24a, P24b, P24c, P45 |
-| [`20_phonons.ipynb`](20_phonons.ipynb) | The force constants as one more derivative of the gradient that already gives the force -- `dynmat0` and `drhodv` as two halves of one `jvp` -- silicon's optical mode at Gamma against `ph.x` (510.102 against 510.152 cm-1), and a **metal**, where that one `jvp` becomes two because its `dpsi` already carries the occupation (aluminium to 0.0019 cm-1) | P25, P28, P28a |
-| [`21_electrostriction.ipynb`](21_electrostriction.ipynb) | Differentiating a *response*: `d(eps)/d(strain)` as one `jvp` of the second-order energy at frozen first-order wavefunctions, against the sweep of re-converged calculations it replaces (5e-5 on the figure's component), and the elasto-optic tensor it is the same object as | P26 |
-| [`22_van_der_waals.ipynb`](22_van_der_waals.ipynb) | Grimme's D2: a pair sum over the nuclei that never enters `v_of_rho` -- the same run with and without it gives a bit-for-bit identical density -- and bilayer graphene binding at 6.10 bohr where PBE alone has no minimum at all (3.1e-9 Ry against `pw.x`) | P27 |
-| [`23_variable_cell_relaxation.ipynb`](23_variable_cell_relaxation.ipynb) | The cell as nine more coordinates of the same BFGS, whose gradient is the stress rearranged into `Omega (P I - sigma) h^-T`: rhombohedral arsenic at 500 kbar compressing 10% and going simple cubic, against `pw.x`'s own relaxed cell to 1e-3 bohr, and the stale-k-point trap a moving cell is the first thing to reach | P29 |
-| [`24_tran_blaha_band_gaps.ipynb`](24_tran_blaha_band_gaps.ipynb) | The one functional here that is a *potential* and not the derivative of an energy: silicon's gap from LDA's 0.49 eV to 1.13 eV against an experimental 1.17, the two analytic limits that stand in for the QE reference that cannot exist, the cell-averaged `c` that `pw.x` never sets, and why mixing beats the exact Jacobian here. On PAW (P32) that `c` comes out 1.107 against the all-electron 1.12 where the norm-conserving core gives 1.000, and spin-orbit coupling (P31) works where `pw.x` stops | P30, P31, P32 |
-| [`25_raman_tensors.ipynb`](25_raman_tensors.ipynb) | The dielectric tensor differentiated with respect to *where an atom is*: `d(eps)/d(tau)` as one `jvp` of the same second-order energy notebook 21 differentiates along a strain, checked against a finite difference of `eps` over re-converged displaced cells (1.0e-5) because the vendored `ph.x` no longer reproduces its own committed example -- and the `chi^(2)` that is refused, with the 42% term it is missing measured rather than estimated | P35 |
-| [`26_raman_and_infrared_spectra.ipynb`](26_raman_and_infrared_spectra.ipynb) | The per-atom tensors of notebook 25 contracted with the phonon modes into what an experiment measures: silicon's `T_2g` at 519.2 cm^-1, Raman-active and infrared-silent, against the vendored `dynmat.x` run on our own tensors -- the one QE reference above second order that still works. Plus the rank-3 average that lets the same case run on 8 k-points instead of 64, and the rule that a degenerate multiplet is comparable only as a sum | P36 |
-| [`27_excitons_and_tddft.ipynb`](27_excitons_and_tddft.ipynb) | The Dyson equation of TDDFT with a **bootstrap** kernel -- `chi_0` as a matrix over reciprocal lattice vectors rather than the operator a Sternheimer solve gives, built by sum over states because a spectrum needs the frequency axis. Validated by an identity instead of another code's spectrum: the same `eps_M(0)` from this route and from notebook 19's projected CG solve, which never sees an empty state, to 1.3e-2 on 22 -- and only when the two kernels are matched, which is what `screening = 'hartree'` is for. Silicon's absorption weight moves downhill where RPA leaves it, and ALDA's kernel has an identically zero head, which is why no adiabatic local kernel binds an exciton | P37 |
-| [`28_the_calculator.ipynb`](28_the_calculator.ipynb) | One object with a method per calculation: `Calculator.from_file` reads the input and its pseudopotentials, `get_scf` caches the ground state, and everything else — forces, stress, the dielectric tensor, phonons, bands and a DOS that draw themselves — is a method consuming that cache. Plus the two rules that keep it honest: nothing mutates, so a derived calculator carries its parent's state as a *starting guess* rather than as an answer, and every refusal in the package passes through untouched | P38 |
-| [`29_effective_mass_and_angular_momenta.ipynb`](29_effective_mass_and_angular_momenta.ipynb) | Two things Elk computes and `pw.x` does not, both at one NSCF's cost. The effective mass as one central difference of an *analytic* first derivative — silicon's `Gamma_2'` at 0.1886 m_e, drawn as a parabola over the bands it came from, and against the vendored all-electron Elk binary to 0.02% on the non-degenerate curvature. Plus the stencil that must not contain its own centre, because a high-symmetry k-point holds fewer plane waves (725 against 733) than any displaced one, which makes the error *grow* as the stencil shrinks — Elk's own number drifts for exactly that reason. Then `<L>`, `<S>`, `<J>` per atom: quenched to 1e-16 without spin-orbit coupling and 0.0365 hbar on nickel with it, `|L|/|S| = 0.117` against an experimental 0.1 | P48 |
+| Notebook | Covers |
+|---|---|
+| [`01_silicon_setup.ipynb`](01_silicon_setup.ipynb) | Input file to cell to k-points to the plane-wave basis, and what a cutoff can represent |
+| [`02_silicon_scf_and_bands.ipynb`](02_silicon_scf_and_bands.ipynb) | The SCF, the energy term by term (1e-9 Ry against QE), silicon's band structure and its covalent bond |
+| [`03_eigensolver_and_performance.ipynb`](03_eigensolver_and_performance.ipynb) | What an iterative eigensolver saves over a dense one, and the single-core comparison with QE |
+| [`04_ultrasoft_and_paw.ipynb`](04_ultrasoft_and_paw.ipynb) | Softer pseudopotentials: the augmentation charge, the overlap operator, and the charge identity it has to satisfy |
+| [`05_gradient_corrections.ipynb`](05_gradient_corrections.ipynb) | PBE, revPBE and PBEsol, what each is fitted for, and the bands they give |
+| [`06_density_of_states.ipynb`](06_density_of_states.ipynb) | Smearing and tetrahedra, silicon's gap as what separates them, and free-electron aluminium |
+| [`07_spin_polarization.ipynb`](07_spin_polarization.ipynb) | LSDA: nickel's moment as an output, the exchange splitting behind it, and the spin-resolved DOS |
+| [`08_spin_orbit_coupling.ipynb`](08_spin_orbit_coupling.ipynb) | Spinors and `j`-resolved projectors, platinum against QE, spinor forces, and bismuthene's spin-orbit gap |
+| [`09_forces_and_relaxation.ipynb`](09_forces_and_relaxation.ipynb) | Hellmann-Feynman and Pulay in one derivative, against finite differences, then relaxation |
+| [`10_topological_invariants.ipynb`](10_topological_invariants.ipynb) | Chern numbers as exact integers, Wannier-centre flow, Fu-Kane parities, and the curvature as a map |
+| [`11_noncollinear_magnetism_and_fields.ipynb`](11_noncollinear_magnetism_and_fields.ipynb) | Magnetism as a vector field, bcc iron against QE, constrained moments, and a fixed-spin-moment search |
+| [`12_spin_spirals.ipynb`](12_spin_spirals.ipynb) | The generalized Bloch theorem, the limits that validate it, and a frozen-magnon `E(q)` curve |
+| [`13_dft_plus_u.ipynb`](13_dft_plus_u.ipynb) | The occupation penalty that opens FeO's gap, the projectors it is defined by, and nickel and FeO against QE |
+| [`14_spiral_relaxation.ipynb`](14_spiral_relaxation.ipynb) | `dE/dq`, and a relaxation that finds a magnet's ground-state pitch in six SCF runs |
+| [`15_stress.ipynb`](15_stress.ipynb) | The stress tensor, silicon's equation of state, and the Pulay stress a low cutoff carries |
+| [`16_projected_density_of_states.ipynb`](16_projected_density_of_states.ipynb) | Which atom and which orbital a band belongs to, as a projected DOS, Löwdin charges and fat bands |
+| [`17_reaching_self_consistency.ipynb`](17_reaching_self_consistency.ipynb) | Charge sloshing and Kerker screening, and the unstable magnetic solutions a mixer cannot reach |
+| [`18_continuing_a_calculation.ipynb`](18_continuing_a_calculation.ipynb) | Starting one run from another across a change of spin regime: iron's moment rotated in one iteration |
+| [`19_linear_response.ipynb`](19_linear_response.ipynb) | The velocity operator, the Sternheimer equation, silicon's dielectric constant against `ph.x`, and Born charges |
+| [`20_phonons.ipynb`](20_phonons.ipynb) | Phonons at Gamma: silicon's optical mode against `ph.x`, the charge that rearranges, and a metal |
+| [`21_electrostriction.ipynb`](21_electrostriction.ipynb) | How a strain changes the dielectric constant: electrostriction, the elasto-optic tensor and elastic constants |
+| [`22_van_der_waals.ipynb`](22_van_der_waals.ipynb) | Grimme's D2, and bilayer graphene binding at 3.23 A where PBE alone has no minimum at all |
+| [`23_variable_cell_relaxation.ipynb`](23_variable_cell_relaxation.ipynb) | Relaxing the cell at an applied pressure: arsenic at 500 kbar going simple cubic |
+| [`24_tran_blaha_band_gaps.ipynb`](24_tran_blaha_band_gaps.ipynb) | A functional that is a potential and not an energy: silicon's gap from 0.49 to 1.13 eV |
+| [`25_raman_tensors.ipynb`](25_raman_tensors.ipynb) | The Raman tensor as the polarizability's derivative in an atomic position, against a finite difference |
+| [`26_raman_and_infrared_spectra.ipynb`](26_raman_and_infrared_spectra.ipynb) | Modes, activities and depolarisation ratios: silicon's 519 cm-1 line, Raman-active and infrared-silent |
+| [`27_excitons_and_tddft.ipynb`](27_excitons_and_tddft.ipynb) | Absorption spectra and the bootstrap kernel, and why no adiabatic local kernel binds an exciton |
+| [`28_the_calculator.ipynb`](28_the_calculator.ipynb) | One object with a method per calculation, and the caching and immutability rules behind it |
+| [`29_effective_mass_and_angular_momenta.ipynb`](29_effective_mass_and_angular_momenta.ipynb) | Band curvature as an effective mass, and site-resolved `<L>`, `<S>` and `<J>` against Elk |
 
 ## Conventions
 
+- **The subject is the physics.** What the quantity is, the equation that defines it, what
+  the number means, and how it compares with experiment or with Quantum ESPRESSO. **The
+  implementation is not the subject and does not belong here**: no `PLAN.md` phase numbers,
+  no QE Fortran file names, no tables of what is transcribed against what is differentiated,
+  no `jvp`, tangents, frozen spheres, padding or compilation, no catalogue of traps, and no
+  account of how something was developed or debugged. That material is what `PLAN.md` and
+  the tests are for. Two sentences survive from that side because they are claims about
+  capability rather than about code: one saying a derivative is taken of the energy itself
+  rather than derived by hand, and one where a reference is unusual and the reader would
+  otherwise not trust the comparison.
+- **No em dashes.** Anywhere, in prose or in printed output.
 - **Every new feature adds a notebook, or extends one.** A phase is not finished until its
   notebook exists. This is a standing requirement, not a per-phase decision.
 - **Drive it with a `Calculator`.** `Calculator.from_file(input, pseudo_dir=...)` and its
   `get_*` methods (notebook 28) are how every notebook here opens, and a new one should
   do the same rather than reach for the `read_pw_input` / `read_upf` / `build_system`
   trio. The functional entry points are unchanged and still correct; a notebook that
-  drops back to one **says why in place**, and there are only four reasons so far: a
-  *timing* has to defeat the cache the calculator exists to provide (03); a run that
-  reads one system at *another's* converged density is not something one calculator can
-  express (06); a finite difference of the **frozen-basis** energy needs
-  `Calculation.at_positions`, since a new calculator would rebuild the setup (09); and a
-  refusal is sometimes the thing being demonstrated (20).
+  drops back to one says why in place, and briefly.
 - **State the observable.** Every notebook heads with the equation of the quantity it
-  computes, in display maths -- the thing a reader wants before any code. Where the
-  quantity is a derivative, say *of what, holding what fixed*: that distinction is the
-  content of half these phases.
+  computes, in display maths, which is the thing a reader wants before any code. Where the
+  quantity is a derivative, say *of what, holding what fixed*: that distinction is physics
+  and it stays.
 - **Five minutes.** Header saying what this computes and the headline number; the shortest
-  code that runs it; **one figure that shows the physics** — a band structure wherever the
+  code that runs it; **one figure that shows the physics**, a band structure wherever the
   feature shows in bands; one table against Quantum ESPRESSO; at most one "how it works"
-  cell for the single best idea; a footer pointing at the `PLAN.md` phase and the test file.
-  About eight code cells, not twenty.
+  cell for the single best *physical* idea; a short footer naming the tests. About eight
+  code cells, not twenty.
 - **Silicon first.** New capabilities are demonstrated on the two-atom fcc silicon cell from
   `test-suite/pw_scf/scf.in` wherever they can be. A second system appears only when it
   shows something silicon cannot (a metal for smearing, a magnetic system for spin).
 - **Compare against Quantum ESPRESSO.** If the reference output contains the quantity, the
   notebook puts the two side by side. Numbers without a reference are labelled as such.
 - **Expensive sweeps are quoted, not run.** A convergence study or a gigabyte-scale case is
-  measured once, offline, and its numbers quoted in the text with a note saying so — the
-  notebook stays fast to run as well as fast to read.
+  measured once, offline, and its numbers quoted in the text with a note saying so, so that
+  the notebook stays fast to run as well as fast to read.
 - **Committed with their outputs**, so they read on GitHub without being run, and **each has
   a `.md` export beside it**: raw `.ipynb` is JSON and unreadable in a plain editor or a
-  diff. The `.ipynb` stays the source of truth — edit it, then re-export.
+  diff. The `.ipynb` stays the source of truth: edit it, then re-export.
 
 ## Running them
 
@@ -85,8 +90,8 @@ jupyter lab notebooks/
 
 Most run in under a minute on one core. The exceptions are `08` (about five minutes, the
 bismuthene pair), `11` and `12` (a few minutes each), `13` (its four SCF runs) and `18`
-(about three minutes: it runs fourteen SCFs, which is the point — every number in it is a
-*pair* of runs, one from the atoms and one continued). `29` takes **63 s**, most of it the
+(about three minutes: it runs fourteen SCFs, which is the point, since every number in it
+is a *pair* of runs, one from the atoms and one continued). `29` takes **63 s**, most of it the
 one spinor SCF on nickel; its Elk comparison and its moment-rotation check are quoted from
 offline runs rather than executed.
 
@@ -95,7 +100,7 @@ offline runs rather than executed.
 Some need the vendored Quantum ESPRESSO tree at `../quantum_espresso/` for their input files
 and reference outputs; that tree is not in the repository (it is 285 MB) and the paths at the
 top of each notebook say what they expect. `04`, `05`, `09`, `10`, `12` and `14` run without
-it — their inputs and references are committed under `tests/data/qe/`, because no benchmark
+it: their inputs and references are committed under `tests/data/qe/`, because no benchmark
 QE ships covers those cases. `07`, `08`, `11` and `13` are mixtures: the inputs come from the
 vendored tree and the references are regenerated and committed, since QE's own benchmarks for
 those cases stop at `conv_thr = 1e-6` and their printed terms are only good to about 1e-4 Ry.
@@ -106,13 +111,13 @@ process) and `14`'s cutoff sweep of the basis-set jumps in `E(q)`. `08` runs bis
 the test size (20 Ry, 6x6x1); the converged pair (35 Ry, 12x12x1) is committed beside it with
 its own QE reference and is one variable away, at about forty minutes and a 9.4 GB peak.
 
-`19` and `20` run without it too — their inputs and the regenerated `ph.x` outputs they
+`19` and `20` run without it too: their inputs and the regenerated `ph.x` outputs they
 are compared against are both committed under `tests/data/qe/`, because `ph_base`'s own
 benchmark dates from release 6.0 and has drifted. `20` takes about a minute.
 
-`16` runs without the vendored tree as well — its input and the `projwfc.x` reference
-it is compared against are both committed under `tests/data/qe/`, because QE's test
-suite has no `projwfc` case at all — and takes about two minutes.
+`16` runs without the vendored tree as well: its input and the `projwfc.x` reference it is
+compared against are both committed under `tests/data/qe/`, because QE's test suite has no
+`projwfc` case at all. It takes about two minutes.
 
 After changing code the notebooks depend on, re-execute them and refresh the exports:
 

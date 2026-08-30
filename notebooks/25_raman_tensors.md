@@ -1,29 +1,26 @@
-# 25 — Raman tensors: two fields and a displacement
+# Raman tensors: two fields and a displacement
 
-Notebook 19 computed the **dielectric constant** — a second derivative of the energy with
-respect to an electric field. Notebook 21 differentiated it once more with respect to a
-**strain**. This one differentiates the same object with respect to **where an atom is**,
-and gets the **Raman tensor**: `d(eps)/d(tau)`, the quantity a non-resonant Raman
-intensity is computed from.
+The Raman tensor is how a crystal's polarizability changes when an atom moves,
 
-It is the same construction as notebook 21 — one `jvp` of the variational second-order
-energy at frozen first-order wavefunctions, which is the 2n+1 theorem — with the atomic
-positions as the geometry variable instead of a strain. **Every tangent already existed**:
-the displacement response is the one the dynamical matrix of notebook 20 already solves,
-the field response is notebook 19's, and the position operator's own derivative is the
-extra Sternheimer solve notebook 21 wrote.
+$$ \frac{\partial \varepsilon_{ij}}{\partial \tau_{a,k}}, $$
 
-Two things make this phase unusual, and they are the reason it is worth five minutes:
+and it is what a non-resonant Raman intensity is computed from: light scatters off a
+vibration because the vibration modulates the dielectric response.
 
-* **QE's third derivative of the exchange-correlation energy is a hardcoded
-  Perdew-Zunger parameterisation** (`PHonon/PH/d2mxc.f90`), so `ph.x` stops outright on
-  `'third order derivatives not implemented with GGA'`. Here that object is never
-  written: the kernel is a `jvp` of `v_of_rho`, and differentiating the second-order
-  energy a third time differentiates it again. Any functional works.
-* **The reference is broken.** The vendored `ph.x` 7.5 does not reproduce its own
-  committed example, and fails its own internal consistency check. So the validation is a
-  finite difference of `eps` over re-converged displaced cells — which is what the figure
-  below shows.
+It is a third derivative of the energy, two fields and a displacement, and it is obtained
+the same way notebook 21 differentiates along a strain: the second-order energy is
+stationary in the first-order wavefunctions, so it can be differentiated with them held
+fixed. Everything it needs already exists at that point, since the displacement response is
+what the dynamical matrix of notebook 20 solves for and the field response is notebook
+19's.
+
+Two things make this quantity unusual. A **gradient-corrected functional** works here, where
+`ph.x` stops on "third order derivatives not implemented with GGA", because its third
+derivative of the exchange-correlation energy is a hardcoded parameterisation of one
+functional. And the reference for it had to be built from scratch: the vendored `ph.x` does
+not reproduce QE's own committed example for this quantity and fails its own internal
+consistency check, so the comparison here is against a **finite difference of $\varepsilon$
+over re-converged displaced cells**.
 
 Headline: **-3.118279** against a finite difference's **-3.118310**, 1.0e-5 relative.
 
@@ -47,13 +44,9 @@ from pypresso.system import build_system
 CASES = Path("../tests/data/qe")
 PSEUDO = Path("../tests/data/pseudo")
 
-# AlAs, because zincblende has no inversion centre and silicon does -- and because it is
-# the system of QE's own Raman example. The k-grid is **unshifted** and run whole under
-# `nosym`, which is how this phase shipped: a Raman tensor carries two field labels and an
-# atom, so a symmetry-reduced sum is incomplete in all three until the rank-3 average
-# (`symtensor3`) completes it. P36 wrote that average -- notebook 26 runs the same case on
-# 8 k-points instead of 64 -- and the closed grid is kept here because it is what the
-# comparison in section 3 was made against.
+# AlAs, because zincblende has no inversion centre and silicon does, and because it is the
+# system of QE's own Raman example. The k-grid is unshifted and run whole under `nosym`, so
+# nothing symmetrises the tensor; notebook 26 runs the same case on the wedge.
 alas = Calculator.from_file(CASES / "alas-raman.in", pseudo_dir=PSEUDO,
                             announce=False, conv_thr=1e-12)
 system, pseudos = alas.system, alas.pseudos
@@ -71,10 +64,9 @@ print(f"pw.x                            -16.88368446 Ry")
 
 ## 1. One call
 
-Inside it: the self-consistent field response (notebook 19), the self-consistent
-**displacement** response (notebook 20's, `3 nat` perturbations), one further Sternheimer
-solve per mode for the position operator's own derivative, and then `3 nat` `jvp`s of the
-second-order energy.
+Inside it: the self-consistent field response, the self-consistent displacement response,
+one further linear solve per mode for the position operator's own derivative, and then the
+third derivative.
 
 
 ```python
@@ -94,15 +86,15 @@ print(f"displacement response   {len(raman.phonon_history)} iterations")
 
 ## 2. The tensor, and the two things nothing imposed
 
-AlAs is `-43m`. A rank-3 tensor in that point group has exactly one independent component:
-the entries with all three indices different, all equal, and everything else zero. The run
-is `nosym` on the whole grid and **no average is applied anywhere**, so the zeros are a
-measurement of every index convention in the phase at once.
+AlAs is $\bar 4 3m$. A rank-3 tensor in that point group has exactly one independent
+component: the entries with all three indices different are equal, and everything else is
+zero. The run uses the whole grid with no symmetrisation anywhere, so those zeros are a
+measurement rather than a construction.
 
 The second check is the **translational sum rule**: moving every atom by the same vector
-translates the crystal, which cannot change `eps`, so the tensors sum to zero over atoms.
-It is P25's acoustic sum rule one derivative up, and like it, it is reported rather than
-imposed.
+translates the crystal, which cannot change $\varepsilon$, so the tensors sum to zero over
+atoms. It is the acoustic sum rule of notebook 20 one derivative up, and like it, it is
+reported rather than imposed.
 
 
 ```python
@@ -135,17 +127,14 @@ print(f"translational sum rule      {raman.sum_rule_relative:.1e} of the scale")
     translational sum rule      2.8e-04 of the scale
 
 
-## 3. What the reference does
+## 3. The reference
 
-QE computes the same tensor with `ph.x`'s `lraman = .true.`, by a different route —
-Lazzeri and Mauri's *second*-order response to the field, where this is the strictly
-first-order 2n+1 contraction. Two independent assemblies of the same number is exactly the
-comparison this project is built on.
-
-It could not be made. The vendored `ph.x` **7.5** does not reproduce QE's own committed
-example (`PHonon/examples/example05`, generated with v6.0 in 2016), and its own internal
-check says so: `dhdrhopsi` obtains the k-derivative of the wavefunctions by finite
-differences and prints the dielectric constant they imply beside the analytic one.
+QE computes the same tensor by a different route, Lazzeri and Mauri's second-order response
+to the field, where this is the strictly first-order contraction. Two independent
+assemblies of the same number would be the ideal comparison, and it could not be made: the
+vendored `ph.x` does not reproduce QE's own committed example for this quantity, and its own
+internal check says so, printing a finite-difference dielectric constant of -0.288 beside
+its analytic 8.8143 where the older release has 8.8116 beside 8.8147.
 
 
 ```python
@@ -172,12 +161,12 @@ print("so it is a regression and not a threshold.")
     so it is a regression and not a threshold.
 
 
-## 4. The figure: a third derivative is the slope of a second one
+## 4. A third derivative is the slope of a second one
 
-So the reference is built here instead. `eps` is a quantity this code computes from
-scratch at any geometry, so displacing one atom and re-converging gives `eps(tau)` — and
-the Raman tensor is its slope. The line below is *not* fitted: it is the analytic
-derivative, drawn through the point it was computed at.
+So the reference is built here instead. The dielectric constant can be computed from
+scratch at any geometry, so displacing one atom and re-converging gives
+$\varepsilon(\tau)$, and the Raman tensor is its slope. The line below is not fitted: it is
+the analytic derivative, drawn through the point it was computed at.
 
 Five SCF runs, each followed by its own dielectric response.
 
@@ -230,29 +219,23 @@ fig.tight_layout()
     
 
 
-## 5. How it works
+## 5. What is not here: the second-order susceptibility
 
-The whole phase is four lines. `F_ij` is the variational second-order energy of a uniform
-field — the functional whose stationary value is `eps` — and the 2n+1 theorem says it may
-be differentiated with its first-order wavefunctions held **fixed**:
+$\chi^{(2)}$, which governs second harmonic generation, is the same functional
+differentiated along a third **field** rather than along a displacement, and it is refused
+rather than approximated: the field enters this calculation only through the source term,
+so one piece of the 2n+1 expression has nothing to build it from.
 
-```python
-def epsilon(positions, psi, rho, b):
-    moved = calculation.at_positions(positions)
-    return 1 - 16 * pi * second_order_energy(moved, psi, rho, b, u) / volume
+The size of what is missing is a measurement rather than an estimate, because the
+displacement derivative has the same kind of term and it *is* computed here: zeroing it
+changes $d\varepsilon_{yz}/d\tau$ from **-3.118279** to **-1.809983**, which is 42% of the
+answer.
 
-_, column = jax.jvp(epsilon, (positions, psi, rho, b),
-                    (displacement, dpsi, drho, db))
-```
-
-The four tangents are: the displacement itself, the response of the states to it, the
-response of the density, and the response of the position operator. The first three exist
-already — the first is a unit vector, the other two are what the dynamical matrix solves
-for. Only `db` is new work, and notebook 21 wrote it.
-
-**`chi^(2)` is refused**, and it is worth seeing why: it is the same functional
-differentiated along a third *field*, and the field enters this code only through the
-source term. There is no `dH/dE` to differentiate.
+And nothing catches its absence by symmetry. Without that term the tensor still vanishes
+identically in silicon, still comes out exactly zincblende in AlAs, and is still symmetric
+under every permutation of its three labels to 2.5e-13, because the omitted term is
+symmetric too. Kleinman's condition is blind to it, which is worth knowing for any tensor of
+this rank: symmetry checks constrain the form and say nothing about the size.
 
 
 ```python
@@ -265,17 +248,5 @@ except NotImplementedError as error:
     chi^(2) and the electro-optic tensor are not implemented: the field enters this code only through the source term P_c r|psi> and through the density, so the term of the 2n+1 expression in which the perturbing operator sits between two first-order wavefunctions (<u_i|r_k|u_j>, QE's dvpsi_e2/solve_e2) has nothing to build it from. Its displacement counterpart is computed here and is 42% of the Raman tensor, and no symmetry check catches its absence -- see pypresso.response.nonlinear's module docstring. The Raman tensor, which needs no such term, is raman_tensors()
 
 
-The size of what is missing is a measurement rather than an estimate, because the
-*displacement* derivative has the same term and it is computed here: zeroing it changes
-`d(eps_yz)/d(tau)` from **-3.118279** to **-1.809983** — 42% of the answer.
-
-And nothing catches its absence by symmetry. Without that term the field tensor still
-vanishes identically in silicon (1.2e-13), still comes out exactly zincblende in AlAs, and
-is still symmetric under every permutation of its three labels to 2.5e-13 — because the
-omitted term is symmetric too. Kleinman's condition was the check this phase expected to be
-decisive, and it is blind here.
-
 ---
-
-`PLAN.md` P35 has the derivation, the full validation table and what the missing term
-would take. The tests are `tests/regression/test_nonlinear.py`.
+The tests behind this notebook: `tests/regression/test_nonlinear.py`.

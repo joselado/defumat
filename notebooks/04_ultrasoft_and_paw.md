@@ -4,10 +4,10 @@ Norm conservation is what makes a pseudopotential expensive: the pseudo-orbital 
 carry the same charge as the all-electron one inside the core, which fixes how smooth it
 can be. Ultrasoft drops that constraint and puts the missing charge back as an
 **augmentation charge** $Q_{ij}(r)$; PAW keeps a full radial description of each sphere
-on top. Both match Quantum ESPRESSO here to **≤3e-9 Ry**.
+on top. Both match Quantum ESPRESSO here to **3e-9 Ry or better**.
 
-The density gains a second piece that lives only inside the spheres, and the
-eigenproblem gains an overlap:
+The density gains a second piece that lives only inside the spheres, and the eigenproblem
+gains an overlap:
 
 $$n(\mathbf r) = \sum_{n\mathbf k} f_{n\mathbf k}\,|\psi_{n\mathbf k}(\mathbf r)|^2
   \;+\; \sum_{I,ij} \rho^I_{ij}\,Q^I_{ij}(\mathbf r),
@@ -18,8 +18,8 @@ $$n(\mathbf r) = \sum_{n\mathbf k} f_{n\mathbf k}\,|\psi_{n\mathbf k}(\mathbf r)
 $$\hat S = 1 + \sum_{I,ij} q^I_{ij}\,|\beta^I_i\rangle\langle\beta^I_j|,
 \qquad q^I_{ij} = \int Q^I_{ij}(\mathbf r)\,d\mathbf r$$
 
-Phase P12. Inputs and references are committed under `tests/data/qe/`, so this runs
-without the vendored QE tree.
+The payoff is the cutoff: the same accuracy on oxygen or a transition metal at a third of
+the plane waves a norm-conserving dataset would need.
 
 
 ```python
@@ -61,10 +61,9 @@ for p in (nc, us, paw):
 ## Two grids, and a charge that is short-ranged
 
 The wavefunctions stay smooth, so they keep the cutoff they always had; the augmentation
-charge is sharp and needs a denser one. That is the whole meaning of `ecutrho` — a
-**smooth** grid carrying the wavefunctions and a **dense** grid carrying the density.
-The smooth G-vectors are the first entries of the dense list (both sorted by $|G|^2$),
-which makes moving a field between them a slice one way and a zero-pad the other.
+charge is sharp and needs a denser one. That is the whole meaning of `ecutrho`: a
+**smooth** grid carrying the wavefunctions and a **dense** grid carrying the density, with
+the ratio between them set by how localised $Q_{ij}(r)$ is.
 
 
 ```python
@@ -114,12 +113,11 @@ fig.tight_layout()
 
 ## The identity the overlap operator buys
 
-Without norm conservation $\langle\psi|\psi\rangle$ is no longer the charge: the
-eigenproblem becomes generalised, $H\psi = \varepsilon S\psi$ with
-$S = 1 + \sum q_{ij}|\beta_i\rangle\langle\beta_j|$, and the augmentation charge is added
-back to the density on the dense grid. Get either half wrong and the integrated density
-stops being the number of electrons — which is a sharper test than any energy, because
-it is exact rather than approximate.
+Without norm conservation $\langle\psi|\psi\rangle$ is no longer the charge. The
+eigenproblem becomes generalised, $H\psi = \varepsilon S\psi$, and the augmentation charge
+is added back to the density on the dense grid. Get either half wrong and the integrated
+density stops being the number of electrons, which is a sharper test than any energy
+because it is exact rather than approximate.
 
 
 ```python
@@ -147,10 +145,12 @@ for case, r in results.items():
 
 ## Against Quantum ESPRESSO
 
-`D_ij` is the other thing that changes: with an augmentation charge it stops being a
-constant read from the file and picks up $\int V_{\rm eff}(r) Q_{ij}(r)$, so it is rebuilt
-from the potential every iteration. PAW adds its one-centre terms on top — a radial
-Poisson solve and a spherical quadrature inside each sphere.
+The screened coefficients $D_{ij}$ are the other thing that changes: with an augmentation
+charge they stop being constants read from the file and pick up
+$\int V_{\rm eff}(\mathbf r)\, Q_{ij}(\mathbf r)\, d\mathbf r$, so they follow the
+potential through the SCF. PAW adds its one-centre terms on top, a radial Poisson solve
+and a spherical quadrature inside each sphere, which is what lets it reconstruct
+all-electron quantities the pseudo density has thrown away.
 
 
 ```python
@@ -192,12 +192,9 @@ for case in ("si2-us", "si2-paw"):
     si2-paw: max |pypresso - QE| = 0.041 meV over 8 eigenvalues
 
 
-The one-centre term is 75% of the total for PAW, and most of *it* is a constant — the
-exchange-correlation energy of the frozen core, which the file fixes and no calculation
+The one-centre term is 75% of the total for PAW, and most of *it* is a constant: the
+exchange-correlation energy of the frozen core, which the dataset fixes and no calculation
 changes.
 
 ---
-**The detail:** `PLAN.md` §3 P12 — `qvan2`, the `becsum` symmetrisation that is not
-optional on a reduced k-set, the Numerov radial Poisson solve, and the FFT-grid rule that
-a supercell disables fractional translations.
-**The tests:** `tests/regression/test_uspp.py`.
+The tests behind this notebook: `tests/regression/test_uspp.py`.

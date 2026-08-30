@@ -1,12 +1,11 @@
 # The calculator: one object, bound methods
 
-Everything in the other twenty-seven notebooks, reached from a single object. A
+Everything in the other twenty-eight notebooks, reached from a single object. A
 `Calculator` is a system together with its pseudopotentials, and each calculation the
-package can do is a method on it — so a script names an input file and then names
-physics.
+package can do is a method on it, so a script names an input file and then names physics.
 
 Nothing here is new physics. The functional entry points the other notebooks use are
-unchanged and still work; this is the short way to drive them. Phase P38.
+unchanged and still work; this is the short way to drive them.
 
 
 ```python
@@ -33,22 +32,14 @@ calc
 
 
 That one line replaced four. `from_file` reads the `pw.x` input, builds the system, and
-loads the pseudopotential files the `ATOMIC_SPECIES` card names — resolved against
-`pseudo_dir`, which defaults to the input file's own directory. Notebook 02 opens with
-the long form:
-
-```python
-system = build_system(read_pw_input(QE / "scf.in"))
-pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-```
-
-and both are still there under `calc.system` and `calc.pseudos`.
+loads the pseudopotential files the `ATOMIC_SPECIES` card names, resolved against
+`pseudo_dir`, which defaults to the input file's own directory. Both halves are still
+available as `calc.system` and `calc.pseudos`.
 
 ## The ground state is computed once and kept
 
-`get_scf()` runs the SCF and caches it. Called again with the same options it returns
-the cache; called with different ones it reruns and *replaces* it — a single slot, not a
-dictionary keyed by option sets, because what it holds is the wavefunctions.
+`get_scf()` runs the SCF and caches it. Called again with the same options it returns the
+cache; called with different ones it reruns and replaces it.
 
 
 ```python
@@ -66,14 +57,13 @@ print("tighter options -> a new run:   ", calc.get_scf(conv_thr=1e-12) is not re
 
 
 `calc.scf_result` reads that slot **without** starting anything, which is what makes it
-usable in an `if`; a property that ran the SCF in order to say whether one had been run
-would be no use at all. And a state that did not converge is refused rather than
-differentiated — the derived quantities below all raise on one.
+usable in a test; a property that ran an SCF in order to say whether one had been run would
+be no use at all. A state that did not converge is refused rather than differentiated.
 
 ## Everything else is a method, and each runs the SCF if it has to
 
-Four quantities that between them cover most of the package: a derivative of the energy,
-a second derivative, a linear response, and a response differentiated once more.
+Four quantities that between them cover most of the package: a derivative of the energy, a
+second derivative, a linear response, and a response differentiated once more.
 
 
 ```python
@@ -95,27 +85,18 @@ print("optical mode     %10.2f cm^-1" % phonons.frequencies[-1])
     optical mode         525.76 cm^-1
 
 
-Written out by hand, the dielectric tensor alone is
-
-```python
-calculation = Calculation(system, pseudos)
-eps = dielectric_tensor(calculation, result.wavefunctions, result.eigenvalues,
-                        result.density, result.becsum)
-```
-
-and the last argument is the one that matters. `becsum` is a property of the *states*,
-not of the density, so it cannot be rebuilt from what the SCF returns as `density` — and
-on a PAW dataset `dielectric_tensor` **refuses** without it rather than quietly dropping
-`ddd_paw`. The refusal is right and it stays; the calculator is what makes it something
-nobody has to meet. The same goes for `ns` under a Hubbard `U` and `tau` under a
-meta-GGA.
+What the calculator carries for those methods is the whole converged state and not only the
+density. The augmentation occupations of an ultrasoft or PAW dataset, the occupation matrix
+under a Hubbard `U` and the kinetic energy density under a meta-GGA are all properties of
+the *states*, and a response that does not receive them is refused rather than computed
+without them.
 
 ## Results draw themselves
 
 `BandStructure`, `DensityOfStates`, `ProjectedDOS` and `OpticalSpectrum` each have a
-`.plot()` that returns the axes. The zero comes from the SCF's own Fermi level, and is
-named after what it actually is — silicon is an insulator, so it has a HOMO and no Fermi
-level.
+`.plot()` that returns the axes. The zero comes from the SCF's own Fermi level, and is named
+after what it actually is: silicon is an insulator, so it has a highest occupied state and
+no Fermi level.
 
 
 ```python
@@ -146,11 +127,11 @@ density that was already in the cache.
 
 ## Nothing mutates
 
-pyqula's `h.add_swave(...)` modifies the Hamiltonian in place, which is safe there
-because nothing expensive is cached on it. Here it would not be: a moved atom under a
-cached `SCFResult` would answer for the geometry the state was converged at. So
-`with_positions`, `with_cell` and `with_spin` return a **new** calculator with an empty
-cache — and the converged state crosses as a *starting guess* rather than as an answer.
+A calculator is never modified in place, because a cached ground state belongs to the
+geometry it was converged at: a moved atom under a stale `SCFResult` would answer for the
+wrong crystal. `with_positions`, `with_cell` and `with_spin` return a **new** calculator
+with an empty cache, and the converged state crosses as a starting guess rather than as an
+answer.
 
 
 ```python
@@ -180,16 +161,11 @@ print("from scratch:",
     from scratch: 7 iterations
 
 
-On this cell the seed is worth nothing — two-atom silicon displaced by 0.05 bohr
-converges in seven iterations either way — and it is measured rather than asserted for
-exactly that reason. Where it pays is where the state is expensive to *find* rather than
-to refine: notebook 18 promotes a converged collinear iron into a noncollinear run whose
-moment only has to be rotated, and that takes **one** iteration against twenty-five.
+On this cell the seed is worth nothing, since two-atom silicon displaced by 0.05 bohr
+converges in seven iterations either way, and it is measured rather than asserted for
+exactly that reason. Where it pays is where the state is expensive to *find* rather than to
+refine: notebook 18 promotes a converged collinear iron into a noncollinear run whose moment
+only has to be rotated, and that takes **one** iteration against twenty-five.
 
 ---
-
-The design and what it refuses: `PLAN.md` P38. The tests: `tests/unit/test_calculator.py`
-— including the one that keeps this honest, which asserts that every `get_*` method is
-short enough to be a delegation and not a second implementation of physics that is
-already validated against Quantum ESPRESSO.
-
+The tests behind this notebook: `tests/unit/test_calculator.py`.

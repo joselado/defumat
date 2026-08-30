@@ -1,27 +1,8 @@
-# 18. Continuing a calculation across a change of spin regime
+# Continuing a calculation across a change of spin regime
 
 An unpolarized run, a collinear one and a noncollinear one are three descriptions of the
-same electrons, and the expensive part of all three — the charge density — is very nearly
-the same object. This notebook takes a converged SCF and *starts another run from it* in a
-different spin regime: non-magnetic → collinear, collinear → noncollinear, and spin-orbit
-coupling switched on.
-
-The headline numbers, all of them identities — the continued run reaches the **same**
-self-consistent solution, because a starting guess is a guess and nothing else:
-
-| case | fresh | continued | agreement |
-|---|---|---|---|
-| Si, `nspin` 2 → 4 | 5 iterations | **1** | 1e-9 Ry |
-| bcc Fe, 2 → 4 with the moment rotated onto `x` | 25 | **1** | 2e-8 Ry |
-| bcc Fe, 1 → 2, magnetization seeded | 30 | 27 | 5e-9 Ry |
-| Pt, scalar PAW → fully-relativistic PAW + `lspinorb` | 13 | **7** | 2e-10 Ry |
-
-`run_scf(starting_from=result)` is the whole interface; `System.with_spin` builds the target
-regime's `System` — with its k-points rebuilt, which is the half of the job that is not the
-density.
-
-The three regimes are three ways of writing the same pair, so a promotion is *decompose,
-decide what $\mathbf m$ should be, recompose*:
+same electrons, and the expensive part of all three, the charge density, is very nearly the
+same object:
 
 $$(n_\uparrow, n_\downarrow)
 \;\longleftrightarrow\;
@@ -31,8 +12,20 @@ $$(n_\uparrow, n_\downarrow)
 \qquad
 n = n_\uparrow + n_\downarrow, \quad m_z = n_\uparrow - n_\downarrow$$
 
-On a `Calculator` that is one call -- `calc.with_spin(...)` returns a new calculator in the
-target regime carrying the converged state as a **starting guess**, not as an answer.
+So a converged calculation can start another one in a different regime: non-magnetic to
+collinear, collinear to noncollinear, spin-orbit coupling switched on. What crosses is a
+*guess*, so the continued run reaches the same self-consistent solution as a fresh one, and
+the saving is in how far it has to travel:
+
+| case | fresh | continued | agreement |
+|---|---|---|---|
+| Si, `nspin` 2 to 4 | 5 iterations | **1** | 1e-9 Ry |
+| bcc Fe, 2 to 4 with the moment rotated onto `x` | 25 | **1** | 2e-8 Ry |
+| bcc Fe, 1 to 2, magnetization seeded | 30 | 27 | 5e-9 Ry |
+| Pt, scalar PAW to fully-relativistic PAW with `lspinorb` | 13 | **7** | 2e-10 Ry |
+
+This is how a magnetic anisotropy is computed in practice: converge the collinear magnet
+once, then run the noncollinear directions from it.
 
 
 ```python
@@ -60,8 +53,8 @@ def system_from(path, **changes):
 ## Silicon: the same electrons, written three ways
 
 The two-atom cell with Gaussian smearing, so that a second spin channel has an occupation
-scheme that can fill it unequally. `with_spin` produces the collinear and the noncollinear
-`System`; nothing about the crystal changes.
+scheme able to fill it unequally. Nothing about the crystal changes between the three
+regimes.
 
 
 ```python
@@ -118,16 +111,15 @@ print(f"\n2 -> 4 continued vs fresh: {si4_cont.total_energy - si4_fresh.total_en
     2 -> 4 continued vs fresh: +0.0e+00 Ry
 
 
-Silicon is not magnetic, so the seeded moment decays and all five runs are the same
-answer — which is the point: the regime is a *description*, and the continuation does not
-move the number. What it moves is the iteration count, and the noncollinear run converges on
-the state it was handed.
+Silicon is not magnetic, so the seeded moment decays and all five runs give the same answer,
+which is the point: the regime is a description, and changing it does not move the physics.
+What it moves is the iteration count.
 
 ## bcc iron: a moment that rotates, and one that has to be found
 
-The interesting cases need a magnet. `pw_noncolin/noncolin.in` is QE's bcc iron with
-`angle1 = 90`, which points the moment along `x`. Three runs of the same cell: non-magnetic,
-collinear, and noncollinear.
+The interesting cases need a magnet. This is QE's bcc iron with `angle1 = 90`, which points
+the moment along `x`. Three runs of the same cell: non-magnetic, collinear, and
+noncollinear.
 
 
 ```python
@@ -171,12 +163,14 @@ print("\nm (mu_B):  collinear |m| = %.4f  ->  noncollinear (%.4f, %.4f, %.4f)"
     m (mu_B):  collinear |m| = 3.1751  ->  noncollinear (3.1755, 0.0000, -0.0000)
 
 
-The collinear run knows only `|m|`; the continuation puts that number on the axis the
-target's input asks for. That rotation is the only thing the promotion does here, and the
-noncollinear run then converges in **one** iteration on the state it was handed.
+A collinear calculation knows only the size of the moment, so the continuation puts that
+number on the axis the noncollinear run asks for, and the run then converges in **one**
+iteration. Rotating a moment costs nothing because without spin-orbit coupling the energy
+does not depend on the direction; with spin-orbit coupling it does, and this is exactly the
+starting point an anisotropy calculation needs.
 
-Now the other direction — non-magnetic → collinear, where the magnetization is not carried
-but *seeded*, and where the saving is small for a reason worth seeing.
+Now the other direction, non-magnetic to collinear, where the magnetization is not carried
+but seeded.
 
 
 ```python
@@ -201,13 +195,11 @@ print(f"unseeded  {fe2_flat.total_energy:12.8f} Ry  {fe2_flat.iterations:2d} ite
     unseeded  -55.67804951 Ry   2 iterations, m = 0.0000 mu_B   <- back to the non-magnetic solution
 
 
-**That second run is the trap the whole module is shaped around.** Nothing in the SCF
-breaks spin symmetry on its own: hand a collinear run two identical channels and it converges
-— reporting convergence, because it did converge — straight back to the state it came from,
-which is a stationary point of the polarized functional and not its minimum. The
+**Nothing in the SCF breaks spin symmetry on its own.** Hand a collinear run two identical
+channels and it converges, correctly reporting convergence, straight back to the unpolarized
+state, which is a stationary point of the polarized functional and not its minimum. The
 magnetization has to be put in by hand, exactly as `starting_magnetization` puts it into a
-run started from the atoms. `magnetization="auto"` does that automatically when the source
-has none to carry.
+run started from the atoms.
 
 ## The figure: where the iterations go
 
@@ -243,19 +235,17 @@ fig.tight_layout()
     
 
 
-Left: the continued noncollinear run starts three orders of magnitude closer than the
-atomic guess and is done in one step. Right: the same continuation across 1 → 2 saves three
-iterations out of thirty, because what it carries — the charge — was never the hard part;
-the *moment* is, and the non-magnetic run has none of it. The flat line is the unseeded run
-sitting on the symmetric solution.
+Left: the continued noncollinear run starts three orders of magnitude closer than the atomic
+guess and is done in one step. Right: the same continuation from non-magnetic to collinear
+saves three iterations out of thirty, because what it carries, the charge, was never the
+hard part. The moment is, and a non-magnetic run has none of it. The flat line is the
+unseeded run sitting on the symmetric solution.
 
-## How it works: one representation, and every direction is the same code
+## Charge and moment, which is all a promotion moves
 
-The three regimes are three ways of writing the same pair `(n(r), m(r))` — `[n]`,
-`[n_up, n_dw]` and `[n, m_x, m_y, m_z]`. So a promotion is *decompose, decide what `m` should
-be, recompose*, and a demotion is the same function read the other way. The collinear moment
-is placed on `z`, which is what makes the collinear → noncollinear step a rotation rather
-than a reinterpretation.
+The charge is conserved across the change of regime and the moment is placed on the axis the
+target asks for. A collinear moment is a signed number on $z$; a noncollinear one is a vector
+field, and the promotion is the rotation between them.
 
 
 ```python
@@ -286,12 +276,11 @@ print("converged    int m = (%.4f, %.4f, %.4f)" % tuple(integrate(c) for c in ve
 
 ## Switching spin-orbit coupling on
 
-For an ultrasoft or PAW dataset, "spin-orbit off" with the *same* file needs QE's
-`average_pp`, which QE itself refuses for ultrasoft (`PW/src/average_pp.f90`). So the toggle
-is a change of *dataset*: platinum with a scalar-relativistic PAW pseudopotential, then with
-the fully-relativistic one and `lspinorb = .true.`. The projector counts differ, so `becsum`
-is re-seeded from the target's own dataset — with a warning saying so — and the density is
-what carries.
+Spin-orbit coupling lives in the pseudopotential, in the splitting between its
+$j = l \pm \tfrac12$ channels, so switching it on is a change of *dataset*: platinum with a
+scalar-relativistic PAW pseudopotential, then with the fully-relativistic one and
+`lspinorb = .true.`. The two datasets have different projectors, so what carries across is
+the density.
 
 
 ```python
@@ -319,11 +308,5 @@ print(f"difference: {pt_cont.total_energy - pt_fresh.total_energy:+.1e} Ry")
 
 
 ---
-
-**Where the detail is.** `PLAN.md` P23 — the `(n, m)` representation, the seeding rule and
-its tolerance, what `pw.x` has of this (`startingpot = 'file'` zero-fills the spin components
-a file does not have, and `nc_magnetization_from_lsda` rotates onto `angle1(1)` only inside
-the force-theorem path), why the wavefunctions cross as a *span* rather than as
-wavefunctions, and everything refused by name. The code is
-`pypresso/scf/continuation.py` and `System.with_spin`; the tests are
-`tests/unit/test_continuation_machinery.py` and `tests/regression/test_continuation.py`.
+The tests behind this notebook: `tests/unit/test_continuation_machinery.py`,
+`tests/regression/test_continuation.py`.

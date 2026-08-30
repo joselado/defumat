@@ -2,7 +2,7 @@
 
 With `nspin = 2` the density, the potential, the eigenvalues and the wavefunctions all
 grow a leading spin axis, and one SCF iteration diagonalises a different Hamiltonian per
-channel. What couples them is the exchange-correlation functional — and the Fermi level,
+channel. What couples them is the exchange-correlation functional, and the Fermi level,
 which is **one** number shared by both unless `tot_magnetization` fixes the imbalance.
 
 The density is a pair, and the moment is the integral of its difference:
@@ -15,10 +15,11 @@ m(\mathbf r) = n_\uparrow(\mathbf r) - n_\downarrow(\mathbf r),
 M = \int m(\mathbf r)\, d\mathbf r$$
 
 The two channels see different potentials,
-$v_{xc}^\sigma = \delta E_{xc}[n_\uparrow, n_\downarrow] / \delta n_\sigma$.
+$v_{xc}^\sigma = \delta E_{xc}[n_\uparrow, n_\downarrow] / \delta n_\sigma$, and that
+difference is the whole of band magnetism.
 
 Eight LSDA benchmarks match Quantum ESPRESSO here; nickel's total energy to **2e-9 Ry**
-and its moment to the two decimals QE prints. Phase P9.
+and its moment to the two decimals QE prints.
 
 
 ```python
@@ -81,8 +82,9 @@ print("  2s exchange splitting %.4f eV, 2p %.4f eV"
 
 `starting_magnetization` only seeds the first density. What the SCF converges to is
 whatever balance of the two channels minimises the energy at one shared Fermi level, and
-for fcc nickel that is 0.73 $\mu_B$ — a number the calculation produces rather than
-reproduces.
+for fcc nickel that is 0.73 $\mu_B$, a number the calculation produces rather than
+reproduces. Nothing forces it to be non-zero: an unpolarized solution exists and is a
+stationary point too, just a higher one.
 
 
 ```python
@@ -111,9 +113,10 @@ print("  absolute       %.4f mu_B   QE %s"
 
 ## Where the moment comes from: the exchange splitting
 
-The two channels see different potentials, so the d bands come out at different energies
-— rigidly shifted by about 0.7 eV. The majority set is then entirely below $E_F$ and the
-minority set is not, and the number of states left over between them is the moment.
+The two channels see different potentials, so the d bands come out at different energies,
+rigidly shifted by about 0.7 eV. The majority set is then entirely below $E_F$ and the
+minority set is not, and the number of states left over between them is the moment. This
+is the Stoner picture, and nickel is its standard illustration.
 
 
 ```python
@@ -157,10 +160,11 @@ print("d-band exchange splitting at Gamma: %.3f eV"
 
 ## The same thing as a density of states
 
-Two curves instead of one, plotted back to back. The Fermi level is **not** per channel:
-`sumkt` applies its factor of two only when `nspin == 1`, so the count whose root is
-$E_F$ is the sum over both channels — a magnetic metal moves electrons between them until
-one number is stationary, and the moment is the imbalance that produces.
+Two curves instead of one, plotted back to back. The Fermi level is not per channel: the
+count whose root is $E_F$ is the sum over both, so a magnetic metal moves electrons from
+one channel to the other until that single number is stationary, and the moment is the
+imbalance that produces. The majority d states are full and lie below $E_F$; the minority
+d states straddle it, which is also why nickel's Fermi surface is the complicated one.
 
 
 ```python
@@ -197,14 +201,6 @@ print("m from the SCF  %+.4f mu_B  (on its own 4x4x4 grid)" % nickel.magnetizati
     
 
 
-**A trap that only appears here.** Every `KPoints` constructor multiplies the weights by
-the spin degeneracy and `build_system` divides it out again for `nspin = 2` — so a grid
-built *later*, which is exactly what a denser DOS grid is, counted every electron twice.
-Nothing raised: the DOS still integrated to ten electrons, at a Fermi level 2.3 eV too
-low. `system.kpoints.for_spin` is now the one place that knows the rule.
-
 ---
-**The detail:** `PLAN.md` §3 P9 — which energy terms split between the channels and which
-do not, exchange by the spin-scaling relation, correlation by interpolation, and the two
-Fermi levels that `tot_magnetization` asks for.
-**The tests:** `tests/regression/test_lsda.py`, `tests/regression/test_isolated_atom.py`.
+The tests behind this notebook: `tests/regression/test_lsda.py`,
+`tests/regression/test_isolated_atom.py`.

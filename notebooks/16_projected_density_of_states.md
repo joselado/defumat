@@ -1,19 +1,10 @@
-# 16. The projected density of states
+# The projected density of states
 
 Which atom, and which orbital, does a band belong to? The answer is the projection of every
-Kohn-Sham state onto the pseudo-atomic orbitals the pseudopotential file already carries,
-`|<phi_i|S|psi_nk>|^2` — Quantum ESPRESSO's `projwfc.x`. Summed against a delta it gives the
-density of states resolved by atom, by `l` and by `m`; summed against the occupations it gives
-the Löwdin charges.
-
-Everything below is silicon with an ultrasoft dataset, and every number is compared with
-`projwfc.x` run on the same input: the **projections agree to 5e-4** — which is all its
-three-decimal printout allows — the **Löwdin charges to 5e-5**, and the curves to **0.3% of
-their peak**.
-
-Each Kohn-Sham state is resolved onto orbitals that are Löwdin-orthogonalised over
-*every* atomic orbital in the crystal, which is what makes the weights sum to at most
-one:
+Kohn-Sham state onto the pseudo-atomic orbitals the pseudopotential file already carries.
+Summed against a delta function it gives the density of states resolved by atom, by $l$ and
+by $m$; summed against the occupations it gives the Löwdin charges, which are one way of
+saying how many electrons sit on an atom.
 
 $$\rho_i(E) = \sum_{n\mathbf k} w_{\mathbf k}\,
    \big|\langle \tilde\phi_i | \hat S | \psi_{n\mathbf k}\rangle\big|^2\,
@@ -23,6 +14,10 @@ $$\rho_i(E) = \sum_{n\mathbf k} w_{\mathbf k}\,
 \quad O_{ij} = \langle \phi_i | \hat S | \phi_j \rangle$$
 
 $$\text{spilling} = 1 - \frac{1}{N_{\rm elec}} \sum_i \int^{E_F} \rho_i(E)\, dE$$
+
+Everything below is silicon with an ultrasoft dataset, against `projwfc.x` run on the same
+input: the **projections agree to 5e-4**, which is all its three-decimal printout allows,
+the **Löwdin charges to 5e-5**, and the curves to **0.3% of their peak**.
 
 
 ```python
@@ -54,14 +49,13 @@ print(f"silicon, ultrasoft: {system.kpoints.nk} irreducible k-points, "
 
 ## Running it
 
-`run_pdos` takes the converged run itself, not just its density: what gets projected is the
-*wavefunctions*. Nothing is re-diagonalised — `projwfc.x` reads the states `pw.x` left in its
-output directory, and this does the same with the states in memory. (Passing `grid=` instead
-re-solves the bands on a finer grid first, exactly as a `nscf` run would.)
+What gets projected is the *wavefunctions*, so the converged run itself is the input and
+nothing is re-diagonalised. Passing a denser `grid=` re-solves the bands on it first,
+exactly as a non-self-consistent run would.
 
-The energy window is pinned to the reference file's so that the two curves are sampled at the
-same energies; left alone, each code sizes its own grid from its own band extremes, which
-differ in the fourth decimal of an eV.
+The energy window is pinned to the reference file's so that the two curves are sampled at
+the same energies; left alone, each code sizes its own grid from its own band extremes,
+which differ in the fourth decimal of an eV.
 
 
 ```python
@@ -152,22 +146,19 @@ print(f"\nprojections, where projwfc.x printed one: max difference "
     projections, where projwfc.x printed one: max difference 5.0e-04 (it prints three decimals)
 
 
-## What the projection is
+## What the projection means
 
-One line of physics and one trap.
+The orbitals are Löwdin-orthogonalised over every atomic orbital in the crystal, which is
+what makes the weights add up to at most one per band, by Bessel's inequality. The deficit
+is the **spilling parameter**: how much of the occupied subspace the atomic basis cannot
+describe at all. Silicon's is 0.009, so the projected curves sum to the total density of
+states to about a percent, by construction rather than by error. A large spilling is a
+warning that the atomic language is a poor description of the bonding, which is a physical
+statement about the material and not a numerical problem.
 
-The projection is `<phi_i|S|psi_nk>`, with `phi` the pseudo-atomic orbitals **Löwdin-
-orthogonalised over every orbital in the crystal** — `O^{-1/2} S phi` with
-`O_ij = <phi_i|S|phi_j>`. That orthogonalisation is what makes the weights add up to at most
-one per band (Bessel's inequality), and the deficit is the *spilling parameter*: how much of
-the occupied subspace the atomic basis cannot describe. Silicon's is 0.009, so the projected
-curves sum to the total density of states to about a percent — by construction, not by error.
-
-**The trap is `S`.** It is applied even when the projectors are the plain `atomic` ones:
-`projwave` runs `s_psi` on the atomic orbitals before it does anything else with them, and so
-does `orthoUwfc` in DFT+U. With a norm-conserving dataset `S` is the identity and nothing
-distinguishes the two, which is exactly why testing on norm-conserving silicon would never
-find it — hence the ultrasoft dataset here.
+The projection carries the overlap operator, so for an ultrasoft dataset it is
+$\langle\phi|S|\psi\rangle$ and not $\langle\phi|\psi\rangle$: that is what an amplitude on
+an atom means once the norm has been given up inside the core.
 
 
 ```python
@@ -182,18 +173,17 @@ print(f"spilling = 1 - sum(charges)/nelec        = {pdos.charges.spilling:.4f}")
 
 ## The picture
 
-Left: the total density of states with the `s` and `p` channels underneath it, `projwfc.x`'s
-own curves dashed on top of ours — 29 k-points and a 0.2 eV Gaussian, which is what the
-committed reference was made with. Right: the same weights on the band structure — each band
-coloured by how `s`-like or `p`-like it is, which is what "fat bands" means. Silicon's valence
-band is `s` at the bottom and `p` at the top, and the two mix where the bonding states form.
+Left: the total density of states with the $s$ and $p$ channels underneath it, and
+`projwfc.x`'s own curves dashed on top, at 29 k-points with a 0.2 eV Gaussian. Right: the
+same weights on the band structure, each band coloured by how $s$-like or $p$-like it is,
+which is what fat bands means. Silicon's valence band is $s$ at the bottom and $p$ at the
+top, and the two mix where the bonding states form.
 
-The dashed curves lie on the solid ones everywhere below about +8 eV — 0.3% of the peak at
-worst. Above that they separate, and for a reason that is not about the projection: the
-eighth band is the topmost one either code computes, and neither eigensolver converges it
-(both stop on the accuracy the density needs, and an empty band at the top of the window is
-carried along rather than converged). It is left in the picture rather than trimmed out of
-it, because that is what the two codes actually produce.
+The dashed curves lie on the solid ones everywhere below about +8 eV, 0.3% of the peak at
+worst. Above that they separate for a reason that is not about the projection: the eighth
+band is the topmost one either code computes, and neither eigensolver converges it, since
+both stop on the accuracy the density needs. It is left in the picture rather than trimmed
+out of it, because that is what the two codes actually produce.
 
 
 ```python
@@ -248,14 +238,10 @@ figure.tight_layout()
     
 
 
-The `s` weight collapses onto the lowest valence band and the `p` weight onto the upper three,
-degenerate at Γ — which is the textbook picture of an `sp3` semiconductor, read off the
-projections rather than asserted.
+The $s$ weight collapses onto the lowest valence band and the $p$ weight onto the upper
+three, degenerate at $\Gamma$, which is the textbook picture of an $sp^3$ semiconductor
+read off the projections rather than asserted.
 
 ---
-
-`PLAN.md` P8 (the *projwfc* sub-entry) has the phase's numbers and its transcription traps —
-including the one that matters most here, that `do_projwfc` silently runs the **linear**
-tetrahedron method for a projected density of states even when the SCF used Bloechl's.
-`tests/regression/test_pdos.py` compares seven cases against `projwfc.x`, and
-`tests/unit/test_projwfc.py` holds the checks that need no reference.
+The tests behind this notebook: `tests/regression/test_pdos.py`,
+`tests/unit/test_projwfc.py`.

@@ -1,18 +1,8 @@
 # Relaxing a spin spiral: `dE/dq`
 
 The spiral wavevector is a coordinate of the calculation exactly as an atomic position is,
-so it gets the same treatment: write the total energy as a function of `q` at **frozen**
-wavefunctions, take `jax.grad`, and walk downhill with the same BFGS. A hydrogen chain
-started at `q = 0.30` finds its antiferromagnetic ground state at **0.50003 in six SCF
-runs**.
-
-`pw.x` has no spiral, so as in notebook 12 the validation is identities and finite
-differences. **Only two terms of the energy depend on `q`** — $|k \pm q/2 + G|^2$ and
-$v_{kb}(k \pm q/2)$ — because at frozen coefficients the rotated-frame density is lattice
-periodic on an FFT box that does not move.
-
-$\mathbf q$ is a coordinate like an atomic position, so its gradient is the same kind of
-partial derivative the force is -- taken at frozen periodic parts $u$ and a frozen sphere:
+so it gets the same treatment: the total energy as a function of $\mathbf q$ at **frozen**
+wavefunctions, its gradient, and a walk downhill.
 
 $$\frac{dE}{d\mathbf q} = \left.
    \frac{\partial E_{\rm tot}[\{u\}, \mathbf q]}{\partial \mathbf q}
@@ -20,10 +10,16 @@ $$\frac{dE}{d\mathbf q} = \left.
 \qquad
 \mathbf q^{\,\rm new} = \mathbf q - s\,H^{-1}\frac{dE}{d\mathbf q}$$
 
-with BFGS run on the **reciprocal** metric $b_i\cdot b_j$, since that is the space
-$\mathbf q$ lives in.
+with BFGS run on the reciprocal metric $\mathbf b_i\cdot\mathbf b_j$, since that is the
+space $\mathbf q$ lives in. Freezing the states is legitimate for the same reason it is for
+a force: the energy is stationary in them.
 
-Phase P21.
+A hydrogen chain started at `q = 0.30` finds its antiferromagnetic ground state at
+**0.50003 in six SCF runs**, where a scan would need a point per wavevector. The physical
+content is the pitch of the magnetic order itself, which for an incommensurate helimagnet
+is not a number any supercell calculation can produce.
+
+`pw.x` has no spiral, so the validation is finite differences and symmetry.
 
 
 ```python
@@ -80,11 +76,9 @@ print("the chain runs along z, so the transverse components are zero by symmetry
 
 ## Two finite differences, checking two different things
 
-The first differentiates the **functional** — same frozen state, `q` moved by hand — and
-tests the gradient itself. The second moves `q` and **re-converges the SCF**, testing the
-stationarity that lets the wavefunctions be frozen at all. The sphere is held fixed for
-it: sphere membership is piecewise constant in `q`, so freezing it is exact between the
-wavevectors where a plane wave crosses the cutoff.
+The first moves $\mathbf q$ with the state held fixed, and tests the gradient. The second
+moves $\mathbf q$ and **re-converges the SCF**, and tests the stationarity that lets the
+wavefunctions be frozen in the first place.
 
 
 ```python
@@ -124,12 +118,12 @@ for step in (0.04, 0.02):
        0.020      -0.010849971652      -0.010901763190       5.2e-05
 
 
-**What the frozen sphere costs.** Rebuilding it makes `E(q)` jump slightly where a plane
-wave crosses the cutoff, and that jump is the Pulay error of a finite basis. Measured
-against a sphere-rebuilding finite difference: **8.3e-4 Ry per unit `q` at
-`ecutwfc = 25`, 5.8e-4 at 40, 8.3e-6 at 60** — erratic rather than smoothly convergent,
-because it counts the crossings inside one window rather than truncating a series. (Run
-offline; it is nine SCF runs.)
+**What a finite basis costs.** The set of plane waves inside the cutoff changes as
+$\mathbf q$ moves, which makes `E(q)` jump slightly whenever one crosses it. That is the
+usual Pulay error of a finite basis, measured here as **8.3e-4 Ry per unit `q` at
+`ecutwfc = 25`, 5.8e-4 at 40 and 8.3e-6 at 60**, and erratic rather than smoothly
+convergent because it counts crossings rather than truncating a series. Measured offline;
+it is nine SCF runs.
 
 ## Symmetry pins two wavevectors exactly
 
@@ -150,15 +144,10 @@ for q3 in (0.0, 0.5):
     q3 =  0.5   E = -0.9567796407 Ry   |m| = 0.6144 mu_B   max |dE/dq| = 8.1e-09
 
 
-Not to within a tolerance — to round-off. $q$ and $-q$ are the same spiral mirrored, so
-the energy is even about both and its slope has to vanish there.
+Not to within a tolerance but to round-off. $\mathbf q$ and $-\mathbf q$ are the same
+spiral mirrored, so the energy is even about both, and its slope has to vanish there.
 
 ## Downhill
-
-BFGS on the reciprocal cell, so that its metric is $b_i \cdot b_j$. **The trap:** BFGS's
-initial inverse Hessian is right for atoms because a chemical bond is about 1 Ry/bohr²,
-and it is two orders of magnitude out on a milli-Rydberg magnetic surface — so
-`BFGSSettings.hessian_scale` sets the first step to the trust radius instead.
 
 
 ```python
@@ -221,16 +210,13 @@ fig.tight_layout()
     
 
 
-The relaxation reaches the minimum in a fraction of the runs the scan needs, and it does
-not need to know the answer is on the axis — the gradient is a vector and the two
+The relaxation reaches the minimum in a fraction of the runs a scan needs, and it does not
+have to be told that the answer lies on the axis: the gradient is a vector, and the two
 transverse components are free to move if the physics asks them to.
 
-**A magnetic field is refused here.** Its energy is outside the reported total (notebook
-11), so the state would be stationary for a different functional than the one being
-differentiated.
+A magnetic field is refused here, because its energy is deliberately left out of the
+reported total (notebook 11), so the state would be stationary for a different functional
+than the one being differentiated.
 
 ---
-**The detail:** `PLAN.md` §3 P21 — which of the seven energy terms carry `q` and why the
-gradient never differentiates through an FFT, and the compiled-gradient trap (it closes
-over its sphere, so it is dropped on every `at_spiral_q`).
-**The tests:** `tests/regression/test_spiral_relaxation.py`.
+The tests behind this notebook: `tests/regression/test_spiral_relaxation.py`.
