@@ -902,6 +902,18 @@ code: one sentence saying a derivative is taken of the energy itself rather than
 hand, and one sentence where a reference is unusual and the reader would otherwise not trust
 the comparison. **No em dashes** anywhere in a notebook.
 
+**That rule binds the code cells, not only the prose, and this is the sentence that was
+missing** (P49). Bounding only the prose is why the notebooks drifted into validation
+reports: the project's validation instinct moved into the code, where the rule did not
+reach, and 2800 code lines across 29 notebooks is what came of it. An identity check
+looped over four pseudopotentials, a derivative checked against a closed form on a random
+matrix, a hand-built linear solve with a probe potential: each is the test suite's job
+being done in public. They belong in `tests/`, and the notebook's footer names the file
+they went to. **Where a `get_*` method exists, the notebook uses it** rather than building
+the same quantity from internals and remarking afterwards that the method also exists.
+`notebooks/README.md` carries the cell-by-cell shape and the budgets, and indexes the set
+**by the property a reader wants to compute** rather than by the order the code gained it.
+
 **A notebook is five minutes long, and it has a figure.** Header saying what this computes
 and the headline number against QE; the shortest code that runs it; **one plot that shows
 the physics**, a band structure wherever the feature shows in bands; one comparison table;

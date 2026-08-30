@@ -202,8 +202,12 @@ subject; a second system appears where it shows something silicon cannot — a
 metal for smearing, iron for magnetism, arsenic under pressure, bilayer graphene
 for dispersion, LiF for a bound exciton.
 
+[`notebooks/README.md`](notebooks/README.md) indexes them by the property you want
+to compute, which is the way to arrive at them. In file order:
+
 | | |
 |---|---|
+| [`00_the_calculator`](notebooks/00_the_calculator.ipynb) | The front door: one object built from an input file, with a method per quantity |
 | [`01_silicon_setup`](notebooks/01_silicon_setup.ipynb) | Reading an input file, the crystal, k-points, and the plane-wave basis |
 | [`02_silicon_scf_and_bands`](notebooks/02_silicon_scf_and_bands.ipynb) | What is inside a pseudopotential, the SCF, the bonding charge, and the band structure |
 | [`03_eigensolver_and_performance`](notebooks/03_eigensolver_and_performance.ipynb) | How the calculation is made fast, and how it compares to Quantum ESPRESSO |

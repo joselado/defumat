@@ -118,7 +118,7 @@ fig.tight_layout()
 
 
     
-![png](28_the_calculator_files/28_the_calculator_7_0.png)
+![png](00_the_calculator_files/00_the_calculator_7_0.png)
     
 
 

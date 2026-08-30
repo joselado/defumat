@@ -113,6 +113,35 @@ class BerryCurvature:
     #: The same shift, unnormalised, in the units of :attr:`curvature`.
     truncation_abs: float | None = None
 
+    def plot(self, ax=None, cmap: str = "RdBu_r", colorbar: bool = True,
+             **kwargs):
+        """Draw ``Omega(k)`` over the mesh plane, and return the axes.
+
+        The map is what a curvature is looked at for: where the hot spots are,
+        whether they are signed, and whether the mesh resolves them. It is
+        drawn on the plane's two fractional coordinates, symmetric about zero
+        so that a sign change reads as a colour change rather than as a
+        brightness one.
+
+        matplotlib is imported here rather than at module scope: it is not a
+        dependency of any calculation, and a headless run should not need it.
+        """
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            _, ax = plt.subplots()
+        field = np.asarray(self.curvature)
+        limit = float(np.max(np.abs(field)))
+        kwargs.setdefault("vmin", -limit)
+        kwargs.setdefault("vmax", limit)
+        image = ax.imshow(field.T, origin="lower", extent=(0.0, 1.0, 0.0, 1.0),
+                          cmap=cmap, aspect="auto", **kwargs)
+        ax.set_xlabel("$k_1$   [fraction of the mesh plane]")
+        ax.set_ylabel("$k_2$   [fraction of the mesh plane]")
+        if colorbar:
+            ax.figure.colorbar(image, ax=ax, label=r"$\Omega(k)$")
+        return ax
+
     @property
     def chern_number(self) -> float:
         """``(1 / 2 pi) int Omega d^2k`` -- an exact integer for ``fhs``."""

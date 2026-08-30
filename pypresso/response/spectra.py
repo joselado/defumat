@@ -178,6 +178,61 @@ class VibrationalSpectrum:
             lines.append(row)
         return "\n".join(lines)
 
+    def plot(self, ax=None, kind: str = "raman", width: float = 8.0,
+             grid=None, acoustic_cutoff: float = 20.0, **kwargs):
+        """Draw the spectrum as a Lorentzian-broadened curve, and return the axes.
+
+        A vibrational spectrum is read as a curve and computed as a set of
+        sticks, and the twenty lines that turn one into the other are twenty
+        lines of a script that are not about physics.
+
+        ``kind`` is ``'raman'`` or ``'infrared'``. ``width`` is the Lorentzian
+        half-width in cm^-1, which is an instrumental parameter rather than a
+        physical one and is why it is exposed. Modes below ``acoustic_cutoff``
+        are dropped: they are the acoustic branch, whose activity the sum rule
+        silences, and a residual stick at 2 cm^-1 is numerical noise magnified
+        by the normalisation.
+
+        matplotlib is imported here rather than at module scope: it is not a
+        dependency of any calculation, and a headless run should not need it.
+        """
+        import matplotlib.pyplot as plt
+
+        activities = {"raman": self.raman_activity, "infrared": self.infrared}
+        if kind not in activities:
+            raise ValueError(
+                f"kind must be one of {sorted(activities)}, not {kind!r}")
+        activity = activities[kind]
+        if activity is None:
+            raise ValueError(
+                f"this spectrum has no {kind} activity: it was built without "
+                + ("Raman tensors" if kind == "raman" else "Born charges")
+            )
+        if ax is None:
+            _, ax = plt.subplots()
+        frequencies = np.asarray(self.frequencies)
+        if grid is None:
+            top = float(np.max(frequencies)) * 1.15 + 5.0 * width
+            grid = np.linspace(0.0, top, 1400)
+        grid = np.asarray(grid)
+        curve = np.zeros_like(grid)
+        for frequency, value in zip(frequencies, np.asarray(activity)):
+            if frequency < acoustic_cutoff:
+                continue
+            curve += value * width**2 / ((grid - frequency) ** 2 + width**2)
+        peak = float(np.max(curve))
+        if peak > 0.0:
+            curve = curve / peak
+        kwargs.setdefault("lw", 1.6)
+        colour = kwargs.setdefault("color", "C0" if kind == "raman" else "C3")
+        ax.fill_between(grid, curve, color=colour, alpha=0.25)
+        ax.plot(grid, curve, **kwargs)
+        ax.set_xlabel(r"wavenumber   [cm$^{-1}$]")
+        ax.set_ylabel(f"{kind} intensity   [normalised]")
+        ax.set_xlim(float(grid[0]), float(grid[-1]))
+        ax.set_ylim(bottom=0.0)
+        return ax
+
 
 def eigendisplacements(eigenvectors: np.ndarray, masses: np.ndarray) -> np.ndarray:
     """``z``: the mass-weighted eigenvectors turned into displacements.

@@ -19,7 +19,9 @@ import inspect
 import numpy as np
 import pytest
 
-from pypresso.calculator import SHARED_OPTIONS, Calculator
+from pypresso.calculator import (SCF_ONLY_OPTIONS, SHARED_OPTIONS,
+                                 _ELECTRONS_OPTIONS, Calculator,
+                                 electrons_defaults)
 from pypresso.io.pwin import parse_pw_input
 from pypresso.pseudo import read_upf
 from pypresso.scf.driver import run_scf
@@ -278,3 +280,96 @@ def test_a_relaxed_calculator_does_not_claim_its_parents_scf_options(silicon):
     derived = silicon._derived(silicon.system, scf=silicon.scf_result)
     assert derived.scf_result is silicon.scf_result
     assert derived._scf_options is None, "so any explicit get_scf reruns"
+
+
+# ----------------------------------------------------------------------
+# the &electrons namelist (P49)
+# ----------------------------------------------------------------------
+
+SILICON_ELECTRONS = SILICON.replace(
+    "&electrons\n/",
+    "&electrons\n"
+    "  conv_thr = 1.0d-9\n"
+    "  mixing_beta = 0.3\n"
+    "  mixing_mode = 'plain'\n"
+    "  electron_maxstep = 42\n"
+    "/",
+)
+
+
+def test_the_electrons_namelist_becomes_this_calculators_defaults(pseudo_dir):
+    # pw.x states how to converge a run in the input file. Nothing here read
+    # that namelist, though ``&control`` has always been read -- an asymmetry,
+    # not a decision, and it is what eleven notebooks wrote a ``load()`` helper
+    # to work around.
+    calc = Calculator.from_text(SILICON_ELECTRONS, pseudo_dir, announce=False)
+    assert calc.defaults["conv_thr"] == pytest.approx(1.0e-9)
+    assert calc.defaults["mixing_beta"] == pytest.approx(0.3)
+    assert calc.defaults["mixing_mode"] == "plain"
+    # renamed on the way in: ``max_iterations`` means three different loops
+    # here, and the input file's number is unambiguously the SCF's.
+    assert calc.defaults["max_iterations"] == 42
+
+
+def test_an_explicit_option_still_wins_over_the_input_file(pseudo_dir):
+    calc = Calculator.from_text(SILICON_ELECTRONS, pseudo_dir,
+                                announce=False, conv_thr=1.0e-12)
+    assert calc.defaults["conv_thr"] == pytest.approx(1.0e-12)
+    assert calc.defaults["mixing_beta"] == pytest.approx(0.3)   # untouched
+
+
+def test_an_absent_variable_is_absent_rather_than_defaulted(pseudo_dir):
+    # Whatever ``run_scf`` already defaults to keeps deciding: inventing a
+    # default here would hide that QE's are context-dependent.
+    calc = Calculator.from_text(SILICON, pseudo_dir, announce=False)
+    assert not set(_ELECTRONS_OPTIONS.values()) & set(calc.defaults)
+
+
+def test_from_file_adopts_the_namelist_too(tmp_path, pseudo_dir):
+    (tmp_path / "scf.in").write_text(SILICON_ELECTRONS)
+    (tmp_path / "Si.pz-vbc.UPF").write_bytes(
+        (pseudo_dir / "Si.pz-vbc.UPF").read_bytes()
+    )
+    calc = Calculator.from_file(tmp_path / "scf.in", announce=False)
+    assert calc.defaults["conv_thr"] == pytest.approx(1.0e-9)
+
+
+def test_every_adopted_electrons_option_is_one_the_calculator_accepts():
+    # The mapping is a claim about *this* code: an entry naming an option no
+    # method forwards would be silently dropped rather than refused.
+    assert set(_ELECTRONS_OPTIONS.values()) <= SHARED_OPTIONS
+    # and all five describe the SCF loop rather than a response loop, which is
+    # what makes reading them off the SCF's own input file correct.
+    assert set(_ELECTRONS_OPTIONS.values()) - {"conv_thr"} <= SCF_ONLY_OPTIONS
+
+
+def test_diagonalization_is_read_by_pw_x_and_deliberately_not_adopted(pseudo_dir):
+    # Valid pw.x input, and this package has one eigensolver. Adopting it would
+    # turn a run that works into a ValueError; mapping it onto Davidson would be
+    # the silent substitution the package refuses elsewhere. So it is neither.
+    text = SILICON.replace("&electrons\n/",
+                           "&electrons\n  diagonalization = 'cg'\n/")
+    calc = Calculator.from_text(text, pseudo_dir, announce=False)
+    assert "diagonalization" not in calc.defaults
+    assert calc.calculation is not None          # the run is still reachable
+
+
+def test_a_refused_mixing_mode_is_refused_by_name_rather_than_substituted(
+        pseudo_dir):
+    # local-TF is QE's approx_screening2 and is not implemented. Adopting the
+    # namelist must surface that refusal, not quietly run the uniform one.
+    text = SILICON.replace("&electrons\n/",
+                           "&electrons\n  mixing_mode = 'local-TF'\n/")
+    calc = Calculator.from_text(text, pseudo_dir, announce=False)
+    assert calc.defaults["mixing_mode"] == "local-TF"
+    with pytest.raises(NotImplementedError, match="approx_screening2"):
+        calc.get_scf()
+
+
+def test_the_adopted_namelist_reaches_the_run(pseudo_dir):
+    # Not just stored: an SCF told to stop after one iteration stops after one.
+    text = SILICON.replace("&electrons\n/",
+                           "&electrons\n  electron_maxstep = 1\n/")
+    calc = Calculator.from_text(text, pseudo_dir, announce=False)
+    result = calc.get_scf()
+    assert result.iterations == 1 and not result.converged

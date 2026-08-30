@@ -115,6 +115,39 @@ class SpiralScan:
         """Energies measured from the first point, in mRy."""
         return 1.0e3 * (self.energies - self.energies[0])
 
+    def plot(self, ax=None, axis: int = 2, moment: bool = True, **kwargs):
+        """Draw ``E(q)``, and return the axes.
+
+        A frozen-magnon curve is the whole point of a scan and is drawn the
+        same way every time: the energy relative to the first point, in mRy,
+        against the component of ``q`` that was varied. ``axis`` selects that
+        component (the spirals here run along ``z`` by convention); ``moment``
+        adds the amplitude of the turning moment on a twin axis, since a curve
+        that softens because the moment collapsed is a different statement from
+        one that softens because the spiral is favourable.
+
+        matplotlib is imported here rather than at module scope: it is not a
+        dependency of any calculation, and a headless run should not need it.
+        """
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            _, ax = plt.subplots()
+        q = np.asarray(self.wavevectors)[:, axis]
+        kwargs.setdefault("marker", "o")
+        kwargs.setdefault("color", "C0")
+        ax.plot(q, self.relative, **kwargs)
+        ax.set_xlabel(f"$q_{'xyz'[axis]}$   [$2\\pi/a$, lattice coordinates]")
+        ax.set_ylabel(r"$E(q) - E(q_0)$   [mRy]")
+        ax.axhline(0.0, color="0.7", lw=0.8, ls=":")
+        if moment and self.moments is not None:
+            twin = ax.twinx()
+            twin.plot(q, np.linalg.norm(np.asarray(self.moments), axis=1),
+                      marker="s", ls="--", lw=1.0, color="C3")
+            twin.set_ylabel(r"$|m|$   [$\mu_B$]", color="C3")
+            twin.tick_params(axis="y", labelcolor="C3")
+        return ax
+
 
 def run_spiral_scan(
     system: System,

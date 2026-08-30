@@ -157,6 +157,19 @@ print(result.total_energy, "Ry in", result.iterations, "iterations")
 \code{conv\_thr} means what it means in a \code{pw.x} input: it is compared
 against QE's \code{dr2}, the Hartree energy of the density residual.
 
+It need not be given at all. \code{from\_file} and \code{from\_text}
+\textbf{adopt the input's own \code{\&electrons} namelist} ---
+\code{conv\_thr}, \code{mixing\_beta}, \code{mixing\_mode},
+\code{mixing\_fixed\_ns} and \code{electron\_maxstep} --- so an input file
+that states how to converge itself converges the same way here as under
+\code{pw.x}. A keyword argument given to the constructor still wins over the
+file, which is how the snippet above overrides it. One variable of that
+namelist is read by \code{pw.x} and deliberately \emph{not} adopted:
+\code{diagonalization}, because this package offers one eigensolver, so
+honouring \code{diagonalization = 'cg'} would turn a run that works into an
+error, and mapping it silently onto Davidson would be the kind of substitution
+refused everywhere else here. Name a solver at construction instead.
+
 \subsection*{One object, bound methods}
 
 A \code{Calculator} is a system together with its pseudopotentials, and every

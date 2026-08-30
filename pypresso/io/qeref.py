@@ -30,7 +30,51 @@ __all__ = [
     "read_qe_output",
     "read_projwfc_output",
     "read_pdos_file",
+    "comparison_table",
 ]
+
+
+def comparison_table(rows, headers=("", "pypresso", "reference", "difference"),
+                     fmt: str = "{:.9f}", difference: bool = True) -> str:
+    """Two columns of numbers beside each other, aligned, as one string.
+
+    ``rows`` is ``(label, ours, theirs)`` per line, ``theirs`` allowed to be
+    ``None`` where no reference exists -- which is the case that must stay
+    visible rather than being filled with a zero.
+
+    This exists because a comparison against a reference is the one table every
+    notebook and every validation script prints, and each of them was printing
+    it with its own ``"%-18s %18s %18s %12s"`` -- 426 lines of ``print``
+    formatting across 29 notebooks, more than the matplotlib (P49). It formats
+    and does nothing else: no tolerance, no verdict, no colour. Deciding whether
+    a difference is acceptable is the caller's, and in the tests it is
+    ``pytest.approx``'s.
+
+    >>> print(comparison_table([("total energy", -15.844527263, -15.84452726)],
+    ...                        fmt="{:.8f}"))
+                      pypresso     reference  difference
+    total energy  -15.84452726  -15.84452726     3.0e-09
+    """
+    labels = [str(row[0]) for row in rows]
+    ours = [fmt.format(row[1]) for row in rows]
+    theirs = [fmt.format(row[2]) if row[2] is not None else "--" for row in rows]
+    gaps = []
+    for row in rows:
+        gaps.append("{:.1e}".format(abs(row[1] - row[2]))
+                    if difference and row[2] is not None else "")
+
+    columns = [labels, ours, theirs] + ([gaps] if difference else [])
+    heads = list(headers)[:len(columns)]
+    widths = [max(len(head), *(len(cell) for cell in column))
+              for head, column in zip(heads, columns)]
+
+    def line(cells):
+        first = cells[0].ljust(widths[0])
+        rest = "  ".join(cell.rjust(width)
+                         for cell, width in zip(cells[1:], widths[1:]))
+        return (first + "  " + rest).rstrip()
+
+    return "\n".join([line(heads)] + [line(cells) for cells in zip(*columns)])
 
 _FLOAT = r"[-+]?\d*\.?\d+(?:[EeDd][-+]?\d+)?"
 

@@ -10,12 +10,14 @@ from pypresso.io.qeref import (
     QEReference,
     read_pdos_file,
     read_projwfc_output,
+    comparison_table,
     read_qe_output,
 )
 
 __all__ = [
     "ProjwfcReference",
     "QEReference",
+    "comparison_table",
     "format_dos",
     "read_pdos_file",
     "read_projwfc_output",

@@ -113,6 +113,38 @@ class RelaxResult:
     def nsteps(self) -> int:
         return len(self.steps)
 
+    def plot(self, ax=None, **kwargs):
+        """Draw the relaxation's progress, and return the axes.
+
+        Two curves against the ionic step: the total energy relative to the
+        final one, in mRy, and the largest force still on any atom, in
+        Ry/bohr on a log axis. They answer the two questions asked of a
+        relaxation that has finished -- how far downhill it went, and whether
+        the force actually reached the threshold or the optimizer simply
+        stopped.
+
+        matplotlib is imported here rather than at module scope: it is not a
+        dependency of any calculation, and a headless run should not need it.
+        """
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            _, ax = plt.subplots()
+        steps = [step.index for step in self.steps]
+        energies = np.array([step.total_energy for step in self.steps])
+        forces = np.array([step.max_force for step in self.steps])
+        kwargs.setdefault("marker", "o")
+        ax.plot(steps, 1.0e3 * (energies - energies[-1]),
+                color="C0", **kwargs)
+        ax.set_xlabel("ionic step")
+        ax.set_ylabel(r"$E - E_{\rm final}$   [mRy]", color="C0")
+        ax.tick_params(axis="y", labelcolor="C0")
+        twin = ax.twinx()
+        twin.semilogy(steps, forces, marker="s", ls="--", lw=1.0, color="C3")
+        twin.set_ylabel(r"max $|F|$   [Ry/bohr]", color="C3")
+        twin.tick_params(axis="y", labelcolor="C3")
+        return ax
+
 
 def run_relax(
     system: System,

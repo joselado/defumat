@@ -83,10 +83,11 @@ import numpy as np
 
 from pypresso.pseudo.upf import Pseudopotential, read_upf
 from pypresso.scf.driver import Calculation, SCFResult, run_scf
-from pypresso.system.builder import System, build_system, system_from_file
+from pypresso.system.builder import System, build_system
 from pypresso.system.kpoints import for_spin
 
-__all__ = ["Calculator", "SHARED_OPTIONS", "SCF_ONLY_OPTIONS"]
+__all__ = ["Calculator", "SHARED_OPTIONS", "SCF_ONLY_OPTIONS",
+           "electrons_defaults"]
 
 
 #: Options a :class:`Calculator` accepts once, at construction, and forwards to
@@ -159,6 +160,62 @@ _STATE_ARGUMENTS = {
     "field": "magnetic_field",
     "field_scale": "field_scale",
 }
+
+
+#: ``&electrons`` variable -> the :data:`SHARED_OPTIONS` name it fills.
+#:
+#: ``pw.x`` states how to converge a run in the input file; nothing here read
+#: that namelist, though ``system/builder.py`` has always read ``&control``'s
+#: ``etot_conv_thr``, ``forc_conv_thr`` and ``nstep``. The asymmetry was worth
+#: real boilerplate: 28 of the 29 notebooks passed a ``conv_thr`` by hand, and
+#: eleven defined a local ``load()`` helper, four of which existed only to
+#: re-parse the input and hand these values straight back (P49).
+#:
+#: ``electron_maxstep`` is renamed on the way in because ``max_iterations``
+#: means three different loops here -- see :data:`SCF_ONLY_OPTIONS` -- and the
+#: input file's number is unambiguously the SCF's.
+_ELECTRONS_OPTIONS = {
+    "conv_thr": "conv_thr",
+    "mixing_beta": "mixing_beta",
+    "mixing_mode": "mixing_mode",
+    "mixing_fixed_ns": "mixing_fixed_ns",
+    "electron_maxstep": "max_iterations",
+}
+
+#: Read but deliberately **not** adopted: ``diagonalization``.
+#:
+#: It is a :data:`Calculator.SETUP_OPTIONS` member rather than a run default, so
+#: it decides which ``Calculation`` exists; and this package offers one
+#: eigensolver, so an input saying ``diagonalization = 'cg'`` -- valid ``pw.x``
+#: input, and common -- would stop being a run that works and start being a
+#: ``ValueError`` from ``get_eigensolver``. Silently mapping it onto Davidson is
+#: the other half of that trade and is worse: it is exactly the substitution
+#: this package refuses elsewhere. So the variable is left alone, and a caller
+#: who wants a solver names it at construction.
+_ELECTRONS_NOT_ADOPTED = ("diagonalization",)
+
+
+def electrons_defaults(pwin) -> dict:
+    """The ``&electrons`` namelist as :data:`SHARED_OPTIONS` keyword arguments.
+
+    Absent variables are absent from the result rather than given a default, so
+    that whatever :func:`~pypresso.scf.driver.run_scf` already defaults to keeps
+    deciding. See :data:`_ELECTRONS_OPTIONS` for what is mapped and
+    :data:`_ELECTRONS_NOT_ADOPTED` for the one that is not.
+    """
+    adopted = {}
+    for name, option in _ELECTRONS_OPTIONS.items():
+        value = pwin.get("electrons", name)
+        if value is None:
+            continue
+        if option in ("conv_thr", "mixing_beta"):
+            value = float(value)
+        elif option in ("mixing_fixed_ns", "max_iterations"):
+            value = int(value)
+        else:
+            value = str(value).strip().strip("'\"")
+        adopted[option] = value
+    return adopted
 
 
 class Calculator:
@@ -247,23 +304,36 @@ class Calculator:
 
         The one line that replaces four. ``pseudo_dir`` defaults to the input
         file's own directory.
+
+        The input's ``&electrons`` namelist is adopted as this calculator's
+        defaults -- ``conv_thr``, ``mixing_beta``, ``mixing_mode``,
+        ``mixing_fixed_ns`` and ``electron_maxstep`` -- so a ``pw.x`` input that
+        states how to converge itself converges the same way here. A keyword
+        argument given to this call still wins over the file. See
+        :func:`electrons_defaults`.
         """
+        from pypresso.io.pwin import read_pw_input
+
         path = Path(path)
-        system = system_from_file(path)
+        pwin = read_pw_input(path)
         if pseudo_dir is None:
             pseudo_dir = path.parent
-        return cls(system, pseudo_dir=pseudo_dir, **defaults)
+        return cls(build_system(pwin),
+                   pseudo_dir=pseudo_dir,
+                   **{**electrons_defaults(pwin), **defaults})
 
     @classmethod
     def from_text(cls, text: str, pseudo_dir, **defaults) -> "Calculator":
         """The same, from the text of an input file rather than a path.
 
         ``pseudo_dir`` is required here: there is no file to take it from.
+        ``&electrons`` is adopted exactly as in :meth:`from_file`.
         """
         from pypresso.io.pwin import parse_pw_input
 
-        return cls(build_system(parse_pw_input(text)), pseudo_dir=pseudo_dir,
-                   **defaults)
+        pwin = parse_pw_input(text)
+        return cls(build_system(pwin), pseudo_dir=pseudo_dir,
+                   **{**electrons_defaults(pwin), **defaults})
 
     # ------------------------------------------------------------------
     # the fixed setup, built once and on demand

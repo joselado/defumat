@@ -1,15 +1,105 @@
 # Tutorial notebooks
 
-One notebook per capability, in the order the code gained them. Each is meant to be read in
-about **five minutes**: what the quantity is, the code that computes it, one figure, and the
-comparison against Quantum ESPRESSO. They are the readable counterpart to the test suite:
-the tests assert that a number matches QE, the notebooks show what the number *is*.
+**Start with [`00_the_calculator`](00_the_calculator.ipynb).** It is the front door: one
+object built from a `pw.x` input file, with a method per quantity. Everything else here is
+one of those methods, on a concrete crystal, with the number it produces put beside
+Quantum ESPRESSO's.
+
+Each notebook is meant to be read in about **five minutes**: what the quantity is, the code
+that computes it, one figure, and the comparison against QE. They are the readable
+counterpart to the test suite — the tests assert that a number matches QE, the notebooks
+show what the number *is*.
 
 They are about the physics. The derivations, the implementation notes and the per-case
 validation tables live in `PLAN.md` and in the tests, and are deliberately kept out of here.
 
+## What do you want to compute?
+
+The index is by the property, not by the order the code gained it. The call named is a
+method on the `Calculator` of notebook 00, unless the entry names an input variable
+instead, which means the physics is selected in the input file rather than at the call.
+
+### The ground state
+
+| To compute | Call | Notebook |
+|---|---|---|
+| Total energy and charge density | `get_scf()` | [02](02_silicon_scf_and_bands.ipynb) |
+| Band structure | `get_bands()` | [02](02_silicon_scf_and_bands.ipynb) |
+| Density of states | `get_dos()` | [06](06_density_of_states.ipynb) |
+| Which atom and which orbital a band belongs to | `get_pdos()` | [16](16_projected_density_of_states.ipynb) |
+| Eigenvalues on a denser grid at fixed density | `get_nscf()` | [06](06_density_of_states.ipynb) |
+
+### Structure: forces, geometry, the cell
+
+| To compute | Call | Notebook |
+|---|---|---|
+| Forces on the atoms | `get_forces()` | [09](09_forces_and_relaxation.ipynb) |
+| A relaxed geometry | `get_relax()` | [09](09_forces_and_relaxation.ipynb) |
+| Stress and pressure | `get_stress()` | [15](15_stress.ipynb) |
+| A relaxed cell at an applied pressure | `get_relax(variable_cell=True)` | [23](23_variable_cell_relaxation.ipynb) |
+| A geometry bound by dispersion | `vdw_corr = 'grimme-d2'` | [22](22_van_der_waals.ipynb) |
+
+### Magnetism
+
+| To compute | Call | Notebook |
+|---|---|---|
+| A collinear magnetic moment | `nspin = 2` | [07](07_spin_polarization.ipynb) |
+| Spin-orbit split bands | `noncolin`, `lspinorb` | [08](08_spin_orbit_coupling.ipynb) |
+| Magnetism as a vector, fields, constrained moments | `nspin = 4`, `B_field` | [11](11_noncollinear_magnetism_and_fields.ipynb) |
+| A magnon `E(q)` without a supercell | `get_spiral_scan()` | [12](12_spin_spirals.ipynb) |
+| A magnet's ground-state pitch | `get_spiral_relaxation()` | [14](14_spiral_relaxation.ipynb) |
+| Site-resolved `<L>`, `<S>` and `<J>` | `get_angular_momenta()` | [29](29_effective_mass_and_angular_momenta.ipynb) |
+| One run continued from another across a change of spin regime | `with_spin()` | [18](18_continuing_a_calculation.ipynb) |
+
+### Response, vibrations and spectra
+
+| To compute | Call | Notebook |
+|---|---|---|
+| The dielectric constant | `get_dielectric_tensor()` | [19](19_linear_response.ipynb) |
+| Born effective charges | `get_born_charges()` | [19](19_linear_response.ipynb) |
+| Band velocities | `get_band_velocities()` | [19](19_linear_response.ipynb) |
+| Phonon frequencies at `Gamma` | `get_phonons()` | [20](20_phonons.ipynb) |
+| Raman tensors | `get_raman_tensors()` | [25](25_raman_tensors.ipynb) |
+| Raman and infrared activities per mode | `get_vibrational_spectrum()` | [26](26_raman_and_infrared_spectra.ipynb) |
+| An optical absorption spectrum, with excitons | `get_absorption()` | [27](27_excitons_and_tddft.ipynb) |
+| Elastic constants | `get_elastic_constants()` | [21](21_electrostriction.ipynb) |
+| Electrostriction and the elasto-optic tensor | `get_electrostriction()`, `get_strain_response()` | [21](21_electrostriction.ipynb) |
+| An effective mass | `get_effective_mass()` | [29](29_effective_mass_and_angular_momenta.ipynb) |
+
+### Topology
+
+| To compute | Call | Notebook |
+|---|---|---|
+| A Berry curvature map | `get_berry_curvature()` | [10](10_topological_invariants.ipynb) |
+| A Chern number | `get_chern()` | [10](10_topological_invariants.ipynb) |
+| A Z2 invariant | `get_z2()`, `get_z2_3d()` | [10](10_topological_invariants.ipynb) |
+
+### Choosing the physics of the run
+
+| To use | Selected by | Notebook |
+|---|---|---|
+| Ultrasoft and PAW pseudopotentials | the dataset named in the input | [04](04_ultrasoft_and_paw.ipynb) |
+| PBE, revPBE, PBEsol | `input_dft`, or the dataset's header | [05](05_gradient_corrections.ipynb) |
+| A Hubbard `U` | the `HUBBARD` card | [13](13_dft_plus_u.ipynb) |
+| A band gap that LDA gets wrong | `input_dft = 'tb09'` | [24](24_tran_blaha_band_gaps.ipynb) |
+
+### Under the hood
+
+These three are about the machinery rather than about a property, and their internals are
+the subject rather than an intrusion. Read them when a calculation misbehaves, not when you
+want a number.
+
+| | |
+|---|---|
+| [`01_silicon_setup`](01_silicon_setup.ipynb) | Input file to cell to k-points to the plane-wave basis, and what a cutoff can represent |
+| [`03_eigensolver_and_performance`](03_eigensolver_and_performance.ipynb) | What an iterative eigensolver saves over a dense one, and the single-core comparison with QE |
+| [`17_reaching_self_consistency`](17_reaching_self_consistency.ipynb) | Charge sloshing and Kerker screening, and the unstable magnetic solutions a mixer cannot reach |
+
+## In file order
+
 | Notebook | Covers |
 |---|---|
+| [`00_the_calculator.ipynb`](00_the_calculator.ipynb) | One object with a method per calculation, and the caching and immutability rules behind it |
 | [`01_silicon_setup.ipynb`](01_silicon_setup.ipynb) | Input file to cell to k-points to the plane-wave basis, and what a cutoff can represent |
 | [`02_silicon_scf_and_bands.ipynb`](02_silicon_scf_and_bands.ipynb) | The SCF, the energy term by term (1e-9 Ry against QE), silicon's band structure and its covalent bond |
 | [`03_eigensolver_and_performance.ipynb`](03_eigensolver_and_performance.ipynb) | What an iterative eigensolver saves over a dense one, and the single-core comparison with QE |
@@ -37,7 +127,6 @@ validation tables live in `PLAN.md` and in the tests, and are deliberately kept 
 | [`25_raman_tensors.ipynb`](25_raman_tensors.ipynb) | The Raman tensor as the polarizability's derivative in an atomic position, against a finite difference |
 | [`26_raman_and_infrared_spectra.ipynb`](26_raman_and_infrared_spectra.ipynb) | Modes, activities and depolarisation ratios: silicon's 519 cm-1 line, Raman-active and infrared-silent |
 | [`27_excitons_and_tddft.ipynb`](27_excitons_and_tddft.ipynb) | Absorption spectra and the bootstrap kernel, and why no adiabatic local kernel binds an exciton |
-| [`28_the_calculator.ipynb`](28_the_calculator.ipynb) | One object with a method per calculation, and the caching and immutability rules behind it |
 | [`29_effective_mass_and_angular_momenta.ipynb`](29_effective_mass_and_angular_momenta.ipynb) | Band curvature as an effective mass, and site-resolved `<L>`, `<S>` and `<J>` against Elk |
 
 ## Conventions
@@ -52,23 +141,27 @@ validation tables live in `PLAN.md` and in the tests, and are deliberately kept 
   capability rather than about code: one saying a derivative is taken of the energy itself
   rather than derived by hand, and one where a reference is unusual and the reader would
   otherwise not trust the comparison.
+- **This binds the code as much as the prose**, which is the rule that was missing and let
+  the notebooks drift into validation reports. An identity check across four
+  pseudopotentials, a derivative checked against a closed form on a random matrix, a
+  hand-built linear solve with a probe potential: these are the test suite's job, and a
+  notebook that carries one is doing it in public. They go in `tests/`, and the notebook's
+  footer names the file they went to.
 - **No em dashes.** Anywhere, in prose or in printed output.
 - **Every new feature adds a notebook, or extends one.** A phase is not finished until its
-  notebook exists. This is a standing requirement, not a per-phase decision.
+  notebook exists. This is a standing requirement, not a per-phase decision. It adds a row
+  to the task index above as well, keyed by the property, not by the feature's name.
 - **Drive it with a `Calculator`.** `Calculator.from_file(input, pseudo_dir=...)` and its
-  `get_*` methods (notebook 28) are how every notebook here opens, and a new one should
+  `get_*` methods (notebook 00) are how every notebook here opens, and a new one should
   do the same rather than reach for the `read_pw_input` / `read_upf` / `build_system`
   trio. The functional entry points are unchanged and still correct; a notebook that
-  drops back to one says why in place, and briefly.
+  drops back to one says why in place, and briefly. **Where a `get_*` method exists, use
+  it**: building the same quantity by hand and then remarking that the method also exists
+  is backwards.
 - **State the observable.** Every notebook heads with the equation of the quantity it
   computes, in display maths, which is the thing a reader wants before any code. Where the
   quantity is a derivative, say *of what, holding what fixed*: that distinction is physics
   and it stays.
-- **Five minutes.** Header saying what this computes and the headline number; the shortest
-  code that runs it; **one figure that shows the physics**, a band structure wherever the
-  feature shows in bands; one table against Quantum ESPRESSO; at most one "how it works"
-  cell for the single best *physical* idea; a short footer naming the tests. About eight
-  code cells, not twenty.
 - **Silicon first.** New capabilities are demonstrated on the two-atom fcc silicon cell from
   `test-suite/pw_scf/scf.in` wherever they can be. A second system appears only when it
   shows something silicon cannot (a metal for smearing, a magnetic system for spin).
@@ -80,6 +173,26 @@ validation tables live in `PLAN.md` and in the tests, and are deliberately kept 
 - **Committed with their outputs**, so they read on GitHub without being run, and **each has
   a `.md` export beside it**: raw `.ipynb` is JSON and unreadable in a plain editor or a
   diff. The `.ipynb` stays the source of truth: edit it, then re-export.
+
+## The shape of a notebook
+
+Nine cells, 60 to 70 lines of code, and no code cell over 25 lines. The second cell is the
+one the whole notebook is for.
+
+1. **The observable.** Title is the property. Its defining equation in display maths. The
+   headline number and the comparison against QE, Elk or experiment, **as a markdown table
+   of quoted numbers** rather than as computed output.
+2. **The run, and at most ten lines of it**: the imports, `Calculator.from_file(...)`, the
+   one `get_X()` call, the number printed plainly. No local `load()` helper, no
+   `read_pw_input`, no internals. Settings that matter belong in the input file.
+3. **What the number means.** Sign, magnitude, what experiment says.
+4. **The figure.** `result.plot(ax=...)` where the result object has one; hand-drawn only
+   where it shows physics the result object does not hold.
+5. **One live comparison against QE.** One case, one table, ten lines.
+6. **Optionally, the single best physical idea**, in one cell, and it is *physical*.
+7. **What the feature refuses.** The refusals are the promise that a run which starts is a
+   run whose physics is there.
+8. **A footer naming the tests**, including the file any identity checks live in.
 
 ## Running them
 

@@ -12,7 +12,7 @@ $$E[n] = T_s[n] + \int v_{\rm ext}(\mathbf r)\, n(\mathbf r)\, d\mathbf r
 and self-consistency is the statement that the density built from the eigenstates of the
 potential $v[n]$ is the same $n$ that produced it.
 
-Notebook 01 builds the plane-wave basis this stands on, and notebook 28 is about the
+Notebook 01 builds the plane-wave basis this stands on, and notebook 00 is about the
 `Calculator` used here.
 
 

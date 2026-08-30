@@ -6487,6 +6487,271 @@ which is what nickel above is.
 `(nk, npwx, natomwfc)` array a projected DOS or a Hubbard `U` already holds, and
 the site matrices are `(natom, nshell, 2l+1, 2, 2l+1, 2)`, which is nothing.
 
+### P49 — The notebooks, rewritten for someone computing a property. 🚧 PHASES 1-2 DONE.
+
+`notebooks/`, `notebooks/README.md`, `pypresso/calculator.py`, and one new test.
+Not started. This entry is the design, written before the work and reviewed
+before being written down, so the session that picks it up does not re-derive the
+diagnosis. The complaint that started it is that the code in the notebooks is
+hard to read and does not go to the physics, for a reader who wants to *use* the
+code to compute something.
+
+**The measurement first, because the obvious diagnosis is the wrong one.** Across
+the 29 notebooks there are 2800 non-comment code lines in 159 code cells: 97 lines
+per notebook against a convention that says "about eight code cells, not twenty",
+and 17.6 lines per cell, so the shape is a handful of very long cells rather than
+many short ones (the longest are 48, 42, 40, 40 and 39 lines). Of those lines
+**14% are hand-rolled matplotlib and 15% are `print` formatting**. Every one of
+the 29 imports from `pypresso` past `Calculator`, median four such lines, worst
+nine. The instinct is to call this boilerplate and shorten it. That is a symptom.
+
+**The cause is that the notebooks are doing the test suite's job in public.** The
+conventions in `CLAUDE.md` and `notebooks/README.md` bind the *prose* — no `jvp`,
+no Fortran file names, no phase numbers, no trap catalogues — and the notebooks
+obey that faithfully. Nothing has ever bound the *code*, so this project's
+validation instinct moved into the code cells, where the rule does not reach:
+
+- `09_forces_and_relaxation`'s **first** code cell is a frozen-functional identity
+  check looped over four pseudopotential cases, printing a four-row table of SCF
+  total against frozen functional. A reader who wants a force meets `frozen_energy`
+  and `state_from_result` before `get_forces()` appears at all.
+- `13_dft_plus_u` checks `hubbard_potential` against `qe_hubbard_potential` **on a
+  random symmetric matrix** (`np.random.default_rng(0)`). That is a unit test,
+  transcribed into a tutorial.
+- `19_linear_response` hand-builds a Sternheimer solve with a cosine probe
+  potential, twice, once spin-polarized. It is 459 export lines, the longest in the
+  set, and the worst offender on every axis measured here.
+
+This cause drags the other two symptoms behind it, which is why fixing volume
+directly would not work. The identity checks are *what force* the internal
+imports; the multi-case comparisons are *what force* the printf tables. Evict them
+to the tests and the 97-line mean falls to the 60s without anyone shortening
+anything.
+
+**Second cause: the facade is opened and then abandoned.** "Drive it with a
+`Calculator`" is honoured as *open* with `from_file` and then drop to internals.
+The damning subset is where the `get_*` method exists and the notebook builds the
+quantity by hand anyway. `19` constructs band velocities from `VelocityOperator`
+plus `fixed_density_states` over ten lines and only afterwards remarks that
+`get_band_velocities` does the same in one call — which is exactly backwards.
+`25_raman_tensors` imports `raman_tensors`, `refined_states`, `Calculation`,
+`run_scf`, `build_system` and `read_upf` at the top and then calls
+`get_raman_tensors()` regardless.
+
+**Third: `.plot()` exists on four result objects and one notebook uses it.**
+`BandStructure`, `DensityOfStates`, `ProjectedDOS` and the absorption result all
+carry a `plot` method; only `28_the_calculator` calls any of them, and the other
+28 hand-roll the axes. The `print` half of the presentation cost is the larger and
+the uglier one, and it has no such method to reach for at all.
+
+**Fourth, and it is a library gap rather than a notebook one.**
+`Calculator.from_file` silently drops the `&electrons` namelist: nothing anywhere
+in `system/builder.py` or `calculator.py` reads `conv_thr`, `mixing_beta`,
+`mixing_mode`, `electron_maxstep` or `mixing_fixed_ns`, though the same builder
+does read `&control`'s `etot_conv_thr`, `forc_conv_thr`, `nstep` and `tstress`.
+So it is an asymmetry, not a decision, and it is generating boilerplate in
+**eleven** notebooks, which define a local `load()` helper between them. They split
+into two kinds and the fix reaches them differently. Four — `07`, `11`, `12`, `13` —
+re-parse the input with `read_pw_input`/`parse_pw_input`, pull `mixing_beta`,
+`conv_thr` or `mixing_fixed_ns` out of it, and hand them straight back to a
+`Calculator` built from the same text; those helpers are deleted outright. The other
+seven — `03`, `04`, `05`, `06`, `08`, `09`, `17` — are path-and-defaults shorthand
+(`Calculator.from_file(DIR / name, pseudo_dir=PSEUDO, announce=False,
+conv_thr=1e-10)`) and only shrink. **28 of the 29 notebooks pass a `conv_thr` by
+hand and 25 pass `announce=False`**; the first number is what the `&electrons` fix
+is worth, and the second says `announce` wants a quieter default or a context
+manager of its own rather than a keyword on every construction.
+
+**Fifth: the ordering is a development history.** `notebooks/README.md` says so in
+its first line — "in the order the code gained them". The sharp version of the
+problem is that `28_the_calculator`, the notebook that teaches how to use the
+code, is second to last, and is **not linked from the root `README.md` at all**
+(its table runs 01 to 27 and then 29). There is no lookup anywhere from a property
+someone wants to the notebook that computes it.
+
+**Sixth, and it is the gap worth the most: nothing shows a reader running their
+own crystal.** All 29 open on QE's test suite or on `tests/data/qe/`. In 2800
+lines there is no cell that writes a fresh `pw.x` input for a material of the
+reader's choosing, points at pseudopotentials they fetched, and runs it. For the
+audience this phase is for, that is the first need, and it is unserved.
+
+**What is not wrong and must not be swept up.** Three notebooks are legitimately
+about machinery and their internals *are* their subject: `01` (the basis), `03`
+(the eigensolver and the QE comparison) and `17` (mixing and self-consistency).
+They should be labelled as a separate tier in the index, not rewritten to a
+skeleton they do not fit. And several hand-drawn figures show physics no result
+object holds — `02`'s bonding-charge plane, `19`'s induced charge — and are the
+best cells in the set. `.plot()` covers less of the 14% than it looks like it
+should, and that is fine.
+
+**Phases 1 and 2 have landed.** What they cost and what they found:
+
+**Phase 1, the index.** `notebooks/README.md` is now keyed by the property —
+six tables (ground state, structure, magnetism, response and spectra, topology,
+choosing the physics of the run) each giving the `get_*` method beside the
+notebook, with `01`, `03` and `17` moved into an explicit "under the hood" tier
+and the file-order table kept below for anyone who wants it. `28_the_calculator`
+is `00_the_calculator`, its one image and its two inbound links moved with it,
+and it is in the root README, which had been listing 01 to 27 and then 29. Every
+link and every `get_*` name in the new index is checked by grep against the file
+system and against `calculator.py` rather than remembered, and so are the four
+input variables the "choosing the physics" table names.
+
+**The rule that was missing is now in `CLAUDE.md`**: the physics-only rule binds
+the *code cells* and not only the prose. That is the whole diagnosis in one
+sentence, and it is what the phase-4 test will enforce mechanically.
+
+**Phase 2, the library.** Three things landed and one was measured and rejected.
+
+- **`&electrons` is adopted** by `from_file` and `from_text`
+  (`calculator.electrons_defaults`): `conv_thr`, `mixing_beta`, `mixing_mode`,
+  `mixing_fixed_ns`, and `electron_maxstep` renamed to `max_iterations` on the
+  way in, because that word means three different loops here and the input
+  file's number is unambiguously the SCF's. An absent variable stays absent
+  rather than being given a default, so `run_scf` keeps deciding; an explicit
+  keyword argument still wins over the file. Verified on QE's own inputs:
+  `pw_lda+U/lda+U.in` yields all four of its settings and `pw_noncolin` two,
+  which are exactly the numbers four notebooks were re-parsing the input to
+  recover. **`diagonalization` is read by `pw.x` and deliberately not adopted**,
+  and the reasoning is in `_ELECTRONS_NOT_ADOPTED`: it is a `SETUP_OPTIONS`
+  member rather than a run default, and this package offers one eigensolver, so
+  adopting it would turn `diagonalization = 'cg'` — valid `pw.x` input — from a
+  run that works into a `ValueError`, while mapping it onto Davidson would be
+  the silent substitution the package refuses everywhere else.
+  **The precedent that settles this was already in the repository and is better
+  evidence than the `&control` asymmetry**: `tools/compare_qe.py` has always
+  read `conv_thr` out of `&electrons` with a private regex (`_CONV_THR`),
+  commented "so both codes stop at the same accuracy". The project had already
+  concluded that the namelist must be honoured; it had just concluded it in a
+  tool rather than in the library. That regex is now duplicated logic and could
+  call `electrons_defaults`, which is a tidy-up deliberately **not** taken here,
+  because the performance comparison is the one thing in the repository whose
+  numbers must not move in a pass that is not about performance.
+  **The blast radius is wide and is the intended behaviour**: 128 of the 136
+  committed `pw.x` inputs under `tests/data/qe/` and `benchmarks/` carry an
+  `&electrons` setting, nearly all of them a `conv_thr` of 1e-10 or 1e-12 where
+  the old default was `run_scf`'s 1e-6. Runs get tighter and slower and agree
+  with what `pw.x` does with the same file. Neither performance tool goes through
+  `Calculator`, so `PERFORMANCE.md` is untouched; **notebooks `03`, `04`, `05`
+  and `06` construct calculators without an explicit `conv_thr` on inputs that
+  carry one**, so their committed outputs are stale as of this phase and are
+  re-executed when phase 3 or 5 reaches them.
+- **Four more `.plot()` methods**, chosen by the criterion that a notebook was
+  already drawing them by hand: `VibrationalSpectrum` (a Lorentzian-broadened
+  Raman or infrared curve, `26`), `SpiralScan` (`E(q)` with the turning moment
+  on a twin axis, `12` and `14`), `RelaxResult` (energy and max force against
+  the ionic step, `09` and `14`) and `BerryCurvature` (the `Omega(k)` map,
+  `10`). The audit that picked them is the set difference the phase called for:
+  69 classes carry array data and four had a `plot`, but most of the 69 are
+  machinery nobody plots, so the operative filter is what the notebooks
+  hand-roll, not what has an array in it.
+- **`io.comparison_table`** — two columns of numbers beside each other, aligned,
+  with the difference. It formats and decides nothing: no tolerance, no verdict.
+  A missing reference prints `--` rather than becoming a zero.
+- **`tests/unit/test_result_plots.py`**, 18 tests in 0.8 s, in the fast gate.
+  The finding worth keeping is that **there was no test anywhere that called any
+  `.plot()`** — the four that existed had never been executed by the suite,
+  which is most of why 28 of the 29 notebooks hand-rolled their axes rather than
+  reaching for one. The file covers all eight, and its parametrised contract
+  test asserts the thing the notebooks depend on: `plot(ax=...)` composes into a
+  figure the caller laid out.
+
+**`announce` was looked at and left alone**, which is the one item of phase 2
+that ends in "no". 25 of the 29 notebooks pass `announce=False`, so it looked
+like the same kind of boilerplate as `conv_thr`. It is not: the announcement is
+that an *implicit* SCF is starting, it is a documented rule in `CLAUDE.md` with
+a test asserting it, and it is useful exactly where a notebook is not — at an
+interactive prompt. Under the skeleton a notebook constructs one calculator in
+cell 2, so the cost is one keyword on one line, which is the right price for
+keeping the behaviour.
+
+**The skeleton, which every property notebook is held to.** Nine cells, 60 to 70
+non-comment code lines, no cell over 25.
+
+1. Markdown: the property as the title, its defining equation in display maths
+   (for a derivative, *of what, holding what fixed*), the headline number, and the
+   comparison against QE or Elk or experiment **as a markdown table of quoted
+   numbers**. `19`'s opening table is the model already.
+2. Code, **10 lines at most, and this cell is what the whole exercise is for**:
+   the imports, `Calculator.from_file(...)`, the one `get_X()` call, and the
+   number printed plainly. No `def load()`, no `read_pw_input`, no internals. Where
+   the run needs particular mixing, it belongs in the input file, which the
+   `&electrons` fix below is what makes possible.
+3. Markdown: what the number means. Sign, magnitude, what experiment says.
+4. Code: the figure. `result.plot(ax=...)` where one exists; hand-drawn only where
+   it shows physics the result object does not hold.
+5. One live comparison against QE. One case, one table, ten lines.
+6. Optional: one cell for the single best *physical* idea. `13`'s figure of the
+   penalty pushing occupations to 0 and 1 is the model; `09`'s frozen-functional
+   identity is the anti-model.
+7. Markdown: what the feature refuses.
+8. Markdown footer naming the tests, extended to say where the identity checks and
+   per-case tables this rewrite evicted now live — so they are moved rather than
+   deleted.
+
+Cell 2 is the anchor the enforcement test below is written around.
+
+**Phases, in the order they have to happen.**
+
+- **1. The index.** `notebooks/README.md` rewritten task-first: a table keyed by
+  the property, giving the `get_*` method and the notebook, with a separate "under
+  the hood" section for `01`, `03` and `17`. Rename `28_the_calculator` to
+  `00_the_calculator` — one file, two inbound links, and it is the signpost the
+  reader needs first — and add it to the root README, which is missing it. No code
+  risk and visible in one sitting.
+- **2. The library, and it must come before any rewrite** or the rewrites get
+  rewritten. `from_file` adopts `&electrons` into `defaults`, with explicit keyword
+  arguments still winning; `electron_maxstep` maps to `max_iterations` and needs
+  care, because `SCF_ONLY_OPTIONS` already documents that three different loops
+  share that one word. This is a behaviour change for every existing caller and
+  wants a slow-suite pass behind it. `announce` gets its own answer in the same
+  pass, since 25 notebooks pass `announce=False` on construction. Then an audit
+  **by set difference** — result
+  objects carrying array data against result objects carrying `plot` — and the
+  missing ones written: `RelaxResult` (energy and force against step, hand-rolled
+  in `09`), the vibrational spectrum's stick plot (`26`), band velocities (`19`).
+  Plus one small table helper, so the `print("%-14s %16s ...")` art goes. **All of
+  this lives on result objects**, which is where this project already put
+  presentation: the facade rule constrains `get_*`, not results, and there are four
+  precedents. A `plot` draws what the result already holds and computes nothing.
+- **3. Three exemplars: `02`, `09`, `19`** — one already close, one
+  validation-shaped, one a machinery tour. The evicted identity checks land in
+  named test files in the same commit. These calibrate the budgets before the
+  sweep, and they are what the user signs off on.
+- **4. The enforcement test.** `tests/unit/test_notebook_conventions.py`, parsing
+  the `.ipynb` JSON, executing nothing, in the fast gate. Per notebook: an import
+  allowlist (`pypresso`, `pypresso.units`, `pypresso.system.kpoints`,
+  `pypresso.io`), anything else needing an inline justification comment and capped
+  at two; the first code cell containing `Calculator.from_` and at most twelve
+  lines; 80 code lines per notebook and 25 per cell; banned tokens; the `.md`
+  export's cell count matching the `.ipynb`, which is a staleness canary that costs
+  no execution; and a facade-bypass check against a hand-maintained map from entry
+  point to `get_*`, which is what would have caught `25` and `26`. The exemptions
+  live in an explicit dict that **shrinks as notebooks land**, so the thing
+  ratchets instead of rotting. One trap in the token list: a `P\d\d` phase-reference
+  pattern false-positives on space groups and point groups and has to be anchored.
+- **5. The sweep**, in index order: the remaining notebooks to the skeleton;
+  `25` and `26` merged into one Raman notebook, the spectrum first and the tensor
+  as its "how it works", since the physicist's question is "give me the Raman
+  spectrum" and the answer currently spans two; `08` trimmed to a quoted
+  measurement, which `CLAUDE.md` already flags as owed and unowned; and the new
+  **"your own crystal"** notebook, which is the sixth finding above and the highest
+  value single artifact in the phase.
+
+**The cost is wall clock, not thinking.** Every rewritten notebook is re-executed
+and re-exported through `tools/export_notebooks.sh`. `08` alone is 25 minutes and
+the rest of the set has never been timed, so phase 5 is paced by execution. Make
+`export_notebooks.sh` print per-notebook wall time and fail over the ten-minute
+ceiling while it is being touched anyway: that measures the unmeasured set as a
+side effect of the first full re-export.
+
+**Why the count stays at 29.** Renumbering is roughly ninety file renames plus a
+hunt through prose cross-references ("notebook 17 could only difference...") and
+through each notebook's `_files/` directory, for a gain that a task-keyed index
+delivers on its own. Twenty-nine was never the problem; the shape and the index
+were. The set ends at 29 either way: one merge, one addition.
+
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);
