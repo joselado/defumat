@@ -335,62 +335,14 @@ def test_a_displaced_spinor_cell_relaxes_back(pseudo_dir):
 
 
 # --- what stays refused ------------------------------------------------------
-
-def test_the_analytic_expressions_still_refuse_a_spinor(pseudo_dir):
-    """``force_us``/``stres_knl`` are a transcription with no spinor form.
-
-    The functional does spinors; the six hand-derived expressions beside it do
-    not, and a refusal that lived only inside the functional would not have
-    reached them -- which is the shape of defect the whole refusal sweep is
-    about.
-    """
-    from pypresso.stress.analytic import analytic_terms
-
-    _, calculation, result = _converged(CASES / "h4-noncolin-force.in", pseudo_dir)
-    with pytest.raises(NotImplementedError, match="noncollinear|spinor"):
-        compute_forces(calculation, result, method="analytic")
-    with pytest.raises(NotImplementedError, match="noncollinear|spinor"):
-        analytic_terms(calculation, state_from_result(result))
-
-
-def test_energy_at_refuses_a_spinor_unless_asked(pseudo_dir):
-    """The default is still a refusal, and that is what guards the consumers.
-
-    :mod:`pypresso.response.elastic` calls ``energy_at`` directly and never
-    reaches the Sternheimer solver's own ``noncolin`` guard, so the opt-in is
-    what keeps a third derivative from inheriting a spinor path its first-order
-    wavefunctions do not have.
-    """
-    _, calculation, result = _converged(CASES / "h4-noncolin-force.in", pseudo_dir)
-    with pytest.raises(NotImplementedError, match="noncollinear"):
-        energy_at(calculation, state_from_result(result))
-
-
-def test_the_sternheimer_refusal_still_stands(pseudo_dir):
-    """Phonons and the dielectric response are a different missing term.
-
-    ``incdrhoscf_nc``/``set_int3_nc`` are a second implementation rather than a
-    spin axis on this one, and that guard is not this phase's to lift.
-    """
-    from pypresso.response.sternheimer import require_a_sternheimer_regime
-
-    _, calculation, _ = _converged(CASES / "h4-noncolin-force.in", pseudo_dir)
-    with pytest.raises(NotImplementedError, match="noncollinear"):
-        require_a_sternheimer_regime(calculation)
-
-
-def test_a_spiral_force_is_refused_by_name(pseudo_dir):
-    """A spiral is ``noncolin`` with two spheres, and this writes down one.
-
-    Before the narrowing it was caught by ``reject_spinors`` along with
-    everything else; afterwards it would have walked into the spinor projector
-    contraction and died on an einsum shape instead of on a refusal.
-    """
-    from pypresso.forces.energy import reject_spinor_spiral
-
-    system = build_system(read_pw_input(CASES / "h-chain-spiral.in"))
-    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
-    calculation = Calculation(system, pseudos)
-    assert calculation.spiral
-    with pytest.raises(NotImplementedError, match="spin spiral"):
-        reject_spinor_spiral(calculation)
+#
+# In ``tests/unit/test_spinor_refusals.py``, and **not** here, because a refusal
+# fires on the *calculation* rather than on a converged state: three of the four
+# need no SCF at all and the fourth needs one iteration, so they cost 13 seconds
+# and belong in the fast gate. Left in this file they were slow-marked, and a
+# refusal lifted by accident would have gone unnoticed until someone ran the
+# two-hour set. The four are: the analytic force and stress expressions, which
+# have no spinor form; ``energy_at``'s opt-in default, which is what keeps the
+# elastic constants from inheriting a spinor path; the Sternheimer solver's own
+# ``noncolin`` guard, which is a different missing term; and the force on an atom
+# of a spin spiral.
