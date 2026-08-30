@@ -108,7 +108,7 @@ want a number.
 | [`06_density_of_states.ipynb`](06_density_of_states.ipynb) | Smearing and tetrahedra, silicon's gap as what separates them, and free-electron aluminium |
 | [`07_spin_polarization.ipynb`](07_spin_polarization.ipynb) | LSDA: nickel's moment as an output, the exchange splitting behind it, and the spin-resolved DOS |
 | [`08_spin_orbit_coupling.ipynb`](08_spin_orbit_coupling.ipynb) | Spinors and `j`-resolved projectors, platinum against QE, spinor forces, and bismuthene's spin-orbit gap |
-| [`09_forces_and_relaxation.ipynb`](09_forces_and_relaxation.ipynb) | Hellmann-Feynman and Pulay in one derivative, against finite differences, then relaxation |
+| [`09_forces_and_relaxation.ipynb`](09_forces_and_relaxation.ipynb) | Hellmann-Feynman and Pulay in one derivative, against Quantum ESPRESSO, then relaxation |
 | [`10_topological_invariants.ipynb`](10_topological_invariants.ipynb) | Chern numbers as exact integers, Wannier-centre flow, Fu-Kane parities, and the curvature as a map |
 | [`11_noncollinear_magnetism_and_fields.ipynb`](11_noncollinear_magnetism_and_fields.ipynb) | Magnetism as a vector field, bcc iron against QE, constrained moments, and a fixed-spin-moment search |
 | [`12_spin_spirals.ipynb`](12_spin_spirals.ipynb) | The generalized Bloch theorem, the limits that validate it, and a frozen-magnon `E(q)` curve |
@@ -118,7 +118,7 @@ want a number.
 | [`16_projected_density_of_states.ipynb`](16_projected_density_of_states.ipynb) | Which atom and which orbital a band belongs to, as a projected DOS, Löwdin charges and fat bands |
 | [`17_reaching_self_consistency.ipynb`](17_reaching_self_consistency.ipynb) | Charge sloshing and Kerker screening, and the unstable magnetic solutions a mixer cannot reach |
 | [`18_continuing_a_calculation.ipynb`](18_continuing_a_calculation.ipynb) | Starting one run from another across a change of spin regime: iron's moment rotated in one iteration |
-| [`19_linear_response.ipynb`](19_linear_response.ipynb) | The velocity operator, the Sternheimer equation, silicon's dielectric constant against `ph.x`, and Born charges |
+| [`19_linear_response.ipynb`](19_linear_response.ipynb) | Silicon's dielectric constant and Born charges against `ph.x`, norm-conserving and ultrasoft, and the charge that does the screening |
 | [`20_phonons.ipynb`](20_phonons.ipynb) | Phonons at Gamma: silicon's optical mode against `ph.x`, the charge that rearranges, and a metal |
 | [`21_electrostriction.ipynb`](21_electrostriction.ipynb) | How a strain changes the dielectric constant: electrostriction, the elasto-optic tensor and elastic constants |
 | [`22_van_der_waals.ipynb`](22_van_der_waals.ipynb) | Grimme's D2, and bilayer graphene binding at 3.23 A where PBE alone has no minimum at all |
@@ -201,7 +201,12 @@ pip install -e ".[notebooks]"    # from the repository root: jupyter, matplotlib
 jupyter lab notebooks/
 ```
 
-Most run in under a minute on one core. The exceptions are `08` (about five minutes, the
+The three rewritten to the shape above are timed: **`02` in 7 s, `09` in 6 s and
+`19` in 46 s**, all of them far inside the ten-minute ceiling. `19` used to be much
+slower, and what it lost was two hand-built linear solves and a second
+self-consistent run that were demonstrating machinery rather than physics.
+
+Most of the rest run in under a minute on one core. The exceptions are `08` (about five minutes, the
 bismuthene pair), `11` and `12` (a few minutes each), `13` (its four SCF runs) and `18`
 (about three minutes: it runs fourteen SCFs, which is the point, since every number in it
 is a *pair* of runs, one from the atoms and one continued). `29` takes **63 s**, most of it the

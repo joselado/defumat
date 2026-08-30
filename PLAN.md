@@ -6487,7 +6487,7 @@ which is what nickel above is.
 `(nk, npwx, natomwfc)` array a projected DOS or a Hubbard `U` already holds, and
 the site matrices are `(natom, nshell, 2l+1, 2, 2l+1, 2)`, which is nothing.
 
-### P49 — The notebooks, rewritten for someone computing a property. 🚧 PHASES 1-2 DONE.
+### P49 — The notebooks, rewritten for someone computing a property. 🚧 PHASES 1-3 DONE.
 
 `notebooks/`, `notebooks/README.md`, `pypresso/calculator.py`, and one new test.
 Not started. This entry is the design, written before the work and reviewed
@@ -6664,6 +6664,64 @@ a test asserting it, and it is useful exactly where a notebook is not — at an
 interactive prompt. Under the skeleton a notebook constructs one calculator in
 cell 2, so the cost is one keyword on one line, which is the right price for
 keeping the behaviour.
+
+**Phase 3, the three exemplars, has landed**, and the headline is that the
+skeleton cuts the code by more than half without losing a number:
+
+| | code cells | code lines | longest cell | beyond-facade imports |
+|---|---|---|---|---|
+| `02` | 5 → **4** | 66 → **53** | 24 → **24** | 5 → **2** |
+| `09` | 4 → **2** | 98 → **26** | 27 → **14** | 4 → **0** |
+| `19` | 11 → **5** | 143 → **47** | 27 → **19** | 10 → **1** |
+
+307 code lines become 126, every cell is inside the 25-line budget, and every
+number in the three headline tables is reproduced by the rewritten notebook.
+
+**The eviction was almost entirely deletion, which is the finding.** All three
+of notebook 09's validation cells were **already in the test suite, verbatim**:
+its opening four-case frozen-functional table is
+`test_force_machinery.py::test_the_frozen_energy_reproduces_the_scf_total`, its
+central difference is
+`test_forces.py::test_the_force_is_the_derivative_of_the_energy`, and its
+analytic-versus-autodiff term table is `test_the_two_methods_agree`,
+`test_the_two_methods_differ_by_the_scf_correction` and
+`test_each_term_matches_quantum_espresso`. The notebook was not carrying checks
+that had no home; it was **restating the tests in public**. Only one gap was
+real — the frozen-functional identity was asserted on one dataset where the
+notebook showed four — and it is closed by
+`test_forces.py::test_the_frozen_functional_reproduces_the_scf_total`,
+parametrised over all five cases and passing in 14 s.
+
+**What was dropped, and why each was safe.** `09`'s analytic-versus-autodiff
+table is a *transcribed-versus-differentiated* comparison, which the notebook
+conventions ban outright; its finite difference is quoted with its numbers and
+named to the test that runs it. `19` lost its hand-built Sternheimer probe solve
+(twice, once spin-polarized), its O2 level diagram and its second probe solve;
+what those demonstrated survives as three sentences and the validated numbers
+they produced. `19`'s velocity operator went from ten lines of
+`VelocityOperator` + `fixed_density_states` to one `get_band_velocities()` call,
+which is what the notebook itself used to point out immediately afterwards.
+
+**Two prose claims were false against the numbers the rewrite printed**, and
+both were inherited rather than introduced. The velocity cell's "the near-zero
+entries are the band extrema" is wrong on the SCF's own shifted Monkhorst-Pack
+grid, whose smallest speed is 0.189 Ry bohr — the grid is shifted *off* the
+high-symmetry points, which is where `d(eps)/dk` vanishes. And `19`'s induced
+charge figure has one dashed atom line, not the two its caption claimed: the
+second atom sits at `x = 0`, on the plot's edge. Re-executing a notebook after
+rewriting it is what surfaced both, and neither is the kind of thing a test
+would catch.
+
+**`get_born_charges` had to be *used* to keep the index honest.** The task index
+routes Born charges to `19`, and the rewritten notebook was reading them off
+`DielectricTensor.born_charges` instead, so the row named a method the notebook
+never called. It calls it now; it costs nothing, because `get_born_charges`
+delegates to `get_dielectric_tensor` and hits the same cache.
+
+**One thing was noticed and deliberately not fixed**: `tests/regression/test_forces.py`
+caches its converged states with `lru_cache(maxsize=None)` over five cells,
+which is the exact leak this file's memory rule names. Changing it alters what
+the slow suite holds and belongs to a pass that is about memory.
 
 **The skeleton, which every property notebook is held to.** Nine cells, 60 to 70
 non-comment code lines, no cell over 25.

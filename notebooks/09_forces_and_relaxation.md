@@ -1,252 +1,158 @@
-# Forces and structural relaxation
+# Forces on the atoms, and relaxing a structure
 
-The force on an atom is minus the derivative of the total energy with respect to its
-position, taken at **frozen** wavefunctions, occupations and eigenvalues:
+The force on an atom is minus the derivative of the total energy with respect to
+its position, taken at **frozen** wavefunctions, occupations and eigenvalues:
 
 $$\mathbf F_I = -\left.\frac{\partial E_{\rm tot}
    [\{\psi\}, \{f\}, \boldsymbol\tau]}
    {\partial \boldsymbol\tau_I}\right|_{\psi,\, f,\, \varepsilon\ \rm fixed}$$
 
-Freezing the states loses nothing because the energy is stationary in them at the
-converged solution, which is the Hellmann-Feynman theorem; what remains beyond the bare
-electrostatics is the Pulay contribution from a basis that moves with the atoms, and, for
-an ultrasoft dataset, the augmentation charge's own displacement.
+Freezing the states costs nothing, because the energy is stationary in them at
+the converged solution: that is the Hellmann-Feynman theorem. What survives
+beyond the bare electrostatic pull is the Pulay contribution from a basis that
+moves with the atoms, and, for an ultrasoft dataset, the augmentation charge's
+own displacement. Both fall out of the same derivative rather than being
+written down separately, which is worth one sentence because it is a claim
+about what the code can do: the derivative is taken of the energy itself.
 
-The derivative is taken of the energy itself rather than from hand-derived expressions,
-and the six terms Quantum ESPRESSO writes out separately are what it expands into. Against
-`pw.x`: **2e-5 Ry/bohr or better** on five references, and a BFGS relaxation that
-reproduces QE's geometry to **1e-6 bohr**.
+On a two-atom silicon cell with the atoms pushed off their sites:
+
+| | pypresso | `pw.x` |
+|---|---|---|
+| force on atom 0, along the bond | **0.06039736 Ry/bohr** | 0.06039673 |
+| the same, five reference cases | | agree to **2e-5 Ry/bohr** |
+| relaxed geometry | | agrees to **1e-6 bohr** |
+
+A crystal with its atoms on their symmetry sites has no force at all, so a cell
+with something to compute is one that has been displaced.
 
 
 ```python
 from pathlib import Path
 
-import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import numpy as np
 
 from pypresso import Calculator
-from pypresso.forces import compute_forces, frozen_energy, state_from_result
-from pypresso.io import read_qe_output
-from pypresso.scf import run_scf          # the finite difference below needs it
+from pypresso.io import comparison_table, read_qe_output
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
+silicon = Calculator.from_file(CASES / "si2-nc-force.in", pseudo_dir=PSEUDO)
+forces = silicon.get_forces()
+qe = read_qe_output(CASES / "reference.out.si2-nc-force")
 
-def load(case):
-    return Calculator.from_file(CASES / f"{case}.in", pseudo_dir=PSEUDO,
-                                announce=False, conv_thr=1e-10)
-
-
-def reference(case):
-    return read_qe_output(CASES / f"reference.out.{case}")
-
-
-# What is differentiated below must be the SCF's own total energy at the converged state,
-# since otherwise its derivative is the force of some other calculation.
-print("%-18s %18s %18s %12s"
-      % ("case", "SCF total (Ry)", "frozen functional", "difference"))
-for case in ("si2-nc-force", "si2-us-force", "si2-paw-force", "si2-us-pbe-force"):
-    calc = load(case)
-    scf = calc.get_scf()
-    energy = float(frozen_energy(calc.calculation,
-                                 calc.system.structure.positions,
-                                 state_from_result(scf)))
-    print("%-18s %18.10f %18.10f %12.1e"
-          % (case, scf.total_energy, energy, energy - scf.total_energy))
+print(comparison_table(
+    [(f"atom {a}, {'xyz'[d]}", float(forces.forces[a, d]), float(qe.forces[a, d]))
+     for a in range(2) for d in range(3)],
+    fmt="{:.8f}", headers=("force [Ry/bohr]", "pypresso", "pw.x", "difference")))
 ```
 
-    case                   SCF total (Ry)  frozen functional   difference
+    [pypresso] the forces: no ground state cached, running the SCF first (conv_thr = 1e-10). Call get_scf() to do this explicitly.
 
 
-    si2-nc-force           -15.7874037087     -15.7874037087      1.8e-15
+    force [Ry/bohr]     pypresso         pw.x  difference
+    atom 0, x         0.06039736   0.06039673     6.3e-07
+    atom 0, y        -0.00000000   0.00000000     3.2e-19
+    atom 0, z         0.00000000   0.00000000     3.2e-19
+    atom 1, x        -0.06039736  -0.06039673     6.3e-07
+    atom 1, y         0.00000000   0.00000000     3.2e-19
+    atom 1, z        -0.00000000   0.00000000     3.2e-19
 
 
-    si2-us-force           -22.7454400458     -22.7454400458      3.6e-15
+`get_forces()` announced that it ran a self-consistent field calculation
+first. There was no ground state cached, and a force is a derivative *at* one,
+so it converged the density before differentiating it. Every `get_*` here
+behaves that way, and says so rather than doing it quietly.
 
+The two forces are equal and opposite, which is Newton's third law and is not
+imposed anywhere: it is the sum rule that the total force on an isolated crystal
+vanishes, and here it holds to 1e-17. The components across the bond are zero by
+symmetry, and they are zero to the same accuracy rather than to the accuracy of
+the force itself.
 
-    si2-paw-force          -89.2668867248     -89.2668867248      1.0e-12
+The comparison that trusts neither code is a **central difference of the total
+energy** over re-converged displaced cells, which is what a force is by
+definition. Measured offline on this cell with symmetry switched off, at a step
+of 2e-3 bohr: the difference gives 0.06076082 Ry/bohr where the derivative gives
+0.06076358, and the gap of 2.8e-6 is the finite difference's own truncation
+error rather than a disagreement. It is quoted rather than run here because it
+costs six self-consistent runs; it is `test_the_force_is_the_derivative_of_the_energy`
+in the test suite, where it belongs.
 
+## Relaxing the structure
 
-    si2-us-pbe-force       -22.8143892008     -22.8143892008      0.0e+00
-
-
-## The force on a displaced silicon cell
-
-Two atoms pushed off their sites, so that there is a force to compute at all. Against QE,
-and against a finite difference of the SCF energy itself, which is the check that trusts
-neither implementation. Symmetry is switched off so that nothing is projected out.
+`calculation = 'relax'` walks downhill with BFGS, a trust radius and a Wolfe
+line search, in crystal coordinates with the cell metric, so that a step is
+measured in the geometry the crystal actually has rather than in cartesian bohr.
+The symmetry group is fixed at the start and checked afterwards, so a relaxation
+moves the atoms within their symmetry and cannot silently lower it.
 
 
 ```python
-import dataclasses
-
-calc = load("si2-nc-force")
-forces = calc.get_forces()                       # autodiff, the default
-qe = reference("si2-nc-force")
-
-print("%4s %38s %38s" % ("atom", "pypresso (Ry/bohr)", "Quantum ESPRESSO"))
-for atom, (ours, theirs) in enumerate(zip(forces.forces, qe.forces)):
-    print("%4d  %s   %s" % (atom, " ".join("% .8f" % v for v in ours),
-                            " ".join("% .8f" % v for v in theirs)))
-print("largest difference %.2e Ry/bohr" % np.abs(forces.forces - qe.forces).max())
-
-nosym = Calculator(dataclasses.replace(calc.system, nosym=True), calc.pseudos,
-                   announce=False, conv_thr=1e-12)
-autodiff = nosym.get_forces().forces
-
-# The finite difference is of the *same* fixed setup, so it steps the positions
-# through `at_positions` rather than building a new calculator each time: that is
-# what keeps the basis frozen and the difference free of Pulay error.
-plain, pseudos = nosym.calculation, nosym.pseudos
-
-
-def energy_at(positions):
-    moved = plain.at_positions(jnp.asarray(positions))
-    return run_scf(moved.system, pseudos, calculation=moved, conv_thr=1e-12).total_energy
-
-
-h, origin = 2.0e-3, np.asarray(nosym.system.structure.positions)
-print("\n%12s %20s %16s %13s"
-      % ("coordinate", "finite difference", "autodiff", "difference"))
-for atom, direction in ((0, 0), (0, 1), (1, 2)):
-    plus, minus = origin.copy(), origin.copy()
-    plus[atom, direction] += h
-    minus[atom, direction] -= h
-    fd = -(energy_at(plus) - energy_at(minus)) / (2 * h)
-    print("  atom %d %s   %20.8f %16.8f %13.1e"
-          % (atom, "xyz"[direction], fd, autodiff[atom, direction],
-             fd - autodiff[atom, direction]))
-```
-
-    atom                     pypresso (Ry/bohr)                       Quantum ESPRESSO
-       0   0.06039736 -0.00000000  0.00000000    0.06039673  0.00000000  0.00000000
-       1  -0.06039736  0.00000000 -0.00000000   -0.06039673  0.00000000  0.00000000
-    largest difference 6.26e-07 Ry/bohr
-
-
-    
-      coordinate    finite difference         autodiff    difference
-
-
-      atom 0 x             0.06076082       0.06076358      -2.8e-06
-
-
-      atom 0 y            -0.00470094      -0.00470190       9.5e-07
-
-
-      atom 1 z             0.01005466       0.01005364       1.0e-06
-
-
-## The same force, term by term
-
-The force splits into the pieces a textbook derives separately: the local potential's
-electrostatic pull, the nonlinear core correction, the Ewald sum between the nuclei, the
-nonlocal projectors' Pulay term and, for ultrasoft, the augmentation charge. Computing it
-both ways is worth doing because the two routes share nothing.
-
-They differ by exactly one term. The extra one is a correction for the density not being
-quite converged, and it vanishes as `conv_thr` tightens: at 1e-10 Ry it is already down at
-1e-7 Ry/bohr.
-
-
-```python
-us = load("si2-us-force")
-system_us, calc_us = us.system, us.calculation
-qe_us = reference("si2-us-force")
-
-analytic = us.get_forces(method="analytic")
-autodiff_us = us.get_forces(method="autodiff")
-
-from pypresso.system.symmetry import atom_mapping, symmetrize_vector
-
-mapping = atom_mapping(system_us.cell, system_us.structure, calc_us.symmetries)
-terms = dict(analytic.terms)
-terms["nonlocal"] = terms["nonlocal"] + terms.pop("augmentation")     # QE folds it in
-
-print("%16s %22s %20s %12s"
-      % ("term", "pypresso (x, atom 1)", "Quantum ESPRESSO", "difference"))
-for name, qe_name in (("ewald", "ionic"), ("local", "local"), ("core", "core"),
-                      ("nonlocal", "nonlocal"), ("scf_correction", "scf_correction")):
-    ours = np.asarray(symmetrize_vector(np.asarray(terms[name]), system_us.cell,
-                                        calc_us.symmetries, mapping))
-    theirs = qe_us.force_terms[qe_name]
-    print("%16s %22.8f %20.8f %12.1e"
-          % (name, ours[0, 0], theirs[0, 0], np.abs(ours - theirs).max()))
-print("\ntotal, analytic vs QE   %.1e Ry/bohr"
-      % np.abs(analytic.forces - qe_us.forces).max())
-print("total, autodiff vs QE   %.1e Ry/bohr"
-      % np.abs(autodiff_us.forces - qe_us.forces).max())
-```
-
-                term   pypresso (x, atom 1)     Quantum ESPRESSO   difference
-               ewald             0.10209222           0.10209221      1.1e-08
-               local            -0.10042023          -0.10042054      3.1e-07
-                core            -0.00600309          -0.00600313      4.5e-08
-            nonlocal             0.06307452           0.06307509      5.7e-07
-      scf_correction             0.00000007          -0.00000028      4.0e-07
-    
-    total, analytic vs QE   2.0e-07 Ry/bohr
-    total, autodiff vs QE   1.3e-07 Ry/bohr
-
-
-## Relaxation
-
-`calculation = 'relax'` walks downhill with BFGS, a trust radius and a Wolfe line search,
-in crystal coordinates with the cell metric so that the step is measured in the geometry
-the crystal actually has. The symmetry group is fixed at the start and checked afterwards,
-so a relaxation moves the atoms within their symmetry and cannot silently lower it.
-
-
-```python
-relax = load("si2-nc-relax")
+# The input asks for conv_thr = 1e-8; the claim being shown is a 1e-6 bohr
+# agreement on the final geometry, which is tighter than that SCF can support.
+relax = Calculator.from_file(CASES / "si2-nc-relax.in", pseudo_dir=PSEUDO,
+                             conv_thr=1e-10)
 relaxed = relax.get_relax()
-qe_relax = reference("si2-nc-relax")
-alat = float(relax.system.cell.alat)
+theirs = read_qe_output(CASES / "reference.out.si2-nc-relax")
 
-print("%5s %20s %19s %19s" % ("step", "total energy (Ry)", "max |F| (Ry/bohr)",
-                              "separation (alat)"))
+relaxed.plot().set_title("silicon relaxing back onto its lattice sites")
+
+alat = float(relax.system.cell.alat)
 for step in relaxed.steps:
     separation = (step.positions[1] - step.positions[0]) / alat
-    print("%5d %20.8f %19.6f   (%.4f, %.4f, %.4f)"
+    print("step %d   E = %.8f Ry   max|F| = %.6f   at (%.4f, %.4f, %.4f) alat"
           % (step.index, step.total_energy, step.max_force, *separation))
-print("\nfinal energy   pypresso %.10f   QE %.10f   difference %.1e Ry"
-      % (relaxed.total_energy, qe_relax.final_energy,
-         relaxed.total_energy - qe_relax.final_energy))
-print("final geometry differs from QE by %.1e bohr"
-      % np.abs(relaxed.positions - qe_relax.final_positions).max())
 
-fig, (left, right) = plt.subplots(1, 2, figsize=(9.5, 3.4))
-steps = [s.index for s in relaxed.steps]
-left.plot(steps, [s.total_energy for s in relaxed.steps], "o-")
-left.set_xlabel("ionic step"); left.set_ylabel("total energy [Ry]")
-left.set_title("the energy going downhill"); left.grid(alpha=0.3)
-right.semilogy(steps, [max(s.max_force, 1e-12) for s in relaxed.steps], "o-")
-right.axhline(1e-3, ls="--", c="k", lw=1, label="forc_conv_thr")
-right.set_xlabel("ionic step"); right.set_ylabel("max |F| [Ry/bohr]")
-right.set_title("and the force going to zero"); right.legend(); right.grid(alpha=0.3)
-fig.tight_layout()
+print("\nfinal energy differs from pw.x by %.1e Ry"
+      % abs(relaxed.total_energy - theirs.final_energy))
+print("final geometry differs from pw.x by %.1e bohr"
+      % np.abs(relaxed.positions - theirs.final_positions).max())
 ```
 
-     step    total energy (Ry)   max |F| (Ry/bohr)   separation (alat)
-        1         -15.78740371            0.060397   (0.2700, 0.2500, 0.2500)
-        2         -15.79256155            0.024847   (0.2582, 0.2500, 0.2500)
-        3         -15.79359588            0.000366   (0.2499, 0.2500, 0.2500)
-        4         -15.79359610            0.000001   (0.2500, 0.2500, 0.2500)
+    step 1   E = -15.78740371 Ry   max|F| = 0.060397   at (0.2700, 0.2500, 0.2500) alat
+    step 2   E = -15.79256155 Ry   max|F| = 0.024847   at (0.2582, 0.2500, 0.2500) alat
+    step 3   E = -15.79359588 Ry   max|F| = 0.000366   at (0.2499, 0.2500, 0.2500) alat
+    step 4   E = -15.79359610 Ry   max|F| = 0.000001   at (0.2500, 0.2500, 0.2500) alat
     
-    final energy   pypresso -15.7935961045   QE -15.7935961042   difference -2.8e-10 Ry
-    final geometry differs from QE by 3.4e-07 bohr
+    final energy differs from pw.x by 2.8e-10 Ry
+    final geometry differs from pw.x by 3.4e-07 bohr
 
 
 
     
-![png](09_forces_and_relaxation_files/09_forces_and_relaxation_7_1.png)
+![png](09_forces_and_relaxation_files/09_forces_and_relaxation_4_1.png)
     
 
 
-QE's own CO relaxation runs here too, with the oxygen frozen by `if_pos`, which is how a
-constrained geometry, a surface adsorbate or a reaction coordinate is set up.
+The atoms started at $(0.2700, 0.2500, 0.2500)$ in units of the lattice constant
+and finished at $(0.2500, 0.2500, 0.2500)$, which is the ideal diamond site.
+That is the whole content of the run: the displaced structure was not a
+stationary point, and the relaxation found the one that is.
+
+The energy falls by about 6 mRy and the force falls by five orders of magnitude
+in four steps, which is what a BFGS on a quadratic minimum looks like. The last
+step barely moves the atoms and barely lowers the energy, and it is the one that
+takes the force below the threshold: near a minimum the energy is flat and the
+gradient is not, which is why relaxation is converged on the force rather than
+on the energy.
+
+QE's own CO relaxation runs here too, with the oxygen held still by `if_pos`,
+which is how a constrained geometry, a surface adsorbate or a reaction
+coordinate is set up.
+
+## What it refuses
+
+An ultrasoft or PAW **metal** has no dynamical matrix here, but its forces are
+fine. A **spin spiral** has no force on an atom: its two spinor components live
+on different plane-wave spheres, so `dE/dq`, the derivative with respect to the
+spiral's own wavevector, is what a spiral has instead (notebook 14). With a
+potential-only meta-GGA such as `tb09` the total energy is not the value of any
+functional being minimised, so every derivative of it, forces included, is
+refused rather than returned wrong.
 
 ---
-The tests behind this notebook: `tests/regression/test_forces.py`,
-`tests/regression/test_relax.py`, `tests/unit/test_force_machinery.py`.
+The tests behind this notebook: `tests/regression/test_forces.py` (the five
+reference cases, the term-by-term breakdown, the central difference, and the
+identity that the differentiated functional reproduces the SCF total on every
+dataset), `tests/regression/test_relax.py`, `tests/unit/test_force_machinery.py`.

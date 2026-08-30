@@ -37,7 +37,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.forces import compute_forces
+from pypresso.forces import compute_forces, frozen_energy, state_from_result
 from pypresso.io import read_qe_output
 from pypresso.io.pwin import read_pw_input
 from pypresso.pseudo import read_upf
@@ -80,6 +80,30 @@ def _reference(case: str):
     if not path.is_file():
         pytest.skip(f"no generated reference for {case}; run tools/generate_reference.py")
     return read_qe_output(path)
+
+
+@pytest.mark.parametrize("case", ALL)
+def test_the_frozen_functional_reproduces_the_scf_total(case, pseudo_dir):
+    """What is differentiated has to be the SCF's own energy, on every dataset.
+
+    The gate on the whole autodiff path, and it is per-dataset rather than
+    per-code-path: ``frozen_energy`` reassembles QE's decomposition out of
+    different pieces (the bare ``D_ij`` rather than the self-consistent one, the
+    augmentation charge inside the density rather than inside ``deeq``, PAW's
+    one-centre terms through ``becsum``), and each pseudopotential kind
+    reassembles it differently. If the two totals disagree, the gradient is the
+    force of some other calculation and every comparison below it is
+    coincidence.
+
+    ``test_force_machinery.py`` makes this claim once, on norm-conserving
+    silicon. This is the same claim across the five datasets, and it arrived
+    here from notebook 09, whose first code cell was a four-case table of
+    exactly this -- the test suite's job being done in a tutorial (P49).
+    """
+    system, calculation, result = _converged(case, pseudo_dir)
+    energy = frozen_energy(calculation, system.structure.positions,
+                           state_from_result(result))
+    assert float(energy) == pytest.approx(result.total_energy, abs=1e-9)
 
 
 @pytest.mark.parametrize("case", ALL)
