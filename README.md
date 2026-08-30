@@ -41,10 +41,10 @@ drive any of this and is what the examples below use.
 | **Band structures** along a path through the Brillouin zone | `run_bands` | `pw.x` + `bands.x` |
 | **Densities of states**, by smearing or by tetrahedra | `run_dos`, `pypresso dos` | `pw.x` + `dos.x` |
 | **Projected densities of states** — resolved by atom, by `l` and by `m`, with Löwdin charges and the spilling parameter | `run_pdos`, `pypresso pdos` | `pw.x` + `projwfc.x` |
-| **Forces on the atoms** | `compute_forces` | `pw.x` |
+| **Forces on the atoms** — unpolarized, collinear spin and **noncollinear/spin-orbit**, on norm-conserving, ultrasoft and PAW | `compute_forces` | `pw.x`. A spinor force is the autodiff route only; `method='analytic'` has no spinor form and is refused |
 | **Structural relaxation** — BFGS with QE's trust radius and line search | `calculation = 'relax'`, `pypresso relax` | `pw.x` |
 | **Variable-cell relaxation** — the cell and the atoms relaxed together, at an applied pressure | `calculation = 'vc-relax'`, `run_vc_relax` | `pw.x` |
-| **Stress tensor and pressure**, in Ry/bohr³ and kbar | `tstress = .true.`, `compute_stress`, `pypresso stress` | `pw.x` |
+| **Stress tensor and pressure**, in Ry/bohr³ and kbar — the same three spin regimes as the force | `tstress = .true.`, `compute_stress`, `pypresso stress` | `pw.x` |
 | **Magnetism**, collinear, with one Fermi level or two | `nspin = 2`, `tot_magnetization` | `pw.x` |
 | **Magnetism as a vector** — noncollinear, with the magnetic symmetry group | `noncolin` | `pw.x` |
 | **Spin-orbit coupling**, two-component spinors and `j`-resolved projectors | `lspinorb` | `pw.x` |
@@ -53,12 +53,12 @@ drive any of this and is what the examples below use.
 | **DFT+U** — Dudarev's functional with `U`, `J0`, `alpha`, `beta` | `HUBBARD` card, `run_scf(starting_ns=...)` | `pw.x`. Dudarev's simplified functional; the full Liechtenstein form, the intersite `V` and noncollinear runs are refused by name |
 | **Spin spirals** at any wavevector, without a supercell | `spiral_q`, `pypresso spiral` | **new** — Elk has it, `pw.x` does not. Needs `nosym`; ultrasoft, PAW and spin-orbit coupling are refused |
 | **Relaxing the spiral wavevector** down `dE/dq` to the ground-state pitch | `relax_spiral_q` | **new** |
-| **Berry curvature and Chern numbers**, the latter exact integers on any mesh | `run_berry_curvature` | **new** — QE has the Berry *phase*, not the curvature |
+| **Berry curvature and Chern numbers**, the latter exact integers on any mesh — the lattice (Fukui-Hatsugai-Suzuki) construction for the integers, and a pointwise `Omega(k)` map by the Kubo/velocity-operator route with the sum's truncation reported | `run_berry_curvature`, `method="kubo"` for the map | **new** — QE has the Berry *phase*, not the curvature |
 | **Z2 invariants** in 2D and 3D, by Wannier charge centres *and* by parities | `run_z2`, `run_z2_3d` | **new** |
 | **Continuing one run from another across a change of spin regime** — a converged non-magnetic density as the starting point of a magnetic run, a collinear one of a noncollinear run, spin-orbit coupling switched on | `run_scf(starting_from=...)`, `System.with_spin` | partly `pw.x` — `startingpot = 'file'` reads a density across a change of `nspin`, but zero-fills the missing components, so a magnetic run started that way converges back to the unpolarized answer |
 | **Reaching self-consistency** — Anderson/Broyden mixing, Kerker preconditioning, or solving the residual with its own Jacobian | `run_scf(mixing_mode=...)`, `run_scf(scf_solver=...)` | `pw.x` has the mixing; the residual solver is new, and reaches solutions no mixer does |
 | **Band velocities** `d(eps)/dk`, with the nonlocal pseudopotential's own contribution — norm-conserving, ultrasoft and PAW | `band_velocities`, `VelocityOperator` | partly — `fermi_velocity.x` finite-differences eigenvalues and reports only the magnitude |
-| **Dielectric constant** `epsilon_infinity` — insulators, norm-conserving, ultrasoft and PAW — **and Born effective charges** (norm-conserving and ultrasoft; PAW refused by name) | `dielectric_tensor` | `ph.x` with `epsil = .true.` |
+| **Dielectric constant** `epsilon_infinity` — insulators, norm-conserving, ultrasoft and PAW — **and Born effective charges** (norm-conserving and ultrasoft; PAW refused by name). The Sternheimer solve underneath it runs for **collinear spin** too, `chi_0` at `nspin = 2` validated against a finite difference of the density | `dielectric_tensor` | `ph.x` with `epsil = .true.` |
 | **Phonons at `Gamma`** — the force constants and their frequencies, insulators **and metals**, on norm-conserving, **ultrasoft and PAW** datasets | `dynamical_matrix` | `ph.x`. Away from `Gamma` they are refused, and so is an ultrasoft or PAW *metal* |
 | **The strain response** `dpsi/d(eps)`, `drho/d(eps)` and the deformation potentials, on norm-conserving, **ultrasoft and PAW** datasets | `strain_response` | **new** — `ph.x` has no strain perturbation |
 | **Elastic constants** `C_ijkl` and the compliance and bulk modulus that follow, clamped-ion, insulators, norm-conserving | `elastic_constants` | **new** — nothing in `pw.x` or `ph.x` computes them |

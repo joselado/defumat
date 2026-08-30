@@ -5789,6 +5789,492 @@ coordinate has the compensating term, and the cheapest discriminator is that the
 displacement's Raman check is a five-minute pytest run
 (`test_nonlinear.py -k moving_overlap`) where the strain's is an hour.
 
+### P45 — The Sternheimer response with two spin channels. ✅ DONE, three narrower cases refused.
+
+*(Number to be checked at paste time: P44 was the last one in `PLAN.md` when
+this was written, and two other tracks are landing in the same pass.)*
+
+**`GAPS.md`'s "single widest guard" is narrowed, and what it was guarding was a
+count.** One refusal in `require_a_sternheimer_regime` blocked *every* response
+quantity for *every* spin-polarized system — no dielectric constant, no phonons,
+no Raman, no strain response for nickel, iron, NiO or FeO, all of which have
+validated LSDA ground states here (P9's eight benchmarks). The stated reason was
+that `SternheimerSolver` takes **one** occupied-band count and slices
+`psi[:, :, :nocc]` across the spin axis with it, and that all three callers —
+`efield.py`, `phonon.py`, `strain.py` — derived that count as `nelec / 2`
+themselves, which is right for an unpolarized insulator and wrong for a magnetic
+one whose channels are filled to different depths.
+
+**QE never meets the problem, and that is why there is nothing to transcribe.**
+LSDA doubles `nks` there, so the spin channels are separate k-points and
+`setup_nbnd_occ.f90` writes one `nbnd_occ(ik)` per k-point that already carries
+the channel; `setup_alpha_pv` then maximises over an `et` array that spans both.
+Here the channel is an *axis*, so what QE gets from its k index is got from a
+per-channel count plus a mask — rule R2, the shape stays static and the deficient
+channel's extra bands are masked rather than removed.
+
+**The reason did not bind a metal and never had**, which is half of what this
+phase found before writing anything: the smearing branch keeps every band in the
+block (`nbnd_eff = nbnd`) and the occupation rides inside `dpsi`, so the slice is
+never taken there. A spin-polarized metal was refused for a reason that applies
+only to an insulator.
+
+What changed:
+
+* `occupied_counts(calculation)` — one count per channel, `(NINT(nelup),
+  NINT(neldw))` for `nspin = 2` and `nelec / degeneracy` otherwise. The three
+  callers consume it instead of deriving `nelec / 2`.
+* `SternheimerSolver.__init__` keeps `max(counts)` bands and builds
+  `projector_mask` from `band < counts[spin]`; `_alpha_pv`'s insulator branch
+  maximises `eps^occ` over the channels, which is what QE's doubled-`nks`
+  `setup_alpha_pv` computes.
+* `project()`'s sharp branch masks in **two** places and they do different jobs.
+  The *column* mask (over `m`) keeps `P_c^+` projecting out this channel's own
+  occupied manifold — without it the projector also removes the bands the *other*
+  channel fills, which is exactly the subspace the deficient channel's response
+  lives in. The *row* mask zeroes the right-hand side of a band this channel does
+  not occupy, so the CG returns `dpsi = 0` at iteration zero instead of solving
+  `H - eps_n S` for an empty `n`, where the operator is not positive definite and
+  the level shift does not make it so. The metal branch is untouched and
+  bit-for-bit what P24c validated.
+* The guard is **parameterised, not deleted** — `spin_polarized = True`, exactly
+  as `metals = True` already works. Deleting the branch would have silently
+  opened `electrostriction.py` and `nonlinear.py`, the two third derivatives,
+  neither of which has ever been run with a spin axis. They still refuse, with a
+  message that says what is now true: the *solve* is spin-polarized, the
+  *assembly* is not.
+* `_nint` — Fortran's `NINT`, half rounding *away* from zero, because
+  `_fixed_occupations_spin` fills `int(floor(count + 1/2))` bands and Python's
+  `round` is banker's rounding. An **odd** electron count with an **even**
+  `tot_magnetization` gives a half-integer `nelup`, and `round` would then build
+  the mask one band shallower than the weights the density was made with — in
+  exactly that case and no other.
+* `_require_a_gap_at_the_cut` — refuses a `nspin = 2` filling whose boundary
+  lands inside a degenerate multiplet, checked on the converged spectrum
+  because it is a property of the spectrum and not of the input.
+* `_require_a_finite_kernel` (`efield.py`) — refuses a screened response whose
+  induced potential came back non-finite, naming the LSDA kernel's second
+  derivative and counting the grid points where `|m| >= |n|`.
+* `reject_potential_only` at the top of the guard, so a potential-only meta-GGA
+  is refused by name instead of surfacing as `v_of_rho` asking for a `tau`
+  nobody passed (`GAPS.md` §3, "Linear response + meta-GGA", part (a)). Reused,
+  not restated: it is the refusal `forces/energy.py` already exports for the
+  stress, the dynamical matrix and the elastic constants.
+
+**The validation is QE-free and it is a finite difference of the density**,
+because comparing two totals would not isolate the term. `chi_0 dV` against
+`(rho[V + h dV] - rho[V - h dV]) / 2h`, with a **spin-dependent probe** — twice
+the amplitude in one channel and the opposite sign in the other, since `chi_0` is
+block-diagonal in spin and a probe equal in both channels leaves the blocks
+indistinguishable. The AFM hydrogen chain (`h-chain-afm`, a smeared metal) and
+the triplet oxygen molecule (`o2-fixed-lsda`, the sliced branch, ultrasoft) are
+the two cases. The third check is the identity: silicon run as `nspin = 1` and as
+`nspin = 2` with no magnetization must give the *same* `epsilon_infinity`, and it
+is run end to end rather than on `chi_0` because the spin sum and the screening
+kernel are where a factor of two would hide and `chi_0` is blind to both.
+
+**The obvious insulator is the wrong one, it fails silently, and that is the
+first of the phase's two findings.** `o-atom-fixed-lsda` — the oxygen atom
+`GAPS.md` points at — cannot be used: at `tot_magnetization = 2` its minority
+channel holds two electrons, so its filling cuts the triply degenerate 2p shell,
+whose two levels are **1.4e-14 Ry** apart. What that does was *measured* rather
+than argued: with the check bypassed **the CG converges normally** — 42
+iterations to a residual of 5e-12 against a 1e-11 threshold — and the `chi_0` it
+returns is **100 per cent** away from a central difference of the density (1.24,
+1.02, 1.01 and 1.01 relative, for probes at Miller (1,0,0), (0,0,1), (1,1,0) and
+(1,1,1)). The difference re-selects which member of the shell falls below the
+cut, because the perturbation splits it at first order; the solve keeps the
+member the eigensolver handed it, which is an arbitrary one. It is the **same
+multivaluedness the residual solver is diagnosed for** (§3's closed
+`occupations = 'fixed'` + `nspin = 2` entry), one layer up. A stalling solve
+would have announced itself; this one does not, which is why it is a refusal
+(`DEGENERATE_CUT_RY`) and not a warning. The oxygen *molecule* is the case that
+works: twelve electrons and `tot_magnetization = 2` give seven up and five down,
+both closed shells — measured gaps 0.438 Ry up and 0.517 Ry down.
+
+**The second finding is what stopped the screened response on the one
+magnetic-insulator cell there is here, and it is not in `pypresso/response/` at
+all.** (One cell: an AFM bulk insulator whose magnetization stays below its
+charge everywhere was not run, so this is a diagnosis of triplet O2 rather than
+of the whole regime.)
+`dv_of_drho` is one `jvp` of `v_of_rho`, so for `nspin = 2` it is the **second**
+derivative of the LSDA exchange-correlation energy in the two channel densities
+— and that diverges wherever a channel density reaches zero, which a plane-wave
+magnetization does in vacuum. The two counts agree exactly on triplet O2 in a
+10-bohr box: **1504 of 91125 grid points have `|m| >= |n|`, and `dv_of_drho` has
+1504 NaN**. The *value* of `v_xc` is fine — `xc_lsda` clips `zeta` to [-1, 1]
+and QE does the same — but the clip's own tangent is zero and `rho^(4/3)`'s
+second derivative is infinite at the channel it zeroes, so the product is
+`inf * 0`. It is the **`abs` trap of P28a in a fifth place**, one derivative
+further out. Two obvious repairs were tried and **neither works**: pulling the
+clip inside to `1 - eps` for `eps` of 1e-12, 1e-10 and 1e-8 leaves all 1504
+points NaN and turns the largest entry into `inf`, so what diverges is the
+kernel itself and not only the clip. Making `pypresso/xc`'s spin branch twice
+differentiable at a fully polarized point is the missing piece; until then a
+magnetic system with vacuum is **refused by name** in the response loop
+(`_require_a_finite_kernel`), because a NaN `|ddv_scf|^2` never satisfies
+`change < tr2` and the loop would otherwise spend its budget and report
+`converged = False` on a tensor that is not a number. `chi_0` is unaffected and
+is validated. **The reference for the day it is fixed is committed**:
+`reference.out.ph-o2-fixed-lsda`, generated with the vendored `ph.x`, which
+computes this quantity happily — `phq_readin.f90:546` refuses an electric field
+only for *noncollinear* magnetism and `:957` only for a smeared or tetrahedron
+metal, so LSDA is allowed. It gives diag(1.110916, 1.110916, 1.198005).
+
+**Descoped and refused by name**: `tot_magnetization` with a *smearing*, which is
+QE's `two_fermi_energies`. `Smearing` carries a single scalar `ef` and
+`smearing_of` reads `result.fermi_energy`, which in that case is the **mean** of
+the two levels — a number QE prints only so the field is not NaN. Every weight in
+`orthogonalize`'s smearing branch would be evaluated at a level neither channel
+has. Giving `Smearing.ef` a spin axis is the missing piece and the message names
+it. Also refused by name: **Born effective charges** for `nspin = 2` (the
+dielectric constant is a spin sum and is validated; `dF/dE` goes through the force
+functional's `becsum`, whose spin axis `response/born.py` has never been run
+with), the **dynamical matrix** and the **strain response** (their `nocc` is fixed
+but their second-derivative assembly — `non_variational_response`,
+`_multiplier_response`, P28's `wg` / `2 wk` split — has not been checked per
+channel), and the two third derivatives.
+
+**One more hole closed for free**: `reject_potential_only` is now called at the
+top of the Sternheimer guard, so a Tran-Blaha or Becke-Johnson run asking for any
+response is refused by name instead of surfacing as `v_of_rho` asking for a `tau`
+nobody passed. It is the refusal the stress, the dynamical matrix and the elastic
+constants already make, reused rather than restated.
+
+Measurements, all from `tests/regression/test_lsda_response.py`:
+
+| what | reference | agreement |
+|---|---|---|
+| `chi_0`, AFM H chain, `nspin = 2` metal | central difference of `rho`, `h = 3e-4` | **1.8e-6** relative |
+| `chi_0`, triplet O2, `nspin = 2` insulator (ultrasoft) | central difference of `rho`, `h = 1e-4` | **1.1e-6** relative |
+| `epsilon_infinity`, silicon, `nspin = 2` at `m = 0` | the same cell at `nspin = 1` | **6.2e-14** (13.806646105 both) |
+| O2 ground state, `nspin = 2` fixed occupations | the vendored `pw.x` | **1.1e-9 Ry** (-63.36308378108187 against -63.36308378) |
+| the whole `nspin = 1` response stack | `tests/regression/test_response.py` | **31 passed**, unchanged |
+| `epsilon_infinity`, triplet O2, `nspin = 2` (ultrasoft) | the vendored `ph.x`, `epsil = .true.` → diag(1.110916, 1.110916, 1.198005) | **refused**: 1504 NaN in `dv_of_drho` at the 1504 points where `\|m\| >= \|n\|` |
+
+---
+
+
+### P46 — The force and the stress of a spinor. ✅ DONE.
+
+**The functional was already written; what was missing was the layout.**
+`GAPS.md` §3 sized this at "two substitutions in one functional — the nonlocal
+quadratic form with `dvan_so`, and the constraint's `<psi|S|psi>` with
+`qq_so`". The physics of that estimate is right and the size of it was not, for
+a reason `CLAUDE.md` states in its own conventions: `nspin`, `npol` and
+`nspin_mag` are three different numbers. `FrozenState.wavefunctions` is
+documented as `(nspin, nk, nbnd, npwx)`, and a spinor does not fit that shape —
+it is `(1, nk, nbnd, 2 npwx)`, one channel of two-component states, so the
+*kinetic* term has to read `state_kinetic` (`|k+G|^2` in the coefficient
+vector's own layout) as well. Three lines, in three places, and only one of them
+is a matrix.
+
+The result: `noncolin = .true.`, with or without `lspinorb`, has forces, a
+stress and therefore a relaxation, on norm-conserving, ultrasoft and PAW
+datasets. Bcc iron's noncollinear ground state can be relaxed.
+
+**The validation is in the order that isolates terms.**
+
+*The energy identity first*, because `energy_at` has to **be** the total energy
+before anything differentiates it — and because a `deeq_nc` used where the bare
+`dvan_so` was meant double-counts `int V_eff Q_ij` and is invisible in a force
+whose reference is a finite difference of the same wrong functional:
+
+| case | regime | `energy_at` − SCF total |
+|---|---|---|
+| `h-chain-90deg` | norm-conserving, `nspin_mag = 4`, `nosym` | 1.3e-15 Ry |
+| `h4-noncolin-force` | norm-conserving, `nspin_mag = 4` | 4.4e-16 Ry |
+| `pw_spinorbit/spinorbit` | ultrasoft + SOC | 1.4e-14 Ry |
+| `pt2-soc-force` | ultrasoft + SOC | 2.8e-14 Ry |
+| `pw_spinorbit/spinorbit-paw` | PAW + SOC | 7.5e-10 Ry |
+| `pt2-soc-paw-force` | PAW + SOC | 9.9e-10 Ry |
+
+PAW is the loosest of the six and that is the radial one-centre quadrature
+rather than the spinor branch: a *collinear* PAW run has the same gap.
+
+**What that identity is blind to, and it is the finding to carry.** The
+constraint term `sum w eps (<psi|S|psi> - 1)` is *identically zero* at the
+converged state, so the 1.4e-14 on an ultrasoft spinor says nothing whatever
+about `qq_so` — only its **derivative** is the Pulay force, and the identity
+cannot see a derivative. The finite difference below cannot see it either, in a
+different way: it checks the gradient of the functional **as written**, so a
+constraint that is wrong but self-consistent passes it exactly. The `qq_so` half
+is therefore validated by exactly one thing — the `pw.x` force on
+`pt2-soc-force` and `pt2-soc-paw-force` — and that is worth naming, because it
+is the same shape as P35's "no symmetry check catches its absence". It *is*
+sufficient (7.5e-6 and 7.3e-7 on terms of 1.7 Ry/bohr), but it is one check and
+not three.
+
+*Then a finite difference of that same frozen energy*, which is P39's anchor and
+needs no Fortran at all: a central difference of `energy_at` under a
+displacement against `jax.grad` of it, on the four-atom `nosym` chain, agrees to
+**6.2e-9 Ry/bohr** on forces of 2.2e-2 — the difference's own floor at
+`h = 1e-3`. On the *undisplaced* chain the same comparison agrees to 7.2e-13,
+with both sides at 1e-7, which is the statement that an equally-spaced chain has
+no force.
+
+*Then the sum rule, which is run and is not rested on.* `sum_a F_a` is 1.3e-7
+Ry/bohr on the chain and 3–4e-6 on platinum, against forces of 2.2e-2 and 5.2e-2.
+An atom sum is blind to a transfer *between* atoms — which is exactly how P28a's
+`abs` trap survived two identities — so it is a diagnostic and the finite
+difference above is the anchor.
+
+*Then `pw.x`*, which computes both quantities for a spinor run (`tprnfor`,
+`tstress`):
+
+| case | what it adds | ΔE (Ry) | max ΔF (Ry/bohr) | max Δσ (Ry/bohr³) |
+|---|---|---|---|---|
+| `h4-noncolin-force` | norm-conserving, `nspin_mag = 4` | 3.6e-9 | **8.9e-7** | 1.8e-9 |
+| `pt2-soc-force` | ultrasoft, `lspinorb`, `qq_so` | 1.6e-8 | **7.5e-6** | 1.2e-6 |
+| `pt2-soc-paw-force` | PAW, `lspinorb` | 1.3e-9 | **7.3e-7** | 3.5e-7 |
+| `pw_spinorbit/spinorbit` | ultrasoft LDA, one atom | 1.3e-8 | — | 9.8e-8 |
+| `pw_spinorbit/spinorbit-pbe` | ultrasoft PBE | 3.8e-9 | — | 4.4e-7 |
+| `pw_spinorbit/spinorbit-paw` | PAW PBE | 8.4e-9 | — | 2.5e-7 |
+
+against `FORCE_RY_BOHR = 1e-4` and `STRESS_RY_BOHR3 = 1e-4`. Two things about
+that table are worth reading twice. The three `pw_spinorbit` rows needed **no
+new reference**: QE's own spin-orbit test-suite inputs already carry
+`tstress = .true.`, so a PAW spin-orbit stress was available all along and the
+refusal was the only thing in the way. And the ultrasoft force's 7.5e-6 is not
+loose — that case's individual force terms are **1.7 Ry/bohr** and cancel to
+0.052, so 7.5e-6 is four parts per million of what is being subtracted.
+
+**The k-set is a wedge and the force is symmetrised as a polar vector with the
+magnetic group.** `Calculation.symmetries` is already `sgam_at_mag`'s group when
+`nspin_mag = 4` (P17), and `compute_forces` already ends in `symvector`, so the
+reuse is the whole of it; a time-reversal operation acts on a *polar* vector
+through its spatial part alone, which is what makes the reuse right rather than
+convenient. Measured on `pt2-soc-force`, whose unshifted 2x4x4 grid reduces 32
+points to 14: the wedge sum agrees with the same run at `nosym` on the whole
+closed grid to **2.3e-7 Ry/bohr** on the force and **6.3e-9 Ry/bohr³** on the
+stress, with the two SCF totals themselves 2.4e-12 Ry apart. The crystal's own
+`F_x = -F_z` holds to 1e-12 on both — on the closed grid *without* the average,
+which is what "an unshifted Monkhorst-Pack grid is closed under the point group"
+means, and on the wedge only because `symvector` put it there.
+
+**A spinor stress on a slab does not fit in memory here, and the number is
+worth having.** The first ultrasoft spin-orbit force case tried was bismuthene
+displaced in-plane (`Bi.rel-pbe-dn-rrkjus`, 15 valence electrons, `ecutrho =
+160` on a 20-bohr vacuum cell, so a dense grid of about 45x45x81). The SCF
+itself is what already runs in the test suite; the *gradient* took free memory
+from 24 GB to 0.65 GB and was killed, three times, on this 30 GB machine. The
+cost is the augmentation table `Q_ij(G)` — `nh^2 x ngm` per atom, with `nh` in
+the twenties for a fully-relativistic `dn` dataset — carried through the
+backward pass. The doubled fcc platinum cell replaced it: same physics
+(ultrasoft, `lspinorb`, an augmentation charge, a displaced atom), a cell of 204
+bohr^3 instead of 1770, and it runs in 33 s. A user's first encounter with this
+gap will be a *slab*, so it belongs in the record rather than in an anecdote.
+
+**Relaxation comes with the force and needed nothing.** The BFGS of P15 runs
+on `pt2-soc-force` unchanged and puts the displaced platinum back: **8 ionic
+steps**, `max |F|` from 0.0524 to **8.96e-5 Ry/bohr**, and the two atoms
+**0.499945** of a cell apart against the half the crystal's symmetry requires.
+What is checked is the *separation* and not either position, and the reason is
+worth recording: subtracting the mean force leaves a rigid translation of the
+whole crystal free and BFGS uses it — this run ends with both atoms moved 0.015
+of a cell along `a1`. Asserting on an absolute coordinate would be asserting on
+which zero mode the optimizer happened to walk along.
+
+**What stays refused, and why each one is a different missing term.**
+
+* **The analytic force and stress expressions.** `force_us`, `stres_knl` and the
+  rest are a transcription that shares no machinery with the functional and has
+  no spinor form — `force_us` alone would need `deeq_nc`, `becsum_nc` and
+  `qq_so` threaded through a second time. Both already refused `noncolin` by
+  name in their own words and still do; the refusal that was lifted was the
+  functional's, and a refusal lifted in one place and not its sibling is the
+  defect this whole pass is about.
+* **The Sternheimer response**, and so phonons, `epsilon`, Born charges and
+  everything above them. `incdrhoscf_nc`/`set_int3_nc` are a second
+  implementation rather than a spin axis on this one, and
+  `require_a_sternheimer_regime` is not this phase's guard to lift.
+* **Elastic constants and electrostriction**, which reach `energy_at`
+  *directly* (`response/elastic.py:181`) and never see the Sternheimer guard at
+  all. This is why the spinor path is **opt-in** rather than simply allowed:
+  `energy_at`, `frozen_energy` and `strained_energy` all default to refusing,
+  and the force and the stress pass `spinors=True`. Deleting the guard would
+  have opened a third derivative for a regime whose *first*-order wavefunctions
+  do not exist.
+* **The force on an atom of a spin spiral**, by name and for a new reason. A
+  spiral is `noncolin` with `spiral_q` on top, so it used to be caught by the
+  same refusal as everything else; after the narrowing it would have walked into
+  the spinor projector contraction with a `(2 nk, npwx, nkb)` `vkb` against `nk`
+  rows of coefficients and died on an einsum shape rather than on a refusal.
+  `reject_spinor_spiral` is what closes that, and the missing term is real: the
+  two components live on `k ± q/2` and the nonlocal term needs the *pair* of
+  projectors — which `spiral_energy` does write, in the other coordinate.
+  `dE/dq` is what a spiral has instead of a force.
+* **The matrix orthonormality multipliers** (`_constraint_energy`), which
+  contract the scalar `qq` and would need `qq_so` with a spin pair on `Lambda`
+  as well. Only the ultrasoft *second* derivative asks for them
+  (`response/born.py`), and that path is refused for `noncolin` already.
+* **A magnetic field or a constrained moment**, unchanged: the field's energy is
+  deliberately outside the reported total, so the converged state is stationary
+  for a different functional than the one being differentiated (P18, P21).
+
+**The trap, and it is a small one worth writing down.** `dvan_so` is the *bare*
+`D` — the spinor twin of `dij`, taken for the same reason the collinear branch
+takes `dion` and not `deeq`: the self-consistent `int V_eff Q_ij` part is
+already inside the augmented density. The spin transform is **not** a detour
+around that accounting, because `newd_nc` sandwiches the scalar integrals
+between `fcoef` and *adds* them to `dvan_so`, so the split survives one spin
+index up. Taking `deeq_nc` instead double-counts, and the only check that sees
+it is the energy identity above — a finite difference would agree with it
+perfectly.
+
+---
+
+
+### P47 — The Kubo Berry curvature of a real crystal. ✅ DONE, ultrasoft/PAW refused by name.
+
+`pypresso/topology/berry.py` has carried a `kubo` curvature method since P16 and
+it has only ever been reachable from a tight-binding model. Its refusal for a
+plane-wave calculation said the velocity operator "needs `d(vkb)/dk` and the
+k-dependence of the plane-wave sphere" and pointed at P11. **P24 wrote both**,
+and the refusal had been stale for two phases: `VelocityOperator` is one
+`jax.jvp` of `H(k)` at a **frozen** sphere, which is exact on each piece of a
+membership that is piecewise constant in `k`, and `VelocityOperator.projectors`
+is `gen_us_dj`/`gen_us_dy`'s derivative about the atom's own centre. So the
+smooth `Omega(k)` map of a real crystal — the anomalous-Hall picture, what
+anyone wants beside the integer — was refused for a reason the repo had already
+satisfied. It is in now: `pypresso/topology/kubo.py`.
+
+**The route GAPS.md offered first is the illegal one.** A
+`PlaneWaveStates.hamiltonian`-shaped adaptor would let the existing
+`_kubo_point` run unchanged, and `_kubo_point` forms the dense `H(k)` and calls
+`eigh` on it — `npw^2`, which `CLAUDE.md` rules out outright. So the sum is
+written as **band matrix elements between the states an NSCF already
+produced**: one `jvp` per crystal direction gives `v_a|psi_n>` for every band at
+every k-point, and the expression is a contraction of that against the same
+states. Nothing dense is ever formed.
+
+**The expression is the generalised one and its band index is not free.**
+Differentiating `H|m> = e_m S|m>` and projecting on `<n|` gives
+`<n|S|d_a m> = <n|(dH/dk_a - e_m dS/dk_a)|m> / (e_m - e_n)`; carrying that
+through the curvature leaves
+
+    Omega_n^{12} = -2 Im sum_{m != n} A^1_nm A^2_mn / (e_n - e_m)^2,
+    A^a_nm = <psi_n| dH/dk_a - e_n dS/dk_a |psi_m>
+
+with **`e_n` — the band whose curvature is being computed — in both factors**,
+not `e_n` in one and `e_m` in the other. The `dS/dk` piece is identically zero
+for a norm-conserving dataset, which is exactly why **ultrasoft and PAW are
+refused by name**: no norm-conserving validation can see whether the convention
+is right, and an off-diagonal element with a moving `S` is the kind of thing
+that comes out plausible when it is wrong. The term is written (one `jvp` of
+`s_psi`, `VelocityOperator.apply_s`) and unvalidated, and there is a second one
+beside it — the augmentation charge's own `k`-derivative, which an overlap
+between two *different* k-points needs as `q_ij(b)` rather than `qq`.
+
+**Three things validate it and they are independent of each other.**
+
+*The operator.* `<psi_m|dH/dk_a|psi_n>` against a **central finite difference**
+of the same matrix element at frozen sphere and frozen states —
+**1.8e-9** at `eps = 1e-4` (1.8e-7 at 1e-3, the exact factor of 100 a
+second-order difference owes) on a matrix whose largest element is 1.05. This
+is QE-free and it isolates the `jvp` *and* the crystal-direction tangent, which
+is the reciprocal lattice vector `bg[d]` and would otherwise be a wrong-units
+curvature no downstream check distinguishes from a wrong assembly. `dH/dk` is
+Hermitian to **3.8e-15**; `dS/dk` is exactly 0.0.
+
+*The assembly.* Against the Fukui-Hatsugai-Suzuki lattice flux, which shares no
+machinery with it — determinants of overlaps between separate diagonalisations,
+differentiating nothing. **AlAs** is the crystal, because zincblende has time
+reversal and no inversion centre, so `Omega(k)` is nonzero pointwise (order 1 in
+crystal-k-area units) while the Chern number is zero. Two forms:
+
+- a **centred plaquette shrunk around one k-point**, converging onto the
+  pointwise value at `k = (0.1875, 0.3125, 0)`, against `Omega_kubo = 0.964705`
+  at `nbnd = 30`: `h = 0.08` → 0.93502 (3.1e-2), `0.04` → 0.96056 (4.3e-3),
+  `0.02` → 0.96784 (**3.2e-3**), `0.01` → 0.97956 (1.5e-2). Second order down to
+  `h = 0.02` and then a **noise floor** — the flux is 1e-4 rad at that size and
+  dividing an eigensolver's round-off by `h^2` amplifies it — so 3e-3 relative
+  is what the check establishes and the mesh cannot be refined past it.
+- the **whole mesh plaquette by plaquette**, one 24x24 Kubo mesh at the
+  plaquette centres integrated by the midpoint rule over the plaquettes of
+  coarser FHS meshes (`nbnd = 30`): `max|integral - flux|` of 9.49e-3 (4x4),
+  3.59e-3 (6x6), 1.63e-3 (8x8), 6.56e-4 (12x12), **1.45e-4** (24x24) — 65x
+  better over a sixfold refinement, faster than the `h^2` both sides' errors
+  are — against a largest flux that itself shrinks from 3.97e-2 to 2.29e-3, so
+  the *relative* figure improves fourfold (0.239 → 0.063) and then flattens onto
+  the same round-off floor from the other side.
+
+*The scope of the claim.* Everything measured is **scalar norm-conserving**.
+The spinor path (`npol = 2`) runs — the coefficient layout flows through the
+same contraction and no new term appears, unlike ultrasoft's `dS/dk` — and it is
+**unmeasured**; it is not refused, and nothing here claims it.
+
+*The symmetry.* Silicon has time reversal **and** inversion, so `Omega(k)` must
+vanish **pointwise** and not merely integrate to zero: **3.5e-5** on a 4x4 mesh
+at `nbnd = 12`, against a per-band curvature of 5.7 on the same mesh. A
+curvature that is zero for the wrong reason is the trap, and the per-band scale
+is what says this one is a cancellation rather than an empty calculation.
+
+**The sum over empty states is truncated and the truncation is reported**, the
+way P37 reports `static_residual`: `BerryCurvature.truncation` is the largest
+shift in `Omega(k)` when the highest empty band is dropped, over `max|Omega|`,
+with `truncation_abs` beside it. It is a number to read and never a knob. At
+`k = (0.1875, 0.3125, 0)`, from one diagonalisation at `nbnd = 45` truncated
+after the fact: 0.978886 (12), 0.965663 (20), 0.964705 (30), 0.961639 (45) —
+1.8% between 12 and 45 and 0.3% between 30 and 45. **On the mesh comparison the
+truncation is worth far more than that and it crosses over** (measured on a
+16x16 Kubo mesh integrated over a 4x4 FHS mesh): at `nbnd = 8` the sum is 1.70
+relative against the flux, at 12 it is 0.20, at 16 0.22, at 20 0.29, and from 25
+up it settles at 0.265 — the accidental agreement at 12 is a
+cancellation between the truncation error and FHS's own coarse-plaquette error,
+and reading it as convergence is the trap the two-axis separation exists to
+avoid. **Where symmetry forces `Omega` to vanish the ratio is noise over noise
+and means nothing** — silicon reports `truncation = 0.98` beside a
+`truncation_abs` of 3.4e-5 — so `truncation_abs` is the one to read there.
+
+**`curvature_by_band` is gauge invariant only for a non-degenerate band**, and
+that is P36's degenerate-multiplet finding one quantity over. Inside a
+degenerate multiplet the eigensolver's arbitrary rotation moves the members'
+values and only their sum is defined; the *manifold* total never has the problem
+because it is built from occupied/empty pairs alone, so an intra-manifold
+degeneracy never enters it. Measured directly rather than argued: at
+`k = (0, 0.375, 0)` the second and third valence bands of AlAs are degenerate to
+**9.4e-16 Ry**, and a unitary mixing of the pair takes their curvatures from
+`(+0.203989, -0.218475)` to `(+0.273508, -0.287993)` — **0.0695** — while the
+manifold total stays at `-0.0144856` to **1.1e-15** and the multiplet's own sum
+to 1.0e-15 (the Kubo weight `1/(e_n - e_m)^2` is constant across the block,
+which makes the sum a trace over it).
+
+**`fhs` stays the default and stays the only method a Chern number is read
+from.** The `1/(e_n - e_m)^2` denominator is what design rule D4 forbids, and
+the Brillouin-zone sum is an ordinary Riemann sum that converges to an integer
+without ever being one. What `kubo` is for is the map.
+
+Three smaller things the phase left behind:
+
+- **The state set had to grow two fields and one of them must be dropped on
+  `select`.** `PlaneWaveStates` now optionally carries `all_coefficients` (the
+  whole diagonalised band set, where everything else here is a property of the
+  occupied manifold alone) and `velocity`. `select` sets **both to `None`**: the
+  velocity operator is built on a `Calculation` at the *whole* k-list, its
+  `vkb(k)` and `|k+G|^2` indexed by the original k-axis, so a sliced state set
+  no longer lines up with it and a Kubo call on the selection would differentiate
+  at the wrong k-points. Dropping them makes the next call refuse by name; slicing
+  them would have been silent.
+- **The state-source protocol gained an optional third argument.**
+  `states(points, keep_projectors=False, keep_velocity=False)`, and
+  `chern_number` passes `keep_velocity` **only when it is true**, so a source
+  written to the two-argument signature still satisfies the protocol.
+- **`DFTSource.states` already had everything the operator needs** — the frozen
+  potential, `ddd_paw` and `ns` are the same three things it hands
+  `calculation.hamiltonian` — so the operator is built from the arguments that
+  were already there rather than rebuilt.
+
+**Refused by name**: ultrasoft and PAW (the `e_n dS/dk` off-diagonal, plus
+`q_ij(b)`), and everything `DFTSource` already refuses inherits unchanged —
+`nspin = 2`, meta-GGA, a PAW dataset without `becsum`, a DFT+U one without `ns`,
+and a manifold that is not gapped (`_check_gap`, which is also what stops a
+*metal*: the Kubo expression here has no occupation factors and there is nothing
+in it for a partially filled band).
+
+---
+
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

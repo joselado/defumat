@@ -159,7 +159,24 @@ input. **Fix:** force `domag` when a field or a constraint is present
 
 Ranked by what they unlock.
 
-### Sternheimer response + `nspin = 2` — *the single widest guard*
+### ~~Sternheimer response + `nspin = 2`~~ — **closed 2026-08-30 (P45)**, three narrower things are not
+
+The solve is spin-polarized: one occupied-band count *per channel* (`occupied_counts`),
+`_alpha_pv` maximised over channels, and all three callers that derived `nelec/2`
+themselves (`efield`, `phonon`, `strain`) fixed. `chi_0` against a central difference of
+the density: **1.8e-6** (antiferromagnetic H chain, smeared metal) and **1.1e-6** (triplet
+O2, the sliced branch, ultrasoft). The `nspin = 1` / `nspin = 2` identity on silicon's
+`epsilon_infinity` is **6.2e-14**. What is still refused, each by name: `tot_magnetization`
+with a smearing (`Smearing.ef` has no spin axis); a filling that cuts a **degenerate
+multiplet**, where the CG converges and the answer is 100% wrong (measured, not argued);
+the **screened** response of a magnetic cell with vacuum, because `dv_of_drho` for
+`nspin = 2` genuinely diverges where a channel density reaches zero (1504 of O2's 91125
+grid points, and exactly 1504 NaN); and the *second-derivative assemblies* — `Z*`, the
+dynamical matrix, the strain response.
+
+The original entry follows.
+
+### The refusal as it stood
 
 `response/sternheimer.py:836`. This one refusal blocks **every** response
 quantity for **every** spin-polarized system: no dielectric tensor, no phonons,
@@ -177,7 +194,21 @@ and `_alpha_pv` — for a metal, just `emax` over the kept bands. The shared-Fer
 case is cheap. The `tot_magnetization` case is real work: two Fermi levels means
 `Smearing.ef` needs a spin axis.
 
-### Forces, stress and relaxation + noncollinear magnetism or spin-orbit
+### ~~Forces, stress and relaxation + noncollinear magnetism or spin-orbit~~ — **closed 2026-08-30 (P46)**
+
+The estimate below was right about the physics and wrong about the size: the *layout* was
+the larger half, because a spinor state is `(1, nk, nbnd, 2 npwx)` and the kinetic term has
+to read `state_kinetic` too. Against `pw.x`: **8.9e-7 Ry/bohr** (four-atom noncollinear
+hydrogen chain), **7.5e-6** (ultrasoft Pt2 with spin-orbit) and **7.3e-7** (PAW), the stress
+on six cases to **<=1.2e-6 Ry/bohr^3**, and a finite difference of the frozen energy — no
+Fortran involved — to **6.2e-9 Ry/bohr**. The refusal was *narrowed*, not deleted: the
+analytic transcriptions, anything through the Sternheimer solver, the elastic constants
+(which reach the functional directly, so the spinor path is opt-in) and the force on an atom
+of a spin spiral all still refuse, each naming its own missing term.
+
+The original entry follows.
+
+### The refusal as it stood
 
 `forces/energy.py:156`, `reject_spinors`. P17's noncollinear magnetism and P14's
 spin-orbit coupling are both validated against `pw.x` to ~1e-9 Ry and have no
@@ -268,7 +299,21 @@ parameter, the DOS registry as a per-band weight — is regime-agnostic and
 written. `hubbard/projectors.py` builds the same projector set and would inherit
 it.
 
-### Kubo Berry curvature on a plane-wave calculation — *verified*
+### ~~Kubo Berry curvature on a plane-wave calculation~~ — **closed 2026-08-30 (P47)**
+
+Written against `VelocityOperator` band matrix elements (`topology/kubo.py`), never as a
+dense `H(k)` — the `O(npw^2)` route CLAUDE.md forbids. Against the FHS flux, which shares
+no machinery with it: a shrinking centred plaquette converges onto the pointwise value to
+**3.2e-3**, and a 24x24 mesh agrees plaquette by plaquette to **1.45e-4**. Silicon's
+curvature vanishes *pointwise* to **3.5e-5**. The truncation of the sum over empty states
+is reported (`BerryCurvature.truncation`). **Ultrasoft and PAW stay refused by name**: the
+`eps_n dS/dk` term is identically zero for a norm-conserving dataset, so nothing validated
+here can see whether its off-diagonal convention is right, and `q_ij(b)` is the second
+missing piece.
+
+The original entry follows.
+
+### The refusal as it stood
 
 `topology/berry.py:189` refuses because "the Kubo route needs `H(k)` as a
 differentiable function, which a plane-wave calculation does not yet expose: the
@@ -311,8 +356,7 @@ and is not.
 
 **Two separable things.** (a) A named refusal — `reject_potential_only` inside
 `require_a_sternheimer_regime` — so the message says the functional has no
-energy. Do this one regardless; it is the same guard-on-one-sibling shape as the
-nine already fixed. (b) The kinetic-energy-density response, if it is ever to
+energy. **Done 2026-08-30 with P45**, which was inside that function anyway. (b) The kinetic-energy-density response, if it is ever to
 work: `tau` comes from the states, so `dtau` is a tangent of `sum_n w |grad
 psi_n|^2`, the screening kernel needs `dv/dtau` beside `dv/drho`, and the
 Hamiltonian needs the `grad . (dv/dtau) grad` operator (`h_psi_meta.f90`). None

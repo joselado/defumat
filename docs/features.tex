@@ -509,6 +509,43 @@ registry --- \textbf{as a cross-check, not as the implementation}. The two share
 no machinery, which is what makes disagreement informative; it is how the
 augmentation force's sign and a missing gradient correction were found.
 
+For a noncollinear or spin-orbit run the same expression is evaluated on
+two-component spinors: the nonlocal term takes the pseudopotential's bare
+\code{dvan\_so} (a complex $2\times2$ matrix in spin space) and the
+orthonormality constraint takes \code{qq\_so}, and the state is one coefficient
+vector of length $2\,n_{\mathrm{pw}}$ rather than two. Nothing else in the
+functional changes.
+
+\begin{pycode}
+from pypresso import Calculator
+
+calculator = Calculator.from_file("pt2-soc-force.in")   # noncolin, lspinorb
+forces = calculator.get_forces()          # (nat, 3) Ry/bohr
+stress = calculator.get_stress()          # (3, 3)   Ry/bohr^3
+print(forces.max_force, stress.pressure_kbar)
+\end{pycode}
+
+Validated against \code{pw.x} with \code{tprnfor}/\code{tstress} on a four-atom
+noncollinear hydrogen chain (norm-conserving) to $8.9\times10^{-7}$ Ry/bohr,
+doubled fcc platinum with spin-orbit coupling to $7.5\times10^{-6}$ (ultrasoft)
+and $7.3\times10^{-7}$ (PAW), and the stress on those three plus QE's own three
+\code{pw\_spinorbit} cases to $\le 1.2\times10^{-6}$ Ry/bohr$^3$; and, without
+any Fortran at all, against a central finite difference of the frozen energy to
+$6.2\times10^{-9}$ Ry/bohr.
+
+\begin{refuses}
+A noncollinear or spin-orbit run has forces, a stress and a relaxation, but only
+through the \emph{autodiff} method: \code{method='analytic'} is refused by name,
+because \code{force\_us}/\code{stres\_knl} are transcriptions of QE's
+hand-derived expressions and have no spinor form. The force on an atom of a
+\textbf{spin spiral} is refused separately --- its two spinor components live on
+different plane-wave spheres, so the nonlocal term needs the projectors of both;
+\code{dE/dq} is what a spiral has instead. \textbf{Elastic constants and
+electrostriction} stay refused for \code{noncolin}: they differentiate the same
+functional a third time and their first-order wavefunctions come from a
+Sternheimer solve that has no spinor form.
+\end{refuses}
+
 % =====================================================================
 \section{Response: dielectric, phonons, Raman}
 
@@ -705,6 +742,56 @@ $k$-grid rather than a wedge, because their functional builds its own density
 and symmetrises it as a scalar inside the chain rule.
 \end{refuses}
 
+\subsection{Spin-polarized response}
+
+The Sternheimer equation is solved per spin channel,
+\begin{equation*}
+  \bigl(H_\sigma - \varepsilon_{n\sigma} S + \alpha_{pv} Q_\sigma\bigr)
+  \,|\Delta\psi_{n\sigma}\rangle
+  = -P^{+}_{c,\sigma}\,\Delta V_\sigma\,|\psi_{n\sigma}\rangle ,
+\end{equation*}
+with the occupied manifold $P_{c,\sigma}$ built from \emph{that channel's}
+filling: $N^{\rm occ}_\uparrow = \mathrm{NINT}(n_\uparrow)$ and
+$N^{\rm occ}_\downarrow = \mathrm{NINT}(n_\downarrow)$, which for a magnetic
+insulator are different numbers. Quantum ESPRESSO never meets this because LSDA
+doubles \code{nks} there and each spin channel is a separate $k$-point.
+
+\begin{pycode}
+# chi_0 for a spin-polarized run -- the part that is validated unconditionally.
+from pypresso.response.sternheimer import make_sternheimer
+
+solver = make_sternheimer(calculation, result, spin_polarized=True)
+drho = solver.chi0(dv)          # dv is (2, n1, n2, n3) on the dense grid
+\end{pycode}
+
+Validated against a central difference of the density under a spin-dependent
+probe potential --- $1.8\times10^{-6}$ on an antiferromagnetic hydrogen chain (a
+smeared metal) and $1.1\times10^{-6}$ on triplet O$_2$ (the sliced branch,
+ultrasoft) --- and against the identity that a cell with no magnetization gives
+the same $\varepsilon_\infty$ at \code{nspin = 1} and \code{nspin = 2}:
+$6.2\times10^{-14}$ on 13.806646105. The probe must differ between the channels,
+because $\chi_0$ is block diagonal in spin and one equal in both would not tell
+the blocks apart.
+
+\begin{refuses}
+\textbf{Refuses.} \code{tot\_magnetization} together with a smearing: the two
+channels have separate Fermi levels and \code{Smearing} carries one scalar
+\code{ef}. A filling whose boundary lands inside a \emph{degenerate multiplet}
+--- a Hund's-rule atom is exactly this case --- where the solve converges and
+returns an answer 100\,\% away from a finite difference, because which member
+falls below the cut is arbitrary; that is the physics, not a missing term. Born
+effective charges, the dynamical matrix, the strain response, the elastic
+constants, the Raman tensor and the electrostriction tensors for
+\code{nspin = 2}: the solve is spin-polarized, their second-derivative assembly
+is not. The \emph{screened} response of a magnetic system with vacuum: for
+\code{nspin = 2} the kernel \code{dv\_of\_drho} is the second derivative of the
+LSDA energy in the two channel densities and diverges wherever a channel density
+reaches zero --- measured on triplet O$_2$, 1504 of 91125 grid points and exactly
+1504 NaN. And any potential-only meta-GGA (\code{tb09}, \code{bj06}), which has
+no total energy to differentiate --- refused by name now rather than surfacing as
+\code{v\_of\_rho} asking for \code{tau}.
+\end{refuses}
+
 % =====================================================================
 \section{Optical spectra and excitons: TDDFT}
 
@@ -870,6 +957,60 @@ one is the answer, because it has no mesh and the Wilson route does.
 $k$-points do not share a $G$-sphere, so coefficients are aligned by Miller
 index; and the wrap at the zone edge is a \emph{shift} of that index, without
 which the Chern number comes out smooth and non-integer.
+
+\subsection{The curvature as a map: the Kubo route}
+
+Two constructions of the same quantity, chosen by name:
+\begin{equation*}
+  \Omega_n^{12}(\mathbf k) = -2\,\mathrm{Im}
+  \sum_{m \neq n}
+  \frac{A^{1}_{nm} A^{2}_{mn}}{(\varepsilon_n - \varepsilon_m)^2},
+  \qquad
+  A^{a}_{nm} = \langle \psi_n |\, \partial_{k_a} H - \varepsilon_n\,
+  \partial_{k_a} S \,| \psi_m \rangle
+\end{equation*}
+with \code{method="kubo"}, against the lattice field strength of Fukui,
+Hatsugai and Suzuki with \code{method="fhs"} (the default). The velocity
+operator is one \code{jvp} of $H(\mathbf k)$ at a frozen plane-wave sphere ---
+no dense $H(\mathbf k)$ is ever formed --- and the tangent for a crystal
+direction $d$ is the reciprocal lattice vector $\mathbf b_d$.
+
+\begin{pycode}
+from pypresso.workflows.topology import run_berry_curvature
+
+curvature = run_berry_curvature(
+    system, pseudos, density, shape=(4, 4), nocc=4, nbnd=12, method="kubo"
+)
+curvature.curvature          # (4, 4), Omega(k)
+curvature.curvature_by_band  # (4, 4, nocc) -- see the refusal box
+curvature.truncation         # what the highest empty band was worth
+\end{pycode}
+
+Validated against the FHS flux, which shares no machinery with it: a centred
+plaquette shrunk around one k-point of zincblende AlAs converges onto the
+pointwise Kubo value to $3.2\times10^{-3}$, and the whole $24\times24$ mesh
+agrees plaquette by plaquette to $1.45\times10^{-4}$, improving 65-fold over a
+sixfold refinement. The velocity matrix elements themselves reproduce a central
+finite difference of $H(\mathbf k)$ to $1.8\times10^{-9}$, and on centrosymmetric
+silicon the curvature vanishes \emph{pointwise} to $3.5\times10^{-5}$.
+
+\begin{refuses}
+\textbf{Refuses.} \code{method="kubo"} is for the map, never for the integer:
+its denominator $(\varepsilon_n-\varepsilon_m)^{-2}$ is singular at a degeneracy
+and its Brillouin-zone sum is an ordinary Riemann sum, which converges to an
+integer without ever being one --- \code{method="fhs"} is the default and is
+exact on any mesh. \textbf{Ultrasoft and PAW are refused by name}: the
+$\varepsilon_n \partial_k S$ term is identically zero for a norm-conserving
+dataset, so no validation here can see whether its off-diagonal convention is
+right, and $q_{ij}(\mathbf b)$ is the second missing piece; \code{method="fhs"}
+carries both correctly on all three dataset kinds. The sum over empty states is
+truncated at \code{nbnd} and the truncation is \emph{reported} rather than
+hidden --- read \code{BerryCurvature.truncation}, or \code{truncation\_abs}
+wherever symmetry forces the curvature to vanish, since the ratio is then noise
+over noise. \code{curvature\_by\_band} is gauge invariant only for a
+non-degenerate band; inside a degenerate multiplet only the sum over the members
+is defined, and \code{curvature} (the manifold total) always is.
+\end{refuses}
 
 % =====================================================================
 \section{Things with no \texorpdfstring{\code{pw.x}}{pw.x} counterpart}
