@@ -36,6 +36,10 @@ NOTEBOOKS = Path(__file__).resolve().parents[2] / "notebooks"
 REWRITTEN = {
     "00_the_calculator",
     "02_silicon_scf_and_bands",
+    "04_ultrasoft_and_paw",
+    "05_gradient_corrections",
+    "06_density_of_states",
+    "07_spin_polarization",
     "08_spin_orbit_coupling",
     "09_forces_and_relaxation",
     "10_topological_invariants",
@@ -93,6 +97,7 @@ HAS_A_FACADE_METHOD = {
     "run_scf": "get_scf",
     "run_bands": "get_bands",
     "run_dos": "get_dos",
+    "run_nscf": "get_nscf",
     "run_pdos": "get_pdos",
     "run_relax": "get_relax",
     "compute_forces": "get_forces",

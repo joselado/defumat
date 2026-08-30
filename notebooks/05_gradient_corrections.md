@@ -1,103 +1,91 @@
 # Gradient corrections: PBE, revPBE and PBEsol
 
-An LDA functional sees only the density at a point; a GGA also sees its gradient. That
-costs one new term in the potential, a divergence, and buys most of what published
-plane-wave work is done with. PBE, revPBE and PBEsol run here on all three kinds of
-pseudopotential and match Quantum ESPRESSO to **6e-9 Ry or better**, with bands to
-**0.05 meV**.
+An LDA functional sees only the density at a point; a GGA also sees its gradient. That costs
+one new term in the potential -- a divergence -- and buys most of what published plane-wave
+work is done with.
 
-A GGA multiplies the local exchange energy by an enhancement factor of the reduced
-gradient, and the potential is the functional derivative of that, which is where the
-second term comes from:
+A GGA multiplies the local exchange energy by an enhancement factor of the *reduced*
+gradient, and the potential is the functional derivative of that, which is where the second
+term comes from:
 
-$$E_x^{\rm GGA}[\rho] = \int \rho(\mathbf r)\,\epsilon_x^{\rm LDA}(\rho)\,
-  F(s)\; d\mathbf r,
+$$E_x^{\rm GGA}[\rho] = \int \rho\,\epsilon_x^{\rm LDA}(\rho)\,F(s)\;d\mathbf r,
 \qquad s = \frac{|\nabla\rho|}{2 k_F \rho},
 \qquad k_F = (3\pi^2\rho)^{1/3}$$
 
-$$v_{xc}(\mathbf r) = \frac{\partial E_{xc}}{\partial \rho}
+$$v_{xc} = \frac{\partial E_{xc}}{\partial \rho}
   - \nabla\cdot\frac{\partial E_{xc}}{\partial \nabla\rho}
   \;\equiv\; v_1 - \nabla\cdot\!\left(v_2 \nabla\rho\right)$$
 
-Only the energy functional is written down; both potentials are obtained by
-differentiating it.
+Only the energy functional is written down here; both potentials are obtained by
+differentiating it, so a new functional is one expression and no accompanying algebra.
+
+| against `pw.x` | pypresso | difference |
+|---|---|---|
+| PBE, norm-conserving silicon | **-15.727897810 Ry** | 2.7e-10 |
+| PBE, **ultrasoft** | **-22.822566057 Ry** | 2.7e-09 |
+| PBE, **PAW** | **-93.439615230 Ry** | 1.1e-10 |
+| **revPBE**, same cell | **-15.734397095 Ry** | 4.6e-09 |
+| **PBEsol**, same cell | **-15.696395527 Ry** | 3.4e-09 |
+| the bands along the same path | | 0.052 meV |
 
 
 ```python
+import warnings
 from pathlib import Path
 
-import jax
-import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 
 from pypresso import Calculator
-from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.system import build_system
-from pypresso.xc.functional import get_functional, resolve_functional
+from pypresso.io import comparison_table, read_qe_output
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
+# revPBE and PBEsol run a PBE-generated dataset, on purpose; see below.
+warnings.filterwarnings("ignore", message="input_dft asks for")
 
-def load(case):
-    return Calculator.from_file(CASES / f"{case}.in", pseudo_dir=PSEUDO,
-                                announce=False)
-
-
-def reference(case):
-    return read_qe_output(CASES / f"reference.out.{case}")
-
-
-# QE composes a functional out of four independently chosen slots, and a UPF header names
-# all four -- which is where the functional comes from unless `input_dft` overrides it.
-for name in ("PZ", "PW", "PBE", "REVPBE", "PBESOL"):
-    f = get_functional(name)
-    print("%-8s exchange=%-18s correlation=%-16s gradient=%s"
-          % (name, f.exchange.__name__, f.correlation.__name__, f.is_gradient))
-print()
-for name in ("Si.pz-vbc.UPF", "Si.pbe-rrkj.UPF", "Si.pbe-n-kjpaw_psl.0.1.UPF"):
-    pseudo = read_upf(PSEUDO / name)
-    print("%-30s header=%-26r -> %s"
-          % (name, pseudo.functional, resolve_functional([pseudo.functional]).name))
+pbe = Calculator.from_file(CASES / "si2-nc-pbe.in", pseudo_dir=PSEUDO, announce=False)
+print("silicon, PBE:   E = %.9f Ry" % pbe.get_scf().total_energy)
 ```
 
-    PZ       exchange=slater_exchange    correlation=pz_correlation   gradient=False
-    PW       exchange=slater_exchange    correlation=pw_correlation   gradient=False
-    PBE      exchange=slater_exchange    correlation=pw_correlation   gradient=True
-    REVPBE   exchange=slater_exchange    correlation=pw_correlation   gradient=True
-    PBESOL   exchange=slater_exchange    correlation=pw_correlation   gradient=True
-    
-    Si.pz-vbc.UPF                  header='SLA  PZ   NOGX NOGC'      -> PZ
-    Si.pbe-rrkj.UPF                header='SLA  PW   PBE  PBE'       -> PBE
-    Si.pbe-n-kjpaw_psl.0.1.UPF     header='SLA  PW   PBX  PBC'       -> PBE
+    silicon, PBE:   E = -15.727897810 Ry
 
+
+The functional was not chosen at the call. It comes from the pseudopotential's own header,
+because a dataset is generated *with* a functional and running it under another one is an
+inconsistency rather than a preference -- `input_dft` overrides it and the package says so
+when it does. QE composes a functional out of four independently chosen slots and a UPF
+header names all four, which is why the same is done here rather than matching on a name.
 
 ## What the three functionals disagree about
 
-All of them multiply the local exchange energy by an enhancement factor $F(s)$ of the
-reduced gradient $s$. The three differ only in how fast it saturates and where: revPBE
-raises the ceiling, which improves atomic and molecular energies, and PBEsol lowers the
-slope, which improves lattice constants and surface energies of solids.
+All of them multiply the local exchange energy by an enhancement factor $F(s)$. They differ
+only in how fast it saturates and where: **revPBE** raises the ceiling, which improves atomic
+and molecular energies, and **PBEsol** lowers the slope at small $s$, which improves lattice
+constants and surface energies of solids.
 
 
 ```python
+from pypresso.xc.functional import get_functional   # no facade route to one functional
+
 rho = 0.05
 s = np.linspace(0.0, 3.0, 300)
 kf = (3.0 * np.pi**2 * rho) ** (1.0 / 3.0)
-sigma = (s * 2.0 * kf * rho) ** 2                 # |grad rho|^2 at each s, fixed rho
+sigma = (s * 2.0 * kf * rho) ** 2               # |grad rho|^2 at each s, at fixed rho
 
-fig, ax = plt.subplots(figsize=(6.2, 4))
+fig, ax = plt.subplots(figsize=(6.2, 4.0))
 for name, style in (("PBE", "-"), ("REVPBE", "--"), ("PBESOL", ":")):
-    f = get_functional(name)
-    ex_gga = np.asarray(f.gradient_energy(jnp.full_like(sigma, rho), jnp.asarray(sigma)))
-    ex_lda = float(rho * f.exchange(jnp.asarray(rho)))
-    ax.plot(s, 1.0 + ex_gga / ex_lda, style, lw=1.8, label=name)
+    functional = get_functional(name)
+    gga = np.asarray(functional.gradient_energy(np.full_like(sigma, rho), sigma))
+    lda = float(rho * functional.exchange(rho))
+    ax.plot(s, 1.0 + gga / lda, style, lw=1.8, label=name)
 ax.axhline(1.0, color="k", lw=0.6)
-ax.set_xlabel("reduced gradient $s$"); ax.set_ylabel("enhancement factor $F(s)$")
+ax.set_xlabel("reduced gradient $s$")
+ax.set_ylabel("enhancement factor $F(s)$")
 ax.set_title(r"Exchange enhancement at $\rho = %.2f$" % rho)
-ax.legend(); ax.grid(alpha=0.3); fig.tight_layout()
+ax.legend()
+ax.grid(alpha=0.3)
+fig.tight_layout()
 ```
 
 
@@ -106,47 +94,13 @@ ax.legend(); ax.grid(alpha=0.3); fig.tight_layout()
     
 
 
-## The potential is the derivative of the energy
+$F(0) = 1$ in all three, which is the uniform gas and is not negotiable: a GGA has to
+reduce to LDA where the density is flat. Everything above that is the model.
 
-Only the energy is written down, and $v_1$ and $v_2$ are obtained by differentiating it,
-so a functional is defined by one expression with no accompanying algebra. The cell below
-checks it against the closed form of the PBE exchange potential.
-
-
-```python
-def qe_pbex(rho, grho, kappa=0.804, mu=0.2195149727645171):
-    """`pbex` from XClib, in Hartree: the hand-derived potentials to reproduce."""
-    c1, c2 = 0.75 / np.pi, 3.093667726280136
-    agrho = np.sqrt(grho); kf = c2 * rho ** (1 / 3); dsg = 0.5 / kf
-    s1 = agrho * dsg / rho; f2 = 1.0 + s1 * s1 * mu / kappa
-    fx = kappa - kappa / f2; exunif = -c1 * kf
-    dfx = 2.0 * mu * s1 / (f2 * f2)
-    v1x = exunif * fx + exunif / 3.0 * fx + exunif * dfx * (-4.0 / 3.0 * s1)
-    return exunif * fx * rho, v1x, exunif * dfx * dsg / agrho
-
-
-E2 = 2.0                       # XClib returns Hartree; this code returns Rydberg
-energy = get_functional("PBE").gradient_exchange
-print("%6s %6s | %13s %13s | %13s %13s"
-      % ("rho", "sigma", "v1 autodiff", "v1 QE", "v2 autodiff", "v2 QE"))
-for r, sig in ((0.05, 0.01), (0.5, 0.3), (2.0, 5.0)):
-    v1 = float(jax.grad(energy, argnums=0)(r, sig))
-    v2 = 2.0 * float(jax.grad(energy, argnums=1)(r, sig))
-    _, v1_qe, v2_qe = qe_pbex(r, sig)
-    print("%6.2f %6.2f | %13.9f %13.9f | %13.9f %13.9f"
-          % (r, sig, v1, E2 * v1_qe, v2, E2 * v2_qe))
-```
-
-       rho  sigma |   v1 autodiff         v1 QE |   v2 autodiff         v2 QE
-      0.05   0.01 |   0.066124366   0.066124366 |  -0.627914775  -0.627914775
-      0.50   0.30 |   0.016393593   0.016393593 |  -0.041548429  -0.041548429
-      2.00   5.00 |   0.011017096   0.011017096 |  -0.006647590  -0.006647590
-
-
-The second potential enters as $-\nabla\cdot(v_2\nabla\rho)$, a divergence, so it
-integrates to zero over the cell and moves no charge: it only redistributes it, sharpening
-the potential where the density is varying fastest. That is exactly where LDA is worst,
-which is why a GGA helps most at surfaces, in bonds and around light atoms.
+The second potential enters as $-\nabla\cdot(v_2\nabla\rho)$, a divergence, so it integrates
+to zero over the cell and moves no charge at all -- it only redistributes it, sharpening the
+potential where the density varies fastest. That is exactly where LDA is worst, which is why
+a GGA helps most at surfaces, in bonds, and around light atoms.
 
 ## Against Quantum ESPRESSO
 
@@ -155,96 +109,89 @@ cell.
 
 
 ```python
-import warnings
-
-print("%-16s %18s %18s %14s" % ("case", "pypresso (Ry)", "QE (Ry)", "difference"))
-for case in ("si2-nc-pbe", "si2-us-pbe", "si2-paw-pbe"):
-    calc = load(case)
-    result = calc.get_scf(conv_thr=1e-10, max_iterations=80)
-    ref = reference(case)
-    print("%-16s %18.9f %18.9f %14.2e"
-          % (case, result.total_energy, ref.total_energy,
-             result.total_energy - ref.total_energy))
-    if case == "si2-nc-pbe":
-        pbe = calc
-
-print()
-for case, label in (("si2-nc-pbe", "PBE"), ("si2-nc-revpbe", "revPBE"),
+rows = []
+for case, label in (("si2-nc-pbe", "PBE, norm-conserving"), ("si2-us-pbe", "PBE, ultrasoft"),
+                    ("si2-paw-pbe", "PBE, PAW"), ("si2-nc-revpbe", "revPBE"),
                     ("si2-nc-pbesol", "PBEsol")):
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")     # input_dft overriding the dataset, on purpose
-        result = load(case).get_scf(conv_thr=1e-10, max_iterations=80)
-    ref = reference(case)
-    print("%-16s %18.9f %18.9f %14.2e"
-          % (label, result.total_energy, ref.total_energy,
-             result.total_energy - ref.total_energy))
+    ours = Calculator.from_file(CASES / f"{case}.in", pseudo_dir=PSEUDO,
+                                announce=False).get_scf()
+    rows.append((label, ours.total_energy,
+                 read_qe_output(CASES / f"reference.out.{case}").total_energy))
+
+print(comparison_table(rows, fmt="{:.9f}",
+                       headers=("case", "pypresso [Ry]", "pw.x", "difference")))
 ```
 
-    case                  pypresso (Ry)            QE (Ry)     difference
+    case                  pypresso [Ry]           pw.x  difference
+    PBE, norm-conserving  -15.727897810  -15.727897810     2.7e-10
+    PBE, ultrasoft        -22.822566057  -22.822566060     2.7e-09
+    PBE, PAW              -93.439615230  -93.439615230     1.1e-10
+    revPBE                -15.734397095  -15.734397090     4.6e-09
+    PBEsol                -15.696395527  -15.696395530     3.4e-09
 
 
-    si2-nc-pbe            -15.727897810      -15.727897810       2.72e-10
-
-
-    si2-us-pbe            -22.822566057      -22.822566060       2.72e-09
-
-
-    si2-paw-pbe           -93.439615230      -93.439615230      -1.11e-10
-    
-
-
-    PBE                   -15.727897810      -15.727897810       2.72e-10
-
-
-    revPBE                -15.734397095      -15.734397090      -4.59e-09
-
-
-    PBEsol                -15.696395527      -15.696395530       3.40e-09
-
+The last two rows carry a warning, silenced in the first cell: they run a PBE-generated
+dataset under a *different* functional. That is what `input_dft` is for and it is deliberate
+here, so that the three functionals are compared on one crystal rather than on three
+datasets -- but it is an inconsistency, `pw.x` says so too, and a published number should not
+be got this way.
 
 ## The bands, and what a gradient correction does not fix
 
-PBE moves silicon's bands by tens of meV against LDA and its gap by about 0.1 eV, still
-half of experiment's 1.17 eV. The band gap of a Kohn-Sham calculation is not the quantity
-experiment measures, and no gradient correction repairs that. What PBE does repair is the
-energetics, which is why it is what structures, binding energies and forces are computed
-with.
+PBE moves silicon's bands by tens of meV against LDA and its gap from 0.49 eV to 0.57 --
+still half of the measured 1.17. **The band gap of a Kohn-Sham calculation is not the quantity
+experiment measures**, and no gradient correction repairs that; notebook 24 is what does.
+What PBE repairs is the energetics, which is why it is what structures, binding energies and
+forces are computed with.
 
 
 ```python
-# The band path comes from QE's own bands input; the density is the one already
-# converged on `pbe`, so only the k-points have to be handed over.
-band_system = build_system(read_pw_input(CASES / "si2-nc-pbe-bands.in"))
-bands = pbe.get_bands(kpoints=band_system.kpoints, nbnd=8)
-theirs = reference("si2-nc-pbe-bands").eigenvalues[0]
-ours = bands.eigenvalues_ev
-homo = ours[:, 3].max()
+path = Calculator.from_file(CASES / "si2-nc-pbe-bands.in", pseudo_dir=PSEUDO,
+                            announce=False).system
+bands = pbe.get_bands(kpoints=path.kpoints, nbnd=8)
+theirs = read_qe_output(CASES / "reference.out.si2-nc-pbe-bands").eigenvalues[0]
+ours = bands.eigenvalues_ev - bands.eigenvalues_ev[:, 3].max()
 
-fig, ax = plt.subplots(figsize=(7, 4.4))
-for band in range(ours.shape[1]):
-    ax.plot(bands.path_length, ours[:, band] - homo, "-", color="C0", lw=1.7,
-            label="pypresso (PBE)" if band == 0 else None)
-    ax.plot(bands.path_length, theirs[:, band] - homo, "o", color="crimson", ms=3.5,
-            mfc="none", label="Quantum ESPRESSO" if band == 0 else None)
-ax.axhline(0, color="k", lw=0.8, ls=":")
-ax.set_ylabel(r"$E - E_{\rm VBM}$  [eV]"); ax.set_xlabel("path through the zone")
-ax.set_title("Silicon under PBE"); ax.legend(loc="upper right")
-ax.grid(alpha=0.25, axis="y"); fig.tight_layout()
+fig, ax = plt.subplots(figsize=(7.0, 4.4))
+ax.plot(bands.path_length, ours, "-", color="C0", lw=1.7)
+ax.plot(bands.path_length, theirs - theirs[:, 3].max(), "o", color="crimson", ms=3.5,
+        mfc="none")
+ax.plot([], [], "-", color="C0", lw=1.7, label="pypresso, PBE")
+ax.plot([], [], "o", color="crimson", ms=5, mfc="none", label="pw.x")
+ax.axhline(0.0, color="k", lw=0.8, ls=":")
+ax.set_xlabel("path through the zone")
+ax.set_ylabel(r"$E - E_{\rm VBM}$   [eV]")
+ax.set_title("Silicon under PBE")
+ax.legend(loc="upper right")
+ax.grid(alpha=0.25, axis="y")
+fig.tight_layout()
 
-print("largest eigenvalue difference from QE: %.3f meV"
-      % (np.abs(ours - theirs).max() * 1e3))
-print("PBE gap: %.3f eV   (experiment 1.17 eV)" % bands.gap(8))
+print("largest eigenvalue difference from pw.x   %.3f meV"
+      % (np.abs(bands.eigenvalues_ev - theirs).max() * 1e3))
+print("PBE gap   %.3f eV   (measured 1.17)" % bands.gap(8))
 ```
 
-    largest eigenvalue difference from QE: 0.052 meV
-    PBE gap: 0.565 eV   (experiment 1.17 eV)
+    largest eigenvalue difference from pw.x   0.052 meV
+    PBE gap   0.565 eV   (measured 1.17)
 
 
 
     
-![png](05_gradient_corrections_files/05_gradient_corrections_9_1.png)
+![png](05_gradient_corrections_files/05_gradient_corrections_7_1.png)
     
 
+
+## What it refuses
+
+An **unimplemented functional is refused rather than silently replaced by LDA**, which is the
+failure mode that matters here: a run that quietly changes the physics and reports success is
+worse than one that stops. The three above plus the LDA family are what is in; anything else
+a UPF header can name is named back.
 
 ---
-The tests behind this notebook: `tests/regression/test_gga.py`, `tests/unit/test_xc.py`.
+The tests behind this notebook: `tests/regression/test_gga.py`, which holds the total
+energies, their term-by-term breakdown and the eigenvalues on all three kinds of dataset,
+and the check that the functional comes from the pseudopotential; and
+`tests/unit/test_xc.py`, which holds the potentials against the closed forms `XClib`
+derives by hand -- $v_1$ and $v_2$ here are obtained by differentiating the energy, so those
+two implementations share nothing and checking one against the other is the test.

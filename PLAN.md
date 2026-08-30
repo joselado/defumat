@@ -6761,7 +6761,8 @@ against 25), or reaching past the facade (up to 7 imports).
 **Phase 5 is the sweep and it is partly done. Pick it up here.**
 
 Rewritten and passing the enforcement test: `00` (which already complied), `02`,
-`09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`, `15`, `24`, `29`, `26`, `25`.
+`09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`, `15`, `24`, `29`, `26`, `25`, `04`,
+`05`, `06`, `07`.
 
 **The Raman merge is done**, which is the first of the two structural jobs.
 `25_raman_tensors` is deleted and `26_raman_and_infrared_spectra` carries both:
@@ -6790,6 +6791,10 @@ arbitrary, and the activity beside them reads 0.0000 in every version.
 | `29` | 102 → 46 | 6 → 4 | 59 s |
 | `25`+`26` | 167 → 43 | 13 → 4 | 107 s |
 | `25` (new) | — → 66 | — → 5 | 28 s |
+| `04` | 74 → 40 | 4 → 4 | 12 s |
+| `05` | 98 → 59 | 5 → 4 | 10 s |
+| `06` | 93 → 80 | 5 → 5 | 23 s |
+| `07` | 82 → 63 | 4 → 4 | 22 s |
 | `19` | 143 → 47 | 11 → 5 | 46 s |
 | `10` | 134 → 46 | 5 → 5 | 50 s |
 | `13` | 123 → 43 | 5 → 3 | 66 s |
