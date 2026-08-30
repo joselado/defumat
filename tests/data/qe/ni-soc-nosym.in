@@ -1,0 +1,31 @@
+! Nickel with spin-orbit coupling, for the site orbital moment.
+!
+! fcc nickel, one atom, a fully relativistic norm-conserving dataset, the moment
+! driven along z. Norm-conserving on purpose: the site angular momenta project
+! onto atomic orbitals with the scalar overlap operator, and a fully relativistic
+! ultrasoft or PAW dataset needs the off-diagonal spin blocks of qq_so there, which
+! is a term this projection does not have and is refused by name for.
+!
+! `nosym = .true.` and the whole 4x4x4 grid for the reason si2-nosym.in gives: <L>
+! and <S> are axial vectors and a reduced wedge does not sum to the cell's.
+!
+! conv_thr is 1e-10 because <L> is a small difference of large projections: at
+! 1e-8 its last printed digit still moves.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 6.65, nat = 1, ntyp = 1, ecutwfc = 60.0,
+    occupations = 'smearing', smearing = 'mv', degauss = 0.02, nosym = .true.,
+    noncolin = .true., lspinorb = .true.,
+    starting_magnetization(1) = 0.3, angle1(1) = 0.0
+ /
+ &electrons
+    conv_thr = 1.0d-10, mixing_beta = 0.3
+ /
+ATOMIC_SPECIES
+ Ni 58.69 Ni.rel-pbe-nc-dojo.UPF
+ATOMIC_POSITIONS crystal
+ Ni 0.00 0.00 0.00
+K_POINTS (automatic)
+ 4 4 4 0 0 0

@@ -883,8 +883,8 @@ knobs that are this code's own — `mbj_c`, `spiral_q`,
 
 ## Tutorial notebooks
 
-**A rewrite of this whole set is in progress and is 12 of 29 done — read `PLAN.md`
-P49 before touching a notebook.** It carries the resume point, the fifteen still to
+**A rewrite of this whole set is in progress and is 13 of 29 done — read `PLAN.md`
+P49 before touching a notebook.** It carries the resume point, the fourteen still to
 do in priority order, the two structural jobs not started (merging `25` and `26`,
 and writing the "your own crystal" notebook), and a six-point checklist in which
 every item is something that pass already got wrong once. The shape they are being

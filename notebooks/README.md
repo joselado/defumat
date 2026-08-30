@@ -221,7 +221,7 @@ five-run finite-difference sweep and a two-run identity check, both of them
 already in the test suite.
 
 Most of the rest run in under a minute on one core. The exception is `12` (a few
-minutes). `29` takes **63 s**, most of it the one spinor SCF on nickel; its Elk
+minutes). `29` takes **59 s**, most of it the one spinor SCF on nickel; its Elk
 comparison and its moment-rotation check are quoted from offline runs rather
 than executed.
 

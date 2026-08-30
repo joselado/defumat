@@ -6761,7 +6761,7 @@ against 25), or reaching past the facade (up to 7 imports).
 **Phase 5 is the sweep and it is partly done. Pick it up here.**
 
 Rewritten and passing the enforcement test: `00` (which already complied), `02`,
-`09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`, `15`, `24`.
+`09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`, `15`, `24`, `29`.
 
 | | code lines | code cells | runtime |
 |---|---|---|---|
@@ -6771,19 +6771,20 @@ Rewritten and passing the enforcement test: `00` (which already complied), `02`,
 | `18` | 114 → 56 | 9 → 4 | 3 min → **29 s** |
 | `15` | 109 → 60 | 6 → 5 | 31 s |
 | `24` | 103 → 48 | 5 → 3 | 31 s |
+| `29` | 102 → 46 | 6 → 4 | 59 s |
 | `19` | 143 → 47 | 11 → 5 | 46 s |
 | `10` | 134 → 46 | 5 → 5 | 50 s |
 | `13` | 123 → 43 | 5 → 3 | 66 s |
 | `11` | 147 → 54 | 6 → 5 | 79 s |
 | `08` | 149 → 56 | 6 → 4 | **25 min → 171 s** |
 
-**Fifteen notebooks are left**, plus the two structural jobs: merging `25` and
+**Fourteen notebooks are left**, plus the two structural jobs: merging `25` and
 `26` into one Raman notebook (spectrum first, tensor as its "how it works"), and
 adding the **"your own crystal"** notebook, which is the highest-value single
 artifact in the phase and still unwritten. In rough order of how badly they miss
-the budgets: `17` (105 lines), `29` (102), `05` (98), `06` (93), `16` (92),
-`27` (92), `14` (91), `12` (84), `26` (84), `25` (83), `07` (82), `21` (81),
-`01` (79), `04` (74), `20` (73), `03` (72), `23` (72). `01`, `03` and `17` are
+the budgets: `17` (105 lines), `05` (98), `06` (93), `16` (92), `27` (92),
+`14` (91), `12` (84), `26` (84), `25` (83), `07` (82), `21` (81), `01` (79),
+`04` (74), `20` (73), `03` (72), `23` (72). `01`, `03` and `17` are
 the "under the hood" tier and are **not** held to the skeleton — trim them toward
 the everywhere-rules and leave them out of `REWRITTEN`.
 
@@ -6797,6 +6798,18 @@ small text file, deletes all of that, and makes the notebook reproducible from
 the command line: `si2-nc-eos.in` for `15`, and `si2-lda-gap.in` /
 `si2-tb09.in` for `24`, the last two differing by `input_dft` and nothing else.
 Neither has a `pw.x` reference and neither needs one, which their comments say.
+`29` needed two more — `si2-nosym.in` and `ni-soc-nosym.in`, both carrying the
+`nosym` and the whole grid that the *axial* character of `<L>` and `<S>` demands
+— which took two inline `from_text` heredocs of 20 lines each out of its code.
+
+**And putting the band count in the input file was wrong**, which is worth
+knowing because it is invisible: `29`'s effective mass wants a window past the
+occupied bands, so `nbnd = 10` went into `si2-nosym.in`, and carrying those extra
+bands through the *self-consistent run* moved silicon's quenched orbital moment
+from **2.6e-16 to 2.0e-9** — seven orders, on the same cell at the same
+`conv_thr`. `<L> = 0` without spin-orbit coupling is an identity, not a
+tolerance, so that is the one number in the notebook that says so. `nbnd` belongs
+on the `get_effective_mass` call, where it does not reach the ground state.
 
 **What the four in this pass cost and found.** `08` was one cell split, and the
 loop now reuses the first run's result rather than repeating it, so it cost no

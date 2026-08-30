@@ -46,6 +46,7 @@ REWRITTEN = {
     "19_linear_response",
     "22_van_der_waals",
     "24_tran_blaha_band_gaps",
+    "29_effective_mass_and_angular_momenta",
 }
 
 #: Notebooks that still say ``jvp`` in a plot label or a code cell. Prose debt

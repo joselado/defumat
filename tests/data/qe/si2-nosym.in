@@ -1,0 +1,38 @@
+! Silicon on the whole 4x4x4 grid, for an effective mass and site angular momenta.
+!
+! QE's own two-atom cell with two changes, one for each quantity this input is for.
+!
+! `nosym = .true.` and the full grid, because <L> and <S> are **axial vectors**:
+! summing them over a symmetry-reduced wedge and calling the result the cell's is
+! wrong in exactly the way summing a polar vector over a wedge is, and the escape
+! that works here is the whole unshifted grid rather than a symmetriser. The
+! effective mass does not need it -- it is one non-self-consistent run at a single
+! k-point -- but running both quantities off one converged density does.
+!
+! The band count is deliberately *not* set here. The effective mass wants a window
+! past the four occupied bands and asks for one at the call, because carrying the
+! extra bands through the self-consistent run itself costs the quenching identity
+! seven orders of magnitude: <L> comes out at 2.6e-16 with the default band count
+! and at 2.0e-9 with `nbnd = 10`, on the same cell and the same conv_thr.
+!
+! conv_thr is 1e-10 rather than what a total energy needs, because a second
+! derivative divides the eigensolver's own scatter by the square of the stencil
+! width, and there is no reference to hide behind: the mass is checked against
+! Elk and against a band structure computed along a line.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.2, nat = 2, ntyp = 1,
+    ecutwfc = 12.0, nosym = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0
