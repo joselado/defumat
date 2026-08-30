@@ -41,6 +41,7 @@ REWRITTEN = {
     "10_topological_invariants",
     "11_noncollinear_magnetism_and_fields",
     "13_dft_plus_u",
+    "15_stress",
     "18_continuing_a_calculation",
     "19_linear_response",
     "22_van_der_waals",

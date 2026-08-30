@@ -209,8 +209,8 @@ jupyter lab notebooks/
 ```
 
 The ones rewritten to the shape above are timed, and all of them are far inside
-the ten-minute ceiling: **`02` 7 s, `09` 6 s, `22` 12 s, `18` 29 s, `19` 46 s,
-`10` 50 s, `11` 79 s, `13` about a minute, `08` 174 s**. Three of those used to
+the ten-minute ceiling: **`02` 7 s, `09` 6 s, `22` 12 s, `18` 29 s, `15` 31 s,
+`19` 46 s, `10` 50 s, `11` 79 s, `13` about a minute, `08` 174 s**. Three of those used to
 be much slower. `19` lost two hand-built linear solves and a second
 self-consistent run that were demonstrating machinery rather than physics; `18`
 ran fourteen self-consistent calculations where two pairs make its point and the

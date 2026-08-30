@@ -6761,7 +6761,7 @@ against 25), or reaching past the facade (up to 7 imports).
 **Phase 5 is the sweep and it is partly done. Pick it up here.**
 
 Rewritten and passing the enforcement test: `00` (which already complied), `02`,
-`09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`.
+`09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`, `15`.
 
 | | code lines | code cells | runtime |
 |---|---|---|---|
@@ -6769,17 +6769,18 @@ Rewritten and passing the enforcement test: `00` (which already complied), `02`,
 | `09` | 98 → 26 | 4 → 2 | 6 s |
 | `22` | 111 → 50 | 5 → 4 | 12 s |
 | `18` | 114 → 56 | 9 → 4 | 3 min → **29 s** |
+| `15` | 109 → 60 | 6 → 5 | 31 s |
 | `19` | 143 → 47 | 11 → 5 | 46 s |
 | `10` | 134 → 46 | 5 → 5 | 50 s |
 | `13` | 123 → 43 | 5 → 3 | 66 s |
 | `11` | 147 → 54 | 6 → 5 | 79 s |
 | `08` | 149 → 56 | 6 → 4 | **25 min → 171 s** |
 
-**Seventeen notebooks are left**, plus the two structural jobs: merging `25` and
+**Sixteen notebooks are left**, plus the two structural jobs: merging `25` and
 `26` into one Raman notebook (spectrum first, tensor as its "how it works"), and
 adding the **"your own crystal"** notebook, which is the highest-value single
 artifact in the phase and still unwritten. In rough order of how badly they miss
-the budgets: `15` (109 lines), `17` (105), `24` (103, first cell does not build a
+the budgets: `17` (105 lines), `24` (103, first cell does not build a
 `Calculator`), `29` (102), `05` (98), `06` (93), `16` (92), `27` (92), `14` (91),
 `12` (84), `26` (84), `25` (83), `07` (82), `21` (81), `01` (79), `04` (74),
 `20` (73), `03` (72), `23` (72). `01`, `03` and `17` are the "under the hood"
@@ -6797,7 +6798,18 @@ where two pairs make the point; the silicon and platinum rows of its table are
 quoted and named to the tests that run them. `22` lost its
 transcribed-against-differentiated force and stress table, which the conventions
 ban outright, and its elastic-constant cell, which was the last of the three
-`jvp` debts but one.
+`jvp` debts but one. `15` needed one new input, `tests/data/qe/si2-nc-eos.in` —
+ideal silicon at `ecutwfc = 40` — because its equation of state was being built
+by editing a parsed input's `celldm` in the notebook, which is five imports past
+the facade; `with_cell` does it in one call and reproduces the old route's
+printed residue **exactly** (2.58 kbar over -83 to 161), which is the check that
+the k-point regeneration `with_cell` exists for is doing the same thing the hand
+route did.
+
+**And the fabricated header happened twice**, in the same session, after the rule
+was written down: `15`'s five pressures were also written from memory and are
+-23.58, -31.13, +10.53, +10.95 and +47.08 kbar. A headline number goes in after
+the execution, from the output, every time.
 
 **Three corrections the re-execution caught**, which is checklist item 3 doing its
 job. `10`'s "the hot spots sit where the gap is smallest" was a claim the figure

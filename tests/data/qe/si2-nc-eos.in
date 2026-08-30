@@ -1,0 +1,39 @@
+! Ideal silicon at a production cutoff, for an equation of state.
+!
+! The two-atom LDA cell of `si2-nc-stress.in` with the displaced atom put back on
+! its ideal site and the cutoff raised from 12 Ry to 40. Both changes are what an
+! E(V) curve needs and neither is what a stress reference needs, which is why
+! this is a separate input rather than a variant of that one.
+!
+! The atom is on its site so that the curve is an equation of state and not a
+! mixture of one with a displaced atom relaxing as the cell is scaled.
+!
+! The cutoff is the point of the file. Expanding the cell at a fixed `ecutwfc`
+! lets more plane waves inside the sphere, so the basis improves as the volume
+! grows and the energy falls for a reason that is not physics -- the Pulay
+! stress. On this cell it is about 44 kbar at 12 Ry, 1.1 kbar at 40 and 0.11 at
+! 60, so 40 is where `tr sigma / 3` and `-dE/dV` can be plotted on one axis and
+! seen to agree.
+!
+! There is no committed `pw.x` reference beside this one and none is needed: what
+! it is for is the agreement of two derivatives computed here, one taken at a
+! single volume with the wavefunctions frozen and one differenced across
+! separately converged runs.
+ &control
+    calculation = 'scf'
+    tstress = .true.
+ /
+ &system
+    ibrav=2, celldm(1)=10.20, nat=2, ntyp=1,
+    ecutwfc=40.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0
