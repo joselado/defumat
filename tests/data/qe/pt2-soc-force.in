@@ -1,0 +1,51 @@
+! **A force with spin-orbit coupling and an ultrasoft dataset**, which is where
+! the spinor force acquires its Pulay term.
+!
+! `pw_spinorbit/spinorbit.in`'s fcc platinum -- the case QE's own test-suite
+! uses for `lspinorb` with a fully-relativistic ultrasoft dataset -- in a cell
+! doubled along `a1`, so that there are two atoms and one of them can be pushed
+! off its site. It sits 0.03 of the doubled vector away, which is 0.32 bohr.
+!
+! The dataset is ultrasoft, so `S` is not the identity and the orthonormality
+! constraint carries the *spinor* metric `qq_so`: a complex 2x2 matrix in spin
+! space where a collinear ultrasoft run has a real `qq`. That term is what
+! `h4-noncolin-force.in` cannot test, its H.pz-vbc having no augmentation
+! charge at all. `pt2-soc-paw-force.in` is the same cell with PAW.
+!
+! The k-grid is **unshifted**, unlike the one-atom file this comes from: an
+! unshifted Monkhorst-Pack grid is closed under the point group, which is what
+! the wedge-against-`nosym` check on the force needs.
+!
+! conv_thr is 1e-10 for `si2-nc-force.in`'s reason: QE's printed force carries
+! `force_corr`, which corrects a density that stopped short of the fixed point
+! and has no counterpart in a force obtained by differentiating the energy *at*
+! the fixed point.
+ &control
+    calculation = 'scf'
+    tprnfor = .true.
+    tstress = .true.
+    verbosity = 'high'
+ /
+ &system
+    ibrav = 0, celldm(1) = 7.42,
+    nat = 2, ntyp = 1,
+    lspinorb = .true.,
+    noncolin = .true.,
+    starting_magnetization = 0.0,
+    occupations = 'smearing', smearing = 'mp', degauss = 0.02,
+    ecutwfc = 30.0, ecutrho = 250.0,
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+CELL_PARAMETERS alat
+  -1.000000000000  0.000000000000  1.000000000000
+   0.000000000000  0.500000000000  0.500000000000
+  -0.500000000000  0.500000000000  0.000000000000
+ATOMIC_SPECIES
+ Pt  195.08  Pt.rel-pz-n-rrkjus.UPF
+ATOMIC_POSITIONS (crystal)
+ Pt 0.00 0.00 0.00
+ Pt 0.53 0.00 0.00
+K_POINTS AUTOMATIC
+ 2 4 4 0 0 0

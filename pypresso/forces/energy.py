@@ -41,6 +41,21 @@ from the pseudopotential file and nothing is counted twice. And there is no
 "SCF correction" term: QE's ``force_corr`` exists because its density is not
 exactly converged, and it vanishes at the fixed point this functional assumes.
 
+**A noncollinear or spin-orbit run is the same functional with two matrices
+and a layout** (P46). The state is a two-component spinor, which QE stores as
+*one* coefficient vector of length ``2 npwx`` (``evc(npwx*npol, nbnd)``) -- so
+``FrozenState.wavefunctions`` is ``(1, nk, nbnd, 2 npwx)`` and the kinetic term
+(1) reads :attr:`~pypresso.scf.driver.Calculation.state_kinetic`, which is
+``|k+G|^2`` in that vector's own layout. Term (2) takes the pseudopotential's
+bare ``dvan_so``, a complex 2x2 matrix in spin space, where the collinear
+branch takes ``dij``, and the constraint (6) takes ``qq_so`` where it takes
+``qq``; everything else -- the density, ``becsum``, the potential, the
+one-centre terms -- already handles the regime, because the SCF runs it. Keep
+``nspin``, ``npol`` and ``nspin_mag`` apart here as everywhere: a spin-orbit run
+without a magnetization has ``nspin_mag = 1`` and still stores two components
+per band. The spinor path is **opt-in** (``spinors=True``) rather than simply
+available, and :func:`reject_spinors` says which consumers cannot ask for it.
+
 **The identity that checks all of this** -- and it is checked, in the test
 suite -- is that (1)+(2)+(3) is QE's ``eband + deband``. Substituting
 ``eps = <psi|T + vltot + v_scf + V_NL^deeq|psi>`` and
@@ -59,7 +74,7 @@ from pypresso.hubbard.energy import hubbard_energy
 from pypresso.scf.potential import total_charge
 
 __all__ = ["FrozenState", "frozen_energy", "energy_at", "reject_spinors", "reject_potential_only",
-           "reject_magnetic_field",
+           "reject_magnetic_field", "reject_spinor_spiral",
            "state_from_result"]
 
 
@@ -74,7 +89,12 @@ class FrozenState(eqx.Module):
     energy minus one term.
     """
 
-    wavefunctions: jnp.ndarray  # (nspin, nk, nbnd, npwx)
+    #: ``(nspin, nk, nbnd, npwx)``, and ``(1, nk, nbnd, 2 npwx)`` for a
+    #: noncollinear run -- one channel of *spinors*, each a single vector
+    #: with the up component's coefficients followed by the down one's.
+    #: ``nspin`` is not ``npol``: a spin-orbit run without a magnetization
+    #: has ``nspin_mag = 1`` and still stores ``2 npwx`` per band.
+    wavefunctions: jnp.ndarray
     weights: jnp.ndarray  # (nspin, nk, nbnd) -- wg
     eigenvalues: jnp.ndarray  # (nspin, nk, nbnd), Ry
     #: The smearing term ``-TS``. A *traced* leaf rather than static metadata,
@@ -116,7 +136,7 @@ def state_from_result(result) -> FrozenState:
 
 def frozen_energy(
     calculation, positions: jnp.ndarray, state: FrozenState, density=None,
-    becsum=None, multipliers=None,
+    becsum=None, multipliers=None, spinors: bool = False,
 ):
     """The total energy at ``positions``, with the electronic state frozen.
 
@@ -134,33 +154,88 @@ def frozen_energy(
     # refusal that arrives on the far side of it is both slower and, for a
     # caller holding a partially built calculation, a different exception
     # entirely.
-    reject_spinors(calculation)
+    reject_potential_only(calculation)
+    if not spinors:
+        # ``spinors`` is opt-in here for the same reason it is on
+        # :func:`energy_at`: the *force* asks for it
+        # (:func:`pypresso.forces.autodiff.autodiff_forces`), and
+        # :mod:`pypresso.response.phonon` and :mod:`pypresso.response.born`
+        # call this same function for a **second** derivative, whose first-order
+        # wavefunctions come from a Sternheimer solve that has no spinor form.
+        # Their own guard is
+        # :func:`~pypresso.response.sternheimer.require_a_sternheimer_regime`;
+        # this keeps that from being the only one.
+        reject_spinors(calculation)
+    reject_spinor_spiral(calculation)
     return energy_at(
         calculation.at_positions(positions), state, density=density, becsum=becsum,
-        multipliers=multipliers,
+        multipliers=multipliers, spinors=spinors,
     )
 
 
 def reject_spinors(calculation) -> None:
-    """The one regime this functional does not cover, refused by name.
+    """Refuse a two-component calculation, for the paths that have no form for it.
 
-    The spinor constraint term needs ``qq_so`` rather than ``qq``, and the
-    nonlocal term ``dvan_so`` rather than ``dij`` -- both complex 2x2 matrices
-    in spin space. Neither is written here, and a force or a stress computed
-    with the scalar expressions would be wrong by the whole spin-orbit part of
-    the nonlocal energy while looking entirely plausible.
+    **This is no longer the whole functional's refusal.** :func:`energy_at`
+    grew a spinor branch (P46) -- the nonlocal quadratic form with ``dvan_so``
+    and the constraint with ``qq_so``, both complex 2x2 matrices in spin space,
+    on the ``2 npwx``-long coefficient vector a spinor actually is -- so the
+    *force* and the *stress* run for ``noncolin = .true.``, with or without
+    ``lspinorb``, on norm-conserving, ultrasoft and PAW datasets. They ask for
+    it with ``spinors=True``.
 
-    Called from the entry points *before* they move the calculation, and again
-    inside :func:`energy_at` so that a caller reaching it directly cannot slip
-    past.
+    What still calls this, and why each one has to:
+
+    * :func:`pypresso.stress.analytic.analytic_terms` and
+      :func:`pypresso.forces.analytic.analytic_forces` (which states it in its
+      own words). Those are transcriptions of ``force_us``/``stres_knl`` and
+      the rest, they share no machinery with the functional, and none of them
+      has a spinor form -- ``force_us`` alone would need ``deeq_nc``,
+      ``becsum_nc`` and ``qq_so`` threaded through a second time.
+    * :mod:`pypresso.response.elastic`, which reaches :func:`energy_at`
+      directly and would otherwise inherit a spinor path its first-order
+      wavefunctions do not have. The Sternheimer solver refuses
+      ``noncolin`` in its own guard
+      (:func:`~pypresso.response.sternheimer.require_a_sternheimer_regime`);
+      the default of ``spinors=False`` is what keeps that refusal from being
+      the *only* one, since a caller who never solves a Sternheimer equation
+      would sail past it.
+
+    So the rule is: the functional does spinors when asked; everything that
+    consumes it has to ask, and the ones that cannot are the ones listed here.
     """
     if calculation.noncolin:
         raise NotImplementedError(
-            "forces and stress for a noncollinear or spin-orbit calculation are "
-            "not implemented; nspin = 1 and nspin = 2 are, on norm-conserving, "
-            "ultrasoft and PAW pseudopotentials"
+            "this path is not implemented for a noncollinear or spin-orbit "
+            "calculation; the force and the stress are (pypresso.forces, "
+            "pypresso.stress), on norm-conserving, ultrasoft and PAW "
+            "pseudopotentials"
         )
     reject_potential_only(calculation)
+
+
+def reject_spinor_spiral(calculation) -> None:
+    """A spin spiral has two spheres, and this functional writes down one.
+
+    ``noncolin`` alone is now carried (see :func:`reject_spinors`), and a
+    spiral is ``noncolin`` with ``spiral_q`` on top -- so without this the
+    force of a spiral would walk into :func:`_spinor_projector_energies` with a
+    ``(2 nk, npwx, nkb)`` ``vkb`` against ``nk`` rows of coefficients and die on
+    an einsum shape rather than on a refusal. The missing piece is real and is
+    named in :mod:`pypresso.forces.spiral`: the up component lives at
+    ``k + q/2`` and the down at ``k - q/2``, each with its own projectors, so
+    the nonlocal term needs the pair -- which ``spiral_energy`` does write, in
+    the *other* coordinate. ``dE/dq`` is what a spiral has instead.
+    """
+    if getattr(calculation, "spiral", False):
+        raise NotImplementedError(
+            "the force on an atom of a spin spiral is not implemented: the two "
+            "spinor components live on different plane-wave spheres, so the "
+            "nonlocal term needs vkb(k + q/2) and vkb(k - q/2) as a pair (see "
+            "pypresso.forces.spiral, which writes exactly that for dE/dq). The "
+            "stress of a spiral is refused for its own reason -- q is in "
+            "lattice coordinates, so a strain turns the spiral"
+        )
 
 
 def reject_potential_only(calculation) -> None:
@@ -251,7 +326,7 @@ def _mixed_state_part(override, build, moved, *arguments):
 
 
 def energy_at(moved, state: FrozenState, terms: bool = False, density=None,
-              becsum=None, multipliers=None):
+              becsum=None, multipliers=None, spinors: bool = False):
     """The frozen-state energy of an already-moved calculation.
 
     Split out from :func:`frozen_energy` because the *coordinate* being
@@ -303,7 +378,25 @@ def energy_at(moved, state: FrozenState, terms: bool = False, density=None,
     coordinate derivative that distinction is the whole of the matter: see
     :func:`_mixed_state_part`.
     """
-    reject_spinors(moved)
+    if moved.noncolin and not spinors:
+        # The default, and it is the guard that stands for every consumer which
+        # has not been validated in this regime -- :mod:`pypresso.response.
+        # elastic` above all, which calls this function directly and never sees
+        # the Sternheimer solver's own ``noncolin`` refusal. See
+        # :func:`reject_spinors`.
+        reject_spinors(moved)
+    reject_potential_only(moved)
+    if moved.noncolin:
+        reject_spinor_spiral(moved)
+        if multipliers is not None:
+            raise NotImplementedError(
+                "the matrix orthonormality multipliers are not implemented for "
+                "a spinor: _constraint_energy contracts the scalar qq, where a "
+                "spinor's metric is qq_so and Lambda carries a spin pair as "
+                "well. Nothing but the ultrasoft second derivative "
+                "(pypresso.response.born) asks for them, and that path is "
+                "refused for noncolin already"
+            )
 
     psi, weights = state.wavefunctions, state.weights
 
@@ -332,11 +425,24 @@ def energy_at(moved, state: FrozenState, terms: bool = False, density=None,
             moved.occupation_matrix(psi, weights), moved.hubbard_coefficients
         )
 
-    kinetic = _kinetic_energy(psi, moved.kinetic, weights)
-    nonlocal_, overlap = _projector_energies(
-        psi, moved.projectors.vkb, moved.projectors.dij, moved.projectors.qq,
-        weights, state.eigenvalues,
-    )
+    if moved.noncolin:
+        # A spinor is one coefficient vector of length ``2 npwx``, not two
+        # states: ``npol`` and ``nspin`` are different numbers (`CLAUDE.md`),
+        # and every array here follows ``npol``. ``state_kinetic`` is
+        # ``|k+G|^2`` laid out in that vector's own layout, and the two
+        # quadratic forms take the complex 2x2-in-spin ``dvan_so`` and
+        # ``qq_so`` where the collinear ones take ``dij`` and ``qq``.
+        kinetic = _kinetic_energy(psi, moved.state_kinetic, weights)
+        nonlocal_, overlap = _spinor_projector_energies(
+            psi, moved.projectors.vkb, moved.dvan_so, moved.qq_so,
+            weights, state.eigenvalues,
+        )
+    else:
+        kinetic = _kinetic_energy(psi, moved.kinetic, weights)
+        nonlocal_, overlap = _projector_energies(
+            psi, moved.projectors.vkb, moved.projectors.dij, moved.projectors.qq,
+            weights, state.eigenvalues,
+        )
     # <psi|psi> - 1 is position-independent (the plane-wave basis does not move
     # with the atoms), so it contributes nothing to the force; it is here
     # because the term is the constraint, and writing half of it would make the
@@ -459,4 +565,49 @@ def _projector_energies(psi, vkb, dij, qq, weights, eigenvalues):
     overlap = jnp.real(
         jnp.einsum("skbi,ij,skbj->skb", becp.conj(), qq.astype(becp.dtype), becp)
     )
+    return nonlocal_, jnp.sum(weights * eigenvalues * overlap)
+
+
+@jax.jit
+def _spinor_projector_energies(psi, vkb, dvan_so, qq_so, weights, eigenvalues):
+    """:func:`_projector_energies` for a two-component spinor.
+
+    ``add_vuspsi_nc`` and ``s_psi_nc``: the coefficient vector is ``2 npwx``
+    long and splits into the two components QE stores as ``evc(1:npw)`` and
+    ``evc(npwx+1:npwx+npw)``, both projected on the *same* projectors -- the
+    spiral is the one case where they are not, and it is refused
+    (:func:`reject_spinor_spiral`). What changes is the matrix between them:
+    ``D`` and the overlap's ``q`` each carry a spin pair, complex and not
+    diagonal, and the off-diagonal blocks are the whole of spin-orbit coupling.
+
+    ``dvan_so`` is the **bare** ``D`` from the pseudopotential -- the spinor
+    twin of ``dij`` and for the same reason: the self-consistent
+    ``int V_eff Q_ij`` part of ``deeq_nc`` is already inside the augmented
+    density, so taking ``deeq_nc`` here would count it twice. Note that the
+    spin transform is not a detour around that: ``newd_nc`` sandwiches the
+    scalar integrals between ``fcoef`` and *adds* them to ``dvan_so``
+    (:func:`pypresso.scf.driver._newd_noncollinear`), so the split is the same
+    split one spin index up.
+
+    Indices: ``s`` the (single) density channel the state axis carries, ``k``
+    k-point, ``n`` band, ``a``/``b`` spinor component, ``i``/``j`` projector.
+    """
+    if vkb.shape[-1] == 0:
+        return jnp.zeros(()), jnp.zeros(())
+    npwx = vkb.shape[1]
+    components = psi.reshape(psi.shape[:-1] + (2, npwx))
+    # ``<beta_i|psi^a>``, the same contraction ``SpinorHamiltonian._project``
+    # does one k-point at a time.
+    becp = jnp.einsum("kgi,sknag->sknai", vkb.conj(), components)
+    bands = jnp.real(jnp.einsum(
+        "sknai,abij,sknbj->skn",
+        becp.conj(), dvan_so.astype(becp.dtype), becp, optimize=True,
+    ))
+    nonlocal_ = jnp.sum(weights * bands)
+    if qq_so is None:
+        return nonlocal_, jnp.zeros(())
+    overlap = jnp.real(jnp.einsum(
+        "sknai,abij,sknbj->skn",
+        becp.conj(), qq_so.astype(becp.dtype), becp, optimize=True,
+    ))
     return nonlocal_, jnp.sum(weights * eigenvalues * overlap)

@@ -63,12 +63,17 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 
-from pypresso.forces.energy import FrozenState, energy_at, reject_spinors
+from pypresso.forces.energy import (
+    FrozenState,
+    energy_at,
+    reject_potential_only,
+    reject_spinors,
+)
 
 __all__ = ["strained_energy", "strained_energy_terms", "require_a_differentiable_cell"]
 
 
-def strained_energy(calculation, strain, state: FrozenState):
+def strained_energy(calculation, strain, state: FrozenState, spinors: bool = False):
     """The total energy of ``calculation`` under ``strain``, state frozen.
 
     Args:
@@ -77,11 +82,14 @@ def strained_energy(calculation, strain, state: FrozenState):
     A scalar in Ry, and a differentiable function of ``strain``.
     """
     require_a_differentiable_cell(calculation)
-    reject_spinors(calculation)
-    return energy_at(calculation.at_strain(strain), state)
+    reject_potential_only(calculation)
+    if not spinors:
+        reject_spinors(calculation)
+    return energy_at(calculation.at_strain(strain), state, spinors=spinors)
 
 
-def strained_energy_terms(calculation, strain, state: FrozenState) -> dict:
+def strained_energy_terms(calculation, strain, state: FrozenState,
+                          spinors: bool = False) -> dict:
     """The same energy as a dict of contributions rather than their sum.
 
     Differentiating this instead gives the stress term by term, which is what
@@ -89,8 +97,10 @@ def strained_energy_terms(calculation, strain, state: FrozenState) -> dict:
     one-to-one and the mapping is in :mod:`pypresso.stress.analytic`.
     """
     require_a_differentiable_cell(calculation)
-    reject_spinors(calculation)
-    return energy_at(calculation.at_strain(strain), state, terms=True)
+    reject_potential_only(calculation)
+    if not spinors:
+        reject_spinors(calculation)
+    return energy_at(calculation.at_strain(strain), state, terms=True, spinors=spinors)
 
 
 def require_a_differentiable_cell(calculation) -> None:

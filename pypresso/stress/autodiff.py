@@ -72,7 +72,7 @@ def _energy_gradient(calculation):
     cached = calculation.__dict__.get("_strain_gradient")
     if cached is None or cached[0] is not calculation:
         cached = (calculation, jax.jit(jax.grad(
-            lambda eps, state: strained_energy(calculation, eps, state)
+            lambda eps, state: strained_energy(calculation, eps, state, spinors=True)
         )))
         calculation._strain_gradient = cached
     return cached[1]
@@ -86,7 +86,7 @@ def _term_gradients(calculation):
     cached = calculation.__dict__.get("_strain_term_gradients")
     if cached is None or cached[0] is not calculation:
         cached = (calculation, jax.jit(jax.jacfwd(
-            lambda eps, state: strained_energy_terms(calculation, eps, state)
+            lambda eps, state: strained_energy_terms(calculation, eps, state, spinors=True)
         )))
         calculation._strain_term_gradients = cached
     return cached[1]

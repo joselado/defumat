@@ -46,6 +46,8 @@ def _energy_gradient(calculation):
     """
     cached = getattr(calculation, "_energy_gradient", None)
     if cached is None:
-        cached = jax.jit(jax.grad(lambda tau, state: frozen_energy(calculation, tau, state)))
+        cached = jax.jit(jax.grad(
+            lambda tau, state: frozen_energy(calculation, tau, state, spinors=True)
+        ))
         calculation._energy_gradient = cached
     return cached
