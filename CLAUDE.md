@@ -883,6 +883,16 @@ knobs that are this code's own — `mbj_c`, `spiral_q`,
 
 ## Tutorial notebooks
 
+**A rewrite of this whole set is in progress and is 6 of 29 done — read `PLAN.md`
+P49 before touching a notebook.** It carries the resume point, the twenty still to
+do in priority order, the two structural jobs not started (merging `25` and `26`,
+and writing the "your own crystal" notebook), and a six-point checklist in which
+every item is something that pass already got wrong once. The shape they are being
+rewritten to is in `notebooks/README.md`, and
+`tests/unit/test_notebook_conventions.py` enforces it: its `REWRITTEN` set names
+the ones already held to it and **only ever grows**, so a notebook joins it in the
+commit that rewrites it.
+
 `notebooks/` holds worked examples on concrete systems — the readable counterpart to the
 test suite. **Every new feature adds a notebook or extends an existing one; a phase is not
 finished until its notebook exists.** Demonstrate on the two-atom silicon cell from
