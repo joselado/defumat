@@ -37,6 +37,7 @@ REWRITTEN = {
     "00_the_calculator",
     "02_silicon_scf_and_bands",
     "09_forces_and_relaxation",
+    "11_noncollinear_magnetism_and_fields",
     "13_dft_plus_u",
     "19_linear_response",
 }
