@@ -17,6 +17,7 @@ from pypresso.workflows.pdos import (
     run_pdos,
 )
 from pypresso.workflows.relax import RelaxResult, run_relax
+from pypresso.workflows.conductivity import run_conductivity
 from pypresso.workflows.tddft import OpticalSpectrum, run_absorption
 from pypresso.workflows.topology import (
     DFTSource,
@@ -39,6 +40,7 @@ __all__ = [
     "denser_grid",
     "energy_grid",
     "run_absorption",
+    "run_conductivity",
     "fixed_density_bands",
     "fixed_density_states",
     "project_states",

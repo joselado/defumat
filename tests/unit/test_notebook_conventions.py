@@ -61,6 +61,7 @@ REWRITTEN = {
     "27_excitons_and_tddft",
     "28_piezoelectricity",
     "29_effective_mass_and_angular_momenta",
+    "30_magneto_optics",
 }
 
 #: Notebooks that still say ``jvp`` in a plot label or a code cell. Prose debt

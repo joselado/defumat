@@ -1,0 +1,38 @@
+! **fcc aluminium for the Drude term**, and the free-electron plasma frequency
+! is the whole point of the case.
+!
+! Aluminium is the textbook nearly-free-electron metal: three valence electrons
+! in 105 bohr^3 give `hbar wp = sqrt(4 pi n)` = 15.8 eV, against a measured
+! 15.3, and that number is an *analytic* anchor for the intraband leg of the
+! optical conductivity -- it needs no other code and no reference output.
+!
+! Two changes from `al-metal.in`, both forced by what the conductivity is:
+!
+!   * the whole 8x8x8 **unshifted** grid with `nosym`, where `al-metal.in` uses
+!     a ten-point shifted wedge. The plasma frequency is a rank-2 tensor built
+!     from `v_a v_b` on the Fermi surface and the Hall conductivity is an axial
+!     vector, so neither may be summed over a wedge; an unshifted grid is closed
+!     under the point group, which is the escape P24 established.
+!   * 512 k-points rather than ten, because what is being integrated is a
+!     **Fermi surface** and not a total energy: the delta function at `E_F` is
+!     sampled by the grid alone. Measured, the plasma frequency is 13.78 eV on
+!     4x4x4 against 12.98 on this one. The cell is one atom at `ecutwfc = 15`,
+!     so the grid is the cheap axis to spend on.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 7.50,
+    nat = 1, ntyp = 1,
+    ecutwfc = 15.0, nosym = .true.,
+    occupations = 'smearing', smearing = 'marzari-vanderbilt', degauss = 0.05
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Al  26.98 Al.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Al 0.00 0.00 0.00
+K_POINTS (automatic)
+ 8 8 8 0 0 0

@@ -123,7 +123,23 @@ def fixed_density_states(
     likewise a converged quantity rather than a namelist variable.
     """
     if kpoints is not None:
-        system = eqx.tree_at(lambda s: s.kpoints, system, kpoints)
+        # **``for_spin`` at the boundary, and this is the one that gets missed.**
+        # Every ``KPoints`` constructor applies the unpolarized spin degeneracy
+        # unconditionally, because a k-set can be built long before it is known
+        # which regime will use it; a spinor band holds *one* electron rather
+        # than two. So a mesh a caller built with ``KPoints.automatic`` and
+        # handed in here carries weights summing to 2 where a ``nspin = 2`` or
+        # ``nspin = 4`` run needs 1, and nothing about that looks like an error
+        # -- the electron count is still met and the Fermi level simply lands
+        # somewhere else. ``denser_grid`` below has always done this for the
+        # density of states; doing it here covers every caller that builds its
+        # own set (:mod:`pypresso.response.conductivity`,
+        # :func:`~pypresso.response.velocity.band_velocities`,
+        # :mod:`pypresso.response.effmass`). It is idempotent, so a set that
+        # has already been normalised passes through untouched.
+        system = eqx.tree_at(
+            lambda s: s.kpoints, system, kpoints_for_spin(kpoints, system.nspin)
+        )
 
     calculation = Calculation(system, pseudos, k_batch=k_batch)
     nbnd = nbnd or system.nbnd or default_nbnd(

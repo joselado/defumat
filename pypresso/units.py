@@ -71,3 +71,12 @@ E2 = 2.0
 #: a Rydberg-atomic-unit code in electrons per bohr squared, and 57.2 is the
 #: number that makes ``e_14`` comparable with a measurement.
 E_BOHR2_TO_C_M2 = ELECTRON_SI / BOHR_RADIUS_SI**2
+
+#: One Hartree atomic unit of conductivity, ``e^2 / (hbar a_0)``, in S/m. The
+#: optical conductivity (:mod:`pypresso.response.conductivity`) is assembled in
+#: atomic units -- the Kubo-Greenwood sum is ``1/Omega`` times a squared
+#: velocity over a squared energy, which in Rydberg units is ``bohr^2/bohr^3``
+#: and therefore ``1/bohr`` -- and 4.6e6 is what takes it to the S/cm an
+#: anomalous Hall conductivity is tabulated in.
+AU_CONDUCTIVITY_SI = ELECTRON_SI**2 / (H_PLANCK_SI / TPI) / BOHR_RADIUS_SI
+AU_TO_S_PER_CM = AU_CONDUCTIVITY_SI / 100.0

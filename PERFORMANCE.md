@@ -3057,6 +3057,52 @@ Sternheimer solves. It is in the slow test set and nowhere near the default path
 **The whole test file is 8 tests in 93 s** and the notebook is 33 s, both of
 which include their own SCF and field response.
 
+## What an optical conductivity costs (P51)
+
+Single core, `taskset -c 0`, `OMP_NUM_THREADS=1`, 2026-08-31.
+
+**The frequency axis is free and the band count is not.** The whole expense is
+one fixed-density diagonalisation with empty states plus three `jvp` calls of
+`H(k)` over the k axis, which produce `(3, nk, nbnd, nbnd)` matrix elements;
+after that a frequency grid costs one matrix product per k-point, `(nw, nbnd^2)`
+against `(nbnd^2, 3, 3)`. Two hundred and fifty frequencies and two thousand
+cost the same to within noise. What does cost is `nbnd`, which enters the pair
+sum **squared** and is also the truncation the f-sum rule measures.
+
+| case | k-points | bands | time |
+|---|---|---|---|
+| fcc Al, `ecutwfc = 15`, one atom | 512 | 12 | **12 s** |
+| fcc Ni + spin-orbit, `ecutwfc = 60`, spinor | 64 | 36 | 188 s |
+| the same, denser | 216 | 36 | 561 s |
+
+The nickel rows are a run that took **both** static routes, so each route is
+about half, and they were measured with another job on the machine — read them
+as an upper bound and as a ratio rather than as a benchmark. Tripling the
+k-points costs three times as much, which says the expense is the NSCF and the
+three `jvp` calls rather than the frequency sum.
+
+**The whole regression file is 6 tests in 559 s**, of which the nickel pair is
+about 250: one spinor SCF at `ecutwfc = 60` and four conductivities off it.
+
+**Where the k-grid has to be spent, and it is not where a total energy spends
+it.** Three quantities here converge at three different rates on the same cell.
+Aluminium's plasma frequency moves 13.78 → 12.98 eV between 4x4x4 and 8x8x8, 6
+per cent, because it integrates a Fermi surface. Nickel's anomalous Hall
+conductivity is far worse, because its integrand lives on near-degeneracies at
+that surface: it **changes sign** between 4x4x4 and 6x6x6 (`PLAN.md` P51 has
+the table), so one mesh's value on its own is not a number. And silicon's f-sum ratio
+moves 1.185 → 0.985 → 0.934 over the same three, converging onto a diamagnetic
+weight of 0.9432 that itself moves by 1e-3 -- which is the sharpest k-convergence
+diagnostic in the package, and the only quantity here that is an integral of a
+*second* derivative.
+
+**Peak.** `(nspin, nk, nbnd, ndim)` for the states, `(3, nk, nbnd, nbnd)`
+complex for the matrix elements, and `nw x nbnd^2` complex per k-chunk for the
+frequency sum. Sixty-four k-points, forty bands and five hundred frequencies is
+13 MB of frequency workspace against 5 MB of matrix elements; the spinor nickel
+at 512 k-points and 36 bands holds 1.0 GB of wavefunctions, which is what sets
+the ceiling and what `k_batch` moves.
+
 ## History
 
 | Date | Change | Effect |

@@ -778,6 +778,23 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS)
         )
 
+    def get_optical_conductivity(self, **options):
+        """``sigma_ab(omega)``, the Kerr angle and the anomalous Hall conductivity.
+
+        The whole complex tensor, interband plus Drude. Its **antisymmetric**
+        part is what needs magnetism and spin-orbit coupling at the same time,
+        and is what a magneto-optical Kerr measurement reads; the result
+        carries ``.kerr`` in degrees and ``.hall_conductivity`` in S/cm.
+        """
+        from pypresso.workflows.conductivity import run_conductivity
+
+        result = self._ground_state("the optical conductivity")
+        return run_conductivity(
+            self.system, self.pseudos, result.density,
+            **self._call_options(run_conductivity, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
     # ------------------------------------------------------------------
     # topology
     # ------------------------------------------------------------------

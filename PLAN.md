@@ -7219,6 +7219,228 @@ residue did not, and it was localised only because it could be measured against
 a finite difference. Lifting this is one non-centrosymmetric, non-polar
 ultrasoft crystal plus the tests that already exist.
 
+### P51 — The optical conductivity tensor, the Kerr angle and the anomalous Hall conductivity. ✅ DONE.
+
+`pypresso/response/conductivity.py` and `pypresso/workflows/conductivity.py`.
+Elk's tasks 121 (`dielectric.f90`) and 122 (`moke.f90`); the **fourth** entry
+taken from `ELK-FEATURES.md`, and the first one there that the file itself
+records as only *partly* absent from QE.
+
+**What it computes.** The whole complex tensor,
+
+    sigma_ij(w) = (i/Omega) sum_k sum_nm W_n (1 - f_m)/e_mn
+                    [ z_nm/(w - e_mn + i eta) + conj(z_nm)/(w + e_mn + i eta) ]
+                  + wp_ij^2 / (4 pi (gamma - i w)),
+    z_nm = <n|v_i|m><m|v_j|n>,
+
+with `W_n` the k-weighted occupation (QE's `wg`) and `f_m = W_m/w_k` the
+fractional filling — `dielectric.f90`'s `t1` exactly, whose asymmetry is
+deliberate. From it: the dielectric tensor `eps = 1 + 4 pi i sigma/w`, the
+plasma frequency, the complex **Kerr angle** (`moke.f90`, and it is the only
+line of those 87 that computes anything), and the **anomalous Hall
+conductivity** as the static antisymmetric part.
+
+**What is new is the antisymmetric part.** `sigma_xx` is an absorption spectrum
+and P37 already produces one, so on its own this would be a second
+implementation of a validated quantity. `sigma_xy` is the response that rotates
+light reflected off a magnet and whose static limit is the intrinsic anomalous
+Hall conductivity, and nothing here computed it.
+
+**The vanishing rule, stated carefully, because the usual version is wrong.**
+Time reversal kills it, so a **nonmagnetic** crystal has none whatever its
+spin-orbit coupling. A magnetic crystal without spin-orbit coupling has none
+either — but only when its moments are **collinear or coplanar**, where a spin
+rotation composed with complex conjugation survives as an antiunitary symmetry.
+A **noncoplanar** magnet has an anomalous Hall effect with no spin-orbit
+coupling at all (the topological Hall effect, driven by the scalar spin
+chirality). So "magnetism and spin-orbit coupling together" is the usual route
+and not a theorem, and what the surviving symmetry actually forces is
+`Omega(k) = -Omega(-k)` rather than `Omega(k) = 0` — so the cancellation is
+exact only on a k-set closed under `k -> -k`, which a shifted grid is not.
+
+**The one line not transcribed, and it is the same one P37 refused.**
+`epsilon.x`'s `dipole_calc` accumulates `<psi_1|G|psi_2>` — a bare momentum
+matrix element — and `[H, r] != p` when the pseudopotential is nonlocal. Here
+the velocity is `VelocityOperator.matrix_elements`, one `jvp` of `H(k)` at a
+frozen sphere (rule D2), and it works on **spinors** unchanged: the contraction
+runs over the whole `2 npwx` coefficient vector, so the spin trace is implicit.
+That was the phase's scope gate and it was checked before anything was written
+(hermitian to 1.1e-16 on a four-atom noncollinear cell, real diagonal to
+2.4e-17). Everything else in the module is a transcription of `dielectric.f90`
+and says so.
+
+**The units cancel, and that is worth writing down rather than assuming.** Elk
+is a Hartree-unit code. Going to Rydberg doubles the energies, doubles `dH/dk`
+with them, and makes a Hartree momentum matrix element `<n|dH/dk|m>/2`. The
+expression carries `1/e_mn` and `1/(w - e_mn)` — two factors of two — against
+the squared matrix element's `1/4`, and the product is exactly one. So the
+formula evaluated with **Rydberg** energies and **Ry bohr** matrix elements
+returns `sigma` in **Hartree atomic units**, `e^2/(hbar a_0)` = 4.59988e6 S/m,
+with no conversion factor anywhere in the sum. It is a coincidence of this
+expression's homogeneity and not a rule; P50's factor of two is the warning
+about assuming it elsewhere, and the two checks below are what establish it.
+
+**Validation, and there is no reference for any of it.** `pw.x` computes no
+conductivity and no Kerr angle, and refuses ultrasoft outright; Elk's number is
+an all-electron one. So the phase stands on two internal statements and one
+analytic identity.
+
+*The symmetric part is P37's, exactly.* `eps = 1 + 4 pi i sigma/w` reproduces
+`run_absorption`'s `epsilon_no_local_fields` on silicon to **3.6e-14** in the
+diagonal, at every frequency. That chain is a different assembly — a Dyson
+solve over a response sphere rather than a resolvent sum over band pairs — and
+it reaches `ph.x` through `dielectric_tensor`. It is the check the factor of
+two P50 found would have failed. The two tensors' **off-diagonals** are zero by
+cubic symmetry in both, and what is left of them is each one's own truncation:
+1e-9 in both at a clean band cut, and 3e-5 (P37) against 9e-4 (here) at a cut
+inside a multiplet.
+
+*The f-sum rule is the absolute anchor, and it is not 1.* The familiar
+`int Re sigma_aa dw = pi n_e/2` is the **local** Hamiltonian's special case.
+The exact statement for a velocity `dH/dk` is
+
+    int_0^inf Re sigma_aa dw = (pi/2 Omega) sum_k sum_n W_n
+                               [<n|d2H/dk_a^2|n> - d2eps_n/dk_a^2],
+
+which follows from the `k.p` identity once the occupied-occupied pairs cancel.
+Two things separate it from `pi n_e/2` and **both were measured**. Silicon's
+diamagnetic weight `<n|d2H/dk^2|n>`, taken by a central difference of the
+velocity operator at frozen states, is **0.9432** in Hartree units rather than
+1 — that is the pseudopotential's nonlocality, and it barely moves with the
+k-grid (0.9423 at 4x4x4, 0.9432 at 8x8x8). And `sum_k w_k d2eps_n/dk^2` is
+zero over the zone by periodicity **and not on a coarse grid**: the spectral
+weight measured in closed form (no frequency axis, no broadening — `Re sigma`
+is a sum of Lorentzians whose total area is exact) comes out at **1.185** of
+`pi n_e/2` on 4x4x4, **0.985** on 6x6x6 and **0.934** on 8x8x8, converging onto
+the diamagnetic weight to **1 per cent**. That convergence is the check: the
+volume, the electron count, the spin degeneracy and the Rydberg-to-Hartree
+cancellation all enter it and none of them is fitted. **It is also a
+k-convergence error nothing else in this package sees**, because every other
+quantity here is an integral rather than an integral of a second derivative.
+
+*The Drude leg has its own limit.* Aluminium's plasma frequency is **12.98 eV**
+against a free-electron `sqrt(4 pi n)` of 16.27 — the 20 per cent is the
+zone-boundary gaps removing Fermi surface, which is what makes aluminium
+"nearly" free-electron rather than free-electron — and the tensor is isotropic
+to **1.7e-4 eV** on a cubic crystal run with `nosym`, with nothing imposing
+that. It needs 512 k-points to get there, because what is being integrated is a
+Fermi surface and not a total energy: on 4x4x4 the same cell gives **13.78 eV**
+(`al-conductivity.in`).
+
+**Four things the phase found, and none of them is a refusal.** Two are
+diagnostics reported to the caller, one was a bug in a shared boundary, and one
+is a rule applied where the reference code does not apply it.
+
+*Where the band sum stops decides a quantity symmetry says is zero.* Silicon's
+antisymmetric `sigma` must vanish, and it comes out at **4.0e-13** when the
+truncation falls at a real gap (`nbnd = 20`, 0.028 Ry) and at **1.0e-5**,
+2.3e-6 and 8.3e-7 at `nbnd = 12`, 24 and 32, whose gaps are 1e-13. Truncating
+inside a degenerate multiplet keeps some of its members and drops others, and
+the cancellation they were making between them does not happen. The diagnostic
+is `band_cut_gap`, and getting it right cost a design decision: the gap that
+matters is between the last band **kept** and the first **dropped**, so it
+cannot be computed from the sum's own band set at all — `run_conductivity`
+diagonalises one extra band to measure it. It is **necessary and not
+sufficient**: `nbnd = 36` cuts a degeneracy and escapes anyway, because its two
+sides happen to contribute equally.
+
+*A k-set handed in is a boundary `for_spin` has to cross, and the symptom is
+not an error.* An optical spectrum wants a denser mesh than the density needed,
+so `run_conductivity` takes one — and every `KPoints` constructor applies the
+unpolarized spin degeneracy unconditionally, because it cannot know what regime
+it will be used in. A **spinor** band holds one electron rather than two, so a
+mesh built with `KPoints.automatic` and handed to a noncollinear run carries
+weights summing to 2 where the run needs 1. Nothing about that looks wrong: the
+electron count is still met and the Fermi level simply lands somewhere else.
+Measured on fcc nickel's *own* 64-point grid, rebuilt rather than reused, it put
+the plasma frequency at **13.11 eV instead of 0.60** and **flipped the sign** of
+the anomalous Hall conductivity. `for_spin`'s own docstring names this class of
+mistake and it appeared in a new place; the fix is one idempotent call at the
+boundary and the test is that the two paths are one path. **It cost most of a
+session, because the wrong numbers were the plausible ones** — 13 eV is a
+believable plasma frequency for a transition metal and 0.6 eV is not, so the
+sweep that used them looked like the converging one.
+
+*The Drude weight must be the multiplet block and not the diagonal.*
+`dielectric.f90` writes it as `sum_n v_a^nn v_b^nn`, and the diagonal of an
+operator is not invariant under the rotation a degenerate eigensolver is free in
+— design rule D4, and a Fermi surface is precisely where a metal keeps its
+degeneracies. What is written here sums `v_a^nm v_b^mn` over the pairs the
+*interband* term already excludes as degenerate, which is invariant, reduces to
+the diagonal wherever nothing is degenerate, and makes the two halves of the
+tensor complementary rather than overlapping. **It is a rule rather than a
+repair**: measured on nickel the two forms give **0.5971 eV** each, because an
+exact degeneracy has to sit within 1e-8 Ry of the Fermi level to be caught at
+all and a 4x4x4 mesh puts none there. It is written
+the invariant way because the diagonal one has no reason to keep agreeing on a
+denser mesh or a more symmetric metal, and the failure would be silent.
+
+*The two static routes are one limit taken in two orders, and for a metal the
+orders do not commute.* Collapsing the two resolvents analytically takes `eta -> 0`
+before `w -> 0`; evaluating the frequency sum at `w = 0` takes them the other
+way round. Where every gap is large compared with `eta` the limits commute. At
+a **Fermi surface** they do not — a metal has occupied-empty pairs with
+arbitrarily small `e_mn`, the curvature route weights them `1/e_mn^2` and the
+frequency route regularises them at `eta` — which is the reason an intrinsic
+anomalous Hall conductivity is famously mesh-hungry, its integrand living on
+near-degeneracies. `method = "curvature"` is the quantity's definition and is
+what `pypresso.topology.kubo` computes by an independently written assembly
+anchored to the Fukui-Hatsugai-Suzuki flux (P47); `method = "frequency"` at
+`w = 0` is what a spectrum extrapolates to at finite scattering.
+
+**Neither is quoted for fcc nickel, and the k-convergence is why.** Measured
+with 36 bands and `eta = 0.01` Ry:
+
+| grid | curvature | frequency at `w = 0` | `hbar wp_xx` |
+|---|---|---|---|
+| 4x4x4, 64 k | **-77.4** S/cm | **-1101.7** S/cm | 0.597 eV |
+| 6x6x6, 216 k | **+2689.2** S/cm | **+1713.6** S/cm | 4.649 eV |
+
+Everything on the Fermi surface moves, and the Hall conductivity **changes
+sign**. That is not a defect of the assembly -- the same code gives silicon's
+dielectric function to 3.6e-14 on this grid density, and aluminium's plasma
+frequency to 2.5 per cent between 4x4x4 and 8x8x8 -- it is what a Fermi-surface integral of a
+quantity concentrated on near-degeneracies does on 64 or 216 points. A
+published intrinsic anomalous Hall conductivity for nickel is about -2200 S/cm
+and is reached with meshes two orders of magnitude denser. **8x8x8 was started
+and cut**: two points already say the sequence is not converging, and a third
+would have cost an hour to say it again. What the phase delivers here is the
+machinery and the diagnostic, not the number.
+
+**Where it lives.** `pypresso/response/conductivity.py` (the assembly),
+`pypresso/workflows/conductivity.py` (the fixed-density run and the extra
+band), `Calculator.get_optical_conductivity`;
+`tests/regression/test_conductivity.py` (6 tests) and
+`tests/unit/test_conductivity_machinery.py` (8);
+`tests/data/qe/al-conductivity.in` and `notebooks/30_magneto_optics.ipynb` are
+new, and `pypresso/workflows/nscf.py` gained the `for_spin` call the finding
+above is about.
+
+**Refused by name**, each for its own missing term: **ultrasoft and PAW**, for
+`pypresso.topology.kubo`'s reason — the current operator of a generalised
+eigenproblem carries `<n|dS/dk|m>` off the diagonal, the term is identically
+zero for a norm-conserving dataset, and nothing validated here can see whether
+its convention is right; a **spin spiral**, whose two spinor components live on
+different spheres; a **symmetry-reduced k-set**, because the antisymmetric part
+is an axial vector and the escape is the whole unshifted grid; and **`nspin =
+2`**, whose two channels are two band structures whose conductivities add — a
+loop this assembly does not have, and not the regime a magneto-optical spectrum
+wants anyway, since `sigma_xy` needs spin-orbit coupling and collinear spin has
+none. And the **intraband term of a tetrahedron run**, which is refused rather
+than dropped: its weight is a Fermi-surface delta function and the tetrahedron
+method has none to supply (it integrates the step function itself, which is why
+it has no `-TS` term either), so falling through would return an insulator's
+conductivity for a metal with a plasma frequency of exactly zero and nothing
+saying why.
+
+**Cost and peak.** One NSCF with empty states, then three `jvp` calls over the
+k axis for `(3, nk, nbnd, nbnd)` matrix elements — which is the whole expense —
+and a frequency sum whose working set is `nw x nbnd^2` complex per k-point,
+accumulated through `sum_k`. Sixty-four k-points, forty bands and five hundred
+frequencies is 13 MB per chunk against 5 MB of matrix elements: **the frequency
+axis is free and the band count is what has to be watched**, since it enters
+squared and is also the truncation the f-sum measures.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

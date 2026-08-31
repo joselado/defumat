@@ -976,6 +976,86 @@ ALDA's kernel is pointwise in the density and a GGA's is not; and
 spectrum of nothing.
 \end{refuses}
 
+\subsection{The conductivity tensor, the Kerr angle and the anomalous Hall effect}
+
+The whole complex tensor, interband plus a Drude term:
+\begin{equation*}
+\sigma_{ij}(\omega) = \frac{i}{\Omega}\sum_{\mathbf k}\sum_{n,m}
+  \frac{W_n\,(1-f_m)}{\epsilon_{mn}}
+  \left[\frac{v^i_{nm}v^j_{mn}}{\omega-\epsilon_{mn}+i\eta}
+      + \frac{\overline{v^i_{nm}v^j_{mn}}}{\omega+\epsilon_{mn}+i\eta}\right]
+  \;+\; \frac{\omega_{p,ij}^2}{4\pi(\gamma - i\omega)}
+\end{equation*}
+with $v = \partial H/\partial\mathbf k$ from one \code{jvp} of $H(\mathbf k)$ at
+a frozen sphere. \emph{That} is the one thing here not transcribed from
+\code{dielectric.f90}, and it is not a refinement: \code{epsilon.x} accumulates
+$\langle\psi_1|\mathbf G|\psi_2\rangle$, and $[H,\mathbf r]\neq\mathbf p$ when
+the pseudopotential is nonlocal.
+
+What is new beside \code{run\_absorption} is the \textbf{antisymmetric} part,
+$\sigma_{xy}$ --- the response that rotates light reflected off a magnet, and
+whose static limit is the intrinsic anomalous Hall conductivity. Time reversal
+forces it to zero, so a nonmagnetic crystal has none however strong its
+spin--orbit coupling; a \emph{collinear or coplanar} magnet without spin--orbit
+coupling has none either, because a spin rotation composed with conjugation
+survives as an antiunitary symmetry. (A \emph{noncoplanar} magnet does have
+one with no spin--orbit coupling at all --- the topological Hall effect --- so
+the usual pairing is a route and not a theorem.)
+
+\begin{pycode}
+calc = Calculator.from_file("ni-soc.in", pseudo_dir="pseudo")
+
+sigma = calc.get_optical_conductivity(nbnd=36, window=0.6, nw=200)
+print(sigma.sigma_s_per_cm.shape)   # (nw, 3, 3) in S/cm
+print(sigma.kerr)                   # complex Kerr angle, degrees, per frequency
+print(sigma.hall_conductivity)      # the static antisymmetric part, S/cm
+print(sigma.plasma_ev)              # hbar omega_p, eV, a (3, 3) tensor
+print(sigma.dielectric)             # 1 + 4 pi i sigma / omega
+print(sigma.fsum, sigma.band_cut_gap)   # the two diagnostics to read
+\end{pycode}
+
+There is no reference output for any of it, so the validation is internal and
+analytic. The \emph{symmetric} part reproduces the independent-particle
+dielectric function of the TDDFT stack to \textbf{3.6e-14}, which is a
+different assembly (a Dyson solve over a response sphere) reaching \code{ph.x}
+through \code{dielectric\_tensor}. The \textbf{f-sum rule} is the absolute
+anchor: $\int_0^\infty\mathrm{Re}\,\sigma_{aa}\,d\omega$ must equal
+$(\pi/2\Omega)\sum W_n\langle n|\partial^2H/\partial k_a^2|n\rangle$, and the
+familiar $\pi n_e/2$ is only the \emph{local} Hamiltonian's special case ---
+silicon's diamagnetic weight is measurably \textbf{0.943} and not one. Measured
+against a central difference of the velocity operator, the ratio is 1.258 on a
+$4^3$ grid, 1.045 on $6^3$ and \textbf{0.990} on $8^3$: it converges in the
+\emph{k-grid}, because what separates the two is $\sum_k w_k\,
+\partial^2\epsilon_n/\partial k^2$, which vanishes over the zone by periodicity
+and not on a coarse mesh. Aluminium's plasma frequency comes out at
+\textbf{12.98 eV} against a free-electron 16.27, which is the zone-boundary gaps
+removing Fermi surface, and its tensor is isotropic to \textbf{1.7e-4} eV with
+nothing imposing that.
+
+\begin{refuses}
+\textbf{Refuses.} \textbf{Ultrasoft and PAW}, for the Kubo curvature's reason:
+with a moving $\hat S$ the current operator carries
+$\epsilon_n\,\partial S/\partial k$ off the diagonal, and that term is
+identically zero for a norm-conserving dataset, so nothing validated here can
+see whether its convention is right. A \textbf{spin spiral}, whose two spinor
+components live on different spheres. A \textbf{symmetry-reduced $k$-set},
+because the antisymmetric part is an axial vector --- the escape is the whole
+unshifted grid, which is closed under the point group. And
+\textbf{\code{nspin} = 2}, whose two channels are two band structures whose
+conductivities add; a spinor run is the regime a magneto-optical spectrum wants
+anyway, since $\sigma_{xy}$ needs spin--orbit coupling and collinear spin has
+none.
+
+\textbf{Two things are reported rather than refused, and both must be read.}
+\code{band\_cut\_gap} is the gap between the last band summed and the first
+dropped: stopping \emph{inside} a degenerate multiplet keeps some members and
+drops others, and silicon's antisymmetric $\sigma$ --- zero by time reversal ---
+comes out at 4.0e-13 when the cut falls at a real gap and at 1.0e-5 when it does
+not. And the \textbf{anomalous Hall conductivity of a metal is mesh-hungry}: the
+static Berry-curvature integral is concentrated on near-degeneracies at the
+Fermi surface, so it is quoted with its $k$-convergence and not on its own.
+\end{refuses}
+
 % =====================================================================
 \section{Topological invariants}
 

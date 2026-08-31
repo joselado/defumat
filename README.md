@@ -70,6 +70,7 @@ drive any of this and is what the examples below use.
 | **Piezoelectric tensor** `e_(k)ij` — the polarization a strain induces, which is the stress a field induces. Clamped-ion, insulators, norm-conserving, and non-polar crystals only: a class that admits a spontaneous polarization is refused, since the proper response then needs `P` itself | `piezoelectric_tensor`, `Calculator.get_piezoelectric_tensor` | | ✓ |
 | **Raman tensors** `d(eps)/d(tau)` — how the dielectric tensor changes when an atom moves. Insulators, norm-conserving/ultrasoft/PAW; `chi^(2)` and the electro-optic tensor are refused | `raman_tensors` | (✓)⁵ | |
 | **Raman and infrared spectra** — the per-mode activities, depolarisation ratios and electronic polarizability at `Gamma`. The non-analytic LO-TO splitting is not included, so an optical triplet comes out unsplit | `vibrational_spectrum` | ✓ | |
+| **Optical conductivity tensor** `sigma_ab(omega)`, the magneto-optical **Kerr angle** and the **anomalous Hall conductivity** — interband plus a Drude term, from `dH/dk` rather than momentum matrix elements. Insulators and metals, norm-conserving; needs the whole k-grid rather than a wedge, since the antisymmetric part is an axial vector | `run_conductivity`, `Calculator.get_optical_conductivity` | (✓)⁷ | ✓ |
 | **Optical absorption spectra with excitons** — `Im eps_M(omega)` from TDDFT, local-field effects included, on a bootstrap exchange-correlation kernel. Needs the whole k-grid rather than a wedge | `run_absorption`, `kernel = 'bootstrap'` (also `rpa`, `alda`, `lrc`, `bootstrap-1`), `ecut_response`, `scissor`, `broadening` | | ✓ |
 | **Van der Waals dispersion** — Grimme's D2 pair correction, in the energy, the forces, the stress and the elastic constants. D3, Tkatchenko-Scheffler, MBD and XDM are refused by name | `vdw_corr = 'grimme-d2'`, `london_s6`, `london_rcut`, `london_c6`, `london_rvdw` | ✓ | |
 | **Band gaps from the Tran-Blaha potential** (mBJ) — the modified Becke-Johnson meta-GGA, on norm-conserving and PAW datasets, unpolarized, collinear, and noncollinear with spin-orbit coupling. The total energy is not variational, so forces, stress and response are refused | `input_dft = 'tb09'` (or `'bj06'`), `mbj_c` | (✓)⁶ | ✓ |
@@ -91,6 +92,10 @@ Where the tick is qualified:
 - ⁶ Quantum ESPRESSO reaches it only through libxc, and then passes a zero
   Laplacian and never sets the functional's coefficient, so what it runs under
   that name is a different functional.
+- ⁷ `epsilon.x`'s `offdiag_calc` forms the dielectric tensor, but computes no
+  conductivity and no Kerr angle, refuses ultrasoft datasets outright, and
+  builds its dipole from momentum matrix elements — which is not `[H, r]` when
+  the pseudopotential is nonlocal.
 
 The variants under each row — which smearing or tetrahedron method fixes the
 occupations, which projectors DFT+U uses, which constraint scheme — are chosen

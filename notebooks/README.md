@@ -70,6 +70,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Elastic constants | `get_elastic_constants()` | [21](21_electrostriction.ipynb) |
 | Electrostriction and the elasto-optic tensor | `get_electrostriction()`, `get_strain_response()` | [21](21_electrostriction.ipynb) |
 | The piezoelectric tensor | `get_piezoelectric_tensor()` | [28](28_piezoelectricity.ipynb) |
+| Optical conductivity, the Kerr angle, the anomalous Hall effect | `get_optical_conductivity()` | [30](30_magneto_optics.ipynb) |
 | An effective mass | `get_effective_mass()` | [29](29_effective_mass_and_angular_momenta.ipynb) |
 
 ### Topology
@@ -135,6 +136,7 @@ want a number.
 | [`27_excitons_and_tddft.ipynb`](27_excitons_and_tddft.ipynb) | Absorption spectra and the bootstrap kernel, and why no adiabatic local kernel binds an exciton |
 | [`28_piezoelectricity.ipynb`](28_piezoelectricity.ipynb) | The voltage a squeezed crystal produces: AlAs's one independent component, and the inversion centre that gives silicon none |
 | [`29_effective_mass_and_angular_momenta.ipynb`](29_effective_mass_and_angular_momenta.ipynb) | Band curvature as an effective mass, and site-resolved `<L>`, `<S>` and `<J>` against Elk |
+| [`30_magneto_optics.ipynb`](30_magneto_optics.ipynb) | Light reflected off a magnet comes back rotated: nickel's Kerr angle, and the two ingredients it needs |
 
 ## Conventions
 
@@ -227,9 +229,9 @@ workstation core, slowest last:
 | `09` | 6 | `07` | 22 | `24` | 31 | `11` | 81 |
 | `02` | 8 | `06` | 23 | `28` | 33 | `14` | 89 |
 | `16` | 9 | `12` | 27 | `23` | 35 | `26` | 107 |
-| `03` | 10 | `25` | 28 | `19` | 47 | `08` | 171 |
-| `05` | 10 | `17` | 29 | `10` | 50 | `27` | 178 |
-| `04` | 12 | `18` | 29 | `20` | 57 |  |  |
+| `03` | 10 | `25` | 28 | `19` | 47 | `30` | 131 |
+| `05` | 10 | `17` | 29 | `10` | 50 | `08` | 171 |
+| `04` | 12 | `18` | 29 | `20` | 57 | `27` | 178 |
 | `22` | 12 | `21` | 30 | `29` | 59 |  |  |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two

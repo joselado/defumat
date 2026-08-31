@@ -12,11 +12,12 @@ machinery this package already has, so that the new code is an assembly and not
 a second implementation of something validated.
 
 **Two of the six were taken in P48** — the effective mass tensor and the
-site-resolved angular momenta — and **a third in P50**, the piezoelectric
-tensor, which is the one entry that fails the cheapness filter above and was
-taken anyway (the *implementation* is one `jvp` of code that already exists).
-The rest are recorded here with their validation route, because that is the
-part that decides whether a phase is worth starting.
+site-resolved angular momenta — **a third in P50**, the piezoelectric tensor,
+which is the one entry that fails the cheapness filter above and was taken
+anyway (the *implementation* is one `jvp` of code that already exists), and **a
+fourth in P51**, the optical conductivity tensor with the Kerr angle and the
+anomalous Hall conductivity. The rest are recorded here with their validation
+route, because that is the part that decides whether a phase is worth starting.
 
 Doing the two taught one thing that applies to the rest: **the value of the
 comparison was in what it found, not in the agreement.** Running Elk's own
@@ -35,6 +36,7 @@ second route beside it.
 | Effective mass tensor `m*_ij` | 25 (`effmass.f90`) | P48a |
 | Site-resolved `<L>`, `<S>`, `<J>` | 15/16 (`writelsj.f90`) | P48b |
 | Piezoelectric tensor `e_(k)ij`, clamped-ion | 380 (`piezoelt.f90`) | P50 |
+| Optical conductivity `sigma_ab(omega)`, MOKE, anomalous Hall | 121/122 (`dielectric.f90`, `moke.f90`) | P51 |
 
 ---
 
