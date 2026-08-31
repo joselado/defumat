@@ -54,6 +54,23 @@ size of the basis-set incompleteness and it shrinks with ``ecutwfc``. It is the
 floor on how tightly ``dE/dq`` can be driven to zero, and
 :func:`~pypresso.workflows.spiral.relax_spiral_q` is what has to know that.
 
+**What it costs, and the one dial that bounds it.** The backward pass carries
+``vkb(k +- q/2)`` -- both shifted spheres, every projector channel -- and the
+states beside it, for every k-point it has in flight. On a two-atom cell that is
+nothing; on a three-atom monolayer with 81 k-points, 64 spinor bands and 26315
+plane waves per component it is **133 GiB**, which is more than an H200 has and
+is where a first attempt at NiI2's ``E(q)`` died after its SCF had converged.
+``k_batch`` bounds it: the sum over k is regrouped into chunks, each one a
+separate ``value_and_grad`` whose tape is discarded before the next begins, so
+the peak falls with the chunk size and the answer does not change at all (the
+two routes agree to 1e-16 on a spinor silicon,
+``tests/regression/test_spiral_relaxation.py``). It is a **Python loop and not a
+mapped one** on purpose: reverse mode through ``lax.map`` stacks every chunk's
+residuals for the backward pass and would hold the same peak. The chunked route
+is the default wherever the calculation carries a chunk size, which is QE's
+end of :mod:`pypresso.batching`'s dial on a CPU; ``k_batch = None`` asks for the
+single pass the whole thing used to be.
+
 **A magnetic field or a constrained moment is refused rather than corrected.**
 The field's own energy is deliberately outside the reported total
 (:mod:`pypresso.scf.fields`), so the converged state minimises total *plus*
@@ -71,10 +88,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from pypresso.basis.planewaves import PlaneWaveBasis
+from pypresso.batching import resolve_k_batch
 from pypresso.forces.energy import FrozenState, state_from_result
+from pypresso.pseudo.projectors import build_projector_core
 from pypresso.scf.potential import total_charge
+from pypresso.system.spiral import spiral_kcart
 
-__all__ = ["SpiralGradient", "spiral_energy", "compute_spiral_gradient"]
+__all__ = ["SpiralGradient", "spiral_energy", "q_dependent_energy",
+           "q_independent_energy", "compute_spiral_gradient"]
 
 
 @dataclass
@@ -163,7 +185,125 @@ def spiral_energy(calculation, q_crystal, state: FrozenState):
     )
 
 
-def compute_spiral_gradient(calculation, result_or_state) -> SpiralGradient:
+def q_dependent_energy(calculation, q_crystal, psi, weights, rows):
+    """The two terms that carry ``q``, over a *subset* of the k-points.
+
+    ``rows`` indexes the ``2 nk`` axis both shifted spheres live on -- the up
+    component's ``nk`` rows first -- so a chunk of ``m`` k-points is the ``m``
+    up rows and the ``m`` down rows that go with them. The sub-basis is
+    **selected** from the calculation's own spheres rather than rebuilt: which
+    plane waves are in each sphere, in which order, is exactly what the frozen
+    coefficients are written against, so a rebuilt sphere would be a different
+    Miller ordering against the same numbers and silently wrong.
+
+    Everything else in :func:`spiral_energy` -- the density, Hartree,
+    exchange-correlation, the local term, Ewald, the orthonormality constraint
+    -- is ``q``-independent at frozen coefficients and is *not* here, because
+    its gradient is zero and the chunking exists to keep the backward pass off
+    it. :func:`q_independent_energy` evaluates it once, forward only, so the
+    identity against the SCF total energy survives.
+    """
+    cell = calculation.system.cell
+    smooth = calculation.basis.smooth
+    planewaves = calculation.basis.planewaves
+    sub = PlaneWaveBasis(
+        indices=planewaves.indices[rows],
+        mask=planewaves.mask[rows],
+        # ``npw`` is host-side bookkeeping -- how many of the padded entries at
+        # each row are real -- and nothing on this path reads it; the sphere
+        # itself is carried by ``indices`` and ``mask``, which is what makes
+        # ``rows`` free to be a traced index and the chunks free to share one
+        # compilation.
+        npw=(),
+        ecutwfc=planewaves.ecutwfc,
+    )
+    kcart = spiral_kcart(calculation.system.kpoints, q_crystal, cell)[rows]
+    kinetic = sub.kinetic(smooth, calculation.basis_kpoints, cell, kcart)
+    core = build_projector_core(
+        calculation.pseudos, calculation.system.structure, cell, smooth, sub,
+        calculation.basis_kpoints, kcart,
+    )
+    projectors = core.at_positions(
+        calculation.system.structure.positions, qq=calculation.projectors.qq
+    )
+
+    m = kinetic.shape[0] // 2
+    state_kinetic = jnp.concatenate([kinetic[:m], kinetic[m:]], axis=-1)
+    return (
+        _kinetic_energy(psi, state_kinetic, weights)
+        + _nonlocal_energy(psi, projectors.vkb, calculation.dvan_so, weights, m)
+    )
+
+
+def q_independent_energy(calculation, state: FrozenState):
+    """Everything :func:`q_dependent_energy` leaves out, at frozen state.
+
+    It is a constant of ``q`` and therefore contributes nothing to ``dE/dq``;
+    it is evaluated -- once, forward only, never under ``grad`` -- so that the
+    chunked route still reports the *total* energy and
+    ``|E_frozen - E_scf|`` remains the check that what was differentiated is
+    the energy the SCF converged.
+    """
+    psi, weights = state.wavefunctions, state.weights
+    becsum_ = calculation.becsum(psi, weights)
+    rho = calculation.density(psi, weights, becsum_)
+    potential = calculation.potential(rho)
+    volume = calculation.system.cell.volume
+    local = volume / rho[0].size * jnp.sum(calculation.vltot * total_charge(rho))
+    norm = jnp.sum(weights * state.eigenvalues * (_norms(psi) - 1.0))
+    return (
+        local
+        + potential.ehart
+        + potential.etxc
+        + calculation.ewald
+        + calculation.dispersion
+        - norm
+        + state.entropy
+    )
+
+
+def _chunked_energy_and_gradient(calculation, q, state: FrozenState, k_batch: int):
+    """``(E, dE/dq)`` accumulated over ``k_batch`` k-points at a time.
+
+    A Python loop of per-chunk ``value_and_grad`` calls, **not** one
+    ``value_and_grad`` around a ``lax.map``: reverse mode through a scan stacks
+    every chunk's residuals for the backward pass, so the mapped form would
+    hold the same peak the single pass does. The loop discards each chunk's
+    tape before the next one starts, which is the whole of the saving.
+
+    Every chunk is padded to exactly ``k_batch`` k-points with a repeat of its
+    own first one at **zero weight**, so all chunks share one shape and
+    therefore one compilation, and the padding contributes nothing to either
+    the energy or the gradient (both are linear in ``weights``).
+    """
+    nk = calculation.system.kpoints.nk
+    fn = calculation.__dict__.get("_spiral_gradient_chunk")
+    if fn is None:
+        fn = jax.jit(jax.value_and_grad(
+            lambda q, psi, weights, rows:
+                q_dependent_energy(calculation, q, psi, weights, rows)
+        ))
+        calculation._spiral_gradient_chunk = fn
+
+    energy = 0.0
+    gradient = jnp.zeros((3,), dtype=float)
+    for start in range(0, nk, k_batch):
+        ks = np.arange(start, min(start + k_batch, nk))
+        pad = k_batch - len(ks)
+        padded = np.concatenate([ks, np.full(pad, ks[0], dtype=int)])
+        live = np.concatenate([np.ones(len(ks)), np.zeros(pad)])
+        psi = state.wavefunctions[:, padded]
+        weights = state.weights[:, padded] * live[None, :, None]
+        rows = jnp.asarray(np.concatenate([padded, nk + padded]))
+        value, slope = fn(q, psi, weights, rows)
+        energy += value
+        gradient = gradient + slope
+    return energy + q_independent_energy(calculation, state), gradient
+
+
+def compute_spiral_gradient(
+    calculation, result_or_state, k_batch: int | None | str = "default"
+) -> SpiralGradient:
     """``dE/dq`` for ``calculation`` in its converged state.
 
     Args:
@@ -171,6 +311,13 @@ def compute_spiral_gradient(calculation, result_or_state) -> SpiralGradient:
             belongs to -- its ``spiral_q`` is where the gradient is evaluated.
         result_or_state: an :class:`~pypresso.scf.driver.SCFResult`, or the
             :class:`~pypresso.forces.energy.FrozenState` taken from one.
+        k_batch: how many k-points are differentiated at once. ``"default"``
+            follows the calculation's own dial, ``None`` asks for the whole
+            axis in one pass, and an integer bounds the working set: the
+            backward pass carries ``vkb(k +- q/2)`` and the states for every
+            k-point it has in flight, which on a cell with many k-points and
+            two spinor components is tens of gigabytes and is the one place
+            ``dE/dq`` costs more than the SCF it follows.
     """
     _require_a_differentiable_spiral(calculation)
     state = (
@@ -180,7 +327,12 @@ def compute_spiral_gradient(calculation, result_or_state) -> SpiralGradient:
     )
 
     q = jnp.asarray(calculation.system.spiral_q, dtype=float)
-    energy, gradient = _energy_and_gradient(calculation)(q, state)
+    batch = (calculation.k_batch if isinstance(k_batch, str) and k_batch == "default"
+             else resolve_k_batch(k_batch))
+    if batch is None or batch >= calculation.system.kpoints.nk:
+        energy, gradient = _energy_and_gradient(calculation)(q, state)
+    else:
+        energy, gradient = _chunked_energy_and_gradient(calculation, q, state, batch)
 
     cell = calculation.system.cell
     # ``q_cart = q_cryst @ B``, so ``dE/dq_cryst = B dE/dq_cart`` and the

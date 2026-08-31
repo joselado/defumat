@@ -1580,6 +1580,7 @@ class Calculation:
         # copy below is a different object, which is the invalidation this one
         # gets by name.
         moved.__dict__.pop("_spiral_gradient", None)
+        moved.__dict__.pop("_spiral_gradient_chunk", None)
         moved.system = eqx.tree_at(
             lambda sys: sys.structure.positions, self.system, positions
         )
@@ -1747,6 +1748,7 @@ class Calculation:
         # As in ``at_positions`` and ``at_spiral_q``: any compiled kernel that
         # closed over *this* cell cannot follow one that has been deformed.
         strained.__dict__.pop("_spiral_gradient", None)
+        strained.__dict__.pop("_spiral_gradient_chunk", None)
         strained.__dict__.pop("_energy_gradient", None)
         strained.__dict__.pop("_analytic_terms", None)
         strained.__dict__.pop("_tetrahedra", None)
@@ -1887,6 +1889,7 @@ class Calculation:
         # As in ``at_positions`` and ``at_spiral_q``: a compiled ``dE/dq`` holds
         # the k-list and the sphere it was built with, so it cannot cross this.
         moved.__dict__.pop("_spiral_gradient", None)
+        moved.__dict__.pop("_spiral_gradient_chunk", None)
         # The tetrahedra are the k-grid's own object -- corner indices into the
         # irreducible list, built from this grid's equivalence -- so on a
         # different k-set they index the new eigenvalues with the old grid's
@@ -1978,6 +1981,7 @@ class Calculation:
         # Both compiled gradients close over the sphere *and* the k-points they
         # were built with, so neither can follow this.
         moved.__dict__.pop("_spiral_gradient", None)
+        moved.__dict__.pop("_spiral_gradient_chunk", None)
         moved.__dict__.pop("_velocity", None)
         moved.__dict__.pop("_tetrahedra", None)
         moved.__dict__.pop("_energy_gradient", None)
@@ -2034,6 +2038,7 @@ class Calculation:
         # it here rather than letting ``copy.copy`` carry it across is the whole
         # of that: a stale one would be silently evaluated at the old cutoff.
         moved.__dict__.pop("_spiral_gradient", None)
+        moved.__dict__.pop("_spiral_gradient_chunk", None)
 
         if not rebuild_basis:
             # ``spiral_q`` stays a *static* field -- static fields cannot hold a

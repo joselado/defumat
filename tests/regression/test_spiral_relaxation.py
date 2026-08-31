@@ -361,14 +361,24 @@ def test_a_moved_calculation_does_not_reuse_a_stale_gradient(pseudo_dir):
     would carry it onto the moved object. It would then be *evaluated*, at the
     old geometry or the old cutoff, and give a plausible wrong number rather
     than an error. Cheaper to assert than to debug.
+
+    There are **two** such closures -- the single pass over the whole k axis and
+    the chunked one -- and they are cached under separate names because a run
+    may use either. Both are asserted here: a drop that reached only the one the
+    platform default happens to use would be invisible until the other was
+    asked for.
     """
+    caches = ("_spiral_gradient", "_spiral_gradient_chunk")
     calculation, result, _ = _converged(0.3, pseudo_dir)
-    compute_spiral_gradient(calculation, result)
-    assert "_spiral_gradient" in calculation.__dict__
+    compute_spiral_gradient(calculation, result, k_batch=None)
+    compute_spiral_gradient(calculation, result, k_batch=1)
+    assert all(name in calculation.__dict__ for name in caches)
 
     shifted = np.asarray(calculation.system.structure.positions) + 0.1
-    assert "_spiral_gradient" not in calculation.at_positions(jnp.asarray(shifted)).__dict__
-    assert "_spiral_gradient" not in calculation.at_spiral_q([0.0, 0.0, 0.35]).__dict__
+    moved = calculation.at_positions(jnp.asarray(shifted))
+    turned = calculation.at_spiral_q([0.0, 0.0, 0.35])
+    assert not any(name in moved.__dict__ for name in caches)
+    assert not any(name in turned.__dict__ for name in caches)
 
 
 def test_integrating_the_gradient_reproduces_the_scan(pseudo_dir):
@@ -428,3 +438,86 @@ def test_integrating_the_gradient_reproduces_the_scan(pseudo_dir):
     # energies carry and the gradients do not.
     assert gaps[0] == pytest.approx(gaps[1], rel=0.1)
     assert 0.05 < gaps[0] < 0.5
+
+
+@lru_cache(maxsize=2)
+def _converged_spinor_silicon(pseudo_dir: Path):
+    """A spiral on a cell whose pseudopotential actually has projectors.
+
+    The hydrogen chain above is local-only (``number_of_proj = 0``), so nothing
+    else in this file evaluates ``vkb(k +- q/2)`` at all -- and that term is
+    half of what ``dE/dq`` is made of and all of what it costs. Silicon at
+    ``ecutwfc = 12`` on a 2x2x2 grid converges in a second and has two
+    projector channels per atom; the spiral is seeded rather than physical,
+    which is all an identity between two evaluations of one functional needs.
+    """
+    system = build_system(parse_pw_input(SPINOR_SILICON))
+    pseudos = _pseudos(system, pseudo_dir)
+    calculation = Calculation(system, pseudos)
+    result = run_scf(system, pseudos, calculation=calculation,
+                     conv_thr=1e-10, mixing_beta=0.3, max_iterations=200)
+    assert result.converged
+    return calculation, result
+
+
+#: Silicon with a spin spiral seeded on it: two atoms, eight electrons and a
+#: pseudopotential with two projector channels, written out here rather than
+#: read from QE's test-suite so the check runs without the vendored tree.
+SPINOR_SILICON = """
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.2, nat = 2, ntyp = 1,
+    ecutwfc = 12.0, nbnd = 12,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.05
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.3
+    angle1(1) = 90.0
+    spiral_q(1) = 0.0, spiral_q(2) = 0.0, spiral_q(3) = 0.3
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS {automatic}
+ 2 2 2 0 0 0
+"""
+
+
+def test_chunking_the_k_axis_regroups_the_same_gradient(pseudo_dir):
+    """``k_batch`` bounds the working set and changes nothing else.
+
+    The single pass differentiates every k-point at once, which carries
+    ``vkb(k +- q/2)`` and the states for the whole axis through the backward
+    pass -- tens of gigabytes on a cell with many k-points and two spinor
+    components, and the one place ``dE/dq`` costs more than the SCF it follows.
+    Chunking is a regrouping of the same sum, so the two must agree to
+    round-off rather than to a tolerance, and the padding that gives every
+    chunk one shape must contribute exactly nothing: the last chunk here is
+    short for ``k_batch`` of 3 and 5, and its padded k-points enter at zero
+    weight.
+
+    The energy is checked too, because the chunked route reaches it a different
+    way -- the ``q``-dependent terms accumulated over chunks plus the rest
+    evaluated once -- and it is what ``frozen_energy_residual`` compares
+    against the SCF total.
+    """
+    calculation, result = _converged_spinor_silicon(pseudo_dir)
+    whole = compute_spiral_gradient(calculation, result, k_batch=None)
+    assert whole.total_energy == pytest.approx(result.total_energy, abs=1e-10)
+
+    for k_batch in (1, 2, 3, 5, 8):
+        chunked = compute_spiral_gradient(calculation, result, k_batch=k_batch)
+        assert chunked.gradient == pytest.approx(whole.gradient, abs=1e-12)
+        assert chunked.total_energy == pytest.approx(whole.total_energy, abs=1e-10)
+
+    # A cell with projectors is the point of this fixture: a gradient that were
+    # kinetic-only would still pass every assertion above.
+    assert calculation.projectors.vkb.shape[-1] > 0

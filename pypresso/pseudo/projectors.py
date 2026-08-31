@@ -149,10 +149,15 @@ def build_projector_core(
     channels_by_species = [projector_channels(p) for p in pseudos]
     nkb = sum(len(channels_by_species[t]) for t in structure.types)
     if nkb == 0:
-        empty = jnp.zeros((kpoints.nk, planewaves.npwx, 0), dtype=cell.precision.complex)
+        # ``planewaves`` and not ``kpoints`` decides how many rows there are:
+        # ``kcart`` is free to replace the k-points' own coordinates, and a
+        # caller differentiating a *subset* of them (a spin spiral's chunked
+        # ``dE/dq``) passes a basis with fewer rows than ``kpoints`` has.
+        nk_rows = planewaves.nk
+        empty = jnp.zeros((nk_rows, planewaves.npwx, 0), dtype=cell.precision.complex)
         return ProjectorCore(
             columns=empty,
-            kg=jnp.zeros((kpoints.nk, planewaves.npwx, 3)),
+            kg=jnp.zeros((nk_rows, planewaves.npwx, 3)),
             mask=planewaves.mask,
             dij=jnp.zeros((0, 0)),
             atom_of_channel=(),

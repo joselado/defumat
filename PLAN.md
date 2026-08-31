@@ -7685,6 +7685,57 @@ Notebook `12`; `docs/features.tex`. **No README row** — it is the same quantit
 the scan already there. **No `PERFORMANCE.md` pair**: neither `pw.x` nor Elk
 computes a spiral `E(q)` this way, so there is nothing to time it against.
 
+#### P21b — `dE/dq` is chunked over the k axis, because its backward pass is not free
+
+`pypresso/forces/spiral.py`. Not a new quantity: the same gradient, regrouped so the
+peak working set is bounded. The single `value_and_grad` over the whole k axis carries
+`vkb(k ± q/2)` — both shifted spheres, every projector channel — and the states beside
+it, for every k-point at once. On the two-atom cells this was written against that is
+nothing; on a NiI2 monolayer at 81 k-points, 64 spinor bands and 26315 plane waves per
+component XLA asked for **133 GiB** on a 141 GB H200, *after* a 1½-hour SCF had
+converged. That is the shape of the cost: **`dE/dq` is minutes of arithmetic and the
+largest allocation in the run**, and the rule "a design is not finished until its peak
+working set is known" had not been applied to it.
+
+`compute_spiral_gradient(..., k_batch=...)` sums the same terms in chunks, each a
+separate `value_and_grad` whose tape is discarded before the next begins. Three things
+make it exact rather than approximate, and each was a way to get it wrong:
+
+* **only the `q`-dependent terms are chunked.** The density, Hartree,
+  exchange-correlation, local, Ewald and orthonormality terms are constants of `q` at
+  frozen coefficients, so their gradient is zero and the chunking exists to keep the
+  backward pass off them entirely; they are evaluated once, forward only
+  (`q_independent_energy`), which is what keeps `|E_frozen − E_scf|` the identity check
+  it was.
+* **the sub-basis is selected, never rebuilt.** Which plane waves are in each sphere and
+  in what order is exactly what the frozen coefficients are written against, so a
+  rebuilt sphere would be a different Miller ordering against the same numbers — right
+  shape, silent nonsense. `PlaneWaveBasis` rows are indexed instead, and the spiral's
+  two blocks are indexed together (`rows` runs over the `2 nk` axis).
+* **a Python loop and not `lax.map`.** Reverse mode through a scan stacks every chunk's
+  residuals for the backward pass, so the mapped form would hold the same peak while
+  looking like it had fixed it.
+
+Every chunk is padded to one shape with a repeat of its own first k-point at **zero
+weight**, so the whole loop shares one compilation and the padding contributes exactly
+nothing (both terms are linear in `weights`).
+
+One latent bug fell out on the way: `build_projector_core`'s `nkb == 0` branch sized its
+empty arrays from `kpoints.nk` rather than from the basis it was handed, which is the
+same number for every caller that passes a matching pair and is not for one
+differentiating a subset. A local-only pseudopotential — the hydrogen chain every other
+spiral test uses — is the only thing that reaches it.
+
+**Tests.** `test_chunking_the_k_axis_regroups_the_same_gradient` in
+`tests/regression/test_spiral_relaxation.py`: five chunk sizes against the single pass,
+to 1e-12 on the gradient and 1e-10 Ry on the energy, on **spinor silicon** rather than
+the hydrogen chain — the chain's pseudopotential has no projectors at all, so nothing
+else in that file evaluates `vkb(k ± q/2)`, which is half of what `dE/dq` is and all of
+what it costs. `test_a_moved_calculation_does_not_reuse_a_stale_gradient` covers both
+compiled closures now: a cache drop that reached only the one the platform default
+happens to use would stay invisible until the other was asked for. **No README row and
+no notebook** — it is a dial on a quantity both already carry.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);
