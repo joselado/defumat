@@ -8029,8 +8029,8 @@ shared denominators and the field-pair products into named variables, on its
 own: +10 per cent at 22 bands and **-12 at 40**, because those were common
 subexpressions too and the stacking cost more than it saved. And wrapping
 `matrix_elements` in `eqx.filter_jit`, which *does* work — 12.3 s to 6.4 warm,
-bit for bit — and takes the peak resident set from **1.33 GB to 8.96**, so it
-is refused: the unjitted path streams over k-points and jitting the whole call
+bit for bit, the pair measured back to back in one process — and takes the peak
+resident set from **1.33 GB to 8.96**, so it is refused: the unjitted path streams over k-points and jitting the whole call
 materialises what the streaming avoids. The one that worked is the one XLA
 cannot find, being an algebraic re-association across a sum rather than a
 common subexpression.
