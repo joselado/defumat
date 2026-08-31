@@ -209,11 +209,15 @@ candidate strain over the crystal's group, so on a cubic crystal the only
 surviving strain is the isotropic one, whose piezoelectric response is
 identically zero.
 
-**Still outstanding: the relaxed-ion constant**, which is what experiment
-quotes and what the near-total cancellation between the two contributions makes
-interesting. Its ingredients are all here (`Z*`, the `Gamma` force constants,
-and the internal-strain tensor as one more `jvp`); what it needs is a
-two-coordinate frozen functional `E(eps, u)`.
+**Still outstanding, and both are in `PLAN.md` P50 with what they take.** The
+**relaxed-ion** constant, which is what experiment quotes and what the near-total
+cancellation between the two contributions makes interesting: its ingredients are
+all here (`Z*`, the `Gamma` force constants, and the internal-strain tensor as
+one more `jvp`) and what it needs is a two-coordinate frozen functional
+`E(eps, u)`. And the **ultrasoft or PAW** case, which needs no new term at all --
+only a non-centrosymmetric, non-polar soft dataset to measure the existing one
+on, since every soft crystal committed here is centrosymmetric and agrees with
+zero however wrong the strain leg is.
 
 ---
 

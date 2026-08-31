@@ -497,7 +497,10 @@ at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals,
 `q2r`/`matdyn` for a dispersion), the **relaxed-ion** piezoelectric constant (P50: `Z*`, the
 `Gamma` force constants and the strain response are all here; what is missing is the
 internal-strain tensor `d^2E/du d(eps)`, whose two legs are *both* coordinates of the energy
-and therefore need a two-coordinate frozen functional), and the rest of P10 (k-axis sharding
+and therefore need a two-coordinate frozen functional) and the piezoelectric tensor of an
+**ultrasoft or PAW** dataset (P50: nothing in the assembly is norm-conserving, and what is
+missing is a *case* — every soft dataset committed here is centrosymmetric, so its tensor is
+zero and agrees with zero however wrong the strain leg is), and the rest of P10 (k-axis sharding
 and GPU).
 
 ## Layout

@@ -7141,6 +7141,13 @@ response solver's floor, against AlAs's 0.764 from the same code); AlAs is
 completion because this assembly is *linear* in the response, where P35's
 screening term is quadratic; and the three routes above.
 
+**Where it lives.** `pypresso/response/piezo.py`, reached by
+`Calculator.get_piezoelectric_tensor()`; `tests/regression/test_piezoelectric.py`
+(8 tests, 103 s: the three routes, the two symmetry statements, the wedge, and
+the `Z*` anchor) and `tests/unit/test_piezo_machinery.py` (the Voigt convention,
+the polar guard, and one refusal per unrun regime, no SCF);
+`notebooks/28_piezoelectricity.ipynb`.
+
 **What is left out, and it is not an approximation.** This is the **clamped-ion**
 constant. The measured one adds the internal-strain term
 `sum Z* (C^-1) Lambda` of the review's Eq. (111), and the review is where the
@@ -7155,7 +7162,31 @@ strain response as its tangent instead of the field's — and the one thing it
 needs that does not exist yet is a **two-coordinate** frozen functional
 `E(eps, u)`, since unlike the field leg both of its legs are coordinates of the
 energy and the explicit `d_u d_eps E|frozen` term does not vanish. That is the
-next step and it is what makes the number comparable with experiment.
+next step and it is what makes the number comparable with experiment. Two things
+to know before starting it. The functional is
+`calculation.at_strain(eps).at_positions((1 + eps) tau_0 + u)` — the strain
+carries the atoms and `u` is the *further* displacement, which is what makes
+`Lambda` the force a homogeneous strain leaves behind. And `C` in Eq. (111) is
+**singular**: the force constants at `Gamma` have three exact zero modes by
+translational invariance (the acoustic sum rule P25 and P28a check), so the
+inverse there is a pseudo-inverse on the complement of the translations, and
+taking a plain `inv` will produce a large number rather than an error.
+
+The composition and the explicit term are **checked rather than asserted**: at
+AlAs's own geometry `energy(0, 0)` reproduces the SCF total to every digit,
+`dE/du` is 3e-16 (the force vanishes, as it must at the symmetric positions),
+and the frozen half of `Lambda` along a `yz` shear is **-1.309 Ry/bohr per unit
+strain** on the aluminium atom along `x` with 1.7e-17 on the other two
+components — which is the zincblende structure of the internal-strain tensor,
+and it is what the response's own half then has to be added to.
+
+**And lifting the ultrasoft refusal is a dataset rather than a term.** What it
+takes is one **non-centrosymmetric, non-polar** ultrasoft or PAW crystal
+committed under `tests/data/pseudo/` — a zincblende III-V is the obvious one,
+since `alas-raman.in` can be copied with the soft datasets substituted — and
+then the tests that already exist say whether the three routes still agree.
+Every soft dataset here today is centrosymmetric, so all three agree on zero and
+say nothing.
 
 **What it costs, and it is not what the term count suggests.** The strain leg
 drops the multipliers the displacement leg needs and is still eight times slower
