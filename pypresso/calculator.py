@@ -818,6 +818,33 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS)
         )
 
+    def get_shift_current(self, kpoints=None, nbnd=None, **options):
+        """``sigma^abc(0; w, -w)``, the bulk photovoltaic effect, in A/V^2.
+
+        The direct current a non-centrosymmetric crystal carries under
+        illumination, with no junction and no built-in field: the photoexcited
+        electron is born displaced, and the shift between the valence and
+        conduction Wannier centres is what the current counts. Zero by symmetry
+        in any crystal with an inversion centre.
+
+        ``nbnd`` is required and is the convergence parameter of the whole
+        quantity -- more so than for an absorption spectrum, because the
+        intermediate sum of the generalised derivative runs over the same bands.
+        Read ``.truncation`` before believing a number.
+        """
+        from pypresso.workflows.photocurrent import run_shift_current
+
+        result = self._ground_state("the shift current")
+        if kpoints is not None:
+            options = {**options, "kpoints": kpoints}
+        if nbnd is not None:
+            options = {**options, "nbnd": nbnd}
+        return run_shift_current(
+            self.system, self.pseudos, result.density,
+            **self._call_options(run_shift_current, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
     # ------------------------------------------------------------------
     # topology
     # ------------------------------------------------------------------

@@ -34,6 +34,9 @@ expression.
     the Sternheimer projector produces and the band is usually empty anyway.
     Elk's eigenvalue-differencing route is kept beside it as the check that
     shares no machinery with the operator.
+``photocurrent``
+    the shift current ``sigma^abc(0; w, -w)`` -- the bulk photovoltaic effect,
+    a second-order optical response by sum over states
 ``nesting``
     the Fermi-surface nesting function ``N(q)``, which is not a response at all
     -- it is a correlation of ``delta(eps - E_F)`` over the k-grid, and it
@@ -77,6 +80,11 @@ from pypresso.response.conductivity import (
     optical_conductivity,
 )
 from pypresso.response.nesting import NestingFunction, nesting_from_eigenvalues
+from pypresso.response.photocurrent import (
+    ShiftCurrent,
+    generalized_derivative,
+    shift_current,
+)
 from pypresso.response.piezo import PiezoelectricTensor, piezoelectric_tensor
 from pypresso.response.strain import StrainResponse, strain_response
 from pypresso.response.phonon import Phonons, dynamical_matrix
@@ -126,6 +134,9 @@ __all__ = [
     "nesting_from_eigenvalues",
     "OpticalConductivity",
     "optical_conductivity",
+    "ShiftCurrent",
+    "generalized_derivative",
+    "shift_current",
     "piezoelectric_tensor",
     "raman_tensors",
     "strain_response",

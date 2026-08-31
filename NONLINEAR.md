@@ -8,7 +8,10 @@ about what is *reachable*, in what order, and at what price.
 The organising fact is stated once and applies to everything below:
 
 > **The 2n+1 theorem with first-order wavefunctions reaches third derivatives and
-> stops.** Every quantity in Tier A is a third derivative and needs nothing new.
+> stops.** (P53 added the qualification this whole file needed: that is a statement
+> about the **Sternheimer stack**. A *sum over states* has no field-source problem
+> and reaches the second-order optical family — shift current, injection current,
+> `chi^(2)` — with none of Tier B's missing term. §7 and §8 carry it.) Every quantity in Tier A is a third derivative and needs nothing new.
 > Everything in Tier B is also a third derivative but has an *electric field* in a
 > place this code cannot differentiate. Tier C and D need either a frequency or a
 > second-order wavefunction, which are two different new machines.
@@ -266,14 +269,75 @@ route is taken, `chi^(3)` becomes reachable rather than impossible.
 **The geometric family — and it is the best fit for this codebase.** Shift current and
 the bulk photovoltaic effect, the Berry-curvature dipole and the non-linear Hall effect
 are second-order responses governed by quantum geometry rather than by a self-consistent
-loop. **QE has none of it** (`grep` finds neither term in the vendored tree), the
-published route is Wannier interpolation, and the two ingredients here are the velocity
-operator (one `jvp` of `H(k)`) and P16's Berry connection — so the curvature dipole in
-particular is one more `jvp` of a quantity that already exists. It is the most cited
+loop. **QE has none of it** (`grep` finds neither term in `PW/src`, `PP/src` or
+`PHonon`; the only implementation in the tarball is the bundled `external/wannier90`),
+the published route is Wannier interpolation, and the two ingredients here are the
+velocity operator (one `jvp` of `H(k)`) and P16's Berry connection. It is the most cited
 corner of non-linear optics right now
 ([2507.00864](https://arxiv.org/abs/2507.00864), [2412.16477](https://arxiv.org/abs/2412.16477)),
-it is validated against model Hamiltonians rather than against another code, and it would
-be a `new` row rather than a reimplementation.
+it is validated against model Hamiltonians rather than against another code, and it is
+a `new` row rather than a reimplementation.
+
+**The shift current half of it is now in** — `pypresso/response/photocurrent.py`,
+`run_shift_current`, `Calculator.get_shift_current` — and the thing to carry forward is
+*why it was reachable while §4 stays refused*. §2.1 is a statement about the **Sternheimer
+stack**: the field enters only through a source term, so a 2n+1 expression with two field
+labels has nothing to build `<u_i|r_k|u_j>` from. A **sum over states** has no such
+problem. It needs the interband dipole, which is `-i v_nm / w_nm` — *exact* for an
+eigenstate of the full `H(k)`, no truncation, and the reason a plane-wave code has no
+counterpart to Wannier90's `AA_R` (that array exists only to undo the Wannier gauge). So
+the whole second-order optical family is reachable by the route P37 already took for
+absorption, and §4's refusal does not reach it. The same is true of `chi^(2)(-2w; w, w)`,
+which `ELK-FEATURES.md` currently rejects by pointing at §4 — that row conflates the two
+routes and is wrong.
+
+**What it cost was one new operator and one piece of algebra.** The operator is
+`w^ab_nm = <n|d^2H/dk_a dk_b|m>`, one `jvp` of the velocity operator's `jvp`
+(`VelocityOperator.apply_second`) — forward over forward, matching a central difference
+of `dH/dk` to **8.9e-9**, symmetric in `a <-> b` to 0.0 and Hermitian to 2e-15. The
+algebra is that the sum rule's `sum_{p != n,m}` collapses to `[v^c, g^a]_nm - g^a_nm
+D^c_nm` with `g^a = v^a/w_nm`, because `1/w_pm` already kills `p = m` and `1/w_np` kills
+`p = n`. That is what makes the assembly two matrix products instead of a loop over
+triples, and it has its own unit test on random matrices.
+
+**Three findings, and two of them are older findings arriving again.**
+
+* **The truncation is the real cost and it is severe.** The intermediate sum over `p` is
+  an *identity* only over a complete basis; truncated it is a few per cent and no
+  symmetry check sees it. Measured on AlAs on a frozen sphere of 158 plane waves, where
+  the band set can be run all the way out: 6.0e-2 at 20 bands, 4.8e-2 at 80, 4.3e-2 at
+  120 — and **1.8e-4 at 158**. IATS18 avoid this with `k.p` inside a closed Wannier
+  subspace and there is no closed subspace here. **The route that removes it is
+  identified**: the two sums are exactly `-<u_n|dH/dk_c|u_m^{;a}> - <u_n^{;a}|dH/dk_c|u_m>`
+  minus the same `D^c` term, which is a Sternheimer solve in place of a spectral sum —
+  but `|u_m^{;a}>` is a *per-band* derivative, so the operator to invert is `H - e_m` on
+  the complement of one band, **indefinite** whenever anything lies below `e_m`. It is
+  P48's objection to getting an individual band's `|dpsi/dk>` that way, and lifting it
+  needs the indefinite solver of §7.
+* **A stencil must not straddle a change of basis** — P48's finding, one derivative up
+  and in the *arm* rather than the centre. The validating finite difference rebuilt its
+  sphere per k-point and got 158 plane waves at `k` and `k - delta` but **157** at
+  `k + delta` on a generic AlAs point; that fixed variational offset divided by
+  `2 delta` made the disagreement *grow* as the step shrank. Freezing the sphere across
+  the stencil is both the cure and the correct comparison, since the analytic route is a
+  frozen-sphere derivative by construction.
+* **The degeneracy threshold is the broadening, not 1e-8.** A linear conductivity carries
+  `1/w_nm` once; this carries it three times. At the `W` points of a 4x4x4 fcc mesh AlAs
+  has a band pair **9.18e-5 Ry** apart — far above `dielectric.f90`'s 1e-8, far below
+  anything resolvable — and `|r^{c;a}|` there is **9.2e6 bohr^2** against a mesh median
+  of 4.4e3, which put a spike in the spectrum that moved by two orders of magnitude
+  between a 4x4x4, a 6x6x6 and an 8x8x8 grid. Elk's `nonlinopt.f90` guards it with the
+  smearing width and that is the rule adopted. **The tensor was exactly `-43m`
+  throughout**, to five figures: §5's first bullet, for the third time.
+
+**Still open in this corner**, in the order they are cheap: the **injection current**
+(CPGE), which needs *nothing* new — the same `v_nm` and the diagonal `Delta^a` — but is
+identically zero in every non-gyrotropic class, `-43m` included, so it has no committed
+cell to run on and its decisive check is the quantized Weyl-node trace on a
+`ModelStates` model; **`chi^(2)` by the same sum over states**, which has Elk's
+`nonlinopt.f90` as a real reference; and the **Berry-curvature dipole**, which is a
+Fermi-surface integral of a k-derivative of an already-singular quantity and is the one
+entry here a direct plane-wave code cannot honestly converge.
 
 ---
 
@@ -297,5 +361,12 @@ be a `new` row rather than a reimplementation.
    makes `chi^(3)` reachable at all (§7).
 5. **Third-order force constants** (§3.3) — after `q != 0` phonons, which is where their
    payoff is.
-6. Then choose between **frequency dependence** and **the geometric family** (§7) — they
-   are unrelated machines, and the second one is the more distinctive.
+6. ~~Then choose between **frequency dependence** and **the geometric family** (§7)~~ —
+   the geometric family was chosen, and its **shift current** half is done (P53). What
+   the phase established is that the boundary drawn in §2.1 is a boundary of the
+   *Sternheimer stack* and not of the physics: a sum over states reaches the whole
+   second-order optical family without `<u_i|r_k|u_j>`, so §4's refusal never applied
+   to it. Next in the same corner, cheapest first: the **injection current** (nothing
+   new but a gyrotropic case), **`chi^(2)`** by the same route (Elk's `nonlinopt.f90`
+   is a real reference), and then **frequency dependence**, which is still the other
+   machine.

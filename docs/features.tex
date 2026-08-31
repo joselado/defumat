@@ -1056,6 +1056,109 @@ static Berry-curvature integral is concentrated on near-degeneracies at the
 Fermi surface, so it is quoted with its $k$-convergence and not on its own.
 \end{refuses}
 
+\subsection{The shift current: the bulk photovoltaic effect}
+
+Illuminate a crystal with no inversion centre and it carries a direct current,
+with no junction and no built-in field. The intrinsic part of that is the
+\emph{shift current}: the photoexcited electron is born displaced, and what the
+current counts is the real-space shift between the valence and conduction
+Wannier centres. It is a second-order optical response,
+$J^a = 2\sigma^{abc}(0;\omega,-\omega)E_b(\omega)E_c(-\omega)$, with
+\begin{equation*}
+\sigma^{abc}(\omega) = -\frac{i\pi e^3}{4\hbar^2}\int\![d\mathbf k]
+  \sum_{n,m} f_{nm}\left(I^{abc}_{mn}+I^{acb}_{mn}\right)
+  \left[\delta(\omega_{mn}-\omega)+\delta(\omega_{nm}-\omega)\right],
+  \qquad I^{abc}_{mn} = r^b_{mn}\,r^{c;a}_{nm} .
+\end{equation*}
+The whole difficulty is $r^{c;a}_{nm}$, the \emph{generalised derivative}
+$\partial_a r^c_{nm} - i(A^a_{nn}-A^a_{mm})r^c_{nm}$ --- neither piece of which
+is separately computable, since the diagonal Berry connection is gauge dependent
+and is not a function of $H$ at one $\mathbf k$. The escape is the Aversa--Sipe
+sum rule, which writes the covariant object entirely in gauge-free quantities
+living at a single $\mathbf k$:
+\begin{equation*}
+r^{c;a}_{nm} = \frac{i}{\omega_{nm}}\left[
+  \frac{v^c_{nm}\Delta^a_{nm} + v^a_{nm}\Delta^c_{nm}}{\omega_{nm}}
+  - w^{ca}_{nm}
+  + \sum_{p\neq n,m}\left(\frac{v^c_{np}v^a_{pm}}{\omega_{pm}}
+                        - \frac{v^a_{np}v^c_{pm}}{\omega_{np}}\right)\right],
+\end{equation*}
+with $v^a_{nm} = \langle n|\partial_a H|m\rangle$ and
+$w^{ab}_{nm} = \langle n|\partial_a\partial_b H|m\rangle$. Both are derivatives
+of code that already exists: $v$ is one \code{jvp} of $H(\mathbf k)$ at a frozen
+sphere and $w$ is that \code{jvp} differentiated by a second one. Nothing is
+transcribed. The interband dipole $r^a_{nm} = -i\,v^a_{nm}/\omega_{nm}$ is
+\emph{exact} for an eigenstate of the full $H(\mathbf k)$, which is why a
+plane-wave code needs no counterpart to Wannier90's position-operator matrices.
+
+\begin{pycode}
+calc = Calculator.from_file("alas-raman.in", pseudo_dir="pseudo")
+
+sc = calc.get_shift_current(nbnd=14, window=0.9, nw=180)
+print(sc.sigma.shape)            # (nw, 3, 3, 3) in A/V^2, real
+print(sc.component(0, 1, 2))     # sigma^xyz(omega), -43m's only free component
+print(sc.frequencies_ev)         # the photon energy axis in eV
+print(sc.truncation)             # the band-truncation diagnostic: read it
+print(sc.band_cut_gap)           # where the band set was cut, in Ry
+\end{pycode}
+
+There is no reference binary --- \code{pw.x} computes no photocurrent of any
+kind, and Elk's \code{nonlinopt.f90} is second-harmonic generation, a different
+response --- so the validation is internal and it is three statements. The
+\textbf{sum rule against a parallel-transport finite difference} of the dipole,
+which shares nothing with it: no second derivative, no intermediate sum, only
+the phases of neighbouring $\mathbf k$-points fixed to one another. That
+comparison is decisive in exactly one form, because the sum rule is an
+\emph{identity over a complete basis}: held on a frozen sphere of 158 plane
+waves, AlAs agrees to \textbf{1.8e-4} at 158 bands against 4.3e-2 at 120 and
+6.0e-2 at 20. A residue that falls off a cliff at completeness is a correct
+assembly with a truncated sum; one that plateaus is a bug. Then the
+\textbf{crystal class}: AlAs comes out exactly $\bar 43m$ on a \code{nosym}
+grid, only the components with all three labels different surviving, while
+centrosymmetric silicon gives zero from the same machinery. And the
+\textbf{absorption edge}: $\sigma^{xyz}$ is 6.9e-25 A/V$^2$ at 2 eV against a
+peak of 1.1e-4 near 4.4 eV, which is the one check no index bookkeeping can pass
+by accident --- no absorption, no photocurrent.
+
+\textbf{All three are blind to an overall constant}, and this document says so
+rather than leaving it to be discovered: a $\sigma$ wrong by a factor of two is
+still exactly $\bar 43m$, still zero on silicon and still zero below the gap.
+What \emph{is} anchored is the \textbf{spin sum} --- the same cell run
+\code{nspin} = 1 and as a two-component spinor gives the same tensor to
+\textbf{4.6e-9}, with the peak ratio 1.000000 --- which is the check that
+catches a factor of two there. The \emph{convention} is not anchored: the
+absolute scale is good to the published order of magnitude for a zincblende
+semiconductor and no better, and pinning it wants a model with a closed form
+through the same array core.
+
+\begin{refuses}
+\textbf{Refuses.} \textbf{Ultrasoft and PAW}, for the Kubo curvature's reason
+one order further out: with a moving $\hat S$ the dipole carries
+$\partial S/\partial k$ and its derivative carries $\partial^2 S/\partial
+k_a\partial k_b$, both identically zero for a norm-conserving dataset, so
+nothing validated here can see whether their convention is right. A
+\textbf{spin spiral}. A \textbf{symmetry-reduced $k$-set}, because
+$\sigma^{abc}$ is a polar rank-3 tensor and a wedge sum is not the cell's until
+it is averaged over the point group; the escape is the whole unshifted grid. A
+\textbf{metal}, whose partially filled bands contribute pairs with vanishing
+$\omega_{nm}$ where every denominator above diverges --- the Fermi-surface terms
+that replace them are a different assembly. \textbf{DFT+$U$}, whose Hubbard term
+is built from $\phi_U(\mathbf k + \mathbf G)$ and so carries a velocity and a
+second velocity of its own. And \textbf{\code{nspin} = 2}. A \emph{spinor} run
+is supported and tested.
+
+\textbf{The band count is reported rather than refused, and it is the largest
+approximation here.} The intermediate sum over $p$ converges only as it
+approaches completeness, so a production band count carries a few per cent that
+no symmetry check sees --- \code{truncation} is the in-run estimate and is taken
+over the top \emph{quarter} of the bands, because dropping one band reports
+5.3e-5 where the error is 4 per cent. The route that would remove it is written
+down in \code{NONLINEAR.md}: the two sums are a Sternheimer solve rather than a
+spectral sum, and what stops it being taken is that the operator to invert is
+indefinite. \code{band\_cut\_gap} carries the same warning it does for the
+conductivity.
+\end{refuses}
+
 % =====================================================================
 \section{Topological invariants}
 

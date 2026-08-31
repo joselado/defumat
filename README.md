@@ -72,6 +72,7 @@ drive any of this and is what the examples below use.
 | **Raman and infrared spectra** — the per-mode activities, depolarisation ratios and electronic polarizability at `Gamma`. The non-analytic LO-TO splitting is not included, so an optical triplet comes out unsplit | `vibrational_spectrum` | ✓ | |
 | **Optical conductivity tensor** `sigma_ab(omega)`, the magneto-optical **Kerr angle** and the **anomalous Hall conductivity** — interband plus a Drude term, from `dH/dk` rather than momentum matrix elements. Insulators and metals, norm-conserving; needs the whole k-grid rather than a wedge, since the antisymmetric part is an axial vector | `run_conductivity`, `Calculator.get_optical_conductivity` | (✓)⁷ | ✓ |
 | **Fermi-surface nesting function** `N(q)` — how much of the Fermi surface maps onto itself when translated by `q`, which is where a phonon softens, a charge-density wave opens a gap or a spin spiral finds its pitch. Metals with a smearing; a symmetry-reduced wedge is unfolded rather than refused | `run_nesting`, `Calculator.get_nesting` | | ✓ |
+| **Shift current** `sigma^abc(0; w, -w)` — the bulk photovoltaic effect: the direct current a crystal with no inversion centre carries under illumination, with no junction and no built-in field. Insulators, norm-conserving, `nspin = 1` or spinor; needs the whole k-grid rather than a wedge, and the band count is the convergence parameter because the generalised derivative's intermediate sum runs over the same bands | `run_shift_current`, `Calculator.get_shift_current` | ⁸ | |
 | **Optical absorption spectra with excitons** — `Im eps_M(omega)` from TDDFT, local-field effects included, on a bootstrap exchange-correlation kernel. Needs the whole k-grid rather than a wedge | `run_absorption`, `kernel = 'bootstrap'` (also `rpa`, `alda`, `lrc`, `bootstrap-1`), `ecut_response`, `scissor`, `broadening` | | ✓ |
 | **Van der Waals dispersion** — Grimme's D2 pair correction, in the energy, the forces, the stress and the elastic constants. D3, Tkatchenko-Scheffler, MBD and XDM are refused by name | `vdw_corr = 'grimme-d2'`, `london_s6`, `london_rcut`, `london_c6`, `london_rvdw` | ✓ | |
 | **Band gaps from the Tran-Blaha potential** (mBJ) — the modified Becke-Johnson meta-GGA, on norm-conserving and PAW datasets, unpolarized, collinear, and noncollinear with spin-orbit coupling. The total energy is not variational, so forces, stress and response are refused | `input_dft = 'tb09'` (or `'bj06'`), `mbj_c` | (✓)⁶ | ✓ |
@@ -97,6 +98,13 @@ Where the tick is qualified:
   conductivity and no Kerr angle, refuses ultrasoft datasets outright, and
   builds its dipole from momentum matrix elements — which is not `[H, r]` when
   the pseudopotential is nonlocal.
+- ⁸ Blank rather than ticked, and the distinction is worth stating because
+  the QE tarball does contain an implementation: `external/wannier90`'s
+  `berry_task = 'sc'` computes a shift current, but Wannier90 is a separate code
+  bundled beside Quantum ESPRESSO rather than part of it, it needs a
+  wannierisation first, and nothing in `PW/src`, `PP/src` or `PHonon` computes a
+  photocurrent of any kind. Elk has none either — its `nonlinopt.f90` is
+  second-harmonic generation, which is a different response.
 
 The variants under each row — which smearing or tetrahedron method fixes the
 occupations, which projectors DFT+U uses, which constraint scheme — are chosen

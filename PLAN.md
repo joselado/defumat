@@ -7736,6 +7736,149 @@ compiled closures now: a cache drop that reached only the one the platform defau
 happens to use would stay invisible until the other was asked for. **No README row and
 no notebook** — it is a dial on a quantity both already carry.
 
+### P53 — The shift current: the bulk photovoltaic effect. ✅ DONE.
+
+`pypresso/response/photocurrent.py`, `workflows/photocurrent.py`,
+`Calculator.get_shift_current`. `sigma^abc(0; w, -w)` — the direct current a
+crystal with no inversion centre carries under illumination, with no junction and
+no built-in field. Following Sipe and Shkrebtii (PRB **61**, 5337 (2000)) in the
+form Ibanez-Azpiroz, Tsirkin and Souza give it (PRB **97**, 245143 (2018),
+arXiv:1804.04030 — "IATS18", the reference Wannier90's `berry_get_sc_klist`
+cites).
+
+**Why this was reachable while P35's `chi^(2)` refusal stands**, which is the
+finding that opened the phase. `NONLINEAR.md` §2.1 is a statement about the
+**Sternheimer stack**: the field enters only through a source term, so a 2n+1
+expression with two field labels has nothing to build `<u_i|r_k|u_j>` from, and
+it is 42% of the answer. **A sum over states has no such problem.** It needs the
+interband dipole `r^a_nm = -i v^a_nm / w_nm`, which is *exact* for an eigenstate
+of the full `H(k)` — no truncation, and the reason a plane-wave code has no
+counterpart to Wannier90's `AA_R`, an array that exists only to undo the Wannier
+gauge. So the whole second-order optical family is reachable by the route P37
+already took for absorption. `ELK-FEATURES.md`'s rejection of second-harmonic
+generation points at P35's refusal and therefore conflates the two routes; that
+row is wrong and is flagged, not yet amended.
+
+**No reference binary exists.** `pw.x` computes no photocurrent — `grep` finds
+nothing in `PW/src`, `PP/src`, `PHonon` or `Modules` — and Elk's `nonlinopt.f90`
+is `chi^(2)(-2w; w, w)`, a different response. The only implementation in the
+tarball is the bundled `external/wannier90`, which needs a wannierisation. So the
+validation is internal, and it is the three statements in
+`tests/regression/test_photocurrent.py`.
+
+**What had to be written: one operator and one piece of algebra.**
+`VelocityOperator.apply_second` / `second_matrix_elements` give
+`w^ab_nm = <n|d^2H/dk_a dk_b|m>` as one `jvp` of the velocity operator's `jvp`,
+forward over forward at a frozen sphere — matching a central difference of
+`dH/dk` to **8.9e-9** at `eps = 1e-4` (a clean factor of 100 against `1e-3`),
+symmetric in `a <-> b` to 0.0 and Hermitian to 2e-15, at ~0.03 s per direction
+pair. Note this is the *operator's* second derivative and not the eigenvalue's,
+so P48's objection (differentiating Hellmann-Feynman again drops the `k.p` sum)
+does not apply — there is no such term to lose. The algebra is that the sum
+rule's `sum_{p != n,m}` collapses to `[v^c, g^a]_nm - g^a_nm D^c_nm` with
+`g^a = v^a/w_nm`, because `1/w_pm` already kills `p = m` and `1/w_np` kills
+`p = n`, leaving one excluded term each which is exactly the `D^c` piece. Two
+matrix products instead of a loop over triples; it has its own unit test against
+the explicit loop, on random Hermitian matrices, degenerate case included.
+
+**The decisive check is the identity over a complete basis.** The sum rule's
+intermediate sum is exact only when `p` runs over the whole space, and on a
+**frozen sphere** the space is finite — 158 plane waves for AlAs at
+`ecutwfc = 10`. So the sweep in `nbnd` is the test, compared against a
+parallel-transport finite difference of the dipole (no `w`, no intermediate sum,
+only neighbouring k-points' phases fixed to each other): **6.0e-2 at 20 bands,
+4.8e-2 at 80, 4.3e-2 at 120, and 1.8e-4 at 158**. A residue that falls off a
+cliff at completeness is a correct assembly with a truncated sum; one that
+plateaus is a bug, and that distinction is what the test asserts.
+
+**Three findings, two of them older findings arriving again.**
+
+* **The truncation is the real cost and it is severe.** A production band count
+  carries a few per cent and no symmetry check sees it. IATS18 avoid it with
+  `k.p` inside a closed Wannier subspace; there is none here. **The route that
+  removes it is identified rather than fitted**: the two sums are exactly
+  `-<u_n|dH/dk_c|u_m^{;a}> - <u_n^{;a}|dH/dk_c|u_m>` minus the same `D^c` term,
+  a Sternheimer solve in place of a spectral sum. What stops it is that
+  `|u_m^{;a}>` is a *per-band* derivative, so the operator to invert is
+  `H - e_m` on the complement of one band — **indefinite** whenever anything
+  lies below `e_m`, which is P48's objection to obtaining an individual band's
+  `|dpsi/dk>` that way. It needs the indefinite solver of `NONLINEAR.md` §7.
+  `ShiftCurrent.truncation` is therefore taken over the top **quarter** of the
+  bands and not the last one, which is where it differs from P37's
+  `static_residual` and P47's `BerryCurvature.truncation`: those sums converge
+  band by band, this one does not, and one band under-reports by three orders
+  (5.3e-5 against a measured 4 per cent).
+* **A stencil must not straddle a change of basis** — P48's finding one
+  derivative up, and in the *arm* rather than the centre. The validating
+  difference rebuilt its sphere per k-point and got **158** plane waves at `k`
+  and `k - delta` but **157** at `k + delta` on a generic AlAs point; that fixed
+  variational offset divided by `2 delta` made the disagreement *grow* as the
+  step shrank (rel. 0.25, 0.28, 0.49 at `delta` = 4e-3, 2e-3, 1e-3). Freezing
+  the sphere across the stencil is both the cure and the correct comparison,
+  since the analytic route is a frozen-sphere derivative by construction. A
+  second trap in the same harness: the phase correction is
+  `r_nm -> ph_n conj(ph_m) r_nm`, and the transposed version — which is what one
+  writes first — leaves an O(1) phase that the difference divides by `2 delta`,
+  giving a relative error of exactly 1.0 that *looks* like a missing term.
+* **The degeneracy threshold is the broadening, not 1e-8.** A linear conductivity
+  carries `1/w_nm` once; this carries it three times. At the `W` points of a
+  4x4x4 fcc mesh AlAs has a band pair **9.18e-5 Ry** apart — far above
+  `dielectric.f90`'s 1e-8, far below anything resolvable — and `|r^{c;a}|` there
+  is **9.2e6 bohr^2** against a mesh median of 4.4e3, which put a spike in the
+  spectrum that moved by two orders of magnitude between a 4x4x4 (1.2e-2), a
+  6x6x6 (1.1e-4) and an 8x8x8 (1.5e-3) grid. Elk's `nonlinopt.f90` guards it
+  with the smearing width and that is the rule adopted. **The tensor was exactly
+  `-43m` throughout**, to five figures: `NONLINEAR.md` §5's first bullet for the
+  third time, and the reason the class check is documented in its own test as
+  weak.
+
+**The absolute scale is anchored in one place only, and the docs say so.**
+Every check above is blind to an overall constant -- a `sigma` wrong by a factor
+of two is still exactly `-43m`, still zero on silicon and still zero below the
+gap, which is P50's trap in this module's coordinates. What *is* pinned is the
+**spin sum**: the same AlAs cell run `nspin = 1` (14 bands) and as a
+two-component spinor (28) gives the same tensor to **4.6e-9**, peak ratio
+1.000000 -- P52's construction, where the same factor of two is a factor of four
+and invisible in the shape. It is also the only test behind the README row's
+claim that a spinor run works at all. The **convention** (Eq. (8)'s
+`J = 2 sigma E E` against the other normalisation) is *not* pinned, and pinning
+it wants a model with a closed form -- Rice-Mele, Fregoso, Morimoto and Moore,
+PRB **96**, 075421 -- through the same array core, which `shift_integrand` is a
+pure function of arrays precisely to allow. That is the first thing to do next.
+
+**The numbers.** AlAs `sigma^xyz` is **-1.78e-5 A/V^2 at 4 eV** and **-2.76e-5
+at 5 eV**, stable across 4x4x4, 6x6x6 and 8x8x8 meshes, with a peak of about
+1.1e-4 near 4.4 eV — the published range for a zincblende semiconductor. Below
+the absorption edge it is **6.9e-25** at 2 eV. Silicon, the centrosymmetric
+control run through the same machinery, gives zero.
+
+**Refused by name**: ultrasoft and PAW (the `dS/dk` and `d^2S/dk dk` terms are
+identically zero for a norm-conserving dataset, so nothing here can see their
+convention — P47's and P51's refusal one order out), a spin spiral, a
+symmetry-reduced wedge (`sigma^abc` is a polar rank-3 tensor;
+`symmetrize_cartesian_tensor` would lift this and it is separate work), a
+**metal** (partially filled bands give pairs with vanishing `w_nm` where every
+denominator diverges; the Fermi-surface terms that replace them are a different
+assembly), **DFT+U** (the Hubbard term is built from `wfcU(k+G)` and carries a
+velocity and a second velocity of its own; it is refused rather than left to
+surface as `VelocityOperator`'s request for an `ns` the entry point cannot pass
+it), and `nspin = 2`. A **spinor** run is supported and tested.
+
+**Still open in this corner**, cheapest first: the **injection current** (CPGE),
+which needs *nothing* new — the same `v_nm` and the diagonal `Delta^a` — but is
+identically zero in every non-gyrotropic class, `-43m` included, so it has no
+committed cell to run on and its decisive check is the quantized Weyl-node trace
+on a `ModelStates` model; **`chi^(2)`** by the same sum over states, which has
+Elk's `nonlinopt.f90` as a real reference; and the **Berry-curvature dipole**,
+which is a Fermi-surface integral of a k-derivative of an already-singular
+quantity and is the one entry a direct plane-wave code cannot honestly converge.
+
+**Not done and owed**: the notebook, and `PERFORMANCE.md`. The latter has no
+reference implementation to be timed against — the rule names features taken
+from QE or Elk and this is taken from neither — so what belongs there is the
+absolute cost and its scaling in `nbnd`, which is quadratic in the pair sum and
+cubic in the intermediate one.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

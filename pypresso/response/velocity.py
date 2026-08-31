@@ -303,6 +303,60 @@ class VelocityOperator:
             for axis in _CARTESIAN
         ])
 
+    def apply_second(self, psi: jnp.ndarray, first, second) -> jnp.ndarray:
+        """``d^2H/dk_a dk_b |psi>``, one ``jvp`` differentiated by another.
+
+        ``first`` and ``second`` are the two cartesian tangents; the result is
+        bilinear in them and symmetric under exchanging them, because mixed
+        partial derivatives of a smooth function commute and the sphere is
+        frozen through both. The nesting is forward-over-forward, so nothing of
+        the reverse pass's tape is built and the peak is two live tangents of
+        ``vkb`` rather than a Jacobian.
+
+        **Why the operator's second derivative and not the eigenvalue's.** P48
+        computes ``d^2 eps_n/dk_a dk_b`` and does *not* do it this way, because
+        differentiating the Hellmann-Feynman expression again at frozen states
+        drops the whole ``k.p`` sum. Here the object wanted is the bare operator
+        between two *given* states -- ``w^ab_nm`` of the generalised derivative
+        (:mod:`pypresso.response.photocurrent`) -- which has no such term to
+        lose: it is the second derivative of ``H``, not of a solution of ``H``.
+        """
+        def broadcast(direction):
+            return jnp.broadcast_to(
+                jnp.asarray(direction, dtype=self.kcart.dtype), self.kcart.shape
+            )
+
+        first, second = broadcast(first), broadcast(second)
+
+        def inner(kcart):
+            _, out = jax.jvp(
+                lambda kc: self._operator(psi, kc, False), (kcart,), (second,)
+            )
+            return out
+
+        _, out = jax.jvp(inner, (self.kcart,), (first,))
+        return out
+
+    def second_matrix_elements(self, psi: jnp.ndarray) -> jnp.ndarray:
+        """``w^ab_nm = <psi_m| d^2H/dk_a dk_b |psi_n>``, ``(3, 3, nspin, nk, nbnd, nbnd)``.
+
+        Ry bohr^2. The six independent pairs are computed and the tensor is
+        filled symmetrically, which costs half of the nine and is exact rather
+        than imposed -- the equality of ``w^ab`` and ``w^ba`` is measured in
+        ``tests/unit/test_photocurrent_machinery.py`` on the operator itself
+        before it is used to save the work.
+        """
+        psi = jnp.asarray(psi)
+        blocks: dict[tuple[int, int], jnp.ndarray] = {}
+        for a in range(3):
+            for b in range(a, 3):
+                applied = self.apply_second(psi, _CARTESIAN[a], _CARTESIAN[b])
+                blocks[(a, b)] = jnp.einsum("skmg,skng->skmn", psi.conj(), applied)
+        return jnp.stack([
+            jnp.stack([blocks[(min(a, b), max(a, b))] for b in range(3)])
+            for a in range(3)
+        ])
+
     def band_velocities(self, psi, eigenvalues) -> BandVelocities:
         """``d(eps_n)/dk`` by the generalised Hellmann-Feynman theorem.
 
