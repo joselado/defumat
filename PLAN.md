@@ -7173,13 +7173,20 @@ what extends, and `PERFORMANCE.md` says which to reach for on a large cell.
 **Refused rather than approximated**, beyond the polar crystals: everything
 `require_a_sternheimer_regime` refuses, everything
 `require_a_differentiable_cell` refuses (a spin spiral, a magnetic field), and a
-shifted grid run with `nosym`. **Ultrasoft and PAW are neither refused nor
-claimed**: nothing in the assembly is norm-conserving — the density and
-`becsum` are handed to the functional as builders that carry the strain, which
-is what P41 needed for the strain response — but the only cases run are
-norm-conserving, so what a dataset with a moving `S` does here is unmeasured.
-P44's refusal of the strain coordinate's *third* derivatives does not apply: this
-is a second one, and it is the `Z*` pattern, which is ultrasoft.
+shifted grid run with `nosym`. **Ultrasoft and PAW are refused by name, and it
+is a gap rather than a missing term.** Nothing in the assembly is
+norm-conserving — the density and `becsum` are handed to the functional as
+builders that carry the strain, which is what P41 needed for the strain
+response; `qq_ij` has no cell in it, so the constraint stays strain-independent;
+and the *displacement* leg of this same assembly is the Born charge, validated
+on all three kinds. What is missing is **a case to measure it on**: every
+ultrasoft and PAW dataset committed here belongs to a centrosymmetric crystal,
+whose piezoelectric tensor vanishes identically, so all three routes agree on
+zero whatever is wrong. P44 is exactly why a plausible argument about the strain
+coordinate is not enough — there, two of P43's ingredients transferred, the
+residue did not, and it was localised only because it could be measured against
+a finite difference. Lifting this is one non-centrosymmetric, non-polar
+ultrasoft crystal plus the tests that already exist.
 
 ## 3a. Environment decisions (settled)
 

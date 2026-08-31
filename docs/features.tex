@@ -811,9 +811,13 @@ $\delta_{ki}P_j - \delta_{ij}P_k$, which needs the spontaneous polarization
 itself. Those terms vanish identically whenever the two Cartesian labels they
 pair are different --- so $e_{14}$ of a zincblende crystal never carries the
 ambiguity --- and they vanish for every component of a class that admits no
-invariant vector, which is what is checked. Beyond that: insulators, and
-everything the Sternheimer regime and the differentiable cell refuse (a spin
-spiral, a magnetic field, a shifted grid run with \code{nosym}).
+invariant vector, which is what is checked. \textbf{Ultrasoft and PAW}, and that one is a gap rather
+than a missing term: nothing in the assembly is norm-conserving and the
+displacement leg of it is the Born charge, which is validated on all three
+kinds, but every ultrasoft and PAW crystal here is centrosymmetric and agrees
+with zero whatever is wrong. Beyond that: insulators, \code{nspin = 1}, and
+everything the Sternheimer regime and the differentiable cell refuse (a metal, a
+spin spiral, a magnetic field, a shifted grid run with \code{nosym}).
 \end{refuses}
 
 \subsection{Spin-polarized response}

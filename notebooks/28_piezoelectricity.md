@@ -161,6 +161,11 @@ the piece that joins them is the force a strain leaves behind.
   crystal class that leaves no direction invariant. A class that does leave one invariant is
   refused by name rather than reported with a term missing.
 - **Clamped-ion only**, as above.
+- **Norm-conserving pseudopotentials.** Nothing in the calculation is specific to
+  them, and the closely related effective charges of notebook 19 work with every
+  kind. What is missing is a crystal to check it on: a softer pseudopotential is
+  available here only for materials that have an inversion centre, and those have no
+  piezoelectric response to compare.
 - **Insulators**, and everything else the linear-response solver needs: no metals, no spin
   spiral, no magnetic field, and a shifted k-grid only where the symmetry is kept.
 

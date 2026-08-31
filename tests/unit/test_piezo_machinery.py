@@ -15,17 +15,21 @@ import numpy as np
 import pytest
 
 from pypresso.io.pwin import read_pw_input
+from pypresso.pseudo import read_upf
 from pypresso.response.piezo import (
     VOIGT,
     polar_direction,
     require_a_nonpolar_crystal,
+    require_a_piezoelectric_tensor,
     to_voigt,
 )
+from pypresso.scf import Calculation
 from pypresso.system import build_system
 
 pytestmark = [pytest.mark.unit]
 
 CASES = Path(__file__).resolve().parents[1] / "data" / "qe"
+PSEUDO = Path(__file__).resolve().parents[1] / "data" / "pseudo"
 
 
 def _crystal(case: str):
@@ -73,3 +77,33 @@ def test_a_cubic_crystal_admits_no_spontaneous_polarization():
     for case in ("alas-raman", "si-electrostriction"):
         assert np.abs(polar_direction(_crystal(case))).max() < 1e-10
         require_a_nonpolar_crystal(_crystal(case))
+
+
+def _calculation(case: str):
+    """A real ``Calculation``, which is what the guard chain reads."""
+    system = build_system(read_pw_input(CASES / f"{case}.in"))
+    pseudos = tuple(
+        read_upf(PSEUDO / sp.pseudo_file) for sp in system.structure.species
+    )
+    return Calculation(system, pseudos)
+
+
+@pytest.mark.parametrize("case, message", [
+    ("si2-us", "ultrasoft"),
+    ("al-metal", "metal"),
+    ("o-atom-fixed-lsda", "nspin = 2"),
+    ("germanene-soc", "noncollinear"),
+])
+def test_the_regimes_this_was_never_run_in_are_refused(case, message):
+    """Every one of these would return a number, and none of them is measured.
+
+    The guard chain is deliberately made of the *bare* forms: the linear
+    response solver runs for a metal and for two spin channels, and this
+    assembly on top of it has been run with neither, so the flags that would
+    say otherwise are not passed. An ultrasoft dataset is the interesting one --
+    nothing in the assembly is norm-conserving, and what is missing is a
+    non-centrosymmetric ultrasoft crystal to measure it on, since a
+    centrosymmetric one agrees with zero whatever is wrong.
+    """
+    with pytest.raises(NotImplementedError, match=message):
+        require_a_piezoelectric_tensor(_calculation(case))

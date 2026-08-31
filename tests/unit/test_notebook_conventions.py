@@ -114,6 +114,7 @@ HAS_A_FACADE_METHOD = {
     "run_absorption": "get_absorption",
     "elastic_constants": "get_elastic_constants",
     "electrostriction": "get_electrostriction",
+    "piezoelectric_tensor": "get_piezoelectric_tensor",
     "effective_mass": "get_effective_mass",
     "run_berry_curvature": "get_berry_curvature",
     "run_z2": "get_z2",

@@ -129,6 +129,7 @@ __all__ = [
     "piezoelectric_zstar_eu_style",
     "piezoelectric_from_strain_response",
     "require_a_piezoelectric_tensor",
+    "require_a_measured_dataset",
     "require_a_nonpolar_crystal",
     "polar_direction",
     "to_voigt",
@@ -233,11 +234,48 @@ def require_a_nonpolar_crystal(calculation) -> None:
         )
 
 
+def require_a_measured_dataset(calculation) -> None:
+    """Norm-conserving only, and it is a gap rather than a missing term.
+
+    Nothing in the assembly is norm-conserving. The density and ``becsum`` are
+    handed to the functional as builders that carry the strain, which is what
+    the strain response already needed; ``qq_ij`` has no cell in it, so the
+    constraint stays strain-independent for an ultrasoft dataset exactly as it
+    is for a norm-conserving one; and the *displacement* leg of the same
+    assembly is validated on all three pseudopotential kinds, being the Born
+    charge.
+
+    **What is missing is a case to measure it on.** Every ultrasoft and PAW
+    dataset committed here belongs to a centrosymmetric crystal, whose
+    piezoelectric tensor vanishes identically -- so running one says nothing at
+    all, and the three routes agree on zero whatever is wrong. And a plausible
+    argument about the strain coordinate is exactly what P44 falsified by
+    measurement on the third derivative: two of its ingredients transferred,
+    the residue did not, and it was localised only because it could be
+    measured. So this is refused by name rather than run, and lifting it is one
+    non-centrosymmetric ultrasoft dataset plus the tests that already exist.
+    """
+    if calculation.is_ultrasoft:
+        raise NotImplementedError(
+            "the piezoelectric tensor is not implemented for an ultrasoft or "
+            "PAW dataset: nothing in the assembly is norm-conserving and the "
+            "displacement leg of it (the Born charge) is validated on all "
+            "three kinds, but every ultrasoft and PAW case committed here is "
+            "a centrosymmetric crystal whose tensor vanishes identically, so "
+            "the strain leg has never been measured on one. A non-polar, "
+            "non-centrosymmetric ultrasoft crystal is what it needs"
+        )
+
+
 def require_a_piezoelectric_tensor(calculation) -> None:
     """Everything that makes the mixed derivative above not be the answer."""
     require_a_symmetrisable_response(calculation)
+    # Bare, not ``metals=True``/``spin_polarized=True``: the *solve* runs for a
+    # metal and for two spin channels, and this assembly on top of it has been
+    # run with neither.
     require_a_sternheimer_regime(calculation)
     require_a_differentiable_cell(calculation)
+    require_a_measured_dataset(calculation)
     require_a_nonpolar_crystal(calculation)
 
 

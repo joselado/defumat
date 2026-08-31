@@ -472,6 +472,12 @@ invariant vector — which is what is checked, from the *structure* rather than 
 `nosym` run's symmetry list). **Clamped-ion**, which is also what Elk's task computes; the
 internal-strain term that makes it comparable with experiment nearly cancels it for
 zincblende, and its one missing ingredient is a two-coordinate frozen functional `E(eps, u)`.
+And **ultrasoft or PAW**, which is a gap rather than a missing term: nothing in the assembly
+is norm-conserving and the *displacement* leg of it is validated on all three kinds, but
+every ultrasoft and PAW case committed here is **centrosymmetric**, whose tensor vanishes
+identically — so running one agrees with zero whatever is wrong, and P44 is the reason a
+plausible argument about the strain coordinate is not enough on its own. Lifting it is one
+non-centrosymmetric ultrasoft dataset.
 
 **Outstanding:** Wyckoff input, the dynamical matrix of an
 ultrasoft or PAW *metal*, the strain coordinate's third derivatives on ultrasoft and PAW
@@ -921,7 +927,7 @@ knobs that are this code's own — `mbj_c`, `spiral_q`,
 ## Tutorial notebooks
 
 **That rewrite is finished** (`PLAN.md` P49), and what enforces it now is
-`tests/unit/test_notebook_conventions.py`: **26 of the 29 are in its `REWRITTEN`
+`tests/unit/test_notebook_conventions.py`: **27 of the 30 are in its `REWRITTEN`
 set** and held to the whole skeleton, `JVP_DEBT` is empty, and the three that are
 not — `01`, `03` and `17` — are the under-the-hood tier by design, whose internals
 are their subject. `REWRITTEN` **only ever grows**, so a new notebook joins it in
