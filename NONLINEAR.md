@@ -330,6 +330,21 @@ triples, and it has its own unit test on random matrices.
   smearing width and that is the rule adopted. **The tensor was exactly `-43m`
   throughout**, to five figures: §5's first bullet, for the third time.
 
+**The overall scale is pinned against the literature and the convention is
+declared.** Every other check is blind to a constant, which is P50's trap here.
+AlAs's first peak converges to **35.0 uA/V^2 at 4.17 eV** (about 1% in both the
+cutoff and the band count), where published
+calculations across the fourteen III-V and II-VI zincblende semiconductors span
+14 (CdSe, smallest) to 83 (AlSb, largest) and find the aluminium compounds the
+strongest of the family: a factor of two either way breaks that *ordering*
+rather than moving the number. And the convention is IATS18's
+`j = 2 sigma E E`, quoted from its text -- Cook, Fregoso, de Juan, Coh and Moore
+(arXiv:1507.08677) write `J = sigma E E` and report numbers twice as large for
+the same physics, so any comparison against a paper that does not state its
+normalisation is worthless to better than a factor of two. This matters for
+everything else in this corner: an injection current and a `chi^(2)` will have
+the same ambiguity, and the same two checks answer it.
+
 **Still open in this corner**, in the order they are cheap: the **injection current**
 (CPGE), which needs *nothing* new — the same `v_nm` and the diagonal `Delta^a` — but is
 identically zero in every non-gyrotropic class, `-43m` included, so it has no committed

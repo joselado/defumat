@@ -1123,13 +1123,30 @@ by accident --- no absorption, no photocurrent.
 \textbf{All three are blind to an overall constant}, and this document says so
 rather than leaving it to be discovered: a $\sigma$ wrong by a factor of two is
 still exactly $\bar 43m$, still zero on silicon and still zero below the gap.
-What \emph{is} anchored is the \textbf{spin sum} --- the same cell run
+Two further checks close that gap. The \textbf{spin sum} --- the same cell run
 \code{nspin} = 1 and as a two-component spinor gives the same tensor to
-\textbf{4.6e-9}, with the peak ratio 1.000000 --- which is the check that
-catches a factor of two there. The \emph{convention} is not anchored: the
-absolute scale is good to the published order of magnitude for a zincblende
-semiconductor and no better, and pinning it wants a model with a closed form
-through the same array core.
+\textbf{4.6e-9}, peak ratio 1.000000. And the \textbf{overall scale against the
+published literature}, where the \emph{ordering} is what makes the comparison
+sharp rather than merely consistent. AlAs's first peak converges to
+\textbf{35.0} $\mu$A/V$^2$ at 4.17 eV (33.9 at \code{ecutwfc} = 16, then 33.7,
+34.8 and 35.0 at 22 with 14, 22 and 30 bands), where calculations across the
+fourteen III--V and II--VI zincblende semiconductors span 14 $\mu$A/V$^2$ (CdSe,
+smallest) to 83 (AlSb, largest) and find the aluminium compounds the strongest of
+the family. A factor of two either way breaks that ordering rather than moving
+the number: 17 would put AlAs at the bottom of the family, below the cadmium
+chalcogenides, and 70 would put it beside AlSb, the heaviest and narrowest-gap
+member. The number to compare is the peak below about 6 eV, which is the range
+published spectra cover. That sweep also showed \code{truncation} to be
+\emph{predictive} rather than merely indicative: it falls 3.5\% to 1.0\% over the
+band sweep while the value moves 3.9\%.
+
+\textbf{The convention is declared, because the literature has two.} What is
+implemented is $j^a = 2\sigma^{abc}(0;\omega,-\omega)\,
+\mathrm{Re}[\mathcal E_b(\omega)\mathcal E_c(-\omega)]$, the definition of the
+paper the formulae above come from. Some authors write
+$J = \sigma\mathcal E\mathcal E$ and report numbers twice as large for the same
+physics, so a comparison against a paper that does not state its normalisation
+is worth nothing to better than a factor of two.
 
 \begin{refuses}
 \textbf{Refuses.} \textbf{Ultrasoft and PAW}, for the Kubo curvature's reason

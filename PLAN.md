@@ -7832,19 +7832,46 @@ plateaus is a bug, and that distinction is what the test asserts.
   third time, and the reason the class check is documented in its own test as
   weak.
 
-**The absolute scale is anchored in one place only, and the docs say so.**
-Every check above is blind to an overall constant -- a `sigma` wrong by a factor
-of two is still exactly `-43m`, still zero on silicon and still zero below the
-gap, which is P50's trap in this module's coordinates. What *is* pinned is the
-**spin sum**: the same AlAs cell run `nspin = 1` (14 bands) and as a
+**The absolute scale needed its own checks, because every other one is blind to
+an overall constant** -- a `sigma` wrong by a factor of two is still exactly
+`-43m`, still zero on silicon and still zero below the gap, which is P50's trap
+in this module's coordinates. Two things pin it.
+
+The **spin sum**: the same AlAs cell run `nspin = 1` (14 bands) and as a
 two-component spinor (28) gives the same tensor to **4.6e-9**, peak ratio
 1.000000 -- P52's construction, where the same factor of two is a factor of four
 and invisible in the shape. It is also the only test behind the README row's
-claim that a spinor run works at all. The **convention** (Eq. (8)'s
-`J = 2 sigma E E` against the other normalisation) is *not* pinned, and pinning
-it wants a model with a closed form -- Rice-Mele, Fregoso, Morimoto and Moore,
-PRB **96**, 075421 -- through the same array core, which `shift_integrand` is a
-pure function of arrays precisely to allow. That is the first thing to do next.
+claim that a spinor run works at all.
+
+The **published literature, with the ordering doing the work**. AlAs's first
+peak converges to **35.0 uA/V^2 at 4.17 eV** -- 33.9 at `ecutwfc = 16`, then
+33.7, 34.8 and 35.0 at 22 with 14, 22 and 30 bands, so about 1% in both
+parameters. Calculations across the fourteen III-V and II-VI zincblende
+semiconductors span **14 uA/V^2** (CdSe, smallest) to **83** (AlSb, largest),
+and find the *aluminium* compounds the strongest responders of the family and
+the II-VI compounds the weakest (Opt. Quantum Electron. **58**,
+10.1007/s11082-026-08937-7). That is what makes the comparison sharp rather than
+merely consistent: a factor of two either way breaks the ordering rather than
+moving the number, since 17 would put AlAs at the bottom of the family, below
+the cadmium chalcogenides, and 70 would put it beside AlSb, the heaviest and
+narrowest-gap member and the one the trend says should be largest.
+
+**Two things from that sweep are worth keeping.** The number to compare is the
+peak *below about 6 eV*, the range published spectra cover; the global maximum
+of a wider window sits at 8.69 eV, where a band count of this size is least
+trustworthy and which nobody quotes. And `ShiftCurrent.truncation` turned out to
+be **predictive of the real error rather than merely indicative** -- it falls
+3.5% to 1.0% across the band sweep while the value moves 3.9% -- which is the
+first evidence that the diagnostic is worth what it claims.
+
+**The convention is declared rather than assumed, because the literature has
+two of them.** What is implemented is IATS18's Eq. (1),
+`j^a = 2 sigma^abc(0; w, -w) Re[E_b(w) E_c(-w)]` -- quoted from the paper's own
+text rather than read off a figure -- which is also arXiv:2308.09641's. Cook,
+Fregoso, de Juan, Coh and Moore (arXiv:1507.08677) write `J = sigma E E` and
+report numbers twice as large for the same physics. So a comparison against a
+paper that does not state its normalisation is worth nothing to better than a
+factor of two, and this one is against the first convention.
 
 **The numbers.** AlAs `sigma^xyz` is **-1.78e-5 A/V^2 at 4 eV** and **-2.76e-5
 at 5 eV**, stable across 4x4x4, 6x6x6 and 8x8x8 meshes, with a peak of about
@@ -7873,7 +7900,7 @@ Elk's `nonlinopt.f90` as a real reference; and the **Berry-curvature dipole**,
 which is a Fermi-surface integral of a k-derivative of an already-singular
 quantity and is the one entry a direct plane-wave code cannot honestly converge.
 
-**Not done and owed**: the notebook, and `PERFORMANCE.md`. The latter has no
+**Not done and owed**: `PERFORMANCE.md`. The latter has no
 reference implementation to be timed against — the rule names features taken
 from QE or Elk and this is taken from neither — so what belongs there is the
 absolute cost and its scaling in `nbnd`, which is quadratic in the pair sum and

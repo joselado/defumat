@@ -73,6 +73,7 @@ instead, which means the physics is selected in the input file rather than at th
 | The piezoelectric tensor | `get_piezoelectric_tensor()` | [28](28_piezoelectricity.ipynb) |
 | Optical conductivity, the Kerr angle, the anomalous Hall effect | `get_optical_conductivity()` | [30](30_magneto_optics.ipynb) |
 | Where a metal will go unstable: Fermi-surface nesting | `get_nesting()` | [31](31_fermi_surface_nesting.ipynb) |
+| A photocurrent with no junction: the bulk photovoltaic effect | `get_shift_current()` | [32](32_shift_current.ipynb) |
 | An effective mass | `get_effective_mass()` | [29](29_effective_mass_and_angular_momenta.ipynb) |
 
 ### Topology
@@ -140,6 +141,7 @@ want a number.
 | [`29_effective_mass_and_angular_momenta.ipynb`](29_effective_mass_and_angular_momenta.ipynb) | Band curvature as an effective mass, and site-resolved `<L>`, `<S>` and `<J>` against Elk |
 | [`30_magneto_optics.ipynb`](30_magneto_optics.ipynb) | Light reflected off a magnet comes back rotated: nickel's Kerr angle, and the two ingredients it needs |
 | [`31_fermi_surface_nesting.ipynb`](31_fermi_surface_nesting.ipynb) | Where a metal will go unstable: a hydrogen chain nesting at 2k_F, and the spin spiral that relaxes to the same pitch |
+| [`32_shift_current.ipynb`](32_shift_current.ipynb) | A solar cell with no junction: AlAs carries a current under light where silicon's inversion centre forbids one |
 
 ## Conventions
 
@@ -228,14 +230,15 @@ workstation core, slowest last:
 
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
-| `01` | 5 | `00` | 22 | `15` | 31 | `29` | 59 |
-| `09` | 6 | `07` | 22 | `24` | 31 | `13` | 69 |
-| `02` | 8 | `06` | 23 | `28` | 33 | `11` | 81 |
-| `16` | 9 | `12` | 30 | `31` | 34 | `14` | 89 |
-| `03` | 10 | `25` | 28 | `23` | 35 | `26` | 107 |
-| `05` | 10 | `17` | 29 | `19` | 47 | `30` | 131 |
-| `04` | 12 | `18` | 29 | `10` | 50 | `08` | 171 |
-| `22` | 12 | `21` | 30 | `20` | 57 | `27` | 178 |
+| `01` | 5 | `07` | 22 | `28` | 33 | `11` | 81 |
+| `09` | 6 | `06` | 23 | `31` | 34 | `14` | 89 |
+| `02` | 8 | `25` | 28 | `23` | 35 | `26` | 107 |
+| `16` | 9 | `17` | 29 | `32` | 35 | `30` | 131 |
+| `03` | 10 | `18` | 29 | `19` | 47 | `08` | 171 |
+| `05` | 10 | `12` | 30 | `10` | 50 | `27` | 178 |
+| `04` | 12 | `21` | 30 | `20` | 57 |  |  |
+| `22` | 12 | `15` | 31 | `29` | 59 |  |  |
+| `00` | 22 | `24` | 31 | `13` | 69 |  |  |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two
 hand-built linear solves and a second self-consistent run that were demonstrating

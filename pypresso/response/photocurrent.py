@@ -174,16 +174,39 @@ DEGENERACY_TOL = 1.0e-8
 #: form, the silicon zero and the below-gap vanishing would all survive a
 #: ``sigma`` wrong by a factor of two. That is P50's trap in this module's
 #: coordinates -- "the wrong one is exactly zincblende, exactly symmetric,
-#: vanishes on silicon and is twice too large". What is anchored today is the
-#: **spin sum**, by running a cell with no magnetization as ``nspin = 1`` and
-#: as a spinor and requiring the same answer, which is the check P52 used for
-#: the same factor. What is **not** anchored is the convention itself -- Eq.
-#: (8)'s ``J = 2 sigma E E`` against the other common normalisation -- so the
-#: absolute scale is good to the published order of magnitude for a zincblende
-#: semiconductor and no better. Pinning it wants a model with a closed form
-#: (Rice-Mele; Fregoso, Morimoto and Moore, PRB **96**, 075421) through the
-#: same array core, which :func:`shift_integrand` is a pure function of arrays
-#: precisely to allow.
+#: vanishes on silicon and is twice too large". The **spin sum** is anchored by
+#: running a cell with no magnetization as ``nspin = 1`` and as a spinor and
+#: requiring the same answer, which is the check P52 used for the same factor.
+#:
+#: **The overall scale is anchored against the published literature, and the
+#: ordering is what makes that sharp.** AlAs's first peak converges to
+#: **35.0 uA/V^2 at 4.17 eV**: 33.9 at ``ecutwfc = 16``, then 33.7, 34.8 and 35.0
+#: at 22 with 14, 22 and 30 bands. First-principles calculations across the
+#: fourteen III-V and II-VI zincblende semiconductors span **14 uA/V^2** (CdSe,
+#: the smallest) to **83** (AlSb, the largest), and find the *aluminium*
+#: compounds the strongest responders of the family and the II-VI compounds the
+#: weakest (Opt. Quantum Electron. **58**, 10.1007/s11082-026-08937-7). A factor
+#: of two either way breaks that ordering rather than merely moving the number:
+#: 17 would put AlAs at the very bottom of the family, below the cadmium
+#: chalcogenides, and 70 would put it beside AlSb, the heaviest and
+#: narrowest-gap member and the one the trend says should be largest.
+#:
+#: **Two things about that sweep are worth keeping.** The number to compare is
+#: the peak *below about 6 eV*, the range published spectra cover; the global
+#: maximum of a wider window sits at 8.69 eV, where a band count of this size is
+#: least trustworthy, and it is not a quantity anyone quotes. And
+#: :attr:`ShiftCurrent.truncation` turned out to be **predictive of the real
+#: error rather than merely indicative**: it falls 3.5% -> 1.0% over that band
+#: sweep while the value moves 3.9%, so reading it is worth what it claims.
+#:
+#: **The convention is declared because the literature has two of them.** What is
+#: implemented is IATS18's Eq. (1),
+#: ``j^a = 2 sigma^abc(0; w, -w) Re[E_b(w) E_c(-w)]``, which is also the
+#: convention of arXiv:2308.09641. Cook, Fregoso, de Juan, Coh and Moore
+#: (arXiv:1507.08677) write ``J = sigma E E`` and report numbers twice as large
+#: for the same physics, so a comparison against a paper that does not state
+#: its normalisation is worth nothing to better than a factor of two. The
+#: comparison above is against the first convention.
 SIGMA_SI = 1.4049e-5
 
 
