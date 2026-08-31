@@ -3220,26 +3220,83 @@ AlAs, `a = 10.575` bohr, `ecutwfc = 30` (`npwx = 869`), the whole unshifted
 6x6x6 grid (216 points), 22 bands, 200 frequencies. One core,
 `OMP_NUM_THREADS=1`, the affinity mask set before JAX is imported.
 
+**Read the absolute stage times as +-20 per cent and the ratios as sound.**
+This workstation was shared while they were taken -- a second, unrelated test
+suite was running most of the time, load average 12 to 15 -- so the stage table
+below and the Elk row further down are the right size and the wrong third
+digit. The **speedup** table in the next section does not have that problem:
+its two arms were run back to back and pinned to the same single core, so the
+contention falls on both equally. A quiet re-measurement of the stage table is
+the one thing this entry still owes.
+
 | stage | s |
 |---|---|
 | SCF on the input's own 4x4x4 grid | 11.9 |
-| NSCF, 22 bands on 216 points | 38.2 |
-| **the tensor itself** | **24.5** |
-| the `truncation` diagnostic (the tensor a second time, at 16 bands) | 24.5 |
-| **end to end** | **96.2** |
+| NSCF, 22 bands on 216 points | 34.6 |
+| `dH/dk` matrix elements, 3 directions x 216 k | 12.3 |
+| the two k-sums (the tensor, and `truncation`'s re-run at 16 bands) | 3.8 |
+| **end to end** | **62.6** |
 
-**The diagnostic costs as much as the answer**, which is worth knowing before
-reading the last row as the price of the physics: `truncation` re-runs the whole
-sum with the top quarter of the bands dropped, so a run that does not want it is
-a little over 70 s. It is kept on by default because the band count is this
-quantity's convergence parameter and no symmetry check sees a truncated sum.
+**The velocity matrix elements are the second-largest line and were mistaken
+for the tensor.** An earlier version of this table put 24.5 s against "the
+tensor" and another 24.5 against the `truncation` diagnostic; both were wrong,
+and the way they were wrong is worth recording because it is the ordinary
+failure of timing a call rather than a computation. `second_harmonic` costs
+24.5 s in total, of which `VelocityOperator.matrix_elements` is 12.3 and the
+two k-sums are 3.8; `truncation` re-runs only the sum, so it costs about 1.5 s
+and not the price of the whole quantity again. **Timing an entry point measures
+whatever it happens to call**, and here that was 69 per cent something else.
 
-**The tensor is `O(nbnd^3)` per k-point and per cartesian triple**, and that is
-the axis to watch: 18 independent triples times 216 k-points times `22^3`. The
-frequency axis is nearly free by comparison -- the coefficient matrices are built
-once, before it is touched, which is `nonlinopt.f90`'s own layout and the reason
-a 200-point spectrum costs no more than a single frequency. Doubling the bands
-costs eight times; doubling the frequencies costs almost nothing.
+**Where the time actually goes is the NSCF and the velocity operator**, which
+is the same shape P51 and P53 both have: the second-order sum on top of a set
+of states is the cheapest stage of the four. So the lever is the eigensolver
+and the `k_batch` dial, not the assembly.
+
+### What the assembly costs, and what it used to
+
+Per k-point, jitted, one core, 200 frequencies:
+
+| bands | as first written | now | |
+|---|---|---|---|
+| 22 | 23.3 ms | **8.9** | 2.6x |
+| 30 | 54.5 | **17.0** | 3.2x |
+| 40 | 156.3 | **31.6** | 4.9x |
+
+The answer is unchanged to **3e-15**, which is the re-association's own
+round-off, and the literal transcription of `nonlinopt.f90`'s triple loop in
+`tests/unit/test_shg_machinery.py` is what both forms are checked against.
+
+**Only `chi_II` needs a sum over the intermediate state.** Its denominator
+`2E_l - E_n - E_m` couples all three band indices and does not factorise. Every
+`l`-dependent factor in `eta_II` and `sigma_II` is either linear in `E_l` or
+independent of it, so each of their sums is a pair of matrix products --
+`sum_l r^i[.,l] r^j[l,.]` and the same with `E_l` inserted. Eighteen of those
+cover all eighteen cartesian triples, so three `nb^3` arrays per triple become
+eighteen `nb^3` matrix multiplications per k-point: BLAS work rather than
+strided elementwise work, and no `nb^3` temporary at all. `chi_II`'s own
+summand is then never materialised either -- `cc2` needs only its sum over `l`,
+which carries no current direction, and the two `cc1` accumulations are
+contractions over `n` and over `m`. What is left is one `nb^3` object per
+*field pair* rather than per triple: six per k-point instead of eighteen.
+
+**Two things that looked like optimizations and were not, both measured before
+being believed.** Sharing the three velocity tangents through `jax.linearize`
+instead of three `jvp` calls gives a bit-for-bit identical answer in **6.33 s
+against 6.35** -- XLA had already deduplicated the common primal. And hoisting
+the shared denominators and field-pair products into named variables, on its
+own, was worth 10 per cent at 22 bands and **minus 12 at 40**, because those
+too were already common subexpressions and the stacking cost more than it
+saved. The rule `CLAUDE.md` states -- that an idiomatic-JAX rewrite which looks
+equivalent has been slower more than once -- held both times. What did work is
+the one change XLA cannot make on its own, because it is an algebraic
+re-association across a sum rather than a common subexpression.
+
+**And one that works and is refused.** Wrapping `matrix_elements` in
+`eqx.filter_jit` is 2x -- 12.3 s to 6.4 warm, bit-for-bit identical -- and
+takes the peak resident set from **1.33 GB to 8.96**. That is the trade this
+file exists to prevent: the unjitted path streams over k-points through
+`over_kpoints`, and jitting the whole 216-point call materialises what the
+streaming was avoiding. It is left unjitted, and `k_batch` is the dial.
 
 ### Against Elk, which is where this one was taken from
 
@@ -3249,11 +3306,11 @@ each. Elk ran tasks 0, 120 and 125 in one invocation from nothing.
 | | Elk | pypresso |
 |---|---|---|
 | ground state | — | 11.9 s |
-| the states the sum runs over | — | 38.2 s (NSCF, 22 bands) |
-| the tensor | — | 24.5 s |
-| **from atomic densities to `chi^(2)(omega)`** | **10.1 s** | **71.7 s** (96.2 with the diagnostic) |
+| the states the sum runs over | — | 34.6 s (NSCF, 22 bands) |
+| `dH/dk` and the tensor | — | 16.1 s |
+| **from atomic densities to `chi^(2)(omega)`** | **10.1 s** | **62.6 s** |
 
-**Elk is about seven times faster here and it is carrying more bands**, which is
+**Elk is about six times faster here and it is carrying more bands**, which is
 the entry's uncomfortable half and the reason the rule says to measure it: 37
 second-variational states against 22. Its three stages could not be separated
 without re-running each against a state on disk, so only the bottom row is a
@@ -3269,16 +3326,10 @@ momentum matrix element at all -- which is a correctness choice rather than a
 performance one, `[H, r] = p` failing for a nonlocal pseudopotential, and it is
 the one line of `nonlinopt.f90` this code deliberately does not transcribe.
 
-**Where the time actually goes is the NSCF and not the tensor**, which is the
-same shape P51 and P53 both have: more than half of it is diagonalising 22 bands
-at 216 k-points, and the second-order sum on top of that is 24.5 s. So the lever
-is the eigensolver and the k-batching dial, not the assembly.
-
-**Peak.** The triple sum holds `nbnd^3` complex numbers per k-point in the chunk
--- 22^3 x 16 B = 170 kB, times `k_batch`, times a handful of live temporaries --
-so the working set is the NSCF's wavefunctions (`nk x nbnd x npwx` = 216 x 22 x
-869 x 16 B = 66 MB) and nothing the tensor adds. At 40 bands the triple sum is
-still only 1 MB per k-point, so `nbnd` costs time here rather than memory.
+**Peak.** One `nb^3` complex array per field pair in flight -- 40^3 x 16 B =
+1 MB at 40 bands, times `k_batch` -- against the NSCF's wavefunctions at
+`nk x nbnd x npwx` = 216 x 22 x 869 x 16 B = 66 MB. So `nbnd` costs time here
+and not memory, and the working set is the states' and nothing the tensor adds.
 
 ## History
 

@@ -8007,6 +8007,42 @@ PAW (`dS/dk`), a spin spiral, a symmetry-reduced wedge (a polar rank-3 tensor),
 DFT+U (the Hubbard term carries a velocity of its own), a **metal**, and
 `nspin = 2`. A **spinor** run is supported and tested.
 
+**The assembly was then made 2.6 to 4.9 times faster at no change of answer**
+(3e-15, which is the re-association's own round-off), and what is worth carrying
+is which of four candidate optimizations worked. **Only `chi_II` needs a sum
+over the intermediate state**: its denominator `2E_l - E_n - E_m` couples all
+three band indices and does not factorise, where every `l`-dependent factor in
+`eta_II` and `sigma_II` is either linear in `E_l` or independent of it, so each
+of their sums is a pair of matrix products. Eighteen of those cover all
+eighteen cartesian triples, so three `nb^3` arrays *per triple* become eighteen
+`nb^3` GEMMs *per k-point*. `chi_II`'s own summand then need not be
+materialised either, leaving one `nb^3` object per **field pair** rather than
+per triple. Per k-point at 200 frequencies, one core: 23.3 ms to 8.9 at 22
+bands, 54.5 to 17.0 at 30, **156.3 to 31.6 at 40**.
+
+**Three of the four candidates were wrong and each was measured before being
+believed**, which is the standing rule in `CLAUDE.md` about idiomatic-JAX
+rewrites earning its keep twice more. Sharing the three velocity tangents
+through `jax.linearize` rather than three `jvp` calls: **6.33 s against 6.35**,
+bit for bit — XLA had already deduplicated the common primal. Hoisting the
+shared denominators and the field-pair products into named variables, on its
+own: +10 per cent at 22 bands and **-12 at 40**, because those were common
+subexpressions too and the stacking cost more than it saved. And wrapping
+`matrix_elements` in `eqx.filter_jit`, which *does* work — 12.3 s to 6.4 warm,
+bit for bit — and takes the peak resident set from **1.33 GB to 8.96**, so it
+is refused: the unjitted path streams over k-points and jitting the whole call
+materialises what the streaming avoids. The one that worked is the one XLA
+cannot find, being an algebraic re-association across a sum rather than a
+common subexpression.
+
+**A timing of an entry point measures whatever it happens to call**, and this
+phase's first `PERFORMANCE.md` table got that wrong in public: it attributed
+24.5 s to "the tensor" and another 24.5 to the `truncation` diagnostic, where
+`second_harmonic`'s 24.5 s is 12.3 of `VelocityOperator.matrix_elements`, 3.8
+of the two k-sums, and the rest compilation — and `truncation` re-runs only the
+sum, so it costs about 1.5 s rather than the whole quantity again. Corrected in
+the same file.
+
 **Still open in this corner**, unchanged from P53 bar this entry: the
 **injection current** (CPGE), which needs nothing new but has no committed
 gyrotropic cell; the **Berry-curvature dipole**; and **frequency dependence**
