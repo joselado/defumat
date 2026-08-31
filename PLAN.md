@@ -7033,6 +7033,141 @@ delivers on its own. Twenty-nine was never the problem; the shape and the index
 were. The set ends at 29 either way: one merge, one addition.
 
 
+### P50 — The piezoelectric tensor: the third thing Elk has and `pw.x` does not. ✅ DONE, clamped-ion.
+
+`pypresso/response/piezo.py`. Elk's task 380 (`piezoelt.f90`); the third entry
+taken from `ELK-FEATURES.md`, and the first that fails that file's own
+cheapness filter — it is a Sternheimer-scale computation rather than an
+NSCF-scale one. It is here anyway because the *implementation* cost is one
+`jvp` of code that already exists, and because it is the one entry where
+autodiff does the work rather than an assembly.
+
+**What it is.** `e_(k)ij = dP_k/d(eps_ij) = d(sigma_ij)/dE_k`: the polarization
+a strain induces, which is the same number as the stress a field induces
+because a mixed second derivative does not care which leg is taken first,
+
+    e_(k)ij = -(1/Omega) d^2 E / d(eps_ij) dE_k.
+
+The equivalence and the choice between the two are Baroni, de Gironcoli, Dal
+Corso and Giannozzi's review (`cond-mat/0012092` §II.C.2), which also records
+that the stress-under-a-field form is what de Gironcoli, Baroni and Resta took
+for the III-V compounds (PRL **62**, 2853 (1989)).
+
+**It is P24b with one coordinate changed, and that is the whole phase.** A Born
+charge is `Z* = dF/dE` and `pypresso/response/born.py` computes it as one `jvp`
+of the *force* along the field's response. The force is `jax.grad` of the
+frozen-state energy in the positions; the stress is `jax.grad` of the *same*
+functional in a strain. So the piezoelectric tensor is one `jvp` of the stress
+along the same field response — three of them, one per field direction, on top
+of a dielectric constant that was going to be solved anyway.
+
+**The strain leg is cheaper than the displacement leg it copies, and the reason
+is the orthonormality constraint.** `<psi|S|psi>` is a sum over the plane-wave
+sphere of `|c_G|^2` and the sphere is a set of *integers*; ultrasoft's `qq_ij`
+is an atom-centred integral over all space with no cell in it. The constraint is
+therefore strain-independent **as a function of the states as well**, so its
+mixed derivative vanishes identically and the multiplier response `dLambda` —
+which is `psidspsi`, `add_dkmds` and `add_for_charges`, three of the four things
+P24b had to supply — has nothing to contribute. What is left is one term.
+
+**Three routes, and they are how the phase is validated, because there is no
+reference.** `pw.x` computes no piezoelectric tensor at all: the word occurs
+once in the vendored tree, in a citation of Vanderbilt's paper in a comment in
+`PW/src/bp_c_phase.f90`. Elk's `piezoelt.f90` reaches it by a **finite
+difference of the Berry-phase polarization over one full ground state per strain
+tensor**, with a `2 pi` branch fix-up between the two — `nstrain` self-consistent
+calculations where this is one, and it is clamped-ion in the same sense (the
+atoms are carried by the lattice, `tshift = .false.`, and nothing relaxes).
+
+| route | what it is | AlAs `e_14`, C/m² |
+|---|---|---|
+| the implementation | `jvp` of the stress along `dpsi^E` | **-0.7637852276** |
+| `zstar_eu.f90`'s contraction, strain label | `-2/Omega sum w Re<dpsi^E \| dH/d(eps) psi>` | -0.7637852276 (**6.2e-15**) |
+| the other ordering | `-2/Omega sum w Re<b^E \| dpsi^(eps)>` | -0.7637853253 (**1.3e-7**) |
+
+The second needs no strain response at all — it is three `jvp` calls of `H|psi>`
+and a contraction, 1.5 s against the field response's 11 — and it is the
+transcribed expression put beside the differentiated one, the arrangement
+`force_us` and `stres_knl` are already in. The third costs six more Sternheimer
+solves and is the only one that puts the **strain** response on the screened
+side, so its 1.3e-7 is that response's own convergence rather than the
+assembly's.
+
+**The trap is a factor of two and it is Rydberg's `e^2`.** `dielec.f90`
+contracts the *same* field response with a **4** in front
+(`response/efield.py:_assemble`) and `zstar_eu.f90` contracts it with a **2**.
+Both are right: a susceptibility is a Coulomb-normalised quantity and a
+Rydberg-unit code puts `e^2 = 2` there, where a bare mixed second derivative
+does not — and a piezoelectric constant is a mixed second derivative, in units
+of `e/bohr^2`, exactly as the Born charge it copies is in units of `e`. Taking
+the 4 gives a tensor that is exactly zincblende, exactly symmetric in its two
+strain labels, vanishes on silicon, agrees between the wedge and the closed
+grid, and is **twice too large**. No symmetry check sees it; what said so is
+that the two routes disagreed by exactly 2.0000005.
+
+**What anchors the sign, the field's normalisation and the volume.** Nothing
+external validates a piezoelectric tensor here, so what stands in for one is
+that **the same assembly run in the position coordinate is the Born charge**:
+`born_charges_from_stress_route` is `clamped_ion_piezoelectric` with
+`at_positions` where it has `at_strain`, and for a norm-conserving dataset
+`Z_a delta_ij` minus it *is* `Z*` — 1.92460 and -3.18116 against the vendored
+`ph.x`'s 1.92461 and -3.18098 on this cell. A wrong sign, a wrong field
+normalisation or a missing volume would show there.
+
+**Proper against improper, and why it is a refusal rather than a correction.**
+What the `jvp` gives is the *improper* tensor, the bare mixed second derivative.
+A measurement sees Vanderbilt's proper piezoelectric response (J. Phys. Chem.
+Solids **61**, 147 (2000)), and the two differ by
+`delta_ki P_j - delta_ij P_k` — terms that arise because a strain carries the
+charge distribution with the cell (`d(Omega P_k)/d(eps_ij)` at frozen states is
+`delta_ki Omega P_j`) and changes the volume that divides it. **Both vanish
+whenever the two Cartesian labels they pair are different**, so `e_14` of a
+zincblende crystal — its only independent component — carries no ambiguity
+whatever the polarization is; and both vanish for *every* component of a crystal
+whose class admits no invariant vector. So a **polar crystal is refused by
+name**: `polar_direction` averages the crystal's point group, which is the
+projector onto the directions a polarization may point along, and a nonzero one
+stops the run. It is searched from the *structure* rather than read off the run,
+because a response is usually `nosym` and that list would call every crystal
+polar.
+
+**Validated by four statements, each of which fails differently.** Silicon is
+centrosymmetric and its whole tensor vanishes (measured 2.4e-5 C/m², the
+response solver's floor, against AlAs's 0.764 from the same code); AlAs is
+`-43m` and the only components that survive are `e_14 = e_25 = e_36`, on a
+`nosym` run where nothing imposes the crystal class (forbidden components
+1.7e-14); the eight-point wedge reproduces the sixty-four-point closed grid to
+**4.5e-9** — P36's rank-3 symmetriser again, and here it is the whole of the
+completion because this assembly is *linear* in the response, where P35's
+screening term is quadratic; and the three routes above.
+
+**What is left out, and it is not an approximation.** This is the **clamped-ion**
+constant. The measured one adds the internal-strain term
+`sum Z* (C^-1) Lambda` of the review's Eq. (111), and the review is where the
+warning belongs: the two contributions "are often of opposite sign and close in
+absolute value, so that a well converged calculation is needed in order to
+extract a reliable value for their sum". Bernardini, Fiorentini and Vanderbilt's
+table of linear-response III-V values gives AlAs a **total** `|e_14|` of about
+0.01 C/m² against this 0.76, which is that cancellation. Every ingredient of the
+missing term is already here — `Z*` (P24b), the force constants at `Gamma`
+(P25), and `Lambda = -d^2E/du d(eps)`, which is this module's `jvp` with the
+strain response as its tangent instead of the field's — and the one thing it
+needs that does not exist yet is a **two-coordinate** frozen functional
+`E(eps, u)`, since unlike the field leg both of its legs are coordinates of the
+energy and the explicit `d_u d_eps E|frozen` term does not vanish. That is the
+next step and it is what makes the number comparable with experiment.
+
+**Refused rather than approximated**, beyond the polar crystals: everything
+`require_a_sternheimer_regime` refuses, everything
+`require_a_differentiable_cell` refuses (a spin spiral, a magnetic field), and a
+shifted grid run with `nosym`. **Ultrasoft and PAW are neither refused nor
+claimed**: nothing in the assembly is norm-conserving — the density and
+`becsum` are handed to the functional as builders that carry the strain, which
+is what P41 needed for the strain response — but the only cases run are
+norm-conserving, so what a dataset with a moving `S` does here is unmeasured.
+P44's refusal of the strain coordinate's *third* derivatives does not apply: this
+is a second one, and it is the `Z*` pattern, which is ultrasoft.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

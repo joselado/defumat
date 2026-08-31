@@ -440,6 +440,39 @@ instead), a symmetry-reduced k-set for the angular momenta (they are axial vecto
 whole unshifted grid is the escape), a fully-relativistic **ultrasoft or PAW** dataset
 there (`qq_so`'s off-diagonal spin blocks), and a spin spiral for both.
 
+**The piezoelectric tensor is in** (P50), the third thing taken from
+`ELK-FEATURES.md` and the first that fails that file's own cheapness filter:
+`e_(k)ij = dP_k/d(eps_ij) = d(sigma_ij)/dE_k` is a mixed second derivative, and it is
+P24b's construction with one coordinate changed — a Born charge is one `jvp` of the
+*force* along the field's response, and this is one `jvp` of the **stress** along the same
+response, three of them on top of a dielectric constant that was going to be solved anyway.
+The strain leg is *cheaper* than the displacement leg it copies, because
+`<psi|S|psi>` is a sum over a sphere of integers and carries no cell, so the multiplier
+response `dLambda` — three of P24b's four added terms — has nothing to contribute.
+**There is no reference**: `pw.x` computes no piezoelectric tensor (the word occurs once in
+the vendored tree, in a citation in a comment in `bp_c_phase.f90`) and Elk's `piezoelt.f90`
+finite-differences a Berry-phase polarization over one full ground state per strain. So the
+validation is internal and it is four statements: silicon's whole tensor vanishes
+(**2.4e-5** C/m² against AlAs's 0.764 from the same code), AlAs comes out exactly `-43m`
+with only `e_14 = e_25 = e_36` surviving to **1.7e-14** on a `nosym` run that imposes
+nothing, the eight-point wedge reproduces the sixty-four-point closed grid to **4.5e-9**,
+and the same mixed derivative contracted the other two ways — `zstar_eu.f90`'s expression
+with a strain label, which needs no strain response at all, and the strain response against
+the field's bare perturbation — agrees to **6.2e-15** and **1.3e-7**. What anchors the sign
+and the field's normalisation is that **the same assembly in the position coordinate is the
+Born charge**, which is `ph.x`'s number. **The trap is a factor of two and it is Rydberg's
+`e^2`**: `dielec.f90` contracts the *same* field response with a 4 because a susceptibility
+is Coulomb-normalised, and a bare mixed derivative takes `zstar_eu.f90`'s 2 — and the wrong
+one is exactly zincblende, exactly symmetric, vanishes on silicon and is twice too large.
+**Refused by name**: a **polar** crystal, because what the derivative gives is the
+*improper* tensor and the proper one differs by `delta_ki P_j - delta_ij P_k`, which needs
+`P` itself (those terms vanish identically whenever the two labels they pair differ, so
+`e_14` never carries the ambiguity, and they vanish for every component of a class with no
+invariant vector — which is what is checked, from the *structure* rather than from a
+`nosym` run's symmetry list). **Clamped-ion**, which is also what Elk's task computes; the
+internal-strain term that makes it comparable with experiment nearly cancels it for
+zincblende, and its one missing ingredient is a two-coordinate frozen functional `E(eps, u)`.
+
 **Outstanding:** Wyckoff input, the dynamical matrix of an
 ultrasoft or PAW *metal*, the strain coordinate's third derivatives on ultrasoft and PAW
 (P44 localised what is missing), the *second derivatives* of a spin-polarized system (P45 put
@@ -455,7 +488,11 @@ response `solve_e2` is, which P35 refuses for), the **non-analytic LO-TO term**
 (`rigid.f90`'s `nonanal`, whose two ingredients — `Z*` and `eps` — are both here),
 phonons at `q != 0` (the perturbed states live
 at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals, plus
-`q2r`/`matdyn` for a dispersion), and the rest of P10 (k-axis sharding and GPU).
+`q2r`/`matdyn` for a dispersion), the **relaxed-ion** piezoelectric constant (P50: `Z*`, the
+`Gamma` force constants and the strain response are all here; what is missing is the
+internal-strain tensor `d^2E/du d(eps)`, whose two legs are *both* coordinates of the energy
+and therefore need a two-coordinate frozen functional), and the rest of P10 (k-axis sharding
+and GPU).
 
 ## Layout
 
@@ -1069,6 +1106,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Fields and constraints | `PW/src/add_bfield.f90`, `make_pointlists.f90`, `get_locals.f90`, `report_mag.f90`, `PW/src/input.f90` (`i_cons`) | the penalty's *energy* is written here and its potential comes from `jax.grad`; QE's five expressions are transcribed as the cross-check. Elk's counterparts: manual §5.2/§5.12/§5.104, `src/bfieldfsm.f90` |
 | Spin spirals | no QE counterpart — Elk's `src/gengkqvec.f90`, `init0.f90`, `findsymlat.f90`, manual §5.146 | up at `k + q/2`, down at `k - q/2`, each with its own `G+k` set; one basis call on the concatenated list gives both a common `npwx` |
 | Spiral relaxation | no QE counterpart — `Modules/bfgs_module.f90` reused with the *reciprocal* cell as its lattice | `dE/dq` is `jax.grad` of the energy at frozen wavefunctions and a frozen sphere (`forces/spiral.py`); only the kinetic and nonlocal terms carry `q` |
+| Piezoelectric tensor | no QE counterpart — Elk's `src/piezoelt.f90` and `genstrain.f90`, manual task 380 | Elk runs one ground state per strain and finite-differences the Berry-phase polarization; here it is one `jvp` of the stress along the field's response (`pypresso/response/piezo.py`), so nothing is transcribed but the *check* — `zstar_eu.f90`'s contraction with a strain label where it has a displacement. `genstrain` symmetrises each candidate strain over the crystal's group, so on a cubic crystal the only strain it keeps is the isotropic one |
 | Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `pypresso/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]` term by term; here it is one `jvp` of `H(k)` at a frozen sphere (`response/velocity.py`), since `dH/dk_a = i[H, r_a]` in the periodic gauge. The overlap carries a velocity too, so a band velocity is `<psi|dH/dk - eps dS/dk|psi>` |
 | Linear response / DFPT | `LR_Modules/cgsolve_all.f90`, `ch_psi_all.f90`, `orthogonalize.f90`, `h_prec.f90`, `setup_alpha_pv.f90`, `incdrhoscf.f90`, `symdvscf.f90`; `PHonon/PH/solve_e.f90`, `dvpsi_e.f90`, `dvqpsi_us.f90`, `dielec.f90`, `zstar_eu.f90` | the linear solve, the projector and the assembly are transcribed; the *perturbations* are not. `dv_of_drho` is one `jvp` of `v_of_rho` (which already drops the `G = 0` Hartree term), the E-field's commutator is the velocity operator, and `dvqpsi_us` is one `jvp` through `at_positions`. **A response on a reduced k-set is a polar vector field and must be symmetrised as one** |

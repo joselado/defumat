@@ -12,8 +12,11 @@ machinery this package already has, so that the new code is an assembly and not
 a second implementation of something validated.
 
 **Two of the six were taken in P48** — the effective mass tensor and the
-site-resolved angular momenta. The rest are recorded here with their validation
-route, because that is the part that decides whether a phase is worth starting.
+site-resolved angular momenta — and **a third in P50**, the piezoelectric
+tensor, which is the one entry that fails the cheapness filter above and was
+taken anyway (the *implementation* is one `jvp` of code that already exists).
+The rest are recorded here with their validation route, because that is the
+part that decides whether a phase is worth starting.
 
 Doing the two taught one thing that applies to the rest: **the value of the
 comparison was in what it found, not in the agreement.** Running Elk's own
@@ -31,6 +34,7 @@ second route beside it.
 |---|---|---|
 | Effective mass tensor `m*_ij` | 25 (`effmass.f90`) | P48a |
 | Site-resolved `<L>`, `<S>`, `<J>` | 15/16 (`writelsj.f90`) | P48b |
+| Piezoelectric tensor `e_(k)ij`, clamped-ion | 380 (`piezoelt.f90`) | P50 |
 
 ---
 
@@ -160,33 +164,56 @@ asserting it vanishes at self-consistency and does not under a constraint.
 
 ---
 
-## 5. The piezoelectric tensor
+## 5. The piezoelectric tensor — **taken, P50**
 
-**Elk task 380** (`piezoelt.f90`). Genuinely new — `pw.x` has the Berry-phase
-polarization (`bp_c_phase.f90`) but nothing that differentiates it with respect
-to a strain.
+**Elk task 380** (`piezoelt.f90`). `pw.x` has the Berry-phase polarization
+(`bp_c_phase.f90`) and nothing that differentiates it with respect to a strain;
+the only occurrence of "piezo" in the vendored tree is a citation of
+Vanderbilt's paper in a comment in that file.
 
-**Elk's route is the expensive one:** a finite difference of the Berry-phase
-polarization over re-converged strained cells, one full ground state per strain
-tensor, with a `2 pi` branch-tracking fix-up between them.
+**Elk's route is the expensive one and it was measured rather than assumed:**
+`piezoelt.f90` runs one full ground state per strain tensor, computes the
+Berry-phase polarization of each, and finite-differences them with a `2 pi`
+branch fix-up between the two. It relaxes nothing (`tshift = .false.`, the atoms
+carried by the lattice), so what it produces is the **clamped-ion** constant —
+the same quantity P50 computes, which is what makes the comparison meaningful in
+principle.
 
-**The cheap route here.** The clamped-ion piezoelectric constant is a **mixed
-second derivative**,
+**The cheap route here, and it is what was implemented.** The clamped-ion
+constant is a **mixed second derivative**,
 
 ```
-e_ij,k = - d2 E / d(eps_ij) d(E_k)
+e_(k)ij = - d2 E / d(eps_ij) d(E_k)
 ```
 
-and *both* perturbations already exist — the electric field from P24 and the
+and *both* perturbations already existed — the electric field from P24 and the
 strain from P26/P41. It is the Born-charge pattern (`Z* = dF/dE`, P24b) with one
-coordinate changed, so the assembly is known.
+coordinate changed: one `jvp` of the **stress** along the field's response,
+three of them for the whole tensor, on top of a dielectric constant that was
+going to be solved anyway. `PLAN.md` P50 has the phase; two things it found are
+worth carrying back here.
 
-**Why it is listed as the bigger option.** It is a Sternheimer-scale
-computation, not an NSCF-scale one, so it fails the cheapness filter this file
-applies. It is here because the *implementation* cost is low relative to what it
-produces, and because P44's finding bounds what to expect: the strain
-coordinate's higher derivatives are validated on norm-conserving and refused on
-ultrasoft/PAW, and a piezoelectric tensor would inherit that line.
+*The cheapness filter was the wrong test for this entry.* It is
+Sternheimer-scale, as this file said, and it still cost one afternoon, because
+the filter that actually predicts effort is **how much of the assembly already
+exists** — and here all of it did.
+
+*The validation closed inside the package, which is what this file says to look
+for.* Three routes to the same mixed derivative (a `jvp` of the energy
+gradient, `zstar_eu.f90`'s contraction with a strain label, and the same
+contraction with the two perturbations interchanged) agree to 6e-15 and 1.3e-7,
+and **the same assembly run in the position coordinate is the Born charge**,
+which is validated against `ph.x`. Elk's own number was never needed — and
+`genstrain.f90` is why it would have been awkward to get: it symmetrises each
+candidate strain over the crystal's group, so on a cubic crystal the only
+surviving strain is the isotropic one, whose piezoelectric response is
+identically zero.
+
+**Still outstanding: the relaxed-ion constant**, which is what experiment
+quotes and what the near-total cancellation between the two contributions makes
+interesting. Its ingredients are all here (`Z*`, the `Gamma` force constants,
+and the internal-strain tensor as one more `jvp`); what it needs is a
+two-coordinate frozen functional `E(eps, u)`.
 
 ---
 

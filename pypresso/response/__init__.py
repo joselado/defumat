@@ -65,6 +65,7 @@ from pypresso.response.effmass import EffectiveMass, Multiplet, effective_mass
 from pypresso.response.elastic import ElasticConstants, elastic_constants
 from pypresso.response.electrostriction import Electrostriction, electrostriction
 from pypresso.response.nonlinear import RamanTensors, raman_tensors
+from pypresso.response.piezo import PiezoelectricTensor, piezoelectric_tensor
 from pypresso.response.strain import StrainResponse, strain_response
 from pypresso.response.phonon import Phonons, dynamical_matrix
 from pypresso.response.spectra import (
@@ -92,6 +93,7 @@ __all__ = [
     "Electrostriction",
     "Multiplet",
     "Phonons",
+    "PiezoelectricTensor",
     "RamanTensors",
     "SternheimerResult",
     "SternheimerSolver",
@@ -108,6 +110,7 @@ __all__ = [
     "local_perturbation",
     "make_sternheimer",
     "mode_activities",
+    "piezoelectric_tensor",
     "raman_tensors",
     "strain_response",
     "vibrational_spectrum",

@@ -743,6 +743,17 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS),
         )
 
+    def get_piezoelectric_tensor(self, **options):
+        """``e_(k)ij``: the clamped-ion piezoelectric tensor, in C/m^2."""
+        from pypresso.response.piezo import piezoelectric_tensor
+
+        result = self._ground_state("the piezoelectric tensor")
+        return piezoelectric_tensor(
+            self.calculation, result,
+            **self._defaults_for(piezoelectric_tensor, options,
+                                 exclude=SCF_ONLY_OPTIONS),
+        )
+
     def get_electrostriction(self, **options):
         """``d(chi)/d(strain)`` and the four electrostriction tensors."""
         from pypresso.response.electrostriction import electrostriction

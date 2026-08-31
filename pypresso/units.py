@@ -65,3 +65,9 @@ RY_TO_KBAR = 10.0 * _AU_GPA / 2.0  # Ry/bohr^3 -> kbar, as QE prints stress
 #: carry an explicit ``E2`` in QE; dropping it is the classic factor-of-two bug
 #: when transcribing from a Hartree-unit reference.
 E2 = 2.0
+
+#: ``e/bohr^2`` to C/m^2, the unit a piezoelectric constant is tabulated in
+#: (:mod:`pypresso.response.piezo`). ``e_(k)ij = d(sigma_ij)/dE_k`` comes out of
+#: a Rydberg-atomic-unit code in electrons per bohr squared, and 57.2 is the
+#: number that makes ``e_14`` comparable with a measurement.
+E_BOHR2_TO_C_M2 = ELECTRON_SI / BOHR_RADIUS_SI**2

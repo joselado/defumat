@@ -755,6 +755,67 @@ $k$-grid rather than a wedge, because their functional builds its own density
 and symmetrises it as a scalar inside the chain rule.
 \end{refuses}
 
+\subsection{The piezoelectric tensor}
+
+The polarization a strain induces is the stress an electric field induces ---
+one mixed second derivative read either way round:
+\begin{equation*}
+e_{k,ij} \;=\; \frac{\partial P_k}{\partial\varepsilon_{ij}}
+        \;=\; \frac{\partial\sigma_{ij}}{\partial\mathcal E_k}
+        \;=\; -\frac{1}{\Omega}\,
+              \frac{\partial^2 E}{\partial\varepsilon_{ij}\,\partial\mathcal E_k}
+\end{equation*}
+It is the Born charge's construction with one coordinate changed. $Z^\ast$ is a
+\code{jvp} of the \emph{force} along the field's response; the force is
+\code{jax.grad} of the frozen-state energy in the atomic positions and the
+stress is \code{jax.grad} of the same functional in a strain, so this is a
+\code{jvp} of the \emph{stress} along the same response --- three of them, one
+per field direction, on top of a dielectric constant that was going to be
+solved anyway. The orthonormality constraint contributes nothing here, because
+$\langle\psi|\hat S|\psi\rangle$ is a sum over a sphere of integers and carries
+no cell.
+
+\begin{pycode}
+calc = Calculator.from_file("alas.in", pseudo_dir="pseudo")
+
+piezo = calc.get_piezoelectric_tensor()
+print(piezo.voigt)              # (3, 6) in C/m^2, columns xx yy zz yz xz xy
+print(piezo.e14)                # -0.7638: zincblende's one component
+print(piezo.e.shape)            # (3, 3, 3) in e/bohr^2, e[k, i, j]
+print(piezo.dielectric.epsilon) # the field response is shared, not re-solved
+\end{pycode}
+
+\code{pw.x} computes no piezoelectric tensor --- the word occurs once in the
+whole distribution, in a citation in a comment --- and Elk's task 380 reaches
+it by a finite difference of the Berry-phase polarization over one full ground
+state per strain tensor. So the validation is internal, and there are four
+independent statements. Silicon is centrosymmetric and its whole tensor
+vanishes (2.4e-5 C/m$^2$ against AlAs's 0.764 from the same code, with nothing
+imposing it on a \code{nosym} run); AlAs is $\bar43m$ and only
+$e_{14} = e_{25} = e_{36}$ survive, to 1.7e-14; an eight-point wedge reproduces
+the sixty-four-point closed grid to \textbf{4.5e-9}; and the same mixed
+derivative contracted the other two ways --- \code{zstar\_eu.f90}'s expression
+with a strain label, and the strain response against the field's bare
+perturbation --- agree to \textbf{6.2e-15} and \textbf{1.3e-7}. What anchors
+the sign and the normalisation is that the \emph{same} assembly run in the
+position coordinate is the Born charge, and that is \code{ph.x}'s number.
+
+\begin{refuses}
+\textbf{Refuses.} \textbf{Clamped-ion} --- the atoms are carried by the strain
+and do not relax, which is also what Elk's task computes; the internal-strain
+term that makes the constant comparable with experiment is not here, and for
+zincblende it very nearly cancels this one. And \textbf{polar crystals by
+name}: what the derivative above gives is the \emph{improper} tensor, and the
+proper piezoelectric response differs from it by
+$\delta_{ki}P_j - \delta_{ij}P_k$, which needs the spontaneous polarization
+itself. Those terms vanish identically whenever the two Cartesian labels they
+pair are different --- so $e_{14}$ of a zincblende crystal never carries the
+ambiguity --- and they vanish for every component of a class that admits no
+invariant vector, which is what is checked. Beyond that: insulators, and
+everything the Sternheimer regime and the differentiable cell refuse (a spin
+spiral, a magnetic field, a shifted grid run with \code{nosym}).
+\end{refuses}
+
 \subsection{Spin-polarized response}
 
 The Sternheimer equation is solved per spin channel,
