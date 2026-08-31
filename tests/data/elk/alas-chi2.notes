@@ -1,0 +1,18 @@
+Estimated indirect band gap :   0.4796875132E-01
+ Fermi                       :     0.18382541993138    
+Density of states at Fermi energy :   0.1364804662    
+Estimated indirect band gap :   0.4796872269E-01
+Generated 2026-08-31 with the vendored Elk binary
+(elkpy/build/elk/src/elk) from alas-chi2.elk.in in this directory: tasks
+0 (ground state), 120 (momentum matrix elements) and 125 (nonlinopt), on the
+same AlAs crystal as tests/data/qe/alas-raman.in (a = 10.575 bohr, LDA).
+CHI_2WWW_123.OUT is chi^xyz(-2w; w, w) in ATOMIC UNITS: the file is two
+blocks separated by a blank line, the real part first and the imaginary part
+second, each "w[Ha]  value".  Run time ~18 s on one core.
+
+Also committed from the same run: CHI_II / ETA_II / SIGMA_II_2WWW_123.OUT, the
+three parts Elk writes separately, so a disagreement can be localised to one of
+them rather than to their sum.  And alas-chi2-123-scissor.elk.out, the identical
+input plus `scissor 0.05` (Ha), which is the reference for the scissors branch:
+it moves Elk's 2w peak from 0.0795 Ha to 0.1035 Ha, a shift of half the scissor,
+and takes chi(0) from -3.4965 a.u. to -0.9985.

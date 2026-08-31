@@ -64,6 +64,7 @@ REWRITTEN = {
     "30_magneto_optics",
     "31_fermi_surface_nesting",
     "32_shift_current",
+    "33_second_harmonic_generation",
 }
 
 #: Notebooks that still say ``jvp`` in a plot label or a code cell. Prose debt

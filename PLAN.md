@@ -7906,6 +7906,112 @@ from QE or Elk and this is taken from neither — so what belongs there is the
 absolute cost and its scaling in `nbnd`, which is quadratic in the pair sum and
 cubic in the intermediate one.
 
+### P54 — Second-harmonic generation. ✅ DONE.
+
+`pypresso/response/shg.py`, `workflows/shg.py`, `Calculator.get_shg`.
+`chi^(2)(-2 omega; omega, omega)` — how much of the light shone on a crystal
+comes back out at twice the frequency — following Sipe and Ghahramani (PRB
+**48**, 11705 (1993)) and Hughes and Sipe (PRB **53**, 10751 (1996)) in the
+form Elk's `nonlinopt.f90` carries after Gonze's 2022 corrections. **P53's
+route, one contraction over**: the same sum over states, with two resonant
+denominators instead of a smeared delta, and none of `second_matrix_elements`
+— the triple sum over the intermediate state *is* the sum-rule expansion of
+the generalised derivative, written out rather than collapsed.
+
+**This is the sixth thing taken from `ELK-FEATURES.md`, and it was in that
+file's *rejected* table.** It was rejected by pointing at P35's `chi^(2)`
+refusal, which is a statement about the **Sternheimer stack** and never applied
+to a sum over states; P53 flagged the row and this acted on it. **What is
+lifted is not P35's refusal.** The 2n+1 route — `solve_e2`, `dvpsi_e2`, the
+electro-optic tensor, a truncation-free static `chi^(2)` — stays refused with
+the same missing term, exactly as P53 left the Sternheimer stack alone.
+
+**There is a real reference here, which is unusual in this corner.** Elk's
+task 125 computes the same tensor, the binary is vendored, and
+`tests/data/elk/` carries its output for the same AlAs crystal (a = 10.575
+bohr, LDA, 6x6x6): the three parts separately, the total, and a scissored run.
+`pw.x` has **no** second-harmonic tensor — `el_opt.f90` is the *static*
+electro-optic response, and the `lraman`/`elop` branch that reaches even that
+is the branch P35 established does not reproduce QE's own committed example.
+
+**Against Elk, on the same crystal and the same mesh**, with what is *not*
+comparable stated rather than discovered — all-electron LAPW against a
+norm-conserving pseudopotential, and a second-order susceptibility carries two
+energy denominators, so a gap difference is not a scale factor:
+
+* the **resonance position** to **0.5%**: 2.152 eV against 2.163;
+* the **peak height** to **7%**: 27.52 a.u. against 25.70;
+* the **static value** to **11%**: -3.10 a.u. against -3.50 — and the basis is
+  shown converged there, `ecutwfc` 10 → 30 → 45 giving -2.71 → -3.10 → -3.13,
+  so the residue is the pseudopotential and not the cutoff;
+* the **three parts separately**, because Elk writes `chi_II`, `eta_II` and
+  `i/2w sigma_II` to three files and comparing only their sum would let two
+  errors cancel — P43's lesson;
+* and the **scissors branch**, which Elk's own GaAs example is built around: at
+  `Delta = 0.05` Ha the 2w peak moves **0.0502 Ry** against a half-scissor of
+  0.0500, and its height falls to **0.60** of the unscissored value against
+  Elk's 0.58.
+
+**Four findings, and the first two are the phase.**
+
+* **`Delta^a` needs the multiplet average and `nonlinopt.f90` does not do it.**
+  The band-velocity difference is built entirely out of the *diagonal* of the
+  velocity operator, and the diagonal of an operator is not invariant under the
+  rotation a degenerate eigensolver is free to apply inside a multiplet — rule
+  D4, and **P51's Drude-weight finding one order up**. What is invariant is the
+  multiplet's block trace, so each member takes the block average, which is what
+  a symmetry-adapted basis would have given and which reduces to `v^a_mm`
+  exactly where a band stands alone. **It is worth four orders of magnitude and
+  no symmetry check sees it**: silicon is centrosymmetric, so every component
+  must vanish, and with the bare diagonal the two `Delta` terms — Eqs. (B12a)
+  and (B16b), the only two places it appears — come out at **1499** and **238**
+  pm/V on a 4x4x4 mesh where the other three sit at 0.09, falling to **0.10**
+  and **0.055** with the average. `Gamma` is what does it: silicon's valence top
+  is threefold degenerate there, its block trace of `v` is zero by symmetry, and
+  an arbitrary basis inside it gives three nonzero diagonal entries that cancel
+  only in that sum. Elk does not need it at 42x42x42 on a mesh that misses the
+  symmetry points, so this is **not** a transcription bug.
+* **The literal loop is the only test that could have found the transposition.**
+  `f(n, m)` and `e(m, n)` differ in the *order* of the pair, so one is
+  transposed and the other is not; writing `f.T` where `f` was meant flipped the
+  sign of chi_II's second resonance, the whole of eta_II and the whole of
+  sigma_II, and left `cc1` and `ce1` — which do not use it — correct. **Every
+  physical check passed with it wrong.** What caught it is
+  `tests/unit/test_shg_machinery.py`'s four-space-indented, explicitly indexed
+  transcription of the Fortran triple loop, run against the vectorised form on
+  random Hermitian matrices; the two agree to **2.6e-16** and share no
+  machinery. The debugging path that localised it is worth keeping too: a
+  **local plane-wave model Hamiltonian** with `V(G)` real and even is
+  centrosymmetric by construction and made every part vanish to **1e-15**,
+  which separated the assembly from the physics in seconds rather than in SCF
+  runs — and adding a separable **nonlocal** term to the same model left it at
+  1e-15, which is what ruled out the pseudopotential as the cause and pointed
+  at the eigensolver.
+* **The broadening is Elk's `swidth` and Elk is in Hartree.** Running 0.005 Ry
+  against Elk's 0.005 Ha makes every peak exactly twice too tall and changes
+  nothing else — not the position, not the static value, not the symmetry.
+  Matching them took the peak comparison from 1.8x to 7%.
+* **The Rydberg factor is four and counting the denominators is the check.**
+  Every term carries exactly *two* energy denominators — one inside the
+  coefficient matrix and one in the frequency contraction — so a sum done in Ry
+  is four times too small, uniformly. Verifying that the same two appear in all
+  three parts is what makes a single scale factor legitimate.
+  `CHI2_AU_TO_PM_PER_V = 24.4377` is derived from CODATA in the docstring and
+  has its own unit test, because it is the constant every other check is blind
+  to (P50's trap, P53's coordinates) — and the Elk comparison is made in Elk's
+  **atomic units** so that a wrong conversion cannot hide inside an agreement.
+
+**Refused by name**, inherited whole from `require_a_shift_current_regime` and
+re-worded so a caller is told about the quantity they asked for: ultrasoft and
+PAW (`dS/dk`), a spin spiral, a symmetry-reduced wedge (a polar rank-3 tensor),
+DFT+U (the Hubbard term carries a velocity of its own), a **metal**, and
+`nspin = 2`. A **spinor** run is supported and tested.
+
+**Still open in this corner**, unchanged from P53 bar this entry: the
+**injection current** (CPGE), which needs nothing new but has no committed
+gyrotropic cell; the **Berry-curvature dipole**; and **frequency dependence**
+in the Sternheimer sense, which is still the other machine.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

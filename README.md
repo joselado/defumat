@@ -73,6 +73,7 @@ drive any of this and is what the examples below use.
 | **Optical conductivity tensor** `sigma_ab(omega)`, the magneto-optical **Kerr angle** and the **anomalous Hall conductivity** — interband plus a Drude term, from `dH/dk` rather than momentum matrix elements. Insulators and metals, norm-conserving; needs the whole k-grid rather than a wedge, since the antisymmetric part is an axial vector | `run_conductivity`, `Calculator.get_optical_conductivity` | (✓)⁷ | ✓ |
 | **Fermi-surface nesting function** `N(q)` — how much of the Fermi surface maps onto itself when translated by `q`, which is where a phonon softens, a charge-density wave opens a gap or a spin spiral finds its pitch. Metals with a smearing; a symmetry-reduced wedge is unfolded rather than refused | `run_nesting`, `Calculator.get_nesting` | | ✓ |
 | **Shift current** `sigma^abc(0; w, -w)` — the bulk photovoltaic effect: the direct current a crystal with no inversion centre carries under illumination, with no junction and no built-in field. Insulators, norm-conserving, `nspin = 1` or spinor; needs the whole k-grid rather than a wedge, and the band count is the convergence parameter because the generalised derivative's intermediate sum runs over the same bands | `run_shift_current`, `Calculator.get_shift_current` | ⁸ | |
+| **Second-harmonic generation** `chi^(2)(-2w; w, w)` — how much of the light shone on a crystal comes back out at twice the frequency. A polar rank-3 tensor, zero in any centrosymmetric crystal. Insulators, norm-conserving, `nspin = 1` or spinor; needs the whole k-grid rather than a wedge, and the band count is the convergence parameter because the sum over the intermediate state is an identity only over a complete basis | `run_shg`, `Calculator.get_shg`, `scissor` | (✓)⁹ | ✓ |
 | **Optical absorption spectra with excitons** — `Im eps_M(omega)` from TDDFT, local-field effects included, on a bootstrap exchange-correlation kernel. Needs the whole k-grid rather than a wedge | `run_absorption`, `kernel = 'bootstrap'` (also `rpa`, `alda`, `lrc`, `bootstrap-1`), `ecut_response`, `scissor`, `broadening` | | ✓ |
 | **Van der Waals dispersion** — Grimme's D2 pair correction, in the energy, the forces, the stress and the elastic constants. D3, Tkatchenko-Scheffler, MBD and XDM are refused by name | `vdw_corr = 'grimme-d2'`, `london_s6`, `london_rcut`, `london_c6`, `london_rvdw` | ✓ | |
 | **Band gaps from the Tran-Blaha potential** (mBJ) — the modified Becke-Johnson meta-GGA, on norm-conserving and PAW datasets, unpolarized, collinear, and noncollinear with spin-orbit coupling. The total energy is not variational, so forces, stress and response are refused | `input_dft = 'tb09'` (or `'bj06'`), `mbj_c` | (✓)⁶ | ✓ |
@@ -105,6 +106,14 @@ Where the tick is qualified:
   wannierisation first, and nothing in `PW/src`, `PP/src` or `PHonon` computes a
   photocurrent of any kind. Elk has none either — its `nonlinopt.f90` is
   second-harmonic generation, which is a different response.
+
+- ⁹ `PHonon`'s `el_opt.f90` computes the **electro-optic** tensor, which is
+  the *static* second-order response and not `chi^(2)(-2w; w, w)`; nothing in
+  the tree computes a frequency-dependent second-harmonic tensor, and the
+  `lraman`/`elop` branch that reaches even the static one is the branch P35
+  established does not reproduce QE's own committed example. Elk's
+  `nonlinopt.f90` (task 125) is the real reference and is what this was
+  validated against.
 
 The variants under each row — which smearing or tetrahedron method fixes the
 occupations, which projectors DFT+U uses, which constraint scheme — are chosen
@@ -322,3 +331,4 @@ this code was written by reading it.
 
 The pseudopotential files under `tests/data/pseudo/` come from the Quantum
 ESPRESSO pseudopotential library and carry their own terms.
+| [`33_second_harmonic_generation`](notebooks/33_second_harmonic_generation.ipynb) | Frequency doubling in AlAs: the tensor zincblende allows, checked against the all-electron code Elk |

@@ -1176,6 +1176,112 @@ indefinite. \code{band\_cut\_gap} carries the same warning it does for the
 conductivity.
 \end{refuses}
 
+\subsection{Second-harmonic generation}
+
+Shine light of frequency $\omega$ on a crystal with no inversion centre and some
+of it comes back out at $2\omega$. The tensor that says how much is the
+second-order optical susceptibility
+$P^a(2\omega) = \chi^{abc}(-2\omega;\omega,\omega)\,E_b(\omega)E_c(\omega)$, a
+polar rank-3 tensor, symmetric in its last two labels and identically zero in
+every centrosymmetric crystal. It is a sum of three physically distinct pieces
+--- the pure interband term $\chi_{II}$, the intraband modulation of it
+$\eta_{II}$, and the modulation of the transition energy
+$\tfrac{i}{2\omega}\sigma_{II}$ --- each of which is a contraction of the
+interband dipoles $r^a_{nm} = -i\,v^a_{nm}/\omega_{nm}$ over two resonant
+denominators, one at $\omega$ and one at $2\omega$:
+\begin{equation*}
+\chi^{abc}(-2\omega;\omega,\omega) = \frac{1}{\Omega}\sum_{\mathbf k, m, n}
+  \left[\frac{c^{(1)}_{mn}}{\omega_{mn}-\omega+i\eta}
+      + \frac{c^{(2)}_{mn}}{\omega_{mn}-2(\omega-i\eta)}\right],
+\end{equation*}
+where the coefficients $c^{(1,2)}_{mn}$ carry a further sum over an intermediate
+state and are built once, before the frequency axis is touched. This is the same
+sum over states the shift current uses, contracted differently; it needs no
+second derivative of $H$ at all, because that triple sum \emph{is} the sum-rule
+expansion of the generalised derivative written out rather than collapsed.
+
+\begin{pycode}
+calc = Calculator.from_file("alas-shg.in", pseudo_dir="pseudo")
+
+shg = calc.get_shg(nbnd=22, window=0.6, nw=240, broadening=0.010)
+print(shg.chi.shape)                  # (240, 3, 3, 3), complex, in pm/V
+print(shg.component(0, 1, 2)[0])       # chi^xyz at the lowest frequency
+print(shg.d_coefficient(0, 1, 2)[0])   # d = chi/2, what the literature quotes
+print(shg.frequencies_ev[:3])          # the FUNDAMENTAL photon energy, in eV
+print(shg.truncation)                  # the band-truncation diagnostic
+print(shg.chi_ii, shg.eta_ii, shg.sigma_ii)   # the three parts, kept apart
+\end{pycode}
+
+\textbf{There is a real reference here}, which is unusual in this corner of the
+package: Elk's \code{nonlinopt.f90} (task 125) computes the same tensor, and
+\code{tests/data/elk/} carries its output for the same AlAs crystal, the three
+parts separately as well as their sum. \code{pw.x} has none --- its
+\code{el\_opt.f90} is the \emph{static} electro-optic response, and the branch
+that reaches even that is the one this document's Raman section records as
+broken in the vendored 7.5.
+
+What the comparison is \emph{not} is digit-for-digit, and saying so is part of
+quoting it: an all-electron LAPW basis is not a norm-conserving pseudopotential
+one, and a second-order susceptibility carries two energy denominators, so a gap
+difference is not a scale factor. On the same crystal and the same $6^3$ mesh:
+the \textbf{resonance position} agrees to \textbf{0.5\%} (2.152 eV against
+2.163), the \textbf{peak height} to \textbf{7\%} (27.52 a.u.\ against 25.70),
+and the \textbf{static value} to \textbf{11\%} ($-3.10$ a.u.\ against $-3.50$).
+The last is the one that moves with the basis, and it is shown converged:
+\code{ecutwfc} 10, 30 and 45 give $-2.71$, $-3.10$ and $-3.13$, so the residue is
+the pseudopotential rather than the cutoff.
+
+Four internal checks close what the reference cannot. \textbf{$\bar 43m$}: AlAs
+comes out exactly zincblende on a \code{nosym} grid with nothing imposing it.
+\textbf{Silicon}: an inversion centre forbids every component, and the
+centrosymmetric control runs through the same machinery. \textbf{The two-photon
+edge}: $\mathrm{Im}\,\chi$ turns on at \emph{half} the smallest direct gap, not
+at the gap, because the second channel's denominator is $\omega_{mn}-2\omega$ ---
+the only check here blind to both the scale and the symmetry, and a lost factor
+of two there moves the absorption edge by an octave. And \textbf{the spinor},
+which is the scale's own anchor: the same cell run \code{nspin} = 1 and as a
+two-component spinor must give the same tensor, which is what catches a factor of
+two in the spin sum.
+
+\textbf{The convention is declared, because the literature has two.} What is
+computed is $\chi^{(2)}$, defined by $P^a = \chi^{abc}E_bE_c$; nonlinear-optics
+papers more often quote $d^{abc} = \chi^{abc}/2$, so a number compared against a
+published $d$ without halving it is wrong by exactly two and nothing about its
+shape, symmetry or zeros would say so. \code{d\_coefficient} returns the halved
+form.
+
+\textbf{The scissors shift is the one knob worth explaining.} An LDA or GGA gap
+error does not scale a second-order susceptibility, it moves its resonances, and
+\code{scissor} applies the usual rigid shift to the empty states. The dipoles are
+built from the \emph{unshifted} gaps --- a scissors correction is a statement
+about energies, not about wavefunctions --- which is what Elk reaches by scaling
+its momentum matrix elements instead. Validated against Elk's own scissored run:
+at $\Delta = 0.05$~Ha the $2\omega$ peak moves \textbf{0.0502}~Ry against a
+half-scissor of 0.0500, and its height falls to \textbf{0.60} of the unscissored
+value against Elk's 0.58.
+
+\begin{refuses}
+\textbf{Refuses.} The same five the shift current refuses, since this is the same
+velocity matrix elements contracted a different way and it inherits every reason:
+\textbf{ultrasoft and PAW} (a moving $\hat S$ puts $\partial S/\partial k$ in the
+dipole), a \textbf{spin spiral}, a \textbf{symmetry-reduced $k$-set} (a polar
+rank-3 tensor is not the cell's until averaged over the point group; the escape
+is the whole unshifted grid), a \textbf{metal}, \textbf{DFT+$U$}, and
+\textbf{\code{nspin} = 2}. A \emph{spinor} run is supported and tested.
+
+\textbf{This does not lift the \code{chi\^{}(2)} refusal in the Raman section},
+and the distinction matters. That one is about the $2n+1$ route through the
+Sternheimer solver, where a field enters only through a source term and the
+$\langle u_i|r_k|u_j\rangle$ piece has nothing to build it from; a sum over
+states never needed that object. The electro-optic tensor and a truncation-free
+static $\chi^{(2)}$ are still refused for the same missing term.
+
+\textbf{The band count is reported rather than refused}, exactly as for the shift
+current and for the same reason: the sum over the intermediate state is an
+identity only over a complete basis. \code{truncation} is the in-run estimate,
+taken over the top quarter of the bands.
+\end{refuses}
+
 % =====================================================================
 \section{Topological invariants}
 

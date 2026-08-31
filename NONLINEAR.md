@@ -252,9 +252,17 @@ In rough order of how much they are worth:
 
 Listed so the boundary is explicit, not because either is next.
 
-**Frequency dependence (a new solver).** `alpha(omega)`, resonant Raman, and true SHG
-`chi^(2)(-2 omega; omega, omega)` all need the Sternheimer operator at `H - eps +- omega`,
-which is **indefinite**, and non-Hermitian once a broadening `eta` is added. The projected
+**Frequency dependence (a new solver).** `alpha(omega)` and resonant Raman need the
+Sternheimer operator at `H - eps +- omega`, which is **indefinite**, and non-Hermitian
+once a broadening `eta` is added.
+
+*(This paragraph named `chi^(2)(-2 omega; omega, omega)` as well until P54, and that
+was the same conflation §8 records for the shift current: it is a statement about the
+**Sternheimer** route to SHG. The **sum over states** reaches the whole frequency axis
+with no solver at all — it has the eigenvalues, so the resonant denominators are
+arithmetic — and that is what `pypresso/response/shg.py` is. What still needs the
+indefinite solver is a *truncation-free* second-order response, which is the same
+`|u_m^{;a}>` §7's shift-current entry identifies below.)* The projected
 CG breaks; a shifted/complex solver (BiCGStab, or QE's own `solve_e_fpol.f90`) is new
 machinery. QE's `fpol` (`polariz.f90`, `PHonon/examples/example09`) is the validation
 target for the linear frequency-dependent case and **should be checked for the same
@@ -345,12 +353,23 @@ normalisation is worthless to better than a factor of two. This matters for
 everything else in this corner: an injection current and a `chi^(2)` will have
 the same ambiguity, and the same two checks answer it.
 
+**The `chi^(2)(-2w; w, w)` half of it is now in too** — `pypresso/response/shg.py`,
+`run_shg`, `Calculator.get_shg` (P54). It is the same sum over states with two resonant
+denominators in place of a smeared delta, it needs *less* than the shift current did (the
+triple sum over the intermediate state is the sum-rule expansion of the generalised
+derivative, so `second_matrix_elements` never appears), and it is the one thing in this
+file with a **real reference implementation**: Elk's task 125, agreeing to 0.5% on the
+resonance position, 7% on the peak height and 11% on the static value with the basis shown
+converged. The finding to carry is that **`Delta^a` needs the multiplet average** — it is
+built from the diagonal of an operator, which rule D4 says is not defined inside a
+degenerate multiplet, and on silicon that is worth four orders of magnitude with no
+symmetry check seeing it. §5's first bullet, for the fourth time.
+
 **Still open in this corner**, in the order they are cheap: the **injection current**
 (CPGE), which needs *nothing* new — the same `v_nm` and the diagonal `Delta^a` — but is
 identically zero in every non-gyrotropic class, `-43m` included, so it has no committed
 cell to run on and its decisive check is the quantized Weyl-node trace on a
-`ModelStates` model; **`chi^(2)` by the same sum over states**, which has Elk's
-`nonlinopt.f90` as a real reference; and the **Berry-curvature dipole**, which is a
+`ModelStates` model; and the **Berry-curvature dipole**, which is a
 Fermi-surface integral of a k-derivative of an already-singular quantity and is the one
 entry here a direct plane-wave code cannot honestly converge.
 
@@ -377,11 +396,13 @@ entry here a direct plane-wave code cannot honestly converge.
 5. **Third-order force constants** (§3.3) — after `q != 0` phonons, which is where their
    payoff is.
 6. ~~Then choose between **frequency dependence** and **the geometric family** (§7)~~ —
-   the geometric family was chosen, and its **shift current** half is done (P53). What
-   the phase established is that the boundary drawn in §2.1 is a boundary of the
-   *Sternheimer stack* and not of the physics: a sum over states reaches the whole
-   second-order optical family without `<u_i|r_k|u_j>`, so §4's refusal never applied
-   to it. Next in the same corner, cheapest first: the **injection current** (nothing
-   new but a gyrotropic case), **`chi^(2)`** by the same route (Elk's `nonlinopt.f90`
-   is a real reference), and then **frequency dependence**, which is still the other
-   machine.
+   the geometric family was chosen, and its **shift current** half is done (P53) and
+   its **`chi^(2)(-2w; w, w)`** half with it (P54). What those phases established is
+   that the boundary drawn in §2.1 is a boundary of the *Sternheimer stack* and not of
+   the physics: a sum over states reaches the whole second-order optical family without
+   `<u_i|r_k|u_j>`, so §4's refusal never applied to it. **P35's refusal is not lifted
+   by either** — the 2n+1 route to a truncation-free static `chi^(2)` and to the
+   electro-optic tensor still lacks the same term. Next in the same corner, cheapest
+   first: the **injection current** (nothing new but a gyrotropic case), the
+   **Berry-curvature dipole**, and then **frequency dependence** in the Sternheimer
+   sense, which is still the other machine.

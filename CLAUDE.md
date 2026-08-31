@@ -308,9 +308,9 @@ re-converged displaced cells**: **-3.118279** against **-3.118310**, 1.0e-5. Wha
 cannot do at all is a **GGA** — `phq_setup.f90` stops on "third order derivatives not
 implemented with GGA" because its third derivative of `E_xc` is a hardcoded Perdew-Zunger
 parameterisation (`d2mxc.f90`), where here it is one more `jvp` of a kernel that already
-exists. **`chi^(2)` and the electro-optic tensor are refused by name**, with the missing
-term identified rather than fitted: the field enters only through the source term, so the
-`<u_i|r_k|u_j>` piece of the 2n+1 expression (QE's `dvpsi_e2`/`solve_e2`) has nothing to
+exists. **`chi^(2)` by this route and the electro-optic tensor are refused by name**, with the
+missing term identified rather than fitted: the field enters only through the source term, so
+the `<u_i|r_k|u_j>` piece of the 2n+1 expression (QE's `dvpsi_e2`/`solve_e2`) has nothing to
 build it from — and it is **42% of the answer**, measured on its displacement counterpart.
 **No symmetry check catches its absence**, which is the finding worth carrying: without it
 the tensor still vanishes identically in a centrosymmetric crystal, still comes out exactly
@@ -543,6 +543,45 @@ statement about the state a spiral grows *out of*. The delta defaults to a **Gau
 when the run used Methfessel-Paxton or cold smearing, because those go negative on the wings
 and a product of two such weights has no sign at all.
 
+**Second-harmonic generation is in** (P54), the sixth thing taken from
+`ELK-FEATURES.md` and the first taken out of that file's own **rejected** table.
+`chi^(2)(-2w; w, w)` — how much of the light shone on a crystal comes back out at twice the
+frequency — by the same sum over states P53 built, contracted with two resonant denominators
+instead of a smeared delta, and needing *less* than the shift current did: the triple sum over
+the intermediate state **is** the sum-rule expansion of the generalised derivative, so the
+second derivative of `H(k)` never appears. **The row was rejected by inheriting P35's
+refusal**, which is a statement about the *Sternheimer stack* and never applied to a sum over
+states — check which machine a refusal belongs to before inheriting it, and note that what
+landed does **not** lift P35's: the 2n+1 route to the electro-optic tensor and to a
+truncation-free static `chi^(2)` still lacks the same term.
+**There is a real reference here**, which is rare in this corner: Elk's `nonlinopt.f90`
+(task 125), whose output for the same AlAs cell is committed under `tests/data/elk/` — the
+three parts separately as well as their sum, plus a scissored run. `pw.x` has none; its
+`el_opt.f90` is the *static* electro-optic response and sits on the branch P35 established
+is broken in the vendored 7.5. Against Elk on the same crystal and mesh, with what is not
+comparable stated rather than discovered (LAPW against norm-conserving, and a different gap
+enters twice because a second-order susceptibility has two energy denominators): the
+**resonance position to 0.5%** (2.152 eV against 2.163), the **peak height to 7%** and the
+**static value to 11%** with the basis shown converged (`ecutwfc` 10 → 30 → 45 giving
+-2.71 → -3.10 → -3.13 a.u. against Elk's -3.50). The **scissors** branch is validated against
+Elk's own scissored run: the 2w peak moves **0.0502 Ry** against a half-scissor of 0.0500.
+**The finding is rule D4 arriving in `Delta^a`** — P51's Drude weight one order up. The
+band-velocity difference is built entirely from the *diagonal* of the velocity operator, which
+is not invariant under the rotation a degenerate eigensolver is free in inside a multiplet, so
+each member takes the multiplet's **block average** instead. It is worth **four orders of
+magnitude** on silicon, where the two terms `Delta` appears in come out at 1499 and 238 pm/V
+against the other three at 0.09 and fall to 0.10 and 0.055 — and **no symmetry check sees it**,
+the tensor being exactly `-43m` either way. Elk does not need it at 42x42x42 on a mesh that
+misses the symmetry points. The second finding is that **only a literal transcription of the
+Fortran loop could catch a transposed occupation factor**: `f(n, m)` and `e(m, n)` differ in
+the order of the pair, and writing one for the other flipped the sign of three of the five
+coefficient matrices while every physical check still passed. What separated the assembly from
+the physics in seconds rather than SCF runs was a **local plane-wave model Hamiltonian** with
+`V(G)` real and even, centrosymmetric by construction, on which every part vanishes to 1e-15.
+**Refused by name**, inherited whole from the shift current and re-worded so a caller hears
+about the quantity they asked for: ultrasoft and PAW, a spin spiral, a symmetry-reduced wedge,
+DFT+U, a metal, and `nspin = 2`. A spinor run is supported and tested.
+
 **Outstanding:** Wyckoff input, the dynamical matrix of an
 ultrasoft or PAW *metal*, the strain coordinate's third derivatives on ultrasoft and PAW
 (P44 localised what is missing), the *second derivatives* of a spin-polarized system (P45 put
@@ -553,8 +592,10 @@ wavefunctions come from a Sternheimer solve with no spinor form), the force on a
 **spin spiral** (the two components live on different plane-wave spheres, so the nonlocal
 term needs the projectors of both — `dE/dq` is what a spiral has instead), the Kubo curvature
 of an **ultrasoft or PAW** dataset (P47: the `e_n dS/dk` term is written and unvalidated),
-PAW Born charges, `chi^(2)` and the electro-optic tensor (the second-order
-response `solve_e2` is, which P35 refuses for), the **non-analytic LO-TO term**
+PAW Born charges, the electro-optic tensor and a *truncation-free* `chi^(2)`
+by the 2n+1 route (the second-order response `solve_e2` is what is missing, which P35 refuses
+for; the **frequency-dependent** `chi^(2)(-2w; w, w)` is in as of P54, by a sum over states,
+which never needed that term), the **non-analytic LO-TO term**
 (`rigid.f90`'s `nonanal`, whose two ingredients — `Z*` and `eps` — are both here),
 phonons at `q != 0` (the perturbed states live
 at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals, plus
@@ -1208,6 +1249,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Spin spirals | no QE counterpart — Elk's `src/gengkqvec.f90`, `init0.f90`, `findsymlat.f90`, manual §5.146 | up at `k + q/2`, down at `k - q/2`, each with its own `G+k` set; one basis call on the concatenated list gives both a common `npwx` |
 | Spiral relaxation | no QE counterpart — `Modules/bfgs_module.f90` reused with the *reciprocal* cell as its lattice | `dE/dq` is `jax.grad` of the energy at frozen wavefunctions and a frozen sphere (`forces/spiral.py`); only the kinetic and nonlocal terms carry `q` |
 | Piezoelectric tensor | no QE counterpart — Elk's `src/piezoelt.f90` and `genstrain.f90`, manual task 380 | Elk runs one ground state per strain and finite-differences the Berry-phase polarization; here it is one `jvp` of the stress along the field's response (`pypresso/response/piezo.py`), so nothing is transcribed but the *check* — `zstar_eu.f90`'s contraction with a strain label where it has a displacement. `genstrain` symmetrises each candidate strain over the crystal's group, so on a cubic crystal the only strain it keeps is the isotropic one |
+| Second-harmonic generation | no QE counterpart — Elk's `src/nonlinopt.f90` and `getpmat.f90`, manual task 125 | `chi^(2)(-2w; w, w)` by a sum over states, so the assembly *is* transcribed, with one substitution: Elk reads momentum matrix elements and this uses `response/velocity.py`'s `dH/dk`, for the reason the TDDFT row already gives. Two things Elk's loop does not need and a plane-wave code does: the multiplet **block average** of the velocity diagonal that `Delta^a` is built from (rule D4 — Elk's 42x42x42 shifted mesh misses the symmetry points where it bites), and the reminder that Elk's `swidth` is in **Hartree**. `el_opt.f90` is QE's nearest thing and is the *static* electro-optic tensor, on the branch P35 found broken |
 | Fermi-surface nesting | no QE counterpart — Elk's `src/nesting.f90`, manual task 105 | Elk writes an `O(N_q N_k)` double loop with `mod(ivk + ivq, ngridk)`; that fold makes the sum a cyclic cross-correlation, so `ifftn(|fftn(g)|^2)` replaces it (`pypresso/response/nesting.py`) and the loop is kept as `method = "direct"`. The wedge is unfolded with `grid_equivalence` — `tetra.f90`'s `equiv`, Elk's `ivkik` — and the group it is unfolded with must be the group `denser_grid` reduced it with (`workflows/nscf.py:grid_symmetry`) |
 | Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `pypresso/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]` term by term; here it is one `jvp` of `H(k)` at a frozen sphere (`response/velocity.py`), since `dH/dk_a = i[H, r_a]` in the periodic gauge. The overlap carries a velocity too, so a band velocity is `<psi|dH/dk - eps dS/dk|psi>` |

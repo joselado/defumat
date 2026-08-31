@@ -37,6 +37,10 @@ expression.
 ``photocurrent``
     the shift current ``sigma^abc(0; w, -w)`` -- the bulk photovoltaic effect,
     a second-order optical response by sum over states
+``shg``
+    second-harmonic generation ``chi^(2)(-2w; w, w)``, the same sum over states
+    contracted with two resonances instead of a delta. Elk's ``nonlinopt.f90``
+    is a real reference for it and ``tests/data/elk/`` carries its output
 ``nesting``
     the Fermi-surface nesting function ``N(q)``, which is not a response at all
     -- it is a correlation of ``delta(eps - E_F)`` over the k-grid, and it
@@ -86,6 +90,12 @@ from pypresso.response.photocurrent import (
     shift_current,
 )
 from pypresso.response.piezo import PiezoelectricTensor, piezoelectric_tensor
+from pypresso.response.shg import (
+    SecondHarmonic,
+    band_velocity_difference,
+    second_harmonic,
+    shg_coefficients,
+)
 from pypresso.response.strain import StrainResponse, strain_response
 from pypresso.response.phonon import Phonons, dynamical_matrix
 from pypresso.response.spectra import (
@@ -137,6 +147,10 @@ __all__ = [
     "ShiftCurrent",
     "generalized_derivative",
     "shift_current",
+    "SecondHarmonic",
+    "band_velocity_difference",
+    "second_harmonic",
+    "shg_coefficients",
     "piezoelectric_tensor",
     "raman_tensors",
     "strain_response",

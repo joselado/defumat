@@ -1,0 +1,43 @@
+! AlAs for chi^(2)(-2w; w, w) -- the same crystal as `alas-raman.in` at a basis
+! a second-order susceptibility can actually be compared in.
+!
+! `alas-raman.in`'s `ecutwfc = 10` is what its own phonon reference was run at
+! and is far too small here: chi^(2) carries two energy denominators rather than
+! one, so the basis reaches it twice. Measured on this cell at a 6x6x6 mesh, the
+! static chi^xyz goes -66.3 pm/V at 10 Ry to **-75.8 at 30**, against the
+! vendored Elk's -85.4 -- so the cutoff is worth 12% and moves toward the
+! all-electron answer rather than away from it -- and then stops: 45 Ry gives
+! -76.6, so 30 is converged and the residual 11% against Elk is the
+! pseudopotential rather than the basis.
+!
+! `nosym`/`noinv` and an **unshifted** grid, for P24's reason: chi^abc is a polar
+! rank-3 tensor, a symmetry-reduced wedge does not sum to the cell's until it is
+! averaged over the point group, and a *shifted* Monkhorst-Pack grid is not
+! closed under that group. The k-set here is only the density's; the tensor is
+! evaluated on a denser mesh the caller builds.
+!
+! AlAs is zincblende and therefore non-centrosymmetric, which is the whole point
+! of the case: chi^(2) vanishes identically in every centrosymmetric crystal and
+! `si2-nosym.in` is the control that says so.
+ &control
+    calculation = 'scf'
+    prefix = 'alas'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.575, nat = 2, ntyp = 2,
+    ecutwfc = 30.0
+    nosym = .true.
+    noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Al  26.98  Al.pz-vbc.UPF
+ As  74.92  As.pz-bhs.UPF
+ATOMIC_POSITIONS (alat)
+ Al 0.00 0.00 0.00
+ As 0.25 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0

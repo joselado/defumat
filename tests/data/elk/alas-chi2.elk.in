@@ -1,0 +1,46 @@
+! AlAs, the same crystal as tests/data/qe/alas-raman.in (a = 10.575 bohr), run
+! through Elk's own chi^(2)(-2w;w,w) (task 125) as the reference for P54.
+! Reduced quality against the shipped GaAs example: this is a shape-and-scale
+! comparison, not a digit-for-digit one -- LAPW against norm-conserving
+! pseudopotentials is a different basis and a different gap.
+
+tasks
+  0
+  120
+  125
+
+nempty
+  12
+
+swidth
+  0.005
+
+optcomp
+  1  2  3
+
+ngridk
+  6  6  6
+
+wplot
+  200  100  0
+  0.0  0.3
+
+xctype
+  3
+
+avec
+  5.2875  5.2875  0.0000
+  5.2875  0.0000  5.2875
+  0.0000  5.2875  5.2875
+
+sppath
+  '/u/40/ladovj1/data/Documents/programs/elkpy/vendor/elk/species/'
+
+atoms
+  2
+  'Al.in'
+  1
+  0.0   0.0   0.0
+  'As.in'
+  1
+  0.25  0.25  0.25

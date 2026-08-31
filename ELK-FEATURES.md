@@ -39,6 +39,18 @@ second route beside it.
 | Piezoelectric tensor `e_(k)ij`, clamped-ion | 380 (`piezoelt.f90`) | P50 |
 | Optical conductivity `sigma_ab(omega)`, MOKE, anomalous Hall | 121/122 (`dielectric.f90`, `moke.f90`) | P51 |
 | Fermi-surface nesting function `N(q)` | 105 (`nesting.f90`) | P52 |
+| Second-harmonic generation `chi^(2)(-2w; w, w)` | 125 (`nonlinopt.f90`) | P54 |
+
+**The second-harmonic row was in the *rejected* table until P54 and was wrong
+there**, which is worth recording because the reasoning that put it there is
+the kind that repeats. It was rejected by pointing at P35's `chi^(2)` refusal
+-- "the `<u_i|r_k|u_j>` piece, worth 42%" -- and that refusal is a statement
+about the **Sternheimer stack**, where a field enters only through a source
+term. `nonlinopt.f90` is a **sum over states**, which needs no such object: its
+only ingredient is the interband dipole `-i v_nm / w_nm`, exact for an
+eigenstate of the full `H(k)`. P53 drew that distinction for the shift current
+and flagged this row; P54 is it being acted on. **Check which machine a
+refusal belongs to before inheriting it.**
 
 ---
 
@@ -250,7 +262,6 @@ zero however wrong the strain leg is.
 | STM images (162) | QE has it — `PP/src/stm.f90`, Tersoff-Hamann. |
 | Fermi surface plots (100/101/102) | QE has it — `PP/src/fermisurface.f90`, `fermi_velocity.f90`. |
 | Wannier90 interface (550) | QE has it — `PP/src/pw2wannier90.f90`. |
-| Second-harmonic generation (125) | Not cheap, and `chi^(2)` is already refused by name with the missing term identified (P35: the `<u_i|r_k|u_j>` piece, worth 42%). |
 | BSE (185/186/187), GW (600-640) | Out of scope per `CLAUDE.md`, and neither is cheap. |
 | Electron-phonon, Eliashberg (240-285) | Needs phonons at `q != 0`, which is the outstanding two-sphere work. |
 | Molecular dynamics (420/421) | A driver, not a new observable. |

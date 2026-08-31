@@ -3214,6 +3214,72 @@ nothing else -- which is what makes the k-grid the axis to spend on. The
 correlation never forms an `N_k x N_q` anything.
 
 
+## What a second-harmonic tensor costs (P54)
+
+AlAs, `a = 10.575` bohr, `ecutwfc = 30` (`npwx = 869`), the whole unshifted
+6x6x6 grid (216 points), 22 bands, 200 frequencies. One core,
+`OMP_NUM_THREADS=1`, the affinity mask set before JAX is imported.
+
+| stage | s |
+|---|---|
+| SCF on the input's own 4x4x4 grid | 11.9 |
+| NSCF, 22 bands on 216 points | 38.2 |
+| **the tensor itself** | **24.5** |
+| the `truncation` diagnostic (the tensor a second time, at 16 bands) | 24.5 |
+| **end to end** | **96.2** |
+
+**The diagnostic costs as much as the answer**, which is worth knowing before
+reading the last row as the price of the physics: `truncation` re-runs the whole
+sum with the top quarter of the bands dropped, so a run that does not want it is
+a little over 70 s. It is kept on by default because the band count is this
+quantity's convergence parameter and no symmetry check sees a truncated sum.
+
+**The tensor is `O(nbnd^3)` per k-point and per cartesian triple**, and that is
+the axis to watch: 18 independent triples times 216 k-points times `22^3`. The
+frequency axis is nearly free by comparison -- the coefficient matrices are built
+once, before it is touched, which is `nonlinopt.f90`'s own layout and the reason
+a 200-point spectrum costs no more than a single frequency. Doubling the bands
+costs eight times; doubling the frequencies costs almost nothing.
+
+### Against Elk, which is where this one was taken from
+
+The same crystal, the same 6x6x6 grid, the same 0.005 Ha broadening, one core
+each. Elk ran tasks 0, 120 and 125 in one invocation from nothing.
+
+| | Elk | pypresso |
+|---|---|---|
+| ground state | — | 11.9 s |
+| the states the sum runs over | — | 38.2 s (NSCF, 22 bands) |
+| the tensor | — | 24.5 s |
+| **from atomic densities to `chi^(2)(omega)`** | **10.1 s** | **71.7 s** (96.2 with the diagnostic) |
+
+**Elk is about seven times faster here and it is carrying more bands**, which is
+the entry's uncomfortable half and the reason the rule says to measure it: 37
+second-variational states against 22. Its three stages could not be separated
+without re-running each against a state on disk, so only the bottom row is a
+comparison; the rows above it are this code's own breakdown.
+
+**What is not comparable**, stated rather than discovered. The bases are two
+methods and not two implementations -- an all-electron LAPW muffin-tin basis
+carrying every electron of aluminium and arsenic, against 869 plane waves and
+eleven valence electrons. And the two reach the matrix elements differently on
+purpose: Elk's task 120 writes momentum matrix elements to `PMAT.OUT` and task
+125 reads them back, where this builds `dH/dk` in memory and never forms a
+momentum matrix element at all -- which is a correctness choice rather than a
+performance one, `[H, r] = p` failing for a nonlocal pseudopotential, and it is
+the one line of `nonlinopt.f90` this code deliberately does not transcribe.
+
+**Where the time actually goes is the NSCF and not the tensor**, which is the
+same shape P51 and P53 both have: more than half of it is diagonalising 22 bands
+at 216 k-points, and the second-order sum on top of that is 24.5 s. So the lever
+is the eigensolver and the k-batching dial, not the assembly.
+
+**Peak.** The triple sum holds `nbnd^3` complex numbers per k-point in the chunk
+-- 22^3 x 16 B = 170 kB, times `k_batch`, times a handful of live temporaries --
+so the working set is the NSCF's wavefunctions (`nk x nbnd x npwx` = 216 x 22 x
+869 x 16 B = 66 MB) and nothing the tensor adds. At 40 bands the triple sum is
+still only 1 MB per k-point, so `nbnd` costs time here rather than memory.
+
 ## History
 
 | Date | Change | Effect |

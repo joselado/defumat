@@ -845,6 +845,32 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS)
         )
 
+    def get_shg(self, kpoints=None, nbnd=None, **options):
+        """``chi^(2)(-2w; w, w)``, the second-harmonic tensor, in pm/V.
+
+        How much of the light shone on a crystal comes back out at twice the
+        frequency. A polar rank-3 tensor, symmetric in its two field labels,
+        and identically zero in any crystal with an inversion centre.
+
+        ``nbnd`` is required and is the convergence parameter of the whole
+        quantity, for the same reason it is for ``get_shift_current``: the sum
+        over the intermediate state is an identity only over a complete basis.
+        Read ``.truncation`` before believing a number, and note that the
+        literature usually quotes ``d = chi/2`` -- ``.d_coefficient`` gives it.
+        """
+        from pypresso.workflows.shg import run_shg
+
+        result = self._ground_state("second-harmonic generation")
+        if kpoints is not None:
+            options = {**options, "kpoints": kpoints}
+        if nbnd is not None:
+            options = {**options, "nbnd": nbnd}
+        return run_shg(
+            self.system, self.pseudos, result.density,
+            **self._call_options(run_shg, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
     # ------------------------------------------------------------------
     # topology
     # ------------------------------------------------------------------
