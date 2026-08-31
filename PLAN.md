@@ -7204,8 +7204,8 @@ what extends, and `PERFORMANCE.md` says which to reach for on a large cell.
 **Refused rather than approximated**, beyond the polar crystals: everything
 `require_a_sternheimer_regime` refuses, everything
 `require_a_differentiable_cell` refuses (a spin spiral, a magnetic field), and a
-shifted grid run with `nosym`. **Ultrasoft and PAW are refused by name, and it
-is a gap rather than a missing term.** Nothing in the assembly is
+shifted grid run with `nosym`. **Ultrasoft and PAW are refused by name**
+(`require_a_measured_dataset`)**, and it is a gap rather than a missing term.** Nothing in the assembly is
 norm-conserving — the density and `becsum` are handed to the functional as
 builders that carry the strain, which is what P41 needed for the strain
 response; `qq_ij` has no cell in it, so the constraint stays strain-independent;
