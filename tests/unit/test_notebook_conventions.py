@@ -52,19 +52,20 @@ REWRITTEN = {
     "18_continuing_a_calculation",
     "19_linear_response",
     "20_phonons",
+    "21_electrostriction",
     "22_van_der_waals",
+    "23_variable_cell_relaxation",
     "24_tran_blaha_band_gaps",
     "25_your_own_crystal",
     "26_raman_and_infrared_spectra",
+    "27_excitons_and_tddft",
     "29_effective_mass_and_angular_momenta",
 }
 
 #: Notebooks that still say ``jvp`` in a plot label or a code cell. Prose debt
 #: from before the rule was enforced, and it goes when P49's phase 5 reaches
 #: them. **This set only shrinks.**
-JVP_DEBT = {
-    "21_electrostriction",
-}
+JVP_DEBT = set()
 
 #: What a notebook may import from ``pypresso``. Everything else is the
 #: implementation, and a notebook that needs it says why on the same line.

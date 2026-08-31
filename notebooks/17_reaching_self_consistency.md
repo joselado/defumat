@@ -37,9 +37,11 @@ from pypresso.scf import Calculation, run_scf
 
 PSEUDO = Path("../tests/data/pseudo")
 
+# The benchmark inputs carry their own conv_thr and electron_maxstep, which
+# `from_file` reads, so this helper is the path and nothing else.
 def load(name):
-    return Calculator.from_file(Path("../benchmarks") / name, pseudo_dir=PSEUDO,
-                                announce=False, conv_thr=1e-8, max_iterations=200)
+    return Calculator.from_file(Path("../benchmarks") / name,
+                                pseudo_dir=PSEUDO, announce=False)
 
 aluminium = load("al-slab.in")
 slab, slab_pseudos = aluminium.system, aluminium.pseudos
@@ -227,7 +229,7 @@ print(f"iron's magnetic stabilisation energy = "
       Newton-Krylov, nspin = 2                  -55.38228995     0.0002
       nspin = 1 (independent reference)         -55.38228995         --
     
-    Newton's root matches the nspin = 1 reference to 1.6e-09 Ry
+    Newton's root matches the nspin = 1 reference to 3.1e-10 Ry
     iron's magnetic stabilisation energy = 64.1 mRy
 
 

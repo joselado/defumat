@@ -12,8 +12,8 @@ where $h$ is the matrix whose columns are the lattice vectors.
 The case below is QE's own `vc-relax4.in`: rhombohedral arsenic squeezed at **500 kbar**,
 where the cell compresses by 10% *and* the two atoms move from 0.2722 to 0.2500, which is
 the rhombohedral to simple-cubic transition. Against `pw.x` the relaxed volume agrees to
-**7e-4 bohr³**, the atoms to **2.4e-6** in crystal coordinates and the final energy to
-**2.4e-6 Ry**, in the same ten ionic steps.
+**2.6e-5 bohr³**, the atoms to **5.7e-6** in crystal coordinates and the final energy to
+**1.0e-7 Ry**, in the same ten ionic steps.
 
 
 ```python
@@ -26,18 +26,16 @@ from pypresso import Calculator
 from pypresso.io import read_qe_output
 from pypresso.units import RY_TO_KBAR
 
-CASES = Path("../tests/data/qe")
-PSEUDO = Path("../tests/data/pseudo")
+CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_vc-relax")
 
-arsenic = Calculator.from_file(QE / "vc-relax4.in", pseudo_dir=PSEUDO,
-                               announce=False, conv_thr=1e-10)
-system, pseudos = arsenic.system, arsenic.pseudos
-print(f"{system.structure.nat} atoms, applied pressure {system.relax.press} kbar, "
-      f"starting volume {float(system.cell.volume):.2f} bohr^3")
+arsenic = Calculator.from_file(QE / "vc-relax4.in", pseudo_dir=PSEUDO, announce=False)
+print("%d atoms, applied pressure %g kbar, starting volume %.2f bohr^3"
+      % (arsenic.system.structure.nat, arsenic.system.relax.press,
+         float(arsenic.system.cell.volume)))
 ```
 
-    2 atoms, applied pressure 500.0 kbar, starting volume 245.37 bohr^3
+    2 atoms, applied pressure 500 kbar, starting volume 245.37 bohr^3
 
 
 ## Run it
@@ -55,14 +53,14 @@ print(f"volume   {result.steps[0].volume:8.2f}  ->  {result.volume:8.2f} bohr^3"
 print(f"energy   {result.total_energy:.8f} Ry")
 print(f"enthalpy {result.enthalpy:.8f} Ry")
 print(f"pressure {np.trace(result.stress) / 3 * RY_TO_KBAR:.2f} kbar "
-      f"(asked for {system.relax.press})")
+      f"(asked for {arsenic.system.relax.press})")
 ```
 
     converged in 10 ionic steps
     volume     245.37  ->    190.79 bohr^3
-    energy   -25.39781626 Ry
+    energy   -25.39781852 Ry
     enthalpy -24.74934425 Ry
-    pressure 502.04 kbar (asked for 500.0)
+    pressure 501.84 kbar (asked for 500.0)
 
 
 ## Against `pw.x`
@@ -95,11 +93,11 @@ print(f"\nPulay error of the frozen basis: {result.pulay_error:.2e} Ry")
 ```
 
                                pypresso           pw.x   difference
-    volume (bohr^3)          190.787050     190.787743     6.93e-04
-    a1 . x (bohr)              3.744124       3.744159     3.50e-05
-    a1 . z (bohr)              5.238375       5.238296     7.88e-05
-    As at (crystal)            0.250001       0.250004     2.35e-06
-    total energy (Ry)        -25.397816     -25.397819     2.36e-06
+    volume (bohr^3)          190.787717     190.787743     2.64e-05
+    a1 . x (bohr)              3.744158       3.744159     1.40e-06
+    a1 . z (bohr)              5.238299       5.238296     3.19e-06
+    As at (crystal)            0.249998       0.250004     5.69e-06
+    total energy (Ry)        -25.397819     -25.397819     1.03e-07
     
     Pulay error of the frozen basis: 3.67e-03 Ry
 
@@ -134,7 +132,7 @@ axes[1].set_title("the atoms"); axes[1].legend()
 
 axes[2].plot(range(1, len(steps) + 1),
              [s.cell_error * RY_TO_KBAR for s in steps], "o-", color="#2ca02c")
-axes[2].axhline(system.relax.press_conv_thr, ls="--", color="grey",
+axes[2].axhline(arsenic.system.relax.press_conv_thr, ls="--", color="grey",
                 label="press_conv_thr")
 axes[2].set_yscale("log")
 axes[2].set_xlabel("ionic step"); axes[2].set_ylabel(r"max $|P\,I - \sigma|$ (kbar)")
@@ -159,11 +157,11 @@ convergence is reported in kbar: what has to go to zero is a pressure difference
 
 
 ```python
-from pypresso.relax.cell import cell_force
+from pypresso.relax.cell import cell_force   # no facade route to dH/dh
 
 h = result.cell.T                      # QE's convention: lattice vectors as columns
 omega = result.volume
-pressure = system.relax.press / RY_TO_KBAR
+pressure = arsenic.system.relax.press / RY_TO_KBAR
 
 gradient = cell_force(result.stress, h, omega, pressure)
 recovered = gradient @ h.T / omega     # ... must be P I - sigma again
@@ -175,11 +173,11 @@ print("\ncontracted back, max |P I - sigma| =",
 ```
 
     dH/dh at the relaxed cell (Ry/bohr):
-    [[-0.000443  0.000221  0.000221]
-     [-0.       -0.000384  0.000384]
-     [-0.000187 -0.000187 -0.000187]]
+    [[-0.000397  0.000198  0.000198]
+     [-0.       -0.000344  0.000344]
+     [-0.000171 -0.000171 -0.000171]]
     
-    contracted back, max |P I - sigma| = 2.271 kbar
+    contracted back, max |P I - sigma| = 2.071 kbar
 
 
 ## What a moving cell does to the k-points
@@ -194,7 +192,7 @@ finite difference of the frozen-basis energy, below.
 
 ```python
 print(f"{'crystal k-point':>28s}   {'from the run':>22s}")
-base = np.asarray(system.kpoints.crystal(system.cell))
+base = np.asarray(arsenic.system.kpoints.crystal(arsenic.system.cell))
 final = np.asarray(result.system.kpoints.crystal(result.system.cell))
 for a, b in list(zip(base, final))[:3]:
     print(f"{np.array2string(a, precision=5):>28s}   {np.array2string(b, precision=5):>22s}")

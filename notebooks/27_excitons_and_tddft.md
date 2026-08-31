@@ -1,8 +1,8 @@
 # Excitons and TDDFT: the bootstrap kernel
 
 An absorption spectrum is the imaginary part of the macroscopic dielectric function as a
-function of frequency, and getting it means building the independent-particle
-susceptibility as a **matrix** over reciprocal lattice vectors,
+function of frequency, and getting it means building the independent-particle susceptibility
+as a **matrix** over reciprocal lattice vectors,
 
 $$\chi^0_{\mathbf{GG}'}(\omega)=\frac{1}{\Omega}\sum_{\mathbf k}\sum_{ij}
 \frac{(f_i-f_j)\,\rho^{ij}_{\mathbf G}\rho^{ij*}_{\mathbf G'}}
@@ -14,147 +14,115 @@ and then solving the Dyson equation with an exchange-correlation kernel:
 
 $$\epsilon^{-1}=1+X\left(1-X-\tilde f_{\rm xc}X\right)^{-1},\qquad X=v^{1/2}\chi^0v^{1/2}$$
 
-The kernel decides whether the calculation can describe an **exciton**, a bound
-electron-hole pair. The one used here is the **bootstrap** of Sharma, Dewhurst, Sanna and
-Gross ([PRL **107**, 186401 (2011)](https://arxiv.org/abs/1107.0199)), which is
-parameter-free and defined *by* the equation it feeds:
+**This is the one place in this package where a sum over empty states earns its keep.**
+Everything in the linear-response stack produces $\chi_0$ as an *operator* from a Sternheimer
+solve, which is cheaper and needs no empty bands -- but a spectrum needs the frequency axis
+and needs $\chi_0$ as a matrix in two $\mathbf G$ indices, and neither is something an
+operator gives.
 
-$$f^{\rm BS}_{\rm xc}=-\frac{\epsilon^{-1}(\mathbf q,0)\,v(\mathbf q)}{\epsilon_0(\mathbf q,0)-1},
-\qquad \epsilon_0=1-v\chi^0$$
+The kernel decides whether the calculation can describe an **exciton**, a bound electron-hole
+pair. The one used here is the **bootstrap** of Sharma, Dewhurst, Sanna and Gross
+([PRL **107**, 186401 (2011)](https://doi.org/10.1103/PhysRevLett.107.186401)), which is a
+fixed point of the Dyson equation and of its own definition: parameter-free, and converging
+in a handful of passes.
 
-so the two are solved together until they stop moving, which takes nine iterations on
-silicon. It diverges as $1/q^2$ as the wavevector goes to zero, and that long-ranged
-attraction is what binds the pair. Quantum ESPRESSO has no counterpart to it.
-
-**How this is validated.** There is no other code's spectrum to compare against, since an
-all-electron LAPW spectrum is not the same number as a pseudopotential plane-wave one. The
-check is an identity instead: the same $\epsilon_M(0)$ reached by this sum over states plus
-a Dyson inversion, and by the projected conjugate-gradient solve of notebook 19, which
-shares no machinery with it and never sees an empty state. They agree to **1.3e-2 on a
-constant of 22**, and what is left is the truncation of the sum over empty bands, which is
-reported rather than tuned away.
+| silicon, LDA, $4\times4\times4$ | |
+|---|---|
+| the bootstrap fixed point converges in | **9 passes** |
+| its long-range strength $\alpha = -4\pi F_{00}$ | **+0.0232** |
+| ALDA's, on the same $\chi_0$ | **0.0000, exactly** |
+| band truncation of the sum, reported not tuned away | **-0.013** on a constant of about 22 |
 
 
 ```python
-import numpy as np
-import matplotlib.pyplot as plt
 from pathlib import Path
 
+import matplotlib.pyplot as plt
+import numpy as np
+
 from pypresso import Calculator
-from pypresso.scf import Calculation, run_scf
 from pypresso.units import RY_TO_EV
 
-DATA = Path("..") / "tests" / "data"
+CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
+OMEGA = np.arange(0.0, 0.60, 0.004)      # Ry
 
-# The unshifted, closed 4x4x4 grid with `nosym`. chi_0(G, G') is a matrix in *two*
-# G indices, and symmetrising it would rotate both at once -- which nothing here
-# does -- so this phase needs the whole grid, and an unshifted one is what makes
-# running it without symmetry sound in the first place.
-silicon = Calculator.from_file(DATA / "qe" / "si-epsilon-unshifted-nosym.in",
-                               pseudo_dir=DATA / "pseudo", announce=False,
-                               conv_thr=1e-12)
-system, pseudos = silicon.system, silicon.pseudos
-
-scf = silicon.get_scf(max_iterations=80)
-print(f"{system.kpoints.nk} k-points, E = {float(scf.total_energy):.8f} Ry")
+silicon = Calculator.from_file(CASES / "si-epsilon-unshifted-nosym.in",
+                               pseudo_dir=PSEUDO, announce=False)
 ```
 
-    64 k-points, E = -15.83064709 Ry
+The k-grid is unshifted, closed, and run under `nosym`. $\chi_0(\mathbf G, \mathbf G')$ is a
+matrix in *two* $\mathbf G$ indices and symmetrising it would have to rotate both at once,
+which nothing here does -- so this needs the **whole** grid, and an unshifted one is what
+makes running it without symmetry sound in the first place.
 
-
-## The spectrum, three kernels
-
-Building $\chi^0$ is the whole cost and the kernel is nearly free, so the three spectra
-below share one $\chi^0$ and differ only in the Dyson equation solved on top of it.
+Building $\chi_0$ is the whole cost and the kernel is nearly free, so the three spectra below
+differ only in the Dyson equation solved on top of it.
 
 
 ```python
-from pypresso.workflows.nscf import fixed_density_states
-from pypresso.tddft import independent_response, solve_dyson, alda_matrix
-import jax.numpy as jnp, time
-
-# One fixed-density run with empty states. `nbnd` is the convergence parameter of
-# this whole phase and nothing can refuse it being too small -- hence the
-# residual measured further down.
-calc, _, evals, wfs = fixed_density_states(system, pseudos, scf.density,
-                                           nbnd=60, conv_thr=1e-10)
-potential = calc.potential(jnp.asarray(scf.density))
-
-omega = np.arange(0.0, 0.60, 0.004)                  # Ry
-t = time.time()
-chi = independent_response(
-    calc, wfs, evals, potential.v_scf,
-    np.concatenate([[0.0], omega]),   # one extra point at omega = 0: the kernel's
-    ecut_response=8.0,                # Elk's gmaxrf -- the G-set chi_0 spans
-    broadening=0.012,                 # Elk's swidth, and the width of every peak
-)
-print(f"chi_0: {chi.nm} x {chi.nm} at {len(omega) + 1} frequencies, "
-      f"{chi.npairs} pairs per k-point, {time.time() - t:.0f} s")
-
-context = {"alda_matrix": alda_matrix(calc, jnp.asarray(scf.density), chi.sphere)}
-solutions, spectra = {}, {}
+spectra = {}
 for kernel in ("rpa", "alda", "bootstrap"):
-    t = time.time()
-    solutions[kernel] = solve_dyson(chi, kernel, context)
-    epsilon = np.asarray(solutions[kernel].epsilon)[1:]
-    spectra[kernel] = np.imag(np.trace(epsilon, axis1=1, axis2=2)) / 3.0
-    print(f"  {kernel:10s} {time.time() - t:5.2f} s   "
-          f"alpha = {solutions[kernel].alpha:+.4f}   "
-          f"{solutions[kernel].iterations} pass(es)")
+    spectra[kernel] = silicon.get_absorption(OMEGA, kernel=kernel, nbnd=60,
+                                             ecut_response=8.0, broadening=0.012)
+
+print("%-11s %9s %8s %12s" % ("kernel", "alpha", "passes", "truncation"))
+for kernel, spectrum in spectra.items():
+    print("%-11s %+9.4f %8d %12.4f"
+          % (kernel, spectrum.alpha, spectrum.iterations, spectrum.static_residual))
 ```
 
-    chi_0: 115 x 115 at 151 frequencies, 224 pairs per k-point, 4 s
+    kernel          alpha   passes   truncation
+    rpa           -0.0000        1      -0.0129
+    alda          -0.0000        1      -0.0129
+    bootstrap     +0.0232        9      -0.0129
 
 
-      rpa         0.56 s   alpha = -0.0000   1 pass(es)
+**$\alpha$ is the number that says whether a kernel can bind.** It is the long-range strength
+the kernel's head is equivalent to, and ALDA's is *zero* -- not small, zero, and for a
+structural reason rather than a matter of magnitude. The symmetrised kernel is
+$\tilde f_{xc}=v^{-1/2}f_{xc}v^{-1/2}$; ALDA's $f_{xc}$ is **finite** at $\mathbf q = 0$ while
+the Coulomb interaction $v$ **diverges**, so its head and wings vanish identically and the
+optical limit never feels it. The bootstrap's do not vanish, because its numerator carries
+$v(\mathbf q)$ itself. **No adiabatic local kernel binds an exciton, however strong it is
+made.**
 
-
-      alda        0.45 s   alpha = -0.0000   1 pass(es)
-
-
-      bootstrap   2.80 s   alpha = +0.0232   9 pass(es)
-
-
-## The figure
-
-An attractive kernel moves oscillator strength **downhill**, towards the absorption edge.
-Silicon has no bound exciton, so there is no peak below the gap to find; what shows here is
-the redistribution, an enhanced $E_1$ shoulder at the expense of $E_2$, which is what the
-bootstrap paper's silicon panel shows.
+The truncation column is the other thing to read. It is $\epsilon_M(0)$ from this sum over
+states, in RPA and with no scissors shift, minus the same quantity from a Sternheimer solve
+that never sees an empty band -- so the difference is this run's band truncation and nothing
+else. It is **reported rather than tuned away**, and `nbnd` is what tightens it.
 
 
 ```python
-fig, (ax, axr) = plt.subplots(1, 2, figsize=(11, 4), width_ratios=[1.6, 1])
+fig, (left, right) = plt.subplots(1, 2, figsize=(11.0, 4.0), width_ratios=[1.6, 1])
 
-ev = omega * RY_TO_EV
-style = {"rpa": ("0.35", "-", r"RPA  ($f_{xc}=0$)"),
+STYLE = {"rpa": ("0.35", "-", r"RPA  ($f_{xc} = 0$)"),
          "alda": ("tab:orange", "--", "ALDA"),
          "bootstrap": ("tab:red", "-", "bootstrap")}
-for name, (colour, dash, label) in style.items():
-    ax.plot(ev, spectra[name], dash, color=colour, lw=1.8, label=label)
-ax.set_xlabel("energy (eV)"); ax.set_ylabel(r"Im $\epsilon_M(\omega)$")
-ax.set_title("silicon, 4x4x4, LDA -- local fields included")
-ax.legend(frameon=False); ax.set_xlim(1.5, 8)
-
-# The same thing as a difference, which is where the effect actually lives.
-for name in ("alda", "bootstrap"):
-    axr.plot(ev, spectra[name] - spectra["rpa"], style[name][1],
-             color=style[name][0], lw=1.8, label=style[name][2])
-axr.axhline(0.0, color="0.7", lw=0.8)
-axr.set_xlabel("energy (eV)"); axr.set_ylabel(r"Im $\epsilon_M$ $-$ RPA")
-axr.set_title("what the kernel does"); axr.legend(frameon=False); axr.set_xlim(1.5, 8)
+for kernel, (colour, dash, label) in STYLE.items():
+    spectra[kernel].plot(ax=left, color=colour, ls=dash, lw=1.8, label=label)
+    if kernel != "rpa":
+        right.plot(OMEGA * RY_TO_EV,
+                   spectra[kernel].absorption - spectra["rpa"].absorption, dash,
+                   color=colour, lw=1.8, label=label)
+left.set(xlim=(1.5, 8.0), title="silicon, 4x4x4, LDA, local fields included")
+left.legend(frameon=False)
+right.axhline(0.0, color="0.7", lw=0.8)
+right.set(xlim=(1.5, 8.0), xlabel="energy   [eV]",
+          ylabel=r"Im $\epsilon_M$ $-$ RPA", title="what the kernel does")
+right.legend(frameon=False)
 fig.tight_layout()
 
-peak = int(np.argmax(spectra["rpa"]))          # a *common* cut for all three
-for name in style:
-    a = spectra[name]
-    print(f"{name:10s} weight below RPA's peak: {a[:peak].sum()/a.sum():.4f}   "
-          f"first moment: {(omega*a).sum()/a.sum()*RY_TO_EV:.4f} eV")
+peak = int(np.argmax(spectra["rpa"].absorption))        # one cut, common to all three
+for kernel in STYLE:
+    curve = spectra[kernel].absorption
+    print("%-11s weight below RPA's peak %.4f   first moment %.4f eV"
+          % (kernel, curve[:peak].sum() / curve.sum(),
+             (OMEGA * curve).sum() / curve.sum() * RY_TO_EV))
 ```
 
-    rpa        weight below RPA's peak: 0.5706   first moment: 3.6477 eV
-    alda       weight below RPA's peak: 0.6138   first moment: 3.5916 eV
-    bootstrap  weight below RPA's peak: 0.6085   first moment: 3.5873 eV
+    rpa         weight below RPA's peak 0.5706   first moment 3.6477 eV
+    alda        weight below RPA's peak 0.6138   first moment 3.5916 eV
+    bootstrap   weight below RPA's peak 0.6085   first moment 3.5873 eV
 
 
 
@@ -163,119 +131,45 @@ for name in style:
     
 
 
+An attractive kernel moves oscillator strength **downhill**, towards the absorption edge, and
+the first moment of the three spectra says so: 3.648 eV in RPA, 3.592 with ALDA, 3.587 with
+the bootstrap. Silicon has no bound exciton, so there is no peak below the gap to find; what
+shows here is the redistribution -- an enhanced $E_1$ shoulder at the expense of $E_2$ --
+which is what the bootstrap paper's silicon panel shows.
+
+**ALDA moves weight too, by about as much, and it would be wrong to say otherwise.** The
+difference between the two is not visible in this figure and is not supposed to be: it is
+the $\alpha$ column above, and it decides what happens in a material that *does* bind.
+
 The energy window the weight is measured in has to be **common** to all three spectra.
-Measuring each one below its own maximum moves the window with the spectrum and reverses
-the answer.
-
-ALDA moves weight too, and it would be wrong to say otherwise. What it cannot do is bind,
-and the reason is structural rather than a matter of size.
-
-## The identity that certifies it
-
-Two routes to $\epsilon_M(0)$ that share the ground state and nothing else. The sum over
-states builds a matrix from occupied-empty pairs and inverts a Dyson equation; the
-Sternheimer route never forms a matrix, never sees an empty state, and solves
-$(\hat H-\epsilon_n\hat S)|\Delta\psi\rangle=-\hat P_c\,\mathbf r|\psi\rangle$ by conjugate
-gradient.
-
-The two kernels have to match for the comparison to mean anything. The static route's
-screening includes $f_{xc}$, so it is the ALDA answer and not the RPA one, and comparing an
-RPA sum over states against it leaves a residue that looks exactly like band truncation.
-
-
-```python
-from pypresso.response.efield import dielectric_tensor
-
-nocc = int(round(calc.nelec / 2))
-
-# chi_0 again at omega = 0 with **no** broadening, so it is comparable with a
-# Sternheimer solve, which has none either. One frequency, so it is cheap.
-static = independent_response(calc, wfs, evals, potential.v_scf, np.array([0.0]),
-                              ecut_response=8.0, broadening=0.0)
-static_context = {"alda_matrix": alda_matrix(calc, jnp.asarray(scf.density),
-                                             static.sphere)}
-
-print(f"{'kernel':10s} {'sum over states':>16s} {'Sternheimer':>13s} {'diff':>9s}")
-sternheimer = {}
-for kernel, screening in (("rpa", "hartree"), ("alda", "full")):
-    reference = dielectric_tensor(calc, wfs[:, :, :nocc], evals[:, :, :nocc],
-                                  jnp.asarray(scf.density), screening=screening,
-                                  born_charges=False)
-    sternheimer[kernel] = float(np.diag(np.asarray(reference.epsilon)).mean())
-    solution = solve_dyson(static, kernel, static_context)
-    here = float(np.real(np.diag(np.asarray(solution.epsilon)[0])).mean())
-    print(f"{kernel:10s} {here:16.4f} {sternheimer[kernel]:13.4f} "
-          f"{here - sternheimer[kernel]:9.1e}")
-
-mismatch = abs(sternheimer["alda"] - sternheimer["rpa"])
-print(f"\nMismatch the pairing and the residue is {mismatch:.3f} on ~22 -- "
-      f"{100 * mismatch / sternheimer['rpa']:.0f}%, and it is f_xc,")
-print("not a convergence error. That is what the `screening` switch is for.")
-```
-
-    kernel      sum over states   Sternheimer      diff
-
-
-    rpa                 22.3322       22.3451  -1.3e-02
-
-
-    alda                23.6214       23.6088   1.3e-02
-    
-    Mismatch the pairing and the residue is 1.264 on ~22 -- 6%, and it is f_xc,
-    not a convergence error. That is what the `screening` switch is for.
-
-
-## Why ALDA cannot bind, in one line of output
-
-The symmetrised kernel is $\tilde f_{xc}=v^{-1/2}f_{xc}v^{-1/2}$. ALDA's $f_{xc}$ is
-**finite** at $\mathbf q=0$ while the Coulomb interaction $v$ **diverges**, so its head and
-wings vanish identically and the optical limit never feels it. The bootstrap's do not
-vanish, because its numerator carries $v(\mathbf q)$ itself. That is the entire difference
-between the two, and it is a statement about shape rather than about magnitude: no
-adiabatic local kernel binds an exciton, however strong it is made.
-
-
-```python
-for name in ("alda", "bootstrap"):
-    f = np.asarray(solutions[name].fxc)[0]
-    print(f"{name:10s} |head| = {np.abs(f[:3, :3]).max():.3e}   "
-          f"|wings| = {np.abs(f[:3, 3:]).max():.3e}   "
-          f"|body| = {np.abs(f[3:, 3:]).max():.3e}")
-
-print("\nAnd the one-call entry point, which does all of the above at once:")
-print("    from pypresso.workflows import run_absorption")
-print("    run_absorption(system, pseudos, scf.density, omega,")
-print("                   kernel='bootstrap', nbnd=60, ecut_response=8.0,")
-print("                   broadening=0.012, scissor=0.05)")
-```
-
-    alda       |head| = 0.000e+00   |wings| = 0.000e+00   |body| = 3.173e+00
-    bootstrap  |head| = 1.847e-03   |wings| = 5.025e-04   |body| = 4.204e-02
-    
-    And the one-call entry point, which does all of the above at once:
-        from pypresso.workflows import run_absorption
-        run_absorption(system, pseudos, scf.density, omega,
-                       kernel='bootstrap', nbnd=60, ecut_response=8.0,
-                       broadening=0.012, scissor=0.05)
-
+Measuring each one below its own maximum moves the window with the spectrum and reverses the
+answer.
 
 ## Two things that leave a perfectly plausible spectrum
 
 **$\epsilon_M$ is the inverse of the $3\times3$ head of $\epsilon^{-1}$, not the head of the
 inverse of the whole matrix.** The two are different physics: the second is exactly the
-no-local-field result, smooth, positive, with the right peaks and 9% too large. Local field
-effects are the difference between them.
+no-local-field result -- smooth, positive, with the right peaks, and 9% too large. Local
+field effects are the difference between them, and the result carries both so the difference
+can be looked at.
 
 **Truncating the sum over empty bands has no symptom.** An undersized sum gives a spectrum
-that looks fine, so the residue against the band-complete static route is reported. It has
-to be compared kernel for kernel and scissors for scissors, since differencing two routes
-measures every way they differ: a 0.05 Ry scissors shift on one side alone turns a residual
-of $+0.013$ into $-3.46$.
+that looks entirely fine, which is why the residue against the band-complete static route is
+reported. It has to be compared kernel for kernel and scissors for scissors, since
+differencing two routes measures every way they differ: a 0.05 Ry scissors shift applied on
+one side alone turns a residual of $+0.013$ into $-3.46$.
+
+## What it refuses
+
+Finite $\mathbf q$, ultrasoft and PAW datasets, metals, spin in any form, a symmetry-reduced
+k-set, ALDA with a gradient-corrected functional, and a bootstrap fixed point that has not
+converged. `TDDFPT/` is the closest thing QE has and it is not comparable: a
+Liouville-Lanczos solver with RPA and ALDA, which has no bootstrap kernel and never forms a
+Dyson equation in $\mathbf G$ space at all.
 
 ---
-The tests behind this notebook: `tests/regression/test_tddft.py`,
-`tests/unit/test_tddft_machinery.py`.
-
-Refused rather than approximated: finite $\mathbf q$, ultrasoft and PAW, metals, spin in any
-form, a symmetry-reduced k-set, ALDA with a gradient-corrected functional, and a bootstrap
-fixed point that has not converged.
+The tests behind this notebook: `tests/regression/test_tddft.py`, which holds the identity
+between this sum over states and the Sternheimer solve of notebook 19 -- two routes to
+$\epsilon_M(0)$ that share the ground state and nothing else -- and
+`tests/unit/test_tddft_machinery.py`, which holds the head-of-the-inverse distinction and
+the bootstrap's fixed point.

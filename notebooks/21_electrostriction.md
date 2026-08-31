@@ -35,31 +35,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from pypresso import Calculator
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.response import electrostriction
-from pypresso.scf import Calculation, run_scf
-from pypresso.system import build_system
 
-CASES = Path("../tests/data/qe")
-PSEUDO = Path("../tests/data/pseudo")
+CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
-# An unshifted k-grid, run whole under `nosym`. It has to be unshifted: a shifted grid is
-# not closed under the point group, so a directional response can neither be run whole on
-# it nor be symmetrised from its wedge.
+# An unshifted k-grid, run whole under `nosym`: a shifted grid is not closed under the
+# point group, so a directional response can neither be run whole on it nor symmetrised.
 silicon = Calculator.from_file(CASES / "si-electrostriction.in", pseudo_dir=PSEUDO,
-                              announce=False, conv_thr=1e-12)
-system, pseudos = silicon.system, silicon.pseudos
-calculation = silicon.calculation
-scf = silicon.get_scf()
-
-print(f"silicon, {len(system.kpoints.weights)} k-points, "
-      f"{calculation.basis.planewaves.npwx} plane waves")
-print(f"total energy   {scf.total_energy:.9f} Ry")
+                               announce=False)
+print("silicon, %d k-points:   E = %.9f Ry"
+      % (silicon.system.kpoints.nk, silicon.get_scf().total_energy))
 ```
 
-    silicon, 8 k-points, 190 plane waves
-    total energy   -15.614354628 Ry
+    silicon, 8 k-points:   E = -15.614354628 Ry
 
 
 ## 1. One call
@@ -108,14 +95,14 @@ print(f"\nlargest component cubic symmetry forbids: "
 
     d(chi_ij)/dx_kl, Voigt rows x columns
                  11       22       33       23       13       12
-      11   108.1081   8.1021   8.1021  -0.0000   0.0000   0.0000
-      22     8.1021 108.1081   8.1021  -0.0000  -0.0000   0.0000
+      11   108.1081   8.1021   8.1021  -0.0000   0.0000  -0.0000
+      22     8.1021 108.1081   8.1021  -0.0000  -0.0000  -0.0000
       33     8.1021   8.1021 108.1081  -0.0000   0.0000  -0.0000
       23     0.0000  -0.0000  -0.0000 197.0154  -0.0000   0.0000
-      13     0.0000  -0.0000  -0.0000  -0.0000 197.0154   0.0000
-      12    -0.0000   0.0000   0.0000  -0.0000  -0.0000 197.0154
+      13     0.0000  -0.0000  -0.0000  -0.0000 197.0154  -0.0000
+      12     0.0000   0.0000   0.0000  -0.0000   0.0000 197.0154
     
-    largest component cubic symmetry forbids: 5.2e-14 of the scale
+    largest component cubic symmetry forbids: 2.6e-14 of the scale
 
 
 ## 3. The derivative *is* the slope
@@ -139,30 +126,26 @@ slope_22 = result.depsilon_dstrain[1, 1, 0, 0]
 
 fig, ax = plt.subplots(figsize=(6.2, 4.2))
 fine = np.linspace(-0.009, 0.009, 2)
-for points, slope, colour, label in (
-    (EPS_11, slope_11, "#c1121f", r"$\varepsilon_{11}$"),
-    (EPS_22, slope_22, "#003049", r"$\varepsilon_{22}$"),
-):
-    ax.plot(SWEEP * 100, points, "o", color=colour, ms=7, zorder=3,
-            label=f"{label}  (sweep)")
+for points, slope, colour, label in ((EPS_11, slope_11, "#c1121f", r"$\varepsilon_{11}$"),
+                                     (EPS_22, slope_22, "#003049", r"$\varepsilon_{22}$")):
+    ax.plot(SWEEP * 100, points, "o", color=colour, ms=7, zorder=3, label=label + " (sweep)")
     ax.plot(fine * 100, eps0 + slope * fine, "-", color=colour, lw=1.6, alpha=0.8,
-            label=f"{label}  tangent, one jvp: {slope:.1f}")
-ax.set_xlabel("axial strain $x_{11}$  (%)")
-ax.set_ylabel(r"$\varepsilon_\infty$")
-ax.set_title("A third derivative of the energy, and the sweep it replaces")
+            label="%s  analytic tangent: %.1f" % (label, slope))
+ax.set(xlabel="axial strain $x_{11}$   [%]", ylabel=r"$\varepsilon_\infty$",
+       title="A third derivative of the energy, and the sweep it replaces")
 ax.legend(fontsize=9, loc="upper left")
 ax.grid(alpha=0.25)
 fig.tight_layout()
 
 central = (EPS_11[3] - EPS_11[1]) / (SWEEP[3] - SWEEP[1])
 print(f"central difference of the sweep   {central:.4f}")
-print(f"one jvp                           {slope_11:.4f}")
+print(f"analytic derivative               {slope_11:.4f}")
 print(f"relative difference               "
       f"{abs(slope_11 - central) / abs(central):.1e}")
 ```
 
     central difference of the sweep   108.1021
-    one jvp                           108.1081
+    analytic derivative               108.1081
     relative difference               5.5e-05
 
 

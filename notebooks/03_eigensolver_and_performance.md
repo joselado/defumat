@@ -90,10 +90,10 @@ for name in ("si-1k.in", "si-1k-ecut40.in"):
                                    exact_ms / dav_ms, agreement))
 ```
 
-      si-1k.in          npw   180   form H + eigh     17.3 ms   Davidson   11.4 ms  ( 1.5x)   agree to 1e-13 Ry
+      si-1k.in          npw   180   form H + eigh      5.3 ms   Davidson    4.6 ms  ( 1.2x)   agree to 1e-13 Ry
 
 
-      si-1k-ecut40.in   npw  1131   form H + eigh   1246.4 ms   Davidson   82.9 ms  (15.0x)   agree to 1e-13 Ry
+      si-1k-ecut40.in   npw  1131   form H + eigh    497.5 ms   Davidson   29.9 ms  (16.7x)   agree to 1e-13 Ry
 
 
 ## Asking for only as much accuracy as the density deserves
@@ -162,10 +162,10 @@ for label, variant in (("full grid", full), ("irreducible wedge", wedge)):
       48 symmetry operations
 
 
-      full grid          8 k-points     22.6 ms/iteration   E = -15.794495571 Ry
+      full grid          8 k-points      8.0 ms/iteration   E = -15.794495571 Ry
 
 
-      irreducible wedge  2 k-points     10.2 ms/iteration   E = -15.794495571 Ry
+      irreducible wedge  2 k-points      3.6 ms/iteration   E = -15.794495571 Ry
 
 
 ## Against Quantum ESPRESSO, single core

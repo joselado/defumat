@@ -883,15 +883,14 @@ knobs that are this code's own — `mbj_c`, `spiral_q`,
 
 ## Tutorial notebooks
 
-**A rewrite of this whole set is in progress and is 23 of 29 done — read `PLAN.md`
-P49 before touching a notebook.** It carries the resume point, the six still to
-do in priority order, the two structural jobs not started (merging `25` and `26`,
-and writing the "your own crystal" notebook), and a six-point checklist in which
-every item is something that pass already got wrong once. The shape they are being
-rewritten to is in `notebooks/README.md`, and
-`tests/unit/test_notebook_conventions.py` enforces it: its `REWRITTEN` set names
-the ones already held to it and **only ever grows**, so a notebook joins it in the
-commit that rewrites it.
+**That rewrite is finished** (`PLAN.md` P49), and what enforces it now is
+`tests/unit/test_notebook_conventions.py`: **26 of the 29 are in its `REWRITTEN`
+set** and held to the whole skeleton, `JVP_DEBT` is empty, and the three that are
+not — `01`, `03` and `17` — are the under-the-hood tier by design, whose internals
+are their subject. `REWRITTEN` **only ever grows**, so a new notebook joins it in
+the commit that adds it. The shape it enforces is in `notebooks/README.md`, and
+P49's six-point checklist is worth reading before touching a notebook: every item
+on it is something that sweep got wrong at least once.
 
 `notebooks/` holds worked examples on concrete systems — the readable counterpart to the
 test suite. **Every new feature adds a notebook or extends an existing one; a phase is not
@@ -950,8 +949,11 @@ series once offline and quote its numbers in prose, which is the same rule as th
 per-case validation tables and for the same reason. A figure that needs ten SCF runs to
 draw is a figure whose points belong in a test.
 
-**No notebook is over that ceiling now**, and the one that was is worth reading as a
-case study. `08_spin_orbit_coupling` took about **25 minutes**; it takes **174 s** (P49).
+**`tools/export_notebooks.sh` times each notebook as it re-executes it and exits
+non-zero over the ceiling**, so the set stays measured without anyone remembering
+to measure it. Nothing is over: the slowest is `27` at 178 s, the median is under
+30, and the full table is in `notebooks/README.md`. The one notebook that ever was
+over is worth reading as a case study. `08_spin_orbit_coupling` took about **25 minutes**; it takes **174 s** (P49).
 Two things were true at once and only one of them was the expensive part. The bismuthene
 section was blamed, and the figure it draws — a Dirac point gapped by nothing but the
 coupling — is the best physics in the notebook and was never the problem: as notebook 08 runs it,
@@ -964,8 +966,7 @@ noncollinear-equals-collinear identity, **both of them already in the test suite
 (`test_the_force_is_a_finite_difference_of_the_frozen_energy`,
 `test_spinors_reproduce_the_collinear_answer`). The lesson is the one P49 is built on: a
 notebook that is too slow is usually a notebook doing the tests' job, and the cell to cut
-is the sweep rather than the physics. **The rest are still unmeasured** except the
-rewritten ones, whose times are in `notebooks/README.md`.
+is the sweep rather than the physics. Every notebook's time is in `notebooks/README.md`.
 
 ## Performance
 

@@ -6487,7 +6487,7 @@ which is what nickel above is.
 `(nk, npwx, natomwfc)` array a projected DOS or a Hubbard `U` already holds, and
 the site matrices are `(natom, nshell, 2l+1, 2, 2l+1, 2)`, which is nothing.
 
-### P49 — The notebooks, rewritten for someone computing a property. 🚧 PHASES 1-4 DONE, PHASE 5 IN PROGRESS (6 of 29).
+### P49 — The notebooks, rewritten for someone computing a property. ✅ DONE.
 
 `notebooks/`, `notebooks/README.md`, `pypresso/calculator.py`, and one new test.
 Not started. This entry is the design, written before the work and reviewed
@@ -6762,7 +6762,25 @@ against 25), or reaching past the facade (up to 7 imports).
 
 Rewritten and passing the enforcement test: `00` (which already complied), `02`,
 `09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`, `15`, `24`, `29`, `26`, `25`, `04`,
-`05`, `06`, `07`, `12`, `14`, `16`, `20`.
+`05`, `06`, `07`, `12`, `14`, `16`, `20`, `21`, `23`, `27`.
+
+**Phase 5 is finished. 26 of the 29 are in `REWRITTEN`, `JVP_DEBT` is empty,
+and the three that are not are the under-the-hood tier by design** — `01`, `03`
+and `17`, whose internals are their subject and which `notebooks/README.md`
+labels as a separate section. What they owed was not a skeleton: it was
+re-execution, since phase 2's `&electrons` adoption made their committed
+outputs stale, and their path helpers now carry the path and nothing else.
+`03`'s energies came back identical to every digit and only its *timings*
+moved, which is the machine rather than the code; `17`'s Newton root tightened
+from 1.6e-9 to 3.1e-10 Ry, because its helper had been capping
+`electron_maxstep` below what the input asks for.
+
+**And the whole set is timed now**, which was the open tooling item:
+`tools/export_notebooks.sh` measures each notebook as it re-executes it, marks
+anything over the ten-minute ceiling and exits non-zero. Nothing is over it;
+the slowest is `27` at 178 s and the median is under 30. The table is in
+`notebooks/README.md` and is a by-product of keeping the outputs true rather
+than something anyone has to remember to measure.
 
 **The Raman merge is done**, which is the first of the two structural jobs.
 `25_raman_tensors` is deleted and `26_raman_and_infrared_spectra` carries both:
@@ -6799,6 +6817,9 @@ arbitrary, and the activity beside them reads 0.0000 in every version.
 | `14` | 91 → 46 | 5 → 3 | 89 s |
 | `16` | 92 → 58 | 5 → 5 | 9 s |
 | `20` | 73 → 54 | 6 → 4 | 57 s |
+| `21` | 81 → 67 | 6 → 6 | 30 s |
+| `23` | 72 → 68 | 6 → 6 | 35 s |
+| `27` | 92 → 40 | 5 → 3 | 178 s |
 | `19` | 143 → 47 | 11 → 5 | 46 s |
 | `10` | 134 → 46 | 5 → 5 | 50 s |
 | `13` | 123 → 43 | 5 → 3 | 66 s |
@@ -6822,10 +6843,9 @@ at 0.85 of $\Gamma$X, on none of those grids. A gap is read off a band structure
 and the two differ by 0.024 eV here (4.1305 against 4.1541). The notebook says so
 now, which is the best content in it and was not in the plan.
 
-**Six notebooks are left**: `27` (92 lines), `21` (81), `23` (72) as skeleton
-conversions, and `01` (79), `03` (72), `17` (105) as the under-the-hood tier,
-which is **not** held to the skeleton and is trimmed toward the everywhere-rules
-instead. `01`, `03` and `17` are
+**Nothing is left.** The sweep is complete: 26 notebooks to the skeleton, the
+Raman merge, the "your own crystal" notebook, and the three under-the-hood ones
+re-executed and trimmed. `01`, `03` and `17` are
 the "under the hood" tier and are **not** held to the skeleton — trim them toward
 the everywhere-rules and leave them out of `REWRITTEN`.
 

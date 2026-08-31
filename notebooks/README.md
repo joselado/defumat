@@ -213,25 +213,39 @@ pip install -e ".[notebooks]"    # from the repository root: jupyter, matplotlib
 jupyter lab notebooks/
 ```
 
-The ones rewritten to the shape above are timed, and all of them are far inside
-the ten-minute ceiling: **`02` 7 s, `09` 6 s, `22` 12 s, `18` 29 s, `15` 31 s,
-`16` 9 s, `05` 10 s, `04` 12 s, `07` 22 s, `06` 23 s, `12` 27 s, `25` 28 s, `24` 31 s,
-`19` 46 s, `10` 50 s, `20` 57 s, `29` 59 s, `11` 79 s, `14` 89 s, `13` about a minute,
-`26` 107 s,
-`08` 174 s**. Three of those used to
-be much slower. `19` lost two hand-built linear solves and a second
-self-consistent run that were demonstrating machinery rather than physics; `18`
-ran fourteen self-consistent calculations where two pairs make its point and the
-other ten are in the test suite; and **`08` was the one notebook measured over
+**Every notebook in the set is timed and every one is far inside the ten-minute
+ceiling.** `tools/export_notebooks.sh` measures them as it re-executes them and
+fails over that ceiling, so the table below is a by-product of keeping the outputs
+true rather than something anyone has to remember to do. Wall clock on one
+workstation core, slowest last:
+
+| | s | | s | | s | | s |
+|---|---|---|---|---|---|---|---|
+| `01` | 5 | `07` | 22 | `18` | 29 | `29` | 59 |
+| `09` | 6 | `00` | 22 | `21` | 30 | `13` | 69 |
+| `02` | 8 | `06` | 23 | `24` | 31 | `11` | 81 |
+| `16` | 9 | `12` | 27 | `15` | 31 | `14` | 89 |
+| `03` | 10 | `25` | 28 | `23` | 35 | `26` | 107 |
+| `05` | 10 | `17` | 29 | `19` | 47 | `08` | 171 |
+| `04` | 12 | | | `10` | 50 | `27` | 178 |
+| `22` | 12 | | | `20` | 57 | | |
+
+Three of those used to be much slower, and each for the same reason. `19` lost two
+hand-built linear solves and a second self-consistent run that were demonstrating
+machinery rather than physics; `18` ran fourteen self-consistent calculations
+where two pairs make its point; and **`08` was the one notebook ever measured over
 the ceiling** -- about 25 minutes -- which it no longer is: what went was a
 five-run finite-difference sweep and a two-run identity check, both of them
 already in the test suite.
 
-Most of the rest run in under a minute on one core.
-
-`22` needs neither the vendored tree nor much time: its input and its `pw.x`
-reference are committed under `tests/data/qe/`, and its binding curve is quoted
-from an offline sweep with only the dispersion half recomputed.
+Six notebooks quote a measurement rather than running it, and say so where they
+do: `10`'s Wannier-charge-centre sweep on bismuthene (7.8 GB in one kernel, so it
+was run in its own process), `14`'s cutoff sweep of the basis-set jumps in `E(q)`,
+`18`'s silicon and platinum pairs, `21`'s five re-converged strained cells, `22`'s
+eleven-point binding curve, whose dispersion half is recomputed live because it is
+a pair sum over four nuclei, and `29`'s Elk comparison and moment rotation. `03`'s
+comparison against `pw.x` is quoted for a different reason: it needs a `pw.x`
+binary, which is not in the repository.
 
 Some need the vendored Quantum ESPRESSO tree at `../quantum_espresso/` for their input files
 and reference outputs; that tree is not in the repository (it is 285 MB) and the paths at the
