@@ -3096,6 +3096,58 @@ weight of 0.9432 that itself moves by 1e-3 -- which is the sharpest k-convergenc
 diagnostic in the package, and the only quantity here that is an integral of a
 *second* derivative.
 
+### Against Elk, which is where this one was taken from
+
+Two-atom silicon, `a = 10.2` bohr, the **same** 4x4x4 non-reduced grid (64
+k-points), **20 states** (Elk's four occupied plus `nempty = 16`, which is also
+this code's clean band cut), 200 frequencies from 0 to 0.3 Ha. One core on both
+sides, `OMP_NUM_THREADS=1` and `taskset -c 0`, the affinity mask set before JAX
+is imported. Elk's tasks were run **one per invocation** against a state already
+on disk, with `tshift = .false.` so the atomic basis is identical across them.
+
+| | Elk | pypresso |
+|---|---|---|
+| ground state | 6.08 s | **1.50 s** |
+| form the operator | 0.92 s (task 120, `pmat` to disk) | — |
+| re-diagonalise | — | 2.55 s (NSCF, 21 bands) |
+| contract, one tensor component | 0.48 s (task 121) | — |
+| contract, **all nine** | 1.19 s | — |
+| operator **and** all nine components | 2.11 s | **0.85 s** warm, 1.21 cold |
+| **from a converged state, whole tensor** | **2.11 s** | **3.40 s** |
+
+**Two numbers point opposite ways and both are worth having.** The step that
+does the same work -- form `dH/dk` (or `pmat`) in all three directions and
+contract it into the whole 3x3 tensor at every frequency -- is **2.5x faster
+here**, and not for a clever reason: Elk writes the momentum matrix elements to
+disk and re-reads them once per component, where the `jvp` and the contraction
+stay in memory and the frequency axis is hoisted into one matrix product per
+k-point instead of an `axpy` inside the band-pair loop. Its marginal cost per
+component is small (0.48 s for one, 1.19 s for nine, so the k-loop and the file
+dominate), which is why the ratio is 2.5 and not nine.
+
+**Where pypresso loses is the re-diagonalisation, and it is the whole of the
+gap.** Elk's ground state leaves `EVECSV.OUT` on disk, so its post-processing
+never diagonalises again; this code runs an NSCF, and that 2.55 s is the entire
+1.6x on the bottom row. It is exactly the memory-for-time trade this file
+describes elsewhere, taken the other way round, and it is a **choice rather than
+an oversight** -- keeping every k-point's wavefunctions is what the k-batching
+dial exists to avoid.
+
+**What is not comparable, stated rather than discovered.** Elk is all-electron
+LAPW: its basis is muffin-tin orbitals plus an interstitial expansion and it
+carries all fourteen of silicon's electrons, against 200 plane waves per k-point
+and eight valence electrons here. The ground-state row is therefore a comparison
+of two methods and not of two implementations, and the 4x should be read that
+way. The rows below it are the ones that compare like with like, because both
+sides start from a converged state and produce the same object.
+
+**Nickel was attempted and abandoned**, which is worth recording so the next
+attempt does not repeat it: an Elk run of `ni-soc-nosym.in`'s cell with
+`spinpol`/`spinorb` and a `bfieldc` seed converged to a moment of **0.008**
+`mu_B` against this code's 0.617, so its `sigma_xy` is the wrong physics and
+timing MOKE on it would mean nothing. The magneto-optical half of P51 therefore
+has **no** Elk timing beside it yet.
+
 **Peak.** `(nspin, nk, nbnd, ndim)` for the states, `(3, nk, nbnd, nbnd)`
 complex for the matrix elements, and `nw x nbnd^2` complex per k-chunk for the
 frequency sum. Sixty-four k-points, forty bands and five hundred frequencies is

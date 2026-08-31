@@ -7433,6 +7433,23 @@ it has no `-TS` term either), so falling through would return an insulator's
 conductivity for a metal with a plasma frequency of exactly zero and nothing
 saying why.
 
+**Timed against Elk, which is what `CLAUDE.md`'s performance rule now requires
+of anything taken from another code.** Two-atom silicon, the same 64-point grid,
+the same 20 states, one core each. The step that does the same work — form the
+operator in three directions and contract the whole 3x3 tensor at 200
+frequencies — is **0.85 s here against Elk's 2.11 s**, because `dielectric.f90`
+writes `pmat` to disk and re-reads it per component while the `jvp` and the
+contraction stay in memory and the frequency axis becomes one matrix product per
+k-point. **From a converged state the whole call is 3.40 s against 2.11 s**, and
+the difference is entirely the **NSCF**: Elk's ground state leaves its
+eigenvectors on disk and never diagonalises again, where this code re-runs one.
+That is the memory-for-time trade taken the other way and it is a choice.
+`PERFORMANCE.md` has the table and the caveats — an all-electron LAPW basis
+against 200 plane waves is not a like-for-like ground state. **The
+magneto-optical half has no Elk timing**: an Elk nickel run with `spinorb`
+converged to a moment of 0.008 `mu_B` against this code's 0.617, so its
+`sigma_xy` is the wrong physics.
+
 **Cost and peak.** One NSCF with empty states, then three `jvp` calls over the
 k axis for `(3, nk, nbnd, nbnd)` matrix elements — which is the whole expense —
 and a frequency sum whose working set is `nw x nbnd^2` complex per k-point,

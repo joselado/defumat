@@ -1045,6 +1045,34 @@ was worth, and the backlog. **Add a measurement to it whenever a feature lands o
 spot moves** — including the QE ratio, not only an internal timing. `tools/benchmark.py
 <input>` gives the component breakdown when a ratio needs explaining.
 
+**Every feature taken from Quantum ESPRESSO or from Elk is timed against the code it
+was taken from, and the pair goes in `PERFORMANCE.md`.** Not the ratio to a previous
+version of this code, not an absolute number on its own: the reference implementation's
+wall clock beside ours, on the same machine and the same physics, one core each
+(`OMP_NUM_THREADS=1` for both; the affinity mask set before JAX is imported, the
+mechanism `tools/compare_qe.py` documents). A phase is not finished without it, the same
+way it is not finished without its notebook or its `features.tex` entry.
+
+The reason is that **the absolute number is the one worth having and it is the one nobody
+measures.** An internal timing says a feature costs 94 s; it does not say whether that is
+what the physics costs or what this implementation costs, and only the other code answers
+that. P48 did it (Elk's `effmass` at 1.08 s against 4.3 s here, which is the entry that
+established both codes do it in *seconds*) and **P51 did not, which is why this rule is
+written down**.
+
+Two things to state rather than discover, because a comparison against an all-electron
+code is never like-for-like and a misleading ratio is worse than no ratio:
+
+- **Say what is not comparable.** LAPW's basis is not a plane-wave sphere, so P48's 4x is
+  733 plane waves against a muffin-tin basis and thirteen stencil points against
+  twenty-seven. Write that beside the number.
+- **Time the same work, not the same task number.** Codes split a calculation into
+  post-processing steps differently: Elk's `dielectric` (task 121) reads momentum matrix
+  elements off a file that `writepmat` (task 120) produced, so timing 121 alone against
+  a `pypresso` call that *builds* `dH/dk` compares a contraction with a contraction plus
+  its operator. Add the steps up until both sides start from the same place -- usually a
+  converged ground state -- and say which steps were added.
+
 ## Non-negotiable conventions
 
 - Pure Python. JAX for anything numerical that runs inside the SCF/diagonalization loop;
