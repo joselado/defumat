@@ -34,6 +34,13 @@ expression.
     the Sternheimer projector produces and the band is usually empty anyway.
     Elk's eigenvalue-differencing route is kept beside it as the check that
     shares no machinery with the operator.
+``nesting``
+    the Fermi-surface nesting function ``N(q)``, which is not a response at all
+    -- it is a correlation of ``delta(eps - E_F)`` over the k-grid, and it
+    lives here because it is the geometric half of the susceptibility the rest
+    of this package solves for. Elk writes it as a double loop over ``q`` and
+    ``k``; the fold that makes ``k + q`` land on the grid makes it a cyclic
+    correlation, so one FFT gives the whole ``q`` dependence.
 ``strain``
     the response to a homogeneous strain -- the third perturbation, and the one
     that carries a rank-2 label. Abinit's metric-tensor formulation is not
@@ -69,6 +76,7 @@ from pypresso.response.conductivity import (
     OpticalConductivity,
     optical_conductivity,
 )
+from pypresso.response.nesting import NestingFunction, nesting_from_eigenvalues
 from pypresso.response.piezo import PiezoelectricTensor, piezoelectric_tensor
 from pypresso.response.strain import StrainResponse, strain_response
 from pypresso.response.phonon import Phonons, dynamical_matrix
@@ -96,6 +104,7 @@ __all__ = [
     "ElasticConstants",
     "Electrostriction",
     "Multiplet",
+    "NestingFunction",
     "Phonons",
     "PiezoelectricTensor",
     "RamanTensors",
@@ -114,6 +123,7 @@ __all__ = [
     "local_perturbation",
     "make_sternheimer",
     "mode_activities",
+    "nesting_from_eigenvalues",
     "OpticalConductivity",
     "optical_conductivity",
     "piezoelectric_tensor",

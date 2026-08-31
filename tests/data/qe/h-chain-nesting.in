@@ -1,0 +1,37 @@
+! **A non-magnetic hydrogen chain, whose Fermi surface is two points.**
+!
+! The same cell as `h-chain-spiral.in` -- one hydrogen every 5 bohr along z,
+! 12 bohr from its images in x and y -- but unpolarized, because that is the
+! state whose instability the nesting function is about. A spiral grows out of
+! the paramagnet, so `N(q)` is computed on the paramagnet and its peak is the
+! pitch the spiral is predicted to choose; `relax_spiral_q` then goes and finds
+! it (P21: 0.50003).
+!
+! One electron per cell in a spin-degenerate band is **half filling**, so
+! `k_F = pi/2c` and the only wavevector that connects the two Fermi points is
+! `2 k_F = pi/c`, which is `q = 0.5` in crystal coordinates. That is an
+! analytic answer with no reference output behind it, which is the point of the
+! case.
+!
+! `1 1 n` k-grids throughout: the transverse dispersion at 12 bohr separation is
+! numerically zero and sampling it would only dilute the one-dimensional Fermi
+! surface being resolved.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 0.41666666666667,
+    nat = 1, ntyp = 1,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.02
+    nbnd = 6
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H 0.0 0.0 0.0
+K_POINTS {automatic}
+ 1 1 16 0 0 0

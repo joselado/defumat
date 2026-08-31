@@ -3155,6 +3155,65 @@ frequency sum. Sixty-four k-points, forty bands and five hundred frequencies is
 at 512 k-points and 36 bands holds 1.0 GB of wavefunctions, which is what sets
 the ceiling and what `k_batch` moves.
 
+## What a nesting function costs (P52)
+
+`N(q)` is two things bolted together and they cost wildly different amounts:
+an NSCF that resolves the Fermi surface, and a correlation over the k-grid that
+is essentially free. The whole point of the phase's one non-transcription is
+the second, so both are timed.
+
+### Against Elk, which is where this one was taken from
+
+fcc aluminium, `a = 7.5` bohr, the **same** 12x12x12 grid, the same Gaussian
+smearing of 0.025 Ha = 0.05 Ry. One core on both sides, `OMP_NUM_THREADS=1`
+and the affinity mask set before JAX is imported (the mechanism
+`tools/compare_qe.py` documents). Elk's tasks were run one per invocation
+against a state already on disk.
+
+| | Elk | pypresso |
+|---|---|---|
+| ground state | 1.63 s (12x12x12, LAPW) | 1.17 s (10-point wedge, PW) |
+| eigenvalues on the nesting grid | — (its SCF ran there) | 0.32 s (NSCF, 72 wedge points) |
+| **the correlation itself** | **0.37 s** (task 105) | **0.001 s** |
+| everything after the ground state | 0.37 s | 0.41 s warm, 0.93 cold |
+| **from atomic densities to `N(q)`** | **2.00 s** | **1.58 s** |
+
+The fourth row is `run_nesting` end to end and is 0.09 s more than the two rows
+above it add up to: building the denser `KPoints`, walking the symmetry orbits
+for the unfold map, and the dispatch around them. The bottom row is the first
+and fourth added, warm.
+
+**The correlation is 370x faster and that is the phase's one idea.**
+`nesting.f90` writes `N(q)` as an `O(N_q N_k)` double loop -- 1728 x 1728
+products with a `mod` fold inside -- and the fold is exactly what makes the sum
+a cyclic cross-correlation, so `ifftn(|fftn(g)|^2)` gives every `q` at once.
+The ratio is a complexity ratio and it grows with the grid: at 24x24x24 the
+loop is eight times more work and the transform is nine.
+
+**The rest is not a like-for-like comparison and the table says which rows
+are.** Only the middle two are. The ground-state row is two methods rather
+than two implementations -- all-electron LAPW with a muffin-tin basis and all
+thirteen of aluminium's electrons, against 107 plane waves and three valence
+electrons. And the two codes reach the eigenvalues differently on purpose: Elk
+runs its *SCF* on the nesting grid and reads `EVALSV.OUT` back, where this code
+converges the density on the input's ten-point wedge and pays 0.32 s for an
+NSCF on 72 points. Both unfold a symmetry-reduced set onto the complete grid
+rather than diagonalising all of it -- Elk with `ivkik`, this code with
+`grid_equivalence` -- which is the same saving arrived at independently, and it
+is worth 24x here.
+
+**What the numbers agree on physically** is in `PLAN.md` P52: `N(0) = 396.42`
+here against Elk's 378.759 in its own units, 4.7 per cent, of which the whole
+is the Fermi surface underneath (`D(E_F)` 4.9719 states/Ry against 4.8228, and
+`N` is quadratic in it). The dimensionless `N(0)/D(E_F)^2` agrees to 1.5 per
+cent.
+
+**Peak.** One `(nspin, nk_irr, nbnd)` eigenvalue array and one real
+`n1 n2 n3` box. A 24x24x24 grid is 110 kB, so the working set is the NSCF's and
+nothing else -- which is what makes the k-grid the axis to spend on. The
+correlation never forms an `N_k x N_q` anything.
+
+
 ## History
 
 | Date | Change | Effect |
@@ -3193,3 +3252,4 @@ the ceiling and what `k_batch` moves.
 | 2026-08-24 | The Tran-Blaha potential (P30): `tau` from the states, the Laplacian as `-G^2 rho(G)`, the Becke-Roussel inversion as a fixed-length bisection with an implicit `custom_jvp` | silicon's gap 0.49 -> 1.13 eV for **1.8x the SCF iterations**; `tau` costs 1125 ms an iteration against the density's 200, which is 7.6x where the algorithm says 3x -- three separate box scatters, and the backlog item |
 | 2026-08-25 | **First contact with a GPU** (GPU.md Phase 0): the same source, unmodified, on a V100 | `al10-metal` **5.44x** the four-core CPU baseline at `k=all, b=all` — and **0.99x on the defaults**, because the cache-shaped dials invert on a GPU (801 → 177 ms). Energy agrees to 1.6e-13 Ry, determinism bit-identical, fp64 costs 1.78-1.98x on a matmul and 0.85-1.44x on an FFT (grid-dependent) |
 | 2026-08-24 | Spin-orbit (P31) and PAW (P32, P33) for the Tran-Blaha potential | `tau` as a 2x2 spin matrix costs the same three transforms per band; PAW's one-centre `tau` is free (same einsum as the density) but its Becke-Roussel inversion runs on `nx * mesh` = 1.4e5 points per atom against the grid's 3.3e4 |
+| 2026-08-31 | The Fermi-surface nesting function (P52): Elk's `O(N_q N_k)` double loop written as one FFT, and a symmetry wedge unfolded rather than re-diagonalised | the correlation **0.001 s against Elk's 0.37 s** on a 12x12x12 aluminium grid; 72 diagonalisations instead of 1728; whole quantity from atomic densities 1.58 s against 2.00 s |

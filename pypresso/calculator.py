@@ -795,6 +795,29 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS)
         )
 
+    def get_nesting(self, grid=None, **options):
+        """``N(q)``, the Fermi-surface nesting function, on a dense grid.
+
+        How much of the Fermi surface maps onto itself when translated by
+        ``q`` -- the geometric half of a charge- or spin-density-wave
+        instability, and what says where a phonon will soften or a spin spiral
+        will find its pitch. ``grid`` is the convergence parameter of the whole
+        quantity and wants to be much denser than the density needed.
+
+        ``q = 0`` is the maximum on every crystal by Cauchy-Schwarz, so the
+        result's ``.peak()`` reports the largest ``N(q)`` away from it.
+        """
+        from pypresso.workflows.nesting import run_nesting
+
+        result = self._ground_state("the nesting function")
+        if grid is not None:
+            options = {**options, "grid": grid}
+        return run_nesting(
+            self.system, self.pseudos, result.density,
+            **self._call_options(run_nesting, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
     # ------------------------------------------------------------------
     # topology
     # ------------------------------------------------------------------

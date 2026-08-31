@@ -479,6 +479,53 @@ identically — so running one agrees with zero whatever is wrong, and P44 is th
 plausible argument about the strain coordinate is not enough on its own. Lifting it is one
 non-centrosymmetric ultrasoft dataset.
 
+**The optical conductivity tensor, the Kerr angle and the anomalous Hall conductivity are
+in** (P51), the fourth thing taken from `ELK-FEATURES.md` (Elk's tasks 121/122). The whole
+complex `sigma_ab(omega)`, interband plus a Drude term, built from `dH/dk` rather than the
+momentum matrix elements `epsilon.x` uses — which is the one construction this file already
+records as wrong with a nonlocal pseudopotential. Two things it found cost real time and
+both are recorded in `PLAN.md` P51: **a caller-built k-set is a `for_spin` boundary**, since
+every `KPoints` constructor applies the unpolarized degeneracy unconditionally and a spinor
+band holds one electron — on nickel that put the plasma frequency at 13.11 eV instead of
+0.60 and flipped the sign of the Hall conductivity, and the wrong numbers were the plausible
+ones. And **the Drude weight has to be the multiplet block** by rule D4: `dielectric.f90`
+writes it as `sum_n v_a^nn v_b^nn`, and the diagonal of an operator is not invariant under
+the rotation a degenerate eigensolver is free in, a Fermi surface being exactly where a metal
+keeps its degeneracies.
+
+**The Fermi-surface nesting function is in** (P52), the fifth entry from `ELK-FEATURES.md`
+and the first there that `pw.x` lacks *entirely* — `nesting` occurs nowhere in `PW/src` or
+`PP/src`. `N(q) = (1/N_k) sum_k g(k) g(k+q)` with `g(k) = sum_n delta(eps_nk - E_F)` counts
+how much of the Fermi surface maps onto itself under a translation, which is where a phonon
+softens, a charge-density wave opens a gap or a spin spiral finds its pitch. **The one place
+it is not a transcription is worth 370x**: `nesting.f90`'s `O(N_q N_k)` double loop folds
+`k + q` back onto the grid with `mod`, and that fold is exactly what makes the sum a cyclic
+cross-correlation — one FFT gives every `q` at once, 0.001 s here against Elk's 0.37 s on a
+12x12x12 aluminium grid, with the double loop kept beside it (`method = "direct"`) agreeing
+to 2.6e-16. A symmetry-reduced wedge is **unfolded** rather than refused, since
+`eps_n(Rk) = eps_n(k)`: 72 diagonalisations instead of 1728, through the tetrahedron
+method's own `equiv` map. The validation closes inside the package, which is what
+`ELK-FEATURES.md` asks for. Free electrons have a closed form, `N(q) = Omega/(4 pi^2 q)`
+below `2 k_F` and **zero** above, reproduced to 1e-4 and to 1e-16 respectively; the mean of
+`N` over the q-grid is exactly `D(E_F)^2` (3e-16), and `D(E_F)` itself agrees with
+`compute_dos` on the wedge to 6.3e-13; and a half-filled hydrogen chain peaks at exactly
+`q = 0.5`, at **99.8 per cent** of the Cauchy-Schwarz bound `N(0)`, where P21's
+`relax_spiral_q` relaxes the corresponding spiral to 0.500014 from an unrelated start —
+two calculations sharing no machinery. **`N(0)` is the maximum on every crystal** by
+Cauchy-Schwarz, so `peak()` excludes the origin rather than reporting the same uninformative
+answer for every material. **Nothing refuses a polarized nesting function, so the spin regimes were
+measured instead**: a cell with no magnetization gives the same `N(q)` at
+`nspin = 1`, `nspin = 2` and as a spinor, to 2.4e-13 and 1.8e-8 — the check
+that catches a factor of two in `degspin`, which is a factor of *four* in `N`
+and is invisible in its shape. Elk's own number is the weakest of the checks
+and is quoted as such: its all-electron `D(E_F)` differs by 3 per cent and `N` is quadratic in it, so what
+agrees to 1.5 per cent is the dimensionless `N(0)/D(E_F)^2`. **Refused by name**: a
+constrained `tot_magnetization` (one Fermi level per channel, so `g` is two surfaces), a
+fixed-occupation run (no level to search for), and a spin spiral — the quantity is a
+statement about the state a spiral grows *out of*. The delta defaults to a **Gaussian** even
+when the run used Methfessel-Paxton or cold smearing, because those go negative on the wings
+and a product of two such weights has no sign at all.
+
 **Outstanding:** Wyckoff input, the dynamical matrix of an
 ultrasoft or PAW *metal*, the strain coordinate's third derivatives on ultrasoft and PAW
 (P44 localised what is missing), the *second derivatives* of a spin-polarized system (P45 put
@@ -1144,6 +1191,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Spin spirals | no QE counterpart — Elk's `src/gengkqvec.f90`, `init0.f90`, `findsymlat.f90`, manual §5.146 | up at `k + q/2`, down at `k - q/2`, each with its own `G+k` set; one basis call on the concatenated list gives both a common `npwx` |
 | Spiral relaxation | no QE counterpart — `Modules/bfgs_module.f90` reused with the *reciprocal* cell as its lattice | `dE/dq` is `jax.grad` of the energy at frozen wavefunctions and a frozen sphere (`forces/spiral.py`); only the kinetic and nonlocal terms carry `q` |
 | Piezoelectric tensor | no QE counterpart — Elk's `src/piezoelt.f90` and `genstrain.f90`, manual task 380 | Elk runs one ground state per strain and finite-differences the Berry-phase polarization; here it is one `jvp` of the stress along the field's response (`pypresso/response/piezo.py`), so nothing is transcribed but the *check* — `zstar_eu.f90`'s contraction with a strain label where it has a displacement. `genstrain` symmetrises each candidate strain over the crystal's group, so on a cubic crystal the only strain it keeps is the isotropic one |
+| Fermi-surface nesting | no QE counterpart — Elk's `src/nesting.f90`, manual task 105 | Elk writes an `O(N_q N_k)` double loop with `mod(ivk + ivq, ngridk)`; that fold makes the sum a cyclic cross-correlation, so `ifftn(|fftn(g)|^2)` replaces it (`pypresso/response/nesting.py`) and the loop is kept as `method = "direct"`. The wedge is unfolded with `grid_equivalence` — `tetra.f90`'s `equiv`, Elk's `ivkik` — and the group it is unfolded with must be the group `denser_grid` reduced it with (`workflows/nscf.py:grid_symmetry`) |
 | Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `pypresso/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]` term by term; here it is one `jvp` of `H(k)` at a frozen sphere (`response/velocity.py`), since `dH/dk_a = i[H, r_a]` in the periodic gauge. The overlap carries a velocity too, so a band velocity is `<psi|dH/dk - eps dS/dk|psi>` |
 | Linear response / DFPT | `LR_Modules/cgsolve_all.f90`, `ch_psi_all.f90`, `orthogonalize.f90`, `h_prec.f90`, `setup_alpha_pv.f90`, `incdrhoscf.f90`, `symdvscf.f90`; `PHonon/PH/solve_e.f90`, `dvpsi_e.f90`, `dvqpsi_us.f90`, `dielec.f90`, `zstar_eu.f90` | the linear solve, the projector and the assembly are transcribed; the *perturbations* are not. `dv_of_drho` is one `jvp` of `v_of_rho` (which already drops the `G = 0` Hartree term), the E-field's commutator is the velocity operator, and `dvqpsi_us` is one `jvp` through `at_positions`. **A response on a reduced k-set is a polar vector field and must be symmetrised as one** |

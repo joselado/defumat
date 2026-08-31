@@ -1171,10 +1171,11 @@ is defined, and \code{curvature} (the manifold total) always is.
 \end{refuses}
 
 % =====================================================================
-\section{Effective masses and site angular momenta}
+\section{Effective masses, site angular momenta and Fermi-surface nesting}
 
-Two quantities Elk computes and \code{pw.x} does not, both at the cost of one
-NSCF at a single k-point.
+Three quantities Elk computes and \code{pw.x} does not. The first two cost one
+NSCF at a single k-point; the third costs one NSCF on a dense grid, and nothing
+after it.
 
 \subsection{The effective mass tensor}
 
@@ -1287,6 +1288,82 @@ magnetization and has no per-atom counterpart to check this against.
 \end{refuses}
 
 % =====================================================================
+\subsection{The Fermi-surface nesting function}
+
+How much of the Fermi surface maps onto itself when translated by $\mathbf q$:
+\begin{equation*}
+  N(\mathbf q) = \frac{1}{N_k}\sum_{\mathbf k} g(\mathbf k)\, g(\mathbf k + \mathbf q),
+  \qquad
+  g(\mathbf k) = g_s \sum_{s,n} \delta(\varepsilon_{sn\mathbf k} - E_F).
+\end{equation*}
+$g(\mathbf k)$ is the density of states \emph{at one k-point} --- a picture of
+the Fermi surface on the grid --- so $N(\mathbf q)$ is the $\omega\to0$
+imaginary part of the Lindhard function stripped of its matrix elements: the
+\emph{geometric} half of an instability. Where it is large, a perturbation of
+wavevector $\mathbf q$ connects many occupied states to many empty ones at no
+energy cost, which is what softens a phonon, opens a charge-density-wave gap, or
+picks a spin spiral's pitch.
+
+\textbf{It is a convolution.} Elk writes an $O(N_q N_k)$ double loop with
+$\mathbf k + \mathbf q$ folded back onto the grid; that fold makes the sum a
+cyclic cross-correlation, so $N = \mathrm{ifftn}(|\mathrm{fftn}(g)|^2)/N_k$
+gives every $\mathbf q$ in one transform. Measured on a $12^3$ aluminium grid
+that is \textbf{0.001~s} here against Elk's 0.37~s. A symmetry-reduced wedge is
+\emph{unfolded} onto the complete grid rather than refused, since
+$\varepsilon_n(R\mathbf k) = \varepsilon_n(\mathbf k)$: 72 diagonalisations
+instead of 1728.
+
+\begin{pycode}
+from pypresso import Calculator
+
+calc = Calculator.from_file("al.scf.in")
+nest = calc.get_nesting(grid=(12, 12, 12))   # the grid is the convergence knob
+
+nest.nesting        # (nq,) N(q), in (states/Ry/cell)^2
+nest.qpoints        # (nq, 3) crystal coordinates, on the unshifted grid
+nest.ratio          # N(q) / D(E_F)^2, dimensionless and 1 on average
+nest.peak()         # the largest N(q) away from q = 0, and where it is
+nest.along(2)       # (q_3, N) along one crystal axis, for a line plot
+nest.as_grid()      # (n1, n2, n3), for a slice
+nest.fermi_dos      # D(E_F) in states/Ry/cell
+nest.elk_units      # the same array in NEST3D.OUT's normalisation
+\end{pycode}
+
+The functional entry point is \code{pypresso.workflows.run\_nesting}, which
+takes the converged density directly.
+
+\textbf{Two identities come with the normalisation and both are worth reading.}
+The mean of $N$ over the whole q-grid is exactly $D(E_F)^2$
+(\code{sum\_rule} reports the residue; it is $3\times10^{-16}$ relative). And
+$N(0) \ge N(\mathbf q)$ for every $\mathbf q$ by Cauchy--Schwarz, so
+\textbf{the nesting peak is always a peak away from the origin} ---
+\code{peak()} excludes $\mathbf q = 0$ for that reason, not as a plotting
+convenience.
+
+Validated against a closed form and against a quantity computed by an unrelated
+route. For free electrons $N(q) = \Omega/4\pi^2 q$ below $2k_F$ and zero above:
+the code reproduces the $1/q$ law to $10^{-4}$ and the hard cut to $10^{-16}$. A
+half-filled hydrogen chain has $2k_F = \pi/c$, so it must nest at
+$\mathbf q = (0,0,\tfrac12)$ --- it does, at \textbf{99.8\%} of the
+Cauchy--Schwarz bound, and \code{relax\_spiral\_q} relaxes the corresponding
+spin spiral to $0.500014$ by going downhill in a magnetic total energy, which
+shares nothing with this. Against the vendored Elk binary on aluminium,
+$N(0)/D(E_F)^2$ agrees to 1.5\%; the raw $N(0)$ differs by 4.7\%, which is the
+all-electron Fermi surface underneath and is quoted rather than tuned away.
+
+\begin{refuses}
+\textbf{Refuses.} A constrained \code{tot\_magnetization}, which has one Fermi
+level per channel, so $g(\mathbf k)$ is two different surfaces; a
+\textbf{fixed-occupation} run, which never searches for a level, so
+$\delta(\varepsilon - E_F)$ has no argument; and a \textbf{spin spiral}, because
+the quantity is a statement about the state a spiral grows out of --- compute it
+on the paramagnet and compare its peak with \code{relax\_spiral\_q}'s answer.
+The delta defaults to a \textbf{Gaussian} even when the run used
+Methfessel--Paxton or cold smearing: those go negative on the wings, so
+$g(\mathbf k)$ can be negative and $N(\mathbf q)$ would have no sign at all.
+Pass \code{smearing=} to have the run's own anyway.
+\end{refuses}
+
 \section{Things with no \texorpdfstring{\code{pw.x}}{pw.x} counterpart}
 
 \textbf{Spin spirals} by the generalized Bloch theorem: a spiral of wavevector

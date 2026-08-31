@@ -14,10 +14,11 @@ a second implementation of something validated.
 **Two of the six were taken in P48** — the effective mass tensor and the
 site-resolved angular momenta — **a third in P50**, the piezoelectric tensor,
 which is the one entry that fails the cheapness filter above and was taken
-anyway (the *implementation* is one `jvp` of code that already exists), and **a
+anyway (the *implementation* is one `jvp` of code that already exists), **a
 fourth in P51**, the optical conductivity tensor with the Kerr angle and the
-anomalous Hall conductivity. The rest are recorded here with their validation
-route, because that is the part that decides whether a phase is worth starting.
+anomalous Hall conductivity, and **a fifth in P52**, the Fermi-surface nesting
+function. The rest are recorded here with their validation route, because that
+is the part that decides whether a phase is worth starting.
 
 Doing the two taught one thing that applies to the rest: **the value of the
 comparison was in what it found, not in the agreement.** Running Elk's own
@@ -37,6 +38,7 @@ second route beside it.
 | Site-resolved `<L>`, `<S>`, `<J>` | 15/16 (`writelsj.f90`) | P48b |
 | Piezoelectric tensor `e_(k)ij`, clamped-ion | 380 (`piezoelt.f90`) | P50 |
 | Optical conductivity `sigma_ab(omega)`, MOKE, anomalous Hall | 121/122 (`dielectric.f90`, `moke.f90`) | P51 |
+| Fermi-surface nesting function `N(q)` | 105 (`nesting.f90`) | P52 |
 
 ---
 
@@ -84,7 +86,7 @@ on P47.
 
 ---
 
-## 2. The Fermi-surface nesting function
+## 2. The Fermi-surface nesting function — **taken, P52**
 
 **Elk task 105** (`nesting.f90`, 91 lines).
 
@@ -95,22 +97,36 @@ N(q) = sum_k  [ sum_n delta(eps_nk - E_F) ] [ sum_m delta(eps_m,k+q - E_F) ]
 **QE has nothing** in the base distribution — `grep -ri nesting PP/src PW/src`
 is empty. EPW has it, and EPW is out of scope.
 
-**What is reused.** Eigenvalues from one dense NSCF and the smearing registry's
-delta functions, both already there. Elk writes it as an `O(N_k^2)` double loop
-over q and k; on a uniform mesh it is a **convolution**, so one FFT over the
-k-grid makes the whole q-dependence essentially free. That is the one place
-this would not be a transcription.
+**The cheapness claim was right and it was the interesting half.** Elk writes it
+as an `O(N_k N_q)` double loop; the `mod(ivk + ivq, ngridk)` fold that puts
+`k + q` back on the grid makes the sum a cyclic cross-correlation, so one FFT
+over the k-grid gives the whole `q` dependence. Measured, that is **0.001 s
+against Elk's 0.37 s** on a 12x12x12 aluminium grid — the one place in the
+phase that is not a transcription, and the only one that needed to be.
 
-**Cost.** One NSCF on a dense grid, then milliseconds.
+**The validation closed inside the package**, which is what this file's method
+note says to look for, and all three routes it named were used. The
+free-electron Lindhard function is analytic and the code reproduces its `1/q`
+law to 1e-4 and its hard cut at `2 k_F` to 1e-16. The hydrogen chain nests at
+`q = 0.5` where `relax_spiral_q` relaxes the spiral to 0.500014 — the pairing
+with P21 that this entry was chosen for, and it worked: nesting predicts the
+pitch from the paramagnet's Fermi-surface geometry, the relaxation finds it in
+a magnetic total energy, and they share no machinery. The Elk binary was run
+too and is the weakest of the three, exactly as this file predicts: its
+all-electron `D(E_F)` differs from a pseudopotential one by 3 per cent and `N`
+is quadratic in it, so what agrees is the dimensionless `N(0)/D(E_F)^2`, to 1.5
+per cent.
 
-**Physics.** It predicts where a charge- or spin-density-wave instability will
-appear — the wavevector at which a phonon will soften or a spiral will win. It
-pairs directly with P21: nesting *predicts* the pitch, `relax_spiral_q` *finds*
-it, and agreement between them on the hydrogen chain is a check neither can
-make alone.
-
-**Validation.** The free-electron Lindhard function analytically; the Elk binary
-on Cr or a one-dimensional chain; internal agreement with `relax_spiral_q`.
+**One finding is worth carrying to the remaining entries.** The saving is not
+in the correlation at all — it is that a symmetry-reduced wedge can be
+**unfolded** onto the complete grid, because `eps_n(Rk) = eps_n(k)`, which
+turns 1728 diagonalisations into 72. Elk does the same thing with `ivkik` and
+the machinery was already here as the tetrahedron method's `equiv`. The trap
+that comes with it is the P28a family: the group a grid is reduced with and the
+group it is unfolded with are different questions on a `nosym`, `noinv` or
+magnetic run, and a mismatch produces a plausible answer built from the wrong
+bands. Anything below that walks a k-grid should go through the one function
+(`workflows/nscf.py:grid_symmetry`) rather than deciding for itself.
 
 **README ticks:** blank for QE, ✓ for Elk (task 105).
 

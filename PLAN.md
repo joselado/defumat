@@ -7458,6 +7458,159 @@ frequencies is 13 MB per chunk against 5 MB of matrix elements: **the frequency
 axis is free and the band count is what has to be watched**, since it enters
 squared and is also the truncation the f-sum measures.
 
+### P52 — The Fermi-surface nesting function. ✅ DONE.
+
+`pypresso/response/nesting.py` and `pypresso/workflows/nesting.py`. Elk's task
+105 (`nesting.f90`); the **fifth** entry taken from `ELK-FEATURES.md`, and the
+first one there that `pw.x` and its post-processing tools lack *entirely* —
+`nesting` occurs nowhere in `PW/src` or `PP/src`, which is a grep and not a
+recollection. EPW has it, and EPW is out of scope.
+
+**What it computes.**
+
+    N(q) = (1/N_k) sum_k g(k) g(k + q),   g(k) = degspin sum_{s,n} delta(eps_snk - E_F)
+
+`g(k)` is the density of states *at one k-point* — a picture of the Fermi
+surface on the grid — and `N(q)` counts how much of that surface maps onto
+itself when translated by `q`. It is the `omega -> 0` imaginary part of the
+Lindhard function stripped of its matrix elements: the **geometric** half of an
+instability, and the half that is cheap. Where it is large a perturbation of
+wavevector `q` connects many occupied states to many empty ones at no energy
+cost, which is what softens a phonon, opens a charge-density-wave gap, or picks
+a spin spiral's pitch.
+
+**The one place this is not a transcription, and it is worth an order of
+magnitude.** `nesting.f90` writes an `O(N_q N_k)` double loop with `k + q`
+folded back onto the grid by `mod(ivk + ivq, ngridk)`. That fold is exactly
+what makes the sum a **cyclic cross-correlation** of `g` with itself, so
+
+    N = ifftn(|fftn(g)|^2) / N_k
+
+gives the whole `q` dependence in one transform. Measured on a 12x12x12
+aluminium grid: **0.001 s here against Elk's 0.37 s** for the same arithmetic.
+The double loop is implemented beside it (`method = "direct"`) and is not
+decoration — the two share no arithmetic and agree to 2.6e-16, which is the
+check that the index fold and the transform's conventions describe the same
+object. `ELK-FEATURES.md` predicted this one correctly: "looks like `N_k^2` and
+is a convolution".
+
+**A wedge is unfolded, not refused, and that is the whole symmetry saving.**
+`N(q)` needs a value at every one of the `n1 n2 n3` grid points, but
+`eps_n(Rk) = eps_n(k)` exactly, so the irreducible wedge carries all of them.
+`grid_equivalence` — `tetra.f90`'s `equiv`, Elk's own `ivkik` — is the map, and
+using it turns a 12x12x12 nesting function on fcc aluminium from 1728
+diagonalisations into **72**.
+
+**The trap is the P28a family and it is silent.** The group a grid is *reduced*
+with and the group it is *unfolded* with are two different questions on a
+`nosym`, `noinv` or magnetic run — `denser_grid`'s four lines. A mismatch maps
+every point of the complete grid onto the wrong representative and raises
+nothing: what comes back is a smooth, positive, plausible `N(q)` built from
+somebody else's bands. Both sides now go through one function,
+`workflows/nscf.py:grid_symmetry`, and the certifying test is `reduce = False`,
+which diagonalises the complete grid: the two agree to **1.8e-14**.
+
+**Validation, and it closes inside the package — which is what
+`ELK-FEATURES.md` says to look for.**
+
+*The analytic limit.* For `eps = |k|^2` in Rydberg the nesting function is a
+closed form: both deltas put `k` on the Fermi sphere, and the angular integral
+of the second over the first gives
+
+    N(q) = Omega / (4 pi^2 q)   for 0 < q <= 2 k_F,   and 0 beyond.
+
+Fed a free-electron band on a 48^3 grid, the code reproduces the `1/q` law to
+**1e-4** averaged in shells of `|q|` up to `0.6 * 2k_F` (it degrades past that,
+which is the delta's own width — the two Fermi shells become tangent as
+`q -> 2k_F`), and gives **zero to 1e-16** beyond `2 k_F`, which is a sharp
+analytic feature reproduced exactly rather than approximately. `D(E_F)` comes
+out at `Omega k_F / 2 pi^2` to 2e-3, which is the linear half of the same
+normalisation — and it matters because `N` is *quadratic* in `g`, so a factor
+of two in the spin degeneracy is a factor of four here and would be hard to
+attribute.
+
+*Two identities, both used as tests.* The weights are this package's DOS
+convention, so `(1/N_k) sum_k g(k)` is `D(E_F)` in states/Ry/cell and therefore
+the **mean of `N` over the whole q-grid is exactly `D(E_F)^2`** — measured at
+3.3e-16 relative, and it ties the unfold, the delta and the transform together
+in one number that `compute_dos` reaches by summing over the *wedge* with its
+multiplicities instead (the two agree to **6.3e-13** on aluminium). And
+`N(0) >= N(q)` for every `q` by Cauchy-Schwarz, so **the nesting peak is always
+a peak away from the origin**; `NestingFunction.peak` excludes `q = 0` for that
+reason rather than as a plotting convenience, since including it would report
+the same uninformative wavevector for every material.
+
+*The pairing with P21, which is the check neither route can make alone.* A
+non-magnetic hydrogen chain at 5 bohr has one electron per cell in a
+spin-degenerate band — half filling, so `k_F = pi/2c` and the only wavevector
+connecting the two Fermi points is `2 k_F = pi/c`, which is **`q = 0.5`** in
+crystal coordinates. The code peaks there, and at **99.8 per cent of the
+Cauchy-Schwarz bound `N(0)`**, which is what perfect one-dimensional nesting
+means: the entire Fermi surface maps onto itself under one translation. P21's
+`relax_spiral_q` writes the total energy of a *magnet* as a function of the
+spiral wavevector, takes `jax.grad` of it at frozen wavefunctions, and walks
+downhill from `q = 0.30` to **0.500014** (P21's own number is 0.50003 at the
+input's cutoff; the gap is the basis-set jump in `E(q)` that phase measures, and the
+notebook's raised cutoff is why the two differ). The two share nothing — one is Fermi-
+surface geometry on the paramagnet, the other a gradient of a magnetic total
+energy — and `ELK-FEATURES.md` singles this pairing out as the entry's reason
+for existing. Aluminium is the control that gives it meaning: a nearly-free-
+electron sphere reaches a few tenths of its own bound and its largest `N(q)` is
+one grid step from the origin, which is the `1/q` tail every metal has and not
+a feature of the surface.
+
+*The spin regimes, which nothing refuses and which therefore had to be
+measured.* A cell with **no magnetization** must give the same `N(q)` run as
+`nspin = 1`, as `nspin = 2` and as a spinor, and it does: **2.4e-13** collinear
+and **1.8e-8** noncollinear (the spinor's Hamiltonian acts on a doubled space
+and its eigenvalues converge to their own threshold). That is the check that
+catches a factor of two in `degspin` — which is a factor of **four** in `N`,
+since it is quadratic in `g`, and would be *invisible* in every other test here:
+the peak still lands at `q = 0.5`, the sum rule still closes against its own
+wrong `D(E_F)`, and the shape is unchanged. It exercises the `for_spin`
+weights, the two-channel `g` (one Fermi level shared between the channels, so
+the surface is their union) and the `t_rev` branch of the unfold at the same
+time. **The band count has to be held equal across the comparison**: a
+different `nbnd` is a different SCF trajectory, and on a one-dimensional metal
+at `conv_thr = 1e-10` that moves the Fermi level by 2e-5 Ry, which is 2.6e-7 in
+`N` and swamps what is being looked for.
+
+*Elk's own number, and what it can and cannot say.* Task 105 on the same cell,
+grid and Gaussian width gives `N(0) = 378.759` in its units against **396.42**
+here — 4.7 per cent, and the whole of it is the Fermi surface underneath:
+Elk's all-electron `D(E_F)` is 4.8228 states/Ry against this code's 4.9719, and
+6.3 per cent of the discrepancy is that ratio *squared*. The dimensionless
+`N(0)/D(E_F)^2` agrees to **1.5 per cent**, which is the comparison that is
+actually like-for-like. The unit conversion itself is pinned by a test rather
+than asserted: `nesting.f90` reports `occmax * Omega_BZ * wkptnr * sum g~ g~`
+with `g~` carrying no degeneracy and energies in Hartree, so its number is
+`(Omega_BZ/occmax) * 4 * N` — and the **4 is a squared factor of two**, which
+is exactly the shape of the trap P50 found in `dielec.f90`.
+
+**Refused by name, in the order they are checked.** A constrained
+`tot_magnetization`, which has one Fermi level per channel (`input.f90`'s
+two-level branch), so `g(k)` is two different surfaces and `N(q)` would have to
+be resolved by channel pair — P45's refusal on the same object. A
+**fixed-occupation** run, which fills a set number of bands and never searches
+for a level, so `delta(eps - E_F)` has no argument. And a **spin spiral**, for
+a reason that is a statement about the physics rather than about the machinery:
+the quantity predicts the wavevector at which a spiral will win, so it is about
+the state the spiral grows *out of*, and computing it on the spiral itself
+would compare a prediction with its own answer.
+
+**The delta defaults to a Gaussian even when the run used Methfessel-Paxton or
+cold smearing**, and that is deliberate rather than an oversight: both go
+negative on the wings, so `g(k)` can be negative at a k-point whose bands sit
+just off the level, and `N(q)` — a product of two such — then has no sign at
+all. The run's own name is accepted if it is asked for.
+
+**Cost and peak.** One NSCF on the wedge of a dense grid, then a transform.
+The working set is one `(nspin, nk_irr, nbnd)` eigenvalue array plus one real
+`n1 n2 n3` box — a 24x24x24 grid is 110 kB — so **the NSCF is the whole
+expense** and the correlation is free. That is what makes the grid, rather than
+the band count, the convergence parameter to spend on: `g(k)` is a delta
+function on a surface and nothing else in the calculation resolves it.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

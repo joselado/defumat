@@ -36,6 +36,7 @@ __all__ = [
     "fixed_density_states",
     "run_nscf",
     "denser_grid",
+    "grid_symmetry",
 ]
 
 
@@ -315,12 +316,13 @@ def denser_grid(
     used as given.
     """
     cell = cell if cell is not None else system.cell
-    magnetic = system.nspin == 4 and system.domag
-    t_rev = None
+    own_rotations, time_reversal, t_rev = grid_symmetry(system)
     if rotations is None:
-        symmetries = system.symmetry_group()
-        rotations = None if system.nosym else symmetries.rotation_array()
-        t_rev = None if system.nosym else symmetries.t_rev_array()
+        rotations = own_rotations
+    else:
+        # An explicit ``rotations`` keeps its own meaning: the caller owns it,
+        # and it carries no ``t_rev`` of its own.
+        t_rev = None
     if shift is None:
         shift = system.kpoints.shift or (0, 0, 0)
     return kpoints_for_spin(
@@ -330,8 +332,30 @@ def denser_grid(
             cell,
             precision=system.kpoints.precision,
             rotations=rotations,
-            time_reversal=not system.noinv and not magnetic,
+            time_reversal=time_reversal,
             t_rev=t_rev,
         ),
         system.nspin,
     )
+
+
+def grid_symmetry(system: System):
+    """``(rotations, time_reversal, t_rev)`` a denser grid of *this run* is reduced with.
+
+    The four lines above, factored out for the one caller that needs them
+    twice: :func:`~pypresso.workflows.nesting.run_nesting` reduces a grid with
+    :func:`denser_grid` and then has to **unfold** it again with
+    :func:`~pypresso.system.kpoints.grid_equivalence`, which walks the same
+    orbits. If the two disagree about the group, every point of the complete
+    grid is mapped to the wrong representative and nothing raises -- the
+    eigenvalues are simply somebody else's. That is the P28a family of bug and
+    the reason this is one function rather than two copies.
+
+    ``rotations`` is ``None`` for a ``nosym`` run, which is what ``KPoints.
+    automatic`` reads as "return the complete grid".
+    """
+    magnetic = system.nspin == 4 and system.domag
+    symmetries = system.symmetry_group()
+    rotations = None if system.nosym else symmetries.rotation_array()
+    t_rev = None if system.nosym else symmetries.t_rev_array()
+    return rotations, (not system.noinv and not magnetic), t_rev
