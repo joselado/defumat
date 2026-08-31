@@ -28,6 +28,21 @@ only on a k-grid invariant under a shift by ``G/2``, which is what
 :mod:`pypresso.system.spiral` documents and what an even Monkhorst-Pack grid
 gives.
 
+**Integrating ``dE/dq`` rather than differencing ``E``.** The same curve comes
+out of the gradient: ``E(q_n) - E(q_0)`` is the line integral of ``dE/dq`` along
+the path the scan walks, and ``gradients=True`` collects the gradient at every
+point so that :attr:`SpiralScan.integrated` can accumulate it. The two curves
+are not identical and the difference is the interesting part -- the energies are
+computed on a plane-wave sphere that is rebuilt at every point and step by the
+Pulay error of a finite basis wherever a plane wave crosses the cutoff, while
+the gradient is taken at a *frozen* sphere and does not see those steps. The
+integrated curve is therefore the smooth one. What it is not is cheaper (every
+point still needs its own SCF), converged on a coarser k-mesh (the gradient is
+the exact derivative of the *same* fixed-mesh energy, so it inherits the same
+Brillouin-zone error), or tolerant of a looser ``conv_thr`` -- that last one runs
+the other way, since an energy's error is second order in the density's and a
+derivative's is first.
+
 **Relaxing ``q`` rather than scanning it.** A scan is the right tool when the
 whole surface is wanted -- the exchange constants are a fit to it -- and the
 wrong one when only its minimum is. :func:`relax_spiral_q` is the minimum, and
@@ -66,7 +81,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from pypresso.forces.spiral import SpiralGradient, compute_spiral_gradient
+from pypresso.forces.spiral import (SpiralGradient, compute_spiral_gradient,
+                                    _require_a_differentiable_spiral)
 from pypresso.pseudo.upf import Pseudopotential
 from pypresso.relax import get_ion_dynamics
 from pypresso.relax.bfgs import BFGSSettings
@@ -109,13 +125,93 @@ class SpiralScan:
     moments: np.ndarray
     converged: tuple
     results: tuple = field(default_factory=tuple)
+    #: ``(nq, 3)`` ``dE/dq`` in lattice coordinates, Ry, or ``None`` when the
+    #: scan was not asked for them (``gradients=False``). One per point, taken
+    #: at that point's own converged state.
+    gradients: np.ndarray | None = None
 
     @property
     def relative(self) -> np.ndarray:
         """Energies measured from the first point, in mRy."""
         return 1.0e3 * (self.energies - self.energies[0])
 
-    def plot(self, ax=None, axis: int = 2, moment: bool = True, **kwargs):
+    @property
+    def integrated(self) -> np.ndarray:
+        """``E(q) - E(q_0)`` in mRy, from ``dE/dq`` rather than the energies.
+
+        The scan's wavevectors are a path through the zone, so the energy along
+        it is the line integral of its own gradient,
+
+            E(q_n) - E(q_0) = sum_m int dq . dE/dq,
+
+        evaluated here by the trapezoid rule on the segments between successive
+        points. Both factors are in **lattice** coordinates -- the units
+        ``spiral_q`` and :attr:`~pypresso.forces.spiral.SpiralGradient.gradient`
+        are written in -- so the contraction needs no metric and the path may
+        bend, which a scan along a zone boundary does.
+
+        **Why this differs from** :attr:`relative`, **which is the same curve.**
+        The energies are computed on a plane-wave sphere rebuilt at every point,
+        so they step by the Pulay error of a finite basis wherever a plane wave
+        crosses ``|k +- q/2 + G|^2 = ecutwfc``; the gradient is taken at a
+        *frozen* sphere and does not see those steps. The integrated curve is
+        therefore the smooth one, and on the hydrogen chain of
+        ``tests/data/qe/h-chain-spiral.in`` the direct one is visibly not: over
+        a 13-point scan at ``ecutwfc = 25`` its energies rise, fall and rise
+        again (0.000, 0.031, 0.105, 0.009, -0.092 mRy) where the integrated
+        curve descends monotonically.
+
+        **Two error sources live in that gap and they are told apart by
+        refining, not by staring.** The trapezoid rule contributes its own
+        ``h^2``, which shrinks when the ``q`` path is refined; the basis noise
+        does not, since it is a property of the cutoff. Measured on that cell at
+        ``ecutwfc = 25``, refining 7 -> 13 -> 25 points takes the quadrature
+        error from 0.051 to 0.016 to 0.003 mRy while the gap against the
+        energies holds at 0.139, 0.138, 0.137 -- so the gap there is basis noise
+        essentially entirely, and refining ``q`` will not touch it. Raising
+        ``ecutwfc`` is what touches it, and it does so **erratically** rather
+        than smoothly, for the reason
+        ``tests/regression/test_spiral_relaxation.py`` records: the number
+        counts the plane waves that happen to cross inside the window of ``q``
+        rather than truncating a series.
+
+        **They do converge onto each other**, which is the check that neither
+        route carries a term the other is missing: at ``ecutwfc = 60`` on the
+        same cell the two agree to **0.005 mRy** once the quadrature error is
+        removed, against 0.130 at 25 -- a factor of 26 for a factor of 2.4 in
+        the cutoff. Which of the two is *closer* to that limit at a low cutoff
+        is a separate question and is not settled by any of this; the integrated
+        curve is smoother, which is not the same claim. Raising ``ecutwfc``
+        until they agree is what settles it, and it is the check to run before
+        quoting either.
+
+        Three things this route does not buy, because the intuition that it
+        might is a common one:
+
+        * **No k-mesh gain.** ``dE/dq`` at the frozen converged state is the
+          exact derivative of the same fixed-mesh ``E(q)``, so integrating it
+          carries the same Brillouin-zone error the energies do.
+        * **No saving.** Every point still needs its own converged state for
+          the gradient to be evaluated at.
+        * **A tighter ``conv_thr``, not a looser one.** An energy's error is
+          second order in the density's and a gradient's is first order, which
+          is why :func:`relax_spiral_q` escalates ``conv_thr`` as it closes in.
+        """
+        if self.gradients is None:
+            raise ValueError(
+                "this scan carries no gradients: pass gradients=True to "
+                "run_spiral_scan, which needs a spiral the gradient supports "
+                "(norm-conserving, no magnetic field)"
+            )
+        q = np.asarray(self.wavevectors, dtype=float)
+        g = np.asarray(self.gradients, dtype=float)
+        # Trapezoid on each segment: the average of the two endpoints'
+        # gradients contracted with the step between them.
+        steps = np.sum(0.5 * (g[1:] + g[:-1]) * (q[1:] - q[:-1]), axis=1)
+        return 1.0e3 * np.concatenate([[0.0], np.cumsum(steps)])
+
+    def plot(self, ax=None, axis: int = 2, moment: bool = True,
+             integrated: bool | None = None, **kwargs):
         """Draw ``E(q)``, and return the axes.
 
         A frozen-magnon curve is the whole point of a scan and is drawn the
@@ -125,6 +221,12 @@ class SpiralScan:
         adds the amplitude of the turning moment on a twin axis, since a curve
         that softens because the moment collapsed is a different statement from
         one that softens because the spiral is favourable.
+
+        ``integrated`` overlays the curve :attr:`integrated` builds from
+        ``dE/dq``, which is the informative comparison when the scan carries
+        gradients: the two are the same physical curve and the gap between them
+        is the basis-set noise the energies have and the gradients do not. It
+        defaults to drawing whenever the gradients are there.
 
         matplotlib is imported here rather than at module scope: it is not a
         dependency of any calculation, and a headless run should not need it.
@@ -136,7 +238,14 @@ class SpiralScan:
         q = np.asarray(self.wavevectors)[:, axis]
         kwargs.setdefault("marker", "o")
         kwargs.setdefault("color", "C0")
+        kwargs.setdefault("label", "from $E$")
         ax.plot(q, self.relative, **kwargs)
+        if integrated is None:
+            integrated = self.gradients is not None
+        if integrated:
+            ax.plot(q, self.integrated, marker="x", ls="--", lw=1.0,
+                    color="C2", label=r"$\int dq\, dE/dq$")
+            ax.legend(frameon=False, loc="best")
         ax.set_xlabel(f"$q_{'xyz'[axis]}$   [$2\\pi/a$, lattice coordinates]")
         ax.set_ylabel(r"$E(q) - E(q_0)$   [mRy]")
         ax.axhline(0.0, color="0.7", lw=0.8, ls=":")
@@ -154,6 +263,7 @@ def run_spiral_scan(
     pseudos: tuple[Pseudopotential, ...],
     wavevectors,
     keep_results: bool = False,
+    gradients: bool = False,
     **scf_options,
 ) -> SpiralScan:
     """One SCF per wavevector, sharing everything that does not depend on ``q``.
@@ -164,6 +274,12 @@ def run_spiral_scan(
         wavevectors: ``(nq, 3)`` in lattice coordinates.
         keep_results: hold every :class:`~pypresso.scf.driver.SCFResult`. Off by default: each one
             carries its wavefunctions, which is the largest array in the run.
+        gradients: also take ``dE/dq`` at every point, which
+            :attr:`SpiralScan.integrated` then integrates along the path into a
+            second, jump-free ``E(q)``. It is evaluated on the converged state
+            the scan already has, so it costs one gradient per point and no
+            further SCF; what it asks for in return is a tighter ``conv_thr``,
+            since a derivative needs a better density than an energy does.
     """
     wavevectors = np.asarray(wavevectors, dtype=float).reshape(-1, 3)
     if not system.spiral:
@@ -173,7 +289,12 @@ def run_spiral_scan(
         )
 
     base = Calculation(system, pseudos, k_batch=scf_options.pop("k_batch", "default"))
-    energies, moments, converged, results = [], [], [], []
+    if gradients:
+        # Ask before the first SCF rather than after it. The refusals live on
+        # the gradient, not the scan, so an unsupported spiral would otherwise
+        # converge a state and then throw it away along with the whole run.
+        _require_a_differentiable_spiral(base.at_spiral_q(wavevectors[0]))
+    energies, moments, converged, results, slopes = [], [], [], [], []
     for q in wavevectors:
         calculation = base.at_spiral_q(q)
         result = run_scf(
@@ -182,6 +303,11 @@ def run_spiral_scan(
         energies.append(result.total_energy)
         moments.append(result.magnetization_vector or (0.0, 0.0, 0.0))
         converged.append(bool(result.converged))
+        if gradients:
+            # The live result is in hand here, so the gradient costs nothing
+            # beyond itself -- ``keep_results`` is about holding the
+            # wavefunctions afterwards and is a separate question.
+            slopes.append(compute_spiral_gradient(calculation, result).gradient)
         if keep_results:
             results.append(result)
 
@@ -191,6 +317,7 @@ def run_spiral_scan(
         moments=np.array(moments),
         converged=tuple(converged),
         results=tuple(results),
+        gradients=np.array(slopes) if gradients else None,
     )
 
 

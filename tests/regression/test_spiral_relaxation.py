@@ -369,3 +369,62 @@ def test_a_moved_calculation_does_not_reuse_a_stale_gradient(pseudo_dir):
     shifted = np.asarray(calculation.system.structure.positions) + 0.1
     assert "_spiral_gradient" not in calculation.at_positions(jnp.asarray(shifted)).__dict__
     assert "_spiral_gradient" not in calculation.at_spiral_q([0.0, 0.0, 0.35]).__dict__
+
+
+def test_integrating_the_gradient_reproduces_the_scan(pseudo_dir):
+    """``E(q)`` accumulated from ``dE/dq`` against ``E(q)`` differenced from ``E``.
+
+    The two are the same curve and the gap between them is the finding. It is
+    *not* quadrature error: refining the ``q`` path shrinks the trapezoid rule's
+    own ``h^2`` and leaves the gap where it was, which is what makes it a
+    property of the basis rather than of the sum. Measured here at
+    ``ecutwfc = 25``, 7 points against 13.
+
+    What the integrated curve buys is smoothness and nothing else, so the two
+    other things a reader might hope for are asserted *not* to happen anywhere:
+    it is the same k-mesh (the gradient is the exact derivative of the same
+    fixed-mesh energy, which
+    :func:`test_the_gradient_is_the_slope_of_the_converged_energy` is the proof
+    of) and the same number of SCF runs.
+
+    The endpoints are the free, sharp part: ``E(-q) = E(q)`` makes ``q = 0`` and
+    ``q = b3/2`` stationary whatever the electrons do, so a scan that ends on
+    them must report zero gradients there to round-off.
+    """
+    from pypresso.workflows.spiral import run_spiral_scan
+
+    text = (GENERATED / "h-chain-spiral.in").read_text()
+    system = build_system(parse_pw_input(text))
+    pseudos = _pseudos(system, pseudo_dir)
+
+    gaps = []
+    for npoints in (7, 13):
+        q = np.zeros((npoints, 3))
+        q[:, 2] = np.linspace(0.0, 0.5, npoints)
+        scan = run_spiral_scan(
+            system, pseudos, q, gradients=True,
+            conv_thr=1e-12, mixing_beta=0.3, max_iterations=300,
+        )
+        assert all(scan.converged)
+        assert scan.gradients.shape == (npoints, 3)
+
+        # The two stationary wavevectors the path ends on.
+        assert np.abs(scan.gradients[0]).max() < SYMMETRY_ZERO
+        assert np.abs(scan.gradients[-1]).max() < SYMMETRY_ZERO
+        # Both curves are measured from the first point, which is where the
+        # integral starts and where the energies are subtracted.
+        assert scan.integrated[0] == 0.0
+
+        # The antiferromagnet is the ground state and both routes must say so:
+        # a sign error in the accumulation would put the minimum at q = 0.
+        assert scan.integrated[-1] == pytest.approx(scan.relative[-1], abs=0.5)
+        assert scan.integrated[-1] < -2.0
+        gaps.append(float(np.abs(scan.integrated - scan.relative).max()))
+
+    # Refining the path halves the step and so quarters the trapezoid rule's
+    # error (0.051 -> 0.016 mRy on this cell, measured against a spline
+    # quadrature of the same gradients). The gap does not follow it down --
+    # 0.139 against 0.138 -- so what is left is the basis-set noise the
+    # energies carry and the gradients do not.
+    assert gaps[0] == pytest.approx(gaps[1], rel=0.1)
+    assert 0.05 < gaps[0] < 0.5

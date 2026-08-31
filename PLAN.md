@@ -7611,6 +7611,80 @@ expense** and the correlation is free. That is what makes the grid, rather than
 the band count, the convergence parameter to spend on: `g(k)` is a delta
 function on a surface and nothing else in the calculation resolves it.
 
+### P21a — `E(q)` from `dE/dq`: the spiral scan integrates its own gradient. ✅ DONE.
+
+`pypresso/workflows/spiral.py`. Not a new quantity and not a new derivative: P21's
+`compute_spiral_gradient` and the scan of P19 were both already here, and what was
+missing was the line joining them. `run_spiral_scan(..., gradients=True)` takes
+`dE/dq` at each point's own converged state, and `SpiralScan.integrated`
+accumulates it along the path,
+
+    E(q_n) - E(q_0) = sum_m int dq . dE/dq
+
+by the trapezoid rule on the segments between successive wavevectors. Both factors
+are in **lattice** coordinates — the units `spiral_q` and `SpiralGradient.gradient`
+are written in — so the contraction needs no metric and the path may bend, which a
+scan along a zone boundary does.
+
+**The reason to want it is the finite basis, and it is the only reason.** A scan
+rebuilds the plane-wave spheres at every point, so `E(q)` steps by the Pulay error
+wherever a plane wave crosses `|k +- q/2 + G|^2 = ecutwfc`; the gradient is taken at
+a *frozen* sphere and does not see those steps. On the hydrogen chain of
+`tests/data/qe/h-chain-spiral.in` at `ecutwfc = 25`, over eleven points, the direct
+energies go **uphill on 2 of 10 steps** of a curve that falls throughout, where the
+integrated curve descends on all 10.
+
+**Two error sources live in the gap between the curves and refining tells them
+apart** — which is the finding, because staring at one number does not. The
+trapezoid rule contributes its own `h^2` and the basis noise does not. Measured at
+`ecutwfc = 25`, refining 7 -> 13 -> 25 points takes the quadrature error from
+**0.051 to 0.016 to 0.003** mRy (against a spline quadrature of the same gradients)
+while the gap against the energies holds at **0.139, 0.138, 0.137** — so that gap is
+basis noise essentially entirely and no amount of refining `q` will touch it. Two
+consequences followed:
+
+* **A cutoff sweep alone reads as the claim failing.** The trapezoid gap goes
+  0.139 (25 Ry), 0.069 (40), 0.072 (60), 0.073 (80) — a plateau, not a decay, and
+  the plateau is the quadrature floor rather than a residual basis error. Removing
+  it shows the real number: at `ecutwfc = 60` the two curves agree to **0.005 mRy**
+  against 0.130 at 25, a factor of 26 for a factor of 2.4 in the cutoff. The two
+  routes *do* converge onto each other, which is the check that neither carries a
+  term the other lacks.
+* **A spline quadrature is a measurement instrument and not an API.** It lives in
+  the validation script; the shipped rule is the trapezoid, because the quadrature
+  error is subdominant to the basis noise the feature exists for *and* is the one
+  the user can remove by refining a path they already chose.
+
+**Three things it does not buy, and the intuition that it might is the reason to
+write them down.** It is **not cheaper** — every point still needs its own SCF,
+since the gradient is evaluated on the converged state; it does **not converge on a
+coarser k-mesh** — `dE/dq` at the frozen converged state is the exact derivative of
+the *same* fixed-mesh `E(q)`, which is what
+`test_the_gradient_is_the_slope_of_the_converged_energy` establishes, so it inherits
+the identical Brillouin-zone error; and it wants a **tighter `conv_thr`, not a
+looser one** — an energy's error is second order in the density's where a
+derivative's is first, which is why `relax_spiral_q` escalates `conv_thr` by
+`UPSCALE` as it closes in.
+
+Which of the two curves is *closer* to the converged-cutoff limit at a low cutoff is
+**not** settled by any of this. The integrated one is smoother, which is a different
+claim, and the honest check is raising `ecutwfc` until they agree.
+
+**One guard.** The refusals live on the gradient, not on the scan, so
+`gradients=True` calls `_require_a_differentiable_spiral` on the first wavevector
+*before* the loop — otherwise an unsupported spiral converges a state and then
+throws it away along with the whole run.
+
+**Tests.** `tests/unit/test_spiral_integration.py` (the accumulation, against a
+cosine's own primitive and against a constant gradient on a **bent** path, where
+the trapezoid rule is exact and any wrongly-inserted metric shows immediately) and
+`test_integrating_the_gradient_reproduces_the_scan` in
+`tests/regression/test_spiral_relaxation.py` (the gap is flat under refinement, and
+the endpoints `q = 0` and `q = b3/2` report zero gradients to `SYMMETRY_ZERO`).
+Notebook `12`; `docs/features.tex`. **No README row** — it is the same quantity as
+the scan already there. **No `PERFORMANCE.md` pair**: neither `pw.x` nor Elk
+computes a spiral `E(q)` this way, so there is nothing to time it against.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

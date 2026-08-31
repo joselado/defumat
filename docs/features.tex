@@ -1389,12 +1389,47 @@ best = relax_spiral_q(system, pseudos)   # BFGS on the reciprocal metric
 print(best.wavevector, best.scf.total_energy)
 
 J = heisenberg_exchange(scan, shells)    # fit E(q) for the exchange constants
+
+scan = run_spiral_scan(system, pseudos, wavevectors, gradients=True)
+print(scan.relative)     # E(q) - E(q_0) in mRy, from the energies
+print(scan.integrated)   # the same curve, from dE/dq along the path
 \end{pycode}
 
 \code{heisenberg\_exchange} fits
 $E(\mathbf q) - E(0) = m^2 \sum_{\mathbf R} J(\mathbf R)\,[1 - \cos(\mathbf q\cdot\mathbf R)]$
 over a set of lattice shells, which is how a spiral scan becomes a spin model.
 \code{compute\_spiral\_gradient} gives $dE/d\mathbf q$ on its own.
+
+\textbf{$E(\mathbf q)$ two ways.} With \code{gradients=True} the scan also takes
+$dE/d\mathbf q$ at every point, and \code{scan.integrated} accumulates it along
+the path,
+\begin{equation*}
+E(\mathbf q_n) - E(\mathbf q_0)
+  = \sum_m \int \mathrm d\mathbf q\cdot\frac{\partial E}{\partial\mathbf q},
+\end{equation*}
+by the trapezoid rule on the segments between successive wavevectors (both
+factors in lattice coordinates, so the contraction needs no metric and the path
+may bend). The two curves are the same physics and the gap between them is the
+useful part: the energies are computed on a plane-wave sphere \emph{rebuilt} at
+every point and step by the Pulay error of a finite basis wherever a plane wave
+crosses the cutoff, while the gradient is taken at a \emph{frozen} sphere and
+does not see those steps. On the hydrogen chain of
+\code{tests/data/qe/h-chain-spiral.in} at \code{ecutwfc = 25} the direct
+energies rise, fall and rise again over a 13-point scan where the integrated
+curve descends monotonically; the two agree to $0.005$~mRy at
+\code{ecutwfc = 60} once the quadrature error is removed, against $0.130$ at
+$25$.
+
+Two error sources live in that gap and refining tells them apart: the trapezoid
+rule's own $h^2$ shrinks when the $\mathbf q$ path is refined ($0.051 \to 0.016
+\to 0.003$~mRy for $7 \to 13 \to 25$ points) and the basis noise does not
+($0.139$, $0.138$, $0.137$). What the integrated route does \emph{not} buy is
+worth stating, since the intuition that it might is a common one: it is not
+cheaper (every point still needs its own SCF), it does not converge on a coarser
+$k$-mesh (the gradient is the exact derivative of the \emph{same} fixed-mesh
+energy, so it inherits the same Brillouin-zone error), and it needs a
+\emph{tighter} \code{conv\_thr} rather than a looser one, an energy's error
+being second order in the density's where a derivative's is first.
 
 Also here: \textbf{per-atom magnetic fields}, the \textbf{topological
 invariants} of the previous section, and \textbf{rank-$n$ tensor

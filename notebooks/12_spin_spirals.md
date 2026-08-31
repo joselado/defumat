@@ -68,7 +68,7 @@ spin model would be built from.
 
 ```python
 scan = chain.get_spiral_scan([[0.0, 0.0, q] for q in np.linspace(0.0, 0.5, 11)],
-                             max_iterations=200)
+                             gradients=True, max_iterations=200)
 
 ax = scan.plot()
 ax.set_title("Hydrogen chain: the frozen-magnon dispersion, one run per point")
@@ -94,6 +94,73 @@ gains, so the self-consistent solution is the non-magnetic one and $E(q)$ is fla
 Heisenberg model has nothing to describe on that stretch, which is why the fit divides by
 $|m|^2$ rather than assuming a fixed spin length, and why the two-shell residual is 2% rather
 than nothing.
+
+## The same curve, from its own slope
+
+$E(\mathbf q)$ can also be had without evaluating $E$ anywhere. The slope $dE/d\mathbf q$ is
+a derivative of the total energy itself rather than an expression derived by hand for it, and
+a curve is the integral of its own slope along the path the scan walks:
+
+$$E(\mathbf q_n) - E(\mathbf q_0)
+  = \sum_m \int \mathrm{d}\mathbf q \cdot \frac{\partial E}{\partial \mathbf q}.$$
+
+Both routes describe the same magnet, and comparing them is worth the trouble because they
+meet the finite basis differently. The energies are computed on a plane-wave basis rebuilt at
+every wavevector, so each carries a small step wherever a plane wave crosses the cutoff; the
+slope is taken at a fixed basis and has no such step in it.
+
+
+
+```python
+q = scan.wavevectors[:, 2]
+print("   q      E(q) [mRy]    from dE/dq [mRy]")
+for qi, direct, slope in zip(q, scan.relative, scan.integrated):
+    print("%6.2f  %11.3f  %16.3f" % (qi, direct, slope))
+
+falls = lambda curve: int(np.sum(np.diff(curve) < 0))
+print("\nlargest difference between the two routes   %.3f mRy"
+      % np.abs(scan.relative - scan.integrated).max())
+print("of %d steps, the number going downhill:  from E %d,  from dE/dq %d"
+      % (len(q) - 1, falls(scan.relative), falls(scan.integrated)))
+
+```
+
+       q      E(q) [mRy]    from dE/dq [mRy]
+      0.00        0.000             0.000
+      0.05        0.008            -0.011
+      0.10        0.032            -0.044
+      0.15       -0.042            -0.144
+      0.20       -0.280            -0.382
+      0.25       -0.704            -0.775
+      0.30       -1.196            -1.281
+      0.35       -1.733            -1.815
+      0.40       -2.225            -2.280
+      0.45       -2.598            -2.595
+      0.50       -2.738            -2.707
+    
+    largest difference between the two routes   0.102 mRy
+    of 10 steps, the number going downhill:  from E 8,  from dE/dq 10
+
+
+Both routes put the ground state at the zone boundary and agree on how deep it is, to
+$0.1$ mRy on a curve $2.7$ mRy deep. Where they part is the way down: the directly computed
+energies are not monotone on a curve that falls throughout, while the integrated one is.
+
+That difference is the finite basis and not the magnet. Repeating this scan at
+`ecutwfc = 60` instead of $25$ brings the two curves from $0.10$ mRy apart to $0.03$, and
+the part of *that* which is the integration rule rather than the basis falls away too as
+more wavevectors are added: the two agree to $0.005$ mRy once it is gone. So neither route
+is missing anything the other has, and the gap at a modest cutoff is the price of the
+basis. Which of the two is nearer the converged answer is a further question that the
+agreement does not settle.
+
+Three things the slope route does not buy, since the hope that it might is a natural one. It
+is not cheaper: every point still needs its own self-consistent run, because the slope is
+evaluated on the converged state. It does not tolerate a coarser $k$-mesh, since the slope is
+the exact derivative of the same $k$-sampled energy and inherits the same sampling error. And
+it wants a *tighter* convergence threshold rather than a looser one, an energy being
+stationary with respect to the density where a derivative is not.
+
 
 
 ```python

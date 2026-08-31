@@ -70,6 +70,23 @@ through the projectors rather than transcribed — to 4.8e-6 Ry/bohr.
 `jax.grad` of the energy at frozen wavefunctions, and a BFGS on the reciprocal metric takes
 a hydrogen chain from `q = 0.30` to its antiferromagnetic ground state at `0.50003` in six
 SCF runs — validated by identities and finite differences, since `pw.x` has no spiral.
+**The same gradient also builds `E(q)` itself** (P21a): `run_spiral_scan(gradients=True)`
+takes `dE/dq` at each point's converged state and `SpiralScan.integrated` accumulates it
+along the path, which is worth doing for exactly one reason — a scan rebuilds the
+plane-wave spheres at every point and its energies step by the Pulay error, where a
+frozen-sphere gradient does not. On the hydrogen chain the direct curve goes uphill on 2 of
+10 steps of a curve that falls throughout and the integrated one on none. **The gap between
+them holds two error sources and refining tells them apart**: 7 → 13 → 25 points takes the
+trapezoid rule's own error from 0.051 to 0.016 to 0.003 mRy while the gap against the
+energies stays at 0.139, 0.138, 0.137 — so at `ecutwfc = 25` that gap is basis noise
+essentially entirely, and a *cutoff* sweep alone reads as the claim failing, because what
+plateaus at 0.07 is the quadrature floor. Removing it gives the real number: **0.005 mRy at
+`ecutwfc = 60` against 0.130 at 25**, so the two routes converge onto each other and neither
+carries a term the other lacks. **Three things it does not buy**, and the intuition that it
+might is why they are written down: it is not cheaper (every point still needs its own SCF),
+it does *not* converge on a coarser k-mesh (the gradient is the exact derivative of the
+*same* fixed-mesh energy), and it wants a **tighter** `conv_thr` rather than a looser one —
+an energy's error is second order in the density's where a derivative's is first.
 **One run continues another across a change of spin regime** (P23):
 `run_scf(starting_from=result)` promotes a converged state into the target's variables —
 a non-magnetic density into a collinear run, a collinear one into a noncollinear run, and

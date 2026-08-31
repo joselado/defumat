@@ -52,6 +52,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Spin-orbit split bands | `noncolin`, `lspinorb` | [08](08_spin_orbit_coupling.ipynb) |
 | Magnetism as a vector, fields, constrained moments | `nspin = 4`, `B_field` | [11](11_noncollinear_magnetism_and_fields.ipynb) |
 | A magnon `E(q)` without a supercell | `get_spiral_scan()` | [12](12_spin_spirals.ipynb) |
+| The same `E(q)` from `dE/dq` instead | `get_spiral_scan(gradients=True)` | [12](12_spin_spirals.ipynb) |
 | A magnet's ground-state pitch | `get_spiral_relaxation()` | [14](14_spiral_relaxation.ipynb) |
 | Site-resolved `<L>`, `<S>` and `<J>` | `get_angular_momenta()` | [29](29_effective_mass_and_angular_momenta.ipynb) |
 | One run continued from another across a change of spin regime | `with_spin()` | [18](18_continuing_a_calculation.ipynb) |
@@ -119,7 +120,7 @@ want a number.
 | [`09_forces_and_relaxation.ipynb`](09_forces_and_relaxation.ipynb) | Hellmann-Feynman and Pulay in one derivative, against Quantum ESPRESSO, then relaxation |
 | [`10_topological_invariants.ipynb`](10_topological_invariants.ipynb) | Chern numbers as exact integers, Wannier-centre flow, Fu-Kane parities, and the curvature as a map |
 | [`11_noncollinear_magnetism_and_fields.ipynb`](11_noncollinear_magnetism_and_fields.ipynb) | Magnetism as a vector field, bcc iron against QE, constrained moments, and the direction the energy cannot depend on |
-| [`12_spin_spirals.ipynb`](12_spin_spirals.ipynb) | The generalized Bloch theorem, the limits that validate it, and a frozen-magnon `E(q)` curve |
+| [`12_spin_spirals.ipynb`](12_spin_spirals.ipynb) | The generalized Bloch theorem, the limits that validate it, and a frozen-magnon `E(q)` curve computed two ways |
 | [`13_dft_plus_u.ipynb`](13_dft_plus_u.ipynb) | The occupation penalty that opens FeO's gap, against QE, and the natural occupations it drives to 0 and 1 |
 | [`14_spiral_relaxation.ipynb`](14_spiral_relaxation.ipynb) | `dE/dq`, and a relaxation that finds a magnet's ground-state pitch in six SCF runs |
 | [`15_stress.ipynb`](15_stress.ipynb) | The stress tensor, silicon's equation of state, and the Pulay stress a low cutoff carries |
@@ -230,7 +231,7 @@ workstation core, slowest last:
 | `01` | 5 | `00` | 22 | `15` | 31 | `29` | 59 |
 | `09` | 6 | `07` | 22 | `24` | 31 | `13` | 69 |
 | `02` | 8 | `06` | 23 | `28` | 33 | `11` | 81 |
-| `16` | 9 | `12` | 27 | `31` | 34 | `14` | 89 |
+| `16` | 9 | `12` | 30 | `31` | 34 | `14` | 89 |
 | `03` | 10 | `25` | 28 | `23` | 35 | `26` | 107 |
 | `05` | 10 | `17` | 29 | `19` | 47 | `30` | 131 |
 | `04` | 12 | `18` | 29 | `10` | 50 | `08` | 171 |
