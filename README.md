@@ -236,6 +236,7 @@ to compute, which is the way to arrive at them. In file order:
 | [`25_your_own_crystal`](notebooks/25_your_own_crystal.ipynb) | Running a material of your own: diamond from a lattice constant, a fetched pseudopotential, and the two convergence tests |
 | [`26_raman_and_infrared_spectra`](notebooks/26_raman_and_infrared_spectra.ipynb) | Raman and infrared activities per mode: silicon's 519.2 cm⁻¹ line, and why it is infrared-silent |
 | [`27_excitons_and_tddft`](notebooks/27_excitons_and_tddft.ipynb) | Optical absorption from TDDFT with a bootstrap kernel, and the excitonic peak RPA does not have |
+| [`28_piezoelectricity`](notebooks/28_piezoelectricity.ipynb) | The voltage a squeezed crystal produces: AlAs's one independent component, and why silicon has none |
 | [`29_effective_mass_and_angular_momenta`](notebooks/29_effective_mass_and_angular_momenta.ipynb) | Effective masses as one difference of an analytic velocity, against the all-electron Elk binary, and where a spin-orbit magnet's orbital moment sits |
 
 `benchmarks/` holds ready-to-run input files, from a two-atom silicon cell up to

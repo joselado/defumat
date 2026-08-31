@@ -69,6 +69,7 @@ instead, which means the physics is selected in the input file rather than at th
 | An optical absorption spectrum, with excitons | `get_absorption()` | [27](27_excitons_and_tddft.ipynb) |
 | Elastic constants | `get_elastic_constants()` | [21](21_electrostriction.ipynb) |
 | Electrostriction and the elasto-optic tensor | `get_electrostriction()`, `get_strain_response()` | [21](21_electrostriction.ipynb) |
+| The piezoelectric tensor | `get_piezoelectric_tensor()` | [28](28_piezoelectricity.ipynb) |
 | An effective mass | `get_effective_mass()` | [29](29_effective_mass_and_angular_momenta.ipynb) |
 
 ### Topology
@@ -132,6 +133,7 @@ want a number.
 | [`25_your_own_crystal.ipynb`](25_your_own_crystal.ipynb) | Diamond from a lattice constant and a fetched pseudopotential: the cutoff and k-grid tests, then bands and a density of states |
 | [`26_raman_and_infrared_spectra.ipynb`](26_raman_and_infrared_spectra.ipynb) | Modes, activities and depolarisation ratios: silicon's 519 cm-1 line, Raman-active and infrared-silent, and the tensor underneath them |
 | [`27_excitons_and_tddft.ipynb`](27_excitons_and_tddft.ipynb) | Absorption spectra and the bootstrap kernel, and why no adiabatic local kernel binds an exciton |
+| [`28_piezoelectricity.ipynb`](28_piezoelectricity.ipynb) | The voltage a squeezed crystal produces: AlAs's one independent component, and the inversion centre that gives silicon none |
 | [`29_effective_mass_and_angular_momenta.ipynb`](29_effective_mass_and_angular_momenta.ipynb) | Band curvature as an effective mass, and site-resolved `<L>`, `<S>` and `<J>` against Elk |
 
 ## Conventions
@@ -221,14 +223,14 @@ workstation core, slowest last:
 
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
-| `01` | 5 | `07` | 22 | `18` | 29 | `29` | 59 |
-| `09` | 6 | `00` | 22 | `21` | 30 | `13` | 69 |
-| `02` | 8 | `06` | 23 | `24` | 31 | `11` | 81 |
-| `16` | 9 | `12` | 27 | `15` | 31 | `14` | 89 |
-| `03` | 10 | `25` | 28 | `23` | 35 | `26` | 107 |
-| `05` | 10 | `17` | 29 | `19` | 47 | `08` | 171 |
-| `04` | 12 | | | `10` | 50 | `27` | 178 |
-| `22` | 12 | | | `20` | 57 | | |
+| `01` | 5 | `00` | 22 | `15` | 31 | `13` | 69 |
+| `09` | 6 | `07` | 22 | `24` | 31 | `11` | 81 |
+| `02` | 8 | `06` | 23 | `28` | 33 | `14` | 89 |
+| `16` | 9 | `12` | 27 | `23` | 35 | `26` | 107 |
+| `03` | 10 | `25` | 28 | `19` | 47 | `08` | 171 |
+| `05` | 10 | `17` | 29 | `10` | 50 | `27` | 178 |
+| `04` | 12 | `18` | 29 | `20` | 57 |  |  |
+| `22` | 12 | `21` | 30 | `29` | 59 |  |  |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two
 hand-built linear solves and a second self-consistent run that were demonstrating

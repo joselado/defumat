@@ -59,6 +59,7 @@ REWRITTEN = {
     "25_your_own_crystal",
     "26_raman_and_infrared_spectra",
     "27_excitons_and_tddft",
+    "28_piezoelectricity",
     "29_effective_mass_and_angular_momenta",
 }
 
