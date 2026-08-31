@@ -7157,6 +7157,19 @@ needs that does not exist yet is a **two-coordinate** frozen functional
 energy and the explicit `d_u d_eps E|frozen` term does not vanish. That is the
 next step and it is what makes the number comparable with experiment.
 
+**What it costs, and it is not what the term count suggests.** The strain leg
+drops the multipliers the displacement leg needs and is still eight times slower
+and four times heavier: 6.4 s and a **4.2 GB** peak on two-atom AlAs where the
+Born charge off the same field response is 0.8 s and 1.13 GB. It is P11's
+stress-against-force ratio one derivative up — `at_positions` moves one complex
+exponential per atom over cached radial tables and `at_strain` moves `|G|`
+itself, so every radial transform in the setup is inside the taped function —
+and the peak does **not** respond to `k_batch`, because what the tape holds is
+the setup rather than the k axis. The consequence is that here the *transcribed*
+route is the cheap one, 4.0 s and no extra memory, which is the reverse of the
+usual arrangement; it stays the cross-check because the differentiated one is
+what extends, and `PERFORMANCE.md` says which to reach for on a large cell.
+
 **Refused rather than approximated**, beyond the polar crystals: everything
 `require_a_sternheimer_regime` refuses, everything
 `require_a_differentiable_cell` refuses (a spin spiral, a magnetic field), and a

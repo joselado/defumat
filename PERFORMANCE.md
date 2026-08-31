@@ -3009,6 +3009,54 @@ few `einsum`s on `(18, 2, 18, 2)`.
 **The notebook is 63 s**, most of it the one spinor SCF on nickel (60 Ry, 64
 k-points, `noncolin` + `lspinorb`), well inside the ten-minute ceiling.
 
+## What a piezoelectric tensor costs, and why it is not a Born charge (P50)
+
+`e_(k)ij` and `Z*` are the same construction with one coordinate changed -- one
+`jvp` of a coordinate gradient of the frozen energy along the electric field's
+response -- so they should cost the same and they do not. Measured on the same
+cell, in the same process, off the same field response: AlAs (2 atoms, NC LDA,
+`ecutwfc = 10`, 64 k-points `nosym`, `npwx = 137`), one core,
+`OMP_NUM_THREADS=1`, 2026-08-31.
+
+| | time | peak RSS |
+|---|---|---|
+| SCF, `conv_thr = 1e-12` | 2.1 s | 0.48 GB |
+| the electric-field response (3 directions, self-consistent) | 15-20 s | 0.98 GB |
+| **Born charges** on top of it (P24b) | **0.8 s** | 1.13 GB |
+| **the piezoelectric tensor** on top of it | **6.4 s** warm, 8.7 s cold | **4.2 GB** |
+| the transcribed contraction beside it (`zstar_eu` with a strain label) | 4.0 s | no change |
+
+**Eight times the time and four times the peak, for a derivative with *fewer*
+terms in it.** The strain leg drops the orthonormality multipliers the
+displacement leg needs, and it is still the expensive one, for the reason P11's
+entry above already gives about a stress against a force: `at_positions` changes
+one complex exponential per atom over cached radial tables, where `at_strain`
+moves `|G|` itself, so every radial transform in the setup is *inside* the
+differentiated function and is rebuilt forward and taped backward. A
+second derivative pays that twice. The ratio here (8x) is larger than the
+first-derivative ratio P11 measured (a stress at 0.6 SCF iterations against a
+force at 0.13-0.52) because forward-over-reverse holds the whole tape.
+
+**The peak does not move with `k_batch`**, which is worth knowing before anyone
+reaches for that dial: 4.2 GB at the platform default, 3.9-4.9 GB at
+`k_batch = 8` and 16, and the SCF four times *slower* at both. What the tape
+holds is not the k axis but the setup's radial and reciprocal-space
+intermediates, which every chunk rebuilds in full.
+
+**So the transcribed route is the cheap one here**, which is the reverse of the
+usual arrangement in this project: 4.0 s and no extra memory at all, against 6.4
+s and 3.2 GB, because it contracts a bare perturbation rather than taping a
+gradient. It is kept as the cross-check rather than as the implementation
+because the differentiated route is what extends -- but on a large cell it is the
+one to reach for.
+
+**What it does not need.** The other cross-check, the same derivative contracted
+with the strain response on the screened side, costs **25 s** for six more
+Sternheimer solves. It is in the slow test set and nowhere near the default path.
+
+**The whole test file is 8 tests in 93 s** and the notebook is 33 s, both of
+which include their own SCF and field response.
+
 ## History
 
 | Date | Change | Effect |

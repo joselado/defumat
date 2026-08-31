@@ -78,6 +78,18 @@ P25, and ``Lambda = -d^2E/du d(eps)`` which is this module's ``jvp`` with the
 strain response as its tangent instead of the field's), and it is the next step
 rather than part of this one.
 
+**The peak working set is the tape of a strained gradient, and it is large.**
+Forward-over-reverse through :func:`~pypresso.stress.energy.strained_energy`
+holds every radial and reciprocal-space intermediate the *setup* rebuilds when
+the cell moves -- ``V_loc(|G|)``, ``rho_core(|G|)``, ``f_l(|k+G|)``,
+``Q^L_nm(|G|)`` -- which a displacement does not touch at all. Measured on
+two-atom AlAs at ``ecutwfc = 10`` with 64 k-points: **4.2 GB** against the Born
+charge's 1.13 on the same field response, and 6.4 s against 0.8. It does **not**
+move with ``k_batch``, because what the tape holds is not the k axis.
+:func:`piezoelectric_zstar_eu_style` is the same number for 4.0 s and no extra
+memory, and on a cell where this one does not fit it is the route to reach for.
+`PERFORMANCE.md` carries the table.
+
 **Elk is the only established code with a piezoelectric tensor and it takes the
 expensive route.** ``piezoelt.f90`` (task 380) runs a full ground state per
 strain tensor, computes the Berry-phase polarization of each, and finite-
