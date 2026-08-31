@@ -13,7 +13,8 @@ The case below is QE's own `vc-relax4.in`: rhombohedral arsenic squeezed at **50
 where the cell compresses by 10% *and* the two atoms move from 0.2722 to 0.2500, which is
 the rhombohedral to simple-cubic transition. Against `pw.x` the relaxed volume agrees to
 **2.6e-5 bohr³**, the atoms to **5.7e-6** in crystal coordinates and the final energy to
-**1.0e-7 Ry**, in the same ten ionic steps.
+**1.0e-7 Ry**, in the same ten ionic steps -- `pw.x` reports that as "10 scf cycles
+and 9 bfgs steps", the two counts differing by the step it accepts without re-solving.
 
 
 ```python

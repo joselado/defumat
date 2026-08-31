@@ -6764,6 +6764,13 @@ Rewritten and passing the enforcement test: `00` (which already complied), `02`,
 `09`, `19`, `11`, `13`, `08`, `10`, `18`, `22`, `15`, `24`, `29`, `26`, `25`, `04`,
 `05`, `06`, `07`, `12`, `14`, `16`, `20`, `21`, `23`, `27`.
 
+**`21` and `23` are the two that were edited in place** rather than rebuilt from
+a scratchpad script like every other conversion, because what they needed was a
+first cell and nothing else. There is no `build21.py`/`build23.py` to look for,
+and the `.ipynb` is their source of truth — which is the safe half of checklist
+item 2, since the danger there is a *stale* script overwriting a patch, not the
+absence of one.
+
 **Phase 5 is finished. 26 of the 29 are in `REWRITTEN`, `JVP_DEBT` is empty,
 and the three that are not are the under-the-hood tier by design** — `01`, `03`
 and `17`, whose internals are their subject and which `notebooks/README.md`
@@ -6818,7 +6825,7 @@ arbitrary, and the activity beside them reads 0.0000 in every version.
 | `16` | 92 → 58 | 5 → 5 | 9 s |
 | `20` | 73 → 54 | 6 → 4 | 57 s |
 | `21` | 81 → 67 | 6 → 6 | 30 s |
-| `23` | 72 → 68 | 6 → 6 | 35 s |
+| `23` | 72 → 70 | 6 → 6 | 35 s |
 | `27` | 92 → 40 | 5 → 3 | 178 s |
 | `19` | 143 → 47 | 11 → 5 | 46 s |
 | `10` | 134 → 46 | 5 → 5 | 50 s |
