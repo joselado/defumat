@@ -77,6 +77,7 @@ instead, which means the physics is selected in the input file rather than at th
 | A photocurrent with no junction: the bulk photovoltaic effect | `get_shift_current()` | [32](32_shift_current.ipynb) |
 | Second-harmonic generation: red light in, blue light out | `get_shg()` | [33](33_second_harmonic_generation.ipynb) |
 | The electric polarization of a crystal, and Born charges from it | `get_polarization()` | [34](34_electric_polarization.ipynb) |
+| Electricity from magnetism: the magnetoelectric effect | `get_magnetoelectric_tensor()` | [35](35_magnetoelectric_effect.ipynb) |
 | An effective mass | `get_effective_mass()` | [29](29_effective_mass_and_angular_momenta.ipynb) |
 
 ### Topology
@@ -147,6 +148,7 @@ want a number.
 | [`32_shift_current.ipynb`](32_shift_current.ipynb) | A solar cell with no junction: AlAs carries a current under light where silicon's inversion centre forbids one |
 | [`33_second_harmonic_generation.ipynb`](33_second_harmonic_generation.ipynb) | Frequency doubling: AlAs against the all-electron code Elk, and why the absorption starts at half the gap |
 | [`34_electric_polarization.ipynb`](34_electric_polarization.ipynb) | Why polarization is a phase and not a dipole, the Born charge read off a displacement, and the sum rule that catches a badly sampled zone |
+| [`35_magnetoelectric_effect.ipynb`](35_magnetoelectric_effect.ipynb) | A magnetic field making an electric polarization, and the spin-orbit null that shows the effect is spin-orbit coupling and nothing else |
 
 ## Conventions
 
@@ -243,7 +245,7 @@ workstation core, slowest last:
 | `05` | 10 | `12` | 30 | `10` | 50 | `27` | 178 |
 | `04` | 12 | `21` | 30 | `20` | 57 | `33` | 115 |
 | `22` | 12 | `15` | 31 | `29` | 59 | `34` | 40 |
-| `00` | 22 | `24` | 31 | `13` | 69 |  |  |
+| `00` | 22 | `24` | 31 | `13` | 69 | `35` | 276 |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two
 hand-built linear solves and a second self-consistent run that were demonstrating

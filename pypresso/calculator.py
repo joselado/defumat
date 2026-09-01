@@ -920,9 +920,15 @@ class Calculator:
         """
         from pypresso.response.magnetoelectric import magnetoelectric_tensor
 
+        # ``conv_thr`` is excluded deliberately. The input file's number is the
+        # *SCF*'s, and this function's ``conv_thr`` would land in the
+        # polarization's slot instead -- which leaves the six ground states on
+        # their defaults and is worth a factor of 300 in the spin-orbit null.
+        # The two thresholds are named apart in the signature for that reason.
         return magnetoelectric_tensor(
             self.system, self.pseudos,
-            **self._defaults_for(magnetoelectric_tensor, options),
+            **self._defaults_for(magnetoelectric_tensor, options,
+                                 exclude=frozenset({"conv_thr"})),
         )
 
     def get_chern(self, **options) -> float:

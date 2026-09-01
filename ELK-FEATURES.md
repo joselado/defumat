@@ -49,6 +49,8 @@ second route beside it.
 | Optical conductivity `sigma_ab(omega)`, MOKE, anomalous Hall | 121/122 (`dielectric.f90`, `moke.f90`) | P51 |
 | Fermi-surface nesting function `N(q)` | 105 (`nesting.f90`) | P52 |
 | Second-harmonic generation `chi^(2)(-2w; w, w)` | 125 (`nonlinopt.f90`) | P54 |
+| Berry-phase polarization | -- (`pw.x`'s `lberry`; Elk's `polar`) | P56 |
+| Magnetoelectric tensor `alpha_ij`, clamped-ion | 390 (`magnetoelt.f90`) | P57 |
 
 **The second-harmonic row was in the *rejected* table until P54 and was wrong
 there**, which is worth recording because the reasoning that put it there is
@@ -332,7 +334,7 @@ for Elk (tasks 330/331).
 
 ---
 
-## 7. The magnetoelectric tensor -- **selected as the next entry to take**
+## 7. The magnetoelectric tensor -- **taken, P57**
 
 **Elk task 390** (`magnetoelt.f90`, 94 lines).
 

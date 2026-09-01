@@ -1540,6 +1540,63 @@ solve and share no machinery with a string of overlaps: AlAs on an
 $8\times8\times8$ ground state gives $Z^*(\mathrm{Al}) = +2.148$ against
 \code{ph.x}'s $+2.142$, charge-neutral to $5\times10^{-5}$.
 
+\subsection{The magnetoelectric tensor}
+
+How much electric polarization a magnetic field induces,
+\begin{equation*}
+  \alpha_{ij} = \frac{\partial P_i}{\partial B_j},
+\end{equation*}
+computed Elk's way (task 390): a full ground state at $B \mp \delta/2$ for each
+Cartesian direction, the Berry-phase polarization of each, and a central
+difference. The cheap route --- one derivative of the magnetization along an
+electric field's response --- needs a noncollinear Sternheimer solve, and an
+electric field as a ground-state perturbation, which this package does not have.
+
+\textbf{Two symmetries must both be broken or the answer is zero for a reason
+that has nothing to do with the calculation}: time reversal and inversion each
+map $\alpha$ to $-\alpha$. Elk's own example is built around the first, and so is
+the case here --- a non-magnetic semiconductor has no linear tensor at all, so a
+\emph{large} external field is applied to break time reversal by hand and the
+derivative taken against a small further change in it. The magnetism is induced
+rather than spontaneous, which is what makes a plain gapped semiconductor usable.
+
+\begin{pycode}
+from pypresso import Calculator
+
+alas = Calculator.from_file("alas-magnetoelectric.in", pseudo_dir)
+me = alas.get_magnetoelectric_tensor(delta=0.02, directions=(2,))
+print(me.magnitude)        # 4.4376e-06
+print(me.largest_step)     # how close a field step came to a branch
+\end{pycode}
+
+\begin{refuses}
+\textbf{Refuses.} An unconverged ground state, which is what makes the next
+limitation visible rather than silent. \textbf{Only the column parallel to the
+seeded magnetization is reachable} on the committed cell: a field along the
+direction \code{starting\_magnetization} points converges in 12 iterations, and
+one with a transverse component does not converge in 150, because rotating the
+moment is the slow mode. It is not the tilt --- a pure transverse field fails on
+its own. Seed the magnetization along the column you want. A run carrying no
+magnetization vector ($n_{\mathrm{spin,mag}} \neq 4$): the Zeeman term then multiplies nothing and every polarization comes out
+identical, which looks like a symmetry result. And a field step that moves the
+Berry phase by more than a quarter of its quantum, since a difference taken across
+a branch is the quantum divided by $\delta$ --- large, smooth and meaningless.
+Everything the polarization refuses is refused here too.
+\end{refuses}
+
+\textbf{The validation is the spin-orbit null.} Without the coupling a global spin
+rotation maps $B$ to $-B$ and leaves every charge observable fixed, so $\alpha$
+vanishes identically. On the same cell, same field, same ultrasoft family at the
+same valence, with only \code{lspinorb} and the scalar/fully relativistic datasets
+changed: $3.43\times10^{-9}$ against the coupled $4.44\times10^{-6}$, a ratio of
+\textbf{1293}. Two things had to be right together to get there, and neither helps
+alone: \code{chain} (seeding one field run from the other, which breaks the very
+$B \to -B$ symmetry the null rests on --- off by default here, unlike Elk) and the
+\emph{polarization's} threshold rather than the self-consistent field's.
+\textbf{The absolute value is not calibrated against another code}: Elk's
+\code{bfieldc} and this package's \code{B\_field} differ in normalisation by about
+two orders of magnitude, and Elk's own tensor on this cell is not converged.
+
 % =====================================================================
 \section{Effective masses, site angular momenta and Fermi-surface nesting}
 

@@ -3413,6 +3413,54 @@ For AlAs that is 5 x 4 x 331 x 16 B = 106 kB; for a 200-electron cell on a
 is the number to check against a machine before asking for a dense transverse
 grid. Raising the transverse grid costs time and no memory at all.
 
+## What a magnetoelectric tensor costs (P57)
+
+Six ground states and eighteen polarizations for the whole tensor; one column is
+two and six. Both codes run the *same algorithm* -- a full self-consistent run
+per field step and a Berry phase of each -- which makes this a rarer thing here
+than most of the rows above: a like-for-like timing rather than two methods
+compared by their output.
+
+### Against Elk, which is where the route was taken from
+
+AlAs, `ngridk 2 2 2`, field along z, step 0.02, spin-orbit coupling on. Elk built
+from the vendored source with `gfortran` and the system BLAS/LAPACK/FFTW.
+
+| | Elk (task 390) | pypresso |
+|---|---|---|
+| threads | 2 | 4 |
+| whole tensor, three columns | **70 s** | ~230 s (3 x the column below) |
+| one column | -- (390 does all three) | **76 s** |
+| one self-consistent run | -- | 20-32 s, 9 iterations |
+
+**Elk is about 3x faster on the wall clock and about 6x per core, and that is
+the honest way round.** An earlier draft of this section had it inverted, from
+an estimate rather than a measurement -- the number is why `CLAUDE.md` asks for
+the reference implementation's wall clock beside ours rather than an internal
+timing. The reason is not mysterious: this is a two-atom cell, which is where a
+LAPW basis is at its most efficient, and Elk's ground state converges quickly on
+it. `ph.x` has no counterpart to time against.
+
+**What the comparison does establish** is that the route is affordable on a
+workstation, which is the question that decided whether the phase could be
+finished here at all -- and that was not obvious, because Elk's own example cell
+(GaAs) does not converge here at *zero* field, which is a physics problem rather
+than a cost one.
+
+**One cost is a choice rather than physics.** `chain` (Elk's `trdstate`) would
+seed each run from the previous converged state and make all but the first
+cheaper. It is **off by default here** because it biases the difference
+(`PLAN.md` P57), and it costs nothing on this cell anyway -- 45 s either way,
+since each run converges in nine iterations from the atomic density, which is
+exactly the regime where Elk's reason for chaining does not apply.
+
+### The working set
+
+One string at a time, inherited from the polarization: `npoints x nbnd x npwx`
+complex, with the number of strings never entering it -- under a megabyte for
+this AlAs. The ground states are sequential and share nothing, so the peak is one
+self-consistent run's.
+
 ## History
 
 | Date | Change | Effect |

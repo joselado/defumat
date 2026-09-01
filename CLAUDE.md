@@ -1153,7 +1153,7 @@ draw is a figure whose points belong in a test.
 
 **`tools/export_notebooks.sh` times each notebook as it re-executes it and exits
 non-zero over the ceiling**, so the set stays measured without anyone remembering
-to measure it. Nothing is over: the slowest is `27` at 178 s, the median is under
+to measure it. Nothing is over: the slowest is `35` at 276 s, the median is under
 30, and the full table is in `notebooks/README.md`. The one notebook that ever was
 over is worth reading as a case study. `08_spin_orbit_coupling` took about **25 minutes**; it takes **174 s** (P49).
 Two things were true at once and only one of them was the expensive part. The bismuthene

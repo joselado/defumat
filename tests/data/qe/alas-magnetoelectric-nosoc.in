@@ -1,0 +1,71 @@
+! AlAs **without** spin-orbit coupling: the magnetoelectric tensor's sharpest null.
+!
+! Identical to `alas-magnetoelectric.in` in every respect but one -- same cell,
+! same cutoffs, same field, same k-grid, the same ultrasoft PBE family at the
+! same valence -- except that the datasets are *scalar*-relativistic and
+! `lspinorb` is off.
+!
+! Without spin-orbit coupling the spin and the lattice decouple: a global spin
+! rotation maps `B` to `-B` and leaves every charge observable fixed, so
+! `P(+B) = P(-B)` and the tensor vanishes **identically**, not merely to within
+! a tolerance. No plausible bug in the assembly survives that.
+!
+! The datasets have to change with the switch, and that is a refusal rather than
+! a choice: a fully-relativistic dataset with `lspinorb = .false.` is refused
+! here rather than having its two `j = l +- 1/2` channels averaged (QE's
+! `average_pp`), so the null needs scalar-relativistic files. That is sound --
+! `alpha = 0` without spin-orbit coupling is a symmetry statement and not a
+! property of the dataset.
+!
+! The setup is Elk's `examples/magnetoelectric/GaAs` (task 390) and the reason
+! that example exists is the physics: **the linear magnetoelectric tensor
+! vanishes in any time-reversal-symmetric crystal**, so a non-magnetic
+! semiconductor has none. Elk's answer is to apply a large external field to
+! break time reversal by hand and difference the polarization against a *small*
+! further change in it. The magnetism is induced rather than spontaneous, which
+! is what makes a plain gapped semiconductor a usable case at all. Zincblende
+! breaks the inversion that would otherwise force the tensor to zero as well,
+! and spin-orbit coupling is what ties the spin the field acts on to the lattice
+! the polarization is measured along.
+!
+! **The crystal is AlAs and not Elk's GaAs, and the reason is not cost.** GaAs
+! here does not converge at *zero* field -- 80 iterations, and a magnetization of
+! -0.322 mu_B in a crystal that must have none -- and every relativistic Ga in
+! pslibrary carries the 3d, so there is no cheap version of it. AlAs is the same
+! zincblende structure with the same four ingredients and 8 valence electrons
+! against 18: 9 iterations and 20-32 s. Its bands are validated against Elk along
+! `L-Gamma-X` (0.062 eV rms on the valence manifold, and a spin-orbit splitting
+! at `Gamma` of 0.293 eV against Elk's 0.307 and a measured 0.28), so the
+! substitution is checked rather than assumed.
+!
+! `B_field` is *not* Elk's `bfieldc` in magnitude: the normalisations differ, and
+! Elk's 0.1 transcribed literally gives a fully spin-polarized semiconductor. The
+! value here is calibrated by the induced moment instead.
+!
+! A `starting_magnetization` is needed even though the crystal is non-magnetic:
+! without one the run carries a scalar density (`nspin_mag = 1`) and the Zeeman
+! term multiplies nothing.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.6134, nat = 2, ntyp = 2,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    noncolin = .true., lspinorb = .false.,
+    nosym = .true., noinv = .true.,
+    starting_magnetization(1) = 0.01, angle1(1) = 0.0,
+    starting_magnetization(2) = 0.01, angle1(2) = 0.0,
+    B_field(3) = 0.05
+ /
+ &electrons
+    conv_thr = 1.0d-10
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Al 26.98 Al.pbe-n-rrkjus_psl.1.0.0.UPF
+ As 74.92 As.pbe-n-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS crystal
+ Al 0.00 0.00 0.00
+ As 0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 2 0 0 0

@@ -8347,7 +8347,7 @@ task 390 limitation too; and the noise floor should be measured from two
 re-converged identical runs before `deltabf` is chosen.
 
 
-### P57 — The magnetoelectric tensor. ⏳ STARTED, not done: the assembly is in and the case is not.
+### P57 — The magnetoelectric tensor. ✅ DONE for the column parallel to the field: the spin, clamped-ion tensor, uncalibrated against another code.
 
 `pypresso/response/magnetoelectric.py`, `Calculator.get_magnetoelectric_tensor`,
 `tests/data/qe/gaas-magnetoelectric.in`, and the two relativistic datasets it
@@ -8434,6 +8434,84 @@ against the MPI stub, the MKL stub (the Intel block sets `SRC_MKL =` empty and
 must be re-commented) and the system BLAS/LAPACK/FFTW. It must be built
 **serially** -- the Makefile carries no module dependencies, so `-j` races
 `mpi.mod` and `libxcifc.mod`.
+
+**It runs locally, and on AlAs rather than on Elk's GaAs.** The measurements
+below are one column of the tensor (`directions=(2,)`), which is two
+self-consistent runs and six polarizations, about 80 s.
+
+| | |
+|---|---|
+| `alpha` with spin-orbit coupling (`delta = 0.02`) | **4.4376e-06** |
+| the same cell without it | **3.4313e-09** |
+| ratio | **1293** |
+| noise floor, two identical runs | **exactly 0** (bit-identical phases) |
+| linearity, `delta` 0.010 against 0.020 | 4.322 against 4.438 (2.7%) |
+| `delta = 0.04` | 5.098 -- outside the linear regime |
+
+**The null is the phase's validation and getting it took finding a defect in the
+loop.** It first came out at 3.9e-8, which is small against the signal and is
+not zero, and the explanation written down first -- the self-consistent field's
+convergence residue divided by `delta` -- was **wrong**: the residue *does*
+halve when `delta` doubles, but tightening `conv_thr` from 1e-10 to 1e-12 makes
+it slightly **worse**. What the scan that followed found is two causes that are
+only right together, the P43 pattern again:
+
+* **`chain` biases it.** Seeding the `-delta/2` run from the `+delta/2` one is
+  Elk's `trdstate` and is exactly the `B -> -B` asymmetry the null rests on.
+* **The *polarization's* threshold floors it**, not the self-consistent field's
+  -- which is why the first diagnostic saw nothing, having varied only the
+  latter.
+
+Chained at a tight polarization threshold gives 6.9e-8, unchained at a loose one
+5.3e-8, the original pairing 3.9e-8, and both together **3.4e-9**. `chain`
+therefore **defaults to off here**, a deliberate departure from Elk recorded in
+the docstring; it costs nothing on this cell (45 s either way, nine iterations
+from the atomic density) and Elk's reason for it is a ground state expensive
+enough that this one is not.
+
+**An Elk reference exists now and is not yet usable, which is worth separating
+from "there is none".** Elk's task 390 runs on this exact cell and produced a
+tensor. Two things stop it being a comparison. The **field normalisations
+differ** by roughly two orders of magnitude -- Elk's induced moment is 3.4e-6
+mu_B at `bfieldc = 0.05` where this code gives 6e-6 at `B_field = 0.001` -- so
+`alpha` cannot be compared until that is pinned, and the unit-free route is
+`dP/dm`, which both codes report. And **Elk's own tensor is not converged at
+`ngridk 2 2 2`**: its three columns have lengths 1.57e-6, 1.64e-7 and 1.99e-7,
+where `S_4` about `z` maps `(x, y, z)` to `(y, -x, -z)` and *preserves* an axial
+vector along `z`, so that operation survives the applied field and relates the
+`x` and `y` columns to each other. A factor of ten between them is a symmetry
+violation in Elk's output rather than an anisotropy, which is what sampling
+noise looks like.
+
+**The full 3x3 tensor does not converge, and the cause is the seed rather than
+the field.** Stepping the field off the axis the magnetization was seeded along
+leaves the self-consistent run short of `conv_thr = 1e-10` at 150 iterations and
+at 400 with `mixing_beta = 0.3`. The first explanation written down was the
+*tilt* -- two competing axes -- and the diagnostic **refuted it**: a field along
+`z`, which is where `starting_magnetization` points, converges in **12**
+iterations; a **pure** `x` field does not converge in 150; and a field tilted 11
+degrees off `z` does not either. It is the rotation of the moment away from its
+seed that is slow, and the transverse magnetization it has to resolve is three
+orders of magnitude below the longitudinal one (2.6e-6 against 3.6e-4). Raising
+`max_iterations` does not help; seeding the magnetization along the wanted column
+is the escape, and it is named in the module docstring rather than automated.
+
+The guard on an unconverged ground state is what made this visible at all, which
+is the second time in this phase that a refusal earned its place: without it the
+off-axis columns would have come back as the mixer's residue divided by `delta`,
+which is a smooth plausible number.
+
+**It is also a candidate explanation for Elk's own output**, and only a
+candidate: its `x` and `y` columns differ by a factor of ten where `S_4` relates
+them, which was read above as sampling noise, and the same rotational difficulty
+would produce it. Separating the two needs Elk's per-ground-state convergence,
+which has not been looked at.
+
+**Still not done, and named:** the absolute value is uncalibrated against any
+other code for the reason above; the off-diagonal columns and with them the
+`S_4` structural check, which is exactly the check no single column can make;
+and it is the **spin (Zeeman)** response, clamped-ion, for the reasons the module
+docstring gives.
 
 **Two things to write down when it lands**, both already in the module
 docstring: what P18's field gives is the **spin (Zeeman)** response, there being

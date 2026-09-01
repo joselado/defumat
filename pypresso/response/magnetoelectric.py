@@ -32,6 +32,23 @@ leaves every charge observable fixed, so ``P(+B) = P(-B)`` and the tensor
 vanishes identically. Running the same cell with ``lspinorb = .false.`` is
 therefore a null that no plausible bug survives, and it costs one more pass.
 
+**Only the column parallel to the seeded magnetization is reachable on the
+committed cell, and the reason is the seed rather than the field.** A field along
+the direction ``starting_magnetization`` points converges in 12 iterations; one
+with a *transverse* component does not reach ``conv_thr = 1e-10`` in 150, because
+rotating the moment is the slow mode and the transverse magnetization is three
+orders of magnitude smaller than the longitudinal one it has to be resolved
+against. Measured on AlAs: ``B`` along ``z`` (the seed) converges in 12
+iterations; ``B`` along ``x`` does not converge in 150, and neither does a field
+tilted 11 degrees off ``z``. It is **not** the tilt -- a pure transverse field
+fails on its own -- which is what the diagnostic was run to separate.
+
+So ``directions`` defaults to all three and a caller wanting an off-axis column
+should seed the magnetization along that column (``angle1``/``angle2`` in the
+input) rather than raise ``max_iterations``, which does not help. The guard on an
+unconverged ground state is what makes this visible instead of returning the
+mixer's residue divided by ``delta``.
+
 **What this computes is the spin (Zeeman) response, clamped-ion.** The field
 enters through :mod:`pypresso.scf.fields`, which is a Zeeman term on the
 magnetization and carries no orbital vector potential, so the orbital
@@ -98,7 +115,10 @@ def magnetoelectric_tensor(
     nppstr: int = 8,
     transverse: tuple[int, int] = (4, 4),
     directions=(0, 1, 2),
-    chain: bool = True,
+    chain: bool = False,
+    scf_conv_thr: float = 1.0e-10,
+    polarization_conv_thr: float = 1.0e-11,
+    max_iterations: int = 120,
     scf_options: dict | None = None,
     **polarization_options,
 ) -> MagnetoelectricTensor:
@@ -111,10 +131,33 @@ def magnetoelectric_tensor(
         directions: which cartesian components of the field to step. Each costs
             two self-consistent runs and three polarizations.
         chain: seed each run from the previous converged state, which is Elk's
-            ``trdstate = .true.`` after the first ground state. It makes the
-            later runs cheap and keeps them on the same magnetic branch; turn it
-            off to check that the answer does not depend on the path.
-        scf_options: forwarded to :func:`~pypresso.scf.driver.run_scf`.
+            ``trdstate = .true.`` after the first ground state. **Off by
+            default here, and that is a departure from Elk with a measured
+            reason.** Seeding the ``-delta/2`` run from the ``+delta/2`` one
+            breaks the very symmetry a null rests on -- without spin-orbit
+            coupling the two differ by ``B -> -B``, which is exactly what the
+            chain makes asymmetric -- and it biases the difference at the level
+            a small response lives at. Measured on the spin-orbit null: the
+            residue is 3.9e-8 chained and 3.4e-9 unchained, and *only* once the
+            polarization threshold is tightened with it. The two are right
+            together and neither alone helps: chained at a tight threshold is
+            6.9e-8, unchained at a loose one 5.3e-8. It buys little here anyway
+            (45 s either way on the committed cell), because each run converges
+            in nine iterations from the atomic density.
+        scf_conv_thr: how tightly each of the six ground states is converged.
+        polarization_conv_thr: how tightly the fixed-density diagonalisation
+            *inside* each polarization is converged. **The two are named apart
+            because they are not interchangeable and the difference is not
+            small.** The residue of the spin-orbit null is floored by this one,
+            not by ``scf_conv_thr``, which is why a diagnostic that varied only
+            the latter found nothing; and a facade that forwarded the input
+            file's ``conv_thr`` -- an *SCF* number -- into the polarization slot
+            while leaving the ground states on their defaults turned a null
+            ratio of 1293 into 4.
+        max_iterations: the ground states' iteration cap.
+        scf_options: further arguments for
+            :func:`~pypresso.scf.driver.run_scf`; the three above are merged
+            into it and an explicit key here wins.
         polarization_options: forwarded to
             :func:`~pypresso.workflows.polarization.run_polarization`.
 
@@ -129,6 +172,9 @@ def magnetoelectric_tensor(
     from pypresso.workflows.polarization import run_polarization
 
     scf_options = dict(scf_options or {})
+    scf_options.setdefault("conv_thr", scf_conv_thr)
+    scf_options.setdefault("max_iterations", max_iterations)
+    polarization_options.setdefault("conv_thr", polarization_conv_thr)
     base = np.asarray(system.b_field, dtype=float)
     if system.nspin_mag != 4:
         raise ValueError(
