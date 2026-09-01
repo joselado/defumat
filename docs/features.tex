@@ -1516,7 +1516,10 @@ manifold, and a smeared occupation does not say which bands the string carries.
 \textbf{\code{nspin = 2}}: two channels are two independent string sets and one
 phase each, which is a layout this does not have rather than a missing term.
 And a \textbf{spin spiral}, whose two spinor components live on spheres centred
-at $\mathbf k \pm \mathbf q/2$, so a string overlap is not a single gather.
+at $\mathbf k \pm \mathbf q/2$, so a string overlap is not a single gather. A
+\emph{spinor} run (\code{noncolin}) is supported and has its own \code{pw.x}
+reference; its quantum is half the scalar one, because a spinor band holds one
+electron.
 Ultrasoft and PAW are \emph{not} refused --- $q_{ij}(\mathbf b)$ reaches the
 overlap exactly as it does for a Chern number --- but no soft case is committed,
 because the only \code{pw\_berry} reference is UPF v1 and the reader refuses it.

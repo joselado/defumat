@@ -44,7 +44,7 @@ def _drop_compiled_code():
     jax.clear_caches()
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=3)
 def converged(name: str):
     system = build_system(read_pw_input(CASES / name))
     pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
@@ -161,3 +161,33 @@ def test_the_phase_is_invariant_under_a_shift_of_the_string_mesh():
                                transverse=(4, 4), shift=(1, 1, 0),
                                conv_thr=1.0e-10)
     assert shifted.total_phase == pytest.approx(plain.total_phase, abs=5.0e-3)
+
+
+def test_a_spinor_reproduces_the_scalar_answer_with_half_the_quantum():
+    """``reference.out.si-noncolin-berry``: the case that pins the spin bookkeeping.
+
+    Silicon with ``noncolin = .true.`` and no relativistic dataset is the same
+    physics computed on two-component wavefunctions, so every phase must be
+    unchanged. The **quantum** is not: a spinor band holds one electron, so
+    ``pw.x`` prints ``MOD_TOT: 1`` where the scalar run prints 2.
+
+    That asymmetry is the whole point of the case. The electronic phase is
+    doubled for ``nspin = 1`` and *not* for a spinor (``bp_c_phase`` puts the
+    whole average in ``phiup`` and sets ``phidw = 0``), and a code that doubled
+    both or neither would still reproduce silicon's zero.
+    """
+    system, pseudos, density = converged("si-noncolin-berry.in")
+    spinor = run_polarization(system, pseudos, density, gdir=2, nppstr=8,
+                              transverse=(4, 4), conv_thr=1.0e-10)
+    assert system.npol == 2 and system.nspin == 4
+    assert spinor.quantum == pytest.approx(1.0)          # pw.x's MOD_TOT
+    assert abs(spinor.electronic_phase) < 1.0e-6         # pw.x's "Average phase"
+    assert abs(abs(spinor.ionic_phase) - 1.0) < 1.0e-6
+    assert abs(abs(spinor.total_phase) - 1.0) < 1.0e-6
+
+    scalar_system, scalar_pseudos, scalar_density = converged("si2-nosym.in")
+    scalar = run_polarization(scalar_system, scalar_pseudos, scalar_density,
+                              gdir=2, nppstr=8, transverse=(4, 4),
+                              conv_thr=1.0e-10)
+    assert spinor.total_phase == pytest.approx(scalar.total_phase, abs=1.0e-6)
+    assert scalar.quantum == pytest.approx(2.0 * spinor.quantum)

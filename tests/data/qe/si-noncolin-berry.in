@@ -1,0 +1,39 @@
+! Silicon as a **spinor**: the Berry-phase polarization with `noncolin = .true.`
+!
+! `si-berry.in`'s cell and settings with two-component wavefunctions. Nothing
+! about the physics changes -- there is no magnetization and no spin-orbit
+! coupling, since `Si.pz-vbc.UPF` is not a relativistic dataset -- so the
+! phases must come out identical to the scalar run's, and they do. What does
+! change is the **quantum**: `pw.x` prints `MOD_TOT: 1` here against the scalar
+! run's 2, because a spinor band holds one electron rather than two, so moving
+! one filled band across the zone moves the phase by half as much.
+!
+! That makes this the case that pins the spin bookkeeping. The electronic phase
+! is *not* doubled for a spinor run (`bp_c_phase` sets `phidw = 0` and puts the
+! whole average in `phiup`), where it is for `nspin = 1`; a code that doubled
+! both, or neither, would still reproduce silicon's zero and would be wrong on
+! any crystal with a nonzero electronic phase.
+!
+! `pw.x` also prints "Average phase" here rather than "ELECTRONIC PHASE", which
+! is the same number under the layout the noncollinear branch uses.
+ &control
+    calculation = 'nscf'
+    lberry = .true.
+    gdir = 3
+    nppstr = 8
+    prefix = 'sinc'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.2, nat = 2, ntyp = 1,
+    ecutwfc = 12.0, nosym = .true., noinv = .true., noncolin = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-12
+ /
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 4 4 8 0 0 0

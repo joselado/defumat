@@ -23,6 +23,29 @@ wrong. Check before building on one.
 
 ---
 
+## 0. Found after the sweep -- **closed 2026-09-01**
+
+One entry, and it is the sweep's own §1 pattern in a place the sweep did not
+look. **`DFTSource` did not forward the converged magnetic field.** Every
+fixed-density topological invariant -- `run_berry_curvature`, `run_z2`,
+`run_z2_3d`, and the polarization added in P56 -- builds its potential from a
+frozen density through `DFTSource.states`, which called
+`calculation.potential(self.density)` with no field argument;
+`Calculation.potential` then falls back to `self.magnetic_field`, the field the
+**input** asked for, at full scale. Wherever `reducebf` or the fixed-spin-moment
+scheme had changed the field during the SCF, every eigenvalue was shifted by a
+field the run never converged under.
+
+It has no symptom, which is why it is worth recording: the invariant is still an
+integer. `workflows/nscf.py:fixed_density_states` has refused this since the
+sweep and the topological source had no counterpart, so this is the *same* entry
+one layer over -- the pattern the sweep's own §1 is full of. Fixed:
+`field`/`field_scale` on `DFTSource` and on all four entry points, the refusal
+copied word for word from `fixed_density_states`, and `_STATE_ARGUMENTS` already
+mapped both names so `Calculator` injects them unchanged. Tests in
+`tests/unit/test_state_across_boundaries.py`, one structural and one that builds
+a noncollinear silicon carrying `b_field(3)` and asserts the refusal fires.
+
 ## 1. Still bugs — **closed 2026-08-29**
 
 All seven are fixed; `tests/unit/test_state_across_boundaries.py` holds the

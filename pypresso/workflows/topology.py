@@ -100,6 +100,19 @@ class DFTSource:
     #: those eigenvalues, so the invariant is a confident integer taken off the
     #: wrong bands.
     ns: jnp.ndarray | None = None
+    #: ``SCFResult.magnetic_field`` and ``SCFResult.field_scale``, needed for
+    #: the same reason ``becsum`` and ``ns`` are: what the run *converged*
+    #: under is not what the input asked for. Elk's ``reducebf`` scales a
+    #: symmetry-breaking field down as the SCF runs, and the fixed-spin-moment
+    #: scheme drives its field from the moment's error, so rebuilding the field
+    #: from the input re-applies one the SCF had already changed -- a rigid
+    #: Zeeman shift of every eigenvalue, which is invisible in an invariant
+    #: because the answer is still an integer.
+    #: :func:`~pypresso.workflows.nscf.fixed_density_states` has refused this
+    #: since the 2026-08-29 sweep and this class did not, which made it the same
+    #: defect one layer over.
+    field: object = None
+    field_scale: float | None = None
     nbnd: int | None = None
     conv_thr: float = 1.0e-8
     k_batch: int | None | str = "default"
@@ -226,7 +239,23 @@ class DFTSource:
                 noncolin=system.noncolin,
             ),
         )
-        potential = calculation.potential(self.density)
+        if calculation.magnetic_field is not None and self.field is None:
+            # ``fixed_density_states``' refusal, word for word, because it is
+            # the same mistake: the converged field is state, not input.
+            raise ValueError(
+                "a fixed-density run of a calculation with a magnetic field or "
+                "a constrained moment needs the field the SCF ended with: pass "
+                "field = scf_result.magnetic_field and field_scale = "
+                "scf_result.field_scale. Rebuilding it from the input "
+                "re-applies a field that reducebf or the fixed-spin-moment "
+                "scheme had already changed, which shifts every eigenvalue and "
+                "still leaves an invariant looking like an integer"
+            )
+        potential = calculation.potential(
+            self.density,
+            1.0 if self.field_scale is None else float(self.field_scale),
+            self.field,
+        )
         hamiltonians = calculation.hamiltonian(
             potential.v_scf, self._ddd_paw(), hubbard_terms
         )
@@ -284,7 +313,7 @@ class DFTSource:
 
 
 def _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
-            becsum=(), ns=None) -> DFTSource:
+            becsum=(), ns=None, field=None, field_scale=None) -> DFTSource:
     if nocc is None:
         nocc = _occupied_bands(system, pseudos)
     return DFTSource(
@@ -294,6 +323,8 @@ def _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
         nocc=int(nocc),
         becsum=tuple(becsum or ()),
         ns=ns,
+        field=field,
+        field_scale=field_scale,
         nbnd=nbnd,
         conv_thr=conv_thr,
         k_batch=k_batch,
@@ -347,6 +378,8 @@ def run_berry_curvature(
     k_batch: int | None | str = "default",
     becsum: tuple = (),
     ns: jnp.ndarray | None = None,
+    field=None,
+    field_scale: float | None = None,
     **kwargs,
 ) -> BerryCurvature:
     """Berry curvature and the Chern number on one plane of the zone.
@@ -365,7 +398,8 @@ def run_berry_curvature(
             ``"kubo"``.
     """
     source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
-                     becsum=becsum, ns=ns)
+                     becsum=becsum, ns=ns,
+                     field=field, field_scale=field_scale)
     return _chern_number(
         source, shape=shape, axis=axis, offset=offset, method=method,
         k_batch=k_batch, **kwargs,
@@ -388,6 +422,8 @@ def run_z2(
     k_batch: int | None | str = "default",
     becsum: tuple = (),
     ns: jnp.ndarray | None = None,
+    field=None,
+    field_scale: float | None = None,
 ):
     """The 2D Z2 invariant of one plane of the zone.
 
@@ -402,7 +438,8 @@ def run_z2(
     """
     _require_spinors(system, "the Z2 invariant")
     source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
-                     becsum=becsum, ns=ns)
+                     becsum=becsum, ns=ns,
+                     field=field, field_scale=field_scale)
     kwargs = dict(axis=axis, offset=offset)
     if (method or "wilson").lower() == "parity":
         kwargs.update(dimension=2, centre=_centre(system))
@@ -425,6 +462,8 @@ def run_z2_3d(
     k_batch: int | None | str = "default",
     becsum: tuple = (),
     ns: jnp.ndarray | None = None,
+    field=None,
+    field_scale: float | None = None,
 ):
     """The four three-dimensional indices ``(nu0; nu1 nu2 nu3)``.
 
@@ -434,7 +473,8 @@ def run_z2_3d(
     """
     _require_spinors(system, "the Z2 invariants")
     source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
-                     becsum=becsum, ns=ns)
+                     becsum=becsum, ns=ns,
+                     field=field, field_scale=field_scale)
     kwargs = {}
     if (method or "wilson").lower() == "parity":
         kwargs["centre"] = _centre(system)

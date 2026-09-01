@@ -163,6 +163,63 @@ def test_the_topology_workflows_can_be_given_ns():
         assert "ns" in inspect.signature(entry).parameters, entry.__name__
 
 
+def test_a_topological_invariant_takes_the_converged_field_too():
+    """The same defect as the fixed-density run below, one layer over.
+
+    ``DFTSource`` rebuilds the potential from a frozen density, and it did that
+    with no field argument at all -- so ``calculation.potential`` fell back to
+    ``self.magnetic_field``, the field the *input* asked for, at full scale.
+    Whenever ``reducebf`` or the fixed-spin-moment scheme had changed it, every
+    eigenvalue was shifted by a field the SCF never converged under, and an
+    invariant computed from those bands is still an integer.
+
+    Found while wiring the polarization through the same source; the sibling
+    refusal in ``fixed_density_states`` had been there since the 2026-08-29
+    sweep and this one had not.
+    """
+    from pypresso.workflows.polarization import run_polarization
+    from pypresso.workflows.topology import DFTSource, run_berry_curvature, run_z2, run_z2_3d
+
+    for entry in (run_berry_curvature, run_z2, run_z2_3d, run_polarization):
+        parameters = inspect.signature(entry).parameters
+        for name in ("field", "field_scale"):
+            assert name in parameters, f"{entry.__name__} is missing {name}"
+    assert "field" in DFTSource.__dataclass_fields__
+    assert "field_scale" in DFTSource.__dataclass_fields__
+    # and the source must forward them rather than accept and drop them
+    body = inspect.getsource(DFTSource.states)
+    assert "self.field" in body and "self.field_scale" in body
+
+
+def test_a_topological_invariant_actually_refuses_a_field_it_was_not_given():
+    """The behavioural half: the guard fires rather than merely existing.
+
+    A noncollinear silicon carrying ``b_field(3)`` reaches ``DFTSource.states``
+    and is refused before anything is diagonalised. Without the guard the run
+    would have built its potential from the *input* field at full scale and
+    returned bands, which is the failure that has no symptom.
+    """
+    from pathlib import Path
+
+    from pypresso.pseudo.upf import read_upf
+    from pypresso.workflows.topology import DFTSource
+
+    cases = Path(__file__).resolve().parents[1] / "data" / "qe"
+    pseudo = Path(__file__).resolve().parents[1] / "data" / "pseudo"
+    text = (cases / "si2-nosym.in").read_text().replace(
+        "ecutwfc = 12.0, nosym = .true.",
+        "ecutwfc = 12.0, nosym = .true., noncolin = .true.,\n"
+        "    starting_magnetization(1) = 0.3, b_field(3) = 0.01,")
+    system = build_system(parse_pw_input(text))
+    pseudos = tuple(read_upf(pseudo / sp.pseudo_file)
+                    for sp in system.structure.species)
+
+    source = DFTSource(system=system, pseudos=pseudos,
+                       density=np.zeros((4, 8, 8, 8)), nocc=4)
+    with pytest.raises(ValueError, match="field the SCF ended with"):
+        source.states(np.array([[0.0, 0.0, 0.0]]))
+
+
 def test_a_fixed_density_run_takes_the_whole_mixed_state():
     """Including the field, which the input does not describe after reducebf."""
     from pypresso.workflows.nscf import fixed_density_states, run_nscf

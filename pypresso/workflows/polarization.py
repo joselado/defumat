@@ -46,6 +46,8 @@ def run_polarization(
     k_batch: int | None | str = "default",
     becsum: tuple = (),
     ns: jnp.ndarray | None = None,
+    field=None,
+    field_scale: float | None = None,
 ) -> Polarization:
     """The Berry-phase polarization along reciprocal lattice vector ``gdir``.
 
@@ -84,7 +86,7 @@ def run_polarization(
         )
 
     source = _source(system, pseudos, density, nocc, nbnd, conv_thr, k_batch,
-                     becsum=becsum, ns=ns)
+                     becsum=becsum, ns=ns, field=field, field_scale=field_scale)
     axis = int(gdir) % 3
     mesh = string_mesh(transverse, int(nppstr) - 1, gdir=axis, shift=shift)
     nstring, npoints = mesh.shape

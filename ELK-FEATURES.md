@@ -377,6 +377,34 @@ as predicted: it is also what P50's refusal of a **polar** crystal is waiting on
 the improper-to-proper correction `delta_ki P_j - delta_ij P_k` being built
 entirely from `P`.
 
+**"Nothing left to write but the loop" is too optimistic**, and it is left in
+view above rather than edited away because taking the next step is what showed
+it. Two things the sentence did not allow for. `DFTSource` -- the fixed-density
+source every invariant and now the polarization runs on -- **did not forward the
+converged magnetic field at all**, so it rebuilt the potential from the *input*
+field at full scale; wherever `reducebf` or the fixed-spin-moment scheme had
+changed it, every eigenvalue was shifted by a field the SCF never converged
+under, and the ME loop would have differenced two Hamiltonians that were not the
+ones it thought. Fixed and refused by name, and it was the same defect
+`fixed_density_states` had carried a guard against since the 2026-08-29 sweep.
+And **there is no committed insulating spinor case**: every noncollinear input
+here uses a smearing, where a Berry phase needs a gapped manifold.
+
+**The spinor path itself is done and has a `pw.x` reference.** `pw.x` accepts
+`noncolin` with `lberry`, and spinor silicon agrees with it on the ionic phase
+(1.00000), the electronic phase (0.00000) and `MOD_TOT` -- which is **1** for a
+spinor against the scalar run's 2, a spinor band holding one electron. That also
+pins the spin bookkeeping the tensor depends on: the electronic phase is doubled
+for `nspin = 1` and not for a spinor.
+
+**What is left is one crystal, and it is this entry's real cost.** A linear ME
+response needs magnetism *and* spin-orbit coupling *and* a gap *and* a magnetic
+point group that permits the tensor -- and the last is what bites, needing
+inversion and time reversal both broken. A centrosymmetric magnet gives zero
+however wrong the assembly is, which is precisely the P50 trap recorded above.
+Naming the crystal is the decision that starts this phase, not a detail inside
+it.
+
 **One thing P56 changed about this entry.** It said the polarization's reference
 would be Elk's `polar`. It is not: `pw.x` computes a Berry-phase polarization
 (`bp_c_phase.f90`, reached by `lberry`) and has a committed `test-suite/pw_berry`

@@ -8277,6 +8277,32 @@ three-dimensional grid. And **raising the cutoff made the DFPT violation worse**
 (-1.257 -> -1.445), which is what said it was not the basis: a basis-set error
 goes away with the basis, and this one did not.
 
+**A spinor is the third reference and it pins the spin bookkeeping.**
+`tests/data/qe/si-noncolin-berry.in`: `pw.x` accepts `noncolin` with `lberry`,
+and silicon on two-component wavefunctions gives the same ionic phase (1.00000),
+the same electronic phase (0.00000) and `MOD_TOT: 1` against the scalar run's 2
+-- a spinor band holds one electron, so moving one filled band across the zone
+moves the phase by half as much. The electronic phase is **doubled for
+`nspin = 1` and not for a spinor** (`bp_c_phase` puts the whole average in
+`phiup` and sets `phidw = 0`), and a code that doubled both or neither would
+still reproduce silicon's zero. The two runs agree on the total to 1e-6 with the
+quantum in the ratio 2:1.
+
+**Wiring it through found a bug in shipped code**, of the `GAPS.md` family and
+with no symptom. `DFTSource` -- the fixed-density source `run_berry_curvature`,
+`run_z2`, `run_z2_3d` and now `run_polarization` all diagonalise on -- called
+`calculation.potential(self.density)` with **no field argument**, and
+`Calculation.potential` falls back to `self.magnetic_field`, the field the
+*input* asked for, at full scale. Wherever `reducebf` or the fixed-spin-moment
+scheme had changed the field during the SCF, every eigenvalue was shifted by a
+field the run never converged under -- and an invariant computed from those
+bands is still an integer. `fixed_density_states` has refused exactly this since
+the 2026-08-29 sweep; the topological source had no such guard. It has one now,
+`field`/`field_scale` reach all four entry points, and `_STATE_ARGUMENTS`
+already mapped them so `Calculator` injects them with no further change. Two
+tests, one structural and one that builds a noncollinear silicon carrying
+`b_field(3)` and asserts the refusal fires.
+
 **Refused by name:** a metal (a Berry phase is a property of a gapped manifold,
 and a smeared occupation does not say which bands the string carries),
 `nspin = 2` (two channels are two independent string sets and one phase each,
@@ -8292,6 +8318,18 @@ phase could not read.
 and is its own phase; `dP/dB`, the magnetoelectric tensor, which is what this was
 built for; and a Wannier-centre decomposition of the phase, which the string
 product already contains and nothing extracts.
+
+**What `dP/dB` still needs is a crystal, not code.** The field has been here
+since P18, the polarization is here now and works on spinors, and the loop is
+six SCF runs and a difference. What is missing is a *case*: a linear
+magnetoelectric response needs magnetism *and* spin-orbit coupling *and* a gap
+*and* a magnetic point group that permits the tensor, and **every noncollinear
+input committed here uses a smearing**. A centrosymmetric magnet returns zero
+however wrong the assembly is -- P50's trap, now recorded twice. Two further
+things to write down when it lands: what P18's field gives is the **spin
+(Zeeman)** response, there being no orbital vector potential, which is Elk's
+task 390 limitation too; and the noise floor should be measured from two
+re-converged identical runs before `deltabf` is chosen.
 
 
 ## 3a. Environment decisions (settled)

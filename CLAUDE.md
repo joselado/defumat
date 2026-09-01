@@ -384,7 +384,18 @@ bug — both DFPT codes agree with *each other* and are short of k-points, while
 phase is a one-dimensional integral and converges along the string. Generating the
 reference also found that at `pw_berry`'s own default `conv_thr` two *symmetry-equivalent*
 strings come out 1e-5 apart, which reads as our disagreement and is QE's threshold.
-**Refused by name:** a metal, `nspin = 2` and a spin spiral.
+**Refused by name:** a metal, `nspin = 2` and a spin spiral. **A spinor run
+works and has its own reference**: `pw.x` accepts `noncolin` with `lberry`, and
+spinor silicon matches it on the ionic and electronic phases with `MOD_TOT` of
+**1** against the scalar run's 2, a spinor band holding one electron — which is
+what pins the doubling, applied for `nspin = 1` and not for a spinor. Wiring
+that through found a bug with no symptom: **`DFTSource` never forwarded the
+converged magnetic field**, so every fixed-density invariant
+(`run_berry_curvature`, `run_z2`, `run_z2_3d`) rebuilt its potential from the
+*input* field at full scale — a rigid Zeeman shift wherever `reducebf` or the
+fixed-spin-moment scheme had changed it, and an invariant off those bands is
+still an integer. `fixed_density_states` had refused exactly that since the
+2026-08-29 sweep and this source had not; it does now.
 
 **Optical spectra with excitons are in** (P37), and they are the first thing here built on
 a **sum over states**: an absorption spectrum needs `chi_0` as a matrix over reciprocal
