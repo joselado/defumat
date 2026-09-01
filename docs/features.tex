@@ -1520,9 +1520,11 @@ at $\mathbf k \pm \mathbf q/2$, so a string overlap is not a single gather. A
 \emph{spinor} run (\code{noncolin}) is supported and has its own \code{pw.x}
 reference; its quantum is half the scalar one, because a spinor band holds one
 electron.
-Ultrasoft and PAW are \emph{not} refused --- $q_{ij}(\mathbf b)$ reaches the
-overlap exactly as it does for a Chern number --- but no soft case is committed,
-because the only \code{pw\_berry} reference is UPF v1 and the reader refuses it.
+Ultrasoft and PAW are \emph{not} refused, and both are validated: zincblende
+SiC matches \code{pw.x} string by string with an electronic phase of $-0.009696$
+against $-0.00970$. It had to be SiC rather than silicon, because a
+centrosymmetric crystal's electronic phase is zero whatever $q_{ij}(\mathbf b)$
+does and so agrees with zero however wrong the augmentation is.
 \end{refuses}
 
 \textbf{Validated three ways, two of which need no other code.} Against

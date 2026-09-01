@@ -20,7 +20,9 @@ import jax
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
+import re
+
+from pypresso.io.pwin import parse_pw_input
 from pypresso.pseudo.upf import read_upf
 from pypresso.scf.driver import run_scf
 from pypresso.system.builder import build_system
@@ -44,18 +46,30 @@ def _drop_compiled_code():
     jax.clear_caches()
 
 
-@lru_cache(maxsize=3)
-def converged(name: str):
-    system = build_system(read_pw_input(CASES / name))
+@lru_cache(maxsize=4)
+def converged(name: str, scf_grid: str = ""):
+    """The converged run of a committed input, cached for the whole module.
+
+    ``scf_grid`` replaces the ``K_POINTS`` line, which the ``lberry`` inputs
+    need: their own grid is the *string* grid ``pw.x`` builds the polarization
+    on, and it is a poor grid to converge a density on. ``pw.x`` has the same
+    split -- ``alas-berry.in`` runs on ``alas-raman.in``'s density.
+    """
+    text = (CASES / name).read_text()
+    if scf_grid:
+        text = re.sub(r"^ *\d+ +\d+ +\d+ +\d+ +\d+ +\d+ *$", f" {scf_grid}",
+                      text, count=1, flags=re.M)
+    text = text.replace("calculation = 'nscf'", "calculation = 'scf'")
+    system = build_system(parse_pw_input(text))
     pseudos = tuple(read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species)
-    return system, pseudos, run_scf(system, pseudos, conv_thr=1.0e-12).density
+    return system, pseudos, run_scf(system, pseudos, conv_thr=1.0e-12)
 
 
 @lru_cache(maxsize=2)
 def alas_polarization():
     """AlAs along ``b_3``, exactly the settings of ``alas-berry.in``."""
-    system, pseudos, density = converged("alas-raman.in")
-    return run_polarization(system, pseudos, density, gdir=2, nppstr=6,
+    system, pseudos, result = converged("alas-raman.in")
+    return run_polarization(system, pseudos, result.density, gdir=2, nppstr=6,
                             transverse=(2, 2), conv_thr=1.0e-12)
 
 
@@ -117,8 +131,8 @@ def test_silicon_matches_pw_x_and_carries_the_larger_quantum():
     an ionic phase of 1.00000 (mod 2), an electronic phase of exactly zero and a
     total of 1.00000 (mod 2).
     """
-    system, pseudos, density = converged("si2-nosym.in")
-    result = run_polarization(system, pseudos, density, gdir=2, nppstr=8,
+    system, pseudos, result = converged("si2-nosym.in")
+    result = run_polarization(system, pseudos, result.density, gdir=2, nppstr=8,
                               transverse=(4, 4), conv_thr=1.0e-10)
     assert result.quantum == pytest.approx(2.0)
     assert abs(result.electronic_phase) < 1.0e-6
@@ -137,8 +151,8 @@ def test_a_centrosymmetric_crystal_is_pinned_to_zero_or_half_a_quantum():
     informative of the two answers: a bug that returned zero would also pass a
     test written as "0 or a half".
     """
-    system, pseudos, density = converged("si2-nosym.in")
-    result = run_polarization(system, pseudos, density, gdir=2, nppstr=8,
+    system, pseudos, result = converged("si2-nosym.in")
+    result = run_polarization(system, pseudos, result.density, gdir=2, nppstr=8,
                               transverse=(4, 4), conv_thr=1.0e-10)
     residue = result.total_phase / result.quantum
     distance = min(abs(residue), abs(abs(residue) - 0.5))
@@ -154,10 +168,10 @@ def test_the_phase_is_invariant_under_a_shift_of_the_string_mesh():
     quadrature of the same quantity -- it changes the answer by the sampling
     error and not by a quantum, which is what this bounds.
     """
-    system, pseudos, density = converged("alas-raman.in")
-    plain = run_polarization(system, pseudos, density, gdir=2, nppstr=8,
+    system, pseudos, result = converged("alas-raman.in")
+    plain = run_polarization(system, pseudos, result.density, gdir=2, nppstr=8,
                              transverse=(4, 4), conv_thr=1.0e-10)
-    shifted = run_polarization(system, pseudos, density, gdir=2, nppstr=8,
+    shifted = run_polarization(system, pseudos, result.density, gdir=2, nppstr=8,
                                transverse=(4, 4), shift=(1, 1, 0),
                                conv_thr=1.0e-10)
     assert shifted.total_phase == pytest.approx(plain.total_phase, abs=5.0e-3)
@@ -176,8 +190,8 @@ def test_a_spinor_reproduces_the_scalar_answer_with_half_the_quantum():
     whole average in ``phiup`` and sets ``phidw = 0``), and a code that doubled
     both or neither would still reproduce silicon's zero.
     """
-    system, pseudos, density = converged("si-noncolin-berry.in")
-    spinor = run_polarization(system, pseudos, density, gdir=2, nppstr=8,
+    system, pseudos, result = converged("si-noncolin-berry.in")
+    spinor = run_polarization(system, pseudos, result.density, gdir=2, nppstr=8,
                               transverse=(4, 4), conv_thr=1.0e-10)
     assert system.npol == 2 and system.nspin == 4
     assert spinor.quantum == pytest.approx(1.0)          # pw.x's MOD_TOT
@@ -185,9 +199,35 @@ def test_a_spinor_reproduces_the_scalar_answer_with_half_the_quantum():
     assert abs(abs(spinor.ionic_phase) - 1.0) < 1.0e-6
     assert abs(abs(spinor.total_phase) - 1.0) < 1.0e-6
 
-    scalar_system, scalar_pseudos, scalar_density = converged("si2-nosym.in")
-    scalar = run_polarization(scalar_system, scalar_pseudos, scalar_density,
+    scalar_system, scalar_pseudos, scalar_result = converged("si2-nosym.in")
+    scalar = run_polarization(scalar_system, scalar_pseudos, scalar_result.density,
                               gdir=2, nppstr=8, transverse=(4, 4),
                               conv_thr=1.0e-10)
     assert spinor.total_phase == pytest.approx(scalar.total_phase, abs=1.0e-6)
     assert scalar.quantum == pytest.approx(2.0 * spinor.quantum)
+
+
+def test_an_ultrasoft_crystal_matches_pw_x_with_a_phase_that_is_not_zero():
+    """``reference.out.sic-berry``: where the augmentation charge has to be right.
+
+    Silicon and AlAs each let a soft dataset off. Silicon is centrosymmetric, so
+    its electronic phase is zero whatever ``q_ij(b)`` does; AlAs has a nonzero
+    one and is norm-conserving, where the augmentation term is identically
+    absent. Zincblende SiC is both at once -- ``-43m`` and two ultrasoft
+    datasets -- so the overlap between neighbouring k-points carries the
+    augmentation and is wrong without it.
+
+    ``pw.x``: strings -0.02660 / -0.00409 / -0.00409 / -0.00401, an electronic
+    phase of -0.00970 and a total of 0.99030 (mod 2).
+    """
+    system, pseudos, result = converged("sic-berry.in", "4 4 4 0 0 0")
+    polarization = run_polarization(
+        system, pseudos, result.density, gdir=2, nppstr=6, transverse=(2, 2),
+        becsum=result.becsum, conv_thr=1.0e-11,
+    )
+    assert np.allclose(polarization.strings.phases,
+                       [-0.02660, -0.00409, -0.00409, -0.00401], atol=1.0e-5)
+    assert polarization.electronic_phase == pytest.approx(-0.00970, abs=1.0e-5)
+    assert polarization.ionic_phase == pytest.approx(1.0, abs=1.0e-6)
+    assert polarization.total_phase == pytest.approx(0.99030, abs=1.0e-5)
+    assert polarization.quantum == pytest.approx(2.0)

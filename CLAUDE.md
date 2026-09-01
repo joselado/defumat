@@ -384,7 +384,7 @@ bug — both DFPT codes agree with *each other* and are short of k-points, while
 phase is a one-dimensional integral and converges along the string. Generating the
 reference also found that at `pw_berry`'s own default `conv_thr` two *symmetry-equivalent*
 strings come out 1e-5 apart, which reads as our disagreement and is QE's threshold.
-**Refused by name:** a metal, `nspin = 2` and a spin spiral. **A spinor run
+**Ultrasoft and PAW are validated**, on zincblende **SiC** rather than on silicon: a centrosymmetric cell's electronic phase is zero whatever `q_ij(b)` does, so it agrees with zero however wrong the augmentation is (the P50 trap). SiC is `-43m` with two ultrasoft datasets and matches `pw.x` string by string (-0.009696 against -0.00970 on the electronic phase). **Refused by name:** a metal, `nspin = 2` and a spin spiral. **A spinor run
 works and has its own reference**: `pw.x` accepts `noncolin` with `lberry`, and
 spinor silicon matches it on the ionic and electronic phases with `MOD_TOT` of
 **1** against the scalar run's 2, a spinor band holding one electron — which is

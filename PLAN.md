@@ -8303,6 +8303,21 @@ already mapped them so `Calculator` injects them with no further change. Two
 tests, one structural and one that builds a noncollinear silicon carrying
 `b_field(3)` and asserts the refusal fires.
 
+**Ultrasoft and PAW are validated, and it took a third crystal to do it.**
+Silicon and AlAs each let a soft dataset off: silicon is centrosymmetric, so its
+electronic phase is zero whatever `q_ij(b)` does, and AlAs has a nonzero one but
+is norm-conserving, where the augmentation term is identically absent. Zincblende
+**SiC** is both at once -- `-43m` and two ultrasoft datasets, the pair
+`NEXT-SESSION.md` had already identified for the ultrasoft piezoelectric tensor --
+so the overlap carries the augmentation and is wrong without it. Against `pw.x`
+(`tests/data/qe/sic-berry.in`, `reference.out.sic-berry`), string by string:
+**-0.026603 / -0.004087 / -0.004087 / -0.004006** against -0.02660 / -0.00409 /
+-0.00409 / -0.00401, an electronic phase of **-0.009696** against -0.00970 and a
+total of **0.990304** against 0.99030. Ultrasoft and PAW silicon run too and give
+the symmetry-required half-quantum, but that is the weaker statement and is
+labelled as such: a centrosymmetric cell agrees with zero however wrong the
+augmentation is, which is the P50 trap and the reason SiC was fetched.
+
 **Refused by name:** a metal (a Berry phase is a property of a gapped manifold,
 and a smeared occupation does not say which bands the string carries),
 `nspin = 2` (two channels are two independent string sets and one phase each,

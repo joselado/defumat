@@ -1,0 +1,38 @@
+! 3C-SiC: the Berry-phase polarization on an **ultrasoft** dataset, and the case
+! where the augmentation charge actually has to be right.
+!
+! Silicon and AlAs both give a soft dataset an easy time here. Silicon is
+! centrosymmetric, so its electronic phase is zero whatever `q_ij(b)` does; AlAs
+! has a nonzero one but is norm-conserving, where the augmentation term is
+! identically absent. Zincblende SiC is both at once -- `-43m`, so nothing forces
+! the phase to zero, and two ultrasoft datasets, so the overlap between
+! neighbouring k-points carries `q_ij(b)` and is wrong without it.
+!
+! Both pseudopotentials were already committed for other cases; this is the pair
+! `NEXT-SESSION.md` identified as the one that unblocks the ultrasoft
+! piezoelectric tensor, used here for the polarization it is built on.
+!
+! `nosym`/`noinv` and the tight `conv_thr` for `alas-berry.in`'s reasons.
+ &control
+    calculation = 'nscf'
+    lberry = .true.
+    gdir = 3
+    nppstr = 6
+    prefix = 'sic'
+ /
+ &system
+    ibrav = 2, celldm(1) = 8.24, nat = 2, ntyp = 2,
+    ecutwfc = 24.0, ecutrho = 192.0,
+    nosym = .true., noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-12
+ /
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-n-rrkjus_psl.0.1.UPF
+ C  12.011 C.pz-rrkjus.UPF
+ATOMIC_POSITIONS crystal
+ Si 0.00 0.00 0.00
+ C  0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 6 0 0 0
