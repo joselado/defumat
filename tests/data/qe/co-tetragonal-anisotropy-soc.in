@@ -1,0 +1,18 @@
+&control
+   calculation = 'nscf'
+/
+&system
+   ibrav = 6, celldm(1) = 4.60, celldm(3) = 1.30, nat = 1, ntyp = 1,
+   noncolin = .true., lspinorb = .true., lforcet = .true., nosym = .true., ecutwfc = 20.0, ecutrho = 160.0,
+   occupations = 'smearing', smearing = 'mv', degauss = 0.02,
+   starting_magnetization(1) = 0.6,
+/
+&electrons
+   conv_thr = 1.0e-9
+/
+ATOMIC_SPECIES
+Co 58.933 Co.rel-pbe-nd-rrkjus.UPF
+ATOMIC_POSITIONS crystal
+Co 0.0 0.0 0.0
+K_POINTS automatic
+3 3 2 0 0 0
