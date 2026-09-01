@@ -8390,15 +8390,68 @@ sharp one -- without `lspinorb` a global spin rotation maps `B` to `-B` and
 leaves every charge observable fixed, so `alpha` vanishes *identically* and no
 plausible bug survives it; then **linearity** in `delta`; then the **noise
 floor** from two re-converged identical runs, which bounds `delta` from below.
-Elk's own number is the weakest tier as everywhere else, and here it is not even
-available: Elk is not built in this checkout and its `species/` directory has no
-`Ga.in`.
+Elk's own number is the weakest tier as everywhere else. It was recorded here as
+*unavailable* on two grounds and **one of them was wrong**: Elk is indeed not
+built in this checkout, but its `species/` **does** contain `Ga.in` -- the claim
+that it did not came from misreading a filtered `ls`, and the full listing has
+every element. Elk is also buildable from the vendored source: `make.inc` ships
+configured for `mpiifort` and MKL, and with `gfortran`, the MPI stub, the MKL
+stub and the system BLAS/LAPACK/FFTW it compiles.
+
+**The substitute cell is validated against Elk's bands, and Elk was built to do
+it.** GaAs is not usable here for a reason that is *not* cost: at **zero field**
+its self-consistent run does not converge in 80 iterations and drifts to a
+magnetization of -0.322 mu_B in a crystal that must have none, so the earlier
+attribution of that failure to the over-large field was wrong. A fully
+relativistic **AlAs** (`Al.rel-pbe-n-rrkjus` with the `As.rel` already here) is
+the same zincblende structure with the same four ingredients and 8 valence
+electrons against GaAs's 18: it converges in **9 iterations, 20-32 s**, against
+GaAs's 187 s and no convergence. Every relativistic Ga in pslibrary carries the
+3d, so there is no cheap GaAs.
+
+Against Elk on AlAs with spin-orbit coupling along `L-Gamma-X`, the valence
+manifold aligned at its maximum:
+
+| | Elk (LAPW) | pypresso | difference | experiment |
+|---|---|---|---|---|
+| spin-orbit splitting at `Gamma` | 0.307 | **0.293** | 0.014 | 0.28 |
+| valence-manifold width | 12.156 | **12.095** | 0.061 | |
+| indirect gap | 1.189 | **1.114** | 0.075 | 2.15 |
+| direct gap at `Gamma` | 1.912 | **2.137** | 0.225 | 3.13 |
+
+and pointwise, over 8 bands and 400 path points, **0.062 eV rms with a 0.165 eV
+maximum**. The spin-orbit splitting is the number this phase depends on and it is
+the best-agreeing one; the largest discrepancy is the *conduction* band at
+`Gamma`, where a pseudopotential is least constrained. Both codes underestimate
+the experimental gap by about the same amount and agree with each other far
+better than either agrees with experiment, which is the signature to want: it is
+the exchange-correlation functional that is wrong, not the two basis sets that
+disagree.
+
+**Elk builds from the vendored source with `gfortran`**, which the project had
+not established: `make.inc` ships set for `mpiifort` and MKL, and it compiles
+against the MPI stub, the MKL stub (the Intel block sets `SRC_MKL =` empty and
+must be re-commented) and the system BLAS/LAPACK/FFTW. It must be built
+**serially** -- the Makefile carries no module dependencies, so `-j` races
+`mpi.mod` and `libxcifc.mod`.
 
 **Two things to write down when it lands**, both already in the module
 docstring: what P18's field gives is the **spin (Zeeman)** response, there being
 no orbital vector potential -- which is Elk's task 390 limitation too, not a gap
 opened here -- and the tensor is **clamped-ion**, the restriction P50 carries for
 the same reason.
+
+**And two measurements the loop already produced.** The **noise floor is exactly
+zero** -- two independently converged runs give bit-identical phases -- so any
+nonzero `alpha` is resolvable, which is the question that decided whether this
+was worth continuing. But `alpha` moves 13 per cent between `delta = 0.02` and
+`0.04` (4.52e-6 to 5.10e-6), so neither is in the linear regime and the step has
+to be shrunk before a value is quoted. **The spin-orbit null is blocked by an
+existing refusal**: a fully-relativistic dataset with `lspinorb = .false.` is
+refused rather than having its two `j` channels averaged (QE's `average_pp`), so
+the null needs *scalar*-relativistic datasets for the same cell -- sound, since
+`alpha = 0` without spin-orbit coupling is a symmetry statement and not a
+property of the dataset.
 
 
 ## 3a. Environment decisions (settled)

@@ -417,6 +417,13 @@ in valence is minutes per SCF and did not converge in 100 iterations at that
 field, where the tensor needs six runs and the spin-orbit null doubles them.
 `PLAN.md` P57 has the validation route, which is the spin-orbit null first.
 
+**Two corrections to the paragraph above, both found by acting on it.** Elk's
+`species/` **does** contain `Ga.in`; an earlier note here said it did not, which
+came from misreading a filtered listing. And Elk is **buildable from the vendored
+source**: `make.inc` ships configured for `mpiifort` and MKL, and it compiles with
+`gfortran`, the MPI and MKL stubs and the system BLAS/LAPACK/FFTW. So an Elk
+reference for this row is reachable, which this entry had written off.
+
 **One thing P56 changed about this entry.** It said the polarization's reference
 would be Elk's `polar`. It is not: `pw.x` computes a Berry-phase polarization
 (`bp_c_phase.f90`, reached by `lberry`) and has a committed `test-suite/pw_berry`
