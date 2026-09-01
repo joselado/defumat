@@ -1866,6 +1866,42 @@ anisotropy is exactly zero, which is the control for the whole calculation:
 without the coupling the Hamiltonian is invariant under a global spin rotation,
 so a band energy \emph{cannot} depend on where the moment points.
 
+\textbf{The torque: the same number from one angle.} Taking the anisotropy as
+$E(\mathbf n_1)-E(\mathbf n_2)$ is $10^{-5}$~Ry out of $10^{2}$ --- seven digits
+of cancellation. The torque takes it as a \emph{derivative} evaluated once,
+where nothing cancels: for $E(\theta)=K_1\sin^2\theta$,
+\begin{equation*}
+  -\frac{\mathrm dF}{\mathrm d\theta} = -K_1\sin 2\theta,
+  \qquad\text{so at }\theta=45^\circ\text{ the torque is }-K_1 .
+\end{equation*}
+
+\begin{pycode}
+torque = scalar.get_torque(spinor)              # 45 degrees by default
+print(torque.anisotropy_constant_mev)           # K1 in meV
+\end{pycode}
+
+\textbf{It differentiates the free energy, and for a smeared metal that is not
+the band energy.} A Hellmann--Feynman derivative at frozen occupations gives
+$\mathrm dF/\mathrm d\theta$ with $F=\sum w\varepsilon-TS$; $\sum w\varepsilon$
+carries an extra $\sum(\mathrm dw/\mathrm d\theta)\varepsilon$ that the entropy
+cancels. The difference is not small. On tetragonal cobalt, as the smearing
+narrows:
+
+\begin{center}
+\begin{tabular}{lccc}
+\code{degauss} (Ry) & band difference & free difference & torque \\
+\hline
+0.020 & 1.2353 & 0.5523 & 0.5523 \\
+0.005 & 0.5434 & 0.5291 & 0.5291 \\
+0.002 & 0.5308 & 0.5308 & 0.5308 \\
+\end{tabular}
+\end{center}
+
+\noindent all in meV. The torque tracks the free-energy difference at every
+width and both converge on $K_1=0.531$; at a production \code{degauss} of 0.02
+the \emph{band}-energy difference reads 2.3 times that. Use
+\code{MagneticAnisotropy.free\_energies} to compare like with like.
+
 \begin{refuses}
 \textbf{Refuses.} \textbf{PAW}, because the handoff from the collinear run
 carries the density and nothing else, and a PAW Hamiltonian needs

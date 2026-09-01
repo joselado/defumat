@@ -100,6 +100,8 @@ __all__ = [
     "run_force_theorem",
     "run_anisotropy",
     "frozen_expectation",
+    "MagneticTorque",
+    "run_torque",
     "cardinal_directions",
     "sphere_cover",
 ]
@@ -190,6 +192,30 @@ class MagneticAnisotropy:
     @property
     def energies_mev(self) -> np.ndarray:
         return self.energies * RY_TO_EV * 1000.0
+
+    @property
+    def free_energies(self) -> np.ndarray:
+        """``(ndir,)`` in Ry: the band energy **plus the smearing's ``-TS``**.
+
+        For an insulator this is :attr:`band_energies`. For a **smeared metal
+        it is a different curve**, and the difference is not small: the free
+        energy is what a variational argument is about, so it is the free
+        energy whose derivative is the torque
+        (:func:`run_torque`), while ``sum w eps`` -- the quantity ``pw.x``
+        prints on the ``lforcet`` path and :attr:`band_energies` carries -- has
+        an extra ``sum (dw/dtheta) eps`` in its derivative. On tetragonal
+        cobalt at ``degauss = 0.02`` Ry the entropy supplies **55 per cent** of
+        the band energy's slope, so the two anisotropies are 1.235 and 0.551
+        meV. They converge onto each other as the smearing goes to zero; at a
+        production smearing they must be quoted apart.
+        """
+        return np.array([r.free_energy for r in self.results])
+
+    @property
+    def free_anisotropy_mev(self) -> float:
+        """The spread of :attr:`free_energies`, in meV."""
+        energies = self.free_energies
+        return float(np.max(energies) - np.min(energies)) * RY_TO_EV * 1000.0
 
     @property
     def anisotropy(self) -> float:
@@ -731,3 +757,122 @@ def frozen_expectation(
         delta_dvan, delta_qq, jnp.asarray(wg), jnp.asarray(eigenvalues),
     )
     return float(nonlocal_ - overlap)
+
+
+@dataclass
+class MagneticTorque:
+    """``-dE/dtheta`` at one angle, and the anisotropy constant it implies."""
+
+    #: Radians from the plane's first axis.
+    angle: float
+    #: ``-dF/dtheta`` in Ry per radian, ``F`` the **free** energy (the band
+    #: energy plus the smearing's ``-TS``). That is what a Hellmann-Feynman
+    #: derivative at frozen occupations gives, and for a smeared metal it is
+    #: *not* the derivative of ``sum w eps`` --
+    #: :attr:`MagneticAnisotropy.free_energies` says how far apart they are.
+    torque: float
+    #: The plane the moment was turned in, as the pair of unit vectors.
+    plane: tuple
+    #: ``sum w eps`` at this angle, in Ry -- what the gradient was taken of.
+    band_energy: float
+    #: The same sum rebuilt as ``sum w <psi|H|psi>``. Equal to
+    #: :attr:`band_energy` to the eigensolver's residual, and the check that
+    #: the quadratic form the gradient runs on is the right one.
+    band_energy_check: float
+    fermi_energy: float | None = None
+
+    @property
+    def torque_mev(self) -> float:
+        return self.torque * RY_TO_EV * 1000.0
+
+    @property
+    def anisotropy_constant(self) -> float:
+        """``K1`` in Ry, for a uniaxial magnet measured at 45 degrees.
+
+        ``E = K1 sin^2(theta)`` gives ``-dE/dtheta = -K1 sin(2 theta)``, so at
+        ``pi/4`` the torque *is* ``-K1``. Away from 45 degrees this divides by
+        ``sin(2 theta)``, which is the same statement and is why 45 is the
+        angle the method is always quoted at: it is where the division is by
+        one, and where the fourth-order term ``K2 sin^4`` contributes least to
+        the ratio.
+        """
+        return -self.torque / np.sin(2.0 * self.angle)
+
+    @property
+    def anisotropy_constant_mev(self) -> float:
+        return self.anisotropy_constant * RY_TO_EV * 1000.0
+
+    @property
+    def residual(self) -> float:
+        """How far the two band energies are apart, in Ry."""
+        return abs(self.band_energy - self.band_energy_check)
+
+
+def run_torque(
+    system: System,
+    pseudos: tuple[Pseudopotential, ...],
+    density: jnp.ndarray,
+    angle: float = np.pi / 4.0,
+    plane=((0.0, 0.0, 1.0), (1.0, 0.0, 0.0)),
+    nbnd: int | None = None,
+    conv_thr: float = 1.0e-10,
+    k_batch: int | None | str = "default",
+    soc_scale: float | None = None,
+) -> MagneticTorque:
+    """The magnetic torque, and through it the anisotropy from **one** angle.
+
+    :func:`run_anisotropy` takes the anisotropy as a difference of two band
+    energies, which is 1e-5 Ry out of 1e2 -- seven digits of cancellation. This
+    takes it as a *derivative* instead, evaluated once, where nothing cancels
+    (:mod:`pypresso.forces.torque`). For a uniaxial magnet
+    ``E = K1 sin^2(theta)``, so the torque at ``pi/4`` is ``-K1`` and
+    :attr:`MagneticTorque.anisotropy_constant` reads it off.
+
+    ``plane`` is the orthonormal pair the moment turns in; the default turns it
+    from ``z`` towards ``x``, so ``angle = 0`` is along ``z``. ``density`` is
+    the **collinear** density of a scalar-relativistic run, exactly as
+    :func:`run_force_theorem` takes it, and everything that function refuses is
+    refused here for the same reasons.
+    """
+    from pypresso.forces.torque import band_energy_at_angle, torque_at_angle
+
+    if soc_scale is not None:
+        system = system.with_soc_scale(soc_scale)
+    _refuse_system(system, pseudos)
+
+    first, second = (np.asarray(v, dtype=float) for v in plane)
+    first, second = first / np.linalg.norm(first), second / np.linalg.norm(second)
+    if abs(float(first @ second)) > 1.0e-8:
+        raise ValueError(
+            f"the two axes of the rotation plane are not orthogonal "
+            f"(dot product {float(first @ second):.3e}); the angle would not "
+            "parameterise a rotation and its derivative would not be a torque"
+        )
+    angle = float(angle)
+    direction = np.cos(angle) * first + np.sin(angle) * second
+
+    # The quantization axis follows the moment, exactly as it must for
+    # ``run_force_theorem`` -- and here it is also what makes the derivative
+    # clean, since a *static* axis is a constant the gradient passes through.
+    system = _with_quantization_axis(system, tuple(direction))
+    rotated = nc_magnetization_from_lsda(density, tuple(direction))
+    calculation, system, eigenvalues, wavefunctions = fixed_density_states(
+        system, pseudos, rotated, nbnd=nbnd, conv_thr=conv_thr, k_batch=k_batch,
+    )
+    wg, levels = calculation.occupations(jnp.asarray(eigenvalues))
+
+    plane_pair = (tuple(float(v) for v in first), tuple(float(v) for v in second))
+    check = float(band_energy_at_angle(
+        calculation, wavefunctions, wg, density, plane_pair, angle
+    ))
+    value = torque_at_angle(
+        calculation, wavefunctions, wg, density, plane_pair, angle
+    )
+    return MagneticTorque(
+        angle=angle,
+        torque=value,
+        plane=plane_pair,
+        band_energy=float(np.sum(np.asarray(wg) * np.asarray(eigenvalues))),
+        band_energy_check=check,
+        fermi_energy=levels.get("fermi_energy"),
+    )

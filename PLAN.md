@@ -8790,6 +8790,65 @@ rather than assumed -- the two preconditioners differ **more in the vacuum than
 in the metal**, which is the whole of what a local screening length buys and
 which no energy comparison would show.
 
+### P60 — The magnetic torque: the anisotropy as a derivative rather than a difference. ✅ DONE.
+
+`pypresso/forces/torque.py`, `run_torque`, `Calculator.get_torque`,
+`MagneticAnisotropy.free_energies`, `tests/regression/test_anisotropy.py`.
+
+P58 takes the anisotropy as `E(n_1) - E(n_2)`, which is **1e-5 Ry out of 1e2** --
+seven digits of cancellation, and the reason its Co-slab residual is the density
+rather than the assembly. The torque method (Wang, Wu, Wang and Freeman, PRB 54,
+61 (1996)) takes it as a *first derivative* evaluated once, where nothing
+cancels: for `E = K1 sin^2(theta)`, `-dE/dtheta = -K1 sin(2 theta)`, so a single
+calculation at **45 degrees** returns `K1`.
+
+**It is `jax.grad` of the energy in a magnetic coordinate**, which is
+`forces/spiral.py`'s `dE/dq` construction and P15's force, term for term. The
+literature's torque is the hand-derived `<psi|dH_SO/dtheta|psi>`; what this adds
+to a known technique is what P15 added to the force.
+
+**One term carries the angle and knowing which makes it cheap.** `dvan_so` is the
+spin-orbit matrix in the *crystal* frame and does not depend on where the moment
+points; neither does `qq_so`, the kinetic term or the local pseudopotential.
+Turning the moment turns the **exchange field** and nothing else, so `dH/dtheta`
+is entirely in the potential built from the rotated density, and the gradient
+finds that without being told.
+
+**The finding is that the torque is the derivative of the FREE energy, and for a
+smeared metal that is a different curve from `sum w eps`.** A Hellmann-Feynman
+derivative at frozen occupations gives `dF/dtheta` with `F = sum w eps - TS`;
+the band energy carries an extra `sum (dw/dtheta) eps` that the entropy exactly
+cancels. Comparing the torque against P58's `anisotropy_mev` therefore looks like
+a factor-of-two bug in the gradient and is not one -- it was measured before it
+was explained: 1.233 meV/rad for the band energy, **-0.682 for the entropy**, and
+0.551 for the free energy against the gradient's 0.552.
+
+**What decided it was a smearing sweep**, and it is the phase's real result --
+the torque is *smearing-robust* where the difference is not:
+
+| `degauss` (Ry) | band difference | free difference | torque | entropy's share |
+|---|---|---|---|---|
+| 0.020 | 1.235307 | 0.552283 | 0.552307 | 55.3% |
+| 0.010 | 0.618065 | 0.496374 | 0.496379 | 19.7% |
+| 0.005 | 0.543389 | 0.529093 | 0.529087 | 2.6% |
+| 0.002 | 0.530771 | 0.530771 | 0.530765 | 0.0% |
+
+The torque tracks the free-energy difference to ~1e-5 meV at **every** width, and
+both converge on `K1 = 0.531` meV. At `degauss = 0.02` -- a perfectly ordinary
+production value -- the band-energy difference reads **1.235**, which is 2.3x the
+converged answer, while the torque at the same width reads 0.552 and is 4% from
+it. So the entropy is not a correction to be neglected at a broad smearing, and
+a force-theorem MAE quoted from `sum w eps` there is contaminated rather than
+merely noisy. `MagneticAnisotropy.free_energies` exists so the two can be quoted
+apart.
+
+**Three checks and only one needs a second method.** `sum w <psi|H|psi>`
+reproduces `sum w eps` at the angle the states came from to **4.8e-11 meV**,
+which catches a wrong contraction, a lost weight or a mis-shaped spinor at once;
+the analytic gradient reproduces a central difference of its own functional to
+six digits (0.552310 both); and the torque's `K1` reproduces the free-energy
+difference's to **2.4e-5 meV** on a route that shares almost no code with it.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

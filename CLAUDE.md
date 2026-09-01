@@ -682,6 +682,25 @@ preconditions the **combined search direction once**, after the Broyden combinat
 preconditioning each history entry runs the solve eight times an iteration. For a linear
 preconditioner the two are identical, so Kerker's results are unchanged to the last digit.
 
+**The magnetic torque is in** (P60), which is the anisotropy as a *derivative* rather than a
+difference: `run_torque` returns `-dF/dtheta` at one angle, and for `E = K1 sin^2(theta)`
+the torque at **45 degrees is `K1`**. P58's route differences two band energies, which is
+1e-5 Ry out of 1e2 -- seven digits of cancellation; a first derivative cancels nothing. It
+is `jax.grad` of the energy in a magnetic coordinate, the same construction as
+`forces/spiral.py`'s `dE/dq` and P15's force, where the literature's torque is the
+hand-derived `<psi|dH_SO/dtheta|psi>`. **One term carries the angle**: `dvan_so` is the
+spin-orbit matrix in the *crystal* frame and does not move with the moment, so `dH/dtheta`
+lives entirely in the exchange field. **The finding is that a Hellmann-Feynman derivative at
+frozen occupations is the derivative of the FREE energy**, and for a smeared metal that is a
+different curve from `sum w eps` -- comparing against P58's `anisotropy_mev` looks like a
+factor-of-two bug and is not one. A smearing sweep is what settled it and is the practical
+result: at `degauss = 0.02` Ry the band-energy difference reads **1.235 meV against a
+converged 0.531**, where the torque at the same width reads 0.552, so the torque is
+*smearing-robust* where the difference is not. Validated three ways: `sum w <psi|H|psi>`
+reproduces `sum w eps` to 4.8e-11 meV, the gradient reproduces a central difference of its
+own functional to six digits, and the torque's `K1` reproduces the free-energy difference's
+to **2.4e-5 meV** at four smearing widths.
+
 **Outstanding:** Wyckoff input, PAW and a *relaxed* (as opposed to frozen-density) magnetocrystalline anisotropy, `average_pp`, the dynamical matrix of an
 ultrasoft or PAW *metal*, the strain coordinate's third derivatives on ultrasoft and PAW
 (P44 localised what is missing), the *second derivatives* of a spin-polarized system (P45 put

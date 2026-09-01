@@ -113,6 +113,34 @@ fig.tight_layout()
     
 
 
+## The same number from one angle
+
+Taking the anisotropy as a difference of two energies throws away most of the
+precision: it is a milli-electronvolt out of a hundred Rydberg, so the two
+numbers agree in seven digits before they disagree in the eighth. The **torque**
+avoids that entirely. For `E(theta) = K sin^2(theta)` the slope at 45 degrees is
+`K` itself, so one calculation gives the constant with nothing cancelling.
+
+It also behaves better at a broad smearing. The torque is the slope of the
+*free* energy, and in a metal the entropy carries a real part of the angle
+dependence: at the smearing used here the plain band-energy difference is more
+than twice the converged answer, while the torque is within a few per cent of
+it.
+
+
+```python
+torque = scalar.get_torque(spinor)
+
+print(f"K from the torque at 45 deg      {torque.anisotropy_constant_mev:+.4f} meV")
+print(f"K from the free-energy difference {mae.free_anisotropy_mev:+.4f} meV")
+print(f"K from the band-energy difference {mae.anisotropy_mev:+.4f} meV")
+```
+
+    K from the torque at 45 deg      +0.5523 meV
+    K from the free-energy difference +0.5523 meV
+    K from the band-energy difference +1.2353 meV
+
+
 The flat line is the whole content of the theorem. Everything that makes the
 other curve bend comes from the spin-orbit term, and switching it off recovers a
 crystal that does not know which way its moment points.

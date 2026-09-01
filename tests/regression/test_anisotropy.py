@@ -43,6 +43,7 @@ from pypresso.units import RY_TO_EV
 from pypresso.workflows.anisotropy import (
     angles_from_direction,
     frozen_expectation,
+    run_torque,
     cardinal_directions,
     run_anisotropy,
     run_force_theorem,
@@ -84,6 +85,24 @@ def _smoke_pair():
         _SMOKE_SR, pseudo_dir=GENERATED.parent / "pseudo", conv_thr=1.0e-10
     )
     return scalar, scalar.get_scf()
+
+
+@lru_cache(maxsize=2)
+def _tetragonal():
+    """The one-atom tetragonal cobalt cell: cheap, and *not* cubic.
+
+    A cubic cell's anisotropy vanishes by symmetry, which is the right check
+    for the assembly and useless for the torque -- a zero derivative of a zero
+    curve says nothing. Stretching ``c/a`` to 1.30 gives a genuine uniaxial
+    ``K1`` in one atom and eighteen k-points.
+    """
+    directory = GENERATED.parent / "pseudo"
+    return (
+        Calculator.from_file(GENERATED / "co-tetragonal-anisotropy-sr.in",
+                             pseudo_dir=directory, announce=False),
+        Calculator.from_file(GENERATED / "co-tetragonal-anisotropy-soc.in",
+                             pseudo_dir=directory, announce=False),
+    )
 
 
 _SMOKE_SR = """
@@ -432,3 +451,89 @@ def test_the_decomposition_recovers_the_band_energy_up_to_the_spilling():
     }
     assert set(p_up) == {0, 1, 2}
     assert p_up[1] == pytest.approx(p_up[2], rel=1e-8)
+
+
+# ----------------------------------------------------------------------
+# the torque: the anisotropy as a derivative rather than a difference
+# ----------------------------------------------------------------------
+
+@pytest.mark.slow
+def test_the_torque_reproduces_the_free_energy_difference():
+    """One angle against two, and they share almost no machinery.
+
+    ``run_anisotropy`` takes the anisotropy as ``E(n_1) - E(n_2)``: two
+    independent diagonalisations differenced, with seven digits of
+    cancellation. ``run_torque`` takes it as ``-dF/dtheta`` at a single angle,
+    where nothing cancels. For ``E = K1 sin^2(theta)`` the torque at 45 degrees
+    *is* ``-K1``, so the two must give the same constant -- and on tetragonal
+    cobalt they agree to **2.4e-5 meV**.
+
+    **The comparison is against the FREE energy and that is the whole point of
+    this test.** A Hellmann-Feynman derivative at frozen occupations is the
+    derivative of ``F = sum w eps - TS``, not of ``sum w eps``: the band energy
+    carries an extra ``sum (dw/dtheta) eps`` that the entropy cancels. On this
+    cell at ``degauss = 0.02`` Ry that term is **55 per cent** of the answer, so
+    comparing against ``anisotropy_mev`` instead would look like a factor-of-two
+    bug in the gradient and is not one.
+    """
+    scalar, spinor = _tetragonal()
+    scf = scalar.get_scf()
+    energies = run_anisotropy(spinor.system, spinor.pseudos, scf.density,
+                              directions="xz")
+    torque = run_torque(spinor.system, spinor.pseudos, scf.density)
+
+    assert torque.anisotropy_constant_mev == pytest.approx(
+        energies.free_anisotropy_mev, abs=2.0e-3
+    )
+    # ... and it is emphatically not the band-energy difference here.
+    assert abs(energies.anisotropy_mev - energies.free_anisotropy_mev) > 0.5
+
+
+@pytest.mark.slow
+def test_the_torque_is_the_gradient_of_the_energy_it_claims_to_be():
+    """Two checks that need no second method at all.
+
+    ``sum w <psi|H|psi>`` must reproduce ``sum w eps`` at the angle the states
+    came from -- one line that catches a wrong contraction, a lost weight or a
+    mis-shaped spinor -- and the analytic gradient must reproduce a central
+    difference of that same functional.
+    """
+    import jax.numpy as jnp
+    from pypresso.forces.torque import band_energy_at_angle, torque_at_angle
+
+    scalar, spinor = _tetragonal()
+    scf = scalar.get_scf()
+    result = run_torque(spinor.system, spinor.pseudos, scf.density)
+    assert result.residual * RY_TO_EV * 1000 < 1.0e-6, (
+        "sum w <psi|H|psi> does not reproduce sum w eps"
+    )
+
+    # The gradient against a central difference of its own functional.
+    from pypresso.scf.continuation import nc_magnetization_from_lsda
+    from pypresso.workflows.anisotropy import _with_quantization_axis
+    from pypresso.workflows.nscf import fixed_density_states
+
+    angle, plane = result.angle, result.plane
+    direction = (np.cos(angle) * np.asarray(plane[0])
+                 + np.sin(angle) * np.asarray(plane[1]))
+    system = _with_quantization_axis(spinor.system, tuple(direction))
+    rotated = nc_magnetization_from_lsda(scf.density, tuple(direction))
+    calculation, system, eigenvalues, states = fixed_density_states(
+        system, spinor.pseudos, rotated, conv_thr=1.0e-10)
+    weights, _ = calculation.occupations(jnp.asarray(eigenvalues))
+
+    step = 1.0e-3
+    def energy(value):
+        return float(band_energy_at_angle(
+            calculation, states, weights, scf.density, plane, value))
+    difference = (energy(angle + step) - energy(angle - step)) / (2 * step)
+    analytic = -torque_at_angle(
+        calculation, states, weights, scf.density, plane, angle)
+    assert analytic == pytest.approx(difference, rel=1.0e-5)
+
+
+def test_the_rotation_plane_must_be_orthogonal():
+    scalar, spinor = _tetragonal()
+    with pytest.raises(ValueError, match="orthogonal"):
+        run_torque(spinor.system, spinor.pseudos, np.zeros((2, 4, 4, 4)),
+                   plane=((0, 0, 1), (0, 0.3, 1)))

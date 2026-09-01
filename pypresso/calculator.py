@@ -966,6 +966,21 @@ class Calculator:
             **self._defaults_for(run_anisotropy, options),
         )
 
+    def get_torque(self, spinor, angle=None, **options):
+        """The magnetic torque, and the anisotropy constant from one angle.
+
+        The derivative route to what :meth:`get_anisotropy` takes as a
+        difference -- see :func:`pypresso.workflows.anisotropy.run_torque`.
+        """
+        from pypresso.workflows.anisotropy import run_torque
+
+        result = self._ground_state("the magnetic torque")
+        system, pseudos = _spinor_leg(spinor)
+        merged = self._defaults_for(run_torque, options)
+        if angle is not None:
+            merged["angle"] = angle
+        return run_torque(system, pseudos, result.density, **merged)
+
     def get_first_order_soc(self, spinor, direction=None, **options):
         """The spin-orbit term's expectation value at coupling-free states.
 
