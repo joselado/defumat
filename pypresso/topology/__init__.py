@@ -37,7 +37,14 @@ from pypresso.topology.invariants import (
     z2_invariant,
     z2_invariant_3d,
 )
-from pypresso.topology.mesh import PlaneMesh, plane_mesh, pumping_mesh, trim_points
+from pypresso.topology.mesh import (
+    PlaneMesh,
+    plane_mesh,
+    pumping_mesh,
+    string_mesh,
+    trim_points,
+)
+from pypresso.topology.polarization import Polarization, StringPhases
 from pypresso.topology.parity import ParityInvariant, fu_kane_z2, inversion_centre
 from pypresso.topology.registry import (
     curvature_methods,
@@ -80,6 +87,9 @@ __all__ = [
     "plane_wave_kubo",
     "pumping_mesh",
     "trim_points",
+    "string_mesh",
+    "Polarization",
+    "StringPhases",
     "velocity_matrices",
     "wilson_z2",
     "z2_invariant",

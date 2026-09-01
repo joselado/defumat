@@ -20,6 +20,7 @@ from pypresso.workflows.relax import RelaxResult, run_relax
 from pypresso.workflows.conductivity import run_conductivity
 from pypresso.workflows.nesting import run_nesting
 from pypresso.workflows.tddft import OpticalSpectrum, run_absorption
+from pypresso.workflows.polarization import run_polarization
 from pypresso.workflows.topology import (
     DFTSource,
     run_berry_curvature,
@@ -31,6 +32,7 @@ __all__ = [
     "BandStructure",
     "OpticalSpectrum",
     "DFTSource",
+    "run_polarization",
     "DensityOfStates",
     "NSCFResult",
     "RelaxResult",

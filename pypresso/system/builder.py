@@ -148,6 +148,14 @@ class System(eqx.Module):
     #: Which local-weight scheme the atom-resolved quantities use; see
     #: :mod:`pypresso.scf.locals`.
     local_weights: str = eqx.field(static=True, default="qe")
+    #: ``lberry``/``gdir``/``nppstr``: the Berry-phase polarization run
+    #: (``bp_c_phase.f90``), as ``(gdir, nppstr)`` with ``gdir`` **0-based**
+    #: here where the input variable is 1-based, or ``None`` when ``lberry`` is
+    #: absent or false. It selects nothing on its own -- an SCF ignores it --
+    #: and only supplies the defaults of
+    #: :meth:`~pypresso.calculator.Calculator.get_polarization`, so that a
+    #: ``pw.x`` input for that run transfers unchanged.
+    berry: tuple | None = eqx.field(static=True, default=None)
     #: ``spiral_q``: the wavevector of a spin spiral, in **lattice**
     #: coordinates, as Elk's ``vqlss`` is (P19). ``None`` -- the normal case --
     #: is no spiral. See :mod:`pypresso.system.spiral`.
@@ -797,6 +805,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         ) if pwin.get("system", "r_m") is not None else (),
         local_weights=str(pwin.get("system", "local_weights", "qe")).lower(),
         hubbard=_hubbard(pwin, structure),
+        berry=_berry(pwin),
         spiral_q=spiral_q,
         vdw_corr=vdw_corr,
         london_s6=float(pwin.get("system", "london_s6", 0.75)),
@@ -1259,6 +1268,37 @@ def local_moments(
         axis=1,
     )
     return magnitudes[types, None] * directions[types]
+
+
+def _berry(pwin: PwInput) -> tuple | None:
+    """``(gdir, nppstr)`` from a ``lberry`` input, or ``None``.
+
+    ``gdir`` is turned 0-based on the way in, which is where the whole package
+    keeps its Cartesian and crystal direction indices; ``pw.x``'s own variable
+    is 1-based and is documented as such in ``INPUT_PW``. Reading them costs
+    nothing and not reading them was a gap of the kind ``_REFUSED_SWITCHES``
+    exists for: an input asking for a polarization would have run an ordinary
+    SCF and reported success.
+    """
+    if not bool(pwin.get("control", "lberry", False)):
+        return None
+    gdir = pwin.get("control", "gdir")
+    nppstr = pwin.get("control", "nppstr")
+    if gdir is None or nppstr is None:
+        raise ValueError(
+            "lberry = .true. needs both gdir (which reciprocal lattice vector "
+            "the strings run along, 1, 2 or 3) and nppstr (how many k-points "
+            "each string carries); pw.x's bp_c_phase stops on the same pair"
+        )
+    gdir = int(gdir)
+    if gdir not in (1, 2, 3):
+        raise ValueError(f"gdir must be 1, 2 or 3, got {gdir}")
+    if int(nppstr) < 3:
+        raise ValueError(
+            f"nppstr must be at least 3, got {nppstr}: it counts the repeated "
+            "endpoint, so a string carries nppstr - 1 distinct k-points"
+        )
+    return (gdir - 1, int(nppstr))
 
 
 def _spiral_q(pwin: PwInput, nspin: int, lspinorb: bool, nosym: bool) -> tuple | None:

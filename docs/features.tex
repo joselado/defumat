@@ -1467,6 +1467,74 @@ non-degenerate band; inside a degenerate multiplet only the sum over the members
 is defined, and \code{curvature} (the manifold total) always is.
 \end{refuses}
 
+\subsection{The Berry-phase polarization}
+
+The polarization of a crystal is not the dipole of its unit cell --- that
+integral depends on where the cell is cut. What is a property of the crystal is
+a \emph{phase}: the Berry phase the occupied manifold accumulates as $\mathbf k$
+crosses the zone once along a reciprocal lattice vector $\mathbf b_i$
+(King-Smith and Vanderbilt, PRB \textbf{47}, 1651 (1993)),
+\begin{equation*}
+  \Omega\,\mathbf P = \sum_i \frac{\varphi_i}{2\pi}\,\mathbf a_i,
+  \qquad
+  \varphi_i = \underbrace{\operatorname{Im}\ln \prod_{j}
+    \det M^{(\mathbf b_i/N)}(\mathbf k_j)}_{\text{electronic}}
+  \;+\; \underbrace{2\pi\sum_a Z^{\mathrm v}_a\, s_{a i}}_{\text{ionic}}
+\end{equation*}
+with $M$ the same overlap the invariants above are built from and $s_{ai}$ the
+atom's crystal coordinate. It is the \emph{determinant} of the overlap that is
+kept here where a Wilson loop keeps the eigenvalues, which is the whole
+difference between the two calculations.
+
+\textbf{The value is defined modulo a quantum} and the result object carries it.
+A single number is not a physical statement: what is meaningful is a
+\emph{difference} between two geometries taken on the same branch, which is what
+a Born effective charge and a piezoelectric constant are made of.
+
+\begin{pycode}
+from pypresso.workflows.polarization import run_polarization
+
+p = run_polarization(system, pseudos, scf.density,
+                     gdir=2,            # 0-based; pw.x's gdir = 3
+                     nppstr=6,          # as pw.x counts it
+                     transverse=(2, 2))
+print(p.total_phase, p.quantum)         # -0.2412383  (mod 1)
+print(p.polarization_si)                # -0.34909 C/m^2, mod 1.44708
+print(p.strings.phases)                 # one phase per string, four here
+\end{pycode}
+
+\code{Calculator.get\_polarization()} reads \code{lberry}, \code{gdir} and
+\code{nppstr} straight off a \code{pw.x} input, so a polarization run transfers
+unchanged. \code{nppstr} counts the repeated endpoint the way \code{kp\_strings}
+does; the mesh built here carries \code{nppstr - 1} distinct points and closes
+the string with the reciprocal lattice vector, which is the same links and one
+diagonalisation fewer per string.
+
+\begin{refuses}
+\textbf{Refuses.} A \textbf{metal} --- a Berry phase is a property of a gapped
+manifold, and a smeared occupation does not say which bands the string carries.
+\textbf{\code{nspin = 2}}: two channels are two independent string sets and one
+phase each, which is a layout this does not have rather than a missing term.
+And a \textbf{spin spiral}, whose two spinor components live on spheres centred
+at $\mathbf k \pm \mathbf q/2$, so a string overlap is not a single gather.
+Ultrasoft and PAW are \emph{not} refused --- $q_{ij}(\mathbf b)$ reaches the
+overlap exactly as it does for a Chern number --- but no soft case is committed,
+because the only \code{pw\_berry} reference is UPF v1 and the reader refuses it.
+\end{refuses}
+
+\textbf{Validated three ways, two of which need no other code.} Against
+\code{pw.x}'s own \code{lberry} run on AlAs it agrees \emph{string by string} and
+on every digit printed (electronic phase 0.00876, total $-0.24124$). The Zak
+phase of the SSH model is pinned to $0$ or $\pi$ by symmetry and comes out
+exactly that on a mesh of \emph{any} size ($10^{-10}$), and silicon is pinned by
+inversion to $0$ or half a quantum, landing on the half ($10^{-8}$). Silicon is
+also the second \code{pw.x} reference, and the one that exercises the quantum of
+2: both its species carry an even valence, where AlAs's arsenic does not. The strongest is
+$\mathrm dP/\mathrm du$ against the Born charges, which come from a Sternheimer
+solve and share no machinery with a string of overlaps: AlAs on an
+$8\times8\times8$ ground state gives $Z^*(\mathrm{Al}) = +2.148$ against
+\code{ph.x}'s $+2.142$, charge-neutral to $5\times10^{-5}$.
+
 % =====================================================================
 \section{Effective masses, site angular momenta and Fermi-surface nesting}
 

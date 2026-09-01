@@ -76,6 +76,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Where a metal will go unstable: Fermi-surface nesting | `get_nesting()` | [31](31_fermi_surface_nesting.ipynb) |
 | A photocurrent with no junction: the bulk photovoltaic effect | `get_shift_current()` | [32](32_shift_current.ipynb) |
 | Second-harmonic generation: red light in, blue light out | `get_shg()` | [33](33_second_harmonic_generation.ipynb) |
+| The electric polarization of a crystal, and Born charges from it | `get_polarization()` | [34](34_electric_polarization.ipynb) |
 | An effective mass | `get_effective_mass()` | [29](29_effective_mass_and_angular_momenta.ipynb) |
 
 ### Topology
@@ -145,6 +146,7 @@ want a number.
 | [`31_fermi_surface_nesting.ipynb`](31_fermi_surface_nesting.ipynb) | Where a metal will go unstable: a hydrogen chain nesting at 2k_F, and the spin spiral that relaxes to the same pitch |
 | [`32_shift_current.ipynb`](32_shift_current.ipynb) | A solar cell with no junction: AlAs carries a current under light where silicon's inversion centre forbids one |
 | [`33_second_harmonic_generation.ipynb`](33_second_harmonic_generation.ipynb) | Frequency doubling: AlAs against the all-electron code Elk, and why the absorption starts at half the gap |
+| [`34_electric_polarization.ipynb`](34_electric_polarization.ipynb) | Why polarization is a phase and not a dipole, the Born charge read off a displacement, and the sum rule that catches a badly sampled zone |
 
 ## Conventions
 
@@ -240,7 +242,7 @@ workstation core, slowest last:
 | `03` | 10 | `18` | 29 | `19` | 47 | `08` | 171 |
 | `05` | 10 | `12` | 30 | `10` | 50 | `27` | 178 |
 | `04` | 12 | `21` | 30 | `20` | 57 | `33` | 115 |
-| `22` | 12 | `15` | 31 | `29` | 59 |  |  |
+| `22` | 12 | `15` | 31 | `29` | 59 | `34` | 40 |
 | `00` | 22 | `24` | 31 | `13` | 69 |  |  |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two

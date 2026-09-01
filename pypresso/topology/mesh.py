@@ -25,6 +25,9 @@ Three shapes are needed and all three are the same object:
 * a **pumping mesh**, closed along the loop direction and open along the other,
   which is swept over half the Brillouin zone -- what a Wilson loop needs
   (:mod:`pypresso.topology.wilson`);
+* a **string mesh**, open across the transverse plane and closed along one
+  reciprocal lattice vector, which is what a Berry-phase polarization is
+  averaged over (:mod:`pypresso.topology.polarization`);
 * the **time-reversal-invariant momenta**, a bare list of points
   (:mod:`pypresso.topology.parity`).
 
@@ -46,6 +49,7 @@ __all__ = [
     "PlaneMesh",
     "plane_mesh",
     "pumping_mesh",
+    "string_mesh",
     "trim_points",
     "PLANE_AXES",
 ]
@@ -207,6 +211,63 @@ def pumping_mesh(
     span2 = np.zeros(3, dtype=int)
     span2[pump] = 1
     return PlaneMesh(points=points, span1=span1, span2=span2, closed=(True, False))
+
+
+def string_mesh(
+    transverse: tuple[int, int],
+    npoints: int,
+    gdir: int = 2,
+    shift: tuple[int, int, int] = (0, 0, 0),
+) -> PlaneMesh:
+    """The strings a Berry-phase polarization along ``gdir`` is averaged over.
+
+    ``transverse`` is the number of points along the two crystal directions
+    *other* than ``gdir``, in the cyclic order of :data:`PLANE_AXES`, and
+    ``npoints`` the number of **distinct** k-points on each string. The mesh is
+    open across the transverse plane -- no overlap is ever taken in that
+    direction, the strings being independent -- and closed along ``gdir``, whose
+    span is the unit reciprocal vector.
+
+    ``npoints`` is one fewer than QE's ``nppstr``. ``kp_strings`` lays out
+    ``nppstr`` points spanning the whole reciprocal vector, so its last point is
+    the first one's periodic image; here the repeat is dropped and the wrap
+    closes the string instead, which leaves the same links and one fewer
+    diagonalisation per string. A run being compared against ``pw.x`` therefore
+    takes ``npoints = nppstr - 1``.
+
+    ``shift`` is QE's ``k1, k2, k3``: a half-step offset per crystal direction.
+    Its ``gdir`` entry is ignored, because a string has to start where it can
+    close on itself and an offset along it is a relabelling of the same loop.
+    """
+    axis = gdir % 3
+    d1, d2 = PLANE_AXES[axis]
+    n1, n2 = int(transverse[0]), int(transverse[1])
+    npoints = int(npoints)
+    if n1 < 1 or n2 < 1:
+        raise ValueError(f"a string mesh needs at least one string per direction, got {transverse}")
+    if npoints < 2:
+        raise ValueError(
+            f"a string needs at least two k-points to have a phase, got {npoints} "
+            "(this is nppstr - 1, one fewer than the number pw.x is given)"
+        )
+
+    offsets = np.asarray(shift, dtype=float)
+    first = (np.arange(n1) + 0.5 * offsets[d1]) / n1
+    second = (np.arange(n2) + 0.5 * offsets[d2]) / n2
+
+    points = np.zeros((n1, n2, npoints, 3))
+    points[..., d1] = first[:, None, None]
+    points[..., d2] = second[None, :, None]
+    points[..., axis] = (np.arange(npoints) / npoints)[None, None, :]
+
+    span2 = np.zeros(3, dtype=int)
+    span2[axis] = 1
+    return PlaneMesh(
+        points=points.reshape(n1 * n2, npoints, 3),
+        span1=np.zeros(3, dtype=int),
+        span2=span2,
+        closed=(False, True),
+    )
 
 
 def trim_points(dimension: int = 3, axis: int = 2, offset: float = 0.0) -> np.ndarray:

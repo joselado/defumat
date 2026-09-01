@@ -885,6 +885,30 @@ class Calculator:
                                    **self._call_options(run_berry_curvature,
                                                         result, options))
 
+    def get_polarization(self, **options):
+        """The Berry-phase polarization along one reciprocal lattice vector.
+
+        ``pw.x``'s ``lberry`` run: strings of k-points along ``gdir``, the
+        occupied manifold's Berry phase along each, and the ions' phase on top.
+        The value is defined **modulo a quantum**, which the result carries --
+        what is physical is a *difference* between two geometries, not the
+        number on its own.
+        """
+        from pypresso.workflows.polarization import run_polarization
+
+        berry = getattr(self.system, "berry", None)
+        if berry is not None:
+            # `lberry`, `gdir` and `nppstr` off the input, so that a pw.x
+            # polarization run transfers unchanged. An explicit argument still
+            # wins, which is what makes a convergence sweep possible without
+            # editing the input file.
+            options.setdefault("gdir", berry[0])
+            options.setdefault("nppstr", berry[1])
+        result = self._ground_state("the Berry-phase polarization")
+        return run_polarization(self.system, self.pseudos, result.density,
+                                **self._call_options(run_polarization,
+                                                     result, options))
+
     def get_chern(self, **options) -> float:
         """The Chern number of one plane -- an exact integer on any mesh."""
         return self.get_berry_curvature(**options).chern_number

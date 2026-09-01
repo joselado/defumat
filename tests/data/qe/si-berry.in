@@ -1,0 +1,39 @@
+! Silicon: the Berry-phase polarization, and the case that exercises the
+! **quantum of 2**.
+!
+! The ground state is `si2-nosym.in`'s, at a tighter `conv_thr` for the reason
+! `alas-berry.in` gives. Silicon is here rather than as a second zincblende
+! because it is the case AlAs cannot be:
+!
+!   * both species carry an **even** valence (4), so the phase is defined
+!     modulo 2 rather than modulo 1, and the electronic and ionic halves are
+!     reduced by different quanta from the total;
+!   * it is **centrosymmetric**, so the total phase can only be 0 or exactly
+!     half a quantum. It comes out 1.00000 (mod 2), which is the half -- not
+!     zero, and nothing in either code imposes it.
+!
+! `pw.x` reduces the transverse grid with the lattice point group whatever
+! `nosym` says (`kp_strings` passes `skip_equivalence = .false.`), so its ten
+! weighted strings are this input's 4x4 transverse grid folded; the strings are
+! all identically zero here, so the two string sets agree term by term anyway.
+ &control
+    calculation = 'nscf'
+    lberry = .true.
+    gdir = 3
+    nppstr = 8
+    prefix = 'si'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.2, nat = 2, ntyp = 1,
+    ecutwfc = 12.0, nosym = .true., noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-12
+ /
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS (automatic)
+ 4 4 8 0 0 0

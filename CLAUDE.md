@@ -357,11 +357,34 @@ ends of one contraction. Everything agrees with `dynmat.x` to every digit it pri
 line of code, and it holds on AlAs to **5.0e-11** — but only after the Born charges are made
 charge-neutral. With the raw ones it is out by 1.6e-3, and the mechanism is the finding:
 `sum_a Z*_a = 0` says a rigid translation builds no field, a computed `Z*` misses it by the
-basis-set error (-1.257 here), and `nonanal` then charges the crystal and lifts a
-**longitudinal acoustic** mode from 1.8 to 33.8 cm^-1. `dynmat.x` reproduces every one of
+error of a finite calculation (-1.257 here), and `nonanal` then charges the crystal and
+lifts a **longitudinal acoustic** mode from 1.8 to 33.8 cm^-1. **That -1.257 was called a
+basis-set error here and it is the k-grid** (P56): `ph.x` on the same cell gives -1.25637,
+-0.21619 and -0.00787 on 4x4x4, 6x6x6 and 8x8x8, where raising `ecutwfc` from 10 to 30
+makes it *worse*, -1.257 to -1.445. LST is untouched, being a statement about the ratio. `dynmat.x` reproduces every one of
 those wrong numbers. AlAs comes out at TO 353.3 / LO 391.5 cm^-1 against a measured 361 and
 402, and `eps_0/eps_infinity = 1.228` against 1.233 from the measured constants — the two
 constants are far too large at `ecutwfc = 10` and their *ratio* is not, which is LST again.
+
+**The Berry-phase polarization is in** (P56), which is the piece `ELK-FEATURES.md` §7
+names as the magnetoelectric tensor's missing ingredient and the piece P50 refuses a polar
+crystal for. It is a Wilson loop with the *determinant* kept instead of the eigenvalues:
+`topology/links.py` already had the gauge-invariant primitive, so ultrasoft `q_ij(b)` and
+the zone-edge index shift came along for free. Against a `pw.x` `lberry` run generated for
+it — the committed `pw_berry` cases are PbTiO3 in **UPF v1**, which the reader refuses —
+AlAs agrees string by string: 0.02777/0.00252/0.00252/0.00224, an electronic phase of
+0.00876 and a total of -0.24124, every digit `pw.x` prints. **Two checks share nothing with
+QE**: the SSH model's Zak phase is exactly `0` or `pi` on a mesh of *any* size (1e-10), and
+silicon is pinned to 0 or half a quantum by inversion (1e-6). **The strongest is `dP/du`
+against the Born charges**, which come from a Sternheimer solve: on an 8x8x8 AlAs ground
+state the Berry route gives Al +2.14794 / As -2.14789 where `ph.x` gives +2.14177 /
+-2.14965 and this package's own field response reproduces `ph.x` to 1e-5. **Getting there
+corrected P55**: on the 4x4x4 grid the two routes disagree by 50 per cent and neither is a
+bug — both DFPT codes agree with *each other* and are short of k-points, while a string
+phase is a one-dimensional integral and converges along the string. Generating the
+reference also found that at `pw_berry`'s own default `conv_thr` two *symmetry-equivalent*
+strings come out 1e-5 apart, which reads as our disagreement and is QE's threshold.
+**Refused by name:** a metal, `nspin = 2` and a spin spiral.
 
 **Optical spectra with excitons are in** (P37), and they are the first thing here built on
 a **sum over states**: an absorption spectrum needs `chi_0` as a matrix over reciprocal

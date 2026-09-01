@@ -3363,6 +3363,56 @@ field and displacement responses that produce `Z*`, `eps` and the force constant
 are **40 s** on this cell, so the whole of P55 is 2 parts per million of the
 calculation it completes.
 
+## What a Berry-phase polarization costs (P56)
+
+`run_polarization` is an NSCF on the string mesh plus a product of determinants,
+and the second is free at any size a plane-wave code would run -- the strings
+are the whole cost, and there is one diagonalisation per point on them.
+
+### Against `pw.x`, which is where this one was taken from
+
+AlAs at `ecutwfc = 10`, `gdir = 3`, `nppstr = 6`, a 2x2 transverse grid --
+`tests/data/qe/alas-berry.in` and the ground state of `alas-raman.in`. One core
+on both sides, `OMP_NUM_THREADS=1` and the affinity mask set before JAX is
+imported (the mechanism `tools/compare_qe.py` documents), both starting from a
+converged density already on disk.
+
+| | `pw.x` (`lberry` nscf) | pypresso (`run_polarization`) |
+|---|---|---|
+| k-points diagonalised | 24 (4 strings x 6) | 20 (4 strings x 5) |
+| wall clock | **0.11 s** | **0.34 s** warm, 1.73 s cold |
+| per k-point | 4.6 ms | 17 ms |
+
+**3.1x on the wall clock and 3.7x per k-point**, which is the band `PERFORMANCE.md`
+already reports for the SCF itself -- no surprise, because the string walk *is*
+`c_bands` and nothing else. The two rows are directly comparable: same cell,
+same cutoff, same threshold, same ground state, and both are dominated by the
+eigensolver.
+
+**The k-point row is the one asymmetry and it is in our favour by design.**
+`kp_strings` lays out `nppstr` points spanning the whole reciprocal vector, so
+its last point is the first one's periodic image and is diagonalised a second
+time; the mesh here drops the repeat and closes the string with the index shift
+instead. That is a free 1/`nppstr` -- 17 per cent here, 9 per cent at
+`nppstr = 12` -- and it is why the per-k ratio is worse than the wall-clock one.
+
+**The determinants are not the cost and were measured to say so.** Four strings
+of five links each is twenty `4x4` `slogdet` calls: below the timer's resolution,
+and under a millisecond even on the 6x6 x 12 mesh (396 points) the convergence
+study used. The phase needs no equivalent of P52's FFT trick, because there is
+nothing quadratic in it -- a polarization is a sum over strings, not a
+correlation between them.
+
+### The working set
+
+One string at a time, which is the memory decision
+`wannier_centers` already makes: the resident set is
+`npoints x nbnd x npwx` complex and the *number of strings never enters it*.
+For AlAs that is 5 x 4 x 331 x 16 B = 106 kB; for a 200-electron cell on a
+12-point string at `npwx = 40000` it is 12 x 100 x 40000 x 16 B = 768 MB, which
+is the number to check against a machine before asking for a dense transverse
+grid. Raising the transverse grid costs time and no memory at all.
+
 ## History
 
 | Date | Change | Effect |

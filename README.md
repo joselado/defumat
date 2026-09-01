@@ -57,6 +57,7 @@ drive any of this and is what the examples below use.
 | **Relaxing the spiral wavevector** down `dE/dq` to the ground-state pitch | `relax_spiral_q` | | |
 | **Berry curvature and Chern numbers** — exact integers on any mesh, and a smooth `Omega(k)` map with the truncation of its band sum reported | `run_berry_curvature`, `method="kubo"` for the map | | |
 | **Z2 invariants** in 2D and 3D, by Wannier charge centres *and* by parities | `run_z2`, `run_z2_3d` | | |
+| **Berry-phase polarization** — King-Smith and Vanderbilt's phase along one reciprocal lattice vector, with the quantum it is defined modulo carried beside it. Insulators; metals, `nspin = 2` and spin spirals are refused | `lberry`/`gdir`/`nppstr`, `run_polarization`, `Calculator.get_polarization` | ✓ | ✓ |
 | **Continuing one run from another across a change of spin regime** — a converged non-magnetic density as the starting point of a magnetic run, a collinear one of a noncollinear run, spin-orbit coupling switched on | `run_scf(starting_from=...)`, `System.with_spin` | (✓)¹ | |
 | **Reaching self-consistency** — Anderson/Broyden mixing, Kerker preconditioning, or solving the residual with its own Jacobian, which reaches magnetic solutions no mixer does | `run_scf(mixing_mode=...)`, `run_scf(scf_solver=...)` | (✓)² | (✓)² |
 | **Band velocities** `d(eps)/dk`, with the nonlocal pseudopotential's own contribution — norm-conserving, ultrasoft and PAW | `band_velocities`, `VelocityOperator` | (✓)³ | |
@@ -340,3 +341,4 @@ this code was written by reading it.
 The pseudopotential files under `tests/data/pseudo/` come from the Quantum
 ESPRESSO pseudopotential library and carry their own terms.
 | [`33_second_harmonic_generation`](notebooks/33_second_harmonic_generation.ipynb) | Frequency doubling in AlAs: the tensor zincblende allows, checked against the all-electron code Elk |
+| [`34_electric_polarization`](notebooks/34_electric_polarization.ipynb) | Polarization as a Berry phase, the Born charge read off a displacement, and the sum rule that catches an undersampled zone |

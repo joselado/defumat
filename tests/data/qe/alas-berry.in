@@ -1,0 +1,44 @@
+! AlAs: the Berry-phase polarization along the third reciprocal lattice vector.
+!
+! The ground state is `alas-raman.in`'s -- the same cell, cutoff, k-grid and
+! `nosym`/`noinv` -- so the two cases share a converged density and this input
+! is only the `lberry` post-processing on top of it.
+!
+! Two things about the settings are deliberate and both are recorded in
+! `reference.out.alas-berry` beside this file:
+!
+!   * `conv_thr = 1e-12`, where the pw_berry test-suite cases leave it at the
+!     default. At the default the two symmetry-equivalent strings of this k-set
+!     come out 1e-5 apart (0.00250 against 0.00251) and the electronic phase is
+!     0.00875; tightened, they agree with each other exactly and the phase is
+!     0.00876. The looser number is not the converged one.
+!   * `nppstr = 6` counts the repeated endpoint, as `kp_strings` lays it out --
+!     six points spanning the whole reciprocal vector, the last being the
+!     first one's periodic image. The string carries five *distinct* points.
+!
+! AlAs is zincblende and non-centrosymmetric, so its total phase is not pinned
+! to 0 or half a quantum by symmetry the way a diamond crystal's is.
+ &control
+    calculation = 'nscf'
+    lberry = .true.
+    gdir = 3
+    nppstr = 6
+    prefix = 'alas'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.575, nat = 2, ntyp = 2,
+    ecutwfc = 10.0
+    nosym = .true.
+    noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-12
+ /
+ATOMIC_SPECIES
+ Al  26.98  Al.pz-vbc.UPF
+ As  74.92  As.pz-bhs.UPF
+ATOMIC_POSITIONS (alat)
+ Al 0.00 0.00 0.00
+ As 0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 6 0 0 0

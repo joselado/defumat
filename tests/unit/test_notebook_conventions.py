@@ -65,6 +65,7 @@ REWRITTEN = {
     "31_fermi_surface_nesting",
     "32_shift_current",
     "33_second_harmonic_generation",
+    "34_electric_polarization",
 }
 
 #: Notebooks that still say ``jvp`` in a plot label or a code cell. Prose debt
@@ -124,6 +125,7 @@ HAS_A_FACADE_METHOD = {
     "run_z2": "get_z2",
     "run_z2_3d": "get_z2_3d",
     "VelocityOperator": "get_band_velocities",
+    "run_polarization": "get_polarization",
 }
 
 

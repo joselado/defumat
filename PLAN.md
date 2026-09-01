@@ -8094,10 +8094,22 @@ with no SCF at all (`tests/unit/test_spectra.py`).
 
 **And it is what found the finding.** With the *raw* Born charges LST is
 violated by **1.6e-3** and the mechanism is visible: `sum_a Z*_a = 0` says a
-rigid translation builds no field, a computed `Z*` misses it by the basis-set
-error (AlAs at `ecutwfc = 10`: **-1.257** against charges of 1.925 and -3.181),
-and `nonanal` then charges the crystal and lifts a **longitudinal acoustic**
-mode from 1.8 to 33.8 cm^-1 while putting the LO frequency 7.7 cm^-1 low.
+rigid translation builds no field, a computed `Z*` misses it by the error of a
+finite calculation (AlAs at `ecutwfc = 10` on the 4x4x4 grid: **-1.257** against
+charges of 1.925 and -3.181), and `nonanal` then charges the crystal and lifts a
+**longitudinal acoustic** mode from 1.8 to 33.8 cm^-1 while putting the LO
+frequency 7.7 cm^-1 low.
+
+**This paragraph used to call that -1.257 the *basis-set* error and that was
+wrong; it is the k-grid, and P56 measured it.** `ph.x` on the same cell and
+cutoff gives an acoustic sum rule of **-1.25637 on 4x4x4, -0.21619 on 6x6x6 and
+-0.00787 on 8x8x8**, with `Z*(Al)` going 1.92461 -> 2.10444 -> 2.14177; raising
+`ecutwfc` from 10 to 30 instead moves it the *wrong* way, from -1.257 to -1.445,
+and it stays there. So the violation converges away in `k` and not in the basis,
+and the charges this cell reports are not near their converged values -- which
+does not touch P55's own conclusion, because LST is a statement about the
+*ratio* and the whole point of `neutralize=True` is that it does not need the
+charges to be converged.
 `dynmat.x` reproduces every one of those wrong numbers, because it is handed
 the same charges — this is a case where the reference implementation agrees
 with a wrong answer and only an identity separates them. `neutralize=True` is
@@ -8129,6 +8141,158 @@ a dispersion through it needs phonons at `q != 0`; the two-dimensional form
 (`loto_2d`, for a slab, where the `1/q` divergence is different) is not
 written; and everything the Raman tensors and the Born charges refuse is
 refused here, since it is built from both.
+
+### P56 — The Berry-phase polarization. ✅ DONE.
+
+`pypresso/topology/polarization.py` and `pypresso/workflows/polarization.py`,
+with `string_mesh` in `topology/mesh.py` and `Calculator.get_polarization`.
+King-Smith and Vanderbilt's phase (PRB 47, 1651 (1993)): the polarization of a
+crystal is not the dipole of its cell -- that integral depends on where the cell
+is cut -- but the Berry phase the occupied manifold accumulates as `k` crosses
+the zone along one reciprocal lattice vector.
+
+**It is the prerequisite `ELK-FEATURES.md` §7 names**, and it was chosen for
+that: the magnetoelectric tensor by Elk's route is `dP/dB` finite-differenced
+over a uniform field, and the field has been here since P18 while `P` was the
+piece that was missing. It also unblocks, in principle, P50's refusal of a
+**polar** crystal, whose improper-to-proper correction
+`delta_ki P_j - delta_ij P_k` is built entirely from `P` -- that is a separate
+phase and is *not* done here.
+
+**Structurally it is a Wilson loop with one thing kept instead of another.**
+`topology/links.py` already had the primitive: a determinant of overlaps between
+neighbouring k-points is blind to the unitary mixing a degenerate eigensolver
+leaves (D4). A Wilson loop needs the *eigenvalues* of the matrix product, so
+every factor is unitarised and the matrix structure survives; a polarization
+needs only the total phase, so each factor collapses to its determinant at once
+and the product is a product of scalars. Ultrasoft `q_ij(b)` and the zone-edge
+index shift come along for free, being properties of the overlap.
+
+**One point per string is not diagonalised, and that is deliberate.**
+`kp_strings` lays out `nppstr` points spanning the *whole* reciprocal vector, so
+its last point is the first one's periodic image -- and `bp_c_phase` then applies
+the wrap to the coefficients anyway (`map_g`, `gtr = g - gpar`). The mesh here
+carries `nppstr - 1` distinct points and closes the string with `span2`, which
+leaves the same links and the same product. `run_polarization` still takes QE's
+`nppstr`, so an input transfers unchanged.
+
+**Three conventions are transcribed rather than reinvented**, because the point
+of the phase was to be comparable with `pw.x` line by line: the branch fixing
+(average the *unit complex numbers*, take `theta0 = arg` of that, place every
+string around it, then move any string a whole turn from the first one back);
+the quantum, which is 2 only for an unpolarized run with all-even valences and 1
+otherwise; and the ionic phase, `Z_v` times the atom's crystal coordinate along
+`gdir`, reduced mod 1 for an odd valence and mod 2 for an even one. The
+`nspin = 1` **doubling** of the electronic phase is the `degspin` trap P51
+records, in a fourth place.
+
+**The reference is `pw.x` and it had to be generated.** The committed
+`test-suite/pw_berry/` cases are PbTiO3 with Vanderbilt ultrasoft datasets in
+**UPF v1**, which `pseudo/upf.py` refuses by name, and their pseudopotentials are
+not shipped. So `tests/data/qe/alas-berry.in` and `reference.out.alas-berry` are
+an `lberry` run of the *same* AlAs ground state `alas-raman.in` already carries.
+Against it, per string as well as on the totals:
+
+| | `pw.x` | pypresso |
+|---|---|---|
+| string phases | 0.02777 / 0.00252 / 0.00252 / 0.00224 | same, to 3e-6 |
+| ionic phase | -0.25000 | -0.25000 |
+| electronic phase | 0.00876 | 0.0087617 |
+| total phase | -0.24124 | -0.2412383 |
+| `P`, `(e/Omega).bohr` | -1.8038727 | -1.8038955 |
+| quantum | 7.4776542 | 7.4776542 |
+
+**Generating it found something about the reference itself.** At `pw_berry`'s own
+default `conv_thr` the two *symmetry-equivalent* strings of this k-set come out
+1e-5 apart (0.00250 against 0.00251) and the electronic phase is 0.00875; at
+`conv_thr = 1e-12` they agree with each other exactly and it is 0.00876, which is
+this code's number. The committed input carries the tight threshold and says why.
+The looser run is not wrong by much, but it is wrong in a way that reads as *our*
+1e-5 disagreement rather than as QE's own eigensolver threshold.
+
+**Silicon is the second reference and it is the one AlAs cannot be.**
+`tests/data/qe/si-berry.in` and `reference.out.si-berry`: both species carry an
+**even** valence, so the quantum is 2 rather than 1 and the ionic half is reduced
+by a different quantum from the total. `pw.x` gives an ionic phase of 1.00000
+(mod 2), an electronic phase of exactly zero and a total of 1.00000 (mod 2) --
+which is *half* a quantum, the more informative of the two values inversion
+allows, since a bug returning zero would also pass a test written as "0 or a
+half". It also records a difference between the two codes' string sets that costs
+nothing here: `kp_strings` reduces the transverse grid with the **lattice** point
+group whatever `nosym` says (`skip_equivalence = .false.`), so `pw.x` runs ten
+weighted strings where this runs the full sixteen with equal weights. Silicon's
+strings are all identically zero, so the two agree term by term.
+
+**One convention no comparison could have settled, and it is worth the
+paragraph.** The electronic phase is folded onto `[-1/2, 1/2)` **before** the
+`nspin = 1` doubling, not after -- `pdl_elec_up = phiup/tpi - nint(...)` and only
+then `pdl_elec_tot = up + dw`. Doing it the other way round differs whenever the
+doubled phase leaves that interval, and it is *wrong* rather than merely
+re-branched: an all-even cell's quantum is **2**, so shifting the total by 1
+moves it by half a quantum. **Neither reference can see it** -- AlAs's odd
+valence makes the quantum 1, where the shift is a whole one, and silicon's
+electronic phase is exactly zero. It is transcribed from the Fortran and pinned
+by a unit test on synthetic phases instead, which is the honest way to hold a
+convention that no available case exercises.
+
+**Two checks share nothing with QE.** The **Zak phase of the SSH model** is
+pinned to `0` or `pi` by chiral symmetry, and because the string product is a
+determinant of overlaps it comes out exactly that on a mesh of *any* size --
+1e-10 at 8, 21 and 40 points, in both the trivial and the topological phase. That
+is the property that makes an FHS Chern number an exact integer, one dimension
+down, and it pins the conventions with no DFT at all. And **silicon is pinned to
+0 or half a quantum** by inversion, to 1e-6, which is the check that would catch a
+sign reversed between the ionic and the electronic halves -- a reversal that
+leaves AlAs's *magnitude* right.
+
+**The strongest check is `dP/du` against the Born charges**, which come from a
+Sternheimer solve and share no machinery with a string of overlaps. Displace one
+atom, re-converge, and build `Z*_(ab) = sum_i (dphi_i/du_b) (a_i)_a` over all
+three directions with no symmetry assumed. On AlAs at `ecutwfc = 10` on an 8x8x8
+ground state, three routes to the same tensor:
+
+| | `Z*(Al)` | `Z*(As)` | sum rule |
+|---|---|---|---|
+| Berry phase, `dP/du` (this phase) | **+2.14794** | **-2.14789** | **+0.00005** |
+| field response, `dF/dE` (P24b) | +2.14177 | -2.14966 | -0.00789 |
+| `ph.x`, `zeu` | +2.14177 | -2.14965 | -0.00787 |
+
+The two Sternheimer routes agree with each other to **1e-5** -- which is P24b's
+own validation, on a cell it had never been run on -- and the Berry phase agrees
+with both to **0.3 per cent** while satisfying the acoustic sum rule two orders
+better. The tensor also comes out **isotropic** with nothing imposing cubic
+symmetry (off-diagonal 6e-5).
+
+**And that is what corrected P55.** On the 4x4x4 grid `alas-raman.in` actually
+carries, the two routes disagree by 50 per cent -- the Berry phase gives ±2.134
+with a sum rule of 5e-5 where DFPT gives 1.925 / -3.181 with -1.257. Neither is a
+bug: **pypresso's field response reproduces `ph.x` to 2e-5 at every cutoff tried**
+(1.92461 / -3.18098 at 10, 1.89120 / -3.33628 at 30), so the two DFPT codes agree
+with each other and the k-grid is what they are both short of. Two things made
+that findable and both are worth carrying. The Berry route **satisfies the
+acoustic sum rule at a sampling where DFPT does not** -- 5e-5 at 20 k-points
+against -1.257 at 64 -- because a string phase is a one-dimensional integral that
+converges along the string, where `sum_k` for `Z*` needs the whole
+three-dimensional grid. And **raising the cutoff made the DFPT violation worse**
+(-1.257 -> -1.445), which is what said it was not the basis: a basis-set error
+goes away with the basis, and this one did not.
+
+**Refused by name:** a metal (a Berry phase is a property of a gapped manifold,
+and a smeared occupation does not say which bands the string carries),
+`nspin = 2` (two channels are two independent string sets and one phase each,
+which is a layout this does not have rather than a missing term -- `pw.x` carries
+them as `nspin_lsda`), and a spin spiral (the two spinor components live on
+spheres centred at `k +- q/2`, so a string overlap is not a single gather).
+Ultrasoft and PAW are **not** refused: `q_ij(b)` reaches the overlap through
+`topology/augmentation.py` exactly as it does for a Chern number, and what is
+missing is a *case* -- the only committed UPF v1 Berry reference is the one this
+phase could not read.
+
+**Not done and named:** the polar-crystal correction to P50, which consumes `P`
+and is its own phase; `dP/dB`, the magnetoelectric tensor, which is what this was
+built for; and a Wannier-centre decomposition of the phase, which the string
+product already contains and nothing extracts.
+
 
 ## 3a. Environment decisions (settled)
 

@@ -16,9 +16,18 @@ site-resolved angular momenta — **a third in P50**, the piezoelectric tensor,
 which is the one entry that fails the cheapness filter above and was taken
 anyway (the *implementation* is one `jvp` of code that already exists), **a
 fourth in P51**, the optical conductivity tensor with the Kerr angle and the
-anomalous Hall conductivity, and **a fifth in P52**, the Fermi-surface nesting
-function. The rest are recorded here with their validation route, because that
-is the part that decides whether a phase is worth starting.
+anomalous Hall conductivity, **a fifth in P52**, the Fermi-surface nesting
+function, and **a sixth in P54**, second-harmonic generation. The rest are
+recorded here with their validation route, because that is the part that decides
+whether a phase is worth starting.
+
+**Re-surveyed 2026-09-01**, against the package as it stands now rather than as
+it stood when this file was written, and that added the last two entries below.
+Neither passes the cheapness filter above and both are here anyway, for the
+reason P50 established: what predicts effort is **how much of the assembly
+already exists**, not what the quantity costs in Elk. §7, the magnetoelectric
+tensor, is the one selected to be taken next; it had been missed altogether
+rather than rejected, which is its own lesson about walking a task list once.
 
 Doing the two taught one thing that applies to the rest: **the value of the
 comparison was in what it found, not in the agreement.** Running Elk's own
@@ -248,6 +257,169 @@ one more `jvp`) and what it needs is a two-coordinate frozen functional
 only a non-centrosymmetric, non-polar soft dataset to measure the existing one
 on, since every soft crystal committed here is centrosymmetric and agrees with
 zero however wrong the strain leg is.
+
+---
+
+## 6. The transverse spin susceptibility, and magnons
+
+**Elk tasks 330/331** (`tddftsplr.f90`, 314 lines, on `genspchi0.f90` and
+`genspfxcg.f90`).
+
+`genspchi0` builds the Kohn-Sham response as a **4x4 matrix in the spin-density
+components**,
+
+```
+chi_{ab,a'b'}(G, G', q, w) = delta rho_{ab}(G, w) / delta v_{a'b'}(G', w)
+```
+
+`tddftsplr` then Dyson-solves it against a spin-dependent `f_xc`, with the
+regularised Coulomb interaction added to the `(1,1)` element **only** -- the
+charge channel is the one that carries the Hartree term and the spin channels do
+not -- and for a collinear ground state projects out the transverse block
+(`CHI_T.OUT`, through `tfm2213`/`tfm13t`). **The pole of that block at finite `q`
+is the magnon**, so this one task gives the magnon dispersion, the Stoner
+continuum it decays into, and the spin-wave stiffness.
+
+**What QE has, precisely, and the tick is not blank.**
+`TDDFPT/src/lr_magnons_main.f90` is turboMagnon, with
+`lr_apply_liouvillian_magnons.f90`, `lr_calc_dens_magnons.f90` and
+`lr_dvpsi_magnons.f90` beside it. It is a Liouville-Lanczos solver -- the branch
+`CLAUDE.md` scopes out -- and it never forms a Dyson equation in G space. There
+is nothing in `PW/src` or `PP/src`. So this row is **`(✓)` for QE with the note,
+`✓` for Elk**, exactly as the conductivity row is, and blank would be the kind of
+wrong row the method note at the bottom of this file warns about.
+
+**What is reused.** P37 built the sum over states and the Dyson solver; what
+changes is that `chi_0` grows a 4x4 spin structure and that `q` is finite.
+P19's two-sphere `k ± q/2` machinery is what supplies the states at `k + q`, and
+`tddft/chi0.py:246` already names finite `q` as the missing piece by that name.
+The transverse ALDA kernel is `jax.grad` of the LSDA energy in the house style
+rather than a transcription of `genspfxcg`.
+
+**Validation, and it closes inside the package twice.** This is the strongest
+route in the file, and neither statement needs a second code:
+
+- **Goldstone.** A ferromagnet's `chi^{+-}` has a pole at exactly `omega = 0` as
+  `q -> 0`, because a global spin rotation costs no energy. How far the computed
+  pole sits from zero measures how consistently the kernel and the ground state
+  were built, and nothing else here tests that at all.
+- **The frozen-magnon stiffness.** P21's `run_spiral_scan` already gives `E(q)`,
+  and in the adiabatic limit `omega(q)` is proportional to `[E(q) - E(0)] / M`
+  (the constant is convention-dependent and is fixed once, on the small-`q`
+  limit, not per case). A spiral scan is a sequence of SCF total energies and a
+  susceptibility is a sum over states plus a matrix inversion: **they share no
+  machinery**, which is the P52 pairing -- nesting against `relax_spiral_q` --
+  one level up.
+
+**The ordering of the cases matters and is not the obvious one.** The natural
+magnon targets are ferromagnetic metals (bcc Fe, fcc Ni) and `chi0.py` refuses
+metals by name. The refusal's *reason* does not transfer unchanged -- the
+spin-flip occupation factor `f_i↑ - f_j↓` does not vanish for `i = j`, so the
+"the intraband term is absent entirely" argument is about the charge channel --
+but establishing that is the phase's work and not an assumption to start from.
+**Start on the antiferromagnetic hydrogen chain**: insulating, norm-conserving,
+`nosym` already for the spiral, and it has committed `E(q)` references from P21
+to check the stiffness against.
+
+**Cost, including the working set, which is the part that bites.** The Dyson
+inversion is `(4 ngrf)^2` complex per frequency: at `ngrf = 100` and 200
+frequencies that is 0.5 GB held at once, four times the charge-only case in each
+G index and sixteen in the pair. The frequency axis is trivially chunked and
+should be from the start.
+
+**README ticks:** `(✓)` for QE (turboMagnon, `TDDFPT/`, Liouville-Lanczos), `✓`
+for Elk (tasks 330/331).
+
+---
+
+## 7. The magnetoelectric tensor -- **selected as the next entry to take**
+
+**Elk task 390** (`magnetoelt.f90`, 94 lines).
+
+```
+alpha_ij = dP_i / dB_j = dM_j / dE_i
+```
+
+**This entry was missing from this file entirely until 2026-09-01**, which is
+worth recording beside it: the original survey walked the task list once, and a
+row can be absent rather than rejected.
+
+**QE has nothing**, and this one was checked wider than the usual two
+directories: `grep -ril magnetoelec` over the *whole* vendored tree is empty.
+
+**Elk's route, read rather than assumed.** `magnetoelt.f90` is the expensive
+pattern `piezoelt.f90` uses. It forces `spinpol = .true.` and `reducebf = 1`,
+and for each Cartesian component of the external field runs **two full ground
+states** at `B ∓ deltabf/2`, takes the Berry-phase polarization of each
+(`polar`), brings the two into coincidence modulo `2 pi`, and finite-differences.
+Six ground states for nine numbers. The atoms are held (`tshift = .false.`), so
+what it produces is the **clamped-ion** tensor -- the same restriction P50
+carries, and for the same reason.
+
+**Why it belongs here.** It is the defining observable of a **type-II
+multiferroic**, where the inversion symmetry that would forbid it is broken by
+the magnetic order itself -- and a spin spiral is the canonical way that happens.
+This package already computes the spiral (P19), relaxes its wavevector (P21) and
+carries the magnetic point group (P17), so the state the effect grows out of is
+here and the coupling it produces is not.
+
+**Two routes, and they are each other's check.**
+
+*Route A -- Elk's, adapted, and it needs no new response machinery.* P18 already
+has the uniform magnetic field (`B_field`, its energy written down and its
+potential `jax.grad` of that), so `dP/dB` is six SCF runs and a finite difference
+exactly as Elk does it. What it needed was the **Berry-phase polarization**, and
+**that is in as of P56** -- `run_polarization`,
+`Calculator.get_polarization` -- built out of the k-string overlaps
+`topology/links.py` already had. So this route is now six SCF runs and a
+difference, with nothing left to write but the loop. That one piece pays twice,
+as predicted: it is also what P50's refusal of a **polar** crystal is waiting on,
+the improper-to-proper correction `delta_ki P_j - delta_ij P_k` being built
+entirely from `P`.
+
+**One thing P56 changed about this entry.** It said the polarization's reference
+would be Elk's `polar`. It is not: `pw.x` computes a Berry-phase polarization
+(`bp_c_phase.f90`, reached by `lberry`) and has a committed `test-suite/pw_berry`
+directory, so QE is the primary reference and the same-basis one -- Elk drops to
+the weakest tier, as everywhere else in this file. What the `pw_berry` cases
+could *not* supply is a runnable case: both are PbTiO3 with Vanderbilt ultrasoft
+datasets in **UPF v1**, which this package's reader refuses by name. The
+reference was generated instead. **Check whether `pw.x` has a quantity before
+assuming an Elk-only entry's ingredients are Elk-only too**; this file's own
+method note says exactly that, and the ingredient slipped past it.
+
+*Route B -- the house style.* One `jvp` of the magnetization along the electric
+field's Sternheimer response: P50's assembly with the stress replaced by `M`. It
+is blocked on the **noncollinear response** (`incdrhoscf_nc`/`set_int3_nc`, the
+largest of P24's remaining refusals) and cannot be reached before that lands.
+
+**Which coordinate is differentiable decides the route, and here it is the
+reverse of Elk's situation.** There is no ground-state electric field in this
+package at all: `tefield` and `lelfield` are both in `_REFUSED_SWITCHES`
+(`system/builder.py`). So `dM/dE` cannot be finite-differenced the way `dP/dB`
+can, and Route A is the cheaper half -- which is why it is the one to start with
+even though Route B is the one that looks like every other phase here.
+
+**Spin-orbit coupling is required, and that is physics rather than plumbing.**
+Without it spin space and real space decouple, a global spin rotation is free,
+and `dM/dE` vanishes identically. A collinear `nspin = 2` run is therefore not a
+weak test case, it is a **zero** -- the P50 trap in a second place, where every
+committed soft dataset was centrosymmetric and agreed with zero however wrong the
+strain leg was. The first case must be a crystal whose tensor is not forced to
+vanish by symmetry, and that must be established from the **magnetic** point
+group before any number is believed.
+
+**Validation.** The two routes are independent and are the primary check, in the
+pattern P50 used (three contractions of one mixed derivative agreeing to 6e-15).
+Beyond that, and cheaply: the tensor must vanish identically when either
+inversion or time reversal survives, which is two extra runs; and the pattern of
+surviving components must match what the magnetic point group permits, which P17
+can produce rather than being asserted. Elk's own number is available and is the
+weakest of the three, for the reason this file gives everywhere else -- an
+all-electron polarization against a pseudopotential one.
+
+**README ticks:** blank for QE (verified over the whole tree), `✓` for Elk (task
+390).
 
 ---
 
