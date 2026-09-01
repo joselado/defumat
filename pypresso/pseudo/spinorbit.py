@@ -231,6 +231,46 @@ def pauli_blocks(components: np.ndarray) -> np.ndarray:
     ])
 
 
+
+def spin_trace(blocks: np.ndarray) -> np.ndarray:
+    """The spin-independent half of a ``(nh, nh, 2, 2)`` operator.
+
+    ``delta_{s s'} (M[..., 0, 0] + M[..., 1, 1]) / 2`` -- and the remainder,
+    ``M - spin_trace(M)``, **is** the spin-orbit coupling. That decomposition is
+    what ``soc_scale`` interpolates along, and it is worth saying why it is this
+    one rather than the obvious alternative.
+
+    The obvious alternative is to give the two ``j`` channels of a shell one
+    ``j``-averaged ``D``, which is ``average_pp.f90``'s arithmetic, and to
+    expect Clebsch-Gordan completeness to collapse ``sum_j D_j fcoef^(l,j)``
+    onto ``delta_{s s'} delta_{m m'}``. **It does not, and the reason is the
+    one thing** ``average_pp`` **does that looks cosmetic**: completeness needs
+    the two shells to share a radial function, and a fully-relativistic file
+    gives them *different* ``beta``, so ``average_pp`` merges the pair into a
+    single refitted projector with ``sqrt(D)`` weights. Averaging ``D`` alone
+    leaves ``D_bar [P_{l-1/2}(beta_a) + P_{l+1/2}(beta_b)]``, a sum of two
+    shell projectors on two different radial functions, which is **not**
+    spin-diagonal -- measured on ``Co.rel-pbe-nd-rrkjus``, its spin off-diagonal
+    block comes out at 2.2, *larger* than the coupled operator's own 1.1.
+
+    The spin trace needs no such argument. It is spin-diagonal and spin-
+    *independent* by construction, so a Hamiltonian built from it cannot
+    produce a magnetic anisotropy whatever the radial functions are; it is
+    exact for a scalar-relativistic species, where ``dvan_so`` is already
+    ``delta_{s s'} D``; and it requires nothing of the dataset, which is what
+    lets ``soc_scale`` work on ultrasoft and PAW where ``average_pp`` refuses.
+    What it is *not* is QE's scalar-relativistic dataset: that is a different
+    pseudopotential, and reproducing it is the two-file route's job
+    (:mod:`pypresso.workflows.anisotropy`), not this knob's.
+    """
+    blocks = np.asarray(blocks)
+    mean = 0.5 * (blocks[..., 0, 0] + blocks[..., 1, 1])
+    out = np.zeros_like(blocks)
+    out[..., 0, 0] = mean
+    out[..., 1, 1] = mean
+    return out
+
+
 class SpinOrbitCoupling:
     """One species' spin-orbit machinery: ``fcoef`` and what is built from it.
 
@@ -239,10 +279,28 @@ class SpinOrbitCoupling:
     where the atom sits.
     """
 
-    def __init__(self, pseudo: Pseudopotential):
+    def __init__(self, pseudo: Pseudopotential, soc_scale: float = 1.0):
         self.pseudo = pseudo
         self.nh = pseudo.nh
         self.has_so = pseudo.has_so
+        self.soc_scale = float(soc_scale)
+        if self.soc_scale not in (0.0, 1.0):
+            raise ValueError(
+                f"soc_scale = {self.soc_scale}: only 0 and 1 are implemented, "
+                "and the reason is the overlap rather than the potential. "
+                "qq_so's coupling-free end is its spin trace, which is "
+                "spin-independent -- so at soc_scale = 0 the anisotropy "
+                "vanishes identically whatever else that operator is -- but a "
+                "blend of it with the true qq_so partway is not the overlap of "
+                "any set of projectors, and S = 1 + sum |beta> qq_so <beta| "
+                "stops being a usable metric. Measured on the cobalt slab, "
+                "where the answer is under a meV: -132 meV at 0.25 and -102 "
+                "at 0.5, against exactly 0.000000 at 0 and a value validated "
+                "against pw.x at 1. Elk's socscf takes any value because it "
+                "scales a genuinely additive sigma.L term in an all-electron "
+                "second-variational Hamiltonian; a pseudopotential has no such "
+                "term to scale"
+            )
 
         if not self.has_so:
             # A scalar-relativistic species inside a spin-orbit calculation is
@@ -254,15 +312,51 @@ class SpinOrbitCoupling:
             self.fcoef[:, :, 0, 0] = identity
             self.fcoef[:, :, 1, 1] = identity
             self.dvan_so = self._diagonal_blocks(self._expanded_dij())
+            self.dvan_scalar = self.dvan_so
             return
 
         # ``init_us_1``, in its order: the full coefficients build ``dvan_so``,
         # and only then are the cross-radial entries dropped. See the module
         # docstring -- swapping these two lines is a silent error.
         full = _fcoef(pseudo)
-        self.dvan_so = self._expanded_dij()[:, :, None, None] * full
-
         indv, _, _, _ = _channel_table(pseudo)
+
+        # ``socscf`` (Elk manual 5.118, ``gensocfr.f90``), which exists there
+        # for exactly this: "to enhance the effect of spin-orbit coupling in
+        # order to accurately determine the magnetic anisotropy energy".
+        #
+        # **What is scaled is the spin-traceless half**, because a
+        # pseudopotential has no additive ``xi L.S`` term to scale: the
+        # coupling lives in the spin structure of ``dvan_so``, which is built
+        # from spin-*independent* radial data, so everything spin-dependent in
+        # it is the coupling and :func:`spin_trace` removes exactly that. The
+        # same rule applies to :meth:`qq_so` and the **opposite** one to
+        # ``newd_so``'s sandwich, whose input carries the exchange field --
+        # see :func:`pypresso.scf.driver._newd_noncollinear`.
+        #
+        # Two other decompositions were tried and each fails the identity that
+        # ``soc_scale = 0`` must give **exactly zero** anisotropy. They are
+        # written down because each looked like the tidy answer. Giving the two
+        # ``j`` channels one ``j``-averaged ``D`` -- ``average_pp``'s own
+        # arithmetic -- leaves a spin off-diagonal block of **2.2**, *larger*
+        # than the coupled operator's 1.1, because Clebsch-Gordan completeness
+        # needs the two shells to share a radial function and a relativistic
+        # file gives them different ``beta`` (which is why ``average_pp``
+        # refits them, and why it refuses ultrasoft and PAW). Blending
+        # ``fcoef`` itself towards the identity is tidier still and keeps the
+        # overlap a congruence, but its identity limit drops ``dion``'s
+        # off-diagonal radial couplings within a shell, which an ultrasoft
+        # dataset needs: **1082 meV** on the cobalt slab where the answer is
+        # zero. Every one of these failures is silent -- covariance still holds
+        # algebraically at zero, so a wrong operator shows up as a large number
+        # rather than as an error.
+        coupled = self._expanded_dij()[:, :, None, None] * full
+        self.dvan_scalar = spin_trace(coupled)
+        self.dvan_so = (
+            coupled if self.soc_scale == 1.0
+            else self.dvan_scalar + self.soc_scale * (coupled - self.dvan_scalar)
+        )
+
         same_radial = indv[:, None] == indv[None, :]
         self.fcoef = np.where(same_radial[:, :, None, None], full, 0.0)
 
@@ -302,8 +396,29 @@ class SpinOrbitCoupling:
         this reproduces ``qq`` on blocks ``(0,0)`` and ``(1,1)`` and zero
         elsewhere -- which is what the Fortran's ``else`` branch writes out by
         hand.
+
+        **``soc_scale`` scales this by the spin trace and not to** ``qq``, and
+        that is the opposite of the rule ``_newd_noncollinear`` follows for the
+        other ``fcoef`` sandwich. It was measured rather than reasoned out.
+        Interpolating towards ``_diagonal_blocks(qq)`` -- the ``fcoef =
+        identity`` limit, which *looks* like the scalar-relativistic overlap
+        and is what the Fortran's ``else`` branch writes -- fails the identity
+        that ``soc_scale = 0`` must give **zero** anisotropy, by 169 meV on
+        hexagonal cobalt, where the spin trace gives 0.000000. The reason is
+        that ``S = 1 + sum |beta> qq_so <beta|`` is a *metric*: a
+        fully-relativistic dataset's scalar ``qq`` is never used on its own by
+        any code -- ``transform_qq_so`` always dresses it -- and undressed it
+        is not the overlap of these ``beta`` at all, so the generalised
+        eigenproblem stops being well posed and the iterative solver lands
+        somewhere different for each direction. Covariance still holds
+        *algebraically* at ``soc_scale = 0``, which is why the failure shows up
+        as a large number rather than as an error.
         """
-        return self._sandwich({(0, 0): qq, (1, 1): qq})
+        full = self._sandwich({(0, 0): qq, (1, 1): qq})
+        if self.soc_scale == 1.0:
+            return full
+        scalar = spin_trace(full)
+        return scalar + self.soc_scale * (full - scalar)
 
     def _sandwich(self, blocks: dict) -> np.ndarray:
         """``sum_{s t} F^{s1 s} M^{s t} F^{t s2}`` for a block-structured ``M``.
@@ -401,9 +516,13 @@ _PAULI = np.array([
 ])
 
 
-def build_spin_orbit(pseudos: tuple[Pseudopotential, ...]) -> tuple:
-    """One :class:`SpinOrbitCoupling` per species."""
-    return tuple(SpinOrbitCoupling(pseudo) for pseudo in pseudos)
+def build_spin_orbit(pseudos: tuple[Pseudopotential, ...], soc_scale: float = 1.0) -> tuple:
+    """One :class:`SpinOrbitCoupling` per species.
+
+    ``soc_scale`` is Elk's ``socscf`` and applies to every species alike: it is
+    a property of the *calculation*, not of a dataset.
+    """
+    return tuple(SpinOrbitCoupling(pseudo, soc_scale) for pseudo in pseudos)
 
 
 # --- the same transforms, on device --------------------------------------------

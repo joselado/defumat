@@ -52,6 +52,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Spin-orbit split bands | `noncolin`, `lspinorb` | [08](08_spin_orbit_coupling.ipynb) |
 | Magnetism as a vector, fields, constrained moments | `nspin = 4`, `B_field` | [11](11_noncollinear_magnetism_and_fields.ipynb) |
 | A magnon `E(q)` without a supercell | `get_spiral_scan()` | [12](12_spin_spirals.ipynb) |
+| Which way a magnet wants to point | `get_anisotropy()` | [36](36_magnetic_anisotropy.ipynb) |
 | The same `E(q)` from `dE/dq` instead | `get_spiral_scan(gradients=True)` | [12](12_spin_spirals.ipynb) |
 | A magnet's ground-state pitch | `get_spiral_relaxation()` | [14](14_spiral_relaxation.ipynb) |
 | Site-resolved `<L>`, `<S>` and `<J>` | `get_angular_momenta()` | [29](29_effective_mass_and_angular_momenta.ipynb) |

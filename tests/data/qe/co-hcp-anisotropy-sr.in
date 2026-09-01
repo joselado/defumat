@@ -1,0 +1,19 @@
+&control
+   calculation='scf'
+/
+&system
+   ibrav = 4, celldm(1) = 4.74, celldm(3) = 1.62, nat = 2, ntyp = 1,
+   nspin = 2, ecutwfc = 25.0, ecutrho = 200.0,
+   occupations = 'smearing', smearing = 'mv', degauss = 0.02,
+   starting_magnetization(1) = 0.5,
+/
+&electrons
+   conv_thr = 1.0e-10
+/
+ATOMIC_SPECIES
+Co 58.933 Co.pbe-nd-rrkjus.UPF
+ATOMIC_POSITIONS crystal
+Co 0.000000 0.000000 0.000000
+Co 0.333333 0.666667 0.500000
+K_POINTS automatic
+3 3 2 0 0 0

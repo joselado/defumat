@@ -634,7 +634,55 @@ the physics in seconds rather than SCF runs was a **local plane-wave model Hamil
 about the quantity they asked for: ultrasoft and PAW, a spin spiral, a symmetry-reduced wedge,
 DFT+U, a metal, and `nspin = 2`. A spinor run is supported and tested.
 
-**Outstanding:** Wyckoff input, the dynamical matrix of an
+**Magnetocrystalline anisotropy is in** (P58), by the **force theorem**: converge the
+magnet without spin-orbit coupling, rotate the converged density onto `n`, and diagonalise
+**once** with the coupling on. At frozen density every term but the band energy is a
+functional of `rho` alone, so the total-energy difference between two directions *is* the
+band-energy difference, exactly, and the whole calculation is one diagonalisation per
+direction. Against `pw.x`'s own committed force-theorem example — the 3-layer Co(0001) slab
+of `PP/examples/ForceTheorem_example`, which `lforcet` reaches and which has no test-suite
+case — the MAE is **0.345770 meV against 0.353403**, on a quantity that is a difference of
+two band energies of 75 eV. **The two legs are two different pseudopotential files**, a
+scalar-relativistic one for the SCF and the fully-relativistic dataset of the same
+generation for the one shot, which is QE's own arrangement and is what makes an *ultrasoft*
+anisotropy reachable at all: the alternative, one relativistic file with its `j` channels
+averaged back, is `average_pp`, which refuses ultrasoft and PAW outright. Only the density
+crosses, and a density does not know which file made it.
+**The obvious cheaper thing gives zero and that is why this is a diagonalisation**: freezing
+the wavefunctions too and taking `<psi|H_SOC|psi>` once returns no anisotropy at all, the
+coupling entering at first order as `xi <L> . n` and P48 having measured `<L>` quenched to
+1.7e-16. **The bug the phase found was not a spin-orbit term**, which is what identified it:
+the density was rotated and QE's `compute_ux` quantization axis was not, so for a moment
+turned into the `xy` plane the sign `sign(m . z)` stuck at `+1` and the gradient correction
+differentiated `|m|` through its own nodes — worth **36.8 meV** on a cell whose answer is
+zero, surviving switching the coupling off entirely, and the `abs` trap of P28a in a fifth
+place. `soc_scale` (Elk's `socscf`) switches the coupling off inside one relativistic file
+and takes **0 or 1 only**: the overlap's coupling-free end has to be spin-independent, so
+the anisotropy vanishes identically there whatever else it is, but a blend partway is not
+the overlap of any set of projectors and `S` stops being a usable metric (-132 meV at 0.25
+on the slab). **Refused by name**: PAW (the handoff carries no `becsum`, and `pw.x` refuses
+it in the same place), DFT+U, a potential-only meta-GGA, a magnetic field, and a spin
+spiral. A direction other than the system's own `angle1`/`angle2` needs `nosym`, because a
+magnetic noncollinear run reduces its k-grid with the group the moment's direction picks.
+
+**QE's `local-TF` mixer is in** (P59): `approx_screening2`, Thomas-Fermi screening whose
+length is a function of `rho(r)` rather than one number for the whole cell. That distinction
+is the difference between a slab converging and not: the metal wants strong screening and
+the vacuum wants none, and one compromise value over-screens one and under-screens the
+other. QE's Co(0001) film runs at **QE's own `mixing_beta = 0.7`**, where plain Anderson
+**diverges** to +335 Ry: it reaches `-223.13842` Ry at iteration 48 against `pw.x`'s
+`-223.13876` and then oscillates about `-223.142`, six times closer than Kerker at 0.3
+gets in 250 iterations. It does **not** reach `conv_thr = 1e-10` in 60, where QE takes 24,
+and that gap is recorded rather than smoothed over. The screened
+residual solves `4 pi e2 v + |G|^2 (alpha v) = |G|^2 (alpha drho)` with `(alpha f)` a
+*real-space* multiply, so the operator is not diagonal in `G` and QE's least-squares Krylov
+method — its Coulomb metric, its restart, its stopping rule — is transcribed rather than
+replaced. **The Fortran's order is the part that is easy to miss**: `mix_rho.f90`
+preconditions the **combined search direction once**, after the Broyden combination, where
+preconditioning each history entry runs the solve eight times an iteration. For a linear
+preconditioner the two are identical, so Kerker's results are unchanged to the last digit.
+
+**Outstanding:** Wyckoff input, PAW and a *relaxed* (as opposed to frozen-density) magnetocrystalline anisotropy, `average_pp`, the dynamical matrix of an
 ultrasoft or PAW *metal*, the strain coordinate's third derivatives on ultrasoft and PAW
 (P44 localised what is missing), the *second derivatives* of a spin-polarized system (P45 put
 the solve in; the dynamical matrix's and the strain response's assembly are not there) and a

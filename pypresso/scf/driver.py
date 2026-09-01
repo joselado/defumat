@@ -102,7 +102,13 @@ from pypresso.scf.density import (
     sum_band,
 )
 from pypresso.scf.ewald import build_ewald
-from pypresso.scf.mixing import PRECONDITIONED, get_mixer, kerker_preconditioner
+from pypresso.scf.mixing import (
+    DENSITY_DEPENDENT,
+    PRECONDITIONED,
+    get_mixer,
+    kerker_preconditioner,
+    local_tf_preconditioner,
+)
 from pypresso.scf.residual import make_residual
 from pypresso.scf.solvers import get_scf_solver
 from pypresso.scf.occupations import (
@@ -360,8 +366,8 @@ def _spinor_density_of_bands(psi, fft_index, grid, weights, cell, nspin_mag, k_b
     return spinor_sum_band(psi, fft_index, grid, weights, cell, nspin_mag, k_batch)
 
 
-@jax.jit
-def _newd_noncollinear(deeq_components, dvan_so, fcoef):
+@partial(jax.jit, static_argnums=(3,))
+def _newd_noncollinear(deeq_components, dvan_so, fcoef, soc_scale: float = 1.0):
     """``newd_so``/``newd_nc``: the scalar integrals as a 2x2 spin matrix.
 
     ``deeq_components`` is ``(nspin_mag, nkb, nkb)`` -- one integral of the
@@ -387,7 +393,24 @@ def _newd_noncollinear(deeq_components, dvan_so, fcoef):
             jnp.stack([mx + 1j * my, charge - mz]),
         ])
     blocks = blocks.astype(fcoef.dtype)
-    return dvan_so + jnp.einsum("asij,stjk,tbkl->abil", fcoef, blocks, fcoef, optimize=True)
+    dressed = jnp.einsum("asij,stjk,tbkl->abil", fcoef, blocks, fcoef, optimize=True)
+    if soc_scale != 1.0:
+        # ``soc_scale`` here is **not** the spin trace that scales ``dvan_so``
+        # and ``qq_so``, and the difference is the trap. Those two are built
+        # from spin-*independent* radial data, so everything spin-dependent in
+        # them is spin-orbit coupling. ``blocks`` is not: it carries
+        # ``m . sigma``, the **exchange field**, which is the magnetism itself,
+        # and spin-tracing here would switch off the magnet rather than the
+        # coupling. What ``fcoef`` adds is the whole of the coupling, and its
+        # scalar limit is ``fcoef = identity``, where the sandwich collapses to
+        # ``blocks`` -- precisely ``newd_nc_acc``'s plain recombination.
+        #
+        # **Leaving this unscaled is silent**, because ``dvan_so`` carries the
+        # coupling too and switching only *it* off still looks like it worked:
+        # measured at -6.7 meV of residual anisotropy at ``soc_scale = 0`` on
+        # the cobalt slab, where the answer is exactly zero.
+        dressed = blocks + soc_scale * (dressed - blocks)
+    return dvan_so + dressed
 
 
 @jax.jit
@@ -986,7 +1009,7 @@ class Calculation:
         self.fcoef_matrix = None
         self.qq_so = None
         if self.noncolin:
-            self.spin_orbit = build_spin_orbit(self.pseudos)
+            self.spin_orbit = build_spin_orbit(self.pseudos, system.soc_scale)
             types = system.structure.types
             self.dvan_so = jnp.asarray(_spin_block_diagonal(
                 [self.spin_orbit[t].dvan_so for t in types]
@@ -1332,6 +1355,37 @@ class Calculation:
         becp = jnp.einsum("gk,...g->...k", vkb.conj(), psi)
         qq = self.projectors.qq.astype(vkb.dtype)
         return psi + jnp.einsum("gk,...k->...g", vkb, becp @ qq.T)
+
+    def _spinor_overlap(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
+        """:meth:`_overlap` for a two-component spinor (``s_psi`` with ``qq_so``).
+
+        ``psi`` is ``(..., 2 npwx)``, the layout ``SpinorHamiltonian`` uses.
+        The augmentation matrix is ``qq_so`` rather than ``qq``: a
+        fully-relativistic dataset's overlap has **off-diagonal spin blocks**
+        (``transform_qq_so``), so contracting each component against the scalar
+        ``qq`` separately is not the same operator -- it is the ``j``-averaged
+        one, and it silently drops exactly the term that distinguishes the two
+        ``j`` channels.
+
+        Written here for the same reason :meth:`_overlap` is: a projection has
+        no Hamiltonian to hang the operator on, and building one only to reach
+        :meth:`~pypresso.hamiltonian.noncollinear.SpinorHamiltonian.apply_s`
+        would need a potential this does not have.
+        """
+        if self.qq_so is None:
+            return psi
+        vkb = self.projectors.vkb[ik]
+        npwx = self.basis.npwx
+        mask = self.basis.planewaves.mask[ik]
+        components = jnp.where(
+            mask, psi.reshape(psi.shape[:-1] + (2, npwx)), 0.0
+        )
+        becp = jnp.einsum("gk,...ag->...ak", vkb.conj(), components)
+        becq = jnp.einsum(
+            "abij,...bj->...ai", self.qq_so.astype(vkb.dtype), becp
+        )
+        result = components + jnp.einsum("gk,...ak->...ag", vkb, becq)
+        return jnp.where(mask, result, 0.0).reshape(psi.shape)
 
     def _build_hubbard_projectors(self, kcart=None) -> jnp.ndarray:
         """``wfcU`` at every k-point of this calculation.
@@ -2266,7 +2320,9 @@ class Calculation:
         ])
         if ddd_paw is not None:
             components = components + ddd_paw
-        return _newd_noncollinear(components, self.dvan_so, self.fcoef_matrix)
+        return _newd_noncollinear(
+            components, self.dvan_so, self.fcoef_matrix, self.system.soc_scale
+        )
 
     def augmented(self, rho_r: jnp.ndarray, becsum_) -> jnp.ndarray:
         """``addusdens``: the augmentation charge added to a real-space density."""
@@ -3178,9 +3234,16 @@ def _solve_residual(
             # is a different and much more aggressive mixer than the one the
             # caller asked for -- and converged the slab on its own, hiding the
             # solver it was supposed to be warming up.
-            warm_mixer.precondition = kerker_preconditioner(
+            build = (
+                local_tf_preconditioner
+                if warmup_mixing.lower() in DENSITY_DEPENDENT
+                else kerker_preconditioner
+            )
+            warm_mixer.precondition = build(
                 calculation.basis.dense, calculation.system.cell, residual.shapes[0],
-                beta=mixing_beta, nelec=calculation.nelec,
+                beta=mixing_beta,
+                **({} if warmup_mixing.lower() in DENSITY_DEPENDENT
+                   else {"nelec": calculation.nelec}),
             )
         for _ in range(warmup):
             fx, wavefunctions = residual.step(x0, wavefunctions)
@@ -3379,12 +3442,20 @@ def run_scf(
         )
 
     if mixing_mode.lower() in PRECONDITIONED:
-        # Kerker's ``beta`` is an operator on the grid, so it cannot be built
-        # inside ``get_mixer``, which knows only a number. It is installed here,
-        # where the density's shape and the dense G-vectors are both in hand.
-        mixer.precondition = kerker_preconditioner(
+        # A preconditioner's ``beta`` is an operator on the grid, so it cannot
+        # be built inside ``get_mixer``, which knows only a number. It is
+        # installed here, where the density's shape and the dense G-vectors are
+        # both in hand. ``local-TF`` differs from the other two only in reading
+        # the density it is handed at each step (``Mixer.step``).
+        build = (
+            local_tf_preconditioner if mixing_mode.lower() in DENSITY_DEPENDENT
+            else kerker_preconditioner
+        )
+        mixer.precondition = build(
             calculation.basis.dense, calculation.system.cell, tuple(np.shape(rho)),
-            beta=mixing_beta, nelec=calculation.nelec,
+            beta=mixing_beta,
+            **({} if mixing_mode.lower() in DENSITY_DEPENDENT
+               else {"nelec": calculation.nelec}),
         )
 
     previous_energy, history = None, []

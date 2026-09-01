@@ -16,6 +16,16 @@ The organising fact is stated once and everything below follows from it:
 > means nothing on an accelerator. The work is to establish the first, revisit the second
 > and define the third.
 
+**The work added since Phase 0 has been checked on a card too** (2026-09-01, job
+20026794, `tools/gpu/p59_check.py`): P58's force-theorem magnetic anisotropy and
+P59's `local-TF` mixer run unmodified on a V100 and reproduce the CPU numbers --
+silicon's energy to 7.1e-15 Ry, the anisotropy to 5.4e-7 meV -- with both of the
+backend-independent identities holding on the card: a preconditioner does not
+move the SCF's fixed point (1.70e-11 Ry on both) and `soc_scale = 0` gives no
+anisotropy (2.2e-8 meV). Peak device memory 0.472 GB. It ran from a *separate*
+checkout, `apps/pypresso-p59`, because `apps/pypresso` was 13 commits behind and
+carried uncommitted spiral work in a file this code also touches.
+
 **Phase 0 is done as of 2026-08-25** and the first of those three is settled: the same
 source, unmodified, runs on a Tesla V100 and reproduces the CPU energy to 1.6e-13 Ry. It
 also returned the two numbers this file was written without — **fp64 costs 1.78–1.98x on a

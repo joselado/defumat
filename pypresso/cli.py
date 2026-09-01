@@ -175,7 +175,7 @@ def _stress(args) -> int:
     calculation = Calculation(system, pseudos)
     result = run_scf(system, pseudos, calculation=calculation, conv_thr=conv_thr,
                      # As in a ``pw.x`` ``&electrons`` namelist -- ``'TF'`` is
-                     # Kerker preconditioning and ``'local-TF'`` is refused.
+                     # Kerker or local-TF preconditioning.
                      mixing_mode=str(pwin.get("electrons", "mixing_mode") or "anderson"),
                      verbose=args.verbose)
     if not result.converged:
@@ -225,7 +225,7 @@ def _spiral(args) -> int:
         mixing_beta=float(pwin.get("electrons", "mixing_beta") or 0.7),
         # ``mixing_mode`` means here what it means in a ``pw.x``
         # ``&electrons`` namelist: an input carrying ``mixing_mode = 'TF'``
-        # gets Kerker preconditioning, and ``'local-TF'`` is refused by name
+        # gets Kerker preconditioning, and ``'local-TF'`` the density-dependent one
         # rather than silently given the uniform screening (PLAN.md P22).
         mixing_mode=str(pwin.get("electrons", "mixing_mode") or "anderson"),
         verbose=args.verbose,

@@ -117,6 +117,25 @@ class System(eqx.Module):
     #: because the spin-orbit term does not commute with ``S_z`` and there is no
     #: collinear Hamiltonian for it to enter.
     lspinorb: bool = eqx.field(static=True, default=False)
+    #: ``lforcet``: this run is the one-shot leg of a force-theorem
+    #: magnetocrystalline-anisotropy calculation
+    #: (:mod:`pypresso.workflows.anisotropy`), so its density comes from a
+    #: *collinear* run and is rotated onto ``angle1(1)``/``angle2(1)`` on the
+    #: way in (``potinit.f90:96``, ``nc_magnetization_from_lsda``). It selects
+    #: nothing on its own here -- the workflow is called explicitly, where
+    #: ``pw.x`` has one executable and needs the flag to branch -- and is read
+    #: so that QE's own force-theorem inputs run unchanged.
+    lforcet: bool = eqx.field(static=True, default=False)
+    #: ``soc_scale``: switches the spin-orbit part of the nonlocal potential
+    #: and the overlap off (``0``) or on (``1``) while keeping the same
+    #: fully-relativistic dataset -- Elk's ``socscf`` (manual 5.118) restricted
+    #: to its two ends. It is what lets the force theorem's coupling-off
+    #: control run on **one** file rather than on a matched scalar/relativistic
+    #: pair, and what makes ``frozen_expectation`` well posed at all.
+    #: Intermediate values are refused, and
+    #: :class:`~pypresso.pseudo.spinorbit.SpinOrbitCoupling` says why.
+    #: ``pw.x`` has no counterpart.
+    soc_scale: float = eqx.field(static=True, default=1.0)
     #: ``angle1``/``angle2`` in degrees, per species: the polar and azimuthal
     #: angles of that species' starting magnetization. Only meaningful when
     #: ``noncolin`` -- a collinear run has nothing to point.
@@ -255,6 +274,26 @@ class System(eqx.Module):
             self.structure, self.nspin, self.starting_magnetization,
             self.angle1, self.angle2,
         )
+
+    def with_soc_scale(self, soc_scale: float) -> "System":
+        """The same run with the spin-orbit term scaled by ``soc_scale``.
+
+        A plain field replacement rather than a
+        :meth:`with_spin`-style rebuild, and that is the point: ``soc_scale``
+        touches only ``dvan_so`` and ``qq_so``, so the cell, the symmetry group
+        and above all the **k-points** are untouched. Two runs that differ only
+        in this are therefore sampled identically, which is what makes the
+        anisotropy vanish *identically* at ``soc_scale = 0`` rather than
+        approximately -- the effect is micro-Rydbergs and a moved k-set would
+        swamp it.
+        """
+        soc_scale = float(soc_scale)
+        if soc_scale not in (0.0, 1.0):
+            raise ValueError(
+                f"soc_scale = {soc_scale}: only 0 and 1 are implemented "
+                "(pypresso.pseudo.spinorbit.SpinOrbitCoupling says why)"
+            )
+        return dataclasses.replace(self, soc_scale=soc_scale)
 
     def with_spin(
         self,
@@ -535,6 +574,13 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     # resolved, since which one the author meant is not recoverable.
     noncolin = _logical(pwin.get("system", "noncolin", False))
     lspinorb = _logical(pwin.get("system", "lspinorb", False))
+    lforcet = _logical(pwin.get("system", "lforcet", False))
+    soc_scale = float(pwin.get("system", "soc_scale", 1.0))
+    if soc_scale not in (0.0, 1.0):
+        raise ValueError(
+            f"soc_scale = {soc_scale}: only 0 and 1 are implemented "
+            "(pypresso.pseudo.spinorbit.SpinOrbitCoupling says why)"
+        )
     nspin = int(pwin.get("system", "nspin", 1))
     if noncolin:
         if nspin == 2:
@@ -789,6 +835,8 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         noinv=noinv,
         tstress=tstress,
         lspinorb=lspinorb,
+        lforcet=lforcet,
+        soc_scale=soc_scale,
         angle1=angle1,
         angle2=angle2,
         constrained_magnetization=constrained_magnetization,

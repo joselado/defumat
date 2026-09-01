@@ -89,6 +89,7 @@ __all__ = [
     "promote_becsum",
     "promote_ns",
     "promote_wavefunctions",
+    "nc_magnetization_from_lsda",
 ]
 
 #: Below this many Bohr magnetons per cell, a source magnetization counts as
@@ -670,4 +671,75 @@ def continued_state(
         wavefunctions=span,
         regimes=(transfer.source, transfer.target),
         magnetization=transfer.mode,
+    )
+
+
+def nc_magnetization_from_lsda(density, direction):
+    """``potinit.f90``'s rotation of a collinear density onto an arbitrary axis.
+
+    The force theorem's whole handoff (:mod:`pypresso.workflows.anisotropy`).
+    QE writes it in G space on ``rho%of_g`` and in place::
+
+        rho(:,4) = rho(:,2)*cos(theta)
+        rho(:,2) = rho(:,2)*sin(theta)
+        rho(:,3) = rho(:,2)*sin(phi)
+        rho(:,2) = rho(:,2)*cos(phi)
+
+    -- four lines whose second and third read the value the line above just
+    wrote, which is correct and worth reading twice. Here it is the same
+    rotation written through :func:`spin_components`: the charge is untouched
+    and the collinear ``m_z`` is laid along ``direction``.
+
+    **It is a rotation of the density and of nothing else.** ``potinit`` reaches
+    it through ``read_rhog`` rather than ``read_scf``, so no ``becsum``, no
+    ``ns`` and no ``tau`` cross with it -- which is exactly why QE refuses PAW
+    on this path (``potinit.f90:98``): a PAW Hamiltonian needs ``ddd_paw``, and
+    ``becsum`` is not in the handoff. An ultrasoft dataset is fine, because its
+    augmentation charge is already inside the density being handed over.
+
+    ``density`` is ``(2, ...)`` or ``(4, ...)``; ``direction`` is a unit vector.
+    A ``(4, ...)`` density is rotated *from its own axis*, so promoting an
+    already-noncollinear collinear-along-z state is the same operation.
+    """
+    direction = np.asarray(direction, dtype=float)
+    norm = float(np.sqrt(np.sum(direction**2)))
+    if norm < DIRECTION_TOL:
+        raise ValueError("direction must be a non-zero vector")
+    direction = direction / norm
+
+    density = jnp.asarray(density)
+    nspin_mag = density.shape[0]
+    if nspin_mag not in (2, 4):
+        raise ValueError(
+            f"nc_magnetization_from_lsda wants a magnetic density, got "
+            f"nspin_mag = {nspin_mag}"
+        )
+    charge, moment = spin_components(density, nspin_mag)
+    if nspin_mag == 4:
+        # Already a vector field: rotate it off *its* axis rather than off z,
+        # so that this is idempotent on a state that is already along
+        # ``direction`` and so that a second call cannot silently re-tilt one.
+        along = _collinear_axis(density)
+        scalar = jnp.sum(_axis(along or (0.0, 0.0, 1.0), moment.ndim) * moment, axis=0)
+    else:
+        scalar = moment[2]
+    return from_spin_components(charge, _axis(direction, scalar.ndim + 1) * scalar, 4)
+
+
+def direction_from_angles(angle1: float, angle2: float) -> tuple:
+    """QE's ``(angle1, angle2)`` in degrees as a cartesian unit vector.
+
+    ``theta`` from ``z`` and ``phi`` from ``x`` in the ``xy`` plane, the
+    convention ``INPUT_PW.txt`` states for ``angle1``/``angle2`` and
+    ``local_moments`` already uses -- repeated here because the force theorem
+    takes its direction from *species one's* angles for the whole cell
+    (``nc_magnetization_from_lsda``), where ``local_moments`` takes each
+    species' own.
+    """
+    theta = np.radians(float(angle1))
+    phi = np.radians(float(angle2))
+    return (
+        float(np.sin(theta) * np.cos(phi)),
+        float(np.sin(theta) * np.sin(phi)),
+        float(np.cos(theta)),
     )

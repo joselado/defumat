@@ -2106,7 +2106,8 @@ hardcoded 1.5 1/bohr; QE's `rs = (3 Omega/4 pi nelec)^(1/3)`, `q_TF^2 = (12/pi)^
 gives 1.008 for the slab, so the hand-picked value over-screened by 2.2x in `q^2` — and
 over-screening is *worse than not preconditioning*: it cost 15 iterations against 14 at one
 vacuum and 48 against 28 at another. QE's `local-TF` (`approx_screening2`), a
-space-dependent screening length, is refused by name rather than substituted.
+space-dependent screening length, was refused by name rather than substituted;
+it is implemented as of **P59**, which is what a slab actually wants.
 
 **The measurement, on the case built for it.** `benchmarks/al-slab.in` is a five-layer
 Al(100) slab: half the cell is a metal, where screening diverges as `q^-2`, and half is
@@ -8531,6 +8532,263 @@ the null needs *scalar*-relativistic datasets for the same cell -- sound, since
 `alpha = 0` without spin-orbit coupling is a symmetry statement and not a
 property of the dataset.
 
+
+
+### P58 — Magnetocrystalline anisotropy by the force theorem. ✅ DONE, PAW refused by name.
+
+`pypresso/workflows/anisotropy.py`, `Calculator.get_anisotropy` /
+`get_force_theorem`, `System.lforcet`, `System.soc_scale` /
+`with_soc_scale`, `pypresso.scf.continuation.nc_magnetization_from_lsda`,
+`Calculation._spinor_overlap`, `tests/regression/test_anisotropy.py`,
+`tests/unit/test_soc_scale.py`, and QE's own force-theorem example committed as
+`tests/data/qe/co-slab-forcetheorem-{sr,par,per}.in` with its reference outputs.
+
+The energy it costs to point a magnet's moment one way rather than another.
+Computed as a difference of two self-consistent total energies it asks two SCF
+runs of a few hundred Rydberg to agree in their ninth digit; the **force
+theorem** does not ask that. Converge the magnet *without* spin-orbit coupling,
+rotate the converged density so its magnetization points along `n`, and
+diagonalise **once** with the coupling on. At frozen density every term of the
+total energy except the band energy is a functional of `rho` alone and is
+therefore identical between two directions, so `E(n1) - E(n2)` is exactly
+`eband(n1) - eband(n2)` and the whole calculation is one diagonalisation per
+direction. Jansen, PRB 38, 8022 (1988); Daalderop, Kelly and Schuurmans, PRB 41,
+11919 (1990).
+
+**The obvious cheaper thing gives zero, and that is why this is a
+diagonalisation.** Freezing the wavefunctions too and taking `<psi|H_SOC|psi>`
+once -- which is what "perturbation theory" suggests -- returns no anisotropy at
+all, not a small one: the coupling enters at first order as `xi <L> . n`, and
+the orbital moment of a scalar-relativistic collinear state is quenched, which
+P48 measured at 1.7e-16. The anisotropy is second order in the coupling and what
+supplies it is the *repulsion between levels* a diagonalisation performs.
+`frozen_expectation` computes that vanishing term anyway, and it is worth having
+as a number: on a one-atom cobalt cell it is **+/-0.000001 meV**, direction-
+independent to **1.9e-6 meV**, where the force theorem on the same density and
+the same cell gives **0.597 meV** -- a factor of 3e5 between the two orders.
+
+**`pw.x` has this and it is undocumented in the places one looks first.**
+`lforcet` is in `INPUT_PW.txt` (line 1536) and in no test-suite case, but
+`PP/examples/ForceTheorem_example` is a complete worked calculation with
+**committed reference output** -- a 3-layer Co(0001) slab, the usage of Blonski
+and Hafner, PRB 90, 205409 (2014). QE spreads it over three runs: an `nspin = 2`
+SCF; an `nscf` with `noncolin`, `lspinorb` and `lforcet`, where `potinit.f90:96`
+reads **only** `rho` (`read_rhog`, not `read_scf`) and
+`nc_magnetization_from_lsda` rotates `m_z` onto `angle1(1)`/`angle2(1)` before
+`print_ks_energies.f90:90` prints `eband`; and `projwfc.x` with `lforcet` and
+`ef_0`, whose `force_theorem` (`projwfc.f90:541`) decomposes `sum wg (eps -
+ef_0)` over atomic orbitals. All three are transcribed here into one call.
+
+**The two legs are two different pseudopotential files, and that is the design
+rather than an accident.** QE's example runs the SCF with `Co.pbe-nd-rrkjus.UPF`
+and the one-shot with `Co.rel-pbe-nd-rrkjus.UPF` -- the fully-relativistic
+dataset of the *same generation*. Only the density crosses, and a density does
+not know which file made it. That is what makes an **ultrasoft** anisotropy
+possible at all: the alternative, one relativistic file with its `j` channels
+averaged back for the SCF leg, is `average_pp`, which refuses ultrasoft and PAW
+outright (`average_pp.f90:34`). It also means `driver.py:845`'s refusal -- a
+relativistic dataset in a run without spin-orbit coupling -- is never reached,
+and `average_pp` did not have to be written.
+
+**Against `pw.x`, on its own committed case:** MAE **0.345770 meV** against
+**0.353403 meV**, which is 7.6 micro-eV on a quantity that is a difference of
+two band energies of 75 eV. The two `eband` are each offset from QE's by
+**+0.2481 eV** -- *the same number to four significant figures in both legs* --
+and that common shift is the SCF stopping short rather than the assembly: the
+slab's density is what QE's `mixing_mode = 'local-TF'` (`approx_screening2`, not
+implemented here, `PLAN.md` P22) exists for, plain Anderson at `beta = 0.7`
+**diverges** on it, and Kerker at `beta = 0.3` converges linearly and was cut off
+at 250 iterations 0.02 Ry short of QE's total. What it did reach is the right
+magnetic solution: **5.2601 (5.8406)** Bohr magnetons against QE's printed 5.26
+(5.84). A rigid shift cancels in the difference, which is the whole point of a
+force theorem, and the remaining 2% is the density's.
+
+**Three internal checks, and the first one found the phase's only real bug.**
+
+* **Switch the coupling off and every direction must agree.** Without
+  spin-orbit coupling the Hamiltonian is invariant under a *global* spin
+  rotation, so a band energy cannot depend on where the moment points --
+  exactly, not approximately. It held to **1.8e-10 meV** only after the fix
+  below; before it, **36.8 meV** on a cell whose answer is zero.
+* **A cubic crystal has no anisotropy between its cubic axes**: 0.000000 meV on
+  a one-atom cubic cobalt cell, with nothing imposing it.
+* **The projected decomposition recovers the band energy up to the spilling**,
+  0.039% on that cell, with the electron count exact at 9.00000000 -- the check
+  that catches the `degspin` class of error P51 documents.
+
+**The bug: the density was rotated and the quantization axis was not.** A
+gradient-corrected noncollinear run does not evaluate the functional on `|m|`.
+It takes the *signed* projection `s = sign(m . u_x)` on a fixed axis
+(`compute_ux`, `fixed_quantization_axis`) so that "up" stays up across a node
+where `m` changes sign, because `|m|` has a **kink** there and a GGA reads the
+gradient of that kink. That axis is built from `starting_magnetization` and
+`angle1`/`angle2`, so rotating the density and leaving the system alone leaves
+the two disagreeing: for a moment turned into the `xy` plane, `m . z` is zero
+everywhere, `s` sticks at `+1`, and what the functional differentiates is `|m|`
+with every one of its kinks. It is the `abs` trap of P28a in a **fifth** place,
+and the first one reached by moving a *spin* direction rather than a position.
+**What identified it is that it survives switching spin-orbit coupling off
+entirely** -- so it could not be a spin-orbit term, and the control that has no
+coupling in it at all is the one diagnostic that could see it.
+`run_force_theorem(require_spin_orbit=False)` is that control, promoted to an
+option rather than left as something only a test can reach.
+
+**The k-set must not move between directions**, for the same reason: a magnetic
+noncollinear run reduces its grid with the *magnetic* symmetry group, which
+depends on where the moment points, so two directions asked for naively arrive
+on two different wedges and differ by the sampling rather than the physics. QE's
+own example sets `nosym = .true.`; here a direction other than the system's own
+is **refused** without it, and that same condition is what makes rotating the
+quantization axis safe (a `nosym` grid is the complete one whatever group is
+asked about it).
+
+**Refused by name**, and the ordering matters: `fixed_density_states` makes its
+own PAW/Hubbard/meta-GGA/field refusals *before* it returns, so a check written
+after it is unreachable code -- and its advice is the wrong advice here, since
+"pass `becsum = scf_result.becsum`" cannot be followed when that `becsum`
+belongs to a run with a different pseudopotential file and a different projector
+count. All of them are therefore decided from the input alone. **PAW**, because
+the handoff carries no `becsum` and a PAW Hamiltonian needs `ddd_paw` -- QE
+refuses it in the same place, `potinit.f90:98`; a **Hubbard `U`**, whose `ns` is
+not in the handoff either; a potential-only **meta-GGA**, whose `tau` is not; a
+converged **magnetic field** or constrained moment, whose energy is outside the
+reported total; and a **spin spiral**, which refuses spin-orbit coupling
+permanently and so has no coupling to switch on.
+
+#### P58b — `soc_scale`: switching the coupling off without changing the dataset.
+
+Elk's `socscf` (manual 5.118, `gensocfr.f90`), which exists there for exactly
+this purpose -- "to enhance the effect of spin-orbit coupling in order to
+accurately determine the magnetic anisotropy energy". `pw.x` has no counterpart.
+It is what makes the coupling-off control reachable **on one file** rather than
+on a matched pair, and it is what `frozen_expectation` needs to be well posed at
+all: a pseudopotential has no additive `xi L.S` operator to take the expectation
+value *of*.
+
+**What is scaled is the spin-traceless half** of `dvan_so` and of `qq_so`. Those
+are built from spin-*independent* radial data, so everything spin-dependent in
+them is the coupling and `spin_trace` removes exactly it. `deeq`'s `fcoef`
+sandwich takes the **opposite** rule -- its scalar limit is `fcoef = identity`,
+where the sandwich collapses to `newd_nc_acc`'s plain recombination -- because
+its input is *not* spin-independent: it carries `m . sigma`, the exchange field,
+and spin-tracing there switches off the magnet rather than the coupling.
+
+**Three other decompositions were tried and each fails the identity that
+`soc_scale = 0` must give exactly zero anisotropy.** They are written down
+because each looked like the tidy answer:
+
+* **Give the two `j` channels one `j`-averaged `D`** -- `average_pp`'s own
+  arithmetic, with Clebsch-Gordan completeness expected to collapse `sum_j D_j
+  fcoef^(l,j)` onto `delta_{ss'} delta_{mm'}`. It does not, and the reason is
+  the one thing `average_pp` does that looks cosmetic: completeness needs the
+  two shells to share a radial function and a relativistic file gives them
+  **different `beta`**, which is why `average_pp` merges them into a single
+  refitted projector and why it refuses ultrasoft and PAW. Measured spin
+  off-diagonal block: **2.2**, larger than the coupled operator's own 1.1.
+* **Blend `fcoef` itself towards the identity.** Mathematically the tidiest --
+  every object downstream then scales consistently for free, and `qq_so` stays a
+  congruence, so the overlap stays a valid metric for any scale. It fails
+  because the identity limit drops `dion`'s **off-diagonal radial couplings**
+  within a shell, which an ultrasoft dataset needs: **1082 meV** on the cobalt
+  slab where the answer is zero.
+* **Take `qq_so`'s scalar end to be the undressed `qq`** -- the `fcoef =
+  identity` limit, which is what `transform_qq_so`'s own `else` branch writes
+  for a scalar species and is the rule `deeq` correctly follows. **169 meV**,
+  because `S = 1 + sum |beta> qq_so <beta|` is a *metric* and a relativistic
+  dataset's scalar `qq` is never used undressed by any code.
+
+Each of those failures is silent: covariance still holds *algebraically* at
+`soc_scale = 0`, so a bad operator shows up as a large number rather than as an
+error, and only the identity catches it.
+
+**Only 0 and 1 are implemented, and the reason is the overlap rather than the
+potential.** `qq_so`'s coupling-free end has to be its spin trace: that is
+spin-*independent*, so at `soc_scale = 0` the anisotropy vanishes identically
+whatever else the operator is. A blend of it with the true `qq_so` partway is
+not the overlap of any set of projectors, and `S = 1 + sum |beta> qq_so <beta|`
+stops being a usable metric -- which is silent, because a bad metric raises
+nothing. Measured on the cobalt slab, where the answer is under a meV:
+**-132 meV at 0.25** and **-102 at 0.5**, against exactly **0.000000** at 0 and
+the `pw.x`-validated value at 1. Elk's `socscf` takes any value because it
+scales a genuinely additive `sigma . L` term in an all-electron
+second-variational Hamiltonian; a pseudopotential has no such term, and that
+difference is the whole of this restriction.
+
+**So the `lambda^2` law is not measured here**, and it would have been the
+sharpest check the knob could offer -- an anisotropy is second order in the
+coupling, so a first-order assembly would come out linear. What the knob does
+deliver is the coupling-off control on **one** file rather than on a matched
+scalar/relativistic pair, which is what makes `frozen_expectation` well posed
+and what turned the two identities above from arguments into measurements.
+
+**The three attempts that failed the `soc_scale = 0` identity are the useful
+record here**, because each looked like the tidy answer and each failed
+silently -- covariance holds algebraically at zero, so a wrong operator shows up
+as a large number rather than as an error, and only the identity catches it. A
+fourth failure is the one that matters most and is not about `soc_scale` at all:
+**leaving `newd_so`'s sandwich unscaled**. `dvan_so` carries the coupling too,
+so switching only *it* off still looks like it worked -- and it cost **-6.7 meV**
+of residual anisotropy at `soc_scale = 0` on the slab, where bulk cells had
+given exactly zero and hidden it.
+
+### P59 — QE's `local-TF` mixer: Thomas-Fermi screening with a local length. ✅ DONE.
+
+`pypresso/scf/mixing.py` (`local_tf_preconditioner`), `mixing_mode = 'local-TF'`,
+`tests/regression/test_scf_solvers.py`.
+
+The gap P58 ran into and P22 had recorded. Kerker and `approx_screening` screen
+with **one** number for the whole cell, and that is exactly wrong for a slab,
+where the metal wants strong screening and the vacuum wants none: a single
+compromise value over-screens one and under-screens the other, which is charge
+sloshing between the surfaces. `approx_screening2` makes the screening length a
+function of `rho(r)` -- `alpha(r) = 3 (2 pi/3)^(5/3) r_s(r)` with `r_s` the local
+Wigner-Seitz radius, so dense regions are screened hard and vacuum is left alone.
+
+The screened residual is the solution of `4 pi e2 v + |G|^2 (alpha v) = |G|^2
+(alpha drho)`, where `(alpha f)` multiplies in **real** space -- so the operator
+is not diagonal in `G` and has to be inverted iteratively, which is why this is a
+hundred lines where Kerker is three. QE's least-squares Krylov method is
+transcribed rather than replaced by a library solve, because its **Coulomb
+metric** `4 pi e2 (Omega/2) sum_{G != 0} Re(conj a b)/|G|^2`, its restart every
+`mmx = 12` directions and its stopping rule `max(1e-12, 1e-6 dr2)` are all part of
+how it behaves.
+
+**On QE's Co(0001) film it runs at QE's own `mixing_beta = 0.7`**, which is
+the headline: plain Anderson at that `beta` **diverges** on this cell, to +335
+Ry. It reaches `-223.13842` Ry at iteration 48 against `pw.x`'s `-223.13876`
+(3.4e-4) and then oscillates about `-223.142`; at a 60-iteration cap the
+estimated accuracy is 3.2e-9 and the energy is 3.5e-3 Ry out, so **it does not
+reach `conv_thr = 1e-10` and is not claimed to**. The magnetization is exact to
+the digits QE prints throughout (5.2600/5.8404 against 5.26/5.84). Against the
+only mixer here that survives this cell at all, Kerker at `beta = 0.3`, which is
+2.0e-2 Ry out after **250** iterations: six times closer in a quarter of the
+iterations. QE itself takes 24 to 1e-10, so the remaining gap is real and is the
+backlog item -- an Anderson history where QE runs Broyden is the first
+suspect.
+
+**The Fortran's *order* is what makes it affordable, and it is easy to miss.**
+`mix_rho.f90` preconditions the **combined search direction once** -- its comment
+reads "preconditioning the new search direction" -- after the Broyden
+combination and before `alphamix` scales the step. Preconditioning each history
+entry separately instead runs the Krylov solve up to eight times an iteration.
+For a *linear* preconditioner the two orders are identical (`P` comes out of the
+sum), so adopting the Fortran's order left every Kerker result unchanged to the
+last digit; for a density-dependent one they are not the same thing at all.
+
+**The preconditioner is not the cost** and measuring it said so: 0.23 s a call
+against Kerker's 0.002 s, on a ~5 s SCF iteration. An early reading of "four
+minutes an iteration" was **CPU contention from concurrent jobs**, not the
+solver -- the same trap that had just produced a wrong single-core timing in
+`PERFORMANCE.md`, twice in one session, which is why the profile was taken before
+anything was optimised.
+
+**Two checks beyond the slab.** A preconditioner is an approximate inverse
+Jacobian, so it must change the *path* and not the answer: silicon and the
+aluminium slab reach the same total energy under `local-TF` as under the plain
+mixer. And the property that distinguishes it from Kerker is checked directly
+rather than assumed -- the two preconditioners differ **more in the vacuum than
+in the metal**, which is the whole of what a local screening length buys and
+which no energy comparison would show.
 
 ## 3a. Environment decisions (settled)
 

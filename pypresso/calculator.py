@@ -935,6 +935,64 @@ class Calculator:
         """The Chern number of one plane -- an exact integer on any mesh."""
         return self.get_berry_curvature(**options).chern_number
 
+    def get_anisotropy(self, spinor, directions=None, **options):
+        """The magnetocrystalline anisotropy, by the force theorem.
+
+        ``self`` is the **scalar-relativistic collinear** leg -- the run whose
+        density this is -- and ``spinor`` is the fully-relativistic
+        noncollinear one, a second :class:`Calculator` built from the ``nscf``
+        input. Two calculators rather than one because the two legs are two
+        different *pseudopotential files*, which is how ``pw.x`` does it as
+        well: only the density crosses between them.
+
+            sr  = Calculator.from_file("sr.in")
+            soc = Calculator.from_file("par.in")
+            mae = sr.get_anisotropy(soc, directions="xyz")
+
+        See :mod:`pypresso.workflows.anisotropy`.
+        """
+        from pypresso.workflows.anisotropy import run_anisotropy
+
+        result = self._ground_state("the magnetic anisotropy")
+        if result.nspin == 1:
+            raise ValueError(
+                "the force theorem's first leg is a spin-polarized run and "
+                "this one has nspin = 1: there is no magnetization to rotate, "
+                "and every direction would come out equal"
+            )
+        system, pseudos = _spinor_leg(spinor)
+        return run_anisotropy(
+            system, pseudos, result.density, directions=directions,
+            **self._defaults_for(run_anisotropy, options),
+        )
+
+    def get_first_order_soc(self, spinor, direction=None, **options):
+        """The spin-orbit term's expectation value at coupling-free states.
+
+        The calculation :meth:`get_anisotropy` is often assumed to be, and it
+        returns essentially zero -- see
+        :func:`pypresso.workflows.anisotropy.frozen_expectation`.
+        """
+        from pypresso.workflows.anisotropy import frozen_expectation
+
+        result = self._ground_state("the first-order spin-orbit term")
+        system, pseudos = _spinor_leg(spinor)
+        return frozen_expectation(
+            system, pseudos, result.density, direction=direction,
+            **self._defaults_for(frozen_expectation, options),
+        )
+
+    def get_force_theorem(self, spinor, direction=None, **options):
+        """One direction of :meth:`get_anisotropy`: its band energy alone."""
+        from pypresso.workflows.anisotropy import run_force_theorem
+
+        result = self._ground_state("a force-theorem band energy")
+        system, pseudos = _spinor_leg(spinor)
+        return run_force_theorem(
+            system, pseudos, result.density, direction=direction,
+            **self._defaults_for(run_force_theorem, options),
+        )
+
     def get_z2(self, **options):
         """The 2D Z2 invariant of one plane, by Wilson loops or Fu-Kane parity."""
         from pypresso.workflows.topology import run_z2
@@ -1199,3 +1257,15 @@ def _same_options(new: dict, old: dict | None) -> bool:
         except Exception:  # pragma: no cover - defensive, see the docstring
             return False
     return True
+
+
+def _spinor_leg(spinor):
+    """``(system, pseudos)`` of the force theorem's one-shot leg.
+
+    Accepts a :class:`Calculator` -- the ordinary way, built from the ``nscf``
+    input -- or the pair directly, for a caller already holding both.
+    """
+    if isinstance(spinor, Calculator):
+        return spinor.system, spinor.pseudos
+    system, pseudos = spinor
+    return system, pseudos

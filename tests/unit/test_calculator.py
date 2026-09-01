@@ -354,16 +354,19 @@ def test_diagonalization_is_read_by_pw_x_and_deliberately_not_adopted(pseudo_dir
     assert calc.calculation is not None          # the run is still reachable
 
 
-def test_a_refused_mixing_mode_is_refused_by_name_rather_than_substituted(
-        pseudo_dir):
-    # local-TF is QE's approx_screening2 and is not implemented. Adopting the
-    # namelist must surface that refusal, not quietly run the uniform one.
+def test_local_tf_is_adopted_from_the_namelist_and_runs(pseudo_dir):
+    # local-TF is QE's ``approx_screening2`` and used to be refused here. It is
+    # implemented now, so an input naming it must *run* it -- and reach the same
+    # fixed point as any other mixer, since a preconditioner changes the path
+    # and not the answer.
     text = SILICON.replace("&electrons\n/",
                            "&electrons\n  mixing_mode = 'local-TF'\n/")
     calc = Calculator.from_text(text, pseudo_dir, announce=False)
     assert calc.defaults["mixing_mode"] == "local-TF"
-    with pytest.raises(NotImplementedError, match="approx_screening2"):
-        calc.get_scf()
+    local = calc.get_scf()
+    assert local.converged
+    plain = Calculator.from_text(SILICON, pseudo_dir, announce=False).get_scf()
+    assert local.total_energy == pytest.approx(plain.total_energy, abs=1.0e-8)
 
 
 def test_the_adopted_namelist_reaches_the_run(pseudo_dir):

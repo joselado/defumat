@@ -205,6 +205,62 @@ def test_kerker_changes_the_path_and_not_the_answer(case):
 
 @pytest.mark.regression
 @pytest.mark.parametrize("case", [SILICON, SLAB], ids=["silicon", "al-slab"])
+def test_local_tf_changes_the_path_and_not_the_answer(case):
+    """``approx_screening2``: the same fixed point as any other mixer.
+
+    A preconditioner is an approximate inverse Jacobian, so it may change how
+    many iterations a run takes and must not change what it converges to. That
+    is the whole of what makes one safe to switch on, and it is the check that
+    a density-dependent one especially needs -- its operator is rebuilt at every
+    iteration, so a bug in it moves with the density rather than sitting still.
+    """
+    system, pseudos, _, _ = _setup(case)
+    plain = run_scf(system, pseudos, calculation=Calculation(system, pseudos), conv_thr=1e-9)
+    local = run_scf(system, pseudos, calculation=Calculation(system, pseudos),
+                    conv_thr=1e-9, mixing_mode="local-TF")
+    assert local.converged
+    assert local.total_energy == pytest.approx(plain.total_energy, abs=TOTAL_ENERGY_RY)
+
+
+@pytest.mark.regression
+def test_local_tf_screens_the_vacuum_less_than_the_metal():
+    """The one thing that distinguishes it from Kerker, measured directly.
+
+    ``alpha(r) = 3 (2 pi / 3)^(5/3) r_s(r)`` is large where the density is
+    small, so the operator ``4 pi e2 + |G|^2 alpha`` is dominated by its second
+    term in vacuum and by its first in the metal -- which is the statement that
+    the vacuum is screened less. Kerker has one number for both and cannot make
+    the distinction at all, so the test is that the two preconditioners disagree
+    *and* that they disagree in the vacuum rather than everywhere.
+    """
+    from pypresso.scf.mixing import kerker_preconditioner, local_tf_preconditioner
+
+    system, pseudos, calculation, _ = _setup(SLAB)
+    rho = np.asarray(calculation.starting_density())
+    shape = rho.shape
+    rng = np.random.default_rng(0)
+    residual = 0.01 * rng.standard_normal(rho.size)
+
+    local = local_tf_preconditioner(
+        calculation.basis.dense, system.cell, shape, beta=0.7)
+    kerker = kerker_preconditioner(
+        calculation.basis.dense, system.cell, shape, beta=0.7, nelec=calculation.nelec)
+    a = np.asarray(local(residual, rho.ravel()))[: int(np.prod(shape))].reshape(shape)
+    b = np.asarray(kerker(residual, rho.ravel()))[: int(np.prod(shape))].reshape(shape)
+
+    charge = rho.reshape(shape[0], -1).sum(axis=0)
+    vacuum = charge < np.quantile(charge, 0.25)
+    metal = charge > np.quantile(charge, 0.75)
+    difference = np.abs(a - b).reshape(shape[0], -1).sum(axis=0)
+    assert np.any(difference > 0), "local-TF reproduced Kerker exactly"
+    assert difference[vacuum].mean() > difference[metal].mean(), (
+        "local-TF differs from Kerker mostly in the dense region, which is the "
+        "opposite of what a locally-screened preconditioner does"
+    )
+
+
+@pytest.mark.regression
+@pytest.mark.parametrize("case", [SILICON, SLAB], ids=["silicon", "al-slab"])
 def test_weights_agree_with_the_driver(case):
     """``residual._weights`` is a second copy of the driver's occupation
     dispatch, kept because ``Calculation.occupations`` syncs the Fermi level to

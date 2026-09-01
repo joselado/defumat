@@ -40,8 +40,9 @@ third scheme addresses:
   assumption that one ``q_TF`` describes the whole cell is only partly right: it
   wins by 24-to-14 with 16 bohr of vacuum, by 34-to-20 with 32, and has lost its
   advantage by 64 (36 against 35). QE's answer to that is ``local-TF``
-  (``approx_screening2``), a space-dependent screening length, which is not
-  implemented here and is refused by name; ``scf/solvers.py`` is the other route,
+  (``approx_screening2``, :func:`local_tf_preconditioner`), which makes the
+  screening length a function of ``rho(r)`` so that the metal and the vacuum get
+  different values of it in the same cell; ``scf/solvers.py`` is the other route,
   an exact Jacobian that makes no such assumption and costs far more.
 """
 
@@ -53,7 +54,8 @@ import jax
 import numpy as np
 
 __all__ = ["Mixer", "LinearMixer", "AndersonMixer", "get_mixer", "MIXERS",
-           "PRECONDITIONED", "kerker_preconditioner", "thomas_fermi_screening"]
+           "PRECONDITIONED", "kerker_preconditioner", "local_tf_preconditioner",
+           "thomas_fermi_screening"]
 
 
 class Mixer:
@@ -67,11 +69,19 @@ class Mixer:
     def mix(self, rho_in: np.ndarray, rho_out: np.ndarray) -> np.ndarray:
         raise NotImplementedError
 
-    def step(self, residual: np.ndarray) -> np.ndarray:
-        """``beta * r``, or the preconditioner's version of it."""
+    def step(self, residual: np.ndarray, density: np.ndarray | None = None) -> np.ndarray:
+        """``beta * r``, or the preconditioner's version of it.
+
+        ``density`` is the input density this residual belongs to. Kerker
+        ignores it -- its screening length is a property of the *cell* -- and
+        ``local-TF`` does not: its screening is a function of ``rho(r)``, so it
+        is rebuilt at every iteration. That is the whole difference between the
+        two (``approx_screening`` against ``approx_screening2``), and it is why
+        the argument is here rather than closed over when the mixer is built.
+        """
         if self.precondition is None:
             return self.beta * residual
-        return self.precondition(residual)
+        return self.precondition(residual, density)
 
     def reset(self) -> None:
         pass
@@ -82,7 +92,7 @@ class LinearMixer(Mixer):
     beta: float = 0.7
 
     def mix(self, rho_in, rho_out):
-        return rho_in + self.step(rho_out - rho_in)
+        return rho_in + self.step(rho_out - rho_in, rho_in)
 
 
 @dataclass
@@ -115,7 +125,9 @@ class AndersonMixer(Mixer):
 
         n = len(self._residuals)
         if n == 1:
-            return (rho_in + self.step(residual)).reshape(np.asarray(rho_out).shape)
+            return (rho_in + self.step(residual, rho_in)).reshape(
+                np.asarray(rho_out).shape
+            )
 
         # Minimise |sum_i c_i r_i| subject to sum_i c_i = 1, by solving the
         # constrained least-squares problem in the residual basis -- **in the
@@ -144,7 +156,9 @@ class AndersonMixer(Mixer):
         norms = np.array([float(np.sqrt(r @ r)) for r in self._residuals])
         if not np.all(norms > 0.0):
             self.reset()
-            return (rho_in + self.step(residual)).reshape(np.asarray(rho_out).shape)
+            return (rho_in + self.step(residual, rho_in)).reshape(
+                np.asarray(rho_out).shape
+            )
 
         gram = np.array([[float(a @ b) for b in self._residuals] for a in self._residuals])
 
@@ -174,7 +188,9 @@ class AndersonMixer(Mixer):
             # A degenerate history means the residuals are linearly dependent;
             # drop it and take a plain linear step rather than failing.
             self.reset()
-            return (rho_in + self.step(residual)).reshape(np.asarray(rho_out).shape)
+            return (rho_in + self.step(residual, rho_in)).reshape(
+                np.asarray(rho_out).shape
+            )
 
         # The belt to the braces above. Normalising fixes the conditioning that
         # comes from the *spread* of the residuals; it cannot fix a history whose
@@ -183,10 +199,27 @@ class AndersonMixer(Mixer):
         # to a linear step costs one slow iteration; not checking costs the run.
         if not np.all(np.isfinite(coefficients)):
             self.reset()
-            return (rho_in + self.step(residual)).reshape(np.asarray(rho_out).shape)
+            return (rho_in + self.step(residual, rho_in)).reshape(
+                np.asarray(rho_out).shape
+            )
 
-        mixed = sum(c * (d + self.step(r)) for c, d, r in
-                    zip(coefficients, self._densities[used], self._residuals[used]))
+        # **Combine first, precondition the combination once.** That is
+        # ``mix_rho.f90``'s order -- its comment reads "preconditioning the new
+        # search direction", and ``approx_screening``/``approx_screening2`` are
+        # applied to the *mixed* residual with the *mixed* density, after the
+        # Broyden combination and before ``alphamix`` scales the step.
+        #
+        # For a linear preconditioner the two orders are identical: ``P`` comes
+        # out of the sum. For ``local-TF`` they are not, because ``P`` depends
+        # on the density it is built at -- and preconditioning each history
+        # entry separately would also run its Krylov solve once per entry
+        # instead of once per iteration, which is up to eight times the cost.
+        combination = zip(coefficients, self._densities[used], self._residuals[used])
+        mixed_density, mixed_residual = 0.0, 0.0
+        for c, d, r in combination:
+            mixed_density = mixed_density + c * d
+            mixed_residual = mixed_residual + c * r
+        mixed = mixed_density + self.step(mixed_residual, mixed_density)
         return np.asarray(mixed).reshape(np.asarray(rho_out).shape)
 
     @staticmethod
@@ -212,17 +245,22 @@ MIXERS = {
     "plain": AndersonMixer,  # QE's 'plain' is Broyden; Anderson is the stand-in
     "anderson": AndersonMixer,
     "broyden": AndersonMixer,
-    # QE's names for the same thing. 'local-TF' is a *space-dependent* screening
-    # length and is not implemented; it is refused rather than silently given
-    # the uniform one, which is the whole distinction that matters here.
+    # QE's names. 'kerker' and 'tf' screen with one length for the whole cell
+    # (``approx_screening``); 'local-TF' makes it a function of rho(r)
+    # (``approx_screening2``), which is what a slab needs.
     "kerker": AndersonMixer,
     "tf": AndersonMixer,
+    "local-tf": AndersonMixer,
     # QE's own default name, so an unedited pw.x input reaches a mixer here.
     "default": AndersonMixer,
 }
 
 #: Mixing modes whose ``beta`` is an operator, so the driver has to build it.
-PRECONDITIONED = {"kerker", "tf"}
+PRECONDITIONED = {"kerker", "tf", "local-tf"}
+
+#: Of those, the ones whose operator depends on the density and is therefore
+#: rebuilt at every iteration rather than once per run.
+DENSITY_DEPENDENT = {"local-tf"}
 
 def thomas_fermi_screening(volume: float, nelec: float) -> float:
     """``q_TF^2`` in 1/bohr^2, from ``mix_rho.f90``'s ``approx_screening``.
@@ -244,8 +282,8 @@ def thomas_fermi_screening(volume: float, nelec: float) -> float:
     ``q_TF``, and less screening. That is the right direction and not enough --
     the screening is still uniform, and the metal and the vacuum want different
     values of it in the same cell. QE's answer to that is ``local-TF``
-    (``approx_screening2``), a space-dependent screening length, which is not
-    implemented here and is refused by name rather than substituted.
+    (:func:`local_tf_preconditioner`, ``approx_screening2``), which makes the
+    screening length a function of ``rho(r)``.
     """
     rs = (3.0 * volume / (4.0 * np.pi * nelec)) ** (1.0 / 3.0)
     return (12.0 / np.pi) ** (2.0 / 3.0) / rs
@@ -317,21 +355,192 @@ def kerker_preconditioner(gvectors, cell, shape, beta=0.7, screening=None, nelec
             out = [screened(head[0])] + [beta * head[c].reshape(-1) for c in range(1, nspin)]
         return jnp.concatenate([jnp.concatenate(out), beta * vector[size:]])
 
-    def preconditioner(residual):
+    def preconditioner(residual, density=None):
+        # ``density`` is accepted and ignored: Kerker's screening length is a
+        # property of the *cell* (``approx_screening``), not of ``rho(r)``.
+        # ``local_tf_preconditioner`` is the one that reads it.
         return np.asarray(apply(jnp.asarray(np.asarray(residual).ravel())))
 
     return preconditioner
 
 
-def get_mixer(name: str, **kwargs) -> Mixer:
-    if name.lower() == "local-tf":
-        raise NotImplementedError(
-            "mixing_mode = 'local-TF' is QE's approx_screening2, a "
-            "*space-dependent* Thomas-Fermi screening length. It is not "
-            "implemented, and it is refused rather than substituted by the "
-            "uniform 'TF' -- the difference between them is the whole point "
-            "on the inhomogeneous systems either is used for (PLAN.md P22)"
+#: ``mmx`` in ``approx_screening2``: the Krylov space's width before it is
+#: restarted, and how many times it may be restarted before giving up.
+LOCAL_TF_MMX, LOCAL_TF_REFRESHES = 12, 4
+
+#: ``eps32`` in ``approx_screening2``: below this the local density has no
+#: Wigner-Seitz radius worth taking, and the point is left out of the average.
+LOCAL_TF_EPS = 1.0e-32
+
+
+def local_tf_preconditioner(gvectors, cell, shape, beta=0.7):
+    """``approx_screening2``: Thomas-Fermi screening with a *local* length.
+
+    Kerker and ``approx_screening`` screen with one number for the whole cell.
+    That is exactly wrong for a **slab**, where the metal wants strong screening
+    and the vacuum wants none, and a single compromise value over-screens one
+    and under-screens the other -- which is charge sloshing between the surfaces
+    and is what makes an unpreconditioned or uniformly preconditioned slab SCF
+    diverge. ``local-TF`` makes the screening a function of ``rho(r)``.
+
+    The screened residual is the solution ``v`` of
+
+        4 pi e2 v(G) + |G|^2 (alpha v)(G) = |G|^2 (alpha drho)(G),
+
+    where ``(alpha f)`` means multiplying by ``alpha(r)`` in *real* space, so
+    the operator is not diagonal in ``G`` and has to be inverted iteratively --
+    which is the whole reason this is a hundred lines where Kerker is three.
+    ``alpha(r) = 3 (2 pi / 3)^(5/3) r_s(r)`` with ``r_s(r) = (3 / 4 pi
+    |rho(r)|)^(1/3)`` the local Wigner-Seitz radius: dense regions get a small
+    ``alpha`` and are screened hard, vacuum gets a large one and is left alone.
+
+    QE solves it by a least-squares Krylov method in the **Coulomb metric**
+    ``<a, b> = 4 pi e2 (Omega/2) sum_{G != 0} Re(conj(a) b) / |G|^2``, which is
+    the same inner product ``rho_ddot`` measures self-consistency in, restarting
+    every ``mmx = 12`` directions. That is transcribed rather than replaced by a
+    library solve: the metric, the restart and the stopping rule
+    ``max(1e-12, 1e-6 dr2)`` are all part of how it behaves.
+
+    ``beta`` multiplies the result, as it does for Kerker, and for the same
+    reason -- at large ``|G|`` the operator tends to the identity, so the
+    convention matches. The **G = 0 component is annihilated** (the metric skips
+    it and the first direction vanishes there), so a preconditioned step cannot
+    change the electron count.
+
+    Only the *charge* is screened; the magnetization, ``becsum``, ``ns`` and
+    ``tau`` take the plain ``beta``, exactly as in
+    :func:`kerker_preconditioner` and for the argument given there.
+    """
+    import jax.numpy as jnp
+
+    grid = gvectors.grid
+    size = int(np.prod(shape))
+    nspin = shape[0]
+    index = gvectors.fft_index
+    g2 = np.asarray(gvectors.kinetic(cell))
+    volume = float(cell.volume)
+    points = int(np.prod(grid))
+    # ``e2 = 2`` in Rydberg atomic units, so ``fpi * e2 = 8 pi``.
+    fpi_e2 = 4.0 * np.pi * 2.0
+    # ``gstart``: the metric and the operator both skip G = 0.
+    nonzero = g2 > 1.0e-12
+    weight = np.zeros_like(g2)
+    weight[nonzero] = 1.0 / g2[nonzero]
+
+    @jax.jit
+    def _to_sphere(field):
+        return jnp.fft.fftn(field.reshape(grid)).reshape(-1)[index] / points
+
+    @jax.jit
+    def _to_grid(coefficients):
+        box = jnp.zeros(points, dtype=coefficients.dtype).at[index].set(coefficients)
+        return jnp.real(jnp.fft.ifftn(box.reshape(grid))).reshape(-1) * points
+
+    def _alpha(charge):
+        """``alpha(r)`` and ``agg0``, the cell-averaged screening it falls back on."""
+        magnitude = np.abs(np.asarray(charge).reshape(-1))
+        dense = magnitude > LOCAL_TF_EPS
+        radius = np.zeros_like(magnitude)
+        radius[dense] = (3.0 / (4.0 * np.pi * magnitude[dense])) ** (1.0 / 3.0)
+        # ``avg_rsm1`` is the *harmonic* mean of r_s over the grid: QE sums
+        # 1/r_s and divides the point count by it, so a vacuum point -- with a
+        # huge r_s and a negligible 1/r_s -- pulls the average almost not at
+        # all. A plain mean would let the vacuum dominate the fallback.
+        inverse = np.sum(1.0 / radius[dense]) if np.any(dense) else 0.0
+        average = points / inverse if inverse > 0.0 else np.inf
+        agg0 = (12.0 / np.pi) ** (2.0 / 3.0) / average
+        alpha = 3.0 * (2.0 * np.pi / 3.0) ** (5.0 / 3.0) * radius
+        return jnp.asarray(alpha), float(agg0)
+
+    def _screen(residual_charge, density_charge):
+        alpha, agg0 = _alpha(density_charge)
+
+        def operator(v):
+            """``4 pi e2 v + |G|^2 (alpha v)``, the system's left-hand side."""
+            return fpi_e2 * v + g2 * _to_sphere(alpha * _to_grid(v))
+
+        drho = _to_sphere(jnp.asarray(np.asarray(residual_charge).reshape(-1)))
+        dv = g2 * _to_sphere(alpha * _to_grid(drho))
+        dv = dv.at[~nonzero].set(0.0)
+
+        def dot(a, b):
+            return float(
+                fpi_e2 * 0.5 * volume * jnp.sum(weight * jnp.real(jnp.conj(a) * b))
+            )
+
+        directions = [dv / (g2 + agg0)]
+        applied, aa, bb = [], [], []
+        target, best, refreshes = 0.0, None, 0
+        while True:
+            applied.append(operator(directions[-1]))
+            m = len(applied)
+            aa = np.pad(np.asarray(aa).reshape(m - 1, m - 1), ((0, 1), (0, 1))) \
+                if m > 1 else np.zeros((1, 1))
+            for i in range(m):
+                aa[i, m - 1] = aa[m - 1, i] = dot(applied[i], applied[m - 1])
+            bb = np.append(np.asarray(bb), dot(applied[m - 1], dv))
+            try:
+                vec = np.linalg.solve(aa, bb)
+            except np.linalg.LinAlgError:
+                # A dependent direction: keep the best estimate so far rather
+                # than failing the whole SCF iteration for a preconditioner.
+                break
+            if not np.all(np.isfinite(vec)):
+                break
+            best = sum(c * v for c, v in zip(vec, directions))
+            residue = dv - sum(c * w for c, w in zip(vec, applied))
+            error = dot(residue, residue)
+            if target == 0.0:
+                target = max(1.0e-12, 1.0e-6 * error)
+            if error < target:
+                break
+            if m >= LOCAL_TF_MMX:
+                if refreshes >= LOCAL_TF_REFRESHES:
+                    break
+                # Restart from the best estimate, which is what keeps the
+                # Krylov space bounded without throwing the answer away.
+                refreshes += 1
+                directions, applied, aa, bb = [best], [], [], []
+                continue
+            directions.append(residue / (g2 + agg0))
+        if best is None:
+            best = directions[0]
+        return _to_grid(best.at[~nonzero].set(0.0))
+
+    def preconditioner(residual, density=None):
+        if density is None:
+            raise ValueError(
+                "local-TF is a density-dependent preconditioner and was called "
+                "without one; Mixer.step passes it"
+            )
+        flat = jnp.asarray(np.asarray(residual).ravel())
+        rho = np.asarray(density).ravel()[:size].reshape(shape)
+        head = flat[:size].reshape(shape)
+        if nspin == 1:
+            out = [_screen(head[0], rho[0])]
+        elif nspin == 2:
+            charge, moment = head[0] + head[1], head[0] - head[1]
+            charge = _screen(charge, rho[0] + rho[1])
+            moment = beta * moment.reshape(-1)
+            out = [0.5 * (beta * charge + moment), 0.5 * (beta * charge - moment)]
+            return np.asarray(
+                jnp.concatenate([jnp.concatenate(out), beta * flat[size:]])
+            )
+        else:
+            out = [beta * _screen(head[0], rho[0])] + [
+                beta * head[c].reshape(-1) for c in range(1, nspin)
+            ]
+            return np.asarray(
+                jnp.concatenate([jnp.concatenate(out), beta * flat[size:]])
+            )
+        return np.asarray(
+            jnp.concatenate([beta * out[0], beta * flat[size:]])
         )
+
+    return preconditioner
+
+
+def get_mixer(name: str, **kwargs) -> Mixer:
     try:
         return MIXERS[name.lower()](**kwargs)
     except KeyError as error:

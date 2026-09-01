@@ -323,9 +323,25 @@ unseeded promotion would converge back to the unpolarized solution and report
 success.
 
 \textbf{Convergence.} \code{mixing\_mode} selects \code{anderson} (default),
-\code{linear}, \code{broyden}, or Kerker/Thomas--Fermi preconditioning
-(\code{TF}); \code{scf\_solver} offers a Newton--Krylov alternative that is
-slower but reaches solutions the mixer cannot hold. \code{max\_iterations}
+\code{linear}, \code{broyden}, Kerker/Thomas--Fermi preconditioning (\code{TF}),
+or \code{local-TF}; \code{scf\_solver} offers a Newton--Krylov alternative that
+is slower but reaches solutions the mixer cannot hold.
+
+\code{TF} screens the residual with one Thomas--Fermi length for the whole cell.
+\code{local-TF} makes that length a function of $\rho(\mathbf r)$, which is what
+a \textbf{slab} needs: the metal wants strong screening and the vacuum wants
+none, and a single compromise value over-screens one and under-screens the other
+--- charge sloshing between the surfaces. The screened residual is the solution
+of
+\begin{equation*}
+  4\pi e^2 v(\mathbf G) + |\mathbf G|^2 (\alpha v)(\mathbf G)
+    = |\mathbf G|^2 (\alpha\,\delta n)(\mathbf G),
+  \qquad \alpha(\mathbf r) = 3\left(\tfrac{2\pi}{3}\right)^{5/3} r_s(\mathbf r),
+\end{equation*}
+with $(\alpha f)$ multiplied in \emph{real} space, so the operator is not
+diagonal in $\mathbf G$ and is inverted iteratively at each step. On a cobalt
+film it converges at \code{mixing\_beta = 0.7} where plain Anderson at the same
+$\beta$ diverges and Kerker at $0.3$ is still far out after 250 iterations. \code{max\_iterations}
 defaults to 100 --- \textbf{a hard SCF may need more}, and hitting the cap is
 reported as not converged rather than as an answer.
 
@@ -1789,6 +1805,85 @@ The delta defaults to a \textbf{Gaussian} even when the run used
 Methfessel--Paxton or cold smearing: those go negative on the wings, so
 $g(\mathbf k)$ can be negative and $N(\mathbf q)$ would have no sign at all.
 Pass \code{smearing=} to have the run's own anyway.
+\end{refuses}
+
+\subsection{Magnetocrystalline anisotropy}
+
+The energy it costs to point a magnet's moment one way rather than another ---
+what makes a hard magnet hard and what pins a spiral into a plane. It is tenths
+of a meV per atom against total energies of hundreds of Rydberg, so taking it as
+a difference of two self-consistent total energies asks two SCF runs to agree in
+their ninth digit. The \emph{force theorem} does not ask that. Converge the
+magnet \textbf{without} spin-orbit coupling, rotate the converged density so its
+magnetization points along $\mathbf n$, and diagonalise \textbf{once} with the
+coupling switched on. At frozen density every term of the total energy except
+the band energy is a functional of $\rho$ alone, so
+\begin{equation*}
+  E(\mathbf n_1) - E(\mathbf n_2)
+    = E_{\text{band}}(\mathbf n_1) - E_{\text{band}}(\mathbf n_2),
+  \qquad
+  E_{\text{band}} = \sum_{n\mathbf k} w_{n\mathbf k}\, \varepsilon_{n\mathbf k},
+\end{equation*}
+exactly, and the whole calculation is one diagonalisation per direction.
+
+\textbf{The cheaper thing gives zero.} Freezing the wavefunctions as well and
+taking $\langle\psi|H_{\text{SOC}}|\psi\rangle$ once returns no anisotropy at
+all: the coupling enters at first order as $\xi\,\langle \mathbf L\rangle\cdot
+\mathbf n$, and the orbital moment of a scalar-relativistic collinear state is
+quenched. The anisotropy is second order in the coupling, and what supplies it
+is the repulsion between levels that a diagonalisation performs and an
+expectation value does not. \code{frozen\_expectation} computes that vanishing
+term anyway.
+
+\textbf{Two pseudopotential files, one density.} The first leg runs with a
+scalar-relativistic dataset and the one-shot leg with the fully-relativistic
+dataset of the \emph{same generation}; only the density crosses, and a density
+does not know which file made it. That is what makes an ultrasoft anisotropy
+reachable, the alternative --- averaging one relativistic file's $j$ channels
+back --- being refused for ultrasoft and PAW by \code{pw.x} itself.
+
+\begin{pycode}
+from pypresso import Calculator
+
+scalar = Calculator.from_file("scf.in")          # nspin = 2, Co.pbe-nd-rrkjus
+spinor = Calculator.from_file("nscf.in")         # noncolin, lspinorb, rel- file
+mae = scalar.get_anisotropy(spinor, directions="xyz")
+
+print(mae.anisotropy_mev, mae.easy_axis)
+print(mae.difference(0, 2))                      # in-plane minus out-of-plane
+\end{pycode}
+
+\code{directions} takes a list of vectors, an integer asking for that many
+points spread evenly over the sphere, or one of \code{"cardinal"},
+\code{"xz"} and \code{"xyz"}. \code{projected=True} adds the decomposition of
+the band energy over atomic orbitals, resolved by atom, $\ell$, $m$ and spin,
+which is what says \emph{which} orbitals supply the anisotropy; comparing its
+total against $E_{\text{band}}$ measures the spilling.
+
+\code{soc\_scale} scales the spin-orbit part of the nonlocal potential and the
+overlap while keeping the same dataset and the same k-points. At $0$ the
+anisotropy is exactly zero, which is the control for the whole calculation:
+without the coupling the Hamiltonian is invariant under a global spin rotation,
+so a band energy \emph{cannot} depend on where the moment points.
+
+\begin{refuses}
+\textbf{Refuses.} \textbf{PAW}, because the handoff from the collinear run
+carries the density and nothing else, and a PAW Hamiltonian needs
+\code{ddd\_paw}, which is built from a \code{becsum} belonging to a run with a
+different pseudopotential file (\code{pw.x} refuses it in the same place). A
+\textbf{Hubbard $U$}, whose \code{ns} is not in the handoff either; a
+potential-only \textbf{meta-GGA}, whose $\tau$ is not; a converged
+\textbf{magnetic field} or constrained moment, whose energy sits outside the
+reported total; and a \textbf{spin spiral}, which refuses spin-orbit coupling
+permanently and so has no coupling to switch on. A direction other than the
+system's own \code{angle1}/\code{angle2} needs \code{nosym}: a magnetic
+noncollinear run reduces its k-grid with the \emph{magnetic} symmetry group,
+which depends on where the moment points, so two directions would otherwise be
+sampled on two different wedges. \code{soc\_scale} takes $0$ or $1$
+and nothing in between: the coupling-free end of the overlap is spin-independent,
+so the anisotropy vanishes identically there whatever else it is, but a blend of
+it with the true overlap partway is not the overlap of any set of projectors and
+$S$ stops being a usable metric.
 \end{refuses}
 
 \section{Things with no \texorpdfstring{\code{pw.x}}{pw.x} counterpart}

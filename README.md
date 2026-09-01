@@ -60,7 +60,7 @@ drive any of this and is what the examples below use.
 | **Berry-phase polarization** — King-Smith and Vanderbilt's phase along one reciprocal lattice vector, with the quantum it is defined modulo carried beside it. Norm-conserving, ultrasoft, PAW and spinor; metals, `nspin = 2` and spin spirals are refused | `lberry`/`gdir`/`nppstr`, `run_polarization`, `Calculator.get_polarization` | ✓ | ✓ |
 | **Magnetoelectric tensor** `alpha_ij = dP_i/dB_j` — the polarization a magnetic field induces. Spin (Zeeman) response, clamped-ion, by a finite difference of the Berry phase over six ground states. Needs spin-orbit coupling, a gap, and a crystal without an inversion centre; the column parallel to the applied field, since a field transverse to the seeded magnetization converges slowly | `magnetoelectric_tensor`, `Calculator.get_magnetoelectric_tensor` | | ✓ |
 | **Continuing one run from another across a change of spin regime** — a converged non-magnetic density as the starting point of a magnetic run, a collinear one of a noncollinear run, spin-orbit coupling switched on | `run_scf(starting_from=...)`, `System.with_spin` | (✓)¹ | |
-| **Reaching self-consistency** — Anderson/Broyden mixing, Kerker preconditioning, or solving the residual with its own Jacobian, which reaches magnetic solutions no mixer does | `run_scf(mixing_mode=...)`, `run_scf(scf_solver=...)` | (✓)² | (✓)² |
+| **Reaching self-consistency** — Anderson/Broyden mixing, Kerker or local Thomas-Fermi preconditioning (the latter screening by the *local* density, which is what a slab needs), or solving the residual with its own Jacobian, which reaches magnetic solutions no mixer does | `run_scf(mixing_mode=...)`, `run_scf(scf_solver=...)` | (✓)² | (✓)² |
 | **Band velocities** `d(eps)/dk`, with the nonlocal pseudopotential's own contribution — norm-conserving, ultrasoft and PAW | `band_velocities`, `VelocityOperator` | (✓)³ | |
 | **Effective mass tensor** `m*_ij` at any k-point, with the principal masses and the density-of-states mass. Bands inside a degenerate multiplet are reported as the multiplet's invariant sum | `effective_mass`, `Calculator.get_effective_mass` | | ✓ |
 | **Orbital, spin and total angular momentum on each atom** — `<L>`, `<S>`, `<J>`, which is where the orbital moment of a spin-orbit magnet actually sits. Needs the whole k-grid; a relativistic ultrasoft or PAW dataset is refused | `angular_momenta`, `Calculator.get_angular_momenta` | (✓)⁴ | ✓ |
@@ -78,6 +78,7 @@ drive any of this and is what the examples below use.
 | **Shift current** `sigma^abc(0; w, -w)` — the bulk photovoltaic effect: the direct current a crystal with no inversion centre carries under illumination, with no junction and no built-in field. Insulators, norm-conserving, `nspin = 1` or spinor; needs the whole k-grid rather than a wedge, and the band count is the convergence parameter because the generalised derivative's intermediate sum runs over the same bands | `run_shift_current`, `Calculator.get_shift_current` | ⁸ | |
 | **Second-harmonic generation** `chi^(2)(-2w; w, w)` — how much of the light shone on a crystal comes back out at twice the frequency. A polar rank-3 tensor, zero in any centrosymmetric crystal. Insulators, norm-conserving, `nspin = 1` or spinor; needs the whole k-grid rather than a wedge, and the band count is the convergence parameter because the sum over the intermediate state is an identity only over a complete basis | `run_shg`, `Calculator.get_shg`, `scissor` | (✓)⁹ | ✓ |
 | **Optical absorption spectra with excitons** — `Im eps_M(omega)` from TDDFT, local-field effects included, on a bootstrap exchange-correlation kernel. Needs the whole k-grid rather than a wedge | `run_absorption`, `kernel = 'bootstrap'` (also `rpa`, `alda`, `lrc`, `bootstrap-1`), `ecut_response`, `scissor`, `broadening` | | ✓ |
+| **Magnetocrystalline anisotropy** — the energy it costs to point a magnet's moment one way rather than another, by the force theorem: converge without spin-orbit coupling, rotate the converged density onto `n`, diagonalise once with the coupling on. One diagonalisation per direction, no reconvergence. Ultrasoft and norm-conserving; PAW is refused, the handoff carrying no `becsum`. Includes the per-orbital decomposition and a knob that switches the coupling off inside one relativistic dataset | `run_anisotropy`, `run_force_theorem`, `Calculator.get_anisotropy`, `lforcet`, `soc_scale`, `frozen_expectation` | ✓ | (✓)¹¹ |
 | **Van der Waals dispersion** — Grimme's D2 pair correction, in the energy, the forces, the stress and the elastic constants. D3, Tkatchenko-Scheffler, MBD and XDM are refused by name | `vdw_corr = 'grimme-d2'`, `london_s6`, `london_rcut`, `london_c6`, `london_rvdw` | ✓ | |
 | **Band gaps from the Tran-Blaha potential** (mBJ) — the modified Becke-Johnson meta-GGA, on norm-conserving and PAW datasets, unpolarized, collinear, and noncollinear with spin-orbit coupling. The total energy is not variational, so forces, stress and response are refused | `input_dft = 'tb09'` (or `'bj06'`), `mbj_c` | (✓)⁶ | ✓ |
 | **Pseudopotentials**: norm-conserving, ultrasoft and PAW (UPF v2) | `ATOMIC_SPECIES` | ✓ | |
@@ -123,6 +124,13 @@ Where the tick is qualified:
   is **read in** rather than assembled from the modes: nothing there sums the
   oscillator strengths into `eps_0`, which is the half `dynmat.x`'s `lperm`
   does.
+
+- ¹¹ Elk's `mae.f90` (tasks 28/29) computes a magnetic anisotropy energy, but by
+  a **different method**: it re-converges a full ground state for each direction
+  of the moment, rotating the lattice rather than the moment. It is not the
+  force theorem, and the two answers differ by the self-consistency the force
+  theorem does without. What transfers from it is `socscf`, its direction sets
+  (`gentpmae`), and the binary as an independent check.
 
 The variants under each row — which smearing or tetrahedron method fixes the
 occupations, which projectors DFT+U uses, which constraint scheme — are chosen
