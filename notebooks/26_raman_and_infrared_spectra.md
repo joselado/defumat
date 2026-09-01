@@ -89,6 +89,71 @@ print("infrared activity of the optical triplet   %.2e"
     infrared activity of the optical triplet   3.61e-31
 
 
+## The field a polar mode builds
+
+In AlAs the two atoms carry opposite charges, so the optical mode that moves them against
+each other separates charge and builds a macroscopic electric field across the crystal.
+The field costs energy. It stiffens whichever optical mode is longitudinal with respect to
+the direction the light came from and leaves the two transverse ones alone, so a polar
+crystal has two optical frequencies at the zone centre where silicon has one. Which mode is
+raised depends on a direction rather than on a point, which is why the splitting is quoted
+along an axis.
+
+Those same charges screen a *static* field. Every polar mode is an oscillator the field
+drives, so the static dielectric constant sits above the optical one by their summed
+strength, and the two are tied to the frequencies by the Lyddane-Sachs-Teller relation
+
+$$ \frac{\varepsilon_0}{\varepsilon_\infty}
+   = \frac{\omega_{\mathrm{LO}}^2}{\omega_{\mathrm{TO}}^2}. $$
+
+The charges have to add up to zero first. A crystal translated bodily builds no field, so
+$\sum_a Z^*_a = 0$; what a calculation returns misses that by its basis set error, and an
+uncorrected set gives the cell a net charge and a spurious field.
+
+
+
+```python
+lo = alas.get_vibrational_spectrum(loto_direction=(1, 0, 0), neutralize=True)
+to_frequency = lo.transverse_frequencies.max()
+lo_frequency = lo.frequencies.max()
+
+print("AlAs along x")
+print("  TO %7.1f cm^-1        (measured 361)" % to_frequency)
+print("  LO %7.1f cm^-1        (measured 402)" % lo_frequency)
+print("  splitting %6.1f cm^-1  (measured  41)" % (lo_frequency - to_frequency))
+print()
+print("  eps_infinity %7.3f" % lo.epsilon[0, 0])
+print("  eps_0        %7.3f   of which the polar modes contribute %.3f"
+      % (lo.static_permittivity[0, 0], lo.ionic_permittivity[0, 0]))
+print()
+print("  eps_0/eps_infinity %8.5f" % (lo.static_permittivity[0, 0] / lo.epsilon[0, 0]))
+print("  (omega_LO/omega_TO)^2 %8.5f   (measured 1.240)"
+      % (lo_frequency / to_frequency) ** 2)
+```
+
+    AlAs along x
+      TO   353.3 cm^-1        (measured 361)
+      LO   391.5 cm^-1        (measured 402)
+      splitting   38.2 cm^-1  (measured  41)
+    
+      eps_infinity  12.967
+      eps_0         15.925   of which the polar modes contribute 2.957
+    
+      eps_0/eps_infinity  1.22804
+      (omega_LO/omega_TO)^2  1.22804   (measured 1.240)
+
+
+Lyddane-Sachs-Teller holds to every digit printed, which is worth more than it looks:
+the left side is a sum of mode dipoles divided by frequencies squared and the right side
+is a ratio of two frequencies, and nothing was imposed to make them agree.
+
+Both dielectric constants come out high, because this cell is run at a low cutoff for
+speed and AlAs measures 8.16 and 10.06. Their **ratio** does not: 1.228 here against
+1.233 from those two measured constants and 1.240 from the two measured frequencies,
+which differ from each other by the experiments' own scatter. The relation above ties
+the ratio to the frequencies, so the error that inflates one constant inflates the other.
+
+
 ## The spectra a spectrometer would record
 
 Each mode a Lorentzian of its activity on a shared axis. The width is instrumental rather
@@ -108,6 +173,9 @@ for axis, data, name, colour in ((top, si, "silicon", "#1f77b4"),
         axis.annotate("%.0f cm$^{-1}$\nRaman %.0f\nIR %.1f" % (frequency, raman, infrared),
                       xy=(frequency + 20.0, 0.70 * axis.get_ylim()[1]), fontsize=8,
                       color=colour)
+    if name == "AlAs":
+        axis.axvline(lo_frequency, color=colour, ls="--", lw=1.0)
+        axis.annotate("LO", xy=(lo_frequency + 8.0, 0.08), fontsize=8, color=colour)
     axis.set_ylabel("%s\nRaman intensity" % name)
     axis.set_title("")
     axis.spines[["top", "right"]].set_visible(False)
@@ -120,7 +188,7 @@ fig.tight_layout()
 
 
     
-![png](26_raman_and_infrared_spectra_files/26_raman_and_infrared_spectra_5_0.png)
+![png](26_raman_and_infrared_spectra_files/26_raman_and_infrared_spectra_8_0.png)
     
 
 

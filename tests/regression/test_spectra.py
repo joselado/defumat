@@ -33,7 +33,7 @@ from pypresso.pseudo import read_upf
 from pypresso.response.electrostriction import refined_states
 from pypresso.response.nonlinear import raman_tensors
 from pypresso.response.phonon import dynamical_matrix
-from pypresso.response.spectra import vibrational_spectrum
+from pypresso.response.spectra import loto_modes, vibrational_spectrum
 from pypresso.scf import Calculation, run_scf
 from pypresso.system import build_system
 
@@ -95,8 +95,41 @@ def _pieces(case: str):
     return calculation, raman, phonons, spectrum
 
 
-def _run_dynmat(case: str, tmp_path: Path) -> str:
-    """Write the dynamical-matrix file and run the vendored ``dynmat.x`` on it."""
+@lru_cache(maxsize=4)
+def _loto(case: str, direction, neutralize: bool = False):
+    """The spectrum with the long-range field added along ``direction``.
+
+    The expensive halves are handed in, so this costs one ``3 nat x 3 nat``
+    diagonalisation on top of :func:`_pieces`.
+    """
+    _, _, calculation, result = _converged(case)
+    _, raman, phonons, _ = _pieces(case)
+    return vibrational_spectrum(
+        calculation, result, raman=raman, phonons=phonons,
+        loto_direction=direction, neutralize=neutralize,
+    )
+
+
+@lru_cache(maxsize=4)
+def _neutralized(case: str):
+    """The analytic spectrum with ``sum_a Z* = 0`` imposed."""
+    _, _, calculation, result = _converged(case)
+    _, raman, phonons, _ = _pieces(case)
+    return vibrational_spectrum(
+        calculation, result, raman=raman, phonons=phonons, neutralize=True,
+    )
+
+
+def _run_dynmat(case: str, tmp_path: Path, direction=None,
+                permittivity: bool = False) -> str:
+    """Write the dynamical-matrix file and run the vendored ``dynmat.x`` on it.
+
+    ``direction`` is ``dynmat.x``'s ``q``: given one, it adds the non-analytic
+    term (``rigid.f90``'s ``nonanal``) before diagonalising, so the frequencies
+    it prints are the LO ones. ``permittivity`` turns on ``lplasma``, which
+    prints the mode effective charges and the static dielectric tensor and
+    implies ``lperm``.
+    """
     if not QE_BIN.exists():
         pytest.skip(f"vendored dynmat.x not built at {QE_BIN}")
     system, _, _, _ = _converged(case)
@@ -107,16 +140,21 @@ def _run_dynmat(case: str, tmp_path: Path) -> str:
         epsilon=raman.epsilon, born=np.asarray(raman.field.born_charges),
         raman=raman.raman, title=f"pypresso {case}",
     )
-    # ``asr = 'no'`` and ``q`` left at zero on purpose. The first is what
-    # ``ph.x`` prints its charges without, and the second keeps the
-    # **non-analytic** LO-TO term out (``rigid.f90``'s ``nonanal``): the
-    # ``Gamma`` matrix P25 computes is the analytic one, so a comparison that
-    # let ``dynmat.x`` add a term this code does not have would be measuring
-    # the term rather than the assembly.
-    (tmp_path / "dynmat.in").write_text(
-        f" &input\n   fildyn = '{fildyn.name}'\n   filout = 'dynmat.out'\n"
-        f"   asr = 'no'\n /\n"
-    )
+    # ``asr = 'no'`` is what ``ph.x`` prints its charges without. ``q`` is left
+    # at zero unless a caller asks for a direction: the analytic matrix and the
+    # non-analytic one are two different comparisons and both are made below.
+    namelist = [
+        " &input",
+        f"   fildyn = '{fildyn.name}'",
+        "   filout = 'dynmat.out'",
+        "   asr = 'no'",
+    ]
+    if direction is not None:
+        namelist += [f"   q({i + 1}) = {value}"
+                     for i, value in enumerate(direction)]
+    if permittivity:
+        namelist.append("   lplasma = .true.")
+    (tmp_path / "dynmat.in").write_text("\n".join(namelist) + "\n /\n")
     finished = subprocess.run(
         [str(QE_BIN)], stdin=(tmp_path / "dynmat.in").open(),
         capture_output=True, text=True, cwd=tmp_path, timeout=300,
@@ -190,6 +228,227 @@ def test_the_mode_table_matches_dynmat_x(case, tmp_path):
     assert spectrum.depolarisation[active] == pytest.approx(
         reference[active, 4], abs=PRINTED
     )
+
+
+def _parse_plasma(output: str) -> np.ndarray:
+    """The ``lplasma`` table: ``(3 nat, 6)`` of freq, ``Z~*``, ``W_eff``, ``deps``."""
+    lines = output.splitlines()
+    start = next(i for i, line in enumerate(lines)
+                 if line.startswith("# mode") and "Z~*_x" in line)
+    rows = []
+    for line in lines[start + 2:]:
+        fields = line.split()
+        if len(fields) != 7:
+            break
+        rows.append([float(value) for value in fields[1:]])
+    return np.array(rows)
+
+
+def _parse_permittivity(output: str) -> np.ndarray:
+    """The ``... with zone-center polar mode contributions`` 3x3 block."""
+    lines = output.splitlines()
+    start = next(i for i, line in enumerate(lines)
+                 if "zone-center polar mode contributions" in line)
+    return np.array([
+        [float(value) for value in lines[start + 1 + i].split()] for i in range(3)
+    ])
+
+
+def test_the_lo_modes_match_dynmat_x(tmp_path):
+    """The non-analytic term, against the Fortran that has it: ``nonanal``.
+
+    ``dynmat.x`` adds the long-range field itself, from the same ``Z*`` and
+    ``eps`` written to the file, so pointing it at a direction and comparing the
+    frequencies checks this code's rank-one term against QE's -- the sign, the
+    ``4 pi e^2``, the volume, and which index of ``Z*`` is contracted with
+    ``q``. The last of those is the one worth naming: ``Z*`` is not symmetric in
+    a general crystal, and contracting the wrong index of it is invisible in
+    zincblende, where it is.
+    """
+    _, raman, phonons, analytic = _pieces("alas-raman-wedge")
+    spectrum = _loto("alas-raman-wedge", (1.0, 0.0, 0.0))
+    reference = _parse_modes(
+        _run_dynmat("alas-raman-wedge", tmp_path, direction=(1.0, 0.0, 0.0))
+    )
+
+    for mode in range(reference.shape[0]):
+        freq, thz, _, _, _ = reference[mode]
+        assert spectrum.frequencies[mode] == pytest.approx(freq, abs=5e-3)
+        assert spectrum.frequencies_thz[mode] == pytest.approx(thz, abs=PRINTED)
+
+    # ... and it is a splitting rather than a shift: two of the three optical
+    # modes stay where they were and one is raised. AlAs's is 41 cm^-1 in
+    # experiment; at ``ecutwfc = 10`` this cell gives tens of cm^-1 and the
+    # comparison above is what pins the number.
+    optical = np.sort(analytic.frequencies)[-3:]
+    split = np.sort(spectrum.frequencies)[-3:]
+    assert split[0] == pytest.approx(optical[0], abs=5e-3)
+    assert split[1] == pytest.approx(optical[1], abs=5e-3)
+    assert split[2] > optical[2] + 20.0
+
+
+def test_an_asymmetric_born_charge_contracts_on_the_right_index(tmp_path):
+    """The index of ``Z*`` that ``q`` is contracted with, on a crystal that shows it.
+
+    ``zag(i) = sum_alpha q_alpha Z*_(alpha i)`` sums over the **field** label,
+    and every crystal committed here has a symmetric ``Z*`` -- zincblende's is
+    a multiple of the identity -- so transposing it changes nothing. That is
+    the shape of the bug P54 found in an occupation factor: a transposed index
+    pair passes every physical check there is.
+
+    So the charges are *made up* rather than computed. The dynamical matrix,
+    the cell and the masses are AlAs's; ``Z*`` is asymmetric and neutral by
+    construction, ``q`` is low-symmetry, and ``dynmat.x`` is asked what it makes
+    of the same file. Nothing here is a physical crystal and nothing needs to
+    be: what is under test is one contraction.
+
+    **Asymmetric is not enough and the first attempt here was not.** What the
+    splitting depends on is ``|Z*^T q|^2`` against ``|Z* q|^2``, which are
+    ``q^T Z Z^T q`` and ``q^T Z^T Z q`` -- equal for any **normal** matrix, and
+    a circulant one is normal, so a perfectly asymmetric cyclic ``Z*`` gives the
+    two contractions bit for bit. The matrix below is not normal.
+    """
+    if not QE_BIN.exists():
+        pytest.skip(f"vendored dynmat.x not built at {QE_BIN}")
+    system, _, calculation, _ = _converged("alas-raman-wedge")
+    _, raman, phonons, _ = _pieces("alas-raman-wedge")
+
+    charge = np.array([[1.4, 2.8, -0.3], [0.1, 1.9, 2.2], [-0.6, 0.2, 1.1]])
+    asymmetric = np.stack([charge, -charge])
+    direction = (0.3, -0.7, 0.5)
+    epsilon = np.asarray(raman.epsilon)
+    volume = float(calculation.system.cell.volume)
+    masses = calculation.system.structure.masses
+
+    fildyn = tmp_path / "asymmetric.dynG"
+    write_dynamical_matrix(
+        fildyn, system.cell, system.structure, phonons.matrix,
+        epsilon=epsilon, born=asymmetric, raman=raman.raman,
+        title="asymmetric Z*",
+    )
+    namelist = [" &input", f"   fildyn = '{fildyn.name}'",
+                "   filout = 'dynmat.out'", "   asr = 'no'"]
+    namelist += [f"   q({i + 1}) = {value}"
+                 for i, value in enumerate(direction)]
+    (tmp_path / "dynmat.in").write_text("\n".join(namelist) + "\n /\n")
+    finished = subprocess.run(
+        [str(QE_BIN)], stdin=(tmp_path / "dynmat.in").open(),
+        capture_output=True, text=True, cwd=tmp_path, timeout=300,
+    )
+    assert "JOB DONE" in finished.stdout, finished.stdout[-2000:]
+
+    ours, _ = loto_modes(phonons.matrix, masses, asymmetric, epsilon,
+                         direction, volume)
+    theirs = _parse_modes(finished.stdout)[:, 0]
+    assert np.abs(np.sort(ours) - np.sort(theirs)).max() < 5e-3
+
+    # ... and the transpose is a different answer, which is what makes the
+    # comparison above worth making.
+    transposed, _ = loto_modes(
+        phonons.matrix, masses, np.swapaxes(asymmetric, 1, 2), epsilon,
+        direction, volume,
+    )
+    # 11.6 cm^-1 apart, against the 5e-3 the right contraction agrees to.
+    assert np.abs(np.sort(transposed) - np.sort(theirs)).max() > 5.0
+
+
+def test_the_static_permittivity_matches_dynmat_x(tmp_path):
+    """``polar_mode_permittivity``, against ``lplasma``'s two printed blocks.
+
+    The mode effective charges are compared **summed over each multiplet**, for
+    the reason the mode table is: ``Z~*`` is a vector attached to one member of
+    a degenerate triplet and the eigensolver's basis inside it is arbitrary,
+    where ``sum_nu |Z~*_nu|^2`` is invariant. The dielectric tensor is a sum
+    over the whole multiplet already and needs no such care.
+    """
+    spectrum = _pieces("alas-raman-wedge")[3]
+    output = _run_dynmat("alas-raman-wedge", tmp_path, permittivity=True)
+    reference = _parse_plasma(output)
+
+    for group in range(int(spectrum.manifold.max()) + 1):
+        members = spectrum.manifold == group
+        ours = np.sum(spectrum.mode_effective_charges[members] ** 2)
+        theirs = np.sum(reference[members, 1:4] ** 2)
+        assert ours == pytest.approx(theirs, rel=1e-4)
+
+    assert np.abs(
+        _parse_permittivity(output) - spectrum.static_permittivity
+    ).max() < PRINTED
+
+
+def test_lyddane_sachs_teller_holds_for_alas():
+    """``eps_0/eps_inf = (omega_LO/omega_TO)^2`` on a crystal rather than a model.
+
+    Both sides are computed here and they share only ``Z*`` and ``eps``: one is
+    a ratio of two diagonalisations of the dynamical matrix and the other a sum
+    of mode dipoles over ``omega^2``. For a diatomic cubic crystal the relation
+    is an identity, so what it measures is the two assemblies against each other
+    -- and it is the check that a *dielectric* constant is tied to a
+    *frequency*, which no comparison against a printed table can see, both codes
+    reading the same tensors off the same file.
+
+    **It needs the charge-neutral ``Z*`` and that is the finding.** At
+    ``ecutwfc = 10`` this cell's Born charges miss ``sum_a Z*_a = 0`` by -1.257,
+    which charges the crystal: :func:`~pypresso.response.spectra.nonanal` then
+    lifts a **longitudinal acoustic** mode from 1.8 to 33.8 cm^-1 and the LO
+    frequency lands 7.7 cm^-1 low. Neither is visible against ``dynmat.x``,
+    which is handed the same charges and reproduces the same wrong number. LST
+    sees it: 1.6e-3 raw against 5.0e-11 neutralised.
+    """
+    analytic = _neutralized("alas-raman-wedge")
+    longitudinal = _loto("alas-raman-wedge", (1.0, 0.0, 0.0), True)
+
+    ratio = analytic.static_permittivity[0, 0] / analytic.epsilon[0, 0]
+    splitting = (
+        np.max(longitudinal.frequencies) / np.max(analytic.frequencies)
+    ) ** 2
+    assert ratio == pytest.approx(splitting, rel=1e-8)
+
+    # ... and the acoustic modes are where they were, which is the half of the
+    # statement that the ratio above cannot see.
+    raw = _pieces("alas-raman-wedge")[3]
+    assert np.abs(np.sort(longitudinal.frequencies)[:3]
+                  - np.sort(raw.frequencies)[:3]).max() < 1e-4
+
+
+def test_the_neutrality_violation_is_what_breaks_it():
+    """The same relation with the raw charges, measured rather than avoided.
+
+    Committed as a *number* because it is the size of a basis-set error showing
+    up in a place nothing else here looks: the acoustic branch of a polar
+    crystal under its own macroscopic field.
+    """
+    analytic = _pieces("alas-raman-wedge")[3]
+    longitudinal = _loto("alas-raman-wedge", (1.0, 0.0, 0.0), False)
+
+    ratio = analytic.static_permittivity[0, 0] / analytic.epsilon[0, 0]
+    splitting = (
+        np.max(longitudinal.frequencies) / np.max(analytic.frequencies)
+    ) ** 2
+    assert abs(ratio - splitting) == pytest.approx(1.64e-3, rel=0.05)
+    # The spurious longitudinal acoustic mode, which is the mechanism.
+    assert np.sort(longitudinal.frequencies)[2] == pytest.approx(33.8, abs=0.5)
+
+
+def test_silicon_is_not_split_and_has_no_ionic_permittivity():
+    """A non-polar crystal: with ``Z* = 0`` both quantities vanish identically.
+
+    Silicon's two atoms are equivalent, so their Born charges are *equal* rather
+    than opposite and the whole of what this cell reports (-1.196 each) is the
+    neutrality violation -- imposing the sum rule leaves exactly zero, and with
+    it no splitting and no ionic screening. The two ways of being zero are
+    different, one a rank-one term with a zero factor and the other a mode
+    dipole with nothing in it, and neither is imposed by hand.
+    """
+    analytic = _neutralized("si-epsilon-unshifted")
+    longitudinal = _loto("si-epsilon-unshifted", (1.0, 1.0, 1.0), True)
+
+    assert np.abs(longitudinal.frequencies - analytic.frequencies).max() < 1e-9
+    assert np.abs(analytic.ionic_permittivity).max() < 1e-12
+    # The raw charges are a pure violation and the optical mode is silent
+    # either way: equal charges on the two atoms cancel in the mode dipole.
+    raw = _pieces("si-epsilon-unshifted")[3]
+    assert np.abs(raw.ionic_permittivity).max() < 1e-12
 
 
 def test_the_polarizability_block_matches_dynmat_x(tmp_path):

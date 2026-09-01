@@ -14,12 +14,18 @@ not need the Fortran.
 import numpy as np
 import pytest
 
+from pypresso.response.phonon import _diagonalize
 from pypresso.response.spectra import (
     degenerate_manifolds,
     eigendisplacements,
+    loto_modes,
     mode_activities,
+    nonanal,
 )
-from pypresso.units import AMU_TO_RY
+from pypresso.units import (
+    AMU_SI, AMU_TO_RY, BOHR_RADIUS_SI, E2, ELECTRON_SI, EPSILON0_SI, FPI, PI,
+    RY_TO_THZ,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -221,3 +227,139 @@ def test_the_translational_sum_rule_kills_the_acoustic_modes():
     )
     assert np.abs(spectrum.raman_activity[:3]).max() < 1e-24
     assert np.abs(spectrum.infrared[:3]).max() < 1e-24
+
+
+# --------------------------------------------------------------------------
+# P55: the long-range electric field -- LO-TO splitting and the static
+# dielectric constant. Both are contractions of the same two ingredients
+# (``Z*`` and ``eps_infinity``), which is what lets them check each other: the
+# Lyddane-Sachs-Teller relation ties the frequencies to the permittivities, and
+# neither routine can satisfy it by accident because each supplies one side.
+# --------------------------------------------------------------------------
+
+#: A diatomic cubic crystal, made up rather than computed: two atoms pulled
+#: together by one spring constant, opposite Born charges, an isotropic
+#: ``eps_infinity``. Everything below is exact for it, so the tolerances are
+#: double precision rather than a physics tolerance.
+SPRING = 0.18
+CHARGE = 2.1
+EPS_INFINITY = 9.5
+
+
+def _diatomic():
+    """``(force_constants, born, epsilon)`` for the model above."""
+    phi = np.zeros((2, 3, 2, 3))
+    for cart in range(3):
+        phi[0, cart, 0, cart] = phi[1, cart, 1, cart] = SPRING
+        phi[0, cart, 1, cart] = phi[1, cart, 0, cart] = -SPRING
+    born = np.stack([CHARGE * np.eye(3), -CHARGE * np.eye(3)])
+    return phi, born, EPS_INFINITY * np.eye(3)
+
+
+def test_the_non_analytic_term_raises_one_mode_and_leaves_the_others():
+    """The field is longitudinal: one LO mode, two TO modes, three acoustic.
+
+    The rank-one structure of ``nonanal`` is the physical content -- an optical
+    mode builds a macroscopic field only if it has a dipole along ``q`` -- and
+    it is visible in the spectrum without any reference to compare against.
+    """
+    phi, born, epsilon = _diatomic()
+    transverse, _ = _diagonalize(phi, MASSES)
+    longitudinal, _ = loto_modes(phi, MASSES, born, epsilon, (1, 0, 0), VOLUME)
+
+    # The three acoustic modes stay at zero: ``sum_a Z*_a = 0``, so the term
+    # annihilates a rigid translation exactly as the force constants do. Both
+    # sets are zero to the eigensolver's own residue, which for a frequency is
+    # the square root of it -- hence a bound rather than a comparison.
+    assert np.max(np.abs(longitudinal[:3])) < 1e-4
+    assert np.max(np.abs(transverse[:3])) < 1e-4
+    # Two of the three optical modes are untouched and one is raised.
+    assert np.allclose(longitudinal[3:5], transverse[3:5], atol=1e-9)
+    assert longitudinal[5] > transverse[5] + 30.0
+
+
+def test_the_non_analytic_term_is_blind_to_the_length_of_q():
+    """It is homogeneous of degree zero: only the *direction* enters."""
+    phi, born, epsilon = _diatomic()
+    one, _ = loto_modes(phi, MASSES, born, epsilon, (1, 0, 0), VOLUME)
+    long_ = loto_modes(phi, MASSES, born, epsilon, (57.0, 0, 0), VOLUME)[0]
+    assert np.allclose(one, long_, atol=1e-12)
+
+
+def test_a_non_polar_crystal_has_no_splitting():
+    """``Z* = 0`` and the term vanishes identically -- silicon, in a fixture."""
+    phi, _, epsilon = _diatomic()
+    born = np.zeros((2, 3, 3))
+    split, _ = loto_modes(phi, MASSES, born, epsilon, (1, 1, 1), VOLUME)
+    assert np.allclose(split, _diagonalize(phi, MASSES)[0], atol=1e-12)
+
+
+def test_a_direction_with_no_length_is_refused():
+    """``nonanal`` writes a message and returns the matrix unchanged.
+
+    Silently giving TO modes back to a caller who asked for LO ones is the kind
+    of failure this project refuses instead.
+    """
+    phi, born, epsilon = _diatomic()
+    with pytest.raises(ValueError, match="direction"):
+        nonanal(phi, born, epsilon, (0.0, 0.0, 0.0), VOLUME)
+
+
+def test_lyddane_sachs_teller():
+    """``eps_0/eps_inf = (omega_LO/omega_TO)^2``, the check neither half passes alone.
+
+    The left-hand side comes from :func:`polar_mode_permittivity` and the right
+    from :func:`nonanal`, and the two share no line of code: one divides the
+    mode dipole by ``omega^2`` and the other adds a rank-one term to a matrix
+    before it is diagonalised. For a diatomic cubic crystal the relation is an
+    identity, so this holds to double precision and any error in either
+    prefactor -- a factor of two in ``e^2``, a missing ``4 pi``, the volume in
+    the wrong place -- breaks it.
+    """
+    phi, born, epsilon = _diatomic()
+    transverse, vectors = _diagonalize(phi, MASSES)
+    longitudinal, _ = loto_modes(phi, MASSES, born, epsilon, (1, 0, 0), VOLUME)
+    spectrum = mode_activities(
+        transverse, vectors, MASSES, epsilon, VOLUME, born=born
+    )
+
+    ratio = spectrum.static_permittivity[0, 0] / EPS_INFINITY
+    splitting = (longitudinal[5] / transverse[5]) ** 2
+    assert ratio == pytest.approx(splitting, rel=1e-12)
+    # ... and the static tensor is isotropic, with nothing imposing it.
+    off_diagonal = spectrum.static_permittivity - np.diag(
+        np.diag(spectrum.static_permittivity)
+    )
+    assert np.max(np.abs(off_diagonal)) < 1e-14
+
+
+def test_the_ionic_permittivity_constant_is_qes():
+    """The one constant written down here rather than transcribed.
+
+    ``polar_mode_permittivity`` in ``LR_Modules/dynmat_sub.f90`` builds its
+    prefactor from ``e/sqrt(eps_0 a_0^3 amu)`` and converts ``omega`` to THz;
+    in Rydberg units the same number is ``4 pi e^2`` with the mode dipole in
+    ``e/sqrt(Ry mass)``. A wrong constant here gives a plausible dielectric
+    constant rather than a broken one, so the two chains are compared directly.
+    """
+    plasma = ELECTRON_SI / np.sqrt(EPSILON0_SI * BOHR_RADIUS_SI**3 * AMU_SI)
+    qe = plasma**2 / (FPI * PI) * 1.0e-24 / RY_TO_THZ**2
+    assert FPI * E2 / AMU_TO_RY == pytest.approx(qe, rel=1e-10)
+
+
+def test_a_soft_mode_is_left_out_of_the_static_permittivity():
+    """An imaginary frequency has no oscillator strength to report.
+
+    ``polar_mode_permittivity``'s ``w2 > eps8``, verbatim: a crystal at a saddle
+    point of its energy has no static dielectric constant, and dividing by a
+    negative ``omega^2`` would return one with the wrong sign rather than
+    saying so.
+    """
+    phi, born, epsilon = _diatomic()
+    unstable = -phi  # every mode imaginary
+    frequencies, vectors = _diagonalize(unstable, MASSES)
+    spectrum = mode_activities(
+        frequencies, vectors, MASSES, epsilon, VOLUME, born=born
+    )
+    assert np.allclose(spectrum.ionic_permittivity, 0.0, atol=0.0)
+    assert np.allclose(spectrum.static_permittivity, epsilon)

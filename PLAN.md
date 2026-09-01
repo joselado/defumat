@@ -8048,6 +8048,88 @@ the same file.
 gyrotropic cell; the **Berry-curvature dipole**; and **frequency dependence**
 in the Sternheimer sense, which is still the other machine.
 
+### P55 — The LO-TO splitting and the static dielectric constant. ✅ DONE.
+
+`pypresso/response/spectra.py`: `nonanal`, `loto_modes`,
+`polar_mode_permittivity`, `neutral_born_charges`, and
+`vibrational_spectrum(loto_direction=..., neutralize=...)`, reachable through
+`Calculator.get_vibrational_spectrum`. **The two things P36 named as omitted
+and did not do**, and they are two contractions of the same pair of tensors P24
+and P24b already produce.
+
+At `Gamma` a polar crystal's dynamical matrix is not analytic: an optical mode
+that moves the ions against each other builds a macroscopic field whose cost
+depends on the *direction* the zone centre is approached from, so the matrix
+takes a rank-one term
+
+    D_(a i, b j) += (4 pi e^2/Omega) (q.Z*_a)_i (q.Z*_b)_j / (q.eps.q)
+
+(`rigid.f90`'s `nonanal`, transcribed) which raises the longitudinal mode and
+leaves the transverse ones alone. Contracting the same `Z*` with the
+eigendisplacements instead gives the mode dipole the infrared activity is
+already the square of, and dividing it by `omega^2` gives the ionic screening
+of a static field (`dynmat_sub.f90`'s `polar_mode_permittivity`, after Fennie
+and Rabe, PRB **68**, 184111 (2003)).
+
+**Why this one was taken:** it is the cheapest remaining item in
+`NONLINEAR.md` §3.1 *and* the one with the strongest available check, which is
+the criterion this phase was chosen on. `dynmat.x` applies both terms itself to
+the `fildyn` P36's `io/dynmat.py` already writes, and it is the one QE
+reference above second order that still works — so the comparison is
+digit-for-digit against the Fortran on quantities this code computed, on a test
+harness that existed.
+
+**Everything matches `dynmat.x` and that is the weaker half of the
+validation.** The LO frequencies, the mode effective charges (summed over each
+multiplet, since `Z~*` is a vector on an arbitrary basis inside one) and the
+static dielectric tensor all agree to every digit it prints. But both codes
+read the same `Z*` and the same `eps` off the same file, so a comparison
+against it cannot see anything wrong with *those*. **The
+Lyddane-Sachs-Teller relation can**, and it is this phase's real check:
+`eps_0/eps_infinity = (omega_LO/omega_TO)^2` is an identity for a diatomic
+cubic crystal, one side is a ratio of two diagonalisations and the other a sum
+of mode dipoles over `omega^2`, and they share no line of code. On AlAs it
+holds to **5.0e-11**, and on a synthetic two-atom model to double precision
+with no SCF at all (`tests/unit/test_spectra.py`).
+
+**And it is what found the finding.** With the *raw* Born charges LST is
+violated by **1.6e-3** and the mechanism is visible: `sum_a Z*_a = 0` says a
+rigid translation builds no field, a computed `Z*` misses it by the basis-set
+error (AlAs at `ecutwfc = 10`: **-1.257** against charges of 1.925 and -3.181),
+and `nonanal` then charges the crystal and lifts a **longitudinal acoustic**
+mode from 1.8 to 33.8 cm^-1 while putting the LO frequency 7.7 cm^-1 low.
+`dynmat.x` reproduces every one of those wrong numbers, because it is handed
+the same charges — this is a case where the reference implementation agrees
+with a wrong answer and only an identity separates them. `neutralize=True` is
+`set_asr`'s own `asr = 'simple'` correction (`zeu -= sum/nat`), after which the
+acoustic modes stay put and LST holds. Silicon is the degenerate case worth
+recording: its two atoms are *equivalent*, so their charges are equal rather
+than opposite and the whole of what the calculation reports (-1.196 each) is
+the violation — neutralising leaves exactly zero, and with it no splitting and
+no ionic screening.
+
+**One constant is written down rather than transcribed**, which is the only
+departure: `polar_mode_permittivity` builds its prefactor from
+`e^2/(eps_0 a_0^3 amu)` with `omega` converted to THz, where in Rydberg units
+the same number is `4 pi e^2/Omega` with the dipole in `e/sqrt(Ry mass)`. The
+two chains agree to **1.6e-12**, which is QE's own constants' round-off, and
+that agreement is a unit test because a wrong constant here gives a *plausible*
+dielectric constant rather than a broken one.
+
+**The physics, at `ecutwfc = 10` on the wedge:** AlAs's TO is 353.3 cm^-1
+against a measured 361, its LO 391.5 against 402, the splitting 38.2 against 41,
+and `eps_0 = 15.92` on `eps_infinity = 12.97`. Both constants are far above the
+measured 10.06 and 8.16 — that is the cutoff — but their **ratio**, 1.228, is
+right against 1.233 from the measured constants and 1.240 from the measured
+frequencies, because LST ties it to the frequencies and the error that inflates
+one constant inflates the other.
+
+**Not done and named:** the splitting is a `Gamma` quantity by construction, so
+a dispersion through it needs phonons at `q != 0`; the two-dimensional form
+(`loto_2d`, for a slab, where the `1/q` divergence is different) is not
+written; and everything the Raman tensors and the Born charges refuse is
+refused here, since it is built from both.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

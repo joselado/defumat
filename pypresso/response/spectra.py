@@ -41,17 +41,34 @@ reported but must not be. Silicon's Raman-active ``T_2g`` triplet happens to be
 per-mode invariant as well (its tensors are traceless and its ``beta^2`` is the
 same for every member), which is an accident of that mode and not a licence.
 
-**What is not here.** The **non-analytic term** that splits LO from TO
-(``rigid.f90``'s ``nonanal``) is omitted: the ``Gamma`` dynamical matrix P25
-computes is the analytic one, and the correction needs a direction of approach
-``q -> 0`` as well as ``Z*`` and ``eps``, both of which are available. So an
-optical triplet comes out unsplit here, and the ``dynmat.x`` comparison is run
-with its ``q`` left at zero for the same reason. Adding it is arithmetic of the
-same kind as this module's; it is named rather than done.
+**The long-range electric field is here as of P55**, and it is what the two
+paragraphs that used to end this docstring named. A polar crystal's ``Gamma``
+dynamical matrix is not analytic: an optical mode that moves the ions against
+each other builds a macroscopic field, the field depends on the *direction* the
+zone centre is approached from, and the matrix acquires the rank-one term
 
-Ionic (mode-resolved) contributions to the static dielectric constant --
-``polar_mode_permittivity`` -- are omitted for the same reason and would be the
-same few lines.
+    D_(a i, b j) += (4 pi e^2/Omega) (q.Z*_a)_i (q.Z*_b)_j / (q.eps.q)
+
+(:func:`nonanal`, ``rigid.f90``). It raises the longitudinal mode and leaves the
+transverse ones alone, which is the LO-TO splitting, and it is zero in a
+non-polar crystal because ``Z*`` is. Contracting the same two ingredients the
+other way gives the **ionic permittivity** (:func:`polar_mode_permittivity`,
+``dynmat_sub.f90``, after Fennie and Rabe, `Phys. Rev. B 68, 184111 (2003)
+<https://doi.org/10.1103/PhysRevB.68.184111>`_): each polar mode contributes
+``4 pi e^2 p_i p_j/(Omega omega^2)`` to the static dielectric constant, where
+``p`` is the mode dipole the infrared activity is already built from. So
+``eps_0`` and ``eps_infinity`` are two ends of the same contraction, and the two
+of them together with the frequencies satisfy the Lyddane-Sachs-Teller relation,
+which is the check that neither piece can pass alone (§"how it is validated" in
+``tests/regression/test_spectra.py``).
+
+**Only the permittivity's constant is written down rather than transcribed.**
+``polar_mode_permittivity`` reaches it through a chain of SI constants and a
+conversion to THz; in Rydberg units it is ``4 pi e^2/Omega`` with the mode
+dipole in ``e/sqrt(Ry mass)``, and the two agree to **1.6e-12**, which is QE's
+own constants' round-off. That agreement is a test
+(``test_the_ionic_permittivity_constant_is_qes``), because a wrong constant here
+is a plausible number rather than a broken one.
 """
 
 from __future__ import annotations
@@ -60,13 +77,19 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from pypresso.units import AMU_TO_RY, BOHR_TO_ANGSTROM, FPI, RY_TO_CMM1, RY_TO_THZ
+from pypresso.units import (
+    AMU_TO_RY, BOHR_TO_ANGSTROM, E2, FPI, RY_TO_CMM1, RY_TO_THZ,
+)
 
 __all__ = [
     "VibrationalSpectrum",
     "eigendisplacements",
     "mode_activities",
     "degenerate_manifolds",
+    "nonanal",
+    "loto_modes",
+    "neutral_born_charges",
+    "polar_mode_permittivity",
     "vibrational_spectrum",
 ]
 
@@ -83,6 +106,15 @@ ELECTRON_DEBYE_PER_ANGSTROM = 4.80324
 #: cm^-1 away. Anything between those two scales would do; 1.0 is chosen because
 #: it is also below any splitting worth reporting as physics.
 DEGENERACY_TOLERANCE = 1.0
+
+#: ``omega^2`` in Ry^2 below which a mode is left out of the ionic
+#: permittivity. ``polar_mode_permittivity``'s ``eps8``, verbatim -- it is 11
+#: cm^-1, so what it drops is the acoustic branch, whose mode dipole the
+#: translational sum rule silences and whose ``1/omega^2`` would otherwise
+#: divide a residue by a residue. An **imaginary** mode is dropped by the same
+#: test, since its ``omega^2`` is negative: a crystal that is unstable has no
+#: static dielectric constant to report.
+HARD_MODE_OMEGA2 = 1.0e-8
 
 
 @dataclass
@@ -127,6 +159,32 @@ class VibrationalSpectrum:
     #: ``(3 nat,)`` -- which multiplet each mode belongs to, from
     #: :func:`degenerate_manifolds`.
     manifold: np.ndarray
+    #: ``(3 nat, 3)`` -- the mode effective charge ``Z~*``, which is
+    #: :attr:`mode_dipole` in the units ``dynmat.x`` prints it
+    #: (``e bohr/sqrt(2)``, its ``Z~*_x`` columns). ``None`` without ``Z*``.
+    mode_effective_charges: np.ndarray | None = None
+    #: ``(3, 3)`` -- the polar modes' contribution to the static dielectric
+    #: tensor, ``4 pi e^2/Omega sum_nu p p/omega^2``. Zero in a non-polar
+    #: crystal and ``None`` without ``Z*``.
+    ionic_permittivity: np.ndarray | None = None
+    #: ``(3, 3)`` -- ``epsilon + ionic_permittivity``: the **static** dielectric
+    #: tensor, which is what a capacitance measures where :attr:`epsilon` is
+    #: what an optical one does. ``None`` without ``Z*``.
+    static_permittivity: np.ndarray | None = None
+    #: The cartesian direction the zone centre was approached from, or ``None``
+    #: for the analytic matrix. When it is set the frequencies are **LO**, and
+    #: then :attr:`static_permittivity` is not the static dielectric constant:
+    #: the sum over modes has to run over the transverse ones, which is
+    #: precisely what a direction removes. ``dynmat.x`` prints "BEWARE" and the
+    #: same number; :func:`vibrational_spectrum` computes the permittivity from
+    #: the analytic modes instead, so this warning applies only to
+    #: :func:`mode_activities` called by hand.
+    loto_direction: tuple | None = None
+    #: ``(3 nat,)`` in cm^-1 -- the frequencies of the **analytic** matrix,
+    #: kept beside :attr:`frequencies` when a direction was given so that the
+    #: splitting is a subtraction rather than a second calculation. ``None``
+    #: when there was no direction, where :attr:`frequencies` are already these.
+    transverse_frequencies: np.ndarray | None = None
 
     def by_manifold(self):
         """The activities summed over each degenerate multiplet.
@@ -276,6 +334,154 @@ def degenerate_manifolds(
     return labels
 
 
+def nonanal(
+    force_constants: np.ndarray,
+    born: np.ndarray,
+    epsilon: np.ndarray,
+    direction,
+    volume: float,
+) -> np.ndarray:
+    """The non-analytic term: ``rigid.f90``'s ``nonanal``, verbatim.
+
+    At ``q = 0`` exactly, a polar crystal's dynamical matrix is missing the
+    macroscopic electric field an optical mode builds. The field is longitudinal
+    and its size depends on the direction ``q`` from which the zone centre is
+    approached, so the ``Gamma`` matrix has a rank-one term that is a function
+    of a *direction* rather than of a point -- which is why a phonon dispersion
+    is discontinuous at ``Gamma`` and why this is applied here rather than
+    inside the second derivative that produced the matrix::
+
+        D_(a i, b j) += (4 pi e^2/Omega) (q . Z*_a)_i (q . Z*_b)_j / (q . eps . q)
+
+    Both factors are dot products of ``q`` with a Born charge, so the term
+    vanishes identically wherever ``Z*`` does and a non-polar crystal is
+    untouched. It is homogeneous of degree zero in ``q``: only the direction
+    matters, and the vector need not be normalised.
+
+    Args:
+        force_constants: ``(nat, 3, nat, 3)`` in Ry/bohr^2 --
+            :attr:`~pypresso.response.phonon.Phonons.matrix`.
+        born: ``(nat, 3, 3)`` indexed ``[atom, field, displacement]``, in ``e``.
+        epsilon: ``(3, 3)``, the **electronic** dielectric tensor.
+        direction: three cartesian components, any length.
+        volume: the cell volume in bohr^3.
+
+    Returns the corrected ``(nat, 3, nat, 3)`` matrix. Raises ``ValueError``
+    for a direction with no length, where ``nonanal`` writes "a direction for q
+    was not specified" and returns the matrix unchanged -- a refusal rather than
+    a silent no-op, since a caller that asked for LO modes and got TO ones back
+    has no way to tell.
+    """
+    q = np.asarray(direction, dtype=float).reshape(3)
+    epsilon = np.asarray(epsilon, dtype=float)
+    qeq = float(q @ epsilon @ q)
+    if qeq < 1.0e-8:
+        raise ValueError(
+            "the non-analytic term needs a direction to approach q = 0 from, "
+            f"and q . eps . q = {qeq:.3e} for q = {tuple(q)}"
+        )
+    born = np.asarray(born, dtype=float)
+    # ``zag(i) = sum_alpha q(alpha) zeu(alpha, i, na)``: the sum is over the
+    # **field** label of ``Z*`` and the surviving one is the displacement, which
+    # is this code's ``[atom, field, displacement]`` in that order.
+    zag = np.einsum("a,kai->ki", q, born)
+    term = FPI * E2 * np.einsum("ki,lj->kilj", zag, zag) / (qeq * volume)
+    return np.asarray(force_constants, dtype=float) + term
+
+
+def neutral_born_charges(born: np.ndarray) -> np.ndarray:
+    """``Z*`` with the charge-neutrality violation shared out over the atoms.
+
+    ``set_asr``'s ``asr = 'simple'`` branch (``LR_Modules/dynmat_sub.f90``),
+    which is one line: ``zeu -= sum_atoms zeu/nat``, component by component.
+
+    **It is not cosmetic, and the LO-TO splitting is where that shows.** The
+    exact ``sum_a Z*_a = 0`` says a rigid translation of the crystal builds no
+    field; a calculated ``Z*`` misses it by the basis-set error (AlAs at
+    ``ecutwfc = 10``: -1.257 against charges of 1.925 and -3.181), and
+    :func:`nonanal` then gives the cell a net charge and lifts a
+    **longitudinal acoustic** mode -- 1.8 to 33.8 cm^-1 on that cell, where the
+    acoustic modes must stay at zero whatever the field does. The
+    Lyddane-Sachs-Teller relation is what measures it: violated by 1.6e-3 with
+    the raw charges and by **5.0e-11** with these.
+
+    ``dynmat.x`` applies the same correction under every ``asr`` but ``'no'``.
+    """
+    born = np.asarray(born, dtype=float)
+    return born - born.mean(axis=0)
+
+
+def loto_modes(
+    force_constants: np.ndarray,
+    masses: np.ndarray,
+    born: np.ndarray,
+    epsilon: np.ndarray,
+    direction,
+    volume: float,
+):
+    """The LO frequencies and displacement patterns along ``direction``.
+
+    :func:`nonanal` followed by the same mass-weighted diagonalisation the
+    analytic matrix gets, which is ``dynmat.x``'s order of operations. Returns
+    ``(frequencies, eigenvectors)`` shaped as
+    :class:`~pypresso.response.phonon.Phonons` carries them -- cm^-1 signed, and
+    the mode index last.
+    """
+    from pypresso.response.phonon import _diagonalize
+
+    matrix = nonanal(force_constants, born, epsilon, direction, volume)
+    return _diagonalize(matrix, np.asarray(masses, dtype=float))
+
+
+def polar_mode_permittivity(
+    frequencies: np.ndarray,
+    mode_dipole: np.ndarray,
+    epsilon: np.ndarray,
+    volume: float,
+):
+    """The ionic contribution to the static dielectric tensor.
+
+    ``LR_Modules/dynmat_sub.f90``'s ``polar_mode_permittivity``, after Fennie
+    and Rabe, `Phys. Rev. B 68, 184111 (2003)
+    <https://doi.org/10.1103/PhysRevB.68.184111>`_. Every polar mode is an
+    oscillator that a static field drives, so it adds
+
+        d(eps)_ij = (4 pi e^2/Omega) p_i p_j / omega^2
+
+    to the electronic dielectric constant, where ``p`` is the mode dipole
+    ``sum_(a,c) Z*_(a,i,c) z_(a,c)`` that the infrared activity is already the
+    square of. A soft mode contributes divergently, which is the physics of a
+    ferroelectric and the reason :data:`HARD_MODE_OMEGA2` is a threshold rather
+    than a filter on the acoustic branch by index.
+
+    **The constant is derived here and transcribed in QE**, which is the one
+    departure in this module. ``polar_mode_permittivity`` reaches it through
+    ``e^2/(eps_0 a_0^3 amu)`` and a conversion of ``omega`` to THz; in Rydberg
+    units the same quantity is ``4 pi e^2/Omega`` with ``omega`` in Ry and the
+    dipole in ``e/sqrt(Ry mass)``, since the Rydberg mass unit is what
+    :func:`eigendisplacements` already normalises against. The two agree to
+    1.6e-12 and there is a test that says so.
+
+    Args:
+        frequencies: ``(3 nat,)`` in cm^-1, signed.
+        mode_dipole: ``(3 nat, 3)`` in ``e/sqrt(Ry mass)`` --
+            :attr:`VibrationalSpectrum.mode_dipole`.
+        epsilon: ``(3, 3)``, the electronic dielectric tensor.
+        volume: the cell volume in bohr^3.
+
+    Returns ``(ionic, static)``, both ``(3, 3)``.
+    """
+    frequencies = np.asarray(frequencies, dtype=float)
+    mode_dipole = np.asarray(mode_dipole, dtype=float)
+    omega2 = np.sign(frequencies) * (frequencies / RY_TO_CMM1) ** 2
+    hard = omega2 > HARD_MODE_OMEGA2
+    weight = np.where(hard, 1.0 / np.where(hard, omega2, 1.0), 0.0)
+    ionic = FPI * E2 / volume * np.einsum(
+        "n,ni,nj->ij", weight, mode_dipole, mode_dipole
+    )
+    return ionic, np.asarray(epsilon, dtype=float) + ionic
+
+
 def mode_activities(
     frequencies: np.ndarray,
     eigenvectors: np.ndarray,
@@ -285,6 +491,7 @@ def mode_activities(
     raman: np.ndarray | None = None,
     born: np.ndarray | None = None,
     tolerance: float = DEGENERACY_TOLERANCE,
+    loto_direction=None,
 ) -> VibrationalSpectrum:
     """``RamanIR``: the whole of the assembly, and nothing that solves anything.
 
@@ -305,6 +512,10 @@ def mode_activities(
             not the Angstrom-squared form, which this converts to itself.
         born: ``(nat, 3, 3)`` indexed ``[atom, field, displacement]`` -- P24b's
             Born effective charges, in units of ``e``.
+        loto_direction: recorded on the result and used for nothing else. The
+            frequencies and eigenvectors handed in are whatever the caller
+            diagonalised; :func:`loto_modes` is what makes them LO ones, and
+            passing the direction here is how the result says which they are.
     """
     frequencies = np.asarray(frequencies, dtype=float)
     epsilon = np.asarray(epsilon, dtype=float)
@@ -315,7 +526,8 @@ def mode_activities(
     polarizability = chi * BOHR_TO_ANGSTROM**3 * volume / FPI
     clausius_mossotti = 3.0 / (2.0 + np.trace(epsilon) / 3.0)
 
-    mode_dipole = infrared = None
+    mode_dipole = infrared = mode_effective_charges = None
+    ionic_permittivity = static_permittivity = None
     if born is not None:
         # ``polar(i) = sum_(a,j) zstar(i,j,a) z(a,j)``: QE's ``zstar`` is
         # ``(field, displacement, atom)``, which is this code's ``[a, i, j]``
@@ -326,6 +538,14 @@ def mode_activities(
         # cancel and are kept apart because that is where the convention lives.
         irfac = ELECTRON_DEBYE_PER_ANGSTROM**2 / 2.0 * AMU_TO_RY
         infrared = 2.0 * np.sum(mode_dipole**2, axis=1) * irfac
+        # ``meffc``, which is the same contraction in QE's printed units:
+        # ``z`` carries ``1/sqrt(amu_ry M)`` and ``meffc`` puts one of the two
+        # back. Nothing downstream uses it -- it is a column ``dynmat.x``
+        # prints under ``lplasma`` and therefore a comparable number.
+        mode_effective_charges = mode_dipole * np.sqrt(AMU_TO_RY)
+        ionic_permittivity, static_permittivity = polar_mode_permittivity(
+            frequencies, mode_dipole, epsilon, volume
+        )
 
     mode_raman = alpha = beta2 = activity = depolarisation = None
     if raman is not None:
@@ -371,6 +591,11 @@ def mode_activities(
         polarizability=polarizability,
         clausius_mossotti=float(clausius_mossotti),
         manifold=degenerate_manifolds(frequencies, tolerance),
+        mode_effective_charges=mode_effective_charges,
+        ionic_permittivity=ionic_permittivity,
+        static_permittivity=static_permittivity,
+        loto_direction=None if loto_direction is None
+        else tuple(float(value) for value in loto_direction),
     )
 
 
@@ -380,6 +605,8 @@ def vibrational_spectrum(
     raman: object | None = None,
     phonons: object | None = None,
     infrared: bool = True,
+    loto_direction=None,
+    neutralize: bool = False,
     verbose: bool = False,
     **response_options,
 ):
@@ -406,9 +633,24 @@ def vibrational_spectrum(
         phonons: :class:`~pypresso.response.phonon.Phonons` computed earlier.
         infrared: also assemble the infrared activities, which needs the Born
             effective charges.
+        loto_direction: three cartesian components, any length. Given one, the
+            long-range electric field of :func:`nonanal` is added before the
+            modes are diagonalised, so the frequencies are the **LO** ones for
+            a zone centre approached from that direction and the Raman and
+            infrared activities are the LO modes'. Needs the Born charges, so
+            it needs ``infrared=True``.
+        neutralize: impose ``sum_a Z*_a = 0`` before anything is contracted
+            (:func:`neutral_born_charges`). Off by default, which is
+            ``dynmat.x``'s ``asr = 'no'``; **on is what a physical LO-TO
+            splitting needs**, because the violation a finite basis leaves
+            charges the cell and lifts a longitudinal acoustic mode.
         response_options: passed to both responses.
 
-    Returns a :class:`VibrationalSpectrum`.
+    Returns a :class:`VibrationalSpectrum`. Its permittivity is always built
+    from the **analytic** modes, whatever ``loto_direction`` says: the sum over
+    oscillators that screens a static field runs over the transverse modes, and
+    a direction is exactly what removes them. ``dynmat.x`` computes it from
+    whichever modes it has and prints "BEWARE" instead.
     """
     # Imported here rather than at the top: this module is what
     # ``pypresso.response`` exposes last, and those three import it back through
@@ -440,12 +682,54 @@ def vibrational_spectrum(
             "response was run without them: pass a raman= computed with "
             "born_charges=True, or infrared=False"
         )
-    return mode_activities(
-        frequencies=phonons.frequencies,
-        eigenvectors=phonons.eigenvectors,
-        masses=calculation.system.structure.masses,
+    if loto_direction is not None and born is None:
+        raise ValueError(
+            "the LO-TO splitting is built from the Born effective charges and "
+            "the electronic dielectric tensor: it needs infrared=True"
+        )
+
+    masses = calculation.system.structure.masses
+    volume = float(calculation.system.cell.volume)
+    born = None if born is None else np.asarray(born, dtype=float)
+    if neutralize and born is not None:
+        violation = np.abs(born.sum(axis=0)).max()
+        born = neutral_born_charges(born)
+        if verbose:
+            print(f"  charge neutrality imposed on Z*: {violation:.3e} shared "
+                  f"over {born.shape[0]} atoms")
+    frequencies, eigenvectors = phonons.frequencies, phonons.eigenvectors
+    if loto_direction is not None:
+        frequencies, eigenvectors = loto_modes(
+            phonons.matrix, masses, born, raman.epsilon, loto_direction, volume,
+        )
+        if verbose:
+            splitting = float(np.max(frequencies) - np.max(phonons.frequencies))
+            print(f"  LO-TO splitting along {tuple(loto_direction)}: "
+                  f"{splitting:.2f} cm^-1")
+
+    spectrum = mode_activities(
+        frequencies=frequencies,
+        eigenvectors=eigenvectors,
+        masses=masses,
         epsilon=raman.epsilon,
-        volume=float(calculation.system.cell.volume),
+        volume=volume,
         raman=raman.raman,
         born=born,
+        loto_direction=loto_direction,
     )
+    if loto_direction is not None and born is not None:
+        # The static dielectric constant is a sum over the **transverse**
+        # modes, so it is rebuilt from the analytic ones rather than from the
+        # LO set just diagonalised (see this function's own docstring).
+        analytic = mode_activities(
+            frequencies=phonons.frequencies,
+            eigenvectors=phonons.eigenvectors,
+            masses=masses,
+            epsilon=raman.epsilon,
+            volume=volume,
+            born=born,
+        )
+        spectrum.ionic_permittivity = analytic.ionic_permittivity
+        spectrum.static_permittivity = analytic.static_permittivity
+        spectrum.transverse_frequencies = analytic.frequencies
+    return spectrum

@@ -100,7 +100,11 @@ from pypresso.response.strain import StrainResponse, strain_response
 from pypresso.response.phonon import Phonons, dynamical_matrix
 from pypresso.response.spectra import (
     VibrationalSpectrum,
+    loto_modes,
     mode_activities,
+    neutral_born_charges,
+    nonanal,
+    polar_mode_permittivity,
     vibrational_spectrum,
 )
 from pypresso.response.sternheimer import (
@@ -140,8 +144,11 @@ __all__ = [
     "electrostriction",
     "local_perturbation",
     "make_sternheimer",
+    "loto_modes",
     "mode_activities",
     "nesting_from_eigenvalues",
+    "neutral_born_charges",
+    "nonanal",
     "OpticalConductivity",
     "optical_conductivity",
     "ShiftCurrent",
@@ -152,6 +159,7 @@ __all__ = [
     "second_harmonic",
     "shg_coefficients",
     "piezoelectric_tensor",
+    "polar_mode_permittivity",
     "raman_tensors",
     "strain_response",
     "vibrational_spectrum",

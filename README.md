@@ -69,7 +69,8 @@ drive any of this and is what the examples below use.
 | **Electrostriction coefficients** `m`, `q`, `M` and `Q` — the quadratic electromechanical coupling, clamped-ion, insulators, norm-conserving | `electrostriction` | | |
 | **Piezoelectric tensor** `e_(k)ij` — the polarization a strain induces, which is the stress a field induces. Clamped-ion, insulators, norm-conserving, and non-polar crystals only: a class that admits a spontaneous polarization is refused, since the proper response then needs `P` itself | `piezoelectric_tensor`, `Calculator.get_piezoelectric_tensor` | | ✓ |
 | **Raman tensors** `d(eps)/d(tau)` — how the dielectric tensor changes when an atom moves. Insulators, norm-conserving/ultrasoft/PAW; `chi^(2)` and the electro-optic tensor are refused | `raman_tensors` | (✓)⁵ | |
-| **Raman and infrared spectra** — the per-mode activities, depolarisation ratios and electronic polarizability at `Gamma`. The non-analytic LO-TO splitting is not included, so an optical triplet comes out unsplit | `vibrational_spectrum` | ✓ | |
+| **Raman and infrared spectra** — the per-mode activities, depolarisation ratios and electronic polarizability at `Gamma` | `vibrational_spectrum` | ✓ | |
+| **LO-TO splitting and the static dielectric constant** — the macroscopic field a polar mode builds, which raises the longitudinal mode and screens a static field. `eps_0 = eps_infinity + sum_modes`, and the two together satisfy the Lyddane-Sachs-Teller relation. Insulators; needs the Born charges, and a physical splitting needs them charge-neutral | `vibrational_spectrum(loto_direction=..., neutralize=True)`, `nonanal`, `polar_mode_permittivity` | ✓ | (✓)¹⁰ |
 | **Optical conductivity tensor** `sigma_ab(omega)`, the magneto-optical **Kerr angle** and the **anomalous Hall conductivity** — interband plus a Drude term, from `dH/dk` rather than momentum matrix elements. Insulators and metals, norm-conserving; needs the whole k-grid rather than a wedge, since the antisymmetric part is an axial vector | `run_conductivity`, `Calculator.get_optical_conductivity` | (✓)⁷ | ✓ |
 | **Fermi-surface nesting function** `N(q)` — how much of the Fermi surface maps onto itself when translated by `q`, which is where a phonon softens, a charge-density wave opens a gap or a spin spiral finds its pitch. Metals with a smearing; a symmetry-reduced wedge is unfolded rather than refused | `run_nesting`, `Calculator.get_nesting` | | ✓ |
 | **Shift current** `sigma^abc(0; w, -w)` — the bulk photovoltaic effect: the direct current a crystal with no inversion centre carries under illumination, with no junction and no built-in field. Insulators, norm-conserving, `nspin = 1` or spinor; needs the whole k-grid rather than a wedge, and the band count is the convergence parameter because the generalised derivative's intermediate sum runs over the same bands | `run_shift_current`, `Calculator.get_shift_current` | ⁸ | |
@@ -114,6 +115,12 @@ Where the tick is qualified:
   established does not reproduce QE's own committed example. Elk's
   `nonlinopt.f90` (task 125) is the real reference and is what this was
   validated against.
+
+- ¹⁰ Elk adds the same non-analytic term (`dynqnat.f90`, under `tphnat`) and
+  computes Born effective charges (task 208), but its static dielectric tensor
+  is **read in** rather than assembled from the modes: nothing there sums the
+  oscillator strengths into `eps_0`, which is the half `dynmat.x`'s `lperm`
+  does.
 
 The variants under each row — which smearing or tetrahedron method fixes the
 occupations, which projectors DFT+U uses, which constraint scheme — are chosen
@@ -295,6 +302,7 @@ its number. Some of the headline agreements:
 | phonons at `Gamma` — silicon, and a metal | 0.05 and 0.0019 cm⁻¹ |
 | phonons at `Gamma` — ultrasoft and PAW silicon | 0.019 and 0.027 cm⁻¹ |
 | Raman and infrared activities | every digit `dynmat.x` prints |
+| LO-TO splitting, and the static dielectric constant | every digit `dynmat.x` prints; Lyddane-Sachs-Teller to 5e-11 |
 
 **The rows with no tick in either column have no such reference**, since
 nothing can be compared against a code that does not compute it. Each is pinned instead by a

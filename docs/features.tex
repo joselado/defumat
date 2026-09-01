@@ -671,12 +671,83 @@ Monkhorst--Pack grid is not.
 \code{becsumort} is missing, and without it the expression is wrong in sign as
 well as size); $\chi^{(2)}$ and the electro-optic tensor (the second-order
 source term has nothing to build the $\langle u_i|r_k|u_j\rangle$ piece from ---
-and it is \textbf{42\%} of the answer, measured); the non-analytic LO--TO term;
+and it is \textbf{42\%} of the answer, measured);
 phonons at $q\neq0$; the dynamical matrix of an ultrasoft or PAW \emph{metal}
 (the \code{wg}/\code{wk} weight split was derived for a response whose
 \code{becsum} dependence is entirely inside \code{dpsi}, and an insulator cannot
 say which weight the three further tangents belong with); any response under a
 potential-only meta-GGA; and a shifted grid with a reduced $k$-set.
+\end{refuses}
+
+\subsection*{LO--TO splitting and the static dielectric constant}
+
+At $\Gamma$ a polar crystal's dynamical matrix is not analytic. An optical mode
+that moves the ions against each other builds a macroscopic electric field, and
+what the field costs depends on the \emph{direction} the zone centre is
+approached from, so the matrix acquires a rank-one term:
+\begin{equation*}
+D_{I\alpha,J\beta} \;\to\; D_{I\alpha,J\beta}
+  + \frac{4\pi e^2}{\Omega}\,
+    \frac{(\mathbf q\!\cdot\!Z^{\ast}_I)_\alpha\,
+           (\mathbf q\!\cdot\!Z^{\ast}_J)_\beta}
+          {\mathbf q\cdot\epsilon^\infty\cdot\mathbf q}
+\end{equation*}
+It raises the longitudinal mode and leaves the transverse ones alone --- the
+LO--TO splitting --- and it vanishes identically where $Z^{\ast}$ does, so a
+non-polar crystal is untouched. Contracting the same two ingredients the other
+way gives the ionic screening of a \emph{static} field, one oscillator per polar
+mode:
+\begin{equation*}
+\epsilon^0_{ij} = \epsilon^\infty_{ij}
+  + \frac{4\pi e^2}{\Omega}\sum_\nu
+    \frac{p^\nu_i\,p^\nu_j}{\omega_\nu^2},
+\qquad
+p^\nu_i = \sum_{I\gamma} Z^{\ast}_{I,i\gamma}\,z^\nu_{I\gamma}
+\end{equation*}
+where $p$ is the same mode dipole the infrared activity is the square of. So
+$\epsilon^0$ and $\epsilon^\infty$ are two ends of one contraction, and
+together with the frequencies they satisfy the Lyddane--Sachs--Teller relation
+$\epsilon^0/\epsilon^\infty = (\omega_{\mathrm{LO}}/\omega_{\mathrm{TO}})^2$.
+
+\begin{pycode}
+spectrum = calc.get_vibrational_spectrum(neutralize=True)
+print(spectrum.static_permittivity)          # eps_0, 3x3
+print(spectrum.ionic_permittivity)           # the polar modes' share of it
+
+lo = calc.get_vibrational_spectrum(loto_direction=(1, 0, 0), neutralize=True)
+print(lo.frequencies)                        # the LO modes along x
+\end{pycode}
+
+\code{nonanal} adds the term to a dynamical matrix on its own and
+\code{loto\_modes} diagonalises the result; \code{polar\_mode\_permittivity}
+is the oscillator sum, and \code{neutral\_born\_charges} the sum-rule
+correction below. All four are pure functions of arrays, so they can be checked
+without a self-consistent run behind them.
+
+Both halves agree with \code{dynmat.x} --- which applies the same term and the
+same oscillator sum to the tensors this code writes to its \code{fildyn} --- to
+every digit it prints. \textbf{The Lyddane--Sachs--Teller relation is the check
+neither half can pass alone}, since one side is a ratio of two diagonalisations
+and the other a sum of dipoles over $\omega^2$; on AlAs it holds to
+\textbf{5.0e-11}.
+
+\textbf{It needs a charge-neutral $Z^{\ast}$ and that is worth knowing before
+reading an LO frequency.} The sum rule $\sum_I Z^{\ast}_I = 0$ says a rigid
+translation builds no field; a computed $Z^{\ast}$ misses it by the basis-set
+error, which \emph{charges the crystal} --- AlAs at \code{ecutwfc = 10} misses
+it by $-1.257$, and the non-analytic term then lifts a longitudinal
+\emph{acoustic} mode from 1.8 to 33.8~cm$^{-1}$ and puts the LO frequency
+7.7~cm$^{-1}$ low. \code{neutralize=True} shares the violation out over the
+atoms, which is what \code{dynmat.x} does under any \code{asr} but
+\code{'no'}. Comparing against another code does not see this: it is handed the
+same charges and reproduces the same wrong number. LST does.
+
+\begin{refuses}
+\textbf{Refuses.} Everything the Raman tensors and the Born charges refuse,
+since it is built from both: PAW $Z^{\ast}$, metals, and the rest of the list
+above. The splitting is a $\Gamma$ quantity by construction --- it is what
+$q\to0$ leaves behind --- so a dispersion through it needs phonons at
+$q\neq0$, which are not implemented.
 \end{refuses}
 
 \subsection*{Elastic constants, electrostriction and the elasto-optic tensor}

@@ -96,9 +96,21 @@ Two things came out of it that were not in the plan:
   matrix, and it is the same object.** `raman_tensors(keep_internals=True)` hands it over
   and `dynamical_matrix(response=...)` takes it, so the phonons cost 1-2 s instead of 50.
 
-Not done and named: the **non-analytic LO-TO term** (`rigid.f90`'s `nonanal`) and the
-mode-resolved ionic permittivity (`polar_mode_permittivity`). Both need only `Z*` and `eps`,
-which are already here.
+**Both of the two things this section named as not done are done** (P55): the
+non-analytic LO-TO term (`rigid.f90`'s `nonanal`) and the mode-resolved ionic permittivity
+(`polar_mode_permittivity`), which needed only `Z*` and `eps` and were an afternoon each.
+They were taken first because of §6 rather than because of §8: `dynmat.x` applies both
+itself, so the transcription check existed already.
+
+**What they added to §5's list of checks is a case where the reference agrees with the
+wrong answer.** Both codes read the same `Z*` off the same file, so `dynmat.x` reproduces
+every digit of a splitting computed from Born charges that violate `sum_a Z*_a = 0` — and
+at `ecutwfc = 10` AlAs's violate it by -1.257, which charges the crystal and lifts a
+*longitudinal acoustic* mode from 1.8 to 33.8 cm^-1. The Lyddane-Sachs-Teller relation
+separates them: violated by 1.6e-3 with the raw charges and by **5.0e-11** with the
+neutralised ones. It is §5's second bullet in a new place — an identity that ties two
+independently computed quantities, where a comparison against another code's arithmetic
+cannot see a shared input being wrong.
 
 ### 3.2 Grüneisen parameters and quasi-harmonic thermal expansion
 
@@ -115,7 +127,39 @@ is one no assembly error is likely to reproduce by accident. At `Gamma` only unt
 `q != 0` lands, which limits it to optical modes — say so rather than quoting a thermal
 expansion from three modes.
 
-**Cost.** Nearly free, and it was promised and not delivered in P35.
+**Cost. Not nearly free, and the estimate above is the one this file got wrong** --
+corrected by reading the code rather than by attempting it, before P55 was chosen instead.
+"One more `jvp` of the dynamical matrix" is not available, because **the dynamical matrix
+here is not assembled variationally**: `_force_constants` computes it as one `jvp` of the
+*force's gradient* along a tangent carrying `(u, dpsi_u, drho_u)`, and differentiating that
+along a strain differentiates the tangents too -- `d(dpsi_u)/d(eps)` is the mixed
+second-order response, which does not exist and is a Sternheimer solve of its own.
+
+The 2n+1 route is the right one and it is what P26 and P35 both are, but it needs an
+object neither of them built: **a second-order energy functional in the *displacement*
+coordinate**. `electrostriction._second_order_energy_at` is that functional for the
+*field* -- and it is hardcoded to the field's three components (`for axis in range(3)`,
+thirteen times) and repairs its wedge sum as a **polar vector**, where a displacement
+perturbation has `3 nat` components and symmetrises as `symdvscf` does. So the phase is:
+
+1. generalise the functional's perturbation axis and hand it its symmetriser, with P26's
+   and P35's committed numbers as the guard that nothing moved;
+2. hand it the displacement's bare perturbation `b`, which is
+   `phonon._bare_displacements` and already exists -- and, unlike the field's `b`, needs
+   **no extra Sternheimer solve**, since `dV_bare/du` is an explicit function of geometry;
+3. put the **frozen** second derivative (`dynmat0`, `d2ionq`) inside the same functional,
+   which the field version has no counterpart to because a field does not move ions. Its
+   strain derivative is then a triple-nested autodiff of the frozen energy;
+4. one `jvp` along the strain tangent `strain_response` already builds.
+
+The check that step 1-3 are right before any of step 4 is worth naming, because it is free:
+the functional's **stationary value must reproduce the electronic part of the force
+constants** P25 already computes.
+
+Two things that stay true from the original entry: the validation is a finite difference of
+the frequencies over re-converged strained cells, which is decisive and needs no `ph.x`;
+and at `Gamma` the negative-`gamma` physics check is unavailable, since it lives on the
+transverse acoustic modes.
 
 ### 3.3 Third-order force constants at `Gamma`
 
@@ -381,11 +425,15 @@ entry here a direct plane-wave code cannot honestly converge.
 2. ~~**The rank-3 symmetriser** (§4.3)~~ — **done, P36**, and it was done first, because its
    check is decisive today (the wedge must reproduce P35's committed closed-grid numbers)
    and it halves the cost of every third-derivative run after it.
-3. **Grüneisen parameters** (§3.2) — nearly free, and still owed. Note that at `Gamma` the
+3. ~~**The LO-TO term and the ionic permittivity** (§3.1)~~ — **done, P55**, and taken
+   out of order for the reason §6 gives: `dynmat.x` computes both, so the check was
+   already there. See §3.1.
+4. **Grüneisen parameters** (§3.2) — still owed, and **not** nearly free: §3.2 carries the
+   corrected estimate and the four steps it actually needs. Note that at `Gamma` the
    negative-`gamma` physics check is unavailable: it lives on the *transverse acoustic*
    modes, which are zero at `Gamma`. Until `q != 0` the only check is a finite difference of
    the frequencies over re-converged strained cells.
-4. **The missing `<u_i|r_k|u_j>` term** (§4) — the real phase, and the one that lifts a
+5. **The missing `<u_i|r_k|u_j>` term** (§4) — the real phase, and the one that lifts a
    refusal rather than adding a quantity. Look at the PEAD route first, but note what §4.1
    understates: P16 supplies the *primitive* `<u_mk|S|u_nk+b>`, not the assembly. Individual
    matrix elements from a finite difference in k are gauge-dependent — the gauge cancels only
@@ -393,9 +441,9 @@ entry here a direct plane-wave code cannot honestly converge.
    Veithen-Gonze-Ghosez's PEAD third-order formulas, not a substitution into the existing
    one. Route (a) is the fallback and it buys something PEAD does not: `dpsi^(2)` is what
    makes `chi^(3)` reachable at all (§7).
-5. **Third-order force constants** (§3.3) — after `q != 0` phonons, which is where their
+6. **Third-order force constants** (§3.3) — after `q != 0` phonons, which is where their
    payoff is.
-6. ~~Then choose between **frequency dependence** and **the geometric family** (§7)~~ —
+7. ~~Then choose between **frequency dependence** and **the geometric family** (§7)~~ —
    the geometric family was chosen, and its **shift current** half is done (P53) and
    its **`chi^(2)(-2w; w, w)`** half with it (P54). What those phases established is
    that the boundary drawn in §2.1 is a boundary of the *Sternheimer stack* and not of

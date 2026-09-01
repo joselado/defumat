@@ -3331,6 +3331,38 @@ the one line of `nonlinopt.f90` this code deliberately does not transcribe.
 `nk x nbnd x npwx` = 216 x 22 x 869 x 16 B = 66 MB. So `nbnd` costs time here
 and not memory, and the working set is the states' and nothing the tensor adds.
 
+## What the LO-TO splitting and the static permittivity cost (P55)
+
+**Nothing measurable, and saying so is the point of the entry.** Both quantities
+are contractions of tensors that are already in hand: the non-analytic term is a
+rank-one addition to a `3 nat x 3 nat` matrix and one more diagonalisation of it,
+and the ionic permittivity is a sum of `3 nat` outer products. The whole
+assembly -- `nonanal`, the diagonalisation, `RamanIR` and the permittivity
+together -- is **0.072 ms** on AlAs, averaged over 200 repeats after warm-up.
+
+### Against `dynmat.x`, which is where this one was taken from
+
+Same machine, one core each. `dynmat.x` was run on the `fildyn` this code writes
+(`asr = 'no'`, `q = (1, 0, 0)`, `lplasma = .true.`), which is the same input and
+the same arithmetic.
+
+| | `dynmat.x` | pypresso |
+|---|---|---|
+| its own timer | 0.00 s | -- |
+| whole invocation, 50 runs averaged | 4.2 ms | -- |
+| the assembly alone, 200 runs averaged | -- | 0.072 ms |
+
+**The two columns are not the same work and the table says which**: 4.2 ms is a
+whole process -- fork, `environment_start`, parsing the dynamical-matrix file,
+the ASR, the diagonalisation, `RamanIR`, `polar_mode_permittivity` and the
+printing -- where 0.072 ms is the arithmetic with the tensors already in memory.
+The comparable statement is the one `dynmat.x`'s own timer makes: **0.00 s**, its
+resolution. Neither is worth optimising, and the reason to write the pair down is
+that it puts a bound on where a Raman-and-infrared run's time actually goes: the
+field and displacement responses that produce `Z*`, `eps` and the force constants
+are **40 s** on this cell, so the whole of P55 is 2 parts per million of the
+calculation it completes.
+
 ## History
 
 | Date | Change | Effect |
@@ -3371,3 +3403,4 @@ and not memory, and the working set is the states' and nothing the tensor adds.
 | 2026-08-24 | Spin-orbit (P31) and PAW (P32, P33) for the Tran-Blaha potential | `tau` as a 2x2 spin matrix costs the same three transforms per band; PAW's one-centre `tau` is free (same einsum as the density) but its Becke-Roussel inversion runs on `nx * mesh` = 1.4e5 points per atom against the grid's 3.3e4 |
 | 2026-08-31 | The Fermi-surface nesting function (P52): Elk's `O(N_q N_k)` double loop written as one FFT, and a symmetry wedge unfolded rather than re-diagonalised | the correlation **0.001 s against Elk's 0.37 s** on a 12x12x12 aluminium grid; 72 diagonalisations instead of 1728; whole quantity from atomic densities 1.58 s against 2.00 s |
 | 2026-08-31 | The shift current (P53): `w^ab = <n|d^2H/dk_a dk_b|m>` as a `jvp` of the velocity operator's `jvp`, and the sum rule's `sum_{p != n,m}` written as a commutator | **no reference to time against** — `pw.x` computes no photocurrent and Elk's `nonlinopt.f90` is a different response, so this is the absolute cost. AlAs: 18 s on 216 k-points at `nbnd = 16`, 62 s on 512 at 24, of which the six `w^ab` pairs are ~0.03 s per k-point after compilation. The pair sum is `O(nbnd^2)` and the intermediate one `O(nbnd^3)`, so the band count — which is also the accuracy parameter — is what the cost scales in. A converged AlAs peak (`ecutwfc = 22`, 30 bands, 64 k-points) is 55 s |
+| 2026-08-31 | The LO-TO splitting and the static dielectric constant (P55): a rank-one term on the `Gamma` dynamical matrix and a sum of mode dipoles over `omega^2` | **0.072 ms** against `dynmat.x`'s whole 4.2 ms invocation, whose own timer reads 0.00 s. Both free beside the 40 s of response solves that produce their inputs |

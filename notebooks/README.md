@@ -67,6 +67,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Phonon frequencies at `Gamma` | `get_phonons()` | [20](20_phonons.ipynb) |
 | Raman tensors | `get_raman_tensors()` | [26](26_raman_and_infrared_spectra.ipynb) |
 | Raman and infrared activities per mode | `get_vibrational_spectrum()` | [26](26_raman_and_infrared_spectra.ipynb) |
+| LO-TO splitting, and the static dielectric constant | `get_vibrational_spectrum(loto_direction=..., neutralize=True)` | [26](26_raman_and_infrared_spectra.ipynb) |
 | An optical absorption spectrum, with excitons | `get_absorption()` | [27](27_excitons_and_tddft.ipynb) |
 | Elastic constants | `get_elastic_constants()` | [21](21_electrostriction.ipynb) |
 | Electrostriction and the elasto-optic tensor | `get_electrostriction()`, `get_strain_response()` | [21](21_electrostriction.ipynb) |
@@ -136,7 +137,7 @@ want a number.
 | [`23_variable_cell_relaxation.ipynb`](23_variable_cell_relaxation.ipynb) | Relaxing the cell at an applied pressure: arsenic at 500 kbar going simple cubic |
 | [`24_tran_blaha_band_gaps.ipynb`](24_tran_blaha_band_gaps.ipynb) | A functional that is a potential and not an energy: silicon's gap from 0.49 to 1.13 eV |
 | [`25_your_own_crystal.ipynb`](25_your_own_crystal.ipynb) | Diamond from a lattice constant and a fetched pseudopotential: the cutoff and k-grid tests, then bands and a density of states |
-| [`26_raman_and_infrared_spectra.ipynb`](26_raman_and_infrared_spectra.ipynb) | Modes, activities and depolarisation ratios: silicon's 519 cm-1 line, Raman-active and infrared-silent, and the tensor underneath them |
+| [`26_raman_and_infrared_spectra.ipynb`](26_raman_and_infrared_spectra.ipynb) | Modes, activities and depolarisation ratios: silicon's 519 cm-1 line, Raman-active and infrared-silent, and the tensor underneath them. AlAs's LO-TO splitting and its static dielectric constant, tied together by Lyddane-Sachs-Teller |
 | [`27_excitons_and_tddft.ipynb`](27_excitons_and_tddft.ipynb) | Absorption spectra and the bootstrap kernel, and why no adiabatic local kernel binds an exciton |
 | [`28_piezoelectricity.ipynb`](28_piezoelectricity.ipynb) | The voltage a squeezed crystal produces: AlAs's one independent component, and the inversion centre that gives silicon none |
 | [`29_effective_mass_and_angular_momenta.ipynb`](29_effective_mass_and_angular_momenta.ipynb) | Band curvature as an effective mass, and site-resolved `<L>`, `<S>` and `<J>` against Elk |
@@ -234,7 +235,7 @@ workstation core, slowest last:
 |---|---|---|---|---|---|---|---|
 | `01` | 5 | `07` | 22 | `28` | 33 | `11` | 81 |
 | `09` | 6 | `06` | 23 | `31` | 34 | `14` | 89 |
-| `02` | 8 | `25` | 28 | `23` | 35 | `26` | 107 |
+| `02` | 8 | `25` | 28 | `23` | 35 | `26` | 109 |
 | `16` | 9 | `17` | 29 | `32` | 35 | `30` | 131 |
 | `03` | 10 | `18` | 29 | `19` | 47 | `08` | 171 |
 | `05` | 10 | `12` | 30 | `10` | 50 | `27` | 178 |

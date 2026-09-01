@@ -345,6 +345,24 @@ comparable only as a sum**: the two eigensolvers land in different bases inside 
 acoustic triplet and print depolarisation ratios of 0.3544/0.7163/0.4065 against
 0.5873/0.2446/0.7264, on modes whose activity both codes give as 0.0000.
 
+**The LO-TO splitting and the static dielectric constant are in** (P55), which are the
+two things P36 named as omitted. A polar mode builds a macroscopic field, so the `Gamma`
+dynamical matrix takes `rigid.f90`'s rank-one `nonanal` term and the longitudinal mode
+rises; contracting the same `Z*` with the eigendisplacements and dividing by `omega^2`
+instead gives the ionic screening of a static field, so `eps_0` and `eps_infinity` are two
+ends of one contraction. Everything agrees with `dynmat.x` to every digit it prints —
+**and that is the weaker half**, because both codes read the same `Z*` off the same file.
+**The Lyddane-Sachs-Teller relation is what bites**: `eps_0/eps_infinity =
+(omega_LO/omega_TO)^2` is an identity for a diatomic cubic crystal whose two sides share no
+line of code, and it holds on AlAs to **5.0e-11** — but only after the Born charges are made
+charge-neutral. With the raw ones it is out by 1.6e-3, and the mechanism is the finding:
+`sum_a Z*_a = 0` says a rigid translation builds no field, a computed `Z*` misses it by the
+basis-set error (-1.257 here), and `nonanal` then charges the crystal and lifts a
+**longitudinal acoustic** mode from 1.8 to 33.8 cm^-1. `dynmat.x` reproduces every one of
+those wrong numbers. AlAs comes out at TO 353.3 / LO 391.5 cm^-1 against a measured 361 and
+402, and `eps_0/eps_infinity = 1.228` against 1.233 from the measured constants — the two
+constants are far too large at `ecutwfc = 10` and their *ratio* is not, which is LST again.
+
 **Optical spectra with excitons are in** (P37), and they are the first thing here built on
 a **sum over states**: an absorption spectrum needs `chi_0` as a matrix over reciprocal
 lattice vectors at every frequency, where the Sternheimer stack produces it as a static
@@ -595,8 +613,7 @@ of an **ultrasoft or PAW** dataset (P47: the `e_n dS/dk` term is written and unv
 PAW Born charges, the electro-optic tensor and a *truncation-free* `chi^(2)`
 by the 2n+1 route (the second-order response `solve_e2` is what is missing, which P35 refuses
 for; the **frequency-dependent** `chi^(2)(-2w; w, w)` is in as of P54, by a sum over states,
-which never needed that term), the **non-analytic LO-TO term**
-(`rigid.f90`'s `nonanal`, whose two ingredients — `Z*` and `eps` — are both here),
+which never needed that term),
 phonons at `q != 0` (the perturbed states live
 at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals, plus
 `q2r`/`matdyn` for a dispersion), the **relaxed-ion** piezoelectric constant (P50: `Z*`, the
