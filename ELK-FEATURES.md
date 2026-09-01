@@ -397,13 +397,25 @@ spinor against the scalar run's 2, a spinor band holding one electron. That also
 pins the spin bookkeeping the tensor depends on: the electronic phase is doubled
 for `nspin = 1` and not for a spinor.
 
-**What is left is one crystal, and it is this entry's real cost.** A linear ME
-response needs magnetism *and* spin-orbit coupling *and* a gap *and* a magnetic
-point group that permits the tensor -- and the last is what bites, needing
-inversion and time reversal both broken. A centrosymmetric magnet gives zero
-however wrong the assembly is, which is precisely the P50 trap recorded above.
-Naming the crystal is the decision that starts this phase, not a detail inside
-it.
+**The crystal was the entry's real cost and Elk supplies it.**
+`examples/magnetoelectric/GaAs` -- and the reason it is GaAs rather than a
+magnet is the part worth carrying: **the linear ME tensor vanishes under time
+reversal**, so Elk does not look for a crystal that breaks it spontaneously, it
+*applies* a large external field and differences against a small further change.
+The magnetism is induced, so a plain gapped semiconductor works, and zincblende
+breaks the inversion that would otherwise force zero. That removes the search
+this file was about to send someone on. Elk's other example, NiO-AFM, is out of
+reach here for an unrelated reason: DFT+U with a noncollinear `ns_nc`, refused.
+
+**P57 is started and is not done.** The assembly is written and its guards are
+tested; two things blocked the physics and both are findings. **Elk's `bfieldc`
+and QE's `B_field` are not the same normalisation** -- transcribing Elk's `0.1`
+gives GaAs a magnetization of 2.71 mu_B, a fully spin-polarized semiconductor,
+so the field must be calibrated by the induced moment rather than copied. And
+the cell is **expensive on this machine**: a spinor ultrasoft GaAs with Ga's 3d
+in valence is minutes per SCF and did not converge in 100 iterations at that
+field, where the tensor needs six runs and the spin-orbit null doubles them.
+`PLAN.md` P57 has the validation route, which is the spin-orbit null first.
 
 **One thing P56 changed about this entry.** It said the polarization's reference
 would be Elk's `polar`. It is not: `pw.x` computes a Berry-phase polarization

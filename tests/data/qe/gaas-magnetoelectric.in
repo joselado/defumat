@@ -1,0 +1,52 @@
+! GaAs with spin-orbit coupling in an external magnetic field: the ground state
+! the magnetoelectric tensor is differenced from.
+!
+! This is Elk's own `examples/magnetoelectric/GaAs` (task 390), and the reason
+! that example exists is the physics this input is set up for. **The linear
+! magnetoelectric tensor vanishes in any time-reversal-symmetric crystal**, so a
+! non-magnetic semiconductor has none -- and Elk's answer is to apply a large
+! external field to break time reversal by hand, then difference the
+! polarization against a *small* further change in it. The magnetism is induced
+! rather than spontaneous, which is what makes a plain gapped semiconductor a
+! usable case at all.
+!
+! GaAs is zincblende, so it is **not centrosymmetric** either, which is the
+! other symmetry that would force the tensor to zero. Both conditions matter and
+! this cell is the cheapest crystal here that meets both: `alas-raman.in`'s twin
+! with relativistic datasets, since spin-orbit coupling is what couples the spin
+! the field acts on to the lattice the polarization is measured along. Without
+! it the tensor vanishes identically, which is this phase's sharpest null.
+!
+! From Elk's file, converted: `scale 10.6826` is celldm(1), the fcc `avec` is
+! ibrav = 2, `spinpol`/`spinorb` are noncolin/lspinorb, and `bfieldc 0 0 0.1` is
+! B_field(3). Elk's `deltabf 0.05` is the finite-difference step and belongs to
+! the workflow rather than to this file.
+!
+! `nosym`/`noinv` because the response is direction-dependent and the field
+! lowers the symmetry anyway; the cutoffs are well below convergence and are set
+! for a machine rather than for a number -- what is validated on this cell are
+! the identities (the spin-orbit null and the linearity), not an absolute.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.6826, nat = 2, ntyp = 2,
+    ecutwfc = 22.0, ecutrho = 176.0,
+    noncolin = .true., lspinorb = .true.,
+    nosym = .true., noinv = .true.,
+    starting_magnetization(1) = 0.01, angle1(1) = 0.0,
+    starting_magnetization(2) = 0.01, angle1(2) = 0.0,
+    B_field(3) = 0.1
+ /
+ &electrons
+    conv_thr = 1.0d-9
+    mixing_beta = 0.3
+ /
+ATOMIC_SPECIES
+ Ga 69.723 Ga.rel-pbe-dn-rrkjus_psl.1.0.0.UPF
+ As 74.922 As.rel-pbe-n-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS crystal
+ Ga 0.00 0.00 0.00
+ As 0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 2 0 0 0

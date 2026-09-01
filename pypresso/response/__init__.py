@@ -73,6 +73,10 @@ expression.
     third-derivative branch that regressed.
 """
 
+from pypresso.response.magnetoelectric import (
+    MagnetoelectricTensor,
+    magnetoelectric_tensor,
+)
 from pypresso.response.born import born_effective_charges
 from pypresso.response.efield import DielectricTensor, dielectric_tensor
 from pypresso.response.effmass import EffectiveMass, Multiplet, effective_mass
@@ -120,6 +124,8 @@ from pypresso.response.velocity import (
 )
 
 __all__ = [
+    "MagnetoelectricTensor",
+    "magnetoelectric_tensor",
     "BandVelocities",
     "DielectricTensor",
     "EffectiveMass",

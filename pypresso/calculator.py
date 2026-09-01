@@ -909,6 +909,22 @@ class Calculator:
                                 **self._call_options(run_polarization,
                                                      result, options))
 
+    def get_magnetoelectric_tensor(self, **options):
+        """``alpha_ij = dP_i/dB_j``: the polarization a magnetic field induces.
+
+        Six self-consistent runs and a central difference, which is Elk's task
+        390 and the only route available here -- the cheap one needs a
+        noncollinear Sternheimer solve. Needs spin-orbit coupling, a gap, a
+        crystal without an inversion centre, and time reversal already broken
+        (usually by the applied field itself).
+        """
+        from pypresso.response.magnetoelectric import magnetoelectric_tensor
+
+        return magnetoelectric_tensor(
+            self.system, self.pseudos,
+            **self._defaults_for(magnetoelectric_tensor, options),
+        )
+
     def get_chern(self, **options) -> float:
         """The Chern number of one plane -- an exact integer on any mesh."""
         return self.get_berry_curvature(**options).chern_number

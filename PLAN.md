@@ -8347,6 +8347,60 @@ task 390 limitation too; and the noise floor should be measured from two
 re-converged identical runs before `deltabf` is chosen.
 
 
+### P57 — The magnetoelectric tensor. ⏳ STARTED, not done: the assembly is in and the case is not.
+
+`pypresso/response/magnetoelectric.py`, `Calculator.get_magnetoelectric_tensor`,
+`tests/data/qe/gaas-magnetoelectric.in`, and the two relativistic datasets it
+names. **The physics is not validated, and no README row or `features.tex` entry
+claims it is.** What is recorded here is the assembly, the case, and the two
+things that blocked it -- both findings rather than chores.
+
+`alpha_ij = dP_i/dB_j`, Elk's task 390 (`magnetoelt.f90`), by Elk's own route: a
+full ground state at `B -+ delta/2` for each Cartesian direction, the Berry-phase
+polarization of each, and a central difference. `reducebf = 1` as Elk sets it (a
+field that decays as the SCF runs leaves the difference taken over nothing), and
+each run seeded from the previous, which is Elk's `trdstate = .true.` after the
+first.
+
+**The crystal came from Elk, and it solved the problem P56 left open.** Finding a
+magnetic, spin-orbit-coupled, gapped, ME-allowed crystal was the blocker, and
+`examples/magnetoelectric/GaAs` answers it by not needing a magnet at all: the
+linear tensor vanishes under time reversal, so Elk *applies* a large external
+field to break it by hand and differences against a small further change. The
+magnetism is induced rather than spontaneous, which makes a plain gapped
+semiconductor usable -- and GaAs is zincblende, so the other symmetry that would
+force zero is broken too. Elk's other example, NiO-AFM, is out of reach here for
+an unrelated reason: it needs DFT+U with a noncollinear `ns_nc`, which is refused.
+
+**Two blockers, and the first is a real trap.** *Elk's `bfieldc` and QE's
+`B_field` are not the same normalisation.* Transcribing Elk's `0.1` literally
+gives GaAs a magnetization of **2.71 mu_B** -- a fully spin-polarized
+semiconductor, which is not a perturbation of anything. The field has to be
+calibrated by the *induced moment* rather than copied by value, and that
+calibration is the regime a linear response is linear in. *And the cell is
+expensive here*: a spinor ultrasoft GaAs with Ga's 3d in valence takes minutes
+per self-consistent run on this workstation and did not converge in 100
+iterations at the transcribed field, so the six runs a tensor needs -- plus the
+spin-orbit-off null, which doubles them -- did not fit. It is a cluster-shaped
+job.
+
+**The validation route is chosen and is what to run first**, in this order and
+before any absolute number is believed: **the spin-orbit null**, which is the
+sharp one -- without `lspinorb` a global spin rotation maps `B` to `-B` and
+leaves every charge observable fixed, so `alpha` vanishes *identically* and no
+plausible bug survives it; then **linearity** in `delta`; then the **noise
+floor** from two re-converged identical runs, which bounds `delta` from below.
+Elk's own number is the weakest tier as everywhere else, and here it is not even
+available: Elk is not built in this checkout and its `species/` directory has no
+`Ga.in`.
+
+**Two things to write down when it lands**, both already in the module
+docstring: what P18's field gives is the **spin (Zeeman)** response, there being
+no orbital vector potential -- which is Elk's task 390 limitation too, not a gap
+opened here -- and the tensor is **clamped-ion**, the restriction P50 carries for
+the same reason.
+
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);
