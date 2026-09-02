@@ -2044,7 +2044,7 @@ scan = run_spiral_scan(system, pseudos, wavevectors)   # E(q)
 best = relax_spiral_q(system, pseudos)   # BFGS on the reciprocal metric
 print(best.wavevector, best.scf.total_energy)
 
-J = heisenberg_exchange(scan, shells)    # fit E(q) for the exchange constants
+J = heisenberg_exchange(scan, system.cell, shells)   # fit E(q) for the J(R)
 
 scan = run_spiral_scan(system, pseudos, wavevectors, gradients=True)
 print(scan.relative)     # E(q) - E(q_0) in mRy, from the energies

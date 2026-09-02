@@ -37,6 +37,98 @@ Quantum ESPRESSO and Elk compute as well; a row blank in both columns is one
 neither has, and is pinned by an identity or an independent second route rather
 than by a reference output.
 
+## Capabilities at a glance
+
+Everything the code computes, grouped by what kind of calculation it is. The
+table below says, quantity by quantity, which input variable or entry point asks
+for it, what it refuses, and whether Quantum ESPRESSO and Elk compute it too.
+
+**Ground state**
+
+- **Total energies**, self-consistently and broken down term by term, for
+  insulators and for metals
+- **Pseudopotentials**: norm-conserving, ultrasoft and PAW
+- **Functionals**: LDA and GGA — Perdew-Zunger, Perdew-Wang, PBE, revPBE, PBEsol
+- **Band gaps from the Tran-Blaha potential**, the modified Becke-Johnson
+  meta-GGA
+- **DFT+U**, Dudarev's rotationally-invariant functional
+- **Van der Waals dispersion** — Grimme's D2 pair correction
+- **Reaching self-consistency** — mixing, preconditioning, and a residual solver
+  that reaches magnetic solutions no mixer does
+- **Continuing one run from another across a change of spin regime**
+
+**Electronic structure**
+
+- **Band structures** along a path through the Brillouin zone
+- **Densities of states**, by smearing or by tetrahedra
+- **Projected densities of states**, resolved by atom, by `l` and by `m`
+- **Band velocities** `d(eps)/dk`, with the nonlocal pseudopotential's own term
+- **Effective mass tensor** `m*_ij` at any k-point
+
+**Structure and mechanics**
+
+- **Forces on the atoms**
+- **Structural relaxation**
+- **Variable-cell relaxation**, the cell and the atoms together at an applied
+  pressure
+- **Stress tensor and pressure**
+- **The strain response** and the deformation potentials
+- **Elastic constants** `C_ijkl`, with the compliances and the bulk modulus
+- **Electrostriction coefficients** `m`, `q`, `M` and `Q`, and the **elasto-optic
+  tensor** `d(chi)/d(strain)` they are obtained from
+- **Piezoelectric tensor** `e_(k)ij`
+
+**Collinear magnetism**
+
+- **Magnetism**, collinear, with one Fermi level or two
+- **Magnetic fields and constrained moments** — a uniform field and four ways of
+  holding a moment where you put it
+
+**Noncollinear magnetism and spin-orbit coupling**
+
+- **Magnetism as a vector**, with the magnetic symmetry group
+- **Spin-orbit coupling** — two-component spinors and `j`-resolved projectors
+- **Magnetic fields inside one atom's sphere**, and a field that fades away as
+  the run converges
+- **Spin spirals** at any wavevector, without a supercell
+- **Relaxing the spiral wavevector** down `dE/dq` to the ground-state pitch
+- **`E(q)` and the Heisenberg exchange constants** `J(R)` — a spiral scan fitted
+  over neighbour shells, which is how a spiral scan becomes a spin model
+- **Orbital, spin and total angular momentum on each atom** — `<L>`, `<S>`, `<J>`
+- **Magnetocrystalline anisotropy**, by the force theorem
+- **Magnetic torque** `-dF/dtheta`, the anisotropy from one angle rather than a
+  difference of two
+
+**Vibrations and dielectric response**
+
+- **Phonons at `Gamma`** — the force constants and their frequencies
+- **Dielectric constant** `epsilon_infinity` and **Born effective charges**
+- **Raman tensors** `d(eps)/d(tau)`
+- **Raman and infrared spectra** — the per-mode activities and depolarisation
+  ratios
+- **LO-TO splitting and the static dielectric constant**
+
+**Topology and polarization**
+
+- **Berry curvature and Chern numbers**, and a smooth `Omega(k)` map
+- **Z2 invariants** in 2D and 3D, by Wannier charge centres and by parities
+- **Berry-phase polarization**
+- **Magnetoelectric tensor** `alpha_ij = dP_i/dB_j`
+
+**Optical and nonlinear response**
+
+- **Optical absorption spectra with excitons**, from TDDFT with local-field
+  effects
+- **Optical conductivity tensor** `sigma_ab(omega)`, the magneto-optical **Kerr
+  angle** and the **anomalous Hall conductivity**
+- **Shift current** `sigma^abc(0; w, -w)` — the bulk photovoltaic effect
+- **Second-harmonic generation** `chi^(2)(-2w; w, w)`
+
+**Fermi surface and diffraction**
+
+- **Fermi-surface nesting function** `N(q)`
+- **X-ray and magnetic structure factors** `F(H)`
+
 ## What it can do today
 
 Each row is a physical quantity you can compute. The two right-hand columns say
@@ -71,6 +163,7 @@ drive any of this and is what the examples below use.
 | **DFT+U** — Dudarev's functional with `U`, `J0`, `alpha`, `beta`. The full Liechtenstein form, the intersite `V` and noncollinear `ns` are refused by name | `HUBBARD` card, `run_scf(starting_ns=...)` | ✓ | ✓ |
 | **Spin spirals** at any wavevector, without a supercell. Needs `nosym`; ultrasoft, PAW and spin-orbit coupling are refused | `spiral_q`, `defumat spiral` | | ✓ |
 | **Relaxing the spiral wavevector** down `dE/dq` to the ground-state pitch | `relax_spiral_q` | | |
+| **`E(q)` and the Heisenberg exchange constants** — a spiral scan's energy against its wavevector, fitted over neighbour shells to `E(q) - E(0) = m^2 sum_R J(R) [1 - cos(q.R)]`, which is how a spiral scan becomes a spin model; the fit residual says how well a Heisenberg model describes the surface. `E(q)` can be accumulated from `dE/dq` instead of read off the energies, which removes the steps a rebuilt plane-wave basis puts in the curve | `run_spiral_scan`, `heisenberg_exchange`, `Calculator.get_spiral_scan` | | |
 | **Berry curvature and Chern numbers** — exact integers on any mesh, and a smooth `Omega(k)` map with the truncation of its band sum reported | `run_berry_curvature`, `method="kubo"` for the map | | |
 | **Z2 invariants** in 2D and 3D, by Wannier charge centres *and* by parities | `run_z2`, `run_z2_3d` | | |
 | **Berry-phase polarization** — King-Smith and Vanderbilt's phase along one reciprocal lattice vector, with the quantum it is defined modulo carried beside it. Norm-conserving, ultrasoft, PAW and spinor; metals, `nspin = 2` and spin spirals are refused | `lberry`/`gdir`/`nppstr`, `run_polarization`, `Calculator.get_polarization` | ✓ | ✓ |
@@ -85,6 +178,7 @@ drive any of this and is what the examples below use.
 | **The strain response** `dpsi/d(eps)`, `drho/d(eps)` and the deformation potentials, on norm-conserving, ultrasoft and PAW datasets | `strain_response` | | |
 | **Elastic constants** `C_ijkl` and the compliance and bulk modulus that follow — clamped-ion, insulators, norm-conserving | `elastic_constants` | | |
 | **Electrostriction coefficients** `m`, `q`, `M` and `Q` — the quadratic electromechanical coupling, clamped-ion, insulators, norm-conserving | `electrostriction` | | |
+| **Elasto-optic tensor** `d(chi)/d(strain)` — how a strain changes the dielectric response, which is what makes a squeezed crystal birefringent, and the third derivative the electrostriction coefficients are obtained from. Clamped-ion, insulators, norm-conserving | `electrostriction(...).photoelastic`, `Calculator.get_electrostriction` | | |
 | **Piezoelectric tensor** `e_(k)ij` — the polarization a strain induces, which is the stress a field induces. Clamped-ion, insulators, norm-conserving, and non-polar crystals only: a class that admits a spontaneous polarization is refused, since the proper response then needs `P` itself | `piezoelectric_tensor`, `Calculator.get_piezoelectric_tensor` | | ✓ |
 | **Raman tensors** `d(eps)/d(tau)` — how the dielectric tensor changes when an atom moves. Insulators, norm-conserving/ultrasoft/PAW; `chi^(2)` and the electro-optic tensor are refused | `raman_tensors` | (✓)⁵ | |
 | **Raman and infrared spectra** — the per-mode activities, depolarisation ratios and electronic polarizability at `Gamma` | `vibrational_spectrum` | ✓ | |
