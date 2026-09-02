@@ -55,8 +55,8 @@ print(f"total energy    {scf.total_energy:.9f} Ry   in {scf.iterations} iteratio
 print(f"Hubbard term    {scf.energy_terms['hubbard']:.8f} Ry")
 ```
 
-    total energy    -174.471560677 Ry   in 56 iterations
-    Hubbard term    0.31370412 Ry
+    total energy    -174.471560677 Ry   in 48 iterations
+    Hubbard term    0.31370551 Ry
 
 
 ## The same cell without the correction
@@ -78,7 +78,7 @@ print(comparison_table(
     fmt="{:.9f}", headers=("total energy [Ry]", "defumat", "pw.x", "difference")))
 ```
 
-    total energy [Ry]        defumat            pw.x  difference
+    total energy [Ry]         defumat            pw.x  difference
     FeO, U = 4.3 eV    -174.471560677  -174.471560670     6.6e-09
     FeO, U -> 0        -174.824657947  -174.824657950     3.4e-09
 
@@ -139,6 +139,130 @@ for label, result in (("U -> 0", no_u), ("U = 4.3 eV", scf)):
     
 
 
+## When one number is not enough
+
+$U$ alone says how much it costs to put two electrons in the *same* shell. It
+says nothing about which two, and inside a partly filled $d$ shell that is most
+of the physics: Hund's rule is the statement that two electrons in different
+orbitals with parallel spins cost less than two in different orbitals with
+opposite spins. Writing that down means keeping the whole interaction rather
+than its average,
+
+$$E = \tfrac{1}{2} \sum_{\sigma\sigma'} \sum_{m_1 m_2 m_3 m_4}
+      \Big[ v_{m_1 m_2 m_3 m_4} - \delta_{\sigma\sigma'} v_{m_1 m_2 m_4 m_3} \Big]
+      n^{\sigma}_{m_1 m_3} n^{\sigma'}_{m_2 m_4} \; - \; E_{\mathrm{dc}},
+\qquad
+v_{m_1 m_2 m_3 m_4} = \sum_k F^k \, a^k_{m_1 m_3} \cdot a^k_{m_2 m_4}$$
+
+with $a^k$ the angular integrals of three spherical harmonics. The radial part
+is three numbers for a $d$ shell: $F^0$, which is $U$, and $F^2$ and $F^4$,
+which between them are $J$. Adding a `J` to the card is what asks for it.
+
+$E_{\mathrm{dc}}$ is the term that removes whatever the underlying functional
+already counted, and there is more than one honest answer. The **fully
+localised limit** assumes the shell holds a whole number of electrons, which is
+right for a magnetic insulator and is what both functionals above use by
+default. **Around mean field** assumes instead that the shell is uniformly
+filled, so a shell that really is uniform gets no correction at all. The two
+disagree most exactly where the correction matters, and which one to use is a
+statement about the material.
+
+
+```python
+full = Calculator.from_file(REFS / "feo-kind1-J.in", pseudo_dir=PSEUDO, conv_thr=1e-9)
+amf = Calculator.from_file(REFS / "feo-amf.in", pseudo_dir=PSEUDO, conv_thr=1e-9)
+fll_scf, amf_scf = full.get_scf(), amf.get_scf()
+
+for label, result in (("fully localised", fll_scf), ("around mean field", amf_scf)):
+    values = occupations(result)
+    print("%-18s  E_U = %+8.4f Ry   spread of the shell = %.4f"
+          % (label, result.energy_terms["hubbard"], values.std()))
+```
+
+    fully localised     E_U =  +0.2321 Ry   spread of the shell = 0.3392
+    around mean field   E_U =  -0.0052 Ry   spread of the shell = 0.3057
+
+
+Both runs are the same cell with the same $U = 4.3$ eV and $J = 1.0$ eV; only
+the double counting differs. The fully localised limit charges the shell 0.23 Ry
+and pulls its occupations apart; around mean field charges it almost nothing and
+leaves them where the underlying functional put them. That is not a small
+adjustment to the same answer, it is the difference between correcting a
+localised electron and correcting an itinerant one.
+
+## Where $U$ comes from
+
+A published $U$ is usually fitted, and it is only meaningful together with the
+projectors it was fitted for. The alternative is to compute the interaction from
+the orbital itself: the shell's own radial function, integrated against a
+screened Coulomb interaction whose range is the one free parameter,
+
+$$F^k(\lambda) = \iint \mathrm{d}r\, \mathrm{d}r' \;
+   [r\phi(r)]^2 \, [r'\phi(r')]^2 \;
+   (2k+1)\, \lambda\, i_k(\lambda r_<)\, \tilde k_k(\lambda r_>)$$
+
+which becomes the bare $r_<^k / r_>^{k+1}$ when the screening is switched off.
+Screening is a long-ranged thing and $F^0$ is the long-ranged multipole, so it
+is almost the only one that feels it.
+
+
+```python
+from defumat.hubbard import (  # no facade route: this is a property of a pseudopotential's orbital, not of a calculation
+    exchange_from_slater, manifold_radial, screening_length, slater_set,
+)
+from defumat.pseudo import read_upf  # no facade route
+from defumat.units import RY_TO_EV
+
+nickel = manifold_radial(read_upf(PSEUDO / "Ni.rel-pbe-spn-kjpaw_psl.1.0.0.UPF"), 3, 2)
+lambdas = np.linspace(0.0, 4.0, 21)
+table = np.array([slater_set(nickel, 2, lam) for lam in lambdas])
+hund = np.array([exchange_from_slater(2, f) for f in table]) * RY_TO_EV
+
+fig, ax = plt.subplots(figsize=(7.2, 3.2))
+for column, label in ((0, "$F^0$, which is $U$"), (2, "$F^2$"), (4, "$F^4$")):
+    ax.plot(lambdas, table[:, column] * RY_TO_EV, "-", lw=2, label=label)
+ax.plot(lambdas, hund, "--", lw=2, color="0.35", label="$J$, from $F^2$ and $F^4$")
+ax.set_xlabel(r"inverse screening length $\lambda$  (bohr$^{-1}$)")
+ax.set_ylabel("eV")
+ax.set_title("Screening removes $U$ and leaves $J$ almost untouched")
+ax.legend(); ax.grid(alpha=0.25)
+fig.tight_layout()
+
+print("nickel 3d, unscreened:  F0 = %.2f eV   F2 = %.2f   F4 = %.2f   F4/F2 = %.3f   J = %.2f eV"
+      % (table[0, 0] * RY_TO_EV, table[0, 2] * RY_TO_EV, table[0, 4] * RY_TO_EV,
+         table[0, 4] / table[0, 2], hund[0]))
+lam = screening_length(nickel, 5.0 / RY_TO_EV)
+chosen = slater_set(nickel, 2, lam)
+print("asking for U = 5.00 eV gives lambda = %.3f bohr^-1,  and then J = %.2f eV"
+      % (lam, exchange_from_slater(2, chosen) * RY_TO_EV))
+```
+
+    nickel 3d, unscreened:  F0 = 23.44 eV   F2 = 11.06   F4 = 6.92   F4/F2 = 0.626   J = 1.28 eV
+    asking for U = 5.00 eV gives lambda = 2.096 bohr^-1,  and then J = 1.01 eV
+
+
+
+    
+![png](13_dft_plus_u_files/13_dft_plus_u_9_1.png)
+    
+
+
+The unscreened $F^4/F^2$ comes out at **0.626**, which is worth pausing on:
+that ratio is a property of a $3d$ radial function and nothing else, and the
+0.625 that codes normally *assume* is the value measured for free atoms. Here it
+is computed from nickel's own orbital and agrees, so the assumption is a good one
+for this shell and is now checkable rather than inherited. $J = 1.28$ eV is the
+Hund coupling of a $3d$ shell, about the 1 eV that experiment and quantum
+chemistry both give.
+
+The dashed line is the practical point. Turning the screening up from nothing to
+$\lambda = 3$ bohr$^{-1}$ takes $U$ from 23 eV down to 3, a factor of seven,
+while $J$ falls only from 1.28 to 0.86. **$U$ and $J$ are not two dials on the
+same knob**: the screening in a solid is what makes a bare 23 eV into a usable
+4 or 5, and it barely touches the exchange. So a screened $U$ of 5 eV does not
+imply a $J$ of 5/8 of an eV, which is the number the free-atom ratio would
+suggest, and asking for that $U$ here returns $J = 1.01$ eV instead.
+
 That is a measurement rather than an impression: **every** multiplet moves
 closer to an integer, and the mean distance from the nearer of 0 and 1 falls
 from 0.1998 to 0.1476. One of them crosses the midpoint to do it, going from
@@ -166,13 +290,19 @@ atomic orbital in the cell, not just the ones carrying `U`. Nickel with
 
 ## What it refuses
 
-The full **Liechtenstein** formulation, the intersite **V**, background
-channels, the orbital-resolved variant, the `wf` and `pseudo` projector sets,
-and a Hubbard `U` on a **noncollinear** density. Each is refused by name rather
-than silently approximated by the simplified functional above.
+The intersite **V**, background channels, the orbital-resolved variant, the `wf`
+and `pseudo` projector sets, and a Hubbard `U` on a **noncollinear** density.
+Computing the interaction from the orbital needs a dataset that carries the
+shell's all-electron radial function, which is what makes the integral above
+mean anything; the others are refused by name rather than quietly done on a
+function that is missing most of its weight.
 
 ---
-The tests behind this notebook: `tests/regression/test_ldau.py` (the seven cases
-against Quantum ESPRESSO, and the Hubbard force), `tests/unit/test_hubbard.py`
-(the potential against the closed form, over every combination of `U`, `J0`,
-`alpha` and `beta`).
+The tests behind this notebook: `tests/regression/test_ldau.py` (nine cases
+against Quantum ESPRESSO, and the Hubbard force),
+`tests/regression/test_ldau_flavours.py` (the two flavours Quantum ESPRESSO does
+not have, and the force under the full interaction),
+`tests/unit/test_hubbard.py`, `tests/unit/test_hubbard_full.py` and
+`tests/unit/test_hubbard_slater.py` (the potentials against closed forms, the
+interaction matrix against a rotation, and the Slater integrals against a second
+way of computing them).

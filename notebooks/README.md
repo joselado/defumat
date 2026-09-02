@@ -97,6 +97,8 @@ instead, which means the physics is selected in the input file rather than at th
 | Ultrasoft and PAW pseudopotentials | the dataset named in the input | [04](04_ultrasoft_and_paw.ipynb) |
 | PBE, revPBE, PBEsol | `input_dft`, or the dataset's header | [05](05_gradient_corrections.ipynb) |
 | A Hubbard `U` | the `HUBBARD` card | [13](13_dft_plus_u.ipynb) |
+| Hund's `J`, and the whole interaction matrix rather than its average | `J` on the `HUBBARD` card | [13](13_dft_plus_u.ipynb) |
+| `U` computed from the shell's own orbital instead of fitted | `hubbard_slater = 'yukawa'` | [13](13_dft_plus_u.ipynb) |
 | A band gap that LDA gets wrong | `input_dft = 'tb09'` | [24](24_tran_blaha_band_gaps.ipynb) |
 
 ### Under the hood
@@ -128,7 +130,7 @@ want a number.
 | [`10_topological_invariants.ipynb`](10_topological_invariants.ipynb) | Chern numbers as exact integers, Wannier-centre flow, Fu-Kane parities, and the curvature as a map |
 | [`11_noncollinear_magnetism_and_fields.ipynb`](11_noncollinear_magnetism_and_fields.ipynb) | Magnetism as a vector field, bcc iron against QE, constrained moments, and the direction the energy cannot depend on |
 | [`12_spin_spirals.ipynb`](12_spin_spirals.ipynb) | The generalized Bloch theorem, the limits that validate it, and a frozen-magnon `E(q)` curve computed two ways |
-| [`13_dft_plus_u.ipynb`](13_dft_plus_u.ipynb) | The occupation penalty that opens FeO's gap, against QE, and the natural occupations it drives to 0 and 1 |
+| [`13_dft_plus_u.ipynb`](13_dft_plus_u.ipynb) | The occupation penalty that opens FeO's gap, the two honest ways to remove what the functional already counted, and a $U$ computed from the orbital instead of fitted |
 | [`14_spiral_relaxation.ipynb`](14_spiral_relaxation.ipynb) | `dE/dq`, and a relaxation that finds a magnet's ground-state pitch in six SCF runs |
 | [`15_stress.ipynb`](15_stress.ipynb) | The stress tensor, silicon's equation of state, and the Pulay stress a low cutoff carries |
 | [`16_projected_density_of_states.ipynb`](16_projected_density_of_states.ipynb) | Which atom and which orbital a band belongs to, as a projected DOS, Löwdin charges and fat bands |
@@ -240,16 +242,16 @@ workstation core, slowest last:
 
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
-| `01` | 5 | `07` | 22 | `31` | 34 | `14` | 89 |
-| `09` | 6 | `06` | 23 | `23` | 35 | `26` | 109 |
-| `02` | 8 | `25` | 28 | `32` | 35 | `33` | 115 |
+| `01` | 5 | `07` | 22 | `31` | 34 | `26` | 109 |
+| `09` | 6 | `06` | 23 | `23` | 35 | `33` | 115 |
+| `02` | 8 | `25` | 28 | `32` | 35 | `13` | 131 |
 | `16` | 9 | `17` | 29 | `34` | 40 | `30` | 131 |
 | `37` | 9 | `18` | 29 | `19` | 47 | `08` | 171 |
 | `03` | 10 | `12` | 30 | `10` | 50 | `27` | 178 |
 | `05` | 10 | `21` | 30 | `20` | 57 | `35` | 276 |
 | `04` | 12 | `15` | 31 | `29` | 59 |  |  |
-| `22` | 12 | `24` | 31 | `13` | 69 |  |  |
-| `00` | 22 | `28` | 33 | `11` | 81 |  |  |
+| `22` | 12 | `24` | 31 | `11` | 81 |  |  |
+| `00` | 22 | `28` | 33 | `14` | 89 |  |  |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two
 hand-built linear solves and a second self-consistent run that were demonstrating

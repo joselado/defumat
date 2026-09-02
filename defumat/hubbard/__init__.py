@@ -19,7 +19,9 @@ Four pieces, one per module:
   ``jax.grad``, and :mod:`~defumat.hubbard.operator` applying that potential to
   the states;
 * :mod:`~defumat.hubbard.interaction` -- the Coulomb matrix ``vee`` of the full
-  (Liechtenstein) functional, from the Slater integrals.
+  (Liechtenstein) functional, from the Slater integrals;
+* :mod:`~defumat.hubbard.yukawa` -- those Slater integrals computed from the
+  manifold's own radial function instead of parameterised.
 
 Refused rather than approximated: the intersite ``V`` (``kind = 2``),
 background channels, the orbital-resolved variant, noncollinear ``ns``, and the
@@ -60,6 +62,13 @@ from defumat.hubbard.occupations import (
 )
 from defumat.hubbard.operator import HubbardTerm, block_potential
 from defumat.hubbard.projectors import build_hubbard_projectors
+from defumat.hubbard.yukawa import (
+    manifold_radial,
+    screening_length,
+    slater_from_poisson,
+    slater_from_radial,
+    slater_set,
+)
 
 __all__ = [
     "HubbardInput",
@@ -79,13 +88,18 @@ __all__ = [
     "hubbard_energy",
     "hubbard_potential",
     "initial_ns",
+    "manifold_radial",
     "ns_ddot",
     "ns_shape",
     "occupation_matrix",
     "parse_manifold",
     "projections",
     "uniform_ns",
+    "screening_length",
+    "slater_from_poisson",
+    "slater_from_radial",
     "slater_integrals",
+    "slater_set",
     "spin_averaged_ns",
     "qe_hubbard_full_potential",
     "qe_hubbard_potential",
