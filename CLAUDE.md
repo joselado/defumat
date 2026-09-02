@@ -701,6 +701,49 @@ reproduces `sum w eps` to 4.8e-11 meV, the gradient reproduces a central differe
 own functional to six digits, and the torque's `K1` reproduces the free-energy difference's
 to **2.4e-5 meV** at four smearing widths.
 
+**X-ray and magnetic structure factors are in** (P61), the seventh thing taken from
+`ELK-FEATURES.md` (Elk's tasks 195/196) and the cheapest: `F(H) = int rho e^{iH.r}` **is**
+an array the code already has, up to the crystallographers' two conventions -- the positive
+phase and no `1/Omega` -- so the step is one transform and a gather, **6 ms** against its
+SCF's seconds. `pw.x` computes neither, verified by `grep`: every "structure factor" in
+`PW/src` and `PP/src` is the internal `struct_fact`. **The entry's own caveat had an
+exception and the exception is the payoff.** It said to claim a *valence* structure factor
+and not to promise agreement with an all-electron code, which is right for an **allowed**
+reflection -- silicon's `F(000)` is 8 here and 28 in Elk, `(111)` is 1.7495 against 15.14 --
+and wrong for a **forbidden** one, where the spherical part of every atom cancels and the
+core with it, leaving the aspherical bonding density that a pseudopotential keeps. Silicon's
+`(222)` is **0.347406 against 0.33416**, 4 per cent. The sharpest check needs no other code:
+the SCF's own starting guess is a superposition of free atoms and gives `(222) = 0` to 1e-10,
+so the value is bonding charge and nothing else. **Norm-conserving, ultrasoft and PAW all
+work** (`F(000) = 8.0000000000` on each, which is how one knows the augmentation charge
+reached the transform), and running the three located that 4 per cent by elimination. It is
+not the k-grid, not either basis, not the functional (0.07 per cent) and **not the core** --
+Elk's own valence-only run, which `wsfac` above the 2p states produces, gives the identical
+0.334165, so the core contributes nothing to a forbidden reflection. Against that valence-only
+reference the augmentation charge is worth a **factor of two** on the allowed reflections
+(`(111)` -0.7 per cent for ultrasoft and PAW against -1.5, `(004)` +31 against +61) and
+**nothing at all** on the `(222)`, which comes out at 0.3474 on all three to 3e-4. The site
+symmetry says why: a silicon atom in diamond is at `-43m`, whose lowest non-spherical
+invariant is `l = 3`, and an `s, p` dataset's augmentation charge carries multipoles only to
+`L = 2`. The falsifiable test is a silicon dataset with a `d` channel; none is committed, so
+it is not claimed. **The magnetic form factor is a
+low-`|H|` quantity and the boundary was measured rather than argued**: bcc iron's normalised
+`F_mag(H)/F_mag(0)` agrees with Elk to 5.8 per cent at the first reflection and drifts to
+tens of per cent outwards, while `ecutwfc` 30 -> 45 moves it by less than 0.1 per cent --
+iron's moment is in the 3d shell, inside the radius the dataset smooths. The exact magnetic
+statement comes from the cheapest cell instead: an antiferromagnetic hydrogen chain scatters
+neutrons exactly where it scatters no X-rays, because the operation halving the charge's
+period is a symmetry only together with time reversal. **Four traps, all silent.** The dense
+grid returns a coefficient at every frequency out to the box corner and only those inside
+`ecutrho` are the density's, so `hmax` is guarded against `sqrt(ecutrho)`. A star may be
+collapsed only with the **symmorphic** operations (Elk's `tv0symc`), a fractional translation
+putting a phase between members -- 24 of silicon's 48 -- and the magnetic members of a star
+are related by `det(R) R` rather than being equal. Conjugating the coefficient is the
+positive-phase transform only for a *real* field, which a density is, so nothing physical
+would ever catch the difference; `ifftn` is used and a complex-field unit test is what found
+it. And Elk's `wsfac` energy window selects **states, not bands**: silicon's two lowest
+valence bands touch at `X`, so a cut between them leaves 5.9648 electrons rather than 6.
+
 **Outstanding:** Wyckoff input, PAW and a *relaxed* (as opposed to frozen-density) magnetocrystalline anisotropy, `average_pp`, the dynamical matrix of an
 ultrasoft or PAW *metal*, the strain coordinate's third derivatives on ultrasoft and PAW
 (P44 localised what is missing), the *second derivatives* of a spin-polarized system (P45 put
@@ -1368,6 +1411,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Spiral relaxation | no QE counterpart — `Modules/bfgs_module.f90` reused with the *reciprocal* cell as its lattice | `dE/dq` is `jax.grad` of the energy at frozen wavefunctions and a frozen sphere (`forces/spiral.py`); only the kinetic and nonlocal terms carry `q` |
 | Piezoelectric tensor | no QE counterpart — Elk's `src/piezoelt.f90` and `genstrain.f90`, manual task 380 | Elk runs one ground state per strain and finite-differences the Berry-phase polarization; here it is one `jvp` of the stress along the field's response (`pypresso/response/piezo.py`), so nothing is transcribed but the *check* — `zstar_eu.f90`'s contraction with a strain label where it has a displacement. `genstrain` symmetrises each candidate strain over the crystal's group, so on a cubic crystal the only strain it keeps is the isotropic one |
 | Second-harmonic generation | no QE counterpart — Elk's `src/nonlinopt.f90` and `getpmat.f90`, manual task 125 | `chi^(2)(-2w; w, w)` by a sum over states, so the assembly *is* transcribed, with one substitution: Elk reads momentum matrix elements and this uses `response/velocity.py`'s `dH/dk`, for the reason the TDDFT row already gives. Two things Elk's loop does not need and a plane-wave code does: the multiplet **block average** of the velocity diagonal that `Delta^a` is built from (rule D4 — Elk's 42x42x42 shifted mesh misses the symmetry points where it bites), and the reminder that Elk's `swidth` is in **Hartree**. `el_opt.f90` is QE's nearest thing and is the *static* electro-optic tensor, on the branch P35 found broken |
+| X-ray and magnetic structure factors | no QE counterpart — Elk's `src/sfacrho.f90`, `sfacmag.f90`, `genhvec.f90`, `zftrf.f90`, manual tasks 195/196 | `zftrf` is `(1/Omega) int f e^{-iH.r}` and `sfacrho` prints `Omega` times its conjugate, which is the crystallographic convention; here the positive-phase transform is taken directly (`pypresso/diffraction/`). `genhvec` reduces the H-set with the **symmorphic, non-magnetic** operations only, and that restriction is about the *phase* of `F` rather than its modulus |
 | Fermi-surface nesting | no QE counterpart — Elk's `src/nesting.f90`, manual task 105 | Elk writes an `O(N_q N_k)` double loop with `mod(ivk + ivq, ngridk)`; that fold makes the sum a cyclic cross-correlation, so `ifftn(|fftn(g)|^2)` replaces it (`pypresso/response/nesting.py`) and the loop is kept as `method = "direct"`. The wedge is unfolded with `grid_equivalence` — `tetra.f90`'s `equiv`, Elk's `ivkik` — and the group it is unfolded with must be the group `denser_grid` reduced it with (`workflows/nscf.py:grid_symmetry`) |
 | Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `pypresso/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]` term by term; here it is one `jvp` of `H(k)` at a frozen sphere (`response/velocity.py`), since `dH/dk_a = i[H, r_a]` in the periodic gauge. The overlap carries a velocity too, so a band velocity is `<psi|dH/dk - eps dS/dk|psi>` |

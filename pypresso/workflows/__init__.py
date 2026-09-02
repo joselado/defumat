@@ -21,6 +21,7 @@ from pypresso.workflows.conductivity import run_conductivity
 from pypresso.workflows.nesting import run_nesting
 from pypresso.workflows.tddft import OpticalSpectrum, run_absorption
 from pypresso.workflows.polarization import run_polarization
+from pypresso.workflows.sfac import run_structure_factors
 from pypresso.workflows.topology import (
     DFTSource,
     run_berry_curvature,
@@ -45,6 +46,7 @@ __all__ = [
     "run_absorption",
     "run_conductivity",
     "run_nesting",
+    "run_structure_factors",
     "fixed_density_bands",
     "fixed_density_states",
     "project_states",

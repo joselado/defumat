@@ -1,0 +1,26 @@
+! Ferromagnetic bcc iron on Elk's own examples/magnetism/Fe cell
+! (a = 5.416 bohr), for the X-ray and magnetic structure factors.
+!
+! The smearing is matched to Elk's swidth = 0.025 Ha in that run: a Gaussian of
+! 0.05 Ry. What the comparison is about is the *shape* of the magnetization,
+! so the moment itself enters only as the normalisation F_mag(H) / F_mag(0).
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 3, celldm(1) = 5.416, nat = 1, ntyp = 1,
+    ecutwfc = 30.0, ecutrho = 240.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.05
+    nspin = 2
+    starting_magnetization(1) = 0.5
+ /
+ &electrons
+    conv_thr = 1.0d-10
+    mixing_beta = 0.3
+ /
+ATOMIC_SPECIES
+ Fe 55.847 Fe.pz-nd-rrkjus.UPF
+ATOMIC_POSITIONS (alat)
+ Fe 0.0 0.0 0.0
+K_POINTS {automatic}
+ 8 8 8 0 0 0

@@ -1,0 +1,46 @@
+! Silicon in the diamond structure, a = 10.20 bohr -- the cell of QE's
+! test-suite/pw_scf/scf.in. X-ray structure factors, Elk task 195.
+
+tasks
+  0
+  195
+
+scale
+  10.20
+
+avec
+  0.5  0.5  0.0
+  0.5  0.0  0.5
+  0.0  0.5  0.5
+
+atoms
+  1                                    : nspecies
+  'Si.in'                              : spfname
+  2                                    : natoms
+  0.00  0.00  0.00    0.0 0.0 0.0
+  0.25  0.25  0.25    0.0 0.0 0.0
+
+sppath
+  '<elk>/species/'
+
+ngridk
+  8  8  8
+
+hmaxvr
+  5.0
+
+reduceh
+  .true.
+
+! conventional cubic indices, H' = M H
+vhmat
+   1.0  1.0 -1.0
+   1.0 -1.0  1.0
+  -1.0  1.0  1.0
+
+lradstp
+  1
+
+! valence only: the window excludes the 1s, 2s and 2p core states
+wsfac
+  -1.0  1000.0

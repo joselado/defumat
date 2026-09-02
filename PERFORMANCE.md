@@ -3461,6 +3461,65 @@ complex, with the number of strings never entering it -- under a megabyte for
 this AlAs. The ground states are sequential and share nothing, so the peak is one
 self-consistent run's.
 
+## What a structure factor costs (P61)
+
+Almost nothing, which was the entry's whole claim in `ELK-FEATURES.md` and is
+the one part of it that needed no defending: `F(H)` is one transform of a
+density that already exists and a gather at `nh` frequencies. What is worth
+timing is therefore the *pair* -- the quantity beside the ground state that has
+to precede it -- because the ratio between them is the point.
+
+### Against Elk, which is where this one was taken from
+
+Two cells, and the same cell and k-grid on both sides. Silicon in the diamond
+structure at `a = 10.20` bohr, LDA, 8x8x8, `hmaxvr = 5`; and ferromagnetic bcc
+iron on Elk's own `examples/magnetism/Fe` cell at `a = 5.416` bohr, LSDA, 8x8x8,
+`hmaxvr = 6`, with Elk's Gaussian `swidth = 0.025` Ha matched to a Rydberg
+`degauss = 0.05`. One core on both sides, `OMP_NUM_THREADS=1` and the affinity
+mask set before JAX is imported (`tools/compare_qe.py`'s mechanism); Elk timed
+by wall clock rather than by its own CPU-seconds line, which is what a threaded
+run makes meaningless.
+
+| | Elk | pypresso |
+|---|---|---|
+| silicon, ground state + task 195 | **2.68 s** | **1.98 s** |
+| iron, ground state + tasks 195/196 | **6.58 s** | **5.00 s** |
+| silicon, the structure factors alone | 0.61 s (task 195 on a stored state) | **0.006 s** |
+| iron, the structure factors alone | — (not separable from the pair above) | **0.005 s** |
+
+**Only the last two rows are a like-for-like comparison, and even they are not
+quite one.** Elk's 0.61 s is `sfacinit` plus `zftrf`: it reads `STATE.OUT` back
+from disk and re-runs `init0`/`init1`/`linengy`/`genapwfr`/`genlofr` before it
+transforms anything, where the step here consumes a converged state that is
+already in memory. And `zftrf` genuinely has more to do -- an LAPW density is an
+interstitial plane-wave part *plus* a muffin-tin expansion, so it carries a
+radial Bessel integration per reflection per atom that a plane-wave code has no
+counterpart for at all. The honest headline is the first two rows, where both
+codes start from atomic densities and end with a table of reflections, and where
+the difference is the ground state rather than the quantity.
+
+**The ground-state rows are two methods, not two implementations**, the same
+caveat every Elk comparison here carries: all-electron LAPW with muffin-tins and
+28 electrons for silicon's cell against a norm-conserving plane-wave sphere with
+8, and 26 against 8 for iron's. That the plane-wave side is *faster* on both is
+not a statement about either code's quality.
+
+**A soft dataset costs the same and pays it earlier.** The step is one transform
+of whatever density the run produced, so ultrasoft and PAW add nothing to it:
+0.005--0.006 s on all three kinds. What they do change is the box it runs on --
+the same silicon cell is 16^3 norm-conserving and 30^3 at `ecutrho = 240` -- and
+the SCF that produced it, which is where a dual of 8 is paid for. The
+augmentation charge is already in `result.density`, so there is no soft branch
+here at all.
+
+**Peak.** One complex `n1 n2 n3` box for the transform -- 16x16x16 for silicon's
+dense grid, 2 MB at 45x45x45 -- plus `(nh,)` complex output. Nothing scales with
+the band count or the k-points, so the working set is the density's and the
+quantity adds a copy of it. The `method="direct"` path is the exception and is
+a test fixture rather than a route: it forms an `(nh, n1, n2, n3)` phase array,
+which is `nh` times the density, and it exists because it shares no index
+arithmetic with the transform.
+
 ## History
 
 | Date | Change | Effect |

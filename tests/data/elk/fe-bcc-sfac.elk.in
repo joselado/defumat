@@ -1,0 +1,57 @@
+! Ferromagnetic bcc iron, a = 5.416 bohr (Elk's own examples/magnetism/Fe cell).
+! X-ray and magnetic structure factors, Elk tasks 195 and 196.
+
+tasks
+  0
+  195
+  196
+
+spinpol
+ .true.
+
+bfieldc
+  0.0  0.0  0.01
+
+nempty
+  8
+
+avec
+  1.0  1.0 -1.0
+  1.0 -1.0  1.0
+ -1.0  1.0  1.0
+
+scale
+  2.708
+
+sppath
+  '<elk>/species/'
+
+atoms
+  1                                   : nspecies
+  'Fe.in'                             : spfname
+  1                                   : natoms
+  0.0  0.0  0.0    0.0  0.0  0.0
+
+ngridk
+  8  8  8
+
+stype
+  0
+
+swidth
+  0.025
+
+hmaxvr
+  6.0
+
+reduceh
+  .true.
+
+! conventional cubic indices for the bcc cell, H' = M H
+vhmat
+  0.0  1.0  1.0
+  1.0  0.0  1.0
+  1.0  1.0  0.0
+
+lradstp
+  1

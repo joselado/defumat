@@ -1,0 +1,39 @@
+Generated 2026-09-02 with the vendored Elk binary, from the two inputs in this
+directory (tasks 0 then 195, and 196 for the magnetic one).  Both are the
+reference for PLAN.md P61, tests/regression/test_structure_factors.py.
+
+si-sfac.elk.in / si-sfac.elk.out
+  Silicon in the diamond structure at a = 10.20 bohr -- the cell of QE's
+  test-suite/pw_scf/scf.in -- LDA, 8x8x8 k-grid, hmaxvr = 5, reduceh = .true.
+  vhmat puts the reflections on the conventional cubic axes.  Elk's ground
+  state plus task 195 is 2.68 s on one pinned core, against 1.98 s here.
+
+  What it is for: an all-electron F(H) beside a valence-only one.  F(000) is
+  28.000003 here against 8 exactly for a pseudopotential, and every ALLOWED
+  reflection is core-dominated in the same way -- (111) is 15.14 against 1.75.
+  The comparable ones are the FORBIDDEN reflections, where the spherical part
+  of every atom cancels: |F(222)| = 0.33416 here against 0.347406.  That 4% is
+  not either code's basis: rgkmax 7 / 8 / 9 gives Elk 0.33416, 0.33452, 0.33456,
+  and ecutwfc 12 / 30 / 40 gives 0.352, 0.361, 0.361 here, the 8x8x8 k-grid
+  taking the last of those to 0.347406.
+
+si-sfac-valence.elk.in / si-sfac-valence.elk.out
+  The same silicon run with wsfac = (-1.0, 1000.0), which is above the 1s, 2s
+  and 2p core states (EVALCORE.OUT: -64.93, -4.68, -3.11, -3.09 Ha), so Elk
+  rebuilds its density from the valence states alone.  F(000) = 7.9999432,
+  which is what makes this the LIKE-FOR-LIKE reference: an all-electron
+  VALENCE structure factor, against the 28-electron total next door.
+  Ultrasoft and PAW are about twice as close to it as norm-conserving on the
+  allowed reflections, and no closer at all on the forbidden (222) -- whose
+  value is identical here and in the all-electron run, so the core contributes
+  nothing to it.
+
+fe-bcc-sfac.elk.in / fe-bcc-sfac-rho.elk.out / fe-bcc-sfac-mag.elk.out
+  Ferromagnetic bcc iron on Elk's own examples/magnetism/Fe cell (a = 5.416
+  bohr), LSDA, 8x8x8, Gaussian smearing of 0.025 Ha to match the Ry 0.05 of
+  tests/data/qe/fe-bcc-sfac.in.  Elk's ground state plus tasks 195/196 is
+  6.58 s on one pinned core, against 5.00 s here.  Elk's total moment is
+  2.0613 mu_B against 2.2145 here, so what is compared is the NORMALISED
+  magnetic form factor F_mag(H)/F_mag(0): 5.8% at (011), 17% at (002), worse
+  outwards, and unmoved to 0.1% by ecutwfc 30 -> 45, so it is the pseudised 3d
+  shell rather than the basis.

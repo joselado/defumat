@@ -795,6 +795,30 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS)
         )
 
+    def get_structure_factors(self, hmax: float = 6.0, **options):
+        """``F(H)``, the X-ray and magnetic structure factors of the density.
+
+        The Fourier coefficients of the converged density and magnetization on
+        the reflections a diffraction experiment measures, in electrons and in
+        Bohr magnetons per cell. ``hmax`` is the cutoff on ``|H|`` in 1/bohr
+        and cannot exceed ``sqrt(ecutrho)``; ``window`` is Elk's ``wsfac``,
+        which rebuilds the density from a chosen energy range of states and is
+        what makes the quantity a probe of bonding.
+
+        The density is **valence-only**, so these are not the experimental
+        structure factors -- except in a forbidden reflection, where the
+        spherical part of every atom cancels and what is left is the bonding
+        charge the pseudopotential keeps.
+        """
+        from pypresso.workflows.sfac import run_structure_factors
+
+        result = self._ground_state("structure factors")
+        return run_structure_factors(
+            self.system, self.pseudos, result, hmax=hmax,
+            **self._call_options(run_structure_factors, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
     def get_nesting(self, grid=None, **options):
         """``N(q)``, the Fermi-surface nesting function, on a dense grid.
 

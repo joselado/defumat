@@ -1614,11 +1614,12 @@ $B \to -B$ symmetry the null rests on --- off by default here, unlike Elk) and t
 two orders of magnitude, and Elk's own tensor on this cell is not converged.
 
 % =====================================================================
-\section{Effective masses, site angular momenta and Fermi-surface nesting}
+\section{Effective masses, site angular momenta, nesting and structure factors}
 
-Three quantities Elk computes and \code{pw.x} does not. The first two cost one
-NSCF at a single k-point; the third costs one NSCF on a dense grid, and nothing
-after it.
+Quantities Elk computes and \code{pw.x} does not. The first two cost one
+NSCF at a single k-point; the nesting function costs one NSCF on a dense grid,
+and nothing after it; the structure factors cost one transform of a density that
+already exists.
 
 \subsection{The effective mass tensor}
 
@@ -1920,6 +1921,103 @@ and nothing in between: the coupling-free end of the overlap is spin-independent
 so the anisotropy vanishes identically there whatever else it is, but a blend of
 it with the true overlap partway is not the overlap of any set of projectors and
 $S$ stops being a usable metric.
+\end{refuses}
+
+\subsection{X-ray and magnetic structure factors}
+
+What a diffractometer measures is not a density but its Fourier coefficients,
+one per reflection:
+\begin{equation*}
+  F(\mathbf H) = \int_\Omega \rho(\mathbf r)\, e^{i\mathbf H\cdot\mathbf r}\,d^3r,
+  \qquad
+  F_j(\mathbf H) = \int_\Omega m_j(\mathbf r)\, e^{i\mathbf H\cdot\mathbf r}\,d^3r
+\end{equation*}
+for every reciprocal lattice vector with $|\mathbf H| \le \code{hmax}$ --- X-rays
+scattering off the charge, neutrons off the magnetization. Elk's tasks 195 and
+196; \code{pw.x} has neither. In a plane-wave code the integral \emph{is} an
+array that already exists, up to the crystallographers' two conventions (the
+positive phase, and no $1/\Omega$), so the whole step is one transform and a
+gather: \textbf{6~ms} against the seconds its SCF cost. $F(0)$ is the electron
+count of the cell and $F_j(0)$ its magnetic moment, which is what anchors both.
+
+\begin{pycode}
+from pypresso import Calculator
+
+calc = Calculator.from_file("si.scf.in")
+factors = calc.get_structure_factors(hmax=5.0)
+
+factors.charge               # (nh,) complex F(H), in electrons
+factors.magnetization        # (nh, ncomp) in Bohr magnetons, or None
+factors.vectors.indices      # (nh, 3) the (h k l) after the output transform
+factors.vectors.length       # (nh,) |H| in 1/bohr
+factors.vectors.multiplicity # the size of each star that was collapsed
+factors.of((2, -2, -2))      # one reflection, by the index the table prints
+print(factors.table(limit=10))
+
+# Elk's wsfac: rebuild the density from the states in an energy window (Ry),
+# which is what makes this a probe of bonding rather than of the whole charge.
+bonding = calc.get_structure_factors(hmax=3.0, window=(-1.0, 0.2))
+\end{pycode}
+
+The functional entry point is \code{pypresso.workflows.sfac.run\_structure\_factors}.
+\code{transform="conventional"} labels the reflections on the conventional cubic
+axes (Elk's \code{vhmat}), \code{reduce=False} keeps every member of every star,
+and \code{core=True} adds a dataset's frozen core-correction charge.
+
+\textbf{A pseudopotential density is valence-only, and the comparison with an
+all-electron code is structured by reflection class rather than by one
+tolerance.} On silicon, against the vendored Elk binary on the same cell and
+k-grid: the origin is $8$ electrons here and $28$ there, and every
+\emph{allowed} reflection is core-dominated in the same proportion --- $(111)$ is
+$1.7495$ against $15.14$, and no tolerance makes that agree. What \emph{is}
+comparable is a \textbf{forbidden} reflection, where the spherical part of every
+atom cancels and the core with it: silicon's $(222)$ is \textbf{0.347406} here
+against \textbf{0.33416}, 4\%, on a quantity whose entire value is the
+aspherical bonding charge. That last statement is checked without any other
+code, since this package's own SCF starting guess is a superposition of free
+atoms: it gives $0$ at $(222)$ to $10^{-10}$. The space-group forbidden
+reflections --- diamond's $(200)$, $(420)$ --- vanish to $10^{-9}$ here and
+$10^{-13}$ there.
+
+\textbf{Norm-conserving, ultrasoft and PAW all work, and the difference between
+them is measurable.} $F(0) = 8.0000000000$ on each, which is the check that the
+augmentation charge reached the transform at all --- for a soft dataset most of
+the density near the nucleus \emph{is} that charge. The like-for-like reference
+is not Elk's all-electron total but its \textbf{valence-only} run, which
+\code{wsfac} above the 2p core produces: against it the augmentation charge is
+worth a factor of two, $(111)$ coming out $-0.7\%$ for ultrasoft and PAW against
+$-1.5\%$ norm-conserving, and $(004)$ $+31\%$ against $+61\%$. It is worth
+\emph{nothing} on the forbidden $(222)$, which is 0.3474 on all three to
+$3\times10^{-4}$: a silicon atom in diamond sits at $\bar 4 3m$, whose lowest
+non-spherical invariant is $l = 3$, and an $s,p$ dataset's augmentation charge
+carries multipoles only to $L = 2$. That is also what the 4\% against
+all-electron is, by elimination --- not the k-grid, not either basis, not the
+functional (0.07\%), and \textbf{not the core}, since Elk's own valence-only run
+gives the identical 0.334165.
+
+\textbf{Magnetic reflections are a low-$|\mathbf H|$ quantity and the boundary is
+measured.} Ferromagnetic bcc iron against Elk's task 196, comparing the
+normalized $F_{\mathrm{mag}}(\mathbf H)/F_{\mathrm{mag}}(0)$ because the moments
+differ (2.2145 $\mu_B$ here, 2.0613 there): 5.8\% at the first reflection, 17\%
+at the second, worse outwards. Raising \code{ecutwfc} from 30 to 45 moves those
+by less than 0.1\%, so it is the pseudisation and not the basis --- iron's moment
+is in the 3d shell, inside the radius the dataset smooths. The cheapest cell
+carries the sharpest magnetic statement instead: an antiferromagnetic hydrogen
+chain has charge factors $2.000000, 0, 0.8587, 0$ along the chain and magnetic
+ones $0, 1.2254, 0, 0.3862$, so it scatters neutrons exactly where it scatters
+no X-rays, and the zeros are exact.
+
+\begin{refuses}
+\textbf{Refuses.} An \code{hmax} past $\sqrt{\code{ecutrho}}$: the FFT box
+carries a coefficient at every frequency out to its corner, and past the density's
+own cutoff those are the aliased tail of $|\psi|^2$ rather than Fourier
+components --- small, smooth and entirely plausible, which is why this is a guard
+and not a check on the answer. An empty or inverted energy window, and
+\code{core=True} on a dataset with no nonlinear core correction.
+\textbf{Said rather than refused}, because the numbers are right and only a
+claim about them would be wrong: these are \emph{valence} structure factors, and
+a star's multiplicity applies to the charge, the magnetic members of a star
+being related by $\det(R)\,R$ rather than being equal.
 \end{refuses}
 
 \section{Things with no \texorpdfstring{\code{pw.x}}{pw.x} counterpart}

@@ -8849,6 +8849,149 @@ the analytic gradient reproduces a central difference of its own functional to
 six digits (0.552310 both); and the torque's `K1` reproduces the free-energy
 difference's to **2.4e-5 meV** on a route that shares almost no code with it.
 
+### P61 — X-ray and magnetic structure factors. ✅ DONE.
+
+`pypresso/diffraction/structure_factor.py`, `pypresso/workflows/sfac.py`,
+`run_structure_factors`, `Calculator.get_structure_factors`,
+`tests/unit/test_structure_factors.py` (13),
+`tests/regression/test_structure_factors.py` (14), `tests/data/qe/si-sfac.in`,
+`tests/data/qe/fe-bcc-sfac.in`, and Elk's own output under `tests/data/elk/`
+(`sfac.notes`). `ELK-FEATURES.md` §3, Elk's tasks 195/196 (`sfacrho.f90`,
+`sfacmag.f90`); `pw.x` computes neither, verified by `grep` over `PW/src` and
+`PP/src`, whose only "structure factor" hits are the internal `struct_fact`
+(the `e^{iG.tau}` of the atoms) and `pw2wannier90`.
+
+`F(H) = int rho(r) e^{iH.r} d3r` over every reciprocal lattice vector with
+`|H| <= hmax`, and the same for each component of `m(r)`. **The survey said this
+was free and it was**: the integral *is* an array the code already has, up to
+the crystallographers' two conventions -- the positive phase and no `1/Omega`.
+The step itself is **6 ms** against an SCF's seconds.
+
+**What was not free is knowing which numbers mean anything**, and that is the
+phase's content. A pseudopotential density is valence-only, so the comparison
+against an all-electron code is *structured by reflection class* rather than
+being one tolerance:
+
+| class | silicon, against Elk on the same cell and k-grid |
+|---|---|
+| origin | 8 electrons here, **28** there -- the pseudopotential's 20 core electrons |
+| allowed, e.g. (111) | 1.7495 against **15.142**: core-dominated, not comparable at all |
+| space-group forbidden, e.g. (002), (204) | zero on both sides to 1e-9 and 1e-13 |
+| **sphericity-forbidden (222)** | **0.347406 against 0.33416 -- 4%** |
+
+The (222) is the one that carries information, and it is the classic
+measurement: the diamond glide allows it, a superposition of *spherical* atoms
+forbids it, so its intensity is the aspherical bonding charge. That is checked
+here without any other code, because this package's own SCF starting guess is a
+superposition of free-atom charges: it gives **0.0 to 1e-10** where the crystal
+gives 0.347. The core cancels in such a reflection, which is why an
+all-electron code and a valence-only one agree on it while differing by a
+factor of nine next door. **That 4% is measured against five things it is not**, which
+is what makes it a statement about the pseudopotential rather than about either
+calculation: not the plane-wave basis (`ecutwfc` 12 -> 30 -> 40 gives 0.352,
+0.361, 0.361), not Elk's (`rgkmax` 7 -> 8 -> 9 gives 0.33416, 0.33452, 0.33456),
+not the k-grid (8x8x8 -> 12x12x12 -> 16x16x16 gives 0.347406, 0.346768, 0.346726
+here and 0.33416 -> 0.33350 there, both converging with the gap unchanged), not
+the functional (Elk under *our* Perdew-Zunger instead of Perdew-Wang gives
+0.333923, 0.07%), and **not the core** -- which is the sharp one, because Elk
+says so itself: its valence-only run gives the identical 0.334165, so the core
+contributes nothing at all to a forbidden reflection and the sphericity argument
+is confirmed inside the reference code rather than argued here.
+
+**Ultrasoft and PAW work, and running all three kinds located what the 4% is.**
+The same cell on `Si.pz-vbc`, `Si.pz-n-rrkjus_psl` and `Si.pz-n-kjpaw_psl` gives
+`F(000) = 8.0000000000` on each -- the check that the augmentation charge
+reached the transform, since for a soft dataset most of the density near the
+nucleus *is* the augmentation charge. Against **Elk's valence-only run**, which
+is the like-for-like reference and is what `wsfac` above the 2p core produces,
+the augmentation charge is worth a factor of two:
+
+| reflection | all-electron valence | norm-conserving | ultrasoft | PAW |
+|---|---|---|---|---|
+| (111) | 1.775594 | 1.749533 (-1.5%) | 1.763620 (-0.7%) | 1.762908 (-0.7%) |
+| (113) | 0.268536 | 0.353831 (+32%) | 0.310082 (+16%) | 0.310581 (+16%) |
+| (004) | 0.243493 | 0.391424 (+61%) | 0.319250 (+31%) | 0.319548 (+31%) |
+| **(222)** | **0.334165** | **0.347406** | **0.347475** | **0.347579** |
+
+**The (222) row is the finding.** A softer dataset halves the error everywhere
+else and moves that reflection by 3e-4. The site symmetry says why it cannot:
+a silicon atom in diamond sits at `-43m`, whose lowest non-spherical invariant
+is **`l = 3`**, and an augmentation charge built from `s` and `p` projectors
+carries multipoles only to `L = 2 lmax = 2`. All three datasets committed here
+are `s, p`. So the missing term is identified rather than fitted, and it has a
+falsifiable test: a silicon dataset with a `d` channel should move the (222)
+where these three do not. None is committed, so it is not claimed.
+
+**The magnetic side has the same shape and a different boundary.** Ferromagnetic
+bcc iron on Elk's own `examples/magnetism/Fe` cell, ultrasoft and LSDA, against
+Elk's task 196, comparing the *normalised* form factor `F_mag(H)/F_mag(0)`
+because the moments differ (2.2145 mu_B here, 2.0613 there): **5.8% at (011),
+17% at (002), and worse outwards**. That is not a convergence failure and was
+measured rather than assumed -- raising `ecutwfc` from 30 to 45 (`ecutrho` 240 to
+360) moves every one of those by **less than 0.1%**. It is the pseudisation:
+iron's moment lives in the 3d shell, inside the radius the dataset smooths, and
+a large `|H|` looks exactly there. So the honest statement is that a magnetic
+structure factor from a pseudopotential is a low-`|H|` quantity, and the number
+above says how low.
+
+**The cheapest cell has the sharpest magnetic statement.** The committed
+antiferromagnetic hydrogen chain scatters neutrons exactly where it scatters no
+X-rays: along the chain the charge factors are `2.000000, 0, 0.8587, 0` at
+`l = 0, 1, 2, 3` and the magnetic ones are `0, 1.2254, 0, 0.3862`. It is Elk's
+MnO example's point -- reflections with zero X-ray and non-zero magnetic
+intensity -- in two atoms instead of four, and it is exact rather than
+approximate: the operation halving the charge's period is a symmetry only
+together with time reversal. `nspin_mag = 4` is validated by the same identity
+one dimension up: `F_mag(0)` reproduces the moment *vector* of a noncollinear
+run componentwise to 1e-8.
+
+**Four traps, and all four are silent.**
+
+*The grid carries more coefficients than the calculation has.* A transform of
+the density on the dense box returns a value at every frequency out to the
+corner, and only those inside the `ecutrho` sphere are Fourier components of
+the density -- past it they are the aliased tail of `|psi|^2`, small, smooth and
+plausible. `hmax` is checked against `sqrt(ecutrho)` and that guard cannot be
+replaced by a check on the answer.
+
+*A star may only be collapsed with the symmorphic operations.* `F(RH) = F(H)`
+for a point operation, but a fractional translation `f` gives
+`F(RH) = e^{-i2pi H.f} F(H)` -- equal modulus, different phase. Elk tests
+`tv0symc` for this, silicon has 24 such operations of 48, and the test asserts
+both halves: every symmorphic image carries the same complex `F`, and the glide
+moves the (222)'s phase while leaving its modulus.
+
+*Conjugating the coefficient is not the positive-phase transform.* It is the
+same operation only for a real field, and a density is real, so nothing here
+would ever have caught the difference -- `sfacrho.f90` conjugates `zftrf` and is
+right for that reason. The implementation uses `ifftn`, which *is* the
+positive-phase transform, and the unit test that found it is a **complex** field:
+the real-field tests pass either way.
+
+*An energy window selects states, not bands.* Elk's `wsfac` rebuilds the density
+from the states inside a window, which is what makes the quantity a probe of
+bonding; but silicon's two lowest valence bands touch at `X`, so a cut placed
+midway between the first band's maximum and the second's minimum leaves
+**5.9648** electrons rather than 6. The identity that does hold, and is the
+test, is that `F(0)` is exactly the sum of the masked weights.
+
+**Timed against Elk, one core each** (`PERFORMANCE.md`): silicon's ground state
+plus task 195 is **2.68 s** there against **1.98 s** here, and iron's plus tasks
+195/196 **6.58 s** against **5.00 s**. What is not comparable is the basis --
+LAPW's muffin-tins and 28 electrons against a plane-wave sphere and 8 -- and
+Elk's `zftrf` has a muffin-tin radial integration per H per atom that a
+plane-wave code has no counterpart for.
+
+**Refused by name**: an `hmax` past `sqrt(ecutrho)`, an empty or inverted
+window, and `core = True` on a dataset with no nonlinear core correction. **Said
+rather than refused**, because there is nothing wrong with the number and only
+with a claim made about it: the factors are *valence* ones; a soft dataset's
+grid density is the smooth density plus its compensation charge rather than the
+reconstructed all-electron valence density, which is worth a factor of two the
+right way on an allowed reflection and nothing at all on one whose asphericity
+is `l = 3` (the table above); and the multiplicity of a reduced set applies to
+the charge, the magnetic star members being related by `det(R) R`.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

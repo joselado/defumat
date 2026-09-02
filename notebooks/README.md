@@ -33,6 +33,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Density of states | `get_dos()` | [06](06_density_of_states.ipynb) |
 | Which atom and which orbital a band belongs to | `get_pdos()` | [16](16_projected_density_of_states.ipynb) |
 | Eigenvalues on a denser grid at fixed density | `get_nscf()` | [06](06_density_of_states.ipynb) |
+| What a diffraction experiment measures: X-ray and magnetic structure factors | `get_structure_factors()` | [37](37_structure_factors.ipynb) |
 
 ### Structure: forces, geometry, the cell
 
@@ -150,6 +151,7 @@ want a number.
 | [`33_second_harmonic_generation.ipynb`](33_second_harmonic_generation.ipynb) | Frequency doubling: AlAs against the all-electron code Elk, and why the absorption starts at half the gap |
 | [`34_electric_polarization.ipynb`](34_electric_polarization.ipynb) | Why polarization is a phase and not a dipole, the Born charge read off a displacement, and the sum rule that catches a badly sampled zone |
 | [`35_magnetoelectric_effect.ipynb`](35_magnetoelectric_effect.ipynb) | A magnetic field making an electric polarization, and the spin-orbit null that shows the effect is spin-orbit coupling and nothing else |
+| [`37_structure_factors.ipynb`](37_structure_factors.ipynb) | The Fourier coefficients a diffractometer measures: silicon's forbidden reflection as a picture of the bond charge, and an antiferromagnet scattering neutrons where it scatters no X-rays |
 
 ## Conventions
 
@@ -238,15 +240,16 @@ workstation core, slowest last:
 
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
-| `01` | 5 | `07` | 22 | `28` | 33 | `11` | 81 |
-| `09` | 6 | `06` | 23 | `31` | 34 | `14` | 89 |
-| `02` | 8 | `25` | 28 | `23` | 35 | `26` | 109 |
-| `16` | 9 | `17` | 29 | `32` | 35 | `30` | 131 |
-| `03` | 10 | `18` | 29 | `19` | 47 | `08` | 171 |
-| `05` | 10 | `12` | 30 | `10` | 50 | `27` | 178 |
-| `04` | 12 | `21` | 30 | `20` | 57 | `33` | 115 |
-| `22` | 12 | `15` | 31 | `29` | 59 | `34` | 40 |
-| `00` | 22 | `24` | 31 | `13` | 69 | `35` | 276 |
+| `01` | 5 | `07` | 22 | `31` | 34 | `14` | 89 |
+| `09` | 6 | `06` | 23 | `23` | 35 | `26` | 109 |
+| `02` | 8 | `25` | 28 | `32` | 35 | `33` | 115 |
+| `16` | 9 | `17` | 29 | `34` | 40 | `30` | 131 |
+| `37` | 9 | `18` | 29 | `19` | 47 | `08` | 171 |
+| `03` | 10 | `12` | 30 | `10` | 50 | `27` | 178 |
+| `05` | 10 | `21` | 30 | `20` | 57 | `35` | 276 |
+| `04` | 12 | `15` | 31 | `29` | 59 |  |  |
+| `22` | 12 | `24` | 31 | `13` | 69 |  |  |
+| `00` | 22 | `28` | 33 | `11` | 81 |  |  |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two
 hand-built linear solves and a second self-consistent run that were demonstrating

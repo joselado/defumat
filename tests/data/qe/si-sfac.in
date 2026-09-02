@@ -1,0 +1,29 @@
+! Silicon in the diamond structure at a = 10.20 bohr -- the cell of QE's
+! test-suite/pw_scf/scf.in -- for the X-ray structure factors.
+!
+! Two things differ from that input and both are convergence rather than
+! physics: ecutwfc = 30 instead of 12, and an 8x8x8 k-grid instead of two
+! k-points. The forbidden (222) reflection is a difference of two nearly equal
+! atomic contributions, so it is the quantity here that converges last: it
+! moves 0.352 -> 0.361 between 12 and 30 Ry and 0.361 -> 0.347 between 4x4x4
+! and 8x8x8, and is stable in both by these values.
+!
+! The Elk reference for it is tests/data/elk/si-sfac.elk.in, the same cell and
+! the same k-grid.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1,
+    ecutwfc = 30.0,
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS {automatic}
+ 8 8 8 0 0 0

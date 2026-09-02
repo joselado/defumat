@@ -50,6 +50,7 @@ second route beside it.
 | Fermi-surface nesting function `N(q)` | 105 (`nesting.f90`) | P52 |
 | Second-harmonic generation `chi^(2)(-2w; w, w)` | 125 (`nonlinopt.f90`) | P54 |
 | Berry-phase polarization | -- (`pw.x`'s `lberry`; Elk's `polar`) | P56 |
+| X-ray and magnetic structure factors | 195/196 (`sfacrho.f90`, `sfacmag.f90`) | P61 |
 | Magnetoelectric tensor `alpha_ij`, clamped-ion | 390 (`magnetoelt.f90`) | P57 |
 
 **The second-harmonic row was in the *rejected* table until P54 and was wrong
@@ -155,36 +156,74 @@ bands. Anything below that walks a k-grid should go through the one function
 
 ---
 
-## 3. X-ray and magnetic structure factors
+## 3. X-ray and magnetic structure factors -- **taken, P61**
 
 **Elk tasks 195/196** (`sfacrho.f90`, `sfacmag.f90`, ~85 lines each).
 
-`F(H) = integral rho(r) exp(i H.r) d3r` — which in a plane-wave code **is**
+`F(H) = integral rho(r) exp(i H.r) d3r` -- which in a plane-wave code **is**
 `rho(G)`, an array that already exists. The magnetic one is `m(G)`, the
-neutron-diffraction observable, and the noncollinear `m(r)` has been there since
-P17.
+neutron-diffraction observable.
 
-**QE has nothing** — the only `PP/src` hits for "structure factor" are
-`pw2wannier90.f90` and `addusdens1d.f90`, neither of which outputs one.
+**QE has nothing**, re-checked when the phase was taken: every "structure
+factor" hit in `PW/src` and `PP/src` is the internal `struct_fact` (the
+`e^{iG.tau}` of the atoms) or `pw2wannier90`.
 
-**Cost.** Free: an indexing operation plus the symmetry multiplicity of each
-`H`. Elk's `genhvec`/`vhmat` machinery for choosing and transforming the `(hkl)`
-set is the only real transcription.
+**The cheapness claim was right and was the least interesting part.** The whole
+step is one transform and a gather, **6 ms** against the seconds its SCF cost;
+Elk's ground state plus task 195 is 2.68 s against 1.98 s here on one core, and
+the gap is the ground state rather than the quantity. What cost the phase was
+not the code.
 
-**The caveat that must be stated rather than discovered.** A pseudopotential
-density is **valence-only**, so this is not the experimental structure factor
-unless the core is added back — by PAW reconstruction, or at least the NLCC core
-charge. Claim it as the *valence* structure factor and do **not** promise
-digit-agreement with the all-electron Elk binary; the size of that mismatch *is*
-the physics content of the comparison. `wsfac` (Elk's energy window on which
-states contribute) is worth having for the same reason: it is what makes the
-quantity a probe of bonding rather than of the whole density.
+**The caveat this entry was written around turned out to have an exception, and
+the exception is the whole payoff.** The entry said to claim only a *valence*
+structure factor and not to promise digit-agreement with an all-electron code.
+That is right for an **allowed** reflection -- silicon's `F(000)` is 8 here and
+28 in Elk, `(111)` is 1.7495 against 15.14, and no tolerance closes that. But in
+a **forbidden** reflection the spherical part of every atom cancels by symmetry,
+the core with it, and what is left is the aspherical bonding density -- which is
+exactly the part a pseudopotential keeps. Silicon's `(222)` is **0.347406 here
+against 0.33416**, 4 per cent. So the right claim is not "valence only, do not
+compare" but **"compare on the reflections where the core cancels"**, which is
+also the class of reflection this quantity is measured for in the first place.
 
-**README ticks:** blank for QE, ✓ for Elk (tasks 195/196). It is the only
+**`wsfac` turned out to be the reference rather than a feature.** Elk's energy
+window rebuilds its density from the states inside it, so a window above the 2p
+core makes Elk compute an all-electron **valence** structure factor -- the same
+quantity a pseudopotential produces, instead of the 28-electron total that is
+not comparable to anything. Against *that*, the augmentation charge is worth a
+factor of two (`(111)` at -0.7 per cent for ultrasoft and PAW against -1.5 for
+norm-conserving), and the 4 per cent on the `(222)` is located by elimination:
+not the k-grid, not either basis, not the functional, and **not the core**,
+since Elk's valence-only `(222)` is identical to its all-electron one. What is
+left is an `l = 3` on-atom asphericity that an `s, p` augmentation charge cannot
+carry. **Take the reference code's own knobs seriously**: one of them made the
+comparison like-for-like where nothing else could.
+
+**The strongest check needed no other code**, as this file's method note
+predicts: the SCF starting guess is a superposition of free-atom charges, and it
+gives `(222) = 0` to 1e-10 where the crystal gives 0.347. The bonding charge is
+therefore the entire value, computed twice through the same transform.
+
+**The magnetic half has the same shape and a boundary that had to be measured.**
+Against Elk's task 196 on bcc iron, the normalised form factor
+`F_mag(H)/F_mag(0)` agrees to 5.8 per cent at the first reflection and drifts to
+tens of per cent outwards -- and raising `ecutwfc` from 30 to 45 moves it by less
+than 0.1 per cent, so that is the pseudisation of the 3d shell rather than the
+basis. The sharp magnetic statement comes from the cheapest cell instead: an
+antiferromagnetic hydrogen chain scatters neutrons exactly where it scatters no
+X-rays, exactly, because the operation halving the charge's period is a symmetry
+only together with time reversal. That is Elk's own MnO example's point in two
+atoms rather than four.
+
+**`wsfac` was worth having and is in**, for the reason this entry gave: an energy
+window rebuilds the density from a chosen range of states, which is what makes
+the quantity a probe of bonding. It also produced the phase's one surprise --
+a window selects *states*, not bands, and silicon's two lowest valence bands
+touch at `X`, so no cut separates them (5.9648 electrons rather than 6).
+
+**README ticks:** blank for QE, `✓` for Elk (tasks 195/196). It is the only
 output in the package that a diffraction experiment can be held against
 directly.
-
----
 
 ## 4. The exchange-correlation spin torque
 
