@@ -51,7 +51,7 @@ for it, what it refuses, and whether Quantum ESPRESSO and Elk compute it too.
 - **Functionals**: LDA and GGA — Perdew-Zunger, Perdew-Wang, PBE, revPBE, PBEsol
 - **Band gaps from the Tran-Blaha potential**, the modified Becke-Johnson
   meta-GGA
-- **DFT+U**, Dudarev's rotationally-invariant functional
+- **DFT+U**, Dudarev's simplified and Liechtenstein's full rotationally-invariant functionals
 - **Van der Waals dispersion** — Grimme's D2 pair correction
 - **Reaching self-consistency** — mixing, preconditioning, and a residual solver
   that reaches magnetic solutions no mixer does
@@ -167,7 +167,9 @@ drive any of this and is what the examples below use.
 | **Spin-orbit coupling**, two-component spinors and $j$-resolved projectors | `lspinorb` | ✓ | ✓ |
 | **Magnetic fields and constrained moments** — a uniform field, and four ways of holding a moment where you put it | `B_field`, `constrained_magnetization` | ✓ | ✓ |
 | **Magnetic fields inside one atom's sphere**, and a field that fades away as the run converges | `LOCAL_MAGNETIC_FIELDS` card, `reducebf`, `constrained_magnetization = 'fsm'` | | ✓ |
-| **DFT+U** — Dudarev's functional with $U$, $J_0$, $\alpha$, $\beta$. The full Liechtenstein form, the intersite $V$ and noncollinear `ns` are refused by name | `HUBBARD` card, `run_scf(starting_ns=...)` | ✓ | ✓ |
+| **DFT+U** — Dudarev's simplified functional with $U$, $J_0$, $\alpha$, $\beta$ and Liechtenstein's full one with $J$, $B$, $E_2$, $E_3$, selected by the card. The intersite $V$ and noncollinear `ns` are refused by name | `HUBBARD` card, `run_scf(starting_ns=...)` | ✓ | ✓ |
+| **Around-mean-field double counting** — the alternative to the fully-localised limit: the shell's mean occupation is subtracted before the interaction, so a uniformly filled shell is corrected by exactly nothing | `hubbard_double_counting = 'amf'` | | ✓ |
+| **Slater integrals from the orbital** — the interaction computed from the manifold's own all-electron radial function with a screened Coulomb kernel, so one chosen $U$ fixes $F^0$, $F^2$, $F^4$ and $J$ instead of an atomic table doing it | `hubbard_slater = 'yukawa'`, `LAMBDA` on the `HUBBARD` card | | ✓ |
 | **Spin spirals** at any wavevector, without a supercell. Needs `nosym`; ultrasoft, PAW and spin-orbit coupling are refused | `spiral_q`, `defumat spiral` | | ✓ |
 | **Relaxing the spiral wavevector** down $\mathrm{d}E/\mathrm{d}\mathbf{q}$ to the ground-state pitch | `relax_spiral_q` | | |
 | **$E(\mathbf{q})$ and the Heisenberg exchange constants** — a spiral scan's energy against its wavevector, fitted over neighbour shells to $E(\mathbf{q}) - E(0) = m^2 \sum_{\mathbf{R}} J(\mathbf{R})\,[1 - \cos(\mathbf{q}\cdot\mathbf{R})]$, which is how a spiral scan becomes a spin model; the fit residual says how well a Heisenberg model describes the surface. $E(\mathbf{q})$ can be accumulated from $\mathrm{d}E/\mathrm{d}\mathbf{q}$ instead of read off the energies, which removes the steps a rebuilt plane-wave basis puts in the curve | `run_spiral_scan`, `heisenberg_exchange`, `Calculator.get_spiral_scan` | | |

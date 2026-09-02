@@ -1426,10 +1426,15 @@ def _hubbard(pwin: PwInput, structure):
           J0 Fe1-3d 1.0
 
     **The card's energies are in eV** and are converted to Ry here, which is the
-    only place in the code that sees an eV (rule R6). The parameters QE accepts
-    but this does not -- ``J``, ``B``, ``E2``, ``E3`` (the full Liechtenstein
-    formulation) and ``V`` (the intersite term) -- are refused by name rather
-    than ignored, because ignoring one silently runs a different functional.
+    only place in the code that sees an eV (rule R6).
+
+    **The card selects the functional**, which is QE's own arrangement
+    (``read_cards.f90:3240``, with the namelist's ``lda_plus_u_kind`` obsolete
+    and warned about): any nonzero ``J``, ``B``, ``E2`` or ``E3`` means the full
+    (Liechtenstein) formulation, ``lda_plus_u_kind = 1``, and ``U``, ``J0``,
+    ``ALPHA``, ``BETA`` alone mean the simplified one. ``V`` -- the intersite
+    term, ``kind = 2`` -- is still refused by name rather than ignored, because
+    ignoring it silently runs a different functional.
     """
     from defumat.hubbard.manifold import HubbardInput, parse_manifold
 
@@ -1438,12 +1443,10 @@ def _hubbard(pwin: PwInput, structure):
         return None
     projectors = (card.option or "atomic").lower()
 
-    accepted = {"u", "j0", "alpha", "beta"}
+    accepted = {"u", "j0", "alpha", "beta", "j", "b", "e2", "e3", "lambda"}
+    #: The four that select ``lda_plus_u_kind = 1``.
+    liechtenstein = ("j", "b", "e2", "e3")
     refused = {
-        "j": "the full (Liechtenstein) formulation, lda_plus_u_kind = 1",
-        "b": "the full (Liechtenstein) formulation, lda_plus_u_kind = 1",
-        "e2": "the full (Liechtenstein) formulation, lda_plus_u_kind = 1",
-        "e3": "the full (Liechtenstein) formulation, lda_plus_u_kind = 1",
         "v": "the intersite Hubbard V, lda_plus_u_kind = 2",
     }
     entries: dict[str, dict] = {}
@@ -1502,8 +1505,48 @@ def _hubbard(pwin: PwInput, structure):
             m, spin, kind = (list(index) + [1, 1])[:3]
             starting_ns.append((kind - 1, spin - 1, m - 1, float(value)))
 
+    full = tuple(
+        (label,) + tuple(entry.get(name, 0.0) for name in liechtenstein)
+        for label, entry in entries.items()
+        if any(entry.get(name, 0.0) for name in liechtenstein)
+    )
+    if full and any("lambda" in entry for entry in entries.values()):
+        raise NotImplementedError(
+            "the HUBBARD card gives both a Liechtenstein parameter (J, B, E2 "
+            "or E3) and a LAMBDA: the first parameterises the Slater integrals "
+            "and the second computes them, and only one of the two can be in "
+            "force"
+        )
+    if full and any(entry.get("j0", 0.0) for entry in entries.values()):
+        # ``card_hubbard``: 'Hund J is not compatible with Hund J0'. The two
+        # are the exchange of two different functionals, and QE stops here
+        # rather than in ``init_hubbard``, so this does too.
+        raise NotImplementedError(
+            "the HUBBARD card gives both J and J0: J selects the full "
+            "(Liechtenstein) functional and J0 is the simplified functional's "
+            "Hund coupling, and QE refuses them together ('Hund J is not "
+            "compatible with Hund J0', card_hubbard)"
+        )
+    double_counting = pwin.get("system", "hubbard_double_counting")
+    slater = pwin.get("system", "hubbard_slater")
+    radial_cutoff = pwin.get("system", "hubbard_radial_cutoff")
+    # ``LAMBDA`` is a screening length in inverse bohr, not an energy, so it is
+    # the one card value that is **not** converted out of eV. It is undone here
+    # rather than special-cased in the loop above, which keeps that loop's rule
+    # ("every value is an energy in eV") true of everything it reads.
+    lambdas = tuple(
+        (label, entry["lambda"] * RY_TO_EV)
+        for label, entry in entries.items()
+        if "lambda" in entry
+    )
     return HubbardInput(
         projectors=projectors,
+        slater=("parameters" if slater is None else str(slater).strip().lower()),
+        lambdas=lambdas,
+        radial_cutoff=(None if radial_cutoff is None else float(radial_cutoff)),
+        double_counting=(
+            "fll" if double_counting is None else str(double_counting).strip().lower()
+        ),
         parameters=tuple(
             (
                 label, entry["n"], entry["l"],
@@ -1514,6 +1557,7 @@ def _hubbard(pwin: PwInput, structure):
         ),
         occupations=tuple(occupations),
         starting_ns=tuple(starting_ns),
+        full=full,
     )
 
 

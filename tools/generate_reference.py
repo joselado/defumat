@@ -116,6 +116,13 @@ RESTAMPED = [
     "pw_lda+U/lda+U-noU.in",
     "pw_lda+U/lda+U-user_ns.in",
     "pw_lda+U/lda+U_force.in",
+    # The full (Liechtenstein) functional, ``lda_plus_u_kind = 1`` (P62a), on
+    # the same FeO cell -- which QE's own case runs at ``J = 1e-12``, so it
+    # tests the four-index assembly exactly at the point where it must reduce to
+    # the simplified functional and tests ``F^2``/``F^4`` not at all. The
+    # ``kind1-J`` case beside it is the same input with a real ``J`` and is
+    # generated here because QE's suite has no collinear case that carries one.
+    "pw_lda+U/lda+U_kind1_collin.in",
     # Variable-cell relaxation (P29). The four cases of ``pw_vc-relax/`` that
     # use BFGS: rhombohedral arsenic at zero pressure and at 500 kbar, the same
     # at ``nspin = 2``, and the same again with ``treinit_gvecs``, which rebuilds

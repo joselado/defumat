@@ -57,8 +57,11 @@ EXPECTED_REFUSALS = {
     "lda+U+V_background.in": "intersite",
     "lda+U+V_force_stress_ortho.in": "intersite",
     "lda+U+V_noncol_ortho.in": "intersite",
-    "lda+U_kind1_collin.in": "Liechtenstein",
-    "lda+U_kind1_noncollin.in": "Liechtenstein",
+    # The two ``kind1`` cases are gone from this list as of P62a: the full
+    # (Liechtenstein) functional is implemented, so both *read*. The
+    # noncollinear one is still refused when a ``Calculation`` is built --- its
+    # occupation matrix is a 2x2 matrix in spin space (P62b) --- but this sweep
+    # is about the input boundary and does not reach that.
     "lda+U_background_one_channel.in": "background",
     "lda+U_orbital_resolved.in": "orbital-resolved",
     # Modes of ``calculation`` with no driver here. ``relax`` arrived with P15

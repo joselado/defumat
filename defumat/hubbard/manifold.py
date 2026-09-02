@@ -32,11 +32,21 @@ is guessable:
 stored here in Ry: the conversion happens once, at the input boundary, and
 nothing downstream sees an eV.
 
+**The kind is inferred from the card, not given.** ``read_cards.f90:3240``
+selects ``lda_plus_u_kind = 1`` from the presence of any nonzero ``J``, ``B``,
+``E2`` or ``E3`` and ``kind = 2`` from a ``V``, and warns that the namelist's
+own ``lda_plus_u_kind`` is obsolete. The same inference is made here, and
+:attr:`HubbardSetup.kind` carries the answer. ``init_hubbard``'s substitutions
+for the ``kind = 1`` parameters left at zero are applied here too, because they
+are what puts ``F^4/F^2`` at its physical 0.625 -- see
+:mod:`defumat.hubbard.interaction`.
+
 What is *not* here, and is refused rather than approximated:
-``lda_plus_u_kind = 1`` (Liechtenstein's full formulation with J, B, E2, E3),
 ``lda_plus_u_kind = 2`` (the intersite V), the background channels
 (``Hubbard_U2``), the orbital-resolved variant, and the ``wf`` and ``pseudo``
-projector types.
+projector types. ``alpha``, ``beta`` and ``J0`` are ``kind = 0`` parameters and
+are refused under ``kind = 1``, in QE's own places: ``init_hubbard`` stops on
+``Hubbard_alpha`` and ``card_hubbard`` stops on ``J`` together with ``J0``.
 """
 
 from __future__ import annotations
@@ -48,6 +58,9 @@ import numpy as np
 from defumat.pseudo.upf import Pseudopotential
 
 __all__ = [
+    "DOUBLE_COUNTING",
+    "NORM_FLOOR",
+    "SLATER_SOURCES",
     "HubbardInput",
     "HubbardSpecies",
     "HubbardSetup",
@@ -61,6 +74,33 @@ __all__ = [
 #: functions from ``pmw.x``) and ``pseudo`` (the beta projectors with the
 #: all-electron overlaps ``q_ae``) are QE options that are refused here.
 PROJECTOR_TYPES = ("atomic", "ortho-atomic", "norm-atomic")
+
+#: Where the Slater integrals come from: Elk's ``inpdftu``, collapsed to the
+#: two that are not a change of coordinates. ``"parameters"`` is ``inpdftu = 1``
+#: (``U`` and ``J``, with QE's ratios); ``"yukawa"`` is ``inpdftu = 4`` and
+#: ``5`` -- computed from the radial function with a Yukawa kernel, the
+#: screening length either given or solved for. ``inpdftu = 2`` and ``3``, the
+#: Slater and Racah *inputs*, are a linear change of coordinates on the same
+#: three numbers ``(U, J, B)`` already span:
+#: :func:`defumat.hubbard.interaction.racah_to_slater` performs it and is
+#: tested, and no card syntax is given for it because QE's card already spends
+#: the names ``E2`` and ``E3`` on its own f-shell parameters.
+SLATER_SOURCES = ("parameters", "yukawa")
+
+#: How much of the manifold has to be inside the cutoff for its Slater integrals
+#: to mean anything. A bound 3d or 5d shell measures 0.90 to 0.96 inside its own
+#: augmentation radius; silicon's 3p measures 0.49 at 2.5 bohr, and an integral
+#: over half an orbital is not that orbital's.
+NORM_FLOOR = 0.7
+
+#: The two double countings, Elk's ``dftu = 1`` and ``dftu = 2``. The
+#: interpolation between them was Elk's ``dftu = 3`` and is **not** here: 11.0.2
+#: documents it in the manual and has removed it from the source ("Cleaned up
+#: and removed options, September 2021", ``genvmatmt.f90``), ``readinput.f90``
+#: answering ``readadu`` with "no longer used" and ``writeinfo.f90`` stopping on
+#: any value but 1 or 2. There is no reference implementation to check it
+#: against, which is the reason rather than the effort.
+DOUBLE_COUNTING = ("fll", "amf")
 
 _SPDF = "SPDF"
 
@@ -127,6 +167,28 @@ class HubbardInput:
     #: ``starting_ns_eigenvalue(m, ispin, ityp)`` as
     #: ``(species index, spin, m, value)``, all zero-based.
     starting_ns: tuple[tuple[int, int, int, float], ...] = ()
+    #: The Liechtenstein parameters as ``(species name, J, B, E2, E3)`` in Ry,
+    #: for each species whose card line carries one. **A non-empty tuple is
+    #: what selects ``lda_plus_u_kind = 1``**, which is QE's own rule; the
+    #: entries QE does not accept for a given ``l`` are refused at the card.
+    full: tuple[tuple[str, float, float, float, float], ...] = ()
+    #: ``hubbard_double_counting``: ``"fll"`` (QE's only one, and Elk's
+    #: ``dftu = 1``) or ``"amf"`` (Elk's ``dftu = 2``). This code's own input
+    #: variable -- ``pw.x`` has no counterpart.
+    double_counting: str = "fll"
+    #: ``hubbard_slater``: ``"parameters"`` (the default -- ``U`` and ``J`` fix
+    #: the Slater integrals by fixed ratios) or ``"yukawa"``, which computes
+    #: them from the manifold's own radial function. Elk's ``inpdftu``; ``pw.x``
+    #: has no counterpart.
+    slater: str = "parameters"
+    #: ``(species name, lambda)`` in inverse bohr -- Elk's ``inpdftu = 4``, a
+    #: given screening length. A species with ``hubbard_slater = 'yukawa'`` and
+    #: no entry here takes ``inpdftu = 5`` instead: its ``U`` is what is given
+    #: and ``lambda`` is solved for.
+    lambdas: tuple[tuple[str, float], ...] = ()
+    #: ``hubbard_radial_cutoff`` in bohr, overriding the dataset's own
+    #: augmentation radius. Only the ``yukawa`` route reads it.
+    radial_cutoff: float | None = None
 
 
 @dataclass
@@ -139,6 +201,23 @@ class HubbardSpecies:
     j0: float = 0.0
     alpha: float = 0.0
     beta: float = 0.0
+    #: ``Hubbard_J(1)``, the Liechtenstein exchange. Zero under ``kind = 0``,
+    #: where ``j0`` is the Hund coupling instead -- the two are different
+    #: parameters of different functionals and QE refuses them together.
+    j: float = 0.0
+    #: ``Hubbard_J(2:3)``: ``(B,)`` for a ``d`` shell, ``(E2, E3)`` for an
+    #: ``f`` shell, ``()`` otherwise, **after** ``init_hubbard``'s substitution
+    #: for a value left at zero.
+    racah: tuple = ()
+    #: ``F[0:7]`` in Ry when they were *computed* from the radial function
+    #: rather than parameterised (:mod:`defumat.hubbard.yukawa`); ``None``
+    #: otherwise. When it is set it overrides ``u``, ``j`` and ``racah``, which
+    #: are then reported back from it rather than being inputs.
+    computed_slater: tuple | None = None
+    #: How the Slater integrals were obtained, for reporting: ``None`` for the
+    #: parameterised route, otherwise ``(radial function kind, cutoff in bohr,
+    #: norm inside it, screening length)``.
+    provenance: tuple | None = None
     #: Reference occupation of the manifold: the input's ``hubbard_occ`` if it
     #: gave one, the pseudopotential's otherwise. Only the starting ``ns`` uses
     #: it.
@@ -152,6 +231,22 @@ class HubbardSpecies:
     def effective_u(self) -> float:
         """``U - J0``, QE's ``effU``: what the quadratic term actually uses."""
         return self.u - self.j0
+
+    @property
+    def slater(self):
+        """``F[0:7]`` in Ry -- the Liechtenstein functional's radial integrals.
+
+        Computed from the manifold's radial function when
+        ``hubbard_slater = 'yukawa'`` asked for that, parameterised from ``U``
+        and ``J`` otherwise.
+        """
+        import numpy as _np
+
+        from defumat.hubbard.interaction import slater_integrals
+
+        if self.computed_slater is not None:
+            return _np.asarray(self.computed_slater, dtype=float)
+        return slater_integrals(self.l, self.u, self.j, self.racah)
 
 
 @dataclass
@@ -180,6 +275,12 @@ class HubbardSetup:
     #: The species index of each slot.
     types: tuple[int, ...]
     projectors: str = "atomic"
+    #: ``lda_plus_u_kind``: 0 for the simplified functional, 1 for the full
+    #: (Liechtenstein) one. Inferred from the card, never given.
+    kind: int = 0
+    #: ``"fll"`` or ``"amf"`` -- Elk's ``dftu = 1`` and ``dftu = 2``. The full
+    #: functional only; the simplified one *is* the fully-localised limit.
+    double_counting: str = "fll"
     #: ``starting_ns_eigenvalue(m, ispin, ityp)`` from the input, as
     #: ``{(species, spin, m): value}`` with zero-based ``spin`` and ``m``.
     starting_ns: dict = field(default_factory=dict)
@@ -286,6 +387,33 @@ def build_hubbard_setup(
         name: {"n": n, "l": l, "u": u, "j0": j0, "alpha": alpha, "beta": beta}
         for name, n, l, u, j0, alpha, beta in hubbard.parameters
     }
+    liechtenstein = {name: rest for name, *rest in getattr(hubbard, "full", ())}
+    lambdas = dict(getattr(hubbard, "lambdas", ()))
+    slater_source = getattr(hubbard, "slater", "parameters")
+    if slater_source not in SLATER_SOURCES:
+        raise ValueError(
+            f"hubbard_slater = {slater_source!r}; expected one of "
+            f"{', '.join(SLATER_SOURCES)}"
+        )
+    # Computed Slater integrals are the whole interaction matrix, so they select
+    # the full functional the way an explicit J does.
+    kind = 1 if (liechtenstein or slater_source == "yukawa") else 0
+    double_counting = getattr(hubbard, "double_counting", "fll")
+    if double_counting not in DOUBLE_COUNTING:
+        raise ValueError(
+            f"hubbard_double_counting = {double_counting!r}; expected one of "
+            f"{', '.join(DOUBLE_COUNTING)}"
+        )
+    if double_counting == "amf" and kind == 0:
+        # The simplified functional *is* the fully-localised limit written out
+        # -- there is no ``vee`` in it to feed a shifted matrix to. Elk reaches
+        # AMF only through the full one, and so does this.
+        raise NotImplementedError(
+            "hubbard_double_counting = 'amf' needs the full (Liechtenstein) "
+            "functional, which the HUBBARD card selects with a J: the "
+            "simplified functional has no interaction matrix to apply the "
+            "mean-field shift to, being the fully-localised limit itself"
+        )
     hubbard_occ = dict(hubbard.occupations)
     starting_ns = {
         (kind, spin, m): value for kind, spin, m, value in hubbard.starting_ns
@@ -319,10 +447,17 @@ def build_hubbard_setup(
             alpha=float(entry.get("alpha", 0.0)),
             beta=float(entry.get("beta", 0.0)),
         )
+        if kind == 1 and slater_source == "yukawa":
+            item = _yukawa_species(
+                name, item, pseudos[t], lambdas.get(name),
+                getattr(hubbard, "radial_cutoff", None),
+            )
+        elif kind == 1:
+            item = _liechtenstein_species(name, item, liechtenstein.get(name))
         # ``init_hubbard``: a species is a Hubbard species if *any* of the
         # parameters is nonzero, not only U -- an alpha-only run is how a
         # linear-response U is measured.
-        if not any((item.u, item.j0, item.alpha, item.beta)):
+        if not any((item.u, item.j0, item.alpha, item.beta, item.j)):
             resolved.append(None)
             continue
         given = hubbard_occ.get(name)
@@ -379,6 +514,122 @@ def build_hubbard_setup(
         nwfcU=wfc_counter,
         types=tuple(types),
         projectors=projectors,
+        kind=kind,
+        double_counting=double_counting,
         starting_ns=starting_ns,
     )
     return setup
+
+
+def _yukawa_species(name, item, pseudo, lam, cutoff):
+    """Elk's ``inpdftu = 4`` and ``5``: the Slater integrals from the orbital.
+
+    With a ``lambda`` given this is ``inpdftu = 4``; without one it is
+    ``inpdftu = 5``, where the card's ``U`` is what is fixed and ``lambda`` is
+    solved for. Either way the whole ``F^k`` set comes out, so ``J`` and the
+    Racah parameters are *results* here and are written back onto the species
+    so that a run reports what it actually used.
+    """
+    from dataclasses import replace
+
+    from defumat.hubbard.interaction import exchange_from_slater
+    from defumat.hubbard.yukawa import (
+        manifold_radial,
+        screening_length,
+        slater_set,
+    )
+
+    if item.j0 or item.alpha or item.beta:
+        raise NotImplementedError(
+            f"{name}: J0, ALPHA and BETA belong to the simplified functional; "
+            "hubbard_slater = 'yukawa' computes the full interaction matrix"
+        )
+    radial = manifold_radial(pseudo, item.n, item.l, cutoff)
+    # **Only PAW carries the object this integral is over**, and falling back to
+    # the pseudo orbital is the silent-wrong this refuses by name: a
+    # norm-conserving ``chi`` is normalised and gives an ``F^0`` far too small
+    # (silicon's 3p, 8.8 eV), and an *ultrasoft* one is not normalised at all --
+    # iron's 3d has ``int (r chi)^2 = 0.41``, the rest of the norm living in the
+    # augmentation charge, and its ``F^0`` comes out at 2.1 eV where the answer
+    # is above twenty. Both converge an SCF and report success.
+    if radial.kind != "all-electron":
+        raise NotImplementedError(
+            f"{name}: hubbard_slater = 'yukawa' computes the Slater integrals "
+            "from the manifold's all-electron partial wave, which only a PAW "
+            f"dataset carries; this one has only the pseudo-orbital chi "
+            f"(norm {radial.norm:.4f}), whose Coulomb integrals are smaller "
+            "than the answer by a factor of two or more"
+        )
+    if radial.norm < NORM_FLOOR:
+        raise ValueError(
+            f"{name}: the {manifold_label(item.n, item.l)} partial wave has "
+            f"norm {radial.norm:.4f} inside {radial.cutoff:.2f} bohr, below the "
+            f"floor of {NORM_FLOOR} -- the manifold is not bound inside the "
+            "augmentation radius, so its Slater integrals are an integral over "
+            "part of an orbital. Set hubbard_radial_cutoff if a larger radius "
+            "is meant"
+        )
+    if lam is None:
+        if item.u <= 0.0:
+            raise ValueError(
+                f"{name}: hubbard_slater = 'yukawa' with no LAMBDA solves for "
+                "the screening length that reproduces a given U, so U must be "
+                "positive"
+            )
+        lam = screening_length(radial, item.u)
+    f = slater_set(radial, item.l, lam)
+    return replace(
+        item,
+        u=float(f[0]),
+        j=float(exchange_from_slater(item.l, f)),
+        racah=(),
+        computed_slater=tuple(float(x) for x in f),
+        provenance=(radial.kind, radial.cutoff, radial.norm, float(lam)),
+    )
+
+
+def _liechtenstein_species(name, item, given):
+    """``init_hubbard``'s ``lda_plus_u_kind = 1`` branch, for one species.
+
+    Three things happen there and each of them changes the answer:
+    ``Hubbard_alpha`` is refused outright; a species given only a ``J`` has its
+    ``U`` set to ``1e-14`` rather than being dropped, so that ``is_hubbard``
+    stays true and the manifold is still corrected; and a Racah parameter left
+    at zero is replaced by its multiple of ``J``, which is what puts
+    ``F^4/F^2`` at 0.625 instead of 1.8 (:mod:`defumat.hubbard.interaction`).
+    """
+    from dataclasses import replace
+
+    from defumat.hubbard.interaction import default_racah
+
+    if item.alpha != 0.0:
+        raise NotImplementedError(
+            f"{name}: ALPHA together with J selects the full DFT+U functional "
+            "with a linear term, which QE refuses too ('full DFT+U does not "
+            "support Hubbard_alpha calculation', init_hubbard)"
+        )
+    if item.j0 != 0.0 or item.beta != 0.0:
+        raise NotImplementedError(
+            f"{name}: J0 and BETA are parameters of the simplified functional "
+            "(lda_plus_u_kind = 0) and J of the full one; QE refuses them "
+            "together ('Hund J is not compatible with Hund J0', card_hubbard)"
+        )
+    j, b, e2, e3 = (given if given is not None else (0.0, 0.0, 0.0, 0.0))
+    if item.l < 2 and (b or e2 or e3):
+        raise ValueError(
+            f"{name}: a {manifold_label(item.n, item.l)} manifold takes only U "
+            "and J; B, E2 and E3 belong to d and f shells"
+        )
+    if item.l == 2 and (e2 or e3):
+        raise ValueError(
+            f"{name}: E2 and E3 belong to an f shell; a d shell's third Slater "
+            "parameter is B"
+        )
+    if item.l == 3 and b:
+        raise ValueError(
+            f"{name}: B belongs to a d shell; an f shell's are E2 and E3"
+        )
+    given_racah = {2: (b,), 3: (e2, e3)}.get(item.l, ())
+    # ``IF (Hubbard_U(nt) == 0.0_dp) Hubbard_U(nt) = 1.d-14``
+    u = item.u if item.u != 0.0 else 1.0e-14
+    return replace(item, u=u, j=j, racah=default_racah(item.l, j, given_racah))

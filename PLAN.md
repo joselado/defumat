@@ -8992,6 +8992,454 @@ right way on an allowed reflection and nothing at all on one whose asphericity
 is `l = 3` (the table above); and the multiplicity of a reduced set applies to
 the charge, the magnetic star members being related by `det(R) R`.
 
+### P62 — Elk's other DFT+U flavours. 🚧 P62a, P62c and P62d DONE; P62b and P62e open.
+
+**What defumat has** is P20: QE's `lda_plus_u_kind = 0`, Dudarev's simplified
+rotationally-invariant functional with `J0`, `alpha` and `beta`, a *scalar* `U_eff` per
+manifold, a collinear `ns`, and the potential as `jax.grad` of an energy that is written
+down. **What Elk has** is not a list of alternatives to that but **four orthogonal axes**,
+which is the finding that shapes this phase — the flavours multiply rather than choose,
+and reading `dftu` and `inpdftu` as a menu of five things to implement gets the
+dependencies backwards:
+
+| Axis | Elk variable | defumat now | `pw.x` | Sub-phase |
+|---|---|---|---|---|
+| Interaction matrix | (implicit in `genveedu`) | scalar `U_eff` | full `vee` (`kind = 1`) | **P62a** |
+| Spin structure of `ns` | `spinpol`/`ncmag`/`spinsprl` | collinear only | `_nc` variants | **P62b** |
+| Double counting | `dftu` = 1, 2 | FLL only | FLL only | **P62c** |
+| Where `F^k` come from | `inpdftu` = 1..5 | `U`, `J0` input | `U`, `J`, `B`, `E2`, `E3` input | **P62d** |
+| Analysis and constraint of `ns` | `tmwrite`, `ftmtype` | — | — | **P62e** |
+
+`vee[m1,m2,m3,m4]` is the prerequisite for the whole of the second column: AMF, the Slater
+and Racah inputs and the Yukawa route all say something about the *interaction matrix*,
+and there is no matrix to say it about until P62a lands. So the order is
+**P62a → P62b → P62c → P62d → P62e**, and only the first two have a `pw.x` reference.
+
+**Taken in the order a, c, d** rather than a, b, c, d, and the reason is worth recording:
+the ordering above is about *where the validation comes from*, and c and d validate inside
+the package where b waits on a benchmark. Once `vee` existed, AMF was 15 lines and the
+Yukawa route needed no spinor machinery, so both landed complete while the spinor
+occupation matrix — which touches the mixed state, the symmetriser and the Hamiltonian —
+was still ahead. **P62b and P62e are the ones still open**, and P62e was always downstream
+of P62b.
+
+**Five things established while surveying, before any code**, because each of them changes
+what a sub-phase is worth:
+
+- **Elk's manual is stale about DFT+U and the source is not.** §5.22 of the 11.0.2 manual
+  lists `dftu` 0/1/2, §5.104 documents `readadu` for `dftu = 3` — and 11.0.2's own
+  `readinput.f90` answers `readadu` with "variable 'readadu' is no longer used",
+  `writeinfo.f90` errors on any `dftu` but 1 or 2, and `vmatmtdu.f90` implements FLL and
+  AMF and nothing between them. The header says why: *"Cleaned up and removed options,
+  September 2021 (JKD)"*, six months after *"Fixed bug for dftu = 3, January 2021"*. So
+  **the FLL/AMF interpolation is not an Elk feature to match** — it is a removed one, and
+  taking it means taking it from Petukhov *et al.*, Phys. Rev. B **67**, 153106 (2003)
+  with no reference implementation at all. It is not in this plan for that reason.
+- **QE's committed `kind = 1` collinear benchmark does not exercise `J`.**
+  `test-suite/pw_lda+U/lda+U_kind1_collin.in` is the same antiferromagnetic FeO cell P20
+  already matches, with `J Fe1-3d 1.d-12` — a `J` of `1e-12` eV, which is zero. So it
+  tests the full `vee` assembly *at the point where it must reduce to what P20 already
+  does*, and tests `F^2`/`F^4` not at all. The only committed QE case that does is
+  `lda+U_kind1_noncollin.in` (`U = 2.20`, `J = 1.75`, `B = 0`), and that one is a spinor,
+  spin-orbit-coupled, fully-relativistic ultrasoft iron. **The two axes are entangled in
+  QE's own coverage**, which is exactly why P62a and P62b are ordered before everything
+  else and why P62a's own validation has to close inside the package rather than waiting
+  for a benchmark that only arrives with P62b.
+- **The Coulomb matrix costs no new machinery.** `plus_u_full.f90`'s `hubbard_matrix`
+  builds `u_matrix` from `F^k` and `aainit_1`, and `aainit_1` is
+  `pseudo/coupling.py:harmonic_products` — the same expansion of a product of two *real*
+  spherical harmonics that the augmentation charge already needs. **Follow QE's
+  construction and not Elk's**: `genveedu.f90` contracts `gaunt` in the *complex* `Ylm`
+  basis because Elk's `dmatmt` lives there, where defumat's `ns` is measured on
+  real-harmonic projectors like QE's. Transcribing Elk here would mean carrying `rot_ylm`
+  through the whole functional for nothing.
+- **`F^4/F^2` is set in a routine that is not the one building the matrix, and reading
+  only the latter is silently wrong.** `hubbard_matrix` takes the `d` shell's Slater
+  integrals as `F^2 = 5 J + 31.5 B`, `F^4 = 9 J - 31.5 B` with `B = Hubbard_J(2)` --
+  which is Racah's `B`, so `B = 0` there means `F^4/F^2 = 1.8`, and atomic spectroscopy
+  says 0.625. QE does not use it: `init_hubbard` (`ldaU.f90:421`) substitutes
+  `B = 0.114774114774 J` **whenever `B` is exactly zero**, and that number is precisely
+  the one that gives `F^2 = 8.61538 J`, `F^4 = 5.38462 J`, `F^4/F^2 = 0.625` -- the same
+  ratio Elk hardcodes as `r1` in `genfdu.f90`. **So QE and Elk agree at the default**,
+  `lda+U_kind1_noncollin.in`'s `B Fe-3d 0.00` is Elk's interaction matrix, and a
+  transcription that reads `plus_u_full.f90` alone gets a `d` shell 1.8 where it should
+  be 0.625 with every symmetry and invariance check still passing. The `f` shell has the
+  same arrangement, `E2 = 0.002268 J` and `E3 = 0.0438 J`. Both codes also agree on
+  `J = (F^2 + F^4)/14`, which is the identity to test the pair against.
+- **The pseudopotentials for P62a are already committed.** `O.pz-rrkjus.UPF` and
+  `Fe.pz-nd-rrkjus.UPF` are both in `tests/data/pseudo/`. P62b needs three that are not:
+  `Fe.rel-pbe-spn-rrkjus_psl.0.2.1.UPF`, `N.rel-pz-n-rrkjus_psl.1.0.0.UPF` and
+  `B.rel-pz-n-rrkjus_psl.1.0.0.UPF`.
+
+**Two conventions that are traps**, both of the kind that produce a converged answer:
+Elk's `u` and `j` are in **Hartree** where the `HUBBARD` card is in eV and everything
+inside defumat is Ry (rule R6 — the conversion stays at the input boundary); and Elk's
+`vmatmtdu` **halves the density matrix** when `spinpol` is false, which is the same
+"`ns` always means one channel" convention P20's module docstring already records, and
+the same place a factor of two goes wrong.
+
+**Each of P62c, P62d and P62e owes a `PERFORMANCE.md` pair against the Elk binary**, per
+the standing rule — they are taken from Elk and have no `pw.x` counterpart to time
+against, which is exactly the case P51 forgot. P62a and P62b are timed against `pw.x` on
+the benchmarks they are validated on. Say what is not comparable: Elk's `dmatmt` is a
+muffin-tin integral and this `ns` is a projection.
+
+**Not in this phase, and why.** QE's `kind = 2` (intersite `V`), `kind = 3` (orbital
+resolved) and the background channels are *QE* extensions, not Elk flavours, and stay
+refused where P20 left them. `HP/` — the linear-response `U` — is out of scope per
+`CLAUDE.md`, and P62d is the in-scope answer to the same question: a `U` that is computed
+rather than chosen.
+
+---
+
+#### P62a — The full rotationally-invariant interaction matrix. ✅ DONE.
+
+**What.** Liechtenstein *et al.*, Phys. Rev. B **52**, R5467 (1995): the Hubbard energy
+written with the full `vee[m1,m2,m3,m4]` rather than a scalar,
+
+```
+E = 1/2 sum_{ss'} sum_{m1..m4} [ vee(m1,m3,m2,m4) - vee(m1,m3,m4,m2) delta_{ss'} ]
+                                n^{s}_{m1 m2} n^{s'}_{m3 m4}   -   E_dc
+E_dc = U/2 N(N-1) - J/2 sum_s N^s (N^s - 1)                     (FLL)
+```
+
+with `vee` built from the Slater integrals `F^0 = U`, and `F^2`, `F^4` (and `F^6` for `f`)
+fixed by `J` and Racah's `B` through `plus_u_full.f90:70-83` -- **together with
+`ldaU.f90:421`'s substitution for `B = 0`**, which is where the physical `F^4/F^2 = 0.625`
+actually comes from and which the bullet above is about. This is QE's
+`lda_plus_u_kind = 1`, `v_hubbard_full` in `v_of_rho.f90:1124`.
+
+**Reuse.** Everything but the matrix itself. The projectors, `ns`, its symmetrisation, the
+`ns_ddot` mixing metric, the separable operator in `vhpsi` and the force through
+`at_positions` are all P20's and are indifferent to how the energy is written --
+`scf_mod.f90:962` confirms it, `ns_ddot` taking the bare `Hubbard_U` for every kind but 2
+and only its *background* part branching on the kind.
+`harmonic_products` gives the real-harmonic Gaunt coefficients. **The energy is written
+down and the potential is `jax.grad` of it**, as P20 does, and `v_hubbard_full` is
+transcribed beside it as the test — the same arrangement, so the cross-check is free.
+
+**Validation, in order.**
+
+1. **The exact reduction, which closes inside the package.** With `J = 0` only `F^0`
+   survives, `vee(m1,m3,m2,m4) = U delta_{m1m2} delta_{m3m4}`, and the algebra collapses to
+   `E = (U/2) sum_s Tr[n^s (1 - n^s)]` — P20's functional with `alpha = beta = J0 = 0`,
+   term for term. So the first test is an equality **to round-off** against the existing
+   Dudarev energy and potential on the FeO cell, at a `J` of exactly zero -- not bit for
+   bit, because the four-index contraction sums in a different order from P20's two
+   traces. It catches a transposed index pair in `vee`, which is the one bug this
+   assembly invites.
+2. **`pw.x`'s `lda+U_kind1_collin.in`**, which is that reduction at `J = 1e-12` plus QE's
+   own double-counting term — the total energy and the eigenvalues, to P20's tolerance.
+3. **Rotational invariance**, which is the property the functional is named for and which
+   the scalar form satisfies trivially: conjugating `ns` by a unitary within the manifold
+   must leave `E` unchanged. A wrong Gaunt normalisation breaks it and nothing else here
+   sees that.
+4. **A real `J`** has no collinear reference until P62b; measure `E(J)` against the finite
+   difference of its own functional and leave the number to P62b's noncollinear benchmark.
+
+**What landed.** `defumat/hubbard/interaction.py` (`coulomb_matrix`, `slater_integrals`,
+`default_racah`, `exchange_from_slater`), the `kind = 1` branch of
+`hubbard/energy.py` with `qe_hubbard_full_potential` transcribed beside it, the
+`HubbardSetup.kind` inference, and the card's `J`/`B`/`E2`/`E3`.
+
+**Measured.** Against `pw.x`, on the antiferromagnetic FeO cell P20 already matches:
+
+| case | `J` | defumat | `pw.x` | difference |
+|---|---|---|---|---|
+| `lda+U_kind1_collin` | 1e-12 eV | -174.471560677 | -174.471560670 | **6.6e-9 Ry** |
+| `feo-kind1-J` | 1.0 eV | -174.556315384 | -174.556315380 | **4.2e-9 Ry** |
+
+with the Hubbard term itself to 4.1e-7 and 9.9e-7 Ry and the `ns` traces and eigenvalues
+to every digit `write_ns` prints. The second case is generated here and is the one that
+exercises `F^2` and `F^4`; `pw.x` prints `B(Fe1-3d) = 0.1148` for it, which is
+`init_hubbard`'s substitution and is the direct evidence for the finding above.
+
+**The reduction closes to round-off in both spin regimes** (2.0e-15 and 2.7e-15 in the
+energy, 1.7e-15 in the potential), and `jax.grad` reproduces the literal `v_hubbard_full`
+to **3.9e-16** — which is what says the `E_dc/2` halving for `nspin = 1` is right, since
+differentiating the reported energy instead gives a double-counting potential exactly
+twice too large. `vee` is invariant under a real rotation to 1.6e-14, on `p`, `d` and `f`.
+
+**The force comes with it and `pw.x` cannot compute it at all.** `force_hub.f90` stops on
+*"forces in the DFT+U+J scheme are not implemented"*, where here the force is `jax.grad`
+of the energy through projectors that move with the atoms and nothing about `kind = 1` had
+to be written for it. A central difference of the SCF energy is therefore the only check,
+and **getting that check right is the phase's second finding**: with a full interaction
+matrix the DFT+U landscape has more than one solution, and a *cold-started* difference
+silently samples two of them. On a two-atom nickel cell the displaced runs converge to the
+**symmetric** state, whose two atoms have identical occupations where the undisplaced
+ground state's differ (4.915/4.344 against 4.935/4.174), and three step sizes give
+**-0.245, -0.005 and +0.054 Ry/bohr** — not noise around an answer, three different
+answers, one of which (the middle one) looks like a plausible 25 per cent error and is not.
+Seeded from the undisplaced converged state the same three steps give -0.00794, -0.00749
+and -0.00749 against an analytic **-0.00736**, so the force is right to **1.3e-4 Ry/bohr**.
+The `kind = 0` control on the same cell is 1.7e-4 cold, which is what said the problem was
+the *difference* rather than the functional; and at `J -> 0` the `kind = 1` force
+reproduces the `kind = 0` one to **8e-9**, which is what said the assembly was right before
+any of this was understood.
+
+**Refusals, in QE's order and for QE's reasons**, which P20's input boundary already does
+for `kind = 0`. `init_hubbard` refuses `Hubbard_alpha` under `kind = 1` outright
+(`'full DFT+U does not support Hubbard_alpha calculation'`) and refuses the `pseudo`
+projectors; `read_cards.f90:3240` refuses `J` together with `J0`, with `V`, and with the
+orbital-resolved parameters. So `alpha`, `beta` and `J0` are **`kind = 0` parameters** and
+are refused here rather than carried, and — a detail worth copying rather than
+rediscovering — **QE infers the kind from the card**: any nonzero `J`, `B`, `E2` or `E3`
+selects `kind = 1`, and `lda_plus_u_kind` in the namelist is obsolete and warned about.
+`f` shells are supported by the formula and have no committed case, so `l = 3` is written
+and stated as untested rather than claimed.
+
+---
+
+#### P62b — The spinor occupation matrix. 📋 OPEN.
+
+**What.** `ns` as one `2(2l+1)` Hermitian matrix in the combined `(m, spin)` space instead
+of two `(2l+1)` blocks — QE's `new_ns_nc`/`v_hubbard_nc`/`v_hubbard_full_nc`, Elk's
+`dmatmt` with `nspinor = 2`. It is what P20 refuses under the name "noncollinear `ns_nc`",
+and it is the axis that unlocks the most: **DFT+U with spin-orbit coupling**, with
+noncollinear magnetism, and — Elk's own combination, which `pw.x` cannot form at all —
+**DFT+U on a spin spiral**.
+
+**Reuse.** P14's spinor projectors and P17's noncollinear density are the hard parts and
+are done. The occupation matrix becomes `<phi_m sigma|S|psi> <psi|S|phi_m' sigma'>` with
+the spin indices kept rather than traced, which is `projwfc/`'s spinor branch; the
+potential stays a separable operator, now with off-diagonal spin blocks, which is the
+shape `dvan_so` already has in `add_vuspsi`. The FLL double counting acquires the
+`dms(1,2) dms(2,1)` cross terms of `vmatmtdu.f90`, which are five lines.
+
+**Validation.**
+
+1. `pw.x`'s **`lda+U_noncol_ortho.in`** — `kind = 0`, `ortho-atomic`, spinor, spin-orbit
+   coupling — which validates the spinor `ns` against the interaction matrix P20 already
+   has, one axis at a time.
+2. `pw.x`'s **`lda+U_kind1_noncollin.in`** — `kind = 1`, `U = 2.20`, `J = 1.75` — which is
+   the **only** committed QE case that exercises a full `vee` with a real `J`, and needs
+   P62a and P62b together. This is the phase's headline number.
+3. **The collinear-as-spinor identity** (the `test_spinors_reproduce_the_collinear_answer`
+   pattern): a collinear `nspin = 2` DFT+U run and the same cell as a spinor with the
+   moment along `z` must give the same total energy and the same `Tr ns` per channel. It
+   is the check that catches a factor of two in the spin sum, and it needs no reference.
+4. **DFT+U on a spin spiral**, if it is taken here at all, validates the way P19 does —
+   a spiral at `q = (0,0,1/2)` against the collinear antiferromagnet of the doubled cell,
+   which is an identity rather than a comparison. Keep it norm-conserving: P42 is why.
+
+**Refusals.** Ultrasoft and PAW follow whatever P20 already supports (the `_nc` projectors
+apply `S` the same way); the spiral stays refused until the identity above closes.
+
+---
+
+#### P62c — Around-mean-field double counting. ✅ DONE.
+
+**What.** `dftu = 2`. FLL assumes the occupations are integers, which is right for a
+localised magnetic insulator and wrong for a metal or a weakly correlated system, where
+the correction it applies at a uniformly-filled shell should be nothing and is not. AMF
+subtracts the *mean* occupation instead, and Elk's implementation is the reason this is a
+small phase: `vmatmtdu.f90` does not write a second functional. It **shifts the density
+matrix**, `n -> n - n̄` with `n̄` the spin-resolved average over the `2(2l+1)` states
+(carrying the noncollinear `mg(1)`, `mg(2)` off-diagonals when `ncmag`), runs the *same*
+`vee` contraction, and subtracts no double-counting term at all.
+
+**`pw.x` has no AMF.** Verified by grep over the vendored tree: no "around mean field", no
+`AMF`, in `PW/src`, `Modules` or `upflib`. So this is a genuine
+neither-QE-nor-defumat entry, and the README ticks are blank for QE, `✓` for Elk.
+
+**Validation.** No `pw.x` reference, so it is identities plus Elk's binary:
+
+1. **AMF vanishes identically at a uniform shell** — `n = n̄` makes the shifted matrix
+   zero, so a full, an empty and a uniformly-fractional `d` shell all give exactly zero
+   energy and zero potential. FLL does not, and the difference between them at a
+   half-filled shell is the physics.
+2. **Rotational invariance** again, and the potential from `jax.grad` against
+   `vmatmtdu.f90`'s hand-derived expression, transcribed as the cross-check. **That
+   cross-check is clean and it is worth saying why**, because the obvious worry is that
+   `jax.grad` differentiates through `n̄(n)` where Elk's hand-derived potential does not:
+   the extra term is proportional to `delta_{ab} Tr(V)`, and `Tr(V)` vanishes because the
+   shift is traceless by construction for a rotationally-invariant `vee`. So the two
+   agree, unlike the removed interpolation, where they would not.
+3. **Elk's own number**, on a cell where an all-electron comparison is meaningful — NiO
+   from Elk's committed `examples/DFT+U/` inputs, **re-run with `dftu = 2`**, since those
+   examples are FLL (plain, Yukawa-screened, and "optimized") and none of them is AMF.
+   This is the weakest of the three for the reason this project records everywhere else,
+   and it is worth having because it is the only external check AMF will ever get.
+
+**What landed.** The `amf` branch of `_full_energy` -- the shift, and no double-counting
+term -- plus `elk_amf_potential` transcribing `vmatmtdu.f90`'s own expression, and the
+input variable `hubbard_double_counting = 'fll' | 'amf'` (this code's own; `pw.x` has no
+counterpart). About fifteen lines of physics, exactly as Elk's implementation predicted.
+
+**Measured.** `jax.grad` against Elk's hand-derived potential: **2.3e-16** on the potential
+and 4.4e-16 on the energy, on `p`, `d` and `f` and in both spin regimes. So the term the
+gradient carries and Elk's expression does not is zero, and the argument for why —
+`Tr(V) = 0` because `sum_a vee(a,c,a,d)` and `sum_a vee(a,c,d,a)` are rotationally
+invariant rank-two tensors contracted with a traceless matrix — is confirmed rather than
+merely plausible. A uniformly filled shell gives **exactly zero** energy and potential at
+every filling, which FLL does not; and on a non-uniform matrix the two differ by more than
+0.1 Ry, which is the guard against the shift silently doing nothing.
+
+**On FeO at `U = 4.3`, `J = 1.0` eV**: AMF converges to -174.828600 Ry with a Hubbard
+energy of **-0.0052 Ry** against FLL's **+0.2321**, and its occupation matrix sits closer
+to uniform (traces 4.972/1.953 against 4.987/1.871). That is the expected physics — AMF
+under-corrects a localised magnetic insulator, which is what FLL is for — and it is
+reported rather than compared, there being no second code to compare it with.
+
+**One note for whoever takes the interpolation anyway.** Elk froze `alpha` for forces
+because `d(alpha)/d(ns)` is not in its potential (§5.104's own justification). Here the
+potential is `jax.grad` of the energy, so that term would be *included* automatically —
+more correct, and a reason an Elk comparison would differ by exactly that term. The check
+is then a finite difference of this code's own energy, the P15 pattern, not Elk.
+
+---
+
+#### P62d — Slater, Racah and Yukawa: a `U` that is computed rather than chosen. ✅ DONE.
+
+**What.** `inpdftu`. Four ways to reach `F^k` besides "input `U` and `J`":
+
+| `inpdftu` | What is given | Elk routine |
+|---|---|---|
+| 2 | `F^0, F^2, F^4, F^6` directly | — |
+| 3 | Racah `E^0..E^3`, converted by Condon-Shortley's relations | `genfdu.f90:55-127` |
+| 4 | a Yukawa screening length `lambda`; `F^k` integrated from the radial functions | `fyukawa.f90` |
+| 5 | a fixed `U`; `lambda` solved for by a 1-D root find, `F^k` follow | `findlambda.f90` |
+
+**2 and 3 are arithmetic** — a linear map on three numbers, `genfdu.f90` transcribed, worth
+taking with 4 for nothing. **4 and 5 are the phase**, and they are the only route in scope
+to a first-principles `U`: `HP/`'s linear response is excluded by `CLAUDE.md`, and this is
+the other established answer to the same question. `F^k(lambda) = <chi chi| screened
+k-th multipole |chi chi>` — a double radial integral of the manifold's own radial function
+against a Yukawa kernel, whose radial Green's function is the modified spherical Bessel
+pair `i_k`, `k_k` in place of `r_<^k / r_>^{k+1}`.
+
+**Reuse.** The radial machinery is all there: logarithmic meshes, the quadrature, and
+`paw/hartree.py`, which is the *unscreened* `k = l` multipole solve already — so the
+`lambda -> 0` limit has a second, independent implementation in the package on the day
+this starts.
+
+**Validation.**
+
+1. **Two routes to the same integral**: `paw/hartree.py`'s Numerov solve at `l = k`
+   against a direct double quadrature with `r_<^k/r_>^{k+1}`, and both against
+   `fyukawa0` at `lambda -> 0`.
+2. **`F^4/F^2 ≈ 0.625` for a 3d shell**, which is the ratio QE hardcodes and atomic
+   spectroscopy measures — a free check on the angular assembly.
+3. **`J` back out of `F^2` and `F^4`** through `genfdu`'s own relation
+   `J = (F^2 + F^4)/14`, against the `J` the same dataset's `F^k` were built from.
+4. `findlambda` is a root find on a monotone function and is checked by round trip: solve
+   for `lambda` at a fixed `U`, integrate `F^0(lambda)`, recover the `U`.
+
+**What landed.** `defumat/hubbard/yukawa.py`: `manifold_radial`, `slater_from_radial`
+(both kernels), `slater_from_poisson` (the independent discretisation), `screening_length`
+and `slater_set`; `racah_to_slater` in `interaction.py`; and
+`hubbard_slater = 'yukawa'` with a per-species `LAMBDA` on the card and
+`hubbard_radial_cutoff`. **`inpdftu = 2` and `3` have no card syntax and that is
+deliberate** — they are a linear change of coordinates on the three numbers `(U, J, B)`
+already spans, and QE's card has already spent the names `E2` and `E3` on its own f-shell
+parameters, so `racah_to_slater` exists and is tested and nothing reads it from an input.
+
+**Three things measured, and one of them found a bug.**
+
+- **The two discretisations agree to 1e-5 to 5e-4 relative** — a cumulative quadrature
+  against `paw/hartree.py`'s Numerov solve of the radial Poisson equation, sharing the mesh
+  and nothing else. They did **not** agree at first: they were 1 to 4 per cent apart,
+  systematically in the same direction for every `k` and every dataset, and the cause was
+  the **diagonal mesh point counted twice** — both inner integrals include `r` itself. It
+  is second order in the mesh weight and looks negligible; it is worth four per cent.
+  Nothing else here would have caught it.
+- **The `lam -> 0` limit is the bare kernel**, approached *linearly* in `lam` (9.5e-5 at
+  `lam = 1e-4`, 9.5e-4 at 1e-3, 9.5e-3 at 1e-2), which is what fixes the normalisation
+  `(2k+1) lam i_k ktilde_k` rather than copying a factor.
+- **`U -> lam -> F^0` round trips exactly** (8.9e-16 to 9.5e-11).
+
+**The number with an outside answer.** Nickel's 3d, from the all-electron partial wave of
+a PAW dataset: `F^0 = 23.44`, `F^2 = 11.06`, `F^4 = 6.92` eV, so **`F^4/F^2 = 0.626`
+against the 0.625 QE and Elk both hardcode** and `J = (F^2 + F^4)/14 = 1.28` eV against a
+published 3d Hund exchange of about 1 eV. Neither is fitted and neither is an input.
+Screening behaves as it must: at `lam = 3` bohr^-1 `F^0` has fallen to 13 per cent of its
+bare value where `F^4` is still at 79 per cent, so `F^4/F^2` *rises* to 0.84 and `J` falls
+only to 0.86 eV — a screened `U` of 5 eV does not imply a `J` of 5/8 eV.
+
+**The cutoff is not optional and that is the phase's practical finding.** A PAW partial
+wave solves the atomic problem *inside* the augmentation sphere and is continued outside it
+by whatever the generator left there, which diverges: over the whole mesh nickel's 3d has a
+norm of **1.3e17** and an `F^0` of 1e34 Ry. Cut at `PP_PAW`'s own `cutoff_index` — 1.81
+bohr — the same function has a norm of 0.906 and the integrals above. So the radius is read
+from the dataset and the measured norm is reported, which is what says whether the manifold
+is bound inside it: silicon's 3p at 2.5 bohr has a norm of 0.485 and its Slater integrals
+mean nothing.
+
+**An ultrasoft `chi` is not merely pseudised, it is not normalised**, which is sharper than
+this phase expected: `Fe.pz-nd-rrkjus.UPF`'s 3d has `int (r chi)^2 = 0.407`, the rest of
+the norm living in the augmentation charge, and its bare `F^0` comes out at **2.14 eV**
+where the answer is above twenty. A norm-conserving `chi` is normalised and gives a
+pseudo-orbital `F^0` that is still far too small (silicon's 3p: 8.8 eV). So the route is
+PAW's all-electron partial wave or nothing, and the reported `norm` is what a caller checks.
+
+**End to end**: `hubbard_slater = 'yukawa'` with `U Pt-5d 4.0` on scalar-relativistic PAW
+platinum solves for `lambda`, builds the whole interaction matrix from the 5d partial wave
+and converges an SCF in 12 s.
+
+**The physics caveat, which has to be stated in the phase and not discovered.** Elk
+integrates over its muffin-tin radial functions, which are all-electron. Here the manifold's
+radial function is the UPF's pseudised `chi`, so a `U` computed from it is a *pseudo-orbital*
+`U` and is not Elk's number — the same pseudisation that P32 measured costing `c = 1.107`
+against 1.000 on the mBJ average, and P61 measured as a factor of two on an allowed
+structure factor. **PAW is the way out and it is the P32 pattern exactly**: `PP_AEWFC` is
+already read (`pseudo/upf.py:112`), so a PAW dataset carries the all-electron partial wave
+for the manifold and the integral can be taken over the object Elk takes it over. Whether
+the two then agree is the phase's real result, and it is a falsifiable claim rather than
+an assumed one. Do not claim a first-principles `U` from a norm-conserving dataset.
+
+**Two things to check before believing even the PAW route.** `PP_AEWFC` holds one partial
+wave per *projector*, not per orbital — a `3d` manifold may have two, and a partial wave
+is not required to be normalisable on its own, so the first step is measuring
+`int (r phi)^2 dr` rather than assuming it is one. And **Elk integrates only inside the
+muffin-tin radius**, where a UPF's radial functions run to the end of the mesh, so even
+with the all-electron partial wave the comparison is not like-for-like until the cutoff
+is matched. Say which radius each `F^k` was integrated to.
+
+---
+
+#### P62e — Tensor moments: the decomposition, and the fixed-moment constraint. 📋 OPEN.
+
+**What.** Two things, and `ELK-FEATURES.md` rejects one of them today.
+
+The **decomposition** (Elk task 400, `tmwrite`, `dmtotm3.f90`) expands `ns` in the coupled
+3-index tensor moments `w^{kpr}_t` — an orthonormal, complete basis of the `2(2l+1)`
+Hermitian matrices, indexed by an orbital rank `k`, a spin rank `p` and their coupling `r`
+— and splits the DFT+U energy into the contribution of each. `k = 0, p = 0` is the charge,
+`k = 0, p = 1` is the spin moment, `k = 1, p = 1, r = 0` is proportional to `L . S`; the high
+ranks are the multipoles that carry orbital ordering. That file's rejected table calls it
+*"niche"* and *"decomposes the DFT+U energy rather than producing a measurable"*, which
+stands — **it is listed here as the prerequisite it is, not as a reversal.**
+
+The **constraint** is the part with a use: `ftmtype`, `tm3fix`. Fix one `w^{kpr}_t` at a
+chosen value and converge the SCF under that constraint, which selects an orbital or
+multipolar ordering that the SCF would not find on its own, and gives its energy against
+the unconstrained state. `pw.x` has nothing of the kind.
+
+**Reuse, and it is the reason this is an entry at all: defumat already has the fixed spin
+moment.** Elk's `vmatmtftm.f90` is proportional feedback — measure the moment, subtract
+the target, scale by `tauftm`, accumulate into a potential matrix — which is
+`bfieldfsm.f90`'s scheme one index up, and P18 implements that scheme (`fsmtype`, QE's
+`constrained_magnetization`). And P18's rule applies unchanged and is better: **write the
+penalty energy down and let `jax.grad` give the potential**, rather than transcribing
+accumulation. `tm3todm.f90`'s Wigner 3-j assembly is the one genuinely new piece: the package has the
+`(l, 1/2)` spin-angle Clebsch-Gordan coefficients of `spinor.f90`
+(`pseudo/spinorbit.py`) and the real-harmonic product coefficients
+(`pseudo/coupling.py`), and **no general Wigner 3-j** — Elk's `wigner3j.f90` is 88 lines
+and is the thing to transcribe.
+
+**Validation.** Orthonormality and completeness are the whole of it and they are exact:
+`Tr[Gamma^{kpr}_t Gamma^{k'p'r'}_{t'}] = delta...` to round-off, and `ns` expanded and
+reassembled must return itself. Then the physical checks — `k = 0, p = 1` must reproduce
+the moment `report_mag` prints, and a constrained run must sit above the unconstrained one
+in energy and relax back to it when the constraint is released. Elk's binary gives an
+external number for a `w^{kpr}_t` of a converged NiO if one is wanted.
+
+**Take it last, or not at all**, and only after P62b — for a collinear `ns` the spin-rank
+tensors keep only their `z` component, so the constraint degenerates into the fixed spin
+moment P18 already implements. The whole entry is downstream of the spinor occupation
+matrix.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

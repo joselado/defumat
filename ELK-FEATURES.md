@@ -29,6 +29,10 @@ already exists**, not what the quantity costs in Elk. §7, the magnetoelectric
 tensor, is the one selected to be taken next; it had been missed altogether
 rather than rejected, which is its own lesson about walking a task list once.
 
+**§8 was added 2026-09-02** and is the only entry here that is not a `task`: Elk's
+DFT+U flavours are reached through the `dft+u` input block, so a walk of the task
+list cannot see them at all.
+
 Doing the two taught one thing that applies to the rest: **the value of the
 comparison was in what it found, not in the agreement.** Running Elk's own
 `effmass` beside this one showed that Elk's number does not converge in its
@@ -511,6 +515,45 @@ all-electron polarization against a pseudopotential one.
 
 ---
 
+## 8. The other DFT+U flavours -- **planned, `PLAN.md` P62**
+
+**Not a task number**: Elk reaches DFT+U through the `dft+u` input block
+(`dftu`, `inpdftu`) rather than through `task`, which is why walking the task
+list once missed it -- the same lesson §7 records.
+
+P20 implements QE's `lda_plus_u_kind = 0`: a scalar `U_eff`, a collinear `ns`,
+FLL double counting. Elk's remaining flavours are **four orthogonal axes**, not
+a menu: the interaction matrix (full `vee` from Slater `F^k`), the spin
+structure of `ns` (spinor, which unlocks spin-orbit coupling, noncollinear
+magnetism and `U` on a spin spiral), the double counting (around mean field),
+and where the `F^k` come from (Slater, Racah, or a Yukawa screening length
+integrated from the radial functions -- a `U` that is *computed*). Plus the
+tensor-moment decomposition and the fixed-tensor-moment constraint on top.
+
+**Two of the axes have `pw.x` references** (`kind = 1` and the `_nc` variants,
+with committed benchmarks in `test-suite/pw_lda+U/`), which is unusual for an
+entry in this file and is why P62 is ordered to reach them first. **AMF, Racah
+and the Yukawa route have none** -- grep over the vendored tree finds no
+"around mean field", no Slater or Racah parameterisation and no Yukawa
+screening in `PW/src`, `Modules` or `upflib`, so those three are blank-QE rows.
+
+**A convention trap found while surveying, of the kind this file exists for**: QE and
+Elk agree on the `d` shell's `F^4/F^2 = 0.625`, but QE reaches it in `init_hubbard`
+by substituting `B = 0.114774 J` when Racah's `B` is zero -- the routine that
+*builds* the matrix would give 1.8 read on its own, with every invariance check
+still passing.
+
+**Elk's own manual is stale here and the source is not**, which the method note
+below is about: 11.0.2 documents `readadu` and the `dftu = 3` FLL/AMF
+interpolation, and 11.0.2's `readinput.f90` answers `readadu` with "no longer
+used" while `writeinfo.f90` errors on any `dftu` but 1 or 2. The interpolation
+was *removed* in September 2021. Read the source, not the manual, and do not
+plan a phase against a feature that is gone.
+
+Full breakdown, sub-phase order, validation route and refusals: `PLAN.md` P62.
+
+---
+
 ## Considered and rejected
 
 | Elk task | Why not |
@@ -525,7 +568,7 @@ all-electron polarization against a pseudopotential one.
 | BSE (185/186/187), GW (600-640) | Out of scope per `CLAUDE.md`, and neither is cheap. |
 | Electron-phonon, Eliashberg (240-285) | Needs phonons at `q != 0`, which is the outstanding two-sphere work. |
 | Molecular dynamics (420/421) | A driver, not a new observable. |
-| Tensor moments (400) | Cheap given `ns`, but it decomposes the DFT+U energy rather than producing a measurable. Niche. |
+| Tensor moments (400) | Cheap given `ns`, but it decomposes the DFT+U energy rather than producing a measurable. Niche. The *constraint* built on it (`ftmtype`, `tm3fix`) is not, and §8 carries it as P62e -- the decomposition is its prerequisite, which is a reason to write it, not a reversal of this row. |
 
 ---
 

@@ -465,16 +465,105 @@ inside one atom's sphere (through a \code{LOCAL\_MAGNETIC\_FIELDS} card that
 of the reported total} --- QE prints \code{etcon} and never adds it, and Elk
 excludes its external field's energy by the same convention.
 
-\textbf{DFT+U:} QE's \code{lda\_plus\_u\_kind = 0} (Dudarev) with the
-$J_0$/$\beta$ extension, on \code{atomic}, \code{ortho-atomic} and
-\code{norm-atomic} projectors, read from the \code{HUBBARD} card. Forces come
-from differentiating through projectors that move with the atoms.
+\textbf{DFT+U:} both rotationally-invariant functionals, on \code{atomic},
+\code{ortho-atomic} and \code{norm-atomic} projectors, read from the
+\code{HUBBARD} card. Forces come from differentiating through projectors that
+move with the atoms.
+
+\emph{The card selects which functional runs}, exactly as \code{pw.x} does it
+--- the namelist's \code{lda\_plus\_u\_kind} is obsolete there and warned about.
+A card carrying only $U$, $J_0$, \code{ALPHA} and \code{BETA} is Dudarev's
+simplified functional; any $J$, $B$, $E_2$ or $E_3$ selects Liechtenstein's full
+one, whose interaction is the whole Coulomb matrix
+%
+\[
+  \mathrm{vee}(m_1 m_2 m_3 m_4)
+  = \sum_{k} F^k \frac{4\pi}{2k+1}
+    \sum_{q=-k}^{k} a_{kq}(m_1 m_3)\, a_{kq}(m_2 m_4)
+\]
+%
+rather than one number, with the Slater integrals $F^k$ fixed by $U$ and $J$.
+Against \code{pw.x} on antiferromagnetic FeO: \textbf{4.2e-9 Ry} at $J = 1$~eV.
+\emph{Forces work for both}, and for the full functional \code{pw.x} does not
+have them at all (\code{force\_hub.f90} stops on ``forces in the DFT+U+J scheme
+are not implemented''); a central difference of the SCF energy agrees to
+1.3e-4~Ry/bohr. \textbf{Seed that difference from the undisplaced run} --- with
+a full interaction matrix the DFT+U landscape has more than one solution, and
+cold-started displacements land on a different one, which does not look like an
+error, it looks like a force.
+
+\begin{lstlisting}[language=Python]
+from defumat import Calculator
+scf = Calculator.from_file("feo.in").get_scf()
+print(scf.energy_terms["hubbard"])
+\end{lstlisting}
+
+\begin{lstlisting}
+HUBBARD {atomic}
+U Fe1-3d 4.3
+J Fe1-3d 1.0     # selects the full functional
+\end{lstlisting}
+
+\textbf{Around-mean-field double counting} (\code{hubbard\_double\_counting =
+'amf'}) is the alternative to the fully-localised limit that both QE's
+functionals assume, and \code{pw.x} has neither the option nor the code. FLL
+treats the occupations as integers, which is right for a localised magnetic
+insulator and wrong for a metal; AMF subtracts the shell's mean occupation
+before the interaction, so a uniformly filled shell is corrected by
+\emph{exactly} nothing --- $0$ to $10^{-14}$ at any filling, where FLL is not.
+On FeO its Hubbard energy is $-0.005$~Ry against FLL's $+0.232$. It needs the
+full functional, there being no interaction matrix in the simplified one to
+apply the shift to.
+
+\textbf{Slater integrals from the orbital} (\code{hubbard\_slater = 'yukawa'})
+computes the interaction instead of parameterising it: $F^k$ is the double
+radial integral of the manifold's own all-electron partial wave against a
+screened Coulomb kernel,
+%
+\[
+  F^k = \iint \mathrm{d}r\,\mathrm{d}r'\;
+        [r\phi(r)]^2 [r'\phi(r')]^2 \,
+        (2k+1)\,\lambda\, i_k(\lambda r_<)\, \tilde k_k(\lambda r_>) ,
+\]
+%
+which becomes the bare $r_<^k/r_>^{k+1}$ as $\lambda \to 0$. Give $\lambda$ on
+the card (\code{LAMBDA Ni-3d 2.1}) or give a $U$ and let the screening length be
+solved for --- either way $F^0$, $F^2$, $F^4$ and $J$ all come out of the
+orbital. Nickel's unscreened 3d gives $F^4/F^2 = 0.626$ against the 0.625 that
+QE and Elk both hardcode, and $J = 1.28$~eV.
+
+\begin{lstlisting}
+&system
+   hubbard_slater = 'yukawa'
+/
+HUBBARD {ortho-atomic}
+U Ni-3d 5.0      # lambda is solved for; F2, F4 and J follow
+\end{lstlisting}
 
 \begin{refuses}
-\textbf{Refuses.} The full (Liechtenstein) DFT+U formulation, intersite $V$,
-background channels, the orbital-resolved variant, the \code{wf}/\code{pseudo}
-projector sets, and noncollinear \code{ns\_nc}; and PAW $+$ GGA $+$ a
-noncollinear magnetization together.
+\textbf{Refuses.} \code{hubbard\_slater = 'yukawa'} needs a \textbf{PAW}
+dataset, and this is a measurement rather than a preference: only PAW carries
+the all-electron partial wave. A norm-conserving $\chi$ is normalised and gives
+a pseudo-orbital $F^0$ far too small (silicon's 3p: 8.8~eV), and an
+\emph{ultrasoft} $\chi$ is not even normalised --- iron's 3d has
+$\int (r\chi)^2 = 0.41$, the rest of the norm living in the augmentation charge,
+and its $F^0$ comes out at 2.1~eV where the answer is above twenty. The
+\code{norm} that comes back with each manifold is what says whether it is bound
+inside the cutoff, and the cutoff defaults to the dataset's own augmentation
+radius because a partial wave \emph{diverges} outside it. Elk's
+\code{inpdftu = 2} and \code{3} (Slater and Racah \emph{input}) have no card
+syntax: they are a change of coordinates on the three numbers $(U, J, B)$
+already spans, and QE's card has spent the names $E_2$ and $E_3$ already. The
+FLL/AMF interpolation (Elk's \code{dftu = 3}) is not here because it is not in
+Elk either any more --- documented in the 11.0.2 manual, removed from the 11.0.2
+source.
+\end{refuses}
+
+\begin{refuses}
+\textbf{Refuses.} The intersite $V$, background channels, the
+orbital-resolved variant, the \code{wf}/\code{pseudo} projector sets, and
+noncollinear \code{ns\_nc}; and PAW $+$ GGA $+$ a noncollinear magnetization
+together.
 
 A \textbf{magnetic field in a noncollinear run with no starting moment} is
 refused rather than run. \code{domag} comes from \code{starting\_magnetization}

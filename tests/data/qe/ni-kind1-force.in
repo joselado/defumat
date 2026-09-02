@@ -1,0 +1,29 @@
+ &control
+    calculation = 'scf'
+    tprnfor = .true.
+ /
+ &system
+    ibrav = 0, celldm(1) = 6.48, nat = 2, ntyp = 1,
+    ecutwfc = 25.0, ecutrho = 200.0, nspin = 2,
+    starting_magnetization(1) = 0.5,
+    occupations = 'smearing', smearing = 'mv', degauss = 0.02,
+    nosym = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.3
+ /
+CELL_PARAMETERS alat
+1.0 0.0 0.0
+0.0 1.0 0.0
+0.0 0.0 1.0
+ATOMIC_SPECIES
+ Ni  58.69  Ni.pz-nd-rrkjus.UPF
+ATOMIC_POSITIONS {crystal}
+ Ni 0.02 0.00 0.00
+ Ni 0.50 0.50 0.00
+K_POINTS {automatic}
+2 2 2 0 0 0
+HUBBARD {atomic}
+U Ni-3d 4.0
+J Ni-3d 0.9

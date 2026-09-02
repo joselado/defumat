@@ -308,8 +308,12 @@ def test_refused_variants(pseudo_dir):
             "HUBBARD {atomic}\nU Fe1-3d 4.3\nU Fe2-3d 4.3", card
         )))
 
-    with pytest.raises(NotImplementedError, match="Liechtenstein"):
-        system_with("HUBBARD {atomic}\nU Fe1-3d 4.3\nJ Fe1-3d 0.5")
+    # ``J`` is no longer among them: it selects the full (Liechtenstein)
+    # functional, which is implemented (P62a) and tested in
+    # ``tests/unit/test_hubbard_full.py``. What it still refuses is being
+    # combined with the simplified functional's own parameters.
+    with pytest.raises(NotImplementedError, match="Hund J0"):
+        system_with("HUBBARD {atomic}\nU Fe1-3d 4.3\nJ Fe1-3d 0.5\nJ0 Fe1-3d 0.2")
     with pytest.raises(NotImplementedError, match="intersite"):
         system_with("HUBBARD {atomic}\nU Fe1-3d 4.3\nV Fe1-3d Fe2-3d 3 4 0.5")
     with pytest.raises(NotImplementedError, match="orbital-resolved"):

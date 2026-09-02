@@ -1,9 +1,12 @@
 """DFT+U: the simplified rotationally-invariant Hubbard correction.
 
 QE's ``lda_plus_u_kind = 0`` -- Dudarev's functional with the ``J0`` and
-``beta`` extensions -- on the ``atomic``, ``ortho-atomic`` and ``norm-atomic``
-projector sets, for ``nspin = 1`` and ``nspin = 2``, on norm-conserving,
-ultrasoft and PAW datasets.
+``beta`` extensions -- and ``lda_plus_u_kind = 1``, Liechtenstein's full
+rotationally-invariant functional with the Coulomb matrix built from the Slater
+integrals; on the ``atomic``, ``ortho-atomic`` and ``norm-atomic`` projector
+sets, for ``nspin = 1`` and ``nspin = 2``, on norm-conserving, ultrasoft and PAW
+datasets. **Which of the two runs is decided by the card**, as QE decides it: a
+``J``, ``B``, ``E2`` or ``E3`` selects the full functional.
 
 Four pieces, one per module:
 
@@ -14,20 +17,29 @@ Four pieces, one per module:
   on them, its symmetrisation, and its starting value;
 * :mod:`~defumat.hubbard.energy` -- the energy, with the potential as its
   ``jax.grad``, and :mod:`~defumat.hubbard.operator` applying that potential to
-  the states.
+  the states;
+* :mod:`~defumat.hubbard.interaction` -- the Coulomb matrix ``vee`` of the full
+  (Liechtenstein) functional, from the Slater integrals.
 
-Refused rather than approximated: the full (Liechtenstein) formulation
-``lda_plus_u_kind = 1``, the intersite ``V`` (``kind = 2``), background
-channels, the orbital-resolved variant, noncollinear ``ns``, and the ``wf`` and
-``pseudo`` projector types.
+Refused rather than approximated: the intersite ``V`` (``kind = 2``),
+background channels, the orbital-resolved variant, noncollinear ``ns``, and the
+``wf`` and ``pseudo`` projector types.
 """
 
 from defumat.hubbard.energy import (
     coefficients_from_setup,
+    elk_amf_potential,
     hubbard_energy,
     hubbard_potential,
     ns_ddot,
+    qe_hubbard_full_potential,
     qe_hubbard_potential,
+)
+from defumat.hubbard.interaction import (
+    coulomb_matrix,
+    default_racah,
+    exchange_from_slater,
+    slater_integrals,
 )
 from defumat.hubbard.manifold import (
     HubbardInput,
@@ -60,6 +72,10 @@ __all__ = [
     "build_hubbard_setup",
     "build_ns_symmetry",
     "coefficients_from_setup",
+    "coulomb_matrix",
+    "default_racah",
+    "elk_amf_potential",
+    "exchange_from_slater",
     "hubbard_energy",
     "hubbard_potential",
     "initial_ns",
@@ -69,6 +85,8 @@ __all__ = [
     "parse_manifold",
     "projections",
     "uniform_ns",
+    "slater_integrals",
     "spin_averaged_ns",
+    "qe_hubbard_full_potential",
     "qe_hubbard_potential",
 ]

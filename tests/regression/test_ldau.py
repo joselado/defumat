@@ -33,6 +33,21 @@ thing:
   ``J0`` and ``beta`` terms have (QE's own ``lda+U+J0.in`` needs a
   pseudopotential that is not committed here).
 
+The last two are the **full (Liechtenstein) functional**, ``lda_plus_u_kind = 1``
+(P62a), on the same FeO cell:
+
+* ``lda+U_kind1_collin`` -- QE's own case, which sets ``J = 1e-12``. It runs the
+  whole four-index assembly at exactly the point where it must reduce to the
+  simplified functional, and exercises ``F^2`` and ``F^4`` not at all. Useful for
+  what it is -- an end-to-end reduction test through the SCF rather than through
+  the energy alone -- and not sufficient on its own, which is why:
+* ``feo-kind1-J`` -- the same input with ``J = 1.0 eV``, generated here because
+  QE's suite has no *collinear* case carrying a real ``J`` (``lda+U_kind1_noncollin``
+  does, and needs the spinor occupation matrix). ``pw.x`` prints
+  ``B(Fe1-3d) = 0.1148`` for it, which is ``init_hubbard``'s substitution putting
+  ``F^4/F^2`` at 0.625 -- so the reference confirms the one convention in
+  :mod:`defumat.hubbard.interaction` that a formula alone would get wrong.
+
 References are regenerated with the vendored ``pw.x`` at ``conv_thr = 1e-10``
 (``tools/generate_reference.py``), for the reason the LSDA suite gives: the
 committed benchmarks stop at 1e-6 and their printed *terms* are worth about
@@ -72,6 +87,8 @@ CASES = [
     (None, "ni-ldau-nospin.in"),
     (None, "ni-ldau-ortho.in"),
     (None, "ni-ldau-j0.in"),
+    ("pw_lda+U", "lda+U_kind1_collin.in"),
+    (None, "feo-kind1-J.in"),
 ]
 
 IDS = [f"{directory or 'local'}/{name}" for directory, name in CASES]
