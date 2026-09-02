@@ -30,7 +30,7 @@ strongly the electrons couple to the perturbation, so a peak says *where* to loo
 ```python
 from pathlib import Path
 
-from pypresso import Calculator
+from defumat import Calculator
 
 PSEUDO, CASES = Path("../tests/data/pseudo"), Path("../tests/data/qe")
 

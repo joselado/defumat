@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 
-from pypresso import Calculator
+from defumat import Calculator
 
 PSEUDO, CASES = Path("../tests/data/pseudo"), Path("../tests/data/qe")
 
@@ -56,7 +56,7 @@ sees that.
 
 
 ```python
-from pypresso.units import RY_TO_EV
+from defumat.units import RY_TO_EV
 
 first = [scalar.get_first_order_soc(spinor, direction=d) * RY_TO_EV * 1000
          for d in [(1, 0, 0), (0, 0, 1)]]

@@ -26,7 +26,7 @@ integer.
 import numpy as np
 import pytest
 
-from pypresso.topology import (
+from defumat.topology import (
     ArrayStates,
     ModelSource,
     chern_number,
@@ -34,7 +34,7 @@ from pypresso.topology import (
     z2_invariant,
     z2_invariant_3d,
 )
-from pypresso.topology.wilson import (
+from defumat.topology.wilson import (
     _orientation,
     largest_gap_center,
     wilson_loop,

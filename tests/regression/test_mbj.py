@@ -24,13 +24,13 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.scf.driver import Calculation
-from pypresso.system import build_system
-from pypresso.units import RY_TO_EV
-from pypresso.workflows import run_bands
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import run_scf
+from defumat.scf.driver import Calculation
+from defumat.system import build_system
+from defumat.units import RY_TO_EV
+from defumat.workflows import run_bands
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
@@ -42,7 +42,7 @@ def _system(testsuite: Path, pseudo_dir: Path, **overrides):
     """QE's own two-atom silicon, with ``&system`` variables overridden.
 
     An **indexed** override (``starting_magnetization(1)``) is translated into
-    the representation :func:`~pypresso.io.pwin.parse_pw_input` produces --
+    the representation :func:`~defumat.io.pwin.parse_pw_input` produces --
     a dict of index tuples under the *base* key -- rather than injected as a
     literal string key, which is a key nothing reads. That was a silent no-op:
     an override was written in the test, was never applied, and the run used the
@@ -283,7 +283,7 @@ def _test_fields(grid):
 def test_the_spinor_tau_is_the_collinear_one(qe_testsuite, pseudo_dir):
     """Two spinor bands ``(psi, 0)`` and ``(0, psi)`` give the scalar ``tau``.
 
-    The decisive test of :func:`~pypresso.scf.density.spinor_band_kinetic_density`,
+    The decisive test of :func:`~defumat.scf.density.spinor_band_kinetic_density`,
     and it is an *identity* rather than an agreement: embedding a scalar band
     into a spinor at half the weight, twice, is the same state, so the two
     builders must return the same array. They do, to 3e-17.
@@ -294,7 +294,7 @@ def test_the_spinor_tau_is_the_collinear_one(qe_testsuite, pseudo_dir):
     nonlinear in ``tau`` on top. That is noise, not a discrepancy, and this test
     is how one tells.
     """
-    from pypresso.scf.density import kinetic_energy_density, spinor_kinetic_energy_density
+    from defumat.scf.density import kinetic_energy_density, spinor_kinetic_energy_density
 
     system, pseudos, result = _converged(qe_testsuite, pseudo_dir, "tb09")
     calculation = Calculation(system, pseudos)
@@ -327,8 +327,8 @@ def test_the_local_spin_frame_reduces_to_the_collinear_branch(qe_testsuite, pseu
     ``|m|`` cannot produce a torque, and the check that the rotation, the ``tau``
     projection and the sign convention all line up with the collinear code.
     """
-    from pypresso.basis.fft import r_to_g
-    from pypresso.scf.potential import _noncollinear_meta_exchange, meta_exchange
+    from defumat.basis.fft import r_to_g
+    from defumat.scf.potential import _noncollinear_meta_exchange, meta_exchange
 
     system, pseudos, _ = _converged(qe_testsuite, pseudo_dir, "tb09")
     calculation = Calculation(system, pseudos)
@@ -368,7 +368,7 @@ def test_the_noncollinear_potential_rotates_with_the_magnetization(
     is the property that a hard-coded component or a mislaid sign breaks and
     that the ``z``-axis test above cannot see.
     """
-    from pypresso.scf.potential import _noncollinear_meta_exchange
+    from defumat.scf.potential import _noncollinear_meta_exchange
 
     system, pseudos, _ = _converged(qe_testsuite, pseudo_dir, "tb09")
     calculation = Calculation(system, pseudos)
@@ -435,9 +435,9 @@ def test_forces_and_stress_are_refused(qe_testsuite, pseudo_dir):
     diagnostic degrades to a warning rather than failing the run -- QE's own
     convention for a combination it cannot do.
     """
-    from pypresso.forces import compute_forces
-    from pypresso.stress import compute_stress
-    from pypresso.forces.energy import state_from_result
+    from defumat.forces import compute_forces
+    from defumat.stress import compute_stress
+    from defumat.forces.energy import state_from_result
 
     system, pseudos, result = _converged(qe_testsuite, pseudo_dir, "tb09",
                                          tstress=None)

@@ -4,7 +4,7 @@ One SCF, one case, one setting of each batching dial, with the five checks
 ``GPU.md`` names run in the order it names them and written to JSON. There is
 nothing GPU-specific in here beyond the reporting: the *same* script is the CPU
 baseline, run on a CPU node, which is the whole point -- §2.3's metric is GPU
-pypresso against CPU pypresso on the same input and the same code, so the two
+defumat against CPU defumat on the same input and the same code, so the two
 sides must not be two scripts.
 
     python3 tools/gpu/phase0.py si-1k --k-batch 1 --band-batch 1
@@ -14,10 +14,10 @@ The case is a name resolved against ``benchmarks/`` and then ``tests/data/qe/``,
 or a path to a ``pw.x`` input.
 
 **Both dials are set explicitly and there is no default here**, deliberately.
-``pypresso/batching.py`` reads ``PYPRESSO_K_BATCH`` and ``PYPRESSO_BAND_BATCH``
+``defumat/batching.py`` reads ``DEFUMAT_K_BATCH`` and ``DEFUMAT_BAND_BATCH``
 *at import time* and defaults both to one, which is what a cache wants and what
 a GPU does not (``GPU.md`` §1) -- so this script sets both into the environment
-before pypresso is imported and refuses to run without being told.
+before defumat is imported and refuses to run without being told.
 
 What each check answers, and what its failure means:
 
@@ -71,9 +71,9 @@ def _dial(setting: str) -> str:
 
 
 def _apply_dials(k_batch: str, band_batch: str) -> dict:
-    """Into the environment, *before* pypresso is imported."""
-    os.environ["PYPRESSO_K_BATCH"] = k_batch
-    os.environ["PYPRESSO_BAND_BATCH"] = band_batch
+    """Into the environment, *before* defumat is imported."""
+    os.environ["DEFUMAT_K_BATCH"] = k_batch
+    os.environ["DEFUMAT_BAND_BATCH"] = band_batch
     return {"k_batch": k_batch, "band_batch": band_batch}
 
 
@@ -97,7 +97,7 @@ def reference_energy(case: Path) -> float | None:
     path = QE_CASES / f"reference.out.{case.stem}"
     if not path.is_file():
         return None
-    from pypresso.io import read_qe_output
+    from defumat.io import read_qe_output
     return read_qe_output(path).total_energy
 
 
@@ -142,7 +142,7 @@ def provenance() -> dict:
         "git_dirty": bool(_run(["git", "-C", str(REPO_ROOT), "status", "--porcelain"])),
         "xla_flags": os.environ.get("XLA_FLAGS"),
         "xla_preallocate": os.environ.get("XLA_PYTHON_CLIENT_PREALLOCATE"),
-        "pypresso_cache_dir": os.environ.get("PYPRESSO_CACHE_DIR"),
+        "defumat_cache_dir": os.environ.get("DEFUMAT_CACHE_DIR"),
     }
     try:
         import jax_cuda12_plugin  # noqa: F401
@@ -160,7 +160,7 @@ def provenance() -> dict:
 def check_precision(grid: tuple[int, int, int] | None) -> dict:
     """x64 asserted on a *device* array, then the fp64/fp32 rate measured.
 
-    ``jax_enable_x64`` is set in ``pypresso/__init__.py`` before anything else
+    ``jax_enable_x64`` is set in ``defumat/__init__.py`` before anything else
     touches JAX, which is structurally right -- but a platform change is exactly
     when a configuration assumption stops holding, and this one fails by running
     the whole calculation in single precision and returning a plausible number.
@@ -269,10 +269,10 @@ def run_case(case: Path, repeats: int, threshold: float,
     than once in one process is what makes check 5 possible at all.
     """
     import jax
-    from pypresso.io.pwin import read_pw_input
-    from pypresso.pseudo import read_upf
-    from pypresso.scf.driver import Calculation, run_scf
-    from pypresso.system import build_system
+    from defumat.io.pwin import read_pw_input
+    from defumat.pseudo import read_upf
+    from defumat.scf.driver import Calculation, run_scf
+    from defumat.system import build_system
 
     system = build_system(read_pw_input(case))
     pseudos = tuple(read_upf(PSEUDO_DIR / s.pseudo_file) for s in system.structure.species)
@@ -401,10 +401,10 @@ def main(argv=None) -> int:
     dials = _apply_dials(_dial(arguments.k_batch), _dial(arguments.band_batch))
     case = resolve_case(arguments.case)
 
-    import pypresso  # noqa: F401  -- sets jax_enable_x64 before any array exists
+    import defumat  # noqa: F401  -- sets jax_enable_x64 before any array exists
 
     record = {"dials": dials, "provenance": provenance()}
-    print(f"# pypresso GPU.md phase 0 -- {case.name}")
+    print(f"# defumat GPU.md phase 0 -- {case.name}")
     print(f"# {record['provenance']['device_kind']} x{record['provenance']['device_count']}"
           f" ({record['provenance']['platform']}), jax {record['provenance']['jax']}")
     print(f"# dials: k_batch={dials['k_batch']} band_batch={dials['band_batch']}")

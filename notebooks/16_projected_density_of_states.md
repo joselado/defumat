@@ -35,9 +35,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.io import comparison_table, read_pdos_file, read_projwfc_output
-from pypresso.units import RY_TO_EV
+from defumat import Calculator
+from defumat.io import comparison_table, read_pdos_file, read_projwfc_output
+from defumat.units import RY_TO_EV
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
@@ -100,10 +100,10 @@ for atom, printed in theirs.charges.items():
 rows.append(("spilling", pdos.charges.spilling, theirs.spilling))
 
 print(comparison_table(rows, fmt="{:.4f}",
-                       headers=("", "pypresso", "projwfc.x", "difference")))
+                       headers=("", "defumat", "projwfc.x", "difference")))
 ```
 
-                pypresso  projwfc.x  difference
+                defumat  projwfc.x  difference
     Si 1 total    3.9647     3.9647     3.7e-05
     Si 1  s       1.1596     1.1596     9.4e-06
     Si 1  p       2.8051     2.8051     4.6e-05
@@ -136,9 +136,9 @@ bands means.
 
 
 ```python
-from pypresso.projwfc import atomic_projections           # no facade route to fat bands
-from pypresso.workflows.nscf import fixed_density_states   # ... nor to the states behind them
-from pypresso.system.kpoints import KPoints
+from defumat.projwfc import atomic_projections           # no facade route to fat bands
+from defumat.workflows.nscf import fixed_density_states   # ... nor to the states behind them
+from defumat.system.kpoints import KPoints
 
 path = KPoints.band_path([(0.5, 0.5, 0.5), (0.0, 0.0, 0.0), (1.0, 0.0, 0.0)], [20, 20, 0],
                          silicon.system.cell, crystal=False)

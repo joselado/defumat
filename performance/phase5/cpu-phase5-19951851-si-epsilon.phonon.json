@@ -21,7 +21,7 @@
     "git_dirty": false,
     "xla_flags": null,
     "xla_preallocate": null,
-    "pypresso_cache_dir": "/scratch/work/ladovj1/calculations/pypresso-gpu/cache-cpu",
+    "defumat_cache_dir": "/scratch/work/ladovj1/calculations/defumat-gpu/cache-cpu",
     "cuda_plugin": "present",
     "nvidia_smi": null
   },

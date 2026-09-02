@@ -4,7 +4,7 @@
 ! `v2 (grad rho)_a (grad rho)_b` that a functional of `|grad rho|^2` contributes
 ! once the gradient is transformed by the strain. It comes out of `jax.grad`
 ! along with everything else, and QE's expression for it is transcribed beside
-! it (`pypresso/stress/analytic.py`).
+! it (`defumat/stress/analytic.py`).
  &control
     calculation = 'scf'
     tstress = .true.

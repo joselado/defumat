@@ -16,13 +16,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import parse_pw_input, read_pw_input
-from pypresso.response.magnetoelectric import (
+from defumat.io.pwin import parse_pw_input, read_pw_input
+from defumat.response.magnetoelectric import (
     BRANCH_FRACTION,
     MagnetoelectricTensor,
     magnetoelectric_tensor,
 )
-from pypresso.system.builder import build_system
+from defumat.system.builder import build_system
 
 pytestmark = pytest.mark.unit
 

@@ -1,5 +1,5 @@
 ! The machinery case for P27 x P26: bilayer graphene put through the
-! third-derivative path (`pypresso/response/electrostriction.py`), which is what
+! third-derivative path (`defumat/response/electrostriction.py`), which is what
 ! the D2 phase could not run on a `smearing` input.
 !
 ! Three things make this input what it is, and the first two are the same pair

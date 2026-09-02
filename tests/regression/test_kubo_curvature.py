@@ -1,11 +1,11 @@
 """The Kubo Berry curvature on a plane-wave calculation (P47).
 
-``pypresso.topology.berry`` has had a ``kubo`` method since P16 and it was
+``defumat.topology.berry`` has had a ``kubo`` method since P16 and it was
 reachable only from a tight-binding model, because a plane-wave ``H(k)`` is not
 a dense matrix ``jacfwd`` can differentiate and ``eigh`` can diagonalise. P24's
-:class:`~pypresso.response.velocity.VelocityOperator` is what removes the
+:class:`~defumat.response.velocity.VelocityOperator` is what removes the
 obstruction -- one ``jax.jvp`` of ``H(k)`` at a frozen sphere -- and
-:mod:`pypresso.topology.kubo` contracts it into band matrix elements, so
+:mod:`defumat.topology.kubo` contracts it into band matrix elements, so
 nothing of size ``npw^2`` is ever formed.
 
 The file is laid out as the three independent things that can be wrong.
@@ -41,15 +41,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo.upf import read_upf
-from pypresso.scf.driver import run_scf
-from pypresso.system.builder import build_system
-from pypresso.topology.berry import berry_curvature
-from pypresso.topology.kubo import kubo_from_matrices, velocity_matrices
-from pypresso.topology.links import berry_phase, link_phase
-from pypresso.topology.mesh import plane_mesh
-from pypresso.workflows.topology import DFTSource, run_berry_curvature
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo.upf import read_upf
+from defumat.scf.driver import run_scf
+from defumat.system.builder import build_system
+from defumat.topology.berry import berry_curvature
+from defumat.topology.kubo import kubo_from_matrices, velocity_matrices
+from defumat.topology.links import berry_phase, link_phase
+from defumat.topology.mesh import plane_mesh
+from defumat.workflows.topology import DFTSource, run_berry_curvature
 
 pytestmark = pytest.mark.regression
 
@@ -123,7 +123,7 @@ def test_the_velocity_matrix_is_the_finite_difference_of_h():
     """
     import jax.numpy as jnp
 
-    from pypresso.response.velocity import over_kpoints
+    from defumat.response.velocity import over_kpoints
 
     points = np.array([[0.13, 0.21, 0.07], [0.30, -0.10, 0.25]])
     states = source("alas-raman.in", 4, nbnd=10).states(points, keep_velocity=True)
@@ -317,7 +317,7 @@ def test_a_degenerate_multiplet_is_gauge_invariant_only_as_a_sum():
     individual ``Omega_n`` are not, and are not properties of a band at all.
 
     This is P36's degenerate-multiplet finding one quantity over, and the
-    reason :attr:`~pypresso.topology.berry.BerryCurvature.curvature_by_band`
+    reason :attr:`~defumat.topology.berry.BerryCurvature.curvature_by_band`
     carries the warning it does. Measured: the pair goes from
     ``(+0.203989, -0.218475)`` to ``(+0.273508, -0.287993)`` -- moving by
     **0.0695** -- while the manifold total stays at ``-0.0144856`` to
@@ -474,7 +474,7 @@ def test_fhs_is_still_the_default_and_is_untouched():
     ever being one. It is for the *map*; the invariant stays with the lattice
     construction.
     """
-    from pypresso.topology.registry import DEFAULT_CURVATURE_METHOD, curvature_methods
+    from defumat.topology.registry import DEFAULT_CURVATURE_METHOD, curvature_methods
 
     assert DEFAULT_CURVATURE_METHOD == "fhs"
     assert set(curvature_methods()) >= {"fhs", "kubo"}

@@ -17,7 +17,7 @@
 !     and the two agree to 1e-10.
 !   * the 1x1x4 k-grid is even, so it is invariant under a shift by half a
 !     reciprocal lattice vector -- which is what makes E(q + G) = E(q) hold. See
-!     pypresso/system/spiral.py.
+!     defumat/system/spiral.py.
  &control
     calculation = 'scf'
  /

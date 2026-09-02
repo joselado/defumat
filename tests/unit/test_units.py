@@ -10,12 +10,12 @@ import re
 
 import pytest
 
-from pypresso import units
+from defumat import units
 from tests.conftest import QE_ROOT
 
 pytestmark = pytest.mark.unit
 
-# name in constants.f90 -> name in pypresso.units
+# name in constants.f90 -> name in defumat.units
 _SI_CONSTANTS = {
     "H_PLANCK_SI": "H_PLANCK_SI",
     "K_BOLTZMANN_SI": "K_BOLTZMANN_SI",

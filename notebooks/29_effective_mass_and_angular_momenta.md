@@ -41,8 +41,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.system.kpoints import KPoints
+from defumat import Calculator
+from defumat.system.kpoints import KPoints
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 

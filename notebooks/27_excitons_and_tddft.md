@@ -40,8 +40,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.units import RY_TO_EV
+from defumat import Calculator
+from defumat.units import RY_TO_EV
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 OMEGA = np.arange(0.0, 0.60, 0.004)      # Ry

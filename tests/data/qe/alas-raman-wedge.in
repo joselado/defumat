@@ -6,7 +6,7 @@
 ! the way through. The Raman tensor assembled from those 8 points is a wedge
 ! sum with three free cartesian indices, so it is *not* the answer until
 ! `symtensor3` completes it (`symme.f90`; here
-! `pypresso.system.symmetry.symmetrize_atom_cartesian_tensor`). Agreeing with
+! `defumat.system.symmetry.symmetrize_atom_cartesian_tensor`). Agreeing with
 ! the closed-grid run is the only check that average has, and P35's committed
 ! numbers -- -3.118279 and +3.119166 -- are what it has to reproduce.
 !

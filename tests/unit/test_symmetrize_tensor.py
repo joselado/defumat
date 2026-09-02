@@ -17,9 +17,9 @@ on its own.
 import numpy as np
 import pytest
 
-from pypresso.system.cell import Cell
-from pypresso.system.structure import Species, Structure
-from pypresso.system.symmetry import (
+from defumat.system.cell import Cell
+from defumat.system.structure import Species, Structure
+from defumat.system.symmetry import (
     atom_mapping,
     find_symmetries,
     symmetrize_atom_cartesian_tensor,

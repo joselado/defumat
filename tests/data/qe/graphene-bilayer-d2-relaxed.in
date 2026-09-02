@@ -1,4 +1,4 @@
-! Bilayer graphene at the geometry pypresso's own relaxation settles on
+! Bilayer graphene at the geometry defumat's own relaxation settles on
 ! (`graphene-bilayer-d2-relax.in`), so that `pw.x` can be asked whether it is a
 ! stationary point of *its* surface -- which is the only curvature-free way to
 ! compare two relaxations on a van der Waals potential this flat. It is: pw.x

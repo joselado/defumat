@@ -27,15 +27,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.scf.driver import Calculation
-from pypresso.scf.occupations import tetrahedra_for, tetrahedron_occupations
-from pypresso.system import build_system
-from pypresso.units import RY_TO_EV
-from pypresso.workflows import run_bands
+from defumat.io import read_qe_output
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import run_scf
+from defumat.scf.driver import Calculation
+from defumat.scf.occupations import tetrahedra_for, tetrahedron_occupations
+from defumat.system import build_system
+from defumat.units import RY_TO_EV
+from defumat.workflows import run_bands
 from tests.conftest import reference_output
 from tests.tolerances import (
     DENSITY_DEPENDENT_TERM_RY,

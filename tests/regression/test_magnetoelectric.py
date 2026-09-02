@@ -24,10 +24,10 @@ import jax
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo.upf import read_upf
-from pypresso.response.magnetoelectric import magnetoelectric_tensor
-from pypresso.system.builder import build_system
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo.upf import read_upf
+from defumat.response.magnetoelectric import magnetoelectric_tensor
+from defumat.system.builder import build_system
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
@@ -123,7 +123,7 @@ def test_the_facade_and_the_functional_entry_point_agree():
     check none of the other tests here made: every one of them went through the
     functional path and none through the facade.
     """
-    from pypresso import Calculator
+    from defumat import Calculator
 
     options = dict(delta=0.02, directions=(2,), nppstr=6, transverse=(2, 2))
     facade = Calculator.from_file(

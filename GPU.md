@@ -23,7 +23,7 @@ silicon's energy to 7.1e-15 Ry, the anisotropy to 5.4e-7 meV -- with both of the
 backend-independent identities holding on the card: a preconditioner does not
 move the SCF's fixed point (1.70e-11 Ry on both) and `soc_scale = 0` gives no
 anisotropy (2.2e-8 meV). Peak device memory 0.472 GB. It ran from a *separate*
-checkout, `apps/pypresso-p59`, because `apps/pypresso` was 13 commits behind and
+checkout, `apps/defumat-p59`, because `apps/defumat` was 13 commits behind and
 carried uncommitted spiral work in a file this code also touches.
 
 **Phase 0 is done as of 2026-08-25** and the first of those three is settled: the same
@@ -68,7 +68,7 @@ the batch that a cache does not."* **A GPU run left on the *old* defaults serial
 FFT into a per-band kernel launch** — close to the worst execution mode available — which
 is why this is now a per-platform default rather than a line in a job script. §5's rule is
 what shapes the fix: a dial with a per-platform default and both settings tested, never a
-rewrite, so nothing moves on a CPU and an explicit argument or `PYPRESSO_*_BATCH` still
+rewrite, so nothing moves on a CPU and an explicit argument or `DEFUMAT_*_BATCH` still
 beats the platform. Every GPU number below this line was produced with the dials set by
 hand in an sbatch script; the same settings are what a bare `run_scf` on a card now picks
 on its own.
@@ -114,13 +114,13 @@ access pattern a GPU punishes and a batched `cuFFT` plan makes unnecessary. **Th
 hypothesis, not a finding**, and §3's Phase 2 is where it gets measured.
 
 **2.3 The metric changes, and reusing the CPU one would flatter the result by a factor
-nobody earned.** `CLAUDE.md`'s measurement is *single-core* pypresso against *single-core*
+nobody earned.** `CLAUDE.md`'s measurement is *single-core* defumat against *single-core*
 QE on the same input, and `tools/compare_qe.py` pins both to one core precisely so the
 comparison is not inflated by core count. A GPU number put against that baseline would be
 meaningless in the same way, only more so. The GPU metric is therefore stated separately
 and never substituted for it:
 
-* **GPU pypresso against CPU pypresso, same input, same code, per SCF iteration**, with
+* **GPU defumat against CPU defumat, same input, same code, per SCF iteration**, with
   compile time reported as its own line rather than amortised away — and **the CPU side
   pinned to a stated core count**, because one core, four and the whole node differ by an
   order of magnitude and an unpinned baseline is not a baseline. That is the entire lesson
@@ -129,7 +129,7 @@ and never substituted for it:
 * the QE comparison stays what it is — a CPU claim — and any table mixing the two says
   which column is which.
 
-**And the comparison this project will eventually owe is pypresso-GPU against QE-GPU.** QE
+**And the comparison this project will eventually owe is defumat-GPU against QE-GPU.** QE
 7.5 has an OpenACC port and it is in the vendored tree — `PW/src/vloc_psi_acc.f90`,
 `add_vuspsi_acc.f90`, `stres_har.f90` and others carry `!$acc` directives. Nothing here has
 to do that comparison soon, and building QE's GPU path is a project of its own, but a
@@ -217,7 +217,7 @@ under "First contact with a GPU". What the five checks returned:
 2. **The energy matches**, to **1.6e-13 Ry** against the CPU run worst case, and
    `al10-metal` reproduces the **committed QE reference to 1.88e-09 Ry** — the
    same digit the development workstation gets.
-3. **Compile is 3.7–14.3 s**, reported as its own line. `PYPRESSO_CACHE_DIR` on
+3. **Compile is 3.7–14.3 s**, reported as its own line. `DEFUMAT_CACHE_DIR` on
    scratch: one writer per job, so the concurrent-writer question is *still
    open* rather than answered.
 4. **Peak device memory 0.40 GB** against an 11.8 GB allocator limit, from
@@ -281,7 +281,7 @@ each: §2.4 says the fully-batched end is the one already measured to exhaust 12
    a blocker — it is the argument for Phase 3 — but it must be *known* before any timing is
    interpreted.
 2. **The total energy against the CPU run**, to the committed tolerance. Not "close".
-3. **Compile time**, separately, and whether `PYPRESSO_CACHE_DIR` on scratch survives the
+3. **Compile time**, separately, and whether `DEFUMAT_CACHE_DIR` on scratch survives the
    node (its concurrent-writer behaviour on the shared filesystem is unverified — P34 flags
    this too).
 4. **Peak device memory — measured with JAX's device memory profiler, not by reading the
@@ -306,13 +306,13 @@ each: §2.4 says the fully-batched end is the one already measured to exhaust 12
 round.**
 
 * **`jax_enable_x64` must be verified at runtime, not assumed.** It is set in
-  `pypresso/__init__.py:24`, immediately after `import jax` and before anything else
+  `defumat/__init__.py:24`, immediately after `import jax` and before anything else
   touches it, which is structurally correct. But its failure mode — JAX silently running
   the whole thing in single precision — produces a result that is plausible rather than
   wrong-looking, and a *platform change is exactly when a config assumption stops holding*.
   Assert a dtype on the device at the top of the job, rather than trusting the call.
 * **`XLA_PYTHON_CLIENT_PREALLOCATE`: leave it alone unless something shares the device.**
-  JAX preallocates the bulk of device memory on first use. For a single-tenant pypresso job
+  JAX preallocates the bulk of device memory on first use. For a single-tenant defumat job
   that is *what you want* — it avoids fragmentation over a long SCF — so the reflex to
   disable it is wrong here. It has to be set `false` when another framework shares the
   process or the card, which is the case that bites and is worth knowing before it does.

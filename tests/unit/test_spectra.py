@@ -1,6 +1,6 @@
 """The Raman/IR assembly, as arithmetic -- ``RamanIR`` without a crystal under it.
 
-``pypresso.response.spectra.mode_activities`` is a pure function of arrays, so
+``defumat.response.spectra.mode_activities`` is a pure function of arrays, so
 everything about it can be checked without solving anything: the
 eigendisplacement normalisation, the two rotational invariants, the unit
 factors, and -- the one that matters for how the results may be *used* -- what a
@@ -14,15 +14,15 @@ not need the Fortran.
 import numpy as np
 import pytest
 
-from pypresso.response.phonon import _diagonalize
-from pypresso.response.spectra import (
+from defumat.response.phonon import _diagonalize
+from defumat.response.spectra import (
     degenerate_manifolds,
     eigendisplacements,
     loto_modes,
     mode_activities,
     nonanal,
 )
-from pypresso.units import (
+from defumat.units import (
     AMU_SI, AMU_TO_RY, BOHR_RADIUS_SI, E2, ELECTRON_SI, EPSILON0_SI, FPI, PI,
     RY_TO_THZ,
 )
@@ -44,7 +44,7 @@ def _zincblende_raman(value):
 
     ``-43m`` leaves one independent component: ``d(chi_yz)/d(tau_x)`` and its
     permutations. The two atoms carry opposite signs, which is the translational
-    sum rule of :func:`~pypresso.response.nonlinear.translational_residue`.
+    sum rule of :func:`~defumat.response.nonlinear.translational_residue`.
     """
     tensor = np.zeros((2, 3, 3, 3))
     for cart in range(3):
@@ -101,7 +101,7 @@ def test_a_degenerate_multiplet_is_only_comparable_as_a_sum():
     change of basis the eigensolver was free to make (rule D4). Both invariants
     are *quadratic* in the mode's Raman tensor, so the multiplet's **sum** of
     activities is unchanged and its individual entries are not -- which is why
-    :meth:`~pypresso.response.spectra.VibrationalSpectrum.by_manifold` exists
+    :meth:`~defumat.response.spectra.VibrationalSpectrum.by_manifold` exists
     and why a per-mode number inside a multiplet must never be compared against
     another code.
     """
@@ -189,7 +189,7 @@ def test_a_vanishing_tensor_gives_zero_rather_than_a_nan():
 
 def test_the_polarizability_table_is_the_susceptibility_in_cubic_angstrom():
     """``Omega chi/(4 pi)``, which is the block ``dynmat.x`` prints first."""
-    from pypresso.units import BOHR_TO_ANGSTROM, FPI
+    from defumat.units import BOHR_TO_ANGSTROM, FPI
 
     spectrum = mode_activities(
         np.zeros(6), np.eye(6), MASSES, EPSILON, VOLUME
@@ -209,7 +209,7 @@ def test_the_translational_sum_rule_kills_the_acoustic_modes():
     that obey the sum rule exactly -- as :func:`_zincblende_raman`'s do by
     construction -- their activity is identically zero. On a real calculation it
     is the sum rule's own residue instead, which is what
-    :attr:`~pypresso.response.nonlinear.RamanTensors.translational_residue`
+    :attr:`~defumat.response.nonlinear.RamanTensors.translational_residue`
     reports.
     """
     # The three acoustic modes of a diatomic cell: both atoms move together,

@@ -32,8 +32,8 @@ import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
 
-from pypresso import Calculator
-from pypresso.scf import Calculation, run_scf
+from defumat import Calculator
+from defumat.scf import Calculation, run_scf
 
 PSEUDO = Path("../tests/data/pseudo")
 
@@ -87,7 +87,7 @@ is not screened by the Hartree term.
 
 
 ```python
-from pypresso.scf.mixing import thomas_fermi_screening
+from defumat.scf.mixing import thomas_fermi_screening
 
 nelec = aluminium.calculation.nelec
 q_tf = thomas_fermi_screening(float(slab.cell.volume), nelec) ** 0.5
@@ -256,7 +256,7 @@ comes back.
 
 
 ```python
-from pypresso.hubbard import uniform_ns
+from defumat.hubbard import uniform_ns
 
 nickel_calc = load("ni-u-unstable.in")
 nickel, nickel_pseudos = nickel_calc.system, nickel_calc.pseudos

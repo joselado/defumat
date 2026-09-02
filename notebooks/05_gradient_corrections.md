@@ -19,7 +19,7 @@ $$v_{xc} = \frac{\partial E_{xc}}{\partial \rho}
 Only the energy functional is written down here; both potentials are obtained by
 differentiating it, so a new functional is one expression and no accompanying algebra.
 
-| against `pw.x` | pypresso | difference |
+| against `pw.x` | defumat | difference |
 |---|---|---|
 | PBE, norm-conserving silicon | **-15.727897810 Ry** | 2.7e-10 |
 | PBE, **ultrasoft** | **-22.822566057 Ry** | 2.7e-09 |
@@ -36,8 +36,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.io import comparison_table, read_qe_output
+from defumat import Calculator
+from defumat.io import comparison_table, read_qe_output
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
@@ -66,7 +66,7 @@ constants and surface energies of solids.
 
 
 ```python
-from pypresso.xc.functional import get_functional   # no facade route to one functional
+from defumat.xc.functional import get_functional   # no facade route to one functional
 
 rho = 0.05
 s = np.linspace(0.0, 3.0, 300)
@@ -119,10 +119,10 @@ for case, label in (("si2-nc-pbe", "PBE, norm-conserving"), ("si2-us-pbe", "PBE,
                  read_qe_output(CASES / f"reference.out.{case}").total_energy))
 
 print(comparison_table(rows, fmt="{:.9f}",
-                       headers=("case", "pypresso [Ry]", "pw.x", "difference")))
+                       headers=("case", "defumat [Ry]", "pw.x", "difference")))
 ```
 
-    case                  pypresso [Ry]           pw.x  difference
+    case                  defumat [Ry]           pw.x  difference
     PBE, norm-conserving  -15.727897810  -15.727897810     2.7e-10
     PBE, ultrasoft        -22.822566057  -22.822566060     2.7e-09
     PBE, PAW              -93.439615230  -93.439615230     1.1e-10
@@ -156,7 +156,7 @@ fig, ax = plt.subplots(figsize=(7.0, 4.4))
 ax.plot(bands.path_length, ours, "-", color="C0", lw=1.7)
 ax.plot(bands.path_length, theirs - theirs[:, 3].max(), "o", color="crimson", ms=3.5,
         mfc="none")
-ax.plot([], [], "-", color="C0", lw=1.7, label="pypresso, PBE")
+ax.plot([], [], "-", color="C0", lw=1.7, label="defumat, PBE")
 ax.plot([], [], "o", color="crimson", ms=5, mfc="none", label="pw.x")
 ax.axhline(0.0, color="k", lw=0.8, ls=":")
 ax.set_xlabel("path through the zone")

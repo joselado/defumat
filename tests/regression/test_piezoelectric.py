@@ -41,11 +41,11 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.response.efield import dielectric_tensor
-from pypresso.response.electrostriction import refined_states
-from pypresso.response.piezo import (
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.response.efield import dielectric_tensor
+from defumat.response.electrostriction import refined_states
+from defumat.response.piezo import (
     born_charges_from_stress_route,
     clamped_ion_piezoelectric,
     piezoelectric_from_strain_response,
@@ -54,10 +54,10 @@ from pypresso.response.piezo import (
     require_a_nonpolar_crystal,
     to_voigt,
 )
-from pypresso.response.strain import strain_response
-from pypresso.scf import Calculation, run_scf
-from pypresso.system import build_system
-from pypresso.units import E_BOHR2_TO_C_M2
+from defumat.response.strain import strain_response
+from defumat.scf import Calculation, run_scf
+from defumat.system import build_system
+from defumat.units import E_BOHR2_TO_C_M2
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 

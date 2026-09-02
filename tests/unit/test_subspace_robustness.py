@@ -24,7 +24,7 @@ import pytest
 
 from jax.scipy.linalg import solve_triangular
 
-from pypresso.solvers.subspace import _cholesky_route, generalised_eigh
+from defumat.solvers.subspace import _cholesky_route, generalised_eigh
 
 pytestmark = pytest.mark.unit
 

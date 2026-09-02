@@ -10,9 +10,9 @@ import jax
 import numpy as np
 import pytest
 
-from pypresso.config import DOUBLE
-from pypresso.system.cell import IBRAV_NAMES, Cell, celldm_from_abc, latgen
-from pypresso.units import TPI
+from defumat.config import DOUBLE
+from defumat.system.cell import IBRAV_NAMES, Cell, celldm_from_abc, latgen
+from defumat.units import TPI
 
 pytestmark = pytest.mark.unit
 
@@ -123,7 +123,7 @@ def test_cell_is_a_pytree_whose_only_leaf_is_the_lattice():
 
 
 def test_precision_policy_is_respected():
-    from pypresso.config import SINGLE
+    from defumat.config import SINGLE
 
     assert Cell.from_ibrav(2, [10.2, 0, 0, 0, 0, 0], precision=DOUBLE).at.dtype == np.float64
     assert Cell.from_ibrav(2, [10.2, 0, 0, 0, 0, 0], precision=SINGLE).at.dtype == np.float32

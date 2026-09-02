@@ -17,7 +17,7 @@ about what the code can do: the derivative is taken of the energy itself.
 
 On a two-atom silicon cell with the atoms pushed off their sites:
 
-| | pypresso | `pw.x` |
+| | defumat | `pw.x` |
 |---|---|---|
 | force on atom 0, along the bond | **0.06039736 Ry/bohr** | 0.06039673 |
 | the same, five reference cases | | agree to **2e-5 Ry/bohr** |
@@ -32,8 +32,8 @@ from pathlib import Path
 
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.io import comparison_table, read_qe_output
+from defumat import Calculator
+from defumat.io import comparison_table, read_qe_output
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
@@ -44,13 +44,13 @@ qe = read_qe_output(CASES / "reference.out.si2-nc-force")
 print(comparison_table(
     [(f"atom {a}, {'xyz'[d]}", float(forces.forces[a, d]), float(qe.forces[a, d]))
      for a in range(2) for d in range(3)],
-    fmt="{:.8f}", headers=("force [Ry/bohr]", "pypresso", "pw.x", "difference")))
+    fmt="{:.8f}", headers=("force [Ry/bohr]", "defumat", "pw.x", "difference")))
 ```
 
-    [pypresso] the forces: no ground state cached, running the SCF first (conv_thr = 1e-10). Call get_scf() to do this explicitly.
+    [defumat] the forces: no ground state cached, running the SCF first (conv_thr = 1e-10). Call get_scf() to do this explicitly.
 
 
-    force [Ry/bohr]     pypresso         pw.x  difference
+    force [Ry/bohr]     defumat         pw.x  difference
     atom 0, x         0.06039736   0.06039673     6.3e-07
     atom 0, y        -0.00000000   0.00000000     3.2e-19
     atom 0, z         0.00000000   0.00000000     3.2e-19

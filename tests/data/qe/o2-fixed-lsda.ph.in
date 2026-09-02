@@ -18,9 +18,9 @@ dielectric constant of triplet O2, LSDA
  /
 0.0 0.0 0.0
 !
-! It gives diag(1.110915996, 1.110915996, 1.198004867). pypresso cannot yet
+! It gives diag(1.110915996, 1.110915996, 1.198004867). defumat cannot yet
 ! reproduce it, and the reason is neither the occupied count nor anything in
-! `pypresso/response/`: `dv_of_drho` is one `jvp` of `v_of_rho`, so for
+! `defumat/response/`: `dv_of_drho` is one `jvp` of `v_of_rho`, so for
 ! nspin = 2 it is the *second* derivative of the LSDA exchange-correlation
 ! energy in the two channel densities, and that diverges wherever a channel
 ! density reaches zero -- which a plane-wave magnetization does in vacuum.

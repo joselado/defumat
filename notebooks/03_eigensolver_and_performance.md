@@ -3,7 +3,7 @@
 The SCF spends almost all of its time diagonalising, so the eigensolver decides what size
 of problem is reachable. Forming $H$ and calling `eigh` costs $O(n_{\rm pw}^3)$ time and
 $O(n_{\rm pw}^2)$ memory; a block Davidson gets the same eigenvalues to 1e-13 Ry at a
-fraction of both, and with it pypresso runs **within 2-4x of serial Quantum ESPRESSO per
+fraction of both, and with it defumat runs **within 2-4x of serial Quantum ESPRESSO per
 SCF iteration**.
 
 What is solved at every k-point is a *generalised* eigenproblem, because ultrasoft and PAW
@@ -35,10 +35,10 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.scf.driver import run_scf
-from pypresso.scf.potential import v_of_rho
-from pypresso.solvers import davidson_eigensolver_all
+from defumat import Calculator
+from defumat.scf.driver import run_scf
+from defumat.scf.potential import v_of_rho
+from defumat.solvers import davidson_eigensolver_all
 
 BENCH, PSEUDO = Path("../benchmarks"), Path("../tests/data/pseudo")
 
@@ -139,8 +139,8 @@ distinct k-points in it than the grid has points.
 
 
 ```python
-from pypresso.system.kpoints import KPoints
-from pypresso.system.symmetry import find_symmetries
+from defumat.system.kpoints import KPoints
+from defumat.system.symmetry import find_symmetries
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_scf")
 wedge = Calculator.from_file(QE / "scf-kauto.in", pseudo_dir=PSEUDO, announce=False)
@@ -178,7 +178,7 @@ needs a `pw.x` binary:
 |---|---|---|---|---|
 | plane waves | 180 | 1131 | 2950 | 5900 |
 | QE, per SCF iteration | 0.003 s | 0.011 s | 0.071 s | 0.278 s |
-| pypresso, per SCF iteration | 0.007 s | 0.033 s | 0.254 s | 1.141 s |
+| defumat, per SCF iteration | 0.007 s | 0.033 s | 0.254 s | 1.141 s |
 | ratio | **2.8x** | **3.0x** | **3.6x** | **4.1x** |
 | total energy agreement | 7e-7 Ry | 3e-9 Ry | 4e-9 Ry | 1e-9 Ry |
 

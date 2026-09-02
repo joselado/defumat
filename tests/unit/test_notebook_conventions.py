@@ -76,9 +76,9 @@ REWRITTEN = {
 #: them. **This set only shrinks.**
 JVP_DEBT = set()
 
-#: What a notebook may import from ``pypresso``. Everything else is the
+#: What a notebook may import from ``defumat``. Everything else is the
 #: implementation, and a notebook that needs it says why on the same line.
-FACADE = {"pypresso", "pypresso.units", "pypresso.system.kpoints", "pypresso.io"}
+FACADE = {"defumat", "defumat.units", "defumat.system.kpoints", "defumat.io"}
 
 #: At most this many justified exceptions to :data:`FACADE`, per notebook. Two,
 #: because the two figures that survived the rewrite of ``02`` and ``19`` both
@@ -240,7 +240,7 @@ def test_imports_stay_at_the_facade(path):
     unjustified, justified = [], []
     for cell in _cells(path):
         for line in cell["source"]:
-            match = re.match(r"\s*from (pypresso[\w.]*) import", line)
+            match = re.match(r"\s*from (defumat[\w.]*) import", line)
             if not match or match.group(1) in FACADE:
                 continue
             (justified if "#" in line else unjustified).append(match.group(1))

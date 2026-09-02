@@ -22,11 +22,11 @@ import pytest
 
 import re
 
-from pypresso.io.pwin import parse_pw_input
-from pypresso.pseudo.upf import read_upf
-from pypresso.scf.driver import run_scf
-from pypresso.system.builder import build_system
-from pypresso.workflows.polarization import run_polarization
+from defumat.io.pwin import parse_pw_input
+from defumat.pseudo.upf import read_upf
+from defumat.scf.driver import run_scf
+from defumat.system.builder import build_system
+from defumat.workflows.polarization import run_polarization
 
 pytestmark = pytest.mark.regression
 

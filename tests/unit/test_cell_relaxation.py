@@ -10,9 +10,9 @@ in the stress it is handed. Everything expensive is in
 import numpy as np
 import pytest
 
-from pypresso.relax.bfgs import BFGS
-from pypresso.relax.cell import cell_dofree_mask, cell_force
-from pypresso.units import RY_TO_KBAR
+from defumat.relax.bfgs import BFGS
+from defumat.relax.cell import cell_dofree_mask, cell_force
+from defumat.units import RY_TO_KBAR
 
 pytestmark = pytest.mark.unit
 
@@ -195,14 +195,14 @@ def test_a_cell_dynamics_that_is_a_different_optimizer_is_refused(name):
     them as BFGS would reach a similar answer and report it under a name that
     did not happen.
     """
-    from pypresso.workflows.vc_relax import _check_cell_dynamics
+    from defumat.workflows.vc_relax import _check_cell_dynamics
 
     with pytest.raises(NotImplementedError, match="cell_dynamics"):
         _check_cell_dynamics(name)
 
 
 def test_bfgs_is_the_cell_dynamics_that_runs():
-    from pypresso.workflows.vc_relax import _check_cell_dynamics
+    from defumat.workflows.vc_relax import _check_cell_dynamics
 
     _check_cell_dynamics("bfgs")
     _check_cell_dynamics(None)

@@ -41,3 +41,11 @@ performance/*.out
 # paths, private notes. Kept beside the checkout, never in a public repository.
 *.local.md
 regression-results/
+
+# xelatex build products for slides/defumat.tex. The PDF is committed.
+slides/*.aux
+slides/*.log
+slides/*.nav
+slides/*.out
+slides/*.snm
+slides/*.toc

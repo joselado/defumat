@@ -23,20 +23,20 @@
 # cpus-per-task 4, matching what phase0 used, so the host-side threading is the
 #             same one every earlier GPU number here was taken with.
 # mem         32G host. Device memory is measured by the script, not requested.
-#SBATCH --job-name=pypresso-p59
+#SBATCH --job-name=defumat-p59
 #SBATCH --partition=gpu-debug
 #SBATCH --time=00:25:00
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --output=/scratch/work/ladovj1/calculations/pypresso-gpu/out/p59-%j.out
-#SBATCH --error=/scratch/work/ladovj1/calculations/pypresso-gpu/out/p59-%j.err
+#SBATCH --output=/scratch/work/ladovj1/calculations/defumat-gpu/out/p59-%j.out
+#SBATCH --error=/scratch/work/ladovj1/calculations/defumat-gpu/out/p59-%j.err
 
-WORK=/scratch/work/ladovj1/calculations/pypresso-gpu
-# A SEPARATE checkout from /scratch/work/ladovj1/apps/pypresso, deliberately:
+WORK=/scratch/work/ladovj1/calculations/defumat-gpu
+# A SEPARATE checkout from /scratch/work/ladovj1/apps/defumat, deliberately:
 # that one is 13 commits behind and carries its own uncommitted spiral work in
-# pypresso/scf/driver.py, which this code also touches. Nothing here writes to it.
-REPO=/scratch/work/ladovj1/apps/pypresso-p59
+# defumat/scf/driver.py, which this code also touches. Nothing here writes to it.
+REPO=/scratch/work/ladovj1/apps/defumat-p59
 mkdir -p "$WORK/out" "$WORK/cache-p59"
 cd "$REPO" || exit 1
 
@@ -49,7 +49,7 @@ source "$WORK/venv/bin/activate"
 unset XLA_PYTHON_CLIENT_PREALLOCATE
 export MKL_NUM_THREADS=1
 export OMP_NUM_THREADS=1
-export PYPRESSO_CACHE_DIR="$WORK/cache-p59"
+export DEFUMAT_CACHE_DIR="$WORK/cache-p59"
 export PYTHONPATH="$REPO"
 export P59_OUT="$WORK/out/p59-gpu-${SLURM_JOB_ID}.json"
 
@@ -58,7 +58,7 @@ nvidia-smi
 echo "=== jax ==="
 python3 -c "import jax; print(jax.__version__, jax.devices())"
 echo "=== code under test ==="
-md5sum pypresso/scf/mixing.py pypresso/workflows/anisotropy.py
+md5sum defumat/scf/mixing.py defumat/workflows/anisotropy.py
 
 echo "=== p59_check ==="
 python3 -u tools/gpu/p59_check.py

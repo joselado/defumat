@@ -28,11 +28,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.io import read_qe_output
-from pypresso.io.pwin import parse_pw_input, read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.system import build_system
+from defumat.io import read_qe_output
+from defumat.io.pwin import parse_pw_input, read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import run_scf
+from defumat.system import build_system
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
@@ -106,7 +106,7 @@ def test_constraint_energy_matches_qe(qe_testsuite, pseudo_dir, benchmark):
         pytest.skip("this reference does not print the constraint energy")
 
     system, result = _run(qe_testsuite / "pw_noncolin" / name, pseudo_dir)
-    from pypresso.scf.driver import Calculation
+    from defumat.scf.driver import Calculation
 
     pseudos = tuple(
         read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
@@ -277,7 +277,7 @@ def test_the_two_fixed_spin_moment_rules_find_the_same_field(pseudo_dir):
     only what survives that.** Measured at 1380 iterations once and at 288
     another time, and what separated the two runs was ``|psi|^2`` being evaluated
     as ``Re(conj(psi) psi)`` rather than ``abs(psi)**2`` -- the same number to
-    **3.5 eps** (:func:`pypresso.scf.density.band_density`). A marginally damped
+    **3.5 eps** (:func:`defumat.scf.density.band_density`). A marginally damped
     controller has no well-defined damping time at that resolution, so an earlier
     ``secant.iterations * 5 < elk.iterations`` was asserting a number that does
     not exist. Every *physics* assertion above is unaffected: both rules reach

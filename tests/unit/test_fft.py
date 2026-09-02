@@ -5,10 +5,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.basis.fft import g_to_r, gather_from_box, r_to_g, scatter_to_box
-from pypresso.basis.gvectors import generate_gvectors
-from pypresso.config import DOUBLE
-from pypresso.system.cell import Cell
+from defumat.basis.fft import g_to_r, gather_from_box, r_to_g, scatter_to_box
+from defumat.basis.gvectors import generate_gvectors
+from defumat.config import DOUBLE
+from defumat.system.cell import Cell
 
 pytestmark = pytest.mark.unit
 

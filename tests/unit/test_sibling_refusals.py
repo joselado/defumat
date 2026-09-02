@@ -7,9 +7,9 @@ in a docstring -- and a second path reaching the same physics had no check at
 all and returned a plausible number. None of them raised; each answered.
 
 * the elastic constants refuse ultrasoft and PAW through
-  :func:`~pypresso.response.phonon.require_norm_conserving`, whose own docstring
-  names them -- and :func:`~pypresso.response.elastic.elastic_constants`, which
-  :meth:`pypresso.calculator.Calculator.get_elastic_constants` calls directly,
+  :func:`~defumat.response.phonon.require_norm_conserving`, whose own docstring
+  names them -- and :func:`~defumat.response.elastic.elastic_constants`, which
+  :meth:`defumat.calculator.Calculator.get_elastic_constants` calls directly,
   never called it;
 * a potential-only functional has no energy to differentiate, and
   ``method='analytic'`` did not go through the functional that says so;
@@ -28,8 +28,8 @@ import warnings
 
 import pytest
 
-from pypresso.io.pwin import parse_pw_input
-from pypresso.system.builder import build_system
+from defumat.io.pwin import parse_pw_input
+from defumat.system.builder import build_system
 
 pytestmark = pytest.mark.unit
 
@@ -71,7 +71,7 @@ def test_lsda_without_a_starting_magnetization_is_refused():
     identical, stay identical and converge to the unpolarized solution --
     ``Calculation.starting_density`` says so in its own docstring, and no caller
     enforced it. The run reported success and printed a total magnetization of
-    zero. :mod:`pypresso.scf.continuation` has the equivalent guard on the
+    zero. :mod:`defumat.scf.continuation` has the equivalent guard on the
     *promotion* path and has had it since P23.
     """
     with pytest.raises(ValueError, match="no starting_magnetization"):
@@ -200,7 +200,7 @@ def test_an_atomic_constraint_needs_something_to_build_its_targets_from():
 def test_chi2_is_refused_on_the_public_path_and_not_only_by_name():
     """The refusal existed and the only call to it was in a test.
 
-    :func:`~pypresso.response.nonlinear.susceptibility_field_derivative` is in
+    :func:`~defumat.response.nonlinear.susceptibility_field_derivative` is in
     ``__all__`` and its docstring said it was "kept and refused rather than
     exposed" -- it was exposed. The tensor it returns is missing the
     ``<u_i|r_k|u_j>`` term, is 42% wrong on its displacement counterpart, and no
@@ -209,7 +209,7 @@ def test_chi2_is_refused_on_the_public_path_and_not_only_by_name():
     """
     import inspect
 
-    from pypresso.response.nonlinear import susceptibility_field_derivative
+    from defumat.response.nonlinear import susceptibility_field_derivative
 
     signature = inspect.signature(susceptibility_field_derivative)
     assert signature.parameters["allow_incomplete"].default is False
@@ -223,17 +223,17 @@ def test_the_elastic_constants_call_the_refusal_that_names_them():
     """``require_norm_conserving`` guards the strain coordinate's third
     derivative, its docstring says so, and this entry point did not call it.
 
-    :mod:`pypresso.response.electrostriction` calls it before reaching
-    :func:`~pypresso.response.elastic.elastic_constants`, so the hole was only
+    :mod:`defumat.response.electrostriction` calls it before reaching
+    :func:`~defumat.response.elastic.elastic_constants`, so the hole was only
     on the direct path --
-    :meth:`pypresso.calculator.Calculator.get_elastic_constants`, which is the
+    :meth:`defumat.calculator.Calculator.get_elastic_constants`, which is the
     one a user takes. P44 measured what comes back without it: 1.3e-2 against a
     finite difference on ultrasoft and PAW, where the norm-conserving control on
     the same script is 2.3e-4.
     """
     import inspect
 
-    from pypresso.response import elastic
+    from defumat.response import elastic
 
     body = inspect.getsource(elastic.elastic_constants)
     assert "require_norm_conserving(calculation)" in body
@@ -250,14 +250,14 @@ def test_every_force_method_passes_the_same_guards(guard, name):
     """Before dispatch, so the analytic route is covered too.
 
     The analytic forces are a transcription of QE's six expressions and share no
-    machinery with :func:`~pypresso.forces.energy.energy_at`, so a refusal
+    machinery with :func:`~defumat.forces.energy.energy_at`, so a refusal
     written into the functional never reached ``method='analytic'``: a
     Tran-Blaha run came back with a force. The field refusal is the stress
-    path's (:func:`pypresso.stress.energy.require_a_differentiable_cell`), which
+    path's (:func:`defumat.stress.energy.require_a_differentiable_cell`), which
     the force path did not have at all.
     """
     import inspect
 
-    import pypresso.forces as forces
+    import defumat.forces as forces
 
     assert f"{guard}(calculation)" in inspect.getsource(forces.compute_forces), name

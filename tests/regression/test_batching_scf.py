@@ -1,6 +1,6 @@
 """A whole SCF run must not notice how many k-points are held at once.
 
-``pypresso.batching`` chunks the k axis so that a calculation costs what QE's
+``defumat.batching`` chunks the k axis so that a calculation costs what QE's
 ``k_loop`` costs in memory rather than ``nk`` times it. The chunk size is a
 memory setting and nothing else, so every number a run produces has to be the
 same at both ends of the dial -- and "the same" here means to round-off, since
@@ -18,7 +18,7 @@ Two cases, because they exercise different chunked paths:
 The band axis is the same dial on a different axis -- ``vloc_psi_k``'s
 ``DO ibnd`` against one transform of the whole block -- and gets the same
 end-to-end statement at the bottom of this file. It has to be made in a
-subprocess: ``PYPRESSO_BAND_BATCH`` is read when a function is *traced*, so
+subprocess: ``DEFUMAT_BAND_BATCH`` is read when a function is *traced*, so
 changing it inside a live process would leave the already-compiled kernels on
 the old setting and compare a run against itself.
 
@@ -31,10 +31,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.system import build_system
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import run_scf
+from defumat.system import build_system
 from tests.conftest import GENERATED
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
@@ -98,10 +98,10 @@ def test_ultrasoft_silicon_is_unchanged(batch, pseudo_dir):
 _BAND_BATCH_RUN = """
 import json, sys
 from pathlib import Path
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.system import build_system
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import run_scf
+from defumat.system import build_system
 
 system = build_system(read_pw_input(Path(sys.argv[1])))
 pseudos = tuple(read_upf(Path(sys.argv[2]) / s.pseudo_file) for s in system.structure.species)
@@ -115,13 +115,13 @@ print(json.dumps({
 
 
 def _run_with_band_batch(setting, input_path, pseudo_dir):
-    """One SCF in a fresh process at ``PYPRESSO_BAND_BATCH=setting``."""
+    """One SCF in a fresh process at ``DEFUMAT_BAND_BATCH=setting``."""
     import json
     import os
     import subprocess
     import sys
 
-    environment = dict(os.environ, PYPRESSO_BAND_BATCH=setting)
+    environment = dict(os.environ, DEFUMAT_BAND_BATCH=setting)
     finished = subprocess.run(
         [sys.executable, "-c", _BAND_BATCH_RUN, str(input_path), str(pseudo_dir)],
         capture_output=True, text=True, env=environment,

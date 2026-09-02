@@ -13,7 +13,7 @@ Five statements, each failing differently:
   must give the same ``N(q)`` as diagonalising all of it. This is the one that
   catches a group mismatch, which is otherwise silent;
 * the **weights are a density of states** -- ``(1/N_k) sum_k g(k)`` against
-  :func:`~pypresso.workflows.dos.compute_dos` on the wedge, which reaches the
+  :func:`~defumat.workflows.dos.compute_dos` on the wedge, which reaches the
   same number through k-point weights instead of an unfold;
 * the **two routes** -- the FFT correlation against ``nesting.f90``'s double
   loop, on a real band structure rather than on random numbers;
@@ -42,14 +42,14 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import parse_pw_input, read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.system import build_system
-from pypresso.system.kpoints import grid_equivalence
-from pypresso.workflows.dos import compute_dos
-from pypresso.workflows.nesting import run_nesting
-from pypresso.workflows.nscf import denser_grid, grid_symmetry, run_nscf
+from defumat.io.pwin import parse_pw_input, read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import run_scf
+from defumat.system import build_system
+from defumat.system.kpoints import grid_equivalence
+from defumat.workflows.dos import compute_dos
+from defumat.workflows.nesting import run_nesting
+from defumat.workflows.nscf import denser_grid, grid_symmetry, run_nscf
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
@@ -87,7 +87,7 @@ def test_a_wedge_and_the_complete_grid_give_the_same_nesting():
     ``eps_n(Rk) = eps_n(k)``, so this has no physical tolerance -- what is left
     is the eigensolver's own scatter between two runs that solve the same
     Hamiltonian at points reached in a different order. It is the certifying
-    test for :func:`~pypresso.workflows.nscf.grid_symmetry`: the group the
+    test for :func:`~defumat.workflows.nscf.grid_symmetry`: the group the
     wedge was *reduced* with and the group it is *unfolded* with are two
     different questions on a ``nosym``, ``noinv`` or magnetic run, and a
     mismatch maps every point to the wrong representative while producing a

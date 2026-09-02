@@ -17,7 +17,7 @@ an atom carries when it moves, and it is the force the atom feels in a field.
 On the silicon cell QE runs with `epsil = .true.`, against a re-run of the
 vendored `ph.x`:
 
-| | pypresso | `ph.x` |
+| | defumat | `ph.x` |
 |---|---|---|
 | $\varepsilon_\infty$, norm-conserving Si | **13.806646** | 13.806689 |
 | $\varepsilon_\infty$, **ultrasoft** Si | **14.325321** | 14.325270 |
@@ -36,8 +36,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.io import comparison_table
+from defumat import Calculator
+from defumat.io import comparison_table
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
@@ -49,7 +49,7 @@ print(np.round(field.epsilon, 6))
 print(f"\ndeparture from cubic symmetry   {field.anisotropy:.1e}")
 ```
 
-    [pypresso] the dielectric tensor: no ground state cached, running the SCF first (conv_thr = 1e-12). Call get_scf() to do this explicitly.
+    [defumat] the dielectric tensor: no ground state cached, running the SCF first (conv_thr = 1e-12). Call get_scf() to do this explicitly.
 
 
     dielectric tensor, cartesian axes:
@@ -137,10 +137,10 @@ print(comparison_table(
     [("epsilon (nc)", field.isotropic, 13.806689470),
      ("Z* Si 1", float(born[0, 0, 0]), -0.07571),
      ("Z* Si 2", float(born[1, 0, 0]), -0.07571)],
-    fmt="{:.6f}", headers=("", "pypresso", "ph.x", "difference")))
+    fmt="{:.6f}", headers=("", "defumat", "ph.x", "difference")))
 ```
 
-                   pypresso       ph.x  difference
+                   defumat       ph.x  difference
     epsilon (nc)  13.806646  13.806689     4.3e-05
     Z* Si 1       -0.075715  -0.075710     5.0e-06
     Z* Si 2       -0.075715  -0.075710     5.0e-06
@@ -160,7 +160,7 @@ in reciprocal space and leaves a function of $x$ alone.
 
 
 ```python
-from pypresso.basis.fft import r_to_g               # no facade route to rho(G)
+from defumat.basis.fft import r_to_g               # no facade route to rho(G)
 
 system = silicon.system
 dense = silicon.calculation.basis.dense
@@ -214,13 +214,13 @@ us = ultrasoft.get_dielectric_tensor()
 print(comparison_table(
     [("epsilon (ultrasoft)", us.isotropic, 14.325270),
      ("Z* (ultrasoft)", float(ultrasoft.get_born_charges()[0, 0, 0]), -0.07945)],
-    fmt="{:.6f}", headers=("", "pypresso", "ph.x", "difference")))
+    fmt="{:.6f}", headers=("", "defumat", "ph.x", "difference")))
 ```
 
-    [pypresso] the dielectric tensor: no ground state cached, running the SCF first (conv_thr = 1e-12). Call get_scf() to do this explicitly.
+    [defumat] the dielectric tensor: no ground state cached, running the SCF first (conv_thr = 1e-12). Call get_scf() to do this explicitly.
 
 
-                          pypresso       ph.x  difference
+                          defumat       ph.x  difference
     epsilon (ultrasoft)  14.325321  14.325270     5.1e-05
     Z* (ultrasoft)       -0.079442  -0.079450     8.3e-06
 

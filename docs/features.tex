@@ -1,4 +1,4 @@
-% pypresso user guide.
+% defumat user guide.
 %
 % This is the SOURCE, not a conversion of anything -- build with:
 %     xelatex docs/features.tex     (twice, for the table of contents)
@@ -31,7 +31,7 @@
 \definecolor{warnrule}{HTML}{E0C08A}
 
 \hypersetup{colorlinks=true, linkcolor=link, urlcolor=link,
-            pdftitle={pypresso: what it computes, and how to ask for it}}
+            pdftitle={defumat: what it computes, and how to ask for it}}
 
 % ---- code boxes: wrapped, so nothing can run off the page ----
 \lstdefinestyle{py}{
@@ -75,7 +75,7 @@
 \setlength{\parskip}{0.45em}
 \setlength{\parindent}{0pt}
 
-\title{\textbf{pypresso}\\[4pt]
+\title{\textbf{defumat}\\[4pt]
   \large what it computes, and how to ask for it}
 \author{\normalsize Plane-wave DFT in Python and JAX, validated against \qe}
 \date{\normalsize\today}
@@ -142,11 +142,11 @@ which is why a \emph{third} derivative needs only first-order wavefunctions.
 % =====================================================================
 \section{Input and invocation}
 
-pypresso reads \textbf{\code{pw.x} input files}. The same file that runs in
+defumat reads \textbf{\code{pw.x} input files}. The same file that runs in
 \qe\ runs here, which is what makes every comparison in this document possible.
 
 \begin{pycode}
-from pypresso import Calculator
+from defumat import Calculator
 
 calc = Calculator.from_file("scf.in", pseudo_dir="pseudo", conv_thr=1.0e-8)
 result = calc.get_scf()
@@ -219,10 +219,10 @@ The functional entry points the rest of this document names --- \code{run\_scf},
 remain the way to drive a calculation whose state is being managed by hand:
 
 \begin{pycode}
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf.driver import Calculation, run_scf
-from pypresso.system import build_system
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf.driver import Calculation, run_scf
+from defumat.system import build_system
 
 system = build_system(read_pw_input("scf.in"))
 pseudos = tuple(read_upf(f"pseudo/{s.pseudo_file}") for s in system.structure.species)
@@ -238,12 +238,12 @@ The calculator passes them.
 A command line covers the common workflows:
 
 \begin{shcode}
-python3 -m pypresso.cli inspect <qe-output>   # summarise what the parser reads
-python3 -m pypresso.cli dos     <input>       # density of states
-python3 -m pypresso.cli pdos    <input>       # projected DOS
-python3 -m pypresso.cli relax   <input>       # structural relaxation
-python3 -m pypresso.cli stress  <input>       # stress tensor
-python3 -m pypresso.cli spiral  <input>       # spin-spiral scan
+python3 -m defumat.cli inspect <qe-output>   # summarise what the parser reads
+python3 -m defumat.cli dos     <input>       # density of states
+python3 -m defumat.cli pdos    <input>       # projected DOS
+python3 -m defumat.cli relax   <input>       # structural relaxation
+python3 -m defumat.cli stress  <input>       # stress tensor
+python3 -m defumat.cli spiral  <input>       # spin-spiral scan
 \end{shcode}
 
 Standard \code{pw.x} variables --- \code{ecutwfc}, \code{ecutrho}, \code{ibrav},
@@ -361,9 +361,9 @@ parameter is what is \emph{not} captured,
 $\sum_{n\mathbf k} w_{\mathbf k} f_{n\mathbf k}\big(1-\sum_\mu|\langle\phi_\mu|\hat S|\psi\rangle|^2\big)$.
 
 \begin{pycode}
-from pypresso.workflows.bands import run_bands
-from pypresso.workflows.dos import run_dos
-from pypresso.workflows.pdos import run_pdos
+from defumat.workflows.bands import run_bands
+from defumat.workflows.dos import run_dos
+from defumat.workflows.pdos import run_pdos
 
 bands = run_bands(system, pseudos, scf.density, kpoints=path)   # a k-path
 
@@ -516,10 +516,10 @@ H = E + P\,\Omega,
 \end{equation*}
 
 \begin{pycode}
-from pypresso.forces import compute_forces
-from pypresso.stress import compute_stress
-from pypresso.workflows.relax import run_relax
-from pypresso.workflows.vc_relax import run_vc_relax
+from defumat.forces import compute_forces
+from defumat.stress import compute_stress
+from defumat.workflows.relax import run_relax
+from defumat.workflows.vc_relax import run_vc_relax
 
 forces = compute_forces(calculation, result)      # method=... for QE's own terms
 print(forces.forces)                              # (nat, 3) in Ry/bohr
@@ -546,7 +546,7 @@ vector of length $2\,n_{\mathrm{pw}}$ rather than two. Nothing else in the
 functional changes.
 
 \begin{pycode}
-from pypresso import Calculator
+from defumat import Calculator
 
 calculator = Calculator.from_file("pt2-soc-force.in")   # noncolin, lspinorb
 forces = calculator.get_forces()          # (nat, 3) Ry/bohr
@@ -627,7 +627,7 @@ theorem, which is why a third derivative costs one more \code{jvp} and not a new
 solve.
 
 \begin{pycode}
-from pypresso.response import (dielectric_tensor, dynamical_matrix,
+from defumat.response import (dielectric_tensor, dynamical_matrix,
                                raman_tensors, vibrational_spectrum)
 
 eps = dielectric_tensor(calculation, scf.wavefunctions, scf.eigenvalues,
@@ -812,7 +812,7 @@ Bousquet and Janolin it gives the four electrostriction tensors $m$, $q$, $M$
 and $Q$.
 
 \begin{pycode}
-from pypresso.response import elastic_constants, electrostriction
+from defumat.response import elastic_constants, electrostriction
 
 es = electrostriction(calculation, scf)     # solves the strain response itself
 print(es.m, es.q, es.M, es.Q)              # the four electrostriction tensors
@@ -923,7 +923,7 @@ doubles \code{nks} there and each spin channel is a separate $k$-point.
 
 \begin{pycode}
 # chi_0 for a spin-polarized run -- the part that is validated unconditionally.
-from pypresso.response.sternheimer import make_sternheimer
+from defumat.response.sternheimer import make_sternheimer
 
 solver = make_sternheimer(calculation, result, spin_polarized=True)
 drho = solver.chi0(dv)          # dv is (2, n1, n2, n3) on the dense grid
@@ -995,7 +995,7 @@ Liouville--Lanczos solver with RPA and ALDA; it has no bootstrap kernel and no
 Dyson equation in $\mathbf G$ space. The reference is Elk.
 
 \begin{pycode}
-from pypresso.workflows import run_absorption
+from defumat.workflows import run_absorption
 import numpy as np
 
 omega = np.arange(0.0, 0.6, 0.005)          # Ry
@@ -1395,7 +1395,7 @@ points:
 \end{equation*}
 
 \begin{pycode}
-from pypresso.workflows.topology import (run_z2, run_z2_3d,
+from defumat.workflows.topology import (run_z2, run_z2_3d,
                                          run_berry_curvature)
 
 z2 = run_z2(system, pseudos, scf.density, axis=2)   # Wilson loop by default
@@ -1447,7 +1447,7 @@ no dense $H(\mathbf k)$ is ever formed --- and the tangent for a crystal
 direction $d$ is the reciprocal lattice vector $\mathbf b_d$.
 
 \begin{pycode}
-from pypresso.workflows.topology import run_berry_curvature
+from defumat.workflows.topology import run_berry_curvature
 
 curvature = run_berry_curvature(
     system, pseudos, density, shape=(4, 4), nocc=4, nbnd=12, method="kubo"
@@ -1508,7 +1508,7 @@ A single number is not a physical statement: what is meaningful is a
 a Born effective charge and a piezoelectric constant are made of.
 
 \begin{pycode}
-from pypresso.workflows.polarization import run_polarization
+from defumat.workflows.polarization import run_polarization
 
 p = run_polarization(system, pseudos, scf.density,
                      gdir=2,            # 0-based; pw.x's gdir = 3
@@ -1577,7 +1577,7 @@ derivative taken against a small further change in it. The magnetism is induced
 rather than spontaneous, which is what makes a plain gapped semiconductor usable.
 
 \begin{pycode}
-from pypresso import Calculator
+from defumat import Calculator
 
 alas = Calculator.from_file("alas-magnetoelectric.in", pseudo_dir)
 me = alas.get_magnetoelectric_tensor(delta=0.02, directions=(2,))
@@ -1644,7 +1644,7 @@ route, differencing eigenvalues, is kept beside it as \code{method="eigenvalue"}
 because it shares nothing with the velocity operator.
 
 \begin{pycode}
-from pypresso import Calculator
+from defumat import Calculator
 
 calc = Calculator.from_file("si.scf.in")
 mass = calc.get_effective_mass((0.0, 0.0, 0.0), nbnd=10)  # crystal coordinates
@@ -1694,7 +1694,7 @@ $J = L + S$. The $L$ matrices are the complex-basis ones conjugated into the
 unitary the spin-orbit projectors are built from.
 
 \begin{pycode}
-from pypresso import Calculator
+from defumat import Calculator
 
 calc = Calculator.from_file("ni.scf.in")   # noncolin, lspinorb, nosym
 momenta = calc.get_angular_momenta()
@@ -1758,7 +1758,7 @@ $\varepsilon_n(R\mathbf k) = \varepsilon_n(\mathbf k)$: 72 diagonalisations
 instead of 1728.
 
 \begin{pycode}
-from pypresso import Calculator
+from defumat import Calculator
 
 calc = Calculator.from_file("al.scf.in")
 nest = calc.get_nesting(grid=(12, 12, 12))   # the grid is the convergence knob
@@ -1773,7 +1773,7 @@ nest.fermi_dos      # D(E_F) in states/Ry/cell
 nest.elk_units      # the same array in NEST3D.OUT's normalisation
 \end{pycode}
 
-The functional entry point is \code{pypresso.workflows.run\_nesting}, which
+The functional entry point is \code{defumat.workflows.run\_nesting}, which
 takes the converged density directly.
 
 \textbf{Two identities come with the normalisation and both are worth reading.}
@@ -1844,7 +1844,7 @@ reachable, the alternative --- averaging one relativistic file's $j$ channels
 back --- being refused for ultrasoft and PAW by \code{pw.x} itself.
 
 \begin{pycode}
-from pypresso import Calculator
+from defumat import Calculator
 
 scalar = Calculator.from_file("scf.in")          # nspin = 2, Co.pbe-nd-rrkjus
 spinor = Calculator.from_file("nscf.in")         # noncolin, lspinorb, rel- file
@@ -1941,7 +1941,7 @@ gather: \textbf{6~ms} against the seconds its SCF cost. $F(0)$ is the electron
 count of the cell and $F_j(0)$ its magnetic moment, which is what anchors both.
 
 \begin{pycode}
-from pypresso import Calculator
+from defumat import Calculator
 
 calc = Calculator.from_file("si.scf.in")
 factors = calc.get_structure_factors(hmax=5.0)
@@ -1959,7 +1959,7 @@ print(factors.table(limit=10))
 bonding = calc.get_structure_factors(hmax=3.0, window=(-1.0, 0.2))
 \end{pycode}
 
-The functional entry point is \code{pypresso.workflows.sfac.run\_structure\_factors}.
+The functional entry point is \code{defumat.workflows.sfac.run\_structure\_factors}.
 \code{transform="conventional"} labels the reflections on the conventional cubic
 axes (Elk's \code{vhmat}), \code{reduce=False} keeps every member of every star,
 and \code{core=True} adds a dataset's frozen core-correction charge.
@@ -2037,7 +2037,7 @@ $|\mathbf k \mp \mathbf q/2 + \mathbf G|^2$ and $v_{\mathrm{nl}}$ --- and
 $dE/d\mathbf q$ at frozen coefficients is \code{jax.grad} of them.
 
 \begin{pycode}
-from pypresso.workflows.spiral import (run_spiral_scan, relax_spiral_q,
+from defumat.workflows.spiral import (run_spiral_scan, relax_spiral_q,
                                        heisenberg_exchange)
 
 scan = run_spiral_scan(system, pseudos, wavevectors)   # E(q)
@@ -2110,7 +2110,7 @@ time, which is what a \emph{cache} wants --- and on a GPU the whole of both
 axes, which is what a card wants. Either end is reachable everywhere:
 
 \begin{shcode}
-PYPRESSO_K_BATCH=all PYPRESSO_BAND_BATCH=all python3 run.py
+DEFUMAT_K_BATCH=all DEFUMAT_BAND_BATCH=all python3 run.py
 \end{shcode}
 
 or per call, \code{run\_scf(..., k\_batch=...)}. The chunk size changes the order

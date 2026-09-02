@@ -17,15 +17,15 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.forces.energy import FrozenState
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import Calculation
-from pypresso.stress import Stress, compute_stress, format_stress, stress_methods
-from pypresso.stress.energy import strained_energy, strained_energy_terms
-from pypresso.system import build_system
-from pypresso.system.symmetry import symmetrize_matrix
-from pypresso.units import RY_TO_KBAR
+from defumat.forces.energy import FrozenState
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import Calculation
+from defumat.stress import Stress, compute_stress, format_stress, stress_methods
+from defumat.stress.energy import strained_energy, strained_energy_terms
+from defumat.system import build_system
+from defumat.system.symmetry import symmetrize_matrix
+from defumat.units import RY_TO_KBAR
 
 pytestmark = pytest.mark.unit
 

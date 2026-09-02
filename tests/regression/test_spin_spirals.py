@@ -21,7 +21,7 @@ the rotated-frame potential all at once, and nothing else does.
 **What is compared is the energy without the Ewald term.** Two cells of
 different size do not compute the same Ewald sum to better than QE's own
 ``upperbound`` tolerance of 1e-7 Ry (``ewald.f90``, transcribed in
-:func:`pypresso.scf.ewald.ewald_alpha`), and that difference -- about 8e-8 Ry
+:func:`defumat.scf.ewald.ewald_alpha`), and that difference -- about 8e-8 Ry
 here -- would otherwise swamp the identity, which holds to **1e-10**. The Ewald
 sums are checked against each other separately, at the tolerance they deserve.
 
@@ -43,10 +43,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import parse_pw_input, read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.system import build_system
+from defumat.io.pwin import parse_pw_input, read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import run_scf
+from defumat.system import build_system
 from tests.conftest import GENERATED
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
@@ -199,8 +199,8 @@ def test_the_scan_workflow_reproduces_single_runs(pseudo_dir):
     ones separate runs give, to round-off, and its ``at_spiral_q`` must leave the
     dense G set and the local potential as the *same objects*.
     """
-    from pypresso.scf.driver import Calculation
-    from pypresso.workflows.spiral import run_spiral_scan
+    from defumat.scf.driver import Calculation
+    from defumat.workflows.spiral import run_spiral_scan
 
     text = _spiral_input(0.25)
     system = build_system(parse_pw_input(text))
@@ -247,7 +247,7 @@ def test_what_a_spiral_refuses(pseudo_dir, qe_testsuite):
 
     # ... and an ultrasoft dataset is refused when the calculation is built,
     # which is where the augmentation charge first exists.
-    from pypresso.scf.driver import Calculation
+    from defumat.scf.driver import Calculation
 
     ultrasoft = read_pw_input(qe_testsuite / "pw_noncolin" / "noncolin.in")
     marker = ultrasoft.namelists["system"]

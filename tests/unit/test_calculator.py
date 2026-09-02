@@ -3,7 +3,7 @@
 Every test here is one of three claims, and only the first is about brevity:
 
 * what the bound method computes is what the functional entry point computes,
-  bit for bit -- there is no physics in :mod:`pypresso.calculator`;
+  bit for bit -- there is no physics in :mod:`defumat.calculator`;
 * the pieces of the mixed state that cannot be rebuilt from the density
   (``ns``, ``tau``, ``becsum``) are supplied automatically. The entry points
   already *refuse* without them rather than computing something else, so what
@@ -19,14 +19,14 @@ import inspect
 import numpy as np
 import pytest
 
-from pypresso.calculator import (SCF_ONLY_OPTIONS, SHARED_OPTIONS,
+from defumat.calculator import (SCF_ONLY_OPTIONS, SHARED_OPTIONS,
                                  _ELECTRONS_OPTIONS, Calculator,
                                  electrons_defaults)
-from pypresso.io.pwin import parse_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf.driver import run_scf
-from pypresso.system.builder import build_system
-from pypresso.system.kpoints import KPoints
+from defumat.io.pwin import parse_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf.driver import run_scf
+from defumat.system.builder import build_system
+from defumat.system.kpoints import KPoints
 
 pytestmark = pytest.mark.unit
 
@@ -168,7 +168,7 @@ def test_the_paw_becsum_is_supplied_without_being_asked_for(pseudo_dir):
     method passes the whole converged state, so the run that raises by hand
     simply works.
     """
-    from pypresso.workflows.bands import run_bands
+    from defumat.workflows.bands import run_bands
 
     calc = Calculator.from_text(SILICON_PAW, pseudo_dir, announce=False)
     result = calc.get_scf()

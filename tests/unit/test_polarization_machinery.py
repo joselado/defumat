@@ -13,15 +13,15 @@ import numpy as np
 import jax.numpy as jnp
 import pytest
 
-from pypresso.topology.mesh import string_mesh
-from pypresso.topology.polarization import (
+from defumat.topology.mesh import string_mesh
+from defumat.topology.polarization import (
     combine_string_phases,
     ionic_phase,
     polarization_quantum,
     string_phase,
 )
-from pypresso.topology.states import ModelStates
-from pypresso.workflows.polarization import _refuse_ungapped, run_polarization
+from defumat.topology.states import ModelStates
+from defumat.workflows.polarization import _refuse_ungapped, run_polarization
 
 pytestmark = pytest.mark.unit
 

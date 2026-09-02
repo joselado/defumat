@@ -36,7 +36,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from pypresso import Calculator
+from defumat import Calculator
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite")
 PSEUDO = Path("../tests/data/pseudo")
@@ -96,7 +96,7 @@ was never the difficulty. The moment is, and an unpolarized run has none of it t
 
 
 ```python
-from pypresso.scf import continued_state    # no facade route to an unseeded promotion
+from defumat.scf import continued_state    # no facade route to an unseeded promotion
 
 fe1 = nonmagnetic.get_scf()
 seeded = collinear.get_scf(starting_from=fe1)

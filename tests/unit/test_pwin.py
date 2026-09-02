@@ -2,7 +2,7 @@
 
 import pytest
 
-from pypresso.io.pwin import parse_pw_input
+from defumat.io.pwin import parse_pw_input
 
 pytestmark = pytest.mark.unit
 
@@ -196,7 +196,7 @@ def test_physics_this_code_does_not_have_is_refused_not_ignored(
     ``tot_charge`` is the sharpest: ``nelec`` is ``sum(Z)`` here, so
     ``pw_cluster/cluster2.in``'s singly-charged cell would have run neutral.
     """
-    from pypresso.system.builder import build_system
+    from defumat.system.builder import build_system
 
     with pytest.raises(NotImplementedError, match=expected):
         build_system(parse_pw_input(_MINIMAL.format(control=control, system=system)))
@@ -204,7 +204,7 @@ def test_physics_this_code_does_not_have_is_refused_not_ignored(
 
 def test_the_defaults_of_all_seven_are_silent():
     """An ordinary input must not go anywhere near the refusal."""
-    from pypresso.system.builder import build_system
+    from defumat.system.builder import build_system
 
     build_system(parse_pw_input(_MINIMAL.format(
         control="tefield = .false., dipfield = .false.",

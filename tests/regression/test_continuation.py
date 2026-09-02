@@ -35,10 +35,10 @@ from functools import lru_cache
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.system import build_system
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import run_scf
+from defumat.system import build_system
 from tests.conftest import GENERATED, QE_ROOT
 from tests.tolerances import MAGNETIZATION_BOHRMAG
 

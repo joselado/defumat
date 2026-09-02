@@ -23,9 +23,9 @@ integer on a coarse mesh, not a converging approximation to one.
 import numpy as np
 import pytest
 
-from pypresso.topology import ArrayStates, ModelSource, chern_number, plane_mesh
-from pypresso.topology.berry import berry_curvature, plaquette_flux
-from pypresso.topology.links import berry_phase, link_phase
+from defumat.topology import ArrayStates, ModelSource, chern_number, plane_mesh
+from defumat.topology.berry import berry_curvature, plaquette_flux
+from defumat.topology.links import berry_phase, link_phase
 from tests.models import haldane, random_gauge
 
 pytestmark = pytest.mark.unit

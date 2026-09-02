@@ -1,9 +1,9 @@
 #!/bin/bash
-# 64 atoms: pypresso on one GPU, against Quantum ESPRESSO on CPU.
+# 64 atoms: defumat on one GPU, against Quantum ESPRESSO on CPU.
 #
 # **This comparison is the one GPU.md §2.3 forbids by default, and it is run
 # here deliberately and labelled rather than quietly.** The project's metric is
-# single-core pypresso against single-core QE, precisely so that a ratio
+# single-core defumat against single-core QE, precisely so that a ratio
 # measures *code* and not hardware; a GPU number against a serial CPU number
 # measures both at once and cannot be decomposed afterwards. So the CPU twin
 # (qe64-cpu.sbatch) runs pw.x at **1, 4, 16 and 32 cores** rather than at one,
@@ -26,22 +26,22 @@
 #            handful of them plus the Davidson subspace should sit well inside
 #            a 32 GB card -- but that is an estimate and check 4 is what settles
 #            it.
-#SBATCH --job-name=pypresso-qe64-gpu
+#SBATCH --job-name=defumat-qe64-gpu
 #SBATCH --partition=gpu-v100-32g
 #SBATCH --time=02:00:00
 #SBATCH --gpus=v100:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=96G
-#SBATCH --output=/scratch/work/ladovj1/calculations/pypresso-gpu/out/qe64gpu-%j.out
-#SBATCH --error=/scratch/work/ladovj1/calculations/pypresso-gpu/out/qe64gpu-%j.err
+#SBATCH --output=/scratch/work/ladovj1/calculations/defumat-gpu/out/qe64gpu-%j.out
+#SBATCH --error=/scratch/work/ladovj1/calculations/defumat-gpu/out/qe64gpu-%j.err
 
-WORK=/scratch/work/ladovj1/calculations/pypresso-gpu
-REPO=/scratch/work/ladovj1/apps/pypresso
+WORK=/scratch/work/ladovj1/calculations/defumat-gpu
+REPO=/scratch/work/ladovj1/apps/defumat
 mkdir -p "$WORK/out" "$WORK/cache-gpu"
 cd "$REPO" || exit 1
 source "$WORK/venv/bin/activate"
 export MKL_NUM_THREADS=1 OMP_NUM_THREADS=1
-export PYPRESSO_CACHE_DIR="$WORK/cache-gpu"
+export DEFUMAT_CACHE_DIR="$WORK/cache-gpu"
 export PYTHONPATH="$REPO"
 
 echo "=== node ==="; hostname; date
@@ -58,6 +58,6 @@ for case in si64-1k-ecut30 si64-1k; do
     echo "exit $?"
   done
   echo; echo "########## stages $case ##########"
-  PYPRESSO_K_BATCH=1 PYPRESSO_BAND_BATCH=all python3 tools/benchmark.py "benchmarks/$case.in"
+  DEFUMAT_K_BATCH=1 DEFUMAT_BAND_BATCH=all python3 tools/benchmark.py "benchmarks/$case.in"
 done
 echo; echo "=== done ==="; date

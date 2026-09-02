@@ -19,7 +19,7 @@ defect worth removing and is removed here, and whether it is *the* cause of that
 import numpy as np
 import pytest
 
-from pypresso.scf.mixing import AndersonMixer, LinearMixer
+from defumat.scf.mixing import AndersonMixer, LinearMixer
 
 pytestmark = pytest.mark.unit
 

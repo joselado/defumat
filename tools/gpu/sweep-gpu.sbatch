@@ -17,22 +17,22 @@
 # The baseline is one CPU core (sweep-qe.sbatch), which GPU.md §2.3 forbids
 # quoting by default -- it measures hardware and code together. It is what was
 # asked for; the table says so beside every number.
-#SBATCH --job-name=pypresso-sweep-gpu
+#SBATCH --job-name=defumat-sweep-gpu
 #SBATCH --partition=gpu-h200-141g-short
 #SBATCH --time=04:00:00
 #SBATCH --gpus=h200:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=160G
-#SBATCH --output=/scratch/work/ladovj1/calculations/pypresso-gpu/out/sweepgpu-%j.out
-#SBATCH --error=/scratch/work/ladovj1/calculations/pypresso-gpu/out/sweepgpu-%j.err
+#SBATCH --output=/scratch/work/ladovj1/calculations/defumat-gpu/out/sweepgpu-%j.out
+#SBATCH --error=/scratch/work/ladovj1/calculations/defumat-gpu/out/sweepgpu-%j.err
 
-WORK=/scratch/work/ladovj1/calculations/pypresso-gpu
-REPO=/scratch/work/ladovj1/apps/pypresso
+WORK=/scratch/work/ladovj1/calculations/defumat-gpu
+REPO=/scratch/work/ladovj1/apps/defumat
 mkdir -p "$WORK/out" "$WORK/cache-gpu"
 cd "$REPO" || exit 1
 source "$WORK/venv/bin/activate"
 export MKL_NUM_THREADS=1 OMP_NUM_THREADS=1
-export PYPRESSO_CACHE_DIR="$WORK/cache-gpu"
+export DEFUMAT_CACHE_DIR="$WORK/cache-gpu"
 export PYTHONPATH="$REPO"
 
 echo "=== node ==="; hostname; date

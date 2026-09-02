@@ -32,11 +32,11 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.system import build_system
+from defumat.io import read_qe_output
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import run_scf
+from defumat.system import build_system
 from tests.conftest import GENERATED
 from tests.tolerances import (
     EIGENVALUE_EV,
@@ -219,7 +219,7 @@ def test_spin_orbit_without_noncolin_is_refused(qe_testsuite, tmp_path):
 
 def test_a_relativistic_dataset_without_lspinorb_is_refused(qe_testsuite, pseudo_dir, tmp_path):
     """QE would j-average the projectors (``average_pp``); this refuses instead."""
-    from pypresso.scf.driver import Calculation
+    from defumat.scf.driver import Calculation
 
     text = (qe_testsuite / "pw_spinorbit" / "spinorbit.in").read_text()
     text = text.replace("lspinorb=.true.,", "")
@@ -283,7 +283,7 @@ def _bismuthene(tag: str, pseudo_dir: Path):
     )
     scf = run_scf(scf_system, pseudos, conv_thr=1e-10, max_iterations=100)
 
-    from pypresso.workflows import run_bands
+    from defumat.workflows import run_bands
 
     path_system = build_system(read_pw_input(GENERATED / f"bismuthene-{tag}-small-bands.in"))
     bands = run_bands(

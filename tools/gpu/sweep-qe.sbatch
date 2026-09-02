@@ -5,18 +5,18 @@
 # `disk_io = 'none'` so neither code is timed doing I/O the other skips.
 # QE 7.2 from the cluster module (the 7.5 vendored in this repo is gitignored
 # and not on the cluster); the version is recorded beside the number.
-#SBATCH --job-name=pypresso-sweep-qe
+#SBATCH --job-name=defumat-sweep-qe
 #SBATCH --partition=batch-csl
 #SBATCH --time=12:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=64G
-#SBATCH --output=/scratch/work/ladovj1/calculations/pypresso-gpu/out/sweepqe-%j.out
-#SBATCH --error=/scratch/work/ladovj1/calculations/pypresso-gpu/out/sweepqe-%j.err
+#SBATCH --output=/scratch/work/ladovj1/calculations/defumat-gpu/out/sweepqe-%j.out
+#SBATCH --error=/scratch/work/ladovj1/calculations/defumat-gpu/out/sweepqe-%j.err
 
-WORK=/scratch/work/ladovj1/calculations/pypresso-gpu
-REPO=/scratch/work/ladovj1/apps/pypresso
+WORK=/scratch/work/ladovj1/calculations/defumat-gpu
+REPO=/scratch/work/ladovj1/apps/defumat
 RUN="$WORK/sweep-$SLURM_JOB_ID"
 mkdir -p "$WORK/out" "$RUN"; cd "$RUN" || exit 1
 echo "=== node ==="; hostname; date; lscpu | grep -E "Model name"

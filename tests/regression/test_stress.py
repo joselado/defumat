@@ -55,18 +55,18 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.forces.energy import state_from_result
-from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import Calculation, run_scf
-from pypresso.stress import compute_stress
-from pypresso.stress.analytic import analytic_terms
-from pypresso.stress.autodiff import autodiff_stress_terms
-from pypresso.system import build_system
-from pypresso.system.symmetry import symmetrize_matrix
+from defumat.forces.energy import state_from_result
+from defumat.io import read_qe_output
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import Calculation, run_scf
+from defumat.stress import compute_stress
+from defumat.stress.analytic import analytic_terms
+from defumat.stress.autodiff import autodiff_stress_terms
+from defumat.system import build_system
+from defumat.system.symmetry import symmetrize_matrix
 from tests.conftest import reference_output
-from pypresso.units import RY_TO_KBAR
+from defumat.units import RY_TO_KBAR
 from tests.tolerances import STRESS_RY_BOHR3, TOTAL_ENERGY_RY
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
@@ -348,7 +348,7 @@ def test_the_frozen_energy_at_zero_strain_is_the_scf_total(pseudo_dir):
     """
     import jax.numpy as jnp
 
-    from pypresso.stress.energy import strained_energy
+    from defumat.stress.energy import strained_energy
 
     for case in ("si2-nc-sheared", "si2-us-stress", "si2-paw-stress"):
         _, calculation, result = _converged(CASES / f"{case}.in", pseudo_dir)
@@ -420,7 +420,7 @@ def test_a_noncollinear_run_is_refused_rather_than_approximated(pseudo_dir):
     """``pw_noncolin/noncolin.in`` is the rung this phase did not reach."""
     import jax.numpy as jnp
 
-    from pypresso.stress.energy import strained_energy
+    from defumat.stress.energy import strained_energy
 
     system = build_system(read_pw_input(CASES / "h-chain-90deg.in"))
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)

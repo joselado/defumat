@@ -14,11 +14,11 @@
 ! `4 x 4 x 1` grid has no points at. The weights are split evenly over the star,
 ! which is exact only when the grid is closed.
 !
-! pypresso reduces the requested grid directly with the crystal's own
+! defumat reduces the requested grid directly with the crystal's own
 ! operations, so its seven points are grid points and their weights are the
 ! orbit sizes. The two answers differ by **6.9e-5 Ry**, and `pw.x`'s own
 ! `nosym` run over the same grid (`si10-nc-anisotropic-nosym.in`) says which is
-! which: it gives -78.97348341, which is pypresso's number to nine digits and
+! which: it gives -78.97348341, which is defumat's number to nine digits and
 ! not QE's own symmetry-reduced -78.97341444.
 !
 ! Nothing here is wrong in QE on a grid it was meant for -- on `4 x 4 x 4` the

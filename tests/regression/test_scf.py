@@ -12,13 +12,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.io import read_qe_output
+from defumat.io import read_qe_output
 from tests.conftest import reference_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.system import build_system
-from pypresso.workflows import run_bands
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import run_scf
+from defumat.system import build_system
+from defumat.workflows import run_bands
 from tests.tolerances import (
     DENSITY_DEPENDENT_TERM_RY,
     EIGENVALUE_EV,

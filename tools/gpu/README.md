@@ -49,7 +49,7 @@ either job script:
 
 ```bash
 module load scicomp-python-env/2025.2     # only to get a python3 to build from
-W=/scratch/work/ladovj1/calculations/pypresso-gpu
+W=/scratch/work/ladovj1/calculations/defumat-gpu
 python3 -m venv "$W/venv"                 # NOT --system-site-packages
 "$W/venv/bin/pip" install --no-cache-dir "jax[cuda12]==0.11.1" equinox numba scipy pytest
 ```
@@ -61,19 +61,19 @@ the price of not having the overlay; inodes are the quota that bites first on a
 shared filesystem, and 12k against a 1048k limit is affordable where a careless
 install is not.
 
-`pypresso` itself is **not** pip-installed into the venv. The job scripts put
+`defumat` itself is **not** pip-installed into the venv. The job scripts put
 the checkout on `PYTHONPATH` instead, so the code that runs is the working tree
 at the commit the job logs, and there is no second copy to drift.
 
 **The gate is a login-node smoke test before the first `sbatch`:**
 
 ```bash
-export PYTHONPATH=/scratch/work/ladovj1/apps/pypresso JAX_PLATFORMS=cpu
+export PYTHONPATH=/scratch/work/ladovj1/apps/defumat JAX_PLATFORMS=cpu
 taskset -c 0-3 "$W/venv/bin/python3" tools/gpu/phase0.py si-1k --k-batch 1 --band-batch 1
 taskset -c 0-3 "$W/venv/bin/python3" -m pytest -m unit -q
 ```
 
-`taskset` because a login node is shared and pypresso otherwise takes four cores
+`taskset` because a login node is shared and defumat otherwise takes four cores
 on import. Measured 2026-08-25: the cluster reproduces the workstation's
 `si-1k` total energy **bit for bit** at `-15.2544487130 Ry`, across jax 0.11.0
 and 0.11.1 on different hardware.
@@ -91,7 +91,7 @@ The job scripts for it deliberately pass nothing, which makes them a test of the
 default as well as of the response path.
 
 That also means **one process per dial setting**: the scripts put the setting
-into the environment before pypresso is imported, so each row of a job script is
+into the environment before defumat is imported, so each row of a job script is
 its own `python3` invocation.
 
 ## The cases, and why the benchmarks alone are the wrong first inputs

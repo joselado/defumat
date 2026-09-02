@@ -2,7 +2,7 @@
 # GPU.md Phase 5, CPU half: the baseline the GPU number is quoted against.
 #
 # The SAME driver on the SAME cases as phase5-gpu.sbatch, for §2.3's reason --
-# GPU pypresso against CPU pypresso, same input, same code -- and a separate job
+# GPU defumat against CPU defumat, same input, same code -- and a separate job
 # because CPU-only work does not belong on a GPU partition and because the CPU
 # side must be pinned to a *stated* core count.
 #
@@ -21,21 +21,21 @@
 #             is the expensive half and this side has no device to make the
 #             Sternheimer solves cheap. Each case carries its own `timeout`, so
 #             an overrun is a reported case rather than a lost job.
-# cpus-per-task 4, the stated core count, matching phase5-gpu.sbatch. pypresso
+# cpus-per-task 4, the stated core count, matching phase5-gpu.sbatch. defumat
 #             narrows its own affinity mask to four on import and only ever
 #             narrows; four is the measured optimum (PERFORMANCE.md).
 # mem         160G, matching the GPU half. si8-us's reverse tape alone is 11 GB
 #             on this workstation and it is the row this job exists to bound.
-#SBATCH --job-name=pypresso-cpu-phase5
+#SBATCH --job-name=defumat-cpu-phase5
 #SBATCH --partition=batch-milan
 #SBATCH --time=08:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=160G
-#SBATCH --output=/scratch/work/ladovj1/calculations/pypresso-gpu/out/cpu-phase5-%j.out
-#SBATCH --error=/scratch/work/ladovj1/calculations/pypresso-gpu/out/cpu-phase5-%j.err
+#SBATCH --output=/scratch/work/ladovj1/calculations/defumat-gpu/out/cpu-phase5-%j.out
+#SBATCH --error=/scratch/work/ladovj1/calculations/defumat-gpu/out/cpu-phase5-%j.err
 
-WORK=/scratch/work/ladovj1/calculations/pypresso-gpu
-REPO=/scratch/work/ladovj1/apps/pypresso
+WORK=/scratch/work/ladovj1/calculations/defumat-gpu
+REPO=/scratch/work/ladovj1/apps/defumat
 mkdir -p "$WORK/out" "$WORK/cache-cpu"
 cd "$REPO" || exit 1
 
@@ -45,7 +45,7 @@ source "$WORK/venv/bin/activate"
 # Its own cache: a CPU kernel and a GPU kernel are different compilations.
 export MKL_NUM_THREADS=1
 export OMP_NUM_THREADS=1
-export PYPRESSO_CACHE_DIR="$WORK/cache-cpu"
+export DEFUMAT_CACHE_DIR="$WORK/cache-cpu"
 export PYTHONPATH="$REPO"
 export JAX_PLATFORMS=cpu   # a CPU node has no device; say so rather than discover it
 

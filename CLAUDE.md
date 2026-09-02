@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-A ground-up reimplementation of Quantum ESPRESSO in Python + JAX ("pypresso"). The
+A ground-up reimplementation of Quantum ESPRESSO in Python + JAX ("defumat"). The
 Fortran QE 7.5 release is vendored here **as reference material only** — it is read to
 understand algorithms and to validate numerical results, never modified or compiled into
 the deliverable.
@@ -131,7 +131,7 @@ And the **screening kernel of a magnetic system with vacuum is not finite** (mea
 cell): `dv_of_drho` for `nspin = 2` is the second derivative of the LSDA energy in the two
 channel densities, which diverges where a channel density reaches zero — 1504 of triplet O2's
 91125 grid points have `|m| >= |n|` and `dv_of_drho` has exactly 1504 NaN. That is the `abs`
-trap of P28a one derivative further out, it is in `pypresso/xc` rather than in the response,
+trap of P28a one derivative further out, it is in `defumat/xc` rather than in the response,
 and pulling the clip inside does *not* fix it. **Also refused by name**: `tot_magnetization`
 with a smearing (two Fermi levels, and `Smearing.ef` has no spin axis), Born charges, the
 dynamical matrix and the strain response for `nspin = 2` (their assembly, not their count),
@@ -184,7 +184,7 @@ read it before writing code. P4 is complete: a block Davidson eigensolver behind
 registry, seeded from the pseudo-atomic orbitals as QE seeds it, and the *only* solver the
 package offers — forming `H` costs `O(npw^2)` memory, so a dense solve is a test fixture
 (`tests/exact_reference.py`), never a `diagonalization` a run can select. P6 is complete too: automatic k-grids are reduced to the
-irreducible wedge. P10's first pass puts pypresso within **2–4x of serial Quantum ESPRESSO
+irreducible wedge. P10's first pass puts defumat within **2–4x of serial Quantum ESPRESSO
 per SCF iteration** on the same machine, ultrasoft and PAW included — see
 `PERFORMANCE.md`. **The projected density of states** (`projwfc.x`) is in as well, completing P8:
 `<phi|S|psi>` on Löwdin-orthogonalised pseudo-atomic orbitals, resolved by atom, `l` and
@@ -774,7 +774,7 @@ and GPU).
 - `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/` — QE 7.5 Fortran sources. **Read-only.**
 - `quantum_espresso/Doc-QE-7.5/Doc-7.5/` — input-file documentation (`INPUT_PW.txt` is the
   authoritative spec for the `pw.x` input namelists/cards) and theory PDFs.
-- `pypresso/` — the Python package. `tests/` alongside it; `tests/data/pseudo/` holds the
+- `defumat/` — the Python package. `tests/` alongside it; `tests/data/pseudo/` holds the
   committed UPF files (QE's test-suite downloads rather than ships them).
 - Git repository, with `quantum_espresso/` gitignored — 285 MB of vendored reference does
   not belong in history. Tests that need it skip cleanly when it is absent.
@@ -852,7 +852,7 @@ double-counts — which only the energy identity catches, never a finite differe
 everything above the Sternheimer solver.
 
 **Magnetic fields and constrained moments are in scope and implemented** (P18):
-`pypresso/scf/fields.py` and `scf/locals.py`. A uniform field over the cell (QE's
+`defumat/scf/fields.py` and `scf/locals.py`. A uniform field over the cell (QE's
 `B_field`, Elk's `bfieldc`), a field inside one atom's sphere (Elk's `bfcmt`, through a
 `LOCAL_MAGNETIC_FIELDS` card that `pw.x` has no counterpart for), Elk's `reducebf`, and all
 four of QE's `constrained_magnetization` schemes. **The energy is written down and the
@@ -899,7 +899,7 @@ refused — its energy is outside the reported total (P18), so the state is stat
 different functional than the one being differentiated.
 
 **Berry curvature, Chern numbers and Z2 invariants are in scope and implemented** (P16):
-`pypresso/topology/` and `workflows/topology.py`. Everything is built from one primitive,
+`defumat/topology/` and `workflows/topology.py`. Everything is built from one primitive,
 `<u_mk|S|u_nk'>` — the overlap of the occupied manifolds at neighbouring k-points — because
 a determinant of overlaps is blind to the unitary mixing a degenerate eigensolver leaves
 (D4) *and* because the Fukui-Hatsugai-Suzuki lattice sum is an exact integer on any mesh
@@ -953,7 +953,7 @@ graphite with the whole cell free it is **0.45 Ry**, and the relaxation goes dow
 frozen basis and uphill in reality. `treinit_gvecs` rebuilds everything per step and makes
 it zero.
 
-**DFT+U is in scope and implemented** (P20): `pypresso/hubbard/`. QE's
+**DFT+U is in scope and implemented** (P20): `defumat/hubbard/`. QE's
 `lda_plus_u_kind = 0` — Dudarev's simplified rotationally-invariant functional with the
 `J0`/`beta` extension — read from the `HUBBARD` card, whose parameters are **in eV** and
 are converted to Ry at the input boundary. **The energy is written down and `v_ns` is
@@ -969,7 +969,7 @@ the full (Liechtenstein) formulation, the intersite `V`, background channels, th
 orbital-resolved variant, the `wf`/`pseudo` projector sets, and noncollinear `ns_nc`.
 
 **Continuing one run from another is in scope and implemented** (P23):
-`pypresso/scf/continuation.py` and `System.with_spin`. The three spin regimes are three ways
+`defumat/scf/continuation.py` and `System.with_spin`. The three spin regimes are three ways
 of writing the same pair `(n(r), m(r))`, so a promotion is *decompose, decide what `m` should
 be, recompose* — and a demotion is the same function read the other way. The whole mixed
 state crosses together (`rho`, `becsum`, `ns`) plus the wavefunctions, which cross as a
@@ -985,7 +985,7 @@ moments along different axes (a collinear source has one scalar field;
 spinor back into two collinear channels, and a `becsum` from a different pseudopotential,
 which is dropped with a warning instead of being reshaped.
 
-**Linear response is in scope and implemented** (P24): `pypresso/response/`. Three layers,
+**Linear response is in scope and implemented** (P24): `defumat/response/`. Three layers,
 and the point of all three is that the *perturbations* are gradients of code that already
 exists rather than expressions derived a second time. The **velocity operator** is one
 `jax.jvp` of `H(k)` at a frozen sphere, because `dH/dk_a = i[H, r_a]` in the periodic gauge
@@ -1029,7 +1029,7 @@ meta-GGA**, which P45 made a named refusal — it used to surface as `v_of_rho` 
 `tau`, which reads like a missing keyword argument and is not.
 
 **Meta-GGA is in scope for the potential-only branch of it** (P30, P31, P32):
-`pypresso/xc/mgga.py`. Tran-Blaha (`tb09`) and Becke-Johnson (`bj06`) are potentials, not
+`defumat/xc/mgga.py`. Tran-Blaha (`tb09`) and Becke-Johnson (`bj06`) are potentials, not
 energy functionals, so they invert the rule above — nothing is differentiated, the expression
 *is* `v_x`, and there is no `E_x` for the total energy to contain. The consequences are
 enforced rather than documented: `run_scf` warns that its total is not the value of any
@@ -1042,8 +1042,8 @@ in**: their potential has a `dE/dtau` piece that acts on the wavefunction throug
 which is why this branch and not that one.
 
 **Van der Waals corrections are in scope, and one of the five is implemented** (P27):
-`pypresso/vdw/`, behind a name registry that `vdw_corr` selects from. Grimme's **D2** is a
-pair potential over the nuclei and nothing else, so it is `pypresso/scf/ewald.py` again with
+`defumat/vdw/`, behind a name registry that `vdw_corr` selects from. Grimme's **D2** is a
+pair potential over the nuclei and nothing else, so it is `defumat/scf/ewald.py` again with
 a different radial function — the energy is written down and the force and the stress are
 `jax.grad` of it. The other four are **refused by name**, where `set_vdw_corr` warns and
 silently runs with no correction at all: **D3** because its `C6` depends on each atom's
@@ -1051,10 +1051,10 @@ coordination number and so has a derivative of its own, and **Tkatchenko-Scheffl
 and **XDM** because their coefficients are functionals of the self-consistent density, which
 puts them inside `v_of_rho` where D2 is outside it.
 
-**Optical spectra and excitons are in scope and implemented** (P37): `pypresso/tddft/`.
+**Optical spectra and excitons are in scope and implemented** (P37): `defumat/tddft/`.
 This is the one place a **sum over states** earns its keep — an absorption spectrum needs
 the frequency axis and needs `chi_0` as a *matrix* over reciprocal lattice vectors, where
-everything in `pypresso/response/` produces it as an operator from a Sternheimer solve. The
+everything in `defumat/response/` produces it as an operator from a Sternheimer solve. The
 Dyson equation is then solved with an exchange-correlation kernel from a name registry, and
 the one that matters is Sharma, Dewhurst, Sanna and Gross's **bootstrap** (PRL 107, 186401
 (2011); Elk's `fxctype = 210`), which is parameter-free, self-consistent with the Dyson
@@ -1086,11 +1086,11 @@ choice should make good performance unreachable without a rewrite.
 
 ## The front door is `Calculator`
 
-`pypresso/calculator.py` (P38). A `Calculator` is a `System` together with its
+`defumat/calculator.py` (P38). A `Calculator` is a `System` together with its
 pseudopotentials, and every workflow, force, stress, response and invariant is a method
 on it — `Calculator.from_file("scf.in")`, then `get_scf()`, `get_bands()`,
 `get_dielectric_tensor()`. It is what the README, the user guide and new notebooks use,
-and `from pypresso import Calculator` is the one import a script needs.
+and `from defumat import Calculator` is the one import a script needs.
 
 **It is a facade and nothing else.** No physics lives there: every method is a one-line
 delegation to the functional entry point, which is unchanged and still the way anything
@@ -1282,7 +1282,7 @@ is the sweep rather than the physics. Every notebook's time is in `notebooks/REA
 
 ## Performance
 
-**The measurement is single-core pypresso against single-core Quantum ESPRESSO on the
+**The measurement is single-core defumat against single-core Quantum ESPRESSO on the
 same machine and the same input.** That comparison is the starting point of any
 performance discussion, not a summary of one:
 
@@ -1335,7 +1335,7 @@ code is never like-for-like and a misleading ratio is worse than no ratio:
 - **Time the same work, not the same task number.** Codes split a calculation into
   post-processing steps differently: Elk's `dielectric` (task 121) reads momentum matrix
   elements off a file that `writepmat` (task 120) produced, so timing 121 alone against
-  a `pypresso` call that *builds* `dH/dk` compares a contraction with a contraction plus
+  a `defumat` call that *builds* `dH/dk` compares a contraction with a contraction plus
   its operator. Add the steps up until both sides start from the same place -- usually a
   converged ground state -- and say which steps were added.
 
@@ -1400,7 +1400,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Structure / symmetry / k-points | `PW/src/symm_base.f90`, `symme.f90`, `kpoint_grid.f90`, `setup.f90`, `Modules/cell_base.f90` | `ibrav` lattice conventions live in `Modules/latgen.f90`. `kpoint_grid` is called with the *lattice* point group and fixed up afterwards; reducing directly with the crystal's symmetries reaches the same orbits. Two rules in `symm_base.f90` change the **FFT grid**: dimensions must be a multiple of the fractional translations' denominators (`fft_fact`), and a cell that is a supercell has fractional translations disabled altogether |
 | Starting wavefunctions | `PW/src/wfcinit.f90`, `Modules/atomic_wfc_mod.f90`, `upflib/atwfc_mod.f90` | the projectors' expression with `chi` for `beta` — but the phase is `i^l`, not `(-i)^l` |
 | Meta-GGA (potential-only) | no QE counterpart to transcribe — `XClib/dft_setting_routines.f90` maps `tb09` to libxc 208; `PW/src/sum_band.f90` (the `kin_r` branch and its `sym_rho`), `PW/src/v_of_rho.f90` (`v_xc_meta`), `PW/src/potinit.f90` (the Thomas-Fermi `tau` guess), `PW/src/setup.f90` (what it refuses) | the functional itself follows libxc's own definition (`maple/mgga_vxc/mgga_x_tb09.mpl`, `maple/mgga_exc/mgga_x_br89.mpl`, `src/mgga_x_br89.c`), because QE has no native implementation. **QE passes a zero Laplacian and never sets `c`**, so its `tb09` is BJ06; both are here separately. `tau` is symmetrised — `sum_band` does it too, and skipping it is worth 0.47 eV in the eigenvalues |
-| Van der Waals dispersion | `Modules/mm_dispersion.f90` (`energy_london`, `force_london`, `stres_london`), `Modules/set_vdw_corr.f90`, `Modules/rgen.f90`, `upflib/atomic_number.f90` | the energy is written down (`pypresso/vdw/grimme.py`) and the force and stress are `jax.grad` of it; QE's two expressions are transcribed as the cross-check. `rgen`'s **fold** of the pair separation into the cell is kept, and it is what lets one neighbour list serve every geometry |
+| Van der Waals dispersion | `Modules/mm_dispersion.f90` (`energy_london`, `force_london`, `stres_london`), `Modules/set_vdw_corr.f90`, `Modules/rgen.f90`, `upflib/atomic_number.f90` | the energy is written down (`defumat/vdw/grimme.py`) and the force and stress are `jax.grad` of it; QE's two expressions are transcribed as the cross-check. `rgen`'s **fold** of the pair separation into the cell is kept, and it is what lets one neighbour list serve every geometry |
 | Ewald / local potential | `PW/src/ewald.f90`, `setlocal.f90` | the ion-ion sum and `V_loc(G)`; the Ewald neighbour list is fixed for the *cell*, not the geometry, so it survives a relaxation |
 | Forces | `PW/src/forces.f90`, `force_lc.f90`, `force_cc.f90`, `force_ew.f90`, `force_us.f90`, `addusforce.f90`, `force_corr.f90`, `symme.f90` (`symvector`) | the default is `jax.grad` of the energy at frozen wavefunctions (`forces/energy.py`); the Fortran expressions are transcribed as a cross-check. `gradcorr` is called from **inside** `v_xc`, so `force_cc` needs it |
 | Structural relaxation | `Modules/bfgs_module.f90`, `PW/src/move_ions.f90`, `run_pwscf.f90`, `update_pot.f90`, `checkallsym.f90` | BFGS in crystal coordinates with the cell metric; the setup (FFT grid, symmetry, k-points) is done **once** and only checked afterwards |
@@ -1409,11 +1409,11 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Fields and constraints | `PW/src/add_bfield.f90`, `make_pointlists.f90`, `get_locals.f90`, `report_mag.f90`, `PW/src/input.f90` (`i_cons`) | the penalty's *energy* is written here and its potential comes from `jax.grad`; QE's five expressions are transcribed as the cross-check. Elk's counterparts: manual §5.2/§5.12/§5.104, `src/bfieldfsm.f90` |
 | Spin spirals | no QE counterpart — Elk's `src/gengkqvec.f90`, `init0.f90`, `findsymlat.f90`, manual §5.146 | up at `k + q/2`, down at `k - q/2`, each with its own `G+k` set; one basis call on the concatenated list gives both a common `npwx` |
 | Spiral relaxation | no QE counterpart — `Modules/bfgs_module.f90` reused with the *reciprocal* cell as its lattice | `dE/dq` is `jax.grad` of the energy at frozen wavefunctions and a frozen sphere (`forces/spiral.py`); only the kinetic and nonlocal terms carry `q` |
-| Piezoelectric tensor | no QE counterpart — Elk's `src/piezoelt.f90` and `genstrain.f90`, manual task 380 | Elk runs one ground state per strain and finite-differences the Berry-phase polarization; here it is one `jvp` of the stress along the field's response (`pypresso/response/piezo.py`), so nothing is transcribed but the *check* — `zstar_eu.f90`'s contraction with a strain label where it has a displacement. `genstrain` symmetrises each candidate strain over the crystal's group, so on a cubic crystal the only strain it keeps is the isotropic one |
+| Piezoelectric tensor | no QE counterpart — Elk's `src/piezoelt.f90` and `genstrain.f90`, manual task 380 | Elk runs one ground state per strain and finite-differences the Berry-phase polarization; here it is one `jvp` of the stress along the field's response (`defumat/response/piezo.py`), so nothing is transcribed but the *check* — `zstar_eu.f90`'s contraction with a strain label where it has a displacement. `genstrain` symmetrises each candidate strain over the crystal's group, so on a cubic crystal the only strain it keeps is the isotropic one |
 | Second-harmonic generation | no QE counterpart — Elk's `src/nonlinopt.f90` and `getpmat.f90`, manual task 125 | `chi^(2)(-2w; w, w)` by a sum over states, so the assembly *is* transcribed, with one substitution: Elk reads momentum matrix elements and this uses `response/velocity.py`'s `dH/dk`, for the reason the TDDFT row already gives. Two things Elk's loop does not need and a plane-wave code does: the multiplet **block average** of the velocity diagonal that `Delta^a` is built from (rule D4 — Elk's 42x42x42 shifted mesh misses the symmetry points where it bites), and the reminder that Elk's `swidth` is in **Hartree**. `el_opt.f90` is QE's nearest thing and is the *static* electro-optic tensor, on the branch P35 found broken |
-| X-ray and magnetic structure factors | no QE counterpart — Elk's `src/sfacrho.f90`, `sfacmag.f90`, `genhvec.f90`, `zftrf.f90`, manual tasks 195/196 | `zftrf` is `(1/Omega) int f e^{-iH.r}` and `sfacrho` prints `Omega` times its conjugate, which is the crystallographic convention; here the positive-phase transform is taken directly (`pypresso/diffraction/`). `genhvec` reduces the H-set with the **symmorphic, non-magnetic** operations only, and that restriction is about the *phase* of `F` rather than its modulus |
-| Fermi-surface nesting | no QE counterpart — Elk's `src/nesting.f90`, manual task 105 | Elk writes an `O(N_q N_k)` double loop with `mod(ivk + ivq, ngridk)`; that fold makes the sum a cyclic cross-correlation, so `ifftn(|fftn(g)|^2)` replaces it (`pypresso/response/nesting.py`) and the loop is kept as `method = "direct"`. The wedge is unfolded with `grid_equivalence` — `tetra.f90`'s `equiv`, Elk's `ivkik` — and the group it is unfolded with must be the group `denser_grid` reduced it with (`workflows/nscf.py:grid_symmetry`) |
-| Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `pypresso/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
+| X-ray and magnetic structure factors | no QE counterpart — Elk's `src/sfacrho.f90`, `sfacmag.f90`, `genhvec.f90`, `zftrf.f90`, manual tasks 195/196 | `zftrf` is `(1/Omega) int f e^{-iH.r}` and `sfacrho` prints `Omega` times its conjugate, which is the crystallographic convention; here the positive-phase transform is taken directly (`defumat/diffraction/`). `genhvec` reduces the H-set with the **symmorphic, non-magnetic** operations only, and that restriction is about the *phase* of `F` rather than its modulus |
+| Fermi-surface nesting | no QE counterpart — Elk's `src/nesting.f90`, manual task 105 | Elk writes an `O(N_q N_k)` double loop with `mod(ivk + ivq, ngridk)`; that fold makes the sum a cyclic cross-correlation, so `ifftn(|fftn(g)|^2)` replaces it (`defumat/response/nesting.py`) and the loop is kept as `method = "direct"`. The wedge is unfolded with `grid_equivalence` — `tetra.f90`'s `equiv`, Elk's `ivkik` — and the group it is unfolded with must be the group `denser_grid` reduced it with (`workflows/nscf.py:grid_symmetry`) |
+| Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `defumat/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]` term by term; here it is one `jvp` of `H(k)` at a frozen sphere (`response/velocity.py`), since `dH/dk_a = i[H, r_a]` in the periodic gauge. The overlap carries a velocity too, so a band velocity is `<psi|dH/dk - eps dS/dk|psi>` |
 | Linear response / DFPT | `LR_Modules/cgsolve_all.f90`, `ch_psi_all.f90`, `orthogonalize.f90`, `h_prec.f90`, `setup_alpha_pv.f90`, `incdrhoscf.f90`, `symdvscf.f90`; `PHonon/PH/solve_e.f90`, `dvpsi_e.f90`, `dvqpsi_us.f90`, `dielec.f90`, `zstar_eu.f90` | the linear solve, the projector and the assembly are transcribed; the *perturbations* are not. `dv_of_drho` is one `jvp` of `v_of_rho` (which already drops the `G = 0` Hartree term), the E-field's commutator is the velocity operator, and `dvqpsi_us` is one `jvp` through `at_positions`. **A response on a reduced k-set is a polar vector field and must be symmetrised as one** |
 | TDDFT: `chi_0`, the Dyson equation, the bootstrap kernel | no QE counterpart — Elk's `src/tddftlr.f90` (the driver and the fixed point), `genvchi0.f90` (Adler-Wiser, the `t3hw` head/wing layout), `genvfxc.f90` (the kernels), `init3.f90` (`ngrf`, and `wrf(1) = 0 + i swidth`), `getpmat.f90` (the scissors renormalisation), manual `fxctype`/`gmaxrf`/`swidth` | the head is the one line **not** to transcribe: Elk reads momentum matrix elements, which is right in LAPW and wrong with a nonlocal pseudopotential, so `response/velocity.py`'s `dH/dk` takes their place. `eps_M` is the inverse of the **3x3 head** of `eps^-1`, not the head of the inverse — Elk writes both, thirty lines apart, and the wrong one is 9% too large and otherwise perfect |
@@ -1480,7 +1480,7 @@ none of them is incidental to the algorithm:
   k-point's whatever `nks` is; the other k-points' `evc` sits in a buffer that is RAM or
   disk according to `io_level`/`disk_io`, and the parallelism over k comes from MPI pools.
   Batching the whole k axis with `vmap` is this code's deliberate deviation — it is what a
-  GPU wants — so it is a **dial** (`pypresso/batching.py`), defaulting to QE's end of it
+  GPU wants — so it is a **dial** (`defumat/batching.py`), defaulting to QE's end of it
   on a CPU and to the batch on an accelerator, not a fixed choice. Rule R6 (k leading) is what keeps both available.
 - **The sphere, not the box.** Wavefunctions live on the G-vectors inside the cutoff and
   are expanded into the FFT box only for the transform, and only over the sticks the
@@ -1548,7 +1548,7 @@ The test-suite's pseudopotential files are **not** shipped — inputs name files
 commit them. The canonical first target is `test-suite/pw_scf/scf.in` (Si diamond, LDA,
 `ecutwfc=12`, 2 k-points, 15³ FFT grid).
 
-The testing method is running the *same input* through real QE and through pypresso and
+The testing method is running the *same input* through real QE and through defumat and
 comparing numbers. Building the Fortran QE is only needed when a comparison is not already
 covered by a committed benchmark (likely for `bands`/`dos` runs); when that happens, store
 the generated reference output alongside the test so it never has to be regenerated.
@@ -1562,8 +1562,8 @@ Dependencies live in the **base anaconda env** — there is no project virtualen
 here; the JAX paths must run unchanged on GPU, so correctness is established in float64 on
 CPU and performance work is a later, separate phase.
 
-Compiled kernels are cached in `~/.cache/pypresso/jax` so that only the first run of a
-process pays for them; `PYPRESSO_CACHE_DIR` moves it and `PYPRESSO_CACHE_DIR=off` disables
+Compiled kernels are cached in `~/.cache/defumat/jax` so that only the first run of a
+process pays for them; `DEFUMAT_CACHE_DIR` moves it and `DEFUMAT_CACHE_DIR=off` disables
 it.
 
 ```
@@ -1571,7 +1571,7 @@ tools/test-fast.sh                     # THE GATE: everything not marked slow, ~
 python3 -m pytest -m slow              # the other 588, over two hours
 tools/run_regression.sh                # the same slow set, resumably, one file at a time
 python3 -m pytest tests/unit/test_qeref.py::test_scf_silicon   # a single test
-python3 -m pypresso.cli inspect <qe-output>   # summarise what the parser reads
+python3 -m defumat.cli inspect <qe-output>   # summarise what the parser reads
 tools/export_notebooks.sh                     # re-execute notebooks + refresh .md exports
 ```
 
@@ -1604,14 +1604,14 @@ skipped, so an interrupted run resumes instead of restarting.
   iteration body (`h_psi` → diagonalize → density → potential → mix). Inside the
   eigensolver, use `lax.while_loop`/`fori_loop` with a fixed subspace size so the solver
   stays on device.
-- **How many k-points are in flight is `pypresso/batching.py`'s dial, and its default
+- **How many k-points are in flight is `defumat/batching.py`'s dial, and its default
   follows the platform** — QE's loop on a CPU, one k-point at a time as `c_bands.f90` and
   `sum_band.f90` do it, and the whole axis at once on an accelerator, where the cache
   argument behind that loop does not exist and inheriting it gives up 4.5x. The band dial
   moves with it, never separately: `k=all, b=1` is measured to be worse than either end.
   `k_batch`
   reaches every entry point (`run_scf`, `run_bands`, `run_nscf`, `run_dos`, `Calculation`,
-  `PYPRESSO_K_BATCH`), `None` asks for one `vmap` over the whole axis, and the chunked form
+  `DEFUMAT_K_BATCH`), `None` asks for one `vmap` over the whole axis, and the chunked form
   is a `lax.map`/`lax.scan` so it stays compiled once and differentiable. Anything new that
   walks the k axis goes through `map_k`/`sum_k` rather than calling `vmap` itself; the
   chunk size must never be visible in a result beyond round-off.

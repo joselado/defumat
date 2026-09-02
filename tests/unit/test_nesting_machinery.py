@@ -17,7 +17,7 @@ Four kinds of thing live here.
   on the transform's sign conventions;
 * the **identities** the normalisation makes true -- the mean over ``q`` being
   ``D(E_F)^2``, and ``N(0)`` being the maximum by Cauchy-Schwarz. The second is
-  why :meth:`~pypresso.response.nesting.NestingFunction.peak` excludes the
+  why :meth:`~defumat.response.nesting.NestingFunction.peak` excludes the
   origin;
 * the **unfold**, which is the one piece of plumbing that fails silently. An
   eigenvalue that is an invariant function of ``k`` must come back the same
@@ -31,15 +31,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.response.nesting import (
+from defumat.io.pwin import read_pw_input
+from defumat.response.nesting import (
     NestingFunction,
     fermi_surface_weights,
     nesting_from_eigenvalues,
     require_a_fermi_surface,
 )
-from pypresso.system import build_system
-from pypresso.system.kpoints import grid_equivalence, irreducible_wedge
+from defumat.system import build_system
+from defumat.system.kpoints import grid_equivalence, irreducible_wedge
 
 pytestmark = [pytest.mark.unit]
 
@@ -160,7 +160,7 @@ def test_the_mean_over_q_is_the_squared_density_of_states():
     Both factors of the correlation sum to ``N_k D(E_F)`` independently, so the
     mean factorises. It ties the delta, the degeneracy and the transform's
     normalisation together in one number, and it is what
-    :attr:`~pypresso.response.nesting.NestingFunction.sum_rule` reports.
+    :attr:`~defumat.response.nesting.NestingFunction.sum_rule` reports.
     """
     rng = np.random.default_rng(11)
     grid = (7, 7, 3)
@@ -173,7 +173,7 @@ def test_the_mean_over_q_is_the_squared_density_of_states():
 def test_nothing_nests_better_than_the_origin():
     """``N(0) >= N(q)`` on every crystal, by Cauchy-Schwarz.
 
-    Which is why :meth:`~pypresso.response.nesting.NestingFunction.peak`
+    Which is why :meth:`~defumat.response.nesting.NestingFunction.peak`
     excludes ``q = 0``: including it would report the same uninformative
     wavevector for every material, and the question the quantity answers is
     where the surface maps onto a *different* part of itself.
@@ -195,7 +195,7 @@ def test_the_spin_degeneracy_squares():
     So an unpolarized cell's ``N`` is four times the same eigenvalues read as
     one spinor channel. Stated as a test because the factor is invisible in the
     *shape* of ``N(q)`` and changes only its scale, and the ratio
-    :attr:`~pypresso.response.nesting.NestingFunction.ratio` divides it out
+    :attr:`~defumat.response.nesting.NestingFunction.ratio` divides it out
     entirely.
     """
     rng = np.random.default_rng(7)
@@ -237,7 +237,7 @@ def test_a_wedge_unfolds_onto_the_complete_grid(shift):
     different orbit walk and is the case a Monkhorst-Pack input actually asks
     for; the q-grid stays unshifted either way, since ``q`` is a difference of
     two k-points and the offset cancels in it.
-    That is the failure mode :func:`~pypresso.workflows.nscf.grid_symmetry`
+    That is the failure mode :func:`~defumat.workflows.nscf.grid_symmetry`
     exists to prevent, and it produces a perfectly plausible ``N(q)`` built
     from somebody else's bands.
     """

@@ -23,9 +23,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.io import read_qe_output
-from pypresso.units import RY_TO_KBAR
+from defumat import Calculator
+from defumat.io import read_qe_output
+from defumat.units import RY_TO_KBAR
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_vc-relax")
@@ -87,13 +87,13 @@ rows = [
     # the final SCF's. ``total_energy`` is the first -- the starting geometry's.
     ("total energy (Ry)", result.total_energy, reference.final_total_energy),
 ]
-print(f"{'':20s} {'pypresso':>14s} {'pw.x':>14s} {'difference':>12s}")
+print(f"{'':20s} {'defumat':>14s} {'pw.x':>14s} {'difference':>12s}")
 for label, ours, theirs in rows:
     print(f"{label:20s} {ours:14.6f} {theirs:14.6f} {abs(ours - theirs):12.2e}")
 print(f"\nPulay error of the frozen basis: {result.pulay_error:.2e} Ry")
 ```
 
-                               pypresso           pw.x   difference
+                               defumat           pw.x   difference
     volume (bohr^3)          190.787717     190.787743     2.64e-05
     a1 . x (bohr)              3.744158       3.744159     1.40e-06
     a1 . z (bohr)              5.238299       5.238296     3.19e-06
@@ -158,7 +158,7 @@ convergence is reported in kbar: what has to go to zero is a pressure difference
 
 
 ```python
-from pypresso.relax.cell import cell_force   # no facade route to dH/dh
+from defumat.relax.cell import cell_force   # no facade route to dH/dh
 
 h = result.cell.T                      # QE's convention: lattice vectors as columns
 omega = result.volume

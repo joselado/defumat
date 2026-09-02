@@ -35,7 +35,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
+from defumat import Calculator
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
@@ -127,7 +127,7 @@ which restores it and leaves a $\mathbb{Z}_2$ behind.
 ```python
 import sys; sys.path.insert(0, "..")
 from tests.models import haldane, kane_mele, kane_mele_critical_mass
-from pypresso.topology import ModelSource, chern_number, z2_invariant  # a model H(k), not a crystal
+from defumat.topology import ModelSource, chern_number, z2_invariant  # a model H(k), not a crystal
 
 for label, mass in (("topological (m = 0)", 0.0), ("trivial (m = 1.5)", 1.5)):
     model = ModelSource(hamiltonian=haldane(t2=0.2, mass=mass), nocc=1)

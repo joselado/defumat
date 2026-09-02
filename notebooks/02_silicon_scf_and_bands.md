@@ -12,7 +12,7 @@ of the potential $v[n]$ is the same $n$ that produced it.
 
 On `test-suite/pw_scf/scf.in`, two atoms of fcc silicon in LDA:
 
-| | pypresso | `pw.x` |
+| | defumat | `pw.x` |
 |---|---|---|
 | total energy | **-15.79449557 Ry** | -15.79449557 Ry |
 | every term of it | | agrees to **1e-9 Ry** |
@@ -29,9 +29,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.io import comparison_table, read_qe_output
-from pypresso.units import RY_TO_EV
+from defumat import Calculator
+from defumat.io import comparison_table, read_qe_output
+from defumat.units import RY_TO_EV
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_scf")
 PSEUDO = Path("../tests/data/pseudo")
@@ -76,10 +76,10 @@ rows = [(term, value, qe.energy_terms[term])
         for term, value in scf.energy_terms.items()]
 rows.append(("TOTAL", scf.total_energy, qe.total_energy))
 print(comparison_table(rows, fmt="{:.8f}",
-                       headers=("term [Ry]", "pypresso", "pw.x", "difference")))
+                       headers=("term [Ry]", "defumat", "pw.x", "difference")))
 ```
 
-    term [Ry]         pypresso          pw.x  difference
+    term [Ry]         defumat          pw.x  difference
     one-electron    4.83371975    4.83371826     1.5e-06
     hartree         1.08439441    1.08439697     2.6e-06
     xc             -4.81285115   -4.81285222     1.1e-06
@@ -110,7 +110,7 @@ ax.plot(bands.path_length, theirs - bands.homo * RY_TO_EV,
 ax.set_xticks(bands.path_length[::5])
 ax.set_xticklabels([r"$\Gamma$", "X", "U", "L", r"$\Gamma$"])
 ax.set_ylabel(r"$E - E_{\rm VBM}$   [eV]")
-ax.set_title("Silicon, LDA: lines pypresso, circles Quantum ESPRESSO")
+ax.set_title("Silicon, LDA: lines defumat, circles Quantum ESPRESSO")
 
 print("largest disagreement   %.5f eV" % np.abs(bands.eigenvalues_ev - theirs).max())
 print("indirect gap           %.4f eV" % bands.gap(8))
@@ -141,8 +141,8 @@ free-electron metal.
 
 
 ```python
-from pypresso.basis.builder import build_basis   # no facade route to rho(G)
-from pypresso.basis.fft import r_to_g           # nor to the transform onto it
+from defumat.basis.builder import build_basis   # no facade route to rho(G)
+from defumat.basis.fft import r_to_g           # nor to the transform onto it
 
 system = silicon.system
 basis = build_basis(system)

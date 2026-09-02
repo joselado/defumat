@@ -26,8 +26,8 @@ from pathlib import Path
 
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.units import RY_TO_EV
+from defumat import Calculator
+from defumat.units import RY_TO_EV
 
 PSEUDO, CASES = Path("../tests/data/pseudo"), Path("../tests/data/qe")
 

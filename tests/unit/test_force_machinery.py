@@ -11,16 +11,16 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.forces import compute_forces, force_methods, frozen_energy, state_from_result
-from pypresso.forces.registry import get_force_method
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.relax import get_ion_dynamics, ion_dynamics_schemes
-from pypresso.relax.bfgs import BFGS
-from pypresso.scf import Calculation, run_scf
-from pypresso.system import build_system
-from pypresso.system.structure import Structure
-from pypresso.system.symmetry import (
+from defumat.forces import compute_forces, force_methods, frozen_energy, state_from_result
+from defumat.forces.registry import get_force_method
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.relax import get_ion_dynamics, ion_dynamics_schemes
+from defumat.relax.bfgs import BFGS
+from defumat.scf import Calculation, run_scf
+from defumat.system import build_system
+from defumat.system.structure import Structure
+from defumat.system.symmetry import (
     atom_mapping,
     check_symmetry,
     find_symmetries,
@@ -162,7 +162,7 @@ def test_bfgs_respects_its_trust_radius():
 
 def test_a_noncollinear_force_is_refused_rather_than_approximated(pseudo_dir):
     """The spinor terms are not written, so the answer is not offered."""
-    from pypresso.forces.energy import FrozenState, frozen_energy as energy_of
+    from defumat.forces.energy import FrozenState, frozen_energy as energy_of
 
     system = build_system(read_pw_input(CASES / "pt-paw-scalar.in"))
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)

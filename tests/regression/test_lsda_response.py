@@ -1,10 +1,10 @@
 """The Sternheimer response of a spin-polarized system (``nspin = 2``).
 
 ``GAPS.md`` section 3 called this "the single widest guard": one refusal in
-:func:`~pypresso.response.sternheimer.require_a_sternheimer_regime` blocked
+:func:`~defumat.response.sternheimer.require_a_sternheimer_regime` blocked
 *every* response quantity for *every* spin-polarized system, and the reason it
 gave was an occupied-band count. The count is per spin channel now
-(:func:`~pypresso.response.sternheimer.occupied_counts`), which is what QE gets
+(:func:`~defumat.response.sternheimer.occupied_counts`), which is what QE gets
 for free by doubling ``nks`` in LSDA -- there each channel is a separate
 k-point and ``setup_nbnd_occ`` writes its own ``nbnd_occ(ik)``.
 
@@ -37,7 +37,7 @@ The difference re-selects which member of the shell falls below the cut,
 because the perturbation splits it at first order; the solve keeps the member
 the eigensolver handed it, which is an arbitrary one. Nothing inside the solve
 can see that, so it is refused by name
-(:data:`~pypresso.response.sternheimer.DEGENERATE_CUT_RY`).
+(:data:`~defumat.response.sternheimer.DEGENERATE_CUT_RY`).
 
 The oxygen *molecule* is the case that works: twelve electrons and
 ``tot_magnetization = 2`` give seven up and five down, and both are closed
@@ -51,15 +51,15 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.response.sternheimer import (
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.response.sternheimer import (
     make_sternheimer,
     occupied_counts,
     require_a_sternheimer_regime,
 )
-from pypresso.scf import run_scf
-from pypresso.system import build_system
+from defumat.scf import run_scf
+from defumat.system import build_system
 
 pytestmark = [pytest.mark.regression]
 
@@ -109,7 +109,7 @@ def _probe_potential(calculation, amplitudes):
 
 
 def _converged(name, **kwargs):
-    from pypresso.scf import Calculation
+    from defumat.scf import Calculation
 
     system = build_system(read_pw_input(CASES / f"{name}.in"))
     pseudos = tuple(
@@ -180,9 +180,9 @@ def test_chi0_matches_a_finite_difference_for_a_spin_polarized_metal():
     The probe is **twice as strong in the up channel and opposite in sign in the
     down one**, so the two blocks are told apart.
     """
-    from pypresso.basis.interpolate import to_dense
-    from pypresso.scf.density import sum_band
-    from pypresso.scf.occupations import smearing_order, wgauss
+    from defumat.basis.interpolate import to_dense
+    from defumat.scf.density import sum_band
+    from defumat.scf.occupations import smearing_order, wgauss
 
     system, _, calculation, result = _hydrogen_chain()
     solver = make_sternheimer(
@@ -243,8 +243,8 @@ def test_chi0_matches_a_finite_difference_for_a_spin_polarized_insulator():
     with the spin axis they have had since P12 and none of them exercised in a
     response before.
     """
-    from pypresso.basis.interpolate import to_dense
-    from pypresso.scf.density import becsum as becsum_of, sum_band
+    from defumat.basis.interpolate import to_dense
+    from defumat.scf.density import becsum as becsum_of, sum_band
 
     system, _, calculation, result = _oxygen_molecule()
     solver = make_sternheimer(calculation, result, spin_polarized=True)
@@ -298,8 +298,8 @@ def _silicon_dielectric(nspin: int):
     ``tot_magnetization`` (``input.f90:784-800``), and zero is one; it fills
     four bands in each channel, which is ``nelec / 2`` twice.
     """
-    from pypresso.response.efield import dielectric_tensor
-    from pypresso.scf import Calculation
+    from defumat.response.efield import dielectric_tensor
+    from defumat.scf import Calculation
 
     parsed = read_pw_input(CASES / "si-epsilon.in")
     if nspin == 2:
@@ -362,7 +362,7 @@ def test_a_magnetic_insulator_is_refused_by_the_kernel_and_not_by_the_solve():
     ``chi_0`` is right for this cell -- the test above measures it against a
     finite difference at 1.1e-6 -- and the *screened* response is not
     computable, for a reason that is neither the occupied count nor anything in
-    :mod:`pypresso.response`. ``dv_of_drho`` is one ``jvp`` of ``v_of_rho``, so
+    :mod:`defumat.response`. ``dv_of_drho`` is one ``jvp`` of ``v_of_rho``, so
     for ``nspin = 2`` it is the **second** derivative of the LSDA
     exchange-correlation energy in the two channel densities, and that diverges
     wherever a channel density reaches zero -- which a plane-wave magnetization
@@ -380,7 +380,7 @@ def test_a_magnetic_insulator_is_refused_by_the_kernel_and_not_by_the_solve():
     smeared or tetrahedron metal, so LSDA is allowed. It gives
     diag(1.110916, 1.110916, 1.198005).
     """
-    from pypresso.response.efield import dielectric_tensor
+    from defumat.response.efield import dielectric_tensor
 
     _, _, calculation, result = _oxygen_molecule()
     with pytest.raises(NotImplementedError, match="dv_of_drho"):
@@ -395,7 +395,7 @@ def test_a_magnetic_insulator_is_refused_by_the_kernel_and_not_by_the_solve():
 
 
 def _calculation(name, **overrides):
-    from pypresso.scf import Calculation
+    from defumat.scf import Calculation
 
     parsed = read_pw_input(CASES / f"{name}.in")
     parsed.namelists["system"].update(overrides)
@@ -460,8 +460,8 @@ def test_an_unflagged_quantity_still_refuses_nspin_two():
     """The guard is opt-in, exactly as ``metals`` is.
 
     Lifting the refusal for everything at once would have silently opened the
-    third derivatives of :mod:`pypresso.response.electrostriction` and
-    :mod:`pypresso.response.nonlinear`, neither of which has ever been run with
+    third derivatives of :mod:`defumat.response.electrostriction` and
+    :mod:`defumat.response.nonlinear`, neither of which has ever been run with
     a spin axis and neither of which has a reference here. The flag keeps them
     refusing, and the message says what is now true: the *solve* is
     spin-polarized and the *assembly* is what is missing.
@@ -475,12 +475,12 @@ def test_born_charges_are_refused_for_a_spin_polarized_run():
     """The dielectric constant is a spin sum; ``Z*`` is not, and is not checked.
 
     ``dF/dE`` goes through the force functional's ``becsum``, whose spin axis
-    :mod:`pypresso.response.born` has never been run with, and there is no
+    :mod:`defumat.response.born` has never been run with, and there is no
     committed LSDA ``Z*`` from ``ph.x`` here that would have caught it. Refused
     by name rather than reported, with ``born_charges=False`` naming the way to
     the quantity that is validated.
     """
-    from pypresso.response.efield import dielectric_tensor
+    from defumat.response.efield import dielectric_tensor
 
     calculation = _calculation("si-epsilon", nspin=2, tot_magnetization=0.0,
                                starting_magnetization={(1,): 0.0})
@@ -512,12 +512,12 @@ def test_the_dynamical_matrix_and_the_strain_response_still_refuse_nspin_two():
 
     Their old reason -- "the occupied-band count here is one number for both
     channels" -- is gone: they derive that pair from
-    :func:`~pypresso.response.sternheimer.occupied_counts` now. What is left is
+    :func:`~defumat.response.sternheimer.occupied_counts` now. What is left is
     the second-derivative assembly above the solve, which is a term rather than
     a count, and the messages name it.
     """
-    from pypresso.response.phonon import _require_one_spin_channel as phonon_guard
-    from pypresso.response.strain import _require_one_spin_channel as strain_guard
+    from defumat.response.phonon import _require_one_spin_channel as phonon_guard
+    from defumat.response.strain import _require_one_spin_channel as strain_guard
 
     calculation = _calculation("h-chain-afm")
     with pytest.raises(NotImplementedError, match="second-derivative assembly"):

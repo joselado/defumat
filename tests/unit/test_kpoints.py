@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from pypresso.system.cell import Cell
-from pypresso.system.kpoints import DEGSPIN, KPoints, expand_band_path, monkhorst_pack
+from defumat.system.cell import Cell
+from defumat.system.kpoints import DEGSPIN, KPoints, expand_band_path, monkhorst_pack
 
 pytestmark = pytest.mark.unit
 

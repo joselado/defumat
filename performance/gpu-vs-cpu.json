@@ -1,6 +1,6 @@
 {
   "meta": {
-    "metric": "pypresso GPU against pypresso CPU, same input and same code, per SCF iteration (GPU.md section 2.3)",
+    "metric": "defumat GPU against defumat CPU, same input and same code, per SCF iteration (GPU.md section 2.3)",
     "cpu_baseline": "4 pinned AMD EPYC Milan cores",
     "qe_baseline": "Quantum ESPRESSO 7.2, 1 core",
     "note": "best of repeated runs on both sides, as tools/compare_qe.py does",

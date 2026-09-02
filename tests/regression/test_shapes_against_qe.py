@@ -1,7 +1,7 @@
 """Every committed reference: the symmetry count and the FFT grid, and nothing else.
 
 This runs no SCF. For each input that has a ``pw.x`` output stored beside it, it
-builds the :class:`~pypresso.system.builder.System` and the basis and compares
+builds the :class:`~defumat.system.builder.System` and the basis and compares
 the two numbers ``pw.x`` prints before it starts iterating -- ``N Sym. Ops.``
 and ``FFT dimensions`` -- against what this code chose.
 
@@ -29,9 +29,9 @@ from pathlib import Path
 
 import pytest
 
-from pypresso.basis.builder import build_basis
-from pypresso.io.pwin import read_pw_input
-from pypresso.system import build_system
+from defumat.basis.builder import build_basis
+from defumat.io.pwin import read_pw_input
+from defumat.system import build_system
 
 pytestmark = [pytest.mark.regression]
 

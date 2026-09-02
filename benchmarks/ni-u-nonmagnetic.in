@@ -12,7 +12,7 @@
 ! starting_magnetization.** init_ns fills ns diagonally by Hund's rule, so the
 ! default start is 1.0 in every majority d orbital against 0.8 in every minority
 ! one whether starting_magnetization is 0.7 or 0.05 -- already deep in the
-! ferromagnetic basin. run_scf(starting_ns=...) with pypresso.hubbard.uniform_ns
+! ferromagnetic basin. run_scf(starting_ns=...) with defumat.hubbard.uniform_ns
 ! is how the unpolarised start is asked for. See PLAN.md P22 and
 ! tests/regression/test_scf_solvers.py.
 !

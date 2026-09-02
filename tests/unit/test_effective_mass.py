@@ -23,8 +23,8 @@ that step gives an error ``delta/h^2`` which **grows** as the stencil shrinks.
 import numpy as np
 import pytest
 
-from pypresso.calculator import Calculator
-from pypresso.response.effmass import Multiplet, effective_mass
+from defumat.calculator import Calculator
+from defumat.response.effmass import Multiplet, effective_mass
 
 pytestmark = pytest.mark.unit
 
@@ -172,7 +172,7 @@ def test_the_eigenvalue_stencil_never_contains_its_centre():
     """
     import inspect
 
-    from pypresso.response import effmass
+    from defumat.response import effmass
 
     source = inspect.getsource(effmass._by_eigenvalue)
     # ``eps[0]`` is the centre and it may be *returned* (the eigenvalues the

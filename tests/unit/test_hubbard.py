@@ -13,33 +13,33 @@ import pytest
 
 import jax.numpy as jnp
 
-from pypresso.hubbard.energy import (
+from defumat.hubbard.energy import (
     coefficients_from_setup,
     hubbard_energy,
     hubbard_potential,
     ns_ddot,
     qe_hubbard_potential,
 )
-from pypresso.hubbard.manifold import (
+from defumat.hubbard.manifold import (
     HubbardInput,
     build_hubbard_setup,
     manifold_label,
     parse_manifold,
     reference_occupation,
 )
-from pypresso.hubbard.occupations import (
+from defumat.hubbard.occupations import (
     adjust_ns,
     initial_ns,
     ns_shape,
     spin_averaged_ns,
     uniform_ns,
 )
-from pypresso.hubbard.operator import block_potential
-from pypresso.hubbard.projectors import lowdin_transform
-from pypresso.io.pwin import parse_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.system import build_system
-from pypresso.units import RY_TO_EV
+from defumat.hubbard.operator import block_potential
+from defumat.hubbard.projectors import lowdin_transform
+from defumat.io.pwin import parse_pw_input
+from defumat.pseudo import read_upf
+from defumat.system import build_system
+from defumat.units import RY_TO_EV
 
 pytestmark = pytest.mark.unit
 
@@ -258,7 +258,7 @@ def test_operator_matrix_and_application_agree():
     different Hamiltonians -- and every existing consistency test would still
     pass, because none of them switches a U on.
     """
-    from pypresso.hubbard.operator import HubbardTerm
+    from defumat.hubbard.operator import HubbardTerm
 
     rng = np.random.default_rng(5)
     wfcU = jnp.asarray(
@@ -353,9 +353,9 @@ def test_atomic_orbitals_are_renormalised(pseudo_dir):
     QE prints ``wavefunction(s) 4S renormalized`` for both iron and nickel, so
     the file's own 4s is *not* normalised in the generalised metric. The DFT+U
     ortho-atomic projectors are where that matters -- see
-    :func:`pypresso.pseudo.upf._renormalize_orbitals`.
+    :func:`defumat.pseudo.upf._renormalize_orbitals`.
     """
-    from pypresso.pseudo.radial import simpson_weights
+    from defumat.pseudo.radial import simpson_weights
 
     pseudo = read_upf(pseudo_dir / "Ni.pz-nd-rrkjus.UPF")
     weights = np.asarray(simpson_weights(pseudo.rab))

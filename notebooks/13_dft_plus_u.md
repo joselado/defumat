@@ -22,7 +22,7 @@ written down beside it.
 `ortho-atomic` or `norm-atomic` projectors. On antiferromagnetic FeO, the
 material the correction exists for:
 
-| | pypresso | `pw.x` |
+| | defumat | `pw.x` |
 |---|---|---|
 | total energy, $U = 4.3$ eV | **-174.471560677 Ry** | -174.471560670 |
 | total energy, $U \to 0$ | **-174.824657947 Ry** | -174.824657950 |
@@ -40,8 +40,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.io import comparison_table, read_qe_output
+from defumat import Calculator
+from defumat.io import comparison_table, read_qe_output
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_lda+U")
 PSEUDO, REFS = Path("../tests/data/pseudo"), Path("../tests/data/qe")
@@ -75,10 +75,10 @@ print(comparison_table(
       read_qe_output(REFS / "reference.out.pw_lda+U-lda+U").total_energy),
      ("FeO, U -> 0", no_u.total_energy,
       read_qe_output(REFS / "reference.out.pw_lda+U-lda+U-noU").total_energy)],
-    fmt="{:.9f}", headers=("total energy [Ry]", "pypresso", "pw.x", "difference")))
+    fmt="{:.9f}", headers=("total energy [Ry]", "defumat", "pw.x", "difference")))
 ```
 
-    total energy [Ry]        pypresso            pw.x  difference
+    total energy [Ry]        defumat            pw.x  difference
     FeO, U = 4.3 eV    -174.471560677  -174.471560670     6.6e-09
     FeO, U -> 0        -174.824657947  -174.824657950     3.4e-09
 

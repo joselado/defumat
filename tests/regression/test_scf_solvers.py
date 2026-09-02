@@ -22,13 +22,13 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import Calculation, run_scf
-from pypresso.scf.driver import default_nbnd
-from pypresso.scf.residual import make_residual
-from pypresso.hubbard import uniform_ns
-from pypresso.system import build_system
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import Calculation, run_scf
+from defumat.scf.driver import default_nbnd
+from defumat.scf.residual import make_residual
+from defumat.hubbard import uniform_ns
+from defumat.system import build_system
 from tests.tolerances import TOTAL_ENERGY_RY
 
 BENCHMARKS = Path(__file__).resolve().parents[2] / "benchmarks"
@@ -233,7 +233,7 @@ def test_local_tf_screens_the_vacuum_less_than_the_metal():
     the distinction at all, so the test is that the two preconditioners disagree
     *and* that they disagree in the vacuum rather than everywhere.
     """
-    from pypresso.scf.mixing import kerker_preconditioner, local_tf_preconditioner
+    from defumat.scf.mixing import kerker_preconditioner, local_tf_preconditioner
 
     system, pseudos, calculation, _ = _setup(SLAB)
     rho = np.asarray(calculation.starting_density())
@@ -266,7 +266,7 @@ def test_weights_agree_with_the_driver(case):
     dispatch, kept because ``Calculation.occupations`` syncs the Fermi level to
     the host and cannot be traced. A second copy is a second thing to get wrong,
     so it is pinned against the original rather than trusted."""
-    from pypresso.scf.residual import _weights
+    from defumat.scf.residual import _weights
 
     system, pseudos, calculation, _ = _setup(case)
     converged = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-9)
@@ -279,7 +279,7 @@ def test_weights_agree_with_the_driver(case):
 def test_unsupported_occupations_are_refused_by_name():
     """A residual solver that silently substituted a scheme it cannot
     differentiate would converge to the wrong physics, so it raises instead."""
-    from pypresso.scf.residual import _weights
+    from defumat.scf.residual import _weights
 
     class _Calculation:
         system = type("S", (), {"occupations": "tetrahedra"})()
@@ -318,7 +318,7 @@ def test_newton_krylov_reaches_an_unstable_solution():
     version started both solvers from the atomic superposition, and it was
     passing on a knife edge: changing how ``|psi|^2`` is evaluated --
     ``Re(conj(psi) psi)`` rather than ``abs(psi)**2``, the same number to **3.5
-    eps** (:func:`pypresso.scf.density.band_density`) -- was enough to send
+    eps** (:func:`defumat.scf.density.band_density`) -- was enough to send
     Newton to the ferromagnet instead. Rebuilding it around a perturbed root
     then turned up something about the *physics* that P22 had got slightly
     wrong. The symmetric solution of this cell is **not a saddle in the linear

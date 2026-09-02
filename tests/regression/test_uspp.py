@@ -33,11 +33,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.system import build_system
+from defumat.io import read_qe_output
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import run_scf
+from defumat.system import build_system
 from tests.tolerances import (
     EIGENVALUE_EV,
     ENERGY_TERM_RY,
@@ -147,14 +147,14 @@ def test_the_augmentation_charge_reproduces_the_files_own_q(pseudo_dir, case, ps
     it depends on the cell through ``1/Omega`` alone -- so a pseudopotential from
     another element can be dropped into it to exercise its own storage format.
     """
-    from pypresso.pseudo.augmentation import build_augmentation
-    from pypresso.pseudo.projectors import projector_channels
+    from defumat.pseudo.augmentation import build_augmentation
+    from defumat.pseudo.projectors import projector_channels
 
     system = build_system(read_pw_input(CASES / f"{case}.in"))
     pseudo = read_upf(
         pseudo_dir / (pseudo_file or system.structure.species[0].pseudo_file)
     )
-    from pypresso.basis.builder import build_basis
+    from defumat.basis.builder import build_basis
 
     basis = build_basis(system)
     augmentation = build_augmentation((pseudo,), system.structure, system.cell, basis.dense)

@@ -11,12 +11,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.scf.occupations import (
+from defumat.scf.occupations import (
     smeared_occupations,
     w0gauss,
     wgauss,
 )
-from pypresso.scf.tetrahedra import (
+from defumat.scf.tetrahedra import (
     build_tetrahedra,
     integrated_states,
     tetrahedron_dos,
@@ -24,13 +24,13 @@ from pypresso.scf.tetrahedra import (
     tetrahedron_occupations,
     _sorted_corners,
 )
-from pypresso.system.kpoints import (
+from defumat.system.kpoints import (
     DEGSPIN,
     grid_equivalence,
     irreducible_wedge,
     monkhorst_pack,
 )
-from pypresso.units import SQRT_PI
+from defumat.units import SQRT_PI
 
 pytestmark = pytest.mark.unit
 

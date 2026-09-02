@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from pypresso.basis.builder import build_basis
-from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.system import build_system
+from defumat.basis.builder import build_basis
+from defumat.io import read_qe_output
+from defumat.io.pwin import read_pw_input
+from defumat.system import build_system
 from tests.regression.test_geometry import CASES, NEEDS_SPACE_GROUPS
 
 pytestmark = pytest.mark.regression
@@ -39,13 +39,13 @@ pytestmark = pytest.mark.regression
 
 
 def _fft_factors(system):
-    from pypresso.system.symmetry import find_symmetries
+    from defumat.system.symmetry import find_symmetries
 
     return find_symmetries(system.cell, system.structure).fft_factors()
 
 
 def _assert_grid(ours, reference, factors):
-    from pypresso.basis.fftgrid import good_fft_order
+    from defumat.basis.fftgrid import good_fft_order
 
     if all(n % f == 0 for n, f in zip(reference, factors)):
         assert tuple(ours) == tuple(reference)

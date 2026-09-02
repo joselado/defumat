@@ -1,6 +1,6 @@
 """Every GPU-against-CPU measurement in one figure: the dials, the stages, the size.
 
-This is §2.3's metric -- pypresso on a GPU against pypresso on a CPU, same input
+This is §2.3's metric -- defumat on a GPU against defumat on a CPU, same input
 and same code -- kept apart from the QE comparison, which measures code and
 hardware together. Numbers from ``gpu-vs-cpu.json``; nothing is re-measured.
 """
@@ -74,7 +74,7 @@ ax.axhline(1.0, color="black", lw=1.0)
 ax.set_yscale("log"); ax.set_xscale("log")
 ax.set_xlabel("atoms in the cell"); ax.set_ylabel("CPU time / GPU time, per iteration")
 ax.set_title("Every matched pair: same code, same input\n"
-             "pypresso GPU against pypresso on 4 CPU cores", fontsize=10.5)
+             "defumat GPU against defumat on 4 CPU cores", fontsize=10.5)
 ax.legend(fontsize=8.5, loc="upper left")
 ax.grid(ls=":", lw=0.6, alpha=0.6); ax.set_axisbelow(True)
 ax.text(2.2, 0.62, "GPU slower below this line", fontsize=7.5, color="grey")
@@ -88,7 +88,7 @@ ax = fig.add_subplot(gs[1, 1])
 cases = [q["case"] for q in QE]
 x = np.arange(len(QE)); w = 0.38
 ax.bar(x - w/2, [q["qe_ms"]/1000 for q in QE], w, label="QE 7.2, 1 core", color="#4C72B0")
-ax.bar(x + w/2, [q["gpu_ms"]/1000 for q in QE], w, label="pypresso, 1 H200", color="#DD8452")
+ax.bar(x + w/2, [q["gpu_ms"]/1000 for q in QE], w, label="defumat, 1 H200", color="#DD8452")
 for xi, q in zip(x, QE):
     ax.text(xi + w/2, q["gpu_ms"]/1000 * 1.5, f"{q['qe_ms']/q['gpu_ms']:.1f}x",
             ha="center", fontsize=9, color=WIN, fontweight="bold")
@@ -99,7 +99,7 @@ ax.set_title("A different metric: against serial QE\n"
              "one core is the softest baseline — see PERFORMANCE.md", fontsize=10.5)
 ax.legend(fontsize=8.5); ax.grid(axis="y", ls=":", lw=0.6, alpha=0.6); ax.set_axisbelow(True)
 
-fig.suptitle("pypresso on a GPU — every CPU comparison measured, 2026-08-25/26",
+fig.suptitle("defumat on a GPU — every CPU comparison measured, 2026-08-25/26",
              fontsize=13, y=0.975)
 fig.savefig(HERE / "gpu-vs-cpu-fig.pdf", bbox_inches="tight")
 fig.savefig(HERE / "gpu-vs-cpu-fig.png", dpi=160, bbox_inches="tight")

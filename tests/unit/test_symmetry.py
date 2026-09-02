@@ -3,10 +3,10 @@
 import numpy as np
 import pytest
 
-from pypresso.basis.gvectors import generate_gvectors
-from pypresso.system.cell import Cell
-from pypresso.system.structure import Species, Structure
-from pypresso.system.symmetry import (
+from defumat.basis.gvectors import generate_gvectors
+from defumat.system.cell import Cell
+from defumat.system.structure import Species, Structure
+from defumat.system.symmetry import (
     find_symmetries,
     lattice_point_group,
     symmetrize_density,
@@ -101,7 +101,7 @@ def test_symmetrization_preserves_the_average_and_reduces_the_norm():
 
 def test_a_symmetric_density_is_unchanged():
     """The structure factor of the crystal is symmetric by construction."""
-    from pypresso.pseudo.potentials import structure_factors
+    from defumat.pseudo.potentials import structure_factors
 
     gvectors = generate_gvectors(SILICON_CELL, 48.0)
     structure = _diamond()
@@ -121,8 +121,8 @@ def test_symmetry_group_honours_the_nosym_it_takes():
     is a property of the crystal, and ``basis.builder`` needs the fractional
     translations to size the FFT box whatever the input said about symmetrising.
     """
-    from pypresso.io.pwin import parse_pw_input
-    from pypresso.system.builder import build_system
+    from defumat.io.pwin import parse_pw_input
+    from defumat.system.builder import build_system
 
     system = build_system(parse_pw_input(
         "&system\n ibrav=2, celldm(1)=10.2, nat=2, ntyp=1, ecutwfc=12.0,"

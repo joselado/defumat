@@ -19,7 +19,7 @@ Both come out of differentiating the force of notebook 09 *once more*, along a d
 carries the positions, the states and the density together, so nothing is derived by hand and
 no second-order wavefunction is needed.
 
-| silicon at $\Gamma$ | pypresso | `ph.x` |
+| silicon at $\Gamma$ | defumat | `ph.x` |
 |---|---|---|
 | optical mode ($\Gamma_{25'}$, triply degenerate) | **510.102 cm⁻¹** | 510.152 |
 | acoustic modes (zero by translation invariance) | 4.09 | 2.05 |
@@ -37,7 +37,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
+from defumat import Calculator
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
@@ -104,7 +104,7 @@ machinery with the left.
 
 
 ```python
-from pypresso.basis.fft import g_to_r, r_to_g   # no facade route to rho(G)
+from defumat.basis.fft import g_to_r, r_to_g   # no facade route to rho(G)
 
 grid = silicon.calculation.basis.dense
 cartesian = grid.cartesian(silicon.system.cell)

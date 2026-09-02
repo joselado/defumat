@@ -7,7 +7,7 @@
     "conv_thr": "1e-10",
     "date": "2026-08-26",
     "commit": "c5dc7d4",
-    "note": "pypresso: k_batch=all, band_batch=all"
+    "note": "defumat: k_batch=all, band_batch=all"
   },
   "cases": [
     {

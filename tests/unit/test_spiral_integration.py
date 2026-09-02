@@ -19,7 +19,7 @@ wrong are different:
 import numpy as np
 import pytest
 
-from pypresso.workflows.spiral import SpiralScan
+from defumat.workflows.spiral import SpiralScan
 
 pytestmark = pytest.mark.unit
 

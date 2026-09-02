@@ -1,6 +1,6 @@
 """P37's cheap pieces: the response sphere, the kernel registry and the refusals.
 
-Everything here runs off a bare :class:`~pypresso.scf.driver.Calculation` --
+Everything here runs off a bare :class:`~defumat.scf.driver.Calculation` --
 no SCF, no states -- which is the point: a refusal is a statement about the
 calculation and must be reachable before anything expensive has been paid for.
 The identities that need a converged ground state are in
@@ -13,17 +13,17 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf.driver import Calculation
-from pypresso.system import build_system
-from pypresso.tddft import (
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf.driver import Calculation
+from defumat.system import build_system
+from defumat.tddft import (
     get_kernel,
     kernel_names,
     require_a_sum_over_states_regime,
     response_sphere,
 )
-from pypresso.units import E2, FPI
+from defumat.units import E2, FPI
 
 pytestmark = pytest.mark.unit
 
@@ -73,7 +73,7 @@ def test_the_coulomb_factor_is_the_rydberg_one():
     """``sqrt(8 pi / |G|^2)``, not ``sqrt(4 pi / |G|^2)``.
 
     ``e^2 = 2`` in Rydberg atomic units, which is exactly the factor
-    :func:`~pypresso.scf.potential.hartree` carries and the classic place to
+    :func:`~defumat.scf.potential.hartree` carries and the classic place to
     lose a two. The symmetrised ``chi_0`` has it on both sides, so a wrong
     constant here is a factor of two on every dielectric function.
     """
@@ -128,7 +128,7 @@ def test_the_lrc_kernel_is_a_constant_on_the_diagonal_and_needs_its_parameter():
     reason the bootstrap kernel was proposed. Supplying a default would hide
     that behind a number that is right for nothing.
     """
-    from pypresso.tddft.chi0 import ChiZero, ResponseSphere
+    from defumat.tddft.chi0 import ChiZero, ResponseSphere
 
     sphere = ResponseSphere(
         fft_index=jnp.arange(2), sqrt_coulomb=jnp.ones(2),

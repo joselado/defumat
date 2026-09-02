@@ -19,7 +19,7 @@
 ! compresses by 25%, diamond silicon becomes metallic, and a run with the default
 ! fixed occupations is then not a calculation at all: `pw.x` relaxes happily in
 ! the frozen basis and then reports `convergence NOT achieved after 100
-! iterations` in its final SCF at the relaxed cell, while pypresso converges the
+! iterations` in its final SCF at the relaxed cell, while defumat converges the
 ! same ill-posed problem to a fixed-occupation solution 7.3e-3 Ry away. Two codes
 ! disagreeing about a system neither should be describing is not a test. At 100
 ! kbar the cell moves ~9%, which is as much as the arsenic cases move, and the

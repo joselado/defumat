@@ -16,7 +16,7 @@
 !
 ! **The `&ions` thresholds are left at QE's defaults on purpose.** `etot_conv_thr`
 ! (1e-4 Ry) and `forc_conv_thr` (1e-3 Ry/bohr) must *both* be met before either
-! code stops, and `pypresso.workflows.relax.run_relax` takes them as arguments
+! code stops, and `defumat.workflows.relax.run_relax` takes them as arguments
 ! rather than reading them from the input -- `System` carries no `&ions` field.
 ! Writing a tighter one here would therefore be honoured by `pw.x` and ignored
 ! by this code, and the two would stop at different points on the same curve:

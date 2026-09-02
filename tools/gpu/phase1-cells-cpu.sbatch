@@ -34,23 +34,23 @@
 #            unknown, so the CPU half is the one that could run long.
 # cpus/mem   4 and 32G, matching phase0-*.sbatch exactly so the two jobs'
 #            numbers sit in one table.
-#SBATCH --job-name=pypresso-cpu-phase1
+#SBATCH --job-name=defumat-cpu-phase1
 #SBATCH --partition=batch-milan
 #SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
-#SBATCH --output=/scratch/work/ladovj1/calculations/pypresso-gpu/out/p1cpu-%j.out
-#SBATCH --error=/scratch/work/ladovj1/calculations/pypresso-gpu/out/p1cpu-%j.err
+#SBATCH --output=/scratch/work/ladovj1/calculations/defumat-gpu/out/p1cpu-%j.out
+#SBATCH --error=/scratch/work/ladovj1/calculations/defumat-gpu/out/p1cpu-%j.err
 
-WORK=/scratch/work/ladovj1/calculations/pypresso-gpu
-REPO=/scratch/work/ladovj1/apps/pypresso
+WORK=/scratch/work/ladovj1/calculations/defumat-gpu
+REPO=/scratch/work/ladovj1/apps/defumat
 mkdir -p "$WORK/out" "$WORK/cache-cpu"
 cd "$REPO" || exit 1
 
 source "$WORK/venv/bin/activate"
 export MKL_NUM_THREADS=1
 export OMP_NUM_THREADS=1
-export PYPRESSO_CACHE_DIR="$WORK/cache-cpu"
+export DEFUMAT_CACHE_DIR="$WORK/cache-cpu"
 export PYTHONPATH="$REPO"
 export JAX_PLATFORMS=cpu   # a CPU node has no device; say so rather than discover it
 
@@ -69,7 +69,7 @@ iterations () {  # whole-iteration ratio: phase0.py <case> <k> <b>
 
 stages () {  # the per-stage split: benchmark.py inherits the dials from the env
   echo; echo "########## stages $1 band_batch=$2 ##########"
-  PYPRESSO_K_BATCH=1 PYPRESSO_BAND_BATCH="$2" python3 tools/benchmark.py "benchmarks/$1.in"
+  DEFUMAT_K_BATCH=1 DEFUMAT_BAND_BATCH="$2" python3 tools/benchmark.py "benchmarks/$1.in"
 }
 
 # Decisive first: the biggest cell, split by stage, at the dial that won. The

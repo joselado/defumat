@@ -12,7 +12,7 @@
 ! itself (`warning: symmetry operation # 3 not compatible with FFT grid`,
 ! then `Error in routine phq_setup (1)`). With the symmetry off both codes run
 ! all sixteen points of the unshifted grid and symmetrise nothing, which is the
-! configuration `pypresso.response` accepts for a `nosym` run and the one that
+! configuration `defumat.response` accepts for a `nosym` run and the one that
 ! makes the comparison exact rather than a comparison of two wedges.
  &control
     calculation = 'scf'

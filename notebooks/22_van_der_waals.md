@@ -22,7 +22,7 @@ radial function: a pair sum over the nuclei and their periodic images, and nothi
 
 Against `pw.x` on the same input:
 
-| | pypresso | `pw.x` |
+| | defumat | `pw.x` |
 |---|---|---|
 | total energy | **-45.10439956 Ry** | agrees to 3.1e-9 |
 | $E_{\rm disp}$ | **-0.02305929 Ry** | agrees to 4.9e-9 |
@@ -39,8 +39,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.io import comparison_table, read_qe_output
+from defumat import Calculator
+from defumat.io import comparison_table, read_qe_output
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
@@ -73,10 +73,10 @@ rows = [(name, value, qe.energy_terms.get(name))
         for name, value in sorted(graphite.energy_terms.items())]
 rows.append(("total", graphite.total_energy, qe.total_energy))
 print(comparison_table(rows, fmt="{:.8f}",
-                       headers=("term", "pypresso [Ry]", "pw.x", "difference")))
+                       headers=("term", "defumat [Ry]", "pw.x", "difference")))
 ```
 
-    term          pypresso [Ry]          pw.x  difference
+    term          defumat [Ry]          pw.x  difference
     dispersion      -0.02305929   -0.02305929     4.9e-09
     ewald           11.66546446   11.66546446     7.9e-10
     hartree         53.78898878   53.78896923     2.0e-05

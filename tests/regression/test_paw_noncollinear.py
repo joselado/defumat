@@ -21,13 +21,13 @@ import pytest
 
 import jax.numpy as jnp
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.paw.gradient import onecenter_gradient_correction
-from pypresso.paw.onecenter import build_paw
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.system import build_system
-from pypresso.xc.functional import get_functional
+from defumat.io.pwin import read_pw_input
+from defumat.paw.gradient import onecenter_gradient_correction
+from defumat.paw.onecenter import build_paw
+from defumat.pseudo import read_upf
+from defumat.scf import run_scf
+from defumat.system import build_system
+from defumat.xc.functional import get_functional
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 

@@ -1,6 +1,6 @@
 """P18: the field and constraint potentials, against QE's hand-derived ones.
 
-:mod:`pypresso.scf.fields` writes down the *energy* of a field or a penalty and
+:mod:`defumat.scf.fields` writes down the *energy* of a field or a penalty and
 takes the potential from ``jax.grad``. QE writes the potential out by hand
 instead -- ``add_bfield.f90``, five expressions, one of them three lines of
 quotient rule -- and the two must agree exactly, because they are the same
@@ -20,9 +20,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.scf.fields import MagneticField
-from pypresso.scf.locals import LocalRegions
-from pypresso.system.cell import Cell
+from defumat.scf.fields import MagneticField
+from defumat.scf.locals import LocalRegions
+from defumat.system.cell import Cell
 
 pytestmark = pytest.mark.unit
 
@@ -286,8 +286,8 @@ def test_b_field_survives_the_input_file():
     Every test of the field machinery until now built :class:`MagneticField` in
     Python, so the input path had no coverage at all. This is that path.
     """
-    from pypresso.io.pwin import parse_pw_input
-    from pypresso.system import build_system
+    from defumat.io.pwin import parse_pw_input
+    from defumat.system import build_system
 
     source = """ &control
     calculation = 'scf'
@@ -326,8 +326,8 @@ def test_b_field_with_a_constraint_is_refused():
     """
     import pytest as _pytest
 
-    from pypresso.io.pwin import parse_pw_input
-    from pypresso.system import build_system
+    from defumat.io.pwin import parse_pw_input
+    from defumat.system import build_system
 
     source = """ &control
     calculation = 'scf'

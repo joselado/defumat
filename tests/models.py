@@ -1,6 +1,6 @@
 """Tight-binding models with known topological invariants.
 
-The invariants in :mod:`pypresso.topology` are integers, and an integer is only
+The invariants in :mod:`defumat.topology` are integers, and an integer is only
 checked by a case whose answer is known independently. A DFT calculation big
 enough to be topologically interesting is minutes of one core; these models are
 milliseconds, and their answers come from the literature rather than from this
@@ -9,9 +9,9 @@ code. They are the same systems the reference implementations use -- ``pyqula``
 ``elkpy`` (``tests/test_wilson_gauge_invariance.py``'s doubled Qi-Wu-Zhang
 model) -- so the numbers here are comparable with theirs.
 
-They live in ``tests/`` and not in the package on purpose: pypresso is a
+They live in ``tests/`` and not in the package on purpose: defumat is a
 plane-wave DFT code, and a library of model Hamiltonians is not part of it.
-What *is* part of it is :class:`pypresso.topology.ModelStates`, the state set
+What *is* part of it is :class:`defumat.topology.ModelStates`, the state set
 that any ``H(k)`` plugs into.
 
 Every Hamiltonian here takes a k-point in **crystal** coordinates and returns a

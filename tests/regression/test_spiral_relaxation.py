@@ -6,12 +6,12 @@ quantity that is already validated. Four of them, and each one isolates a
 different thing:
 
 1. **The functional is the total energy.**
-   :func:`~pypresso.forces.spiral.spiral_energy`, evaluated at the converged
+   :func:`~defumat.forces.spiral.spiral_energy`, evaluated at the converged
    state and the wavevector it converged at, must reproduce the SCF's own total
    energy to round-off. It is written out in full for exactly this reason: it is
    the only check on the terms the gradient does *not* see.
 2. **The gradient is the derivative of that functional.** A central difference
-   of :func:`~pypresso.forces.spiral.spiral_energy` at frozen state against
+   of :func:`~defumat.forces.spiral.spiral_energy` at frozen state against
    ``jax.grad`` of it. This tests the automatic differentiation and nothing
    else, and it holds to the finite difference's own truncation error.
 3. **The gradient is the derivative of the converged energy.** The one that
@@ -50,14 +50,14 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.forces.energy import state_from_result
-from pypresso.forces.spiral import compute_spiral_gradient, spiral_energy
-from pypresso.io.pwin import parse_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.scf.driver import Calculation
-from pypresso.system import build_system
-from pypresso.workflows.spiral import relax_spiral_q
+from defumat.forces.energy import state_from_result
+from defumat.forces.spiral import compute_spiral_gradient, spiral_energy
+from defumat.io.pwin import parse_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import run_scf
+from defumat.scf.driver import Calculation
+from defumat.system import build_system
+from defumat.workflows.spiral import relax_spiral_q
 from tests.conftest import GENERATED
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
@@ -251,7 +251,7 @@ def test_a_gradient_is_refused_where_it_would_be_silently_wrong(pseudo_dir):
 
     A calculation that is not a spiral has no ``q`` to differentiate with
     respect to; one with a magnetic field is stationary for a functional that is
-    not the one being differentiated (:mod:`pypresso.scf.fields`), and that term
+    not the one being differentiated (:mod:`defumat.scf.fields`), and that term
     would be missing without anything looking wrong.
     """
     text = (GENERATED / "h-atom-lsda.in").read_text().replace(
@@ -401,7 +401,7 @@ def test_integrating_the_gradient_reproduces_the_scan(pseudo_dir):
     ``q = b3/2`` stationary whatever the electrons do, so a scan that ends on
     them must report zero gradients there to round-off.
     """
-    from pypresso.workflows.spiral import run_spiral_scan
+    from defumat.workflows.spiral import run_spiral_scan
 
     text = (GENERATED / "h-chain-spiral.in").read_text()
     system = build_system(parse_pw_input(text))

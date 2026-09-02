@@ -34,7 +34,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
+from defumat import Calculator
 
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
 
@@ -174,7 +174,7 @@ greyed out for that reason.
 p = result.photoelastic_voigt
 BIEGELSEN = {"p11": -0.094, "p12": +0.017, "p44": -0.051}   # PRL 32, 1196 (1974)
 
-print(f"{'':6}{'pypresso':>12}{'experiment':>13}   comparable?")
+print(f"{'':6}{'defumat':>12}{'experiment':>13}   comparable?")
 for name, ours, measured in (
     ("p11", p[0, 0], BIEGELSEN["p11"]),
     ("p12", p[0, 1], BIEGELSEN["p12"]),
@@ -184,7 +184,7 @@ for name, ours, measured in (
     print(f"{name:6}{ours:12.4f}{measured:13.4f}   {note}")
 ```
 
-              pypresso   experiment   comparable?
+              defumat   experiment   comparable?
     p11        -0.0341      -0.0940   yes
     p12        -0.0026       0.0170   yes
     p44        -0.0622      -0.0510   no -- needs the ionic term

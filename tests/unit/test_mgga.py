@@ -2,7 +2,7 @@
 
 There is no Fortran to compare against -- QE reaches TB09 only through libxc,
 and with a zero Laplacian and ``c = 1`` at that (see
-:mod:`pypresso.xc.mgga`) -- so the checks here are *analytic identities* the
+:mod:`defumat.xc.mgga`) -- so the checks here are *analytic identities* the
 functional has to satisfy, which is a stronger kind of test than an agreement
 to somebody else's floating point:
 
@@ -28,9 +28,9 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from pypresso.units import E2
-from pypresso.xc.functional import get_functional
-from pypresso.xc.mgga import (
+from defumat.units import E2
+from defumat.xc.functional import get_functional
+from defumat.xc.mgga import (
     BR89_GAMMA,
     META_RHO_THRESHOLD,
     TB09_ALPHA,

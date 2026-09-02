@@ -1,6 +1,6 @@
 """The pieces of the shift current, each checked without a crystal where it can be.
 
-``pypresso.response.photocurrent`` is three things stacked: the second
+``defumat.response.photocurrent`` is three things stacked: the second
 derivative of ``H(k)``, the generalised derivative built from it by the
 Aversa-Sipe sum rule, and a spectrum. This file checks the first two, plus the
 refusals; the crystal-scale statements -- the complete-basis identity against a
@@ -22,7 +22,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pypresso.response.photocurrent import (
+from defumat.response.photocurrent import (
     DEGENERACY_TOL,
     dipole_matrix,
     generalized_derivative,
@@ -190,7 +190,7 @@ def test_the_generalized_derivative_is_hermitian_in_the_band_pair():
 class _Stub:
     """The four attributes :func:`require_a_shift_current_regime` reads.
 
-    A stand-in and not a :class:`~pypresso.scf.driver.Calculation`, because the
+    A stand-in and not a :class:`~defumat.scf.driver.Calculation`, because the
     branch under test is unreachable from any committed input: every DFT+U case
     in this suite uses an ultrasoft dataset, so the ultrasoft refusal fires
     first and the Hubbard message is never seen. The guard is four independent

@@ -26,11 +26,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.system import build_system
-from pypresso.workflows.relax import run_relax
+from defumat.io import read_qe_output
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.system import build_system
+from defumat.workflows.relax import run_relax
 from tests.tolerances import FORCE_RY_BOHR, TOTAL_ENERGY_RY
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]

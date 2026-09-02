@@ -5,7 +5,7 @@ by *quietly* not converging: plausible numbers, wrong in the fourth decimal. On
 a cell of a couple of hundred plane waves the question is settled by forming
 ``H`` and handing it to ``eigh``, which is right by construction -- so that is
 what these tests do (``tests/exact_reference.py``). It is a test fixture and not
-a solver the package offers; see ``pypresso/solvers/__init__.py`` for why.
+a solver the package offers; see ``defumat/solvers/__init__.py`` for why.
 
 Eigenvalues are compared, not eigenvectors: silicon's bands are degenerate at
 the k-point used here, and any rotation within a degenerate subspace is an
@@ -18,18 +18,18 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.basis.builder import build_basis
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf.driver import Calculation, run_scf
-from pypresso.scf.potential import v_of_rho
-from pypresso.solvers import (
+from defumat.basis.builder import build_basis
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf.driver import Calculation, run_scf
+from defumat.scf.potential import v_of_rho
+from defumat.solvers import (
     DEFAULT_EIGENSOLVER,
     EIGENSOLVERS,
     davidson_eigensolver_all,
     get_eigensolver,
 )
-from pypresso.system import build_system
+from defumat.system import build_system
 from tests.exact_reference import exact_eigenpairs_all
 
 pytestmark = pytest.mark.unit
@@ -164,7 +164,7 @@ def test_a_cholesky_that_returns_nan_is_rescued_outside_the_k_batch(silicon,
     lowers to ``select_n`` and both branches run on every step (2.85x of the
     subspace solve, measured on ``si10-nc``). So the batched solve takes the
     Cholesky route unconditionally and
-    :func:`~pypresso.solvers.davidson.davidson_eigensolver_all` retries the
+    :func:`~defumat.solvers.davidson.davidson_eigensolver_all` retries the
     whole k-set with canonical orthogonalisation when the eigenvalues come back
     non-finite -- which is one scalar predicate, outside the batch, and a real
     branch again.
@@ -175,7 +175,7 @@ def test_a_cholesky_that_returns_nan_is_rescued_outside_the_k_batch(silicon,
     ``tests/unit/test_subspace_robustness.py``). Replacing the fast route with
     one that returns ``NaN`` exercises the identical path deterministically.
     """
-    from pypresso.solvers import davidson, subspace
+    from defumat.solvers import davidson, subspace
 
     _, _, hamiltonian = silicon
     exact, _ = exact_eigenpairs_all(hamiltonian, NBND)

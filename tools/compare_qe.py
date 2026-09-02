@@ -1,14 +1,14 @@
-"""Run one input through Quantum ESPRESSO and through pypresso, single core.
+"""Run one input through Quantum ESPRESSO and through defumat, single core.
 
 This is the project's primary performance measurement. Everything else --
 component breakdowns, flame graphs, guesses about where time goes -- is
-secondary to the one number this prints: how much slower pypresso is than the
+secondary to the one number this prints: how much slower defumat is than the
 Fortran code it reimplements, on the same machine, on the same input, with both
 restricted to one core.
 
 Single core on both sides is what makes the comparison mean anything. QE is
 built serial here (``configure --disable-parallel --disable-openmp``) and run
-with ``OMP_NUM_THREADS=1``; pypresso is run with XLA's intra-op thread pool
+with ``OMP_NUM_THREADS=1``; defumat is run with XLA's intra-op thread pool
 pinned to one thread, since otherwise JAX quietly uses every core and the
 comparison flatters it by the core count.
 
@@ -23,7 +23,7 @@ Usage::
     cd quantum_espresso/qe-7.5-ReleasePack/qe-7.5
     ./configure --disable-parallel --disable-openmp && make -j pw
 
-The three timings reported for pypresso are separate on purpose:
+The three timings reported for defumat are separate on purpose:
 
 * **setup** is everything done once per calculation -- basis, projectors, local
   potential, Ewald, symmetry -- and on a first run it is mostly XLA compiling.
@@ -54,12 +54,12 @@ _SINGLE_CORE = {
     "OMP_NUM_THREADS": "1",
     "MKL_NUM_THREADS": "1",
     "OPENBLAS_NUM_THREADS": "1",
-    "PYPRESSO_THREADS": "1",
+    "DEFUMAT_THREADS": "1",
 }
 
-if os.environ.get("PYPRESSO_PINNED") != "1":
+if os.environ.get("DEFUMAT_PINNED") != "1":
     os.environ.update(_SINGLE_CORE)
-    os.environ["PYPRESSO_PINNED"] = "1"
+    os.environ["DEFUMAT_PINNED"] = "1"
     os.execv(sys.executable, [sys.executable, *sys.argv])
 
 if hasattr(os, "sched_setaffinity"):
@@ -101,7 +101,7 @@ def run_qe(input_path: Path, pw_x: Path, repeats: int) -> dict:
     QE prints the wall time of every routine it instruments, so there is nothing
     to instrument here: the numbers below are QE's, not a stopwatch around it.
     ``total`` is the process wall time all the same, because that is what is
-    comparable to a stopwatch around pypresso.
+    comparable to a stopwatch around defumat.
     """
     if not pw_x.exists():
         raise SystemExit(
@@ -160,20 +160,20 @@ def _parse_qe(output: str) -> dict:
     }
 
 
-# --------------------------------------------------------------------- pypresso
+# --------------------------------------------------------------------- defumat
 
 
-def run_pypresso(input_path: Path, repeats: int, conv_thr: float) -> dict:
+def run_defumat(input_path: Path, repeats: int, conv_thr: float) -> dict:
     """Set up and run the same input, timing setup, cold SCF and warm SCF.
 
     ``conv_thr`` is read from the input's ``&electrons`` namelist so that both
-    codes are asked to converge to the same place; pypresso does not yet take it
+    codes are asked to converge to the same place; defumat does not yet take it
     from the input file itself.
     """
-    from pypresso.io.pwin import read_pw_input
-    from pypresso.pseudo import read_upf
-    from pypresso.scf.driver import Calculation, run_scf
-    from pypresso.system import build_system
+    from defumat.io.pwin import read_pw_input
+    from defumat.pseudo import read_upf
+    from defumat.scf.driver import Calculation, run_scf
+    from defumat.system import build_system
 
     system = build_system(read_pw_input(input_path))
     pseudos = tuple(read_upf(PSEUDO_DIR / s.pseudo_file) for s in system.structure.species)
@@ -224,7 +224,7 @@ def report(name: str, qe: dict, ours: dict) -> None:
     cores = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else ["?"]
     print(f"  single core: both codes pinned to CPU {cores}, OMP_NUM_THREADS=1")
     print()
-    print(f"  {'':22s} {'QE 7.5':>10s} {'pypresso':>10s} {'ratio':>8s}")
+    print(f"  {'':22s} {'QE 7.5':>10s} {'defumat':>10s} {'ratio':>8s}")
     print(f"  {'-' * 52}")
     print(f"  {'setup / init_run':22s} {qe['init']:9.3f}s {ours['setup']:9.3f}s "
           f"{_ratio(ours['setup'], qe['init'])}")
@@ -240,7 +240,7 @@ def report(name: str, qe: dict, ours: dict) -> None:
     print(f"  {'  (iterations)':22s} {qe['iterations']:9d}  {ours['iterations']:9d}")
     print(f"  {'total process wall':22s} {qe['total']:9.3f}s {'-':>10s}")
     print()
-    print(f"  total energy  QE {qe['energy']:.8f} Ry   pypresso {ours['energy']:.8f} Ry"
+    print(f"  total energy  QE {qe['energy']:.8f} Ry   defumat {ours['energy']:.8f} Ry"
           f"   delta {abs(qe['energy'] - ours['energy']):.2e} Ry")
     print()
 
@@ -257,7 +257,7 @@ def main() -> None:
         raise SystemExit("neither pw.x nor a Fortran compiler is available")
 
     qe = run_qe(arguments.input, arguments.pw_x, arguments.repeats)
-    ours = run_pypresso(arguments.input, arguments.repeats, _conv_thr(arguments.input))
+    ours = run_defumat(arguments.input, arguments.repeats, _conv_thr(arguments.input))
     report(arguments.input.name, qe, ours)
 
 

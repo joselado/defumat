@@ -40,7 +40,7 @@ Laplacian and never sets $c$, so what it runs under that name is Becke-Johnson.
 import warnings
 from pathlib import Path
 
-from pypresso import Calculator
+from defumat import Calculator
 
 # The TB09 runs emit two warnings, both quoted just below; silenced by name here
 # so that what this notebook prints is its numbers.
@@ -83,8 +83,8 @@ the density itself sets, rather than one applied by hand.
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso.system.kpoints import KPoints
-from pypresso.units import RY_TO_EV
+from defumat.system.kpoints import KPoints
+from defumat.units import RY_TO_EV
 
 FCC = {"L": (.5, .5, .5), "G": (0., 0., 0.), "X": (0., 0., 1.),
        "W": (.5, 0., 1.), "K": (.75, .75, 0.)}

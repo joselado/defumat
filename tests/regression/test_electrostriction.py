@@ -3,7 +3,7 @@
 The phase has four pieces and each is checked against something that shares no
 machinery with it:
 
-* **the strain response** (:mod:`pypresso.response.strain`) against a central
+* **the strain response** (:mod:`defumat.response.strain`) against a central
   difference of a *re-converged* SCF at the same frozen sphere. The analytic
   route is a ``jvp`` through ``at_strain`` plus a projected CG solve; the
   reference re-runs the whole SCF loop at ``+-h``, so the two share only the
@@ -14,7 +14,7 @@ machinery with it:
   terms where the assembly has one -- and at the stationary point they are equal
   identically. It is the sharpest cheap check in the phase, and it is what found
   that the SCF's wavefunctions are eigenvectors of the *previous* iteration's
-  Hamiltonian (:func:`~pypresso.response.electrostriction.refined_states`).
+  Hamiltonian (:func:`~defumat.response.electrostriction.refined_states`).
 * **the cubic form of ``d(chi)/dx``**. Nothing here imposes the crystal class:
   the k-grid is unshifted and closed under the point group, and no average is
   applied anywhere. So the components a cubic crystal forbids are a measurement
@@ -38,18 +38,18 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.response.electrostriction import (
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.response.electrostriction import (
     _compliance_tensor,
     _epsilon_at,
     _project_conduction,
     electrostriction,
     refined_states,
 )
-from pypresso.response.strain import strain_response, strain_tangent
-from pypresso.scf import Calculation, run_scf
-from pypresso.system import build_system
+from defumat.response.strain import strain_response, strain_tangent
+from defumat.scf import Calculation, run_scf
+from defumat.system import build_system
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
@@ -251,7 +251,7 @@ def test_the_variational_energy_reproduces_the_dielectric_assembly():
     this fails by 7e-7 *relative* -- systematically, not as noise, and it does
     not shrink when the response's own thresholds are tightened.
     """
-    from pypresso.response.efield import dielectric_tensor
+    from defumat.response.efield import dielectric_tensor
 
     _, _, calculation, result, eigenvalues, psi = _converged("si-electrostriction")
     density = jnp.asarray(result.density)
@@ -289,7 +289,7 @@ def test_the_variational_energy_is_the_dielectric_assembly_with_a_moving_overlap
 
     The staircase they were found on: **21% -> 2.2e-3 -> 1.6e-4 -> 3.4e-10**.
     """
-    from pypresso.response.efield import dielectric_tensor
+    from defumat.response.efield import dielectric_tensor
 
     _, _, calculation, result, eigenvalues, psi = _converged(case)
     density = jnp.asarray(result.density)
@@ -341,7 +341,7 @@ def test_the_third_derivative_matches_a_finite_difference(component):
     ``at_strain`` rather than rebuilding a cell -- so what is compared is the
     response, not the basis-set jump.
     """
-    from pypresso.response.efield import dielectric_tensor
+    from defumat.response.efield import dielectric_tensor
 
     step = 3e-3
     a, b = component
@@ -502,7 +502,7 @@ def test_the_wedge_reproduces_the_closed_grid():
     ``d(eps)/d(strain)`` carries **four** cartesian labels, so a Brillouin-zone
     sum over the irreducible wedge is incomplete in all four and the tensor has
     to be averaged over the point group afterwards
-    (:func:`~pypresso.system.symmetry.symmetrize_cartesian_tensor`, which is
+    (:func:`~defumat.system.symmetry.symmetrize_cartesian_tensor`, which is
     ``symmatrix3`` at whatever rank the object has -- rank 4 is one QE has no
     counterpart for, because QE does not compute this tensor). Until P36 that
     average did not exist and the phase refused a reduced k-set by name.
@@ -530,7 +530,7 @@ def test_the_wedge_reproduces_the_closed_grid():
 def test_the_elastic_constants_are_still_refused_on_a_wedge():
     """The refusal P36 did **not** lift, and it is a different one.
 
-    :func:`~pypresso.response.elastic.elastic_constants` has to let the energy
+    :func:`~defumat.response.elastic.elastic_constants` has to let the energy
     functional build its own density, so that its gradient is the stress rather
     than a partial derivative at fixed ``rho`` -- and the functional symmetrises
     that density as a *scalar*, which a response must not go through. No average

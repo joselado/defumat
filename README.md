@@ -1,4 +1,4 @@
-# pypresso
+# defumat
 
 A plane-wave density-functional theory code written in Python, which reads
 Quantum ESPRESSO's input files and reproduces its numbers.
@@ -9,7 +9,7 @@ it runs the calculation itself.
 
 ```
 total energy   QE  -63.36038036 Ry
-          pypresso  -63.36038036 Ry
+          defumat  -63.36038036 Ry
 ```
 
 That is an eight-atom silicon cell, agreeing to 3.5e-9 Ry. The agreement is
@@ -41,19 +41,19 @@ drive any of this and is what the examples below use.
 |---|---|:-:|:-:|
 | **Total energies**, self-consistently, broken down term by term — insulators and metals alike | `calculation = 'scf'` | ✓ | ✓ |
 | **Band structures** along a path through the Brillouin zone | `run_bands` | ✓ | ✓ |
-| **Densities of states**, by smearing or by tetrahedra | `run_dos`, `pypresso dos` | ✓ | ✓ |
-| **Projected densities of states** — resolved by atom, by `l` and by `m`, with Löwdin charges and the spilling parameter | `run_pdos`, `pypresso pdos` | ✓ | ✓ |
+| **Densities of states**, by smearing or by tetrahedra | `run_dos`, `defumat dos` | ✓ | ✓ |
+| **Projected densities of states** — resolved by atom, by `l` and by `m`, with Löwdin charges and the spilling parameter | `run_pdos`, `defumat pdos` | ✓ | ✓ |
 | **Forces on the atoms** — unpolarized, collinear spin and noncollinear/spin-orbit, on norm-conserving, ultrasoft and PAW. For a spinor the hand-derived cross-check has no counterpart and `method='analytic'` is refused | `compute_forces` | ✓ | ✓ |
-| **Structural relaxation** — the atoms moved downhill to their equilibrium positions | `calculation = 'relax'`, `pypresso relax` | ✓ | ✓ |
+| **Structural relaxation** — the atoms moved downhill to their equilibrium positions | `calculation = 'relax'`, `defumat relax` | ✓ | ✓ |
 | **Variable-cell relaxation** — the cell and the atoms relaxed together, at an applied pressure | `calculation = 'vc-relax'`, `run_vc_relax` | ✓ | ✓ |
-| **Stress tensor and pressure**, in Ry/bohr³ and kbar — the same three spin regimes as the force | `tstress = .true.`, `compute_stress`, `pypresso stress` | ✓ | ✓ |
+| **Stress tensor and pressure**, in Ry/bohr³ and kbar — the same three spin regimes as the force | `tstress = .true.`, `compute_stress`, `defumat stress` | ✓ | ✓ |
 | **Magnetism**, collinear, with one Fermi level or two | `nspin = 2`, `tot_magnetization` | ✓ | ✓ |
 | **Magnetism as a vector** — noncollinear, with the magnetic symmetry group | `noncolin` | ✓ | ✓ |
 | **Spin-orbit coupling**, two-component spinors and `j`-resolved projectors | `lspinorb` | ✓ | ✓ |
 | **Magnetic fields and constrained moments** — a uniform field, and four ways of holding a moment where you put it | `B_field`, `constrained_magnetization` | ✓ | ✓ |
 | **Magnetic fields inside one atom's sphere**, and a field that fades away as the run converges | `LOCAL_MAGNETIC_FIELDS` card, `reducebf`, `constrained_magnetization = 'fsm'` | | ✓ |
 | **DFT+U** — Dudarev's functional with `U`, `J0`, `alpha`, `beta`. The full Liechtenstein form, the intersite `V` and noncollinear `ns` are refused by name | `HUBBARD` card, `run_scf(starting_ns=...)` | ✓ | ✓ |
-| **Spin spirals** at any wavevector, without a supercell. Needs `nosym`; ultrasoft, PAW and spin-orbit coupling are refused | `spiral_q`, `pypresso spiral` | | ✓ |
+| **Spin spirals** at any wavevector, without a supercell. Needs `nosym`; ultrasoft, PAW and spin-orbit coupling are refused | `spiral_q`, `defumat spiral` | | ✓ |
 | **Relaxing the spiral wavevector** down `dE/dq` to the ground-state pitch | `relax_spiral_q` | | |
 | **Berry curvature and Chern numbers** — exact integers on any mesh, and a smooth `Omega(k)` map with the truncation of its band sum reported | `run_berry_curvature`, `method="kubo"` for the map | | |
 | **Z2 invariants** in 2D and 3D, by Wannier charge centres *and* by parities | `run_z2`, `run_z2_3d` | | |
@@ -159,8 +159,8 @@ the detail. Source is `docs/features.tex`; rebuild with
 ## Installing
 
 ```bash
-git clone https://github.com/joselado/pypresso
-cd pypresso
+git clone https://github.com/joselado/defumat
+cd defumat
 pip install -e .
 ```
 
@@ -172,7 +172,7 @@ and `pip` will fetch them.
 Silicon, from the input file in `benchmarks/`:
 
 ```python
-from pypresso import Calculator
+from defumat import Calculator
 
 calc = Calculator.from_file("benchmarks/si-1k.in", pseudo_dir="tests/data/pseudo")
 result = calc.get_scf()
@@ -217,7 +217,7 @@ that manages its own state.
 Carrying on from the density that SCF converged:
 
 ```python
-from pypresso.system.kpoints import KPoints
+from defumat.system.kpoints import KPoints
 
 path = KPoints.band_path(
     [[0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],   # L - Gamma - X

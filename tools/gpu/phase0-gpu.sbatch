@@ -6,7 +6,7 @@
 # GPU.md's five checks, and writes one JSON per (case, dial setting).
 #
 # Its pair is phase0-cpu.sbatch, which runs the SAME script on a CPU node.
-# That is deliberate and is §2.3's metric: GPU pypresso against CPU pypresso,
+# That is deliberate and is §2.3's metric: GPU defumat against CPU defumat,
 # same input, same code. CPU-only work is not run on a GPU partition.
 #
 # ---- the #SBATCH values, and why each one ----
@@ -22,24 +22,24 @@
 # time        25 min inside gpu-debug's 30. The six invocations below cost about
 #             two CPU minutes of arithmetic; the rest of the budget is compilation,
 #             which on a first GPU run is the unknown.
-# cpus-per-task 4, matching phase0-cpu.sbatch exactly. pypresso narrows its own
+# cpus-per-task 4, matching phase0-cpu.sbatch exactly. defumat narrows its own
 #             affinity mask to four CPUs on import and only ever narrows
 #             (PERFORMANCE.md: four is the measured optimum, 1.7x over the
 #             default), so both sides get the same host-side threading and the
 #             GPU number is not flattered or penalised by it.
 # mem         32G host memory. Device memory is the constraint that matters and
 #             is measured, not requested.
-#SBATCH --job-name=pypresso-gpu-phase0
+#SBATCH --job-name=defumat-gpu-phase0
 #SBATCH --partition=gpu-debug
 #SBATCH --time=00:25:00
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --output=/scratch/work/ladovj1/calculations/pypresso-gpu/out/gpu-%j.out
-#SBATCH --error=/scratch/work/ladovj1/calculations/pypresso-gpu/out/gpu-%j.err
+#SBATCH --output=/scratch/work/ladovj1/calculations/defumat-gpu/out/gpu-%j.out
+#SBATCH --error=/scratch/work/ladovj1/calculations/defumat-gpu/out/gpu-%j.err
 
-WORK=/scratch/work/ladovj1/calculations/pypresso-gpu
-REPO=/scratch/work/ladovj1/apps/pypresso
+WORK=/scratch/work/ladovj1/calculations/defumat-gpu
+REPO=/scratch/work/ladovj1/apps/defumat
 mkdir -p "$WORK/out" "$WORK/cache-gpu"
 cd "$REPO" || exit 1
 
@@ -65,9 +65,9 @@ unset XLA_PYTHON_CLIENT_PREALLOCATE
 
 export MKL_NUM_THREADS=1
 export OMP_NUM_THREADS=1
-export PYPRESSO_CACHE_DIR="$WORK/cache-gpu"
+export DEFUMAT_CACHE_DIR="$WORK/cache-gpu"
 # The venv is isolated, so this is the only thing that makes the
-# checkout importable; pypresso is deliberately not pip-installed into
+# checkout importable; defumat is deliberately not pip-installed into
 # it, so the code that runs is the checkout at the commit logged below.
 export PYTHONPATH="$REPO"
 

@@ -2,8 +2,8 @@
 # GPU.md Phase 0, CPU half: the baseline the GPU number is quoted against.
 #
 # This is the SAME driver on the SAME cases at the SAME dial settings as
-# phase0-gpu.sbatch. That is the entire point of §2.3's metric -- GPU pypresso
-# against CPU pypresso, same input, same code -- and it is why the two halves
+# phase0-gpu.sbatch. That is the entire point of §2.3's metric -- GPU defumat
+# against CPU defumat, same input, same code -- and it is why the two halves
 # are one script run twice rather than two scripts.
 #
 # It is a separate job because CPU-only work does not belong on a GPU
@@ -26,21 +26,21 @@
 #             (al10-metal at k_batch=all was measured at 2.2x the loop on the
 #             development workstation) and this side has no device to make them
 #             cheap. Still far inside the partition's limit.
-# cpus-per-task 4, and this is the stated core count. pypresso narrows its own
+# cpus-per-task 4, and this is the stated core count. defumat narrows its own
 #             affinity mask to four CPUs on import and only ever narrows, so the
 #             scheduler's allocation is what it gets; four is also the measured
 #             optimum (PERFORMANCE.md: 1.7x over XLA's every-core default, and
 #             8 and 14 cores are both worse than 1).
-#SBATCH --job-name=pypresso-cpu-phase0
+#SBATCH --job-name=defumat-cpu-phase0
 #SBATCH --partition=batch-milan
 #SBATCH --time=00:40:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --output=/scratch/work/ladovj1/calculations/pypresso-gpu/out/cpu-%j.out
-#SBATCH --error=/scratch/work/ladovj1/calculations/pypresso-gpu/out/cpu-%j.err
+#SBATCH --output=/scratch/work/ladovj1/calculations/defumat-gpu/out/cpu-%j.out
+#SBATCH --error=/scratch/work/ladovj1/calculations/defumat-gpu/out/cpu-%j.err
 
-WORK=/scratch/work/ladovj1/calculations/pypresso-gpu
-REPO=/scratch/work/ladovj1/apps/pypresso
+WORK=/scratch/work/ladovj1/calculations/defumat-gpu
+REPO=/scratch/work/ladovj1/apps/defumat
 mkdir -p "$WORK/out" "$WORK/cache-cpu"
 cd "$REPO" || exit 1
 
@@ -52,9 +52,9 @@ source "$WORK/venv/bin/activate"
 # GPU.md flags as unverified on this filesystem. One writer each, no question.
 export MKL_NUM_THREADS=1
 export OMP_NUM_THREADS=1
-export PYPRESSO_CACHE_DIR="$WORK/cache-cpu"
+export DEFUMAT_CACHE_DIR="$WORK/cache-cpu"
 # The venv is isolated, so this is the only thing that makes the
-# checkout importable; pypresso is deliberately not pip-installed into
+# checkout importable; defumat is deliberately not pip-installed into
 # it, so the code that runs is the checkout at the commit logged below.
 export PYTHONPATH="$REPO"
 export JAX_PLATFORMS=cpu   # a CPU node has no device; say so rather than discover it

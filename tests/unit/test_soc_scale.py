@@ -21,8 +21,8 @@ kinds of object it has to act on**. That is the whole content of this file:
 import numpy as np
 import pytest
 
-from pypresso.pseudo import read_upf
-from pypresso.pseudo.spinorbit import SpinOrbitCoupling, spin_trace
+from defumat.pseudo import read_upf
+from defumat.pseudo.spinorbit import SpinOrbitCoupling, spin_trace
 from tests.conftest import GENERATED
 
 pytestmark = [pytest.mark.unit]
@@ -126,7 +126,7 @@ def test_spin_trace_is_idempotent_and_kills_the_traceless_part():
 
 def test_the_system_carries_it_without_moving_the_k_points():
     """Two ``soc_scale`` must be sampled identically or the law is unmeasurable."""
-    from pypresso.system.builder import system_from_file
+    from defumat.system.builder import system_from_file
 
     system = system_from_file(GENERATED / "co-slab-forcetheorem-par.in")
     assert system.soc_scale == 1.0

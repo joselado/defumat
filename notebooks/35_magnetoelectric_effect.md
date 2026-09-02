@@ -18,7 +18,7 @@ after it is the reason to believe it.
 ```python
 from pathlib import Path
 import numpy as np
-from pypresso import Calculator
+from defumat import Calculator
 
 PSEUDO, CASES = Path("../tests/data/pseudo"), Path("../tests/data/qe")
 

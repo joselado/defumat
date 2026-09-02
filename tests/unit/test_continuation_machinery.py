@@ -14,10 +14,10 @@ from functools import lru_cache
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import Calculation, SCFResult
-from pypresso.scf.continuation import (
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import Calculation, SCFResult
+from defumat.scf.continuation import (
     ContinuedState,
     continued_state,
     from_spin_components,
@@ -25,7 +25,7 @@ from pypresso.scf.continuation import (
     promote_wavefunctions,
     spin_components,
 )
-from pypresso.system import build_system
+from defumat.system import build_system
 from tests.conftest import QE_ROOT
 
 pytestmark = pytest.mark.unit
@@ -476,7 +476,7 @@ def test_with_spin_refuses_what_the_input_reader_refuses():
 
 
 def test_continued_state_can_be_handed_to_run_scf_only_on_its_own():
-    from pypresso.scf import run_scf
+    from defumat.scf import run_scf
 
     with pytest.raises(ValueError, match="two states at once"):
         run_scf(_silicon(), (read_upf(PSEUDO),),

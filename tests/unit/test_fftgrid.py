@@ -3,13 +3,13 @@
 import numpy as np
 import pytest
 
-from pypresso.basis.fftgrid import (
+from defumat.basis.fftgrid import (
     allowed_fft_size,
     fft_grid_dimensions,
     gcut_from_ecut,
     good_fft_order,
 )
-from pypresso.system.cell import Cell
+from defumat.system.cell import Cell
 
 pytestmark = pytest.mark.unit
 

@@ -9,17 +9,17 @@
 #
 # Ordered so the single-core runs finish first: they are the comparison, and a
 # 128-atom serial run at 30 Ry is the one that could overrun.
-#SBATCH --job-name=pypresso-h200-ladder-cpu
+#SBATCH --job-name=defumat-h200-ladder-cpu
 #SBATCH --partition=batch-milan
 #SBATCH --time=08:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=32
 #SBATCH --mem=192G
-#SBATCH --output=/scratch/work/ladovj1/calculations/pypresso-gpu/out/h200ladcpu-%j.out
-#SBATCH --error=/scratch/work/ladovj1/calculations/pypresso-gpu/out/h200ladcpu-%j.err
+#SBATCH --output=/scratch/work/ladovj1/calculations/defumat-gpu/out/h200ladcpu-%j.out
+#SBATCH --error=/scratch/work/ladovj1/calculations/defumat-gpu/out/h200ladcpu-%j.err
 
-WORK=/scratch/work/ladovj1/calculations/pypresso-gpu
-REPO=/scratch/work/ladovj1/apps/pypresso
+WORK=/scratch/work/ladovj1/calculations/defumat-gpu
+REPO=/scratch/work/ladovj1/apps/defumat
 RUN="$WORK/lad-$SLURM_JOB_ID"
 mkdir -p "$WORK/out" "$RUN"
 cd "$RUN" || exit 1

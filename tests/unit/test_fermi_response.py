@@ -16,7 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.scf.occupations import _wgauss_prime, bisect_fermi, w0gauss
+from defumat.scf.occupations import _wgauss_prime, bisect_fermi, w0gauss
 
 SMEARINGS = [(0, "gaussian"), (1, "methfessel-paxton"), (-1, "cold"), (-99, "fermi-dirac")]
 

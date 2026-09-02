@@ -22,12 +22,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.basis.fft import g_to_r
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import Calculation
-from pypresso.system import build_system
-from pypresso.system.symmetry import atom_mapping, symmetrize_atom_pair_tensor
+from defumat.basis.fft import g_to_r
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import Calculation
+from defumat.system import build_system
+from defumat.system.symmetry import atom_mapping, symmetrize_atom_pair_tensor
 
 pytestmark = pytest.mark.unit
 

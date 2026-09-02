@@ -22,8 +22,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.io import read_qe_output
+from defumat import Calculator
+from defumat.io import read_qe_output
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_scf")
 PSEUDO = Path("../tests/data/pseudo")
@@ -184,7 +184,7 @@ rows = [
      str(tuple(int(n) for n in reference.npw))),
     ("k-points", kpoints.nk, len(reference.kpoints)),
 ]
-print("%-28s %-18s %-18s" % ("quantity", "pypresso", "Quantum ESPRESSO"))
+print("%-28s %-18s %-18s" % ("quantity", "defumat", "Quantum ESPRESSO"))
 for name, ours, theirs in rows:
     print("%-28s %-18s %-18s %s" % (name, ours, theirs,
                                     "OK" if str(ours) == str(theirs) else "MISMATCH"))
@@ -196,7 +196,7 @@ print("k-points match:        ",
       np.allclose(np.asarray(kpoints.coords), reference.kpoints, atol=1e-6))
 ```
 
-    quantity                     pypresso           Quantum ESPRESSO  
+    quantity                     defumat           Quantum ESPRESSO  
     lattice parameter (bohr)     10.200000          10.200000          OK
     cell volume (bohr^3)         265.3020           265.3020           OK
     G-vectors (dense)            1459               1459               OK

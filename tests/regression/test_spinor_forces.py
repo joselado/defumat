@@ -1,6 +1,6 @@
 """P46 check: the force and the stress of a noncollinear or spin-orbit run.
 
-The functional in :mod:`pypresso.forces.energy` grew a spinor branch, so
+The functional in :mod:`defumat.forces.energy` grew a spinor branch, so
 ``noncolin = .true.`` -- with or without ``lspinorb`` -- has forces, a stress
 and therefore a relaxation, where it had a refusal. What changed is two
 quadratic forms and a layout, and this file is arranged around measuring them
@@ -54,15 +54,15 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from pypresso.forces import compute_forces
-from pypresso.forces.energy import energy_at, state_from_result
-from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import Calculation, run_scf
-from pypresso.stress import compute_stress
-from pypresso.system import build_system
-from pypresso.workflows.relax import run_relax
+from defumat.forces import compute_forces
+from defumat.forces.energy import energy_at, state_from_result
+from defumat.io import read_qe_output
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import Calculation, run_scf
+from defumat.stress import compute_stress
+from defumat.system import build_system
+from defumat.workflows.relax import run_relax
 from tests.tolerances import FORCE_RY_BOHR, STRESS_RY_BOHR3, TOTAL_ENERGY_RY
 
 #: How close the two relaxed atoms must come to being half a cell apart, in
@@ -164,7 +164,7 @@ def test_the_frozen_energy_is_the_total_energy_on_platinum(stem, qe_testsuite, p
 def test_the_force_is_a_finite_difference_of_the_frozen_energy(pseudo_dir):
     """The anchor that shares nothing with `pw.x`, on the ``nosym`` chain.
 
-    A central difference of :func:`~pypresso.forces.energy.energy_at` under a
+    A central difference of :func:`~defumat.forces.energy.energy_at` under a
     displacement, against ``jax.grad`` of the same function. It isolates the
     gradient from the symmetrisation, the translation correction and QE's
     ``force_corr`` all at once, which is why it comes before the reference

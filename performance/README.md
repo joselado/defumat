@@ -21,7 +21,7 @@ python3 performance/run_performance.py --from-json               # re-typeset, n
 
 ## What it measures, and why that way
 
-The project's metric is **single-core pypresso against single-core Quantum
+The project's metric is **single-core defumat against single-core Quantum
 ESPRESSO, same machine, same input, same `conv_thr`** — see `PERFORMANCE.md` for
 the running commentary and `tools/compare_qe.py` for the measurement itself,
 which this script drives and typesets.
@@ -44,7 +44,7 @@ which this script drives and typesets.
 The benchmark inputs are **single k-point on purpose**: both codes parallelise
 over k, so a multi-k comparison measures batching rather than the cost of the
 physics. How many k-points this code holds at once is a separate axis with its
-own measurement — `pypresso/batching.py`, and the k-axis section of
+own measurement — `defumat/batching.py`, and the k-axis section of
 `PERFORMANCE.md`.
 
 ## Requirements
@@ -62,7 +62,7 @@ runs, or re-run on the machine that matters.
 ## `gpu-sweep.*` — the GPU report
 
 A second, hand-run report beside the single-core one, and **a different metric**:
-pypresso on one GPU against Quantum ESPRESSO on one CPU core, across twelve
+defumat on one GPU against Quantum ESPRESSO on one CPU core, across twelve
 cases spanning the pseudopotential kinds, a GGA, a metal, collinear and
 noncollinear magnetism, spin-orbit coupling and DFT+U, at 10-40 atoms.
 

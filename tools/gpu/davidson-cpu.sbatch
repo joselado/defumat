@@ -3,7 +3,7 @@
 # against, on a *stated* core count.
 #
 # The SAME script on the SAME cases as davidson-gpu.sbatch, for §2.3's reason:
-# GPU pypresso against CPU pypresso, same input, same code, and a separate job
+# GPU defumat against CPU defumat, same input, same code, and a separate job
 # because CPU-only work does not belong on a GPU partition.
 #
 # It carries a second deliverable that needs no card. The three candidates
@@ -23,26 +23,26 @@
 # time        06:00:00, twice the GPU half: the SCF each profile needs first has
 #             no device to make it cheap, and si64-1k-ecut30 on four cores is
 #             the case that sets this budget. Each case carries its own timeout.
-# cpus-per-task 4, the stated core count, matching davidson-gpu.sbatch. pypresso
+# cpus-per-task 4, the stated core count, matching davidson-gpu.sbatch. defumat
 #             narrows its own affinity mask to four on import and only narrows.
 # mem         120G, matching the GPU half. This is the ground state; no
 #             reverse-mode tape is taken here.
-#SBATCH --job-name=pypresso-cpu-davidson
+#SBATCH --job-name=defumat-cpu-davidson
 #SBATCH --partition=batch-milan
 #SBATCH --time=06:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=120G
-#SBATCH --output=/scratch/work/ladovj1/calculations/pypresso-gpu/out/cpu-davidson-%j.out
-#SBATCH --error=/scratch/work/ladovj1/calculations/pypresso-gpu/out/cpu-davidson-%j.err
+#SBATCH --output=/scratch/work/ladovj1/calculations/defumat-gpu/out/cpu-davidson-%j.out
+#SBATCH --error=/scratch/work/ladovj1/calculations/defumat-gpu/out/cpu-davidson-%j.err
 
-WORK=/scratch/work/ladovj1/calculations/pypresso-gpu
-REPO=/scratch/work/ladovj1/apps/pypresso
+WORK=/scratch/work/ladovj1/calculations/defumat-gpu
+REPO=/scratch/work/ladovj1/apps/defumat
 mkdir -p "$WORK/out" "$WORK/cache-cpu"
 cd "$REPO" || exit 1
 source "$WORK/venv/bin/activate"
 
 export MKL_NUM_THREADS=1 OMP_NUM_THREADS=1
-export PYPRESSO_CACHE_DIR="$WORK/cache-cpu"
+export DEFUMAT_CACHE_DIR="$WORK/cache-cpu"
 export PYTHONPATH="$REPO"
 export JAX_PLATFORMS=cpu   # a CPU node has no device; say so rather than discover it
 

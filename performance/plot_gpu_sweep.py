@@ -47,7 +47,7 @@ def figure():
     left.set_xscale("log")
     left.set_xlim(1.0, 260.0)
     left.axvline(1.0, color="black", lw=1.0)
-    left.set_xlabel("pypresso on one H200  /  Quantum ESPRESSO on one CPU core\n"
+    left.set_xlabel("defumat on one H200  /  Quantum ESPRESSO on one CPU core\n"
                     "(per SCF iteration, log scale)", fontsize=9)
     for yi, value in zip(y, ratio):
         left.text(value * 1.10, yi, f"{value:.1f}x", va="center", fontsize=8.5)
@@ -65,26 +65,26 @@ def figure():
                   c=colours, s=64, edgecolor="black", linewidth=0.5, zorder=3)
     right.set_yscale("log")
     right.set_xlabel("atoms in the cell", fontsize=9)
-    right.set_ylabel(r"$|E_{\rm pypresso} - E_{\rm QE}|$  per atom  (Ry)", fontsize=9)
+    right.set_ylabel(r"$|E_{\rm defumat} - E_{\rm QE}|$  per atom  (Ry)", fontsize=9)
     right.set_title("Agreement with Quantum ESPRESSO", fontsize=11, pad=8)
     right.axhline(1e-9, color="grey", ls="--", lw=0.9)
     right.text(41, 1.25e-9, "1e-9 Ry/atom", fontsize=8, color="grey", ha="right")
     right.grid(ls=":", lw=0.6, alpha=0.6)
     right.set_axisbelow(True)
-    # The two bismuth points are a *known* pypresso discrepancy, not a GPU one --
+    # The two bismuth points are a *known* defumat discrepancy, not a GPU one --
     # labelling them is the difference between a plot and a misleading plot.
     for c, value in zip(cases, per_atom):
         if c["group"] == "spin-orbit":
             right.annotate(c["case"], (c["nat"], value), textcoords="offset points",
                            xytext=(6, -4), fontsize=8, color="#C44E52")
-    right.annotate("bismuth: a pre-existing pypresso/QE\n"
+    right.annotate("bismuth: a pre-existing defumat/QE\n"
                    "difference (PLAN.md), reproduced\n"
                    "by the GPU rather than caused by it",
                    xy=(20, per_atom[-1]), xytext=(11, 2.0e-7),
                    fontsize=7.6, color="#C44E52",
                    arrowprops=dict(arrowstyle="->", color="#C44E52", lw=0.8))
 
-    fig.suptitle("pypresso on a GPU against Quantum ESPRESSO on one CPU core — "
+    fig.suptitle("defumat on a GPU against Quantum ESPRESSO on one CPU core — "
                  f"{len(cases)} cases, conv_thr = {DATA['meta']['conv_thr']}",
                  fontsize=12.5, y=0.985)
     fig.tight_layout(rect=(0, 0, 1, 0.95))

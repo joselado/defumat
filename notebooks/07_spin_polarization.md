@@ -16,7 +16,7 @@ The two channels see different potentials,
 $v_{xc}^\sigma = \delta E_{xc}[n_\uparrow, n_\downarrow] / \delta n_\sigma$, and that
 difference is the whole of band magnetism.
 
-| against `pw.x` | pypresso | `pw.x` |
+| against `pw.x` | defumat | `pw.x` |
 |---|---|---|
 | fcc nickel, total energy | **-85.723399012 Ry** | -85.72339901, 1.9e-9 apart |
 | its magnetization | **0.7280 $\mu_B$** | 0.73, the two decimals it prints |
@@ -34,8 +34,8 @@ higher one.
 import warnings
 from pathlib import Path
 
-from pypresso import Calculator
-from pypresso.units import RY_TO_EV
+from defumat import Calculator
+from defumat.units import RY_TO_EV
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite")
 CASES, PSEUDO = Path("../tests/data/qe"), Path("../tests/data/pseudo")
@@ -68,7 +68,7 @@ bands and there is no level left to search for.
 
 
 ```python
-from pypresso.io import read_qe_output
+from defumat.io import read_qe_output
 
 oxygen = Calculator.from_file(QE / "pw_atom" / "atom-lsda.in", pseudo_dir=PSEUDO,
                               announce=False, conv_thr=1e-10)   # the input sets none
@@ -105,7 +105,7 @@ moment. This is the Stoner picture, and nickel is its standard illustration.
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso.system.kpoints import KPoints
+from defumat.system.kpoints import KPoints
 
 PATH = np.array([[0.5, 0.25, 0.75], [0.5, 0.5, 0.5], [0.0, 0.0, 0.0],
                  [0.0, 0.0, 1.0], [0.5, 0.25, 0.75], [0.375, 0.375, 0.75]])

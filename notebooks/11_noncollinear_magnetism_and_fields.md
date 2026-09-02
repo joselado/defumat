@@ -27,7 +27,7 @@ $$E_{\rm pen} = \lambda \sum_I \big(\mathbf m_I - \mathbf m^{\rm fix}_I\big)^2,
 
 On bcc iron, and on the constrained-moment cells QE ships:
 
-| | pypresso | `pw.x` |
+| | defumat | `pw.x` |
 |---|---|---|
 | bcc iron, LDA | **-55.69968434 Ry** | -55.69968434 |
 | bcc iron, PBE | **-55.939445673 Ry** | -55.939445670 |
@@ -41,8 +41,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.io import comparison_table, read_qe_output
+from defumat import Calculator
+from defumat.io import comparison_table, read_qe_output
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_noncolin")
 PSEUDO, REFS = Path("../tests/data/pseudo"), Path("../tests/data/qe")
@@ -51,10 +51,10 @@ iron = Calculator.from_file(QE / "noncolin.in", pseudo_dir=PSEUDO, conv_thr=1e-1
 scf = iron.get_scf()
 qe = read_qe_output(REFS / "reference.out.pw_noncolin-noncolin")
 
-print(f"moment   pypresso {np.round(scf.magnetization_vector, 4)}   pw.x {qe.magnetization_vector}")
+print(f"moment   defumat {np.round(scf.magnetization_vector, 4)}   pw.x {qe.magnetization_vector}")
 ```
 
-    moment   pypresso [ 3.1763  0.     -0.    ]   pw.x (3.18, -0.0, -0.0)
+    moment   defumat [ 3.1763  0.     -0.    ]   pw.x (3.18, -0.0, -0.0)
 
 
 The moment came out along $x$, which is where the input put it, and with a
@@ -79,10 +79,10 @@ print(comparison_table(
     [(term, scf.energy_terms[term], value)
      for term, value in qe.energy_terms.items() if term in scf.energy_terms]
     + [("TOTAL", scf.total_energy, qe.total_energy)],
-    fmt="{:.8f}", headers=("term [Ry]", "pypresso", "pw.x", "difference")))
+    fmt="{:.8f}", headers=("term [Ry]", "defumat", "pw.x", "difference")))
 ```
 
-    term [Ry]         pypresso          pw.x  difference
+    term [Ry]         defumat          pw.x  difference
     one-electron    8.92933178    8.92932731     4.5e-06
     hartree         6.13361506    6.13359228     2.3e-05
     xc            -26.12190861  -26.12188165     2.7e-05
@@ -172,10 +172,10 @@ for name, scheme in (("noncolin-constrain_atomic", "atomic"),
     rows.append((scheme, result.total_energy, theirs.total_energy))
 
 print(comparison_table(rows, fmt="{:.8f}",
-                       headers=("scheme", "pypresso [Ry]", "pw.x", "difference")))
+                       headers=("scheme", "defumat [Ry]", "pw.x", "difference")))
 ```
 
-    scheme            pypresso [Ry]          pw.x  difference
+    scheme            defumat [Ry]          pw.x  difference
     atomic             -55.69055703  -55.69055687     1.6e-07
     atomic direction   -55.69968434  -55.69968434     2.7e-09
     total              -55.54266107  -55.54266124     1.7e-07

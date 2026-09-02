@@ -16,18 +16,18 @@ states *is* independently of any reference:
 import numpy as np
 import pytest
 
-from pypresso.projwfc.projections import PROJECTION_KINDS, atomic_projections
-from pypresso.projwfc.channels import (
+from defumat.projwfc.projections import PROJECTION_KINDS, atomic_projections
+from defumat.projwfc.channels import (
     L_LABELS,
     M_LABELS,
     channel_table,
     projection_channels,
 )
-from pypresso.pseudo import read_upf
-from pypresso.scf.tetrahedra import build_tetrahedra, tetrahedron_projected_dos
-from pypresso.system.kpoints import DEGSPIN, monkhorst_pack
-from pypresso.workflows.dos import compute_dos, energy_grid, get_dos_scheme
-from pypresso.workflows.pdos import lowdin_charges, partial_energy_grid
+from defumat.pseudo import read_upf
+from defumat.scf.tetrahedra import build_tetrahedra, tetrahedron_projected_dos
+from defumat.system.kpoints import DEGSPIN, monkhorst_pack
+from defumat.workflows.dos import compute_dos, energy_grid, get_dos_scheme
+from defumat.workflows.pdos import lowdin_charges, partial_energy_grid
 
 pytestmark = pytest.mark.unit
 
@@ -121,7 +121,7 @@ def test_the_projected_grid_is_one_point_longer_than_the_dos_grid():
 
 
 def test_silicons_channels_are_one_s_and_three_p_per_atom(pseudo_dir):
-    from pypresso.system.structure import Species, Structure
+    from defumat.system.structure import Species, Structure
 
     pseudo = read_upf(pseudo_dir / "Si.pz-vbc.UPF")
     structure = Structure(
@@ -155,7 +155,7 @@ def test_the_m_labels_are_ylmr2s_order():
 
 def test_lowdin_charges_use_the_weights_that_carry_the_k_point_weight(pseudo_dir):
     """``print_proj`` multiplies by ``wg``, which is ``w_k f_kb`` and not ``f``."""
-    from pypresso.system.structure import Species, Structure
+    from defumat.system.structure import Species, Structure
 
     pseudo = read_upf(pseudo_dir / "Si.pz-vbc.UPF")
     structure = Structure(

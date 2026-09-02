@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
-from pypresso.system.cell import Cell
-from pypresso.system.structure import Species, Structure
-from pypresso.units import BOHR_TO_ANGSTROM
+from defumat.system.cell import Cell
+from defumat.system.structure import Species, Structure
+from defumat.units import BOHR_TO_ANGSTROM
 
 pytestmark = pytest.mark.unit
 
@@ -81,9 +81,9 @@ def test_a_structure_card_written_in_fortran_double_literals():
     positions as ``0.0d0`` just as freely; every one of those went through a bare
     ``float()``, which accepts none of them.
     """
-    from pypresso.io.pwin import parse_pw_input
-    from pypresso.config import DEFAULT_PRECISION
-    from pypresso.system.builder import _build_structure
+    from defumat.io.pwin import parse_pw_input
+    from defumat.config import DEFAULT_PRECISION
+    from defumat.system.builder import _build_structure
 
     inp = parse_pw_input(
         "&system\n ibrav=2, celldm(1)=10.2, nat=2, ntyp=1\n/\n"

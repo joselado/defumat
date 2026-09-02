@@ -1,7 +1,7 @@
 # Performance log
 
 The measurement this project is judged by is **the same input through Quantum
-ESPRESSO and through pypresso, on this machine, with both restricted to one
+ESPRESSO and through defumat, on this machine, with both restricted to one
 core**. Everything else — component breakdowns, compilation counts, guesses
 about where time goes — is diagnosis in service of that one number.
 
@@ -11,7 +11,7 @@ python3 tools/compare_qe.py benchmarks/si-1k.in --repeats 5
 
 Single core on both sides is what makes the comparison mean anything. QE is
 built serial (`./configure --disable-parallel --disable-openmp && make -j pw`)
-and run with `OMP_NUM_THREADS=1`; pypresso runs with XLA's intra-op thread pool
+and run with `OMP_NUM_THREADS=1`; defumat runs with XLA's intra-op thread pool
 pinned to one thread, since otherwise JAX quietly uses all 14 cores and the
 comparison flatters it by the core count. The tool pins both itself.
 
@@ -39,7 +39,7 @@ Re-measured 2026-08-20 after the band axis became a dial ("The band a
 transform holds", below). The `before` column is the 2026-08-19 measurement it
 replaces, on the same machine and the same inputs.
 
-| | QE 7.5 | pypresso | ratio | before |
+| | QE 7.5 | defumat | ratio | before |
 |---|---|---|---|---|
 | **`si-1k`** — 2 atoms, 180 PWs, 1 k | 0.003 s | 0.008 s | **3.1x** | 3.0x |
 | **`si-1k-ecut40`** — 2 atoms, 1131 PWs | 0.013 s | 0.032 s | **2.6x** | 3.2x |
@@ -61,7 +61,7 @@ A pair added 2026-08-21 with DFT+U (P20), listed apart because they differ only 
 the `HUBBARD` card and the ratio *between them* is the measurement — see "What
 DFT+U costs" below:
 
-| | QE 7.5 | pypresso | ratio |
+| | QE 7.5 | defumat | ratio |
 |---|---|---|---|
 | **`ni-noldau-1k`** — Ni, ultrasoft, LSDA, 1 k | 0.070 s | 0.134 s | **1.9x** |
 | **`ni-ldau-1k`** — the same with `U = 3 eV` | 0.069 s | 0.155 s | **2.3x** |
@@ -81,7 +81,7 @@ and a ratio that moves without a code change is the machine, not the code.
 
 and, for ultrasoft and PAW (2026-08-19, `ecutwfc = 20`, `ecutrho = 160`):
 
-| | QE 7.5 | pypresso | ratio | before |
+| | QE 7.5 | defumat | ratio | before |
 |---|---|---|---|---|
 | **`si2-us-1k`** — 2 atoms, 395 PWs, 9185 G | 0.021 s | 0.049 s | **2.3x** | 2.2x |
 | **`si2-paw-1k`** — the same, PAW | 0.034 s | 0.083 s | **2.4x** | 1.8x |
@@ -99,7 +99,7 @@ measured in one session, the local ones re-run alongside the PBE ones, so each
 pair differs only in the functional — which is the only way the "what does a
 gradient correction cost" question has an answer:
 
-| | QE 7.5 | pypresso | ratio |
+| | QE 7.5 | defumat | ratio |
 |---|---|---|---|
 | **`si8-1k`** — 8 atoms, LDA | 0.030 s | 0.074 s | **2.5x** |
 | **`si8-pbe-1k`** — the same cell, PBE | 0.025 s | 0.077 s | **3.1x** |
@@ -122,7 +122,7 @@ difference between them is believed.)
 sphere it is nearly free *relative to QE*.** The two rows say different things and
 both are worth reading.
 
-The first pair: PBE costs pypresso 4% per iteration (0.074 → 0.077 s) for four
+The first pair: PBE costs defumat 4% per iteration (0.074 → 0.077 s) for four
 extra FFTs on the dense grid and a longer pointwise expression. Four transforms
 of a 24³ box is not nothing, but it is a fixed handful of large, dense
 operations — exactly the shape XLA is good at — where the iteration's real cost
@@ -149,7 +149,7 @@ at 40 Ry, 3.0e-9 for two atoms at 12 Ry, 5.6e-9 for the metal.
 
 `scf-kauto` is the one case where the two codes differ by more than that
 (1.0e-6 Ry), and it is not a disagreement about the physics: that input asks for
-`conv_thr = 1e-6`, so QE stops there while this comparison runs pypresso to
+`conv_thr = 1e-6`, so QE stops there while this comparison runs defumat to
 1e-10. The regression suite compares it against a reference regenerated at 1e-10,
 where the two agree to 2e-9.
 
@@ -206,7 +206,7 @@ k-points multiply the per-dispatch overhead that the single-k cases mostly hide.
 **Both codes are pinned to one CPU by affinity**, which is the only mechanism
 that works — see "Threads" below. An earlier version of the harness passed
 `intra_op_parallelism_threads=1` inside `XLA_FLAGS`; XLA ignored it silently
-(the token does not begin with `--`, so it was read as a filename) and pypresso
+(the token does not begin with `--`, so it was read as a filename) and defumat
 ran on 1.8 cores while the table claimed one. The ratios were not flattered by
 it — extra threads make this workload *slower*, so the honest single-core
 numbers came out slightly better — but the claim was wrong and is now enforced
@@ -320,7 +320,7 @@ per-compilation floor.
 QE never converges the eigenvalues further than the density warrants
 (`electrons.f90`): `ethr` starts at 1e-2, is reset to 1e-2 at the second
 iteration, and thereafter follows `min(ethr, 0.1 dr2 / nelec)` with a floor at
-1e-13. pypresso was asking for 1e-12 from the first iteration — twelve digits of
+1e-13. defumat was asking for 1e-12 from the first iteration — twelve digits of
 eigenvalue against a density still wrong in the second.
 
 Implementing the schedule needed QE's `dr2` (`rho_ddot` in `scf_mod.f90`), which
@@ -336,8 +336,8 @@ The schedules, side by side, and the Davidson steps each one buys:
 |---|---|---|---|---|---|---|---|---|---|
 | QE `ethr` | 1e-2 | 1.6e-3 | 7.0e-5 | 1.5e-6 | 3.3e-8 | 3.4e-10 | 1.7e-11 | 2.0e-12 | |
 | QE steps | 2 | 1 | 2 | 5 | 6 | 4 | 2 | 3 | **25** |
-| pypresso `ethr` | 1e-2 | 1.8e-3 | 4.5e-5 | 9.9e-7 | 1.5e-8 | 3.5e-9 | 2.9e-12 | — | |
-| pypresso steps | 8 | 4 | 4 | 4 | 4 | 3 | 6 | — | **33** |
+| defumat `ethr` | 1e-2 | 1.8e-3 | 4.5e-5 | 9.9e-7 | 1.5e-8 | 3.5e-9 | 2.9e-12 | — | |
+| defumat steps | 8 | 4 | 4 | 4 | 4 | 3 | 6 | — | **33** |
 | *(before)* | 26 | 16 | 12 | 9 | 6 | 4 | 2 | — | **75** |
 
 75 → 33 steps, against QE's 25. QE's own `ethr` sequence is reproduced closely
@@ -415,8 +415,8 @@ has four and a smeared run asks for six — the rest are random, as QE tops up.
 ### 7. The compilation cache
 
 Nothing to do with the loop, and the largest effect on what a user actually
-waits for. XLA compilations are now written to `~/.cache/pypresso/jax`
-(`PYPRESSO_CACHE_DIR` overrides it; `off` disables it), so the second and every
+waits for. XLA compilations are now written to `~/.cache/defumat/jax`
+(`DEFUMAT_CACHE_DIR` overrides it; `off` disables it), so the second and every
 later run skips them:
 
 | | first run | later runs |
@@ -483,8 +483,8 @@ Per SCF iteration, same code, only the number of visible cores changing:
 | 14 (default) | 10.0 ms | 54.6 ms | 120.3 ms | 152 ms |
 
 Four is best everywhere measured, including a 3215-plane-wave cell, so this is
-not an artefact of small cases. `pypresso` now narrows the affinity mask to four
-CPUs on import — **1.7x faster out of the box** — with `PYPRESSO_THREADS` to
+not an artefact of small cases. `defumat` now narrows the affinity mask to four
+CPUs on import — **1.7x faster out of the box** — with `DEFUMAT_THREADS` to
 change or disable it, and it only ever *narrows*, so an outer `taskset` or a
 scheduler's allocation is respected.
 
@@ -594,7 +594,7 @@ not free.
 
 Measured, 2026-08-19, single core, against the same QE build:
 
-| | QE 7.5 | pypresso | ratio | pypresso before P9 |
+| | QE 7.5 | defumat | ratio | defumat before P9 |
 |---|---|---|---|---|
 | **`si-1k`** — 2 atoms, 180 PWs | 0.003 s | 0.010 s | **4.1x** | 0.011 s |
 | **`si8-1k`** — 8 atoms, 738 PWs | 0.027 s | 0.074 s | **2.8x** | 0.064 / 0.074 s |
@@ -638,7 +638,7 @@ is what a GPU wants and what made the first Python-loop version slow.
 
 That deviation was never measured until a converged bismuthene run (19
 irreducible k-points, two-component spinors, 35 Ry) died at **12.7 GB**. So the
-k axis is now a dial, `pypresso/batching.py`, default 1 -- QE's loop -- with
+k axis is now a dial, `defumat/batching.py`, default 1 -- QE's loop -- with
 `k_batch=None` for the old behaviour and anything between as a chunk. It is a
 `lax.map`/`lax.scan`, not a Python loop, so the body is compiled once whatever
 the chunk count; the answer is identical to round-off (1.8e-15 Ry) because only
@@ -672,7 +672,7 @@ is a dial with both ends kept working rather than a rewrite in either direction.
 ## What a force costs (P15)
 
 Forces are ``jax.grad`` of one energy expression evaluated at the converged
-state (`pypresso/forces/energy.py`), and QE's six hand-derived terms are
+state (`defumat/forces/energy.py`), and QE's six hand-derived terms are
 implemented beside them as a cross-check (`analytic.py`). Both are timed against
 the SCF that has to happen first, since that is what decides whether a
 relaxation is affordable, and against QE's own `forces` clock.
@@ -744,7 +744,7 @@ codes compared per unit of work instead of per SCF iteration — which is the
 comparison that matters, since the two do not take the same number of iterations
 or the same number of Davidson steps.
 
-| | QE | pypresso, before | |
+| | QE | defumat, before | |
 |---|---|---|---|
 | `h_psi`, `si8-1k-ecut30`, 16 bands | 14.5 ms | 24.1 ms | 1.7x |
 | `h_psi`, `si16-1k-ecut30`, 32 bands | 51.3 ms | 169.6 ms | **3.3x** |
@@ -775,7 +775,7 @@ The one case that loses is the 180-plane-wave cell, where the whole box is
 box size is the evidence that the explanation is the right one — no arithmetic
 change produces it. `sum_band` gets the same treatment for the same reason
 (`calc.density` 119 → 47 ms on the sixteen-atom cell), and the band axis is now
-a dial beside the k axis (`pypresso/batching.py`, `PYPRESSO_BAND_BATCH`),
+a dial beside the k axis (`defumat/batching.py`, `DEFUMAT_BAND_BATCH`),
 defaulting to QE's loop, with the batched end kept working for the GPU — which
 wants the batch that a cache does not.
 
@@ -849,7 +849,7 @@ reason every other input in that directory is: both codes parallelise over k, an
 symmetry-reduced list is not the same list in both codes unless the *magnetic* group is
 reproduced exactly, which is a correctness question and not a timing one.
 
-| | QE 7.5 | pypresso | ratio |
+| | QE 7.5 | defumat | ratio |
 |---|---|---|---|
 | setup / `init_run` | 0.550 s | 7.078 s | 12.9x |
 | SCF, cold | 1.420 s | 21.801 s | 15.4x |
@@ -916,13 +916,13 @@ crystal the number to watch is still `nk`, which the loss of symmetry has alread
 ## What DFT+U costs (P20)
 
 **The Hubbard term is a small separable operator, and it prices like one.** The comparison
-is the one this file always makes -- single-core pypresso against single-core QE 7.5 on the
+is the one this file always makes -- single-core defumat against single-core QE 7.5 on the
 same input -- with a *pair* of inputs that differ only by the `HUBBARD` card, so the ratio
 between them is the term's own cost. fcc nickel, one k-point, `nosym`, ultrasoft,
 `ortho-atomic` projectors, `U = 3 eV` (`benchmarks/ni-noldau-1k.in` and
 `benchmarks/ni-ldau-1k.in`, `--repeats 3`, 2026-08-21):
 
-| | QE 7.5 | pypresso | ratio |
+| | QE 7.5 | defumat | ratio |
 |---|---|---|---|
 | per SCF iteration, no U | 0.070 s | 0.134 s | 1.9x |
 | per SCF iteration, `U = 3 eV` | 0.069 s | 0.155 s | 2.3x |
@@ -953,13 +953,13 @@ falls; the FeO benchmark below is where that shows.
 **Four atoms, ultrasoft, `nspin = 2`, symmetry-reduced 2x2x2** -- QE's `pw_lda+U/lda+U.in`
 at `conv_thr = 1e-10` on both sides:
 
-| | QE 7.5 | pypresso |
+| | QE 7.5 | defumat |
 |---|---|---|
 | SCF wall | 18.54 s | 81.5 s |
 | iterations | 24 | 53 |
 | **per SCF iteration** | 0.77 s | 1.54 s (**2.0x**) |
 
-**2.0x**, the good end of the 2-4x band P10 established, and pypresso's figure is an upper
+**2.0x**, the good end of the 2-4x band P10 established, and defumat's figure is an upper
 bound: it includes the compilation the first iteration pays for. The iteration *count* is
 the honest difference -- 53 against 24 -- and it is the usual one, two different mixers
 taking different routes to the same fixed point (the total energies agree to 6.7e-9 Ry).
@@ -1401,7 +1401,7 @@ phonon part has to be separated out: its cumulative clock reads 1.9 s when the e
 field's loop ends and 4.1 s when the second representation does, so the six `Gamma` modes
 cost it about **2.2 s** of its 4.15 s wall.
 
-| | pypresso | `ph.x` |
+| | defumat | `ph.x` |
 |---|---|---|
 | the six `Gamma` modes, after the SCF | **57 s** | ~2.2 s |
 | self-consistency of the response | 17 iterations | 5 per representation |
@@ -1571,14 +1571,14 @@ threshold already sits in.
 ## What a variable-cell relaxation costs (P29)
 
 **The comparison, single core on both sides, best of three.** `pw.x` is the vendored
-serial build and the number is its own `PWSCF ... WALL`; pypresso is pinned to one CPU by
+serial build and the number is its own `PWSCF ... WALL`; defumat is pinned to one CPU by
 the affinity mask, as `tools/compare_qe.py` pins it. On QE's `pw_vc-relax/vc-relax4.in`
 (rhombohedral arsenic at 500 kbar, 2 atoms, 10 k-points, 10 ionic steps on both sides):
 
 | | best of 3 | samples |
 |---|---|---|
 | `pw.x` | **4.39 s** | 4.4, 4.5, 4.4 |
-| pypresso | **32.36 s** | 39.0, 33.1, 32.4 |
+| defumat | **32.36 s** | 39.0, 33.1, 32.4 |
 | ratio | **7.4x** | |
 
 **Best of three and not a single sample, and this is the finding to read first.** This
@@ -1737,8 +1737,8 @@ with `(3 nat, nat, 3)` and runs in under a millisecond. The whole of
 ## First contact with a GPU (P10 / GPU.md Phase 0)
 
 **A different metric, and it is never mixed with the one above.** Everything
-else in this file is single-core pypresso against single-core Quantum ESPRESSO.
-This section is **GPU pypresso against CPU pypresso, same input, same code, per
+else in this file is single-core defumat against single-core Quantum ESPRESSO.
+This section is **GPU defumat against CPU defumat, same input, same code, per
 SCF iteration**, with compile time as its own column — `GPU.md` §2.3, and the
 reason the two must not share a table. The QE comparison stays a CPU claim.
 
@@ -1956,17 +1956,17 @@ dial-induced difference measured anywhere here, it is GPU-only, and it is on the
 largest cell, which is the direction that matters. It should be re-measured on a
 bigger cell before the batched dial is called answer-preserving on a GPU.
 
-## Sixty-four atoms: pypresso on a GPU against Quantum ESPRESSO on CPUs
+## Sixty-four atoms: defumat on a GPU against Quantum ESPRESSO on CPUs
 
 **Read the baseline column before the ratio.** `GPU.md` §2.3 rules this
 comparison out by default and the reason is not pedantry: the project's metric
 is single-core against single-core so that a ratio measures *code*, and a GPU
 number against a CPU number measures code *and* hardware at once and cannot be
 decomposed afterwards. It is run here because it was asked for, with `pw.x` at
-**four core counts** and pypresso-on-CPU included as the middle corner, so that
+**four core counts** and defumat-on-CPU included as the middle corner, so that
 the reader can take whichever comparison they actually mean.
 
-Run 2026-08-25/26. **pypresso on one NVIDIA H200**, jax 0.11.1; **Quantum
+Run 2026-08-25/26. **defumat on one NVIDIA H200**, jax 0.11.1; **Quantum
 ESPRESSO 7.2** (the cluster module — the 7.5 vendored in this repo is gitignored
 and not on the cluster) on **AMD EPYC Milan** cores, one node, `disk_io='none'`
 so neither code is timed doing I/O the other skips. `benchmarks/si64-1k*.in`:
@@ -1974,15 +1974,15 @@ so neither code is timed doing I/O the other skips. `benchmarks/si64-1k*.in`:
 
 ### The clean case: `si64-1k`, everything converged to `conv_thr = 1e-10`
 
-Both codes agree on the answer first — **QE -505.71932000 Ry, pypresso
+Both codes agree on the answer first — **QE -505.71932000 Ry, defumat
 -505.71932002 Ry**, 2e-8 apart — which is what makes the timings comparable at
 all.
 
 | code | hardware | iterations | ms/iteration | whole SCF |
 |---|---|---|---|---|
-| **pypresso** | **H200, `band_batch=all`** | 8 | **39** | **0.31 s** |
-| pypresso | H200, `band_batch=1` | 8 | 342 | 2.74 s |
-| pypresso | 4 Milan cores | 8 | 1975 | 15.8 s |
+| **defumat** | **H200, `band_batch=all`** | 8 | **39** | **0.31 s** |
+| defumat | H200, `band_batch=1` | 8 | 342 | 2.74 s |
+| defumat | 4 Milan cores | 8 | 1975 | 15.8 s |
 | QE 7.2 | 1 core | 16 | 1352 | 21.6 s |
 | QE 7.2 | 4 cores | 16 | 531 | 8.50 s |
 | QE 7.2 | 16 cores | 17 | 223 | 3.79 s |
@@ -1994,7 +1994,7 @@ second: one H200 is worth about **5.5x a 32-core Milan node** on this cell,
 per iteration.
 
 **Whole-SCF is a different ratio again — 70x and 11.7x — and the gap is not the
-GPU.** pypresso converges in **8** iterations where QE takes **16-17**, which is
+GPU.** defumat converges in **8** iterations where QE takes **16-17**, which is
 a difference of starting guess and mixing, not of hardware, and it would show
 identically on a CPU. Time-to-answer is what a user feels, so it is quoted; it
 just must not be filed as a GPU speedup.
@@ -2003,7 +2003,7 @@ just must not be filed as a GPU speedup.
 buys 4%. A single k-point leaves QE only plane-wave and FFT parallelism, and it
 saturates. That is the real reason the GPU comparison looks the way it does.
 
-**And pypresso is still the slower code per core** — 1975 ms/iteration on four
+**And defumat is still the slower code per core** — 1975 ms/iteration on four
 cores against QE's 531, i.e. **3.7x slower**, consistent with the ~3.3x this
 file records elsewhere. The accelerator is doing the work, not the
 implementation.
@@ -2130,7 +2130,7 @@ Typeset with the figure in `performance/gpu-sweep.tex`; raw numbers in
 | `bi10-soc` | spin-orbit | 10 | 1 | 14 | 21686 | 17 | 260 | **83.3x** | -1.9e-04 † | 16.92 |
 | `bi20-soc` | spin-orbit | 20 | 1 | 20 | 105350 | 20 | 912 | **115.5x** | -3.7e-04 † | 34.70 |
 
-† **The bismuth rows are a pre-existing pypresso/QE difference, not a GPU one.**
+† **The bismuth rows are a pre-existing defumat/QE difference, not a GPU one.**
 `PLAN.md` records exactly 1.9e-4 Ry for `bi10-soc` as "the one that does not
 close", and QE 7.5 and 7.2 agree with each other to 1e-8 on that case, so it is
 not a version effect either. The GPU reproduces it.
@@ -2138,7 +2138,7 @@ not a version effect either. The GPU reproduces it.
 **Every non-spin-orbit case agrees to 4.6e-09 Ry or better, and those figures
 reproduce the *CPU* agreements already in `PLAN.md`** — 1.9e-9 on `al10-metal`,
 4.3e-9 on `h10-chain-lsda`, 4.4e-9 on `h10-chain-noncolin`, 1.8e-8 on
-`ni10-ldau`. That is the finding: **the GPU reproduces pypresso's behaviour
+`ni10-ldau`. That is the finding: **the GPU reproduces defumat's behaviour
 including its known imperfections, rather than having a numerical character of
 its own.** A further check that costs nothing: `h10-chain-lsda` and
 `h10-chain-noncolin` return the same total to all eight digits (-9.56782281), so
@@ -2255,7 +2255,7 @@ because 11 GB of tape in HBM is the row the phase exists to bound. Per
 
 Run 2026-08-26 at commit `e562427`. **One NVIDIA H200** (`gpu63`, 143771 MiB,
 driver 580.173.02, jax 0.11.1) against **four EPYC Milan cores** (`milan1`, same
-jax, same commit) — §2.3's metric, GPU pypresso against CPU pypresso on the same
+jax, same commit) — §2.3's metric, GPU defumat against CPU defumat on the same
 input and the same code, with the CPU side pinned to a stated core count. Both
 jobs ran `tools/gpu/phase5.py` twice per property, so every row carries its own
 determinism check. Warm times, the cold ones beside them:
@@ -2364,7 +2364,7 @@ change is the reason to trust it:
 * **the CPU default is bit-identical to what it was**, so no validated number
   moves. The whole suite is the check;
 * **the order of precedence is unchanged**: an explicit `k_batch`/`band_batch`
-  beats `PYPRESSO_K_BATCH`/`PYPRESSO_BAND_BATCH`, which beat the platform;
+  beats `DEFUMAT_K_BATCH`/`DEFUMAT_BAND_BATCH`, which beat the platform;
 * **the two axes move together**, because `k=all, b=1` was measured at 2075 ms
   against 177 and 801 — worse than either end, since batching k while looping
   bands multiplies the per-band launches by `nk`;
@@ -2375,9 +2375,9 @@ change is the reason to trust it:
 
 Two implementation notes worth having: the platform is asked **lazily and
 cached**, because asking initialises the backend and on a GPU node that
-allocates device memory — importing `pypresso.batching` must not do that — and
+allocates device memory — importing `defumat.batching` must not do that — and
 the two constants are module attributes (PEP 562) rather than values frozen at
-import, which also fixes a smaller bug of its own: `PYPRESSO_K_BATCH` set after
+import, which also fixes a smaller bug of its own: `DEFUMAT_K_BATCH` set after
 the import used to be ignored. `tests/unit/test_batching.py` substitutes the
 backend, so the accelerator branch is tested on this CPU-only workstation.
 
@@ -2612,7 +2612,7 @@ instinct. None of these may change a validated number.
    iterations against `ph.x`'s 5, whose mixer is `LR_Modules/mix_pot.f90`. It
    turned out not to be a speed item at all -- linear mixing of a map whose
    Jacobian has an eigenvalue below -1 **diverges**, which two systems then did
-   (see "What a mixer in the response loop was worth"). `pypresso/response/mixing.py`
+   (see "What a mixer in the response loop was worth"). `defumat/response/mixing.py`
    now wraps `scf/mixing.py`'s Anderson history for all three loops.
 9. **One irreducible representation at a time** (P25), for the *memory* rather
    than the time: it bounds the working set at 3 modes in flight instead of
@@ -2698,7 +2698,7 @@ this cost is that it is a **mixing** problem: the ground-state SCF answers the
 same stiffness with Kerker preconditioning and pays about 1.7x, where the
 response loop has no preconditioner and pays ~7x in iterations. Preconditioning
 `_self_consistent_response`, or replacing its linear mixing with the Anderson
-mixer `pypresso/scf/mixing.py` already has, is the obvious next move and is in
+mixer `defumat/scf/mixing.py` already has, is the obvious next move and is in
 the backlog.
 
 ## What a mixer in the response loop was worth (P24 x P25 x P26)
@@ -2979,7 +2979,7 @@ before JAX is imported (the mechanism `tools/compare_qe.py` documents), Elk with
 
 | | | |
 |---|---|---|
-| pypresso SCF (4x4x4, `conv_thr = 1e-12`) | **4.3 s** | the thing both quantities ride on |
+| defumat SCF (4x4x4, `conv_thr = 1e-12`) | **4.3 s** | the thing both quantities ride on |
 | `effective_mass`, velocity route | **4.3 s** warm, 4.8 s cold | 13 NSCF k-points |
 | `effective_mass`, eigenvalue route | **6.0 s** warm, 6.4 s cold | 49 NSCF k-points |
 | Elk ground state (LAPW, same cell, PBE) | 1.36 s | |
@@ -3105,7 +3105,7 @@ sides, `OMP_NUM_THREADS=1` and `taskset -c 0`, the affinity mask set before JAX
 is imported. Elk's tasks were run **one per invocation** against a state already
 on disk, with `tshift = .false.` so the atomic basis is identical across them.
 
-| | Elk | pypresso |
+| | Elk | defumat |
 |---|---|---|
 | ground state | 6.08 s | **1.50 s** |
 | form the operator | 0.92 s (task 120, `pmat` to disk) | — |
@@ -3125,7 +3125,7 @@ k-point instead of an `axpy` inside the band-pair loop. Its marginal cost per
 component is small (0.48 s for one, 1.19 s for nine, so the k-loop and the file
 dominate), which is why the ratio is 2.5 and not nine.
 
-**Where pypresso loses is the re-diagonalisation, and it is the whole of the
+**Where defumat loses is the re-diagonalisation, and it is the whole of the
 gap.** Elk's ground state leaves `EVECSV.OUT` on disk, so its post-processing
 never diagonalises again; this code runs an NSCF, and that 2.55 s is the entire
 1.6x on the bottom row. It is exactly the memory-for-time trade this file
@@ -3170,7 +3170,7 @@ and the affinity mask set before JAX is imported (the mechanism
 `tools/compare_qe.py` documents). Elk's tasks were run one per invocation
 against a state already on disk.
 
-| | Elk | pypresso |
+| | Elk | defumat |
 |---|---|---|
 | ground state | 1.63 s (12x12x12, LAPW) | 1.17 s (10-point wedge, PW) |
 | eigenvalues on the nesting grid | — (its SCF ran there) | 0.32 s (NSCF, 72 wedge points) |
@@ -3302,7 +3302,7 @@ streaming was avoiding. It is left unjitted, and `k_batch` is the dial.
 The same crystal, the same 6x6x6 grid, the same 0.005 Ha broadening, one core
 each. Elk ran tasks 0, 120 and 125 in one invocation from nothing.
 
-| | Elk | pypresso |
+| | Elk | defumat |
 |---|---|---|
 | ground state | — | 5.6 s |
 | the states the sum runs over | — | 51.3 s (NSCF, 22 bands) |
@@ -3346,7 +3346,7 @@ Same machine, one core each. `dynmat.x` was run on the `fildyn` this code writes
 (`asr = 'no'`, `q = (1, 0, 0)`, `lplasma = .true.`), which is the same input and
 the same arithmetic.
 
-| | `dynmat.x` | pypresso |
+| | `dynmat.x` | defumat |
 |---|---|---|
 | its own timer | 0.00 s | -- |
 | whole invocation, 50 runs averaged | 4.2 ms | -- |
@@ -3377,7 +3377,7 @@ on both sides, `OMP_NUM_THREADS=1` and the affinity mask set before JAX is
 imported (the mechanism `tools/compare_qe.py` documents), both starting from a
 converged density already on disk.
 
-| | `pw.x` (`lberry` nscf) | pypresso (`run_polarization`) |
+| | `pw.x` (`lberry` nscf) | defumat (`run_polarization`) |
 |---|---|---|
 | k-points diagonalised | 24 (4 strings x 6) | 20 (4 strings x 5) |
 | wall clock | **0.11 s** | **0.34 s** warm, 1.73 s cold |
@@ -3426,7 +3426,7 @@ compared by their output.
 AlAs, `ngridk 2 2 2`, field along z, step 0.02, spin-orbit coupling on. Elk built
 from the vendored source with `gfortran` and the system BLAS/LAPACK/FFTW.
 
-| | Elk (task 390) | pypresso |
+| | Elk (task 390) | defumat |
 |---|---|---|
 | threads | 2 | 4 |
 | whole tensor, three columns | **70 s** | ~230 s (3 x the column below) |
@@ -3480,7 +3480,7 @@ mask set before JAX is imported (`tools/compare_qe.py`'s mechanism); Elk timed
 by wall clock rather than by its own CPU-seconds line, which is what a threaded
 run makes meaningless.
 
-| | Elk | pypresso |
+| | Elk | defumat |
 |---|---|---|
 | silicon, ground state + task 195 | **2.68 s** | **1.98 s** |
 | iron, ground state + tasks 195/196 | **6.58 s** | **5.00 s** |
@@ -3540,7 +3540,7 @@ arithmetic with the transform.
 | 2026-08-19 | QE's stick FFT layout implemented, with the field held xy-contiguous | 1.13x on the local term at eight atoms; ~4% per iteration |
 | 2026-08-19 | LSDA: a leading spin axis on the density, potential, `becsum`, `D_ij` and the wavefunctions | no change to the unpolarized path (`si-1k` 0.011 → 0.010 s, `si8-1k` unchanged) |
 | 2026-08-20 | Spin-orbit coupling (P14): spinor wavefunctions, `j`-resolved projectors | one Hamiltonian on a doubled space; a nonmagnetic run keeps `nspin_mag = 1`, so the density, potential and XC paths are untouched |
-| 2026-08-20 | The k axis chunked as QE's `k_loop`, default one k-point (`pypresso/batching.py`) | converged bismuthene 44.9 → 22.5 s/iteration and 4.91 → 3.16 GB; 9% slower on `metal.in`'s ten cheap k-points |
+| 2026-08-20 | The k axis chunked as QE's `k_loop`, default one k-point (`defumat/batching.py`) | converged bismuthene 44.9 → 22.5 s/iteration and 4.91 → 3.16 GB; 9% slower on `metal.in`'s ten cheap k-points |
 | 2026-08-20 | The band axis chunked as `vloc_psi_k`'s `DO ibnd`, default one band (`map_bands`/`sum_bands`) | `h_psi` local term 2.48x at 16 atoms, 1.66x at 8, 0.91x at 180 PWs; `si16-1k-ecut30` 4.2 → 2.5x against QE |
 | 2026-08-20 | `batch = 1` stops meaning a width-one batch axis: direct call at `nk = 1`, plain `lax.map` beyond | 37% of a Davidson solve, on every k-point of every run |
 | 2026-08-20 | `v_xc` and `e_xc` from one `value_and_grad` pass instead of two evaluations | `exchange_correlation` 7.3 → 3.5 ms |

@@ -1,6 +1,6 @@
 # Non-linear response: what is here, what is next, and what each one costs
 
-A roadmap for the third-order-and-beyond half of `pypresso/response/`, written after
+A roadmap for the third-order-and-beyond half of `defumat/response/`, written after
 P35 so that the session which picks any of it up does not re-derive the constraints.
 `PLAN.md` is the phase tracker and stays the authority on what is *done*; this file is
 about what is *reachable*, in what order, and at what price.
@@ -75,12 +75,12 @@ These are assemblies. Each is days rather than a phase, and each adds a README r
 
 ### 3.1 Raman and infrared spectra — **DONE (P36)**
 
-`pypresso/response/spectra.py`, `vibrational_spectrum`. Placzek's two invariants of the
+`defumat/response/spectra.py`, `vibrational_spectrum`. Placzek's two invariants of the
 per-mode Raman tensor and the mode projection of `Z*`, in the units `dynmat.x` prints them.
 
 `RamanIR` turned out to be more than a transcription check: it is **the only working QE
 reference above second order**, because it is post-processing and never enters the
-`lraman` branch. `pypresso/io/dynmat.py` writes the `fildyn` `ph.x` would have written and
+`lraman` branch. `defumat/io/dynmat.py` writes the `fildyn` `ph.x` would have written and
 the test runs the vendored binary on our tensors — every digit either code prints, on AlAs
 (353.25 cm⁻¹, Raman 446.8854) and on silicon (519.20 cm⁻¹, Raman 9815.5635, IR 0.0000).
 
@@ -195,7 +195,7 @@ unblocks all of them at once. **This is the single highest-value item in the fil
 
 Route (b) deserves the first look and this document exists partly to say so. It needs
 `<u_mk|u_nk+b>` with the Miller-index alignment and the zone-edge `G` shift — which
-`pypresso/topology/` already implements and validates against exactly-integer Chern
+`defumat/topology/` already implements and validates against exactly-integer Chern
 numbers. It converges faster in k, it is what ABINIT actually ships, and it avoids
 writing a second response loop. Its cost is that the field perturbation stops being an
 analytic derivative and becomes a finite difference over the k-mesh, which is a different
@@ -217,7 +217,7 @@ Sternheimer solver's gauge.
 ### 4.3 The infrastructure item that goes with it — **DONE (P36)**
 
 **The rank-3 symmetriser is in**, and at any rank:
-`pypresso.system.symmetry.symmetrize_cartesian_tensor` and
+`defumat.system.symmetry.symmetrize_cartesian_tensor` and
 `symmetrize_atom_cartesian_tensor`. P26 and P35 both run on a symmetry-reduced wedge now —
 AlAs to 3.3e-9 of its closed grid on 8 k-points instead of 64 (8.7e-14 when the
 phase landed; the residue is the two SCFs' convergence footprint amplified by a third
@@ -304,7 +304,7 @@ once a broadening `eta` is added.
 was the same conflation §8 records for the shift current: it is a statement about the
 **Sternheimer** route to SHG. The **sum over states** reaches the whole frequency axis
 with no solver at all — it has the eigenvalues, so the resonant denominators are
-arithmetic — and that is what `pypresso/response/shg.py` is. What still needs the
+arithmetic — and that is what `defumat/response/shg.py` is. What still needs the
 indefinite solver is a *truncation-free* second-order response, which is the same
 `|u_m^{;a}>` §7's shift-current entry identifies below.)* The projected
 CG breaks; a shifted/complex solver (BiCGStab, or QE's own `solve_e_fpol.f90`) is new
@@ -330,7 +330,7 @@ corner of non-linear optics right now
 it is validated against model Hamiltonians rather than against another code, and it is
 a `new` row rather than a reimplementation.
 
-**The shift current half of it is now in** — `pypresso/response/photocurrent.py`,
+**The shift current half of it is now in** — `defumat/response/photocurrent.py`,
 `run_shift_current`, `Calculator.get_shift_current` — and the thing to carry forward is
 *why it was reachable while §4 stays refused*. §2.1 is a statement about the **Sternheimer
 stack**: the field enters only through a source term, so a 2n+1 expression with two field
@@ -397,7 +397,7 @@ normalisation is worthless to better than a factor of two. This matters for
 everything else in this corner: an injection current and a `chi^(2)` will have
 the same ambiguity, and the same two checks answer it.
 
-**The `chi^(2)(-2w; w, w)` half of it is now in too** — `pypresso/response/shg.py`,
+**The `chi^(2)(-2w; w, w)` half of it is now in too** — `defumat/response/shg.py`,
 `run_shg`, `Calculator.get_shg` (P54). It is the same sum over states with two resonant
 denominators in place of a smeared delta, it needs *less* than the shift current did (the
 triple sum over the intermediate state is the sum-rule expansion of the generalised

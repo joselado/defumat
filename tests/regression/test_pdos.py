@@ -35,16 +35,16 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.io import read_pdos_file, read_projwfc_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.projwfc.channels import L_LABELS, M_LABELS
-from pypresso.projwfc.projections import atomic_projections
-from pypresso.pseudo import read_upf
-from pypresso.scf import run_scf
-from pypresso.scf.driver import Calculation
-from pypresso.system import build_system
-from pypresso.units import RY_TO_EV
-from pypresso.workflows.pdos import run_pdos
+from defumat.io import read_pdos_file, read_projwfc_output
+from defumat.io.pwin import read_pw_input
+from defumat.projwfc.channels import L_LABELS, M_LABELS
+from defumat.projwfc.projections import atomic_projections
+from defumat.pseudo import read_upf
+from defumat.scf import run_scf
+from defumat.scf.driver import Calculation
+from defumat.system import build_system
+from defumat.units import RY_TO_EV
+from defumat.workflows.pdos import run_pdos
 from tests.tolerances import LOWDIN_CHARGE, PDOS_RELATIVE, PROJECTION
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]

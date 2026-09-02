@@ -34,19 +34,19 @@ import jax
 import numpy as np
 import pytest
 
-from pypresso.basis.builder import build_basis
-from pypresso.basis.fft import g_to_r
-from pypresso.diffraction.structure_factor import (
+from defumat.basis.builder import build_basis
+from defumat.basis.fft import g_to_r
+from defumat.diffraction.structure_factor import (
     conventional_transform,
     h_vectors,
     structure_factors_of_field,
 )
-from pypresso.io.pwin import parse_pw_input
-from pypresso.pseudo.potentials import starting_charge
-from pypresso.pseudo.upf import read_upf
-from pypresso.scf.driver import run_scf
-from pypresso.system.builder import build_system
-from pypresso.workflows.sfac import run_structure_factors
+from defumat.io.pwin import parse_pw_input
+from defumat.pseudo.potentials import starting_charge
+from defumat.pseudo.upf import read_upf
+from defumat.scf.driver import run_scf
+from defumat.system.builder import build_system
+from defumat.workflows.sfac import run_structure_factors
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
@@ -184,7 +184,7 @@ def test_a_star_is_flat_under_the_operations_it_was_collapsed_with():
     whole reason :func:`symmorphic_rotations` exists, and asserting it here is
     what makes the first half a real check rather than a tautology.
     """
-    from pypresso.diffraction.structure_factor import symmorphic_rotations
+    from defumat.diffraction.structure_factor import symmorphic_rotations
 
     system, pseudos, result, reduced = silicon(3.0)
     whole = run_structure_factors(system, pseudos, result, hmax=3.0, reduce=False)

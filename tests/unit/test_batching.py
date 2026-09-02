@@ -1,6 +1,6 @@
 """The k-point chunking, which must be invisible in every result.
 
-``pypresso.batching`` is the dial between QE's ``k_loop`` -- one k-point
+``defumat.batching`` is the dial between QE's ``k_loop`` -- one k-point
 resident, ``c_bands.f90`` -- and a single ``vmap`` over the whole k axis, and
 the same dial on the band axis, between ``vloc_psi_k``'s ``DO ibnd`` and one
 transform of the whole block. Both
@@ -20,8 +20,8 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from pypresso import batching
-from pypresso.batching import (DEFAULT_BAND_BATCH, DEFAULT_K_BATCH, _resolve_band_batch,
+from defumat import batching
+from defumat.batching import (DEFAULT_BAND_BATCH, DEFAULT_K_BATCH, _resolve_band_batch,
                                map_bands, map_k, resolve_k_batch, sum_bands, sum_k)
 
 pytestmark = pytest.mark.unit
@@ -94,8 +94,8 @@ def test_chunking_stays_differentiable(batch):
 @pytest.mark.parametrize("batch", [1, 3, None])
 def test_sum_band_is_the_same_density(batch):
     """``sum_band``'s accumulation, which is where the second-largest working set is."""
-    from pypresso.scf.density import sum_band
-    from pypresso.system.cell import Cell
+    from defumat.scf.density import sum_band
+    from defumat.system.cell import Cell
 
     grid = (6, 6, 6)
     nk, nbnd, npwx = 5, 3, 11
@@ -177,7 +177,7 @@ def test_h_psi_is_the_same_operator_whatever_the_band_chunk(batch):
     scheduling decision and nothing else, so the operator it applies has to be
     the same one to the last bit the transforms allow.
     """
-    from pypresso.batching import _resolve_band_batch
+    from defumat.batching import _resolve_band_batch
 
     key = jax.random.split(jax.random.PRNGKey(7), 2)
     grid = (8, 8, 8)
@@ -187,7 +187,7 @@ def test_h_psi_is_the_same_operator_whatever_the_band_chunk(batch):
     fft_index = jnp.arange(npwx)
     potential = jnp.asarray(np.cos(np.arange(int(np.prod(grid))), dtype=float)).reshape(grid)
 
-    from pypresso.basis.fft import g_to_r, gather_from_box
+    from defumat.basis.fft import g_to_r, gather_from_box
 
     n = int(np.prod(grid))
 
@@ -245,8 +245,8 @@ def test_the_two_axes_move_together(monkeypatch):
 @pytest.mark.parametrize("platform", ["cpu", "gpu"])
 def test_the_environment_beats_the_platform(monkeypatch, platform):
     _on(monkeypatch, platform)
-    monkeypatch.setenv("PYPRESSO_K_BATCH", "2")
-    monkeypatch.setenv("PYPRESSO_BAND_BATCH", "all")
+    monkeypatch.setenv("DEFUMAT_K_BATCH", "2")
+    monkeypatch.setenv("DEFUMAT_BAND_BATCH", "all")
     assert resolve_k_batch("default") == 2
     assert _resolve_band_batch("default") is None
 
@@ -255,7 +255,7 @@ def test_the_environment_beats_the_platform(monkeypatch, platform):
 def test_an_explicit_argument_beats_the_environment_and_the_platform(
         monkeypatch, platform):
     _on(monkeypatch, platform)
-    monkeypatch.setenv("PYPRESSO_K_BATCH", "2")
+    monkeypatch.setenv("DEFUMAT_K_BATCH", "2")
     assert resolve_k_batch(3) == 3
     assert resolve_k_batch(None) is None
     assert _resolve_band_batch(5) == 5
@@ -269,7 +269,7 @@ def test_the_environment_is_read_when_it_is_asked_for(monkeypatch):
     """
     _on(monkeypatch, "cpu")
     assert resolve_k_batch("default") == 1
-    monkeypatch.setenv("PYPRESSO_K_BATCH", "all")
+    monkeypatch.setenv("DEFUMAT_K_BATCH", "all")
     assert resolve_k_batch("default") is None
 
 
@@ -277,7 +277,7 @@ def test_the_environment_is_read_when_it_is_asked_for(monkeypatch):
 def test_a_malformed_setting_warns_and_falls_back_to_the_platform(
         monkeypatch, platform, expected):
     _on(monkeypatch, platform)
-    monkeypatch.setenv("PYPRESSO_K_BATCH", "lots")
+    monkeypatch.setenv("DEFUMAT_K_BATCH", "lots")
     with pytest.warns(RuntimeWarning, match="not a number"):
         assert resolve_k_batch("default") == expected
 

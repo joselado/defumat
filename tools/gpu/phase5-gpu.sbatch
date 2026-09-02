@@ -17,7 +17,7 @@
 #     this job measures rather than assumes.
 #
 # Its pair is phase5-cpu.sbatch, which runs the SAME script on a CPU node.
-# §2.3's metric is GPU pypresso against CPU pypresso, same input, same code.
+# §2.3's metric is GPU defumat against CPU defumat, same input, same code.
 #
 # ---- the #SBATCH values, and why each one ----
 #
@@ -28,22 +28,22 @@
 # time        04:00:00, matching the sweep. Each case below carries its own
 #             `timeout` so one overrun is a reported case and not a lost job.
 # cpus-per-task 4, matching phase5-cpu.sbatch exactly, for phase0-gpu.sbatch's
-#             reason: pypresso narrows its own affinity mask to four CPUs on
+#             reason: defumat narrows its own affinity mask to four CPUs on
 #             import, so both sides get the same host-side threading.
 # mem         160G host memory. Device memory is what is being measured, not
 #             requested -- but a response through the radial transforms also
 #             holds host-side setup, so this is not the place to be tight.
-#SBATCH --job-name=pypresso-gpu-phase5
+#SBATCH --job-name=defumat-gpu-phase5
 #SBATCH --partition=gpu-h200-141g-short
 #SBATCH --time=04:00:00
 #SBATCH --gpus=h200:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=160G
-#SBATCH --output=/scratch/work/ladovj1/calculations/pypresso-gpu/out/gpu-phase5-%j.out
-#SBATCH --error=/scratch/work/ladovj1/calculations/pypresso-gpu/out/gpu-phase5-%j.err
+#SBATCH --output=/scratch/work/ladovj1/calculations/defumat-gpu/out/gpu-phase5-%j.out
+#SBATCH --error=/scratch/work/ladovj1/calculations/defumat-gpu/out/gpu-phase5-%j.err
 
-WORK=/scratch/work/ladovj1/calculations/pypresso-gpu
-REPO=/scratch/work/ladovj1/apps/pypresso
+WORK=/scratch/work/ladovj1/calculations/defumat-gpu
+REPO=/scratch/work/ladovj1/apps/defumat
 mkdir -p "$WORK/out" "$WORK/cache-gpu"
 cd "$REPO" || exit 1
 
@@ -56,7 +56,7 @@ unset XLA_PYTHON_CLIENT_PREALLOCATE
 
 export MKL_NUM_THREADS=1
 export OMP_NUM_THREADS=1
-export PYPRESSO_CACHE_DIR="$WORK/cache-gpu"
+export DEFUMAT_CACHE_DIR="$WORK/cache-gpu"
 export PYTHONPATH="$REPO"
 
 echo "=== node ==="; hostname; date

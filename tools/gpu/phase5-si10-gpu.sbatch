@@ -40,24 +40,24 @@
 #             what is measured rather than requested -- every two-atom property
 #             sat under 0.25 GB of HBM, and what this job establishes is how
 #             that scales with nk and ngm.
-#SBATCH --job-name=pypresso-gpu-phase5-si10
+#SBATCH --job-name=defumat-gpu-phase5-si10
 #SBATCH --partition=gpu-h200-141g-short
 #SBATCH --time=04:00:00
 #SBATCH --gpus=h200:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=160G
-#SBATCH --output=/scratch/work/ladovj1/calculations/pypresso-gpu/out/gpu-phase5-si10-%j.out
-#SBATCH --error=/scratch/work/ladovj1/calculations/pypresso-gpu/out/gpu-phase5-si10-%j.err
+#SBATCH --output=/scratch/work/ladovj1/calculations/defumat-gpu/out/gpu-phase5-si10-%j.out
+#SBATCH --error=/scratch/work/ladovj1/calculations/defumat-gpu/out/gpu-phase5-si10-%j.err
 
-WORK=/scratch/work/ladovj1/calculations/pypresso-gpu
-REPO=/scratch/work/ladovj1/apps/pypresso
+WORK=/scratch/work/ladovj1/calculations/defumat-gpu
+REPO=/scratch/work/ladovj1/apps/defumat
 mkdir -p "$WORK/out" "$WORK/cache-gpu"
 cd "$REPO" || exit 1
 source "$WORK/venv/bin/activate"
 
 unset XLA_PYTHON_CLIENT_PREALLOCATE
 export MKL_NUM_THREADS=1 OMP_NUM_THREADS=1
-export PYPRESSO_CACHE_DIR="$WORK/cache-gpu"
+export DEFUMAT_CACHE_DIR="$WORK/cache-gpu"
 export PYTHONPATH="$REPO"
 
 echo "=== node ==="; hostname; date

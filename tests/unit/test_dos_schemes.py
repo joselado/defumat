@@ -8,11 +8,11 @@ each scheme integrates to the right number of states, that the energy grid is
 import numpy as np
 import pytest
 
-from pypresso.io.output import format_dos, fortran_exponential, write_dos
-from pypresso.scf.tetrahedra import build_tetrahedra
-from pypresso.system.kpoints import DEGSPIN, monkhorst_pack
-from pypresso.units import RY_TO_EV
-from pypresso.workflows.dos import (
+from defumat.io.output import format_dos, fortran_exponential, write_dos
+from defumat.scf.tetrahedra import build_tetrahedra
+from defumat.system.kpoints import DEGSPIN, monkhorst_pack
+from defumat.units import RY_TO_EV
+from defumat.workflows.dos import (
     DOS_SCHEMES,
     DEFAULT_DELTA_E,
     compute_dos,

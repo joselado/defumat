@@ -21,8 +21,8 @@ the magnetization -- is expensive enough to be marked slow.
 import numpy as np
 import pytest
 
-from pypresso.calculator import Calculator
-from pypresso.projwfc.angular_momentum import (
+from defumat.calculator import Calculator
+from defumat.projwfc.angular_momentum import (
     PAULI,
     angular_momenta,
     orbital_matrices,

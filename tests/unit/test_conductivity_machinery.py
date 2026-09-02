@@ -16,13 +16,13 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.response.conductivity import (
+from defumat.io.pwin import read_pw_input
+from defumat.response.conductivity import (
     OpticalConductivity,
     require_a_conductivity_regime,
 )
-from pypresso.system import build_system
-from pypresso.units import AU_TO_S_PER_CM, FPI
+from defumat.system import build_system
+from defumat.units import AU_TO_S_PER_CM, FPI
 
 pytestmark = [pytest.mark.unit]
 

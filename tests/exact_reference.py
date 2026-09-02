@@ -25,7 +25,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from pypresso.solvers.subspace import generalised_eigh
+from defumat.solvers.subspace import generalised_eigh
 
 __all__ = ["exact_eigenpairs", "exact_eigenpairs_all"]
 

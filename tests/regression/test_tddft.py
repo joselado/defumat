@@ -6,9 +6,9 @@ the checks that matter are the ones that share nothing with the transcription:
 * **the identity that certifies everything at once.** The macroscopic
   dielectric constant of an insulator can be reached two ways here, and they
   have no machinery in common -- an Adler-Wiser sum over states followed by a
-  Dyson equation in G space (:mod:`pypresso.tddft`), and a projected conjugate
+  Dyson equation in G space (:mod:`defumat.tddft`), and a projected conjugate
   gradient solve of the Sternheimer equation with the position operator on its
-  right-hand side (:mod:`pypresso.response.efield`). Agreement pins the pair
+  right-hand side (:mod:`defumat.response.efield`). Agreement pins the pair
   matrix elements, the occupation weights, the Coulomb symmetrisation, the
   optical head, the wings and the matrix inversion in one number.
 
@@ -39,18 +39,18 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.basis.fft import g_to_r, r_to_g
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf import Calculation, run_scf
-from pypresso.system import build_system
-from pypresso.units import RY_TO_EV
-from pypresso.tddft import (
+from defumat.basis.fft import g_to_r, r_to_g
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf import Calculation, run_scf
+from defumat.system import build_system
+from defumat.units import RY_TO_EV
+from defumat.tddft import (
     alda_matrix,
     independent_response,
     solve_dyson,
 )
-from pypresso.workflows.nscf import fixed_density_states
+from defumat.workflows.nscf import fixed_density_states
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
@@ -110,7 +110,7 @@ def _chi(nbnd: int = NBND, ecut: float = ECUT_RESPONSE):
 @lru_cache(maxsize=None)
 def _sternheimer(screening: str) -> float:
     """``epsilon_infinity`` from the projected CG solve, isotropic average."""
-    from pypresso.response.efield import dielectric_tensor
+    from defumat.response.efield import dielectric_tensor
 
     _, _, scf, calculation, eigenvalues, wavefunctions = _silicon()
     nocc = int(round(calculation.nelec / 2))
@@ -203,7 +203,7 @@ def test_the_body_converges_onto_the_sternheimer_operator_with_bands(nbnd, toler
 
 @lru_cache(maxsize=None)
 def _solver(nbnd: int):
-    from pypresso.response.sternheimer import SternheimerSolver
+    from defumat.response.sternheimer import SternheimerSolver
 
     _, _, scf, calculation, eigenvalues, wavefunctions = _silicon(nbnd)
     potential = calculation.potential(jnp.asarray(scf.density))
@@ -373,8 +373,8 @@ def test_lif_has_a_bound_exciton_where_elk_puts_one():
     local-field effect and no plane-wave matrix element to form, so ``chi_0`` is
     built from the velocity operator alone.
     """
-    from pypresso.system.kpoints import KPoints
-    from pypresso.workflows import run_absorption
+    from defumat.system.kpoints import KPoints
+    from defumat.workflows import run_absorption
 
     system = build_system(read_pw_input(CASES / "lif-tddft.in"))
     pseudos = tuple(

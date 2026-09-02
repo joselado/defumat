@@ -1,12 +1,12 @@
-"""Time a pypresso calculation, component by component.
+"""Time a defumat calculation, component by component.
 
 Run from the repository root:
 
     python3 tools/benchmark.py quantum_espresso/.../pw_scf/scf.in
 
-This is the *diagnosis* tool: it says where pypresso's own time goes. The
+This is the *diagnosis* tool: it says where defumat's own time goes. The
 measurement that matters is ``tools/compare_qe.py``, which runs the same input
-through Quantum ESPRESSO and through pypresso with both pinned to one core; come
+through Quantum ESPRESSO and through defumat with both pinned to one core; come
 here when that comparison has produced a ratio in need of an explanation.
 """
 
@@ -19,12 +19,12 @@ from pathlib import Path
 import jax
 import numpy as np
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf.driver import Calculation, run_scf
-from pypresso.scf.potential import v_of_rho
-from pypresso.solvers.davidson import davidson_eigensolver
-from pypresso.system import build_system
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf.driver import Calculation, run_scf
+from defumat.scf.potential import v_of_rho
+from defumat.solvers.davidson import davidson_eigensolver
+from defumat.system import build_system
 
 
 def _block(value):

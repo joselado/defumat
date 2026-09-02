@@ -1,15 +1,15 @@
 #!/bin/bash
-# 64 atoms: Quantum ESPRESSO on CPU, at four core counts, plus pypresso on CPU.
+# 64 atoms: Quantum ESPRESSO on CPU, at four core counts, plus defumat on CPU.
 #
 # The CPU half of qe64-gpu.sbatch. **pw.x is run at 1, 4, 16 and 32 cores** and
 # every number is reported with its core count, because a GPU quoted against an
 # unstated CPU baseline is the flattering comparison GPU.md §2.3 exists to
 # prevent. One core is the project's own canonical metric; four matches the
-# pypresso CPU baseline used all through this work; 16 and 32 are what someone
+# defumat CPU baseline used all through this work; 16 and 32 are what someone
 # would actually launch for a 64-atom cell.
 #
-# pypresso is run on 4 cores too, so the table has all three corners: pypresso
-# GPU, pypresso CPU, QE CPU. Without the middle one, a GPU-vs-QE ratio cannot be
+# defumat is run on 4 cores too, so the table has all three corners: defumat
+# GPU, defumat CPU, QE CPU. Without the middle one, a GPU-vs-QE ratio cannot be
 # split into "what the accelerator bought" and "what the two codes differ by".
 #
 # QE 7.2 from the cluster module, not the 7.5 vendored in this repo (which is
@@ -23,17 +23,17 @@
 # disk       QE writes wavefunctions by default; disk_io='none' is set in the
 #            run so that neither code is timed doing I/O the other does not do,
 #            and so the shared filesystem's small-file policy is respected.
-#SBATCH --job-name=pypresso-qe64-cpu
+#SBATCH --job-name=defumat-qe64-cpu
 #SBATCH --partition=batch-milan
 #SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=32
 #SBATCH --mem=192G
-#SBATCH --output=/scratch/work/ladovj1/calculations/pypresso-gpu/out/qe64cpu-%j.out
-#SBATCH --error=/scratch/work/ladovj1/calculations/pypresso-gpu/out/qe64cpu-%j.err
+#SBATCH --output=/scratch/work/ladovj1/calculations/defumat-gpu/out/qe64cpu-%j.out
+#SBATCH --error=/scratch/work/ladovj1/calculations/defumat-gpu/out/qe64cpu-%j.err
 
-WORK=/scratch/work/ladovj1/calculations/pypresso-gpu
-REPO=/scratch/work/ladovj1/apps/pypresso
+WORK=/scratch/work/ladovj1/calculations/defumat-gpu
+REPO=/scratch/work/ladovj1/apps/defumat
 RUN="$WORK/qe64-$SLURM_JOB_ID"
 mkdir -p "$WORK/out" "$RUN"
 cd "$RUN" || exit 1
@@ -49,7 +49,7 @@ export OMP_NUM_THREADS=1
 export ESPRESSO_TMPDIR="$RUN/tmp"
 mkdir -p "$ESPRESSO_TMPDIR"
 
-# QE writes wavefunctions to disk by default. pypresso does not, so timing one
+# QE writes wavefunctions to disk by default. defumat does not, so timing one
 # doing I/O the other skips would not be a comparison of the physics -- and the
 # cluster's small-files policy says not to anyway.
 for case in si64-1k-ecut30 si64-1k; do
@@ -65,15 +65,15 @@ for case in si64-1k-ecut30 si64-1k; do
   done
 done
 
-# The middle corner: pypresso on CPU, four cores, exactly as everywhere else here.
+# The middle corner: defumat on CPU, four cores, exactly as everywhere else here.
 source "$WORK/venv/bin/activate"
-export PYPRESSO_CACHE_DIR="$WORK/cache-cpu" PYTHONPATH="$REPO" JAX_PLATFORMS=cpu
+export DEFUMAT_CACHE_DIR="$WORK/cache-cpu" PYTHONPATH="$REPO" JAX_PLATFORMS=cpu
 export MKL_NUM_THREADS=1
 for case in si64-1k-ecut30 si64-1k; do
-  echo; echo "########## pypresso CPU $case ##########"
+  echo; echo "########## defumat CPU $case ##########"
   srun --ntasks=1 --cpus-per-task=4 python3 "$REPO/tools/gpu/phase0.py" $case \
       --k-batch 1 --band-batch all --repeats 2 --skip-precision-probe \
-      --json "$WORK/out/qe64cpu-${SLURM_JOB_ID}-$case-pypresso.json"
+      --json "$WORK/out/qe64cpu-${SLURM_JOB_ID}-$case-defumat.json"
 done
 
 rm -rf "$RUN"

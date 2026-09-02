@@ -5,7 +5,7 @@
 ! closed under the point group and `nosym` is safe -- which matters more here
 ! than anywhere else, because the object P26 differentiates carries a field
 ! label and a strain label at once and there is no average written for it
-! (`pypresso/response/electrostriction.py` refuses a reduced wedge by name).
+! (`defumat/response/electrostriction.py` refuses a reduced wedge by name).
 ! And it is deliberately **small and under-converged**: 2x2x2 at ecutwfc = 12
 ! gives an epsilon_infinity of 56 rather than silicon's 13.8, which is useless
 ! as physics and perfectly good for the identities the tests here check --

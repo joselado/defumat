@@ -13,7 +13,7 @@ $j = l - \tfrac12$ and $j = l + \tfrac12$, and their difference is the physics.
 
 On QE's three platinum benchmarks, one per kind of dataset:
 
-| | pypresso | `pw.x` |
+| | defumat | `pw.x` |
 |---|---|---|
 | ultrasoft, LDA | **-69.491529507 Ry** | -69.491529520 |
 | ultrasoft, PBE | **-90.199533906 Ry** | -90.199533910 |
@@ -32,9 +32,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.io import comparison_table, read_qe_output
-from pypresso.units import RY_TO_EV
+from defumat import Calculator
+from defumat.io import comparison_table, read_qe_output
+from defumat.units import RY_TO_EV
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_spinorbit")
 PSEUDO, CASES = Path("../tests/data/pseudo"), Path("../tests/data/qe")
@@ -62,10 +62,10 @@ for name, label in (("spinorbit-pbe", "ultrasoft, PBE"), ("spinorbit-paw", "PAW,
     rows.append((label, scf.total_energy, theirs.total_energy))
 
 print(comparison_table(rows, fmt="{:.9f}",
-                       headers=("dataset", "pypresso [Ry]", "pw.x", "difference")))
+                       headers=("dataset", "defumat [Ry]", "pw.x", "difference")))
 ```
 
-    dataset          pypresso [Ry]            pw.x  difference
+    dataset          defumat [Ry]            pw.x  difference
     ultrasoft, LDA   -69.491529507   -69.491529520     1.3e-08
     ultrasoft, PBE   -90.199533906   -90.199533910     3.8e-09
     PAW, PBE        -753.342691622  -753.342691630     8.4e-09

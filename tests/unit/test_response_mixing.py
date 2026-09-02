@@ -1,6 +1,6 @@
 """The mixer a self-consistent response advances with.
 
-``pypresso.response.mixing`` exists because all three response loops advanced
+``defumat.response.mixing`` exists because all three response loops advanced
 with one line of linear mixing where QE uses a Broyden history
 (``LR_Modules/mix_pot.f90``), and linear mixing of a map whose Jacobian has an
 eigenvalue below -1 does not converge slowly -- it diverges. What is checked
@@ -18,7 +18,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
+from defumat.response.mixing import DEFAULT_RESPONSE_MIXING, ResponseMixer
 
 pytestmark = pytest.mark.unit
 

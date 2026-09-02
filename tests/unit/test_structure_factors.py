@@ -18,14 +18,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pypresso.diffraction.structure_factor import (
+from defumat.diffraction.structure_factor import (
     conventional_transform,
     h_vectors,
     structure_factors_of_field,
     symmorphic_rotations,
 )
-from pypresso.io.pwin import parse_pw_input
-from pypresso.system.builder import build_system
+from defumat.io.pwin import parse_pw_input
+from defumat.system.builder import build_system
 
 pytestmark = pytest.mark.unit
 
@@ -243,7 +243,7 @@ def test_a_cutoff_past_the_density_sphere_is_refused():
     The one guard that cannot be replaced by a check on the answer: the
     coefficients out there are small, smooth and entirely plausible.
     """
-    from pypresso.workflows.sfac import run_structure_factors
+    from defumat.workflows.sfac import run_structure_factors
 
     system = silicon()  # ecutwfc = 12, so ecutrho = 48 and sqrt is 6.93
     result = _Result(np.zeros((1, 16, 16, 16)))
@@ -252,7 +252,7 @@ def test_a_cutoff_past_the_density_sphere_is_refused():
 
 
 def test_an_empty_or_inverted_energy_window_is_refused():
-    from pypresso.workflows.sfac import run_structure_factors
+    from defumat.workflows.sfac import run_structure_factors
 
     system = silicon()
     result = _Result(np.zeros((1, 16, 16, 16)))

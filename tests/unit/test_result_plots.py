@@ -1,7 +1,7 @@
 """A result object draws itself, and the drawing is checked.
 
 Presentation lives on the result objects rather than on
-:class:`~pypresso.calculator.Calculator`, which is the line the facade rule
+:class:`~defumat.calculator.Calculator`, which is the line the facade rule
 draws: a ``get_*`` method must not compute, and a ``plot`` must not either --
 it draws what the result already holds. There were four such methods
 (``BandStructure``, ``DensityOfStates``, ``ProjectedDOS``, ``OpticalSpectrum``)
@@ -21,14 +21,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
-from pypresso.response.spectra import VibrationalSpectrum
-from pypresso.topology.berry import BerryCurvature
-from pypresso.workflows.bands import BandStructure
-from pypresso.workflows.dos import DensityOfStates
-from pypresso.workflows.pdos import ProjectedDOS
-from pypresso.workflows.relax import RelaxResult, RelaxStep
-from pypresso.workflows.spiral import SpiralScan
-from pypresso.workflows.tddft import OpticalSpectrum
+from defumat.response.spectra import VibrationalSpectrum
+from defumat.topology.berry import BerryCurvature
+from defumat.workflows.bands import BandStructure
+from defumat.workflows.dos import DensityOfStates
+from defumat.workflows.pdos import ProjectedDOS
+from defumat.workflows.relax import RelaxResult, RelaxStep
+from defumat.workflows.spiral import SpiralScan
+from defumat.workflows.tddft import OpticalSpectrum
 
 pytestmark = pytest.mark.unit
 
@@ -186,19 +186,19 @@ def test_every_drawable_result_takes_an_axes_and_returns_it(cls):
 # ----------------------------------------------------------------------
 
 def test_the_comparison_table_aligns_and_computes_the_difference():
-    from pypresso.io import comparison_table
+    from defumat.io import comparison_table
 
     table = comparison_table([("total energy", -15.844527263, -15.84452726)],
                              fmt="{:.8f}")
     header, row = table.splitlines()
-    assert header.split() == ["pypresso", "reference", "difference"]
+    assert header.split() == ["defumat", "reference", "difference"]
     assert row.split()[-1] == "3.0e-09"
     # the columns line up, which is the whole reason the helper exists
     assert len(header) == len(row)
 
 
 def test_a_missing_reference_stays_visible_rather_than_becoming_a_zero():
-    from pypresso.io import comparison_table
+    from defumat.io import comparison_table
 
     table = comparison_table([("Z*", -0.075715, None)])
     assert "--" in table

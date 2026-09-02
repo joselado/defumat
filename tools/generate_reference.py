@@ -1,6 +1,6 @@
 """Run reference inputs through Quantum ESPRESSO and commit the output.
 
-Most of pypresso's validation uses the outputs QE already ships in its
+Most of defumat's validation uses the outputs QE already ships in its
 ``test-suite/``. Ultrasoft and PAW silicon is the case where it does not: no
 committed benchmark covers the pseudopotentials used here, so the reference has
 to be generated once with the vendored ``pw.x`` and stored next to the input --
@@ -149,7 +149,7 @@ def prerequisite(case: Path) -> Path | None:
     ``<stem>-bands.in`` reads the density ``<stem>.in`` converged, so the two
     have to share an outdir. That is the only dependency between cases here, and
     encoding it in the name keeps the inputs plain ``pw.x`` inputs -- which they
-    have to stay, since pypresso reads the same files.
+    have to stay, since defumat reads the same files.
     """
     if not case.stem.endswith("-bands"):
         return None
@@ -166,7 +166,7 @@ def run_case(case: Path, conv_thr: float | None = None) -> str:
     test-suite cases, whose inputs ask for 1e-6: QE then stops with a density
     still wrong in the seventh decimal, and its printed energy *terms* -- which
     are first-order sensitive to the density where the total is second-order --
-    are only good to about 1e-4. Comparing a converged pypresso against that
+    are only good to about 1e-4. Comparing a converged defumat against that
     measures QE's stopping point, not the physics. The dedicated inputs under
     ``tests/data/qe`` and ``benchmarks`` already ask for 1e-10 for the same
     reason; this brings the borrowed ones to the same footing.
@@ -182,7 +182,7 @@ def _invoke(case: Path, tmp: str, conv_thr: float | None) -> str:
     """One ``pw.x`` run in an existing directory."""
     # pseudo_dir and outdir are injected rather than written into the
     # committed input: the input has to stay a plain pw.x input that
-    # pypresso reads unchanged, and neither path is a property of the case.
+    # defumat reads unchanged, and neither path is a property of the case.
     text = case.read_text()
     text = re.sub(
         r"(&control\b)",

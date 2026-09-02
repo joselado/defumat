@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from scipy.special import spherical_jn
 
-from pypresso.pseudo import (
+from defumat.pseudo import (
     atomic_charge_of_g,
     local_potential_of_g,
     mesh_cutoff_index,
@@ -13,8 +13,8 @@ from pypresso.pseudo import (
     simpson,
     spherical_bessel,
 )
-from pypresso.pseudo.radial import RCUT
-from pypresso.units import E2, FPI
+from defumat.pseudo.radial import RCUT
+from defumat.units import E2, FPI
 
 pytestmark = pytest.mark.unit
 
@@ -160,7 +160,7 @@ def test_a_stray_ampersand_is_repaired_rather_than_refused(tmp_path, pseudo_dir)
     The substitution is safe because it rewrites exactly the ``&`` no XML parser
     would accept: on every UPF committed here it is a no-op.
     """
-    from pypresso.pseudo.upf import _STRAY_AMPERSAND
+    from defumat.pseudo.upf import _STRAY_AMPERSAND
 
     original = (pseudo_dir / "Si.pz-vbc.UPF").read_bytes()
     assert _STRAY_AMPERSAND.sub(b"&amp;", original) == original

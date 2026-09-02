@@ -16,7 +16,7 @@ spin-polarised run whose eigenvalues come in two channels (`pw_lsda/lsda.in`).
 import numpy as np
 import pytest
 
-from pypresso.io import read_qe_output
+from defumat.io import read_qe_output
 
 pytestmark = pytest.mark.unit
 

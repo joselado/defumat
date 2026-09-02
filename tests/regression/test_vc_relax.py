@@ -24,7 +24,7 @@ the cell and the atoms are both doing something, and doing it at once.
 the sharpest case here because of it.** ``symm_base.f90`` tests a fixed
 catalogue of rotation matrices written in a canonical cartesian frame, so QE
 finds a symmetry only when the crystal is presented in one of those frames;
-:func:`~pypresso.system.symmetry.lattice_point_group` here searches for lattice
+:func:`~defumat.system.symmetry.lattice_point_group` here searches for lattice
 vectors of matching lengths and angles, which is orientation-free -- its module
 docstring has always said so. ``vc-relax3`` and ``vc-relax4`` are the *same*
 rhombohedral crystal in two settings, and QE finds **2** operations for the
@@ -43,12 +43,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.system import build_system
-from pypresso.units import RY_TO_KBAR
-from pypresso.workflows.vc_relax import run_vc_relax
+from defumat.io import read_qe_output
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.system import build_system
+from defumat.units import RY_TO_KBAR
+from defumat.workflows.vc_relax import run_vc_relax
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
@@ -151,7 +151,7 @@ def test_the_relaxed_cell_matches_pw_x(name, pseudo_dir):
     """The nine cell coordinates, against ``pw.x``'s own relaxed cell."""
     result = _relaxed(name, pseudo_dir, True)
     reference = _reference(name, True)
-    assert result.converged, f"{name}: pypresso did not converge"
+    assert result.converged, f"{name}: defumat did not converge"
     difference = np.abs(result.cell - reference.final_cell).max()
     assert difference < CELL_BOHR, f"{name}: cell differs by {difference:.2e} bohr"
 

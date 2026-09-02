@@ -42,7 +42,7 @@ def _record(case="si8-1k", **overrides):
 
 ENVIRONMENT = {
     "date": "2026-08-20 10:00", "host": "l26-0350", "cpu": "Intel(R) Core(TM) Ultra 5",
-    "cores": 14, "python": "3.14.6", "jax": "0.11.0", "pypresso": "0.0.1",
+    "cores": 14, "python": "3.14.6", "jax": "0.11.0", "defumat": "0.0.1",
     "qe": "v.7.5", "commit": "abc1234",
 }
 

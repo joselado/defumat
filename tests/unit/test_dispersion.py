@@ -17,19 +17,19 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import parse_pw_input
-from pypresso.io.qeref import read_qe_output
-from pypresso.system.builder import build_system
-from pypresso.system.cell import Cell, latgen
-from pypresso.system.elements import atomic_number, element_symbol
-from pypresso.system.structure import Species, Structure
-from pypresso.vdw import (
+from defumat.io.pwin import parse_pw_input
+from defumat.io.qeref import read_qe_output
+from defumat.system.builder import build_system
+from defumat.system.cell import Cell, latgen
+from defumat.system.elements import atomic_number, element_symbol
+from defumat.system.structure import Species, Structure
+from defumat.vdw import (
     D2_COEFFICIENTS,
     build_grimme_d2,
     build_vdw_correction,
     canonical_vdw_corr,
 )
-from pypresso.vdw.analytic import dispersion_force, dispersion_stress
+from defumat.vdw.analytic import dispersion_force, dispersion_stress
 
 pytestmark = pytest.mark.unit
 

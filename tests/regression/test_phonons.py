@@ -41,13 +41,13 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.basis.fft import g_to_r, r_to_g
-from pypresso.forces import compute_forces
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.response.phonon import _require_one_spin_channel, dynamical_matrix
-from pypresso.scf import Calculation, run_scf
-from pypresso.system import build_system
+from defumat.basis.fft import g_to_r, r_to_g
+from defumat.forces import compute_forces
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.response.phonon import _require_one_spin_channel, dynamical_matrix
+from defumat.scf import Calculation, run_scf
+from defumat.system import build_system
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
@@ -244,7 +244,7 @@ def test_the_gamma_phonon_of_a_metal_matches_quantum_espresso():
     counted the occupation twice. QE never does: ``dynmat_us.f90`` reads ``wg``
     for the frozen Hessian and ``drhodvnl.f90`` reads ``2 wk`` for the
     electronic term, in two routines. Splitting the ``jvp`` accordingly is the
-    whole of the change (:func:`pypresso.response.phonon._state_weights`).
+    whole of the change (:func:`defumat.response.phonon._state_weights`).
 
     Three of the six modes are the primitive cell's at the zone-boundary point
     the doubling folds in; the other three are acoustic and are the diagnostic
@@ -474,7 +474,7 @@ def test_the_gamma_phonon_of_a_moving_overlap_matches_quantum_espresso(case):
 
     * the source term is ``(dH/du - eps dS/du)|psi>`` (``compute_deff``);
     * the first-order state has an occupied block the solve does not produce
-      (:func:`~pypresso.response.phonon.orthogonality_states`);
+      (:func:`~defumat.response.phonon.orthogonality_states`);
     * the mixed state changes at *frozen* states -- the augmentation charge and
       the projectors travel with their atom (``drho.f90``) -- and that change
       both screens and enters the assembly;

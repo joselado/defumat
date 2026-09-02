@@ -10,7 +10,7 @@ internal statements and one analytic limit, and each fails differently:
 * the **symmetric** part must reproduce P37's independent-particle dielectric
   function exactly. That chain is a different assembly -- a Dyson solve over a
   response sphere rather than a resolvent sum over band pairs -- and it reaches
-  ``ph.x`` through :func:`~pypresso.response.efield.dielectric_tensor`. It is
+  ``ph.x`` through :func:`~defumat.response.efield.dielectric_tensor`. It is
   what pins the prefactor, and it is the check the factor of two P50 found
   would have failed;
 * the **f-sum rule** converges onto ``<n|d2H/dk^2|n>``, measured separately by a
@@ -39,16 +39,16 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.response.conductivity import optical_conductivity
-from pypresso.response.velocity import VelocityOperator
-from pypresso.scf import run_scf
-from pypresso.system import build_system
-from pypresso.system.kpoints import KPoints
-from pypresso.workflows.conductivity import run_conductivity
-from pypresso.workflows.nscf import fixed_density_states
-from pypresso.workflows.tddft import run_absorption
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.response.conductivity import optical_conductivity
+from defumat.response.velocity import VelocityOperator
+from defumat.scf import run_scf
+from defumat.system import build_system
+from defumat.system.kpoints import KPoints
+from defumat.workflows.conductivity import run_conductivity
+from defumat.workflows.nscf import fixed_density_states
+from defumat.workflows.tddft import run_absorption
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
@@ -175,7 +175,7 @@ def _weights(system, pseudos, density, nbnd):
     is exactly ``(pi/2 Omega) sum t_nm |V_nm|^2`` over the pairs with a
     positive gap, so no frequency grid and no ``eta`` enter the number at all.
     """
-    from pypresso.response.conductivity import _pair_weights
+    from defumat.response.conductivity import _pair_weights
 
     calculation, _, eigenvalues, psi = fixed_density_states(
         system, pseudos, density, nbnd=nbnd, conv_thr=1e-10

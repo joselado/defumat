@@ -13,21 +13,21 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.pseudo.radial import simpson_weights
-from pypresso.pseudo.atomic import (
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.pseudo.radial import simpson_weights
+from defumat.pseudo.atomic import (
     atomic_channels,
     atomic_wavefunctions,
     count_atomic_wavefunctions,
 )
-from pypresso.scf.driver import Calculation
-from pypresso.scf.potential import v_of_rho
+from defumat.scf.driver import Calculation
+from defumat.scf.potential import v_of_rho
 from tests.exact_reference import exact_eigenpairs_all
-from pypresso.solvers.davidson import starting_vectors
-from pypresso.solvers.subspace import rayleigh_ritz
-from pypresso.system import build_system
-from pypresso.system.cell import Cell
+from defumat.solvers.davidson import starting_vectors
+from defumat.solvers.subspace import rayleigh_ritz
+from defumat.system import build_system
+from defumat.system.cell import Cell
 
 pytestmark = pytest.mark.unit
 

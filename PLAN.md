@@ -1,4 +1,4 @@
-# pypresso — architecture and implementation plan
+# defumat — architecture and implementation plan
 
 Target for the first milestone: **SCF, band structure, DOS**, in pure Python with JAX
 (Numba where a host-side loop is the better tool). Everything else in Quantum ESPRESSO is
@@ -114,7 +114,7 @@ refusal had to move to `Calculation.__init__` where the symmetry decision is act
 ## 2. Package layout
 
 ```
-pypresso/
+defumat/
   __init__.py           # enables x64 before anything else; top-level API
   config.py             # precision policy, device selection, runtime options
   units.py              # constants + conversions (ref: Modules/constants.f90)
@@ -183,7 +183,7 @@ pypresso/
     scf.py, nscf.py, bands.py, dos.py
     pdos.py             # P8: projwfc.x -- the projected DOS and the Lowdin charges
     spiral.py           # P19: an E(q) scan; P21: relaxing q down its gradient
-  cli.py                # pypresso scf|bands|dos <input>
+  cli.py                # defumat scf|bands|dos <input>
 tests/
   unit/                 # analytic and self-consistency checks
   regression/           # against QE reference outputs
@@ -393,7 +393,7 @@ exact; the `nscf` run of `scf-2.in` matches on its own grid.
 
 **P8 — DOS. ✅ DONE.** Smearing and tetrahedron Brillouin-zone integration behind a name
 registry, on top of an NSCF grid run lifted out of `workflows/bands.py` into
-`workflows/nscf.py`, plus `dos.x`'s `.dos` file and a `pypresso dos` subcommand. The
+`workflows/nscf.py`, plus `dos.x`'s `.dos` file and a `defumat dos` subcommand. The
 tetrahedron method is also an *occupation* scheme inside the SCF, which is where the hard
 numbers are. *Check met:* all three of QE's fcc-aluminium benchmarks in `pw_metal`, which
 between them cover every variant — `metal-tetrahedra.in` (`tetrahedra-opt`, an SCF) to
@@ -477,9 +477,9 @@ loops over them and the `.dos` file grows a `dosup`/`dosdw` pair with one summed
    NSCF grid comes out **15.3379 eV against QE's 15.3379**.
 
 **P8 x projwfc — the projected density of states. ✅ DONE.** The remainder of P8:
-`pypresso/projwfc/` (what the projection columns are, and the projection itself),
+`defumat/projwfc/` (what the projection columns are, and the projection itself),
 `workflows/pdos.py` (the integration, the Löwdin charges and the workflow), the
-`filpdos` writer in `io/output.py` and a `pypresso pdos` subcommand. What is
+`filpdos` writer in `io/output.py` and a `defumat pdos` subcommand. What is
 computed is `PP/src/projwfc.f90`'s
 
     proj[i, n, k] = |<phi_i| S |psi_nk>|^2,   phi = O^{-1/2} S chi,  O_ij = <chi_i|S|chi_j>
@@ -544,7 +544,7 @@ Design decisions, in the pattern the rest of the code follows:
   across (P12) — and it costs nothing, because re-solving the same Hamiltonian
   at the same k-points gives back the same states. `grid=` still runs an NSCF on
   a denser grid, for the same reason a DOS does.
-* **`pypresso/projwfc/` sits below the workflows and does not import them**
+* **`defumat/projwfc/` sits below the workflows and does not import them**
   (rule R3). The projection is a `pseudo`/`scf`-level object; the density of
   states built from it needs `DOS_SCHEMES`, so it lives in `workflows/pdos.py`.
   Putting both in one package is an import cycle, which is how the layering rule
@@ -747,7 +747,7 @@ quickly on a landscape that flat, which is a mixer-robustness item for `PERFORMA
 backlog rather than a correctness gap — `o-paw-spin-pbe` pins the identical code path.
 
 **P10 — Performance and parallelism. 🔶 FIRST PASS DONE.** The metric is single-core
-pypresso against single-core QE on the same machine (`tools/compare_qe.py`, inputs in
+defumat against single-core QE on the same machine (`tools/compare_qe.py`, inputs in
 `benchmarks/`), and it now stands at **~3.3x per SCF iteration**, from 53x. Done: `vmap`
 over k-points, the iteration body compiled in three units, the Fermi bisection moved
 on-device, one host sync per iteration, the Ewald real-space sum vectorised, setup's
@@ -825,7 +825,7 @@ optimisation.** `batching.py` defaulted both dials to `1` on *every* platform, s
 Every GPU number above was produced by a dial set by hand in an sbatch script, and nothing
 in the code said so. The default now follows the platform (`_platform_default`): QE's loop
 on a CPU, the whole of both axes on anything else, with an explicit argument beating
-`PYPRESSO_*_BATCH` beating the platform, both dials moving together because `k=all, b=1` is
+`DEFUMAT_*_BATCH` beating the platform, both dials moving together because `k=all, b=1` is
 worse than either end, and the CPU default bit-identical to what it was. The accelerator
 branch is tested here by substituting the backend, so it needs no card. `GPU.md` §5's rule
 is what shapes it: a platform-dependent choice is a dial with a per-platform default, never
@@ -879,7 +879,7 @@ passes and a converged SCF sits on the exact eigenvalues of its own converged Ha
 **The k axis is a dial now, and its default is QE's.** Batching every k-point into one
 `vmap` — which is what R6 exists to allow — was never measured against the alternative
 until a converged bismuthene run needed 12.7 GB for 19 irreducible k-points of
-two-component spinors. `pypresso/batching.py` chunks the axis instead, defaulting to one
+two-component spinors. `defumat/batching.py` chunks the axis instead, defaulting to one
 k-point at a time exactly as `c_bands.f90`'s `k_loop` and `sum_band.f90` do, with
 `k_batch=None` for the old behaviour; it is a `lax.map`/`lax.scan`, so the body is still
 compiled once and still differentiable, and the answer moves by round-off alone (1.8e-15
@@ -1156,10 +1156,10 @@ approximates.
 
 ### P11a — The stress tensor. ✅ DONE.
 
-`pypresso/stress/` (the strained energy, its gradient, QE's seven hand-derived terms behind
+`defumat/stress/` (the strained energy, its gradient, QE's seven hand-derived terms behind
 a name registry, and the `Stress` object with its two residues), `Calculation.at_strain`,
 `symmetrize_matrix` (`symme.f90`'s `symmatrix`), `tstress` on `System` and on `run_scf`,
-`SCFResult.stress`, and a `pypresso stress` subcommand.
+`SCFResult.stress`, and a `defumat stress` subcommand.
 
 **It is P15's construction with the cell in place of the atoms.** The total energy is
 written down once — `forces/energy.py`'s `energy_at`, which the force and the stress now
@@ -1370,10 +1370,10 @@ had to fix:
   that had to be rebuilt. The sphere is **not** — QE freezes it too, for the whole
   relaxation, and rebuilds it only in the final SCF.)*
 
-**P15 — Forces and structural relaxation. ✅ DONE.** `pypresso/forces/` (the stationary
+**P15 — Forces and structural relaxation. ✅ DONE.** `defumat/forces/` (the stationary
 energy functional, its gradient, and QE's six hand-derived terms behind a name registry),
-`pypresso/relax/bfgs.py` (`bfgs_module.f90`), `workflows/relax.py`, `Calculation.at_positions`,
-`if_pos`, `symvector`, `checkallsym`, and a `pypresso relax` subcommand. *Check met:* forces
+`defumat/relax/bfgs.py` (`bfgs_module.f90`), `workflows/relax.py`, `Calculation.at_positions`,
+`if_pos`, `symvector`, `checkallsym`, and a `defumat relax` subcommand. *Check met:* forces
 match QE on **five references** — displaced silicon norm-conserving, ultrasoft, PAW and PBE,
 and a spin-polarized O₂ molecule — to **≤2e-5 Ry/bohr** by both methods and to 6e-7 on the
 crystals; the two methods agree with each other to the size of `force_corr`; every *term*
@@ -1440,7 +1440,7 @@ the constraint and nonlocal terms — refused rather than approximated), and the
 other than BFGS (`damp`, `fire`, molecular dynamics), which are a file and a registration
 each. `vc-relax` was deferred here and is **P29**.
 
-**P16 — Berry curvature, Chern numbers and Z2 invariants. ✅ DONE.** `pypresso/topology/`
+**P16 — Berry curvature, Chern numbers and Z2 invariants. ✅ DONE.** `defumat/topology/`
 (mesh and the reciprocal-lattice wrap, the state sets and their overlap, the augmentation
 charge at an arbitrary wavevector, link variables, Berry curvature behind a name registry,
 Wilson loops, Fu-Kane parities, and the two Z2 methods behind a second registry) and
@@ -1835,7 +1835,7 @@ k-dependent tables is independent of `q`, and P16 measured what rebuilding the r
 
 *Notebook 12.*
 
-**P20 — DFT+U. ✅ DONE (simplified rotationally-invariant).** `pypresso/hubbard/`, four
+**P20 — DFT+U. ✅ DONE (simplified rotationally-invariant).** `defumat/hubbard/`, four
 modules and a term in the Hamiltonian. The functional is Dudarev's (PRB **57**, 1505
 (1998)) with the `J0`/`beta` extension of Himmetoglu et al. (PRB **84**, 115108 (2011)) —
 QE's `lda_plus_u_kind = 0`:
@@ -2393,7 +2393,7 @@ plane-wave spheres.
 *Notebook 18.*
 
 **P24 — Linear response by autodiff: the velocity operator, the Sternheimer equation,
-and the dielectric constant. ✅ DONE.** `pypresso/response/` — `velocity.py`,
+and the dielectric constant. ✅ DONE.** `defumat/response/` — `velocity.py`,
 `sternheimer.py`, `efield.py` — plus `Calculation.at_kcart`,
 `Calculation.symmetrize_directional`, and `symmetrize_vector_density` /
 `symmetrize_atom_tensor` in `system/symmetry.py`. This is P11's remaining half, P22c, and
@@ -2639,7 +2639,7 @@ potential carries a `dns` that is not a function of `drho`); and spin spirals.
 
 ### P24b — Born effective charges for ultrasoft pseudopotentials. ✅ DONE.
 
-`pypresso/response/born.py`, plus two generalisations of
+`defumat/response/born.py`, plus two generalisations of
 `forces/energy.py`: the mixed state may be handed in as a **builder** rather than
 an array (`_mixed_state_part`), and the orthonormality constraint's multipliers
 may be a **matrix** (`_constraint_energy`). P24a left `Z*` norm-conserving and
@@ -2754,7 +2754,7 @@ from the same run is right to 3.4e-5 and is not.
 
 ### P24c — Metals in linear response. ✅ DONE (the solve and `ef_shift`).
 
-`pypresso/response/sternheimer.py` — `Smearing`, `SternheimerSolver._smeared_projection`,
+`defumat/response/sternheimer.py` — `Smearing`, `SternheimerSolver._smeared_projection`,
 `local_density_of_states`, `fermi_level_shift`, `fermi_level_shift_states` — plus two new
 test inputs, `tests/data/qe/al-metal.in` (QE's own `pw_metal/metal.in`, copied so the tests
 run without the vendored tree) and `al2-metal.in` with its regenerated `ph.x` reference.
@@ -2880,7 +2880,7 @@ phonon row covers metals.
 
 ### P25 — Phonons at `Gamma`: the dynamical matrix. ✅ DONE.
 
-`pypresso/response/phonon.py`, plus `Calculation.symmetrize_atom_displacement`,
+`defumat/response/phonon.py`, plus `Calculation.symmetrize_atom_displacement`,
 `symmetrize_atom_displacement_density` and `symmetrize_atom_pair_tensor` in
 `system/symmetry.py`, and one new argument on `forces/energy.py`'s functional. It is
 what P24 was built toward — the electric field's response gave `epsilon_infinity` and
@@ -3039,7 +3039,7 @@ without it there is one point of it.
 
 ### P26 — Electrostriction: `d(chi)/d(strain)` as a mixed third derivative. ✅ DONE.
 
-`pypresso/response/strain.py`, `elastic.py` and `electrostriction.py`, plus
+`defumat/response/strain.py`, `elastic.py` and `electrostriction.py`, plus
 `Calculation.symmetrize_strain_response` and `symmetrize_tensor_density` in
 `system/symmetry.py`, a `kcart` argument on `VelocityOperator`, and a `keep_internals`
 flag on `dielectric_tensor`. It is the first quantity in this project that is a **third**
@@ -3223,8 +3223,8 @@ is refused here too, and so is `nspin = 2`, for P25's reason.
 
 ### P27 — Van der Waals dispersion: Grimme's D2. ✅ DONE.
 
-`pypresso/vdw/` (`grimme.py`, `registry.py`, `analytic.py`), plus
-`pypresso/system/elements.py`, `Calculation.dispersion_sum`/`dispersion`, and one
+`defumat/vdw/` (`grimme.py`, `registry.py`, `analytic.py`), plus
+`defumat/system/elements.py`, `Calculation.dispersion_sum`/`dispersion`, and one
 row each in `forces/analytic.py`, `stress/analytic.py` and `io/qeref.py`.
 
 **Why it is needed and why it is cheap.** A semilocal functional has no London
@@ -3329,10 +3329,10 @@ Neither is a bug. The interlayer force constant here is ~2e-4 Ry/bohr² — thre
 orders below a chemical bond — so the `forc_conv_thr = 1e-5` both codes stop at
 pins the separation only to a few tenths of a bohr, and what `max |F|` is actually
 measuring is the *stiff* mode, the A/B sublattice buckling inside each layer.
-What settles it is asking `pw.x` about pypresso's geometry
+What settles it is asking `pw.x` about defumat's geometry
 (`graphene-bilayer-d2-relaxed.in`, committed): it gives the same total energy to
 **1e-8 Ry** and a force of **3e-6 Ry/bohr** there. The two codes walk the same
-surface and pypresso walked further down it. So the comparison the test makes is
+surface and defumat walked further down it. So the comparison the test makes is
 through the **energies and the forces at each other's answers**, never through
 the coordinates.
 
@@ -3397,7 +3397,7 @@ against a measurement. The compliance is healthy (condition number 32, every
 eigenvalue positive from 27.7 to 886.9), so `M` and `Q` are ordinary here rather
 than the slab artefact a near-singular shear would have made them.
 
-**One thing found on the way that is not this phase's.** pypresso's symmetry
+**One thing found on the way that is not this phase's.** defumat's symmetry
 finder is stricter than `symm_base.f90`'s `accep = 1e-5`: an `ATOMIC_POSITIONS`
 card written with QE's customary six digits (`0.333333`) gives bilayer graphene
 **4** operations here where `pw.x` finds 12, and 43 k-points where `pw.x` uses 19.
@@ -3409,7 +3409,7 @@ digits.
 
 ### P28 — The dynamical matrix of a metal. ✅ DONE.
 
-`pypresso/response/phonon.py` — `_state_weights` and the split in `_force_constants` — and
+`defumat/response/phonon.py` — `_state_weights` and the split in `_force_constants` — and
 the deletion of `require_a_metallic_assembly`, which P24c wrote and this phase closes. It
 is the smallest phase here in lines changed and it is the one with the sharpest before and
 after, because the refusal it lifts had a committed reference sitting beside it
@@ -3510,7 +3510,7 @@ metals and P24c is the layer under it.
 
 ### P28a — A supercell is a regime, and it found two bugs. ✅ DONE.
 
-`pypresso/scf/ewald.py`, `pypresso/system/symmetry.py`, and
+`defumat/scf/ewald.py`, `defumat/system/symmetry.py`, and
 `tests/data/qe/al4-metal.in` with its `ph.x` reference. This phase has no new
 feature in it: it is P28 run on a **bigger cell** — the four-atom conventional
 cubic cell of fcc aluminium instead of the two-atom one — and the whole of its
@@ -3633,7 +3633,7 @@ makes a node bite.
 
 ### P28b — Ten sites: the whole feature set at ten atoms per cell. ✅ DONE.
 
-`pypresso/system/symmetry.py`, `pypresso/response/efield.py`,
+`defumat/system/symmetry.py`, `defumat/response/efield.py`,
 `tools/generate_reference.py`, twenty `pw.x` inputs and one `ph.x` one under
 `tests/data/qe`, with their `pw.x`, `projwfc.x` and `ph.x` references, and
 `tests/regression/test_ten_site.py`. Like P28a this phase adds **no feature**:
@@ -3696,11 +3696,11 @@ generating `S k` for coset representatives `S` of the **lattice** group. On a
 `4 x 4 x 1` grid those images leave the grid: displacing one atom of
 `si10-nc.in` drops the group from six operations to two, and seven of the
 fourteen points `pw.x` ends with have a third crystal coordinate of `1/4`, which
-a grid with one division along that axis has no points at. pypresso reduces the
+a grid with one division along that axis has no points at. defumat reduces the
 *requested* grid with the crystal's own operations, so its seven points are grid
 points and their weights are the orbit sizes. The totals differ by **6.9e-5 Ry**
 and `pw.x`'s own `nosym` run over the same grid says which is which: it gives
--78.97348341, which is pypresso's reduced answer to nine digits and not QE's own
+-78.97348341, which is defumat's reduced answer to nine digits and not QE's own
 reduced -78.97341444. On `4 x 4 x 4` -- closed under every integer rotation --
 `pw.x` reproduces its `nosym` total exactly and the two codes agree to 2e-9. The
 committed pair `si10-nc-anisotropic.in` and `si10-nc-anisotropic-nosym.in` is
@@ -3710,7 +3710,7 @@ that experiment; the force cases run on `4 x 4 x 4` because of it.
 `phq_setup` requires every symmetry operation to map the FFT grid onto itself
 and stops with "FFT grid incompatible with symmetry" on the 15 x 15 x 80 grid of
 the five-cell stack, so `si10-epsilon.in` runs `nosym` -- which is the
-configuration `pypresso.response` accepts on an unshifted grid, and which makes
+configuration `defumat.response` accepts on an unshifted grid, and which makes
 the comparison exact rather than a comparison of two wedges. And with
 `occupations = 'tetrahedra'` (Bloechl's) `pw.x` never converges the elongated
 metallic supercell at all -- 100 iterations with the total energy stable in the
@@ -3814,9 +3814,9 @@ visible in one of those two numbers long before any energy was.*
 
 ### P29 — Variable-cell relaxation: the cell as nine more coordinates. ✅ DONE.
 
-`pypresso/relax/cell.py`, `pypresso/relax/settings.py`, `pypresso/workflows/vc_relax.py`,
+`defumat/relax/cell.py`, `defumat/relax/settings.py`, `defumat/workflows/vc_relax.py`,
 `Calculation.at_cell`, `System.with_cell`, `check_lattice_symmetry`, and the variable-cell
-half of `pypresso/relax/bfgs.py`. `calculation = 'vc-relax'`.
+half of `defumat/relax/bfgs.py`. `calculation = 'vc-relax'`.
 
 **The objection this phase was refused on is QE's own and QE answers it.** The
 entry above read "a moving cell would also invalidate the rule that the FFT grid
@@ -3878,8 +3878,8 @@ both codes holding the same 4159 G-vectors on the same 24³ grid:
 | | frozen basis | fresh basis |
 |---|---|---|
 | `pw.x` | 500.04 kbar | 502.03 |
-| pypresso, before | **564.05** | 502.03 |
-| pypresso, after | **500.04** | 502.03 |
+| defumat, before | **564.05** | 502.03 |
+| defumat, after | **500.04** | 502.03 |
 | a central difference of the energy | **500.12** | 510.30 |
 
 The finite difference is what settled it: 64 kbar is not a Pulay term that
@@ -3961,11 +3961,11 @@ it. It was written at **500 kbar and is not a test there**, and the failure look
 like a bug in the SCF, which is what made it take a while to see: the two codes'
 relaxed geometries agree to **5e-5 bohr** and their final energies are **7.3e-3
 Ry** apart, on identical setups — 12557 G-vectors, a 30³ grid, 24 operations, 10
-k-points — and pypresso reproduces its own 7.3e-3 discrepancy at *QE's* cell,
+k-points — and defumat reproduces its own 7.3e-3 discrepancy at *QE's* cell,
 which rules the geometry out. The reference says what it is: `convergence NOT
 achieved after 100 iterations`. 500 kbar compresses this cell by 25% and closes
 silicon's gap, so a run at the default fixed occupations is ill-posed; `pw.x`
-relaxes happily in the frozen basis and then fails its final SCF, while pypresso
+relaxes happily in the frozen basis and then fails its final SCF, while defumat
 converges the same ill-posed problem to a fixed-occupation solution QE never
 reaches. Two codes disagreeing about a system neither should be describing is not
 a comparison. **At 100 kbar** the cell moves 8.4% — as much as the arsenic cases
@@ -4067,9 +4067,9 @@ doing something and doing it at once.
 
 ### P30 — The Tran-Blaha potential: a functional that is not a derivative. ✅ DONE.
 
-`pypresso/xc/mgga.py`, the meta slot of `pypresso/xc/functional.py`,
-`meta_exchange` in `pypresso/scf/potential.py`, `kinetic_energy_density` in
-`pypresso/scf/density.py`, `laplacian` in `pypresso/basis/gradients.py`,
+`defumat/xc/mgga.py`, the meta slot of `defumat/xc/functional.py`,
+`meta_exchange` in `defumat/scf/potential.py`, `kinetic_energy_density` in
+`defumat/scf/density.py`, `laplacian` in `defumat/basis/gradients.py`,
 `PlaneWaveBasis.kplusg`, and `tau` threaded through `Calculation.potential`,
 `run_scf`, `run_bands`/`run_nscf` and `ScfResidual`. `input_dft = 'tb09'`,
 `'bj06'`, and `mbj_c`.
@@ -4330,8 +4330,8 @@ Becke-Roussel inversion, which is why the `custom_jvp` is not optional.
 ### P31 — The Tran-Blaha potential with spin-orbit coupling. ✅ DONE.
 
 `spinor_band_kinetic_density` and `spinor_kinetic_energy_density` in
-`pypresso/scf/density.py`, `_noncollinear_meta_exchange` in
-`pypresso/scf/potential.py`, and the noncollinear branch of
+`defumat/scf/density.py`, `_noncollinear_meta_exchange` in
+`defumat/scf/potential.py`, and the noncollinear branch of
 `Calculation.kinetic_energy_density`. `noncolin = .true.` and `lspinorb = .true.`
 with `input_dft = 'tb09'`.
 
@@ -4393,7 +4393,7 @@ the algebraic test above is what says the builders agree exactly while the two
 ### P32 — The Tran-Blaha potential on PAW spheres. ✅ DONE.
 
 `_kinetic_tensor`, `_radial_laplacian` and `_meta_exchange_onecenter` in
-`pypresso/paw/onecenter.py`, `PawSpecies.kinetic_ae`/`kinetic_ps`, and `becsum`
+`defumat/paw/onecenter.py`, `PawSpecies.kinetic_ae`/`kinetic_ps`, and `becsum`
 threaded through `fixed_density_states`/`run_bands`/`run_nscf`/`run_dos`.
 
 **The obstacle was supposed to be the coefficients and it was not.** A
@@ -4422,7 +4422,7 @@ derivatives and a `-l(l+1)/r^2`, with no QE counterpart because nothing QE
 evaluates on a sphere asks for one.
 
 **Which angular table carries the `1/sin(theta)` is not inferable from the
-variable names**, and the module docstring of `pypresso/paw/gradient.py` says
+variable names**, and the module docstring of `defumat/paw/gradient.py` says
 one thing while the code does another. Settled by the exact identity
 `int |grad_Omega Y_lm|^2 dOmega = l(l+1)`: `dylmt^2 + dylmp^2` reproduces it to
 every digit on two grid sizes and `dylmt^2 + dylmp^2/sin^2` does not (4.58
@@ -4479,7 +4479,7 @@ from.
 
 ### P33 — PAW's one-centre gradient correction, noncollinear. ✅ DONE.
 
-`_noncollinear_gradient` in `pypresso/paw/gradient.py`, and the quantization axis
+`_noncollinear_gradient` in `defumat/paw/gradient.py`, and the quantization axis
 threaded from `Calculation` down to `onecenter_species`.
 
 P12 refused this and named the reason precisely: `PAW_gcxc_potential` needs the
@@ -4555,7 +4555,7 @@ same rule such systems state for BLAS — pin XLA to the CPUs the job asked for,
   re-run to re-derive a number, and that rule has already paid for itself: the
   first NiI2 script computed its gap at the wrong band index, and because the
   eigenvalues were on disk the fix cost a re-read rather than three hours.
-- **Analysis and plotting stay local.** The cluster runs pypresso and nothing
+- **Analysis and plotting stay local.** The cluster runs defumat and nothing
   else.
 
 **Build the thin path first.** Polling and fetch machinery written blind against
@@ -4573,7 +4573,7 @@ relaxed explicitly, as the pseudopotential downloads of P30 did.)
 
 ### P35 — Raman tensors: two fields and a displacement. ✅ DONE.
 
-`pypresso/response/nonlinear.py`, `raman_tensors`. The third derivative of the
+`defumat/response/nonlinear.py`, `raman_tensors`. The third derivative of the
 energy with respect to **two electric fields and one atomic displacement** —
 `d(eps)/d(tau)`, which is what a non-resonant Raman intensity is computed from.
 It is P26's construction with one substitution: the *same* variational
@@ -4597,7 +4597,7 @@ one consumer is unproven.
 *Check met*, on AlAs (zincblende, LDA norm-conserving, `ecutwfc = 10`, the
 unshifted 4x4x4 grid run whole under `nosym`):
 
-| quantity | pypresso | reference | |
+| quantity | defumat | reference | |
 |---|---|---|---|
 | `d(eps_yz)/d(tau_(Al,x))` | **-3.118279** | -3.118310 | central difference of `eps` over re-converged displaced cells, **1.0e-5** relative |
 | `d(eps_yz)/d(tau_(As,x))` | **+3.119166** | +3.119194 | the same, 9e-6 |
@@ -4714,7 +4714,7 @@ of a third derivative) that shape the order they should be taken in.
 
 Two things, and the second one is why the first is cheap.
 
-**The symmetriser first.** `pypresso/system/symmetry.py`,
+**The symmetriser first.** `defumat/system/symmetry.py`,
 `symmetrize_cartesian_tensor` and `symmetrize_atom_cartesian_tensor` —
 `symme.f90`'s `symmatrix3` and `symtensor3`, written **at any rank** rather than
 at rank 3, because Fortran wrote the rank-2 case out in four nested loops and
@@ -4775,7 +4775,7 @@ symmetrises the density it builds as a **scalar**. No average of the assembled
 tensor undoes one applied inside the chain rule. `electrostriction(elastic=False)`
 is the wedge route and the refusal says so.
 
-**Then the spectra**, `pypresso/response/spectra.py`. P35's Raman tensors are
+**Then the spectra**, `defumat/response/spectra.py`. P35's Raman tensors are
 per *atom* and what an experiment resolves is a *mode*, so this is the
 contraction with the phonon eigendisplacement — `R^(nu) = sum_(a,c) dchi/dtau z`,
 `p^(nu) = sum_(a,c) Z* z` — followed by Placzek's two rotational invariants
@@ -4786,12 +4786,12 @@ Every ingredient existed: P35's tensors, P25's modes, P24b's Born charges.
 table through `dynmat.x`, whose `RamanIR` (`LR_Modules/dynmat_sub.f90`) is *pure
 post-processing* — it reads `dchi_dtau`, `zstar` and `eps0` off a file and
 contracts them — and shares nothing with the `lraman` branch P35 established has
-regressed. `pypresso/io/dynmat.py` writes the file `ph.x` would have written and
+regressed. `defumat/io/dynmat.py` writes the file `ph.x` would have written and
 the test runs the vendored binary on it.
 
 *Check met*, against the vendored `dynmat.x` on tensors this code computed:
 
-| | pypresso | `dynmat.x` |
+| | defumat | `dynmat.x` |
 |---|---|---|
 | AlAs optical triplet | 353.25 cm⁻¹, IR 5.9262, Raman **446.8854**, depol 0.7500 | every digit |
 | silicon `T_2g` | 519.20 cm⁻¹, IR **0.0000**, Raman **9815.5635**, depol 0.7500 | every digit |
@@ -4843,7 +4843,7 @@ here already.
 
 ### P37 — The bootstrap kernel: excitons from TDDFT. ✅ DONE.
 
-`pypresso/tddft/`, `pypresso/workflows/tddft.py`, `tests/regression/test_tddft.py`,
+`defumat/tddft/`, `defumat/workflows/tddft.py`, `tests/regression/test_tddft.py`,
 `tests/unit/test_tddft_machinery.py`. The design below was written and reviewed
 twice **before** the work; what the work then found is at the end of the entry,
 and three of its four findings share one shape — they produce a spectrum that is
@@ -4875,7 +4875,7 @@ it would be dishonest. **Two genuine ones exist and are the phase's real content
 
 **The expensive part is the object this code does not have.** `chi_0(G, G', w)`
 as a *matrix* over a response G-set and a frequency axis. Everything in
-`pypresso/response/` is Sternheimer, static, and gives `chi_0` only as an
+`defumat/response/` is Sternheimer, static, and gives `chi_0` only as an
 operator `drho = chi_0 dV`. So P37's weight is `chi_0`, not the kernel.
 
 **Adler-Wiser, and the hybrid is a trap.** `chi_0` is built by sum over states
@@ -4919,20 +4919,20 @@ Elk does.
 `genvchi0` reads bare momentum matrix elements `pmat`, which is legitimate in an
 all-electron code and silently wrong in a pseudopotential one, where
 `[H, r] != p` because of the nonlocal projectors. What is needed is the velocity
-operator — and that is `pypresso/response/velocity.py`, one `jvp` of `H(k)` at a
+operator — and that is `defumat/response/velocity.py`, one `jvp` of `H(k)` at a
 frozen sphere, rule D2 cashed in for the third time. **This is the phase's honest
 autodiff claim**: not that the kernel is differentiated, but that the ingredient
 Elk reads off a file is here a derivative of the Hamiltonian, and has to be.
 
 **The scissors shift is part of the method, not a nicety.** PRL Eq. (3) replaces
 `chi_0` by a gap-corrected model response, and every published bootstrap spectrum
-is computed that way; without it nothing validates. pypresso has no scissors knob
-at all today (`grep -rn scissor pypresso/` is empty), so P37 adds one — and with
+is computed that way; without it nothing validates. defumat has no scissors knob
+at all today (`grep -rn scissor defumat/` is empty), so P37 adds one — and with
 it Elk's renormalisation of the matrix elements, `getpmat.f90:61`:
 `p -> p * e_ij/(e_ij -+ Delta)` for the valence-conduction pairs, the Del
 Sole-Girlanda factor, since the eigenvalues have already been shifted.
 
-**Modules.** `pypresso/tddft/`, shaped like `topology/` — a new subsystem rather
+**Modules.** `defumat/tddft/`, shaped like `topology/` — a new subsystem rather
 than a fourth kind of thing inside `response/`, because nothing here is a
 Sternheimer solve.
 
@@ -5150,7 +5150,7 @@ against the vendored binary and committed as
 `tests/data/qe/reference.out.elk-lif-bootstrap`. Rocksalt LiF, LDA, the
 head-only kernel (`gmaxrf = 0.0`), 8x8x8:
 
-| | pypresso | Elk |
+| | defumat | Elk |
 |---|---|---|
 | RPA peak (no local fields) | 3.47 at **24.37 eV** | 2.67 at **24.49 eV** |
 | bootstrap peak | 16.78 at **14.05 eV** | 18.53 at **13.67 eV** |
@@ -5192,13 +5192,13 @@ not in `tests/data/pseudo/`.
 
 ### P38 — The calculator: one object, bound methods. ✅ DONE.
 
-**What.** `pypresso/calculator.py`. A `Calculator` is a `System` together with its
+**What.** `defumat/calculator.py`. A `Calculator` is a `System` together with its
 pseudopotentials, and every workflow, force, stress, response and invariant in the
 package is a method on it. `Calculator.from_file("scf.in")` reads the input and loads
 the pseudopotentials the `ATOMIC_SPECIES` card names; `get_scf()` runs and caches the
-ground state; every other method consumes that cache. `from pypresso import Calculator`
+ground state; every other method consumes that cache. `from defumat import Calculator`
 is the one import a script needs, resolved lazily through a module `__getattr__` so that
-`import pypresso` does not pull the whole package into a process that wanted `units`.
+`import defumat` does not pull the whole package into a process that wanted `units`.
 
 **Why it is a facade and not methods on `System`.** Two reasons, the second decisive.
 `System` is an `eqx.Module` crossing `jit`/`grad` — `at_positions`, `at_strain` and
@@ -5894,7 +5894,7 @@ works: twelve electrons and `tot_magnetization = 2` give seven up and five down,
 both closed shells — measured gaps 0.438 Ry up and 0.517 Ry down.
 
 **The second finding is what stopped the screened response on the one
-magnetic-insulator cell there is here, and it is not in `pypresso/response/` at
+magnetic-insulator cell there is here, and it is not in `defumat/response/` at
 all.** (One cell: an AFM bulk insulator whose magnetization stays below its
 charge everywhere was not run, so this is a diagnosis of triplet O2 rather than
 of the whole regime.)
@@ -5910,7 +5910,7 @@ second derivative is infinite at the channel it zeroes, so the product is
 further out. Two obvious repairs were tried and **neither works**: pulling the
 clip inside to `1 - eps` for `eps` of 1e-12, 1e-10 and 1e-8 leaves all 1504
 points NaN and turns the largest entry into `inf`, so what diverges is the
-kernel itself and not only the clip. Making `pypresso/xc`'s spin branch twice
+kernel itself and not only the clip. Making `defumat/xc`'s spin branch twice
 differentiable at a fully polarized point is the missing piece; until then a
 magnetic system with vacuum is **refused by name** in the response loop
 (`_require_a_finite_kernel`), because a NaN `|ddv_scf|^2` never satisfies
@@ -6128,7 +6128,7 @@ perfectly.
 
 ### P47 — The Kubo Berry curvature of a real crystal. ✅ DONE, ultrasoft/PAW refused by name.
 
-`pypresso/topology/berry.py` has carried a `kubo` curvature method since P16 and
+`defumat/topology/berry.py` has carried a `kubo` curvature method since P16 and
 it has only ever been reachable from a tight-binding model. Its refusal for a
 plane-wave calculation said the velocity operator "needs `d(vkb)/dk` and the
 k-dependence of the plane-wave sphere" and pointed at P11. **P24 wrote both**,
@@ -6138,7 +6138,7 @@ membership that is piecewise constant in `k`, and `VelocityOperator.projectors`
 is `gen_us_dj`/`gen_us_dy`'s derivative about the atom's own centre. So the
 smooth `Omega(k)` map of a real crystal — the anomalous-Hall picture, what
 anyone wants beside the integer — was refused for a reason the repo had already
-satisfied. It is in now: `pypresso/topology/kubo.py`.
+satisfied. It is in now: `defumat/topology/kubo.py`.
 
 **The route GAPS.md offered first is the illegal one.** A
 `PlaneWaveStates.hamiltonian`-shaped adaptor would let the existing
@@ -6289,7 +6289,7 @@ validated.
 
 #### P48a — The effective mass tensor. ✅ DONE.
 
-`pypresso/response/effmass.py`. Elk's task 25 (`effmass.f90`); QE has nothing —
+`defumat/response/effmass.py`. Elk's task 25 (`effmass.f90`); QE has nothing —
 `grep -ri "effective mass"` over `PW/src` and `PP/src` is empty.
 
     (1/m*)_ab = (1/2) d^2 eps_n(k) / dk_a dk_b,
@@ -6370,7 +6370,7 @@ is the evidence: silicon's threefold `Gamma_25'` gets **-5.8938, -3.7690,
 agree to 5e-8 Ha.
 
 **Against Elk** — the vendored binary, all-electron LAPW, PBE, same cell
-(`a = 10.26` bohr), against pypresso on the **PAW** `Si.pbe-n-kjpaw_psl.0.1`
+(`a = 10.26` bohr), against defumat on the **PAW** `Si.pbe-n-kjpaw_psl.0.1`
 dataset at `ecutwfc = 30`, both at Elk's default stencil. The quantity compared
 is Elk's `d` matrix, which is in Hartree atomic units and is therefore
 `inverse_mass` exactly:
@@ -6383,7 +6383,7 @@ is Elk's `d` matrix, which is in Hartree atomic units and is therefore
 | `Gamma_2'c`, band 8 | 5.8460134 | 5.8671956 | 5.8682740 | 0.36% |
 
 as masses, `Gamma_1v` is **1.16267** `m_e` against Elk's 1.16238 and
-`Gamma_2'c` **0.170439** against 0.171057. The two pypresso routes agree with
+`Gamma_2'c` **0.170439** against 0.171057. The two defumat routes agree with
 each other to **1.2e-5** on `Gamma_1v` and 1.1e-3 on `Gamma_2'c` — the same
 distance from Elk on every row, which is what says the residual is Elk's drift
 and the pseudopotential rather than either route's arithmetic — and the
@@ -6398,19 +6398,19 @@ then **diverging**, which is the `delta/h^2` signature above. `Gamma_2'c` is
 worse: 4.5966, 5.5284, 5.8460, 6.0222, 5.9158, non-monotone with no limit.
 `effmass.f90`'s stencil includes its centre and Elk's APW basis is `|G+k| <
 gkmax`, so it has the same trap; fitting the offset gives `delta ~ 1e-6` Ha,
-the same order measured here. pypresso's velocity route over the same range is
+the same order measured here. defumat's velocity route over the same range is
 0.8596006, 0.8599815, 0.8600630, 0.8600562 — monotone, converged to five
 digits. **So the 0.02% agreement at Elk's default is partly luck about where the
 drift has got to**, and the honest statement is that the two codes agree to
 0.02-2% while only one of them converges.
 
-The residual 1-2% on the multiplet sums is not pypresso's basis: `ecutwfc` 30 →
+The residual 1-2% on the multiplet sums is not defumat's basis: `ecutwfc` 30 →
 40 → 50 moves `Gamma_1v` by 4.6e-5 and the `Gamma_25'` sum by 3.6e-3, so it is
 Elk's own drift plus the genuine pseudopotential-against-all-electron
 difference.
 
 **Timing**, one core each, same machine. Elk: 1.36 s for the ground state and
-**1.08 s** for task 25 (27 k-points, all states). pypresso PAW: 4.3 s for the
+**1.08 s** for task 25 (27 k-points, all states). defumat PAW: 4.3 s for the
 SCF, **4.3 s** for the velocity route warm (4.9 s cold, compilation included)
 and 6.0 s warm for the eigenvalue route. About 4x, and the comparison is not
 like-for-like — a 733-plane-wave basis against LAPW's much smaller one, and 13
@@ -6422,7 +6422,7 @@ quantity in the package.
 
 #### P48b — Site-resolved `<L>`, `<S>` and `<J>`. ✅ DONE, two regimes refused.
 
-`pypresso/projwfc/angular_momentum.py`. Elk's tasks 15/16 (`writelsj.f90`,
+`defumat/projwfc/angular_momentum.py`. Elk's tasks 15/16 (`writelsj.f90`,
 `dmatls.f90`, `gendmat.f90`). **QE has `lorbm`** — `PW/src/orbm_kubo.f90`, the
 *cell's* orbital magnetization by the modern theory — and nothing resolved by
 atom, so the README column is `partly` and the new part is the site
@@ -6441,7 +6441,7 @@ set, the same one DFT+U measures `ns` with, and `S` is the calculation's own.
 **`L` had to be written in the basis the code actually uses.** `L_z` is diagonal
 on `Y_lm` and is *not* diagonal on the real harmonics `ylmr2` builds, so the
 matrices are the complex ones conjugated with `rot_ylm` — the unitary
-`pypresso/pseudo/spinorbit.py` already builds for `fcoef` —
+`defumat/pseudo/spinorbit.py` already builds for `fcoef` —
 `L^real = A^T L^complex conj(A)`. The result is **purely imaginary and
 antisymmetric**, which is a consequence rather than a convention (`L` Hermitian,
 the harmonics real) and is therefore the cheapest test that the transform is
@@ -6490,7 +6490,7 @@ the site matrices are `(natom, nshell, 2l+1, 2, 2l+1, 2)`, which is nothing.
 
 ### P49 — The notebooks, rewritten for someone computing a property. ✅ DONE.
 
-`notebooks/`, `notebooks/README.md`, `pypresso/calculator.py`, and one new test.
+`notebooks/`, `notebooks/README.md`, `defumat/calculator.py`, and one new test.
 Not started. This entry is the design, written before the work and reviewed
 before being written down, so the session that picks it up does not re-derive the
 diagnosis. The complaint that started it is that the code in the notebooks is
@@ -6503,7 +6503,7 @@ per notebook against a convention that says "about eight code cells, not twenty"
 and 17.6 lines per cell, so the shape is a handful of very long cells rather than
 many short ones (the longest are 48, 42, 40, 40 and 39 lines). Of those lines
 **14% are hand-rolled matplotlib and 15% are `print` formatting**. Every one of
-the 29 imports from `pypresso` past `Calculator`, median four such lines, worst
+the 29 imports from `defumat` past `Calculator`, median four such lines, worst
 nine. The instinct is to call this boilerplate and shorten it. That is a symptom.
 
 **The cause is that the notebooks are doing the test suite's job in public.** The
@@ -6943,7 +6943,7 @@ least once and each cost a correction:
 **A stale-warning sweep over all 29 committed outputs found exactly one** and it
 is fixed (`11` claimed spinor forces and stress were unimplemented, which P46
 implemented). Worth re-running after any refusal changes: grep the `.md` exports
-for warning text and check each string still exists in `pypresso/`.
+for warning text and check each string still exists in `defumat/`.
 
 **The skeleton, which every property notebook is held to.** Nine cells, 60 to 70
 non-comment code lines, no cell over 25.
@@ -7000,8 +7000,8 @@ Cell 2 is the anchor the enforcement test below is written around.
   sweep, and they are what the user signs off on.
 - **4. The enforcement test.** `tests/unit/test_notebook_conventions.py`, parsing
   the `.ipynb` JSON, executing nothing, in the fast gate. Per notebook: an import
-  allowlist (`pypresso`, `pypresso.units`, `pypresso.system.kpoints`,
-  `pypresso.io`), anything else needing an inline justification comment and capped
+  allowlist (`defumat`, `defumat.units`, `defumat.system.kpoints`,
+  `defumat.io`), anything else needing an inline justification comment and capped
   at two; the first code cell containing `Calculator.from_` and at most twelve
   lines; 80 code lines per notebook and 25 per cell; banned tokens; the `.md`
   export's cell count matching the `.ipynb`, which is a staleness canary that costs
@@ -7036,7 +7036,7 @@ were. The set ends at 29 either way: one merge, one addition.
 
 ### P50 — The piezoelectric tensor: the third thing Elk has and `pw.x` does not. ✅ DONE, clamped-ion.
 
-`pypresso/response/piezo.py`. Elk's task 380 (`piezoelt.f90`); the third entry
+`defumat/response/piezo.py`. Elk's task 380 (`piezoelt.f90`); the third entry
 taken from `ELK-FEATURES.md`, and the first that fails that file's own
 cheapness filter — it is a Sternheimer-scale computation rather than an
 NSCF-scale one. It is here anyway because the *implementation* cost is one
@@ -7055,7 +7055,7 @@ that the stress-under-a-field form is what de Gironcoli, Baroni and Resta took
 for the III-V compounds (PRL **62**, 2853 (1989)).
 
 **It is P24b with one coordinate changed, and that is the whole phase.** A Born
-charge is `Z* = dF/dE` and `pypresso/response/born.py` computes it as one `jvp`
+charge is `Z* = dF/dE` and `defumat/response/born.py` computes it as one `jvp`
 of the *force* along the field's response. The force is `jax.grad` of the
 frozen-state energy in the positions; the stress is `jax.grad` of the *same*
 functional in a strain. So the piezoelectric tensor is one `jvp` of the stress
@@ -7142,7 +7142,7 @@ response solver's floor, against AlAs's 0.764 from the same code); AlAs is
 completion because this assembly is *linear* in the response, where P35's
 screening term is quadratic; and the three routes above.
 
-**Where it lives.** `pypresso/response/piezo.py`, reached by
+**Where it lives.** `defumat/response/piezo.py`, reached by
 `Calculator.get_piezoelectric_tensor()`; `tests/regression/test_piezoelectric.py`
 (8 tests, 103 s: the three routes, the two symmetry statements, the wedge, and
 the `Z*` anchor) and `tests/unit/test_piezo_machinery.py` (the Voigt convention,
@@ -7222,7 +7222,7 @@ ultrasoft crystal plus the tests that already exist.
 
 ### P51 — The optical conductivity tensor, the Kerr angle and the anomalous Hall conductivity. ✅ DONE.
 
-`pypresso/response/conductivity.py` and `pypresso/workflows/conductivity.py`.
+`defumat/response/conductivity.py` and `defumat/workflows/conductivity.py`.
 Elk's tasks 121 (`dielectric.f90`) and 122 (`moke.f90`); the **fourth** entry
 taken from `ELK-FEATURES.md`, and the first one there that the file itself
 records as only *partly* absent from QE.
@@ -7385,7 +7385,7 @@ arbitrarily small `e_mn`, the curvature route weights them `1/e_mn^2` and the
 frequency route regularises them at `eta` — which is the reason an intrinsic
 anomalous Hall conductivity is famously mesh-hungry, its integrand living on
 near-degeneracies. `method = "curvature"` is the quantity's definition and is
-what `pypresso.topology.kubo` computes by an independently written assembly
+what `defumat.topology.kubo` computes by an independently written assembly
 anchored to the Fukui-Hatsugai-Suzuki flux (P47); `method = "frequency"` at
 `w = 0` is what a spectrum extrapolates to at finite scattering.
 
@@ -7408,17 +7408,17 @@ and cut**: two points already say the sequence is not converging, and a third
 would have cost an hour to say it again. What the phase delivers here is the
 machinery and the diagnostic, not the number.
 
-**Where it lives.** `pypresso/response/conductivity.py` (the assembly),
-`pypresso/workflows/conductivity.py` (the fixed-density run and the extra
+**Where it lives.** `defumat/response/conductivity.py` (the assembly),
+`defumat/workflows/conductivity.py` (the fixed-density run and the extra
 band), `Calculator.get_optical_conductivity`;
 `tests/regression/test_conductivity.py` (6 tests) and
 `tests/unit/test_conductivity_machinery.py` (8);
 `tests/data/qe/al-conductivity.in` and `notebooks/30_magneto_optics.ipynb` are
-new, and `pypresso/workflows/nscf.py` gained the `for_spin` call the finding
+new, and `defumat/workflows/nscf.py` gained the `for_spin` call the finding
 above is about.
 
 **Refused by name**, each for its own missing term: **ultrasoft and PAW**, for
-`pypresso.topology.kubo`'s reason — the current operator of a generalised
+`defumat.topology.kubo`'s reason — the current operator of a generalised
 eigenproblem carries `<n|dS/dk|m>` off the diagonal, the term is identically
 zero for a norm-conserving dataset, and nothing validated here can see whether
 its convention is right; a **spin spiral**, whose two spinor components live on
@@ -7461,7 +7461,7 @@ squared and is also the truncation the f-sum measures.
 
 ### P52 — The Fermi-surface nesting function. ✅ DONE.
 
-`pypresso/response/nesting.py` and `pypresso/workflows/nesting.py`. Elk's task
+`defumat/response/nesting.py` and `defumat/workflows/nesting.py`. Elk's task
 105 (`nesting.f90`); the **fifth** entry taken from `ELK-FEATURES.md`, and the
 first one there that `pw.x` and its post-processing tools lack *entirely* —
 `nesting` occurs nowhere in `PW/src` or `PP/src`, which is a grep and not a
@@ -7614,7 +7614,7 @@ function on a surface and nothing else in the calculation resolves it.
 
 ### P21a — `E(q)` from `dE/dq`: the spiral scan integrates its own gradient. ✅ DONE.
 
-`pypresso/workflows/spiral.py`. Not a new quantity and not a new derivative: P21's
+`defumat/workflows/spiral.py`. Not a new quantity and not a new derivative: P21's
 `compute_spiral_gradient` and the scan of P19 were both already here, and what was
 missing was the line joining them. `run_spiral_scan(..., gradients=True)` takes
 `dE/dq` at each point's own converged state, and `SpiralScan.integrated`
@@ -7688,7 +7688,7 @@ computes a spiral `E(q)` this way, so there is nothing to time it against.
 
 #### P21b — `dE/dq` is chunked over the k axis, because its backward pass is not free
 
-`pypresso/forces/spiral.py`. Not a new quantity: the same gradient, regrouped so the
+`defumat/forces/spiral.py`. Not a new quantity: the same gradient, regrouped so the
 peak working set is bounded. The single `value_and_grad` over the whole k axis carries
 `vkb(k ± q/2)` — both shifted spheres, every projector channel — and the states beside
 it, for every k-point at once. On the two-atom cells this was written against that is
@@ -7739,7 +7739,7 @@ no notebook** — it is a dial on a quantity both already carry.
 
 ### P53 — The shift current: the bulk photovoltaic effect. ✅ DONE.
 
-`pypresso/response/photocurrent.py`, `workflows/photocurrent.py`,
+`defumat/response/photocurrent.py`, `workflows/photocurrent.py`,
 `Calculator.get_shift_current`. `sigma^abc(0; w, -w)` — the direct current a
 crystal with no inversion centre carries under illumination, with no junction and
 no built-in field. Following Sipe and Shkrebtii (PRB **61**, 5337 (2000)) in the
@@ -7909,7 +7909,7 @@ cubic in the intermediate one.
 
 ### P54 — Second-harmonic generation. ✅ DONE.
 
-`pypresso/response/shg.py`, `workflows/shg.py`, `Calculator.get_shg`.
+`defumat/response/shg.py`, `workflows/shg.py`, `Calculator.get_shg`.
 `chi^(2)(-2 omega; omega, omega)` — how much of the light shone on a crystal
 comes back out at twice the frequency — following Sipe and Ghahramani (PRB
 **48**, 11705 (1993)) and Hughes and Sipe (PRB **53**, 10751 (1996)) in the
@@ -8051,7 +8051,7 @@ in the Sternheimer sense, which is still the other machine.
 
 ### P55 — The LO-TO splitting and the static dielectric constant. ✅ DONE.
 
-`pypresso/response/spectra.py`: `nonanal`, `loto_modes`,
+`defumat/response/spectra.py`: `nonanal`, `loto_modes`,
 `polar_mode_permittivity`, `neutral_born_charges`, and
 `vibrational_spectrum(loto_direction=..., neutralize=...)`, reachable through
 `Calculator.get_vibrational_spectrum`. **The two things P36 named as omitted
@@ -8145,7 +8145,7 @@ refused here, since it is built from both.
 
 ### P56 — The Berry-phase polarization. ✅ DONE.
 
-`pypresso/topology/polarization.py` and `pypresso/workflows/polarization.py`,
+`defumat/topology/polarization.py` and `defumat/workflows/polarization.py`,
 with `string_mesh` in `topology/mesh.py` and `Calculator.get_polarization`.
 King-Smith and Vanderbilt's phase (PRB 47, 1651 (1993)): the polarization of a
 crystal is not the dipole of its cell -- that integral depends on where the cell
@@ -8194,7 +8194,7 @@ not shipped. So `tests/data/qe/alas-berry.in` and `reference.out.alas-berry` are
 an `lberry` run of the *same* AlAs ground state `alas-raman.in` already carries.
 Against it, per string as well as on the totals:
 
-| | `pw.x` | pypresso |
+| | `pw.x` | defumat |
 |---|---|---|
 | string phases | 0.02777 / 0.00252 / 0.00252 / 0.00224 | same, to 3e-6 |
 | ionic phase | -0.25000 | -0.25000 |
@@ -8267,7 +8267,7 @@ symmetry (off-diagonal 6e-5).
 **And that is what corrected P55.** On the 4x4x4 grid `alas-raman.in` actually
 carries, the two routes disagree by 50 per cent -- the Berry phase gives ±2.134
 with a sum rule of 5e-5 where DFPT gives 1.925 / -3.181 with -1.257. Neither is a
-bug: **pypresso's field response reproduces `ph.x` to 2e-5 at every cutoff tried**
+bug: **defumat's field response reproduces `ph.x` to 2e-5 at every cutoff tried**
 (1.92461 / -3.18098 at 10, 1.89120 / -3.33628 at 30), so the two DFPT codes agree
 with each other and the k-grid is what they are both short of. Two things made
 that findable and both are worth carrying. The Berry route **satisfies the
@@ -8350,7 +8350,7 @@ re-converged identical runs before `deltabf` is chosen.
 
 ### P57 — The magnetoelectric tensor. ✅ DONE for the column parallel to the field: the spin, clamped-ion tensor, uncalibrated against another code.
 
-`pypresso/response/magnetoelectric.py`, `Calculator.get_magnetoelectric_tensor`,
+`defumat/response/magnetoelectric.py`, `Calculator.get_magnetoelectric_tensor`,
 `tests/data/qe/gaas-magnetoelectric.in`, and the two relativistic datasets it
 names. **The physics is not validated, and no README row or `features.tex` entry
 claims it is.** What is recorded here is the assembly, the case, and the two
@@ -8413,7 +8413,7 @@ GaAs's 187 s and no convergence. Every relativistic Ga in pslibrary carries the
 Against Elk on AlAs with spin-orbit coupling along `L-Gamma-X`, the valence
 manifold aligned at its maximum:
 
-| | Elk (LAPW) | pypresso | difference | experiment |
+| | Elk (LAPW) | defumat | difference | experiment |
 |---|---|---|---|---|
 | spin-orbit splitting at `Gamma` | 0.307 | **0.293** | 0.014 | 0.28 |
 | valence-manifold width | 12.156 | **12.095** | 0.061 | |
@@ -8536,9 +8536,9 @@ property of the dataset.
 
 ### P58 — Magnetocrystalline anisotropy by the force theorem. ✅ DONE, PAW refused by name.
 
-`pypresso/workflows/anisotropy.py`, `Calculator.get_anisotropy` /
+`defumat/workflows/anisotropy.py`, `Calculator.get_anisotropy` /
 `get_force_theorem`, `System.lforcet`, `System.soc_scale` /
-`with_soc_scale`, `pypresso.scf.continuation.nc_magnetization_from_lsda`,
+`with_soc_scale`, `defumat.scf.continuation.nc_magnetization_from_lsda`,
 `Calculation._spinor_overlap`, `tests/regression/test_anisotropy.py`,
 `tests/unit/test_soc_scale.py`, and QE's own force-theorem example committed as
 `tests/data/qe/co-slab-forcetheorem-{sr,par,per}.in` with its reference outputs.
@@ -8733,7 +8733,7 @@ given exactly zero and hidden it.
 
 ### P59 — QE's `local-TF` mixer: Thomas-Fermi screening with a local length. ✅ DONE.
 
-`pypresso/scf/mixing.py` (`local_tf_preconditioner`), `mixing_mode = 'local-TF'`,
+`defumat/scf/mixing.py` (`local_tf_preconditioner`), `mixing_mode = 'local-TF'`,
 `tests/regression/test_scf_solvers.py`.
 
 The gap P58 ran into and P22 had recorded. Kerker and `approx_screening` screen
@@ -8792,7 +8792,7 @@ which no energy comparison would show.
 
 ### P60 — The magnetic torque: the anisotropy as a derivative rather than a difference. ✅ DONE.
 
-`pypresso/forces/torque.py`, `run_torque`, `Calculator.get_torque`,
+`defumat/forces/torque.py`, `run_torque`, `Calculator.get_torque`,
 `MagneticAnisotropy.free_energies`, `tests/regression/test_anisotropy.py`.
 
 P58 takes the anisotropy as `E(n_1) - E(n_2)`, which is **1e-5 Ry out of 1e2** --
@@ -8851,7 +8851,7 @@ difference's to **2.4e-5 meV** on a route that shares almost no code with it.
 
 ### P61 — X-ray and magnetic structure factors. ✅ DONE.
 
-`pypresso/diffraction/structure_factor.py`, `pypresso/workflows/sfac.py`,
+`defumat/diffraction/structure_factor.py`, `defumat/workflows/sfac.py`,
 `run_structure_factors`, `Calculator.get_structure_factors`,
 `tests/unit/test_structure_factors.py` (13),
 `tests/regression/test_structure_factors.py` (14), `tests/data/qe/si-sfac.in`,
@@ -9006,7 +9006,7 @@ the charge, the magnetic star members being related by `det(R) R`.
 
 ## 4. Validation strategy
 
-The primary test is **the same input run through QE and through pypresso**.
+The primary test is **the same input run through QE and through defumat**.
 
 - QE's `test-suite/` ships inputs *with committed reference outputs* — use those first
   (`pw_scf/scf-*.in` plus `benchmark.out.git.inp=scf-*.in`), so no Fortran build is needed

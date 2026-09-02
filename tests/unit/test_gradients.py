@@ -10,12 +10,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.basis.fft import g_to_r
-from pypresso.basis.gradients import divergence, gradient
-from pypresso.basis.gvectors import generate_gvectors
-from pypresso.paw.angular import build_angular_grid
-from pypresso.paw.gradient import radial_derivative
-from pypresso.system.cell import Cell
+from defumat.basis.fft import g_to_r
+from defumat.basis.gradients import divergence, gradient
+from defumat.basis.gvectors import generate_gvectors
+from defumat.paw.angular import build_angular_grid
+from defumat.paw.gradient import radial_derivative
+from defumat.system.cell import Cell
 
 pytestmark = pytest.mark.unit
 
@@ -182,7 +182,7 @@ def test_the_angular_derivatives_are_the_derivatives_of_the_harmonics():
     only the projection is transcribed, so the check is against the angles
     directly.
     """
-    from pypresso.pseudo.harmonics import real_spherical_harmonics
+    from defumat.pseudo.harmonics import real_spherical_harmonics
 
     grid = build_angular_grid(2, 9, gradient=True)
     lmax, nlm = 4, 25

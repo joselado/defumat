@@ -40,14 +40,14 @@ import jax
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo.upf import read_upf
-from pypresso.response.shg import require_an_shg_regime
-from pypresso.scf.driver import Calculation, run_scf
-from pypresso.system.builder import build_system
-from pypresso.system.kpoints import KPoints
-from pypresso.units import RY_TO_EV
-from pypresso.workflows.shg import run_shg
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo.upf import read_upf
+from defumat.response.shg import require_an_shg_regime
+from defumat.scf.driver import Calculation, run_scf
+from defumat.system.builder import build_system
+from defumat.system.kpoints import KPoints
+from defumat.units import RY_TO_EV
+from defumat.workflows.shg import run_shg
 
 pytestmark = pytest.mark.regression
 
@@ -101,7 +101,7 @@ def read_elk_chi(path: Path):
     """Elk's ``CHI_2WWW_abc.OUT``: real block, blank line, imaginary block.
 
     ``w`` in Hartree and ``chi`` in atomic units, which is why
-    :data:`~pypresso.response.shg.CHI2_AU_TO_PM_PER_V` exists as a separate
+    :data:`~defumat.response.shg.CHI2_AU_TO_PM_PER_V` exists as a separate
     constant -- the comparison is made in Elk's own units and converted once,
     so a wrong conversion cannot hide inside an agreement.
     """
@@ -191,7 +191,7 @@ def test_the_absorption_turns_on_at_half_the_gap():
 
     import equinox as eqx
 
-    from pypresso.workflows.nscf import fixed_density_states
+    from defumat.workflows.nscf import fixed_density_states
 
     _, _, eigenvalues, _ = fixed_density_states(
         eqx.tree_at(lambda s: s.kpoints, system, mesh),
@@ -276,7 +276,7 @@ def test_the_tensor_agrees_with_elk_on_the_same_crystal():
     ours = np.asarray(chi.chi)[:, 0, 1, 2]
 
     # The static limit, in Elk's own atomic units.
-    from pypresso.response.shg import CHI2_AU_TO_PM_PER_V
+    from defumat.response.shg import CHI2_AU_TO_PM_PER_V
 
     static_ours = float(ours[0].real) / CHI2_AU_TO_PM_PER_V
     static_elk = float(elk[0].real)
@@ -320,7 +320,7 @@ def test_the_scissors_shift_moves_the_two_photon_resonance_by_half_of_itself():
     the three, because a near-cancellation amplifies the 11% the two codes
     already differ by.
     """
-    from pypresso.response.shg import CHI2_AU_TO_PM_PER_V
+    from defumat.response.shg import CHI2_AU_TO_PM_PER_V
 
     scissor = 0.1  # Ry, which is Elk's 0.05 Ha
     plain = spectrum("alas-shg.in", 6, 22, window=0.6, nw=240, broadening=0.010)
@@ -363,7 +363,7 @@ def test_the_three_parts_agree_with_elks_three_parts():
     LAPW against a norm-conserving pseudopotential with a different gap.
     ``sigma_II`` is the smallest of the three and the loosest.
     """
-    from pypresso.response.shg import CHI2_AU_TO_PM_PER_V
+    from defumat.response.shg import CHI2_AU_TO_PM_PER_V
 
     result = spectrum("alas-shg.in", 6, 22, window=0.6, nw=240, broadening=0.010)
     ours = {
@@ -400,7 +400,7 @@ def test_a_symmetry_reduced_wedge_is_refused_by_name():
 
 @pytest.mark.slow
 def test_the_refusals_name_second_harmonic_generation_rather_than_the_shift_current():
-    """The guard is inherited from :mod:`~pypresso.response.photocurrent`.
+    """The guard is inherited from :mod:`~defumat.response.photocurrent`.
 
     Sharing the refusals is right -- this module is the same velocity matrix
     elements contracted a different way, so it has every one of their reasons --

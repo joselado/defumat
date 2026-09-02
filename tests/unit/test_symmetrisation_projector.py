@@ -26,10 +26,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import parse_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf.driver import Calculation
-from pypresso.system.builder import build_system
+from defumat.io.pwin import parse_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf.driver import Calculation
+from defumat.system.builder import build_system
 
 pytestmark = pytest.mark.unit
 

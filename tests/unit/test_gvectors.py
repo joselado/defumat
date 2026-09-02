@@ -4,10 +4,10 @@ import jax
 import numpy as np
 import pytest
 
-from pypresso.basis.gvectors import generate_gvectors
-from pypresso.basis.planewaves import build_plane_wave_basis
-from pypresso.system.cell import Cell
-from pypresso.system.kpoints import KPoints
+from defumat.basis.gvectors import generate_gvectors
+from defumat.basis.planewaves import build_plane_wave_basis
+from defumat.system.cell import Cell
+from defumat.system.kpoints import KPoints
 
 pytestmark = pytest.mark.unit
 
@@ -30,7 +30,7 @@ def test_gamma_is_first_and_shells_are_ordered(gvectors):
 
 def test_every_g_is_inside_the_cutoff_and_none_is_missing(gvectors):
     """The set is exactly {G : |G|^2 <= gcut} over the representable range."""
-    from pypresso.basis.fftgrid import gcut_from_ecut
+    from defumat.basis.fftgrid import gcut_from_ecut
 
     gcut = gcut_from_ecut(48.0, SILICON.alat)
     bg = np.asarray(SILICON.bg_2pi_alat)

@@ -53,18 +53,18 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo.upf import read_upf
-from pypresso.response.photocurrent import (
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo.upf import read_upf
+from defumat.response.photocurrent import (
     dipole_matrix,
     generalized_derivative,
     require_a_shift_current_regime,
 )
-from pypresso.scf.driver import Calculation, run_scf
-from pypresso.system.builder import build_system
-from pypresso.system.kpoints import KPoints
-from pypresso.units import RY_TO_EV
-from pypresso.workflows.photocurrent import run_shift_current
+from defumat.scf.driver import Calculation, run_scf
+from defumat.system.builder import build_system
+from defumat.system.kpoints import KPoints
+from defumat.units import RY_TO_EV
+from defumat.workflows.photocurrent import run_shift_current
 
 pytestmark = pytest.mark.regression
 
@@ -131,7 +131,7 @@ def _frozen_sphere_pieces(system, pseudos, density, k_crystal, kcart, nbnd):
     moved = calculation.at_kcart(jnp.asarray(kcart))
     energies, states = exact_eigenpairs_all(moved.hamiltonian(v_scf, None, None)[0], nbnd)
 
-    from pypresso.response.velocity import VelocityOperator
+    from defumat.response.velocity import VelocityOperator
 
     operator = VelocityOperator(calculation, v_scf, kcart=jnp.asarray(kcart))
     psi = jnp.asarray(states)[None]
@@ -245,7 +245,7 @@ def test_alas_comes_out_exactly_zincblende():
     and the three cartesian directions are treated identically by construction.
 
     It is a **weak** check on its own and this file says so twice: the spike
-    that :data:`~pypresso.response.photocurrent.DEGENERACY_TOL` documents left
+    that :data:`~defumat.response.photocurrent.DEGENERACY_TOL` documents left
     it passing to five figures while moving the spectrum by two orders of
     magnitude. It is here to catch a transposed cartesian index, which is all
     it is good for.
@@ -329,7 +329,7 @@ def test_a_spinor_run_gives_the_same_current_as_an_unpolarized_one():
     """
     system, pseudos, result = converged("alas-raman.in")
     spinor = system.with_spin(4)
-    from pypresso.scf.driver import run_scf as _run_scf
+    from defumat.scf.driver import run_scf as _run_scf
 
     spinor_result = _run_scf(spinor, pseudos, conv_thr=1.0e-10)
 
@@ -368,7 +368,7 @@ def test_dft_plus_u_does_not_fall_through_to_a_ragged_error():
 
     Worth a test because the failure it prevents is *ragged* rather than wrong:
     without a guard a DFT+U caller reaches
-    :class:`~pypresso.response.velocity.VelocityOperator`'s request for the
+    :class:`~defumat.response.velocity.VelocityOperator`'s request for the
     converged ``ns``, which ``run_shift_current`` has no parameter to pass it,
     so the amber box's promise -- that a run which starts is a run whose physics
     is there -- would be kept by accident and reported by the wrong error.

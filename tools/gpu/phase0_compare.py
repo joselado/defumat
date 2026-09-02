@@ -5,7 +5,7 @@
 Check 2 -- "the total energy against the CPU run, to the committed tolerance" --
 is a comparison between two *runs*, so it cannot live inside either of them.
 This is where it happens, and it is also where §2.3's metric is finally stated:
-the ratio is GPU pypresso against CPU pypresso, per SCF iteration, with compile
+the ratio is GPU defumat against CPU defumat, per SCF iteration, with compile
 time as its own column rather than folded into it.
 
 **The tolerance is the case's own ``conv_thr``**, used as a *flag* rather than

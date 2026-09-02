@@ -14,8 +14,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from pypresso import Calculator
-from pypresso.system.kpoints import KPoints
+from defumat import Calculator
+from defumat.system.kpoints import KPoints
 
 QE = Path("../quantum_espresso/qe-7.5-ReleasePack/qe-7.5/test-suite/pw_scf")
 PSEUDO = Path("../tests/data/pseudo")

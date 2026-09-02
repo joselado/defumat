@@ -34,13 +34,13 @@ import jax
 import numpy as np
 import pytest
 
-from pypresso.calculator import Calculator
-from pypresso.scf.continuation import (
+from defumat.calculator import Calculator
+from defumat.scf.continuation import (
     direction_from_angles,
     nc_magnetization_from_lsda,
 )
-from pypresso.units import RY_TO_EV
-from pypresso.workflows.anisotropy import (
+from defumat.units import RY_TO_EV
+from defumat.workflows.anisotropy import (
     angles_from_direction,
     frozen_expectation,
     run_torque,
@@ -442,7 +442,7 @@ def test_the_decomposition_recovers_the_band_energy_up_to_the_spilling():
     # ``p_x`` and ``p_y`` degenerate and need **not** keep ``p_z`` with them --
     # which is the anisotropy itself, seen orbital by orbital. QE's real
     # harmonics for ``l = 1`` are ordered ``(z, x, y)``
-    # (:data:`pypresso.projwfc.channels.M_LABELS`), so it is the last two that
+    # (:data:`defumat.projwfc.channels.M_LABELS`), so it is the last two that
     # must agree.
     p_up = {
         channel.m: value for (channel, spin), value in
@@ -499,7 +499,7 @@ def test_the_torque_is_the_gradient_of_the_energy_it_claims_to_be():
     difference of that same functional.
     """
     import jax.numpy as jnp
-    from pypresso.forces.torque import band_energy_at_angle, torque_at_angle
+    from defumat.forces.torque import band_energy_at_angle, torque_at_angle
 
     scalar, spinor = _tetragonal()
     scf = scalar.get_scf()
@@ -509,9 +509,9 @@ def test_the_torque_is_the_gradient_of_the_energy_it_claims_to_be():
     )
 
     # The gradient against a central difference of its own functional.
-    from pypresso.scf.continuation import nc_magnetization_from_lsda
-    from pypresso.workflows.anisotropy import _with_quantization_axis
-    from pypresso.workflows.nscf import fixed_density_states
+    from defumat.scf.continuation import nc_magnetization_from_lsda
+    from defumat.workflows.anisotropy import _with_quantization_axis
+    from defumat.workflows.nscf import fixed_density_states
 
     angle, plane = result.angle, result.plane
     direction = (np.cos(angle) * np.asarray(plane[0])

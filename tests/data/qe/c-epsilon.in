@@ -8,7 +8,7 @@
 ! the same arithmetic.
 !
 ! The `nr1`/`nr2`/`nr3` lines of the original are dropped: they force a 32^3 FFT
-! grid, which is what `ecutrho = 300` gives here anyway, and pypresso does not
+! grid, which is what `ecutrho = 300` gives here anyway, and defumat does not
 ! read them.
  &control
     calculation='scf',

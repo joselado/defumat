@@ -14,12 +14,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.basis.fft import g_to_r, r_to_sticks, sticks_to_r
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.scf.driver import Calculation
-from pypresso.scf.potential import v_of_rho
-from pypresso.system import build_system
+from defumat.basis.fft import g_to_r, r_to_sticks, sticks_to_r
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.scf.driver import Calculation
+from defumat.scf.potential import v_of_rho
+from defumat.system import build_system
 
 pytestmark = pytest.mark.unit
 

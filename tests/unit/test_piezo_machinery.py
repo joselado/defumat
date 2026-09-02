@@ -14,17 +14,17 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.response.piezo import (
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.response.piezo import (
     VOIGT,
     polar_direction,
     require_a_nonpolar_crystal,
     require_a_piezoelectric_tensor,
     to_voigt,
 )
-from pypresso.scf import Calculation
-from pypresso.system import build_system
+from defumat.scf import Calculation
+from defumat.system import build_system
 
 pytestmark = [pytest.mark.unit]
 
@@ -35,7 +35,7 @@ PSEUDO = Path(__file__).resolve().parents[1] / "data" / "pseudo"
 def _crystal(case: str):
     """A stand-in for a calculation: the guard reads only the crystal.
 
-    :func:`~pypresso.response.piezo.polar_direction` searches the symmetries of
+    :func:`~defumat.response.piezo.polar_direction` searches the symmetries of
     the structure rather than reading the run's -- deliberately, since a
     response is usually run with ``nosym`` and that list would call every
     crystal polar -- so nothing here needs pseudopotentials or a converged
@@ -50,7 +50,7 @@ def test_voigt_carries_no_factor_of_two():
     ``P_i = sum_jk e_(i)jk eps_jk`` runs over all nine pairs, and Voigt's
     ``eps_4 = 2 eps_23`` absorbs the doubling of the two equal shear terms --
     so the coefficient is untouched. It is
-    :class:`~pypresso.response.elastic.ElasticConstants`' convention one rank
+    :class:`~defumat.response.elastic.ElasticConstants`' convention one rank
     down, and the check is that a contraction gives the same answer in both.
     """
     rng = np.random.default_rng(0)

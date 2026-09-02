@@ -20,13 +20,13 @@ tenth decimal of the Hartree term.
 The third derivative is checked on **both** cells and the two say different
 things. On silicon (``si-electrostriction-d2.in``, unphysical and exactly the
 point) the statement is an *equality*: D2 reaches the elastic constants through
-:meth:`~pypresso.scf.driver.Calculation.at_strain` by exactly the pair sum's own
+:meth:`~defumat.scf.driver.Calculation.at_strain` by exactly the pair sum's own
 second derivative, and does not reach ``d(chi)/dx`` at all. On bilayer graphene
 (``graphene-bilayer-electrostriction.in``) the statement is that the whole path
 *runs* on the system the correction exists for -- which took a K-avoiding k-grid,
 because graphene is a semimetal and the Sternheimer response here is the
 insulator one, and a mixing parameter the slab needs and the bulk crystal does
-not (:func:`~pypresso.response.electrostriction.require_converged_responses`).
+not (:func:`~defumat.response.electrostriction.require_converged_responses`).
 """
 
 from functools import lru_cache
@@ -37,18 +37,18 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from pypresso.forces import compute_forces
-from pypresso.io import read_qe_output
-from pypresso.io.pwin import read_pw_input
-from pypresso.pseudo import read_upf
-from pypresso.response.elastic import VOIGT, elastic_constants
-from pypresso.response.electrostriction import electrostriction, refined_states
-from pypresso.response.strain import strain_response, strain_tangent
-from pypresso.scf import Calculation, run_scf
-from pypresso.system import build_system
-from pypresso.system.symmetry import cartesian_rotations, find_symmetries
-from pypresso.vdw.analytic import dispersion_force, dispersion_stress
-from pypresso.workflows.relax import run_relax
+from defumat.forces import compute_forces
+from defumat.io import read_qe_output
+from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
+from defumat.response.elastic import VOIGT, elastic_constants
+from defumat.response.electrostriction import electrostriction, refined_states
+from defumat.response.strain import strain_response, strain_tangent
+from defumat.scf import Calculation, run_scf
+from defumat.system import build_system
+from defumat.system.symmetry import cartesian_rotations, find_symmetries
+from defumat.vdw.analytic import dispersion_force, dispersion_stress
+from defumat.workflows.relax import run_relax
 from tests.tolerances import ENERGY_TERM_RY, TOTAL_ENERGY_RY
 
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
@@ -185,7 +185,7 @@ def test_the_transcribed_stress_matches_quantum_espressos_own_block():
 
 
 def test_the_stress_matches_quantum_espresso():
-    from pypresso.stress import compute_stress
+    from defumat.stress import compute_stress
 
     _, _, calculation, result = _converged("graphene-bilayer-d2", 1e-12)
     reference = _reference("graphene-bilayer-d2")
@@ -195,7 +195,7 @@ def test_the_stress_matches_quantum_espresso():
 
 def test_the_correction_moves_the_stress_the_way_it_moves_the_energy():
     """The difference between the two runs' stresses is ``stres_london`` alone."""
-    from pypresso.stress import compute_stress
+    from defumat.stress import compute_stress
 
     system, _, plain_calc, plain = _converged("graphene-bilayer", 1e-12)
     _, _, calc, corrected = _converged("graphene-bilayer-d2", 1e-12)
@@ -244,7 +244,7 @@ def _relaxed():
 
 @pytest.mark.slow
 def test_the_relaxed_geometry_is_a_stationary_point_of_pw_xs_surface():
-    """``pw.x`` run at the geometry pypresso relaxed to, and it agrees.
+    """``pw.x`` run at the geometry defumat relaxed to, and it agrees.
 
     **A geometry comparison is the wrong test here and this is the right one.**
     The interlayer force constant is ~2e-4 Ry/bohr^2 -- three orders below a
@@ -252,14 +252,14 @@ def test_the_relaxed_geometry_is_a_stationary_point_of_pw_xs_surface():
     separation only to a few tenths of a bohr, and what ``max |F|`` is actually
     measuring is the *stiff* mode, the A/B sublattice buckling inside each layer.
     On that surface the two BFGS runs stop 0.48 bohr apart and both are entitled
-    to: QE's own force at its answer is 6.9e-6 and pypresso's force at QE's
-    answer is 4.1e-5, each below the other's threshold, and pypresso's answer is
+    to: QE's own force at its answer is 6.9e-6 and defumat's force at QE's
+    answer is 4.1e-5, each below the other's threshold, and defumat's answer is
     8.3e-4 Ry lower.
 
-    What settles it is asking ``pw.x`` about pypresso's geometry
+    What settles it is asking ``pw.x`` about defumat's geometry
     (``graphene-bilayer-d2-relaxed.in``). It gives the same total energy to
     **1e-8 Ry** and a force of **3e-6 Ry/bohr**, so the two codes are walking the
-    same surface and pypresso walked further down it. The energies, not the
+    same surface and defumat walked further down it. The energies, not the
     coordinates, are what the two relaxations can be compared through.
     """
     result = _relaxed()
@@ -289,7 +289,7 @@ def _final_energy(path: Path) -> float:
 def test_quantum_espressos_relaxed_geometry_is_stationary_here_too():
     """The comparison in the other direction, and it is the weaker of the two.
 
-    pypresso's force at QE's answer is 4.1e-5 Ry/bohr -- below the 1e-4 a
+    defumat's force at QE's answer is 4.1e-5 Ry/bohr -- below the 1e-4 a
     ``pw.x`` input asks for by default and above the 1e-5 this case asks for,
     which is the flatness of the surface rather than a disagreement: the
     *analytic* force at a shared geometry agrees with QE's to 3.7e-7
@@ -400,7 +400,7 @@ def test_the_strain_coefficients_move_and_the_stress_ones_do_not():
 # the truth about this k-set rather than an approximation to it; and a mixing
 # parameter for the response loop, which is the subject of the first test below.
 
-#: Kept explicit even though the Anderson default (:mod:`pypresso.response.mixing`)
+#: Kept explicit even though the Anderson default (:mod:`defumat.response.mixing`)
 #: now converges this cell at 0.7 as well: it is what the *linear* mixing these
 #: runs were first done with needed, and the numbers in `PLAN.md` P27 are its.
 SLAB_ALPHA_MIX = 0.3
@@ -420,7 +420,7 @@ def test_linear_mixing_diverges_on_a_slab_and_is_refused():
     out was not symmetric under ``C_ijkl = C_klij`` (49817 GPa against -243233
     for the same index pair) and nothing about the numbers said so.
 
-    The default is now Anderson (:mod:`pypresso.response.mixing`), which takes
+    The default is now Anderson (:mod:`defumat.response.mixing`), which takes
     this same cell from 9.3e6 to 79.8 in the five iterations below -- so the
     divergence has to be requested to be tested, and the guard is tested on the
     thing that can still produce it.

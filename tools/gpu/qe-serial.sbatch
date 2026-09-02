@@ -7,18 +7,18 @@
 # is the comparison and a one-task job starts immediately. The 4/16/32-core
 # columns are that other job's business and are what stop this one being read as
 # "what a GPU is worth against QE".
-#SBATCH --job-name=pypresso-qe-serial
+#SBATCH --job-name=defumat-qe-serial
 #SBATCH --partition=batch-milan
 #SBATCH --time=08:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=64G
-#SBATCH --output=/scratch/work/ladovj1/calculations/pypresso-gpu/out/qeser-%j.out
-#SBATCH --error=/scratch/work/ladovj1/calculations/pypresso-gpu/out/qeser-%j.err
+#SBATCH --output=/scratch/work/ladovj1/calculations/defumat-gpu/out/qeser-%j.out
+#SBATCH --error=/scratch/work/ladovj1/calculations/defumat-gpu/out/qeser-%j.err
 
-WORK=/scratch/work/ladovj1/calculations/pypresso-gpu
-REPO=/scratch/work/ladovj1/apps/pypresso
+WORK=/scratch/work/ladovj1/calculations/defumat-gpu
+REPO=/scratch/work/ladovj1/apps/defumat
 RUN="$WORK/qeser-$SLURM_JOB_ID"
 mkdir -p "$WORK/out" "$RUN"
 cd "$RUN" || exit 1
