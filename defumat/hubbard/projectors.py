@@ -113,16 +113,106 @@ def build_hubbard_projectors(
     the same construction over *every* atomic orbital -- the projected density of
     states (:mod:`defumat.projwfc`) is the other caller and it keeps them all.
     """
+    width = setup.npol
     columns = (
         np.concatenate([
-            np.arange(offset, offset + ldim)
+            np.arange(offset, offset + width * ldim)
             for offset, ldim in zip(setup.atomwfc_offsets, setup.ldims)
         ]) if setup.nwfcU else np.zeros(0, dtype=int)
     )
     return build_atomic_projectors(
         pseudos, structure, cell, gvectors, planewaves, kpoints, apply_s,
         kind=setup.projectors, columns=columns, kcart=kcart,
+        noncolin=setup.noncolin,
     )
+
+
+def _spinor_channels(pseudos, structure) -> list:
+    """How to build each spinor channel out of the scalar orbital list.
+
+    Each entry is ``(width, [(start, weight), ...])``: the columns to combine
+    and with what weight, ``start`` being where that scalar channel begins.
+
+    **A fully-relativistic dataset needs the combination and it is not
+    optional.** ``atomic_wfc_so_mag`` returns immediately for the
+    ``j = l - 1/2`` channel and, for ``j = l + 1/2``, builds the *average*
+
+        chi = [ (l + 1) chi_{j = l + 1/2} + l chi_{j = l - 1/2} ] / (2l + 1)
+
+    which is the "averaged j = l +- 1/2 radial WFs" ``plus_u_full.f90``'s header
+    advertises. So the two ``j`` channels of one shell collapse into **one**
+    spinor channel of ``2 (2l+1)`` columns, not two of them. Doubling every
+    entry of the scalar list instead gives twice as many columns, shifts every
+    offset after the first ``p`` shell, and makes the Hubbard manifold a mixture
+    of the two ``j`` channels rather than their average: on relativistic BN that
+    is the whole occupation matrix wrong by a factor near 1.85, an SCF that
+    converges, and a total energy 0.025 Ry out.
+
+    The average is taken on the *built* orbitals rather than on the radial
+    tables, which is exact: the two channels share ``i^l``, the structure factor
+    and the harmonic, and differ only in the radial function they multiply.
+    """
+    channels = []
+    start = 0
+    for species in structure.types:
+        pseudo = pseudos[species]
+        kept = [o for o in pseudo.orbitals if o.occupation >= 0.0]
+        starts, previous = [], None
+        for orbital in kept:
+            starts.append(start)
+            start += 2 * orbital.l + 1
+        relativistic = any(getattr(o, "j", None) is not None for o in kept)
+        for index, orbital in enumerate(kept):
+            width = 2 * orbital.l + 1
+            l, j = orbital.l, getattr(orbital, "j", None)
+            if not relativistic or l == 0 or j is None:
+                channels.append((width, [(starts[index], 1.0)]))
+                continue
+            if abs(j - l + 0.5) < 1.0e-4:
+                continue  # the j = l - 1/2 partner; folded into the one below
+            partner = next(
+                (n for n, other in enumerate(kept)
+                 if other.l == l and other.j is not None
+                 and abs(other.j - l + 0.5) < 1.0e-4),
+                None,
+            )
+            if partner is None:
+                channels.append((width, [(starts[index], 1.0)]))
+                continue
+            channels.append((width, [
+                (starts[index], (l + 1.0) / (2 * l + 1.0)),
+                (starts[partner], l / (2 * l + 1.0)),
+            ]))
+    return channels
+
+
+def _spinor_expand(atomic: jnp.ndarray, channels, npwx: int) -> jnp.ndarray:
+    """``(nk, 2 nchannel_orbitals, 2 npwx)`` from scalar orbitals, in QE's order.
+
+    ``atomic_wfc_nc``'s ``updown`` branch: each spatial orbital appears twice,
+    once with a pure spin-up spinor and once with a pure spin-down one, and the
+    two copies of a *channel* are emitted as blocks -- all ``2l+1`` up columns,
+    then all ``2l+1`` down ones -- rather than interleaved per orbital. That
+    order is not cosmetic: ``new_ns_nc`` reads the occupation matrix at
+    ``offsetU + m + ldim (is - 1)``, so interleaving would transpose the spin
+    and ``m`` indices of every block.
+
+    ``channels`` comes from :func:`_spinor_channels` and says which scalar
+    columns each spinor channel is built from.
+    """
+    nk = atomic.shape[0]
+    blocks = []
+    for width, parts in channels:
+        block = sum(
+            weight * atomic[:, start:start + width, :] for start, weight in parts
+        )
+        pad = jnp.zeros_like(block)
+        blocks.append(jnp.concatenate([block, pad], axis=-1))   # spin up
+        blocks.append(jnp.concatenate([pad, block], axis=-1))   # spin down
+        start = 0
+    if not blocks:
+        return jnp.zeros((nk, 0, 2 * npwx), dtype=atomic.dtype)
+    return jnp.concatenate(blocks, axis=1)
 
 
 def build_atomic_projectors(
@@ -136,6 +226,7 @@ def build_atomic_projectors(
     kind: str = "ortho-atomic",
     columns=None,
     kcart=None,
+    noncolin: bool = False,
 ) -> jnp.ndarray:
     """``(nk, npwx, ncolumns)``: projector functions built from ``chi``.
 
@@ -155,6 +246,10 @@ def build_atomic_projectors(
     atomic = atomic_wavefunctions(
         pseudos, structure, cell, gvectors, planewaves, kpoints, kcart
     )  # (nk, natomwfc, npwx)
+    if noncolin:
+        atomic = _spinor_expand(
+            atomic, _spinor_channels(pseudos, structure), planewaves.npwx
+        )
     nk, natomwfc = atomic.shape[0], atomic.shape[1]
     if columns is None:
         columns = np.arange(natomwfc)

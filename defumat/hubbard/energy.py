@@ -227,6 +227,72 @@ def _full_interaction(ns: jnp.ndarray, vee: jnp.ndarray) -> jnp.ndarray:
     return 0.5 * (direct - exchange + cross)
 
 
+def _spin_blocks(ns: jnp.ndarray) -> jnp.ndarray:
+    """``(2, 2, nslot, ldmx, ldmx)`` from the packed ``(4, ...)`` spinor ``ns``."""
+    return ns.reshape((2, 2) + ns.shape[1:])
+
+
+def _noncollinear_energy(ns: jnp.ndarray, coefficients) -> jnp.ndarray:
+    """``v_hubbard_nc`` and ``v_hubbard_full_nc``, written once.
+
+    The simplified functional is the collinear one on the **combined**
+    ``(m, spin)`` index -- ``(alpha + U/2) Tr N - (U/2) Tr(N N)`` with ``N`` the
+    whole ``2(2l+1)`` Hermitian matrix -- which is exactly what
+    ``v_hubbard_nc``'s spin-flip and non-spin-flip branches add up to. The full
+    one is the same four-index contraction with both spin sums written out:
+
+        E_u = 1/2 sum_{s,s'} [ vee_abcd N^{ss}_ac N^{s's'}_bd
+                             - vee_abdc N^{ss'}_ac N^{s's}_bd ]
+
+    where the exchange term carries the **off-diagonal** spin blocks a collinear
+    occupation matrix does not have. ``J0`` and ``beta`` are absent because
+    ``card_hubbard`` refuses them with ``noncolin``, and ``v_hubbard_nc`` has no
+    branch for them either.
+    """
+    blocks = _spin_blocks(ns)
+    diagonal = jnp.einsum("ssnab->nab", blocks)          # N^uu + N^dd
+    trace = jnp.einsum("stnmm->stn", blocks)             # (2, 2, nslot)
+
+    if coefficients["kind"] == 0:
+        linear = jnp.sum(coefficients["linear"] * jnp.einsum("nmm->n", diagonal))
+        square = jnp.einsum("stnab,tsnba->n", blocks, blocks)
+        return jnp.real(linear - jnp.sum(coefficients["quadratic"] * square))
+
+    vee = coefficients["vee"]
+    if coefficients["double_counting"] == "amf":
+        mean = trace / coefficients["ldims"]
+        identity = jnp.eye(ns.shape[-1], dtype=ns.dtype)
+        shift = mean[:, :, :, None, None] * identity * _slot_mask(coefficients)
+        blocks = blocks - shift
+        diagonal = jnp.einsum("ssnab->nab", blocks)
+        return jnp.real(_noncollinear_interaction(blocks, diagonal, vee))
+
+    # ``v_hubbard_full_nc``'s double counting: the shell's charge and the
+    # magnitude of its moment, the second of which is what the collinear
+    # expression writes as ``mag^2`` with one component.
+    total = jnp.real(trace[0, 0] + trace[1, 1])
+    moment = jnp.stack([
+        jnp.real(trace[0, 1] + trace[1, 0]),
+        jnp.imag(trace[0, 1] - trace[1, 0]),
+        jnp.real(trace[0, 0] - trace[1, 1]),
+    ])
+    double_counting = 0.5 * (
+        coefficients["u"] * total * (total - 1.0)
+        - coefficients["j"] * total * (0.5 * total - 1.0)
+        - 0.5 * coefficients["j"] * jnp.sum(moment**2, axis=0)
+    )
+    return jnp.real(
+        _noncollinear_interaction(blocks, diagonal, vee)
+    ) - jnp.sum(double_counting)
+
+
+def _noncollinear_interaction(blocks, diagonal, vee) -> jnp.ndarray:
+    """``E_u`` with both spin sums written out; see :func:`_noncollinear_energy`."""
+    direct = jnp.einsum("nabcd,nac,nbd->", vee, diagonal, diagonal)
+    exchange = jnp.einsum("nabdc,stnac,tsnbd->", vee, blocks, blocks)
+    return 0.5 * (direct - exchange)
+
+
 def _per_channel_energy(ns: jnp.ndarray, coefficients) -> jnp.ndarray:
     """The bracketed sum above, **without** the ``nspin = 1`` doubling.
 
@@ -238,6 +304,8 @@ def _per_channel_energy(ns: jnp.ndarray, coefficients) -> jnp.ndarray:
     so the branch resolves at trace time and neither functional is compiled into
     a run that does not use it.
     """
+    if ns.shape[0] == 4:
+        return _noncollinear_energy(ns, coefficients)
     if coefficients["kind"] == 1:
         return _full_energy(ns, coefficients)
     nspin = ns.shape[0]
@@ -272,7 +340,17 @@ def hubbard_potential(ns: jnp.ndarray, coefficients) -> jnp.ndarray:
 
     Not of :func:`hubbard_energy` -- of the per-channel sum. See the module
     docstring.
+
+    For a spinor ``ns`` is complex and the energy is real, so the derivative is
+    taken with ``holomorphic = False`` and **conjugated**: ``jax.grad`` of a
+    real function of a complex argument returns the conjugate of the Wirtinger
+    derivative (it is built for gradient descent), and the potential is the
+    derivative itself -- ``v_hub`` is Hermitian, and the unconjugated array is
+    its transpose, which is the one bug this branch invites and the one a
+    symmetric test matrix cannot see.
     """
+    if ns.shape[0] == 4:
+        return jnp.conj(jax.grad(_per_channel_energy, holomorphic=False)(ns, coefficients))
     return jax.grad(_per_channel_energy)(ns, coefficients)
 
 
@@ -457,5 +535,8 @@ def ns_ddot(residual: jnp.ndarray, coefficients) -> jnp.ndarray:
     schedule and the iteration count, so QE's numbers would no longer be
     reproducible step for step.
     """
-    value = jnp.sum(coefficients["u_metric"] * jnp.sum(residual**2, axis=(2, 3)))
+    # ``CONJG`` for the spinor branch, where the residual is complex and
+    # ``ns_ddot`` is still a norm (``scf_mod.f90``'s ``nspin == 4`` case).
+    square = jnp.real(jnp.conj(residual) * residual)
+    value = jnp.sum(coefficients["u_metric"] * jnp.sum(square, axis=(2, 3)))
     return 2.0 * value if residual.shape[0] == 1 else value

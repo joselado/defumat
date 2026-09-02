@@ -29,11 +29,22 @@ __all__ = ["HubbardTerm", "block_potential"]
 def block_potential(v_ns: jnp.ndarray, indices) -> jnp.ndarray:
     """``(nspin, nwfcU, nwfcU)``: the per-atom blocks laid on the diagonal.
 
-    ``indices`` is ``(slot, row, column, block_row, block_column, nwfcU)`` --
-    the static scatter :meth:`~defumat.hubbard.manifold.HubbardSetup.block_indices`
-    produces, paired with the positions inside each padded block.
+    ``indices`` is ``(spin, slot, row, column, block_row, block_column,
+    nwfcU)`` -- the static scatter
+    :meth:`~defumat.hubbard.manifold.HubbardSetup.block_indices` produces,
+    paired with the positions inside each padded block. For a spinor the four
+    spin blocks land in the four quadrants of **one** matrix, so what comes back
+    has a single channel however many components ``v_ns`` has.
     """
-    slot, row, column, block_row, block_column, nwfcU = indices
+    spin, slot, row, column, block_row, block_column, nwfcU = indices
+    if v_ns.shape[0] == 4:
+        # A spinor's four spin blocks are the four quadrants of **one**
+        # operator, and ``spin`` is which quadrant each entry belongs to.
+        values = v_ns[spin, slot, block_row, block_column]
+        empty = jnp.zeros((1, nwfcU, nwfcU), dtype=v_ns.dtype)
+        return empty.at[0, row, column].set(values)
+    # Collinear: the same per-atom scatter in every channel, so the channel axis
+    # broadcasts and ``spin`` (all zeros here) is not used.
     nspin = v_ns.shape[0]
     values = v_ns[:, slot, block_row, block_column]  # (nspin, nentries)
     empty = jnp.zeros((nspin, nwfcU, nwfcU), dtype=v_ns.dtype)

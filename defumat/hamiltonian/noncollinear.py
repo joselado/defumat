@@ -78,6 +78,11 @@ class SpinorHamiltonian(eqx.Module):
     #: ``qq_so``: ``(2, 2, nkb, nkb)``. ``None`` for a norm-conserving
     #: calculation, where ``S`` is the identity.
     qq: jnp.ndarray | None = None
+    #: The DFT+U term, or ``None``. **One term, not two**: a spinor's four spin
+    #: blocks are the four quadrants of a single ``(nwfcU, nwfcU)`` matrix over
+    #: projector columns that are themselves spinors, so it applies to the
+    #: ``2 npwx`` vector exactly as the collinear one applies to ``npwx``.
+    hubbard: object | None = None
 
     @property
     def nk(self) -> int:
@@ -171,7 +176,13 @@ class SpinorHamiltonian(eqx.Module):
         result = self._pair(self.kinetic, ik) * components
         result = result + self._local(components, ik)
         result = result + self._nonlocal(components, ik)
-        return self._join(jnp.where(self._pair(self.mask, ik), result, 0.0))
+        result = self._join(jnp.where(self._pair(self.mask, ik), result, 0.0))
+        if self.hubbard is not None:
+            # Applied to the whole spinor rather than component by component:
+            # the projectors are spinors and the potential's off-diagonal spin
+            # blocks are what turn the shell's moment.
+            result = result + self.hubbard.apply(psi, ik)
+        return result
 
     def apply_s(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``S|psi>``; the identity for a norm-conserving calculation."""
@@ -414,6 +425,8 @@ class SpinorHamiltonian(eqx.Module):
                 columns.append(jnp.where(pair, block, 0.0))
             blocks.append(jnp.concatenate(columns, axis=1))
         matrix = jnp.concatenate(blocks, axis=0)
+        if self.hubbard is not None:
+            matrix = matrix + self.hubbard.matrix(ik)
         return 0.5 * (matrix + matrix.conj().T)
 
     def matrix_by_application(self, ik: int) -> jnp.ndarray:

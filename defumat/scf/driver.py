@@ -74,6 +74,7 @@ from defumat.hubbard.occupations import (
     adjust_ns,
     build_ns_symmetry,
     initial_ns,
+    initial_ns_noncollinear,
     ns_shape,
     occupation_matrix,
 )
@@ -287,8 +288,13 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None):
         flat.append(np.asarray(old).ravel())
         flat_out.append(np.asarray(new).ravel())
     if ns_in is not None:
-        flat.append(np.asarray(ns_in).ravel())
-        flat_out.append(np.asarray(ns_out).ravel())
+        # A spinor ``ns`` is complex, and the mixer's state is one real vector.
+        # ``view(float)`` interleaves the real and imaginary parts in place,
+        # which is a relabelling rather than a transformation: Anderson's
+        # coefficients are real and act on each part identically, so mixing the
+        # viewed array is mixing the complex one.
+        flat.append(np.ascontiguousarray(ns_in).view(float).ravel())
+        flat_out.append(np.ascontiguousarray(ns_out).view(float).ravel())
 
     mixed = mixer.mix(np.concatenate(flat), np.concatenate(flat_out))
 
@@ -303,7 +309,13 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None):
         offset += old.size
     ns_mixed = None
     if ns_in is not None:
-        ns_mixed = jnp.asarray(mixed[offset : offset + ns_in.size].reshape(ns_in.shape))
+        real = np.asarray(ns_in).dtype != np.complex128
+        size = ns_in.size if real else 2 * ns_in.size
+        block = mixed[offset : offset + size]
+        ns_mixed = jnp.asarray(
+            block.reshape(ns_in.shape) if real
+            else block.view(complex).reshape(ns_in.shape)
+        )
     return rho_mixed, tuple(becsum_mixed), ns_mixed
 
 
@@ -715,10 +727,19 @@ class SCFResult:
 
     @property
     def hubbard_occupations(self) -> dict:
-        """``{atom: (Tr n_up, Tr n_down, total)}`` -- what ``write_ns`` prints."""
+        """``{atom: (Tr n_up, Tr n_down, total)}`` -- what ``write_ns`` prints.
+
+        For a spinor there is no global up and down, and what the two entries
+        hold instead are the traces of the two *diagonal* spin blocks, whose
+        difference is the ``z`` component of the shell's moment rather than its
+        magnitude. Read them together with :attr:`ns`, whose off-diagonal blocks
+        carry the rest of the direction.
+        """
         if self.ns is None:
             return {}
         traces = np.asarray(jnp.einsum("snmm->sn", self.ns))
+        if traces.shape[0] == 4:
+            traces = np.real(traces[[0, 3]])
         if traces.shape[0] == 1:
             traces = np.concatenate([traces, traces])
         return {
@@ -1209,7 +1230,7 @@ class Calculation:
         # atomic orbitals. ``None`` -- the normal case -- costs nothing: the term
         # is absent from the Hamiltonian rather than added as a zero.
         self.hubbard = build_hubbard_setup(
-            system.hubbard, system.structure, self.pseudos
+            system.hubbard, system.structure, self.pseudos, noncolin=self.noncolin
         )
         self._setup_hubbard(use_symmetry)
 
@@ -1295,15 +1316,37 @@ class Calculation:
             return
 
         setup = self.hubbard
-        if self.noncolin:
-            # ``new_ns_nc`` measures a 2x2 spin matrix per pair of orbitals and
-            # ``v_hubbard_nc`` builds a potential from it; neither is written
-            # here, and running the collinear expressions on one spinor channel
-            # would apply a correction with the wrong spin structure.
+        if self.noncolin and setup.kind == 1:
+            # **Measured, not assumed.** The two axes are validated separately
+            # and their composition is not: the simplified functional on a
+            # spinor matches ``pw.x`` to 1.2e-7 Ry on relativistic BN, and the
+            # full one on a collinear cell to 4.2e-9 Ry on FeO -- but together,
+            # on QE's own ``lda+U_kind1_noncollin`` case, they sit **4.2e-4 Ry**
+            # apart, with both codes converged (5.8e-12 here, in 148
+            # iterations) and both on the same solution: the occupation matrix
+            # agrees to 1.8e-4 in its trace. So it is a term rather than a
+            # threshold, and there is no honest number to report yet.
             raise NotImplementedError(
-                "DFT+U with noncolin = .true. is not implemented: the "
-                "occupation matrix is a 2x2 matrix in spin space (new_ns_nc), "
-                "not one real matrix per channel"
+                "the full (Liechtenstein) DFT+U functional with noncolin = "
+                ".true. is not implemented: the simplified functional works "
+                "for a spinor (matching pw.x to 1.2e-7 Ry) and the full one "
+                "works for a collinear run (4.2e-9 Ry), but the two together "
+                "are 4.2e-4 Ry from pw.x on its own benchmark with both codes "
+                "converged, so a term is missing. Drop the J, or run collinear"
+            )
+        if self.noncolin and use_symmetry and self.symmetries.nsym > 1:
+            # ``new_ns_nc`` averages the occupation matrix with the **SU(2)**
+            # representation of each operation (``d_spin_ldau``) beside the
+            # rotation of the ``m`` indices, because a spinor occupation matrix
+            # carries a spin frame that the operation turns. Nothing here builds
+            # those matrices, and symmetrising the ``m`` indices alone would
+            # leave the off-diagonal spin blocks in the wrong frame -- which is
+            # a converged run with a magnetization pointing somewhere else.
+            raise NotImplementedError(
+                "DFT+U with noncolin = .true. is implemented without symmetry: "
+                "the occupation matrix is a 2x2 matrix in spin space and its "
+                "group average needs the spin rotation of each operation. Run "
+                "with nosym = .true. and the whole k-grid"
             )
         if self.spiral:
             raise NotImplementedError(
@@ -1323,16 +1366,13 @@ class Calculation:
             )
 
         self.hubbard_coefficients = coefficients_from_setup(setup)
-        columns = np.zeros((setup.nslot, setup.ldmx), dtype=int)
-        mask = setup.slot_mask()
-        for slot, (offset, ldim) in enumerate(zip(setup.offsets, setup.ldims)):
-            columns[slot, :ldim] = np.arange(offset, offset + ldim)
-        self._hubbard_columns = jnp.asarray(columns)
-        self._hubbard_mask = jnp.asarray(mask)
-        slot_index, row, column = setup.block_indices()
+        self._hubbard_columns = jnp.asarray(setup.column_map())
+        self._hubbard_mask = jnp.asarray(setup.slot_mask())
+        spin_index, slot_index, row, column = setup.block_indices()
         block_row, block_column = setup.padded_indices()
         self._hubbard_blocks = (
-            jnp.asarray(slot_index), jnp.asarray(row), jnp.asarray(column),
+            jnp.asarray(spin_index), jnp.asarray(slot_index),
+            jnp.asarray(row), jnp.asarray(column),
             jnp.asarray(block_row), jnp.asarray(block_column), setup.nwfcU,
         )
         self.hubbard_symmetry = (
@@ -1398,7 +1438,7 @@ class Calculation:
         return build_hubbard_projectors(
             self.hubbard, self.pseudos, self.system.structure, self.system.cell,
             self.basis.smooth, self.basis.planewaves, self.basis_kpoints,
-            self._overlap, kcart,
+            self._spinor_overlap if self.noncolin else self._overlap, kcart,
         )
 
     @property
@@ -1426,8 +1466,13 @@ class Calculation:
         energy = hubbard_energy(ns, self.hubbard_coefficients)
         v_ns = hubbard_potential(ns, self.hubbard_coefficients)
         blocks = block_potential(v_ns, self._hubbard_blocks)
+        # A spinor has **one** Hamiltonian on a space twice as large, so its
+        # four spin blocks are four quadrants of one operator rather than four
+        # operators (`CLAUDE.md`: ``nspin``, ``npol`` and ``nspin_mag`` are
+        # three different numbers).
+        channels = 1 if self.noncolin else ns.shape[0]
         return energy, v_ns, tuple(
-            HubbardTerm(wfcU=self.wfcU, vns=blocks[spin]) for spin in range(ns.shape[0])
+            HubbardTerm(wfcU=self.wfcU, vns=blocks[spin]) for spin in range(channels)
         )
 
     def starting_ns(self) -> jnp.ndarray:
@@ -1440,6 +1485,11 @@ class Calculation:
         Applying it here instead would steer the first Hamiltonian rather than
         the second and give a different self-consistent solution.
         """
+        if self.noncolin:
+            return initial_ns_noncollinear(
+                self.hubbard, self.starting_magnetization,
+                self.system.angle1, self.system.angle2,
+            )
         return initial_ns(self.hubbard, self.nspin, self.starting_magnetization)
 
     def adjust_ns(self, ns: jnp.ndarray) -> jnp.ndarray:
@@ -2679,7 +2729,7 @@ class Calculation:
         total = v_scf + as_potential_components(self.vltot, self.nspin_mag)
         deeq = self.coefficients(total, ddd_paw)
         if self.noncolin:
-            return (self._spinor_hamiltonian(total, deeq),)
+            return (self._spinor_hamiltonian(total, deeq, hubbard),)
         hamiltonians = []
         for spin in range(self.nspin):
             # ``vhpsi`` is a separate term, not a contribution to ``deeq``: it
@@ -2706,8 +2756,15 @@ class Calculation:
             ))
         return tuple(hamiltonians)
 
-    def _spinor_hamiltonian(self, total: jnp.ndarray, deeq) -> SpinorHamiltonian:
-        """The single noncollinear Hamiltonian, at the given total potential."""
+    def _spinor_hamiltonian(
+        self, total: jnp.ndarray, deeq, hubbard=None
+    ) -> SpinorHamiltonian:
+        """The single noncollinear Hamiltonian, at the given total potential.
+
+        ``hubbard`` is a one-tuple: a spinor has one Hamiltonian on a space
+        twice as large, so the DFT+U term's four spin blocks are one operator
+        over spinor projector columns rather than one operator per channel.
+        """
         potential = jnp.stack([
             to_smooth(component, self.basis.dense, self.basis.smooth)
             for component in total
@@ -2725,6 +2782,7 @@ class Calculation:
             grid=self.basis.smooth.grid,
             resolves_differences=self.resolves_differences,
             qq=self.qq_so,
+            hubbard=None if hubbard is None else hubbard[0],
         )
 
     def starting_density(self) -> jnp.ndarray:
@@ -3676,7 +3734,12 @@ def run_scf(
             # ``delta_e`` runs before ``v_of_rho`` is called again. The Hubbard
             # potential is inside every eigenvalue through ``vhpsi``, so
             # ``eband`` double-counts it and this removes exactly that.
-            overlap = float(jnp.sum(ns_out * v_ns))
+            # ``Tr(N V)`` over the combined ``(m, spin)`` index, which for a
+            # real symmetric collinear pair is the plain elementwise sum and for
+            # a spinor's Hermitian pair needs the conjugate -- the transpose is
+            # the conjugate, so ``sum(conj(N) V)`` is the trace either way and
+            # is real by construction.
+            overlap = float(jnp.real(jnp.sum(jnp.conj(ns_out) * v_ns)))
             deband -= 2.0 * overlap if calculation.nspin == 1 else overlap
 
         terms = {

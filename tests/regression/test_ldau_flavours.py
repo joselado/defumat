@@ -1,4 +1,4 @@
-"""P62c and P62d: the two DFT+U flavours `pw.x` does not have.
+"""P62b, P62c and P62d: the DFT+U axes beyond a scalar `U` on a collinear cell.
 
 Neither has a reference to compare against -- QE computes no around-mean-field
 double counting and no Slater integral at all, and an all-electron code's
@@ -14,6 +14,9 @@ functionals themselves live in ``tests/unit/test_hubbard_full.py`` and
   that it does not correct a uniformly filled shell, so its occupation matrix
   must end up **closer to uniform** and its Hubbard energy far smaller. Both are
   statements about the physics rather than about a number.
+* ``bn-ldau-noncol`` -- relativistic BN with ``noncolin`` and ``lspinorb``, the
+  one case here that *does* have a reference: the occupation matrix as a 2x2
+  matrix in spin space, against a ``pw.x`` run generated for it.
 * ``pt-yukawa`` -- fcc platinum with ``hubbard_slater = 'yukawa'``, where the
   input gives a ``U`` and the screening length, ``F^2``, ``F^4`` and ``J`` are
   all computed from the 5d all-electron partial wave. The assertion is that
@@ -27,8 +30,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from defumat.pseudo import read_upf
+from defumat.io import read_qe_output
 from defumat.io.pwin import read_pw_input
+from defumat.pseudo import read_upf
 from defumat.scf import run_scf
 from defumat.scf.driver import Calculation
 from defumat.system import build_system
@@ -39,7 +43,7 @@ pytestmark = [pytest.mark.regression, pytest.mark.slow]
 GENERATED = Path(__file__).resolve().parents[1] / "data" / "qe"
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=3)
 def _converged(name, pseudo_dir):
     pwin = read_pw_input(GENERATED / name)
     system = build_system(pwin)
@@ -149,6 +153,60 @@ def _force_case(pseudo_dir):
     )
     assert result.converged
     return system, pseudos, calculation, result
+
+
+def test_a_spinor_occupation_matrix_matches_pw_x(pseudo_dir):
+    """P62b: DFT+U on a two-component spinor, with spin-orbit coupling.
+
+    Relativistic BN with ``U`` on the nitrogen ``2p``, ``noncolin`` and
+    ``lspinorb``, against a ``pw.x`` run generated for it. The occupation matrix
+    is one 2x2 matrix in spin space rather than two real matrices, and it is
+    measured on projector columns that are themselves spinors.
+
+    **It runs with ``nosym``**, which the input carries, because the group
+    average of a spinor occupation matrix needs the ``SU(2)`` representation of
+    each operation beside the rotation of the ``m`` indices; that is refused by
+    name. The grid is unshifted 3x3x1, so the two codes sample the same
+    k-points either way.
+    """
+    calculation, result = _converged("bn-ldau-noncol.in", pseudo_dir)
+    reference = read_qe_output(GENERATED / "reference.out.bn-ldau-noncol")
+    assert result.converged
+    assert np.asarray(result.ns).shape[0] == 4
+    assert np.iscomplexobj(np.asarray(result.ns))
+    assert result.total_energy == pytest.approx(reference.total_energy, abs=1e-6)
+    assert result.energy_terms["hubbard"] == pytest.approx(
+        reference.energy_terms["hubbard"], abs=1e-6
+    )
+    # ``Tr[ns]`` per diagonal spin block, against the five decimals ``write_ns``
+    # prints: 2.14903 / 2.14903.
+    (up, down, total), = result.hubbard_occupations.values()
+    assert (up, down) == pytest.approx((2.14903, 2.14903), abs=1e-4)
+
+
+def test_a_spinor_occupation_matrix_is_hermitian(pseudo_dir):
+    """The matrix a spinor run measures is an operator, not two numbers."""
+    _, result = _converged("bn-ldau-noncol.in", pseudo_dir)
+    ns = np.asarray(result.ns).reshape(2, 2, -1, 3, 3)
+    assert ns == pytest.approx(np.conj(np.einsum("stnab->tsnba", ns)), abs=1e-12)
+
+
+def test_the_full_functional_on_a_spinor_is_refused(pseudo_dir):
+    """The composition of two validated axes that does not close.
+
+    Measured rather than assumed, which is why it is a refusal and not a gap:
+    on QE's own ``lda+U_kind1_noncollin`` case the two codes are 4.2e-4 Ry apart
+    with both converged and both on the same solution.
+    """
+    from defumat.scf.driver import Calculation
+
+    pwin = read_pw_input(GENERATED / "fe-kind1-noncol.in")
+    system = build_system(pwin)
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    with pytest.raises(NotImplementedError, match="noncolin"):
+        Calculation(system, pseudos)
 
 
 def test_the_computed_interaction_reproduces_the_requested_u(pseudo_dir):

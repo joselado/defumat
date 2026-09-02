@@ -8992,7 +8992,7 @@ right way on an allowed reflection and nothing at all on one whose asphericity
 is `l = 3` (the table above); and the multiplicity of a reduced set applies to
 the charge, the magnetic star members being related by `det(R) R`.
 
-### P62 — Elk's other DFT+U flavours. 🚧 P62a, P62c and P62d DONE; P62b and P62e open.
+### P62 — Elk's other DFT+U flavours. 🚧 P62a, P62c, P62d DONE and P62b DONE for the simplified functional; P62e open.
 
 **What defumat has** is P20: QE's `lda_plus_u_kind = 0`, Dudarev's simplified
 rotationally-invariant functional with `J0`, `alpha` and `beta`, a *scalar* `U_eff` per
@@ -9191,7 +9191,7 @@ and stated as untested rather than claimed.
 
 ---
 
-#### P62b — The spinor occupation matrix. 📋 OPEN.
+#### P62b — The spinor occupation matrix. ✅ DONE for the simplified functional; the full one is refused by name.
 
 **What.** `ns` as one `2(2l+1)` Hermitian matrix in the combined `(m, spin)` space instead
 of two `(2l+1)` blocks — QE's `new_ns_nc`/`v_hubbard_nc`/`v_hubbard_full_nc`, Elk's
@@ -9223,8 +9223,69 @@ shape `dvan_so` already has in `add_vuspsi`. The FLL double counting acquires th
    a spiral at `q = (0,0,1/2)` against the collinear antiferromagnet of the doubled cell,
    which is an identity rather than a comparison. Keep it norm-conserving: P42 is why.
 
-**Refusals.** Ultrasoft and PAW follow whatever P20 already supports (the `_nc` projectors
-apply `S` the same way); the spiral stays refused until the identity above closes.
+**What landed.** `ns` as `(4, nslot, ldmx, ldmx)` complex, the four spin pairs in QE's own
+`ns_nc` order; spinor Hubbard projectors; the noncollinear form of both functionals written
+**once** rather than as a second implementation; the four spin blocks scattered into the
+four *quadrants* of one `(nwfcU, nwfcU)` operator, since a spinor has one Hamiltonian on a
+space twice as large; a complex `ns` through the mixer and through `ns_ddot`; and
+`init_ns`'s spinor form, which puts the shell's moment along the species' own
+`angle1`/`angle2` rather than along `z`.
+
+**Measured.** Relativistic BN with `noncolin`, `lspinorb` and `U` on the nitrogen `2p`,
+against a `pw.x` run generated for it: **1.2e-7 Ry** in the total energy, 1.2e-7 in the
+Hubbard term, and `Tr[ns]` = **2.14903 / 2.14903** against every digit `write_ns` prints.
+The identity checks that share nothing with QE: a spinor with its moment along `z`
+reproduces the collinear energy *and* potential to 1e-13 with the off-diagonal spin blocks
+exactly zero, and the energy is invariant under a global `SU(2)` rotation of the spin frame
+to 1e-13 — which is the check the along-`z` one cannot make, and the one a wrong index in
+the exchange term breaks.
+
+**The bug worth recording is a list read twice.** For a *fully-relativistic* dataset the
+scalar orbital list carries two entries per shell, one per `j`, and
+`atomic_wfc_so_mag` uses **neither of them**: it returns immediately for `j = l - 1/2` and
+builds, under the other one, the average
+
+    chi = [ (l+1) chi_{j=l+1/2} + l chi_{j=l-1/2} ] / (2l+1)
+
+so the two `j` channels of one shell collapse into **one** spinor channel of `2(2l+1)`
+columns. Doubling every entry of the scalar list instead — which is what "a spinor is two
+copies of each orbital" says — gives twice as many columns, shifts every offset after the
+first `p` shell, and makes the Hubbard manifold a *mixture* of the two `j` channels rather
+than their average. On BN that is the occupation matrix out by a factor near 1.85, an SCF
+that converges in ten iterations, and a total energy 0.025 Ry from `pw.x`. It is the
+`fcoef` trap of P14 one level up: **one list, read differently for a relativistic dataset**,
+and the offset arithmetic has to run over the collapsed list too — a `3d` manifold behind a
+`3p` one lands six columns past where it belongs, and only a dataset with two shells above
+`s` would ever show it.
+
+**The discriminator that localised it, twice.** Setting `U -> 0` and comparing against
+`pw.x` separates the spinor *infrastructure* from the Hubbard term: at `U = 1e-8` the same
+cell agrees to **8.0e-11 Ry**, which said the projectors, the doubled `ns`, the mixer and
+the deband trace were all right and the error was in the correction alone. The second time,
+it was the reverse: with the occupation matrix corrected, `Tr[ns]` matched QE to five
+decimals while `hartree` and `xc` were *exactly* their `U -> 0` values — the signature of a
+potential that is computed and never applied, which is what a spinor Hamiltonian with no
+`hubbard` field does.
+
+**Refused by name, and this one is measured rather than assumed**: the **full
+(Liechtenstein) functional on a spinor**. The two axes are validated separately — the
+simplified functional on a spinor to 1.2e-7 Ry, the full one on a collinear cell to 4.2e-9 —
+and their composition is not: on QE's own `lda+U_kind1_noncollin` case the two codes sit
+**4.2e-4 Ry** apart with **both converged** (5.8e-12 here, in 148 iterations) and **both on
+the same solution**, the occupation matrix agreeing to 1.8e-4 in its trace and putting the
+moment in the `xy` plane as `angle1 = 90` asks. Tightening `conv_thr` from 1e-10 to 1e-11
+does not move it. So it is a term rather than a threshold, and there is no honest number to
+report yet; the guess to check first is `v_hubbard_full_nc`'s treatment of the *direct*
+term, which contracts `ns(m3,m4,1) + ns(m3,m4,4)` where the collinear one sums over
+channels.
+
+**Also refused.** Symmetry: the group average of a spinor occupation matrix needs the
+`SU(2)` representation of each operation (`d_spin_ldau`, from `find_u`) beside the rotation
+of the `m` indices, and symmetrising the `m` indices alone leaves the off-diagonal spin
+blocks in the wrong frame — a converged run with the magnetization pointing somewhere else.
+`nosym` and the whole grid is the escape, and it costs nothing on the unshifted grids these
+benchmarks use. Ultrasoft and PAW follow whatever P20 already supports (the `_nc`
+projectors apply `S` the same way); the spiral stays refused.
 
 ---
 

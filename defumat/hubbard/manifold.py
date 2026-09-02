@@ -278,6 +278,12 @@ class HubbardSetup:
     #: ``lda_plus_u_kind``: 0 for the simplified functional, 1 for the full
     #: (Liechtenstein) one. Inferred from the card, never given.
     kind: int = 0
+    #: Whether the states are two-component spinors. It doubles the number of
+    #: *projector columns* per manifold -- ``2 (2l+1)``, spin slowest, which is
+    #: ``atomic_wfc_nc``'s own order -- and makes the occupation matrix a 2x2
+    #: matrix in spin space. It does **not** change ``ldims``, which stays the
+    #: number of ``m`` values.
+    noncolin: bool = False
     #: ``"fll"`` or ``"amf"`` -- Elk's ``dftu = 1`` and ``dftu = 2``. The full
     #: functional only; the simplified one *is* the fully-localised limit.
     double_counting: str = "fll"
@@ -288,6 +294,25 @@ class HubbardSetup:
     @property
     def nslot(self) -> int:
         return len(self.atoms)
+
+    @property
+    def npol(self) -> int:
+        """Spinor components of a *projector*: 2 for a spinor run, 1 otherwise."""
+        return 2 if self.noncolin else 1
+
+    def column_map(self) -> np.ndarray:
+        """``(nslot, npol, ldmx)``: which ``wfcU`` column each orbital is.
+
+        ``offsetU(na) + m + ldim (is - 1)`` of ``new_ns_nc``, with the padding
+        of a manifold shorter than ``ldmx`` pointing at the slot's first column
+        -- :meth:`slot_mask` is what zeroes it, exactly as it does for the
+        scalar map this generalises.
+        """
+        columns = np.zeros((self.nslot, self.npol, self.ldmx), dtype=int)
+        for slot, (offset, ldim) in enumerate(zip(self.offsets, self.ldims)):
+            for spin in range(self.npol):
+                columns[slot, spin, :ldim] = np.arange(ldim) + offset + spin * ldim
+        return columns
 
     def slot_mask(self) -> np.ndarray:
         """``(nslot, ldmx)``: which rows of a padded block are real orbitals."""
@@ -302,25 +327,35 @@ class HubbardSetup:
             [getattr(self.species[t], name) for t in self.types], dtype=float
         )
 
-    def block_indices(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def block_indices(self) -> tuple[np.ndarray, ...]:
         """Where each ``ns`` entry lands in the ``(nwfcU, nwfcU)`` operator.
 
-        Returns ``(slot, row, column)`` index arrays over the real entries of
-        every block, flattened -- the scatter that turns a padded per-atom
+        Returns ``(spin, slot, row, column)`` index arrays over the real entries
+        of every block, flattened -- the scatter that turns a padded per-atom
         occupation matrix into the block-diagonal matrix the Hamiltonian's
-        separable term contracts with.
+        separable term contracts with. ``spin`` is the *leading axis of* ``ns``:
+        the channel index for a collinear run, and the packed pair
+        ``2 s1 + s2`` for a spinor, whose four blocks land in the four quadrants
+        of one ``2 ldim`` block rather than in four separate matrices. That is
+        the whole of what makes a spinor Hubbard term one operator instead of
+        two.
         """
-        slots, rows, columns = [], [], []
+        spins, slots, rows, columns = [], [], [], []
+        npol = self.npol
         for slot, (ldim, offset) in enumerate(zip(self.ldims, self.offsets)):
             i, j = np.meshgrid(np.arange(ldim), np.arange(ldim), indexing="ij")
-            slots.append(np.full(i.size, slot))
-            rows.append((offset + i).ravel())
-            columns.append((offset + j).ravel())
+            for s1 in range(npol):
+                for s2 in range(npol):
+                    spins.append(np.full(i.size, s1 * npol + s2))
+                    slots.append(np.full(i.size, slot))
+                    rows.append((offset + s1 * ldim + i).ravel())
+                    columns.append((offset + s2 * ldim + j).ravel())
         if not slots:
             empty = np.zeros(0, dtype=int)
-            return empty, empty, empty
+            return empty, empty, empty, empty
         return (
-            np.concatenate(slots), np.concatenate(rows), np.concatenate(columns)
+            np.concatenate(spins), np.concatenate(slots),
+            np.concatenate(rows), np.concatenate(columns),
         )
 
     def padded_indices(self) -> tuple[np.ndarray, np.ndarray]:
@@ -329,21 +364,38 @@ class HubbardSetup:
         rows, columns = [], []
         for ldim in self.ldims:
             i, j = np.meshgrid(np.arange(ldim), np.arange(ldim), indexing="ij")
-            rows.append(i.ravel())
-            columns.append(j.ravel())
+            for _ in range(self.npol**2):
+                rows.append(i.ravel())
+                columns.append(j.ravel())
         if not rows:
             empty = np.zeros(0, dtype=int)
             return empty, empty
         return np.concatenate(rows), np.concatenate(columns)
 
 
-def _atomic_orbitals(pseudo: Pseudopotential):
+def _atomic_orbitals(pseudo: Pseudopotential, noncolin: bool = False):
     """The orbitals in the order the atomic wavefunctions are built in.
 
     :func:`defumat.pseudo.atomic.atomic_channels` skips negative occupations,
     as ``offset_atom_wfc`` does; the width of each kept orbital is ``2l+1``.
+
+    **For a spinor run on a fully-relativistic dataset the two ``j`` channels of
+    a shell are one channel, not two.** ``atomic_wfc_so_mag`` returns
+    immediately for ``j = l - 1/2`` and builds the ``j``-averaged radial
+    function under the other one, so the orbital list this offset arithmetic
+    runs over is *shorter* than the scalar list. Doubling the scalar offsets
+    instead happens to be right when the manifold is the first shell with
+    ``l > 0`` and is wrong after that -- a ``3d`` manifold behind a ``3p`` one
+    lands 6 columns past where it belongs, silently.
     """
-    return [orbital for orbital in pseudo.orbitals if orbital.occupation >= 0.0]
+    kept = [orbital for orbital in pseudo.orbitals if orbital.occupation >= 0.0]
+    if not noncolin:
+        return kept
+    return [
+        orbital for orbital in kept
+        if orbital.l == 0 or getattr(orbital, "j", None) is None
+        or abs(orbital.j - orbital.l + 0.5) >= 1.0e-4
+    ]
 
 
 def reference_occupation(pseudo: Pseudopotential, n: int, l: int) -> float:
@@ -373,6 +425,7 @@ def build_hubbard_setup(
     hubbard: HubbardInput | None,
     structure,
     pseudos: tuple[Pseudopotential, ...],
+    noncolin: bool = False,
 ) -> HubbardSetup | None:
     """Resolve a :class:`HubbardInput` against the structure and the datasets.
 
@@ -477,9 +530,10 @@ def build_hubbard_setup(
 
     atoms, ldims, offsets, atomwfc_offsets, types = [], [], [], [], []
     counter = wfc_counter = 0
+    width_scale = 2 if noncolin else 1
     for atom, t in enumerate(structure.types):
         item = resolved[t]
-        orbitals = _atomic_orbitals(pseudos[t])
+        orbitals = _atomic_orbitals(pseudos[t], noncolin)
         if item is not None:
             label = manifold_label(item.n, item.l)
             position, width = None, 0
@@ -500,8 +554,13 @@ def build_hubbard_setup(
             types.append(t)
             ldims.append(item.ldim)
             offsets.append(wfc_counter)
-            atomwfc_offsets.append(counter + position)
-            wfc_counter += item.ldim
+            # ``atomic_wfc_nc`` emits two columns per orbital -- the same
+            # spatial function with a pure up and a pure down spin -- keeping
+            # each channel's ``2l+1`` contiguous and putting the two spins one
+            # after the other. So every offset into the atomic-orbital list
+            # doubles, and each Hubbard slot occupies ``2 (2l+1)`` columns.
+            atomwfc_offsets.append(width_scale * (counter + position))
+            wfc_counter += width_scale * item.ldim
         counter += sum(2 * orbital.l + 1 for orbital in orbitals)
 
     setup = HubbardSetup(
@@ -515,6 +574,7 @@ def build_hubbard_setup(
         types=tuple(types),
         projectors=projectors,
         kind=kind,
+        noncolin=bool(noncolin),
         double_counting=double_counting,
         starting_ns=starting_ns,
     )

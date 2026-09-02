@@ -57,6 +57,8 @@ __all__ = [
     "adjust_ns",
     "build_ns_symmetry",
     "initial_ns",
+    "initial_ns_noncollinear",
+    "ns_components",
     "ns_shape",
     "occupation_matrix",
     "projections",
@@ -84,17 +86,36 @@ def occupation_matrix(
 ) -> jnp.ndarray:
     """``nr``: the unsymmetrised occupation matrix, ``(nspin, nslot, ldmx, ldmx)``.
 
-    ``columns[slot, m]`` is the position of orbital ``m`` of that slot in
-    ``wfcU``, and ``mask[slot, m]`` says whether it is a real orbital or padding
-    -- the two together are what let manifolds of different ``l`` share one
-    rectangular array. ``weights`` are QE's ``wg``, the k-point weight times the
-    occupation.
+    ``columns[slot, spin, m]`` is the position of orbital ``m`` of that slot in
+    ``wfcU`` (``spin`` has one entry unless the states are spinors), and
+    ``mask[slot, m]`` says whether it is a real orbital or padding -- the two
+    together are what let manifolds of different ``l`` share one rectangular
+    array. ``weights`` are QE's ``wg``, the k-point weight times the occupation.
+
+    For a spinor the result is ``(4, nslot, ldmx, ldmx)`` **complex**, the four
+    entries being the spin pairs ``(uu, ud, du, dd)``; for a collinear run it is
+    ``(nspin, nslot, ldmx, ldmx)`` real, as before.
     """
     nspin = wavefunctions.shape[0]
+    npol = columns.shape[1]
+    if npol == 2:
+        # ``new_ns_nc``: one projection per spinor band onto ``2 (2l+1)``
+        # columns, and the occupation matrix keeps the two spin indices rather
+        # than tracing over them. ``nr(m1, m2, is1, is2)`` becomes four
+        # ``(ldmx, ldmx)`` blocks packed as ``2 is1 + is2``, which is QE's own
+        # ``ns_nc`` layout and the order :meth:`HubbardSetup.block_indices`
+        # scatters back from.
+        proj = projections(wfcU, wavefunctions[0], k_batch)  # (nk, nbnd, nwfcU)
+        block = jnp.where(mask[:, None, :], proj[..., columns], 0.0)
+        ns = jnp.einsum(
+            "kb,kbnsa,kbntc->stnac", weights[0], jnp.conj(block), block
+        )
+        return ns.reshape((4,) + ns.shape[2:])
+
     blocks = []
     for spin in range(nspin):
         proj = projections(wfcU, wavefunctions[spin], k_batch)  # (nk, nbnd, nwfcU)
-        block = proj[..., columns]  # (nk, nbnd, nslot, ldmx)
+        block = proj[..., columns[:, 0]]  # (nk, nbnd, nslot, ldmx)
         block = jnp.where(mask, block, 0.0)
         blocks.append(
             jnp.einsum("kb,kbna,kbnc->nac", weights[spin], jnp.conj(block), block).real
@@ -198,6 +219,17 @@ def build_ns_symmetry(setup, cell, structure, symmetries) -> NsSymmetry | None:
     )
 
 
+def ns_components(setup, nspin: int) -> int:
+    """The size of ``ns``'s leading axis: 4 for a spinor, ``nspin`` otherwise.
+
+    Not the same number as ``nspin_mag``, and deliberately not derived from it:
+    a spinor DFT+U run measures all four spin components of the occupation
+    matrix whether or not the *density* carries a magnetization, because the
+    correction acts on the shell rather than on the density.
+    """
+    return 4 if setup.noncolin else nspin
+
+
 def ns_shape(setup, nspin: int) -> tuple[int, int, int, int]:
     """``(nspin, nslot, ldmx, ldmx)`` -- what a ``starting_ns`` has to be.
 
@@ -206,7 +238,7 @@ def ns_shape(setup, nspin: int) -> tuple[int, int, int, int]:
     from the structure. :attr:`~defumat.scf.Calculation.hubbard` carries the
     slot-to-atom map.
     """
-    return (nspin, setup.nslot, setup.ldmx, setup.ldmx)
+    return (ns_components(setup, nspin), setup.nslot, setup.ldmx, setup.ldmx)
 
 
 def uniform_ns(setup, nspin: int, occupation=None) -> jnp.ndarray:
@@ -259,6 +291,52 @@ def spin_averaged_ns(ns) -> jnp.ndarray:
     if ns.shape[0] == 1:
         return ns
     return jnp.broadcast_to(jnp.mean(ns, axis=0, keepdims=True), ns.shape)
+
+
+def initial_ns_noncollinear(setup, starting_magnetization, angle1, angle2) -> jnp.ndarray:
+    """``init_ns``'s spinor form: Hund's rule, along the species' own direction.
+
+    The collinear routine fills the majority channel first and spreads the rest
+    over the minority one. Here the same two numbers are the eigenvalues of a
+    2x2 matrix whose axis is the direction ``angle1``/``angle2`` name, so the
+    starting occupation matrix has off-diagonal spin blocks from the first
+    iteration. **That matters more than in a collinear run**: nothing in the SCF
+    turns a moment, so a spinor DFT+U run started with a moment along ``z`` on a
+    species whose ``angle1`` points elsewhere converges with the shell polarised
+    along the wrong axis and reports success.
+    """
+    ns = np.zeros((4, setup.nslot, setup.ldmx, setup.ldmx), dtype=complex)
+    magnetization = np.asarray(starting_magnetization, dtype=float)
+    theta = np.deg2rad(np.asarray(angle1, dtype=float))
+    phi = np.deg2rad(np.asarray(angle2, dtype=float))
+    for slot, t in enumerate(setup.types):
+        item = setup.species[t]
+        ldim, total = item.ldim, item.occupation
+        moment = magnetization[t] if t < len(magnetization) else 0.0
+        if total > ldim:
+            major, minor = 1.0, (total - ldim) / ldim
+        else:
+            major, minor = total / ldim, 0.0
+        if moment == 0.0:
+            major = minor = total / 2.0 / ldim
+        elif moment < 0.0:
+            major, minor = minor, major
+        axis = np.array([
+            np.sin(theta[t]) * np.cos(phi[t]),
+            np.sin(theta[t]) * np.sin(phi[t]),
+            np.cos(theta[t]),
+        ]) if t < len(theta) else np.array([0.0, 0.0, 1.0])
+        charge, spin = 0.5 * (major + minor), 0.5 * (major - minor)
+        # ``(n/2) I + (m/2) sigma . n``, whose eigenvalues are the two fillings.
+        block = charge * np.eye(2) + spin * np.array([
+            [axis[2], axis[0] - 1j * axis[1]],
+            [axis[0] + 1j * axis[1], -axis[2]],
+        ])
+        for m in range(ldim):
+            for s1 in range(2):
+                for s2 in range(2):
+                    ns[2 * s1 + s2, slot, m, m] = block[s1, s2]
+    return jnp.asarray(ns)
 
 
 def initial_ns(setup, nspin: int, starting_magnetization) -> jnp.ndarray:

@@ -234,9 +234,10 @@ def test_ns_adj_replaces_eigenvalues_and_keeps_eigenvectors(feo):
 def test_block_potential_is_block_diagonal(feo):
     """The per-atom blocks land on the diagonal of one ``(nwfcU, nwfcU)`` matrix."""
     _, _, setup = feo
-    slot, row, column = setup.block_indices()
+    spin, slot, row, column = setup.block_indices()
     block_row, block_column = setup.padded_indices()
-    indices = (jnp.asarray(slot), jnp.asarray(row), jnp.asarray(column),
+    indices = (jnp.asarray(spin), jnp.asarray(slot),
+               jnp.asarray(row), jnp.asarray(column),
                jnp.asarray(block_row), jnp.asarray(block_column), setup.nwfcU)
 
     rng = np.random.default_rng(7)

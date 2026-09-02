@@ -540,8 +540,23 @@ HUBBARD {ortho-atomic}
 U Ni-3d 5.0      # lambda is solved for; F2, F4 and J follow
 \end{lstlisting}
 
+\textbf{On a spinor} (\code{noncolin}, with or without \code{lspinorb}) the
+occupation matrix is one $2\times2$ matrix in spin space rather than two real
+matrices, measured on projector columns that are themselves spinors, and its
+off-diagonal blocks are what let the shell's moment point anywhere. Relativistic
+BN against \code{pw.x}: \textbf{1.2e-7 Ry}, with $\mathrm{Tr}[n^{\sigma\sigma}]$
+matching every digit \code{write\_ns} prints.
+
 \begin{refuses}
-\textbf{Refuses.} \code{hubbard\_slater = 'yukawa'} needs a \textbf{PAW}
+\textbf{Refuses.} A spinor occupation matrix needs \code{nosym}: its group
+average takes the $SU(2)$ representation of each operation beside the rotation
+of the $m$ indices, and averaging the $m$ indices alone leaves the moment
+pointing somewhere else. The \textbf{full} functional on a spinor is refused
+too, and that one is measured rather than assumed: each axis agrees with
+\code{pw.x} on its own (1.2e-7~Ry for a spinor, 4.2e-9 for the full functional
+on a collinear cell) and together they sit 4.2e-4~Ry apart with both codes
+converged and on the same solution, so a term is missing.
+\code{hubbard\_slater = 'yukawa'} needs a \textbf{PAW}
 dataset, and this is a measurement rather than a preference: only PAW carries
 the all-electron partial wave. A norm-conserving $\chi$ is normalised and gives
 a pseudo-orbital $F^0$ far too small (silicon's 3p: 8.8~eV), and an
