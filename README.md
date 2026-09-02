@@ -1,25 +1,41 @@
 # defumat
 
-A plane-wave density-functional theory code written in Python, which reads
-Quantum ESPRESSO's input files and reproduces its numbers.
+A plane-wave density-functional theory code written in Python and JAX, in which
+the derivatives are taken of the energy itself rather than derived by hand.
 
-It is a reimplementation of `pw.x`, not a wrapper: there is no Fortran
-underneath. You give it the same input file you would give Quantum ESPRESSO and
-it runs the calculation itself.
+It is inspired by two established codes and benchmarked against both. **Quantum
+ESPRESSO** is where the plane-wave machinery comes from, closely enough that
+defumat reads its input files: you give it the same file you would give `pw.x`
+and it runs the calculation itself, with no Fortran underneath. **Elk**, the
+all-electron LAPW code, is where a second family of quantities comes from —
+spin spirals without a supercell, magnetic fields inside a single atom's sphere,
+effective masses, the Fermi-surface nesting function, second-harmonic
+generation, X-ray and magnetic structure factors — none of which `pw.x`
+computes at all.
+
+Because the whole compute path is differentiable, a quantity that is usually a
+second implementation is here a derivative of the first. The forces, the stress,
+the phonons, the dielectric response and the third derivatives above them are
+obtained by differentiating the total energy, so each agrees with the energy it
+came from by construction rather than by transcription.
 
 ```
 total energy   QE  -63.36038036 Ry
           defumat  -63.36038036 Ry
 ```
 
-That is an eight-atom silicon cell, agreeing to 3.5e-9 Ry. The agreement is
-checked automatically, term by term, against Quantum ESPRESSO's own reference
-outputs for around a hundred cases.
+That is an eight-atom silicon cell, agreeing to 3.5e-9 Ry. Both codes are
+references and not only influences: the agreement is checked automatically, term
+by term, against Quantum ESPRESSO's own reference outputs for around a hundred
+cases, and against Elk for the quantities Elk computes and `pw.x` does not.
 
-It also computes things `pw.x` cannot: spin spirals without a supercell,
-topological invariants, elastic and electrostriction constants, optical spectra
-with excitonic effects. The table below ticks off, quantity by quantity, what
-Quantum ESPRESSO and the all-electron code Elk compute as well.
+On top of the two there are things neither of them computes — relaxing a spin
+spiral's wavevector down `dE/dq`, Chern numbers and Z2 invariants, the strain
+response and the deformation potentials, elastic and electrostriction constants,
+the magnetic torque. The table below ticks off, quantity by quantity, what
+Quantum ESPRESSO and Elk compute as well; a row blank in both columns is one
+neither has, and is pinned by an identity or an independent second route rather
+than by a reference output.
 
 ## What it can do today
 
@@ -280,6 +296,14 @@ to compute, which is the way to arrive at them. In file order:
 | [`27_excitons_and_tddft`](notebooks/27_excitons_and_tddft.ipynb) | Optical absorption from TDDFT with a bootstrap kernel, and the excitonic peak RPA does not have |
 | [`28_piezoelectricity`](notebooks/28_piezoelectricity.ipynb) | The voltage a squeezed crystal produces: AlAs's one independent component, and why silicon has none |
 | [`29_effective_mass_and_angular_momenta`](notebooks/29_effective_mass_and_angular_momenta.ipynb) | Effective masses as one difference of an analytic velocity, against the all-electron Elk binary, and where a spin-orbit magnet's orbital moment sits |
+| [`30_magneto_optics`](notebooks/30_magneto_optics.ipynb) | The Kerr effect: linearly polarized light coming back rotated off a magnet, and the off-diagonal conductivity that produces it |
+| [`31_fermi_surface_nesting`](notebooks/31_fermi_surface_nesting.ipynb) | Where a metal will go unstable: the wavevector that slides one piece of the Fermi surface onto another |
+| [`32_shift_current`](notebooks/32_shift_current.ipynb) | The bulk photovoltaic effect: a crystal with no inversion centre carrying a current under uniform light, with no junction |
+| [`33_second_harmonic_generation`](notebooks/33_second_harmonic_generation.ipynb) | Frequency doubling in AlAs: the tensor zincblende allows, checked against the all-electron code Elk |
+| [`34_electric_polarization`](notebooks/34_electric_polarization.ipynb) | Polarization as a Berry phase, the Born charge read off a displacement, and the sum rule that catches an undersampled zone |
+| [`35_magnetoelectric_effect`](notebooks/35_magnetoelectric_effect.ipynb) | A magnetic field producing an electric polarization in AlAs, and the null that shows it is spin-orbit coupling and nothing else |
+| [`36_magnetic_anisotropy`](notebooks/36_magnetic_anisotropy.ipynb) | Which way a magnet wants to point: a milli-electronvolt read off a stretched cobalt cell as a derivative rather than a difference |
+| [`37_structure_factors`](notebooks/37_structure_factors.ipynb) | What a diffraction experiment sees: silicon's forbidden (222) reflection, which is bonding charge and nothing else |
 
 `benchmarks/` holds ready-to-run input files, from a two-atom silicon cell up to
 a sixteen-atom one.
@@ -351,6 +375,3 @@ this code was written by reading it.
 
 The pseudopotential files under `tests/data/pseudo/` come from the Quantum
 ESPRESSO pseudopotential library and carry their own terms.
-| [`33_second_harmonic_generation`](notebooks/33_second_harmonic_generation.ipynb) | Frequency doubling in AlAs: the tensor zincblende allows, checked against the all-electron code Elk |
-| [`34_electric_polarization`](notebooks/34_electric_polarization.ipynb) | Polarization as a Berry phase, the Born charge read off a displacement, and the sum rule that catches an undersampled zone |
-| [`35_magnetoelectric_effect`](notebooks/35_magnetoelectric_effect.ipynb) | A magnetic field producing an electric polarization in AlAs, and the null that shows it is spin-orbit coupling and nothing else |
