@@ -113,6 +113,11 @@ fig.tight_layout()
     
 
 
+The flat line is the whole content of the theorem. Everything that makes the
+other curve bend comes from the spin-orbit term, and switching it off recovers a
+crystal that does not know which way its moment points.
+
+
 ## The same number from one angle
 
 Taking the anisotropy as a difference of two energies throws away most of the
@@ -140,10 +145,6 @@ print(f"K from the band-energy difference {mae.anisotropy_mev:+.4f} meV")
     K from the free-energy difference +0.5523 meV
     K from the band-energy difference +1.2353 meV
 
-
-The flat line is the whole content of the theorem. Everything that makes the
-other curve bend comes from the spin-orbit term, and switching it off recovers a
-crystal that does not know which way its moment points.
 
 ## Against Quantum ESPRESSO
 
