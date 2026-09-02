@@ -30,12 +30,12 @@ by term, against Quantum ESPRESSO's own reference outputs for around a hundred
 cases, and against Elk for the quantities Elk computes and `pw.x` does not.
 
 On top of the two there are things neither of them computes — relaxing a spin
-spiral's wavevector down `dE/dq`, Chern numbers and Z2 invariants, the strain
-response and the deformation potentials, elastic and electrostriction constants,
-the magnetic torque. The table below ticks off, quantity by quantity, what
-Quantum ESPRESSO and Elk compute as well; a row blank in both columns is one
-neither has, and is pinned by an identity or an independent second route rather
-than by a reference output.
+spiral's wavevector down $\mathrm{d}E/\mathrm{d}\mathbf{q}$, Chern numbers and
+$\mathbb{Z}_2$ invariants, the strain response and the deformation potentials,
+elastic and electrostriction constants, the magnetic torque. The table below
+ticks off, quantity by quantity, what Quantum ESPRESSO and Elk compute as well;
+a row blank in both columns is one neither has, and is pinned by an identity or
+an independent second route rather than by a reference output.
 
 ## Capabilities at a glance
 
@@ -61,9 +61,10 @@ for it, what it refuses, and whether Quantum ESPRESSO and Elk compute it too.
 
 - **Band structures** along a path through the Brillouin zone
 - **Densities of states**, by smearing or by tetrahedra
-- **Projected densities of states**, resolved by atom, by `l` and by `m`
-- **Band velocities** `d(eps)/dk`, with the nonlocal pseudopotential's own term
-- **Effective mass tensor** `m*_ij` at any k-point
+- **Projected densities of states**, resolved by atom, by $l$ and by $m$
+- **Band velocities** $\partial\epsilon_n/\partial\mathbf{k}$, with the nonlocal
+  pseudopotential's own term
+- **Effective mass tensor** $m^{\ast}_{ij}$ at any k-point
 
 **Structure and mechanics**
 
@@ -73,10 +74,11 @@ for it, what it refuses, and whether Quantum ESPRESSO and Elk compute it too.
   pressure
 - **Stress tensor and pressure**
 - **The strain response** and the deformation potentials
-- **Elastic constants** `C_ijkl`, with the compliances and the bulk modulus
-- **Electrostriction coefficients** `m`, `q`, `M` and `Q`, and the **elasto-optic
-  tensor** `d(chi)/d(strain)` they are obtained from
-- **Piezoelectric tensor** `e_(k)ij`
+- **Elastic constants** $C_{ijkl}$, with the compliances and the bulk modulus
+- **Electrostriction coefficients** $m$, $q$, $M$ and $Q$, and the
+  **elasto-optic tensor** $\partial\chi_{ij}/\partial\varepsilon_{kl}$ they are
+  obtained from
+- **Piezoelectric tensor** $e_{k,ij}$
 
 **Collinear magnetism**
 
@@ -87,47 +89,52 @@ for it, what it refuses, and whether Quantum ESPRESSO and Elk compute it too.
 **Noncollinear magnetism and spin-orbit coupling**
 
 - **Magnetism as a vector**, with the magnetic symmetry group
-- **Spin-orbit coupling** — two-component spinors and `j`-resolved projectors
+- **Spin-orbit coupling** — two-component spinors and $j$-resolved projectors
 - **Magnetic fields inside one atom's sphere**, and a field that fades away as
   the run converges
 - **Spin spirals** at any wavevector, without a supercell
-- **Relaxing the spiral wavevector** down `dE/dq` to the ground-state pitch
-- **`E(q)` and the Heisenberg exchange constants** `J(R)` — a spiral scan fitted
-  over neighbour shells, which is how a spiral scan becomes a spin model
-- **Orbital, spin and total angular momentum on each atom** — `<L>`, `<S>`, `<J>`
+- **Relaxing the spiral wavevector** down $\mathrm{d}E/\mathrm{d}\mathbf{q}$ to
+  the ground-state pitch
+- **$E(\mathbf{q})$ and the Heisenberg exchange constants** $J(\mathbf{R})$ — a
+  spiral scan fitted over neighbour shells, which is how a spiral scan becomes
+  a spin model
+- **Orbital, spin and total angular momentum on each atom** —
+  $\langle L\rangle$, $\langle S\rangle$, $\langle J\rangle$
 - **Magnetocrystalline anisotropy**, by the force theorem
-- **Magnetic torque** `-dF/dtheta`, the anisotropy from one angle rather than a
-  difference of two
+- **Magnetic torque** $-\mathrm{d}F/\mathrm{d}\theta$, the anisotropy from one
+  angle rather than a difference of two
 
 **Vibrations and dielectric response**
 
-- **Phonons at `Gamma`** — the force constants and their frequencies
-- **Dielectric constant** `epsilon_infinity` and **Born effective charges**
-- **Raman tensors** `d(eps)/d(tau)`
+- **Phonons at $\Gamma$** — the force constants and their frequencies
+- **Dielectric constant** $\epsilon^\infty$ and **Born effective charges**
+- **Raman tensors** $\partial\epsilon_{ij}/\partial\tau$
 - **Raman and infrared spectra** — the per-mode activities and depolarisation
   ratios
 - **LO-TO splitting and the static dielectric constant**
 
 **Topology and polarization**
 
-- **Berry curvature and Chern numbers**, and a smooth `Omega(k)` map
-- **Z2 invariants** in 2D and 3D, by Wannier charge centres and by parities
+- **Berry curvature and Chern numbers**, and a smooth $\Omega(\mathbf{k})$ map
+- **$\mathbb{Z}_2$ invariants** in 2D and 3D, by Wannier charge centres and by
+  parities
 - **Berry-phase polarization**
-- **Magnetoelectric tensor** `alpha_ij = dP_i/dB_j`
+- **Magnetoelectric tensor** $\alpha_{ij} = \partial P_i/\partial B_j$
 
 **Optical and nonlinear response**
 
 - **Optical absorption spectra with excitons**, from TDDFT with local-field
   effects
-- **Optical conductivity tensor** `sigma_ab(omega)`, the magneto-optical **Kerr
-  angle** and the **anomalous Hall conductivity**
-- **Shift current** `sigma^abc(0; w, -w)` — the bulk photovoltaic effect
-- **Second-harmonic generation** `chi^(2)(-2w; w, w)`
+- **Optical conductivity tensor** $\sigma_{ab}(\omega)$, the magneto-optical
+  **Kerr angle** and the **anomalous Hall conductivity**
+- **Shift current** $\sigma^{abc}(0;\omega,-\omega)$ — the bulk photovoltaic
+  effect
+- **Second-harmonic generation** $\chi^{(2)}(-2\omega;\omega,\omega)$
 
 **Fermi surface and diffraction**
 
-- **Fermi-surface nesting function** `N(q)`
-- **X-ray and magnetic structure factors** `F(H)`
+- **Fermi-surface nesting function** $N(\mathbf{q})$
+- **X-ray and magnetic structure factors** $F(\mathbf{H})$
 
 ## What it can do today
 
@@ -150,47 +157,47 @@ drive any of this and is what the examples below use.
 | **Total energies**, self-consistently, broken down term by term — insulators and metals alike | `calculation = 'scf'` | ✓ | ✓ |
 | **Band structures** along a path through the Brillouin zone | `run_bands` | ✓ | ✓ |
 | **Densities of states**, by smearing or by tetrahedra | `run_dos`, `defumat dos` | ✓ | ✓ |
-| **Projected densities of states** — resolved by atom, by `l` and by `m`, with Löwdin charges and the spilling parameter | `run_pdos`, `defumat pdos` | ✓ | ✓ |
+| **Projected densities of states** — resolved by atom, by $l$ and by $m$, with Löwdin charges and the spilling parameter | `run_pdos`, `defumat pdos` | ✓ | ✓ |
 | **Forces on the atoms** — unpolarized, collinear spin and noncollinear/spin-orbit, on norm-conserving, ultrasoft and PAW. For a spinor the hand-derived cross-check has no counterpart and `method='analytic'` is refused | `compute_forces` | ✓ | ✓ |
 | **Structural relaxation** — the atoms moved downhill to their equilibrium positions | `calculation = 'relax'`, `defumat relax` | ✓ | ✓ |
 | **Variable-cell relaxation** — the cell and the atoms relaxed together, at an applied pressure | `calculation = 'vc-relax'`, `run_vc_relax` | ✓ | ✓ |
 | **Stress tensor and pressure**, in Ry/bohr³ and kbar — the same three spin regimes as the force | `tstress = .true.`, `compute_stress`, `defumat stress` | ✓ | ✓ |
 | **Magnetism**, collinear, with one Fermi level or two | `nspin = 2`, `tot_magnetization` | ✓ | ✓ |
 | **Magnetism as a vector** — noncollinear, with the magnetic symmetry group | `noncolin` | ✓ | ✓ |
-| **Spin-orbit coupling**, two-component spinors and `j`-resolved projectors | `lspinorb` | ✓ | ✓ |
+| **Spin-orbit coupling**, two-component spinors and $j$-resolved projectors | `lspinorb` | ✓ | ✓ |
 | **Magnetic fields and constrained moments** — a uniform field, and four ways of holding a moment where you put it | `B_field`, `constrained_magnetization` | ✓ | ✓ |
 | **Magnetic fields inside one atom's sphere**, and a field that fades away as the run converges | `LOCAL_MAGNETIC_FIELDS` card, `reducebf`, `constrained_magnetization = 'fsm'` | | ✓ |
-| **DFT+U** — Dudarev's functional with `U`, `J0`, `alpha`, `beta`. The full Liechtenstein form, the intersite `V` and noncollinear `ns` are refused by name | `HUBBARD` card, `run_scf(starting_ns=...)` | ✓ | ✓ |
+| **DFT+U** — Dudarev's functional with $U$, $J_0$, $\alpha$, $\beta$. The full Liechtenstein form, the intersite $V$ and noncollinear `ns` are refused by name | `HUBBARD` card, `run_scf(starting_ns=...)` | ✓ | ✓ |
 | **Spin spirals** at any wavevector, without a supercell. Needs `nosym`; ultrasoft, PAW and spin-orbit coupling are refused | `spiral_q`, `defumat spiral` | | ✓ |
-| **Relaxing the spiral wavevector** down `dE/dq` to the ground-state pitch | `relax_spiral_q` | | |
-| **`E(q)` and the Heisenberg exchange constants** — a spiral scan's energy against its wavevector, fitted over neighbour shells to `E(q) - E(0) = m^2 sum_R J(R) [1 - cos(q.R)]`, which is how a spiral scan becomes a spin model; the fit residual says how well a Heisenberg model describes the surface. `E(q)` can be accumulated from `dE/dq` instead of read off the energies, which removes the steps a rebuilt plane-wave basis puts in the curve | `run_spiral_scan`, `heisenberg_exchange`, `Calculator.get_spiral_scan` | | |
-| **Berry curvature and Chern numbers** — exact integers on any mesh, and a smooth `Omega(k)` map with the truncation of its band sum reported | `run_berry_curvature`, `method="kubo"` for the map | | |
-| **Z2 invariants** in 2D and 3D, by Wannier charge centres *and* by parities | `run_z2`, `run_z2_3d` | | |
+| **Relaxing the spiral wavevector** down $\mathrm{d}E/\mathrm{d}\mathbf{q}$ to the ground-state pitch | `relax_spiral_q` | | |
+| **$E(\mathbf{q})$ and the Heisenberg exchange constants** — a spiral scan's energy against its wavevector, fitted over neighbour shells to $E(\mathbf{q}) - E(0) = m^2 \sum_{\mathbf{R}} J(\mathbf{R})\,[1 - \cos(\mathbf{q}\cdot\mathbf{R})]$, which is how a spiral scan becomes a spin model; the fit residual says how well a Heisenberg model describes the surface. $E(\mathbf{q})$ can be accumulated from $\mathrm{d}E/\mathrm{d}\mathbf{q}$ instead of read off the energies, which removes the steps a rebuilt plane-wave basis puts in the curve | `run_spiral_scan`, `heisenberg_exchange`, `Calculator.get_spiral_scan` | | |
+| **Berry curvature and Chern numbers** — exact integers on any mesh, and a smooth $\Omega(\mathbf{k})$ map with the truncation of its band sum reported | `run_berry_curvature`, `method="kubo"` for the map | | |
+| **$\mathbb{Z}_2$ invariants** in 2D and 3D, by Wannier charge centres *and* by parities | `run_z2`, `run_z2_3d` | | |
 | **Berry-phase polarization** — King-Smith and Vanderbilt's phase along one reciprocal lattice vector, with the quantum it is defined modulo carried beside it. Norm-conserving, ultrasoft, PAW and spinor; metals, `nspin = 2` and spin spirals are refused | `lberry`/`gdir`/`nppstr`, `run_polarization`, `Calculator.get_polarization` | ✓ | ✓ |
-| **Magnetoelectric tensor** `alpha_ij = dP_i/dB_j` — the polarization a magnetic field induces. Spin (Zeeman) response, clamped-ion, by a finite difference of the Berry phase over six ground states. Needs spin-orbit coupling, a gap, and a crystal without an inversion centre; the column parallel to the applied field, since a field transverse to the seeded magnetization converges slowly | `magnetoelectric_tensor`, `Calculator.get_magnetoelectric_tensor` | | ✓ |
+| **Magnetoelectric tensor** $\alpha_{ij} = \partial P_i/\partial B_j$ — the polarization a magnetic field induces. Spin (Zeeman) response, clamped-ion, by a finite difference of the Berry phase over six ground states. Needs spin-orbit coupling, a gap, and a crystal without an inversion centre; the column parallel to the applied field, since a field transverse to the seeded magnetization converges slowly | `magnetoelectric_tensor`, `Calculator.get_magnetoelectric_tensor` | | ✓ |
 | **Continuing one run from another across a change of spin regime** — a converged non-magnetic density as the starting point of a magnetic run, a collinear one of a noncollinear run, spin-orbit coupling switched on | `run_scf(starting_from=...)`, `System.with_spin` | (✓)¹ | |
 | **Reaching self-consistency** — Anderson/Broyden mixing, Kerker or local Thomas-Fermi preconditioning (the latter screening by the *local* density, which is what a slab needs), or solving the residual with its own Jacobian, which reaches magnetic solutions no mixer does | `run_scf(mixing_mode=...)`, `run_scf(scf_solver=...)` | (✓)² | (✓)² |
-| **Band velocities** `d(eps)/dk`, with the nonlocal pseudopotential's own contribution — norm-conserving, ultrasoft and PAW | `band_velocities`, `VelocityOperator` | (✓)³ | |
-| **Effective mass tensor** `m*_ij` at any k-point, with the principal masses and the density-of-states mass. Bands inside a degenerate multiplet are reported as the multiplet's invariant sum | `effective_mass`, `Calculator.get_effective_mass` | | ✓ |
-| **Orbital, spin and total angular momentum on each atom** — `<L>`, `<S>`, `<J>`, which is where the orbital moment of a spin-orbit magnet actually sits. Needs the whole k-grid; a relativistic ultrasoft or PAW dataset is refused | `angular_momenta`, `Calculator.get_angular_momenta` | (✓)⁴ | ✓ |
-| **Dielectric constant** `epsilon_infinity` and **Born effective charges** — insulators, norm-conserving, ultrasoft and PAW (PAW `Z*` refused). The response solver underneath runs for collinear spin too | `dielectric_tensor` | ✓ | ✓ |
-| **Phonons at `Gamma`** — the force constants and their frequencies, insulators and metals, on norm-conserving, ultrasoft and PAW datasets. Away from `Gamma`, and an ultrasoft or PAW metal, are refused | `dynamical_matrix` | ✓ | ✓ |
-| **The strain response** `dpsi/d(eps)`, `drho/d(eps)` and the deformation potentials, on norm-conserving, ultrasoft and PAW datasets | `strain_response` | | |
-| **Elastic constants** `C_ijkl` and the compliance and bulk modulus that follow — clamped-ion, insulators, norm-conserving | `elastic_constants` | | |
-| **Electrostriction coefficients** `m`, `q`, `M` and `Q` — the quadratic electromechanical coupling, clamped-ion, insulators, norm-conserving | `electrostriction` | | |
-| **Elasto-optic tensor** `d(chi)/d(strain)` — how a strain changes the dielectric response, which is what makes a squeezed crystal birefringent, and the third derivative the electrostriction coefficients are obtained from. Clamped-ion, insulators, norm-conserving | `electrostriction(...).photoelastic`, `Calculator.get_electrostriction` | | |
-| **Piezoelectric tensor** `e_(k)ij` — the polarization a strain induces, which is the stress a field induces. Clamped-ion, insulators, norm-conserving, and non-polar crystals only: a class that admits a spontaneous polarization is refused, since the proper response then needs `P` itself | `piezoelectric_tensor`, `Calculator.get_piezoelectric_tensor` | | ✓ |
-| **Raman tensors** `d(eps)/d(tau)` — how the dielectric tensor changes when an atom moves. Insulators, norm-conserving/ultrasoft/PAW; `chi^(2)` and the electro-optic tensor are refused | `raman_tensors` | (✓)⁵ | |
-| **Raman and infrared spectra** — the per-mode activities, depolarisation ratios and electronic polarizability at `Gamma` | `vibrational_spectrum` | ✓ | |
-| **LO-TO splitting and the static dielectric constant** — the macroscopic field a polar mode builds, which raises the longitudinal mode and screens a static field. `eps_0 = eps_infinity + sum_modes`, and the two together satisfy the Lyddane-Sachs-Teller relation. Insulators; needs the Born charges, and a physical splitting needs them charge-neutral | `vibrational_spectrum(loto_direction=..., neutralize=True)`, `nonanal`, `polar_mode_permittivity` | ✓ | (✓)¹⁰ |
-| **Optical conductivity tensor** `sigma_ab(omega)`, the magneto-optical **Kerr angle** and the **anomalous Hall conductivity** — interband plus a Drude term, from `dH/dk` rather than momentum matrix elements. Insulators and metals, norm-conserving; needs the whole k-grid rather than a wedge, since the antisymmetric part is an axial vector | `run_conductivity`, `Calculator.get_optical_conductivity` | (✓)⁷ | ✓ |
-| **Fermi-surface nesting function** `N(q)` — how much of the Fermi surface maps onto itself when translated by `q`, which is where a phonon softens, a charge-density wave opens a gap or a spin spiral finds its pitch. Metals with a smearing; a symmetry-reduced wedge is unfolded rather than refused | `run_nesting`, `Calculator.get_nesting` | | ✓ |
-| **X-ray and magnetic structure factors** `F(H)` — the Fourier coefficients of the charge and of the magnetization on each reflection, which is what a diffraction experiment measures rather than a density. Norm-conserving, ultrasoft and PAW; valence-only, so a forbidden reflection (where the core cancels and only the bonding charge is left) is the one an all-electron code agrees with; an energy window rebuilds the density from a chosen range of states | `run_structure_factors`, `Calculator.get_structure_factors`, `hmax`, `window`, `core` | | ✓ |
-| **Shift current** `sigma^abc(0; w, -w)` — the bulk photovoltaic effect: the direct current a crystal with no inversion centre carries under illumination, with no junction and no built-in field. Insulators, norm-conserving, `nspin = 1` or spinor; needs the whole k-grid rather than a wedge, and the band count is the convergence parameter because the generalised derivative's intermediate sum runs over the same bands | `run_shift_current`, `Calculator.get_shift_current` | ⁸ | |
-| **Second-harmonic generation** `chi^(2)(-2w; w, w)` — how much of the light shone on a crystal comes back out at twice the frequency. A polar rank-3 tensor, zero in any centrosymmetric crystal. Insulators, norm-conserving, `nspin = 1` or spinor; needs the whole k-grid rather than a wedge, and the band count is the convergence parameter because the sum over the intermediate state is an identity only over a complete basis | `run_shg`, `Calculator.get_shg`, `scissor` | (✓)⁹ | ✓ |
-| **Optical absorption spectra with excitons** — `Im eps_M(omega)` from TDDFT, local-field effects included, on a bootstrap exchange-correlation kernel. Needs the whole k-grid rather than a wedge | `run_absorption`, `kernel = 'bootstrap'` (also `rpa`, `alda`, `lrc`, `bootstrap-1`), `ecut_response`, `scissor`, `broadening` | | ✓ |
-| **Magnetic torque** `-dF/dtheta` — the anisotropy from **one** angle instead of a difference of two, which removes seven digits of cancellation and is robust to the smearing width where the difference is not. `E = K1 sin^2(theta)` makes the torque at 45 degrees equal to `K1`. Same refusals as the anisotropy row below | `run_torque`, `Calculator.get_torque` | | |
-| **Magnetocrystalline anisotropy** — the energy it costs to point a magnet's moment one way rather than another, by the force theorem: converge without spin-orbit coupling, rotate the converged density onto `n`, diagonalise once with the coupling on. One diagonalisation per direction, no reconvergence. Ultrasoft and norm-conserving; PAW is refused, the handoff carrying no `becsum`. Includes the per-orbital decomposition and a knob that switches the coupling off inside one relativistic dataset | `run_anisotropy`, `run_force_theorem`, `Calculator.get_anisotropy`, `lforcet`, `soc_scale`, `frozen_expectation` | ✓ | (✓)¹¹ |
+| **Band velocities** $\partial\epsilon_n/\partial\mathbf{k}$, with the nonlocal pseudopotential's own contribution — norm-conserving, ultrasoft and PAW | `band_velocities`, `VelocityOperator` | (✓)³ | |
+| **Effective mass tensor** $m^{\ast}_{ij}$ at any k-point, with the principal masses and the density-of-states mass. Bands inside a degenerate multiplet are reported as the multiplet's invariant sum | `effective_mass`, `Calculator.get_effective_mass` | | ✓ |
+| **Orbital, spin and total angular momentum on each atom** — $\langle L\rangle$, $\langle S\rangle$, $\langle J\rangle$, which is where the orbital moment of a spin-orbit magnet actually sits. Needs the whole k-grid; a relativistic ultrasoft or PAW dataset is refused | `angular_momenta`, `Calculator.get_angular_momenta` | (✓)⁴ | ✓ |
+| **Dielectric constant** $\epsilon^\infty$ and **Born effective charges** — insulators, norm-conserving, ultrasoft and PAW (PAW $Z^{\ast}$ refused). The response solver underneath runs for collinear spin too | `dielectric_tensor` | ✓ | ✓ |
+| **Phonons at $\Gamma$** — the force constants and their frequencies, insulators and metals, on norm-conserving, ultrasoft and PAW datasets. Away from $\Gamma$, and an ultrasoft or PAW metal, are refused | `dynamical_matrix` | ✓ | ✓ |
+| **The strain response** $\partial\psi/\partial\varepsilon$, $\partial\rho/\partial\varepsilon$ and the deformation potentials, on norm-conserving, ultrasoft and PAW datasets | `strain_response` | | |
+| **Elastic constants** $C_{ijkl}$ and the compliance and bulk modulus that follow — clamped-ion, insulators, norm-conserving | `elastic_constants` | | |
+| **Electrostriction coefficients** $m$, $q$, $M$ and $Q$ — the quadratic electromechanical coupling, clamped-ion, insulators, norm-conserving | `electrostriction` | | |
+| **Elasto-optic tensor** $\partial\chi_{ij}/\partial\varepsilon_{kl}$ — how a strain changes the dielectric response, which is what makes a squeezed crystal birefringent, and the third derivative the electrostriction coefficients are obtained from. Clamped-ion, insulators, norm-conserving | `electrostriction(...).photoelastic`, `Calculator.get_electrostriction` | | |
+| **Piezoelectric tensor** $e_{k,ij}$ — the polarization a strain induces, which is the stress a field induces. Clamped-ion, insulators, norm-conserving, and non-polar crystals only: a class that admits a spontaneous polarization is refused, since the proper response then needs $P$ itself | `piezoelectric_tensor`, `Calculator.get_piezoelectric_tensor` | | ✓ |
+| **Raman tensors** $\partial\epsilon_{ij}/\partial\tau$ — how the dielectric tensor changes when an atom moves. Insulators, norm-conserving/ultrasoft/PAW; $\chi^{(2)}$ and the electro-optic tensor are refused | `raman_tensors` | (✓)⁵ | |
+| **Raman and infrared spectra** — the per-mode activities, depolarisation ratios and electronic polarizability at $\Gamma$ | `vibrational_spectrum` | ✓ | |
+| **LO-TO splitting and the static dielectric constant** — the macroscopic field a polar mode builds, which raises the longitudinal mode and screens a static field. $\epsilon^0_{ij} = \epsilon^\infty_{ij} + (4\pi e^2/\Omega)\sum_\nu p^\nu_i p^\nu_j/\omega_\nu^2$, and the two together satisfy the Lyddane-Sachs-Teller relation. Insulators; needs the Born charges, and a physical splitting needs them charge-neutral | `vibrational_spectrum(loto_direction=..., neutralize=True)`, `nonanal`, `polar_mode_permittivity` | ✓ | (✓)¹⁰ |
+| **Optical conductivity tensor** $\sigma_{ab}(\omega)$, the magneto-optical **Kerr angle** and the **anomalous Hall conductivity** — interband plus a Drude term, from $\partial H/\partial\mathbf{k}$ rather than momentum matrix elements. Insulators and metals, norm-conserving; needs the whole k-grid rather than a wedge, since the antisymmetric part is an axial vector | `run_conductivity`, `Calculator.get_optical_conductivity` | (✓)⁷ | ✓ |
+| **Fermi-surface nesting function** $N(\mathbf{q})$ — how much of the Fermi surface maps onto itself when translated by $\mathbf{q}$, which is where a phonon softens, a charge-density wave opens a gap or a spin spiral finds its pitch. Metals with a smearing; a symmetry-reduced wedge is unfolded rather than refused | `run_nesting`, `Calculator.get_nesting` | | ✓ |
+| **X-ray and magnetic structure factors** $F(\mathbf{H})$ — the Fourier coefficients of the charge and of the magnetization on each reflection, which is what a diffraction experiment measures rather than a density. Norm-conserving, ultrasoft and PAW; valence-only, so a forbidden reflection (where the core cancels and only the bonding charge is left) is the one an all-electron code agrees with; an energy window rebuilds the density from a chosen range of states | `run_structure_factors`, `Calculator.get_structure_factors`, `hmax`, `window`, `core` | | ✓ |
+| **Shift current** $\sigma^{abc}(0;\omega,-\omega)$ — the bulk photovoltaic effect: the direct current a crystal with no inversion centre carries under illumination, with no junction and no built-in field. Insulators, norm-conserving, `nspin = 1` or spinor; needs the whole k-grid rather than a wedge, and the band count is the convergence parameter because the generalised derivative's intermediate sum runs over the same bands | `run_shift_current`, `Calculator.get_shift_current` | ⁸ | |
+| **Second-harmonic generation** $\chi^{(2)}(-2\omega;\omega,\omega)$ — how much of the light shone on a crystal comes back out at twice the frequency. A polar rank-3 tensor, zero in any centrosymmetric crystal. Insulators, norm-conserving, `nspin = 1` or spinor; needs the whole k-grid rather than a wedge, and the band count is the convergence parameter because the sum over the intermediate state is an identity only over a complete basis | `run_shg`, `Calculator.get_shg`, `scissor` | (✓)⁹ | ✓ |
+| **Optical absorption spectra with excitons** — $\mathrm{Im}\,\epsilon_M(\omega)$ from TDDFT, local-field effects included, on a bootstrap exchange-correlation kernel. Needs the whole k-grid rather than a wedge | `run_absorption`, `kernel = 'bootstrap'` (also `rpa`, `alda`, `lrc`, `bootstrap-1`), `ecut_response`, `scissor`, `broadening` | | ✓ |
+| **Magnetic torque** $-\mathrm{d}F/\mathrm{d}\theta$ — the anisotropy from **one** angle instead of a difference of two, which removes seven digits of cancellation and is robust to the smearing width where the difference is not. $E(\theta) = K_1\sin^2\theta$ makes the torque at 45 degrees equal to $-K_1$. Same refusals as the anisotropy row below | `run_torque`, `Calculator.get_torque` | | |
+| **Magnetocrystalline anisotropy** — the energy it costs to point a magnet's moment one way rather than another, by the force theorem: converge without spin-orbit coupling, rotate the converged density onto $\hat{\mathbf{n}}$, diagonalise once with the coupling on. One diagonalisation per direction, no reconvergence. Ultrasoft and norm-conserving; PAW is refused, the handoff carrying no `becsum`. Includes the per-orbital decomposition and a knob that switches the coupling off inside one relativistic dataset | `run_anisotropy`, `run_force_theorem`, `Calculator.get_anisotropy`, `lforcet`, `soc_scale`, `frozen_expectation` | ✓ | (✓)¹¹ |
 | **Van der Waals dispersion** — Grimme's D2 pair correction, in the energy, the forces, the stress and the elastic constants. D3, Tkatchenko-Scheffler, MBD and XDM are refused by name | `vdw_corr = 'grimme-d2'`, `london_s6`, `london_rcut`, `london_c6`, `london_rvdw` | ✓ | |
 | **Band gaps from the Tran-Blaha potential** (mBJ) — the modified Becke-Johnson meta-GGA, on norm-conserving and PAW datasets, unpolarized, collinear, and noncollinear with spin-orbit coupling. The total energy is not variational, so forces, stress and response are refused | `input_dft = 'tb09'` (or `'bj06'`), `mbj_c` | (✓)⁶ | ✓ |
 | **Pseudopotentials**: norm-conserving, ultrasoft and PAW (UPF v2) | `ATOMIC_SPECIES` | ✓ | |
@@ -213,8 +220,8 @@ Where the tick is qualified:
   that name is a different functional.
 - ⁷ `epsilon.x`'s `offdiag_calc` forms the dielectric tensor, but computes no
   conductivity and no Kerr angle, refuses ultrasoft datasets outright, and
-  builds its dipole from momentum matrix elements — which is not `[H, r]` when
-  the pseudopotential is nonlocal.
+  builds its dipole from momentum matrix elements — which is not
+  $[H,\mathbf{r}]$ when the pseudopotential is nonlocal.
 - ⁸ Blank rather than ticked, and the distinction is worth stating because
   the QE tarball does contain an implementation: `external/wannier90`'s
   `berry_task = 'sc'` computes a shift current, but Wannier90 is a separate code
@@ -224,8 +231,9 @@ Where the tick is qualified:
   second-harmonic generation, which is a different response.
 
 - ⁹ `PHonon`'s `el_opt.f90` computes the **electro-optic** tensor, which is
-  the *static* second-order response and not `chi^(2)(-2w; w, w)`; nothing in
-  the tree computes a frequency-dependent second-harmonic tensor, and the
+  the *static* second-order response and not
+  $\chi^{(2)}(-2\omega;\omega,\omega)$; nothing in the tree computes a
+  frequency-dependent second-harmonic tensor, and the
   `lraman`/`elop` branch that reaches even the static one is the branch P35
   established does not reproduce QE's own committed example. Elk's
   `nonlinopt.f90` (task 125) is the real reference and is what this was
@@ -234,7 +242,7 @@ Where the tick is qualified:
 - ¹⁰ Elk adds the same non-analytic term (`dynqnat.f90`, under `tphnat`) and
   computes Born effective charges (task 208), but its static dielectric tensor
   is **read in** rather than assembled from the modes: nothing there sums the
-  oscillator strengths into `eps_0`, which is the half `dynmat.x`'s `lperm`
+  oscillator strengths into $\epsilon^0$, which is the half `dynmat.x`'s `lperm`
   does.
 
 - ¹¹ Elk's `mae.f90` (tasks 28/29) computes a magnetic anisotropy energy, but by
@@ -248,7 +256,7 @@ The variants under each row — which smearing or tetrahedron method fixes the
 occupations, which projectors DFT+U uses, which constraint scheme — are chosen
 with the same input variables as in `pw.x` where it has them.
 
-**Not yet:** phonons away from `Gamma`, exact exchange, real-time propagation.
+**Not yet:** phonons away from $\Gamma$, exact exchange, real-time propagation.
 `K_POINTS gamma` runs, but at an explicit k = 0 with the full G sphere — the
 same answer at twice the cost, and the run says so.
 
@@ -368,19 +376,19 @@ to compute, which is the way to arrive at them. In file order:
 | [`05_gradient_corrections`](notebooks/05_gradient_corrections.ipynb) | PBE and its relatives: what a gradient correction adds to the potential, on the grid and inside a PAW sphere |
 | [`06_density_of_states`](notebooks/06_density_of_states.ipynb) | Smearing against tetrahedra, silicon's gap as the thing that separates them, and nickel's spin-resolved DOS |
 | [`07_spin_polarization`](notebooks/07_spin_polarization.ipynb) | LSDA: exchange splitting, nickel's magnetic moment, and constraining the magnetization |
-| [`08_spin_orbit_coupling`](notebooks/08_spin_orbit_coupling.ipynb) | Spinors and `j`-resolved projectors, platinum against Quantum ESPRESSO, and a bismuthene gap made of nothing but the coupling |
+| [`08_spin_orbit_coupling`](notebooks/08_spin_orbit_coupling.ipynb) | Spinors and $j$-resolved projectors, platinum against Quantum ESPRESSO, and a bismuthene gap made of nothing but the coupling |
 | [`09_forces_and_relaxation`](notebooks/09_forces_and_relaxation.ipynb) | Forces as one gradient of the energy, against Quantum ESPRESSO, and a structure relaxing back onto its lattice site |
-| [`10_topological_invariants`](notebooks/10_topological_invariants.ipynb) | Berry curvature from one overlap rather than a derivative, Chern numbers that are exact integers, and Z2 by two independent routes |
+| [`10_topological_invariants`](notebooks/10_topological_invariants.ipynb) | Berry curvature from one overlap rather than a derivative, Chern numbers that are exact integers, and $\mathbb{Z}_2$ by two independent routes |
 | [`11_noncollinear_magnetism_and_fields`](notebooks/11_noncollinear_magnetism_and_fields.ipynb) | Magnetism as a vector, bcc iron against Quantum ESPRESSO, constrained moments, and the direction the energy cannot depend on |
-| [`12_spin_spirals`](notebooks/12_spin_spirals.ipynb) | Spin spirals of any pitch without a supercell, and an `E(q)` magnon dispersion |
+| [`12_spin_spirals`](notebooks/12_spin_spirals.ipynb) | Spin spirals of any pitch without a supercell, and an $E(\mathbf{q})$ magnon dispersion |
 | [`13_dft_plus_u`](notebooks/13_dft_plus_u.ipynb) | The Hubbard correction on antiferromagnetic FeO, and the occupations it drives to 0 and 1 |
-| [`14_spiral_relaxation`](notebooks/14_spiral_relaxation.ipynb) | `dE/dq`: which terms of the energy a spiral's wavevector touches, and a BFGS walking a hydrogen chain to its ground-state pitch |
-| [`15_stress`](notebooks/15_stress.ipynb) | The stress as the strain derivative of the energy, silicon's equation of state, and the pressure against `-dE/dV` |
-| [`16_projected_density_of_states`](notebooks/16_projected_density_of_states.ipynb) | Silicon's `s` and `p` densities of state against `projwfc.x`, and the same weights as fat bands |
+| [`14_spiral_relaxation`](notebooks/14_spiral_relaxation.ipynb) | $\mathrm{d}E/\mathrm{d}\mathbf{q}$: which terms of the energy a spiral's wavevector touches, and a BFGS walking a hydrogen chain to its ground-state pitch |
+| [`15_stress`](notebooks/15_stress.ipynb) | The stress as the strain derivative of the energy, silicon's equation of state, and the pressure against $-\mathrm{d}E/\mathrm{d}V$ |
+| [`16_projected_density_of_states`](notebooks/16_projected_density_of_states.ipynb) | Silicon's $s$ and $p$ densities of state against `projwfc.x`, and the same weights as fat bands |
 | [`17_reaching_self_consistency`](notebooks/17_reaching_self_consistency.ipynb) | Making a hard SCF converge: preconditioning, and the magnetic solutions no mixer reaches |
 | [`18_continuing_a_calculation`](notebooks/18_continuing_a_calculation.ipynb) | Starting one run from another's converged state, across a change of spin regime |
 | [`19_linear_response`](notebooks/19_linear_response.ipynb) | The dielectric constant and the Born effective charges of silicon, against `ph.x`, on all three kinds of pseudopotential |
-| [`20_phonons`](notebooks/20_phonons.ipynb) | Phonon frequencies at `Gamma`: silicon's optical mode against `ph.x`, and a metal |
+| [`20_phonons`](notebooks/20_phonons.ipynb) | Phonon frequencies at $\Gamma$: silicon's optical mode against `ph.x`, and a metal |
 | [`21_electrostriction`](notebooks/21_electrostriction.ipynb) | Elastic constants, electrostriction and the elasto-optic tensor of silicon |
 | [`22_van_der_waals`](notebooks/22_van_der_waals.ipynb) | Grimme's D2 dispersion, and bilayer graphene binding where PBE alone has no minimum |
 | [`23_variable_cell_relaxation`](notebooks/23_variable_cell_relaxation.ipynb) | Relaxing the cell and the atoms together: arsenic squeezed to simple cubic at 500 kbar, against `pw.x` |
@@ -429,8 +437,8 @@ its number. Some of the headline agreements:
 | relaxation — the same geometry, and the same energy | 1e-6 bohr, 3e-10 Ry |
 | stress | 2.7e-7 Ry/bohr³ |
 | the dielectric constant, and Born effective charges | 1.2e-4; every digit `ph.x` prints |
-| phonons at `Gamma` — silicon, and a metal | 0.05 and 0.0019 cm⁻¹ |
-| phonons at `Gamma` — ultrasoft and PAW silicon | 0.019 and 0.027 cm⁻¹ |
+| phonons at $\Gamma$ — silicon, and a metal | 0.05 and 0.0019 cm⁻¹ |
+| phonons at $\Gamma$ — ultrasoft and PAW silicon | 0.019 and 0.027 cm⁻¹ |
 | Raman and infrared activities | every digit `dynmat.x` prints |
 | LO-TO splitting, and the static dielectric constant | every digit `dynmat.x` prints; Lyddane-Sachs-Teller to 5e-11 |
 

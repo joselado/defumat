@@ -684,7 +684,7 @@ preconditioner the two are identical, so Kerker's results are unchanged to the l
 
 **The magnetic torque is in** (P60), which is the anisotropy as a *derivative* rather than a
 difference: `run_torque` returns `-dF/dtheta` at one angle, and for `E = K1 sin^2(theta)`
-the torque at **45 degrees is `K1`**. P58's route differences two band energies, which is
+the torque at **45 degrees is `-K1`**. P58's route differences two band energies, which is
 1e-5 Ry out of 1e2 -- seven digits of cancellation; a first derivative cancels nothing. It
 is `jax.grad` of the energy in a magnetic coordinate, the same construction as
 `forces/spiral.py`'s `dE/dq` and P15's force, where the literature's torque is the

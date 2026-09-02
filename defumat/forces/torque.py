@@ -8,9 +8,9 @@ derivative evaluated once, at one angle, and nothing cancels. That is the whole
 reason the method exists (Wang, Wu, Wang and Freeman, PRB 54, 61 (1996)), and
 for a uniaxial magnet it gives the anisotropy constant directly --
 
-    E(theta) = K1 sin^2(theta)   =>   dE/dtheta = K1 sin(2 theta),
+    E(theta) = K1 sin^2(theta)   =>   -dE/dtheta = -K1 sin(2 theta),
 
-so a single calculation at **45 degrees** returns ``K1``.
+so a single calculation at **45 degrees** returns ``-K1``.
 
 **It is the same construction as the force, term for term**
 (:mod:`defumat.forces.spiral` says this of ``dE/dq`` and it is as true here):
