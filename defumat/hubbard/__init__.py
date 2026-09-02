@@ -21,7 +21,10 @@ Four pieces, one per module:
 * :mod:`~defumat.hubbard.interaction` -- the Coulomb matrix ``vee`` of the full
   (Liechtenstein) functional, from the Slater integrals;
 * :mod:`~defumat.hubbard.yukawa` -- those Slater integrals computed from the
-  manifold's own radial function instead of parameterised.
+  manifold's own radial function instead of parameterised;
+* :mod:`~defumat.hubbard.tensormoments` -- the occupation matrix in an
+  orthonormal basis of multipoles, and :mod:`~defumat.hubbard.ftm`, which holds
+  one of them fixed.
 
 Refused rather than approximated: the intersite ``V`` (``kind = 2``),
 background channels, the orbital-resolved variant, noncollinear ``ns``, and the
@@ -61,7 +64,16 @@ from defumat.hubbard.occupations import (
     uniform_ns,
 )
 from defumat.hubbard.operator import HubbardTerm, block_potential
+from defumat.hubbard.ftm import build_constraints, measured_moments
 from defumat.hubbard.projectors import build_hubbard_projectors
+from defumat.hubbard.tensormoments import (
+    MomentLabel,
+    compose,
+    decompose,
+    moment_labels,
+    moment_matrices,
+    wigner3j,
+)
 from defumat.hubbard.yukawa import (
     manifold_radial,
     screening_length,
@@ -79,7 +91,11 @@ __all__ = [
     "block_potential",
     "build_hubbard_projectors",
     "build_hubbard_setup",
+    "MomentLabel",
+    "build_constraints",
     "build_ns_symmetry",
+    "compose",
+    "decompose",
     "coefficients_from_setup",
     "coulomb_matrix",
     "default_racah",
@@ -89,12 +105,16 @@ __all__ = [
     "hubbard_potential",
     "initial_ns",
     "manifold_radial",
+    "measured_moments",
+    "moment_labels",
+    "moment_matrices",
     "ns_ddot",
     "ns_shape",
     "occupation_matrix",
     "parse_manifold",
     "projections",
     "uniform_ns",
+    "wigner3j",
     "screening_length",
     "slater_from_poisson",
     "slater_from_radial",

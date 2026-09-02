@@ -543,20 +543,55 @@ U Ni-3d 5.0      # lambda is solved for; F2, F4 and J follow
 \textbf{On a spinor} (\code{noncolin}, with or without \code{lspinorb}) the
 occupation matrix is one $2\times2$ matrix in spin space rather than two real
 matrices, measured on projector columns that are themselves spinors, and its
-off-diagonal blocks are what let the shell's moment point anywhere. Relativistic
-BN against \code{pw.x}: \textbf{1.2e-7 Ry}, with $\mathrm{Tr}[n^{\sigma\sigma}]$
-matching every digit \code{write\_ns} prints.
+off-diagonal blocks are what let the shell's moment point anywhere. Both
+functionals work there. Against \code{pw.x}: \textbf{7.7e-9 Ry} on relativistic
+BN and \textbf{1.4e-9 Ry} on fully-relativistic iron carrying $U = 2.20$,
+$J = 1.75$~eV with its moment turned into the $xy$ plane, with
+$\mathrm{Tr}[n^{\sigma\sigma}]$ matching every digit \code{write\_ns} prints.
+
+\textbf{Tensor moments} put that matrix in a basis where each element is a
+multipole rather than a number: an orthonormal, complete set $\Gamma^{kpr}_t$
+with $k$ the rank in the orbital index, $p$ the rank in spin and $r$ their
+coupling, so that
+%
+\[
+  n = \sum_{kprt} w^{kpr}_t \, \Gamma^{kpr}_t ,
+\]
+%
+with real $w$. The charge is $w^{000}$, the spin moment is $w^{011}$, and
+$\mathbf{L}\cdot\mathbf{S}$ is $w^{110}_0$ alone --- to $10^{-11}$ over all one
+hundred moments of a $d$ shell.
+
+\textbf{Fixing one} (a \code{TENSOR\_MOMENTS} card) converges the field to a
+state carrying it, which selects an orbital or multipolar ordering the field
+would not find on its own. The penalty is written down and its potential is
+\code{jax.grad} of it, and, like a constrained moment's, its energy is not part
+of the reported total --- so the number that comes back is the unconstrained
+functional at the constrained state.
+
+\begin{lstlisting}
+&system
+   tensor_moment_penalty = 20.0
+/
+TENSOR_MOMENTS
+ N-2p 1 1 0 0 -0.40      # hold L.S at -0.40
+\end{lstlisting}
+
+Being quadratic, the penalty settles where its gradient balances the material's
+own restoring force, so the moment \emph{approaches} its target as the penalty
+stiffens rather than reaching it: on nitrogen's $2p$, whose free
+$\mathbf{L}\cdot\mathbf{S}$ is $-0.0006$, holding it at $-0.40$ gives $-0.109$,
+$-0.263$, $-0.355$ and $-0.388$ at $\lambda = 1, 5, 20, 80$, with the energy
+rising monotonically by $2.6$, $15.3$, $27.4$ and $32.6$~mRy.
 
 \begin{refuses}
 \textbf{Refuses.} A spinor occupation matrix needs \code{nosym}: its group
 average takes the $SU(2)$ representation of each operation beside the rotation
 of the $m$ indices, and averaging the $m$ indices alone leaves the moment
-pointing somewhere else. The \textbf{full} functional on a spinor is refused
-too, and that one is measured rather than assumed: each axis agrees with
-\code{pw.x} on its own (1.2e-7~Ry for a spinor, 4.2e-9 for the full functional
-on a collinear cell) and together they sit 4.2e-4~Ry apart with both codes
-converged and on the same solution, so a term is missing.
-\code{hubbard\_slater = 'yukawa'} needs a \textbf{PAW}
+pointing somewhere else. A fixed tensor moment needs a spinor: for a collinear
+run the spin-rank moments keep only their $z$ component and the constraint
+degenerates into the fixed spin moment \code{constrained\_magnetization}
+already is. \code{hubbard\_slater = 'yukawa'} needs a \textbf{PAW}
 dataset, and this is a measurement rather than a preference: only PAW carries
 the all-electron partial wave. A norm-conserving $\chi$ is normalised and gives
 a pseudo-orbital $F^0$ far too small (silicon's 3p: 8.8~eV), and an

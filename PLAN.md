@@ -8992,7 +8992,7 @@ right way on an allowed reflection and nothing at all on one whose asphericity
 is `l = 3` (the table above); and the multiplicity of a reduced set applies to
 the charge, the magnetic star members being related by `det(R) R`.
 
-### P62 — Elk's other DFT+U flavours. 🚧 P62a, P62c, P62d DONE and P62b DONE for the simplified functional; P62e open.
+### P62 — Elk's other DFT+U flavours. ✅ DONE, all five.
 
 **What defumat has** is P20: QE's `lda_plus_u_kind = 0`, Dudarev's simplified
 rotationally-invariant functional with `J0`, `alpha` and `beta`, a *scalar* `U_eff` per
@@ -9191,7 +9191,7 @@ and stated as untested rather than claimed.
 
 ---
 
-#### P62b — The spinor occupation matrix. ✅ DONE for the simplified functional; the full one is refused by name.
+#### P62b — The spinor occupation matrix. ✅ DONE, both functionals.
 
 **What.** `ns` as one `2(2l+1)` Hermitian matrix in the combined `(m, spin)` space instead
 of two `(2l+1)` blocks — QE's `new_ns_nc`/`v_hubbard_nc`/`v_hubbard_full_nc`, Elk's
@@ -9267,17 +9267,23 @@ decimals while `hartree` and `xc` were *exactly* their `U -> 0` values — the s
 potential that is computed and never applied, which is what a spinor Hamiltonian with no
 `hubbard` field does.
 
-**Refused by name, and this one is measured rather than assumed**: the **full
-(Liechtenstein) functional on a spinor**. The two axes are validated separately — the
-simplified functional on a spinor to 1.2e-7 Ry, the full one on a collinear cell to 4.2e-9 —
-and their composition is not: on QE's own `lda+U_kind1_noncollin` case the two codes sit
-**4.2e-4 Ry** apart with **both converged** (5.8e-12 here, in 148 iterations) and **both on
-the same solution**, the occupation matrix agreeing to 1.8e-4 in its trace and putting the
-moment in the `xy` plane as `angle1 = 90` asks. Tightening `conv_thr` from 1e-10 to 1e-11
-does not move it. So it is a term rather than a threshold, and there is no honest number to
-report yet; the guess to check first is `v_hubbard_full_nc`'s treatment of the *direct*
-term, which contracts `ns(m3,m4,1) + ns(m3,m4,4)` where the collinear one sums over
-channels.
+**The full functional on a spinor was refused here for a day and the refusal was the
+bug, not the physics.** The two axes agreed with `pw.x` separately — the simplified
+functional on a spinor to 1.2e-7 Ry, the full one on a collinear cell to 4.2e-9 — and their
+composition sat **4.2e-4 Ry** out on QE's own `lda+U_kind1_noncollin` case with both codes
+converged (5.8e-12 here, 148 iterations) and on the same solution. That reads exactly like a
+missing term and it was **a transpose**: see P62e, which found it. Both are in now, and the
+iron case is **1.4e-9 Ry** with `Tr[ns]` on every digit `write_ns` prints.
+
+**The pairing, since it is the thing to get right.** `occupation_matrix` builds
+`N_ij = sum w conj(p_i) p_j` with `p_i = <phi_i|psi>`, so the separable operator
+`V = sum |phi_i> v_ij <phi_j|` has expectation value `sum_ij v_ij N_ij`, **unconjugated**.
+The potential is therefore the object satisfying `dE = Re sum v_ij dN_ij`, which is
+`jax.grad` as it comes; conjugating it gives the transpose, which is the *same matrix*
+whenever `ns` is real. So the error is invisible for a collinear run, invisible for a spinor
+whose moment happens to lie along `z` (1.2e-7 against 7.7e-9 on BN — present but under the
+noise of everything else), and worth **4.2e-4** the moment the moment tilts. `deband`'s
+pairing had the same conjugate and is fixed with it.
 
 **Also refused.** Symmetry: the group average of a spinor occupation matrix needs the
 `SU(2)` representation of each operation (`d_spin_ldau`, from `find_u`) beside the rotation
@@ -9459,7 +9465,7 @@ is matched. Say which radius each `F^k` was integrated to.
 
 ---
 
-#### P62e — Tensor moments: the decomposition, and the fixed-moment constraint. 📋 OPEN.
+#### P62e — Tensor moments: the decomposition, and the fixed-moment constraint. ✅ DONE, and it found P62b's remaining bug.
 
 **What.** Two things, and `ELK-FEATURES.md` rejects one of them today.
 
@@ -9496,10 +9502,59 @@ the moment `report_mag` prints, and a constrained run must sit above the unconst
 in energy and relax back to it when the constraint is released. Elk's binary gives an
 external number for a `w^{kpr}_t` of a converged NiO if one is wanted.
 
-**Take it last, or not at all**, and only after P62b — for a collinear `ns` the spin-rank
-tensors keep only their `z` component, so the constraint degenerates into the fixed spin
-moment P18 already implements. The whole entry is downstream of the spinor occupation
-matrix.
+**What landed.** `defumat/hubbard/tensormoments.py` — a general Wigner 3-j symbol in
+**doubled** arguments (so the half-integer spin symbols are the same function), the coupled
+basis `Gamma^{kpr}_t`, and `decompose`/`compose`; and `defumat/hubbard/ftm.py`, the
+constraint, reached by a `TENSOR_MOMENTS` card and `tensor_moment_penalty`.
+
+**Everything about the basis is an identity, which is the point of it.** Orthonormal to
+**1e-15** and `(2(2l+1))^2` members — complete by counting as well as by construction — with
+an exact round trip. The named moments carry their names: `w^{000}` is the shell's charge
+and `|w^{011}|` its moment, both over the conventional `sqrt(2(2l+1))`. And the sharpest
+one, which fixes two conventions at once: **`L . S` decomposes onto `w^{110}_0` and nothing
+else**, to 1e-11 over all 100 moments of a `d` shell, with the coefficient the closed form
+`-sqrt(l(l+1)(2l+1)/2)`. `L` comes from P48's `orbital_matrices`, which shares nothing with
+this module but `rot_ylm` — and that rotation is the second convention it fixes, because the
+3-j construction is written in **complex** `Y_lm` where the occupation matrix is measured on
+**real** harmonics. Decomposing in the wrong one is not an error anything reports: the
+moments stay orthonormal and complete, and the ones that mean something get mixed into the
+ones that do not.
+
+**The constraint is a penalty and its potential is `jax.grad`**, which is P18's rule and the
+one deviation from Elk: `vmatmtftm` accumulates a potential by proportional feedback, which
+is a controller rather than a functional. Written as `E = (lambda/2) sum (w - w_target)^2`
+the constraint has a stationary point instead of a fixed point, and the two are the same
+answer wherever the controller converges. **Its energy is not in the reported total** — the
+penalty's potential is in `v_ns`, so `deband` removes it again, exactly as P18 arranges for
+a magnetic field, and the number reported is the *unconstrained* functional at the
+constrained state, which is the comparable one.
+
+**Measured** on the nitrogen `2p` of relativistic BN, whose free `L . S` is -0.0006, held at
+-0.40: the moment approaches the target as the penalty stiffens — **-0.109, -0.263, -0.355,
+-0.388** at `lambda = 1, 5, 20, 80` — and the energy rises monotonically with it, **+2.6,
++15.3, +27.4, +32.6 mRy** above the free state. A quadratic penalty settles where its
+gradient balances the material's own restoring force, so it approaches rather than reaches;
+that is a property of the scheme and not of the implementation, and Elk's gain `tauftm` has
+the same character.
+
+**It found P62b's remaining bug, and that is the reason to have a second route.** The first
+constrained run drove `L . S` the *wrong way* — up, from 0 toward +0.6, when asked for -0.4.
+The gradient was exact against a finite difference of its own functional, so the error had to
+be in how the potential is *paired* with the occupation matrix, and it was: the spinor branch
+conjugated it. Fixing that moved BN from 1.2e-7 to **7.7e-9** and the iron case P62b had
+refused from **4.2e-4 to 1.4e-9**. The refusal was not a missing term. **Nothing else here
+could have found it**: the collinear cases are real, so a transpose is the identity there;
+the along-`z` spinor identity is real too; and the rotation-invariance check is on the
+*energy*, which never sees the potential.
+
+**Elk's own manual is stale here as well**, in the way this phase's survey already recorded
+for `dftu = 3`: 11.0.2 documents `ftmtype = -1` as breaking the symmetry without performing
+the constraint, which is a mode this implementation has no counterpart for and does not
+need — symmetry is refused for a spinor occupation matrix anyway (P62b).
+
+**Refused.** A collinear run: its spin-rank tensors keep only their `z` component, so the
+constraint degenerates into the fixed spin moment `constrained_magnetization` already is,
+and it is refused by name rather than duplicated.
 
 ## 3a. Environment decisions (settled)
 

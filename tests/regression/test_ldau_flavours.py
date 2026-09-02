@@ -31,7 +31,7 @@ import numpy as np
 import pytest
 
 from defumat.io import read_qe_output
-from defumat.io.pwin import read_pw_input
+from defumat.io.pwin import parse_pw_input, read_pw_input
 from defumat.pseudo import read_upf
 from defumat.scf import run_scf
 from defumat.scf.driver import Calculation
@@ -43,7 +43,7 @@ pytestmark = [pytest.mark.regression, pytest.mark.slow]
 GENERATED = Path(__file__).resolve().parents[1] / "data" / "qe"
 
 
-@lru_cache(maxsize=3)
+@lru_cache(maxsize=4)
 def _converged(name, pseudo_dir):
     pwin = read_pw_input(GENERATED / name)
     system = build_system(pwin)
@@ -52,8 +52,8 @@ def _converged(name, pseudo_dir):
     )
     calculation = Calculation(system, pseudos)
     result = run_scf(
-        system, pseudos, calculation=calculation, conv_thr=1e-9,
-        max_iterations=250,
+        system, pseudos, calculation=calculation, conv_thr=1e-10,
+        max_iterations=400,
         mixing_beta=float(pwin.get("electrons", "mixing_beta", 0.7)),
     )
     return calculation, result
@@ -191,22 +191,66 @@ def test_a_spinor_occupation_matrix_is_hermitian(pseudo_dir):
     assert ns == pytest.approx(np.conj(np.einsum("stnab->tsnba", ns)), abs=1e-12)
 
 
-def test_the_full_functional_on_a_spinor_is_refused(pseudo_dir):
-    """The composition of two validated axes that does not close.
+def test_the_full_functional_on_a_spinor_matches_pw_x(pseudo_dir):
+    """The two axes together: a full interaction matrix on a spinor.
 
-    Measured rather than assumed, which is why it is a refusal and not a gap:
-    on QE's own ``lda+U_kind1_noncollin`` case the two codes are 4.2e-4 Ry apart
-    with both converged and both on the same solution.
+    QE's ``lda+U_kind1_noncollin`` -- fully-relativistic ultrasoft iron at
+    ``U = 2.20``, ``J = 1.75`` eV with its moment turned into the ``xy`` plane.
+    It is the only committed QE case that carries a real ``J``, and the moment
+    lying **out of the z axis** is what makes it the sharp test: an occupation
+    matrix with complex off-diagonal spin blocks is where the potential's
+    pairing convention stops being invisible.
     """
-    from defumat.scf.driver import Calculation
+    calculation, result = _converged("fe-kind1-noncol.in", pseudo_dir)
+    reference = read_qe_output(GENERATED / "reference.out.fe-kind1-noncol")
+    assert result.converged
+    assert calculation.hubbard.kind == 1 and calculation.hubbard.noncolin
+    assert result.total_energy == pytest.approx(reference.total_energy, abs=1e-7)
+    # ``Tr[ns]`` per diagonal spin block, against the 3.69213 / 3.69212 QE prints.
+    (up, down, total), = result.hubbard_occupations.values()
+    assert (up, down) == pytest.approx((3.69213, 3.69213), abs=1e-4)
+    # The moment is in the xy plane, as ``angle1 = 90`` asks: the off-diagonal
+    # spin blocks carry it and the diagonal ones are equal.
+    ns = np.asarray(result.ns).reshape(2, 2, -1, 5, 5)
+    assert abs(np.trace(ns[0, 1, 0]).real) > 1.0
+    assert np.trace(ns[0, 0, 0]).real == pytest.approx(
+        np.trace(ns[1, 1, 0]).real, abs=1e-6
+    )
 
-    pwin = read_pw_input(GENERATED / "fe-kind1-noncol.in")
-    system = build_system(pwin)
+
+@pytest.mark.parametrize("penalty,expected", [(1.0, -0.109), (20.0, -0.355)])
+def test_a_fixed_tensor_moment_tracks_its_target(pseudo_dir, penalty, expected):
+    """P62e: naming a multipole of the shell and converging to a state with it.
+
+    ``L . S`` of the nitrogen ``2p``, which the free run leaves at -0.0006, held
+    at -0.40. The penalty is quadratic, so the state settles where its gradient
+    balances the material's own restoring force and the moment approaches the
+    target as the penalty stiffens rather than reaching it: -0.109 at
+    ``lambda = 1``, -0.263 at 5, -0.355 at 20 and -0.388 at 80. **The energy
+    rises monotonically with it** -- +2.6, +15.3, +27.4, +32.6 mRy above the
+    free state -- which is the statement that this is a constraint and not a
+    different functional's ground state.
+    """
+    from defumat.hubbard.ftm import measured_moments
+
+    text = (GENERATED / "bn-ldau-noncol.in").read_text().replace(
+        " &system", f" &system\n    tensor_moment_penalty = {penalty}"
+    ) + "TENSOR_MOMENTS\n N-2p 1 1 0 0 -0.40\n"
+    system = build_system(parse_pw_input(text))
     pseudos = tuple(
         read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
     )
-    with pytest.raises(NotImplementedError, match="noncolin"):
-        Calculation(system, pseudos)
+    calculation = Calculation(system, pseudos)
+    result = run_scf(
+        system, pseudos, calculation=calculation, conv_thr=1e-9,
+        max_iterations=300, mixing_beta=0.5,
+    )
+    assert result.converged
+    moment = measured_moments(np.asarray(result.ns), calculation.hubbard.constraints)
+    assert float(moment[0]) == pytest.approx(expected, abs=5e-3)
+
+    _, free = _converged("bn-ldau-noncol.in", pseudo_dir)
+    assert result.total_energy > free.total_energy
 
 
 def test_the_computed_interaction_reproduces_the_requested_u(pseudo_dir):

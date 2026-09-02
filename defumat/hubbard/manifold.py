@@ -55,6 +55,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from defumat.hubbard.ftm import build_constraints
 from defumat.pseudo.upf import Pseudopotential
 
 __all__ = [
@@ -189,6 +190,13 @@ class HubbardInput:
     #: ``hubbard_radial_cutoff`` in bohr, overriding the dataset's own
     #: augmentation radius. Only the ``yukawa`` route reads it.
     radial_cutoff: float | None = None
+    #: The ``TENSOR_MOMENTS`` card: ``(species, n, l, k, p, r, t, value)``, Elk's
+    #: ``tm3fix``. This code's own card -- ``pw.x`` has neither the constraint
+    #: nor the quantity.
+    tensor_moments: tuple = ()
+    #: ``tensor_moment_penalty``: the strength ``lambda`` of the quadratic
+    #: penalty, in Ry per unit squared.
+    tensor_moment_penalty: float = 1.0
 
 
 @dataclass
@@ -287,6 +295,8 @@ class HubbardSetup:
     #: ``"fll"`` or ``"amf"`` -- Elk's ``dftu = 1`` and ``dftu = 2``. The full
     #: functional only; the simplified one *is* the fully-localised limit.
     double_counting: str = "fll"
+    #: The resolved ``TENSOR_MOMENTS`` constraint, or ``None``.
+    constraints: object = None
     #: ``starting_ns_eigenvalue(m, ispin, ityp)`` from the input, as
     #: ``{(species, spin, m): value}`` with zero-based ``spin`` and ``m``.
     starting_ns: dict = field(default_factory=dict)
@@ -577,6 +587,12 @@ def build_hubbard_setup(
         noncolin=bool(noncolin),
         double_counting=double_counting,
         starting_ns=starting_ns,
+    )
+    setup.constraints = build_constraints(
+        setup,
+        getattr(hubbard, "tensor_moments", ()),
+        getattr(hubbard, "tensor_moment_penalty", 1.0),
+        names,
     )
     return setup
 

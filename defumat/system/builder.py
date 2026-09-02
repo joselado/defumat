@@ -1415,6 +1415,38 @@ def _atomic_b_field(pwin: PwInput, nat: int) -> tuple:
     return tuple(tuple(fortran_float(v) for v in row[:3]) for row in rows)
 
 
+def _tensor_moments(pwin: PwInput) -> tuple:
+    """The ``TENSOR_MOMENTS`` card: Elk's ``tm3fix``, one line per constraint.
+
+        TENSOR_MOMENTS
+          Fe1-3d  1 1 0  0   -2.5
+
+    is ``manifold``, then the four indices ``k p r t`` of the moment, then the
+    value it is held at. A card ``pw.x`` does not have, for a quantity it does
+    not have; the units are the conventional ones, so a ``w^{000}_0`` of ``N``
+    is ``N`` electrons in the shell.
+    """
+    from defumat.hubbard.manifold import parse_manifold
+
+    card = pwin.card("TENSOR_MOMENTS")
+    if card is None:
+        return ()
+    entries = []
+    for line in card.lines:
+        fields = line.split()
+        if not fields:
+            continue
+        if len(fields) != 6:
+            raise ValueError(
+                f"malformed TENSOR_MOMENTS line {line!r}: expected "
+                "'label-nl k p r t value'"
+            )
+        label, n, l = parse_manifold(fields[0])
+        k, p, r, t = (int(x) for x in fields[1:5])
+        entries.append((label, n, l, k, p, r, t, fortran_float(fields[5])))
+    return tuple(entries)
+
+
 def _hubbard(pwin: PwInput, structure):
     """The ``HUBBARD`` card, with ``hubbard_occ`` and ``starting_ns_eigenvalue``.
 
@@ -1541,6 +1573,10 @@ def _hubbard(pwin: PwInput, structure):
     )
     return HubbardInput(
         projectors=projectors,
+        tensor_moments=_tensor_moments(pwin),
+        tensor_moment_penalty=float(
+            pwin.get("system", "tensor_moment_penalty", 1.0)
+        ),
         slater=("parameters" if slater is None else str(slater).strip().lower()),
         lambdas=lambdas,
         radial_cutoff=(None if radial_cutoff is None else float(radial_cutoff)),

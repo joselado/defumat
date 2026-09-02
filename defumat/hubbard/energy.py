@@ -114,6 +114,7 @@ def coefficients_from_setup(setup) -> dict:
             # ``ns_ddot`` takes the bare ``U`` for every kind but 2
             # (``scf_mod.f90:962``), so the mixing metric is unchanged.
             "u_metric": jnp.asarray(0.5 * u),
+            "constraints": getattr(setup, "constraints", None),
         }
     j0 = setup.parameter("j0")
     alpha = setup.parameter("alpha")
@@ -124,6 +125,7 @@ def coefficients_from_setup(setup) -> dict:
     second = (j0 != 0.0) | (beta != 0.0)
     return {
         "kind": 0,
+        "constraints": getattr(setup, "constraints", None),
         "linear": jnp.asarray(np.where(first, alpha + 0.5 * effective, 0.0)),
         "quadratic": jnp.asarray(np.where(first, 0.5 * effective, 0.0)),
         "beta": jnp.asarray(np.where(second, beta, 0.0)),
@@ -341,16 +343,32 @@ def hubbard_potential(ns: jnp.ndarray, coefficients) -> jnp.ndarray:
     Not of :func:`hubbard_energy` -- of the per-channel sum. See the module
     docstring.
 
-    For a spinor ``ns`` is complex and the energy is real, so the derivative is
-    taken with ``holomorphic = False`` and **conjugated**: ``jax.grad`` of a
-    real function of a complex argument returns the conjugate of the Wirtinger
-    derivative (it is built for gradient descent), and the potential is the
-    derivative itself -- ``v_hub`` is Hermitian, and the unconjugated array is
-    its transpose, which is the one bug this branch invites and the one a
-    symmetric test matrix cannot see.
+    **For a spinor the pairing is the operator's and not the trace's**, and the
+    two differ. ``occupation_matrix`` builds ``N_ij = sum_k w conj(p_i) p_j``
+    with ``p_i = <phi_i|psi>``, so the separable operator
+    ``V = sum |phi_i> v_ij <phi_j|`` has expectation value ``sum_ij v_ij N_ij``
+    -- **unconjugated**. The potential is therefore the object satisfying
+    ``dE = Re sum_ij v_ij dN_ij``, which is ``jax.grad`` as it comes: taking its
+    conjugate instead gives the transpose, which is the same matrix whenever
+    ``ns`` is real and is not when its off-diagonal spin blocks are complex.
+
+    That is exactly a moment lying out of the ``z`` axis, and it is worth
+    **4.2e-4 Ry** on QE's ``lda+U_kind1_noncollin`` benchmark against 1.4e-9
+    with the pairing right -- while costing only 1.2e-7 against 7.7e-9 on a
+    cell whose converged ``ns`` is nearly real. So it hides wherever the physics
+    is collinear and appears the moment it is not.
     """
     if ns.shape[0] == 4:
-        return jnp.conj(jax.grad(_per_channel_energy, holomorphic=False)(ns, coefficients))
+        potential = jax.grad(_per_channel_energy, holomorphic=False)(ns, coefficients)
+        constraint = coefficients.get("constraints")
+        if constraint is not None:
+            # The penalty's potential, and **only** its potential: its energy is
+            # not part of the reported total, exactly as a constrained moment's
+            # is not (P18). See :mod:`defumat.hubbard.ftm`.
+            from defumat.hubbard.ftm import constraint_energy
+
+            potential = potential + jax.grad(constraint_energy)(ns, constraint)
+        return potential
     return jax.grad(_per_channel_energy)(ns, coefficients)
 
 

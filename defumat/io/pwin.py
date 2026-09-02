@@ -45,6 +45,9 @@ CARD_NAMES = frozenset(
         # QE has no input at all even though ``add_bfield`` can apply one. One
         # line per atom, three cartesian components in Ry.
         "LOCAL_MAGNETIC_FIELDS",
+        # A second one: Elk's ``tm3fix``, which fixes a tensor moment of a
+        # Hubbard shell. One line per constraint, ``label-nl k p r t value``.
+        "TENSOR_MOMENTS",
     }
 )
 

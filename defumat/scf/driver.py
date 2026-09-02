@@ -1316,24 +1316,6 @@ class Calculation:
             return
 
         setup = self.hubbard
-        if self.noncolin and setup.kind == 1:
-            # **Measured, not assumed.** The two axes are validated separately
-            # and their composition is not: the simplified functional on a
-            # spinor matches ``pw.x`` to 1.2e-7 Ry on relativistic BN, and the
-            # full one on a collinear cell to 4.2e-9 Ry on FeO -- but together,
-            # on QE's own ``lda+U_kind1_noncollin`` case, they sit **4.2e-4 Ry**
-            # apart, with both codes converged (5.8e-12 here, in 148
-            # iterations) and both on the same solution: the occupation matrix
-            # agrees to 1.8e-4 in its trace. So it is a term rather than a
-            # threshold, and there is no honest number to report yet.
-            raise NotImplementedError(
-                "the full (Liechtenstein) DFT+U functional with noncolin = "
-                ".true. is not implemented: the simplified functional works "
-                "for a spinor (matching pw.x to 1.2e-7 Ry) and the full one "
-                "works for a collinear run (4.2e-9 Ry), but the two together "
-                "are 4.2e-4 Ry from pw.x on its own benchmark with both codes "
-                "converged, so a term is missing. Drop the J, or run collinear"
-            )
         if self.noncolin and use_symmetry and self.symmetries.nsym > 1:
             # ``new_ns_nc`` averages the occupation matrix with the **SU(2)**
             # representation of each operation (``d_spin_ldau``) beside the
@@ -3739,7 +3721,7 @@ def run_scf(
             # a spinor's Hermitian pair needs the conjugate -- the transpose is
             # the conjugate, so ``sum(conj(N) V)`` is the trace either way and
             # is real by construction.
-            overlap = float(jnp.real(jnp.sum(jnp.conj(ns_out) * v_ns)))
+            overlap = float(jnp.real(jnp.sum(ns_out * v_ns)))
             deband -= 2.0 * overlap if calculation.nspin == 1 else overlap
 
         terms = {
