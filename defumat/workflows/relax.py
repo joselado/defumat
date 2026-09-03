@@ -260,7 +260,15 @@ def run_relax(
 
         previous = calculation
         calculation = calculation.at_positions(jnp.asarray(moved))
-        if not check_symmetry(
+        # **The group to check is the one the run applies, not the one the
+        # crystal has.** ``Calculation.symmetries`` is the full detected group
+        # whatever the input said, with ``use_symmetry`` beside it as the switch
+        # (``scf/driver.py``), and under ``nosym`` nothing this check protects
+        # depends on it: ``build_basis`` takes ``fft_fact = (1, 1, 1)`` and the
+        # k-set is not reduced. Checking the unused group there refuses a
+        # perfectly valid step -- which is what an adsorbate on a surface does
+        # at its first displacement, the whole reason such a run sets ``nosym``.
+        if calculation.use_symmetry and not check_symmetry(
             calculation.system.cell, calculation.system.structure, calculation.symmetries
         ):
             raise RuntimeError(
@@ -268,7 +276,9 @@ def run_relax(
                 "(checkallsym): the FFT grid and the k-point set were chosen "
                 "for that group and are no longer valid. Symmetrised forces "
                 "cannot do this in exact arithmetic, so this is a bug or a "
-                "structure whose symmetry was mis-detected"
+                "structure whose symmetry was mis-detected. A run that means to "
+                "break symmetry wants nosym = .true., which makes this check "
+                "vacuous rather than merely quiet"
             )
         density, becsum = _extrapolate(
             previous, calculation, result, density_extrapolation

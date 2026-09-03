@@ -166,3 +166,91 @@ def test_an_unknown_calculation_is_rejected():
     text = _CONSTRAINED.replace("calculation = 'scf'", "calculation = 'scv'")
     with pytest.raises(ValueError, match="calculation"):
         build_system(parse_pw_input(text))
+
+
+# --- the group a relaxation checks against ---------------------------------
+#
+# ``Calculation.symmetries`` is the full detected group whatever the input said,
+# with ``use_symmetry`` beside it as the switch. ``workflows/relax.py`` used to
+# check the group rather than the switch, which refuses a valid ionic step under
+# ``nosym`` -- exactly what an adsorbate on a surface does at its first
+# displacement, and the whole reason such a run sets ``nosym`` in the first
+# place.
+
+
+_RELAX_SILICON = """
+&control
+  calculation = 'relax'
+/
+&system
+  ibrav = 2, celldm(1) = 10.20, nat = 2, ntyp = 1, ecutwfc = 12.0{extra}
+/
+&electrons
+/
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS alat
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS automatic
+ 2 2 2 0 0 0
+"""
+
+
+def _displaced(pseudo_dir, extra):
+    """A calculation and the same one with one atom moved off every symmetry."""
+    import warnings
+
+    import jax.numpy as jnp
+    import numpy as np
+
+    from defumat.calculator import Calculator
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        built = Calculator.from_text(
+            _RELAX_SILICON.format(extra=extra), pseudo_dir, announce=False
+        ).calculation
+    moved = np.asarray(built.system.structure.positions).copy()
+    moved[0, 0] += 0.13
+    return built, built.at_positions(jnp.asarray(moved))
+
+
+def test_a_symmetric_run_still_refuses_a_step_that_breaks_its_group(pseudo_dir):
+    """The protective half of the gate, which must keep working.
+
+    The FFT grid and the k-set were chosen for this group, so a step that
+    leaves it is a bug and has to be caught.
+    """
+    from defumat.system.symmetry import check_symmetry
+
+    built, moved = _displaced(pseudo_dir, "")
+    assert built.use_symmetry
+    assert not check_symmetry(
+        moved.system.cell, moved.system.structure, moved.symmetries
+    )
+
+
+def test_nosym_does_not_check_a_group_it_never_applies(pseudo_dir):
+    """The fix: under ``nosym`` the same step must be allowed.
+
+    The group is still *detected* -- it is a property of the crystal, and
+    ``basis/builder.py`` wants its fractional translations -- so the thing that
+    distinguishes the two cases is ``use_symmetry`` and nothing else. Under
+    ``nosym`` the FFT grid takes ``fft_fact = (1, 1, 1)`` and the k-set is not
+    reduced, so nothing the check protects is at risk.
+    """
+    from defumat.system.symmetry import check_symmetry
+
+    built, moved = _displaced(pseudo_dir, ", nosym = .true.")
+    assert not built.use_symmetry
+    # The group is detected all the same, and the displaced structure does not
+    # have it -- so a check written against the group alone would raise here.
+    assert built.symmetries.nsym > 1
+    assert not check_symmetry(
+        moved.system.cell, moved.system.structure, moved.symmetries
+    )
+    # ... and the gate as written does not.
+    assert not (moved.use_symmetry and not check_symmetry(
+        moved.system.cell, moved.system.structure, moved.symmetries
+    ))
