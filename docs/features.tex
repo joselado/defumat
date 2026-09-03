@@ -1897,12 +1897,13 @@ $B \to -B$ symmetry the null rests on --- off by default here, unlike Elk) and t
 two orders of magnitude, and Elk's own tensor on this cell is not converged.
 
 % =====================================================================
-\section{Effective masses, site angular momenta, nesting and structure factors}
+\section{Effective masses, site angular momenta, nesting, structure factors and
+STM images}
 
-Quantities Elk computes and \code{pw.x} does not. The first two cost one
+Quantities Elk computes and \code{pw.x} mostly does not. The first two cost one
 NSCF at a single k-point; the nesting function costs one NSCF on a dense grid,
 and nothing after it; the structure factors cost one transform of a density that
-already exists.
+already exists, and an STM image one band sum with different weights.
 
 \subsection{The effective mass tensor}
 
@@ -2377,6 +2378,136 @@ and not a check on the answer. An empty or inverted energy window, and
 claim about them would be wrong: these are \emph{valence} structure factors, and
 a star's multiplicity applies to the charge, the magnetic members of a star
 being related by $\det(R)\,R$ rather than being equal.
+\end{refuses}
+
+\subsection{Scanning-tunnelling microscopy images}
+
+Tersoff and Hamann's result is that the current an s-wave tip draws at
+$\mathbf r$ is the sample's local density of states there, at the energy the
+bias selects. So an STM image is not a new calculation, it is the
+\emph{density built from different occupations}:
+\begin{equation*}
+  \rho_{\mathrm{STM}}(\mathbf r)
+   = \sum_{n\mathbf k} w_{\mathbf k}\,
+     \tilde\delta(E - \varepsilon_{n\mathbf k})\,
+     |\psi_{n\mathbf k}(\mathbf r)|^2 ,
+\end{equation*}
+with $\tilde\delta$ the same smeared delta a density of states is built from.
+Elk's task 162 and \code{pw.x}'s \code{plot\_num = 5} both say exactly that.
+Two energy selections: with no \code{bias} the weight is a delta at $E$ (Elk's,
+a density of states per unit volume, in $1/(\mathrm{bohr}^3\,\mathrm{Ry})$),
+and with one it is the window $[E, E+V]$ (QE's, a density in
+electrons/bohr$^3$) --- a \emph{negative} $V$ imaging the filled states, which
+is a real experiment's sign convention and the mode a semiconductor surface
+needs.
+
+\begin{pycode}
+from defumat import Calculator
+
+calc = Calculator.from_file("graphene.scf.in")
+
+# constant height: the tip plane at crystal coordinate 0.85 along c
+image = calc.get_stm(height=0.85, shape=(64, 64))
+
+image.values        # (64, 64) the tunnelling density on the plane
+image.coordinates   # (64, 64, 2) in-plane cartesian coordinates, bohr
+image.extent()      # (x0, x1, y0, y1) for imshow
+image.integral      # int rho_STM d3r = D(E_F): the sum rule
+image.density       # the same field on the FFT grid
+
+# filled states, 0.15 Ry below the Fermi level
+filled = calc.get_stm(height=0.85, bias=-0.15)
+
+# constant current: the corrugation, in bohr along the surface normal
+scan = calc.get_stm(height=0.70, mode="constant-current",
+                    current=1.0e-5, heights=(0.0, 6.0), nheights=80)
+scan.heights_bohr   # (n1, n2), nan where the set-point is not crossed
+
+# a magnetic tip: the image depends on which way it points
+up = calc.get_stm(height=0.85, spin="up")            # collinear
+along_x = calc.get_stm(height=0.85, spin=(1, 0, 0))  # noncollinear
+
+# Elk's three corners, in crystal coordinates, for any other plane
+side = calc.get_stm(plane=((0.15, 0, 0), (0.15, 0.3, 0), (0.15, 0, 1)))
+\end{pycode}
+
+The functional entry point is \code{defumat.workflows.stm.run\_stm}. A delta at
+the Fermi level wants a denser k-grid than the SCF's, which \code{grid=}
+re-solves the bands on and \textbf{recomputes the Fermi level for}; \code{smearing}
+picks the delta (a Gaussian by default whatever the run used, because
+Methfessel--Paxton and cold smearing go negative on their wings and a negative
+tunnelling current is meaningless); and \code{band\_cutoff} is \code{stm.f90}'s
+fixed truncation at three widths, off by default because it is an approximation.
+
+\textbf{The plane is read out of the grid exactly.} A density is a finite sum
+of plane waves, so its value at a point between grid points is that sum
+evaluated there rather than a spline through neighbours. It matters for the one
+thing an image is about: the corrugation in the vacuum is a small modulation on
+a quantity falling by orders of magnitude across one grid spacing, and an
+interpolant of it carries the grid's own periodicity as a false corrugation.
+The three corners are in \emph{crystal} coordinates, Elk's \code{vclp2d}, and
+the sampling excludes the far edge ($i/n$, not $i/(n-1)$) so a whole-cell image
+tiles.
+
+\textbf{Against \code{pp.x}: $6.7\times10^{-10}$} on every point of the
+$15^3$ grid of QE's own fcc aluminium, reading its \code{filplot} text dump so
+that nothing is interpolated on either side. Three of QE's conventions are
+needed to make it the same sum: \code{stm.f90} divides by the volume and not by
+\code{degauss}, so its image is the zero-bias one times the width; it uses the
+run's own smearing; and it truncates the band sum at three widths. That
+truncation is worth 0.4\% \emph{and the complete sum is the smaller one} ---
+Marzari--Vanderbilt's delta is negative for $x > \sqrt2$, so the states QE drops
+carry negative weight. The check that involves no other code is the sum rule
+$\int\rho_{\mathrm{STM}}\,d^3r = D(E)$ against \code{compute\_dos}, which holds
+to $10^{-10}$ on a scalar run and on a spinor one, and in its window form on an
+ultrasoft one --- the augmentation charge follows the tunnelling weights, which
+is why an ultrasoft or PAW image works here and \code{stm.f90}'s does not.
+
+\textbf{A magnetic tip is the part neither code has.} It counts the states
+whose spin is along its own moment, so with $P$ the tip's polarization
+\begin{equation*}
+  \rho_{\mathrm{STM}}(\mathbf r; \hat{\mathbf n})
+   = \tfrac12\left[\rho(\mathbf r)
+     + P\,\hat{\mathbf n}\cdot\mathbf m(\mathbf r)\right],
+\end{equation*}
+and $P = 1$ makes the image a genuine spin channel. On an antiferromagnetic
+hydrogen chain the charge image is flat to six figures while the two spin
+projections are each other's mirror ($\pm 2.58\%$, antisymmetric to $10^{-3}$),
+and they add back to the charge to $10^{-14}$. On a chain whose four moments
+each turn 90 degrees from the last, a tip along $x$ sees atoms 1 and 3 with
+opposite sign and atoms 2 and 4 \textbf{not at all} ($10^{-16}$ against a
+contrast of 0.063), while a tip along $z$ sees none of the four --- with nothing
+imposing any of it.
+
+\textbf{The physics case is graphite.} In AB-stacked bilayer graphene one
+sublattice of the surface layer sits above an atom of the layer below and the
+other above a hollow, so the two are inequivalent and only one is bright at the
+Fermi level: 1.64$\times$ here, on two atoms of the same element carrying the
+same charge. That is the textbook result that half the atoms of graphite are
+invisible to an STM, and it is a statement about the density of states \emph{at
+the Fermi level} rather than about the charge. The tunnelling density falls off
+log-linearly into the vacuum ($R^2 = 0.9992$ over five orders) at a rate of at
+least $2\sqrt{V_{\mathrm{vac}} - E_F}$, which is Tersoff--Hamann's own statement
+and involves none of the assembly; the bound is one-sided because graphene's
+states at $E_F$ sit at $K$, whose in-plane momentum steepens the decay
+(measured 1.86, against 0.98 for $k_\parallel = 0$).
+
+\begin{refuses}
+\textbf{Refuses.} A spin spiral (its two spinor components live on different
+plane-wave spheres, so $|\psi(\mathbf r)|^2$ is not the lattice-periodic object
+this sum builds), a constrained \code{tot\_magnetization} (one Fermi level per
+channel, and a tip sees one energy), an applied magnetic field (its energy is
+outside the reported total, so the level the tip would be put at is not the
+field-free one the image would be read as), a spin direction on a run with no
+magnetization, and a \emph{transverse} direction on a collinear run --- there
+$m_x$ is absent rather than zero, and projecting onto the axis would be a claim
+the calculation cannot make. A constant-current scan longer than the lattice
+period along the plane's normal, where the tip meets the periodic image of the
+surface and the density rises again.
+\textbf{Said rather than refused}: a constant-current image returns \code{nan}
+at every point where the set-point is not crossed inside the scan, with a
+warning saying how many; and a zero-bias image of a gapped run is identically
+zero, the delta sitting in the gap, which is what \code{bias} is for.
 \end{refuses}
 
 \section{Things with no \texorpdfstring{\code{pw.x}}{pw.x} counterpart}

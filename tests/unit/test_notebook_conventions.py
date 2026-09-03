@@ -34,6 +34,7 @@ NOTEBOOKS = Path(__file__).resolve().parents[2] / "notebooks"
 #: Held to the whole skeleton. **This set only grows.** Add a notebook here in
 #: the same commit that rewrites it; never remove one to make a test pass.
 REWRITTEN = {
+    "40_stm_images",
     "39_orbital_magnetization",
     "38_magnons",
     "37_structure_factors",
@@ -132,6 +133,7 @@ HAS_A_FACADE_METHOD = {
     "VelocityOperator": "get_band_velocities",
     "run_polarization": "get_polarization",
     "run_orbital_magnetization": "get_orbital_magnetization",
+    "run_stm": "get_stm",
     "magnetoelectric_tensor": "get_magnetoelectric_tensor",
 }
 

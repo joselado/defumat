@@ -819,6 +819,31 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS)
         )
 
+    def get_stm(self, height=None, **options):
+        """A Tersoff-Hamann scanning-tunnelling image of a surface.
+
+        The tunnelling current an s-wave tip draws is the sample's local
+        density of states at the tip, so the image is the density rebuilt from
+        the states the bias selects -- a delta at the Fermi level with no
+        ``bias`` (Elk's task 162) and the window ``[E_F, E_F + V]`` with one
+        (``PP/src/stm.f90``). ``height`` is the crystal coordinate of the tip
+        plane above the slab; ``mode="constant-current"`` with a ``current``
+        set-point returns the corrugation in bohr instead.
+
+        A delta at the Fermi level wants a **denser k-grid** than the SCF's,
+        which ``grid`` re-solves the bands on.
+        """
+        from defumat.workflows.stm import run_stm
+
+        result = self._ground_state("an STM image")
+        if height is not None:
+            options = {**options, "height": height}
+        return run_stm(
+            self.system, self.pseudos, result,
+            **self._call_options(run_stm, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
     def get_nesting(self, grid=None, **options):
         """``N(q)``, the Fermi-surface nesting function, on a dense grid.
 

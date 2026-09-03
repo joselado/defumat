@@ -58,6 +58,7 @@ second route beside it.
 | Magnetoelectric tensor `alpha_ij`, clamped-ion | 390 (`magnetoelt.f90`) | P57 |
 | The other DFT+U flavours | -- (the `dft+u` block) | P62 |
 | Transverse spin susceptibility `chi^{+-}(q, w)` and magnons | 330/331 (`tddftsplr.f90`) | P63 |
+| Scanning-tunnelling microscopy images, including spin-polarized | 162 (`wfplot.f90`) | P65 |
 
 **The second-harmonic row was in the *rejected* table until P54 and was wrong
 there**, which is worth recording because the reasoning that put it there is
@@ -69,6 +70,22 @@ only ingredient is the interband dipole `-i v_nm / w_nm`, exact for an
 eigenstate of the full `H(k)`. P53 drew that distinction for the shift current
 and flagged this row; P54 is it being acted on. **Check which machine a
 refusal belongs to before inheriting it.**
+
+**The STM row was rejected for a reason that was true and did not settle it.**
+"QE has it -- `PP/src/stm.f90`, Tersoff-Hamann" is correct, and it is the
+method note's own first rule doing its job: the `grep` was right. What it does
+not answer is the *other* two questions the method note asks. **Cheapness**:
+the whole quantity is `Calculation.density` called with different weights,
+which is P61's `wsfac` window under another name, so the phase is one point
+evaluator and no new physics -- the cheapest entry in this file after the
+structure factors. And **what it adds**: `stm.f90` sums `|psi|^2` with no
+`addusdens` and no spin channel, so it is norm-conserving and charge-only,
+while Elk's 162 is the zero-bias delta with no bias window. The
+**spin-polarized** image -- a magnetic tip, `[rho + P n.m]/2`, which on a
+noncollinear crystal makes the picture depend on which way the tip points -- is
+in neither code, and it is free here because the tunnelling density already
+carries its channel axis. **"QE has it" is a reason to check what QE's version
+omits, not a reason to stop.**
 
 ---
 
@@ -600,7 +617,6 @@ Full breakdown, sub-phase order, validation route and refusals: `PLAN.md` P62.
 | Electric field gradient at the nuclei (115) | QE genuinely lacks it, but it needs PAW reconstruction inside the sphere and is notoriously sensitive to how that is done — a large validation burden for one number. |
 | Mössbauer contact density and hyperfine field (110) | Same objection, harder: it is the density *at* the nucleus, which a pseudopotential does not have at all. |
 | ELF (51/2/3) | QE has it — `PP/src/elf.f90`. |
-| STM images (162) | QE has it — `PP/src/stm.f90`, Tersoff-Hamann. |
 | Fermi surface plots (100/101/102) | QE has it — `PP/src/fermisurface.f90`, `fermi_velocity.f90`. |
 | Wannier90 interface (550) | QE has it — `PP/src/pw2wannier90.f90`. |
 | BSE (185/186/187), GW (600-640) | Out of scope per `CLAUDE.md`, and neither is cheap. |
@@ -618,7 +634,10 @@ produce a wrong claim:
 - **"QE does not have it" is a `grep` over the vendored tree**, not a memory.
   Two of the original candidates died this way (ELF, STM) and one changed its
   README tick from blank to `(✓)` (the conductivity tensor, because
-  `epsilon.x` has an `offdiag_calc` nobody remembered).
+  `epsilon.x` has an `offdiag_calc` nobody remembered). **STM has since come
+  back and is P65**: the `grep` was right and the conclusion was not, because a
+  code having a quantity says nothing about what its version of it omits -- see
+  the note under **Taken**.
 - **"It is cheap" is a claim about the algorithm, checked against Elk's own
   implementation.** The piezoelectric tensor looks cheap in Elk's task list and
   is a ground state per strain tensor; the nesting function looks like `N_k^2`

@@ -9969,6 +9969,157 @@ any manifold not separated from the band above it (the gap check), a spin spiral
 two-division mesh.
 
 
+### P65 — Scanning-tunnelling microscopy images, including spin-polarized ones. ✅ DONE.
+
+`defumat/basis/sample.py`, `defumat/stm/` (`plane.py`, `image.py`),
+`defumat/workflows/stm.py`, `Calculator.get_stm`,
+`tests/unit/test_stm_machinery.py` (31), `tests/regression/test_stm.py` (10), a committed
+`pp.x` reference and its input, and `notebooks/40_stm_images.ipynb`.
+
+Elk's task 162 (`wfplot.f90`) and QE's `PP/src/stm.f90` — the one entry taken out of
+`ELK-FEATURES.md`'s rejected table on the grounds that its rejection was right about the
+*charge* image and wrong about what the phase would cost and what it would add.
+Tersoff-Hamann: the current an s-wave tip draws at `r` is the sample's local density of
+states there at the energy the bias selects, so **an STM image is a density built from
+different occupations** and nothing else:
+
+    rho_STM(r) = sum_kn w_k delta(E - e_kn) |psi_kn(r)|^2
+
+Elk says exactly that in eight lines — `wfplot.f90` overwrites `occsv` with a normalised
+delta at the Fermi level and calls `rhomagv` again — and this follows it, because
+`Calculation.density(wavefunctions, weights)` is the same masked-weight call P61's `wsfac`
+window already makes. **No second band sum was written**, and the symmetrisation and the
+augmentation charge come along with the weights rather than being left behind: an
+ultrasoft or PAW image works and `stm.f90`'s does not, its sum being over `|psi|^2` with
+no `addusdens` anywhere.
+
+**The one genuinely new piece is reading a field on a plane that misses the grid points**,
+and it is exact rather than interpolated: a density is a finite sum of plane waves, so
+`f(r) = sum_G c_G e^{iG.r}` evaluated at the point *is* the value there
+(`basis/sample.py`, `sample_field`). That matters for the only thing an STM image is
+about — the corrugation in the vacuum is a small modulation on a quantity falling by
+orders of magnitude across one grid spacing, and a trilinear interpolant of it carries the
+grid's own periodicity as a false corrugation. The peak working set is `chunk x ngm`
+complex numbers and the points are chunked to ~32 MB for that reason: a 40x40 plane
+against a 30000-vector sphere is 768 MB in one block. The plane itself is `plotpt2d`
+transcribed, three corners in **crystal** coordinates, including the detail that decides
+whether an image tiles — the parameters run `i/n` and not `i/(n-1)`, so the far edge is
+excluded and column `n` does not repeat column 0.
+
+**Against `pp.x`: 6.7e-10** on the whole 15^3 grid of QE's own fcc aluminium (2e-7
+relative), reading `Modules/plot_io.f90`'s `filplot` text dump so that nothing is
+interpolated on either side. Getting an *exact* comparison took three of QE's conventions
+rather than one: `stm.f90` divides by the volume and **not** by `degauss`, so its image is
+the zero-bias one times the width; it uses the run's own smearing, Marzari-Vanderbilt
+here, where this defaults to a Gaussian; and it truncates the band sum three widths either
+side of the window (`first_band`/`last_band`), which is `band_cutoff` here and is off by
+default because it is an approximation.
+
+**And that truncation is worth 0.4 per cent in the direction that says what it is doing.**
+The complete sum is the *smaller* one, because Marzari-Vanderbilt's delta is negative for
+`x > sqrt(2)`: the states past QE's cutoff carry **negative** weight and dropping them
+raises the image. It is P52's objection one order out — a tunnelling density built from a
+non-positive delta is not positive by construction — and it is why the default here is a
+Gaussian whatever the run used. Elk's own default is Fermi-Dirac (`stype = 3`); both are
+reachable through `smearing`.
+
+**Two energy selections, and Elk implements only the first.** `bias = None` is Elk's delta
+at `E`, a density of states per unit volume in 1/(bohr^3 Ry), which images a metal and
+returns identically zero on an insulator — a true statement about zero bias and a useless
+image. `bias = V` is QE's window `[E, E + V]`, a density in electrons/bohr^3, with a
+negative `V` imaging the filled states, which is a real experiment's sign convention and
+the reason the window is here at all: a semiconductor surface is the common case. A run
+with fixed occupations has no Fermi level and the tip goes to midgap with a warning, which
+is `stm.f90`'s own rule.
+
+**The spin-polarized image is the part neither code has**, and it is the cheapest thing in
+the phase because the tunnelling density already carries its channel axis. A magnetic tip
+counts the states whose spin is along its own moment, so
+
+    rho_STM(r; n) = [ rho(r) + P n.m(r) ] / 2
+
+with `P = 1` a fully polarized tip, which makes the image a genuine spin channel, and
+`P = 0` the mean of the two, which is the charge image again. A **collinear** run carries
+only `m_z`, so a direction with a transverse component is refused rather than projected
+onto the axis: `m_x` is *absent* there rather than zero, and the two are different claims.
+
+**Its validation needs no other code and is the best in the phase.** The
+antiferromagnetic hydrogen chain is flat in charge to six figures and its two spin
+projections are each other's mirror (asymmetry +2.58 and -2.58 per cent, antisymmetric to
+1e-3), while `up + down = charge` holds to 1e-14 — a partition, not two calculations. The
+**90-degree noncollinear chain** is sharper still: four moments, each turned 90 degrees
+from the last, and a tip along `x` sees atoms 1 and 3 with opposite sign and atoms 2 and 4
+**not at all** (1e-16 against a contrast of 0.063), because their moments are
+perpendicular to it — while a tip along `z` sees none of the four, every moment lying in
+the plane. The contrast has the same magnitude in every direction, which says the four
+moments are equal with nothing having imposed it.
+
+**The sum rule is what catches a factor of two** and it is run on both branches:
+`int rho_STM d3r = D(E)` against `compute_dos` at the same energy and width, to 1e-10 on
+scalar aluminium *and* on the spinor chain — the second being the check P51's `for_spin`
+trap calls for, since a spinor band holds one electron and neither the contrast nor the
+partition can see that factor, both being ratios. The ultrasoft branch has the same rule in
+its window form (the integral is the number of states inside, which needs `<psi|S|psi> = 1`
+and therefore the augmentation).
+
+**Graphite is the physics case and it behaves**: in AB-stacked bilayer graphene one
+sublattice of the surface layer sits above an atom of the layer below and the other above
+a hollow, so only one is bright at the Fermi level — 1.64x here, on two atoms of the same
+element carrying the same charge. It is the textbook result that half the atoms of
+graphite are invisible to an STM, and it is a statement about the density of states *at
+the Fermi level* rather than about the charge.
+
+**Constant current is here too** and is the mode an experiment runs in: scan the plane
+outwards, invert for the height at which the tunnelling density reaches a set-point. QE has
+one (`pp.x`'s `ISOSTM` card, `chdens_module.f90`'s `isostm_plot`) and Elk has none, and the
+difference is worth naming rather than glossing: `isostm_plot` writes `image(i,j) = k`, the
+**FFT plane index** at which the density first exceeds the set-point, searching along the
+third axis only -- so its corrugation is quantised to the grid spacing, which on a
+twenty-bohr cell at 81 points is 0.25 bohr against the 0.39 measured here. This one scans
+planes along the *plane's own* normal and interpolates between them. The
+interpolation is **linear in the logarithm**, which is exact for the exponential the
+quantity actually is over one step. **The trap is periodicity and it is silent**:
+withdrawing the tip further than the lattice period along the plane's own normal brings it
+up underneath the periodic image of the surface, where the density rises again, so the
+outermost crossing is the wrong one or there is none — and a pixel that comes back `nan`
+reads exactly like a set-point that is merely too low. It is guarded, and the reach is
+measured from the *plane's* normal rather than from the `axis` argument, which is what the
+first version got wrong: `_CHAIN_PLANE` is normal to `a1` and a reach taken along `a3` is
+zero, so every constant-current scan on a plane the `height` shortcut did not build was
+refused with an error about its own bounds.
+
+**The vacuum decay is the check that shares nothing with the assembly, and its bound is
+one-sided for a reason worth writing down.** Tersoff-Hamann says a state at `E` under a
+vacuum level `V` decays as `exp(-sqrt(V - E + k_par^2) z)` and its square twice as fast,
+so the tunnelling density falls off log-linearly at a rate of **at least** `2 sqrt(V - E)`
+— and graphene's states at the Fermi level sit at `K` rather than at `Gamma`, whose
+in-plane momentum steepens the decay. Measured on the bilayer: **1.86** against 0.98 for
+`k_par = 0` and 2.92 for `|K|`, log-linear with `R^2 = 0.9992` over five orders of decay.
+Two decay constants superpose there (the layer below shows through, and the states at the
+Fermi level carry a spread of in-plane momenta), so what is claimed is a straight log and
+a lower bound, not a single exponent.
+
+**Performance** (`PERFORMANCE.md`): Elk's task 162 on the same fcc aluminium, the same
+4x4x4 shifted grid and the same 40x40 plane, both starting from a converged ground state,
+is **0.49 s** against **0.09 s** here (0.29 s including compilation), single core each.
+Not comparable: Elk's `rfpts` evaluates a muffin-tin function inside each sphere, a
+spherical-harmonic sum per point, where a plane-wave code has one Fourier sum everywhere.
+
+**Refused by name:** a spin spiral (the two spinor components live on different plane-wave
+spheres, so `|psi(r)|^2` is not the lattice-periodic object this sum builds — `dE/dq` is
+what a spiral has instead), a constrained `tot_magnetization` (one Fermi level per
+channel, and a tip sees one energy — P52's reason), an applied magnetic field (its energy
+is outside the reported total, P18, so the level the tip would go to is not the field-free
+one the image would be read as), a spin direction on a run with no magnetization, and a
+transverse direction on a collinear one.
+
+**Not claimed:** a band-resolved plot (Elk's tasks 61/62/63, `kstlist`, which is the same
+routine with a different occupation and would be a second entry point rather than a second
+phase), a tip with structure beyond Tersoff-Hamann's s-wave (Chen's derivative rule),
+and an image of a **charged** or field-biased surface, where the tip's own potential
+enters.
+
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

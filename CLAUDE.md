@@ -870,6 +870,48 @@ spiral, and a mesh with **two** divisions along a direction that carries a deriv
 point's two neighbours are then the same k-point and the difference is an alias); **one**
 division is allowed and sets that derivative to zero, which is what a slab means.
 
+**Scanning-tunnelling microscopy images are in** (P65), Elk's task 162 and QE's
+`PP/src/stm.f90`, and it is the one row taken back out of `ELK-FEATURES.md`'s **rejected**
+table -- rejected there for "QE has it", which was true and did not settle it. Tersoff-Hamann
+says the current an s-wave tip draws is the sample's local density of states at the tip, so
+an STM image **is a density built from different occupations** and nothing else:
+`Calculation.density(wavefunctions, weights)` with a normalised delta at the Fermi level,
+which is P61's `wsfac` call under another name. No second band sum was written, and the
+symmetrisation and the augmentation charge follow the weights -- so an **ultrasoft or PAW**
+image works where `stm.f90`'s does not, its sum being over `|psi|^2` with no `addusdens`.
+Against `pp.x`: **6.7e-10** on every point of the 15^3 grid of QE's own fcc aluminium, which
+took three of QE's conventions rather than one (it divides by the volume and *not* by
+`degauss`; it uses the run's own smearing; and it truncates the band sum at three widths,
+`band_cutoff` here). **That truncation is worth 0.4 per cent in the direction that says what
+it is**: the complete sum is the *smaller* one, because Marzari-Vanderbilt's delta is
+negative for `x > sqrt(2)` and the dropped states carry negative weight -- P52's objection
+one order out, and why the default here is a Gaussian whatever the run used.
+**The spin-polarized image is the part neither code has** and is the cheapest thing in the
+phase, the tunnelling density already carrying its channel axis: a magnetic tip counts the
+states whose spin is along its own moment, `[rho + P n.m]/2`. A **collinear** run carries
+only `m_z`, so a transverse direction is refused rather than projected onto the axis -- `m_x`
+is absent there rather than zero. Its validation needs no other code and is the best in the
+phase: an antiferromagnetic hydrogen chain is flat in charge to six figures while its two
+spin projections are mirrors (+-2.58 per cent) that add back to the charge to 1e-14, and a
+**90-degree noncollinear chain** answers a tip along `x` with atoms 1 and 3 at opposite sign
+and atoms 2 and 4 at **nothing at all** (1e-16 against 0.063), their moments being
+perpendicular to it -- while a tip along `z` sees none of the four. The sum rule
+`int rho_STM = D(E)` against `compute_dos` holds to 1e-10 on the scalar *and* the spinor
+branch, which is the check that catches P51's `for_spin` factor of two. **The one new piece
+of machinery is exact point evaluation** (`basis/sample.py`): a density is a finite sum of
+plane waves, so its value between grid points is that sum evaluated there rather than an
+interpolant, whose grid periodicity would read as corrugation. **Graphite is the physics
+case**: AB stacking makes the two sublattices of the surface layer inequivalent and only one
+is bright at the Fermi level (1.64x), which is the textbook result that half of graphite's
+atoms are invisible -- and the contrast **inverts** at +2 eV bias. Elk's task 162 is 0.49 s
+against 0.09 s here on the same cell and plane, both from a converged ground state; what is
+not comparable is that `rfpts` sums spherical harmonics inside each muffin tin.
+**Refused by name**: a spin spiral, a constrained `tot_magnetization`, an applied magnetic
+field, a spin direction on a run with no magnetization, a transverse direction on a collinear
+one, and a constant-current scan longer than the lattice period along the plane's normal --
+past which the tip meets the periodic image of the surface and the density rises again,
+silently.
+
 **Outstanding:** Wyckoff input, PAW and a *relaxed* (as opposed to frozen-density) magnetocrystalline anisotropy, `average_pp`, the dynamical matrix of an
 ultrasoft or PAW *metal*, the strain coordinate's third derivatives on ultrasoft and PAW
 (P44 localised what is missing), the *second derivatives* of a spin-polarized system (P45 put

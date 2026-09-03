@@ -1,0 +1,24 @@
+! How `reference.stm.al-metal` was made: `pw.x < al-metal.in` (with an outdir
+! and prefix added), then `pp.x < al-metal.pp.in`. `plot_num = 5` is
+! `PP/src/stm.f90` and `sample_bias = 0` collapses its window onto the Fermi
+! level, which is Elk's task 162 -- so QE's image is defumat's delta-weighted
+! one times `degauss`. The comparison is in
+! `tests/regression/test_stm.py::test_the_tunnelling_density_matches_pp_x`.
+!
+! `filplot` is what the test reads: `Modules/plot_io.f90` writes the whole dense
+! FFT grid as text, so nothing is interpolated on either side.
+ &inputpp
+    prefix='al'
+    outdir='./out'
+    filplot='al.stm'
+    plot_num=5
+    sample_bias=0.0
+ /
+ &plot
+    nfile=1
+    filepp(1)='al.stm'
+    weight(1)=1.0
+    iflag=3
+    output_format=6
+    fileout='al.stm.cube'
+ /
