@@ -10281,6 +10281,142 @@ block the whole `nk x nbnd` set), a tip with structure beyond an s-wave, a self-
 treatment of the leads' own potential, and an absolute conductance — the two couplings are
 unfixed prefactors, so what the result carries is the map and its contrast.
 
+### P67 — Running a calculation too large for one job: sizing, checkpointing, and a partial dynamical matrix. ✅ DONE.
+
+Driven by a concrete case from another project -- a 57-atom FePc molecule on a
+fixed 100-atom SnTe slab, 157 atoms, `K_POINTS gamma`, `nspin = 2`, SG15
+norm-conserving at 60/240 Ry -- whose driver was working around four things at
+once. Four of them are fixed here; two are named as phases of their own below.
+
+**`defumat/sizing.py`: what a run costs, before anything is allocated.**
+`Calculation.__init__` builds the G-vectors, the plane waves and the projectors
+on the device, so an input too large for the machine dies in setup without
+saying what was too large. `Calculator.estimate()` / `defumat size scf.in`
+answers from the cutoffs and the datasets alone, host-side, with the G-vector
+enumeration in slabs of the first Miller index so an input destined for a GPU
+can be sized on a laptop. The counts are **exact** -- the same predicates
+`basis/gvectors.py` and `basis/planewaves.py` select with -- and are asserted
+against a real `Calculation` on four cells, including the two-grid PAW case
+where `ngm` and `ngms` come apart and a bug conflating them passes on silicon.
+
+**The finding is a term that hand estimates omit, and it decided the case.**
+On that slab the estimate is npwx 761911, ngm 6.1e6, nbnd 1020, nkb 2170 -- all
+within a per cent of the project's own hand estimate -- and a memory floor of
+**189 GB against the 52 GB that estimate budgeted**, on a 141 GB card. The
+difference is the **Davidson subspace**: at QE's `nvecx = 4 nbnd` it is
+`2 nvecx ndim` for `psi` and `hpsi` (92.6 GB) plus the Ritz block (46.3 GB),
+against 23 GB of wavefunctions and 24.6 GB of `vkb`. So the gamma-point trick is
+not an optimisation for that cell, it is the difference between the *ground
+state* running and not. Two things the report gets right that are easy to get
+wrong: `K_POINTS gamma` is sized as **the run and not the request**, since
+`_without_gamma_storage` substitutes the full sphere and reporting the halved
+counts understates every array by two; and the eigensolver is **not doubled by
+spin** -- `Calculation.diagonalize` solves the channels one after another --
+where the wavefunctions are, which is 90 GB of phantom on that cell.
+
+**`defumat/scf/checkpoint.py`: a converged state on disk.** Nothing was
+serialisable, so `run_scf(starting_from=...)` needed the object in memory and a
+job that hit its wall clock lost the run. `result.save(path)` /
+`SCFResult.load(path, system=...)`, and `run_relax(checkpoint_dir=...)` writing
+the state, the next geometry and the **BFGS history** every ionic step. The
+system is supplied rather than stored -- a resume already has the input file --
+with a fingerprint checked on load. The history is the half that is easy to omit
+and most of the value: BFGS earns its rate from the inverse Hessian and the
+trust radius, so the assertion is not that the resumed run reaches the same
+minimum (it would anyway) but that **stopping a six-step relaxation at step two
+and resuming costs 2 + 4 steps, not 2 + 6**.
+
+**Coverage over the result's fields is asserted, not maintained.** A checkpoint
+that silently omits a field reloads as a *different state* that converges to
+something plausible -- the worst failure mode for a calculation big enough to
+need checkpointing. `unhandled_fields()` is a set difference over
+`dataclasses.fields(SCFResult)` and it earned its keep on the first run: five
+fields were missing from the first draft, and `tau` is genuine state (a
+meta-GGA rebuilds its potential from the density **and** it). Refused rather
+than dropped: a converged **magnetic field** (not the input field wherever
+`reducebf` changed it -- P56 is the record of that bug found the hard way) and a
+**Hubbard setup** (without it `ns` is an array about nothing).
+
+**A partial dynamical matrix (`atoms=`, `on_row=`).** The cost of P25's phase is
+that `3 nat` bare perturbations and `3 nat` first-order wavefunctions are held
+at once; the module docstring already named "solve one irreducible
+representation at a time" as the way down, and this is that lever in its
+simplest form. `atoms=` solves a chosen subset and returns *that subset's* block
+diagonalised with its own masses, which is the frozen-substrate approximation
+and is what holding the other atoms fixed means; `on_row` streams each row out
+as it is assembled.
+
+**The validation needs no reference of any kind**, which is rare here: a partial
+dynamical matrix is not an approximation, it solves fewer perturbations of the
+*same* equations, so the whole-cell run is exact for what the two share. The
+subset's rows reproduce it to **9.3e-15** (norm-conserving), **2.8e-14**
+(ultrasoft) and **4.9e-15** (PAW) Ry/bohr^2. **Ultrasoft and PAW work**, and two
+of the four tangents P39 adds needed no change once the other two were
+subsetted, because they take their shape from what they are handed
+(`multiplier_response` from `bare`, `orthogonality_states` from `derivatives`)
+rather than from `nat` -- which is the argument for writing them that way.
+Getting one wrong would show up nowhere else: the frequencies stay real, stay
+threefold degenerate on a cubic crystal, and stay plausible.
+
+The physical check is that freezing one of silicon's two atoms turns the optical
+mode's reduced mass `m/2` into `m`, so the frequency falls by `sqrt(2)`:
+**519.205 -> 367.146**, a ratio of 1.414173. The deviation from `sqrt(2)` is not
+noise -- `D_12 = -D_11` is what makes the ratio exact, so it *is* the acoustic
+sum rule's residue, which is why the PAW cell (acoustic modes at -15.7 cm^-1
+against 4.3) gives 1.414711.
+
+**Refused with a subset:** a symmetrised run, because `symdvscf` acts on the
+`3 nat` stack as one object -- an operation rotates the cartesian direction
+*and* permutes the atom, so it mixes a mode inside the subset with one outside
+it and the partial stack is not something the group can act on. And the acoustic
+sum rule, which is a sum over every atom and is not what a frozen substrate
+wants anyway: the modes it leaves are frustrated translations, which are the
+physics.
+
+**`run_relax` checks the group it applies, not the one the crystal has.**
+`Calculation.symmetries` is the full detected group whatever `nosym` said, with
+`use_symmetry` beside it as the switch, and the relaxation checked the group --
+so an ionic step under `nosym` was refused for leaving a group the run never
+applied. That is what an adsorbate does at its first displacement. Under `nosym`
+nothing the check protects is at risk (`build_basis` takes `fft_fact = (1,1,1)`,
+the k-set is not reduced), so it is vacuous there; the protective half is
+unchanged and has its own test.
+
+**The LSDA refusal was measured rather than restated, and its stated reason was
+wrong.** `_require_one_spin_channel` blamed `non_variational_response` and
+`_multiplier_response`; both are ultrasoft and PAW terms and are identically
+inert for a norm-conserving dataset, so they cannot block a norm-conserving LSDA
+run. With both guards bypassed: a **nonmagnetic cell run as `nspin = 1` and as
+`nspin = 2` agrees to 1.6e-14** Ry/bohr^2 on force constants of 0.287 (the check
+that catches a factor of two in the spin sum, which P45, P51 and P52 each found
+the hard way); **one column of a smeared magnetic metal agrees with a finite
+difference of the forces to 3.6e-7** on a column of 6.0e-3, which is the only
+measurement that reaches P28's `wg`/`wk` split at all, the two weights coinciding
+wherever occupations are 0 or 1. And the third measurement is why the control
+mattered: that cell's acoustic residue is **992.9 cm^-1**, which reads as a
+disqualifying bug until the same geometry is run at `nspin = 1` and gives
+**1168.5**. It is a hydrogen chain in vacuum at `degauss = 0.10`, whose
+transverse direction has almost no restoring force -- blaming the spin axis for
+it would have been P28a's mistake in reverse.
+
+**The refusal stays**, for a reason none of the three is: that chain converges to
+`M = -3.4e-08`, so it demagnetises exactly as P63's spirals do, and a
+two-channel assembly whose channels are equal does not test a spin axis. What
+lifts it is one cell that *stays* magnetic against a finite difference of its
+forces, plus a generated `ph.x` LSDA reference -- a short, well-defined job
+rather than the open-ended one the refusal described.
+
+**Two things deliberately not done, and each is a phase.** `K_POINTS gamma`
+consumed rather than substituted -- the real-wavefunction packing in
+`vloc_psi`, `regterg`'s real subspace overlaps, `calbec`/`sum_band`'s `fact = 2`
+with its `G = 0` correction, and the GGA gradient filling both `nl` and `nlm` --
+which the sizing above now shows is worth a factor of two on every array and is
+what that slab needs. And the nonlocal projectors applied without materialising
+`vkb (nk, npwx, nkb)`, per species inside a scan with the phases regenerated;
+note that matrix-free forward is **not** matrix-free backward unless the scan
+body is rematerialised (`jax.checkpoint`), or the force's tape holds the
+per-atom slices anyway.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);
