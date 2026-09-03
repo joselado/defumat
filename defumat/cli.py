@@ -32,6 +32,30 @@ from defumat.workflows import run_dos
 from defumat.workflows.relax import run_relax
 
 
+def _size(path: str, pseudo_dir, k_batch, david) -> int:
+    """``defumat size scf.in``: the shapes and a memory floor, allocating none.
+
+    The point of it is to be runnable on a machine that cannot hold the run --
+    see :mod:`defumat.sizing`. Nothing reaches the device.
+    """
+    import warnings
+
+    from defumat.calculator import Calculator
+    from defumat.sizing import estimate_size
+
+    with warnings.catch_warnings():
+        # ``K_POINTS gamma`` warns on substitution; the report says it plainly
+        # and at more length, so the warning is noise here.
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(path, pseudo_dir=pseudo_dir, announce=False)
+        estimate = estimate_size(
+            calculator.system, calculator.pseudos,
+            k_batch=k_batch, davidson_basis=david,
+        )
+    print(estimate.report())
+    return 0
+
+
 def _inspect(path: str) -> int:
     ref = read_qe_output(path)
     np.set_printoptions(precision=6, suppress=True)
@@ -306,6 +330,18 @@ def main(argv: list[str] | None = None) -> int:
     inspect = sub.add_parser("inspect", help="summarise a Quantum ESPRESSO pw.x output file")
     inspect.add_argument("path", help="path to a pw.x output (e.g. a test-suite benchmark)")
 
+    size = sub.add_parser(
+        "size",
+        help="what a pw.x input will cost, without allocating anything",
+    )
+    size.add_argument("path", help="path to a pw.x input file")
+    size.add_argument("--pseudo-dir", default=None,
+                      help="where the UPF files are (default: the input's directory)")
+    size.add_argument("--k-batch", type=int, default=None,
+                      help="k-points in flight in the eigensolver (default: all)")
+    size.add_argument("--david", type=int, default=4,
+                      help="Davidson subspace multiple nvecx/nbnd (QE's default 4)")
+
     dos = sub.add_parser("dos", help="SCF, then a density of states on a denser k-grid")
     dos.add_argument("input", help="path to a pw.x input file")
     dos.add_argument("--pseudo-dir", help="where the UPF files are (default: beside the input)")
@@ -395,6 +431,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "inspect":
         return _inspect(args.path)
+    if args.command == "size":
+        return _size(args.path, args.pseudo_dir, args.k_batch, args.david)
     if args.command == "dos":
         return _dos(args)
     if args.command == "pdos":

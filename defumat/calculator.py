@@ -298,6 +298,22 @@ class Calculator:
     # construction
     # ------------------------------------------------------------------
 
+    def estimate(self, **options):
+        """What this run will cost, without allocating anything on the device.
+
+        A :class:`~defumat.sizing.SizeEstimate`: the exact ``ngm``, ``npwx``,
+        ``nbnd`` and ``nkb`` the setup would build, the two FFT grids, and a
+        floor on the bytes. Unlike every other method here it does **not** touch
+        :attr:`calculation`, which is the whole point -- it answers "will this
+        fit" for an input too large to build.
+
+        ``options`` are :func:`~defumat.sizing.estimate_size`'s: ``nbnd``,
+        ``k_batch`` and ``davidson_basis``.
+        """
+        from defumat.sizing import estimate_size
+
+        return estimate_size(self.system, self.pseudos, **options)
+
     @classmethod
     def from_file(cls, path, pseudo_dir=None, **defaults) -> "Calculator":
         """Read a ``pw.x`` input file and load the pseudopotentials it names.
