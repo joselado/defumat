@@ -186,3 +186,44 @@ def test_ultrasoft_falls_back_to_the_full_sphere(pseudo_dir):
     """
     assert _substitutes(pseudo_dir, ", ecutrho = 120.0",
                         pseudo="Si.pz-n-kjpaw_psl.0.1.UPF")
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("mixing", ["local-TF", "TF"], ids=["local-tf", "tf"])
+def test_a_screened_mixer_is_unaffected_by_the_storage(pseudo_dir, mixing):
+    """The mixer's preconditioner solves on the **dense** set, which stays whole.
+
+    Worth a test rather than an argument, and worth one for a specific reason:
+    a wrong factor inside a preconditioner changes the *convergence* and not the
+    fixed point, so it does not show up in the energy comparison above -- the
+    run reaches the same answer and takes a different number of iterations to do
+    it. On a slab that is the difference between converging and not
+    (``local-TF`` is what QE's Co(0001) film needs at ``mixing_beta = 0.7``).
+
+    It passes structurally: ``local_tf_preconditioner`` and
+    ``kerker_preconditioner`` are handed ``gvectors``, which is the dense set,
+    and only the wavefunction sphere halves. The test pins that rather than
+    trusting it, and would catch anyone later deciding to halve the dense set
+    after all.
+    """
+    extra_electrons = f",\n  mixing_mode = '{mixing}', mixing_beta = 0.3"
+
+    def run(kpoints):
+        text = _TEMPLATE.format(extra="", kpoints=kpoints,
+                                pseudo="Si.pz-vbc.UPF")
+        text = text.replace("conv_thr = 1.0d-12",
+                            "conv_thr = 1.0d-12" + extra_electrons)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            calculator = Calculator.from_text(text, pseudo_dir, announce=False)
+            return calculator, calculator.get_scf()
+
+    whole, full = run("automatic\n 1 1 1 0 0 0")
+    half, gamma = run("gamma")
+
+    assert half.calculation.gamma_only and not whole.calculation.gamma_only
+    assert full.converged and gamma.converged
+    assert gamma.total_energy == pytest.approx(full.total_energy, abs=1e-12)
+    # The iteration count is the quantity a preconditioner bug moves, so it is
+    # the one asserted -- not equal, but not drifting either.
+    assert abs(gamma.iterations - full.iterations) <= 2
