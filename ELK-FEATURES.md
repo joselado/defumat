@@ -56,6 +56,8 @@ second route beside it.
 | Berry-phase polarization | -- (`pw.x`'s `lberry`; Elk's `polar`) | P56 |
 | X-ray and magnetic structure factors | 195/196 (`sfacrho.f90`, `sfacmag.f90`) | P61 |
 | Magnetoelectric tensor `alpha_ij`, clamped-ion | 390 (`magnetoelt.f90`) | P57 |
+| The other DFT+U flavours | -- (the `dft+u` block) | P62 |
+| Transverse spin susceptibility `chi^{+-}(q, w)` and magnons | 330/331 (`tddftsplr.f90`) | P63 |
 
 **The second-harmonic row was in the *rejected* table until P54 and was wrong
 there**, which is worth recording because the reasoning that put it there is
@@ -305,7 +307,7 @@ zero however wrong the strain leg is.
 
 ---
 
-## 6. The transverse spin susceptibility, and magnons
+## 6. The transverse spin susceptibility, and magnons -- **taken, P63**
 
 **Elk tasks 330/331** (`tddftsplr.f90`, 314 lines, on `genspchi0.f90` and
 `genspfxcg.f90`).
@@ -374,6 +376,42 @@ should be from the start.
 
 **README ticks:** `(✓)` for QE (turboMagnon, `TDDFPT/`, Liouville-Lanczos), `✓`
 for Elk (tasks 330/331).
+
+---
+
+**Taken in P63, and three things this entry got wrong are worth carrying back**, because
+each of them made the phase look larger than it was.
+
+*The 4x4 matrix is not needed for a collinear ground state.* The transverse block
+decouples -- Elk's own `tfm2213` shows it, every charge-spin and off-diagonal spin-spin
+entry vanishing when the local axis is along `z` -- so `chi^{+-}` is a plain matrix in
+`(G, G')`. The `(4 ngrf)^2` working set this entry sized the cost from does not arise, and
+neither does the Coulomb term, the head/wing structure or the velocity operator.
+
+*P19's two-sphere machinery is not needed either.* Restricting `q` to a difference of two
+k-points of the run's own grid -- which is Elk's `vecql` commensurability, reached by
+construction -- puts `k + q` in the grid already. What is left of the problem is an
+umklapp shift of one gather index, which `defumat/topology/` has had since P16.
+
+*The named starting case was the wrong one and for a reason this file could have
+predicted.* A hydrogen **chain** has vacuum, and `B_xc/m` grows without bound as the
+density falls: `|F| = 173` in the tail against 21 in the core, and the leading eigenvalue
+moving 1.129 to 0.924 as the density clip moves two orders. It is also not insulating.
+Three model ferromagnets were tried and all three turn out to be Stoner-unstable, and the
+spiral scan this entry proposed as the confirmation **does not confirm it**: the spiral's
+own SCF leaves the magnetic branch, converging to `|m| = 0.0001` at `q = 1/2`, so its
+energy gain is demagnetization rather than a spin wave. Nor is it a bad lattice constant --
+a half-filled band on any lattice prefers antiferromagnetic order, and at `a = 6.5` bohr the
+ferromagnetic solution is 58 meV *above* the nonmagnetic one. **The physics case is fcc
+nickel**, on the one norm-conserving 3d dataset committed here, whose enhancement falls away
+from `q = 0` as a stable ferromagnet's must.
+
+*And the axis to converge is not the one the cost suggests.* On a transition metal the
+Goldstone residual does not move with the band count at all (10.02, 10.13, 10.22 per cent
+at `nbnd` = 30, 60, 100) and moves only with the **response sphere** (10.0, 6.1, 2.0 per
+cent at `ecut_response` = 12, 30, 60 Ry), because the identity's left side is
+`sum_G' X_0(G, G') B_G'` and `B_xc` of a 3d shell has structure a small sphere cannot
+represent. On hydrogen, where `B_xc` is smooth, the band axis is the one that binds.
 
 ---
 
@@ -515,7 +553,7 @@ all-electron polarization against a pseudopotential one.
 
 ---
 
-## 8. The other DFT+U flavours -- **planned, `PLAN.md` P62**
+## 8. The other DFT+U flavours -- **taken, P62**
 
 **Not a task number**: Elk reaches DFT+U through the `dft+u` input block
 (`dftu`, `inpdftu`) rather than through `task`, which is why walking the task

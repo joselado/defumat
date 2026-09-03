@@ -1097,6 +1097,150 @@ no total energy to differentiate --- refused by name now rather than surfacing a
 \end{refuses}
 
 % =====================================================================
+\subsection{Magnons: the transverse spin susceptibility}
+
+A magnon is the collective precession of a magnet's own magnetization: a spin
+wave. It lives at the pole of the transverse susceptibility, which obeys a
+Dyson equation with \emph{no} Coulomb term --- a transverse spin fluctuation
+moves no charge, and the Hartree interaction belongs to the charge channel:
+\begin{equation*}
+  \chi^{+-} = \bigl[1 - \chi_0^{+-} f_{xc}^{+-}\bigr]^{-1}\chi_0^{+-},
+  \qquad
+  f_{xc}^{+-}(\mathbf r) = \frac{B_{xc}(\mathbf r)}{m(\mathbf r)} .
+\end{equation*}
+The Kohn--Sham part $\chi_0^{+-}$ is a sum over pairs with one member in each
+spin channel, the majority state at $\mathbf k$ and the minority at
+$\mathbf k+\mathbf q$; its own spectral weight is the \textbf{Stoner
+continuum} of independent spin flips, which costs at least the exchange
+splitting. The kernel pulls a mode out from underneath that continuum, and that
+mode is the magnon.
+
+\textbf{The kernel is not a second derivative and this is why it works for a
+GGA.} Rotate the whole ground state rigidly by an angle $\theta$: then
+$\delta\mathbf m_\perp = \theta\,\mathbf m$ and
+$\delta\mathbf B_{xc,\perp} = \theta\,\mathbf B_{xc}$, so the transverse
+response of the exchange--correlation field to the magnetization is
+$B_{xc}/m$ --- an exact consequence of rotational invariance of
+$E_{xc}[n,|m|]$, whatever the functional. It also means the Goldstone theorem
+holds \emph{by construction}, so the residual below tests the assembly and the
+truncations rather than the physics of $f_{xc}$.
+
+\begin{pycode}
+import numpy as np
+from defumat import Calculator
+
+calc = Calculator.from_file("ni-fcc-magnon.in")
+
+# one wavevector: the spectral function, and the Stoner continuum under it
+chi = calc.get_spin_susceptibility((0.0, 0.0, 0.0), np.linspace(0.0, 0.06, 9),
+                                   nbnd=30, ecut_response=60.0)
+chi.goldstone              # how far X_0 B_xc = m is from holding: the error bar
+chi.enhancement            # lambda_max(X_0 F) at omega = 0; one at q = 0
+chi.magnon                 # the pole, in Ry, or None where there is none
+chi.magnon_mev
+chi.spectral_function      # -Im chi_00 / pi
+chi.kohn_sham_spectral_function
+chi.method                 # "crossing", "peak" or "unstable"
+
+# a path: one fixed-density run serves every q
+disp = calc.get_magnon_dispersion([(0, x, x) for x in (0.0, 0.25, 0.5)],
+                                  np.linspace(0.0, 0.06, 9),
+                                  nbnd=30, ecut_response=60.0,
+                                  goldstone_correction=True)
+disp.energies_mev          # (nq,), nan where the grid holds no pole
+disp.enhancements          # > 1 is an instability, not a magnon
+disp.kernel_scale
+\end{pycode}
+
+The functional entry points are
+\code{defumat.workflows.run\_spin\_susceptibility} and
+\code{run\_magnon\_dispersion}.
+
+\textbf{$\mathbf q$ must be a difference of two k-points of the run's own
+grid.} That is where the states at $\mathbf k+\mathbf q$ come from --- there is
+no second diagonalisation --- and it is Elk's requirement that \code{vecql} be
+commensurate with the mesh, reached by construction. What survives of the
+$\mathbf k+\mathbf q$ problem is an umklapp shift of one gather index, and
+$\chi_0(\mathbf q + \mathbf G) = \chi_0(\mathbf q)$ under a relabelling of the
+matrix's own $\mathbf G$ index holds to $1.3\times10^{-17}$, which is what says
+that shift is right.
+
+\textbf{The pole is found as a root, not as a peak.} Below the Stoner onset
+$\lambda_{\max}(\chi_0(\omega) f_{xc})$ is real and rises monotonically, so the
+magnon is the root of $\lambda_{\max} = 1$ --- no broadening enters it, a
+handful of frequencies suffice, and it reports \emph{below zero} where the
+state is unstable instead of returning the frequency grid's own edge.
+
+\textbf{The Goldstone residual is the number to read first.} A global spin
+rotation costs no energy, so $\chi_0(\mathbf q{=}0,\omega{=}0)\,B_{xc} = m$
+exactly --- but only with a complete band set \emph{and} a complete
+$\mathbf G$-set, so what \code{goldstone} reports is a double truncation.
+\textbf{Which axis binds depends on the element.} On hydrogen the band count
+does it: $8.0 \to 0.50$ per cent over $n_{\text{bnd}} = 12 \to 140$. On fcc
+nickel the band count does nothing at all (10.02, 10.13, 10.22 per cent at 30,
+60, 100 bands) and only \code{ecut\_response} moves it: $10.0 \to 6.1 \to 2.0$
+per cent at 12, 30, 60~Ry, because $B_{xc}$ of a 3d shell has structure a small
+sphere cannot represent.
+
+\textbf{Against Elk's committed reference, nickel's magnon agrees to 0.8\%.}
+Elk ships an \code{Ni-magnetic-response} example --- fcc nickel at
+$\mathbf q = (0.1,0.1,0)$ on a $10^3$ shifted grid --- whose pole sits at
+117.92~meV. Its input applies a small magnetic field, which is worth 1.99~meV
+of Zeeman gap, so its field-free magnon is 115.93~meV against \textbf{115.04}
+here on the same cell, grid and wavevector --- and 123.08 with the Goldstone
+correction applied, which moves it \emph{away}, so neither is chosen for
+agreeing. That is across an all-electron LAPW basis versus a norm-conserving
+plane-wave one, and across a 25~Ry response sphere versus 60. The moment agrees
+on the same run (0.6178 against 0.6152 $\mu_B$), and so does the sign of the
+static $\chi$. \textbf{That 0.7\% of kernel is worth 7\% of magnon} is the
+number to take away: it is how steeply $\lambda(\omega)$ crosses one, and so how
+far the Goldstone residual has to fall before a magnon energy is worth a second
+digit.
+
+\textbf{An enhancement above one is an instability, and that is a result.} It
+says the collinear state is not a minimum at that wavevector --- the transverse
+susceptibility has changed sign --- so the ferromagnet is not the ground state
+there. Nickel's enhancement \emph{falls} away from $\mathbf q = 0$, which is
+what a stable ferromagnet looks like. Most simple models do not: a half-filled
+band on any lattice prefers antiferromagnetic order, so an fcc hydrogen crystal
+comes out soft at finite $\mathbf q$ at every spacing tried, and the calculation
+says so rather than producing a plausible dispersion anyway.
+
+\textbf{Do not compare that against a spiral $E(q)$ without checking what the
+spiral converged to.} It is the obvious cross-check and it does not work: on fcc
+hydrogen the 90-degree spiral at $q_3 = \tfrac12$ converges to $|m| = 0.0001$,
+the \emph{nonmagnetic} solution, so its energy gain is demagnetization and not a
+spin wave; a 15-degree cone collapses the same way, because nothing holds it.
+Elk's own magnon-spiral example runs \code{fsmtype = -1} with a large field for
+exactly that reason.
+
+\code{goldstone\_correction=True} scales the kernel by
+$1/\lambda_{\max}(\mathbf q{=}0)$, the same factor at every $\mathbf q$, so the
+uniform mode sits at exactly zero. It is what the magnon literature does, it is
+off by default, and it is honest only if the residual error is
+$\mathbf q$-independent --- check that by running the dispersion at two
+$(n_{\text{bnd}},\ \code{ecut\_response})$ settings.
+
+\begin{refuses}
+\textbf{Refuses.} \code{nspin != 2}: without a collinear magnetization the
+transverse block does not decouple and $B_{xc}/m$ does not exist, and a
+\textbf{noncollinear} ground state needs the full $4\times4$ spin-density
+response, which is a different object. \textbf{Ultrasoft and PAW}, because
+$\langle u_i|e^{-i(\mathbf q+\mathbf G)\cdot\mathbf r}|u_j\rangle$ is not the
+plane-wave overlap once the charge is not all in $|\psi|^2$. A \textbf{spin
+spiral}, whose rotating frame is not the one the kernel was derived in. A
+\textbf{Hubbard $U$}, which responds to the magnetization too. An
+\textbf{applied magnetic field or a constrained moment}, because the rotation
+argument assumes the energy is invariant under a global spin rotation and a
+field is exactly what breaks it --- a magnon in a field is gapped by the Zeeman
+energy, which this construction does not carry. A \textbf{potential-only
+meta-GGA}, there being no $E_{xc}$ for that argument to be about. And a
+\textbf{symmetry-reduced k-set}: $\chi_0(\mathbf G,\mathbf G')$ is a matrix in
+two $\mathbf G$ indices that nothing here symmetrises, and the
+$\mathbf k+\mathbf q$ fold needs the grid closed under translation by
+$\mathbf q$ in any case.
+\end{refuses}
+
 \section{Optical spectra and excitons: TDDFT}
 
 The response above is a \emph{static} one, solved orbital by orbital. An

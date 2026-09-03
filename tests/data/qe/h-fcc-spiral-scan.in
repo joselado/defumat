@@ -1,0 +1,47 @@
+! The spin-spiral twin of h-fcc-magnon.in -- the same crystal, the same grid,
+! the same functional -- run through the generalized Bloch theorem instead.
+!
+! **It exists to reproduce a negative result, not a comparison.** The plan was
+! the obvious pairing: the transverse susceptibility says the ferromagnet is
+! linearly unstable wherever the leading eigenvalue of X_0 F exceeds one, and a
+! scan of E(q) over this input should say whether a spiral at that q is actually
+! lower in energy -- two calculations sharing no machinery at all, one a sum
+! over states plus a matrix inversion on a fixed density, the other a sequence
+! of independent self-consistent fields.
+!
+! It does not work, and what it does instead is worth being able to reproduce:
+! **the spiral's own SCF leaves the magnetic branch.** At q = (0, 0, 1/2) the
+! 90-degree spiral converges to |m| = 0.0001 -- the nonmagnetic solution -- so
+! its 59 meV "gain" is demagnetization and not a spin-wave energy at all; at
+! q = (0, 0, 1/4) it lands on a different collinear solution at |m| = 0.248.
+! Starting from a 15-degree cone does not help: the cone collapses to zero at
+! 1/4 and the moment to zero at 1/2, because nothing holds either. Elk's own
+! Ni-magnon-spiral example runs fsmtype = -1 with a large field along momfix
+! for exactly that reason.
+!
+! PLAN.md P63 records the measurement and what replaced it in the tests.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 6.5,
+    nat = 1, ntyp = 1,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.01,
+    noncolin = .true.
+    nosym = .true., noinv = .true.
+    starting_magnetization(1) = 1.0
+    angle1(1) = 90.0
+    spiral_q(1) = 0.0, spiral_q(2) = 0.0, spiral_q(3) = 0.0
+    nbnd = 8
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H 0.0 0.0 0.0
+K_POINTS {automatic}
+ 4 4 4 0 0 0

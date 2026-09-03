@@ -1,0 +1,38 @@
+! Ferromagnetic fcc nickel, the magnon case -- and the one norm-conserving 3d
+! ferromagnet this repository has a dataset for.
+!
+! Ni.pbe-nc-sg15.UPF carries 18 valence electrons (3s and 3p as semicore), so
+! this is far from the cheapest cell here; it is used because the transverse
+! susceptibility's matrix elements are the plane-wave ones, which an ultrasoft
+! or PAW dataset invalidates, and every other magnetic dataset committed here
+! is one of those.
+!
+! The 4x4x4 grid is the compromise the cost forces and it bounds what can be
+! claimed: the smallest wavevector it offers along Gamma-X is already 0.89
+! inverse angstrom, where nickel's magnon is a few hundred meV and is
+! Landau-damped by the Stoner continuum. It is enough to show the collective
+! mode separating from that continuum and to measure the Goldstone residual;
+! it is not a converged spin-wave stiffness.
+!
+! nosym and noinv with the whole grid, for the reason h-fcc-magnon.in gives.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 6.65, nat = 1, ntyp = 1,
+    ecutwfc = 60.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.02,
+    nspin = 2
+    nosym = .true., noinv = .true.
+    starting_magnetization(1) = 0.3
+ /
+ &electrons
+    conv_thr = 1.0d-9
+    mixing_beta = 0.3
+ /
+ATOMIC_SPECIES
+ Ni 58.69 Ni.pbe-nc-sg15.UPF
+ATOMIC_POSITIONS (alat)
+ Ni 0.0 0.0 0.0
+K_POINTS {automatic}
+ 4 4 4 0 0 0

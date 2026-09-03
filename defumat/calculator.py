@@ -842,6 +842,47 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS)
         )
 
+    def get_spin_susceptibility(self, q, frequencies, **options):
+        """``chi^{+-}(q, omega)``, the transverse spin susceptibility.
+
+        Its pole is the **magnon**: a collective precession of the whole
+        magnetization, pulled out from under the Stoner continuum of
+        independent spin flips by the exchange-correlation kernel
+        ``B_xc/m``. ``q`` is in crystal coordinates and must be a difference
+        of two k-points of the run's own grid, which is where the states at
+        ``k + q`` come from.
+
+        The result carries ``.goldstone`` -- how far ``X_0 B_xc = m`` is from
+        holding, which is the calculation's own error bar and is worth reading
+        before its magnon energy.
+        """
+        from defumat.workflows.magnons import run_spin_susceptibility
+
+        result = self._ground_state("a spin susceptibility")
+        return run_spin_susceptibility(
+            self.system, self.pseudos, result.density, q, frequencies,
+            **self._call_options(run_spin_susceptibility, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
+    def get_magnon_dispersion(self, qpoints, frequencies, **options):
+        """``omega(q)`` along a path of wavevectors: the spin-wave dispersion.
+
+        One fixed-density run serves every ``q``, because each is a difference
+        of two k-points of the grid. Points where the result's
+        ``.enhancements`` exceed one are **instabilities** rather than
+        magnons: the collinear state is not a minimum there, and that is where
+        a spin spiral would lower the energy.
+        """
+        from defumat.workflows.magnons import run_magnon_dispersion
+
+        result = self._ground_state("a magnon dispersion")
+        return run_magnon_dispersion(
+            self.system, self.pseudos, result.density, qpoints, frequencies,
+            **self._call_options(run_magnon_dispersion, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
     def get_shift_current(self, kpoints=None, nbnd=None, **options):
         """``sigma^abc(0; w, -w)``, the bulk photovoltaic effect, in A/V^2.
 

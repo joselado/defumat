@@ -103,6 +103,8 @@ for it, what it refuses, and whether Quantum ESPRESSO and Elk compute it too.
 - **Magnetocrystalline anisotropy**, by the force theorem
 - **Magnetic torque** $-\mathrm{d}F/\mathrm{d}\theta$, the anisotropy from one
   angle rather than a difference of two
+- **Magnons** — the spin-wave dispersion $\omega(\mathbf{q})$, from the pole of
+  the transverse spin susceptibility $\chi^{+-}(\mathbf{q},\omega)$
 
 **Vibrations and dielectric response**
 
@@ -198,6 +200,7 @@ drive any of this and is what the examples below use.
 | **X-ray and magnetic structure factors** $F(\mathbf{H})$ — the Fourier coefficients of the charge and of the magnetization on each reflection, which is what a diffraction experiment measures rather than a density. Norm-conserving, ultrasoft and PAW; valence-only, so a forbidden reflection (where the core cancels and only the bonding charge is left) is the one an all-electron code agrees with; an energy window rebuilds the density from a chosen range of states | `run_structure_factors`, `Calculator.get_structure_factors`, `hmax`, `window`, `core` | | ✓ |
 | **Shift current** $\sigma^{abc}(0;\omega,-\omega)$ — the bulk photovoltaic effect: the direct current a crystal with no inversion centre carries under illumination, with no junction and no built-in field. Insulators, norm-conserving, `nspin = 1` or spinor; needs the whole k-grid rather than a wedge, and the band count is the convergence parameter because the generalised derivative's intermediate sum runs over the same bands | `run_shift_current`, `Calculator.get_shift_current` | ⁸ | |
 | **Second-harmonic generation** $\chi^{(2)}(-2\omega;\omega,\omega)$ — how much of the light shone on a crystal comes back out at twice the frequency. A polar rank-3 tensor, zero in any centrosymmetric crystal. Insulators, norm-conserving, `nspin = 1` or spinor; needs the whole k-grid rather than a wedge, and the band count is the convergence parameter because the sum over the intermediate state is an identity only over a complete basis | `run_shg`, `Calculator.get_shg`, `scissor` | (✓)⁹ | ✓ |
+| **Magnons and the transverse spin susceptibility** $\chi^{+-}(\mathbf{q},\omega)$ — the collective precession of a magnet's own magnetization, and the Stoner continuum of independent spin flips it separates from. Its pole is the spin wave, and the Goldstone theorem pins it to zero energy at $\mathbf{q}=0$, which is the calculation's own error bar. Collinear magnets, insulating or metallic, norm-conserving; $\mathbf{q}$ must be a difference of two k-points of the run's own grid, and the whole grid is needed rather than a wedge. Nickel's magnon agrees with Elk's committed reference to **0.8%** on the same cell and grid | `run_spin_susceptibility`, `run_magnon_dispersion`, `Calculator.get_magnon_dispersion`, `ecut_response`, `goldstone_correction` | (✓)¹² | ✓ |
 | **Optical absorption spectra with excitons** — $\mathrm{Im}\,\epsilon_M(\omega)$ from TDDFT, local-field effects included, on a bootstrap exchange-correlation kernel. Needs the whole k-grid rather than a wedge | `run_absorption`, `kernel = 'bootstrap'` (also `rpa`, `alda`, `lrc`, `bootstrap-1`), `ecut_response`, `scissor`, `broadening` | | ✓ |
 | **Magnetic torque** $-\mathrm{d}F/\mathrm{d}\theta$ — the anisotropy from **one** angle instead of a difference of two, which removes seven digits of cancellation and is robust to the smearing width where the difference is not. $E(\theta) = K_1\sin^2\theta$ makes the torque at 45 degrees equal to $-K_1$. Same refusals as the anisotropy row below | `run_torque`, `Calculator.get_torque` | | |
 | **Magnetocrystalline anisotropy** — the energy it costs to point a magnet's moment one way rather than another, by the force theorem: converge without spin-orbit coupling, rotate the converged density onto $\hat{\mathbf{n}}$, diagonalise once with the coupling on. One diagonalisation per direction, no reconvergence. Ultrasoft and norm-conserving; PAW is refused, the handoff carrying no `becsum`. Includes the per-orbital decomposition and a knob that switches the coupling off inside one relativistic dataset | `run_anisotropy`, `run_force_theorem`, `Calculator.get_anisotropy`, `lforcet`, `soc_scale`, `frozen_expectation` | ✓ | (✓)¹¹ |
@@ -241,6 +244,15 @@ Where the tick is qualified:
   established does not reproduce QE's own committed example. Elk's
   `nonlinopt.f90` (task 125) is the real reference and is what this was
   validated against.
+
+- ¹² `TDDFPT`'s turboMagnon (`lr_magnons_main.f90`) is a Liouville-Lanczos
+  solver: it propagates a response vector and never forms $\chi_0$ as a matrix
+  over reciprocal lattice vectors, so there is no Dyson equation and no
+  eigenvalue whose crossing of one is the mode. Nothing in `PW/src` or `PP/src`
+  computes a spin susceptibility at all. Elk's tasks 330/331
+  (`tddftsplr.f90`) do exactly this, for the general $4\times4$ spin-density
+  response of which the transverse block computed here is the collinear
+  corner.
 
 - ¹⁰ Elk adds the same non-analytic term (`dynqnat.f90`, under `tphnat`) and
   computes Born effective charges (task 208), but its static dielectric tensor

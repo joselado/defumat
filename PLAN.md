@@ -9556,6 +9556,302 @@ need — symmetry is refused for a spinor occupation matrix anyway (P62b).
 constraint degenerates into the fixed spin moment `constrained_magnetization` already is,
 and it is refused by name rather than duplicated.
 
+### P63 — Magnons: the transverse spin susceptibility. ✅ DONE, collinear and norm-conserving.
+
+`defumat/tddft/spinchi0.py`, `defumat/tddft/spinkernel.py`,
+`defumat/workflows/magnons.py`, `Calculator.get_spin_susceptibility` and
+`Calculator.get_magnon_dispersion`, `tests/unit/test_magnon_machinery.py` (14),
+`tests/regression/test_magnons.py` (7), three committed inputs, and
+`notebooks/36_magnons.ipynb`.
+
+Elk's tasks 330/331 (`tddftsplr.f90`, on `genspchi0.f90` and `genspfxcg.f90`), which is
+`ELK-FEATURES.md` §6 — the last untaken magnetism entry in that file. What comes out is
+`chi^{+-}(q, omega)` and its pole, which is the **magnon**: the collective precession of
+the magnetization, pulled out from under the Stoner continuum of independent spin flips
+by the exchange-correlation kernel.
+
+**The phase is far smaller than `ELK-FEATURES.md` sized it, and the reason is one
+observation.** For a *collinear* ground state the 4x4 spin-density response
+block-diagonalises and the transverse block decouples, so `chi^{+-}` is a plain matrix in
+`(G, G')` rather than the `(4 ngrf)^2` object the file feared. Elk's own `tfm2213` says
+so: with the local axis along `z`, every charge-spin and off-diagonal spin-spin entry of
+its kernel vanishes and the `xx` and `yy` entries are equal. Three things follow and each
+*removes* machinery that P37's charge-channel `chi_0` needs.
+
+- **No Coulomb.** The Hartree interaction lives in the charge channel — Elk adds its
+  regularised form to the `(1,1)` element only — so nothing is symmetrised with
+  `sqrt(v)`, there is no `1/q^2`, and **`G = 0` is an ordinary entry** rather than a
+  direction-resolved 3x3 head. A transverse spin fluctuation moves no charge.
+- **No velocity operator.** The optical limit is what needed `dH/dk`; a transverse
+  susceptibility is finite and nonzero at `q = 0`, that being the Goldstone mode.
+- **No second set of states.** `q` is restricted to a **difference of two k-points of the
+  run's own grid**, so `k + q` is already in it and the down states the sum needs are the
+  ones already computed, read through a permutation. That is Elk's requirement that
+  `vecql` be commensurate with the mesh, reached by construction rather than by a check —
+  and it means P19's two-sphere spiral machinery, which `ELK-FEATURES.md` named as the
+  supplier of the states at `k + q`, is **not needed at all**. What survives of the
+  problem is an **umklapp shift of the gather index**, which is the zone-edge shift
+  `u_{k+b}(G) = u_k(G+b)` that `defumat/topology/` has lived on since P16.
+
+**The normalisation is derived, not fitted, and it is a factor of two.** First-order
+perturbation theory gives the off-diagonal block of the density matrix as
+`delta rho_{up,dn} = chi_AW delta V_{up,dn}` with the ordinary Adler-Wiser sum; since
+`rho_{up,dn} = m^-/2` and `V_{up,dn} = B^-`, the response of the *magnetization* is
+`X_0 = 2 chi_AW`. The kernel comes from a rigid rotation, which is exact: rotating the
+whole ground state by an angle takes `delta m_perp = theta m` and
+`delta B_xc,perp = theta B_xc`, so
+
+    F(r) = B_xc(r)/m(r) = [v_xc^up(r) - v_xc^dn(r)] / [2 (n_up(r) - n_dn(r))]
+
+and the Dyson equation is `X = [1 - X_0 F]^{-1} X_0`. The same normalisation is Elk's:
+`tfm2213`'s transverse entry is `bxcp/magm` and its longitudinal one
+`0.25 (f_uu - 2 f_ud + f_dd)`, and those two agree in the `m -> 0` limit, which is the
+check that the factor is right.
+
+**`B_xc` is the spin splitting of the self-consistent potential**, `(v^up - v^dn)/2`, with
+no separate exchange-correlation call and no functional-specific branch — Hartree and the
+local pseudopotential are spin-independent, and a gradient correction is inside `v_scf`
+already. It is built from `v_of_rho` directly rather than from `Calculation.potential`,
+which would add the converged **magnetic field**: an applied field is exactly what breaks
+the rotational invariance the kernel rests on, so a run with one is refused by name.
+
+**The rotation argument does not need the functional to be local**, which is worth stating
+because it inverts the charge channel's rule: `alda_matrix` refuses a GGA, since the ALDA
+kernel is a pointwise second derivative and a gradient-corrected functional's is not, where
+`B_xc/m` is exact for the rotation mode whatever the functional. The consequence is that
+the Goldstone identity is satisfied **by construction** — it tests the assembly, the
+truncations and the kernel's *matrix*, not the physics of `f_xc`.
+
+#### The two anchors, and neither needs another code
+
+`pw.x` has no counterpart: `TDDFPT`'s turboMagnon (`lr_magnons_main.f90`) is a
+Liouville-Lanczos solver that propagates a response vector and never forms `chi_0` as a
+matrix in G space, so there is no Dyson equation and no eigenvalue whose crossing of one is
+the mode; nothing in `PW/src` or `PP/src` computes a spin susceptibility at all. An
+all-electron LAPW spectrum from Elk is not a comparable number. So the validation closes
+inside the package, twice, on statements with **no free parameter**.
+
+**1. Goldstone.** A global spin rotation costs no energy, so `1 - X_0 F` is singular at
+`q = 0`, `omega = 0` with `m` its null vector. Since `F m = B_xc` identically that is
+
+    X_0(q = 0, omega = 0) B_xc = m
+
+an equation between two arrays reached by completely different routes — one a sum over
+states, the other the converged density. It is exact only with a complete band set **and**
+a complete G-set, so what it reports is a **double truncation**, and it converges in both.
+
+**The proof names a condition, and it is a second reason for two of the refusals.** The
+step that makes the identity work is
+`<n up|B_xc|m dn> = (1/2)(eps_n^up - eps_m^dn) <n up|m dn>`, which needs `H_up - H_dn` to
+be a **local multiplicative potential** -- true for LDA and GGA on a norm-conserving
+dataset, false as soon as the spin dependence acquires a nonlocal part. Ultrasoft and PAW
+have spin-dependent `D_ij` and a Hubbard `U` a spin-dependent projector term, so for those
+it is not only the missing `Q_ij(q+G)` in the matrix elements: the **kernel** would need a
+nonlocal piece as well, and `B_xc/m` would no longer be all of it. Spin-orbit coupling
+breaks the same step.
+
+**The two axes are not interchangeable and which one binds depends on the element**, which
+is the finding a `nbnd` sweep alone would have got backwards. On a ferromagnetic hydrogen
+chain the residual falls 8.0 -> 4.6 -> 2.3 -> 0.93 -> 0.50 per cent over `nbnd`
+12 -> 20 -> 40 -> 80 -> 140 at a fixed sphere, and 20 -> 6.8 -> 1.9 per cent over
+`ecut_response` 2 -> 4 -> 8 Ry at a fixed band count. On **fcc nickel** the band axis does
+nothing at all: 10.02, 10.13, 10.22 per cent at `nbnd` = 30, 60, 100, all at
+`ecut_response = 12`. Moving the *cutoff* instead gives 10.0 -> 6.1 -> 2.0 per cent at
+12 -> 30 -> 60 Ry, and the leading eigenvalue of `X_0 F` follows it to
+**1.0062**. The reason is structural: the identity's left side is
+`sum_G' X_0(G, G') B_G'`, and `B_xc` of a 3d shell has structure on the orbital's own
+scale, which a small sphere cannot represent — where hydrogen's is smooth.
+
+**2. Periodicity, which is the umklapp fold.** `X_0(q + G)` must equal `X_0(q)` after
+relabelling the matrix's own G index, since `e^{-i(q + G0 + G).r}` is `e^{-i(q + (G0+G)).r}`
+and nothing else changes. It is **exact rather than convergent** and it comes out at
+**1.3e-17** on fcc hydrogen. This is the check that says the finite-`q` machinery is right
+before anything is read into a dispersion, and without the shift a magnon dispersion is
+smooth, positive and wrong wherever `k + q` leaves the first zone — which is most of the
+grid.
+
+**The residual is a truncation and not a k-sampling error**, which the two nickel grids
+say directly: 1.99 per cent (leading eigenvalue 1.0062) on 4x4x4 and **2.04 per cent**
+(1.00730) on the 10x10x10 shifted grid, at the same `nbnd` and `ecut_response`. Fifteen
+times the k-points move it by 0.05 per cent, where widening the sphere moves it by a factor
+of five.
+
+#### The pole is a root, not a peak
+
+**`lambda_max(X_0(omega) F) = 1` is where the magnon is**, and finding it that way rather
+than as a maximum of `-Im chi_00/pi` is both cheaper and more honest. Below the Stoner
+onset `X_0` is Hermitian at `eta = 0` and `lambda_max` rises monotonically, so the crossing
+is a one-dimensional root on a handful of frequencies: no broadening enters it, the
+frequency grid does not have to resolve a Lorentzian whose width is a numerical choice, and
+it reports **"below zero"** where the state is unstable instead of returning the grid's own
+edge as a magnon energy. Inside the continuum the mode is Landau-damped, there is no root,
+and `SpinSusceptibility.method` says the fallback to a spectral peak happened.
+
+This matters practically as well: the `chi_0` einsum is `nw npairs nm^2`, so a hundred
+frequencies at nickel's `nm = 561` is twenty minutes a wavevector where eight is ninety
+seconds.
+
+#### Three model ferromagnets are Stoner-unstable, and that is the result
+
+Finding a cheap, *stable* itinerant ferromagnet to demonstrate this on took three tries and
+all three failed in the same physical way — a half-filled single band prefers a spin-density
+wave. It is recorded because the outcome is a measurement rather than a defeat.
+
+- **A hydrogen chain is the wrong cell and the kernel says why.** `B_xc/m` grows without
+  bound as the density falls, so 8 bohr of vacuum gives `|F| = 173` in the tail against 21
+  in the core, and the leading eigenvalue moves **1.129 -> 1.033 -> 0.924** as the density
+  clip moves 1e-6 -> 1e-3 -> 1e-2. That is P45's "the screening kernel of a magnetic system
+  with vacuum is not finite" arriving in the transverse channel, and it is the reason
+  `density_threshold` exists and is a *stated* approximation checked by moving it.
+- **Simple-cubic hydrogen at 5 bohr** is well behaved — leading eigenvalue 1.0426 against a
+  next of 0.18, only weakly clip-dependent, Goldstone 2.8 per cent — and its eigenvalue at
+  `omega = 0` **rises** with `q`, crossing one at `q = (0, 0, 1/2)`. The ferromagnet is
+  unstable to an antiferromagnetic spin-density wave, which for a half-filled simple cubic
+  lattice is right.
+- **fcc hydrogen at 6.5 bohr** has the best Goldstone residual of the three (**0.57 per
+  cent** at `nbnd = 30`, `ecut_response = 12` — a compact cell, so the sphere covers
+  `B_xc`) and is unstable at `q = (0, 0, 1/4)`.
+
+**The obvious third comparison does not work, and establishing that is this phase's
+negative result.** The plan was the pairing `ELK-FEATURES.md` §6 names: a wavevector where
+`lambda_max > 1` must be one where a spin spiral is actually lower in energy, and
+`run_spiral_scan` — a sequence of independent self-consistent fields — shares no machinery
+with a sum over states plus a matrix inversion. The signs do agree on fcc hydrogen
+(`lambda = 1.018, 1.270, 0.667` at `q_3 = 0, 1/4, 1/2` against `E(q) - E(0)` of
+`0, -150, -59` meV) and it means nothing, because **the spiral's own SCF leaves the
+magnetic branch**. Measured, with the converged moment printed at every point: at
+`q_3 = 1/2` the 90-degree spiral converges to `|m| = 0.0001` — the *nonmagnetic* solution —
+so its "-59 meV" is the demagnetization energy and not a spin-wave energy at all; at
+`q_3 = 1/4` it lands on a different collinear solution at `|m| = 0.248`. **Starting from a
+small cone does not fix it**: at `angle1 = 15` degrees the cone collapses to 0 at `q = 1/4`
+and the moment to zero at `q = 1/2`, because nothing holds it — which is exactly why Elk's
+own `Ni-magnon-spiral` example runs `fsmtype = -1` with a large field along `momfix`.
+
+**And the case cannot be rescued by choosing a better lattice constant, which is the part
+worth carrying.** At `a = 6.5` bohr the ferromagnetic solution is **58 meV above the
+nonmagnetic one** — it is metastable, not a ground state. A scan finds no spacing where a
+half-filled fcc hydrogen lattice is a stable ferromagnet: `a = 7.0` is 7 meV below the
+nonmagnetic solution and still soft at finite `q`, `a = 8.0` is fully polarized and 64 meV
+below it and **still soft** (`lambda` = 1.049, 1.080, 1.126 at `q_3` = 0, 1/4, 1/2). That is
+not a defect of any of them; a half-filled band on any lattice prefers antiferromagnetic
+order, and the susceptibility says so. **So the only stable ferromagnet reachable here is
+fcc nickel**, whose enhancement *falls* away from `q = 0` (1.0000, 0.633, 0.583 at
+`q = 0`, `(0,1/4,1/4)` and `X` after the Goldstone correction) and whose magnons are therefore
+at positive energy. Distinguishing those two behaviours is what the quantity is for, and it
+is the strongest qualitative statement the phase supports.
+
+**What replaced it in the test file** are two checks that are cheaper and actually exact:
+`X_0(-q)` equals `X_0(q)` with its G indices reflected on a centrosymmetric crystal, which
+exercises the umklapp on a second and independent pattern (`q -> q + G` moves every
+k-point's umklapp by the same amount, where `q -> -q` does not); and `X_0` has no spectral
+weight below the smallest spin-flip energy the bands allow, which relates the assembled
+matrix to the eigenvalues that went into it with nothing fitted between them.
+
+#### The Goldstone correction, opt-in and shown rather than assumed
+
+`goldstone_correction = True` scales the kernel by `1/lambda_max(q = 0)`, the **same factor
+at every q**, so that the uniform mode sits at exactly zero. This is what the magnon
+literature does (a kernel scaling in Sasioglu, Buczek, Rousseau and Skovhus-Olsen; a shift
+of the Stoner spectrum in Muller-Friedrich-Blugel), and the reason it is a *kernel* scaling
+here rather than a shift is the measurement above: what limits the identity on a transition
+metal is the response sphere, which truncates the kernel's own matrix. It is off by default
+and the factor is reported on every point, because it is honest only if the error it absorbs
+is q-independent — and the way to know is to run a dispersion at two `(nbnd,
+ecut_response)` settings and check that the corrected curves agree better than the
+uncorrected ones.
+
+#### Elk's committed magnon reference, and the field that nearly disqualified it
+
+`examples/TDDFT-magnetic-response/Ni-magnetic-response` is fcc nickel at
+`vecql = (0.1, 0.1, 0)` on a 10x10x10 shifted grid with `CHI_T.OUT` and `CHI0_T.OUT`
+committed beside it. Its `chi` has a pole -- Re `chi` through zero and Im `chi` peaked at
+the same point -- at **117.92 meV**, with the Stoner continuum's own onset near 172 meV
+above it.
+
+**The input applies a magnetic field, and this phase's first reading of that was wrong.**
+`bfieldc = (0, 0, 0.01)` with `readinput.f90`'s default `reducebf = 1.0` means the field is
+applied and never reduced, its static `chi` is a *finite* -7.93 where an unfielded
+ferromagnet's would diverge, and this package refuses an applied field for the quantity by
+name -- from which it was concluded that the two numbers were not comparable. That
+conclusion came from *estimating* the field's size rather than reading it, which is the
+mistake this repository's own method note warns about. Elk's Zeeman term is
+`cb B . sigma` with `cb = gfacte/(4 solsc)` (`eveqnsv.f90:55`), so
+
+    2 cb B = 2 x 3.6529e-3 x 0.01 Ha = 1.99 meV
+
+and the gap is **1.7 per cent of the pole**, not the bulk of it. Elk's field-free magnon is
+therefore **115.93 meV**.
+
+**Against that, this code gives 115.04 meV: 0.8 per cent.** Same cell, same lattice
+constant, same 10x10x10 shifted grid, same functional family, and the wavevector converted
+between the two codes' primitive bases (Elk's `(0.1, 0.1, 0)` is `(-0.1, 0, -0.1)` in QE's).
+The **moment** agrees on the same run, 0.6178 mu_B here against Elk's 0.6152, and the
+**sign** of the static `chi` agrees -- Elk's is negative, which independently confirms the
+convention this module settles.
+
+**Both the corrected and the uncorrected number are recorded, and which to quote is not
+decided by which agrees better.** The leading eigenvalue on this grid is 1.00730, so the
+Goldstone-corrected kernel is 0.7 per cent weaker and the pole moves **up** by 8.04 meV --
+115.04 uncorrected, **123.08 corrected**, against Elk's field-free 115.93: **-0.8 and +6.2
+per cent**. So the correction moves it *away*, and choosing the uncorrected one because it
+lands closer would be a fit. The correction is justified by the Goldstone theorem rather
+than by this comparison, and 0.7 per cent of kernel being worth 7 per cent of magnon is
+itself the useful number: it is how steeply `lambda(omega)` crosses one, and therefore how
+hard the residual has to be pushed down before a magnon energy is worth a second digit.
+
+**Four things are still not like-for-like and all four favour Elk on cost rather than on
+accuracy**: LAPW against a 60 Ry plane-wave sphere; `gmaxrf = 5.0` is a **25 Ry** response
+sphere against the 60 Ry this cell needs for a 2 per cent Goldstone residual; `emaxrf = 1.5`
+Ha caps the states summed over where `nbnd` here does not; and the smearing schemes differ.
+That the magnon lands within one per cent across all of that is the phase's strongest
+single number.
+
+**The reference's own reproducibility belongs beside it.** Rebuilding the example with Elk
+11.0.2 here reproduces the committed `CHI_T.OUT`'s **pole to the meV** (117.9 in both) and
+its *values* only to 0.49 absolute on numbers of order 8 to 28 -- a few per cent, on a
+function evaluated next to a pole. That is the resolution the file supports, and it is why
+the comparison above is quoted to a tenth of a meV in the pole and not in `chi` itself.
+
+#### Refused by name
+
+Each is a missing term rather than a missing convenience, and each would otherwise produce
+a plausible dispersion.
+
+- **`nspin != 2`.** Without a collinear magnetization there is no transverse channel to
+  separate and no `B_xc/m`; a *noncollinear* ground state needs Elk's full 4x4
+  `genspchi0`, which is a different object rather than a spin axis on this one.
+- **Ultrasoft and PAW.** `<u_i|e^{-i(q+G).r}|u_j>` is not the plane-wave overlap when the
+  charge is not all in `|psi|^2`, and this is the same missing `Q_ij(q+G)` that P40
+  measured and did not close in the charge channel.
+- **A spin spiral**, whose rotating frame is not the frame the kernel was derived in.
+- **A Hubbard `U`**, which responds to the magnetization too.
+- **An applied magnetic field or a constrained moment**, for the reason above: the magnon
+  acquires a Zeeman gap this construction does not carry.
+- **A potential-only meta-GGA**, there being no `E_xc` for the rotation argument to be
+  about.
+- **A symmetry-reduced k-set**, both because `X_0(G, G')` is a matrix in two G indices that
+  nothing here symmetrises and because the `k + q` fold needs the grid closed under
+  translation by `q`.
+
+#### What nickel gives, and what is not claimed
+
+`m = 0.5788` mu_B on a 4x4x4 grid at `ecutwfc = 60`, a Goldstone residual of **1.99 per
+cent** at `nbnd = 30`, `ecut_response = 60` (kernel scale 0.99387), and magnons of **432
+meV** at `q = (0, 1/4, 1/4)` -- 0.89 inverse angstrom along `Gamma`-`X` -- and **396 meV**
+at `X`, the dispersion turning over as it approaches the zone boundary. **The two settings
+agree**: at the cheaper `nbnd = 24`, `ecut_response = 40` that the notebook runs (residual
+2.29 per cent) the same mode comes out at **434 meV**, 2 meV from the converged one.
+
+Nickel's measured spin-wave stiffness of about 550 meV A^2 would put a quadratic magnon at
+438 meV at that wavevector, which is the same size -- and the agreement should not be
+pushed, because the quadratic law is long past its range there. **This is not a converged
+spin-wave stiffness and is not compared with one.** A 4x4x4 grid's smallest wavevector is
+already where nickel's magnon is Landau-damped; resolving the small `q` where the stiffness
+is defined needs a much finer grid, which is a cost question and not a missing term:
+`Ni.pbe-nc-sg15.UPF` carries 18 valence electrons and the response is `nw npairs nm^2` with
+`nm = 561`.
+
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

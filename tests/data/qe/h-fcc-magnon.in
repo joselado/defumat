@@ -1,0 +1,55 @@
+! Face-centred-cubic hydrogen at 6.5 bohr: an itinerant ferromagnet cheap
+! enough to converge the transverse spin susceptibility on, and the cell the
+! P63 identities are measured on.
+!
+! Three things about it are deliberate.
+!
+!   * fcc rather than a chain. The kernel of the transverse channel is
+!     B_xc(r)/m(r), which grows without bound as the density falls, so a cell
+!     with vacuum has an enormous kernel where there is nothing to respond: on
+!     a hydrogen chain with 8 bohr between images |B_xc/m| reaches 173 in the
+!     tail against 21 in the core, and the leading eigenvalue of X_0 F moves
+!     from 1.13 to 0.92 as the density clip moves from 1e-6 to 1e-2. A compact
+!     cell has a density ratio of 29 rather than 1858 and the same eigenvalue
+!     is stable to the clip.
+!   * nosym and noinv with the whole 4x4x4 grid. The states at k + q are read
+!     out of this same grid, which needs it closed under translation by q, and
+!     X_0(G, G') is a matrix in two G indices that nothing here symmetrises.
+!   * a = 6.5 bohr. Below about 6 the cell is not magnetic at all and above it
+!     the density ratio climbs; here the moment is 0.53 mu_B, which is an
+!     itinerant ferromagnet rather than a set of local moments.
+!
+! **The ferromagnetic solution is not the ground state and that is why the cell
+! is here.** It converges at m = 0.53 mu_B and sits 58 meV *above* the
+! nonmagnetic solution of the same input, and the transverse susceptibility says
+! so: its leading eigenvalue exceeds one at q = (0, 0, 1/4), which means the
+! uniform state is unstable against an infinitesimal spiral of that pitch. No
+! lattice constant fixes it -- at 7.0 bohr the ferromagnet is 7 meV below the
+! nonmagnetic solution and still soft at finite q, at 8.0 it is fully polarized
+! and 64 meV below and still soft -- because a half-filled band on any lattice
+! prefers antiferromagnetic order. So this cell is the *identities* case
+! (Goldstone, periodicity, the q -> -q reflection), and fcc nickel is the
+! physics one. See PLAN.md P63.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 6.5,
+    nat = 1, ntyp = 1,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.01,
+    nspin = 2
+    nosym = .true., noinv = .true.
+    starting_magnetization(1) = 1.0
+    nbnd = 8
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H 0.0 0.0 0.0
+K_POINTS {automatic}
+ 4 4 4 0 0 0

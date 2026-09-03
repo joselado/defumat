@@ -54,6 +54,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Magnetism as a vector, fields, constrained moments | `nspin = 4`, `B_field` | [11](11_noncollinear_magnetism_and_fields.ipynb) |
 | A magnon `E(q)` without a supercell | `get_spiral_scan()` | [12](12_spin_spirals.ipynb) |
 | Which way a magnet wants to point | `get_anisotropy()` | [36](36_magnetic_anisotropy.ipynb) |
+| A spin wave, and whether the magnetic order survives it | `get_magnon_dispersion()` | [38](38_magnons.ipynb) |
 | The same `E(q)` from `dE/dq` instead | `get_spiral_scan(gradients=True)` | [12](12_spin_spirals.ipynb) |
 | A magnet's ground-state pitch | `get_spiral_relaxation()` | [14](14_spiral_relaxation.ipynb) |
 | Site-resolved `<L>`, `<S>` and `<J>` | `get_angular_momenta()` | [29](29_effective_mass_and_angular_momenta.ipynb) |
@@ -154,6 +155,7 @@ want a number.
 | [`34_electric_polarization.ipynb`](34_electric_polarization.ipynb) | Why polarization is a phase and not a dipole, the Born charge read off a displacement, and the sum rule that catches a badly sampled zone |
 | [`35_magnetoelectric_effect.ipynb`](35_magnetoelectric_effect.ipynb) | A magnetic field making an electric polarization, and the spin-orbit null that shows the effect is spin-orbit coupling and nothing else |
 | [`37_structure_factors.ipynb`](37_structure_factors.ipynb) | The Fourier coefficients a diffractometer measures: silicon's forbidden reflection as a picture of the bond charge, and an antiferromagnet scattering neutrons where it scatters no X-rays |
+| [`38_magnons.ipynb`](38_magnons.ipynb) | Spin waves: the collective mode below the Stoner continuum, the Goldstone theorem as an error bar, and a magnon going soft |
 
 ## Conventions
 
@@ -248,8 +250,8 @@ workstation core, slowest last:
 | `16` | 9 | `17` | 29 | `34` | 40 | `30` | 131 |
 | `37` | 9 | `18` | 29 | `19` | 47 | `08` | 171 |
 | `03` | 10 | `12` | 30 | `10` | 50 | `27` | 178 |
-| `05` | 10 | `21` | 30 | `20` | 57 | `35` | 276 |
-| `04` | 12 | `15` | 31 | `29` | 59 |  |  |
+| `05` | 10 | `21` | 30 | `20` | 57 | `38` | 242 |
+| `04` | 12 | `15` | 31 | `29` | 59 | `35` | 276 |
 | `22` | 12 | `24` | 31 | `11` | 81 |  |  |
 | `00` | 22 | `28` | 33 | `14` | 89 |  |  |
 

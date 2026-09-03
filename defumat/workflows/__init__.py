@@ -19,6 +19,9 @@ from defumat.workflows.pdos import (
 from defumat.workflows.relax import RelaxResult, run_relax
 from defumat.workflows.conductivity import run_conductivity
 from defumat.workflows.nesting import run_nesting
+from defumat.workflows.magnons import (MagnonDispersion, SpinSusceptibility,
+                                       run_magnon_dispersion,
+                                       run_spin_susceptibility)
 from defumat.workflows.tddft import OpticalSpectrum, run_absorption
 from defumat.workflows.polarization import run_polarization
 from defumat.workflows.sfac import run_structure_factors
@@ -44,6 +47,10 @@ __all__ = [
     "denser_grid",
     "energy_grid",
     "run_absorption",
+    "MagnonDispersion",
+    "SpinSusceptibility",
+    "run_magnon_dispersion",
+    "run_spin_susceptibility",
     "run_conductivity",
     "run_nesting",
     "run_structure_factors",
