@@ -281,7 +281,13 @@ and the datasets alone, allocating nothing:
 print(Calculator.from_file("scf.in").estimate().report())
 \end{lstlisting}
 
-\noindent or \code{python3 -m defumat.cli size scf.in}. It reports $n_{gm}$,
+\noindent or \code{python3 -m defumat.cli size scf.in}. \textbf{It sizes the
+run the input describes}, which means it reads that input's own
+\code{diago\_david\_ndim} and resolves \code{k\_batch} the way the SCF would ---
+an estimate that quietly assumed a library default would report a run that does
+not happen, and nobody relying on one is in a position to notice. The
+arguments and the CLI flags are \emph{overrides} of the file, and the report's
+header states which assumptions it used. It reports $n_{gm}$,
 $n_{gms}$, $n_{pwx}$, $n_{bnd}$, $n_{kb}$ and both FFT grids --- \emph{exactly},
 from the same predicates the setup selects with, which is asserted against a
 real \code{Calculation} rather than trusted --- and a floor on the bytes for the

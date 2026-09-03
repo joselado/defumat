@@ -160,3 +160,79 @@ def test_the_spin_channels_do_not_double_the_eigensolver(pseudo_dir):
     assert two.nbnd == one.nbnd == 8
     assert (two.arrays["wavefunctions (nspin,nk,nbnd,ndim)"]
             == 2 * one.arrays["wavefunctions (nspin,nk,nbnd,ndim)"])
+
+
+# --- the estimate must size the run the input describes ---------------------
+#
+# The failure this guards is the module's whole reason for existing turned
+# against it: an estimate that silently assumes a library default reports a run
+# that does not happen, and nobody relying on it is in a position to notice.
+# It was found in the field on `diago_david_ndim` and was worth 35 GB.
+
+
+_DAVID_2 = SILICON.replace("&electrons\n", "&electrons\n  diago_david_ndim = 2\n")
+
+
+def test_the_estimate_uses_the_inputs_own_diago_david_ndim(pseudo_dir):
+    """An input that sets it must be sized at it, not at ``DAVID_NDIM``.
+
+    The same calculator would *run* at 2, so sizing at 4 describes a different
+    calculation -- and the subspace is the largest array in a large run, so the
+    discrepancy is not small.
+    """
+    calculator = _calculator(_DAVID_2, pseudo_dir)
+    assert calculator.defaults["david"] == 2
+
+    estimate = calculator.estimate()
+    assert estimate.davidson_basis == 2
+    # ... and it is genuinely half of what the default would give.
+    plain = _calculator(SILICON, pseudo_dir).estimate()
+    assert plain.davidson_basis == 4
+    assert (estimate.arrays["Davidson subspace psi+hpsi"]
+            == plain.arrays["Davidson subspace psi+hpsi"] // 2)
+
+
+def test_an_explicit_argument_still_overrides_the_input(pseudo_dir):
+    """The flags are overrides, not replacements of the reading."""
+    calculator = _calculator(_DAVID_2, pseudo_dir)
+    assert calculator.estimate(davidson_basis=4).davidson_basis == 4
+
+
+def test_the_library_default_is_not_a_literal():
+    """``DAVID_NDIM`` and the estimate cannot drift apart.
+
+    Writing 4 in two places is how they would.
+    """
+    from defumat.solvers.davidson import DAVID_NDIM
+
+    calculator_free = estimate_size.__defaults__
+    assert DAVID_NDIM == 4
+    # The signature default is None -- "ask the constant" -- rather than 4.
+    assert None in calculator_free
+
+
+def test_the_report_says_what_it_assumed(pseudo_dir):
+    """Two estimates differing only in an assumption must be tellable apart.
+
+    ``davidson_basis`` and ``k_batch`` are not properties of the input, so a
+    reader comparing two reports has to be able to see which one moved.
+    """
+    report = _calculator(_DAVID_2, pseudo_dir).estimate().report()
+    assert "diago_david_ndim = 2" in report
+    assert "k in flight" in report
+
+
+def test_k_batch_is_resolved_the_way_the_run_would_resolve_it(pseudo_dir):
+    """The same alignment, one option along.
+
+    ``Calculator`` defaults ``k_batch`` to ``"default"``, which
+    :func:`~defumat.batching.resolve_k_batch` turns into QE's one-k-point loop
+    on a CPU. An estimate that assumed the whole axis instead would overstate
+    the eigensolver on every multi-k cell.
+    """
+    from defumat.batching import resolve_k_batch
+
+    estimate = _calculator(SILICON, pseudo_dir).estimate()
+    expected = resolve_k_batch("default")
+    if expected is not None:
+        assert estimate.k_batch == min(expected, estimate.nk)

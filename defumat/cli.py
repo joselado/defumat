@@ -41,17 +41,22 @@ def _size(path: str, pseudo_dir, k_batch, david) -> int:
     import warnings
 
     from defumat.calculator import Calculator
-    from defumat.sizing import estimate_size
 
     with warnings.catch_warnings():
         # ``K_POINTS gamma`` warns on substitution; the report says it plainly
         # and at more length, so the warning is noise here.
         warnings.simplefilter("ignore")
         calculator = Calculator.from_file(path, pseudo_dir=pseudo_dir, announce=False)
-        estimate = estimate_size(
-            calculator.system, calculator.pseudos,
-            k_batch=k_batch, davidson_basis=david,
-        )
+        # Through the calculator rather than around it: the flags are
+        # *overrides* of what the input said, and what they do not override
+        # comes from the input. Reaching for ``estimate_size`` directly here
+        # would size a run the file does not describe.
+        options = {}
+        if david is not None:
+            options["davidson_basis"] = david
+        if k_batch is not None:
+            options["k_batch"] = k_batch
+        estimate = calculator.estimate(**options)
     print(estimate.report())
     return 0
 
@@ -339,8 +344,9 @@ def main(argv: list[str] | None = None) -> int:
                       help="where the UPF files are (default: the input's directory)")
     size.add_argument("--k-batch", type=int, default=None,
                       help="k-points in flight in the eigensolver (default: all)")
-    size.add_argument("--david", type=int, default=4,
-                      help="Davidson subspace multiple nvecx/nbnd (QE's default 4)")
+    size.add_argument("--david", type=int, default=None,
+                      help="Davidson subspace multiple nvecx/nbnd, overriding "
+                           "the input's diago_david_ndim (QE's default is 4)")
 
     dos = sub.add_parser("dos", help="SCF, then a density of states on a denser k-grid")
     dos.add_argument("input", help="path to a pw.x input file")

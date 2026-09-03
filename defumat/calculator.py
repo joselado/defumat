@@ -318,9 +318,26 @@ class Calculator:
 
         ``options`` are :func:`~defumat.sizing.estimate_size`'s: ``nbnd``,
         ``k_batch`` and ``davidson_basis``.
+
+        **What is not given is taken from this calculator's own defaults**, not
+        from the library's, because the question this answers is "will *this
+        run* fit" and any other reading makes the answer describe a run that
+        does not happen. An input saying ``diago_david_ndim = 2`` is sized at 2,
+        and ``k_batch`` is resolved the way the SCF would resolve it -- which is
+        QE's one-k-point loop on a CPU, not the whole axis. Sizing the first of
+        those at the library default was worth 35 GB on the cell this was
+        written for; it is the same mistake as sizing ``K_POINTS gamma`` as the
+        request rather than as the substitution, one option along.
         """
+        from defumat.batching import resolve_k_batch
         from defumat.sizing import estimate_size
 
+        options.setdefault("davidson_basis", self.defaults.get("david"))
+        options.setdefault("nbnd", self.defaults.get("nbnd"))
+        if options.get("k_batch") is None:
+            options["k_batch"] = resolve_k_batch(
+                self.defaults.get("k_batch", "default")
+            )
         return estimate_size(self.system, self.pseudos, **options)
 
     @classmethod

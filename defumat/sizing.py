@@ -150,6 +150,12 @@ class SizeEstimate:
     doublegrid: bool
     #: Precision policy the cell carries.
     precision: str
+    #: The Davidson subspace multiple and the k-points in flight this was
+    #: sized for. Reported because they are *assumptions* rather than
+    #: properties of the input, and a reader comparing two estimates has to be
+    #: able to see which one moved.
+    davidson_basis: int
+    k_batch: int | None
     #: ``name -> bytes`` for each array whose size the basis fixes.
     arrays: dict = field(default_factory=dict)
 
@@ -188,7 +194,9 @@ class SizeEstimate:
             f"  smooth FFT grid      {'x'.join(str(n) for n in self.smooth_grid)}"
             f"  ({self.smooth_points} points)",
             "",
-            f"Memory floor ({self.precision} precision)",
+            f"Memory floor ({self.precision} precision, "
+            f"diago_david_ndim = {self.davidson_basis}, "
+            f"k in flight = {self.k_batch if self.k_batch is not None else 'all'})",
         ]
         if self.gamma_requested and not self.gamma_only:
             lines[1:1] = [
@@ -209,7 +217,7 @@ def estimate_size(
     pseudos,
     nbnd: int | None = None,
     k_batch: int | None = None,
-    davidson_basis: int = 4,
+    davidson_basis: int | None = None,
 ) -> SizeEstimate:
     """Size a run from its input alone, allocating nothing on the device.
 
@@ -224,8 +232,21 @@ def estimate_size(
             :mod:`defumat.batching`'s dial. ``None`` means the whole axis, which
             is what an accelerator defaults to; ``1`` is QE's own loop and is
             the CPU default.
-        davidson_basis: the subspace multiple ``nvecx/nbnd``. QE's ``cegterg``
-            default is 4.
+        davidson_basis: the subspace multiple ``nvecx/nbnd`` --
+            ``diago_david_ndim``. ``None`` takes
+            :data:`~defumat.solvers.davidson.DAVID_NDIM`, which is what a run
+            with nothing set uses; it is read from the constant rather than
+            written as a literal so the two cannot drift apart.
+
+            **A caller who has a** :class:`~defumat.calculator.Calculator`
+            **should not be passing this by hand**:
+            :meth:`~defumat.calculator.Calculator.estimate` fills it from the
+            same defaults the run would use, which is the whole point of a size
+            estimate. Sizing at 4 an input that says ``diago_david_ndim = 2``
+            reports a run that does not happen, and by 35 GB on the cell this
+            module was written for -- the same mistake as sizing
+            ``K_POINTS gamma`` as the request rather than the substitution, one
+            option along.
 
     Returns:
         a :class:`SizeEstimate`. Its counts are exact; its bytes are a floor.
@@ -299,6 +320,10 @@ def estimate_size(
         )
     nkb = sum(len(projector_channels(pseudos[t])) for t in structure.types)
 
+    from defumat.solvers.davidson import DAVID_NDIM
+
+    if davidson_basis is None:
+        davidson_basis = DAVID_NDIM
     name = getattr(cell.precision, "name", "double")
     zc, zr = _COMPLEX_BYTES.get(name, 16), _REAL_BYTES.get(name, 8)
     nk = len(npw)
@@ -358,5 +383,6 @@ def estimate_size(
         smooth_grid=tuple(int(n) for n in smooth_grid),
         gamma_requested=gamma_requested, gamma_only=gamma_only,
         doublegrid=doublegrid, precision=name,
+        davidson_basis=int(davidson_basis), k_batch=k_live,
         arrays=arrays,
     )
