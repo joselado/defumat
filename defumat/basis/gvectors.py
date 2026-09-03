@@ -70,6 +70,21 @@ class GVectors(eqx.Module):
         """
         return _fft_index(self.miller, self.grid)
 
+    @property
+    def fft_index_minus(self) -> jnp.ndarray:
+        """Flat index of **-G** in the FFT box -- QE's ``nlm``.
+
+        Only meaningful for a :attr:`gamma_only` set, where the stored half
+        sphere carries one G of each ``(G, -G)`` pair and the other half is
+        recovered from ``c(-G) = conj(c(G))`` -- a field with real values in
+        real space, which for ``gamma_only`` every field is.
+
+        ``fft_index_minus[0] == fft_index[0]``, both being ``G = 0``, and every
+        caller has to skip that entry rather than add it twice. It is entry 0
+        because :func:`generate_gvectors` sorts ``G = 0`` first and asserts it.
+        """
+        return _fft_index(-self.miller, self.grid)
+
     def shell_boundaries(self, cell: Cell, tolerance: float = 1e-8) -> np.ndarray:
         """Indices where a new ``|G|^2`` shell starts. Useful for radial tables."""
         g2 = np.asarray(self.g2(cell))

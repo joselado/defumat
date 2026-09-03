@@ -200,11 +200,17 @@ class SizeEstimate:
         ]
         if self.gamma_requested and not self.gamma_only:
             lines[1:1] = [
-                "  NOTE: K_POINTS gamma was requested, but the half-sphere",
-                "        storage is not consumed anywhere, so the run is an",
-                "        explicit k = 0 on the FULL sphere. Everything below is",
-                "        sized for that -- roughly twice what the gamma trick",
-                "        would cost.",
+                "  NOTE: K_POINTS gamma was requested and cannot be consumed by",
+                "        this run (it needs norm-conserving and nosym), so it is",
+                "        an explicit k = 0 on the FULL sphere. Everything below",
+                "        is sized for that -- about twice what gamma would cost.",
+            ]
+        elif self.gamma_only:
+            lines[1:1] = [
+                "  NOTE: gamma-only storage IS in use: one plane wave of each",
+                "        (G, -G) pair, so npwx and every array a band lives in",
+                "        is halved. The dense G set is whole -- only the",
+                "        wavefunction sphere halves.",
             ]
         for name, size in sorted(self.arrays.items(), key=lambda kv: -kv[1]):
             lines.append(f"  {name:<34s}{gb(size)}")
@@ -251,22 +257,25 @@ def estimate_size(
     Returns:
         a :class:`SizeEstimate`. Its counts are exact; its bytes are a floor.
     """
-    # What the SCF will actually run, which is not always what was asked for:
-    # ``K_POINTS gamma`` is substituted for an explicit k = 0 on the full
-    # sphere. Sizing the request rather than the run would understate every
-    # array by two, which is the wrong direction for a feasibility estimate.
-    from defumat.scf.driver import _without_gamma_storage
+    # What the SCF will actually run, which is not always what was asked for.
+    # ``K_POINTS gamma`` is *consumed* where the run can consume it and
+    # substituted for an explicit k = 0 on the full sphere where it cannot, and
+    # this has to mirror that decision exactly -- sizing the request rather than
+    # the run understates every array by two, and sizing the substitution where
+    # the run consumes the half sphere overstates them by two.
+    from defumat.scf.driver import _without_gamma_storage, gamma_storage_is_consumable
 
     gamma_requested = bool(system.kpoints.gamma_only)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        system = _without_gamma_storage(system)
+    gamma_only = gamma_storage_is_consumable(system, pseudos)
+    if not gamma_only:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            system = _without_gamma_storage(system)
 
     cell = system.cell
     structure = system.structure
     bg = np.asarray(cell.bg_2pi_alat)
     at = np.asarray(cell.at_alat)
-    gamma_only = bool(system.kpoints.gamma_only)
 
     # The FFT box carries the fractional translations' divisibility, exactly as
     # ``build_basis`` sets it -- and ``nosym`` removes that constraint, which
@@ -289,9 +298,12 @@ def estimate_size(
     else:
         gcut_smooth, smooth_grid = gcut_rho, dense_grid
 
-    ngm = _count_sphere(dense_grid, bg, gcut_rho, gamma_only)
+    # The **dense** set is whole whatever the storage is: only the plane-wave
+    # sphere halves (``build_basis``). That is why ``ngm`` below carries no
+    # ``gamma_only`` and ``npwx`` does.
+    ngm = _count_sphere(dense_grid, bg, gcut_rho, False)
     ngms = ngm if not doublegrid else _count_sphere(
-        dense_grid, bg, gcut_smooth, gamma_only
+        dense_grid, bg, gcut_smooth, False
     )
 
     gcut_wfc = gcut_from_ecut(system.ecutwfc, cell.alat)

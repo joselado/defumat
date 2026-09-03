@@ -10417,6 +10417,83 @@ note that matrix-free forward is **not** matrix-free backward unless the scan
 body is rematerialised (`jax.checkpoint`), or the force's tape holds the
 per-atom slices anyway.
 
+### P68 — Gamma-only storage, consumed: half the plane waves. ✅ DONE.
+
+`K_POINTS gamma` generated the half-sphere storage and nothing consumed it, so
+such a run was substituted by an explicit `k = 0` on the whole sphere. It is
+consumed now, and the phase was framed as a **memory** item rather than a speed
+one: P67's estimator put the 157-atom FePc/SnTe slab at 189 GB on a 141 GB card,
+and this takes it to **95.7 GB** at `diago_david_ndim = 4` and **72.4 GB** at 2.
+`npwx` goes 761911 → **380956**, against 380978 from `pw.x`'s own analytic
+formula.
+
+**The design decision is that only the wavefunction sphere halves.** `pw.x`
+halves the dense G set too; this does not. The memory is entirely in the
+plane-wave-sized arrays -- on that slab the density and potential are 0.4 GB
+against 139 GB of Davidson subspace -- so halving the dense set as well is worth
+a fifth of a per cent and costs a conjugate fill inside every consumer of a
+*real field*: `to_dense`, `v_of_rho`, the GGA gradient, the augmentation charge,
+the symmetriser. **It was tried first the other way and that is how the
+trade-off got measured**: with the dense set halved the SCF converged to
+-13.057 Ry against -14.519, because the density round-trips through G space in
+half a dozen places and each needs the fill. Confining the trick to the
+wavefunctions made the GGA work with no change to `basis/gradients.py` at all --
+`_reject_gamma_only` simply never fires, since the dense set it guards is whole.
+
+The consequence to record is that **`ngm` here is not the `ngm` `pw.x` prints**
+for the same input. The relation is exact, `ngm_full = 2 ngm_QE - 1`, and
+`tests/regression/test_basis.py` asserts *that* rather than equality -- which is
+the stronger statement, since it says this code's set is precisely the one QE's
+is half of.
+
+**Three things carry the trick and nothing else does.** The field is rebuilt
+from both halves (`g_to_r_gamma`, skipping `G = 0` in the conjugate scatter
+because `nlm[0] == nl[0]` and the scatter accumulates). Every sum over plane
+waves becomes `2 Re(sum) - (the G = 0 term)`, that vector being its own
+conjugate partner rather than half of a pair -- `gamma_inner`, and QE says the
+same thing with `gstart`: `calbec_gamma`'s `DGEMM` factor `2.0_DP` followed by
+`betapsi -= beta(1,:) psi(1,:)` (`Modules/becmod.f90:321`), and `regterg`'s four
+`MYDGER(-1.D0, ...)` calls. And `Im c(0)` must stay zero, which `regterg`
+imposes at `regterg.f90:174` and `:375` every time a vector enters the subspace.
+
+**The last is the silent one.** A complex `c(0)` makes the rebuilt field complex
+and the run converges to a plausible wrong answer rather than failing; the
+subspace matrices are taken `.real` before the eigensolve for the same reason,
+since otherwise `generalised_eigh` hands back an arbitrary phase per eigenvector
+and puts the imaginary part back.
+
+**The validation needs no other code**, which is what makes this phase cheap to
+trust: an explicit `k = 0` on the whole sphere is the same calculation in the
+other storage, so the two agree to *round-off* rather than to a tolerance --
+totals to **1e-14 Ry**, eigenvalues to **3e-15** and forces to **3e-16
+Ry/bohr**, on LDA, PBE, LSDA and PBE+LSDA.
+
+**Two bugs, and each announced itself in a different place.** The force sums in
+`forces/energy.py` are written independently of the operator's, and with their
+`G = 0` correction missing the total energy was right to **3e-12 Ry** while the
+force was wrong by **0.4 Ry/bohr** on a force of 0.06 -- the frozen energy is
+the functional the force is the gradient of, so being stationary at the ground
+state hides an error in its derivative. And `rotate_wfc`'s overlaps
+(`solvers/subspace.py`) had no gamma branch, which cost **19 iterations against
+8** and converged to the right answer anyway: the iteration count was the only
+symptom, and chasing it is what found it. Round-off agreement came only after
+both.
+
+**Substituted rather than refused**, with the existing warning: an ultrasoft or
+PAW dataset (`addusdens` and `newd` need their own `fact = 2`, and `Q_ij(G)` is
+tabulated on a set this does not halve -- a gap rather than a missing term), a
+run that uses symmetry (`symmetry_maps` carries a stored `G` onto an unstored
+`-G'`; it raises rather than being silently wrong, but `nosym = .true.` is the
+way out), and a spinor or spiral run. `Calculation.gamma_only` is the switch and
+`gamma_storage_is_consumable` is the rule; `estimate_size` mirrors it exactly,
+because sizing the substitution where the run consumes the half sphere
+overstates every band-sized array by two.
+
+**Not implemented, and it is the speed half rather than the memory half**:
+`vloc_psi_gamma`'s two-bands-per-FFT packing, which would halve the transform
+count as well. The stick path is bypassed under gamma for the same reason -- a
+half sphere occupies half the columns and the conjugate fill needs the others.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

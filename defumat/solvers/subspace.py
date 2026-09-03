@@ -14,6 +14,8 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+
+from defumat.basis.fft import force_real_g0
 from jax.scipy.linalg import solve_triangular
 
 __all__ = ["generalised_eigh", "rayleigh_ritz"]
@@ -152,6 +154,14 @@ def rayleigh_ritz(hamiltonian, ik, vectors, nbnd: int):
     """
     mask = hamiltonian.state_mask[ik]
     vectors = jnp.where(mask, vectors, 0.0)
+    # ``rotate_wfc``'s gamma counterpart (``rotate_wfc_gamma``) works in real
+    # arithmetic, so the trial vectors enter with ``Im c(0) = 0`` and the two
+    # subspace matrices are real. Without the first the rotated vectors carry a
+    # complex ``G = 0`` into the SCF; without the second the atomic guess is
+    # rotated by the wrong combinations, which costs iterations rather than
+    # correctness -- the run still converges, to the same answer, more slowly.
+    gamma_only = hamiltonian.gamma_only
+    vectors = force_real_g0(vectors, gamma_only)
     applied = hamiltonian.apply(vectors, ik)
 
     h = vectors.conj() @ applied.T
@@ -162,8 +172,21 @@ def rayleigh_ritz(hamiltonian, ik, vectors, nbnd: int):
     # and the first Davidson call starts further from the answer than a random
     # guess would. ``rotate_wfc`` calls ``s_psi`` for exactly this reason.
     s = vectors.conj() @ hamiltonian.apply_s(vectors, ik).T
+    if gamma_only:
+        # ``2 Re(...) - (G = 0)``, the same correction every plane-wave sum
+        # under half-sphere storage takes.
+        h = 2.0 * h.real - jnp.real(
+            vectors[:, :1].conj() * applied[:, :1].T
+        )
+        s = 2.0 * s.real - jnp.real(
+            vectors[:, :1].conj()
+            * hamiltonian.apply_s(vectors, ik)[:, :1].T
+        )
+        h = h.astype(vectors.dtype)
+        s = s.astype(vectors.dtype)
     h = 0.5 * (h + h.conj().T)
     s = 0.5 * (s + s.conj().T)
 
     values, coefficients = generalised_eigh(h, s)
-    return values[:nbnd].real, coefficients[:, :nbnd].T @ vectors
+    rotated = coefficients[:, :nbnd].T.astype(vectors.dtype) @ vectors
+    return values[:nbnd].real, force_real_g0(rotated, gamma_only)

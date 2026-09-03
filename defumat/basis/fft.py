@@ -26,7 +26,9 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 __all__ = ["scatter_to_box", "gather_from_box", "g_to_r", "r_to_g",
-           "sticks_to_r", "r_to_sticks"]
+           "sticks_to_r", "r_to_sticks",
+           "scatter_to_box_gamma", "g_to_r_gamma", "r_to_g_gamma",
+           "gamma_inner", "force_real_g0"]
 
 
 def scatter_to_box(coefficients: jnp.ndarray, fft_index: jnp.ndarray, grid) -> jnp.ndarray:
@@ -64,6 +66,105 @@ def r_to_g(field: jnp.ndarray, fft_index: jnp.ndarray) -> jnp.ndarray:
     n1, n2, n3 = field.shape[-3:]
     box = jnp.fft.fftn(field, axes=(-3, -2, -1)) / (n1 * n2 * n3)
     return gather_from_box(box, fft_index)
+
+
+# --- gamma-only: half the sphere, and the other half by conjugation -----------
+#
+# At ``k = 0`` a Kohn-Sham state can be chosen real, and then
+# ``c(-G) = conj(c(G))``: half the sphere carries all the information and QE
+# stores only that half (``ggen``'s ``gamma_only`` branch, reproduced in
+# :func:`~defumat.basis.gvectors._half_sphere`). Everything below is what it
+# costs to *consume* that storage rather than merely produce it.
+#
+# **``G = 0`` is the whole difficulty and it is not symmetric with the rest.**
+# Every other stored G stands for a pair and is worth twice its stored value;
+# ``G = 0`` is its own partner and is worth once. So a sum over the full sphere
+# becomes ``2 Re(sum over the stored half) - (the G = 0 term)``, and the
+# scatter that rebuilds the box must not write ``G = 0`` twice. QE says the same
+# thing with ``gstart``: ``gstart == 2`` means "this rank holds G = 0, so skip
+# entry 1 and correct for it", and `regterg.f90` spends four `MYDGER` calls and
+# two explicit ``CMPLX(DBLE(psi(1,:)), 0)`` on exactly that.
+
+
+def scatter_to_box_gamma(coefficients, fft_index, fft_index_minus, grid):
+    """Rebuild the whole box from the stored half, by conjugation.
+
+    ``c(-G) = conj(c(G))``, which makes the transformed field real. ``G = 0`` is
+    written once -- it is its own conjugate partner, and
+    ``fft_index_minus[0] == fft_index[0]``, so adding both would double it.
+
+    The reality of the result also needs ``Im c(0) = 0``. That is *not* imposed
+    here, because a caller whose ``c(0)`` has drifted complex has a bug upstream
+    that silently zeroing it would hide -- see :func:`force_real_g0`, which is
+    where QE imposes it and where this code imposes it too.
+    """
+    box = scatter_to_box(coefficients, fft_index, grid)
+    n1, n2, n3 = grid
+    flat = box.reshape(coefficients.shape[:-1] + (n1 * n2 * n3,))
+    flat = flat.at[..., fft_index_minus[1:]].add(coefficients[..., 1:].conj())
+    return flat.reshape(coefficients.shape[:-1] + (n1, n2, n3))
+
+
+def g_to_r_gamma(coefficients, fft_index, fft_index_minus, grid):
+    """Half-sphere coefficients -> the **real** field on the grid.
+
+    The imaginary part is discarded rather than returned: it is zero for a
+    consistent input and round-off otherwise, and every consumer of this wants a
+    real field. Callers that need to *check* the reality should compare against
+    the full-sphere transform, which is what the tests do.
+    """
+    box = scatter_to_box_gamma(coefficients, fft_index, fft_index_minus, grid)
+    n = grid[0] * grid[1] * grid[2]
+    return (jnp.fft.ifftn(box, axes=(-3, -2, -1)) * n).real
+
+
+def r_to_g_gamma(field, fft_index):
+    """A real field on the grid -> the stored half of its coefficients.
+
+    The same gather as :func:`r_to_g`; only half the indices are asked for. No
+    factor: the stored coefficients *are* the field's coefficients, and the
+    doubling belongs to sums over them, not to the transform.
+    """
+    return r_to_g(field, fft_index)
+
+
+def gamma_inner(a, b, gamma_only: bool, keepdims: bool = False):
+    """``<a|b>`` over a plane-wave axis, on a half sphere or a whole one.
+
+    For ``gamma_only`` the stored half is doubled and ``G = 0`` -- which stands
+    for itself rather than for a pair -- is counted once::
+
+        <a|b> = 2 Re sum_stored conj(a) b  -  Re(conj(a_0) b_0)
+
+    and the result is **real**, which is the point: `regterg` works with real
+    subspace matrices, so a complex overlap here is round-off that
+    ``generalised_eigh`` would turn into an arbitrary phase per eigenvector and
+    hence a complex ``c(0)`` and a field that is no longer real.
+
+    One helper rather than the same three lines at each site, because the
+    ``G = 0`` correction is exactly the term that gets dropped in one place out
+    of ten and only an energy comparison notices.
+    """
+    product = jnp.sum(a.conj() * b, axis=-1, keepdims=keepdims)
+    if not gamma_only:
+        return product
+    zero = a[..., :1].conj() * b[..., :1]
+    if not keepdims:
+        zero = zero[..., 0]
+    return 2.0 * product.real - zero.real
+
+
+def force_real_g0(coefficients, gamma_only: bool):
+    """``Im c(G = 0) = 0``, which a real field requires and round-off breaks.
+
+    ``regterg.f90:174`` and ``:375``: ``psi(1,k) = CMPLX(DBLE(psi(1,k)), 0)``,
+    applied every time a vector enters the subspace. It is not cosmetic -- an
+    imaginary part at ``G = 0`` makes the rebuilt field complex, and the run
+    converges to a plausible wrong answer rather than failing.
+    """
+    if not gamma_only:
+        return coefficients
+    return coefficients.at[..., 0].set(coefficients[..., 0].real)
 
 
 # --- the stick layout ---------------------------------------------------------

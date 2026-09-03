@@ -103,7 +103,23 @@ def smooth_subset(
 
 
 def build_basis(system: System) -> Basis:
-    """Generate the G-vectors and per-k plane waves for a system."""
+    """Generate the G-vectors and per-k plane waves for a system.
+
+    **``gamma_only`` halves the plane-wave sphere and not the dense one**, which
+    is a deliberate departure from QE and is where the memory actually is. Every
+    array whose size is a plane-wave count -- the wavefunctions, ``vkb``, the
+    Davidson subspace -- halves; the density and the potential live on the dense
+    set and are three orders of magnitude smaller than those (0.4 GB against
+    139 GB on the 157-atom slab this was measured on). Halving the dense set as
+    well would save nothing worth having and would put a conjugate fill inside
+    every consumer of a *real field* -- ``to_dense``, ``v_of_rho``, the GGA
+    gradient, the augmentation charge, the symmetriser -- each a place the
+    ``G = 0`` term can be dropped silently.
+
+    So the reality trick is confined to the wavefunctions, which is the only
+    place it pays, and everything downstream of the density sees the basis it
+    has always seen.
+    """
     gamma_only = system.kpoints.gamma_only
 
     # The FFT box must be commensurate with the crystal's fractional
@@ -117,7 +133,7 @@ def build_basis(system: System) -> Basis:
     )
 
     dense = generate_gvectors(
-        system.cell, system.ecutrho, gamma_only=gamma_only, fft_factors=factors
+        system.cell, system.ecutrho, fft_factors=factors
     )
 
     dual = system.ecutrho / system.ecutwfc
@@ -126,5 +142,7 @@ def build_basis(system: System) -> Basis:
     else:
         smooth = dense
 
-    planewaves = build_plane_wave_basis(smooth, system.kpoints, system.cell, system.ecutwfc)
+    planewaves = build_plane_wave_basis(
+        smooth, system.kpoints, system.cell, system.ecutwfc, gamma_only=gamma_only
+    )
     return Basis(dense=dense, smooth=smooth, planewaves=planewaves)

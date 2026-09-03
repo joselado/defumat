@@ -1,0 +1,72 @@
+! NiI2 monolayer, spin-spiral SCF -- the pw.x form of the Elk input.
+!
+! Elk -> defumat, term by term:
+!
+!   avec (bohr)          -> ibrav = 4 (hexagonal): a1 = (a,0,0),
+!                           a2 = (-a/2, a*sqrt(3)/2, 0), a3 = (0,0,c), which is
+!                           Elk's matrix exactly. celldm(1) = 7.360483 bohr,
+!                           celldm(3) = 46.255853/7.360483 = 6.2843502254.
+!   atoms / atposl       -> ATOMIC_POSITIONS (crystal). The trailing three zeros
+!                           on each Elk position line are bfcmt (a per-atom field)
+!                           and are zero, so nothing is carried over.
+!   spinsprl + vqlss     -> noncolin = .true. + spiral_q, in lattice coordinates,
+!                           which is the same convention as vqlss.
+!   ngridk 9 9 1         -> K_POINTS automatic 9 9 1 0 0 0. nosym = .true. is
+!                           mandatory: the spin space group is not implemented,
+!                           so a spiral runs the full 81-point grid.
+!   bfieldc 0.05 0 0     -> deliberately NOT reproduced. In Elk that field is a
+!                           transverse seed that breaks spin symmetry so the
+!                           spiral can form; here starting_magnetization with
+!                           angle1 = 90 does the same job and stays out of the
+!                           total energy. An external field's energy is excluded
+!                           from the reported total by convention (P18), so
+!                           carrying it would contaminate the E(q) differences
+!                           this calculation is for.
+!   rgkmax/gmaxvr/lmaxapw-> LAPW basis knobs with no plane-wave counterpart. The
+!                           cutoff comes from the pseudopotentials instead.
+!   epspot 1e-7          -> conv_thr (on the density, Ry).
+!
+! starting_magnetization is a fraction of the *valence* charge, and this Ni
+! carries eighteen valence electrons (3s 3p semicore), so the usual "0.4" would
+! seed 7.2 Bohr magnetons on an ion whose moment is about 2. 0.15 x 18 = 2.7 is
+! the seed, verified by integrating the starting density: channel 0 gives 52.0
+! electrons and channel 1 (m_x, since angle1 = 90) gives 2.7, m_y = m_z = 0.
+!   mixtype 3 (Broyden)  -> the default mixer here is Broyden.
+!
+! Pseudopotentials: SG15 ONCV PBE-1.2, norm-conserving and *scalar*-relativistic.
+! Norm-conserving because a spiral refuses ultrasoft and PAW; scalar because a
+! fully-relativistic dataset without lspinorb is refused (average_pp is not
+! implemented) and lspinorb breaks the generalized Bloch theorem outright.
+! Ni carries 18 valence electrons (3s 3p 3d 4s) and I 17 (4d 5s 5p): 52 in all.
+ &control
+    calculation = 'scf'
+    prefix = 'nii2'
+ /
+ &system
+    ibrav = 4, celldm(1) = 7.360483, celldm(3) = 6.2843502254,
+    nat = 3, ntyp = 2,
+    ecutwfc = 30.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.01,
+    nbnd = 58,
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.15
+    angle1(1) = 90.0
+    starting_magnetization(2) = 0.0
+    angle1(2) = 90.0
+    spiral_q(1) = 0.0, spiral_q(2) = 0.0, spiral_q(3) = 0.0
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-8
+    electron_maxstep = 200
+ /
+ATOMIC_SPECIES
+ Ni  58.693  Ni.pbe-nc-sg15.UPF
+ I  126.904  I.pbe-nc-sg15.UPF
+ATOMIC_POSITIONS (crystal)
+ Ni  0.00000000000  0.00000000000  0.0000000
+ I   0.33333333333  0.66666666667  0.0615401
+ I   0.66666666667  0.33333333333  0.9384599
+K_POINTS {automatic}
+ 2 2 1 0 0 0

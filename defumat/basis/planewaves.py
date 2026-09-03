@@ -19,7 +19,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.fftgrid import gcut_from_ecut
-from defumat.basis.gvectors import GVectors
+from defumat.basis.gvectors import GVectors, _half_sphere
 from defumat.system.cell import Cell
 from defumat.system.kpoints import KPoints
 
@@ -44,6 +44,11 @@ class PlaneWaveBasis(eqx.Module):
     mask: jnp.ndarray  # (nk, npwx) bool
     npw: tuple[int, ...] = eqx.field(static=True)
     ecutwfc: float = eqx.field(static=True)
+    #: Whether only one plane wave of each ``(G, -G)`` pair is stored. The
+    #: **dense** G-vector set is whole either way -- see
+    #: :func:`~defumat.basis.builder.build_basis` for why the trick is confined
+    #: to the wavefunctions.
+    gamma_only: bool = eqx.field(static=True, default=False)
 
     @property
     def nk(self) -> int:
@@ -108,6 +113,13 @@ class PlaneWaveBasis(eqx.Module):
         """(nk, npwx) flat FFT-box index for each retained plane wave."""
         return gvectors.fft_index[self.indices]
 
+    def fft_index_minus(self, gvectors: GVectors) -> jnp.ndarray:
+        """``(nk, npwx)`` flat index of ``-(k+G)`` -- QE's ``nlm``.
+
+        For ``gamma_only`` only, where ``k = 0`` and the sphere is a half.
+        """
+        return gvectors.fft_index_minus[self.indices]
+
 
 # Setup arrays are built once, but each one built from a handful of eager
 # operations costs a separate XLA compilation -- which on a small cell is far
@@ -125,7 +137,8 @@ def _kplusg(gcart, kcart, indices, mask):
 
 
 def build_plane_wave_basis(
-    gvectors: GVectors, kpoints: KPoints, cell: Cell, ecutwfc: float
+    gvectors: GVectors, kpoints: KPoints, cell: Cell, ecutwfc: float,
+    gamma_only: bool = False,
 ) -> PlaneWaveBasis:
     """Select and pad the plane waves for every k-point.
 
@@ -134,6 +147,10 @@ def build_plane_wave_basis(
         kpoints: the k-points, in units of ``2*pi/alat``.
         cell: the unit cell.
         ecutwfc: wavefunction cutoff in Ry.
+        gamma_only: keep one plane wave of each ``(G, -G)`` pair. At ``k = 0``
+            the state can be chosen real, so the other half is
+            ``c(-G) = conj(c(G))`` and storing it is storing the same numbers
+            twice. Halves ``npwx`` and with it every array a band lives in.
     """
     gcutw = gcut_from_ecut(ecutwfc, cell.alat)
     g = np.asarray(gvectors.reduced(cell))  # (ngm, 3) in 2*pi/alat
@@ -143,7 +160,10 @@ def build_plane_wave_basis(
     for ik in range(len(k)):
         kg2 = np.sum((k[ik] + g) ** 2, axis=1)
         kg2 = np.where(kg2 <= _EPS, 0.0, kg2)
-        (indices,) = np.nonzero(kg2 <= gcutw)
+        keep = kg2 <= gcutw
+        if gamma_only:
+            keep = keep & _half_sphere(np.asarray(gvectors.miller))
+        (indices,) = np.nonzero(keep)
         # Order by |k+G|^2, as gk_sort does; ties broken by G index so the
         # result does not depend on the sorting algorithm.
         selected.append(indices[np.lexsort((indices, np.round(kg2[indices], 12)))])
@@ -162,6 +182,7 @@ def build_plane_wave_basis(
     return PlaneWaveBasis(
         indices=jnp.asarray(indices),
         mask=jnp.asarray(mask),
+        gamma_only=gamma_only,
         npw=npw,
         ecutwfc=float(ecutwfc),
     )

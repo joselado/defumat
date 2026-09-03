@@ -85,6 +85,18 @@ class SpinorHamiltonian(eqx.Module):
     hubbard: object | None = None
 
     @property
+    def gamma_only(self) -> bool:
+        """Always ``False``: a spinor run never uses half-sphere storage.
+
+        ``gamma_storage_is_consumable`` refuses the combination, and for a
+        reason rather than for lack of testing -- a spinor's two components are
+        not related by ``c(-G) = conj(c(G))`` unless the state can be chosen
+        real, and spin-orbit coupling is exactly what stops it. Elk and
+        ``pw.x`` both refuse it too.
+        """
+        return False
+
+    @property
     def nk(self) -> int:
         rows = self.kinetic.shape[0]
         return rows // 2 if self.spiral else rows

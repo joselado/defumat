@@ -219,14 +219,16 @@ def _symmetrize_noncollinear(rho_r, fft_index, grid, maps, rotations):
 
 
 @partial(jax.jit, static_argnames=("grid", "k_batch"))
-def _density_of_bands(psi, fft_index, grid, weights, cell, k_batch):
+def _density_of_bands(psi, fft_index, grid, weights, cell, k_batch,
+                      fft_index_minus=None):
     """``sum_band`` on the smooth grid, in one kernel.
 
     The symmetrisation used to be fused in here. It cannot be any more: it acts
     on the dense grid, and with a double grid the density has to be lifted there
     first.
     """
-    return sum_band(psi, fft_index, grid, weights, cell, k_batch)
+    return sum_band(psi, fft_index, grid, weights, cell, k_batch,
+                    fft_index_minus=fft_index_minus)
 
 
 @partial(jax.jit, static_argnames=("grid", "k_batch"))
@@ -485,6 +487,41 @@ def _iteration_scalars(eigenvalues, weights, rho_in, rho_out, v_scf, volume):
     return jnp.stack([eband, deband, residual])
 
 
+def gamma_storage_is_consumable(system: System, pseudos) -> bool:
+    """Whether this run can actually *use* the half-sphere storage.
+
+    ``K_POINTS gamma`` halves every plane-wave-sized array -- the
+    wavefunctions, ``vkb``, the Davidson subspace -- which on a large cell is
+    the difference between a calculation that fits on a card and one that does
+    not. It is consumed for a **norm-conserving** run with **no symmetry**, and
+    substituted away (with a warning) otherwise. Both restrictions are real:
+
+    * **Ultrasoft and PAW.** ``addusdens`` and ``newd`` need their own
+      ``fact = 2`` over the augmentation charge, and ``Q_ij(G)`` is tabulated
+      on the dense set, which is a half sphere here too. Nothing in
+      :mod:`defumat.pseudo.augmentation` has been written or checked for that.
+    * **Symmetry.** :func:`~defumat.system.symmetry.symmetry_maps` permutes the
+      G list under each rotation, and a rotation carries a stored ``G`` onto an
+      unstored ``-G'`` -- the map would have to carry a conjugation with it.
+      As it stands that raises rather than being silently wrong, which is the
+      right failure but not a good message.
+
+    A run wanting the storage on a symmetric crystal sets ``nosym = .true.``,
+    which is what the gain is traded against and is usually worth it: the
+    saving is a factor of two on the largest arrays in the run.
+    """
+    if not system.kpoints.gamma_only:
+        return False
+    if any(getattr(p, "is_ultrasoft", False) for p in pseudos):
+        return False
+    if system.nspin == 4 or system.spiral_q is not None:
+        # A spinor's two components are not related by ``c(-G) = conj(c(G))``
+        # unless the state can be chosen real, and spin-orbit coupling is what
+        # stops it; a spiral's components live on two different spheres.
+        return False
+    return bool(system.nosym)
+
+
 def _without_gamma_storage(system: System) -> System:
     """Turn ``K_POINTS gamma`` into an explicit single k-point at the origin.
 
@@ -513,9 +550,11 @@ def _without_gamma_storage(system: System) -> System:
         return system
     warnings.warn(
         "K_POINTS gamma asks for the half-sphere storage of the gamma-point "
-        "trick, which is not implemented; running at an explicit k = 0 with the "
-        "full G sphere instead. The result is the same, the cost is twice the "
-        "plane waves",
+        "trick, which this run cannot consume -- it is implemented for a "
+        "norm-conserving calculation with nosym = .true., and this one is "
+        "ultrasoft/PAW or uses symmetry (see gamma_storage_is_consumable). "
+        "Running at an explicit k = 0 with the full G sphere instead: the "
+        "result is the same and the cost is twice the plane waves",
         stacklevel=3,
     )
     replacement = KPoints(
@@ -862,7 +901,12 @@ class Calculation:
         k_batch: int | None | str = "default",
         david: int | None = None,
     ):
-        system = _without_gamma_storage(system)
+        # **The substitution is conditional now.** Half-sphere storage is
+        # consumed where it can be and substituted away where it cannot, so
+        # that a run which *can* use it is not silently paying twice.
+        self.gamma_only = gamma_storage_is_consumable(system, pseudos)
+        if not self.gamma_only:
+            system = _without_gamma_storage(system)
         self.system = system
         self.eigensolver = get_eigensolver(diagonalization)
         #: ``diago_david_ndim``: the Davidson subspace multiple ``nvecx/nbnd``.
@@ -886,10 +930,11 @@ class Calculation:
         self.k_batch = resolve_k_batch(k_batch)
         self.pseudos = tuple(pseudos)
         self.basis = basis if basis is not None else build_basis(system)
-        if self.basis.dense.gamma_only:
+        if self.basis.planewaves.gamma_only and not self.gamma_only:
             raise NotImplementedError(
-                "the gamma-only half-sphere storage is not implemented in h_psi, "
-                "sum_band or the eigensolver; pass a basis built with "
+                "a gamma-only basis was passed for a run that cannot consume it "
+                "(see gamma_storage_is_consumable: norm-conserving and "
+                "nosym = .true. are what it takes); pass a basis built with "
                 "gamma_only=False"
             )
 
@@ -994,6 +1039,12 @@ class Calculation:
         planewaves = self.basis.planewaves
         self.kinetic = planewaves.kinetic(smooth, self.basis_kpoints, system.cell)
         self.fft_index = planewaves.fft_index(smooth)
+        #: ``(nk, npwx)`` indices of ``-(k+G)`` -- QE's ``nlm`` -- for a
+        #: gamma-only run, and ``None`` otherwise. Its presence is what switches
+        #: the half-sphere path on, here and in every operator built below.
+        self.fft_index_minus = (
+            planewaves.fft_index_minus(smooth) if planewaves.gamma_only else None
+        )
         # ``k + G`` itself, and only where a meta-GGA needs it: it is
         # ``(nk, npwx, 3)`` doubles, three times the size of ``kinetic``, and
         # every other consumer wants the modulus. ``None`` otherwise, so that
@@ -2675,7 +2726,7 @@ class Calculation:
         else:
             rho = _density_of_bands(
                 wavefunctions, self.fft_index, smooth.grid, weights, self.system.cell,
-                self.k_batch,
+                self.k_batch, fft_index_minus=self.fft_index_minus,
             )
         return self.symmetrize(self.augmented(to_dense(rho, smooth, dense), becsum_))
 
@@ -2767,6 +2818,7 @@ class Calculation:
                 potential_wave=jnp.moveaxis(potential, -1, -3),
                 sticks=self.sticks,
                 fft_index=self.fft_index,
+                fft_index_minus=self.fft_index_minus,
                 mask=self.basis.planewaves.mask,
                 projectors=self.projectors,
                 grid=self.basis.smooth.grid,

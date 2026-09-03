@@ -35,7 +35,9 @@ from __future__ import annotations
 import equinox as eqx
 import jax.numpy as jnp
 
-from defumat.basis.fft import g_to_r, gather_from_box, r_to_sticks, sticks_to_r
+from defumat.basis.fft import (
+    g_to_r, g_to_r_gamma, gamma_inner, gather_from_box, r_to_sticks, sticks_to_r,
+)
 from defumat.batching import map_bands
 from defumat.pseudo.projectors import Projectors
 
@@ -74,6 +76,22 @@ class Hamiltonian(eqx.Module):
     #: :meth:`matrix` alone would make the dense reference fixture solve a
     #: *different* Hamiltonian from the one Davidson solves.
     hubbard: object | None = None
+    #: ``(nk, npwx)``: the flat index of ``-(k+G)`` -- QE's ``nlm`` -- and
+    #: ``None`` unless this is a gamma-only run. Its presence *is* the switch:
+    #: see :attr:`gamma_only`.
+    fft_index_minus: jnp.ndarray | None = None
+
+    @property
+    def gamma_only(self) -> bool:
+        """Whether states are stored on the half sphere (QE's ``gamma_only``).
+
+        At ``k = 0`` a state can be chosen real, so ``c(-G) = conj(c(G))`` and
+        half the sphere carries all of it. What that changes here is three
+        things and no more: the field is rebuilt from both halves
+        (:meth:`_local`), every plane-wave sum doubles and corrects ``G = 0``
+        (:func:`~defumat.basis.fft.gamma_inner`), and ``Im c(0)`` must stay zero.
+        """
+        return self.fft_index_minus is not None
 
     @property
     def nk(self) -> int:
@@ -117,6 +135,29 @@ class Hamiltonian(eqx.Module):
         """
         return self.kinetic
 
+    def _becp(self, vectors: jnp.ndarray, vkb: jnp.ndarray) -> jnp.ndarray:
+        """``<beta|psi>`` for a block of states -- ``calbec``.
+
+        ``(..., npwx) x (npwx, nkb) -> (..., nkb)``.
+
+        **The gamma branch is ``calbec_gamma``** (``Modules/becmod.f90:321``):
+        ``DGEMM`` with a factor ``2`` over the real and imaginary parts as one
+        real vector, then ``betapsi -= beta(1,:) psi(1,:)`` for the rank that
+        holds ``G = 0``. Both ``beta(r)`` and ``psi(r)`` are real there, so the
+        result is real -- it is cast back to the complex dtype only because the
+        reconstruction below multiplies ``vkb``.
+
+        The factor belongs to *this* sum and to nothing after it: rebuilding
+        ``|beta> D <beta|psi>`` is an expansion in the stored basis, not a sum
+        over it, and doubling it too is the classic way to get an energy that
+        is nearly right.
+        """
+        product = jnp.einsum("gk,...g->...k", vkb.conj(), vectors)
+        if not self.gamma_only:
+            return product
+        zero = vkb[0].conj() * vectors[..., :1]
+        return (2.0 * product.real - zero.real).astype(vkb.dtype)
+
     def s_projections(self, vectors: jnp.ndarray, ik: int):
         """``(<beta|psi>, q <beta|psi>)`` for a block of states, both flattened.
 
@@ -132,7 +173,7 @@ class Hamiltonian(eqx.Module):
             becp = vectors @ empty.conj()
             return becp, becp
         vkb = self.projectors.vkb[ik]
-        becp = vectors @ vkb.conj()
+        becp = self._becp(vectors, vkb)
         return becp, becp @ self.projectors.qq.astype(vkb.dtype).T
 
     def s_correction(self, becq: jnp.ndarray, ik: int) -> jnp.ndarray:
@@ -168,7 +209,7 @@ class Hamiltonian(eqx.Module):
         if not self.has_overlap:
             return psi
         vkb = self.projectors.vkb[ik]
-        becp = jnp.einsum("gk,...g->...k", vkb.conj(), psi)
+        becp = self._becp(psi, vkb)
         qq = self.projectors.qq.astype(vkb.dtype)
         result = psi + jnp.einsum("gk,...k->...g", vkb, becp @ qq.T)
         return jnp.where(self.mask[ik], result, 0.0)
@@ -198,6 +239,28 @@ class Hamiltonian(eqx.Module):
         reason alone. :func:`defumat.batching.map_bands` is the dial, and it
         changes nothing but the order the transforms are issued in.
         """
+        if self.gamma_only:
+            # **The half sphere is rebuilt into a whole box and the product is
+            # gathered back out of half of it.** ``V`` is real and ``psi(r)`` is
+            # real, so ``V psi`` is real and its own coefficients obey
+            # ``c(-G) = conj(c(G))`` -- which is why gathering the stored half
+            # loses nothing and no factor appears here. The doubling belongs to
+            # *sums* over the stored coefficients, never to the transform.
+            #
+            # The stick path is deliberately not taken: a half sphere occupies
+            # half the columns and the conjugate fill needs the others, so
+            # ``sticks_to_r`` would transform the wrong set. That is a speed
+            # question, not a memory one, and this is the memory phase.
+            n = self.grid[0] * self.grid[1] * self.grid[2]
+            minus = self.fft_index_minus[ik]
+
+            def block_gamma(states):
+                field = g_to_r_gamma(states, self.fft_index[ik], minus, self.grid)
+                box = jnp.fft.fftn(field * self.potential, axes=(-3, -2, -1)) / n
+                return gather_from_box(box, self.fft_index[ik])
+
+            return map_bands(block_gamma, psi)
+
         if self.sticks is None:
             n = self.grid[0] * self.grid[1] * self.grid[2]
 
@@ -221,7 +284,7 @@ class Hamiltonian(eqx.Module):
         if self.projectors.nkb == 0:
             return jnp.zeros_like(psi)
         vkb = self.projectors.vkb[ik]  # (npwx, nkb)
-        becp = jnp.einsum("gk,...g->...k", vkb.conj(), psi)  # <beta|psi>
+        becp = self._becp(psi, vkb)  # <beta|psi>
         dij = self.coefficients.astype(vkb.dtype)
         return jnp.einsum("gk,...k->...g", vkb, becp @ dij.T)
 

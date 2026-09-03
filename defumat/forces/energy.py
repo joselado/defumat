@@ -66,6 +66,8 @@ converged geometry must reproduce the SCF total energy to round-off.
 
 from __future__ import annotations
 
+from functools import partial
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -425,6 +427,11 @@ def energy_at(moved, state: FrozenState, terms: bool = False, density=None,
             moved.occupation_matrix(psi, weights), moved.hubbard_coefficients
         )
 
+    # Half-sphere storage: every plane-wave sum below doubles and corrects
+    # ``G = 0``. A spinor run never has it (``gamma_storage_is_consumable``
+    # takes only a norm-conserving collinear run), so the branch above is
+    # untouched.
+    gamma_only = bool(getattr(moved, "gamma_only", False))
     if moved.noncolin:
         # A spinor is one coefficient vector of length ``2 npwx``, not two
         # states: ``npol`` and ``nspin`` are different numbers (`CLAUDE.md`),
@@ -438,10 +445,10 @@ def energy_at(moved, state: FrozenState, terms: bool = False, density=None,
             weights, state.eigenvalues,
         )
     else:
-        kinetic = _kinetic_energy(psi, moved.kinetic, weights)
+        kinetic = _kinetic_energy(psi, moved.kinetic, weights, gamma_only)
         nonlocal_, overlap = _projector_energies(
             psi, moved.projectors.vkb, moved.projectors.dij, moved.projectors.qq,
-            weights, state.eigenvalues,
+            weights, state.eigenvalues, gamma_only,
         )
     # <psi|psi> - 1 is position-independent (the plane-wave basis does not move
     # with the atoms), so it contributes nothing to the force; it is here
@@ -450,14 +457,14 @@ def energy_at(moved, state: FrozenState, terms: bool = False, density=None,
     # equally inert -- the coefficients are frozen and the basis is a set of
     # Miller indices -- which is the statement that a norm-conserving stress has
     # no Pulay term of this kind either.
-    norm = jnp.sum(weights * state.eigenvalues * (_norms(psi) - 1.0))
+    norm = jnp.sum(weights * state.eigenvalues * (_norms(psi, gamma_only) - 1.0))
     if multipliers is not None:
         # The same constraint with the multipliers off the diagonal -- see
         # :func:`_constraint_energy`. Identical at the ground state, where
         # ``Lambda = diag(w eps)``, and the two terms above are what it replaces.
         overlap = jnp.zeros(())
         norm = _constraint_energy(
-            psi, moved.projectors.vkb, moved.projectors.qq, multipliers
+            psi, moved.projectors.vkb, moved.projectors.qq, multipliers, gamma_only
         )
 
     contributions = {
@@ -483,8 +490,8 @@ def energy_at(moved, state: FrozenState, terms: bool = False, density=None,
     return sum(contributions.values())
 
 
-@jax.jit
-def _kinetic_energy(psi, kinetic, weights):
+@partial(jax.jit, static_argnames=("gamma_only",))
+def _kinetic_energy(psi, kinetic, weights, gamma_only: bool = False):
     """``sum w f <psi| |k+G|^2 |psi>``.
 
     The plane-wave basis does not move with the atoms, so this term has no
@@ -501,17 +508,55 @@ def _kinetic_energy(psi, kinetic, weights):
     # (:mod:`defumat.response.phonon`). The trap is
     # :func:`defumat.scf.density.band_density`'s, in a third place.
     density = jnp.real(jnp.conj(psi) * psi)  # (nspin, nk, nbnd, npwx)
-    return jnp.sum(weights * jnp.einsum("skbg,kg->skb", density, kinetic))
+    per_band = jnp.einsum("skbg,kg->skb", density, kinetic)
+    if gamma_only:
+        # ``2 x - (the G = 0 term)``. ``kinetic`` is ``(nk, npwx)`` against a
+        # ``(nspin, nk, nbnd, npwx)`` density, so the G = 0 slice has to be
+        # broadcast back onto the band axes explicitly.
+        per_band = 2.0 * per_band - density[..., 0] * kinetic[None, :, None, 0]
+    return jnp.sum(weights * per_band)
 
 
-@jax.jit
-def _norms(psi):
+# Every plane-wave sum in this module takes ``2 x - (the G = 0 term)`` under
+# half-sphere storage. They are written out at each site rather than funnelled
+# through one helper, because the shapes differ (a band index here, a projector
+# index there) and a helper that took every layout would be harder to read than
+# the two lines it replaced. What they share is the *comment*: the correction is
+# not optional and not small, and a **force** is where dropping it shows --
+# these terms are the functional the force is the gradient of, so an energy that
+# is right at the ground state can still have a wrong derivative. Measured: with
+# the ``G = 0`` term dropped the total energy was right to 3e-12 and the force
+# was wrong by 0.4 Ry/bohr on a force of 0.06.
+
+
+@partial(jax.jit, static_argnames=("gamma_only",))
+def _norms(psi, gamma_only: bool = False):
     """``<psi|psi>``, with :func:`_kinetic_energy`'s rule about ``abs``."""
-    return jnp.sum(jnp.real(jnp.conj(psi) * psi), axis=-1)
+    density = jnp.real(jnp.conj(psi) * psi)
+    total = jnp.sum(density, axis=-1)
+    if gamma_only:
+        total = 2.0 * total - density[..., 0]
+    return total
 
 
-@jax.jit
-def _constraint_energy(psi, vkb, qq, multipliers):
+def _becp_gamma(psi, vkb, gamma_only: bool):
+    """``<beta|psi>``, halved sphere or whole -- ``calbec`` / ``calbec_gamma``.
+
+    The same expression :meth:`defumat.hamiltonian.operator.Hamiltonian._becp`
+    computes for the operator. It is written twice because the two live on
+    opposite sides of a ``jax.grad``: this one is differentiated with respect to
+    the atomic positions through ``vkb``, and importing the operator's would
+    drag a whole ``Hamiltonian`` into the functional.
+    """
+    becp = jnp.einsum("skbg,kgc->skbc", psi.conj(), vkb).conj()
+    if not gamma_only:
+        return becp
+    zero = jnp.einsum("skbg,kgc->skbc", psi[..., :1].conj(), vkb[:, :1]).conj()
+    return (2.0 * becp.real - zero.real).astype(becp.dtype)
+
+
+@partial(jax.jit, static_argnames=("gamma_only",))
+def _constraint_energy(psi, vkb, qq, multipliers, gamma_only: bool = False):
     """``Tr[Lambda (<psi|S|psi> - 1)]``: the constraint with a *matrix* multiplier.
 
     The diagonal form it replaces is the same expression at
@@ -536,8 +581,13 @@ def _constraint_energy(psi, vkb, qq, multipliers):
     fixes rather than a convention.
     """
     gram = jnp.einsum("skmg,skng->skmn", psi.conj(), psi)
+    if gamma_only:
+        gram = 2.0 * gram.real - jnp.real(
+            psi[..., :1].conj() * jnp.swapaxes(psi[..., :1], -1, -2)
+        )
+        gram = gram.astype(psi.dtype)
     if vkb.shape[-1] != 0 and qq is not None:
-        becp = jnp.einsum("skbg,kgc->skbc", psi.conj(), vkb).conj()
+        becp = _becp_gamma(psi, vkb, gamma_only)
         gram = gram + jnp.einsum(
             "skmi,ij,sknj->skmn", becp.conj(), qq.astype(becp.dtype), becp
         )
@@ -545,8 +595,9 @@ def _constraint_energy(psi, vkb, qq, multipliers):
     return jnp.real(jnp.einsum("skmn,sknm->", multipliers, gram - identity))
 
 
-@jax.jit
-def _projector_energies(psi, vkb, dij, qq, weights, eigenvalues):
+@partial(jax.jit, static_argnames=("gamma_only",))
+def _projector_energies(psi, vkb, dij, qq, weights, eigenvalues,
+                        gamma_only: bool = False):
     """The two sums over projector channels: ``<psi|V_NL|psi>`` and ``<psi|S-1|psi>``.
 
     Computed together because both are quadratic forms in the same projections
@@ -557,7 +608,7 @@ def _projector_energies(psi, vkb, dij, qq, weights, eigenvalues):
     """
     if vkb.shape[-1] == 0:
         return jnp.zeros(()), jnp.zeros(())
-    becp = jnp.einsum("skbg,kgc->skbc", psi.conj(), vkb).conj()  # <beta|psi>
+    becp = _becp_gamma(psi, vkb, gamma_only)  # <beta|psi>
     bands = jnp.real(jnp.einsum("skbi,ij,skbj->skb", becp.conj(), dij.astype(becp.dtype), becp))
     nonlocal_ = jnp.sum(weights * bands)
     if qq is None:

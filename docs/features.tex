@@ -331,13 +331,43 @@ inverse Hessian and the trust radius, so a resume from positions alone takes
 its next step as if it were the first. Stopping a six-step relaxation at step
 two and resuming costs $2+4$ steps, not $2+6$.
 
+\subsection*{Gamma-only storage: half the plane waves}
+
+At $k=0$ a Kohn--Sham state can be chosen real, so $c(-G)=c^*(G)$ and one plane
+wave of each $(G,-G)$ pair carries all of it. \code{K\_POINTS gamma} stores that
+half, which halves $n_{pwx}$ and with it every array a band lives in --- the
+wavefunctions, \code{vkb}, the Davidson subspace. On a 157-atom slab at
+$E_{\mathrm{cut}}=60$~Ry that is \textbf{189~GB against 96}. It is a memory
+feature, not a speed one: the two-bands-per-FFT packing of
+\code{vloc\_psi\_gamma} is deliberately not implemented.
+
+\textbf{Only the wavefunction sphere halves.} The dense $G$ set stays whole,
+where \code{pw.x} halves both. The memory is entirely in the plane-wave-sized
+arrays, so halving the dense set as well saves a fifth of a per cent and puts a
+conjugate fill inside every consumer of a real field. The consequence to know is
+that \code{ngm} here is not the one \code{pw.x} prints: the relation is
+$n_{gm} = 2 n_{gm}^{\mathrm{QE}} - 1$, and the test suite asserts it.
+
+Three things carry the trick: the field is rebuilt from both halves, every sum
+over plane waves becomes $2\,\mathrm{Re}(\sum) - (G{=}0)$ --- that vector being
+its own conjugate partner rather than half a pair --- and $\mathrm{Im}\,c(0)$
+must stay zero. \textbf{The last is the silent one}: a complex $c(0)$ makes the
+rebuilt field complex and the run converges to a plausible wrong answer.
+
+\textbf{The validation needs no other code.} An explicit $k=0$ on the whole
+sphere is the same calculation in the other storage, so the two agree to
+round-off: totals to \textbf{1e-14}~Ry, eigenvalues to \textbf{3e-15} and forces
+to \textbf{3e-16}~Ry/bohr, on LDA, PBE, LSDA and PBE+LSDA alike.
+
 \begin{refuses}
-\textbf{Refuses.} \code{K\_POINTS gamma} selects the half-sphere storage of the
-gamma-point trick, which is generated but not consumed. Such a run is
-substituted by an explicit $k=0$ on the full sphere --- the same physics at
-twice the storage --- and it says so; \code{estimate()} sizes the substitution
-rather than the request, since reporting the halved counts would understate
-every array by two. A checkpoint refuses rather than drops a converged
+\textbf{Refuses.} \code{K\_POINTS gamma} is \emph{substituted} by an explicit
+$k=0$ on the full sphere --- the same physics at twice the storage, with a
+warning --- for an ultrasoft or PAW dataset (\code{addusdens} and \code{newd}
+need their own \code{fact = 2}), for a run that uses symmetry (a rotation
+carries a stored $G$ onto an unstored $-G'$, so the permutation would need a
+conjugation; \code{nosym = .true.} is the way out), and for a spinor or spiral
+run. \code{estimate()} makes the same decision the driver makes, so it sizes
+the run either way. A checkpoint refuses rather than drops a converged
 \emph{magnetic field} (it is not the input field wherever \code{reducebf}
 changed it) and a \emph{Hubbard setup} (without it \code{ns} is an array about
 nothing); \code{stress}, \code{solver} and \code{history} are deliberately not

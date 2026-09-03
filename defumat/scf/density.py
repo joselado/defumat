@@ -23,7 +23,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from defumat.basis.fft import g_to_r
+from defumat.basis.fft import g_to_r, g_to_r_gamma
 from defumat.batching import resolve_k_batch, sum_bands, sum_k
 from defumat.system.cell import Cell
 
@@ -33,7 +33,8 @@ __all__ = ["sum_band", "band_density", "becsum", "spinor_sum_band",
            "spinor_band_kinetic_density", "spinor_kinetic_energy_density"]
 
 
-def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.ndarray, cell: Cell):
+def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.ndarray,
+                 cell: Cell, fft_index_minus: jnp.ndarray | None = None):
     """Contribution of one k-point's bands to the density.
 
     Args:
@@ -42,9 +43,22 @@ def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.nd
         grid: FFT dimensions.
         weights: ``(nbnd,)`` occupation weights ``wg`` for these bands.
         cell: for the cell volume.
+        fft_index_minus: ``(npwx,)`` indices of ``-(k+G)``, for a gamma-only
+            run, where the state is stored on half the sphere. **There is no
+            factor of two here**: the half sphere is storage for the *same*
+            bands, so each contributes ``w_n |psi_n(r)|^2`` exactly as before
+            once the field is rebuilt from both halves. The doubling in
+            ``sum_band.f90``'s gamma branch belongs to its two-bands-per-FFT
+            packing, which is a speed device this does not use.
     """
     def one_band(arrays):
         state, weight = arrays
+        if fft_index_minus is not None:
+            # The gamma field is real by construction, so the square is the
+            # square -- and it is still written as a product rather than through
+            # ``abs``, for the reason the comment below gives.
+            field = g_to_r_gamma(state, fft_index, fft_index_minus, grid)
+            return weight * (field * field)
         field = g_to_r(state, fft_index, grid)
         # ``|psi|^2`` as ``Re(conj(psi) psi)`` and not as ``abs(psi)**2``. The two
         # are the same number to a rounding, and only one of them is
@@ -63,7 +77,8 @@ def band_density(psi: jnp.ndarray, fft_index: jnp.ndarray, grid, weights: jnp.nd
 
 
 def sum_band(psi, fft_index, grid, weights, cell: Cell,
-             k_batch: int | None | str = "default") -> jnp.ndarray:
+             k_batch: int | None | str = "default",
+             fft_index_minus=None) -> jnp.ndarray:
     """The density from every k-point, ``(nspin, n1, n2, n3)`` and real.
 
     Args:
@@ -80,6 +95,18 @@ def sum_band(psi, fft_index, grid, weights, cell: Cell,
     working set in the code after the Davidson subspace.
     """
     batch = resolve_k_batch(k_batch)
+
+    if fft_index_minus is not None:
+        def channel(states, occupations):
+            def one_k(arrays):
+                state, index, minus, occupation = arrays
+                return band_density(state, index, grid, occupation, cell,
+                                    fft_index_minus=minus)
+
+            return sum_k(one_k, (states, fft_index, fft_index_minus, occupations),
+                         batch=batch)
+
+        return jax.vmap(channel)(psi, weights)
 
     def channel(states, occupations):
         def one_k(arrays):

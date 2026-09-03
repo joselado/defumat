@@ -65,6 +65,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
+from defumat.basis.fft import force_real_g0, gamma_inner
 from defumat.batching import map_k, resolve_k_batch
 from defumat.hamiltonian.operator import Hamiltonian
 from defumat.solvers.subspace import generalised_eigh
@@ -144,7 +145,8 @@ ETHR_MIN = 1.0e-13
 RESIDUAL_THRESHOLD = None
 
 
-def _extend_projection(hc, sc, psi, hpsi, becp, becq, offset, block):
+def _extend_projection(hc, sc, psi, hpsi, becp, becq, offset, block,
+                       gamma_only: bool = False):
     """Add one block of rows and columns to the projected H and overlap.
 
     The projected matrices grow by a block of vectors per Davidson step, so all
@@ -167,9 +169,29 @@ def _extend_projection(hc, sc, psi, hpsi, becp, becq, offset, block):
     have zero columns when there is no augmentation charge.
     """
     rows = jax.lax.dynamic_slice(psi, (offset, 0), (block, psi.shape[1]))
-    row_h = rows.conj() @ hpsi.T
-    row_s = rows.conj() @ psi.T
+    if gamma_only:
+        # ``regterg``'s ``MYDGER(..., -1.D0, psi, ..., hr, ...)``: the stored
+        # half is doubled and ``G = 0`` -- its own conjugate partner rather than
+        # half of a pair -- is then counted once. Both matrices are **real**
+        # here, which is the point of the branch: a complex overlap is round-off
+        # that ``generalised_eigh`` turns into an arbitrary phase per
+        # eigenvector, hence a complex ``c(0)``, hence a state that is no longer
+        # real. `regterg` never sees one because it works in real arithmetic.
+        row_h = 2.0 * (rows.conj() @ hpsi.T).real - (
+            rows[:, :1].conj() * hpsi[:, :1].T
+        ).real
+        row_s = 2.0 * (rows.conj() @ psi.T).real - (
+            rows[:, :1].conj() * psi[:, :1].T
+        ).real
+        row_h = row_h.astype(psi.dtype)
+        row_s = row_s.astype(psi.dtype)
+    else:
+        row_h = rows.conj() @ hpsi.T
+        row_s = rows.conj() @ psi.T
     row_b = jax.lax.dynamic_slice(becp, (offset, 0), (block, becp.shape[1]))
+    # ``becp^H becq`` is a sum over *projector* channels, not over plane waves,
+    # so it carries no gamma factor -- the factor is already inside ``becp``,
+    # which ``calbec_gamma`` returned.
     row_s = row_s + row_b.conj() @ becq.T
 
     hc = jax.lax.dynamic_update_slice(hc, row_h, (offset, 0))
@@ -232,6 +254,7 @@ def davidson_eigensolver(
     carries wavefunctions.
     """
     ethr = ETHR if ethr is None else ethr
+    gamma_only = hamiltonian.gamma_only
     ndim = hamiltonian.ndim
     nvecx = david * nbnd
     mask = hamiltonian.state_mask[ik]
@@ -251,6 +274,10 @@ def davidson_eigensolver(
         return hamiltonian.s_projections(vectors, ik)
 
     start = starting_vectors(psi0, nbnd, ndim, kinetic, mask, dtype)
+    # ``regterg.f90:174``: ``psi(1,k) = CMPLX(DBLE(psi(1,k)), 0)`` for every
+    # vector that enters the subspace. A random start has an imaginary part at
+    # ``G = 0`` and it makes the rebuilt field complex.
+    start = force_real_g0(start, gamma_only)
 
     # Inactive subspace directions are given this eigenvalue, which has to sit
     # above anything physical: the diagonal bounds the spectrum from above well
@@ -265,7 +292,8 @@ def davidson_eigensolver(
     becq = jnp.zeros((nvecx, nkb), dtype).at[:nbnd].set(becq0)
     first = jnp.arange(nvecx) < nbnd
     empty = jnp.zeros((nvecx, nvecx), dtype)
-    hc0, sc0 = _extend_projection(empty, empty, psi, hpsi, becp, becq, 0, nbnd)
+    hc0, sc0 = _extend_projection(empty, empty, psi, hpsi, becp, becq, 0, nbnd,
+                                  gamma_only)
 
     def solve(psi, hpsi, becq, active, hc_raw, sc_raw, previous):
         """Diagonalise in the current subspace and measure what is left."""
@@ -274,9 +302,16 @@ def davidson_eigensolver(
         hc = jnp.where(pair, hc_raw, 0.0) + jnp.diag(shift * inactive)
         sc = jnp.where(pair, sc_raw, 0.0) + jnp.diag(inactive)
 
+        if gamma_only:
+            # Real symmetric, as ``regterg``'s ``hr``/``sr`` are. Taking the
+            # real part is not a truncation: the imaginary part is round-off in
+            # a quantity that is real by construction, and leaving it in is what
+            # gives each eigenvector an arbitrary phase.
+            hc, sc = hc.real, sc.real
         values, vectors = generalised_eigh(0.5 * (hc + hc.conj().T),
                                            0.5 * (sc + sc.conj().T),
                                            robust=robust)
+        vectors = vectors.astype(psi.dtype)
         energies = values[:nbnd].real
         coefficients = vectors[:, :nbnd]
 
@@ -302,7 +337,14 @@ def davidson_eigensolver(
         # their relative order.
         correction = _precondition(residual, diagonal, s_diagonal, energies)
         correction = jnp.where(mask, correction, 0.0)
-        norm = jnp.sqrt(jnp.sum(jnp.abs(correction) ** 2, axis=1, keepdims=True))
+        correction = force_real_g0(correction, gamma_only)
+        # ``regterg.f90:361``: ``ew(n) = ew(n) - DBLE(psi(1,n) psi(1,n))`` --
+        # the same doubling and the same ``G = 0`` correction as every other
+        # plane-wave sum here.
+        norm = jnp.sqrt(gamma_inner(correction, correction, gamma_only,
+                                    keepdims=True).real
+                        if gamma_only else
+                        jnp.sum(jnp.abs(correction) ** 2, axis=1, keepdims=True))
         correction = jnp.where(settled[:, None], 0.0,
                                correction / jnp.where(norm > 0.0, norm, 1.0))
         correction = correction[jnp.argsort(settled)]
@@ -376,7 +418,8 @@ def davidson_eigensolver(
         becp = jax.lax.dynamic_update_slice(becp, new_becp, (nbase, 0))
         becq = jax.lax.dynamic_update_slice(becq, new_becq, (nbase, 0))
         active = jax.lax.dynamic_update_slice(active, jnp.arange(nbnd) < notcnv, (nbase,))
-        hc_raw, sc_raw = _extend_projection(hc_raw, sc_raw, psi, hpsi, becp, becq, nbase, nbnd)
+        hc_raw, sc_raw = _extend_projection(hc_raw, sc_raw, psi, hpsi, becp, becq,
+                                            nbase, nbnd, gamma_only)
         nbase = nbase + notcnv
 
         energies, evc, hevc, correction, notcnv, converged = solve(

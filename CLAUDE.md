@@ -1012,11 +1012,54 @@ will keep growing, so structure matters more than speed of delivery — see `PLA
 the architecture, the phase breakdown, and the validation strategy. Read it before writing
 code.
 
-**Gamma-only is a gap, not a feature.** `K_POINTS gamma` selects the half-sphere storage
-of the gamma-point trick, and that storage is generated but not consumed anywhere:
-`h_psi` would need `vloc_psi_gamma`'s packing, the eigensolver `regterg`'s real overlaps,
-and `addusdens`/`newd` their `fact = 2`. Such a run is silently substituted by an explicit
-k = 0 with the full sphere, which is the same physics at twice the storage, and it says so.
+**Gamma-only storage is in scope and implemented** (P68), and it is a **memory**
+feature rather than a speed one. `K_POINTS gamma` stores one plane wave of each
+`(G, -G)` pair, because at `k = 0` a state can be chosen real and
+`c(-G) = conj(c(G))`. That halves `npwx` and with it every array a band lives in —
+the wavefunctions, `vkb`, the Davidson subspace — which on a 157-atom slab at
+`ecutwfc = 60` is **189 GB against 96**.
+
+**Only the wavefunction sphere halves, and the dense G set stays whole.** That is a
+deliberate departure from `pw.x`, which halves both: the memory is entirely in the
+plane-wave-sized arrays (the density and potential are 0.4 GB against 139 GB of
+Davidson subspace there), so halving the dense set too would save a fifth of a per
+cent and would put a conjugate fill inside every consumer of a *real field* —
+`to_dense`, `v_of_rho`, the GGA gradient, the augmentation charge, the symmetriser —
+each a place the `G = 0` term can go missing silently. The consequence to know is
+that `ngm` here is **not** the `ngm` `pw.x` prints for the same input; the exact
+relation is `ngm_full = 2 ngm_QE - 1` and `tests/regression/test_basis.py` asserts it.
+
+**Three things carry the trick and nothing else does.** The field is rebuilt from both
+halves (`g_to_r_gamma`); every sum over plane waves becomes `2 Re(sum) - (the G = 0
+term)`, since `G = 0` is its own conjugate partner rather than half of a pair
+(`gamma_inner`, and `calbec_gamma`'s `DGEMM` factor 2 with its `betapsi -= beta(1,:)
+psi(1,:)`); and `Im c(0)` must stay zero, which `regterg` imposes at
+`regterg.f90:174` and `:375` every time a vector enters the subspace and which this
+code imposes in the same places (`force_real_g0`). **The last is the silent one**: a
+complex `c(0)` makes the rebuilt field complex and the run converges to a plausible
+wrong answer.
+
+**The validation needs no other code**: an explicit `k = 0` on the whole sphere is the
+same calculation in the other storage, so the two agree to round-off rather than to a
+tolerance — totals to **1e-14 Ry**, eigenvalues to **3e-15** and forces to
+**3e-16 Ry/bohr**, on LDA, PBE, LSDA and PBE+LSDA. **The force is where a dropped
+`G = 0` term shows and the energy is not**: with the correction missing from
+`forces/energy.py` the total energy was right to 3e-12 Ry and the force was wrong by
+**0.4 Ry/bohr** on a force of 0.06, because the frozen energy is the functional the
+force is the gradient of and being stationary hides an error in its derivative.
+A second symptom worth knowing: before `rotate_wfc`'s overlaps were corrected the run
+still converged to the right answer and merely took **19 iterations against 8** — the
+iteration count was the diagnostic.
+
+**Substituted rather than refused**, with the existing warning, for an ultrasoft or PAW
+dataset (`addusdens` and `newd` need their own `fact = 2`), for a run that uses
+symmetry (`symmetry_maps` carries a stored `G` onto an unstored `-G'`, so the
+permutation would need a conjugation with it — `nosym = .true.` is the way out), and
+for a spinor or spiral run (a spinor's components are not related by conjugation once
+spin-orbit coupling is on). Such a run is the same physics at twice the storage and it
+says so. **The two-bands-per-FFT packing of `vloc_psi_gamma` is *not* implemented** and
+is a speed item rather than a memory one; the stick path is bypassed under gamma for
+the same reason.
 
 **Ultrasoft and PAW are in scope and implemented** (P12): the two-grid split, the
 augmentation charge, the overlap operator, self-consistent `D_ij`, and PAW's one-centre

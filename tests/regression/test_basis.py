@@ -78,11 +78,31 @@ def _basis_and_reference(qe_testsuite, directory, name):
         pytest.skip(str(refusal).split(" -- ")[0])
 
 
+def _expected_ngm(reported: int, system) -> int:
+    """QE's ``ngm`` against this code's, which differ for ``K_POINTS gamma``.
+
+    **A deliberate divergence, and the relation is exact.** QE halves the
+    *dense* G-vector set for a gamma run as well as the wavefunction sphere;
+    this code halves only the wavefunction sphere and keeps the dense set whole
+    (:func:`~defumat.basis.builder.build_basis` says why -- the memory is in the
+    plane-wave-sized arrays, and halving the dense set would put a conjugate
+    fill inside every consumer of a real field for 0.2 per cent of the saving).
+
+    So the check is not equality but the half-sphere relation itself,
+    ``ngm_full = 2 ngm_half - 1`` -- one G of each pair, and ``G = 0`` counted
+    once -- which is a **stronger** statement than equality would be: it says
+    this code's set is exactly the one QE's is half of.
+    """
+    if not system.kpoints.gamma_only:
+        return reported
+    return 2 * reported - 1
+
+
 @pytest.mark.parametrize(("directory", "name"), CASES)
 def test_dense_grid_matches_reference(qe_testsuite, directory, name):
     basis, system, ref = _basis_and_reference(qe_testsuite, directory, name)
 
-    assert basis.dense.ngm == ref.ngm_dense
+    assert basis.dense.ngm == _expected_ngm(ref.ngm_dense, system)
     _assert_grid(basis.dense.grid, ref.fft_dense, _fft_factors(system))
 
 
@@ -98,7 +118,7 @@ def test_smooth_grid_matches_reference(qe_testsuite, directory, name):
         return
 
     assert basis.doublegrid
-    assert basis.smooth.ngm == ref.ngm_smooth
+    assert basis.smooth.ngm == _expected_ngm(ref.ngm_smooth, system)
     _assert_grid(basis.smooth.grid, ref.fft_smooth, _fft_factors(system))
     assert basis.smooth.ngm < basis.dense.ngm
 
