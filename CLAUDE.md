@@ -912,6 +912,59 @@ one, and a constant-current scan longer than the lattice period along the plane'
 past which the tip meets the periodic image of the surface and the density rises again,
 silently.
 
+**Vertical tunnelling transport through a 2D material is in** (P66), which is the question
+P65 does not answer: an STM image says what the tip *sees*, and this says what gets
+*through*. An electron enters at a point above the sheet and leaves into an infinite plane
+below it (the substrate), so the current is set by the **nonlocal** Green's function between
+the two, and a **point** tip makes `Gamma_t` rank one, which collapses the Landauer trace to
+`int_plane |G(r, r')|^2` exactly. An infinite featureless substrate conserves lateral
+momentum, so the exit integral is **diagonal in k** and the whole thing is one quadratic form
+per k-point on the bands' plane-restricted **Gram matrix** `S_k`. Three things follow from
+that word and all three are load-bearing: the transmission is non-negative by construction;
+the whole-cell exit region makes `S_k` the identity by orthonormality, so the quantity becomes
+P65's tunnelling density of states **exactly** (4.6e-13 against `run_stm`, no factor between
+them, which is the check a normalisation error could not hide in); and it is **blind to a
+rotation inside a degenerate multiplet**, so rule D4 is satisfied by construction rather than
+by handling degeneracies. `S_k` is closed-form -- the `h3` sum collapses the sphere onto its
+shadow on the surface reciprocal lattice -- so there is no quadrature and no convergence
+parameter: 5e-16 against a real-space quadrature, and 1.4e-15 to the identity when swept along
+its own normal.
+**The largest finding is negative and it changed what is computed.** The literal denominator
+`1/(E - e + i eta)` **cannot be summed over states**: the states far from `E` build the
+barrier's evanescent decay entirely by cancellation. On a cell diagonalised *completely* (367
+plane waves, 367 exact bands) one `G(r_tip, r_exit)` wanders over an order of magnitude and
+lands only at the complete basis, at a **cancellation ratio of 349**. What converges is that
+denominator's **modulus**, which is Bardeen's golden rule and is exactly the resolvent's
+modulus with its phase held fixed -- it keeps the interference between bands **degenerate at
+the tip energy**, which is the interference an experiment lets happen, and drops direct
+tunnelling through the barrier without going on shell, which a weak-coupling geometry is
+defined by not having. With a Gaussian the band count converges to 3e-7. `method="resolvent"`
+stays reachable and warns, so the statement is measured rather than believed.
+**The second finding is a transposed index and it is P54's again**: `G(r, r') = sum_n a_n(r)
+psi*_n(r')` conjugates `psi` in the *exit* variable, so the plane integral is `a^T S a*` and
+**not** `a^dagger S a`. The wrong one is real, non-negative, exact in the Tersoff-Hamann
+limit, passes the sum rule and is blind to a degenerate rotation -- and is wrong wherever `S`
+has an off-diagonal, which is wherever the interference lives. Only a unit test that evaluates
+`G(r, r')` on a grid and integrates `|G|^2` literally could see it.
+**The physics is the monolayer/bilayer pair**: graphene's two Dirac states at `K` are
+degenerate partners, so by Schur's lemma the substrate's overlap on that pair is a multiple of
+the identity and has nothing off-diagonal to interfere through -- its map correlates with the
+STM image at **1.000000** with zero interference, while an AB bilayer, whose current must
+cross two layer-polarized sheets, falls to **0.16** with the coherent map 26x below the
+incoherent one. **The incoherent map needed rule D4 to be usable at all**: it is a *diagonal*,
+which is not invariant under the rotation a degenerate eigensolver is free in where the
+coherent quadratic form is, so `S_k` is diagonalised inside each multiplet first
+(`channel_basis`) -- worth 69x against 26x on the bilayer, and P51's Drude weight one layer out. **Ultrasoft and PAW need nothing extra** because
+both planes are in the vacuum, where a pseudo-wavefunction is the true one; a plane inside an
+augmentation sphere is refused. The whole-cell *diagnostic* is the exception and took the `S`
+metric (9 per cent short without it). **Refused by name:** more than one k-division along the
+stacking axis, a symmetry-reduced wedge (`grid=` builds the **whole** grid), a tilted exit
+plane, a plane inside an augmentation sphere, a spin-selective substrate with no magnetization,
+and P65's three whole. **Warned rather than refused**: atoms not between the two planes, since
+a cell is periodic and the electron then goes around it. **Not claimed**: a finite contact
+patch, a tip beyond an s-wave, or an absolute conductance -- the two couplings are unfixed
+prefactors, so what is carried is the map and its contrast.
+
 **Outstanding:** Wyckoff input, PAW and a *relaxed* (as opposed to frozen-density) magnetocrystalline anisotropy, `average_pp`, the dynamical matrix of an
 ultrasoft or PAW *metal*, the strain coordinate's third derivatives on ultrasoft and PAW
 (P44 localised what is missing), the *second derivatives* of a spin-polarized system (P45 put
@@ -1582,6 +1635,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | X-ray and magnetic structure factors | no QE counterpart — Elk's `src/sfacrho.f90`, `sfacmag.f90`, `genhvec.f90`, `zftrf.f90`, manual tasks 195/196 | `zftrf` is `(1/Omega) int f e^{-iH.r}` and `sfacrho` prints `Omega` times its conjugate, which is the crystallographic convention; here the positive-phase transform is taken directly (`defumat/diffraction/`). `genhvec` reduces the H-set with the **symmorphic, non-magnetic** operations only, and that restriction is about the *phase* of `F` rather than its modulus |
 | Orbital magnetization | `PW/src/orbm_kubo.f90` (reached by `lorbm`), `PW/src/kpoint_grid.f90` (`kpoint_grid_efield`), `PW/src/setup.f90` (what it refuses) | the assembly is transcribed and the mesh with it -- the dual states are `zgefa`/`zgedi` on the neighbour overlap, which is the covariant derivative. Two conventions are QE's and are documented rather than inherited silently: `ef` is imported and never used, so what is printed is `M(mu = 0)`, and the two printed terms are not the papers' LC/IC split. The vector direction is `b_l` while the derivatives are along the other two crystal directions, which is exact for any lattice (`a_i x a_j = Omega b_l/(2 pi)`) |
 | Fermi-surface nesting | no QE counterpart — Elk's `src/nesting.f90`, manual task 105 | Elk writes an `O(N_q N_k)` double loop with `mod(ivk + ivq, ngridk)`; that fold makes the sum a cyclic cross-correlation, so `ifftn(|fftn(g)|^2)` replaces it (`defumat/response/nesting.py`) and the loop is kept as `method = "direct"`. The wedge is unfolded with `grid_equivalence` — `tetra.f90`'s `equiv`, Elk's `ivkik` — and the group it is unfolded with must be the group `denser_grid` reduced it with (`workflows/nscf.py:grid_symmetry`) |
+| Vertical tunnelling transport | no `pw.x` or Elk counterpart for the quantity — QE's `PWCOND/src/` (`transmit.f90`, `compbs.f90`) is a Landauer transmission of a *different geometry*: two semi-infinite crystalline leads, one conductance per energy, no point contact and so no map | nothing is transcribed. The exit plane's Gram matrix is a closed-form Miller-index orthogonality (`transport/substrate.py`), the tip amplitudes are P65's sampler made complex and per-k (`basis/sample.py`), and the contraction is one quadratic form. The index order is the one trap: `G(r,r')` conjugates `psi` in the **exit** variable |
 | Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `defumat/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]` term by term; here it is one `jvp` of `H(k)` at a frozen sphere (`response/velocity.py`), since `dH/dk_a = i[H, r_a]` in the periodic gauge. The overlap carries a velocity too, so a band velocity is `<psi|dH/dk - eps dS/dk|psi>` |
 | Linear response / DFPT | `LR_Modules/cgsolve_all.f90`, `ch_psi_all.f90`, `orthogonalize.f90`, `h_prec.f90`, `setup_alpha_pv.f90`, `incdrhoscf.f90`, `symdvscf.f90`; `PHonon/PH/solve_e.f90`, `dvpsi_e.f90`, `dvqpsi_us.f90`, `dielec.f90`, `zstar_eu.f90` | the linear solve, the projector and the assembly are transcribed; the *perturbations* are not. `dv_of_drho` is one `jvp` of `v_of_rho` (which already drops the `G = 0` Hartree term), the E-field's commutator is the velocity operator, and `dvqpsi_us` is one `jvp` through `at_positions`. **A response on a reduced k-set is a polar vector field and must be symmetrised as one** |

@@ -844,6 +844,35 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS)
         )
 
+    def get_vertical_transport(self, exit_height=None, height=None, **options):
+        """Tunnelling *through* a two-dimensional material, tip to substrate.
+
+        An electron enters at a point above the material and leaves into an
+        infinite plane below it, so what decides the current is the nonlocal
+        Green's function between the two rather than the local density of
+        states at the tip. On a material with one band to tunnel through the
+        map is the Tersoff-Hamann image of :meth:`get_stm`; on a stack the
+        bands interfere on the way through and it is not, which
+        :attr:`~defumat.transport.green.VerticalTransport.interference`
+        reports.
+
+        ``exit_height`` is the substrate plane's crystal coordinate and
+        ``height`` the tip plane's, with the material between them. The k-set
+        must be the **whole** grid, which ``grid`` builds.
+        """
+        from defumat.workflows.transport import run_vertical_transport
+
+        result = self._ground_state("a vertical transmission")
+        if exit_height is not None:
+            options = {**options, "exit_height": exit_height}
+        if height is not None:
+            options = {**options, "height": height}
+        return run_vertical_transport(
+            self.system, self.pseudos, result,
+            **self._call_options(run_vertical_transport, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
     def get_nesting(self, grid=None, **options):
         """``N(q)``, the Fermi-surface nesting function, on a dense grid.
 

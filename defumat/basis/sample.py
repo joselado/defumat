@@ -33,7 +33,7 @@ import numpy as np
 from defumat.basis.fft import r_to_g
 from defumat.basis.gvectors import GVectors
 
-__all__ = ["sample_field", "sample_coefficients"]
+__all__ = ["sample_field", "sample_coefficients", "sample_wavefunctions"]
 
 #: Complex entries in one phase block -- ~32 MB of complex128.
 _PHASE_BLOCK = 2_000_000
@@ -92,3 +92,70 @@ def sample_coefficients(coefficients, gvectors: GVectors, points,
         phases = np.exp(2.0j * np.pi * (block @ miller.T))
         out[:, start:start + chunk] = np.real(flat @ phases.T)
     return out.reshape(leading + points.shape[:1])
+
+
+def sample_wavefunctions(coefficients, miller, kcrystal, points, volume,
+                         mask=None, chunk: int | None = None):
+    """``psi_kn(r)`` at arbitrary points, for one k-point's bands.
+
+    The complex sibling of :func:`sample_coefficients`, and it differs in three
+    ways that all come from a wavefunction not being a lattice-periodic field:
+    the sum runs over that k-point's **own** ``k + G`` sphere rather than the
+    dense set, it carries the Bloch phase, and the result is complex because
+    the phase of ``psi`` is the whole point -- what consumes this is an
+    interference between bands.
+
+        psi_kn(r) = Omega^{-1/2} sum_G c_n(G) e^{i(k+G).r}
+                  = Omega^{-1/2} sum_G c_n(G) e^{2 pi i (k_cryst + h).s}
+
+    with ``h`` the Miller indices and ``s`` the crystal coordinate: the direct
+    and reciprocal bases cancel exactly as they do for a periodic field, so the
+    cell enters only through the ``Omega^{-1/2}`` that makes ``sum_G |c|^2 = 1``
+    the statement that ``psi`` is normalised in the cell.
+
+    Args:
+        coefficients: ``(..., npw)`` complex on this k-point's sphere -- the
+            wavefunction array's ``[ispin, ik]`` slice, leading axes carried
+            through, so every band goes in one call.
+        miller: ``(npw, 3)`` integer Miller indices of that sphere,
+            :meth:`~defumat.basis.planewaves.PlaneWaveBasis.miller` at this k.
+        kcrystal: ``(3,)`` the k-point in **crystal** (reciprocal-lattice)
+            coordinates, :meth:`~defumat.system.kpoints.KPoints.crystal`.
+        points: ``(np, 3)`` crystal coordinates. They need not lie in the unit
+            cell; a point outside it is the Bloch function continued, which is
+            what a tip above a slab in a tall cell actually needs.
+        volume: the cell volume in bohr^3.
+        mask: ``(npw,)`` the sphere's padding mask. Padded entries point at
+            ``G = 0`` and are dropped here rather than trusted to be zero.
+        chunk: points per phase block.
+
+    Returns ``(..., np)`` complex, in bohr^{-3/2}.
+    """
+    coefficients = np.asarray(coefficients)
+    miller = np.asarray(miller, dtype=float)
+    kcrystal = np.asarray(kcrystal, dtype=float).reshape(3)
+    points = np.atleast_2d(np.asarray(points, dtype=float))
+    if points.shape[-1] != 3:
+        raise ValueError(f"points must be (np, 3) crystal coordinates, got {points.shape}")
+    npw = miller.shape[0]
+    if coefficients.shape[-1] != npw:
+        raise ValueError(
+            f"the coefficients carry {coefficients.shape[-1]} plane waves and "
+            f"the sphere has {npw}: they are not the same k-point"
+        )
+
+    leading = coefficients.shape[:-1]
+    flat = coefficients.reshape((-1, npw))
+    if mask is not None:
+        flat = flat * np.asarray(mask, dtype=bool)
+    if chunk is None:
+        chunk = max(1, int(_PHASE_BLOCK // max(npw, 1)))
+
+    # k + G in crystal coordinates: an integer lattice offset by the k-point.
+    frequencies = miller + kcrystal
+    out = np.empty(flat.shape[:1] + points.shape[:1], dtype=complex)
+    for start in range(0, points.shape[0], chunk):
+        block = points[start:start + chunk]
+        phases = np.exp(2.0j * np.pi * (block @ frequencies.T))
+        out[:, start:start + chunk] = flat @ phases.T
+    return (out / np.sqrt(float(volume))).reshape(leading + points.shape[:1])

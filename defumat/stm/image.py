@@ -44,7 +44,25 @@ import numpy as np
 from defumat.scf.occupations import smearing_order, w0gauss
 
 __all__ = ["STMImage", "tunnelling_weights", "constant_current_height",
-           "project_spin"]
+           "project_spin", "smeared_delta"]
+
+
+def smeared_delta(x, smearing: str = "gaussian"):
+    """The normalised delta this module images with, by name.
+
+    Everything QE's ``w0gauss`` offers, plus a **Lorentzian**, which QE
+    has no counterpart for because it is not an occupation scheme: there
+    is no ``wgauss`` to go with it and it would not fill a band. It is a
+    delta and only a delta, and it is here because a broadening that comes
+    from a *lifetime* rather than from a numerical smearing is Lorentzian
+    -- which is what the leads impose in
+    :mod:`defumat.transport.green`, and what makes the Tersoff-Hamann
+    limit of a vertical transmission comparable with an image from here.
+    """
+    x = np.asarray(x, dtype=float)
+    if smearing.strip().lower() in ("lorentzian", "lorentz"):
+        return 1.0 / (np.pi * (1.0 + x ** 2))
+    return np.asarray(w0gauss(x, smearing_order(smearing)))
 
 
 def tunnelling_weights(eigenvalues, kweights, energy: float, width: float,
@@ -59,8 +77,8 @@ def tunnelling_weights(eigenvalues, kweights, energy: float, width: float,
             1 per polarized channel), so no factor is written down.
         energy: the energy the tip is tuned to, in Ry. The Fermi level, usually.
         width: the smearing width in Ry -- Elk's ``swidth``, QE's ``degauss``.
-        smearing: which smeared delta, by the name
-            :func:`~defumat.scf.occupations.smearing_order` knows.
+        smearing: which smeared delta, by the name :func:`smeared_delta`
+            knows -- everything ``w0gauss`` has, plus ``'lorentzian'``.
         bias: ``None`` for the delta, or a sample bias in Ry for the window.
         band_cutoff: drop every state further than this many widths outside the
             window, QE's ``down1``/``up1``, which ``stm.f90`` fixes at 3. It is
@@ -79,14 +97,14 @@ def tunnelling_weights(eigenvalues, kweights, energy: float, width: float,
     kweights = np.asarray(kweights, dtype=float)[None, :, None]
     if width <= 0.0:
         raise ValueError(f"the smearing width must be positive, got {width}")
-    ngauss = smearing_order(smearing)
+    smeared_delta(0.0, smearing)  # validate the name before any work
 
     if bias is None:
         # Elk: occsv = occmax * wkpt * sdelta((E_F - e)/swidth) / swidth. Elk's
         # ``occmax * wkpt`` is this code's ``kweights``, and the 1/width is what
         # makes it a delta rather than a step -- QE's stm.f90 leaves it out, so
         # its image is this one times ``degauss``.
-        delta = np.asarray(w0gauss((energy - eigenvalues) / width, ngauss))
+        delta = smeared_delta((energy - eigenvalues) / width, smearing)
         return kweights * delta / width * _band_mask(
             eigenvalues, energy, energy, width, band_cutoff)
 
@@ -96,8 +114,8 @@ def tunnelling_weights(eigenvalues, kweights, energy: float, width: float,
     # rather than by the step function, undivided by the width. It is QE's
     # expression and is transcribed rather than corrected -- with a width far
     # below the window it is a soft edge either way.
-    below = np.asarray(w0gauss((low - eigenvalues) / width, ngauss))
-    above = np.asarray(w0gauss((high - eigenvalues) / width, ngauss))
+    below = smeared_delta((low - eigenvalues) / width, smearing)
+    above = smeared_delta((high - eigenvalues) / width, smearing)
     tails = np.where(eigenvalues <= low, below, above)
     return kweights * np.where(inside, 1.0, tails) * _band_mask(
         eigenvalues, low, high, width, band_cutoff)

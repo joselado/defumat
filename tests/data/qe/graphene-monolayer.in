@@ -1,0 +1,32 @@
+! One sheet of graphene, the same lattice and cutoff as graphene-bilayer.in so
+! that the two can be compared directly. It is the case PLAN.md P66 rests on:
+! at the Fermi level graphene has one band per k-point to tunnel through, so
+! the vertical transmission is the Tersoff-Hamann image and the interference
+! is identically zero -- which the bilayer, whose current has to cross both
+! layers, is not.
+&control
+ calculation = 'scf'
+/
+&system
+ ibrav = 4
+ celldm(1) = 4.6511
+ celldm(3) = 4.3
+ nat = 2
+ ntyp = 1
+ ecutwfc = 40
+ occupations = 'smearing'
+ smearing = 'gaussian'
+ degauss = 0.02
+ nbnd = 12
+/
+&electrons
+ conv_thr = 1.0d-10
+ mixing_beta = 0.5
+/
+ATOMIC_SPECIES
+ C 12.011 C.pbe-hgh.UPF
+ATOMIC_POSITIONS crystal
+ C 0.000000 0.000000 0.500000
+ C 0.333333333333 0.666666666667 0.500000
+K_POINTS automatic
+ 12 12 1 0 0 0

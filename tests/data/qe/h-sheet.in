@@ -1,0 +1,32 @@
+! A square sheet of hydrogen in vacuum: the cheapest cell that is a
+! two-dimensional material with a tip plane above it and a substrate plane
+! below. Used by tests/regression/test_transport.py (PLAN.md P66), whose
+! checks are identities rather than comparisons with another code -- no code
+! computes this quantity, so what validates it is the Tersoff-Hamann limit
+! against run_stm, the spin partition, and the agreement of the three spin
+! regimes.
+!
+! nosym and one k-division along the stacking axis are both required by the
+! quantity: lateral momentum is conserved exactly and the momentum along the
+! normal is not, and a symmetry-reduced wedge symmetrises the map over
+! operations that exchange the tip side with the substrate side.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 5.0, celldm(3) = 3.0,
+    nat = 1, ntyp = 1,
+    ecutwfc = 15.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.05
+    nosym = .true.
+    nbnd = 8
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H 0.0 0.0 0.5
+K_POINTS {automatic}
+ 4 4 1 0 0 0

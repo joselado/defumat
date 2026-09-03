@@ -10120,6 +10120,167 @@ and an image of a **charged** or field-biased surface, where the tip's own poten
 enters.
 
 
+### P66 — Vertical tunnelling transport through a two-dimensional material. ✅ DONE.
+
+`defumat/transport/` (`substrate.py`, `green.py`), `sample_wavefunctions` in
+`defumat/basis/sample.py`, `smeared_delta` in `defumat/stm/image.py`,
+`defumat/workflows/transport.py`, `Calculator.get_vertical_transport`,
+`tests/unit/test_transport_machinery.py` (25), `tests/regression/test_transport.py` (17),
+two committed inputs (`h-sheet.in`, `graphene-monolayer.in`) and
+`notebooks/41_vertical_transport.ipynb`.
+
+**Neither `pw.x` nor Elk computes this, and the nearest thing either has is worth naming
+rather than glossing.** QE's `PWCOND` (`pwcond.x`, Choi and Ihm's complex-band-structure
+method) *is* a Landauer transmission, and it is a different geometry: it solves the
+scattering problem between two semi-infinite **crystalline leads** with the current along
+one axis and returns one conductance per energy for that junction. It has no point contact
+and therefore no map -- nothing in it is a function of where a tip is, which is the whole
+output here. Elk has neither; no task in its list computes a conductance. So this is not
+taken from `ELK-FEATURES.md` and it is not a transcription of anything: an electron enters at a point above the material (the STM
+tip) and leaves into an infinite plane below it (the substrate), so what decides the current
+is the **nonlocal** Green's function between the two rather than the local density of states
+at the tip. P65 answers "what does an STM see"; this answers "what gets through".
+
+    T(r; E) = Tr[Gamma_t G^r Gamma_s G^a]  ->  int_plane d^2 r' |G(r, r'; E)|^2
+
+the reduction being exact because a **point** tip makes `Gamma_t` rank one.
+
+**The exit integral is over the whole infinite plane, and that is what makes it cheap.**
+A substrate invariant under every lateral lattice translation conserves lateral momentum, so
+
+    int_{all cells} d^2 r' psi*_kn psi_k'n'  ~  delta(k'_par - k_par + G_par)
+
+forces `k' = k` on a Brillouin-zone mesh. What survives is one Hermitian matrix per k-point —
+`S_k[n,n'] = int_{plane in one cell} psi*_kn psi_kn'`, the bands' **Gram matrix restricted to
+the plane** — and the whole calculation is one quadratic form per k:
+
+    T(r; E) = sum_k w_k sum_{nm} a_kn(r) a*_km(r) S_k[n,m]
+
+So **the k-sum is incoherent and the interference is between bands at the same k**, which is
+the physical content of "the substrate is featureless". A *finite* contact patch is a
+different regime and is not this.
+
+**Three things follow from the word "Gram" and all three are load-bearing.** The transmission
+is **non-negative by construction** rather than by luck, where a tunnelling density built from
+a smeared delta is not (P52, P65). The whole-cell exit region makes `S_k` the **identity** by
+orthonormality, so the quantity becomes P65's tunnelling density of states exactly — the
+validation route, and it shares no line of code with the plane path. And it is **blind to a
+rotation inside a degenerate multiplet**: `a` and `S` are both covariant and the weight is one
+number per multiplet, so rule D4 is satisfied by construction rather than by handling
+degeneracies — which is what P51's Drude weight and P54's `Delta^a` could not say.
+
+**`S_k` is computed in closed form, with no quadrature and no convergence parameter.** For a
+plane at crystal coordinate `s3` spanning the other two lattice vectors, the in-plane integral
+is an orthogonality relation between Miller indices:
+
+    S_k[n,n'] = (A/Omega) sum_{h_par} b*_n(h_par) b_n'(h_par),
+    b_n(h_par) = sum_{h3} c_n(h_par, h3) e^{2 pi i h3 s3}
+
+one gather and one `nbnd x n_hpar` product per k-point. Against a real-space quadrature of the
+same integral it agrees to **5e-16**, and swept through the cell along its own normal it
+integrates to the identity to **1.4e-15**, which is the check on the `h3` collapse that
+involves no wavefunction at all. A *tilted* exit plane has no such relation and is refused;
+a two-dimensional material's substrate never is one.
+
+**The one genuinely new primitive is `sample_wavefunctions`** — the complex, per-k, Bloch-phase
+sibling of P65's `sample_coefficients`, evaluating `psi_kn(r)` at an arbitrary point by its own
+`k+G` sum. It carries `Omega^{-1/2}`, which is what makes `sum_G |c|^2 = 1` mean "normalised in
+the cell", and it is exact outside the cell too — a tip above a slab in a tall box is a point
+the Bloch function is continued to.
+
+**The phase's largest finding is a negative one, and it changed what is computed.**
+The literal Landauer denominator `1/(E - e_kn + i eta)` **cannot be evaluated by a sum over
+states**. Its tail is not a correction: the states far from `E` build the barrier's evanescent
+decay entirely out of cancellation between themselves. Measured on a hydrogen sheet at
+`ecutwfc = 15`, small enough to diagonalise **completely** (367 plane waves, therefore 367
+exact bands), the running sum for one `G(r_tip, r_exit)` wanders over more than an order of
+magnitude — 2.4e-4, 7.2e-3, 1.2e-3, 8.0e-4, 5.1e-4, 1.0e-3, 4.5e-4 at 8, 16, 32, 64, 128, 200
+and 367 bands — and only lands when the basis is complete, at a **cancellation ratio of 349**
+(the moduli of the terms sum to 0.157; the terms sum to 4.5e-4). On graphene the same thing
+showed as a map whose *shape* moved 33 per cent between 45 and 60 bands. There is no band count
+at which a truncated version is right, and the complete basis is a dense diagonalisation.
+
+What converges is the **modulus** of that denominator with its phase held fixed, which is the
+weak-coupling limit of the same Landauer expression — Bardeen's golden rule, the sample visited
+on shell:
+
+    a_kn(r) = psi_kn(r) sqrt( delta(E - e_kn) / eta )
+
+Two things make it the right object rather than a retreat. It is *exactly* the resolvent's
+modulus — for a Lorentzian, `|1/(E - e + i eta)| = sqrt(pi delta_eta / eta)` — so all that is
+dropped is the arctan the phase sweeps across a resonance. And the interference it keeps is
+between bands **degenerate at the tip energy**, which is the interference a real experiment
+lets happen and which no local density of states can represent; what it drops is direct
+tunnelling through the barrier without going on shell in the sample, which is what a
+weak-coupling tunnelling geometry is defined by not having. The delta defaults to a **Gaussian**
+and that is what makes the sum finite: a Lorentzian's square root falls off only as
+`1/|E - e|`. With it the band count converges to **3e-7 in the mean and 1e-6 in the shape**
+between 8 and 45 bands on graphene. `method = "resolvent"` stays reachable and warns, so the
+statement above can be measured rather than believed. **The normalisation is chosen so the
+whole-cell limit is P65's number with no factor**, which is the only check a factor could not
+hide in.
+
+**The second finding is a transposed index, and it is P54's again.** `G(r, r') = sum_n a_n(r)
+psi*_n(r')` carries `psi` **conjugated in the exit variable**, so the plane integral of its
+modulus squared is `sum_nm a_n a*_m S[n,m]` — which is `a^T S a*`, **not** `a^dagger S a`. The
+two differ by a transpose of a Hermitian matrix, and the wrong one is real, non-negative,
+reproduces the Tersoff-Hamann limit exactly (where `S` is the identity and they coincide),
+passes the plane sum rule, is blind to a degenerate rotation, and is wrong wherever `S` has an
+off-diagonal — that is, wherever the interference the phase exists for actually lives. **Only a
+literal check against the definition caught it**: a unit test that evaluates `G(r, r')` on a
+real-space grid and integrates `|G|^2` with a quadrature, which agrees with the fast path to
+1e-12 and pins the index order that nothing else can.
+
+**The physics is the monolayer/bilayer pair and it is sharp.** Monolayer graphene's states at
+the Fermi level are the two Dirac states at each zone corner, and they are **degenerate
+partners**: the little group acts irreducibly on the pair, so by Schur's lemma the substrate's
+overlap restricted to it is a multiple of the identity (measured `diag(0.05405086, 0.05405084)`
+with off-diagonals at 1e-8) and there is nothing off-diagonal for the current to interfere
+through. The transmission map correlates with P65's STM image at **1.000000**, with an
+interference of **0.0000** — which is the claim the phase was started on, now a measurement. An **AB bilayer**
+of the same sheets has a current that must cross *both* layers, and its low-energy bands are
+layer-polarized: a state large on the top layer is small on the bottom. The correlation with
+the STM image falls to **0.16**, the coherent map sits a factor of **26 below** the incoherent
+one (every channel tunnelling on its own), and the effective number of open channels falls from
+2.9 to **1.9**. Nothing in a Tersoff-Hamann image can express that, and the difference is
+reported (`VerticalTransport.interference`) rather than left implicit.
+
+**Ultrasoft and PAW work and need nothing extra**, and where the planes are is the reason: in
+the vacuum a pseudo-wavefunction *is* the true one, so the exit overlap wants no augmentation
+charge, and both planes of a tunnelling geometry are in the vacuum by construction. A plane
+inside an augmentation sphere is refused by name rather than approximated. **The whole-cell
+diagnostic is the exception and it took the `S` metric**: orthonormality there is
+`<psi|S|psi> = delta`, and the plain `sum_G c* c` is short by **9 per cent** on an ultrasoft
+carbon sheet and 3 on a PAW silicon one — which reads exactly like an assembly error. With `S`
+applied it falls to a residue that is **the reference's** rather than this code's: the gap
+against `run_stm` tracks `1/rho` at a fixed *absolute* floor of ~2e-6 e/bohr^3 (3.3e-5 relative
+at 1.6 bohr above the atom, 1.7e-2 at 6.6 bohr), which is the augmentation charge's Fourier
+ringing in the vacuum, where `exit_overlap` carries no augmentation at all. Norm-conserving is
+**4.6e-13**.
+
+**Refused by name.** A k-set with more than one division along the stacking axis (lateral
+momentum is conserved exactly and the perpendicular one is not, so two `k_perp` at the same
+`k_par` interfere with a phase depending on where the exit plane sits, and the count of lateral
+cells changes with them — a two-dimensional material is a slab with one k-point along its
+normal). A **symmetry-reduced wedge**, because the wedge sum returns the map symmetrised over
+the *whole* point group while only the subgroup leaving the exit plane in place belongs to this
+geometry — a mirror through the slab exchanges the tip side with the substrate side; `grid=`
+builds the **whole** grid for that reason (`whole_grid`, not `denser_grid`), and unfolding is
+not the escape it is for P52 because unfolding a wavefunction means rotating it. A tilted exit
+plane. A plane inside an augmentation sphere. A spin-selective substrate on a run with no
+magnetization, and a transverse direction on a collinear one (P65's reasons, unchanged). And
+P65's three whole: a spin spiral, a constrained `tot_magnetization`, an applied magnetic field.
+
+**Warned rather than refused**: the atoms not lying between the two planes. A cell is periodic,
+so "above" and "below" mean nothing except relative to where the atoms are, and with both
+planes on the same side the electron tunnels through the vacuum and around the periodic image —
+a real number, and not this one.
+
+**Not claimed**: a finite contact patch (which breaks the k-diagonality and makes the coherent
+block the whole `nk x nbnd` set), a tip with structure beyond an s-wave, a self-consistent
+treatment of the leads' own potential, and an absolute conductance — the two couplings are
+unfixed prefactors, so what the result carries is the map and its contrast.
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

@@ -60,6 +60,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Site-resolved `<L>`, `<S>` and `<J>` | `get_angular_momenta()` | [29](29_effective_mass_and_angular_momenta.ipynb) |
 | The cell's orbital magnetization | `get_orbital_magnetization()` | [39](39_orbital_magnetization.ipynb) |
 | A spin-polarized STM image, one atom's moment at a time | `get_stm(spin=...)` | [40](40_stm_images.ipynb) |
+| What gets *through* a 2D sheet rather than what its surface looks like | `get_vertical_transport()` | [41](41_vertical_transport.ipynb) |
 | One run continued from another across a change of spin regime | `with_spin()` | [18](18_continuing_a_calculation.ipynb) |
 
 ### Response, vibrations and spectra
@@ -160,6 +161,7 @@ want a number.
 | [`38_magnons.ipynb`](38_magnons.ipynb) | Spin waves: the collective mode below the Stoner continuum, the Goldstone theorem as an error bar, and a magnon going soft |
 | [`39_orbital_magnetization.ipynb`](39_orbital_magnetization.ipynb) | The circulating half of a magnet's moment: an iodine atom's Hund's-rule orbital moment, and the part of it no projection onto atomic orbitals can see |
 | [`40_stm_images.ipynb`](40_stm_images.ipynb) | What a scanning-tunnelling microscope sees: half of graphite's surface atoms missing, a contrast that inverts with the bias, and a magnetic tip reading four moments one at a time |
+| [`41_vertical_transport.ipynb`](41_vertical_transport.ipynb) | Tunnelling *through* a two-dimensional material into the substrate beneath it: graphene, where the current map is the microscope's picture, and a bilayer, where the two layers' paths interfere and it is not |
 
 ## Conventions
 

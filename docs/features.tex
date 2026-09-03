@@ -2510,6 +2510,130 @@ warning saying how many; and a zero-bias image of a gapped run is identically
 zero, the delta sitting in the gap, which is what \code{bias} is for.
 \end{refuses}
 
+\subsection{Vertical tunnelling transport through a two-dimensional material}
+
+An STM image says what the tip \emph{sees}. This says what gets
+\emph{through}: an electron enters at a point $\mathbf r$ above the material
+and leaves into an infinite plane below it --- the substrate the sheet sits on
+--- so what decides the current is the \emph{nonlocal} Green's function between
+the two rather than the local density of states at the tip. A \textbf{point}
+tip makes $\Gamma_t$ rank one, which collapses the Landauer--B\"uttiker trace
+exactly:
+\begin{equation*}
+  T(\mathbf r; E) \;=\; \mathrm{Tr}\!\left[\Gamma_t G^r \Gamma_s G^a\right]
+  \;\propto\; \int_{\mathrm{plane}}\! \mathrm{d}^2 r'\,
+  \bigl|G(\mathbf r, \mathbf r'; E)\bigr|^2 .
+\end{equation*}
+The substrate is taken to be \emph{infinite and featureless}, so it is
+invariant under every lateral lattice translation and conserves the lateral
+momentum. The exit integral is then diagonal in $\mathbf k$, and everything
+reduces to one quadratic form per k-point,
+\begin{equation*}
+  T(\mathbf r; E) = \sum_{\mathbf k} w_{\mathbf k}
+    \sum_{nm} a_{n\mathbf k}(\mathbf r)\, a^{*}_{m\mathbf k}(\mathbf r)\,
+    S_{\mathbf k}[n,m],
+  \qquad
+  S_{\mathbf k}[n,m] = \int_{\mathrm{plane}} \psi^{*}_{n\mathbf k}
+     \psi_{m\mathbf k}\, \mathrm{d}^2 r' ,
+\end{equation*}
+with $a_{n\mathbf k} = \psi_{n\mathbf k}(\mathbf r)
+\sqrt{\tilde\delta(E - \varepsilon_{n\mathbf k})/\eta}$. So \textbf{the sum
+over $\mathbf k$ is incoherent and the interference is between bands at the
+same $\mathbf k$}, which is what "the substrate is featureless" means
+physically. $S_{\mathbf k}$ is a Gram matrix, so the transmission is
+non-negative by construction and is blind to a rotation inside a degenerate
+multiplet.
+
+\begin{pycode}
+from defumat import Calculator
+
+calc = Calculator.from_file("graphene.scf.in")
+
+# tip plane above the sheet, substrate plane below it, atoms in between
+t = calc.get_vertical_transport(exit_height=0.38, height=0.62,
+                                shape=(48, 48), broadening=0.02,
+                                grid=(6, 6, 1))
+
+t.image            # (48, 48) the transmission map, arbitrary units
+t.interference     # coherent minus incoherent: what no local picture gives
+t.notes["channels"]  # open transmission channels the substrate offers
+t.extent()         # (x0, x1, y0, y1) for imshow
+
+# a transport dI/dV at one place: the tip sampling is paid once
+import numpy as np
+spectrum = calc.get_vertical_transport(
+    exit_height=0.38, tip=np.array([[0.0, 0.0, 0.62]]),
+    energies=calc.get_scf().fermi_energy + np.linspace(-0.2, 0.2, 41),
+    broadening=0.02, grid=(6, 6, 1))
+
+# a spin-polarized substrate: only on a magnetic run, and the two
+# directions partition the unpolarized answer exactly
+magnet = Calculator.from_file("h-sheet-lsda.scf.in")
+up = magnet.get_vertical_transport(exit_height=0.15, height=0.85,
+                                   spin="up", broadening=0.05)
+down = magnet.get_vertical_transport(exit_height=0.15, height=0.85,
+                                     spin="down", broadening=0.05)
+\end{pycode}
+
+\textbf{The amplitude is the on-shell one and that is a measurement, not a
+preference.} The literal Landauer denominator $1/(E - \varepsilon + i\eta)$
+cannot be evaluated by a sum over states: the states far from $E$ build the
+barrier's evanescent decay entirely by cancellation between themselves. On a
+cell small enough to diagonalise completely (367 plane waves, 367 exact bands)
+the running sum for one $G(\mathbf r,\mathbf r')$ wanders over more than an
+order of magnitude and lands only at the complete basis, with a cancellation
+ratio of \textbf{349}. Replacing the denominator by its modulus --- which is
+Bardeen's golden rule, the sample visited on shell --- keeps the interference
+between bands degenerate at the tip energy, which is the interference a real
+experiment lets happen, and converges: to \textbf{3e-7} in the mean between 8
+and 45 bands. \code{method="resolvent"} is reachable and warns.
+
+\textbf{Validated by identities}, since neither \code{pw.x} nor Elk computes
+this. (QE's \code{pwcond.x} is a Landauer transmission of a different geometry:
+two semi-infinite crystalline leads with the current along one axis, one
+conductance per energy, and no point contact and so no map. Elk has none.) Widening the substrate from a plane to the whole cell makes
+$S_{\mathbf k}$ the identity by orthonormality, so the quantity becomes the
+Tersoff--Hamann tunnelling density of states \emph{exactly} --- agreeing with
+\code{run\_stm} to \textbf{4.6e-13} with no factor between them, which is the
+check a normalisation error could not hide in. $S_{\mathbf k}$ swept along its
+own normal integrates to the identity to 1.4e-15, and agrees with a real-space
+quadrature to 5e-16. A substrate polarized along $\hat{\mathbf n}$ plus one
+along $-\hat{\mathbf n}$ is a substrate that takes both, to round-off; one
+across the moment takes exactly half. The same cell run as $n_{\rm spin}=1$,
+$n_{\rm spin}=2$ and as a spinor agrees to 1e-10 and 1e-5. And the physics:
+graphene's two Dirac states at $K$ are degenerate partners, so the symmetry of
+that point makes the substrate's overlap on the pair a multiple of the identity
+and leaves nothing off-diagonal for the current to interfere through; its map
+correlates with the STM image at \textbf{1.000000} with zero interference, while
+an AB bilayer --- whose current must cross both layer-polarized sheets --- falls
+to \textbf{0.16}, its coherent map a factor of 26 below the incoherent one.
+
+\begin{refuses}
+\textbf{Refuses.} A k-set with more than one division along the stacking axis:
+the lateral momentum is conserved exactly and the perpendicular one is not, so
+two $k_\perp$ at the same $k_\parallel$ interfere with a phase that depends on
+where the exit plane sits. A \emph{symmetry-reduced} k-set, because a wedge sums
+to the map symmetrised over the whole point group while only the subgroup that
+leaves the exit plane in place belongs to this geometry --- a mirror through the
+slab exchanges the tip side with the substrate side; \code{grid=} builds the
+whole grid for that reason. A tilted exit plane, which has no closed-form
+in-plane orthogonality to stand on. A tip or exit plane \emph{inside} an
+augmentation sphere on an ultrasoft or PAW dataset --- in the vacuum a
+pseudo-wavefunction is the true one, which is why those datasets otherwise need
+nothing extra. A spin-selective substrate on a run with no magnetization, and a
+transverse direction on a collinear one. And, inherited from the STM images
+unchanged: a spin spiral, a constrained \code{tot\_magnetization}, an applied
+magnetic field.
+\textbf{Said rather than refused}: a geometry whose atoms do not lie between the
+two planes warns --- a cell is periodic, so with both planes on the same side
+the electron tunnels through the vacuum and around the periodic image, which is
+a real number and not this one.
+\textbf{Not claimed}: a finite contact patch (which breaks the k-diagonality),
+a tip with structure beyond an s-wave, and an absolute conductance --- the tip
+and substrate couplings are unfixed prefactors, so what the result carries is
+the map and its contrast.
+\end{refuses}
+
 \section{Things with no \texorpdfstring{\code{pw.x}}{pw.x} counterpart}
 
 \textbf{Spin spirals} by the generalized Bloch theorem: a spiral of wavevector
