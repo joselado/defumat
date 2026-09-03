@@ -270,11 +270,57 @@ only layer that speaks anything else is \code{io/}: Hubbard $U$ in the
 \code{HUBBARD} card is in eV and is converted at the boundary, as \code{pw.x}
 does it.
 
+\subsection*{What a run will cost, before it is run}
+
+\code{Calculation} builds the G-vectors, the plane waves and the projectors on
+the device, so an input too large for the machine dies in setup without saying
+what was too large. \code{Calculator.estimate()} answers that from the cutoffs
+and the datasets alone, allocating nothing:
+
+\begin{lstlisting}[language=Python]
+print(Calculator.from_file("scf.in").estimate().report())
+\end{lstlisting}
+
+\noindent or \code{python3 -m defumat.cli size scf.in}. It reports $n_{gm}$,
+$n_{gms}$, $n_{pwx}$, $n_{bnd}$, $n_{kb}$ and both FFT grids --- \emph{exactly},
+from the same predicates the setup selects with, which is asserted against a
+real \code{Calculation} rather than trusted --- and a floor on the bytes for the
+wavefunctions, the projectors, the eigensolver's subspace and the fields. The
+G-vector enumeration runs in slabs, so an input destined for a GPU can be sized
+on a laptop.
+
+Two lines of that report are worth reading before believing a hand estimate.
+The Davidson subspace is $2\,n_{vecx}\,n_{dim}$ for $\psi$ and $H\psi$ at QE's
+$n_{vecx}=4\,n_{bnd}$, plus the Ritz block, and it is usually the largest
+single array --- on a 157-atom slab at $E_{\mathrm{cut}}=60$~Ry it is 139~GB
+against 23~GB of wavefunctions. And the eigensolver is \emph{not} doubled by
+spin, because the channels are solved one after another, where the
+wavefunctions are; the report separates the two.
+
+\subsection*{A converged state on disk}
+
+\code{result.save(path)} writes the state and \code{SCFResult.load(path,
+system=...)} reads it back for \code{run\_scf(starting\_from=...)}, so a job
+that hits its wall clock does not cost the run. The system is supplied rather
+than stored --- a resume already has the input file --- and is checked against
+a fingerprint. \code{run\_relax(checkpoint\_dir=...)} does the same every ionic
+step \emph{including the optimizer's own history}, which is the half that is
+easy to omit and most of the value: BFGS earns its convergence rate from the
+inverse Hessian and the trust radius, so a resume from positions alone takes
+its next step as if it were the first. Stopping a six-step relaxation at step
+two and resuming costs $2+4$ steps, not $2+6$.
+
 \begin{refuses}
 \textbf{Refuses.} \code{K\_POINTS gamma} selects the half-sphere storage of the
 gamma-point trick, which is generated but not consumed. Such a run is
 substituted by an explicit $k=0$ on the full sphere --- the same physics at
-twice the storage --- and it says so.
+twice the storage --- and it says so; \code{estimate()} sizes the substitution
+rather than the request, since reporting the halved counts would understate
+every array by two. A checkpoint refuses rather than drops a converged
+\emph{magnetic field} (it is not the input field wherever \code{reducebf}
+changed it) and a \emph{Hubbard setup} (without it \code{ns} is an array about
+nothing); \code{stress}, \code{solver} and \code{history} are deliberately not
+stored, so what comes back is a state and not a report.
 \end{refuses}
 
 % =====================================================================
@@ -816,6 +862,32 @@ is that $\partial\epsilon/\partial\tau$ is a sum of five partial derivatives
 and each one can be finite-differenced on its own against a re-converged run:
 three agreed to 7e-4 and two did not.
 
+\textbf{A subset of the atoms can be displaced on its own.} The cost of a
+dynamical matrix is that $3\,n_{\mathrm{at}}$ bare perturbations and
+$3\,n_{\mathrm{at}}$ first-order wavefunctions are held at once, which is what
+stops it running on a large cell; \code{atoms=} solves only the perturbations
+asked for and returns that subset's own block, diagonalised with its own
+masses. That is the frozen-substrate approximation --- a molecule on a fixed
+slab --- and the modes it leaves are the frustrated translations and rotations,
+which are the physics of such a calculation rather than an artefact. A
+\code{on\_row} callback receives each row as it is assembled, so a run that
+outlives its job keeps what it paid for.
+
+\begin{lstlisting}[language=Python]
+phonons = calc.get_phonons(atoms=range(57))   # the molecule, slab held fixed
+phonons.frequencies                            # (3 * 57,) in cm^-1
+\end{lstlisting}
+
+\noindent It works on norm-conserving, ultrasoft and PAW datasets. The
+validation needs no reference of any kind, which is unusual here: a partial
+dynamical matrix is not an approximation --- it solves fewer perturbations of
+the \emph{same} equations --- so the whole-cell run is exact for what the two
+share, and the subset's rows reproduce it to \textbf{9.3e-15} (norm-conserving),
+\textbf{2.8e-14} (ultrasoft) and \textbf{4.9e-15} (PAW) Ry/bohr$^2$. The
+physical check is that freezing one of silicon's two atoms turns the optical
+mode's reduced mass $m/2$ into $m$, so the frequency falls by $\sqrt2$:
+$519.205 \to 367.146$, a ratio of 1.414173.
+
 \textbf{A trap worth knowing:} a response on a reduced $k$-set is a \emph{polar
 vector field} and must be symmetrised as one. Running the whole grid instead is
 sound only if the grid is closed under the point group --- a \textbf{shifted}
@@ -827,7 +899,11 @@ Monkhorst--Pack grid is not.
 well as size); $\chi^{(2)}$ and the electro-optic tensor (the second-order
 source term has nothing to build the $\langle u_i|r_k|u_j\rangle$ piece from ---
 and it is \textbf{42\%} of the answer, measured);
-phonons at $q\neq0$; the dynamical matrix of an ultrasoft or PAW \emph{metal}
+phonons at $q\neq0$; a partial dynamical matrix (\code{atoms=}) of a
+\emph{symmetrised} run, since \code{symdvscf} acts on the $3\,n_{\mathrm{at}}$
+stack as one object --- an operation rotates the cartesian direction \emph{and}
+permutes the atom, so it mixes a mode inside the subset with one outside it,
+and such a run wants \code{nosym}; the dynamical matrix of an ultrasoft or PAW \emph{metal}
 (the \code{wg}/\code{wk} weight split was derived for a response whose
 \code{becsum} dependence is entirely inside \code{dpsi}, and an insulator cannot
 say which weight the three further tangents belong with); any response under a
