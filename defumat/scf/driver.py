@@ -860,10 +860,25 @@ class Calculation:
         basis: Basis | None = None,
         diagonalization: str | None = None,
         k_batch: int | None | str = "default",
+        david: int | None = None,
     ):
         system = _without_gamma_storage(system)
         self.system = system
         self.eigensolver = get_eigensolver(diagonalization)
+        #: ``diago_david_ndim``: the Davidson subspace multiple ``nvecx/nbnd``.
+        #:
+        #: **It is the one memory dial the eigensolver has**, and on a large
+        #: cell it is the largest array in the run rather than a detail:
+        #: ``psi`` and ``hpsi`` are ``(nvecx, ndim)`` each, so 4 against 2 is
+        #: 46 GB against 23 GB per k-point in flight on a 157-atom slab at
+        #: ``ecutwfc = 60`` (:mod:`defumat.sizing` reports it). QE exposes it
+        #: for exactly that reason and so does this.
+        #:
+        #: ``None`` takes :data:`~defumat.solvers.davidson.DAVID_NDIM`, which
+        #: is **4** -- QE's *code* default (``input_parameters.f90:926``,
+        #: assigned straight through by ``input.f90:960``). ``INPUT_PW.txt``
+        #: says 2 and is stale; the number QE runs is 4.
+        self.david = david
         # How many k-points are in flight at once, everywhere this calculation
         # touches the k axis. One -- QE's ``k_loop`` -- unless asked otherwise;
         # ``None`` is a single ``vmap`` over all of them. See
@@ -3071,10 +3086,11 @@ class Calculation:
         ``ethr`` is how accurately to converge each eigenvalue. A direct solver
         ignores both.
         """
+        extra = {} if self.david is None else {"david": self.david}
         solved = [
             self.eigensolver(
                 hamiltonian, nbnd, None if psi0 is None else psi0[spin], ethr,
-                k_batch=self.k_batch,
+                k_batch=self.k_batch, **extra,
             )
             for spin, hamiltonian in enumerate(hamiltonians)
         ]
@@ -3331,6 +3347,7 @@ def run_scf(
     mixing_beta: float = 0.7,
     calculation: Calculation | None = None,
     diagonalization: str | None = None,
+    david: int | None = None,
     verbose: bool = False,
     k_batch: int | None | str = "default",
     starting_density: jnp.ndarray | None = None,
@@ -3421,7 +3438,8 @@ def run_scf(
     instead, because then the caller wants the number.
     """
     calculation = calculation or Calculation(
-        system, pseudos, diagonalization=diagonalization, k_batch=k_batch
+        system, pseudos, diagonalization=diagonalization, k_batch=k_batch,
+        david=david
     )
     nbnd = nbnd or system.nbnd or default_nbnd(
         calculation.nelec,

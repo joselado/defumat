@@ -103,6 +103,7 @@ SHARED_OPTIONS = frozenset({
     "conv_thr",
     "k_batch",
     "diagonalization",
+    "david",
     "mixing_mode",
     "mixing_beta",
     "mixing_fixed_ns",
@@ -180,6 +181,13 @@ _ELECTRONS_OPTIONS = {
     "mixing_mode": "mixing_mode",
     "mixing_fixed_ns": "mixing_fixed_ns",
     "electron_maxstep": "max_iterations",
+    # ``diago_david_ndim``: adopted where ``diagonalization`` beside it is not,
+    # and the difference is that this one cannot fail. It is an integer that
+    # always means the same thing to the one solver here, where a solver *name*
+    # this package does not have would turn a valid pw.x input into a
+    # ValueError. It is a setup option all the same -- it belongs to the
+    # Calculation rather than to a run -- so it is in SETUP_OPTIONS too.
+    "diago_david_ndim": "david",
 }
 
 #: Read but deliberately **not** adopted: ``diagonalization``.
@@ -210,7 +218,7 @@ def electrons_defaults(pwin) -> dict:
             continue
         if option in ("conv_thr", "mixing_beta"):
             value = float(value)
-        elif option in ("mixing_fixed_ns", "max_iterations"):
+        elif option in ("mixing_fixed_ns", "max_iterations", "david"):
             value = int(value)
         else:
             value = str(value).strip().strip("'\"")
@@ -241,7 +249,8 @@ class Calculator:
             keyword overrides both for that call, and is the way to reach an
             SCF-only option elsewhere -- at the call site the name is
             unambiguous. The exception to *that* is :data:`SETUP_OPTIONS`
-            (``diagonalization``, ``k_batch``), which do not describe a *run*
+            (``diagonalization``, ``k_batch``, ``david``), which do not
+            describe a *run*
             but the ``Calculation`` every run goes through, so giving one per
             call rebuilds it and it stays.
 
@@ -371,12 +380,13 @@ class Calculator:
                 basis=self._basis,
                 diagonalization=self.defaults.get("diagonalization"),
                 k_batch=self.defaults.get("k_batch", "default"),
+                david=self.defaults.get("david"),
             )
         return self._calculation
 
     #: The options that define a :class:`~defumat.scf.driver.Calculation`
     #: rather than one run over it. Given per call, they have to rebuild it.
-    SETUP_OPTIONS = ("diagonalization", "k_batch")
+    SETUP_OPTIONS = ("diagonalization", "k_batch", "david")
 
     def _adopt(self, options) -> None:
         """Take a per-call setup option as this calculator's own.

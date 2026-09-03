@@ -338,9 +338,17 @@ def test_every_adopted_electrons_option_is_one_the_calculator_accepts():
     # The mapping is a claim about *this* code: an entry naming an option no
     # method forwards would be silently dropped rather than refused.
     assert set(_ELECTRONS_OPTIONS.values()) <= SHARED_OPTIONS
-    # and all five describe the SCF loop rather than a response loop, which is
-    # what makes reading them off the SCF's own input file correct.
-    assert set(_ELECTRONS_OPTIONS.values()) - {"conv_thr"} <= SCF_ONLY_OPTIONS
+    # ... and each describes the SCF loop or the Calculation underneath it,
+    # rather than a *response* loop -- which is what makes reading them off the
+    # SCF's own input file correct. The two kinds are both legitimate and are
+    # not the same thing: `max_iterations` is a run's own iteration count and
+    # would mean something different to a response solver, so it must not be
+    # forwarded past the SCF; `david` is `diago_david_ndim`, which belongs to
+    # the eigensolver and so to the `Calculation`, and is therefore never
+    # forwarded as a run keyword at all -- giving it per call rebuilds the
+    # setup instead.
+    kinds = SCF_ONLY_OPTIONS | set(Calculator.SETUP_OPTIONS)
+    assert set(_ELECTRONS_OPTIONS.values()) - {"conv_thr"} <= kinds
 
 
 def test_diagonalization_is_read_by_pw_x_and_deliberately_not_adopted(pseudo_dir):
@@ -376,3 +384,81 @@ def test_the_adopted_namelist_reaches_the_run(pseudo_dir):
     calc = Calculator.from_text(text, pseudo_dir, announce=False)
     result = calc.get_scf()
     assert result.iterations == 1 and not result.converged
+
+
+# --- diago_david_ndim: the eigensolver's one memory dial --------------------
+#
+# ``psi`` and ``hpsi`` are ``(nvecx, ndim)`` each with ``nvecx = david * nbnd``,
+# so on a large cell this is the biggest array in the run rather than a detail
+# -- 46 GB against 23 GB per k-point in flight on a 157-atom slab at
+# ``ecutwfc = 60``. QE exposes it and so does this, from the input file as
+# ``diago_david_ndim``, per call, and at construction.
+
+
+_DAVID = SILICON.replace("&electrons\n", "&electrons\n  diago_david_ndim = 2\n")
+
+
+def test_diago_david_ndim_is_read_from_the_input(pseudo_dir):
+    """``&electrons`` carries it, and it reaches the ``Calculation``.
+
+    Adopted where ``diagonalization`` beside it is deliberately not, and the
+    difference is that this one cannot fail: it is an integer that means the
+    same thing to the one solver here, where a solver *name* this package does
+    not have would turn a valid ``pw.x`` input into a ``ValueError``.
+    """
+    calc = Calculator.from_text(_DAVID, pseudo_dir, announce=False)
+    assert calc.calculation.david == 2
+
+
+def test_the_default_is_qes_code_default_and_not_its_documented_one(pseudo_dir):
+    """``None``, which the solver reads as ``DAVID_NDIM``.
+
+    QE's own source and documentation disagree: ``input_parameters.f90:926``
+    sets 4 and ``input.f90:960`` assigns it straight through, while
+    ``INPUT_PW.txt`` says "Default: 2". The number ``pw.x`` runs is **4**, so
+    that is the number here.
+    """
+    from defumat.solvers.davidson import DAVID_NDIM
+
+    calc = Calculator.from_text(SILICON, pseudo_dir, announce=False)
+    assert calc.calculation.david is None
+    assert DAVID_NDIM == 4
+
+
+def test_david_is_a_setup_option_and_rebuilds_the_calculation(pseudo_dir):
+    """Given per call it has to replace the ``Calculation``, not a run default.
+
+    It decides how the eigensolver behaves, so it belongs with
+    ``diagonalization`` and ``k_batch`` rather than with ``conv_thr``.
+    """
+    calc = Calculator.from_text(SILICON, pseudo_dir, announce=False)
+    assert "david" in Calculator.SETUP_OPTIONS
+    assert calc.calculation.david is None
+    calc.get_scf(david=2)
+    assert calc.calculation.david == 2
+
+
+@pytest.mark.slow
+def test_the_subspace_size_changes_the_cost_and_not_the_answer(pseudo_dir):
+    """The whole point: a smaller workspace must reach the same solution.
+
+    Measured on this cell: the two totals agree to **7.3e-11** Ry and the
+    smaller subspace takes one more iteration, which is the trade QE's own
+    documentation describes ("a larger value may yield a smaller number of
+    iterations ... but uses more memory").
+    """
+    import numpy as np
+
+    from defumat.sizing import estimate_size
+
+    wide = Calculator.from_text(SILICON, pseudo_dir, announce=False).get_scf()
+    narrow = Calculator.from_text(_DAVID, pseudo_dir, announce=False).get_scf()
+    assert wide.converged and narrow.converged
+    assert narrow.total_energy == pytest.approx(wide.total_energy, abs=1e-8)
+
+    # And the workspace really is half the size, which is what it was for.
+    calc = Calculator.from_text(SILICON, pseudo_dir, announce=False)
+    four = estimate_size(calc.system, calc.pseudos, davidson_basis=4)
+    two = estimate_size(calc.system, calc.pseudos, davidson_basis=2)
+    assert (two.arrays["Davidson subspace psi+hpsi"]
+            == four.arrays["Davidson subspace psi+hpsi"] // 2)

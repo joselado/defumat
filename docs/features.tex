@@ -297,6 +297,21 @@ against 23~GB of wavefunctions. And the eigensolver is \emph{not} doubled by
 spin, because the channels are solved one after another, where the
 wavefunctions are; the report separates the two.
 
+\noindent The one lever that changes that floor without changing the physics is
+\code{diago\_david\_ndim} --- QE's own name for it, read from
+\code{\&electrons}, and settable per call or at construction:
+
+\begin{lstlisting}[language=Python]
+calc = Calculator.from_file("scf.in", david=2)   # or diago_david_ndim = 2
+\end{lstlisting}
+
+\noindent It halves $\psi$ and $H\psi$ exactly, for one more SCF iteration on
+silicon and the same total energy to 7.3e-11~Ry --- the trade QE's
+documentation describes. Note that \code{INPUT\_PW.txt} gives its default as 2
+and is stale: \code{input\_parameters.f90} sets 4 and \code{input.f90} assigns
+it straight through, so the number \code{pw.x} runs is \textbf{4}, and that is
+the default here.
+
 \subsection*{A converged state on disk}
 
 \code{result.save(path)} writes the state and \code{SCFResult.load(path,
