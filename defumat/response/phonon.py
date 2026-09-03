@@ -97,7 +97,11 @@ wavefunctions are held at once, each ``(nspin, nk, nocc, npwx)`` complex. On the
 two-atom silicon of ``si-epsilon.in`` that is 2 MB; on a 16-atom cell with 100
 k-points and 3000 plane waves it is 7 GB, and the way down is QE's -- solve one
 irreducible representation at a time, which cuts the count as well as the
-storage. The bare perturbations are stored rather than recomputed because the
+storage. **``atoms=`` is that lever in its simplest form**: it solves a chosen
+subset's perturbations and nothing else, so the storage falls in proportion --
+a 57-atom molecule on a 100-atom fixed slab is 171 perturbations rather than
+471 -- and ``on_row`` streams each row of the force constants out as it is
+assembled, so a run that outlives its job keeps what it paid for. The bare perturbations are stored rather than recomputed because the
 self-consistent loop re-uses them at every iteration, which is the same trade
 :mod:`defumat.response.efield` makes for its three.
 
@@ -190,6 +194,11 @@ class Phonons:
     #: Mean CG iterations per band per solve, QE's ``av.it.``.
     average_iterations: float = 0.0
     converged: bool = False
+    #: Which atoms were displaced, or ``None`` for the whole cell. When it is a
+    #: tuple, :attr:`matrix` and :attr:`frequencies` are that subset's block
+    #: with every other atom held fixed -- so the modes are the frozen-substrate
+    #: ones and there is no acoustic triplet among them to look for.
+    atoms: tuple | None = None
 
     @property
     def omega2(self) -> np.ndarray:
@@ -258,6 +267,8 @@ def dynamical_matrix(
     threshold: float = 1.0e-12,
     acoustic_sum_rule: bool = False,
     response: "DisplacementResponse | None" = None,
+    atoms=None,
+    on_row=None,
     verbose: bool = False,
 ) -> Phonons:
     """The ``Gamma``-point force constants and phonon frequencies.
@@ -278,6 +289,39 @@ def dynamical_matrix(
             diagonalising. **Off by default, because ``ph.x`` does not impose
             it** and the residue is the diagnostic described in
             :attr:`Phonons.acoustic_residue`.
+        atoms: solve only these atoms' displacements, as indices into the
+            structure. The cost of this function is ``3 nat`` perturbations held
+            at once -- see the module docstring -- so a molecule on a fixed slab
+            is the case this exists for: 171 perturbations rather than 471, and
+            the memory in proportion. What comes back is then the subset's own
+            block, ``(len(atoms), 3, len(atoms), 3)``, diagonalised with the
+            subset's masses, which is the frozen-substrate approximation and is
+            what holding the other atoms fixed means.
+
+            **Ultrasoft and PAW work**, which took subsetting the four tangents
+            P39 adds -- the overlap derivatives, the occupied block ``ort``, the
+            mixed state's own change and the multiplier response. Two of those
+            needed no change at all once the first two were done, because they
+            take their shape from what they are handed (``multiplier_response``
+            from ``bare``, ``orthogonality_states`` from ``derivatives``) rather
+            than from ``nat``, and that is the reason to prefer such a shape.
+            An ultrasoft or PAW **metal** stays refused, for the reason
+            :func:`_require_a_moving_overlap_regime` gives and not for this one.
+
+            **What is refused with a subset** is a symmetrised run, because
+            ``symdvscf`` symmetrises the ``3 nat`` responses *together* -- an
+            operation rotates the direction and permutes the atom, so it mixes a
+            mode inside the subset with one outside it, and a partial stack is
+            not something the group can act on.
+
+            The acoustic sum rule is unavailable for the same reason the columns
+            outside the subset are not solved -- it is a sum over *all* atoms --
+            and it is not wanted here anyway: the modes a fixed substrate leaves
+            are frustrated translations, which are physical rather than an
+            artefact to be projected out.
+        on_row: called as ``on_row(atom, cart, row)`` as each row of the force
+            constants is assembled, so a long run can persist what it has paid
+            for instead of holding it to the end.
         response: a :class:`DisplacementResponse` solved earlier, if there is
             one. It is steps 1 and 2 below and the whole cost of this function;
             :func:`~defumat.response.nonlinear.raman_tensors` solves the same
@@ -298,6 +342,14 @@ def dynamical_matrix(
 
     structure = calculation.system.structure
     positions = jnp.asarray(structure.positions)
+    chosen = _require_a_subsettable_regime(calculation, atoms, structure.nat)
+    if atoms is not None and acoustic_sum_rule:
+        raise ValueError(
+            "the acoustic sum rule is a sum over every atom of the cell and "
+            "cannot be imposed on a subset's block. It is also not what a "
+            "frozen substrate wants: the modes left are frustrated "
+            "translations, which are physical"
+        )
 
     weights, _ = calculation.occupations(eigenvalues)
     weights = jnp.asarray(weights)
@@ -315,11 +367,11 @@ def dynamical_matrix(
     # 0. What ``S`` moving with the atoms adds, and all of it is zero for a
     #    norm-conserving dataset: the occupied block of the first-order state,
     #    and the mixed state's own change at frozen states (``drho.f90``).
-    derivatives = overlap_derivatives(calculation, solver, positions)
-    ort = orthogonality_states(calculation, solver, positions)
+    derivatives = overlap_derivatives(calculation, solver, positions, chosen)
+    ort = orthogonality_states(calculation, solver, positions, chosen)
     (rho_moved, bec_moved), (rho_ort, bec_ort) = non_variational_response(
         calculation, positions, jnp.asarray(wavefunctions), weights,
-        jnp.asarray(density), becsum, ort,
+        jnp.asarray(density), becsum, ort, chosen,
     )
     drhous_stacked = moved_stacked = becsumort = bec_moved_sym = None
     if rho_moved is not None:
@@ -335,14 +387,17 @@ def dynamical_matrix(
     if response is None:
         # 1. The bare perturbation ``(dH/du - eps dS/du)|psi>``, once per mode
         #    and stored: the loop below drives on it at every iteration.
-        bare = _bare_displacements(calculation, solver, potential.v_scf, positions)
+        bare = _bare_displacements(
+            calculation, solver, potential.v_scf, positions, chosen
+        )
 
         # 2. ``solve_linter``'s loop, one perturbation per (atom, direction).
         dpsi, drho, history, average_iterations, converged, extras = (
             self_consistent_response(
                 calculation, solver, bare, density, positions=positions,
                 alpha_mix=alpha_mix, tr2=tr2, max_iterations=max_iterations,
-                becsumort=becsumort, drhous=drhous_stacked, verbose=verbose,
+                becsumort=becsumort, drhous=drhous_stacked, atoms=chosen,
+                verbose=verbose,
             )
         )
     else:
@@ -373,7 +428,7 @@ def dynamical_matrix(
         calculation, positions, jnp.asarray(wavefunctions), weights,
         _state_weights(solver, weights), eigenvalues, jnp.asarray(density),
         dpsi, drho, solver.nocc, becsum=becsum, dbecsum=dbecsum,
-        multipliers=multipliers, ort=ort,
+        multipliers=multipliers, ort=ort, atoms=chosen, on_row=on_row,
     )
     # ``symdynph_gq`` first and the hermitisation second, which is the order
     # that makes the second one a *measurement*. A column of the raw matrix is a
@@ -385,13 +440,25 @@ def dynamical_matrix(
     # so the hermitisation has nothing left to do and what it would have removed
     # is a report on the linear solves. Whether the average *must* leave a
     # symmetric matrix is not claimed -- it is measured.
-    matrix = calculation.symmetrize_atom_pair_tensor(matrix)
+    if chosen is None:
+        matrix = calculation.symmetrize_atom_pair_tensor(matrix)
+        masses = structure.masses
+    else:
+        # **The subset's own block, and it is square by construction.** A row is
+        # the gradient against every atom, so the columns outside the subset are
+        # computed and then dropped: they are the force the molecule's
+        # displacement exerts on the frozen substrate, which is a real quantity
+        # and not one a frozen-substrate mode can respond to. Nothing is
+        # symmetrised -- the guard above established the run is ``nosym``, where
+        # ``symmetrize_atom_pair_tensor`` is the identity anyway.
+        matrix = matrix[:, :, list(chosen), :]
+        masses = np.asarray(structure.masses)[list(chosen)]
     asymmetry = float(np.abs(matrix - matrix.transpose(2, 3, 0, 1)).max())
     matrix = 0.5 * (matrix + matrix.transpose(2, 3, 0, 1))
     if acoustic_sum_rule:
         matrix = _impose_acoustic_sum_rule(matrix)
 
-    frequencies, vectors = _diagonalize(matrix, structure.masses)
+    frequencies, vectors = _diagonalize(matrix, masses)
     return Phonons(
         matrix=np.asarray(matrix),
         frequencies=frequencies,
@@ -401,6 +468,7 @@ def dynamical_matrix(
         history=history,
         average_iterations=average_iterations,
         converged=converged,
+        atoms=chosen,
     )
 
 
@@ -436,6 +504,7 @@ def self_consistent_response(
     mixing_mode: str = DEFAULT_RESPONSE_MIXING,
     becsumort=None,
     drhous=None,
+    atoms=None,
     verbose: bool = False,
 ):
     """``solve_linter``'s loop for the ``3 nat`` displacement patterns.
@@ -471,11 +540,18 @@ def self_consistent_response(
     ``dpsi`` an object array of shape ``(nat, 3)``.
     """
     nat = calculation.system.structure.nat
+    # ``rows`` is how many perturbations are being solved and ``chosen`` which
+    # atoms they belong to. They are the same thing only for a whole-cell run;
+    # a subset is refused unless the symmetrisation below is inert, because an
+    # operation *mixes* the modes and a partial stack is not something it can
+    # act on (see :func:`dynamical_matrix`).
+    chosen = tuple(range(nat)) if atoms is None else tuple(atoms)
+    rows = len(chosen)
     grid_shape = jnp.asarray(density).shape
-    core = _core_charge_response(calculation, density, positions)
-    dvscf = jnp.zeros((nat, 3) + grid_shape)
+    core = _core_charge_response(calculation, density, positions, chosen)
+    dvscf = jnp.zeros((rows, 3) + grid_shape)
     history, total_iterations, solves = [], 0, 0
-    dpsi = np.empty((nat, 3), dtype=object)
+    dpsi = np.empty((rows, 3), dtype=object)
     symmetrised = jnp.zeros_like(dvscf)
     converged = False
     # PAW's one-centre coefficients respond too, and they are *not* a function
@@ -483,20 +559,20 @@ def self_consistent_response(
     # ``dvscf`` exactly as :mod:`defumat.response.efield` carries its three,
     # which is ``dfpt_kernels``' ``int3_paw`` beside ``dvscfin``.
     onecentre = None if solver.ddd_paw is None else jnp.zeros(
-        (nat, 3) + solver.ddd_paw.shape
+        (rows, 3) + solver.ddd_paw.shape
     )
 
     mixer = ResponseMixer(mixing_mode, beta=alpha_mix)
     for iteration in range(max_iterations):
         response, becsum_response = [], []
-        for atom in range(nat):
+        for row in range(rows):
             for cart in range(3):
                 perturbation = _bare_plus_induced(
-                    solver, bare[atom, cart], dvscf[atom, cart], iteration > 0,
-                    None if onecentre is None else onecentre[atom, cart],
+                    solver, bare[row, cart], dvscf[row, cart], iteration > 0,
+                    None if onecentre is None else onecentre[row, cart],
                 )
                 solution = solver.solve(perturbation)
-                dpsi[atom, cart] = solution.dpsi
+                dpsi[row, cart] = solution.dpsi
                 total_iterations += solution.iterations
                 solves += 1
                 response.append(solver.response_density(solution.dpsi))
@@ -519,7 +595,7 @@ def self_consistent_response(
         # ``symdvscf``: the 3 nat responses are symmetrised *together*, after
         # the loop over modes and before the kernel, because an operation mixes
         # them -- rotating the direction and permuting the atom.
-        stacked = jnp.stack(response).reshape((nat, 3) + grid_shape)
+        stacked = jnp.stack(response).reshape((rows, 3) + grid_shape)
         if drhous is not None:
             # The first-order density the potential responds to is the *whole*
             # of it, and for an ultrasoft or PAW dataset the variational part is
@@ -534,9 +610,9 @@ def self_consistent_response(
             jax.jvp(
                 lambda r: calculation.potential(r).v_scf,
                 (jnp.asarray(density),),
-                (symmetrised[atom, cart],),
+                (symmetrised[row, cart],),
             )[1]
-            for atom in range(nat) for cart in range(3)
+            for row in range(rows) for cart in range(3)
         ]).reshape(dvscf.shape)
 
         induced_onecentre = None
@@ -552,18 +628,18 @@ def self_consistent_response(
             # accumulates one of the two cross terms and
             # :meth:`SternheimerSolver.response_becsum` -- a ``jvp``, so
             # ``2 Re`` -- accumulates both.
-            per_mode = np.empty((nat, 3), dtype=object)
+            per_mode = np.empty((rows, 3), dtype=object)
             index = 0
-            for atom in range(nat):
+            for row in range(rows):
                 for cart in range(3):
-                    per_mode[atom, cart] = becsum_response[index]
+                    per_mode[row, cart] = becsum_response[index]
                     index += 1
             if becsumort is not None:
                 per_mode = _add_becsum(per_mode, becsumort)
             per_mode = symmetrize_becsum_modes(calculation, per_mode)
             induced_onecentre = jnp.stack([
-                paw_response(calculation, per_mode[atom, cart], solver.becsum)
-                for atom in range(nat) for cart in range(3)
+                paw_response(calculation, per_mode[row, cart], solver.becsum)
+                for row in range(rows) for cart in range(3)
             ]).reshape(onecentre.shape)
 
         if core is not None:
@@ -612,7 +688,7 @@ def self_consistent_response(
             total_iterations / max(solves, 1), converged, extras)
 
 
-def _core_charge_response(calculation, density, positions):
+def _core_charge_response(calculation, density, positions, atoms=None):
     """``dv_xc`` from the core charge travelling with its atom -- ``addcore``.
 
     ``(nat, 3, nspin_mag, n1, n2, n3)``, or ``None`` when no species has a
@@ -658,15 +734,16 @@ def _core_charge_response(calculation, density, positions):
     def potential_at(pos):
         return calculation.at_positions(pos).potential(rho).v_scf
 
+    chosen = tuple(range(nat)) if atoms is None else tuple(atoms)
     fields = []
-    for atom in range(nat):
+    for atom in chosen:
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
             fields.append(jax.jvp(potential_at, (positions,), (tangent,))[1])
-    return jnp.stack(fields).reshape((nat, 3) + rho.shape)
+    return jnp.stack(fields).reshape((len(chosen), 3) + rho.shape)
 
 
-def _bare_displacements(calculation, solver, v_scf, positions) -> np.ndarray:
+def _bare_displacements(calculation, solver, v_scf, positions, atoms=None) -> np.ndarray:
     """``dV_bare/du |psi>`` for every atom and cartesian direction.
 
     ``dvqpsi_us.f90`` builds this term by term from ``dvloc/dtau``, the
@@ -681,12 +758,18 @@ def _bare_displacements(calculation, solver, v_scf, positions) -> np.ndarray:
     the induced ``dV_scf`` that the loop above adds, so the potential handed to
     ``at_positions`` here is held *fixed* while the atoms move under it.
 
+    ``atoms`` restricts the perturbations to a subset, in which case the result
+    is ``(len(atoms), 3)`` and its first index runs over the subset rather than
+    over the cell. That is the whole of what makes a partial dynamical matrix
+    cheap: this array and ``dpsi`` beside it are the memory the phase costs.
+
     Returns an object array of shape ``(nat, 3)`` whose entries are
     ``(nspin, nk, nocc, npwx)`` -- see the module docstring on what that costs.
     """
     batch = calculation.k_batch
     psi = solver.psi
     nat = positions.shape[0]
+    chosen = tuple(range(nat)) if atoms is None else tuple(atoms)
 
     eigenvalues = solver.eigenvalues
 
@@ -711,15 +794,15 @@ def _bare_displacements(calculation, solver, v_scf, positions) -> np.ndarray:
             applied.append(values)
         return jnp.stack(applied)
 
-    bare = np.empty((nat, 3), dtype=object)
-    for atom in range(nat):
+    bare = np.empty((len(chosen), 3), dtype=object)
+    for row, atom in enumerate(chosen):
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
-            bare[atom, cart] = jax.jvp(h_psi, (positions,), (tangent,))[1]
+            bare[row, cart] = jax.jvp(h_psi, (positions,), (tangent,))[1]
     return bare
 
 
-def orthogonality_states(calculation, solver, positions) -> np.ndarray | None:
+def orthogonality_states(calculation, solver, positions, atoms=None) -> np.ndarray | None:
     """``dpsi^ort_n = -1/2 sum_m psi_m <psi_m|dS/du|psi_n>``, one per mode.
 
     ``compute_drhous.f90``'s ingredient, and the piece of the first-order
@@ -734,7 +817,7 @@ def orthogonality_states(calculation, solver, positions) -> np.ndarray | None:
     block is zero. Returns an object array of shape ``(nat, 3)`` whose entries
     have ``dpsi``'s own shape.
     """
-    derivatives = overlap_derivatives(calculation, solver, positions)
+    derivatives = overlap_derivatives(calculation, solver, positions, atoms)
     if derivatives is None:
         return None
     psi = solver.psi
@@ -744,7 +827,7 @@ def orthogonality_states(calculation, solver, positions) -> np.ndarray | None:
     return out
 
 
-def overlap_derivatives(calculation, solver, positions) -> np.ndarray | None:
+def overlap_derivatives(calculation, solver, positions, atoms=None) -> np.ndarray | None:
     """``S'_mn = <psi_m|dS/du|psi_n>`` over the occupied block, per mode.
 
     ``None`` for a norm-conserving dataset. The object two other things are
@@ -771,16 +854,17 @@ def overlap_derivatives(calculation, solver, positions) -> np.ndarray | None:
             blocks.append(map_k(one_k, jnp.arange(psi.shape[1]), batch=batch))
         return jnp.stack(blocks)
 
-    out = np.empty((nat, 3), dtype=object)
-    for atom in range(nat):
+    chosen = tuple(range(nat)) if atoms is None else tuple(atoms)
+    out = np.empty((len(chosen), 3), dtype=object)
+    for row, atom in enumerate(chosen):
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
-            out[atom, cart] = jax.jvp(overlap_matrix, (positions,), (tangent,))[1]
+            out[row, cart] = jax.jvp(overlap_matrix, (positions,), (tangent,))[1]
     return out
 
 
 def non_variational_response(calculation, positions, psi, weights, density,
-                             becsum, ort):
+                             becsum, ort, atoms=None):
     """``drhous`` and ``becsumort``: the mixed state's change at frozen ``dpsi``.
 
     ``PHonon/PH/drho.f90``, whose own summary is the definition -- "the change
@@ -834,19 +918,20 @@ def non_variational_response(calculation, positions, psi, weights, density,
         return density_of(moved, states, weights, parts), parts
 
     nat = positions.shape[0]
+    chosen = tuple(range(nat)) if atoms is None else tuple(atoms)
     zero_p, zero_s = jnp.zeros_like(positions), jnp.zeros_like(psi)
     halves = {}
     for name in ("moved", "ort"):
-        halves[name] = (np.empty((nat, 3), dtype=object),
-                        np.empty((nat, 3), dtype=object))
-    for atom in range(nat):
+        halves[name] = (np.empty((len(chosen), 3), dtype=object),
+                        np.empty((len(chosen), 3), dtype=object))
+    for row, atom in enumerate(chosen):
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
             for name, pair in (("moved", (tangent, zero_s)),
-                               ("ort", (zero_p, ort[atom, cart]))):
+                               ("ort", (zero_p, ort[row, cart]))):
                 _, (rho, parts) = jax.jvp(mixed, (positions, psi), pair)
-                halves[name][0][atom, cart] = rho
-                halves[name][1][atom, cart] = parts
+                halves[name][0][row, cart] = rho
+                halves[name][1][row, cart] = parts
     return halves["moved"], halves["ort"]
 
 
@@ -1067,6 +1152,7 @@ def _state_weights(solver, weights):
 def _force_constants(
     calculation, positions, psi, weights, state_weights, eigenvalues, density,
     dpsi, drho, nocc, becsum=(), dbecsum=None, multipliers=None, ort=None,
+    atoms=None, on_row=None,
 ) -> np.ndarray:
     """``d^2E/du_i du_j``: two ``jvp`` of the force's gradient per mode.
 
@@ -1227,24 +1313,34 @@ def _force_constants(
         def frozen(pos, rho):  # noqa: F811 -- the norm-conserving signature
             return gradient(pos, psi, rho, becsum, None, weights)
 
-    matrix = np.zeros((nat, 3, nat, 3))
-    for atom in range(nat):
+    # ``chosen`` are the atoms perturbed and ``matrix`` has one row per
+    # perturbation. The *columns* stay the whole cell: a row is a gradient with
+    # respect to every position, and restricting the perturbations does not
+    # restrict what they push against.
+    chosen = tuple(range(nat)) if atoms is None else tuple(atoms)
+    matrix = np.zeros((len(chosen), 3, nat, 3))
+    for row, atom in enumerate(chosen):
         for cart in range(3):
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
-            states = jnp.zeros_like(psi).at[:, :, :nocc].set(dpsi[atom, cart])
+            states = jnp.zeros_like(psi).at[:, :, :nocc].set(dpsi[row, cart])
             if ort is not None:
                 # The occupied block, which the Sternheimer solve does not
                 # produce and the identity this module rests on needs: ``dpsi``
                 # in ``d^2E = ... + (d_psi d_j L).dpsi_i`` is the *whole*
                 # first-order state, and for an ultrasoft or PAW dataset its
                 # occupied part is fixed by the constraint rather than free.
-                states = states + ort[atom, cart]
+                states = states + ort[row, cart]
             if not ultrasoft:
                 _, hessian = jax.jvp(
-                    frozen, (positions, density), (tangent, drho[atom, cart])
+                    frozen, (positions, density), (tangent, drho[row, cart])
                 )
                 _, response = jax.jvp(electronic, (psi,), (states,))
-                matrix[atom, cart] = np.asarray(hessian + response)
+                matrix[row, cart] = np.asarray(hessian + response)
+                if on_row is not None:
+                    # Streamed as it is solved, so a job that is killed keeps
+                    # the rows it paid for. The row is the whole gradient
+                    # ``d^2E/du_(a i) du_(b j)`` over ``b``.
+                    on_row(atom, cart, matrix[row, cart])
                 continue
 
             # **One ``jvp`` and not two, and that is what an ultrasoft dataset
@@ -1258,13 +1354,13 @@ def _force_constants(
             # rule is what says so. An ultrasoft *metal* is refused for exactly
             # this reason (:func:`_require_a_moving_overlap_regime`).
             raw = jax.jvp(raw_mixed, (positions, psi), (tangent, states))[1]
-            correction = drho[atom, cart] - raw[0]
+            correction = drho[row, cart] - raw[0]
             parts = (
                 tuple(None if b is None else jnp.zeros_like(b) for b in becsum)
                 if dbecsum is None else
                 tuple(
                     None if a is None else a - b
-                    for a, b in zip(dbecsum[atom, cart], raw[1])
+                    for a, b in zip(dbecsum[row, cart], raw[1])
                 )
             )
             _, whole = jax.jvp(
@@ -1272,9 +1368,11 @@ def _force_constants(
                 (positions, psi, zero_density, zero_becsum, ground),
                 (tangent, states, correction, parts,
                  jnp.zeros_like(ground) if multipliers is None
-                 else multipliers[atom, cart]),
+                 else multipliers[row, cart]),
             )
-            matrix[atom, cart] = np.asarray(whole)
+            matrix[row, cart] = np.asarray(whole)
+            if on_row is not None:
+                on_row(atom, cart, matrix[row, cart])
     return matrix
 
 
@@ -1309,6 +1407,41 @@ def _diagonalize(matrix: np.ndarray, masses: np.ndarray):
     omega2, vectors = np.linalg.eigh(0.5 * (weighted + weighted.T))
     frequencies = np.sign(omega2) * np.sqrt(np.abs(omega2)) * RY_TO_CMM1
     return frequencies, vectors
+
+
+def _require_a_subsettable_regime(calculation, atoms, nat):
+    """Which atoms to perturb, and what a subset is refused for.
+
+    Returns ``None`` for a whole-cell run -- the path every committed case
+    takes, left bit for bit as it was -- and a validated tuple of indices
+    otherwise.
+
+    The two refusals are in :func:`dynamical_matrix`'s docstring. Both are
+    structural rather than cautious: ``symdvscf`` acts on the ``3 nat`` stack as
+    one object, and P39's ultrasoft tangents are each a ``(nat, 3)`` array that
+    nothing here has subsetted.
+    """
+    if atoms is None:
+        return None
+    chosen = tuple(int(a) for a in atoms)
+    if not chosen:
+        raise ValueError("atoms is empty: there is nothing to displace")
+    if len(set(chosen)) != len(chosen):
+        raise ValueError(f"atoms repeats an index: {chosen}")
+    if any(a < 0 or a >= nat for a in chosen):
+        raise ValueError(
+            f"atoms indexes outside the structure's {nat} atoms: {chosen}"
+        )
+    if calculation.use_symmetry:
+        raise NotImplementedError(
+            "a partial dynamical matrix needs nosym = .true.: symdvscf "
+            "symmetrises the 3 nat responses together -- an operation rotates "
+            "the cartesian direction and permutes the atom, so it mixes a mode "
+            "inside the subset with one outside it, and the partial stack is "
+            "not something the group can act on. Run the whole cell, or run the "
+            "subset with symmetry switched off"
+        )
+    return chosen
 
 
 def _require_one_spin_channel(calculation) -> None:

@@ -37,6 +37,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -131,6 +132,21 @@ AL4_TOLERANCE = 0.2
 #: gives and is why this number is not a tolerance so much as an assertion that
 #: the two routes are the same calculation.
 WEDGE_TOLERANCE = 1e-10
+
+
+@pytest.fixture(autouse=True)
+def _bounded_compilation_cache():
+    """Drop XLA's executables between tests, keeping the results cached.
+
+    ``CLAUDE.md``'s rule for a file that sweeps several cells: each distinct
+    shape compiles the whole SCF and response stack afresh and XLA keeps every
+    executable for the life of the process, so the peak grows monotonically
+    through the file. The ``lru_cache`` on the converged states is bounded for
+    the same reason -- ``maxsize=2`` is what a comparison between two cells
+    needs and is the largest that is not a leak.
+    """
+    yield
+    jax.clear_caches()
 
 
 def _build(case: str):
@@ -600,3 +616,134 @@ def test_a_spin_polarized_calculation_is_refused():
     assert calculation.nspin == 2
     with pytest.raises(NotImplementedError, match="spin-polarized"):
         _require_one_spin_channel(calculation)
+
+
+# ---------------------------------------------------------------------------
+# A partial dynamical matrix.
+# ---------------------------------------------------------------------------
+#
+# ``dynamical_matrix`` holds ``3 nat`` bare perturbations and ``3 nat`` first-
+# order wavefunctions at once, which is what stops it being run on a large cell
+# at all: a molecule on a slab is 471 perturbations where only 171 are wanted.
+# ``atoms=`` solves the subset, and the validation needs no new reference --
+# the subset's rows must be the full matrix's own rows.
+
+
+@lru_cache(maxsize=2)
+def _partial_pair(case: str):
+    """The whole matrix and the first atom's block, from one ground state."""
+    system, pseudos, calculation = _build(case)
+    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12,
+                     max_iterations=100)
+    whole = dynamical_matrix(
+        calculation, result.wavefunctions, result.eigenvalues, result.density,
+        result.becsum,
+    )
+    rows = []
+    partial = dynamical_matrix(
+        calculation, result.wavefunctions, result.eigenvalues, result.density,
+        result.becsum, atoms=(0,),
+        on_row=lambda atom, cart, row: rows.append((atom, cart)),
+    )
+    return calculation, whole, partial, rows
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "case", ["si-epsilon-unshifted-nosym", "si-us-nosym", "si-paw-nosym"],
+    ids=["nc", "us", "paw"],
+)
+def test_a_subset_reproduces_the_whole_matrix_rows(case):
+    """The rows a subset solves are the rows the whole calculation gives.
+
+    **This is the validation, and it needs no reference of any kind.** A partial
+    dynamical matrix is not an approximation -- it solves fewer perturbations of
+    the same equations -- so the only thing that can be wrong is the
+    bookkeeping, and the whole-cell run is the exact answer for what it shares.
+
+    Ultrasoft and PAW are here because the four tangents they add are each a
+    per-mode object array, and subsetting one of them wrongly would show up
+    nowhere else: the frequencies would still be real, still be threefold
+    degenerate on a cubic crystal, and still be plausible.
+    """
+    _, whole, partial, _ = _partial_pair(case)
+    assert partial.atoms == (0,)
+    assert partial.matrix.shape == (1, 3, 1, 3)
+    np.testing.assert_allclose(
+        partial.matrix, whole.matrix[0:1, :, 0:1, :], atol=1e-12
+    )
+
+
+@pytest.mark.slow
+def test_the_rows_are_streamed_as_they_are_solved():
+    """``on_row`` fires once per perturbation, so a long run can persist them.
+
+    The point of the hook is a calculation that does not fit in one job: what
+    it has paid for is on disk before the job ends.
+    """
+    _, _, _, rows = _partial_pair("si-epsilon-unshifted-nosym")
+    assert rows == [(0, 0), (0, 1), (0, 2)]
+
+
+@pytest.mark.slow
+def test_a_frozen_partner_raises_the_frequency_by_the_reduced_mass():
+    """Physics rather than bookkeeping, and nothing imposes it.
+
+    Freezing one of the two silicon atoms turns the optical mode's reduced mass
+    ``m/2`` into ``m``, so the frequency should fall by ``sqrt(2)`` -- exactly,
+    if the force constants obey the acoustic sum rule, since then
+    ``D_12 = -D_11`` and the optical mode is ``2 D_11/m`` against the subset's
+    ``D_11/m``. Measured: **1.414173** on the norm-conserving cell against
+    ``sqrt(2) = 1.414214``.
+
+    The deviation is therefore not noise but the sum rule's own residue, which
+    is why the tolerance here is loose enough for the PAW cell (1.414711, whose
+    acoustic modes sit at -15.7 cm^-1 against the norm-conserving 4.3).
+    """
+    _, whole, partial, _ = _partial_pair("si-epsilon-unshifted-nosym")
+    ratio = whole.frequencies[3] / partial.frequencies[0]
+    assert ratio == pytest.approx(np.sqrt(2.0), rel=1e-3)
+
+
+@pytest.mark.slow
+def test_a_subset_of_a_symmetrised_run_is_refused():
+    """``symdvscf`` acts on the ``3 nat`` stack as one object.
+
+    An operation rotates the cartesian direction *and* permutes the atom, so it
+    mixes a mode inside the subset with one outside it. Refusing is the only
+    honest option: the partial stack is not something the group can act on.
+    """
+    _, _, calculation = _build("si-epsilon")
+    assert calculation.use_symmetry
+    with pytest.raises(NotImplementedError, match="nosym"):
+        dynamical_matrix(
+            calculation, np.zeros((1, 1, 1, 1)), np.zeros((1, 1, 1)),
+            np.zeros((1, 1, 1, 1)), (), atoms=(0,),
+        )
+
+
+@pytest.mark.slow
+def test_the_acoustic_sum_rule_is_refused_on_a_subset():
+    """It is a sum over every atom, and a frozen substrate does not want it.
+
+    The modes a fixed substrate leaves are frustrated translations, which are
+    the physical content of such a calculation rather than an artefact.
+    """
+    _, _, calculation = _build("si-epsilon-unshifted-nosym")
+    with pytest.raises(ValueError, match="acoustic sum rule"):
+        dynamical_matrix(
+            calculation, np.zeros((1, 1, 1, 1)), np.zeros((1, 1, 1)),
+            np.zeros((1, 1, 1, 1)), (), atoms=(0,), acoustic_sum_rule=True,
+        )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("bad", [(), (0, 0), (5,)], ids=["empty", "repeat", "range"])
+def test_a_malformed_subset_is_rejected(bad):
+    """An index typed wrong must not silently become a different calculation."""
+    _, _, calculation = _build("si-epsilon-unshifted-nosym")
+    with pytest.raises(ValueError):
+        dynamical_matrix(
+            calculation, np.zeros((1, 1, 1, 1)), np.zeros((1, 1, 1)),
+            np.zeros((1, 1, 1, 1)), (), atoms=bad,
+        )
