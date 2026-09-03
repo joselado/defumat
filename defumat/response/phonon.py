@@ -1456,16 +1456,40 @@ def _require_one_spin_channel(calculation) -> None:
     (``tests/regression/test_lsda_response.py``). The ``nocc`` this module
     derives is that pair.
 
-    What is left is the second-derivative *assembly* above the solve, and it is
-    a term rather than a count: :func:`non_variational_response` and
-    :func:`_multiplier_response` contract ``dpsi`` against ``becsum`` and
-    against the orthonormality multipliers, both of which acquire a spin axis
-    that nothing here has been run with -- and P28's split between the frozen
-    Hessian's ``wg`` and the electronic term's ``2 wk`` is a statement about
-    *one* channel's occupation, so a two-channel run needs it checked per
-    channel rather than inherited. No committed reference exists to check it
-    against either: the vendored ``ph.x`` has LSDA phonons, so one can be
-    generated, and that is the work this refusal names.
+    What is left is the second-derivative *assembly* above the solve.
+
+    **The reason above was a guess and it has now been measured, so what
+    follows is data rather than an argument.** The two terms it names --
+    :func:`non_variational_response` and :func:`_multiplier_response` -- are
+    ultrasoft and PAW terms, and they are identically inert for a
+    norm-conserving dataset, so they cannot be what blocks a norm-conserving
+    LSDA run. Three measurements, with both guards bypassed:
+
+    * **A nonmagnetic cell run as ``nspin = 1`` and as ``nspin = 2`` gives the
+      same dynamical matrix to 1.6e-14 Ry/bohr^2** on force constants of 0.287,
+      and the same frequencies to 8.3e-10 cm^-1 (unshifted ``nosym`` silicon).
+      That is the check that catches a factor of two in the spin sum, which is
+      what P45, P51 and P52 each found the hard way, so the normalisation and
+      the plumbing are right.
+    * **One column against a finite difference of the forces agrees to 3.6e-7**
+      on a column of scale 6.0e-3 (the antiferromagnetic hydrogen chain, a
+      *smeared metal* -- so this is the one measurement that reaches P28's
+      ``wg``/``wk`` split, which is indistinguishable wherever the occupations
+      are 0 or 1).
+    * **The alarming acoustic residue on that cell is the cell**, not the spin
+      axis: 992.9 cm^-1 at ``nspin = 2`` against **1168.5 at ``nspin = 1``** on
+      the same geometry. A hydrogen chain in vacuum at ``degauss = 0.10`` has
+      almost no transverse restoring force. Running the control is what stopped
+      that number being read as evidence against the assembly.
+
+    **The refusal stays anyway, and this is why.** That chain converges to
+    ``M = -3.4e-08`` -- it demagnetises, exactly as P63's spirals do -- so no
+    measurement here has a genuinely magnetic ground state in it, and a
+    two-channel assembly whose two channels are equal is not a test of a spin
+    axis at all. What would lift it is one cell that *stays* magnetic checked
+    against a finite difference of its forces, and a generated ``ph.x`` LSDA
+    reference beside it; the vendored ``ph.x`` has LSDA phonons, so the second
+    is available for the asking.
     """
     if calculation.nspin == 2:
         raise NotImplementedError(
