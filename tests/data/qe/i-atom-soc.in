@@ -1,0 +1,36 @@
+! An iodine atom in a box: a magnetic insulator with spin-orbit coupling.
+!
+! The smallest cell that carries an orbital magnetization at all. A neutral
+! iodine atom is 5s2 5p5, one hole in the p shell, so Hund's rules give S = 1/2,
+! L = 1 and -- the shell being more than half full -- J = L + S = 3/2 with the
+! orbital moment parallel to the spin. Spin-orbit coupling is what locks them
+! together, and a fully relativistic norm-conserving dataset is what carries it.
+!
+! `occupations = 'fixed'` with nbnd = 8: seven spinor bands hold the seven
+! valence electrons and the eighth is empty, 0.16 eV above. That gap is what
+! makes the manifold isolated, which every Berry-phase quantity needs. A
+! smearing wide enough to converge this atom comfortably (degauss = 0.005 Ry)
+! puts a fifth of an electron in the eighth band and the manifold stops being
+! one; fixed occupations converge in 9 iterations here and need no such choice.
+!
+! 12 bohr of box leaves the periodic images overlapping slightly, which is
+! deliberate: the bands acquire a little dispersion, and a k-space Berry phase
+! of a set of flat bands is not a test of anything.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 1, celldm(1) = 12.0, nat = 1, ntyp = 1, ecutwfc = 45.0,
+    occupations = 'fixed', nbnd = 8, nosym = .true., noinv = .true.,
+    noncolin = .true., lspinorb = .true.,
+    starting_magnetization(1) = 0.5, angle1(1) = 0.0
+ /
+ &electrons
+    conv_thr = 1.0d-10, mixing_beta = 0.3
+ /
+ATOMIC_SPECIES
+ I 126.9 I.rel-pbe-nc-dojo.UPF
+ATOMIC_POSITIONS crystal
+ I 0.00 0.00 0.00
+K_POINTS (automatic)
+ 1 1 1 0 0 0

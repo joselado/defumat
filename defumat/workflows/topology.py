@@ -168,8 +168,13 @@ class DFTSource:
         return self._ddd
 
     def states(self, points, keep_projectors: bool = False,
-               keep_velocity: bool = False):
+               keep_velocity: bool = False, keep_hamiltonian: bool = False):
         """Occupied states at the given crystal k-points, in the given order.
+
+        ``keep_hamiltonian`` keeps the fixed-density Hamiltonian itself, which
+        an orbital magnetization applies between two k-derivatives. It costs
+        nothing -- the object was built to diagonalise with and is otherwise
+        dropped.
 
         ``keep_velocity`` additionally builds the
         :class:`~defumat.response.velocity.VelocityOperator` of *this*
@@ -285,6 +290,7 @@ class DFTSource:
             keep_projectors=keep_projectors,
             energies=eigenvalues[0],
             velocity=velocity,
+            hamiltonian=hamiltonians[0] if keep_hamiltonian else None,
         )
 
     def _check_gap(self, eigenvalues: np.ndarray, points: np.ndarray) -> None:

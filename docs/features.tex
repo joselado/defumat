@@ -2011,7 +2011,83 @@ PAW} dataset, because the spinor overlap's off-diagonal spin blocks are
 a fully-relativistic \emph{norm-conserving} dataset has $S = 1$ and is exact. And
 a \textbf{spin spiral}, whose two components do not share a set of atomic
 orbitals. \code{pw.x}'s \code{lorbm} computes the \emph{cell's} orbital
-magnetization and has no per-atom counterpart to check this against.
+magnetization and has no per-atom counterpart to check this against --- that
+quantity is the next subsection, and the two are worth reading together.
+\end{refuses}
+
+% =====================================================================
+\subsection{The orbital magnetization of the cell}
+
+The other half of a magnet's moment, and the half no integral over the unit cell
+can give. A Bloch state's current circulates through the whole crystal, so
+$\int \mathbf r \times \mathbf j$ depends on where the cell is cut --- the same
+difficulty the electric polarization has. What is well defined is a k-space
+quantity (Thonhauser \emph{et al.}, PRL \textbf{95}, 137205 (2005); Ceresoli
+\emph{et al.}, PRB \textbf{74}, 024408 (2006)):
+\begin{equation*}
+  \mathbf M = \frac{e}{2\hbar c}\,\mathrm{Im} \sum_n \int [d\mathbf k]\,
+    \langle \partial_{\mathbf k} u_n | \times
+      \left( H_{\mathbf k} + E_{n\mathbf k} - 2\mu \right)
+    | \partial_{\mathbf k} u_n \rangle,
+\end{equation*}
+a \emph{local} circulation inside each cell plus an \emph{itinerant} one along
+the boundary. Neither is separately measurable and their sum is. The derivative
+is the covariant finite difference over a uniform mesh --- the dual states
+$|w_m\rangle = \sum_n (M^{-1})_{nm} |u_{\mathbf k + \mathbf b, n}\rangle$ of the
+neighbouring manifold --- so nothing is divided by $E_n - E_m$ and the answer is
+invariant under any unitary mixing of the occupied bands.
+
+\begin{pycode}
+from defumat import Calculator
+
+calc = Calculator.from_file("i-atom-soc.in")    # noncolin, lspinorb, gapped
+orbm = calc.get_orbital_magnetization(divisions=(3, 3, 3))
+
+orbm.lc, orbm.ic     # pw.x's two Kubo terms, Bohr magnetons per cell
+orbm.total           # their sum, at mu = 0
+orbm.chern           # the Chern vector; zero for an ordinary insulator
+\end{pycode}
+
+\textbf{Against \code{pw.x}'s \code{lorbm}} on the same $3\times3\times3$ grid,
+an iodine atom in a twelve-bohr box: $M_{LC} = -0.5986388$ against
+$-0.5986370$ and $M_{IC} = -0.5757995$ against $-0.5757987$, so the total is
+$-1.1744384$ against $-1.1744357$. What is left at $2\times10^{-6}$ is the
+difference between two separately converged densities: re-running at
+\code{conv\_thr} of 1e-6, 1e-8 and 1e-12 moves $M_{LC}$ by 5e-6, 2e-7 and 2e-6
+against the same reference. \textbf{The physics check is independent of both}:
+iodine is $5s^2 5p^5$, one hole in the p shell, and Hund's rules give
+$L = 1$ locked parallel to $S = 1/2$. The site projection of the previous
+subsection measures $\langle L_z \rangle = 0.99977\,\hbar$ on the same run, and
+the modern theory gives $1.1744\,\mu_B$ --- 17\% more, which is what a
+projection onto atomic orbitals does not see: the circulation outside those
+orbitals, and the nonlocal pseudopotential's own contribution to the velocity,
+since $\langle L \rangle$ is $\mathbf r \times \mathbf p$ where this contracts
+$H$.
+
+\textbf{Two conventions are QE's and are worth knowing.} What both codes print
+is $M(\mu = 0)$: \code{orbm\_kubo} imports the Fermi level and never uses it,
+and the term it drops is $\mu$ times the Chern vector, which vanishes for any
+topologically trivial manifold. And the two printed terms are \emph{not} the
+papers' LC/IC split --- the Fortran prints $\mathrm{Im}\langle \partial u|H|
+\partial u\rangle$ and $\mathrm{Im}\langle \partial u|E|\partial u\rangle$, which
+differ from $(H-E)$ and $2(E-\mu)$ term by term and agree in the sum. This
+follows the Fortran, so the two halves can be compared and not only the total.
+
+\begin{refuses}
+\textbf{Refuses.} \textbf{Ultrasoft and PAW}, which \code{pw.x} refuses in the
+same place (\code{setup.f90}: `Orbital Magnetization not implemented with
+USPP/PAW'): the overlap between neighbouring manifolds would need $q_{ij}(b)$
+and the dual states would have to be dual in the $S$ metric. A run
+\textbf{without spin-orbit coupling}, where the orbital moment is quenched
+identically --- measured here as $10^{-9}$ with \code{soc\_scale = 0} in the
+same relativistic dataset. \textbf{\code{nspin = 2}}, which is the same
+statement: each channel is separately time-reversal symmetric. A
+\textbf{metal}, or any manifold not separated from the band above it, which the
+gap check refuses by name. A \textbf{spin spiral}. And a mesh with
+\textbf{two divisions} along a direction that carries a derivative, where a
+point's two neighbours are the same k-point and the central difference is an
+alias; one division is allowed and sets that direction's derivative to zero,
+which is what a slab means.
 \end{refuses}
 
 % =====================================================================

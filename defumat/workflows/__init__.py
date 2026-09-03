@@ -19,6 +19,7 @@ from defumat.workflows.pdos import (
 from defumat.workflows.relax import RelaxResult, run_relax
 from defumat.workflows.conductivity import run_conductivity
 from defumat.workflows.nesting import run_nesting
+from defumat.workflows.orbital_magnetization import run_orbital_magnetization
 from defumat.workflows.magnons import (MagnonDispersion, SpinSusceptibility,
                                        run_magnon_dispersion,
                                        run_spin_susceptibility)
@@ -37,6 +38,7 @@ __all__ = [
     "OpticalSpectrum",
     "DFTSource",
     "run_polarization",
+    "run_orbital_magnetization",
     "DensityOfStates",
     "NSCFResult",
     "RelaxResult",

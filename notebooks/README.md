@@ -58,6 +58,7 @@ instead, which means the physics is selected in the input file rather than at th
 | The same `E(q)` from `dE/dq` instead | `get_spiral_scan(gradients=True)` | [12](12_spin_spirals.ipynb) |
 | A magnet's ground-state pitch | `get_spiral_relaxation()` | [14](14_spiral_relaxation.ipynb) |
 | Site-resolved `<L>`, `<S>` and `<J>` | `get_angular_momenta()` | [29](29_effective_mass_and_angular_momenta.ipynb) |
+| The cell's orbital magnetization | `get_orbital_magnetization()` | [39](39_orbital_magnetization.ipynb) |
 | One run continued from another across a change of spin regime | `with_spin()` | [18](18_continuing_a_calculation.ipynb) |
 
 ### Response, vibrations and spectra
@@ -156,6 +157,7 @@ want a number.
 | [`35_magnetoelectric_effect.ipynb`](35_magnetoelectric_effect.ipynb) | A magnetic field making an electric polarization, and the spin-orbit null that shows the effect is spin-orbit coupling and nothing else |
 | [`37_structure_factors.ipynb`](37_structure_factors.ipynb) | The Fourier coefficients a diffractometer measures: silicon's forbidden reflection as a picture of the bond charge, and an antiferromagnet scattering neutrons where it scatters no X-rays |
 | [`38_magnons.ipynb`](38_magnons.ipynb) | Spin waves: the collective mode below the Stoner continuum, the Goldstone theorem as an error bar, and a magnon going soft |
+| [`39_orbital_magnetization.ipynb`](39_orbital_magnetization.ipynb) | The circulating half of a magnet's moment: an iodine atom's Hund's-rule orbital moment, and the part of it no projection onto atomic orbitals can see |
 
 ## Conventions
 
@@ -248,11 +250,11 @@ workstation core, slowest last:
 | `09` | 6 | `06` | 23 | `23` | 35 | `33` | 115 |
 | `02` | 8 | `25` | 28 | `32` | 35 | `13` | 131 |
 | `16` | 9 | `17` | 29 | `34` | 40 | `30` | 131 |
-| `37` | 9 | `18` | 29 | `19` | 47 | `08` | 171 |
-| `03` | 10 | `12` | 30 | `10` | 50 | `27` | 178 |
-| `05` | 10 | `21` | 30 | `20` | 57 | `38` | 242 |
-| `04` | 12 | `15` | 31 | `29` | 59 | `35` | 276 |
-| `22` | 12 | `24` | 31 | `11` | 81 |  |  |
+| `37` | 9 | `18` | 29 | `19` | 47 | `39` | 151 |
+| `03` | 10 | `12` | 30 | `10` | 50 | `08` | 171 |
+| `05` | 10 | `21` | 30 | `20` | 57 | `27` | 178 |
+| `04` | 12 | `15` | 31 | `29` | 59 | `38` | 242 |
+| `22` | 12 | `24` | 31 | `11` | 81 | `35` | 276 |
 | `00` | 22 | `28` | 33 | `14` | 89 |  |  |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two

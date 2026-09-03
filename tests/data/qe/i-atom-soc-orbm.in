@@ -1,0 +1,34 @@
+! The orbital magnetization of `i-atom-soc.in`, by `pw.x`'s own route.
+!
+! `lorbm = .true.` in a non-self-consistent run over a uniform grid is what
+! reaches `PW/src/orbm_kubo.f90`, which prints the two Kubo terms in Bohr
+! magnetons per cell. It is norm-conserving only (`setup.f90` refuses ultrasoft
+! and PAW) and it sums every band it is given with no occupations at all, so
+! `nbnd = 7` here is the occupied manifold and nothing else -- which is also why
+! the manifold has to be gapped for the number to mean anything.
+!
+! Three divisions per direction is the smallest uniform grid that carries a
+! derivative: with two, a point's two neighbours along a direction are the same
+! k-point and every difference is identically zero.
+!
+! `pw.x` builds its own k-grid for this (`kpoint_grid_efield`) and sets
+! `nosym`, so the K_POINTS card below only says how many divisions.
+ &control
+    calculation = 'nscf'
+    lorbm = .true.
+ /
+ &system
+    ibrav = 1, celldm(1) = 12.0, nat = 1, ntyp = 1, ecutwfc = 45.0,
+    occupations = 'fixed', nbnd = 7,
+    noncolin = .true., lspinorb = .true.,
+    starting_magnetization(1) = 0.5, angle1(1) = 0.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ I 126.9 I.rel-pbe-nc-dojo.UPF
+ATOMIC_POSITIONS crystal
+ I 0.00 0.00 0.00
+K_POINTS (automatic)
+ 3 3 3 0 0 0

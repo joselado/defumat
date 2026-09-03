@@ -100,6 +100,9 @@ for it, what it refuses, and whether Quantum ESPRESSO and Elk compute it too.
   a spin model
 - **Orbital, spin and total angular momentum on each atom** —
   $\langle L\rangle$, $\langle S\rangle$, $\langle J\rangle$
+- **The cell's orbital magnetization** $\mathbf{M}_\mathrm{orb}$, by the modern
+  theory — the circulating half of a magnet's moment, which no integral over
+  the unit cell can give
 - **Magnetocrystalline anisotropy**, by the force theorem
 - **Magnetic torque** $-\mathrm{d}F/\mathrm{d}\theta$, the anisotropy from one
   angle rather than a difference of two
@@ -185,6 +188,7 @@ drive any of this and is what the examples below use.
 | **Band velocities** $\partial\epsilon_n/\partial\mathbf{k}$, with the nonlocal pseudopotential's own contribution — norm-conserving, ultrasoft and PAW | `band_velocities`, `VelocityOperator` | (✓)³ | |
 | **Effective mass tensor** $m^{\ast}_{ij}$ at any k-point, with the principal masses and the density-of-states mass. Bands inside a degenerate multiplet are reported as the multiplet's invariant sum | `effective_mass`, `Calculator.get_effective_mass` | | ✓ |
 | **Orbital, spin and total angular momentum on each atom** — $\langle L\rangle$, $\langle S\rangle$, $\langle J\rangle$, which is where the orbital moment of a spin-orbit magnet actually sits. Needs the whole k-grid; a relativistic ultrasoft or PAW dataset is refused | `angular_momenta`, `Calculator.get_angular_momenta` | (✓)⁴ | ✓ |
+| **Orbital magnetization of the cell** $\mathbf{M}_\mathrm{orb}$ — the modern theory's k-space expression, local plus itinerant circulation, which is the half of a magnet's moment no integral over the cell can give. Needs spin-orbit coupling, broken time reversal and a gapped manifold; norm-conserving, on the whole uniform grid. Agrees with `pw.x`'s `lorbm` on both Kubo terms to **2e-6** $\mu_B$/cell | `lorbm`, `run_orbital_magnetization`, `Calculator.get_orbital_magnetization` | ✓ | ¹³ |
 | **Dielectric constant** $\epsilon^\infty$ and **Born effective charges** — insulators, norm-conserving, ultrasoft and PAW (PAW $Z^{\ast}$ refused). The response solver underneath runs for collinear spin too | `dielectric_tensor` | ✓ | ✓ |
 | **Phonons at $\Gamma$** — the force constants and their frequencies, insulators and metals, on norm-conserving, ultrasoft and PAW datasets. Away from $\Gamma$, and an ultrasoft or PAW metal, are refused | `dynamical_matrix` | ✓ | ✓ |
 | **The strain response** $\partial\psi/\partial\varepsilon$, $\partial\rho/\partial\varepsilon$ and the deformation potentials, on norm-conserving, ultrasoft and PAW datasets | `strain_response` | | |
@@ -259,6 +263,11 @@ Where the tick is qualified:
   is **read in** rather than assembled from the modes: nothing there sums the
   oscillator strengths into $\epsilon^0$, which is the half `dynmat.x`'s `lperm`
   does.
+
+- ¹³ Elk has no orbital magnetization by the modern theory. Its moments are
+  integrals of the magnetization over the muffin tins and the interstitial, and
+  its orbital information is the per-atom `writelsj` decomposition of the row
+  above; the phrase does not occur anywhere in its manual.
 
 - ¹¹ Elk's `mae.f90` (tasks 28/29) computes a magnetic anisotropy energy, but by
   a **different method**: it re-converges a full ground state for each direction

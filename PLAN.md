@@ -9852,6 +9852,123 @@ is defined needs a much finer grid, which is a cost question and not a missing t
 `nm = 561`.
 
 
+### P64 — The orbital magnetization of the cell, by the modern theory. ✅ DONE, norm-conserving.
+
+`defumat/topology/orbital_magnetization.py`, `defumat/topology/mesh.py`'s `VolumeMesh`,
+two new primitives on `StateSet` (`transport_plan`, `hamiltonian_matvec`),
+`defumat/workflows/orbital_magnetization.py`, `Calculator.get_orbital_magnetization`,
+`tests/unit/test_orbital_magnetization.py` (11), `tests/regression/test_orbital_magnetization.py`
+(5), two committed inputs with a generated `pw.x` reference, and
+`notebooks/39_orbital_magnetization.ipynb`.
+
+`PW/src/orbm_kubo.f90`, reached by `lorbm` — the one magnetism quantity `pw.x` has that
+was not here. A magnet's moment has two parts and only one of them is an integral over the
+cell: the orbital part is the current a Bloch state carries *through* the crystal, so
+`int r x j` depends on where the cell is cut and is not a property of the material at all.
+The k-space expression that is (Thonhauser, Ceresoli, Vanderbilt and Resta, PRL 95, 137205
+(2005); Ceresoli et al., PRB 74, 024408 (2006); Malashevich et al., NJP 12, 053032 (2010))
+is a *local* circulation inside each cell plus an *itinerant* one along the boundary,
+neither separately measurable.
+
+**The gating problem was the case, not the code, and it is worth stating because it is the
+same shape as P50's.** The quantity is nonzero only when time reversal is broken *and*
+spin and orbital motion are coupled, and QE's routine sums every band it is given with no
+occupations at all (`ef` is imported at line 27 and never used), so it is insulator-only.
+Every spinor magnet committed here is a **metal** (nickel, the cobalt slab) and every
+spinor insulator is **nonmagnetic** (silicon, platinum, bismuthene) — so the obvious cases
+all agree with zero or with nothing. What broke it open is that a magnetic insulator with
+strong spin-orbit coupling does not have to be a crystal: **an iodine atom in a twelve-bohr
+box**. Neutral iodine is `5s2 5p5`, one hole in the p shell, and Hund's rules give
+`S = 1/2`, `L = 1` and — the shell being more than half full — `J = 3/2` with `L` parallel
+to `S`. Both committed datasets it needs are already here (`I.rel-pbe-nc-dojo.UPF`), the
+SCF is 2.4 s in `pw.x` and 5.9 s here, and it carries a **physics** check no crystal
+would: the answer should be about one Bohr magneton.
+
+**The occupation choice is what makes it an insulator and it is not a formality.** A
+smearing wide enough to converge an atom comfortably (`degauss = 0.005` Ry) puts a fifth of
+an electron in the eighth band, because the gap above the manifold is 0.16 eV and the
+smearing is 0.07 — so the manifold stops being isolated and the dual-state construction is
+inverting the overlap of a set that is not a set. `occupations = 'fixed'` with `nbnd = 8`
+converges in **9 iterations** and leaves exactly seven filled spinor bands. QE and defumat
+agree on that ground state to every digit `pw.x` prints (-25.80117002 Ry, m_z = 1.00).
+
+**The construction is D4-safe by being covariant, not by handling degeneracies.** The
+textbook expression carries a per-band `E_n`, which is not gauge invariant inside a
+degenerate multiplet; the Fortran's `zgefa`/`zgedi` at lines 404-408 invert the overlap
+with the neighbouring manifold and build the **dual states**
+`|w_m> = sum_n (M^-1)_{nm} |u_{k+b, n}>`, which satisfy `<u_l|w_m> = delta_lm`. Everything
+downstream is then the occupied *block* `<u_n|H|u_m>` rather than an eigenvalue, and
+nothing is ever divided by `E_n - E_m`. Validated directly: a random unitary mixing of a
+two-band manifold at every k-point moves nothing (1e-9).
+
+**Two of QE's conventions are not what a reader of the papers would assume.** The Fermi
+level is imported and never used, so what both codes print is `M(mu = 0)`; the dropped term
+is `mu` times the Chern vector, which vanishes for a trivial manifold and is otherwise a
+statement about where the zero of energy sits. It is computed here anyway and reported as
+`dm_dmu`, because the same sum **is** a Chern number: `S^curv_l = -4 pi N_l C_l`, which
+converges onto the Fukui-Hatsugai-Suzuki integer (-0.956, -0.992, -0.999 on 5x5, 9x9 and
+15x15 Haldane meshes, against an exact -1 from a construction sharing nothing with it).
+And QE's two printed terms are **not** the papers' LC/IC split — the Fortran prints
+`Im<du|H|du>` and `Im<du|E|du>` where the papers write `(H - E)` and `2(E - mu)`. The two
+splits differ term by term and agree in the sum; this follows the Fortran so that both
+halves can be compared and not only the total.
+
+**The lattice factor looks wrong and is right.** `orbm_kubo` multiplies the assembly of
+the `i` and `j` derivative directions by `b_l`, the *third* reciprocal vector, which is not
+generally perpendicular to either. It is exact for any lattice: `d/dk` in reduced
+coordinates carries the **direct** lattice vectors, and `a_i x a_j = Omega b_l / (2 pi)`.
+A cubic test case cannot tell the two apart, which is why it is written down.
+
+**Against `pw.x` on the same 3x3x3 grid:** `M_LC = -0.5986388` against `-0.5986370` and
+`M_IC = -0.5757995` against `-0.5757987`, total `-1.1744384` against `-1.1744357` —
+**2e-6 mu_B/cell**, on both terms separately. What is left is the difference between two
+separately converged densities and is measured rather than asserted: re-running at
+`conv_thr` 1e-6, 1e-8 and 1e-12 gives `M_LC` off by 5e-6, 2.4e-7 and 1.8e-6 against the
+same reference, so the scatter is the floor and tightening the SCF does not walk through
+it. The transverse components come out at **1e-9** here against `pw.x`'s 1.6e-4 and 5.4e-4
+— both are zero by symmetry and neither code imposes it, so what that compares is the two
+densities' residual asymmetry.
+
+**The physics check is independent of both codes, and it is the reason for the atom.**
+P48's site projection on the same run gives `<L_z> = 0.99977 hbar` and `<S_z> = 0.49975`,
+which is Hund's rules exactly; the modern theory gives **1.1744** mu_B. **The 17 per cent
+between them is not one thing but two**, and calling it "the itinerant part" would be an
+overclaim: `<L>` is `r x p` on *projected atomic orbitals*, so it misses the circulation
+outside them, and it is `p` where this is the velocity `i[H, r]`, which carries the
+nonlocal pseudopotential. Quoting the two side by side is the honest way to read both.
+
+**The null is the same run with the coupling switched off.** `soc_scale = 0` (P58's
+switch, 0 or 1 only) inside the *same* relativistic dataset leaves the magnet a magnet
+(`m_z = 1.0000`, and 30 mRy of the total energy is the coupling) and takes the orbital
+magnetization to **6e-9**. Everything else — the cell, the mesh, the dataset, the
+magnetization — is unchanged, which is what makes it sharper than comparing two systems.
+
+**One mesh rule, and it separates two cases that look alike.** A direction with a single
+division carries no derivative and is set to **zero** — exact for a slab, and what makes a
+two-dimensional model run on an `(n, n, 1)` mesh. A direction with **two** is refused: a
+point's two neighbours there are the same k-point (reached with opposite umklapp shifts),
+so the central difference is an alias rather than a derivative, and it would produce a
+plausible number.
+
+**What the subpackage gained.** Everything in `defumat/topology/` until now was built from
+one primitive, the overlap `<u_mk|S|u_nk'>`, because loops and determinants are all a
+*phase* needs. A derivative needs the transported coefficients themselves — the dual states
+are a linear combination of the neighbours' — and it needs `H` **applied** rather than
+differentiated. So `StateSet` grew `transport_plan` (a gather index and a phase, which is a
+Miller-index gather for plane waves and the atomic gauge's phase for a model) and
+`hamiltonian_matvec`. Both are answered by `ModelStates` as well, which is what lets the
+Haldane checks reach every line of the assembly with no lattice and no unit in sight.
+`PlaneWaveStates.hamiltonian` is a **non-static** field, unlike `velocity`: a `Hamiltonian`
+is itself an `eqx.Module` of arrays and marking one static asks equinox to hash a JAX
+array, which it warns about.
+
+**Refused by name:** ultrasoft and PAW (`setup.f90:130` refuses the same combination —
+the overlap between neighbouring manifolds needs `q_ij(b)` and the dual states would have
+to be dual in the `S` metric), `nspin = 2`, a run without spin-orbit coupling, a metal or
+any manifold not separated from the band above it (the gap check), a spin spiral, and a
+two-division mesh.
+
+
 ## 3a. Environment decisions (settled)
 
 - Dependencies are installed into the **base anaconda env** (`pip install equinox`);

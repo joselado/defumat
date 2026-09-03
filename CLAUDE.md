@@ -829,6 +829,47 @@ quadratic law is long past its range. The cheap setting the notebook runs (`nbnd
 Not claimed: a converged spin-wave stiffness, whose small wavevectors a 4x4x4 grid does not
 reach.
 
+**The orbital magnetization is in** (P64), which is the one magnetism quantity `pw.x` has
+that was not here: `PW/src/orbm_kubo.f90`, reached by `lorbm`. A magnet's moment has two
+parts and only one of them is an integral over the cell -- the orbital part is the current a
+Bloch state carries *through* the crystal, so `int r x j` depends on where the cell is cut,
+which is the polarization's difficulty with the polarization's resolution. The k-space
+expression is a *local* circulation plus an *itinerant* one, built from the **dual states**
+of the neighbouring manifolds (`sum_n (M^-1)_{nm} |u_{k+b,n}>`, QE's `zgefa`/`zgedi`) -- a
+covariant finite difference, so rule D4 is satisfied by construction rather than by handling
+degeneracies, and nothing is divided by `E_n - E_m`. **The gating problem was the case, not
+the code**: the quantity needs broken time reversal *and* spin-orbit coupling, and QE's
+routine sums every band it is given with no occupations, so it is insulator-only -- while
+every spinor magnet committed here is a metal and every spinor insulator is nonmagnetic.
+What broke it open is that a magnetic insulator with strong spin-orbit coupling need not be
+a crystal: **an iodine atom in a twelve-bohr box**, `5s2 5p5` with one p hole, which Hund's
+rules give `L = 1` parallel to `S = 1/2`. Against `pw.x` on the same 3x3x3 grid, on both
+Kubo terms separately: `M_LC = -0.5986388` against `-0.5986370` and `M_IC = -0.5757995`
+against `-0.5757987`, **2e-6 mu_B/cell**, which is measured to be the gap between two
+separately converged densities rather than asserted (`conv_thr` 1e-6, 1e-8, 1e-12 move it
+by 5e-6, 2.4e-7, 1.8e-6). **The physics check needs neither code**: the site projection of
+P48 gives `<L_z> = 0.99977 hbar` on the same run and the modern theory gives 1.1744 mu_B --
+and the 17 per cent between them is *two* things rather than one, which is why it is not
+called "the itinerant part": `<L>` is `r x p` on projected atomic orbitals, so it misses
+both the circulation outside those orbitals and the nonlocal pseudopotential's own
+contribution to the velocity `i[H, r]`. **The null is the same run with the coupling switched off** (`soc_scale = 0`, P58's
+switch), which leaves the magnet a magnet and the orbital magnetization at 6e-9. Three
+things are worth carrying. **`orbm_kubo` prints at `mu = 0`** -- it imports `ef` and never
+uses it -- and the dropped term is `mu` times the Chern vector, computed here anyway as
+`dm_dmu`, since the same sum *is* a Chern number (`S^curv_l = -4 pi N_l C_l`, converging
+onto the Fukui-Hatsugai-Suzuki integer). **Its two printed terms are not the papers' LC/IC
+split** (`Im<du|H|du>` and `Im<du|E|du>` against `(H - E)` and `2(E - mu)`), which agree in
+the sum and not term by term; this follows the Fortran so both halves can be compared. And
+**the lattice factor looks wrong and is right**: the assembly of the `i` and `j` derivative
+directions is multiplied by `b_l`, the third reciprocal vector, which is exact for any
+lattice because `d/dk` in reduced coordinates carries the *direct* vectors and
+`a_i x a_j = Omega b_l/(2 pi)` -- a cubic test cannot tell the two apart. **Refused by
+name**: ultrasoft and PAW (`setup.f90:130` refuses the same combination), `nspin = 2`, a run
+without spin-orbit coupling, a metal or any manifold the gap check cannot certify, a spin
+spiral, and a mesh with **two** divisions along a direction that carries a derivative (a
+point's two neighbours are then the same k-point and the difference is an alias); **one**
+division is allowed and sets that derivative to zero, which is what a slab means.
+
 **Outstanding:** Wyckoff input, PAW and a *relaxed* (as opposed to frozen-density) magnetocrystalline anisotropy, `average_pp`, the dynamical matrix of an
 ultrasoft or PAW *metal*, the strain coordinate's third derivatives on ultrasoft and PAW
 (P44 localised what is missing), the *second derivatives* of a spin-polarized system (P45 put
@@ -1497,6 +1538,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Piezoelectric tensor | no QE counterpart — Elk's `src/piezoelt.f90` and `genstrain.f90`, manual task 380 | Elk runs one ground state per strain and finite-differences the Berry-phase polarization; here it is one `jvp` of the stress along the field's response (`defumat/response/piezo.py`), so nothing is transcribed but the *check* — `zstar_eu.f90`'s contraction with a strain label where it has a displacement. `genstrain` symmetrises each candidate strain over the crystal's group, so on a cubic crystal the only strain it keeps is the isotropic one |
 | Second-harmonic generation | no QE counterpart — Elk's `src/nonlinopt.f90` and `getpmat.f90`, manual task 125 | `chi^(2)(-2w; w, w)` by a sum over states, so the assembly *is* transcribed, with one substitution: Elk reads momentum matrix elements and this uses `response/velocity.py`'s `dH/dk`, for the reason the TDDFT row already gives. Two things Elk's loop does not need and a plane-wave code does: the multiplet **block average** of the velocity diagonal that `Delta^a` is built from (rule D4 — Elk's 42x42x42 shifted mesh misses the symmetry points where it bites), and the reminder that Elk's `swidth` is in **Hartree**. `el_opt.f90` is QE's nearest thing and is the *static* electro-optic tensor, on the branch P35 found broken |
 | X-ray and magnetic structure factors | no QE counterpart — Elk's `src/sfacrho.f90`, `sfacmag.f90`, `genhvec.f90`, `zftrf.f90`, manual tasks 195/196 | `zftrf` is `(1/Omega) int f e^{-iH.r}` and `sfacrho` prints `Omega` times its conjugate, which is the crystallographic convention; here the positive-phase transform is taken directly (`defumat/diffraction/`). `genhvec` reduces the H-set with the **symmorphic, non-magnetic** operations only, and that restriction is about the *phase* of `F` rather than its modulus |
+| Orbital magnetization | `PW/src/orbm_kubo.f90` (reached by `lorbm`), `PW/src/kpoint_grid.f90` (`kpoint_grid_efield`), `PW/src/setup.f90` (what it refuses) | the assembly is transcribed and the mesh with it -- the dual states are `zgefa`/`zgedi` on the neighbour overlap, which is the covariant derivative. Two conventions are QE's and are documented rather than inherited silently: `ef` is imported and never used, so what is printed is `M(mu = 0)`, and the two printed terms are not the papers' LC/IC split. The vector direction is `b_l` while the derivatives are along the other two crystal directions, which is exact for any lattice (`a_i x a_j = Omega b_l/(2 pi)`) |
 | Fermi-surface nesting | no QE counterpart — Elk's `src/nesting.f90`, manual task 105 | Elk writes an `O(N_q N_k)` double loop with `mod(ivk + ivq, ngridk)`; that fold makes the sum a cyclic cross-correlation, so `ifftn(|fftn(g)|^2)` replaces it (`defumat/response/nesting.py`) and the loop is kept as `method = "direct"`. The wedge is unfolded with `grid_equivalence` — `tetra.f90`'s `equiv`, Elk's `ivkik` — and the group it is unfolded with must be the group `denser_grid` reduced it with (`workflows/nscf.py:grid_symmetry`) |
 | Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `defumat/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]` term by term; here it is one `jvp` of `H(k)` at a frozen sphere (`response/velocity.py`), since `dH/dk_a = i[H, r_a]` in the periodic gauge. The overlap carries a velocity too, so a band velocity is `<psi|dH/dk - eps dS/dk|psi>` |

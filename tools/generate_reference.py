@@ -150,20 +150,31 @@ def restamped_path(relative: str) -> Path:
     return CASES / f"reference.out.{directory}-{Path(name).stem}"
 
 
+#: Suffixes marking a case that reads a converged density rather than producing
+#: one: ``<stem>-bands.in`` is a band structure on ``<stem>.in``'s density, and
+#: ``<stem>-orbm.in`` is the orbital magnetization on it (``lorbm``, a
+#: non-self-consistent run over a uniform grid). Both need their parent to have
+#: run first *in the same outdir*.
+FOLLOWS: tuple[str, ...] = ("-bands", "-orbm")
+
+
 def prerequisite(case: Path) -> Path | None:
     """The scf run a case needs to have happened first, by naming convention.
 
     ``<stem>-bands.in`` reads the density ``<stem>.in`` converged, so the two
-    have to share an outdir. That is the only dependency between cases here, and
-    encoding it in the name keeps the inputs plain ``pw.x`` inputs -- which they
-    have to stay, since defumat reads the same files.
+    have to share an outdir. That is the only kind of dependency between cases
+    here, and encoding it in the name keeps the inputs plain ``pw.x`` inputs --
+    which they have to stay, since defumat reads the same files.
     """
-    if not case.stem.endswith("-bands"):
-        return None
-    parent = case.with_name(f"{case.stem[: -len('-bands')]}.in")
-    if not parent.is_file():
-        raise FileNotFoundError(f"{case.name} needs {parent.name}, which is missing")
-    return parent
+    for suffix in FOLLOWS:
+        if case.stem.endswith(suffix):
+            parent = case.with_name(f"{case.stem[: -len(suffix)]}.in")
+            if not parent.is_file():
+                raise FileNotFoundError(
+                    f"{case.name} needs {parent.name}, which is missing"
+                )
+            return parent
+    return None
 
 
 def run_case(case: Path, conv_thr: float | None = None) -> str:

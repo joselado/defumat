@@ -950,6 +950,25 @@ class Calculator:
                                    **self._call_options(run_berry_curvature,
                                                         result, options))
 
+    def get_orbital_magnetization(self, **options):
+        """``M_orb`` in Bohr magnetons per cell, by the modern theory.
+
+        The circulating part of a magnet's moment -- what ``pw.x`` reaches with
+        ``lorbm`` and what no integral over the cell can give. It needs a
+        magnetic spinor calculation with spin-orbit coupling and a gapped
+        manifold; ``divisions`` is the uniform grid it is assembled on and
+        defaults to the one the k-points came from.
+        """
+        from defumat.workflows.orbital_magnetization import (
+            run_orbital_magnetization,
+        )
+
+        result = self._ground_state("the orbital magnetization")
+        return run_orbital_magnetization(
+            self.system, self.pseudos, result.density,
+            **self._call_options(run_orbital_magnetization, result, options),
+        )
+
     def get_polarization(self, **options):
         """The Berry-phase polarization along one reciprocal lattice vector.
 

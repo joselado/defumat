@@ -118,6 +118,38 @@ class StateSet(eqx.Module):
         """
         return jnp.stack([self.overlap(i, j, shift) for i, j, shift in pairs])
 
+    def transport_plan(self, pairs):
+        """``(index, phase)``: how a neighbour's coefficients are read at ``k_i``.
+
+        ``pairs`` is a sequence of ``(i, j, shift)`` as :meth:`overlaps` takes
+        them. The result is a pair of ``(npair, dim)`` arrays for which
+
+            transported = coefficients[j][:, index] * phase
+
+        holds the states at ``k_j + shift`` written in ``k_i``'s own
+        representation -- a gather by Miller index for a plane-wave set, a
+        phase for a tight-binding model in the atomic gauge, and the identity
+        for one in the periodic gauge.
+
+        :meth:`overlap` is this contracted against the bra immediately, and is
+        what everything built from *loops* uses. What needs the transported
+        coefficients themselves is a k-**derivative**: the dual states of
+        :mod:`defumat.topology.orbital_magnetization` are a linear combination
+        of the neighbours', and the Hamiltonian is then applied to them at
+        ``k_i``, which cannot be done to an overlap matrix.
+        """
+        raise NotImplementedError
+
+    def hamiltonian_matvec(self):
+        """``(vectors, ik) -> H(k_ik)|vectors>``, or raise if there is no ``H``.
+
+        The one operation here that needs the Hamiltonian rather than the
+        states: an orbital magnetization contracts ``H`` between two k-derivatives.
+        ``vectors`` is ``(nbnd, dim)`` in this k-point's representation and
+        ``ik`` may be traced, so the result stays inside :func:`map_k`.
+        """
+        raise NotImplementedError
+
     def select(self, index) -> "StateSet":
         """The same states restricted to a subset of the k-points, in order.
 
@@ -169,6 +201,11 @@ class ArrayStates(StateSet):
             self.coefficients[i], self.coefficients[j], shift, self.orbital_positions
         )
 
+    def transport_plan(self, pairs):
+        return _array_transport_plan(
+            pairs, self.coefficients.shape[-1], self.orbital_positions
+        )
+
     def select(self, index) -> "ArrayStates":
         return ArrayStates(
             coefficients=self.coefficients[jnp.asarray(index)],
@@ -183,6 +220,20 @@ def _array_overlap(bra, ket, shift, orbital_positions):
         phase = jnp.exp(-2j * jnp.pi * (orbital_positions @ shift))
         ket = ket * phase
     return jnp.einsum("ma,na->mn", bra.conj(), ket)
+
+
+def _array_transport_plan(pairs, dim, orbital_positions):
+    """The identity gather, with the atomic gauge's wrap phase if there is one."""
+    index = np.tile(np.arange(dim, dtype=np.int64), (len(pairs), 1))
+    if orbital_positions is None:
+        phase = jnp.ones((len(pairs), dim))
+    else:
+        positions = np.asarray(orbital_positions, dtype=float)
+        shifts = np.stack([
+            np.zeros(3) if s is None else np.asarray(s, dtype=float) for _, _, s in pairs
+        ])
+        phase = jnp.asarray(np.exp(-2j * np.pi * (shifts @ positions.T)))
+    return index, phase
 
 
 class ModelStates(StateSet):
@@ -205,6 +256,12 @@ class ModelStates(StateSet):
     hamiltonian: object = eqx.field(static=True)
     energies: jnp.ndarray | None = None
     orbital_positions: jnp.ndarray | None = None
+    #: The k-points the states were solved at, in **crystal** coordinates --
+    #: what ``hamiltonian`` takes. Carried because a quantity that applies
+    #: ``H(k)`` rather than differentiating it needs to know where each state
+    #: sits; ``None`` for a set built without them, which then cannot answer
+    #: :meth:`hamiltonian_matvec`.
+    points: jnp.ndarray | None = None
     #: The matrix representing spatial inversion on the basis, if the model has
     #: an inversion centre. At a TRIM it commutes with ``H(k)``, so the parity
     #: matrix is just its representation in the occupied manifold.
@@ -223,6 +280,26 @@ class ModelStates(StateSet):
             self.coefficients[i], self.coefficients[j], shift, self.orbital_positions
         )
 
+    def transport_plan(self, pairs):
+        return _array_transport_plan(
+            pairs, self.coefficients.shape[-1], self.orbital_positions
+        )
+
+    def hamiltonian_matvec(self):
+        """``v -> v H(k)^T``: the model's dense Hamiltonian applied to row states."""
+        if self.points is None:
+            raise ValueError(
+                "this model state set carries no k-points, so H(k) cannot be "
+                "applied; build it with ModelStates.solve, which stores them"
+            )
+        points = jnp.asarray(self.points)
+        hamiltonian = self.hamiltonian
+
+        def matvec(vectors, ik):
+            return vectors @ hamiltonian(points[ik]).T
+
+        return matvec
+
     def select(self, index) -> "ModelStates":
         index = jnp.asarray(index)
         return ModelStates(
@@ -230,6 +307,7 @@ class ModelStates(StateSet):
             hamiltonian=self.hamiltonian,
             energies=None if self.energies is None else self.energies[index],
             orbital_positions=self.orbital_positions,
+            points=None if self.points is None else self.points[index],
             inversion=self.inversion,
         )
 
@@ -267,6 +345,7 @@ class ModelStates(StateSet):
             hamiltonian=hamiltonian,
             energies=energies,
             orbital_positions=orbital_positions,
+            points=points,
             inversion=inversion,
         )
 
@@ -317,6 +396,14 @@ class PlaneWaveStates(StateSet):
     #: Static: it holds the frozen potential and the calculation, neither of
     #: which is traced through a state set.
     velocity: object = eqx.field(static=True, default=None)
+    #: The fixed-density :class:`~defumat.hamiltonian.operator.Hamiltonian` at
+    #: *these* k-points -- what an orbital magnetization contracts between two
+    #: k-derivatives. Kept only when asked for: it carries the frozen potential
+    #: on the FFT grid. **Not** static, unlike :attr:`velocity`: a
+    #: ``Hamiltonian`` is itself an ``eqx.Module`` of arrays, and marking one
+    #: static asks equinox to hash a JAX array, which it warns about and which
+    #: would compare potentials elementwise on every retrace.
+    hamiltonian: object = None
 
     @property
     def nk(self) -> int:
@@ -425,6 +512,39 @@ class PlaneWaveStates(StateSet):
             batch=resolve_k_batch(k_batch),
         )
 
+    def transport_plan(self, pairs):
+        """The Miller-index gather of :meth:`_alignment`, on the full state vector.
+
+        ``_alignment`` answers for one spinor component's ``npwx`` plane waves;
+        a state is ``npol`` of those stored end to end, so the index is repeated
+        with an ``npwx`` offset per component and the mask rides along as a
+        real phase. What a missing Miller index means is what it means in
+        :meth:`overlap`: the neighbour has no plane wave there, its coefficient
+        is zero, and the mask is what puts a zero rather than whatever
+        ``searchsorted`` clipped onto.
+        """
+        npwx = self.npwx
+        index, phase = [], []
+        for i, j, shift in pairs:
+            gather, found = self._alignment(i, j, shift)
+            gather = np.asarray(gather)
+            found = np.asarray(found)
+            index.append(np.concatenate(
+                [gather + component * npwx for component in range(self.npol)]
+            ))
+            phase.append(np.tile(found.astype(float), self.npol))
+        return np.stack(index), jnp.asarray(np.stack(phase))
+
+    def hamiltonian_matvec(self):
+        """``H(k_ik)|v>`` through the stored :class:`Hamiltonian`."""
+        if self.hamiltonian is None:
+            raise ValueError(
+                "these states carry no Hamiltonian, so H(k) cannot be applied; "
+                "build them with keep_hamiltonian = True"
+            )
+        hamiltonian = self.hamiltonian
+        return lambda vectors, ik: hamiltonian.apply(vectors, ik)
+
     def parity_matrix(self, i: int, centre) -> jnp.ndarray:
         """``<u_m | S P | u_n>`` at a time-reversal-invariant momentum.
 
@@ -498,6 +618,9 @@ class PlaneWaveStates(StateSet):
             # wrong k-points, which is the failure that would be silent.
             all_coefficients=None,
             velocity=None,
+            # Dropped for the reason ``velocity`` is: a Hamiltonian is built at
+            # the whole k-list and its ``ik`` indexes that list, not a subset.
+            hamiltonian=None,
         )
 
     @property
@@ -584,6 +707,7 @@ def build_plane_wave_states(
     keep_projectors: bool = False,
     energies: jnp.ndarray | None = None,
     velocity=None,
+    hamiltonian=None,
 ) -> PlaneWaveStates:
     """Wrap a diagonalisation's output as a :class:`PlaneWaveStates`.
 
@@ -596,6 +720,11 @@ def build_plane_wave_states(
     nothing else does. It is ``(nk, npwx, nkb)`` complex -- megabytes per
     k-point on a real cell -- so it is off by default and the four TRIM of a
     parity calculation are the only place it is worth paying.
+
+    ``hamiltonian`` is the same fixed-density Hamiltonian the states were
+    diagonalised with, kept so that ``H(k)`` can be *applied* rather than
+    differentiated -- which is what an orbital magnetization needs and nothing
+    else here does.
 
     ``velocity`` is a :class:`~defumat.response.velocity.VelocityOperator`
     built on the same ``calculation``; passing one also retains the *whole*
@@ -648,4 +777,5 @@ def build_plane_wave_states(
         energies=energies,
         all_coefficients=all_coefficients,
         velocity=velocity,
+        hamiltonian=hamiltonian,
     )

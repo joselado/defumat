@@ -39,10 +39,17 @@ from defumat.topology.invariants import (
 )
 from defumat.topology.mesh import (
     PlaneMesh,
+    VolumeMesh,
+    volume_mesh,
     plane_mesh,
     pumping_mesh,
     string_mesh,
     trim_points,
+)
+from defumat.topology.orbital_magnetization import (
+    OrbitalMagnetization,
+    orbital_magnetization,
+    orbital_magnetization_sums,
 )
 from defumat.topology.polarization import Polarization, StringPhases
 from defumat.topology.parity import ParityInvariant, fu_kane_z2, inversion_centre
@@ -69,6 +76,11 @@ __all__ = [
     "ParityInvariant",
     "PlaneMesh",
     "PlaneWaveStates",
+    "OrbitalMagnetization",
+    "VolumeMesh",
+    "volume_mesh",
+    "orbital_magnetization",
+    "orbital_magnetization_sums",
     "StateSet",
     "WannierFlow",
     "Z2Invariant3D",
