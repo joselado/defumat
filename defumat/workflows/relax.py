@@ -45,7 +45,9 @@ cell. Two runs, each with its setup done once.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
@@ -56,6 +58,9 @@ from defumat.relax.bfgs import BFGSSettings
 from defumat.scf.driver import Calculation, SCFResult, run_scf
 from defumat.system.builder import System
 from defumat.system.symmetry import check_symmetry
+from defumat.scf.checkpoint import (
+    load_optimizer, load_state, save_optimizer, save_state,
+)
 from defumat.units import BOHR_TO_ANGSTROM
 
 __all__ = ["RelaxResult", "run_relax"]
@@ -163,6 +168,9 @@ def run_relax(
     mixing_beta: float = 0.7,
     k_batch: int | None | str = "default",
     density_extrapolation: str = "atomic",
+    checkpoint_dir=None,
+    resume: bool = True,
+    on_step=None,
     verbose: bool = False,
     **scf_options,
 ) -> RelaxResult:
@@ -172,6 +180,17 @@ def run_relax(
     (1e-4 Ry) and ``forc_conv_thr`` (1e-3 Ry/bohr) must *both* be satisfied,
     ``conv_thr`` is the SCF's starting threshold, and ``nstep`` caps the ionic
     steps.
+
+    ``checkpoint_dir`` makes the relaxation restartable. After every ionic step
+    the converged state and the **optimizer's own history** are written there,
+    and a run started against a directory that already holds them picks up where
+    it stopped (``resume=False`` starts over and overwrites). The history is the
+    half that is easy to omit and is most of the value: BFGS earns its
+    convergence rate from the inverse Hessian and the trust radius, so a resume
+    from positions alone takes its next step as if it were the first.
+
+    ``on_step`` is called as ``on_step(step, result, forces)`` after each ionic
+    step, for a caller that wants to write its own record beside the checkpoint.
 
     **They come from the input file unless given here.** ``None`` -- the
     default -- reads :attr:`System.relax`, which carries what ``&control`` and
@@ -200,6 +219,36 @@ def run_relax(
         settings=BFGSSettings(),
     )
 
+    # Checkpoint layout: one state file and one optimizer file, both rewritten
+    # in place each step. Two files rather than one because the state is tens of
+    # gigabytes and the optimizer is kilobytes, and because a resume wants to
+    # know which of the two it is missing.
+    checkpoint_dir = None if checkpoint_dir is None else Path(checkpoint_dir)
+    state_path = optimizer_path = step_path = None
+    if checkpoint_dir is not None:
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        state_path = checkpoint_dir / "scf_state.npz"
+        optimizer_path = checkpoint_dir / "optimizer.npz"
+        step_path = checkpoint_dir / "relax_step.json"
+
+    first_step = 1
+    resumed_state = None
+    if (checkpoint_dir is not None and resume and step_path.is_file()
+            and optimizer_path.is_file()):
+        record = json.loads(step_path.read_text())
+        load_optimizer(optimizer, optimizer_path)
+        moved = np.asarray(record["next_positions"])
+        calculation = calculation.at_positions(jnp.asarray(moved))
+        first_step = int(record["index"]) + 1
+        threshold_resume = float(record["conv_thr"])
+        if state_path.is_file():
+            # The state belongs to the *previous* geometry, so it is carried as
+            # a starting density rather than as an answer -- which is what the
+            # loop does with the extrapolated density anyway.
+            resumed_state = load_state(state_path, system=calculation.system)
+        if verbose:
+            print(f"resuming from {checkpoint_dir} at ionic step {first_step}")
+
     upscale = settings.upscale
     free = system.structure.free
     starting_threshold = conv_thr
@@ -208,7 +257,11 @@ def run_relax(
     density = becsum = None
     converged = False
 
-    for index in range(1, nstep + 1):
+    if resumed_state is not None:
+        density, becsum = resumed_state.density, resumed_state.becsum
+        threshold = threshold_resume
+
+    for index in range(first_step, nstep + 1):
         result = run_scf(
             calculation.system,
             pseudos,
@@ -242,6 +295,8 @@ def run_relax(
             print(f"ionic step {index:3d}   E = {result.total_energy:16.8f} Ry"
                   f"   max |F| = {forces.max_force:.6f} Ry/bohr"
                   f"   dE = {optimizer.energy_error:.2e}")
+        if on_step is not None:
+            on_step(steps[-1], result, forces)
         if converged:
             break
 
@@ -257,6 +312,21 @@ def run_relax(
                     optimizer.gradient_error / (forc_conv_thr * upscale),
                 ),
             )
+
+        if checkpoint_dir is not None:
+            # Written after the step is decided and before it is taken, so what
+            # a resume finds is a geometry to *run*, together with the state and
+            # the history that produced it. The optimizer goes last: it is the
+            # file whose presence says the record is complete.
+            save_state(result, state_path)
+            step_path.write_text(json.dumps({
+                "index": index,
+                "next_positions": np.asarray(moved).tolist(),
+                "conv_thr": float(threshold),
+                "total_energy": float(result.total_energy),
+                "max_force": float(forces.max_force),
+            }))
+            save_optimizer(optimizer, optimizer_path)
 
         previous = calculation
         calculation = calculation.at_positions(jnp.asarray(moved))

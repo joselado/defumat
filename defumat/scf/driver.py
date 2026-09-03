@@ -796,6 +796,29 @@ class SCFResult:
         return f"<SCFResult: {', '.join(parts)}>"
 
 
+    def save(self, path):
+        """Write this state to ``path`` so another process can continue from it.
+
+        :mod:`defumat.scf.checkpoint`. The wavefunctions dominate the file, so
+        this is a scratch-directory operation.
+        """
+        from defumat.scf.checkpoint import save_state
+
+        return save_state(self, path)
+
+    @staticmethod
+    def load(path, system=None, calculation=None, strict: bool = True):
+        """Read a state back, for ``run_scf(starting_from=...)``.
+
+        ``system`` is supplied rather than stored -- a resume already has the
+        input file -- and is checked against the file's fingerprint.
+        """
+        from defumat.scf.checkpoint import load_state
+
+        return load_state(path, system=system, calculation=calculation,
+                          strict=strict)
+
+
 def _spin_block_diagonal(per_atom) -> np.ndarray:
     """Per-atom ``(nh, nh, 2, 2)`` blocks -> one ``(2, 2, nkb, nkb)`` matrix.
 
