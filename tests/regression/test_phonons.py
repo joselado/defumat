@@ -747,3 +747,67 @@ def test_a_malformed_subset_is_rejected(bad):
             calculation, np.zeros((1, 1, 1, 1)), np.zeros((1, 1, 1)),
             np.zeros((1, 1, 1, 1)), (), atoms=bad,
         )
+
+
+@pytest.mark.slow
+def test_a_subset_that_does_not_start_at_zero(pseudo_dir):
+    """``atoms=(1,)`` must give atom 1's block, not atom 0's.
+
+    **The bug this pins was invisible to every earlier test in this file**, and
+    the reason is worth more than the fix: they all used ``atoms=(0,)`` or
+    ``range(n)``, where the subset index and the absolute atom index are the
+    same number. Under ``ef_shift`` the first-order states were then re-indexed
+    by *atom* into an array whose leading axis is per *perturbation*, which for
+    a subset starting anywhere else reads off the end of it -- and for one that
+    starts at 0 would silently read the wrong row.
+
+    It is also a **metals-only** path, so a smeared cell is what reaches it at
+    all. Both halves of that -- a subset that does not start at 0, and a
+    smearing -- are needed for this test to fail against the old code.
+
+    Reported from a real calculation rather than found here: a frozen-substrate
+    run is exactly where the mobile atoms need not be listed first.
+    """
+    import warnings
+
+    from defumat.calculator import Calculator
+
+    text = """
+&control
+  calculation = 'scf'
+/
+&system
+  ibrav = 1, celldm(1) = 12.0, nat = 2, ntyp = 1, ecutwfc = 16.0,
+  nosym = .true., occupations = 'smearing', smearing = 'mv', degauss = 0.02
+/
+&electrons
+  conv_thr = 1.0d-10
+/
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS bohr
+ Si 0.00 0.00 0.00
+ Si 4.20 0.00 0.00
+K_POINTS gamma
+"""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_text(text, pseudo_dir, announce=False)
+        result = calculator.get_scf()
+        whole = calculator.get_phonons()
+        second = calculator.get_phonons(atoms=(1,))
+
+    assert calculator.calculation.system.occupations == "smearing"
+    assert second.atoms == (1,)
+    # Atom 1's own block of the whole matrix, which is what was being read from
+    # the wrong row.
+    np.testing.assert_allclose(
+        second.matrix, whole.matrix[1:2, :, 1:2, :], atol=1e-10
+    )
+    # ... and it is genuinely a different block from atom 0's, so the assertion
+    # above could not pass by the two happening to agree.
+    assert not np.allclose(
+        np.asarray(whole.matrix[1:2, :, 1:2, :]),
+        np.asarray(whole.matrix[0:1, :, 0:1, :]),
+        atol=1e-8,
+    )

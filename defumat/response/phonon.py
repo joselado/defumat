@@ -674,11 +674,18 @@ def self_consistent_response(
     # It matters because the second derivative consumes ``dpsi`` as a tangent
     # rather than through the density it builds.
     if solver.smearing is not None and shifts is not None:
-        for index, (atom, cart) in enumerate(
-            (a, c) for a in range(nat) for c in range(3)
+        # **Over the rows solved, not over the cell's atoms.** ``dpsi`` and
+        # ``shifts`` are both indexed by *perturbation*, so their leading size
+        # is ``len(atoms)`` and using an absolute atom index here reads off the
+        # end of them -- or, for a subset that happens to start at 0, reads the
+        # wrong row silently. It is the only place in this module that got the
+        # two confused, and it is a **metals-only** path, which is why an
+        # insulating validation could not see it.
+        for index, (row, cart) in enumerate(
+            (r, c) for r in range(rows) for c in range(3)
         ):
-            dpsi[atom, cart] = solver.fermi_level_shift_states(
-                dpsi[atom, cart], shifts[index]
+            dpsi[row, cart] = solver.fermi_level_shift_states(
+                dpsi[row, cart], shifts[index]
             )
 
     extras = {
