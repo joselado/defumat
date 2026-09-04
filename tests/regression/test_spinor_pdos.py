@@ -161,9 +161,15 @@ def _cases(*names):
 
 
 PAW = ("pt-soc-paw", "pt-soc-paw-nosym")
+#: The ultrasoft twin, whose ``PP_QIJ`` carries no ``L`` decomposition. It was
+#: excluded while ``GAPS.md`` §2c stood: its ground state at an unshifted grid
+#: was 0.20 Ry out, so there was nothing right to project. The defect was in the
+#: *starting wavefunctions* rather than in the augmentation charge, and both
+#: kinds run here now.
+US = ("pt-soc", "pt-soc-nosym")
 
 
-@_cases(PAW)
+@_cases(PAW, US)
 def test_the_columns_are_the_ones_projwfc_builds(_projection):
     """``natomwfc``, and each column's ``(l, j, m_j)``, against ``fill_nlmchi``.
 
@@ -181,7 +187,7 @@ def test_the_columns_are_the_ones_projwfc_builds(_projection):
         assert float(label[7]) == pytest.approx(channel.mj)
 
 
-@_cases(PAW)
+@_cases(PAW, US)
 def test_the_occupied_multiplet_sums_match_projwfc(_projection):
     """The invariant: a degenerate multiplet's projection, summed over its bands.
 
@@ -207,7 +213,7 @@ def test_the_occupied_multiplet_sums_match_projwfc(_projection):
     assert worst < 1.0e-4
 
 
-@_cases(PAW)
+@_cases(PAW, US)
 def test_the_lowdin_charges_match_every_digit_projwfc_prints(_projection):
     """``print_lowdin``'s block: the charge on each ``l`` and the spilling.
 
@@ -233,7 +239,7 @@ def test_the_lowdin_charges_match_every_digit_projwfc_prints(_projection):
     assert charges.spilling == pytest.approx(spilling, abs=5.0e-5)
 
 
-@_cases(PAW)
+@_cases(PAW, US)
 def test_a_spinor_projection_has_no_m_resolved_charge(_projection):
     """``print_lowdin`` allocates ``charges_lm`` only ``IF ( nspin /= 4 )``.
 
@@ -276,7 +282,7 @@ def test_a_symmetrised_spinor_projection_is_refused(qe_testsuite, pseudo_dir):
         atomic_projections(calculation, states, symmetrize=True)
 
 
-@_cases(PAW)
+@_cases(PAW, US)
 def test_an_unsymmetrised_projection_is_allowed_on_a_nosym_run(_projection):
     """The other half of the same guard: ``nosym`` must not trip it.
 
@@ -297,18 +303,19 @@ def test_an_unsymmetrised_projection_is_allowed_on_a_nosym_run(_projection):
 # The curves, which is the workflow rather than the projection
 # --------------------------------------------------------------------------
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="module", params=[PAW, US], ids=lambda case: case[0])
 def _curves(request):
     """``run_pdos`` on the grid and the smearing ``projwfc.x`` used."""
+    stem, case = request.param
     root = request.config.rootpath
     cases = root / "tests/data/qe"
-    total = cases / "reference.pt-soc-paw.pdos_tot"
+    total = cases / f"reference.{stem}.pdos_tot"
     if not total.is_file():
-        pytest.skip("pt-soc-paw: no generated reference (needs projwfc.x)")
+        pytest.skip(f"{stem}: no generated reference (needs projwfc.x)")
 
     energies, _ = _read_kresolved(total)
     calculator = Calculator.from_file(
-        cases / "pt-soc-paw-nosym.in", pseudo_dir=root / "tests/data/pseudo"
+        cases / f"{case}.in", pseudo_dir=root / "tests/data/pseudo"
     )
     scf = calculator.get_scf()
     # ``DeltaE = 0.05`` eV from ``tools/generate_reference.py``; the broadening
@@ -325,6 +332,7 @@ def _curves(request):
     # that no unconverged state contributes even through the tail of its delta.
     edge = eigenvalues[:, _occupied(scf):].min() * RY_TO_EV - 5 * 0.02 * RY_TO_EV
     return {
+        "stem": stem,
         "cases": cases,
         "energies": energies,
         "window": energies <= edge,
@@ -342,7 +350,7 @@ def test_the_total_curve_matches_projwfc(_curves):
     states in a different place, and the curves separate by 15 per cent of the
     peak there while agreeing to a sixth of a per cent below it.
     """
-    _, columns = _read_kresolved(_curves["cases"] / "reference.pt-soc-paw.pdos_tot")
+    _, columns = _read_kresolved(_curves["cases"] / f"reference.{_curves['stem']}.pdos_tot")
     theirs = (columns[:, :, 0] * _curves["weights"][:, None]).sum(axis=0)
     ours = _curves["pdos"].total.total_dos[:_curves["n"]] / RY_TO_EV
 
@@ -360,8 +368,12 @@ def test_every_shell_curve_matches_projwfc(_curves):
     multiplet moves weight between the columns and not between the files.
     """
     pdos, window = _curves["pdos"], _curves["window"]
-    files = sorted(_curves["cases"].glob("reference.pt-soc-paw.pdos_atm*"))
-    assert len(files) == 5, [f.name for f in files]
+    files = sorted(_curves["cases"].glob(f"reference.{_curves['stem']}.pdos_atm*"))
+    # Five shells for the PAW dataset (6S, 6P x 2, 5D x 2) and three for the
+    # ultrasoft one, whose 6P channels carry a negative occupation and are
+    # skipped by ``n_atom_wfc`` -- the same skip that makes its band 11 at X
+    # invisible to every atomic orbital either code builds.
+    assert len(files) in (3, 5), [f.name for f in files]
 
     for path in files:
         _, columns = _read_kresolved(path)

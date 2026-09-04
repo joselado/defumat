@@ -32,6 +32,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from defumat import Calculator
 from defumat.io import read_qe_output
 from defumat.io.pwin import read_pw_input
 from defumat.pseudo import read_upf
@@ -435,3 +436,48 @@ def test_the_same_cell_under_lda_has_no_such_offset(pseudo_dir):
     # ...and it is four orders better than the PBE pair above, not merely inside
     # a loose tolerance.
     assert abs(scf.total_energy - reference.total_energy) < 0.01 * VACUUM_GGA_TOTAL_RY
+
+
+# --------------------------------------------------------------------------
+# An unshifted grid, which is where the starting wavefunctions used to bite
+# --------------------------------------------------------------------------
+
+#: ``(input, reference)`` for a spin-orbit run on an **unshifted even** grid.
+#: Every other spin-orbit case here is shifted -- ``spinorbit.in`` is
+#: ``4 4 4 1 1 1`` -- and a shifted grid contains no nonzero time-reversal
+#: invariant momentum. That is why a defect in the *starting wavefunctions*,
+#: which only bites where the extra symmetry of such a point makes an
+#: eigenvector exactly orthogonal to the atomic span, went unseen: it was worth
+#: 0.20 Ry on this input and the run reported success.
+UNSHIFTED_CASES = [
+    ("pt-soc-nosym", "ultrasoft"),
+    ("pt-soc-paw-nosym", "PAW"),
+]
+
+
+@pytest.mark.parametrize(("stem", "kind"), UNSHIFTED_CASES, ids=[k for _, k in UNSHIFTED_CASES])
+def test_spin_orbit_on_an_unshifted_grid(stem, kind, pseudo_dir):
+    """The total energy at ``2 2 2 0 0 0``, which contains ``X`` and ``L``.
+
+    The reduced check that localised the defect, kept because it is the cheap
+    one: at a *single* k-point at ``X`` the same input was 0.18 Ry out, and at
+    ``L`` 0.29, while every general k-point was already exact to 1e-8. What was
+    missing is the random top-up ``wfcinit`` adds when the atomic set is shorter
+    than ``nbnd``; building the doubled scalar set (22 vectors) instead of the
+    ``j``-resolved one (12) filled ``nbnd = 18`` with atomic vectors alone and
+    removed it.
+    """
+    case = Path("tests/data/qe") / f"{stem}.in"
+    reference_path = Path("tests/data/qe") / f"reference.out.{stem}"
+    if not (case.is_file() and reference_path.is_file()):
+        pytest.skip(f"{stem}: input or reference not present")
+
+    reference = read_qe_output(reference_path)
+    calculator = Calculator.from_file(case, pseudo_dir=pseudo_dir, announce=False)
+    result = calculator.get_scf()
+
+    assert calculator.system.lspinorb and calculator.system.nspin == 4
+    assert result.converged
+    assert sum(result.energy_terms.values()) == pytest.approx(
+        reference.total_energy, abs=TOTAL_ENERGY_RY
+    )

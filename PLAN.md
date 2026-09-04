@@ -10527,7 +10527,7 @@ Contributed from a production study of a molecule on a surface whose modes of
 interest are 10-15 meV; documented in `docs/features.tex` beside the partial
 dynamical matrix.
 
-### P69 — The `j`-resolved projected density of states. 🚧 PARTIAL — validated and documented; the curve comparison and the ultrasoft case remain.
+### P69 — The `j`-resolved projected density of states. ✅ DONE.
 
 **What it is.** `projwfc.x` with `noncolin`/`lspinorb`: the orbital character of a
 spinor band, resolved by `j` and `m_j` instead of by `m`. Every heavy-element run
@@ -10652,8 +10652,48 @@ per cent** of the peak there while agreeing to 0.16 below it -- the same
 unconverged-empty-band effect the projection comparison already had to exclude,
 seen a second way.
 
-**Still open, which is why this is PARTIAL and not DONE** -- the ultrasoft case,
-which needs `GAPS.md` §2c closed first.
+**The ultrasoft case is in as well, and closing it is the phase's largest
+result** -- larger than the projection it was blocking. `GAPS.md` §2c was
+recorded as an ultrasoft defect (`q_with_l = false` plus spin-orbit coupling at
+a nonzero TRIM, all three conditions shown necessary by elimination) and **the
+elimination was right while the inference from it was wrong**: three of the four
+conditions were correlated with the cause rather than being it. The cause is the
+**starting wavefunctions**, and it is not an ultrasoft term at all.
+
+`wfcinit` tops the atomic orbitals up to `nbnd` with *random* vectors, and only
+if there are fewer than `nbnd` of them. The noncollinear count is `sum (2j + 1)`
+for a fully-relativistic dataset -- `atomic_wfc_so`, the same spin-angle
+functions this phase built for the projection -- and `sum 2 (2l + 1)` otherwise.
+Building the second for both gave platinum **22** starting vectors where `pw.x`
+prints "12 randomized atomic wfcs + 6 random wfcs", and 22 >= 18 meant **the
+random top-up never happened**. Those six vectors are load-bearing:
+`Pt.rel-pz-n-rrkjus`'s `6P` channels carry a *negative occupation* and are
+skipped by `n_atom_wfc` in both codes, so its atomic set is `s` and `d` only and
+platinum's band 11 at `X` is `p`-like -- **exactly** orthogonal to every atomic
+orbital either code builds, measured at `|P w|^2 = 0.000000` against 0.0023 one
+thousandth of a reciprocal lattice vector away. Davidson cannot leave a subspace
+the Hamiltonian preserves, so the pair was unreachable, the solver returned the
+next state in its place, and the Hartree energy came out **1.53 Ry** high while
+`int rho` stayed exact to 4e-14 and `<psi|S|psi>` stayed the identity to 3e-15.
+
+**Two measurements found it after the elimination table had not, and both are
+cheap enough to reach for first next time.** Comparing *term by term* rather
+than on the total put the whole error in Hartree with Ewald exact, which says
+the density's shape rather than its norm. And a **dense** diagonalisation of the
+same Hamiltonian (`tests/exact_reference.py`) reproduced QE's spectrum, which
+moves the fault off the Hamiltonian and onto the eigensolver in one step -- the
+fixture exists for the fast tests and turns out to be the sharpest debugging
+tool here. A sweep then localised it exactly: `nbnd` 18 and 20 fail identically
+and 24 is exact, while `david` changes nothing.
+
+Platinum now matches `pw.x` to **1.6e-8 Ry** at `Gamma`, `X`, `L` and general
+points alike and to **1.0e-8** on the `2 2 2 0 0 0` grid, so the ultrasoft
+projection runs and is validated on every check the PAW one is. **The reason it
+survived is a k-grid convention worth remembering**: every committed spin-orbit
+case is on a *shifted* grid, which contains no nonzero TRIM, and an odd
+unshifted grid contains only `Gamma` -- so the feature had been validated
+entirely on the grids that cannot see the defect. The new regression is an
+unshifted even one for that reason.
 
 **One small API gap, found while writing the notebook and not filled**:
 `ProjectedDOS.select()` takes `atom, l, species, m, wfc` and no `j` or `mj`, so the

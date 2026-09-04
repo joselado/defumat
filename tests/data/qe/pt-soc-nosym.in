@@ -11,13 +11,15 @@
 ! 2x2x2 rather than 4x4x4: what is being compared is a projection at fixed
 ! states, so the k-set only has to be the same one on both sides.
 !
-! **This case does not validate anything and must not be read as if it did.**
-! defumat's own SCF on it is 0.18-0.29 Ry away from `pw.x` -- see GAPS.md section
-! 2c, an ultrasoft dataset with `q_with_l = false` plus spin-orbit coupling at a
-! nonzero time-reversal-invariant momentum, which this 2x2x2 unshifted grid is full
-! of. The generated reference is that bug's acceptance test, not a projection
-! comparison; the projection is validated on the PAW twin, `pt-soc-paw-nosym.in`,
-! whose SCF agrees to 1.2e-8. Do not chase a projected-DOS bug here.
+! **This input found a wrong answer and is kept as its regression** (GAPS.md
+! section 2c, closed 2026-09-04). An unshifted even grid contains nonzero
+! time-reversal-invariant momenta, where an eigenvector can be *exactly*
+! orthogonal to every atomic starting orbital; this code built the doubled
+! scalar set (22 vectors) instead of the j-resolved one (12), which filled
+! nbnd = 18 with atomic vectors alone and removed the random top-up `wfcinit`
+! adds. The SCF was 0.20 Ry out on this grid and reported success. It agrees
+! with `pw.x` to 1.0e-8 now, and every other committed spin-orbit case uses a
+! *shifted* grid, which cannot see the defect -- so keep this one unshifted.
 !
 ! Platinum's fully-relativistic dataset carries 5D(j=3/2), 5D(j=5/2) and 6S with
 ! non-negative occupations, so the projection has **12** columns -- 4 + 6 + 2 --

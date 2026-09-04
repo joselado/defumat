@@ -529,25 +529,26 @@ print(pdos.charges.format())     # -> s = 0.5032, p = 0.9944, d = 8.4903
 print(pdos.charges.charges_lm)   # -> None: a spin-angle function has no m
 \end{pycode}
 
-Validated on a fully-relativistic \textbf{PAW} platinum dataset against a
-\code{projwfc.x} run generated for it, three ways. The \emph{columns} --- how
+Validated on fully-relativistic \textbf{ultrasoft and PAW} platinum datasets
+against \code{projwfc.x} runs generated for them, four ways. The \emph{columns} --- how
 many, and each one's $(l, j, m_j)$ --- match QE's own label table exactly, 18
 channels where the $j$-averaged count is 9. The \emph{projections} agree to
 \textbf{6.3e-6}, compared as sums over each degenerate multiplet: a spinor band
 structure is Kramers-degenerate everywhere, and an individual
 $|\langle\phi|\hat S|\psi_n\rangle|^2$ is not invariant under the mixing inside
 a multiplet that either code's eigensolver is free to choose, where the sum is.
-And the \textbf{Löwdin charges and the spilling parameter agree to every digit
-\code{projwfc.x} prints}. Timing, one core each from a converged ground state:
+The \textbf{Löwdin charges and the spilling parameter agree to every digit
+\code{projwfc.x} prints}. And the \emph{curves} --- the total and each shell's,
+on \code{projwfc.x}'s own energy grid and broadening --- agree to \textbf{0.16
+per cent of the peak} everywhere below the lowest empty band, above which the
+topmost states are the ones neither eigensolver converges. Timing, one core each from a converged ground state:
 \code{get\_pdos} costs \textbf{1.65~s} against \code{projwfc.x}'s 0.62~s, and
 on both sides that is mostly rebuilding from the pseudopotential files rather
 than projecting --- the projection and its integration are 0.137~s of it here.
 
-Ultrasoft is the one kind not claimed here: a fully-relativistic ultrasoft
-dataset whose \code{PP\_QIJ} is stored without its $L$ decomposition has a
-separate, open defect in its ground state, so there is no converged state to
-project. Norm-conserving is untested rather than refused --- no reference case
-is committed for it.
+Validated on a fully-relativistic \textbf{ultrasoft} dataset too, on the same
+cell and to the same numbers. Norm-conserving is untested rather than refused
+--- no reference case is committed for it.
 
 \begin{refuses}
 \textbf{Refuses.} A \textbf{symmetrised} spinor projection: averaging over the

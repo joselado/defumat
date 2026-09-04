@@ -7,7 +7,9 @@ plumbing, and a repo-wide hunt for silent failure. The nine that were bugs with 
 the seven of §1 whose fix was a term or a forwarding
 (`tests/unit/test_state_across_boundaries.py`), and so is the whole of §2 plus
 **one** entry of §3 — `occupations = 'fixed'` with `nspin = 2`, the fourth
-(`tests/unit/test_unreachable_combinations.py`). What is left is the rest of §3,
+(`tests/unit/test_unreachable_combinations.py`). §2c, found later and the only
+*wrong answer* on this list rather than a refusal, is closed too. What is left
+is the rest of §3,
 and the widest of them is still the first one listed there: the Sternheimer
 response with `nspin = 2`, which is untouched.
 
@@ -178,67 +180,84 @@ input. **Fix:** force `domag` when a field or a constraint is present
 
 ---
 
-## 2c. Found 2026-09-04 -- **a wrong answer, not a refusal**
+## 2c. Found 2026-09-04 -- **a wrong answer, not a refusal; closed 2026-09-04**
 
-One entry, and it is the worst kind: a converged run, a plausible number, no
+One entry, and it was the worst kind: a converged run, a plausible number, no
 warning. Found while generating a `projwfc.x` reference for the spinor projected
 density of states, by comparing total energies on a k-grid nobody had used for a
 spin-orbit case before.
 
-**An ultrasoft dataset with `q_with_l = false`, spin-orbit coupling, and a
-k-point at a nonzero time-reversal-invariant momentum gives the wrong total
-energy.** On fcc platinum with `Pt.rel-pz-n-rrkjus.UPF` at `ecutwfc = 30`, a
-single k-point at `X = (1,0,0) 2pi/a` gives **-68.43785238 Ry against `pw.x`'s
--68.61775789** -- 0.18 Ry -- and at `L` 0.29 Ry. The SCF converges to
-`conv_thr = 1e-8` in six iterations and reports success.
+**The symptom.** A spin-orbit run at a nonzero time-reversal-invariant momentum
+gave the wrong total energy. On fcc platinum with `Pt.rel-pz-n-rrkjus.UPF` at
+`ecutwfc = 30`, a single k-point at `X = (1,0,0) 2pi/a` gave **-68.43785238 Ry
+against `pw.x`'s -68.61775789** -- 0.18 Ry -- and at `L` 0.29 Ry. The SCF
+converged to `conv_thr = 1e-8` in six iterations and reported success. On the
+`2 2 2 0 0 0` grid the projected density of states needs, it was 0.20 Ry out.
 
-**All three conditions are needed, and each was measured rather than argued:**
+**The first diagnosis was wrong, and how it was wrong is the lesson.** The
+conditions were established by elimination -- ultrasoft, `q_with_l = false`,
+spin-orbit coupling, and a nonzero TRIM, each shown necessary -- and the
+elimination was correct. The *inference* from it was not: three of those four
+are **correlated with the cause rather than being it**. An elimination table
+tells you which cells fail; it does not tell you which of their shared
+properties is load-bearing, and "ultrasoft with `q_with_l = false`" named the
+augmentation charge, which had nothing to do with it.
 
-| dataset | `q_with_l` | spin-orbit | k | result |
-|---|---|---|---|---|
-| `Pt.rel-pz-n-rrkjus` (US) | false | yes | `Gamma`, `(0.3,0.1,0.2)`, `(0.5,0,0)`, `W` | 1e-8 to 1e-9 |
-| `Pt.rel-pz-n-rrkjus` (US) | false | yes | `X`, `-X`, `(0,0,1)`, `L` | **0.18 - 0.29 Ry** |
-| `Pt.rel-pbe-n-kjpaw_psl` (PAW) | true | yes | `X` | 1.2e-8 |
-| `Al.rel-pbe-n-rrkjus_psl` (US) | true | yes | `X` | 5.2e-10 |
-| `C.pz-rrkjus` (US) | false | **no** | `X`, `L`, general | 1e-9 |
+**What it actually was: the starting wavefunctions.** `wfcinit` builds the
+atomic orbitals and, *if there are fewer than `nbnd` of them*, tops the rest up
+with random vectors. The noncollinear count is `sum (2j + 1)` for a
+fully-relativistic dataset -- QE's `atomic_wfc_so`, the spin-angle functions
+themselves -- and `sum 2 (2l + 1)` when the dataset has no `j` channels. This
+code built the second for both, so platinum came out with **22** starting
+vectors where `pw.x` prints "Starting wfcs are 12 randomized atomic wfcs + 6
+random wfcs". With 22 >= `nbnd` = 18 the random top-up **never happened**.
 
-So it is not "ultrasoft", not "`q_with_l = false`", not "spin-orbit" and not "a
-zone-boundary point" on its own -- it is the three together. A `q_with_l = true`
-ultrasoft relativistic dataset at the same `X` is exact to 5e-10, and the same
-`q_with_l = false` file at a general k is exact to 1e-8.
+And the six random vectors are load-bearing. `Pt.rel-pz-n-rrkjus` has `6P`
+channels with a **negative occupation**, which `n_atom_wfc` skips in both codes,
+so its atomic set is `s` and `d` only. Platinum's band 11 at `X` is `p`-like,
+and therefore *exactly* orthogonal to every atomic orbital either code builds --
+measured at `|P w|^2 = 0.000000` against 0.0023 at `k = (0.999, 0.001, 0)`.
+Davidson's residual correction cannot leave a subspace the Hamiltonian
+preserves, so with no random vector to break it the state was unreachable: the
+solver returned the *next* state in its place, the occupied manifold was wrong
+by one Kramers pair, and the Hartree energy came out **+1.53 Ry** too high while
+`int rho` stayed exact to 4e-14 and `<psi|S|psi>` stayed the identity to 3e-15.
 
-**Why nothing caught it.** Every committed spin-orbit case uses a **shifted**
-Monkhorst-Pack grid -- `pw_spinorbit/spinorbit.in` is `4 4 4 1 1 1` -- and a
-shifted grid contains no nonzero TRIM. `2 2 2 1 1 1` and `4 4 4 1 1 1` reproduce
-`pw.x` to 3e-9 and 5e-9; `2 2 2 0 0 0` and `4 4 4 0 0 0` are out by 2.0e-1 and
-1.0e-2. An **odd** unshifted grid is also safe (`3 3 3 0 0 0` is exact to 7e-9):
-it contains `Gamma`, which is a TRIM with `2k = 0`, and no other.
+**Why each of the four conditions looked necessary.** The TRIM is real and is
+the symmetry that makes the overlap *exactly* zero rather than merely small.
+Spin-orbit coupling is real, in that only a relativistic dataset takes the
+branch whose count was wrong. Ultrasoft and `q_with_l` were **coincidence**:
+those were simply the committed relativistic datasets whose doubled count
+exceeded `nbnd`. The PAW file passed not because PAW is right where ultrasoft is
+wrong, but because 18 of its 22 vectors happen to span the state.
 
-**What is ruled out.** The basis is identical -- same `npw` per k-point in the
-same order (283/272/272/286/272/286/286/272), same `ngm` (6855 dense, 2229
-smooth), same FFT grids. The k-points and their weights match `pw.x`'s list
-point for point. `<psi|S|psi> = I` to 3e-15 while `<psi|psi>` is 0.4 away from
-it, so the overlap is a genuine operator and the states are consistent with it.
-`int rho` is `nelec` to 4e-14, so `addusdens`' normalisation is right. And a
-`nosym` run over the whole grid gives the same wrong answer as the reduced wedge
-(both -68.98452), so it is not the symmetrisation. **The first SCF iteration
-already differs** (-69.744 against -68.524 from the same atomic starting
-density), so it is the Hamiltonian rather than the SCF path.
+**What found it, after the elimination table did not.** Two measurements, both
+cheap and neither about the augmentation charge. Comparing *term by term* rather
+than on the total put 1.53 Ry of the 0.18 in the Hartree term with the Ewald
+exact, which says the density's shape rather than its norm. And a **dense**
+diagonalisation of the very same Hamiltonian (`tests/exact_reference.py`)
+reproduced QE's spectrum, which moves the fault off the Hamiltonian and onto the
+eigensolver in one step. A sweep in `nbnd` then localised it exactly: `18` and
+`20` fail identically and `24` is exact to 5e-4 eV, while `david` -- the
+subspace size -- changes nothing at all.
 
-**Where to look.** What `q_with_l = false` changes is that `Q_ij^L(r)` has to be
-*reconstructed* from one radial function per pair plus the `rinner`/`qfcoef`
-inner pseudisation, per `L`, rather than read from `PP_QIJL`. What spin-orbit
-adds on top is `fcoef`, `transform_qq_so` and `add_becsum_so`. The trap
-`CLAUDE.md`'s spin-orbit row already names is in that neighbourhood --
-`init_us_1` builds `fcoef`, uses it for `dvan_so`, and *then* zeroes the
-cross-radial entries, so one array serving both gives a correct `dvan_so` and a
-silently wrong `qq_so`/`becsum`. What is not yet explained is why the error is
-invisible except at a nonzero TRIM, where the `k + G` set is closed under
-negation.
+**Fixed** by building the spin-angle functions for a relativistic dataset, which
+is `atomic_wfc_so` and is the same construction P69's projection already needed
+(`spinor_atomic_wavefunctions`). Platinum now matches `pw.x` to **1.6e-8 Ry** at
+every k-point of the elimination table, `Gamma`, `X`, `L` and general points
+alike, and to **1.0e-8** on the `2 2 2 0 0 0` grid. Tests:
+`tests/unit/test_starting_wavefunctions.py` for the count and the span, and
+`test_spin_orbit_on_an_unshifted_grid` in `tests/regression/test_spinorbit.py`
+for the energy. A scalar dataset and a spin spiral keep the doubling, which is
+what QE does for them.
 
-**Not fixed and not refused**, because a refusal that names the wrong condition
-is worse than none: the reproducer is above and it is cheap (one atom, one
-k-point, six SCF iterations, a few seconds per code).
+**The reason it survived so long is a k-grid convention.** Every committed
+spin-orbit case uses a **shifted** Monkhorst-Pack grid -- `pw_spinorbit/
+spinorbit.in` is `4 4 4 1 1 1` -- and a shifted grid contains no nonzero TRIM.
+An **odd** unshifted grid is safe too: it contains `Gamma`, which is a TRIM with
+`2k = 0`, and no other. So the whole feature was validated on the one family of
+grids that cannot see the defect, and the new regression is an unshifted even
+one for exactly that reason.
 
 ## 3. Refused by name, and a real term is missing
 

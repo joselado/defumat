@@ -61,7 +61,10 @@ from defumat.basis.sticks import build_sticks
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.hamiltonian.noncollinear import SpinorHamiltonian
 from defumat.hamiltonian.operator import Hamiltonian
-from defumat.pseudo.atomic import atomic_wavefunctions
+from defumat.pseudo.atomic import (
+    atomic_wavefunctions,
+    spinor_atomic_wavefunctions,
+)
 from defumat.paw.onecenter import build_paw
 from defumat.hubbard.energy import (
     coefficients_from_setup,
@@ -3034,12 +3037,23 @@ class Calculation:
         (:mod:`defumat.scf.continuation`).
         """
         if span is None:
-            atomic = atomic_wavefunctions(
-                self.pseudos, self.system.structure, self.system.cell,
-                self.basis.smooth, self.basis.planewaves, self.basis_kpoints,
-            )
-            if self.noncolin:
-                atomic = self._as_spinors(atomic)
+            if self._starts_from_spin_angle_functions():
+                # ``atomic_wfc_so``: the ``|l j m_j>`` themselves, which is what
+                # ``wfcinit`` builds for a fully-relativistic dataset. The
+                # *count* is the reason this is not merely a better-conditioned
+                # start -- see the method's docstring.
+                atomic = spinor_atomic_wavefunctions(
+                    self.pseudos, self.system.structure, self.system.cell,
+                    self.basis.smooth, self.basis.planewaves,
+                    self.basis_kpoints, lspinorb=True,
+                )
+            else:
+                atomic = atomic_wavefunctions(
+                    self.pseudos, self.system.structure, self.system.cell,
+                    self.basis.smooth, self.basis.planewaves, self.basis_kpoints,
+                )
+                if self.noncolin:
+                    atomic = self._as_spinors(atomic)
         else:
             atomic = jnp.asarray(span)
             expected = self.npol * self.basis.npwx
@@ -3097,17 +3111,44 @@ class Calculation:
             for channel, hamiltonian in enumerate(hamiltonians)
         ])
 
+    def _starts_from_spin_angle_functions(self) -> bool:
+        """Whether ``wfcinit`` would build ``|l j m_j>`` rather than doubling.
+
+        ``n_atom_wfc``'s noncollinear count is ``sum (2j + 1)`` for a
+        fully-relativistic dataset and ``sum 2 (2l + 1)`` otherwise, and those
+        are different numbers -- 12 against 22 for ``Pt.rel-pz-n-rrkjus``,
+        whose two ``6P`` channels carry a negative occupation and are skipped by
+        both. **That count is not a detail, it decides whether the random
+        vectors get added at all**, which is what the docstring below used to
+        get wrong. A spiral keeps the doubling: it refuses spin-orbit coupling,
+        so its dataset is never relativistic, and its two components live on
+        different spheres.
+        """
+        return (
+            self.noncolin
+            and not self.spiral
+            and any(pseudo.has_so for pseudo in self.pseudos)
+        )
+
     def _as_spinors(self, atomic: jnp.ndarray) -> jnp.ndarray:
         """Scalar atomic orbitals -> twice as many spinors, ``(nk, 2 n, 2 npwx)``.
 
-        Each orbital is used twice, once in each spin component, which spans the
-        same space as QE's ``atomic_wfc_nc``. It is *not* the same set of
-        vectors: with spin-orbit coupling QE builds the ``j``-resolved
-        spin-angle functions (``atomic_wfc_so``), which are already close to the
-        eigenstates. The difference is entirely one of convergence -- both spans
-        are then diagonalised by ``rotate_wfc``, and what comes out of that is
-        what the SCF starts from -- so this is a slower start, not a different
-        calculation.
+        Each orbital is used twice, once in each spin component, which is
+        exactly QE's ``atomic_wfc_nc`` and is right for a dataset with no ``j``
+        channels -- ``n_atom_wfc`` counts ``2 (2l + 1)`` there.
+
+        **It is wrong for a fully-relativistic one, and not merely as a slower
+        start**, which is what this docstring used to say. QE builds the
+        ``j``-resolved spin-angle functions there (``atomic_wfc_so``), and their
+        count is ``sum (2j + 1)`` -- 12 against this doubling's 22 for
+        ``Pt.rel-pz-n-rrkjus``. Since ``wfcinit`` tops the atomic set up with
+        random vectors only when it is shorter than ``nbnd``, producing 22
+        removes that top-up, and with it the only part of the span with generic
+        angular character: a state no atomic orbital of the dataset carries is
+        then unreachable, because the residual correction cannot leave a
+        subspace the Hamiltonian preserves. That was a converged, plausible,
+        0.20 Ry wrong answer (``GAPS.md`` §2c).
+        :meth:`_starts_from_spin_angle_functions` is the guard.
         """
         if self.spiral:
             # The two halves of the doubled list are the two components'
