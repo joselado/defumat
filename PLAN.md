@@ -10489,6 +10489,44 @@ way out), and a spinor or spiral run. `Calculation.gamma_only` is the switch and
 because sizing the substitution where the run consumes the half sphere
 overstates every band-sized array by two.
 
+### P68b — A soft mode's `ecutrho` convergence, and why the two routes agreeing is weak evidence. 📓 RECORDED.
+
+Not a phase and nothing was implemented; a convergence property measured
+downstream and worth writing down, because both routes hide it.
+
+The analytic Hessian and a finite difference of the forces are the same
+quantity in exact arithmetic and are not on a grid. The FFT box breaks
+continuous translation invariance, so the energy carries a ripple as an atom
+crosses it -- the egg-box effect -- and the analytic second derivative takes the
+**point** curvature of that ripple where a finite difference **averages** it
+over the displacement. The difference is roughly a fixed curvature, so it
+matters in proportion to how small the mode's own curvature is: a stiff mode
+barely notices and a soft one can be several per cent out. It is `ecutrho` that
+fixes it, not `ecutwfc`, the ripple living on the dense grid.
+
+Measured on N2 in a 12 bohr cube (SG15 ONCV PBE, `nosym`, `K_POINTS gamma`, one
+atom frozen, the other at 1.15 A; central difference of the forces at ±0.03 A):
+at 40/160 Ry the transverse pair is **314.12 analytic against 296.59** and at
+40/320 it is **306.35 against 301.9**, so raising only `ecutrho` moves the
+analytic value by 8 cm^-1 and the finite-difference one by 5 and closes their
+gap from **17.5 to 4.4 cm^-1** -- while the stretch is 0.5 per cent off either
+way at both cutoffs, which is the signature. The analytic asymmetry is 3e-8 and
+1.4e-8 Ry/bohr^2, so neither is a convergence failure of the solve.
+
+**The reason to record it is what it says about validation.** Both routes
+converge, each agrees with itself, and they drift *together*, so nothing in
+either calculation announces the error. Agreement between the analytic and
+finite-difference routes at one cutoff is therefore a weaker statement than it
+looks -- and this repository leans on exactly that comparison in several places
+(P25's finite-differenced columns, P39's, P43's). Those cases are stiff modes
+where the effect is small, which is why they were never wrong; the caveat is
+that they would not have caught it on a soft one. A soft mode wants its own
+`ecutrho` pair and the shift between them is the error bar.
+
+Contributed from a production study of a molecule on a surface whose modes of
+interest are 10-15 meV; documented in `docs/features.tex` beside the partial
+dynamical matrix.
+
 ### P68a — The dynamical matrix under gamma storage. ✅ DONE.
 
 The two memory features of P67 and P68 aim at the same calculation -- a molecule

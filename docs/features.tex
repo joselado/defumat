@@ -957,6 +957,51 @@ physical check is that freezing one of silicon's two atoms turns the optical
 mode's reduced mass $m/2$ into $m$, so the frequency falls by $\sqrt2$:
 $519.205 \to 367.146$, a ratio of 1.414173.
 
+\textbf{A soft mode converges in \code{ecutrho}, and the finite-difference
+route hides it.} The analytic Hessian and a finite difference of the forces are
+the same quantity in exact arithmetic and are not on a grid: the FFT box breaks
+continuous translation invariance, so the energy carries a small ripple as an
+atom moves across it (the ``egg-box'' effect). The analytic second derivative
+takes the \emph{point} curvature of that ripple; a finite difference averages it
+over the displacement. The two therefore differ by the amount the dense grid is
+not translationally invariant --- and because that error is roughly a fixed
+curvature, it matters in proportion to how \emph{small} the mode's own curvature
+is. A stiff mode barely notices; a soft one can be several per cent out.
+
+It is \code{ecutrho} and not \code{ecutwfc} that fixes it, the ripple living on
+the dense grid where the density and the local potential do. Measured on
+N$_2$ in a 12~bohr cube (SG15 ONCV PBE, \code{nosym}, \code{K\_POINTS gamma},
+one atom frozen, the other at 1.15~\AA), with the finite difference taken as a
+central difference of the forces at $\pm0.03$~\AA:
+
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+ & transverse (cm$^{-1}$) & gap & stretch (cm$^{-1}$) \\
+\midrule
+40/160~Ry, analytic          & 314.12 &        & 1483.49 \\
+40/160~Ry, finite difference & 296.59 & 17.5   & 1490.77 \\
+40/320~Ry, analytic          & 306.35 &        & 1488.1 \\
+40/320~Ry, finite difference & 301.9  & \phantom{0}4.4 & 1495.2 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Raising \emph{only} \code{ecutrho} moves the frustrated-rotation pair
+by 8~cm$^{-1}$ analytically and 5~cm$^{-1}$ by finite difference, closing their
+gap from \textbf{17.5 to 4.4}~cm$^{-1}$, while the stretch is 0.5\% off either
+way at both cutoffs --- which is the signature. The analytic asymmetry is 3e-8
+and 1.4e-8~Ry/bohr$^2$, so neither number is a convergence failure of the solve.
+
+\textbf{What makes this worth stating rather than discovering:} both routes
+converge, each agrees with itself, and they drift \emph{together}, so nothing in
+either calculation announces the error. The practical rule is that a soft mode
+wants its own \code{ecutrho} convergence pair, and the shift between them is the
+error bar to quote --- not the agreement between the analytic and
+finite-difference routes at one cutoff, which is a weaker statement than it
+looks. (Measurements contributed from a production study of a molecule on a
+surface, where the modes of interest are 10--15~meV.)
+
 \textbf{A trap worth knowing:} a response on a reduced $k$-set is a \emph{polar
 vector field} and must be symmetrised as one. Running the whole grid instead is
 sound only if the grid is closed under the point group --- a \textbf{shifted}
