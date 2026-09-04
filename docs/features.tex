@@ -369,13 +369,23 @@ conjugation; \code{nosym = .true.} is the way out), and for a spinor or spiral
 run. \code{estimate()} makes the same decision the driver makes, so it sizes
 the run either way.
 
-Every \textbf{response} quantity --- the dielectric tensor, phonons, Raman,
-Born charges --- is refused by name under gamma storage, and the reason is that
-it does not fail: the Sternheimer stack's inner products carry no
-$2\,\mathrm{Re}(\sum) - (G{=}0)$, and silicon's dielectric constant comes out
-$285.4/229.4/228.3$ against an isotropic $190.8$ --- not even cubic on a cubic
-crystal, which is the only tell. The partial dynamical matrix and gamma storage
-therefore do not combine yet. A checkpoint refuses rather than drops a converged
+\textbf{The dynamical matrix works under gamma storage}, including a partial
+one --- the combination a molecule on a fixed slab needs. The Sternheimer solve
+is gamma-aware throughout (the projector, the CG's products, the
+preconditioner, the response density), and a displacement's source term is one
+$\mathrm{jvp}$ through \code{at\_positions}, so it inherits the corrected
+\code{h\_psi} with no branch of its own. Against the whole sphere: frequencies
+to \textbf{9.6e-10}~cm$^{-1}$ and the matrix to \textbf{1.5e-13}~Ry/bohr$^2$,
+with the acoustic residue identical; a partial matrix to \textbf{5.9e-11}. And
+$\chi_0$ against a central difference of the density --- which shares no
+machinery with either storage --- to \textbf{7.0e-6}.
+
+A \textbf{field} response is still refused, and the distinction is the reason: a
+field enters through the commutator $[H,\mathbf r]$, which builds plane-wave
+sums of its own. The dielectric tensor, the Raman tensor, the strain response
+and the Born charges all stand on it. It does not fail --- with the guard
+lifted silicon's dielectric constant is $501.7/213.1/253.1$ against an isotropic
+$190.8$ --- which is why it is a refusal. A checkpoint refuses rather than drops a converged
 \emph{magnetic field} (it is not the input field wherever \code{reducebf}
 changed it) and a \emph{Hubbard setup} (without it \code{ns} is an array about
 nothing); \code{stress}, \code{solver} and \code{history} are deliberately not

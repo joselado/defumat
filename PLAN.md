@@ -10489,7 +10489,49 @@ way out), and a spinor or spiral run. `Calculation.gamma_only` is the switch and
 because sizing the substitution where the run consumes the half sphere
 overstates every band-sized array by two.
 
-**The response stack is refused under gamma by name, and the reason is that it
+### P68a — The dynamical matrix under gamma storage. ✅ DONE.
+
+The two memory features of P67 and P68 aim at the same calculation -- a molecule
+on a fixed slab -- and did not combine, because lifting the substitution left
+the Sternheimer stack reading a half sphere with none of its inner products
+corrected. They combine now. **The solve is gamma-aware**: the projector's
+overlaps in `orthogonalize`, the CG's own products in `cgsolve_all`, the
+preconditioner's `<psi|T|psi>`, the projections in the perturbation applier and
+the density the response is a `jvp` of, each taking `2 Re(...)` minus the
+`G = 0` term through one helper.
+
+**What decides whether a quantity works is where its source term comes from,
+and that is the finding.** A *displacement* enters through the potential, so
+`_bare_displacements` is one `jvp` through `at_positions` and inherits the
+gamma-aware `h_psi` with no branch of its own -- which is why the dynamical
+matrix needed nothing above the solve. A *field* enters through the commutator
+`[H, r]` (`dvpsi_e`, `response/velocity.py`), which builds its own plane-wave
+sums; the dielectric tensor, the Raman tensor, the strain response and the Born
+charges all stand on that and stay refused.
+
+Against an explicit `k = 0` on the whole sphere, which is the same calculation
+in the other storage: frequencies to **9.6e-10 cm^-1** and the matrix to
+**1.5e-13 Ry/bohr^2** on LDA, **1.3e-9** and **2.6e-13** on PBE, with the
+**acoustic residue identical** in both storages -- that last being the sum-rule
+quantity that caught P28's factor of two, where a wrong doubling in the response
+density shows as a rigid shift while the frequencies still look plausible. A
+**partial** matrix (`atoms=(0,)`) agrees to **5.9e-11 cm^-1**, which is the
+combination the phase exists for.
+
+**And one check shares no machinery with either storage**: `chi_0` under a
+potential probe against a central difference of the density, re-diagonalised and
+rebuilt from scratch -- **7.0e-6** relative under gamma against 1.9e-5 for the
+full sphere on the same probe and step, both at the difference's own floor. That
+is the one a factor wrong in *both* storages would still fail.
+
+**The refusal that remains is worth its wording.** It used to say the stack was
+not implemented; it now says the *solver* is, names the commutator as what is
+missing, and quotes the number: with the guard lifted the dielectric constant is
+501.7/213.1/253.1 against an isotropic 190.8. `nspin = 2` phonons stay refused
+for the separate, pre-existing reason (the LSDA assembly), which is unrelated to
+storage.
+
+**The response stack was refused under gamma by name, and the reason is that it
 does not fail.** Lifting the substitution made every Sternheimer quantity
 reachable with a half sphere, and none of its inner products -- `orthogonalize`'s
 projector, `cgsolve_all`'s own products, the response density -- carries the

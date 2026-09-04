@@ -142,7 +142,7 @@ from jax import lax
 
 import jax
 
-from defumat.basis.fft import g_to_r
+from defumat.basis.fft import force_real_g0, g_to_r, g_to_r_gamma
 from defumat.basis.interpolate import to_dense, to_smooth
 from defumat.batching import map_k
 from defumat.scf.density import becsum as becsum_of, sum_band
@@ -340,6 +340,33 @@ class SternheimerSolver:
     def nspin(self) -> int:
         return self.psi.shape[0]
 
+    @property
+    def gamma_only(self) -> bool:
+        """Whether the states are stored on the half sphere (``PLAN.md`` P68).
+
+        Read off the operator rather than passed in: the ``Hamiltonian`` the
+        solver was handed already knows, and a second source of truth for this
+        is a second thing to get out of step.
+        """
+        return bool(self.hamiltonians[0].gamma_only)
+
+    def _pw(self, total, zero):
+        """``2 Re(total) - Re(zero)`` for a sum over a stored half sphere.
+
+        ``total`` is the sum over what is stored and ``zero`` the ``G = 0``
+        term of it, which stands for itself rather than for half of a pair. The
+        result is **real** and is cast back to the states' dtype, because every
+        caller feeds it straight into a complex ``einsum``.
+
+        One helper for the whole stack: the projector's overlaps, the CG's own
+        products, the preconditioner's ``<psi|T|psi>`` and the projections in
+        the perturbation applier all take the same correction, and the term
+        that goes missing is always the ``G = 0`` one.
+        """
+        if not self.gamma_only:
+            return total
+        return (2.0 * total.real - zero.real).astype(self.psi.dtype)
+
     # -- the pieces of ``ch_psi_all`` -------------------------------------
 
     def _operator(self, vectors, ik, spin):
@@ -357,7 +384,10 @@ class SternheimerSolver:
         # norm-conserving dataset is the identity twice and the plain projector.
         # ``ch_psi_all`` runs this sum over ``nbnd_occ``, which for a metal is
         # not every band in the block -- hence the mask.
-        overlaps = jnp.einsum("mg,ng->mn", jnp.conj(occupied), s)
+        overlaps = self._pw(
+            jnp.einsum("mg,ng->mn", jnp.conj(occupied), s),
+            jnp.conj(occupied[:, :1]) * s[:, :1].T,
+        )
         overlaps = jnp.where(self.projector_mask[spin][ik][:, None], overlaps, 0.0)
         lifted = jnp.einsum("mn,mg->ng", overlaps, occupied)
         return out + self.alpha_pv * hamiltonian.apply_s(lifted, ik)
@@ -373,8 +403,16 @@ class SternheimerSolver:
         hamiltonian = self.hamiltonians[spin]
         occupied = self.psi[spin][ik]
         s_occupied = hamiltonian.apply_s(occupied, ik)
+        # ``Im c(0) = 0`` on the right-hand side, or it propagates through every
+        # ``dpsi`` and into the response density. The CG below preserves it --
+        # its alpha and beta are real and ``h_prec`` is a real diagonal -- but
+        # only if it starts true.
+        rhs = force_real_g0(rhs, self.gamma_only)
         if self.smearing is not None:
-            overlaps = jnp.einsum("mg,ng->mn", jnp.conj(occupied), rhs)
+            overlaps = self._pw(
+                jnp.einsum("mg,ng->mn", jnp.conj(occupied), rhs),
+                jnp.conj(occupied[:, :1]) * rhs[:, :1].T,
+            )
             rhs, overlaps = self._smeared_projection(rhs, overlaps, ik, spin)
             return -(rhs - jnp.einsum("mn,mg->ng", overlaps, s_occupied))
         # The sharp branch, and the mask is the identity except in the deficient
@@ -393,7 +431,10 @@ class SternheimerSolver:
         keep = self.projector_mask[spin][ik][:, None]
         rhs = jnp.where(keep, rhs, 0.0)
         overlaps = jnp.where(
-            keep, jnp.einsum("mg,ng->mn", jnp.conj(occupied), rhs), 0.0
+            keep,
+            self._pw(jnp.einsum("mg,ng->mn", jnp.conj(occupied), rhs),
+                     jnp.conj(occupied[:, :1]) * rhs[:, :1].T),
+            0.0,
         )
         return -(rhs - jnp.einsum("mn,mg->ng", overlaps, s_occupied))
 
@@ -451,9 +492,14 @@ class SternheimerSolver:
         hamiltonian = self.hamiltonians[spin]
         occupied = self.psi[spin][ik]
         kinetic = hamiltonian.state_kinetic[ik]
-        eprec = 1.35 * jnp.real(
+        expectation = jnp.real(
             jnp.einsum("ng,g,ng->n", jnp.conj(occupied), kinetic, occupied)
         )
+        if self.gamma_only:
+            expectation = 2.0 * expectation - jnp.real(
+                jnp.conj(occupied[:, 0]) * kinetic[0] * occupied[:, 0]
+            )
+        eprec = 1.35 * expectation
         return 1.0 / jnp.maximum(1.0, kinetic[None, :] / eprec[:, None])
 
     # -- the solver -------------------------------------------------------
@@ -473,8 +519,17 @@ class SternheimerSolver:
             return jnp.where(mask, self._operator(vectors, ik, spin), 0.0)
 
         def dot(a, b):
-            """``MYDDOTV3``: the real part of the Hermitian product, per band."""
-            return jnp.real(jnp.einsum("ng,ng->n", jnp.conj(a), b))
+            """``MYDDOTV3``: the real part of the Hermitian product, per band.
+
+            Under half-sphere storage ``cgsolve_all`` treats each vector as a
+            real one of length ``2 npw`` and subtracts the ``G = 0`` product --
+            which is this, with the doubling that the real dot product supplies
+            there written out.
+            """
+            product = jnp.real(jnp.einsum("ng,ng->n", jnp.conj(a), b))
+            if not self.gamma_only:
+                return product
+            return 2.0 * product - jnp.real(jnp.conj(a[:, 0]) * b[:, 0])
 
         rhs = jnp.where(mask, rhs, 0.0)
         dpsi = jnp.zeros_like(rhs)
@@ -576,6 +631,7 @@ class SternheimerSolver:
         rho = sum_band(
             states, calculation.fft_index, smooth.grid, weights,
             calculation.system.cell, calculation.k_batch,
+            fft_index_minus=calculation.fft_index_minus,
         )
         return calculation.augmented(to_dense(rho, smooth, dense), becsum_)
 
@@ -768,6 +824,7 @@ def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None)
     dense, smooth = calculation.basis.dense, calculation.basis.smooth
     grid = smooth.grid
     fft_index = calculation.fft_index
+    minus_index = calculation.fft_index_minus
     mask = calculation.basis.planewaves.mask
     n = grid[0] * grid[1] * grid[2]
     dv = jnp.asarray(dv)
@@ -781,13 +838,26 @@ def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None)
 
     def apply(states, ik, spin):
         index = fft_index[ik]
-        box = jnp.fft.fftn(
-            g_to_r(states, index, grid) * fields[spin], axes=(-3, -2, -1)
-        ) / n
+        if minus_index is None:
+            field = g_to_r(states, index, grid)
+        else:
+            # Half-sphere storage: the field is rebuilt from both halves and is
+            # real, and ``dV_scf`` is real, so the product is -- and gathering
+            # the stored half of its coefficients loses nothing. No factor: the
+            # doubling belongs to *sums*, never to the transform.
+            field = g_to_r_gamma(states, index, minus_index[ik], grid)
+        box = jnp.fft.fftn(field * fields[spin], axes=(-3, -2, -1)) / n
         out = jnp.take(box.reshape(box.shape[:-3] + (-1,)), index, axis=-1)
         if coefficients is not None:
             projectors = vkb[ik]
             projections = jnp.einsum("gk,...g->...k", projectors.conj(), states)
+            if minus_index is not None:
+                # ``calbec_gamma`` again -- a sum over plane waves, so it takes
+                # the doubling and the ``G = 0`` correction.
+                zero = projectors[:1].conj() * states[..., :1]
+                projections = (
+                    2.0 * projections.real - zero.real
+                ).astype(projectors.dtype)
             dij = coefficients[spin].astype(projectors.dtype)
             out = out + jnp.einsum("gk,...k->...g", projectors, projections @ dij.T)
         return jnp.where(mask[ik], out, 0.0)
@@ -957,7 +1027,8 @@ def _alpha_pv(eigenvalues, counts, smearing=None) -> float:
 
 
 def require_a_sternheimer_regime(
-    calculation, metals: bool = False, spin_polarized: bool = False
+    calculation, metals: bool = False, spin_polarized: bool = False,
+    gamma_ok: bool = False,
 ) -> None:
     """Refuse, by name, every regime whose response needs machinery not here.
 
@@ -981,19 +1052,24 @@ def require_a_sternheimer_regime(
     are still refused here. The flag is deliberately opt-in for that reason,
     exactly as ``metals`` is.
     """
-    if getattr(calculation, "gamma_only", False):
+    if getattr(calculation, "gamma_only", False) and not gamma_ok:
         raise NotImplementedError(
-            "a response quantity is not implemented for gamma-only storage. "
-            "The SCF consumes the half sphere (P68) and this stack does not: "
-            "every inner product here -- the projector in orthogonalize, the "
-            "CG's own products in cgsolve_all, the response density -- is a sum "
-            "over plane waves and needs 2 Re(...) minus the G = 0 term, and "
-            "none of them has it. **It does not fail, which is why this refusal "
-            "exists**: silicon's dielectric constant comes out 285.4/229.4/228.3 "
-            "against 190.8/190.8/190.8, half again too large and not even cubic "
-            "on a cubic crystal. Run the same cell with an explicit k = 0 "
-            "(K_POINTS automatic, 1 1 1 0 0 0), which is the same physics on the "
-            "whole sphere"
+            "this response quantity is not implemented for gamma-only "
+            "storage. **The solver is** (P68a): every inner product in the "
+            "Sternheimer stack takes 2 Re(...) minus the G = 0 term, chi_0 "
+            "under a potential probe matches a central difference of the "
+            "density to 7e-6, and the dynamical matrix -- including a partial "
+            "one -- agrees with the whole sphere to 1.5e-13 Ry/bohr^2. What is "
+            "not is this quantity's own source term. A displacement enters "
+            "through the potential and so inherits the corrected h_psi; a "
+            "**field** enters through the commutator [H, r] (dvpsi_e, "
+            "response/velocity.py), and the Raman tensor, the strain response "
+            "and the Born charges each build further plane-wave sums on top of "
+            "that. **None of them fails**, which is why this is a refusal: with "
+            "the guard lifted, silicon's dielectric constant is "
+            "501.7/213.1/253.1 against an isotropic 190.8. Run the same cell "
+            "with an explicit k = 0 (K_POINTS automatic, 1 1 1 0 0 0), which is "
+            "the same physics on the whole sphere"
         )
     system = calculation.system
     reject_potential_only(calculation)
@@ -1094,10 +1170,12 @@ def smearing_of(calculation, result) -> Smearing | None:
 
 
 def make_sternheimer(calculation, result, threshold: float = THRESHOLD,
-                     metals: bool = False, spin_polarized: bool = False):
+                     metals: bool = False, spin_polarized: bool = False,
+                     gamma_ok: bool = False):
     """A solver for a converged :class:`~defumat.scf.driver.SCFResult`."""
     require_a_sternheimer_regime(
-        calculation, metals=metals, spin_polarized=spin_polarized
+        calculation, metals=metals, spin_polarized=spin_polarized,
+        gamma_ok=gamma_ok,
     )
     eigenvalues = jnp.asarray(result.eigenvalues)
     if eigenvalues.ndim == 2:

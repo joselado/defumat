@@ -337,7 +337,9 @@ def dynamical_matrix(
     # ``ef_shift``, inside the loop below.
     # Before the generic guard, so that the message names the dynamical matrix.
     _require_one_spin_channel(calculation)
-    require_a_sternheimer_regime(calculation, metals=True)
+    # ``gamma_ok``: validated against an explicit k = 0 on the whole sphere,
+    # which is the same calculation in the other storage (``PLAN.md`` P68a).
+    require_a_sternheimer_regime(calculation, metals=True, gamma_ok=True)
     _require_a_moving_overlap_regime(calculation)
 
     structure = calculation.system.structure

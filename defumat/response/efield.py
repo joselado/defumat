@@ -244,6 +244,15 @@ def dielectric_tensor(
     # so no factor appears here that is not in the density builder. The identity
     # that says so is the same cell run as ``nspin = 1`` and as ``nspin = 2``
     # with no magnetization (``tests/regression/test_lsda_response.py``).
+    # **Still refused under gamma, and the reason is specific.** The solve
+    # itself is right there (P68a) -- ``chi_0`` under a *potential* probe
+    # matches a central difference of the density to 7e-6 -- and the dynamical
+    # matrix, whose perturbation is one ``jvp`` through ``at_positions`` and so
+    # inherits the gamma-aware ``h_psi``, agrees with the whole sphere to
+    # 1.5e-13. A *field* does not enter through the potential: its source is the
+    # commutator ``[H, r]`` (``dvpsi_e``, ``response/velocity.py``), which
+    # builds its own plane-wave sums and has none of the corrections. Measured
+    # with the guard lifted: 501.7/213.1/253.1 against an isotropic 190.8.
     require_a_sternheimer_regime(calculation, spin_polarized=True)
     if born_charges and calculation.nspin == 2:
         # The dielectric constant above is a spin *sum*; a Born charge is not.

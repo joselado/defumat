@@ -229,29 +229,93 @@ def test_a_screened_mixer_is_unaffected_by_the_storage(pseudo_dir, mixing):
     assert abs(gamma.iterations - full.iterations) <= 2
 
 
+# --- the response stack -----------------------------------------------------
+#
+# The solve is gamma-aware: every inner product in it takes
+# ``2 Re(...) - (G = 0)``. What decides whether a *quantity* works is where its
+# source term comes from. A displacement enters through the potential and so
+# inherits the corrected ``h_psi``; a field enters through the commutator
+# ``[H, r]``, which builds its own sums and has none of the corrections.
+
+
+def _undisplaced(kpoints, extra=""):
+    text = _TEMPLATE.format(extra=extra, kpoints=kpoints, pseudo="Si.pz-vbc.UPF")
+    return text.replace(" Si 0.01 0.00 0.00", " Si 0.00 0.00 0.00").replace(
+        " Si 0.26 0.24 0.25", " Si 0.25 0.25 0.25"
+    )
+
+
 @pytest.mark.slow
-@pytest.mark.parametrize("quantity", ["get_dielectric_tensor", "get_phonons"])
-def test_the_response_stack_is_refused_under_gamma(pseudo_dir, quantity):
-    """It runs and is wrong, which is why the refusal is by name.
+@pytest.mark.parametrize("regime", ["lda", "pbe"], ids=["lda", "pbe"])
+def test_the_dynamical_matrix_agrees_with_the_full_sphere(pseudo_dir, regime):
+    """The quantity this storage was extended for, and it needs no reference.
 
-    Every inner product in the Sternheimer stack -- ``orthogonalize``'s
-    projector, ``cgsolve_all``'s own products, the response density -- is a sum
-    over plane waves needing ``2 Re(...) - (G = 0)``, and none of them has it.
-    Nothing raises: silicon's dielectric constant comes out
-    **285.4 / 229.4 / 228.3** against **190.8 / 190.8 / 190.8**, half again too
-    large and **not even cubic on a cubic crystal**, which is the tell. Measured
-    before the refusal was added.
+    The perturbation is one ``jvp`` through ``at_positions``, so it inherits the
+    gamma-aware ``h_psi`` rather than needing a branch of its own; what had to
+    change was the solve underneath -- the projector, the CG's products, the
+    preconditioner and the response density.
 
-    The consequence worth stating: the partial dynamical matrix and gamma-only
-    storage are both memory features for the same kind of calculation and they
-    do **not** combine yet.
+    The **acoustic residue** is compared as well as the frequencies, because it
+    is the sum-rule quantity that caught P28's factor of two: a wrong doubling
+    anywhere in the response density shows there as a rigid shift while the
+    frequencies still look plausible.
     """
-    text = _TEMPLATE.format(extra="", kpoints="gamma", pseudo="Si.pz-vbc.UPF")
+    extra = REGIMES[regime]
+
+    def phonons(kpoints):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            calculator = Calculator.from_text(
+                _undisplaced(kpoints, extra), pseudo_dir, announce=False
+            )
+            return calculator, calculator.get_phonons()
+
+    whole, full = phonons("automatic\n 1 1 1 0 0 0")
+    half, gamma = phonons("gamma")
+    assert half.calculation.gamma_only and not whole.calculation.gamma_only
+
+    np.testing.assert_allclose(gamma.frequencies, full.frequencies, atol=1e-6)
+    np.testing.assert_allclose(gamma.matrix, full.matrix, atol=1e-10)
+    assert gamma.acoustic_residue == pytest.approx(full.acoustic_residue, rel=1e-6)
+
+
+@pytest.mark.slow
+def test_a_partial_dynamical_matrix_works_under_gamma(pseudo_dir):
+    """The combination the whole thing is for: fewer perturbations, half the sphere.
+
+    Both are memory features aimed at the same calculation -- a molecule on a
+    fixed slab -- and neither is much use to it without the other.
+    """
+    def subset(kpoints):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            calculator = Calculator.from_text(
+                _undisplaced(kpoints), pseudo_dir, announce=False
+            )
+            return calculator.get_phonons(atoms=(0,))
+
+    full = subset("automatic\n 1 1 1 0 0 0")
+    gamma = subset("gamma")
+    assert gamma.atoms == (0,) and gamma.matrix.shape == (1, 3, 1, 3)
+    np.testing.assert_allclose(gamma.frequencies, full.frequencies, atol=1e-6)
+
+
+@pytest.mark.slow
+def test_a_field_response_is_still_refused_under_gamma(pseudo_dir):
+    """The commutator source has no gamma form, and it does not fail.
+
+    With the guard lifted, silicon's dielectric constant comes out
+    **501.7 / 213.1 / 253.1** against an isotropic **190.8** -- and *not cubic
+    on a cubic crystal* is the only tell. The Raman tensor, the strain response
+    and the Born charges build further sums on top of the same source.
+    """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        calculator = Calculator.from_text(text, pseudo_dir, announce=False)
+        calculator = Calculator.from_text(
+            _undisplaced("gamma"), pseudo_dir, announce=False
+        )
         with pytest.raises(NotImplementedError, match="gamma-only"):
-            getattr(calculator, quantity)()
+            calculator.get_dielectric_tensor()
 
 
 @pytest.mark.slow
@@ -277,3 +341,66 @@ def test_the_full_sphere_response_still_works(pseudo_dir):
     diagonal = np.diag(epsilon)
     assert diagonal[0] == pytest.approx(diagonal[1], rel=1e-6)
     assert diagonal[0] == pytest.approx(diagonal[2], rel=1e-6)
+
+
+@pytest.mark.slow
+def test_chi0_matches_a_finite_difference_under_gamma(pseudo_dir):
+    """The check a self-consistent factor cannot fool.
+
+    Every other comparison here is gamma against the full sphere, which shares
+    machinery; this one re-diagonalises under a probe potential and rebuilds the
+    density from scratch, so a factor wrong in *both* storages would still show.
+    It is the measurement P24c and P45 used, under half-sphere storage.
+
+    Measured: **7.0e-6** relative, against **1.9e-5** for the full sphere on the
+    same probe and step -- both at the central difference's own floor.
+    """
+    import jax.numpy as jnp
+
+    from defumat.basis.interpolate import to_dense
+    from defumat.response.sternheimer import make_sternheimer
+    from defumat.scf.density import sum_band
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_text(
+            _undisplaced("gamma"), pseudo_dir, announce=False
+        )
+        result = calculator.get_scf()
+    calculation = calculator.calculation
+    assert calculation.gamma_only
+
+    # ``cos(2 pi G.r)`` on the dense grid, for a low G.
+    dense = calculation.basis.dense
+    axes = [np.arange(n) / n for n in dense.grid]
+    mesh = np.meshgrid(*axes, indexing="ij")
+    miller = np.asarray(dense.miller)[3]
+    phase = 2 * np.pi * sum(miller[i] * mesh[i] for i in range(3))
+    dv = jnp.asarray(np.cos(phase)[None].repeat(calculation.nspin_mag, axis=0))
+
+    solver = make_sternheimer(calculation, result, gamma_ok=True)
+    solution = solver.solve(solver.perturbation(dv))
+    assert solution.converged
+    drho = np.asarray(solver.response_density(solution.dpsi))
+
+    smooth = calculation.basis.smooth
+    v_scf = calculation.potential(result.density).v_scf
+    nbnd = np.asarray(result.wavefunctions).shape[2]
+    weights = jnp.asarray(np.asarray(result.occupations))
+    if weights.ndim == 2:
+        weights = weights[None]
+
+    def density_at(scale):
+        hamiltonians = calculation.hamiltonian(v_scf + scale * dv, None)
+        _, psi = calculation.diagonalize(hamiltonians, nbnd, None, 1e-13)
+        rho = sum_band(
+            psi, calculation.fft_index, smooth.grid, weights,
+            calculation.system.cell, calculation.k_batch,
+            fft_index_minus=calculation.fft_index_minus,
+        )
+        return np.asarray(to_dense(rho, smooth, dense))
+
+    step = 1.0e-3
+    reference = (density_at(step) - density_at(-step)) / (2.0 * step)
+    relative = np.abs(drho - reference).max() / np.abs(drho).max()
+    assert relative < 1.0e-4
