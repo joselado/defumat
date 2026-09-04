@@ -286,7 +286,26 @@ PROJWFC = {
     # and ``fill_nlmchi``'s ordering is the thing being compared as much as the
     # numbers are.
     "si10-nc": "si10-nc",
+    # Spin-orbit coupling, where the projection is onto the spin-angle functions
+    # |l j m_j> rather than onto real harmonics, and ``natomwfc`` is not a
+    # doubling. Ultrasoft and PAW, because ``S`` carries ``qq_so`` in both and a
+    # norm-conserving case cannot see it.
+    "pt-soc": "pt-soc-nosym",
+    "pt-soc-paw": "pt-soc-paw-nosym",
 }
+
+#: Cases whose projection must **not** be symmetrised, because defumat refuses a
+#: symmetrised spinor projection (``sym_proj_so`` needs the SU(2) representation
+#: of each operation) and offers ``nosym`` as the way out.
+#:
+#: **``nosym`` in the ``pw.x`` input is not enough and this was measured.**
+#: ``projwfc.x`` re-derives the point group rather than inheriting the one the
+#: SCF ran with, so ``lsym = .true.`` symmetrises even where ``pw.x`` printed
+#: "No symmetry found": on ``pt-soc`` it averages the two Kramers partners of the
+#: ``6S`` shell to 0.495 each where the unsymmetrised projection is 0.870/0.120.
+#: The Loewdin charges and the spilling are identical either way, so nothing that
+#: is summed over a shell can catch it -- only the per-column projection can.
+PROJWFC_NOSYM = {"pt-soc", "pt-soc-paw"}
 
 #: Cases that ask ``projwfc.x`` for a broadening of their own, in **Ry** --
 #: which is the unit its ``degauss`` is in, unlike its ``DeltaE``. Without one
@@ -310,7 +329,8 @@ def projwfc_case(source: str) -> Path:
     return CASES / f"{source}.in"
 
 
-def run_projwfc(case: Path, conv_thr: float | None, degauss: float | None = None) -> tuple[str, dict]:
+def run_projwfc(case: Path, conv_thr: float | None, degauss: float | None = None,
+                lsym: bool = True) -> tuple[str, dict]:
     """``pw.x`` then ``projwfc.x`` in one directory; stdout and the pdos files."""
     with tempfile.TemporaryDirectory() as tmp:
         _invoke(case, tmp, conv_thr)
@@ -322,6 +342,15 @@ def run_projwfc(case: Path, conv_thr: float | None, degauss: float | None = None
             "    filpdos = 'pdos'\n"
             f"    DeltaE = {PROJWFC_DELTA_E}\n"
             + (f"    degauss = {degauss}\n" if degauss else "")
+            + ("" if lsym else
+               # ``kresolveddos`` because ``projwfc.f90:229`` writes the partial
+               # densities of states only ``IF ( lsym .OR. kresolveddos )``, and
+               # ``filproj`` because the projections in the standard output are
+               # rounded to three decimals, where the file carries ten -- which
+               # is what a column-by-column comparison needs.
+               "    lsym = .false.\n"
+               "    kresolveddos = .true.\n"
+               "    filproj = 'proj'\n")
             + "/\n"
         )
         result = subprocess.run(
@@ -341,6 +370,10 @@ def run_projwfc(case: Path, conv_thr: float | None, degauss: float | None = None
             path.name: path.read_text()
             for path in sorted(Path(tmp).glob("pdos.pdos_*"))
         }
+        files.update({
+            path.name: path.read_text()
+            for path in sorted(Path(tmp).glob("proj.projwfc_*"))
+        })
         return result.stdout, files
 
 
@@ -363,7 +396,8 @@ def generate_projwfc(wanted: set, force: bool) -> None:
             continue
         print(f"  {stem}: running pw.x + projwfc.x ...", flush=True)
         stdout, files = run_projwfc(
-            case, RESTAMPED_CONV_THR, PROJWFC_DEGAUSS.get(stem)
+            case, RESTAMPED_CONV_THR, PROJWFC_DEGAUSS.get(stem),
+            lsym=stem not in PROJWFC_NOSYM,
         )
         out.write_text(stdout)
         for name, text in files.items():

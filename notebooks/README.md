@@ -137,7 +137,7 @@ want a number.
 | [`13_dft_plus_u.ipynb`](13_dft_plus_u.ipynb) | The occupation penalty that opens FeO's gap, the two honest ways to remove what the functional already counted, and a $U$ computed from the orbital instead of fitted |
 | [`14_spiral_relaxation.ipynb`](14_spiral_relaxation.ipynb) | `dE/dq`, and a relaxation that finds a magnet's ground-state pitch in six SCF runs |
 | [`15_stress.ipynb`](15_stress.ipynb) | The stress tensor, silicon's equation of state, and the Pulay stress a low cutoff carries |
-| [`16_projected_density_of_states.ipynb`](16_projected_density_of_states.ipynb) | Which atom and which orbital a band belongs to, as a projected DOS, Löwdin charges and fat bands |
+| [`16_projected_density_of_states.ipynb`](16_projected_density_of_states.ipynb) | Which atom and which orbital a band belongs to, as a projected DOS, Löwdin charges and fat bands, and resolved by $j$ for a spin-orbit run |
 | [`17_reaching_self_consistency.ipynb`](17_reaching_self_consistency.ipynb) | Charge sloshing and Kerker screening, and the unstable magnetic solutions a mixer cannot reach |
 | [`18_continuing_a_calculation.ipynb`](18_continuing_a_calculation.ipynb) | Starting one run from another across a change of spin regime: iron's moment rotated in one iteration |
 | [`19_linear_response.ipynb`](19_linear_response.ipynb) | Silicon's dielectric constant and Born charges against `ph.x`, norm-conserving and ultrasoft, and the charge that does the screening |
@@ -253,12 +253,12 @@ workstation core, slowest last:
 | `01` | 5 | `07` | 22 | `31` | 34 | `14` | 89 |
 | `09` | 6 | `06` | 23 | `40` | 34 | `26` | 109 |
 | `02` | 8 | `25` | 28 | `23` | 35 | `33` | 115 |
-| `16` | 9 | `17` | 29 | `32` | 35 | `13` | 131 |
-| `37` | 9 | `18` | 29 | `34` | 40 | `30` | 131 |
-| `03` | 10 | `12` | 30 | `19` | 47 | `39` | 151 |
-| `05` | 10 | `21` | 30 | `10` | 50 | `08` | 171 |
-| `04` | 12 | `15` | 31 | `20` | 57 | `27` | 178 |
-| `22` | 12 | `24` | 31 | `29` | 59 | `38` | 242 |
+| `37` | 9 | `17` | 29 | `32` | 35 | `13` | 131 |
+| `03` | 10 | `18` | 29 | `34` | 40 | `30` | 131 |
+| `05` | 10 | `12` | 30 | `19` | 47 | `39` | 151 |
+| `04` | 12 | `21` | 30 | `10` | 50 | `08` | 171 |
+| `22` | 12 | `15` | 31 | `20` | 57 | `27` | 178 |
+| `16` | 18 | `24` | 31 | `29` | 59 | `38` | 242 |
 | `00` | 22 | `28` | 33 | `11` | 81 | `35` | 276 |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two

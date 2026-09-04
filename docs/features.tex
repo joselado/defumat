@@ -498,6 +498,69 @@ orbitals. Validated against a purpose-built \code{projwfc.x} on seven cases:
 \textbf{6.9e-4} on a projection, \textbf{4.7e-5} on a Löwdin charge, and the
 spilling parameter to all four decimals it prints.
 
+\subsection*{Resolved by $j$ and $m_j$ for a spin-orbit run}
+
+With \code{noncolin} and \code{lspinorb} the orbitals projected onto are the
+\textbf{spin-angle functions} $|l\,j\,m_j\rangle$ rather than $|l\,m\rangle$
+times a spin, so a channel is labelled by $j$ and $m_j$ and the projection
+separates the two branches spin--orbit coupling splits a shell into. For
+platinum that is $5d_{3/2}$ against $5d_{5/2}$: one number, resolved, where an
+$l$-resolved projection reports their sum and cannot see the splitting at all.
+The functions are
+\begin{equation*}
+  |l\,j\,m_j\rangle \;=\;
+  \sum_{\sigma=\uparrow,\downarrow}
+  C\!\left(l,\tfrac12,j;\,m_j-\sigma,\sigma\right)\,
+  Y_{l,\,m_j-\sigma}\;\chi_\sigma ,
+\end{equation*}
+Clebsch--Gordan coefficients against the harmonics, and the number of columns is
+$\sum_\mathrm{shells}(2j+1)$ --- which is \emph{not} in general twice the scalar
+count, because it is read off the dataset's own $j$ channels.
+
+\begin{pycode}
+from defumat import Calculator
+
+calc = Calculator.from_file("pt-soc-paw-nosym.in",   # noncolin + lspinorb
+                            pseudo_dir="../pseudo")
+pdos = calc.get_pdos()
+
+print(pdos.channels[0])          # -> #1 Pt1 s_j0.5 m_j=-0.5
+print(pdos.charges.format())     # -> s = 0.5032, p = 0.9944, d = 8.4903
+print(pdos.charges.charges_lm)   # -> None: a spin-angle function has no m
+\end{pycode}
+
+Validated on a fully-relativistic \textbf{PAW} platinum dataset against a
+\code{projwfc.x} run generated for it, three ways. The \emph{columns} --- how
+many, and each one's $(l, j, m_j)$ --- match QE's own label table exactly, 18
+channels where the $j$-averaged count is 9. The \emph{projections} agree to
+\textbf{6.3e-6}, compared as sums over each degenerate multiplet: a spinor band
+structure is Kramers-degenerate everywhere, and an individual
+$|\langle\phi|\hat S|\psi_n\rangle|^2$ is not invariant under the mixing inside
+a multiplet that either code's eigensolver is free to choose, where the sum is.
+And the \textbf{Löwdin charges and the spilling parameter agree to every digit
+\code{projwfc.x} prints}. Timing, one core each from a converged ground state:
+\code{get\_pdos} costs \textbf{1.65~s} against \code{projwfc.x}'s 0.62~s, and
+on both sides that is mostly rebuilding from the pseudopotential files rather
+than projecting --- the projection and its integration are 0.137~s of it here.
+
+Ultrasoft is the one kind not claimed here: a fully-relativistic ultrasoft
+dataset whose \code{PP\_QIJ} is stored without its $L$ decomposition has a
+separate, open defect in its ground state, so there is no converged state to
+project. Norm-conserving is untested rather than refused --- no reference case
+is committed for it.
+
+\begin{refuses}
+\textbf{Refuses.} A \textbf{symmetrised} spinor projection: averaging over the
+point group needs the SU(2) representation of each operation beside the rotation
+of the harmonics, and that is not built --- run with \code{nosym} and the whole
+$\mathbf k$-grid, where both codes use every point and neither averages.
+\textbf{\code{noncolin} without \code{lspinorb}}: there is no $j$ to resolve by,
+and the up/down projection that case wants is not built here. An
+$m$-resolved charge is \emph{absent} rather than refused: \code{charges\_lm} is
+\code{None} for a spinor run, since a spin-angle function has an $m_j$ and no
+$m$, and there is no $p_x$ weight to report.
+\end{refuses}
+
 % =====================================================================
 \section{Pseudopotentials and functionals}
 

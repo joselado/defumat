@@ -10527,6 +10527,136 @@ Contributed from a production study of a molecule on a surface whose modes of
 interest are 10-15 meV; documented in `docs/features.tex` beside the partial
 dynamical matrix.
 
+### P69 — The `j`-resolved projected density of states. 🚧 PARTIAL — validated and documented; the curve comparison and the ultrasoft case remain.
+
+**What it is.** `projwfc.x` with `noncolin`/`lspinorb`: the orbital character of a
+spinor band, resolved by `j` and `m_j` instead of by `m`. Every heavy-element run
+this package advertises — the platinum spin-orbit benchmarks, a topological
+insulator whose Z2 it computes — had no orbital decomposition at all, in exactly
+the regime where the `j`-resolved one is the interesting one.
+
+**The one idea that made it small.** A spin-angle function is a *fixed complex
+matrix* acting on the scalar orbitals of one radial channel:
+
+    Omega_{l j m_j}[is] = spinor(l, j, m, is) * sum_m' rot_ylm[sph_ind(l,j,m,is), m'] Y_lm'
+
+so `atomic_wavefunctions` — which carries the radial function, the structure
+factor and the `i^l` phase, and is validated by every calculation that starts
+from it — is called unchanged and each shell is one contraction of a block of its
+output (`_spin_angle_matrix`, `spinor_orbital_blocks`). Nothing about the radial
+transform is written twice. All three branches `atomic_wfc_nc_proj` can reach are
+one such matrix: `atomic_wfc_so` for a fully-relativistic dataset,
+`atomic_wfc_so2` for a scalar one under `lspinorb`, and `atomic_wfc_nc` for a
+noncollinear run without it.
+
+**It is a different basis from the one already here, and that is the distinction
+to keep.** `hubbard/projectors.py`'s `_spinor_expand` is `atomic_wfc_so_mag` —
+the two `j` radial functions *averaged*, filling pure up and down spinors — which
+is what a noncollinear SCF starts from and what DFT+U's `wfcU` is. `projwfc.x`
+asks for `starting_spin_angle = .TRUE.` and gets the spin-angle functions
+themselves. `build_atomic_projectors` takes a `spinor_basis` argument with the
+DFT+U set as the default, so nothing validated moved.
+
+**`natomwfc` is not a doubling and platinum is the case that shows it.** A
+fully-relativistic file carries the two `j` of a shell as two `PP_CHI` entries,
+so the scalar count already has `2l+1` for each where the spinor count has
+`2j+1`: `Pt.rel-pz-n-rrkjus` is **11 scalar columns and 12 spinor ones**, not 22.
+Counted from the blocks rather than by a rule.
+
+**Validated against a `projwfc.x` run generated for it** (`pt-soc-paw`, fcc
+platinum, PAW, `nosym`, 2x2x2 unshifted):
+
+* the **column labels** agree with `filproj`'s own header column for column —
+  18 columns, `6S(1/2)`, `6P(1/2)`, `6P(3/2)`, `5D(3/2)`, `5D(5/2)`, each with its
+  `j` and `m_j`;
+* the **occupied multiplet sums** of the projection agree to **6.3e-6**;
+* the **Loewdin charges** agree to every digit `projwfc.x` prints — `s = 0.5032`,
+  `p = 0.9944`, `d = 8.4903`, total `9.9880`, spilling `0.0012`. That is the
+  strongest of the three, because it exercises the spin-angle orbitals, the `S`
+  metric with `qq_so`, the Loewdin orthogonalisation over all `natomwfc` and the
+  grouping of the two `j` back onto one `l`.
+
+**The raw per-band projection is not comparable and the empty bands are not
+either.** An individual `|<phi_i|S|psi_n>|^2` is not invariant under the mixing a
+degenerate eigensolver is free in, and a spinor band structure is
+Kramers-degenerate everywhere — so the comparable quantity is the multiplet sum
+(rule D4, one more time). Above the Fermi level the two codes' states are not
+converged to each other at all: restricted to the occupied manifold the multiplet
+sums agree to 6.3e-6, and including the empty bands the same number is **0.52**.
+Reporting the second would have read as a broken feature.
+
+**Two traps, both measured rather than reasoned about.**
+
+* **`nosym` in the `pw.x` input does not reach `projwfc.x`.** It re-derives the
+  point group rather than inheriting the one the SCF ran with, so `lsym = .true.`
+  symmetrises even where `pw.x` printed "No symmetry found" — on `pt-soc` it
+  averages the two Kramers partners of the `6S` shell to 0.495 each where the raw
+  projection is 0.870/0.120. The Loewdin charges and the spilling are **identical
+  either way**, so nothing summed over a shell can catch it. `lsym = .false.` is
+  pinned in the generator, and with it `kresolveddos = .true.` (without which
+  `projwfc.f90:229` writes no pdos files at all) and `filproj` (the standard
+  output rounds the projections to three decimals; the file carries ten).
+* **`print_lowdin` allocates `charges_lm` only `IF ( nspin /= 4 )`**, and the
+  reason is not storage: a spin-angle function has an `m_j` and no `m`, so there
+  is no `p_x` weight to report. `LowdinCharges.charges_lm` is `None` for a spinor
+  projection rather than an array that would index without meaning anything.
+
+**Refused by name**: a **symmetrised** spinor projection, because `sym_proj_so`
+needs the SU(2) representation of each operation beside the rotation of the
+harmonics and nothing here builds those — DFT+U with `noncolin` refuses in the
+same place and for the same reason (`d_spin_ldau`), so writing them would close
+two refusals at once. `nosym` with the whole grid is the way out and is the same
+physics. Also refused: a **fully-relativistic dataset with `lspinorb = .false.`**,
+because QE dispatches the orbitals on `has_so` and their labels on `lspinorb`, so
+that combination builds `j`-resolved columns and calls them up/down ones — the
+counts agree, nothing fails, and every label is wrong.
+
+**And it found a bug that is not this phase's** — an ultrasoft dataset with
+`q_with_l = false` plus spin-orbit coupling at a nonzero time-reversal-invariant
+momentum gives a wrong total energy, 0.18 Ry on platinum at `X`, converged and
+silent. It is why the validation above is the PAW case and not the ultrasoft one.
+`GAPS.md` §2c has the full elimination table and the reproducer; it is **not
+fixed and not refused**, because a refusal naming the wrong condition is worse
+than none.
+
+**Three of the five standing requirements are now met** (2026-09-04): the
+`features.tex` entry (a `j`/`m_j` subsection with an executed snippet and its own
+refusals box), the notebook (`16` gained a platinum section, 9 s to 18 s, well
+inside the ceiling), and the **`PERFORMANCE.md` timing pair**. That pair is worth
+more than the tick, because it turned an internal number into a finding:
+`get_pdos` is **1.65 s against `projwfc.x`'s 0.62 s**, of which **1.53 s is
+`Calculation.__init__`** -- so the rebuild this file's P8 section calls "about 1 s"
+and "never mattered next to an SCF" is 87 per cent of the call. It is `build_paw`
+(0.93 s) and `build_augmentation` (0.42 s), which is why the scalar cases never
+showed it. **The comparison had to be stated carefully and the first draft got it
+wrong**: `projwfc.x` is a separate executable and cannot skip its own setup --
+`pw.x`'s `init_run` on the same cell is 0.69 s, more than the whole `projwfc.x`
+run -- so its 0.62 s is not a projection time, and setting it against the 0.137 s
+this code needs from a *live* `Calculation` compares defumat without setup against
+QE with it. The honest pair is rebuild against rebuild, 1.65 against 0.62; the
+0.137 s is a forecast of where `get_pdos` lands once the `Calculation` is threaded
+through the `SCFResult`, which is below QE on work QE has to repeat.
+
+**Still open, which is why this is PARTIAL and not DONE** -- a workflow-level
+comparison against QE's own `pdos_*` files (what is validated is the *projection*,
+three ways; `run_pdos` executes and gives the five shells `partialdos_nc` writes
+and the right Loewdin block, but its output curves have not been diffed against
+QE's -- they are k-resolved and on QE's own energy grid, so it is an alignment job
+rather than a check), and the ultrasoft case, which needs `GAPS.md` §2c closed
+first.
+
+**One small API gap, found while writing the notebook and not filled**:
+`ProjectedDOS.select()` takes `atom, l, species, m, wfc` and no `j` or `mj`, so the
+`5d(5/2)` states are reachable as `select(wfc=5)` -- the file index rather than the
+physics. `plot(by="shell")` does carry `j` in its label, which is why the notebook's
+figure needed no workaround.
+
+**One check that does *not* apply here, recorded so it is not tried again**: the
+`sum_p D_p = D` sum rule holds only for a *complete* projection. On this cell it is
+39 against a peak of 70, and that is correct -- the empty bands are barely on the
+atomic manifold at all (`projwfc.x` gives 0.000 for two of them). The unit test that
+checks the rule sets the projections to one for exactly that reason.
+
 ### P68a — The dynamical matrix under gamma storage. ✅ DONE.
 
 The two memory features of P67 and P68 aim at the same calculation -- a molecule

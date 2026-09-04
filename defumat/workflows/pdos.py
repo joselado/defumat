@@ -48,7 +48,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.projwfc.channels import L_LABELS, M_LABELS, AtomicChannel, projection_channels
-from defumat.projwfc.projections import atomic_projections
+from defumat.projwfc.projections import atomic_projections, calculation_channels
 from defumat.pseudo.upf import Pseudopotential
 from defumat.scf.driver import Calculation
 from defumat.scf.tetrahedra import build_tetrahedra, tetrahedron_kind
@@ -123,7 +123,10 @@ class LowdinCharges:
         return self.charges if self.nspin == 2 else self.charges[None]
 
     @property
-    def charges_lm_by_spin(self) -> np.ndarray:
+    def charges_lm_by_spin(self) -> np.ndarray | None:
+        """``None`` for a spinor projection, which has no ``m`` to resolve."""
+        if self.charges_lm is None:
+            return None
         return self.charges_lm if self.nspin == 2 else self.charges_lm[None]
 
     @property
@@ -160,7 +163,7 @@ class LowdinCharges:
                         f"{L_LABELS[l]}{M_LABELS[l][m]}="
                         f"{lm_by_spin[spin, atom, l, m]:8.4f}"
                         for m in range(2 * l + 1)
-                    ) if l else ""
+                    ) if l and lm_by_spin is not None else ""
                     lines.append(
                         f"{prefix}{L_LABELS[l]} = {by_spin[spin, atom, l]:8.4f}"
                         + (f", {detail}" if detail else "")
@@ -194,7 +197,16 @@ def lowdin_charges(
     nspin = projections.shape[0]
     lmax = max((channel.l for channel in channels), default=0)
     charges = np.zeros((nspin, nat, lmax + 1))
-    charges_lm = np.zeros((nspin, nat, lmax + 1, 2 * lmax + 1))
+    # ``print_lowdin`` allocates ``charges_lm`` only ``IF ( nspin /= 4 )``, and
+    # the reason is not storage: a spinor column is a spin-angle function, so it
+    # has an ``m_j`` and no ``m`` -- there is no ``p_x`` weight to report, and
+    # the ``2 lmax + 1`` axis is the wrong shape for the ``2j+1`` members of a
+    # shell as well as the wrong label. Left as ``None`` rather than filled with
+    # something that would index without meaning anything.
+    spinor = any(channel.spinor for channel in channels)
+    charges_lm = (
+        None if spinor else np.zeros((nspin, nat, lmax + 1, 2 * lmax + 1))
+    )
 
     # (nspin, nproj): the occupied weight in each column, summed over k and band.
     weight = np.einsum(
@@ -202,11 +214,15 @@ def lowdin_charges(
     )
     for channel in channels:
         charges[:, channel.atom, channel.l] += weight[:, channel.index]
-        charges_lm[:, channel.atom, channel.l, channel.m] += weight[:, channel.index]
+        if charges_lm is not None:
+            charges_lm[:, channel.atom, channel.l, channel.m] += weight[:, channel.index]
 
     return LowdinCharges(
         charges=charges if nspin == 2 else charges[0],
-        charges_lm=charges_lm if nspin == 2 else charges_lm[0],
+        charges_lm=(
+            None if charges_lm is None else
+            (charges_lm if nspin == 2 else charges_lm[0])
+        ),
         spilling=1.0 - float(charges.sum()) / nelec,
         nelec=float(nelec),
         nspin=nspin,
@@ -511,7 +527,7 @@ def project_states(
     k-point weights.
     """
     system = calculation.system
-    channels = projection_channels(calculation.pseudos, system.structure)
+    channels = calculation_channels(calculation)
     projections = atomic_projections(
         calculation, wavefunctions, kind=projectors, symmetrize=symmetrize
     )

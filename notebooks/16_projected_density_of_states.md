@@ -19,14 +19,15 @@ The projection carries the **overlap operator**, so on an ultrasoft dataset it i
 $\langle\phi|S|\psi\rangle$ and not $\langle\phi|\psi\rangle$ -- which is what an amplitude
 on an atom means once the norm has been given up inside the core.
 
-Everything below is silicon with an ultrasoft dataset, against `projwfc.x` run on the same
-input:
+The first half below is silicon with an ultrasoft dataset and the second is platinum with
+a fully relativistic one, both against `projwfc.x` run on the same input:
 
 | | agreement |
 |---|---|
 | the projections themselves, band by band | **6.9e-4**, which is all its three decimals allow |
 | the Löwdin charges | **4.6e-5** |
 | the curves | 0.3% of their peak |
+| the same on a spin-orbit run, resolved by $j$ | Löwdin charges to **every digit** it prints |
 
 
 ```python
@@ -104,19 +105,19 @@ print(comparison_table(rows, fmt="{:.4f}",
 ```
 
                 defumat  projwfc.x  difference
-    Si 1 total    3.9647     3.9647     3.7e-05
-    Si 1  s       1.1596     1.1596     9.4e-06
-    Si 1  p       2.8051     2.8051     4.6e-05
-    Si 1  pz      0.9350     0.9350     1.8e-05
-    Si 1  px      0.9350     0.9350     1.8e-05
-    Si 1  py      0.9350     0.9350     1.8e-05
-    Si 2 total    3.9647     3.9647     3.7e-05
-    Si 2  s       1.1596     1.1596     9.4e-06
-    Si 2  p       2.8051     2.8051     4.6e-05
-    Si 2  pz      0.9350     0.9350     1.8e-05
-    Si 2  px      0.9350     0.9350     1.8e-05
-    Si 2  py      0.9350     0.9350     1.8e-05
-    spilling      0.0088     0.0088     3.4e-05
+    Si 1 total   3.9647     3.9647     3.7e-05
+    Si 1  s      1.1596     1.1596     9.4e-06
+    Si 1  p      2.8051     2.8051     4.6e-05
+    Si 1  pz     0.9350     0.9350     1.8e-05
+    Si 1  px     0.9350     0.9350     1.8e-05
+    Si 1  py     0.9350     0.9350     1.8e-05
+    Si 2 total   3.9647     3.9647     3.7e-05
+    Si 2  s      1.1596     1.1596     9.4e-06
+    Si 2  p      2.8051     2.8051     4.6e-05
+    Si 2  pz     0.9350     0.9350     1.8e-05
+    Si 2  px     0.9350     0.9350     1.8e-05
+    Si 2  py     0.9350     0.9350     1.8e-05
+    spilling     0.0088     0.0088     3.4e-05
 
 
 The orbitals are Löwdin-orthogonalised over **every** atomic orbital in the crystal, which is
@@ -190,6 +191,100 @@ computes, and neither eigensolver converges it, since both stop on the accuracy 
 needs. It is left in the picture rather than trimmed out of it, because that is what the two
 codes actually produce.
 
+
+## Spin-orbit coupling: resolved by $j$
+
+Spin-orbit coupling splits a shell by total angular momentum, and the projection can be made
+to say so. What a spinor state is projected onto is then the **spin-angle function**
+$|l\,j\,m_j\rangle$ rather than $|l\,m\rangle$ times a spin,
+
+$$|l\,j\,m_j\rangle = \sum_{\sigma=\uparrow,\downarrow}
+   C\!\left(l,\tfrac12,j;\,m_j-\sigma,\sigma\right)\, Y_{l,\,m_j-\sigma}\,\chi_\sigma ,$$
+
+so a channel carries $j$ and $m_j$, and platinum's $5d$ arrives as two separate curves. An
+$l$-resolved projection reports their sum and cannot see the splitting at all.
+
+
+```python
+platinum = Calculator.from_file(CASES / "pt-soc-paw-nosym.in", pseudo_dir=PSEUDO,
+                                announce=False)
+pt = platinum.get_pdos(delta_e=0.01 / RY_TO_EV, degauss=0.02)
+
+print(", ".join(dict.fromkeys(c.shell for c in pt.channels)))
+print(pt.charges.format(("Pt",)))
+```
+
+    Pt1 6S j=0.5, Pt1 6P j=0.5, Pt1 6P j=1.5, Pt1 5D j=1.5, Pt1 5D j=2.5
+    Lowdin Charges:
+    
+         Atom #   1 (Pt): total charge =   9.9880
+           s =   0.5032
+           p =   0.9944
+           d =   8.4903
+         Spilling Parameter:   0.0012
+
+
+The shells are the ones the dataset carries, each with its own $j$. There is no
+$m$-resolved charge printed beside them, and there cannot be: a spin-angle function has an
+$m_j$ and no $m$, so there is no $p_x$ weight to report.
+
+The same comparison as above, on a fully relativistic PAW dataset.
+
+
+```python
+qe = read_projwfc_output(CASES / "reference.projwfc.pt-soc-paw")
+
+rows = [("Pt total", pt.charges.total[0], qe.charges[1]["total"])]
+for l, letter in enumerate("spd"):
+    rows.append(("Pt  " + letter, pt.charges.charges[0][l], qe.charges[1][letter]))
+rows.append(("spilling", pt.charges.spilling, qe.spilling))
+print(comparison_table(rows, fmt="{:.4f}",
+                       headers=("", "defumat", "projwfc.x", "difference")))
+```
+
+              defumat  projwfc.x  difference
+    Pt total   9.9880     9.9880     4.5e-05
+    Pt  s      0.5032     0.5032     4.1e-06
+    Pt  p      0.9944     0.9944     3.2e-05
+    Pt  d      8.4903     8.4903     2.7e-05
+    spilling   0.0012     0.0012     4.5e-06
+
+
+And the splitting itself. The two $5d$ curves are what the coupling does to the
+band structure, and their weights are the degeneracies $2j+1$ read off the projection rather
+than imposed on it.
+
+
+```python
+ax = pt.plot(by="shell")
+ax.set(xlim=(-9.0, 4.0), title=r"platinum, projected by $j$")
+
+energies = (pt.energies - pt.fermi_energy) * RY_TO_EV
+for j in (1.5, 2.5):
+    curve = sum(pt.pdos[c.index] for c in pt.channels if c.l == 2 and c.j == j)
+    print("5d j=%.1f: %.2f states, centred %+.2f eV"
+          % (j, np.trapezoid(curve, energies) / RY_TO_EV,
+             np.trapezoid(energies * curve, energies) / np.trapezoid(curve, energies)))
+```
+
+    5d j=1.5: 4.00 states, centred -3.68 eV
+    5d j=2.5: 6.00 states, centred -2.43 eV
+
+
+
+    
+![png](16_projected_density_of_states_files/16_projected_density_of_states_16_1.png)
+    
+
+
+The $5d_{3/2}$ holds four states and the $5d_{5/2}$ six, and their centres sit
+1.3 eV apart. That gap is the spin-orbit splitting of platinum's $5d$ shell, and it is
+why a heavy element's bands cannot be labelled by $l$ alone.
+
+The curves are spiky because the k-grid is the coarse one the reference run used, and the
+peaks are individual bands rather than a converged density of states. The splitting is not an
+artefact of that: on a 4x4x4 grid the two centres move by 0.03 eV and stay 1.3 eV apart.
+
 ## What it refuses
 
 The weighted integration goes through the **same** density-of-states registry the total does,
@@ -197,8 +292,18 @@ so every scheme of notebook 06 is available here -- with one caveat inherited fr
 than added: `projwfc.x` silently runs the **linear** tetrahedron method whatever the
 self-consistent run used, and this reproduces that only when asked to.
 
+A $j$-resolved projection **refuses to be symmetrised**: averaging over the point group needs
+the spin-space representation of each operation beside the rotation of the harmonics, and
+that is not built, so a spin-orbit run is projected with `nosym` and the whole k-grid, where
+no averaging happens on either side. A noncollinear run *without* spin-orbit coupling is
+refused for the opposite reason: there is no $j$ to resolve by, and the up and down
+projection that case wants is not built here.
+
 ---
 The tests behind this notebook: `tests/regression/test_pdos.py`, which holds the projections,
 the Löwdin charges and the spilling against `projwfc.x` on seven cases; and
 `tests/unit/test_projwfc.py`, which holds Bessel's inequality on the projections and the
-orthogonalisation over the whole `natomwfc` manifold rather than the Hubbard one.
+orthogonalisation over the whole `natomwfc` manifold rather than the Hubbard one. The
+spin-angle half is in `tests/regression/test_spinor_pdos.py` and
+`tests/unit/test_spinor_projection.py`, which hold the column labels, the multiplet sums and
+the isometry of each $(l, j)$ shell.

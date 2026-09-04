@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from defumat.pseudo.spinorbit import spinor
 from defumat.pseudo.upf import Pseudopotential
 from defumat.system.structure import Structure
 
@@ -66,35 +67,80 @@ class AtomicChannel:
     l: int
     m: int  # 0-based within the shell, in ylmr2's order
     label: str = ""  # the UPF's own els, e.g. "3S"
+    #: ``nlmchi%jj``: the total angular momentum, on a spinor column of a
+    #: fully-relativistic dataset. ``None`` on every scalar column.
+    j: float | None = None
+    #: ``compute_mj``: the projection of ``j``. ``None`` unless ``j`` is set.
+    mj: float | None = None
+    #: ``+-1/2``: which spin the column carries, on a noncollinear run
+    #: *without* spin-orbit coupling, where the two are still good labels.
+    s_z: float | None = None
 
     @property
     def l_label(self) -> str:
         return L_LABELS[self.l]
 
     @property
+    def spinor(self) -> bool:
+        """Whether this column is one component of a two-component orbital."""
+        return self.j is not None or self.s_z is not None
+
+    @property
     def m_label(self) -> str:
-        """``"pz"``, ``"dxy"``, ``"s"`` -- what ``print_lowdin`` prints."""
-        return f"{L_LABELS[self.l]}{M_LABELS[self.l][self.m]}"
+        """``"pz"``, ``"dxy"``, ``"s"`` -- what ``print_lowdin`` prints.
+
+        A ``j``-resolved column has no such name: it is a combination of every
+        ``m`` of the shell, so it is labelled ``p_j1.5 m_j=-0.5`` instead. A
+        noncollinear column without spin-orbit coupling keeps the harmonic's
+        name and gains an arrow.
+        """
+        if self.j is not None:
+            return f"{L_LABELS[self.l]}_j{self.j:.1f} m_j={self.mj:+.1f}"
+        name = f"{L_LABELS[self.l]}{M_LABELS[self.l][self.m]}"
+        if self.s_z is not None:
+            return name + ("(up)" if self.s_z > 0 else "(dn)")
+        return name
 
     @property
     def shell(self) -> str:
-        """``"Si 1 3S"``-ish: the atom and shell this column belongs to."""
-        return f"{self.species}{self.atom + 1} {self.label or self.l_label}"
+        """``"Si 1 3S"``-ish: the atom and shell this column belongs to.
+
+        A ``j``-resolved column carries ``j`` in its shell name, because
+        ``partialdos_nc`` writes one file per ``(atom, wfc, l, j)`` -- the two
+        ``j`` of a shell are different files, named ``..._wfc#n(p_j0.5)``.
+        """
+        name = f"{self.species}{self.atom + 1} {self.label or self.l_label}"
+        return f"{name} j={self.j:.1f}" if self.j is not None else name
 
     def __str__(self) -> str:
         return f"#{self.index + 1} {self.species}{self.atom + 1} {self.m_label}"
 
 
+def _compute_mj(j: float, l: int, m: int) -> float:
+    """``compute_mj``: the ``m_j`` of the ``m``-th spin-angle function."""
+    if abs(j - l - 0.5) < 1.0e-4:
+        return m + 0.5
+    if abs(j - l + 0.5) < 1.0e-4:
+        return m - 0.5
+    raise ValueError(f"j = {j} is not compatible with l = {l}")
+
+
 def projection_channels(
-    pseudos: tuple[Pseudopotential, ...], structure: Structure
+    pseudos: tuple[Pseudopotential, ...],
+    structure: Structure,
+    noncolin: bool = False,
+    lspinorb: bool = False,
 ) -> tuple[AtomicChannel, ...]:
     """The label of every atomic-orbital column, in the order they are built.
 
-    ``fill_nlmchi``, minus the ``lspinorb``/``noncolin`` branches: a spinor
-    projection doubles the columns and resolves them by ``j`` and ``m_j``, and
-    :mod:`defumat.projwfc.projections` refuses that regime by name rather than
-    silently labelling twice as many columns as it has.
+    ``fill_nlmchi``. The three branches follow the Fortran's, and the order has
+    to agree column for column with
+    :func:`defumat.pseudo.atomic.spinor_orbital_blocks`, which builds the
+    orbitals themselves -- a label table that disagrees with the basis is a
+    projected density of states with the right total and the wrong decomposition.
     """
+    if noncolin:
+        return _spinor_projection_channels(pseudos, structure, lspinorb)
     channels: list[AtomicChannel] = []
     for atom, species in enumerate(structure.types):
         pseudo = pseudos[species]
@@ -133,3 +179,81 @@ def channel_table(channels: tuple[AtomicChannel, ...]) -> str:
         for channel in channels
     ]
     return "\n".join(lines)
+
+
+def _spinor_projection_channels(
+    pseudos: tuple[Pseudopotential, ...], structure: Structure, lspinorb: bool
+) -> tuple[AtomicChannel, ...]:
+    """``fill_nlmchi``'s ``noncolin`` branches.
+
+    **The ``wfc`` number is not the same counter in the two spin-orbit
+    branches**, and it reaches the reader through a file name. For a
+    fully-relativistic dataset it is the orbital's index in the UPF file, so the
+    two ``j`` of one shell share it; for a scalar dataset under ``lspinorb`` it
+    counts the *synthesised* ``j`` shells, so they do not. That is ``n`` against
+    ``n2`` in the Fortran and it is easy to miss.
+    """
+    channels: list[AtomicChannel] = []
+
+    def emit(**kwargs) -> None:
+        channels.append(AtomicChannel(index=len(channels), **kwargs))
+
+    for atom, species in enumerate(structure.types):
+        pseudo = pseudos[species]
+        # The same refusal :func:`~defumat.pseudo.atomic.spinor_orbital_blocks`
+        # makes, and it has to be made here too rather than left to the orbital
+        # builder: the two are reached by *different* branches of
+        # ``build_atomic_projectors``, so without it a relativistic dataset at
+        # ``lspinorb = .false.`` gets ``2 (2l+1)`` labels per PP_CHI entry from
+        # here and the j-averaged ``atomic_wfc_so_mag`` columns from there --
+        # 22 labels against 12 columns on platinum.
+        if (any(getattr(o, "j", None) is not None
+                for o in pseudo.orbitals if o.occupation >= 0.0)
+                and not lspinorb):
+            raise NotImplementedError(
+                "a fully-relativistic dataset with lspinorb = .false. is not "
+                "implemented for the projection: QE dispatches the orbitals on "
+                "has_so and their labels on lspinorb, so it builds j-resolved "
+                "columns and calls them up/down ones. Run with lspinorb = "
+                ".true., which is what a relativistic dataset is for"
+            )
+        counters = [1, 2, 3, 4]
+        name = structure.species[species].name
+        synthesised = 0  # fill_nlmchi's n2
+        for orbital_index, orbital in enumerate(pseudo.orbitals, start=1):
+            if orbital.occupation < 0.0:
+                continue
+            label = (orbital.label or "").strip()
+            if not label or label.upper() == "XN":
+                label = f"{counters[orbital.l]}{L_LABELS[orbital.l].upper()}"
+                counters[orbital.l] += 1
+            l = orbital.l
+            common = dict(atom=atom, species=name, l=l, label=label)
+
+            if not lspinorb:
+                # ``atomic_wfc_nc``: every m up, then every m down.
+                for spin, s_z in enumerate((0.5, -0.5)):
+                    for m in range(2 * l + 1):
+                        emit(wfc=orbital_index, m=m, s_z=s_z, **common)
+                continue
+
+            j_of_orbital = getattr(orbital, "j", None)
+            if j_of_orbital is not None:
+                shells = [(orbital_index, j_of_orbital)]
+            else:
+                shells = []
+                for n1 in (l, l + 1):
+                    j = n1 - 0.5
+                    if j > 0.0:
+                        synthesised += 1
+                        shells.append((synthesised, j))
+
+            for wfc, j in shells:
+                ind = 0
+                for m in range(-l - 1, l + 1):
+                    if (abs(spinor(l, j, m, 0)) <= 1.0e-8
+                            and abs(spinor(l, j, m, 1)) <= 1.0e-8):
+                        continue
+                    emit(wfc=wfc, m=ind, j=j, mj=_compute_mj(j, l, m), **common)
+                    ind += 1
+    return tuple(channels)

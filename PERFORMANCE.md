@@ -1097,6 +1097,73 @@ the projectors and the augmentation tables again. Passing the calculation throug
 would remove it; the same applies to `run_dos` and it has never mattered next to
 an SCF.
 
+### Against `projwfc.x` on a spinor run (P69, 2026-09-04)
+
+**The whole call is 2.7x `projwfc.x`, and on both sides it is mostly setup.**
+`projwfc.x` is a separate executable, so its 0.62 s is dominated by rebuilding
+from the pseudopotential files and reading `evc` off disk — `pw.x`'s own
+`init_run` on this cell is **0.69 s**, which is more than the entire `projwfc.x`
+run, so the projection arithmetic is not what either number measures. What is
+comparable is therefore rebuild against rebuild: **defumat 1.65 s against 0.62
+s**, of which **1.53 s is `Calculation.__init__`**. The paragraph above calls
+that rebuild "about 1 s" and says it "has never mattered next to an SCF"; on a
+PAW dataset it is 87 per cent of the call and about 2.5x QE's.
+
+Fcc platinum, one atom, `Pt.rel-pbe-n-kjpaw_psl.0.1.UPF`, `noncolin` +
+`lspinorb`, 2x2x2 unshifted with `nosym`, `nbnd = 18`, `npwx = 286`,
+`natomwfc = 18`, `ecutwfc = 30`, `ecutrho = 250`. Both codes start from **their
+own converged ground state** — the SCF is outside the pair — one core each
+(`taskset -c 0`, `OMP_NUM_THREADS=1`, the affinity set before JAX is imported),
+`DeltaE = 0.01` eV on both sides, so the energy grids are 3318 points against
+3319. QE's times are `projwfc.x`'s own closing WALL line, not a stopwatch:
+
+| step | defumat | `projwfc.x` |
+|---|---|---|
+| **the entry point** (`get_pdos`, and `projwfc.x` whole) | **1.65 s** | **0.62 s** |
+| the same with QE writing k-resolved files (`kresolveddos`) | | 0.80 s |
+| — of it, rebuilding from the pseudopotential files | 1.53 s | not separable |
+| — of it, the projection of 18 columns onto 18 bands at 8 k | 0.111 s | not separable |
+| — of it, Löwdin charges and the spilling parameter | < 1 ms | |
+| — of it, the projected DOS, 3318 energies, 18 channels | 0.022 s | 0.02 s |
+| the three above together, from a live `Calculation` | 0.137 s | |
+
+**What is not comparable, and why the last row is not the headline.**
+`projwfc.x` cannot skip its setup — a separate process has nothing to inherit —
+so its 0.62 s has no 0.137 s inside it to compare against. That row is not a
+win over QE; it is a *forecast*: it says where `get_pdos` lands once the
+`Calculation` is threaded through, which is below 0.62 s on work QE has to
+repeat. Quoting it as a speedup today would be comparing defumat without setup
+against QE with it. The other incomparability is I/O and it cuts both ways:
+QE writes six files where `get_pdos` returns an object, and its own k-resolved
+output is the 0.80 s row against the 0.62 s one — 0.20 s for 8x the rows.
+
+**Where the entry point's 1.65 s goes** (`cProfile`, warm):
+
+| | |
+|---|---|
+| `Calculation.__init__` | **1.53 s** |
+| — of which `build_paw` (`_build_species`, `_truncated_weights`) | 0.93 s |
+| — of which `build_augmentation` (`radial_augmentation_transforms`) | 0.42 s |
+| `project_states` (`atomic_projections` 0.131 s inside it) | 0.204 s |
+
+So 87 per cent of the call is setup that the SCF has already done once, and it
+is the *soft* dataset's setup — a norm-conserving case would not show it, which
+is why the scalar cases above put the rebuild at "about 1 s" and left it there.
+The fix is unchanged and is now worth something concrete: thread the
+`Calculation` through the `SCFResult`, and a call that costs 2.7x `projwfc.x`
+costs a fraction of it, because the setup QE cannot skip is the setup this would
+stop repeating.
+
+**Memory.** A spinor doubles the first row of the table above and nothing else:
+`phi` is `nk x 2npwx x natomwfc` complex, 1.3 MB here, because a spin-angle
+function has both components where a scalar orbital has one. `natomwfc` is
+`sum (2j + 1)` over the dataset's radial functions, which is **not** in general
+twice the scalar `sum (2l + 1)`: it is 18 against 9 for this PAW file only
+because every `l` it carries has both of its `j` partners present. A dataset
+holding one of the pair — or one whose `j` shells are separate entries with
+different occupations — lands somewhere between, so the array is sized from the
+file rather than from a factor.
+
 ## What a stress costs (P11)
 
 **A stress is not a force.** A force differentiates the *positions*, which enter through
@@ -2560,6 +2627,151 @@ The cell is 10 atoms, 16 k-points, `nbnd` 20, `npwx` 952, `ngm` 7373; its SCF is
 The `born_xx` figure is the one component quoted; `tests/regression/test_ten_site.py`
 already checks the whole tensor against this reference, and `PLAN.md` records
 7.0e-6 across every component.
+
+## The Davidson step count against `pw.x` on a 157-atom slab (2026-09-04)
+
+**Open, not fixed, and the headline is the step count rather than any one
+cause**: on the identical input at the identical `diago_david_ndim = 2`,
+defumat's Davidson takes roughly **12x** more steps than `pw.x`. Three
+candidates are below, ranked; the per-band threshold is the one that was
+measured and it accounts for **1.47x** of the 12x, so the rest is elsewhere
+and the leading suspect is the missing hard restart. Diagnosed by running FePc on SnTe(001) through `pw.x` and through
+defumat on the *identical* input and comparing per-iteration timings. Recorded
+here so that whoever takes it does not re-derive any of it.
+
+**The case.** 157 atoms, `nelec = 1700`, `nbnd = 1020`, `K_POINTS gamma`,
+`nspin = 2`, `ecutwfc 60` / `ecutrho 240`, `nosym`, `diago_david_ndim = 2`,
+`mixing_mode local-TF`, `smearing mv`, `degauss 0.01`; `npwx` about 381k on the
+gamma half-sphere, FFT 225x216x256. defumat on one H200 at `f2be49f`
+(`DEFUMAT_BAND_BATCH 64`, pool 132.81 GiB); `pw.x` 7.2 on 128 Milan cores,
+`-npool 1 -ndiag 64`.
+
+**The symptom.** defumat's iteration 1 takes **62 s** and its iteration 2 takes
+**2187 s** — 35x, at an `ethr` that only tightened 4.5x. Memory is not involved:
+14.5 GB in use and 38.1 GB peak against a 132.81 GiB pool.
+
+**Defect 1: there is no `btype` and no `empty_ethr`.** `cegterg.f90:559-561` (and
+`regterg.f90:1108-1112`) test each band against **two** thresholds --
+`ABS(ew - e) < ethr` for an occupied band and `< empty_ethr` for an empty one,
+with `empty_ethr = MAX(ethr * 5, 1.D-5)` (`cegterg.f90:129`). `btype` is set in
+`sum_band.f90:122-127` from the *previous* iteration's occupations, `0` wherever
+`wg/wk < 0.01`, unless `diago_full_acc`. Neither name occurs in this package:
+`davidson.py:372` compares every band against one scalar `ethr` and `:386` is
+`jnp.all(settled)`, so a handful of stubborn bands keeps the whole block
+expanding. About 170 of this cell's 1020 bands are empty, and they are the
+slowest-converging part of an atomic start.
+
+**Why iteration 2 and not iteration 1**, which is the part that identifies it:
+`btype` comes from the previous iteration's weights, so it is all-ones during
+iteration 1 in both codes and only bites from iteration 2. That is exactly where
+the anomaly starts, and it is why `pw.x`'s iteration 2 gets **cheaper** than its
+iteration 1 while defumat's gets 35x dearer.
+
+**Defect 2: `H` is applied at full `nbnd` width.** `davidson.py:434-437` sorts the
+unconverged roots to the front and *zeroes* the settled rows, and `:508` then
+applies `hamiltonian.apply` to the whole `(nbnd, npwx)` block. The subspace grows
+by `notcnv` (`:514`), which is `cegterg`'s behaviour and is right; the H
+application never narrows, so zero rows are transformed at full price. **This is
+the static-shape rule** (`davidson.py:20-24`) -- a `lax.while_loop` body has one
+shape -- and therefore an intrinsic cost of keeping the solver on device rather
+than an oversight. It is what the reference trace below shows `pw.x` not paying:
+its cost does not track its step count, because its late steps touch a handful of
+vectors.
+
+**The reference trace, which is the acceptance test.** `pw.x` on the same input at
+the same `diago_david_ndim = 2` (its "avg # of iterations" is `avg_iter/nkstot`
+with `nkstot = 2` here, so per spin channel):
+
+| iter | `ethr` | avg steps | seconds | accuracy (Ry) |
+|---|---|---|---|---|
+| 1 | 1.00e-02 | 15.5 | 340.4 | 24.79 |
+| 2 | 1.46e-03 | 8.5 | 113.4 | 20.04 |
+| 3 | 1.18e-03 | 2.0 | 64.9 | 13.55 |
+| 4 | 7.97e-04 | 12.0 | 59.8 | 26.59 |
+| 5 | 7.97e-04 | 2.5 | 47.6 | 22.75 |
+| 6 | 7.97e-04 | 8.0 | 59.4 | 16.12 |
+| 7 | 7.97e-04 | 2.0 | 46.0 | 2.85 |
+| 8 | 1.68e-04 | 5.0 | 48.7 | 2.72 |
+| 9 | 1.60e-04 | 3.0 | 48.9 | 7.79 |
+
+After a fix, defumat's step count should land in that range rather than at
+`MAX_ITERATIONS = 100` (`davidson.py:156`). **No new `pw.x` run is needed** -- the
+table is the reference.
+
+**The step counts are the comparable quantity and the energies are not.** That
+trace is `pw.x` **7.2** (spack, gcc 12.3, openblas 0.3.24, fftw 3.3.10), where
+everything else in this repository is validated against the vendored **7.5**.
+Nothing in `cegterg`'s convergence structure moved between those releases, so the
+iteration counts carry across; the total energies and `scf accuracy` values in the
+table are 7.2's and are **not** a reference for a 7.5 build. This file exists in a
+project where a 6.0 benchmark drifting in the sixth decimal is why
+`tools/generate_reference.py` was written, so the caveat is stated rather than
+left to be discovered.
+
+**Instrument before fixing.** The loop counter already exists: `final[14]`, beside
+`final[8]` and `final[10]` at `davidson.py:524`. Emit it per SCF iteration
+(averaged over channels, as `pw.x` does) together with the number of unsettled
+bands at exit. The prediction to falsify is ~100 for iteration 2 with the
+unsettled bands being the empty ones.
+
+**The fix for defect 1** is a transcription and is contained: thread a per-band
+threshold *vector* into the solver in place of the scalar `ethr`, built from the
+previous iteration's weights as `where(wg/wk < 0.01, max(5*ethr, 1e-5), ethr)` and
+all-ones on iteration 1; `settled` becomes an elementwise comparison against it.
+No shape changes and nothing leaves the `jit`. Expose `diago_full_acc` as the
+off-switch, which QE has for the same reason.
+
+**Defect 1 is confirmed and is worth about 1.5x, not 12x** -- measured, and the
+number matters more than the confirmation. Running `pw.x` on the same input with
+`diago_full_acc = .true.`, which is exactly the switch that forces `btype` to
+all-ones, against the same run without it:
+
+| iteration | `ethr` | with `empty_ethr` | without it |
+|---|---|---|---|
+| 1 | 1.00e-02 | 15.5 steps, accuracy 24.79143461 | 15.5 steps, accuracy 24.79143461 |
+| 2 | 1.46e-03 | 8.5 steps | 12.5 steps |
+
+Iteration 1 is bit-identical to eight decimals, which is the control saying the
+two runs differ only in that switch. Iteration 2 goes 8.5 -> 12.5, **a factor of
+1.47** -- the right sign, in the right place, and an order of magnitude short of
+the ~12x by which defumat's inferred ~100 steps exceed `pw.x`'s 8.5.
+
+**So the diagnosis is right and incomplete, and whoever implements it should
+expect ~1.5x.** Measuring 1.5x is confirmation, not refutation; do not conclude
+from it that the per-band threshold was the wrong lead.
+
+**Where the rest most likely lives** -- for the backlog, not as a claim, and both
+testable against the trace above with no new `pw.x` run:
+
+* **There is no hard restart.** `c_bands.f90` re-enters `cegterg` up to **5
+  times** at `maxter = 20`, each re-entry restarting Davidson from the current
+  `evc` with a fresh subspace -- which is why `CLAUDE.md` says QE's real budget is
+  100 steps. defumat's `MAX_ITERATIONS = 100` is one *continuous* loop, and the
+  collapse-to-Ritz at `nvecx` is **not** the same thing: it keeps the iteration
+  history and the preconditioner state where a re-entry discards them. A periodic
+  hard restart is the standard rescue for a stalled Davidson.
+* **The preconditioner**, compared directly against `g_psi.f90`'s form. A weak
+  diagonal preconditioner shows up as exactly this signature -- many cheap steps
+  rather than few expensive ones.
+
+**A backlog idea for defect 2, speculative and unmeasured** -- do not bundle it
+with the above: apply `H` on a fixed-size *leading* slice, `nbnd`, `nbnd/2` or
+`nbnd/4` chosen by a `lax.switch` on `notcnv`, which keeps a small number of
+static shapes instead of one. The unconverged roots are already sorted to the
+front, so the slice is contiguous.
+
+**Ruled out, and listed so they are not re-chased.** Recompilation on iteration 2
+(one `lax.while_loop` in one `jit`; every shape is fixed by the basis, and neither
+`ethr` nor the trip count is a shape). Allocator thrash (a preallocated BFC pool
+aborts when over budget, it does not degrade to slowness). `diago_david_ndim = 2`
+being pessimal -- it collapses the subspace every step, which is real, but `pw.x`
+at the *same* setting does iteration 2 in 8.5 steps at a *tighter* `ethr`, so
+raising it would mask the defect rather than explain it. And the H200 being slow
+per unit of work: defumat is at `>= 10.9` s/step against `pw.x`'s ~6.7, about
+1.6x, but defumat's step does more work (defect 2), so once that is normalised the
+GPU is probably not behind -- **do not go hunting a slow FFT or GEMM until
+work-per-step is normalised**. `5779eae` and `5b9eb0f` are memory only (84.3 ->
+73.3 GiB at `david = 2`, `band_batch = 64`), not time.
 
 ## Optimisation backlog
 

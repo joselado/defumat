@@ -59,8 +59,25 @@ __all__ = [
     "ProjectionSymmetry",
     "build_projection_symmetry",
     "atomic_projections",
+    "calculation_channels",
     "PROJECTION_KINDS",
 ]
+
+
+def calculation_channels(calculation) -> tuple[AtomicChannel, ...]:
+    """The projection's label table for whichever spin regime this run is in.
+
+    One function rather than the two lines repeated, because the labels and the
+    *orbitals* have to agree column for column and they are built in different
+    modules: a second copy of the regime test is how they come to disagree.
+    """
+    system = calculation.system
+    return projection_channels(
+        calculation.pseudos,
+        system.structure,
+        bool(system.noncolin),
+        bool(getattr(system, "lspinorb", False)),
+    )
 
 #: The projector sets a projection can be made onto. ``projwfc.x`` has only the
 #: first; the other two are ``pw.x``'s ``Hubbard_projectors`` spellings and
@@ -172,16 +189,44 @@ def atomic_projections(
         raise ValueError(
             f"unknown projector set {kind!r}; expected one of {PROJECTION_KINDS}"
         )
-    if calculation.system.noncolin:
-        raise NotImplementedError(
-            "a projected density of states with noncollinear or spin-orbit "
-            "wavefunctions is not implemented: the projection is onto spinor "
-            "orbitals and natomwfc doubles (atomic_wfc_nc_proj, sym_proj_so), "
-            "which is a different projector set rather than a wider one"
-        )
-
     system = calculation.system
-    channels = projection_channels(calculation.pseudos, system.structure)
+    noncolin = bool(system.noncolin)
+    lspinorb = bool(getattr(system, "lspinorb", False))
+    if noncolin and symmetrize and calculation.use_symmetry and (
+        calculation.symmetries is not None and calculation.symmetries.nsym > 1
+    ):
+        # ``sym_proj_so`` averages the projection over the group with the
+        # **SU(2)** representation of each operation beside the rotation of the
+        # harmonics, because a spin-angle function carries a spin frame that the
+        # operation turns. Nothing here builds those matrices -- DFT+U with
+        # noncolin refuses in the same place and for the same reason
+        # (``scf/driver.py``, ``d_spin_ldau``) -- and averaging the ``m``
+        # indices alone would mix ``m_j`` across a frame that has moved, which
+        # is a smooth, normalised, plausible and wrong projection.
+        raise NotImplementedError(
+            "a symmetrised projection is not implemented for a noncollinear or "
+            "spin-orbit run: sym_proj_so needs the SU(2) representation of each "
+            "point-group operation beside the rotation of the harmonics, and "
+            "nothing here builds those. Run with nosym = .true. and the whole "
+            "k-grid, which is the same physics, or pass symmetrize=False"
+        )
+    if noncolin and not lspinorb:
+        # The *orbitals* for this branch are built (``atomic_wfc_nc``, an up and
+        # a down copy of each harmonic -- ``_updown_matrix``), and the labels
+        # carry their ``s_z``. What is not here is ``partialdos_nc``'s layout for
+        # it: that branch has ``nspin0 = 2`` and routes each column into an up or
+        # a down channel by ``ind <= 2l+1``, where this package's ``compute_pdos``
+        # would bin all of them as one. No reference was generated for it either,
+        # so it is refused rather than shipped as a plausible decomposition --
+        # the same rule the rest of the package follows.
+        raise NotImplementedError(
+            "a projected density of states for a noncollinear run without "
+            "spin-orbit coupling is not implemented: the spin-angle orbitals are "
+            "built, but partialdos_nc splits such a run's columns into up and "
+            "down densities of states (nspin0 = 2) and nothing here does that. "
+            "lspinorb = .true. is implemented and validated against projwfc.x"
+        )
+    channels = calculation_channels(calculation)
     if not channels:
         raise ValueError(
             "none of the pseudopotentials carries an atomic orbital to project "
@@ -197,10 +242,22 @@ def atomic_projections(
         calculation.basis.planewaves,
         calculation.basis_kpoints,
         # ``s_psi`` written against the projectors alone, exactly as the Hubbard
-        # projectors reach it -- there is no Hamiltonian in a projection.
-        calculation._overlap,
+        # projectors reach it -- there is no Hamiltonian in a projection. The
+        # spinor branch is a **different operator** and not the same one on a
+        # longer vector: ``_spinor_overlap`` carries ``qq_so``, whose off-
+        # diagonal spin blocks are exactly what tells the two ``j`` channels
+        # apart, so contracting each component against the scalar ``qq`` would
+        # give the j-averaged overlap. ``_build_hubbard_projectors`` picks
+        # between them the same way (``scf/driver.py:1512``).
+        calculation._spinor_overlap if noncolin else calculation._overlap,
         kind=kind,
-    )  # (nk, npwx, natomwfc)
+        noncolin=noncolin,
+        # ``atomic_wfc_nc_proj``'s ``starting_spin_angle = .TRUE.``: the
+        # projection is onto the spin-angle functions themselves, where the SCF
+        # and DFT+U start from the j-averaged up/down set. Without spin-orbit
+        # coupling the two coincide -- there is no j to average.
+        spinor_basis="jmj" if lspinorb else "updown",
+    )  # (nk, npol npwx, natomwfc)
 
     symmetry = (
         build_projection_symmetry(

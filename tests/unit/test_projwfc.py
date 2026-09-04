@@ -183,17 +183,57 @@ def test_lowdin_charges_use_the_weights_that_carry_the_k_point_weight(pseudo_dir
 # --------------------------------------------------------------------------
 
 
-def _stub(**system):
+def _stub(nsym: int = 1, use_symmetry: bool = False, **system):
     """The smallest object :func:`atomic_projections` inspects before it works."""
     from types import SimpleNamespace
 
-    return SimpleNamespace(system=SimpleNamespace(**system))
+    return SimpleNamespace(
+        system=SimpleNamespace(**system),
+        use_symmetry=use_symmetry,
+        symmetries=SimpleNamespace(nsym=nsym),
+    )
 
 
-def test_a_noncollinear_projection_is_refused_by_name():
-    """The spinor projector set is a different set, not a wider one."""
-    with pytest.raises(NotImplementedError, match="noncollinear"):
-        atomic_projections(_stub(noncolin=True), None)
+def test_a_symmetrised_spinor_projection_is_refused_by_name():
+    """What is refused is ``sym_proj_so``, not the spinor projection itself.
+
+    The projector set is implemented (``atomic_wfc_so``); what is missing is the
+    SU(2) representation of each point-group operation that its group average
+    needs, so the refusal names that and offers ``nosym`` as the way out.
+    """
+    with pytest.raises(NotImplementedError, match="sym_proj_so"):
+        atomic_projections(
+            _stub(noncolin=True, lspinorb=True, nsym=48, use_symmetry=True), None
+        )
+
+
+def test_a_noncollinear_projection_without_spin_orbit_is_refused_by_name():
+    """``partialdos_nc``'s ``nspin0 = 2`` layout is not implemented.
+
+    The orbitals for that branch exist (``atomic_wfc_nc``, an up and a down copy
+    of each harmonic) and the labels carry their ``s_z``; what is missing is that
+    such a run's columns are routed into an up or a down density of states by
+    ``ind <= 2l+1``, where ``compute_pdos`` would bin them as one. Refused rather
+    than shipped as a plausible decomposition, and there is no generated
+    reference for it either.
+
+    A *relativistic* dataset never reaches this: ``Calculation`` already refuses
+    ``has_so`` without ``lspinorb`` where QE calls ``average_pp``.
+    """
+    with pytest.raises(NotImplementedError, match="without spin-orbit"):
+        atomic_projections(_stub(noncolin=True, lspinorb=False), None)
+
+
+def test_a_spinor_projection_is_not_refused_without_symmetry():
+    """The guard must not fire on the path its own message recommends.
+
+    It gets past the refusal and fails later for want of a real calculation --
+    an ``AttributeError`` on the stub -- which is what says the refusal was not
+    what stopped it.
+    """
+    with pytest.raises(Exception) as caught:
+        atomic_projections(_stub(noncolin=True, lspinorb=True), None)
+    assert not isinstance(caught.value, NotImplementedError)
 
 
 def test_an_unknown_projector_set_is_refused():

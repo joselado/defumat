@@ -162,7 +162,7 @@ drive any of this and is what the examples below use.
 | **Total energies**, self-consistently, broken down term by term — insulators and metals alike | `calculation = 'scf'` | ✓ | ✓ |
 | **Band structures** along a path through the Brillouin zone | `run_bands` | ✓ | ✓ |
 | **Densities of states**, by smearing or by tetrahedra | `run_dos`, `defumat dos` | ✓ | ✓ |
-| **Projected densities of states** — resolved by atom, by $l$ and by $m$, with Löwdin charges and the spilling parameter | `run_pdos`, `defumat pdos` | ✓ | ✓ |
+| **Projected densities of states** — resolved by atom, by $l$ and by $m$, or by $j$ and $m_j$ for a spin-orbit run, with Löwdin charges and the spilling parameter | `run_pdos`, `defumat pdos` | ✓ | (✓)¹⁶ |
 | **Forces on the atoms** — unpolarized, collinear spin and noncollinear/spin-orbit, on norm-conserving, ultrasoft and PAW. For a spinor the hand-derived cross-check has no counterpart and `method='analytic'` is refused | `compute_forces` | ✓ | ✓ |
 | **Structural relaxation** — the atoms moved downhill to their equilibrium positions | `calculation = 'relax'`, `defumat relax` | ✓ | ✓ |
 | **Variable-cell relaxation** — the cell and the atoms relaxed together, at an applied pressure | `calculation = 'vc-relax'`, `run_vc_relax` | ✓ | ✓ |
@@ -279,6 +279,15 @@ Where the tick is qualified:
   contact and therefore no map: nothing in it is a function of where a tip
   is, which is the whole output here. Elk has neither — no task in its list
   computes a conductance, and `ELK-FEATURES.md` records none.
+
+- ¹⁶ Elk's partial density of states (task 10) is resolved over $(l, m)$ and
+  over spin — `dosmsum` and `dosssum` sum those away, and `lmirep` transforms the
+  $Y_{lm}$ basis into irreducible representations (manual §5.25, §5.26, §5.59).
+  None of that is a $j$ resolution: there is no decomposition onto the
+  spin-angle functions $|l\,j\,m_j\rangle$, which is what a spin-orbit run's
+  orbital character means. `projwfc.x` has it (`atomic_wfc_nc_proj`,
+  `partialdos_nc`) and is what the $j$-resolved projection here is validated
+  against.
 
 - ¹⁴ both codes compute the **charge** image and neither computes the spin-polarized one: QE's `PP/src/stm.f90` (`plot_num = 5`) sums $|\psi|^2$ over a
   bias window with no spin channel and no `addusdens`, so it is norm-conserving

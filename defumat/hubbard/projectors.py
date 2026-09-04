@@ -50,7 +50,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.hubbard.manifold import PROJECTOR_TYPES
-from defumat.pseudo.atomic import atomic_wavefunctions
+from defumat.pseudo.atomic import atomic_wavefunctions, spinor_atomic_wavefunctions
 
 __all__ = [
     "build_hubbard_projectors",
@@ -227,6 +227,7 @@ def build_atomic_projectors(
     columns=None,
     kcart=None,
     noncolin: bool = False,
+    spinor_basis: str = "updown",
 ) -> jnp.ndarray:
     """``(nk, npwx, ncolumns)``: projector functions built from ``chi``.
 
@@ -242,14 +243,38 @@ def build_atomic_projectors(
     ``kcart`` replaces the k-points' cartesian coordinates, as it does for the
     nonlocal projectors, and exists for the stress -- see
     :func:`build_hubbard_projectors`.
+
+    ``spinor_basis`` picks *which* spinor set ``noncolin`` builds, and the two
+    are different bases rather than different spellings:
+
+    * ``"updown"`` is ``atomic_wfc_so_mag`` -- the two ``j`` radial functions of
+      a shell averaged, filling pure up and down spinors. It is what a
+      noncollinear SCF starts from and what DFT+U's ``wfcU`` is, and it is the
+      default so that nothing already validated moves.
+    * ``"jmj"`` is ``atomic_wfc_so`` -- the spin-angle functions themselves,
+      ``|l j m_j>``, which is what ``atomic_wfc_nc_proj`` gives ``projwfc.x``
+      and what a ``j``-resolved projection is a decomposition on.
+
+    QE reaches the two through ``starting_spin_angle``, ``.FALSE.`` for the SCF
+    and ``.TRUE.`` for the projection.
     """
-    atomic = atomic_wavefunctions(
-        pseudos, structure, cell, gvectors, planewaves, kpoints, kcart
-    )  # (nk, natomwfc, npwx)
-    if noncolin:
-        atomic = _spinor_expand(
-            atomic, _spinor_channels(pseudos, structure), planewaves.npwx
+    if spinor_basis not in ("updown", "jmj"):
+        raise ValueError(
+            f"unknown spinor basis {spinor_basis!r}; expected 'updown' or 'jmj'"
         )
+    if noncolin and spinor_basis == "jmj":
+        atomic = spinor_atomic_wavefunctions(
+            pseudos, structure, cell, gvectors, planewaves, kpoints,
+            lspinorb=True, kcart=kcart,
+        )  # (nk, natomwfc_spinor, 2 npwx)
+    else:
+        atomic = atomic_wavefunctions(
+            pseudos, structure, cell, gvectors, planewaves, kpoints, kcart
+        )  # (nk, natomwfc, npwx)
+        if noncolin:
+            atomic = _spinor_expand(
+                atomic, _spinor_channels(pseudos, structure), planewaves.npwx
+            )
     nk, natomwfc = atomic.shape[0], atomic.shape[1]
     if columns is None:
         columns = np.arange(natomwfc)

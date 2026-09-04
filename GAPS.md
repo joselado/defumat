@@ -178,6 +178,68 @@ input. **Fix:** force `domag` when a field or a constraint is present
 
 ---
 
+## 2c. Found 2026-09-04 -- **a wrong answer, not a refusal**
+
+One entry, and it is the worst kind: a converged run, a plausible number, no
+warning. Found while generating a `projwfc.x` reference for the spinor projected
+density of states, by comparing total energies on a k-grid nobody had used for a
+spin-orbit case before.
+
+**An ultrasoft dataset with `q_with_l = false`, spin-orbit coupling, and a
+k-point at a nonzero time-reversal-invariant momentum gives the wrong total
+energy.** On fcc platinum with `Pt.rel-pz-n-rrkjus.UPF` at `ecutwfc = 30`, a
+single k-point at `X = (1,0,0) 2pi/a` gives **-68.43785238 Ry against `pw.x`'s
+-68.61775789** -- 0.18 Ry -- and at `L` 0.29 Ry. The SCF converges to
+`conv_thr = 1e-8` in six iterations and reports success.
+
+**All three conditions are needed, and each was measured rather than argued:**
+
+| dataset | `q_with_l` | spin-orbit | k | result |
+|---|---|---|---|---|
+| `Pt.rel-pz-n-rrkjus` (US) | false | yes | `Gamma`, `(0.3,0.1,0.2)`, `(0.5,0,0)`, `W` | 1e-8 to 1e-9 |
+| `Pt.rel-pz-n-rrkjus` (US) | false | yes | `X`, `-X`, `(0,0,1)`, `L` | **0.18 - 0.29 Ry** |
+| `Pt.rel-pbe-n-kjpaw_psl` (PAW) | true | yes | `X` | 1.2e-8 |
+| `Al.rel-pbe-n-rrkjus_psl` (US) | true | yes | `X` | 5.2e-10 |
+| `C.pz-rrkjus` (US) | false | **no** | `X`, `L`, general | 1e-9 |
+
+So it is not "ultrasoft", not "`q_with_l = false`", not "spin-orbit" and not "a
+zone-boundary point" on its own -- it is the three together. A `q_with_l = true`
+ultrasoft relativistic dataset at the same `X` is exact to 5e-10, and the same
+`q_with_l = false` file at a general k is exact to 1e-8.
+
+**Why nothing caught it.** Every committed spin-orbit case uses a **shifted**
+Monkhorst-Pack grid -- `pw_spinorbit/spinorbit.in` is `4 4 4 1 1 1` -- and a
+shifted grid contains no nonzero TRIM. `2 2 2 1 1 1` and `4 4 4 1 1 1` reproduce
+`pw.x` to 3e-9 and 5e-9; `2 2 2 0 0 0` and `4 4 4 0 0 0` are out by 2.0e-1 and
+1.0e-2. An **odd** unshifted grid is also safe (`3 3 3 0 0 0` is exact to 7e-9):
+it contains `Gamma`, which is a TRIM with `2k = 0`, and no other.
+
+**What is ruled out.** The basis is identical -- same `npw` per k-point in the
+same order (283/272/272/286/272/286/286/272), same `ngm` (6855 dense, 2229
+smooth), same FFT grids. The k-points and their weights match `pw.x`'s list
+point for point. `<psi|S|psi> = I` to 3e-15 while `<psi|psi>` is 0.4 away from
+it, so the overlap is a genuine operator and the states are consistent with it.
+`int rho` is `nelec` to 4e-14, so `addusdens`' normalisation is right. And a
+`nosym` run over the whole grid gives the same wrong answer as the reduced wedge
+(both -68.98452), so it is not the symmetrisation. **The first SCF iteration
+already differs** (-69.744 against -68.524 from the same atomic starting
+density), so it is the Hamiltonian rather than the SCF path.
+
+**Where to look.** What `q_with_l = false` changes is that `Q_ij^L(r)` has to be
+*reconstructed* from one radial function per pair plus the `rinner`/`qfcoef`
+inner pseudisation, per `L`, rather than read from `PP_QIJL`. What spin-orbit
+adds on top is `fcoef`, `transform_qq_so` and `add_becsum_so`. The trap
+`CLAUDE.md`'s spin-orbit row already names is in that neighbourhood --
+`init_us_1` builds `fcoef`, uses it for `dvan_so`, and *then* zeroes the
+cross-radial entries, so one array serving both gives a correct `dvan_so` and a
+silently wrong `qq_so`/`becsum`. What is not yet explained is why the error is
+invisible except at a nonzero TRIM, where the `k + G` set is closed under
+negation.
+
+**Not fixed and not refused**, because a refusal that names the wrong condition
+is worse than none: the reproducer is above and it is cheap (one atom, one
+k-point, six SCF iterations, a few seconds per code).
+
 ## 3. Refused by name, and a real term is missing
 
 Ranked by what they unlock.

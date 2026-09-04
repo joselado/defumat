@@ -1,0 +1,51 @@
+! Fcc platinum with spin-orbit coupling, for the j-resolved projected density of
+! states. `test-suite/pw_spinorbit/spinorbit.in` with three changes and no others.
+!
+! `nosym`/`noinv` and an unshifted grid, because a spinor projection cannot yet
+! be symmetrised here: `sym_proj_so` averages over the point group with the SU(2)
+! representation of each operation beside the rotation of the harmonics, and
+! nothing in defumat builds those. Run this way both codes use the whole grid and
+! neither averages, so the comparison is of the projection itself. `projwfc.x`
+! is given `lsym = .false.` to match.
+!
+! 2x2x2 rather than 4x4x4: what is being compared is a projection at fixed
+! states, so the k-set only has to be the same one on both sides.
+!
+! **This case does not validate anything and must not be read as if it did.**
+! defumat's own SCF on it is 0.18-0.29 Ry away from `pw.x` -- see GAPS.md section
+! 2c, an ultrasoft dataset with `q_with_l = false` plus spin-orbit coupling at a
+! nonzero time-reversal-invariant momentum, which this 2x2x2 unshifted grid is full
+! of. The generated reference is that bug's acceptance test, not a projection
+! comparison; the projection is validated on the PAW twin, `pt-soc-paw-nosym.in`,
+! whose SCF agrees to 1.2e-8. Do not chase a projected-DOS bug here.
+!
+! Platinum's fully-relativistic dataset carries 5D(j=3/2), 5D(j=5/2) and 6S with
+! non-negative occupations, so the projection has **12** columns -- 4 + 6 + 2 --
+! and not twice the scalar 11. That distinction is the case's own reason for
+! being: a dataset whose two j channels are separate PP_CHI entries is where
+! `n_atom_wfc`'s noncollinear count stops being a doubling.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 7.42, nat = 1, ntyp = 1,
+    lspinorb = .true.,
+    noncolin = .true.,
+    starting_magnetization = 0.0,
+    occupations = 'smearing',
+    degauss = 0.02,
+    smearing = 'mp',
+    ecutwfc = 30.0,
+    ecutrho = 250.0,
+    nosym = .true.,
+    noinv = .true.,
+ /
+ &electrons
+    conv_thr = 1.0e-8
+ /
+ATOMIC_SPECIES
+Pt  195.08   Pt.rel-pz-n-rrkjus.UPF
+ATOMIC_POSITIONS {alat}
+Pt  0.0000000   0.00000000   0.0
+K_POINTS AUTOMATIC
+2 2 2 0 0 0
