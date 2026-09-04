@@ -10637,13 +10637,23 @@ QE with it. The honest pair is rebuild against rebuild, 1.65 against 0.62; the
 0.137 s is a forecast of where `get_pdos` lands once the `Calculation` is threaded
 through the `SCFResult`, which is below QE on work QE has to repeat.
 
-**Still open, which is why this is PARTIAL and not DONE** -- a workflow-level
-comparison against QE's own `pdos_*` files (what is validated is the *projection*,
-three ways; `run_pdos` executes and gives the five shells `partialdos_nc` writes
-and the right Loewdin block, but its output curves have not been diffed against
-QE's -- they are k-resolved and on QE's own energy grid, so it is an alignment job
-rather than a check), and the ultrasoft case, which needs `GAPS.md` §2c closed
-first.
+**The curves are compared now too**, which was the fourth requirement: the total
+and each of the five shells' `ldos` against QE's own `pdos_*` files, agreeing to
+**0.16 per cent of the peak** over everything below the lowest empty band. Three
+things had to be right and each is a way to be silently wrong. `partialdos.f90`
+sets **`wkeff = 1` under `kresolveddos`** -- the per-k blocks carry no weight, so
+summing the file as written is a factor of `nk` out and still looks like a density
+of states. The broadening is the **run's own** (`ngauss = 1`, Methfessel-Paxton at
+0.02 Ry, which `projwfc.x` reads off the file), so the curves go *negative* on the
+wings and a gaussian does not reproduce them. And the window has to exclude the
+empty bands: above the lowest empty band's minimum the two codes' topmost six
+states are the same states in a different place, and the curves separate by **15
+per cent** of the peak there while agreeing to 0.16 below it -- the same
+unconverged-empty-band effect the projection comparison already had to exclude,
+seen a second way.
+
+**Still open, which is why this is PARTIAL and not DONE** -- the ultrasoft case,
+which needs `GAPS.md` §2c closed first.
 
 **One small API gap, found while writing the notebook and not filled**:
 `ProjectedDOS.select()` takes `atom, l, species, m, wfc` and no `j` or `mj`, so the

@@ -33,6 +33,7 @@ import pytest
 from defumat import Calculator
 from defumat.projwfc.projections import atomic_projections, calculation_channels
 from defumat.workflows.pdos import lowdin_charges
+from defumat.units import RY_TO_EV
 
 pytestmark = pytest.mark.regression
 
@@ -77,6 +78,32 @@ def _read_filproj(path):
             proj[column, int(ibnd) - 1, int(ik) - 1] = float(value)
             index += 1
     return labels, proj
+
+
+def _read_kresolved(path):
+    """QE's ``kresolveddos`` output: ``(energies_eV, columns[nk, nE, ncol])``.
+
+    One block per k-point, separated by a blank line. **The weights are not in
+    the file**: ``partialdos.f90`` sets ``wkeff = 1`` under ``kresolveddos``
+    ("set equal weight to all k-points"), so a caller wanting the k-summed curve
+    QE would otherwise have written has to apply ``wk`` itself. Reading it
+    unweighted and summing is a factor of ``nk`` wrong and still looks like a
+    density of states.
+    """
+    blocks, current = [], []
+    for line in path.read_text().splitlines():
+        if line.startswith("#"):
+            continue
+        if not line.strip():
+            if current:
+                blocks.append(current)
+                current = []
+            continue
+        current.append([float(value) for value in line.split()])
+    if current:
+        blocks.append(current)
+    data = np.asarray(blocks)                    # (nk, nE, 2 + ncol)
+    return data[0, :, 1], data[:, :, 2:]
 
 
 def _qe_lowdin(text):
@@ -264,3 +291,84 @@ def test_an_unsymmetrised_projection_is_allowed_on_a_nosym_run(_projection):
     projections = np.asarray(atomic_projections(calculation, states))
     assert np.allclose(projections, _projection["projections"])
 
+
+
+# --------------------------------------------------------------------------
+# The curves, which is the workflow rather than the projection
+# --------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def _curves(request):
+    """``run_pdos`` on the grid and the smearing ``projwfc.x`` used."""
+    root = request.config.rootpath
+    cases = root / "tests/data/qe"
+    total = cases / "reference.pt-soc-paw.pdos_tot"
+    if not total.is_file():
+        pytest.skip("pt-soc-paw: no generated reference (needs projwfc.x)")
+
+    energies, _ = _read_kresolved(total)
+    calculator = Calculator.from_file(
+        cases / "pt-soc-paw-nosym.in", pseudo_dir=root / "tests/data/pseudo"
+    )
+    scf = calculator.get_scf()
+    # ``DeltaE = 0.05`` eV from ``tools/generate_reference.py``; the broadening
+    # is the *run's* own, which ``projwfc.x`` reads off the file and prints as
+    # "ngauss,degauss= 1 0.020000" -- Methfessel-Paxton, not a gaussian, so the
+    # curves go negative on the wings and a gaussian would not reproduce them.
+    pdos = calculator.get_pdos(
+        scheme="mp", degauss=0.02, delta_e=0.05 / RY_TO_EV,
+        emin=energies[0] / RY_TO_EV, emax=energies[-1] / RY_TO_EV,
+    )
+    eigenvalues = np.asarray(scf.eigenvalues)
+    eigenvalues = eigenvalues.reshape(eigenvalues.shape[-2:])
+    # Everything below the lowest *empty* band, less five smearing widths so
+    # that no unconverged state contributes even through the tail of its delta.
+    edge = eigenvalues[:, _occupied(scf):].min() * RY_TO_EV - 5 * 0.02 * RY_TO_EV
+    return {
+        "cases": cases,
+        "energies": energies,
+        "window": energies <= edge,
+        "weights": np.asarray(calculator.calculation.system.kpoints.weights),
+        "pdos": pdos,
+        "n": energies.size,
+    }
+
+
+def test_the_total_curve_matches_projwfc(_curves):
+    """The workflow's output, not the projection it is built from.
+
+    Compared where both codes' states are converged. Above that the topmost
+    bands are the ones neither eigensolver converges -- they are the same six
+    states in a different place, and the curves separate by 15 per cent of the
+    peak there while agreeing to a sixth of a per cent below it.
+    """
+    _, columns = _read_kresolved(_curves["cases"] / "reference.pt-soc-paw.pdos_tot")
+    theirs = (columns[:, :, 0] * _curves["weights"][:, None]).sum(axis=0)
+    ours = _curves["pdos"].total.total_dos[:_curves["n"]] / RY_TO_EV
+
+    window = _curves["window"]
+    assert window.sum() > 300
+    worst = np.abs(ours - theirs)[window].max()
+    assert worst < 2.0e-2 * theirs[window].max(), worst
+
+
+def test_every_shell_curve_matches_projwfc(_curves):
+    """One file per ``(atom, wfc, l, j)``, compared on its ``ldos`` column.
+
+    The shell's own sum rather than its ``m_j`` columns, which is the same
+    invariance the Loewdin comparison rests on: a rotation inside a degenerate
+    multiplet moves weight between the columns and not between the files.
+    """
+    pdos, window = _curves["pdos"], _curves["window"]
+    files = sorted(_curves["cases"].glob("reference.pt-soc-paw.pdos_atm*"))
+    assert len(files) == 5, [f.name for f in files]
+
+    for path in files:
+        _, columns = _read_kresolved(path)
+        theirs = (columns[:, :, 0] * _curves["weights"][:, None]).sum(axis=0)
+        letter, j = path.name.split("(")[-1].rstrip(")").split("_j")
+        ours = sum(pdos.pdos[c.index] for c in pdos.channels
+                   if c.l_label == letter and abs(c.j - float(j)) < 1.0e-6)
+        ours = ours[:_curves["n"]] / RY_TO_EV
+        worst = np.abs(ours - theirs)[window].max()
+        assert worst < 2.0e-2 * theirs[window].max(), (path.name, worst)
