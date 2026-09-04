@@ -531,8 +531,12 @@ print(pdos.charges.charges_lm)   # -> None: a spin-angle function has no m
 
 Validated on fully-relativistic \textbf{ultrasoft and PAW} platinum datasets
 against \code{projwfc.x} runs generated for them, four ways. The \emph{columns} --- how
-many, and each one's $(l, j, m_j)$ --- match QE's own label table exactly, 18
-channels where the $j$-averaged count is 9. The \emph{projections} agree to
+many, and each one's $(l, j, m_j)$ --- match QE's own label table exactly. The
+two datasets differ there in a way worth seeing: the PAW file carries both $j$
+partners of every $l$, so its 18 columns are exactly twice the $j$-averaged 9,
+while the ultrasoft one has 12 against a scalar 11 --- the count is
+$\sum (2j + 1)$ read off the file and not a doubling. The \emph{projections}
+agree to
 \textbf{6.3e-6}, compared as sums over each degenerate multiplet: a spinor band
 structure is Kramers-degenerate everywhere, and an individual
 $|\langle\phi|\hat S|\psi_n\rangle|^2$ is not invariant under the mixing inside
@@ -546,9 +550,8 @@ topmost states are the ones neither eigensolver converges. Timing, one core each
 on both sides that is mostly rebuilding from the pseudopotential files rather
 than projecting --- the projection and its integration are 0.137~s of it here.
 
-Validated on a fully-relativistic \textbf{ultrasoft} dataset too, on the same
-cell and to the same numbers. Norm-conserving is untested rather than refused
---- no reference case is committed for it.
+Norm-conserving is untested rather than refused --- no reference case is
+committed for it.
 
 \begin{refuses}
 \textbf{Refuses.} A \textbf{symmetrised} spinor projection: averaging over the

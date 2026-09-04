@@ -3123,9 +3123,15 @@ class Calculation:
         get wrong. A spiral keeps the doubling: it refuses spin-orbit coupling,
         so its dataset is never relativistic, and its two components live on
         different spheres.
+
+        ``lspinorb`` is in the condition to state the precondition rather than
+        to change the answer: ``spinor_orbital_blocks`` refuses a relativistic
+        dataset without it, and so does the input check above (QE's
+        ``average_pp``), so the combination cannot reach here either way.
         """
         return (
             self.noncolin
+            and self.lspinorb
             and not self.spiral
             and any(pseudo.has_so for pseudo in self.pseudos)
         )
