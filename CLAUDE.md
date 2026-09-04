@@ -1783,6 +1783,27 @@ plain `pytest -m slow` run everything in **one** process, where splitting change
 all. The two bounds above work under all three, so they are the rule and splitting is a
 judgement call about what belongs together.
 
+**Do not run demanding suites simultaneously — not in one process, and not in two at
+once.** This machine has 30 GB and both mistakes have killed a session here:
+
+- **Several slow files in one `pytest` invocation.** `pytest tests/regression/test_a.py
+  tests/regression/test_b.py test_c.py` is *one* process, so every file's XLA executables
+  accumulate for the whole run — three spinor suites reached 2.4 GB in ninety seconds and
+  kept climbing. Run them one at a time (`tools/run_regression.sh`, or a loop with one
+  `python3 -m pytest <file>` per file), which is the only thing that actually frees them
+  between files.
+- **Two test runs in parallel, or a test run beside anything being measured.** They
+  contend for RAM on a machine already sized for one, and a timing taken next to a test
+  run is not a timing — a `projwfc.x` comparison measured beside a background suite read
+  70% slow and had to be discarded and repeated.
+
+Two habits make this cheap. Put `ulimit -v` on the child so a runaway suite is killed
+instead of the session, and write a **durable summary line per file** so a kill costs the
+file in flight rather than the whole run — which is exactly what `run_regression.sh`
+already does and why it exists. And **narrow the list before running it**: a `grep` for
+the inputs that can actually reach the changed code path is minutes of work and routinely
+removes most of the suites, where guessing adds them.
+
 What neither bound touches is the peak *inside* one test, which is a real cost to be sized
 in advance rather than discovered: the backward pass of an ultrasoft or PAW derivative
 carries the augmentation table `Q_ij(G)` — `nh^2 x ngm` per atom, and `nh` is in the
