@@ -43,7 +43,12 @@ pytestmark = [pytest.mark.regression, pytest.mark.slow]
 GENERATED = Path(__file__).resolve().parents[1] / "data" / "qe"
 
 
-@lru_cache(maxsize=4)
+# ``CLAUDE.md``: **2, never more** -- "what a comparison between two cells needs
+# and the largest that is not a leak". This held 4, and each entry is a
+# converged DFT+U state *including its wavefunctions*, so four FeO cells were
+# resident at once. The file was SIGKILLed (exit 137) part way through the slow
+# suite on this machine, which is the failure mode that rule exists to prevent.
+@lru_cache(maxsize=2)
 def _converged(name, pseudo_dir):
     pwin = read_pw_input(GENERATED / name)
     system = build_system(pwin)
@@ -61,7 +66,11 @@ def _converged(name, pseudo_dir):
 
 @pytest.fixture(autouse=True)
 def _bound_compilation_cache():
-    """Three distinct cells in one process; see `CLAUDE.md` on memory."""
+    """Several distinct cells in one process; see `CLAUDE.md` on memory.
+
+    The results stay cached (bounded above); only the compiled code is dropped,
+    which trades recompilation for a peak this machine can afford.
+    """
     yield
     import jax
 
