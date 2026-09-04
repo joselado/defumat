@@ -139,6 +139,12 @@ def test_gamma_storage_is_substituted_rather_than_used(qe_testsuite, pseudo_dir)
     through :meth:`KPoints.from_cartesian` would renormalise it and reapply the
     spin degeneracy, which is exactly the factor an ``nspin = 2`` run has already
     halved.
+
+    **This cell is substituted, and the reason is symmetry rather than the
+    storage being unimplemented.** Half-sphere storage is consumed for a
+    norm-conserving run with ``nosym`` (``PLAN.md`` P68); this atom sits in a
+    cubic box with its full point group, and a rotation carries a stored ``G``
+    onto an unstored ``-G'``. ``gamma_storage_is_consumable`` is the rule.
     """
     from defumat.scf.driver import Calculation
 
@@ -154,7 +160,13 @@ def test_gamma_storage_is_substituted_rather_than_used(qe_testsuite, pseudo_dir)
     assert float(calculation.system.kpoints.weights.sum()) == pytest.approx(
         float(system.kpoints.weights.sum())
     )
-    # The full sphere is exactly twice the half sphere less the G = 0 it shares.
+    # **The doubling is in the plane waves, not in the dense set.** Only the
+    # wavefunction sphere halves under gamma storage (``build_basis``), so the
+    # dense G list is the same either way and it is ``npwx`` that carries the
+    # factor -- exactly twice the half sphere less the ``G = 0`` they share.
     from defumat.basis.builder import build_basis
 
-    assert calculation.basis.dense.ngm == 2 * build_basis(system).dense.ngm - 1
+    halved = build_basis(system)
+    assert halved.planewaves.gamma_only
+    assert calculation.basis.npwx == 2 * halved.npwx - 1
+    assert calculation.basis.dense.ngm == halved.dense.ngm
