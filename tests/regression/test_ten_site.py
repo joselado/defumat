@@ -377,7 +377,12 @@ def test_the_two_codes_reduce_an_unclosed_grid_differently(pseudo_dir):
 # The projected density of states, where ten sites change what can be compared.
 # ---------------------------------------------------------------------------
 
-@lru_cache(maxsize=None)
+# ``maxsize=1``, and **only the projected DOS comes back**: all three callers
+# below discard the rest, so returning ``scf`` and ``states`` held a ten-atom
+# cell's wavefunctions twice over for the lifetime of the file. ``maxsize=None``
+# on a helper that carries wavefunctions is the leak this file's own header
+# warns about.
+@lru_cache(maxsize=1)
 def _projected(pseudo_dir: Path):
     from defumat.workflows.pdos import run_pdos
     from defumat.io import read_pdos_file
@@ -387,10 +392,10 @@ def _projected(pseudo_dir: Path):
     # ``partialdos`` sizes its energy grid from QE's own eigenvalues, so the
     # window is taken from the reference rather than from this run's extremes.
     energies_ev = read_pdos_file(CASES / "reference.si10-nc.pdos_tot")[0]
-    pdos, states = run_pdos(system, pseudos, scf, delta_e=0.05 / RY_TO_EV,
-                            emin=energies_ev[0] / RY_TO_EV,
-                            emax=energies_ev[-1] / RY_TO_EV)
-    return system, scf, pdos, states
+    pdos, _states = run_pdos(system, pseudos, scf, delta_e=0.05 / RY_TO_EV,
+                             emin=energies_ev[0] / RY_TO_EV,
+                             emax=energies_ev[-1] / RY_TO_EV)
+    return pdos
 
 
 def _projwfc_reference():
@@ -404,7 +409,7 @@ def _projwfc_reference():
 
 def test_the_projection_channels_of_ten_atoms_are_qes(pseudo_dir):
     """``fill_nlmchi`` over ten atoms: forty channels in QE's order."""
-    _, _, pdos, _ = _projected(pseudo_dir)
+    pdos = _projected(pseudo_dir)
     reference = _projwfc_reference()
 
     assert len(pdos.channels) == reference.natomwfc == 40
@@ -429,7 +434,7 @@ def test_lowdin_charges_and_spilling_at_ten_sites(pseudo_dir):
     from tests.tolerances import LOWDIN_CHARGE
     from defumat.projwfc.channels import L_LABELS
 
-    _, _, pdos, _ = _projected(pseudo_dir)
+    pdos = _projected(pseudo_dir)
     reference = _projwfc_reference()
     charges = pdos.charges
 
@@ -450,7 +455,7 @@ def test_the_projected_dos_curves_match_filpdos_at_ten_sites(pseudo_dir):
     from defumat.io import read_pdos_file
     from tests.tolerances import PDOS_RELATIVE
 
-    _, _, pdos, _ = _projected(pseudo_dir)
+    pdos = _projected(pseudo_dir)
     energies, columns, _ = read_pdos_file(CASES / "reference.si10-nc.pdos_tot")
     assert np.abs(pdos.energies_ev[: energies.size] - energies).max() < 1e-6
 

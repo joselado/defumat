@@ -1797,10 +1797,17 @@ once.** This machine has 30 GB and both mistakes have killed a session here:
   run is not a timing — a `projwfc.x` comparison measured beside a background suite read
   70% slow and had to be discarded and repeated.
 
-Two habits make this cheap. Put `ulimit -v` on the child so a runaway suite is killed
-instead of the session, and write a **durable summary line per file** so a kill costs the
+One habit makes this cheap: write a **durable summary line per file** so a kill costs the
 file in flight rather than the whole run — which is exactly what `run_regression.sh`
-already does and why it exists. And **narrow the list before running it**: a `grep` for
+already does and why it exists.
+
+**`ulimit -v` is not the cap to reach for, and trying it cost a session's confidence.**
+It bounds *virtual* address space, and XLA reserves arenas far larger than it ever
+resides, so a 16 GB cap turned eight passing tests into `Out of memory allocating
+17236761704 bytes` — a test that needs 60 s and a couple of GB standing alone. Failures
+that read as a physics regression and are not are worse than no cap at all. The process
+boundary is the real bound; if a ceiling is genuinely wanted it is
+`XLA_PYTHON_CLIENT_MEM_FRACTION`, which is about memory rather than address space. And **narrow the list before running it**: a `grep` for
 the inputs that can actually reach the changed code path is minutes of work and routinely
 removes most of the suites, where guessing adds them.
 

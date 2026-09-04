@@ -102,8 +102,8 @@ def _converged(path: Path, pseudo_dir: Path):
     system = build_system(read_pw_input(path))
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
     calculation = Calculation(system, pseudos)
-    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-10,
-                     max_iterations=120)
+    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12,
+                     max_iterations=250)
     return system, calculation, result
 
 
@@ -271,8 +271,8 @@ def _platinum_nosym(pseudo_dir: Path):
     system = build_system(data)
     pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species)
     calculation = Calculation(system, pseudos)
-    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-10,
-                     max_iterations=120)
+    result = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-12,
+                     max_iterations=250)
     return system, calculation, result
 
 
@@ -285,8 +285,20 @@ def test_the_wedge_reproduces_the_closed_grid(pseudo_dir):
     implementation, and this is the only check on it. The comparison is against
     the *same cell* with ``nosym`` on all 32 points of an unshifted grid, which
     is closed under the point group and therefore needs no symmetrisation at
-    all. Achieved 2.3e-7 Ry/bohr on the force and 6.3e-9 Ry/bohr^3 on the
-    stress, with the two SCF totals 2.4e-12 Ry apart.
+    all. Achieved 3.5e-7 Ry/bohr on the force and 3.5e-9 Ry/bohr^3 on the
+    stress, with the two SCF totals 2.6e-13 Ry apart.
+
+    **This check is what pins ``conv_thr`` at 1e-12 rather than 1e-10, and the
+    reason is the starting guess.** A fully-relativistic dataset is seeded with
+    the spin-angle functions topped up with *random* vectors, exactly as
+    ``wfcinit`` does it, so these two runs do not start from the same span --
+    they have different k-sets and the random part differs with them. At 1e-10
+    that survives into the force as 6.9e-6 and this test fails; at 1e-12 it is
+    3.5e-7. The number to compare against is ``pw.x``'s own, which is **4e-7**
+    between the same two k-sets on this cell (measured, its symmetrised run
+    against its ``nosym`` one), so a floor of a few times 1e-7 is the physics
+    and not a slack tolerance -- QE does no better, because it seeds the same
+    way.
     """
     _, wedge_calculation, wedge_result = _converged(
         CASES / "pt2-soc-force.in", pseudo_dir
