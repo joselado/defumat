@@ -73,10 +73,6 @@ the card, **measure it** rather than adding anything back:
 (``david``, ``nbnd``, ``band_batch``) without executing anything, and
 ``tools/gpu/force_memory.py`` does the same for the reverse-mode force, whose
 tape this module cannot see either.
-``tools/gpu/davidson_memory.py`` measures the real backend's number directly
-(compile only, nothing executed) and is what to run when the answer is close to
-the card; ``tools/gpu/force_memory.py`` does the same for the reverse-mode
-force, whose tape this module cannot see either.
 
 **``band_batch`` is therefore an assumption of the estimate the way ``k_batch``
 and ``davidson_basis`` already were**, and it is reported beside them: it is the
