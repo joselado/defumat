@@ -161,10 +161,20 @@ def force_real_g0(coefficients, gamma_only: bool):
     applied every time a vector enters the subspace. It is not cosmetic -- an
     imaginary part at ``G = 0`` makes the rebuilt field complex, and the run
     converges to a plausible wrong answer rather than failing.
+
+    **Written as a select rather than as ``.at[..., 0].set(...)``**, which is
+    the same value and not the same buffer. A scatter is opaque to XLA's loop
+    fusion, and this sits in the middle of the Davidson correction chain --
+    precondition, mask, *this*, normalise -- where every link is otherwise
+    elementwise over a ``(nbnd, npwx)`` block. The scatter split that chain in
+    two and each half materialised a block of its own; on a 157-atom slab a
+    block is 5.8 GiB. A select fuses with its neighbours and costs nothing.
     """
     if not gamma_only:
         return coefficients
-    return coefficients.at[..., 0].set(coefficients[..., 0].real)
+    at_zero = jnp.arange(coefficients.shape[-1]) == 0
+    return jnp.where(at_zero, coefficients.real.astype(coefficients.dtype),
+                     coefficients)
 
 
 # --- the stick layout ---------------------------------------------------------

@@ -56,6 +56,41 @@ so everything the algorithm needs from it is a function of the small
 arithmetic in a fraction of the memory, and it makes the norm-conserving path
 free rather than merely cheap: with no augmentation charge the tracked array has
 zero columns, and every expression involving it disappears at compile time.
+
+**The working set is one contiguous XLA buffer and it is what decides whether a
+large run starts at all**, so it is written down here rather than discovered.
+Fitted to ``memory_analysis().temp_size_in_bytes`` of the compiled solve, in
+bytes of one complex number ``zc``::
+
+    2.18 nvecx npwx zc  +  4.20 nbnd npwx zc  +  2.00 band_batch N_smooth zc
+
+The first term is ``psi`` and ``hpsi``, the two arrays this carries; the second
+is the ``(nbnd, npwx)`` blocks -- ``evc``, ``hevc`` and the expansion chain; and
+the third is ``h_psi``'s FFT boxes, two per band in flight, which is the term
+nothing in this file controls. On a 157-atom slab at ``ecutwfc = 60`` with
+``nbnd = 1020`` and ``diago_david_ndim = 4`` that is 46 + 24 + 24 GiB, and an
+H200 with the default 75 per cent preallocation refuses it.
+
+Two of those band blocks were **carried and did not need to be**, and removing
+them is worth 11.6 GiB there:
+
+* the expansion block is a pure function of ``evc``, ``hevc``, ``sbec`` and the
+  eigenvalues, all of which the loop already carries, so it is rebuilt at the
+  top of the step that consumes it rather than held across the loop boundary
+  (:func:`~defumat.solvers.davidson.davidson_eigensolver`'s ``expansion``);
+* and the robustness retry was a ``lax.cond`` over a *static* flag, which put
+  two copies of the whole ``while_loop`` in one executable -- XLA shares the
+  ``(nvecx, npwx)`` carries between them and gives the ``(nbnd, npwx)`` one a
+  slot each. The retry is a host branch now
+  (:func:`davidson_eigensolver_all`).
+
+Neither changes an eigenvalue: seven of eight reference cells came back
+bit-for-bit and the eighth moved by 1.1e-15 Ry, from an unrelated rewrite of
+``force_real_g0`` on the same pass. **The measurement that shows it is the
+ratio ``nbnd npwx / (band_batch N_smooth)``**, which is 0.5 on that slab: at a
+small cell's 0.06 the same change reads as 1 per cent, and only at a
+production-like ratio does it read as the 10 per cent it is (``si64`` at
+``band_batch = 16``: 932.6 MB to 837.1).
 """
 
 from __future__ import annotations
@@ -167,6 +202,15 @@ def _extend_projection(hc, sc, psi, hpsi, becp, becq, offset, block,
     ``becp``/``becq`` carry the augmentation part of the overlap: ``becq`` is
     ``q <beta|psi>``, so ``becp^H becq`` is the ``<psi|S - 1|psi>`` block. They
     have zero columns when there is no augmentation charge.
+
+    **The new rows are sliced back out of ``psi`` rather than passed in**, and
+    that is the measured choice rather than the obvious one. The caller has
+    just written them there and still holds them, so handing them over looks
+    like one ``(nbnd, npwx)`` block saved -- and it costs one instead, on both
+    backends and at every band batch tried. A ``dynamic_slice`` of a buffer the
+    consumer only reads is free to XLA; passing the block keeps the caller's
+    copy live *across* the two matrix products below, where otherwise it dies
+    into the ``dynamic_update_slice`` that wrote it.
     """
     rows = jax.lax.dynamic_slice(psi, (offset, 0), (block, psi.shape[1]))
     if gamma_only:
@@ -319,22 +363,55 @@ def davidson_eigensolver(
         # rotations of vectors already computed -- no extra application of H.
         evc = coefficients.T @ psi
         hevc = coefficients.T @ hpsi
-        # S|evc> without ever storing S|psi>: the Ritz vector's projections are
-        # the same rotation of the stored ones.
-        sevc = evc + hamiltonian.s_correction(coefficients.T @ becq, ik)
+        # ``q <beta|evc>``, the only thing S needs beyond ``evc`` itself: the
+        # Ritz vector's projections are the same rotation of the stored ones,
+        # so ``S|psi>`` is never formed. ``(nbnd, nkb)``, and zero-width
+        # without an augmentation charge.
+        sbec = coefficients.T @ becq
 
-        residual = hevc - energies[:, None].astype(dtype) * sevc
         settled = jnp.abs(energies - previous) < ethr
         if residual_threshold is not None:
+            # The only consumer of the residual inside this function, and it is
+            # off by default (:data:`RESIDUAL_THRESHOLD`). :func:`expansion`
+            # builds its own from the same inputs.
+            sevc = (evc + hamiltonian.s_correction(sbec, ik)
+                    if hamiltonian.has_overlap else evc)
+            residual = hevc - energies[:, None].astype(dtype) * sevc
             settled = jnp.logical_and(
                 settled,
                 jnp.sqrt(jnp.sum(jnp.abs(residual) ** 2, axis=1)) < residual_threshold,
             )
 
-        # ... the preconditioned, normalised correction, with the unconverged
-        # roots sorted to the front so the block written next starts with
-        # exactly the vectors worth keeping. The sort is stable, so roots keep
-        # their relative order.
+        return (energies, evc, hevc, sbec, settled,
+                jnp.sum(jnp.logical_not(settled)), jnp.all(settled))
+
+    def expansion(evc, hevc, sbec, energies, settled):
+        """The block the subspace grows by: preconditioned, normalised, sorted.
+
+        The unconverged roots are sorted to the front so that the block written
+        next starts with exactly the vectors worth keeping. The sort is stable,
+        so roots keep their relative order.
+
+        **Split out of :func:`solve` and evaluated at the top of the step that
+        consumes it, rather than at the bottom of the one that could have
+        produced it.** It is a pure function of things the loop already carries,
+        and computing it here means it is *not* a loop carry -- which is one
+        ``(nbnd, npwx)`` block, 5.8 GiB on a 157-atom slab, live across the
+        whole of the next step for the sake of an elementwise chain that costs
+        nothing to rebuild. ``cegterg`` carries ``evc`` and ``hevc`` and no
+        such block either. The arithmetic is unchanged, so the vectors are
+        bit-for-bit what the carried version produced.
+
+        ``sbec`` is ``<beta|evc>`` already multiplied by ``q``, carried as the
+        ``(nbnd, nkb)`` array it is rather than recomputed: recomputing it from
+        ``project(evc)`` would be the same quantity by a different summation and
+        would move the answer in the last bits.
+        """
+        if hamiltonian.has_overlap:
+            sevc = evc + hamiltonian.s_correction(sbec, ik)
+        else:
+            sevc = evc
+        residual = hevc - energies[:, None].astype(dtype) * sevc
         correction = _precondition(residual, diagonal, s_diagonal, energies)
         correction = jnp.where(mask, correction, 0.0)
         correction = force_real_g0(correction, gamma_only)
@@ -345,14 +422,21 @@ def davidson_eigensolver(
                                     keepdims=True).real
                         if gamma_only else
                         jnp.sum(jnp.abs(correction) ** 2, axis=1, keepdims=True))
-        correction = jnp.where(settled[:, None], 0.0,
-                               correction / jnp.where(norm > 0.0, norm, 1.0))
-        correction = correction[jnp.argsort(settled)]
+        # **The sort comes before the normalisation, and only the buffer cares.**
+        # Each row is still divided by its own norm and zeroed by its own flag,
+        # so the value is what it was; but a gather whose consumer is elementwise
+        # fuses into that consumer, where a gather *after* the division is a
+        # second ``(nbnd, npwx)`` block -- one before it and one after. The
+        # permutation is applied to the two ``(nbnd,)`` vectors instead, which
+        # is free.
+        order = jnp.argsort(settled)
+        norm = norm[order]
+        return jnp.where(
+            settled[order][:, None], 0.0,
+            correction[order] / jnp.where(norm > 0.0, norm, 1.0),
+        )
 
-        return (energies, evc, hevc, correction,
-                jnp.sum(jnp.logical_not(settled)), jnp.all(settled))
-
-    energies0, evc0, hevc0, correction0, notcnv0, converged0 = solve(
+    energies0, evc0, hevc0, sbec0, settled0, notcnv0, converged0 = solve(
         psi, hpsi, becq, first, hc0, sc0,
         jnp.full((nbnd,), jnp.inf, dtype=diagonal.dtype),
     )
@@ -361,7 +445,7 @@ def davidson_eigensolver(
         psi, hpsi, becp, becq, first, hc0, sc0,  # the subspace and its projections
         nbnd,                              # where the next block is written
         evc0, hevc0, energies0,            # current estimate, and H applied to it
-        correction0, notcnv0,              # what to expand with, decided already
+        sbec0, settled0, notcnv0,          # what the expansion is built from
         0, converged0,                     # iteration, converged
     )
 
@@ -375,13 +459,13 @@ def davidson_eigensolver(
         # guard rather than a ``cond`` inside the batch.
         alive = jnp.all(jnp.isfinite(state[10]))
         return jnp.logical_and(
-            jnp.logical_and(jnp.logical_not(state[14]), state[13] < max_iterations),
+            jnp.logical_and(jnp.logical_not(state[15]), state[14] < max_iterations),
             alive,
         )
 
     def step(state):
         (psi, hpsi, becp, becq, active, hc_raw, sc_raw, nbase,
-         evc, hevc, energies, correction, notcnv, iteration, _) = state
+         evc, hevc, energies, sbec, settled, notcnv, iteration, _) = state
 
         # ... collapse onto the current estimates when the subspace is full,
         # which is the only place the basis ever shrinks (cegterg's "refresh").
@@ -412,6 +496,13 @@ def davidson_eigensolver(
         # residuals that are all zero because every root has just converged.
         # That was one wasted h_psi per Davidson call -- 7 of the 23 steps a
         # whole eight-atom run takes.
+        # ... the block to expand with, rebuilt here rather than carried across
+        # the loop boundary, and built *after* the collapse rather than before
+        # it: the collapse leaves ``evc``, ``hevc``, ``sbec`` and ``energies``
+        # untouched, so the value is the same either way, and putting it here
+        # keeps the block out of the ``cond``'s live range -- which is where the
+        # FFT boxes of the next ``h_psi`` are. See :func:`expansion`.
+        correction = expansion(evc, hevc, sbec, energies, settled)
         new_becp, new_becq = project(correction)
         psi = jax.lax.dynamic_update_slice(psi, correction, (nbase, 0))
         hpsi = jax.lax.dynamic_update_slice(hpsi, hamiltonian.apply(correction, ik), (nbase, 0))
@@ -422,11 +513,12 @@ def davidson_eigensolver(
                                             nbase, nbnd, gamma_only)
         nbase = nbase + notcnv
 
-        energies, evc, hevc, correction, notcnv, converged = solve(
+        energies, evc, hevc, sbec, settled, notcnv, converged = solve(
             psi, hpsi, becq, active, hc_raw, sc_raw, energies
         )
         return (psi, hpsi, becp, becq, active, hc_raw, sc_raw, nbase,
-                evc, hevc, energies, correction, notcnv, iteration + 1, converged)
+                evc, hevc, energies, sbec, settled, notcnv, iteration + 1,
+                converged)
 
     final = jax.lax.while_loop(unconverged, step, state)
     evc, energies = final[8], final[10]
@@ -453,7 +545,33 @@ def starting_vectors(psi0, nbnd, ndim, kinetic, mask, dtype):
 
 
 @partial(jax.jit, static_argnames=("nbnd", "david", "max_iterations", "k_batch",
-                                   "robust_retry"))
+                                   "robust"))
+def _every_k(
+    hamiltonian: Hamiltonian,
+    nbnd: int,
+    psi0,
+    ethr,
+    residual_threshold,
+    david: int,
+    max_iterations: int,
+    k_batch: int | None | str,
+    robust: bool,
+):
+    """One compiled solve of the whole k-set, by one of the two routes."""
+    def solve(ik, start):
+        return davidson_eigensolver(
+            hamiltonian, ik, nbnd, start, ethr=ethr,
+            residual_threshold=residual_threshold, david=david,
+            max_iterations=max_iterations, robust=robust,
+        )
+
+    batch = resolve_k_batch(k_batch)
+    indices = jnp.arange(hamiltonian.nk)
+    if psi0 is None:
+        return map_k(lambda ik: solve(ik, None), indices, batch=batch)
+    return map_k(lambda pair: solve(*pair), (indices, psi0), batch=batch)
+
+
 def davidson_eigensolver_all(
     hamiltonian: Hamiltonian,
     nbnd: int,
@@ -499,26 +617,28 @@ def davidson_eigensolver_all(
     that retry is a few steps rather than the whole budget.
 
     The values returned are bit-for-bit what the guarded version returned
-    whenever the guard passed, because the guard passing *is* the Cholesky
-    route: ``select_n`` chose between two computed arrays and took that one.
+    whenever the guard passed, because the guard passing *is* taking the
+    Cholesky route's own answer.
+
+    **The guard is a Python branch and not a ``lax.cond``, and that is a memory
+    decision.** ``robust`` is static -- it picks between two different subspace
+    routines -- so a ``cond`` over it puts *two* copies of the whole Davidson
+    ``while_loop`` in one executable. XLA shares the big ``(nvecx, npwx)``
+    carries between them, but not the ``(nbnd, npwx)`` correction: the buffer
+    assignment gives ``while.4`` and ``while.5`` a slot each, which is one band
+    block of pure duplication -- 5.8 GiB on a 157-atom slab -- and twice the
+    HLO for the rematerialisation pass to work on, which is where a large run
+    actually fails. Branching on the host costs one scalar transfer per call,
+    at a point where :meth:`~defumat.scf.driver.Calculation.diagonalize`'s
+    caller synchronises on the Fermi level a few lines later anyway.
+
+    ``robust_retry = False`` keeps the whole thing inside one ``jit`` for a
+    caller that has to trace through it; ``clear_cache`` reaches the compiled
+    unit, so a test that monkeypatches the subspace route still works.
     """
-
-    def solve(ik, start, robust):
-        return davidson_eigensolver(
-            hamiltonian, ik, nbnd, start, ethr=ethr,
-            residual_threshold=residual_threshold, david=david,
-            max_iterations=max_iterations, robust=robust,
-        )
-
-    batch = resolve_k_batch(k_batch)
-    indices = jnp.arange(hamiltonian.nk)
-
-    def over_k(robust):
-        if psi0 is None:
-            return map_k(lambda ik: solve(ik, None, robust), indices, batch=batch)
-        return map_k(lambda pair: solve(*pair, robust), (indices, psi0), batch=batch)
-
-    fast = over_k(False)
+    arguments = (hamiltonian, nbnd, psi0, ethr, residual_threshold, david,
+                 max_iterations, k_batch)
+    fast = _every_k(*arguments, robust=False)
     if not robust_retry:
         return fast
     # Both halves, not just the eigenvalues. A Cholesky factor that has gone
@@ -527,6 +647,10 @@ def davidson_eigensolver_all(
     # because the failure sat in a triangle nothing read -- so a guard that
     # watches only the energies can pass a wavefunction with a NaN in it
     # straight into the density. Two reductions against a solve is not a cost.
-    finite = jnp.logical_and(jnp.all(jnp.isfinite(fast[0])),
-                             jnp.all(jnp.isfinite(fast[1])))
-    return jax.lax.cond(finite, lambda: fast, lambda: over_k(True))
+    finite = bool(jnp.isfinite(fast[0]).all() & jnp.isfinite(fast[1]).all())
+    if finite:
+        return fast
+    return _every_k(*arguments, robust=True)
+
+
+davidson_eigensolver_all.clear_cache = _every_k.clear_cache
