@@ -227,3 +227,53 @@ def test_a_screened_mixer_is_unaffected_by_the_storage(pseudo_dir, mixing):
     # The iteration count is the quantity a preconditioner bug moves, so it is
     # the one asserted -- not equal, but not drifting either.
     assert abs(gamma.iterations - full.iterations) <= 2
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("quantity", ["get_dielectric_tensor", "get_phonons"])
+def test_the_response_stack_is_refused_under_gamma(pseudo_dir, quantity):
+    """It runs and is wrong, which is why the refusal is by name.
+
+    Every inner product in the Sternheimer stack -- ``orthogonalize``'s
+    projector, ``cgsolve_all``'s own products, the response density -- is a sum
+    over plane waves needing ``2 Re(...) - (G = 0)``, and none of them has it.
+    Nothing raises: silicon's dielectric constant comes out
+    **285.4 / 229.4 / 228.3** against **190.8 / 190.8 / 190.8**, half again too
+    large and **not even cubic on a cubic crystal**, which is the tell. Measured
+    before the refusal was added.
+
+    The consequence worth stating: the partial dynamical matrix and gamma-only
+    storage are both memory features for the same kind of calculation and they
+    do **not** combine yet.
+    """
+    text = _TEMPLATE.format(extra="", kpoints="gamma", pseudo="Si.pz-vbc.UPF")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_text(text, pseudo_dir, announce=False)
+        with pytest.raises(NotImplementedError, match="gamma-only"):
+            getattr(calculator, quantity)()
+
+
+@pytest.mark.slow
+def test_the_full_sphere_response_still_works(pseudo_dir):
+    """The refusal must not catch the run the user is told to fall back to.
+
+    On the **undisplaced** cell, which is the one that is cubic -- the template
+    above deliberately displaces both atoms so that its force is non-zero, and
+    that breaks the symmetry this checks for. Getting that backwards is what
+    the first draft of this test did.
+    """
+    text = _TEMPLATE.format(extra="", kpoints="automatic\n 1 1 1 0 0 0",
+                            pseudo="Si.pz-vbc.UPF")
+    text = text.replace(" Si 0.01 0.00 0.00", " Si 0.00 0.00 0.00").replace(
+        " Si 0.26 0.24 0.25", " Si 0.25 0.25 0.25"
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_text(text, pseudo_dir, announce=False)
+        epsilon = np.asarray(calculator.get_dielectric_tensor().epsilon)
+    # Cubic, which is exactly what the gamma answer was not: 285.4/229.4/228.3
+    # against an isotropic 190.8.
+    diagonal = np.diag(epsilon)
+    assert diagonal[0] == pytest.approx(diagonal[1], rel=1e-6)
+    assert diagonal[0] == pytest.approx(diagonal[2], rel=1e-6)

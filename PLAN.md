@@ -10489,6 +10489,20 @@ way out), and a spinor or spiral run. `Calculation.gamma_only` is the switch and
 because sizing the substitution where the run consumes the half sphere
 overstates every band-sized array by two.
 
+**The response stack is refused under gamma by name, and the reason is that it
+does not fail.** Lifting the substitution made every Sternheimer quantity
+reachable with a half sphere, and none of its inner products -- `orthogonalize`'s
+projector, `cgsolve_all`'s own products, the response density -- carries the
+`2 Re(...)` and the `G = 0` correction. Nothing raises: silicon's dielectric
+constant comes out **285.4 / 229.4 / 228.3** against **190.8 / 190.8 / 190.8**,
+half again too large and **not even cubic on a cubic crystal**. That last is the
+tell, and it is the only one -- the numbers are otherwise the right order and
+positive. Found by checking rather than by a test failing, which is the argument
+for checking a lifted refusal's *neighbours* and not only the thing lifted. The
+consequence to state plainly: **P67's partial dynamical matrix and this phase are
+both memory features for the same kind of calculation and they do not combine
+yet.**
+
 **Not implemented, and it is the speed half rather than the memory half**:
 `vloc_psi_gamma`'s two-bands-per-FFT packing, which would halve the transform
 count as well. The stick path is bypassed under gamma for the same reason -- a

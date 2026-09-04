@@ -981,6 +981,20 @@ def require_a_sternheimer_regime(
     are still refused here. The flag is deliberately opt-in for that reason,
     exactly as ``metals`` is.
     """
+    if getattr(calculation, "gamma_only", False):
+        raise NotImplementedError(
+            "a response quantity is not implemented for gamma-only storage. "
+            "The SCF consumes the half sphere (P68) and this stack does not: "
+            "every inner product here -- the projector in orthogonalize, the "
+            "CG's own products in cgsolve_all, the response density -- is a sum "
+            "over plane waves and needs 2 Re(...) minus the G = 0 term, and "
+            "none of them has it. **It does not fail, which is why this refusal "
+            "exists**: silicon's dielectric constant comes out 285.4/229.4/228.3 "
+            "against 190.8/190.8/190.8, half again too large and not even cubic "
+            "on a cubic crystal. Run the same cell with an explicit k = 0 "
+            "(K_POINTS automatic, 1 1 1 0 0 0), which is the same physics on the "
+            "whole sphere"
+        )
     system = calculation.system
     reject_potential_only(calculation)
     if calculation.noncolin:

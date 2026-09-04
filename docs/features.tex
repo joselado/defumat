@@ -367,7 +367,15 @@ need their own \code{fact = 2}), for a run that uses symmetry (a rotation
 carries a stored $G$ onto an unstored $-G'$, so the permutation would need a
 conjugation; \code{nosym = .true.} is the way out), and for a spinor or spiral
 run. \code{estimate()} makes the same decision the driver makes, so it sizes
-the run either way. A checkpoint refuses rather than drops a converged
+the run either way.
+
+Every \textbf{response} quantity --- the dielectric tensor, phonons, Raman,
+Born charges --- is refused by name under gamma storage, and the reason is that
+it does not fail: the Sternheimer stack's inner products carry no
+$2\,\mathrm{Re}(\sum) - (G{=}0)$, and silicon's dielectric constant comes out
+$285.4/229.4/228.3$ against an isotropic $190.8$ --- not even cubic on a cubic
+crystal, which is the only tell. The partial dynamical matrix and gamma storage
+therefore do not combine yet. A checkpoint refuses rather than drops a converged
 \emph{magnetic field} (it is not the input field wherever \code{reducebf}
 changed it) and a \emph{Hubbard setup} (without it \code{ns} is an array about
 nothing); \code{stress}, \code{solver} and \code{history} are deliberately not
