@@ -122,7 +122,8 @@ from jax import lax
 from ._envcompat import environ_get
 
 __all__ = ["DEFAULT_K_BATCH", "resolve_k_batch", "map_k", "sum_k",
-           "DEFAULT_BAND_BATCH", "map_bands", "sum_bands"]
+           "DEFAULT_BAND_BATCH", "resolve_band_batch", "map_bands",
+           "sum_bands"]
 
 
 _UNSET = object()
@@ -357,6 +358,14 @@ def _resolve_band_batch(requested: int | None | str = "default") -> int | None:
         raise ValueError(
             f"band batch must be a positive integer or None, got {requested!r}")
     return value
+
+
+#: The band dial's resolver under a public name, mirroring
+#: :func:`resolve_k_batch`. The two dials are read the same way and one of them
+#: had no public spelling, which meant a caller outside this module -- e.g.
+#: :func:`defumat.sizing.estimate_size`, which has to size the bands in flight
+#: the way a run would resolve them -- had to reach for the private one.
+resolve_band_batch = _resolve_band_batch
 
 
 def sum_bands(fn, xs, *, batch: int | None | str = "default"):

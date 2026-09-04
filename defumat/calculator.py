@@ -317,7 +317,7 @@ class Calculator:
         fit" for an input too large to build.
 
         ``options`` are :func:`~defumat.sizing.estimate_size`'s: ``nbnd``,
-        ``k_batch`` and ``davidson_basis``.
+        ``k_batch``, ``davidson_basis`` and ``band_batch``.
 
         **What is not given is taken from this calculator's own defaults**, not
         from the library's, because the question this answers is "will *this
@@ -334,6 +334,12 @@ class Calculator:
 
         options.setdefault("davidson_basis", self.defaults.get("david"))
         options.setdefault("nbnd", self.defaults.get("nbnd"))
+        # The band dial has no input-file variable, so a caller's value or the
+        # environment's is the whole of it -- but it still has to be resolved
+        # here rather than inside, for the same reason ``k_batch`` is: the
+        # answer describes *this run*.
+        if options.get("band_batch") is None:
+            options["band_batch"] = "default"
         if options.get("k_batch") is None:
             options["k_batch"] = resolve_k_batch(
                 self.defaults.get("k_batch", "default")

@@ -31,6 +31,57 @@ or the autodiff tape of a derivative that has not been asked for; a reverse-mode
 force carries intermediates this cannot see. Read the total as "at least this",
 which is the direction that makes it useful.
 
+**One of those omissions is large enough to decide feasibility on its own, so it
+is estimated separately.** A compiled executable's temporaries are one
+contiguous buffer, and for ``davidson_eigensolver_all`` at a 157-atom slab's
+shapes that buffer is **110 GiB** where this module's Davidson lines add to 69
+GB -- so a run whose floor fits on the card dies asking for a single allocation
+larger than the card. :attr:`SizeEstimate.eigensolver_buffer` reports it and
+:attr:`SizeEstimate.peak_bytes` is the number that decides. The fit is
+
+    2.18 nvecx npwx zc  +  4.20 nbnd npwx zc  +  2.00 band_batch N_smooth zc
+
+-- the subspace ``psi``/``hpsi`` pair, about five more ``(nbnd, npwx)`` blocks
+live inside the Davidson subspace solve, and roughly two FFT boxes per band in
+flight. It comes from compiling the real function over ``nbnd``, ``david`` and
+``DEFUMAT_BAND_BATCH`` on a small cell and reading
+``memory_analysis().temp_size_in_bytes``. It is fitted **through the origin**:
+a constant term improves the fit on the cell it was measured on (1.6 per cent
+against 6.4) and means nothing three orders of magnitude out, which is where it
+is used.
+
+**The coefficients are measured on the CPU backend and were checked against
+fourteen H200 measurements at the slab's own shapes**, over ``david`` in
+{2, 3, 4}, ``nbnd`` in {900, 1020} and ``band_batch`` in {16, 32, 64, 128}. On
+**twelve** of the fourteen the formula was within **3.1 per cent** -- a stronger
+transfer than a CPU fit had any right to, given that the two backends schedule
+buffers differently. The two it missed are both ``david = 2`` with
+``band_batch = 64``, where the card asked for **30 per cent less** than the
+formula said (64.5 GiB against 84.3, and 59.7 against 77.1): the buffer is *not
+monotonic* in the band batch there -- 66.1, 74.9, 64.5 GiB at 16, 32, 64 -- so
+at a small subspace XLA finds a schedule the third term does not describe. It
+errs in the safe direction, and it errs.
+
+**Those GPU points were taken before the second coefficient fell from 6.20 to
+4.20**, which is :func:`~defumat.solvers.davidson.davidson_eigensolver` no
+longer carrying the expansion block across its loop and no longer holding two
+copies of that loop for the robustness retry -- two ``(nbnd, npwx)`` blocks
+exactly, measured as 2.00 by a refit and 11.6 GiB at the slab's shapes. Add
+``2 nbnd npwx zc`` back to compare against them. Where the answer is close to
+the card, **measure it** rather than adding anything back:
+``tools/gpu/davidson_memory.py`` returns the real backend's buffer at any
+(``david``, ``nbnd``, ``band_batch``) without executing anything, and
+``tools/gpu/force_memory.py`` does the same for the reverse-mode force, whose
+tape this module cannot see either.
+``tools/gpu/davidson_memory.py`` measures the real backend's number directly
+(compile only, nothing executed) and is what to run when the answer is close to
+the card; ``tools/gpu/force_memory.py`` does the same for the reverse-mode
+force, whose tape this module cannot see either.
+
+**``band_batch`` is therefore an assumption of the estimate the way ``k_batch``
+and ``davidson_basis`` already were**, and it is reported beside them: it is the
+third term above, worth 22 GiB at 64 and 44 at 128 on that slab.
+
 References for the conventions rather than the code: ``PW/src/setup.f90`` for
 ``nbnd``, ``Modules/recvec_subs.f90`` (``ggen``) for the sphere, and
 ``PW/src/n_plane_waves.f90`` for ``npwx``.
@@ -51,6 +102,28 @@ __all__ = ["SizeEstimate", "estimate_size"]
 #: Bytes in one complex number at the precision a run will use.
 _COMPLEX_BYTES = {"double": 16, "single": 8}
 _REAL_BYTES = {"double": 8, "single": 4}
+
+#: Coefficients of the eigensolver's XLA temp buffer, in units of
+#: ``nvecx npwx zc``, ``nbnd npwx zc`` and ``band_batch N_smooth zc``. Fitted to
+#: ``memory_analysis().temp_size_in_bytes`` of the compiled
+#: :func:`~defumat.solvers.davidson.davidson_eigensolver_all` over ``nbnd`` in
+#: {32, 48, 64, 96}, ``david`` in {2, 3, 4, 6} and ``DEFUMAT_BAND_BATCH`` in
+#: {4, 8, 32} on ``benchmarks/si16-1k-ecut30.in``, **through the origin**;
+#: residuals <= 8 per cent there. See the module docstring for the H200 check
+#: and for what changed under it. Measured on the CPU backend: replace them
+#: with a GPU fit rather than tuning them, and say which backend they came from
+#: when you do.
+#:
+#: The band-batch sweep goes down to **4** rather than starting at 8, and that
+#: is what makes the second coefficient meaningful: what separates the three
+#: terms is the ratio ``nbnd npwx / (band_batch N_smooth)``, which is 0.5 on
+#: the 157-atom slab and 0.06 at ``si16`` with ``band_batch = 32``. Fitted only
+#: in the batch-dominated corner, the ``nbnd`` term is barely identified at all
+#: -- and a change worth two whole blocks reads as 1 per cent there and as 10
+#: per cent at the ratio a production run actually has.
+_SUBSPACE_COEFFICIENT = 2.18
+_RITZ_COEFFICIENT = 4.20
+_FFT_COEFFICIENT = 2.00
 
 #: Miller-index slabs are counted this many rows at a time. The intermediate is
 #: ``rows * n2 * n3`` triples, so this bounds the host peak at tens of MB for
@@ -156,12 +229,40 @@ class SizeEstimate:
     #: able to see which one moved.
     davidson_basis: int
     k_batch: int | None
+    #: Bands in flight inside ``h_psi`` -- :mod:`defumat.batching`'s other
+    #: dial, and an assumption of the estimate for the same reason the two
+    #: above it are: it sizes the third term of the eigensolver's buffer and
+    #: appears nowhere else.
+    band_batch: int | None
     #: ``name -> bytes`` for each array whose size the basis fixes.
     arrays: dict = field(default_factory=dict)
+    #: The compiled eigensolver's single contiguous XLA temp buffer, estimated
+    #: from the fit in the module docstring. It is **not** a member of
+    #: ``arrays``: it supersedes the two Davidson entries there rather than
+    #: adding to them, which is what :attr:`peak_bytes` does with it.
+    eigensolver_buffer: int = 0
+
+    #: The ``arrays`` entries the eigensolver's buffer stands in for.
+    _SUPERSEDED = ("Davidson subspace psi+hpsi", "Davidson Ritz block")
 
     @property
     def total_bytes(self) -> int:
         return int(sum(self.arrays.values()))
+
+    @property
+    def peak_bytes(self) -> int:
+        """The number that decides whether the run starts.
+
+        The persistent arrays, with the two Davidson lines replaced by the one
+        buffer XLA actually asks the allocator for. Those two are a floor on
+        what the subspace *contains*; the buffer is what a single allocation
+        has to be, and on a large cell it is the larger by about 60 per cent.
+        """
+        resident = sum(
+            size for name, size in self.arrays.items()
+            if name not in self._SUPERSEDED
+        )
+        return int(resident + self.eigensolver_buffer)
 
     @property
     def dense_points(self) -> int:
@@ -196,7 +297,9 @@ class SizeEstimate:
             "",
             f"Memory floor ({self.precision} precision, "
             f"diago_david_ndim = {self.davidson_basis}, "
-            f"k in flight = {self.k_batch if self.k_batch is not None else 'all'})",
+            f"k in flight = {self.k_batch if self.k_batch is not None else 'all'}, "
+            f"bands in flight = "
+            f"{self.band_batch if self.band_batch is not None else 'all'})",
         ]
         if self.gamma_requested and not self.gamma_only:
             lines[1:1] = [
@@ -215,6 +318,18 @@ class SizeEstimate:
         for name, size in sorted(self.arrays.items(), key=lambda kv: -kv[1]):
             lines.append(f"  {name:<34s}{gb(size)}")
         lines.append(f"  {'TOTAL (floor, see module docstring)':<34s}{gb(self.total_bytes)}")
+        lines += [
+            "",
+            "What the allocator is actually asked for",
+            f"  {'eigensolver XLA temp buffer':<34s}{gb(self.eigensolver_buffer)}",
+            "        one contiguous allocation, and it stands in for the two",
+            "        Davidson lines above rather than adding to them. Estimated",
+            "        from a fit measured on the CPU backend and checked on an",
+            "        H200: within 3.1% on 12 of 14 points, 30% HIGH on the two",
+            "        at david 2 / band_batch 64. Close to the card? Measure it",
+            "        with tools/gpu/davidson_memory.py.",
+            f"  {'PEAK (resident + that buffer)':<34s}{gb(self.peak_bytes)}",
+        ]
         return "\n".join(lines)
 
 
@@ -224,6 +339,7 @@ def estimate_size(
     nbnd: int | None = None,
     k_batch: int | None = None,
     davidson_basis: int | None = None,
+    band_batch: int | None | str = "default",
 ) -> SizeEstimate:
     """Size a run from its input alone, allocating nothing on the device.
 
@@ -253,6 +369,11 @@ def estimate_size(
             module was written for -- the same mistake as sizing
             ``K_POINTS gamma`` as the request rather than the substitution, one
             option along.
+        band_batch: how many bands ``h_psi`` transforms at once --
+            :mod:`defumat.batching`'s other dial, and the third term of the
+            eigensolver's buffer. ``"default"`` resolves it the way a run
+            would, from ``DEFUMAT_BAND_BATCH`` and the platform; ``None`` means
+            every band at once, which is what an accelerator defaults to.
 
     Returns:
         a :class:`SizeEstimate`. Its counts are exact; its bytes are a floor.
@@ -336,6 +457,10 @@ def estimate_size(
 
     if davidson_basis is None:
         davidson_basis = DAVID_NDIM
+    if isinstance(band_batch, str):
+        from defumat.batching import resolve_band_batch
+
+        band_batch = resolve_band_batch(band_batch)
     name = getattr(cell.precision, "name", "double")
     zc, zr = _COMPLEX_BYTES.get(name, 16), _REAL_BYTES.get(name, 8)
     nk = len(npw)
@@ -387,6 +512,16 @@ def estimate_size(
             6 * nspin_mag * int(np.prod(dense_grid)) * zr
         )
 
+    # The eigensolver's own XLA temp buffer -- see the module docstring. The
+    # FFT term is on the **smooth** grid, which is the box ``h_psi`` transforms
+    # a band in; ``band_batch = None`` is every band at once.
+    bands_in_flight = nbnd if band_batch is None else min(band_batch, nbnd)
+    eigensolver_buffer = int(
+        _SUBSPACE_COEFFICIENT * nvecx * ndim * zc
+        + _RITZ_COEFFICIENT * nbnd * ndim * zc
+        + _FFT_COEFFICIENT * bands_in_flight * int(np.prod(smooth_grid)) * zc
+    )
+
     return SizeEstimate(
         nat=len(structure.types), nsp=len(pseudos), nelec=nelec, nbnd=int(nbnd),
         nspin=nspin, npol=npol, nspin_mag=nspin_mag, nk=nk,
@@ -396,5 +531,6 @@ def estimate_size(
         gamma_requested=gamma_requested, gamma_only=gamma_only,
         doublegrid=doublegrid, precision=name,
         davidson_basis=int(davidson_basis), k_batch=k_live,
-        arrays=arrays,
+        band_batch=None if band_batch is None else int(band_batch),
+        arrays=arrays, eigensolver_buffer=eigensolver_buffer,
     )
