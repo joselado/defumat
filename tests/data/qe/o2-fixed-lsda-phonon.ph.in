@@ -1,0 +1,26 @@
+! The `ph.x` input that generated `reference.out.ph-o2-fixed-lsda-phonon`.
+!
+!   pw.x -in o2-fixed-lsda.in && ph.x -in o2-fixed-lsda-phonon.ph.in
+!
+! `o2-fixed-lsda.ph.in`'s twin with `trans = .true.`: the Gamma dynamical
+! matrix of a spin-polarized system, which is the quantity
+! `defumat.response.phonon` refuses for nspin = 2. `ph.x` allows it -- there is
+! no LSDA refusal anywhere in `phq_readin.f90` or `phq_setup.f90`; what those
+! refuse is noncollinear magnetism (`:546`, `:777`, `:807`), `i_cons` (`:850`),
+! two Fermi levels with a metal (`:854`) and `lraman`/`elop` with an ultrasoft
+! or PAW dataset (`:811`, `:814`, `:817`).
+!
+! The cell is the same triplet O2: fixed occupations at tot_magnetization = 2,
+! so it stays magnetic exactly rather than demagnetizing the way the
+! antiferromagnetic hydrogen chain does, and it is an ultrasoft insulator, so
+! it exercises the two terms P39 added (becsumort and the multiplier matrix)
+! in the spin-polarized regime as well.
+Gamma dynamical matrix of triplet O2, LSDA
+ &inputph
+  tr2_ph = 1.0d-14,
+  epsil = .true.,
+  trans = .true.,
+  fildyn = 'o2-phonon.dyn',
+  amass(1) = 15.99994,
+ /
+0.0 0.0 0.0

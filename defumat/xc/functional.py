@@ -96,6 +96,29 @@ _RHO_TRASH = 0.5
 _SIGMA_TRASH = 0.2
 
 
+def _fully_polarized(rho):
+    """``dmxc_lsda``'s gate on the KERNEL, which is not the gate on the potential.
+
+    ``|zeta| >= 1`` is exactly ``|rho_up - rho_dw| >= |rho_up + rho_dw|``, which is
+    where a channel density reaches zero and ``rho_sigma^(4/3)``'s *second*
+    derivative is infinite. QE does not regularise that point, it **defines the
+    kernel to be zero there**, on both of ``dmxc_lsda``'s branches: the analytic
+    one pre-zeroes the whole 2x2 ``dmuxc`` block and then ``CYCLE``s past
+    ``|zeta| >= 1`` (``XClib/qe_drivers_d_lda_lsda.f90:234-237, :255, :257``), and
+    the numerical one reaches the same zero by clamping ``zeta`` to ``1 - 2e-6``
+    and setting ``rhotot = dr = 0`` (``:341, :344-346``).
+
+    Written on the **absolute** total rather than on QE's signed ``rhotot > small``
+    deliberately: ``_spin_channels`` already zeroes the potential below
+    ``RHO_THRESHOLD``, so its tangent is zero there anyway, and the signed form
+    would additionally mask points of small negative total density where nothing
+    is singular -- which would put the validated ``nspin = 1`` / ``nspin = 2``
+    identity at risk for no physical reason.
+    """
+    rho = jnp.asarray(rho)
+    return jnp.abs(rho[0] - rho[1]) >= jnp.abs(rho[0] + rho[1])
+
+
 def _revpbe_exchange(rho, sigma):
     """``REVX``: PBE exchange with Zhang and Yang's larger ``kappa``."""
     return pbe_exchange(rho, sigma, REVPBE_KAPPA, PBE_MU)
@@ -436,8 +459,30 @@ class Functional(eqx.Module):
         signed total is only used afterwards, as the prefactor of ``etxc``. That
         split is reproduced here, so what this returns is a function of the
         sanitised pair alone and the caller supplies the sign.
+
+        **The value and the first derivative are exactly the expression below;
+        only the second derivative is masked**, and it has to be, because this
+        is the *other* route to ``dmxc_lsda``. ``scf.potential`` builds ``etxc``
+        from this, ``forces.energy`` takes ``etxc`` into the total energy, and
+        ``response.born`` / ``response.phonon`` differentiate that gradient once
+        more -- so a Born charge reaches ``d^2 e_xc/d rho^2`` without ever
+        touching ``dv_of_drho``. Measured on triplet O2 with the kernel already
+        masked and this one not: every entry of ``Z*`` came back ``NaN``.
+
+        The first derivative is finite at a fully polarized point and is taken
+        there, so a *force* is unchanged to the last digit; the identity
+        ``d e/d n_sigma = (v_sigma - e)/n`` is **not** used to write it, because
+        :meth:`spin_potential` evaluates at the signed total and an unclipped
+        polarization where this evaluates at ``|n|`` and a clipped ``zeta`` --
+        the two disagree at exactly the saturated points, and substituting one
+        for the other moves the validated LSDA force by 6.1e-5 Ry/bohr.
         """
-        return self._spin_energy_density(*_spin_channels(rho)[1:3])
+        def raw(pair):
+            return self._spin_energy_density(*_spin_channels(pair)[1:3])
+
+        saturated = _fully_polarized(rho)
+        regular = jnp.where(saturated[None], _RHO_TRASH, rho)
+        return jnp.where(saturated, raw(jax.lax.stop_gradient(rho)), raw(regular))
 
     def spin_potential(self, rho: jnp.ndarray) -> jnp.ndarray:
         """``(v_up, v_dw)``: ``d(rho e_xc)/d rho_sigma``, Ry, by differentiation.
@@ -456,7 +501,20 @@ class Functional(eqx.Module):
             polarization = (pair[0] - pair[1]) / jnp.maximum(density, RHO_THRESHOLD)
             return jnp.sum(density * self._spin_energy_density(density, polarization))
 
-        return jnp.where(active, jax.grad(total)(channels), 0.0)
+        # The *value* is finite at a fully polarized point and is taken there;
+        # only the derivative is not, and ``dmxc_lsda`` defines it to be zero.
+        # Both halves are read off a branch whose argument carries no tangent,
+        # so nothing multiplies an infinity by a zero -- which is the trap the
+        # obvious repair falls into. Clipping the density to ``1 - eps`` masks
+        # the *value* and leaves the primal singular, so the tangent stays
+        # ``0 * inf = NaN``; masking the *argument* is what works, and at a
+        # regular point ``regular is channels`` so value and every derivative
+        # are bit-identical to the unmasked expression.
+        saturated = _fully_polarized(rho)[None]
+        regular = jnp.where(saturated, _RHO_TRASH, channels)
+        finite_value = jax.grad(total)(jax.lax.stop_gradient(channels))
+        potential = jnp.where(saturated, finite_value, jax.grad(total)(regular))
+        return jnp.where(active, potential, 0.0)
 
     def spin_potential_and_energy_density(self, rho: jnp.ndarray):
         """``(v_xc, e_xc)`` for the polarized case, from one pass.
@@ -464,17 +522,14 @@ class Functional(eqx.Module):
         The unpolarized :meth:`potential_and_energy_density`'s reasoning, with
         the pair of channels in place of the single density.
         """
-        active, arho, zeta = _spin_channels(rho)
-        channels = jnp.stack([0.5 * arho * (1.0 + zeta), 0.5 * arho * (1.0 - zeta)])
-
-        def total(pair):
-            density = pair[0] + pair[1]
-            polarization = (pair[0] - pair[1]) / jnp.maximum(density, RHO_THRESHOLD)
-            energy_density = self._spin_energy_density(density, polarization)
-            return jnp.sum(density * energy_density), energy_density
-
-        (_, energy_density), potential = jax.value_and_grad(total, has_aux=True)(channels)
-        return jnp.where(active, potential, 0.0), energy_density
+        # Two calls rather than one ``value_and_grad(has_aux=True)``, because the
+        # potential's derivative is masked at a fully polarized point and the
+        # energy density's is not -- the *first* derivative of ``e_xc`` is finite
+        # there and is what a force reads. The value returned is unchanged: the
+        # aux this used to carry was ``_spin_energy_density`` at the same
+        # sanitised pair :meth:`spin_energy_density` evaluates, and the extra
+        # evaluation is pointwise with no transform in it.
+        return self.spin_potential(rho), self.spin_energy_density(rho)
 
     def _spin_energy_density(self, arho, zeta):
         """``e_x + e_c`` per electron at a positive density and its polarization.

@@ -356,39 +356,106 @@ def test_the_polarized_dielectric_constant_reduces_to_the_unpolarized_one():
 
 
 @pytest.mark.slow
-def test_a_magnetic_insulator_is_refused_by_the_kernel_and_not_by_the_solve():
-    """The one thing that stops a magnetic insulator's ``epsilon_infinity`` here.
+def test_a_magnetic_insulators_dielectric_constant_matches_ph_x():
+    """``epsilon_infinity`` of a magnetic insulator, against the vendored ``ph.x``.
 
-    ``chi_0`` is right for this cell -- the test above measures it against a
-    finite difference at 1.1e-6 -- and the *screened* response is not
-    computable, for a reason that is neither the occupied count nor anything in
-    :mod:`defumat.response`. ``dv_of_drho`` is one ``jvp`` of ``v_of_rho``, so
-    for ``nspin = 2`` it is the **second** derivative of the LSDA
-    exchange-correlation energy in the two channel densities, and that diverges
-    wherever a channel density reaches zero -- which a plane-wave magnetization
-    does in vacuum. Measured: **1504 of 91125 grid points** of this cell have
-    ``|m| >= |n|``, and ``dv_of_drho`` has exactly **1504 NaN**.
+    **This case used to be a refusal and the refusal was reasoning about the
+    wrong code.** ``dv_of_drho`` is one ``jvp`` of ``v_of_rho``, so for
+    ``nspin = 2`` it is the second derivative of the LSDA exchange-correlation
+    energy in the two channel densities -- and that is infinite wherever a
+    channel density reaches zero, which a plane-wave magnetization does in
+    vacuum. Measured on this cell: **1504 of 91125 grid points** have
+    ``|m| >= |n|``, and ``dv_of_drho`` had exactly 1504 ``NaN``. What was
+    concluded from that was that ``defumat.xc``'s spin branch had to be made
+    twice differentiable at a fully polarized point.
 
-    Refused with the term named rather than run: a NaN ``|ddv_scf|^2`` never
-    satisfies ``change < tr2``, so without this the loop spends its whole budget
-    and reports ``converged = False`` on a tensor that is not a number.
+    It does not: **QE does not compute a kernel there either.** ``dmxc_lsda``
+    *defines* it to be zero, on both of its branches -- the analytic one
+    pre-zeroes the whole ``dmuxc`` block and ``CYCLE``s past ``|zeta| >= 1``
+    (``XClib/qe_drivers_d_lda_lsda.f90:234-237, :255, :257``), the numerical one
+    clamps ``zeta`` to ``1 - 2e-6`` and sets ``rhotot = dr = 0``
+    (``:341, :344-346``). So the missing piece was a convention, not an
+    analysis.
 
-    **The reference for the day it is fixed is committed beside the input**:
-    ``reference.out.ph-o2-fixed-lsda``, generated with the vendored ``ph.x``,
-    which computes this quantity happily -- ``phq_readin.f90:546`` refuses an
-    electric field only for *noncollinear* magnetism and ``:957`` only for a
-    smeared or tetrahedron metal, so LSDA is allowed. It gives
-    diag(1.110916, 1.110916, 1.198005).
+    **Why the recorded attempts failed is worth keeping**: clipping the density
+    to ``1 - eps`` at 1e-12, 1e-10 and 1e-8 left all 1504 points ``NaN``,
+    because that masks the *value* and leaves the primal singular -- the tangent
+    is still ``0 * inf``. Masking the **argument** the derivative is taken at is
+    what works, and at a regular point the masked and unmasked expressions are
+    bit-identical, so nothing already validated moves.
+
+    ``ph.x`` computes this happily -- ``phq_readin.f90:546`` refuses an electric
+    field only for *noncollinear* magnetism and ``:957`` only for a smeared or
+    tetrahedron metal -- and ``reference.out.ph-o2-fixed-lsda`` is its output.
     """
     from defumat.response.efield import dielectric_tensor
 
     _, _, calculation, result = _oxygen_molecule()
-    with pytest.raises(NotImplementedError, match="dv_of_drho"):
-        dielectric_tensor(
-            calculation, result.wavefunctions, result.eigenvalues,
-            result.density, result.becsum, born_charges=False,
-            max_iterations=2,
-        )
+    response = dielectric_tensor(
+        calculation, result.wavefunctions, result.eigenvalues,
+        result.density, result.becsum, born_charges=False, max_iterations=40,
+    )
+    assert response.converged
+    epsilon = np.asarray(response.epsilon)
+    # ``reference.out.ph-o2-fixed-lsda``, the "Dielectric constant in cartesian
+    # axis" block. The molecule lies along z, so xx = yy and zz is the odd one.
+    assert np.allclose(np.diag(epsilon), [1.110915996, 1.110915996, 1.198004867],
+                       atol=2e-5)
+    off = epsilon - np.diag(np.diag(epsilon))
+    assert np.abs(off).max() < 1e-10
+
+
+@pytest.mark.slow
+def test_the_lsda_born_charges_match_ph_x():
+    """``Z*`` for ``nspin = 2``, against ``reference.out.ph-o2-fixed-lsda``.
+
+    **The bug this closes could not be seen by anything already validated, and
+    that is the point of the case.** The solver keeps ``max(occupied_counts)``
+    bands in every channel because the shape has to be static, so triplet O2's
+    counts of ``(7, 5)`` leave the down channel carrying its two empty pi*_g
+    bands. In ``_multiplier_response`` the weight was applied to the *column* of
+    ``dLambda_mn`` and nothing to the *row*, so those two bands entered as rows
+    with their full interband position matrix element -- ``P_c`` does not remove
+    a state that is conduction in its own channel -- and were contracted against
+    ``<psi_n|dS/du|pi*>``.
+
+    Three things had to be true at once for it to survive: the term it feeds is
+    ``dS/du``, which is **zero for a norm-conserving dataset**; the mask is all
+    ones wherever the two channels are occupied to the **same depth**, which is
+    every ``nspin = 1`` run and every LSDA run at ``tot_magnetization = 0``; and
+    a **metal** never reaches here at all. QE cannot write the bug down --
+    ``zstar_eu_us.f90:224-231`` runs both band loops over ``nbnd_occ(ikk)``, the
+    spin-resolved k-point's own count.
+
+    Worth 0.0918 on ``Z*_xx`` of an answer of 0.1337, and 0.0100 on ``zz`` of
+    0.2004. The transverse component was out by a factor of three and ``zz`` by
+    5 per cent, for a reason the numbers show: the genuine ``x`` occupied block
+    holds only the augmentation dipole and a weakly screened ``dV_scf``
+    (``eps_xx = 1.11``), so the leak dominated it, where along the molecular
+    axis the genuine block is eight times larger.
+
+    Compared against the **raw** block -- QE prints ``Z*`` both with and without
+    the acoustic sum rule, and the ASR-applied one is ~0 by construction on a
+    homonuclear molecule and would agree with anything.
+    """
+    from defumat.response.efield import dielectric_tensor
+
+    _, _, calculation, result = _oxygen_molecule()
+    response = dielectric_tensor(
+        calculation, result.wavefunctions, result.eigenvalues,
+        result.density, result.becsum, born_charges=True, max_iterations=40,
+    )
+    charges = np.asarray(response.born_charges)
+    # "Effective charges (d Force / dE) in cartesian axis without acoustic sum
+    # rule applied (asr)", reference.out.ph-o2-fixed-lsda:181-192.
+    reference = np.array([
+        [[0.13367, 0.0, 0.0], [0.0, 0.13367, 0.0], [0.0, 0.0, 0.20023]],
+        [[0.13366, 0.0, 0.0], [0.0, 0.13366, 0.0], [0.0, 0.0, 0.20025]],
+    ])
+    assert np.abs(charges - reference).max() < 5e-4
+    # The molecule is homonuclear, so the two atoms carry the same charge and
+    # ph.x's own spread between them (1-2e-5) is the floor this can be held to.
+    assert np.abs(charges[0] - charges[1]).max() < 5e-5
 
 
 # -- what is still refused, and why -------------------------------------------
@@ -469,26 +536,6 @@ def test_an_unflagged_quantity_still_refuses_nspin_two():
     calculation = _calculation("h-chain-afm")
     with pytest.raises(NotImplementedError, match="not implemented for nspin = 2"):
         require_a_sternheimer_regime(calculation, metals=True)
-
-
-def test_born_charges_are_refused_for_a_spin_polarized_run():
-    """The dielectric constant is a spin sum; ``Z*`` is not, and is not checked.
-
-    ``dF/dE`` goes through the force functional's ``becsum``, whose spin axis
-    :mod:`defumat.response.born` has never been run with, and there is no
-    committed LSDA ``Z*`` from ``ph.x`` here that would have caught it. Refused
-    by name rather than reported, with ``born_charges=False`` naming the way to
-    the quantity that is validated.
-    """
-    from defumat.response.efield import dielectric_tensor
-
-    calculation = _calculation("si-epsilon", nspin=2, tot_magnetization=0.0,
-                               starting_magnetization={(1,): 0.0})
-    with pytest.raises(NotImplementedError, match="Born effective charges"):
-        dielectric_tensor(
-            calculation, None, np.zeros((2, 10, 4)), None, (),
-            born_charges=True,
-        )
 
 
 def test_a_potential_only_functional_is_refused_by_name():

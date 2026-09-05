@@ -18,14 +18,20 @@ dielectric constant of triplet O2, LSDA
  /
 0.0 0.0 0.0
 !
-! It gives diag(1.110915996, 1.110915996, 1.198004867). defumat cannot yet
-! reproduce it, and the reason is neither the occupied count nor anything in
-! `defumat/response/`: `dv_of_drho` is one `jvp` of `v_of_rho`, so for
-! nspin = 2 it is the *second* derivative of the LSDA exchange-correlation
-! energy in the two channel densities, and that diverges wherever a channel
-! density reaches zero -- which a plane-wave magnetization does in vacuum.
-! 1504 of this cell's 91125 grid points have |m| >= |n|, and `dv_of_drho` has
-! exactly 1504 NaN. `chi_0` on the same cell is validated against a central
-! difference of the density to 1.1e-6. The reference is committed now so that
-! it is there the day the kernel is made twice differentiable at a fully
-! polarized point.
+! It gives diag(1.110915996, 1.110915996, 1.198004867), and defumat reproduces
+! it to 5.1e-6 as of P70 -- diag(1.11091441, 1.11091441, 1.19799977), in 13
+! iterations. The obstacle was not what an earlier version of this comment said
+! it was. `dv_of_drho` is one `jvp` of `v_of_rho`, so for nspin = 2 it is the
+! second derivative of the LSDA exchange-correlation energy in the two channel
+! densities, and 1504 of this cell's 91125 grid points have |m| >= |n|, where
+! that second derivative is infinite -- so it came back with exactly 1504 NaN.
+! What was concluded was that defumat.xc's spin branch had to be made twice
+! differentiable there. It does not: `dmxc_lsda` does not compute a kernel at
+! those points either, it *defines* it to be zero and CYCLEs past them. The
+! missing piece was that convention, applied to the argument the derivative is
+! taken at rather than to its value -- which is why clipping the density to
+! 1 - eps had left all 1504 points NaN.
+!
+! `chi_0` on the same cell is validated separately against a central difference
+! of the density to 1.1e-6. Its twin `o2-fixed-lsda-phonon.ph.in` is the same
+! run with `trans = .true.`, for the dynamical matrix.

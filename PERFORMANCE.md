@@ -3732,6 +3732,43 @@ a test fixture rather than a route: it forms an `(nh, n1, n2, n3)` phase array,
 which is `nh` times the density, and it exists because it shares no index
 arithmetic with the transform.
 
+## What a magnetic insulator's screened response costs (P70)
+
+Triplet O2 in a 10-bohr box (`tests/data/qe/o2-fixed-lsda.in`): ultrasoft
+`O.pz-rrkjus.UPF`, `nspin = 2`, `occupations = 'fixed'`, `tot_magnetization = 2`,
+Gamma only, 45^3 dense grid, 9 bands. One core each (`OMP_NUM_THREADS=1`), same
+machine, both codes starting from nothing.
+
+### Against `ph.x`, which is where this one was taken from
+
+| stage | `pw.x` / `ph.x` | defumat | ratio |
+|---|---|---|---|
+| ground state | 1.76 s | 4.25 s | **2.4x** |
+| `epsilon_infinity` **and** `Z*` | 3.35 s | 38.46 s | **11.5x** |
+| both | 5.11 s | 42.72 s | 8.4x |
+
+The ground-state ratio is the 2-4x this project already records for an SCF, so
+nothing about a magnetic insulator changes that. **The response leg is the
+outlier and the reason is the spin axis rather than the physics**: the
+Sternheimer solve runs once per occupied band per field direction per *channel*,
+and this cell's channels hold 7 and 5, where `ph.x` gets the same work from
+doubling `nks` and pays for it inside its own k-loop. It is not a fair 11.5x
+either -- `ph.x` reads a converged ground state off disk, so the two columns of
+the middle row start from the same place, but defumat's column includes building
+the augmentation tables that `pw.x`'s column already paid for on the QE side.
+The honest number is the "both" row.
+
+The dynamical matrix is **not** timed here, because it is refused for
+`nspin = 2` (`PLAN.md` P70) -- what `ph.x` costs for it on the same cell, for
+when that lands, is 11.3 s with `trans = .true.` and `epsil = .true.` together.
+
+### The working set
+
+4.4 GB peak for the dynamical matrix with the guards bypassed, 3.4 GB for
+`epsilon` with `Z*`, 2.5 GB for `epsilon` alone. The driver is the backward pass
+carrying `Q_ij(G)` (`nh^2 x ngm` per atom, `nh = 8` for this dataset) against a
+91125-point dense grid.
+
 ## History
 
 | Date | Change | Effect |

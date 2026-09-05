@@ -371,6 +371,15 @@ def dynamical_matrix(
     #    and the mixed state's own change at frozen states (``drho.f90``).
     derivatives = overlap_derivatives(calculation, solver, positions, chosen)
     ort = orthogonality_states(calculation, solver, positions, chosen)
+    # **The occupied block is a tangent of the *stored* states and has to be as
+    # wide as they are.** ``solver.psi`` is truncated to ``max(occupied_counts)``
+    # -- 7 for triplet O2, whose channels hold 7 and 5 -- while
+    # ``wavefunctions`` carries all ``nbnd`` of them, and a ``jvp`` wants the two
+    # the same shape. Every cell this module was validated on had
+    # ``nbnd == nocc``, so the pad is a no-op there and the mismatch only
+    # appears once a run asks for empty bands or fills its two channels to
+    # different depths.
+    ort = _pad_to_bands(ort, jnp.asarray(wavefunctions).shape[2])
     (rho_moved, bec_moved), (rho_ort, bec_ort) = non_variational_response(
         calculation, positions, jnp.asarray(wavefunctions), weights,
         jnp.asarray(density), becsum, ort, chosen,
@@ -870,6 +879,30 @@ def overlap_derivatives(calculation, solver, positions, atoms=None) -> np.ndarra
             tangent = jnp.zeros_like(positions).at[atom, cart].set(1.0)
             out[row, cart] = jax.jvp(overlap_matrix, (positions,), (tangent,))[1]
     return out
+
+
+
+def _pad_to_bands(blocks, nbnd):
+    """Widen each ``(nspin, nk, nocc, npwx)`` tangent to ``nbnd`` with zeros.
+
+    ``blocks`` is the object array :func:`orthogonality_states` returns, indexed
+    ``[row, cart]``. ``None`` passes through, which is the norm-conserving case.
+    """
+    if blocks is None:
+        return None
+    padded = np.empty(blocks.shape, dtype=object)
+    for index, block in np.ndenumerate(blocks):
+        if block is None:
+            padded[index] = None
+            continue
+        block = jnp.asarray(block)
+        if block.shape[2] == nbnd:
+            padded[index] = block
+            continue
+        padded[index] = jnp.zeros(
+            block.shape[:2] + (nbnd,) + block.shape[3:], dtype=block.dtype
+        ).at[:, :, :block.shape[2]].set(block)
+    return padded
 
 
 def non_variational_response(calculation, positions, psi, weights, density,
@@ -1491,14 +1524,63 @@ def _require_one_spin_channel(calculation) -> None:
       almost no transverse restoring force. Running the control is what stopped
       that number being read as evidence against the assembly.
 
-    **The refusal stays anyway, and this is why.** That chain converges to
-    ``M = -3.4e-08`` -- it demagnetises, exactly as P63's spirals do -- so no
-    measurement here has a genuinely magnetic ground state in it, and a
-    two-channel assembly whose two channels are equal is not a test of a spin
-    axis at all. What would lift it is one cell that *stays* magnetic checked
-    against a finite difference of its forces, and a generated ``ph.x`` LSDA
-    reference beside it; the vendored ``ph.x`` has LSDA phonons, so the second
-    is available for the asking.
+    **The refusal stays, and it is measured against ``ph.x`` now rather than
+    argued.** The paragraph this replaces asked for "one cell that *stays*
+    magnetic checked against a generated ``ph.x`` LSDA reference"; that cell is
+    triplet O2 (``tests/data/qe/o2-fixed-lsda.in``, fixed occupations at
+    ``tot_magnetization = 2``, so it does not demagnetise the way the hydrogen
+    chain does), the reference is
+    ``tests/data/qe/reference.out.ph-o2-fixed-lsda-phonon`` with its ``.dyn``
+    file beside it, and the answer is that **the assembly is wrong in the block
+    a rigid translation reaches and right in the one it does not**:
+
+    ===========================  ============  ============  ==========
+    ..                           here          ``ph.x``      error
+    ===========================  ============  ============  ==========
+    ``D_zz(1,1)``                 1.67717946    1.67938263    -0.00220
+    ``D_zz(1,2)``                -1.67864588   -1.67643488    -0.00221
+    **the stretch** (difference)  3.35582534    3.35581751    **+7.8e-6**
+    the acoustic sum             -0.00147       0.00295       -0.0044
+    ``D_xx(1,1)``                -0.12879253   -0.01018884    -0.1186
+    ``D_xx(1,2)``                -0.00833895    0.01889432    -0.0272
+    ===========================  ============  ============  ==========
+
+    The O-O stretch is **1664.3992 cm^-1 against 1664.401578**, 1.4e-6 relative,
+    so the part of the assembly in which the two atoms move against each other
+    is right. The ``zz`` row says where the rest goes wrong with unusual
+    precision: **both of its entries are shifted by the same -0.0022**, which
+    cancels in the difference and doubles in the sum. Transverse it is thirty
+    times larger and is *not* a common shift.
+
+    **Do not use the acoustic sum rule as the arbiter on this cell.** ``ph.x``
+    violates its own by +0.0087 in ``xx`` and +0.0029 in ``zz`` -- a 10-bohr box
+    at ``ecutwfc = 25`` has almost no restoring force against translating the
+    molecule, which is why its translational modes print at -155 cm^-1. Only the
+    element-by-element comparison against the committed ``.dyn`` decides.
+
+    **Two candidates are eliminated by measurement, which is the useful part.**
+
+    * **Not the density threshold.** ``dmxc_lsda`` cuts at ``small = 1e-30``
+      (``qe_drivers_d_lda_lsda.f90:218``) where the kernel here is the derivative
+      of a potential ``_spin_channels`` zeroes below ``RHO_THRESHOLD = 1e-10``,
+      which is a twenty-order-of-magnitude asymmetry living entirely in vacuum --
+      exactly where the acoustic block lives and the bond does not. It is not the
+      cause: **zero** of this cell's 91125 grid points are below 1e-10, and the
+      whole matrix is bit-identical with the threshold moved to 1e-30.
+    * **Not ``nbnd > nocc``.** This is the first phonon cell here whose stored
+      states outnumber its occupied ones, and it exposed a real shape bug in
+      ``ort`` (see :func:`_pad_to_bands`) that no other cell could reach -- so the
+      obvious reading is that the remaining error is the same regime rather than
+      the spin axis. It is not: ultrasoft silicon with two empty bands gives
+      **513.294847 cm^-1 against 513.294706** at ``nbnd = nocc``, a difference of
+      1.4e-4 and below its own convergence noise.
+
+    So what is left is what this refusal has always named: the second-derivative
+    assembly's **spin axis**. The next thing to do is a per-term decomposition
+    against a finite difference of the LSDA forces, which are themselves
+    ``pw.x``-validated on a magnetic O2 (``tests/data/qe/o2-lsda-force.in``) --
+    P43's method, which localised the Raman tensor's two missing tangents by
+    measuring each partial separately instead of guessing among them.
     """
     if calculation.nspin == 2:
         raise NotImplementedError(

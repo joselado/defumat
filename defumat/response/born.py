@@ -444,7 +444,30 @@ def _multiplier_response(solver, perturbation, weights, nbnd, nocc):
         blocks.append(map_k(
             one_k, jnp.arange(occupied.shape[1]), batch=solver.calculation.k_batch
         ))
-    matrix = jnp.stack(blocks) * weights[:, :, None, :nocc]
+    # **The weight masks the column and the row needs a mask of its own**, and
+    # for ``nspin = 2`` those are not the same cut. The solver keeps
+    # ``max(occupied_counts)`` bands in *every* channel, because the shape has to
+    # be static -- so on triplet O2, where the counts are (7, 5), the down
+    # channel's block carries the two empty pi*_g bands as *rows*. Their weight
+    # is zero, which kills their columns and not them, and
+    # ``dLambda_pn = w_n <pi*| S P_c r + dV_scf |psi_n>`` for such a row is the
+    # full interband position matrix element -- ``P_c`` does not remove a state
+    # that is conduction in its own channel. ``_constraint_energy`` then
+    # contracts it with ``<psi_n|dS/du|pi*>``.
+    #
+    # QE cannot write this down: ``zstar_eu_us.f90:224-231`` runs *both* band
+    # loops over ``nbnd_occ(ikk)``, the spin-resolved k-point's own count, so the
+    # block outside occupied x occupied does not exist there. Worth 0.0918 on
+    # ``Z*_xx`` of an answer of 0.1337 and 0.0100 on ``zz`` of 0.2004, and
+    # **nothing that was already validated can see it**: the term it feeds is
+    # ``dS/du``, which is zero for a norm-conserving dataset, and the mask is all
+    # ones wherever the two channels are occupied to the same depth --
+    # ``nspin = 1``, and LSDA at ``tot_magnetization = 0``.
+    matrix = (
+        jnp.stack(blocks)
+        * weights[:, :, None, :nocc]
+        * solver.projector_mask[:, :, :nocc, None]
+    )
     shape = (occupied.shape[0], occupied.shape[1], nbnd, nbnd)
     return jnp.zeros(shape, dtype=matrix.dtype).at[:, :, :nocc, :nocc].set(matrix)
 

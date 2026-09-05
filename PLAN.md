@@ -10707,6 +10707,118 @@ figure needed no workaround.
 atomic manifold at all (`projwfc.x` gives 0.000 for two of them). The unit test that
 checks the rule sets the projections to one for exactly that reason.
 
+### P70 — The screened response and the Born charges of a magnetic insulator. ✅ DONE.
+
+**Two refusals, one cell, and neither of them needed a derivation.** `nspin = 2` had a
+validated `chi_0` (P45) and nothing above it: the *screened* response stopped on a
+non-finite kernel and `Z*` was refused by name. Both are `ph.x` numbers now, on triplet O2
+(`tests/data/qe/o2-fixed-lsda.in`, ultrasoft, `occupations = 'fixed'`,
+`tot_magnetization = 2`), against `reference.out.ph-o2-fixed-lsda`:
+
+| | xx | zz |
+|---|---|---|
+| `eps_inf` here | 1.11091441 | 1.19799977 |
+| `eps_inf` `ph.x` | 1.110915996 | 1.198004867 |
+| `Z*` here (raw, no ASR) | 0.133724 | 0.200416 |
+| `Z*` `ph.x` | 0.13367 | 0.20023 |
+
+**5.1e-6 on the dielectric constant, 5.4e-5 and 1.9e-4 on `Z*`.**
+
+**The kernel was a convention, not an analysis, and the refusal said the opposite.** It said
+the missing piece was "making `defumat.xc`'s spin branch twice differentiable at a fully
+polarized point". QE does not do that: `dmxc_lsda` *defines* the LSDA kernel to be zero at
+`|zeta| >= 1`, on **both** its branches — the analytic one pre-zeroes the whole 2x2 `dmuxc`
+block and then `CYCLE`s (`XClib/qe_drivers_d_lda_lsda.f90:234-237, :255, :257`), the
+numerical one clamps `zeta` to `1 - 2e-6` and sets `rhotot = dr = 0` (`:341, :344-346`).
+`_fully_polarized` is that predicate.
+
+**Why the recorded attempts failed is the transferable part.** Clipping the density to
+`1 - eps` at 1e-12, 1e-10 and 1e-8 left all 1504 saturated points `NaN`, because it masks
+the *value* and leaves the primal singular — the tangent is still `0 * inf`. Masking the
+**argument the derivative is taken at** is what works, and at a regular point the masked and
+unmasked expressions are bit-identical, so nothing already validated moves. It is the `abs`
+trap of P28a in a fifth place and the first one whose cure is a QE convention rather than a
+reformulation.
+
+**There are two singular paths and only one of them is `dv_of_drho`.** `forces/energy.py`
+takes `etxc` from the potential and `response/born` differentiates that gradient once more,
+so a Born charge reaches `d^2 e_xc/d rho^2` without ever touching the kernel — measured, and
+with the kernel alone masked every entry of `Z*` came back `NaN`. `spin_energy_density`
+carries the same mask.
+
+**What must not be done there**, because it was tried and measured: writing the energy
+density's first derivative as the identity `de/dn_sigma = (v_sigma - e)/n`. `spin_potential`
+evaluates at the *signed* total and an *unclipped* polarization where `spin_energy_density`
+evaluates at `|n|` and the clipped `zeta`, so the two disagree at exactly the saturated
+points (`-0.884` against `v_dw = -0.247`) and substituting one for the other moves the
+validated LSDA force by **6.1e-5 Ry/bohr** against a 5e-5 tolerance. A `jax.custom_jvp`
+returning the exact first tangent off a `stop_gradient`ed primal is wrong differently: it
+corrupts the second derivative at *regular* points (-3.5306 to -2.0485).
+
+**The `Z*` term was a row/column mask and QE cannot write it down.** `_multiplier_response`
+applied the weight to the **column** of `dLambda_mn = w_n <psi_m|dV_E|psi_n>` and nothing to
+the **row**. The solver keeps `max(occupied_counts)` bands in every channel because the shape
+has to be static (rule R2), so O2's counts of `(7, 5)` leave the down channel carrying its
+two empty `pi*_g` bands as rows; their weight is zero, which kills their columns and not
+them, and for such a row `dLambda_pn` is the full interband position matrix element — `P_c`
+does not remove a state that is conduction in its own channel. `_constraint_energy` then
+contracts it with `<psi_n|dS/du|pi*>`. `PHonon/PH/zstar_eu_us.f90:224-231` runs **both** band
+loops over `nbnd_occ(ikk)`, the spin-resolved k-point's own count, so the block does not
+exist there — this is precisely the class of bug that a batched implementation acquires and
+QE avoids by doubling `nks`.
+
+Worth **0.0918 on `Z*_xx` of an answer of 0.1337** and 0.0100 on `zz` of 0.2004 — one term of
+constant per-atom magnitude, not a factor. It read as a *transverse* bug because the genuine
+`x` occupied block holds only the augmentation dipole and a weakly screened `dV_scf`
+(`eps_xx = 1.11`) and the leak dominated it, where along the molecular axis the genuine block
+is eight times larger.
+
+**Three things had to be true at once for it to survive**, and that is why the case matters
+more than the fix: the term it feeds is `dS/du`, which is **zero for a norm-conserving
+dataset**; the mask is all ones wherever the two channels are occupied to the **same depth**,
+which is every `nspin = 1` run and LSDA at `tot_magnetization = 0`; and a **metal** never
+reaches `born` at all. A magnetic ultrasoft insulator with unequal channel fillings is the
+only configuration that sees it.
+
+**Refused still, and the guard is kept for it**: a **GGA** magnetic response. `dgcxc_spin`
+has its own `rho_threshold_gga` and its own `zeta` gates, in a different routine, and both
+committed O2 references are `pz` — so `_require_a_finite_kernel` stays in place, reworded to
+say that the LDA is covered and the GGA is not. The dynamical matrix, the strain response and
+the two third derivatives stay refused for `nspin = 2`: their *assembly* is what is missing,
+not the solve and not the kernel.
+
+**The Gamma dynamical matrix stays refused, measured rather than argued.** The `ph.x`
+LSDA reference this refusal asked for is generated and committed
+(`o2-fixed-lsda-phonon.ph.in`, `reference.out.ph-o2-fixed-lsda-phonon` and its `.dyn`),
+and with the guards bypassed the **O-O stretch is 1664.3992 cm^-1 against 1664.401578**,
+1.4e-6 relative -- while the block a rigid translation reaches is not: the `zz` row's two
+entries are shifted by the *same* -0.0022, which cancels in the difference and doubles in
+the sum, and transverse the error is thirty times larger and is not a common shift. The
+acoustic sum rule cannot arbitrate on this cell, because `ph.x` violates its own by
++0.0087 in `xx` -- a 10-bohr box at `ecutwfc = 25` barely resists translating the
+molecule, which is why its translational modes print at -155 cm^-1.
+
+**Two candidates eliminated, and one latent bug found on the way.** Not the density
+threshold: `dmxc_lsda` cuts at `small = 1e-30` where this code's kernel inherits
+`RHO_THRESHOLD = 1e-10`, a twenty-order asymmetry living exactly where the acoustic block
+does -- and **zero** of the cell's 91125 points are below 1e-10, the matrix being
+bit-identical at 1e-30. Not `nbnd > nocc` either, though this is the first phonon cell
+here whose stored states outnumber its occupied ones and it **did** contain a real shape
+bug: `orthogonality_states`' occupied block is built at the solver's truncated width and
+was handed to a `jvp` against the full-width states (`_pad_to_bands` now widens it). That
+one is **not spin-specific** -- every phonon cell validated here had `nbnd == nocc`, so it
+had never been reachable -- and ultrasoft silicon with two empty bands gives
+**513.294847 cm^-1 against 513.294706**, 1.4e-4, which is what rules the regime out as the
+cause. What is left is the spin axis itself, and the next step is P43's per-term
+decomposition against a finite difference of the LSDA forces, which are `pw.x`-validated
+on this same molecule.
+
+**Not accounted for**: 5.4e-5 on `Z*_xx` and 1.9e-4 on `zz`, against `ph.x`'s own
+atom-to-atom spread of 1-2e-5 on this cell and the ultrasoft-silicon 8e-6. A `conv_thr =
+1e-10` ground state moves `zz` by 7e-6, so it is not the SCF's convergence and no term is
+named for it; the cheapest next experiment is P43's per-partial decomposition against a
+finite difference of the force under a field, on the `zz` column alone.
+
 ### P68a — The dynamical matrix under gamma storage. ✅ DONE.
 
 The two memory features of P67 and P68 aim at the same calculation -- a molecule

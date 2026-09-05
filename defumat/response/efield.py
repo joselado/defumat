@@ -254,21 +254,6 @@ def dielectric_tensor(
     # builds its own plane-wave sums and has none of the corrections. Measured
     # with the guard lifted: 501.7/213.1/253.1 against an isotropic 190.8.
     require_a_sternheimer_regime(calculation, spin_polarized=True)
-    if born_charges and calculation.nspin == 2:
-        # The dielectric constant above is a spin *sum*; a Born charge is not.
-        # ``defumat.response.born`` differentiates the force along the field's
-        # response, and the force functional's nonlocal and constraint terms are
-        # contracted per channel through ``becsum`` -- which has a spin axis of
-        # its own that nothing in that module has been run with. Refused by name
-        # rather than reported: there is no ``ph.x`` LSDA ``Z*`` committed here
-        # to have caught it.
-        raise NotImplementedError(
-            "Born effective charges are not implemented for nspin = 2: the "
-            "dielectric constant is a spin sum and is validated, but the mixed "
-            "derivative dF/dE goes through the force functional's becsum, whose "
-            "spin axis defumat.response.born has never been run with. Pass "
-            "born_charges=False for the dielectric constant alone"
-        )
     if born_charges:
         # Checked first of all: the refusal is a statement about the dataset, so
         # it should not cost a whole self-consistent response -- nor a converged
@@ -474,6 +459,19 @@ def _require_a_finite_kernel(calculation, induced, density) -> None:
     An unpolarized run cannot reach this -- there is no ``zeta`` -- and neither
     can a polarized run whose magnetization is zero everywhere, which is why the
     ``nspin = 1`` / ``nspin = 2`` identity on silicon passes.
+
+    **The LDA is fixed and this guard is insurance for what is not.** QE does
+    not regularise a fully polarized point either: ``dmxc_lsda`` *defines* the
+    kernel to be zero there, on both of its branches, and
+    :func:`~defumat.xc.functional._fully_polarized` is that convention -- so the
+    cell in the paragraph above now returns ``diag(1.11091441, 1.11091441,
+    1.19799977)`` against this ``ph.x`` reference's ``diag(1.110915996,
+    1.110915996, 1.198004867)``, 5.1e-6, in 13 iterations. What is **not**
+    covered is a **GGA**: ``dgcxc_spin`` carries its own ``rho_threshold_gga``
+    and its own ``zeta`` gates, which are different numbers in a different
+    routine, and nothing here has transcribed them -- both committed O2
+    references are ``pz``. A PBE magnetic response can still land here, and
+    that is what this is left in place for.
     """
     if bool(jnp.all(jnp.isfinite(induced))):
         return

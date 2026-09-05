@@ -1334,21 +1334,43 @@ $6.2\times10^{-14}$ on 13.806646105. The probe must differ between the channels,
 because $\chi_0$ is block diagonal in spin and one equal in both would not tell
 the blocks apart.
 
+The \emph{screened} response and the Born effective charges are validated for
+\code{nspin = 2} as well, on triplet O$_2$ against the vendored \code{ph.x}:
+$\varepsilon_\infty = \mathrm{diag}(1.11091441, 1.11091441, 1.19799977)$ against
+$(1.110915996, 1.110915996, 1.198004867)$, and $Z^*$ against the \emph{raw}
+(no acoustic sum rule) block, $0.13372$ and $0.20042$ against $0.13367$ and
+$0.20023$. Two things had to be right for those and neither was a new
+derivation. The exchange--correlation kernel is \emph{defined} to be zero where
+the magnetization reaches the charge --- \code{dmxc\_lsda} does not regularise
+$|\zeta| = 1$, it skips it --- so what was missing was that convention, applied
+to the \emph{argument} the derivative is taken at rather than to its value.
+And the orthonormality multipliers carry a weight on the column of
+$\Lambda_{mn}$ and need a \emph{mask} on its row: the solver keeps
+$\max(N^{\rm occ}_\sigma)$ bands in every channel because the shape is static,
+so a magnetic insulator's minority channel carries empty bands whose rows are
+not removed by the zero weight. That leak is worth a factor of three on
+$Z^*_{xx}$, and nothing already validated can see it --- the term it feeds is
+$dS/du$, which vanishes for a norm-conserving dataset, and the mask is all ones
+whenever the two channels are filled to the same depth.
+
 \begin{refuses}
 \textbf{Refuses.} \code{tot\_magnetization} together with a smearing: the two
 channels have separate Fermi levels and \code{Smearing} carries one scalar
 \code{ef}. A filling whose boundary lands inside a \emph{degenerate multiplet}
 --- a Hund's-rule atom is exactly this case --- where the solve converges and
 returns an answer 100\,\% away from a finite difference, because which member
-falls below the cut is arbitrary; that is the physics, not a missing term. Born
-effective charges, the dynamical matrix, the strain response, the elastic
+falls below the cut is arbitrary; that is the physics, not a missing term. The
+dynamical matrix, the strain response, the elastic
 constants, the Raman tensor and the electrostriction tensors for
 \code{nspin = 2}: the solve is spin-polarized, their second-derivative assembly
-is not. The \emph{screened} response of a magnetic system with vacuum: for
+is not --- \emph{except} the Born effective charges, which are validated above. The \emph{screened} response of a magnetic system with vacuum: for
 \code{nspin = 2} the kernel \code{dv\_of\_drho} is the second derivative of the
 LSDA energy in the two channel densities and diverges wherever a channel density
 reaches zero --- measured on triplet O$_2$, 1504 of 91125 grid points and exactly
-1504 NaN. And any potential-only meta-GGA (\code{tb09}, \code{bj06}), which has
+1504 NaN --- \emph{lifted for the LDA}, which is the paragraph above, and
+standing for a \textbf{GGA}, whose \code{dgcxc\_spin} carries its own density
+and $\zeta$ gates that nothing here has transcribed. And any potential-only
+meta-GGA (\code{tb09}, \code{bj06}), which has
 no total energy to differentiate --- refused by name now rather than surfacing as
 \code{v\_of\_rho} asking for \code{tau}.
 \end{refuses}
