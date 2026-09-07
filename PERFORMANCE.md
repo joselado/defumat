@@ -3014,9 +3014,13 @@ no cap at all.
 
 **The process boundary is the real bound**, which is what `tools/run_regression.sh` gives
 by invoking pytest once per file. A ceiling on *resident* memory is a **cgroup** rather
-than a `ulimit`, and it works on this workstation -- `systemd-run --user -p MemoryMax=8G
--p MemorySwapMax=0 --scope python3 -m pytest <file>`, probed at 512 MB on 2026-09-07: the
-kernel `SIGKILL`s the scope, exit 137, and the shell survives. Not
+than a `ulimit`, and it works on this workstation -- `systemd-run --user --unit=<name>
+-p MemoryMax=8G -p MemorySwapMax=0 --scope python3 -m pytest <file>`, measured twice on
+2026-09-07: a plain allocation past a 512 MB limit is `SIGKILL`ed at it (exit 137, shell
+untouched), and **`test_scf.py::test_total_energy_matches_reference`, eight SCF runs
+against `pw.x` references, passes inside a 4 GB scope** at 1.0 GB peak RSS. That is the
+whole difference from the entry above: XLA's 17 GB of address space is not charged to a
+cgroup, so the cap can be set near the resident cost instead of an order above it. Not
 `XLA_PYTHON_CLIENT_MEM_FRACTION`, which sizes the PJRT **device** allocator's pool -- it
 is what the 2026-09-04 GPU entry above reads a pool against, and there is nothing for it
 to bound on the CPU backend this machine develops on. And **narrow the list before running

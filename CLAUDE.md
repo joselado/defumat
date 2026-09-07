@@ -651,19 +651,27 @@ section that is not yet fixed.** Everything above is a way of staying under the 
 none of it puts a floor under what happens when something goes over it anyway, and going
 over it here kills whatever else the terminal was holding. It has happened at least three
 times: `test_ten_site.py` (P28b) and `test_spinor_forces.py` (P46), both measured in
-`PERFORMANCE.md`, and again on **2026-09-07**, where it took a session down with a
-documentation restructuring uncommitted. **What was in flight the third time is not
-recorded anywhere, and that is itself the point** — an unbounded process that dies takes
-its account of what it was doing with it.
+`PERFORMANCE.md`, and again on **2026-09-07** — that one by the user's account rather than
+from a log — where it took a session down with a documentation restructuring uncommitted.
+**What was in flight the third time is not recorded anywhere, and that is itself the
+point** — an unbounded process that dies takes its account of what it was doing with it.
 
 **The mechanism is a cgroup, and it works on this machine** (cgroup v2, user-slice
-delegation; probed 2026-09-07 — a 512 MB scope was `SIGKILL`ed at the limit, exit 137, and
-the shell was untouched):
+delegation, probed 2026-09-07). Name the unit rather than quieting it, so
+`journalctl --user -u <unit>` can afterwards say the kill was `memory.oom` and not
+something else:
 
 ```bash
-systemd-run --user --quiet -p MemoryMax=8G -p MemorySwapMax=0 --scope \
+systemd-run --user --unit=reg-<file> -p MemoryMax=8G -p MemorySwapMax=0 --scope \
     python3 -m pytest <file> -q
 ```
+
+Two measurements, and the second is the one that matters: a plain Python allocation past a
+512 MB limit is `SIGKILL`ed at it, exit 137, with the shell untouched; and **the eight
+`test_scf.py` energy comparisons run to completion under `MemoryMax=4G`**, peak RSS 1.0 GB,
+which is the same class of work that a 16 GB `ulimit -v` failed. That contrast *is* the
+argument — XLA's address-space reservations are not charged to a cgroup, so a resident cap
+can be set near what the work actually uses.
 
 Two caps that look like this one and are not:
 
