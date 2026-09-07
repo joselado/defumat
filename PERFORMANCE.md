@@ -3820,7 +3820,13 @@ norm-conserving `Si.pz-vbc.UPF`, LDA, `ecutwfc = 18`, 20^3 FFT grid, an
 unshifted 4x4x4 grid. One core each (`OMP_NUM_THREADS=1`, `taskset -c 0` before
 JAX is imported), same machine, and the measurement was taken on a **quiet**
 machine -- an earlier attempt sat beside another session's suite and was
-discarded rather than recorded.
+discarded rather than recorded. `ph.x`'s own figures were **not** taken under
+that rule, and did not need to be: it reports 2.33 s CPU against 2.48 s WALL,
+6% apart, where contention shows as WALL well above CPU.
+
+Both columns are **warm**: `~/.cache/defumat/jax` already held this cell's
+kernels from the regression file, which runs the same three wavevectors, so the
+32/46/46 s exclude compilation. Cold, the first call pays it once per process.
 
 ### Against `ph.x`, which is where this one was taken from
 
@@ -3852,8 +3858,25 @@ do not repeat, while this code builds a second sphere at `q = 0` that is a copy
 of the first -- 128 solves where 64 would do. Both distortions push the same
 way, and the zone-boundary rows are the comparison to quote.
 
-The convergence is the same on both sides and is not where the time goes: 8
-mixing iterations at `Gamma`, 11 at `L` and 11 at `X`.
+**The two sides are converged to the same place**, which is set rather than
+assumed: the `ph.x` input carries `tr2_ph = 1.0d-14` and `alpha_mix = 0.700`,
+and defumat runs at its matching `tr2 = 1e-14`, `alpha_mix = 0.7`. So neither
+column is buying speed with a looser solve.
+
+The **iteration counts are not comparable**, and the reason is a second thing
+QE has that this does not. `ph.x` decomposes the perturbation into irreducible
+representations and mixes each separately -- 2 of them at `Gamma`, 4 at `L`, 3
+at `X` -- so its 15, 23 and 16 `iter #` lines are sums over 2, 4 and 3 smaller
+solves. This code has no irrep decomposition (`PLAN.md` P71) and mixes all `3N`
+perturbations in one loop: 8 iterations at `Gamma`, 11 at `L`, 11 at `X`, each
+over a block three times the size. That is the second item on the small-group
+phase's list after the wedge itself.
+
+**Where the 14 s between `Gamma` and `L` goes is not measured**, and it is the
+natural first question of that phase: the second sphere stops being a copy of
+the first, so the `k + q` states have to be diagonalised for real and the solve
+runs across two different G-sets. `tools/benchmark.py` is the instrument for
+splitting it and this entry does not.
 
 ### The working set
 

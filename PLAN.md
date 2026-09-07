@@ -11086,12 +11086,20 @@ measured rather than unknown.
 0.76 and 0.68 on the same cell and one core each — but `ph.x` reduces with the small group
 of `q` and runs 26 sphere solves where this runs 128, so the like-for-like figure is **12x
 at `L` and 14x at `X`** and the rest is the missing symmetry. `PERFORMANCE.md` has the
-split and why `Gamma`'s row does not divide the same way.
+split and why `Gamma`'s row does not divide the same way. Both sides run at
+`tr2 = 1e-14` and `alpha_mix = 0.7`, so neither is buying speed with a looser solve; the
+iteration counts are *not* comparable, because `ph.x` mixes each irreducible
+representation separately (2 at `Gamma`, 4 at `L`, 3 at `X`) where this mixes all `3N`
+perturbations in one loop.
 
 **What is outstanding.** The whole point of a dispersion is the *second* half of this:
 the small group of `q` (`symdvscf`, so a wedge rather than the full grid), the star of
 `q`, and `q2r`/`matdyn`'s Fourier interpolation with the acoustic sum rule. `ph_2d` has a
-committed BN reference for both. Beside them the refusals this lands with, each named at
+committed BN reference for both. A third piece belongs with them and is what the timing
+exposed: `ph.x` splits the perturbation into **irreducible representations**
+(`PHonon/PH/set_irr.f90`) and mixes each on its own — 2 at `Gamma`, 4 at `L`, 3 at `X` on
+this cell — where this mixes all `3N` together, so QE solves several small blocks where
+this solves one large one. Beside them the refusals this lands with, each named at
 the door: ultrasoft and PAW (`S` moves with the atoms and the multiplier matrix has no
 two-sphere form — the bra is at `k` and the ket at `k+q`, where `qq_ij` pairs projectors
 on one sphere), metals, spin, spinors, spirals, meta-GGA, DFT+U, and a **nonlinear core
