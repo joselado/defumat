@@ -3813,6 +3813,57 @@ when that lands, is 11.3 s with `trans = .true.` and `epsil = .true.` together.
 carrying `Q_ij(G)` (`nh^2 x ngm` per atom, `nh = 8` for this dataset) against a
 91125-point dense grid.
 
+## What a phonon away from `Gamma` costs (P71)
+
+Silicon in the two-atom cell (`tests/data/qe/si-epsilon-unshifted-nosym.in`):
+norm-conserving `Si.pz-vbc.UPF`, LDA, `ecutwfc = 18`, 20^3 FFT grid, an
+unshifted 4x4x4 grid. One core each (`OMP_NUM_THREADS=1`, `taskset -c 0` before
+JAX is imported), same machine, and the measurement was taken on a **quiet**
+machine -- an earlier attempt sat beside another session's suite and was
+discarded rather than recorded.
+
+### Against `ph.x`, which is where this one was taken from
+
+`ph.x`'s figures are its own cumulative `PHONON` wall clock differenced across
+the three wavevectors of one `ldisp` run at `nq = 2 2 2`
+(`reference.out.ph-si-epsilon-unshifted-dispersion`), so its ground state is
+excluded on both sides: defumat's is 1.3 s and is listed once.
+
+| q | `ph.x` | defumat | ratio |
+|---|---|---|---|
+| `Gamma` | 0.93 s | 32.0 s | 34x |
+| `L` (0.5, -0.5, 0.5) | 0.76 s | 45.7 s | **60x** |
+| `X` (0, -1, 0) | 0.68 s | 46.3 s | **68x** |
+
+**Most of that is k-sampling rather than implementation, and the two must be
+separated or the ratio is meaningless.** `ph.x` reduces with the **small group
+of q** -- 13 operations at `L`, printed as `13 Sym.Ops. (with q -> -q+G)` -- and
+its "number of k points = 26" is 13 points each paired with its `k + q` partner
+at zero weight. This code has no small group of `q` yet (`PLAN.md` P71, refused
+by name) so it runs the whole 64-point grid with `nosym`, and builds a `k + q`
+sphere for each: **128 sphere solves against 26**, a factor of 4.9 in the work
+before any code is compared. Dividing it out leaves **12x at `L` and 14x at
+`X`** per solve, which is the honest statement of what this implementation
+costs against QE's.
+
+`Gamma`'s row does not split the same way and should not be read as the good
+case. `ph.x`'s 0.93 s is its *first* q and absorbs run setup that the later two
+do not repeat, while this code builds a second sphere at `q = 0` that is a copy
+of the first -- 128 solves where 64 would do. Both distortions push the same
+way, and the zone-boundary rows are the comparison to quote.
+
+The convergence is the same on both sides and is not where the time goes: 8
+mixing iterations at `Gamma`, 11 at `L` and 11 at `X`.
+
+### The working set
+
+1.50 GB at `Gamma`, 1.62 GB at `L`, 1.65 GB at `X` -- the growth is the second
+sphere, which at `q = 0` shares the first's G-vectors and away from it does not.
+The whole nine-test regression file peaks at **2.77 GB**, well inside the 12 GB
+default cap, so `test_phonons_at_q.py` is not a memory liability the way an
+ultrasoft derivative on a slab is: this is norm-conserving, so no `Q_ij(G)`
+crosses the backward pass.
+
 ## History
 
 | Date | Change | Effect |

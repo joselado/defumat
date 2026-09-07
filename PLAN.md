@@ -11082,6 +11082,12 @@ agreement at **1.07e-9**, which is what says the residue is that and nothing els
 worth 0.002 cm^-1 on silicon's optical mode — inside every tolerance P25 quotes, and now
 measured rather than unknown.
 
+**What it costs.** 32.0 s at `Gamma`, 45.7 at `L`, 46.3 at `X`, against `ph.x`'s 0.93,
+0.76 and 0.68 on the same cell and one core each — but `ph.x` reduces with the small group
+of `q` and runs 26 sphere solves where this runs 128, so the like-for-like figure is **12x
+at `L` and 14x at `X`** and the rest is the missing symmetry. `PERFORMANCE.md` has the
+split and why `Gamma`'s row does not divide the same way.
+
 **What is outstanding.** The whole point of a dispersion is the *second* half of this:
 the small group of `q` (`symdvscf`, so a wedge rather than the full grid), the star of
 `q`, and `q2r`/`matdyn`'s Fourier interpolation with the acoustic sum rule. `ph_2d` has a
