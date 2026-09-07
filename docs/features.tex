@@ -1074,13 +1074,90 @@ vector field} and must be symmetrised as one. Running the whole grid instead is
 sound only if the grid is closed under the point group --- a \textbf{shifted}
 Monkhorst--Pack grid is not.
 
+\subsection{Phonons away from $\Gamma$}
+
+A displacement pattern $\mathbf u_s(\mathbf R) = \mathbf u_s e^{i\mathbf q\cdot\mathbf R}$
+is not a displacement of the unit cell --- it is periodic only on a supercell
+commensurate with $\mathbf q$, which is exactly what a frozen-phonon calculation
+pays for. Linear response does not pay it, because the \emph{first-order}
+quantities are still lattice periodic once their $e^{i\mathbf q\cdot\mathbf r}$
+is taken out. The perturbation is $e^{i\mathbf q\cdot\mathbf r}$ times a
+periodic function, so $\Delta V_{\mathbf q}|\psi_{\mathbf k}\rangle$ is a Bloch
+state at $\mathbf k + \mathbf q$: the calculation stays in the unit cell, with
+one extra plane-wave sphere.
+
+That asymmetry is the whole of it. The operator, the projector and the
+preconditioner belong to $\mathbf k+\mathbf q$; the eigenvalue subtracted is the
+one of the band being perturbed, at $\mathbf k$:
+\begin{equation*}
+\big(\hat H_{\mathbf k+\mathbf q} - \epsilon_{n\mathbf k}\hat S_{\mathbf k+\mathbf q}
+   + \alpha\hat Q\big)\,|\Delta\psi_{n\mathbf k}\rangle
+ = -\,\hat P_c^{\,\mathbf k+\mathbf q}\,\Delta V_{\mathbf q}\,|\psi_{n\mathbf k}\rangle
+\end{equation*}
+and the response density is $\Delta n_{\mathbf q}(\mathbf r) = (2/\Omega)\sum_{n\mathbf k}
+w_{\mathbf k}\,\psi^{*}_{n\mathbf k}\Delta\psi_{n\mathbf k}$, which is complex ---
+at $\Gamma$ it collapses to twice a real part and nowhere else.
+
+\begin{pycode}
+# nosym = .true., noinv = .true., on an unshifted grid -- see the box below
+calc = Calculator.from_file("si-nosym.in", pseudo_dir="pseudo")
+
+ph = calc.get_phonons_at_q(q=(0.5, 0.5, 0.5))          # crystal coordinates, L
+print(ph.frequencies)                                   # cm^-1
+print(ph.matrix.shape)                                  # (nat, 3, nat, 3), complex
+
+xpoint = calc.get_phonons_at_q(q=(0.0, -1.0, 0.0), q_cartesian=True)
+\end{pycode}
+
+\noindent \code{q} is in crystal coordinates of the reciprocal lattice unless
+\code{q\_cartesian} is set, which reads it in the $2\pi/a$ units \code{ph.x}
+prints. The matrix is \textbf{complex}: $D(\mathbf q)$ is hermitian rather than
+symmetric, and only at $\mathbf q = 0$ --- or where the crystal has inversion
+--- does it collapse to a real one.
+
+Silicon on a 64-point unshifted grid, against the vendored \code{ph.x}: at $L$
+the six modes are 101.789, 101.789, 382.235, 405.099, 488.028 and
+488.028~cm$^{-1}$ against 101.843, 101.843, 382.241, 405.121, 488.019 and
+488.019, the worst of them \textbf{0.054}~cm$^{-1}$; at $X$ the worst is
+\textbf{0.038}. That is the same floor the zone centre has and for the same
+reason (QE interpolates its radial form factors from a $\mathrm{d}q = 0.01$
+table where this integrates them directly). \code{ph.x} runs the eight-point
+wedge with its response symmetrised where this runs the whole grid with nothing
+symmetrised, so the comparison is also the only check the two routes get
+against each other.
+
+\textbf{Only the Ewald sum knows about $\mathbf q$}, among the terms that do not
+involve the response. The second derivative of the external potential at frozen
+density is diagonal in the atom index --- both derivatives are taken at the same
+site, so the two modulation phases cancel --- and it is therefore the same
+matrix at every wavevector. The ion--ion sum is not diagonal, and it is the one
+piece rebuilt.
+
+\begin{refuses}
+\textbf{Refuses.} A symmetry-reduced $k$-set: a response has to be averaged over
+the operations that leave the \emph{perturbation} invariant, and for a phonon at
+$\mathbf q$ those are the ones with $S\mathbf q = \mathbf q + \mathbf G$ --- the
+small group of $\mathbf q$, which is not the crystal's group and is not written.
+Run with \code{nosym} and \code{noinv} on an \textbf{unshifted} grid, which is
+the grid that is closed under the point group. There is no \textbf{dispersion}
+either: that needs the star of $\mathbf q$ and \code{q2r}/\code{matdyn}'s
+Fourier interpolation on top of this. Ultrasoft and PAW are refused ($S$ moves
+with the atoms, and the orthonormality multipliers carry a term whose bra is at
+$\mathbf k$ and whose ket is at $\mathbf k+\mathbf q$, where $q_{ij}$ pairs
+projectors on one sphere); so are metals, spin polarization, spinors, spin
+spirals, meta-GGA and DFT+U. A \textbf{nonlinear core correction} is refused for
+a reason that belongs to $\mathbf q$ rather than to the dataset: two atoms' core
+charges overlap inside a nonlinear $E_{\mathrm{xc}}$, so unlike every other
+frozen term that one \emph{is} a function of $\mathbf q$.
+\end{refuses}
+
 \begin{refuses}
 \textbf{Refuses.} Born charges for PAW (\code{int3\_paw} against
 \code{becsumort} is missing, and without it the expression is wrong in sign as
 well as size); $\chi^{(2)}$ and the electro-optic tensor (the second-order
 source term has nothing to build the $\langle u_i|r_k|u_j\rangle$ piece from ---
 and it is \textbf{42\%} of the answer, measured);
-phonons at $q\neq0$; a partial dynamical matrix (\code{atoms=}) of a
+a partial dynamical matrix (\code{atoms=}) of a
 \emph{symmetrised} run, since \code{symdvscf} acts on the $3\,n_{\mathrm{at}}$
 stack as one object --- an operation rotates the cartesian direction \emph{and}
 permutes the atom, so it mixes a mode inside the subset with one outside it,

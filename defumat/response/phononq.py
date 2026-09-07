@@ -59,6 +59,7 @@ import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.response.sternheimer import SternheimerSolver
+from defumat.system.cell import Cell
 from defumat.system.kpoints import KPoints
 
 __all__ = [
@@ -70,8 +71,20 @@ __all__ = [
 ]
 
 
-def kpoints_plus_q(kpoints: KPoints, q_cart) -> KPoints:
-    """The list ``k + q``, in the cartesian ``2 pi / alat`` units ``coords`` uses.
+def kpoints_plus_q(kpoints: KPoints, q_cart, cell: Cell) -> KPoints:
+    """The list ``k + q``. ``q_cart`` is in **1/bohr**, and that matters.
+
+    **Two cartesian conventions meet here and only this function sees both.**
+    Everything else in this module works against
+    :meth:`~defumat.basis.gvectors.GVectors.cartesian`, which is 1/bohr, so
+    ``q_cart`` is in 1/bohr throughout -- while :class:`KPoints` stores
+    ``coords`` in units of ``2 pi / alat``, which is what ``pw.x`` prints.
+    Adding one to the other is dimensionally silent: the k-points move by
+    ``tpiba`` times too much, every array is the right shape, every solve
+    converges, and the answer is **exactly right at** ``q = 0`` because zero
+    scales to zero. It was worth 1822 cm^-1 at ``X`` and nothing at ``Gamma``,
+    which is why ``PLAN.md`` P71 has a regression at ``q = 0`` *and* a number at
+    the zone boundary rather than only the first.
 
     The shifted points are kept **literal** -- not wrapped back into the first
     Brillouin zone -- for the reason :mod:`defumat.system.spiral` gives for the
@@ -84,7 +97,8 @@ def kpoints_plus_q(kpoints: KPoints, q_cart) -> KPoints:
     place to put a second sphere and a second diagonalisation, not a second
     integration grid.
     """
-    coords = np.asarray(kpoints.coords) + np.asarray(q_cart, dtype=float)[None, :]
+    shift = np.asarray(q_cart, dtype=float) / cell.tpiba
+    coords = np.asarray(kpoints.coords) + shift[None, :]
     return KPoints.from_cartesian(
         coords, np.asarray(kpoints.weights), precision=kpoints.precision
     )
@@ -107,9 +121,9 @@ def states_at_k_plus_q(calculation, v_scf, q_cart, nbnd, ethr: float = 1e-13):
 
     Returns ``(calculation_kq, hamiltonians_kq, eigenvalues_kq, psi_kq)``.
     """
-    moved = calculation.at_kpoints(
-        kpoints_plus_q(calculation.system.kpoints, q_cart)
-    )
+    moved = calculation.at_kpoints(kpoints_plus_q(
+        calculation.system.kpoints, q_cart, calculation.system.cell
+    ))
     hamiltonians = moved.hamiltonian(v_scf)
     eigenvalues, wavefunctions = moved.diagonalize(hamiltonians, nbnd, None, ethr)
     return moved, hamiltonians, np.asarray(eigenvalues), wavefunctions

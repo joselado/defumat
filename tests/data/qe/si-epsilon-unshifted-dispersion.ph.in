@@ -1,0 +1,27 @@
+! The `ph.x` input that generated `reference.out.ph-si-epsilon-unshifted-dispersion`,
+! so that the reference is regenerable rather than merely committed.
+!
+!   pw.x -in si-epsilon-unshifted.in && ph.x -in si-epsilon-unshifted-dispersion.ph.in
+!
+! with `outdir` pointing at the same scratch for both.
+!
+! **This is the reference for a phonon at q != 0** (`PLAN.md` P71). `ldisp` with
+! a 2x2x2 q-grid is one run for three wavevectors -- Gamma, X and L -- which is
+! what makes it worth more than a single `xq`: Gamma is the regression against
+! the P25 machinery, and the other two are the quantity that machinery could not
+! reach. The 2x2x2 q-grid is commensurate with the 4x4x4 k-grid of
+! `si-epsilon-unshifted.in`, which is what lets both codes sample the same
+! Brillouin zone.
+!
+! `epsil` is deliberately **off**: it is only defined at Gamma, and asking for it
+! in an `ldisp` run makes `ph.x` compute the dielectric constant and the Born
+! charges as well, which is a different quantity already covered by
+! `si-epsilon.ph.in`.
+silicon phonons on a 2x2x2 q-grid, norm-conserving
+ &inputph
+  tr2_ph = 1.0d-14,
+  ldisp = .true.,
+  nq1 = 2, nq2 = 2, nq3 = 2,
+  fildyn = 'si.dyn',
+  amass(1) = 28.086,
+ /

@@ -739,6 +739,25 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS),
         )
 
+    def get_phonons_at_q(self, q=(0.0, 0.0, 0.0), **options):
+        """The dynamical matrix at one wavevector ``q``, and its frequencies.
+
+        ``q`` is in crystal coordinates of the reciprocal lattice unless
+        ``q_cartesian = True``, which reads it in the ``2 pi / alat`` units
+        ``ph.x`` prints. ``q = 0`` is the same physics as :meth:`get_phonons`
+        through a second plane-wave sphere, so it is a regression rather than a
+        second way of asking; away from the zone centre it is the only route.
+        """
+        from defumat.response.phononq import dynamical_matrix_at_q
+
+        result = self._ground_state("the dynamical matrix at q")
+        return dynamical_matrix_at_q(
+            self.calculation, result.wavefunctions, result.eigenvalues,
+            result.density, result.becsum, q=q,
+            **self._defaults_for(dynamical_matrix_at_q, options,
+                                 exclude=SCF_ONLY_OPTIONS),
+        )
+
     def get_raman_tensors(self, **options):
         """``d(epsilon)/d(tau)``: the Raman tensor of each atom."""
         from defumat.response.nonlinear import raman_tensors

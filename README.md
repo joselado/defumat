@@ -190,7 +190,8 @@ drive any of this and is what the examples below use.
 | **Orbital, spin and total angular momentum on each atom** — $\langle L\rangle$, $\langle S\rangle$, $\langle J\rangle$, which is where the orbital moment of a spin-orbit magnet actually sits. Needs the whole k-grid; a relativistic ultrasoft or PAW dataset is refused | `angular_momenta`, `Calculator.get_angular_momenta` | (✓)⁴ | ✓ |
 | **Orbital magnetization of the cell** $\mathbf{M}_\mathrm{orb}$ — the modern theory's k-space expression, local plus itinerant circulation, which is the half of a magnet's moment no integral over the cell can give. Needs spin-orbit coupling, broken time reversal and a gapped manifold; norm-conserving, on the whole uniform grid. Agrees with `pw.x`'s `lorbm` on both Kubo terms to **2e-6** $\mu_B$/cell | `lorbm`, `run_orbital_magnetization`, `Calculator.get_orbital_magnetization` | ✓ | ¹³ |
 | **Dielectric constant** $\epsilon^\infty$ and **Born effective charges** — insulators, norm-conserving, ultrasoft and PAW (PAW $Z^{\ast}$ refused), and **collinear spin**, magnetic insulators included | `dielectric_tensor` | ✓ | ✓ |
-| **Phonons at $\Gamma$** — the force constants and their frequencies, insulators and metals, on norm-conserving, ultrasoft and PAW datasets. Away from $\Gamma$, and an ultrasoft or PAW metal, are refused | `dynamical_matrix` | ✓ | ✓ |
+| **Phonons at $\Gamma$** — the force constants and their frequencies, insulators and metals, on norm-conserving, ultrasoft and PAW datasets. An ultrasoft or PAW metal is refused | `dynamical_matrix` | ✓ | ✓ |
+| **Phonons at $\mathbf{q} \neq 0$** — the dynamical matrix at any wavevector, from the perturbed states on their own $\mathbf{k}+\mathbf{q}$ plane-wave sphere. Norm-conserving insulators on the full grid; a symmetry-reduced $\mathbf{k}$-set (the small group of $\mathbf{q}$), a dispersion through $\texttt{q2r}$/$\texttt{matdyn}$, and every soft or magnetic regime are refused | `dynamical_matrix_at_q`, `Calculator.get_phonons_at_q` | ✓ | ✓ |
 | **The strain response** $\partial\psi/\partial\varepsilon$, $\partial\rho/\partial\varepsilon$ and the deformation potentials, on norm-conserving, ultrasoft and PAW datasets | `strain_response` | | |
 | **Elastic constants** $C_{ijkl}$ and the compliance and bulk modulus that follow — clamped-ion, insulators, norm-conserving | `elastic_constants` | | |
 | **Electrostriction coefficients** $m$, $q$, $M$ and $Q$ — the quadratic electromechanical coupling, clamped-ion, insulators, norm-conserving | `electrostriction` | | |
@@ -310,7 +311,7 @@ The variants under each row — which smearing or tetrahedron method fixes the
 occupations, which projectors DFT+U uses, which constraint scheme — are chosen
 with the same input variables as in `pw.x` where it has them.
 
-**Not yet:** phonons away from $\Gamma$, exact exchange, real-time propagation.
+**Not yet:** a phonon *dispersion* (one wavevector works; the star of $\mathbf{q}$ and the Fourier interpolation do not), exact exchange, real-time propagation.
 `K_POINTS gamma` runs, but at an explicit k = 0 with the full G sphere — the
 same answer at twice the cost, and the run says so.
 

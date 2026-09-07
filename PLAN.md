@@ -233,9 +233,14 @@ because that is what decides whether it is a session or a phase.
   second-order response `solve_e2`, which is what P35 refuses for. The
   frequency-dependent `chi^(2)(-2w; w, w)` is in as of P54, by a sum over states, which
   never needed that term.
-- **Phonons at `q != 0`** — the perturbed states live at `k + q`, so it needs the
-  two-sphere machinery P19 built for the spin spirals, plus `q2r`/`matdyn` for a
-  dispersion.
+- **A phonon *dispersion***. P71 put the phonon at one `q != 0` -- the two-sphere
+  machinery, `d2ionq`, and 0.054 cm^-1 against `ph.x` at `L` and `X`. What is left is
+  everything that turns one wavevector into a curve: the **small group of `q`** (so a
+  wedge rather than the full grid, `symdvscf`), the **star of `q`**, and `q2r`/`matdyn`'s
+  Fourier interpolation with the acoustic sum rule. `test-suite/ph_2d` has a committed
+  BN reference for both halves. Beside them, the regimes P71 refuses: ultrasoft and PAW
+  (the multiplier matrix has no two-sphere form), metals, spin, spinors, and a nonlinear
+  core correction (`dynmatcc` is the one frozen term that *is* a function of `q`).
 - **The relaxed-ion piezoelectric constant** (P50: `Z*`, the `Gamma` force constants and
   the strain response are all here; what is missing is the internal-strain tensor
   `d^2E/du d(eps)`, whose two legs are *both* coordinates of the energy and therefore need
@@ -10960,6 +10965,121 @@ half sphere occupies half the columns and the conjugate fill needs the others.
   `tests/data/pseudo/` (10 UPF files covering `pw_scf`, `pw_atom`, `pw_metal`, `pw_lsda`).
 
 ---
+
+### P71 — Phonons away from `Gamma`: the perturbed states on a second sphere. ✅ DONE, norm-conserving insulator.
+
+Every response quantity before this one is a zone-centre quantity, and the reason is not
+that nobody wrote the loop. A displacement pattern
+
+    u_s(R) = u_s e^{i q . R}
+
+is **not a displacement of the unit cell**. It is periodic only on a supercell
+commensurate with `q`, and a frozen-phonon calculation is exactly the price of building
+that supercell. So there is no energy in *this* cell to differentiate twice, and P25's
+whole method — one `jvp` of the gradient that already gives the force — has nothing to
+act on.
+
+Linear response does not pay that price, and the reason is one line: **the first-order
+quantities are still lattice periodic once their `e^{i q . r}` is factored out.** The
+perturbation is `e^{iqr}` times a periodic function, so `dV_q |psi_k>` is a Bloch state at
+`k + q`; the whole calculation stays in the unit cell with one extra plane-wave sphere.
+That is the same trick the spin spirals use (P19, Elk's `gengkqvec`), with one
+perturbation where a spiral has one spinor component.
+
+**What moves, and what does not.**
+
+| | `q = 0` (P25) | `q != 0` |
+|---|---|---|
+| where `dpsi` lives | the `k` sphere | the `k + q` sphere |
+| `H - eps S` | both at `k` | `H`, `S` at `k+q`, `eps` at `k` |
+| `P_c^+` | occupied at `k` | occupied at `k+q` |
+| the bare local term | `jvp` of `V_loc(G)` | `jvp` of `V_loc(G+q)` |
+| the Hartree kernel | `8 pi/|G|^2`, `G = 0` dropped | `8 pi/|G+q|^2`, **`G = 0` kept** |
+| `drho` | `2 Re[psi* dpsi]` | `2 psi* dpsi`, complex |
+| the frozen Hessian | `dynmat_us + d2ionq(0)` | `dynmat_us` **unchanged** `+ d2ionq(q)` |
+
+**The last row is the fact the phase rests on, and it was read in the Fortran rather than
+assumed.** `dynmat_us.f90:105-124` fills `dynwrk(na_icart, na_jcart)` — the same atom index
+twice — from `g(:,ng)` and `tau(na)`, and calls `init_us_2` at `ikk`; `xq` appears nowhere
+in the routine. A second derivative of the external potential taken twice at the *same*
+site carries `e^{iqR} e^{-iqR} = 1`, so the frozen electronic Hessian is the same matrix at
+every wavevector. The entire `q` dependence of the non-response half is the Ewald sum. So
+`frozen_force_constants` takes P25's own frozen Hessian (its `jvp` with the state and
+density tangents set to zero), subtracts the **same** `jax.hessian` of the **same** Ewald
+energy that sits inside that functional — so the swap carries no disagreement of its own —
+and adds `ewald_dynamical_matrix`.
+
+**The perturbation is still a gradient of code that already exists.** What `q` changes is
+the *code being differentiated*, not the way the derivative is taken:
+`local_potential_at_q` evaluates the radial table at `|G+q|` and phases it with
+`e^{-i(G+q).tau}`, so differentiating brings down `-i(G+q)` where at `Gamma` it brought
+down `-iG` — `init_vlocq` and `compute_dvloc` in one function. The nonlocal term is written
+across the two spheres, `|beta_{k+q}> D <beta_k|psi_k>`, and **both** factors carry the
+positions, so the one `jvp` produces both halves of `dvqpsi_us_only` without either being
+written down. (This code's `vkb` carries the full Bloch phase `e^{-i(k+G).tau}`, unlike
+QE's `init_us_2`, which is why no separate `eigqts` appears: the two spheres' phases
+already compose to `e^{-iq.tau}`.)
+
+*Checks met*, all on `si-epsilon-unshifted-nosym.in` — the 64-point unshifted grid, no
+symmetry — against the vendored `ph.x` run committed as
+`reference.out.ph-si-epsilon-unshifted-dispersion` (one `ldisp` run, `nq = 2x2x2`, three
+wavevectors):
+
+- **`q = 0` through the two-sphere path reproduces P25's matrix to 1.94e-6 Ry/bohr^2** on
+  force constants of 0.287, and that residue is not noise — see the Ewald finding below.
+  The bare perturbation alone reproduces P25's to **1.8e-16**, and the imaginary part of
+  `D(0)`, which physics requires to vanish, is 3.3e-9 — the linear solves' own residue.
+- **`L` = (0.5, -0.5, 0.5): 101.7888, 101.7888, 382.2355, 405.0991, 488.0283, 488.0283
+  cm^-1 against `ph.x`'s 101.8428, 101.8428, 382.2406, 405.1208, 488.0194, 488.0194** —
+  worst mode **0.054 cm^-1**, which is the same floor P25 quotes at `Gamma` (QE
+  interpolates its radial form factors from a `dq = 0.01` table where this integrates them
+  directly). `ph.x` runs the eight-point wedge with `symdvscf` over the small group of `q`
+  and this runs the whole grid with nothing symmetrised, so it is also the only check the
+  two routes get against each other.
+- **`X` = (0, -1, 0): 132.8006, 132.8006, 405.3208, 405.3208, 455.1226, 455.1226 cm^-1
+  against `ph.x`'s 132.8053, 132.8053, 405.3589, 405.3589, 455.1387, 455.1387** — worst
+  mode **0.038 cm^-1**. Both degenerate pairs come out degenerate to 7e-5 cm^-1 and
+  nothing here imposes that
+- **`d2ionq(0)` against `jax.hessian` of the Ewald energy already here: 1.07e-9**, once
+  that energy's real-space sum is extended to `d2ionq`'s cutoff. The ionic matrix obeys the
+  acoustic sum rule to 7.8e-16 at `q = 0` **identically** rather than to the accuracy of
+  the sum, because the self term is constructed as the sum of the cross terms; `D(q)` is
+  hermitian to 3.8e-16.
+
+**The trap, and it is a units trap that only a finite `q` can see.** `KPoints` stores
+`coords` in units of `2 pi / alat` — what `pw.x` prints — while every `GVectors.cartesian`
+in this module is in 1/bohr. `kpoints_plus_q` had the `q` of the second convention added to
+the coordinates of the first, so the `k + q` sphere sat at `k + q tpiba`. Nothing about
+that is detectable at `Gamma`: zero scales to zero, so the regression above passed at
+1.9e-6 while `X` was out by **1822 cm^-1** and `L` by 1080. It is why this phase has a
+number at the zone boundary *as well as* a regression at `q = 0`, and why the
+`q = 0` check on its own would have shipped it.
+
+Two things localised it and neither was a guess. The response half's norm grew with `|q|`
+— 2.35 at `Gamma`, 3.87 at `|q| = 0.05`, 4.21 at `L`, 8.13 at `X` — where the frozen half
+tracked the Ewald sum exactly; and the Ewald sum's own behaviour was *right*, its
+`G = 0` term at small `q` reproducing the non-analytic `-e2 4pi Z^2 q_i q_j/(Omega q^2)`
+to five figures (1.51291 against 1.5129) and being cancelled by the response to 0.3%.
+
+**The second finding is about `Gamma`, not about `q`.** The 1.94e-6 residue against P25 is
+the ground state's own Ewald sum: `ewald.f90`'s real-space cutoff is `4/sqrt(alpha)`, and
+`erfc(4) ~ 2e-8` bounds the error in the **energy** and not in a second derivative, which
+carries `1/r^5`. `d2ionq.f90` uses `5/sqrt(alpha)` for exactly that reason and this
+follows it; extending the ground-state sum to the same cutoff brings the two into
+agreement at **1.07e-9**, which is what says the residue is that and nothing else. It is
+worth 0.002 cm^-1 on silicon's optical mode — inside every tolerance P25 quotes, and now
+measured rather than unknown.
+
+**What is outstanding.** The whole point of a dispersion is the *second* half of this:
+the small group of `q` (`symdvscf`, so a wedge rather than the full grid), the star of
+`q`, and `q2r`/`matdyn`'s Fourier interpolation with the acoustic sum rule. `ph_2d` has a
+committed BN reference for both. Beside them the refusals this lands with, each named at
+the door: ultrasoft and PAW (`S` moves with the atoms and the multiplier matrix has no
+two-sphere form — the bra is at `k` and the ket at `k+q`, where `qq_ij` pairs projectors
+on one sphere), metals, spin, spinors, spirals, meta-GGA, DFT+U, and a **nonlinear core
+correction** — which is the one refusal that is a statement about `q` rather than about a
+dataset, since `dynmatcc.f90:105` calls `set_drhoc(xq, drc)`: two atoms' core charges
+overlap inside a nonlinear `E_xc` and that second derivative is not diagonal in the atom.
 
 ## 4. Validation strategy
 
