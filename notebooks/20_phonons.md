@@ -1,4 +1,4 @@
-# Phonons at $\Gamma$: the second derivative of the energy
+# Phonons: the second derivative of the energy, at $\Gamma$ and beyond
 
 A phonon frequency is an eigenvalue of the force constant matrix -- the second derivative of
 the total energy with respect to the atomic positions -- divided by the masses:
@@ -26,6 +26,8 @@ no second-order wavefunction is needed.
 | the same cell, **ultrasoft** | **513.295** | 513.275 |
 | the same cell, **PAW** | **513.378** | 513.404 |
 | two-atom aluminium, a **metal** | **311.0335 cm⁻¹** | 311.035 |
+| silicon at $L$, worst of six branches | **0.054 cm⁻¹** from `ph.x` | |
+| silicon at $X$, worst of six branches | **0.038 cm⁻¹** from `ph.x` | |
 
 The acoustic residue is a *diagnostic* rather than an answer, and the section below is about
 what it measures.
@@ -71,16 +73,16 @@ print("acoustic sum rule, D_00 + D_01  %.3e" % (on_site[0, 0] + between[0, 0]))
 ```
 
     D[Si_1, Si_1] =
-     [[ 0.276582  0.        0.      ]
-     [ 0.        0.276582 -0.      ]
-     [ 0.       -0.        0.276582]]
+     [[0.276582 0.       0.      ]
+     [0.       0.276582 0.      ]
+     [0.       0.       0.276582]]
     D[Si_1, Si_2] =
-     [[-0.27654648 -0.          0.        ]
-     [-0.         -0.27654648  0.        ]
-     [ 0.         -0.         -0.27654648]]
+     [[-0.27654648 -0.         -0.        ]
+     [-0.         -0.27654648 -0.        ]
+     [-0.          0.         -0.27654648]]
     
-    isotropic on-site block to      5.6e-17
-    asymmetry, max |D - D^T|        1.4e-16
+    isotropic on-site block to      6.9e-17
+    asymmetry, max |D - D^T|        1.7e-16
     acoustic sum rule, D_00 + D_01  3.552e-05
 
 
@@ -187,7 +189,7 @@ print("\nacoustic sum rule  %.2e Ry/bohr^2,  against on-site force constants of 
          np.abs(metal.matrix[0, :, 0, :]).max()))
 ```
 
-    silicon, sum rule imposed:  [-9.041e-06 -6.024e-06 -3.547e-06  5.101e+02  5.101e+02  5.101e+02]
+    silicon, sum rule imposed:  [1.494e-06 9.624e-06 1.014e-05 5.101e+02 5.101e+02 5.101e+02]
 
 
     
@@ -201,6 +203,110 @@ print("\nacoustic sum rule  %.2e Ry/bohr^2,  against on-site force constants of 
     
     acoustic sum rule  1.06e-05 Ry/bohr^2,  against on-site force constants of 0.0476
 
+
+## Away from the zone centre
+
+A phonon is a wave, and so far every frequency in this notebook has been the wave of
+infinite wavelength: all the cells move together. A phonon at wavevector $\mathbf q$ moves
+them out of step,
+
+$$ \mathbf u_s(\mathbf R) = \mathbf u_s \, e^{i \mathbf q \cdot \mathbf R} $$
+
+and that is a pattern the unit cell does not have. It repeats only after however many cells
+it takes for $e^{i \mathbf q \cdot \mathbf R}$ to come back to one, which for a general
+$\mathbf q$ is never. Displacing the atoms and measuring the energy therefore means building
+a supercell, and the cost of a phonon dispersion by that route is the cost of a supercell per
+wavevector.
+
+Linear response escapes it, and the reason is worth one line. The *change* in every quantity
+is $e^{i \mathbf q \cdot \mathbf r}$ times something that is still periodic in the original
+cell. So the perturbed orbital is again a Bloch state, at $\mathbf k + \mathbf q$ instead of
+$\mathbf k$, and the whole calculation stays in the two-atom cell. What a wavevector costs is
+one more set of plane waves, not one more crystal.
+
+$$ D_{I\alpha,J\beta}(\mathbf q)
+   = \sum_{\mathbf R} \frac{\partial^2 E}{\partial u_{I\alpha}(0)\,\partial u_{J\beta}(\mathbf R)}
+     \, e^{i \mathbf q \cdot \mathbf R}, \qquad
+   \omega^2(\mathbf q)\,\mathbf e = \frac{D(\mathbf q)}{\sqrt{M_I M_J}}\,\mathbf e $$
+
+$D(\mathbf q)$ is hermitian rather than symmetric, and its eigenvalues are the branches of
+the dispersion. Silicon has six: two atoms in the cell, three directions each, splitting into
+three acoustic branches that vanish at $\Gamma$ and three optical ones that do not.
+
+
+```python
+silicon_q = Calculator.from_file(CASES / "si-epsilon-unshifted-nosym.in",
+                                pseudo_dir=PSEUDO, announce=False)
+
+POINTS = {"$\\Gamma$": (0.0, 0.0, 0.0), "$L$": (0.5, -0.5, 0.5), "$X$": (0.0, -1.0, 0.0)}
+PH_X = {"$\\Gamma$": [3.2736] * 3 + [519.1982] * 3,
+        "$L$": [101.8428, 101.8428, 382.2406, 405.1208, 488.0194, 488.0194],
+        "$X$": [132.8053, 132.8053, 405.3589, 405.3589, 455.1387, 455.1387]}
+
+branches = {label: silicon_q.get_phonons_at_q(q=q, q_cartesian=True).frequencies
+            for label, q in POINTS.items()}
+for label in POINTS:
+    print("%-9s %s" % (label, np.array2string(branches[label], precision=2)))
+    print("   ph.x  %s" % np.array2string(np.array(PH_X[label]), precision=2))
+```
+
+    $\Gamma$  [  4.32   4.32   4.32 519.21 519.21 519.21]
+       ph.x  [  3.27   3.27   3.27 519.2  519.2  519.2 ]
+    $L$       [101.79 101.79 382.24 405.1  488.03 488.03]
+       ph.x  [101.84 101.84 382.24 405.12 488.02 488.02]
+    $X$       [132.8  132.8  405.32 405.32 455.12 455.12]
+       ph.x  [132.81 132.81 405.36 405.36 455.14 455.14]
+
+
+The three acoustic branches collapse at $\Gamma$ because translating the whole crystal costs
+no energy, and what is printed there instead is the small residue of the plane-wave basis.
+Everywhere else the six branches are real frequencies, and they are what a neutron scattering
+experiment measures. Silicon's transverse acoustic branch is famously flat, which is why
+$L$ and $X$ put it at 102 and 133 cm⁻¹ while the optical branch has barely moved from its
+zone-centre 519.
+
+The comparison against `ph.x` is worth one sentence, because the two calculations do not
+sample the zone the same way: Quantum ESPRESSO reduces the eight symmetry-inequivalent
+$k$-points and averages the response back over the symmetry group, while this runs all
+sixty-four and averages nothing. Agreeing to **0.05 cm⁻¹** on twelve zone-boundary
+frequencies is therefore a statement about both routes.
+
+
+```python
+fig, ax = plt.subplots(figsize=(6.2, 4.0))
+place = {"$\\Gamma$": 0, "$L$": 1, "$X$": 2}
+here = np.array([branches[label] for label in place])
+there = np.array([PH_X[label] for label in place])
+
+ax.plot(list(place.values()), here, "-o", color="#1f77b4", markersize=7, linewidth=1)
+ax.plot(list(place.values()), there, "x", color="#d62728", markersize=8, mew=1.8)
+ax.plot([], [], "-o", color="#1f77b4", label="defumat")
+ax.plot([], [], "x", color="#d62728", label="ph.x", mew=1.8)
+ax.set_xticks(list(place.values()), list(place.keys()), fontsize=13)
+ax.set_ylabel("frequency [cm$^{-1}$]")
+ax.set_title("Silicon: the six phonon branches at three symmetry points")
+ax.axhline(0.0, color="0.7", linewidth=0.8)
+ax.legend(loc="center right", frameon=False)
+fig.tight_layout()
+```
+
+
+    
+![png](20_phonons_files/20_phonons_11_0.png)
+    
+
+
+The lines joining the points are a guide to the eye and not a dispersion: the branches between
+these wavevectors are separate calculations, one per $\mathbf q$. Getting a smooth curve out
+of a handful of them is a second step, in which the force constants are transformed back to
+real space, where they are short ranged, and interpolated. That step is not here yet, and
+neither is the saving that comes with it: the symmetry that relates one wavevector to another
+is a different group from the crystal's, so this runs the full $k$-grid where Quantum
+ESPRESSO runs a wedge.
+
+What is here works for norm-conserving pseudopotentials in an insulator. Ultrasoft and PAW
+datasets are refused at $\mathbf q \neq 0$, and so are metals, magnetism and spin-orbit
+coupling.
 
 The three real modes land within **0.002 cm⁻¹** of `ph.x`, tighter than silicon's 0.05, and
 the folded pair splits by the same 0.004 `ph.x` splits it by. That near-degeneracy is the
@@ -225,12 +331,11 @@ means. Everything the two datasets add vanishes identically when the overlap is 
 which is what keeps the norm-conserving number in the header table unchanged to round-off.
 
 What is refused is one *combination* rather than a dataset: an ultrasoft or PAW **metal**,
-where the moving overlap and the responding occupations meet. And this is $\Gamma$ only -- a
-phonon at $\mathbf q \neq 0$ needs the perturbed states at $\mathbf k + \mathbf q$ as well as
-at $\mathbf k$, and a dispersion needs a Fourier interpolation on top of that.
+where the moving overlap and the responding occupations meet.
 
 ---
-The tests behind this notebook: `tests/regression/test_phonons.py`, which holds the
+The tests behind this notebook: `tests/regression/test_phonons.py` and
+`tests/regression/test_phonons_at_q.py`, which hold the
 frequencies against `ph.x` on all three kinds of dataset and on the metal, the rigid
 translation reproducing $-\partial\rho/\partial x$, whole columns of the matrix against
 finite-differenced forces, and the symmetry-reduced wedge against the whole closed grid.

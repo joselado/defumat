@@ -738,6 +738,15 @@ def response_force_constants(solver, dpsi, bare, nat) -> np.ndarray:
     The conjugate sits on ``dpsi`` and the row index is the perturbation
     ``dpsi`` solves, which is ``drhodvloc``'s ``dot_product(drhos(ipert), dvloc(nu_j))``
     read through ``drho ~ conj(psi) dpsi``.
+
+    **What this costs**, since a design is not finished until its working set is
+    known: the loop is ``(3 nat)^2`` passes over an ``(nspin, nk, nocc, npwx)``
+    block, which is the same flop count a single ``(3 nat, N)`` Gram matrix
+    would be and worse constants. It allocates nothing -- ``dpsi`` and ``bare``
+    are already held -- and stacking them into that matrix would hold a second
+    copy of the largest arrays a phonon run has. On the cells this phase admits
+    the Sternheimer solves dominate it by two orders; on a large cell the trade
+    is worth revisiting, and the stack is where to start.
     """
     weights = solver.weights
     matrix = np.zeros((3 * nat, 3 * nat), dtype=complex)

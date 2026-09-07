@@ -71,6 +71,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Born effective charges | `get_born_charges()` | [19](19_linear_response.ipynb) |
 | Band velocities | `get_band_velocities()` | [19](19_linear_response.ipynb) |
 | Phonon frequencies at `Gamma` | `get_phonons()` | [20](20_phonons.ipynb) |
+| Phonon frequencies at any wavevector | `get_phonons_at_q()` | [20](20_phonons.ipynb) |
 | Raman tensors | `get_raman_tensors()` | [26](26_raman_and_infrared_spectra.ipynb) |
 | Raman and infrared activities per mode | `get_vibrational_spectrum()` | [26](26_raman_and_infrared_spectra.ipynb) |
 | LO-TO splitting, and the static dielectric constant | `get_vibrational_spectrum(loto_direction=..., neutralize=True)` | [26](26_raman_and_infrared_spectra.ipynb) |
@@ -141,7 +142,7 @@ want a number.
 | [`17_reaching_self_consistency.ipynb`](17_reaching_self_consistency.ipynb) | Charge sloshing and Kerker screening, and the unstable magnetic solutions a mixer cannot reach |
 | [`18_continuing_a_calculation.ipynb`](18_continuing_a_calculation.ipynb) | Starting one run from another across a change of spin regime: iron's moment rotated in one iteration |
 | [`19_linear_response.ipynb`](19_linear_response.ipynb) | Silicon's dielectric constant and Born charges against `ph.x`, norm-conserving and ultrasoft, and the charge that does the screening |
-| [`20_phonons.ipynb`](20_phonons.ipynb) | Phonons at Gamma: silicon's optical mode against `ph.x`, the charge that rearranges, and a metal |
+| [`20_phonons.ipynb`](20_phonons.ipynb) | Phonons: silicon's optical mode at Gamma against `ph.x`, the charge that rearranges, a metal, and the six branches at the zone boundary |
 | [`21_electrostriction.ipynb`](21_electrostriction.ipynb) | How a strain changes the dielectric constant: electrostriction, the elasto-optic tensor and elastic constants |
 | [`22_van_der_waals.ipynb`](22_van_der_waals.ipynb) | Grimme's D2, and bilayer graphene binding at 3.23 A where PBE alone has no minimum at all |
 | [`23_variable_cell_relaxation.ipynb`](23_variable_cell_relaxation.ipynb) | Relaxing the cell at an applied pressure: arsenic at 500 kbar going simple cubic |
@@ -242,24 +243,26 @@ pip install -e ".[notebooks]"    # from the repository root: jupyter, matplotlib
 jupyter lab notebooks/
 ```
 
-**Every notebook in the set is timed and every one is far inside the ten-minute
-ceiling.** `tools/export_notebooks.sh` measures them as it re-executes them and
+**Every notebook in the set is timed and every one is inside the ten-minute
+ceiling.** `20` is now the slowest at 4m42s: three wavevectors of a phonon on a
+64-point grid is what a dispersion costs, and the cell to cut if it ever grows is
+a wavevector rather than the physics. `tools/export_notebooks.sh` measures them as it re-executes them and
 fails over that ceiling, so the table below is a by-product of keeping the outputs
 true rather than something anyone has to remember to do. Wall clock on one
 workstation core, slowest last:
 
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
-| `01` | 5 | `07` | 22 | `31` | 34 | `14` | 89 |
-| `09` | 6 | `06` | 23 | `40` | 34 | `26` | 109 |
-| `02` | 8 | `25` | 28 | `23` | 35 | `33` | 115 |
-| `37` | 9 | `17` | 29 | `32` | 35 | `13` | 131 |
-| `03` | 10 | `18` | 29 | `34` | 40 | `30` | 131 |
-| `05` | 10 | `12` | 30 | `19` | 47 | `39` | 151 |
-| `04` | 12 | `21` | 30 | `10` | 50 | `08` | 171 |
-| `22` | 12 | `15` | 31 | `20` | 57 | `27` | 178 |
-| `16` | 18 | `24` | 31 | `29` | 59 | `38` | 242 |
-| `00` | 22 | `28` | 33 | `11` | 81 | `35` | 276 |
+| `01` | 5 | `07` | 22 | `31` | 34 | `26` | 109 |
+| `09` | 6 | `06` | 23 | `40` | 34 | `33` | 115 |
+| `02` | 8 | `25` | 28 | `23` | 35 | `13` | 131 |
+| `37` | 9 | `17` | 29 | `32` | 35 | `30` | 131 |
+| `03` | 10 | `18` | 29 | `34` | 40 | `39` | 151 |
+| `05` | 10 | `12` | 30 | `19` | 47 | `08` | 171 |
+| `04` | 12 | `21` | 30 | `10` | 50 | `27` | 178 |
+| `22` | 12 | `15` | 31 | `29` | 59 | `38` | 242 |
+| `16` | 18 | `24` | 31 | `11` | 81 | `35` | 276 |
+| `00` | 22 | `28` | 33 | `14` | 89 | `20` | 282 |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two
 hand-built linear solves and a second self-consistent run that were demonstrating
@@ -297,7 +300,7 @@ its own QE reference and is one variable away, at about forty minutes and a 9.4 
 
 `19` and `20` run without it too: their inputs and the regenerated `ph.x` outputs they
 are compared against are both committed under `tests/data/qe/`, because `ph_base`'s own
-benchmark dates from release 6.0 and has drifted. `20` takes about a minute.
+benchmark dates from release 6.0 and has drifted.
 
 `16` runs without the vendored tree as well: its input and the `projwfc.x` reference it is
 compared against are both committed under `tests/data/qe/`, because QE's test suite has no
