@@ -25,7 +25,8 @@ from defumat.pseudo.upf import Pseudopotential
 from defumat.system.cell import Cell
 from defumat.system.structure import Structure
 
-__all__ = ["structure_factors", "local_potential", "starting_charge", "core_charge",
+__all__ = ["structure_factors", "local_potential", "local_potential_at_q",
+           "starting_charge", "core_charge",
            "species_local_potential", "species_core_charge", "species_atomic_charge",
            "combine_species"]
 
@@ -35,7 +36,9 @@ def structure_factors(
 ) -> jnp.ndarray:
     """``S_t(G)`` for every species, shaped ``(ntyp, ngm)``."""
     membership = _membership(structure)
-    return _structure_factors(gvectors.cartesian(cell), structure.positions, membership)
+    return _structure_factors_at(
+        gvectors.cartesian(cell), structure.positions, membership
+    )
 
 
 def _membership(structure: Structure) -> jnp.ndarray:
@@ -50,12 +53,6 @@ def _membership(structure: Structure) -> jnp.ndarray:
     return jnp.asarray(
         np.equal(types[None, :], np.arange(structure.ntyp)[:, None]).astype(float)
     )
-
-
-@jax.jit
-def _structure_factors(g, positions, membership):
-    phases = jnp.exp(-1j * (g @ positions.T))  # (ngm, nat)
-    return membership @ phases.T  # (ntyp, ngm)
 
 
 def _sum_over_species(radial, structure, cell, gvectors) -> jnp.ndarray:
@@ -149,6 +146,64 @@ def local_potential(
         cell,
         gvectors,
     )
+
+
+def local_potential_at_q(
+    pseudos: tuple[Pseudopotential, ...],
+    structure: Structure,
+    cell: Cell,
+    gvectors: GVectors,
+    q_cart,
+) -> jnp.ndarray:
+    """``sum_t vloc_t(|G+q|) sum_{a in t} e^{-i (G+q) . tau_a}``.
+
+    :func:`local_potential` with the argument shifted, and it exists for one
+    reason: **the derivative of this is the bare local perturbation of a phonon
+    at** ``q``. Displace atom ``a`` by ``u e^{i q R}`` and the change in the
+    local potential is ``e^{i q r}`` times a lattice-periodic function whose
+    Fourier coefficients are
+
+        dV_a(G) = -i (G+q)_alpha vloc_t(|G+q|) e^{-i (G+q) . tau_a} u_alpha
+
+    which is exactly ``d/dtau_a`` of the expression above -- the phase carries
+    ``G+q`` rather than ``G``, so differentiating it brings down ``-i(G+q)``
+    and the radial table is already evaluated at the shifted argument. That is
+    ``compute_dvloc.f90``'s ``vlocq(ig,nt) * gu * fact * gtau``, with its
+    ``fact = tpiba (-i) eigqts(na)`` and ``gtau = e^{-i G . tau}`` recombined
+    into the one phase ``e^{-i(G+q) . tau}``, and its ``gu = (xq+g) . u``.
+
+    So the phonon's bare local term stays what ``PLAN.md`` P24 made it -- one
+    ``jvp`` through the positions of code that builds a potential -- rather
+    than a second, hand-derived expression. What ``q`` changes is the *code
+    being differentiated*, not the way the derivative is taken.
+
+    The radial table is QE's own ``init_vlocq``: ``vloc_of_g`` evaluated at
+    ``|q+G|^2`` and nothing else, so ``q = 0`` returns :func:`local_potential`
+    to round-off and that is the regression this pair is checked by.
+
+    ``q_cart`` is in 1/bohr, like :meth:`defumat.basis.gvectors.GVectors.cartesian`.
+    """
+    g = gvectors.cartesian(cell) + jnp.asarray(q_cart)[None, :]
+    gmod = modulus(g)
+    volume = cell.volume
+    values = tuple(
+        local_potential_of_g(pseudos[t], gmod, volume)
+        for t in range(structure.ntyp)
+    )
+    membership = _membership(structure)
+    factors = _structure_factors_at(g, structure.positions, membership)
+    return _contract_species(tuple(values), factors)
+
+
+@jax.jit
+def _structure_factors_at(g, positions, membership):
+    """``S_t(G)`` on a G set handed in rather than derived from the cell.
+
+    One function for both callers: :func:`structure_factors` passes ``G`` and
+    :func:`local_potential_at_q` passes ``G+q``.
+    """
+    phases = jnp.exp(-1j * (g @ positions.T))  # (ngm, nat)
+    return membership @ phases.T  # (ntyp, ngm)
 
 
 def starting_charge(
