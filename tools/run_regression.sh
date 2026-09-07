@@ -77,6 +77,9 @@ for f in $GLOB; do
     # otherwise leaves no trace of which file it was in, which is exactly what
     # made the 2026-09-07 session unrecoverable.
     echo "$name started $(date -Is)" >> "$INFLIGHT"
+    PEAKFILE="$OUT/$name.peak"
+    rm -f "$PEAKFILE"
+    if [ -x /usr/bin/time ]; then TIMER=(/usr/bin/time -f %M -o "$PEAKFILE"); else TIMER=(); fi
     if [ "$CAPPED" -eq 1 ]; then
         # The scope holds systemd-run and its descendants, not this loop, so the
         # kernel's kill lands there and the loop lives to record it. The unit
@@ -85,16 +88,31 @@ for f in $GLOB; do
         # looks like a test failure. `reset-failed` clears it afterwards; the
         # name itself is in the file's log, on systemd-run's own first line.
         unit="defumat-reg-$name-$$"
-        systemd-run --user --unit="$unit" \
+        "${TIMER[@]}" systemd-run --user --unit="$unit" \
             -p MemoryMax="$MEMMAX" -p MemorySwapMax=0 --scope \
             python3 -m pytest "$f" -q -m "$MARK" --tb=line > "$OUT/$name.log" 2>&1
         status=$?
         systemctl --user reset-failed "$unit.scope" >/dev/null 2>&1
         (exit $status)
     else
-        python3 -m pytest "$f" -q -m "$MARK" --tb=line > "$OUT/$name.log" 2>&1
+        "${TIMER[@]}" python3 -m pytest "$f" -q -m "$MARK" --tb=line > "$OUT/$name.log" 2>&1
     fi
     status=$?
+    # The peak goes on the durable line, which is what makes the cap
+    # self-calibrating: 12G is a guess until the files say what they reside in,
+    # and a file at 11G is the next kill whether or not it has happened yet.
+    # `/usr/bin/time` reports the descendant through the scope and propagates
+    # the 137, both checked; a killed scope is gone by now, so systemd's own
+    # MemoryPeak is not readable here.
+    peak=""
+    if [ -s "$PEAKFILE" ]; then
+        kb=$(tail -1 "$PEAKFILE")
+        case "$kb" in
+            ''|*[!0-9]*) ;;
+            *) peak=" peak=$((kb / 1024))M" ;;
+        esac
+    fi
+    rm -f "$PEAKFILE"
     # pytest exits 5 when a file holds nothing matching the marker, which is a
     # normal outcome here and not a failure.
     [ "$status" -eq 5 ] && status=0
@@ -105,7 +123,7 @@ for f in $GLOB; do
     if [ "$status" -eq 137 ]; then
         line="killed (SIGKILL, cap=$MEMMAX) -- rerun this file alone or raise DEFUMAT_TEST_MEM_MAX"
     fi
-    echo "$name exit=$status | $line" >> "$SUMMARY"
+    echo "$name exit=$status$peak | $line" >> "$SUMMARY"
     echo "$name finished $(date -Is) exit=$status" >> "$INFLIGHT"
 done
 echo "ALL FILES DONE" >> "$SUMMARY"

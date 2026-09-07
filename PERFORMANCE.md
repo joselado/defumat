@@ -3015,7 +3015,7 @@ no cap at all.
 **The process boundary is the real bound**, which is what `tools/run_regression.sh` gives
 by invoking pytest once per file. A ceiling on *resident* memory is a **cgroup** rather
 than a `ulimit`, and it works on this workstation -- `systemd-run --user --unit=<name>
--p MemoryMax=8G -p MemorySwapMax=0 --scope python3 -m pytest <file>`, measured twice on
+-p MemoryMax=12G -p MemorySwapMax=0 --scope python3 -m pytest <file>`, measured twice on
 2026-09-07: a plain allocation past a 512 MB limit is `SIGKILL`ed at it (exit 137, shell
 untouched), and **`test_scf.py::test_total_energy_matches_reference`, eight SCF runs
 against `pw.x` references, passes inside a 4 GB scope** at 1.0 GB peak RSS. That is the
@@ -3042,7 +3042,9 @@ happens is that the terminal dies. `run_regression.sh` now puts each file in a c
 scope (`DEFUMAT_TEST_MEM_MAX`, 12G by default), so a kill costs that file's result and a
 `killed (SIGKILL, cap=...)` line; verified by killing a synthetic 2.5 GB test under a
 512 MB cap and watching the loop record it and carry on, and by `test_scf.py`'s 27 slow
-tests passing under the default cap in 7.4 s. What the scope cannot do is name the test:
+tests passing under the default cap in 7.4 s. Each line also carries that file's peak RSS -- `test_scf.py`
+1011 M, `test_dos.py` 1297 M, both slow -- so the first full pass through the runner is
+what says whether 12G is the right default. What the scope cannot do is name the test:
 that wants an RSS watchdog in the fixture, and it is what remains open.
 
 ## What the Tran-Blaha potential costs (P30)

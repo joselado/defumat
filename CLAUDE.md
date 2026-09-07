@@ -663,7 +663,7 @@ delegation, probed 2026-09-07). Name the unit rather than quieting it, so
 something else:
 
 ```bash
-systemd-run --user --unit=reg-<file> -p MemoryMax=8G -p MemorySwapMax=0 --scope \
+systemd-run --user --unit=reg-<file> -p MemoryMax=12G -p MemorySwapMax=0 --scope \
     python3 -m pytest <file> -q
 ```
 
@@ -697,6 +697,12 @@ because a killed scope stays *loaded* and reusing the name fails with "already l
 which reads as a test failure. It also writes an `in-flight.log` line before starting a
 file — **what was running is the thing a kill destroys**, and no cap can be trusted to
 cover every way that happens.
+
+**Every summary line carries that file's peak RSS**, which is what makes the default cap
+self-calibrating: `12G` is a guess, and a file sitting at 11 GB is the next kill whether or
+not it has happened yet. The two figures on record so far are `test_scf.py` at **1011 M**
+and `test_dos.py` at **1297 M**, both of them slow files running clean, so the first full
+pass through the runner is also the measurement that says what the cap should be.
 
 **What is still missing is the named failure.** A `psutil` RSS watchdog in the autouse
 fixture, failing a single test as it approaches the cap, turns an anonymous `SIGKILL` into
