@@ -900,6 +900,14 @@ def dynamical_matrix_at_q(
     **complex**: ``D(q)`` is hermitian rather than symmetric, and only at
     ``q = 0`` (or at a wavevector where the crystal has inversion) does it
     collapse to a real matrix.
+
+    **There is no** ``atoms=`` **here**, which is the first lever a large cell
+    would reach for at ``Gamma`` (:func:`~defumat.response.phonon.dynamical_matrix`
+    has it). It is left out rather than half-written: the response half of the
+    assembly would index a subset's rows while the frozen half and
+    :func:`ewald_dynamical_matrix` are whole-cell objects, and a partial
+    dynamical matrix that silently mixed the two would be a plausible wrong
+    answer rather than an error. Adding it means slicing all three together.
     """
     from defumat.response.phonon import Phonons
     from defumat.response.sternheimer import make_sternheimer
