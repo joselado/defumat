@@ -8,6 +8,20 @@ is below. Everything about *what was found* — per-phase validation numbers, th
 phase uncovered, what a refusal was measured at — is in `PLAN.md` §3, one section per phase.
 Do not restate a phase's findings here; add them there.
 
+## How to talk to the user
+
+**The user is a physicist, so write to them as one, in plain English.** Explain what a
+thing does physically before what it does in code, and keep the sentences short. When a
+choice genuinely needs their input, put it in terms a physicist who writes some Python
+will recognise — what the option changes in the calculation, what it costs, what it gets
+wrong — not in software-engineering vocabulary (pytrees, tracing, cache invalidation)
+that assumes the answer is about the code rather than the physics.
+
+**This is about talking, not about writing.** It binds replies, questions and summaries in
+the session. It does **not** loosen `PLAN.md`, `PERFORMANCE.md`, `docs/features.tex`,
+docstrings or comments: the record stays exact, technical and numeric, because the whole
+rule of this project is that a claim is a number rather than an adjective.
+
 ## What this project is
 
 A ground-up reimplementation of Quantum ESPRESSO in Python + JAX ("defumat"). The
