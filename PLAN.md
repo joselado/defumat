@@ -246,11 +246,13 @@ because that is what decides whether it is a session or a phase.
   wrong the strain leg is).
 - **An ultrasoft spin spiral** (P42, attempted and reverted, four findings banked) and
   **ultrasoft/PAW in the sum-over-states `chi_0`** (P40, two findings banked).
-- **A bound on an out-of-memory kill.** Not a physics gap and it belongs here anyway,
-  because it has cost work three times: nothing stops a run that goes over the machine's
-  memory from taking the whole process, so a kill costs the session rather than one file.
-  The cgroup scope that would bound it and the RSS watchdog that would name it are both
-  written down in `CLAUDE.md`'s memory section and neither is implemented.
+- **A *named* out-of-memory failure.** Not a physics gap and it belongs here anyway,
+  because the unnamed kind has cost work three times (P28b, P46, and a session on
+  2026-09-07). Half of it is closed: `tools/run_regression.sh` runs each file in a cgroup
+  scope with `MemoryMax`, so a kill costs that file's result and a durable line instead of
+  the run. What is left is the `psutil` RSS watchdog that would fail one *named* test
+  before the kernel acts — which is also the only form of it that reaches
+  `tools/test-fast.sh`, one process by design.
 - **Cluster sweeps** (P34, planned and unstarted) and **the rest of P10** — k-axis
   sharding and GPU.
 

@@ -632,8 +632,9 @@ once.** This machine has 30 GB and both mistakes have killed a session here:
 
 - **Several slow files in one `pytest` invocation** is *one* process, so every file's XLA
   executables accumulate for the whole run — three spinor suites reached 2.4 GB in ninety
-  seconds and kept climbing. Run them one at a time (`tools/run_regression.sh`, or a loop
-  with one `python3 -m pytest <file>` per file).
+  seconds and kept climbing. Run them one at a time, through `tools/run_regression.sh`
+  rather than a hand-written loop — it caps each file's memory as well as separating them,
+  which is the next subsection.
 - **Two test runs in parallel, or a test run beside anything being measured.** A timing
   taken next to a test run is not a timing — a `projwfc.x` comparison measured beside a
   background suite read 70% slow and had to be discarded and repeated.
@@ -683,15 +684,26 @@ Two caps that look like this one and are not:
   against; development here is CPU-only, where there is no such pool and nothing to bound.
   The absence of a CPU equivalent inside JAX is exactly why this item is open.
 
-**What is required, and what neither exists yet:** `tools/run_regression.sh` should run
-each file inside such a scope, write `killed (OOM)` as that file's durable summary line,
-and go on to the next one — a kill then costs one file's *result*, which is the whole point
-of the per-file runner and is currently defeated by the kill taking the runner too. Better
-still, a `psutil` RSS watchdog in the autouse fixture that fails a single test as it
-approaches the limit turns an anonymous kill into a **named** failure, which is the
-difference between a lost afternoon and a bug report. Until one of the two is written:
-**commit before starting anything heavy**, and treat every slow-suite invocation as
-something that can take the session with it.
+**`tools/run_regression.sh` is where this is wired, and it is the way to run anything
+long.** Each file goes into its own scope, a kill lands there rather than on the loop, and
+the loop writes `killed (SIGKILL, cap=…)` as that file's durable summary line and starts
+the next one — so a kill costs one file's *result*, which is what the per-file runner was
+always for and what the kill taking the runner defeated. Three things it does that are not
+obvious and are each a bug that was hit while writing it: the cap is `DEFUMAT_TEST_MEM_MAX`
+(`off` for none, and a machine without cgroup delegation says so and runs uncapped); a file
+the cap killed is **retried** on the next run rather than skipped, since the reason to
+resume after a kill is that something changed; and the unit name carries the run's PID,
+because a killed scope stays *loaded* and reusing the name fails with "already loaded",
+which reads as a test failure. It also writes an `in-flight.log` line before starting a
+file — **what was running is the thing a kill destroys**, and no cap can be trusted to
+cover every way that happens.
+
+**What is still missing is the named failure.** A `psutil` RSS watchdog in the autouse
+fixture, failing a single test as it approaches the cap, turns an anonymous `SIGKILL` into
+a test name — the difference between a lost afternoon and a bug report — and it is also
+the only form of this that works inside `tools/test-fast.sh`, which is one process by
+design. Until then: run anything long through `run_regression.sh`, and **commit before
+starting it**.
 
 What neither bound touches is the peak *inside* one test, which is a real cost to be sized
 in advance rather than discovered: the backward pass of an ultrasoft or PAW derivative
@@ -745,7 +757,7 @@ it.
 ```
 tools/test-fast.sh                     # THE GATE: everything not marked slow, ~4.5 min
 python3 -m pytest -m slow              # the other 588, over two hours
-tools/run_regression.sh                # the same slow set, resumably, one file at a time
+tools/run_regression.sh                # the same slow set, one capped process per file
 python3 -m pytest tests/unit/test_qeref.py::test_scf_silicon   # a single test
 python3 -m defumat.cli inspect <qe-output>   # summarise what the parser reads
 tools/export_notebooks.sh                     # re-execute notebooks + refresh .md exports
@@ -765,9 +777,9 @@ because it is the part that catches what the gate cannot, and the one time it
 was run end to end it found **three phases' claims had drifted** — P29's stale
 refusal list and its broken BFGS metric, P36's 8.7e-14 wedge agreement, and two
 notebooks whose committed outputs no longer matched their code (`PLAN.md` P38).
-`tools/run_regression.sh` exists for running it in pieces: one pytest invocation
-per file, a durable summary line each, and a file already in the summary is
-skipped, so an interrupted run resumes instead of restarting.
+`tools/run_regression.sh` exists for running it in pieces: one **memory-capped**
+pytest invocation per file, a durable summary line each, and a file already in
+the summary is skipped, so an interrupted run resumes instead of restarting.
 
 ## JAX rules
 

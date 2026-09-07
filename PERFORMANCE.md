@@ -3038,8 +3038,12 @@ documentation restructuring uncommitted and no record of what had been running -
 what turned this from a testing habit into an open item (`PLAN.md` §3's outstanding index,
 and the section `CLAUDE.md` now carries). Every bound above keeps a run *under* the
 ceiling; none of them decides what happens when one goes over it, and on this machine what
-happens is that the terminal dies. The cgroup scope is the mechanism for making that cost
-one file, and `run_regression.sh` does not use it yet.
+happens is that the terminal dies. `run_regression.sh` now puts each file in a cgroup
+scope (`DEFUMAT_TEST_MEM_MAX`, 12G by default), so a kill costs that file's result and a
+`killed (SIGKILL, cap=...)` line; verified by killing a synthetic 2.5 GB test under a
+512 MB cap and watching the loop record it and carry on, and by `test_scf.py`'s 27 slow
+tests passing under the default cap in 7.4 s. What the scope cannot do is name the test:
+that wants an RSS watchdog in the fixture, and it is what remains open.
 
 ## What the Tran-Blaha potential costs (P30)
 
