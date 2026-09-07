@@ -34,6 +34,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -43,8 +44,10 @@ from defumat.response.phonon import dynamical_matrix
 from defumat.response.phononq import (
     dynamical_matrix_at_q,
     ewald_dynamical_matrix,
+    frozen_force_constants,
     require_a_two_sphere_regime,
 )
+from defumat.response.sternheimer import make_sternheimer
 from defumat.scf import Calculation, run_scf
 from defumat.system import build_system
 
@@ -254,6 +257,51 @@ def test_the_ewald_term_reproduces_the_ground_state_hessian_at_q_zero():
 # Identities the zone centre cannot check.
 # ---------------------------------------------------------------------------
 
+def test_the_frozen_electronic_hessian_carries_no_q():
+    """The fact the whole assembly rests on, measured instead of read.
+
+    A displacement pattern ``u_s e^{iq.R}`` moves every cell, so almost
+    everything in the second derivative depends on ``q``. The exception is the
+    part taken at a **frozen** electronic state: it is diagonal in the atom
+    index, so the phases ``e^{iq.R}`` of the two displacements it couples are
+    attached to the same atom and cancel. That is why one ground state serves
+    every wavevector and only the ion-ion sum has to be redone.
+
+    It was established by reading ``dynmat_us.f90:105-124`` -- ``init_us_2`` is
+    called at ``ikk`` and ``compute_nldyn`` uses only ``ikk`` and ``wk(ikk)``,
+    never the ``k + q`` index. This is the same statement as a number: the
+    frozen half's dependence on ``q`` is *entirely* its Ewald term, so removing
+    that term must leave something constant.
+
+    Measured: the frozen half differs by 1.515768e-6 between ``q`` and
+    ``q + G``, and :func:`ewald_dynamical_matrix` differs by 1.515768e-6 -- the
+    same number, which is the Ewald reciprocal sum's own truncation and is what
+    sets the floor of the periodicity check below. The electronic remainder is
+    constant to 1e-12, which is where this asserts.
+
+    Cheap by construction: the frozen half needs no linear solve, so this runs
+    in a ground state and two Ewald sums.
+    """
+    calculation, result = _ground_state("si-epsilon-unshifted-nosym")
+    cell = calculation.system.cell
+    solver = make_sternheimer(calculation, result, threshold=1.0e-14)
+    positions = jnp.asarray(calculation.system.structure.positions)
+
+    def frozen_minus_ewald(q_crystal):
+        q_cart = np.asarray(
+            cell.k_to_cartesian(np.asarray(q_crystal, dtype=float))
+        ) * cell.tpiba
+        whole = np.asarray(frozen_force_constants(
+            calculation, solver, positions, result.density, q_cart
+        ))
+        return whole - np.asarray(ewald_dynamical_matrix(calculation, q_cart))
+
+    reference = frozen_minus_ewald([0.0, 0.0, 0.0])
+    for q in ([0.25, 0.25, 0.0], [0.5, -0.5, 0.5], [1.25, 0.25, -1.0]):
+        difference = np.abs(frozen_minus_ewald(q) - reference).max()
+        assert difference < 1e-12, (q, difference)
+
+
 def test_the_matrix_is_periodic_in_the_reciprocal_lattice():
     """``D(q + G) = D(q)``, and the two sides share almost nothing.
 
@@ -269,6 +317,16 @@ def test_the_matrix_is_periodic_in_the_reciprocal_lattice():
 
     Checked on the matrix rather than the frequencies, since a frequency is
     blind to a phase convention that a matrix element is not.
+
+    **Measured: 8.22e-7**, against a largest element of 0.3255 Ry/bohr^2, so
+    2.5e-6 relative. The tolerance is deliberately loose against that, because
+    the residue is not the electrons'. The *frozen* half alone differs by
+    1.515768e-6 between the two wavevectors, and
+    :func:`~defumat.response.phononq.ewald_dynamical_matrix` alone differs by
+    1.515768e-6 -- the same number to every digit printed. So what bounds this
+    check is the Ewald reciprocal sum's truncation, and the electronic response
+    is clean well below it; the time-reversal identity, which has no such
+    floor, lands at 3.18e-9.
     """
     here = _phonons("si-epsilon-unshifted-nosym", (0.25, 0.25, 0.0))
     shifted = _phonons("si-epsilon-unshifted-nosym", (1.25, 0.25, -1.0))
@@ -285,16 +343,22 @@ def test_time_reversal_conjugates_the_matrix():
     both. Nothing here imposes either: the ``-q`` run builds its own second
     sphere and its own first-order states, and the hermitisation in the
     assembly is applied *after* :attr:`~defumat.response.phonon.Phonons.asymmetry`
-    has recorded what it removed -- which on this cell is 1e-9, the linear
-    solves' own residue.
+    has recorded what it removed.
+
+    Measured: **3.18e-9** on the matrix and 8.79e-10 on the asymmetry, both of
+    them the linear solves' own residue at ``threshold = 1e-14``. Unlike the
+    periodicity check above this one has no Ewald truncation floor -- the two
+    runs truncate the ion-ion sum identically, since ``|-q| = |q|`` -- so it is
+    the sharper of the two identities, and the tolerances are set to match
+    rather than left at a round number the residue clears by four orders.
     """
     plus = _phonons("si-epsilon-unshifted-nosym", (0.25, 0.25, 0.0))
     minus = _phonons("si-epsilon-unshifted-nosym", (-0.25, -0.25, 0.0))
-    assert plus.asymmetry < 1e-6
+    assert plus.asymmetry < 1e-8, plus.asymmetry
     difference = np.abs(
         np.asarray(minus.matrix) - np.conj(np.asarray(plus.matrix))
     ).max()
-    assert difference < 1e-5, difference
+    assert difference < 1e-7, difference
 
 
 # ---------------------------------------------------------------------------

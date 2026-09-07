@@ -11009,6 +11009,18 @@ density tangents set to zero), subtracts the **same** `jax.hessian` of the **sam
 energy that sits inside that functional — so the swap carries no disagreement of its own —
 and adds `ewald_dynamical_matrix`.
 
+That reading is now also a **measurement**, which matters because it is the one premise the
+assembly cannot survive being wrong about. Strip `ewald_dynamical_matrix` back off the
+frozen half and what is left must not depend on `q` at all: across `Gamma`,
+`(0.25, 0.25, 0)`, `L` and `(1.25, 0.25, -1)` it is constant to **1e-12**
+(`test_the_frozen_electronic_hessian_carries_no_q`, which needs no linear solve and runs in
+seven seconds). The same run says where the **periodicity** check's floor comes from: the
+frozen half differs between `q` and `q + G` by 1.515768e-6 and the Ewald term alone differs
+by 1.515768e-6 — the same number to every digit — so `D(q + G) = D(q)` is bounded by the
+ion-ion sum's reciprocal truncation (8.22e-7 on the total) and not by the electrons. The
+sharper of the two identities is therefore time reversal, which truncates the ion-ion sum
+identically at `-q` and lands at **3.18e-9**, the linear solves' own residue.
+
 **The perturbation is still a gradient of code that already exists.** What `q` changes is
 the *code being differentiated*, not the way the derivative is taken:
 `local_potential_at_q` evaluates the radial table at `|G+q|` and phases it with
