@@ -197,6 +197,63 @@ tests/
 Each phase ends with a concrete, checkable number — no phase is "done" on the basis that
 the code runs.
 
+### What is outstanding
+
+The index of what is *not* here, kept at the head of the phase list so it is read before a
+new phase is started. Each entry names the missing term rather than the missing feature,
+because that is what decides whether it is a session or a phase.
+
+- **Wyckoff input** (P6, the one part of that phase not done).
+- **A relaxed magnetocrystalline anisotropy**, as against P58's frozen-density force
+  theorem, and **PAW** for it (the handoff carries no `becsum`); **`average_pp`** with it.
+- **The dynamical matrix of an ultrasoft or PAW *metal*** (P39: `addusdynmat`, the
+  density's cross derivative, needs both tangents in one `jvp` where P28's weight split
+  puts them in two).
+- **The strain coordinate's third derivatives on ultrasoft and PAW** — the elastic
+  constants, electrostriction, the elasto-optic tensor. P44 localised what is missing to
+  the `b` partial and measured it; the refusal stays.
+- **The second derivatives of a spin-polarized system** — the dynamical matrix's, the
+  strain response's and the two third derivatives' *assembly*, which is what is missing
+  rather than the solve or the kernel. P45 put the solve in and P70 the screened response
+  and `Z*`; the `Gamma` dynamical matrix is measured with the guards bypassed (the O-O
+  stretch to 1.4e-6 relative) and still refused, because the block a rigid translation
+  reaches is not right. **A GGA magnetic response** is refused with them: P70 covered the
+  LDA kernel, and `dgcxc_spin` has its own thresholds and `zeta` gates in a different
+  routine.
+- **The elastic constants and electrostriction of a spinor run** (P46 left that refusal
+  standing: they reach the energy functional directly, and their first-order
+  wavefunctions come from a Sternheimer solve with no spinor form).
+- **The force on an atom of a spin spiral** — the two components live on different
+  plane-wave spheres, so the nonlocal term needs the projectors of both. `dE/dq` (P21) is
+  what a spiral has instead.
+- **The Kubo Berry curvature of an ultrasoft or PAW dataset** (P47: the `e_n dS/dk` term
+  is written and unvalidated).
+- **PAW Born charges** (P39a: two candidates, both measured, both rejected).
+- **The electro-optic tensor and a truncation-free `chi^(2)` by the 2n+1 route** — the
+  second-order response `solve_e2`, which is what P35 refuses for. The
+  frequency-dependent `chi^(2)(-2w; w, w)` is in as of P54, by a sum over states, which
+  never needed that term.
+- **Phonons at `q != 0`** — the perturbed states live at `k + q`, so it needs the
+  two-sphere machinery P19 built for the spin spirals, plus `q2r`/`matdyn` for a
+  dispersion.
+- **The relaxed-ion piezoelectric constant** (P50: `Z*`, the `Gamma` force constants and
+  the strain response are all here; what is missing is the internal-strain tensor
+  `d^2E/du d(eps)`, whose two legs are *both* coordinates of the energy and therefore need
+  a two-coordinate frozen functional).
+- **The piezoelectric tensor of an ultrasoft or PAW dataset** (P50: nothing in the
+  assembly is norm-conserving, and what is missing is a *case* — every soft dataset
+  committed here is centrosymmetric, so its tensor is zero and agrees with zero however
+  wrong the strain leg is).
+- **An ultrasoft spin spiral** (P42, attempted and reverted, four findings banked) and
+  **ultrasoft/PAW in the sum-over-states `chi_0`** (P40, two findings banked).
+- **A bound on an out-of-memory kill.** Not a physics gap and it belongs here anyway,
+  because it has cost work three times: nothing stops a run that goes over the machine's
+  memory from taking the whole process, so a kill costs the session rather than one file.
+  The cgroup scope that would bound it and the RSS watchdog that would name it are both
+  written down in `CLAUDE.md`'s memory section and neither is implemented.
+- **Cluster sweeps** (P34, planned and unstarted) and **the rest of P10** — k-axis
+  sharding and GPU.
+
 **P0 — Scaffolding. ✅ DONE.** Package skeleton, `pyproject.toml`, x64 enabled at import,
 `config.Precision` dtype policy, `units.py`, pytest with tolerance module and markers,
 `io/qeref.py`, `cli.py inspect`. *Check met:* 17 tests pass; the parser reads `pw_scf/scf.in`
@@ -5726,6 +5783,9 @@ in the displacement coordinate:
 | `b` | +100.2647 | **+112.1054** | ❌ |
 | `u` | 0 (frozen) | −0.0191 | envelope residue |
 
+The three that agree do so to **1.4e-3** relative, which is the floor the two that do not are
+measured against.
+
 **Two of P43's ingredients transfer, and they are wired in behind the refusal**
 (`susceptibility_strain_derivative`), because they are established and whatever closes
 this will need them:
@@ -10244,6 +10304,13 @@ the STM image falls to **0.16**, the coherent map sits a factor of **26 below** 
 one (every channel tunnelling on its own), and the effective number of open channels falls from
 2.9 to **1.9**. Nothing in a Tersoff-Hamann image can express that, and the difference is
 reported (`VerticalTransport.interference`) rather than left implicit.
+
+**The incoherent map needed rule D4 to be usable at all**, and that is what fixes the size of
+the effect: the incoherent reference is a *diagonal*, which -- unlike the coherent quadratic
+form -- is not invariant under the rotation a degenerate eigensolver is free in. Diagonalising
+`S_k` inside each multiplet first (`channel_basis`, `defumat/transport/green.py`) takes the
+bilayer's coherent-to-incoherent factor from 26x to **69x**; it is P51's Drude weight one layer
+out.
 
 **Ultrasoft and PAW work and need nothing extra**, and where the planes are is the reason: in
 the vacuum a pseudo-wavefunction *is* the true one, so the exit overlap wants no augmentation

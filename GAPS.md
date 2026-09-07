@@ -16,7 +16,7 @@ response with `nspin = 2`, which is untouched.
 This is not `PLAN.md`. That file is the phase record and says what was built and
 what each phase's traps were; this one is a list of what a user can ask for and
 not get, with the missing term named and the ingredients that already exist
-beside it. `CLAUDE.md`'s **Outstanding** paragraph is the short version of §3.
+beside it. `PLAN.md` §3's **"What is outstanding"** index is the short version of §3.
 
 **Verification.** Entries marked *verified* were read in the source directly.
 The rest carry the reporting agent's file:line and have not been independently

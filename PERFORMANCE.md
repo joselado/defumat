@@ -3003,6 +3003,40 @@ What the symmetry fix was worth in *time*, on the same machine: `si10-nc`'s SCF 
 operations -- the density is symmetrised over six operations instead of two, and the
 k-point set is unchanged. A bug that costs accuracy usually costs time as well.
 
+### `ulimit -v` is the wrong cap, and trying it cost a session's confidence
+
+Bounding the test runner's memory looks like the cheap way to stop a sweep killing the
+machine. `ulimit -v` is not it: it bounds *virtual* address space, and XLA reserves arenas
+far larger than it ever resides in, so a 16 GB cap turned eight passing tests into
+`Out of memory allocating 17236761704 bytes` -- on a test that needs 60 s and a couple of
+GB standing alone. Failures that read as a physics regression and are not are worse than
+no cap at all.
+
+**The process boundary is the real bound**, which is what `tools/run_regression.sh` gives
+by invoking pytest once per file. A ceiling on *resident* memory is a **cgroup** rather
+than a `ulimit`, and it works on this workstation -- `systemd-run --user -p MemoryMax=8G
+-p MemorySwapMax=0 --scope python3 -m pytest <file>`, probed at 512 MB on 2026-09-07: the
+kernel `SIGKILL`s the scope, exit 137, and the shell survives. Not
+`XLA_PYTHON_CLIENT_MEM_FRACTION`, which sizes the PJRT **device** allocator's pool -- it
+is what the 2026-09-04 GPU entry above reads a pool against, and there is nothing for it
+to bound on the CPU backend this machine develops on. And **narrow the list before running
+it**: a `grep` for the inputs that can actually reach the changed code path is minutes of
+work and routinely removes most of the suites, where guessing adds them.
+
+Two test files have been killed on this machine by accumulation rather than by any one
+peak -- `test_ten_site.py` in P28b, measured above, and `test_spinor_forces.py` in P46,
+which did not inherit the first one's cure. The two bounds `CLAUDE.md` now states as a
+rule (`jax.clear_caches()` in an autouse fixture, `lru_cache(maxsize=2)` on the
+converged-state helper) are what came out of them.
+
+**A third kill, on 2026-09-07, took the session rather than a test file**, with a
+documentation restructuring uncommitted and no record of what had been running -- which is
+what turned this from a testing habit into an open item (`PLAN.md` §3's outstanding index,
+and the section `CLAUDE.md` now carries). Every bound above keeps a run *under* the
+ceiling; none of them decides what happens when one goes over it, and on this machine what
+happens is that the terminal dies. The cgroup scope is the mechanism for making that cost
+one file, and `run_regression.sh` does not use it yet.
+
 ## What the Tran-Blaha potential costs (P30)
 
 Silicon, `ecutwfc = 30`, a 6x6x6 grid reduced to 16 k-points, a 32^3 dense grid,

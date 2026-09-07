@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**This file is the rules. `PLAN.md` is the record.** Everything about *how* to work here —
+conventions, refusals, where the reference source lives, what a finished phase looks like —
+is below. Everything about *what was found* — per-phase validation numbers, the trap each
+phase uncovered, what a refusal was measured at — is in `PLAN.md` §3, one section per phase.
+Do not restate a phase's findings here; add them there.
+
 ## What this project is
 
 A ground-up reimplementation of Quantum ESPRESSO in Python + JAX ("defumat"). The
@@ -9,986 +15,31 @@ Fortran QE 7.5 release is vendored here **as reference material only** — it is
 understand algorithms and to validate numerical results, never modified or compiled into
 the deliverable.
 
-**Status: the first milestone — SCF, band structure, DOS — is met**, with ultrasoft/PAW,
-LDA/GGA and collinear spin, and **forces and structural relaxation** on top of it.
-P0–P9, P12–P21, P23 and P25 are done bar Wyckoff input in P6; P10 has had one pass. A silicon SCF reproduces QE's total energy to **~1e-9 Ry** term by term, its
-band structure to **0.0002 eV**, and metals with every smearing to ~2.5e-8 Ry.
-**Ultrasoft and PAW pseudopotentials are supported** and match QE to **≤3e-9 Ry** on 2-
-and 8-atom silicon (P12). **PBE, revPBE and PBEsol** work on all three pseudopotential
-kinds, matching QE to **≤6e-9 Ry** and 5e-5 eV in the bands (P13). **The density of states**
-(P8) has both the smearing and the tetrahedron families, the latter also as an occupation
-scheme inside the SCF, matching QE's three aluminium benchmarks to 2.5e-8 Ry. **Collinear
-spin** (P9) matches eight LSDA benchmarks — nickel's total energy to **1.2e-9 Ry** and its
-magnetic moment to the two decimals QE prints (0.7280 against 0.73).
-**Spin-orbit coupling** (P14) is in as well: `noncolin`/`lspinorb` give two-component
-spinor wavefunctions and the `j`-resolved projectors of a fully-relativistic dataset, on
-norm-conserving, ultrasoft and PAW pseudopotentials, matching QE's three platinum
-benchmarks to **≤1.3e-8 Ry**.
-**Forces and relaxation** (P15) are in: the force is `jax.grad` of the total energy at
-frozen wavefunctions — Hellmann-Feynman, Pulay and the augmentation charge's own
-derivative all falling out of one gradient — with QE's six hand-derived terms implemented
-beside it as a cross-check, and a BFGS relaxation on top. They match QE to **≤2e-5 Ry/bohr**
-on five references and reproduce its relaxed geometries to **1e-6 bohr**.
-**Forces and the stress are spinor now too** (P46): the frozen-energy functional P15
-differentiates grew a two-component branch — the nonlocal quadratic form with `dvan_so` and
-the orthonormality constraint with `qq_so`, both complex 2x2 matrices in spin space, on the
-`2 npwx`-long coefficient vector a spinor actually is — so `noncolin = .true.`, with or
-without `lspinorb`, has forces, a stress and a relaxation on norm-conserving, ultrasoft and
-PAW datasets. The plumbing was the larger half of it and this file's own rule is why:
-`nspin`, `npol` and `nspin_mag` are three different numbers, so a spinor state is
-`(1, nk, nbnd, 2 npwx)` and the *kinetic* term has to read `state_kinetic` as well. Against
-`pw.x`: a four-atom noncollinear hydrogen chain to **8.9e-7 Ry/bohr**, doubled fcc platinum
-with spin-orbit coupling to **7.5e-6** (ultrasoft) and **7.3e-7** (PAW), and the stress on
-six cases to **≤1.2e-6 Ry/bohr³** — three of which needed no new reference, QE's own
-`pw_spinorbit` inputs already carrying `tstress`. The anchor underneath all of that is a
-finite difference of the frozen energy, which agrees to **6.2e-9 Ry/bohr** and involves no
-Fortran. Refused by name and each for its own missing term: the **analytic** transcriptions
-(`force_us`/`stres_knl` have no spinor form), anything through the **Sternheimer** solver,
-the **elastic constants** — which reach the functional directly, which is why the spinor path
-is opt-in rather than merely allowed — and the force on an atom of a **spin spiral**, whose
-two components sit on different spheres.
-**Berry curvature, Chern numbers and Z2 invariants** (P16) are in too: the Chern number is
-an exact integer on a 6x6 mesh, and the Z2 has both the Wilson-loop and the Fu-Kane parity
-route, agreeing on every model case with a known answer. **The smooth `Omega(k)` map is in
-as of P47**, by the Kubo route on P24's velocity operator rather than on a dense `H(k)` —
-agreeing with the Fukui-Hatsugai-Suzuki flux to 1.45e-4 plaquette by plaquette on zincblende
-AlAs, vanishing pointwise on silicon to 3.5e-5, and reporting the truncation of its sum over
-empty states rather than tuning it away.
-**Noncollinear magnetism, magnetic fields and spin spirals** (P17-P19) are in: a magnetic
-`nspin_mag = 4` run reproduces QE's bcc-iron benchmarks to **2.8e-9 Ry** with LDA and with
-PBE, the moment and the magnetic symmetry group matching what QE prints; external and
-per-atom fields and all three of QE's constrained-moment schemes match their (regenerated)
-benchmarks to **≤2e-7 Ry**; and **spin spirals** by the generalized Bloch theorem
-reproduce the collinear antiferromagnet of a doubled cell and a 90-degree noncollinear
-supercell to **1e-12 Ry**, which is the validation they have — `pw.x` has no spin spiral.
-**DFT+U** (P20) is in: the simplified rotationally-invariant functional with `U`, `J0`,
-`alpha` and `beta`, on `atomic`, `ortho-atomic` and `norm-atomic` projectors, matching QE
-to **≤6.7e-9 Ry** on seven cases (antiferromagnetic FeO and fcc nickel) with the Hubbard
-term itself to 4.6e-7 Ry, and its forces — QE's `force_hub`, obtained by differentiating
-through the projectors rather than transcribed — to 4.8e-6 Ry/bohr.
-**The spin spiral's wavevector is relaxed** (P21) the way the atoms are: `dE/dq` is
-`jax.grad` of the energy at frozen wavefunctions, and a BFGS on the reciprocal metric takes
-a hydrogen chain from `q = 0.30` to its antiferromagnetic ground state at `0.50003` in six
-SCF runs — validated by identities and finite differences, since `pw.x` has no spiral.
-**The same gradient also builds `E(q)` itself** (P21a): `run_spiral_scan(gradients=True)`
-takes `dE/dq` at each point's converged state and `SpiralScan.integrated` accumulates it
-along the path, which is worth doing for exactly one reason — a scan rebuilds the
-plane-wave spheres at every point and its energies step by the Pulay error, where a
-frozen-sphere gradient does not. On the hydrogen chain the direct curve goes uphill on 2 of
-10 steps of a curve that falls throughout and the integrated one on none. **The gap between
-them holds two error sources and refining tells them apart**: 7 → 13 → 25 points takes the
-trapezoid rule's own error from 0.051 to 0.016 to 0.003 mRy while the gap against the
-energies stays at 0.139, 0.138, 0.137 — so at `ecutwfc = 25` that gap is basis noise
-essentially entirely, and a *cutoff* sweep alone reads as the claim failing, because what
-plateaus at 0.07 is the quadrature floor. Removing it gives the real number: **0.005 mRy at
-`ecutwfc = 60` against 0.130 at 25**, so the two routes converge onto each other and neither
-carries a term the other lacks. **Three things it does not buy**, and the intuition that it
-might is why they are written down: it is not cheaper (every point still needs its own SCF),
-it does *not* converge on a coarser k-mesh (the gradient is the exact derivative of the
-*same* fixed-mesh energy), and it wants a **tighter** `conv_thr` rather than a looser one —
-an energy's error is second order in the density's where a derivative's is first.
-**One run continues another across a change of spin regime** (P23):
-`run_scf(starting_from=result)` promotes a converged state into the target's variables —
-a non-magnetic density into a collinear run, a collinear one into a noncollinear run, and
-spin-orbit coupling switched on — reaching the *same* self-consistent solution as a fresh
-run (≤4e-8 Ry on six cases) in 1 iteration instead of 25 where the magnetization only has
-to be rotated. **The magnetization is seeded when the source has none**, because nothing in
-the SCF breaks spin symmetry on its own and an unseeded promotion converges straight back to
-the unpolarized solution.
-**Linear response by autodiff** (P24) is in: the velocity operator from one `jvp` of `H(k)`
-(rule D2 cashed in), the Sternheimer equation in place of a sum over states, and silicon's
-**dielectric constant** against `ph.x` on norm-conserving, ultrasoft *and* PAW datasets
-— agreeing to **≤1.2e-4** — with the
-screening kernel, the field's commutator and the bare phonon term all gradients of code that
-was already there.
-**The Born effective charges are ultrasoft now too** (P24b), because `Z* = dF/dE` is a mixed
-second derivative and is computed as one: a single `jvp` of the force along the field's
-response, per field direction, which turns four of the five stages `zstar_eu_us.f90` adds
-into terms of the same derivative. Against `ph.x`: **-0.0757150** norm-conserving silicon
-(every printed digit), **-0.0794417** ultrasoft silicon (8.3e-6) and **+0.0415594** ultrasoft
-carbon, whose sign is the *opposite* one. PAW is refused by name at 1.3e-3, with the missing
-term identified (`int3_paw` against `becsumort`) rather than fitted.
-**Metals are in the response** (P24c): `orthogonalize`'s smearing branch, `setup_alpha_pv`'s
-metal value, `localdos` and `ef_shift`, with `chi_0` on fcc aluminium matching a finite
-difference of the density to **2.5e-7** and the Fermi-level correction restoring charge
-neutrality to 1e-15.
-**The Sternheimer solve is spin-polarized now** (P45): the widest guard in the package — one
-refusal that blocked every response quantity for every `nspin = 2` system — was an
-occupied-band count, and it is one number *per channel* now (`occupied_counts`), which is
-what QE gets for free by doubling `nks` in LSDA. `chi_0` matches a central difference of the
-density to **1.8e-6** for an antiferromagnetic hydrogen chain (a smeared metal) and to
-**1.1e-6** for triplet O2 (the sliced branch, ultrasoft, seven bands up and five down),
-under a probe potential that is **different in the two channels** — `chi_0` is block-diagonal
-in spin, so a probe equal in both would not tell the blocks apart. The dielectric constant of
-a cell with no magnetization comes out identical run as `nspin = 1` and as `nspin = 2`
-(**6.2e-14** on 13.806646105), which is the check that catches a factor of two in the spin
-sum. **Two things fail silently and both are refused by name now.** A filling that cuts a
-**degenerate multiplet** — the oxygen atom at `tot_magnetization = 2`, whose minority channel
-splits the 2p shell — lets the CG converge in 42 iterations and returns a `chi_0` that is
-**100 per cent** away from a finite difference, because the difference re-selects which
-member falls below the cut and the solve keeps the arbitrary one the eigensolver handed it.
-And the **screening kernel of a magnetic system with vacuum is not finite** (measured on one
-cell): `dv_of_drho` for `nspin = 2` is the second derivative of the LSDA energy in the two
-channel densities, which diverges where a channel density reaches zero — 1504 of triplet O2's
-91125 grid points have `|m| >= |n|` and `dv_of_drho` has exactly 1504 NaN. That is the `abs`
-trap of P28a one derivative further out, it is in `defumat/xc` rather than in the response,
-and pulling the clip inside does *not* fix it. **Also refused by name**: `tot_magnetization`
-with a smearing (two Fermi levels, and `Smearing.ef` has no spin axis), Born charges, the
-dynamical matrix and the strain response for `nspin = 2` (their assembly, not their count),
-and the two third derivatives.
-**The dynamical matrix of a metal is in** (P28), and it cost one weight rather than a
-routine: a metal's `dpsi` already carries its occupation, so contracting it against an
-energy functional weighted by `wg` counts that occupation twice, and QE's own layout says
-so — `dynmat_us.f90` reads `wg` for the frozen Hessian and `drhodvnl.f90` reads `2 wk` for
-the electronic term. Splitting P25's single `jvp` along those lines puts two-atom
-aluminium's modes at **146.7093**, **146.7132** and **311.0335** cm⁻¹ against `ph.x`'s
-146.710511 / 146.714378 and 311.035401 — **0.0019 cm⁻¹**, an order tighter than silicon's
-0.05, the folded pair's real 0.0039 splitting reproduced rather than flattened — where
-the unsplit assembly gave 197.96 and 309.26 and put the acoustic modes at 155.7 against
-1.9. The acoustic sum rule is the diagnostic that said so and now holds to 1.06e-5
-Ry/bohr². **The `df_n` term the refusal predicted is not needed**: it is already inside
-`dpsi`, being the `(f_i - f_j)/(eps_i - eps_j)` structure of the smeared projector, which
-vanishes identically for an insulator.
-**A supercell is a regime of its own** (P28a), which running P28 on the four-atom
-conventional cell of fcc aluminium established by finding two bugs no other committed
-cell could see. Its atoms sit at exact fractions, so the structure factor vanishes
-*exactly* (92 of 3287 G-vectors, against a 4e-16 floor on primitive cells) and the point
-group's atom permutations acquire **3-cycles** where every other cell here has only
-involutions. The first made `abs(rho)**2` in the reciprocal Ewald sum a `0/0` derivative —
-the `abs` trap in a **fourth** place, and the first one *forced by symmetry* rather than
-by an accidental node — and the second made `symdvscf` average over the atom each
-operation moves instead of the one it moves onto. Both leave the energy and the forces
-right and damage only the second derivative. **The two identities P25 rests on are blind
-to the first**, because the acoustic sum rule and the rigid-translation test are both sums
-over *atoms* and the error was a transfer between them; the first check that is not an
-atom-sum is the per-mode response density against a finite difference. Four-atom aluminium
-now matches `ph.x` to **0.020-0.034 cm⁻¹** on the first metal phonon computed on a
-symmetry-reduced wedge.
-**Ten atoms per cell is where the whole feature set was run against `pw.x` at once**
-(P28b), and it found three more bugs of the same family — things only a supercell can
-see. The **lattice point group was searched over a fixed `range(-3, 4)` window**, which
-cannot hold the entries of five that five stacked primitive cells put in a rotation
-matrix: 2 operations found where QE finds 6, and a total energy 3.2e-6 Ry out with both
-codes converged to 1e-10 and both reporting success. **A fractional translation was
-accepted whatever its denominator**, where `sgam_at` takes only `1/n` with `n` in
-{2,3,4,6}: five-layer graphite kept a real mirror plane QE drops, `fft_fact` then wanted a
-20x20x**135** grid where `pw.x` chooses 128, and the totals differed by 1.7e-4 Ry with
-neither code wrong. And **`dielectric_tensor` symmetrised a `nosym` run**, which is
-invisible wherever the k-grid is closed under the point group and worth 0.97 in the
-off-diagonal entries where it is not. A fourth divergence is nobody's bug and is worth
-knowing: on a k-grid with **unequal divisions** the two codes build genuinely different
-irreducible sets — QE completes the lattice wedge with `irreducible_BZ`, whose star
-members leave such a grid — and `pw.x`'s own `nosym` run says which one is the grid's.
-`PLAN.md` §3 tracks the phases and records the transcription traps each one uncovered —
-read it before writing code. P4 is complete: a block Davidson eigensolver behind a name
-registry, seeded from the pseudo-atomic orbitals as QE seeds it, and the *only* solver the
-package offers — forming `H` costs `O(npw^2)` memory, so a dense solve is a test fixture
-(`tests/exact_reference.py`), never a `diagonalization` a run can select. P6 is complete too: automatic k-grids are reduced to the
-irreducible wedge. P10's first pass puts defumat within **2–4x of serial Quantum ESPRESSO
-per SCF iteration** on the same machine, ultrasoft and PAW included — see
-`PERFORMANCE.md`. **The projected density of states** (`projwfc.x`) is in as well, completing P8:
-`<phi|S|psi>` on Löwdin-orthogonalised pseudo-atomic orbitals, resolved by atom, `l` and
-`m`, feeding the *same* DOS registry as a per-band weight, with Löwdin charges and the
-spilling parameter — matching a `projwfc.x` built for the purpose on seven cases, to the
-resolution of everything it prints (6.9e-4 on a projection, 4.7e-5 on a charge).
-**The stress tensor** (P11) is in too: `sigma = -(1/Omega) dE/d(epsilon)` from one `jax.grad`
-of the energy at frozen wavefunctions, matching QE to **≤2.7e-7 Ry/bohr³** on thirteen cases
-from norm-conserving LDA up through ultrasoft, PAW, PBE, `nspin = 2` and DFT+U.
-**Phonons at `Gamma`** (P25) are in: the force constants are `jax.grad` of the total
-energy differentiated *once more*, along a tangent that carries the positions, the states
-and the density together — so QE's `dynmat0`/`d2ionq` (the frozen second derivative) and
-`drhodv` (the electronic response) are two halves of one `jvp` of the gradient that
-already gives the force. Silicon's optical mode is **510.102 cm⁻¹** against the vendored
-`ph.x`'s 510.152, checked three further ways that share nothing with the assembly: a rigid
-translation reproduces `-drho/dx` to 6.5e-5, finite-differenced forces reproduce whole
-columns of the matrix to 2.1e-5 Ry/bohr², and the reduced wedge agrees with the whole
-closed grid to 2.7e-14. **Ultrasoft and PAW are in as of P39**: with `S` moving, the source term becomes
-`(dH/du - eps dS/du)|psi>`, the first-order state acquires an occupied block the solve
-does not produce, the mixed state changes at *frozen* states (`drho.f90`), and the
-orthonormality multipliers move as a **matrix** — a diagonal one is not invariant under
-the occupied-manifold rotation the state tangent is free in, and the sum rule says so.
-Ultrasoft silicon is **513.2947** cm⁻¹ against `ph.x`'s 513.275287 and PAW **513.3776**
-against 513.404419 — 0.019 and 0.027, tighter than the norm-conserving 0.05. Getting
-there found two bugs that are **not** ultrasoft terms: `addcore` was missing for every
-dataset (no committed phonon case had a core charge, so a norm-conserving pseudopotential
-with one was wrong too), and `addusforce` was missing from the differentiated gradient,
-so what was being differentiated was not the force. And one the sum rule could not see —
-the density's cross derivative `d^2 rho/du dpsi`, `addusdynmat`, which needs both tangents
-in one `jvp` where P28's weight split had put them in two. An ultrasoft or PAW **metal**
-is refused for exactly that reason.
-**Electrostriction** (P26) is in, and it is the first **third** derivative of the energy
-here: `d(chi)/d(strain)` — the elasto-optic tensor, and through the thermodynamic identity
-of Tanner, Bousquet and Janolin the four electrostriction tensors `m`, `q`, `M` and `Q` —
-from **one `jvp` of the second-order energy at frozen first-order wavefunctions**, which is
-the 2n+1 theorem and is the envelope argument P15 and P25 already make, one order up. The
-strain perturbation it stands on (`dpsi/dx`, `drho/dx`) is Abinit's metric-tensor
-formulation obtained for nothing, because `at_strain` was already written in reduced
-coordinates; the **elastic constants** come with it, as one more `jvp` of the stress, and
-reproduce a five-point second difference of the energy to five significant figures
-(converged silicon: `C_11` = 198.5 GPa against a measured 165.7, `C_12` = 68.9 against 63.9).
-The three independent components of `d(eps)/dx` match a central difference of `epsilon`
-over re-converged strained cells to **2e-4**, the difference's own floor, and the whole
-rank-4 tensor is cubic to 3e-14 with nothing imposing it. Norm-conserving, `nspin = 1`, insulators
-and **clamped-ion**, on an **unshifted** k-grid — which is closed under the point group where a
-shifted one is not. A symmetry-reduced wedge of it works as of P36; the *elastic constants*
-still need the whole grid, and for a different reason (their functional builds its own density
-and symmetrises it as a scalar, inside the chain rule).
+**Status: well past the first milestone.** SCF, band structure and DOS are met, and on top
+of them: ultrasoft and PAW, the PBE family, collinear spin, spin-orbit coupling and
+noncollinear magnetism, spin spirals, DFT+U, forces, stress and both relaxations, the
+topological invariants, the whole linear-response stack (dielectric constants, Born
+charges, phonons at `Gamma`), third derivatives (Raman, electrostriction, the
+elasto-optic tensor), and a long tail of quantities taken from Elk that `pw.x` does not
+have. Phases run **P0 through P70**; the ones still open, and the exact term each is
+missing, are indexed at the head of `PLAN.md` §3.
 
-**Grimme's D2 van der Waals correction** (P27) is in: `vdw_corr = 'grimme-d2'`, written
-as the Ewald sum's twin — a pair sum over the nuclei whose neighbour list is fixed once, so
-the force and the stress are `jax.grad` of it in the two coordinates and QE's `force_london`
-and `stres_london` are transcribed beside them as the check (they agree to 1e-14). Bilayer
-graphene matches `pw.x` to **3.1e-9 Ry** in the total energy and 3.7e-7 Ry/bohr in the force,
-and **binds at 6.10 bohr (3.23 Å) where PBE alone has no minimum at all**. The correction
-never enters `v_of_rho`, and the test for that is an *equality*: the same cell with and
-without it gives a bit-for-bit identical density, and `d(chi)/d(strain)` is unchanged to
-0.0 while the elastic constants move by exactly the pair sum's own second derivative.
-**P26's third derivative runs on the bilayer itself** on a k-grid that misses `K` — graphene
-is a semimetal and the Sternheimer response here is the insulator one — reproducing a
-five-point second difference of the energy to 5.8e-5 and a central difference of `epsilon`
-to 2.2e-4. Getting there found a trap that is P26's rather than P27's: at QE's
-`alpha_mix = 0.7` the strain response of a **slab** diverges, and a diverged first-order
-solution was being consumed in silence, giving a `C_ijkl` that was not even symmetric under
-`C_ijkl = C_klij`. It is refused now (`require_converged_responses`).
+**Where to look for what:**
 
-**Variable-cell relaxation** (P29) is in: the cell relaxes with the atoms in one BFGS over
-`3 nat + 9` coordinates at an applied pressure, matching `pw.x` on all four of its
-`pw_vc-relax` BFGS cases — arsenic at 500 kbar compressing 10% and going simple cubic
-(0.2722 → 0.2500) agrees on the relaxed volume to **7e-4 bohr³** and on the final energy to
-**2.4e-6 Ry**, in the same number of ionic steps. Getting there found two bugs, both of the
-P28a family — the energy right and something else not. **`at_strain` rebuilt its k-points
-from `system.kpoints`**, whose cartesian coordinates describe a k-set only together with the
-cell they were built for; every earlier caller deformed a cell whose k-points had just been
-built for it, and a cell that has actually *moved* separates them, so a stress on a stepped
-cell was differentiated **0.031 away in crystal coordinates** from where the SCF had run —
-64 kbar, and 2% of the relaxed volume. A finite difference of the frozen-basis energy is
-what settled it against the plausible story that autodiff was seeing a Pulay term QE misses.
-And **the lattice symmetry tolerance was dimensional**: an absolute 1e-6 applied to bohr and
-bohr² where `symm_base.f90`'s `eps1` applies to `at` in units of `alat`, so the same crystal
-loses operations as its lattice constant grows — eight of twelve dropped on QE's own
-`vc-relax4.in`.
+| question | file |
+|---|---|
+| what a phase found, and what it was measured at | `PLAN.md` §3 (one section per phase) |
+| what is implemented, and whether QE or Elk has it | `README.md`'s feature table |
+| how a user runs a feature, and what it refuses | `docs/features.tex` |
+| what something costs, in time and in memory | `PERFORMANCE.md` |
+| what is not here and what term is missing | `PLAN.md` §3, "What is outstanding" |
+| a survey of Elk's tasks against QE 7.5 | `ELK-FEATURES.md` |
 
-**The Tran-Blaha potential is in** (P30), and it is the one functional here whose
-*potential* is written down and whose energy does not exist: `input_dft = 'tb09'` gives the
-modified Becke-Johnson meta-GGA, so silicon's gap goes from LDA's **0.49 eV to 1.13 eV**
-against an experimental 1.17 and the published all-electron mBJ's 1.17, and diamond's from
-3.89 to 4.43. There is nothing to transcribe — `pw.x` reaches TB09 only through libxc, and
-then **passes a zero Laplacian** (`xc_wrapper_mgga.f90` calls the argument "not used in QE")
-and **never sets `c`**, so what it runs under that name is Becke-Johnson without a Laplacian.
-Both ingredients are here: the Laplacian is `-G^2 rho(G)`, one transform, and `c` is Tran and
-Blaha's cell average, with `mbj_c` to impose it instead. Validated against two *analytic*
-limits rather than another code's floating point — the hydrogen atom, where Becke-Roussel is
-the exact Slater potential of the 1s orbital to 1e-6 and `E_x` is exactly -5/16 Ha, and the
-uniform gas, where Becke-Johnson reproduces `v_x^LDA` to 6e-4 (which is the model's own error
-at `gamma = 0.8`, and measuring it showed that 0.8 *is* the uniform-gas fit, to four digits).
-The **total energy is not variational**, so forces, stress, phonons and response are refused
-by name. **PAW works** (P32) and is what makes the difference: its one-centre `tau` comes from
-the partial waves, and it recovers `c = 1.107` against the all-electron 1.12 where a
-norm-conserving silicon measures 1.000 — the pseudised core is exactly what the average of
-`|grad rho|/rho` misses. **Noncollinear magnetism and spin-orbit coupling work too** (P31),
-with `tau` carried as the 2x2 matrix in spin space it is and resolved onto the density's local
-axis. `pw.x` refuses both combinations outright (`setup.f90`: 'Meta-GGA not implemented with
-USPP/PAW', 'Non-collinear Meta-GGA not implemented'). Plain **ultrasoft** stays refused: it
-has no partial waves to reconstruct `tau` from inside the sphere, where PAW does. One thing a
-UPF cannot supply is a **core kinetic energy density**, so the one-centre term sees the
-valence density alone on both sides — including the all-electron core in `rho` with no `tau`
-to match it inverts the functional's `c` dependence, measurably (`PLAN.md` P32).
-
-**The Raman tensor is in** (P35), and it is P26's third derivative with the atoms as its
-geometry variable rather than the cell: `d(eps)/d(tau)` is one `jvp` of the *same*
-variational second-order energy, so the phase is an assembly of tangents that already
-existed — the displacement response P25 solves for the dynamical matrix, the field response
-P24 solves for `epsilon`, and P26's own extra Sternheimer solve for the position operator.
-**The reference for it is broken and establishing that came first**: the vendored `ph.x`
-7.5 does not reproduce QE's committed `PHonon/examples/example05` (v6.0, 2016) — -1.8681
-against -0.78497 on the Raman tensor — and fails its *own* internal check, printing a
-finite-difference dielectric constant of -0.288 beside its analytic 8.8143 where v6.0 has
-8.8116 beside 8.8147. So the validation is a **finite difference of `epsilon` over
-re-converged displaced cells**: **-3.118279** against **-3.118310**, 1.0e-5. What `pw.x`
-cannot do at all is a **GGA** — `phq_setup.f90` stops on "third order derivatives not
-implemented with GGA" because its third derivative of `E_xc` is a hardcoded Perdew-Zunger
-parameterisation (`d2mxc.f90`), where here it is one more `jvp` of a kernel that already
-exists. **`chi^(2)` by this route and the electro-optic tensor are refused by name**, with the
-missing term identified rather than fitted: the field enters only through the source term, so
-the `<u_i|r_k|u_j>` piece of the 2n+1 expression (QE's `dvpsi_e2`/`solve_e2`) has nothing to
-build it from — and it is **42% of the answer**, measured on its displacement counterpart.
-**No symmetry check catches its absence**, which is the finding worth carrying: without it
-the tensor still vanishes identically in a centrosymmetric crystal, still comes out exactly
-zincblende, and is still symmetric under every permutation of its three labels to 2.5e-13.
-
-**Raman and infrared spectra are in** (P36), and so is **the rank-3 symmetriser** that
-made them cheap. `symme.f90`'s `symmatrix3`/`symtensor3` are written here **at any rank**,
-which lifts the closed-grid refusal P26 introduced and P35 inherited: AlAs's eight-point
-wedge reproduces its sixty-four-point closed grid to **3.3e-9** and silicon's rank-4
-elasto-optic tensor to 7.9e-14, at half the cost. **The AlAs number was 8.7e-14 when the
-phase landed and is not any more, for a reason that is not P36's**: a third derivative
-multiplies the difference between two converged densities by the norm of a first-order
-wavefunction (order 10^3), so what the wedge and the closed grid agree to is what their
-SCFs agree to — and the mixer normalisation in `a351005` (Gram block cond 1.1e11 → 2.7e4,
-and a NaN fixed with it) stopped the two k-sets landing on the same fixed point bit for
-bit. It is convergence-limited and measured as such: 3.3e-9 at `conv_thr = 1e-12`, 6.5e-10
-at 1e-14. Both routes are still right — each gives 3.119 against the -3.1183 of a finite
-difference over re-converged displaced cells. The silicon 7.9e-14 is from a grid-sharing
-pair that no test exercises and has **not** been re-measured since. The average alone is not enough,
-and that is the phase's finding: it completes a wedge sum only where the tensor is a
-*linear* k-sum of a covariant per-k quantity, and the screening term of `F` is **quadratic**
-in one — so the *value* of the density response inside the functional must be the full-zone
-object while its *derivative* stays the raw wedge sum. Getting that wrong is worth 2.5%, is
-worse than doing nothing, and **no symmetry check sees it** — the sum rule is what caught
-it, one more time. On top of that the spectra themselves: P35's per-atom tensors contracted
-with P25's modes and P24b's `Z*` into per-mode activities, matching the vendored `dynmat.x`
-on every digit it prints, with silicon's `T_2g` at **519.2 cm⁻¹** against an experimental
-520 — Raman-active and infrared-silent, which is a symmetry statement rather than a fit.
-**`dynmat.x` is the one reference above second order that still works**, because `RamanIR`
-is post-processing and never touches the branch that regressed. **A degenerate multiplet is
-comparable only as a sum**: the two eigensolvers land in different bases inside silicon's
-acoustic triplet and print depolarisation ratios of 0.3544/0.7163/0.4065 against
-0.5873/0.2446/0.7264, on modes whose activity both codes give as 0.0000.
-
-**The LO-TO splitting and the static dielectric constant are in** (P55), which are the
-two things P36 named as omitted. A polar mode builds a macroscopic field, so the `Gamma`
-dynamical matrix takes `rigid.f90`'s rank-one `nonanal` term and the longitudinal mode
-rises; contracting the same `Z*` with the eigendisplacements and dividing by `omega^2`
-instead gives the ionic screening of a static field, so `eps_0` and `eps_infinity` are two
-ends of one contraction. Everything agrees with `dynmat.x` to every digit it prints —
-**and that is the weaker half**, because both codes read the same `Z*` off the same file.
-**The Lyddane-Sachs-Teller relation is what bites**: `eps_0/eps_infinity =
-(omega_LO/omega_TO)^2` is an identity for a diatomic cubic crystal whose two sides share no
-line of code, and it holds on AlAs to **5.0e-11** — but only after the Born charges are made
-charge-neutral. With the raw ones it is out by 1.6e-3, and the mechanism is the finding:
-`sum_a Z*_a = 0` says a rigid translation builds no field, a computed `Z*` misses it by the
-error of a finite calculation (-1.257 here), and `nonanal` then charges the crystal and
-lifts a **longitudinal acoustic** mode from 1.8 to 33.8 cm^-1. **That -1.257 was called a
-basis-set error here and it is the k-grid** (P56): `ph.x` on the same cell gives -1.25637,
--0.21619 and -0.00787 on 4x4x4, 6x6x6 and 8x8x8, where raising `ecutwfc` from 10 to 30
-makes it *worse*, -1.257 to -1.445. LST is untouched, being a statement about the ratio. `dynmat.x` reproduces every one of
-those wrong numbers. AlAs comes out at TO 353.3 / LO 391.5 cm^-1 against a measured 361 and
-402, and `eps_0/eps_infinity = 1.228` against 1.233 from the measured constants — the two
-constants are far too large at `ecutwfc = 10` and their *ratio* is not, which is LST again.
-
-**The Berry-phase polarization is in** (P56), which is the piece `ELK-FEATURES.md` §7
-names as the magnetoelectric tensor's missing ingredient and the piece P50 refuses a polar
-crystal for. It is a Wilson loop with the *determinant* kept instead of the eigenvalues:
-`topology/links.py` already had the gauge-invariant primitive, so ultrasoft `q_ij(b)` and
-the zone-edge index shift came along for free. Against a `pw.x` `lberry` run generated for
-it — the committed `pw_berry` cases are PbTiO3 in **UPF v1**, which the reader refuses —
-AlAs agrees string by string: 0.02777/0.00252/0.00252/0.00224, an electronic phase of
-0.00876 and a total of -0.24124, every digit `pw.x` prints. **Two checks share nothing with
-QE**: the SSH model's Zak phase is exactly `0` or `pi` on a mesh of *any* size (1e-10), and
-silicon is pinned to 0 or half a quantum by inversion (1e-6). **The strongest is `dP/du`
-against the Born charges**, which come from a Sternheimer solve: on an 8x8x8 AlAs ground
-state the Berry route gives Al +2.14794 / As -2.14789 where `ph.x` gives +2.14177 /
--2.14965 and this package's own field response reproduces `ph.x` to 1e-5. **Getting there
-corrected P55**: on the 4x4x4 grid the two routes disagree by 50 per cent and neither is a
-bug — both DFPT codes agree with *each other* and are short of k-points, while a string
-phase is a one-dimensional integral and converges along the string. Generating the
-reference also found that at `pw_berry`'s own default `conv_thr` two *symmetry-equivalent*
-strings come out 1e-5 apart, which reads as our disagreement and is QE's threshold.
-**Ultrasoft and PAW are validated**, on zincblende **SiC** rather than on silicon: a centrosymmetric cell's electronic phase is zero whatever `q_ij(b)` does, so it agrees with zero however wrong the augmentation is (the P50 trap). SiC is `-43m` with two ultrasoft datasets and matches `pw.x` string by string (-0.009696 against -0.00970 on the electronic phase). **Refused by name:** a metal, `nspin = 2` and a spin spiral. **A spinor run
-works and has its own reference**: `pw.x` accepts `noncolin` with `lberry`, and
-spinor silicon matches it on the ionic and electronic phases with `MOD_TOT` of
-**1** against the scalar run's 2, a spinor band holding one electron — which is
-what pins the doubling, applied for `nspin = 1` and not for a spinor. Wiring
-that through found a bug with no symptom: **`DFTSource` never forwarded the
-converged magnetic field**, so every fixed-density invariant
-(`run_berry_curvature`, `run_z2`, `run_z2_3d`) rebuilt its potential from the
-*input* field at full scale — a rigid Zeeman shift wherever `reducebf` or the
-fixed-spin-moment scheme had changed it, and an invariant off those bands is
-still an integer. `fixed_density_states` had refused exactly that since the
-2026-08-29 sweep and this source had not; it does now.
-
-**Optical spectra with excitons are in** (P37), and they are the first thing here built on
-a **sum over states**: an absorption spectrum needs `chi_0` as a matrix over reciprocal
-lattice vectors at every frequency, where the Sternheimer stack produces it as a static
-operator. `run_absorption` solves the Dyson equation with a kernel from a registry —
-`rpa`, `alda`, `lrc`, `bootstrap` (Elk's `fxctype = 210`) and `bootstrap-1` — the bootstrap
-being a fixed point of the Dyson equation and its own definition, parameter-free and
-convergent in **9 iterations** on silicon. **The reference is Elk and it is validated by an
-identity instead**, because an all-electron LAPW spectrum is not a comparable number: the
-same `eps_M(0)` reached by this sum over states plus a Dyson inversion and by the projected
-CG solve of `dielectric_tensor` — which shares no machinery with it and never sees an empty
-state — agree to **1.3e-2 on a constant of 22**, and that residue is the band truncation,
-which is reported (`static_residual`) rather than tuned away. Three traps, all of them
-producing a smooth, positive, plausible spectrum: **`eps_M` is the inverse of the 3x3 head
-of `eps^-1`, not the head of the inverse** (Elk writes both from one array thirty lines
-apart; the wrong one is exactly the no-local-field result, 9% high); the **identity holds
-only when the two kernels match**, so `dielectric_tensor` gained a `screening = 'hartree'`
-switch, since its own kernel is `dv_of_drho` and therefore ALDA; and **the diagnostic is
-broken by a scissors shift** the same way, which turns a `+0.013` residual into `-3.46`.
-**The head is the one line of Elk that must not be transcribed** — it reads momentum matrix
-elements, right in an all-electron code and wrong with a nonlocal pseudopotential — so
-`dH/dk` from P24's `jvp` takes their place, and it is this phase's only load-bearing
-autodiff. Everything else is a transcription and says so.
-
-**The whole of it is reachable from one object** (P38): `Calculator.from_file("scf.in")`
-loads the input and the pseudopotentials it names, `get_scf()` caches the ground state,
-and every quantity above is a method consuming that cache — with nothing mutating, the
-refusals passing through untouched, and the functional API unchanged beneath it. It found
-one real gap on the way in: `run_dos` never forwarded `becsum` or `ns`, so a **PAW or
-DFT+U density of states on a denser grid was unreachable**, stopping on `run_nscf`'s own
-refusal rather than being wrong.
-
-**The strain response is ultrasoft and PAW too** (P41): `Q_ij(r)` is a function of the
-*cell*, so a strain deforms the table where a displacement translates it, and `at_strain`
-already rebuilds it — the four terms P39 wrote transfer across, and `drho/d(eps)` matches a
-central difference of re-converged strained runs to **4.6e-4** (US) and **4.7e-4** (PAW)
-against a norm-conserving 1.9e-4. **And the functional the strain derivatives stand on is
-ultrasoft and PAW too** (P43): P26's second-order energy reproduces `dielec.f90`'s dielectric
-constant to **3.4e-10** (US) and **6.9e-11** (PAW), which took `becsum` inside its density,
-`ddd_paw` in its Hamiltonian, the `S` metric in its projector and multiplier — including
-the distinction that a *state* takes `1 - Σ|psi><psi|S` and a *right-hand side* takes
-`1 - Σ S|psi><psi|` — and PAW's one-centre screening term.
-
-**The Raman tensor is ultrasoft and PAW now as well** (P43), at **1.2e-4** against a
-finite difference of `epsilon` over re-converged displaced cells where the norm-conserving
-control is 6.8e-4 — and it took **two tangents that are only right together**, which is why
-one of them had already been measured and read as an exclusion. The state tangent is
-`P_c dpsi + ort`, P39's occupied block; and **`b` is not the solution of its own linear
-equation**, because `dvpsi_e` solves for `P_c r|psi>` and `adddvepsi_us` then applies `S`
-and adds the augmentation dipole, so `db` is the tangent of a *composition* and the frozen
-solution the residual is written about is `commutators`, not `b`. Either alone is worse
-than neither (3.0e-2 → 8.0e-2 for the block, 2.1 apart for the tail); both together land
-on the finite difference. What found them is that **`d(eps)/d(tau)` is a sum of five
-partial derivatives and each can be measured against its own finite difference** — three
-agreed to 7e-4 and two did not, which localised the bug instead of guessing at it. A third
-thing had to change before either was reachable: `VelocityOperator.projectors` read the
-atoms with `np.asarray`, so `d(beta)/dk` about the atom's own centre was not
-differentiable in the geometry at all and the term vanished silently.
-
-**The same third derivative in the *strain* coordinate is measured and still refused**
-(P44) — the elastic constants, electrostriction and the elasto-optic tensor. Two of P43's
-ingredients transfer and are wired in behind the guard (`dpsi + ort` and
-`stored = commutators`), taking `d(eps)/d(strain)` from **4.6e-2 to 1.3e-2** on ultrasoft
-and 5.5e-2 to 1.3e-2 on PAW against a central difference of `epsilon` over re-converged
-strained cells, where the norm-conserving control on the same script is 2.3e-4 and does
-not move. Thirty times better and fifty times the control, so the refusal stays. **The
-decomposition says the whole residue is the `b` partial** — `ort` takes the `psi`
-partial's error from +5.94 to +0.032 and the other three agree to 1.4e-3 — and it is
-**−1.72 of 112, the same number on ultrasoft and on PAW**, which is what makes it
-structural rather than a dataset's physics. **One candidate is excluded by measurement,
-and that is the finding**: `_position_response`'s commutator *source* holds `eps_n` as a
-frozen scalar where the operator beside it has carried the multiplier matrix since P26,
-and removing that asymmetry — at no change of value — takes the strain to **1.7e-4** and
-takes the *Raman* tensor from 1.2e-4 to **1.14e-3**, in every operator/source pairing
-tried. One of the two coordinates has a compensating term; adopting this one on the
-strain column alone would be a fit that regresses a validated result.
-
-**Two things Elk has and `pw.x` does not are in** (P48), chosen from a survey of Elk's
-task list against QE 7.5 that `ELK-FEATURES.md` keeps — the four not taken are recorded
-there with the validation route each would need, because that is what decides whether a
-phase is worth starting. **The effective mass tensor** is `(1/2) d^2 eps_n/dk_a dk_b`, and
-the honest construction is **the first derivative by `jvp` and the second by one central
-difference of it**: differentiating the Hellmann-Feynman expression again at frozen states
-drops the whole `k.p` sum, the Sternheimer solver cannot supply an individual band's
-`|dpsi/dk>` (its `P_c` removes the occupied manifold, and the band whose mass is wanted is
-usually empty), and rule D4 forbids the eigensolver. That still beats Elk's difference of
-*eigenvalues* — six stencil points against twenty-seven, and no fit. Against the vendored
-all-electron Elk binary on silicon at `Gamma`: the non-degenerate `Gamma_1` curvature to
-**0.02%** and `Gamma_2'` to 0.36% (`m* = 0.170` `m_e`), with the two routes here agreeing
-to 1.2e-5 and the tensors isotropic to 2.9e-8 with nothing imposing cubic symmetry.
-**The finding is that a stencil must not contain its own centre**: the plane-wave sphere is
-rebuilt at every `k`, and a high-symmetry point is exactly where a shell sits on the cutoff
-— `Gamma` holds **725** plane waves where every displaced point holds 733, so the centre
-eigenvalue is variationally high by a fixed 1.2e-6 Ry and the second difference inherits
-`-delta/h^2`, an error that *grows* as the stencil shrinks (measured growing fourfold per
-halving). It is the **cutoff and not the pseudopotential** — norm-conserving LDA at the
-same `ecutwfc = 30` has the identical 725/733 split and the same cell at 12 has none —
-and **Elk has it too**: its own `Gamma_1` drifts 0.8583, 0.8595, 0.8603, 0.8642, 0.8697 as
-`deltaem` shrinks, rising to a minimum-error point at its default and then diverging, so
-only one of the two codes converges. **Site-resolved `<L>`, `<S>` and `<J>`** are the
-second: the projection a projected DOS is made of, contracted with `L` (written in the
-*real* harmonic basis by conjugating with `rot_ylm`) and with `sigma` instead of squared.
-`pw.x` has `lorbm` — the **cell's** orbital magnetization — and nothing per atom. Validated
-by identities rather than by Elk's number, since a muffin-tin expectation value and a
-projector one differ by definition: `<L>` is **quenched to 1.7e-16** without spin-orbit
-coupling, nickel's is **0.0364767** hbar with it (`|L|/|S| = 0.11665` against an experimental
-0.1, `L` parallel to `S`), and driving the moment along `z`, `x` and `y` gives the same
-`|<L>|` to 7.3e-11 with nothing imposing that a magnitude is a scalar. Refused by
-name: a degenerate multiplet's *per-band* mass (the invariant multiplet sum is reported
-instead), a symmetry-reduced k-set for the angular momenta (they are axial vectors; the
-whole unshifted grid is the escape), a fully-relativistic **ultrasoft or PAW** dataset
-there (`qq_so`'s off-diagonal spin blocks), and a spin spiral for both.
-
-**The piezoelectric tensor is in** (P50), the third thing taken from
-`ELK-FEATURES.md` and the first that fails that file's own cheapness filter:
-`e_(k)ij = dP_k/d(eps_ij) = d(sigma_ij)/dE_k` is a mixed second derivative, and it is
-P24b's construction with one coordinate changed — a Born charge is one `jvp` of the
-*force* along the field's response, and this is one `jvp` of the **stress** along the same
-response, three of them on top of a dielectric constant that was going to be solved anyway.
-The strain leg is *cheaper* than the displacement leg it copies, because
-`<psi|S|psi>` is a sum over a sphere of integers and carries no cell, so the multiplier
-response `dLambda` — three of P24b's four added terms — has nothing to contribute.
-**There is no reference**: `pw.x` computes no piezoelectric tensor (the word occurs once in
-the vendored tree, in a citation in a comment in `bp_c_phase.f90`) and Elk's `piezoelt.f90`
-finite-differences a Berry-phase polarization over one full ground state per strain. So the
-validation is internal and it is four statements: silicon's whole tensor vanishes
-(**2.4e-5** C/m² against AlAs's 0.764 from the same code), AlAs comes out exactly `-43m`
-with only `e_14 = e_25 = e_36` surviving to **1.7e-14** on a `nosym` run that imposes
-nothing, the eight-point wedge reproduces the sixty-four-point closed grid to **4.5e-9**,
-and the same mixed derivative contracted the other two ways — `zstar_eu.f90`'s expression
-with a strain label, which needs no strain response at all, and the strain response against
-the field's bare perturbation — agrees to **6.2e-15** and **1.3e-7**. What anchors the sign
-and the field's normalisation is that **the same assembly in the position coordinate is the
-Born charge**, which is `ph.x`'s number. **The trap is a factor of two and it is Rydberg's
-`e^2`**: `dielec.f90` contracts the *same* field response with a 4 because a susceptibility
-is Coulomb-normalised, and a bare mixed derivative takes `zstar_eu.f90`'s 2 — and the wrong
-one is exactly zincblende, exactly symmetric, vanishes on silicon and is twice too large.
-**Refused by name**: a **polar** crystal, because what the derivative gives is the
-*improper* tensor and the proper one differs by `delta_ki P_j - delta_ij P_k`, which needs
-`P` itself (those terms vanish identically whenever the two labels they pair differ, so
-`e_14` never carries the ambiguity, and they vanish for every component of a class with no
-invariant vector — which is what is checked, from the *structure* rather than from a
-`nosym` run's symmetry list). **Clamped-ion**, which is also what Elk's task computes; the
-internal-strain term that makes it comparable with experiment nearly cancels it for
-zincblende, and its one missing ingredient is a two-coordinate frozen functional `E(eps, u)`.
-And **ultrasoft or PAW**, which is a gap rather than a missing term: nothing in the assembly
-is norm-conserving and the *displacement* leg of it is validated on all three kinds, but
-every ultrasoft and PAW case committed here is **centrosymmetric**, whose tensor vanishes
-identically — so running one agrees with zero whatever is wrong, and P44 is the reason a
-plausible argument about the strain coordinate is not enough on its own. Lifting it is one
-non-centrosymmetric ultrasoft dataset.
-
-**The optical conductivity tensor, the Kerr angle and the anomalous Hall conductivity are
-in** (P51), the fourth thing taken from `ELK-FEATURES.md` (Elk's tasks 121/122). The whole
-complex `sigma_ab(omega)`, interband plus a Drude term, built from `dH/dk` rather than the
-momentum matrix elements `epsilon.x` uses — which is the one construction this file already
-records as wrong with a nonlocal pseudopotential. Two things it found cost real time and
-both are recorded in `PLAN.md` P51: **a caller-built k-set is a `for_spin` boundary**, since
-every `KPoints` constructor applies the unpolarized degeneracy unconditionally and a spinor
-band holds one electron — on nickel that put the plasma frequency at 13.11 eV instead of
-0.60 and flipped the sign of the Hall conductivity, and the wrong numbers were the plausible
-ones. And **the Drude weight has to be the multiplet block** by rule D4: `dielectric.f90`
-writes it as `sum_n v_a^nn v_b^nn`, and the diagonal of an operator is not invariant under
-the rotation a degenerate eigensolver is free in, a Fermi surface being exactly where a metal
-keeps its degeneracies.
-
-**The Fermi-surface nesting function is in** (P52), the fifth entry from `ELK-FEATURES.md`
-and the first there that `pw.x` lacks *entirely* — `nesting` occurs nowhere in `PW/src` or
-`PP/src`. `N(q) = (1/N_k) sum_k g(k) g(k+q)` with `g(k) = sum_n delta(eps_nk - E_F)` counts
-how much of the Fermi surface maps onto itself under a translation, which is where a phonon
-softens, a charge-density wave opens a gap or a spin spiral finds its pitch. **The one place
-it is not a transcription is worth 370x**: `nesting.f90`'s `O(N_q N_k)` double loop folds
-`k + q` back onto the grid with `mod`, and that fold is exactly what makes the sum a cyclic
-cross-correlation — one FFT gives every `q` at once, 0.001 s here against Elk's 0.37 s on a
-12x12x12 aluminium grid, with the double loop kept beside it (`method = "direct"`) agreeing
-to 2.6e-16. A symmetry-reduced wedge is **unfolded** rather than refused, since
-`eps_n(Rk) = eps_n(k)`: 72 diagonalisations instead of 1728, through the tetrahedron
-method's own `equiv` map. The validation closes inside the package, which is what
-`ELK-FEATURES.md` asks for. Free electrons have a closed form, `N(q) = Omega/(4 pi^2 q)`
-below `2 k_F` and **zero** above, reproduced to 1e-4 and to 1e-16 respectively; the mean of
-`N` over the q-grid is exactly `D(E_F)^2` (3e-16), and `D(E_F)` itself agrees with
-`compute_dos` on the wedge to 6.3e-13; and a half-filled hydrogen chain peaks at exactly
-`q = 0.5`, at **99.8 per cent** of the Cauchy-Schwarz bound `N(0)`, where P21's
-`relax_spiral_q` relaxes the corresponding spiral to 0.500014 from an unrelated start —
-two calculations sharing no machinery. **`N(0)` is the maximum on every crystal** by
-Cauchy-Schwarz, so `peak()` excludes the origin rather than reporting the same uninformative
-answer for every material. **Nothing refuses a polarized nesting function, so the spin regimes were
-measured instead**: a cell with no magnetization gives the same `N(q)` at
-`nspin = 1`, `nspin = 2` and as a spinor, to 2.4e-13 and 1.8e-8 — the check
-that catches a factor of two in `degspin`, which is a factor of *four* in `N`
-and is invisible in its shape. Elk's own number is the weakest of the checks
-and is quoted as such: its all-electron `D(E_F)` differs by 3 per cent and `N` is quadratic in it, so what
-agrees to 1.5 per cent is the dimensionless `N(0)/D(E_F)^2`. **Refused by name**: a
-constrained `tot_magnetization` (one Fermi level per channel, so `g` is two surfaces), a
-fixed-occupation run (no level to search for), and a spin spiral — the quantity is a
-statement about the state a spiral grows *out of*. The delta defaults to a **Gaussian** even
-when the run used Methfessel-Paxton or cold smearing, because those go negative on the wings
-and a product of two such weights has no sign at all.
-
-**Second-harmonic generation is in** (P54), the sixth thing taken from
-`ELK-FEATURES.md` and the first taken out of that file's own **rejected** table.
-`chi^(2)(-2w; w, w)` — how much of the light shone on a crystal comes back out at twice the
-frequency — by the same sum over states P53 built, contracted with two resonant denominators
-instead of a smeared delta, and needing *less* than the shift current did: the triple sum over
-the intermediate state **is** the sum-rule expansion of the generalised derivative, so the
-second derivative of `H(k)` never appears. **The row was rejected by inheriting P35's
-refusal**, which is a statement about the *Sternheimer stack* and never applied to a sum over
-states — check which machine a refusal belongs to before inheriting it, and note that what
-landed does **not** lift P35's: the 2n+1 route to the electro-optic tensor and to a
-truncation-free static `chi^(2)` still lacks the same term.
-**There is a real reference here**, which is rare in this corner: Elk's `nonlinopt.f90`
-(task 125), whose output for the same AlAs cell is committed under `tests/data/elk/` — the
-three parts separately as well as their sum, plus a scissored run. `pw.x` has none; its
-`el_opt.f90` is the *static* electro-optic response and sits on the branch P35 established
-is broken in the vendored 7.5. Against Elk on the same crystal and mesh, with what is not
-comparable stated rather than discovered (LAPW against norm-conserving, and a different gap
-enters twice because a second-order susceptibility has two energy denominators): the
-**resonance position to 0.5%** (2.152 eV against 2.163), the **peak height to 7%** and the
-**static value to 11%** with the basis shown converged (`ecutwfc` 10 → 30 → 45 giving
--2.71 → -3.10 → -3.13 a.u. against Elk's -3.50). The **scissors** branch is validated against
-Elk's own scissored run: the 2w peak moves **0.0502 Ry** against a half-scissor of 0.0500.
-**The finding is rule D4 arriving in `Delta^a`** — P51's Drude weight one order up. The
-band-velocity difference is built entirely from the *diagonal* of the velocity operator, which
-is not invariant under the rotation a degenerate eigensolver is free in inside a multiplet, so
-each member takes the multiplet's **block average** instead. It is worth **four orders of
-magnitude** on silicon, where the two terms `Delta` appears in come out at 1499 and 238 pm/V
-against the other three at 0.09 and fall to 0.10 and 0.055 — and **no symmetry check sees it**,
-the tensor being exactly `-43m` either way. Elk does not need it at 42x42x42 on a mesh that
-misses the symmetry points. The second finding is that **only a literal transcription of the
-Fortran loop could catch a transposed occupation factor**: `f(n, m)` and `e(m, n)` differ in
-the order of the pair, and writing one for the other flipped the sign of three of the five
-coefficient matrices while every physical check still passed. What separated the assembly from
-the physics in seconds rather than SCF runs was a **local plane-wave model Hamiltonian** with
-`V(G)` real and even, centrosymmetric by construction, on which every part vanishes to 1e-15.
-**Refused by name**, inherited whole from the shift current and re-worded so a caller hears
-about the quantity they asked for: ultrasoft and PAW, a spin spiral, a symmetry-reduced wedge,
-DFT+U, a metal, and `nspin = 2`. A spinor run is supported and tested.
-
-**Magnetocrystalline anisotropy is in** (P58), by the **force theorem**: converge the
-magnet without spin-orbit coupling, rotate the converged density onto `n`, and diagonalise
-**once** with the coupling on. At frozen density every term but the band energy is a
-functional of `rho` alone, so the total-energy difference between two directions *is* the
-band-energy difference, exactly, and the whole calculation is one diagonalisation per
-direction. Against `pw.x`'s own committed force-theorem example — the 3-layer Co(0001) slab
-of `PP/examples/ForceTheorem_example`, which `lforcet` reaches and which has no test-suite
-case — the MAE is **0.345770 meV against 0.353403**, on a quantity that is a difference of
-two band energies of 75 eV. **The two legs are two different pseudopotential files**, a
-scalar-relativistic one for the SCF and the fully-relativistic dataset of the same
-generation for the one shot, which is QE's own arrangement and is what makes an *ultrasoft*
-anisotropy reachable at all: the alternative, one relativistic file with its `j` channels
-averaged back, is `average_pp`, which refuses ultrasoft and PAW outright. Only the density
-crosses, and a density does not know which file made it.
-**The obvious cheaper thing gives zero and that is why this is a diagonalisation**: freezing
-the wavefunctions too and taking `<psi|H_SOC|psi>` once returns no anisotropy at all, the
-coupling entering at first order as `xi <L> . n` and P48 having measured `<L>` quenched to
-1.7e-16. **The bug the phase found was not a spin-orbit term**, which is what identified it:
-the density was rotated and QE's `compute_ux` quantization axis was not, so for a moment
-turned into the `xy` plane the sign `sign(m . z)` stuck at `+1` and the gradient correction
-differentiated `|m|` through its own nodes — worth **36.8 meV** on a cell whose answer is
-zero, surviving switching the coupling off entirely, and the `abs` trap of P28a in a fifth
-place. `soc_scale` (Elk's `socscf`) switches the coupling off inside one relativistic file
-and takes **0 or 1 only**: the overlap's coupling-free end has to be spin-independent, so
-the anisotropy vanishes identically there whatever else it is, but a blend partway is not
-the overlap of any set of projectors and `S` stops being a usable metric (-132 meV at 0.25
-on the slab). **Refused by name**: PAW (the handoff carries no `becsum`, and `pw.x` refuses
-it in the same place), DFT+U, a potential-only meta-GGA, a magnetic field, and a spin
-spiral. A direction other than the system's own `angle1`/`angle2` needs `nosym`, because a
-magnetic noncollinear run reduces its k-grid with the group the moment's direction picks.
-
-**QE's `local-TF` mixer is in** (P59): `approx_screening2`, Thomas-Fermi screening whose
-length is a function of `rho(r)` rather than one number for the whole cell. That distinction
-is the difference between a slab converging and not: the metal wants strong screening and
-the vacuum wants none, and one compromise value over-screens one and under-screens the
-other. QE's Co(0001) film runs at **QE's own `mixing_beta = 0.7`**, where plain Anderson
-**diverges** to +335 Ry: it reaches `-223.13842` Ry at iteration 48 against `pw.x`'s
-`-223.13876` and then oscillates about `-223.142`, six times closer than Kerker at 0.3
-gets in 250 iterations. It does **not** reach `conv_thr = 1e-10` in 60, where QE takes 24,
-and that gap is recorded rather than smoothed over. The screened
-residual solves `4 pi e2 v + |G|^2 (alpha v) = |G|^2 (alpha drho)` with `(alpha f)` a
-*real-space* multiply, so the operator is not diagonal in `G` and QE's least-squares Krylov
-method — its Coulomb metric, its restart, its stopping rule — is transcribed rather than
-replaced. **The Fortran's order is the part that is easy to miss**: `mix_rho.f90`
-preconditions the **combined search direction once**, after the Broyden combination, where
-preconditioning each history entry runs the solve eight times an iteration. For a linear
-preconditioner the two are identical, so Kerker's results are unchanged to the last digit.
-
-**The magnetic torque is in** (P60), which is the anisotropy as a *derivative* rather than a
-difference: `run_torque` returns `-dF/dtheta` at one angle, and for `E = K1 sin^2(theta)`
-the torque at **45 degrees is `-K1`**. P58's route differences two band energies, which is
-1e-5 Ry out of 1e2 -- seven digits of cancellation; a first derivative cancels nothing. It
-is `jax.grad` of the energy in a magnetic coordinate, the same construction as
-`forces/spiral.py`'s `dE/dq` and P15's force, where the literature's torque is the
-hand-derived `<psi|dH_SO/dtheta|psi>`. **One term carries the angle**: `dvan_so` is the
-spin-orbit matrix in the *crystal* frame and does not move with the moment, so `dH/dtheta`
-lives entirely in the exchange field. **The finding is that a Hellmann-Feynman derivative at
-frozen occupations is the derivative of the FREE energy**, and for a smeared metal that is a
-different curve from `sum w eps` -- comparing against P58's `anisotropy_mev` looks like a
-factor-of-two bug and is not one. A smearing sweep is what settled it and is the practical
-result: at `degauss = 0.02` Ry the band-energy difference reads **1.235 meV against a
-converged 0.531**, where the torque at the same width reads 0.552, so the torque is
-*smearing-robust* where the difference is not. Validated three ways: `sum w <psi|H|psi>`
-reproduces `sum w eps` to 4.8e-11 meV, the gradient reproduces a central difference of its
-own functional to six digits, and the torque's `K1` reproduces the free-energy difference's
-to **2.4e-5 meV** at four smearing widths.
-
-**X-ray and magnetic structure factors are in** (P61), the seventh thing taken from
-`ELK-FEATURES.md` (Elk's tasks 195/196) and the cheapest: `F(H) = int rho e^{iH.r}` **is**
-an array the code already has, up to the crystallographers' two conventions -- the positive
-phase and no `1/Omega` -- so the step is one transform and a gather, **6 ms** against its
-SCF's seconds. `pw.x` computes neither, verified by `grep`: every "structure factor" in
-`PW/src` and `PP/src` is the internal `struct_fact`. **The entry's own caveat had an
-exception and the exception is the payoff.** It said to claim a *valence* structure factor
-and not to promise agreement with an all-electron code, which is right for an **allowed**
-reflection -- silicon's `F(000)` is 8 here and 28 in Elk, `(111)` is 1.7495 against 15.14 --
-and wrong for a **forbidden** one, where the spherical part of every atom cancels and the
-core with it, leaving the aspherical bonding density that a pseudopotential keeps. Silicon's
-`(222)` is **0.347406 against 0.33416**, 4 per cent. The sharpest check needs no other code:
-the SCF's own starting guess is a superposition of free atoms and gives `(222) = 0` to 1e-10,
-so the value is bonding charge and nothing else. **Norm-conserving, ultrasoft and PAW all
-work** (`F(000) = 8.0000000000` on each, which is how one knows the augmentation charge
-reached the transform), and running the three located that 4 per cent by elimination. It is
-not the k-grid, not either basis, not the functional (0.07 per cent) and **not the core** --
-Elk's own valence-only run, which `wsfac` above the 2p states produces, gives the identical
-0.334165, so the core contributes nothing to a forbidden reflection. Against that valence-only
-reference the augmentation charge is worth a **factor of two** on the allowed reflections
-(`(111)` -0.7 per cent for ultrasoft and PAW against -1.5, `(004)` +31 against +61) and
-**nothing at all** on the `(222)`, which comes out at 0.3474 on all three to 3e-4. The site
-symmetry says why: a silicon atom in diamond is at `-43m`, whose lowest non-spherical
-invariant is `l = 3`, and an `s, p` dataset's augmentation charge carries multipoles only to
-`L = 2`. The falsifiable test is a silicon dataset with a `d` channel; none is committed, so
-it is not claimed. **The magnetic form factor is a
-low-`|H|` quantity and the boundary was measured rather than argued**: bcc iron's normalised
-`F_mag(H)/F_mag(0)` agrees with Elk to 5.8 per cent at the first reflection and drifts to
-tens of per cent outwards, while `ecutwfc` 30 -> 45 moves it by less than 0.1 per cent --
-iron's moment is in the 3d shell, inside the radius the dataset smooths. The exact magnetic
-statement comes from the cheapest cell instead: an antiferromagnetic hydrogen chain scatters
-neutrons exactly where it scatters no X-rays, because the operation halving the charge's
-period is a symmetry only together with time reversal. **Four traps, all silent.** The dense
-grid returns a coefficient at every frequency out to the box corner and only those inside
-`ecutrho` are the density's, so `hmax` is guarded against `sqrt(ecutrho)`. A star may be
-collapsed only with the **symmorphic** operations (Elk's `tv0symc`), a fractional translation
-putting a phase between members -- 24 of silicon's 48 -- and the magnetic members of a star
-are related by `det(R) R` rather than being equal. Conjugating the coefficient is the
-positive-phase transform only for a *real* field, which a density is, so nothing physical
-would ever catch the difference; `ifftn` is used and a complex-field unit test is what found
-it. And Elk's `wsfac` energy window selects **states, not bands**: silicon's two lowest
-valence bands touch at `X`, so a cut between them leaves 5.9648 electrons rather than 6.
-
-**Magnons are in** (P63), the eighth thing taken from `ELK-FEATURES.md` (Elk's tasks
-330/331) and the last untaken magnetism entry in that file. `chi^{+-}(q, omega)` and its
-pole, which is the collective precession of the magnetization -- pulled out from under the
-Stoner continuum of independent spin flips by the exchange-correlation kernel. **The phase
-is far smaller than the survey sized it, for one reason**: for a *collinear* ground state
-the 4x4 spin-density response block-diagonalises and the transverse block decouples, so
-`chi^{+-}` is a plain matrix in `(G, G')` rather than the `(4 ngrf)^2` object Elk carries
-for the general case -- Elk's own `tfm2213` says so. Three things follow and each *removes*
-machinery P37's charge channel needs: **no Coulomb** (a transverse spin fluctuation moves no
-charge, so `G = 0` is an ordinary entry rather than a 3x3 head), **no velocity operator**
-(the response is finite at `q = 0`, that being the Goldstone mode), and **no second set of
-states** -- `q` is restricted to a difference of two k-points of the run's own grid, so
-`k + q` is already in it and P19's two-sphere machinery, which the survey named as the
-supplier, is not needed at all. What survives is an **umklapp shift** of one gather index,
-which `defumat/topology/` has had since P16. The normalisation is derived rather than
-fitted and is a factor of two (`X_0 = 2 chi_AW`, because `rho_{up,dn} = m^-/2` while
-`V_{up,dn} = B^-`), and the kernel `f_xc^{+-} = B_xc/m` comes from a rigid rotation, which
-is exact and needs no locality -- so it works for a GGA where the *longitudinal* ALDA
-kernel is refused.
-**`pw.x` has no counterpart** (turboMagnon is a Liouville-Lanczos solver and never forms a
-Dyson equation in G space; `PW/src` and `PP/src` have nothing), **but Elk has a committed
-one and it is the phase's strongest number**: `examples/TDDFT-magnetic-response`'s fcc
-nickel at `vecql = (0.1, 0.1, 0)` on a 10x10x10 shifted grid has its pole at **117.92 meV**,
-and running the same cell here gives **115.04**. The gap is almost entirely Elk's applied
-field, and *that* is the trap: `bfieldc = 0.01` with the default `reducebf = 1.0` reads like
-a disqualifying Zeeman gap -- this package refuses an applied field for the quantity by name
--- until `cb = gfacte/(4 solsc)` is read out of `eveqnsv.f90` rather than estimated, which
-makes the gap `2 cb B` = **1.99 meV**, 1.7 per cent of the pole. Elk's field-free magnon is
-115.93 against this code's 115.04: **0.8 per cent**, across LAPW versus norm-conserving,
-Elk's 25 Ry response sphere versus 60, and its `emaxrf` band cap. The moment agrees on the
-same run (0.6178 against 0.6152) and the *sign* of the static `chi` does too. **Both numbers are recorded and
-neither is chosen for agreeing**: the Goldstone-corrected kernel is 0.7 per cent weaker and
-moves the pole *up* by 8.04 meV, so 115.04 uncorrected and 123.08 corrected sit at -0.8 and
-+6.2 per cent of Elk. That 0.7 per cent of kernel is worth 7 per cent of magnon is the
-useful number -- it is how steeply `lambda(omega)` crosses one, and so how far the residual
-must fall before a magnon energy is worth a second digit. Beyond that the
-validation closes inside the package twice, on statements with no free parameter. **Goldstone**:
-`X_0(0, 0) B_xc = m`, exact only with complete bands *and* a complete G-set, so it reports a
-**double truncation** -- and **which axis binds depends on the element**, which a band sweep
-alone gets backwards. Hydrogen: 8.0 -> 0.50 per cent over `nbnd` 12 -> 140. Fcc nickel: the
-band count does *nothing* (10.02, 10.13, 10.22 per cent at 30, 60, 100) and only
-`ecut_response` moves it (10.0 -> 6.1 -> 2.0 at 12, 30, 60 Ry, the leading eigenvalue
-reaching **1.0062**), because `B_xc` of a 3d shell has structure a small sphere cannot
-represent. **Periodicity**: `X_0(q + G) = X_0(q)` under a relabelling of the matrix's own G
-index, which is the entire content of the umklapp fold, and it is **exact** -- 1.3e-17.
-**The pole is a root and not a peak**: `lambda_max(X_0 F) = 1` is a one-dimensional root on
-a handful of frequencies, no broadening enters it, and it says *below zero* where the state
-is unstable instead of returning the frequency grid's own edge; that also keeps the cost
-down, the response being `nw npairs nm^2`.
-**Three model ferromagnets are Stoner-unstable and that is the result, not a defeat.** A
-hydrogen *chain* is the wrong cell and the kernel says why -- `B_xc/m` grows without bound
-as the density falls, so 8 bohr of vacuum gives `|F| = 173` in the tail against 21 in the
-core and the leading eigenvalue moves 1.129 -> 0.924 as the density clip moves two orders,
-which is P45's diverging screening kernel arriving in the transverse channel. Simple-cubic
-hydrogen is well behaved and unstable at `q = (0,0,1/2)`; fcc hydrogen has the best
-Goldstone residual of the three (**0.57 per cent**) and is unstable at `q = (0,0,1/4)`.
-**The obvious third comparison does not work and establishing that is the negative
-result.** `lambda_max > 1` should mean a spiral at that `q` is lower in energy, and the
-signs do agree on fcc hydrogen -- and it means nothing, because **the spiral's own SCF
-leaves the magnetic branch**: at `q = 1/2` the 90-degree spiral converges to `|m| = 0.0001`,
-the *nonmagnetic* solution, so its energy gain is demagnetization rather than a spin wave,
-and a 15-degree cone collapses the same way because nothing holds it (Elk's own
-`Ni-magnon-spiral` example runs `fsmtype = -1` with a large field for exactly that reason).
-**Nor can the case be rescued by choosing a lattice constant**: at `a = 6.5` bohr the
-ferromagnetic solution is 58 meV *above* the nonmagnetic one, and no spacing makes a
-half-filled fcc hydrogen lattice a stable ferromagnet -- `a = 8` is fully polarized, 64 meV
-below the nonmagnetic solution, and still soft at finite `q`. That is what a half-filled
-band does, and the susceptibility says so. **The only stable ferromagnet reachable here is
-fcc nickel**, whose enhancement *falls* away from `q = 0` (1.0000, 0.633, 0.583 at `q = 0`,
-`(0,1/4,1/4)` and `X`), and telling those two behaviours apart is what the quantity is for.
-What replaced the comparison in the tests are two exact checks: `X_0(-q) = X_0(q)` with the
-G indices reflected, which exercises the umklapp on a pattern `q -> q + G` cannot, and no
-spectral weight below the smallest spin-flip energy the bands allow.
-**Refused by name**: `nspin != 2` and noncollinear magnetism (the transverse
-block stops decoupling), ultrasoft and PAW (`Q_ij(q+G)`, P40's unclosed term), a spin
-spiral, DFT+U, an **applied magnetic field or constrained moment** (the rotation argument
-assumes what a field breaks -- a magnon in a field is Zeeman-gapped), a potential-only
-meta-GGA, and a symmetry-reduced k-set. **Nickel is the physics case and behaves**: `m = 0.5788` mu_B, a Goldstone residual of
-**1.99 per cent**, and magnons of **432 meV** at `q = (0, 1/4, 1/4)` and **396 meV** at `X`
--- against 438 meV from nickel's measured spin-wave stiffness at that wavevector, where the
-quadratic law is long past its range. The cheap setting the notebook runs (`nbnd = 24`,
-`ecut_response = 40`) gives **434 meV** for the same mode, 2 meV from the converged one.
-Not claimed: a converged spin-wave stiffness, whose small wavevectors a 4x4x4 grid does not
-reach.
-
-**The orbital magnetization is in** (P64), which is the one magnetism quantity `pw.x` has
-that was not here: `PW/src/orbm_kubo.f90`, reached by `lorbm`. A magnet's moment has two
-parts and only one of them is an integral over the cell -- the orbital part is the current a
-Bloch state carries *through* the crystal, so `int r x j` depends on where the cell is cut,
-which is the polarization's difficulty with the polarization's resolution. The k-space
-expression is a *local* circulation plus an *itinerant* one, built from the **dual states**
-of the neighbouring manifolds (`sum_n (M^-1)_{nm} |u_{k+b,n}>`, QE's `zgefa`/`zgedi`) -- a
-covariant finite difference, so rule D4 is satisfied by construction rather than by handling
-degeneracies, and nothing is divided by `E_n - E_m`. **The gating problem was the case, not
-the code**: the quantity needs broken time reversal *and* spin-orbit coupling, and QE's
-routine sums every band it is given with no occupations, so it is insulator-only -- while
-every spinor magnet committed here is a metal and every spinor insulator is nonmagnetic.
-What broke it open is that a magnetic insulator with strong spin-orbit coupling need not be
-a crystal: **an iodine atom in a twelve-bohr box**, `5s2 5p5` with one p hole, which Hund's
-rules give `L = 1` parallel to `S = 1/2`. Against `pw.x` on the same 3x3x3 grid, on both
-Kubo terms separately: `M_LC = -0.5986388` against `-0.5986370` and `M_IC = -0.5757995`
-against `-0.5757987`, **2e-6 mu_B/cell**, which is measured to be the gap between two
-separately converged densities rather than asserted (`conv_thr` 1e-6, 1e-8, 1e-12 move it
-by 5e-6, 2.4e-7, 1.8e-6). **The physics check needs neither code**: the site projection of
-P48 gives `<L_z> = 0.99977 hbar` on the same run and the modern theory gives 1.1744 mu_B --
-and the 17 per cent between them is *two* things rather than one, which is why it is not
-called "the itinerant part": `<L>` is `r x p` on projected atomic orbitals, so it misses
-both the circulation outside those orbitals and the nonlocal pseudopotential's own
-contribution to the velocity `i[H, r]`. **The null is the same run with the coupling switched off** (`soc_scale = 0`, P58's
-switch), which leaves the magnet a magnet and the orbital magnetization at 6e-9. Three
-things are worth carrying. **`orbm_kubo` prints at `mu = 0`** -- it imports `ef` and never
-uses it -- and the dropped term is `mu` times the Chern vector, computed here anyway as
-`dm_dmu`, since the same sum *is* a Chern number (`S^curv_l = -4 pi N_l C_l`, converging
-onto the Fukui-Hatsugai-Suzuki integer). **Its two printed terms are not the papers' LC/IC
-split** (`Im<du|H|du>` and `Im<du|E|du>` against `(H - E)` and `2(E - mu)`), which agree in
-the sum and not term by term; this follows the Fortran so both halves can be compared. And
-**the lattice factor looks wrong and is right**: the assembly of the `i` and `j` derivative
-directions is multiplied by `b_l`, the third reciprocal vector, which is exact for any
-lattice because `d/dk` in reduced coordinates carries the *direct* vectors and
-`a_i x a_j = Omega b_l/(2 pi)` -- a cubic test cannot tell the two apart. **Refused by
-name**: ultrasoft and PAW (`setup.f90:130` refuses the same combination), `nspin = 2`, a run
-without spin-orbit coupling, a metal or any manifold the gap check cannot certify, a spin
-spiral, and a mesh with **two** divisions along a direction that carries a derivative (a
-point's two neighbours are then the same k-point and the difference is an alias); **one**
-division is allowed and sets that derivative to zero, which is what a slab means.
-
-**Scanning-tunnelling microscopy images are in** (P65), Elk's task 162 and QE's
-`PP/src/stm.f90`, and it is the one row taken back out of `ELK-FEATURES.md`'s **rejected**
-table -- rejected there for "QE has it", which was true and did not settle it. Tersoff-Hamann
-says the current an s-wave tip draws is the sample's local density of states at the tip, so
-an STM image **is a density built from different occupations** and nothing else:
-`Calculation.density(wavefunctions, weights)` with a normalised delta at the Fermi level,
-which is P61's `wsfac` call under another name. No second band sum was written, and the
-symmetrisation and the augmentation charge follow the weights -- so an **ultrasoft or PAW**
-image works where `stm.f90`'s does not, its sum being over `|psi|^2` with no `addusdens`.
-Against `pp.x`: **6.7e-10** on every point of the 15^3 grid of QE's own fcc aluminium, which
-took three of QE's conventions rather than one (it divides by the volume and *not* by
-`degauss`; it uses the run's own smearing; and it truncates the band sum at three widths,
-`band_cutoff` here). **That truncation is worth 0.4 per cent in the direction that says what
-it is**: the complete sum is the *smaller* one, because Marzari-Vanderbilt's delta is
-negative for `x > sqrt(2)` and the dropped states carry negative weight -- P52's objection
-one order out, and why the default here is a Gaussian whatever the run used.
-**The spin-polarized image is the part neither code has** and is the cheapest thing in the
-phase, the tunnelling density already carrying its channel axis: a magnetic tip counts the
-states whose spin is along its own moment, `[rho + P n.m]/2`. A **collinear** run carries
-only `m_z`, so a transverse direction is refused rather than projected onto the axis -- `m_x`
-is absent there rather than zero. Its validation needs no other code and is the best in the
-phase: an antiferromagnetic hydrogen chain is flat in charge to six figures while its two
-spin projections are mirrors (+-2.58 per cent) that add back to the charge to 1e-14, and a
-**90-degree noncollinear chain** answers a tip along `x` with atoms 1 and 3 at opposite sign
-and atoms 2 and 4 at **nothing at all** (1e-16 against 0.063), their moments being
-perpendicular to it -- while a tip along `z` sees none of the four. The sum rule
-`int rho_STM = D(E)` against `compute_dos` holds to 1e-10 on the scalar *and* the spinor
-branch, which is the check that catches P51's `for_spin` factor of two. **The one new piece
-of machinery is exact point evaluation** (`basis/sample.py`): a density is a finite sum of
-plane waves, so its value between grid points is that sum evaluated there rather than an
-interpolant, whose grid periodicity would read as corrugation. **Graphite is the physics
-case**: AB stacking makes the two sublattices of the surface layer inequivalent and only one
-is bright at the Fermi level (1.64x), which is the textbook result that half of graphite's
-atoms are invisible -- and the contrast **inverts** at +2 eV bias. Elk's task 162 is 0.49 s
-against 0.09 s here on the same cell and plane, both from a converged ground state; what is
-not comparable is that `rfpts` sums spherical harmonics inside each muffin tin.
-**Refused by name**: a spin spiral, a constrained `tot_magnetization`, an applied magnetic
-field, a spin direction on a run with no magnetization, a transverse direction on a collinear
-one, and a constant-current scan longer than the lattice period along the plane's normal --
-past which the tip meets the periodic image of the surface and the density rises again,
-silently.
-
-**Vertical tunnelling transport through a 2D material is in** (P66), which is the question
-P65 does not answer: an STM image says what the tip *sees*, and this says what gets
-*through*. An electron enters at a point above the sheet and leaves into an infinite plane
-below it (the substrate), so the current is set by the **nonlocal** Green's function between
-the two, and a **point** tip makes `Gamma_t` rank one, which collapses the Landauer trace to
-`int_plane |G(r, r')|^2` exactly. An infinite featureless substrate conserves lateral
-momentum, so the exit integral is **diagonal in k** and the whole thing is one quadratic form
-per k-point on the bands' plane-restricted **Gram matrix** `S_k`. Three things follow from
-that word and all three are load-bearing: the transmission is non-negative by construction;
-the whole-cell exit region makes `S_k` the identity by orthonormality, so the quantity becomes
-P65's tunnelling density of states **exactly** (4.6e-13 against `run_stm`, no factor between
-them, which is the check a normalisation error could not hide in); and it is **blind to a
-rotation inside a degenerate multiplet**, so rule D4 is satisfied by construction rather than
-by handling degeneracies. `S_k` is closed-form -- the `h3` sum collapses the sphere onto its
-shadow on the surface reciprocal lattice -- so there is no quadrature and no convergence
-parameter: 5e-16 against a real-space quadrature, and 1.4e-15 to the identity when swept along
-its own normal.
-**The largest finding is negative and it changed what is computed.** The literal denominator
-`1/(E - e + i eta)` **cannot be summed over states**: the states far from `E` build the
-barrier's evanescent decay entirely by cancellation. On a cell diagonalised *completely* (367
-plane waves, 367 exact bands) one `G(r_tip, r_exit)` wanders over an order of magnitude and
-lands only at the complete basis, at a **cancellation ratio of 349**. What converges is that
-denominator's **modulus**, which is Bardeen's golden rule and is exactly the resolvent's
-modulus with its phase held fixed -- it keeps the interference between bands **degenerate at
-the tip energy**, which is the interference an experiment lets happen, and drops direct
-tunnelling through the barrier without going on shell, which a weak-coupling geometry is
-defined by not having. With a Gaussian the band count converges to 3e-7. `method="resolvent"`
-stays reachable and warns, so the statement is measured rather than believed.
-**The second finding is a transposed index and it is P54's again**: `G(r, r') = sum_n a_n(r)
-psi*_n(r')` conjugates `psi` in the *exit* variable, so the plane integral is `a^T S a*` and
-**not** `a^dagger S a`. The wrong one is real, non-negative, exact in the Tersoff-Hamann
-limit, passes the sum rule and is blind to a degenerate rotation -- and is wrong wherever `S`
-has an off-diagonal, which is wherever the interference lives. Only a unit test that evaluates
-`G(r, r')` on a grid and integrates `|G|^2` literally could see it.
-**The physics is the monolayer/bilayer pair**: graphene's two Dirac states at `K` are
-degenerate partners, so by Schur's lemma the substrate's overlap on that pair is a multiple of
-the identity and has nothing off-diagonal to interfere through -- its map correlates with the
-STM image at **1.000000** with zero interference, while an AB bilayer, whose current must
-cross two layer-polarized sheets, falls to **0.16** with the coherent map 26x below the
-incoherent one. **The incoherent map needed rule D4 to be usable at all**: it is a *diagonal*,
-which is not invariant under the rotation a degenerate eigensolver is free in where the
-coherent quadratic form is, so `S_k` is diagonalised inside each multiplet first
-(`channel_basis`) -- worth 69x against 26x on the bilayer, and P51's Drude weight one layer out. **Ultrasoft and PAW need nothing extra** because
-both planes are in the vacuum, where a pseudo-wavefunction is the true one; a plane inside an
-augmentation sphere is refused. The whole-cell *diagnostic* is the exception and took the `S`
-metric (9 per cent short without it). **Refused by name:** more than one k-division along the
-stacking axis, a symmetry-reduced wedge (`grid=` builds the **whole** grid), a tilted exit
-plane, a plane inside an augmentation sphere, a spin-selective substrate with no magnetization,
-and P65's three whole. **Warned rather than refused**: atoms not between the two planes, since
-a cell is periodic and the electron then goes around it. **Not claimed**: a finite contact
-patch, a tip beyond an s-wave, or an absolute conductance -- the two couplings are unfixed
-prefactors, so what is carried is the map and its contrast.
-
-**Outstanding:** Wyckoff input, PAW and a *relaxed* (as opposed to frozen-density) magnetocrystalline anisotropy, `average_pp`, the dynamical matrix of an
-ultrasoft or PAW *metal*, the strain coordinate's third derivatives on ultrasoft and PAW
-(P44 localised what is missing), the *second derivatives* of a spin-polarized system (P45 put
-the solve in; the dynamical matrix's and the strain response's assembly are not there) and a
-spin-polarized `Z*`, the elastic constants and electrostriction of a **spinor** run (P46 left
-that refusal standing: they reach the energy functional directly and their first-order
-wavefunctions come from a Sternheimer solve with no spinor form), the force on an atom of a
-**spin spiral** (the two components live on different plane-wave spheres, so the nonlocal
-term needs the projectors of both — `dE/dq` is what a spiral has instead), the Kubo curvature
-of an **ultrasoft or PAW** dataset (P47: the `e_n dS/dk` term is written and unvalidated),
-PAW Born charges, the electro-optic tensor and a *truncation-free* `chi^(2)`
-by the 2n+1 route (the second-order response `solve_e2` is what is missing, which P35 refuses
-for; the **frequency-dependent** `chi^(2)(-2w; w, w)` is in as of P54, by a sum over states,
-which never needed that term),
-phonons at `q != 0` (the perturbed states live
-at `k + q`, so it needs the two-sphere machinery P19 built for the spin spirals, plus
-`q2r`/`matdyn` for a dispersion), the **relaxed-ion** piezoelectric constant (P50: `Z*`, the
-`Gamma` force constants and the strain response are all here; what is missing is the
-internal-strain tensor `d^2E/du d(eps)`, whose two legs are *both* coordinates of the energy
-and therefore need a two-coordinate frozen functional) and the piezoelectric tensor of an
-**ultrasoft or PAW** dataset (P50: nothing in the assembly is norm-conserving, and what is
-missing is a *case* — every soft dataset committed here is centrosymmetric, so its tensor is
-zero and agrees with zero however wrong the strain leg is), and the rest of P10 (k-axis sharding
-and GPU).
+**The claims in this project are numbers, not adjectives.** A phase is done when it has a
+concrete figure against `pw.x`, against Elk, or against an identity that shares no
+machinery with it — and when the *absence* of a term is measured and refused by name
+rather than approximated. That habit is the reason `PLAN.md` is as long as it is, and it
+is the one thing not to compress away.
 
 ## Layout
 
@@ -1005,332 +56,140 @@ and GPU).
 
 ## Scope
 
-First milestone, in this order: **SCF → band structure → DOS**, for `pw.x` with
-norm-conserving pseudopotentials, LDA/PBE and k-point grids — **now met**, and extended
-since with ultrasoft/PAW, the PBE family and collinear spin. This is a large project that
-will keep growing, so structure matters more than speed of delivery — see `PLAN.md` for
-the architecture, the phase breakdown, and the validation strategy. Read it before writing
-code.
+The first milestone was **SCF → band structure → DOS** for `pw.x` with norm-conserving
+pseudopotentials, LDA/PBE and k-point grids, and it is met. This is a large project that
+will keep growing, so structure matters more than speed of delivery — read `PLAN.md` for
+the architecture, the phase breakdown and the validation strategy before writing code.
 
-**Gamma-only storage is in scope and implemented** (P68), and it is a **memory**
-feature rather than a speed one. `K_POINTS gamma` stores one plane wave of each
-`(G, -G)` pair, because at `k = 0` a state can be chosen real and
-`c(-G) = conj(c(G))`. That halves `npwx` and with it every array a band lives in —
-the wavefunctions, `vkb`, the Davidson subspace — which on a 157-atom slab at
-`ecutwfc = 60` is **189 GB against 96**.
+**What is in scope and implemented**, one line each. The binding rule is stated; the
+validation numbers and the traps are in the named phase, and the user-facing refusals are
+in `docs/features.tex`'s amber boxes.
 
-**Only the wavefunction sphere halves, and the dense G set stays whole.** That is a
-deliberate departure from `pw.x`, which halves both: the memory is entirely in the
-plane-wave-sized arrays (the density and potential are 0.4 GB against 139 GB of
-Davidson subspace there), so halving the dense set too would save a fifth of a per
-cent and would put a conjugate fill inside every consumer of a *real field* —
-`to_dense`, `v_of_rho`, the GGA gradient, the augmentation charge, the symmetriser —
-each a place the `G = 0` term can go missing silently. The consequence to know is
-that `ngm` here is **not** the `ngm` `pw.x` prints for the same input; the exact
-relation is `ngm_full = 2 ngm_QE - 1` and `tests/regression/test_basis.py` asserts it.
+- **Ultrasoft and PAW** (P12): the two-grid split, the augmentation charge, the overlap
+  operator, self-consistent `D_ij`, PAW's one-centre terms.
+- **Gradient-corrected functionals** (P13): PBE, revPBE, PBEsol, on the plane-wave grid
+  and on the PAW spheres. The functional comes from the pseudopotentials' headers unless
+  `input_dft` overrides it, and **an unimplemented one is refused rather than silently
+  replaced by LDA**.
+- **Collinear spin** (P9): `nspin = 2` gives the density, potential, `becsum`, `D_ij`,
+  eigenvalues and wavefunctions a leading channel axis. The occupation scheme decides how
+  many Fermi levels there are — one shared, or one per channel when `tot_magnetization`
+  constrains it. `occupations = 'fixed'` implements only the second, which is `pw.x`'s own
+  rule (`input.f90:784-800`) and is enforced at input here in QE's order. A fixed
+  occupation **cutting a degenerate multiplet** is diagnosed by name for the residual
+  solver: which member the eigensolver returns is arbitrary, so `F` is not a function of
+  the density.
+- **Spin-orbit coupling** (P14): `noncolin` makes a wavefunction a two-component spinor of
+  length `2 npwx`, so there is *one* Hamiltonian on a space twice as large rather than two
+  Hamiltonians; `lspinorb` puts a fully-relativistic dataset's `j`-resolved projectors into
+  it. Forces, stress and relaxation for this regime are P46, and they take `dvan_so` (the
+  **bare** `D`, for the same reason the collinear branch takes `dion`) and `qq_so`.
+- **Noncollinear magnetism, magnetic fields and spin spirals** (P17-P19;
+  `defumat/scf/fields.py`, `scf/locals.py`). `sym_rho`
+  rotates the magnetization as an **axial** vector. Fields: the *energy* is written down
+  and the potential is `jax.grad` of it, with QE's five `add_bfield.f90` expressions as a
+  test; **the field's energy is not in the reported total**, by QE's and Elk's shared
+  convention, and is carried separately. Spirals (`spiral_q`, Elk's `vqlss`) put the up
+  component at `k + q/2` and the down at `k - q/2`, each on its own sphere — the whole of
+  the generalized Bloch theorem. Refused for a spiral: spin-orbit coupling permanently,
+  symmetry (until the spin space group is written, so `nosym` and the full grid), and
+  ultrasoft/PAW.
+- **Relaxing the spiral wavevector** (P21): `q` is a coordinate like an atomic position, so
+  `dE/dq` is `jax.grad` at frozen wavefunctions and a frozen sphere (`forces/spiral.py`,
+  `workflows/spiral.relax_spiral_q`), with the same BFGS
+  handed the **reciprocal** cell as its metric. Only `|k ± q/2 + G|^2` and `vkb(k ± q/2)`
+  carry `q`. Two traps: the compiled gradient closes over its sphere and must be dropped on
+  every `at_spiral_q`, and BFGS's initial inverse Hessian is out by two orders on a
+  milli-Rydberg magnetic surface (`BFGSSettings.hessian_scale`). A magnetic field is
+  refused — its energy is outside the reported total, so the state is stationary for a
+  different functional.
+- **Forces, stress and both relaxations** (P15, P11, P29, P46). The default is `jax.grad`
+  of the total energy at *frozen* wavefunctions, with the orthonormality constraint carried
+  explicitly so ultrasoft's Pulay term falls out of the same gradient; QE's hand-derived
+  expressions are transcribed **beside** them as the cross-check, never instead. A
+  vc-relax is **two runs** — the relaxation in a frozen basis, then one more SCF from
+  scratch — and the gap between their energies is the Pulay error, reported
+  (`VCRelaxResult.pulay_error`) rather than left to be noticed.
+- **Berry curvature, Chern numbers, Z2, and the Berry-phase polarization** (P16, P47, P56).
+  Everything is built from one primitive, `<u_mk|S|u_nk'>`, because a determinant of
+  overlaps is blind to the mixing a degenerate eigensolver leaves (rule D4) *and* is an
+  exact integer on any mesh. Z2 has two independent routes and running both where both
+  apply is the check; where they disagree the parity one is the answer.
+- **DFT+U** (P20, P62): `lda_plus_u_kind = 0` and Elk's other flavours, from the `HUBBARD`
+  card, whose parameters are **in eV** and are converted at the input boundary. The energy
+  is written down and `v_ns` is `jax.grad` of it; `v_hubbard` is transcribed as a test, and
+  `force_hub` is *not* transcribed at all — it is `jax.grad` through moving projectors.
+- **Continuing one run from another** (P23, `defumat/scf/continuation.py` and
+  `System.with_spin`): `run_scf(starting_from=result)` across a
+  change of spin regime. A promotion is *decompose, decide what `m` should be, recompose*;
+  the magnetization is **seeded** when the source has none, because nothing in the SCF
+  breaks spin symmetry on its own. `with_spin` rebuilds the k-points rather than
+  relabelling them.
+- **Linear response** (P24 and its letters, P45): the velocity operator from one `jvp` of
+  `H(k)`, the Sternheimer solve in place of a sum over states, and the dielectric constant,
+  Born charges, phonons at `Gamma`, and the strain response on top. **The perturbations are
+  gradients of code that already exists** rather than expressions derived a second time —
+  `dv_of_drho` is one `jvp` of `v_of_rho`, `dvqpsi_us` one `jvp` through `at_positions`,
+  `int3` one `jvp` of `newd`, `PAW_dpotential` one `jvp` of `onecenter`. Still refused:
+  noncollinear magnetism, DFT+U, spin spirals, a potential-only meta-GGA, and — for
+  `nspin = 2` — a **GGA** kernel (P70 covered the LDA; `dgcxc_spin` has its own thresholds
+  and gates in a different routine) and the *assemblies* above the solve, which is the
+  dynamical matrix, the strain response and the two third derivatives.
+- **Third derivatives** (P26, P35, P36, P43): the Raman tensor, electrostriction, the
+  elastic and elasto-optic constants, from one `jvp` of the second-order energy at frozen
+  first-order wavefunctions — the 2n+1 theorem, which is P15's and P25's envelope argument
+  one order up. `symtensor3`/`symmatrix3` are implemented at **any** rank.
+- **Meta-GGA, potential-only** (P30-P32): `tb09` and `bj06` are potentials with no energy
+  functional, so they invert the rule above — nothing is differentiated, the expression
+  *is* `v_x`. The consequences are enforced rather than documented: `run_scf` warns that
+  its total is not the value of anything it minimised, and every consumer of
+  `forces/energy.py:energy_at` refuses. `tau` comes from the states and is **not mixed**,
+  exactly as `mix_rho.f90` leaves `kin_r` alone. Energy-carrying meta-GGAs (TPSS, SCAN,
+  M06L) are **not** in — their potential has a `dE/dtau` piece acting on the wavefunction.
+- **Van der Waals** (P27): Grimme's **D2** only, as a pair sum over the nuclei outside
+  `v_of_rho`. The other four are **refused by name**, where QE's `set_vdw_corr` warns and
+  silently runs with no correction at all — D3's `C6` has a coordination derivative of its
+  own, and TS/MBD/XDM are functionals of the self-consistent density.
+- **Optical spectra with excitons** (P37): the one place a **sum over states** earns its
+  keep, because a spectrum needs `chi_0` as a matrix over `G` at every frequency where the
+  Sternheimer stack gives a static operator. The Dyson equation is solved with a kernel
+  from a registry; the bootstrap one is parameter-free.
+- **The magnetism tail** (P48, P51-P66): site-resolved `<L>`/`<S>`/`<J>`, effective masses,
+  the piezoelectric tensor, optical conductivity and the Kerr angle, Fermi-surface nesting,
+  the shift current, second-harmonic generation, LO-TO splitting, magnetocrystalline
+  anisotropy and the magnetic torque, structure factors, magnons, the orbital
+  magnetization, STM images and vertical tunnelling transport.
+- **Running a calculation too large for one job** (P67): `defumat/sizing.py` budgets a
+  run's peak before it starts, the SCF checkpoints, and a dynamical matrix can be built
+  one atom's column at a time across jobs.
+- **The `j`-resolved projected density of states** (P69): `projwfc.x` for a spinor band,
+  resolved by `j` and `m_j` instead of by `m` — the regime every heavy-element run here
+  advertises and had no orbital decomposition for.
+- **The screened response and Born charges of a magnetic insulator** (P70): `nspin = 2`
+  above `chi_0`. The LSDA kernel is **defined** to be zero at `|zeta| >= 1` (QE's
+  `dmxc_lsda` does it on both branches), so what was refused as an analysis was a
+  convention — and masking the *argument the derivative is taken at* is what works, where
+  clipping the density leaves the primal singular and the tangent `0 * inf`.
 
-**Three things carry the trick and nothing else does.** The field is rebuilt from both
-halves (`g_to_r_gamma`); every sum over plane waves becomes `2 Re(sum) - (the G = 0
-term)`, since `G = 0` is its own conjugate partner rather than half of a pair
-(`gamma_inner`, and `calbec_gamma`'s `DGEMM` factor 2 with its `betapsi -= beta(1,:)
-psi(1,:)`); and `Im c(0)` must stay zero, which `regterg` imposes at
-`regterg.f90:174` and `:375` every time a vector enters the subspace and which this
-code imposes in the same places (`force_real_g0`). **The last is the silent one**: a
-complex `c(0)` makes the rebuilt field complex and the run converges to a plausible
-wrong answer.
+**Gamma-only storage** (P68) is a **memory** feature rather than a speed one:
+`K_POINTS gamma` stores one plane wave of each `(G, -G)` pair, which halves `npwx` and
+every array a band lives in — 96 GB against 189 on a 157-atom slab. **Only the
+wavefunction sphere halves and the dense G set stays whole**, which is a deliberate
+departure from `pw.x`: the memory is entirely in the plane-wave-sized arrays, and halving
+the dense set would put a conjugate fill inside every consumer of a real field. The
+consequence to know is that `ngm` here is **not** the `ngm` `pw.x` prints —
+`ngm_full = 2 ngm_QE - 1`, asserted in `tests/regression/test_basis.py`. Three things
+carry the trick and nothing else does: `g_to_r_gamma` rebuilds the field from both halves;
+every plane-wave sum becomes `2 Re(sum) - (the G = 0 term)`, since `G = 0` is its own
+conjugate partner (`gamma_inner`, `calbec_gamma`); and `Im c(0)` must stay zero
+(`force_real_g0`, where `regterg.f90:174` and `:375` impose it). **Substituted rather than
+refused**, with a warning, for ultrasoft/PAW, for a run that uses symmetry, and for a
+spinor or spiral run — the same physics at twice the storage, and it says so.
 
-**The validation needs no other code**: an explicit `k = 0` on the whole sphere is the
-same calculation in the other storage, so the two agree to round-off rather than to a
-tolerance — totals to **1e-14 Ry**, eigenvalues to **3e-15** and forces to
-**3e-16 Ry/bohr**, on LDA, PBE, LSDA and PBE+LSDA. **The force is where a dropped
-`G = 0` term shows and the energy is not**: with the correction missing from
-`forces/energy.py` the total energy was right to 3e-12 Ry and the force was wrong by
-**0.4 Ry/bohr** on a force of 0.06, because the frozen energy is the functional the
-force is the gradient of and being stationary hides an error in its derivative.
-A second symptom worth knowing: before `rotate_wfc`'s overlaps were corrected the run
-still converged to the right answer and merely took **19 iterations against 8** — the
-iteration count was the diagnostic.
-
-**Substituted rather than refused**, with the existing warning, for an ultrasoft or PAW
-dataset (`addusdens` and `newd` need their own `fact = 2`), for a run that uses
-symmetry (`symmetry_maps` carries a stored `G` onto an unstored `-G'`, so the
-permutation would need a conjugation with it — `nosym = .true.` is the way out), and
-for a spinor or spiral run (a spinor's components are not related by conjugation once
-spin-orbit coupling is on). Such a run is the same physics at twice the storage and it
-says so. **The two-bands-per-FFT packing of `vloc_psi_gamma` is *not* implemented** and
-is a speed item rather than a memory one; the stick path is bypassed under gamma for
-the same reason.
-
-**Ultrasoft and PAW are in scope and implemented** (P12): the two-grid split, the
-augmentation charge, the overlap operator, self-consistent `D_ij`, and PAW's one-centre
-terms. **Gradient-corrected functionals are too** (P13) — PBE, revPBE and PBEsol, on the
-plane-wave grid and on the PAW spheres — so the PBE datasets that most published
-ultrasoft/PAW work uses run here. The functional comes from the pseudopotentials' headers
-unless `input_dft` overrides it, and an unimplemented one is refused rather than silently
-replaced by LDA.
-
-**Collinear spin is in scope and implemented** (P9): `nspin = 2` gives the density, the
-potential, `becsum`, `D_ij`, the eigenvalues and the wavefunctions a leading channel axis,
-and one SCF iteration diagonalises a different Hamiltonian per channel. Whichever
-occupation scheme is in use decides how many Fermi levels there are — one shared between
-the channels, or one each when `tot_magnetization` constrains the magnetisation — and both
-the smearing and the tetrahedron families implement both. **`occupations = 'fixed'`
-implements only the second**, and that is `pw.x`'s rule rather than a gap:
-`input.f90:784-800` refuses fixed-occupation LSDA without a `tot_magnetization` and
-requires an integer one, so each channel fills `NINT(nelup)` and `NINT(neldw)` bands
-(`iweights_only` with `degspin = 1`) and there is no level to search for. Both refusals
-are made at input here too, in QE's order. An oxygen atom at `tot_magnetization = 2`
-matches `pw.x` to **4.9e-9 Ry**. What the *residual solver* cannot take is a fixed
-occupation cutting a **degenerate multiplet** — a Hund's-rule atom, which is most of what
-this combination is for: which member the eigensolver returns is arbitrary, so `F` is not
-a function of the density and there is nothing for a Newton step to converge on. It is
-diagnosed by name; the mixer is unaffected, and a *gapped* fixed LSDA cell agrees between
-the two solvers to 5.3e-12 Ry.
-
-**Spin-orbit coupling is in scope and implemented** (P14): `noncolin = .true.` makes a
-wavefunction a two-component spinor of length `2 npwx`, so there is *one* Hamiltonian on a
-space twice as large rather than two Hamiltonians, and `lspinorb = .true.` puts the
-`j`-resolved projectors of a fully-relativistic dataset into it. **Keep QE's three spin
-numbers apart**, because collapsing them is the mistake that makes a spin-orbit run
-allocate a magnetization it does not have: `nspin` says which regime (1, 2 or 4), `npol`
-how many components a *wavefunction* has, and `nspin_mag` how many a *density* has —
-which is **one** for a nonmagnetic spin-orbit run, exactly as for an unpolarized one. That
-is why such a run costs about what a doubled unpolarized one costs: the density, the
-potential, the exchange-correlation functional and the symmetrisation are untouched, and
-all the new physics is in the spinors and in `D_ij` becoming a complex 2x2 matrix in spin
-space. Non-collinear *magnetism* (`nspin_mag = 4`) is complete and validated as of P17:
-`sym_rho` rotates the magnetization as an axial vector, the magnetic symmetry group keeps
-the operations that need time reversal, and `gradcorr` runs in the local spin frame. `PAW_gcxc_potential` with a magnetization — PAW plus a GGA plus `nspin_mag = 4` — is in
-as of P33: the radial local-frame rotation calls into the plane-wave one rather than
-restating it, and the rotated channels' multipoles are recomputed by quadrature, because
-the rotation runs through `|m|` and is not linear in the stored components.
-Forces, the stress and relaxation are implemented for this regime as of P46. What they take
-from it is two matrices — `dvan_so` for the nonlocal energy and `qq_so` for the
-orthonormality constraint — and one layout: a spinor is one coefficient vector of length
-`2 npwx`, so the frozen state's array is `(1, nk, nbnd, 2 npwx)` and the kinetic term reads
-`state_kinetic`. `dvan_so` is the **bare** `D`, for the same reason the collinear branch
-takes `dion` and not `deeq`: `newd_nc` sandwiches the self-consistent integrals between
-`fcoef` and *adds* them, so the split survives one spin index up and taking `deeq_nc` instead
-double-counts — which only the energy identity catches, never a finite difference. The
-**analytic** transcriptions of `force_us` and `stres_knl` stay refused, and so does
-everything above the Sternheimer solver.
-
-**Magnetic fields and constrained moments are in scope and implemented** (P18):
-`defumat/scf/fields.py` and `scf/locals.py`. A uniform field over the cell (QE's
-`B_field`, Elk's `bfieldc`), a field inside one atom's sphere (Elk's `bfcmt`, through a
-`LOCAL_MAGNETIC_FIELDS` card that `pw.x` has no counterpart for), Elk's `reducebf`, and all
-four of QE's `constrained_magnetization` schemes. **The energy is written down and the
-potential is `jax.grad` of it** — QE's five hand-derived expressions in `add_bfield.f90`
-are then a *test*, not a second implementation. **The field's energy is not in the total
-energy**: `add_bfield` is called from inside `v_of_rho`, so `deband` removes it again and
-`etcon` is printed and never added; Elk excludes its external field's energy by the same
-convention, and both numbers are carried separately.
-
-**Spin spirals are in scope and implemented** (P19): `spiral_q` (Elk's `vqlss`, in lattice
-coordinates) makes the up component of the spinor live at `k + q/2` and the down at
-`k - q/2`, each on its own plane-wave sphere, which is the generalized Bloch theorem and the
-whole of the implementation. In the rotated frame the density and the potential are lattice
-periodic, so the SCF, the functional and the mixer are untouched. **Three things are
-refused**: spin-orbit coupling permanently (it breaks the theorem, and Elk refuses it too);
-symmetry, until the spin space group is written, so a spiral needs `nosym` and the full
-k-grid; and ultrasoft/PAW, until the augmentation charge *between the two components* —
-`q_ij(q)`, which `topology/augmentation.py` already builds, not `qq` — is threaded through.
-
-**Relaxing the spiral wavevector is in scope and implemented** (P21): `q` is a coordinate
-of the calculation the way the atomic positions are, so it gets the same treatment —
-`forces/spiral.py` writes the total energy as a function of `q` at *frozen* wavefunctions
-and `dE/dq` is `jax.grad` of it, and `workflows/spiral.relax_spiral_q` walks it downhill
-with the same transcribed BFGS, handed the **reciprocal** cell so that its metric is
-`b_i . b_j`. The frozen quantity is the *periodic part* of the spinor, which is what the
-stored coefficients are, so freezing them lets the spiral turn — exactly the variational
-parameter the SCF minimised over. **Only two terms of the energy depend on `q`**:
-`|k +- q/2 + G|^2` and `vkb(k +- q/2)`. At frozen coefficients the rotated-frame density is
-lattice periodic on an FFT box that does not move, so the Hartree, exchange-correlation,
-local and Ewald terms are `q`-independent and the gradient never differentiates through an
-FFT; they are written down anyway, because the identity against the SCF total energy is the
-only check on them. **The plane-wave sphere is frozen while differentiating and rebuilt to
-move** — sphere membership is piecewise constant in `q`, so that is exact between the
-wavevectors where a plane wave crosses the cutoff, and the jump at those is the Pulay error
-of a finite basis (measured against a sphere-rebuilding finite difference: 8.3e-4 Ry per
-unit `q` at `ecutwfc = 25`, 5.8e-4 at 40 and 8.3e-6 at 60 — erratic rather than smoothly
-convergent, because it counts the crossings inside one window rather than truncating a
-series). Two
-traps: the compiled gradient closes over its sphere and is dropped on every `at_spiral_q`;
-and BFGS's initial inverse Hessian, which for atoms is right because a chemical bond is
-1 Ry/bohr^2, is out by two orders of magnitude on a milli-Rydberg magnetic surface, so
-`BFGSSettings.hessian_scale` sets the first step to the trust radius. A magnetic field is
-refused — its energy is outside the reported total (P18), so the state is stationary for a
-different functional than the one being differentiated.
-
-**Berry curvature, Chern numbers and Z2 invariants are in scope and implemented** (P16):
-`defumat/topology/` and `workflows/topology.py`. Everything is built from one primitive,
-`<u_mk|S|u_nk'>` — the overlap of the occupied manifolds at neighbouring k-points — because
-a determinant of overlaps is blind to the unitary mixing a degenerate eigensolver leaves
-(D4) *and* because the Fukui-Hatsugai-Suzuki lattice sum is an exact integer on any mesh
-where a Riemann sum of a pointwise curvature is not. The velocity-operator route from
-`jacfwd` of `H(k)` (D2) is registered as `kubo` for a smooth `Omega(k)`, and **as of P47 it
-runs on a real crystal too**: what it used to refuse for — `d(vkb)/dk`, and a plane-wave
-sphere that changes with `k` — is what P24's `VelocityOperator` already is, one `jvp` of
-`H(k)` at a frozen sphere. It is written as band matrix elements between the states an NSCF
-produced, never as a dense `H(k)`, and validated against the FHS flux the two ways that
-check different things: a plaquette shrunk around one k-point converges onto the pointwise
-value to **3.2e-3**, and the whole 24x24 mesh agrees plaquette by plaquette to **1.45e-4**,
-improving 65x over a sixfold refinement. Silicon's curvature vanishes **pointwise** to
-3.5e-5, which is the check that AlAs's does not. The sum over empty states is truncated and
-the truncation is **reported** (`BerryCurvature.truncation`). **Ultrasoft and PAW are
-refused by name**: the `e_n dS/dk` term is identically zero for a norm-conserving dataset,
-so nothing validated here can see whether its convention is right. Z2 has two independent methods — Wannier-charge-centre flow, which
-needs only time-reversal symmetry, and the Fu-Kane parity products, which need an inversion
-centre and cost eight k-points — and running both wherever they both apply is the check.
-**The parity route has no mesh and the Wilson route does**, so where they disagree the
-parity one is the answer; `WannierFlow.gap_step` is the Wilson result's own diagnostic
-(how far the largest-gap reference line moves in one pumping step) and it is the number to
-read before believing the integer.
-**Two things bite in a plane-wave code and both are silent:** neighbouring k-points do not
-share a G-sphere, so coefficients are aligned by Miller index; and the wrap at the zone
-edge is a *shift* of that index (`u_{k+b}(G) = u_k(G+b)`), without which the Chern number
-is smooth and non-integer. Ultrasoft `S` between two k-points is `q_ij(b)`, not `qq`, and a
-relativistic dataset needs it through `transform_qq_so`.
-
-**Forces and ionic relaxation are in scope and implemented** (P15): the force comes from
-differentiating the total energy with respect to the atomic positions at *frozen*
-wavefunctions, occupations and eigenvalues, with the orthonormality constraint carried
-explicitly so that ultrasoft's Pulay term is part of the same gradient. QE's `force_lc`,
-`force_cc`, `force_ew`, `force_us`, `addusforce` and `force_corr` are transcribed as well,
-behind the same registry, because the two implementations share no machinery and checking
-one against the other is what found the augmentation force's sign and the gradient
-correction missing from `force_cc`. `calculation = 'relax'` runs QE's BFGS with its trust
-radius and Wolfe line search.
-
-**Variable-cell relaxation is in too** (P29): `calculation = 'vc-relax'`. The cell is nine
-more coordinates of the same BFGS, its gradient is `cell_force`'s
-`dH/dh = Omega (P I - sigma) h^-T`, and what is minimised is the **enthalpy** — so the
-stationary point is `sigma = P I` and a relaxed crystal carries the applied pressure rather
-than having no stress. **A vc-relax is two runs and that is what makes it obey the
-fixed-setup rule**: `scale_h.f90` re-expresses the *same* G-vectors against the new
-reciprocal cell and changes nothing else (`Calculation.at_cell`), so the relaxation is one
-run with one setup; then `reset_gvectors` throws it away and runs **one more SCF from
-scratch** at the relaxed geometry, which is a second run with a second setup. The gap
-between their energies is the Pulay error of the frozen basis and is reported
-(`VCRelaxResult.pulay_error`) rather than left to be noticed — on QE's own five-layer
-graphite with the whole cell free it is **0.45 Ry**, and the relaxation goes downhill in the
-frozen basis and uphill in reality. `treinit_gvecs` rebuilds everything per step and makes
-it zero.
-
-**DFT+U is in scope and implemented** (P20): `defumat/hubbard/`. QE's
-`lda_plus_u_kind = 0` — Dudarev's simplified rotationally-invariant functional with the
-`J0`/`beta` extension — read from the `HUBBARD` card, whose parameters are **in eV** and
-are converted to Ry at the input boundary. **The energy is written down and `v_ns` is
-`jax.grad` of it**; QE's `v_hubbard` is transcribed as a *test*. The correction enters the
-Hamiltonian as another separable term (`vhpsi.f90`), `ns` joins the mixed state beside
-`becsum`, and the force is `jax.grad` through projectors that move with the atoms — which
-is the whole of `force_hub` without transcribing it. **Three traps, all silent**:
-`Hubbard_projectors = 'atomic'` still applies `S`, so `wfcU = S phi`; the atomic orbitals
-are renormalised at read time in the *generalised* metric (`upf_check_atwfc_norm`), which
-`ortho-atomic` projectors feel through the `4s` and `atomic` ones do not; and the
-`nspin = 1` factor of two is on the **energy**, never on the potential. Refused by name:
-the full (Liechtenstein) formulation, the intersite `V`, background channels, the
-orbital-resolved variant, the `wf`/`pseudo` projector sets, and noncollinear `ns_nc`.
-
-**Continuing one run from another is in scope and implemented** (P23):
-`defumat/scf/continuation.py` and `System.with_spin`. The three spin regimes are three ways
-of writing the same pair `(n(r), m(r))`, so a promotion is *decompose, decide what `m` should
-be, recompose* — and a demotion is the same function read the other way. The whole mixed
-state crosses together (`rho`, `becsum`, `ns`) plus the wavefunctions, which cross as a
-**span for the first Rayleigh-Ritz** rather than as wavefunctions, so they need not be
-orthonormal in the target's overlap operator or number `nbnd`. **The magnetization is seeded
-from the target's `starting_magnetization` when the source has none**: nothing in the SCF
-breaks spin symmetry on its own, so a promotion that carried only the charge would converge
-back to the unpolarized solution and report success. `with_spin` **rebuilds the k-points**
-rather than relabelling them — the `degspin` factor and the magnetic symmetry group both
-change with `nspin`. Refused rather than approximated: a target whose species point their
-moments along different axes (a collinear source has one scalar field;
-`magnetization="seed"` is the way out), a Hubbard `U` crossing into `nspin = 4`, splitting a
-spinor back into two collinear channels, and a `becsum` from a different pseudopotential,
-which is dropped with a warning instead of being reshaped.
-
-**Linear response is in scope and implemented** (P24): `defumat/response/`. Three layers,
-and the point of all three is that the *perturbations* are gradients of code that already
-exists rather than expressions derived a second time. The **velocity operator** is one
-`jax.jvp` of `H(k)` at a frozen sphere, because `dH/dk_a = i[H, r_a]` in the periodic gauge
-— which is what rule D2 asked P2-P4 to preserve, and why no radial form factor is ever a
-table lookup. The **Sternheimer equation** `(H - eps_n S + alpha Q)|dpsi_n> = -P_c^+ dV|psi_n>`
-replaces the sum over states with a projected CG solve per occupied band: no empty states,
-and no division by `eps_n - eps_m`, which rule D4 forbids. And the **dielectric constant**
-and **Born effective charges** follow, matching the **vendored** `ph.x` to 4.3e-5 on
-`epsilon_infinity` (13.806646 against 13.806689) and to every digit it prints on `Z*`
-(-0.075715 against -0.07571). The comparison is against a *regenerated* reference, not
-`ph_base`'s committed one, which dates from release 6.0 and has drifted to 13.806375 —
-the same staleness `tests/conftest.py` already documents for `pw.x`.
-
-**Ultrasoft and PAW are in scope here too, and almost none of what they add is
-transcribed.** `incdrhoscf` + `addusdbec` + `lr_addusddens` is one `jvp` of the density
-builder with respect to the *states*; `newdq`'s `int3` is one `jvp` of `newd` with respect
-to the potential; `PAW_dpotential` is one `jvp` of `onecenter` with respect to `becsum`.
-The dielectric constant matches the vendored `ph.x` to **≤1.2e-4** on norm-conserving,
-ultrasoft and PAW silicon and on ultrasoft carbon. Three things did have to be written and
-each is a trap: `|psi|^2` must be `Re(conj(psi) psi)` and not `abs(psi)**2`, whose
-derivative is `0/0` at a node; the projector derivative in `adddvepsi_us` is the one about
-the atom's own centre, since `gen_us_dj`/`gen_us_dy` leave the structure factor alone and
-the `tau` term is worth 2%; and `dbecsum` on a wedge is a **polar vector**
-(`PAW_dusymmetrize`), worth 1.6e-2 on PAW. **Born effective charges stay norm-conserving**
-— `zstar_eu_us.f90` is five further stages — and are refused by name for the other two,
-because without them the expression is wrong in sign as well as size.
-
-**The trap is that a response is direction-dependent and must be symmetrised as a polar
-vector**, and the escape from that does not work where it looks like it should: running the
-*whole* k-grid instead of a wedge is only sound if the grid is closed under the point group,
-and a **shifted** Monkhorst-Pack grid is not — 2304 of the 3072 rotation images of a shifted
-4x4x4 grid on fcc silicon land off it, giving a 2% asymmetric density and a dielectric tensor
-with off-diagonal entries cubic symmetry forbids. That combination is refused by name; an
-unshifted grid is closed exactly and is the independent check on the symmetrisation.
-**Refused** rather than approximated — and the list is shorter than it was, because
-ultrasoft and PAW (`dbecsum`, the augmentation charge's own response, `int3`) came in with
-P24's own ultrasoft paragraph, metals with P24c and collinear spin with P45: what is left is
-noncollinear magnetism (`incdrhoscf_nc`/`set_int3_nc` are a second implementation rather than
-a spin axis on this one), DFT+U (`adddvhubscf`), spin spirals, and a **potential-only
-meta-GGA**, which P45 made a named refusal — it used to surface as `v_of_rho` asking for
-`tau`, which reads like a missing keyword argument and is not.
-
-**Meta-GGA is in scope for the potential-only branch of it** (P30, P31, P32):
-`defumat/xc/mgga.py`. Tran-Blaha (`tb09`) and Becke-Johnson (`bj06`) are potentials, not
-energy functionals, so they invert the rule above — nothing is differentiated, the expression
-*is* `v_x`, and there is no `E_x` for the total energy to contain. The consequences are
-enforced rather than documented: `run_scf` warns that its total is not the value of any
-functional it minimised, and every consumer of `forces/energy.py:energy_at` refuses. The SCF
-carries a second field, `tau`, which comes from the states rather than the density (three
-extra transforms per band, `sum_band.f90`'s meta branch) and is **not mixed**, exactly as
-`mix_rho.f90` leaves `kin_r` alone. **Energy-carrying meta-GGAs — TPSS, SCAN, M06L — are not
-in**: their potential has a `dE/dtau` piece that acts on the wavefunction through
-`h_psi_meta.f90`, and none of that is written; a potential-only functional needs no such term,
-which is why this branch and not that one.
-
-**Van der Waals corrections are in scope, and one of the five is implemented** (P27):
-`defumat/vdw/`, behind a name registry that `vdw_corr` selects from. Grimme's **D2** is a
-pair potential over the nuclei and nothing else, so it is `defumat/scf/ewald.py` again with
-a different radial function — the energy is written down and the force and the stress are
-`jax.grad` of it. The other four are **refused by name**, where `set_vdw_corr` warns and
-silently runs with no correction at all: **D3** because its `C6` depends on each atom's
-coordination number and so has a derivative of its own, and **Tkatchenko-Scheffler**, **MBD**
-and **XDM** because their coefficients are functionals of the self-consistent density, which
-puts them inside `v_of_rho` where D2 is outside it.
-
-**Optical spectra and excitons are in scope and implemented** (P37): `defumat/tddft/`.
-This is the one place a **sum over states** earns its keep — an absorption spectrum needs
-the frequency axis and needs `chi_0` as a *matrix* over reciprocal lattice vectors, where
-everything in `defumat/response/` produces it as an operator from a Sternheimer solve. The
-Dyson equation is then solved with an exchange-correlation kernel from a name registry, and
-the one that matters is Sharma, Dewhurst, Sanna and Gross's **bootstrap** (PRL 107, 186401
-(2011); Elk's `fxctype = 210`), which is parameter-free, self-consistent with the Dyson
-equation it feeds, and divergent as `1/q^2` — which is what binds an electron-hole pair
-where ALDA's head and wings vanish identically. **This deliberately enters territory the
-line below used to exclude**, and from Elk's side rather than QE's: `TDDFPT/` is a
-Liouville-Lanczos solver with RPA and ALDA, has no bootstrap kernel and never forms a Dyson
-equation in G space, so there is nothing there to transcribe.
-
-Out of scope until the above works: EXX, real-time propagation and the Liouville-Lanczos
-route to a spectrum (`TDDFPT/`), Car-Parrinello (`CPV/`), and everything in `EPW/`, `HP/`,
-`GWW/`. The code should nonetheless be shaped so these are additions, not rewrites.
+**Out of scope until the above works:** EXX, real-time propagation and the
+Liouville-Lanczos route to a spectrum (`TDDFPT/`), Car-Parrinello (`CPV/`), and everything
+in `EPW/`, `HP/`, `GWW/`. The code should nonetheless be shaped so these are additions,
+not rewrites.
 
 ## Why JAX (this drives the design)
 
@@ -1382,167 +241,114 @@ options go in `SHARED_OPTIONS` and are forwarded **by named parameter only** —
 `**kwargs` in a signature is not permission to pass everything, since several response
 entry points forward theirs to solvers that would raise on `nbnd`.
 
-## The README's feature table
+## What a finished phase leaves behind
 
-`README.md` carries a table of every implemented feature, with the input variable or entry
-point that reaches it and **two tick columns — `QE` and `Elk` — saying whether either
-established code computes that quantity at all**. A tick means it is there, `(✓)` with a
-numbered note means it is there only partly, and **blank in both columns is the mark of a
-quantity neither code has** (the spiral relaxation, the topological invariants, the strain
-response, the elastic and electrostriction constants). It is the only place that
-distinction is written down for a reader who is not going to read `PLAN.md`, and it is what
-tells someone evaluating the code whether it is a reimplementation or an extension.
+A phase is not done when the code runs. It is done when all five of these exist, and each
+of the five has gone stale silently at least once, so each is checked rather than assumed.
 
-**The table names quantities, not routines.** Which Fortran file a feature corresponds to,
-what is transcribed and what is differentiated, belongs in this file and in `PLAN.md`; the
-README says what the physics is and whether the other codes have it.
+**1. A number.** A concrete figure against `pw.x`, against Elk, or against an identity
+that shares no machinery with the assembly — and, where a term is missing, a *measurement*
+of what it is worth and a refusal by name. `PLAN.md` §3 is where it goes.
 
-**The rows are physics, not knobs.** A row is a thing someone would want to compute — total
-energies, bands, densities of states, forces, relaxation, magnetism, DFT+U, the invariants —
-not an implementation setting underneath one. Smearing is the example: it belongs inside the
-row about metals, not in a row of its own. A new feature adds *one* row, named by the
-quantity it produces; its variants, schemes and internal terms go in `PLAN.md`.
+**2. A row in the README's feature table.** `README.md` carries every implemented feature,
+with the input variable or entry point that reaches it and **two tick columns, `QE` and
+`Elk`, saying whether either established code computes that quantity at all**. `(✓)` with
+a numbered note means partly; **blank in both is the mark of a quantity neither code has**,
+which is what tells a reader whether this is a reimplementation or an extension.
 
-**Every new feature adds a row, and every removed or renamed one edits its row.** Same
-standing requirement as the notebooks: a phase is not finished until its row exists. Two
-things make the table go stale silently and both have already happened once, so check them:
-
-- **Each tick is a claim about someone else's source**, not a guess. Before ticking `QE`,
-  find the routine in the vendored tree; before ticking `Elk`, find it in the task list of
+- **The table names quantities, not routines**, and **the rows are physics, not knobs.** A
+  row is a thing someone would want to compute; smearing belongs inside the row about
+  metals, not in a row of its own. A new feature adds *one* row; its variants, schemes and
+  internal terms go in `PLAN.md`.
+- **Each tick is a claim about someone else's source.** Before ticking `QE`, find the
+  routine in the vendored tree; before ticking `Elk`, find it in the task list of
   `docs/elk_manual.txt` (§5.127) or in `vendor/elk/src/` in the user's `elkpy` checkout;
-  before leaving both blank, grep both. "QE probably has this" is how a wrong row gets in,
-  and Elk is the easier of the two to get wrong — its `z2*.f90` files are complex-matrix
-  helpers and have nothing to do with the Z2 invariant.
-- **The entry-point column is a claim about *this* code.** Check the variable is actually
-  read (`grep` it in `io/pwin.py` and `system/builder.py`) and the function actually
-  exported. A row naming `tprnfor` when nothing parses it, or `UPF v1` when the reader
-  refuses anything but v2, is worse than no row — both were in the first draft of the table.
+  before leaving both blank, grep both. Elk is the easier of the two to get wrong — its
+  `z2*.f90` files are complex-matrix helpers with nothing to do with the Z2 invariant.
+- **The entry-point column is a claim about *this* code.** `grep` the variable in
+  `io/pwin.py` and `system/builder.py` and check the function is exported. A row naming
+  something nothing parses is worse than no row.
 
-## The user guide
+**3. An entry in the user guide.** `docs/features.tex`, built with `xelatex docs/features.tex`
+(twice, for the table of contents); there is no markdown copy and none should be added,
+because two copies drift. An entry is four things and the last two get skipped:
 
-`docs/features.tex` is the user-facing reference — every capability, the
-equation behind it, a snippet that runs it, what it was validated against, and
-what it refuses. `docs/features.pdf` is built from it with
-`xelatex docs/features.tex` (twice, for the table of contents); there is no
-markdown copy and none should be added, because two copies drift.
-
-**Every new feature adds an entry, and a phase is not finished until it does.**
-Same standing requirement as the README table and the notebooks, and it goes
-stale the same way. A feature the code has and the guide does not is a feature
-nobody can find.
-
-An entry is four things, and the last two are the ones that get skipped:
-
-- **what it computes**, as an equation where there is one — this is a physics
-  document, not an API listing;
+- **what it computes**, as an equation where there is one — this is a physics document,
+  not an API listing;
 - **the entry point**, checked by `grep` rather than remembered;
-- **a snippet that has been run.** Checking that a name exists is not enough:
-  an audit that only checked `dir()` passed six broken snippets, because
-  `run_dos` and `run_pdos` return `(result, states)` tuples, `ProjectedDOS`
-  has no `spilling` (it is on the nested `charges`), `run_berry_curvature`
-  already *is* the Chern number, and `SpiralRelaxResult` has no `.energy`.
-  Execute it;
-- **what it refuses**, in the amber box. The refusals are the promise that a run
-  which starts is a run whose physics is there, and that promise is only usable
-  if its edges are written down.
+- **a snippet that has been run.** Checking a name exists is not enough: an audit that only
+  checked `dir()` passed six broken snippets. Execute it;
+- **what it refuses**, in the amber box. The refusals are the promise that a run which
+  starts is a run whose physics is there, and that promise is only usable if its edges are
+  written down.
 
-**The audit that catches drift** is a set difference, not a read-through: list
-the workflow, response, force and stress entry points the package exports and
-check each appears in the `.tex`. Run it when a phase lands. It found ten
-missing at once — including *elastic constants and electrostriction*, a whole
-implemented feature with no mention at all.
+**Do not re-document standard `pw.x` variables** — `ecutwfc`, `ibrav`, `nbnd` mean what
+they mean in QE and the guide says so once. Document this code's own knobs (`mbj_c`,
+`spiral_q`, `LOCAL_MAGNETIC_FIELDS`) and the ones that gate a feature. **The audit that
+catches drift is a set difference, not a read-through**: list the workflow, response, force
+and stress entry points the package exports and check each appears in the `.tex`. It found
+ten missing at once, including a whole implemented feature with no mention.
 
-**Do not re-document standard `pw.x` variables.** `ecutwfc`, `ibrav`, `nbnd`
-and the rest mean what they mean in QE and the guide says so once. Document the
-knobs that are this code's own — `mbj_c`, `spiral_q`,
-`LOCAL_MAGNETIC_FIELDS` — and the ones that gate a feature below.
+**4. A notebook.** See the section below.
+
+**5. A timing against the code it was taken from.** See "Performance".
 
 ## Tutorial notebooks
 
-**That rewrite is finished** (`PLAN.md` P49), and what enforces it now is
-`tests/unit/test_notebook_conventions.py`: **27 of the 30 are in its `REWRITTEN`
-set** and held to the whole skeleton, `JVP_DEBT` is empty, and the three that are
-not — `01`, `03` and `17` — are the under-the-hood tier by design, whose internals
-are their subject. `REWRITTEN` **only ever grows**, so a new notebook joins it in
-the commit that adds it. The shape it enforces is in `notebooks/README.md`, and
-P49's six-point checklist is worth reading before touching a notebook: every item
-on it is something that sweep got wrong at least once.
-
 `notebooks/` holds worked examples on concrete systems — the readable counterpart to the
-test suite. **Every new feature adds a notebook or extends an existing one; a phase is not
-finished until its notebook exists.** Demonstrate on the two-atom silicon cell from
-`test-suite/pw_scf/scf.in` wherever possible, compare against the committed QE benchmark
-whenever the reference contains the quantity, and commit the notebook executed so it reads
-without being run.
+test suite. **Every new feature adds a notebook or extends an existing one.** Demonstrate
+on the two-atom silicon cell from `test-suite/pw_scf/scf.in` wherever possible, compare
+against the committed QE benchmark whenever the reference contains the quantity, and commit
+the notebook executed so it reads without being run. `notebooks/README.md` carries the
+cell-by-cell shape, the per-notebook timings and the index — which is **by the property a
+reader wants to compute**, not by the order the code gained it. Conventions are enforced by
+`tests/unit/test_notebook_conventions.py`, whose `REWRITTEN` set **only ever grows**, so a
+new notebook joins it in the commit that adds it. The three that are *not* in it — `01`,
+`03` and `17` — are the under-the-hood tier by design, whose internals are their subject;
+they are exempt rather than unfinished.
 
 **A notebook is about the physics, and nothing else.** What the quantity is, the equation
 that defines it, what the number means, how it compares with experiment or with Quantum
 ESPRESSO. **The implementation is not the subject and must not appear**: no `PLAN.md` phase
 numbers, no QE Fortran file names, no transcribed-versus-differentiated tables, no `jvp`,
 tangents, frozen spheres, padding or compilation, no catalogue of traps, and no account of
-how something was developed or debugged. That material is exactly what `PLAN.md` and the
-tests are for, and a reader who wants the physics should not have to wade through it. Two
-things survive from that side because they are claims about capability rather than about
-code: one sentence saying a derivative is taken of the energy itself rather than derived by
-hand, and one sentence where a reference is unusual and the reader would otherwise not trust
-the comparison. **No em dashes** anywhere in a notebook.
+how something was developed or debugged. Two things survive from that side because they are
+claims about capability rather than about code: one sentence saying a derivative is taken of
+the energy itself rather than derived by hand, and one sentence where a reference is unusual
+and the reader would otherwise not trust the comparison. **No em dashes** anywhere in a
+notebook.
 
-**That rule binds the code cells, not only the prose, and this is the sentence that was
-missing** (P49). Bounding only the prose is why the notebooks drifted into validation
-reports: the project's validation instinct moved into the code, where the rule did not
-reach, and 2800 code lines across 29 notebooks is what came of it. An identity check
-looped over four pseudopotentials, a derivative checked against a closed form on a random
-matrix, a hand-built linear solve with a probe potential: each is the test suite's job
-being done in public. They belong in `tests/`, and the notebook's footer names the file
-they went to. **Where a `get_*` method exists, the notebook uses it** rather than building
-the same quantity from internals and remarking afterwards that the method also exists.
-`notebooks/README.md` carries the cell-by-cell shape and the budgets, and indexes the set
-**by the property a reader wants to compute** rather than by the order the code gained it.
+**That rule binds the code cells, not only the prose.** Bounding only the prose is why the
+notebooks drifted into validation reports: the project's validation instinct moved into the
+code, where the rule did not reach. An identity check looped over four pseudopotentials, a
+derivative checked against a closed form on a random matrix, a hand-built linear solve with
+a probe potential — each is the test suite's job being done in public. They belong in
+`tests/`, and the notebook's footer names the file they went to. **Where a `get_*` method
+exists, the notebook uses it** rather than building the same quantity from internals.
 
 **A notebook is five minutes long, and it has a figure.** Header saying what this computes
 and the headline number against QE; the shortest code that runs it; **one plot that shows
 the physics**, a band structure wherever the feature shows in bands; one comparison table;
 at most one "how it works" cell for the single best idea, and it is a *physical* idea. About
-eight code cells. The derivations, the trap catalogue and the per-case validation tables
-belong in `PLAN.md` and in the tests, not here, and an expensive sweep is measured once
-offline and *quoted* rather than run. Each notebook also has a `.md` export committed beside it — raw `.ipynb` is unreadable in a
-plain editor or a diff — regenerated together with the notebook by `tools/export_notebooks.sh`.
-`notebooks/README.md` holds the index and the full conventions.
+eight code cells. Each notebook also has a `.md` export committed beside it — raw `.ipynb`
+is unreadable in a plain editor or a diff — regenerated together with the notebook by
+`tools/export_notebooks.sh`.
 
 **Ten minutes is the hard ceiling on executing one**, and it is a ceiling rather than a
-target — the five minutes above is still what to aim for. A notebook is re-executed every
-time the code under it changes, by `tools/export_notebooks.sh` and by anyone checking that
-it still reads true, so its runtime is paid over and over by people who are not doing
-physics at the time. **Time it before committing it**, the same way a peak working set is
-sized before it is landed:
+target. A notebook is re-executed every time the code under it changes, so its runtime is
+paid over and over by people who are not doing physics at the time. Time it before
+committing it:
 
 ```bash
 time jupyter nbconvert --to notebook --execute --inplace notebooks/<n>.ipynb
 ```
 
-If it does not fit, the cell to cut is the *sweep*, not the physics: measure the expensive
-series once offline and quote its numbers in prose, which is the same rule as the
-per-case validation tables and for the same reason. A figure that needs ten SCF runs to
-draw is a figure whose points belong in a test.
-
-**`tools/export_notebooks.sh` times each notebook as it re-executes it and exits
-non-zero over the ceiling**, so the set stays measured without anyone remembering
-to measure it. Nothing is over: the slowest is `35` at 276 s, the median is under
-30, and the full table is in `notebooks/README.md`. The one notebook that ever was
-over is worth reading as a case study. `08_spin_orbit_coupling` took about **25 minutes**; it takes **174 s** (P49).
-Two things were true at once and only one of them was the expensive part. The bismuthene
-section was blamed, and the figure it draws — a Dirac point gapped by nothing but the
-coupling — is the best physics in the notebook and was never the problem: as notebook 08 runs it,
-at the default band count, that spinor SCF is **48 s**. The 281 s recorded here is the
-same cell under `notebooks/10`, which asks for thirty spinor bands to build a curvature
-from, and generalising it to "a spinor SCF on a slab" is what made the section look
-unfixable. What actually cost the
-time was a five-run finite-difference sweep of the spinor force and a two-run
-noncollinear-equals-collinear identity, **both of them already in the test suite**
-(`test_the_force_is_a_finite_difference_of_the_frozen_energy`,
-`test_spinors_reproduce_the_collinear_answer`). The lesson is the one P49 is built on: a
-notebook that is too slow is usually a notebook doing the tests' job, and the cell to cut
-is the sweep rather than the physics. Every notebook's time is in `notebooks/README.md`.
+`tools/export_notebooks.sh` times each one as it re-executes it and exits non-zero over the
+ceiling, so the set stays measured without anyone remembering to measure it. **If one does
+not fit, the cell to cut is the *sweep*, not the physics**: measure the expensive series
+once offline and quote its numbers in prose. A figure that needs ten SCF runs to draw is a
+figure whose points belong in a test — which is what the one notebook that was ever over
+the ceiling turned out to be doing (`notebooks/README.md` has the case study).
 
 ## Performance
 
@@ -1564,44 +370,87 @@ The benchmark inputs live in `benchmarks/`, and are **single k-point** on purpos
 codes parallelise over k, so a multi-k comparison measures batching rather than the cost
 of the physics. `si-1k.in` is the test suite's silicon at `ecutwfc = 12`; `si-1k-ecut40.in`
 is the same cell at a production cutoff, where scaling starts to show.
-
-`performance/run_performance.py` runs that comparison over a whole set of inputs and
-typesets it — a PDF with the per-case ratios, what compilation costs, and each case's peak
-memory, regenerable by hand at any time (`performance/README.md`). Each case is a
-subprocess with a 2-minute budget, so a slow one is reported rather than waited on.
-
-`PERFORMANCE.md` is the running log: the comparison, where the time goes, what each change
-was worth, and the backlog. **Add a measurement to it whenever a feature lands or a hot
-spot moves** — including the QE ratio, not only an internal timing. `tools/benchmark.py
-<input>` gives the component breakdown when a ratio needs explaining.
+`performance/run_performance.py` runs the comparison over a whole set of inputs and
+typesets it (`performance/README.md`). `PERFORMANCE.md` is the running log: the comparison,
+where the time goes, what each change was worth, and the backlog. **Add a measurement to it
+whenever a feature lands or a hot spot moves** — including the QE ratio, not only an
+internal timing. `tools/benchmark.py <input>` gives the component breakdown.
 
 **Every feature taken from Quantum ESPRESSO or from Elk is timed against the code it
 was taken from, and the pair goes in `PERFORMANCE.md`.** Not the ratio to a previous
 version of this code, not an absolute number on its own: the reference implementation's
 wall clock beside ours, on the same machine and the same physics, one core each
-(`OMP_NUM_THREADS=1` for both; the affinity mask set before JAX is imported, the
-mechanism `tools/compare_qe.py` documents). A phase is not finished without it, the same
-way it is not finished without its notebook or its `features.tex` entry.
-
-The reason is that **the absolute number is the one worth having and it is the one nobody
-measures.** An internal timing says a feature costs 94 s; it does not say whether that is
-what the physics costs or what this implementation costs, and only the other code answers
-that. P48 did it (Elk's `effmass` at 1.08 s against 4.3 s here, which is the entry that
-established both codes do it in *seconds*) and **P51 did not, which is why this rule is
-written down**.
+(`OMP_NUM_THREADS=1` for both; the affinity mask set before JAX is imported, the mechanism
+`tools/compare_qe.py` documents). The reason is that **the absolute number is the one worth
+having and it is the one nobody measures** — an internal timing says a feature costs 94 s
+without saying whether that is what the physics costs or what this implementation costs,
+and only the other code answers that.
 
 Two things to state rather than discover, because a comparison against an all-electron
 code is never like-for-like and a misleading ratio is worse than no ratio:
 
-- **Say what is not comparable.** LAPW's basis is not a plane-wave sphere, so P48's 4x is
-  733 plane waves against a muffin-tin basis and thirteen stencil points against
-  twenty-seven. Write that beside the number.
+- **Say what is not comparable.** LAPW's basis is not a plane-wave sphere; write that
+  beside the number.
 - **Time the same work, not the same task number.** Codes split a calculation into
-  post-processing steps differently: Elk's `dielectric` (task 121) reads momentum matrix
-  elements off a file that `writepmat` (task 120) produced, so timing 121 alone against
-  a `defumat` call that *builds* `dH/dk` compares a contraction with a contraction plus
-  its operator. Add the steps up until both sides start from the same place -- usually a
-  converged ground state -- and say which steps were added.
+  post-processing steps differently — Elk's `dielectric` (task 121) reads momentum matrix
+  elements off a file that `writepmat` (task 120) produced, so timing 121 alone against a
+  `defumat` call that *builds* `dH/dk` compares a contraction with a contraction plus its
+  operator. Add the steps up until both sides start from the same place, usually a
+  converged ground state, and say which steps were added.
+
+## The traps that recur
+
+Every one of these has been hit in more than one phase, and most of them produce a
+plausible wrong answer rather than an error. `PLAN.md` has the phase that found each.
+
+- **`abs` is not differentiable at zero, and the zero is often forced.** `|psi|^2` must be
+  `Re(conj(psi) psi)`; `abs(rho)**2` in the reciprocal Ewald sum is `0/0` wherever a
+  structure factor vanishes *exactly*, which symmetry arranges on a supercell; `|m|` in the
+  gradient correction differentiates through its own nodes. Five sites so far (P24, P28a,
+  P45, P58).
+- **Rule D4: a diagonal is not invariant under the rotation a degenerate eigensolver is
+  free in.** Anything built from `<psi_n|A|psi_n>` band by band — a Drude weight, a band
+  velocity difference, an incoherent channel sum — takes the **multiplet block average**
+  instead. Worth four orders of magnitude on silicon's `chi^(2)` and 69x against 26x on a
+  bilayer's transport contrast, and **no symmetry check sees it** (P51, P54, P66).
+- **A caller-built k-set is a `for_spin` boundary.** Every `KPoints` constructor applies
+  the unpolarized `degspin` unconditionally, and a spinor band holds one electron. The
+  wrong numbers are the plausible ones — a plasma frequency of 13.11 eV instead of 0.60
+  (P51), a factor of four in a nesting function (P52).
+- **A response on a reduced k-set is a polar (or axial) vector field and must be
+  symmetrised as one**, and the obvious escape does not work: a **shifted** Monkhorst-Pack
+  grid is *not* closed under the point group, so running the whole grid instead of the
+  wedge is unsound there and is refused by name (P24).
+- **A wedge sum completes only for a quantity *linear* in a covariant per-k object.**
+  Where a functional is quadratic in one, the *value* inside it must be the full-zone
+  object while its *derivative* stays the raw wedge sum. Getting it wrong is worth 2.5%,
+  is worse than doing nothing, and only the sum rule catches it (P36).
+- **`np.asarray` on anything differentiated kills the gradient silently** — a term that
+  should be there simply vanishes (P43).
+- **The energy can be right while its derivative is wrong**, which is the whole supercell
+  family (P28a) and is also how a dropped gamma-storage `G = 0` term shows: the total was
+  right to 3e-12 Ry and the force wrong by 0.4 Ry/bohr on a force of 0.06, because being
+  stationary hides an error in the gradient (P68). The identities that are sums over
+  *atoms* — the acoustic sum rule, the rigid-translation test — are blind to a transfer
+  between atoms; the first check that is not an atom-sum is a per-mode response density
+  against a finite difference.
+- **A stencil must not contain its own centre.** The plane-wave sphere is rebuilt at every
+  `k`, and a high-symmetry point is exactly where a shell sits on the cutoff — `Gamma`
+  holds fewer plane waves than every displaced point, so its eigenvalue is variationally
+  **high** against theirs and a second difference inherits an error that *grows* as the
+  stencil shrinks (P48).
+- **Neighbouring k-points do not share a G-sphere.** Coefficients are aligned by Miller
+  index, and the wrap at the zone edge is a *shift* of that index — without which a Chern
+  number comes out smooth and non-integer (P16).
+- **Index order in a transposed pair reads as a sign.** `f(n, m)` against `e(m, n)`, and
+  `G(r, r')` conjugating `psi` in the *exit* variable rather than the source one: both give
+  results that are real, non-negative, correctly symmetric and wrong (P54, P66).
+- **An `nspin = 2` screening kernel is not finite where a channel density reaches zero**,
+  which a cell with vacuum guarantees. That is the `abs` trap one derivative further out,
+  it lives in `defumat/xc`, and clipping inside the response does not fix it (P45).
+- **Inherit a refusal only after checking which machine it belongs to.** P35's refusal is a
+  statement about the Sternheimer stack and never applied to a sum over states; taking it
+  as read left a whole quantity marked impossible (P54).
 
 ## Non-negotiable conventions
 
@@ -1738,16 +587,14 @@ allocates per k-point, per band, or per G-vector, say what the peak costs in ter
 real machine — the same reflex the performance rule above asks for with time.
 
 **Where QE spends effort to save memory, copy it unless something better is on offer.**
-Thirty years of running problems larger than the machine is encoded in these choices, and
-none of them is incidental to the algorithm:
+None of these is incidental to the algorithm:
 
 - **One k-point at a time.** `c_bands.f90`'s `k_loop` diagonalises a single k-point and
   `sum_band.f90` accumulates the density inside the same loop, so QE's working set is one
-  k-point's whatever `nks` is; the other k-points' `evc` sits in a buffer that is RAM or
-  disk according to `io_level`/`disk_io`, and the parallelism over k comes from MPI pools.
-  Batching the whole k axis with `vmap` is this code's deliberate deviation — it is what a
-  GPU wants — so it is a **dial** (`defumat/batching.py`), defaulting to QE's end of it
-  on a CPU and to the batch on an accelerator, not a fixed choice. Rule R6 (k leading) is what keeps both available.
+  k-point's whatever `nks` is, and the parallelism over k comes from MPI pools. Batching
+  the whole k axis with `vmap` is this code's deliberate deviation — it is what a GPU wants
+  — so it is a **dial** (`defumat/batching.py`), defaulting to QE's end of it on a CPU and
+  to the batch on an accelerator. Rule R6 (k leading) is what keeps both available.
 - **The sphere, not the box.** Wavefunctions live on the G-vectors inside the cutoff and
   are expanded into the FFT box only for the transform, and only over the sticks the
   sphere occupies (`basis/sticks.py`).
@@ -1761,55 +608,82 @@ selectable when it is large**, never arrived at by accident: name it in the modu
 docstring, and put the number in `PERFORMANCE.md` beside the timing.
 
 **A test file that sweeps many cells is a memory liability, and splitting the file is not
-the fix.** Every such file has been killed on this machine eventually — `test_ten_site.py`
-in P28b, `test_spinor_forces.py` in P46, and the second one did not inherit the first one's
-cure. The mechanism is accumulation, not any one peak: cells that share no shape each
+the fix.** The mechanism is accumulation, not any one peak: cells that share no shape each
 compile the whole SCF (and, for a derivative, the gradient) stack afresh and **XLA keeps
 every executable for the life of the process**, while an unbounded `lru_cache` of converged
-states holds their wavefunctions beside it. Both grow monotonically through the file.
-
-Two bounds, and they belong on any file that runs more than about three distinct cells:
+states holds their wavefunctions beside it. Both grow monotonically through the file, and
+two files have been killed on this machine that way. Two bounds, and they belong on any
+file that runs more than about three distinct cells:
 
 - **`jax.clear_caches()` in an autouse fixture**, after the `yield`. The results stay
   cached; only the compiled code is dropped, which trades recompilation for a peak the
-  machine can afford.
+  machine can afford. It gets *faster* as well as smaller, which is the tell that the
+  process was paging rather than recompiling (`PERFORMANCE.md`, P28b).
 - **`lru_cache(maxsize=2)` on the converged-state helper**, never `maxsize=None` — 2 is
   what a comparison between two cells needs and is the largest that is not a leak.
 
-**Splitting the file only pays off under one of the three runners, which is why it is the
-weaker lever.** `tools/run_regression.sh` invokes pytest once per file, so a file boundary
-there *is* a process boundary and splitting does cap the peak. `tools/test-fast.sh` and a
-plain `pytest -m slow` run everything in **one** process, where splitting changes nothing at
-all. The two bounds above work under all three, so they are the rule and splitting is a
-judgement call about what belongs together.
+**Splitting the file only pays off under one of the three runners**, which is why it is the
+weaker lever: `tools/run_regression.sh` invokes pytest once per file, so a file boundary
+there *is* a process boundary; `tools/test-fast.sh` and a plain `pytest -m slow` run
+everything in **one** process, where splitting changes nothing at all.
 
 **Do not run demanding suites simultaneously — not in one process, and not in two at
 once.** This machine has 30 GB and both mistakes have killed a session here:
 
-- **Several slow files in one `pytest` invocation.** `pytest tests/regression/test_a.py
-  tests/regression/test_b.py test_c.py` is *one* process, so every file's XLA executables
-  accumulate for the whole run — three spinor suites reached 2.4 GB in ninety seconds and
-  kept climbing. Run them one at a time (`tools/run_regression.sh`, or a loop with one
-  `python3 -m pytest <file>` per file), which is the only thing that actually frees them
-  between files.
-- **Two test runs in parallel, or a test run beside anything being measured.** They
-  contend for RAM on a machine already sized for one, and a timing taken next to a test
-  run is not a timing — a `projwfc.x` comparison measured beside a background suite read
-  70% slow and had to be discarded and repeated.
+- **Several slow files in one `pytest` invocation** is *one* process, so every file's XLA
+  executables accumulate for the whole run — three spinor suites reached 2.4 GB in ninety
+  seconds and kept climbing. Run them one at a time (`tools/run_regression.sh`, or a loop
+  with one `python3 -m pytest <file>` per file).
+- **Two test runs in parallel, or a test run beside anything being measured.** A timing
+  taken next to a test run is not a timing — a `projwfc.x` comparison measured beside a
+  background suite read 70% slow and had to be discarded and repeated.
 
 One habit makes this cheap: write a **durable summary line per file** so a kill costs the
-file in flight rather than the whole run — which is exactly what `run_regression.sh`
-already does and why it exists.
+file in flight rather than the whole run, which is what `run_regression.sh` already does.
+And **narrow the list before running it**: a `grep` for the inputs that can actually reach
+the changed code path is minutes of work and routinely removes most of the suites, where
+guessing adds them.
 
-**`ulimit -v` is not the cap to reach for, and trying it cost a session's confidence.**
-It bounds *virtual* address space, and XLA reserves arenas far larger than it ever
-resides, so a 16 GB cap turned eight passing tests into `Out of memory allocating
-17236761704 bytes` — a test that needs 60 s and a couple of GB standing alone. Failures
-that read as a physics regression and are not are worse than no cap at all. The process
-boundary is the real bound; if a ceiling is genuinely wanted it is
-`XLA_PYTHON_CLIENT_MEM_FRACTION`, which is about memory rather than address space. And **narrow the list before running it**: a `grep` for
-the inputs that can actually reach the changed code path is minutes of work and routinely
-removes most of the suites, where guessing adds them.
+### An out-of-memory kill must cost one file, and it still costs the session
+
+**This is an open defect rather than a fact of the machine, and it is the one thing in this
+section that is not yet fixed.** Everything above is a way of staying under the ceiling;
+none of it puts a floor under what happens when something goes over it anyway, and going
+over it here kills whatever else the terminal was holding. It has happened at least three
+times: `test_ten_site.py` (P28b) and `test_spinor_forces.py` (P46), both measured in
+`PERFORMANCE.md`, and again on **2026-09-07**, where it took a session down with a
+documentation restructuring uncommitted. **What was in flight the third time is not
+recorded anywhere, and that is itself the point** — an unbounded process that dies takes
+its account of what it was doing with it.
+
+**The mechanism is a cgroup, and it works on this machine** (cgroup v2, user-slice
+delegation; probed 2026-09-07 — a 512 MB scope was `SIGKILL`ed at the limit, exit 137, and
+the shell was untouched):
+
+```bash
+systemd-run --user --quiet -p MemoryMax=8G -p MemorySwapMax=0 --scope \
+    python3 -m pytest <file> -q
+```
+
+Two caps that look like this one and are not:
+
+- **`ulimit -v` is not the cap to reach for** — it bounds *virtual* address space, and XLA
+  reserves arenas far larger than it ever resides in, so a 16 GB cap fails tests that need
+  a couple of GB (`PERFORMANCE.md` has the episode).
+- **`XLA_PYTHON_CLIENT_MEM_FRACTION` is a GPU knob.** It sizes the PJRT *device*
+  allocator's pool, which is what the 2026-09-04 H200 entry in `PERFORMANCE.md` reads
+  against; development here is CPU-only, where there is no such pool and nothing to bound.
+  The absence of a CPU equivalent inside JAX is exactly why this item is open.
+
+**What is required, and what neither exists yet:** `tools/run_regression.sh` should run
+each file inside such a scope, write `killed (OOM)` as that file's durable summary line,
+and go on to the next one — a kill then costs one file's *result*, which is the whole point
+of the per-file runner and is currently defeated by the kill taking the runner too. Better
+still, a `psutil` RSS watchdog in the autouse fixture that fails a single test as it
+approaches the limit turns an anonymous kill into a **named** failure, which is the
+difference between a lost afternoon and a bug report. Until one of the two is written:
+**commit before starting anything heavy**, and treat every slow-suite invocation as
+something that can take the session with it.
 
 What neither bound touches is the peak *inside* one test, which is a real cost to be sized
 in advance rather than discovered: the backward pass of an ultrasoft or PAW derivative
