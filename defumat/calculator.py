@@ -104,6 +104,7 @@ SHARED_OPTIONS = frozenset({
     "k_batch",
     "diagonalization",
     "david",
+    "diago_full_acc",
     "mixing_mode",
     "mixing_beta",
     "mixing_fixed_ns",
@@ -138,6 +139,12 @@ SHARED_OPTIONS = frozenset({
 #: call -- ``get_absorption(max_iterations=...)`` is unambiguous *at the call
 #: site*, which is exactly what a constructor default is not.
 SCF_ONLY_OPTIONS = frozenset({
+    # ``diago_full_acc`` is SCF-only because the thing it switches -- the
+    # looser threshold on an empty band -- exists only where there are
+    # occupations to call a band empty. A band-structure or response run
+    # diagonalises every band at ``ethr`` regardless, so forwarding the flag
+    # past ``run_scf`` would name an option that does nothing.
+    "diago_full_acc",
     "mixing_mode",
     "mixing_beta",
     "mixing_fixed_ns",
@@ -188,6 +195,11 @@ _ELECTRONS_OPTIONS = {
     # ValueError. It is a setup option all the same -- it belongs to the
     # Calculation rather than to a run -- so it is in SETUP_OPTIONS too.
     "diago_david_ndim": "david",
+    # ``diago_full_acc``: adopted for the same reason ``diago_david_ndim`` is.
+    # It is a logical that means exactly what it means in ``pw.x`` -- hold the
+    # empty states to ``ethr`` as well -- and it changes no shape and no
+    # ``Calculation``, so it is a run default rather than a setup option.
+    "diago_full_acc": "diago_full_acc",
 }
 
 #: Read but deliberately **not** adopted: ``diagonalization``.
@@ -220,6 +232,12 @@ def electrons_defaults(pwin) -> dict:
             value = float(value)
         elif option in ("mixing_fixed_ns", "max_iterations", "david"):
             value = int(value)
+        elif option == "diago_full_acc":
+            # A Fortran logical, which ``_convert`` has already turned into a
+            # Python ``bool``. Without this arm it would fall through to the
+            # string branch below and arrive as ``"True"`` -- truthy either
+            # way, and the wrong type.
+            value = bool(value)
         else:
             value = str(value).strip().strip("'\"")
         adopted[option] = value

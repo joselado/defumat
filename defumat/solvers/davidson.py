@@ -41,6 +41,25 @@ The convergence test is QE's -- two consecutive estimates of a root differing by
 less than ``ethr`` -- and the preconditioner is ``g_psi.f90``'s, including its
 ``TEST_NEW_PRECONDITIONING`` branch, which is the one QE compiles by default.
 
+**``ethr`` is a per-band vector, not a scalar, and that is ``cegterg`` too.**
+``cegterg.f90:556-563`` tests band ``i`` against ``ethr`` when ``btype(i) == 1``
+and against ``empty_ethr = MAX(5 ethr, 1e-5)`` (``:129``) otherwise, where
+``btype`` is 0 for a band whose fractional occupation is below 0.01
+(``sum_band.f90:118-128``). An empty band is converged more loosely because
+nothing reads it: it carries no charge, so the density, the total energy and
+every derivative of them are blind to it, and the states it holds up are the
+occupied ones the SCF is actually solving for. The threshold is data of shape
+``(nbnd,)`` per k-point -- a traced argument, so it changes no shape and forces
+no recompilation -- and :func:`~defumat.scf.driver.band_thresholds` is where the
+occupations become one. Two properties of the Fortran that the transcription
+keeps: the flag is **not sticky** (recomputed from scratch every step, so a band
+that met the test once may fail it later, unlike ``crmmdiagg.f90:1093``'s
+latched ``conv = conv .OR. ...``), and a loosened band is **not locked out of
+the loop** -- ``notcnv`` counts every band and the exit is still that all of
+them pass, so the only thing ``btype`` changes is when a given root stops being
+expanded. What it buys is that plus a narrower expansion block, which is the
+1.47x ``pw.x`` itself shows when ``diago_full_acc`` turns it off.
+
 **The problem is generalised**, ``H v = e S v``, because an ultrasoft
 pseudopotential makes ``S`` a genuine operator. ``cegterg`` tracks ``S|psi>``
 alongside ``H|psi>`` in a second ``(nvecx, npw)`` array; this does not, and the
@@ -106,8 +125,8 @@ from defumat.hamiltonian.operator import Hamiltonian
 from defumat.solvers.subspace import generalised_eigh
 
 __all__ = ["davidson_eigensolver", "davidson_eigensolver_all", "DAVID_NDIM",
-           "MAX_ITERATIONS", "ETHR", "ETHR_MIN", "RESIDUAL_THRESHOLD",
-           "starting_vectors"]
+           "MAX_ITERATIONS", "ETHR", "ETHR_MIN", "EMPTY_ETHR_FLOOR",
+           "RESIDUAL_THRESHOLD", "empty_band_threshold", "starting_vectors"]
 
 #: QE's ``diago_david_ndim``: the subspace may grow to this many times ``nbnd``
 #: before it is collapsed back onto the current eigenvector estimates.
@@ -178,6 +197,22 @@ ETHR_MIN = 1.0e-13
 #: density, and demanding more than that of the eigenvalues is exactly the waste
 #: this schedule exists to remove.
 RESIDUAL_THRESHOLD = None
+
+#: The floor under the threshold an *empty* band is converged to
+#: (``cegterg.f90:129``: ``empty_ethr = MAX( ( ethr * 5.D0 ), 1.D-5 )``).
+#:
+#: **The floor is the half that matters, and writing ``5 ethr`` alone misses
+#: most of the effect.** Five times a loose ``ethr`` is still loose, so early in
+#: an SCF the two thresholds barely differ; it is late, once ``ethr`` has fallen
+#: below 2e-6, that the constant takes over and the empty bands stop being
+#: converged at all. At QE's ``ethr`` floor of 1e-13 the two differ by eight
+#: orders of magnitude.
+EMPTY_ETHR_FLOOR = 1.0e-5
+
+
+def empty_band_threshold(ethr):
+    """``cegterg.f90:129``'s ``empty_ethr``, for one scalar ``ethr`` in Ry."""
+    return max(5.0 * float(ethr), EMPTY_ETHR_FLOOR)
 
 
 def _extend_projection(hc, sc, psi, hpsi, becp, becq, offset, block,
@@ -272,6 +307,7 @@ def davidson_eigensolver(
     david: int = DAVID_NDIM,
     max_iterations: int = MAX_ITERATIONS,
     robust: bool = False,
+    return_steps: bool = False,
 ):
     """The ``nbnd`` lowest eigenpairs at k-point ``ik``, iteratively.
 
@@ -283,8 +319,25 @@ def davidson_eigensolver(
             converge in one or two Davidson steps. ``None`` starts from QE's
             random guess.
         ethr: convergence threshold on the change in each eigenvalue, in Ry.
-            ``None`` uses :data:`ETHR`; the SCF driver passes its scheduled
-            value, which starts loose and tightens as the density converges.
+            A scalar applies to every band; an ``(nbnd,)`` array is QE's
+            per-band threshold, ``ethr`` for an occupied band and
+            ``empty_ethr`` for an empty one (``cegterg.f90:556-563``, and
+            :func:`~defumat.scf.driver.band_thresholds` for where the vector
+            comes from). ``None`` uses :data:`ETHR`; the SCF driver passes its
+            scheduled value, which starts loose and tightens as the density
+            converges.
+        return_steps: also return how many Davidson steps the solve took and
+            how many bands were still unsettled when it stopped. Both are
+            already computed inside the loop -- they are its trip counter and
+            its ``notcnv`` -- so this only widens the return, and it is
+            *static*, read at trace time, so the two-value form compiles to
+            exactly what it did. The count is the number of passes of the
+            step function, and the initial subspace solve happens outside the
+            loop, so a solve that arrives already converged reports 0. Read the
+            pair together: a count at ``max_iterations`` with a small
+            ``notcnv`` is a straggler, with a large one it is a stall, and a
+            *short* count can also mean the eigenvalues stopped being finite
+            (see ``unconverged``).
         robust: which route the subspace solve takes, *statically*. ``False`` is
             the Cholesky one, which is what every validated number here was
             produced with; ``True`` is canonical orthogonalisation, for an
@@ -295,7 +348,8 @@ def davidson_eigensolver(
 
     Returns ``(eigenvalues, eigenvectors)`` with eigenvalues ascending in Ry and
     eigenvectors ``(nbnd, npwx)`` -- bands first, as the rest of the code
-    carries wavefunctions.
+    carries wavefunctions -- and, with ``return_steps``, the step count and the
+    number of unsettled bands after them.
     """
     ethr = ETHR if ethr is None else ethr
     gamma_only = hamiltonian.gamma_only
@@ -522,6 +576,10 @@ def davidson_eigensolver(
 
     final = jax.lax.while_loop(unconverged, step, state)
     evc, energies = final[8], final[10]
+    if return_steps:
+        # Both are loop carries already: nothing is measured that was not
+        # measured before, and nothing is read on the host inside the loop.
+        return energies, jnp.where(mask, evc, 0.0), final[14], final[13]
     return energies, jnp.where(mask, evc, 0.0)
 
 
@@ -545,7 +603,7 @@ def starting_vectors(psi0, nbnd, ndim, kinetic, mask, dtype):
 
 
 @partial(jax.jit, static_argnames=("nbnd", "david", "max_iterations", "k_batch",
-                                   "robust"))
+                                   "robust", "return_steps"))
 def _every_k(
     hamiltonian: Hamiltonian,
     nbnd: int,
@@ -556,13 +614,29 @@ def _every_k(
     max_iterations: int,
     k_batch: int | None | str,
     robust: bool,
+    *,
+    return_steps: bool = False,
 ):
-    """One compiled solve of the whole k-set, by one of the two routes."""
+    """One compiled solve of the whole k-set, by one of the two routes.
+
+    ``return_steps`` is keyword-only and last on purpose: ``tools/gpu``'s memory
+    tool lowers this unit by position, so a new positional parameter would break
+    it with no test to notice.
+    """
     def solve(ik, start):
+        # The threshold rides the traced ``ethr`` slot as an ``(nk, nbnd)``
+        # array and is gathered here with the same ``ik`` the solver already
+        # uses for ``state_mask[ik]``. It is *not* a leaf of ``map_k``'s
+        # pytree: keeping it closed over means the chunked, the scanned and the
+        # ``vmap``ped branch all read the same rows, so the chunk size still
+        # cannot change the answer. ``jnp.ndim`` is static on a tracer, so the
+        # branch below is taken at trace time.
+        row = ethr if jnp.ndim(ethr) < 2 else ethr[ik]
         return davidson_eigensolver(
-            hamiltonian, ik, nbnd, start, ethr=ethr,
+            hamiltonian, ik, nbnd, start, ethr=row,
             residual_threshold=residual_threshold, david=david,
             max_iterations=max_iterations, robust=robust,
+            return_steps=return_steps,
         )
 
     batch = resolve_k_batch(k_batch)
@@ -582,6 +656,7 @@ def davidson_eigensolver_all(
     max_iterations: int = MAX_ITERATIONS,
     k_batch: int | None | str = "default",
     robust_retry: bool = True,
+    return_steps: bool = False,
 ):
     """Every k-point, ``k_batch`` of them at a time.
 
@@ -635,10 +710,27 @@ def davidson_eigensolver_all(
     ``robust_retry = False`` keeps the whole thing inside one ``jit`` for a
     caller that has to trace through it; ``clear_cache`` reaches the compiled
     unit, so a test that monkeypatches the subspace route still works.
+
+    ``ethr`` may be a scalar, an ``(nbnd,)`` vector applied at every k-point, or
+    an ``(nk, nbnd)`` one. **It is broadcast to ``(nk, nbnd)`` here, on the
+    host, and the reason is compilation rather than convenience**: the value is
+    traced, so no value of it ever recompiles, but a ``()`` aval and an
+    ``(nk, nbnd)`` aval are two signatures -- and an SCF whose first iteration
+    has no occupations yet, hence a scalar, and whose second has a vector would
+    compile the whole Davidson stack twice.
+
+    ``return_steps`` adds the per-k step count and unsettled-band count to the
+    return, ``(nk,)`` each. It is off by default so that every existing caller
+    still unpacks two values.
     """
+    ethr = jnp.broadcast_to(
+        jnp.asarray(ETHR if ethr is None else ethr,
+                    dtype=hamiltonian.kinetic.dtype),
+        (hamiltonian.nk, nbnd),
+    )
     arguments = (hamiltonian, nbnd, psi0, ethr, residual_threshold, david,
                  max_iterations, k_batch)
-    fast = _every_k(*arguments, robust=False)
+    fast = _every_k(*arguments, robust=False, return_steps=return_steps)
     if not robust_retry:
         return fast
     # Both halves, not just the eigenvalues. A Cholesky factor that has gone
@@ -650,7 +742,7 @@ def davidson_eigensolver_all(
     finite = bool(jnp.isfinite(fast[0]).all() & jnp.isfinite(fast[1]).all())
     if finite:
         return fast
-    return _every_k(*arguments, robust=True)
+    return _every_k(*arguments, robust=True, return_steps=return_steps)
 
 
 davidson_eigensolver_all.clear_cache = _every_k.clear_cache

@@ -136,7 +136,11 @@ from defumat.scf.potential import (
 from defumat.xc.mgga import thomas_fermi_tau
 from defumat.xc.functional import resolve_functional
 from defumat.solvers import get_eigensolver
-from defumat.solvers.davidson import ETHR_MIN, starting_vectors
+from defumat.solvers.davidson import (
+    ETHR_MIN,
+    empty_band_threshold,
+    starting_vectors,
+)
 from defumat.solvers.subspace import rayleigh_ritz
 from defumat.system.builder import System
 from defumat.system.kpoints import KPoints
@@ -155,7 +159,8 @@ from defumat.system.symmetry import (
 from defumat.units import RY_TO_EV
 from defumat.vdw.registry import build_vdw_correction, vdw_options
 
-__all__ = ["SCFResult", "Calculation", "run_scf", "default_nbnd"]
+__all__ = ["SCFResult", "Calculation", "run_scf", "default_nbnd",
+           "band_thresholds", "EMPTY_BAND_OCCUPATION"]
 
 
 # The iteration body is compiled in three units rather than one, because the
@@ -180,6 +185,90 @@ _accuracy = jax.jit(scf_accuracy)
 #: superposition of atomic charges and is nowhere near self-consistent, so there
 #: is nothing to be gained by diagonalising against it accurately.
 ETHR_INIT = 1.0e-2
+
+
+#: Below this fractional occupation a band is "empty" for the purposes of the
+#: eigensolver, and is converged to ``empty_ethr`` instead of ``ethr``
+#: (``PW/src/sum_band.f90:125``: ``WHERE( wg(:,ik) / wk(ik) < 0.01D0 )``).
+#:
+#: **The test is on the fractional occupation and not on ``wg``.** QE's k-point
+#: weight already carries the spin degeneracy -- ``wk`` sums to 2 per channel
+#: unpolarized and to 1 when there are two channels -- so dividing by it is what
+#: makes 0.01 mean the same thing at ``nspin = 1``, at ``nspin = 2`` and for a
+#: spinor band. This code's ``KPoints.weights`` follows the same convention
+#: (``for_spin`` divides by ``DEGSPIN``), and every occupation routine here
+#: builds ``wg`` as ``weights * f`` with ``f`` in [0, 1], so the ratio is the
+#: fractional occupation directly and the literal is transcribed unscaled.
+EMPTY_BAND_OCCUPATION = 0.01
+
+
+def band_thresholds(ethr, wg=None, weights=None, *, shape=None,
+                    diago_full_acc: bool = False):
+    """QE's per-band diagonalisation threshold, ``(nspin, nk, nbnd)`` in Ry.
+
+    ``sum_band.f90:118-128`` and ``cegterg.f90:129`` between them:
+
+    * every band starts at full accuracy (``btype = 1``, ``init_run.f90:149``);
+    * unless ``diago_full_acc``, a band whose fractional occupation
+      ``wg / wk`` is below :data:`EMPTY_BAND_OCCUPATION` becomes ``btype = 0``;
+    * a ``btype = 0`` band is converged to ``max(5 ethr, 1e-5)`` instead
+      (:func:`~defumat.solvers.davidson.empty_band_threshold`).
+
+    ``wg = None`` -- the **first** SCF iteration, which has no occupations yet --
+    gives every band ``ethr``, which is exactly what ``pw.x`` does: ``btype`` is
+    all ones out of ``init_run`` and ``sum_band`` only overwrites it after the
+    first diagonalisation. It is also why the first iteration is the control
+    experiment for this feature: it must be identical with the switch either
+    way.
+
+    A **zero-weight** k-point keeps full accuracy for all its bands, which is
+    ``sum_band``'s ``FORALL( ik = 1:nks, wk(ik) > 0.D0 )`` and matters for the
+    ``nscf``-with-extra-k-points case (``non_scf.f90:107-110``). It is masked
+    explicitly rather than left to a ``0/0`` comparing false.
+
+    Args:
+        ethr: the scheduled scalar threshold for the occupied bands, in Ry.
+        wg: ``(nchannel, nk, nbnd)`` occupation weights from the previous
+            diagonalisation, or ``None``.
+        weights: ``(nk,)`` k-point weights, the ``wk`` above.
+        shape: the ``(nchannel, nk, nbnd)`` to return when ``wg`` is ``None``.
+        diago_full_acc: ``pw.x``'s switch. ``True`` leaves ``btype`` all ones,
+            so every band is held to ``ethr`` and this returns a constant --
+            the behaviour this package had before the vector existed.
+
+    **One deviation from ``pw.x``, stated rather than left implicit:** QE never
+    resets ``btype`` between SCFs in one process (it is written in exactly two
+    places, ``init_run.f90:149`` and ``sum_band.f90:122-126``), so the second
+    ionic step of a relaxation diagonalises its first iteration with the
+    previous geometry's flags. Every :func:`run_scf` here starts from
+    ``wg = None`` instead, which is full accuracy for every band; a continuation
+    through ``starting_from`` does not carry ``wg`` either. The cost is one
+    iteration of extra accuracy on the empty bands of a restarted run, which is
+    the conservative direction.
+
+    The result is wrapped in ``stop_gradient``: ``wg`` is a differentiable
+    function of the eigenvalues through ``smeared_occupations``, and a tangent
+    that vanishes silently at a comparison is the trap this project has hit
+    five times elsewhere. Better said than implied.
+    """
+    if wg is None and shape is None:
+        raise ValueError("band_thresholds needs either wg or an explicit shape")
+    target = tuple(shape) if wg is None else tuple(np.shape(wg))
+    full = jnp.full(target, float(ethr))
+    if diago_full_acc or wg is None:
+        return jax.lax.stop_gradient(full)
+
+    wg = jnp.asarray(wg)
+    weights = jnp.asarray(weights)[None, :, None]
+    positive = weights > 0.0
+    # ``jnp.where`` on the *divisor* rather than on the result: the masked
+    # k-points must not go through a division by zero at all, since a NaN that
+    # happens to compare false is not what the Fortran says.
+    occupancy = wg / jnp.where(positive, weights, 1.0)
+    empty = positive & (occupancy < EMPTY_BAND_OCCUPATION)
+    return jax.lax.stop_gradient(
+        jnp.where(empty, empty_band_threshold(ethr), full)
+    )
 
 
 @partial(jax.jit, static_argnames=("grid",))
@@ -3171,7 +3260,8 @@ class Calculation:
         down = jnp.concatenate([zero, atomic], axis=-1)
         return jnp.concatenate([up, down], axis=1)
 
-    def diagonalize(self, hamiltonians, nbnd: int, psi0=None, ethr=None):
+    def diagonalize(self, hamiltonians, nbnd: int, psi0=None, ethr=None,
+                    return_steps: bool = False):
         """Solve at every k-point of every channel.
 
         Returns ``(eigenvalues, wavefunctions)`` shaped ``(nspin, nk, nbnd)``
@@ -3182,20 +3272,45 @@ class Calculation:
         density moves a little, so the eigenvectors do too, and Davidson starts
         one step away from the answer instead of from a random guess.
 
-        ``ethr`` is how accurately to converge each eigenvalue. A direct solver
-        ignores both.
+        ``ethr`` is how accurately to converge each eigenvalue. A scalar holds
+        every band to the same threshold; a ``(nspin, nk, nbnd)`` array is QE's
+        per-band one (:func:`band_thresholds`) and is sliced per channel exactly
+        as ``psi0`` is. A direct solver ignores both.
+
+        ``return_steps`` adds two ``(nspin, nk)`` arrays: how many Davidson
+        steps each solve took, and how many bands it left unsettled. They are
+        the solver's own loop counters, so nothing extra is computed and nothing
+        is read on the host inside the loop.
         """
         extra = {} if self.david is None else {"david": self.david}
+        if return_steps:
+            extra["return_steps"] = True
+        rank = 0 if ethr is None else jnp.ndim(ethr)
+        if rank not in (0, 3):
+            raise ValueError(
+                f"ethr must be a scalar or a (nspin, nk, nbnd) array, got rank "
+                f"{rank}. A bare (nk, nbnd) or (nbnd,) array would be sliced on "
+                f"the wrong axis here and would silently converge the wrong "
+                f"bands -- build it with band_thresholds()"
+            )
+        per_band = rank == 3
         solved = [
             self.eigensolver(
-                hamiltonian, nbnd, None if psi0 is None else psi0[spin], ethr,
+                hamiltonian, nbnd, None if psi0 is None else psi0[spin],
+                ethr[spin] if per_band else ethr,
                 k_batch=self.k_batch, **extra,
             )
             for spin, hamiltonian in enumerate(hamiltonians)
         ]
-        return (
-            jnp.stack([values for values, _ in solved]),
-            jnp.stack([vectors for _, vectors in solved]),
+        stacked = (
+            jnp.stack([one[0] for one in solved]),
+            jnp.stack([one[1] for one in solved]),
+        )
+        if not return_steps:
+            return stacked
+        return stacked + (
+            jnp.stack([one[2] for one in solved]),
+            jnp.stack([one[3] for one in solved]),
         )
 
     @property
@@ -3447,6 +3562,7 @@ def run_scf(
     calculation: Calculation | None = None,
     diagonalization: str | None = None,
     david: int | None = None,
+    diago_full_acc: bool = False,
     verbose: bool = False,
     k_batch: int | None | str = "default",
     starting_density: jnp.ndarray | None = None,
@@ -3471,6 +3587,19 @@ def run_scf(
     memory against speed without touching the answer
     (:mod:`defumat.batching`). It is ignored when ``calculation`` is given,
     which already carries its own.
+
+    ``diago_full_acc`` is ``pw.x``'s switch of the same name, and it is
+    ``False`` here as it is there. With it off, a band whose fractional
+    occupation has fallen below 0.01 is diagonalised to ``max(5 ethr, 1e-5)``
+    Ry instead of to ``ethr`` (:func:`band_thresholds`): empty states carry no
+    charge, so nothing the SCF is solving for reads them, and converging them
+    as hard as the occupied ones is work spent on numbers the density does not
+    contain. ``True`` holds every band to ``ethr``, which is what to set when
+    the empty eigenvalues are themselves the answer -- and it is also the
+    control experiment, since the first SCF iteration has no occupations yet
+    and is therefore identical either way. Band-structure, NSCF and response
+    runs never take this path at all: they have no occupations of their own and
+    diagonalise every band at full accuracy, exactly as ``non_scf.f90`` does.
 
     ``starting_density`` replaces the superposition of atomic charges the run
     would otherwise start from. It is what a relaxation hands the next geometry
@@ -3639,6 +3768,20 @@ def run_scf(
         )
 
     previous_energy, history = None, []
+    # The occupations the *next* iteration's per-band thresholds are built from
+    # (:func:`band_thresholds`). ``None`` until the first diagonalisation has
+    # happened, which is ``btype`` coming out of ``init_run.f90:149`` all ones.
+    #
+    # **Deviation from ``pw.x``, stated rather than left implicit:** QE never
+    # resets ``btype`` between SCFs in one process, so the second ionic step of
+    # a relaxation diagonalises its first iteration with the previous geometry's
+    # flags. Here every ``run_scf`` starts from ``None``, i.e. full accuracy for
+    # every band, and a continuation through ``starting_from`` does not carry
+    # ``wg`` either -- the occupations are rebuilt from the first
+    # diagonalisation, as ``scf/continuation.py`` says. The deviation is one
+    # iteration of extra accuracy on the empty bands of a restarted run, which
+    # is the conservative direction.
+    wg = None
     potential_change = None
     converged = False
     wavefunctions = None
@@ -3724,10 +3867,31 @@ def run_scf(
                 hamiltonians, nbnd, span=starting_wavefunctions
             )
 
+        davidson_steps, davidson_unconverged = 0.0, 0
         for attempt in range(2):
-            eigenvalues, wavefunctions = calculation.diagonalize(
-                hamiltonians, nbnd, wavefunctions, ethr
+            # Rebuilt inside the attempt loop, because ``ethr`` can be
+            # re-tightened below and ``empty_ethr`` is a function of it. This is
+            # ``electrons.f90:890-908``'s ``CYCLE scf_step``, whose second
+            # ``c_bands`` runs with the ``btype`` ``sum_band`` has just set.
+            thresholds = band_thresholds(
+                ethr, wg, calculation.system.kpoints.weights,
+                shape=(len(hamiltonians), hamiltonians[0].nk, nbnd),
+                diago_full_acc=diago_full_acc,
             )
+            eigenvalues, wavefunctions, steps, unsettled = calculation.diagonalize(
+                hamiltonians, nbnd, wavefunctions, thresholds, return_steps=True
+            )
+            # ``c_bands.f90:159``: ``avg_iter / nkstot``, and ``nkstot`` counts
+            # spin channels, so the mean over both axes is the same quantity.
+            # One line per attempt, as ``pw.x`` prints one per ``c_bands``
+            # call; the history entry below sums them, since that is what the
+            # SCF iteration paid.
+            steps_here = float(np.mean(np.asarray(steps)))
+            davidson_steps += steps_here
+            davidson_unconverged = int(np.max(np.asarray(unsettled)))
+            if verbose:
+                print(f"     ethr = {ethr:9.2E},  avg # of iterations = "
+                      f"{steps_here:4.1f}")
             wg, levels = calculation.occupations(eigenvalues)
             becsum_out = calculation.becsum(wavefunctions, wg)
             rho_out = calculation.density(wavefunctions, wg, becsum_out)
@@ -3900,7 +4064,17 @@ def run_scf(
 
         entry = {"iteration": iteration, "total_energy": total,
                  "accuracy": accuracy, "ethr": ethr,
-                 "residual": residual, "change": change}
+                 "residual": residual, "change": change,
+                 # Davidson steps per k-point per spin channel, summed over the
+                 # attempts this iteration made -- ``pw.x``'s "avg # of
+                 # iterations", which is comparable step for step even though
+                 # the *cost* of a step is not: ``h_psi`` is applied here at
+                 # full ``nbnd`` width where ``cegterg`` narrows it to
+                 # ``notcnv``. ``davidson_unconverged`` is the worst k-point of
+                 # the last attempt, so a stall shows as a large number beside
+                 # a step count at the budget.
+                 "davidson_iterations": davidson_steps,
+                 "davidson_unconverged": davidson_unconverged}
         if tau_state is not None:
             # ``c`` is a cell average of the density, so it moves with the SCF
             # and settling is part of convergence: a run whose density has

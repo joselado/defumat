@@ -251,15 +251,48 @@ because that is what decides whether it is a session or a phase.
   wrong the strain leg is).
 - **An ultrasoft spin spiral** (P42, attempted and reverted, four findings banked) and
   **ultrasoft/PAW in the sum-over-states `chi_0`** (P40, two findings banked).
-- **A *named* out-of-memory failure.** Not a physics gap and it belongs here anyway,
-  because the unnamed kind has cost work three times (P28b, P46, and a session on
-  2026-09-07). Half of it is closed: `tools/run_regression.sh` runs each file in a cgroup
-  scope with `MemoryMax`, so a kill costs that file's result and a durable line instead of
-  the run. What is left is the `psutil` RSS watchdog that would fail one *named* test
-  before the kernel acts — which is also the only form of it that reaches
-  `tools/test-fast.sh`, one process by design.
+- **A *named* out-of-memory failure — the naming is now closed; what a sampler cannot
+  see is not.** Not a physics gap and it belonged here anyway, because the unnamed kind
+  has cost work three times (P28b, P46, and a session on 2026-09-07). Both halves are now
+  in place. `tools/run_regression.sh` runs each file in a cgroup scope with `MemoryMax`,
+  so a kill costs that file's result and a durable line instead of the run, and it now
+  **exports the effective cap and the path of its own `in-flight.log`** to the child. On
+  the child's side, `tests/conftest.py`'s autouse fixture (all of it in `tests/memwatch.py`)
+  writes the running test's nodeid into that log *before* the test starts, samples this
+  process's resident set once a second in a daemon thread, records a crossing in the log
+  the moment it happens, and fails that test by name at teardown once its peak passes
+  **0.85** of `DEFUMAT_TEST_MEM_MAX` — the same variable and the same `off` sentinel the
+  runner already used, never a second one. It names the **crossing** rather than everything
+  after it: once a test has been named, a later one is named only if it raises the peak by
+  a further 2% of the cap, because XLA's executable cache does not shrink and the first
+  offender would otherwise fail every test behind it. The fraction is the headroom: 15% of a 12 G cap
+  is 1.8 GB and of a 4 G one 600 MB, which is what a 1 s interval has to cover between two
+  reads. **Unset is inert** — no thread, no log, no `psutil` import — so the pre-push gate
+  pays nothing until it is asked (`DEFUMAT_TEST_MEM_MAX=12G tools/test-fast.sh`). *Check
+  met:* 41 unmarked tests in `tests/unit/test_memory_watchdog.py` pass in 0.4 s with no
+  JAX and no SCF, including two `pytester` runs of the *copied* project conftest; a real
+  run of `tests/unit/test_config.py` under a deliberately low `DEFUMAT_TEST_MEM_MAX=200M`
+  gives five `ERROR at teardown of <nodeid>` lines and `RSS-HIGH rss=217M…250M` lines in
+  the log, where the same file under `4G` passes and prints
+  `memory watchdog: peak=250M in <nodeid> cap=4G threshold=85%`; the runner's summary line
+  now carries that clause beside `/usr/bin/time`'s `peak=`, which is the part `time`
+  cannot say — *which test*.
+- **What the watchdog still cannot catch**, listed because a watchdog trusted past its
+  range is worse than none: a single allocation that goes from under the threshold to past
+  the cap **between two samples**, which no sampler at any interval can see; a kill *below*
+  the RSS threshold, since the cgroup charges page cache and kernel memory to the scope
+  while `memory_info().rss` counts this process's anonymous resident pages only — reading
+  the scope's own `memory.current` would match the kill criterion exactly and is the
+  follow-up; memory held by **child** processes, which the cgroup charges and this does
+  not; and the fact that the failure lands at *teardown*, after the peak — if the peak is
+  the kill, what survives is the log line, which is why it is written first.
 - **Cluster sweeps** (P34, planned and unstarted) and **the rest of P10** — k-axis
-  sharding and GPU.
+  sharding, GPU, and **the Davidson step count on a large cell**: the eigensolver takes
+  roughly **12x** the steps `pw.x` does on a 157-atom slab, of which the per-band
+  threshold recorded in P10 is worth **~1.5x** and is now the only one of the four
+  candidates that is closed. The hard restart, the preconditioner and the full-width `H`
+  application are all still open, and the acceptance test is `PERFORMANCE.md`'s nine-row `pw.x` trace,
+  which is cluster work and has not been run against the fixed code.
 
 **P0 — Scaffolding. ✅ DONE.** Package skeleton, `pyproject.toml`, x64 enabled at import,
 `config.Precision` dtype policy, `units.py`, pytest with tolerance module and markers,
@@ -959,6 +992,92 @@ operation dispatched outside a `jit` is compiled separately at ~50 ms, so setup 
 compiling 81 kernels to do 0.2 s of work. Optimising here means reducing the number of
 compiled units, not the number of flops — which is the opposite of the instinct the
 Fortran encourages.
+
+**QE's per-band convergence threshold, and what it is worth (2026-09-08). This is a P10
+continuation and not a lettered phase of its own**, for two reasons: it is measured on
+P10's own metric — Davidson steps against `pw.x` on the identical input — and it closes
+**one of four** candidates in a diagnosis that already lives in `PERFORMANCE.md`'s
+"Davidson step count against `pw.x` on a 157-atom slab", so giving a partial fix its own
+phase number would make an incomplete fix read as a finished one.
+
+`cegterg.f90:129,556-563` tests each band against **two** thresholds — `ethr` for an
+occupied band and `empty_ethr = MAX(5 ethr, 1e-5)` for an empty one — with `btype` set in
+`sum_band.f90:118-128` from the *previous* iteration's occupations, `0` wherever
+`wg/wk < 0.01`, unless `diago_full_acc`. Neither name existed here: every band was compared
+against one scalar. Both are now in (`solvers/davidson.py`'s `empty_band_threshold`,
+`scf/driver.py`'s `band_thresholds`), `ethr` into the solver is a `(nbnd,)` vector where it
+was a scalar, and `diago_full_acc` is the off-switch, reaching `run_scf` and `Calculator`
+through `SHARED_OPTIONS`; the default is `pw.x`'s `False`. The solver also reports its trip
+count and its unsettled-band count, which land in the SCF history as
+`davidson_iterations`/`davidson_unconverged` — `PERFORMANCE.md`'s "instrument before
+fixing", now done. Two Fortran properties are kept and are easy to lose: `conv` is **not**
+sticky (unlike `crmmdiagg.f90:1093`'s latched `.OR.`), and a loosened band is **not** locked
+out of the loop — `notcnv` still counts it.
+
+*Check met:* on `benchmarks/si8-smeared-1k.in` (8 atoms, gaussian smearing at
+`degauss 0.02`, `nbnd = 20` by default, four empty bands) **18 Davidson steps
+against 23** — 1.28x — and 0.48 s against 0.54 s of wall, on a machine whose
+timing floor is ±1.5%; on a scratchpad copy of `si16-1k.in` with the same
+smearing lines (`nbnd = 40`, eight empty), **41 steps against 62** — 1.51x — and
+3.60 s against 4.83 s. The control is the off-switch: `si8-1k.in` and `si16-1k.in` are
+fixed-occupation insulators at `nbnd = nelec/2`, where no band is below occupation 0.01, and
+their two arms are **bit-identical** entry for entry — same steps, same energies, same
+accuracies. The physics does not move: `dE` is **8.6e-12 Ry** and **-2.0e-12 Ry** on the two
+smeared cells, 12x and 49x below their own `conv_thr = 1e-10`, at the same SCF iteration
+count in both arms. 15 unit tests in `tests/unit/test_empty_band_threshold.py`, and the
+pre-push gate passes (2528 passed, 66 skipped, 25:12 on four pinned cores).
+
+**What this is worth against the gap it was aimed at, stated so it cannot be misread: about
+1.5x of about 12x.** The 1.28x and 1.51x measured here bracket the **1.47x** `pw.x` itself
+shows between `diago_full_acc = .true.` and `.false.` on the 157-atom slab, which is the
+number already on record — so the fix is worth exactly what the diagnosis predicted, and the
+diagnosis also predicted that the remaining order of magnitude is elsewhere. **Three
+candidates are untouched**: there is no **hard restart** (`c_bands.f90` re-enters `cegterg`
+up to 5 times with a fresh subspace, where this code runs one continuous loop of
+`MAX_ITERATIONS = 100`, and a collapse-to-Ritz at `nvecx` is not the same thing); the
+**preconditioner** has never been compared against `g_psi.f90`'s form; and `H` is still
+applied at the **full `nbnd` width** (`PERFORMANCE.md`'s defect 2, which is the static-shape
+rule rather than an oversight). None of the three is measured against the fixed code, because
+the acceptance test is the nine-row `pw.x` trace on the 157-atom slab and that is cluster
+work: everything above was run on an 8- and 16-atom cell on a laptop, where
+`davidson_unconverged` is **0 on every SCF iteration of every run** and step counts are 1-12
+against a budget of 100. So the ~100-step stall the record predicts is **unfalsified here,
+not tested**, and no arithmetic of the form 12/1.5 should be written down as a remaining
+factor.
+
+**The trap: the iteration-1 control does not hold on a smeared cell, and the reason is
+`pw.x`'s own loop rather than this change.** `btype` comes from the previous iteration's
+weights, so iteration 1 should be all-ones in both arms — which is how the defect was
+identified in the first place. It is, per `c_bands` *call*: the first diagonalisation is 3.0
+steps at `ethr = 1e-2` in both arms on both smeared inputs. But `electrons.f90:670-906`
+opens `scf_step: DO`, sets `tr2_min = ethr MAX(1, nelec)`, and `CYCLE`s back to `c_bands`
+**inside the same `iter`** when `dr2 < tr2_min`, while `sum_band.f90:122-126` has already
+rewritten `btype` — so a second diagonalisation in iteration 1 carries the per-band
+thresholds (2.0 steps off, 1.0 on). The arithmetic says which cells retry: `si8-smeared` has
+`tr2_min = 1e-2 x 32 = 0.32` against `dr2 = 0.257` and does; the 157-atom slab had
+`dr2 = 24.79` against `1e-2 x 1700 = 17` and did not, which is exactly why *its* iteration 1
+was bit-identical. A control that is a *scf iteration* is not the same control as one that
+is a `c_bands` call, and on this quantity only the second is sound.
+
+**One deviation and one correction, both recorded rather than left to be found.** `btype` is
+not carried across `run_scf` calls, so the first iteration of a relaxation step starts
+all-ones where QE never resets it — stated in `band_thresholds`'s docstring. And
+`wg/wk` is in **[0,1]** here as it is in QE (`occupations.py`, all three routes), not the
+0..2 an earlier working note claimed; the 0.01 literal is transcribed unscaled, and the
+range only matters for a band between 0.005 and 0.01.
+
+**Outstanding on this change itself.** The slow files that can see empty-band drift have not
+been run: `tests/regression/test_scf.py`, `test_batching_scf.py`, `test_scf_solvers.py`
+(the `jvp="autodiff"` path), `test_lsda_response.py`, `test_gamma_only.py`,
+`test_response.py`; spin spirals were not exercised at all. Two unconfirmed costs, both
+hypotheses with no clean-tree baseline: the gate's peak RSS sat **at** its 8 GiB cap
+(8,377,004 KB), and `return_steps` is a *static* `jit` argument that `run_scf` passes as
+`True` while bands, NSCF and response pass `False`, so a process doing both at one shape may
+now compile the Davidson stack twice; and the first `diago_full_acc = False` run in a fresh
+process is 0.06-0.24 s dearer than its repeats, most likely the eager `jnp` ops in
+`band_thresholds` tracing on first use. Empty-band SCF eigenvalues can now move by up to
+`max(5 ethr, 1e-5)` Ry, which is the accuracy QE's own reference outputs were produced at.
+
 
 **P12 — Ultrasoft and PAW. ✅ DONE for LDA.** `basis/interpolate.py` (the smooth/dense
 grid split), NLCC in `v_of_rho`, `pseudo/coupling.py` (real-harmonic Gaunt coefficients),

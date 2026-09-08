@@ -2630,9 +2630,12 @@ already checks the whole tensor against this reference, and `PLAN.md` records
 
 ## The Davidson step count against `pw.x` on a 157-atom slab (2026-09-04)
 
-**Open, not fixed, and the headline is the step count rather than any one
+**Open, and the headline is the step count rather than any one
 cause**: on the identical input at the identical `diago_david_ndim = 2`,
-defumat's Davidson takes roughly **12x** more steps than `pw.x`. Three
+defumat's Davidson takes roughly **12x** more steps than `pw.x`. (**Defect 1
+below was implemented on 2026-09-08 and measured at 1.28-1.51x on small cells**
+-- the next section. Everything else in this section stands as written; the
+sentences that the implementation has overtaken are marked in place.) Three
 candidates are below, ranked; the per-band threshold is the one that was
 measured and it accounts for **1.47x** of the 12x, so the rest is elsewhere
 and the leading suspect is the missing hard restart. Diagnosed by running FePc on SnTe(001) through `pw.x` and through
@@ -2650,14 +2653,15 @@ gamma half-sphere, FFT 225x216x256. defumat on one H200 at `f2be49f`
 **2187 s** — 35x, at an `ethr` that only tightened 4.5x. Memory is not involved:
 14.5 GB in use and 38.1 GB peak against a 132.81 GiB pool.
 
-**Defect 1: there is no `btype` and no `empty_ethr`.** `cegterg.f90:559-561` (and
-`regterg.f90:1108-1112`) test each band against **two** thresholds --
+**Defect 1: there is no `btype` and no `empty_ethr`** (*fixed 2026-09-08; the
+next section is the measurement*). `cegterg.f90:556-563` (and
+`regterg.f90:471-477`) test each band against **two** thresholds --
 `ABS(ew - e) < ethr` for an occupied band and `< empty_ethr` for an empty one,
 with `empty_ethr = MAX(ethr * 5, 1.D-5)` (`cegterg.f90:129`). `btype` is set in
 `sum_band.f90:122-127` from the *previous* iteration's occupations, `0` wherever
-`wg/wk < 0.01`, unless `diago_full_acc`. Neither name occurs in this package:
-`davidson.py:372` compares every band against one scalar `ethr` and `:386` is
-`jnp.all(settled)`, so a handful of stubborn bands keeps the whole block
+`wg/wk < 0.01`, unless `diago_full_acc`. Neither name occurred in this package until 2026-09-08:
+`davidson.py` compared every band against one scalar `ethr` and its exit test was
+`jnp.all(settled)`, so a handful of stubborn bands kept the whole block
 expanding. About 170 of this cell's 1020 bands are empty, and they are the
 slowest-converging part of an atomic start.
 
@@ -2708,11 +2712,15 @@ project where a 6.0 benchmark drifting in the sixth decimal is why
 `tools/generate_reference.py` was written, so the caveat is stated rather than
 left to be discovered.
 
-**Instrument before fixing.** The loop counter already exists: `final[14]`, beside
-`final[8]` and `final[10]` at `davidson.py:524`. Emit it per SCF iteration
-(averaged over channels, as `pw.x` does) together with the number of unsettled
-bands at exit. The prediction to falsify is ~100 for iteration 2 with the
-unsettled bands being the empty ones.
+**Instrument before fixing** (*done 2026-09-08*). The loop counter already
+existed as `final[14]`; it and the `notcnv` at exit are now emitted per SCF
+iteration, averaged over k and spin as `pw.x` does, into the SCF history as
+`davidson_iterations` and `davidson_unconverged`, with `run_scf(verbose=True)`
+printing `pw.x`'s own `ethr = %9.2E,  avg # of iterations = %4.1f` line. **The
+prediction it was built to falsify -- ~100 steps for iteration 2, the unsettled
+bands being the empty ones -- is still unfalsified rather than tested**: every
+cell it has been run on is small enough that `davidson_unconverged` is 0 on every
+iteration and step counts are 1-12 against the budget of 100.
 
 **The fix for defect 1** is a transcription and is contained: thread a per-band
 threshold *vector* into the solver in place of the scalar `ethr`, built from the
@@ -2772,6 +2780,97 @@ per unit of work: defumat is at `>= 10.9` s/step against `pw.x`'s ~6.7, about
 GPU is probably not behind -- **do not go hunting a slow FFT or GEMM until
 work-per-step is normalised**. `5779eae` and `5b9eb0f` are memory only (84.3 ->
 73.3 GiB at `david = 2`, `band_batch = 64`), not time.
+
+## Defect 1 implemented: QE's per-band threshold, measured at 1.28-1.51x (2026-09-08)
+
+**The one number to carry: this is worth about 1.5x of the section above's 12x,
+and three of the four candidates there are untouched.** `cegterg.f90:129,556-563`
+and `sum_band.f90:118-128` are now transcribed -- `empty_ethr = MAX(5 ethr, 1e-5)`
+and a `btype` built from the previous iteration's occupations, `0` wherever
+`wg/wk < 0.01` -- so `ethr` into the solver is a `(nbnd,)` vector where it was a
+scalar. `diago_full_acc` is the off-switch, defaulting to `pw.x`'s `.false.` and
+reaching `run_scf` and `Calculator`. Code: `defumat/solvers/davidson.py`
+(`empty_band_threshold`, a vector `ethr`, `return_steps`),
+`defumat/scf/driver.py` (`band_thresholds`, the history entries),
+`defumat/calculator.py` (the option).
+
+**The measurement.** One process per input, both arms inside it, alternating
+off/on, 5 repeats, the compiling run discarded; `OMP_NUM_THREADS=1
+MKL_NUM_THREADS=1`, `taskset -c 0,1`, a `systemd-run --scope` at `MemoryMax=4G`,
+nothing else running. Wall is the median of 5, warm.
+
+| input | Davidson steps/it, on | off | total steps, on / off | wall, on | off | dE (Ry) |
+|---|---|---|---|---|---|---|
+| `si8-1k.in` (fixed occ.) | 2.25 | 2.25 | -- | 0.43 s | 0.44 s | **0.0, bit-identical** |
+| `si16-1k.in` (fixed occ.) | 2.25 | 2.25 | -- | 1.64 s | 1.61 s | **0.0, bit-identical** |
+| `si8-smeared-1k.in` | 2.57 | 3.29 | **18 / 23 = 1.28x** | **0.48 s** | 0.54 s | +8.6e-12 |
+| si16-1k + smearing (scratchpad, *not* a committed benchmark) | 3.73 | 5.64 | **41 / 62 = 1.51x** | **3.60 s** | 4.83 s | -2.0e-12 |
+
+Per-iteration steps on `si8-smeared-1k.in` (on/off): 4/5, 1/2, 3/3, 2/2, 3/3,
+2/4, 3/4. On the scratchpad si16: 4/5, 1/2, 3/3, 9/12, 8/5, 4/5, 3/10, 2/5, 3/5,
+2/5, 2/5.
+
+**The control is the first two rows and they are 1.00x by construction.** Both are
+`occupations = 'fixed'` insulators at `nbnd = nelec/2`, so no band is below
+occupation 0.01, `band_thresholds` returns the constant `ethr`, and the two
+histories match entry for entry -- steps, energies and accuracies. That is the
+off-switch being exactly an off-switch, not a measurement of the feature. It also
+fixes the timing floor on this machine at **+-1.5%**, against which 1.11x and
+1.34x of wall are real and 0.986-1.004x is not. Both smeared `dE` values are 12x
+and 49x *below* their own `conv_thr = 1e-10` and both arms take the same number of
+SCF iterations (7 and 11), so the physics has not moved. An earlier run on the two-atom silicon of
+`benchmarks/si-1k.in` **modified** to carry MV smearing at `degauss = 0.02` and
+`nbnd = 10` (four filled) -- not the committed input, which is a fixed-occupation
+insulator at `nbnd = 4` and cannot show the feature -- gave 17 steps against 22,
+1.29x, with the total energies 1.6e-12 Ry apart and the occupied eigenvalues
+2.0e-7 Ry apart.
+
+**Wall gains less than the step count does -- 1.11x against 1.28x, 1.34x against
+1.51x -- and the reason is defect 2**, still open: a defumat Davidson step costs
+the same whatever `notcnv` is, because `H` is applied to the whole `(nbnd, npwx)`
+block, where `pw.x`'s late steps touch a handful of vectors. The eigensolver is
+also only part of an SCF iteration that costs 0.07 s on the 8-atom cell.
+
+**The reference side of the comparison is the 1.47x already on record, and no new
+`pw.x` run was made.** `pw.x`'s own `diago_full_acc = .true.`/`.false.` pair on the
+157-atom slab gives 8.5 against 12.5 steps in iteration 2; the 1.28x and 1.51x here
+bracket it. **The acceptance test is still the nine-row `pw.x` trace above, on the
+157-atom slab, and it was not run** -- it is a 128-core-plus-H200 cluster
+measurement, where everything in this section is an 8- and 16-atom cell on a
+two-core laptop scope. Nothing here says anything about the ~100-step stall.
+
+**A trap worth more than the fix, because it invalidates the obvious control.**
+`btype` comes from the previous iteration's occupations, so scf iteration 1 "must"
+be identical in both arms -- and on a smeared cell it is not. Per `c_bands` *call*
+it is: the first diagonalisation is 3.0 steps at `ethr = 1e-2` in both arms on both
+smeared inputs. But `electrons.f90:670` opens `scf_step: DO`, `:677` sets
+`tr2_min = ethr*MAX(1,nelec)`, `:898` tests `dr2 < tr2_min` and `:906` does
+`CYCLE scf_step` back into `c_bands` **inside the same `iter`**, by which point
+`sum_band.f90:122-126` has rewritten `btype` unconditionally -- so the second
+diagonalisation of iteration 1 already carries the per-band thresholds (2.0 steps
+off, 1.0 on). The arithmetic says which cells retry: `si8-smeared` has
+`tr2_min = 1e-2 x 32 = 0.32` against `dr2 = 0.257` and does, while the slab had
+`dr2 = 24.79` against `1e-2 x 1700 = 17` and did not, which is exactly why *its*
+iteration 1 was bit-identical. The sound control is a `c_bands` call, not an SCF
+iteration.
+
+**Costs and unknowns, none of them measured against a clean-tree baseline.** The
+pre-push gate passes (2528 passed, 66 skipped, 25:12 on four pinned cores at
+`OMP_NUM_THREADS=1`) but its peak RSS sat **at** the 8 GiB cap it ran under
+(8,377,004 KB of 8,388,608), with `MemorySwapMax=0`, so the uncapped peak of the
+fast gate on this tree is unknown and at least that. One hypothesis for part of it,
+untested: `return_steps` is a **static** `jit` argument, `run_scf` always passes
+`True` and bands/NSCF/response pass `False`, so a process doing both at one shape
+compiles the Davidson stack twice where it compiled once, and XLA keeps both.
+Separately, the first `on`-arm run in each process is 0.06-0.24 s dearer than its
+repeats where the `off` arm's is dearer by ~0.02 s -- later repeats match exactly,
+so it is not a Davidson recompile, most likely the eager `jnp` ops in
+`band_thresholds` tracing on first use. The medians above exclude it; a single short
+SCF in a fresh process would not.
+
+**Not measured**: multi-k behaviour (every input here is single-k on purpose),
+`nspin = 2`, ultrasoft/PAW, gamma-only storage, any cell above 16 atoms, memory
+(nothing came near the 4 GB scope cap), and the slow test suite.
 
 ## Optimisation backlog
 
@@ -3940,3 +4039,4 @@ crosses the backward pass.
 | 2026-09-03 | STM images (P65): the tunnelling density as `Calculation.density` called with delta-weighted occupations, and the plane read out of the grid by its own Fourier series | **The comparison is like-for-like and this end is 5.4x faster, which is the direction this file does not usually record.** Elk's task 162 on fcc aluminium (the cell and the 4x4x4 shifted grid of QE's `pw_metal/metal.in`, a 40x40 plane, one core each, both starting from a converged ground state) is **0.49 s** against **0.09 s** here warm and 0.29 s including compilation. Each side rebuilds the density from the new occupations and then evaluates it on 1600 points; Elk's leg also re-reads `STATE.OUT` and regenerates its radial functions, which is what a post-processing task does there and has no counterpart in a cached `Calculator`. **What is not comparable is the evaluation**: `rfpts` sums spherical harmonics inside each muffin tin and does a plane-wave sum only in the interstitial, where a pseudopotential code has one Fourier sum everywhere -- so the ratio is a statement about LAPW's geometry rather than about either implementation. **The ground states go the usual way**, 0.69 s by Elk's own timer for its thirteen iterations against 1.57 s here, so the quantity is cheap on both sides and the phase's own cost is a rounding error on the SCF that feeds it. Against `pp.x` the timing is not measured and would not be informative: `plot_num = 5` re-reads the collected wavefunctions off disk and writes a text dump of the whole grid, which is I/O rather than the sum. **Peak** is `chunk x ngm` complex for the phase table -- the points are chunked to ~32 MB, because a 40x40 plane against a 30000-vector sphere is 768 MB in one block -- plus the tunnelling density itself at one dense grid, which is what a density already costs. |
 | 2026-09-03 | Vertical tunnelling transport (P66): the substrate's exit plane as a closed-form Gram matrix per k-point, the tip amplitudes as one plane-wave sum, and the whole thing as one quadratic form | **There is no like-for-like pair and the reason is the geometry rather than the physics.** QE's `pwcond.x` computes a Landauer transmission, but between two semi-infinite crystalline leads with the current along one axis -- one conductance per energy and no point contact, so no map; timing it against a tip-resolved image would compare two different calculations. Elk has nothing. So this is the absolute cost, one core, affinity mask set before JAX is imported. Monolayer graphene, the **whole** 6x6x1 grid (36 k-points, a wedge being refused), 20 bands, a 40x40 tip plane: **36.7 s** warm and 39.4 s cold, of which the fixed-density diagonalisation is **29.9 s** and the transport assembly itself is **6.8 s** -- so four fifths of the run is the NSCF every k-resolved quantity here pays, and the phase's own cost is the smaller part. **The nearest relative is P65's STM image at 8.6 s on the same call, and the gap is not the assembly**: `run_stm` may reduce its grid to a wedge and this may not, so it diagonalises 7 k-points where this does 36. That is a real cost of the quantity and it is the refusal, not the implementation. **The energy axis is free and this is the measurement that says so**: 1, 21 and 81 energies cost 35.7, 36.6 and 38.6 s, so eighty-one tip energies are **8 per cent** more than one -- the tip sampling and the Gram matrices do not depend on `E`, only the per-state weight does, which makes a transport dI/dV at every pixel a by-product rather than a sweep. **Cost shape**: sampling is `nk nbnd npts npwx` and dominates, the Gram matrices are `nk nbnd n_hpar`, and the contraction is `nk nbnd^2 npts` per energy. **Peak 0.85 GB** on that cell, of which the amplitudes are `npol nk nbnd npts` complex (18 MB here) and the phase table is chunked to ~32 MB as P65's sampler already chunks it. |
 | 2026-09-04 | **Two `(nbnd, npwx)` blocks out of the Davidson working set**: the expansion rebuilt at the step that consumes it instead of carried across the loop, and the robustness retry moved from a `lax.cond` to a host branch | **The eigensolver's XLA temp buffer falls by 11.6 GiB on a 157-atom slab, and nothing gets slower.** That buffer is one contiguous allocation and it is what decides whether a large run starts: on FePc/SnTe at `ecutwfc = 60`, `nbnd = 1020`, gamma storage, an H200 was asked for **109.95 GiB** against a 104.85 GiB limit and died before the first iteration, where `defumat/sizing.py` had budgeted 69 GB. **That limit is a setting rather than the card**: it is JAX's default preallocation, 0.75 of the memory free when the client initialises (143158 MiB on these nodes, against an `nvidia-smi` total of 143771 -- the CUDA context holds the rest), where jobs after 2026-09-04 14:30 set `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95` and get a 132.81 GiB pool (`bytes_limit` 142606336000). **A buffer has to be read against the fraction its own job ran under**, and the pool taken from that job's own `bytes_limit` rather than from a remembered constant -- the same number read against the wrong one of those two pools says a configuration fits when it does not. Fitting `memory_analysis().temp_size_in_bytes` of the compiled solve gives `2.18 nvecx npwx zc + 4.20 nbnd npwx zc + 2.00 band_batch N_smooth zc` -- the `psi`/`hpsi` pair, the band blocks, and `h_psi`'s two FFT boxes per band in flight -- and the middle coefficient was **6.20** before this change: a refit measures the drop as **2.00 blocks exactly**, with the other two coefficients unmoved (2.15 -> 2.18, 1.98 -> 2.00). **The buffer assignment is what found them**, not the fit: XLA's own `memory-usage-report` gives `while.4{9}` and `while.5{9}` a `(nbnd, npwx)` slot each, which is the retry `cond` holding two copies of the whole loop -- it shares the big `(nvecx, npwx)` carries between them and not the small one. **Measuring it needs the right cell**: what separates the three terms is `nbnd npwx / (band_batch N_smooth)`, which is 0.5 on the slab and **0.06** at si16 with `band_batch = 32`, where the same change reads as 1 per cent. At a production-like ratio it is **-10.0%** (si16, `band_batch = 4`: 59.6 -> 53.6 MB) and **-10.2%** (si64, `band_batch = 16`: 932.6 -> 837.1 MB). **Time went the same way**, best of three at one core: si16 2.62 -> **2.13 s**, si32 11.93 -> **11.69 s**, iteration counts identical -- the retry `cond` was half the HLO and it is gone. **Seven of eight reference cells are bit-for-bit unchanged** (si8, si16, si8-us, si2-paw, the two-k-point test-suite silicon, Pt with spin-orbit, magnetic Fe) and the eighth moves by **1.1e-15 Ry**, from rewriting `force_real_g0` as a select on the same pass -- a scatter in the middle of the correction chain is a fusion barrier, and that path is gamma-only, which is what production runs. **Not touched, and the larger term at `band_batch = 64`**: the two FFT boxes per band belong to `vloc_psi`, not to this solver. |
+| 2026-09-08 | **QE's per-band Davidson threshold** (`cegterg.f90`'s `empty_ethr`, `sum_band.f90`'s `btype`), with `diago_full_acc` as the off-switch and the step count logged per SCF iteration | **1.28x in Davidson steps on `si8-smeared-1k.in`** (18 against 23) and **1.51x** on a scratchpad si16 with smearing (41 against 62); 1.11x and 1.34x of wall against a +-1.5% timing floor. The control is the off-switch: the two fixed-occupation insulators `si8-1k.in` and `si16-1k.in` are **bit-identical** in both arms, entry for entry, because no band there is below occupation 0.01. Energies move by 8.6e-12 and -2.0e-12 Ry, 12x and 49x below their own `conv_thr`, at unchanged SCF iteration counts. **This is defect 1 of the four candidates in the 157-atom-slab diagnosis and is worth about 1.5x of that section's 12x** -- it brackets the 1.47x `pw.x` shows between its own `diago_full_acc` settings, which is the reference side and is the one already on record: **no new `pw.x` run was made, and the acceptance test, the nine-row slab trace, is cluster work that was not run.** The hard restart, the preconditioner and defect 2's full-width `H` are untouched. |
