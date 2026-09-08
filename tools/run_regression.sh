@@ -44,6 +44,14 @@ MEMMAX=${DEFUMAT_TEST_MEM_MAX:-12G}
 mkdir -p "$OUT"
 SUMMARY=$OUT/summary.txt
 INFLIGHT=$OUT/in-flight.log
+# The child needs both of these, and the *effective* cap rather than whatever
+# the environment happened to hold: `tests/conftest.py`'s watchdog samples this
+# process's resident set against it and fails a **named** test at 85% of it,
+# writing that name into the same `in-flight.log` this loop appends to. The
+# name is the whole point -- a SIGKILL destroys the process's account of what
+# it was running, so the watchdog writes it before the kernel can act.
+export DEFUMAT_TEST_MEM_MAX="$MEMMAX"
+export DEFUMAT_TEST_INFLIGHT="$INFLIGHT"
 # The end marker is rewritten rather than appended, so a resumed run does not
 # leave a trail of them through the file.
 [ -f "$SUMMARY" ] && { grep -v "^ALL FILES DONE$" "$SUMMARY" > "$SUMMARY.tmp"; mv "$SUMMARY.tmp" "$SUMMARY"; }
@@ -60,6 +68,11 @@ elif ! systemd-run --user --quiet -p MemoryMax=64M --scope true >/dev/null 2>&1;
     CAPPED=0
     echo "run_regression: no cgroup memory cap available -- an out-of-memory" >&2
     echo "  kill will take this runner with it. Run fewer files at a time." >&2
+    # `DEFUMAT_TEST_MEM_MAX` stays at the requested size here rather than being
+    # set to `off`: with no cgroup between the process and the machine's own OOM
+    # killer, the in-process watchdog is the *only* thing that can name a test,
+    # so it is worth more on this branch, not less. Only an explicit `off` above
+    # turns it off.
 fi
 
 for f in $GLOB; do
@@ -123,7 +136,11 @@ for f in $GLOB; do
     if [ "$status" -eq 137 ]; then
         line="killed (SIGKILL, cap=$MEMMAX) -- rerun this file alone or raise DEFUMAT_TEST_MEM_MAX"
     fi
-    echo "$name exit=$status$peak | $line" >> "$SUMMARY"
+    # The watchdog's own line names the *test* that held the peak, which
+    # `/usr/bin/time -f %M` around the process cannot; the two sit side by side.
+    wd=$(grep -m1 '^memory watchdog: ' "$OUT/$name.log" 2>/dev/null | sed 's/^memory watchdog: //')
+    [ -n "$wd" ] && wd=" | $wd"
+    echo "$name exit=$status$peak | $line$wd" >> "$SUMMARY"
     echo "$name finished $(date -Is) exit=$status" >> "$INFLIGHT"
 done
 echo "ALL FILES DONE" >> "$SUMMARY"

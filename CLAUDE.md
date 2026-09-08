@@ -659,12 +659,14 @@ And **narrow the list before running it**: a `grep` for the inputs that can actu
 the changed code path is minutes of work and routinely removes most of the suites, where
 guessing adds them.
 
-### An out-of-memory kill must cost one file, and it still costs the session
+### An out-of-memory kill must cost one file, and must name the test that caused it
 
-**This is an open defect rather than a fact of the machine, and it is the one thing in this
-section that is not yet fixed.** Everything above is a way of staying under the ceiling;
-none of it puts a floor under what happens when something goes over it anyway, and going
-over it here kills whatever else the terminal was holding. It has happened at least three
+**This was an open defect rather than a fact of the machine, and it is now bounded from
+both sides** — a cgroup cap per file, and a watchdog that names the test before the kernel
+acts (the last two subsections below say exactly what each covers). Everything above is a
+way of staying under the ceiling; none of it puts a floor under what happens when
+something goes over it anyway, and going over it here kills whatever else the terminal was
+holding. It has happened at least three
 times: `test_ten_site.py` (P28b) and `test_spinor_forces.py` (P46), both measured in
 `PERFORMANCE.md`, and again on **2026-09-07** — that one by the user's account rather than
 from a log — where it took a session down with a documentation restructuring uncommitted.
@@ -718,12 +720,36 @@ not it has happened yet. The two figures on record so far are `test_scf.py` at *
 and `test_dos.py` at **1297 M**, both of them slow files running clean, so the first full
 pass through the runner is also the measurement that says what the cap should be.
 
-**What is still missing is the named failure.** A `psutil` RSS watchdog in the autouse
-fixture, failing a single test as it approaches the cap, turns an anonymous `SIGKILL` into
-a test name — the difference between a lost afternoon and a bug report — and it is also
-the only form of this that works inside `tools/test-fast.sh`, which is one process by
-design. Until then: run anything long through `run_regression.sh`, and **commit before
-starting it**.
+**The named failure is wired in, and its edges are the thing to know.** A `psutil` RSS
+watchdog lives in `tests/conftest.py`'s autouse fixture, with all of it in
+`tests/memwatch.py`: it writes the running test's nodeid into the runner's own
+`in-flight.log` *before* the test starts, samples this process's resident set once a
+second in a daemon thread, logs a crossing the moment it happens, and fails that test by
+name at teardown once its peak passes **0.85** of `DEFUMAT_TEST_MEM_MAX` — the same
+variable and the same `off` sentinel as the cap above, and `run_regression.sh` now exports
+the effective value and the log path so the child sees the number actually in force. **It
+fails the crossing, not everything after it**: once a test has been named, a later one is
+named only if it raises the peak by a further 2% of the cap, because XLA's executable
+cache does not shrink and the first offender would otherwise fail every test behind it —
+at a deliberately low 200 M cap on `tests/unit/test_config.py` that is 5 named errors
+rather than 17. That
+turns an anonymous `SIGKILL` into a test name, which is the difference between a lost
+afternoon and a bug report. The fraction is the headroom: 15% of a 12 G cap is 1.8 GB and
+of a 4 G one 600 MB, which is what a 1 s interval has to cover between two reads. **Unset
+is inert** — no thread, no log file, no `psutil` import — so the gate pays nothing; to
+watch the gate, which is one process by design and where this is the only form of the
+protection that works, give it a cap: `DEFUMAT_TEST_MEM_MAX=12G tools/test-fast.sh`.
+
+**Four things it does not catch, and they are why the log line comes first.** A single
+allocation that goes from under the threshold to past the cap **between two samples** is
+invisible to any sampler at any interval. The cgroup charges page cache and kernel memory
+to the scope while `memory_info().rss` counts this process's anonymous pages, so the
+kernel can kill *below* the threshold — the scope's own `memory.current` would match the
+kill criterion exactly and is the follow-up, not this. Memory held by **child** processes
+is charged to the scope and not counted here. And the failure lands at *teardown*, after
+the peak: if the peak is the kill, what survives is the line in `in-flight.log`, not the
+failure. So the standing advice does not change — run anything long through
+`run_regression.sh`, and **commit before starting it**.
 
 What neither bound touches is the peak *inside* one test, which is a real cost to be sized
 in advance rather than discovered: the backward pass of an ultrasoft or PAW derivative

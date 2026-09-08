@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from tests import memwatch  # stdlib + psutil only; never JAX
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 QE_ROOT = REPO_ROOT / "quantum_espresso" / "qe-7.5-ReleasePack" / "qe-7.5"
 
@@ -82,3 +84,64 @@ def committed_benchmark(qe_testsuite):
         return path
 
     return _get
+
+
+# ---------------------------------------------------------------------------
+# The memory watchdog: fail a *named* test before the kernel kills the process.
+#
+# `tools/run_regression.sh` puts each file in a cgroup scope with `MemoryMax`,
+# so an out-of-memory kill costs one file rather than the session. What it
+# cannot do is say which *test* was holding the memory, because a `SIGKILL`
+# takes the process's knowledge of that with it. The fixture below writes the
+# running test's nodeid into the runner's own `in-flight.log` before the test
+# starts, samples the resident set once a second while it runs, and fails the
+# test at teardown once its peak crosses 85% of the same `DEFUMAT_TEST_MEM_MAX`
+# the runner set. Everything it does is in `tests/memwatch.py`, including what
+# it cannot catch; keep this end thin.
+#
+# It is inert with the variable unset -- no thread, no file, no `psutil` import
+# -- so the pre-push gate pays nothing. To watch the gate, give it a cap:
+# `DEFUMAT_TEST_MEM_MAX=12G tools/test-fast.sh`.
+#
+# A teardown failure is reported by pytest as `ERROR at teardown of <test>`
+# rather than `FAILED`; that is still the test's name, and it still matches the
+# `passed|failed|error` grep the runner's summary line is built from.
+# ---------------------------------------------------------------------------
+
+
+def pytest_configure(config):
+    """Build the watchdog once, and warn (never raise) if the cap is unusable."""
+    watchdog, warning = memwatch.build_watchdog(
+        default_log=REPO_ROOT / "regression-results" / "in-flight.log"
+    )
+    config._memwatch = watchdog
+    if warning is not None:
+        config.issue_config_time_warning(UserWarning(warning), stacklevel=2)
+
+
+def pytest_sessionstart(session):
+    watchdog = getattr(session.config, "_memwatch", None)
+    if watchdog is not None:
+        watchdog.start()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    watchdog = getattr(session.config, "_memwatch", None)
+    if watchdog is not None:
+        watchdog.log(watchdog.summary_line())
+        watchdog.stop()
+
+
+def pytest_terminal_summary(terminalreporter):
+    """The peak, in the runner's own `peak=NNNM` shape, plus the test that set
+    it -- which is the thing `/usr/bin/time -f %M` around the process cannot
+    say."""
+    watchdog = getattr(terminalreporter.config, "_memwatch", None)
+    if watchdog is not None:
+        terminalreporter.write_line(watchdog.summary_line())
+
+
+@pytest.fixture(autouse=True)
+def memory_watchdog(request):
+    yield from memwatch.guard(getattr(request.config, "_memwatch", None),
+                              request.node.nodeid)
