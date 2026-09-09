@@ -509,6 +509,34 @@ class Calculator:
         self._strain_response = None
         return self._scf
 
+    def get_elk_seed(self, directory, renormalise: bool = True, report=None):
+        """Elk's converged density on this run's grid, as a starting guess.
+
+        Hand the result to :meth:`get_scf` as ``starting_density`` to continue
+        an Elk ground state here:
+
+        .. code-block:: python
+
+            seed = calc.get_elk_seed("elk_run/")
+            result = calc.get_scf(starting_density=seed)
+
+        ``directory`` is an Elk *run directory* -- ``STATE.OUT`` beside
+        ``GEOMETRY.OUT``, because ``STATE.OUT`` carries neither the cell nor the
+        atomic positions.
+
+        **It is a seed, not an answer.** Elk is all-electron and this is a
+        pseudopotential code, so the two converged densities are different
+        functions wherever there is a core; defumat's own SCF still runs on top.
+        Passing an Elk density as a *fixed* density is refused
+        (:func:`defumat.io.elk_density.density_on`), as are a spin-polarized Elk
+        state, a spin spiral and a DFT+U one.
+        """
+        from defumat.io.elk import ElkState
+
+        return ElkState.read(directory).density_on(
+            self.calculation, renormalise=renormalise, report=report
+        )
+
     def _ground_state(self, quantity: str) -> SCFResult:
         """The cached ground state, running one first if there is none."""
         if self._scf is None:

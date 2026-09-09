@@ -1,0 +1,47 @@
+! Simple cubic hydrogen, one atom at the origin, a = 3.0 Bohr.
+!
+! A deliberately PLAIN run: default gmaxvr, default species settings,
+! autormt as it falls.  The fixture exists so a STATE.OUT reader can be
+! checked pointwise against Elk's own reconstruction (RHO3D.OUT, task 33),
+! so a typical run is the point -- do not tune it.
+!
+! Non-spin-polarised, and hydrogen has no core, so the all-electron and
+! valence densities are the same function.
+
+tasks
+  0
+  33
+
+! The species file is copied in beside elk.in so the fixture is portable.
+sppath
+  './'
+
+avec
+  3.0  0.0  0.0
+  0.0  3.0  0.0
+  0.0  0.0  3.0
+
+atoms
+  1
+  'H.in'
+  1
+  0.0  0.0  0.0    0.0  0.0  0.0
+
+ngridk
+  4  4  4
+
+! Pin the frame.  With one atom at the origin the inversion centre is
+! already there, so this is a no-op here -- but Elk's default (.true.)
+! moves the origin onto the inversion centre, which puts STATE.OUT and
+! GEOMETRY.OUT in a different frame from elk.in's atoms block.
+tshift
+  .false.
+
+! plot3d box: the unit cell.  Origin, then the three lattice vectors as
+! absolute corner vertices.
+plot3d
+  0.0  0.0  0.0
+  1.0  0.0  0.0
+  0.0  1.0  0.0
+  0.0  0.0  1.0
+  16  16  16

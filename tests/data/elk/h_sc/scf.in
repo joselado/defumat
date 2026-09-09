@@ -1,0 +1,27 @@
+! Simple cubic hydrogen, one atom at the origin, a = 3.0 bohr -- the same cell
+! as the Elk run in this directory, so the Elk ground state can seed this one.
+!
+! One electron in a metallic band, so the occupations are smeared: Elk's own
+! run finds a finite density of states at the Fermi level.
+&CONTROL
+  calculation = 'scf'
+/
+&SYSTEM
+  ibrav = 1
+  celldm(1) = 3.0
+  nat = 1
+  ntyp = 1
+  ecutwfc = 40.0
+  occupations = 'smearing'
+  smearing = 'gaussian'
+  degauss = 0.02
+/
+&ELECTRONS
+  conv_thr = 1.0d-10
+/
+ATOMIC_SPECIES
+  H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+  H 0.0 0.0 0.0
+K_POINTS automatic
+  4 4 4 0 0 0
