@@ -568,6 +568,19 @@ def density_on(state, calculation, renormalise: bool = True, report=None):
     """
     import jax.numpy as jnp
 
+    # Refused before any work, the way the read-time refusals are: a run that
+    # cannot take this seed should say so in the first line rather than after a
+    # reconstruction it will throw away.
+    nspin_mag = calculation.nspin_mag
+    if nspin_mag != 1:
+        raise NotImplementedError(
+            f"this calculation has nspin_mag = {nspin_mag}, and only an "
+            "unpolarized seed is implemented. An Elk magnetization is a second "
+            "field with a transfer rule of its own, and splitting a charge "
+            "density evenly between two channels would seed a magnetic run "
+            "from a non-magnetic guess without saying so."
+        )
+
     system = calculation.system
     cell = np.asarray(system.cell.at, dtype=float)
     if not np.allclose(cell, state.geometry.avec, atol=1e-6, rtol=1e-6):
@@ -652,13 +665,4 @@ def density_on(state, calculation, renormalise: bool = True, report=None):
     if report is not None:
         report.append(measured)
 
-    nspin_mag = calculation.nspin_mag
-    if nspin_mag != 1:
-        raise NotImplementedError(
-            f"this calculation has nspin_mag = {nspin_mag}, and only an "
-            "unpolarized seed is implemented. An Elk magnetization is a second "
-            "field with a transfer rule of its own, and splitting a charge "
-            "density evenly between two channels would seed a magnetic run "
-            "from a non-magnetic guess without saying so."
-        )
     return jnp.asarray(rho)[None]

@@ -3986,6 +3986,87 @@ default cap, so `test_phonons_at_q.py` is not a memory liability the way an
 ultrasoft derivative on a slab is: this is norm-conserving, so no `Q_ij(G)`
 crosses the backward pass.
 
+## What reading an Elk ground state costs (P72)
+
+Simple-cubic hydrogen at `a = 3.0` bohr (`tests/data/elk/h_sc/`): one atom, one
+electron, `H.pz-vbc.UPF`, `ecutwfc = 40`, a 15^3 dense grid, a 4x4x4 k-grid,
+`conv_thr = 1e-10`. Elk's own run of the same cell is a 12^3 interstitial grid
+with 751 reciprocal lattice vectors, `rmt = 1.4` bohr and a 197-point radial
+mesh. One core each (`OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, `taskset -c 0`
+set before JAX is imported), same machine, nothing else running.
+
+| | |
+|---|---|
+| read `STATE.OUT` + `GEOMETRY.OUT` | **0.001 s** warm, 0.12 s on the call that pays `scipy.io`'s import |
+| reconstruct onto the 15^3 dense grid | **0.036 s** |
+| `evaluate_at` on 4096 arbitrary points | **0.135 s** warm, 0.225 s on the call that pays `scipy.special`'s import |
+| the SCF it seeds | **2.5 s**, four iterations |
+
+Both SCF columns are **warm**: each was run twice in its own process and the
+second is quoted, so `~/.cache/defumat/jax` already held the kernels and neither
+number contains a compile. A "fresh process" is not a cold one here, the
+compilation cache being on disk.
+
+**The seed is free and it saves nothing**, which is the same statement the
+iteration count makes and is worth having in wall clock too. Starting from the
+atomic superposition: 2.52 s of SCF in a 4.96 s process. Starting from the Elk
+density: 0.04 s of reconstruction and 2.53 s of SCF in a 4.99 s process. The
+reconstruction is 1.5% of the run it feeds and the run is the same length either
+way.
+
+### Against Elk, which is where `evaluate_at` was taken from
+
+**The transfer itself has no reference pair and one should not be invented.**
+Elk has no counterpart to reading an Elk state into a plane-wave code, and
+neither has `pw.x`, which restarts only from its own `charge-density.dat`.
+
+**`evaluate_at` does have one.** It is a transcription of `rfpts`, and Elk's task
+33 is exactly that routine applied to the density on a grid, so the same work can
+be timed on both sides. The Elk column is a task-33-only run in a scratch
+directory holding the fixture's `elk.in`, `H.in`, `GEOMETRY.OUT` and
+`STATE.OUT`, which reproduces the committed `RHO3D.OUT` **bit for bit**, three
+runs, single core:
+
+| read the state, evaluate 4096 points, write the file | Elk task 33 | defumat | ratio |
+|---|---|---|---|
+| **per process**, which is what Elk always is | **0.17 s** | **0.376 s** | **2.2x** |
+| a repeat call inside a live process | -- | **0.137 s** | 0.8x |
+
+**The per-process row is the one to quote**, and the difference between the two
+is entirely lazy imports: the first `read_elk_state` in a process pays
+`scipy.io`'s import (0.14 s against 0.001 s warm) and the first `evaluate_at`
+pays `scipy.special`'s (0.225 s against 0.135 s). Nobody avoids those once, so
+folding them out would be quoting a number no user ever sees. The second row is
+worth keeping beside it because a reconstruction is usually one of several calls
+on one state.
+
+**Two further things that are not like-for-like, and both favour Elk.** Elk's
+0.17 s includes `init0` -- species setup, the radial meshes, the G-vector
+generation and the characteristic function -- which this side does not repeat,
+because the state object carries the meshes and the G-set is rebuilt only when it
+is asked for. And the Python process pays **0.93 s** to import NumPy, SciPy and
+the package before any of this starts, where Elk's binary starts in milliseconds;
+on a 0.17 s task that fixed cost dominates end to end and is stated separately
+rather than folded in.
+
+So: **2.2x per process and parity on a repeat call**, which is closer than a
+faithful transcription of a Fortran routine into Python has any right to be. What
+pays for it is vectorising the 27-image sphere search and the harmonic sum over
+all points at once, where the Fortran loops over them one at a time -- the same
+`poly4` windows, done in a different order.
+
+### The working set
+
+246 MB for the reader alone (of which most is the Python interpreter and NumPy),
+475 MB for a process that also runs the SCF, and the whole nine-test regression
+file peaks at **589 MB** -- far inside the 12 GB default cap. Nothing here
+allocates per band or per k-point: the largest array is `rhomt`, which is
+`lmmaxo x nrmtmax x natmtot` and is 76 KB on this fixture and 0.30 MB on the
+two-species SiC one, and the state holds **four** such blocks (the density and
+three potentials). A real all-electron state is bounded by the same expression,
+so a fifty-atom cell at `lmaxo = 6` on a 400-point mesh would be 7.8 MB a block
+and 31 MB for the state, which is not the constraint on anything.
+
 ## History
 
 | Date | Change | Effect |

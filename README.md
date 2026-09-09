@@ -213,6 +213,7 @@ drive any of this and is what the examples below use.
 | **Magnetocrystalline anisotropy** — the energy it costs to point a magnet's moment one way rather than another, by the force theorem: converge without spin-orbit coupling, rotate the converged density onto $\hat{\mathbf{n}}$, diagonalise once with the coupling on. One diagonalisation per direction, no reconvergence. Ultrasoft and norm-conserving; PAW is refused, the handoff carrying no `becsum`. Includes the per-orbital decomposition and a knob that switches the coupling off inside one relativistic dataset | `run_anisotropy`, `run_force_theorem`, `Calculator.get_anisotropy`, `lforcet`, `soc_scale`, `frozen_expectation` | ✓ | (✓)¹¹ |
 | **Van der Waals dispersion** — Grimme's D2 pair correction, in the energy, the forces, the stress and the elastic constants. D3, Tkatchenko-Scheffler, MBD and XDM are refused by name | `vdw_corr = 'grimme-d2'`, `london_s6`, `london_rcut`, `london_c6`, `london_rvdw` | ✓ | |
 | **Band gaps from the Tran-Blaha potential** (mBJ) — the modified Becke-Johnson meta-GGA, on norm-conserving and PAW datasets, unpolarized, collinear, and noncollinear with spin-orbit coupling. The total energy is not variational, so forces, stress and response are refused | `input_dft = 'tb09'` (or `'bj06'`), `mbj_c` | (✓)⁶ | ✓ |
+| **Starting a run from an all-electron ground state** — Elk's converged density, read off its own `STATE.OUT` and put on this run's grid as the starting density | `Calculator.get_elk_seed` | | |¹⁷
 | **Pseudopotentials**: norm-conserving, ultrasoft and PAW (UPF v2) | `ATOMIC_SPECIES` | ✓ | |
 | **Functionals**: LDA and GGA — Perdew-Zunger, Perdew-Wang, PBE, revPBE, PBEsol | `input_dft`, or the UPF header | ✓ | ✓ |
 
@@ -280,6 +281,15 @@ Where the tick is qualified:
   contact and therefore no map: nothing in it is a function of where a tip
   is, which is the whole output here. Elk has neither — no task in its list
   computes a conductance, and `ELK-FEATURES.md` records none.
+
+- ¹⁷ Neither code reads the other's ground state. `pw.x` restarts from its
+  own `charge-density.dat` (`potinit.f90`'s `read_rhog`, reached by
+  `startingpot = 'file'`) and has no reader for a foreign format; Elk restarts
+  from its own `STATE.OUT` and no task in its list reads or writes another
+  code's density. Elk's own `STATE.OUT` reader is not the same claim: what is
+  ticked here is crossing from an all-electron muffin-tin representation into a
+  plane-wave pseudopotential one, which is a transfer neither code has a reason
+  to implement.
 
 - ¹⁶ Elk's partial density of states (task 10) is resolved over $(l, m)$ and
   over spin — `dosmsum` and `dosssum` sum those away, and `lmirep` transforms the
@@ -505,7 +515,9 @@ reproduce the supercell calculation of the same magnetic order (it does, to
 1e-12 Ry), a derivative that has to match a finite difference of the thing it is
 the derivative of. Where another code does compute it, that is used instead:
 LiF's excitonic peak comes out at 14.05 eV against the 13.67 eV of Elk, whose
-example it is. Where a second, independent route to the same number exists,
+example it is, and an all-electron density brought here from Elk reproduces
+Elk's own evaluation of it at every point to 4.5e-11 e/bohr³, which is the
+precision Elk printed rather than any error in the transfer. Where a second, independent route to the same number exists,
 both are computed and compared. The per-feature detail is in
 [`docs/features.pdf`](docs/features.pdf), which says for every capability what
 it was validated against.

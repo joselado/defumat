@@ -4,6 +4,12 @@ parser for QE reference outputs used throughout the test suite.
 This is the only layer allowed to speak in units other than Rydberg atomic units.
 """
 
+from defumat.io.elk import (
+    ElkGeometry,
+    ElkState,
+    read_elk_geometry,
+    read_elk_state,
+)
 from defumat.io.output import format_dos, write_dos, write_pdos
 from defumat.io.qeref import (
     ProjwfcReference,
@@ -15,10 +21,14 @@ from defumat.io.qeref import (
 )
 
 __all__ = [
+    "ElkGeometry",
+    "ElkState",
     "ProjwfcReference",
     "QEReference",
     "comparison_table",
     "format_dos",
+    "read_elk_geometry",
+    "read_elk_state",
     "read_pdos_file",
     "read_projwfc_output",
     "read_qe_output",

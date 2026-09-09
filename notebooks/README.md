@@ -34,6 +34,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Which atom and which orbital a band belongs to | `get_pdos()` | [16](16_projected_density_of_states.ipynb) |
 | Eigenvalues on a denser grid at fixed density | `get_nscf()` | [06](06_density_of_states.ipynb) |
 | What a diffraction experiment measures: X-ray and magnetic structure factors | `get_structure_factors()` | [37](37_structure_factors.ipynb) |
+| A run started from an all-electron ground state, and how far a pseudopotential density is from one | `get_elk_seed()` | [42](42_all_electron_start.ipynb) |
 
 ### Structure: forces, geometry, the cell
 
@@ -163,6 +164,7 @@ want a number.
 | [`39_orbital_magnetization.ipynb`](39_orbital_magnetization.ipynb) | The circulating half of a magnet's moment: an iodine atom's Hund's-rule orbital moment, and the part of it no projection onto atomic orbitals can see |
 | [`40_stm_images.ipynb`](40_stm_images.ipynb) | What a scanning-tunnelling microscope sees: half of graphite's surface atoms missing, a contrast that inverts with the bias, and a magnetic tip reading four moments one at a time |
 | [`41_vertical_transport.ipynb`](41_vertical_transport.ipynb) | Tunnelling *through* a two-dimensional material into the substrate beneath it: graphene, where the current map is the microscope's picture, and a bilayer, where the two layers' paths interfere and it is not |
+| [`42_all_electron_start.ipynb`](42_all_electron_start.ipynb) | A converged all-electron density brought here and used to start a run: where a pseudopotential density is allowed to differ from the real one, and where it is not |
 
 ## Conventions
 
@@ -253,16 +255,17 @@ workstation core, slowest last:
 
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
-| `01` | 5 | `07` | 22 | `31` | 34 | `26` | 109 |
-| `09` | 6 | `06` | 23 | `40` | 34 | `33` | 115 |
-| `02` | 8 | `25` | 28 | `23` | 35 | `13` | 131 |
-| `37` | 9 | `17` | 29 | `32` | 35 | `30` | 131 |
-| `03` | 10 | `18` | 29 | `34` | 40 | `39` | 151 |
-| `05` | 10 | `12` | 30 | `19` | 47 | `08` | 171 |
-| `04` | 12 | `21` | 30 | `10` | 50 | `27` | 178 |
-| `22` | 12 | `15` | 31 | `29` | 59 | `38` | 242 |
-| `16` | 18 | `24` | 31 | `11` | 81 | `35` | 276 |
-| `00` | 22 | `28` | 33 | `14` | 89 | `20` | 282 |
+| `01` | 5 | `07` | 22 | `40` | 34 | `13` | 131 |
+| `09` | 6 | `06` | 23 | `23` | 35 | `30` | 131 |
+| `02` | 8 | `25` | 28 | `32` | 35 | `36` | 133 |
+| `37` | 9 | `17` | 29 | `34` | 40 | `39` | 151 |
+| `03` | 10 | `18` | 29 | `19` | 47 | `41` | 164 |
+| `05` | 10 | `12` | 30 | `10` | 50 | `08` | 171 |
+| `04` | 12 | `21` | 30 | `29` | 59 | `27` | 178 |
+| `22` | 12 | `15` | 31 | `11` | 81 | `38` | 242 |
+| `42` | 13 | `24` | 31 | `14` | 89 | `35` | 276 |
+| `16` | 18 | `28` | 33 | `26` | 109 | `20` | 282 |
+| `00` | 22 | `31` | 34 | `33` | 115 |  |  |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two
 hand-built linear solves and a second self-consistent run that were demonstrating

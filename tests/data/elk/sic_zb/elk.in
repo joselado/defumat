@@ -1,0 +1,75 @@
+! 3C-SiC (cubic silicon carbide, beta-SiC): zincblende, a = 8.23845 Bohr
+! (4.3596 Angstrom), one carbon and one silicon.
+!
+! The two-SPECIES companion to tests/fixtures/c_diamond.  Its whole reason
+! for existing is two traps in STATE.OUT that no one-species fixture can
+! fail, and that a reader therefore gets wrong silently:
+!
+!   * natmtot is the sum of natoms over ALL species, not natoms(1).  Here
+!     nspecies = 2 and natoms = 1 1, so a reader that writes natoms(1)
+!     reads half the muffin-tin block.
+!   * rfmt is dimensioned to nrmtmax, and the rows past nrmt(is) are
+!     UNINITIALISED buffer, not zero.  Elk's species files set nrmt by
+!     periodic-table row -- 300 for row 2, 400 for row 3, less the lradstp
+!     rounding -- so here nrmt = 297 (C) and 397 (Si) and nrmtmax = 397.
+!     A reader that integrates all 397 rows of carbon picks up garbage.
+!
+! That second one is why this is SiC and not BN: boron and nitrogen are both
+! row 2, so nrmt would be 297 for both and equal to nrmtmax, and the trap
+! would stay invisible.  autormt changes rmt, never nrmt.
+!
+! Carbon is species 1, i.e. the SHORT mesh is the FIRST one, so the padding
+! trap bites atom 1 -- the atom a reader is most likely to check.  Putting
+! the origin on the carbon rather than the silicon sublattice is the same
+! crystal either way.
+!
+! Checked before running: the Si-C distance is 3.56735 Bohr = 1.88776
+! Angstrom with four neighbours, against a literature 1.888 Angstrom.
+!
+! elk_init.in is this same input with tasks 9006 instead of 0 and 33.
+
+tasks
+  0
+  33
+
+! The species files are copied in beside elk.in so the fixture is portable.
+sppath
+  './'
+
+! fcc primitive vectors, a/2 (0,1,1), (1,0,1), (1,1,0).
+avec
+  0.000000  4.119225  4.119225
+  4.119225  0.000000  4.119225
+  4.119225  4.119225  0.000000
+
+atoms
+  2
+  'C.in'
+  1
+  0.00  0.00  0.00    0.0  0.0  0.0
+  'Si.in'
+  1
+  0.25  0.25  0.25    0.0  0.0  0.0
+
+! PBE, set explicitly rather than left at the default LSDA, matching
+! c_diamond.  It also makes xcgrad = 1 in STATE.OUT's header.
+xctype
+  20
+
+ngridk
+  4  4  4
+
+! Zincblende has no inversion centre at all, so this is a no-op here.  It is
+! pinned anyway so all three STATE.OUT fixtures state their frame the same
+! way, and so the atoms block, GEOMETRY.OUT and STATE.OUT cannot disagree.
+tshift
+  .false.
+
+! plot3d box: the unit cell.  plotpt3d.f90 steps i/np3d without an endpoint,
+! so with 16 points the second atom at 1/4 is exactly grid index (4,4,4).
+plot3d
+  0.000000  0.000000  0.000000
+  1.000000  0.000000  0.000000
+  0.000000  1.000000  0.000000
+  0.000000  0.000000  1.000000
+  16  16  16

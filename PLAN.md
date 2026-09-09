@@ -286,6 +286,16 @@ because that is what decides whether it is a session or a phase.
   follow-up; memory held by **child** processes, which the cgroup charges and this does
   not; and the fact that the failure lands at *teardown*, after the peak — if the peak is
   the kill, what survives is the log line, which is why it is written first.
+- **Transferring more than a charge density from Elk** (P72). The reader and the seed are
+  in for an unpolarized state of an element with no core, validated pointwise against
+  Elk's own `RHO3D.OUT` on hydrogen and on SiC. What is missing is a **magnetization** (an
+  Elk moment is a second field with its own transfer rule, and spin spirals fall under the
+  same refusal); an element **with a core**, where `STATE.OUT` alone cannot separate core
+  from valence inside a sphere — a difference against Elk's *initialisation* state does not
+  close it either, because that state's core is the free-atom one and relaxes by 1.9e-3
+  electrons inside `r < 0.2` bohr on diamond; **DFT+U**, whose matrices are trailing
+  records; and **a species carrying more than one atom**, the last blind spot of the atom
+  index. A *fixed* Elk density is refused permanently rather than outstanding.
 - **Cluster sweeps** (P34, planned and unstarted) and **the rest of P10** — k-axis
   sharding, GPU, and **the Davidson step count on a large cell**: the eigensolver takes
   roughly **12x** the steps `pw.x` does on a 157-atom slab, of which the per-band
@@ -11294,6 +11304,298 @@ on one sphere), metals, spin, spinors, spirals, meta-GGA, DFT+U, and a **nonline
 correction** — which is the one refusal that is a statement about `q` rather than about a
 dataset, since `dynmatcc.f90:105` calls `set_drhoc(xq, drc)`: two atoms' core charges
 overlap inside a nonlinear `E_xc` and that second derivative is not diagonal in the atom.
+
+
+### P72 — Reading an Elk ground state, and measuring that it buys nothing. ✅ DONE, hydrogen and unpolarized.
+
+`defumat/io/elk.py` and `defumat/io/elk_density.py`, reached by
+`Calculator.get_elk_seed(directory)`. Elk is an all-electron LAPW code and this is a
+pseudopotential plane-wave one, so their converged densities are **different objects** —
+Elk's carries the core and the nuclear cusp where this one has a smooth pseudo valence
+density normalised to `nelec`. What crosses is a **seed**: a starting guess, with
+defumat's own SCF still running on top of it. A *fixed* Elk density is refused.
+
+**The unit that can be read is a run directory, not a file.** `STATE.OUT` is unformatted
+sequential Fortran binary from `writestate.f90` and is not self-contained: it holds no
+lattice vectors, no atomic positions and no species names. `GEOMETRY.OUT` has to be
+beside it — and `elk.in` is not a substitute, because Elk's default `tshift` moves the
+origin onto the inversion centre and only `GEOMETRY.OUT` is written in that shifted frame.
+**That is measured rather than asserted**: on hydrogen it is a no-op, and on diamond, whose
+inversion centre is the bond midpoint, the same input gives atoms at `±(3/8, 3/8, 3/8)` —
+both moved, and neither at `(0,0,0)` or `(1/4,1/4,1/4)` where `elk.in` put them.
+
+**The check that says the transcription is right.** `evaluate_at` is a deliberately
+literal transcription of `rfpts` — `findmtpt`'s 27-image sphere search, `poly4`'s 4-point
+Lagrange window, `genrlmv`'s real harmonics, `wsplint`/`splint`'s quadrature weights —
+because Elk produces `RHO3D.OUT` (task 33) by calling exactly that routine. So the
+comparison is against Elk's own evaluation of its own density, and it closes at the file's
+print floor rather than at interpolation level:
+
+| | |
+|---|---|
+| pointwise against `RHO3D.OUT`, all 4096 points | **4.525e-11** absolute, **3.548e-10** relative |
+| of which inside a muffin tin | 1743, so both branches are exercised |
+| `chgmt` against `INFO.OUT` | **0.6125761996**, exact to every printed digit |
+| `chgir` against `INFO.OUT` | **0.3874238004**, exact |
+| `chgmt + chgir` | 1.000000000000 |
+| the origin, `f_00(0) Y_00` | 0.2859303012, exact — the one value that is not an interpolation |
+
+That residual is `G18.10`, not physics. Substituting a spline for `poly4` would agree at
+interpolation error instead, which is orders of magnitude larger and readable as neither
+agreement nor disagreement. Simpson's rule in place of the spline weights is **9e-6** off
+`chgmt`, which is large enough to be mistaken for a reader bug — that is why both are
+transcribed rather than improved.
+
+**A sharp sphere is not what `chgir` is.** Elk's `cfunir` is the *Fourier-truncated* step,
+so it rings at the boundary and is not zero inside the sphere. Integrating the same
+interstitial density against a sharp in-or-out step gives **0.3846593957**, a difference of
+**2.7644e-3** or **0.714%** of `chgir`. Small, but a hundred thousand times the agreement
+above: an implementation that used the sharp step would look broken against `INFO.OUT`
+while being perfectly reasonable physics. (Two effects are mixed in that number — Gibbs
+ringing of the truncated step, and a 12^3 grid staircasing a sphere — so it is an order of
+magnitude rather than a calibrated Gibbs measurement.)
+
+**The identity, and it is the phase's central claim.** A seed is only a seed if the run
+lands where it would have landed anyway. On `tests/data/elk/h_sc/scf.in` (simple cubic H,
+`a = 3.0` bohr, `ecutwfc = 40`, `conv_thr = 1e-10`):
+
+```
+atomic superposition : E = -1.080181442650 Ry   4 iterations
+Elk seed             : E = -1.080181442650 Ry   4 iterations
+dE = 6.35e-14 Ry ;  max |drho| between the two converged densities = 8.661e-08
+```
+
+The density is checked as well as the energy, because a total energy is stationary and can
+agree while the state behind it does not (the P68 lesson, one order down).
+
+**What the seed buys, in iterations: nothing, and that is the result.**
+
+| `ecutwfc` | `ecutrho` | dense grid | atomic | Elk seed | dE (Ry) |
+|---|---|---|---|---|---|
+| 12 | 48 | 8^3 | 5 | 5 | 4.4e-16 |
+| 20 | 80 | 9^3 | 4 | **5** | 3.7e-12 |
+| 40 | 160 | 15^3 | 4 | 4 | 6.4e-14 |
+
+At `ecutwfc = 20` it costs one **extra** iteration. The reason is physical rather than
+numerical: for one hydrogen atom a superposition of atomic charges is already almost the
+answer, and Elk's all-electron cusp inside the pseudisation radius is a place where its
+density is *further* from the pseudo one than the atomic guess is. **The reader is worth
+having because it bridges to an all-electron ground state, not because it is faster**, and
+that is now measured rather than assumed.
+
+**The aliasing worry was misdirected, and the measurement says so.** How much of the
+state's own norm sits past defumat's dense sphere, measured on Elk's `ngvec = 751` G-set
+rather than on the target grid where it has already aliased in:
+
+| `ecutwfc` | `ecutrho` | G kept | outside fraction | integral before renormalisation |
+|---|---|---|---|---|
+| 12 | 48 Ry | 147 | **6.72e-08** | 1.002946 |
+| 20 | 80 Ry | 341 | **2.50e-13** | 1.001697 |
+| 40 | 160 Ry | 751 | **0.0, nothing truncated** | 1.000298 |
+
+`ecutrho = 160` Ry exceeds Elk's own `gmaxvr = 12` bohr^-1 (144 Ry), so at a production
+cutoff the dense sphere contains the whole Elk G-set. **The nuclear cusp is not in this
+number at all**: it lives inside the muffin tin, which is transferred pointwise and never
+passes through a Fourier truncation. What is truncated is the smooth interstitial field,
+which is why even 48 Ry costs 7e-8. The 1.000298 residual before renormalisation is the
+sharp-versus-truncated sphere boundary above, transferred.
+
+**The traps, all of which produce a plausible wrong answer.**
+
+- **One Fortran record holds two arrays.** `write(100) rhomt, rhoir` is a *single* record
+  with both concatenated, and likewise for each of the four (muffin-tin, interstitial)
+  pairs. A reader that expects one array per record desyncs at the very first density
+  record, and the symptom reads as a byte-order problem rather than a framing one. The
+  length is asserted as an **equality** and the error says so by name.
+- **`rhomt` stores `f_lm(r)`, not `r^2 f_lm(r)`.** The `r^2` is in the integration weight
+  (`genrmesh.f90:66-68` builds `wr2mt` as spline weights and *then* multiplies by `r^2`).
+- **Padding past `nrmt(is)` is uninitialised buffer, not zeros.** The muffin-tin block is
+  dimensioned to `nrmtmax`; every slice here is `[:, :nrmt(is), ias]`.
+- **`natmtot` is `sum(natoms(is))` over all species**, not `natoms(1)`.
+- **`ias` runs species-outer, atom-inner** (`init0.f90:78-91`).
+- **`rmt(is) = rsp(nrmt(is), is)` exactly**, which is the post-`autormt` radius and not the
+  species file's own `rmt`.
+- **Elk is Hartree and defumat is Rydberg, and only the potentials carry the factor** —
+  `vclmt`, `vxcmt`, `vsmt`, `efermi`, `dlefe`. A density is e/bohr^3 in both and takes no
+  factor at all. The conversion is at the `io` boundary, as the project rule requires.
+- **Fortran `nint` is half away from zero and `np.rint` is half to even**, which reaches
+  the radial index `nint(t1 log(r/rmin)) + 1`. On exactly the boundary points a different
+  `poly4` window is picked and the residual stops being round-off. Same trap as P1's
+  Monkhorst-Pack fold, two subsystems apart.
+- **`genrlmv` is not the textbook real spherical harmonic.** Elk takes
+  `sqrt(2) Re Y_lm` for `m > 0` and `sqrt(2) Im Y_lm` for `m < 0` with the
+  Condon-Shortley phase left inside `Y`, so `p_x`, `p_y`, `d_xy`, `d_yz` and `d_xz` come
+  out with the **opposite** sign to the usual definition while `d_z2` and `d_x2-y2` do not.
+  Nothing else in this phase can catch it — the sign cancels in every norm, and the fixture
+  is one atom on a cubic site where every affected channel is zero. It would show first on
+  a real crystal, as a density mirrored in a plane, and it is pinned by
+  `test_real_spherical_harmonics_against_the_closed_forms` and by nothing else.
+- **`rhonorm` inverts the charge story.** `rhonorm.f90`, called from `rhomag.f90:24` with
+  `trhonorm` on by default, adds a uniform constant to `rhoir` and to the `l = 0` channel of
+  every `rhomt` so the total comes out right, then updates `chgmt` and sets
+  `chgir = chgtot - chgmttot`. So `chgmt + chgir = 1` **exactly, by construction**, and the
+  printed `total calculated charge = 1.000739542` with its 7.4e-4 error is **pre**-shift.
+  There is no 1e-3 discrepancy to hunt for.
+- **`zfftifc(3, ngridg, -1, z)` is `np.fft.fftn(z)/ngtot`**, and the Miller range is Elk's
+  `intgv = [n/2-n+1, n/2]` (for `n = 12`: -5..6), which is **not** `np.fft.fftfreq`'s
+  -6..5. Taking the first `ngvec` vectors sorted by `|G|` is safe because `gengvec` cuts at
+  the first vector past `gmaxvr`, so no degenerate shell is ever split — measured, kept
+  `|G|max = 11.848` against a next of 12.031 with `gmaxvr = 12`.
+- **The origin is exact and nothing else is.** `rfpts` clamps `r` up to `rsp(1)` and its
+  window starts at `ir0 = 1` there, so `rho(0) = f_00(0) Y_00` is a direct assertion about
+  `rhomt`; every other point is an interpolation.
+
+**One knowing departure.** Elk truncates the harmonic sum to `lmmaxi` whenever the
+interpolation window *starts* inside the inner region (`ir0 <= nri`); this always sums all
+`lmmaxo`. Neither `nrmti` nor `lmmaxi` is written to `STATE.OUT` for the truncation to be
+reproduced from. The two agree identically except on a three-point window straddling `nri`,
+because the file's `lm > lmmaxi` entries are **exactly zero** for `ir <= nri` — and `nri` is
+recoverable from precisely those zeros (`ElkState.nri` returns 129 here, `r = 0.0131` bohr
+against `rmt = 1.4`, so the band is 1% of the sphere radius).
+
+**The two traps a second species reaches, and why the obvious fixture would not have
+reached them.** `natmtot` and the `nrmt` padding are handled by construction and were
+tested by nothing while the only fixture was hydrogen. The fixture that closes them is
+**zincblende SiC**, committed at `tests/data/elk/sic_zb`, and the reason it is not BN is
+worth recording because BN was the first guess: **Elk's species files set `nrmt` by
+periodic-table row** — 300 for row 2, 400 for row 3, rounded at `init0.f90:363` to 297 and
+397 — and `checkmt`/`autormt` move `rmt` without ever touching `nrmt`. Boron and nitrogen
+are both row 2, so a BN fixture would have `nrmt(1) = nrmt(2) = nrmtmax` and the padding
+would stay exactly as invisible as it is on hydrogen. Carbon and silicon are rows 2 and 3,
+so `nrmt = (297, 397)` with `nrmtmax = 397`, and **carbon's rows 298–397 in the file hold
+leftovers of order 1e-3** — sixteen orders above the 1e-19 floor of a symmetry-forbidden
+channel, and a couple of per cent of the real `l > 0` density at the sphere boundary.
+Nothing about them looks like round-off. Carbon is species 1 deliberately, so the *short*
+mesh comes first and the padding bites the atom a reader checks.
+
+The fixture closed three things at once on first contact, with no change to the reader:
+
+| | |
+|---|---|
+| `chgmt` per atom against `INFO.OUT` | **4.832618957** (C) and **11.73695755** (Si), exact |
+| `chgir` | **3.430423495**, and `chgmt + chgir = 20.000000000` |
+| pointwise against `RHO3D.OUT`, 4096 points | median relative **2.4e-10**, worst **7.2e-9** |
+| the two nuclei | 129.9024835 and 2094.5177730, both exact |
+| `xcgrad` | **1**, where hydrogen has 0 — a versioned header field, and a reader that assumed either value reads everything after it at the wrong offset |
+
+**The two fixtures agree in the median and differ only in the tail**, and both halves of
+that have a mechanism. `plot3d.f90` writes the coordinates *and* the value in one
+`(7G18.10)`, so each carries ten significant digits and no more.
+
+* **The median is the value's own rounding**, and it is the same floor on both: 7.3e-11
+  relative on hydrogen, 2.4e-10 on SiC. Nothing can be measured below it.
+* **The tail is the coordinate's rounding, times the density's gradient**, and only SiC has
+  one. Its worst *relative* point, 7.2e-9, sits 0.36 bohr from a carbon nucleus where
+  `|grad rho|` is 20 e/bohr^4, and the 5e-10 bohr rounding of two coordinate columns is
+  worth 1.5e-8 there against an observed 1.48e-8. Hydrogen has no such tail because its
+  grid step is `3/16 = 0.1875` and **every one of its coordinates prints exactly**, where
+  SiC's is `4.119225/16 = 0.2574515625` and odd multiples from five upward need eleven
+  digits.
+
+So hydrogen's 4.5e-11 is **not** the achievable target and should not be read as one: it is
+a lattice constant that happens to be short in decimal. A tighter comparison anywhere needs
+Elk to print more digits, not a better transcription.
+
+The worst *absolute* residual is a third thing again and is worth separating, because
+conflating it with the relative one invents a problem. It is **3.5e-7 at the silicon
+nucleus**, `(1/4, 1/4, 1/4)`, where `rho = 2094.5177730` — a value whose ten printed digits
+put the floor at 5e-7, and whose coordinate `a/4 = 2.0596125` needs only eight and so
+prints exactly. So the largest absolute disagreement in the file is pure value rounding,
+and it lands on **the cleanest point there is**: `rfpts` clamps `r` up to `rsp(1)` at a
+nucleus, so that value is `f_00(rsp(1)) Y_00` read straight out of `rhomt` — the same
+identity the hydrogen origin check uses, and not an interpolation at all.
+
+**Diamond cannot do this job and SiC can**, which is the reason the two-species fixture is
+SiC rather than the elemental crystal stage 5 wants: diamond's two carbons are related by
+inversion through the bond midpoint, so their `rho_lm` differ by `(-1)^l` — `l = 0, 4, 6`
+agree to 1e-14, `l = 3` is exactly opposite, and `l = 1, 2, 5` vanish under the `Td` site
+symmetry. The `l = 0` origin equality, which is the sharpest check in this phase, therefore
+**cannot detect a swapped `ias` on diamond**: both sites print the same value. SiC settles it
+with no symmetry argument at all, 2095 against 130.
+
+**What that still leaves untested.** `natoms = [2, 1]` — the interaction of the
+species-outer and atom-inner loops, where a species has more than one atom. Both committed
+fixtures have one atom per species.
+
+**Refusals, all at read time except the last.** A spin-polarized state (`spinpol`), which
+covers spin spirals since those are spin-polarized Elk runs; a DFT+U state (`dftu`) or a
+fixed tensor moment one (`ftmtype`), whose occupation matrices sit in trailing records
+nothing here consumes; anything written by Elk older than 2.0.0, which `readstate.f90`
+refuses itself; a missing `GEOMETRY.OUT`; a geometry from a different run (the species
+count is the one cross-check the two files allow); a calculation on a different cell; a
+calculation with `nspin_mag != 1`; and a run whose `nelec` is more than 50% away from what
+the state integrates to, which is the frozen core arriving. They fire **before** any
+reconstruction, so a run that cannot take the seed says so in the first line.
+
+A *fixed* Elk density — no defumat SCF above it — is refused in the docstrings and by there
+being no code path that would do it. No flag was invented to reject something nothing
+offers.
+
+**Performance** (`PERFORMANCE.md`). Reading the pair is 0.001 s warm, reconstructing onto
+the 15^3 dense grid 0.036 s, against 2.5 s for the SCF it seeds — so the seed is 1.5% of
+the run it feeds, and the run is the same length either way, which is the null result in
+wall clock as well as in iterations. **No reference pair is owed for the transfer itself**
+— neither code reads the other's ground state — but one *is* owed for `evaluate_at`, which
+is `rfpts`, and Elk's task 33 is that routine on a grid. Timed on the same work, reading
+the state and evaluating 4096 points and writing them: **Elk 0.17 s against 0.376 s here
+per process, 2.2x**, falling to 0.137 s and parity on a repeat call inside a live process.
+The gap between those two is entirely lazy imports — the first read pays `scipy.io` and the
+first evaluation `scipy.special` — and the per-process row is the one to quote, because
+nobody avoids paying them once. Two further things are not like-for-like and both favour
+Elk: its figure includes `init0`, which this side does not repeat, and the Python process
+pays 0.93 s of imports before any of it starts, which on a 0.17 s task dominates end to end
+and is stated separately rather than folded in.
+
+**Tests.** `tests/unit/test_elk_reader.py` (25 tests, 1.4 s, in the gate) covers the
+header, the harmonic convention, `poly4`, the spline weights, the species-outer atom index
+on a synthetic two-species geometry, and every refusal — the last through synthetic
+`STATE.OUT` headers written with `scipy.io.FortranFile`, since each refusal fires before the
+first density record and a header-only file is enough.
+`tests/regression/test_elk_seed.py` (9 tests, 6 s, marked `slow`) carries the numbers above,
+the identity and the SiC reconstruction. Both files skip cleanly without their fixtures.
+The regression file is `slow` by the phase plan rather than by its cost: at 6 s it would sit
+comfortably in the gate, and moving it there is a free decision for whoever wants the
+identity checked on every push.
+
+**What is outstanding.**
+
+- **Spin (stage 4).** An Elk magnetization is a second field with a transfer rule of its
+  own. Spin spirals fall under the same refusal, being spin-polarized Elk runs.
+- **An element with a core (stage 5).** `rhomt` includes the core and `STATE.OUT` alone
+  cannot separate it — there is nothing in the file that distinguishes core from valence
+  charge inside a sphere, and it is not subtle: the density at a carbon nucleus is 129.83
+  against hydrogen's 0.286, and **45% of diamond's `chgmt` is core**. The intended route is
+  a **difference** transfer, and the fixture for it is diamond (fcc `a = 6.74` bohr, two C,
+  PBE), which the elkpy side has committed with a second state file beside the converged
+  one. Three things about that route are measured rather than assumed, and all three make
+  it harder than it looks:
+
+  * **The second file is not a one-iteration state.** Elk's task 9006 gives `gndstate`'s
+    initialisation plus the top of its first iteration and stops before `rhomag`, so what
+    it holds is `rhoinit`'s superposition of **free atomic** densities. Describing it as a
+    density after one SCF iteration would be wrong.
+  * **The core does not cancel in the difference.** The initial file's core is `rhosp`'s
+    free-atom core and the converged file's is `gencore`'s core in the crystal potential,
+    and they are different functions — on diamond they differ by 1.67 e/bohr^3 out of 460
+    at the innermost mesh points, and by **1.9e-3 electrons inside `r < 0.2` bohr**. So
+    `rho_SCF - rho_init` is the valence change *plus* the core relaxation, and carbon's
+    `2s` has amplitude at the nucleus too, so there is nothing in `STATE.OUT` that
+    separates them. Getting the core residue as a number rather than a bound needs Elk
+    patched to export `rhocr`.
+  * **A converged state's density and potential are one mixing step apart.** `mixrho` is
+    false by default, so it is the *potential* that Elk mixes (`gndstate.f90:211`), and
+    `rhomag` is written at `:189` — before the mix. The bound is `epspot`, not zero. The
+    initialisation file is the exception and the useful one: `mixerifc` is never called
+    for it, so it is the one internally consistent `(rho, v)` pair Elk writes.
+
+  A disagreement at roughly `epspot` is that mixing step, not a transcription bug. It has
+  looked like a bug four times on the elkpy side.
+- **DFT+U**, whose occupation and potential matrices are the trailing records.
+- **A fixed Elk density**, refused permanently and not outstanding: an all-electron density
+  is not a pseudo valence density, and no SCF-free splice of the two is meaningful.
+- **A species with more than one atom in it**, which is the last blind spot of the atom
+  index: both committed fixtures have `natoms = [1]` or `[1, 1]`, so the species-outer and
+  atom-inner loops never interact.
 
 ## 4. Validation strategy
 

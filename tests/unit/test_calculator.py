@@ -14,7 +14,9 @@ Every test here is one of three claims, and only the first is about brevity:
   longer described, returning a number rather than raising.
 """
 
+import ast
 import inspect
+import textwrap
 
 import numpy as np
 import pytest
@@ -242,14 +244,32 @@ def test_every_get_method_is_a_delegation():
     implementation of something already validated against QE -- exactly what
     the package's cross-checks exist to prevent. Length is a crude proxy and a
     deliberately generous one.
+
+    **The docstring is not counted.** It was, and the first method to fail this
+    test failed it on documentation: ``get_vertical_transport``'s body is 11
+    lines under a budget of 30, and its 22-line docstring took the total to 31.
+    Explaining what a quantity is has nothing to do with computing it here, so
+    counting the two together measured the wrong thing and pushed the wrong way.
+    The budget on the body alone is 20, measured as the span from the first
+    statement after the docstring to the last. That is tighter than the old rule
+    was for every method in the class: the longest span is
+    ``get_scf``'s 17, and ``get_vertical_transport``'s is 12.
     """
     for name, method in inspect.getmembers(Calculator, inspect.isfunction):
         if not name.startswith("get_"):
             continue
-        body = inspect.getsource(method)
-        code = [line for line in body.splitlines()
-                if line.strip() and not line.strip().startswith("#")]
-        assert len(code) < 30, f"{name} is doing too much to be a delegation"
+        tree = ast.parse(textwrap.dedent(inspect.getsource(method))).body[0]
+        statements = tree.body
+        if (statements and isinstance(statements[0], ast.Expr)
+                and isinstance(statements[0].value, ast.Constant)
+                and isinstance(statements[0].value.value, str)):
+            statements = statements[1:]
+        assert statements, f"{name} has no body at all"
+        span = statements[-1].end_lineno - statements[0].lineno + 1
+        assert span <= 20, (
+            f"{name} is {span} lines of body, budget 20 -- too much to be a "
+            f"delegation"
+        )
 
 
 def test_a_per_call_setup_option_rebuilds_the_calculation(pseudo_dir):

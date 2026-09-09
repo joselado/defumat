@@ -3125,6 +3125,116 @@ functional than the one being differentiated.
 \end{refuses}
 
 % =====================================================================
+\section{Continuing an all-electron ground state}
+
+Elk is an all-electron LAPW code and this is a pseudopotential plane-wave one,
+so their converged densities are different objects: Elk's carries the core
+electrons and the nuclear cusp, and this one carries a smooth pseudo valence
+density normalised to the valence electron count. What crosses between them is a
+\emph{starting guess}, and the run's own SCF still happens on top of it.
+
+Inside each muffin tin Elk stores the density as a real-spherical-harmonic
+expansion on a logarithmic radial mesh, and everywhere else as a periodic
+function on a uniform grid,
+\begin{equation*}
+  \rho(\mathbf r) =
+  \begin{cases}
+    \sum_{lm} f_{lm}(r)\,R_{lm}(\hat{\mathbf r}), & |\mathbf r - \mathbf R_a| < r_a,\\[4pt]
+    \sum_{\mathbf G} \tilde\rho(\mathbf G)\, e^{i\mathbf G\cdot\mathbf r}, & \text{otherwise,}
+  \end{cases}
+\end{equation*}
+so putting it on a plane-wave grid means deciding which region each grid point
+is in, then interpolating radially or summing the Fourier series. The muffin-tin
+part is written in pointwise and is never Fourier truncated, which is why the
+nuclear cusp transfers exactly and why nothing is lost to aliasing.
+
+\begin{pycode}
+from defumat import Calculator
+
+calc = Calculator.from_file("scf.in", pseudo_dir="pseudo")
+seed = calc.get_elk_seed("elk_run/")     # STATE.OUT beside GEOMETRY.OUT
+result = calc.get_scf(starting_density=seed)
+\end{pycode}
+
+The argument is an Elk \emph{run directory} rather than a file:
+\code{STATE.OUT} carries neither the lattice vectors nor the atomic positions,
+so \code{GEOMETRY.OUT} has to be beside it. And \code{elk.in} is not a
+substitute, because Elk's default \code{tshift} moves the origin onto the
+inversion centre and only \code{GEOMETRY.OUT} is written in that shifted frame.
+Pass \code{report=[]} to get back a \code{SeedReport}, which is what the
+reconstruction measured on the way: what it integrated to before renormalisation,
+how many of Elk's reciprocal lattice vectors this run's density cutoff kept, and
+what fraction of the norm sat outside it.
+
+\code{ElkState} is the reader on its own, for looking at the state rather than
+seeding with it. \code{read\_elk\_state} is the same thing as a function and
+\code{read\_elk\_geometry} reads \code{GEOMETRY.OUT} alone, returning the
+\code{ElkGeometry} that \code{state.geometry} also holds; all four are exported
+from \code{defumat.io}.
+
+\begin{pycode}
+from defumat.io import ElkState
+
+state = ElkState.read("elk_run/")
+print(state.rmt, state.efermi)            # muffin-tin radii; e_F in Rydberg
+print(state.muffin_tin_charges())         # the charge inside each sphere
+print(state.interstitial_charge())        # and the charge outside all of them
+rho = state.evaluate_at(points)           # the density at arbitrary points
+\end{pycode}
+
+The pieces of the reconstruction are exported too, from
+\code{defumat.io.elk\_density}, because each is a separately checkable part of
+somebody else's convention rather than an internal:
+\code{real\_spherical\_harmonics} (the sign convention is Elk's and is not the
+textbook one), \code{poly4} (the 4-point Lagrange radial window),
+\code{spline\_weights} (the quadrature the radial integrals use, where Simpson's
+rule is 9e-6 away), \code{characteristic\_function} (the Fourier-truncated step
+that separates the two regions) and \code{interstitial\_coefficients}
+(\code{rhoir} as a G-vector list). \code{density\_on} is what
+\code{get\_elk\_seed} calls.
+
+\textbf{What it is worth, measured.} On simple-cubic hydrogen at $a = 3.0$~bohr,
+the reconstruction agrees with Elk's own evaluation of its own density at every
+one of the 4096 points Elk printed, to $4.5\times10^{-11}$, which is the
+precision the file was printed at rather than any error in the transfer. The
+charge inside the sphere is $0.6125761996$ and outside it $0.3874238004$, both
+exact to every digit Elk printed. And a run started from that density and a run
+started from a superposition of atomic charges converge to the same state:
+$-1.080181442650$~Ry either way, agreeing to $6\times10^{-14}$~Ry with converged
+densities $9\times10^{-8}$ apart.
+
+\textbf{It buys no iterations, and that is the honest result.} Both runs take
+four. At a lower cutoff the seeded one takes \emph{one more}. For a hydrogen
+atom a superposition of atomic charges is already almost the answer, and the
+all-electron cusp inside the pseudisation radius is a place where Elk's density
+is further from the pseudo one than the atomic guess is. The reader is worth
+having because it bridges to an all-electron ground state, not because it is
+faster.
+
+\begin{refuses}
+\textbf{Refuses.} A \textbf{spin-polarized} Elk state, and a
+\textbf{spin spiral} with it --- a magnetization is a second field with a
+transfer rule of its own, and a seed that carries the charge while silently
+dropping the moment would start a magnetic run from a non-magnetic guess. A
+\textbf{DFT+U} or fixed-tensor-moment state, whose occupation matrices are
+trailing records nothing here reads. A state written by Elk older than
+\textbf{2.0.0}, which Elk's own reader refuses. A directory with no
+\code{GEOMETRY.OUT}, or one whose geometry is from a different run. A
+calculation on a \textbf{different cell} --- a density is transferable between
+identical lattices and there is no interpolation here that would make anything
+else mean something. A calculation with more than one spin channel. And an
+element with a \textbf{core}: the muffin-tin density includes the core states
+and nothing in \code{STATE.OUT} separates them from the valence charge, so a run
+whose valence electron count is far from what the state integrates to is refused
+by name rather than scaled to fit. Hydrogen, with no core at all, is what this
+path is for.
+
+Passing an Elk density as a \textbf{fixed} density, with no SCF above it, is not
+offered: the two codes' converged densities are different functions wherever
+there is a core, and no splice of the two would be a solution of anything.
+\end{refuses}
+
+% =====================================================================
 \section{Performance: dials, memory and GPUs}
 
 \textbf{Two batching dials} control how much is in flight, and both defaults

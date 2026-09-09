@@ -35,7 +35,7 @@ noncollinear magnetism, spin spirals, DFT+U, forces, stress and both relaxations
 topological invariants, the whole linear-response stack (dielectric constants, Born
 charges, phonons at `Gamma`), third derivatives (Raman, electrostriction, the
 elasto-optic tensor), and a long tail of quantities taken from Elk that `pw.x` does not
-have. Phases run **P0 through P70**; the ones still open, and the exact term each is
+have. Phases run **P0 through P72**; the ones still open, and the exact term each is
 missing, are indexed at the head of `PLAN.md` §3.
 
 **Where to look for what:**
@@ -184,6 +184,14 @@ in `docs/features.tex`'s amber boxes.
   `dmxc_lsda` does it on both branches), so what was refused as an analysis was a
   convention — and masking the *argument the derivative is taken at* is what works, where
   clipping the density leaves the primal singular and the tangent `0 * inf`.
+- **Starting from an all-electron ground state** (P72): Elk's converged density read off
+  its own `STATE.OUT` and put on this run's grid, `Calculator.get_elk_seed`. The unit read
+  is a run *directory*, because `STATE.OUT` carries neither the cell nor the positions and
+  `tshift` moves the origin. `rfpts` is transcribed **literally** so the check can be
+  Elk's own `RHO3D.OUT`, pointwise. The result is a **null**: the seed buys no iterations,
+  because the cusp it carries lives inside the pseudisation radius where the pseudo
+  density is built not to look like it. A spin-polarized state, a spiral, DFT+U, an element
+  with a **core** and a *fixed* Elk density are refused by name.
 
 **Gamma-only storage** (P68) is a **memory** feature rather than a speed one:
 `K_POINTS gamma` stores one plane wave of each `(G, -G)` pair, which halves `npwx` and
@@ -542,6 +550,7 @@ Paths relative to `quantum_espresso/qe-7.5-ReleasePack/qe-7.5/`.
 | Orbital magnetization | `PW/src/orbm_kubo.f90` (reached by `lorbm`), `PW/src/kpoint_grid.f90` (`kpoint_grid_efield`), `PW/src/setup.f90` (what it refuses) | the assembly is transcribed and the mesh with it -- the dual states are `zgefa`/`zgedi` on the neighbour overlap, which is the covariant derivative. Two conventions are QE's and are documented rather than inherited silently: `ef` is imported and never used, so what is printed is `M(mu = 0)`, and the two printed terms are not the papers' LC/IC split. The vector direction is `b_l` while the derivatives are along the other two crystal directions, which is exact for any lattice (`a_i x a_j = Omega b_l/(2 pi)`) |
 | Fermi-surface nesting | no QE counterpart — Elk's `src/nesting.f90`, manual task 105 | Elk writes an `O(N_q N_k)` double loop with `mod(ivk + ivq, ngridk)`; that fold makes the sum a cyclic cross-correlation, so `ifftn(|fftn(g)|^2)` replaces it (`defumat/response/nesting.py`) and the loop is kept as `method = "direct"`. The wedge is unfolded with `grid_equivalence` — `tetra.f90`'s `equiv`, Elk's `ivkik` — and the group it is unfolded with must be the group `denser_grid` reduced it with (`workflows/nscf.py:grid_symmetry`) |
 | Vertical tunnelling transport | no `pw.x` or Elk counterpart for the quantity — QE's `PWCOND/src/` (`transmit.f90`, `compbs.f90`) is a Landauer transmission of a *different geometry*: two semi-infinite crystalline leads, one conductance per energy, no point contact and so no map | nothing is transcribed. The exit plane's Gram matrix is a closed-form Miller-index orthogonality (`transport/substrate.py`), the tip amplitudes are P65's sampler made complex and per-k (`basis/sample.py`), and the contraction is one quadratic form. The index order is the one trap: `G(r,r')` conjugates `psi` in the **exit** variable |
+| Reading an Elk ground state | no QE counterpart — `pw.x` reads its own `charge-density.dat` and no foreign format. Elk's `src/writestate.f90` (the binary layout), `rfpts.f90` with `findmtpt`/`poly4`/`genrlmv`/`wsplint` (evaluating a muffin-tin function at a point), `rhonorm.f90` (why `chgmt + chgir = 1` exactly), `gencfun.f90` (the truncated step), `genrmesh.f90` (`rmt = rsp(nrmt)` and where the `r^2` lives) | `rfpts` is transcribed **literally**, because the check that says the transcription is right is a pointwise comparison against `RHO3D.OUT`, which Elk produces by calling it (task 33). A spline in place of `poly4` would leave a residual at interpolation level, readable as neither agreement nor disagreement. The unit read is a run *directory*: `STATE.OUT` carries no cell and no positions, and `tshift` means the positions must come from `GEOMETRY.OUT` rather than from `elk.in`. Only the potentials and `efermi` carry the Hartree-to-Rydberg factor |
 | Berry phase / topology | `PW/src/bp_c_phase.f90` (the ultrasoft `q_ij(b)` and the k-string overlaps), `Modules/bfgs`-free | the invariants themselves have no QE counterpart to transcribe — `defumat/topology/` follows Fukui-Hatsugai-Suzuki, Yu-Qi-Bernevig-Fang-Dai and Fu-Kane, with `bp_c_phase.f90` as the reference for how the augmentation charge enters an overlap between two different k-points |
 | Velocity / position operator | `PW/src/commutator_Hx_psi.f90`, `PP/src/` Berry-phase code | QE hand-codes `[H,r]` term by term; here it is one `jvp` of `H(k)` at a frozen sphere (`response/velocity.py`), since `dH/dk_a = i[H, r_a]` in the periodic gauge. The overlap carries a velocity too, so a band velocity is `<psi|dH/dk - eps dS/dk|psi>` |
 | Linear response / DFPT | `LR_Modules/cgsolve_all.f90`, `ch_psi_all.f90`, `orthogonalize.f90`, `h_prec.f90`, `setup_alpha_pv.f90`, `incdrhoscf.f90`, `symdvscf.f90`; `PHonon/PH/solve_e.f90`, `dvpsi_e.f90`, `dvqpsi_us.f90`, `dielec.f90`, `zstar_eu.f90` | the linear solve, the projector and the assembly are transcribed; the *perturbations* are not. `dv_of_drho` is one `jvp` of `v_of_rho` (which already drops the `G = 0` Hartree term), the E-field's commutator is the velocity operator, and `dvqpsi_us` is one `jvp` through `at_positions`. **A response on a reduced k-set is a polar vector field and must be symmetrised as one** |
