@@ -157,6 +157,87 @@ for name, t, c in rows:
     bilayer         1.93       0.1562                 26.4
 
 
+## Two magnets, one junction
+
+Nothing so far has cared which way an electron's spin points. Make both
+electrodes magnetic and it becomes the whole answer. A magnetic tip counts the
+electrons whose spin lies along its own moment, a magnetic substrate accepts the
+ones whose spin lies along its, and the sheet in between carries a moment of its
+own that the current has to pass through on the way.
+
+That is a spin valve. Each electrode counts spins along a single direction, so
+the transmission is **linear** in the tip's moment: three tip directions fix the
+current for every other one. The curve below is drawn from three of the thirteen
+points, and the other ten land on it.
+
+Where that curve peaks is not where either electrode points. The sheet between
+them has a moment of its own, lying in the plane and turned away from the
+substrate's, and what the junction favours is set by all three together. The
+swing between the largest and smallest current is the tunnelling
+magnetoresistance, which is what a spin-polarized microscope reads off a magnetic
+surface.
+
+The sheet below is a square lattice of hydrogen and both electrodes are 90 per
+cent polarized. `spin` sets the substrate's moment and `tip_spin` the tip's.
+
+
+```python
+magnet = Calculator.from_file('../tests/data/qe/h-sheet-noncolin.in',
+                              pseudo_dir='../tests/data/pseudo')
+
+# the substrate's moment held along x, the tip's turned through the plane
+junction = dict(exit_height=0.15, height=0.85, shape=(20, 20),
+                broadening=0.05, spin=(1.0, 0.0, 0.0), polarization=0.9)
+angles = np.linspace(0.0, 360.0, 13)
+current = np.array([
+    magnet.get_vertical_transport(
+        tip_spin=(np.cos(np.radians(a)), np.sin(np.radians(a)), 0.0),
+        tip_polarization=0.9, **junction).image.mean()
+    for a in angles])
+
+print(f'antiparallel / parallel current: {current[6] / current[0]:.2f}')
+```
+
+    [defumat] a vertical transmission: no ground state cached, running the SCF first (conv_thr = 1e-10). Call get_scf() to do this explicitly.
+
+
+    antiparallel / parallel current: 5.31
+
+
+
+```python
+antiparallel = magnet.get_vertical_transport(
+    tip_spin=(-1.0, 0.0, 0.0), tip_polarization=0.9, **junction)
+
+# three tip directions fix the whole curve, the current being linear in the
+# tip's moment: the transmission at 0, 90 and 180 degrees
+c0 = 0.5 * (current[0] + current[6])
+cx, cy = 0.5 * (current[0] - current[6]), current[3] - c0
+fine = np.radians(np.linspace(0.0, 360.0, 361))
+
+fig, ax = plt.subplots(1, 2, figsize=(9.8, 3.8))
+ax[0].plot(np.degrees(fine), c0 + cx * np.cos(fine) + cy * np.sin(fine), '-',
+           color='0.6', label='from three directions')
+ax[0].plot(angles, current, 'o', color='crimson', label='calculated')
+ax[0].set(xlabel='angle between the two moments (degrees)',
+          ylabel='transmission (arbitrary units)', xticks=[0, 90, 180, 270, 360])
+ax[0].legend(frameon=False)
+xy = antiparallel.coordinates.reshape(-1, 2)
+field = antiparallel.image
+ax[1].tricontourf(xy[:, 0], xy[:, 1], field.ravel() / field.max(), 60,
+                  cmap='afmhot')
+ax[1].set(title='antiparallel electrodes', xlabel='bohr', ylabel='bohr',
+          aspect='equal')
+fig.suptitle('A spin valve read one tip position at a time', fontsize=13)
+fig.tight_layout()
+```
+
+
+    
+![png](41_vertical_transport_files/41_vertical_transport_12_0.png)
+    
+
+
 ## Reading the map
 
 `flow.image` is proportional to a conductance, not equal to one: how strongly the
@@ -170,7 +251,8 @@ at a time. It is zero for graphene and it is most of the answer for the bilayer.
 
 Passing `energies=` sweeps the tip energy and costs almost nothing extra, since
 where the wavefunctions sit does not depend on it. `spin=` gives a magnetic
-substrate, which counts only the electrons whose spin points along its moment.
+substrate and `tip_spin=` a magnetic tip, each counting only the electrons whose
+spin points along its own moment, and either may be used without the other.
 
 ---
 

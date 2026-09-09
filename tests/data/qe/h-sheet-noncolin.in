@@ -1,0 +1,39 @@
+! A magnetic square sheet of hydrogen, run noncollinear: the cheapest cell that
+! is a two-dimensional magnet with a tip plane above it and a substrate plane
+! below. Used by tests/regression/test_transport.py and by
+! notebooks/41_vertical_transport.ipynb (PLAN.md P66).
+!
+! The lattice constant is 8 bohr rather than h-sheet.in's 5, which is what makes
+! the sheet magnetic: at 5 bohr the atoms are close enough that the band forms
+! and the moment collapses.
+!
+! **The moment is put in a generic direction on purpose** (angle1 = 90 puts it
+! in the plane, angle2 = 40 turns it away from x). A moment lying along a
+! cartesian axis has no m_y, and a transposed spin index in the tip's
+! contraction -- which returns the answer for a tip at (n_x, -n_y, n_z) -- would
+! then agree with the right one exactly. The check needs m_y to be nonzero.
+!
+! nosym and one k-division along the stacking axis are both required by the
+! quantity, for the reasons h-sheet.in states.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 8.0, celldm(3) = 3.0,
+    nat = 1, ntyp = 1,
+    noncolin = .true., starting_magnetization(1) = 0.8,
+    angle1(1) = 90.0, angle2(1) = 40.0,
+    ecutwfc = 15.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.05
+    nosym = .true.
+    nbnd = 16
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H 0.0 0.0 0.5
+K_POINTS {automatic}
+ 4 4 1 0 0 0

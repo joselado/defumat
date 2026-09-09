@@ -945,6 +945,13 @@ class Calculator:
         ``exit_height`` is the substrate plane's crystal coordinate and
         ``height`` the tip plane's, with the material between them. The k-set
         must be the **whole** grid, which ``grid`` builds.
+
+        **Both leads can be magnetic, and the names are asymmetric.** ``spin``
+        and ``polarization`` describe the **substrate**, which is the opposite
+        of :meth:`get_stm`, where they describe the tip; the tip's own moment is
+        ``tip_spin`` / ``tip_polarization``. Given both, the map depends on the
+        angle between the two moments, which is a tunnelling-magnetoresistance
+        image.
         """
         from defumat.workflows.transport import run_vertical_transport
 

@@ -10311,7 +10311,7 @@ enters.
 `defumat/transport/` (`substrate.py`, `green.py`), `sample_wavefunctions` in
 `defumat/basis/sample.py`, `smeared_delta` in `defumat/stm/image.py`,
 `defumat/workflows/transport.py`, `Calculator.get_vertical_transport`,
-`tests/unit/test_transport_machinery.py` (25), `tests/regression/test_transport.py` (17),
+`tests/unit/test_transport_machinery.py` (40), `tests/regression/test_transport.py` (24),
 two committed inputs (`h-sheet.in`, `graphene-monolayer.in`) and
 `notebooks/41_vertical_transport.ipynb`.
 
@@ -10451,6 +10451,71 @@ at 1.6 bohr above the atom, 1.7e-2 at 6.6 bohr), which is the augmentation charg
 ringing in the vacuum, where `exit_overlap` carries no augmentation at all. Norm-conserving is
 **4.6e-13**.
 
+**A magnetic tip, and it is the coherent half of the same expression.** The substrate was
+the polarizer first (`spin`, `polarization`, a 2x2 acceptance inside `S_k`) and the tip's
+spin was *traced over* -- which is a nonmagnetic tip, and shows in the assembly as the two
+spinor components' quadratic forms added **incoherently**. A polarized tip couples through
+`Gamma_t = gamma_t P_t`, `P_t = (1 + P n.sigma)/2`, and then they are contracted instead:
+
+    T(r) = sum_k w_k Tr_spin[ P_t M_k(r) ],   M_k[s,s'] = a_s^T S_k a_{s'}^*
+
+(`spin_transmission`, `tip_spin`/`tip_polarization`). `M` is itself a Gram matrix in
+tip-spin space -- `A^T S A^*` for the `(nbnd, 2)` amplitude block -- so **the non-negativity
+above survives**: `v^dag M v = e^dag S e` and `Tr[P_t M] = Tr[P_t^{1/2} M P_t^{1/2}] >= 0`.
+It is blind to a degenerate rotation for the reason the unpolarized form is, being bilinear
+in `a` and `a*`; the incoherent branch still needs `channel_basis`, and both components are
+rotated by the same unitary because it mixes bands and not spins.
+
+**The names are asymmetric with P65's and that is deliberate**: there `spin` is the *tip*,
+here it is the *substrate*, because the substrate had it first and runs written against it
+should not move. `tip_spin`/`tip_polarization` are the new pair, and both docstrings say so
+in their first paragraph rather than in a footnote.
+
+**The check is P65's spin-polarized image, and it needs a moment in a generic direction.**
+With `exit_region = "volume"` the Gram matrix is the identity and `T` reduces to
+`sum_kn w_k delta(E - e) v_n^dag P_t v_n`, which is `[rho + P n.m]/2` -- `run_stm(spin=n,
+polarization=P)`, through a path that shares no line: this contracts a 2x2 matrix of
+sampled amplitudes, that builds a four-component density on the FFT grid and projects it.
+Measured on a spinor hydrogen sheet whose moment is put at `angle1 = 90, angle2 = 40` with
+a tip along `(1,1,1)` and `P = 0.85`: **5.8e-13** relative. The generic angles are the
+point. **The transposed index order `M[s,s'] = a_{s'}^T S a_s^*` is P54's and P66's trap one
+level up**: `M` is Hermitian, so its transpose is its conjugate and contracting it with
+`P_t` returns `Tr[P_t^* M]`, which is the answer for a tip at `(n_x, -n_y, n_z)` -- real,
+non-negative, positive semi-definite, blind to a degenerate rotation, exact in the
+Tersoff-Hamann limit whenever the sample's moment has no `y` component, and wrong. On the
+generic moment above the mirrored tip's image differs by a factor of **two**, so the check
+has something to catch; on the `angle1 = 90` cell the earlier tests use it would have
+differed by nothing at all.
+
+**The identities.** `P_t(n, P) + P_t(-n, P) = 1`, so the two tips partition the map a
+nonmagnetic one draws: **3.1e-16** relative, with the substrate polarized along a third
+direction at the same time. `P = 0` is exactly half the unpolarized map (**1.5e-16**), which
+is P65's convention for a tip with no moment. `P_t = 1` reproduces the traced sum to 1e-13
+in the algebra, and `tip_spin = None` takes the old branch *unchanged*, so every number
+above in this section is untouched. Against the definition: the 2x2 spinor Green's function
+built on a real-space grid and integrated as `int dr' Tr[P_t G Gamma_s G^dag]`, with **both**
+leads' acceptances off-diagonal, agrees with the contraction to **1e-12** -- the only check
+that pins the index order without an SCF.
+
+**The new capability is the angle between the two moments**, which is a tunnelling
+magnetoresistance map and needs both polarizers at once. On the same sheet with both leads
+at `P = 0.9`, parallel against antiparallel is a factor of **5.3** (`T_par/T_anti = 0.189`,
+and it is the *antiparallel* configuration that passes more, the vacuum amplitude at `E_F`
+being almost entirely the channel antiparallel to the atomic moment). A tip perpendicular to
+the substrate sits at the mean of the two to **5e-6**, the residue being that the sheet's
+moment is not exactly in-plane after the SCF -- which is the same 1e-5 the `spin = "z"`
+substrate test already measures.
+
+**Collinear is exact rather than approximate**, because spin is conserved: the two channels
+are two calculations, each lead is a weight `(1 +- P)/2` on them, and the two weights simply
+multiply -- two spin filters in series. A fully polarized tip on one channel and a fully
+polarized substrate on the other pass **exactly zero**, and that gets its own warning: the
+existing "identically zero" message blames the k-set, which would be a wrong diagnosis of a
+right number.
+
+**No `+n` against `-n` contrast was added to `notes`.** It would double the cost of every
+call to report a number two calls already give, which is metadata for its own sake.
+
 **Refused by name.** A k-set with more than one division along the stacking axis (lateral
 momentum is conserved exactly and the perpendicular one is not, so two `k_perp` at the same
 `k_par` interfere with a phase depending on where the exit plane sits, and the count of lateral
@@ -10460,8 +10525,10 @@ the *whole* point group while only the subgroup leaving the exit plane in place 
 geometry — a mirror through the slab exchanges the tip side with the substrate side; `grid=`
 builds the **whole** grid for that reason (`whole_grid`, not `denser_grid`), and unfolding is
 not the escape it is for P52 because unfolding a wavefunction means rotating it. A tilted exit
-plane. A plane inside an augmentation sphere. A spin-selective substrate on a run with no
-magnetization, and a transverse direction on a collinear one (P65's reasons, unchanged). And
+plane. A plane inside an augmentation sphere. A spin-selective substrate, **or a spin-polarized tip**, on a run
+with no magnetization -- every direction would take half of everything, which is the charge
+map again -- and a transverse direction on a collinear run for either lead, `m_x` and `m_y`
+being absent there rather than zero (P65's reasons, unchanged). And
 P65's three whole: a spin spiral, a constrained `tot_magnetization`, an applied magnetic field.
 
 **Warned rather than refused**: the atoms not lying between the two planes. A cell is periodic,
@@ -10470,7 +10537,9 @@ planes on the same side the electron tunnels through the vacuum and around the p
 a real number, and not this one.
 
 **Not claimed**: a finite contact patch (which breaks the k-diagonality and makes the coherent
-block the whole `nk x nbnd` set), a tip with structure beyond an s-wave, a self-consistent
+block the whole `nk x nbnd` set), **a tip with structure beyond an s-wave** -- a *magnetic*
+tip is still a point contact, and giving `Gamma_t` a spin structure says nothing about its
+spatial one, so this stays outstanding -- a self-consistent
 treatment of the leads' own potential, and an absolute conductance — the two couplings are
 unfixed prefactors, so what the result carries is the map and its contrast.
 

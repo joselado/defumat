@@ -2900,6 +2900,31 @@ physically. $S_{\mathbf k}$ is a Gram matrix, so the transmission is
 non-negative by construction and is blind to a rotation inside a degenerate
 multiplet.
 
+\textbf{Either electrode can be magnetic.} A spin-polarized substrate is a
+$2\times2$ acceptance $P_s = (1 + P_s\,\hat{\mathbf n}_s\!\cdot\!\boldsymbol\sigma)/2$
+sitting \emph{inside} $S_{\mathbf k}$, between two bands. A spin-polarized
+\emph{tip} is the same matrix on the other side, $\Gamma_t = \gamma_t P_t$, and
+it is not a weight but a contraction: with the spinor Green's function
+$G_{ss'}(\mathbf r, \mathbf r') = \sum_n a_{n,s}(\mathbf r)\,
+\psi^{*}_{n,s'}(\mathbf r')$ the Landauer trace is no longer taken over the
+tip's spin, and the two spinor components stop adding and start interfering,
+\begin{equation*}
+  T(\mathbf r) = \int_{\rm plane}\!\mathrm{d}^2 r'\,
+     \mathrm{Tr}_{\rm spin}\!\left[\Gamma_t\, G\, \Gamma_s\, G^\dagger\right]
+  \;=\; \sum_{\mathbf k} w_{\mathbf k}\,
+     \mathrm{Tr}_{\rm spin}\!\left[P_t\, M_{\mathbf k}(\mathbf r)\right],
+  \qquad
+  M_{\mathbf k}[s,s'] = \mathbf a_s^{\mathsf T} S_{\mathbf k}\, \mathbf a_{s'}^{*} .
+\end{equation*}
+$M$ is itself a Gram matrix, $A^{\mathsf T} S A^{*}$ for the $(n_{\rm bnd},2)$
+amplitude block, so it is positive semi-definite and $\mathrm{Tr}[P_t M] \ge 0$:
+the non-negativity survives. With \emph{both} leads polarized the map depends on
+the angle between the two moments, which is a \textbf{tunnelling
+magnetoresistance} image. \textbf{Note the asymmetry of the names}: here
+\code{spin} is the \emph{substrate} and \code{tip\_spin} the \emph{tip}, which is
+the opposite way round from \code{get\_stm}, where \code{spin} is the tip. The
+substrate was the polarizer first and the name was kept.
+
 \begin{pycode}
 from defumat import Calculator
 
@@ -2929,6 +2954,20 @@ up = magnet.get_vertical_transport(exit_height=0.15, height=0.85,
                                    spin="up", broadening=0.05)
 down = magnet.get_vertical_transport(exit_height=0.15, height=0.85,
                                      spin="down", broadening=0.05)
+
+# a magnetic tip on a noncollinear run, and both electrodes at once:
+# the map then measures the angle between the two moments
+spinor = Calculator.from_file("h-sheet-noncolin.scf.in")
+valve = dict(exit_height=0.15, height=0.85, broadening=0.05,
+             shape=(24, 24), spin=(1.0, 0.0, 0.0), polarization=0.9)
+parallel = spinor.get_vertical_transport(tip_spin=(1.0, 0.0, 0.0),
+                                         tip_polarization=0.9, **valve)
+antiparallel = spinor.get_vertical_transport(tip_spin=(-1.0, 0.0, 0.0),
+                                             tip_polarization=0.9, **valve)
+tmr = antiparallel.image.mean() / parallel.image.mean()   # 5.29 on this cell
+
+parallel.tip_spin           # (1.0, 0.0, 0.0), beside .spin for the substrate
+parallel.tip_polarization   # 0.9
 \end{pycode}
 
 \textbf{The amplitude is the on-shell one and that is a measurement, not a
@@ -2955,7 +2994,18 @@ check a normalisation error could not hide in. $S_{\mathbf k}$ swept along its
 own normal integrates to the identity to 1.4e-15, and agrees with a real-space
 quadrature to 5e-16. A substrate polarized along $\hat{\mathbf n}$ plus one
 along $-\hat{\mathbf n}$ is a substrate that takes both, to round-off; one
-across the moment takes exactly half. The same cell run as $n_{\rm spin}=1$,
+across the moment takes exactly half. The same holds for the \emph{tip}, to
+\textbf{3.1e-16}, with the substrate polarized along a third direction at the
+same time, and a tip at $P=0$ is exactly half the unpolarized map (1.5e-16), the
+convention a nonmagnetic tip has in the STM images. A \emph{magnetic} tip in the
+whole-cell limit reproduces the spin-polarized tunnelling density of states to
+\textbf{5.8e-13}, on a sheet whose moment is put in a generic direction: the
+transposed index order of $M$ would return the answer for a tip at
+$(n_x, -n_y, n_z)$, which is real, non-negative and --- on a moment lying along
+an axis --- identical, so the check is only a check with $m_y \ne 0$. On that
+cell the mirrored tip's image differs by a factor of two. Both electrodes
+polarized at $P = 0.9$ give a parallel-to-antiparallel contrast of a factor
+\textbf{5.3}, with a perpendicular tip at the mean of the two to 5e-6. The same cell run as $n_{\rm spin}=1$,
 $n_{\rm spin}=2$ and as a spinor agrees to 1e-10 and 1e-5. And the physics:
 graphene's two Dirac states at $K$ are degenerate partners, so the symmetry of
 that point makes the substrate's overlap on the pair a multiple of the identity
@@ -2976,8 +3026,11 @@ whole grid for that reason. A tilted exit plane, which has no closed-form
 in-plane orthogonality to stand on. A tip or exit plane \emph{inside} an
 augmentation sphere on an ultrasoft or PAW dataset --- in the vacuum a
 pseudo-wavefunction is the true one, which is why those datasets otherwise need
-nothing extra. A spin-selective substrate on a run with no magnetization, and a
-transverse direction on a collinear one. And, inherited from the STM images
+nothing extra. A spin-selective substrate \emph{or a spin-polarized
+tip} on a run with no magnetization, there being nothing for either moment to
+couple to and every direction taking half of everything, which is the charge map
+again; and a transverse direction on a collinear run for either lead, where
+$m_x$ and $m_y$ are absent rather than zero. And, inherited from the STM images
 unchanged: a spin spiral, a constrained \code{tot\_magnetization}, an applied
 magnetic field.
 \textbf{Said rather than refused}: a geometry whose atoms do not lie between the

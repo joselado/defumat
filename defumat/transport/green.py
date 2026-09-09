@@ -66,6 +66,22 @@ transmission is non-negative by construction** -- unlike a tunnelling density
 built from a smeared delta, which a Methfessel-Paxton weight can drive negative
 (``PLAN.md`` P52, P65).
 
+**A magnetic tip keeps the two spinor components coherent.** The expression
+above traces over the tip's spin, which is what a nonmagnetic tip does; a
+polarized one couples through ``Gamma_t = gamma_t P_t``, ``P_t = (1 + P
+n.sigma)/2``, and then the two components of the spinor are no longer added but
+contracted through a 2x2 matrix,
+
+    T(r; E) = sum_k w_k Tr_spin[ P_t M_k(r) ],   M_k[s,s'] = a_s^T S_k a_{s'}^*
+
+(:func:`spin_transmission`). ``M`` is itself a Gram matrix -- ``A^T S A^*`` for
+the ``(nbnd, 2)`` amplitude block -- so it is positive semi-definite and the
+non-negativity above survives, for ``P_t`` is a projector and
+``Tr[P_t M] = Tr[P_t^{1/2} M P_t^{1/2}]``. **This is the tip's polarizer; the
+substrate has its own**, which lives inside ``S_k``
+(:func:`defumat.transport.substrate.exit_overlap`), and running both at once is
+the angle between the two moments -- a tunnelling magnetoresistance map.
+
 **The Tersoff-Hamann limit is exact.** Widen the substrate from a plane to the
 whole cell and ``S_k -> delta_nn'`` by orthonormality, leaving
 
@@ -98,8 +114,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-__all__ = ["VerticalTransport", "transmission", "amplitude_weights",
-           "channel_basis"]
+__all__ = ["VerticalTransport", "transmission", "spin_transmission",
+           "amplitude_weights", "channel_basis"]
 
 
 def amplitude_weights(eigenvalues, energy: float, broadening: float,
@@ -266,6 +282,108 @@ def transmission(amplitudes, overlaps, kweights, weights, coherent: bool = True,
     return kweights @ term
 
 
+def spin_transmission(amplitudes, overlaps, kweights, weights, projector,
+                      coherent: bool = True, eigenvalues=None,
+                      tol: float = DEGENERACY_TOL):
+    """``T(r)`` for a **spin-polarized tip**: the two spinor components kept
+    coherently instead of added.
+
+    :func:`transmission` traces the Landauer expression over the tip's spin,
+    which is a tip that takes both components equally and adds their quadratic
+    forms **incoherently**. A magnetic tip does not: its coupling is
+    ``Gamma_t = gamma_t P_t`` with ``P_t = (1 + P n.sigma)/2`` a 2x2 projector
+    on its own moment, and the trace no longer collapses to a diagonal. With
+    the spinor Green's function ``G_{ss'}(r, r') = sum_n a_{n,s}(r)
+    psi*_{n,s'}(r')`` and the exit integral done (which is what ``overlaps``
+    already is, with the *substrate's* acceptance folded inside it),
+
+        T(r) = sum_k w_k Tr_spin[ P_t M_k(r) ],
+        M_k[s,s'] = a_s^T S_k a_{s'}^*
+
+    so the whole of a magnetic tip is one 2x2 matrix per k-point and tip point,
+    contracted with ``P_t``.
+
+    **``M`` is positive semi-definite and so the map is still non-negative by
+    construction.** ``M = A^T S A^*`` with ``A`` the ``(nbnd, 2)`` amplitude
+    block, so ``v^dag M v = e^dag S e`` with ``e_n = sum_s a_{n,s} v_s``
+    conjugated, which is non-negative because ``S`` is a Gram matrix; and
+    ``Tr[P_t M] = Tr[P_t^{1/2} M P_t^{1/2}] >= 0`` because ``P_t`` is a
+    projector. The incoherent branch replaces ``S`` by its diagonal, and
+    ``M_inc[s,s'] = sum_n S[n,n] a_{n,s} a*_{n,s'}`` is a non-negatively
+    weighted sum of rank-one ``v v^dag``, so it is positive semi-definite too.
+
+    Args:
+        amplitudes: ``(2, nk, nbnd, npts)`` complex -- the spinor's two
+            components, ``psi_kn(r)`` at the tip points.
+        overlaps: ``(nk, nbnd, nbnd)`` the exit-plane Gram matrices.
+        kweights: ``(nk,)``.
+        weights: ``(nk, nbnd)`` the per-state factor.
+        projector: ``(2, 2)`` Hermitian, the tip's spin acceptance --
+            :func:`defumat.transport.substrate.spin_projector`.
+        coherent: keep the off-diagonal of ``S_k``. The tip's spin structure is
+            kept either way; what ``False`` drops is the interference **between
+            bands**, in the channel basis, exactly as :func:`transmission` does.
+        eigenvalues: ``(nk, nbnd)`` in Ry, for ``coherent=False``.
+        tol: what counts as degenerate, in Ry.
+
+    Returns ``(npts,)`` real and non-negative.
+    """
+    amplitudes = np.asarray(amplitudes)
+    overlaps = np.asarray(overlaps)
+    kweights = np.asarray(kweights, dtype=float)
+    weights = np.asarray(weights)
+    projector = np.asarray(projector, dtype=complex)
+
+    if amplitudes.ndim != 4 or amplitudes.shape[0] != 2:
+        raise ValueError(
+            f"a spin-polarized tip needs both spinor components, so the "
+            f"amplitudes are (2, nk, nbnd, npts); got {amplitudes.shape}"
+        )
+    if projector.shape != (2, 2):
+        raise ValueError(f"a tip spin projector is 2x2, got {projector.shape}")
+    _, nk, nbnd, npts = amplitudes.shape
+    if overlaps.shape != (nk, nbnd, nbnd):
+        raise ValueError(
+            f"the overlaps are {overlaps.shape} and the amplitudes want "
+            f"{(nk, nbnd, nbnd)}"
+        )
+    if weights.shape != (nk, nbnd) or kweights.shape != (nk,):
+        raise ValueError(
+            f"state weights {weights.shape} and k weights {kweights.shape} do "
+            f"not match {nk} k-points and {nbnd} bands"
+        )
+
+    a = amplitudes * weights[None, :, :, None]
+    if coherent:
+        # The conjugation convention is :func:`transmission`'s, unchanged:
+        # ``psi`` is conjugated in the **exit** variable, so ``S`` acts on
+        # ``a*``. What is new is the index order of ``M``, and it is the same
+        # trap one level up: ``M[s,s'] = a_s^T S a_{s'}^*`` has the
+        # *un-conjugated* component first. The transposed version is
+        # ``M^T = M*`` (M is Hermitian), and contracting it with ``P_t`` gives
+        # ``Tr[P_t* M]`` -- which is the answer for a tip along
+        # ``(n_x, -n_y, n_z)``. Real, non-negative, agreeing wherever the
+        # sample's moment has no y component, and wrong. P54's and P66's
+        # transposed index, in tip-spin space.
+        sa = np.einsum("kij,tkjp->tkip", overlaps, a.conj(), optimize=True)
+        m = np.einsum("sknp,tknp->stkp", a, sa, optimize=True)
+    else:
+        if eigenvalues is not None:
+            # Both components rotate with the *same* unitary: it mixes bands,
+            # not spins.
+            u = channel_basis(overlaps, eigenvalues, tol)
+            a = np.einsum("kni,sknp->skip", u, a, optimize=True)
+            overlaps = np.einsum("kni,knm,kmj->kij", u.conj(), overlaps, u,
+                                 optimize=True)
+        diagonal = np.real(np.einsum("knn->kn", overlaps))
+        m = np.einsum("kn,sknp,tknp->stkp", diagonal.astype(complex), a,
+                      a.conj(), optimize=True)
+    # ``sum_{s,s'} P_t[s',s] M[s,s'] = Tr[P_t M]``, real because both factors
+    # are Hermitian.
+    term = np.real(np.einsum("ts,stkp->kp", projector, m, optimize=True))
+    return kweights @ term
+
+
 @dataclass
 class VerticalTransport:
     """A vertical-transport map and everything needed to read it."""
@@ -288,9 +406,15 @@ class VerticalTransport:
     incoherent: np.ndarray | None = None
     #: The Fermi level of the k-set actually used, in Ry.
     fermi_energy: float | None = None
-    #: The substrate's spin acceptance, if it had one.
+    #: The **substrate's** spin acceptance, if it had one. Note the asymmetry
+    #: with :func:`defumat.workflows.stm.run_stm`, where ``spin`` describes the
+    #: *tip*: here the substrate was the polarizer first and the name was kept.
     spin: object = None
     polarization: float = 1.0
+    #: The **tip's** spin acceptance, if it had one -- a direction and a
+    #: polarization, exactly as ``spin``/``polarization`` are for the substrate.
+    tip_spin: object = None
+    tip_polarization: float = 1.0
     #: The k-set, when a denser one was solved for.
     grid: tuple[int, int, int] | None = None
     #: Diagnostics: the smallest eigenvalue of any ``S_k`` (must not be

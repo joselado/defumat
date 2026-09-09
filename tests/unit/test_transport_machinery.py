@@ -15,6 +15,12 @@ construction rests on:
 * the contraction is **invariant under a rotation inside a degenerate
   multiplet**, which is rule D4 satisfied by construction rather than by
   handling degeneracies.
+
+A **magnetic tip** adds a fourth: the two spinor components are contracted
+through ``P_t = (1 + P n.sigma)/2`` rather than added, and the resulting
+``T = Tr[P_t M]`` is still non-negative (both factors are positive
+semi-definite), still blind to a degenerate rotation, partitions exactly
+between ``+n`` and ``-n``, and gives half the unpolarized map at ``P = 0``.
 """
 
 import numpy as np
@@ -24,6 +30,7 @@ from defumat.basis.sample import sample_wavefunctions
 from defumat.transport.green import (
     amplitude_weights,
     channel_basis,
+    spin_transmission,
     transmission,
 )
 from defumat.transport.substrate import (
@@ -333,6 +340,246 @@ def test_mismatched_shapes_are_refused_rather_than_broadcast():
         transmission(amplitudes, overlaps[:, :2, :2], kweights, weights)
     with pytest.raises(ValueError, match="state weights"):
         transmission(amplitudes, overlaps, kweights, weights[:, :2])
+
+
+# --------------------------------------------------------------------------
+# the magnetic tip
+# --------------------------------------------------------------------------
+
+
+def _spinor_case(nk=3, nbnd=4, npts=5, seed=13):
+    """The same random Gram data as :func:`_random_case`, with two components."""
+    rng = np.random.default_rng(seed)
+    amplitudes = (rng.normal(size=(2, nk, nbnd, npts))
+                  + 1.0j * rng.normal(size=(2, nk, nbnd, npts)))
+    raw = rng.normal(size=(nk, nbnd, nbnd)) + 1.0j * rng.normal(size=(nk, nbnd, nbnd))
+    overlaps = np.einsum("kij,klj->kil", raw, raw.conj())
+    kweights = rng.uniform(0.1, 1.0, size=nk)
+    weights = rng.uniform(0.1, 1.0, size=(nk, nbnd)).astype(complex)
+    return amplitudes, overlaps, kweights, weights
+
+
+def _unpolarized(amplitudes, overlaps, kweights, weights, **kwargs):
+    """What the traced-over-spin tip gives: the two components added."""
+    return sum(transmission(amplitudes[c], overlaps, kweights, weights, **kwargs)
+               for c in range(2))
+
+
+@pytest.mark.parametrize("coherent", [True, False])
+def test_an_unpolarized_tip_projector_is_the_traced_sum(coherent):
+    """``P_t = 1`` is the tip that takes both spins, which is what was there.
+
+    The whole extension is one 2x2 contraction, and the identity matrix has to
+    put it back exactly where it started -- otherwise every existing number in
+    the phase moves.
+    """
+    case = _spinor_case()
+    fixed = ({} if coherent else
+             dict(coherent=False,
+                  eigenvalues=np.tile(np.array([0.0, 0.0, 1.0, 2.0]),
+                                      (case[0].shape[1], 1))))
+    ours = spin_transmission(*case, np.eye(2, dtype=complex), **fixed)
+    assert np.abs(ours - _unpolarized(*case, **fixed)).max() < 1.0e-13
+
+
+@pytest.mark.parametrize("coherent", [True, False])
+def test_the_two_tip_directions_partition_the_unpolarized_map(coherent):
+    """``P_t(n, P) + P_t(-n, P) = 1`` for every ``n`` and every ``P``.
+
+    An identity that shares no machinery with the contraction: it is a
+    statement about the projector alone, and it holds for a generic direction
+    and a partial polarization, not only for the axes.
+    """
+    case = _spinor_case()
+    rng = np.random.default_rng(5)
+    fixed = ({} if coherent else
+             dict(coherent=False,
+                  eigenvalues=np.tile(np.array([0.0, 0.0, 1.0, 2.0]),
+                                      (case[0].shape[1], 1))))
+    total = _unpolarized(*case, **fixed)
+    for _ in range(3):
+        direction = rng.normal(size=3)
+        p = float(rng.uniform(-1.0, 1.0))
+        plus = spin_transmission(*case, spin_projector(direction, p), **fixed)
+        minus = spin_transmission(*case, spin_projector(-direction, p), **fixed)
+        assert np.abs(plus + minus - total).max() / total.max() < 1.0e-14
+
+
+def test_a_nonmagnetic_tip_gives_exactly_half():
+    """``P = 0`` is ``P_t = 1/2``, which is P65's convention for a tip with no
+    moment: half the charge, the average of the two channels."""
+    case = _spinor_case()
+    half = spin_transmission(*case, spin_projector((0.3, -0.7, 0.2), 0.0))
+    total = _unpolarized(*case)
+    assert np.abs(half - 0.5 * total).max() / total.max() < 1.0e-14
+
+
+@pytest.mark.parametrize("coherent", [True, False])
+def test_a_polarized_tip_cannot_make_the_transmission_negative(coherent):
+    """The structural guarantee survives the extension, and it needs both
+    factors: ``M = A^T S A^*`` is a Gram matrix in tip-spin space and ``P_t`` is
+    a projector, so ``Tr[P_t M] = Tr[P_t^{1/2} M P_t^{1/2}] >= 0``."""
+    amplitudes, overlaps, kweights, weights = _spinor_case()
+    eigenvalues = np.tile(np.array([0.0, 0.0, 1.0, 2.0]), (overlaps.shape[0], 1))
+    fixed = ({} if coherent
+             else dict(coherent=False, eigenvalues=eigenvalues))
+    rng = np.random.default_rng(17)
+    for _ in range(5):
+        projector = spin_projector(rng.normal(size=3), 1.0)
+        assert spin_transmission(amplitudes, overlaps, kweights, weights,
+                                 projector, **fixed).min() >= 0.0
+    # and the 2x2 matrix it contracts is itself positive semi-definite
+    a = amplitudes * weights[None, :, :, None]
+    sa = np.einsum("kij,tkjp->tkip", overlaps, a.conj())
+    m = np.einsum("sknp,tknp->stkp", a, sa)
+    spectrum = np.linalg.eigvalsh(np.moveaxis(m, (0, 1), (-2, -1)))
+    assert spectrum.min() > -1.0e-10
+
+
+def test_the_tip_spin_index_order_is_the_definition_and_not_its_transpose():
+    """``M[s,s'] = a_s^T S a_{s'}^*``, with the *un-conjugated* component first.
+
+    The transposed version is ``M^T = M^*`` because ``M`` is Hermitian, so
+    contracting it with ``P_t`` returns ``Tr[P_t^* M]`` -- which is exactly the
+    answer for a tip along ``(n_x, -n_y, n_z)``. Real, non-negative, identical
+    for any tip in the ``xz`` plane, and wrong. It is P54's and P66's transposed
+    index one level up, in tip-spin space, and only a check against the
+    definition sees it.
+    """
+    amplitudes, overlaps, kweights, weights = _spinor_case()
+    direction = np.array([0.4, 0.8, -0.3])
+    projector = spin_projector(direction, 0.9)
+
+    a = amplitudes * weights[None, :, :, None]
+    sa = np.einsum("kij,tkjp->tkip", overlaps, a.conj())
+    m = np.einsum("sknp,tknp->stkp", a, sa)
+    wrong = kweights @ np.real(np.einsum("ts,stkp->kp", projector,
+                                         np.swapaxes(m, 0, 1)))
+    right = spin_transmission(amplitudes, overlaps, kweights, weights, projector)
+
+    mirrored = spin_projector((direction[0], -direction[1], direction[2]), 0.9)
+    assert np.abs(wrong - spin_transmission(amplitudes, overlaps, kweights,
+                                            weights, mirrored)).max() < 1.0e-12
+    assert wrong.min() > 0.0                       # plausible
+    assert np.abs(wrong - right).max() / right.max() > 1.0e-2   # and different
+
+
+def test_a_polarized_tip_is_blind_to_a_rotation_inside_a_degenerate_multiplet():
+    """Rule D4, still satisfied by construction: ``M`` is bilinear-covariant in
+    ``a`` and ``a^*``, so mixing a degenerate multiplet cannot move it. The
+    incoherent branch is a diagonal and still needs ``eigenvalues=``."""
+    rng = np.random.default_rng(23)
+    amplitudes, overlaps, kweights, weights = _spinor_case(nk=2, nbnd=4, npts=3)
+    weights = np.ones_like(weights)
+    eigenvalues = np.tile(np.array([0.0, 0.0, 1.0, 2.0]), (2, 1))
+    raw = rng.normal(size=(2, 2)) + 1.0j * rng.normal(size=(2, 2))
+    u, _ = np.linalg.qr(raw)
+    full = np.eye(4, dtype=complex)
+    full[:2, :2] = u
+    mixed_a = np.einsum("ni,sknp->skip", full, amplitudes)
+    mixed_s = np.einsum("ni,knm,mj->kij", full.conj(), overlaps, full)
+    projector = spin_projector((0.2, 0.5, -0.8), 0.7)
+
+    before = spin_transmission(amplitudes, overlaps, kweights, weights, projector)
+    after = spin_transmission(mixed_a, mixed_s, kweights, weights, projector)
+    assert np.abs(after - before).max() / before.max() < 1.0e-12
+
+    fixed = dict(coherent=False, eigenvalues=eigenvalues)
+    incoherent_before = spin_transmission(amplitudes, overlaps, kweights,
+                                          weights, projector, **fixed)
+    incoherent_after = spin_transmission(mixed_a, mixed_s, kweights, weights,
+                                         projector, **fixed)
+    assert (np.abs(incoherent_after - incoherent_before).max()
+            / incoherent_before.max()) < 1.0e-12
+
+
+def test_the_polarized_tip_refuses_shapes_it_cannot_read():
+    amplitudes, overlaps, kweights, weights = _spinor_case()
+    identity = np.eye(2, dtype=complex)
+    with pytest.raises(ValueError, match="both spinor components"):
+        spin_transmission(amplitudes[0], overlaps, kweights, weights, identity)
+    with pytest.raises(ValueError, match="projector is 2x2"):
+        spin_transmission(amplitudes, overlaps, kweights, weights, np.eye(3))
+    with pytest.raises(ValueError, match="overlaps are"):
+        spin_transmission(amplitudes, overlaps[:, :2, :2], kweights, weights,
+                          identity)
+    with pytest.raises(ValueError, match="state weights"):
+        spin_transmission(amplitudes, overlaps, kweights, weights[:, :2],
+                          identity)
+
+
+def test_the_tip_acceptance_refuses_what_it_has_nothing_to_couple_to():
+    """The two refusals, on the pure function that makes them.
+
+    A run with no magnetization has nothing for the tip's moment to couple to,
+    and a collinear run carries no transverse magnetization -- ``m_x`` and
+    ``m_y`` there are absent rather than zero, which is P65's reasoning applied
+    to the other lead.
+    """
+    from defumat.workflows.transport import _tip_acceptance
+
+    assert _tip_acceptance(None, 1.0, 1, 1) == (None, None)
+    with pytest.raises(NotImplementedError, match="tip needs a magnetization"):
+        _tip_acceptance("up", 1.0, 1, 1)
+    with pytest.raises(NotImplementedError, match="transverse component"):
+        _tip_acceptance((1.0, 0.0, 0.0), 1.0, 1, 2)
+    with pytest.raises(ValueError, match="tip polarization must be in"):
+        _tip_acceptance("up", 1.5, 1, 2)
+    with pytest.raises(ValueError, match="tip polarization must be in"):
+        _tip_acceptance("x", -2.0, 2, 1)
+    # a collinear tip is the same (1 +- P)/2 weight the substrate gets
+    assert _tip_acceptance("up", 0.6, 1, 2)[1] == pytest.approx((0.8, 0.2))
+    assert _tip_acceptance("down", 0.6, 1, 2)[1] == pytest.approx((0.2, 0.8))
+
+
+def test_the_spinor_contraction_is_a_real_space_integral_of_the_green_function():
+    """The magnetic tip against its definition, with a quadrature in between.
+
+    ``T(r) = int_plane dr' Tr_spin[P_t G(r,r') Gamma_s G^dag(r',r)]`` written
+    out literally: build the 2x2 spinor Green's function on a grid covering the
+    exit plane, contract it with both leads' acceptances, integrate. It shares
+    only the sampler with the fast path, and it is what pins the index order of
+    ``M`` on data where a transpose is visible -- the substrate's own projector
+    is off-diagonal here, and so is the tip's.
+    """
+    cell, height, axis = HEXAGONAL, 0.23, 2
+    miller = _sphere(2)
+    nbnd, npwx = 4, miller.shape[0]
+    # the spinor's two components are the two halves of a row, which is how the
+    # whole package stores them; nothing here needs them orthonormal
+    spinors = _orthonormal_bands(np.zeros((2 * npwx, 3), dtype=int), nbnd, seed=41)
+    k = np.array([0.25, 0.5, 0.0])
+    tips = np.array([[0.11, 0.42, 0.77], [0.6, 0.1, 0.9]])
+    weights = np.array([[0.9, 0.4, 0.25, 0.7]], dtype=complex)
+    tip_projector = spin_projector((0.3, 0.6, -0.5), 0.8)
+    substrate = spin_projector((-0.2, 0.7, 0.4), 0.9)
+
+    # the fast path
+    overlaps = exit_overlap(spinors, miller, height, axis, cell, npol=2,
+                            projector=substrate)[None]
+    sampled = sample_wavefunctions(spinors.reshape((nbnd, 2, npwx)), miller, k,
+                                   tips, cell.volume)
+    amplitudes = np.moveaxis(sampled, 1, 0)[:, None]     # (2, 1, nbnd, npts)
+    fast = spin_transmission(amplitudes, overlaps, np.array([1.0]), weights,
+                             tip_projector)
+
+    # the definition
+    n = 2 * int(np.abs(miller[:, :2]).max()) + 3
+    u, v = np.meshgrid(np.arange(n) / n, np.arange(n) / n, indexing="ij")
+    plane = np.stack([u.ravel(), v.ravel(), np.full(u.size, height)], axis=1)
+    on_plane = sample_wavefunctions(spinors.reshape((nbnd, 2, npwx)), miller, k,
+                                    plane, cell.volume)                # (n,2,q)
+    a = amplitudes[:, 0] * weights[0][None, :, None]                   # (2,n,p)
+    # G_{ss'}(r, r') = sum_n a_{n,s}(r) psi*_{n,s'}(r')
+    green = np.einsum("snp,ntq->stpq", a, on_plane.conj())
+    # Tr_spin[P_t G Gamma_s G^dag] at each (tip point p, exit point q), with
+    # G^dag(r', r)[v, s] = conj(G(r, r')[s, v]) -- the exit variable is the one
+    # that carries the conjugate, which is the whole index-order question
+    slow = np.real(np.einsum("st,tupq,uv,svpq->p", tip_projector, green,
+                             substrate, green.conj(), optimize=True))
+    slow *= surface_area(cell, axis) / plane.shape[0]
+
+    assert np.abs(fast - slow).max() / np.abs(slow).max() < 1.0e-12
 
 
 # --------------------------------------------------------------------------

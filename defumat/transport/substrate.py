@@ -60,8 +60,9 @@ def surface_area(cell, axis: int) -> float:
     return float(np.linalg.norm(np.cross(at[first], at[second])))
 
 
-def spin_projector(direction, polarization: float = 1.0) -> np.ndarray:
-    """``(1 + P n.sigma)/2``: which spins the substrate accepts.
+def spin_projector(direction, polarization: float = 1.0,
+                   what: str = "substrate") -> np.ndarray:
+    """``(1 + P n.sigma)/2``: which spins a lead accepts.
 
     A spin-polarized substrate (or, read the other way round, a magnetic
     counter-electrode) does not take every state equally. This is the same
@@ -69,13 +70,18 @@ def spin_projector(direction, polarization: float = 1.0) -> np.ndarray:
     tunnelling density, written one level lower as the 2x2 matrix in spin space
     it comes from -- because here it has to sit *inside* the overlap integral,
     between two different bands, where a density has already been squared.
+
+    **Both leads use it.** For the substrate it goes inside
+    :func:`exit_overlap`, between two bands; for the tip it multiplies the 2x2
+    matrix :func:`defumat.transport.green.spin_transmission` builds. ``what``
+    only names the lead in the error message.
     """
     from defumat.stm.image import _unit_vector
 
     unit = _unit_vector(direction)
     p = float(polarization)
     if not -1.0 <= p <= 1.0:
-        raise ValueError(f"the substrate polarization must be in [-1, 1], got {p}")
+        raise ValueError(f"the {what} polarization must be in [-1, 1], got {p}")
     sigma_x = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
     sigma_y = np.array([[0.0, -1.0j], [1.0j, 0.0]], dtype=complex)
     sigma_z = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)

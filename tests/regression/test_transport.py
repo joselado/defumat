@@ -15,8 +15,8 @@ checks the important part, and they are four:
 * the **three spin regimes**, which must agree on a cell with no magnetization
   -- the check that catches P51's ``for_spin`` factor of two, invisible in any
   ratio;
-* the **spin partition**: a substrate polarized along ``n`` plus one along
-  ``-n`` is a substrate that takes both, exactly;
+* the **spin partition**: a lead polarized along ``n`` plus one along ``-n`` is
+  a lead that takes both, exactly -- for the substrate and for the tip alike;
 * the **physics**, which is the phase's reason for existing: monolayer graphene's
   Dirac pair is degenerate, so the substrate cannot tell its two members apart and
   its transmission *is* the STM image, while an AB bilayer's current has to cross
@@ -26,6 +26,7 @@ The algebra -- the Gram matrix, the contraction, the amplitude weights, the
 sampler -- is in ``tests/unit/test_transport_machinery.py`` and needs no SCF.
 """
 
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -45,6 +46,16 @@ PSEUDO = Path(__file__).resolve().parents[1] / "data" / "pseudo"
 #: Where the two planes go on ``h-sheet.in``, whose atom sits at 0.5.
 SHEET = dict(exit_height=0.15, height=0.85, broadening=0.05)
 
+#: The magnetic hydrogen sheet as a collinear run; the spinor one is committed
+#: as ``h-sheet-noncolin.in``, whose moment is put in a **generic** direction
+#: rather than along an axis. With the moment along ``x`` every ``m_y`` in the
+#: answer is zero, and the transposed tip-spin contraction -- which is the
+#: answer for a tip at ``(n_x, -n_y, n_z)`` -- would agree with the right one
+#: exactly. A test that cannot fail is not a test.
+MAGNETS = {
+    "collinear": ("    nspin = 2, starting_magnetization(1) = 0.8,\n", 8),
+}
+
 
 @pytest.fixture(autouse=True)
 def _drop_compiled_code():
@@ -60,6 +71,27 @@ def _converged(case: str):
     calculator = Calculator.from_file(CASES / f"{case}.in", pseudo_dir=PSEUDO)
     calculator.get_scf()
     return calculator
+
+
+@lru_cache(maxsize=2)
+def _magnet(kind: str):
+    """The magnetic hydrogen sheet, converged once and shared.
+
+    ``lru_cache(maxsize=2)`` rather than ``None``: two is what a comparison
+    between the two spin regimes needs and is the largest that is not a leak
+    (``CLAUDE.md``, memory).
+    """
+    if kind == "spinor":
+        # committed, because the notebook needs it too and because the generic
+        # moment direction is load-bearing rather than incidental
+        calculator = Calculator.from_file(CASES / "h-sheet-noncolin.in",
+                                          pseudo_dir=PSEUDO)
+        calculator.get_scf()
+        return calculator
+    insert, nbnd = MAGNETS[kind]
+    return _variant(Path(tempfile.mkdtemp()), "h-sheet", insert,
+                    [("nbnd = 8", f"nbnd = {nbnd}"),
+                     ("celldm(1) = 5.0", "celldm(1) = 8.0")])
 
 
 def _variant(tmp_path, case: str, insert: str = "", replacements=()):
@@ -222,6 +254,141 @@ def test_a_substrate_across_the_moment_has_no_preference(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# the polarized tip
+# --------------------------------------------------------------------------
+
+
+def test_a_magnetic_tip_in_the_whole_cell_limit_is_the_spin_polarized_stm_image():
+    """The strongest check the phase has, now with both spins kept coherently.
+
+    Widen the substrate from a plane to the whole cell and the Gram matrix is
+    the identity by orthonormality, so ``T(r) = sum_kn w_k delta(E - e)
+    v_n^dagger P_t v_n`` with ``v_n`` the spinor amplitude -- which is
+    ``[rho + P n.m]/2``, the spin-polarized tunnelling density of states
+    :func:`run_stm` returns. Exactly, with no factor, through a completely
+    different code path: this one contracts a 2x2 matrix built from sampled
+    amplitudes, the other builds a four-component density on the FFT grid and
+    projects it.
+
+    **The tip direction and the sample's moment both have a ``y`` component on
+    purpose.** The transposed index order returns the answer for a tip at
+    ``(n_x, -n_y, n_z)``, which here differs by a factor of two, and on a moment
+    along an axis would not differ at all.
+    """
+    calculator = _magnet("spinor")
+    result = calculator.get_scf()
+    geometry = dict(height=0.80, shape=(6, 6))
+    direction, p = (1.0, 1.0, 1.0), 0.85
+    ours = run_vertical_transport(
+        calculator.system, calculator.pseudos, result, exit_height=0.20,
+        broadening=0.02, exit_region="volume", tip_spin=direction,
+        tip_polarization=p, **geometry)
+    reference = np.asarray(run_stm(
+        calculator.system, calculator.pseudos, result, width=0.02,
+        spin=direction, polarization=p, **geometry).values)
+    assert np.abs(ours.image - reference).max() / np.abs(reference).max() < 1e-11
+
+    # and the mirrored tip -- what a transposed contraction would have given --
+    # is a different image entirely, so the check above has something to catch
+    mirrored = np.asarray(run_stm(
+        calculator.system, calculator.pseudos, result, width=0.02,
+        spin=(1.0, -1.0, 1.0), polarization=p, **geometry).values)
+    assert np.abs(mirrored - reference).max() / np.abs(reference).max() > 1.0
+
+
+@pytest.mark.parametrize("kind,pair", [
+    ("collinear", ("up", "down")),
+    ("spinor", ((0.3, 0.8, 0.5), (-0.3, -0.8, -0.5))),
+])
+def test_a_polarized_tip_partitions_the_transmission(kind, pair):
+    """``P_t(n, P) + P_t(-n, P) = 1``, so the two tips add back to the map a
+    nonmagnetic one draws. One calculation split two ways, so what it is held to
+    is round-off. The substrate is polarized at the same time, along a third
+    direction: the two polarizers are independent and the identity is the tip's
+    alone.
+    """
+    calculator = _magnet(kind)
+    result = calculator.get_scf()
+    substrate = dict(spin="up" if kind == "collinear" else (0.0, 0.0, 1.0),
+                     polarization=0.6)
+    options = dict(shape=(3, 3), **SHEET, **substrate)
+    total = run_vertical_transport(calculator.system, calculator.pseudos,
+                                   result, **options).image
+    parts = [run_vertical_transport(calculator.system, calculator.pseudos,
+                                    result, tip_spin=n, tip_polarization=0.9,
+                                    **options).image for n in pair]
+    assert np.abs(parts[0] + parts[1] - total).max() / total.max() < 1.0e-14
+    # a nonmagnetic tip is exactly half, which is P65's convention
+    half = run_vertical_transport(calculator.system, calculator.pseudos, result,
+                                  tip_spin=pair[0], tip_polarization=0.0,
+                                  **options).image
+    assert np.abs(half - 0.5 * total).max() / total.max() < 1.0e-14
+    # and the split is a real preference rather than two halves
+    assert abs(parts[0].mean() - parts[1].mean()) > 0.1 * total.mean()
+    assert parts[0].min() > 0.0 and parts[1].min() > 0.0
+
+
+def test_the_two_moments_together_are_a_tunnelling_magnetoresistance_map():
+    """The capability that needed both polarizers: the angle between them.
+
+    A magnetic tip over a magnetic sheet on a magnetic substrate is a spin
+    valve, and what it measures is the relative orientation of the two
+    electrodes. Parallel and antiparallel must differ, and a tip at ninety
+    degrees to the substrate must sit between them -- which is the statement
+    that the answer depends on ``cos`` of the angle and not on the two
+    directions separately.
+    """
+    calculator = _magnet("spinor")
+    result = calculator.get_scf()
+    options = dict(shape=(3, 3), **SHEET, spin=(1.0, 0.0, 0.0),
+                   polarization=0.9)
+
+    def at(direction):
+        return run_vertical_transport(
+            calculator.system, calculator.pseudos, result, tip_spin=direction,
+            tip_polarization=0.9, **options).image.mean()
+
+    parallel = at((1.0, 0.0, 0.0))
+    antiparallel = at((-1.0, 0.0, 0.0))
+    perpendicular = at((0.0, 0.0, 1.0))
+    ratio = parallel / antiparallel
+    assert ratio > 1.05 or ratio < 0.95, ratio
+    assert min(parallel, antiparallel) < perpendicular < max(parallel,
+                                                             antiparallel)
+    # the perpendicular tip is the mean of the two, exactly: the acceptance is
+    # linear in n and the two parallel/antiparallel projectors average to it
+    assert abs(perpendicular - 0.5 * (parallel + antiparallel)) < 1e-4 * parallel
+
+
+def test_a_collinear_tip_and_substrate_multiply():
+    """Two spin filters in series, and on a collinear run that is exact.
+
+    Spin is conserved through the junction there, so the two channels are two
+    independent calculations and each polarizer is a weight ``(1 +- P)/2`` on
+    them. The product is not an approximation to a 2x2 contraction; it is what
+    the 2x2 contraction becomes when everything is diagonal.
+    """
+    calculator = _magnet("collinear")
+    result = calculator.get_scf()
+    options = dict(shape=(3, 3), **SHEET)
+
+    def at(**extra):
+        return run_vertical_transport(calculator.system, calculator.pseudos,
+                                      result, **options, **extra).image
+
+    up_up = at(spin="up", tip_spin="up")
+    # a fully polarized tip takes one channel and a fully polarized substrate
+    # takes one channel: with the two opposed, nothing gets through -- and the
+    # zero says so by name rather than blaming the k-set for it
+    with pytest.warns(UserWarning, match="leave no channel open"):
+        up_down = at(spin="up", tip_spin="down")
+    assert np.abs(up_down).max() == 0.0
+    assert up_up.min() > 0.0
+    # and the channel the two agree on is the substrate's own answer
+    assert np.abs(up_up - at(spin="up")).max() / up_up.max() < 1.0e-14
+
+
+# --------------------------------------------------------------------------
 # the physics
 # --------------------------------------------------------------------------
 
@@ -360,6 +527,27 @@ def test_a_spin_selective_substrate_needs_something_to_select():
         run_vertical_transport(calculator.system, calculator.pseudos,
                                calculator.get_scf(), shape=(2, 2),
                                spin="up", **SHEET)
+
+
+def test_a_polarized_tip_needs_something_to_couple_to():
+    """The same statement about the other lead: with no magnetization every
+    direction takes half of everything, which is the charge map again."""
+    calculator = _converged("h-sheet")
+    with pytest.raises(NotImplementedError, match="tip needs a magnetization"):
+        run_vertical_transport(calculator.system, calculator.pseudos,
+                               calculator.get_scf(), shape=(2, 2),
+                               tip_spin="up", **SHEET)
+
+
+def test_a_transverse_tip_on_a_collinear_run_is_refused():
+    """``m_x`` and ``m_y`` are absent there rather than zero, so projecting on
+    a direction off the ``z`` axis would be a statement the calculation cannot
+    make -- P65's reasoning, applied to the tip of this geometry."""
+    calculator = _magnet("collinear")
+    with pytest.raises(NotImplementedError, match="transverse component"):
+        run_vertical_transport(calculator.system, calculator.pseudos,
+                               calculator.get_scf(), shape=(2, 2),
+                               tip_spin=(1.0, 0.0, 0.0), **SHEET)
 
 
 def test_the_atoms_have_to_lie_between_the_two_planes():

@@ -43,6 +43,7 @@ from defumat.transport.green import (
     VerticalTransport,
     amplitude_weights,
     channel_basis,
+    spin_transmission,
     transmission,
 )
 from defumat.transport.substrate import (
@@ -84,6 +85,8 @@ def run_vertical_transport(
     smearing: str = "gaussian",
     spin=None,
     polarization: float = 1.0,
+    tip_spin=None,
+    tip_polarization: float = 1.0,
     incoherent: bool = True,
     exit_region: str = "plane",
     grid: tuple[int, int, int] | None = None,
@@ -129,10 +132,22 @@ def run_vertical_transport(
         smearing: which delta the on-shell amplitude is the square root of. A
             Gaussian by default, and a delta that goes negative is refused --
             an amplitude has no square root there.
-        spin: a spin-selective substrate. ``"up"``/``"down"`` for a collinear
-            run, a cartesian direction for a spinor one, ``None`` for a
-            substrate that takes both spins equally.
+        spin: a spin-selective **substrate**. ``"up"``/``"down"`` for a
+            collinear run, a cartesian direction for a spinor one, ``None`` for
+            a substrate that takes both spins equally. **Note the asymmetry
+            with** :func:`defumat.workflows.stm.run_stm`, where ``spin``
+            describes the *tip*: here the substrate was the polarizer first and
+            the name is kept for the runs already written against it. The tip's
+            own moment is ``tip_spin``.
         polarization: the substrate's spin polarization, in ``[-1, 1]``.
+        tip_spin: a spin-polarized **tip**, which is P65's ``spin`` and the
+            magnetic counter-electrode of a tunnelling-magnetoresistance
+            measurement. Same spelling of a direction as ``spin``, and the two
+            may be used together: the answer then depends on the angle between
+            the tip's moment and the substrate's.
+        tip_polarization: the tip's spin polarization, in ``[-1, 1]``. ``0`` is
+            a nonmagnetic tip and gives exactly **half** the unpolarized map,
+            which is :func:`defumat.stm.image.project_spin`'s convention.
         incoherent: also build the map with every band tunnelling
             independently, so that the interference can be read off.
         exit_region: ``"plane"``, or ``"volume"`` for the diagnostic in which
@@ -215,6 +230,7 @@ def run_vertical_transport(
         exit_height=float(exit_height), exit_axis=exit_axis,
         energies=grid_energies, broadening=float(broadening),
         spin=spin, polarization=float(polarization),
+        tip_spin=tip_spin, tip_polarization=float(tip_polarization),
         incoherent=bool(incoherent), exit_region=exit_region,
         method=method, smearing=smearing,
     )
@@ -243,10 +259,10 @@ def run_vertical_transport(
         exit_axis=int(exit_axis),
         incoherent=incoherent_map,
         fermi_energy=levels.get("fermi_energy"),
-        spin=None if spin is None else (
-            spin if isinstance(spin, str)
-            else tuple(float(c) for c in np.ravel(spin))),
+        spin=_label(spin),
         polarization=float(polarization),
+        tip_spin=_label(tip_spin),
+        tip_polarization=float(tip_polarization),
         grid=None if grid is None else tuple(int(n) for n in grid),
         least_eigenvalue=extras["least_eigenvalue"],
         offdiagonal_weight=extras["offdiagonal_weight"],
@@ -297,20 +313,29 @@ def whole_grid(system, grid, shift=None) -> KPoints:
 
 def _assemble(calculation, wavefunctions, eigenvalues, points, *,
               exit_height, exit_axis, energies, broadening, spin,
-              polarization, incoherent, exit_region, method, smearing):
+              polarization, tip_spin, tip_polarization, incoherent,
+              exit_region, method, smearing):
     """Sample the tip, build every ``S_k``, contract. One channel at a time.
 
-    **A spinor's two components are two amplitude vectors, not one.** The tip
-    here is not spin-selective -- the substrate is -- so what tunnels in is the
-    whole spinor, and tracing the Landauer expression over the tip's spin gives
+    **A spinor's two components are two amplitude vectors, not one**, and what
+    joins them is the tip's own spin structure. With a nonmagnetic tip the
+    Landauer expression is traced over the tip's spin and the two components
+    add incoherently,
 
-        T = sum_s  a_s^dagger S a_s
+        T = sum_s  a_s^T S a_s^*
 
     with ``a_s`` the amplitude vector of one spinor component and ``S`` the
-    exit-plane overlap, which carries the substrate's spin acceptance inside
-    it. It is a *sum of two* quadratic forms and not one form on a doubled
+    exit-plane overlap, which carries the *substrate's* spin acceptance inside
+    it. It is a sum of two quadratic forms and not one form on a doubled
     vector: the two components leave through the same substrate but enter
     through independent tip channels.
+
+    A **magnetic** tip couples through ``P_t = (1 + P n.sigma)/2`` instead of
+    through the identity, and then the two components are contracted rather
+    than added: ``T = Tr[P_t M]`` with ``M[s,s'] = a_s^T S a_{s'}^*``
+    (:func:`defumat.transport.green.spin_transmission`). ``P_t = 1`` is the sum
+    above, so ``tip_spin=None`` takes the branch it always took, unchanged and
+    to the last bit.
     """
     used = calculation.system
     basis = build_basis(used)
@@ -324,6 +349,8 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
 
     projector, channel_scale = _substrate_acceptance(
         spin, polarization, npol, wavefunctions.shape[0])
+    tip_projector, tip_scale = _tip_acceptance(
+        tip_spin, tip_polarization, npol, wavefunctions.shape[0])
     # ``S`` without a Hamiltonian to hang it on, which the volume diagnostic
     # needs and the plane does not: the augmentation charge is zero in the
     # vacuum where both planes of a tunnelling geometry sit.
@@ -336,6 +363,7 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
     top_band = np.zeros_like(total) if incoherent else None
     least, offdiagonal, hermiticity, channels = np.inf, [], 0.0, []
 
+    open_path = 0.0
     for ispin in range(nspin):
         amplitudes = np.empty((npol, nk, nbnd, points.shape[0]), dtype=complex)
         overlaps = np.empty((nk, nbnd, nbnd), dtype=complex)
@@ -385,11 +413,30 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
             / np.where(norms > 0.0, norms, 1.0))
 
         scale = 1.0 if channel_scale is None else channel_scale[ispin]
+        # Two polarizers multiply: on a collinear run each is a weight on the
+        # channel, and a channel the tip does not accept is one the substrate
+        # never sees.
+        if tip_scale is not None:
+            scale *= tip_scale[ispin]
+        open_path += scale
         if scale == 0.0:
             continue
         for ie, energy in enumerate(energies):
             weights = amplitude_weights(
                 eigenvalues[ispin], energy, broadening, method, smearing)
+            if tip_projector is not None:
+                total[ie] += scale * spin_transmission(
+                    amplitudes, overlaps, kweights, weights, tip_projector,
+                    coherent=True)
+                if incoherent:
+                    total_incoherent[ie] += scale * spin_transmission(
+                        amplitudes, overlaps, kweights, weights, tip_projector,
+                        coherent=False, eigenvalues=eigenvalues[ispin])
+                    top_band[ie] += scale * spin_transmission(
+                        amplitudes[:, :, -1:], overlaps[:, -1:, -1:],
+                        kweights, weights[:, -1:], tip_projector,
+                        coherent=False)
+                continue
             for component in range(npol):
                 total[ie] += scale * transmission(
                     amplitudes[component], overlaps, kweights, weights,
@@ -402,7 +449,20 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
                         amplitudes[component][:, -1:], overlaps[:, -1:, -1:],
                         kweights, weights[:, -1:], coherent=False)
 
-    if not np.any(total > 0.0):
+    if not np.any(total > 0.0) and open_path == 0.0:
+        # Two spin filters in series with nothing in common pass nothing, and
+        # that is the answer rather than a k-set that misses the states: a
+        # fully polarized tip on one channel of a collinear run and a fully
+        # polarized substrate on the other leave no path at all. Saying the
+        # k-set is at fault here would be a wrong diagnosis of a right number.
+        warnings.warn(
+            "the transmission is identically zero because the tip's and the "
+            "substrate's spin acceptances leave no channel open between them: "
+            "two fully polarized leads on opposite channels of a collinear run "
+            "pass nothing. That is the answer, not a numerical accident",
+            stacklevel=4,
+        )
+    elif not np.any(total > 0.0):
         # **A Gaussian delta returns exactly zero, not something small.** With
         # no state within a few ``broadening`` of the tip energy every
         # amplitude underflows and the map is identically 0.0 -- which reads
@@ -461,12 +521,39 @@ def _substrate_acceptance(spin, polarization, npol, nspin):
     )
 
 
-def _collinear_acceptance(spin, polarization):
+def _tip_acceptance(spin, polarization, npol, nspin):
+    """The **tip's** spin selection: a 2x2 matrix, or a weight per channel.
+
+    The mirror image of :func:`_substrate_acceptance` and physically the more
+    familiar of the two -- this is the magnetic tip of spin-polarized STM,
+    P65's ``spin``. It is spelled ``tip_spin`` here only because the substrate
+    got the plain name first.
+
+    On a **collinear** run it is exact rather than approximate: spin is
+    conserved through the junction, the two channels are two independent
+    calculations, and a polarized tip is the weight ``(1 +- P)/2`` on each --
+    the same three lines the substrate's acceptance is. The two weights then
+    simply multiply, which is a series of two spin filters.
+    """
+    if spin is None:
+        return None, None
+    if npol == 2:
+        return spin_projector(spin, polarization, what="tip"), None
+    if nspin == 2:
+        return None, _collinear_acceptance(spin, polarization, what="tip")
+    raise NotImplementedError(
+        "a spin-polarized tip needs a magnetization to couple to and this run "
+        "has none: every direction would take half of everything, which is the "
+        "charge map again"
+    )
+
+
+def _collinear_acceptance(spin, polarization, what: str = "substrate"):
     """``(1 +- P)/2`` per channel -- P65's ``[rho + P n.m]/2``, one level down.
 
-    A collinear run's two channels are two calculations, so a polarized
-    substrate is a weight on each rather than a matrix between them. The
-    identity is the same one :func:`defumat.stm.image.project_spin` writes:
+    A collinear run's two channels are two calculations, so a polarized lead is
+    a weight on each rather than a matrix between them. The identity is the
+    same one :func:`defumat.stm.image.project_spin` writes:
     ``[rho + P m]/2 = (1+P)/2 rho_up + (1-P)/2 rho_down``.
     """
     from defumat.stm.image import _collinear_axis
@@ -475,8 +562,17 @@ def _collinear_acceptance(spin, polarization):
     p = float(polarization) * axis
     if not -1.0 <= float(polarization) <= 1.0:
         raise ValueError(
-            f"the substrate polarization must be in [-1, 1], got {polarization}")
+            f"the {what} polarization must be in [-1, 1], got {polarization}")
     return (0.5 * (1.0 + p), 0.5 * (1.0 - p))
+
+
+def _label(spin):
+    """A direction as something a result object can carry and print."""
+    if spin is None:
+        return None
+    if isinstance(spin, str):
+        return spin
+    return tuple(float(c) for c in np.ravel(spin))
 
 
 # --------------------------------------------------------------------------
