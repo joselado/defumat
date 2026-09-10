@@ -251,11 +251,13 @@ because that is what decides whether it is a session or a phase.
   wrong the strain leg is).
 - **An ultrasoft spin spiral** (P42, attempted and reverted, four findings banked) and
   **ultrasoft/PAW in the sum-over-states `chi_0`** (P40, two findings banked).
-- **An unidentified 83.62 GiB allocation at the first diagonalisation of a 45-atom slab**
-  (P73): byte-for-byte the same at two `diago_david_ndim` and two band batches, so it is
-  neither, and not the buffer `tools/gpu/davidson_memory.py` fits. `2^13 x 641 x 17099`
-  has no factor of 3, 5, 7, 13 or 17, which rules out `nbnd`, `nh`, `nat` and any FFT
-  grid. Needs `memory_analysis()` at the slab's shapes, which allocates nothing.
+- ~~**An unidentified 83.62 GiB allocation at the first diagonalisation of a 45-atom
+  slab**~~ (P73) — **closed by P74**: it was `vloc_psi_nc` transforming the whole band
+  block because the spinor local term never called `map_bands`, so `DEFUMAT_BAND_BATCH`
+  was inert in every noncollinear run. `c128[403,2,200,240,54]` is 33.42 GB and the
+  starting subspace's `c128[510,2,200,240,54]` is 42.32 GB, three live at once. The
+  arithmetic could not close it because an XLA:GPU executable holds one aligned temp
+  buffer summed over every live temporary; `--xla_dump_to` closed it in one run.
 - **A *named* out-of-memory failure — the naming is now closed; what a sampler cannot
   see is not.** Not a physics gap and it belonged here anyway, because the unnamed kind
   has cost work three times (P28b, P46, and a session on 2026-09-07). Both halves are now
@@ -11736,7 +11738,10 @@ block (the chunk's own cost, and the reason `_aug_chunk` sizes itself from `nh`)
 `setup_transient` that shrinks with it: the Bessel transform runs on the knots instead of
 on the G sphere, which is the whole difference between the two schemes in one line.
 
-**What is outstanding.** A **fourth** allocation, unidentified: with setup passed at
+**What is outstanding — nothing now; this was the fourth allocation and P74 identifies
+it.** It is `vloc_psi_nc` transforming the whole band block, because the spinor local term
+never called `map_bands`; what follows is the diagnosis as it stood before the XLA dump
+settled it, kept because the reasoning is the point. With setup passed at
 `ecutrho = 240`, the first diagonalisation asks for 83.62 GiB = 89,788,080,128 bytes,
 byte-for-byte identically at `diago_david_ndim` 4 against 2 and `DEFUMAT_BAND_BATCH` 64
 against 16, so it is neither of those and is not the buffer `tools/gpu/davidson_memory.py`
@@ -11833,6 +11838,91 @@ For scale, the same run's file peaks elsewhere are `test_stress` 6,317 MB, `test
 this number is **not measured** — the Aug 29 run predates the peak column, so there is no
 baseline to compare against, and the honest statement is that the peak is now known rather
 than that it is new.
+
+### P74 — The band dial reaches the spinor `h_psi`. ✅ DONE.
+
+`defumat/hamiltonian/noncollinear.py`. A **memory** fix and nothing else: no new physics,
+no README row, no notebook, and the deliverable is that a 45-atom noncollinear PAW
+supercell stops asking a 141 GB card for arrays it does not have.
+
+**This is P73's fourth allocation, identified.** P73 left an 83.62 GiB request at the first
+diagonalisation of the NiBr2 slab that answered to neither `diago_david_ndim` nor
+`DEFUMAT_BAND_BATCH`, and the arithmetic there (`2^13 x 641 x 17099`, no factor of 3, 5, 7,
+13 or 17) could not close it. The reason the arithmetic could not close it is that an
+XLA:GPU executable gets **one** temp buffer, the sum of every live temporary at its aligned
+offset, so the number is an aggregate with padding and matches no array's shape by
+construction. What settles it is `--xla_dump_to`, not factoring.
+
+**What it is.** `NoncollinearHamiltonian._local` -- `vloc_psi_nc` -- never called
+`map_bands`. The scalar `Hamiltonian._local` has walked its bands since the dial existed;
+the spinor one transformed the whole block. So `DEFUMAT_BAND_BATCH` was **silently inert in
+every noncollinear run**, which is the one regime where a band in flight is two real-space
+boxes rather than one, and the regime this project advertises for every heavy element it
+supports.
+
+The dump names it in two modules at once, on the slab's own shapes
+(`ecutrho = 240`, smooth grid 240x54x200, `nbnd = 403`, `natomwfc = 510`):
+
+| where | traced FFT | per array |
+|---|---|---|
+| `jit(_every_k)`, the Davidson | `c128[403,2,200,240,54]` | **33.42 GB** |
+| `jit(_rotate_all)`, the starting subspace | `c128[510,2,200,240,54]` | **42.32 GB** |
+
+and the second is the one the card refused first: cuFFT reported
+`rank 2, input_distance 12960, batch_count 204000` -- which is `510 x 2 x 200` planes of
+`240 x 54` exactly -- and asked for a **39.40 GiB** work area, one array's worth, on top of
+the array. Beside each of them the stick pass holds a `c128[510,2,2383,200]`, 7.78 GB.
+
+**The 83.62 GiB is an aggregate of two or three of these and is not reproduced to the
+byte**, and it does not need to be: the shapes are the identification and the arithmetic is
+not. Two of the 42.32 GB arrays is 84.6 GB, three of the 33.42 GB ones is 100.3 GB, and the
+request was 89.79 GB -- which is what a summed, aligned temp buffer looks like from the
+outside, and why chasing it by factoring was the wrong instrument.
+
+**The fix is four lines and the care is in one of them.** `_local` flattens the `(2, npwx)`
+spinor pair into `map_bands`'s `ndim`, chunks, and restores it inside the block:
+`map_bands` flattens *all* leading axes, so handing it `(nbnd, 2, npwx)` would chunk across
+the spinor pair and split a state in half. The body is untouched and became `_local_block`,
+so the spiral branch -- two components on two different spheres -- rides along unchanged.
+
+**The numbers.** On `tests/data/qe/h-chain-90deg.in`, four noncollinear hydrogens with
+`nbnd = 24` on a 40x40x64 grid, the traced FFT goes from `24x2x64x40x40` to `1x2x...` at
+`DEFUMAT_BAND_BATCH=1` and to `5x2...` plus a four-band tail at 5, and `H|psi>` is
+**bit-for-bit identical** -- `assert_array_equal`, not a tolerance, because `map_bands`
+maps and does not reduce, so there is not even a round-off difference to allow for. On the
+slab, `band_batch = 16` takes the Davidson's box from 33.42 GB to **1.33 GB**.
+
+**The test asserts the shape, not only the equality**, and that distinction is the whole
+lesson. `test_batching.py` already had
+`test_h_psi_is_the_same_operator_whatever_the_band_chunk`, which builds *its own* local
+term and checks the two ends agree -- so it passes whether or not any operator calls the
+dial, and it passed throughout. `test_the_band_dial_reaches_the_spinor_h_psi` sets
+`DEFUMAT_BAND_BATCH` the way a run sets it, lowers the real
+`NoncollinearHamiltonian.apply`, and reads the leading axis of every `stablehlo.fft` in the
+result. On the unfixed code its equality half passes and the shape half fails with
+`assert {24} == {1}`. **A dial is tested by watching the thing it is supposed to move.**
+
+**`sizing.py`'s third term gains its missing `npol`** in the same pass, for the same
+reason: `2.00 band_batch npol N_smooth zc`, because a spinor band in flight is `npol`
+boxes. The coefficients were fitted on `si16` and checked against fourteen H200 points on a
+**gamma-storage** slab, and gamma storage is substituted away for a spinor run -- so every
+point behind the fit is `npol = 1`, this factor is an extrapolation the fit never saw
+rather than a retuning of it, and nothing moves where it was measured.
+
+**Two consequences not yet measured, and the first is not about GPUs.** On a **CPU** the
+band default is 1, so every spinor SCF on this workstation has been transforming its whole
+block *against* its own default and now walks the bands one at a time. `batching.py`
+measures that trade at 1.14-2.48x faster on large scalar cells and 0.91x on the
+180-plane-wave one; for a spinor it is unmeasured, and the number is a before/after
+per-iteration timing on `pw_spinorbit/spinorbit.in`. And `OPEN.md` item 2 --
+`test_spinorbit.py` peaking at 11,088 MB against a 12 GB cap -- was measured with the whole
+block in the box, so that peak may have moved on its own; one capped `run_regression.sh`
+pass over that file on an idle machine re-reads it.
+
+**What is outstanding.** Whether the slab now runs. The identification and the fix are
+measured; the SCF that follows them is not, and P73's stated peak of 117.55 GB for the
+`Calculation` build was taken before the tabulated augmentation existed. The next run is
+the number.
 
 ## 4. Validation strategy
 

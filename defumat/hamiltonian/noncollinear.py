@@ -41,6 +41,7 @@ import equinox as eqx
 import jax.numpy as jnp
 
 from defumat.basis.fft import g_to_r, gather_from_box, r_to_sticks, sticks_to_r
+from defumat.batching import map_bands
 from defumat.pseudo.projectors import Projectors
 
 __all__ = ["SpinorHamiltonian"]
@@ -235,7 +236,35 @@ class SpinorHamiltonian(eqx.Module):
         ``vloc_psi_nc``. The two components are transformed independently -- the
         FFT knows nothing about spin -- and mixed pointwise in between, which is
         the only place in ``H|psi>`` where the magnetization enters at all.
+
+        **The bands are walked, not batched**, exactly as they are in the scalar
+        :meth:`defumat.hamiltonian.operator.Hamiltonian._local`, and here it is
+        a memory question rather than a cache one. A spinor band's real-space
+        working set is *two* boxes, so the whole block is
+        ``nbnd x 2 x N_smooth`` -- 33 GB at 403 bands on a 240x54x200 grid, with
+        several such arrays live inside one ``h_psi`` and a cuFFT work area
+        beside them. That is what stopped a 45-atom NiBr2 supercell on a 141 GB
+        H200 (``PLAN.md`` P74): the band dial reached the scalar operator and
+        not this one, so ``DEFUMAT_BAND_BATCH`` was silently inert in the one
+        regime that most needs it.
+
+        The chunk is over the *band* axis alone: the ``(2, npwx)`` spinor pair
+        is the state and must not be split, so the pair is flattened into
+        :func:`~defumat.batching.map_bands`'s ``ndim`` and restored inside the
+        block. Nothing else changes -- every band goes through the same
+        transforms in the same order, so the result is identical to the last
+        bit.
         """
+        flat = self._join(components)
+
+        def block(states: jnp.ndarray) -> jnp.ndarray:
+            pair = states.reshape(states.shape[:-1] + (2, self.npwx))
+            return self._join(self._local_block(pair, ik))
+
+        return map_bands(block, flat).reshape(components.shape)
+
+    def _local_block(self, components: jnp.ndarray, ik: int) -> jnp.ndarray:
+        """One block of bands through the grid; see :meth:`_local`."""
         up, down = self._rows(ik)
         if self.sticks is None:
             if not self.spiral:

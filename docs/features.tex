@@ -3249,6 +3249,15 @@ DEFUMAT_K_BATCH=all DEFUMAT_BAND_BATCH=all python3 run.py
 or per call, \code{run\_scf(..., k\_batch=...)}. The chunk size changes the order
 contributions are summed in and nothing else --- round-off, $\sim$1e-15 Ry.
 
+\textbf{The band dial is worth twice as much in a spinor run}, because a band
+in flight is then \emph{two} real-space boxes rather than one: a noncollinear
+calculation with 403 bands on a $240\times54\times200$ grid puts
+$403\times2\times2{,}592{,}000$ complex numbers --- 33 GB --- into one transform
+if the whole block goes at once, and several such arrays are live inside a
+single application of $H$. \code{DEFUMAT\_BAND\_BATCH=16} makes that 1.3 GB. The
+answer is unchanged bit for bit, not merely to round-off, because chunking the
+band axis reorders nothing: it is a map, not a sum.
+
 \textbf{Why the default is per platform.} A GPU has no cache to fit in and
 inverts the conclusion: on a ten-atom metal, \code{k=1,b=1} costs \textbf{4.5x}
 what \code{k=all,b=all} does on the same card, sixteen-atom silicon runs at

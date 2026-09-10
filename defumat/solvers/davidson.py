@@ -81,12 +81,12 @@ large run starts at all**, so it is written down here rather than discovered.
 Fitted to ``memory_analysis().temp_size_in_bytes`` of the compiled solve, in
 bytes of one complex number ``zc``::
 
-    2.18 nvecx npwx zc  +  4.20 nbnd npwx zc  +  2.00 band_batch N_smooth zc
+    2.18 nvecx npwx zc  +  4.20 nbnd npwx zc  +  2.00 band_batch npol N_smooth zc
 
 The first term is ``psi`` and ``hpsi``, the two arrays this carries; the second
 is the ``(nbnd, npwx)`` blocks -- ``evc``, ``hevc`` and the expansion chain; and
-the third is ``h_psi``'s FFT boxes, two per band in flight, which is the term
-nothing in this file controls. On a 157-atom slab at ``ecutwfc = 60`` with
+the third is ``h_psi``'s FFT boxes, two per band in flight and ``npol`` fields
+per band, which is the term nothing in this file controls. On a 157-atom slab at ``ecutwfc = 60`` with
 ``nbnd = 1020`` and ``diago_david_ndim = 4`` that is 46 + 24 + 24 GiB, and an
 H200 with the default 75 per cent preallocation refuses it.
 

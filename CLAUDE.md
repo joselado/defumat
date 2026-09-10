@@ -35,7 +35,7 @@ noncollinear magnetism, spin spirals, DFT+U, forces, stress and both relaxations
 topological invariants, the whole linear-response stack (dielectric constants, Born
 charges, phonons at `Gamma`), third derivatives (Raman, electrostriction, the
 elasto-optic tensor), and a long tail of quantities taken from Elk that `pw.x` does not
-have. Phases run **P0 through P72**; the ones still open, and the exact term each is
+have. Phases run **P0 through P74**; the ones still open, and the exact term each is
 missing, are indexed at the head of `PLAN.md` §3.
 
 **Where to look for what:**

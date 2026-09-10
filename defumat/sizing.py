@@ -39,7 +39,7 @@ GB -- so a run whose floor fits on the card dies asking for a single allocation
 larger than the card. :attr:`SizeEstimate.eigensolver_buffer` reports it and
 :attr:`SizeEstimate.peak_bytes` is the number that decides. The fit is
 
-    2.18 nvecx npwx zc  +  4.20 nbnd npwx zc  +  2.00 band_batch N_smooth zc
+    2.18 nvecx npwx zc  +  4.20 nbnd npwx zc  +  2.00 band_batch npol N_smooth zc
 
 -- the subspace ``psi``/``hpsi`` pair, about five more ``(nbnd, npwx)`` blocks
 live inside the Davidson subspace solve, and roughly two FFT boxes per band in
@@ -100,8 +100,8 @@ _COMPLEX_BYTES = {"double": 16, "single": 8}
 _REAL_BYTES = {"double": 8, "single": 4}
 
 #: Coefficients of the eigensolver's XLA temp buffer, in units of
-#: ``nvecx npwx zc``, ``nbnd npwx zc`` and ``band_batch N_smooth zc``. Fitted to
-#: ``memory_analysis().temp_size_in_bytes`` of the compiled
+#: ``nvecx npwx zc``, ``nbnd npwx zc`` and ``band_batch npol N_smooth zc``.
+#: Fitted to ``memory_analysis().temp_size_in_bytes`` of the compiled
 #: :func:`~defumat.solvers.davidson.davidson_eigensolver_all` over ``nbnd`` in
 #: {32, 48, 64, 96}, ``david`` in {2, 3, 4, 6} and ``DEFUMAT_BAND_BATCH`` in
 #: {4, 8, 32} on ``benchmarks/si16-1k-ecut30.in``, **through the origin**;
@@ -591,11 +591,18 @@ def estimate_size(
     # The eigensolver's own XLA temp buffer -- see the module docstring. The
     # FFT term is on the **smooth** grid, which is the box ``h_psi`` transforms
     # a band in; ``band_batch = None`` is every band at once.
+    #
+    # **The FFT term carries ``npol`` and the fit does not know it.** A spinor
+    # band is two fields on that grid -- ``vloc_psi_nc`` transforms each
+    # component -- so a band in flight is ``npol`` boxes, not one. The
+    # coefficients were fitted on ``si16`` and checked on a gamma-storage slab,
+    # both ``npol = 1``, so this factor is an extrapolation the fit never saw
+    # rather than a retuning of it: at ``npol = 1`` nothing here moves.
     bands_in_flight = nbnd if band_batch is None else min(band_batch, nbnd)
     eigensolver_buffer = int(
         _SUBSPACE_COEFFICIENT * nvecx * ndim * zc
         + _RITZ_COEFFICIENT * nbnd * ndim * zc
-        + _FFT_COEFFICIENT * bands_in_flight * int(np.prod(smooth_grid)) * zc
+        + _FFT_COEFFICIENT * bands_in_flight * npol * int(np.prod(smooth_grid)) * zc
     )
 
     return SizeEstimate(

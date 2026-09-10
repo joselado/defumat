@@ -204,6 +204,76 @@ def test_h_psi_is_the_same_operator_whatever_the_band_chunk(batch):
 
 
 # ---------------------------------------------------------------------------
+# The dial has to reach the *real* operator, not only ``map_bands``. The test
+# above builds its own local term, so it passes whether or not anything calls
+# the dial -- which is exactly how a spinor ``h_psi`` came to ignore it
+# entirely (``PLAN.md`` P74). The assertion that catches that is on the shape
+# of the transform the operator actually traces.
+
+
+@pytest.mark.parametrize("setting, widths", [("1", {1}), ("5", {5, 4}), ("all", {24})])
+def test_the_band_dial_reaches_the_spinor_h_psi(pseudo_dir, monkeypatch,
+                                                setting, widths):
+    """``vloc_psi_nc``'s FFT is over one chunk of bands, not over the block.
+
+    A spinor band's real-space working set is ``npol`` boxes, so the whole
+    block is ``nbnd x 2 x N_smooth``: 33 GB at the 403 bands of a 45-atom NiBr2
+    supercell on a 240x54x200 grid, several of them live inside one ``h_psi``,
+    which is what an H200 with 141 GB refused. The equality below is the easy
+    half and passes on the broken code; the width of the traced FFT is the half
+    that does not.
+
+    The dial is set the way a run sets it -- ``DEFUMAT_BAND_BATCH`` -- rather
+    than by reaching into the module, because "the environment variable is
+    inert here" *was* the defect.
+    """
+    from pathlib import Path
+
+    from defumat.io.pwin import read_pw_input
+    from defumat.pseudo import read_upf
+    from defumat.scf.driver import Calculation
+    from defumat.scf.potential import v_of_rho
+    from defumat.system import build_system
+
+    case = Path(__file__).resolve().parents[1] / "data" / "qe" / "h-chain-90deg.in"
+    system = build_system(read_pw_input(case))
+    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file)
+                    for s in system.structure.species)
+    calculation = Calculation(system, pseudos)
+    potential = v_of_rho(calculation.starting_density(),
+                         calculation.basis.dense, system.cell)
+    hamiltonian = calculation.hamiltonian(potential.v_scf)[0]
+    assert hamiltonian.npol == 2
+
+    nbnd, ndim = 24, hamiltonian.ndim
+    generator = np.random.default_rng(0)
+    psi = jnp.asarray(generator.normal(size=(nbnd, ndim))
+                      + 1j * generator.normal(size=(nbnd, ndim)))
+
+    def applied(band_batch):
+        monkeypatch.setenv("DEFUMAT_BAND_BATCH", band_batch)
+        compiled = jax.jit(lambda p, _tag=band_batch: hamiltonian.apply(p, 0))
+        return compiled.lower(psi).as_text(), np.asarray(compiled(psi))
+
+    text, value = applied(setting)
+    _, reference = applied("all")
+
+    # Bit-for-bit: ``map_bands`` maps, it does not reduce, so there is not even
+    # a round-off difference to allow for.
+    np.testing.assert_array_equal(value, reference)
+
+    # ``tensor<Nx2x...>``: the leading axis of every FFT the operator traces is
+    # the chunk, and 24 bands at 5 leave a tail of 4.
+    seen = set()
+    for line in text.splitlines():
+        if "stablehlo.fft" not in line or "tensor<" not in line:
+            continue
+        seen.add(int(line.split("tensor<", 1)[1].split("x", 1)[0]))
+    assert seen, "no FFT was traced at all -- the probe, not the operator, is wrong"
+    assert seen == widths
+
+
+# ---------------------------------------------------------------------------
 # The default is per platform, and that is the whole of what a GPU run has to
 # get right. ``PERFORMANCE.md`` measures the cache-shaped defaults at 4.5x on
 # ``al10-metal`` and at an outright loss (0.20x) on sixteen atoms, and at
