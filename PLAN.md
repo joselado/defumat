@@ -11906,8 +11906,24 @@ result. On the unfixed code its equality half passes and the shape half fails wi
 reason: `2.00 band_batch npol N_smooth zc`, because a spinor band in flight is `npol`
 boxes. The coefficients were fitted on `si16` and checked against fourteen H200 points on a
 **gamma-storage** slab, and gamma storage is substituted away for a spinor run -- so every
-point behind the fit is `npol = 1`, this factor is an extrapolation the fit never saw
-rather than a retuning of it, and nothing moves where it was measured.
+point behind the fit is `npol = 1` and nothing moves where it was measured.
+
+**The factor is measured rather than argued.** `tools/gpu/davidson_memory.py` on
+`h-chain-90deg.in` -- `npol = 2`, `nbnd = 24`, a 40x40x64 smooth grid -- gives a temp
+buffer rising by **6,553,600 bytes per band in flight**, the same number over `band_batch`
+1, 2, 4 and 8, against a box of `40 x 40 x 64 x 16 = 1,638,400`. That is **exactly 4.00
+boxes per spinor band**, which is the term's 2.00 times `npol`; and the remainder at
+`band_batch = 1`, 39.84 MB, is the two `ndim` terms' 40.2 MB to one per cent, so the fit's
+whole *form* transfers to a spinor and only this factor was missing. `band_batch = 16` sits
+off that ladder and is not a counter-example: 24 bands at 16 compile a 16-block **and** an
+8-tail, and one executable holds both.
+
+**The report was printing GiB and calling it GB**, which is the same slip one unit further
+out: `SizeEstimate.report` divides by `2^30` and labelled the result GB, so its figures
+read 7.4 per cent low against a card whose specification is decimal -- an H200 is 143.8 GB
+and 133.9 GiB. That is what made this run's log look self-contradictory, with the report
+saying `PEAK 25.90 GB` and the line beneath it `the SCF estimate said 27.80 GB`: one
+number, two units. `peak_bytes` is and was bytes; only the formatter chose.
 
 **Two consequences not yet measured, and the first is not about GPUs.** On a **CPU** the
 band default is 1, so every spinor SCF on this workstation has been transforming its whole

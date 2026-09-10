@@ -280,7 +280,13 @@ class SizeEstimate:
     def report(self) -> str:
         """A human-readable table -- what the CLI prints."""
         def gb(n):
-            return f"{n / 2**30:9.2f} GB"
+            # **GiB, and it says so.** This divides by 2^30 and said "GB",
+            # which is the unit a card's own specification is *not* in: an
+            # H200 is 143.8 GB and 133.9 GiB, and a report read against the
+            # wrong one of those is out by 7.4 per cent in the direction that
+            # says a run fits. `peak_bytes` is bytes; only this formatter
+            # chose a unit.
+            return f"{n / 2**30:9.2f} GiB"
 
         lines = [
             "Sizes",
@@ -592,12 +598,20 @@ def estimate_size(
     # FFT term is on the **smooth** grid, which is the box ``h_psi`` transforms
     # a band in; ``band_batch = None`` is every band at once.
     #
-    # **The FFT term carries ``npol`` and the fit does not know it.** A spinor
+    # **The FFT term carries ``npol``, and that factor is measured.** A spinor
     # band is two fields on that grid -- ``vloc_psi_nc`` transforms each
     # component -- so a band in flight is ``npol`` boxes, not one. The
     # coefficients were fitted on ``si16`` and checked on a gamma-storage slab,
-    # both ``npol = 1``, so this factor is an extrapolation the fit never saw
-    # rather than a retuning of it: at ``npol = 1`` nothing here moves.
+    # both ``npol = 1``, so nothing here moves where they were measured. On
+    # ``tests/data/qe/h-chain-90deg.in`` (``npol = 2``, ``nbnd = 24``, a
+    # 40x40x64 smooth grid) ``memory_analysis().temp_size_in_bytes`` rises by
+    # **6,553,600 bytes per band in flight**, flat over ``band_batch``
+    # 1 -> 2 -> 4 -> 8, against a box of 40*40*64*16 = 1,638,400 -- so a spinor
+    # band is **exactly 4.00 boxes**, which is this term's 2.00 times ``npol``.
+    # The remainder at ``band_batch = 1``, 39.84 MB, is the two ``ndim`` terms'
+    # 40.2 MB to one per cent, so the whole form transfers. (``band_batch = 16``
+    # is off that ladder and is not a counter-example: 24 bands at 16 compile a
+    # 16-block *and* an 8-tail, and the executable holds both.)
     bands_in_flight = nbnd if band_batch is None else min(band_batch, nbnd)
     eigensolver_buffer = int(
         _SUBSPACE_COEFFICIENT * nvecx * ndim * zc
