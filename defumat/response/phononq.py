@@ -256,7 +256,7 @@ class TwoSphereSolver(SternheimerSolver):
         ``(nspin_mag, ...)`` leading axis every consumer of one expects.
         """
         from defumat.basis.interpolate import to_dense
-        from defumat.batching import sum_k
+        from defumat.batching import sum_bands, sum_k
 
         calculation, kq = self.calculation, self.calculation_kq
         grid = calculation.basis.smooth.grid
@@ -266,12 +266,19 @@ class TwoSphereSolver(SternheimerSolver):
 
         def one_k(item):
             states, tangent, here, there, weight = item
-            psi_r = g_to_r(states, here, grid)
-            dpsi_r = g_to_r(tangent, there, grid)
-            return jnp.einsum(
-                "n,nxyz->xyz", weight.astype(states.dtype),
-                jnp.conj(psi_r) * dpsi_r,
-            )
+
+            # **The bands are walked, not batched**, which is
+            # ``incdrhoscf.f90``'s own ``DO ibnd`` and is the same working-set
+            # argument the ground-state ``sum_band`` makes -- with *three*
+            # band-sized real-space arrays here rather than one, since both
+            # factors are transformed and then multiplied (``PLAN.md`` P74).
+            def one_band(arrays):
+                state, tangent_band, occupation = arrays
+                psi_r = g_to_r(state, here, grid)
+                dpsi_r = g_to_r(tangent_band, there, grid)
+                return occupation.astype(states.dtype) * jnp.conj(psi_r) * dpsi_r
+
+            return sum_bands(one_band, (states, tangent, weight))
 
         total = jnp.zeros(grid, dtype=self.psi.dtype)
         for spin in range(self.nspin):
@@ -323,7 +330,7 @@ def bare_displacements_at_q(calculation, calculation_kq, solver, q_cart, positio
     import equinox as eqx
 
     from defumat.basis.fft import gather_from_box
-    from defumat.batching import map_k
+    from defumat.batching import map_bands, map_k
     from defumat.pseudo.potentials import local_potential_at_q
 
     smooth = calculation.basis.smooth
@@ -356,9 +363,17 @@ def bare_displacements_at_q(calculation, calculation_kq, solver, q_cart, positio
 
             def one_k(item, coefficients=coefficients):
                 states, here, there, beta_k, beta_kq, keep = item
-                field = g_to_r(states, here, grid)
-                box = jnp.fft.fftn(field * potential, axes=(-3, -2, -1)) / points
-                local = gather_from_box(box, there)
+
+                # The local term is a band's box in and a band's box out, so
+                # it takes the band dial; the two einsums below are
+                # ``(n, npwx) x (npwx, nkb)`` and hold nothing grid-sized.
+                def local_block(block):
+                    field = g_to_r(block, here, grid)
+                    box = jnp.fft.fftn(
+                        field * potential, axes=(-3, -2, -1)) / points
+                    return gather_from_box(box, there)
+
+                local = map_bands(local_block, states)
                 projected = jnp.einsum("gk,ng->nk", beta_k.conj(), states)
                 nonlocal_ = jnp.einsum(
                     "gk,nk->ng", beta_kq, projected @ coefficients.T
@@ -468,6 +483,7 @@ def induced_perturbation_at_q(calculation, calculation_kq, dv):
     """
     from defumat.basis.fft import gather_from_box
     from defumat.basis.interpolate import to_smooth
+    from defumat.batching import map_bands
 
     smooth, dense = calculation.basis.smooth, calculation.basis.dense
     grid = smooth.grid
@@ -477,11 +493,14 @@ def induced_perturbation_at_q(calculation, calculation_kq, dv):
     mask = calculation_kq.basis.planewaves.mask
 
     def apply(states, ik, spin):
-        box = jnp.fft.fftn(
-            g_to_r(states, index_k[ik], grid) * field[spin],
-            axes=(-3, -2, -1),
-        ) / points
-        return jnp.where(mask[ik], gather_from_box(box, index_kq[ik]), 0.0)
+        def block(chunk):
+            box = jnp.fft.fftn(
+                g_to_r(chunk, index_k[ik], grid) * field[spin],
+                axes=(-3, -2, -1),
+            ) / points
+            return gather_from_box(box, index_kq[ik])
+
+        return jnp.where(mask[ik], map_bands(block, states), 0.0)
 
     return apply
 

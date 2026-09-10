@@ -144,7 +144,7 @@ import jax
 
 from defumat.basis.fft import force_real_g0, g_to_r, g_to_r_gamma
 from defumat.basis.interpolate import to_dense, to_smooth
-from defumat.batching import map_k
+from defumat.batching import map_bands, map_k
 from defumat.scf.density import becsum as becsum_of, sum_band
 from defumat.scf.occupations import smearing_order, w0gauss, wgauss
 from defumat.forces.energy import reject_potential_only
@@ -838,16 +838,28 @@ def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None)
 
     def apply(states, ik, spin):
         index = fft_index[ik]
-        if minus_index is None:
-            field = g_to_r(states, index, grid)
-        else:
-            # Half-sphere storage: the field is rebuilt from both halves and is
-            # real, and ``dV_scf`` is real, so the product is -- and gathering
-            # the stored half of its coefficients loses nothing. No factor: the
-            # doubling belongs to *sums*, never to the transform.
-            field = g_to_r_gamma(states, index, minus_index[ik], grid)
-        box = jnp.fft.fftn(field * fields[spin], axes=(-3, -2, -1)) / n
-        out = jnp.take(box.reshape(box.shape[:-3] + (-1,)), index, axis=-1)
+
+        # **The bands are walked, not batched**, as everywhere else a block of
+        # states goes through the grid. This is the whole linear-response
+        # stack's local perturbation -- the dielectric constant, the Born
+        # charges and the phonons all reach it -- so a block of bands here is
+        # ``nbnd`` boxes live at once (``PLAN.md`` P74). The nonlocal term
+        # below is ``(n, npwx) x (npwx, nkb)`` and holds nothing grid-sized, so
+        # it stays outside the chunk.
+        def local_block(block):
+            if minus_index is None:
+                field = g_to_r(block, index, grid)
+            else:
+                # Half-sphere storage: the field is rebuilt from both halves
+                # and is real, and ``dV_scf`` is real, so the product is -- and
+                # gathering the stored half of its coefficients loses nothing.
+                # No factor: the doubling belongs to *sums*, never to the
+                # transform.
+                field = g_to_r_gamma(block, index, minus_index[ik], grid)
+            box = jnp.fft.fftn(field * fields[spin], axes=(-3, -2, -1)) / n
+            return jnp.take(box.reshape(box.shape[:-3] + (-1,)), index, axis=-1)
+
+        out = map_bands(local_block, states)
         if coefficients is not None:
             projectors = vkb[ik]
             projections = jnp.einsum("gk,...g->...k", projectors.conj(), states)

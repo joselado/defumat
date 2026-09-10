@@ -11991,6 +11991,50 @@ digit. The tolerance is round-off rather than bit-for-bit here and that is the d
 between the two fixes: `map_bands` maps, `sum_bands` **sums**, so the chunk reorders the
 band contributions.
 
+**The defect is one dial and five places, and three of them are latent.** An audit of every
+real-space transform in the package -- `g_to_r`/`sticks_to_r`, every caller -- found the
+same shape three more times, all in the response stack and none of them measured to have
+bitten anything:
+
+| site | what it held at once |
+|---|---|
+| `phononq.response_density_at_q` | **three** band-sized boxes: `psi_r`, `dpsi_r` and their product (`incdrhoscf`) |
+| `phononq.bare_displacements_at_q` | two, inside a `jvp` |
+| `phononq.induced_perturbation_at_q` | two -- `dV_scf(r)|psi>` through the box |
+| `sternheimer.local_perturbation` | two, and this is the perturbation the *whole* linear-response stack applies |
+
+All four now take the dial: `sum_bands` where the contraction is a weighted sum over bands
+(the first), `map_bands` where it is a band in and a band out (the other three), with the
+nonlocal terms left outside the chunk because `(n, npwx) x (npwx, nkb)` holds nothing
+grid-sized. **They are recorded as latent rather than measured**, which is the honest
+distinction: the two SCF sites were each found by a card refusing an allocation, and these
+were found by reading. No response calculation here has been run at a scale that would
+stop on them.
+
+The check is one example through all four at once -- silicon
+`si-epsilon-unshifted-nosym.in`, `dielectric_tensor` for the Sternheimer path and the
+dynamical matrix at `L` for the three phonon ones -- against the unfixed code:
+
+| | max abs | relative |
+|---|---|---|
+| total energy | 0 | 0 |
+| dielectric tensor | 7.1e-15 | **3.0e-16** |
+| Born charge | 2.3e-14 | **1.9e-14** |
+| frequencies at `L` | 2.0e-12 cm^-1 | **4.2e-15** |
+
+and the frequencies still sit against `ph.x`'s 101.84/382.24/405.12/488.02 inside the
+0.2 cm^-1 the regression file asserts. **The gate was not run on these four**: the push
+that carried them was asked for before it finished, and what stands behind them is the
+comparison above rather than the suite.
+
+**The test that should have caught all five, and did not.**
+`test_h_psi_is_the_same_operator_whatever_the_band_chunk` builds *its own* local term and
+checks the two ends of the dial agree -- so it passes whether or not a single operator in
+the package ever calls the dial, and it passed throughout. **A dial is tested by watching
+the thing it is supposed to move**, which is why both new tests assert the leading axis of
+the traced `stablehlo.fft` and fail on the old code with `assert {24} == {1}` and
+`assert {24} == {2}`.
+
 **What is outstanding.** The re-run. The new peak is *predicted* to be about 32 GB --
 `density` falling to ~1.3 GB and `diagonalize` becoming the peak -- and that is arithmetic
 rather than a measurement, which is precisely the thing this phase keeps being punished
