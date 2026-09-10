@@ -11955,14 +11955,51 @@ turning through the cell, which is a helix and not the ferromagnet a single spec
 otherwise give. The spread in `|m|` and the uneven turn angle are what two iterations look
 like; neither is a converged number and neither is comparable with Elk's 1.4058 yet.
 
-**What is outstanding.** Two things, and the first is a gap in this module rather than in
-the run. **`sizing.py` said 27.80 GB against a measured 78.51 GB**, still 2.8x low. Setup
-is outside that figure by construction and the message says so, but P73's whole complaint
-was a green light for a run that did not fit, and 2.8x is the same shape of error with the
-sign flipped now that the run *does* fit. The eigensolver buffer was estimated at 18.54 GB;
-what the other ~50 GB is has not been measured, and the instrument is the one that worked
-here -- `--xla_dump_to`, not arithmetic. And the SCF has not been run to convergence, so
-there is still no defumat number for the physics.
+**The 78.51 GB was measured, not reasoned about, and it was a second instance of the same
+defect.** Job **20202818** bracketed the run by stage and job **20203025** bracketed one
+SCF iteration by its own stages, each label a *synchronised* read of
+`peak_bytes_in_use` -- `block_until_ready` on every return value, because JAX dispatches
+asynchronously and an unsynchronised peak is read before the work it is meant to bracket
+has run.
+
+| | peak | live |
+|---|---|---|
+| `Calculation` built | 8.20 GB | 6.68 GB |
+| helix seed built | 9.76 GB | 6.81 GB |
+| `onecenter`, `hamiltonian` | 9.76 GB | 7.2 GB |
+| `diagonalize` | 27.23 -> **31.97 GB** | 11.26 GB |
+| `occupations`, `becsum` | 31.97 GB | 9.24 GB |
+| **`density`** | 31.97 -> **78.19 GB** | 9.37 GB |
+
+Two things that says at once. **Setup is finished business** -- 8.20 GB where P73 measured
+117.55 -- and **the Davidson is not the problem**: about 22 GB over a 9.24 GB base against
+a fitted 18.54, so the fit is sound at `npol = 2` and PAW. The peak is **46 GB inside
+`density`**, and the live set after it is 9.37 GB, so all of it is transient.
+
+**`spinor_band_density` transformed the whole band block**, exactly as `vloc_psi_nc` did:
+`g_to_r` on `(nbnd, 2, n1, n2, n3)` is 33.4 GB at 403 bands on this grid, and the stacked
+Pauli components built from it are another 33.4. The scalar `band_density` and the spinor
+`tau` beside it have always walked their bands with `sum_bands`; only this one did not. It
+does now, and every `g_to_r` in `scf/density.py` is inside a `one_band` -- audited, not
+assumed.
+
+The check is the pair the other fix used. On `h-chain-90deg.in` the traced FFT's leading
+axis goes from `24` at every setting to **2** at `band_batch = 1` -- the spinor pair, and
+its being what is left is the point -- and `{5, 4}` at 5, while the density agrees with the
+unfixed code to **4.3e-16** relative with an integrated charge identical to every printed
+digit. The tolerance is round-off rather than bit-for-bit here and that is the difference
+between the two fixes: `map_bands` maps, `sum_bands` **sums**, so the chunk reorders the
+band contributions.
+
+**What is outstanding.** The re-run. The new peak is *predicted* to be about 32 GB --
+`density` falling to ~1.3 GB and `diagonalize` becoming the peak -- and that is arithmetic
+rather than a measurement, which is precisely the thing this phase keeps being punished
+for: the first guess at this peak was the Davidson and it was wrong. Beyond it:
+`sizing.py` still models the eigensolver's transient and nothing else, so `density`,
+`onecenter` and `v_of_rho` are outside it whatever their size; the SCF has not been run to
+convergence, so there is still no defumat number for the physics; and `OPEN.md` item 2 --
+`test_spinorbit.py` at 11,088 MB -- was measured with the whole block in the box and both
+fixes should have moved it, unread.
 
 ## 4. Validation strategy
 

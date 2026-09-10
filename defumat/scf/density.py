@@ -350,42 +350,58 @@ def spinor_band_density(psi, fft_index, grid, weights, cell: Cell, nspin_mag: in
     they always were, and the transverse pair ``(m_x, m_y)`` is measured in the
     frame that turns with the spiral, which is the frame the potential is built
     in. The laboratory-frame spiral is recovered on output and nowhere else.
+
+    **The bands are walked, not batched**, which is ``sum_band.f90``'s own
+    ``DO ibnd`` and here is a memory decision rather than a cache one. A spinor
+    band's real-space working set is two boxes, and every quantity below is
+    another array of that shape: on a 45-atom NiBr2 supercell at 403 bands on a
+    240x54x200 grid the transform alone is 33 GB and the stacked Pauli
+    components another 33 (``PLAN.md`` P74). The scalar :func:`band_density`
+    and the spinor ``tau`` beside it both already did this; this one did not,
+    which is 46 GB of a 78 GB peak.
+
+    The chunk changes the order the band contributions are *added* in and
+    nothing else, so it moves the density by round-off.
     """
     npwx = psi.shape[-1] // 2
-    components = psi.reshape(psi.shape[:-1] + (2, npwx))
     fft_index = jnp.asarray(fft_index)
-    if fft_index.ndim == 1:
-        field = g_to_r(components, fft_index, grid)  # (nbnd, 2, n1, n2, n3)
-    else:
-        # A spin spiral: the two components are on different spheres, so they
-        # are transformed with different index maps. What comes back is the pair
-        # of *periodic* parts ``U_up``, ``U_dn``, and every quantity below is
-        # built from those -- which is the point of the generalized Bloch
-        # theorem: the density it produces is lattice periodic even though the
-        # magnetization it describes turns from cell to cell.
-        field = jnp.stack(
-            [g_to_r(components[:, spin], fft_index[spin], grid) for spin in range(2)],
-            axis=1,
-        )
-    up, down = field[:, 0], field[:, 1]
 
-    # ``Re(conj(z) z)`` rather than ``abs(z)**2``, for the reason in
-    # :func:`band_density`: the two are the same number and only one has a
-    # derivative at a node.
-    up_density = jnp.real(jnp.conj(up) * up)
-    down_density = jnp.real(jnp.conj(down) * down)
-    charge = up_density + down_density
-    if nspin_mag == 1:
-        stacked = charge[None]
-    else:
+    def one_band(arrays):
+        state, weight = arrays
+        components = state.reshape((2, npwx))
+        if fft_index.ndim == 1:
+            field = g_to_r(components, fft_index, grid)      # (2, n1, n2, n3)
+        else:
+            # A spin spiral: the two components are on different spheres, so
+            # they are transformed with different index maps. What comes back
+            # is the pair of *periodic* parts ``U_up``, ``U_dn``, and every
+            # quantity below is built from those -- which is the point of the
+            # generalized Bloch theorem: the density it produces is lattice
+            # periodic even though the magnetization it describes turns from
+            # cell to cell.
+            field = jnp.stack(
+                [g_to_r(components[spin], fft_index[spin], grid)
+                 for spin in range(2)]
+            )
+        up, down = field[0], field[1]
+
+        # ``Re(conj(z) z)`` rather than ``abs(z)**2``, for the reason in
+        # :func:`band_density`: the two are the same number and only one has a
+        # derivative at a node.
+        up_density = jnp.real(jnp.conj(up) * up)
+        down_density = jnp.real(jnp.conj(down) * down)
+        charge = up_density + down_density
+        if nspin_mag == 1:
+            return weight * charge[None]
         cross = jnp.conj(up) * down
-        stacked = jnp.stack([
+        return weight * jnp.stack([
             charge,
             2.0 * jnp.real(cross),
             2.0 * jnp.imag(cross),
             up_density - down_density,
         ])
-    return jnp.einsum("b,cb...->c...", weights, stacked) / cell.volume
+
+    return sum_bands(one_band, (psi, weights)) / cell.volume
 
 
 def spinor_sum_band(psi, fft_index, grid, weights, cell: Cell, nspin_mag: int,

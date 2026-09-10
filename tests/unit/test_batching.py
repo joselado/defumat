@@ -273,6 +273,68 @@ def test_the_band_dial_reaches_the_spinor_h_psi(pseudo_dir, monkeypatch,
     assert seen == widths
 
 
+@pytest.mark.parametrize("setting, widths", [("1", {2}), ("5", {5, 4}), ("all", {24})])
+def test_the_band_dial_reaches_the_spinor_density(pseudo_dir, monkeypatch,
+                                                  setting, widths):
+    """``sum_band``'s spinor branch walks its bands too.
+
+    The same defect as the test above, one layer up and worth more: on the
+    45-atom NiBr2 supercell the whole-block transform is 33 GB and the stacked
+    Pauli components another 33, which was **46 GB of a 78 GB peak** and the
+    largest single thing in the run. The scalar ``band_density`` and the spinor
+    ``tau`` beside it were always chunked; only this one was not.
+
+    At ``band_batch = 1`` the leading axis of the transform is **2**, not 1 --
+    that is the spinor pair, and its being what is left is exactly the point:
+    the band axis is gone.
+    """
+    from pathlib import Path
+
+    from defumat.io.pwin import read_pw_input
+    from defumat.pseudo import read_upf
+    from defumat.scf.density import spinor_sum_band
+    from defumat.scf.driver import Calculation
+    from defumat.system import build_system
+
+    case = Path(__file__).resolve().parents[1] / "data" / "qe" / "h-chain-90deg.in"
+    system = build_system(read_pw_input(case))
+    pseudos = tuple(read_upf(pseudo_dir / s.pseudo_file)
+                    for s in system.structure.species)
+    calculation = Calculation(system, pseudos)
+    assert system.npol == 2
+
+    nbnd = 24
+    ndim = 2 * calculation.basis.planewaves.npwx
+    generator = np.random.default_rng(1)
+    psi = jnp.asarray(generator.normal(size=(1, nbnd, ndim))
+                      + 1j * generator.normal(size=(1, nbnd, ndim)))
+    occupations = jnp.asarray(generator.random((1, nbnd)))
+
+    def summed(band_batch):
+        monkeypatch.setenv("DEFUMAT_BAND_BATCH", band_batch)
+        compiled = jax.jit(lambda p, w, _tag=band_batch: spinor_sum_band(
+            p, calculation.state_fft_index, calculation.basis.smooth.grid, w,
+            system.cell, system.nspin_mag, 1))
+        return (compiled.lower(psi, occupations).as_text(),
+                np.asarray(compiled(psi, occupations)))
+
+    text, value = summed(setting)
+    _, reference = summed("all")
+
+    # A *sum* this time, not a map, so the chunk moves the order the band
+    # contributions are added in. Round-off and no more, which is what the
+    # module docstring promises for every dial here.
+    np.testing.assert_allclose(value, reference, rtol=0, atol=1e-15 * np.max(np.abs(reference)))
+
+    seen = set()
+    for line in text.splitlines():
+        if "stablehlo.fft" not in line or "tensor<" not in line:
+            continue
+        seen.add(int(line.split("tensor<", 1)[1].split("x", 1)[0]))
+    assert seen, "no FFT was traced at all -- the probe, not the density, is wrong"
+    assert seen == widths
+
+
 # ---------------------------------------------------------------------------
 # The default is per platform, and that is the whole of what a GPU run has to
 # get right. ``PERFORMANCE.md`` measures the cache-shaped defaults at 4.5x on
