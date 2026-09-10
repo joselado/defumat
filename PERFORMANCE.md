@@ -3146,6 +3146,49 @@ tests passing under the default cap in 7.4 s. Each line also carries that file's
 what says whether 12G is the right default. What the scope cannot do is name the test:
 that wants an RSS watchdog in the fixture, and it is what remains open.
 
+### What the cap is actually worth: eight files' peak RSS (2026-09-10)
+
+The measurement the paragraph above asked for, on eight of the slow regression files under
+the 12G default, one capped process each, nothing else running:
+
+| file | peak RSS | wall | result |
+|---|---|---|---|
+| `test_spinorbit.py` | **11,088 M** | 8:27 | 2 failed, 25 passed, 1 watchdog error |
+| `test_stress.py` | 6,317 M | 4:55 | 1 failed, 23 passed |
+| `test_response.py` | 5,879 M | 4:30 | 31 passed |
+| `test_topology.py` | 4,838 M | 2:21 | 1 passed, 12 deselected |
+| `test_forces.py` | 4,090 M | 1:14 | 33 passed |
+| `test_phonons.py` | 3,793 M | 19:59 | 31 passed |
+| `test_uspp.py` | 1,877 M | 0:36 | 40 passed |
+| `test_gga.py` | 1,775 M | 0:33 | 25 passed |
+
+**`test_spinorbit.py` sits at 92% of the cap, and it is the answer to whether 12G is the
+right default: it is, but only just, and this file is the next kill.** The watchdog the
+paragraph above leaves open is by now written (`tests/memwatch.py`), and it earned its keep
+on this first full pass — it named
+`test_spin_orbit_total_energy[spinorbit-paw.in]` at 10,818 M rather than leaving a
+`SIGKILL` with no account of what was running. Its assertions passed; the memory is the
+finding.
+
+**Where the memory goes is not measured, and one lead is not a mechanism.** The stderr
+shows XLA constant-folding and transposing an `f64[25,1277,34,34]` array inside
+`jvp(jit(_paw_onecenter))`, twice, the fold alone taking over 2 s each time. The shape is
+`PawSpecies.density_ae`/`density_ps`, `(nh, nh, nlm, mesh)` at `nh = 34` for a
+fully-relativistic platinum dataset, `nlm = 25` and a 1277-point mesh: 295 MB apiece. They
+are ordinary pytree fields and so are arguments to `_paw_onecenter` itself; appearing as
+XLA *constants* means the enclosing `jit(<lambda>)` closes over the object holding them,
+which would give every compiled variant its own copy in a cache that never shrinks. That is
+worth chasing — but 590 MB is **under 6% of an 11 GB peak**, so this is where the compile
+time goes and not, on the arithmetic, where the resident set goes. Start here; do not
+assume it is the answer.
+
+Two comparisons to keep the numbers honest. The two figures already on record,
+`test_scf.py` at 1,011 M and `test_dos.py` at 1,297 M, are an order below every file here,
+so the earlier pair was not a representative sample of the slow set. And these eight are
+not the whole slow set either — the run covered the files reached by the P73 augmentation
+work, so the true maximum over all of `tests/regression/` is still unmeasured and can only
+be higher.
+
 ## What the Tran-Blaha potential costs (P30)
 
 Silicon, `ecutwfc = 30`, a 6x6x6 grid reduced to 16 k-points, a 32^3 dense grid,

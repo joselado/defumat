@@ -1093,6 +1093,13 @@ process is 0.06-0.24 s dearer than its repeats, most likely the eager `jnp` ops 
 `band_thresholds` tracing on first use. Empty-band SCF eigenvalues can now move by up to
 `max(5 ethr, 1e-5)` Ry, which is the accuracy QE's own reference outputs were produced at.
 
+**That last sentence has a measured victim, found on 2026-09-10 and recorded under P73**:
+`test_spinorbit.py::test_kramers_degeneracy_survives_spin_orbit` bounds the splitting of
+*every* Kramers pair by 1e-6 eV, and the three empty pairs on fcc platinum now split by up
+to 6.5e-5 eV — 4.8e-6 Ry, inside `empty_ethr` and therefore correct behaviour rather than a
+defect. It is a **slow** regression test, so the gate this work was pushed through could not
+have seen it, which is the concrete argument for the slow set that P38 already makes.
+
 
 **P12 — Ultrasoft and PAW. ✅ DONE for LDA.** `basis/interpolate.py` (the smooth/dense
 grid split), NLCC in `v_of_rho`, `pseudo/coupling.py` (real-harmonic Gaunt coefficients),
@@ -11748,28 +11755,84 @@ slab's shapes: it runs the compiler and allocates not one byte, so a configurati
 cannot possibly run can still be sized. It could not be reached before this phase, because
 building the `Calculation` died first — which is the practical thing that changed.
 
-**One test failure was seen while validating this phase and is not explained.**
+**Three test failures were seen while validating this phase. None of them is this phase,
+and the worktree run that says so has now returned.**
+
 `tests/regression/test_stress.py::test_an_input_asking_for_an_impossible_stress_warns_rather_than_raising`
 fails with `DID NOT WARN. No warnings of type (RuntimeWarning,) were emitted` — it expects
 `tstress = .true.` on a regime P11 does not cover to warn and switch itself off, and no
 warning arrives. The other 23 tests in that file pass, as do `test_uspp` (40),
-`test_response` (31) and `test_topology`.
+`test_response` (31), `test_topology`, `test_gga` (25), `test_forces` (33) and
+`test_phonons` (31).
 
-What is known, and it is worth separating from what is not. This phase's diff touches
-**two files**, `pseudo/augmentation.py` and `sizing.py`. The failing test's cell is
+The argument that it was not this phase was that the diff touches **two files**,
+`pseudo/augmentation.py` and `sizing.py`; that the failing test's cell is
 `h-chain-90deg.in` — noncollinear, **norm-conserving** hydrogen — and `build_augmentation`
 returns `None` on its first line for a structure with no ultrasoft species, so neither
-storage scheme, neither dial and none of the new code runs at all on it. `sizing.py` is
-not on that path either. So there is no mechanism by which this phase reaches that
-assertion.
+storage scheme, neither dial and none of the new code runs at all on it; and that
+`sizing.py` is not on that path either. **That was an argument, not a measurement.** The
+measurement is the same single test on a worktree at `e22aa7d`, the commit before this
+phase started, and **it fails there identically**: `1 failed in 16.71s`, same assertion,
+same empty `Emitted warnings: []`. It is pre-existing and open, and the warning that has
+gone missing is P11's own refusal rather than anything here.
 
-**That is an argument, not a measurement, and the measurement is the one that settles it**
-— the same distinction this project applies everywhere else. The check is the single test
-on a worktree at `e22aa7d`, the commit before this phase started; it was queued behind the
-suites still running and has not returned. **Until it does, this is recorded as an open
-failure of unknown provenance rather than as a pre-existing one**, because "my change
-cannot have caused it" is exactly the reasoning that hides a change that did.
+**The other two are `test_spinorbit.py::test_kramers_degeneracy_survives_spin_orbit`, and
+they are not a spin-orbit defect at all — they are the empty-band threshold of the P10
+continuation above (2026-09-08), seen from a test written before it existed.** The bound
+is `splitting < 1e-6` eV over *every* band; what arrives is 6.52e-5 eV on `spinorbit.in`
+and 7.74e-5 eV on `spinorbit-pbe.in`. Both reproduce at `e22aa7d` to four significant
+digits (7.73634e-5 against 7.73680e-5), so this phase is not in it either.
 
+The band-resolved number is what settles it. On `spinorbit.in`, with 18 bands in 9
+Kramers pairs, the per-pair maximum splitting in eV is
+
+    1.6e-12  1.1e-12  1.5e-12  6.3e-13  4.6e-12  4.8e-12  6.0e-09  1.5e-06  6.5e-05
+
+against per-pair minimum occupations of `3.1e-2, 3.1e-2, 3.1e-2, 3.1e-2, -3.1e-3,
+-5.7e-21, -2.4e-87, -3.8e-87, -4.6e-87` and pair centres at `-7.24, -5.09, -3.71, -2.37,
+-0.82, +1.26, +10.35, +15.22, +17.85` eV relative to `E_F`. **Every pair carrying any
+weight is degenerate to 5e-12 eV, which is the round-off the test's docstring claims.**
+The whole of the failure lives in the three pairs whose occupation is `1e-87` — bands 10
+eV and more above the Fermi level, which `cegterg.f90:129` converges to
+`empty_ethr = MAX(5 ethr, 1e-5)` Ry by construction. 6.5e-5 eV is 4.8e-6 Ry, comfortably
+inside that envelope.
+
+Run with that work's own off-switch, `diago_full_acc = .true.`, the same case gives a
+maximum splitting of **2.6e-11 eV** over all nine pairs — the test passes with four
+orders to spare, and `E_F` moves by 1.6e-7 Ry. That is the attribution measured rather
+than argued: the empty bands are loose because they are meant to be.
+
+**So the defect is in the test's bound, not in the code, and the fix is not to drop the
+empty bands.** Restricting the assertion to occupied pairs would give up the guard exactly
+where a non-Hermitian `D` or a mispaired spin block is least likely to be noticed. The
+bound that keeps the whole range is the one the solver actually promises: occupied pairs
+to round-off, empty pairs to `empty_ethr`. Both numbers above are what it should be
+written against. **Left open**, because it changes a P14 claim and belongs in a commit that
+says so rather than in this one.
+
+**A fourth item is not a failure and is the more urgent of the four: the memory watchdog
+named `test_spin_orbit_total_energy[spinorbit-paw.in]` at 10.8 GB against the 12 GB cap.**
+Its assertions passed; what the watchdog says is that this file peaks at **11,088 MB** and
+is the next out-of-memory kill on a 30 GB machine whether or not it has happened yet — the
+case `CLAUDE.md` names when it asks for a peak beside every summary line.
+
+**There is one lead and it is not yet the answer.** The stderr shows XLA constant-folding
+and transposing an `f64[25,1277,34,34]` inside `jvp(jit(_paw_onecenter))`, twice, each
+fold taking over 2 s. That shape is `PawSpecies.density_ae`/`density_ps` —
+`(nh, nh, nlm, mesh)` with `nh = 34` for a fully-relativistic platinum dataset, `nlm = 25`
+and a 1277-point radial mesh — at 295 MB each. They are ordinary pytree fields, so inside
+`_paw_onecenter` they are *arguments*; their appearing as XLA **constants** means the
+enclosing `jit(<lambda>)` closes over the object that holds them. **But 590 MB is under 6%
+of an 11 GB peak**, so what the stderr locates is where the *compile time* goes, not where
+the resident set does. It is where to start looking and nothing more; the mechanism is
+unmeasured.
+
+For scale, the same run's file peaks elsewhere are `test_stress` 6,317 MB, `test_response`
+5,879 MB, `test_topology` 4,838 MB, `test_forces` 4,090 MB, `test_phonons` 3,793 MB,
+`test_uspp` 1,877 MB and `test_gga` 1,775 MB. Whether the P73 augmentation commits moved
+this number is **not measured** — the Aug 29 run predates the peak column, so there is no
+baseline to compare against, and the honest statement is that the peak is now known rather
+than that it is new.
 
 ## 4. Validation strategy
 
