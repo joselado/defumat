@@ -11919,10 +11919,34 @@ per-iteration timing on `pw_spinorbit/spinorbit.in`. And `OPEN.md` item 2 --
 block in the box, so that peak may have moved on its own; one capped `run_regression.sh`
 pass over that file on an idle machine re-reads it.
 
-**What is outstanding.** Whether the slab now runs. The identification and the fix are
-measured; the SCF that follows them is not, and P73's stated peak of 117.55 GB for the
-`Calculation` build was taken before the tabulated augmentation existed. The next run is
-the number.
+**The slab runs.** Job **20200794**, an H200 at commit `5ba0ada`, 2026-09-10: two SCF
+iterations of the 45-atom cell in **5 m 33 s** wall, at a peak of **78.51 GB** of the
+card's 143.8. Nothing about this cell had ever completed a single iteration before --
+six jobs died in setup and two more at the first diagonalisation.
+
+| | |
+|---|---|
+| first iteration | 184.5 s, which is the compile |
+| **second iteration** | **5.5 s** |
+| SCF total | 190.6 s for two iterations |
+| peak device memory | **78.51 GB** |
+| total energy, iteration 2 | -8851.2277 Ry, `accuracy` 3.03 -- **not converged**, and not meant to be |
+
+At 5.5 s an iteration a converged run is minutes rather than the hours the 8 h and 12 h
+requests were sized for. **The helix seed survives the two iterations**: the total moment
+is `(0, -0.036, 0.0014)` mu_B against a per-site `|m|` of 0.84 to 1.13 on the fifteen Ni,
+turning through the cell, which is a helix and not the ferromagnet a single species would
+otherwise give. The spread in `|m|` and the uneven turn angle are what two iterations look
+like; neither is a converged number and neither is comparable with Elk's 1.4058 yet.
+
+**What is outstanding.** Two things, and the first is a gap in this module rather than in
+the run. **`sizing.py` said 27.80 GB against a measured 78.51 GB**, still 2.8x low. Setup
+is outside that figure by construction and the message says so, but P73's whole complaint
+was a green light for a run that did not fit, and 2.8x is the same shape of error with the
+sign flipped now that the run *does* fit. The eigensolver buffer was estimated at 18.54 GB;
+what the other ~50 GB is has not been measured, and the instrument is the one that worked
+here -- `--xla_dump_to`, not arithmetic. And the SCF has not been run to convergence, so
+there is still no defumat number for the physics.
 
 ## 4. Validation strategy
 
