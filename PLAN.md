@@ -12035,15 +12035,37 @@ the thing it is supposed to move**, which is why both new tests assert the leadi
 the traced `stablehlo.fft` and fail on the old code with `assert {24} == {1}` and
 `assert {24} == {2}`.
 
-**What is outstanding.** The re-run. The new peak is *predicted* to be about 32 GB --
-`density` falling to ~1.3 GB and `diagonalize` becoming the peak -- and that is arithmetic
-rather than a measurement, which is precisely the thing this phase keeps being punished
-for: the first guess at this peak was the Davidson and it was wrong. Beyond it:
-`sizing.py` still models the eigensolver's transient and nothing else, so `density`,
-`onecenter` and `v_of_rho` are outside it whatever their size; the SCF has not been run to
-convergence, so there is still no defumat number for the physics; and `OPEN.md` item 2 --
-`test_spinorbit.py` at 11,088 MB -- was measured with the whole block in the box and both
-fixes should have moved it, unread.
+**The re-run, and the prediction it settles.** Job **20203515** on an H200 at `17d3b16`
+is the same 45-atom cell with the same stage brackets, and it puts the peak at
+**32.30 GB** against the 78.51 GB of `5ba0ada` -- **2.43x lower**, where the arithmetic
+said "about 32". What the brackets show is the shape rather than only the total:
+
+| stage | at `5ba0ada` | at `17d3b16` |
+|---|---|---|
+| `Calculation` built | 8.20 GB | 8.20 GB |
+| helix seed | 9.76 | 9.76 |
+| `diagonalize` | 27.23 -> 31.97 | 27.23 -> 31.97 |
+| `density` | **31.97 -> 78.19** | **31.97 -> 31.97** |
+| peak over two iterations | 78.51 | **32.30** |
+
+**`density` no longer moves the peak at all** -- not on either iteration -- so the whole
+46 GB is gone and `diagonalize` is what the run now costs, which is the term `sizing.py`
+actually models. The physics is untouched: `E = -9082.99449656` and `-8851.22767276` Ry to
+every printed digit of the earlier run, moment `(-0.000, -0.036, 0.001)` [19.940] mu_B.
+**And it is not slower** -- 168.2 s to the first iteration against 184.5, **5.3 s** to the
+second against 5.5 -- so chunking the transform bought a factor of 2.4 in memory and cost
+nothing in time on this cell.
+
+**The sizing gap is now 1.16x rather than 2.8x**, 27.80 GB estimated against 32.30
+measured, and the residual is *not* resolved to a term: setup leaves 6.7-9.6 GB resident
+that the SCF estimate does not model, which is more than the 4.5 GB difference, so the two
+are not simply additive and saying which part is which would be arithmetic again.
+
+**What is outstanding.** `sizing.py` still models the eigensolver's transient and nothing
+else, so `density`, `onecenter` and `v_of_rho` are outside it whatever their size; the SCF
+has not been run to convergence, so there is still no defumat number for the physics; and
+`OPEN.md` item 2 -- `test_spinorbit.py` at 11,088 MB -- was measured with the whole block
+in the box and both fixes should have moved it, unread.
 
 ## 4. Validation strategy
 
