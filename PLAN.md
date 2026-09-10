@@ -11718,10 +11718,18 @@ byte-for-byte identically at `diago_david_ndim` 4 against 2 and `DEFUMAT_BAND_BA
 against 16, so it is neither of those and is not the buffer `tools/gpu/davidson_memory.py`
 fits. It cannot be reproduced on a 30 GB workstation. What is known is arithmetic and
 worth recording: `89788080128 = 2^13 x 641 x 17099`, so as `complex128` it is
-`2^9 x 641 x 17099` elements and has **no factor of 3, 5, 7, 13 or 17** — which rules out
-`nbnd` (403), `nh` (34 and 14), `nat` (45) and any FFT grid, all of which carry one. The
-route to it that costs nothing is `jit(f).lower(*ShapeDtypeStructs).compile()
-.memory_analysis()` at the slab's shapes, which allocates nothing.
+`2^9 x 641 x 17099` elements, with 641 and 17099 both prime and **no factor of 3, 5, 7, 13
+or 17** anywhere. Taken at face value that rules out `nbnd` (403 = 13 x 31), `nh` (34 and
+14), `nat` (45) and any 2/3/5/7-smooth FFT grid — and it kills the one hypothesis that
+otherwise fits, `nbnd npol N_fft` on the dense grid, which lands within 2.3 per cent of
+the byte count on a cell rebuilt from the reported dimensions and yet cannot divide it.
+
+**That elimination is only as good as the assumption that XLA did not pad the buffer**,
+which nothing guarantees, so it narrows the search rather than closing it. The route that
+costs nothing is `jit(f).lower(*ShapeDtypeStructs).compile().memory_analysis()` at the
+slab's shapes: it runs the compiler and allocates not one byte, so a configuration that
+cannot possibly run can still be sized. It could not be reached before this phase, because
+building the `Calculation` died first — which is the practical thing that changed.
 
 
 ## 4. Validation strategy
