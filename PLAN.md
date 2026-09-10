@@ -11748,6 +11748,28 @@ slab's shapes: it runs the compiler and allocates not one byte, so a configurati
 cannot possibly run can still be sized. It could not be reached before this phase, because
 building the `Calculation` died first — which is the practical thing that changed.
 
+**One test failure was seen while validating this phase and is not explained.**
+`tests/regression/test_stress.py::test_an_input_asking_for_an_impossible_stress_warns_rather_than_raising`
+fails with `DID NOT WARN. No warnings of type (RuntimeWarning,) were emitted` — it expects
+`tstress = .true.` on a regime P11 does not cover to warn and switch itself off, and no
+warning arrives. The other 23 tests in that file pass, as do `test_uspp` (40),
+`test_response` (31) and `test_topology`.
+
+What is known, and it is worth separating from what is not. This phase's diff touches
+**two files**, `pseudo/augmentation.py` and `sizing.py`. The failing test's cell is
+`h-chain-90deg.in` — noncollinear, **norm-conserving** hydrogen — and `build_augmentation`
+returns `None` on its first line for a structure with no ultrasoft species, so neither
+storage scheme, neither dial and none of the new code runs at all on it. `sizing.py` is
+not on that path either. So there is no mechanism by which this phase reaches that
+assertion.
+
+**That is an argument, not a measurement, and the measurement is the one that settles it**
+— the same distinction this project applies everywhere else. The check is the single test
+on a worktree at `e22aa7d`, the commit before this phase started; it was queued behind the
+suites still running and has not returned. **Until it does, this is recorded as an open
+failure of unknown provenance rather than as a pre-existing one**, because "my change
+cannot have caused it" is exactly the reasoning that hides a change that did.
+
 
 ## 4. Validation strategy
 

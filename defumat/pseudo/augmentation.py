@@ -362,7 +362,9 @@ def _aug_chunk(nh_max: int, ngm: int) -> int:
     return int(min(1 << max(10, int(np.floor(np.log2(max(target, 1024))))), ngm))
 
 
-def _qrad_table(pseudo: Pseudopotential, qmax: float, omega, nl: int) -> jnp.ndarray:
+def _qrad_table(
+    pseudo: Pseudopotential, qmax: float, omega, nl: int, dtype=None
+) -> jnp.ndarray:
     """``tab_qrad``: ``Q^L_nm`` on the ``(i - 1) dq`` grid. ``init_tab_qrad``.
 
     ``nqx = INT(qmax/dq + 4)`` is QE's own sizing (``qrad_mod.f90:86``), and
@@ -371,7 +373,7 @@ def _qrad_table(pseudo: Pseudopotential, qmax: float, omega, nl: int) -> jnp.nda
     safety margin.
     """
     nqx = int(qmax / AUG_DQ + 4)
-    knots = jnp.arange(nqx) * AUG_DQ
+    knots = jnp.arange(nqx, dtype=dtype) * AUG_DQ
     return radial_augmentation_transforms(pseudo, knots, omega, nl)
 
 
@@ -492,7 +494,9 @@ class TabulatedAugmentation(AugmentationCharge):
         for t, atoms in enumerate(self.species_atoms):
             nh = 0 if self.tables[t] is None else self.beta_of[t].shape[0]
             if self.tables[t] is None or not atoms:
-                result.append(jnp.zeros((len(atoms), nh, nh)))
+                result.append(
+                    jnp.zeros((len(atoms), nh, nh), dtype=self.phases.real.dtype)
+                )
                 continue
             result.append(
                 _tabulated_integrals(
@@ -546,8 +550,13 @@ def _tabulated_integrals(build, gcart, mask, potential_g, phases, volume, chunk,
         block = jnp.einsum("ijc,ac->aij", jnp.conj(build(gcart_chunk)), shifted)
         return carry + jnp.real(block), None
 
+    # The carry's dtype comes from the data and not from ``jnp``'s default.
+    # ``lax.scan`` requires the carry to match what the body returns exactly,
+    # so a hardcoded float64 accumulator is not a policy violation that shows
+    # up in the sixth decimal -- under a float32 precision policy it does not
+    # run at all.
     total, _ = jax.lax.scan(
-        body, jnp.zeros((nat, nh, nh)), jnp.arange(nchunks)
+        body, jnp.zeros((nat, nh, nh), dtype=phases.real.dtype), jnp.arange(nchunks)
     )
     return volume * total
 
@@ -640,7 +649,7 @@ def _build_tabulated_augmentation(
         if key not in built:
             lm_of = np.array([lm for _, _, lm in channels])
             built[key] = (
-                _qrad_table(pseudo, qmax, volume, nl_t),
+                _qrad_table(pseudo, qmax, volume, nl_t, cell.precision.real),
                 jnp.asarray(ap[:, lm_of[:, None], lm_of[None, :]]),
                 jnp.asarray(np.array([nb for nb, _, _ in channels])),
             )
