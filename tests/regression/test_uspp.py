@@ -167,3 +167,43 @@ def test_the_augmentation_charge_reproduces_the_files_own_q(pseudo_dir, case, ps
                 expected[i, j] = pseudo.augmentation.q[nb_i, nb_j]
 
     assert np.asarray(augmentation.qq[0]) == pytest.approx(expected, abs=1e-6)
+
+
+def test_two_species_naming_one_dataset_share_one_augmentation_charge(pseudo_dir):
+    """One species per magnetic site must not build ``Q_ij(G)`` twice.
+
+    ``angle1``/``angle2`` are per *species*, so the standard way to write a
+    noncollinear texture is one species per site, all of them naming the same
+    UPF file. ``Q_ij(G)`` is a property of the dataset and of the G set, so
+    every one of those species wants the identical ``(nh, nh, ngm)`` array --
+    which on a 45-atom NiBr2 slab is 65 GB each. They share one array here, and
+    the check is object identity rather than equality: two arrays that agree
+    numerically still cost twice the memory, which is the whole point.
+    """
+    import dataclasses
+
+    from defumat.pseudo.augmentation import build_augmentation
+    from defumat.basis.builder import build_basis
+    from defumat.system.structure import Structure
+
+    system = build_system(read_pw_input(CASES / "si2-us.in"))
+    basis = build_basis(system)
+
+    # The same file read twice, as ``Calculator`` reads it: two distinct
+    # objects, so nothing can be deduplicated by identity.
+    path = pseudo_dir / system.structure.species[0].pseudo_file
+    first, second = read_upf(path), read_upf(path)
+    assert first is not second
+
+    base = system.structure
+    split = Structure(
+        positions=base.positions,
+        types=(0, 1),
+        species=(base.species[0], dataclasses.replace(base.species[0], name="Si1")),
+        precision=base.precision,
+    )
+
+    augmentation = build_augmentation((first, second), split, system.cell, basis.dense)
+    assert augmentation.qgm[0] is augmentation.qgm[1]
+    assert augmentation.qq[0] is augmentation.qq[1]
+    assert augmentation.species_atoms == ((0,), (1,))

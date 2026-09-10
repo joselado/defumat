@@ -43,6 +43,7 @@ integrates to ``kkbeta`` and so does this. The check that it is right is that
 
 from __future__ import annotations
 
+import hashlib
 from functools import partial
 
 import equinox as eqx
@@ -303,6 +304,47 @@ def _qrad_kernel(q, r, weights, functions, prefactor, l):
     return prefactor * jnp.einsum("fm,qm,m->fq", functions, bessel, weights)
 
 
+def _dataset_key(pseudo: Pseudopotential, nl_species: int) -> tuple:
+    """A fingerprint of everything ``Q_ij(G)`` is built from, bar the G set.
+
+    Two *species* that name the same UPF file are the same dataset, and
+    ``Q_ij(G)`` depends on the dataset and on the G set -- never on which label
+    an atom carries. Writing one species per magnetic site is the standard way
+    to write a noncollinear input, because ``angle1``/``angle2`` are per
+    species, so a fifteen-site helix arrives here as fifteen identical
+    datasets; without this key each of them builds and holds its own
+    ``(nh, nh, ngm)`` array. On a 45-atom NiBr2 slab that is 65 GB per Ni
+    species.
+
+    The key is the *content* rather than the file name: the path is a hint that
+    can be absent (a hand-built :class:`Pseudopotential` has none) and can lie
+    (two objects read from one path, one of them since modified). Hashing the
+    radial data is a few milliseconds against an array measured in tens of GB.
+    """
+    augmentation = pseudo.augmentation
+    kkbeta = pseudo.kkbeta
+
+    def digest(array) -> bytes:
+        return hashlib.blake2b(
+            np.ascontiguousarray(np.asarray(array)).tobytes(), digest_size=16
+        ).digest()
+
+    qfuncl = (
+        augmentation.qfuncl[:, :, :nl_species, :kkbeta]
+        if augmentation is not None and augmentation.qfuncl is not None
+        else np.zeros(0)
+    )
+    return (
+        nl_species,
+        kkbeta,
+        tuple(projector_channels(pseudo)),
+        tuple(projector.l for projector in pseudo.projectors),
+        digest(pseudo.r[:kkbeta]),
+        digest(pseudo.rab[:kkbeta]),
+        digest(qfuncl),
+    )
+
+
 def build_augmentation(
     pseudos: tuple[Pseudopotential, ...],
     structure: Structure,
@@ -337,6 +379,7 @@ def build_augmentation(
     volume = cell.volume
 
     qgm, qq = [], []
+    built: dict = {}  # dataset fingerprint -> (Q_ij(G), qq); see _dataset_key
     for pseudo in pseudos:
         channels = projector_channels(pseudo)
         if not pseudo.is_ultrasoft or not channels:
@@ -345,6 +388,17 @@ def build_augmentation(
             continue
 
         nl_species = min(nl, pseudo.augmentation.nqlc) if pseudo.augmentation else nl
+
+        key = _dataset_key(pseudo, nl_species)
+        if key in built:
+            # The same dataset under a second species label. Q_ij(G) is a
+            # property of the *file* and of the G set, not of the label, and
+            # both are unchanged -- so the two species share one array.
+            shared = built[key]
+            qgm.append(shared[0])
+            qq.append(shared[1])
+            continue
+
         radial = radial_augmentation_transforms(pseudo, gmod, volume, nl_species)
 
         beta_of = np.array([nb for nb, _, _ in channels])
@@ -356,8 +410,10 @@ def build_augmentation(
         values = _assemble_qgm(
             coefficients, ylm, radial, jnp.asarray(beta_of), nl_species
         )
-        qgm.append(values.astype(cell.precision.complex))
-        qq.append(volume * jnp.real(values[:, :, 0]))
+        entry = (values.astype(cell.precision.complex), volume * jnp.real(values[:, :, 0]))
+        built[key] = entry
+        qgm.append(entry[0])
+        qq.append(entry[1])
 
     phases = _atom_phases(gcart, structure.positions)
 
