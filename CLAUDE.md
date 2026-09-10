@@ -825,9 +825,16 @@ asked for, not on every change. The split cuts across `unit` and `regression`
 both, because it is about cost and not about kind: a cheap regression case
 against a two-atom reference is in the gate, and an expensive unit test is not.
 
-**The slow set is not optional, it is just not per-push.** Run it before a
-release, after touching anything in the SCF, the eigensolver or the response
-stack, and whenever a number in this file changes. It is two hours precisely
+**The slow set is not optional, it is just not a gate.** Run it before a
+release, or when it is explicitly asked for — **not before a push, and not
+because a change touched the SCF, the eigensolver or the response stack.**
+This project is in heavy development: pushes are frequent, the slow set is over
+two hours, and waiting on it stalls the work far more often than it catches
+something. Where a change wants more assurance than the gate gives, the cheap
+and better instrument is a **targeted numeric check** — the same quantity
+computed before and after on one small example that goes through the changed
+path, compared to round-off. That is what identified and confirmed every one of
+P74's five band-batching sites, and none of it needed the suite. It is two hours precisely
 because it is the part that catches what the gate cannot, and the one time it
 was run end to end it found **three phases' claims had drifted** — P29's stale
 refusal list and its broken BFGS metric, P36's 8.7e-14 wedge agreement, and two
