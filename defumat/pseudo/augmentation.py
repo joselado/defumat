@@ -326,12 +326,21 @@ AUG_CELL_FACTOR = 2.0
 
 
 def _aug_max_bytes() -> int:
+    """``DEFUMAT_AUG_MAX_BYTES``: a byte count, ``2G``/``512M``/``64K``, or ``off``.
+
+    The suffixes are here because ``DEFUMAT_TEST_MEM_MAX`` already takes them
+    and a reader who has met one will write the other the same way.
+    """
     value = os.environ.get("DEFUMAT_AUG_MAX_BYTES")
     if value is None:
         return AUG_MAX_BYTES
-    if value.strip().lower() in ("off", "none", "inf"):
+    text = value.strip().lower()
+    if text in ("off", "none", "inf"):
         return 1 << 62
-    return int(float(value))
+    scale = {"k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}
+    if text and text[-1] in scale:
+        return int(float(text[:-1]) * scale[text[-1]])
+    return int(float(text))
 
 
 def _aug_chunk(nh_max: int, ngm: int) -> int:

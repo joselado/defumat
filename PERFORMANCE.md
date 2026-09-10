@@ -4067,6 +4067,70 @@ three potentials). A real all-electron state is bounded by the same expression,
 so a fifty-atom cell at `lmaxo = 6` on a 400-point mesh would be 7.8 MB a block
 and 31 MB for the state, which is not the constraint on anything.
 
+## What the augmentation charge costs to *store* (P73)
+
+The one entry here whose headline is bytes rather than seconds, and the only one where
+this code was three orders of magnitude off the reference rather than a small multiple of
+it.
+
+### Against `pw.x`, which is where the table was taken from
+
+QE never materialises `Q_ij(G)`. `upflib/qrad_mod.f90`'s `init_tab_qrad` allocates
+`tab_qrad(nqx, nbetam(nbetam+1)/2, lmaxq, nsp)` — an interpolation table in `|q|` at
+`dq = 0.01` — and `qvan2` rebuilds the charge per `(ij)` pair inside `addusdens` and
+`newd`, every iteration. This code built the whole `(nh, nh, ngm)` array once and kept it.
+
+On the 45-atom NiBr2 slab that made it fail (noncollinear + spin-orbit, fully-relativistic
+PBE PAW, 21 A of vacuum, `ecutrho = 360`, `ngm = 3536849`):
+
+| | defumat, before | `pw.x` `tab_qrad` | ratio |
+|---|---|---|---|
+| 2 species (Ni + Br) | 76.5 GB | 8.4 MB | **9100x** |
+| 16 species, one per magnetic site | 992.4 GB | 66.9 MB | 14800x |
+
+The second row is the deduplication defect rather than the scheme: fifteen species naming
+one UPF built fifteen identical arrays. Both are closed. **Not like for like in one
+respect worth naming**: QE packs the `(ij)` upper triangle where this carries the full
+symmetric matrix, a factor of about two on the table, and QE's `cell_factor` is 1 for a
+fixed cell where this reaches 2 so a vc-relax lands on the table. Neither is visible next
+to 9100.
+
+### What the table costs in time
+
+`benchmarks/si8-us-1k.in`, single core, `OMP_NUM_THREADS=1`, separate processes, no test
+run anywhere near it. `ngm = 36257`, silicon's ultrasoft dataset (`nh = 8`, `nbeta = 4`),
+table `nqx = 2533`.
+
+| | stored | tabulated |
+|---|---|---|
+| `Q_ij(G)` held | 37.13 MB | **0.97 MB** (38x) |
+| `build_augmentation` | 1.67 s | **1.16 s** |
+| `charge` per call | 0.054 s | 0.174 s (4.3x) |
+| `integrals` per call | 0.033 s | 0.153 s (4.7x) |
+| whole SCF, 6 iterations | 5.56 s | 5.42 s |
+
+**The two contractions are ~4.5x slower and the whole run is level**, which is the number
+worth keeping: the table is *cheaper to build* than the stored array is — the radial
+transform runs on 2533 knots instead of 36257 G vectors — and the contractions are a small
+part of an iteration. That is not an argument that the table is free. It is one cell, and
+"level here" is why the stored path stays the default rather than why it should not be.
+
+The storage ratio is `ngm/nqx` and so grows with the cell: **9.7x** on the two-atom
+`si2-us`, **38x** on the eight-atom one, **9100x** on the slab. The *time* ratio does not
+grow the same way, and nothing here measures it above eight atoms.
+
+### The working set
+
+`sizing.py` now carries setup, which it did not: it reported 34.78 GB for the slab against
+a measured 117.55 GB peak, with each of the three setup allocations larger than that whole
+total. `Q_ij(G)` per distinct dataset and the `(nat, ngm)` structure factors are resident
+lines; `_qrad_kernel`'s `(ngm, kkbeta)` Bessel intermediate is `setup_transient`, which
+**bounds** the peak against the eigensolver's buffer rather than adding to it, since the
+two never coexist. On the two-atom PAW cell the augmentation line is already the largest
+resident entry (0.03 GB against a 0.05 GB total) and the transient (0.23 GB) is four times
+the whole SCF floor.
+
+
 ## History
 
 | Date | Change | Effect |

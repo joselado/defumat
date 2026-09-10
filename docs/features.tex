@@ -3280,6 +3280,48 @@ on eight-atom ultrasoft silicon, ten times any of the others, and an order more
 than the SCF it came from. Measure your own with
 \code{tools/gpu/phase5.py <case> -{}-property <name>}.
 
+\textbf{The augmentation charge is the largest object in an ultrasoft or PAW
+run on a large cell}, and there are two ways of keeping it. Below
+\code{DEFUMAT\_AUG\_MAX\_BYTES} (default 2~GB) $Q_{ij}(\mathbf{G})$ is built on
+the whole $G$ sphere once and kept, which is what every number in the accuracy
+table below was measured with. Above it, \qe's scheme takes over: the
+\emph{radial} transforms
+%
+\begin{equation*}
+  Q^L_{nm}(q) \;=\; \frac{4\pi}{\Omega}\int_0^{r_{\mathrm{kkbeta}}}\!\!
+  \mathrm{d}r\; j_L(qr)\,\bigl[r^2 Q^L_{nm}(r)\bigr]
+\end{equation*}
+%
+are tabulated on a grid in $|q|$ at $\mathrm{d}q = 0.01$ and
+$Q_{ij}(\mathbf{G})$ is rebuilt from them a block of $\mathbf{G}$ at a time,
+every iteration, exactly as \code{addusdens} and \code{newd} do it. On a
+45-atom slab with 21~\AA\ of vacuum that is \textbf{8.4~MB} against
+\textbf{65~GB} for one relativistic nickel dataset.
+
+\begin{shcode}
+DEFUMAT_AUG_MAX_BYTES=off python3 run.py   # never tabulate
+DEFUMAT_AUG_MAX_BYTES=2G  python3 run.py   # the default
+DEFUMAT_AUG_CHUNK=8192    python3 run.py   # G vectors per block
+\end{shcode}
+
+\code{DEFUMAT\_AUG\_CHUNK} sizes the rebuild's working array,
+$(n_h, n_h, \text{chunk})$, and defaults to putting it near 256~MB; like the
+batching dials it is a loop bound over an exact sum and is invisible in a
+result. The two schemes agree to \textbf{4e-10~Ry} on a total energy and
+exactly at $\mathbf{G} = 0$. On eight-atom ultrasoft silicon the two
+contractions cost about \textbf{4.5x} more from the table, and the whole run
+comes out level, because the table is cheaper to build than the stored array
+is.
+
+\begin{refuses}
+\textbf{Past the end of the table is NaN, not an extrapolation.} The table
+reaches $2\sqrt{\code{ecutrho}}$ --- \qe's own \code{cell\_factor} --- so that a
+strained cell, whose $G$ vectors move while the $G$ \emph{set} does not, still
+lands on it. A strain large enough to take $|\mathbf{G}|$ past that gives NaN
+rather than a clamped value, because a clamped $Q^L(q)$ would be smooth, of the
+right order and wrong, and would show up only as a bad stress.
+\end{refuses}
+
 \textbf{Precision.} Every dtype comes from \code{config.Precision}; x64 is
 enabled before any array exists, and all validation is float64. float32 is a
 performance mode and \textbf{never one a correctness claim is made in}.

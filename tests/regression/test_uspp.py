@@ -368,3 +368,30 @@ def test_an_scf_through_the_table_reaches_the_same_total_energy(pseudo_dir, monk
     assert float(tabulated.total_energy) == pytest.approx(
         float(stored.total_energy), abs=1e-8
     )
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [("off", 1 << 62), ("2G", 2 * 1024**3), ("512M", 512 * 1024**2),
+     ("64K", 65536), ("1048576", 1048576), ("0", 0)],
+)
+def test_the_augmentation_budget_reads_every_form_the_guide_prints(
+    monkeypatch, text, expected
+):
+    """``docs/features.tex`` prints ``2G``; ``float("2G")`` raises.
+
+    The suffixes are not decoration: ``DEFUMAT_TEST_MEM_MAX`` already takes
+    them, so anyone who has capped a test run will write this one the same way
+    and get a traceback out of setup rather than a memory budget.
+    """
+    from defumat.pseudo.augmentation import _aug_max_bytes
+
+    monkeypatch.setenv("DEFUMAT_AUG_MAX_BYTES", text)
+    assert _aug_max_bytes() == expected
+
+
+def test_the_augmentation_budget_defaults_when_unset(monkeypatch):
+    from defumat.pseudo.augmentation import AUG_MAX_BYTES, _aug_max_bytes
+
+    monkeypatch.delenv("DEFUMAT_AUG_MAX_BYTES", raising=False)
+    assert _aug_max_bytes() == AUG_MAX_BYTES

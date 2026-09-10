@@ -251,6 +251,11 @@ because that is what decides whether it is a session or a phase.
   wrong the strain leg is).
 - **An ultrasoft spin spiral** (P42, attempted and reverted, four findings banked) and
   **ultrasoft/PAW in the sum-over-states `chi_0`** (P40, two findings banked).
+- **An unidentified 83.62 GiB allocation at the first diagonalisation of a 45-atom slab**
+  (P73): byte-for-byte the same at two `diago_david_ndim` and two band batches, so it is
+  neither, and not the buffer `tools/gpu/davidson_memory.py` fits. `2^13 x 641 x 17099`
+  has no factor of 3, 5, 7, 13 or 17, which rules out `nbnd`, `nh`, `nat` and any FFT
+  grid. Needs `memory_analysis()` at the slab's shapes, which allocates nothing.
 - **A *named* out-of-memory failure — the naming is now closed; what a sampler cannot
   see is not.** Not a physics gap and it belonged here anyway, because the unnamed kind
   has cost work three times (P28b, P46, and a session on 2026-09-07). Both halves are now
@@ -11596,6 +11601,128 @@ identity checked on every push.
 - **A species with more than one atom in it**, which is the last blind spot of the atom
   index: both committed fixtures have `natoms = [1]` or `[1, 1]`, so the species-outer and
   atom-inner loops never interact.
+
+### P73 — The augmentation charge as a table, not as an array on the whole G sphere. ✅ DONE.
+
+`defumat/pseudo/augmentation.py`. A **memory** phase and nothing else: no new physics, no
+README row, and the deliverable is that the two ways of getting `Q_ij(G)` give the same
+answer.
+
+**The defect, and it was found from the outside.** A parallel session running a 15x1 NiBr2
+supercell on the cluster — 45 atoms, 360 valence electrons, noncollinear with spin-orbit,
+fully-relativistic PBE PAW, 21 A of vacuum, `ecutrho = 360` so `ngm = 3536849` — lost six
+jobs, none of which completed a single SCF iteration. `build_augmentation` stored
+`Q_ij(G)` as `(nh, nh, ngm)` complex per species, and for the nickel dataset (`nh = 34`)
+that is **65.4 GB**. QE stores nothing of the kind: `upflib/qrad_mod.f90` allocates
+`tab_qrad(nqx, nbetam(nbetam+1)/2, lmaxq, nsp)`, an interpolation table in `|q|` at
+`dq = 0.01`, and `qvan2` rebuilds `Q_ij(G)` per `(ij)` pair inside `addusdens` and `newd`
+every iteration. On this cell that table is **8.4 MB**, so the storage ratio is **9100x**
+and it is a scheme difference rather than a constant factor.
+
+**Three separate things were wrong, and only one of them was the scheme.**
+
+*One species per magnetic site is not one dataset per magnetic site.* `angle1`/`angle2`
+are per **species** in a `pw.x` input, so the standard way to write a noncollinear texture
+is one species per site all naming the same UPF. `Q_ij(G)` depends on the dataset and the
+G set and on nothing else, but the build loop was over species: fifteen nickel labels
+built fifteen identical 65.4 GB arrays, taking the cell from 76.5 GB to **992.4 GB**. The
+key is the dataset's *content* — a blake2b of `qfuncl`, `r` and `rab` on `[:kkbeta]` plus
+the channel list — rather than its path, because the path is a hint that can be absent on
+a hand-built `Pseudopotential` and can lie when two objects were read from one file and
+one has since been modified. Hashing a few megabytes against an array measured in tens of
+GB is free. The test asserts **object identity**, not equality: two arrays that agree
+numerically still cost twice the memory, which is the entire point.
+
+*The `(nbeta, nbeta) -> (nh, nh)` expansion was done once for every `L` at once.*
+`_assemble_qgm` built `(nh, nh, nl, ngm)` and then indexed `L` out of it. Inside the `L`
+loop instead, the same arithmetic runs through `nl (nh/nbeta)^2` less memory — **58 times**
+for a nickel dataset (`nh = 34` against `nbeta = 10`, `nl = 5`). This helps both schemes
+and is the one change with no trade at all.
+
+*The scheme itself.* `TabulatedAugmentation` keeps QE's radial table and rebuilds
+`Q_ij(G)` a **block of G at a time**, which is QE's loop over `(ij)` pairs with the axis
+swapped for the one a plane-wave code in JAX can afford to walk. `build_augmentation`
+chooses by what the stored array would cost — `DEFUMAT_AUG_MAX_BYTES`, default 2 GB — so
+**every validated number in this project keeps the path it was measured on**, and the
+tabulated branch is reached only where the other one does not run at all.
+
+**The numbers, on `benchmarks/si8-us-1k.in` unless said otherwise, single core.**
+
+| | stored | tabulated |
+|---|---|---|
+| `Q_ij(G)` held | 37.13 MB | **0.97 MB** (38x) |
+| setup, `build_augmentation` | 1.67 s | **1.16 s** |
+| `charge` per call | 0.054 s | 0.174 s (4.3x) |
+| `integrals` per call | 0.033 s | 0.153 s (4.7x) |
+| whole SCF, 6 iterations | 5.56 s | 5.42 s |
+| total energy | -91.0139258667 Ry | -91.0139258683 Ry |
+
+**The two contractions really are ~4.5x slower and the whole run is still level**, because
+the table is *cheaper to build* than the stored array is — the radial transform runs on
+2533 knots instead of 36257 G vectors — and because the two contractions are a small part
+of an iteration. That is a measurement rather than an argument for the table being free:
+"level on one cell" is not "never slower", which is why it is not the default.
+
+**The agreement, which is what the switch rests on.**
+
+| | |
+|---|---|
+| `Omega Q_ij(G = 0)` | **exact**, bit for bit |
+| `charge`, si8-us | 5.28e-11 relative |
+| `integrals`, si8-us | 4.69e-11 relative |
+| SCF total energy, si2-us | **3.96e-10 Ry** on -22.75 |
+| SCF total energy, si2-paw | 3.96e-10 Ry on -89.27 |
+| SCF total energy, si8-us | 1.6e-9 Ry on -91.01 |
+| the block size, over 1024 / 4096 / 5000 / 36257 | identical to the last digit |
+
+`Q(G = 0)` is exact and not merely close because at `q = 0` the four Lagrange weights are
+`(1, 0, 0, 0)` and the interpolation reads the first knot straight out — which is also
+what makes the `PP_Q` check that was already there reach the table.
+
+**`qvan2`'s stencil is transcribed rather than improved on.** A cubic spline is smoother
+and would have been easier to write, and it would have moved every committed `pw.x`
+comparison by its own interpolation error — leaving a disagreement that reads as neither
+agreement nor a bug. The stencil is **forward-biased**: the four knots are `i0 .. i0+3`
+with the evaluation point in the *first* of the three intervals, which is why
+`init_tab_qrad` sizes the table with `+ 4` and not `+ 2`.
+
+**Two things that would have been silently wrong.**
+
+- **A gather in JAX clamps its indices.** Past the end of the table, `Q^L(q)` would be a
+  clamped extrapolation: smooth, of the right order, and wrong. Nothing in the suite is
+  sensitive to it, and the way it would surface is a **wrong stress** under a strain large
+  enough to move `|G|` past `qmax` — the energy staying right while its derivative does
+  not, met again. Off-table is NaN, which is the only report available from inside a
+  traced function; the table reaches `cell_factor sqrt(ecutrho)` with QE's own
+  `cell_factor` default of 2.0 (`memory_report.f90:173`) so that a vc-relax lands on it.
+- **A padded G is the origin, where `Q_ij(G)` is not zero.** The scan pads `ngm` up to a
+  whole number of blocks, and `ngm` is a multiple of nothing. Letting the padding vanish on
+  its own adds a smooth spurious term; it is masked in the contraction instead.
+
+**`sizing.py` said 34.78 GB for a cell whose measured peak was 117.55 GB**, and each of
+the three allocations above was larger than that whole total. The module is explicit that
+its bytes are a floor covering the SCF, so this was a scope observation rather than an
+error — but on this cell it read as a green light three times, which is the same thing.
+Setup is now a term rather than a disclaimer: `Q_ij(G)` per distinct dataset and the
+`(nat, ngm)` structure factors as resident arrays, and `_qrad_kernel`'s `(ngm, kkbeta)`
+Bessel intermediate as `SizeEstimate.setup_transient`, which **bounds** the peak against
+the eigensolver's buffer rather than adding to it — the two never coexist, and summing
+them would report a peak that exists at no instant. On the two-atom PAW cell the
+augmentation line is already the largest single entry and the transient is larger still.
+The augmentation figure is asserted against the array a real `Calculation` allocated, not
+against a formula written a second time.
+
+**What is outstanding.** A **fourth** allocation, unidentified: with setup passed at
+`ecutrho = 240`, the first diagonalisation asks for 83.62 GiB = 89,788,080,128 bytes,
+byte-for-byte identically at `diago_david_ndim` 4 against 2 and `DEFUMAT_BAND_BATCH` 64
+against 16, so it is neither of those and is not the buffer `tools/gpu/davidson_memory.py`
+fits. It cannot be reproduced on a 30 GB workstation. What is known is arithmetic and
+worth recording: `89788080128 = 2^13 x 641 x 17099`, so as `complex128` it is
+`2^9 x 641 x 17099` elements and has **no factor of 3, 5, 7, 13 or 17** — which rules out
+`nbnd` (403), `nh` (34 and 14), `nat` (45) and any FFT grid, all of which carry one. The
+route to it that costs nothing is `jit(f).lower(*ShapeDtypeStructs).compile()
+.memory_analysis()` at the slab's shapes, which allocates nothing.
+
 
 ## 4. Validation strategy
 
