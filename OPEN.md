@@ -3,13 +3,17 @@
 Two things came out of the 2026-09-10 regression run that are real and are not
 this-session work. Neither is a wrong physical answer; one is a test asserting a
 bound the solver never promised, the other is a memory peak sitting one bad
-allocation away from an out-of-memory kill.
+allocation away from an out-of-memory kill. A third was added the same day from a
+different direction -- a cluster run that needed to know what a wall-clock kill
+costs -- and it is a missing capability rather than a defect.
 
-**The evidence is not repeated here.** Both are recorded with their numbers in
-`PLAN.md` §3, in the P73 section, under "Three test failures were seen while
-validating this phase". This file is only what to do about them, what it costs,
-and how to know it worked. `GAPS.md` is not the place for either: that file is a
-list of what a user can ask for and not get, and both of these are internal.
+**The evidence is not repeated here.** The first two are recorded with their
+numbers in `PLAN.md` §3, in the P73 section, under "Three test failures were seen
+while validating this phase". This file is only what to do about them, what it
+costs, and how to know it worked. `GAPS.md` is not the place for any of the
+three: that file is a list of what a user can ask for and not get, and these are
+internal -- the third is the closest to a user-facing gap, and it is still a
+question of how a job is run rather than of what physics comes out.
 
 ---
 
@@ -96,7 +100,44 @@ nothing else on the machine, nothing else being timed -- and through
 
 ---
 
-## Neither of these is P73
+## 3. A single SCF is not restartable, only a relaxation is
+
+`run_scf` takes no checkpoint argument at all -- confirmed against its signature,
+not remembered -- so the only way a ground state reaches disk is
+`result.save(path)` **after the driver returns**. That covers the case P67 was
+written for (a converged state handed to a later job, or to a second process) and
+the case where the run stops at `max_iterations`, which still returns a result.
+It does **not** cover the one a cluster user actually meets: a job killed at its
+wall clock mid-SCF loses every iteration it ran. `run_relax(checkpoint_dir=...)`
+writes the state, the geometry and the BFGS history every ionic step, so an
+ionic loop already survives what an electronic one does not.
+
+**Found from the outside**, by the NiBr2 session staging a production run of the
+45-atom helix on Triton: this end told it a wall-clock kill was cheap because
+"the SCF checkpoints", and it checked the script instead of believing it. The
+consequence it drew is the right one and is what a user has to do today -- ask
+for four hours rather than a tight backfill-friendly limit, because there is no
+cheap way to be wrong about the length of the run.
+
+**What to write.** A `checkpoint_dir`/`checkpoint_every` on `run_scf`, writing
+the same `save_state` payload from inside the iteration loop and reading it back
+through `starting_from`, which is machinery that already exists and is already
+field-covered by `unhandled_fields()`. The loop is Python (the convergence test
+is data-dependent), so there is no `lax` boundary in the way. Two things to get
+right rather than discover: the write is the wavefunctions and so is not free --
+it is the same array that dominates the checkpoint file -- so the interval is a
+knob and not every iteration; and a resumed run must re-enter with the *density*
+mixing history it left, or it pays back the iterations it saved, which is exactly
+the trap P67 already solved on the BFGS side and asserted with "2 + 4 steps, not
+2 + 6".
+
+**Cost.** Small, and the test is P67's own pattern one level down: stop an SCF at
+iteration `n`, resume, and assert the total iteration count matches the
+uninterrupted run rather than merely that it converges.
+
+---
+
+## Neither of the first two is P73
 
 Both reproduce on a worktree at `e22aa7d`, the commit before the P73 augmentation
 work started, and item 1 reproduces there to four significant figures. The stress
