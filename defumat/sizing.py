@@ -237,6 +237,12 @@ class SizeEstimate:
     #: ``arrays``: it supersedes the two Davidson entries there rather than
     #: adding to them, which is what :attr:`peak_bytes` does with it.
     eigensolver_buffer: int = 0
+    #: The largest single transient ``Calculation.__init__`` allocates before
+    #: the SCF starts -- the augmentation charge's ``(ngm, kkbeta)`` Bessel
+    #: intermediate. It is gone by the time the eigensolver runs, so it
+    #: **bounds** the peak against the eigensolver's buffer rather than adding
+    #: to it; on a vacuum-padded slab it is the larger of the two.
+    setup_transient: int = 0
 
     #: The ``arrays`` entries the eigensolver's buffer stands in for.
     _SUPERSEDED = ("Davidson subspace psi+hpsi", "Davidson Ritz block")
@@ -258,7 +264,10 @@ class SizeEstimate:
             size for name, size in self.arrays.items()
             if name not in self._SUPERSEDED
         )
-        return int(resident + self.eigensolver_buffer)
+        # Setup's transient and the eigensolver's buffer never coexist -- the
+        # first is freed before the second is asked for -- so the peak takes
+        # the larger of the two, not their sum.
+        return int(resident + max(self.eigensolver_buffer, self.setup_transient))
 
     @property
     def dense_points(self) -> int:
@@ -317,6 +326,10 @@ class SizeEstimate:
         lines += [
             "",
             "What the allocator is actually asked for",
+            f"  {'setup transient (augmentation)':<34s}{gb(self.setup_transient)}",
+            "        the (ngm, kkbeta) Bessel intermediate of the augmentation",
+            "        charge, freed before the SCF starts. It bounds the peak",
+            "        against the line below rather than adding to it.",
             f"  {'eigensolver XLA temp buffer':<34s}{gb(self.eigensolver_buffer)}",
             "        one contiguous allocation, and it stands in for the two",
             "        Davidson lines above rather than adding to them. Estimated",
@@ -324,7 +337,7 @@ class SizeEstimate:
             "        H200: within 3.1% on 12 of 14 points, 30% HIGH on the two",
             "        at david 2 / band_batch 64. Close to the card? Measure it",
             "        with tools/gpu/davidson_memory.py.",
-            f"  {'PEAK (resident + that buffer)':<34s}{gb(self.peak_bytes)}",
+            f"  {'PEAK (resident + the larger)':<34s}{gb(self.peak_bytes)}",
         ]
         return "\n".join(lines)
 
@@ -508,6 +521,39 @@ def estimate_size(
             6 * nspin_mag * int(np.prod(dense_grid)) * zr
         )
 
+    # **Setup, which is where the three largest allocations on a slab live.**
+    # ``Calculation.__init__`` builds the augmentation charge before the SCF
+    # starts, and on a vacuum-padded cell it dwarfs everything below: this
+    # module once reported 34.78 GB for a 45-atom NiBr2 slab whose measured
+    # peak was 117.55 GB, and each of the terms here was larger than that
+    # total. Counted per distinct **dataset** rather than per species, which is
+    # what ``build_augmentation`` now builds (a noncollinear texture is one
+    # species per site, all naming one file).
+    setup_transient = 0
+    from defumat.pseudo.augmentation import _dataset_key
+
+    ultrasoft = [pseudos[t] for t in sorted(set(structure.types))]
+    ultrasoft = [p for p in ultrasoft if p.is_ultrasoft and projector_channels(p)]
+    if ultrasoft:
+        nl_all = 2 * max(p.lmax for p in pseudos) + 1
+        seen, qgm_bytes = set(), 0
+        for pseudo in ultrasoft:
+            nqlc = pseudo.augmentation.nqlc if pseudo.augmentation else nl_all
+            nl_species = min(nl_all, nqlc)
+            key = _dataset_key(pseudo, nl_species)
+            if key in seen:
+                continue
+            seen.add(key)
+            nh = len(projector_channels(pseudo))
+            qgm_bytes += nh * nh * ngm * zc
+            # ``_qrad_kernel``'s ``(ngm, kkbeta)`` Bessel intermediate: one L at
+            # a time, so the peak is one dataset's, not the sum. Transient --
+            # it is gone before the eigensolver runs, which is why it bounds
+            # the peak rather than adding to it.
+            setup_transient = max(setup_transient, ngm * pseudo.kkbeta * zr)
+        arrays["augmentation Q_ij(G) (nh,nh,ngm)"] = qgm_bytes
+        arrays["augmentation phases (nat,ngm)"] = len(structure.types) * ngm * zc
+
     # The eigensolver's own XLA temp buffer -- see the module docstring. The
     # FFT term is on the **smooth** grid, which is the box ``h_psi`` transforms
     # a band in; ``band_batch = None`` is every band at once.
@@ -529,4 +575,5 @@ def estimate_size(
         davidson_basis=int(davidson_basis), k_batch=k_live,
         band_batch=None if band_batch is None else int(band_batch),
         arrays=arrays, eigensolver_buffer=eigensolver_buffer,
+        setup_transient=setup_transient,
     )

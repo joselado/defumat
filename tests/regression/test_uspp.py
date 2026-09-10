@@ -30,6 +30,7 @@ The cases build on each other, and each isolates one thing:
 from functools import lru_cache
 from pathlib import Path
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -207,3 +208,163 @@ def test_two_species_naming_one_dataset_share_one_augmentation_charge(pseudo_dir
     assert augmentation.qgm[0] is augmentation.qgm[1]
     assert augmentation.qq[0] is augmentation.qq[1]
     assert augmentation.species_atoms == ((0,), (1,))
+
+
+def _augmentation_pair(pseudo_dir, case="si2-us"):
+    """The same cell's augmentation charge under both storage schemes."""
+    from defumat.basis.builder import build_basis
+    from defumat.pseudo.augmentation import build_augmentation
+
+    system = build_system(read_pw_input(CASES / f"{case}.in"))
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    dense = build_basis(system).dense
+    stored = build_augmentation(pseudos, system.structure, system.cell, dense)
+    tabulated = build_augmentation(
+        pseudos, system.structure, system.cell, dense, max_bytes=0
+    )
+    return system, dense, stored, tabulated
+
+
+def test_the_tabulated_augmentation_charge_agrees_with_the_stored_one(pseudo_dir):
+    """QE's table against evaluating the transform at every G, on one cell.
+
+    The two are different answers to the same question and the whole switch
+    between them rests on the gap being below anything this project claims.
+    ``Q(G = 0)`` is *exact* rather than close, because at ``q = 0`` the four
+    Lagrange weights are ``(1, 0, 0, 0)`` and the interpolation reads the first
+    knot straight out -- which is also what makes the ``PP_Q`` check above
+    reach the table.
+    """
+    from defumat.pseudo.augmentation import TabulatedAugmentation
+
+    system, dense, stored, tabulated = _augmentation_pair(pseudo_dir)
+    assert isinstance(tabulated, TabulatedAugmentation)
+
+    assert np.asarray(stored.qq[0]) == pytest.approx(np.asarray(tabulated.qq[0]), abs=0)
+
+    rng = np.random.default_rng(0)
+    nh = stored.qgm[0].shape[0]
+    nat = len(stored.species_atoms[0])
+    becsum = rng.normal(size=(nat, nh, nh))
+    becsum = jnp.asarray(0.5 * (becsum + becsum.transpose(0, 2, 1)))
+    charge = np.asarray(stored.charge((becsum,)))
+    assert np.asarray(tabulated.charge((becsum,))) == pytest.approx(
+        charge, rel=0, abs=1e-9 * np.abs(charge).max()
+    )
+
+    potential = jnp.asarray(
+        rng.normal(size=dense.ngm) + 1j * rng.normal(size=dense.ngm)
+    )
+    integrals = np.asarray(stored.integrals(potential)[0])
+    assert np.asarray(tabulated.integrals(potential)[0]) == pytest.approx(
+        integrals, rel=0, abs=1e-9 * np.abs(integrals).max()
+    )
+
+    # And the point of the exercise. The ratio is ngm/nqx and so grows with
+    # the cell: 9.7x on this two-atom one, 38x on benchmarks/si8-us-1k.in, and
+    # 9100x on the 45-atom NiBr2 slab this was written for.
+    held_stored = sum(q.nbytes for q in stored.qgm)
+    held_table = sum(t.nbytes for t in tabulated.tables if t is not None)
+    assert held_table * 5 < held_stored
+
+
+@pytest.mark.parametrize("chunk", [1024, 5000], ids=["divides-npad", "does-not"])
+def test_the_augmentation_chunk_is_invisible(pseudo_dir, monkeypatch, chunk):
+    """The block size is a loop bound over an exact sum, so it changes nothing.
+
+    ``ngm`` is not a multiple of any round number, so the scan pads; a padded
+    G is the **origin**, where ``Q_ij(G)`` is far from zero, and forgetting to
+    mask it adds a smooth spurious term rather than raising anything.
+    """
+    from defumat.basis.builder import build_basis
+    from defumat.pseudo.augmentation import build_augmentation
+
+    system = build_system(read_pw_input(CASES / "si2-us.in"))
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    dense = build_basis(system).dense
+    reference = build_augmentation(system_pseudos := pseudos, system.structure,
+                                   system.cell, dense, max_bytes=0)
+
+    monkeypatch.setenv("DEFUMAT_AUG_CHUNK", str(chunk))
+    chunked = build_augmentation(
+        system_pseudos, system.structure, system.cell, dense, max_bytes=0
+    )
+    assert chunked.chunk == min(chunk, dense.ngm)
+
+    rng = np.random.default_rng(1)
+    nh = reference.beta_of[0].shape[0]
+    nat = len(reference.species_atoms[0])
+    becsum = rng.normal(size=(nat, nh, nh))
+    becsum = jnp.asarray(0.5 * (becsum + becsum.transpose(0, 2, 1)))
+    expected = np.asarray(reference.charge((becsum,)))
+    got = np.asarray(chunked.charge((becsum,)))
+    assert not np.isnan(got).any()
+    assert got == pytest.approx(expected, rel=0, abs=1e-12 * np.abs(expected).max())
+
+
+def test_past_the_end_of_the_table_is_nan_and_not_a_clamp(pseudo_dir):
+    """A gather clamps its indices silently; a clamped Q^L(q) is plausible.
+
+    The failure this guards is a *stress* under a strain large enough to move
+    ``|G|`` past ``qmax``: the extrapolation would be smooth, of the right
+    order and wrong, and no identity in the suite is sensitive to it. NaN is
+    the only report available from inside a traced function.
+    """
+    from defumat.pseudo.augmentation import AUG_DQ, _interpolate_qrad, _qrad_table
+
+    system = build_system(read_pw_input(CASES / "si2-us.in"))
+    pseudo = read_upf(pseudo_dir / system.structure.species[0].pseudo_file)
+    table = _qrad_table(pseudo, 5.0, float(system.cell.volume), 3)
+    top = (table.shape[-1] - 4) * AUG_DQ
+
+    inside = np.asarray(_interpolate_qrad(table, jnp.asarray([0.0, top - 1e-6])))
+    assert np.isfinite(inside).all()
+    outside = np.asarray(_interpolate_qrad(table, jnp.asarray([top + 0.05, top + 10.0])))
+    assert np.isnan(outside).all()
+
+
+def test_the_storage_scheme_is_chosen_by_size(pseudo_dir):
+    """The switch is the array's size, and a generous budget keeps the old path."""
+    from defumat.basis.builder import build_basis
+    from defumat.pseudo.augmentation import (
+        AugmentationCharge, TabulatedAugmentation, build_augmentation,
+    )
+
+    system = build_system(read_pw_input(CASES / "si2-us.in"))
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    dense = build_basis(system).dense
+    roomy = build_augmentation(pseudos, system.structure, system.cell, dense,
+                               max_bytes=1 << 40)
+    assert type(roomy) is AugmentationCharge
+    tight = build_augmentation(pseudos, system.structure, system.cell, dense,
+                               max_bytes=0)
+    assert isinstance(tight, TabulatedAugmentation)
+
+
+@pytest.mark.slow
+def test_an_scf_through_the_table_reaches_the_same_total_energy(pseudo_dir, monkeypatch):
+    """The whole loop, not just the two contractions.
+
+    ``newd`` rebuilds ``D_ij`` from ``integrals`` and ``addusdens`` the density
+    from ``charge``, both every iteration, so an error in either compounds
+    through the self-consistency rather than staying where it was made.
+    """
+    system = build_system(read_pw_input(CASES / "si2-us.in"))
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    monkeypatch.setenv("DEFUMAT_AUG_MAX_BYTES", "off")
+    stored = run_scf(system, pseudos)
+    monkeypatch.setenv("DEFUMAT_AUG_MAX_BYTES", "0")
+    tabulated = run_scf(system, pseudos)
+
+    assert len(tabulated.history) == len(stored.history)
+    assert float(tabulated.total_energy) == pytest.approx(
+        float(stored.total_energy), abs=1e-8
+    )

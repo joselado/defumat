@@ -44,6 +44,7 @@ integrates to ``kkbeta`` and so does this. The check that it is right is that
 from __future__ import annotations
 
 import hashlib
+import os
 from functools import partial
 
 import equinox as eqx
@@ -61,8 +62,8 @@ from defumat.system.cell import Cell
 from defumat.system.structure import Structure
 from defumat.units import FPI
 
-__all__ = ["AugmentationCharge", "augmentation_dipole", "build_augmentation",
-           "radial_augmentation_transforms"]
+__all__ = ["AugmentationCharge", "TabulatedAugmentation", "augmentation_dipole",
+           "build_augmentation", "radial_augmentation_transforms"]
 
 
 class AugmentationCharge(eqx.Module):
@@ -304,6 +305,244 @@ def _qrad_kernel(q, r, weights, functions, prefactor, l):
     return prefactor * jnp.einsum("fm,qm,m->fq", functions, bessel, weights)
 
 
+
+#: QE's interpolation step in ``|q|`` (``upflib/qrad_mod.f90:22``). ``q`` is in
+#: sqrt(Ry), since ``q^2`` is an energy in Rydberg atomic units.
+AUG_DQ = 0.01
+
+#: How much ``Q_ij(G)`` may occupy before the run stops storing it and rebuilds
+#: it from a table instead. Below this it is built once and kept, which is what
+#: every validated number in this project was measured with and is the faster
+#: of the two on a small cell. ``DEFUMAT_AUG_MAX_BYTES`` overrides it; ``off``
+#: means never tabulate.
+AUG_MAX_BYTES = 2 * 1024**3
+
+#: QE's ``cell_factor``: how far past ``sqrt(ecutrho)`` the table reaches, so
+#: that a strained cell -- whose G vectors move while the G *set* does not --
+#: still lands on it. QE's own default for a variable cell
+#: (``PW/src/input.f90:1284``), and the table is kilobytes, so the margin is
+#: free.
+AUG_CELL_FACTOR = 2.0
+
+
+def _aug_max_bytes() -> int:
+    value = os.environ.get("DEFUMAT_AUG_MAX_BYTES")
+    if value is None:
+        return AUG_MAX_BYTES
+    if value.strip().lower() in ("off", "none", "inf"):
+        return 1 << 62
+    return int(float(value))
+
+
+def _aug_chunk(nh_max: int, ngm: int) -> int:
+    """How many G vectors ``Q_ij(G)`` is rebuilt for at a time.
+
+    The intermediate this decides is ``(nh, nh, chunk)`` complex, so the
+    default is chosen to put *that* near 256 MB rather than fixed at a count:
+    one chunk is eleven times more memory for a fully-relativistic nickel
+    dataset (``nh = 34``) than for silicon's (``nh = 8``).
+    ``DEFUMAT_AUG_CHUNK`` overrides it.
+
+    Like every other batching dial here it is a loop bound over an exact sum,
+    and must not be visible in a result beyond round-off.
+    """
+    value = os.environ.get("DEFUMAT_AUG_CHUNK")
+    if value is not None:
+        return max(1, min(int(value), ngm))
+    target = 256 * 1024**2 // max(1, nh_max * nh_max * 16)
+    return int(min(1 << max(10, int(np.floor(np.log2(max(target, 1024))))), ngm))
+
+
+def _qrad_table(pseudo: Pseudopotential, qmax: float, omega, nl: int) -> jnp.ndarray:
+    """``tab_qrad``: ``Q^L_nm`` on the ``(i - 1) dq`` grid. ``init_tab_qrad``.
+
+    ``nqx = INT(qmax/dq + 4)`` is QE's own sizing (``qrad_mod.f90:86``), and
+    the four extra points are the room the forward-biased stencil in
+    :func:`_interpolate_qrad` needs at the top of the range rather than a
+    safety margin.
+    """
+    nqx = int(qmax / AUG_DQ + 4)
+    knots = jnp.arange(nqx) * AUG_DQ
+    return radial_augmentation_transforms(pseudo, knots, omega, nl)
+
+
+def _interpolate_qrad(table: jnp.ndarray, qmod: jnp.ndarray) -> jnp.ndarray:
+    """``qvan2``'s four-point Lagrange, at every ``|G|`` at once.
+
+    ``upflib/qvan2.f90:143-158``, transcribed rather than replaced by a spline:
+    every committed ``pw.x`` reference this code is checked against was
+    produced with *this* stencil, so a smoother one would move the comparison
+    by its own interpolation error and leave the disagreement unreadable.
+
+    The stencil is forward-biased -- the four knots are ``i0 .. i0+3`` with the
+    evaluation point in the **first** of the three intervals, not the middle
+    one -- which is why ``init_tab_qrad`` adds four points and not two.
+
+    **Off the top of the table is NaN, never a clamped extrapolation.** A
+    gather in JAX clamps its indices silently, and a clamped ``Q^L(q)`` is
+    smooth, plausible and wrong: it would surface as a wrong stress under a
+    strain large enough to push ``|G|`` past ``qmax``, with nothing anywhere to
+    say so.
+    """
+    nqx = table.shape[-1]
+    qm = qmod / AUG_DQ
+    i0 = jnp.floor(qm).astype(jnp.int32)
+    px = qm - i0
+    ux, vx, wx = 1.0 - px, 2.0 - px, 3.0 - px
+    uvx = ux * vx / 6.0
+    pwx = px * wx * 0.5
+
+    total = None
+    for step, weight in enumerate((uvx * wx, pwx * vx, -pwx * ux, px * uvx)):
+        # Summed one stencil point at a time: gathering all four first would
+        # hold four (nbeta, nbeta, nl, nq) arrays at once for no reason.
+        term = table[..., jnp.clip(i0 + step, 0, nqx - 1)] * weight
+        total = term if total is None else total + term
+    return jnp.where(i0 + 3 < nqx, total, jnp.nan)
+
+
+class TabulatedAugmentation(AugmentationCharge):
+    """``Q_ij(G)`` rebuilt from a table, for a cell too large to store it on.
+
+    The base class's materialised ``(nh, nh, ngm)`` array is the largest object
+    in the whole calculation on a vacuum-padded slab: 65 GB for one
+    fully-relativistic nickel dataset on a 45-atom NiBr2 cell at
+    ``ecutrho = 360``, against the 8.4 MB QE spends on the same physics. QE
+    never materialises it. ``init_tab_qrad`` tabulates the *radial* transforms
+    on a grid in ``|q|`` and ``qvan2`` interpolates per ``(ij)`` pair inside
+    ``addusdens`` and ``newd``, every iteration.
+
+    This does the same, with QE's loop over ``(ij)`` pairs replaced by a scan
+    over blocks of G -- the axis a plane-wave code in JAX can afford to walk.
+
+    **The trade is smaller than it looks, and it was measured rather than
+    assumed.** The rebuild happens twice an iteration where the stored array is
+    built once, and the two contractions do cost what that implies: on
+    ``benchmarks/si8-us-1k.in``, single core, ``charge`` goes from 0.054 s to
+    0.174 s and ``integrals`` from 0.033 s to 0.153 s, both about 4.5 times.
+    But they are a small part of an SCF iteration, and the table is *cheaper*
+    to build than the stored array is -- the radial transform runs on 2533
+    knots instead of 36257 G vectors -- so the whole run comes out level: 5.56
+    s against 5.42 s, the same six iterations, and a total energy 1.6e-9 Ry
+    apart on -91.01 Ry. What changes by 38 times is only the memory.
+
+    It is still not the default, because "level on one cell" is not "never
+    slower", and because the stored path is what every validated number in this
+    project was measured with.
+
+    ``gcart`` and ``phases`` are stored **padded** to a whole number of chunks,
+    with ``mask`` zero on the padding. A padded G is the origin, where
+    ``Q_ij(G)`` is emphatically not zero, so the padding is killed in the
+    contraction rather than left to vanish on its own.
+    """
+
+    tables: tuple  # per species, (nbeta, nbeta, nl, nqx) -- QE's tab_qrad
+    coefficients: tuple  # per species, (nlm, nh, nh) -- ap, restricted
+    beta_of: tuple  # per species, (nh,) -- which radial projector a channel is
+    gcart: jnp.ndarray  # (npad, 3) cartesian G, padded; carries the cell
+    mask: jnp.ndarray  # (npad,) 1.0 on a real G, 0.0 on the padding
+    ngm: int = eqx.field(static=True)
+    chunk: int = eqx.field(static=True)
+    lmax2: int = eqx.field(static=True)  # the ylm order, 2 lmax
+    nl_species: tuple = eqx.field(static=True)
+
+    @property
+    def ntyp(self) -> int:
+        return len(self.tables)
+
+    def _builder(self, t: int):
+        """``Q_ij(G)`` for species ``t``, as a function of a block of G."""
+        table, coefficients = self.tables[t], self.coefficients[t]
+        beta_of, nl = self.beta_of[t], self.nl_species[t]
+
+        def build(gcart_chunk):
+            ylm = real_spherical_harmonics(gcart_chunk, self.lmax2)
+            radial = _interpolate_qrad(table, modulus(gcart_chunk))
+            return _assemble_qgm(coefficients, ylm, radial, beta_of, nl)
+
+        return build
+
+    def charge(self, becsum: tuple) -> jnp.ndarray:
+        total = None
+        for t, atoms in enumerate(self.species_atoms):
+            if self.tables[t] is None or not atoms:
+                continue
+            contribution = _tabulated_charge(
+                self._builder(t), self.gcart, self.mask,
+                self.phases[jnp.asarray(atoms)],
+                becsum[t].astype(self.phases.dtype), self.chunk, self.ngm,
+            )
+            total = contribution if total is None else total + contribution
+        if total is None:
+            return jnp.zeros(self.ngm, dtype=self.phases.dtype)
+        return total
+
+    def integrals(self, potential_g: jnp.ndarray) -> tuple:
+        padded = jnp.pad(potential_g, (0, self.mask.shape[0] - self.ngm))
+        result = []
+        for t, atoms in enumerate(self.species_atoms):
+            nh = 0 if self.tables[t] is None else self.beta_of[t].shape[0]
+            if self.tables[t] is None or not atoms:
+                result.append(jnp.zeros((len(atoms), nh, nh)))
+                continue
+            result.append(
+                _tabulated_integrals(
+                    self._builder(t), self.gcart, self.mask, padded,
+                    self.phases[jnp.asarray(atoms)], self.volume, self.chunk, nh,
+                )
+            )
+        return tuple(result)
+
+    def at_positions(self, positions: jnp.ndarray, gcart: jnp.ndarray):
+        """As the base class, except the G set is padded with the phases."""
+        padded = jnp.pad(gcart, ((0, self.mask.shape[0] - self.ngm), (0, 0)))
+        phases = _atom_phases(padded, positions).astype(self.phases.dtype)
+        return eqx.tree_at(lambda a: (a.phases, a.gcart), self, (phases, padded))
+
+
+def _tabulated_charge(build, gcart, mask, phases, becsum, chunk, ngm):
+    """``rho_aug(G)`` for one species, scanning over blocks of G."""
+    nchunks = mask.shape[0] // chunk
+    nat = phases.shape[0]
+
+    def body(carry, index):
+        start = index * chunk
+        gcart_chunk = jax.lax.dynamic_slice(gcart, (start, 0), (chunk, 3))
+        phase_chunk = jax.lax.dynamic_slice(phases, (0, start), (nat, chunk))
+        mask_chunk = jax.lax.dynamic_slice(mask, (start,), (chunk,))
+        weighted = jnp.einsum("aij,ac->ijc", becsum, phase_chunk)
+        block = jnp.einsum("ijc,ijc->c", build(gcart_chunk), weighted)
+        return carry, block * mask_chunk
+
+    _, blocks = jax.lax.scan(body, None, jnp.arange(nchunks))
+    return blocks.reshape(-1)[:ngm]
+
+
+def _tabulated_integrals(build, gcart, mask, potential_g, phases, volume, chunk, nh):
+    """``int V(r) Q_ij^a(r) dr`` for one species, scanning over blocks of G.
+
+    A reduction over G rather than a map along it, so the accumulator is the
+    scan's *carry*: ``(nat, nh, nh)`` whatever the chunk is.
+    """
+    nchunks = mask.shape[0] // chunk
+    nat = phases.shape[0]
+
+    def body(carry, index):
+        start = index * chunk
+        gcart_chunk = jax.lax.dynamic_slice(gcart, (start, 0), (chunk, 3))
+        phase_chunk = jax.lax.dynamic_slice(phases, (0, start), (nat, chunk))
+        mask_chunk = jax.lax.dynamic_slice(mask, (start,), (chunk,))
+        potential_chunk = jax.lax.dynamic_slice(potential_g, (start,), (chunk,))
+        shifted = potential_chunk[None, :] * jnp.conj(phase_chunk) * mask_chunk
+        block = jnp.einsum("ijc,ac->aij", jnp.conj(build(gcart_chunk)), shifted)
+        return carry + jnp.real(block), None
+
+    total, _ = jax.lax.scan(
+        body, jnp.zeros((nat, nh, nh)), jnp.arange(nchunks)
+    )
+    return volume * total
+
+
 def _dataset_key(pseudo: Pseudopotential, nl_species: int) -> tuple:
     """A fingerprint of everything ``Q_ij(G)`` is built from, bar the G set.
 
@@ -345,15 +584,123 @@ def _dataset_key(pseudo: Pseudopotential, nl_species: int) -> tuple:
     )
 
 
+
+def _nl_of(pseudo: Pseudopotential, nl: int) -> int:
+    """How many multipoles this dataset's augmentation charge actually has."""
+    if pseudo.augmentation is None:
+        return nl
+    return min(nl, pseudo.augmentation.nqlc)
+
+
+def _build_tabulated_augmentation(
+    pseudos, structure, cell, gvectors, ap, lmax, nl, nh_max, cell_factor
+):
+    """:class:`TabulatedAugmentation` -- the branch for a cell too large to store.
+
+    ``qmax`` is QE's, from ``memory_report.f90:173``: the table reaches
+    ``cell_factor`` times ``sqrt(ecutrho)`` because a strained cell moves its G
+    vectors while the G *set* stays as it was, and an evaluation past the end
+    of the table is NaN rather than a clamp.
+    """
+    volume = cell.volume
+    qmax = float(np.sqrt(gvectors.ecut)) * cell_factor
+    chunk = _aug_chunk(nh_max, gvectors.ngm)
+    npad = -(-gvectors.ngm // chunk) * chunk
+
+    gcart = gvectors.cartesian(cell)
+    gcart = jnp.pad(gcart, ((0, npad - gvectors.ngm), (0, 0)))
+    mask = jnp.concatenate([
+        jnp.ones(gvectors.ngm, dtype=cell.precision.real),
+        jnp.zeros(npad - gvectors.ngm, dtype=cell.precision.real),
+    ])
+
+    tables, coefficients, beta_of, nl_species, qq = [], [], [], [], []
+    built: dict = {}
+    for pseudo in pseudos:
+        channels = projector_channels(pseudo)
+        if not pseudo.is_ultrasoft or not channels:
+            tables.append(None)
+            coefficients.append(None)
+            beta_of.append(jnp.zeros(0, dtype=jnp.int32))
+            nl_species.append(0)
+            qq.append(jnp.zeros((0, 0)))
+            continue
+
+        nl_t = _nl_of(pseudo, nl)
+        key = _dataset_key(pseudo, nl_t)
+        if key not in built:
+            lm_of = np.array([lm for _, _, lm in channels])
+            built[key] = (
+                _qrad_table(pseudo, qmax, volume, nl_t),
+                jnp.asarray(ap[:, lm_of[:, None], lm_of[None, :]]),
+                jnp.asarray(np.array([nb for nb, _, _ in channels])),
+            )
+        table, coefficient, betas = built[key]
+        tables.append(table)
+        coefficients.append(coefficient)
+        beta_of.append(betas)
+        nl_species.append(nl_t)
+
+        # ``Omega * Q_ij(G = 0)``. Taken through the table and the stencil
+        # rather than from the radial transform directly, so that the file's
+        # own ``PP_Q`` check reaches the interpolation as well: at ``q = 0``
+        # the four weights are (1, 0, 0, 0), so this reads the first knot.
+        at_origin = _assemble_qgm(
+            coefficient,
+            real_spherical_harmonics(gcart[:1], 2 * lmax),
+            _interpolate_qrad(table, modulus(gcart[:1])),
+            betas, nl_t,
+        )
+        qq.append(volume * jnp.real(at_origin[:, :, 0]))
+
+    phases = _atom_phases(gcart, structure.positions).astype(cell.precision.complex)
+    types = np.asarray(structure.types)
+    species_atoms = tuple(
+        tuple(int(a) for a in np.flatnonzero(types == t)) for t in range(structure.ntyp)
+    )
+    sizes = [len(projector_channels(pseudos[t])) for t in types]
+
+    return TabulatedAugmentation(
+        qgm=(),
+        qq=tuple(qq),
+        phases=phases,
+        volume=jnp.asarray(volume),
+        species_atoms=species_atoms,
+        channel_offsets=tuple(int(o) for o in np.cumsum([0] + sizes)[:-1]),
+        nkb=int(sum(sizes)),
+        tables=tuple(tables),
+        coefficients=tuple(coefficients),
+        beta_of=tuple(beta_of),
+        gcart=gcart,
+        mask=mask,
+        ngm=int(gvectors.ngm),
+        chunk=int(chunk),
+        lmax2=int(2 * lmax),
+        nl_species=tuple(nl_species),
+    )
+
+
 def build_augmentation(
     pseudos: tuple[Pseudopotential, ...],
     structure: Structure,
     cell: Cell,
     gvectors: GVectors,
+    max_bytes: int | None = None,
+    cell_factor: float = AUG_CELL_FACTOR,
 ) -> AugmentationCharge | None:
     """Assemble ``Q_ij(G)`` for every ultrasoft species. ``None`` if there are none.
 
     ``gvectors`` must be the **dense** set.
+
+    **Two storage schemes, and the size of the cell picks one.** Below
+    ``max_bytes`` (:data:`AUG_MAX_BYTES`, or ``DEFUMAT_AUG_MAX_BYTES``) the
+    array is built on the whole G sphere and kept for the run, which is what
+    every validated number here was measured with. Above it,
+    :class:`TabulatedAugmentation` keeps QE's radial table instead and rebuilds
+    ``Q_ij(G)`` a block of G at a time -- 8.4 MB where the stored array is 65
+    GB on a 45-atom NiBr2 slab, at the cost of rebuilding it twice an
+    iteration. The two agree to interpolation error, which
+    ``tests/regression/test_uspp.py`` measures rather than assumes.
     """
     if not any(pseudos[t].is_ultrasoft for t in structure.types):
         return None
@@ -372,6 +719,25 @@ def build_augmentation(
     lmax = max(p.lmax for p in pseudos)
     ap = harmonic_products(lmax)  # ((2lmax+1)^2, (lmax+1)^2, (lmax+1)^2)
     nl = 2 * lmax + 1
+
+    # Which scheme, decided on what the stored array would cost -- per distinct
+    # *dataset*, since that is what is built below.
+    stored_bytes, nh_max = 0, 0
+    seen = set()
+    for pseudo in pseudos:
+        channels = projector_channels(pseudo)
+        if not pseudo.is_ultrasoft or not channels:
+            continue
+        key = _dataset_key(pseudo, _nl_of(pseudo, nl))
+        if key in seen:
+            continue
+        seen.add(key)
+        stored_bytes += len(channels) ** 2 * gvectors.ngm * 16
+        nh_max = max(nh_max, len(channels))
+    if stored_bytes > (_aug_max_bytes() if max_bytes is None else max_bytes):
+        return _build_tabulated_augmentation(
+            pseudos, structure, cell, gvectors, ap, lmax, nl, nh_max, cell_factor
+        )
 
     gcart = gvectors.cartesian(cell)
     gmod = modulus(gcart)  # guarded at G = 0; see gvectors.modulus
@@ -443,16 +809,18 @@ def _assemble_qgm(coefficients, ylm, radial, beta_of, nl):
     ``LM`` at once -- needs the radial table broadcast to ``(nh, nh, nlm, ngm)``,
     which is the same arithmetic through several times the memory.
     """
-    # (nbeta, nbeta, nl, ngm) -> (nh, nh, nl, ngm), one row per projector channel
-    channel_radial = radial[beta_of[:, None], beta_of[None, :]]
-
     total = None
     for l in range(nl):
         block = slice(l * l, (l + 1) ** 2)
         angular = jnp.einsum("mij,gm->ijg", coefficients[block], ylm[:, block])
         # (-i)^L: real for even L, imaginary for odd, which is qvan2's sig/ind.
         phase = (-1j) ** l
-        term = phase * angular * channel_radial[:, :, l, :]
+        # The (nbeta, nbeta) -> (nh, nh) expansion is done **inside** the L loop
+        # and never for every L at once. One row per projector channel is a
+        # factor (nh/nbeta)^2 more rows -- 11.6 for a fully-relativistic Ni
+        # dataset, nh = 34 against nbeta = 10 -- and the whole table at once is
+        # a further nl on top. Same arithmetic, one L's worth of memory.
+        term = phase * angular * radial[beta_of[:, None], beta_of[None, :], l]
         total = term if total is None else total + term
     return total
 

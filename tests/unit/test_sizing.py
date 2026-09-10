@@ -89,6 +89,67 @@ def test_the_estimate_is_what_the_setup_builds(text, pseudo_dir):
     assert estimate.npw == tuple(built.basis.planewaves.npw)
 
 
+def test_the_augmentation_charge_is_sized_and_is_the_largest_term(pseudo_dir):
+    """``Q_ij(G)`` is what decides whether an ultrasoft run starts.
+
+    Setup was outside this module's scope, and on a vacuum-padded slab that was
+    not a scope observation but a green light: 34.78 GB reported against a
+    117.55 GB measured peak, with each of the setup allocations larger than the
+    whole reported total. The augmentation charge is counted exactly here --
+    against the array a real ``Calculation`` allocated, not against a formula
+    written twice -- and on a PAW cell it is already bigger than everything the
+    SCF holds put together.
+    """
+    calculator = _calculator(SILICON_PAW, pseudo_dir)
+    estimate = estimate_size(calculator.system, calculator.pseudos)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        built = calculator.calculation
+
+    assert built.augmentation is not None
+    counted = estimate.arrays["augmentation Q_ij(G) (nh,nh,ngm)"]
+    assert counted == sum(q.nbytes for q in built.augmentation.qgm)
+    assert (
+        estimate.arrays["augmentation phases (nat,ngm)"]
+        == built.augmentation.phases.nbytes
+    )
+
+    # It is the largest single line, and the Bessel transient is larger still.
+    assert counted == max(estimate.arrays.values())
+    assert estimate.setup_transient > counted
+
+
+def test_the_setup_transient_bounds_the_peak_rather_than_adding_to_it(pseudo_dir):
+    """The Bessel intermediate is freed before the eigensolver is asked for one.
+
+    Summing them would report a peak that never exists at any instant, which is
+    the opposite of this module's error: an overestimate that refuses a run
+    that would have fitted.
+    """
+    calculator = _calculator(SILICON_PAW, pseudo_dir)
+    estimate = estimate_size(calculator.system, calculator.pseudos)
+
+    resident = sum(
+        size for name, size in estimate.arrays.items()
+        if name not in estimate._SUPERSEDED
+    )
+    assert estimate.peak_bytes == resident + max(
+        estimate.setup_transient, estimate.eigensolver_buffer
+    )
+    assert estimate.peak_bytes < (
+        resident + estimate.setup_transient + estimate.eigensolver_buffer
+    )
+
+
+def test_a_norm_conserving_run_is_charged_no_augmentation_at_all(pseudo_dir):
+    """``Si.pz-vbc`` has no augmentation charge, so neither line may appear."""
+    calculator = _calculator(SILICON, pseudo_dir)
+    estimate = estimate_size(calculator.system, calculator.pseudos)
+    assert not any("augmentation" in name for name in estimate.arrays)
+    assert estimate.setup_transient == 0
+
+
 def test_the_double_grid_is_genuinely_double(pseudo_dir):
     """The PAW case must actually exercise the two-grid path.
 
