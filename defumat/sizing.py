@@ -527,16 +527,23 @@ def estimate_size(
     # module once reported 34.78 GB for a 45-atom NiBr2 slab whose measured
     # peak was 117.55 GB, and each of the terms here was larger than that
     # total. Counted per distinct **dataset** rather than per species, which is
-    # what ``build_augmentation`` now builds (a noncollinear texture is one
-    # species per site, all naming one file).
+    # what ``build_augmentation`` builds (a noncollinear texture is one species
+    # per magnetic site, all of them naming one file).
+    #
+    # **Which of the two storage schemes is sized is decided the same way the
+    # run decides it**, by calling the same budget on the same number. Sizing
+    # the stored array for a run that will tabulate is this module's own error
+    # inverted: a red light for a calculation that fits.
     setup_transient = 0
-    from defumat.pseudo.augmentation import _dataset_key
+    from defumat.pseudo.augmentation import (
+        AUG_CELL_FACTOR, AUG_DQ, _aug_chunk, _aug_max_bytes, _dataset_key,
+    )
 
     ultrasoft = [pseudos[t] for t in sorted(set(structure.types))]
     ultrasoft = [p for p in ultrasoft if p.is_ultrasoft and projector_channels(p)]
     if ultrasoft:
         nl_all = 2 * max(p.lmax for p in pseudos) + 1
-        seen, qgm_bytes = set(), 0
+        seen, datasets = set(), []
         for pseudo in ultrasoft:
             nqlc = pseudo.augmentation.nqlc if pseudo.augmentation else nl_all
             nl_species = min(nl_all, nqlc)
@@ -544,15 +551,42 @@ def estimate_size(
             if key in seen:
                 continue
             seen.add(key)
-            nh = len(projector_channels(pseudo))
-            qgm_bytes += nh * nh * ngm * zc
-            # ``_qrad_kernel``'s ``(ngm, kkbeta)`` Bessel intermediate: one L at
-            # a time, so the peak is one dataset's, not the sum. Transient --
-            # it is gone before the eigensolver runs, which is why it bounds
-            # the peak rather than adding to it.
-            setup_transient = max(setup_transient, ngm * pseudo.kkbeta * zr)
-        arrays["augmentation Q_ij(G) (nh,nh,ngm)"] = qgm_bytes
-        arrays["augmentation phases (nat,ngm)"] = len(structure.types) * ngm * zc
+            datasets.append((pseudo, nl_species, len(projector_channels(pseudo))))
+
+        nh_max = max(nh for _, _, nh in datasets)
+        qgm_bytes = sum(nh * nh * ngm * zc for _, _, nh in datasets)
+        if qgm_bytes <= _aug_max_bytes():
+            arrays["augmentation Q_ij(G) (nh,nh,ngm)"] = qgm_bytes
+            arrays["augmentation phases (nat,ngm)"] = len(structure.types) * ngm * zc
+            # ``_qrad_kernel``'s ``(ngm, kkbeta)`` Bessel intermediate: built one
+            # L at a time, so the peak is one dataset's rather than their sum.
+            # Transient -- gone before the eigensolver runs, which is why it
+            # bounds the peak rather than adding to it.
+            setup_transient = max(
+                ngm * pseudo.kkbeta * zr for pseudo, _, _ in datasets
+            )
+        else:
+            # The tabulated scheme. ``nqx`` is QE's sizing with this code's
+            # ``cell_factor``, and the Bessel intermediate shrinks with it --
+            # the transform runs on the knots instead of on the G sphere, which
+            # is the whole difference.
+            nqx = int(AUG_CELL_FACTOR * np.sqrt(system.ecutrho) / AUG_DQ + 4)
+            chunk = _aug_chunk(nh_max, ngm)
+            npad = -(-ngm // chunk) * chunk
+            arrays["augmentation table (nbeta,nbeta,nl,nqx)"] = sum(
+                pseudo.nbeta**2 * nl * nqx * zr for pseudo, nl, _ in datasets
+            )
+            arrays["augmentation phases (nat,npad)"] = len(structure.types) * npad * zc
+            arrays["augmentation G set (npad,3)"] = npad * 3 * zr + npad * zr
+            # What one block of the rebuild holds: the assembled (nh, nh, chunk)
+            # and the two it is contracted against. This is the dial's cost and
+            # the reason ``_aug_chunk`` sizes itself from ``nh`` rather than
+            # being a fixed count.
+            arrays["augmentation rebuild block"] = 3 * nh_max * nh_max * chunk * zc
+            setup_transient = max(
+                nqx * pseudo.kkbeta * zr for pseudo, _, _ in datasets
+            )
+
 
     # The eigensolver's own XLA temp buffer -- see the module docstring. The
     # FFT term is on the **smooth** grid, which is the box ``h_psi`` transforms

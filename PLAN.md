@@ -11608,6 +11608,13 @@ identity checked on every push.
 README row, and the deliverable is that the two ways of getting `Q_ij(G)` give the same
 answer.
 
+**No notebook, and that is a decision rather than an omission.** A notebook here is about
+the physics and nothing else, and this phase changes none: the same cell, the same
+functional, the same total energy to 4e-10 Ry. What it would have to be about is storage
+schemes and interpolation stencils, which is exactly the material the notebook rule
+excludes. The comparison that would have been its figure is a *test*
+(`tests/regression/test_uspp.py`), which is where the rule says it belongs.
+
 **The defect, and it was found from the outside.** A parallel session running a 15x1 NiBr2
 supercell on the cluster — 45 atoms, 360 valence electrons, noncollinear with spin-orbit,
 fully-relativistic PBE PAW, 21 A of vacuum, `ecutrho = 360` so `ngm = 3536849` — lost six
@@ -11711,6 +11718,16 @@ them would report a peak that exists at no instant. On the two-atom PAW cell the
 augmentation line is already the largest single entry and the transient is larger still.
 The augmentation figure is asserted against the array a real `Calculation` allocated, not
 against a formula written a second time.
+
+**And it sizes the scheme that will run, by calling the same budget on the same number the
+run calls it on.** Sizing the stored array for a calculation that is going to tabulate is
+this module's own failure inverted — a red light for a run that fits, where the original
+complaint was a green light for one that did not — and it is the failure mode a
+size-triggered switch invites, because the two decisions are made in different files. The
+tabulated branch reports the table, the padded structure factors and G set, one rebuild
+block (the chunk's own cost, and the reason `_aug_chunk` sizes itself from `nh`), and a
+`setup_transient` that shrinks with it: the Bessel transform runs on the knots instead of
+on the G sphere, which is the whole difference between the two schemes in one line.
 
 **What is outstanding.** A **fourth** allocation, unidentified: with setup passed at
 `ecutrho = 240`, the first diagonalisation asks for 83.62 GiB = 89,788,080,128 bytes,

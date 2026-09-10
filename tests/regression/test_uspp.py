@@ -395,3 +395,59 @@ def test_the_augmentation_budget_defaults_when_unset(monkeypatch):
 
     monkeypatch.delenv("DEFUMAT_AUG_MAX_BYTES", raising=False)
     assert _aug_max_bytes() == AUG_MAX_BYTES
+
+
+def _converged_both_schemes(case, pseudo_dir, monkeypatch):
+    """The same cell converged under each augmentation storage scheme."""
+    from defumat.calculator import Calculator
+
+    out = []
+    for budget in ("off", "0"):
+        monkeypatch.setenv("DEFUMAT_AUG_MAX_BYTES", budget)
+        calculator = Calculator.from_file(CASES / f"{case}.in", pseudo_dir,
+                                          announce=False)
+        out.append((calculator.calculation, calculator.get_scf()))
+    return out
+
+
+@pytest.mark.slow
+def test_a_force_through_the_table_matches_the_stored_path(pseudo_dir, monkeypatch):
+    """The derivative, which is the only thing the table's two guards exist for.
+
+    Nothing else here reaches it: every committed cell is under the budget, so
+    the whole force and stress suite runs the stored path and would pass with
+    ``grad`` through the interpolation broken. The agreement should be tight
+    rather than merely close, because ``jax.grad`` of the four Lagrange weights
+    *is* ``dqvan2``'s ``work1`` -- QE differentiates the same stencil by hand
+    and gets the same expression.
+    """
+    from defumat.forces import compute_forces
+
+    (calc_a, res_a), (calc_b, res_b) = _converged_both_schemes(
+        "si2-us-force", pseudo_dir, monkeypatch
+    )
+    stored = np.asarray(compute_forces(calc_a, res_a, method="autodiff").forces)
+    tabulated = np.asarray(compute_forces(calc_b, res_b, method="autodiff").forces)
+    assert np.isfinite(tabulated).all()
+    assert np.abs(tabulated - stored).max() < 1e-8
+
+
+@pytest.mark.slow
+def test_a_stress_through_the_table_matches_the_stored_path(pseudo_dir, monkeypatch):
+    """The strain derivative is where the table's range guard actually lives.
+
+    ``Calculation.at_strain`` rebuilds the augmentation charge on a **traced**
+    cell, so the interpolation is inside the stress tape and ``|G|`` is the
+    thing being differentiated. A clamped extrapolation past ``qmax`` would
+    show up here and nowhere else, which is why off-table is NaN and why the
+    table reaches ``2 sqrt(ecutrho)``.
+    """
+    from defumat.stress import compute_stress
+
+    (calc_a, res_a), (calc_b, res_b) = _converged_both_schemes(
+        "si2-us-stress", pseudo_dir, monkeypatch
+    )
+    stored = np.asarray(compute_stress(calc_a, res_a).tensor)
+    tabulated = np.asarray(compute_stress(calc_b, res_b).tensor)
+    assert np.isfinite(tabulated).all()
+    assert np.abs(tabulated - stored).max() < 1e-8

@@ -120,6 +120,44 @@ def test_the_augmentation_charge_is_sized_and_is_the_largest_term(pseudo_dir):
     assert estimate.setup_transient > counted
 
 
+def test_a_tabulated_run_is_sized_as_one_and_not_as_the_stored_array(
+    pseudo_dir, monkeypatch
+):
+    """Above the budget the run holds a table, and the estimate must say so.
+
+    Reporting 65 GB of ``Q_ij(G)`` for a run that will hold 15 MB of table is
+    this module's own failure inverted -- a red light for a calculation that
+    fits -- so the estimate calls the same budget on the same number the run
+    calls it on, and the two move together.
+    """
+    from defumat.pseudo.augmentation import TabulatedAugmentation
+
+    monkeypatch.setenv("DEFUMAT_AUG_MAX_BYTES", "0")
+    calculator = _calculator(SILICON_PAW, pseudo_dir)
+    estimate = estimate_size(calculator.system, calculator.pseudos)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        built = calculator.calculation
+    assert isinstance(built.augmentation, TabulatedAugmentation)
+
+    assert "augmentation Q_ij(G) (nh,nh,ngm)" not in estimate.arrays
+    counted = estimate.arrays["augmentation table (nbeta,nbeta,nl,nqx)"]
+    held = sum(t.nbytes for t in built.augmentation.tables if t is not None)
+    # The estimate's nqx uses the run's own cell_factor and dq, so it is the
+    # same table; it may reach further than this cell's G set needs.
+    assert counted == pytest.approx(held, rel=0.05)
+
+    assert estimate.arrays["augmentation phases (nat,npad)"] == (
+        built.augmentation.phases.nbytes
+    )
+    # And the point: sized for the scheme that runs, not the one that does not.
+    stored_would_be = (
+        built.projectors.nkb**2 * estimate.ngm * 16 // len(calculator.pseudos)
+    )
+    assert counted < stored_would_be
+
+
 def test_the_setup_transient_bounds_the_peak_rather_than_adding_to_it(pseudo_dir):
     """The Bessel intermediate is freed before the eigensolver is asked for one.
 
