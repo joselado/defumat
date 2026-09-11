@@ -264,3 +264,50 @@ def test_a_polar_crystal_is_refused_by_name():
     require_a_nonpolar_crystal(calculation)
     with pytest.raises(NotImplementedError, match="polar crystal"):
         require_a_nonpolar_crystal(displaced)
+
+
+@pytest.mark.unit
+def test_the_ultrasoft_refusal_names_the_term_and_not_the_pseudopotentials(
+    pseudo_dir,
+):
+    """The refusal said the obstacle was the *dataset library*, and it was not.
+
+    "Every ultrasoft and PAW case committed here is a centrosymmetric crystal"
+    was already false when it was written: ``Al.pbe-n-rrkjus_psl`` and
+    ``As.pbe-n-rrkjus_psl`` are committed and ``alas-magnetoelectric-nosoc.in``
+    already builds zincblende from them -- ``ibrav = 2`` with the basis at
+    ``(0,0,0)`` and ``(1/4,1/4,1/4)``, which is the non-polar,
+    non-centrosymmetric class ``require_a_nonpolar_crystal`` names as handled.
+    A reader who believed the sentence would have gone looking for a
+    pseudopotential file. What actually blocks it is one term: ``Q_ij(r)`` is a
+    function of the cell, so ``dbecsum`` gains a strain term of its own.
+
+    This builds the case, checks it really is what the old claim denied
+    existed, and checks the refusal now names the term.
+    """
+    from defumat.response.piezo import require_a_measured_dataset
+
+    system = build_system(read_pw_input(
+        Path(__file__).parent.parent / "data" / "qe" / "alas-piezo.in"
+    ))
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    calculation = Calculation(system, pseudos)
+
+    # The case exists, and it is the one the old text said did not.
+    assert calculation.is_ultrasoft
+    assert system.nspin == 1 and not system.noncolin
+    require_a_nonpolar_crystal(calculation)  # non-polar, and not centrosymmetric
+    assert calculation.symmetries.nsym == 24  # Td, which has no inversion
+    assert not any(
+        np.allclose(np.asarray(r), -np.eye(3))
+        for r in calculation.symmetries.rotation_array()
+    )
+
+    with pytest.raises(NotImplementedError) as raised:
+        require_a_measured_dataset(calculation)
+    message = str(raised.value)
+    assert "Q_ij" in message and "dbecsum" in message
+    assert "alas-piezo.in" in message
+    assert "centrosymmetric" not in message

@@ -76,7 +76,8 @@ __all__ = ["Functional", "get_functional", "resolve_functional", "FUNCTIONALS",
            "EXCHANGE", "CORRELATION", "GRADIENT_EXCHANGE", "GRADIENT_CORRELATION",
            "CORRELATION_SPIN", "GRADIENT_CORRELATION_SPIN", "META",
            "META_FUNCTIONALS",
-           "RHO_THRESHOLD_GGA", "SIGMA_THRESHOLD_GGA", "SMALL_SPIN_GGA"]
+           "RHO_THRESHOLD_GGA", "SIGMA_THRESHOLD_GGA", "SMALL_SPIN_GGA",
+           "safe_modulus", "local_spin_frame"]
 
 #: ``rho_threshold_gga`` and ``grho_threshold_gga`` of
 #: ``XClib/dft_setting_params.f90``.
@@ -781,6 +782,30 @@ def _announce_override(requested: Functional, pseudo_dfts) -> None:
             return
 
 
+def safe_modulus(magnetization: jnp.ndarray, axis: int = 0) -> jnp.ndarray:
+    """``|m|`` with a finite derivative where ``m`` is bit-exactly zero.
+
+    **The mask goes on the argument the derivative is taken at.** ``sqrt`` has
+    an *infinite* derivative at zero, so guarding what comes after it leaves
+    ``0 * inf`` -- a NaN -- in the tangent however careful the division is; the
+    mask has to go on the sum of squares. That is ``CLAUDE.md``'s first
+    recurring trap in its smallest form, and
+    :func:`defumat.scf.fields._safe_modulus` is the same three lines on the
+    per-atom moments.
+
+    ``|m| = 0`` is not a rounding accident here. ``sym_rho``'s axial-vector
+    average is *exact* at a grid point whose magnetic little group admits no
+    invariant axial vector (``m + (-m)`` with +-1 rotation entries), and a
+    vacuum region underflows to it. The value is unchanged (``sqrt(0) = 0``);
+    the tangent is zero rather than a direction picked out of a conical
+    singularity, which is the choice QE makes by zeroing the vector part of the
+    potential there.
+    """
+    square = jnp.sum(magnetization**2, axis=axis)
+    nonzero = square > 0.0
+    return jnp.where(nonzero, jnp.sqrt(jnp.where(nonzero, square, 1.0)), 0.0)
+
+
 def local_spin_frame(charge: jnp.ndarray, magnetization: jnp.ndarray):
     """The ``(up, down)`` pair along the local spin axis of a noncollinear density.
 
@@ -801,21 +826,11 @@ def local_spin_frame(charge: jnp.ndarray, magnetization: jnp.ndarray):
     of the potential there rather than picking a direction out of rounding
     error).
     """
-    # **The mask goes on the argument the derivative is taken at.** ``sqrt`` has
-    # an *infinite* derivative at zero, so guarding what comes after it leaves
-    # ``0 * inf`` -- a NaN -- in the tangent however careful the division below
-    # is. ``|m| = 0`` is not a rounding accident: ``sym_rho``'s axial average is
-    # exact at a grid point whose magnetic little group admits no invariant
-    # axial vector, and a vacuum region underflows to it. Every spinor force,
-    # every spinor stress and every ``jvp`` in the response stack differentiates
-    # this function, and the primal survives, which is why small bulk cells
-    # never showed it. Bit-identical in value (``sqrt(0) = 0``); finite in the
-    # tangent, where the derivative is zero rather than a direction picked out
-    # of a conical singularity, which is the same choice QE makes by zeroing the
-    # vector part of the potential there.
-    square = jnp.sum(magnetization**2, axis=0)
-    nonzero = square > 0.0
-    modulus = jnp.where(nonzero, jnp.sqrt(jnp.where(nonzero, square, 1.0)), 0.0)
+    # Every spinor force, every spinor stress and every ``jvp`` in the response
+    # stack differentiates this function, and the primal survives an ``|m| = 0``
+    # -- which is why small bulk cells never showed it. See
+    # :func:`safe_modulus`.
+    modulus = safe_modulus(magnetization)
     clamped = jnp.minimum(modulus, jnp.abs(charge))
     channels = jnp.stack([(charge + clamped) / 2.0, (charge - clamped) / 2.0])
     safe = jnp.where(modulus > 0.0, modulus, 1.0)

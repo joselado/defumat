@@ -55,6 +55,22 @@ def _membership(structure: Structure) -> jnp.ndarray:
     )
 
 
+
+def _weighted_structure_factors(structure, cell, gvectors, weights) -> jnp.ndarray:
+    """``sum_{a in t} w_a e^{-iG.tau_a}`` for every species, ``(ntyp, ngm)``.
+
+    :func:`structure_factors` with the atoms *counted* replaced by the atoms
+    *weighted*, which is all a per-atom magnetization needs: the radial charge
+    is still a property of the species, so only the phase sum changes. Contract
+    this with the same per-species radial transforms and the result is
+    ``sum_a w_a rho^at_{t(a)}(G) e^{-iG.tau_a}``.
+    """
+    membership = _membership(structure) * jnp.asarray(weights, dtype=float)[None, :]
+    return _structure_factors_at(
+        gvectors.cartesian(cell), structure.positions, membership
+    )
+
+
 def _sum_over_species(radial, structure, cell, gvectors) -> jnp.ndarray:
     """Combine per-species radial transforms with their structure factors.
 
@@ -213,6 +229,7 @@ def starting_charge(
     gvectors: GVectors,
     nelec: float | None = None,
     magnetization=None,
+    per_atom=None,
 ):
     """Superposition of atomic charges, ``rho(G)``, as the SCF starting guess.
 
@@ -225,7 +242,16 @@ def starting_charge(
     LSDA pair. ``atomic_rho_g`` builds the second component from the *same*
     radial charges weighted by each species' value, so an atom with
     ``starting_magnetization = 1`` starts fully polarized and one with 0 starts
-    unpolarized. Both components are then scaled by the one factor that fixes
+    unpolarized.
+
+    ``per_atom`` gives that weight **per atom** instead, which is what the
+    ``STARTING_MOMENTS`` card asks for: two atoms of one species pointing
+    opposite ways is an antiferromagnet, and no per-species number can say it.
+    It costs nothing -- the radial transform is still per species, and the only
+    change is that the structure factor each one is contracted with carries the
+    atoms' weights instead of counting them. Given together with
+    ``magnetization``, ``per_atom`` wins; that is the precedence the card is
+    documented with. Both components are then scaled by the one factor that fixes
     the total charge, which is ``potinit``'s ``rho%of_g = rho%of_g/charge*nelec``
     applied to the whole array rather than to its first component: the *ratio*
     of magnetization to charge is what the input asked for and rescaling only
@@ -244,16 +270,26 @@ def starting_charge(
     if nelec is None:
         nelec = sum(pseudos[t].z_valence for t in structure.types)
 
-    if magnetization is None:
+    if magnetization is None and per_atom is None:
         return _renormalise(rho, cell.volume, nelec)
 
-    weights = jnp.asarray(magnetization, dtype=rho.real.dtype)
-    polarized = _sum_over_species(
-        lambda t, gmod: weights[t] * atomic_charge_of_g(pseudos[t], gmod, volume),
-        structure,
-        cell,
-        gvectors,
-    )
+    if per_atom is not None:
+        gmod = _gmod(gvectors.cartesian(cell))
+        values = tuple(
+            atomic_charge_of_g(pseudos[t], gmod, volume)
+            for t in range(structure.ntyp)
+        )
+        polarized = _contract_species(
+            values, _weighted_structure_factors(structure, cell, gvectors, per_atom)
+        )
+    else:
+        weights = jnp.asarray(magnetization, dtype=rho.real.dtype)
+        polarized = _sum_over_species(
+            lambda t, gmod: weights[t] * atomic_charge_of_g(pseudos[t], gmod, volume),
+            structure,
+            cell,
+            gvectors,
+        )
     scale = _renormalisation(rho, cell.volume, nelec)
     return rho * scale, polarized * scale
 

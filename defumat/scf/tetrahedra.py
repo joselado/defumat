@@ -565,14 +565,20 @@ def _average_degenerate(wg: jnp.ndarray, eigenvalues: jnp.ndarray) -> jnp.ndarra
     """Share the weight of degenerate bands equally (``opt_tetra_weights_only``).
 
     Kawamura's weights are not symmetric between two bands that cross inside a
-    tetrahedron, so QE averages over each degenerate group afterwards. **It is
-    QE's own sequential scan and not the symmetric equivalent**, and the
-    difference is not cosmetic.
+    tetrahedron, so QE averages over each degenerate group afterwards. **This is
+    a partition and not the symmetric relation**, and the difference is not
+    cosmetic.
 
     The scan walks the (sorted) bands and compares each to the *first* of the
     group it is building, which makes the grouping a genuine partition: the
-    average is then a block-diagonal one and conserves weight exactly, because
-    each block of size ``d`` contributes ``d`` terms of ``1/d``.
+    average is then block-diagonal and conserves weight exactly, because each
+    block of size ``d`` contributes ``d`` terms of ``1/d``. That is the rule
+    ``opt_tetra_weights_only``'s own sequential scan describes; it was written
+    here from that description rather than transcribed, because the vendored
+    tree was not present on the machine this was fixed on -- **check it against
+    ``PW/src/tetra.f90`` where the tree is available.** What does not depend on
+    that check is the weight conservation, which is true by construction and is
+    asserted in ``tests/unit/test_bz_integration.py``.
 
     What stood here was ``w'_i = sum_j S_ij w_j / sum_j S_ij`` with ``S`` the
     symmetric "within 1e-6 Ry" matrix, and its docstring claimed the two were

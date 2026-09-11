@@ -358,3 +358,111 @@ def test_atomic_texture_runs_with_a_card():
     )))
     assert system.constrained_magnetization == "atomic texture"
     assert _distinct_directions(system.local_moments) == 4
+
+
+# --- ...and the card has to start the moments it names -----------------------
+#
+# The group was the half that was fixed. The card was also documented as
+# overriding ``starting_magnetization``/``angle1``/``angle2``, and it reached
+# only the *constraint* field: ``domag`` read the per-species array, and so did
+# the starting density. Two consequences, and the second survives fixing the
+# first.
+
+
+#: The same chain with **no** ``starting_magnetization`` at all, so the card is
+#: the only thing that can say the run is magnetic.
+BARE = (
+    "&system\n ibrav=1, celldm(1)=12.0, nat=4, ntyp=1, ecutwfc=12.0,\n"
+    " noncolin = .true.,\n/\n"
+    "ATOMIC_SPECIES\n Ni 58.69 Ni.pbe-nd-rrkjus.UPF\n"
+    "ATOMIC_POSITIONS alat\n"
+    " Ni 0.00 0.0 0.0\n Ni 0.25 0.0 0.0\n Ni 0.50 0.0 0.0\n Ni 0.75 0.0 0.0\n"
+    "K_POINTS gamma\n"
+)
+
+
+def test_a_texture_given_only_by_the_card_is_a_magnetic_run():
+    """``domag`` read ``starting_magnetization``, the per-*species* array.
+
+    An input whose texture is given **only** through ``STARTING_MOMENTS``
+    therefore got ``domag = False``, hence ``nspin_mag = 1``: it converged, it
+    reported a total energy, and it never had a magnetization. Nothing in the
+    output said so, because a nonmagnetic spin-orbit run is a legitimate thing
+    to ask for and looks exactly like this.
+    """
+    system = build_system(parse_pw_input(
+        BARE + _card("STARTING_MOMENTS", CYCLOID, scale=0.5)
+    ))
+    assert system.nspin == 4
+    assert system.domag
+    assert system.nspin_mag == 4
+    assert _distinct_directions(system.local_moments) == 4
+
+    # The control: the same cell with neither is correctly *not* magnetic.
+    plain = build_system(parse_pw_input(BARE))
+    assert plain.nspin == 4 and not plain.domag and plain.nspin_mag == 1
+
+
+def test_one_rule_decides_whether_a_run_is_magnetic():
+    """``domag``, the k-point reduction and the symmetry group had two rules
+    between them: one read ``starting_magnetization``, the other read
+    ``local_moments`` and the ``LOCAL_MAGNETIC_FIELDS`` card.
+
+    The consequence is trap 4 through bookkeeping: the SCF can symmetrise the
+    density with a larger group than the one its k-set was reduced with.
+    """
+    from defumat.system.builder import is_magnetic
+
+    system = build_system(parse_pw_input(
+        BARE + _card("LOCAL_MAGNETIC_FIELDS", CYCLOID, scale=1.0e-3)
+    ))
+    # A per-atom field alone is enough: it is an applied constraint, not a
+    # guess, so asking for one is asking for the magnetic branch.
+    assert system.domag and system.nspin_mag == 4
+    assert is_magnetic(4, np.zeros((4, 3)), np.asarray(CYCLOID) * 1e-3)
+    assert not is_magnetic(4, np.zeros((4, 3)), ())
+    assert not is_magnetic(2, np.asarray(CYCLOID), ())  # collinear: never 4
+
+
+def test_the_starting_density_carries_the_cards_texture(pseudo_dir):
+    """The consequence that survives fixing ``domag``.
+
+    With ``starting_magnetization`` also set the run *is* magnetic, and the
+    starting density was still built from the per-*type* magnitudes and angles
+    -- so a card documented as a starting magnetic texture seeded no texture. It
+    started the per-species ferromagnet and then penalised it toward the
+    texture, which is a different calculation and a slower one.
+
+    Asserted on the starting density itself rather than on a converged state:
+    an SCF would say the same thing four minutes later.
+    """
+    from defumat.calculator import Calculator
+
+    cards = _card("STARTING_MOMENTS", CYCLOID, scale=0.5)
+    calc = Calculator.from_text(
+        _input(extra=" angle1(1) = 0.0,\n", cards=cards), pseudo_dir,
+        announce=False,
+    )
+    density = np.asarray(calc.calculation.starting_density())
+    assert density.shape[0] == 4  # (n, m_x, m_y, m_z)
+
+    # Integrate each moment component over a sphere around each atom. The
+    # cycloid puts atom 0 along +x and atom 2 along -x, so the two must come out
+    # with opposite sign and the cell total must vanish.
+    grid = density.shape[1:]
+    axes = [np.arange(n) / n for n in grid]
+    mesh = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1)
+    positions = np.asarray(calc.system.structure.positions)
+    crystal = positions @ np.linalg.inv(np.asarray(calc.system.cell.at))
+
+    def near(atom):
+        delta = mesh - crystal[atom][None, None, None, :]
+        delta -= np.round(delta)
+        return np.sum(delta**2, axis=-1) < (0.10) ** 2
+
+    mx = density[1]
+    lobes = [float(mx[near(a)].sum()) for a in range(4)]
+    assert lobes[0] > 0.0 and lobes[2] < 0.0, lobes
+    assert abs(lobes[0] + lobes[2]) < 0.05 * abs(lobes[0])
+    # ... and the whole cell is unpolarized, as a cycloid is.
+    assert abs(float(mx.sum())) < 1e-6 * float(density[0].sum())

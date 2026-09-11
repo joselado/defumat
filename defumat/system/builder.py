@@ -36,7 +36,8 @@ from defumat.system.symmetry import (
 from defumat.units import ANGSTROM_TO_BOHR, RY_TO_EV
 from defumat.vdw.registry import canonical_vdw_corr
 
-__all__ = ["System", "build_system", "system_from_file", "local_moments"]
+__all__ = ["System", "build_system", "system_from_file", "local_moments",
+           "is_magnetic"]
 
 
 class System(eqx.Module):
@@ -244,19 +245,32 @@ class System(eqx.Module):
     def domag(self) -> bool:
         """Whether the run carries a magnetization at all (``setup.f90``).
 
-        For a noncollinear calculation this is decided by ``starting_magnetization``
-        being nonzero *somewhere* and by nothing else: a spin-orbit run on a
-        nonmagnetic crystal has spinor wavefunctions and a scalar density, and
-        QE says so in the comment above the assignment -- "set the domag
-        variable to make a spin-orbit calculation with zero magnetization".
+        A spin-orbit run on a nonmagnetic crystal has spinor wavefunctions and a
+        scalar density, and QE says so in the comment above the assignment --
+        "set the domag variable to make a spin-orbit calculation with zero
+        magnetization". It is a property of the *input* rather than of the
+        converged state, which is what makes it static: the magnetization cannot
+        appear during the SCF if nothing in the starting guess breaks the
+        symmetry.
 
-        It is a property of the input rather than of the converged state, which
-        is what makes it static: the magnetization cannot appear during the SCF
-        if nothing in the starting guess breaks the symmetry.
+        **What counts as a starting guess is every axial vector the input gives,
+        not ``starting_magnetization`` alone.** This read the per-*species*
+        array and nothing else, while the k-point reduction and the symmetry
+        group read :attr:`local_moments` and the ``LOCAL_MAGNETIC_FIELDS`` card
+        beside it -- three call sites, two rules. A noncollinear input whose
+        texture is given **only** through ``STARTING_MOMENTS`` therefore got
+        ``domag = False``, hence ``nspin_mag = 1``: it converged, reported a
+        total energy, and never had a magnetization. The disagreement also let
+        the SCF symmetrise the density with a larger group than the one its
+        k-set was reduced with, which is trap 4 arriving through bookkeeping
+        rather than through a response.
+
+        One rule, on :class:`System`, for the same reason
+        ``nspin``/``npol``/``nspin_mag`` are: no call site recomputes it.
         """
         if not self.noncolin:
             return False
-        return any(abs(m) > 1.0e-6 for m in self.starting_magnetization)
+        return is_magnetic(self.nspin, self.local_moments, self.atomic_b_field)
 
     @property
     def nspin_mag(self) -> int:
@@ -463,7 +477,7 @@ class System(eqx.Module):
         symmetries = self.symmetry_group()
         rotations = None if self.nosym else symmetries.rotation_array()
         t_rev = None if self.nosym else symmetries.t_rev_array()
-        magnetic = self.nspin == 4 and self.domag
+        magnetic = self.domag
         if kpoints.grid is not None:
             rebuilt = KPoints.automatic(
                 kpoints.grid, kpoints.shift or (0, 0, 0), self.cell,
@@ -492,10 +506,7 @@ class System(eqx.Module):
         )
         fields = np.asarray(self.atomic_b_field, dtype=float)
         axial = (moments, fields) if self.atomic_b_field else moments
-        magnetic = nspin == 4 and bool(
-            np.any(np.abs(moments) > 1.0e-6)
-            or (fields.size and np.any(np.abs(fields) > 1.0e-12))
-        )
+        magnetic = is_magnetic(nspin, moments, fields)
         symmetries = find_symmetries(self.cell, self.structure)
         if magnetic:
             symmetries = magnetic_symmetries(
@@ -588,6 +599,37 @@ class System(eqx.Module):
                 self.cell, self.structure, symmetries, self.axial_fields
             )
         return symmetries
+
+
+
+def is_magnetic(nspin: int, moments, fields=()) -> bool:
+    """``setup.f90``'s ``domag``: does this run carry a magnetization?
+
+    ``moments`` is ``(nat, 3)`` -- :func:`local_moments`, which already folds
+    the ``STARTING_MOMENTS`` card over the per-species
+    ``starting_magnetization``/``angle1``/``angle2`` -- and ``fields`` the
+    ``LOCAL_MAGNETIC_FIELDS`` card. Elk's ``findsym.f90`` tests both, and so
+    must this: an applied per-atom field breaks operations the moments alone
+    keep, and ``sym_rho`` would then average away the texture the field was
+    applied to create.
+
+    The two thresholds are not the same number and that is deliberate: ``1e-6``
+    is QE's on a magnetization, and a *field* is compared against ``1e-12``
+    because it is an applied constraint rather than a guess -- asking for one at
+    all is asking for the magnetic branch.
+
+    A module-level function rather than a method, because
+    :func:`build_system` needs it before there is a :class:`System` and
+    :meth:`System._respin_kpoints` needs it for a regime that is not this one.
+    """
+    if nspin != 4:
+        return False
+    moments = np.asarray(moments, dtype=float)
+    fields = np.asarray(fields, dtype=float)
+    return bool(
+        np.any(np.abs(moments) > 1.0e-6)
+        or (fields.size and np.any(np.abs(fields) > 1.0e-12))
+    )
 
 
 def system_from_file(path, precision: Precision = DEFAULT_PRECISION) -> System:
@@ -829,10 +871,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     atomic_fields = _atomic_b_field(pwin, structure.nat)
     axial = (moments, np.asarray(atomic_fields, dtype=float)) if atomic_fields \
         else moments
-    magnetic = nspin == 4 and bool(
-        np.any(np.abs(moments) > 1.0e-6)
-        or (len(atomic_fields) and np.any(np.abs(np.asarray(atomic_fields)) > 1.0e-12))
-    )
+    magnetic = is_magnetic(nspin, moments, atomic_fields)
     symmetries = find_symmetries(cell, structure)
     if magnetic:
         symmetries = magnetic_symmetries(cell, structure, symmetries, axial)

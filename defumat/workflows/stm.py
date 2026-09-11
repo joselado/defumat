@@ -42,7 +42,7 @@ from defumat.basis.builder import build_basis
 from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.basis.fft import r_to_g
 from defumat.basis.sample import sample_coefficients
-from defumat.scf.driver import Calculation
+from defumat.scf.driver import Calculation, gamma_storage_is_consumable
 from defumat.stm.image import (
     STMImage,
     constant_current_height,
@@ -144,8 +144,15 @@ def run_stm(
     _refuse_what_has_no_fermi_level(system, result)
     # A real-space wavefunction from a half sphere loses the conjugate half and
     # gains a spurious imaginary part, and nothing downstream notices.
+    #
+    # **The test is whether the run *consumed* the storage, not whether the
+    # input asked for it.** An ultrasoft or symmetric ``K_POINTS gamma`` run is
+    # substituted to an explicit k = 0 before the SCF starts
+    # (``_without_gamma_storage``), so its states are on the whole sphere and
+    # there is nothing here to refuse; reading ``system.kpoints.gamma_only``
+    # would stop a run whose wavefunctions are perfectly good.
     refuse_gamma_storage(
-        bool(system.kpoints.gamma_only), "an STM image",
+        gamma_storage_is_consumable(system, pseudos), "an STM image",
         "psi(r) is evaluated as a bare sum over the stored k + G list "
         "(basis/sample.py)",
     )

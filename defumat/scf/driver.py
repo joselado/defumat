@@ -363,6 +363,26 @@ def _paw_deband(ddd_paw, augmentation, becsum_):
     return total
 
 
+def _ns_dtypes(ns):
+    """``(ns's dtype, the real type its parts are in)``.
+
+    ``complex128 -> float64``, ``complex64 -> float32``, and a real ``ns``
+    gives its own type twice. Read off the array rather than written down, for
+    the reason :mod:`defumat.config` gives: single precision has to stay viable,
+    and a hardcoded ``complex128`` is how it stops being.
+    """
+    dtype = np.asarray(ns).dtype
+    return dtype, np.empty(0, dtype).real.dtype
+
+
+def _pack_ns(ns, dtype, real):
+    """``ns`` as a flat real vector the mixer can carry."""
+    packed = np.ascontiguousarray(ns, dtype=dtype)
+    if np.issubdtype(dtype, np.complexfloating):
+        packed = packed.view(real)
+    return packed.ravel()
+
+
 def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None):
     """One mixing step over the density and, for PAW and DFT+U, its companions.
 
@@ -385,12 +405,20 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None):
         flat_out.append(np.asarray(new).ravel())
     if ns_in is not None:
         # A spinor ``ns`` is complex, and the mixer's state is one real vector.
-        # ``view(float)`` interleaves the real and imaginary parts in place,
-        # which is a relabelling rather than a transformation: Anderson's
-        # coefficients are real and act on each part identically, so mixing the
-        # viewed array is mixing the complex one.
-        flat.append(np.ascontiguousarray(ns_in).view(float).ravel())
-        flat_out.append(np.ascontiguousarray(ns_out).view(float).ravel())
+        # Viewing it as its **own** real part type interleaves the real and
+        # imaginary parts in place, which is a relabelling rather than a
+        # transformation: Anderson's coefficients are real and act on each part
+        # identically, so mixing the viewed array is mixing the complex one.
+        #
+        # **The dtype comes from ``ns`` and is not a literal**, which is the
+        # standing convention and here is also the correctness argument. An
+        # unconditional ``.view(float)`` is float64 by name: on a *real*
+        # float32 ``ns`` it reinterprets pairs of numbers as one, and on a
+        # complex64 one it halves the length -- silently garbage rather than an
+        # error, and invisible while only the x64 path is exercised.
+        ns_dtype, ns_real = _ns_dtypes(ns_in)
+        flat.append(_pack_ns(ns_in, ns_dtype, ns_real))
+        flat_out.append(_pack_ns(ns_out, ns_dtype, ns_real))
 
     mixed = mixer.mix(np.concatenate(flat), np.concatenate(flat_out))
 
@@ -405,13 +433,17 @@ def _mix(mixer, rho, rho_out, becsum_in, becsum_out, ns_in=None, ns_out=None):
         offset += old.size
     ns_mixed = None
     if ns_in is not None:
-        real = np.asarray(ns_in).dtype != np.complex128
-        size = ns_in.size if real else 2 * ns_in.size
-        block = mixed[offset : offset + size]
-        ns_mixed = jnp.asarray(
-            block.reshape(ns_in.shape) if real
-            else block.view(complex).reshape(ns_in.shape)
-        )
+        ns_dtype, ns_real = _ns_dtypes(ns_in)
+        complex_ns = np.issubdtype(ns_dtype, np.complexfloating)
+        size = 2 * ns_in.size if complex_ns else ns_in.size
+        # ``mixed`` is whatever the concatenation promoted to (float64, since
+        # the density is), so the cast back to ``ns``'s own real type has to be
+        # explicit before the view -- a float64 buffer viewed as complex64 is
+        # the same reinterpretation bug the other way round.
+        block = np.ascontiguousarray(mixed[offset : offset + size], dtype=ns_real)
+        if complex_ns:
+            block = block.view(ns_dtype)
+        ns_mixed = jnp.asarray(block.reshape(ns_in.shape))
     return rho_mixed, tuple(becsum_mixed), ns_mixed
 
 
@@ -2996,6 +3028,7 @@ class Calculation:
         rho_g, magnetization_g = starting_charge(
             self.pseudos, self.system.structure, self.system.cell, dense, self.nelec,
             magnetization=self.spin_weights[0] - self.spin_weights[1],
+            per_atom=self._per_atom_magnetization(axis=2),
         )
         channels = jnp.stack([rho_g + magnetization_g, rho_g - magnetization_g]) / 2.0
         return jnp.real(g_to_r(channels, dense.fft_index, dense.grid))
@@ -3021,10 +3054,33 @@ class Calculation:
             rho_g, component = starting_charge(
                 self.pseudos, self.system.structure, self.system.cell, dense,
                 self.nelec, magnetization=magnitudes * directions[:, axis],
+                per_atom=self._per_atom_magnetization(axis),
             )
             components.append(component)
         channels = jnp.stack([rho_g, *components])
         return jnp.real(g_to_r(channels, dense.fft_index, dense.grid))
+
+
+    def _per_atom_magnetization(self, axis: int):
+        """One cartesian component of each atom's starting moment, or ``None``.
+
+        ``None`` where the ``STARTING_MOMENTS`` card is absent, which leaves the
+        per-species path exactly as it was -- the card is the only thing that
+        can say something a per-species number cannot.
+
+        **The card was validated, documented as overriding all three of
+        ``starting_magnetization``/``angle1``/``angle2``, and then reached only
+        the constraint field.** So it started the per-species ferromagnet and
+        penalised it toward the texture, rather than starting the texture; on a
+        two-atom antiferromagnet given nothing else it started the two sites
+        parallel and let a penalty pull one of them round. :attr:`System.local_moments`
+        already folds the card over the per-species values in exactly the order
+        the documentation states, so this is that array read a component at a
+        time.
+        """
+        if not self.system.starting_moments:
+            return None
+        return np.asarray(self.system.local_moments, dtype=float)[:, axis]
 
     @property
     def starting_magnetization(self) -> np.ndarray:

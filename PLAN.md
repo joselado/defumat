@@ -245,10 +245,13 @@ because that is what decides whether it is a session or a phase.
   the strain response are all here; what is missing is the internal-strain tensor
   `d^2E/du d(eps)`, whose two legs are *both* coordinates of the energy and therefore need
   a two-coordinate frozen functional).
-- **The piezoelectric tensor of an ultrasoft or PAW dataset** (P50: nothing in the
-  assembly is norm-conserving, and what is missing is a *case* — every soft dataset
-  committed here is centrosymmetric, so its tensor is zero and agrees with zero however
-  wrong the strain leg is).
+- **The piezoelectric tensor of an ultrasoft or PAW dataset** (P50: nothing in *this*
+  assembly is norm-conserving, and what is missing is **one term** — `Q_ij(r)` is a
+  function of the cell, so `dbecsum` gains a strain term beside the one the `jvp` gives,
+  which is the same term `response/strain.py` refuses ultrasoft for. **The entry used to
+  say the blocker was a *case*, and that was false when it was written**: the soft
+  zincblende datasets are committed and `tests/data/qe/alas-piezo.in` is now the
+  nonmagnetic cell to measure on.)
 - **An ultrasoft spin spiral** (P42, attempted and reverted, four findings banked) and
   **ultrasoft/PAW in the sum-over-states `chi_0`** (P40, two findings banked).
 - ~~**An unidentified 83.62 GiB allocation at the first diagonalisation of a 45-atom
@@ -7391,13 +7394,11 @@ strain** on the aluminium atom along `x` with 1.7e-17 on the other two
 components — which is the zincblende structure of the internal-strain tensor,
 and it is what the response's own half then has to be added to.
 
-**And lifting the ultrasoft refusal is a dataset rather than a term.** What it
-takes is one **non-centrosymmetric, non-polar** ultrasoft or PAW crystal
-committed under `tests/data/pseudo/` — a zincblende III-V is the obvious one,
-since `alas-raman.in` can be copied with the soft datasets substituted — and
-then the tests that already exist say whether the three routes still agree.
-Every soft dataset here today is centrosymmetric, so all three agree on zero and
-say nothing.
+**And lifting the ultrasoft refusal is a term rather than a dataset** — this
+paragraph said the reverse until 2026-09-11, see the refusal note below. The
+zincblende III-V is committed (`tests/data/qe/alas-piezo.in`, soft PBE Al and As
+that were already in `tests/data/pseudo/`); what it waits on is `dbecsum`'s
+strain term, which `response/strain.py` refuses for the same reason.
 
 **What it costs, and it is not what the term count suggests.** The strain leg
 drops the multipliers the displacement leg needs and is still eight times slower
@@ -7416,19 +7417,39 @@ what extends, and `PERFORMANCE.md` says which to reach for on a large cell.
 `require_a_sternheimer_regime` refuses, everything
 `require_a_differentiable_cell` refuses (a spin spiral, a magnetic field), and a
 shifted grid run with `nosym`. **Ultrasoft and PAW are refused by name**
-(`require_a_measured_dataset`)**, and it is a gap rather than a missing term.** Nothing in the assembly is
-norm-conserving — the density and `becsum` are handed to the functional as
-builders that carry the strain, which is what P41 needed for the strain
-response; `qq_ij` has no cell in it, so the constraint stays strain-independent;
-and the *displacement* leg of this same assembly is the Born charge, validated
-on all three kinds. What is missing is **a case to measure it on**: every
-ultrasoft and PAW dataset committed here belongs to a centrosymmetric crystal,
-whose piezoelectric tensor vanishes identically, so all three routes agree on
-zero whatever is wrong. P44 is exactly why a plausible argument about the strain
-coordinate is not enough — there, two of P43's ingredients transferred, the
-residue did not, and it was localised only because it could be measured against
-a finite difference. Lifting this is one non-centrosymmetric, non-polar
-ultrasoft crystal plus the tests that already exist.
+(`require_a_measured_dataset`), **and it is a missing term rather than a missing
+case — which is the opposite of what this section said until 2026-09-11.**
+
+Nothing in *this* assembly is norm-conserving — the density and `becsum` are
+handed to the functional as builders that carry the strain, which is what P41
+needed for the strain response; `qq_ij` has no cell in it, so the constraint
+stays strain-independent; and the *displacement* leg of this same assembly is
+the Born charge, validated on all three kinds. But the strain leg runs through
+`response/strain.py`, which refuses ultrasoft and PAW for a reason of its own:
+the augmentation charge `Q_ij(r)` is a function of the **cell**, so `dbecsum`
+acquires a strain term beside the one the `jvp` gives. That term is what is
+missing, and the displacement leg is validated on all three kinds precisely
+because it has no counterpart of it.
+
+**What this entry claimed instead, and why the correction matters.** It said the
+blocker was a *case* — "every ultrasoft and PAW dataset committed here belongs to
+a centrosymmetric crystal" — and that was already false the day it was written
+(2026-09-02): `Al.pbe-n-rrkjus_psl.1.0.0.UPF` and
+`As.pbe-n-rrkjus_psl.1.0.0.UPF` were committed on 2026-09-01 and
+`tests/data/qe/alas-magnetoelectric-nosoc.in` already built zincblende from them.
+That file is stopped upstream by the noncollinear branch, so it never reached
+this refusal; `tests/data/qe/alas-piezo.in` is the same cell with the magnetism
+taken out, and `test_the_ultrasoft_refusal_names_the_term_and_not_the_pseudopotentials`
+checks that it is genuinely non-polar, genuinely non-centrosymmetric (Td, 24
+operations, no inversion) and genuinely ultrasoft. **A stale refusal reads as a
+closed question**, and this one sent a reader looking for a pseudopotential file
+that was already in the repository.
+
+P44 is still exactly why a plausible argument about the strain coordinate is not
+enough — there, two of P43's ingredients transferred, the residue did not, and it
+was localised only because it could be measured against a finite difference. So
+lifting this is the `Q_ij` strain term, and then the tests that already exist,
+on the cell that is now committed.
 
 ### P51 — The optical conductivity tensor, the Kerr angle and the anomalous Hall conductivity. ✅ DONE.
 

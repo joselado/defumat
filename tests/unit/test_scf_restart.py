@@ -276,3 +276,43 @@ def test_an_explicit_starting_from_is_not_overridden(qe_silicon, pseudo_dir, tmp
                           verbose=False)
     assert resumed.converged
     assert resumed.iterations <= 2
+
+
+# --- the mixer's ns block, in both precisions -------------------------------
+
+
+@pytest.mark.parametrize("dtype", ["complex128", "complex64", "float64", "float32"])
+def test_the_ns_block_survives_the_mixer_in_either_precision(dtype):
+    """``ns`` is packed into the mixer's one real vector and unpacked from it.
+
+    The pack was an unconditional ``.view(float)`` and the unpack a
+    ``!= np.complex128`` test, so three of the four cases below were wrong:
+    ``.view(float)`` is float64 *by name*, which on a real float32 ``ns``
+    reinterprets pairs of numbers as one, and a complex64 ``ns`` failed the
+    ``complex128`` test and came back as reals. Silently garbage rather than an
+    error, and invisible while only the x64 path is run -- which is also what
+    makes it a hardcoded-dtype violation of the standing convention, and what
+    made it findable.
+
+    Mixing something with *itself* is the identity for any mixer, so what this
+    isolates is exactly the packing.
+    """
+    import numpy as np
+
+    from defumat.scf.driver import _mix
+
+    rng = np.random.default_rng(20260911)
+    shape = (2, 1, 5, 5)
+    if np.issubdtype(np.dtype(dtype), np.complexfloating):
+        ns = (rng.normal(size=shape) + 1j * rng.normal(size=shape)).astype(dtype)
+    else:
+        ns = rng.normal(size=shape).astype(dtype)
+
+    rho = rng.normal(size=(1, 4, 4, 4))
+    mixer = get_mixer("anderson", beta=1.0)
+    _, _, mixed = _mix(mixer, rho, rho, (), (), ns_in=ns, ns_out=ns)
+
+    mixed = np.asarray(mixed)
+    assert mixed.shape == ns.shape
+    assert np.iscomplexobj(mixed) == np.iscomplexobj(ns)
+    assert mixed == pytest.approx(ns, rel=1e-6, abs=1e-7)

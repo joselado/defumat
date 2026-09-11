@@ -245,25 +245,43 @@ def require_a_measured_dataset(calculation) -> None:
     assembly is validated on all three pseudopotential kinds, being the Born
     charge.
 
-    **What is missing is a case to measure it on.** Every ultrasoft and PAW
-    dataset committed here belongs to a centrosymmetric crystal, whose
-    piezoelectric tensor vanishes identically -- so running one says nothing at
-    all, and the three routes agree on zero whatever is wrong. And a plausible
-    argument about the strain coordinate is exactly what P44 falsified by
-    measurement on the third derivative: two of its ingredients transferred,
-    the residue did not, and it was localised only because it could be
-    measured. So this is refused by name rather than run, and lifting it is one
-    non-centrosymmetric ultrasoft dataset plus the tests that already exist.
+    **What is missing is a measurement, and what stood here named the wrong
+    obstacle.** The claim was that "every ultrasoft and PAW dataset committed
+    here belongs to a centrosymmetric crystal", and it was already false on the
+    day it was written: ``Al.pbe-n-rrkjus_psl.1.0.0.UPF`` and
+    ``As.pbe-n-rrkjus_psl.1.0.0.UPF`` are committed and
+    ``tests/data/qe/alas-magnetoelectric-nosoc.in`` already builds zincblende
+    from them, which is exactly the non-polar, non-centrosymmetric class
+    :func:`require_a_nonpolar_crystal` handles. A reader who believed the
+    sentence would have gone looking for a pseudopotential; the case exists and
+    ``tests/data/qe/alas-piezo.in`` is now the nonmagnetic version of it.
+
+    **What actually blocks it is one term.** The strain leg goes through
+    :func:`~defumat.response.strain.strain_response`, and that refuses ultrasoft
+    and PAW for a reason of its own: the augmentation charge ``Q_ij(r)`` is a
+    function of the *cell*, so ``dbecsum`` acquires a strain term beside the one
+    the ``jvp`` gives. The displacement leg (the Born charge) has no such term,
+    which is why it is validated on all three dataset kinds and this is not.
+
+    And a plausible argument about the strain coordinate is exactly what P44
+    falsified by measurement on the third derivative: two of its ingredients
+    transferred, the residue did not, and it was localised only because it could
+    be measured. So this is refused by name rather than run, and lifting it is
+    the ``Q_ij`` strain term and then the tests that already exist, on the cell
+    that is now committed.
     """
     if calculation.is_ultrasoft:
         raise NotImplementedError(
             "the piezoelectric tensor is not implemented for an ultrasoft or "
-            "PAW dataset: nothing in the assembly is norm-conserving and the "
-            "displacement leg of it (the Born charge) is validated on all "
-            "three kinds, but every ultrasoft and PAW case committed here is "
-            "a centrosymmetric crystal whose tensor vanishes identically, so "
-            "the strain leg has never been measured on one. A non-polar, "
-            "non-centrosymmetric ultrasoft crystal is what it needs"
+            "PAW dataset. Nothing in *this* assembly is norm-conserving and the "
+            "displacement leg of it (the Born charge) is validated on all three "
+            "dataset kinds; what is missing is one term in the strain leg, "
+            "which response/strain.py refuses for the same reason -- the "
+            "augmentation charge Q_ij(r) is a function of the cell, so dbecsum "
+            "acquires a strain term of its own beside the one the jvp gives. "
+            "The case to measure it on is committed "
+            "(tests/data/qe/alas-piezo.in, zincblende AlAs); it is the term "
+            "that is not. Use a norm-conserving dataset"
         )
 
 

@@ -1,0 +1,44 @@
+! AlAs, nonmagnetic: a non-centrosymmetric **ultrasoft** crystal.
+!
+! The piezoelectric tensor is refused for an ultrasoft or PAW dataset, and the
+! reason given was that "every ultrasoft and PAW case committed here is a
+! centrosymmetric crystal whose tensor vanishes identically, so the strain leg
+! has never been measured on one". That was not true the day it was written:
+! `Al.pbe-n-rrkjus_psl.1.0.0.UPF` and `As.pbe-n-rrkjus_psl.1.0.0.UPF` were
+! already committed, and `alas-magnetoelectric-nosoc.in` already built
+! zincblende from them -- `ibrav = 2` with the basis at (0,0,0) and
+! (1/4,1/4,1/4), which is precisely the non-polar, non-centrosymmetric class
+! `require_a_nonpolar_crystal` names as the handled one.
+!
+! What that file is not is *nonmagnetic*: it sets `noncolin` and a `B_field`, so
+! it is stopped upstream by the noncollinear branch of
+! `require_a_sternheimer_regime` and never reaches the dataset refusal at all.
+! This is the same cell with the magnetism taken out -- the missing twenty lines,
+! so that the refusal can be argued about on the case rather than on a claim
+! about the pseudopotential library.
+!
+! Symmetry is left **on**, unlike the magnetoelectric file: the strain response
+! is symmetrised as a tensor and `genstrain` reduces the candidate strains with
+! the crystal's group, so `nosym` there would be answering a different question.
+!
+! Same cutoffs as the magnetoelectric case, whose bands are validated against
+! Elk along L-Gamma-X (0.062 eV rms on the valence manifold).
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.6134, nat = 2, ntyp = 2,
+    ecutwfc = 25.0, ecutrho = 200.0
+ /
+ &electrons
+    conv_thr = 1.0d-10
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Al 26.98 Al.pbe-n-rrkjus_psl.1.0.0.UPF
+ As 74.92 As.pbe-n-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS crystal
+ Al 0.00 0.00 0.00
+ As 0.25 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0

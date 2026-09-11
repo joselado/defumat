@@ -673,3 +673,86 @@ def test_the_whole_contraction_is_a_real_space_integral_of_the_green_function():
     slow = (surface_area(cell, axis) / plane.shape[0]) * (np.abs(green) ** 2).sum(axis=1)
 
     assert np.abs(fast - slow).max() / slow.max() < 1.0e-12
+
+
+# --- the band-count diagnostic is a diagonal too -----------------------------
+
+
+def _degenerate_top(nk=2, nbnd=4, npts=3, seed=11):
+    """A case whose **topmost** two bands are degenerate.
+
+    That is the configuration the band-count diagnostic is read in: the
+    truncation cuts at ``nbnd``, and if the top band has a partner the cut goes
+    through a multiplet.
+    """
+    rng = np.random.default_rng(seed)
+    amplitudes = (rng.normal(size=(nk, nbnd, npts))
+                  + 1.0j * rng.normal(size=(nk, nbnd, npts)))
+    raw = rng.normal(size=(nk, nbnd, nbnd)) + 1.0j * rng.normal(size=(nk, nbnd, nbnd))
+    overlaps = np.einsum("kij,klj->kil", raw, raw.conj())
+    kweights = rng.uniform(0.1, 1.0, size=nk)
+    weights = rng.uniform(0.1, 1.0, size=(nk, nbnd)).astype(complex)
+    eigenvalues = np.tile(np.array([0.0, 0.4, 1.0, 1.0]), (nk, 1))
+    return amplitudes, overlaps, kweights, weights, eigenvalues
+
+
+def test_the_top_multiplet_mask_is_the_whole_degenerate_block():
+    from defumat.workflows.transport import _top_multiplet_mask
+
+    _, _, _, _, eigenvalues = _degenerate_top()
+    mask = _top_multiplet_mask(eigenvalues)
+    assert mask == pytest.approx(np.tile([0.0, 0.0, 1.0, 1.0], (2, 1)))
+
+    # A nondegenerate spectrum keeps the single topmost band, which is what the
+    # diagnostic always meant.
+    plain = np.tile(np.array([0.0, 0.4, 1.0, 1.7]), (2, 1))
+    assert _top_multiplet_mask(plain) == pytest.approx(
+        np.tile([0.0, 0.0, 0.0, 1.0], (2, 1))
+    )
+
+
+def test_the_band_edge_weight_is_blind_to_a_degenerate_rotation():
+    """Rule D4 on the diagnostic rather than on the answer.
+
+    The numerator was the raw diagonal of the *single* topmost band and the
+    denominator had already been rotated into the substrate's channels, so the
+    ratio that certifies the band-count truncation moved with a basis nobody
+    chose. Taking the whole multiplet, in the same basis, fixes both halves.
+    """
+    from defumat.workflows.transport import _top_multiplet_mask
+
+    amplitudes, overlaps, kweights, weights, eigenvalues = _degenerate_top()
+    # ``amplitude_weights`` is a function of the eigenvalue alone, so two
+    # members of a multiplet carry the *same* weight. A random per-band weight
+    # would break the invariance on its own and would be testing the fixture.
+    weights = np.asarray([[0.3, 0.5, 0.9, 0.9]] * len(kweights), dtype=complex)
+    mask = _top_multiplet_mask(eigenvalues)
+
+    def edge(a, s):
+        top = transmission(a, s, kweights, weights * mask, coherent=False,
+                           eigenvalues=eigenvalues)
+        total = transmission(a, s, kweights, weights, coherent=False,
+                             eigenvalues=eigenvalues)
+        return top.sum() / total.sum()
+
+    # An arbitrary unitary inside the degenerate top pair: exactly the freedom
+    # the eigensolver has and no symmetry check sees.
+    rng = np.random.default_rng(31)
+    raw = rng.normal(size=(2, 2)) + 1.0j * rng.normal(size=(2, 2))
+    u, _ = np.linalg.qr(raw)
+    rotation = np.eye(4, dtype=complex)
+    rotation[2:, 2:] = u
+    mixed_a = np.einsum("ni,knp->kip", rotation, amplitudes)
+    mixed_s = np.einsum("ni,knm,mj->kij", rotation.conj(), overlaps, rotation)
+
+    assert abs(edge(mixed_a, mixed_s) - edge(amplitudes, overlaps)) < 1e-12
+
+    # ... and the form that stood there genuinely moves, which is the point.
+    def naive(a, s):
+        top = transmission(a[:, -1:], s[:, -1:, -1:], kweights,
+                           weights[:, -1:], coherent=False)
+        total = transmission(a, s, kweights, weights, coherent=False,
+                             eigenvalues=eigenvalues)
+        return top.sum() / total.sum()
+
+    assert abs(naive(mixed_a, mixed_s) - naive(amplitudes, overlaps)) > 1e-3

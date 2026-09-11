@@ -38,9 +38,10 @@ import numpy as np
 from defumat.basis.builder import build_basis
 from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.basis.sample import sample_wavefunctions
-from defumat.scf.driver import Calculation
+from defumat.scf.driver import Calculation, gamma_storage_is_consumable
 from defumat.stm.plane import PlotPlane
 from defumat.transport.green import (
+    DEGENERACY_TOL,
     VerticalTransport,
     amplitude_weights,
     channel_basis,
@@ -165,8 +166,15 @@ def run_vertical_transport(
     _refuse_what_has_no_fermi_level(system, result)
     # A real-space wavefunction from a half sphere loses the conjugate half and
     # gains a spurious imaginary part, and nothing downstream notices.
+    #
+    # **The test is whether the run *consumed* the storage, not whether the
+    # input asked for it.** An ultrasoft or symmetric ``K_POINTS gamma`` run is
+    # substituted to an explicit k = 0 before the SCF starts
+    # (``_without_gamma_storage``), so its states are on the whole sphere and
+    # there is nothing here to refuse; reading ``system.kpoints.gamma_only``
+    # would stop a run whose wavefunctions are perfectly good.
     refuse_gamma_storage(
-        bool(system.kpoints.gamma_only), "the vertical tunnelling transmission",
+        gamma_storage_is_consumable(system, pseudos), "the vertical tunnelling transmission",
         "psi(r) is evaluated as a bare sum over the stored k + G list "
         "(basis/sample.py)",
     )
@@ -420,6 +428,10 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
             np.sqrt(np.clip(norms ** 2 - diagonals ** 2, 0.0, None))
             / np.where(norms > 0.0, norms, 1.0))
 
+        # Which bands the band-count truncation actually cuts: the topmost
+        # *multiplet*, in the same channel basis the denominator is taken in.
+        top_multiplet = _top_multiplet_mask(eigenvalues[ispin])
+
         scale = 1.0 if channel_scale is None else channel_scale[ispin]
         # Two polarizers multiply: on a collinear run each is a weight on the
         # channel, and a channel the tip does not accept is one the substrate
@@ -441,9 +453,9 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
                         amplitudes, overlaps, kweights, weights, tip_projector,
                         coherent=False, eigenvalues=eigenvalues[ispin])
                     top_band[ie] += scale * spin_transmission(
-                        amplitudes[:, :, -1:], overlaps[:, -1:, -1:],
-                        kweights, weights[:, -1:], tip_projector,
-                        coherent=False)
+                        amplitudes, overlaps, kweights,
+                        weights * top_multiplet, tip_projector,
+                        coherent=False, eigenvalues=eigenvalues[ispin])
                 continue
             for component in range(npol):
                 total[ie] += scale * transmission(
@@ -454,8 +466,9 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
                         amplitudes[component], overlaps, kweights, weights,
                         coherent=False, eigenvalues=eigenvalues[ispin])
                     top_band[ie] += scale * transmission(
-                        amplitudes[component][:, -1:], overlaps[:, -1:, -1:],
-                        kweights, weights[:, -1:], coherent=False)
+                        amplitudes[component], overlaps, kweights,
+                        weights * top_multiplet, coherent=False,
+                        eigenvalues=eigenvalues[ispin])
 
     if not np.any(total > 0.0) and open_path == 0.0:
         # Two spin filters in series with nothing in common pass nothing, and
@@ -512,6 +525,46 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
         "notes": notes,
     }
     return values, extras
+
+
+
+def _top_multiplet_mask(eigenvalues, tol: float = DEGENERACY_TOL):
+    """``(nk, nbnd)``: which bands share the topmost band's multiplet.
+
+    **The band-count diagnostic is a diagonal, and rule D4 says a diagonal is
+    not invariant under the rotation a degenerate eigensolver is free in.** The
+    quantity is "how much of the transmission the topmost band carries", and it
+    was built from the raw diagonal of the *single* topmost band -- so wherever
+    that band sits in a multiplet it depended on which basis the solver
+    happened to return, while the denominator it was divided by had already
+    been rotated into the substrate's channels (:func:`channel_basis`). Two
+    bases, one ratio, and the check that certifies the truncation was itself
+    the thing rule D4 says cannot be trusted band by band.
+
+    Taking the whole multiplet fixes both halves at once, and it is also the
+    better diagnostic: a truncation at ``nbnd`` cuts the multiplet, not one
+    member of it.
+
+    The grouping rule is :func:`channel_basis`'s own -- compare to the *first*
+    of the group, on sorted eigenvalues -- so the mask and the rotation always
+    agree about where the block is.
+    """
+    eigenvalues = np.asarray(eigenvalues, dtype=float)
+    nk, nbnd = eigenvalues.shape
+    mask = np.zeros((nk, nbnd), dtype=float)
+    for ik in range(nk):
+        order = np.argsort(eigenvalues[ik], kind="stable")
+        start = 0
+        while start < nbnd:
+            stop = start + 1
+            while (stop < nbnd
+                   and eigenvalues[ik][order[stop]]
+                   - eigenvalues[ik][order[start]] < tol):
+                stop += 1
+            block = order[start:stop]
+            start = stop
+        mask[ik, block] = 1.0  # the last block the scan built is the top one
+    return mask
 
 
 def _substrate_acceptance(spin, polarization, npol, nspin):

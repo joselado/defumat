@@ -370,4 +370,8 @@ def test_the_peak_grows_with_the_k_batch(pseudo_dir):
     whole = estimate_size(calculator.system, calculator.pseudos, k_batch=None)
     assert whole.nk > 1
     assert whole.peak_bytes > one.peak_bytes
-    assert whole.eigensolver_buffer == whole.nk * one.eigensolver_buffer
+    # ``int()`` of the scaled sum against ``nk`` times the rounded one, so the
+    # comparison is to within the truncation rather than exact.
+    assert whole.eigensolver_buffer == pytest.approx(
+        whole.nk * one.eigensolver_buffer, abs=whole.nk
+    )

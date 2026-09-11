@@ -222,3 +222,129 @@ def test_each_named_consumer_calls_the_guard(module, function):
 
     source = inspect.getsource(getattr(importlib.import_module(module), function))
     assert "refuse_gamma_storage" in source
+
+
+# -- trap 1: abs and sqrt at a zero symmetry forces --------------------------
+#
+# ``CLAUDE.md``'s first recurring trap. The primal survives at an exact zero and
+# only the *tangent* is NaN, so a cell that never lands on one -- every small
+# bulk case in the suite -- reports nothing. The test therefore forces the zero
+# rather than hoping to meet one.
+
+
+def test_the_hartree_energy_is_the_same_number_with_and_without_abs(spheres):
+    """**A measured null, recorded so it is not re-derived.**
+
+    ``scf/potential.py`` carried ``jnp.abs(rho_g) ** 2`` where every other
+    differentiated site in the package uses ``Re(conj(rho) rho)``, and the
+    prediction was trap 1: ``abs`` has no derivative at zero, and a structure
+    factor vanishing *exactly* is what symmetry arranges on a supercell. This
+    is the one term every force, every stress and every phonon differentiates,
+    so the prediction was worth checking rather than assuming.
+
+    **It does not hold in JAX.** ``jnp.abs`` of a complex number has a finite
+    derivative at exactly zero here -- measured as 0, in reverse mode, in
+    forward mode and in the Hessian -- so ``abs(z)**2`` was never a NaN. The
+    expression was changed anyway, because it is the package's convention and
+    the two agree to 1.9e-16 in the energy and 2.8e-16 in its gradient -- the
+    old form routes through a ``sqrt`` and squares it back, which is one
+    rounding the new one does not do, and that is the whole of the
+    difference. What must not happen is the change being remembered as a
+    fix. This test is what says which it was.
+
+    If a future JAX changes that rule the first assertion below fails, which is
+    the warning the prediction was actually worth.
+    """
+    import jax
+
+    from defumat.scf.potential import hartree
+
+    cell, full, _ = spheres
+    rng = np.random.default_rng(20260911)
+    rho = (rng.standard_normal(full.ngm) + 1j * rng.standard_normal(full.ngm))
+    rho[7] = 0.0 + 0.0j  # bit-exact, the way a cancelling phase sum leaves it
+    parts = jnp.stack([jnp.real(jnp.asarray(rho)), jnp.imag(jnp.asarray(rho))])
+
+    g2 = full.kinetic(cell)
+    inverse = jnp.where(g2 > 1e-12, 1.0 / jnp.where(g2 > 1e-12, g2, 1.0), 0.0)
+
+    def banned(p):
+        return jnp.sum(jnp.abs(p[0] + 1j * p[1]) ** 2 * inverse)
+
+    def kept(p):
+        r = p[0] + 1j * p[1]
+        return jnp.sum(jnp.real(jnp.conj(r) * r) * inverse)
+
+    assert np.all(np.isfinite(np.asarray(jax.grad(banned)(parts)))), (
+        "jnp.abs is no longer differentiable at an exact zero: the Hartree "
+        "energy's old form would have been a NaN in every force and stress"
+    )
+    # Equal in value bit for bit, and in the gradient to the last bit -- the
+    # old form routes through a sqrt and squares it back, which is one rounding
+    # the new one does not do.
+    assert float(kept(parts)) == pytest.approx(float(banned(parts)), rel=1e-15)
+    assert np.asarray(jax.grad(kept)(parts)) == pytest.approx(
+        np.asarray(jax.grad(banned)(parts)), rel=1e-14
+    )
+
+    # And the function itself, on the same input, is finite in value and slope.
+    def energy(p):
+        return hartree(p[0] + 1j * p[1], full, cell)[1]
+
+    assert np.isfinite(float(energy(parts)))
+    assert np.all(np.isfinite(np.asarray(jax.grad(energy)(parts))))
+
+
+def test_the_local_spin_frame_has_a_finite_gradient_where_the_magnetization_vanishes():
+    """``d|m|/dm = m/|m|`` is ``0/0`` at an exact zero, and the zero is forced.
+
+    Two mechanisms produce a bit-exact one: ``sym_rho``'s axial-vector average
+    at a grid point whose magnetic little group admits no invariant axial vector
+    (``m + (-m)`` with +-1 rotation entries is exact), and a vacuum region where
+    the density underflows. Every spinor force, every spinor stress and every
+    ``jvp`` in the response stack differentiates ``v_of_rho``, and so this.
+
+    Guarding the *division* after the ``sqrt`` -- which is what stood here -- is
+    not enough: ``sqrt`` has an infinite derivative at zero, so the tangent is
+    ``0 * inf`` however careful everything downstream is. The mask has to go on
+    the sum of squares.
+    """
+    import jax
+
+    from defumat.xc.functional import local_spin_frame, safe_modulus
+
+    charge = jnp.asarray([1.0, 2.0, 0.5, 3.0])
+    magnetization = jnp.asarray([
+        [0.1, 0.0, -0.2, 0.3],
+        [0.0, 0.0, 0.4, -0.1],
+        [0.2, 0.0, 0.0, 0.5],
+    ])  # column 1 is bit-exactly zero in all three components
+    assert not np.any(np.asarray(magnetization)[:, 1])
+
+    for target in (safe_modulus,
+                   lambda m: local_spin_frame(charge, m)[1],
+                   lambda m: local_spin_frame(charge, m)[0]):
+        gradient = jax.grad(lambda m: jnp.sum(target(m)))(magnetization)
+        assert np.all(np.isfinite(np.asarray(gradient))), target
+
+    # The value is untouched: sqrt(0) is 0 either way.
+    assert float(safe_modulus(magnetization)[1]) == 0.0
+    assert np.asarray(safe_modulus(magnetization)) == pytest.approx(
+        np.linalg.norm(np.asarray(magnetization), axis=0)
+    )
+
+
+def test_both_magnetization_sites_share_the_one_guarded_function():
+    """``xc/functional.py`` and ``paw/gradient.py`` had the same three lines,
+    and the same defect, written twice. One function, tested above."""
+    import inspect
+
+    from defumat.paw import gradient as paw_gradient
+    from defumat.xc import functional
+
+    source = inspect.getsource(paw_gradient._noncollinear_gradient)
+    assert "safe_modulus(magnetization)" in source
+    assert "jnp.sqrt(jnp.sum(magnetization**2" not in source
+    assert "jnp.sqrt(jnp.sum(magnetization**2" not in inspect.getsource(
+        functional.local_spin_frame
+    )

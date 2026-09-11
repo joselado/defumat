@@ -38,6 +38,8 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
+from defumat.xc.functional import safe_modulus
+
 __all__ = ["radial_derivative", "onecenter_gradient_correction"]
 
 
@@ -188,13 +190,10 @@ def _noncollinear_gradient(rho_lm, rho_rad, core, paw, axis):
 
     charge = rho_rad[0] / r2 + core
     magnetization = rho_rad[1:] / r2
-    # Masked on the sqrt's *argument*, for the reason
-    # :func:`~defumat.xc.functional.local_spin_frame` gives at the same shape:
-    # guarding the result leaves ``0 * inf`` in the tangent, and this function
-    # is differentiated by every PAW spinor force and by ``PAW_dpotential``.
-    square = jnp.sum(magnetization**2, axis=0)
-    nonzero = square > 0.0
-    modulus = jnp.where(nonzero, jnp.sqrt(jnp.where(nonzero, square, 1.0)), 0.0)
+    # The same guard the plane-wave branch uses, and the same function rather
+    # than the same three lines written twice: this is differentiated by every
+    # PAW spinor force and by ``PAW_dpotential``.
+    modulus = safe_modulus(magnetization)
     if axis is None:
         sign = jnp.ones_like(modulus)
     else:
