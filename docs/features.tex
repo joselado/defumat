@@ -1331,6 +1331,18 @@ and such a run wants \code{nosym}; the dynamical matrix of an ultrasoft or PAW \
 \code{becsum} dependence is entirely inside \code{dpsi}, and an insulator cannot
 say which weight the three further tangents belong with); any response under a
 potential-only meta-GGA; and a shifted grid with a reduced $k$-set.
+
+Also refused: a ground state converged under a \textbf{magnetic field or a
+constrained moment}. The whole stack rebuilds its potential from the field the
+\emph{input} asked for, and that is not the field the density belongs to ---
+\code{reducebf} scales a field away as the run proceeds (7\% of its input
+value after 25 iterations at 0.9) and the fixed-spin-moment scheme replaces it
+outright, which is why \code{SCFResult} carries \code{magnetic\_field} and
+\code{field\_scale} separately. Threading that pair through is the missing
+piece for a field put in by hand; a \code{constrained\_magnetization = 'fsm'}
+moment needs the \emph{induced} field as well, and its field comes from a
+feedback update rather than from a penalty, so it is not a derivative of
+anything. Re-run the ground state without the field.
 \end{refuses}
 
 \subsection*{LO--TO splitting and the static dielectric constant}
@@ -2285,6 +2297,19 @@ wherever symmetry forces the curvature to vanish, since the ratio is then noise
 over noise. \code{curvature\_by\_band} is gauge invariant only for a
 non-degenerate band; inside a degenerate multiplet only the sum over the members
 is defined, and \code{curvature} (the manifold total) always is.
+
+A mesh point where an occupied and an empty band actually \emph{touch} --- a
+Dirac cone, a Weyl node, the closing a topological transition runs through ---
+is a genuine singularity and is \textbf{dropped, with a warning naming how
+many}. \code{BerryCurvature.singular\_points} carries the count, and a nonzero
+one means the mesh sum is not a Chern number of that state set: the curvature
+diverges there and a zero was put in its place, which is smooth and plausible
+and wrong. Move the mesh off the point, or use \code{method="fhs"}, which
+needs no gap in a denominator. A band pair counts as touching below
+$10^{-8}$ of the band width \emph{over the whole mesh} --- a fraction rather
+than an energy, since a model Hamiltonian carries no unit, and over the whole
+mesh because for a two-band model the spectrum at one $\mathbf k$ \emph{is}
+the gap.
 \end{refuses}
 
 \subsection{The Berry-phase polarization}

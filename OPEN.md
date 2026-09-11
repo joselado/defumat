@@ -15,8 +15,12 @@ P73 section, under "Three test failures were seen while validating this phase".
 **Status, 2026-09-11 (later the same day).** Sixteen entries are closed, each with a
 test that was checked to fail against the old code: **A1, A3, A4, A5, A6, A7, A8, A9,
 A10, B2, D2, E1, E2, F1, F2, F3**, together with Part I item 1 and its two siblings
-C2/C3. What is left is A2, B1, B3, C1, D1, D3, E3 and Part I item 2 -- the entries
-whose *test* is expensive rather than whose fix is. Each closed entry is marked
+C2/C3. What is left is B1, C1, D1, D3, E3 and Part I item 2 -- the entries
+whose *test* is expensive rather than whose fix is. **A2 and B3 closed on 2026-09-12.** Neither
+went the way the sweep predicted: A2's two non-refusal sites looked like a null
+and are not, and B3's NaN claim is a null while its other two
+hold -- the absolute threshold turned out to be wrong in *both* directions at
+once. Each entry says which. Each closed entry is marked
 **[closed]** below with what the fix turned out to be, because two of them turned out
 not to be what the sweep predicted.
 
@@ -260,7 +264,43 @@ on the field side; what is missing is the same `per_atom` argument reaching
 zero total -- today it converges to the nonmagnetic state. This is directly under the
 helix work, which is the reason it is first.
 
-### A2. The Sternheimer stack rebuilds its potential from the **input** magnetic field **[opened here]**
+### A2. The Sternheimer stack rebuilds its potential from the **input** magnetic field **[closed 2026-09-12 -- the refusal half, plus two real fixes]**
+
+> **The refusal is one line in one place**, because
+> `require_a_sternheimer_regime` is the funnel all seven entry points share
+> (`efield`, `strain`, `phonon`, `electrostriction`, `nonlinear`, `piezo`,
+> `make_sternheimer` -- and `phononq` through the last of those). It is placed
+> *above* the `metals` and `spin_polarized` checks on purpose: five of the seven
+> pass neither flag, so a smeared magnetic run would otherwise have been refused
+> with a message about metals and the field never mentioned. Threading the
+> converged pair is what a field put in by hand needs and it is plumbing -- the
+> induced `2 lambda dm` term then appears on its own, since `_field_potential`
+> is `jax.grad` of the penalty and the induced potential is one `jvp` of
+> `potential`. `constrained_magnetization = 'fsm'` needs more: its field is a
+> feedback update, so `dB/drho` is not a derivative of anything.
+>
+> **The two sites outside that stack were threaded rather than refused**, and
+> they turned out *not* to be the null they looked like.
+> `velocity.py:band_velocities` and `workflows/conductivity.py` now pass
+> `SCFResult.magnetic_field` and `.field_scale`. The field enters `v_scf` as a
+> **local** potential and `dH/dk` at a frozen sphere cannot see one -- that much
+> is exact, measured at 0.0. But `hamiltonian` rebuilds `deeq` from `v_scf` on
+> every call and `deeq` multiplies `vkb(k)`, so on an **ultrasoft or PAW**
+> dataset the local potential reaches the velocity through the nonlocal term:
+> **0.37 out of 398 Ry bohr** for an arbitrary bump on `si2-us`, against exactly
+> zero on `si2-nc-force`. Every band velocity, optical conductivity and
+> anomalous Hall number of a soft magnetic run was built from the input field.
+> `tests/unit/test_velocity_locality.py` holds both halves.
+>
+> **The third group the entry asked about is clean**, and that is a stated
+> negative rather than an unchecked one. `projwfc`/`pdos`, `stm` and
+> `transport` build no potential of their own: each routes through
+> `fixed_density_states`, which already refuses a field it was not handed
+> (`nscf.py:193`), and each already forwards `result.magnetic_field`.
+> `workflows/shg`, `photocurrent` and `tddft` take no field argument at all, so
+> the same refusal stops them. The forces refuse a field outright
+> (`forces/energy.py:reject_magnetic_field`).
+
 
 `calculation.potential(<density>)` is called with **no field argument at ten sites
 across the response stack** -- `efield.py:280` and `:524`, `phononq.py:462` and `:951`,
@@ -500,20 +540,49 @@ each band to the *first* of the group -- the docstring already identifies it as 
 reference and as the thing that was replaced. **How to know it worked** is
 `sum(wg) == nelec` asserted after `_average_degenerate`, on a case with a chain in it.
 
-### B3. The Kubo Berry curvature swallows the point a Chern number is about
+### B3. The Kubo Berry curvature swallows the point a Chern number is about **[closed 2026-09-12 -- one of the sweep's three claims was wrong]**
 
-`defumat/topology/berry.py:296`. `_kubo_point` masks an occupied-empty degeneracy to
-zero weight while its own comment says such a pair is "left to blow up", and its inner
-and outer guards use *different* thresholds, so a gap between 0 and 1e-12 overflows in
-the un-taken branch -- `jnp.where` does not protect a gradient -- and poisons any
-derivative through the curvature. The mask is an absolute 1e-12 Ry rather than a
-fraction of the band width.
-
-Run `method='kubo'` on graphene or a Weyl mesh that includes the band-touching point:
-a finite number comes back where the quantity diverges, the mesh sum gives a plausible
-non-integer Chern number, and nothing in the output says a singular point was dropped.
-The overlap-determinant route (`CLAUDE.md` rule D4's reason for it) is exact on any mesh
-and is what this should be checked against.
+> **The old guard had two behaviours and the sweep named one of them.** Both
+> measured on graphene on a 3x3 mesh, which lands on both Dirac points exactly
+> (`t2 = 0`, a sublattice mass setting the gap):
+>
+> * an **exactly** gapless model -- gap 8e-16, which is rounding rather than
+>   physics -- fell *below* the absolute 1e-12 guard and was silently zeroed.
+>   That is the sweep's "swallows the point", and it is right: a symmetry-forced
+>   touching that sits on a mesh point is the common case, and nothing said so.
+> * **any** perturbation off exact -- a 1e-9 mass, so a 2e-9 gap -- sails over
+>   the guard and returns `Omega = 1.7e19`, nineteen orders above every other
+>   point on the mesh, again with nothing to say the sum it entered is not a
+>   Chern number.
+>
+> So the absolute threshold was wrong in *both* directions at once, and which
+> one a run got depended on whether the touching was exact to the last bit.
+>
+> **The NaN half is a measured null**, like A8. `jnp.where` multiplies the
+> untaken branch's tangent by zero, and `1/gap^2` is a large *finite* number
+> for any gap an eigensolver can produce -- an infinity would need
+> `gap < 1e-154`. Gradients are finite at gaps of 2e-9, 2e-13, 2e-14 and
+> 8e-16. The two thresholds were made one anyway: a guard that means two
+> things is one library change from meaning something wrong.
+>
+> **The threshold is now a fraction (1e-8) of the band width over the whole
+> mesh**, and the "whole mesh" is the part that is not obvious -- for a
+> two-band model the spectrum at *one* k **is** the gap, so a tolerance
+> relative to the local spread can never fire. `kubo_curvature` takes one
+> `eigvalsh` pass over the mesh first, which is free beside the `jacfwd` it
+> was already paying per point.
+>
+> **And it says so**, which is what closes the first branch above rather than
+> moving it. `_kubo_point` returns how many occupied/empty pairs it dropped,
+> `BerryCurvature.singular_points` carries the total and `kubo_curvature`
+> warns, naming the count and pointing at `method='fhs'` -- whose determinant
+> of overlaps is an exact integer on any mesh. Three tests in
+> `tests/unit/test_topology_curvature.py`, including the complement (a gapped
+> model must report **zero**), so the count is a discriminator rather than a
+> constant.
+>
+> The plane-wave sibling `topology/kubo.py:139` already had the one-mask form
+> and a documented `DEGENERACY_TOL`; the two expressions are now the same.
 
 ---
 

@@ -58,6 +58,7 @@ states is reported rather than tuned away.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import jax
@@ -112,6 +113,12 @@ class BerryCurvature:
     truncation: float | None = None
     #: The same shift, unnormalised, in the units of :attr:`curvature`.
     truncation_abs: float | None = None
+    #: How many mesh points the ``kubo`` route found an occupied/empty band
+    #: touching at and **dropped**. Nonzero means the mesh sum is not a Chern
+    #: number of this state set: the curvature diverges there and a zero was
+    #: put in its place, which is smooth and plausible and wrong. ``None`` for
+    #: a route that does not divide by a gap.
+    singular_points: int | None = None
 
     def plot(self, ax=None, cmap: str = "RdBu_r", colorbar: bool = True,
              **kwargs):
@@ -268,9 +275,47 @@ def kubo_curvature(states, mesh: PlaneMesh, nocc: int | None = None, **_) -> Ber
         )
     nocc = states.nbnd if nocc is None else int(nocc)
     points = jnp.asarray(mesh.points.reshape(-1, 3))
-    values = jax.vmap(lambda k: _kubo_point(hamiltonian, k, nocc, axes))(points)
+    # The band width over the whole mesh, which is the only scale a model
+    # offers (see :data:`MODEL_DEGENERACY_TOL`). One extra ``eigvalsh`` per
+    # point, against a ``jacfwd`` and an ``eigh`` already being paid there.
+    spectrum = jax.vmap(lambda k: jnp.linalg.eigvalsh(hamiltonian(k)))(points)
+    width = float(jnp.max(spectrum) - jnp.min(spectrum))
+    tol = MODEL_DEGENERACY_TOL * (width if width > 0.0 else 1.0)
+    values, singular = jax.vmap(
+        lambda k: _kubo_point(hamiltonian, k, nocc, axes, tol)
+    )(points)
     curvature = np.asarray(values).reshape(mesh.shape)
-    return BerryCurvature(mesh=mesh, curvature=curvature, flux=None, method="kubo")
+    touchings = int(np.count_nonzero(np.asarray(singular)))
+    if touchings:
+        # Said out loud, because the number that comes back is otherwise
+        # indistinguishable from a converged one: every masked point
+        # contributes zero, the map stays smooth, and the mesh sum gives a
+        # non-integer Chern number that reads as a discretisation error.
+        warnings.warn(
+            f"the Kubo curvature is singular at {touchings} of "
+            f"{curvature.size} mesh points -- an occupied and an empty band "
+            "touch there -- and those points were dropped, which is not the "
+            "same as their contribution being zero. The mesh sum is not a "
+            "Chern number of this state set. Use method='fhs', whose "
+            "determinant of overlaps is an exact integer on any mesh, or "
+            "move the mesh off the touching point",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return BerryCurvature(
+        mesh=mesh, curvature=curvature, flux=None, method="kubo",
+        singular_points=touchings,
+    )
+
+
+#: A pair of bands is treated as degenerate below this fraction of the band
+#: width **over the whole mesh**. Relative because a
+#: :class:`~defumat.topology.states.ModelStates` Hamiltonian carries no unit --
+#: the plane-wave route's :data:`defumat.topology.kubo.DEGENERACY_TOL` is 1e-6
+#: **Ry** and means nothing here -- and over the whole mesh because the
+#: spectrum at *one* k is no scale at all: for a two-band model the local
+#: spread **is** the gap, so a tolerance relative to it can never fire.
+MODEL_DEGENERACY_TOL = 1.0e-8
 
 
 def _plane_directions(mesh: PlaneMesh) -> tuple[int, int]:
@@ -280,8 +325,17 @@ def _plane_directions(mesh: PlaneMesh) -> tuple[int, int]:
     return d1, d2
 
 
-def _kubo_point(hamiltonian, k, nocc: int, axes):
-    """``Omega_12(k)`` summed over the lowest ``nocc`` bands."""
+def _kubo_point(hamiltonian, k, nocc: int, axes, tol: float):
+    """``(Omega_12(k), how many occupied/empty pairs were dropped)``.
+
+    The second return value is the point of the rewrite. A Kubo curvature
+    diverges where an occupied and an empty band touch, and that is exactly
+    the point a Chern number is about -- a Weyl node, a Dirac cone, the gap
+    closing a topological transition runs through. Masking it to zero returns
+    a finite, smooth, plausible number and says nothing, which is the "a check
+    whose null result cannot be told from a pass" trap in ``CLAUDE.md``. The
+    count is what lets :func:`kubo_curvature` say it happened.
+    """
     d1, d2 = axes
     jacobian = jax.jacfwd(hamiltonian)(k)  # (dim, dim, 3)
     v1, v2 = jacobian[..., d1], jacobian[..., d2]
@@ -289,15 +343,22 @@ def _kubo_point(hamiltonian, k, nocc: int, axes):
     a1 = vectors.conj().T @ v1 @ vectors
     a2 = vectors.conj().T @ v2 @ vectors
     gap = energies[:, None] - energies[None, :]
-    # The n = m terms cancel in the antisymmetrised product; masking them is
-    # what keeps the 1/gap^2 finite. Degeneracies *between* an occupied and an
-    # empty band are a genuine singularity and are left to blow up (D4): a
-    # Kubo curvature there has no value to return.
-    weight = jnp.where(jnp.abs(gap) > 1.0e-12, 1.0 / jnp.where(gap == 0, 1.0, gap) ** 2, 0.0)
+
+    # **One mask, used twice.** The inner ``jnp.where`` must test the *same*
+    # condition as the outer one: with the outer at ``|gap| > tol`` and the
+    # inner at ``gap == 0``, a gap anywhere in ``(0, tol)`` still evaluates
+    # ``1/gap^2`` in the branch that is thrown away -- and ``jnp.where`` does
+    # not protect a gradient, so the discarded infinity comes back as a NaN
+    # through any derivative of the curvature. This is the form
+    # :func:`defumat.topology.kubo.kubo_from_matrices` already uses on the
+    # plane-wave route; the two are now the same expression.
+    finite = jnp.abs(gap) > tol
+    weight = jnp.where(finite, 1.0 / jnp.where(finite, gap, 1.0) ** 2, 0.0)
     occupied = jnp.arange(energies.shape[0]) < nocc
     mask = occupied[:, None] & ~occupied[None, :]
     terms = jnp.where(mask, a1 * a2.T * weight, 0.0)
-    return -2.0 * jnp.imag(jnp.sum(terms))
+    singular = jnp.sum(jnp.where(mask & ~finite, 1, 0))
+    return -2.0 * jnp.imag(jnp.sum(terms)), singular
 
 
 def berry_curvature(

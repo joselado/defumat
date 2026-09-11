@@ -20,6 +20,8 @@ determinant-based construction survives it.
 integer on a coarse mesh, not a converging approximation to one.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -165,3 +167,98 @@ def test_an_unknown_method_is_refused_by_name():
     states = ArrayStates(coefficients=np.zeros((4, 1, 2), dtype=complex))
     with pytest.raises(ValueError, match="unknown Berry curvature method"):
         berry_curvature(states, mesh, method="green")
+
+
+# -- What the Kubo route does where the bands touch -------------------------
+#
+# ``OPEN.md`` B3. The Kubo curvature divides by a band gap, and the point a
+# Chern number is *about* -- a Dirac cone, a Weyl node, the closing that a
+# topological transition runs through -- is exactly where that gap is zero.
+# The old guard tested ``|gap| > 1e-12`` in absolute energy, which is wrong in
+# **both** directions at once: an exactly gapless model lands under it (8e-16
+# of rounding) and is silently zeroed, while a gap of 2e-9 sails over it and
+# returns 1.7e19. Either way nothing in the output said so.
+
+
+def _almost_gapless_graphene():
+    """Graphene with a sublattice mass of 1e-9: a 2e-9 gap at K and K'.
+
+    ``t2 = 0`` removes the Haldane term, so the two Dirac points survive and a
+    3x3 mesh lands on both of them exactly -- (1/3, 2/3) and (2/3, 1/3).
+    """
+    return ModelSource(hamiltonian=haldane(t2=0.0, mass=1.0e-9), nocc=1)
+
+
+def test_a_band_touching_is_dropped_and_said_out_loud():
+    """Counted, warned about, and recorded on the result.
+
+    Measured against the old absolute guard on the same mesh: it returned
+    ``Omega = 1.7e19`` at each Dirac point -- a finite number, larger than
+    every other point by nineteen orders, and with nothing in the output to
+    say the sum it went into is not a Chern number. Set the mass to zero
+    instead and the same guard does the opposite: the 8e-16 residue falls
+    *under* 1e-12, the point is zeroed, and again nothing is said. Silence
+    that cannot be told from a pass is the trap ``CLAUDE.md`` names, and the
+    old guard produced both of its forms depending on the last bit of a
+    rounding.
+    """
+    mesh = plane_mesh((3, 3))
+    states = _almost_gapless_graphene().states(mesh.flat())
+
+    with pytest.warns(RuntimeWarning, match="singular at 2 of 9 mesh points"):
+        result = berry_curvature(states, mesh, method="kubo", nocc=1)
+
+    assert result.singular_points == 2
+    # And the two points are *dropped*, not merely flagged: nothing enormous
+    # survives into the map.
+    assert np.all(np.isfinite(result.curvature))
+    assert np.abs(result.curvature).max() < 1.0e3
+
+
+def test_a_gapped_model_reports_no_singular_points():
+    """The complement, so the count above is a discriminator and not a constant.
+
+    A check whose answer is the same on the case it is meant to catch and on
+    the case it is meant to pass says nothing at all.
+    """
+    mesh = plane_mesh((3, 3))
+    states = ModelSource(hamiltonian=haldane(t2=0.2, mass=0.0), nocc=1).states(
+        mesh.flat()
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        result = berry_curvature(states, mesh, method="kubo", nocc=1)
+    assert result.singular_points == 0
+
+
+def test_the_degeneracy_guard_uses_one_threshold_in_both_places():
+    """``jnp.where`` gates a value *and* its tangent, and they must agree.
+
+    The inner ``where`` that keeps ``1/gap^2`` finite used to test ``gap == 0``
+    while the outer one tested ``|gap| > 1e-12``, so a gap between the two was
+    evaluated in a branch that was then thrown away. **That part of the sweep's
+    prediction was a null** -- the discarded value is a large finite number
+    rather than an infinity for any gap an eigensolver can produce, and
+    ``jnp.where`` multiplies its tangent by zero, so no NaN ever appeared
+    (checked at gaps of 2e-9, 2e-13, 2e-14 and 8e-16). The two thresholds are
+    now one because a guard that means two things is one library change away
+    from meaning something wrong, and this asserts the property the rewrite
+    bought rather than the bug it did not have.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    from defumat.topology.berry import _kubo_point, _plane_directions
+
+    mesh = plane_mesh((3, 3))
+    axes = _plane_directions(mesh)
+    hamiltonian = haldane(t2=0.0, mass=1.0e-9)
+    # Band width 6, so this is the tolerance ``kubo_curvature`` would pick.
+    tol = 1.0e-8 * 6.0
+
+    at_k = jnp.asarray([1.0 / 3.0, 2.0 / 3.0, 0.0])
+    value, singular = _kubo_point(hamiltonian, at_k, 1, axes, tol)
+    assert int(singular) == 1
+    assert float(value) == 0.0
+    gradient = jax.grad(lambda k: _kubo_point(hamiltonian, k, 1, axes, tol)[0])
+    assert np.all(np.isfinite(np.asarray(gradient(at_k))))
