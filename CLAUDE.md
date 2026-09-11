@@ -48,6 +48,7 @@ missing, are indexed at the head of `PLAN.md` §3.
 | what something costs, in time and in memory | `PERFORMANCE.md` |
 | what is not here and what term is missing | `PLAN.md` §3, "What is outstanding" |
 | a survey of Elk's tasks against QE 7.5 | `ELK-FEATURES.md` |
+| what is known to be broken, and what to do about it | `OPEN.md` |
 
 **The claims in this project are numbers, not adjectives.** A phase is done when it has a
 concrete figure against `pw.x`, against Elk, or against an identity that shares no
