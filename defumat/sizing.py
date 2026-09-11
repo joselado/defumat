@@ -39,13 +39,16 @@ GB -- so a run whose floor fits on the card dies asking for a single allocation
 larger than the card. :attr:`SizeEstimate.eigensolver_buffer` reports it and
 :attr:`SizeEstimate.peak_bytes` is the number that decides. The fit is
 
-    2.18 nvecx npwx zc  +  4.20 nbnd npwx zc  +  2.00 band_batch npol N_smooth zc
+    k_batch (2.18 nvecx npwx zc + 4.20 nbnd npwx zc
+             + 2.00 band_batch npol N_smooth zc)
 
 -- the subspace ``psi``/``hpsi`` pair, about five more ``(nbnd, npwx)`` blocks
 live inside the Davidson subspace solve, and roughly two FFT boxes per band in
 flight. It comes from compiling the real function over ``nbnd``, ``david`` and
 ``DEFUMAT_BAND_BATCH`` on a small cell and reading
-``memory_analysis().temp_size_in_bytes``. It is fitted **through the origin**:
+``memory_analysis().temp_size_in_bytes``, **one k-point at a time**: the
+parenthesis is one chunk, and ``davidson_eigensolver_all`` holds ``k_batch`` of
+them at once, which is why the whole of it carries that factor. It is fitted **through the origin**:
 a constant term improves the fit on the cell it was measured on (1.6 per cent
 against 6.4) and means nothing three orders of magnitude out, which is where it
 is used.
@@ -233,9 +236,11 @@ class SizeEstimate:
     #: ``name -> bytes`` for each array whose size the basis fixes.
     arrays: dict = field(default_factory=dict)
     #: The compiled eigensolver's single contiguous XLA temp buffer, estimated
-    #: from the fit in the module docstring. It is **not** a member of
-    #: ``arrays``: it supersedes the two Davidson entries there rather than
-    #: adding to them, which is what :attr:`peak_bytes` does with it.
+    #: from the fit in the module docstring, times ``k_batch``. It is **not** a
+    #: member of ``arrays``: it supersedes the two Davidson entries there rather
+    #: than adding to them, which is what :attr:`peak_bytes` does with it -- so
+    #: it must scale with the k-batch exactly as those two do, or the peak falls
+    #: when the batch grows.
     eigensolver_buffer: int = 0
     #: The largest single transient ``Calculation.__init__`` allocates before
     #: the SCF starts -- the augmentation charge's ``(ngm, kkbeta)`` Bessel
@@ -612,12 +617,25 @@ def estimate_size(
     # 40.2 MB to one per cent, so the whole form transfers. (``band_batch = 16``
     # is off that ladder and is not a counter-example: 24 bands at 16 compile a
     # 16-block *and* an 8-tail, and the executable holds both.)
+    #
+    # **And it carries ``k_live``, for the same reason the two lines it
+    # supersedes do.** The fit was taken one k-point at a time --
+    # ``tools/gpu/davidson_memory.py`` defaults ``--k-batch`` to 1 -- so every
+    # term above describes *one chunk*, and ``davidson_eigensolver_all``
+    # ``vmap``s that chunk over ``k_live`` k-points at once. Without the factor
+    # the buffer superseded two ``arrays`` lines that do carry it, so
+    # :attr:`SizeEstimate.peak_bytes` *fell* as the batch grew: at ``nk = 8``,
+    # ``k_batch = None``, ``nbnd = 64``, ``ndim = 10000``, ``nvecx = 256`` and a
+    # 45^3 smooth grid it removed 983 MB of floor and put 319 MB back, reporting
+    # 664 MB **below** the floor it discarded and a smaller peak at the end of
+    # the dial that actually holds ``nk`` subspaces. That is this module's own
+    # stated error inverted -- a green light for the larger calculation.
     bands_in_flight = nbnd if band_batch is None else min(band_batch, nbnd)
-    eigensolver_buffer = int(
+    eigensolver_buffer = int(k_live * (
         _SUBSPACE_COEFFICIENT * nvecx * ndim * zc
         + _RITZ_COEFFICIENT * nbnd * ndim * zc
         + _FFT_COEFFICIENT * bands_in_flight * npol * int(np.prod(smooth_grid)) * zc
-    )
+    ))
 
     return SizeEstimate(
         nat=len(structure.types), nsp=len(pseudos), nelec=nelec, nbnd=int(nbnd),

@@ -482,3 +482,62 @@ def test_the_subspace_size_changes_the_cost_and_not_the_answer(pseudo_dir):
     two = estimate_size(calc.system, calc.pseudos, davidson_basis=2)
     assert (two.arrays["Davidson subspace psi+hpsi"]
             == four.arrays["Davidson subspace psi+hpsi"] // 2)
+
+
+# --- what a relaxation does with the namelist it adopted ---------------------
+
+
+def test_the_relaxation_drivers_name_every_option_the_scf_does():
+    """``_defaults_for`` forwards by **named parameter only**, so an option a
+    relaxation does not name is an option a relaxation never receives.
+
+    All three drivers take ``**scf_options`` and pass it straight to
+    ``run_scf``, which reads as though the options get through -- and they do
+    when a caller writes them at the call site. What they do not survive is the
+    facade: ``_defaults_for`` inspects the signature, and a ``**kwargs`` is
+    deliberately not permission to pass everything. So ``electron_maxstep``,
+    ``diago_full_acc`` and ``mixing_fixed_ns``, all three adopted from the
+    input's own ``&electrons`` namelist, were dropped on the way in and every
+    SCF inside a relaxation ran at the defaults.
+    """
+    from defumat.workflows.relax import run_relax
+    from defumat.workflows.spiral import relax_spiral_q
+    from defumat.workflows.vc_relax import run_vc_relax
+
+    wanted = {
+        name for name in _ELECTRONS_OPTIONS.values()
+        if name in inspect.signature(run_scf).parameters
+    }
+    for driver in (run_relax, run_vc_relax, relax_spiral_q):
+        named = set(inspect.signature(driver).parameters)
+        assert wanted <= named, f"{driver.__name__} drops {sorted(wanted - named)}"
+
+
+def test_an_option_left_alone_does_not_override_run_scfs_own_default():
+    """The named parameters are ``None``-defaulted rather than repeating
+    ``run_scf``'s numbers, so "not given" stays distinguishable from "given the
+    default" and the two cannot drift apart."""
+    from defumat.workflows.relax import SCF_LOOP_OPTIONS, _scf_loop_options
+
+    assert _scf_loop_options({}, max_iterations=None, david=None) == {}
+    assert _scf_loop_options({}, max_iterations=3) == {"max_iterations": 3}
+    # An explicit call-site value still wins over the calculator's default.
+    assert _scf_loop_options({"max_iterations": 7}, max_iterations=3) == {
+        "max_iterations": 7
+    }
+    assert set(SCF_LOOP_OPTIONS) <= set(inspect.signature(run_scf).parameters)
+
+
+def test_the_adopted_namelist_reaches_the_scf_inside_a_relaxation(pseudo_dir):
+    """The running counterpart of the signature test above.
+
+    ``electron_maxstep = 1`` caps the *electronic* loop, not the ionic one, so
+    the relaxation's first step must report exactly one SCF iteration.
+    """
+    text = (SILICON.replace("calculation = 'scf'", "calculation = 'relax'")
+            .replace("&electrons\n/", "&electrons\n  electron_maxstep = 1\n/"))
+    if "&ions" not in text:
+        text = text.replace("ATOMIC_SPECIES", "&ions\n/\nATOMIC_SPECIES")
+    calc = Calculator.from_text(text, pseudo_dir, announce=False)
+    relax = calc.get_relax(nstep=1)
+    assert relax.steps[0].scf_iterations == 1

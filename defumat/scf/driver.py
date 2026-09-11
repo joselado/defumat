@@ -600,6 +600,15 @@ def gamma_storage_is_consumable(system: System, pseudos) -> bool:
       As it stands that raises rather than being silently wrong, which is the
       right failure but not a good message.
 
+    * **DFT+U.** ``hubbard/occupations.py``'s ``projections`` is a plain
+      ``<wfcU|psi>`` over the stored ``k + G`` list, with none of the
+      ``2 Re(sum) - G0`` rule on it, and ``ns`` is built from it *inside* the
+      SCF -- so the Hubbard potential and energy follow a set of occupations
+      that is roughly a quarter of the true one and the run converges silently
+      to the wrong ground state. It is the only one of these that is wrong
+      before the run finishes rather than after, which is why it is a
+      substitution rather than something left to a consumer to notice.
+
     A run wanting the storage on a symmetric crystal sets ``nosym = .true.``,
     which is what the gain is traded against and is usually worth it: the
     saving is a factor of two on the largest arrays in the run.
@@ -607,6 +616,8 @@ def gamma_storage_is_consumable(system: System, pseudos) -> bool:
     if not system.kpoints.gamma_only:
         return False
     if any(getattr(p, "is_ultrasoft", False) for p in pseudos):
+        return False
+    if getattr(system, "hubbard", None) is not None:
         return False
     if system.nspin == 4 or system.spiral_q is not None:
         # A spinor's two components are not related by ``c(-G) = conj(c(G))``
@@ -645,8 +656,9 @@ def _without_gamma_storage(system: System) -> System:
     warnings.warn(
         "K_POINTS gamma asks for the half-sphere storage of the gamma-point "
         "trick, which this run cannot consume -- it is implemented for a "
-        "norm-conserving calculation with nosym = .true., and this one is "
-        "ultrasoft/PAW or uses symmetry (see gamma_storage_is_consumable). "
+        "norm-conserving calculation with no Hubbard U and nosym = .true., and "
+        "this one is ultrasoft/PAW, carries a U, or uses symmetry (see "
+        "gamma_storage_is_consumable). "
         "Running at an explicit k = 0 with the full G sphere instead: the "
         "result is the same and the cost is twice the plane waves",
         stacklevel=3,

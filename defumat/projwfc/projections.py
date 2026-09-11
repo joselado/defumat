@@ -49,6 +49,8 @@ import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 
+from defumat.basis.gvectors import refuse_gamma_storage
+
 from defumat.batching import map_k
 from defumat.hubbard.projectors import build_atomic_projectors
 from defumat.paw.symmetry import harmonic_rotations
@@ -189,6 +191,12 @@ def atomic_projections(
         raise ValueError(
             f"unknown projector set {kind!r}; expected one of {PROJECTION_KINDS}"
         )
+    refuse_gamma_storage(
+        bool(getattr(calculation, "gamma_only", False)),
+        "the projected density of states",
+        "<phi|S|psi> here is a plain sum over the stored k + G list, so a "
+        "Loewdin charge comes out at roughly a quarter of its value",
+    )
     system = calculation.system
     noncolin = bool(system.noncolin)
     lspinorb = bool(getattr(system, "lspinorb", False))

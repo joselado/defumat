@@ -1060,6 +1060,32 @@ _REFUSED_SWITCHES = (
     ("system", "nr1s", "nonzero", "a hand-pinned smooth FFT grid (nr1s/nr2s/nr3s)"),
     ("system", "nr2s", "nonzero", "a hand-pinned smooth FFT grid (nr1s/nr2s/nr3s)"),
     ("system", "nr3s", "nonzero", "a hand-pinned smooth FFT grid (nr1s/nr2s/nr3s)"),
+    # The four symmetry switches. None of them was read anywhere in the package,
+    # and each one is a statement that some part of the group is *not* a symmetry
+    # of the state being asked for -- so ignoring one leaves the k-mesh reduced
+    # with operations the input excluded, ``sym_rho`` averaging over them, and a
+    # total energy that will not match a benchmark generated from the same file
+    # with nothing saying why. Refused until they are consumed, which is the
+    # standing rule that a run which starts is a run whose physics is there.
+    ("system", "no_t_rev", "logical",
+     "dropping the operations that are symmetries only together with time "
+     "reversal (symm_base.f90's t_rev array, which sgam_at_mag sets and "
+     "sym_rho's nspin = 4 branch carries an extra sign for). Here t_rev_array() "
+     "keeps them unconditionally and the magnetic wedge is built with them"),
+    ("system", "force_symmorphic", "logical",
+     "discarding every operation with a fractional translation (symm_base.f90's "
+     "sgam_at). The group is built with them here, and both the k-point "
+     "reduction and the FFT grid's fft_fact follow from them"),
+    ("system", "use_all_frac", "logical",
+     "keeping fractional translations that are not commensurate with the FFT "
+     "grid (symm_base.f90's remove_sym). Here the grid is chosen to fit the "
+     "translations rather than the translations filtered to fit the grid, so "
+     "the switch selects a different group and a different mesh"),
+    ("system", "nosym_evc", "logical",
+     "the unreduced k-grid symmetrised anyway -- no symmetry in the "
+     "diagonalisation, but the k-points forced to carry the crystal's group "
+     "(setup.f90). Here nosym gives the full grid *and* switches sym_rho off, "
+     "which is a different calculation"),
 )
 
 

@@ -261,3 +261,59 @@ def test_every_force_method_passes_the_same_guards(guard, name):
     import defumat.forces as forces
 
     assert f"{guard}(calculation)" in inspect.getsource(forces.compute_forces), name
+
+
+# -- a refusal that named the wrong missing term -------------------------------
+
+def _metallic_calculation():
+    """The least that :func:`require_a_sternheimer_regime` reads, on a metal.
+
+    A stub rather than a real :class:`~defumat.scf.driver.Calculation`: the
+    guard is a guard, it reads seven attributes, and building an SCF to reach it
+    would be the slow way to check a message.
+    """
+    import types
+
+    system = build_system(parse_pw_input(
+        _SILICON.format(extra="occupations = 'smearing', degauss = 0.02")
+    ))
+    return types.SimpleNamespace(
+        system=system, gamma_only=False, noncolin=False, is_hubbard=False,
+        spiral=None, nspin=1, two_fermi_energies=False, functional=None,
+        # ``require_a_symmetrisable_response`` runs first and only asks whether
+        # the wedge can be completed; ``nosym`` is how the input above is *not*
+        # written, so the group is what it reads.
+        symmetries=types.SimpleNamespace(nsym=1),
+    )
+
+
+def test_the_strain_response_refuses_a_metal_for_the_right_reason():
+    """Aluminium *has* elastic constants. A Born effective charge does not
+    exist for any metal, and the two refusals are not the same refusal.
+
+    Left to the shared default, asking for the elastic constants of a metal
+    came back with a message about ``epsilon_infinity`` and Born charges --
+    a true statement about a different quantity, with nothing in it to say that
+    what is actually missing is the Fermi-level shift the phonon branch already
+    carries.
+    """
+    from defumat.response.strain import strain_response
+
+    with pytest.raises(NotImplementedError) as raised:
+        strain_response(_metallic_calculation(), None, [[0.0]], None)
+    message = str(raised.value)
+    assert "Fermi-level shift" in message
+    assert "localdos" in message and "ef_shift" in message
+    # And it must not go on answering the question that was not asked.
+    assert "epsilon_infinity" not in message
+    assert "Born effective charge" not in message
+
+
+def test_the_electric_field_still_refuses_a_metal_by_definition():
+    """The sibling keeps the other message, because for *it* the statement is
+    true: the quantity does not exist for a metal at all."""
+    from defumat.response.efield import dielectric_tensor
+
+    with pytest.raises(NotImplementedError) as raised:
+        dielectric_tensor(_metallic_calculation(), None, [[0.0]], None)
+    assert "epsilon_infinity" in str(raised.value)

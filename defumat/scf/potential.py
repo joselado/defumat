@@ -108,7 +108,15 @@ def hartree(rho_g: jnp.ndarray, gvectors: GVectors, cell: Cell):
     inverse = jnp.where(g2 > 1e-12, 1.0 / jnp.where(g2 > 1e-12, g2, 1.0), 0.0)
 
     v = E2 * FPI * rho_g * inverse
-    energy = 0.5 * cell.volume * E2 * FPI * jnp.sum(jnp.abs(rho_g) ** 2 * inverse)
+    # ``Re(conj(rho) rho)`` rather than ``|rho|^2``: this is the one term every
+    # force, every stress and every phonon differentiates, and ``abs`` has no
+    # derivative at zero. ``rho_g`` reaching an *exact* zero is what symmetry
+    # arranges -- the same mechanism that makes it happen in the reciprocal
+    # Ewald sum on a supercell -- and the two expressions are identical
+    # everywhere else, so this is a no-op wherever it is already safe.
+    energy = 0.5 * cell.volume * E2 * FPI * jnp.sum(
+        jnp.real(jnp.conj(rho_g) * rho_g) * inverse
+    )
     if gvectors.gamma_only:
         # Only half the sphere is stored; every G != 0 stands for a +-G pair.
         energy = 2.0 * energy
@@ -148,11 +156,13 @@ def scf_accuracy(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell) -> jnp
         else (residual_g[0] - residual_g[1])[None]
     )
     weight = E2 * FPI / (2.0 * jnp.pi) ** 2
-    contribution = jnp.sum(jnp.abs(magnetization) ** 2)
+    contribution = jnp.sum(jnp.real(jnp.conj(magnetization) * magnetization))
     if gvectors.gamma_only:
         # Only half the sphere is stored, and unlike the Hartree half the G = 0
         # term is counted here -- so the doubling applies to the rest of it.
-        contribution = 2.0 * contribution - jnp.sum(jnp.abs(magnetization[:, 0]) ** 2)
+        contribution = 2.0 * contribution - jnp.sum(
+            jnp.real(jnp.conj(magnetization[:, 0]) * magnetization[:, 0])
+        )
     return total + 0.5 * cell.volume * weight * contribution
 
 

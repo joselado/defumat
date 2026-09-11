@@ -69,7 +69,7 @@ from defumat.stress import compute_stress
 from defumat.system.builder import System
 from defumat.system.symmetry import check_lattice_symmetry, check_symmetry
 from defumat.units import BOHR_TO_ANGSTROM, RY_TO_KBAR
-from defumat.workflows.relax import RelaxStep, _extrapolate
+from defumat.workflows.relax import RelaxStep, _extrapolate, _scf_loop_options
 
 __all__ = ["VCRelaxResult", "VCRelaxStep", "run_vc_relax"]
 
@@ -185,6 +185,13 @@ def run_vc_relax(
     k_batch: int | None | str = "default",
     density_extrapolation: str = "atomic",
     verbose: bool = False,
+    # See :data:`~defumat.workflows.relax.SCF_LOOP_OPTIONS`.
+    max_iterations: int | None = None,
+    david: int | None = None,
+    diago_full_acc: bool | None = None,
+    mixing_fixed_ns: int | None = None,
+    scf_solver: str | None = None,
+    scf_solver_options: dict | None = None,
     **scf_options,
 ) -> VCRelaxResult:
     """Relax the atomic positions and the cell at fixed applied pressure.
@@ -247,6 +254,11 @@ def run_vc_relax(
         cell_mask=cell_dofree_mask(cell_dofree),
     )
 
+    scf_options = _scf_loop_options(
+        scf_options, max_iterations=max_iterations, david=david,
+        diago_full_acc=diago_full_acc, mixing_fixed_ns=mixing_fixed_ns,
+        scf_solver=scf_solver, scf_solver_options=scf_solver_options,
+    )
     current = base
     free = system.structure.free
     starting_threshold = threshold = conv_thr

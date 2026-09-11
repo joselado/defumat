@@ -129,10 +129,20 @@ def test_spinors_reproduce_the_collinear_answer(
     for term, value in reference.energy_terms.items():
         assert result.energy_terms[term] == pytest.approx(value, abs=1e-9), term
 
-    # Twice as many bands, in degenerate pairs, matching the collinear ones.
+    # Twice as many bands, in degenerate pairs, matching the collinear ones --
+    # each to the accuracy its own band was converged to. Over *every* band this
+    # asserted 1e-10 Ry where the solver promises max(5 ethr, 1e-5) on an empty
+    # one: five orders looser than the bound, and two independent SCF runs, so
+    # nothing made the empty states agree to anything in particular.
     doubled = np.repeat(reference.eigenvalues, 2, axis=1)
     assert result.eigenvalues.shape[1] >= doubled.shape[1]
-    assert np.abs(result.eigenvalues[:, : doubled.shape[1]] - doubled).max() < 1e-10
+    difference = np.abs(result.eigenvalues[:, : doubled.shape[1]] - doubled)
+    occupied = _occupied_mask(system, result)[:, : doubled.shape[1]]
+    assert difference[occupied].max() < 1e-10
+    empty_bound = max(_empty_band_bound_ev(result.ethr),
+                      _empty_band_bound_ev(reference.ethr)) / RY_TO_EV
+    if (~occupied).any():
+        assert difference[~occupied].max() < empty_bound
 
 
 @pytest.mark.parametrize(("name", "stem"), SPINORBIT_CASES)
@@ -173,6 +183,76 @@ def test_spin_orbit_eigenvalues(name, stem, qe_testsuite, pseudo_dir):
     )
 
 
+# --- what a degeneracy assertion may promise ---------------------------------
+#
+# A Kramers pair is degenerate to whatever the eigensolver converged it to, and
+# that is **two different numbers**. ``cegterg.f90:129`` holds a band whose
+# fractional occupation ``wg/wk`` is below 0.01 only to
+# ``empty_ethr = max(5 ethr, 1e-5)`` Ry, and every band above it to ``ethr``.
+# Asserting round-off over *every* band therefore asserts something the solver
+# never promised: on fcc platinum the whole failure was three bands occupied to
+# 1e-87, more than 10 eV above E_F, while every band carrying weight was
+# degenerate to 5e-12 eV.
+#
+# The answer is not "assert over the occupied bands only" -- that drops the
+# guard exactly where a non-Hermitian ``D`` or a mispaired spin block is least
+# likely to be noticed, which is the whole reason the test exists. It is two
+# bounds, each matching what the solver actually promises.
+
+#: Round-off, in eV, for a pair the solver converged to ``ethr``. Measured at
+#: 5e-12 on both platinum cases; the bound is six orders looser than that.
+KRAMERS_OCCUPIED_EV = 1.0e-6
+
+
+def _empty_band_bound_ev(ethr) -> float:
+    """``empty_ethr`` in eV: what an empty band's eigenvalue is converged to."""
+    from defumat.solvers.davidson import empty_band_threshold
+
+    return empty_band_threshold(ethr) * RY_TO_EV
+
+
+def _assert_kramers_pairs(levels_ev, occupied_mask, loose_ev: float) -> None:
+    """Every ``(2n, 2n+1)`` pair degenerate, to the bound its own band earned.
+
+    ``occupied_mask`` has the shape of ``levels_ev`` and says which bands the
+    solver held to ``ethr`` -- QE's own rule, ``wg/wk >= 0.01``
+    (``sum_band.f90:118-128``). A pair counts as occupied if either member
+    does, since the two are converged together.
+    """
+    split = np.abs(levels_ev[..., 0::2] - levels_ev[..., 1::2])
+    tight = occupied_mask[..., 0::2] | occupied_mask[..., 1::2]
+
+    assert tight.any(), "no band carries weight: the tight bound would be vacuous"
+    assert split[tight].max() < KRAMERS_OCCUPIED_EV, (
+        f"an occupied Kramers pair is split by {split[tight].max():.3e} eV"
+    )
+    if (~tight).any():
+        # Still asserted, and still a real guard: a mispaired spin block splits
+        # an empty pair by an eV, not by a threshold.
+        assert split[~tight].max() < loose_ev, (
+            f"an empty Kramers pair is split by {split[~tight].max():.3e} eV, "
+            f"past the {loose_ev:.3e} eV the eigensolver promised it"
+        )
+
+
+def _occupied_mask(system, result) -> np.ndarray:
+    """``wg/wk >= 0.01`` per band, the test ``sum_band`` sets ``btype`` from.
+
+    The ratio and not ``wg`` itself: ``wk`` carries the spin degeneracy, so
+    dividing by it is what makes 0.01 mean the same thing for a spinor band as
+    for an unpolarized one. A zero-weight k-point keeps full accuracy for all
+    its bands, which is ``sum_band``'s ``FORALL( ik = 1:nks, wk(ik) > 0 )``.
+    """
+    from defumat.scf.driver import EMPTY_BAND_OCCUPATION
+
+    wg = np.asarray(result.occupations)
+    wk = np.asarray(system.kpoints.weights).reshape(
+        (1,) * (wg.ndim - 2) + (-1, 1)
+    )
+    fraction = wg / np.where(wk > 0.0, wk, 1.0)
+    return (fraction >= EMPTY_BAND_OCCUPATION) | np.broadcast_to(wk <= 0.0, wg.shape)
+
+
 @pytest.mark.parametrize(("name", "stem"), SPINORBIT_CASES)
 def test_kramers_degeneracy_survives_spin_orbit(name, stem, qe_testsuite, pseudo_dir):
     """Every level of fcc platinum stays doubly degenerate.
@@ -186,10 +266,12 @@ def test_kramers_degeneracy_survives_spin_orbit(name, stem, qe_testsuite, pseudo
     a physical result and is exactly what a spin-orbit implementation gets
     wrong.
     """
-    _, result = _run(qe_testsuite / "pw_spinorbit" / name, pseudo_dir)
-    levels = np.asarray(result.eigenvalues)
-    splitting = np.abs(levels[:, 0::2] - levels[:, 1::2]).max() * RY_TO_EV
-    assert splitting < 1e-6
+    system, result = _run(qe_testsuite / "pw_spinorbit" / name, pseudo_dir)
+    levels = np.asarray(result.eigenvalues) * RY_TO_EV
+    _assert_kramers_pairs(
+        levels, _occupied_mask(system, result),
+        _empty_band_bound_ev(result.ethr),
+    )
 
 
 def test_spin_orbit_lifts_the_degeneracy_a_scalar_run_keeps(qe_testsuite, pseudo_dir):
@@ -406,7 +488,17 @@ def test_kramers_degeneracy_on_the_bismuthene_path(pseudo_dir):
     _skip_without_references()
     _, _, _, bands = _bismuthene("soc", pseudo_dir)
     levels = bands.eigenvalues_ev
-    assert np.abs(levels[:, 0::2] - levels[:, 1::2]).max() < 1e-6
+    # **Not over every band.** ``UNCONVERGED_TOP_BANDS`` is this file's own
+    # measurement that the topmost Kramers pair is converged by neither code --
+    # 10.7 meV of per-band disagreement with QE against 0.46 meV below it -- so
+    # asserting round-off on it asserts something already documented as false.
+    settled = levels[:, : levels.shape[1] - UNCONVERGED_TOP_BANDS["soc"]]
+    assert np.abs(settled[:, 0::2] - settled[:, 1::2]).max() < KRAMERS_OCCUPIED_EV
+    # The pair that is not settled is still asserted, at what it is worth: a
+    # mispaired spin block splits a pair by an eV, not by a convergence
+    # threshold, so this still fails on the defect the test exists for.
+    top = levels[:, levels.shape[1] - UNCONVERGED_TOP_BANDS["soc"]:]
+    assert np.abs(top[:, 0::2] - top[:, 1::2]).max() < 0.05
 
 
 def test_the_same_cell_under_lda_has_no_such_offset(pseudo_dir):

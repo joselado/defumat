@@ -801,7 +801,21 @@ def local_spin_frame(charge: jnp.ndarray, magnetization: jnp.ndarray):
     of the potential there rather than picking a direction out of rounding
     error).
     """
-    modulus = jnp.sqrt(jnp.sum(magnetization**2, axis=0))
+    # **The mask goes on the argument the derivative is taken at.** ``sqrt`` has
+    # an *infinite* derivative at zero, so guarding what comes after it leaves
+    # ``0 * inf`` -- a NaN -- in the tangent however careful the division below
+    # is. ``|m| = 0`` is not a rounding accident: ``sym_rho``'s axial average is
+    # exact at a grid point whose magnetic little group admits no invariant
+    # axial vector, and a vacuum region underflows to it. Every spinor force,
+    # every spinor stress and every ``jvp`` in the response stack differentiates
+    # this function, and the primal survives, which is why small bulk cells
+    # never showed it. Bit-identical in value (``sqrt(0) = 0``); finite in the
+    # tangent, where the derivative is zero rather than a direction picked out
+    # of a conical singularity, which is the same choice QE makes by zeroing the
+    # vector part of the potential there.
+    square = jnp.sum(magnetization**2, axis=0)
+    nonzero = square > 0.0
+    modulus = jnp.where(nonzero, jnp.sqrt(jnp.where(nonzero, square, 1.0)), 0.0)
     clamped = jnp.minimum(modulus, jnp.abs(charge))
     channels = jnp.stack([(charge + clamped) / 2.0, (charge - clamped) / 2.0])
     safe = jnp.where(modulus > 0.0, modulus, 1.0)

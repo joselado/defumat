@@ -1038,9 +1038,35 @@ def _alpha_pv(eigenvalues, counts, smearing=None) -> float:
     return max(2.0 * (emax - emin), 1.0e-2)
 
 
+#: The default answer to "why is a metal refused here". It is a statement about
+#: the *quantity*, not about the solve, and it is only true of the two static
+#: electronic responses -- which is why a caller whose quantity is perfectly well
+#: defined for a metal passes ``metals_missing`` instead of inheriting it.
+_NO_METAL_BY_DEFINITION = (
+    "the quantity being asked for is not defined there -- a metal has no "
+    "epsilon_infinity and no Born effective charge, which is why pw.x refuses "
+    "epsil for one too"
+)
+
+#: ...and what is actually missing where the quantity *is* defined for a metal.
+#: The solve handles one; the self-consistent loop above it does not yet move
+#: the Fermi level, which is a term the phonon branch already has.
+_NO_METAL_YET = (
+    "the quantity being asked for is perfectly well defined for a metal and "
+    "the machinery is not here yet. What is missing is the Fermi-level shift: "
+    "a perturbation at q = 0 changes the number of states below E_F, so the "
+    "level moves and the response density has to be corrected by the local "
+    "density of states at it (localdos/ef_shift, SternheimerSolver.local_dos "
+    "and fermi_level_shift), together with the wg/2wk weight split the "
+    "occupied projector needs. Both are written for the displacement "
+    "coordinate and are what response/phonon.py passes metals = True on; "
+    "neither has been carried onto this perturbation"
+)
+
+
 def require_a_sternheimer_regime(
     calculation, metals: bool = False, spin_polarized: bool = False,
-    gamma_ok: bool = False,
+    gamma_ok: bool = False, metals_missing: str = _NO_METAL_BY_DEFINITION,
 ) -> None:
     """Refuse, by name, every regime whose response needs machinery not here.
 
@@ -1054,6 +1080,14 @@ def require_a_sternheimer_regime(
     does: ``orthogonalize``'s smearing branch is implemented
     (:meth:`SternheimerSolver._smeared_projection`). ``epsilon_infinity`` and
     the Born charges do not, and are refused here rather than in three places.
+
+    ``metals_missing`` is *why*, and it has two answers rather than one. For the
+    two static electronic responses the quantity itself does not exist for a
+    metal (:data:`_NO_METAL_BY_DEFINITION`). For the **strain** response it does
+    -- aluminium has elastic constants, and they are the textbook case -- and
+    what is missing is the Fermi-level shift (:data:`_NO_METAL_YET`). Inheriting
+    the first message there answered a question the user had not asked, and left
+    nothing in the output to say what the real gap was.
 
     ``spin_polarized = True`` says the same thing about ``nspin = 2``: the
     *solve* now takes one occupied-band count per channel
@@ -1120,9 +1154,7 @@ def require_a_sternheimer_regime(
         raise NotImplementedError(
             f"occupations={scheme!r}: this response is refused for a metal. "
             "The Sternheimer solve itself handles one (orthogonalize's smearing "
-            "branch is implemented), but the quantity being asked for is not "
-            "defined there -- a metal has no epsilon_infinity and no Born "
-            "effective charge, which is why pw.x refuses epsil for one too"
+            f"branch is implemented), but {metals_missing}"
         )
     if calculation.spiral:
         raise NotImplementedError("the Sternheimer response of a spin spiral is not implemented")

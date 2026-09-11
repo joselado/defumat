@@ -286,6 +286,91 @@ def test_weights_are_the_step_function_far_from_the_fermi_level(kind):
 
 
 # --------------------------------------------------------------------------
+# The degenerate-band average: a partition, not a symmetric relation
+# --------------------------------------------------------------------------
+
+
+def _chain(nk: int = 3):
+    """Bands in a *chain*: ``a ~ b`` and ``b ~ c`` but ``a !~ c``.
+
+    Each step is 0.6e-6 Ry, the tolerance is 1e-6, so consecutive bands are
+    "degenerate" and the outer two are not. This is the configuration a metal
+    slab or a large supercell produces near ``E_F`` and an insulator never
+    does -- silicon's degeneracies are exact, where the symmetric relation and
+    the partition coincide.
+    """
+    step = 0.6e-6
+    levels = jnp.asarray(np.tile([0.0, step, 2.0 * step], (nk, 1)))
+    rng = np.random.default_rng(20260911)
+    wg = jnp.asarray(rng.uniform(0.1, 1.0, size=levels.shape))
+    return levels, wg
+
+
+def test_the_degenerate_average_conserves_weight_on_a_chain():
+    """The Fermi level has just been bisected to give exactly ``nelec``.
+
+    Anything the averaging does to the total after that is charge appearing or
+    disappearing, and ``sum_band`` builds the density from these weights with
+    no further check -- so the cell simply comes out charged, with no error and
+    no message.
+
+    The symmetric form that stood here returns ``sum_j S_ij w_j / sum_j S_ij``,
+    which preserves weight only when ``S`` is block-diagonal. On the chain
+    below the middle column sums to ``1/2 + 1/3 + 1/2 = 4/3`` instead of 1.
+    """
+    from defumat.scf.tetrahedra import _average_degenerate
+
+    levels, wg = _chain()
+    averaged = _average_degenerate(wg, levels)
+    assert float(jnp.sum(averaged)) == pytest.approx(float(jnp.sum(wg)), rel=1e-12)
+
+
+def test_the_old_symmetric_form_is_the_one_that_loses_weight():
+    """The control, so the test above is not passing for an unrelated reason.
+
+    If this ever stops failing to conserve weight, the chain has stopped being
+    a chain and the test above has gone quiet.
+    """
+    levels, wg = _chain()
+    same = (jnp.abs(levels[:, :, None] - levels[:, None, :]) < 1.0e-6).astype(wg.dtype)
+    symmetric = jnp.einsum("kij,kj->ki", same, wg) / jnp.sum(same, axis=-1)
+    assert float(jnp.sum(symmetric)) != pytest.approx(float(jnp.sum(wg)), rel=1e-9)
+
+
+def test_the_groups_are_contiguous_runs_and_the_average_is_their_mean():
+    """QE's scan compares each band to the *first* of the group it is building,
+    so a group is a contiguous run and the average within it is a plain mean."""
+    from defumat.scf.tetrahedra import _average_degenerate
+
+    levels, wg = _chain()
+    averaged = np.asarray(_average_degenerate(wg, levels))
+    raw = np.asarray(wg)
+    # Bands 0 and 1 are one group (both within 1e-6 of band 0); band 2 is 1.2e-6
+    # from band 0, so it opens its own.
+    assert averaged[:, 0] == pytest.approx(0.5 * (raw[:, 0] + raw[:, 1]))
+    assert averaged[:, 1] == pytest.approx(0.5 * (raw[:, 0] + raw[:, 1]))
+    assert averaged[:, 2] == pytest.approx(raw[:, 2])
+
+
+def test_an_exact_multiplet_is_unchanged_by_the_new_rule():
+    """The case every committed reference is: exact degeneracies, where the
+    partition and the symmetric relation agree. The fix must be a no-op here."""
+    from defumat.scf.tetrahedra import _average_degenerate
+
+    levels = jnp.asarray(np.tile([-1.0, 0.5, 0.5, 0.5, 3.0], (4, 1)))
+    rng = np.random.default_rng(7)
+    wg = jnp.asarray(rng.uniform(0.1, 1.0, size=levels.shape))
+    averaged = np.asarray(_average_degenerate(wg, levels))
+    raw = np.asarray(wg)
+    assert float(np.sum(averaged)) == pytest.approx(float(np.sum(raw)), rel=1e-12)
+    assert averaged[:, 0] == pytest.approx(raw[:, 0])
+    assert averaged[:, 4] == pytest.approx(raw[:, 4])
+    assert averaged[:, 1:4] == pytest.approx(
+        np.repeat(raw[:, 1:4].mean(axis=1)[:, None], 3, axis=1)
+    )
+
+
+# --------------------------------------------------------------------------
 # w0gauss
 # --------------------------------------------------------------------------
 

@@ -136,3 +136,89 @@ def test_the_g_zero_coefficient_is_forced_real(spheres):
     np.testing.assert_array_equal(
         np.asarray(force_real_g0(coefficients, False)), np.asarray(coefficients)
     )
+
+
+# -- who may consume the half sphere, and who must say they cannot ------------
+#
+# ``gamma_storage_is_consumable`` decides what the *SCF* can do with the
+# storage. It says nothing about what happens to the states afterwards, and
+# ``gamma_only`` appeared nowhere in ``hubbard/``, ``projwfc/``, ``tddft/`` or
+# ``basis/sample.py`` -- four consumers summing a half sphere as if it were a
+# whole one, each returning a plausible number about a factor of two out.
+
+
+_GAMMA_HUBBARD = """
+&control
+  calculation = 'scf'
+/
+&system
+  ibrav = 2, celldm(1) = 10.2, nat = 2, ntyp = 1, ecutwfc = 12.0
+  nosym = .true.
+/
+&electrons
+/
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS gamma
+HUBBARD ortho-atomic
+ U Si-3p 2.0
+"""
+
+
+def test_a_hubbard_run_cannot_consume_the_half_sphere():
+    """``ns`` is built from a plain ``<wfcU|psi>`` inside the SCF.
+
+    This is the one of the four that is wrong *before* the run finishes: the
+    Hubbard potential and energy follow the occupations, so the SCF converges
+    silently to a different ground state rather than reporting a bad number at
+    the end. It is therefore a substitution -- run the same cell at an explicit
+    k = 0 -- and not something left to a consumer to refuse.
+    """
+    from defumat.io.pwin import parse_pw_input
+    from defumat.scf.driver import gamma_storage_is_consumable
+    from defumat.system.builder import build_system
+
+    system = build_system(parse_pw_input(_GAMMA_HUBBARD))
+    assert system.kpoints.gamma_only and system.nosym
+    assert system.hubbard is not None
+    assert not gamma_storage_is_consumable(system, ())
+
+    # ... and without the U the same cell keeps the storage, so the test above
+    # is about the U and not about the cell.
+    plain = build_system(parse_pw_input(
+        _GAMMA_HUBBARD.split("HUBBARD")[0]
+    ))
+    assert gamma_storage_is_consumable(plain, ())
+
+
+def test_the_post_scf_consumers_refuse_the_half_sphere_by_name():
+    """The other three are after the run, so a refusal is enough.
+
+    Each has a full-sphere sibling that is an *exact* substitution -- the same
+    cell as an explicit single k-point at the origin -- so the refusal costs a
+    factor of two in storage and nothing in physics.
+    """
+    from defumat.basis.gvectors import refuse_gamma_storage
+
+    refuse_gamma_storage(False, "anything", "on the whole sphere")  # silent
+    with pytest.raises(NotImplementedError, match="2 Re"):
+        refuse_gamma_storage(True, "the projected density of states", "...")
+
+
+@pytest.mark.parametrize("module,function", [
+    ("defumat.projwfc.projections", "atomic_projections"),
+    ("defumat.tddft.chi0", "require_a_sum_over_states_regime"),
+    ("defumat.workflows.transport", "run_vertical_transport"),
+    ("defumat.workflows.stm", "run_stm"),
+])
+def test_each_named_consumer_calls_the_guard(module, function):
+    """A set difference, not a read-through: the four sites are named here so a
+    fifth consumer added later has to be argued about rather than forgotten."""
+    import importlib
+    import inspect
+
+    source = inspect.getsource(getattr(importlib.import_module(module), function))
+    assert "refuse_gamma_storage" in source

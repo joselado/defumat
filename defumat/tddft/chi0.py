@@ -103,6 +103,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
+from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.batching import resolve_k_batch, sum_k
 from defumat.response.velocity import VelocityOperator
 from defumat.units import E2, FPI
@@ -265,6 +266,10 @@ def require_a_sum_over_states_regime(calculation) -> None:
     ``nspin != 1``, noncollinear, spin-orbit
         the kernel acquires spin components (Elk's ``nscfxc``, and a separate
         routine ``tddftsplr.f90``).
+    gamma-only storage
+        the pair densities go through the **full-sphere** ``g_to_r``, and the
+        stored half sphere is not the whole one. See
+        :func:`~defumat.basis.gvectors.refuse_gamma_storage`.
     a reduced k-set
         ``genvchi0`` sums the **full** non-reduced grid, and so does this.
         Symmetrising ``chi_0(G, G')`` on a wedge is a rotation in *two* G
@@ -273,6 +278,14 @@ def require_a_sum_over_states_regime(calculation) -> None:
         does not apply here, because nothing is being symmetrised.
     """
     system = calculation.system
+    refuse_gamma_storage(
+        bool(getattr(calculation, "gamma_only", False)),
+        "a sum-over-states chi_0",
+        "the pair densities are formed by transforming the states with the "
+        "full-sphere g_to_r, so an optical spectrum of a molecule in a box -- "
+        "the archetypal gamma case -- would be built from wrong real-space "
+        "states",
+    )
     if calculation.is_ultrasoft or calculation.is_paw:
         raise NotImplementedError(
             "a sum-over-states chi_0 with an ultrasoft or PAW pseudopotential "

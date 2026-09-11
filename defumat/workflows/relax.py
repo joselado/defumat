@@ -151,6 +151,42 @@ class RelaxResult:
         return ax
 
 
+#: The ``&electrons`` options a relaxation's *inner* SCF wants, and which
+#: ``Calculator._defaults_for`` cannot pass unless the entry point names them.
+#:
+#: Every one of these is adopted from the input file's own ``&electrons``
+#: namelist by :func:`~defumat.calculator.electrons_defaults`, and every one was
+#: then discarded on the way into a relaxation: ``_defaults_for`` filters
+#: strictly by *named parameter*, and a ``**scf_options`` in the signature is
+#: not permission to pass everything (there are response entry points that would
+#: raise on ``nbnd``). So the three relaxation drivers named ``conv_thr`` and
+#: the two mixing knobs, and silently dropped the rest -- every SCF inside a
+#: relaxation ran at the default 100 iterations, with loose empty states and no
+#: fixed-``ns`` warm-up, whatever the input asked for. On a DFT+U relaxation the
+#: dropped ``mixing_fixed_ns`` decides which minimum of the +U functional the
+#: run lands in, so the relaxed *geometry* can differ with nothing saying the
+#: request was ignored.
+#:
+#: They are declared ``None`` rather than repeating
+#: :func:`~defumat.scf.driver.run_scf`'s own defaults, so that "not given" stays
+#: distinguishable from "given the default" and the two cannot drift apart.
+SCF_LOOP_OPTIONS = (
+    "max_iterations", "david", "diago_full_acc", "mixing_fixed_ns",
+    "scf_solver", "scf_solver_options",
+)
+
+
+def _scf_loop_options(scf_options: dict, **named) -> dict:
+    """``scf_options`` plus whichever of :data:`SCF_LOOP_OPTIONS` was given.
+
+    An option left at ``None`` is absent from the result, so ``run_scf`` keeps
+    deciding it -- the same rule :func:`~defumat.calculator.electrons_defaults`
+    follows one layer up.
+    """
+    given = {name: value for name, value in named.items() if value is not None}
+    return {**given, **scf_options}
+
+
 def run_relax(
     system: System,
     pseudos: tuple,
@@ -172,6 +208,14 @@ def run_relax(
     resume: bool = True,
     on_step=None,
     verbose: bool = False,
+    # See :data:`SCF_LOOP_OPTIONS`. Named rather than left to ``scf_options``
+    # so that the facade can forward them.
+    max_iterations: int | None = None,
+    david: int | None = None,
+    diago_full_acc: bool | None = None,
+    mixing_fixed_ns: int | None = None,
+    scf_solver: str | None = None,
+    scf_solver_options: dict | None = None,
     **scf_options,
 ) -> RelaxResult:
     """Relax the atomic positions at fixed cell.
@@ -252,6 +296,11 @@ def run_relax(
     upscale = settings.upscale
     free = system.structure.free
     starting_threshold = conv_thr
+    scf_options = _scf_loop_options(
+        scf_options, max_iterations=max_iterations, david=david,
+        diago_full_acc=diago_full_acc, mixing_fixed_ns=mixing_fixed_ns,
+        scf_solver=scf_solver, scf_solver_options=scf_solver_options,
+    )
     threshold = conv_thr
     steps: list[RelaxStep] = []
     density = becsum = None

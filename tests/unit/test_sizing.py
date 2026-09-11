@@ -335,3 +335,39 @@ def test_k_batch_is_resolved_the_way_the_run_would_resolve_it(pseudo_dir):
     expected = resolve_k_batch("default")
     if expected is not None:
         assert estimate.k_batch == min(expected, estimate.nk)
+
+
+def test_the_peak_never_falls_below_the_floor_it_supersedes(pseudo_dir):
+    """The eigensolver's buffer stands in for two Davidson lines, so it has to
+    be at least as large as they are -- at every point on the k-batch dial.
+
+    It carries ``k_batch`` because those two do: the buffer was fitted one
+    k-point at a time and ``davidson_eigensolver_all`` ``vmap``s that chunk over
+    the whole batch. Without the factor the estimate reported a *smaller* peak
+    for the end of the dial that actually holds ``nk`` subspaces -- a green
+    light for the larger calculation, which is this module's own stated error
+    inverted.
+    """
+    calculator = _calculator(SILICON, pseudo_dir)
+    whole_axis = estimate_size(calculator.system, calculator.pseudos, k_batch=None)
+    assert whole_axis.k_batch == whole_axis.nk > 1
+
+    superseded = sum(
+        whole_axis.arrays[name] for name in whole_axis._SUPERSEDED
+    )
+    assert whole_axis.eigensolver_buffer >= superseded
+
+
+def test_the_peak_grows_with_the_k_batch(pseudo_dir):
+    """More k-points in flight is more memory, monotonically.
+
+    The dial exists to trade memory for batching, so an estimate that reports
+    the trade backwards is worse than no estimate: it says the accelerator end
+    is the cheap one.
+    """
+    calculator = _calculator(SILICON, pseudo_dir)
+    one = estimate_size(calculator.system, calculator.pseudos, k_batch=1)
+    whole = estimate_size(calculator.system, calculator.pseudos, k_batch=None)
+    assert whole.nk > 1
+    assert whole.peak_bytes > one.peak_bytes
+    assert whole.eigensolver_buffer == whole.nk * one.eigensolver_buffer

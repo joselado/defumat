@@ -565,16 +565,45 @@ def _average_degenerate(wg: jnp.ndarray, eigenvalues: jnp.ndarray) -> jnp.ndarra
     """Share the weight of degenerate bands equally (``opt_tetra_weights_only``).
 
     Kawamura's weights are not symmetric between two bands that cross inside a
-    tetrahedron, so QE averages over each degenerate group afterwards. Its own
-    version is a sequential scan that compares every band to the *first* of the
-    group it is building; this one is the symmetric equivalent -- each band takes
-    the mean over every band within ``1e-6`` Ry of it. The two agree whenever the
-    relation is transitive, which at that tolerance it is unless a band structure
-    is degenerate in a chain, and the operation is weight-preserving either way,
-    so nothing downstream can see the difference.
+    tetrahedron, so QE averages over each degenerate group afterwards. **It is
+    QE's own sequential scan and not the symmetric equivalent**, and the
+    difference is not cosmetic.
+
+    The scan walks the (sorted) bands and compares each to the *first* of the
+    group it is building, which makes the grouping a genuine partition: the
+    average is then a block-diagonal one and conserves weight exactly, because
+    each block of size ``d`` contributes ``d`` terms of ``1/d``.
+
+    What stood here was ``w'_i = sum_j S_ij w_j / sum_j S_ij`` with ``S`` the
+    symmetric "within 1e-6 Ry" matrix, and its docstring claimed the two were
+    "weight-preserving either way". They are not. Weight is preserved only if
+    ``sum_i S_ij / d_i = 1`` for every column ``j``; for a block relation that
+    is ``sum_{i in block} 1/|block| = 1``, and for a **chain** it fails --
+    three bands with ``a ~ b``, ``b ~ c``, ``a !~ c`` give ``d = (2, 3, 2)``
+    and column ``b`` sums to ``1/2 + 1/3 + 1/2 = 4/3``. So after the Fermi level
+    had been bisected to give exactly ``nelec``, the weights returned summed to
+    something else and ``sum_band`` built a **charged cell**, with no error and
+    no message.
+
+    It needs bands dense near ``E_F`` -- a metal slab, or a large supercell.
+    Silicon cannot show it: an insulator with exact degeneracies, where the
+    symmetric form and the block form coincide.
     """
-    same = jnp.abs(eigenvalues[:, :, None] - eigenvalues[:, None, :]) < _BAND_DEGENERATE
-    same = same.astype(wg.dtype)
+    # The scan is over the band axis with the k axis carried, so it compiles
+    # once at a static ``nbnd`` and holds no dynamic shape. ``eigenvalues``
+    # arrives sorted ascending (the eigensolver's order, which is also what
+    # ``tetra.f90``'s scan assumes), so a group is a contiguous run of bands.
+    def step(carry, level):
+        first = carry
+        starts = jnp.abs(level - first) >= _BAND_DEGENERATE
+        return jnp.where(starts, level, first), starts
+
+    _, breaks = jax.lax.scan(
+        step, eigenvalues[:, 0], jnp.swapaxes(eigenvalues, 0, 1)
+    )  # (nbnd, nk) -- True where a band opens a new group
+    group = jnp.cumsum(jnp.swapaxes(breaks, 0, 1).astype(jnp.int32), axis=-1)
+
+    same = (group[:, :, None] == group[:, None, :]).astype(wg.dtype)
     return jnp.einsum("kij,kj->ki", same, wg) / jnp.sum(same, axis=-1)
 
 

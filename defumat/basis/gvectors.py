@@ -26,7 +26,7 @@ import numpy as np
 from defumat.basis.fftgrid import fft_grid_dimensions, gcut_from_ecut
 from defumat.system.cell import Cell
 
-__all__ = ["GVectors", "generate_gvectors", "modulus"]
+__all__ = ["GVectors", "generate_gvectors", "modulus", "refuse_gamma_storage"]
 
 
 class GVectors(eqx.Module):
@@ -201,3 +201,37 @@ def _half_sphere(miller: np.ndarray) -> np.ndarray:
     """
     i, j, k = miller[:, 0], miller[:, 1], miller[:, 2]
     return (i > 0) | ((i == 0) & (j > 0)) | ((i == 0) & (j == 0) & (k >= 0))
+
+
+def refuse_gamma_storage(gamma_only: bool, quantity: str, detail: str) -> None:
+    """Stop a consumer that would sum a half sphere as if it were a whole one.
+
+    ``K_POINTS gamma`` stores one plane wave of each ``(G, -G)`` pair, so every
+    plane-wave sum over the stored list is **half** the sum it looks like:
+    the rule is ``2 Re(sum)`` minus the ``G = 0`` term, and exactly three places
+    in this package carry it (:func:`g_to_r_gamma`, ``gamma_inner``/
+    ``calbec_gamma``, and ``force_real_g0``). A consumer that does not is not
+    wrong by a little -- a Loewdin charge comes out at roughly a quarter of its
+    value, and a real-space wavefunction loses the conjugate half and gains a
+    spurious imaginary part.
+
+    The gate on the *storage* (``gamma_storage_is_consumable``) asks only what
+    the SCF can do with it and says nothing about what happens to the states
+    afterwards, so each post-SCF consumer answers for itself. Refusing is the
+    honest first move; carrying the rule is the feature.
+
+    The escape is exact rather than approximate, and it is the same one
+    ``_without_gamma_storage`` documents: run the cell at an explicit ``k = 0``
+    (``K_POINTS automatic, 1 1 1 0 0 0``). Same physics, twice the plane waves.
+    """
+    if not gamma_only:
+        return
+    raise NotImplementedError(
+        f"{quantity} is not implemented for gamma-only storage (K_POINTS "
+        f"gamma): {detail}. Only half of each (G, -G) pair is stored, so a "
+        "plane-wave sum over the stored list must be 2 Re(sum) minus the G = 0 "
+        "term, and this one is not -- it would return a plausible number that "
+        "is wrong by about a factor of two. Run the same cell with an explicit "
+        "k = 0 (K_POINTS automatic, 1 1 1 0 0 0), which is the same physics on "
+        "the whole sphere"
+    )

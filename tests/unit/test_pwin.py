@@ -182,6 +182,10 @@ K_POINTS gamma
         ("", "assume_isolated = 'martyna-tuckerman'", "assume_isolated"),
         ("", "twochem = .true.", "twochem"),
         ("", "one_atom_occupations = .true.", "one_atom_occupations"),
+        ("", "no_t_rev = .true.", "no_t_rev"),
+        ("", "force_symmorphic = .true.", "force_symmorphic"),
+        ("", "use_all_frac = .true.", "use_all_frac"),
+        ("", "nosym_evc = .true.", "nosym_evc"),
     ],
 )
 def test_physics_this_code_does_not_have_is_refused_not_ignored(
@@ -209,4 +213,22 @@ def test_the_defaults_of_all_seven_are_silent():
     build_system(parse_pw_input(_MINIMAL.format(
         control="tefield = .false., dipfield = .false.",
         system="tot_charge = 0.0, assume_isolated = 'none'",
+    )))
+
+
+def test_the_four_symmetry_switches_are_silent_at_their_defaults():
+    """The four symmetry switches all default to ``.false.`` in QE, so an input
+    that writes the default out longhand must still run.
+
+    They were read by *nothing* in the package before -- ``no_t_rev``,
+    ``force_symmorphic``, ``use_all_frac`` and ``nosym_evc`` had zero
+    occurrences anywhere in ``defumat/`` -- so an input excluding part of the
+    group got its k-mesh reduced with that part anyway.
+    """
+    from defumat.system.builder import build_system
+
+    build_system(parse_pw_input(_MINIMAL.format(
+        control="",
+        system=("no_t_rev = .false., force_symmorphic = .false., "
+                "use_all_frac = .false., nosym_evc = .false."),
     )))

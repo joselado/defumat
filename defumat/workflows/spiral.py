@@ -88,6 +88,7 @@ from defumat.relax import get_ion_dynamics
 from defumat.relax.bfgs import BFGSSettings
 from defumat.scf.driver import Calculation, SCFResult, run_scf
 from defumat.system.builder import System
+from defumat.workflows.relax import _scf_loop_options
 
 __all__ = ["SpiralScan", "run_spiral_scan", "heisenberg_exchange",
            "SpiralRelaxResult", "relax_spiral_q"]
@@ -419,6 +420,13 @@ def relax_spiral_q(
     k_batch: int | None | str = "default",
     warm_start: bool = True,
     verbose: bool = False,
+    # See :data:`~defumat.workflows.relax.SCF_LOOP_OPTIONS`.
+    max_iterations: int | None = None,
+    david: int | None = None,
+    diago_full_acc: bool | None = None,
+    mixing_fixed_ns: int | None = None,
+    scf_solver: str | None = None,
+    scf_solver_options: dict | None = None,
     **scf_options,
 ) -> SpiralRelaxResult:
     """Move ``q`` downhill until ``dE/dq`` vanishes: the ground-state spiral.
@@ -492,6 +500,11 @@ def relax_spiral_q(
         at=bg, energy_thr=etot_conv_thr, grad_thr=grad_conv_thr, settings=settings,
     )
 
+    scf_options = _scf_loop_options(
+        scf_options, max_iterations=max_iterations, david=david,
+        diago_full_acc=diago_full_acc, mixing_fixed_ns=mixing_fixed_ns,
+        scf_solver=scf_solver, scf_solver_options=scf_solver_options,
+    )
     free = np.asarray(free, dtype=float).reshape(1, 3)
     starting_threshold = threshold = conv_thr
     steps: list[SpiralRelaxStep] = []

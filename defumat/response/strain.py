@@ -86,6 +86,7 @@ from defumat.response.sternheimer import (
     SternheimerSolver,
     occupied_counts,
     require_a_sternheimer_regime,
+    _NO_METAL_YET,
 )
 from defumat.response.velocity import over_kpoints
 from defumat.scf.density import becsum as becsum_of
@@ -235,7 +236,12 @@ def strain_response(
     require_a_symmetrisable_response(calculation)
     # Before the generic guard, so that the message names the strain response.
     _require_one_spin_channel(calculation)
-    require_a_sternheimer_regime(calculation)
+    # **A metal is refused here for a different reason than a field is.** An
+    # elastic constant exists for aluminium; a Born effective charge does not
+    # exist for any metal. Left to the default the refusal talked about
+    # epsilon_infinity, which is not the quantity that was asked for and not the
+    # term that is missing.
+    require_a_sternheimer_regime(calculation, metals_missing=_NO_METAL_YET)
 
     weights, _ = calculation.occupations(eigenvalues)
     weights = jnp.asarray(weights)

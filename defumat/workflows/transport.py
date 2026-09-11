@@ -36,6 +36,7 @@ import warnings
 import numpy as np
 
 from defumat.basis.builder import build_basis
+from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.basis.sample import sample_wavefunctions
 from defumat.scf.driver import Calculation
 from defumat.stm.plane import PlotPlane
@@ -162,6 +163,13 @@ def run_vertical_transport(
     Returns a :class:`~defumat.transport.green.VerticalTransport`.
     """
     _refuse_what_has_no_fermi_level(system, result)
+    # A real-space wavefunction from a half sphere loses the conjugate half and
+    # gains a spurious imaginary part, and nothing downstream notices.
+    refuse_gamma_storage(
+        bool(system.kpoints.gamma_only), "the vertical tunnelling transmission",
+        "psi(r) is evaluated as a bare sum over the stored k + G list "
+        "(basis/sample.py)",
+    )
     if method.strip().lower() == "resolvent":
         warnings.warn(
             "method='resolvent' is the exact Landauer denominator and a "
