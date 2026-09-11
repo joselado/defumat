@@ -44,7 +44,8 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
-__all__ = ["save_state", "load_state", "state_fingerprint"]
+__all__ = ["save_state", "load_state", "state_fingerprint",
+           "save_mixer", "load_mixer"]
 
 #: Array-valued fields, stored as their own entries in the ``.npz``. ``None`` is
 #: representable: the key is simply absent.
@@ -63,7 +64,11 @@ _ARRAYS = (
 #: ``magnetization_vector`` a tuple of them.
 _SCALARS = (
     "converged", "iterations", "total_energy", "energy_terms", "fermi_energy",
-    "homo", "lumo", "accuracy", "nspin", "magnetization",
+    # ``ethr`` is loop state rather than a report: ``save_in_electrons.f90``
+    # writes ``iter, dr2, ethr`` because QE's schedule is indexed on the
+    # iteration number, and a resume that re-enters at 1 without it takes the
+    # reset and converges on a different schedule than the one it left.
+    "homo", "lumo", "accuracy", "ethr", "nspin", "magnetization",
     "absolute_magnetization", "fermi_energy_up", "fermi_energy_down",
     "magnetization_vector", "field_energy", "constraint_energy", "field_scale",
     "nspin_mag", "meta_c",
@@ -345,6 +350,106 @@ def load_optimizer(optimizer, path):
         if name != "format":
             setattr(optimizer, name, value)
     return optimizer
+
+
+#: Rebuilt by ``get_mixer`` from ``mixing_mode``/``mixing_beta``, or installed by
+#: the driver because building it needs the G-vectors the mixer does not have.
+#: Everything else on a mixer is evolving state and is written.
+_MIXER_DERIVED = frozenset({
+    "beta", "history", "condition_limit", "precondition",
+})
+
+
+def save_mixer(mixer, path) -> Path:
+    """Write a :class:`~defumat.scf.mixing.Mixer`'s evolving history.
+
+    **This is the half of a restart that is easy to leave out and expensive to
+    get wrong.** A resume that restores only the density hands Anderson an empty
+    history, so the first iterations back are plain mixing and the run pays back
+    the iterations the checkpoint saved -- the same trap P67 solved on the BFGS
+    side, where the assertion is "2 + 4 steps, not 2 + 6".
+
+    ``_densities`` and ``_residuals`` are lists of equal-length one-dimensional
+    arrays, so they stack; a :class:`~defumat.scf.mixing.LinearMixer` has no
+    state at all and writes a file with nothing in it but the format, which is
+    correct rather than a special case. What is *not* written is
+    :data:`_MIXER_DERIVED` -- the settings, which ``get_mixer`` rebuilds, and
+    the preconditioner, which the driver installs because it needs the
+    G-vectors.
+    """
+    path = Path(path)
+    payload, meta = {}, {"format": FORMAT_VERSION}
+    for name, value in vars(mixer).items():
+        if name in _MIXER_DERIVED:
+            continue
+        if isinstance(value, np.ndarray):
+            payload[f"array_{name}"] = value
+        elif isinstance(value, list):
+            # The history. Stacked with its length in the metadata, because an
+            # empty list and a list of empty arrays are different states and
+            # ``np.stack`` cannot tell them apart on the way back.
+            meta[f"len_{name}"] = len(value)
+            for index, entry in enumerate(value):
+                payload[f"list_{name}_{index}"] = np.asarray(entry)
+        elif value is None or isinstance(value, (bool, int, float, str)):
+            meta[name] = value
+        else:
+            raise NotImplementedError(
+                f"the mixer holds {name!r} of type {type(value).__name__}, "
+                "which this checkpoint cannot represent. Add it to "
+                "_MIXER_DERIVED if ``get_mixer`` rebuilds it, or extend this "
+                "function -- dropping it would restart the history silently"
+            )
+    payload["__meta__"] = np.frombuffer(
+        json.dumps(meta).encode("utf-8"), dtype=np.uint8
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    scratch = path.with_suffix(path.suffix + ".partial")
+    np.savez(scratch, **payload)
+    written = (scratch if scratch.suffix.endswith(".npz")
+               else scratch.with_suffix(scratch.suffix + ".npz"))
+    written.replace(path)
+    return path
+
+
+def load_mixer(mixer, path):
+    """Pour a saved history back into a freshly built mixer. Returns it."""
+    path = Path(path)
+    with np.load(path, allow_pickle=False) as handle:
+        meta = json.loads(bytes(handle["__meta__"]).decode("utf-8"))
+        if meta.get("format") != FORMAT_VERSION:
+            raise ValueError(
+                f"{path} is checkpoint format {meta.get('format')}, and this is "
+                f"version {FORMAT_VERSION}"
+            )
+        for key in handle.files:
+            if key.startswith("array_"):
+                setattr(mixer, key[len("array_"):], np.asarray(handle[key]))
+        for key, count in meta.items():
+            if not key.startswith("len_"):
+                continue
+            name = key[len("len_"):]
+            setattr(mixer, name, [
+                np.asarray(handle[f"list_{name}_{index}"])
+                for index in range(int(count))
+            ])
+    for name, value in meta.items():
+        if name != "format" and not name.startswith("len_"):
+            setattr(mixer, name, value)
+    return mixer
+
+
+def unhandled_mixer_fields(mixer) -> set:
+    """Attributes neither stored nor declared derived -- empty, and tested."""
+    stored = set()
+    for name, value in vars(mixer).items():
+        if name in _MIXER_DERIVED:
+            continue
+        if isinstance(value, (np.ndarray, list)) or value is None or isinstance(
+            value, (bool, int, float, str)
+        ):
+            stored.add(name)
+    return set(vars(mixer)) - stored - set(_MIXER_DERIVED)
 
 
 def unhandled_optimizer_fields(optimizer) -> set:

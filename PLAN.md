@@ -12133,6 +12133,89 @@ what the code cannot check. That is the one place in this phase where a refusal 
 sentence rather than a `raise`, and it is written down here so the box is not read as a
 promise the code keeps.
 
+### P76 -- Restarting an SCF from the middle. ✅ DONE.
+
+`defumat/scf/driver.py`, `scf/checkpoint.py`. `run_scf` wrote a state only *after* the
+driver returned, so a job killed at its wall clock lost every iteration it had run.
+**Requested with its cost measured**: the NiBr2 CPU run was cancelled at **7:33:29** having
+completed zero SCF iterations, and a second GPU allocation had to be submitted purely as
+insurance against the first being killed -- two allocations doing one calculation.
+
+`checkpoint_dir`/`checkpoint_every` write the state on a cadence and **resume from the same
+directory**, which is `run_relax`'s contract rather than a new one: a resubmitted sbatch is
+the same command and continues. An explicit `starting_from` still wins over a file on disk.
+
+**Two files, because the mixer is a second object.** `save_mixer`/`load_mixer` sit beside
+`save_optimizer`/`load_optimizer` and are policed by `unhandled_mixer_fields` the same way
+-- a mixer that grows a third piece of state nobody saves would resume with *part* of its
+history, which is wrong rather than slow. `_MIXER_DERIVED` is what `get_mixer` rebuilds plus
+the preconditioner the driver installs. The checkpoint is written **after** `_mix` and before
+the field steps, so the saved density is the next iteration's input and the mixer holds the
+history that belongs to it.
+
+**The write is refused, once and by name, for a run whose field changes between
+iterations.** `save_state` already refuses a state whose `field_scale` is not 1 or that
+carries a `magnetic_field`, so `reducebf` and the fixed-spin-moment feedback are out --
+correctly, since the state's field is then not the input's. The refusal is caught, reported
+and checkpointing is switched off for the rest of the run rather than retried every cadence.
+
+**A restart is three things, and the third is the finding.** The state and the mixer are
+the obvious two. The third is the *loop state* -- `iter`, `dr2` and `ethr` -- which is
+exactly what `save_in_electrons.f90` writes into QE's `restart_scf`, and the reason is
+`next_ethr`: QE's schedule from `electrons.f90` is indexed on the **iteration number**, keeps
+the incoming threshold at iteration 1, resets to `ETHR_INIT` at iteration 2 and only ever
+decreases. A resume that re-enters the loop at 1 with a fresh threshold therefore takes the
+reset and tightens straight to the accuracy it already carries, converging on a **different
+schedule** than the one it left.
+
+Measured before `ethr` was carried, on `pw_scf/scf.in` at `conv_thr = 1e-12`,
+`mixing_beta = 0.25`: **5 + 8 = 13 iterations against 17 uninterrupted.** The resume looked
+*faster*, which is neither a bug nor a saving -- it is two runs meeting a different threshold
+sequence, and at `mixing_beta = 0.2` the same comparison ran the other way, 16 against 13.
+It was read here as "the assertion `OPEN.md` asked for does not hold for an electronic
+loop", and that reading was **wrong**; what did not hold was the implementation. Reading
+`save_in_electrons.f90` is what found it, which is the standing rule doing its job.
+
+**With all three carried the restart is exact**, which is `OPEN.md`'s assertion and P67's
+"2 + 4 steps, not 2 + 6" one level down. Total iterations against uninterrupted, at three
+mixing parameters: **17/17, 13/13, 11/11**, with the converged energies agreeing to
+**1.8e-15 Ry** and one of them to zero. Three parameters rather than one because a single
+one agrees by accident: Anderson's history is not monotonically helpful, and a resume with
+the history deliberately deleted still converged in 11 iterations where the uninterrupted
+run took 13.
+
+**One trap of its own, found by the test.** `next_ethr` must be given the **absolute**
+iteration number. Passing the number relative to the resume re-fires the `ETHR_INIT` reset
+on the second iteration after *every* restart, which throws away the threshold the
+checkpoint was carrying it for -- and the symptom is not an error, it is an iteration count
+that stays stubbornly wrong. A second off-by-one sits beside it: the deadline breaks at the
+*top* of an iteration whose body never ran, so the reported count and the checkpoint must
+both say `iteration - 1` or a resume repeats an iteration.
+
+**Both reference codes do it this way, which is the corroboration.** QE writes `iter, dr2,
+ethr` plus the eigenvalues into `restart_scf` (`save_in_electrons.f90`) and stops on
+`check_stop_now`, itself driven by `max_seconds` or an exit file. Elk's `gndstate.f90:117-123`
+reads back **the mixer work array and the starting loop index** under `mixsave`
+(`readmix`), which is the same three parts reached independently -- the state, the mixer,
+and where in the loop it was. A design both of them converged on is not one to improvise
+around.
+
+**`max_seconds` is QE's `check_stop_now`**, and it is what the wall-clock case actually
+needs: the loop stops *itself* before the scheduler does and writes on the way out, so a
+kill lands after a checkpoint rather than between two. A library cannot install a `SIGTERM`
+handler without changing the host process's behaviour for pytest, notebooks and every other
+caller; a deadline it is told about has no such cost. **At least one iteration always
+runs** -- the loop's arrays do not exist before the first body, so a deadline honoured at
+the top of the first pass would have neither a result to return nor a state to write.
+
+**What is outstanding. The write is not timed.** The payload is the wavefunctions, which `PERFORMANCE.md` sizes at 32 GB on the
+NiBr2 cell -- at `checkpoint_every = 5` on a 5.3 s iteration that is 32 GB every 27 s, and
+whether that is affordable is a measurement nobody has made. The default cadence of 10 is a
+guess until it is. And `max_seconds` is honoured **between** iterations, so a deadline set
+tighter than one iteration's cost overshoots by up to that much -- on the NiBr2 cell at
+5.3 s an iteration that is 5.3 s, and on a cell where one iteration is twenty minutes it is
+twenty minutes. Leave the margin.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.

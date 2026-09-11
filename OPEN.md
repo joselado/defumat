@@ -135,6 +135,22 @@ the trap P67 already solved on the BFGS side and asserted with "2 + 4 steps, not
 iteration `n`, resume, and assert the total iteration count matches the
 uninterrupted run rather than merely that it converges.
 
+> **Done, and the assertion above is exactly right -- but only once `ethr` crosses
+> the file.** `run_scf` takes `checkpoint_dir`/`checkpoint_every` and resumes from
+> the same directory the way `run_relax` does, so a resubmitted sbatch continues
+> rather than starting over. A restart is **three** things, not two: the state,
+> the mixer's history (`save_mixer`/`load_mixer`, policed by
+> `unhandled_mixer_fields`), and the *loop state* -- `iter`, `dr2` and `ethr`,
+> which is precisely what `save_in_electrons.f90` writes. `next_ethr` is indexed
+> on the iteration number, so a resume that re-enters at 1 with a fresh threshold
+> converges on a different schedule: 5 + 8 = **13 iterations against 17
+> uninterrupted** on silicon at `conv_thr = 1e-12`, which looks like a saving and
+> is a different calculation. With all three carried the count is **exact** --
+> 17/17, 13/13, 11/11 at three mixing parameters, energies agreeing to 1.8e-15 Ry.
+> `max_seconds` is QE's `check_stop_now`: the loop stops itself and writes on the
+> way out, so the wall-clock case needs no signal handler.
+> `tests/unit/test_scf_restart.py`.
+
 ---
 
 ## Neither of the first two is P73

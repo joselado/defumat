@@ -111,6 +111,9 @@ SHARED_OPTIONS = frozenset({
     "max_iterations",
     "scf_solver",
     "scf_solver_options",
+    "checkpoint_dir",
+    "checkpoint_every",
+    "mixing_from",
     "verbose",
 })
 
@@ -151,6 +154,13 @@ SCF_ONLY_OPTIONS = frozenset({
     "max_iterations",
     "scf_solver",
     "scf_solver_options",
+    # The SCF's own iteration state reaches disk on a cadence and comes back
+    # through it. A response's inner loop is not restartable and has no such
+    # directory, so forwarding these past ``run_scf`` would name an option that
+    # does nothing -- which is the failure the comment above this set describes.
+    "checkpoint_dir",
+    "checkpoint_every",
+    "mixing_from",
 })
 
 

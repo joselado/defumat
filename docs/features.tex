@@ -647,6 +647,50 @@ inside one atom's sphere (through a \code{LOCAL\_MAGNETIC\_FIELDS} card that
 of the reported total} --- QE prints \code{etcon} and never adds it, and Elk
 excludes its external field's energy by the same convention.
 
+\textbf{Restarting an SCF from the middle} (\code{checkpoint\_dir},
+\code{checkpoint\_every}, \code{max\_seconds}). A job killed at its wall clock
+used to lose every iteration it had run: a state reached disk only after
+\code{run\_scf} returned. It now writes on a cadence and \emph{resumes from the
+same directory}, so a resubmitted batch script is the same command and
+continues.
+
+\begin{lstlisting}[language=Python]
+from defumat import Calculator
+calculator = Calculator.from_file("scf.in", checkpoint_dir="ckpt")
+scf = calculator.get_scf()          # run again after a kill: it continues
+\end{lstlisting}
+
+\emph{A restart is three things}, and the third is the one with no obvious home:
+the state (density, wavefunctions, \code{becsum}, \code{ns}, \code{tau}); the
+\emph{mixer's history}, without which Anderson restarts empty and pays back the
+iterations the checkpoint saved; and the \emph{loop state} --- the iteration
+number, \code{dr2} and the diagonalisation threshold \code{ethr}. That last one
+matters because QE's threshold schedule is indexed on the iteration number, so a
+resume re-entering at iteration 1 with a fresh threshold converges on a different
+schedule than the one it left. With all three carried the restart is exact: on
+silicon at \code{conv\_thr = 1e-12}, stopping and resuming costs the \emph{same}
+total iteration count as an uninterrupted run at three different mixing
+parameters (17/17, 13/13, 11/11), with energies agreeing to $2\times10^{-15}$~Ry.
+Both \qe{} and Elk restart this way, and carry the same three parts.
+
+\code{max\_seconds} lets the loop stop \emph{itself} before the scheduler does,
+writing a checkpoint on the way out, so a wall-clock kill lands after a
+checkpoint rather than between two. It is checked between iterations, so set it
+at least one iteration short of the real limit.
+
+\begin{refuses}
+\textbf{Refused.} Checkpointing is switched off, once and with a message, for a
+run whose field changes between iterations --- Elk's \code{reducebf} and the
+fixed-spin-moment feedback. The state's field is then not the input's, and
+\code{save\_state} will not write a lossy one. \code{checkpoint\_every} must be
+at least 1.
+
+\textbf{Know the cost.} The payload is the wavefunctions, which is tens of
+gigabytes on a large cell, so this is a scratch-directory operation and the
+cadence is a knob rather than every iteration. It has not been timed on a large
+cell; the default of 10 is a guess until it is.
+\end{refuses}
+
 \textbf{A starting magnetic texture} (\code{STARTING\_MOMENTS} card): one
 starting moment per \emph{atom}, cartesian, in Bohr magnetons, one line per atom
 in the order of \code{ATOMIC\_POSITIONS}. QE's \code{starting\_magnetization},

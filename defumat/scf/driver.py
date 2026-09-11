@@ -45,7 +45,9 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import time
 import warnings
+from pathlib import Path
 from dataclasses import dataclass, field
 from functools import partial
 
@@ -775,6 +777,12 @@ class SCFResult:
     lumo: float | None = None
     #: QE's estimated scf accuracy at the last iteration, in Ry.
     accuracy: float | None = None
+    #: The diagonalisation threshold the run ended at. Reported because it is
+    #: **loop state**: ``next_ethr`` is indexed on the iteration number, resets
+    #: to ``ETHR_INIT`` at iteration 2 and only ever decreases, so a restart that
+    #: does not carry it re-enters on a different schedule than the one it left.
+    #: ``save_in_electrons.f90`` writes ``iter, dr2, ethr`` for the same reason.
+    ethr: float | None = None
     nspin: int = 1
     #: ``int (rho_up - rho_dw)`` and ``int |rho_up - rho_dw|``, in Bohr
     #: magnetons per cell -- the two numbers QE prints. ``None`` unpolarized.
@@ -3430,6 +3438,112 @@ def _result_for_stress(calculation, eigenvalues, wg, wavefunctions, rho, terms):
     )
 
 
+#: A mid-SCF checkpoint, and the mixer history that belongs to it. Named apart
+#: from ``run_relax``'s ``scf_state.npz`` on purpose: a relaxation writes a
+#: *converged* state per ionic step, and the two must not overwrite each other
+#: when one directory is given to both.
+SCF_CHECKPOINT = "scf_iteration.npz"
+SCF_MIXER = "scf_mixer.npz"
+
+
+class _InProgressState:
+    """What the loop has, shaped like the part of an ``SCFResult`` a state is.
+
+    :func:`~defumat.scf.checkpoint.save_state` reads its result entirely through
+    ``getattr``, and :func:`~defumat.scf.checkpoint.state_fingerprint` needs only
+    the density, the wavefunctions, the spin regime and ``becsum``. All of that
+    exists inside the iteration loop, so a mid-SCF checkpoint is the **same file
+    format** a converged one writes rather than a second one -- which is what
+    lets a resume come back through ``starting_from`` with no new path.
+
+    ``converged`` is ``False`` and ``iterations`` is how many have run, so a
+    file that is read back says what it is. The fields a finished run reports
+    rather than converges to -- the stress, the solver record, the per-iteration
+    history -- are absent by construction, which is the same choice
+    ``checkpoint._DROPPED`` already makes.
+    """
+
+    def __init__(self, *, density, wavefunctions, eigenvalues, occupations,
+                 becsum, ns, tau, potential, nspin, nspin_mag, iterations,
+                 accuracy, ethr, total_energy, energy_terms, system, field_scale,
+                 fermi_energy=None, magnetization=None,
+                 absolute_magnetization=None, magnetization_vector=None,
+                 meta_c=None):
+        self.density = density
+        self.wavefunctions = wavefunctions
+        self.eigenvalues = eigenvalues
+        self.occupations = occupations
+        self.becsum = tuple(becsum or ())
+        self.ns = ns
+        self.tau = tau
+        self.potential = potential
+        self.potential_change = None
+        self.nspin = nspin
+        self.nspin_mag = nspin_mag
+        self.iterations = iterations
+        self.accuracy = accuracy
+        self.ethr = ethr
+        self.total_energy = total_energy
+        self.energy_terms = energy_terms
+        self.system = system
+        self.field_scale = field_scale
+        self.fermi_energy = fermi_energy
+        self.fermi_energy_up = None
+        self.fermi_energy_down = None
+        self.homo = None
+        self.lumo = None
+        self.magnetization = magnetization
+        self.absolute_magnetization = absolute_magnetization
+        self.magnetization_vector = magnetization_vector
+        self.meta_c = meta_c
+        self.converged = False
+        self.field_energy = None
+        self.constraint_energy = None
+        # In ``checkpoint._REFUSED``: a converged field is not the input field
+        # wherever ``reducebf`` or the fixed-spin-moment scheme changed it, and
+        # a Hubbard setup is what says which atom each slot of ``ns`` belongs
+        # to. Left ``None`` so the refusal fires on the runs that have one.
+        self.magnetic_field = None
+        self.hubbard_setup = None
+
+
+def _write_checkpoint(directory, state, mixer, iteration, verbose):
+    """One checkpoint: the state and the mixer's history, beside each other.
+
+    **Both, or neither is worth writing.** A resume that restores the density
+    and restarts Anderson with an empty history pays back the iterations it
+    saved, so the mixer file is not an optional extra -- it is half of what a
+    restart *is*.
+
+    The write is the wavefunctions, which dominate the file and are tens of
+    gigabytes on a large cell, so this is a scratch-directory operation on a
+    cadence and never every iteration. Failures are reported and do not stop the
+    run: a full disk should cost the checkpoint, not the calculation that has
+    been running for six hours.
+    """
+    from defumat.scf.checkpoint import save_mixer, save_state
+
+    directory = Path(directory)
+    try:
+        save_state(state, directory / SCF_CHECKPOINT)
+        save_mixer(mixer, directory / SCF_MIXER)
+    except NotImplementedError as refused:
+        # ``reducebf`` and the fixed-spin-moment feedback change the field
+        # between iterations, and ``save_state`` refuses to write a state whose
+        # field is not the input's rather than write a lossy one. Say it once
+        # and stop trying, instead of once per cadence for the rest of the run.
+        if verbose:
+            print(f"  checkpointing is off for this run: {refused}")
+        return False
+    except OSError as failure:
+        if verbose:
+            print(f"  checkpoint at iteration {iteration} failed: {failure}")
+        return True
+    if verbose:
+        print(f"  checkpoint written at iteration {iteration} -> {directory}")
+    return True
+
+
 def _solve_residual(
     calculation, system, nbnd, rho, becsum_, ns_, conv_thr,
     scf_solver, options, mixing_beta, verbose, tau_=None,
@@ -3576,6 +3690,10 @@ def run_scf(
     tstress: bool | None = None,
     scf_solver: str = "mixing",
     scf_solver_options: dict | None = None,
+    checkpoint_dir=None,
+    checkpoint_every: int = 10,
+    mixing_from=None,
+    max_seconds: float | None = None,
 ) -> SCFResult:
     """Run the self-consistent field loop to convergence.
 
@@ -3627,6 +3745,19 @@ def run_scf(
     magnetic run started from a non-magnetic one can leave the symmetric
     solution at all.
 
+    ``checkpoint_dir`` writes the run's state and its **mixer history** every
+    ``checkpoint_every`` iterations, so a job killed at its wall clock loses at
+    most that many rather than all of them. Resume with
+    ``starting_from=load_state(dir / "scf-state.npz", system=..., calculation=...)``
+    and ``mixing_from=dir``, which is what carries the history: a resume that
+    restores only the density restarts Anderson empty and pays back the
+    iterations it saved. **The write is the wavefunctions**, tens of gigabytes
+    on a large cell, so the interval is a knob and not every iteration -- and it
+    is a scratch-directory operation. Refused, once and by name, for a run whose
+    field changes between iterations (``reducebf``, a fixed spin moment): the
+    state's field is then not the input's and ``save_state`` will not write a
+    lossy one.
+
     ``starting_ns`` also decides *which* self-consistent solution a DFT+U run
     finds, which ``starting_density`` alone does not: ``init_ns`` fills the
     occupation matrix diagonally by **Hund's rule**, so the default start is
@@ -3677,6 +3808,32 @@ def run_scf(
         noncolin=system.noncolin,
     )
 
+    # The loop state a resume re-enters with -- ``iter``, ``dr2``, ``ethr``. Set
+    # only by the checkpoint path: an explicit ``starting_from`` is a *different
+    # run's* converged state, whose iteration count and threshold say nothing
+    # about this one's schedule.
+    resumed_state = None
+    # ``run_relax(checkpoint_dir=...)`` resumes from its own directory rather
+    # than making the caller wire the state back by hand, and an sbatch that is
+    # resubmitted after a wall-clock kill wants exactly that: the same command,
+    # which continues if there is something to continue from. Explicit
+    # ``starting_from`` wins -- an argument the caller passed is not something
+    # to second-guess.
+    if (checkpoint_dir is not None and starting_from is None
+            and (Path(checkpoint_dir) / SCF_CHECKPOINT).exists()):
+        from defumat.scf.checkpoint import load_state
+
+        starting_from = load_state(
+            Path(checkpoint_dir) / SCF_CHECKPOINT,
+            system=system, calculation=calculation,
+        )
+        resumed_state = starting_from
+        if mixing_from is None and (Path(checkpoint_dir) / SCF_MIXER).exists():
+            mixing_from = checkpoint_dir
+        if verbose:
+            print(f"  resuming from {checkpoint_dir} at iteration "
+                  f"{getattr(starting_from, 'iterations', '?')}")
+
     if starting_from is not None:
         if any(x is not None for x in (starting_density, starting_becsum,
                                        starting_ns, starting_wavefunctions)):
@@ -3710,7 +3867,25 @@ def run_scf(
         if verbose:
             print(f"  continuing a previous run: {state.description}")
 
+    started_at = time.time()
     mixer = get_mixer(mixing_mode, beta=mixing_beta)
+    # Turned off for the rest of the run the first time a write is refused, so a
+    # ``reducebf`` run says so once rather than once per cadence.
+    checkpointing = checkpoint_dir is not None
+    if checkpointing and checkpoint_every < 1:
+        raise ValueError(
+            f"checkpoint_every = {checkpoint_every} is not a cadence; it is how "
+            "many iterations pass between writes and must be at least 1"
+        )
+    if mixing_from is not None:
+        # Poured into a mixer built the normal way, which is what supplies the
+        # settings ``save_mixer`` deliberately does not store. Same shape as
+        # ``load_optimizer`` on the BFGS side.
+        from defumat.scf.checkpoint import load_mixer
+
+        load_mixer(mixer, Path(mixing_from) / SCF_MIXER)
+        if verbose:
+            print(f"  mixer history restored from {mixing_from}")
     rho = (
         calculation.starting_density() if starting_density is None
         else jnp.asarray(starting_density)
@@ -3848,7 +4023,54 @@ def run_scf(
         else:
             tau_state = _starting_tau(rho, calculation)
 
-    for iteration in range(1, max_iterations + 1):
+    # **QE carries three numbers across a restart, not one.** ``iter``, ``dr2``
+    # and ``ethr`` (``save_in_electrons.f90``), because ``next_ethr`` is indexed
+    # on the iteration *number*: it resets to ``ETHR_INIT`` at iteration 2 and
+    # only ever decreases. A resume that re-enters the loop at 1 with a fresh
+    # threshold therefore converges on a different schedule than the one it
+    # left -- measured at 5 + 8 = 13 iterations against 17 uninterrupted on
+    # silicon, which looks like a saving and is a different calculation.
+    resumed_at = 0
+    if resumed_state is not None:
+        resumed_at = int(getattr(resumed_state, "iterations", 0) or 0)
+        resumed_accuracy = getattr(resumed_state, "accuracy", None)
+        resumed_ethr = getattr(resumed_state, "ethr", None)
+        if resumed_accuracy is not None:
+            accuracy = float(resumed_accuracy)
+        if resumed_ethr is not None:
+            ethr = float(resumed_ethr)
+        if verbose:
+            print(f"  continuing the loop at iteration {resumed_at + 1} with "
+                  f"ethr = {ethr:.2e}, accuracy = {accuracy:.2e}")
+
+    stopped_early = False
+    for iteration in range(resumed_at + 1, resumed_at + max_iterations + 1):
+        # **At least one iteration always runs.** The loop's arrays -- the
+        # eigenvalues, the weights, the wavefunctions -- do not exist before the
+        # first body, so a deadline honoured at the top of the first pass has
+        # nothing to return and nothing to checkpoint. QE can stop there because
+        # ``init_run`` has already allocated; here one iteration is the price of
+        # having a state to write, and a run with no time for one has no time
+        # for a restart either.
+        if (iteration > resumed_at + 1 and max_seconds is not None
+                and time.time() - started_at > max_seconds):
+            # ``check_stop_now`` in ``electrons.f90``: the loop stops itself
+            # before the scheduler does, so the checkpoint below is written
+            # rather than the process killed between two of them. A wall clock
+            # is the one deadline a library can honour without installing a
+            # signal handler and changing the host process's behaviour for
+            # every other caller.
+            stopped_early = True
+            if verbose:
+                print(f"  stopping at iteration {iteration}: max_seconds "
+                      f"({max_seconds:g} s) reached")
+            break
+        # The **absolute** iteration number: ``next_ethr``'s two special cases
+        # are "the first iteration keeps the incoming threshold" and "the second
+        # resets it to ETHR_INIT", and both are properties of the calculation
+        # rather than of this process. Passing the relative number re-fires the
+        # reset on the second iteration after every resume, which throws away
+        # the threshold the checkpoint was carrying it for.
         ethr = next_ethr(ethr, accuracy, calculation.nelec, iteration)
 
         potential = calculation.potential(rho, field_scale, field, tau=tau_state)
@@ -4136,6 +4358,32 @@ def run_scf(
             ns_state if calculation.is_hubbard else None,
             ns_out if calculation.is_hubbard else None,
         )
+        # **After the mix, before the field steps.** The saved ``rho`` is the
+        # next iteration's *input* and the mixer holds the history that belongs
+        # to it, so a resume re-enters exactly where this iteration left -- which
+        # is the whole difference between a restart that costs nothing and one
+        # that pays back the iterations it saved. Checkpointing before the mix
+        # would save a density the mixer's history does not match.
+        if checkpointing and iteration % checkpoint_every == 0:
+            checkpointing = _write_checkpoint(
+                checkpoint_dir,
+                _InProgressState(
+                    density=rho, wavefunctions=wavefunctions,
+                    eigenvalues=eigenvalues, occupations=wg,
+                    becsum=becsum_state, ns=ns_state, tau=tau_state,
+                    potential=potential.v_scf,
+                    nspin=calculation.nspin, nspin_mag=calculation.nspin_mag,
+                    iterations=iteration, accuracy=float(accuracy),
+                    ethr=float(ethr),
+                    total_energy=float(total), energy_terms=dict(terms),
+                    system=calculation.system, field_scale=float(field_scale),
+                    magnetization=None if magnetization is None else magnetization[0],
+                    absolute_magnetization=(
+                        None if magnetization is None else magnetization[1]),
+                    magnetization_vector=moment,
+                ),
+                mixer, iteration, verbose,
+            )
         if field is not None:
             # ``reducebf`` (Elk 5.104), and the fixed-spin-moment feedback, both
             # act between iterations -- after the density is mixed and before
@@ -4153,6 +4401,39 @@ def run_scf(
                 # the next field than the atomic guess, and the field moves by
                 # less each time.
                 field = field.feedback(rho_out, calculation.system.cell)
+
+    # ``iteration > resumed_at + 1`` is "at least one iteration body ran": a
+    # deadline already past when the loop is entered leaves no state to write,
+    # and the loop's arrays do not exist yet.
+    # The deadline breaks at the *top* of an iteration whose body never ran, so
+    # what the run completed is one fewer. Everything downstream -- the reported
+    # count, the checkpoint a resume re-enters from -- must say the same number,
+    # or a resume repeats an iteration or skips one.
+    completed = iteration - 1 if stopped_early else iteration
+    if checkpointing and not converged:
+        # **Any** unconverged exit, not only the deadline: a run that stops at
+        # ``max_iterations`` between two cadence boundaries has a perfectly good
+        # state and is exactly the "continue it later" case. Writing only on the
+        # cadence made ``max_iterations = 3`` with the default ``every = 10``
+        # leave an empty directory, and the next run started over in silence.
+        # A converged run does not need one -- the caller has the result.
+        _write_checkpoint(
+            checkpoint_dir,
+            _InProgressState(
+                density=rho, wavefunctions=wavefunctions, eigenvalues=eigenvalues,
+                occupations=wg, becsum=becsum_state, ns=ns_state, tau=tau_state,
+                potential=potential.v_scf, nspin=calculation.nspin,
+                nspin_mag=calculation.nspin_mag, iterations=completed,
+                accuracy=float(accuracy), ethr=float(ethr),
+                total_energy=float(total), energy_terms=dict(terms),
+                system=calculation.system, field_scale=float(field_scale),
+                magnetization=None if magnetization is None else magnetization[0],
+                absolute_magnetization=(
+                    None if magnetization is None else magnetization[1]),
+                magnetization_vector=moment,
+            ),
+            mixer, completed, verbose,
+        )
 
     nspin = calculation.nspin
     stress = None
@@ -4197,7 +4478,9 @@ def run_scf(
 
     return SCFResult(
         converged=converged,
-        iterations=iteration,
+        # Absolute across a resume, which is what the next one re-enters with.
+        iterations=completed,
+        ethr=float(ethr),
         total_energy=total,
         energy_terms=terms,
         # The spin axis is dropped when there is only one channel: an
