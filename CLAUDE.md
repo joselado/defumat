@@ -486,8 +486,14 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   (`atomic direction`) constrains `m_z/|m|` alone, so it is exactly satisfied by every
   in-plane texture, helix and collinear alike. The answer is to **test that the guard
   fires** -- feed it a case that must trip it -- rather than to read a clean zero as a
-  pass. Its sibling is an explanation that *fits* a number and is accepted because it fits.
-  (The NiBr2 helix runs, 2026-09-10/11.)
+  pass. It has two siblings, both from the same day: an explanation that *fits* a number and
+  is accepted because it fits; and a correction that is **right about a level and is allowed
+  to discharge an observation about a trend** -- `int|m|` was shown to be the wrong absolute
+  quantity (a vector-norm integral loses weight at the nodes a collinear state has and a
+  spiral does not), which retired "the moments are inflating" without touching the separate
+  fact that the number was still *climbing* at iteration 77. A constant cannot explain a
+  derivative, and the arithmetic said the node effect covered 0.47 of a 3.2 excess in any
+  case. (The NiBr2 helix runs, 2026-09-10/11.)
 
 ## Non-negotiable conventions
 
