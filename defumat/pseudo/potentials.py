@@ -65,7 +65,10 @@ def _weighted_structure_factors(structure, cell, gvectors, weights) -> jnp.ndarr
     this with the same per-species radial transforms and the result is
     ``sum_a w_a rho^at_{t(a)}(G) e^{-iG.tau_a}``.
     """
-    membership = _membership(structure) * jnp.asarray(weights, dtype=float)[None, :]
+    # No dtype literal: ``_membership`` is the real mask and the product follows
+    # it, so the phase sum's precision stays the one the G vectors and the
+    # positions set rather than one written down here.
+    membership = _membership(structure) * jnp.asarray(weights)[None, :]
     return _structure_factors_at(
         gvectors.cartesian(cell), structure.positions, membership
     )

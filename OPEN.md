@@ -11,7 +11,22 @@ P73 section, under "Three test failures were seen while validating this phase".
 
 **Part II** is the sweep of **2026-09-11** -- eight read-only agents over the package,
 28 findings, ranked by what a wrong answer costs rather than by what it costs to fix.
-Nothing in Part II has been acted on.
+
+**Status, 2026-09-11 (later the same day).** Sixteen entries are closed, each with a
+test that was checked to fail against the old code: **A1, A3, A4, A5, A6, A7, A8, A9,
+A10, B2, D2, E1, E2, F1, F2, F3**, together with Part I item 1 and its two siblings
+C2/C3. What is left is A2, B1, B3, C1, D1, D3, E3 and Part I item 2 -- the entries
+whose *test* is expensive rather than whose fix is. Each closed entry is marked
+**[closed]** below with what the fix turned out to be, because two of them turned out
+not to be what the sweep predicted.
+
+**Two corrections to the sweep itself, both worth more than the fixes.** A8 is a
+**measured null**: JAX 0.11.1's complex `abs` has a finite derivative at exactly zero, so
+`abs(rho_g)**2` was never the NaN predicted -- the expression was changed anyway, being
+the package's convention, and the test now records which it was. And the ranking in this
+file is by *cost of a wrong answer*; the order the entries were actually worked in is by
+*quickness and testability*, which puts A1 and A2 -- the top two here -- in the middle
+and at the end respectively.
 
 ---
 
@@ -191,7 +206,16 @@ one, the same rule `GAPS.md` states.
 The class this project weights highest, because a wrong number that looks right is
 worse than a crash. Ranked.
 
-### A1. `STARTING_MOMENTS` starts no moments **[opened here]**
+### A1. `STARTING_MOMENTS` starts no moments **[closed 2026-09-11]**
+
+> Both halves. `domag` is now `System.is_magnetic`, which reads `local_moments`
+> (the card already folded in) and the `LOCAL_MAGNETIC_FIELDS` card -- the same
+> rule the k-point reduction and the symmetry group were already using, which is
+> A6. And `starting_charge` takes a per-atom weight, which costs one weighted
+> structure factor and no new radial transform: `_weighted_structure_factors` is
+> `structure_factors` with the atoms *weighted* instead of *counted*, checked
+> against a brute-force `sum_a w_a exp(-iG.tau_a)` to 0.0. Three tests in
+> `tests/unit/test_textured_symmetry.py`, all three verified to fail before.
 
 `defumat/system/builder.py:259` and `scf/driver.py:3005`. `domag` is
 `any(abs(m) > 1e-6 for m in self.starting_magnetization)` -- the per-*species* array.
@@ -246,7 +270,15 @@ finds every site -- run it over `projwfc`, `stm` and `transport` too, since §0 
 topological consumers and this is the response ones, and nobody has checked the third
 group.
 
-### A3. Four post-SCF consumers do full-sphere sums on half-sphere storage **[opened here]**
+### A3. Four post-SCF consumers do full-sphere sums on half-sphere storage **[closed 2026-09-11 -- the refusal half]**
+
+> The honest first move, as this entry proposed. DFT+U is substituted away in
+> `gamma_storage_is_consumable` (it is the one that is wrong *inside* the SCF);
+> the other three refuse by name through `refuse_gamma_storage`. **One thing the
+> entry did not say:** the guard must ask `gamma_storage_is_consumable`, not
+> `kpoints.gamma_only` -- an ultrasoft gamma run has already been substituted to
+> the full sphere, and reading the input's flag would refuse a run whose states
+> are fine. The `2 Re(sum) - G0` rule at the four sites is still open.
 
 `gamma_storage_is_consumable` (`scf/driver.py:584-616`) checks four things --
 `kpoints.gamma_only`, ultrasoft, `nspin == 4` or a spiral, and `nosym`. It says nothing
@@ -281,7 +313,13 @@ cell as `K_POINTS gamma` and as an explicit single k-point at the origin, which
 `_without_gamma_storage` already documents as an *exact* substitution, and the two must
 agree to round-off.
 
-### A4. Four symmetry input variables are read by nothing **[opened here]**
+### A4. Four symmetry input variables are read by nothing **[closed 2026-09-11]**
+
+> Four entries in `_REFUSED_SWITCHES`, which already existed. **Unverified on
+> this machine:** `tests/regression/test_input_sweep.py` sweeps QE's own `pw_*`
+> inputs and expects each to run or to hit a *listed* refusal; if any of them
+> sets one of these four, it needs an entry there. The vendored tree is absent
+> here so that file skips.
 
 `no_t_rev`, `force_symmorphic`, `use_all_frac`, `nosym_evc`: **zero** occurrences
 anywhere in `defumat/`, including `io/`. They parse into the namelist without complaint
@@ -300,7 +338,12 @@ of the group.
 is minutes and is the right first move -- this file's whole rule is that a run which
 starts is a run whose physics is there.
 
-### A5. `sqrt(sum(m**2))` is unguarded in two differentiated paths **[opened here]**
+### A5. `sqrt(sum(m**2))` is unguarded in two differentiated paths **[closed 2026-09-11]**
+
+> Confirmed by measurement: the old form gives `[nan nan nan]` at a bit-exact
+> zero and the new one `[0. 0. 0.]`, with the value unchanged. One function,
+> `xc/functional.safe_modulus`, shared by both sites -- they were the same three
+> lines and the same defect written twice.
 
 `defumat/xc/functional.py:804` and `defumat/paw/gradient.py:191`. Both read
 `modulus = jnp.sqrt(jnp.sum(magnetization**2, axis=0))`, and in `functional.py` the
@@ -319,7 +362,10 @@ no invariant axial vector (`m + (-m)` with ±1 rotation entries is exact), and a
 region where the density underflows. **How to know it worked** is therefore a *test*
 that forces the zero rather than a run that happens not to hit it.
 
-### A6. Three different rules for "is this run magnetic"
+### A6. Three different rules for "is this run magnetic" **[closed 2026-09-11]**
+
+> `System.is_magnetic`, used by `domag`, `_respin_kpoints`, `_recelled_kpoints`
+> and `build_system`. Closed together with A1, which is the same defect.
 
 `defumat/system/builder.py:586`, and four call sites. The consequence named is that the
 SCF can symmetrise the density with a larger group than the one its k-set was reduced
@@ -330,7 +376,10 @@ of the three rules.
 **What to write.** One property on `System`, the way `nspin`/`npol`/`nspin_mag` are
 already exposed so no call site recomputes the rule.
 
-### A7. The Broyden mixer packs `ns` complex and unpacks it on a hardcoded dtype test
+### A7. The Broyden mixer packs `ns` complex and unpacks it on a hardcoded dtype test **[closed 2026-09-11]**
+
+> *PLAUSIBLE* resolved to real: three of the four precision cases were wrong, and
+> the parametrised round-trip test fails on the old code for both float32 ones.
 
 `defumat/scf/driver.py:408`. An unconditional `.view(float)` on the way in, a
 `!= np.complex128` test on the way out. In float32 mode a complex `ns` is packed as
@@ -338,7 +387,14 @@ reinterpreted bits and unpacked as real -- silently garbage, not an error. Also 
 hardcoded-dtype violation of the standing convention, which is what makes it findable.
 *PLAUSIBLE: the float32 path was not exercised.*
 
-### A8. The Hartree energy uses the banned `jnp.abs(rho_g) ** 2`
+### A8. The Hartree energy uses the banned `jnp.abs(rho_g) ** 2` **[closed 2026-09-11 -- as a null]**
+
+> *PLAUSIBLE* resolved to **no**. `jnp.abs` of a complex number has a finite
+> derivative at exactly zero in JAX 0.11.1 -- measured as 0 in reverse mode, in
+> forward mode and in the Hessian -- so this was never a NaN. Changed anyway, on
+> the convention; the two agree to 1.9e-16 in the energy and 2.8e-16 in its
+> gradient, and the test asserts the *old* form is finite so it fails if a
+> future JAX changes that rule.
 
 `defumat/scf/potential.py:111`. Every other differentiated site in the package uses
 `Re(conj(rho) rho)`. This is the one term that every force, every stress and every
@@ -347,7 +403,12 @@ is the recorded instance and a structure factor vanishing exactly is what symmet
 arranges on a supercell. *PLAUSIBLE: whether `rho_g` reaches an exact zero was not
 established.* Cheap to change regardless, and the change is a no-op where it is safe.
 
-### A9. The transport band-count diagnostic is rule-D4 basis-dependent
+### A9. The transport band-count diagnostic is rule-D4 basis-dependent **[closed 2026-09-11]**
+
+> The topmost *multiplet*, in the same channel basis the denominator is taken in
+> -- which is also the better diagnostic, since a truncation at `nbnd` cuts the
+> multiplet rather than one member of it. The test rotates a degenerate top pair
+> by a random unitary and asserts the old form moves by more than 1e-3.
 
 `defumat/workflows/transport.py:448`. `band_edge_weight` is built from the raw diagonal
 of the single topmost band, so it is basis-dependent whenever that band sits in a
@@ -355,7 +416,11 @@ degenerate multiplet -- and it is divided by a denominator taken in a different
 (channel) basis. The check that certifies the truncation is itself the thing rule D4
 says cannot be trusted band by band. Take the multiplet block average.
 
-### A10. `get_relax` drops every `&electrons` option it adopted
+### A10. `get_relax` drops every `&electrons` option it adopted **[closed 2026-09-11]**
+
+> Six options named in all three relaxation drivers, `None`-defaulted so that
+> "not given" stays distinguishable from "given the default" and `run_scf`'s own
+> numbers are not repeated. A signature test keeps the set from drifting.
 
 `defumat/calculator.py:671`, and the same for `get_relax(variable_cell=True)` and
 `get_spiral_relaxation`. `electrons_defaults`/`_ELECTRONS_OPTIONS`
@@ -388,7 +453,14 @@ artifact of `conv_thr`.
 to write -- an AHC that moves with the convergence threshold is the failure, and one
 that does not is the pass.
 
-### B2. The tetrahedron degenerate-weight average does not conserve weight **[opened here]**
+### B2. The tetrahedron degenerate-weight average does not conserve weight **[closed 2026-09-11]**
+
+> A `lax.scan` partition -- compare to the *first* of the group, on sorted
+> eigenvalues -- so the average is block-diagonal and conserves weight by
+> construction. Tested on a synthetic chain, with the old symmetric form beside
+> it as the control. **Written from `opt_tetra_weights_only`'s description and
+> not transcribed**, because the vendored tree is absent on this machine; the
+> docstring says so and asks for the check where it is available.
 
 `defumat/scf/tetrahedra.py:576`. `_average_degenerate` builds a symmetric "within 1e-6
 Ry" matrix `S` and returns `w'_i = sum_j S_ij w_j / sum_j S_ij`. Its own docstring says
@@ -474,7 +546,13 @@ because it changes a P14 claim.
 module's own docstring claims the pair densities are bounded by `map_k`. The P74
 template exactly: a documented dial that does not reach the hot path.
 
-### D2. `sizing.py` can report a peak below the floor it just discarded
+### D2. `sizing.py` can report a peak below the floor it just discarded **[closed 2026-09-11]**
+
+> The buffer carries `k_live`, because the fit was taken one k-point at a time
+> (`tools/gpu/davidson_memory.py` defaults `--k-batch` to 1) and
+> `davidson_eigensolver_all` holds `k_batch` of those at once. Two assertions,
+> neither needing an SCF: the buffer is never below the floor it supersedes, and
+> the peak grows with the batch.
 
 `defumat/sizing.py:619`. `eigensolver_buffer` carries no `k_live` factor, yet
 `peak_bytes` uses it to **supersede** the two Davidson `arrays` lines that do. At
@@ -499,7 +577,14 @@ loop.
 
 ## E. Incompatibilities worth building, with the missing term named
 
-### E1. The piezoelectric tensor on ultrasoft -- the blocker is a case, and the case exists
+### E1. The piezoelectric tensor on ultrasoft -- the blocker is a case, and the case exists **[closed 2026-09-11]**
+
+> Scoped as the entry's caveat implies: the *dataset* claim is demolished and the
+> refusal now names the real term (`dbecsum`'s strain piece from a cell-dependent
+> `Q_ij(r)`, which `response/strain.py` refuses ultrasoft for). The missing twenty
+> lines are `tests/data/qe/alas-piezo.in`, and the test checks the cell really is
+> ultrasoft, non-polar and non-centrosymmetric (Td, 24 operations, no inversion).
+> Running the piezo tests on it is tier 3, and waits on that term.
 
 `defumat/response/piezo.py:258`. The refusal says "every ultrasoft and PAW case
 committed here is a centrosymmetric crystal", and `PLAN.md`'s outstanding index repeats
@@ -516,7 +601,11 @@ they are stopped upstream by the noncollinear branch of
 that those two files run today. The missing ingredient is a nonmagnetic AlAs scf input
 of about twenty lines, after which the existing piezo tests apply.
 
-### E2. The elastic constants of a metal, refused with a reason about a different quantity
+### E2. The elastic constants of a metal, refused with a reason about a different quantity **[closed 2026-09-11 -- the message half]**
+
+> `require_a_sternheimer_regime` takes a `metals_missing` reason, defaulting to
+> the epsilon_infinity one and overridden by the strain response with the
+> Fermi-level-shift one. The `ef_shift` term itself is still open.
 
 `defumat/response/strain.py:238` is a bare `require_a_sternheimer_regime(calculation)`
 with no `metals=True`, where the sibling perturbation passes it -- **[opened here]**
@@ -550,7 +639,7 @@ lists** -- it is the residue P69 left behind.
 
 ---
 
-## F. Three records that are wrong and mislead the next session
+## F. Three records that are wrong and mislead the next session **[all closed 2026-09-11]**
 
 Each is minutes, and each is the kind of error that costs a phase: a stale refusal reads
 as a closed question.
