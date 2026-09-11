@@ -647,6 +647,68 @@ inside one atom's sphere (through a \code{LOCAL\_MAGNETIC\_FIELDS} card that
 of the reported total} --- QE prints \code{etcon} and never adds it, and Elk
 excludes its external field's energy by the same convention.
 
+\textbf{A starting magnetic texture} (\code{STARTING\_MOMENTS} card): one
+starting moment per \emph{atom}, cartesian, in Bohr magnetons, one line per atom
+in the order of \code{ATOMIC\_POSITIONS}. QE's \code{starting\_magnetization},
+\code{angle1} and \code{angle2} are per \emph{species}, so a helix, a cycloid or
+a skyrmion cannot be stated in a \code{pw.x} input at all.
+
+\emph{What it actually decides is the symmetry group}, which is why it matters
+more than a starting guess usually does. The magnetic group is filtered by the
+per-atom moments $\mathbf{m}_i$ --- an operation survives only if it maps that
+axial vector field onto itself, possibly followed by time reversal --- and it is
+built from the input, once, never from the converged state. Built from
+per-species values it is a \emph{ferromagnet's} group, which keeps operations a
+texture does not have, and \code{sym\_rho} then averages the texture away a few
+iterations in while the charge converges and \code{dr2} reports nothing.
+
+A per-atom \emph{applied} field is filtered with the moments, together, under one
+choice of time reversal, exactly as Elk's \code{findsym.f90} tests \code{bfcmt0}.
+So a \code{LOCAL\_MAGNETIC\_FIELDS} card that asks for a texture now cuts the
+group by itself and needs no card of its own.
+
+\begin{lstlisting}
+STARTING_MOMENTS
+  0.00000000  1.50000000  0.00000000
+ -0.75000000  1.29903811  0.00000000
+ -1.29903811  0.75000000  0.00000000
+\end{lstlisting}
+
+\textbf{Holding a texture} (\code{constrained\_magnetization = 'atomic
+texture'}) constrains the \emph{full} unit vector of every atom's moment,
+%
+\[
+  E_{\mathrm{con}} = \lambda \sum_i \left(
+    1 - \frac{\mathbf{m}_i \cdot \hat{\mathbf{n}}_i}{|\mathbf{m}_i|} \right),
+\]
+%
+with $\hat{\mathbf{n}}_i$ the normalised \code{STARTING\_MOMENTS} rows. It is not
+one of QE's schemes and has no \code{i\_cons} number. QE's nearest, \code{'atomic
+direction'} (\code{i\_cons = 2}), constrains $m_z/|m|$ --- the polar angle
+\emph{alone} --- so it is exactly satisfied by every texture lying in a plane
+that contains $z$, a helix and a collinear state alike, at zero penalty: it
+cannot hold one, and reports success while failing to.
+
+\begin{refuses}
+\textbf{Refused.} \code{'atomic texture'} needs \code{noncolin = .true.} (a
+collinear moment has no direction beyond its sign) and a
+\code{STARTING\_MOMENTS} card with no zero row (a zero vector carries no
+direction). \code{STARTING\_MOMENTS} itself needs \code{noncolin} for any $x$ or
+$y$ component, the same rule \code{B\_field} and \code{LOCAL\_MAGNETIC\_FIELDS}
+are held to, and one row per atom.
+
+\textbf{Checked, not remembered:} the card above parses through
+\code{build\_system}, reaches \code{system.starting\_moments} unchanged, becomes
+\code{m\_loc} verbatim, and \code{constraint\_targets} returns it normalised ---
+three unit rows.
+
+\textbf{Not covered, and this one is a sentence rather than a \code{raise}:} a
+textured starting \emph{density} handed to \code{run\_scf} by the caller. The symmetry group is decided from the input and
+never from the density, so a texture that reaches the run only that way is
+invisible to the filter and will be symmetrised away. Give the same texture as a
+\code{STARTING\_MOMENTS} card, or set \code{nosym = .true.}
+\end{refuses}
+
 \textbf{DFT+U:} both rotationally-invariant functionals, on \code{atomic},
 \code{ortho-atomic} and \code{norm-atomic} projectors, read from the
 \code{HUBBARD} card. Forces come from differentiating through projectors that

@@ -12067,6 +12067,72 @@ has not been run to convergence, so there is still no defumat number for the phy
 `OPEN.md` item 2 -- `test_spinorbit.py` at 11,088 MB -- was measured with the whole block
 in the box and both fixes should have moved it, unread.
 
+### P75 -- A magnetic texture the symmetry group could not see. ✅ DONE.
+
+`defumat/system/symmetry.py`, `system/builder.py`, `scf/fields.py`. **The bug is that a
+noncollinear run symmetrised away the texture it was asked to compute, and reported
+success.**
+
+**Found from the outside**, on the production run P74 sized: a 45-atom NiBr2 cycloid at 24
+degrees per site, seeded per atom and biased by 45 per-atom fields at Elk's own converged
+`bfcmt`, **unwound to collinear between iterations 3 and 6** and was held there for twenty
+more. The converged Ni moments lie along `+-y` with two domain walls; consecutive angles
+`0.0 0.1 0.1 179.8 ...`; the fifteen directions have singular values `[3.873, 0.0056, 0]`.
+`E = -8925.9786` Ry at `accuracy = 7.55e-07` in 23 iterations -- a clean convergence to the
+wrong state.
+
+**The mechanism, measured rather than reasoned.** `local_moments` builds `m_loc` from
+`starting_magnetization`/`angle1`/`angle2`, which are **per species**, and the magnetic
+group is decided from `m_loc` "and from nothing else ... never from the converged state"
+(its own docstring). Replicating `builder.py`'s four lines against that input gives
+**one** distinct Ni direction, `(0, -0.02, 0)`, and `nsym = 4`. `sym_rho`'s `nspin = 4`
+branch then averages the magnetization over four operations a cycloid does not have. **The
+field cannot prevent it**: the field enters the *potential* and the symmetrisation happens
+to the *density* afterwards. Nothing in the convergence test sees it, because `dr2` is a
+norm over the whole density and the charge converges throughout.
+
+**The fix is Elk's, not a refusal.** `findsym.f90:120-125` rotates `bfcmt0` -- the per-atom
+*field* -- and requires it to map onto itself exactly as the moments must. So
+`magnetic_symmetries` now takes **a sequence** of axial fields on the atoms and keeps an
+operation only if **one** choice of `t_rev` works for all of them; time reversal is a single
+operation on the calculation and cannot flip the moments while leaving the applied field
+alone. `System.axial_fields` exists so the three call sites -- the build, the k-point
+rebuild and `symmetry_group` -- cannot disagree about the group, which is the defect
+`System.local_moments` was already written to prevent one layer down.
+
+On the four-atom test cycloid the group drops from **4 to 1**; a *parallel* per-atom field
+leaves it at 4, which is what says the cut is the texture rather than the card.
+
+**And a texture with no field needs an input that can say one**, so `STARTING_MOMENTS` is a
+new card: one moment per atom, cartesian, in Bohr magnetons, overriding the per-species
+variables in `local_moments` and in `constraint_targets`. `pw.x` has no per-atom starting
+magnetization at all, so nothing is transcribed.
+
+**`constrained_magnetization = 'atomic direction'` cannot hold a texture, and this is
+measured.** QE's `i_cons = 2` constrains `m_z/|m|` -- the polar angle alone -- so on a
+cycloid in the `xy` plane it returns **exactly 0.0** for the helix *and* **exactly 0.0**
+for the collinear state it is meant to exclude. `'atomic texture'` constrains the full unit
+vector, `lambda sum_i (1 - m_i . n_i / |m_i|)`, and gives **0.0** against **4.0** on the
+same pair. It is not a QE scheme and carries no `i_cons` number.
+
+**A latent NaN came out with it.** `_polar_cosine` masked the *result* of `m_z/|m|` while
+leaving `sqrt` seeing a zero, whose derivative is infinite, so `0 * inf` reached the tangent
+and `jax.grad` of the constraint energy returned **NaN** at any site with no moment -- a
+ligand with no induced moment, or vacuum. The energy was finite throughout, which is why it
+survived: the value is right and the derivative is not. The mask belongs on the **argument**
+(`_safe_modulus`), which is P70's lesson in its smallest form.
+
+**What is outstanding.** No notebook: the natural one is a helix that holds, and the cell
+that motivated this has not yet converged to a textured state at any k-mesh -- the run that
+would supply the figure is the open question, not the feature. No timing pair is owed
+(`pw.x` cannot express the input and Elk's counterpart is a different code path, not a
+different speed). And **the filter cannot see a starting *density***: a texture handed to
+`run_scf` by a caller reaches no input variable, so there is nothing to detect and the
+amber box's entry for it is **not an enforced refusal** -- it is the guide telling a reader
+what the code cannot check. That is the one place in this phase where a refusal is a
+sentence rather than a `raise`, and it is written down here so the box is not read as a
+promise the code keeps.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.

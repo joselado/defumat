@@ -75,6 +75,12 @@ CONSTRAINTS = {
     "total": 3,
     "total direction": 6,
     "fsm": -1,
+    # Not QE's, and it has no ``i_cons`` number because ``input.f90`` has no
+    # such scheme. ``atomic direction`` is ``i_cons = 2`` and constrains
+    # ``m_z/|m|`` -- the polar angle *alone* -- so it is exactly satisfied by
+    # every texture lying in a plane containing ``z``, helix and collinear
+    # alike, and cannot hold one. This constrains the full unit vector.
+    "atomic texture": None,
 }
 
 #: Below this moment a direction constraint has nothing to act on, and QE stops
@@ -146,6 +152,7 @@ def constraint_targets(
     fixed_magnetization,
     ntyp: int,
     noncollinear: bool,
+    per_atom=(),
 ) -> np.ndarray:
     """``mcons``: what each constraint compares the moment against (``input.f90``).
 
@@ -168,6 +175,38 @@ def constraint_targets(
     magnitudes = np.zeros(ntyp)
     given = np.asarray(starting_magnetization, dtype=float)
     magnitudes[: len(given)] = given
+
+    # ``STARTING_MOMENTS`` overrides the per-species construction for the two
+    # atom-resolved schemes, and for the same reason it overrides ``m_loc``: a
+    # texture has one direction per *atom* and QE's input cannot say one. The
+    # cell-wide schemes are untouched -- ``fixed_magnetization`` is already a
+    # single vector and has nothing per-atom about it.
+    if constraint == "atomic texture":
+        if not len(per_atom):
+            raise ValueError(
+                "constrained_magnetization = 'atomic texture' needs a "
+                "STARTING_MOMENTS card: it constrains one direction per atom and "
+                "starting_magnetization/angle1/angle2 are per species, so there "
+                "is nothing per-atom for it to aim at"
+            )
+        targets = np.asarray(per_atom, dtype=float).reshape(-1, 3)
+        modulus = np.linalg.norm(targets, axis=-1, keepdims=True)
+        if np.any(modulus <= VANISHING_MOMENT):
+            raise ValueError(
+                "constrained_magnetization = 'atomic texture' with a zero row in "
+                "STARTING_MOMENTS: a zero vector carries no direction. Give every "
+                "atom a direction, or use 'atomic' to constrain magnitudes too"
+            )
+        return targets / modulus
+
+    if len(per_atom) and constraint in ("atomic", "atomic direction"):
+        targets = np.asarray(per_atom, dtype=float).reshape(-1, 3)
+        if constraint == "atomic":
+            return targets if noncollinear else targets[:, 2:3]
+        modulus = np.linalg.norm(targets, axis=-1)
+        safe = np.where(modulus > VANISHING_MOMENT, modulus, 1.0)
+        cosine = np.where(modulus > VANISHING_MOMENT, targets[:, -1] / safe, 0.0)
+        return cosine[:, None]
 
     if constraint == "atomic":
         if not noncollinear:
@@ -288,6 +327,15 @@ class MagneticField(eqx.Module):
         if self.constraint == "atomic":
             difference = self.local_moments(rho_r, cell) - targets
             return self.penalty * jnp.sum(difference**2)
+
+        if self.constraint == "atomic texture":
+            # ``sum_i (1 - m_i . n_i / |m_i|)``, zero when every moment points
+            # where it was asked to and rising with the angle. The full unit
+            # vector, where ``atomic direction`` takes the polar angle alone --
+            # see :data:`CONSTRAINTS`.
+            moments = self.local_moments(rho_r, cell)
+            cosine = _unit_cosine(moments, targets)
+            return self.penalty * jnp.sum(1.0 - cosine)
 
         if self.constraint == "atomic direction":
             moments = self.local_moments(rho_r, cell)
@@ -423,8 +471,35 @@ class MagneticField(eqx.Module):
         return updated
 
 
+def _safe_modulus(moments: jnp.ndarray):
+    """``(|m|, is_there_a_moment)`` with a finite derivative at ``m = 0``.
+
+    ``sqrt`` has an **infinite** derivative at zero, so masking its *result*
+    leaves ``0 * inf`` -- a NaN -- in the tangent however carefully the division
+    afterwards is guarded. The mask has to go on the argument the derivative is
+    taken at, which is the sum of squares, and that is the P70 lesson in its
+    smallest form. A cell with vacuum, or a ligand with no induced moment,
+    reaches this on every gradient.
+    """
+    square = jnp.sum(moments**2, axis=-1)
+    present = square > VANISHING_MOMENT**2
+    return jnp.sqrt(jnp.where(present, square, 1.0)), present
+
+
 def _polar_cosine(moments: jnp.ndarray) -> jnp.ndarray:
     """``m_z / |m|`` per row, zero where there is no moment to take it of."""
-    modulus = jnp.sqrt(jnp.sum(moments**2, axis=-1))
-    safe = jnp.where(modulus > VANISHING_MOMENT, modulus, 1.0)
-    return jnp.where(modulus > VANISHING_MOMENT, moments[..., -1] / safe, 0.0)
+    modulus, present = _safe_modulus(moments)
+    return jnp.where(present, moments[..., -1] / modulus, 0.0)
+
+
+def _unit_cosine(moments: jnp.ndarray, targets: jnp.ndarray) -> jnp.ndarray:
+    """``m . n / |m|`` per row for unit ``n``, and **1** where there is no moment.
+
+    One rather than zero: the penalty is ``sum(1 - cos)``, so a site with nothing
+    to point contributes nothing rather than a full unit of penalty it cannot act
+    on. That is the same choice ``add_bfield`` makes when it stops instead of
+    dividing, written as a value because this expression is differentiated.
+    """
+    modulus, present = _safe_modulus(moments)
+    cosine = jnp.sum(moments * targets, axis=-1) / modulus
+    return jnp.where(present, cosine, 1.0)

@@ -90,6 +90,16 @@ class System(eqx.Module):
     #: solution whenever that is a stationary point, which for a symmetric
     #: crystal it always is.
     starting_magnetization: tuple[float, ...] = eqx.field(static=True, default=())
+    #: The ``STARTING_MOMENTS`` card: one starting moment per atom, cartesian, in
+    #: Bohr magnetons. ``()`` -- the normal case -- means the per-species
+    #: variables above decide. **Not a ``pw.x`` input**: QE has no per-atom
+    #: starting magnetization, so a texture (a helix, a cycloid, a skyrmion)
+    #: cannot be stated in its input at all. What it changes is
+    #: :attr:`local_moments`, and through it the magnetic symmetry group -- which
+    #: is the whole point, since a group built from a per-species ferromagnet
+    #: keeps operations a texture does not have and ``sym_rho`` then averages the
+    #: texture away.
+    starting_moments: tuple = eqx.field(static=True, default=())
     #: ``tot_magnetization``: constrain ``N_up - N_dw`` instead of letting the
     #: two channels share one Fermi level. ``None`` -- QE's -10000 sentinel --
     #: means unconstrained.
@@ -272,8 +282,24 @@ class System(eqx.Module):
         """
         return local_moments(
             self.structure, self.nspin, self.starting_magnetization,
-            self.angle1, self.angle2,
+            self.angle1, self.angle2, per_atom=self.starting_moments,
         )
+
+    @property
+    def axial_fields(self) -> tuple:
+        """Every per-atom axial vector the magnetic symmetry group must respect.
+
+        :attr:`local_moments` and, when there is one, the
+        ``LOCAL_MAGNETIC_FIELDS`` card. Elk's ``findsym.f90`` tests both; a group
+        filtered by the moments alone keeps operations an applied per-atom field
+        breaks, and ``sym_rho`` then averages away the texture that field was
+        applied to create. It lives here for the reason :attr:`local_moments`
+        does -- three call sites need the same rule and must not each invent it.
+        """
+        moments = self.local_moments
+        if not self.atomic_b_field:
+            return moments
+        return (moments, np.asarray(self.atomic_b_field, dtype=float))
 
     def with_soc_scale(self, soc_scale: float) -> "System":
         """The same run with the spin-orbit term scaled by ``soc_scale``.
@@ -460,12 +486,20 @@ class System(eqx.Module):
         if kpoints.path_length is not None or kpoints.gamma_only:
             return kpoints_for_spin(kpoints, nspin)
 
-        moments = local_moments(self.structure, nspin, magnetization, angle1, angle2)
-        magnetic = nspin == 4 and bool(np.any(np.abs(moments) > 1.0e-6))
+        moments = local_moments(
+            self.structure, nspin, magnetization, angle1, angle2,
+            per_atom=self.starting_moments,
+        )
+        fields = np.asarray(self.atomic_b_field, dtype=float)
+        axial = (moments, fields) if self.atomic_b_field else moments
+        magnetic = nspin == 4 and bool(
+            np.any(np.abs(moments) > 1.0e-6)
+            or (fields.size and np.any(np.abs(fields) > 1.0e-12))
+        )
         symmetries = find_symmetries(self.cell, self.structure)
         if magnetic:
             symmetries = magnetic_symmetries(
-                self.cell, self.structure, symmetries, moments
+                self.cell, self.structure, symmetries, axial
             )
         rotations = None if self.nosym else symmetries.rotation_array()
         t_rev = None if self.nosym else symmetries.t_rev_array()
@@ -551,7 +585,7 @@ class System(eqx.Module):
         symmetries = find_symmetries(self.cell, self.structure)
         if self.nspin_mag == 4:
             symmetries = magnetic_symmetries(
-                self.cell, self.structure, symmetries, self.local_moments
+                self.cell, self.structure, symmetries, self.axial_fields
             )
         return symmetries
 
@@ -643,6 +677,27 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
             "the local moment and z, and a collinear moment has no angle. QE "
             "refuses the same combination in add_bfield.f90"
         )
+    if constrained_magnetization == "atomic texture" and nspin != 4:
+        # Not a QE refusal because it is not a QE scheme: the constrained
+        # quantity is a full unit vector per atom, and a collinear moment has
+        # only a sign.
+        raise ValueError(
+            "constrained_magnetization = 'atomic texture' requires "
+            "noncolin = .true.: it constrains the direction of each atom's "
+            "moment as a vector, and a collinear moment has no direction to "
+            "constrain beyond its sign"
+        )
+    if (constrained_magnetization == "atomic texture"
+            and not _starting_moments(pwin, structure.nat)):
+        # At the input boundary rather than where the targets are built: an
+        # input that cannot work should not allocate first. ``constraint_targets``
+        # refuses it again for a caller that reaches it directly.
+        raise ValueError(
+            "constrained_magnetization = 'atomic texture' needs a "
+            "STARTING_MOMENTS card: it constrains one direction per atom, and "
+            "starting_magnetization/angle1/angle2 are per species, so there is "
+            "nothing per-atom for it to aim at"
+        )
     if constrained_magnetization == "total" and nspin != 4:
         raise ValueError(
             "constrained_magnetization = 'total' requires noncolin = .true.: "
@@ -691,7 +746,9 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
             "tot_magnetization or constrained_magnetization. QE stops on the "
             "same input"
         )
-    if constrained_magnetization in ("atomic", "atomic direction") and not given_magnetization:
+    if (constrained_magnetization in ("atomic", "atomic direction")
+            and not given_magnetization
+            and not _starting_moments(pwin, structure.nat)):
         # ``input.f90``: "constrained atomic magnetizations require that some
         # starting_magnetization is set". The targets *are* built from it.
         raise ValueError(
@@ -757,11 +814,28 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     # through ``run_scf`` -- so what is read is the input's own value.
     tstress = _logical(pwin.get("control", "tstress", False))
     spiral_q = _spiral_q(pwin, nspin, lspinorb, nosym)
-    moments = local_moments(structure, nspin, starting_magnetization, angle1, angle2)
-    magnetic = nspin == 4 and bool(np.any(np.abs(moments) > 1.0e-6))
+    starting_moments = _starting_moments(pwin, structure.nat)
+    moments = local_moments(
+        structure, nspin, starting_magnetization, angle1, angle2,
+        per_atom=starting_moments,
+    )
+    # The per-atom applied field is an axial field on the atoms exactly as the
+    # starting moments are, and Elk's ``findsym.f90`` filters the group with both
+    # (``bfcmt0``, lines 120-125). Without it a ``LOCAL_MAGNETIC_FIELDS`` card
+    # asking for a texture is symmetrised away by operations that a per-species
+    # ferromagnet has and the texture does not -- measured on a 45-atom NiBr2
+    # helix, where one Ni direction in ``m_loc`` against 15 in the card left
+    # ``nsym = 4`` and a cycloid collapsed to collinear in three iterations.
+    atomic_fields = _atomic_b_field(pwin, structure.nat)
+    axial = (moments, np.asarray(atomic_fields, dtype=float)) if atomic_fields \
+        else moments
+    magnetic = nspin == 4 and bool(
+        np.any(np.abs(moments) > 1.0e-6)
+        or (len(atomic_fields) and np.any(np.abs(np.asarray(atomic_fields)) > 1.0e-12))
+    )
     symmetries = find_symmetries(cell, structure)
     if magnetic:
-        symmetries = magnetic_symmetries(cell, structure, symmetries, moments)
+        symmetries = magnetic_symmetries(cell, structure, symmetries, axial)
     rotations = None if nosym else symmetries.rotation_array()
     kpoints = _build_kpoints(
         pwin, cell, precision, rotations,
@@ -831,6 +905,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         input_occupations=_input_occupations(pwin),
         starting_magnetization=starting_magnetization,
         tot_magnetization=_tot_magnetization(pwin),
+        starting_moments=starting_moments,
         nosym=nosym,
         noinv=noinv,
         tstress=tstress,
@@ -1287,6 +1362,7 @@ def local_moments(
     starting_magnetization,
     angle1,
     angle2,
+    per_atom=(),
 ) -> np.ndarray:
     """``m_loc``: the starting moment of every atom, cartesian -- ``setup.f90``.
 
@@ -1295,7 +1371,33 @@ def local_moments(
     (see :attr:`System.domag`). ``angle1``/``angle2`` are the polar and azimuthal
     angles in degrees, and a collinear run has no angles: its moment is along
     ``z`` by construction.
+
+    ``per_atom`` is the ``STARTING_MOMENTS`` card and **overrides all three** when
+    it is given. QE's variables are per species and so cannot say a texture; the
+    group built from them is a ferromagnet's, keeps operations a helix does not
+    have, and has ``sym_rho`` average the helix away. The override is this
+    package's own -- there is no ``pw.x`` input to transcribe.
     """
+    if len(per_atom):
+        moments = np.asarray(per_atom, dtype=float).reshape(-1, 3)
+        if len(moments) != structure.nat:
+            raise ValueError(
+                f"STARTING_MOMENTS has {len(moments)} rows for {structure.nat} atoms"
+            )
+        # A collinear run has one component, and a moment off the z axis has
+        # nothing to live on -- the same rule B_field and LOCAL_MAGNETIC_FIELDS
+        # are held to a few hundred lines up.
+        if nspin != 4:
+            if np.any(np.abs(moments[:, :2]) > 1.0e-8):
+                raise ValueError(
+                    "a STARTING_MOMENTS card with an x or y component needs "
+                    "noncolin = .true.: a collinear magnetization has only a z "
+                    "component"
+                )
+            out = np.zeros_like(moments)
+            out[:, 2] = moments[:, 2]
+            return out
+        return moments
     types = np.asarray(structure.types, dtype=int)
     ntyp = structure.ntyp
     magnitudes = np.zeros(ntyp)
@@ -1413,6 +1515,56 @@ def _atomic_b_field(pwin: PwInput, nat: int) -> tuple:
             f"LOCAL_MAGNETIC_FIELDS lists {len(rows)} atoms but the cell has {nat}"
         )
     return tuple(tuple(fortran_float(v) for v in row[:3]) for row in rows)
+
+
+def _starting_moments(pwin: PwInput, nat: int) -> tuple:
+    """The ``STARTING_MOMENTS`` card: one starting moment per atom, cartesian.
+
+    ``starting_magnetization``/``angle1``/``angle2`` are **per species**, which
+    is QE's input and is enough for a ferromagnet or for a two-sublattice
+    antiferromagnet built by splitting the species. It cannot say a *texture* --
+    a helix, a cycloid, a skyrmion -- where every atom of one species has its own
+    direction. This card can, one line per atom in the order of
+    ``ATOMIC_POSITIONS``, three cartesian components in Bohr magnetons.
+
+    ``pw.x`` has no counterpart, so there is nothing to transcribe; the shape
+    follows :func:`_atomic_b_field`, which is this package's other per-atom card.
+    ``()`` when the card is absent, which is the normal case.
+
+    **What it is for is the magnetic symmetry group.** ``m_loc`` decides that
+    group and is built from the per-species variables, so without this card a
+    textured run hands the symmetry search a ferromagnet, keeps operations the
+    texture does not have, and has the texture symmetrised away by ``sym_rho``
+    -- see :func:`_refuse_untextured_symmetry`.
+    """
+    card = pwin.card("STARTING_MOMENTS")
+    if card is None:
+        return ()
+    rows = [line.split() for line in card.lines if line.strip()]
+    if len(rows) != nat:
+        raise ValueError(
+            f"STARTING_MOMENTS lists {len(rows)} atoms but the cell has {nat}"
+        )
+    return tuple(tuple(fortran_float(v) for v in row[:3]) for row in rows)
+
+
+def _distinct_directions(vectors, tol: float = 1.0e-6) -> int:
+    """How many distinct directions a set of vectors points in, ignoring length.
+
+    Antiparallel counts as **distinct**: a two-sublattice antiferromagnet has two
+    directions, and an operation that maps one onto the other is a symmetry only
+    with time reversal, which is exactly the distinction ``magnetic_symmetries``
+    is making. Rows of (near) zero length carry no direction and are skipped.
+    """
+    directions: list[np.ndarray] = []
+    for row in np.asarray(vectors, dtype=float).reshape(-1, 3):
+        norm = float(np.linalg.norm(row))
+        if norm <= tol:
+            continue
+        unit = row / norm
+        if not any(float(unit @ seen) > 1.0 - tol for seen in directions):
+            directions.append(unit)
+    return len(directions)
 
 
 def _tensor_moments(pwin: PwInput) -> tuple:

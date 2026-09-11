@@ -48,6 +48,11 @@ CARD_NAMES = frozenset(
         # A second one: Elk's ``tm3fix``, which fixes a tensor moment of a
         # Hubbard shell. One line per constraint, ``label-nl k p r t value``.
         "TENSOR_MOMENTS",
+        # A third: one starting moment per atom, cartesian, in Bohr magnetons.
+        # ``starting_magnetization`` is per *species* in QE, so a texture -- a
+        # helix, a cycloid -- cannot be stated in a pw.x input at all, and the
+        # magnetic symmetry group is built from exactly those per-species values.
+        "STARTING_MOMENTS",
     }
 )
 

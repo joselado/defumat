@@ -1732,6 +1732,7 @@ class Calculation:
             system.fixed_magnetization,
             system.structure.ntyp,
             self.nspin_mag == 4,
+            per_atom=system.starting_moments,
         )
         return MagneticField(
             regions=regions,

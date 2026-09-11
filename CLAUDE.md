@@ -473,6 +473,21 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
 - **Inherit a refusal only after checking which machine it belongs to.** P35's refusal is a
   statement about the Sternheimer stack and never applied to a sum over states; taking it
   as read left a whole quantity marked impossible (P54).
+- **A check whose null result cannot be told from a pass.** A diagnostic that returns the
+  same constant across the whole family it is meant to discriminate reads as agreement
+  rather than as silence, and nothing downstream can tell the difference. Five in one
+  production run: a chirality projected on `q` is identically zero for a **cycloid**, whose
+  moments lie in the plane `q` lies in, so fourteen bonds of signed zero reported as
+  "signs agree on 14 of 14"; a ratio between two quantities the driver evaluates at the
+  *same* density is 1 by construction at convergence (`driver.py:3988` rebinds the
+  potential to `rho_out`, `:4121` sets `rho = rho_out`), so it is informative only where
+  `dr2` already is; a monitor read off a `{:6.3f}` log line stops moving when the **format**
+  runs out, at 1e-3, rather than when the physics does; and QE's `i_cons = 2`
+  (`atomic direction`) constrains `m_z/|m|` alone, so it is exactly satisfied by every
+  in-plane texture, helix and collinear alike. The answer is to **test that the guard
+  fires** -- feed it a case that must trip it -- rather than to read a clean zero as a
+  pass. Its sibling is an explanation that *fits* a number and is accepted because it fits.
+  (The NiBr2 helix runs, 2026-09-10/11.)
 
 ## Non-negotiable conventions
 

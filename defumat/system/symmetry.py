@@ -282,6 +282,34 @@ def find_symmetries(cell: Cell, structure: Structure) -> Symmetries:
     )
 
 
+def _axial_fields(moments, nat: int) -> list:
+    """``moments`` as a list of ``(nat, 3)`` axial fields, dropping the zero ones.
+
+    One array is the ordinary case and is wrapped; a sequence of them is the
+    case where more than one per-atom vector has to be a symmetry of the
+    operation -- the starting moments *and* an applied per-atom field, which
+    Elk's ``findsym.f90`` tests together for the same reason.
+    """
+    candidates = (
+        [moments] if np.ndim(moments) == 2 else [m for m in moments if m is not None]
+    )
+    fields = []
+    for vectors in candidates:
+        vectors = np.asarray(vectors, dtype=float)
+        if vectors.size == 0:
+            continue
+        vectors = vectors.reshape(-1, 3)
+        if len(vectors) != nat:
+            raise ValueError(
+                f"a magnetic symmetry filter was given {len(vectors)} vectors "
+                f"for {nat} atoms"
+            )
+        if np.all(np.abs(vectors) < _MAGNETIC_TOLERANCE):
+            continue
+        fields.append(vectors)
+    return fields
+
+
 def magnetic_symmetries(
     cell: Cell, structure: Structure, symmetries: Symmetries, moments: np.ndarray
 ) -> Symmetries:
@@ -306,23 +334,45 @@ def magnetic_symmetries(
     it, which averages the moment to zero and converges to the nonmagnetic
     solution.
 
+    **More than one vector field can be in play, and they are tested together.**
+    A per-atom *applied* field (``LOCAL_MAGNETIC_FIELDS``, Elk's ``bfcmt``) is as
+    much a part of the calculation as the starting moments are, and an operation
+    that is not a symmetry of it is not a symmetry of the run: Elk's
+    ``findsym.f90`` rotates ``bfcmt0`` and compares it exactly as it does the
+    moments. Symmetrising with operations the field breaks is what makes a
+    **texture** -- a helix, a cycloid -- unwind a few iterations in while the
+    charge converges and ``dr2`` reports nothing, because the field enters the
+    *potential* and ``sym_rho`` acts on the *density* afterwards.
+
     Args:
         moments: ``(nat, 3)`` cartesian starting moments (``m_loc`` in
-            ``setup.f90``).
+            ``setup.f90``), or a sequence of such arrays, all of which the kept
+            operations must be symmetries of under **one** choice of ``t_rev``.
     """
     if symmetries.nsym <= 1:
         return symmetries
-    moments = np.asarray(moments, dtype=float)
+    fields = _axial_fields(moments, structure.nat)
+    if not fields:
+        return symmetries
     mapping = atom_mapping(cell, structure, symmetries)
     rotations = cartesian_rotations(cell, symmetries)
 
     kept, translations, t_rev = [], [], []
     for s, rotation in enumerate(rotations):
         determinant = np.sign(np.linalg.det(rotation))
-        rotated = determinant * (moments @ rotation.T)
-        images = moments[mapping[s]]
-        same = np.all(np.abs(rotated - images) < _MAGNETIC_TOLERANCE)
-        opposite = np.all(np.abs(rotated + images) < _MAGNETIC_TOLERANCE)
+        # **One sign for all of them.** Time reversal is a single operation on
+        # the whole calculation: it cannot flip the moments and leave the
+        # applied field alone. So an operation survives only if the *same*
+        # choice of ``t_rev`` works for every axial field on the atoms, which is
+        # why they are tested together rather than one filter after another.
+        same = opposite = True
+        for vectors in fields:
+            rotated = determinant * (vectors @ rotation.T)
+            images = vectors[mapping[s]]
+            same = same and bool(
+                np.all(np.abs(rotated - images) < _MAGNETIC_TOLERANCE))
+            opposite = opposite and bool(
+                np.all(np.abs(rotated + images) < _MAGNETIC_TOLERANCE))
         if not (same or opposite):
             continue
         kept.append(symmetries.rotations[s])
