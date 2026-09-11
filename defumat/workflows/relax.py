@@ -236,6 +236,12 @@ def run_relax(
     ``on_step`` is called as ``on_step(step, result, forces)`` after each ionic
     step, for a caller that wants to write its own record beside the checkpoint.
 
+    ``max_iterations``, ``david``, ``diago_full_acc``, ``mixing_fixed_ns``,
+    ``scf_solver`` and ``scf_solver_options`` are the **inner SCF's** options and
+    are named here so that :class:`~defumat.calculator.Calculator` can forward
+    them -- see :data:`SCF_LOOP_OPTIONS` for why naming them is what it takes.
+    ``max_iterations`` is the electronic loop; ``nstep`` is the ionic one.
+
     **They come from the input file unless given here.** ``None`` -- the
     default -- reads :attr:`System.relax`, which carries what ``&control`` and
     ``&ions`` said or QE's defaults if they said nothing

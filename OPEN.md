@@ -216,6 +216,21 @@ worse than a crash. Ranked.
 > `structure_factors` with the atoms *weighted* instead of *counted*, checked
 > against a brute-force `sum_a w_a exp(-iG.tau_a)` to 0.0. Three tests in
 > `tests/unit/test_textured_symmetry.py`, all three verified to fail before.
+>
+> **One residual, and it is new**: a **PAW** dataset's atomic `becsum` is still
+> split by the per-*species* `starting_magnetization`, so with the card the
+> charge's starting texture and the one-centre starting occupations now disagree
+> at iteration 1 -- which is exactly what `spin_weights`'s docstring says must
+> not happen. The SCF repairs it and nothing is wrong at convergence; it costs
+> iterations. Lifting it is a per-atom `_becsum_split`, with `starting_becsum`'s
+> `broadcast_to` over `len(atoms)` replaced by a per-atom stack. The test cell
+> is ultrasoft (`rrkjus`, `paw is None`, `becsum` starts at zero), so nothing
+> here sees it.
+>
+> **Not verified on this machine**: the entry's own how-to-know -- a two-atom
+> antiferromagnet converging to `|M| > 0` per site and zero total. What is
+> asserted is the *starting* density (opposite lobes, zero cell total) and the
+> two structural consequences, which is the same claim one step earlier.
 
 `defumat/system/builder.py:259` and `scf/driver.py:3005`. `domag` is
 `any(abs(m) > 1e-6 for m in self.starting_magnetization)` -- the per-*species* array.
@@ -460,7 +475,10 @@ that does not is the pass.
 > construction. Tested on a synthetic chain, with the old symmetric form beside
 > it as the control. **Written from `opt_tetra_weights_only`'s description and
 > not transcribed**, because the vendored tree is absent on this machine; the
-> docstring says so and asks for the check where it is available.
+> docstring says so and asks for the check where it is available. The metal
+> cases that would exercise it against QE (`reference.out.al10-metal-tetra`,
+> `al-tetrahedra`) need that tree too, so the partition has been checked on
+> synthetic chains and exact multiplets and not yet on a real Fermi surface.
 
 `defumat/scf/tetrahedra.py:576`. `_average_degenerate` builds a symmetric "within 1e-6
 Ry" matrix `S` and returns `w'_i = sum_j S_ij w_j / sum_j S_ij`. Its own docstring says

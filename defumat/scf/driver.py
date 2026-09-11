@@ -3077,6 +3077,17 @@ class Calculation:
         already folds the card over the per-species values in exactly the order
         the documentation states, so this is that array read a component at a
         time.
+
+        **What this does not yet reach is a PAW dataset's atomic ``becsum``**,
+        which :meth:`_becsum_split` still splits by the per-*species*
+        ``starting_magnetization``. :attr:`spin_weights` says why that matters:
+        "the two starting guesses have to agree about how polarized the atom is
+        or the first iteration contradicts itself". With the card on a PAW
+        dataset they now disagree -- the charge carries the texture and the
+        one-centre occupations carry the ferromagnet. The SCF repairs it and
+        nothing is wrong at convergence; it costs iterations. Lifting it is a
+        per-atom ``_becsum_split``, with the ``broadcast_to`` over
+        ``len(atoms)`` in :meth:`starting_becsum` replaced by a per-atom stack.
         """
         if not self.system.starting_moments:
             return None

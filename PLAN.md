@@ -1105,6 +1105,27 @@ to 6.5e-5 eV — 4.8e-6 Ry, inside `empty_ethr` and therefore correct behaviour 
 defect. It is a **slow** regression test, so the gate this work was pushed through could not
 have seen it, which is the concrete argument for the slow set that P38 already makes.
 
+**Fixed 2026-09-11, and it changes what P14 claims.** The test asserted one bound where the
+solver promises two, so the claim "every Kramers pair is degenerate to 1e-6 eV" was never
+what had been measured. What is measured, and what the three tests now assert separately:
+
+| pair | what the solver promises | measured |
+|---|---|---|
+| carrying weight (`wg/wk >= 0.01`, QE's own `btype` rule, `sum_band.f90:118-128`) | `ethr` | **5e-12 eV** |
+| empty | `empty_ethr = max(5 ethr, 1e-5)` Ry = **1.36e-4 eV** at the floor | 6.5e-5 eV (`spinorbit.in`), 7.7e-5 (`spinorbit-pbe.in`) |
+
+With `diago_full_acc = .true.` the same case gives 2.6e-11 eV over every band, which is the
+independent check that the split is the threshold and not the physics.
+
+**Not "assert over the occupied bands only"**, which would have given up the guard exactly
+where a non-Hermitian `D` or a mispaired spin block is least likely to be noticed — the
+empty pairs are still bounded, at what they are worth. Two sibling tests were written the
+same way and are fixed in the same pass: `test_kramers_degeneracy_on_the_bismuthene_path`
+asserted 1e-6 eV including the top two bands the same file documents as unconverged in both
+codes (`UNCONVERGED_TOP_BANDS`), and `test_spinors_reproduce_the_collinear_answer` compared
+two *independent* SCF runs band by band to 1e-10 Ry — five orders tighter than the bound on
+an empty one.
+
 
 **P12 — Ultrasoft and PAW. ✅ DONE for LDA.** `basis/interpolate.py` (the smooth/dense
 grid split), NLCC in `v_of_rho`, `pseudo/coupling.py` (real-harmonic Gaunt coefficients),

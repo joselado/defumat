@@ -170,6 +170,37 @@ honouring \code{diagonalization = 'cg'} would turn a run that works into an
 error, and mapping it silently onto Davidson would be the kind of substitution
 refused everywhere else here. Name a solver at construction instead.
 
+\textbf{The adopted namelist reaches a relaxation too}, and did not until
+2026-09-11: \code{electron\_maxstep}, \code{diago\_full\_acc} and
+\code{mixing\_fixed\_ns} were read off the file and then dropped on the way into
+\code{get\_relax}, so every SCF inside a relaxation ran at the default hundred
+iterations whatever the input asked for. On a DFT+U relaxation the dropped
+\code{mixing\_fixed\_ns} decides which minimum of the $+U$ functional the run
+lands in, so the relaxed \emph{geometry} could differ with nothing saying the
+request had been ignored.
+
+\begin{refuses}
+\textbf{An input variable that changes the physics and is not implemented is
+refused by name}, never read and ignored --- a run that quietly drops one is
+wrong by far more than the agreement with \code{pw.x} this code is checked to.
+That covers a charged cell (\code{tot\_charge}), the saw-tooth field and the
+dipole correction (\code{tefield}, \code{dipfield}), the Berry-phase finite
+field (\code{lelfield}), the isolated-system corrections
+(\code{assume\_isolated}), two chemical potentials (\code{twochem}, in either
+namelist), per-orbital atomic occupations
+(\code{one\_atom\_occupations}), the constant-cutoff kinetic functional
+(\code{qcutz}), a hand-pinned FFT grid (\code{nr1}--\code{nr3s}), and the four
+\textbf{symmetry} switches \code{no\_t\_rev}, \code{force\_symmorphic},
+\code{use\_all\_frac} and \code{nosym\_evc}.
+
+Those last four were read by \emph{nothing} until 2026-09-11. Each says that
+some part of the group is not a symmetry of the state being asked for, so
+ignoring one left the k-mesh reduced with operations the input had excluded and
+\code{sym\_rho} averaging over them --- a total energy that will not match a
+benchmark generated from the same file, with nothing saying why. Anything QE
+defaults to is silent, so an ordinary input never reaches the refusal.
+\end{refuses}
+
 \subsection*{One object, bound methods}
 
 A \code{Calculator} is a system together with its pseudopotentials, and every
@@ -365,9 +396,23 @@ $k=0$ on the full sphere --- the same physics at twice the storage, with a
 warning --- for an ultrasoft or PAW dataset (\code{addusdens} and \code{newd}
 need their own \code{fact = 2}), for a run that uses symmetry (a rotation
 carries a stored $G$ onto an unstored $-G'$, so the permutation would need a
-conjugation; \code{nosym = .true.} is the way out), and for a spinor or spiral
-run. \code{estimate()} makes the same decision the driver makes, so it sizes
+conjugation; \code{nosym = .true.} is the way out), for a spinor or spiral run,
+and for a \textbf{Hubbard $U$}. The last is the only one of them that would go
+wrong \emph{during} the run rather than after it: $n_{\sigma}$ is built from a
+plain $\langle \phi | \psi \rangle$ over the stored list, so the Hubbard
+potential and energy would follow occupations about a quarter of their true
+size and the SCF would converge silently to a different ground state.
+\code{estimate()} makes the same decision the driver makes, so it sizes
 the run either way.
+
+\textbf{Four things after the run refuse rather than substitute}, because by
+then the states exist and the honest answer is to say the sum is not written:
+the projected density of states, the sum-over-states $\chi_0$ (so an optical
+spectrum of a molecule in a box, which is the archetypal gamma case), an STM
+image and the vertical tunnelling transmission. Each is a plane-wave sum that
+would have to be $2\,\mathrm{Re}(\sum) - (G{=}0)$ and is not; the escape is the
+same explicit $k=0$, which is an \emph{exact} substitution rather than an
+approximate one.
 
 \textbf{The dynamical matrix works under gamma storage}, including a partial
 one --- the combination a molecule on a fixed slab needs. The Sternheimer solve
@@ -697,8 +742,14 @@ in the order of \code{ATOMIC\_POSITIONS}. QE's \code{starting\_magnetization},
 \code{angle1} and \code{angle2} are per \emph{species}, so a helix, a cycloid or
 a skyrmion cannot be stated in a \code{pw.x} input at all.
 
-\emph{What it actually decides is the symmetry group}, which is why it matters
-more than a starting guess usually does. The magnetic group is filtered by the
+\emph{It decides three things}, and the first is why it matters more than a
+starting guess usually does. It decides the \textbf{symmetry group}; it decides
+whether the run is \textbf{magnetic at all} (a noncollinear input whose texture
+is given only through this card is a magnetic run, with a four-component density
+--- this used to be read off the per-species \code{starting\_magnetization}
+alone, so such an input converged, reported a total energy and never had a
+magnetization); and it seeds the \textbf{starting density}, one moment per atom
+rather than one per species. The magnetic group is filtered by the
 per-atom moments $\mathbf{m}_i$ --- an operation survives only if it maps that
 axial vector field onto itself, possibly followed by time reversal --- and it is
 built from the input, once, never from the converged state. Built from
@@ -744,7 +795,15 @@ are held to, and one row per atom.
 \textbf{Checked, not remembered:} the card above parses through
 \code{build\_system}, reaches \code{system.starting\_moments} unchanged, becomes
 \code{m\_loc} verbatim, and \code{constraint\_targets} returns it normalised ---
-three unit rows.
+three unit rows. The starting density built from it carries opposite moment
+lobes on two antiparallel sites and integrates to zero over the cell.
+
+\textbf{One thing it does not yet reach, for a PAW dataset:} the atomic
+\code{becsum}, which is still split by the per-\emph{species}
+\code{starting\_magnetization}. So on PAW the charge's starting texture and the
+one-centre starting occupations disagree at iteration~1. The SCF repairs it and
+nothing downstream is wrong at convergence; it costs iterations, and it is
+written down here rather than left to be met.
 
 \textbf{Not covered, and this one is a sentence rather than a \code{raise}:} a
 textured starting \emph{density} handed to \code{run\_scf} by the caller. The symmetry group is decided from the input and
