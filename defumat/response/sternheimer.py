@@ -1125,6 +1125,43 @@ def require_a_sternheimer_regime(
             "spin-orbit calculation: incdrhoscf_nc and set_int3_nc are a second "
             "implementation rather than a spin axis on this one"
         )
+    if getattr(calculation, "magnetic_field", None) is not None:
+        # **The field the run converged under is not the field the input asked
+        # for**, and nothing in this stack carries the difference. ``reducebf``
+        # scales the field down as the SCF proceeds and the fixed-spin-moment
+        # scheme replaces it outright, so ``SCFResult.magnetic_field`` and
+        # ``field_scale`` are what the ground state belongs to -- while every
+        # ``calculation.potential(rho)`` here takes the default third argument
+        # and rebuilds the Zeeman term at **input** strength. Every eigenvalue
+        # entering the solve, and the screened tensor on top of it, would then
+        # be evaluated under a field the density was never converged under. The
+        # tensor stays symmetric and positive, which is why this is a refusal
+        # rather than a warning.
+        #
+        # Two different amounts of work sit behind it. For a field put in by
+        # hand the missing piece is **plumbing**: thread the converged pair
+        # through ``make_sternheimer`` and the ten ``.potential(`` sites, after
+        # which the induced ``2 lambda dm`` term appears on its own, because
+        # ``_field_potential`` is ``jax.grad`` of the penalty and the induced
+        # potential is one ``jvp`` of ``potential`` (``efield.py``,
+        # ``electrostriction.py``, ``phonon.py``, ``strain.py``). For a
+        # *constrained* moment that is not enough at the fixed-spin-moment end:
+        # ``fsm`` updates its field by feedback rather than from a penalty, so
+        # ``dB/drho`` is not a derivative of anything and would have to be
+        # written.
+        raise NotImplementedError(
+            "the Sternheimer response of a calculation with a magnetic field "
+            "or a constrained moment is not implemented: the response is built "
+            "from calculation.potential(density), which rebuilds the Zeeman "
+            "term from the *input* field, and reducebf or the fixed-spin-moment "
+            "scheme mean that is not the field the ground state converged "
+            "under (SCFResult.magnetic_field and .field_scale are). Threading "
+            "the converged pair through the stack is what is missing for a "
+            "field put in by hand; a constrained_magnetization = 'fsm' moment "
+            "needs the induced field as well, and its field is a feedback "
+            "update rather than a derivative. Re-run the ground state without "
+            "the field to get the response of the state it produced"
+        )
     if calculation.is_hubbard:
         raise NotImplementedError(
             "the Sternheimer response with a Hubbard U is not implemented: the "

@@ -447,7 +447,26 @@ def band_velocities(calculation, result, kpoints=None, nbnd=None,
         eigenvalues = jnp.asarray(result.eigenvalues)
         psi = result.wavefunctions
 
-    potential = calculation.potential(result.density)
+    # The converged field, not the input's -- the same rule the ``kpoints``
+    # branch above already follows, and the reason is ``newd``. The Zeeman and
+    # constraint terms enter ``v_scf`` as a *local* multiplicative potential,
+    # which a norm-conserving ``dH/dk`` cannot see at all: ``_operator``
+    # differentiates with respect to ``kcart``, and only the kinetic term and
+    # ``vkb`` carry it. **On an ultrasoft or PAW dataset it can.**
+    # ``hamiltonian`` rebuilds ``deeq`` from ``v_scf`` on every call and
+    # ``deeq`` multiplies ``vkb(k)``, so the local potential reaches the
+    # velocity through the nonlocal term. Measured in
+    # ``tests/unit/test_velocity_locality.py``: exactly zero for si2-nc, 0.37
+    # out of 398 Ry bohr for si2-us.
+    # ``is None``, not ``or`` -- a field ``reducebf`` has scaled all the way
+    # down has ``field_scale = 0.0``, and ``or`` would turn that back into the
+    # full-strength input field, which is the defect this line exists to fix.
+    field_scale = getattr(result, "field_scale", None)
+    potential = calculation.potential(
+        result.density,
+        1.0 if field_scale is None else float(field_scale),
+        getattr(result, "magnetic_field", None),
+    )
     # PAW's one-centre coefficients come from ``becsum``, which the result
     # carries for exactly this reason (it is part of the mixed state, not a
     # function of the density).

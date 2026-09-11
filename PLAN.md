@@ -220,6 +220,15 @@ because that is what decides whether it is a session or a phase.
   reaches is not right. **A GGA magnetic response** is refused with them: P70 covered the
   LDA kernel, and `dgcxc_spin` has its own thresholds and `zeta` gates in a different
   routine.
+- **Any Sternheimer response of a run converged under a magnetic field or a constrained
+  moment.** The whole stack rebuilds its potential from the field the *input* asked for,
+  and `reducebf` and the fixed-spin-moment scheme both make that the wrong field —
+  `SCFResult.magnetic_field` and `.field_scale` are what the density belongs to. The
+  missing term for a field put in by hand is only the plumbing (the induced
+  `2 lambda dm` falls out of the existing `jvp`, since `_field_potential` is `jax.grad`
+  of the penalty); `constrained_magnetization = 'fsm'` needs the induced field too, and
+  its field is a feedback update rather than a derivative. Refused by name in
+  `require_a_sternheimer_regime` (`OPEN.md` A2, 2026-09-12).
 - **The elastic constants and electrostriction of a spinor run** (P46 left that refusal
   standing: they reach the energy functional directly, and their first-order
   wavefunctions come from a Sternheimer solve with no spinor form).

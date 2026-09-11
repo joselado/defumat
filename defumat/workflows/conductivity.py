@@ -124,7 +124,19 @@ def run_conductivity(
     )
     eigenvalues = eigenvalues[..., :nbnd]
     wavefunctions = jnp.asarray(wavefunctions)[..., :nbnd, :]
-    potential = calculation.potential(jnp.asarray(density))
+    # ``field``/``field_scale`` reach the states above and must reach the
+    # potential too: accepting an argument and dropping it half way is how the
+    # input's field gets rebuilt at full strength over a ground state that
+    # converged under a reduced one. It is not a formality on a **soft**
+    # dataset -- ``deeq`` is built from this potential and multiplies
+    # ``vkb(k)``, so the whole velocity operator, and the conductivity and
+    # anomalous Hall number on top of it, move with which field was used
+    # (:mod:`tests.unit.test_velocity_locality`).
+    potential = calculation.potential(
+        jnp.asarray(density),
+        1.0 if field_scale is None else float(field_scale),
+        field,
+    )
     _, ddd_paw = calculation.onecenter(becsum)
 
     if fermi_energy is None:

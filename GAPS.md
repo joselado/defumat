@@ -467,6 +467,33 @@ compare against (`pw.x` reaches TB09 only through libxc and refuses meta-GGA
 with USPP/PAW). Whoever reads the current message goes looking for a packing bug
 that is not there.
 
+### Linear response + a magnetic field or a constrained moment — **new 2026-09-12**
+
+`require_a_sternheimer_regime`. Every response quantity — the dielectric
+tensor, the phonons, the Born charges, Raman, the strain response, the
+piezoelectric tensor — is now refused for a ground state converged under
+`B_field` or `constrained_magnetization`. Until 2026-09-12 it **answered**:
+each of the ten `calculation.potential(rho)` calls in the stack takes the
+default field argument and so rebuilds the Zeeman term from what the *input*
+asked for, while `reducebf` scales a field away as the SCF proceeds (7% of its
+input value after 25 iterations at 0.9) and the fixed-spin-moment scheme
+replaces it outright. Every eigenvalue entering the solve was shifted by a
+field the density was never converged under, and the tensor came back
+symmetric and positive. This is §0's `DFTSource` defect one layer over, in the
+group of consumers that fix did not look at (`OPEN.md` A2 has the whole sweep,
+including the stated negative for `projwfc`, `stm` and `transport`, which are
+clean).
+
+**Missing:** for a field put in by hand, only the plumbing — thread
+`SCFResult.magnetic_field` and `.field_scale` through `make_sternheimer` and
+the ten sites, after which the induced `2 lambda dm` term falls out on its own,
+because `_field_potential` is `jax.grad` of the penalty and the induced
+potential is one `jvp` of `potential`. For `constrained_magnetization = 'fsm'`
+there is a real term as well: its field comes from a feedback update rather
+than from a penalty, so `dB/drho` is not a derivative of anything and has to be
+written. **Workaround:** re-run the ground state without the field, which is
+the response of the state that run actually produced.
+
 ### Linear response + meta-GGA — *the hard one*
 
 `require_a_sternheimer_regime` has no meta-GGA branch, so what stops such a run

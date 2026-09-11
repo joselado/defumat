@@ -146,7 +146,10 @@ in `docs/features.tex`'s amber boxes.
   gradients of code that already exists** rather than expressions derived a second time —
   `dv_of_drho` is one `jvp` of `v_of_rho`, `dvqpsi_us` one `jvp` through `at_positions`,
   `int3` one `jvp` of `newd`, `PAW_dpotential` one `jvp` of `onecenter`. Still refused:
-  noncollinear magnetism, DFT+U, spin spirals, a potential-only meta-GGA, and — for
+  noncollinear magnetism, DFT+U, spin spirals, a potential-only meta-GGA, **a ground
+  state converged under a magnetic field or a constrained moment** (the stack rebuilds
+  its potential from the *input* field, which `reducebf` and the fixed-spin-moment
+  scheme both make wrong), and — for
   `nspin = 2` — a **GGA** kernel (P70 covered the LDA; `dgcxc_spin` has its own thresholds
   and gates in a different routine) and the *assemblies* above the solve, which is the
   dynamical matrix, the strain response and the two third derivatives.

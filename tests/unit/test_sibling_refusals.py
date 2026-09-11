@@ -317,3 +317,87 @@ def test_the_electric_field_still_refuses_a_metal_by_definition():
     with pytest.raises(NotImplementedError) as raised:
         dielectric_tensor(_metallic_calculation(), None, [[0.0]], None)
     assert "epsilon_infinity" in str(raised.value)
+
+
+def _calculation_with_a_field(extra: str, pseudo_dir):
+    """A real :class:`~defumat.scf.Calculation`, because the stub has no field.
+
+    ``magnetic_field`` is built in the constructor
+    (:meth:`~defumat.scf.driver.Calculation._build_magnetic_field`) and is
+    ``None`` unless the input asked for one, so the namespace above cannot say
+    whether the guard fires for the right reason. Silicon at ``ecutwfc = 12``
+    with a spin axis costs a basis and a projector table and no SCF at all.
+    """
+    from defumat.pseudo import read_upf
+    from defumat.scf import Calculation
+
+    system = _system(extra)
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    return Calculation(system, pseudos)
+
+
+#: ``tot_magnetization`` is there because ``pw.x`` demands it of a fixed
+#: occupation with a spin axis, not because the field needs it.
+_A_FIELD_BY_HAND = (
+    "nspin = 2, starting_magnetization(1) = 0.1, tot_magnetization = 0.0\n"
+    "  B_field(3) = 0.01"
+)
+_A_CONSTRAINED_MOMENT = (
+    "nspin = 2, starting_magnetization(1) = 0.1, tot_magnetization = 0.0\n"
+    "  constrained_magnetization = 'fsm', lambda = 0.02"
+)
+
+
+@pytest.mark.parametrize(
+    "extra", [_A_FIELD_BY_HAND, _A_CONSTRAINED_MOMENT],
+    ids=["a field by hand", "a constrained moment"],
+)
+def test_the_sternheimer_stack_refuses_a_magnetic_field(extra, pseudo_dir):
+    """The response was built from the **input** field, not the converged one.
+
+    Ten call sites across the stack take ``calculation.potential(density)``
+    with no field argument, so each falls back to ``self.magnetic_field`` --
+    what the input asked for. ``reducebf`` scales a field away over the SCF
+    (7% of its input value after 25 iterations at 0.9) and the fixed-spin-moment
+    scheme replaces it outright, so that is not the field the density belongs
+    to. Every eigenvalue entering the solve would be shifted, and the screened
+    tensor would still come back symmetric and positive.
+
+    The guard is checked on the *calculation* alone, which is what lets one
+    assertion stand for all seven entry points that share it.
+    """
+    from defumat.response.sternheimer import require_a_sternheimer_regime
+
+    calculation = _calculation_with_a_field(extra, pseudo_dir)
+    assert calculation.magnetic_field is not None
+    with pytest.raises(NotImplementedError) as raised:
+        require_a_sternheimer_regime(
+            calculation, metals=True, spin_polarized=True,
+        )
+    message = str(raised.value)
+    assert "magnetic field or a constrained moment" in message
+    # It must name the pair that would fix it, not just say no.
+    assert "field_scale" in message and "SCFResult.magnetic_field" in message
+
+
+def test_the_field_refusal_fires_before_the_regime_flags(pseudo_dir):
+    """It must not be reachable only when a caller opts into ``nspin = 2``.
+
+    The flags ``metals`` and ``spin_polarized`` are per-quantity claims, and
+    ``occupations != 'fixed'`` or ``nspin = 2`` would otherwise answer first --
+    so a smeared magnetic run would be refused with a message about metals and
+    the field would go unmentioned. Five of the seven entry points pass neither
+    flag.
+    """
+    from defumat.response.sternheimer import require_a_sternheimer_regime
+
+    calculation = _calculation_with_a_field(
+        _A_FIELD_BY_HAND.replace("tot_magnetization = 0.0", "")
+        + "\n  occupations = 'smearing', degauss = 0.02",
+        pseudo_dir,
+    )
+    with pytest.raises(NotImplementedError) as raised:
+        require_a_sternheimer_regime(calculation)
+    assert "magnetic field" in str(raised.value)
