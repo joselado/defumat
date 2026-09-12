@@ -149,3 +149,63 @@ def test_without_a_card_nothing_changes(pseudo_dir):
     ])
     # angle1 = angle2 = 0 by default, so the shell is along +z.
     assert _direction(shell) == pytest.approx([0.0, 0.0, 1.0], abs=1e-12)
+
+
+def test_a_collinear_card_reaches_the_one_centre_occupations_too(pseudo_dir):
+    """The regime the collinear symmetry filter opened up (P77).
+
+    A ``STARTING_MOMENTS`` card is accepted for ``nspin = 2`` as long as x and
+    y vanish, and a one-species antiferromagnet written that way now converges
+    instead of being averaged to zero. That makes this branch reachable: left
+    per species, a PAW or ultrasoft dataset would get a *ferromagnetic*
+    ``becsum`` beside an antiferromagnetic charge -- the same iteration-1
+    contradiction as the noncollinear case, one regime over, and newly so.
+    """
+    system, calculation = _calculation("o2-paw-afm.in", pseudo_dir)
+    assert system.nspin == 2 and calculation.nspin_mag == 2
+    assert calculation.pseudos[0].paw is not None
+    wanted = np.asarray(system.local_moments, dtype=float)[:, 2]
+    assert wanted[0] == pytest.approx(-wanted[1]), "the card must be staggered"
+
+    becsum = np.asarray(calculation.starting_becsum()[0])
+    assert becsum.shape[:2] == (2, 2)
+    moments = np.array([
+        float(np.trace(becsum[0, a]).real) - float(np.trace(becsum[1, a]).real)
+        for a in range(2)
+    ])
+    assert moments[0] == pytest.approx(-moments[1], abs=1e-12), (
+        "the one-centre occupations are ferromagnetic beside a staggered charge"
+    )
+    assert moments == pytest.approx(wanted, abs=1e-9)
+
+    # And they agree with the charge, which is the property that matters.
+    _, site = calculation.site_moments(calculation.starting_density())
+    assert np.sign(np.asarray(site)[:, 0]) == pytest.approx(np.sign(moments))
+
+
+def test_a_collinear_card_reaches_the_hubbard_shell_too(pseudo_dir):
+    """``initial_ns`` took its sign from the per-species number.
+
+    Only the sign matters in a collinear run -- it says which channel is the
+    majority one -- but it is per atom that it has to be right.
+    """
+    from defumat.hubbard.occupations import initial_ns
+
+    system, calculation = _calculation("n2-ldau-texture.in", pseudo_dir)
+    setup = calculation.hubbard
+    staggered = np.array([+1.0, -1.0])[np.asarray(setup.atoms, dtype=int)]
+
+    ns = np.asarray(initial_ns(setup, 2, np.array([0.5]), per_atom=staggered))
+    per_slot = np.array([
+        float(np.trace(ns[0, slot]) - np.trace(ns[1, slot]))
+        for slot in range(setup.nslot)
+    ])
+    assert per_slot[0] > 0 and per_slot[1] < 0, "both shells took the same channel"
+
+    # Without the card the per-species number decides, as it always did.
+    plain = np.asarray(initial_ns(setup, 2, np.array([0.5])))
+    flat = np.array([
+        float(np.trace(plain[0, slot]) - np.trace(plain[1, slot]))
+        for slot in range(setup.nslot)
+    ])
+    assert flat[0] == pytest.approx(flat[1])

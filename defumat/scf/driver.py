@@ -1815,7 +1815,13 @@ class Calculation:
                     if self.system.starting_moments else None
                 ),
             )
-        return initial_ns(self.hubbard, self.nspin, self.starting_magnetization)
+        return initial_ns(
+            self.hubbard, self.nspin, self.starting_magnetization,
+            per_atom=(
+                self.local_seed_weights[:, 2]
+                if self.system.starting_moments else None
+            ),
+        )
 
     def adjust_ns(self, ns: jnp.ndarray) -> jnp.ndarray:
         """``ns_adj``: impose ``starting_ns_eigenvalue`` on a measured ``ns``."""
@@ -3282,19 +3288,29 @@ class Calculation:
             [float(self.pseudos[t].z_valence) for t in types]
         )[:, None]
         weights = moments / valence
-        largest = np.max(np.abs(weights)) if weights.size else 0.0
-        if largest > 1.0:
+        # **On the norm, not component by component.** What must stay positive
+        # is ``(n - |m|)/2``, so the bound is on ``|m|``: a row of
+        # ``(0.8, 0.8, 0.8) Z_v`` has no component above 1 and a length of
+        # 1.39, and a component-wise clip would pass it straight through into a
+        # negative channel. Rescaling the row keeps its *direction*, which is
+        # the part of a texture that matters.
+        lengths = (
+            np.linalg.norm(weights, axis=1) if weights.size else np.zeros(0)
+        )
+        longest = float(lengths.max()) if lengths.size else 0.0
+        if longest > 1.0:
             warnings.warn(
                 f"a STARTING_MOMENTS row asks for more moment than the atom has "
-                f"valence charge (the largest is {largest:.3f} times it), which "
+                f"valence charge (the longest is {longest:.3f} times it), which "
                 f"an atomic superposition cannot seed -- a channel density would "
-                f"go negative. The rows are in Bohr magnetons; they are clamped "
-                f"to the valence charge for the starting guess, and the SCF is "
-                f"free to move away from it. The constraint targets, if any, are "
-                f"not clamped",
+                f"go negative. The rows are in Bohr magnetons; they are shortened "
+                f"to the valence charge for the starting guess, keeping their "
+                f"direction, and the SCF is free to move away from it. The "
+                f"constraint targets, if any, are not clamped",
                 stacklevel=2,
             )
-        return np.clip(weights, -1.0, 1.0)
+        scale = np.where(lengths > 1.0, lengths, 1.0)[:, None]
+        return weights / scale
 
     @property
     def starting_magnetization(self) -> np.ndarray:
@@ -3466,9 +3482,20 @@ class Calculation:
         is, which is what :attr:`spin_weights` says one species at a time.
         """
         rows = self._becsum_split(t)
-        if not self.noncolin or self.nspin_mag == 1 or not self.system.starting_moments:
+        if self.nspin_mag == 1 or not self.system.starting_moments:
             return np.broadcast_to(rows, (len(atoms), rows.size))
         weights = self.local_seed_weights[np.asarray(atoms, dtype=int)]
+        if not self.noncolin:
+            # **The collinear case is not a special case any more.** A card is
+            # accepted for ``nspin = 2`` as long as x and y vanish, and a
+            # one-species antiferromagnet written that way now converges
+            # (P77) -- so leaving this branch per species would put a
+            # *ferromagnetic* ``becsum`` beside an antiferromagnetic charge on
+            # any ultrasoft or PAW dataset, which is the same iteration-1
+            # contradiction one regime over. The z column is the whole moment
+            # a collinear run has.
+            along_z = weights[:, 2]
+            return 0.5 * np.stack([1.0 + along_z, 1.0 - along_z], axis=1)
         return np.concatenate([np.ones((len(atoms), 1)), weights], axis=1)
 
     def starting_wavefunctions(self, hamiltonians, nbnd: int, span=None) -> jnp.ndarray:

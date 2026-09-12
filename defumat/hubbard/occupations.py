@@ -366,7 +366,7 @@ def initial_ns_noncollinear(
     return jnp.asarray(ns)
 
 
-def initial_ns(setup, nspin: int, starting_magnetization) -> jnp.ndarray:
+def initial_ns(setup, nspin: int, starting_magnetization, per_atom=None) -> jnp.ndarray:
     """``init_ns``: the starting occupation matrix, diagonal, from Hund's rule.
 
     Majority-spin levels are filled first and the remainder is spread equally
@@ -374,13 +374,24 @@ def initial_ns(setup, nspin: int, starting_magnetization) -> jnp.ndarray:
     the reference occupation in each channel. The result is what the first
     Hubbard potential is built from, and for a magnetic insulator it is what
     decides which of several self-consistent solutions the run finds.
+
+    ``per_atom`` is the ``(nat,)`` z-moment of a ``STARTING_MOMENTS`` card, and
+    when it is given **only its sign per slot is used** -- the same Hund's-rule
+    filling, majority in whichever channel the card points at. Without it a
+    one-species antiferromagnet, which is now expressible and now converges,
+    would start every correlated site polarised the *same* way while the charge
+    carried the staggered moment.
     """
     ns = np.zeros((nspin, setup.nslot, setup.ldmx, setup.ldmx))
     magnetization = np.asarray(starting_magnetization, dtype=float)
+    textured = None if per_atom is None else np.asarray(per_atom, dtype=float)
     for slot, t in enumerate(setup.types):
         item = setup.species[t]
         ldim, total = item.ldim, item.occupation
-        moment = magnetization[t] if t < len(magnetization) else 0.0
+        if textured is None:
+            moment = magnetization[t] if t < len(magnetization) else 0.0
+        else:
+            moment = float(textured[setup.atoms[slot]])
         if nspin == 2 and moment != 0.0:
             major, minor = (0, 1) if moment > 0.0 else (1, 0)
             if total > ldim:

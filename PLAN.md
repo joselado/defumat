@@ -12849,6 +12849,26 @@ axis to carry the sign. With a per-atom *vector* the axis carries it -- `-m` alo
 `+m` along `-z` -- so doing both would undo it. The swap is now conditional on there being
 no vector.
 
+**The collinear regime needed the same fix, and P77 is what made it reachable.** A card is
+accepted for `nspin = 2` as long as x and y vanish, and a one-species antiferromagnet
+written that way now converges instead of being averaged to zero -- so leaving
+`_becsum_split_per_atom` and `initial_ns` per species would have put a *ferromagnetic*
+`becsum` beside an antiferromagnetic charge on any ultrasoft or PAW dataset. Newly
+reachable rather than long-standing, which is the kind of hole a fix opens and an audit
+written before it cannot name. On two collinear PAW oxygens with `+-1.5`
+(`tests/data/qe/o2-paw-afm.in`) the one-centre moments are now `+1.5 / -1.5` against the
+charge's `+1.4994 / -1.4994`; both were the same number before. For `initial_ns` only the
+*sign* per slot matters -- it says which channel is the majority one -- but it is per atom
+that it has to be right.
+
+**The clamp is on the norm, not component by component.** What must stay positive is
+`(n - |m|)/2`, so the bound is on `|m|`: a row of `(0.8, 0.8, 0.8) Z_v` has no component
+above the valence charge and a length of `1.39 Z_v`, and a component-wise clip passes it
+straight into a negative channel. The row is rescaled instead, which keeps its
+*direction* -- the part of a texture that means anything. Measured on `o2-paw-texture.in`
+with atom 1 at `(4.8, 4.8, 4.8)` on `Z_v = 6`: seeded `|m|` is 6.0 with a warning, where
+the component-wise form would have seeded 8.31 on an atom with six electrons.
+
 **The per-species path is untouched**, which is most existing inputs:
 `bn-ldau-noncol.in`, the committed spinor DFT+U case validated against `pw.x` at 1.2e-7 Ry,
 has no card and its occupation matrix still comes from

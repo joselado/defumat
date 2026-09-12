@@ -332,7 +332,11 @@ against 1.0: it will come out at `Z_v`. Then transcribe `input.f90:1448-1449` an
 oxygens at 90 degrees the one-centre moments now follow the card -- `(0,0,1.5)` and
 `(1.5,0,0)` where both were `(0,0,0.3)` -- and the sphere-integrated charge moment and
 the `becsum` agree in direction to **7.5e-6** on both sites, where the per-species split
-had them 90 degrees apart on one. The unmeasured claim "the SCF repairs it and nothing
+had them 90 degrees apart on one. The **collinear** regime needed the same fix and got it in the same pass -- item 1 made a
+one-species antiferromagnet converge, which made a ferromagnetic `becsum` beside a
+staggered charge newly reachable; on two collinear PAW oxygens at `+-1.5` the one-centre
+moments are now `+1.5 / -1.5` where both were the same number.
+The unmeasured claim "the SCF repairs it and nothing
 is wrong at convergence" is **removed rather than disproved**; the run that would settle
 it is in `PLAN.md` P77d's outstanding paragraph, and P77's readout makes it cheap.
 
