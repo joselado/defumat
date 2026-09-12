@@ -76,12 +76,12 @@ def _drop_compiled_code():
     jax.clear_caches()
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=2)
 def _calculator(pseudo_dir):
     return Calculator.from_file(CASES / f"{CASE}.in", pseudo_dir, announce=False)
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=2)
 def _reference():
     from defumat.io import read_qe_output
 

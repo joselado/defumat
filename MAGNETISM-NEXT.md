@@ -56,6 +56,7 @@ number, because the whole rule of this project is that a claim is a number:
 | nothing said whether the group a run uses belongs to the density it starts from | `Calculation.symmetry_residual`, checked before iteration 1 and warned above 1e-3 | 6.7e-16 from a card against **1.0** for the same texture under a group too large; the charge reads 5.9e-16 in *both* (P80) |
 | no **vector** texture had ever been carried through an SCF and inspected | one has: a 90-degree cycloid on four hydrogens, symmetrised and free | 0.4543 mu_B per site either way, angles 90.00 degrees, the pair 8.0e-9 Ry apart (P80) |
 | a relaxation of a magnet said nothing per site | `site_charges`/`site_moments` on all three drivers' step objects | mechanical; and the *final* geometry is the one step that cannot show a collapse (P80) |
+| the noncollinear GGA had no measured derivative anywhere | bcc iron, ultrasoft, PBE, compared through its **stress** | 6.7e-9 Ry and 1.6e-7 Ry/bohr^3, the level the collinear ultrasoft cases reach; **signed branch only** (P80) |
 
 Three of those were **not** in the audit and were found while fixing it: the spinor `ns`
 cast, nickel's `conv_thr` (`OPEN.md` Y1), and `'atomic texture'`'s `1/|m|`. The first is
@@ -224,6 +225,13 @@ the four iterations between 25 and 21 rather than the thirteen between 25 and 12
 `mixing_ndim`, the other obvious lever, makes both cells *worse*: 27/25/33/39 at 4/8/12/20
 on the magnetic one and 26/21/30/26 on the nonmagnetic.
 
+**A second cell shows the same 2:1 ratio, and it has no deconfounder yet.**
+`fe-noncolin-pbe-stress.in` (P80) takes **43** iterations where `pw.x` takes **19** at the
+same `mixing_beta = 0.2` and the same `conv_thr = 1e-10`, with the two energies agreeing to
+6.7e-9 Ry — noncollinear, ultrasoft, PBE, where `fe-mag-1k` is collinear. Two cells at 2:1 is
+worth more than one, and the nonmagnetic twin of *this* cell has not been run: without it the
+43/19 is no more attributable to anything magnetic than the 25/12 was.
+
 **First step, if it is still worth one.** Dump one run's residual history and recompute the
 Anderson coefficients under both quadratic forms — `scf_accuracy` gives QE's for free — and
 report the angle between the two coefficient vectors. If it is small, the metric is not the
@@ -320,6 +328,13 @@ canted PBE state converges in `pw.x` — iron or nickel sublattices at 90 degree
 hydrogen, or the same hydrogen cell held by `constrained_magnetization = 'atomic'`, which both
 codes can state per species (and whose penalty is then outside both totals, which is the
 hazard to check before trusting agreement).
+
+**Try a PBE dataset before reaching for a constraint.** Both failed attempts ran
+`H.pz-vbc.UPF` — an *LDA* pseudopotential — under `input_dft = 'PBE'`, which was deliberate
+(the same inconsistency on both sides isolates the functional) and is also a candidate cause
+of the limit-cycle in its own right: a dataset generated for one functional has the wrong core
+under another, and the gradient correction is what feels that most. `H.pbe-hgh.UPF` is
+committed. Rule that out before concluding the cell is frustrated.
 
 **Q5 — ultrasoft or PAW with several non-parallel moments has no external number in any
 regime.** [O13] Take `fe-kind1-noncol.in` (`Fe.rel-pbe-spn-rrkjus`), build a two-atom
