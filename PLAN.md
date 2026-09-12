@@ -13010,6 +13010,78 @@ ground state, no noncollinear linear response, no noncollinear magnons, no `d_sp
 no external number for a spin spiral, and no measurement of the mixer's metric beyond the
 `mixing_ndim` sweep above.
 
+### P79 -- Which penalty holds a texture, and the DFT+U promotion that was closed by a stale refusal. ✅ DONE.
+
+`defumat/scf/fields.py`, `scf/continuation.py`. `NONCOLLINEAR.md` items 9 and 10.
+
+**Item 10 said nothing holds a texture that is not the ground state. That is now false, and
+the audit's own criterion is what settles it** -- "if the angle is off by more than a degree
+at the largest `lambda` the SCF tolerates, the penalty is not holding it". It is off by
+**0.55 degrees**.
+
+Two hydrogen atoms of one species asked to sit 120 degrees apart
+(`tests/data/qe/h2-texture-120.in`), `conv_thr = 1e-8`, targets at the converged sphere
+moment of 0.26 mu_B:
+
+| scheme | lambda | converged | iterations | angle | error/site |
+|---|---|---|---|---|---|
+| (none) | -- | **yes** | 10 | 180.00 | 30.00 |
+| `atomic` | 0.05 | yes | 10 | 170.95 | 25.47 |
+| `atomic` | 0.2 | yes | 7 | 153.52 | 16.76 |
+| `atomic` | 1.0 | yes | 9 | 130.30 | 5.15 |
+| `atomic` | 3.0 | yes | 17 | 123.65 | 1.83 |
+| `atomic` | 10.0 | yes | **38** | **121.13** | **0.55** |
+| `atomic` | 30.0 | **no** | 200 | 11.91 | 64.41 |
+| `atomic texture` | 0.1 | **no** | 200 | 118.39 | 4.30 |
+| `atomic texture` | 0.02 (beta 0.1) | **no** | 400 | 140.03 | 10.02 |
+| `atomic texture` | >= 2 | **no** | 200 | collapsed | -- |
+
+Row one is the failure the constraint exists for, on a cell small enough to assert: left
+alone the 120-degree state relaxes to the **collinear antiferromagnet** in ten iterations
+and reports success, which is the cone and spiral collapse `docs/features.tex:1878-1884`
+records, reproduced in two atoms.
+
+**Which scheme, and why, is the finding.** `'atomic texture'` constrains a *direction*, so
+its gradient carries `1/|m|` -- as a site's moment shrinks its constraint potential
+**grows**, which is positive feedback, and above `lambda = 2` one site's moment blew up to
+2 mu_B while the other went to zero. `'atomic'` constrains the *vector*, so its gradient is
+`2 lambda (m - m_target)` and bounded, and it converges at every stiffness up to 10. That is
+the opposite of the intuition that a direction-only penalty is the gentler one, and it is
+why the recipe is `'atomic'` with a `STARTING_MOMENTS` card scaled to the moment you
+**expect** rather than the moment you seed with. `'atomic texture'` now warns at input and
+names this table.
+
+**What this does *not* settle**, and it is the reason item 10's fix is still worth writing.
+A penalty leaves a residual force at convergence by construction (`fields.py:385-388` says
+so), and 0.55 degrees at `lambda = 10` is that residual, not zero. Elk's per-atom feedback
+field (`bfieldfsm.f90:50-73`, `fsmtype = 2/3`, and `-1` for the direction alone) converges
+instead to a genuine stationary point of the unconstrained functional *under* that field.
+The measurement above says a penalty is good enough to map out `E(theta)` today; the
+feedback field is what would make it exact. Neither the 120-degree state nor a cone has been
+compared against Elk.
+
+**Item 9: `promote_ns` refused every DFT+U continuation into `nspin = 4`**, naming `ns_nc`
+as unimplemented -- which P62b implemented and measured at 1.2e-7 Ry on relativistic BN. The
+refusal was gated on the *target's* `nspin` alone, so it caught two different things. `2 -> 4`
+is the staged route into a hard magnet (converge a collinear antiferromagnet, promote it,
+let the moments cant), closed for anything with a `HUBBARD` card. And `4 -> 4` is the
+**checkpoint resume**: `checkpoint.py:174-192` rebuilds an `SCFResult` carrying `ns` and the
+driver sends it through `continued_state`, so a wall-clock-killed noncollinear DFT+U run
+could not restart from its own `checkpoint_dir` -- the long run P76 was written for.
+
+The promotion is the density's own rule one axis out. A spinor `ns` is
+`(4, nslot, ldmx, ldmx)` complex packed as `(uu, ud, du, dd)`, so a collinear pair becomes
+the two diagonal blocks with the off-diagonal ones zero -- the shape
+`initial_ns_noncollinear` builds for a moment along z. `4 -> 4` is a pass-through. Coming
+back keeps the diagonal, which is exact only while the shell is polarised along z, so a
+transverse block above `TRANSVERSE_NS = 1e-8` is **refused by name** rather than dropped:
+taking the diagonal of a canted occupation matrix is a different state, not a coarser one.
+
+**What is outstanding.** The Elk feedback field above; and the `2 -> 4` promotion has unit
+coverage of the array algebra but no end-to-end run -- P62b's collinear-as-spinor identity
+reached through `run_scf(starting_from=...)` instead of from scratch is the test that would
+close it, and it is an SCF pair rather than a session's worth of work.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.

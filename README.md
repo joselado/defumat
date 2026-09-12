@@ -174,7 +174,8 @@ drive any of this and is what the examples below use.
 | **Magnetic fields and constrained moments** — a uniform field, and four ways of holding a moment where you put it | `B_field`, `constrained_magnetization` | ✓ | ✓ |
 | **Magnetic fields inside one atom's sphere**, and a field that fades away as the run converges | `LOCAL_MAGNETIC_FIELDS` card, `reducebf`, `constrained_magnetization = 'fsm'` | | ✓ |
 | **Restarting an SCF from the middle** — the state, the mixer's history and the threshold schedule written on a cadence and resumed from the same directory, so a resubmitted job continues rather than starting over; and a wall clock the loop stops itself against | `run_scf(checkpoint_dir=, checkpoint_every=, max_seconds=)`, `Calculator(checkpoint_dir=)` | ✓ | ✓ |
-| **A starting magnetic texture**, one direction per *atom* rather than per species — what a helix, a cycloid or a skyrmion needs, and what decides the magnetic symmetry group, so that a texture is not symmetrised away by operations a per-species ferromagnet has and it does not. With a constraint that holds the full direction, where QE's holds the polar angle alone | `STARTING_MOMENTS` card, `constrained_magnetization = 'atomic texture'` | | |
+| **A starting magnetic texture**, one direction per *atom* rather than per species — what a helix, a cycloid or a skyrmion needs, and what decides the magnetic symmetry group, so that a texture is not symmetrised away by operations a per-species ferromagnet has and it does not. Statable from Python as well as from an input file | `STARTING_MOMENTS` card, `Calculator.with_moments` | | |
+| **Converging a magnetic structure that is not the ground state** — a 120-degree Néel state, a cone, a canted configuration, held by a per-atom penalty while the rest of the density relaxes around it. Left alone a canted pair relaxes to the collinear arrangement that is lower and reports success; held, it converges to 0.55° per site | `constrained_magnetization = 'atomic'` with a `STARTING_MOMENTS` card, `SCFResult.site_residuals` | (✓)¹⁸ | (✓)¹⁸ |
 | **DFT+U** — Dudarev's simplified functional with $U$, $J_0$, $\alpha$, $\beta$ and Liechtenstein's full one with $J$, $B$, $E_2$, $E_3$, selected by the card. Collinear or on a two-component **spinor** with spin-orbit coupling, where the occupation matrix is a 2x2 matrix in spin space. The intersite $V$ is refused by name | `HUBBARD` card, `noncolin`, `run_scf(starting_ns=...)` | ✓ | ✓ |
 | **Tensor moments of the correlated shell** — the occupation matrix in an orthonormal basis of multipoles, where the charge, the spin moment and $\mathbf{L}\cdot\mathbf{S}$ are single components; and **holding one of them fixed**, which selects an orbital ordering the field would not find on its own | `TENSOR_MOMENTS` card, `tensor_moment_penalty` | | ✓ |
 | **Around-mean-field double counting** — the alternative to the fully-localised limit: the shell's mean occupation is subtracted before the interaction, so a uniformly filled shell is corrected by exactly nothing | `hubbard_double_counting = 'amf'` | | ✓ |
@@ -303,6 +304,16 @@ Where the tick is qualified:
   orbital character means. `projwfc.x` has it (`atomic_wfc_nc_proj`,
   `partialdos_nc`) and is what the $j$-resolved projection here is validated
   against.
+
+- ¹⁸ Both codes hold a moment per atom and neither holds a *texture* the way
+  this row means it. QE's `constrained_magnetization = 'atomic'` (`i_cons = 1`,
+  `add_bfield.f90`) takes its target from `starting_magnetization` and
+  `angle1`/`angle2`, which are per **species**, so a 120-degree Néel state on
+  one species has one target for all three sites and cannot be stated. Elk's
+  `fsmtype = 2`/`3` does fix `mommtfix(:, ia, is)` per atom
+  (`bfieldfsm.f90:32-73`) and is a *feedback field* rather than a penalty, so it
+  converges to a genuine stationary point where a penalty leaves a residual —
+  the better mechanism, and not implemented here.
 
 - The **momentum-resolved** row above is blank in both columns and that is a
   claim about two sources rather than a gap in the search. `pw.x` has nothing

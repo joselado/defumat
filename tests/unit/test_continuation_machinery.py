@@ -338,23 +338,94 @@ def test_ns_is_copied_into_both_channels_and_averaged_back():
     assert np.allclose(back[0], ns[0])
 
 
-def test_ns_in_a_noncollinear_target_is_refused_by_name():
-    calculation = _Hubbard(_Setup(), nspin=4)
-    ns = np.zeros((2, 2, 3, 3))
-    with pytest.raises(NotImplementedError, match="ns_nc"):
-        promote_ns(_result(np.zeros((1, 2, 2, 2)), 2, ns=ns), calculation)
+def test_ns_promotes_into_the_two_diagonal_spin_blocks_of_a_spinor():
+    """2 -> 4 is the density's own rule one axis out: decompose, decide, recompose.
+
+    A spinor ``ns`` is ``(4, nslot, ldmx, ldmx)`` complex, the four entries
+    being ``(uu, ud, du, dd)``, so a collinear pair goes into the two diagonal
+    blocks with the off-diagonal ones zero -- the same shape
+    ``initial_ns_noncollinear`` builds for a moment along z.
+
+    **This used to raise for every ``nspin = 4`` target**, naming a blocker
+    P62b removed: ``ns_nc`` is implemented and measured at 1.2e-7 Ry on
+    relativistic BN. Converging a hard magnet is staged -- get a collinear
+    antiferromagnet, then promote it and let the moments cant -- and that route
+    was closed for anything with a HUBBARD card.
+    """
+    setup = _Setup()
+    ns = np.arange(2 * 2 * 3 * 3, dtype=float).reshape(2, 2, 3, 3)
+    promoted = np.asarray(promote_ns(
+        _result(np.zeros((1, 2, 2, 2)), 2, ns=ns), _Hubbard(setup, nspin=4)))
+    assert promoted.shape == (4, 2, 3, 3)
+    assert np.iscomplexobj(promoted)
+    assert np.allclose(promoted[0], ns[0])       # uu
+    assert np.allclose(promoted[3], ns[1])       # dd
+    assert np.allclose(promoted[1], 0.0)         # ud
+    assert np.allclose(promoted[2], 0.0)         # du
+
+    # 1 -> 4 puts the same block in both diagonal slots, as 1 -> 2 does.
+    single = ns[:1]
+    both = np.asarray(promote_ns(
+        _result(np.zeros((1, 2, 2, 2)), 1, ns=single), _Hubbard(setup, nspin=4)))
+    assert np.allclose(both[0], single[0]) and np.allclose(both[3], single[0])
+
+
+def test_a_spinor_ns_passes_through_unchanged_which_is_the_checkpoint_resume():
+    """4 -> 4 is the case that broke the P76 restart.
+
+    The old refusal was gated on the *target's* ``nspin`` alone, so it caught a
+    noncollinear run resuming from its own checkpoint: ``checkpoint.py`` rebuilds
+    an ``SCFResult`` carrying ``ns`` and the driver sends it through
+    ``continued_state``. A wall-clock-killed noncollinear DFT+U run could not
+    restart from its own ``checkpoint_dir``, which is exactly the long run the
+    checkpointing was written for.
+    """
+    setup = _Setup()
+    rng = np.random.default_rng(11)
+    ns = rng.normal(size=(4, 2, 3, 3)) + 1j * rng.normal(size=(4, 2, 3, 3))
+    same = promote_ns(_result(np.zeros((1, 2, 2, 2)), 4, ns=ns),
+                      _Hubbard(setup, nspin=4))
+    assert np.allclose(np.asarray(same), ns)
+
+
+def test_demoting_a_spinor_ns_keeps_the_diagonal_and_refuses_a_canted_shell():
+    """4 -> 2 is exact only while the shell is polarised along z.
+
+    Taking the diagonal of a canted occupation matrix drops the transverse spin
+    blocks, which is a different state rather than a coarser one -- so it is
+    refused by name instead.
+    """
+    setup = _Setup()
+    ns = np.zeros((4, 2, 3, 3), dtype=complex)
+    ns[0] = np.eye(3) * 0.8
+    ns[3] = np.eye(3) * 0.2
+    back = np.asarray(promote_ns(_result(np.zeros((1, 2, 2, 2)), 4, ns=ns),
+                                 _Hubbard(setup, nspin=2)))
+    assert back.shape == (2, 2, 3, 3)
+    assert not np.iscomplexobj(back)
+    assert np.allclose(back[0], np.real(ns[0])) and np.allclose(back[1], np.real(ns[3]))
+
+    ns[1] = ns[2] = np.eye(3) * 0.3
+    with pytest.raises(NotImplementedError, match="off-diagonal spin blocks"):
+        promote_ns(_result(np.zeros((1, 2, 2, 2)), 4, ns=ns),
+                   _Hubbard(setup, nspin=2))
 
 
 class _Setup:
     nslot = 2
     ldmx = 3
+    noncolin = False
 
 
 class _Hubbard:
     """The three attributes :func:`promote_ns` reads off a calculation."""
 
     def __init__(self, setup, nspin):
-        self.hubbard = setup
+        import copy
+        # ``ns_components`` reads ``noncolin`` off the setup, and a spinor
+        # target is a spinor setup -- the two cannot disagree in a real run.
+        self.hubbard = copy.copy(setup)
+        self.hubbard.noncolin = nspin == 4
         self.nspin = nspin
         self.is_hubbard = True
 

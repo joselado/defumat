@@ -80,6 +80,14 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
 
+from defumat.hubbard.occupations import ns_components
+
+#: Above this, a spinor occupation matrix's off-diagonal spin blocks carry real
+#: information and there is no collinear ``ns`` that means the same thing. It is
+#: a *demotion* threshold and nothing else reads it: the promotion the other way
+#: writes exact zeros there.
+TRANSVERSE_NS = 1.0e-8
+
 __all__ = [
     "ContinuedState",
     "continued_state",
@@ -437,23 +445,33 @@ def promote_ns(result, calculation):
 
     ``ns`` is per *channel* for every ``nspin`` -- ``new_ns`` halves it in the
     unpolarized case -- so 1 -> 2 is the same matrix in both channels and 2 -> 1
-    is their average, with no factor anywhere. There is no noncollinear form:
-    ``ns_nc`` is refused by name in :mod:`defumat.hubbard`, so a Hubbard run
-    cannot cross into ``nspin = 4`` at all.
+    is their average, with no factor anywhere.
+
+    **Crossing into a spinor is the same rule one axis further out**, and it is
+    the density's own: decompose, decide, recompose. A spinor ``ns`` is
+    ``(4, nslot, ldmx, ldmx)`` complex, the four entries being the spin pairs
+    ``(uu, ud, du, dd)``, so a collinear pair becomes the two *diagonal* blocks
+    with the off-diagonal ones zero -- the same shape ``initial_ns_noncollinear``
+    builds for a moment along ``z``. Coming back the other way keeps the
+    diagonal, which is exact only while the moment is along ``z``, so a
+    transverse block above :data:`TRANSVERSE_NS` is refused rather than dropped
+    silently.
+
+    This used to raise for **every** target with ``nspin = 4``, naming a blocker
+    that P62b removed -- ``ns_nc`` is implemented and measured, 1.2e-7 Ry on
+    relativistic BN. The refusal was gated on the target alone, so it caught
+    ``4 -> 4`` as well as ``2 -> 4``; and ``4 -> 4`` is the **checkpoint
+    resume**, which meant a wall-clock-killed noncollinear DFT+U run could not
+    restart from its own ``checkpoint_dir``.
     """
     if not calculation.is_hubbard:
         return None
     ns = getattr(result, "ns", None)
     if ns is None:
         return None
-    if calculation.nspin == 4:
-        raise NotImplementedError(
-            "a Hubbard U in a noncollinear calculation needs ns_nc, which is "
-            "refused by name (PLAN.md P20); drop the HUBBARD card or stay "
-            "collinear"
-        )
     ns = jnp.asarray(ns)
-    source, target = ns.shape[0], calculation.nspin
+    source, target = ns.shape[0], ns_components(
+        calculation.hubbard, calculation.nspin)
     if ns.shape[1:] != (calculation.hubbard.nslot, calculation.hubbard.ldmx,
                         calculation.hubbard.ldmx):
         warnings.warn(
@@ -472,8 +490,29 @@ def promote_ns(result, calculation):
         return jnp.concatenate([ns, ns])
     if source == 2 and target == 1:
         return jnp.mean(ns, axis=0, keepdims=True)
+    if target == 4:
+        # ``(uu, ud, du, dd)``, packed as ``2 is1 + is2``. An unpolarized source
+        # puts the same block in both diagonal slots; a collinear one puts its
+        # two channels there. Complex, because a spinor ``ns`` is.
+        up, down = (ns[0], ns[0]) if source == 1 else (ns[0], ns[1])
+        zero = jnp.zeros_like(up)
+        return jnp.stack([up, zero, zero, down]).astype(
+            jnp.result_type(up, 1j))
+    if source == 4:
+        transverse = float(jnp.max(jnp.abs(ns[1])) + jnp.max(jnp.abs(ns[2])))
+        if transverse > TRANSVERSE_NS:
+            raise NotImplementedError(
+                f"this spinor occupation matrix has off-diagonal spin blocks of "
+                f"{transverse:.3e}, so its shell is not polarised along z and "
+                f"there is no collinear ns that means the same thing. Demote to "
+                f"nspin = {calculation.nspin} from a run whose moment is along "
+                f"z, or start from init_ns (drop starting_from)"
+            )
+        diagonal = jnp.real(jnp.stack([ns[0], ns[3]]))
+        return diagonal if target == 2 else jnp.mean(diagonal, axis=0,
+                                                     keepdims=True)
     raise NotImplementedError(
-        f"no ns promotion from nspin = {source} to nspin = {target}"
+        f"no ns promotion from {source} components to {target}"
     )
 
 

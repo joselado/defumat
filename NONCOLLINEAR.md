@@ -9,12 +9,17 @@
 > `_refuse_untextured_symmetry`. Numbers are folded into each entry below and into
 > `PLAN.md` P77/P77a-d and **P78**.
 >
-> **Still open, and every one of them is a phase rather than a session:** **10** (nothing
-> holds a texture that is not the ground state), **11** (no noncollinear linear response),
+Also fixed: **9** (the DFT+U continuation, including the noncollinear checkpoint resume),
+> and **10** is *measured and largely false* -- `'atomic'` holds a 120-degree state to 0.55
+> degrees per site in 38 iterations where the unconstrained run collapses to collinear in
+> ten. Read its entry: the scheme that works is not the one this file recommends.
+>
+> **Still open, and every one is a phase:** **11** (no noncollinear linear response),
 > **12** (no noncollinear magnons), **13** (`d_spin_ldau`, which gates three consumers),
 > **15** (no external number for a spin spiral), **17** (the mixer's metric -- but see
 > item 16's measurement, which points away from it), **22** (the memory wall, unmeasured
-> since P73/P74), and **9** (the DFT+U continuation, a session that has not been taken).
+> since P73/P74), and Elk's per-atom feedback field, which item 10 now wants as an
+> improvement on a working route rather than as the only route.
 > Plus the notebook, and the open questions O1-O14.
 >
 > Three defects found *while* fixing, none of which is in this file's own list: `at_cell`
@@ -541,6 +546,14 @@ code is the construction of a `Calculation` with that constraint and no
 
 #### 9. `promote_ns` refuses every DFT+U continuation into `nspin = 4`, naming a blocker P62b removed -- and it breaks the noncollinear checkpoint resume
 
+**FIXED 2026-09-12 (P79).** `1 -> 4` and `2 -> 4` put the collinear channels into the two
+diagonal spin blocks with the off-diagonal ones zero, which is the shape
+`initial_ns_noncollinear` builds for a moment along z; `4 -> 4` is a pass-through, and it is
+the checkpoint resume. Coming back keeps the diagonal and **refuses by name** above a
+transverse block of 1e-8, because the diagonal of a canted occupation matrix is a different
+state and not a coarser one. Unit coverage of the array algebra; the end-to-end
+`run_scf(starting_from=...)` identity is still owed.
+
 **What.** Converging a hard magnet is staged: get a collinear ferromagnet or
 antiferromagnet, then promote it and let the moments cant. That route is closed for
 anything with a `HUBBARD` card.
@@ -569,6 +582,25 @@ threshold.
 **Size.** Session.
 
 #### 10. Nothing holds a texture that is not the ground state
+
+**MEASURED AND LARGELY FALSE, 2026-09-12 (P79).** By this item's own criterion -- "if the
+angle is off by more than a degree at the largest `lambda` the SCF tolerates, the penalty is
+not holding it" -- the penalty **is** holding it: **0.55 degrees**. On two hydrogen atoms of
+one species at 120 degrees, `constrained_magnetization = 'atomic'` converges at every
+`lambda` up to 10 and at `lambda = 10` holds the angle to 121.13 degrees in 38 iterations,
+where the unconstrained run collapses to the collinear antiferromagnet (180 degrees) in ten
+and reports success.
+
+The surprise is *which* scheme. `'atomic texture'` -- the direction-only one this file
+recommends -- has a `1/|m|` in its gradient, so a shrinking moment is amplified rather than
+damped: **no** `lambda` converged, and above 2 one site blew up to 2 mu_B while the other
+went to zero. `'atomic'` constrains the vector, so its gradient is bounded. The full table is
+in `PLAN.md` P79 and `docs/features.tex`, and `'atomic texture'` now warns and names it.
+
+**What stands.** A penalty leaves a residual at convergence by construction, and 0.55 degrees
+is that residual. Elk's per-atom feedback field (`bfieldfsm.f90:50-73`) would converge to a
+genuine stationary point instead, and is still worth writing -- but it is now an improvement
+on a working route rather than the only route. Nothing has been compared against Elk.
 
 **What.** Elk fixes a moment per muffin tin: `mommtfix(:, ia, is)` with `fsmtype = 2` or
 `3`, updating one field per atom, and a negative `fsmtype` fixes the *direction* alone by

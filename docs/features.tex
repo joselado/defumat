@@ -1049,6 +1049,48 @@ direction'} (\code{i\_cons = 2}), constrains $m_z/|m|$ --- the polar angle
 that contains $z$, a helix and a collinear state alike, at zero penalty: it
 cannot hold one, and reports success while failing to.
 
+\textbf{Which penalty holds a texture, measured.} \emph{Not this one.}
+\code{'atomic texture'} constrains a direction and not a length, so its
+potential carries a $1/|\mathbf m|$ and \emph{grows} as a site's moment
+shrinks --- positive feedback, and on the two-sublattice cell below no
+$\lambda$ converged. \code{'atomic'} constrains the moment as a vector, so its
+potential is $2\lambda(\mathbf m - \mathbf m_{\mathrm{target}})$ and bounded,
+and it is what to reach for. Two hydrogen atoms of one species asked to sit 120
+degrees apart (\code{tests/data/qe/h2-texture-120.in}), \code{conv\_thr = 1e-8},
+targets at the converged sphere moment of $0.26\,\mu_B$:
+
+\begin{center}
+\begin{tabular}{llccrr}
+\toprule
+scheme & $\lambda$ & converged & iterations & angle & error/site \\
+\midrule
+(none)           & ---   & \textbf{yes} &  10 & $180.00^\circ$ & $30.00^\circ$ \\
+\code{atomic}    & 0.05  & yes &  10 & $170.95^\circ$ & $25.47^\circ$ \\
+\code{atomic}    & 0.2   & yes &   7 & $153.52^\circ$ & $16.76^\circ$ \\
+\code{atomic}    & 1.0   & yes &   9 & $130.30^\circ$ & $5.15^\circ$ \\
+\code{atomic}    & 3.0   & yes &  17 & $123.65^\circ$ & $1.83^\circ$ \\
+\code{atomic}    & 10.0  & yes &  38 & $\mathbf{121.13^\circ}$ & $\mathbf{0.55^\circ}$ \\
+\code{atomic}    & 30.0  & \textbf{no} & 200 & $11.91^\circ$ & $64.41^\circ$ \\
+\code{atomic texture} & 0.1  & \textbf{no} & 200 & $118.39^\circ$ & $4.30^\circ$ \\
+\code{atomic texture} & 0.02 & \textbf{no} & 400 & $140.03^\circ$ & $10.02^\circ$ \\
+\code{atomic texture} & $\geq 2$ & \textbf{no} & 200 & collapsed & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Read the first row and the sixth together: left alone the 120-degree state
+relaxes to the collinear antiferromagnet in ten iterations and \emph{reports
+success}, and at the largest $\lambda$ the SCF tolerates the vector penalty
+holds it to \textbf{0.55 degrees per site} in 38. So a magnetic structure that
+is not the ground state can be converged here, which is what a user mapping out
+$E(\theta)$ needs and what the cone and spiral collapses recorded elsewhere in
+this document have no constraint applied to them. The recipe is
+\code{'atomic'}, a \code{STARTING\_MOMENTS} card scaled to the moment you
+\emph{expect} rather than the moment you seed with, and $\lambda$ raised until
+the angle stops moving or the SCF stops converging --- which on this cell are
+within a factor of three of each other. \code{'atomic texture'} warns and names
+this table.
+
 \emph{How far each atom is from its target} is on
 \code{SCFResult.site\_residuals}, one number per atom --- degrees for the two
 direction schemes, Bohr magnetons for \code{'atomic'}. \code{constraint\_energy}

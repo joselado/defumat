@@ -47,6 +47,8 @@ module's.
 
 from __future__ import annotations
 
+import warnings
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -244,6 +246,20 @@ def constraint_targets(
                 "starting_magnetization/angle1/angle2 are per species, so there "
                 "is nothing per-atom for it to aim at"
             )
+        warnings.warn(
+            "constrained_magnetization = 'atomic texture' constrains a "
+            "direction and not a length, so its potential carries a 1/|m| and "
+            "*grows* as a site's moment shrinks. Measured on a two-hydrogen "
+            "120-degree cell: it holds the angle to 1.6 degrees but no lambda "
+            "converged in 400 iterations, and above lambda = 2 one site blew up "
+            "to 2 mu_B while the other went to zero. Use 'atomic' instead, with "
+            "the same STARTING_MOMENTS card scaled to the moment you expect: on "
+            "that cell it converges at every lambda up to 10, and at lambda = 10 "
+            "it holds the 120 degrees to 0.55 degrees per site in 38 iterations "
+            "where the unconstrained run collapses to 180 in ten",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         targets = np.asarray(per_atom, dtype=float).reshape(-1, 3)
         modulus = np.linalg.norm(targets, axis=-1, keepdims=True)
         if np.any(modulus <= VANISHING_MOMENT):
@@ -411,6 +427,16 @@ class MagneticField(eqx.Module):
             # where it was asked to and rising with the angle. The full unit
             # vector, where ``atomic direction`` takes the polar angle alone --
             # see :data:`CONSTRAINTS`.
+            #
+            # **Its gradient carries a 1/|m|**, which is what constraining a
+            # direction and not a length means, and it is why this scheme is
+            # hard to converge: as a site's moment shrinks its constraint
+            # potential *grows*, which is positive feedback. Measured on a
+            # two-hydrogen 120-degree cell: no lambda converged, and above
+            # lambda = 2 one site's moment blew up to 2 mu_B while the other
+            # went to zero. ``'atomic'`` constrains the vector, so its gradient
+            # is ``2 lambda (m - m_target)`` and bounded -- see the warning in
+            # :func:`constraint_targets`.
             moments = self.sphere_moments(rho_r, cell)
             cosine = _unit_cosine(moments, targets)
             return self.penalty * jnp.sum(1.0 - cosine)

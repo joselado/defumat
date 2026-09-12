@@ -5007,8 +5007,14 @@ def run_scf(
         ),
         field_energy=None if field is None else float(potential.e_field),
         constraint_energy=None if field is None else float(potential.e_constraint),
+        # ``rho_out``, which is what ``site_moments`` is measured on, and not
+        # the mixed ``rho`` the *potential's* penalty was built from. QE's own
+        # note in ``add_bfield.f90`` says the two differ during a run and
+        # coincide at convergence; reporting the constraint's residual against a
+        # different density than the moments beside it would be unreadable --
+        # measured at 7.0 degrees against 4.3 on an unconverged 120-degree cell.
         site_residuals=None if field is None else _as_tuple(
-            field.site_residuals(rho, calculation.system.cell)),
+            field.site_residuals(rho_out, calculation.system.cell)),
         magnetic_field=field,
         field_scale=float(field_scale),
         fermi_energy=levels.get("fermi_energy"),
