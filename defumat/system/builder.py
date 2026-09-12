@@ -757,6 +757,25 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
             "fixed_magnetization is a vector and a collinear run has one "
             "component to compare it against (input.f90's i_cons = 3)"
         )
+    if constrained_magnetization == "fsm" and lspinorb:
+        # Not QE's -- ``fsm`` is Elk's scheme and QE has no counterpart -- and
+        # not a limit of the physics either: it is a limit of *this* secant.
+        # ``MagneticField._secant_step`` measures ``chi = dm/dB`` component by
+        # component and inverts it the same way, which models the
+        # susceptibility as diagonal. Spin-orbit coupling ties the moment to
+        # the lattice, so pushing along x moves the moment along z as well and
+        # the three components stop being three independent one-dimensional
+        # searches. The scheme would still converge sometimes and would find
+        # the wrong field the rest of the time, with nothing in the output to
+        # say which had happened.
+        raise ValueError(
+            "constrained_magnetization = 'fsm' with lspinorb = .true. is "
+            "refused: the fixed-spin-moment search updates each cartesian "
+            "component of the field from its own component of the moment, "
+            "which assumes dm_a/dB_b is diagonal, and spin-orbit coupling is "
+            "exactly what makes it not. Use a penalty scheme ('total', "
+            "'atomic') for a moment held under spin-orbit coupling"
+        )
     given_magnetization = pwin.get("system", "starting_magnetization") is not None
     # ``input.f90:1506``, in the ``'none'`` branch of the same SELECT CASE:
     # ``lscf .AND. lsda .AND. (.NOT. tfixed_occ) .AND. (.not.
@@ -977,7 +996,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         ),
         b_field=tuple(float(v) for v in pwin.indexed("system", "b_field", 3)),
         atomic_b_field=_atomic_b_field(pwin, structure.nat),
-        reducebf=float(pwin.get("system", "reducebf", 1.0)),
+        reducebf=_reducebf(pwin),
         fsm_update=_fsm_update(pwin),
         integration_radii=tuple(
             float(v) for v in pwin.indexed("system", "r_m", structure.ntyp)
@@ -1569,6 +1588,28 @@ def _spiral_q(pwin: PwInput, nspin: int, lspinorb: bool, nosym: bool) -> tuple |
         )
     return q
 
+
+
+def _reducebf(pwin) -> float:
+    """``reducebf``, inside Elk's own range.
+
+    Elk restricts it to ``[0.5, 1]`` (``readinput.f90:1264-1266``) and stops
+    otherwise, and the range is not arbitrary at either end: above 1 the
+    symmetry-breaking field *grows* every iteration, and below 0.5 it is gone
+    before the density has responded to it, so the run is the unmagnetised one
+    with a slower start. This code applies the decay after the convergence
+    test, so a value Elk would refuse is a run that stops carrying a field
+    nobody chose -- see :data:`defumat.scf.fields.FADED_FIELD`.
+    """
+    value = float(pwin.get("system", "reducebf", 1.0))
+    if not 0.5 <= value <= 1.0:
+        raise ValueError(
+            f"reducebf = {value} is outside [0.5, 1], which is the range Elk "
+            "accepts (readinput.f90:1264). Above 1 the symmetry-breaking field "
+            "grows instead of decaying; below 0.5 it is gone before the "
+            "density has responded to it"
+        )
+    return value
 
 
 def _fsm_update(pwin) -> str:

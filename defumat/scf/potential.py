@@ -53,7 +53,7 @@ from defumat.xc.functional import (
 )
 
 __all__ = ["Potential", "v_of_rho", "hartree", "exchange_correlation",
-           "gradient_correction", "meta_exchange", "scf_accuracy", "total_charge",
+           "gradient_correction", "meta_exchange", "scf_accuracy", "scf_accuracy_terms", "total_charge",
            "with_core", "as_potential_components",
            "DEFAULT_FUNCTIONAL"]
 
@@ -151,10 +151,24 @@ def scf_accuracy(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell) -> jnp
     uniform shift of the magnetization is a real error where a uniform shift of
     the charge is forbidden by neutrality.
     """
+    charge, magnetic = scf_accuracy_terms(residual_r, gvectors, cell)
+    return charge + magnetic
+
+
+def scf_accuracy_terms(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell):
+    """``(charge, magnetization)``: the two halves :func:`scf_accuracy` adds.
+
+    Same expression, reported separately, because the sum hides which one is
+    still moving. The two are weighted very differently -- the charge half by
+    ``1/G^2`` and the magnetization half by a constant -- so on a magnetic cell
+    a ``dr2`` below ``conv_thr`` bounds the moment far more weakly than it
+    bounds the charge, and a run can stop with the charge converged and the
+    magnetization still drifting. Nothing in a single scalar can say that.
+    """
     residual_g = r_to_g(residual_r, gvectors.fft_index)
-    total = hartree(total_charge(residual_g), gvectors, cell)[1]
+    charge = hartree(total_charge(residual_g), gvectors, cell)[1]
     if residual_g.shape[0] == 1:
-        return total
+        return charge, jnp.zeros_like(charge)
 
     magnetization = (
         residual_g[1:] if residual_g.shape[0] == 4
@@ -168,7 +182,7 @@ def scf_accuracy(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell) -> jnp
         contribution = 2.0 * contribution - jnp.sum(
             jnp.real(jnp.conj(magnetization[:, 0]) * magnetization[:, 0])
         )
-    return total + 0.5 * cell.volume * weight * contribution
+    return charge, 0.5 * cell.volume * weight * contribution
 
 
 def exchange_correlation(

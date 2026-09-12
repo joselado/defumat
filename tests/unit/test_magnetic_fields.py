@@ -578,3 +578,119 @@ def test_a_field_that_did_not_fade_is_reported_and_a_faded_one_is_not(regions):
 
     # An unconverged run has worse problems and says so elsewhere.
     assert warnings_from(0.99, 0.951, converged=False) == []
+
+
+def test_the_two_halves_of_dr2_add_up_to_dr2(density, cell):
+    """``scf_accuracy`` is a sum of two very differently weighted terms.
+
+    The charge half is a Hartree energy, weighted by ``1/G^2``; the
+    magnetization half has a constant weight and keeps its ``G = 0`` component.
+    Reporting only their sum hides which one is still moving, and on a magnetic
+    cell they are far enough apart at ``G_min`` that a ``dr2`` under
+    ``conv_thr`` bounds the moment much more weakly than it bounds the charge.
+    """
+    from defumat.basis.gvectors import generate_gvectors
+    from defumat.scf.potential import scf_accuracy, scf_accuracy_terms
+
+    gvectors = generate_gvectors(cell, ecut=8.0, grid=GRID)
+    residual = jnp.asarray(np.random.default_rng(7).normal(size=(4,) + GRID) * 1e-3)
+    charge, magnetic = scf_accuracy_terms(residual, gvectors, cell)
+    assert float(charge) > 0.0 and float(magnetic) > 0.0
+    assert float(charge + magnetic) == pytest.approx(
+        float(scf_accuracy(residual, gvectors, cell)), rel=1e-14
+    )
+
+    # nspin = 1 has no magnetization to be inaccurate about.
+    charge1, magnetic1 = scf_accuracy_terms(residual[:1], gvectors, cell)
+    assert float(magnetic1) == 0.0
+    assert float(charge1) == pytest.approx(
+        float(scf_accuracy(residual[:1], gvectors, cell)), rel=1e-14
+    )
+
+
+def _build(text: str):
+    from defumat.io.pwin import parse_pw_input
+    from defumat.system.builder import build_system
+    return build_system(parse_pw_input(text))
+
+
+_FSM_SOC = """
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 3, celldm(1) = 5.217, nat = 1, ntyp = 1,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.05
+    noncolin = .true.
+    nosym = .true.
+    lspinorb = %s
+    starting_magnetization(1) = 0.5
+    constrained_magnetization = 'fsm'
+    lambda = 0.02
+    fixed_magnetization(3) = 2.0
+ /
+ &electrons
+    conv_thr = 1.0d-8
+ /
+ATOMIC_SPECIES
+ Fe 55.847 Fe.rel-pbe-spn-rrkjus_psl.0.2.1.UPF
+ATOMIC_POSITIONS (alat)
+ Fe 0.0 0.0 0.0
+K_POINTS gamma
+"""
+
+
+def test_the_fixed_spin_moment_search_refuses_spin_orbit_coupling():
+    """Its secant models ``dm_a/dB_b`` as diagonal, and SOC is what breaks that.
+
+    ``_secant_step`` measures a susceptibility per cartesian component and
+    inverts it the same way, so it is three independent one-dimensional
+    searches. Spin-orbit coupling ties the moment to the lattice: pushing along
+    x moves it along z too. The scheme still converges sometimes, which is
+    exactly why it needs a refusal rather than a warning -- nothing in the
+    output says which time it was.
+    """
+    _build(_FSM_SOC % ".false.")  # the collinear-axis case is still allowed
+    with pytest.raises(ValueError, match="dm_a/dB_b is diagonal"):
+        _build(_FSM_SOC % ".true.")
+
+
+_REDUCEBF = """
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 1, celldm(1) = 10.0, nat = 1, ntyp = 1, ecutwfc = 15.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.02
+    nspin = 2
+    nosym = .true.
+    starting_magnetization(1) = 0.5
+    reducebf = %s
+ /
+ &electrons
+    conv_thr = 1.0d-6
+ /
+ATOMIC_SPECIES
+ H 1.008 H.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ H 0.0 0.0 0.0
+K_POINTS gamma
+"""
+
+
+@pytest.mark.parametrize("value", ["0.5", "0.9", "1.0"])
+def test_reducebf_is_accepted_inside_elks_range(value):
+    assert _build(_REDUCEBF % value).reducebf == float(value)
+
+
+@pytest.mark.parametrize("value", ["0.0", "0.49", "1.01", "2.0", "-1.0"])
+def test_reducebf_outside_elks_range_is_refused(value):
+    """Elk stops outside ``[0.5, 1]`` and this took anything at all.
+
+    The range is not arbitrary: above 1 the symmetry-breaking field *grows*
+    every iteration, and below 0.5 it is gone before the density has responded
+    to it, so the run is the unmagnetised one with a slower start.
+    """
+    with pytest.raises(ValueError, match=r"outside \[0.5, 1\]"):
+        _build(_REDUCEBF % value)

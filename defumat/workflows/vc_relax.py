@@ -190,6 +190,7 @@ def run_vc_relax(
     david: int | None = None,
     diago_full_acc: bool | None = None,
     mixing_fixed_ns: int | None = None,
+    mixing_ndim: int | None = None,
     scf_solver: str | None = None,
     scf_solver_options: dict | None = None,
     **scf_options,
@@ -257,6 +258,7 @@ def run_vc_relax(
     scf_options = _scf_loop_options(
         scf_options, max_iterations=max_iterations, david=david,
         diago_full_acc=diago_full_acc, mixing_fixed_ns=mixing_fixed_ns,
+        mixing_ndim=mixing_ndim,
         scf_solver=scf_solver, scf_solver_options=scf_solver_options,
     )
     current = base

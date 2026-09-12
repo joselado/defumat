@@ -107,6 +107,7 @@ SHARED_OPTIONS = frozenset({
     "diago_full_acc",
     "mixing_mode",
     "mixing_beta",
+    "mixing_ndim",
     "mixing_fixed_ns",
     "max_iterations",
     "scf_solver",
@@ -150,6 +151,7 @@ SCF_ONLY_OPTIONS = frozenset({
     "diago_full_acc",
     "mixing_mode",
     "mixing_beta",
+    "mixing_ndim",
     "mixing_fixed_ns",
     "max_iterations",
     "scf_solver",
@@ -196,6 +198,12 @@ _ELECTRONS_OPTIONS = {
     "conv_thr": "conv_thr",
     "mixing_beta": "mixing_beta",
     "mixing_mode": "mixing_mode",
+    # ``mixing_ndim``: how many previous iterations the extrapolation spans.
+    # Raising it is the first thing a pw.x user does to a magnetic cell that
+    # will not converge, and it was parsed and dropped on the floor until P78.
+    # 8 is pw.x's own default and this code's, so an input that does not set it
+    # behaves exactly as it did.
+    "mixing_ndim": "mixing_ndim",
     "mixing_fixed_ns": "mixing_fixed_ns",
     "electron_maxstep": "max_iterations",
     # ``diago_david_ndim``: adopted where ``diagonalization`` beside it is not,
@@ -240,7 +248,8 @@ def electrons_defaults(pwin) -> dict:
             continue
         if option in ("conv_thr", "mixing_beta"):
             value = float(value)
-        elif option in ("mixing_fixed_ns", "max_iterations", "david"):
+        elif option in ("mixing_fixed_ns", "max_iterations", "david",
+                        "mixing_ndim"):
             value = int(value)
         elif option == "diago_full_acc":
             # A Fortran logical, which ``_convert`` has already turned into a

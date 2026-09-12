@@ -48,6 +48,7 @@ third scheme addresses:
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 
 import jax
@@ -541,7 +542,26 @@ def local_tf_preconditioner(gvectors, cell, shape, beta=0.7):
 
 
 def get_mixer(name: str, **kwargs) -> Mixer:
+    """The mixer registered under ``name``, built from the keywords it takes.
+
+    A keyword whose value is ``None`` is dropped rather than passed, so a caller
+    can forward an unset input variable without a branch of its own; one the
+    mixer has no field for is a named error rather than a ``TypeError``, because
+    the caller is usually an input file and the fix is in the input file.
+    """
     try:
-        return MIXERS[name.lower()](**kwargs)
+        mixer = MIXERS[name.lower()]
     except KeyError as error:
         raise ValueError(f"unknown mixing mode {name!r}; expected one of {sorted(MIXERS)}") from error
+    supplied = {key: value for key, value in kwargs.items() if value is not None}
+    accepted = {
+        entry.name for entry in dataclasses.fields(mixer)
+        if not entry.name.startswith("_")
+    }
+    unknown = sorted(set(supplied) - accepted)
+    if unknown:
+        raise ValueError(
+            f"mixing mode {name!r} has no {', '.join(unknown)}; it takes "
+            f"{sorted(accepted)}"
+        )
+    return mixer(**supplied)

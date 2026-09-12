@@ -103,3 +103,62 @@ def test_the_normalised_system_gives_the_same_coefficients():
     assert np.isclose(got.sum(), 1.0)          # the constraint still holds
     # and the point of it all: the normalised system is far better conditioned
     assert np.linalg.cond(scaled) < np.linalg.cond(raw) / 1.0e3
+
+
+def test_mixing_ndim_reaches_the_mixer_and_an_unset_one_does_not_move():
+    """``mixing_ndim`` was parsed and dropped on the floor until P78.
+
+    ``AndersonMixer.history`` was fixed at 8, which is also ``pw.x``'s default,
+    so the *silence* was the whole defect: an input that set it behaved exactly
+    like one that did not, and raising it is the first thing a QE user does to a
+    cell that will not converge.
+    """
+    from defumat.scf.mixing import get_mixer
+
+    assert get_mixer("anderson", beta=0.3, history=12).history == 12
+    assert get_mixer("anderson", beta=0.3, history=None).history == 8
+    assert get_mixer("anderson", beta=0.3).history == 8
+
+    # A mixer with no such knob says so rather than raising a TypeError from
+    # inside a dataclass constructor, because the caller is usually an input
+    # file and the fix belongs in the input file.
+    with pytest.raises(ValueError, match="has no history"):
+        get_mixer("linear", beta=0.3, history=12)
+
+
+def test_mixing_ndim_is_adopted_from_the_electrons_namelist_as_an_int():
+    from defumat.calculator import electrons_defaults
+    from defumat.io.pwin import parse_pw_input
+
+    text = """
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 1, celldm(1) = 5.0, nat = 1, ntyp = 1, ecutwfc = 10.0
+ /
+ &electrons
+    mixing_ndim = 12
+ /
+ATOMIC_SPECIES
+ H 1.008 H.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ H 0.0 0.0 0.0
+K_POINTS gamma
+"""
+    adopted = electrons_defaults(parse_pw_input(text))
+    assert adopted["mixing_ndim"] == 12
+    assert isinstance(adopted["mixing_ndim"], int)
+
+
+def test_every_relaxation_driver_names_mixing_ndim():
+    """A ``**kwargs`` is not permission to pass everything, so each driver has
+    to name it -- the defect ``mixing_fixed_ns`` already had once."""
+    import inspect
+
+    from defumat.workflows.relax import run_relax
+    from defumat.workflows.spiral import relax_spiral_q
+    from defumat.workflows.vc_relax import run_vc_relax
+
+    for driver in (run_relax, run_vc_relax, relax_spiral_q):
+        assert "mixing_ndim" in inspect.signature(driver).parameters

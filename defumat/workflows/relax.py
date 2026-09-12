@@ -172,7 +172,7 @@ class RelaxResult:
 #: distinguishable from "given the default" and the two cannot drift apart.
 SCF_LOOP_OPTIONS = (
     "max_iterations", "david", "diago_full_acc", "mixing_fixed_ns",
-    "scf_solver", "scf_solver_options",
+    "mixing_ndim", "scf_solver", "scf_solver_options",
 )
 
 
@@ -214,6 +214,7 @@ def run_relax(
     david: int | None = None,
     diago_full_acc: bool | None = None,
     mixing_fixed_ns: int | None = None,
+    mixing_ndim: int | None = None,
     scf_solver: str | None = None,
     scf_solver_options: dict | None = None,
     **scf_options,
@@ -237,6 +238,7 @@ def run_relax(
     step, for a caller that wants to write its own record beside the checkpoint.
 
     ``max_iterations``, ``david``, ``diago_full_acc``, ``mixing_fixed_ns``,
+    ``mixing_ndim``,
     ``scf_solver`` and ``scf_solver_options`` are the **inner SCF's** options and
     are named here so that :class:`~defumat.calculator.Calculator` can forward
     them -- see :data:`SCF_LOOP_OPTIONS` for why naming them is what it takes.
@@ -305,6 +307,7 @@ def run_relax(
     scf_options = _scf_loop_options(
         scf_options, max_iterations=max_iterations, david=david,
         diago_full_acc=diago_full_acc, mixing_fixed_ns=mixing_fixed_ns,
+        mixing_ndim=mixing_ndim,
         scf_solver=scf_solver, scf_solver_options=scf_solver_options,
     )
     threshold = conv_thr

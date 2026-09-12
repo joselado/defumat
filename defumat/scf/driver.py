@@ -134,6 +134,7 @@ from defumat.scf.potential import (
     as_potential_components,
     fixed_quantization_axis,
     scf_accuracy,
+    scf_accuracy_terms,
     v_of_rho,
 )
 from defumat.xc.mgga import thomas_fermi_tau
@@ -182,6 +183,7 @@ def _field_potential(field, rho_r, cell, scale):
 #: it comes from the *input* magnetization and cannot change during a run.
 _potential_of_rho = jax.jit(v_of_rho, static_argnums=(6,))
 _accuracy = jax.jit(scf_accuracy)
+_accuracy_terms = jax.jit(scf_accuracy_terms)
 
 
 #: Where ``ethr`` starts, from ``PW/src/setup.f90``: the starting potential is a
@@ -4061,6 +4063,7 @@ def run_scf(
     max_iterations: int = 100,
     mixing_mode: str = "anderson",
     mixing_beta: float = 0.7,
+    mixing_ndim: int | None = None,
     calculation: Calculation | None = None,
     diagonalization: str | None = None,
     david: int | None = None,
@@ -4255,7 +4258,7 @@ def run_scf(
             print(f"  continuing a previous run: {state.description}")
 
     started_at = time.time()
-    mixer = get_mixer(mixing_mode, beta=mixing_beta)
+    mixer = get_mixer(mixing_mode, beta=mixing_beta, history=mixing_ndim)
     # Turned off for the rest of the run the first time a write is refused, so a
     # ``reducebf`` run says so once rather than once per cadence.
     checkpointing = checkpoint_dir is not None
@@ -4349,6 +4352,9 @@ def run_scf(
     converged = False
     wavefunctions = None
     ethr, accuracy = ETHR_INIT, None
+    # The two halves of ``accuracy``, set together with it inside the loop. Named
+    # here so a resumed run that never reaches the retry block still has them.
+    charge_accuracy = magnetic_accuracy = 0.0
     # External fields (P18). ``field`` is a loop variable rather than a property
     # of the calculation because two of its uses change it as the loop runs:
     # Elk's ``reducebf`` multiplies it down towards zero, and its fixed-spin-
@@ -4514,9 +4520,12 @@ def run_scf(
             # the conservative direction. Using the smooth GVectors here would
             # be a silent error whenever they differ: their fft_index addresses
             # a smaller box than the array being gathered from.
-            accuracy = float(_accuracy(
-                rho_out - rho, calculation.basis.dense, calculation.system.cell
-            ))
+            charge_accuracy, magnetic_accuracy = (
+                float(term) for term in _accuracy_terms(
+                    rho_out - rho, calculation.basis.dense, calculation.system.cell
+                )
+            )
+            accuracy = charge_accuracy + magnetic_accuracy
             if calculation.is_hubbard:
                 ns_out = calculation.occupation_matrix(wavefunctions, wg)
                 if iteration == 1 and starting_density is None and starting_ns is None:
@@ -4683,6 +4692,15 @@ def run_scf(
 
         entry = {"iteration": iteration, "total_energy": total,
                  "accuracy": accuracy, "ethr": ethr,
+                 # The two halves ``rho_ddot`` adds, because the sum hides which
+                 # one is still moving. ``rho_ddot`` weights the charge by
+                 # ``1/G^2`` and the magnetization by a constant -- a factor of
+                 # 13.6 apart at ``G_min`` on ``fe-mag-1k`` -- so an
+                 # ``accuracy`` under ``conv_thr`` bounds the moment much more
+                 # weakly than it bounds the charge, and a magnetic run can stop
+                 # with the charge converged and the moment still drifting.
+                 "charge_accuracy": charge_accuracy,
+                 "magnetic_accuracy": magnetic_accuracy,
                  "residual": residual, "change": change,
                  # Davidson steps per k-point per spin channel, summed over the
                  # attempts this iteration made -- ``pw.x``'s "avg # of
@@ -4750,6 +4768,9 @@ def run_scf(
                 # whole array is in ``history`` every iteration.
                 lengths = np.linalg.norm(site_moments, axis=1)
                 extra += f"   |m|_site = {lengths.min():.4f}..{lengths.max():.4f}"
+            if magnetic_accuracy > 0.0:
+                extra += (f"   (dr2: charge {charge_accuracy:.2e}"
+                          f" + mag {magnetic_accuracy:.2e})")
             print(f"  iteration {iteration:3d}   E = {total:16.8f} Ry"
                   f"   accuracy = {accuracy:.2e}   ethr = {ethr:.2e}"
                   f"   |drho| = {residual:.2e}{extra}")
