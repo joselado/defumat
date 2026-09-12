@@ -1356,6 +1356,13 @@ takes the other twenty, which no scalar `dr2` distinguishes. Do **not** profile
 project's 2-4x band, and a total-time table with no per-iteration column beside
 it is exactly what would have sent someone there.
 
+**It is not the machine (2026-09-12, later).** The same 12 against 32 reproduces on a
+different box and a different Quantum ESPRESSO -- i7-1255U, QE 7.4.1 in place of 7.5 --
+with the energies agreeing to the same 6.7e-9 Ry and the other nine cases' iteration
+counts identical as well (`PERFORMANCE.md`, "The same set on a second machine"). So the
+count is a property of the mixer, which is where this entry already put it, and the
+`dr2`-versus-`|m|` logging above is still the first step.
+
 ## M. Contained, but each needs the right input before it means anything
 
 ### M1. The noncollinear `newd` runs entirely outside `jit`, where the collinear one thirty lines above is inside it

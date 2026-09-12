@@ -87,6 +87,90 @@ reported against **defumat on CPU, per SCF iteration**, never against single-cor
 `GPU.md` §2.3 — with compile time as its own column. That is a different table in the
 same report and the caption says which is which.
 
+## The same set on a second machine, and what `pw.x` is linked against (2026-09-12)
+
+The `fast` set again, on a **different machine and a different Quantum ESPRESSO** from
+the run above: a 12th Gen Core i7-1255U with 40 GB, against **QE 7.4.1** installed at
+`~/apps/qe-7.4.1` rather than the vendored 7.5 tree, which is absent on this box. Same
+harness, same command, `PW_X` pointed at the other binary. Twenty units, all succeeded.
+
+**Three things came out of it, and the second is the one that matters beyond this
+machine.**
+
+**1. QE 7.4.1 and 7.5 are the same reference on these ten inputs.** Every `dE` agrees
+with the 7.5 table above to two digits — 3.0e-9, 3.8e-9, 1.5e-9, 2.5e-9, 3.7e-10,
+3.7e-9, 1.5e-9, 1.5e-9, 1.4e-8, 6.7e-9 — and **all ten iteration-count pairs are
+identical** as well, 8/7 through 12/32. The version difference is below the level at
+which the two codes disagree, so a comparison run against 7.4.1 is worth the same as one
+run against 7.5. `qe_version()` reads the banner rather than a hardcoded string, so the
+record says which was used.
+
+**2. The BLAS `pw.x` is linked against is worth 2.0x, and this project has never recorded
+it.** The QE here resolves `libblas.so.3` to Debian's **reference netlib** build
+(`/usr/lib/x86_64-linux-gnu/blas/libblas.so.3`, the only alternative installed), which is
+the unoptimised Fortran reference implementation. Preloading Anaconda's sequential MKL
+into `pw.x` alone cuts `si8-nc-1k`'s `electrons` from **0.75 s to 0.37 s** — one core
+either way, `0.37s CPU / 0.40s WALL`, so nothing threaded behind the pinning — for a
+total energy identical to every printed digit (`-63.17798906 Ry` both ways), and the
+whole `dE` column unchanged across all ten cases. It is a pure speed substitution.
+
+That moves the project's own metric: the netlib table's median is **2.0x** and the MKL
+one's is **2.2x**, and on the spinor case alone 1.1x becomes 2.2x. **A weak baseline
+flatters this code**, which is the one direction an unstated condition must not be
+allowed to run in.
+
+**What this leaves open.** Nothing in this file, in `tools/compare_qe.py` or in
+`performance/` records what linear algebra any previous `pw.x` was built against, and
+`./configure --disable-parallel --disable-openmp` on a Debian-family box picks up
+whatever `libblas.so.3` resolves to — which here is netlib. So **the 2.6x median measured
+yesterday on the other machine may or may not have had an optimised BLAS under it, and
+there is no way to tell from the record.** If it was netlib, its fair median is *above*
+2.6x rather than equal to it. This is stated as an unknown rather than reconciled: the
+honest reading is that 2.2x here and 2.6x there are two numbers whose baselines are not
+known to match. Recording the resolved `ldd` of `pw.x` beside its version in the sweep's
+record would close it, and is a small change to `run_performance.py`.
+
+**3. The whole `fast` set, this machine, QE on MKL**, one core each, `--repeats 2`,
+kernel cache off, clean tree. All columns per SCF iteration.
+
+| | QE 7.4.1 | defumat | ratio | its (QE/ours) | dE (Ry) |
+|---|---|---|---|---|---|
+| **`si-1k`** — 2 atoms, 180 PWs | 0.001 s | 0.004 s | **3.5x** | 8/7 | 3.0e-9 |
+| **`si-1k-ecut40`** — 2 atoms, 1131 PWs | 0.007 s | 0.016 s | **2.1x** | 8/8 | 3.8e-9 |
+| **`si8-1k`** — 8 atoms, 738 PWs | 0.011 s | 0.020 s | **1.8x** | 9/8 | 1.5e-9 |
+| **`si2-us-1k`** — ultrasoft | 0.011 s | 0.026 s | **2.3x** | 8/8 | 2.5e-9 |
+| **`si2-paw-1k`** — PAW | 0.017 s | 0.043 s | **2.6x** | 9/8 | 3.7e-10 |
+| **`si8-pbe-1k`** — PBE | 0.013 s | 0.022 s | **1.8x** | 8/8 | 3.7e-9 |
+| **`si8-smeared-1k`** — a metal | 0.013 s | 0.026 s | **2.1x** | 8/7 | 1.5e-9 |
+| **`si8-nc-1k`** — spinors, `npol = 2` | 0.050 s | 0.109 s | **2.2x** | 8/7 | 1.5e-9 |
+| **`pt-so-1k`** — spin-orbit | 0.094 s | 0.124 s | **1.3x** | 7/8 | 1.4e-8 |
+| **`fe-mag-1k`** — `nspin_mag = 4` | 0.035 s | 0.090 s | **2.6x** | 12/32 | 6.7e-9 |
+
+Median **2.2x**, range 1.3-3.5x — inside the 2-4x band P10 established, on a machine and
+a QE release neither of which the band was measured on.
+
+**Repeatability, measured for free.** The MKL sweep was run twice, the second time from a
+clean tree; the two agree to **0.1x** on every case and to the digit on the median, which
+is the resolution these ratios should be read at. (The first of the two is stamped
+`(dirty)` because a version probe left an empty `input_tmp.in` in the repository root —
+harmless, and the reason the quoted table is the second run.)
+
+**`fe-mag-1k`'s iteration count is not a property of the machine.** 12 against 32
+reproduces exactly here, on different hardware and a different QE release, with the
+energies agreeing to the same 6.7e-9 Ry — so `OPEN.md` H9 is about the mixer, which is
+where it was filed.
+
+**How to run it here**, since the vendored tree this file's instructions assume is absent
+on this machine and the system BLAS is the wrong one:
+
+```bash
+PW_X=~/apps/qe-7.4.1/bin/pw.x-mkl tools/run_benchmark.sh
+```
+
+`pw.x-mkl` is a two-line wrapper beside the binary that preloads sequential MKL into
+`pw.x` and nothing else — preloading it in the environment would also reach the JAX
+process on the other side of the comparison.
+
 ## Where it stands
 
 Single core, this machine, re-measured 2026-08-19. `conv_thr = 1e-10` where the
