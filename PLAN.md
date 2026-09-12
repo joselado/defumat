@@ -12495,6 +12495,116 @@ tighter than one iteration's cost overshoots by up to that much -- on the NiBr2 
 5.3 s an iteration that is 5.3 s, and on a cell where one iteration is twenty minutes it is
 twenty minutes. Leave the margin.
 
+### P77 -- Two magnetic defects: an antiferromagnet averaged to zero, and no way to see it. ✅ DONE.
+
+`defumat/system/symmetry.py`, `system/builder.py`, `scf/locals.py`, `scf/driver.py`. The
+first two entries of `NONCOLLINEAR.md`'s Tier 1, taken together because **neither is usable
+without the other**: the symmetry defect produces a converged, plausible number for the
+wrong physics, and until this phase nothing a run reported could tell that number from the
+right one.
+
+**The defect. A collinear run got no magnetic symmetry filter at all.** `is_magnetic`
+returns `False` for every `nspin != 4`, so `System.symmetry_group`, `build_system` and
+`_respin_kpoints` all skipped it. A one-species antiferromagnet therefore kept the
+operation carrying sublattice A onto sublattice B, and the density symmetriser then
+averaged `rho_up` over both sites -- which *is* the statement that the staggered moment is
+zero. The k-set was reduced with that same group, so switching the symmetriser off would
+not have rescued the run either: `nosym = .true.` was the only working spelling.
+
+**The number, on `tests/data/qe/h2-mirror-afm.in`** -- two hydrogen atoms at `+-0.2 c` with
+`+-0.6` from a `STARTING_MOMENTS` card, related by the mirror `z -> -z`, at
+`conv_thr = 1e-8`:
+
+| | nsym | swaps | E (Ry) | \|m\|_cell | site moments | iterations |
+|---|---|---|---|---|---|---|
+| before | 16 | 8 | -1.93478487 | 0.000007 | `0.000, 0.000` | 5 |
+| after | 8 | 0 | -1.93526881 | 0.807516 | `+0.291142, -0.291151` | 8 |
+| `nosym` control | 1 | -- | -1.93526881 | 0.807517 | `+0.291142, -0.291152` | 8 |
+
+**4.84e-4 Ry, which is 6.6 meV, and the entire magnetic state.** The moments were gone at
+*iteration 1* and the run then converged cleanly, reporting an absolute magnetization of
+7e-6. After the fix the symmetric run agrees with the `nosym` control to **1e-8 Ry** and
+**1e-6 mu_B** in the *same* iteration count, while still using the eight operations that
+survive rather than falling back to the identity.
+
+**The cell matters and is the reason this went unseen.** `h-chain-afm.in`, the committed
+two-site antiferromagnet, is safe -- its sublattices are related by a **pure translation**,
+which `is_supercell` already disables. The defect needs the swap to be a **point**
+operation, which is exactly the altermagnetic case: compensated order whose sublattices are
+related by a rotation. All eight swapping operations here have a zero fractional
+translation.
+
+**What was transcribed, and the trap in it.** `sgam_at_collin`
+(`~/apps/qe-7.4.1/PW/src/symm_base.f90:715-788`) takes `m_org(na) = m_loc(3,na)` -- a
+**scalar** per site -- permutes it with `irt` and compares. Without spin-orbit coupling a
+spatial operation does not turn the spin, so **reusing `magnetic_symmetries` with the
+z-moments as axial vectors would have been wrong in the other direction**: the axial filter
+carries `det(R)` and would cut a `C2x` or a mirror on a z-ferromagnet, giving a group that
+is too *small* and a k-wedge to match. `test_the_moment_is_a_scalar_and_is_not_rotated`
+is the guard, on a cell where such operations exist.
+
+**Time-reversed operations are discarded rather than kept, and that is QE's own
+`colin_mag = 1` branch.** An operation reversing every moment is a symmetry of the crystal
+followed by time reversal, and using it means swapping the two spin channels while
+symmetrising, which `_symmetrize` does not do. Discarding leaves a subgroup of the true
+magnetic group -- correct, paid for in k-points. `colin_mag = 2` needs `t_rev` as a channel
+swap and is not done. QE's default has the same hole for a different reason:
+`symmetry_with_labels` defaults `.FALSE.`, so `colin_mag` stays at -1 and `sgam_at_collin`
+is never called; the exposure is larger here only because `STARTING_MOMENTS` makes a
+one-label collinear antiferromagnet *expressible*, which a `pw.x` input cannot say.
+
+**The regression surface is zero, and that is measured rather than argued.** The filter is
+a no-op on **all 22 committed collinear inputs** -- none of them is a one-species
+compensated magnet, precisely because that spelling did not work.
+`test_the_filter_changes_nothing_on_the_committed_collinear_inputs` sweeps them so a future
+change cannot quietly move a number validated against `pw.x`.
+
+**The instrument. `get_locals` existed, was validated against `pw.x`, and had no caller.**
+It is QE's `report_mag` per atom, checked at `abs = 1e-4` on the charge and 1e-3 on the
+moment, and nothing in `defumat/` called it: `SCFResult` carried the cell total and no
+per-atom field, and the cell total is **zero by construction for every compensated state**
+-- for the antiferromagnet and equally for the nonmagnetic collapse. It is now on
+`SCFResult` as `site_charges`/`site_moments`, in `history` **every iteration**, and printed
+as `report_mag`'s block at the end with `theta` and `phi` added, which QE does not print
+and which is the step that made the one production texture failure invisible.
+
+**Per iteration and not only at convergence**, because a texture that unwinds does it
+early: the 45-atom NiBr2 cycloid went between iterations 3 and 6 and then converged to
+`accuracy = 7.55e-07` in 23 iterations. The console line carries the pair
+`|m|_site = min..max`, which is the shortest thing that separates a live compensated state
+from a dead one, and the noncollinear format is widened from `{:6.3f}` to `{:7.4f}` -- the
+harder regime was the coarser one, and 1e-3 is also `FSM_TOLERANCE`.
+
+**The spheres are stored QE's way, and that is what makes the readout free.**
+`LocalRegions` was `(nat, ngrid)` float64; for `scheme = "qe"` the regions are disjoint by
+construction, so it is now `pointlist`/`factlist` -- one owner index and one taper per grid
+point, independent of the atom count. `smooth` stays dense because a partition of unity has
+no single owner. Measured: 20.5 MB against 3.1 MB on the ten-atom chain, and an estimated
+**5 GB against 31 MB on a 157-atom slab**, which is the difference between an instrument
+that costs less than the density and one that costs more. The packed layout reproduces
+`_qe_weights` **bit for bit** and its `segment_sum` agrees with the `einsum` it replaced to
+2.5e-14.
+
+**The cost, which is what decided it goes in the loop:** 2.02 ms per iteration on
+`h-chain-afm` against a 282 ms iteration (**0.72%**) and 7.19 ms on `h10-chain-noncolin`
+against 2866 ms (**0.25%**). The spheres are built once per geometry, host-side, at 42 ms
+and 795 ms.
+
+**A third defect fell out of the same reading.** `at_cell` never rebuilt the spheres.
+`_moved_magnetic_field`'s own docstring says carrying a stale assignment across a concrete
+move is the defect, and `at_positions` and `at_strain` both call it -- `at_cell`, which is
+a vc-relax step, did not. A relaxation under `constrained_magnetization = 'atomic'`
+integrated its penalty over spheres sized for the starting cell.
+
+**What is outstanding.** The time-reversal half (`colin_mag = 2`) is not implemented, so a
+collinear magnet whose group contains flip-only operations runs on a subgroup: correct, and
+more k-points than QE would use. The `pw.x` cross-check of the packed layout
+(`test_local_moment_matches_qe`) **skips in this checkout** because the vendored QE
+test-suite is absent -- the layout is instead pinned by bit-exact equality against the
+dense weights it replaced, which is the same guarantee one step removed. And the site
+moments are not yet reported by `run_relax`, `run_vc_relax` or the response stack, only by
+`run_scf`.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.

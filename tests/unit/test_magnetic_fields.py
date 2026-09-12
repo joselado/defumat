@@ -49,7 +49,8 @@ def regions():
     """Random per-atom weights, in ``[0, 1]`` and not summing to anything."""
     rng = np.random.default_rng(31337)
     weights = rng.uniform(size=(NAT,) + GRID)
-    return LocalRegions(weights=jnp.asarray(weights), radii=(1.0,), scheme="qe")
+    return LocalRegions(weights=jnp.asarray(weights), radii=(1.0,),
+                        grid=GRID, nat=NAT, scheme="qe")
 
 
 def _moments(field: MagneticField, density, cell):
@@ -63,7 +64,7 @@ def _potential(field: MagneticField, density, cell, scale: float = 1.0):
 
 def _weighted(regions, values, grid_scale):
     """``sum_a w_a(r) values[a, ipol]`` as a ``(3, ...)`` grid array."""
-    return np.einsum("anmk,ac->cnmk", np.asarray(regions.weights), values)
+    return np.einsum("anmk,ac->cnmk", np.asarray(regions.dense_weights()), values)
 
 
 def test_uniform_field_is_minus_b(density, cell):

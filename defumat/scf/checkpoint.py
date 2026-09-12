@@ -86,7 +86,14 @@ _REFUSED = ("magnetic_field", "hubbard_setup")
 #: and the iteration history describe a run that is over. A reloaded result is
 #: therefore a state and not a report, which :func:`load_state` says in its
 #: docstring rather than leaving to be noticed.
-_DROPPED = ("stress", "solver", "history")
+#:
+#: The site charges and moments are reports of the same kind and are dropped for
+#: a second reason as well: they are a contraction of the *density* against the
+#: integration spheres, costing about 2 ms, and the spheres are a function of the
+#: geometry. Carrying them would let a pair computed for one geometry ride along
+#: beside a density reloaded into another -- the ``at_cell`` defect one layer up.
+#: :meth:`Calculation.site_moments` recomputes them from the loaded density.
+_DROPPED = ("stress", "solver", "history", "site_charges", "site_moments")
 
 #: Reconstructed from the ``system`` the caller supplies on load.
 _FROM_CALLER = ("system",)

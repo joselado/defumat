@@ -45,6 +45,7 @@ __all__ = ["Symmetries", "lattice_point_group", "find_symmetries", "is_supercell
            "symmetrize_atom_cartesian_tensor",
            "check_symmetry", "check_lattice_symmetry",
            "magnetic_symmetries", "magnetization_signs",
+           "collinear_symmetries",
            "symmetrize_magnetization", "symmetrize_vector_density",
            "symmetrize_tensor_density"]
 
@@ -52,6 +53,11 @@ _TOLERANCE = 1.0e-6
 #: QE compares magnetizations with ``eps2 = 1e-5`` (``sgam_at_mag``), looser than
 #: the position tolerance because ``m_loc`` is a product of input numbers.
 _MAGNETIC_TOLERANCE = 1.0e-5
+#: ``sgam_at_collin`` uses ``1.0D-6`` and not ``eps2``, and the difference is not
+#: cosmetic: this one is compared against a *magnetization* only, where
+#: ``_MAGNETIC_TOLERANCE`` is also applied to an applied field in Rydbergs whose
+#: scale the user picks freely.
+_COLLINEAR_TOLERANCE = 1.0e-6
 
 
 class Symmetries(eqx.Module):
@@ -385,6 +391,62 @@ def magnetic_symmetries(
         translations=tuple(translations),
         time_reversed=tuple(t_rev),
     )
+
+
+def collinear_symmetries(
+    cell: Cell, structure: Structure, symmetries: Symmetries, moments: np.ndarray
+) -> Symmetries:
+    """``sgam_at_collin``: the same filter for ``nspin = 2``, on a *scalar*.
+
+    A collinear run has no spin-orbit coupling, so a spatial operation does not
+    turn the spin: the moment is a **number** per site, not a vector, and the
+    operation permutes those numbers without rotating anything. That is the one
+    thing to get right here -- reusing :func:`magnetic_symmetries` with the
+    z-moments as axial vectors would cut operations that are perfectly good in
+    a collinear run (a ``C2x`` on a z-ferromagnet, every mirror), giving a
+    group that is too *small* and a k-wedge to match.
+
+    ``symm_base.f90:715-788`` (7.4.1) is the transcription: take
+    ``m_org(na) = m_loc(3,na)``, permute it with ``irt``, and keep the
+    operation when the permuted pattern equals the original.
+
+    **Time-reversed operations are discarded rather than kept**, which is QE's
+    own ``colin_mag = 1`` branch and not an invention. An operation that sends
+    every moment to minus itself is a symmetry of the crystal followed by time
+    reversal, and using it means *swapping the two spin channels* while
+    symmetrising -- which the density symmetriser here does not do. Discarding
+    them leaves a subgroup of the true magnetic group: correct, and paid for in
+    k-points rather than in physics. Keeping them (``colin_mag = 2``) needs
+    ``t_rev`` implemented as a channel swap and is the larger piece of work.
+
+    Why this exists at all: without it a one-species antiferromagnet keeps the
+    operation carrying sublattice A onto sublattice B, and the symmetriser then
+    averages ``rho_up`` over both sites -- which *is* the statement that the
+    staggered moment is zero. Measured on two hydrogen atoms related by a
+    mirror with moments ``+-0.6``: the site moments are gone at iteration 1 and
+    the run converges cleanly, 6.6 meV above the antiferromagnet, reporting an
+    absolute magnetization of 7e-6.
+
+    Args:
+        moments: ``(nat, 3)`` cartesian starting moments. Only the ``z``
+            component is read, because that is the axis a collinear run has.
+    """
+    if symmetries.nsym <= 1:
+        return symmetries
+    along_z = np.asarray(moments, dtype=float).reshape(-1, 3)[:, 2]
+    # ``sgam_at_collin``'s own threshold, on a magnetization rather than on the
+    # field ``_MAGNETIC_TOLERANCE`` is written for.
+    if not np.any(np.abs(along_z) > _COLLINEAR_TOLERANCE):
+        return symmetries
+    mapping = atom_mapping(cell, structure, symmetries)
+
+    kept, translations = [], []
+    for s in range(symmetries.nsym):
+        images = along_z[mapping[s]]
+        if np.all(np.abs(images - along_z) < _COLLINEAR_TOLERANCE):
+            kept.append(symmetries.rotations[s])
+            translations.append(symmetries.translations[s])
+    return Symmetries(rotations=tuple(kept), translations=tuple(translations))
 
 
 def magnetization_signs(cell: Cell, symmetries: Symmetries) -> np.ndarray:

@@ -127,7 +127,7 @@ from defumat.scf.occupations import (
     tetrahedron_occupations_spin,
 )
 from defumat.scf.fields import MagneticField, constraint_targets
-from defumat.scf.locals import build_local_regions
+from defumat.scf.locals import build_local_regions, get_locals
 from defumat.scf.potential import (
     Potential,
     as_potential_components,
@@ -553,6 +553,55 @@ def _newd_noncollinear(deeq_components, dvan_so, fcoef, soc_scale: float = 1.0):
     return dvan_so + dressed
 
 
+def _report_mag(system, regions, charges, moments) -> None:
+    """``report_mag.f90``'s per-atom block, in QE's own layout.
+
+    QE prints the relative position, the charge in the sphere, the
+    magnetization and its ratio to the charge; the noncollinear form prints
+    three components and the collinear one. The angles are added here and are
+    not QE's -- ``theta`` from the z axis and ``phi`` in the xy plane are how a
+    texture is read, and reconstructing them by hand from three components for
+    every atom is the step that made the one production failure invisible.
+
+    Printed once, at the end. The per-iteration line carries the two-number
+    summary and ``history`` carries the whole array, because a texture that
+    unwinds does it in the first few iterations and the converged value is
+    exactly the one that cannot show it.
+    """
+    positions = np.asarray(system.structure.positions_crystal(system.cell))
+    labels = [system.structure.species[t].name for t in system.structure.types]
+    radii = np.asarray(regions.radii)[np.asarray(system.structure.types, dtype=int)]
+    noncollinear = moments.shape[1] == 3
+    print("\n     Magnetic moment per site"
+          "  (integrated on atomic sphere of radius R)")
+    for atom, (label, position, radius) in enumerate(zip(labels, positions, radii)):
+        moment = moments[atom]
+        print(f"     atom {atom + 1:4d} {label:<3s} (R = {radius:.4f} bohr) "
+              f"relative position : {position[0]:9.4f}{position[1]:9.4f}"
+              f"{position[2]:9.4f}")
+        print(f"       charge        : {charges[atom]:11.6f}")
+        if noncollinear:
+            length = float(np.linalg.norm(moment))
+            theta = float(np.degrees(np.arccos(np.clip(
+                moment[2] / length, -1.0, 1.0)))) if length > 0.0 else 0.0
+            phi = float(np.degrees(np.arctan2(moment[1], moment[0])))
+            print(f"       magnetization : {moment[0]:11.6f}{moment[1]:11.6f}"
+                  f"{moment[2]:11.6f}   |m| = {length:.6f} mu_B")
+            print(f"       direction     : theta = {theta:8.3f} deg"
+                  f"   phi = {phi:8.3f} deg")
+        else:
+            print(f"       magnetization : {moment[0]:11.6f} mu_B")
+    total = moments.sum(axis=0)
+    lengths = np.linalg.norm(moments, axis=1)
+    # **The two sums that are not the same number.** The vector sum is zero for
+    # every compensated state; the sum of the lengths is not, and the pair is
+    # what says "antiferromagnet" rather than "nonmagnetic". Both are sums over
+    # the spheres and so are smaller than the cell integrals above, which
+    # include the interstitial.
+    print(f"     sum over sites: m = ({', '.join(f'{c:.6f}' for c in total)})"
+          f"   sum |m| = {lengths.sum():.6f} mu_B")
+
+
 @jax.jit
 def _noncollinear_magnetization(rho_r, volume):
     """``(m_x, m_y, m_z, |m|)`` integrated over the cell, in Bohr magnetons.
@@ -839,6 +888,22 @@ class SCFResult:
     #: noncollinear run has one -- a collinear one has :attr:`magnetization`,
     #: which is the same quantity when the axis is fixed by construction.
     magnetization_vector: tuple | None = None
+    #: ``report_mag``'s per-atom block at the converged density: the charge
+    #: ``(nat,)`` in electrons and the moment ``(nat, 1)`` collinear or
+    #: ``(nat, 3)`` noncollinear, in Bohr magnetons, integrated in the spheres
+    #: :class:`~defumat.scf.locals.LocalRegions` defines. ``None`` for a run
+    #: with no magnetization.
+    #:
+    #: **These are the only numbers a run reports that distinguish a
+    #: compensated magnet from the nonmagnetic state it may have collapsed
+    #: to.** Both totals above are zero for an antiferromagnet, for a spiral,
+    #: for a cycloid and for the collinear state a symmetriser can average one
+    #: into; the site moments are not. They are recorded per iteration in
+    #: :attr:`history` as well, because a texture that unwinds does it early --
+    #: the NiBr2 cycloid went between iterations 3 and 6 and then converged
+    #: cleanly to the wrong state.
+    site_charges: tuple | None = None
+    site_moments: tuple | None = None
     #: ``-int B . m`` and the constraint penalty at the converged density, in
     #: Ry. **Neither is part of** :attr:`total_energy` -- QE prints ``etcon``
     #: and never adds it, and Elk excludes its external field's energy by the
@@ -1471,6 +1536,10 @@ class Calculation:
         # case -- costs nothing: the whole term is absent rather than added as a
         # zero to every potential.
         self.magnetic_field = self._build_magnetic_field()
+        # The integration spheres the *reporting* uses. Built on demand rather
+        # than here, because a nonmagnetic run never asks for them; shared with
+        # the field's when there is one, so a constrained run builds one set.
+        self._reporting_regions = None
 
 
     def _require_meta_supported(self, system) -> None:
@@ -1797,6 +1866,41 @@ class Calculation:
             fsm_update=system.fsm_update,
         )
 
+    def local_regions(self):
+        """``make_pointlists``' spheres, for any quantity resolved by atom.
+
+        The field builds these when a per-atom field or an ``atomic``
+        constraint needs them; this is the same object for everything else that
+        wants a site-resolved number, so a constrained run builds one set and a
+        plain magnetic run builds one on first use.
+
+        The cost is stated in :class:`~defumat.scf.locals.LocalRegions`: the
+        packed layout is ``ngrid`` and does not grow with the number of atoms,
+        which is what lets the per-site moment be reported every iteration
+        rather than only on small cells.
+        """
+        field = self.magnetic_field
+        if field is not None and field.regions is not None:
+            return field.regions
+        if self._reporting_regions is None:
+            self._reporting_regions = build_local_regions(
+                self.system.cell, self.system.structure, self.basis.dense.grid,
+                radii=self.system.integration_radii or None,
+                scheme=self.system.local_weights,
+            )
+        return self._reporting_regions
+
+    def site_moments(self, rho_r):
+        """``(charge, moment)`` per atom -- ``report_mag``'s printed block.
+
+        ``charge`` is ``(nat,)`` in electrons and ``moment`` is ``(nat, 1)`` for
+        a collinear run and ``(nat, 3)`` for a noncollinear one, in Bohr
+        magnetons. **This is the only quantity a run reports that can tell a
+        compensated magnet from the nonmagnetic state it may have collapsed
+        to**: the cell total is zero for both.
+        """
+        return get_locals(rho_r, self.local_regions(), self.system.cell)
+
     def _moved_magnetic_field(self, system):
         """The field's integration spheres, rebuilt for a geometry that moved.
 
@@ -1939,6 +2043,9 @@ class Calculation:
         if self.hubbard is not None:
             moved.wfcU = moved._build_hubbard_projectors()
         moved.magnetic_field = moved._moved_magnetic_field(moved.system)
+        # The spheres are centred on the atoms, so a move invalidates them --
+        # the ``test_geometry_invalidation`` defect, on the reporting copy.
+        moved._reporting_regions = None
         return moved
 
     def at_cell(self, at: jnp.ndarray) -> "Calculation":
@@ -2007,6 +2114,15 @@ class Calculation:
                 np.asarray(self._kcrystal) @ np.asarray(cell.bg) / float(cell.tpiba)
             ),
         )
+        # The integration spheres are measured in the cell's own metric, so a
+        # cell that has *moved* remeasures them -- the same rule
+        # :meth:`_moved_magnetic_field` states for the atoms, and ``at_cell``
+        # is the third concrete move (a vc-relax step) beside ``at_positions``
+        # and ``at_strain``. Without this a relaxation under
+        # ``constrained_magnetization = 'atomic'`` integrates its penalty over
+        # spheres sized for the starting cell.
+        moved.magnetic_field = moved._moved_magnetic_field(moved.system)
+        moved._reporting_regions = None
         return moved
 
     def at_strain(self, strain: jnp.ndarray) -> "Calculation":
@@ -2166,6 +2282,7 @@ class Calculation:
         # ``build_local_regions`` takes its minimum-image distances in the cell's
         # own metric, so a deformed cell measures the spheres differently.
         strained.magnetic_field = strained._moved_magnetic_field(strained.system)
+        strained._reporting_regions = None
         return strained
 
     def at_kpoints(self, kpoints) -> "Calculation":
@@ -4363,6 +4480,15 @@ def run_scf(
                 )
             ]
             moment, magnetization = tuple(values[:3]), [None, values[3]]
+        site_charges = site_moments = None
+        if calculation.nspin_mag in (2, 4):
+            # ``report_mag`` per iteration, not only at the end: a texture that
+            # is going to be symmetrised away goes early and then converges
+            # cleanly, so the *last* value is exactly the one that cannot see
+            # it. One host transfer of an ``(nat, 4)`` array.
+            charges, moments = calculation.site_moments(rho_out)
+            site_charges = np.asarray(charges)
+            site_moments = np.asarray(moments)
 
         entry = {"iteration": iteration, "total_energy": total,
                  "accuracy": accuracy, "ethr": ethr,
@@ -4404,17 +4530,35 @@ def run_scf(
             entry["absolute_magnetization"] = magnetization[1]
         if moment is not None:
             entry["magnetization_vector"] = moment
+        if site_moments is not None:
+            entry["site_charges"] = site_charges.tolist()
+            entry["site_moments"] = site_moments.tolist()
         history.append(entry)
         if verbose:
             if moment is not None:
+                # ``{:7.4f}`` and not ``{:6.3f}``: the collinear branch below
+                # has always printed four decimals, and the *harder* regime
+                # was the coarser one. A monitor read off a log line stops
+                # moving when the format runs out rather than when the physics
+                # does, and 1e-3 is also ``FSM_TOLERANCE``.
                 extra = (
-                    f"   m = ({moment[0]:6.3f}, {moment[1]:6.3f}, {moment[2]:6.3f})"
-                    f" [{magnetization[1]:6.3f}] mu_B"
+                    f"   m = ({moment[0]:7.4f}, {moment[1]:7.4f}, {moment[2]:7.4f})"
+                    f" [{magnetization[1]:7.4f}] mu_B"
                 )
             elif magnetization is None:
                 extra = ""
             else:
                 extra = f"   m = {magnetization[0]:7.4f} ({magnetization[1]:7.4f}) mu_B"
+            if site_moments is not None:
+                # **The pair that says whether a compensated state is still
+                # there.** Both totals above are zero for an antiferromagnet,
+                # for a spiral and for the nonmagnetic state one can collapse
+                # into; the largest site moment separates them, and the
+                # smallest says whether the collapse took some sites and not
+                # others. The full block is printed at convergence and the
+                # whole array is in ``history`` every iteration.
+                lengths = np.linalg.norm(site_moments, axis=1)
+                extra += f"   |m|_site = {lengths.min():.4f}..{lengths.max():.4f}"
             print(f"  iteration {iteration:3d}   E = {total:16.8f} Ry"
                   f"   accuracy = {accuracy:.2e}   ethr = {ethr:.2e}"
                   f"   |drho| = {residual:.2e}{extra}")
@@ -4514,6 +4658,12 @@ def run_scf(
             mixer, completed, verbose,
         )
 
+    if verbose and site_moments is not None:
+        _report_mag(
+            calculation.system, calculation.local_regions(),
+            site_charges, site_moments,
+        )
+
     nspin = calculation.nspin
     stress = None
     asked_by_hand = tstress is not None
@@ -4585,6 +4735,11 @@ def run_scf(
         magnetization=None if magnetization is None else magnetization[0],
         absolute_magnetization=None if magnetization is None else magnetization[1],
         magnetization_vector=moment,
+        site_charges=None if site_charges is None else tuple(site_charges.tolist()),
+        site_moments=(
+            None if site_moments is None
+            else tuple(tuple(row) for row in site_moments.tolist())
+        ),
         field_energy=None if field is None else float(potential.e_field),
         constraint_energy=None if field is None else float(potential.e_constraint),
         magnetic_field=field,

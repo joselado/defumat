@@ -689,7 +689,8 @@ there *is* a process boundary; `tools/test-fast.sh` and a plain `pytest -m slow`
 everything in **one** process, where splitting changes nothing at all.
 
 **Do not run demanding suites simultaneously — not in one process, and not in two at
-once.** This machine has 30 GB and both mistakes have killed a session here:
+once.** This machine has 39 GB (40906044 kB, read 2026-09-12; it was 30 GB when the
+episodes below happened) and both mistakes have killed a session here:
 
 - **Several slow files in one `pytest` invocation** is *one* process, so every file's XLA
   executables accumulate for the whole run — three spinor suites reached 2.4 GB in ninety
@@ -705,6 +706,26 @@ file in flight rather than the whole run, which is what `run_regression.sh` alre
 And **narrow the list before running it**: a `grep` for the inputs that can actually reach
 the changed code path is minutes of work and routinely removes most of the suites, where
 guessing adds them.
+
+**Watch the memory while it runs, and be willing to stop.** Anything long enough to walk
+away from is long enough to check on: read `free -g` between steps rather than only after
+a kill, and treat a shrinking `available` column as a reason to act now. When it is
+tightening, **kill your own subprocesses first and run what is left serially** — one file
+per process, waiting for each to exit before starting the next. Serial is slower and it
+finishes; parallel is faster until it takes the session with it. Two specifics, both paid
+for here:
+
+- **The default for a long run is one capped process per file, not one big invocation.**
+  `tools/test-fast.sh` is the exception, and only on an otherwise idle machine — a single
+  2000-test process climbs monotonically for six minutes because XLA never releases a
+  compiled executable, and it was killed mid-run on 2026-09-12 for exactly that. Reach for
+  `tools/run_regression.sh`, or a loop of `systemd-run --user --scope -p MemoryMax=...
+  python3 -m pytest <one file>`, whose peak stays in the low hundreds of megabytes.
+- **This machine is shared with other sessions, and memory is the contended resource
+  rather than the cores.** A run here killed another session's suite on 2026-09-12. Before
+  starting something long, check whether anything else is running; if a peer session says
+  it is running one, either wait or cap yourself and say what you are doing. Killing your
+  own work is always the right call over letting the kernel choose whose to kill.
 
 ### An out-of-memory kill must cost one file, and must name the test that caused it
 

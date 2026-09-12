@@ -191,7 +191,8 @@ def _one_hot_regions(nat=4):
     weights = np.zeros((nat,) + CGRID)
     for a in range(nat):
         weights[a, a, 0, 0] = 1.0
-    return LocalRegions(weights=jnp.asarray(weights), radii=(1.0,) * nat, scheme="qe")
+    return LocalRegions(weights=jnp.asarray(weights), radii=(1.0,) * nat,
+                        grid=weights.shape[1:], nat=nat, scheme="qe")
 
 
 def _density_with_moments(moments):

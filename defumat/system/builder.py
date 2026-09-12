@@ -29,6 +29,7 @@ from defumat.system.kpoints import (
 from defumat.system.structure import Species, Structure
 from defumat.system.symmetry import (
     Symmetries,
+    collinear_symmetries,
     find_symmetries,
     lattice_point_group,
     magnetic_symmetries,
@@ -512,6 +513,10 @@ class System(eqx.Module):
             symmetries = magnetic_symmetries(
                 self.cell, self.structure, symmetries, axial
             )
+        elif nspin == 2:
+            symmetries = collinear_symmetries(
+                self.cell, self.structure, symmetries, moments
+            )
         rotations = None if self.nosym else symmetries.rotation_array()
         t_rev = None if self.nosym else symmetries.t_rev_array()
 
@@ -597,6 +602,12 @@ class System(eqx.Module):
         if self.nspin_mag == 4:
             symmetries = magnetic_symmetries(
                 self.cell, self.structure, symmetries, self.axial_fields
+            )
+        elif self.nspin == 2:
+            # ``sgam_at_collin``, and it is a *different* filter rather than the
+            # same one on a z-only vector -- see :func:`collinear_symmetries`.
+            symmetries = collinear_symmetries(
+                self.cell, self.structure, symmetries, self.local_moments
             )
         return symmetries
 
@@ -875,6 +886,12 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     symmetries = find_symmetries(cell, structure)
     if magnetic:
         symmetries = magnetic_symmetries(cell, structure, symmetries, axial)
+    elif nspin == 2:
+        # The k-set has to be reduced with the *same* group the density is
+        # symmetrised with, or switching the symmetriser off would not rescue
+        # the run either -- which is why this is here and not only in
+        # ``System.symmetry_group``.
+        symmetries = collinear_symmetries(cell, structure, symmetries, moments)
     rotations = None if nosym else symmetries.rotation_array()
     kpoints = _build_kpoints(
         pwin, cell, precision, rotations,

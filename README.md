@@ -167,8 +167,9 @@ drive any of this and is what the examples below use.
 | **Structural relaxation** — the atoms moved downhill to their equilibrium positions | `calculation = 'relax'`, `defumat relax` | ✓ | ✓ |
 | **Variable-cell relaxation** — the cell and the atoms relaxed together, at an applied pressure | `calculation = 'vc-relax'`, `run_vc_relax` | ✓ | ✓ |
 | **Stress tensor and pressure**, in Ry/bohr³ and kbar — the same three spin regimes as the force | `tstress = .true.`, `compute_stress`, `defumat stress` | ✓ | ✓ |
-| **Magnetism**, collinear, with one Fermi level or two | `nspin = 2`, `tot_magnetization` | ✓ | ✓ |
+| **Magnetism**, collinear, with one Fermi level or two — including a compensated magnet stated on **one** species, where the two sublattices are related by a rotation (an altermagnet), which needs the magnetic symmetry group a collinear run also has | `nspin = 2`, `tot_magnetization`, `STARTING_MOMENTS` card | ✓ | ✓ |
 | **Magnetism as a vector** — noncollinear, with the magnetic symmetry group | `noncolin` | ✓ | ✓ |
+| **The moment on each atom** — the charge and the magnetization integrated in a sphere around every atom, reported at convergence and recorded at every iteration. It is the only quantity a run reports that separates a compensated magnet from the nonmagnetic state it can collapse into: the cell total is zero for both | `SCFResult.site_moments`, `SCFResult.site_charges`, `history` | ✓ | ✓ |
 | **Spin-orbit coupling**, two-component spinors and $j$-resolved projectors | `lspinorb` | ✓ | ✓ |
 | **Magnetic fields and constrained moments** — a uniform field, and four ways of holding a moment where you put it | `B_field`, `constrained_magnetization` | ✓ | ✓ |
 | **Magnetic fields inside one atom's sphere**, and a field that fades away as the run converges | `LOCAL_MAGNETIC_FIELDS` card, `reducebf`, `constrained_magnetization = 'fsm'` | | ✓ |

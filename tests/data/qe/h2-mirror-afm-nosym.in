@@ -1,0 +1,37 @@
+! Two hydrogen atoms at +-0.2 c with opposite moments, stated on ONE species
+! with a STARTING_MOMENTS card -- the compensated magnet whose two sublattices
+! are related by a point operation, which is what an altermagnet is and what a
+! pw.x input cannot express at all (starting_magnetization is per species).
+!
+! The mirror z -> -z maps atom 1 onto atom 2 with NO fractional translation, so
+! `is_supercell` cannot disable it: this is the cell that needs
+! `sgam_at_collin`. Without that filter the density symmetriser averages rho_up
+! over both sites, the staggered moment is gone at iteration 1, and the run
+! converges cleanly 6.6 meV above the antiferromagnet.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 0.83333333333333,
+    nat = 2, ntyp = 1,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10
+    nspin = 2
+    nosym = .true.
+    starting_magnetization(1) = 0.6
+    nbnd = 12
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-11
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H 0.0 0.0 0.2
+ H 0.0 0.0 0.8
+K_POINTS {automatic}
+ 1 1 2 0 0 0
+STARTING_MOMENTS
+ 0.0 0.0  0.6
+ 0.0 0.0 -0.6

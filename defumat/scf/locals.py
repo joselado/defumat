@@ -39,6 +39,7 @@ Which one a run used is recorded in the result rather than assumed.
 from __future__ import annotations
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -110,21 +111,88 @@ def default_radii(cell: Cell, structure: Structure) -> np.ndarray:
 class LocalRegions(eqx.Module):
     """The per-atom integration weights on the dense grid.
 
-    ``weights[a]`` is the grid-shaped weight of atom ``a``. QE keeps the same
-    information as ``pointlist`` (which atom, or none) and ``factlist`` (the
-    taper), packed because a point belongs to one atom at most; here it is one
-    row per atom because that is what a contraction against a density wants and
-    because the ``smooth`` scheme does not have the disjointness that makes the
-    packed form possible.
+    Two storage layouts, because the two schemes admit different ones and the
+    difference is the whole cost of an atom-resolved quantity on a large cell:
+
+    * **packed** (``qe``) -- QE's own ``pointlist`` (which atom owns the point,
+      or ``-1``) and ``factlist`` (the taper there), which is possible exactly
+      because a point belongs to at most one atom. It is ``(ngrid,)`` of each,
+      so the cost does not grow with the number of atoms.
+    * **dense** (``smooth``) -- one grid-shaped row per atom, which the
+      partition of unity needs since a point contributes to several atoms.
+
+    The layout is invisible above :meth:`integrate`, which is the only way
+    either is read.
+
+    **The number this is here for.** Dense is ``nat x ngrid x 8`` bytes and
+    packed is ``ngrid x 12``, so they cross at two atoms and diverge from
+    there. Measured on the committed cells, with the two estimates that decide
+    the layout:
+
+    ========================  ===  =========  ========  ========
+    cell                      nat  ngrid      dense     packed
+    ========================  ===  =========  ========  ========
+    ``fe-kind1-noncol``         1     15 625   0.12 MB   0.19 MB
+    ``h4-noncolin-force``       4    102 400   3.28 MB   1.23 MB
+    ``h10-chain-noncolin``     10    256 000  20.48 MB   3.07 MB
+    NiBr2 cycloid (estimate)   45  ~2 000 000  ~700 MB    ~24 MB
+    157-atom slab (estimate)  157  ~4 000 000    ~5 GB    ~31 MB
+    ========================  ===  =========  ========  ========
+
+    The right-hand column is what lets the per-atom moment be reported every
+    iteration on any magnetic run rather than only on the small ones.
     """
 
-    weights: jnp.ndarray  # (nat, n1, n2, n3)
     radii: tuple = eqx.field(static=True)
+    grid: tuple = eqx.field(static=True)
+    nat: int = eqx.field(static=True)
     scheme: str = eqx.field(static=True, default="qe")
+    #: ``(nat, n1, n2, n3)`` -- the dense layout, or ``None`` when packed.
+    weights: jnp.ndarray | None = None
+    #: ``(ngrid,)`` int -- which atom owns each point, ``-1`` for none.
+    owner: jnp.ndarray | None = None
+    #: ``(ngrid,)`` -- the taper at each owned point.
+    taper: jnp.ndarray | None = None
 
     @property
-    def nat(self) -> int:
-        return self.weights.shape[0]
+    def packed(self) -> bool:
+        return self.weights is None
+
+    def dense_weights(self) -> jnp.ndarray:
+        """``(nat, n1, n2, n3)`` whichever layout is stored.
+
+        For the packed layout this *builds* the array the layout exists to
+        avoid, so it is for tests and for comparing the two schemes, never for
+        the SCF.
+        """
+        if self.weights is not None:
+            return self.weights
+        rows = jnp.zeros((self.nat, self.owner.size), dtype=self.taper.dtype)
+        keep = self.owner >= 0
+        rows = rows.at[jnp.where(keep, self.owner, 0), jnp.arange(self.owner.size)].set(
+            jnp.where(keep, self.taper, 0.0)
+        )
+        return rows.reshape((self.nat,) + tuple(self.grid))
+
+    def integrate(self, field: jnp.ndarray) -> jnp.ndarray:
+        """``(nat, ncomponent)``: each component of ``field`` in each sphere.
+
+        ``field`` is ``(ncomponent, n1, n2, n3)``. This is the *sum* over grid
+        points, with no volume element -- every caller multiplies by
+        ``Omega / ngrid`` itself, as ``get_locals`` does.
+        """
+        if self.weights is not None:
+            return jnp.einsum("anmk,cnmk->ac", self.weights, field)
+        flat = field.reshape(field.shape[0], -1)
+        # ``segment_sum`` wants a valid index everywhere, so unowned points are
+        # parked on atom 0 with a zero taper and dropped by the multiplication.
+        keep = self.owner >= 0
+        contribution = jnp.where(keep, self.taper, 0.0)[None, :] * flat
+        return jax.ops.segment_sum(
+            contribution.T,
+            jnp.where(keep, self.owner, 0),
+            num_segments=self.nat,
+        )
 
 
 def _grid_points(grid: tuple[int, int, int]) -> np.ndarray:
@@ -210,10 +278,27 @@ def build_local_regions(
     points = _grid_points(grid)
     distances = _minimum_image_distances(points, positions, at)
     weights = local_weights_registry[scheme](distances, per_atom)
+    common = dict(
+        radii=tuple(float(r) for r in species_radii),
+        grid=tuple(int(n) for n in grid),
+        nat=len(positions),
+        scheme=scheme,
+    )
+    if scheme == "qe":
+        # Disjoint by construction, so the whole ``(nat, ngrid)`` array is one
+        # owner index and one taper per point -- ``pointlist``/``factlist``.
+        # ``argmax`` picks the single nonzero row; ``max`` is its value, and a
+        # point in nobody's sphere has a maximum of exactly zero.
+        taper = weights.max(axis=0)
+        owner = np.where(taper > 0.0, weights.argmax(axis=0), -1)
+        return LocalRegions(
+            owner=jnp.asarray(owner),
+            taper=jnp.asarray(taper),
+            **common,
+        )
     return LocalRegions(
         weights=jnp.asarray(weights.reshape((len(positions),) + tuple(grid))),
-        radii=tuple(float(r) for r in species_radii),
-        scheme=scheme,
+        **common,
     )
 
 
@@ -236,5 +321,5 @@ def get_locals(rho_r: jnp.ndarray, regions: LocalRegions, cell: Cell):
         components = jnp.stack([rho_r[0] + rho_r[1], rho_r[0] - rho_r[1]])
     else:
         components = rho_r
-    integrated = scale * jnp.einsum("anmk,snmk->as", regions.weights, components)
+    integrated = scale * regions.integrate(components)
     return integrated[:, 0], integrated[:, 1:]

@@ -4444,6 +4444,52 @@ the last printed digit on all three cells: `si8-pbe-1k` -63.25766689 Ry, `si8-pa
 `xc/functional.py` draws itself -- and it is why the unpolarized branch, which gains
 nothing, was put back exactly as it was rather than left in the new form for symmetry.
 
+## What a per-atom moment costs to report, and what the spheres cost to store (P77)
+
+`report_mag`'s block is now computed **every iteration** of every magnetic run rather than
+never, so the first question is whether that is affordable. Measured single-core
+(`OMP_NUM_THREADS=1`, `block_until_ready` around each call, machine idle):
+
+| cell | nat | ngrid | nspin_mag | readout | one SCF iteration | share |
+|---|---|---|---|---|---|---|
+| `h-chain-afm` | 2 | 51 200 | 2 | **2.02 ms** | 282 ms | 0.72% |
+| `h10-chain-noncolin` | 10 | 256 000 | 4 | **7.19 ms** | 2866 ms | 0.25% |
+
+The spheres themselves are built once per geometry, host-side in NumPy
+(`_minimum_image_distances` over `nat x ngrid`): **42 ms** and **795 ms** for those two.
+That is the same cost the constrained-moment path has always paid, now also paid by a
+plain magnetic run; on a 45-atom cell it extrapolates to a few seconds, once.
+
+**The storage is the part that needed a decision.** `LocalRegions` held `(nat, ngrid)`
+float64, which grows with the atom count; for `scheme = "qe"` the regions are disjoint by
+construction, so it is now QE's `pointlist`/`factlist` -- one `int` owner and one `float`
+taper per grid point, **independent of `nat`**. `smooth` stays dense, because a partition
+of unity has no single owner.
+
+| cell | nat | ngrid | dense `(nat, ngrid)` | packed `(ngrid,)` |
+|---|---|---|---|---|
+| `fe-kind1-noncol` | 1 | 15 625 | 0.12 MB | 0.19 MB |
+| `h4-noncolin-force` | 4 | 102 400 | 3.28 MB | 1.23 MB |
+| `h10-chain-noncolin` | 10 | 256 000 | 20.48 MB | 3.07 MB |
+| NiBr2 cycloid (estimate) | 45 | ~2 000 000 | ~700 MB | ~24 MB |
+| 157-atom slab (estimate) | 157 | ~4 000 000 | ~5 GB | ~31 MB |
+
+They cross at two atoms. The right-hand column is what makes the readout unconditional
+instead of a flag: on the cells this package is actually pointed at, the dense layout costs
+more than the density it is measuring. The packed form reproduces `_qe_weights` **bit for
+bit** and its `segment_sum` agrees with the `einsum` it replaced to 2.5e-14, so it is a
+layout change and not an approximation.
+
+**What is not comparable, stated rather than fudged.** There is no reference wall clock to
+put beside these. `report_mag` is not a separately-timed routine in `pw.x`'s output and
+Elk's `moment.f90` is not one in Elk's, so "the same work" on the other side would have to
+be a whole SCF with and against the readout -- where 0.25-0.72% is well inside the run-to-run
+scatter. The QE-relative number that *is* meaningful for this phase is the one the
+collinear symmetry filter changes, and it is not a timing: the filter cuts
+`h2-mirror-afm`'s group from 16 operations to 8 and the run then converges in the same 8
+iterations as the `nosym` spelling, against 5 iterations to the wrong (nonmagnetic) state
+before. **Three more iterations for the right physics.**
+
 ## History
 
 | Date | Change | Effect |

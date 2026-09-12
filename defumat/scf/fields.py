@@ -294,7 +294,7 @@ class MagneticField(eqx.Module):
         """``(nat, ncomponent)``: the moment inside each atom's sphere."""
         magnetization = magnetization_components(rho_r)
         scale = cell.volume / magnetization[0].size
-        return scale * jnp.einsum("anmk,cnmk->ac", self.regions.weights, magnetization)
+        return scale * self.regions.integrate(magnetization)
 
     def total_moment(self, rho_r: jnp.ndarray, cell: Cell) -> jnp.ndarray:
         """``(ncomponent,)``: the moment of the whole cell."""

@@ -66,10 +66,11 @@ def test_local_regions_follow_the_atoms(pseudo_dir):
     field = calculation.magnetic_field
     assert field is not None and field.regions is not None
 
-    before = np.asarray(field.regions.weights)
+    before = np.asarray(field.regions.dense_weights())
     shifted = np.asarray(system.structure.positions) + np.array([0.8, 0.0, 0.0])
     after = np.asarray(
-        calculation.at_positions(jnp.asarray(shifted)).magnetic_field.regions.weights
+        calculation.at_positions(jnp.asarray(shifted))
+        .magnetic_field.regions.dense_weights()
     )
     assert np.abs(after - before).max() > 1e-6, "the spheres did not move with the atoms"
 

@@ -948,6 +948,87 @@ invisible to the filter and will be symmetrised away. Give the same texture as a
 \code{STARTING\_MOMENTS} card, or set \code{nosym = .true.}
 \end{refuses}
 
+\textbf{The moment on each atom} (\code{SCFResult.site\_moments},
+\code{.site\_charges}). The two magnetic numbers a run has always printed are
+integrals over the \emph{cell}, and both are zero for every compensated state
+--- for an antiferromagnet, for a spiral, for a cycloid, and equally for the
+nonmagnetic state any of those can collapse into. What separates them is the
+charge and the moment integrated in a sphere around each atom, which is what
+\qe{}'s \code{report\_mag} prints and what Elk computes as \code{mommt}:
+%
+\[
+  q_a = \int w_a(\mathbf{r})\, n(\mathbf{r})\, d^3r,
+  \qquad
+  \mathbf{m}_a = \int w_a(\mathbf{r})\, \mathbf{m}(\mathbf{r})\, d^3r,
+\]
+%
+with $w_a$ one inside a radius $r_m$ around atom $a$, falling linearly to zero
+at $1.2\,r_m$, and every grid point belonging to at most one atom.
+
+\begin{lstlisting}[language=Python]
+from defumat import Calculator
+
+calculator = Calculator.from_file("h2-mirror-afm.in")
+scf = calculator.get_scf()
+
+print(scf.magnetization)          # -2.3e-06  -- the cell total, zero
+print(scf.absolute_magnetization) #  0.806933
+for a, (q, m) in enumerate(zip(scf.site_charges, scf.site_moments)):
+    print(f"atom {a}: charge {q:.4f}  moment {m[0]:+.4f} mu_B")
+# atom 0: charge 0.6240  moment +0.2909 mu_B
+# atom 1: charge 0.6240  moment -0.2909 mu_B
+\end{lstlisting}
+
+\emph{They are recorded at every iteration}, in \code{scf.history}, and not only
+at convergence. That is the point rather than a convenience: a texture that is
+going to be lost goes early and the run then converges cleanly, so the converged
+value is exactly the one that cannot show it. The per-iteration console line
+carries \code{|m|\_site = min..max}, the shortest pair that tells a live
+compensated state from a dead one, and the full block is printed at the end with
+$\theta$ and $\phi$ per atom --- angles \qe{} does not print and that nobody
+should be reconstructing by hand from three components.
+
+\textbf{A collinear run has a magnetic symmetry group too.} Until recently it did
+not: the filter was built only for \code{noncolin}, so a compensated magnet
+stated on \emph{one} species kept the operation carrying one sublattice onto the
+other, and the density symmetriser then averaged $n_\uparrow$ over both sites ---
+which is the statement that the staggered moment is zero. This is not an exotic
+case: an \emph{altermagnet} is by definition compensated order whose sublattices
+are related by a rotation, so the swap is a point-group operation of the chemical
+structure. On two hydrogen atoms related by a mirror with $\pm0.6$ from the card,
+the moments were gone at iteration~1 and the run converged to a perfectly good
+total energy \textbf{6.6~meV} above the antiferromagnet, reporting an absolute
+magnetization of $7\times10^{-6}$. With the filter the group is cut from 16
+operations to the 8 that preserve the moment pattern, and the run agrees with the
+\code{nosym = .true.} spelling --- the only one that used to work --- to
+$10^{-8}$~Ry and $10^{-6}\,\mu_B$ in the same iteration count.
+
+The collinear filter compares a \emph{number} per site, not a vector. Without
+spin--orbit coupling a spatial operation does not turn the spin, so the moment is
+permuted and never rotated; filtering it as an axial vector instead would cut a
+$C_{2x}$ or a mirror on a $z$-ferromagnet and leave a group that is too
+\emph{small}.
+
+\begin{refuses}
+\textbf{Refused.} An operation that reverses \emph{every} moment is a symmetry of
+the crystal followed by time reversal. Those are \textbf{dropped} rather than
+used, which is \qe{}'s own \code{colin\_mag = 1} behaviour: using one means
+swapping the two spin channels while symmetrising, and the density symmetriser
+here does not. The result is a subgroup of the true magnetic group --- correct,
+and paid for in k-points rather than in physics.
+
+\textbf{Where the site moments are not reported:} \code{run\_scf} only. A
+relaxation and the response stack do not carry them yet.
+
+\textbf{The spheres are a choice, not a definition.} A plane-wave basis has no
+muffin tins, so ``the moment on this atom'' is whatever region you integrate
+over; $r_m$ defaults to a little under half the nearest-neighbour distance so the
+tapered spheres are disjoint. The site charges therefore sum to \emph{less} than
+the cell's charge --- the interstitial belongs to nobody --- and the site moments
+sum to less than the cell moment. Compare them against another code only when
+both used the same radius.
+\end{refuses}
+
 \textbf{DFT+U:} both rotationally-invariant functionals, on \code{atomic},
 \code{ortho-atomic} and \code{norm-atomic} projectors, read from the
 \code{HUBBARD} card. Forces come from differentiating through projectors that
