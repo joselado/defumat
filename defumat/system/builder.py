@@ -1008,6 +1008,8 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     # -- a k-set built later, for a denser DOS grid, has to go through the same
     # function or it counts every electron twice.
     kpoints = kpoints_for_spin(kpoints, nspin)
+    if spiral_q is not None:
+        _warn_if_the_spiral_grid_cannot_shift(spiral_q, kpoints)
 
     ecutwfc = pwin.get("system", "ecutwfc")
     if ecutwfc is None:
@@ -1635,6 +1637,52 @@ def _berry(pwin: PwInput) -> tuple | None:
             "endpoint, so a string carries nppstr - 1 distinct k-points"
         )
     return (gdir - 1, int(nppstr))
+
+
+def _warn_if_the_spiral_grid_cannot_shift(spiral_q, kpoints) -> None:
+    """``E(q + G) = E(q)`` needs a k-grid invariant under a shift by ``G/2``.
+
+    Adding a reciprocal lattice vector to ``q`` moves one spinor component's
+    sphere by ``+G/2`` and the other by ``-G/2``, which is the same calculation
+    with **every** ``k`` shifted by ``G/2`` -- an identity for the sum over the
+    zone only if the k-set survives that shift. For a Monkhorst-Pack grid a
+    shift of half a reciprocal vector along direction ``i`` lands on the grid
+    only when ``n_i`` is **even**.
+
+    It is not an abstract worry. Measured on the hydrogen chain: the identity
+    holds to **2e-9 Ry** on a 1x1x4 grid and fails by **2e-3 Ry** on a 1x1x3
+    one (``PLAN.md`` P19). A user scanning ``E(q)`` on a soft magnetic surface
+    can get a Heisenberg fit that is entirely the sampling, and nothing said so.
+
+    A warning rather than a refusal, because the calculation at a *single* ``q``
+    is perfectly well defined on an odd grid -- what is not defined is comparing
+    it with the same physics written at ``q + G``. Only the directions ``q``
+    actually points along are checked: those are the ones a scan moves in.
+    """
+    grid = getattr(kpoints, "grid", None)
+    if grid is None:
+        # An explicit k-list: there is no ``n_i`` to test, and the same
+        # requirement applies to it. Nothing here can check it cheaply.
+        return
+    odd = [
+        axis for axis in range(3)
+        if abs(float(spiral_q[axis])) > 1.0e-12 and int(grid[axis]) % 2
+    ]
+    if not odd:
+        return
+    names = ", ".join("xyz"[axis] for axis in odd)
+    warnings.warn(
+        f"this spin spiral's k-grid is {tuple(int(n) for n in grid)} and is odd "
+        f"along {names}, where spiral_q = {tuple(spiral_q)} is nonzero. "
+        f"E(q + G) = E(q) is an exact identity and it needs a k-set invariant "
+        f"under a shift by G/2, which a Monkhorst-Pack grid has only when that "
+        f"dimension is even: measured on a hydrogen chain, the identity holds to "
+        f"2e-9 Ry on 1x1x4 and fails by 2e-3 Ry on 1x1x3. A single q is still "
+        f"well defined; an E(q) scan on this grid is not comparable across the "
+        f"zone boundary, and a Heisenberg fit to it can be entirely the sampling",
+        RuntimeWarning,
+        stacklevel=3,
+    )
 
 
 def _spiral_q(pwin: PwInput, nspin: int, lspinorb: bool, nosym: bool) -> tuple | None:

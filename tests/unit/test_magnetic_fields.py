@@ -743,3 +743,63 @@ def test_angles_with_no_magnitude_are_refused_rather_than_run_unpolarized():
 ])
 def test_the_angle_refusal_does_not_catch_a_run_that_meant_it(body, nspin_mag):
     assert _build(_NONCOLIN_ANGLES % body).nspin_mag == nspin_mag
+
+
+_SPIRAL = """
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 0.5,
+    nat = 1, ntyp = 1, ecutwfc = 20.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.6
+    spiral_q(1) = 0.0, spiral_q(2) = 0.0, spiral_q(3) = {q}
+ /
+ &electrons
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H 0.0 0.0 0.0
+K_POINTS {{automatic}}
+ 1 1 {n} 0 0 0
+"""
+
+
+def test_a_spiral_on_an_odd_grid_says_its_own_identity_will_fail():
+    """``E(q + G) = E(q)`` needs a k-set invariant under a shift by ``G/2``.
+
+    Adding ``G`` to ``q`` moves one component's sphere by ``+G/2`` and the other
+    by ``-G/2``, which is the same calculation with every ``k`` shifted --
+    an identity only if the grid survives the shift, which a Monkhorst-Pack grid
+    does along a direction only when that dimension is even. Measured on the
+    hydrogen chain: **2e-9 Ry on 1x1x4 and 2e-3 Ry on 1x1x3** (P19), and nothing
+    checked a user's grid. A scan of ``E(q)`` on a soft magnetic surface can then
+    be a Heisenberg fit to the sampling.
+    """
+    with pytest.warns(RuntimeWarning, match="E.q . G. = E.q."):
+        _build(_SPIRAL.format(q=0.5, n=3))
+
+
+@pytest.mark.parametrize("q, n", [
+    (0.25, 4),   # the committed spiral input's own grid
+    (0.5, 4),
+    (0.5, 6),
+    (0.0, 3),    # q = 0 shifts nothing, so an odd grid is fine
+])
+def test_the_grid_warning_is_quiet_where_the_shift_lands_on_the_grid(q, n):
+    """The guard has to discriminate, not fire on every spiral.
+
+    Only the directions ``q`` actually points along are tested -- those are the
+    ones a scan moves in -- so a 1x1xN grid does not warn about its own
+    single-point x and y.
+    """
+    import warnings as _warnings
+
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        _build(_SPIRAL.format(q=q, n=n))
+    assert not [w for w in caught if "spin spiral's k-grid" in str(w.message)]

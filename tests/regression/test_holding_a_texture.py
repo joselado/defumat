@@ -41,7 +41,13 @@ import pytest
 
 from defumat import Calculator
 
-pytestmark = [pytest.mark.regression, pytest.mark.slow]
+#: **Not blanket-slow.** The audit's own finding was that the fast gate contained
+#: no magnetic *noncollinear* SCF at all -- every `pw.x` noncollinear comparison
+#: is module-level slow and the only spinor SCF in the gate is nonmagnetic
+#: platinum. The two cheap tests here are the pair worth having: a canted state
+#: collapsing to collinear (7.8 s) and one held by a constraint (4.3 s). The
+#: expensive two are marked individually.
+pytestmark = [pytest.mark.regression]
 
 INPUT = "tests/data/qe/h2-texture-120.in"
 UNIT = np.array([[np.sin(a), 0.0, np.cos(a)] for a in np.deg2rad([60.0, -60.0])])
@@ -103,7 +109,7 @@ def test_nothing_holds_a_canted_state_on_its_own(pseudo_dir):
 
 @pytest.mark.parametrize("lam, angle, tolerance", [
     (1.0, 130.30, 1.0),
-    (10.0, 121.13, 1.0),
+    pytest.param(10.0, 121.13, 1.0, marks=pytest.mark.slow),
 ])
 def test_the_vector_penalty_holds_it_and_tightens_with_lambda(
         lam, angle, tolerance, pseudo_dir):
@@ -119,6 +125,7 @@ def test_the_vector_penalty_holds_it_and_tightens_with_lambda(
     assert between < 175.0, "the constraint did nothing"
 
 
+@pytest.mark.slow
 def test_the_direction_only_penalty_does_not_converge_on_this_cell(pseudo_dir):
     """The guard that must fire, rather than a clean number read as a pass.
 

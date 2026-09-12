@@ -1002,13 +1002,27 @@ O10. **Session for the measurement, phase for a derivative term in `SizeEstimate
   `test_noncollinear_magnetism.py`), and the only spinor SCF in the gate is nonmagnetic
   platinum (`test_spinor_pdos.py:163,169`, four cases). Promote one cheap magnetic case -- the
   two-atom hydrogen antiferromagnet, not iron.
-- Two things settleable **by reading**, not by running, so they belong here rather than in
-  section 6: whether the P75 group and `is_magnetic` agree for a run carrying *both*
-  `STARTING_MOMENTS` and `LOCAL_MAGNETIC_FIELDS` -- the NiBr2 combination -- which is a read of
-  `builder.py`'s three call sites against `symmetry_group`; and whether anything rechecks the
-  *magnetic* group during a relaxation, where `checkallsym`'s equivalent covers only the
-  positions (`workflows/vc_relax.py:386-398`) and `starting_moments` is a tuple in
-  `ATOMIC_POSITIONS` order that `with_positions` does not touch.
+- **Both settled 2026-09-12 (P79), and both are clean.** *(a)* The P75 group and
+  `is_magnetic` **agree** for a run carrying both cards. Checked on five shapes of a
+  four-hydrogen chain, `is_magnetic`, `nspin_mag`, `nsym` and `nk` together: moments only,
+  fields only at 1e-6 Ry, both (the NiBr2 combination), a sub-threshold pair (moments 1e-8
+  *and* field 1e-10), and the P75 failure mode itself -- ferromagnetic moments with a
+  cycloid field. All five give `is_magnetic = True`, `nspin_mag = 4`, **`nsym = 4`** and
+  `nk = 12`, against 16 and 9 for the ferromagnet. The mechanism is that `is_magnetic` reads
+  both cards and `axial_fields` filters by both, so the only way they can differ is a
+  quantity above one threshold and below the other -- and there the *group* is the
+  conservative one, since P77b made the field comparison scale-free while `is_magnetic`'s
+  own floor stayed at 1e-12.
+
+  *(b)* Nothing rechecks the magnetic group during a relaxation and **nothing needs to**.
+  The magnetic condition is `R m_{irt(s,a)} = +- det(R) m_a`: the moments are a fixed input
+  tuple in `ATOMIC_POSITIONS` order, so a moving atom carries its own row, and `checkallsym`
+  (`check_symmetry`, `symmetry.py:1070`) verifies that every operation still maps the
+  structure onto itself -- which is the permutation the magnetic condition is stated in.
+  Unchanged moments plus an unchanged permutation is an unchanged magnetic group. The one
+  hole is that `_maps_structure` tests a *setwise* map rather than pinning the permutation,
+  so two atoms of the same species exchanging roles would slip through; a continuous
+  relaxation does not do that, and nothing else here can.
 
 ---
 
