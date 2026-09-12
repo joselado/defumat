@@ -3301,6 +3301,134 @@ and substrate couplings are unfixed prefactors, so what the result carries is
 the map and its contrast.
 \end{refuses}
 
+\subsection{Which k-points the tunnelling current comes out of}
+
+The section above asks \emph{where on the surface} the current goes. This asks
+the conjugate question: \emph{which states} carry it. Replace the point tip by a
+plane parallel to the surface and the real-space map collapses; what is left is
+one number per k-point, and on a two-dimensional metal that number is the
+answer to "which pocket of the Fermi surface does an electron actually tunnel
+out of".
+
+Integrating the point-tip map over one cell's worth of the tip plane turns
+$\int a_{n\mathbf k}(\mathbf r)\, a^{*}_{m\mathbf k}(\mathbf r)\,\mathrm d^2 r$
+into $g_{n\mathbf k} g_{m\mathbf k} S^{\rm tip}_{\mathbf k}[m,n]$, where
+$S^{\rm tip}$ is the \emph{same} Gram matrix as the exit plane's, evaluated at
+the tip's height. So
+\begin{equation*}
+  W(\mathbf k) \;=\; w_{\mathbf k}\,
+    \mathrm{Tr}\!\left[ D_{\mathbf k}\, S^{\rm exit}_{\mathbf k}\,
+                        D_{\mathbf k}\, S^{\rm tip}_{\mathbf k} \right],
+  \qquad D_{\mathbf k} = \mathrm{diag}\bigl(g_{n\mathbf k}\bigr),
+  \qquad \sum_{\mathbf k} W(\mathbf k) = \int_{\rm tip} T(\mathbf r)\,\mathrm d^2 r .
+\end{equation*}
+That last equality is a theorem, not an approximation: this is the same object
+as the map, and nothing is sampled in real space, so it costs a small fraction
+of one --- two Gram matrices and an $n_{\rm bnd}^2$ trace, against an
+$n_k \times n_{\rm bnd} \times n_{\rm points}$ sampling.
+
+\textbf{Three columns come back together}, because they are the same trace with
+one or both matrices replaced by the identity, and \emph{the physics is in their
+ratio}. \code{weight} is $W(\mathbf k)$; \code{tersoff\_hamann} is its
+$S^{\rm exit}\!\to\!1$ limit, which is the tip plane's local density of states
+and so what an STM would see; \code{bare} is the further limit in which the tip
+plane stops discriminating too, the plain Fermi surface
+$\sum_n \tilde\delta(E - \varepsilon_{n\mathbf k})$. A fourth,
+\code{incoherent}, is every channel tunnelling on its own, taken in the basis
+that diagonalises $S^{\rm exit}$ inside each degenerate multiplet --- that
+column is a \emph{diagonal} and so is not invariant under the rotation a
+degenerate eigensolver is free in, where $W$ is a trace and needs no such care.
+
+\textbf{Why the ratio is large.} A state at in-plane momentum
+$\mathbf k_\parallel$ decays into the vacuum as
+$\psi \sim e^{-\sqrt{\kappa_0^2 + k_\parallel^2}\, z}$, so a zone-corner pocket
+is suppressed against a zone-centre one by a factor that grows exponentially
+with the gap. That is also the \textbf{check that shares no machinery with
+either code}: fit a decay constant to each pocket over a height sweep and they
+must satisfy $\kappa_1^2 - \kappa_2^2 = |\mathbf k_1|^2 - |\mathbf k_2|^2$.
+$\kappa$ is the \emph{amplitude} decay and $W$ is quadratic in $\psi$ on each
+plane, so a sweep of the tip alone has $\mathrm{d}\ln W/\mathrm{d}z = -2\kappa$
+and a sweep of both planes $-4\kappa$; halving on one side only makes the
+identity come out four times too large, which is what it is for. A height sweep
+costs \emph{one} band solve, not one per height --- the bands do not know where
+the tip is.
+
+\begin{pycode}
+import numpy as np
+from defumat import Calculator
+from defumat.transport.momentum import decay_constants, decay_identity, pocket_mask
+
+calc = Calculator.from_file("nbse2.in")          # a 1H-NbSe2 monolayer
+
+# the two planes straddle the slab; a sweep of tip heights costs one band solve
+run = calc.get_momentum_transport(exit_height=0.212, height=[0.677, 0.732, 0.788],
+                                  grid=(6, 6, 1), broadening=0.006,
+                                  smearing="gaussian")
+
+run.weight            # (nheights, nk) -- the transmission per k-point
+run.tersoff_hamann    # the same states, substrate made structureless
+run.bare              # the plain Fermi surface
+run.interference      # coherent minus incoherent
+run.as_grid("weight") # reshaped to the Monkhorst-Pack grid, for a BZ image
+run.per_kpoint()      # with the k-weight divided out, for another code
+
+# the zone partition: closer to a corner than to Gamma, which on a hexagon is
+# exactly 2/3 of the zone by area
+corners = pocket_mask(run.kcartesian, calc.system.cell)
+run.shares(corners, index=2)        # each column's share, and the suppression
+run.reweighting(corners, index=2)   # (W_G/W_K)/(D_G/D_K): how the junction re-ranks
+
+# the vacuum decay, and the identity that checks it
+sweep = run.sweep("tersoff_hamann")
+heights = np.array([1.5, 2.5, 3.5]) / 0.529177210903      # bohr
+kappa = decay_constants(heights, sweep[:, [0, 14]])       # Gamma and K
+decay_identity(kappa[1], kappa[0], run.kcartesian[14], run.kcartesian[0])
+\end{pycode}
+
+\textbf{The index order is the whole difficulty, and it needs two distinct
+planes to see at all.} The elementwise-looking alternative
+$\sum_{nm} g_n g_m S^{\rm exit}[n,m]\, S^{\rm tip}[n,m]$ is
+$\mathrm{Tr}[D S^{\rm exit} D (S^{\rm tip})^{\mathsf T}]$: real, non-negative,
+and \emph{exactly} equal to the right answer whenever either matrix is diagonal
+--- so it agrees in the Tersoff--Hamann limit, agrees on a single-band metal,
+and passes every check that does not involve two planes at once. On random
+orthonormal bands it is \textbf{3\%} out, which is far above round-off and far
+below anything a plot would show. Only the literal plane integral separates
+them, and it does: the two routes agree to \textbf{1e-12}, one evaluating a
+Green's function on a real-space quadrature of the tip plane and the other never
+leaving reciprocal space.
+
+\textbf{Validated against a second implementation, which is new here.} Neither
+\code{pw.x} nor stock Elk computes this: Elk's \code{fermisurf.f90} (tasks
+100/101) writes bands for a plotting program without weighting them by
+anything, and its only tunnelling task is 162, the Tersoff--Hamann image. The
+one other implementation known is elkpy's Elk patch (task 9007), and it was
+written independently --- same on-shell Bardeen amplitude, same full Gram
+matrices on both planes, same trace of a product, and the same index-order trap
+recorded on its own side. On 1H-NbSe2 the two agree on the physics; the numbers
+are in \code{PLAN.md} P77.
+
+\begin{refuses}
+\textbf{Refuses.} A \emph{magnetic plane tip}: a polarized tip contracts the two
+spinor components through its own $2\times2$ projector, which the plane integral
+does not collapse the way it collapses the trace over position, so it is left to
+\code{get\_vertical\_transport}'s map rather than approximated here. The
+substrate's own acceptance does go in, inside the Gram matrix, exactly as it
+does there. A tilted tip plane, where the point-tip map allows one: the
+closed-form Miller-index orthogonality both sides rest on needs a plane spanned
+by two lattice vectors, and it is what makes this cheap.
+\textbf{Inherited from the vertical transmission unchanged}: a k-set with more
+than one division along the stacking axis, a symmetry-reduced k-set
+(\code{grid=} builds the whole grid), a plane inside an augmentation sphere on
+an ultrasoft or PAW dataset, gamma-only storage, a spin-selective substrate on a
+run with no magnetization, and --- from the STM images --- a spin spiral, a
+constrained \code{tot\_magnetization} and an applied magnetic field. Both planes
+on the same side of the slab \textbf{warns} rather than refuses.
+\textbf{Not claimed}: an absolute conductance. The lead couplings are unfixed
+prefactors, so what this carries is the weights and their ratios --- which is
+also why \code{shares} reports shares of a total rather than absolute weights.
+\end{refuses}
+
 \section{Things with no \texorpdfstring{\code{pw.x}}{pw.x} counterpart}
 
 \textbf{Spin spirals} by the generalized Bloch theorem: a spiral of wavevector

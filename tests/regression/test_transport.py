@@ -630,3 +630,86 @@ def test_the_literal_landauer_denominator_warns_that_it_does_not_converge():
         run_vertical_transport(calculator.system, calculator.pseudos,
                                calculator.get_scf(), shape=(2, 2),
                                method="resolvent", **SHEET)
+
+
+# --------------------------------------------------------------------------
+# the momentum-resolved weight, on real wavefunctions
+# --------------------------------------------------------------------------
+
+
+def test_the_momentum_weight_is_the_plane_integral_of_the_map_on_a_real_cell():
+    """The theorem, on converged wavefunctions rather than on random Gram matrices.
+
+    ``tests/unit`` asserts this at 1e-12 on synthetic bands; what it cannot
+    reach is the path a real run takes -- the padding mask, the whole-grid
+    k-set, the spin degeneracy in the k-weights, and the sampler. Integrating
+    :func:`run_vertical_transport`'s map over the tip plane must give
+    ``sum_k W(k)``, and the two share only ``exit_overlap``.
+
+    The tip sampling has to be a **grid of the surface cell** for the
+    quadrature to be the plane integral: ``shape`` samples ``[0, 1)`` in each
+    direction, which is exactly the rectangle rule on a periodic function, and
+    that is spectrally accurate rather than second order -- so this is asserted
+    at 1e-9 and not at a per-cent.
+    """
+    from defumat.workflows.transport import run_momentum_transport
+    from defumat.transport.substrate import surface_area
+
+    calculator = _converged("h-sheet")
+    scf = calculator.get_scf()
+    shared = dict(exit_height=0.20, broadening=0.02, grid=(3, 3, 1),
+                  energies=float(scf.fermi_energy))
+
+    per_k = run_momentum_transport(
+        calculator.system, calculator.pseudos, scf, height=0.80, **shared)
+    mapped = run_vertical_transport(
+        calculator.system, calculator.pseudos, scf, height=0.80,
+        shape=(24, 24), **shared)
+
+    area = surface_area(calculator.system.cell, 2)
+    integrated = area * mapped.image.mean()
+    assert abs(per_k.weight.sum() - integrated) / integrated < 1.0e-9
+
+
+def test_the_two_limits_are_the_stm_image_and_the_fermi_surface_on_a_real_cell():
+    """``S^exit -> 1`` is P65, and both identities is the plain Fermi surface.
+
+    The Tersoff-Hamann column must be the plane integral of ``run_stm``'s image
+    -- with no factor, for the reason the whole-cell test above gives -- and the
+    bare column must be ``fermi_surface_weights`` divided by ``eta`` and
+    multiplied by the k-weight, which is the third of the three routes to a
+    Fermi-level density of states in this package.
+    """
+    from defumat.response.nesting import fermi_surface_weights
+    from defumat.workflows.transport import run_momentum_transport
+    from defumat.transport.substrate import surface_area
+
+    calculator = _converged("h-sheet")
+    scf = calculator.get_scf()
+    eta = 0.02
+    run = run_momentum_transport(
+        calculator.system, calculator.pseudos, scf,
+        exit_height=0.20, height=0.80, broadening=eta, grid=(3, 3, 1),
+        energies=float(scf.fermi_energy))
+    image = run_stm(calculator.system, calculator.pseudos, scf,
+                    height=0.80, shape=(24, 24), width=eta)
+    area = surface_area(calculator.system.cell, 2)
+    assert (abs(run.tersoff_hamann.sum() - area * np.asarray(image.values).mean())
+            / (area * np.asarray(image.values).mean())) < 1.0e-9
+
+
+def test_a_magnetic_plane_tip_is_refused_rather_than_approximated():
+    """The one refusal this quantity adds to the map's, and it is physical.
+
+    A polarized tip contracts the two spinor components through its own 2x2
+    projector; the plane integral does not collapse that the way it collapses
+    the trace over tip position, so there is no planar form of it to compute.
+    """
+    from defumat.workflows.transport import run_momentum_transport
+
+    calculator = _magnet("spinor")
+    with pytest.raises(TypeError):
+        run_momentum_transport(
+            calculator.system, calculator.pseudos, calculator.get_scf(),
+            exit_height=0.15, height=0.85, broadening=0.05,
+            tip_spin=(1.0, 0.0, 0.0))
