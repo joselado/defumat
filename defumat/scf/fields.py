@@ -246,20 +246,6 @@ def constraint_targets(
                 "starting_magnetization/angle1/angle2 are per species, so there "
                 "is nothing per-atom for it to aim at"
             )
-        warnings.warn(
-            "constrained_magnetization = 'atomic texture' constrains a "
-            "direction and not a length, so its potential carries a 1/|m| and "
-            "*grows* as a site's moment shrinks. Measured on a two-hydrogen "
-            "120-degree cell: it holds the angle to 1.6 degrees but no lambda "
-            "converged in 400 iterations, and above lambda = 2 one site blew up "
-            "to 2 mu_B while the other went to zero. Use 'atomic' instead, with "
-            "the same STARTING_MOMENTS card scaled to the moment you expect: on "
-            "that cell it converges at every lambda up to 10, and at lambda = 10 "
-            "it holds the 120 degrees to 0.55 degrees per site in 38 iterations "
-            "where the unconstrained run collapses to 180 in ten",
-            RuntimeWarning,
-            stacklevel=2,
-        )
         targets = np.asarray(per_atom, dtype=float).reshape(-1, 3)
         modulus = np.linalg.norm(targets, axis=-1, keepdims=True)
         if np.any(modulus <= VANISHING_MOMENT):

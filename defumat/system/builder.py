@@ -794,6 +794,24 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
             "moment as a vector, and a collinear moment has no direction to "
             "constrain beyond its sign"
         )
+    if constrained_magnetization == "atomic texture":
+        # At input, once, rather than inside ``constraint_targets``, which every
+        # ``Calculation`` and several unit tests call: a run-setup warning
+        # belongs where a run is set up.
+        warnings.warn(
+            "constrained_magnetization = 'atomic texture' constrains a "
+            "direction and not a length, so its potential carries a 1/|m| and "
+            "*grows* as a site's moment shrinks. Measured on a two-hydrogen "
+            "120-degree cell it holds the angle to 1.6 degrees and **no lambda "
+            "converged** in 400 iterations, and above lambda = 2 one site blew "
+            "up to 2 mu_B while the other went to zero. Use 'atomic' instead, "
+            "with the same STARTING_MOMENTS card scaled to the moment you "
+            "expect: there it converges at every lambda up to 10, and at 10 it "
+            "holds the 120 degrees to 0.55 degrees per site in 38 iterations "
+            "where the unconstrained run collapses to 180 in ten",
+            RuntimeWarning,
+            stacklevel=3,
+        )
     if (constrained_magnetization == "atomic texture"
             and not _starting_moments(pwin, structure.nat)):
         # At the input boundary rather than where the targets are built: an

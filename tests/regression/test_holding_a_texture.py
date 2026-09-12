@@ -134,9 +134,10 @@ def test_the_direction_only_penalty_does_not_converge_on_this_cell(pseudo_dir):
     scheme that works; this asserts the warning is there and that the run it
     warns about really does fail to converge.
     """
+    text = _text("atomic texture", 0.1, length=0.6)
     with pytest.warns(RuntimeWarning, match=r"1/\|m\|"):
-        scf, _, _ = _converge(_text("atomic texture", 0.1, length=0.6),
-                              pseudo_dir)
+        Calculator.from_text(text, pseudo_dir, announce=False)
+    scf, _, _ = _converge(text, pseudo_dir)
     assert not scf.converged, (
         "'atomic texture' converged on this cell -- if that is now true the "
         "warning and the table in this module's docstring are both stale"
