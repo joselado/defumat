@@ -3249,11 +3249,56 @@ class Calculation:
 
     @property
     def starting_magnetization(self) -> np.ndarray:
-        """``starting_magnetization`` per species, padded to ``ntyp``."""
+        """``starting_magnetization`` per species, in QE's units, padded to ``ntyp``.
+
+        **A value at or above 1 is read as Bohr magnetons and divided by the
+        valence charge**, which is `input.f90:1448-1449` and is not optional if
+        the same input file is to mean the same thing in both codes:
+
+            IF (ANY(ABS(starting_magnetization(1:nsp)) >= 1)) &
+                 starting_magnetization = starting_magnetization / zv
+
+        Two details of that line are easy to lose and both are kept. It is
+        triggered by **any** species reaching 1 and then applied to **every**
+        species, each by its own ``zv`` -- so one species written in Bohr
+        magnetons reinterprets the whole card. And it sits outside the
+        ``noncolin`` block and outside the ``constrained_magnetization``
+        ``SELECT``, so it is unconditional.
+
+        The clamp at `:1476-1480` is **not** unconditional -- QE applies it
+        inside ``CASE('none')`` -- and it is what stops a channel density going
+        negative: without it ``starting_magnetization = 2`` splits an oxygen
+        atom into 9 up and **-3 down** electrons, which is not a density.
+
+        This is the *seeding* number only. ``constraint_targets`` is built from
+        ``system.starting_magnetization`` directly and is deliberately left
+        alone: ``get_locals`` returns Bohr magnetons and a constraint aims at
+        exactly the number the user wrote.
+        """
         ntyp = self.system.structure.ntyp
         values = np.zeros(ntyp)
         given = np.asarray(self.system.starting_magnetization, dtype=float)
         values[: given.size] = given[:ntyp]
+        if np.any(np.abs(values) >= 1.0):
+            valence = np.array(
+                [float(self.pseudos[t].z_valence) for t in range(ntyp)]
+            )
+            divided = values / valence
+            warnings.warn(
+                f"starting_magnetization {list(np.round(values, 6))} has an entry "
+                f"at or above 1, so pw.x reads the whole set as Bohr magnetons and "
+                f"divides every species by its valence charge "
+                f"({list(valence)}), giving {list(np.round(divided, 6))} as the "
+                f"fraction of the valence charge each atom is polarised by "
+                f"(input.f90:1448). This run does the same. If you meant a "
+                f"fraction, write a value below 1",
+                stacklevel=2,
+            )
+            values = divided
+        if self.system.constrained_magnetization == "none":
+            # ``input.f90:1476-1480``, inside ``CASE('none')`` exactly as here.
+            # A magnitude above 1 would otherwise seed a negative channel.
+            values = np.clip(values, -1.0, 1.0)
         return values
 
     @property
@@ -3286,12 +3331,14 @@ class Calculation:
         charge -- the two starting guesses have to agree about how polarized the
         atom is or the first iteration contradicts itself.
         """
-        ntyp = self.system.structure.ntyp
-        magnetization = np.zeros(ntyp)
-        given = np.asarray(self.system.starting_magnetization, dtype=float)
-        magnetization[: given.size] = given[:ntyp]
         if self.nspin == 1:
-            return np.ones((1, ntyp))
+            return np.ones((1, self.system.structure.ntyp))
+        # :attr:`starting_magnetization` and **not** a second copy of the
+        # padding: QE's Bohr-magneton rule and its clamp live there, and this
+        # method had its own copy of the three lines, which is how the rule
+        # came to be applied to the noncollinear seed and not the collinear
+        # one. The two guesses have to agree about how polarized the atom is.
+        magnetization = self.starting_magnetization
         return 0.5 * np.stack([1.0 + magnetization, 1.0 - magnetization])
 
     def starting_becsum(self) -> tuple:

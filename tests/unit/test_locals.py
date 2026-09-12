@@ -186,3 +186,104 @@ def test_the_printed_block_carries_the_direction(antiferromagnet):
     assert "theta =    0.000" in text and "theta =  180.000" in text
     # The pair that says "antiferromagnet" rather than "nonmagnetic".
     assert "sum |m| = 1.200000" in text
+
+
+# --------------------------------------------------------------------------
+# what the seeding number means
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "written, expected",
+    [
+        # Below 1, a fraction of the valence charge -- both codes agree and
+        # every committed benchmark lives here, which is why the rule below
+        # went unnoticed.
+        (0.1, 0.6),
+        (0.5, 3.0),
+        # At or above 1, pw.x reads Bohr magnetons and divides by Z_v = 6.
+        (1.0, 1.0),
+        (2.0, 2.0),
+        (-2.0, -2.0),
+        # 6/6 = 1 exactly: fully polarised, and the clamp is not reached.
+        (6.0, 6.0),
+    ],
+)
+def test_the_seeded_moment_is_the_one_pw_x_would_seed(written, expected, pseudo_dir):
+    """``input.f90:1448-1449``, on an oxygen atom where ``Z_v = 6``.
+
+    A value at or above 1 is Bohr magnetons in ``pw.x`` and was always a
+    fraction here, so the same input file asked the two codes for different
+    physics -- by a factor of six on this atom. Invisible to the committed
+    benchmark suite because every test-suite value is below 1.
+
+    The clamp at ``:1476-1480`` matters for a second reason that has nothing to
+    do with units: without it ``starting_magnetization = 2`` splits this atom
+    into **9 up and -3 down** electrons, and a negative channel density is not
+    a density.
+    """
+    import re
+    import tempfile
+    import warnings
+
+    text = re.sub(
+        r"starting_magnetization\(1\)\s*=\s*[-\d.]+",
+        f"starting_magnetization(1) = {written}",
+        (QE / "o-atom-lsda.in").read_text(),
+    )
+    directory = Path(tempfile.mkdtemp())
+    (directory / "case.in").write_text(text)
+    system = system_from_file(directory / "case.in")
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    assert float(pseudos[0].z_valence) == 6.0, "this test is about Z_v != 1"
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        calculation = Calculation(system, pseudos)
+        density = np.asarray(calculation.starting_density())
+    scale = system.cell.volume / density[0].size
+    up, down = (density.sum(axis=(1, 2, 3)) * scale)[:2]
+
+    assert up - down == pytest.approx(expected, abs=1e-9)
+    assert min(up, down) >= -1e-12, "a channel density went negative"
+    assert up + down == pytest.approx(6.0, abs=1e-9), "the charge must not move"
+
+    # The reinterpretation is announced, and only when it happens.
+    reinterpreted = [w for w in caught if "Bohr magnetons" in str(w.message)]
+    assert bool(reinterpreted) == (abs(written) >= 1.0)
+
+
+def test_the_collinear_and_noncollinear_seeds_use_the_same_rule(pseudo_dir):
+    """``spin_weights`` had its own copy of the padding, and so its own units.
+
+    The collinear density and PAW's atomic ``becsum`` both come from
+    ``spin_weights``, and it read ``System.starting_magnetization`` directly
+    rather than going through the property where QE's rule lives -- so the rule
+    reached the noncollinear seed and not the collinear one. Two guesses that
+    disagree about how polarized an atom is make iteration 1 contradict itself.
+    """
+    import re
+    import tempfile
+    import warnings
+
+    text = re.sub(
+        r"starting_magnetization\(1\)\s*=\s*[-\d.]+",
+        "starting_magnetization(1) = 3.0",
+        (QE / "o-atom-lsda.in").read_text(),
+    )
+    directory = Path(tempfile.mkdtemp())
+    (directory / "case.in").write_text(text)
+    system = system_from_file(directory / "case.in")
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculation = Calculation(system, pseudos)
+        weights = calculation.spin_weights
+        fraction = calculation.starting_magnetization
+    assert fraction[0] == pytest.approx(0.5, abs=1e-12)   # 3.0 / 6
+    assert weights[0, 0] == pytest.approx(0.75, abs=1e-12)
+    assert weights[1, 0] == pytest.approx(0.25, abs=1e-12)

@@ -12730,6 +12730,65 @@ deliberate calculation and the result object already says so. Not a refusal, bec
 state is a legitimate thing to compute -- and every response entry point already refuses it
 by name.
 
+### P77c -- `starting_magnetization = 2` meant two different things in the two codes. ✅ DONE, per species; ⏳ the card.
+
+`defumat/scf/driver.py`. `NONCOLLINEAR.md`'s Tier 1 item 4, the half that is not a
+convention question. `pw.x` reads a starting magnetization at or above 1 as **Bohr
+magnetons** and divides every species by its valence charge (`input.f90:1448-1449`); below
+1 it is a fraction of the valence charge. Here it was always the fraction, so the same
+input file asked the two codes for different physics -- **by a factor of six** on an
+oxygen atom. It is invisible to the committed benchmark suite because every test-suite
+value is below 1.
+
+Measured on `o-atom-lsda.in`, `Z_v = 6`, the seeded moment in Bohr magnetons:
+
+| written | before | `pw.x` | after |
+|---|---|---|---|
+| 0.1 | +0.60 | +0.60 | +0.60 |
+| 0.5 | +3.00 | +3.00 | +3.00 |
+| 1.0 | **+6.00** | +1.00 | +1.00 |
+| 2.0 | **+12.00**, `N_down` = **-3** | +2.00 | +2.00 |
+| -2.0 | **-12.00**, `N_up` = **-3** | -2.00 | -2.00 |
+| 6.0 | +6.00 | +6.00 | +6.00 |
+
+**The missing clamp is the worse half and has nothing to do with units.**
+`input.f90:1476-1480` bounds the value to `[-1, 1]`, and without it
+`starting_magnetization = 2` splits an oxygen atom into 9 up and **-3 down** electrons. A
+negative channel density is not a density. QE applies that clamp inside
+`CASE('none')` of `constrained_magnetization` and so does this, rather than
+unconditionally, because that is where QE has it.
+
+Two details of the division are easy to lose and both are kept: it is triggered by **any**
+species reaching 1 and then applied to **every** species, each by its own `zv`, so one
+species written in Bohr magnetons reinterprets the whole card; and it sits outside both the
+`noncolin` block and the constraint `SELECT`, so it is unconditional. A run that trips it
+says so, because the number the user wrote now means something different than it did in the
+previous version of this code.
+
+**The trap was a second copy of three lines.** The rule went into
+`Calculation.starting_magnetization`, which the *noncollinear* seed reads -- and
+`spin_weights`, which the *collinear* density and PAW's atomic `becsum` both read, had its
+own copy of the padding and read `System.starting_magnetization` directly. So the first
+version of this fix changed the noncollinear seed and not the collinear one, and the
+measurement above showed no movement at all. `spin_weights` now goes through the property.
+Its own docstring is what named the cost: "the two starting guesses have to agree about how
+polarized the atom is or the first iteration contradicts itself."
+
+**The constraint side is deliberately not touched.** `constraint_targets` is built from
+`system.starting_magnetization` directly, `get_locals` returns Bohr magnetons, and
+`constrained_magnetization = 'atomic'` therefore aims at exactly the number the user wrote.
+That is right and changing it would break it.
+
+**What is outstanding: the `STARTING_MOMENTS` card's unit, which is a user decision rather
+than a bug to fix.** The card is documented as Bohr magnetons in four places
+(`io/pwin.py:51`, `builder.py:94-95`, `builder.py:1593`, `docs/features.tex:875-877`) and
+is consumed as the per-atom *weight* on that species' tabulated atomic charge, so a row of
+`(0, 0, 1.0)` seeds **6.0** mu_B on oxygen and a row of `(0, 0, 3.0)` seeds 18 and a
+negative channel. Both readings are defensible -- Bohr magnetons matches the documentation
+and the constraint side, a fraction matches `starting_magnetization` three lines below --
+and **picking one changes the seeded density for every existing texture input**, so it is
+not a change to make silently. Measured, stated, and left for the user.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.
