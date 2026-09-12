@@ -144,6 +144,30 @@ def reference_path(case: Path) -> Path:
     return case.with_name(f"reference.out.{case.stem}")
 
 
+#: Cards that are **this code's own** and that ``pw.x`` cannot parse. An input
+#: carrying one has no ``pw.x`` reference by construction, so it is skipped here
+#: rather than run and failed.
+#:
+#: ``STARTING_MOMENTS`` is the case: a texture on one species, which
+#: ``starting_magnetization`` (per *species*) cannot express at all, so those
+#: cells exist precisely because QE has no way to state them. Before P77 every
+#: input in ``tests/data/qe`` was a valid ``pw.x`` input and the bare
+#: ``generate_reference.py`` -- its documented "everything missing" form --
+#: worked; afterwards it would stop at the first texture with a parser error
+#: that reads like a broken input file.
+NOT_PW_X_INPUT = ("STARTING_MOMENTS", "LOCAL_MAGNETIC_FIELDS")
+
+
+def is_defumat_only(case: Path) -> str | None:
+    """The card that makes this input unreadable by ``pw.x``, or ``None``."""
+    text = case.read_text()
+    for card in NOT_PW_X_INPUT:
+        for line in text.splitlines():
+            if line.strip().upper().startswith(card):
+                return card
+    return None
+
+
 def restamped_path(relative: str) -> Path:
     """Where a regenerated test-suite reference is stored."""
     directory, name = relative.split("/")
@@ -440,6 +464,11 @@ def main(argv=None) -> int:
             continue
         if out.is_file() and not args.force:
             print(f"  {case.stem}: already generated")
+            continue
+        card = is_defumat_only(case)
+        if card is not None:
+            print(f"  {case.stem}: carries a {card} card, which pw.x cannot read; "
+                  f"no reference exists for it")
             continue
         print(f"  {case.stem}: running pw.x ...", flush=True)
         out.write_text(run_case(case, conv_thr))

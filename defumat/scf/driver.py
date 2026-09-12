@@ -192,6 +192,23 @@ _accuracy_split = jax.jit(scf_accuracy_split)
 ETHR_INIT = 1.0e-2
 
 
+#: Above this relative residual, the density a run is starting from is not
+#: invariant under the group the run will symmetrise with, and the first
+#: iteration will average part of it away
+#: (:meth:`Calculation.symmetry_residual`).
+#:
+#: **1e-3 is a threshold on a quantity that is round-off or order one**, not a
+#: tolerance with physics in it. A seed built from the input file's own cards is
+#: invariant by construction -- the magnetic filter cut the group down to the
+#: operations that leave the stated texture alone -- so the measured figure
+#: there is 1e-16-ish; a seed handed in by hand under a group that does not
+#: belong to it loses a finite fraction of its magnetization, which is what
+#: P75's cycloid did. Nothing lands in between, and the value is set where
+#: ``FSM_TOLERANCE`` is for that reason: far above any round-off and far below
+#: any real loss.
+SYMMETRY_SEED_RESIDUAL = 1.0e-3
+
+
 #: Below this fractional occupation a band is "empty" for the purposes of the
 #: eigensolver, and is converged to ``empty_ethr`` instead of ``ethr``
 #: (``PW/src/sum_band.f90:125``: ``WHERE( wg(:,ik) / wk(ik) < 0.01D0 )``).
@@ -595,6 +612,64 @@ def _warn_if_the_field_did_not_fade(field, field_scale, converged, e_field) -> N
         f"to, and every response entry point refuses such a state by name",
         RuntimeWarning,
         stacklevel=2,
+    )
+
+
+def _warn_if_the_seed_is_not_symmetric(calculation, rho, from_a_card: bool) -> None:
+    """The density a run starts from is not invariant under the run's own group.
+
+    :meth:`Calculation.symmetry_residual`, checked once before iteration 1. Why
+    here and not inside the loop: the group is fixed for the run, so a seed the
+    group does not leave alone is a seed whose non-invariant part iteration 1
+    averages away -- and the output densities that follow are *wedge sums*,
+    where the same residual is large whenever ``sym_rho`` is doing its job and
+    therefore says nothing (a check whose positive result cannot be told from
+    correct operation).
+
+    **This is P75's failure, caught before the run rather than after it.** A
+    four-atom cycloid handed in as a starting density under a group built for a
+    ferromagnet converged cleanly to the collinear state 23 iterations later,
+    and the only surviving evidence was the site moments. A seed built from the
+    input file's own cards cannot do that -- the magnetic filter cut the group
+    to the operations that preserve the stated texture -- which is why the two
+    cases get different messages: from a card, a nonzero residual is a defect in
+    the filter and is worth saying so; handed in, it is the caller's group that
+    does not match the caller's density, and ``nosym`` is the fix.
+
+    Costs one symmetrisation of the seed, once per run, and changes nothing the
+    run computes.
+    """
+    if not calculation.use_symmetry:
+        return
+    charge, moment = calculation.symmetry_residual(rho)
+    worst = charge if moment is None else max(charge, moment)
+    if worst <= SYMMETRY_SEED_RESIDUAL:
+        return
+    where = (
+        "This seed came from the input file's own cards, so the magnetic "
+        "symmetry filter (sgam_at_mag / sgam_at_collin) should already have cut "
+        "the group down to the operations that preserve it -- a residual this "
+        "large means it did not, which is a defect rather than a usage error."
+        if from_a_card else
+        "This seed was handed in (starting_density=, or starting_from= a "
+        "result), and nothing checked it against this run's symmetry: the group "
+        "belongs to what the *input file* states, which for a texture handed in "
+        "by hand is usually a larger group than the texture has. Re-run with "
+        "nosym = .true., or state the texture in the input (STARTING_MOMENTS, "
+        "or angle1/angle2 per species) so the filter can see it."
+    )
+    moment_text = "n/a" if moment is None else f"{moment:.2e}"
+    warnings.warn(
+        f"the density this run is starting from is not invariant under the "
+        f"{calculation.symmetries.nsym} symmetry operations the run will use: "
+        f"||rho - sym(rho)|| / ||rho|| is {charge:.2e} for the charge and "
+        f"{moment_text} for the magnetization. The first iteration will average "
+        f"that part away and the run will then converge cleanly to whatever is "
+        f"left, so nothing later in the run says this happened -- "
+        f"SCFResult.site_moments and history[*]['site_moments'] are what show "
+        f"it, per site and per iteration. {where}",
+        RuntimeWarning,
+        stacklevel=3,
     )
 
 
@@ -2820,6 +2895,61 @@ class Calculation:
             )
         return _symmetrize(rho_r, gvectors.fft_index, gvectors.grid, self._symmetry_maps)
 
+    def symmetry_residual(self, rho_r: jnp.ndarray) -> tuple:
+        """How much of a density :meth:`symmetrize` would remove.
+
+        ``(charge, magnetization)``, each ``||f - sym(f)|| / ||f||`` over the
+        dense grid, and ``(0.0, 0.0)`` when no symmetry is in force. The
+        magnetization figure is ``None`` for a run that carries none.
+
+        **This is a check on the density a run *starts* from, and it is not one
+        on the density it produces.** An output density is a sum over an
+        irreducible wedge, which is *not* invariant -- putting the rest of the
+        zone back is exactly what ``sym_rho`` is for -- so the same number
+        computed there is large whenever symmetry is doing its job and says
+        nothing. An *input* density is different: the group a run uses is fixed
+        for the run, so a seed the group does not leave alone is a seed the
+        first iteration will average, and the residual is round-off or it is a
+        bug.
+
+        What it catches is P75's failure, one step earlier than the site moments
+        do. A stated texture cuts the group down to the operations that preserve
+        it (``sgam_at_mag``, and ``sgam_at_collin`` for the collinear case), so
+        for a texture that came from a card this is round-off by construction.
+        A texture handed in as ``starting_density`` or through
+        ``starting_from`` carries no such guarantee: the group belongs to
+        whatever the *input file* said, and where that was a ferromagnet or a
+        nonmagnetic cell the texture is averaged away at iteration 1 -- after
+        which the run converges cleanly to the wrong state.
+
+        The two halves are reported apart for the reason ``scf_accuracy_split``
+        reports its two apart: they are different physics with different
+        thresholds, and a charge that is invariant tells nothing about a
+        magnetization that is not.
+        """
+        if self._symmetry_maps is None:
+            return 0.0, (None if self.nspin_mag == 1 else 0.0)
+
+        def relative(a, b):
+            scale = float(jnp.linalg.norm(b))
+            if scale == 0.0:
+                return 0.0
+            return float(jnp.linalg.norm(a - b) / scale)
+
+        rho_r = jnp.asarray(rho_r)
+        symmetrized = self.symmetrize(rho_r)
+        if self.nspin_mag == 1:
+            return relative(symmetrized, rho_r), None
+        if self.nspin_mag == 2:
+            # The collinear density is carried as ``(up, down)``, so neither
+            # component is the charge or the magnetization on its own.
+            charge = relative(symmetrized[0] + symmetrized[1], rho_r[0] + rho_r[1])
+            moment = relative(symmetrized[0] - symmetrized[1], rho_r[0] - rho_r[1])
+            return charge, moment
+        return relative(symmetrized[0], rho_r[0]), relative(
+            symmetrized[1:4], rho_r[1:4]
+        )
+
     def symmetrize_directional(self, fields: jnp.ndarray) -> jnp.ndarray:
         """Impose the crystal symmetry on three densities that form a vector.
 
@@ -4295,6 +4425,7 @@ def run_scf(
         calculation.starting_density() if starting_density is None
         else jnp.asarray(starting_density)
     )
+    _warn_if_the_seed_is_not_symmetric(calculation, rho, starting_density is None)
     # ``becsum`` is mixed alongside the density, not derived from it. For an
     # ultrasoft run it could be recomputed from the wavefunctions at any point,
     # but for PAW the one-centre potential is built from it *before* the

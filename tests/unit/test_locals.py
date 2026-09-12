@@ -342,3 +342,63 @@ def test_a_card_row_seeds_the_moment_it_names(row, seeded, clamped, pseudo_dir):
     # two different valence charges would give the filter a pattern nothing
     # physical has.
     assert np.asarray(system.local_moments)[0, 2] == pytest.approx(row, abs=1e-12)
+
+
+# --------------------------------------------------------------------------
+# the readout along a relaxation's path
+# --------------------------------------------------------------------------
+
+
+def test_a_relaxation_records_the_site_moments_at_every_ionic_step(pseudo_dir):
+    """A magnet that relaxes must say, per site, whether it is still a magnet.
+
+    Everything else a relaxation records is zero-sum over the sites: the total
+    energy, the largest force, the cell. So a compensated magnet whose moments
+    have collapsed between two ionic steps reads exactly like one that still has
+    them -- ``SCFResult.site_moments`` answers the question at the *last*
+    geometry, which is the one step that cannot show where it went.
+
+    ``nstep = 1`` is enough and is what keeps this cheap: the claim is that the
+    driver routes the pair onto its own step object, and an array-algebra test of
+    the helper would pass whether or not it does (which is how ``promote_ns``
+    was right in every element while every resume was silently collinear).
+    """
+    from defumat.calculator import Calculator
+    from defumat.workflows.relax import site_moment_report
+
+    text = (QE / "h2-mirror-afm.in").read_text().replace(
+        "calculation = 'scf'", "calculation = 'relax'"
+    ).replace("ATOMIC_SPECIES", "&ions\n/\nATOMIC_SPECIES")
+    calc = Calculator.from_text(text, pseudo_dir, announce=False)
+    relax = calc.get_relax(nstep=1, conv_thr=1e-6)
+
+    step = relax.steps[0]
+    assert step.site_moments is not None, "the driver did not carry them through"
+    assert np.asarray(step.site_moments).shape == (2, 1)
+    assert np.asarray(step.site_charges).shape == (2,)
+    # The staggered moment this cell exists for, read off the path rather than
+    # off the final result.
+    moments = np.asarray(step.site_moments)[:, 0]
+    assert abs(moments[0]) > 0.2
+    assert moments[0] == pytest.approx(-moments[1], abs=1e-3)
+    # And the console line the driver prints from the same pair.
+    assert "|m|_site" in site_moment_report(step.site_moments)
+
+
+def test_a_nonmagnetic_relaxation_records_nothing_per_site(pseudo_dir):
+    """``None``, and no empty tuple or array of zeros.
+
+    The absence has to be distinguishable from a measurement: a nonmagnetic run
+    has no site moments, and reporting zeros would make a collapsed magnet and a
+    nonmagnetic cell read the same on the one instrument that separates them.
+    """
+    from defumat.calculator import Calculator
+    from defumat.workflows.relax import site_moment_report
+
+    text = (QE / "si2-nc-relax.in").read_text()
+    calc = Calculator.from_text(text, pseudo_dir, announce=False)
+    relax = calc.get_relax(nstep=1, conv_thr=1e-6)
+
+    assert relax.steps[0].site_moments is None
+    assert relax.steps[0].site_charges is None
+    assert site_moment_report(None) == ""

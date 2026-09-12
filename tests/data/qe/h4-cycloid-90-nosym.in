@@ -1,0 +1,45 @@
+! `h4-cycloid-90.in` with `nosym`: the free half of the pair.
+!
+! The same four-hydrogen 90-degree cycloid, run with no symmetry at all, so the
+! density is whatever the wedge sum gives and nothing is averaged. It is the
+! control the symmetrised run is measured against: the group the magnetic filter
+! leaves (4 operations out of 16) is either exactly the texture's own, in which
+! case the two runs agree site by site, or it is too large, in which case this
+! one keeps a texture the other has lost.
+!
+! **The discriminator is the singular values of the (nat, 3) matrix of site
+! moments**, not their norms: two nonzero singular values mean the moments still
+! span a plane, which is what a cycloid is, and one means they have collapsed
+! onto a line. `SCFResult.site_moments` is that matrix and `history` carries it
+! per iteration.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 1.66666666666667,
+    nat = 4, ntyp = 1,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.6
+    nbnd = 24
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-8
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H 0.0 0.0 0.00
+ H 0.0 0.0 0.25
+ H 0.0 0.0 0.50
+ H 0.0 0.0 0.75
+K_POINTS {automatic}
+ 1 1 4 0 0 0
+STARTING_MOMENTS
+  0.6000000000  0.0000000000  0.0000000000
+  0.0000000000  0.6000000000  0.0000000000
+ -0.6000000000  0.0000000000  0.0000000000
+  0.0000000000 -0.6000000000  0.0000000000

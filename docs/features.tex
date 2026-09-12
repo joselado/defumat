@@ -1137,11 +1137,20 @@ is forced to \code{nosym}, leaving the starting matrix as the only steering
 there is --- could converge with the shells polarised along the wrong axes and
 report success.
 
-\textbf{Not covered, and this one is a sentence rather than a \code{raise}:} a
-textured starting \emph{density} handed to \code{run\_scf} by the caller. The symmetry group is decided from the input and
-never from the density, so a texture that reaches the run only that way is
-invisible to the filter and will be symmetrised away. Give the same texture as a
-\code{STARTING\_MOMENTS} card, or set \code{nosym = .true.}
+\textbf{Warned about, with a number:} a textured starting \emph{density} handed
+to \code{run\_scf} by the caller. The symmetry group is decided from the input
+and never from the density, so a texture that reaches the run only that way is
+invisible to the filter and \emph{will} be symmetrised away. \code{run\_scf}
+measures $\lVert \rho - \mathrm{sym}(\rho)\rVert / \lVert \rho\rVert$ on the seed
+before iteration~1 and warns above $10^{-3}$, reporting the charge and the
+magnetization apart. It is not a small effect and it is not a rounding: a
+four-atom 90-degree cycloid handed to the same cell's \emph{ferromagnetic} group
+has its magnetization residual come out at \textbf{1.0} --- averaging four
+directions 90 degrees apart over a group that permutes the four sites gives
+exactly zero, and every site moment goes from $0.27\,\mu_B$ to $10^{-19}$ ---
+while its charge residual is $5.7\times10^{-16}$, so the charge notices nothing.
+From a \code{STARTING\_MOMENTS} card the same figure is $6\times10^{-16}$. Give
+the texture as a card, or set \code{nosym = .true.}
 \end{refuses}
 
 \textbf{The moment on each atom} (\code{SCFResult.site\_moments},
@@ -1213,8 +1222,13 @@ swapping the two spin channels while symmetrising, and the density symmetriser
 here does not. The result is a subgroup of the true magnetic group --- correct,
 and paid for in k-points rather than in physics.
 
-\textbf{Where the site moments are not reported:} \code{run\_scf} only. A
-relaxation and the response stack do not carry them yet.
+\textbf{Where the site moments are not reported:} the response stack. All three
+relaxation drivers carry them now --- \code{RelaxStep}, \code{VCRelaxStep} and
+\code{SpiralRelaxStep} each hold \code{site\_charges} and \code{site\_moments} at
+their own step, which is the record a \emph{relaxation} needs for the same reason
+the SCF needs one per iteration: everything else a step reports is zero-sum over
+the sites, so a compensated magnet that lost its moments between two geometries
+reads exactly like one that kept them.
 
 \textbf{The spheres are a choice, not a definition.} A plane-wave basis has no
 muffin tins, so ``the moment on this atom'' is whatever region you integrate

@@ -1,0 +1,48 @@
+! Four hydrogens along z, one species, each moment turned 90 degrees from the
+! one before: a **vector** texture -- a cycloid in the xy plane -- rather than a
+! collinear arrangement with a sign. It is stated with a STARTING_MOMENTS card,
+! which is the only way one species can carry four different directions.
+!
+! **Symmetry is left ON, which is the point of the file.** The simple-tetragonal
+! lattice gives 16 operations for a ferromagnet along z and the magnetic filter
+! cuts them to 4 for this texture. Whether that filter is enough was an open
+! question: the seed's residual under its own group is 6e-16, and under the
+! ferromagnet's 16 operations the same density has its magnetization removed
+! *entirely* (residual 1.0, and every site moment goes from 0.27 to 1e-19).
+! `h4-cycloid-90-nosym.in` is the same cell with no symmetry at all, and the two
+! are run as a pair: what survives an SCF here must survive it there.
+!
+! There is no constraint and no field. Nothing in the SCF holds an angle, so
+! whether the cycloid is still there at convergence is a statement about the
+! energy surface rather than about the machinery -- which is why the pair is
+! compared per site and not against a reference number.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 1.66666666666667,
+    nat = 4, ntyp = 1,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10
+    noncolin = .true.
+    starting_magnetization(1) = 0.6
+    nbnd = 24
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-8
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H 0.0 0.0 0.00
+ H 0.0 0.0 0.25
+ H 0.0 0.0 0.50
+ H 0.0 0.0 0.75
+K_POINTS {automatic}
+ 1 1 4 0 0 0
+STARTING_MOMENTS
+  0.6000000000  0.0000000000  0.0000000000
+  0.0000000000  0.6000000000  0.0000000000
+ -0.6000000000  0.0000000000  0.0000000000
+  0.0000000000 -0.6000000000  0.0000000000

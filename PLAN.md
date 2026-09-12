@@ -13151,6 +13151,70 @@ an energy, and the test's tolerance is set from that measurement rather than fro
 
 **What is outstanding.** The Elk feedback field above.
 
+### P80 -- A texture that dies before iteration 1, and a relaxation that could not say so. ✅ DONE.
+
+`defumat/scf/driver.py`, `workflows/relax.py`, `workflows/vc_relax.py`,
+`workflows/spiral.py`. `MAGNETISM-NEXT.md` question Q3 and the first of its owed
+deliverables. **The cheap end of the magnetic queue**: no new physics, two measurements, and
+a diagnostic that fires before an SCF starts rather than after it has converged to the wrong
+state.
+
+**Q3 asked how much the symmetriser removes. It removes all of it, and the number is 1.0.**
+`Calculation.symmetry_residual` is `||rho - sym(rho)|| / ||rho||` on the density a run starts
+from, reported as a **pair** -- the charge and the magnetization apart. On a four-atom
+hydrogen chain with a 90-degree-per-site cycloid
+(`tests/unit/test_seed_symmetry.py`, and `tests/data/qe/h4-cycloid-90.in`):
+
+| seed | group | charge | magnetization |
+|---|---|---|---|
+| the cycloid, from its `STARTING_MOMENTS` card | its own, `nsym = 4` | 5.2e-16 | **6.2e-16** |
+| a ferromagnet along z, from `starting_magnetization` | its own, `nsym = 16` | 5.7e-16 | 5.1e-16 |
+| **the cycloid's density handed to the ferromagnet's group** | `nsym = 16` | **5.7e-16** | **1.0** |
+
+Row three is P75 reproduced in one call and no SCF: every site moment goes from 0.27 mu_B to
+1e-19, because averaging four directions 90 degrees apart over a group that permutes the
+four sites gives **zero** rather than something smaller. Rows one and two are the magnetic
+filter (`sgam_at_mag`, `sgam_at_collin`) doing exactly its job, at both group sizes -- which
+is what says the number measures invariance and not how many operations there are.
+
+**The charge cannot see it, which is why the pair is reported apart.** In the failing row the
+charge residual is 5.7e-16 -- the group leaves the charge *exactly* alone -- so a residual
+computed on the density as one object, or on its charge, reads as a clean pass. That is the
+same split `scf_accuracy_split` makes for `dr2`, for the same reason.
+
+**The check is on the seed and it must not be on an output density.** An output density is a
+sum over an irreducible wedge and is *not* invariant; putting the rest of the zone back is
+precisely what `sym_rho` is for. So the identical number computed there is large exactly when
+symmetry is working, and cannot be told from the failure -- a check whose positive result
+cannot be told from correct operation, which is this project's recurring trap with its sign
+flipped. On a *seed* there is no ambiguity: the group is fixed for the run, so a seed the
+group does not leave alone is a seed whose non-invariant part iteration 1 averages away.
+`run_scf` now warns above `SYMMETRY_SEED_RESIDUAL = 1e-3`, and the two messages differ --
+from a card a nonzero residual is a defect in the filter, handed in it is the caller's group
+that does not match the caller's density and `nosym` is the fix. It costs one symmetrisation
+of the seed, once per run, and changes nothing the run computes (the trap: a diagnostic must
+not change the run it is diagnosing).
+
+**The owed deliverable: all three relaxation drivers now carry the site moments per ionic
+step.** `RelaxStep`, `VCRelaxStep` and `SpiralRelaxStep` gained `site_charges` and
+`site_moments`, filled from the inner SCF, and the console line gained the same
+`|m|_site = min..max` suffix the SCF prints. `RelaxResult.scf.site_moments` was already
+reachable and is the *final* geometry only -- which is the one step that cannot show where a
+texture went, since everything else a relaxation records (energy, largest force, cell) is
+zero-sum over the sites and reads the same for a collapsed compensated magnet as for an
+intact one. The test is end-to-end on `h2-mirror-afm.in` relaxed for one ionic step rather
+than on the helper, for this file's own reason: an array-algebra test passes whether or not
+the driver routes anything through it, which is how `promote_ns` was right in every element
+while every resume was silently collinear (P79). A nonmagnetic relaxation records `None` and
+not zeros, so the absence stays distinguishable from a measurement.
+
+**One latent breakage fixed on the way past.** `tools/generate_reference.py`'s documented
+bare form ("everything missing") globs every `.in` in `tests/data/qe`, and since P77 some of
+them carry a `STARTING_MOMENTS` card -- this code's own, which `pw.x` cannot parse, on cells
+that exist *because* `starting_magnetization` is per species and cannot state a texture at
+all. The tool would have stopped at the first one with a parser error reading like a broken
+input file. Those inputs are now skipped by name, saying why.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.

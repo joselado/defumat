@@ -88,7 +88,8 @@ from defumat.relax import get_ion_dynamics
 from defumat.relax.bfgs import BFGSSettings
 from defumat.scf.driver import Calculation, SCFResult, run_scf
 from defumat.system.builder import System
-from defumat.workflows.relax import _scf_loop_options
+from defumat.workflows.relax import (_scf_loop_options, site_magnetization,
+                                     site_moment_report)
 
 __all__ = ["SpiralScan", "run_spiral_scan", "heisenberg_exchange",
            "SpiralRelaxResult", "relax_spiral_q"]
@@ -364,6 +365,16 @@ class SpiralRelaxStep:
     conv_thr: float
     energy_error: float | None = None
     gradient_error: float | None = None
+    #: ``report_mag`` at this wavevector, in the **rotated frame** the spiral's
+    #: density is carried in: the charge ``(nat,)`` and the moment ``(nat, 3)``
+    #: in Bohr magnetons. ``None`` for a run with no magnetization.
+    #:
+    #: A spiral's cell total is the one quantity that cannot see whether the
+    #: magnet is still there -- :attr:`SpiralRelaxResult.moment` is the
+    #: rotated-frame integral and a collapsed run reports it as small in exactly
+    #: the way a long-pitch one does. Per site, a collapse is unambiguous.
+    site_charges: np.ndarray | None = None
+    site_moments: np.ndarray | None = None
 
 
 @dataclass
@@ -553,6 +564,7 @@ def relax_spiral_q(
             result.total_energy,
             gradient.force.reshape(1, 3) * free,
         )
+        charges, moments = site_magnetization(result)
         steps.append(SpiralRelaxStep(
             index=index,
             wavevector=q_crystal,
@@ -562,13 +574,16 @@ def relax_spiral_q(
             conv_thr=threshold,
             energy_error=getattr(optimizer, "energy_error", None),
             gradient_error=getattr(optimizer, "gradient_error", None),
+            site_charges=charges,
+            site_moments=moments,
         ))
         if verbose:
             print(f"spiral step {index:3d}   q = "
                   f"({q_crystal[0]:8.5f}, {q_crystal[1]:8.5f}, {q_crystal[2]:8.5f})"
                   f"   E = {result.total_energy:16.8f} Ry"
                   f"   max |dE/dq| = {max_gradient:.6f}"
-                  f"   dE = {optimizer.energy_error:.2e}")
+                  f"   dE = {optimizer.energy_error:.2e}"
+                  f"{site_moment_report(moments)}")
         if converged:
             break
 

@@ -63,7 +63,7 @@ from defumat.scf.checkpoint import (
 )
 from defumat.units import BOHR_TO_ANGSTROM
 
-__all__ = ["RelaxResult", "run_relax"]
+__all__ = ["RelaxResult", "run_relax", "site_magnetization", "site_moment_report"]
 
 #: ``upscale`` in ``Modules/read_namelists.f90``: how much tighter than the
 #: input ``conv_thr`` the SCF is allowed to become as the relaxation converges.
@@ -82,6 +82,47 @@ class RelaxStep:
     conv_thr: float
     energy_error: float | None = None
     gradient_error: float | None = None
+    #: ``report_mag`` at this step's converged density: the charge ``(nat,)``
+    #: in electrons and the moment ``(nat, 1)`` collinear or ``(nat, 3)``
+    #: noncollinear, in Bohr magnetons. ``None`` for a run with no
+    #: magnetization.
+    #:
+    #: **A relaxation can unwind a texture and then converge cleanly**, exactly
+    #: as an SCF can, and for the same reason: every quantity the path records
+    #: -- the energy, the force, the cell -- is zero-sum over the sites, so a
+    #: compensated magnet whose moments have collapsed looks like a compensated
+    #: magnet that still has them. :attr:`SCFResult.site_moments` answers the
+    #: question at the *last* geometry only, which is the one step that cannot
+    #: show where it went.
+    site_charges: np.ndarray | None = None
+    site_moments: np.ndarray | None = None
+
+
+def site_magnetization(result) -> tuple:
+    """``(site_charges, site_moments)`` off an :class:`SCFResult`, as arrays.
+
+    ``(None, None)`` when the run carried no magnetization. One helper for the
+    three relaxation drivers, which record the same pair at each of their own
+    kinds of step.
+    """
+    if getattr(result, "site_moments", None) is None:
+        return None, None
+    return np.asarray(result.site_charges), np.asarray(result.site_moments)
+
+
+def site_moment_report(site_moments) -> str:
+    """``   |m|_site = a..b``, or ``""`` -- the SCF console line's own suffix.
+
+    The smallest and the largest site moment, in the format
+    :func:`~defumat.scf.driver.run_scf` prints per iteration, so that a
+    relaxation's log line and its inner SCF's read the same way. The *pair* is
+    what a partial collapse shows in: one site losing its moment moves the
+    minimum and leaves the maximum where it was.
+    """
+    if site_moments is None:
+        return ""
+    lengths = np.linalg.norm(np.asarray(site_moments), axis=1)
+    return f"   |m|_site = {lengths.min():.4f}..{lengths.max():.4f}"
 
 
 @dataclass
@@ -339,6 +380,7 @@ def run_relax(
         moved, converged = optimizer.step(
             positions, result.total_energy, forces.forces * free
         )
+        charges, moments = site_magnetization(result)
         steps.append(RelaxStep(
             index=index,
             positions=positions,
@@ -348,11 +390,14 @@ def run_relax(
             conv_thr=threshold,
             energy_error=getattr(optimizer, "energy_error", None),
             gradient_error=getattr(optimizer, "gradient_error", None),
+            site_charges=charges,
+            site_moments=moments,
         ))
         if verbose:
             print(f"ionic step {index:3d}   E = {result.total_energy:16.8f} Ry"
                   f"   max |F| = {forces.max_force:.6f} Ry/bohr"
-                  f"   dE = {optimizer.energy_error:.2e}")
+                  f"   dE = {optimizer.energy_error:.2e}"
+                  f"{site_moment_report(moments)}")
         if on_step is not None:
             on_step(steps[-1], result, forces)
         if converged:

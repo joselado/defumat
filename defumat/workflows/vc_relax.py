@@ -69,7 +69,8 @@ from defumat.stress import compute_stress
 from defumat.system.builder import System
 from defumat.system.symmetry import check_lattice_symmetry, check_symmetry
 from defumat.units import BOHR_TO_ANGSTROM, RY_TO_KBAR
-from defumat.workflows.relax import RelaxStep, _extrapolate, _scf_loop_options
+from defumat.workflows.relax import (RelaxStep, _extrapolate, _scf_loop_options,
+                                     site_magnetization, site_moment_report)
 
 __all__ = ["VCRelaxResult", "VCRelaxStep", "run_vc_relax"]
 
@@ -285,6 +286,7 @@ def run_vc_relax(
             positions, result.total_energy, forces.forces * free,
             stress=stress.tensor,
         )
+        charges, moments = site_magnetization(result)
         steps.append(VCRelaxStep(
             index=index,
             positions=positions,
@@ -298,12 +300,15 @@ def run_vc_relax(
             volume=volume,
             enthalpy=result.total_energy + pressure * volume,
             cell_error=optimizer.cell_error,
+            site_charges=charges,
+            site_moments=moments,
         ))
         if verbose:
             print(
                 f"vc step {index:3d}   H = {steps[-1].enthalpy:16.8f} Ry"
                 f"   V = {volume:10.4f}   max |F| = {forces.max_force:.6f}"
                 f"   |P I - sigma| = {optimizer.cell_error * RY_TO_KBAR:.3f} kbar"
+                f"{site_moment_report(moments)}"
             )
         if converged:
             break
