@@ -6366,6 +6366,37 @@ index up. Taking `deeq_nc` instead double-counts, and the only check that sees
 it is the energy identity above — a finite difference would agree with it
 perfectly.
 
+**The symmetry test carried no information, and its repair says why**
+(`OPEN.md` C1, closed 2026-09-12). `test_the_force_carries_the_crystal_symmetry`
+asserted `F_x = -F_z` to 1e-12 on forces `compute_forces` had **already**
+projected onto that subspace with `symvector`, so it could not fail. The obvious
+repair — assert it on the unsymmetrised gradient instead — does not work, and
+that is the measurement worth keeping: a wedge sum is exact for a scalar and
+**not for a vector**, which is why `symvector` exists at all, so the raw
+gradient carries a symmetry-forbidden part by construction. It breaks the
+identity by **1.1185e-2 Ry/bohr on forces of 5.2432e-2** (ultrasoft, 21.3 per
+cent) and **3.8661e-3 on 5.9167e-2** (PAW, 6.5 per cent).
+
+What is asserted now is the **pair**, which is a statement where neither half
+is: the unsymmetrised gradient must break the identity by more than 1e-3, so
+the projection had work to do on this case, and the symmetrised force must
+satisfy it — 6.9e-18 on both datasets. The gradient is carried as
+`Forces.unsymmetrized`. And the docstring no longer claims this is "the one
+check here that would survive both codes being wrong in the same way": a P46
+term wrong by a factor the symmetry respects moves the force's magnitude inside
+the invariant subspace, where only `test_forces_match_quantum_espresso` and the
+finite-difference anchor can see it.
+
+**Three peak figures, since this file has been killed for memory before and
+two more kills were spent measuring these.** Alone in a fresh process,
+`pt2-soc-force` peaks at **7,691 MB** and `pt2-soc-paw-force` at **12,204 MB**
+— the second already *over* `tools/run_regression.sh`'s 12G default. The two
+parameters together in one process peak at **16,961 MB**, which is the
+accumulation `CLAUDE.md` describes rather than any one allocation: the backend
+keeps both cells' executables. The file wants `DEFUMAT_TEST_MEM_MAX=20G`, and
+the cost inside one test is `Q_ij(G)` at `nh = 34` in the backward pass. This
+is Part I item 2's sibling and the same measurement it asks for.
+
 ---
 
 

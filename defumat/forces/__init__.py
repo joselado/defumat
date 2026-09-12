@@ -72,6 +72,23 @@ class Forces:
     #: ``sum_a F_a`` before it was subtracted, one number per cartesian
     #: component. QE's ``sumfor``; large values mean an under-converged run.
     total_before_correction: np.ndarray
+    #: ``(nat, 3)``: the same forces one step earlier -- translation-corrected,
+    #: but **before** ``symvector``. It is carried so that a test can see the
+    #: projection doing work, and for nothing else.
+    #:
+    #: **It is not a better force and it does not obey the crystal's
+    #: symmetry**, which is the whole reason ``symvector`` is not optional: a
+    #: wedge sum is exact for a scalar and not for a vector, so what this
+    #: holds is `2 sum_wedge F(k)` with its symmetry-forbidden part still in
+    #: it. Measured on the displaced platinum, whose surviving operation
+    #: forces ``F_x = -F_z``: this array breaks that identity by **1.1185e-2
+    #: Ry/bohr on forces of 5.2432e-2** (ultrasoft, 21.3 per cent) and
+    #: **3.8661e-3 on 5.9167e-2** (PAW, 6.5 per cent), which is a property of
+    #: which representatives the wedge picked rather than of any accuracy.
+    #: Asserting a symmetry identity on :attr:`forces` instead cannot fail --
+    #: the projection has already put it in the invariant subspace -- so the
+    #: two together are a statement and neither is one alone.
+    unsymmetrized: np.ndarray
     #: The individual contributions, when the method computes them separately.
     terms: dict = field(default_factory=dict)
 
@@ -124,6 +141,7 @@ def compute_forces(calculation, result_or_state, method: str | None = None) -> F
     forces = forces - total / forces.shape[0]
 
     structure = calculation.system.structure
+    unsymmetrized = forces
     if calculation.symmetries.nsym > 1 and not calculation.system.nosym:
         mapping = atom_mapping(
             calculation.system.cell, structure, calculation.symmetries
@@ -138,6 +156,7 @@ def compute_forces(calculation, result_or_state, method: str | None = None) -> F
         forces=forces,
         method=name,
         total_before_correction=total,
+        unsymmetrized=unsymmetrized,
         terms={key: np.asarray(value) for key, value in terms.items()},
         _free=structure.free,
     )

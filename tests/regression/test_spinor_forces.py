@@ -69,6 +69,20 @@ from tests.tolerances import FORCE_RY_BOHR, STRESS_RY_BOHR3, TOTAL_ENERGY_RY
 #: crystal coordinates of the doubled cell. 0.001 is 0.015 bohr; achieved 5.5e-5.
 RELAX_POSITION = 1.0e-3
 
+#: How far the **unsymmetrised** force must break the crystal's ``F_x = -F_z``
+#: for the symmetrised assertion beside it to mean anything, in Ry/bohr. A
+#: **lower** bound, not a tolerance.
+#:
+#: A wedge sum is exact for a scalar and not for a vector, so the raw gradient
+#: is not a symmetric object and is not expected to be. Measured: **1.1185e-2
+#: Ry/bohr on forces of 5.2432e-2** for the ultrasoft case (21.3 per cent) and
+#: **3.8661e-3 on 5.9167e-2** for the PAW one (6.5 per cent), both of which are
+#: set by which representatives the 14-point wedge picked out of the 32-point
+#: grid rather than by any accuracy. 1e-3 clears the smaller of the two by a
+#: factor of four and sits four decades above the 3.5e-7 the wedge and the
+#: closed grid agree to once both *are* symmetrised.
+WEDGE_ASYMMETRY_FLOOR = 1.0e-3
+
 pytestmark = [pytest.mark.regression, pytest.mark.slow]
 
 CASES = Path(__file__).resolve().parents[1] / "data" / "qe"
@@ -245,19 +259,57 @@ def test_platinum_stress_matches_quantum_espresso(stem, qe_testsuite, pseudo_dir
 
 
 @pytest.mark.parametrize("case", ["pt2-soc-force", "pt2-soc-paw-force"])
-def test_the_force_carries_the_crystal_symmetry(case, pseudo_dir):
-    """``F_x = -F_z`` on the displaced platinum, exactly.
+def test_the_symmetrisation_reaches_the_crystals_invariant_subspace(case, pseudo_dir):
+    """``F_x = -F_z`` on the displaced platinum, and proof the projection did it.
 
     The doubled cell's surviving operation exchanges ``x`` and ``z`` with a
-    sign, so the force is constrained to that plane whatever the k-set says --
-    a statement about the crystal rather than a tolerance, and the one check
-    here that would survive both codes being wrong in the same way. Nothing
-    imposes it on the *unsymmetrised* gradient, so it is also the check that the
-    magnetic point group is being applied as ``symvector`` applies it.
+    sign, so the force is constrained to that plane. ``compute_forces`` ends in
+    ``symvector``, which projects onto exactly that subspace -- **so asserting
+    the identity afterwards cannot fail**, and on its own it is
+    ``CLAUDE.md``'s "a check whose null result cannot be told from a pass".
+    That is ``OPEN.md`` C1.
+
+    **The fix C1 proposed does not work, and the measurement is the finding.**
+    It asked for the identity on the *unsymmetrised* gradient, "where it is a
+    claim rather than a tautology". It is not a claim there either: a wedge sum
+    is exact for a scalar and not for a vector, which is why ``symvector`` is
+    not optional in the first place, so the raw gradient carries a
+    symmetry-forbidden part by construction. Measured, it breaks ``F_x = -F_z``
+    by **1.1185e-2 Ry/bohr on forces of 5.2432e-2** (ultrasoft, 21.3 per cent)
+    and **3.8661e-3 on 5.9167e-2** (PAW, 6.5 per cent), set by which
+    representatives the 14-point wedge picked out of the 32-point grid. A bound
+    loose enough to pass that would discriminate nothing at all.
+
+    So the test asserts the **pair**, which is a statement where neither half
+    is: the projection had real work to do here, and it finished it -- to
+    6.9e-18 on both datasets. What it cannot do is see a P46 term wrong by a
+    factor the symmetry respects -- a dropped ``dvan_so`` or ``qq_so`` piece, a
+    mis-scaled augmentation force. Those change the force's *magnitude* inside
+    the invariant subspace, and what catches them is
+    ``test_forces_match_quantum_espresso`` and
+    ``test_the_force_is_a_finite_difference_of_the_frozen_energy``.
+
+    **This case needs more than the runner's default cap**, which is worth
+    knowing before it is discovered by a kill -- two were spent finding it.
+    Alone in a fresh process the ultrasoft case peaks at **7,691 MB** and the
+    PAW one at **12,204 MB**, already over ``tools/run_regression.sh``'s 12G
+    default; the two parameters *together* in one process peak at **16,961
+    MB**, because the backend keeps both cells' executables. So the file wants
+    ``DEFUMAT_TEST_MEM_MAX=20G``, and the cost is ``Q_ij(G)`` at ``nh = 34`` in
+    the backward pass -- the figure ``PLAN.md`` P46 already names for a
+    fully-relativistic dataset.
     """
     _, calculation, result = _converged(CASES / f"{case}.in", pseudo_dir)
-    forces = compute_forces(calculation, result).forces
-    assert np.abs(forces[:, 0] + forces[:, 2]).max() < 1e-12
+    forces = compute_forces(calculation, result)
+
+    # The projection had something to do: without this line the next one is a
+    # tautology and would pass against a ``symvector`` that ran on an already
+    # symmetric gradient.
+    raw = forces.unsymmetrized
+    assert np.abs(raw[:, 0] + raw[:, 2]).max() > WEDGE_ASYMMETRY_FLOOR
+
+    # And it finished it, which is also the check on ``atom_mapping``.
+    assert np.abs(forces.forces[:, 0] + forces.forces[:, 2]).max() < 1e-12
 
 
 # --- the symmetrisation ------------------------------------------------------

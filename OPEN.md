@@ -15,8 +15,8 @@ P73 section, under "Three test failures were seen while validating this phase".
 **Status, 2026-09-11 (later the same day).** Sixteen entries are closed, each with a
 test that was checked to fail against the old code: **A1, A3, A4, A5, A6, A7, A8, A9,
 A10, B2, D2, E1, E2, F1, F2, F3**, together with Part I item 1 and its two siblings
-C2/C3. What is left is C1, D1, D3, E3 and Part I item 2 -- the entries
-whose *test* is expensive rather than whose fix is. **A2, B3 and B1 closed on
+C2/C3. What is left is D1, D3, E3 and Part I item 2 -- the entries
+whose *test* is expensive rather than whose fix is. **A2, B3, B1 and C1 closed on
 2026-09-12.** None
 went the way the sweep predicted: A2's two non-refusal sites looked like a null
 and are not; B3's NaN claim is a null while its other two
@@ -679,7 +679,43 @@ reference and as the thing that was replaced. **How to know it worked** is
 
 The trap `CLAUDE.md` added most recently, and Part I item 1 is the same family.
 
-### C1. The spinor force symmetry test asserts an identity the code has already imposed
+### C1. The spinor force symmetry test asserts an identity the code has already imposed **[closed 2026-09-12 -- the entry's diagnosis is right and its proposed fix is not]**
+
+> **The diagnosis holds and the fix does not, for a reason that is worth more
+> than either.** C1 asked for the identity on the *unsymmetrised* gradient,
+> "where it is a claim rather than a tautology". It is not a claim there
+> either: a wedge sum is exact for a scalar and **not for a vector**, which is
+> the reason `symvector` is not optional in the first place, so the raw
+> gradient carries a symmetry-forbidden part by construction. Measured on the
+> displaced platinum, where the surviving operation forces `F_x = -F_z`, the
+> unsymmetrised gradient breaks it by **1.1185e-2 Ry/bohr on forces of
+> 5.2432e-2** (ultrasoft, 21.3 per cent) and **3.8661e-3 on 5.9167e-2** (PAW,
+> 6.5 per cent). A bound loose enough to pass that discriminates nothing.
+>
+> **What was written instead is the pair**, which is a statement where neither
+> half is: the unsymmetrised gradient must break the identity by more than
+> `WEDGE_ASYMMETRY_FLOOR` = 1e-3 -- so the projection had real work to do on
+> this case and the next line is not vacuous -- and the symmetrised force must
+> satisfy it, measured 6.9e-18 on both datasets. That is `CLAUDE.md`'s "test
+> that the guard fires" rather than reading a clean zero as a pass. The
+> gradient is carried as `Forces.unsymmetrized`, whose docstring says plainly
+> that it is not a better force.
+>
+> **What the test cannot do, said out loud rather than left implied.** C1's
+> real worry -- a P46 term wrong by a factor the crystal symmetry respects, a
+> dropped `dvan_so` or `qq_so` piece, a mis-scaled augmentation force -- moves
+> the force's *magnitude* inside the invariant subspace and no symmetry check
+> can see it. `test_forces_match_quantum_espresso` and
+> `test_the_force_is_a_finite_difference_of_the_frozen_energy` are what catch
+> those, and the docstring now names them instead of claiming this test is
+> "the one check here that would survive both codes being wrong in the same
+> way", which was false.
+>
+> **A memory figure came out of it**, and it belongs with Part I item 2:
+> `pt2-soc-paw-force` peaks at **12,204 MB**, *over* `run_regression.sh`'s 12G
+> default, so that case wants `DEFUMAT_TEST_MEM_MAX=20G`; the ultrasoft case
+> peaks at 7,691 MB. Two harness kills were spent finding that out.
+
 
 `tests/regression/test_spinor_forces.py:260`.
 `test_the_force_carries_the_crystal_symmetry` asserts `F_x = -F_z` on forces that
