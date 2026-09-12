@@ -52,6 +52,14 @@ pytestmark = pytest.mark.regression
 EXPECTED_REFUSALS = {
     # Wyckoff input (P6, outstanding).
     "lattice-wyckoff-sio2.in": "space_group",
+    # The two symmetry switches of OPEN.md A4, refused by name on 2026-09-11.
+    # That entry closed with the note that this sweep "needs an entry there" if
+    # any QE input sets one, and could not check because the vendored tree was
+    # absent on that machine. It is present here and exactly two inputs do --
+    # `no_t_rev` and `nosym_evc`, the other half of A4, are set by none of the
+    # 252, which is why they have no entry rather than an unused one.
+    "scf-allfrac.in": "use_all_frac",
+    "scf-nofrac.in": "force_symmorphic",
     # DFT+U variants `defumat.hubbard` refuses by name.
     "lda+U+V-user_ns.in": "intersite",
     "lda+U+V_background.in": "intersite",

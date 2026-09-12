@@ -539,6 +539,21 @@ numbers side by side:
 python3 tools/compare_qe.py benchmarks/si8-1k.in
 ```
 
+For the whole picture rather than one cell, there is a benchmark sweep with two
+named sets — `fast` is ten cases, one per kind of physics; `complete` is
+twenty-five, adding a size ladder and a sweep across the physics at fixed size:
+
+```bash
+tools/run_benchmark.sh              # Quantum ESPRESSO, defumat on a core, a GPU if present
+tools/run_benchmark.sh complete
+```
+
+Both codes are pinned to one core, and a GPU leg is reported against **defumat
+on CPU** rather than against Quantum ESPRESSO, since only one side of that
+comparison changed. `performance/README.md` has the detail, and
+`tools/cluster/submit_benchmark.py` writes the same sweep as Slurm array scripts
+for a cluster.
+
 ## License
 
 GPL v3 or later — see [LICENSE](LICENSE). Quantum ESPRESSO is itself GPL, and

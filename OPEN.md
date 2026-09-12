@@ -401,11 +401,17 @@ agree to round-off.
 
 ### A4. Four symmetry input variables are read by nothing **[closed 2026-09-11]**
 
-> Four entries in `_REFUSED_SWITCHES`, which already existed. **Unverified on
-> this machine:** `tests/regression/test_input_sweep.py` sweeps QE's own `pw_*`
-> inputs and expects each to run or to hit a *listed* refusal; if any of them
-> sets one of these four, it needs an entry there. The vendored tree is absent
-> here so that file skips.
+> Four entries in `_REFUSED_SWITCHES`, which already existed. **The caveat this
+> note left open is now closed (2026-09-12), on a machine that has the vendored
+> tree.** It was right: `tests/regression/test_input_sweep.py` sweeps QE's own
+> `pw_*` inputs expecting each to run or to hit a *listed* refusal, two of the
+> 252 set one of these four, and both failed the sweep for the whole day between
+> the refusals landing and the entries being written -- `scf-allfrac.in`
+> (`use_all_frac`) and `scf-nofrac.in` (`force_symmorphic`), now declared in
+> `EXPECTED_REFUSALS`. The other two switches, `no_t_rev` and `nosym_evc`, are
+> set by **none** of the 252, so they have no entry rather than an unused one.
+> (`pw_gau-pbe/gau-pbe-si444.in` looks like a third and is not: its
+> `force_symmorphic` is commented out.) 250 pass, 2 skip.
 
 `no_t_rev`, `force_symmorphic`, `use_all_frac`, `nosym_evc`: **zero** occurrences
 anywhere in `defumat/`, including `io/`. They parse into the namelist without complaint
@@ -1322,6 +1328,33 @@ threshold moves the answer at round-off, so the acceptance test is the `ph.x` co
 P71 was validated against, not the timing.
 
 ---
+
+### H9. `fe-mag-1k` takes 32 SCF iterations where `pw.x` takes 12 **[measured 2026-09-12]**
+
+Surfaced by the new `fast` benchmark set (`performance/sweep.py`), and it is the
+one row in that set whose *total* ratio and *per-iteration* ratio disagree:
+**7.6x warm-SCF against 2.8x per iteration**, entirely because of the iteration
+count. Same `conv_thr = 1e-8` on both sides, same input, and the two energies
+agree to **6.7e-9 Ry** -- so nothing is wrong with the answer and nothing is
+slow about the arithmetic. The cell is `benchmarks/fe-mag-1k.in`: one iron atom,
+`nspin_mag = 4`, Marzari-Vanderbilt smearing at `degauss = 0.05`,
+`starting_magnetization = 0.5`, `mixing_beta = 0.3`.
+
+**Why it is filed here rather than as a defect.** This is the same family as the
+Co(0001) slab entries in `PERFORMANCE.md` (2026-09-01): where QE converges a
+magnetic cell in a couple of dozen iterations, the mixer here takes several
+times as many, and closing that gap has each time been a mixer question rather
+than a kernel one. The bound is already on record -- at 2.8x per iteration, an
+iteration count matching QE's would put this cell at the band's median and is
+worth **2.7x on the run**, no more.
+
+**What to do first, and what not to.** Check whether the magnetization is what
+takes the extra iterations, by logging `dr2` and `|m|` separately: the plausible
+story is that the charge converges in a dozen and the *vector* magnetization
+takes the other twenty, which no scalar `dr2` distinguishes. Do **not** profile
+`h_psi` -- the per-iteration figure already says the arithmetic sits in the
+project's 2-4x band, and a total-time table with no per-iteration column beside
+it is exactly what would have sent someone there.
 
 ## M. Contained, but each needs the right input before it means anything
 

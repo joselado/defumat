@@ -29,6 +29,64 @@ The benchmark inputs are all a single k-point (`benchmarks/`):
 One k-point on purpose: both codes parallelise over k, so a multi-k comparison
 measures batching rather than the cost of the physics.
 
+## The systematic sweep, and the `fast` set measured (2026-09-12)
+
+`performance/sweep.py` and `performance/sets.py`, driven by `tools/run_benchmark.sh`
+locally and by `tools/cluster/submit_benchmark.py` as three Slurm arrays. Two named
+sets, three legs — `pw.x` on one core, defumat on one core, defumat on one GPU — and
+one JSON record per (case, leg) so the legs join by case name afterwards.
+
+**It measures nothing new.** The QE leg is `tools/compare_qe.py`'s `run_qe` and both
+defumat legs are `tools/gpu/phase0.py`'s `run_case`, which was already device-agnostic.
+What is new is that the set is written down once, that a laptop run and an array task
+execute the same `--measure` command, and that the report separates the two claims
+instead of averaging them.
+
+**The whole `fast` set, this machine, one core each**, `--repeats 2` so the SCF column
+is the warm loop, kernel cache off. All ten cases converged and all twenty units
+succeeded.
+
+| | QE 7.5 | defumat | ratio | its (QE/ours) | dE (Ry) |
+|---|---|---|---|---|---|
+| **`si-1k`** — 2 atoms, 180 PWs | 0.003 s | 0.010 s | **4.2x** | 8/7 | 3.0e-9 |
+| **`si-1k-ecut40`** — 2 atoms, 1131 PWs | 0.013 s | 0.037 s | **3.0x** | 8/8 | 3.8e-9 |
+| **`si8-1k`** — 8 atoms, 738 PWs | 0.021 s | 0.046 s | **2.2x** | 9/8 | 1.5e-9 |
+| **`si2-us-1k`** — ultrasoft | 0.022 s | 0.061 s | **2.7x** | 8/8 | 2.5e-9 |
+| **`si2-paw-1k`** — PAW | 0.036 s | 0.091 s | **2.6x** | 9/8 | 3.7e-10 |
+| **`si8-pbe-1k`** — PBE | 0.025 s | 0.051 s | **2.0x** | 8/8 | 3.7e-9 |
+| **`si8-smeared-1k`** — a metal | 0.026 s | 0.061 s | **2.3x** | 8/7 | 1.5e-9 |
+| **`si8-nc-1k`** — spinors, `npol = 2` | 0.098 s | 0.243 s | **2.5x** | 8/7 | 1.5e-9 |
+| **`pt-so-1k`** — spin-orbit | 0.196 s | 0.286 s | **1.5x** | 7/8 | 1.4e-8 |
+| **`fe-mag-1k`** — `nspin_mag = 4` | 0.072 s | 0.206 s | **2.8x** | 12/32 | 6.7e-9 |
+
+All columns are **per SCF iteration**. Median **2.6x**, range 1.5-4.2x — the same 2-4x
+band P10 established, and `si8-1k`'s 2.2x is the figure already in the table at the head
+of this file, re-measured through new machinery. That agreement is the point of quoting
+it: the harness is not a new measurement, and if it had disagreed the harness would have
+been the thing at fault.
+
+**`fe-mag-1k` is the row to read twice, and it is an argument for the per-iteration
+column rather than a performance finding.** Its *warm SCF* ratio is **7.6x** and its
+per-iteration ratio is **2.8x**, because defumat takes **32 iterations where `pw.x`
+takes 12** on that cell. Nothing there is slow; something there converges badly, and a
+table carrying only total time would have reported it as a 7.6x arithmetic problem and
+sent the next session to profile `h_psi`. The two mixers take different routes to the
+same answer — the energies agree to 6.7e-9 Ry. Whether that iteration count is worth
+closing is a separate question from anything in this file.
+
+**Conditions, stated because they bound what the numbers are worth.** Intel Core Ultra
+5 225U, both codes pinned to one core by affinity, QE 7.5 built serially here. This run
+had light documentation editing alongside it — small, short-lived processes on other
+cores, not a test suite — so treat these as good to a few percent rather than to the
+last digit. The rule against measuring beside a test run still stands and is why the
+figures agree with the established ones at all.
+
+**The GPU leg is unmeasured here**, because this machine has no accelerator; the sweep
+detects that and skips it rather than substituting a CPU number. When it runs it is
+reported against **defumat on CPU, per SCF iteration**, never against single-core QE —
+`GPU.md` §2.3 — with compile time as its own column. That is a different table in the
+same report and the caption says which is which.
+
 ## Where it stands
 
 Single core, this machine, re-measured 2026-08-19. `conv_thr = 1e-10` where the

@@ -49,3 +49,9 @@ slides/*.nav
 slides/*.out
 slides/*.snm
 slides/*.toc
+
+# The benchmark sweep's output: per-case JSON records and the report typeset
+# from them. These describe one machine on one day (performance/sweep.py), and
+# the generated sbatch array scripts describe one cluster account.
+performance/results/
+performance/cluster/generated/

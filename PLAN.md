@@ -315,7 +315,9 @@ because that is what decides whether it is a session or a phase.
   electrons inside `r < 0.2` bohr on diamond; **DFT+U**, whose matrices are trailing
   records; and **a species carrying more than one atom**, the last blind spot of the atom
   index. A *fixed* Elk density is refused permanently rather than outstanding.
-- **Cluster sweeps** (P34, planned and unstarted) and **the rest of P10** — k-axis
+- **Cluster sweeps** (P34, part done — the benchmark sweep's array scripts are
+  written and `fetch.py`, `scancel` tooling and the sweep cap are not) and **the
+  rest of P10** — k-axis
   sharding, GPU, and **the Davidson step count on a large cell**: the eigensolver takes
   roughly **12x** the steps `pw.x` does on a 157-atom slab, of which the per-band
   threshold recorded in P10 is worth **~1.5x** and is now the only one of the four
@@ -4753,12 +4755,46 @@ part of this package's one-centre XC does not fold it in either, so leaving it
 out of both keeps them consistent; putting it in one and not the other would be
 worse than in neither.
 
-### P34 — Running on a cluster: a submit/fetch harness for sweeps. 📋 PLANNED.
+### P34 — Running on a cluster: a submit/fetch harness for sweeps. 🚧 PART DONE.
 
-`tools/cluster/`. Not started. This entry is the design, written down before the
+`tools/cluster/`. This entry is the design, written down before the
 work and reviewed before being written down, so that the session which picks it
 up does not re-derive it — and does not repeat the two mistakes the review
 caught.
+
+**The benchmark sweep is the first thing built on it (2026-09-12), and it is one
+sweep rather than the general harness.** What exists:
+
+- `performance/sets.py` — the two named case sets, `fast` (10 cases) and
+  `complete` (25), written down **once** and read by both the laptop run and the
+  cluster array. A case is a name resolved against `benchmarks/` then
+  `tests/data/qe/`, which is P34's "a case is a directory" simplified to what
+  this sweep actually needs: the run options are already in the `pw.x` input.
+- `performance/sweep.py` — the harness. Three legs (`qe`, `cpu`, `gpu`), one
+  process per (case, leg), a per-unit timeout, `--resume`, and one JSON record
+  per unit. It measures nothing itself: the QE leg is `tools/compare_qe.py`'s
+  `run_qe` and both defumat legs are `tools/gpu/phase0.py`'s `run_case`, which
+  was already device-agnostic. **The array task and the laptop loop run the same
+  `--measure` command**, which is what makes the cluster path testable here.
+- `tools/run_benchmark.sh` — the laptop entry point.
+- `tools/cluster/submit_benchmark.py` — P34's `submit.py`, for this sweep. It
+  writes three `sbatch` array scripts and **prints the `sbatch` lines**; it never
+  submits, and has no flag that would. That is stronger than the design's
+  `--dry-run` and is what the policy beside this checkout requires.
+
+**Two design points settled by building it.** The legs are *three arrays rather
+than one*, because `--partition` and `--gpus` are properties of a job and the QE
+leg additionally needs the cluster's own `quantum-espresso` module on `PATH`
+beside the virtualenv; they are joined afterwards by case name, so a leg that
+failed or is still queued costs its own column. And **the kernel cache is off**
+for a benchmark process, which is the opposite of what this entry's storage note
+says a *production* sweep wants: a shared cache on scratch would mean a "cold"
+run is reading a concurrent array task's compilation, and the cold/warm split is
+the measurement.
+
+**Still not started**, and deliberately out of that scope: `fetch.py` and its
+sentinel, `scancel` tooling, the sweep-size cap, the environment build, and
+anything that is not this one benchmark. The design below stands for those.
 
 **The cluster's rules are not this project's to set, and they are recorded outside this
 repository.** A shared HPC system's access policy, account paths and site-specific limits

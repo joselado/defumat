@@ -59,6 +59,98 @@ The generated `performance.tex`, `.pdf` and `.json` are **not committed** — th
 describe one machine on one day. Keep a copy yourself if you want to diff two
 runs, or re-run on the machine that matters.
 
+## The systematic sweep — `sweep.py`, and the two sets
+
+`run_performance.py` above is the typeset CPU-only report over a hand-kept case
+list. `performance/sweep.py` is the same measurement made **systematic**: three
+legs, two named sets, one record per case per leg, and the same code path on a
+laptop and as one task of a Slurm array.
+
+```bash
+tools/run_benchmark.sh                      # the fast set, on this machine
+tools/run_benchmark.sh complete --resume    # the whole thing, restartable
+python3 performance/sweep.py --report performance/results/complete --set complete
+python3 performance/sets.py complete --describe    # what is in a set, and why
+```
+
+**Three legs, and two of them are a different claim from the third.**
+
+| leg | what runs | what it is compared against |
+|---|---|---|
+| `qe` | `pw.x`, one core, timed by its own report | — it is the baseline |
+| `cpu` | defumat, one core, both batching dials at QE's end | `qe`, per SCF iteration — *the project's metric* |
+| `gpu` | defumat, one GPU, both dials batched | `cpu`, per SCF iteration — `GPU.md` §2.3's metric |
+
+The report prints them as two tables and never mixes them. A GPU number put
+against single-core QE would be meaningless in the same way an unpinned CPU
+number is, only more so, so table B is against the `cpu` leg and its caption
+says so. Compile time is its own column there rather than amortised into the
+speedup.
+
+**The two sets** are in `performance/sets.py`, which is the single place the
+list is written down — the laptop run and the cluster array read the same
+module, and the sbatch generator bakes it into a bash array from there rather
+than from a retyped copy.
+
+- **`fast`** — 10 cases, one per kind of physics, all single-k and 2–8 atoms.
+  The "did anything move?" set, sized to finish while someone waits.
+- **`complete`** — 25 cases: `fast`, plus the 8/16/32/64-atom size ladder, plus
+  nine ten-atom cells spanning the pseudopotential kinds, a GGA, a metal,
+  collinear and noncollinear magnetism, spin-orbit coupling and DFT+U, plus
+  three larger cells. Size and physics vary on separate axes so a ratio that
+  moves with one can be told from a ratio that moves with the other.
+
+**The kernel cache is off by default** (`--cache`), and that is not incidental:
+with `~/.cache/defumat/jax` live, a "cold" run is reading an earlier run's
+compilation and the cold/warm split stops being a measurement. On a cluster it
+would be a *concurrent* task's compilation.
+
+**A case that cannot fit this machine is refused before it starts.** `bi20-soc`
+peaks at about **35 GB** and the workstation this was written on has 31, and an
+out-of-memory kill here does not cost a case — it costs whatever else the
+terminal was holding, which has happened at least three times. So `sets.py`
+carries each large cell's recorded peak, the local runner compares it against
+`MemTotal` with 20% headroom, and a case that does not fit is written out as a
+*named refusal* rather than started and discovered. `--force-large` overrides
+it; the cluster does not need it. The peaks are the GPU sweep's device figures
+standing in for host peaks — the right order of magnitude, which is all a guard
+needs — and a case with no recorded peak is not assumed to be small.
+
+**Two cells need `max_iterations = 200`**, and this is recorded in `sets.py`
+rather than left to the default: `ni10-ldau` and `h40-chain-lsda` converge in
+151 and 104 iterations, so the usual cap of 100 reports them as *not converged*
+instead of as capped. The first GPU sweep made exactly that mistake.
+
+**One process per (case, leg)**, with a per-unit timeout — which bounds a case
+two ways, keeps one case's compilation cache and memory high-water mark off the
+next, and is what makes an array task a single unit of this same harness.
+`--resume` skips units that already have a successful record, so an interrupted
+sweep continues instead of restarting.
+
+## Running the sweep on Triton
+
+```bash
+python3 tools/cluster/submit_benchmark.py --set complete
+```
+
+That writes three array scripts — one per leg, because `--partition` and
+`--gpus` are properties of a job — and **prints the `sbatch` commands for you to
+run**. It does not submit, it has no `--submit` flag, and it should not grow
+one: the policy beside this checkout is explicit that nothing here submits,
+cancels or polls on its own.
+
+One array task is one case, which is the site's "group short tasks into an
+array" rule, and each writes one JSON — one small file per unit, not per
+iteration. The three legs are joined afterwards by case name, so a leg that
+failed or is still queued costs its own column and nothing else.
+
+**The `#SBATCH` values are inherited from `tools/gpu/sweep-qe.sbatch` and
+`sweep-gpu.sbatch`**, which have run on this cluster, with their whole-loop time
+budgets divided down to one case. Every one is a flag. Check the partition, the
+time limit and the `quantum-espresso` module against
+<https://scicomp.aalto.fi/triton/> before the first submission rather than
+against the generator.
+
 ## `gpu-sweep.*` — the GPU report
 
 A second, hand-run report beside the single-core one, and **a different metric**:
