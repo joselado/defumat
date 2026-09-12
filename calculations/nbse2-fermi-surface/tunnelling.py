@@ -117,6 +117,10 @@ def main(grid=(24, 24, 1)) -> None:
         grid=tuple(grid),
         broadening=ETA_RY,
         smearing="gaussian",
+        # A whole 24x24 grid of this slab is over an hour, and the band solve
+        # is a compiled loop that cannot print from inside itself. This at
+        # least says what is coming before the silence starts.
+        report=lambda line: print(line, flush=True),
         # **The delta is centred on the SCF's own Fermi level, not the dense
         # grid's.** Elk's task 9007 has no `occupy` call: it takes `efermi`
         # from `readstate` and evaluates its window once before the k-loop, so

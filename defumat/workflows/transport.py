@@ -39,6 +39,7 @@ space.
 
 from __future__ import annotations
 
+import time
 import warnings
 
 import numpy as np
@@ -325,6 +326,7 @@ def run_momentum_transport(
     nbnd: int | None = None,
     conv_thr: float = 1.0e-6,
     k_batch: int | None | str = "default",
+    report=None,
 ) -> MomentumTransport:
     """``W(k; E)``: which k-points the tunnelling current comes out of.
 
@@ -370,6 +372,19 @@ def run_momentum_transport(
             the reason :func:`whole_grid` gives.
         k_batch: the band solve's batching dial. The assembly here allocates
             only ``(nk, nbnd, nbnd)``, so it needs no bound of its own.
+        report: a ``callable(str)`` -- ``print``, or a logger -- told what this
+            is about to do and what it has finished. ``None`` is silent, which
+            is what every test wants and is therefore the default.
+
+            **It exists because the expensive half cannot report on itself.**
+            The band solve is one call into
+            :meth:`~defumat.scf.driver.Calculation.diagonalize`, whose k loop is
+            a compiled ``lax.map`` with no Python frame to print from; a whole
+            grid of a real slab is an hour with nothing on stdout, and an hour of
+            silence cannot be told from a hang. What *can* be said is the shape
+            of the work before it starts -- how many diagonalisations, of how
+            many bands, on how many plane waves -- which is enough to decide
+            whether to wait, and how long each stage took afterwards.
 
     Returns a :class:`~defumat.transport.momentum.MomentumTransport`, carrying
     the transmission and its two limits -- the Tersoff-Hamann one and the plain
@@ -400,13 +415,24 @@ def run_momentum_transport(
     if kpoints is None and grid is not None:
         kpoints = whole_grid(system, grid, shift)
 
+    say = report if callable(report) else (lambda _line: None)
     if kpoints is None:
         calculation = Calculation(system, pseudos, k_batch=k_batch)
         eigenvalues = np.asarray(result.eigenvalues_by_spin)
         wavefunctions = result.wavefunctions
         levels = {"fermi_energy": result.fermi_energy,
                   "homo": result.homo, "lumo": result.lumo}
+        say(f"using the run's own {calculation.system.kpoints.nk} k-points; "
+            "no band solve")
     else:
+        # The shape of the work, before an hour of silence rather than after it.
+        wanted = nbnd or system.nbnd
+        say(f"solving {kpoints.nk} k-points"
+            + (f" x {wanted} bands" if wanted else "")
+            + " at fixed density -- the whole grid, because W(k) is a function "
+              "of k. This is the long part and it cannot report from inside: "
+              "its k loop is compiled")
+        began = time.time()
         calculation, system, eigenvalues, wavefunctions = fixed_density_states(
             system, pseudos, result.density, kpoints, nbnd, conv_thr, k_batch,
             ns=getattr(result, "ns", None),
@@ -417,6 +443,9 @@ def run_momentum_transport(
         )
         eigenvalues = np.asarray(eigenvalues)
         _, levels = calculation.occupations(eigenvalues)
+        elapsed = time.time() - began
+        say(f"  solved in {elapsed:.0f} s "
+            f"({elapsed / max(1, kpoints.nk):.2f} s per k-point)")
 
     if wavefunctions is None:
         raise ValueError(
@@ -449,6 +478,7 @@ def run_momentum_transport(
         exit_axis=exit_axis, energies=grid_energies,
         broadening=float(broadening), spin=spin,
         polarization=float(polarization), method=method, smearing=smearing,
+        say=say,
     )
 
     if bias is not None:
@@ -757,7 +787,7 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
 
 def _assemble_momentum(calculation, wavefunctions, eigenvalues, *,
                        exit_height, heights, exit_axis, energies, broadening,
-                       spin, polarization, method, smearing):
+                       spin, polarization, method, smearing, say=None):
     """A Gram matrix per plane per k-point, then one trace. No real-space sampling.
 
     The whole cost of :func:`_assemble` is the ``(npol, nk, nbnd, npoints)``
@@ -807,6 +837,9 @@ def _assemble_momentum(calculation, wavefunctions, eigenvalues, *,
         block_of = lambda ik, s=ispin: np.asarray(wavefunctions[s, ik])
         exit_gram = gram_at(block_of, exit_height)
         for ih, plane_height in enumerate(heights):
+            if say is not None:
+                say(f"  tip plane {ih + 1} of {len(heights)} "
+                    f"at crystal height {float(plane_height):.4f}")
             tip_gram = gram_at(block_of, float(plane_height))
             for gram in (exit_gram, tip_gram):
                 hermiticity = max(hermiticity, float(

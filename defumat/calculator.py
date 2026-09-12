@@ -1018,6 +1018,11 @@ class Calculator:
         Tersoff-Hamann limit (the substrate made structureless), and the plain
         Fermi surface. The k-set must be the **whole** grid, which ``grid``
         builds.
+
+        A whole grid of a real slab is an hour, most of it in a band solve whose
+        k loop is compiled and cannot print from inside itself, so pass
+        ``report=print`` on anything that size: it says the shape of the work
+        before the silence rather than after it.
         """
         from defumat.workflows.transport import run_momentum_transport
 
