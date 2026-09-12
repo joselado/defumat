@@ -12,10 +12,10 @@ its section and its table row. What they named was the **functional entry
 point** -- ``run_absorption``, ``elastic_constants``, ``raman_tensors`` -- and
 never the bound method beside it. So a reader who knew the physics and grepped
 for ``get_absorption`` found nothing, in a document whose own introduction says
-that is the way to call it. Fifteen of the forty-six were missing from
-``docs/features.tex`` and thirteen from ``README.md``, and a human reading either
-document end to end would not have noticed, because each page is individually
-complete.
+that is the way to call it. **Fifteen of the forty-six were missing from
+``docs/features.tex`` and twelve from ``README.md``** (thirteen counting
+``get_nscf``, which is exempt below), and a human reading either document end to
+end would not have noticed, because each page is individually complete.
 
 The fix is mechanical and so is the check: a set difference against
 ``dir(Calculator)``, run in the fast gate. It cannot say whether an entry is any
@@ -107,6 +107,34 @@ def test_every_calculator_method_is_named_in_the_readme_feature_table():
         f"{len(missing)} Calculator methods are absent from README.md: "
         f"{missing}. Add each to the entry-point column of the row whose "
         "quantity it computes -- not a new row, unless the quantity is new"
+    )
+
+
+def test_no_feature_row_is_split_by_an_unescaped_pipe():
+    """A bare ``|`` inside ``$...$`` silently splits a table cell.
+
+    Two rows carried one for months: the vertical-transport row's
+    ``$\\int |G(r,r')|^2$`` and the momentum-resolved row's
+    ``$|\\mathbf k_\\parallel|$``. GitHub's renderer takes every unescaped pipe
+    as a separator whatever surrounds it, so those rows rendered with six and
+    eight columns against the header's four -- the entry points and the two tick
+    columns shifted right, out from under their headings. It reads as a
+    formatting wobble rather than as a wrong claim, which is why nobody chased
+    it; but the ``QE``/``Elk`` ticks are claims about someone else's source, and
+    a tick under the wrong heading is a false one.
+
+    Escape the pipe (``\\|``) or write ``\\lvert``.
+    """
+    rows = [(n, line) for n, line in
+            enumerate(README.read_text().split("\n"), 1)
+            if line.startswith("| **")]
+    assert len(rows) > 40, "the feature table did not parse; has its shape changed?"
+    split = [(n, len(re.split(r"(?<!\\)\|", line)), line[:60])
+             for n, line in rows
+             if len(re.split(r"(?<!\\)\|", line)) != 6]
+    assert not split, (
+        "these feature rows do not have four columns, which means an "
+        f"unescaped pipe inside the prose is splitting a cell: {split}"
     )
 
 
