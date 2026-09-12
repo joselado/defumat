@@ -13289,40 +13289,78 @@ moments at **5e-8**, where the same cells converge to 1e-11 under LDA in 62 iter
 magnetic state is frustrated under PBE on those cells. What that half needs is a cell whose
 canted PBE state converges in `pw.x`, not a change here.
 
-**E(c) asked whether a spiral can be *held* by a constraint. It is not refused, and it does
-not work.** A spiral SCF accepts `constrained_magnetization` and a field -- nothing declines
-either -- and the quantity a constraint acts on is confirmed to be the **rotated-frame**
-magnetization, which is the right object for a helix and was documented nowhere near
-`constrained_magnetization`. What it does with it is the finding.
-`h-fcc-spiral-scan.in` at `spiral_q = (0, 0, 1/2)`, target taken from the same cell's
-`q = 0` run:
+**E(c) asked whether a spiral can be *held* by a constraint. A spiral accepts one; whether
+`fsm` can hold it is still open, and the reason is that this cell cannot answer it -- `fsm`
+fails at `q = 0` too, where there is no rotated frame at all.**
 
-| run | iterations | converged | rotated-frame `\|m\|` | E (Ry) |
-|---|---|---|---|---|
-| `q = 0`, bare | 24 | yes | 0.0273 | -0.98458891 |
-| `q = 1/2`, bare | 149 | yes | 0.0435 | -0.98461919 |
-| `q = 1/2`, `fsm` at 0.0273 along x | **200** | **no** | **0.1468** | -0.98370265 |
+What is settled. A spiral SCF does not refuse `constrained_magnetization` or a field, and the
+quantity a constraint acts on is the **rotated-frame** magnetization -- the right object for a
+helix, and documented nowhere near `constrained_magnetization` before now.
 
-The constrained run **overshoots its target by a factor of five and does not converge**, and
-lands 0.9 mRy *above* the bare one. The mechanism is visible on the result object:
-`constraint_energy` is **0.0** and `field_scale` is 1.0, because `fsm` is a *feedback* field
-rather than a penalty -- so there is no penalty energy to report and, more to the point,
-**nothing on the result says how far from its target the run is**. That is the
-`site_residuals` gap for the non-atom-resolved schemes, and it is why a non-convergence here
-reads as an ordinary non-convergence. Elk's own recipe for this exact calculation is
-`fsmtype = -1` with a **large** field along `momfix` -- fix the *direction* hard, not the
-magnitude at a small value -- and that is the thing to try next, not a larger `lambda`.
+The runs, all on `h-fcc-spiral-scan.in` at `conv_thr = 1e-10` and `max_iterations = 200`:
 
-Two things found on the way, both corrections to what was written down.
-`h-fcc-spiral-scan.in`'s header records `|m| = 0.0001` at `q = 1/2`; this run gives
-**0.0435** after 149 iterations. Both are "collapsed off the magnetic branch" and neither is a
-number: it is wherever a wandering SCF stopped, so the header's figure should not be quoted as
-one. And the cell's `q = 0` state is itself only 0.027 mu_B on an atom seeded at 1.0, so the
-target handed to `fsm` was a nearly nonmagnetic number -- which is a poor test of a feedback
-field and is part of why it did not settle. *The first criterion written for this comparison
-was also wrong in this file's recurring way*: "held if `|m| > 0.5 target`" passes at 0.1468
-against a 0.0273 target, so a five-fold **overshoot** reads as a hold. The test of a
-constraint is the distance from the target, signed, not a one-sided bound.
+| `q_3` | target `m_x` | iterations | converged | accuracy (Ry) | `m_x` | `m_x - target` | final field (Ry) |
+|---|---|---|---|---|---|---|---|
+| 0 | -- | 24 | yes | -- | +0.0273 | -- | -- |
+| 1/2 | -- | 149 | yes | -- | +0.0435 | -- | -- |
+| 1/2 | +0.0273 | 200 | **no** | **3.9e-11** | -0.1468 | **-0.1741** | -- |
+| 1/2 | -0.0273 | 200 | no | -- | -0.5275 | -0.5002 | -- |
+| 0 | +0.5 | 200 | no | 2.5e-4 | +0.7187 | +0.2187 | +0.057 |
+| 0 | +0.1 | 200 | no | 5.5e-3 | +0.7195 | +0.6195 | +0.181 |
+
+**It is not a sign error and it is not the frame**, which were the two obvious suspects and
+both are ruled out by the last two rows. The feedback drives the field the *right* way -- at
+`q = 0` with a target above the bare moment the field grows **positive** (+0.057 Ry) and the
+moment rises -- and it fails at `q = 0`, where the rotated frame is the laboratory frame. The
+module's own docstring warns that a reversed sign "drives the field the wrong way until the
+moment saturates, and the run converges to the *unconstrained* answer looking untroubled";
+that is not what happens.
+
+**What it is: a secant on a step function.** fcc hydrogen at `a = 6.5` bohr is a *marginal*
+magnet, and that is P63's own measurement -- the ferromagnetic solution is metastable, **58
+meV above** the nonmagnetic one. So `m(B)` there is nearly a step: 0.057 Ry of field takes the
+moment from 0.027 to 0.719, essentially the saturated value. A secant iteration on a step
+overshoots by construction, and past the overshoot the moment is saturated, so `chi -> 0` and
+the step the secant asks for is unbounded (`FSM_TRUST` clips its *growth*, not its size). Then
+the second failure closes the loop: under that large field the inner SCF stops converging
+(**2.5e-4** and **5.5e-3** against a 1e-10 threshold), the secant only steps on *converged*
+pairs by design, so the field freezes where it overshot to and the remaining iterations are
+spent going nowhere.
+
+**Row three is the one that reads wrongly without help, and it is now fixed.** Its
+`accuracy` is **3.9e-11**, *below* its own 1e-10 threshold: the density converged and it is
+the **constraint** that is unmet, by 0.174 mu_B against `FSM_TOLERANCE = 1e-3`. Until this
+phase nothing on the result said so -- `constraint_energy` is 0 for `fsm` by construction,
+since it is a feedback field rather than a penalty, and `site_residuals` is filled only for
+the atom-resolved schemes, so `MagneticField.satisfied` computed exactly this error, tested it
+and threw the number away. Added: `MagneticField.cell_residual`,
+`SCFResult.constraint_residual` (signed and per component, because a moment that has crossed
+to the *other side* of its target is a different failure from one that has not arrived), the
+same per iteration in `history` so the field's trajectory is visible, and a **separate**
+non-convergence warning for this case, which says the density is fine, names the miss and the
+tolerance, and points at the two things the generic advice gets backwards: `electron_maxstep`
+is **shared** between the inner SCF and the outer field loop -- so a cell whose *bare* SCF
+needs 149 of 200 iterations leaves the field almost no steps -- and a residual that has
+changed sign is an overshoot wanting a *smaller* `lambda`, not more iterations.
+
+**Three mistakes of mine on the way, all the same trap.** "Held if `|m| > 0.5 target`" passes
+at `|m| = 0.147` against a target of 0.027 -- a sign flip and a six-fold miss reading as a
+hold; the test of a constraint is the **signed** distance. The first `q = 0` control took its
+target *from* the bare `q = 0` run, so the error was zero at iteration one, the field never
+moved, and 24 iterations bit-identical to the bare run read as a pass -- a control has to ask
+the machinery to do work. And the first write-up called `-0.1468` against `+0.0273` an
+"overshoot by a factor of five", which is a magnitude where the finding is a sign.
+
+**A separate finding, and it is drift rather than a defect.** P63's spiral scan does not
+reproduce. It records `E(q) - E(0)` of `0, -150, -59` meV at `q_3 = 0, 1/4, 1/2`; the
+`q_3 = 1/2` point now comes out at **-0.41 meV** (-0.98461919 against -0.98458891 Ry). The
+reason is visible in the `q = 0` row above: that run's moment is **0.0273 mu_B** on an atom
+seeded at 1.0, so it is no longer on the metastable ferromagnetic branch P63 measured at all,
+and both ends of the difference are now on the nonmagnetic one. P63's *conclusion* is
+untouched and if anything strengthened -- the spiral leaves the magnetic branch, and now so
+does `q = 0` -- but its **numbers** are stale, and which of P77-P79's magnetic changes moved
+which metastable minimum is not identified. This is what `CLAUDE.md` says the slow suite
+exists to catch, found instead by re-running one input by hand.
 
 **The QE test-suite is on this machine outside the repo, and about thirty tests were skipping
 for no reason.** `~/apps/qe-7.4.1/test-suite/` has the same directories and the same inputs

@@ -126,8 +126,8 @@ from defumat.scf.occupations import (
     tetrahedra_for,
     tetrahedron_occupations_spin,
 )
-from defumat.scf.fields import (ATOM_RESOLVED, FADED_FIELD, MagneticField,
-                                constraint_targets)
+from defumat.scf.fields import (ATOM_RESOLVED, FADED_FIELD, FSM_TOLERANCE,
+                                MagneticField, constraint_targets)
 from defumat.scf.locals import build_local_regions, get_locals
 from defumat.scf.potential import (
     Potential,
@@ -1040,6 +1040,20 @@ class SCFResult:
     #: is the same comparison site by site, which is the only form of it that
     #: can tell those two apart.
     site_residuals: tuple | None = None
+    #: ``m - m_target`` as a 3-vector, in Bohr magnetons, for a **cell-wide**
+    #: constraint -- ``constrained_magnetization = 'total'`` or ``'fsm'``.
+    #: ``None`` otherwise, including for ``'total direction'``, whose target is
+    #: an angle rather than a moment.
+    #:
+    #: **It is the only number an ``fsm`` run has.** A penalty's miss shows in
+    #: :attr:`constraint_energy`, which is part of the energy; ``fsm`` drives a
+    #: *feedback field* instead, so its ``constraint_energy`` is 0 by
+    #: construction and until this field existed nothing said how far the run
+    #: ended from what it was asked for -- ``MagneticField.satisfied`` computed
+    #: exactly this, tested it and threw it away. Signed and per component,
+    #: because a moment that has crossed to the *other side* of its target is a
+    #: different failure from one that has not reached it (``PLAN.md`` P80).
+    constraint_residual: tuple | None = None
     #: The field the run ended with, which is not the one it started with when
     #: ``reducebf`` or the fixed-spin-moment scheme was in use.
     magnetic_field: object | None = None
@@ -4890,6 +4904,14 @@ def run_scf(
             residuals = field.site_residuals(rho_out, calculation.system.cell)
             if residuals is not None:
                 entry["site_residuals"] = np.asarray(residuals)
+            cell_residual = field.cell_residual(rho_out, calculation.system.cell)
+            if cell_residual is not None:
+                # Per iteration as well as at the end, because an ``fsm`` field
+                # steps only on *converged* pairs: the history is where the
+                # sequence of field steps is visible, and a run that stops on
+                # the iteration budget rather than on the constraint looks
+                # identical to one that diverged unless the trajectory is there.
+                entry["constraint_residual"] = np.asarray(cell_residual)
         if calculation.is_hubbard:
             entry["hubbard_energy"] = float(eth)
             # ``write_ns``'s headline number, per correlated atom: the trace of
@@ -5049,18 +5071,53 @@ def run_scf(
         # raises (``Calculator._ground_state``); the functional entry point is
         # the one that cannot, because a deliberate one-iteration run is a
         # legitimate thing to ask for.
-        warnings.warn(
-            f"the SCF stopped without converging: {completed} iterations "
-            f"reached accuracy = "
-            f"{'unmeasured' if accuracy is None else format(accuracy, '.3e')} Ry "
-            f"against conv_thr = "
-            f"{conv_thr:.3e}. Every quantity on this result is computed from an "
-            f"unconverged density. Raise electron_maxstep, lower mixing_beta, "
-            f"or start from a better density (run_scf(starting_from=...)); "
-            f"SCFResult.converged and .accuracy are what say which this is",
-            RuntimeWarning,
-            stacklevel=2,
+        #
+        # **A fixed-spin-moment run that stops here is usually not a density
+        # failure**, and saying so is the difference between a diagnosis and a
+        # shrug: ``accuracy`` can be *below* ``conv_thr`` while ``converged`` is
+        # False, because ``MagneticField.satisfied`` is a second condition on top
+        # of it (measured at 3.9e-11 against a 1e-10 threshold with the moment
+        # 0.174 mu_B from target, ``PLAN.md`` P80). The advice is then the
+        # opposite of the generic one -- the density is fine and it is the outer
+        # field loop that ran out of room, which matters because the iteration
+        # budget is *shared* between the two.
+        unmet = (
+            None if field is None or accuracy is None or accuracy >= conv_thr
+            else field.cell_residual(rho_out, calculation.system.cell)
         )
+        if unmet is not None:
+            largest = float(jnp.max(jnp.abs(jnp.asarray(unmet))))
+            warnings.warn(
+                f"the SCF stopped without converging, but its **density** did: "
+                f"accuracy = {accuracy:.3e} Ry is below conv_thr = "
+                f"{conv_thr:.3e} and what is unmet is the "
+                f"constrained_magnetization = {field.constraint!r} target, by "
+                f"{largest:.3e} Bohr magnetons against a tolerance of "
+                f"{FSM_TOLERANCE:.0e} (SCFResult.constraint_residual is the "
+                f"signed vector, and history carries it per iteration). The "
+                f"field steps only on converged pairs, so electron_maxstep is "
+                f"shared between the inner SCF and the outer field loop and a "
+                f"cell whose *bare* SCF needs most of it leaves the field almost "
+                f"no steps: raise electron_maxstep well above the bare run's own "
+                f"iteration count first. A residual that has changed **sign** "
+                f"relative to the target is an overshoot rather than a slow "
+                f"approach, and a smaller `lambda` is what that wants",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        else:
+            warnings.warn(
+                f"the SCF stopped without converging: {completed} iterations "
+                f"reached accuracy = "
+                f"{'unmeasured' if accuracy is None else format(accuracy, '.3e')} Ry "
+                f"against conv_thr = "
+                f"{conv_thr:.3e}. Every quantity on this result is computed from an "
+                f"unconverged density. Raise electron_maxstep, lower mixing_beta, "
+                f"or start from a better density (run_scf(starting_from=...)); "
+                f"SCFResult.converged and .accuracy are what say which this is",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     if verbose and site_moments is not None:
         _report_mag(
@@ -5154,6 +5211,8 @@ def run_scf(
         # measured at 7.0 degrees against 4.3 on an unconverged 120-degree cell.
         site_residuals=None if field is None else _as_tuple(
             field.site_residuals(rho_out, calculation.system.cell)),
+        constraint_residual=None if field is None else _as_tuple(
+            field.cell_residual(rho_out, calculation.system.cell)),
         magnetic_field=field,
         field_scale=float(field_scale),
         fermi_energy=levels.get("fermi_energy"),

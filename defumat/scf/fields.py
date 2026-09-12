@@ -581,6 +581,40 @@ class MagneticField(eqx.Module):
             is_leaf=lambda x: x is None,
         )
 
+    def cell_residual(self, rho_r: jnp.ndarray, cell: Cell):
+        """``m - m_target`` as a 3-vector for a cell-wide constraint, or ``None``.
+
+        The companion of :meth:`site_residuals` for the schemes that have **no**
+        per-site target -- ``'total'``, ``'total direction'`` and ``'fsm'``.
+
+        **It exists because ``fsm`` had no number at all.** A penalty's miss is
+        visible in ``constraint_energy``, which is part of the energy and goes to
+        zero as the constraint is met. ``fsm`` is a *feedback field* rather than a
+        penalty, so its ``constraint_energy`` is **0 by construction** and
+        nothing on the result said how far the run ended from what it was asked
+        for: :meth:`satisfied` computed exactly this error, compared it against
+        :data:`FSM_TOLERANCE`, returned a bool and threw the number away. A run
+        that stops with ``converged = False`` then looks like an ordinary
+        non-convergence even when its *density* is converged -- measured at
+        ``accuracy = 3.9e-11`` against a ``conv_thr`` of 1e-10, with the moment
+        0.174 mu_B from its target (``PLAN.md`` P80).
+
+        In Bohr magnetons, signed and per component, because the sign is the
+        whole of the diagnosis: a moment that has gone to the *other side* of its
+        target is a different failure from one that has not got there yet, and a
+        magnitude cannot tell them apart.
+
+        ``None`` for ``'total direction'`` as well as for the atom-resolved
+        schemes and for no constraint at all: that scheme's target is a polar
+        **angle in degrees** (``constraint_targets``) rather than a moment, so a
+        vector difference against it is not a residual of anything. Its own
+        residual is an angle and belongs beside ``_polar_angle``; it is not
+        written here rather than written wrongly.
+        """
+        if self.constraint not in ("total", "fsm"):
+            return None
+        return self.total_moment(rho_r, cell) - jnp.asarray(self.targets)
+
     def satisfied(self, rho_r: jnp.ndarray, cell: Cell) -> bool:
         """Whether a fixed-spin-moment run has actually fixed the moment.
 

@@ -25,12 +25,17 @@
 ! reference the same cell at q = 0 converges in 24 iterations to |m| = 0.0273,
 ! which is barely magnetic itself on an atom seeded at 1.0.
 !
-! **Holding it with `fsm` was tried and does not work** (P80): at q = 1/2 with the
-! target at that 0.0273 the run takes 200 iterations without converging and
-! overshoots to 0.1468. `fsm` is a feedback field rather than a penalty, so
-! `constraint_energy` is 0.0 and nothing on the result says how far off target it
-! is. Elk's `fsmtype = -1` -- the direction fixed hard by a large field -- is the
-! route, and it is not implemented here.
+! **Holding it with `fsm` was tried and this cell cannot be held** (P80). At
+! q = 1/2 with the target at that 0.0273 the run takes 200 iterations without
+! converging and ends at -0.1468 -- the other side of the target, not short of it.
+! It is not a sign error and not the rotated frame: it fails at q = 0 too, where
+! that frame is the laboratory frame, and there the field grows in the *right*
+! direction. The cause is that m(B) here is nearly a step -- 0.057 Ry of field
+! takes the moment from 0.027 to 0.719 -- so a secant on it overshoots, the
+! moment saturates, the inner SCF stops converging under the large field, and the
+! field freezes because it only steps on converged pairs. Use a cell whose m(B) is
+! not a step. Elk's `fsmtype = -1` -- the direction fixed hard by a large field --
+! is the other route and is not implemented here.
 !
 ! PLAN.md P63 records the measurement and what replaced it in the tests.
  &control

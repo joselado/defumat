@@ -57,6 +57,7 @@ number, because the whole rule of this project is that a claim is a number:
 | no **vector** texture had ever been carried through an SCF and inspected | one has: a 90-degree cycloid on four hydrogens, symmetrised and free | 0.4543 mu_B per site either way, angles 90.00 degrees, the pair 8.0e-9 Ry apart (P80) |
 | a relaxation of a magnet said nothing per site | `site_charges`/`site_moments` on all three drivers' step objects | mechanical; and the *final* geometry is the one step that cannot show a collapse (P80) |
 | the noncollinear GGA had no measured derivative anywhere | bcc iron, ultrasoft, PBE, compared through its **stress** | 6.7e-9 Ry and 1.6e-7 Ry/bohr^3, the level the collinear ultrasoft cases reach; **signed branch only** (P80) |
+| an `fsm` run that missed its target said so nowhere | `SCFResult.constraint_residual`, signed, plus a warning of its own | `constraint_energy` is 0 for a feedback field; a run with `accuracy = 3.9e-11` under a 1e-10 threshold and its moment 0.174 out read as an ordinary non-convergence (P80) |
 
 Three of those were **not** in the audit and were found while fixing it: the spinor `ns`
 cast, nickel's `conv_thr` (`OPEN.md` Y1), and `'atomic texture'`'s `1/|m|`. The first is
@@ -198,26 +199,43 @@ converts the feature from a set of identities to an external comparison, is the 
 that catches an error the five identities share, and supplies the missing
 `PERFORMANCE.md` pair in the same run.
 
-**(c) is run, and the answer is a negative; P80.** A spiral SCF does not refuse a field or a
-constraint, and the quantity a constraint acts on **is** the rotated-frame magnetization —
-the right object for a helix, and documented nowhere near `constrained_magnetization` before
-now. But `fsm` does not hold it: at `q3 = 1/2` with the target at the same cell's `q = 0`
-moment (0.0273 mu_B) the run takes 200 iterations **without converging**, overshoots to
-0.1468 — a factor of five — and lands 0.9 mRy *above* the bare run.
+**(c) is run. A spiral accepts a constraint; whether `fsm` can *hold* one is still open,
+because this cell cannot answer it — `fsm` fails at `q = 0` too. P80.**
 
-The mechanism is on the result object: `constraint_energy` is 0.0 and `field_scale` is 1.0,
-because `fsm` is a **feedback** field rather than a penalty, so nothing reports how far from
-its target the run is and the failure reads as an ordinary non-convergence. That is the
-`site_residuals` gap for the schemes that are not atom-resolved. **Next step is Elk's own
-recipe for this calculation and not a larger `lambda`**: `fsmtype = -1` with a large field
-along `momfix`, which fixes the *direction* hard instead of pinning a small magnitude — and
-item B is the machinery for it.
+Settled: a spiral SCF does not refuse `constrained_magnetization` or a field, and the quantity
+the constraint acts on **is** the rotated-frame magnetization, which is the right object for a
+helix and was documented nowhere near `constrained_magnetization`.
 
-Two corrections fell out. `h-fcc-spiral-scan.in`'s header records `|m| = 0.0001` at
-`q = 1/2`; the run gives **0.0435** in 149 iterations. Both are "off the magnetic branch" and
-neither is a number — it is where a wandering SCF stopped — so the header's figure must not be
-quoted as one. And the cell's `q = 0` state is only 0.027 mu_B on an atom seeded at 1.0, so
-the target was nearly nonmagnetic to begin with, which is a poor test of a feedback field.
+Not settled, and the two obvious suspects are both ruled out. It is **not a sign error** — at
+`q = 0` with a target above the bare moment the field grows *positive* (+0.057 Ry) and the
+moment rises — and it is **not the rotated frame**, because it fails at `q = 0` where that
+frame is the laboratory frame. What it is: fcc hydrogen at `a = 6.5` bohr is a marginal magnet
+(P63: the ferromagnet is metastable, 58 meV *above* the nonmagnetic solution), so `m(B)` is
+nearly a step — 0.057 Ry of field takes the moment from 0.027 to 0.719 — and a secant on a
+step overshoots by construction. Past the overshoot the moment is saturated, `chi -> 0`, and
+the inner SCF stops converging under the large field (2.5e-4, 5.5e-3 against 1e-10), so the
+secant gets no more converged pairs to step on and the field freezes where it went.
+
+**First step is a different cell, not a different `lambda`**: iron or nickel, something whose
+`m(B)` is not a step, and `max_iterations` well above the bare SCF's own count — the budget is
+**shared** between the inner SCF and the outer field loop, and this cell's bare `q = 1/2` run
+alone takes 149 of 200.
+
+**What P80 added so the next attempt is readable.** `MagneticField.cell_residual` and
+`SCFResult.constraint_residual`: `m - m_target`, signed and per component, at the end and per
+iteration in `history`. `fsm` had **no** number at all before — `constraint_energy` is 0 by
+construction for a feedback field and `site_residuals` only covers the atom-resolved schemes,
+so `satisfied` computed the error, tested it and discarded it. A dedicated non-convergence
+warning now fires when the **density** converged and only the constraint did not (measured:
+`accuracy = 3.9e-11` against `conv_thr = 1e-10`, moment 0.174 mu_B out), because the generic
+advice — more iterations, smaller `mixing_beta` — is backwards there.
+
+Two corrections to what was written down. `h-fcc-spiral-scan.in`'s header quoted
+`|m| = 0.0001` at `q = 1/2`; the run gives **0.0435**, converged, at a different fixed point.
+And **P63's whole spiral scan is stale**: it records `E(q) - E(0) = -59` meV at `q_3 = 1/2` and
+the re-run gives **-0.41 meV**, because the `q = 0` end is no longer on the metastable
+ferromagnetic branch (0.0273 mu_B on an atom seeded at 1.0). The conclusion stands and the
+numbers do not; which of P77–P79's changes moved that minimum is unidentified.
 
 ### F. The mixer's metric — and its headroom is now bounded [17]
 

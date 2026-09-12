@@ -2193,18 +2193,31 @@ $|m|$ is not a number to quote --- two runs of the same input give 0.0001 and
 0.0435, which is where a wandering SCF stopped rather than a property of the
 state.)
 
-\textbf{A constraint does not rescue it, and that edge is worth knowing.} A
-spiral SCF accepts \code{constrained\_magnetization} and a magnetic field ---
+\textbf{A constraint does not rescue it on this cell, and the reason is the cell.}
+A spiral SCF accepts \code{constrained\_magnetization} and a magnetic field ---
 neither is refused --- and the quantity a constraint acts on is the
 \textbf{rotated-frame} magnetization, which is the right object for a helix. But
-\code{'fsm'} does not hold one: at $q_3 = \tfrac12$ with the target at the same
-cell's $q = 0$ moment the run takes 200 iterations without converging and
-overshoots it by a factor of five. \code{'fsm'} is a \emph{feedback} field rather
-than a penalty, so \code{constraint\_energy} is 0 and nothing on the result says
-how far from its target the run is --- the failure reads as an ordinary
-non-convergence. Elk's own magnon-spiral example runs \code{fsmtype = -1} with a
-large field for exactly that reason: the \emph{direction} fixed hard, not a small
-magnitude pinned. That scheme is not implemented here.
+\code{'fsm'} does not converge here, and it does not converge at $q = 0$ either,
+where there is no rotated frame at all: fcc hydrogen at this spacing is a
+\emph{marginal} magnet, so $m(B)$ is nearly a step --- 0.057~Ry of field takes the
+moment from 0.027 to 0.719 --- and a secant iteration on a step overshoots by
+construction. Past the overshoot the moment is saturated and the inner SCF stops
+converging under the large field, and since the field steps only on
+self-consistent pairs it then freezes where it went. Use a cell whose $m(B)$ is
+not a step, and give \code{electron\_maxstep} room: it is \textbf{shared} between
+the inner SCF and the outer field loop.
+
+\textbf{What to read when one does not converge.} \code{'fsm'} drives a
+\emph{feedback field} rather than a penalty, so its \code{constraint\_energy} is
+0 by construction and tells you nothing. \code{SCFResult.constraint\_residual} is
+$\mathbf m - \mathbf m_{\text{target}}$, signed and per component, with the same
+per iteration in \code{history}; a residual that has changed \emph{sign} is an
+overshoot rather than a slow approach. And \code{converged = False} on such a run
+is often not a density failure --- \code{accuracy} can sit below
+\code{conv\_thr} while the constraint is unmet, which is a separate warning with
+its own advice. Elk's own magnon-spiral example runs \code{fsmtype = -1} with a
+large field along \code{momfix} instead: the \emph{direction} fixed hard rather
+than a small magnitude pinned. That scheme is not implemented here.
 
 \code{goldstone\_correction=True} scales the kernel by
 $1/\lambda_{\max}(\mathbf q{=}0)$, the same factor at every $\mathbf q$, so the
