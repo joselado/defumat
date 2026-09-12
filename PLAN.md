@@ -12495,7 +12495,7 @@ tighter than one iteration's cost overshoots by up to that much -- on the NiBr2 
 5.3 s an iteration that is 5.3 s, and on a cell where one iteration is twenty minutes it is
 twenty minutes. Leave the margin.
 
-### P77 -- Two magnetic defects: an antiferromagnet averaged to zero, and no way to see it. ✅ DONE.
+### P77 -- Two magnetic defects: an antiferromagnet averaged to zero, and no way to see it. ✅ DONE, four of five deliverables; ⏳ the notebook.
 
 `defumat/system/symmetry.py`, `system/builder.py`, `scf/locals.py`, `scf/driver.py`. The
 first two entries of `NONCOLLINEAR.md`'s Tier 1, taken together because **neither is usable
@@ -12596,6 +12596,19 @@ move is the defect, and `at_positions` and `at_strain` both call it -- `at_cell`
 a vc-relax step, did not. A relaxation under `constrained_magnetization = 'atomic'`
 integrated its penalty over spheres sized for the starting cell.
 
+**The notebook is the one deliverable missing, and it is blocked on the checkout rather
+than on the work.** The two natural hosts, `notebooks/07_spin_polarization.ipynb` and
+`notebooks/11_noncollinear_magnetism_and_fields.ipynb`, both read their inputs from
+`quantum_espresso/qe-7.5-ReleasePack/.../test-suite`, which is gitignored and **absent
+here**, so neither can be re-executed and a cell added to one would have to be committed
+unexecuted -- which is the thing the notebook rule exists to prevent. The cell to add is
+short and the run is seconds: `Calculator.from_file("h2-mirror-afm.in")`, print the cell
+total beside the site moments, and say that the first is zero for the antiferromagnet and
+for the nonmagnetic state alike. The alternative, and probably the better one, is a
+notebook of its own on compensated magnetism -- it needs only `tests/data/`, so it is
+executable in this checkout, and the figure is the per-site moment against iteration for
+the two spellings.
+
 **What is outstanding.** The time-reversal half (`colin_mag = 2`) is not implemented, so a
 collinear magnet whose group contains flip-only operations runs on a subgroup: correct, and
 more k-points than QE would use. The `pw.x` cross-check of the packed layout
@@ -12650,6 +12663,72 @@ what its 4.4e-7 PBE stress measures. What is needed is `h4-noncolin-force.in` wi
 `input_dft = 'PBE'` and a committed `pw.x` reference, which is a phase because the
 reference has to be generated. Until then the sign convention, the rotate-back and every
 term between them are pinned only by finiteness and by the LDA cases.
+
+### P77b -- Two magnetic thresholds that disagreed, and a field that never left. ✅ DONE.
+
+`defumat/system/symmetry.py`, `scf/fields.py`, `scf/driver.py`. `NONCOLLINEAR.md`'s Tier 1
+items 6 and 7, together because both are a run reporting success in a state it was not
+asked for.
+
+**Item 6: seven orders of magnitude between two rules about how small is nothing.**
+`is_magnetic` counts an applied per-atom field from **1e-12** upward, deliberately and with
+the reason stated -- asking for a field at all is asking for the magnetic branch. The
+symmetry filter dropped a whole field below **1e-5** (`_MAGNETIC_TOLERANCE`), and compared
+images against the same absolute number. A field in between therefore switched the run to
+`nspin_mag = 4`, switched time reversal off, and then contributed **nothing** to the
+filter -- leaving the full crystal group to average away the texture the field was applied
+to create. Measured on the four-atom cycloid, group of 8 for the ferromagnet:
+
+| field scale (Ry) | 1e-3 | 1e-5 | **1e-6** | 1e-9 | 1e-12 |
+|---|---|---|---|---|---|
+| `nsym` before | 2 | 2 | **8** | 8 | 8 |
+| `nsym` after | 2 | 2 | **2** | 2 | 2 |
+
+**The fix is to remove the scale rather than to move the threshold.** What the filter tests
+is a *pattern* -- whether the operation maps the field onto itself up to time reversal --
+and that question has no scale in it, so `_axial_fields` now divides each field by its own
+largest component. Scaling both sides of a comparison by the same number cannot change its
+answer, which is why this is safe for the validated cases; comparing an unnormalised field
+against a fixed 1e-5 *can*, and did. A field is now dropped only below `_VANISHING_FIELD =
+1e-12`, which is `is_magnetic`'s own floor, so **one rule decides both**: a field big enough
+to make a run magnetic is big enough to cut its group. Below it neither counts it.
+
+The tolerance was documented as QE's `eps2` on `m_loc`, a magnetization in
+`starting_magnetization` units, and was being applied to a field in **Rydbergs**, a
+quantity whose scale the user chooses freely. After normalisation it is compared against a
+direction pattern in both cases, which is what it was written for.
+
+The test writes its card at `%.16e` and not the `%.8f` the neighbouring tests use, because
+at 1e-11 that format rounds every component to zero -- the first version of this
+measurement was reading its own `printf` and reported the fix as not working below 1e-8.
+
+**Item 7: `reducebf` decays the field *after* the convergence test.** `field_scale *=
+field.reducebf` sits below the `break`, so nothing requires the field to be small before
+the loop stops, and the reported state is then the ground state of a functional carrying a
+Zeeman term whose energy is excluded from the total by QE's and Elk's shared convention.
+Measured on the hydrogen atom of
+`test_a_local_field_breaks_the_symmetry_it_should` (0.1 Ry local field, `conv_thr = 1e-10`),
+against the properly seeded field-free run:
+
+| `reducebf` | iterations | residual `\|B\|` | `field_energy` | error in the total |
+|---|---|---|---|---|
+| 0.5 | 15 | 6.1e-06 Ry | -6.1e-06 Ry | **-5e-14 Ry** |
+| 0.9 | 39 | 1.8e-03 Ry | -1.8e-03 Ry | +2.2e-08 Ry |
+| 0.95 | 44 | 1.1e-02 Ry | -1.1e-02 Ry | +7.8e-07 Ry |
+| 0.99 | **6** | **9.5e-02 Ry** | -9.5e-02 Ry | **+4.7e-05 Ry** |
+
+The last row is the case: six iterations, **95% of the field still applied**, a total
+0.63 meV out, and nothing said so. The error is **second order** in the residual because
+the state is stationary -- 8.6x the field is 60x the error, and 8.6^2 is 74 -- which is why
+the threshold is on the *field* and not on `field_energy`. `field_energy` is first order and
+is 6e-06 Ry in the row whose total is right to 5e-14.
+
+`FADED_FIELD = 1e-4` sits between the two cleanest rows and corresponds to an error around
+1e-10 Ry. A run that stops above it gets a `RuntimeWarning` naming `field_scale`, the
+residual and `field_energy`. **Only for `reducebf < 1`**: a field held at full strength is a
+deliberate calculation and the result object already says so. Not a refusal, because such a
+state is a legitimate thing to compute -- and every response entry point already refuses it
+by name.
 
 ## 4. Validation strategy
 

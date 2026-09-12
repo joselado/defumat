@@ -58,6 +58,11 @@ _MAGNETIC_TOLERANCE = 1.0e-5
 #: ``_MAGNETIC_TOLERANCE`` is also applied to an applied field in Rydbergs whose
 #: scale the user picks freely.
 _COLLINEAR_TOLERANCE = 1.0e-6
+#: Below this a per-atom vector field is *absent* rather than small, and is not
+#: filtered with. It is ``is_magnetic``'s own floor for an applied field
+#: (``builder.py``), so one rule decides both: a field big enough to make a run
+#: magnetic is big enough to cut its symmetry group.
+_VANISHING_FIELD = 1.0e-12
 
 
 class Symmetries(eqx.Module):
@@ -289,12 +294,38 @@ def find_symmetries(cell: Cell, structure: Structure) -> Symmetries:
 
 
 def _axial_fields(moments, nat: int) -> list:
-    """``moments`` as a list of ``(nat, 3)`` axial fields, dropping the zero ones.
+    """``moments`` as a list of ``(nat, 3)`` axial fields, **each normalised**.
 
     One array is the ordinary case and is wrapped; a sequence of them is the
     case where more than one per-atom vector has to be a symmetry of the
     operation -- the starting moments *and* an applied per-atom field, which
     Elk's ``findsym.f90`` tests together for the same reason.
+
+    **Each field is divided by its own largest component**, and that is a fix
+    rather than a tidy-up. What this filter tests is a *pattern*: whether the
+    operation maps the vector field onto itself, up to time reversal. That
+    question has no scale in it, and scaling both sides of the comparison by
+    the same number cannot change its answer -- but comparing an unnormalised
+    field against a fixed ``1e-5`` does, and did.
+
+    The failure it removes: ``is_magnetic`` counts an applied field from
+    ``1e-12`` upward, deliberately, because asking for one at all is asking for
+    the magnetic branch. This function used to drop a whole field below
+    ``1e-5``, and the image comparison below used the same absolute number, so
+    a field between those two thresholds switched the run to ``nspin_mag = 4``,
+    switched time reversal off, and then **contributed nothing to the filter**
+    -- leaving the full crystal group to average away the very texture the
+    field was applied to create. Measured on the four-atom cycloid: at a field
+    scale of 1e-5 the group is cut from 8 operations to 2, and at 1e-6 it stays
+    at 8 with zero distinct field directions seen. Seven orders of magnitude
+    wide, and the exposed user is the one seeding a helix the Elk way, with an
+    infinitesimal field and nothing else.
+
+    ``_MAGNETIC_TOLERANCE`` was documented as QE's ``eps2`` on ``m_loc``, a
+    magnetization in ``starting_magnetization`` units -- and was being applied
+    to a field in **Rydbergs**, whose scale the user picks freely. After
+    normalisation it is compared against a pure direction pattern in both
+    cases, which is what it was written for.
     """
     candidates = (
         [moments] if np.ndim(moments) == 2 else [m for m in moments if m is not None]
@@ -310,9 +341,12 @@ def _axial_fields(moments, nat: int) -> list:
                 f"a magnetic symmetry filter was given {len(vectors)} vectors "
                 f"for {nat} atoms"
             )
-        if np.all(np.abs(vectors) < _MAGNETIC_TOLERANCE):
+        largest = float(np.max(np.abs(vectors)))
+        # Genuinely absent, not merely small. ``is_magnetic``'s own floor for a
+        # field, so the two rules agree on what counts as nothing.
+        if largest < _VANISHING_FIELD:
             continue
-        fields.append(vectors)
+        fields.append(vectors / largest)
     return fields
 
 

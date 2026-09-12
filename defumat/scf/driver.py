@@ -126,7 +126,7 @@ from defumat.scf.occupations import (
     tetrahedra_for,
     tetrahedron_occupations_spin,
 )
-from defumat.scf.fields import MagneticField, constraint_targets
+from defumat.scf.fields import FADED_FIELD, MagneticField, constraint_targets
 from defumat.scf.locals import build_local_regions, get_locals
 from defumat.scf.potential import (
     Potential,
@@ -551,6 +551,43 @@ def _newd_noncollinear(deeq_components, dvan_so, fcoef, soc_scale: float = 1.0):
         # the cobalt slab, where the answer is exactly zero.
         dressed = blocks + soc_scale * (dressed - blocks)
     return dvan_so + dressed
+
+
+def _warn_if_the_field_did_not_fade(field, field_scale, converged, e_field) -> None:
+    """``reducebf`` asked the field to leave, and it may not have.
+
+    The decay is applied **after** the convergence test (``field_scale *=
+    field.reducebf`` sits below the ``break``), so nothing requires the field to
+    be small before the run stops. What is then reported is the ground state of
+    a functional carrying a Zeeman term whose energy is excluded from the total
+    by QE's and Elk's shared convention -- so the total is not wrong by that
+    energy, it is wrong by a *second-order* amount that nothing on the result
+    object states. See :data:`~defumat.scf.fields.FADED_FIELD` for the table
+    this threshold comes from.
+
+    Only for ``reducebf < 1``. A field held at full strength is a deliberate
+    calculation, and ``field_energy`` and ``magnetic_field`` already say so.
+    """
+    if field is None or field.reducebf >= 1.0 or not converged:
+        return
+    residual = field.residual(field_scale)
+    if residual <= FADED_FIELD:
+        return
+    warnings.warn(
+        f"this run converged with the symmetry-breaking field still on: "
+        f"reducebf = {field.reducebf} left field_scale = {field_scale:.3e}, so "
+        f"the largest component still applied is {residual:.3e} Ry and its "
+        f"energy is {e_field:+.3e} Ry. That energy is NOT in total_energy (QE's "
+        f"and Elk's convention), so the total is not wrong by it -- it is wrong "
+        f"by a second-order amount instead, about 8e-7 Ry at a 1e-2 Ry residual "
+        f"on the reference hydrogen case. The reported state is the ground state "
+        f"of a functional that includes the field. Lower reducebf, or raise "
+        f"electron_maxstep so the decay has iterations to work in; "
+        f"SCFResult.field_scale and .field_energy are what this density belongs "
+        f"to, and every response entry point refuses such a state by name",
+        RuntimeWarning,
+        stacklevel=2,
+    )
 
 
 def _report_mag(system, regions, charges, moments) -> None:
@@ -4657,6 +4694,11 @@ def run_scf(
             ),
             mixer, completed, verbose,
         )
+
+    _warn_if_the_field_did_not_fade(
+        field, field_scale, converged,
+        0.0 if field is None else float(potential.e_field),
+    )
 
     if verbose and site_moments is not None:
         _report_mag(

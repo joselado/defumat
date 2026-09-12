@@ -2,6 +2,14 @@
 
 ## 1. What this file is
 
+> **Status, 2026-09-12.** Items **1**, **2**, **6**, **7** and the guard half of **3** are
+> fixed (`9f806b0`, `1828c4e` and the commit after them), with the numbers folded into each entry below and into `PLAN.md`
+> P77/P77a; two defects found while fixing them -- `at_cell` never remeasuring the
+> integration spheres, and `forces/torque.py` guarding a per-point modulus with a global
+> norm -- are fixed with them. **Everything else in this file still stands.** Each fixed
+> entry keeps its full reasoning, because the reasoning is why the fix has the shape it
+> does; read the bold line at its head for the state.
+
 This is an **audit**, run on **2026-09-12** at commit `314d676`, of everything in this
 package that a physicist would touch to set up, converge, trust and analyse a
 noncollinear magnetic structure. The method was five read-only agents over the source,
@@ -89,6 +97,16 @@ one edit plus its test), *phase* (a `PLAN.md` phase with its five deliverables),
 
 #### 1. A collinear run gets no magnetic symmetry filter, so a one-species antiferromagnet or altermagnet is averaged back to zero
 
+**FIXED 2026-09-12, `9f806b0`.** `collinear_symmetries` (`sgam_at_collin`) is wired
+into all three sites. On `tests/data/qe/h2-mirror-afm.in` -- two H related by a mirror
+with `+-0.6` from the card -- the group is cut 16 -> 8, no survivor swaps the sublattices,
+and the run reaches `-1.93526881` Ry with sites at `+-0.291` in 8 iterations against
+`-1.93478487` Ry, sites `0.000`, in 5 before. **4.84e-4 Ry = 6.6 meV and the whole
+magnetic state.** It now agrees with the `nosym` spelling to 1e-8 Ry. Time-reversed
+operations are *discarded* (QE's `colin_mag = 1`); the `t_rev` channel-swap enlargement is
+still not done. The filter is a no-op on all 22 committed collinear inputs, swept by a
+test. Read the rest of this entry for the reasoning, not for the state.
+
 **What.** The magnetic group is the subgroup of the crystal's operations that preserves
 the moments. It is built only for `nspin_mag = 4`. A collinear run therefore keeps the
 operation that carries sublattice A onto sublattice B, and the density symmetriser then
@@ -143,6 +161,14 @@ atom 1. With two labels it contains none. To price it, one SCF each: the one-lab
 
 #### 2. Nothing a run reports says whether the texture survived
 
+**FIXED 2026-09-12, `9f806b0`.** `SCFResult.site_charges`/`site_moments`, in `history`
+every iteration, `report_mag`'s block printed at the end with `theta` and `phi`, and
+`|m|_site = min..max` on the per-iteration line; the noncollinear format is widened to
+`{:7.4f}`. `LocalRegions` is packed as `pointlist`/`factlist` for `scheme = "qe"`, so the
+spheres cost `ngrid` rather than `nat x ngrid` -- ~31 MB instead of ~5 GB on a 157-atom
+slab -- and the readout is 0.25-0.72% of an iteration. **Not** yet reported by `run_relax`,
+`run_vc_relax` or the response stack.
+
 **What.** For a compensated magnet the two numbers a run prints are identical for the
 state you asked for and for the collinear state the symmetriser may have given you
 instead. The vector total is zero for both. `int|m|` moves in the *wrong* direction:
@@ -189,6 +215,14 @@ console the way `report_mag.f90` prints it, and widen the noncollinear format to
 **Size.** Session.
 
 #### 3. The noncollinear GGA potential is differentiated by every spinor force, and no committed test differentiates it
+
+**HALF FIXED 2026-09-12, `1828c4e`.** The NaN is gone: `_noncollinear_gradient_correction`,
+`_noncollinear_meta_exchange` and `forces/torque.py` all use `safe_modulus`, verified to
+give `nan` on 243 components without it and finite with it, energy unchanged at
+`-0.0612744443880662` Ry. The source-text test is now a **sweep with an allowlist** over
+six modules rather than two named functions. **The larger half is still open**: there is
+no measured derivative of this branch against `pw.x`, and generating
+`h4-noncolin-force.in` with `input_dft = 'PBE'` plus its reference is a phase.
 
 **What.** At `nspin_mag = 4` with a gradient-corrected functional the exchange-correlation
 potential goes through `_noncollinear_gradient_correction` (`defumat/scf/potential.py:304-353`):
@@ -332,6 +366,12 @@ state refutes it.
 
 #### 6. A seed field between 1e-12 and 1e-5 Ry makes a run magnetic and is invisible to the filter
 
+**FIXED 2026-09-12.** `_axial_fields` now divides each field by its own largest
+component, so the filter tests a *pattern* and has no scale in it, and drops a field only
+below `_VANISHING_FIELD = 1e-12` -- `is_magnetic`'s own floor, so one rule decides both.
+On the four-atom cycloid the group is now cut from 8 to 2 at every scale from 1e-3 down to
+1e-12, where before 1e-6 left it at 8. The threshold was moved *out*, not moved down.
+
 **What.** Two rules disagree about how small a magnetic thing has to be before it stops
 counting, and the gap between them is seven orders of magnitude. A field inside it
 switches the run to `nspin_mag = 4` and switches time reversal off, then contributes
@@ -372,6 +412,14 @@ the package -- or to pass `is_magnetic`'s two thresholds down so one rule decide
 **Size.** Session.
 
 #### 7. A run can converge with `reducebf`'s symmetry-breaking field still on, and nothing says so
+
+**FIXED 2026-09-12.** A `RuntimeWarning` at the end of `run_scf` naming `field_scale`,
+the residual and `field_energy`, above `FADED_FIELD = 1e-4` Ry and only for
+`reducebf < 1`. The size is now measured rather than bounded: on the H atom at
+`reducebf = 0.99` the run stops after **six** iterations with 9.5e-2 Ry of field still on
+and a total **4.7e-5 Ry** out, while `reducebf = 0.5` stops at 6.1e-6 Ry and is right to
+5e-14. The error is second order in the residual, which is why the guard is on the field
+and not on `field_energy` -- that is first order and is 6e-6 Ry in the clean row.
 
 **What.** `reducebf` applies a field, lets it decay geometrically and keeps whatever is
 left. The decay is applied *after* the convergence test, and nothing requires the field to
@@ -977,6 +1025,14 @@ you either way).
 Each needs something to be **run**. Nothing below was.
 
 **O1. Does a texture stated with `STARTING_MOMENTS` survive an SCF, with symmetry on?**
+**Partly answered, 2026-09-12 (`9f806b0`).** The *collinear* half is now done and is a
+committed test: `tests/data/qe/h2-mirror-afm.in` is a `+-m` card on one species carried
+through an SCF and inspected per site, and it survives with symmetry on -- it did not
+before that commit, and the failure was a clean convergence to the nonmagnetic state 6.6
+meV up. The **noncollinear** half is still exactly as written below: no *vector* texture
+has been carried through an SCF and inspected. What the site-moment readout added is that
+the inspection no longer has to be typed at a prompt -- `SCFResult.site_moments` is the
+`(nat, 3)` matrix the singular-value test below wants, and `history` has it per iteration.
 Nobody has run one. Take the four-atom 90-degree cycloid already built at
 `tests/unit/test_textured_symmetry.py:39`, converge it twice at `conv_thr = 1e-8`, once with
 `nosym = .true.` and once without, and compare the per-site directions from `get_locals`. The

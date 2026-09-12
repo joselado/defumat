@@ -84,6 +84,50 @@ def test_a_textured_field_cuts_the_symmetry_group():
     assert textured.symmetry_group().nsym < ferro.symmetry_group().nsym
 
 
+def test_an_infinitesimal_field_cuts_the_group_just_as_a_large_one_does():
+    """The filter must not have a scale, because a seed field has no natural one.
+
+    An infinitesimal symmetry-breaking field is the *standard* way to start a
+    texture -- small enough not to bias the energy, large enough to pick the
+    state -- and it is what the NiBr2 helix used. Two rules used to disagree
+    about how small was too small: ``is_magnetic`` counts a field from 1e-12,
+    deliberately, while the filter dropped one below 1e-5. In between, a run
+    turned magnetic, switched time reversal off, and then kept the *full*
+    crystal group, which averages away exactly the texture the field was
+    applied to create. Seven orders of magnitude wide.
+
+    Measured before the fix: 1e-5 cut the group from 8 to 2 and 1e-6 left it at
+    8. The card is written at ``%.16e`` here rather than the ``%.8f`` the other
+    tests use, because at 1e-11 that format rounds every component to zero and
+    the test would be measuring its own printf.
+    """
+    def wide_card(rows, scale):
+        body = "\n".join(
+            f" {scale * x:.16e} {scale * y:.16e} {scale * z:.16e}" for x, y, z in rows
+        )
+        return f"LOCAL_MAGNETIC_FIELDS\n{body}\n"
+
+    ferro = build_system(parse_pw_input(_input())).symmetry_group().nsym
+    large = build_system(parse_pw_input(
+        _input(cards=wide_card(CYCLOID, 1.0e-3))
+    )).symmetry_group().nsym
+    assert large < ferro, "the premise: a large field cuts the group"
+
+    # Every decade from the old threshold down to is_magnetic's own floor.
+    for scale in (1.0e-6, 1.0e-9, 1.0e-12):
+        system = build_system(parse_pw_input(_input(cards=wide_card(CYCLOID, scale))))
+        assert system.nspin_mag == 4, f"{scale:g} should still be a magnetic run"
+        assert system.symmetry_group().nsym == large, (
+            f"a field of {scale:g} Ry made the run magnetic and then contributed "
+            f"nothing to the filter"
+        )
+
+    # And below that floor neither rule counts it, which is the consistency the
+    # fix is: a field too small to make a run magnetic cannot cut its group.
+    tiny = build_system(parse_pw_input(_input(cards=wide_card(CYCLOID, 1.0e-14))))
+    assert tiny.symmetry_group().nsym == ferro
+
+
 def test_a_parallel_field_leaves_the_group_alone():
     """The negative: a field that asks for no texture takes nothing away.
 

@@ -828,6 +828,31 @@ inside one atom's sphere (through a \code{LOCAL\_MAGNETIC\_FIELDS} card that
 of the reported total} --- QE prints \code{etcon} and never adds it, and Elk
 excludes its external field's energy by the same convention.
 
+\emph{A seed field has no natural size, so the symmetry filter has no scale in
+it.} An infinitesimal field is the standard way to start a texture: small enough
+not to bias the energy, large enough to pick the state. What the magnetic filter
+asks of a field is a \emph{pattern} --- does the operation map it onto itself,
+up to time reversal --- so each field is compared after being divided by its own
+largest component, and it is ignored only below $10^{-12}$~Ry, which is the same
+floor that decides whether the run is magnetic at all. One rule: a field big
+enough to make a run magnetic is big enough to cut its group. (It used to be two,
+seven orders of magnitude apart, and a field in between turned the run magnetic
+and then contributed nothing to the filter --- which is the one thing worse than
+no field, because the full crystal group then averages away the texture the field
+was applied to create.)
+
+\emph{\code{reducebf} decays the field after the convergence test}, so a run can
+stop with the field still substantially on. The state reported is then the ground
+state of a functional that includes a Zeeman term, and \textbf{the error in the
+total is second order in the residual field}, not the field energy --- the state
+is stationary. On a hydrogen atom with a 0.1~Ry local field, \code{reducebf =
+0.5} stops with $6\times10^{-6}$~Ry still applied and a total right to
+$5\times10^{-14}$~Ry, while \code{reducebf = 0.99} stops after \emph{six}
+iterations with $9.5\times10^{-2}$~Ry applied and a total $4.7\times10^{-5}$~Ry
+out. A run that stops above $10^{-4}$~Ry now says so, naming
+\code{field\_scale}, the residual and \code{field\_energy}; a field held at full
+strength (\code{reducebf = 1}) is a deliberate calculation and is left alone.
+
 \textbf{Restarting an SCF from the middle} (\code{checkpoint\_dir},
 \code{checkpoint\_every}, \code{max\_seconds}). A job killed at its wall clock
 used to lose every iteration it had run: a state reached disk only after

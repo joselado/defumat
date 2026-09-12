@@ -111,13 +111,18 @@ def test_the_filter_changes_nothing_on_the_committed_collinear_inputs():
     -- precisely because that spelling did not work -- so the filter must be a
     no-op on all of them.
     """
-    unchanged, cut = [], []
+    unchanged, cut, unparsed = [], [], []
     for path in sorted(QE.glob("*.in")):
         if path.name.startswith("h2-mirror-afm"):
             continue
         try:
             system = system_from_file(path)
-        except Exception:
+        except (ValueError, NotImplementedError, FileNotFoundError, KeyError) as why:
+            # A handful of committed inputs are refusal cases and are *meant*
+            # not to build. Anything else is a parse failure that would remove
+            # an input from this sweep silently, which is the failure mode this
+            # test exists to prevent one level up.
+            unparsed.append(f"{path.name}: {type(why).__name__}")
             continue
         if system.nspin != 2:
             continue
@@ -125,7 +130,12 @@ def test_the_filter_changes_nothing_on_the_committed_collinear_inputs():
         (cut if system.symmetry_group().nsym != full.nsym else unchanged).append(
             path.name
         )
-    assert unchanged, "no collinear inputs were examined; the sweep is broken"
+    # A floor, not a truthiness check: the sweep silently shrinking is exactly
+    # how a coverage assertion stops covering anything.
+    assert len(unchanged) >= 20, (
+        f"only {len(unchanged)} collinear inputs were examined (expected at "
+        f"least 20); inputs that did not build: {unparsed}"
+    )
     assert not cut, f"the filter cut operations on {cut}"
 
 

@@ -95,6 +95,37 @@ VANISHING_MOMENT = 1.0e-12
 #: would report an unconstrained answer under a "constrained" heading.
 FSM_TOLERANCE = 1.0e-3
 
+#: How much applied field, in Ry, a ``reducebf`` run may still be carrying when
+#: it stops before the run says so. ``reducebf`` decays the field *after* the
+#: convergence test, so nothing requires it to be small before the loop breaks --
+#: and the state that is then reported is the ground state of a functional that
+#: includes a Zeeman term whose energy is, by QE's and Elk's shared convention,
+#: **not in the reported total**.
+#:
+#: The number is measured rather than picked. On the hydrogen atom of
+#: ``test_a_local_field_breaks_the_symmetry_it_should``, with a 0.1 Ry local
+#: field and ``conv_thr = 1e-10``, against the properly seeded field-free run:
+#:
+#: ===========  ==========  ==============  =====================
+#: ``reducebf``  iterations  residual ``|B|``  error in the total
+#: ===========  ==========  ==============  =====================
+#: 0.5                  15        6.1e-06 Ry             -5e-14 Ry
+#: 0.9                  39        1.8e-03 Ry            +2.2e-08 Ry
+#: 0.95                 44        1.1e-02 Ry            +7.8e-07 Ry
+#: 0.99                  6        9.5e-02 Ry            +4.7e-05 Ry
+#: ===========  ==========  ==============  =====================
+#:
+#: The error is **second order** in the residual, because the state is
+#: stationary -- 8.6x the field is 60x the error, and 8.6^2 is 74. That is why
+#: the threshold is on the field and not on ``field_energy``, which is first
+#: order and is 6e-06 Ry in the row whose total is right to 5e-14. ``1e-4``
+#: sits between the two cleanest rows and corresponds to an error around
+#: 1e-10 Ry, below any threshold a run is held to.
+#:
+#: The last row is the case worth seeing: six iterations, 95% of the field still
+#: applied, and a total 0.63 meV out.
+FADED_FIELD = 1.0e-4
+
 #: The fixed-spin-moment update rules, by name.
 #:
 #: ``"elk"``
@@ -458,6 +489,19 @@ class MagneticField(eqx.Module):
             return True
         error = self.total_moment(rho_r, cell) - jnp.asarray(self.targets)
         return bool(jnp.max(jnp.abs(error)) < FSM_TOLERANCE)
+
+    def residual(self, scale: float) -> float:
+        """The largest field component still applied, in Ry.
+
+        ``scale`` is the driver's accumulated ``reducebf`` factor, which is a
+        loop variable and is deliberately **not** on this object: ``reducebf``
+        multiplies the loop's copy and leaves the field itself alone, so the
+        applied field is only reconstructible from the pair.
+        """
+        largest = float(jnp.max(jnp.abs(self.uniform))) if self.uniform.size else 0.0
+        if self.atomic is not None:
+            largest = max(largest, float(jnp.max(jnp.abs(self.atomic))))
+        return scale * largest
 
     def reduced(self) -> "MagneticField":
         """The fields multiplied by ``reducebf``, as Elk does after each loop."""

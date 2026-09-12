@@ -352,3 +352,59 @@ K_POINTS gamma
 """
     with _pytest.raises(ValueError, match="B_field"):
         build_system(parse_pw_input(source))
+
+
+def test_a_field_that_did_not_fade_is_reported_and_a_faded_one_is_not(regions):
+    """``reducebf`` decays the field *after* the convergence test.
+
+    So nothing requires the field to be small before the loop breaks, and the
+    state that is then reported is the ground state of a functional carrying a
+    Zeeman term whose energy is excluded from the total by convention. The
+    guard has to fire on that and stay quiet on a run that did fade, or it is
+    noise and gets switched off.
+
+    Measured on the hydrogen atom of
+    ``test_a_local_field_breaks_the_symmetry_it_should``: ``reducebf = 0.5``
+    stops with 6.1e-06 Ry of field and a total right to 5e-14 Ry, and
+    ``reducebf = 0.99`` stops after **six** iterations with 9.5e-02 Ry still
+    applied and a total 4.7e-05 Ry out. The threshold sits between them; the
+    table is in ``FADED_FIELD``.
+    """
+    import warnings
+
+    from defumat.scf.driver import _warn_if_the_field_did_not_fade
+
+    def field_with(reducebf):
+        return MagneticField(
+            regions=regions,
+            uniform=jnp.asarray([0.0, 0.0, 0.10]),
+            atomic=None, targets=None, penalty=0.0,
+            constraint="none", reducebf=reducebf, fsm_update="elk",
+        )
+
+    def warnings_from(reducebf, scale, converged=True):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            _warn_if_the_field_did_not_fade(
+                field_with(reducebf), scale, converged, -1.0e-3
+            )
+        return [w for w in caught if "field still on" in str(w.message)]
+
+    # 0.951 * 0.10 = 9.5e-2 Ry still applied: the measured 0.99 case.
+    fired = warnings_from(0.99, 0.951)
+    assert len(fired) == 1
+    message = str(fired[0].message)
+    # Both numbers a reader needs to act, named rather than implied.
+    assert "field_scale" in message and "9.510e-01" in message
+    assert "9.510e-02 Ry" in message
+
+    # 6.1e-05 * 0.10 = 6.1e-06 Ry: the measured 0.5 case, whose total is right
+    # to 5e-14 Ry. A guard that fires here is a guard nobody leaves on.
+    assert warnings_from(0.5, 6.104e-05) == []
+
+    # A field held at full strength is a deliberate calculation, and
+    # field_energy and magnetic_field already say so on the result.
+    assert warnings_from(1.0, 1.0) == []
+
+    # An unconverged run has worse problems and says so elsewhere.
+    assert warnings_from(0.99, 0.951, converged=False) == []
