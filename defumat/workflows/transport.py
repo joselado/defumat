@@ -36,6 +36,7 @@ import warnings
 import numpy as np
 
 from defumat.basis.builder import build_basis
+from defumat.batching import resolve_k_batch
 from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.basis.sample import sample_wavefunctions
 from defumat.scf.driver import Calculation, gamma_storage_is_consumable
@@ -159,7 +160,12 @@ def run_vertical_transport(
             density on a denser k-set first, as a density of states wants.
             The grid is built **whole**, not reduced to a wedge, because a
             wedge is refused here -- see :func:`whole_grid`.
-        k_batch: the k-axis batching dial.
+        k_batch: the k-axis batching dial. It reaches two places here: the
+            band solve, as everywhere else, **and** the assembly's host array
+            of tip amplitudes, which is ``(npol, nk, nbnd, npoints)`` complex
+            and is the largest thing this workflow allocates. See
+            :func:`_assemble` for why an accelerator's default does not bound
+            the second one.
 
     Returns a :class:`~defumat.transport.green.VerticalTransport`.
     """
@@ -249,6 +255,7 @@ def run_vertical_transport(
         tip_spin=tip_spin, tip_polarization=float(tip_polarization),
         incoherent=bool(incoherent), exit_region=exit_region,
         method=method, smearing=smearing,
+        k_batch=resolve_k_batch(k_batch),
     )
 
     if bias is not None:
@@ -330,7 +337,7 @@ def whole_grid(system, grid, shift=None) -> KPoints:
 def _assemble(calculation, wavefunctions, eigenvalues, points, *,
               exit_height, exit_axis, energies, broadening, spin,
               polarization, tip_spin, tip_polarization, incoherent,
-              exit_region, method, smearing):
+              exit_region, method, smearing, k_batch=None):
     """Sample the tip, build every ``S_k``, contract. One channel at a time.
 
     **A spinor's two components are two amplitude vectors, not one**, and what
@@ -352,6 +359,14 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
     (:func:`defumat.transport.green.spin_transmission`). ``P_t = 1`` is the sum
     above, so ``tip_spin=None`` takes the branch it always took, unchanged and
     to the last bit.
+
+    **``k_batch`` bounds the amplitudes, and it is the one dial that reaches a
+    host array.** Everywhere else in this package the dial decides how much is
+    resident on the *device*; here the tip amplitudes are sampled into a numpy
+    array of ``(npol, nk, nbnd, npoints)`` and the working set is the same on a
+    CPU and on a GPU, so ``k_batch = None`` -- an accelerator's default,
+    chosen because a device wants the whole axis -- does **not** bound it. A
+    machine with a GPU and an image-sized ``npoints`` should pass a number.
     """
     used = calculation.system
     basis = build_basis(used)
@@ -379,59 +394,17 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
     top_band = np.zeros_like(total) if incoherent else None
     least, offdiagonal, hermiticity, channels = np.inf, [], 0.0, []
 
+    # **The k axis is walked in chunks, and this is a host array rather than a
+    # device one.** ``amplitudes`` is ``(npol, nk, nbnd, npoints)`` complex and
+    # ``npoints`` is an image -- a 100x100 map over 100 k-points and 50 spinor
+    # bands is 1.6 GB, and the ``sa`` intermediate inside
+    # :func:`~defumat.transport.green.transmission` is another ``(nk, nbnd,
+    # npoints)`` beside it. Every contraction downstream ends in
+    # ``kweights @ term``, so the sum over k is exact term by term and a chunk
+    # changes only the order the contributions are added in.
+    chunk = nk if k_batch is None else min(int(k_batch), nk)
     open_path = 0.0
     for ispin in range(nspin):
-        amplitudes = np.empty((npol, nk, nbnd, points.shape[0]), dtype=complex)
-        overlaps = np.empty((nk, nbnd, nbnd), dtype=complex)
-        for ik in range(nk):
-            block = np.asarray(wavefunctions[ispin, ik])
-            if exit_region == "volume":
-                overlaps[ik] = volume_overlap(block, mask[ik], npol,
-                                              overlap=lambda p, i=ik: apply_s(p, i))
-            else:
-                overlaps[ik] = exit_overlap(
-                    block, miller[ik], exit_height, exit_axis, used.cell,
-                    mask=mask[ik], npol=npol, projector=projector,
-                )
-            sampled = sample_wavefunctions(
-                block.reshape((nbnd, npol, npwx)), miller[ik], kcrystal[ik],
-                points, volume, mask=mask[ik],
-            )
-            amplitudes[:, ik] = np.moveaxis(sampled, 1, 0)
-
-        hermiticity = max(hermiticity, float(
-            np.abs(overlaps - np.conj(np.swapaxes(overlaps, 1, 2))).max()))
-        hermitian = 0.5 * (overlaps + np.conj(np.swapaxes(overlaps, 1, 2)))
-        spectrum = np.linalg.eigvalsh(hermitian)
-        least = min(least, float(spectrum.min()))
-        # How many independent ways there are through the substrate: the
-        # participation ratio of S_k's spectrum, which is the number of open
-        # transmission channels. In the vacuum it is close to **one** -- every
-        # band's evanescent tail has nearly the same shape on the plane and
-        # differs only by a coefficient -- and that is precisely why the
-        # interference here is large rather than a correction: the plane sees
-        # one amplitude, so what tunnels is |sum_n a_n c_n|^2 and not sum |a_n|^2.
-        positive = np.clip(spectrum, 0.0, None)
-        norms2 = (positive ** 2).sum(axis=1)
-        channels.extend(
-            np.where(norms2 > 0.0, positive.sum(axis=1) ** 2
-                     / np.where(norms2 > 0.0, norms2, 1.0), 0.0))
-        # In the channel basis, so that "how much sits off the diagonal" is a
-        # property of the substrate and not of which basis the eigensolver
-        # returned inside a multiplet.
-        u = channel_basis(overlaps, eigenvalues[ispin])
-        rotated = np.einsum("kni,knm,kmj->kij", u.conj(), overlaps, u,
-                            optimize=True)
-        norms = np.linalg.norm(rotated, axis=(1, 2))
-        diagonals = np.linalg.norm(np.einsum("knn->kn", rotated), axis=1)
-        offdiagonal.extend(
-            np.sqrt(np.clip(norms ** 2 - diagonals ** 2, 0.0, None))
-            / np.where(norms > 0.0, norms, 1.0))
-
-        # Which bands the band-count truncation actually cuts: the topmost
-        # *multiplet*, in the same channel basis the denominator is taken in.
-        top_multiplet = _top_multiplet_mask(eigenvalues[ispin])
-
         scale = 1.0 if channel_scale is None else channel_scale[ispin]
         # Two polarizers multiply: on a collinear run each is a weight on the
         # channel, and a channel the tip does not accept is one the substrate
@@ -439,36 +412,99 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
         if tip_scale is not None:
             scale *= tip_scale[ispin]
         open_path += scale
-        if scale == 0.0:
-            continue
-        for ie, energy in enumerate(energies):
-            weights = amplitude_weights(
-                eigenvalues[ispin], energy, broadening, method, smearing)
-            if tip_projector is not None:
-                total[ie] += scale * spin_transmission(
-                    amplitudes, overlaps, kweights, weights, tip_projector,
-                    coherent=True)
-                if incoherent:
-                    total_incoherent[ie] += scale * spin_transmission(
-                        amplitudes, overlaps, kweights, weights, tip_projector,
-                        coherent=False, eigenvalues=eigenvalues[ispin])
-                    top_band[ie] += scale * spin_transmission(
-                        amplitudes, overlaps, kweights,
-                        weights * top_multiplet, tip_projector,
-                        coherent=False, eigenvalues=eigenvalues[ispin])
+        # Which bands the band-count truncation actually cuts: the topmost
+        # *multiplet*, in the same channel basis the denominator is taken in.
+        # It is decided k-point by k-point, so it is built once for the whole
+        # axis and sliced -- rebuilding it per chunk would be the same numbers
+        # and a second place for the rule to drift out of step.
+        top_multiplet = _top_multiplet_mask(eigenvalues[ispin])
+
+        for start in range(0, nk, chunk):
+            here = slice(start, min(start + chunk, nk))
+            live = here.stop - here.start
+            amplitudes = np.empty(
+                (npol, live, nbnd, points.shape[0]), dtype=complex)
+            overlaps = np.empty((live, nbnd, nbnd), dtype=complex)
+            for ik in range(here.start, here.stop):
+                at = ik - here.start
+                block = np.asarray(wavefunctions[ispin, ik])
+                if exit_region == "volume":
+                    overlaps[at] = volume_overlap(
+                        block, mask[ik], npol,
+                        overlap=lambda p, i=ik: apply_s(p, i))
+                else:
+                    overlaps[at] = exit_overlap(
+                        block, miller[ik], exit_height, exit_axis, used.cell,
+                        mask=mask[ik], npol=npol, projector=projector,
+                    )
+                sampled = sample_wavefunctions(
+                    block.reshape((nbnd, npol, npwx)), miller[ik],
+                    kcrystal[ik], points, volume, mask=mask[ik],
+                )
+                amplitudes[:, at] = np.moveaxis(sampled, 1, 0)
+
+            bands = eigenvalues[ispin][here]
+            weight_of_k = kweights[here]
+            hermiticity = max(hermiticity, float(
+                np.abs(overlaps - np.conj(np.swapaxes(overlaps, 1, 2))).max()))
+            hermitian = 0.5 * (overlaps + np.conj(np.swapaxes(overlaps, 1, 2)))
+            spectrum = np.linalg.eigvalsh(hermitian)
+            least = min(least, float(spectrum.min()))
+            # How many independent ways there are through the substrate: the
+            # participation ratio of S_k's spectrum, which is the number of
+            # open transmission channels. In the vacuum it is close to **one**
+            # -- every band's evanescent tail has nearly the same shape on the
+            # plane and differs only by a coefficient -- and that is precisely
+            # why the interference here is large rather than a correction: the
+            # plane sees one amplitude, so what tunnels is |sum_n a_n c_n|^2
+            # and not sum |a_n|^2.
+            positive = np.clip(spectrum, 0.0, None)
+            norms2 = (positive ** 2).sum(axis=1)
+            channels.extend(
+                np.where(norms2 > 0.0, positive.sum(axis=1) ** 2
+                         / np.where(norms2 > 0.0, norms2, 1.0), 0.0))
+            # In the channel basis, so that "how much sits off the diagonal" is
+            # a property of the substrate and not of which basis the
+            # eigensolver returned inside a multiplet.
+            u = channel_basis(overlaps, bands)
+            rotated = np.einsum("kni,knm,kmj->kij", u.conj(), overlaps, u,
+                                optimize=True)
+            norms = np.linalg.norm(rotated, axis=(1, 2))
+            diagonals = np.linalg.norm(np.einsum("knn->kn", rotated), axis=1)
+            offdiagonal.extend(
+                np.sqrt(np.clip(norms ** 2 - diagonals ** 2, 0.0, None))
+                / np.where(norms > 0.0, norms, 1.0))
+
+            if scale == 0.0:
                 continue
-            for component in range(npol):
-                total[ie] += scale * transmission(
-                    amplitudes[component], overlaps, kweights, weights,
-                    coherent=True)
-                if incoherent:
-                    total_incoherent[ie] += scale * transmission(
-                        amplitudes[component], overlaps, kweights, weights,
-                        coherent=False, eigenvalues=eigenvalues[ispin])
-                    top_band[ie] += scale * transmission(
-                        amplitudes[component], overlaps, kweights,
-                        weights * top_multiplet, coherent=False,
-                        eigenvalues=eigenvalues[ispin])
+            cut = top_multiplet[here]
+            for ie, energy in enumerate(energies):
+                weights = amplitude_weights(
+                    bands, energy, broadening, method, smearing)
+                if tip_projector is not None:
+                    total[ie] += scale * spin_transmission(
+                        amplitudes, overlaps, weight_of_k, weights,
+                        tip_projector, coherent=True)
+                    if incoherent:
+                        total_incoherent[ie] += scale * spin_transmission(
+                            amplitudes, overlaps, weight_of_k, weights,
+                            tip_projector, coherent=False, eigenvalues=bands)
+                        top_band[ie] += scale * spin_transmission(
+                            amplitudes, overlaps, weight_of_k,
+                            weights * cut, tip_projector,
+                            coherent=False, eigenvalues=bands)
+                    continue
+                for component in range(npol):
+                    total[ie] += scale * transmission(
+                        amplitudes[component], overlaps, weight_of_k, weights,
+                        coherent=True)
+                    if incoherent:
+                        total_incoherent[ie] += scale * transmission(
+                            amplitudes[component], overlaps, weight_of_k,
+                            weights, coherent=False, eigenvalues=bands)
+                        top_band[ie] += scale * transmission(
+                            amplitudes[component], overlaps, weight_of_k,
+                            weights * cut, coherent=False, eigenvalues=bands)
 
     if not np.any(total > 0.0) and open_path == 0.0:
         # Two spin filters in series with nothing in common pass nothing, and

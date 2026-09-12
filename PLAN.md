@@ -5429,6 +5429,23 @@ exciton, which needs a wide-gap material and a k-grid several times denser than
 anything committed here — LiF is the canonical case and its pseudopotentials are
 not in `tests/data/pseudo/`.
 
+**Later (2026-09-12): the pair densities were the phase's real working set, and the
+docstring said otherwise.** `OPEN.md` D1. `<u_i|e^{-iG.r}|u_j>` is formed on the smooth
+grid for every occupied-empty pair *at once*, so what was live was `npairs` whole FFT
+boxes while the module's own docstring claimed `map_k` bounded them — the P74 shape
+exactly, a documented dial that does not reach the hot path. The pair axis is now chunked
+by `pair_batch`, defaulting to the **band** dial, because one pair density in flight is
+what one band in flight is; `batching.map_axis` is `map_k`'s body under a name that does
+not claim the axis is k. *Measured*: compiler temporaries on `_pair_terms` at
+`si-epsilon-unshifted-nosym`'s shapes fall from 8.19 MB to 3.13 MB, and the part that
+scales with `npairs` from 5.06 MB to nothing; the 3.13 MB that stays is `fields`, the
+`nbnd` states in real space, which is the floor rather than an oversight. `npairs` is
+`nocc (nbnd - nocc)`, so the unbounded form is 26 GB on a cell with 50 occupied and 150
+empty bands. The matrix does not move: 1e-14 of its own maximum between the two settings
+on silicon, which is the last-bits agreement a chunk that changes no arithmetic should
+give. **What this does not bound** is the `(nw, 2 npairs, nm)` assembly above it, which is
+the stated trade the docstring already carried and is two hundred times smaller.
+
 
 ### P38 — The calculator: one object, bound methods. ✅ DONE.
 
@@ -10723,6 +10740,20 @@ tip is still a point contact, and giving `Gamma_t` a spin structure says nothing
 spatial one, so this stays outstanding -- a self-consistent
 treatment of the leads' own potential, and an absolute conductance — the two couplings are
 unfixed prefactors, so what the result carries is the map and its contrast.
+
+**Later (2026-09-12): the tip amplitudes were outside every dial.** `OPEN.md` D3.
+`_assemble` sampled every band of every k-point at every tip point into one **host** array
+— `(npol, nk, nbnd, npoints)` complex — before contracting anything, and
+`transmission` then formed an `(nk, nbnd, npoints)` intermediate beside it. Both grow with
+the two things a user turns up for a better picture, the k-set and the pixel count: 1.6 GB
+and 0.8 GB for a 100x100 map on 100 k-points with 50 spinor bands. Every branch of the
+contraction ends in `kweights @ term`, so the sum over k is exact term by term and the
+loop is now chunked by `k_batch`, which on a CPU is 1 by default. *Measured*: 512 entries
+against 8192 on `h-sheet.in`'s 16 k-points, the factor being `nk` by construction, and the
+map unchanged to 1e-13 of its maximum. **The one thing to know is that the platform
+default does not bound this one** — `k_batch = None` is an accelerator's default because a
+*device* wants the whole axis, and this array is on the host either way, so a GPU run
+asking for an image-sized `npoints` has to pass a number.
 
 ### P67 — Running a calculation too large for one job: sizing, checkpointing, and a partial dynamical matrix. ✅ DONE.
 

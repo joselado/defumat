@@ -87,9 +87,21 @@ it was divided by have moved.
   axis is the dial that would fix it if it ever mattered. ``PERFORMANCE.md``
   carries the measurement.
 
-The transforms are ``nk npairs`` of them, one per occupied-empty pair, and they
-are the *time* rather than the memory: the pair densities go through ``map_k``
-so only one k-chunk's are ever alive.
+The transforms are ``nk npairs`` of them, one per occupied-empty pair, and the
+**pair densities are a working set of their own**: one is a whole complex field
+on the smooth grid, so forming every pair's at once is ``npairs`` times the FFT
+box -- 26 GB on a cell with 50 occupied and 150 empty bands and a 60^3 grid,
+where the wavefunctions it is built from are a few hundred megabytes. The pair
+axis is therefore chunked (``pair_batch``, defaulting to the **band** dial,
+because one pair density in flight is exactly what one band in flight is), and
+what stays live whatever the chunk is ``fields`` -- the ``nbnd`` states in real
+space, which is the natural working set and is ``nbnd/npairs`` of the other.
+
+This bounds the grid-sized allocation and **not** the assembly above: the
+``(nw, 2 npairs, nm)`` einsum is still linear in ``npairs``, and it is the
+stated trade the previous paragraph records rather than an oversight. It is
+also the smaller of the two by the ratio of ``nm`` to the FFT box, which is
+where the two hundred separating 100 MB from 26 GB comes from.
 
 Refused by name: finite ``q``, ultrasoft and PAW, metals, ``nspin != 1``,
 noncollinear magnetism and spin-orbit coupling, and a **reduced k-set** -- see
@@ -104,7 +116,7 @@ import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
 from defumat.basis.gvectors import refuse_gamma_storage
-from defumat.batching import resolve_k_batch, sum_k
+from defumat.batching import map_axis, resolve_band_batch, resolve_k_batch, sum_k
 from defumat.response.velocity import VelocityOperator
 from defumat.units import E2, FPI
 
@@ -369,6 +381,7 @@ def independent_response(
     broadening: float,
     scissor: float = 0.0,
     k_batch: int | None | str = "default",
+    pair_batch: int | None | str = "default",
 ) -> ChiZero:
     """``v^1/2 chi_0 v^1/2`` over a response sphere and a frequency grid.
 
@@ -395,6 +408,14 @@ def independent_response(
             built there.
         scissor: a rigid shift (Ry) of the empty states, PRL 107, 186401's
             Eq. (3). The velocity matrix elements are renormalised with it.
+        k_batch: how many k-points are in flight, as everywhere else.
+        pair_batch: how many occupied-empty **pair densities** are in flight
+            inside one k-point. One of them is a whole complex field on the
+            smooth grid, so this is the dial that decides whether the phase's
+            largest array is ``npairs`` FFT boxes or a handful; the default is
+            the band dial (``DEFUMAT_BAND_BATCH``), since a pair density and a
+            band in real space are the same object. Every chunk goes through
+            the same transform, so the answer does not depend on it.
 
     Returns:
         A :class:`ChiZero`. Nothing is symmetrised: on the full grid there is
@@ -436,12 +457,14 @@ def independent_response(
     volume = calculation.system.cell.volume
     mask = jnp.asarray(calculation.basis.planewaves.mask)
     batch = resolve_k_batch(k_batch)
+    pairs = resolve_band_batch(pair_batch)
 
     def one_k(arrays):
         psi, fft_index, band_mask, eig, occupation, element = arrays
         vectors, scalars = _pair_terms(
             psi, fft_index, band_mask, eig, occupation, element,
             rows, columns, sphere, grid, volume, zomega, scissor, precision,
+            pairs,
         )
         # ``(nw, nm, nm)``: one matrix product per frequency, the pair axis
         # contracted away. This is the whole frequency cost of the phase.
@@ -479,7 +502,7 @@ def _pairs(nocc: int, nbnd: int):
 
 def _pair_terms(psi, fft_index, band_mask, eig, occupation, element,
                 rows, columns, sphere, grid, volume, zomega, scissor,
-                precision):
+                precision, pair_batch=None):
     """One k-point's pair vectors ``r`` and their frequency weights.
 
     Returns ``(vectors, scalars)`` of shapes ``(2 npairs, nm)`` and
@@ -491,11 +514,18 @@ def _pair_terms(psi, fft_index, band_mask, eig, occupation, element,
         # scatter, since padding entries share the index of G = 0.
         fields = g_to_r(psi * band_mask[None, :], fft_index, grid)
 
-        # ``<u_i| e^{-iG.r} |u_j>`` for every pair, from one transform each. The
-        # product is formed on the smooth grid, which holds every G a product of
-        # two wavefunctions has.
-        products = jnp.conj(fields[rows]) * fields[columns]
-        body = r_to_g(products, sphere.fft_index) * sphere.sqrt_coulomb
+        def one_pair(index):
+            # ``<u_i| e^{-iG.r} |u_j>``, from one transform. The product is
+            # formed on the smooth grid, which holds every G a product of two
+            # wavefunctions has, and it is **the** allocation of this phase:
+            # one whole complex box per pair, against ``nm`` numbers kept.
+            # Forming every pair's at once is what ``pair_batch`` bounds.
+            i, j = index
+            product = jnp.conj(fields[i]) * fields[j]
+            return r_to_g(product, sphere.fft_index) * sphere.sqrt_coulomb
+
+        body = map_axis(one_pair, (jnp.asarray(rows), jnp.asarray(columns)),
+                        batch=pair_batch)
     else:
         # **The head-only kernel needs no transform at all**, and the saving is
         # the whole of the phase's cost rather than a corner of it: with an

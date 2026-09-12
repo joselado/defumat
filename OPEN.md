@@ -761,7 +761,22 @@ because it changes a P14 claim.
 
 ## D. Memory
 
-### D1. The sum-over-states `chi_0` materialises the whole pair axis
+### D1. The sum-over-states `chi_0` materialises the whole pair axis **[closed 2026-09-12]**
+
+> The pair axis is chunked by `pair_batch`, defaulting to the **band** dial --
+> one pair density in flight is exactly what one band in flight is -- and
+> `batching.map_axis` is `map_k`'s body under a name that does not claim the
+> axis is k. *Measured*, by `memory_analysis()` rather than by a run: the
+> compiler's temporaries fall from 8.19 MB to 3.13 MB on the silicon case, and
+> the part that scales with `npairs` from 5.06 MB to nothing. **There is a floor
+> and it is `fields`**, the `nbnd` states in real space, which is the natural
+> working set; the entry's implied "bound it and it is bounded" is therefore
+> only true of the grid-sized half. The `(nw, 2 npairs, nm)` assembly above the
+> transform is still linear in `npairs` and is the docstring's stated trade,
+> two hundred times smaller. The matrix agrees to 1e-14 of its maximum between
+> the two settings, and there is a test that the dial reaches the *entry point*
+> as well as one that it saves anything -- which is the half P74 says goes
+> wrong.
 
 `defumat/tddft/chi0.py:484`. `products` is `(npairs, n1, n2, n3)` complex with
 `npairs = nocc * (nbnd - nocc)`, all live at once, and no dial bounds it -- while the
@@ -789,7 +804,18 @@ direction of mistake. It is also the tool this project uses to decide whether a
 calculation fits before starting it, which is what makes a 664 MB under-report worse
 than no estimate.
 
-### D3. The vertical-tunnelling workflow allocates outside every dial
+### D3. The vertical-tunnelling workflow allocates outside every dial **[closed 2026-09-12]**
+
+> The k loop is chunked by `k_batch`, which every branch of the contraction
+> permits because each ends in `kweights @ term`. 512 entries against 8192 on
+> `h-sheet.in`; 1.6 GB against 16 MB on a 100x100 map over 100 k-points and 50
+> spinor bands, and the `(nk, nbnd, npoints)` intermediate inside `transmission`
+> falls with it. **The entry is right that this sits outside every dial and
+> incomplete about why it matters**: the array is on the *host*, so the platform
+> default -- `None` on an accelerator, because a *device* wants the whole axis
+> -- does not bound it, and a GPU run with an image-sized `npoints` has to pass
+> a number. On a CPU the default already is 1. The map is unchanged to 1e-13 of
+> its maximum, and old and new agree digit for digit where they are printed.
 
 `defumat/workflows/transport.py:368`. One host array of `(npol, nk, nbnd, npoints)`
 complex128 up front, and each k-point's wavefunctions pulled to host inside a Python

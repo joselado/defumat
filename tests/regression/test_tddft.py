@@ -121,6 +121,32 @@ def _sternheimer(screening: str) -> float:
     return float(np.diag(np.asarray(response.epsilon)).mean())
 
 
+def test_the_pair_dial_reaches_the_matrix_and_does_not_move_it():
+    """The dial has to reach the hot path, which is the half that goes wrong.
+
+    ``tests/unit/test_tddft_machinery.py`` measures what chunking the pair axis
+    saves; this checks the saving is actually asked for from the entry point,
+    and that the matrix is the same either way. A documented dial that never
+    reaches the loop is exactly the defect this fix was for, so the plumbing is
+    worth a test of its own.
+
+    Every pair goes through the same transform whatever the chunk, so the
+    agreement is to the last bits rather than to round-off.
+    """
+    _, _, scf, calculation, eigenvalues, wavefunctions = _silicon()
+    potential = calculation.potential(jnp.asarray(scf.density))
+    matrices = [
+        np.asarray(independent_response(
+            calculation, wavefunctions, eigenvalues, potential.v_scf,
+            np.array([0.0]), ecut_response=ECUT_RESPONSE, broadening=0.0,
+            pair_batch=pair_batch,
+        ).x)
+        for pair_batch in (1, None)
+    ]
+    scale = np.abs(matrices[1]).max()
+    assert np.abs(matrices[0] - matrices[1]).max() / scale < 1.0e-14
+
+
 @pytest.mark.parametrize("kernel,screening", [("rpa", "hartree"), ("alda", "full")])
 def test_the_dyson_equation_reproduces_the_sternheimer_dielectric_constant(
     kernel, screening

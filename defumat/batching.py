@@ -123,7 +123,7 @@ from ._envcompat import environ_get
 
 __all__ = ["DEFAULT_K_BATCH", "resolve_k_batch", "map_k", "sum_k",
            "DEFAULT_BAND_BATCH", "resolve_band_batch", "map_bands",
-           "sum_bands"]
+           "sum_bands", "map_axis"]
 
 
 _UNSET = object()
@@ -233,30 +233,42 @@ def _leading(xs) -> int:
     return int(leaves[0].shape[0])
 
 
-def map_k(fn, xs, *, batch: int | None):
-    """``fn`` at every k-point, results stacked on a leading k axis.
+def map_axis(fn, xs, *, batch: int | None):
+    """``fn`` at every entry of a leading axis, results stacked back onto it.
 
-    ``xs`` is a pytree whose leaves all have ``nk`` as their leading axis, and
-    ``fn`` takes one k-point's slice of it. ``batch=None`` asks for the whole
-    axis at once, which is ``jax.vmap(fn)(xs)``; otherwise the k axis is walked
-    ``batch`` at a time. A single k-point is the same computation under every
-    setting, and is done without a batch axis whatever was asked for.
+    The chunking itself, with no opinion about what the axis *is*. ``map_k`` is
+    this function under the name of the axis it was written for, and the k axis
+    is not the only one whose per-entry working set is a whole real-space field
+    -- the occupied-empty **pair** axis of a sum-over-states response is
+    another, and one pair density is the same object one band's is.
 
-    **One k-point at a time means no ``vmap`` at all** -- see the module
-    docstring's "A batch of one is not a batch".
+    ``batch=None`` asks for the whole axis at once, ``batch=n`` walks it ``n``
+    at a time, and a leading axis of length one is done without a batch
+    dimension at all -- see the module docstring's "A batch of one is not a
+    batch".
     """
-    nk = _leading(xs)
-    if nk == 1:
-        # A single k-point is not a batch. Calling ``fn`` on the squeezed
-        # pytree and putting the axis back is the same computation without the
+    n = _leading(xs)
+    if n == 1:
+        # A single entry is not a batch. Calling ``fn`` on the squeezed pytree
+        # and putting the axis back is the same computation without the
         # width-one batch dimension, which is what costs.
         one = jax.tree_util.tree_map(lambda a: a[0], xs)
         return jax.tree_util.tree_map(lambda a: a[None], fn(one))
     if batch == 1:
-        return lax.map(fn, xs)  # a plain scan: one k-point, no batch axis
-    if batch is None or batch >= nk:
+        return lax.map(fn, xs)  # a plain scan: one entry, no batch axis
+    if batch is None or batch >= n:
         return jax.vmap(fn)(xs)
     return lax.map(fn, xs, batch_size=batch)
+
+
+def map_k(fn, xs, *, batch: int | None):
+    """``fn`` at every k-point, results stacked on a leading k axis.
+
+    ``xs`` is a pytree whose leaves all have ``nk`` as their leading axis, and
+    ``fn`` takes one k-point's slice of it. This is :func:`map_axis` with the k
+    axis named, which is the axis every caller of it walks.
+    """
+    return map_axis(fn, xs, batch=batch)
 
 
 def sum_k(fn, xs, *, batch: int | None):

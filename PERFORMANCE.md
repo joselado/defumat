@@ -4174,6 +4174,72 @@ resident entry (0.03 GB against a 0.05 GB total) and the transient (0.23 GB) is 
 the whole SCF floor.
 
 
+## What a tunnelling map and a spectrum hold, and what bounds them (OPEN.md D3, D1)
+
+Two allocations that grew with something a user turns up for a better answer and sat
+outside every dial. Neither is a new quantity, so this is memory arithmetic rather than a
+timing, and in both cases the fix changes the order a sum is added in and nothing else.
+
+### The tip amplitudes (`workflows/transport.py`)
+
+`_assemble` sampled every band of every k-point at every tip point into one **host**
+array before contracting anything:
+
+    amplitudes = (npol, nk, nbnd, npoints) complex
+
+and `transmission` then formed `sa = S a*` of `(nk, nbnd, npoints)` beside it. Both are
+now built one k-chunk at a time, because every branch ends in `kweights @ term` and the
+sum over k is exact term by term.
+
+| | before | `k_batch = 1` |
+|---|---|---|
+| `h-sheet.in`, 16 k-points, 8 bands, 8x8 map | 8192 entries | **512** (16x) |
+| a 100x100 map, 100 k-points, 50 spinor bands | 1.60 GB | **16 MB** |
+| the `sa` intermediate at those sizes | 0.80 GB | 8 MB |
+
+The factor is `nk` by construction. **The dial's platform default does not bound this
+one**, and that is the thing to know: `k_batch = None` is an accelerator's default because
+a *device* wants the whole axis, and this array is on the host either way — a GPU machine
+asking for an image-sized `npoints` should pass a number. On a CPU the default is already
+1, so the bound is the default there.
+
+Measured by counting what the assembly asks `numpy.empty` for, in
+`tests/regression/test_transport.py::test_the_tip_amplitudes_are_bounded_by_the_k_dial`;
+the map is unchanged to 1e-13 of its maximum, and the two runs agree digit for digit in
+the one comparison that prints them.
+
+### The pair densities (`tddft/chi0.py`)
+
+The sum-over-states `chi_0` formed `<u_i|e^{-iG.r}|u_j>` for every occupied-empty pair at
+once, so the working set was `npairs` whole FFT boxes while the module's own docstring
+said `map_k` bounded them. The pair axis is now chunked by `pair_batch`, defaulting to the
+**band** dial, because one pair density in flight is exactly what one band in flight is.
+
+Compiler temporaries, `memory_analysis().temp_size_in_bytes` on `_pair_terms` at
+`si-epsilon-unshifted-nosym`'s shapes (`nocc = 4`, `nbnd = 12`, so 32 pairs, a 20^3 smooth
+grid, one 128 kB box):
+
+| `pair_batch` | temporaries | of which pair-dependent |
+|---|---|---|
+| `None` (the whole axis) | 8.19 MB | 5.06 MB |
+| 8 | 3.64 MB | 0.51 MB |
+| 4 | 3.13 MB | ~0 (XLA fuses the chunk into its transform) |
+| 1 | **3.13 MB** | ~0 |
+
+**There is a floor and it is not the pairs**: 3.13 MB of it is `fields`, the `nbnd` states
+in real space, whose own transform holds an input and an output box each — 2 x 12 x 128 kB
+is 3.07 MB of the 3.13. That is the natural working set and it stays whatever the chunk.
+What falls is the 5.06 MB that scales with `npairs`, and `npairs` is `nocc (nbnd - nocc)`
+— quadratic in the band count, which is this phase's one convergence parameter. On a cell
+with 50 occupied and 150 empty bands and a 60^3 grid the unbounded part is **26 GB**
+against the few hundred megabytes of the states it is built from.
+
+**This bounds the grid-sized allocation and not the assembly above it**: the
+`(nw, 2 npairs, nm)` einsum is still linear in `npairs` and is the stated trade the module
+docstring already carried — 100 MB at silicon's sizes, where the pair densities at the
+same sizes would be two hundred times that on a production cell.
+
+
 ## History
 
 | Date | Change | Effect |

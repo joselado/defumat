@@ -154,6 +154,7 @@ def run_absorption(
     ns=None,
     conv_thr: float = 1.0e-10,
     k_batch: int | None | str = "default",
+    pair_batch: int | None | str = "default",
     static_residual: bool = True,
     tolerance: float = TOLERANCE,
     max_iterations: int = MAX_ITERATIONS,
@@ -198,6 +199,11 @@ def run_absorption(
         alpha: the ``lrc`` kernel's parameter; ignored by every other kernel.
         static_residual: whether to measure this run's band truncation against
             the Sternheimer solve. Costs one self-consistent field response.
+        pair_batch: how many occupied-empty pair densities are in flight at
+            once. One of them is a whole field on the smooth grid, so this is
+            what decides the largest array a spectrum allocates; the default is
+            the band dial. See
+            :func:`~defumat.tddft.chi0.independent_response`.
     """
     from defumat.scf.driver import Calculation
 
@@ -229,7 +235,7 @@ def run_absorption(
     chi = independent_response(
         calculation, wavefunctions, eigenvalues, potential.v_scf,
         grid + 1j * imaginary, ecut_response=ecut_response, broadening=0.0,
-        scissor=scissor, k_batch=k_batch,
+        scissor=scissor, k_batch=k_batch, pair_batch=pair_batch,
     )
 
     context = {}
@@ -249,6 +255,7 @@ def run_absorption(
         rpa_static, residual = _static_residual(
             calculation, wavefunctions, eigenvalues, density, chi,
             scissor=scissor, ecut_response=ecut_response, k_batch=k_batch,
+            pair_batch=pair_batch,
             v_scf=potential.v_scf,
         )
 
@@ -286,7 +293,7 @@ def _default_nbnd(system, pseudos) -> int:
 
 
 def _static_residual(calculation, wavefunctions, eigenvalues, density, chi, *,
-                     scissor, ecut_response, k_batch, v_scf):
+                     scissor, ecut_response, k_batch, v_scf, pair_batch="default"):
     """``eps_M(0)`` here in RPA, against the Sternheimer solve's RPA value.
 
     **Everything about this comparison has to match except the truncation**,
@@ -321,7 +328,7 @@ def _static_residual(calculation, wavefunctions, eigenvalues, density, chi, *,
         chi = independent_response(
             calculation, wavefunctions, eigenvalues, v_scf, np.array([0.0]),
             ecut_response=ecut_response, broadening=0.0, scissor=0.0,
-            k_batch=k_batch,
+            k_batch=k_batch, pair_batch=pair_batch,
         )
     # Index 0 is the unbroadened static point; the Sternheimer solve has no
     # broadening either, so the two are comparable without a limit being taken.

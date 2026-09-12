@@ -170,6 +170,61 @@ def test_the_band_count_converges():
                   - maps[0] / maps[0].mean()).max() < 1.0e-4
 
 
+def test_the_tip_amplitudes_are_bounded_by_the_k_dial():
+    """The assembly's host array is ``(npol, nk, nbnd, npoints)`` and the dial
+    has to reach it.
+
+    This workflow's largest allocation is not on the device and is not the
+    wavefunctions: it is the tip amplitudes, one complex number per spinor
+    component, k-point, band and *pixel*. An image is thousands of pixels, so
+    the array grows with the product of two things a user turns up for a better
+    picture, and it sat outside every dial.
+
+    Two assertions, because a chunked sum has to be both smaller and the same
+    answer: the largest array the assembly asks numpy for scales with the chunk
+    rather than with ``nk``, and the map is unchanged by it. The sum over k
+    ends in ``kweights @ term`` in every branch, so a chunk moves nothing but
+    the order the contributions are added in.
+    """
+    calculator = _converged("h-sheet")
+    nk = len(calculator.system.kpoints.weights)
+    assert nk > 1, "a single k-point cannot show a chunking"
+
+    def run(k_batch):
+        biggest = 0
+        empty = np.empty
+
+        def spy(shape, *args, **kwargs):
+            nonlocal biggest
+            size = int(np.prod(shape)) if isinstance(shape, tuple) else int(shape)
+            biggest = max(biggest, size)
+            return empty(shape, *args, **kwargs)
+
+        np.empty = spy
+        try:
+            image = run_vertical_transport(
+                calculator.system, calculator.pseudos, calculator.get_scf(),
+                shape=(8, 8), k_batch=k_batch, **SHEET)
+        finally:
+            np.empty = empty
+        return image, biggest
+
+    one, small = run(1)
+    whole, large = run(None)
+
+    # 8 bands x 64 pixels a k-point: the whole axis is nk times that, and the
+    # chunked run never asks for more than one k-point's worth.
+    assert small < 2 * 8 * 8 * 8
+    assert large > (nk // 2) * 8 * 8 * 8
+    assert np.abs(one.image - whole.image).max() / whole.image.max() < 1.0e-13
+    assert np.abs(one.incoherent - whole.incoherent).max() \
+        / whole.incoherent.max() < 1.0e-13
+    assert one.least_eigenvalue == pytest.approx(whole.least_eigenvalue, rel=1e-12)
+    assert one.notes["channels"] == pytest.approx(whole.notes["channels"], rel=1e-12)
+    assert one.notes["band_edge_weight"] == pytest.approx(
+        whole.notes["band_edge_weight"], rel=1e-10)
+
+
 # --------------------------------------------------------------------------
 # the spin regimes and the polarized substrate
 # --------------------------------------------------------------------------

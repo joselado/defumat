@@ -169,3 +169,77 @@ def test_an_ultrasoft_dataset_is_refused_by_name():
 def test_the_whole_grid_norm_conserving_insulator_is_accepted():
     """The complement of the refusals: the one regime that is supported."""
     require_a_sum_over_states_regime(_calculation("si-epsilon-unshifted-nosym"))
+
+
+# --- the pair axis's working set ---------------------------------------------
+
+def test_the_pair_densities_are_bounded_by_the_pair_dial():
+    """One pair density is a whole FFT box, and there are ``npairs`` of them.
+
+    The transforms are the *time* of this phase and the pair densities are its
+    **memory**: ``<u_i|e^{-iG.r}|u_j>`` is formed on the smooth grid, so every
+    occupied-empty pair costs one complex box in flight while ``nm`` numbers
+    are kept from it. Forming them all at once is quadratic in the band count
+    and reaches tens of gigabytes on a cell of production size, where the
+    states they are built from are hundreds of megabytes.
+
+    Two assertions, and they are the two halves of a dial: the compiler's own
+    temporary budget falls with the chunk, and the vectors it returns do not
+    move. Every pair goes through the same transform whatever the chunk, so
+    this is ``map_bands``'s "identical rather than round-off" case and the
+    bound is tight.
+
+    ``memory_analysis()`` runs the compiler and allocates nothing, which is
+    what makes this a unit test rather than a run.
+    """
+    import jax
+
+    from defumat.tddft.chi0 import _pair_terms, _pairs, response_sphere
+
+    calculation = _calculation("si-epsilon-unshifted-nosym")
+    sphere = response_sphere(calculation, 8.0)
+    precision = calculation.system.cell.precision
+    grid = calculation.basis.smooth.grid
+    fft_index = jnp.asarray(calculation.fft_index)[0]
+    band_mask = jnp.asarray(calculation.basis.planewaves.mask)[0]
+    npwx = int(band_mask.shape[0])
+
+    nocc, nbnd = 4, 12
+    rows, columns = _pairs(nocc, nbnd)
+    rng = np.random.default_rng(0)
+    psi = jnp.asarray(rng.normal(size=(nbnd, npwx))
+                      + 1j * rng.normal(size=(nbnd, npwx)), precision.complex)
+    element = jnp.asarray(rng.normal(size=(3, nbnd, nbnd))
+                          + 1j * rng.normal(size=(3, nbnd, nbnd)),
+                          precision.complex)
+    eig = jnp.asarray(np.sort(rng.normal(size=nbnd)), precision.real)
+    occupation = jnp.asarray(
+        np.where(np.arange(nbnd) < nocc, 2.0, 0.0), precision.real)
+    zomega = jnp.asarray([0.0 + 0.01j], precision.complex)
+
+    def measure(pair_batch):
+        def f(psi, element, eig, occupation):
+            return _pair_terms(
+                psi, fft_index, band_mask, eig, occupation, element,
+                rows, columns, sphere, grid, 270.0, zomega, 0.0, precision,
+                pair_batch,
+            )
+
+        compiled = jax.jit(f).lower(psi, element, eig, occupation).compile()
+        temporary = compiled.memory_analysis().temp_size_in_bytes
+        return compiled(psi, element, eig, occupation), int(temporary)
+
+    (whole, _), big = measure(None)
+    (chunked, _), small = measure(1)
+
+    box = int(np.prod(grid)) * 16
+    npairs = int(rows.size)
+    assert npairs == nocc * (nbnd - nocc)
+    # **There is a floor and it is not the pairs.** ``fields`` -- the ``nbnd``
+    # states in real space -- is transformed whatever the chunk, and its
+    # transform's own input and output are about ``2 nbnd`` boxes; that is
+    # 3.13 MB of the 3.13 MB left at a chunk of one. What has to fall is the
+    # part that scales with ``npairs``, which is the whole difference.
+    assert big - small > 0.5 * npairs * box
+    assert small < 4 * nbnd * box
+    assert np.abs(np.asarray(whole) - np.asarray(chunked)).max() < 1.0e-14
