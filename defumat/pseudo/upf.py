@@ -449,12 +449,10 @@ def _read_spin_orbit(root, path: Path, header: dict, projectors, orbitals):
         )
 
     def indexed(prefix: str, count: int, attribute: str):
-        found = {}
-        for child in section:
-            if not child.tag.startswith(prefix):
-                continue
-            index = int(child.attrib.get("index", "0"))
-            found[index] = float(child.attrib[attribute])
+        found = {
+            _series_index(child): float(child.attrib[attribute])
+            for child in _series(section, prefix)
+        }
         missing = [i for i in range(1, count + 1) if i not in found]
         if missing:
             raise ValueError(
@@ -488,6 +486,38 @@ def _require(node: ET.Element, tag: str) -> ET.Element:
     return found
 
 
+def _series_index(node: ET.Element) -> int:
+    """The position of ``node`` in a ``<tag>.i`` series, taken from its **tag**.
+
+    QE builds the tag it looks for out of the loop counter -- ``PP_BETA.//i2c(nb)``
+    in ``read_upf_new.f90:377``, ``PP_RELBETA.//i2c(nb)`` at ``:714`` -- and never
+    reads the ``index`` attribute at all, so the suffix is what the format actually
+    guarantees. The attribute is written with a Fortran ``i1`` edit descriptor in at
+    least one generator: the SG15 fully-relativistic ONCV files carry ten projectors
+    and the tenth reads ``index="*"``, the overflow marker, on ``PP_BETA.10`` alone.
+    Falling back on the attribute is therefore a crash on exactly the datasets a
+    heavy element needs.
+    """
+    head, _, tail = node.tag.rpartition(".")
+    if head and tail.isdigit():
+        return int(tail)
+    attribute = node.attrib.get("index", "").strip()
+    return int(attribute) if attribute.isdigit() else 0
+
+
+def _series(parent: ET.Element, name: str) -> list[ET.Element]:
+    """The ``<name>.i`` children of ``parent``, in index order.
+
+    The tag is matched **exactly** up to its suffix rather than by prefix, for the
+    reason ``PP_AEWFC``/``PP_AEWFC_REL`` gives below: a prefix match silently
+    interleaves two series and attaches every entry to the wrong channel.
+    """
+    return sorted(
+        (child for child in parent if child.tag.rpartition(".")[0] == name),
+        key=_series_index,
+    )
+
+
 def _numbers(node: ET.Element) -> np.ndarray:
     text = (node.text or "").replace("D", "E").replace("d", "e")
     return np.fromstring(text, sep=" ")
@@ -504,10 +534,7 @@ def _read_nonlocal(root: ET.Element, path: Path, r: np.ndarray):
         return (), None, None
 
     projectors = []
-    for node in sorted(
-        (child for child in section if child.tag.startswith("PP_BETA")),
-        key=lambda child: int(child.attrib.get("index", "0")),
-    ):
+    for node in _series(section, "PP_BETA"):
         beta = _numbers(node)
         # kkbeta: the projector vanishes beyond this index. Some files leave it
         # at 0, meaning "use the whole mesh".
@@ -539,10 +566,7 @@ def _read_orbitals(root: ET.Element) -> tuple[AtomicOrbital, ...]:
         return ()
 
     orbitals = []
-    for node in sorted(
-        (child for child in section if child.tag.startswith("PP_CHI")),
-        key=lambda child: int(child.attrib.get("index", "0")),
-    ):
+    for node in _series(section, "PP_CHI"):
         orbitals.append(
             AtomicOrbital(
                 l=int(node.attrib["l"]),
@@ -724,10 +748,7 @@ def _read_paw(root: ET.Element, nbeta: int) -> PawData | None:
         the wrong channel. That is not a parse error anywhere downstream: the
         one-centre energy simply comes out tens of Ry wrong.
         """
-        nodes = sorted(
-            (child for child in full if child.tag.rsplit(".", 1)[0] == name),
-            key=lambda child: int(child.attrib.get("index", "0")),
-        )
+        nodes = _series(full, name)
         if not nodes:
             return None
         return np.stack([_numbers(node) for node in nodes])

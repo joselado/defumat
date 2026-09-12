@@ -46,6 +46,36 @@ def test_every_shipped_pseudopotential_parses(pseudo_dir):
         assert pseudo.msh <= pseudo.mesh
 
 
+def test_a_tenth_projector_is_ordered_by_its_tag_not_its_index_attribute(pseudo_dir):
+    """``index="*"`` is a Fortran field overflow, and QE never reads that attribute.
+
+    The SG15 fully-relativistic ONCV files carry ten projectors, and their
+    generator writes the ``index`` attribute with an ``i1`` edit descriptor: the
+    tenth reads ``index="*"``, the overflow marker. QE is untouched by it because
+    ``read_upf_new.f90:377`` builds the tag it looks for out of the loop counter
+    (``'PP_BETA.'//i2c(nb)``) and never consults the attribute, so the suffix is
+    what the format guarantees. Reading the attribute instead is a crash on
+    exactly the datasets a heavy element needs -- and, in a file that merely
+    disagreed with itself rather than overflowing, a silent permutation of the
+    projectors against their ``D_ij``.
+    """
+    path = pseudo_dir / "Nb.rel-pbe-nc-sg15.UPF"
+    assert 'index="*"' in path.read_text(), "the file no longer carries the overflow"
+
+    nb = read_upf(path)
+    assert [b.l for b in nb.projectors] == [0, 0, 1, 1, 1, 1, 2, 2, 2, 2]
+    assert [b.j for b in nb.projectors] == [0.5, 0.5, 0.5, 1.5, 0.5, 1.5,
+                                            1.5, 2.5, 1.5, 2.5]
+    assert nb.dij.shape == (10, 10)
+    # The tenth is the one the overflow names, and it is a d_{5/2} channel whose
+    # partner is the ninth: the two differ, so a dropped or duplicated entry shows.
+    assert nb.projectors[9].beta[:5] == pytest.approx(
+        [0.0, -7.9097511373e-05, -6.3152036549e-04,
+         -2.1243102703e-03, -5.0120114642e-03]
+    )
+    assert not np.allclose(nb.projectors[8].beta, nb.projectors[9].beta)
+
+
 def test_mesh_truncation_reproduces_qes_rule(pseudo_dir):
     """``msh`` must be QE's, transcribed loop for loop rather than paraphrased.
 
