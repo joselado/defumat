@@ -1,0 +1,24 @@
+! 1H-NbSe2 monolayer -- reduced-cost copy of nbse2.in, for shaking the path out.
+ &control
+    calculation = 'scf'
+    prefix = 'nbse2-smoke'
+ /
+ &system
+    ibrav = 4, celldm(1) = 6.5044373210, celldm(3) = 5.2295177223,
+    nat = 3, ntyp = 2,
+    ecutwfc = 30.0,
+    occupations = 'smearing', smearing = 'fermi-dirac', degauss = 0.002,
+    nbnd = 20,
+ /
+ &electrons
+    conv_thr = 1.0d-6
+ /
+ATOMIC_SPECIES
+ Nb  92.906  Nb.pbe-nc-sg15.UPF
+ Se  78.971  Se.pbe-nc-sg15.UPF
+ATOMIC_POSITIONS (crystal)
+ Nb  0.0000000000  0.0000000000  0.5000000000
+ Se  0.3333000000  0.6667000000  0.5933533333
+ Se  0.3333000000  0.6667000000  0.4066466667
+K_POINTS {automatic}
+ 3 3 1 0 0 0

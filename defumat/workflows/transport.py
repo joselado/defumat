@@ -830,13 +830,13 @@ def _assemble_momentum(calculation, wavefunctions, eigenvalues, *,
         # What the plane sees of the topmost multiplet: the band-count
         # truncation measure, in the same spirit as the map's.
         "top_multiplet_share": _top_multiplet_share(
-            columns["weight"], eigenvalues, energies, broadening),
+            eigenvalues, energies, broadening, smearing),
     }
     return columns, {"least_eigenvalue": float(least),
                      "hermiticity": float(hermiticity), "notes": notes}
 
 
-def _top_multiplet_share(weight, eigenvalues, energies, broadening):
+def _top_multiplet_share(eigenvalues, energies, broadening, smearing):
     """How much of the answer the highest band carries -- a truncation measure.
 
     A band sum stops somewhere, and the honest question is not "how many bands"
@@ -844,6 +844,11 @@ def _top_multiplet_share(weight, eigenvalues, energies, broadening):
     summed over the k-set and divided by every band's, is that number: it is
     zero when the band set reaches past the window and grows as the window
     approaches the top of it.
+
+    It uses the run's **own** delta rather than a Gaussian: a Fermi-Dirac one
+    of the same width is 2.1x wider in full width and still carries 1.3e-3 of
+    its peak eight widths out, so a diagnostic hardcoded to a Gaussian would
+    say the truncation was harmless on exactly the shape where it is not.
     """
     eigenvalues = np.asarray(eigenvalues)
     from defumat.stm.image import smeared_delta
@@ -851,7 +856,7 @@ def _top_multiplet_share(weight, eigenvalues, energies, broadening):
     share = 0.0
     for energy in np.atleast_1d(energies):
         delta = smeared_delta((float(energy) - eigenvalues) / broadening,
-                              "gaussian")
+                              smearing)
         total = float(delta.sum())
         if total > 0.0:
             share = max(share, float(delta[..., -1].sum()) / total)

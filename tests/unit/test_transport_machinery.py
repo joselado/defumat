@@ -938,8 +938,14 @@ def test_the_incoherent_column_is_blind_to_a_degenerate_rotation():
                              weights, eigenvalues=eigenvalues)["incoherent"]
 
     assert np.abs(after - before).max() / before.max() < 1.0e-10
-    assert np.all(before <= momentum_weights(
-        exit_gram, tip_gram, kweights, weights)["weight"] * 1e6)
+
+    # And it is a *different* number from the coherent one, which is the only
+    # reason to compute it: on these Gram matrices 47% of the exit overlap sits
+    # off the diagonal and the two columns differ by 2 to 9%. Equal columns
+    # would mean the interference had been dropped twice rather than reported.
+    coherent = momentum_weights(exit_gram, tip_gram, kweights,
+                                weights)["weight"]
+    assert np.abs(before - coherent).max() / coherent.max() > 1.0e-3
 
 
 def test_momentum_weights_refuse_shapes_they_cannot_read():

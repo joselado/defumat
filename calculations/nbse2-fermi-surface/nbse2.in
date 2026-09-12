@@ -1,0 +1,72 @@
+! 1H-NbSe2 monolayer -- the pw.x form of the Elk input behind elkpy's
+! momentum-resolved tunnelling runs (elkpy notebooks/_scratch/nbse2, 2026-09-10).
+!
+! Elk -> defumat, term by term:
+!
+!   avec (bohr)          -> ibrav = 4 (hexagonal): a1 = (a,0,0),
+!                           a2 = (-a/2, a*sqrt(3)/2, 0), a3 = (0,0,c), which is
+!                           Elk's matrix exactly -- a2 = (-1.721, 2.980859, 0) A
+!                           both ways. celldm(1) = 3.442 A in bohr,
+!                           celldm(3) = 18/3.442.
+!   atoms / atposl       -> ATOMIC_POSITIONS (crystal). The Se in-plane pair is
+!                           the CIF's TRUNCATED 0.3333/0.6667, not exact thirds,
+!                           and that is deliberate: the 3.3e-5 offset is above
+!                           both codes' symmetry tolerance, so it breaks the
+!                           three-fold and leaves 4 operations out of the
+!                           lattice's 24. Elk finds 4 and defumat finds 4. Exact
+!                           thirds are the same physics on a different
+!                           irreducible k-set, and would not be this input.
+!   xctype 20            -> PBE, which is what the pseudopotential headers say,
+!                           so no input_dft is needed.
+!   stype 3, swidth 0.001-> occupations = 'smearing', smearing = 'fermi-dirac',
+!     (Hartree)             degauss = 0.002 Ry. Elk's swidth is k_B T in HARTREE
+!                           and 0.001 Ha is 316 K; QE's degauss is k_B T in Ry.
+!                           The two delta functions are the same function:
+!                           Elk's sdelta_fd is exp(-x)/(1+exp(-x))^2 and QE's
+!                           w0gauss at ngauss = -99 is f(1-f), which is equal.
+!   ngridk 12 12 1       -> K_POINTS automatic 12 12 1 0 0 0. Gamma-centred both
+!     vkloff 0 0 0          ways. Elk's 24 24 1 Triton run is nbse2-24.in.
+!   spinpol .false.      -> nothing. This is a PHYSICS choice and not a default:
+!                           DFT sits on a Stoner instability for this monolayer
+!                           and a spurious moment would destroy the Fermi
+!                           surface the calculation is about.
+!   spinorb .false.      -> scalar-relativistic datasets. NbSe2's Ising splitting
+!                           needs the .rel- pair, which is committed beside these.
+!   tshift .false.       -> nothing here: defumat never moves the origin.
+!   epspot 1e-7          -> conv_thr, tightened to 1e-10 because the Fermi
+!                           surface and the tunnelling weights are post-processed
+!                           off this density.
+!   rgkmax 7, gmaxvr 12  -> LAPW basis knobs with no plane-wave counterpart. The
+!     lmaxapw, lmaxo        cutoff comes from the pseudopotentials instead, and
+!                           ecutwfc = 60 Ry is where the total energy is settled
+!                           to 0.5 mRy and E_F to 0.13 mRy (50 -> 80 Ry sweep).
+!   12 empty states      -> nbnd = 24 against 13 occupied: 25 valence electrons,
+!                           Nb 13 (4s 4p 4d 5s) and Se 6 (4s 4p) each.
+!   mixtype 3 (Broyden)  -> the default mixer here is Broyden.
+!
+! Pseudopotentials: SG15 ONCV PBE, norm-conserving. Norm-conserving because the
+! vertical-transport and Fermi-surface stacks want no augmentation charge on a
+! slab, where Q_ij(G) is tens of GB.
+ &control
+    calculation = 'scf'
+    prefix = 'nbse2'
+ /
+ &system
+    ibrav = 4, celldm(1) = 6.5044373210, celldm(3) = 5.2295177223,
+    nat = 3, ntyp = 2,
+    ecutwfc = 60.0,
+    occupations = 'smearing', smearing = 'fermi-dirac', degauss = 0.002,
+    nbnd = 24,
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Nb  92.906  Nb.pbe-nc-sg15.UPF
+ Se  78.971  Se.pbe-nc-sg15.UPF
+ATOMIC_POSITIONS (crystal)
+ Nb  0.0000000000  0.0000000000  0.5000000000
+ Se  0.3333000000  0.6667000000  0.5933533333
+ Se  0.3333000000  0.6667000000  0.4066466667
+K_POINTS {automatic}
+ 12 12 1 0 0 0
