@@ -13316,16 +13316,24 @@ module's own docstring warns that a reversed sign "drives the field the wrong wa
 moment saturates, and the run converges to the *unconstrained* answer looking untroubled";
 that is not what happens.
 
-**What it is: a secant on a step function.** fcc hydrogen at `a = 6.5` bohr is a *marginal*
-magnet, and that is P63's own measurement -- the ferromagnetic solution is metastable, **58
-meV above** the nonmagnetic one. So `m(B)` there is nearly a step: 0.057 Ry of field takes the
-moment from 0.027 to 0.719, essentially the saturated value. A secant iteration on a step
-overshoots by construction, and past the overshoot the moment is saturated, so `chi -> 0` and
-the step the secant asks for is unbounded (`FSM_TRUST` clips its *growth*, not its size). Then
-the second failure closes the loop: under that large field the inner SCF stops converging
-(**2.5e-4** and **5.5e-3** against a 1e-10 threshold), the secant only steps on *converged*
-pairs by design, so the field freezes where it overshot to and the remaining iterations are
-spent going nowhere.
+**What it is: the cell has two stable moments and the target is neither.** fcc hydrogen at
+`a = 6.5` bohr is a *marginal* magnet, and that is P63's own measurement -- the ferromagnetic
+solution is metastable, **58 meV above** the nonmagnetic one. So `m(B)` there is nearly a
+**step**: 0.057 Ry of field takes the moment from 0.027 to 0.719, essentially the saturated
+value, and there is very little in between to hold. In every constrained run above the moment
+lands at that saturated value, and the inner SCF then stops converging under the field that
+put it there (**2.5e-4** and **5.5e-3** against a 1e-10 threshold) -- and because the secant
+steps only on *converged* pairs by design, the field then freezes where it is and the remaining
+iterations go nowhere. *How* the field reached that size was not traced: the six runs above
+predate `constraint_residual`, so the field trajectory was never printed, and whether the
+secant's step or Elk's first `-penalty (m - m_fix)` carried it there is not in the data.
+
+**The two figures that say the cell was unsuitable before any of this was run.** The bare
+`q = 1/2` moment is **0.0435** and the target was **0.0273** -- an initial error of 0.016,
+sixteen times `FSM_TOLERANCE`, and *below* the bare value. So the constraint was asking for a
+moment smaller than the cell's own, on a cell whose only other stable point is the saturated
+one 0.72 away in the opposite direction. That is the diagnosis in two numbers, and
+`constraint_residual` is now what puts them in front of a reader.
 
 **Row three is the one that reads wrongly without help, and it is now fixed.** Its
 `accuracy` is **3.9e-11**, *below* its own 1e-10 threshold: the density converged and it is

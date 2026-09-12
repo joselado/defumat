@@ -30,12 +30,16 @@
 ! converging and ends at -0.1468 -- the other side of the target, not short of it.
 ! It is not a sign error and not the rotated frame: it fails at q = 0 too, where
 ! that frame is the laboratory frame, and there the field grows in the *right*
-! direction. The cause is that m(B) here is nearly a step -- 0.057 Ry of field
-! takes the moment from 0.027 to 0.719 -- so a secant on it overshoots, the
-! moment saturates, the inner SCF stops converging under the large field, and the
-! field freezes because it only steps on converged pairs. Use a cell whose m(B) is
-! not a step. Elk's `fsmtype = -1` -- the direction fixed hard by a large field --
-! is the other route and is not implemented here.
+! direction. The cause is the cell: m(B) here is nearly a step -- 0.057 Ry of
+! field takes the moment from 0.027 to 0.719 -- so there is little in between to
+! hold, the moment lands saturated, the inner SCF stops converging under the field
+! that put it there, and the field then freezes because it only steps on converged
+! pairs. Two numbers say the cell was unsuitable before the run: the bare q = 1/2
+! moment is 0.0435 and the target was 0.0273, so the constraint asked for a moment
+! *below* the cell's own, sixteen FSM_TOLERANCEs away, with the only other stable
+! point saturated in the opposite direction. Use a robust magnet --
+! `fe-noncolin-pbe-stress.in` is one. Elk's `fsmtype = -1`, the direction fixed
+! hard by a large field, is the other route and is not implemented here.
 !
 ! PLAN.md P63 records the measurement and what replaced it in the tests.
  &control

@@ -211,15 +211,23 @@ Not settled, and the two obvious suspects are both ruled out. It is **not a sign
 moment rises — and it is **not the rotated frame**, because it fails at `q = 0` where that
 frame is the laboratory frame. What it is: fcc hydrogen at `a = 6.5` bohr is a marginal magnet
 (P63: the ferromagnet is metastable, 58 meV *above* the nonmagnetic solution), so `m(B)` is
-nearly a step — 0.057 Ry of field takes the moment from 0.027 to 0.719 — and a secant on a
-step overshoots by construction. Past the overshoot the moment is saturated, `chi -> 0`, and
-the inner SCF stops converging under the large field (2.5e-4, 5.5e-3 against 1e-10), so the
-secant gets no more converged pairs to step on and the field freezes where it went.
+nearly a **step** — 0.057 Ry of field takes the moment from 0.027 to 0.719 — with very little
+in between to hold. Every constrained run lands at that saturated value and the inner SCF then
+stops converging under the field that put it there (2.5e-4, 5.5e-3 against 1e-10); the secant
+steps only on converged pairs, so the field freezes. *How* the field grew that large was not
+traced — those runs predate `constraint_residual` and the trajectory was never printed.
 
-**First step is a different cell, not a different `lambda`**: iron or nickel, something whose
-`m(B)` is not a step, and `max_iterations` well above the bare SCF's own count — the budget is
-**shared** between the inner SCF and the outer field loop, and this cell's bare `q = 1/2` run
-alone takes 149 of 200.
+**The cell was unsuitable before the run, and two numbers say so.** The bare `q = 1/2` moment
+is **0.0435** and the target was **0.0273** — an initial error of 0.016, sixteen times
+`FSM_TOLERANCE`, and *below* the bare value. The constraint was asking for a moment smaller
+than the cell's own, on a cell whose only other stable point is the saturated one.
+
+**First step is a different cell, not a different `lambda`, and the cell is already
+committed**: `tests/data/qe/fe-noncolin-pbe-stress.in` (P80) is bcc iron at 1.95 mu_B, a
+robust magnet whose `m(B)` is not a step, and it converges here in 43 iterations. Give
+`max_iterations` room well above the bare SCF's own count — the budget is **shared** between
+the inner SCF and the outer field loop, and the hydrogen cell's bare `q = 1/2` run alone takes
+149 of 200. A spiral on an iron cell is the pairing E(c) actually wants.
 
 **What P80 added so the next attempt is readable.** `MagneticField.cell_residual` and
 `SCFResult.constraint_residual`: `m - m_target`, signed and per component, at the end and per

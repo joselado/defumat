@@ -2200,12 +2200,14 @@ neither is refused --- and the quantity a constraint acts on is the
 \code{'fsm'} does not converge here, and it does not converge at $q = 0$ either,
 where there is no rotated frame at all: fcc hydrogen at this spacing is a
 \emph{marginal} magnet, so $m(B)$ is nearly a step --- 0.057~Ry of field takes the
-moment from 0.027 to 0.719 --- and a secant iteration on a step overshoots by
-construction. Past the overshoot the moment is saturated and the inner SCF stops
-converging under the large field, and since the field steps only on
-self-consistent pairs it then freezes where it went. Use a cell whose $m(B)$ is
-not a step, and give \code{electron\_maxstep} room: it is \textbf{shared} between
-the inner SCF and the outer field loop.
+moment from 0.027 to 0.719 --- with very little in between for a constraint to
+hold. The moment lands saturated, the inner SCF then stops converging under the
+field that put it there, and since the field steps only on self-consistent pairs it
+freezes. Two numbers say that cell was the wrong choice before the run: its bare
+moment is 0.0435 and the target was 0.0273, so the constraint asked for a moment
+\emph{below} the cell's own while the only other stable point was saturated in the
+opposite direction. Use a robust magnet, and give \code{electron\_maxstep} room:
+it is \textbf{shared} between the inner SCF and the outer field loop.
 
 \textbf{What to read when one does not converge.} \code{'fsm'} drives a
 \emph{feedback field} rather than a penalty, so its \code{constraint\_energy} is
