@@ -968,12 +968,18 @@ are held to, and one row per atom.
 three unit rows. The starting density built from it carries opposite moment
 lobes on two antiparallel sites and integrates to zero over the cell.
 
-\textbf{One thing it does not yet reach, for a PAW dataset:} the atomic
-\code{becsum}, which is still split by the per-\emph{species}
-\code{starting\_magnetization}. So on PAW the charge's starting texture and the
-one-centre starting occupations disagree at iteration~1. The SCF repairs it and
-nothing downstream is wrong at convergence; it costs iterations, and it is
-written down here rather than left to be met.
+\textbf{It reaches all three consumers}, which it did not until recently: the
+charge density, the Hubbard occupation matrix, and a PAW or ultrasoft dataset's
+atomic \code{becsum}. The last two used to be split by the per-\emph{species}
+\code{starting\_magnetization} and so started every site of a species pointing
+the same way, while the charge carried the texture --- so iteration~1
+contradicted itself on exactly the systems the card exists for. For PAW that is
+not merely a poorer guess: the one-centre terms are a \emph{function} of
+\code{becsum}, so the two sites got different Hamiltonians than the density
+asked for. And nothing in the SCF turns a moment, so a spinor DFT+U run --- which
+is forced to \code{nosym}, leaving the starting matrix as the only steering
+there is --- could converge with the shells polarised along the wrong axes and
+report success.
 
 \textbf{Not covered, and this one is a sentence rather than a \code{raise}:} a
 textured starting \emph{density} handed to \code{run\_scf} by the caller. The symmetry group is decided from the input and

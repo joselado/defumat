@@ -1810,6 +1810,10 @@ class Calculation:
             return initial_ns_noncollinear(
                 self.hubbard, self.starting_magnetization,
                 self.system.angle1, self.system.angle2,
+                per_atom=(
+                    np.asarray(self.system.local_moments, dtype=float)
+                    if self.system.starting_moments else None
+                ),
             )
         return initial_ns(self.hubbard, self.nspin, self.starting_magnetization)
 
@@ -3232,16 +3236,18 @@ class Calculation:
         the documentation states, so this is that array read a component at a
         time.
 
-        **What this does not yet reach is a PAW dataset's atomic ``becsum``**,
-        which :meth:`_becsum_split` still splits by the per-*species*
-        ``starting_magnetization``. :attr:`spin_weights` says why that matters:
+        **The other two consumers of the card now see it too**, which they did
+        not: :meth:`_becsum_split_per_atom` gives an ultrasoft or PAW dataset's
+        atomic ``becsum`` one row per atom, and :func:`initial_ns_noncollinear`
+        takes its axis per slot. :attr:`spin_weights` says why that matters --
         "the two starting guesses have to agree about how polarized the atom is
-        or the first iteration contradicts itself". With the card on a PAW
-        dataset they now disagree -- the charge carries the texture and the
-        one-centre occupations carry the ferromagnet. The SCF repairs it and
-        nothing is wrong at convergence; it costs iterations. Lifting it is a
-        per-atom ``_becsum_split``, with the ``broadcast_to`` over
-        ``len(atoms)`` in :meth:`starting_becsum` replaced by a per-atom stack.
+        or the first iteration contradicts itself" -- and that sentence only
+        means anything per *atom* once a texture is stateable. Checked on two
+        PAW oxygens at 90 degrees in
+        ``tests/unit/test_textured_seeding.py``: the sphere-integrated moment
+        of the starting charge and the one-centre ``becsum`` agree in direction
+        to 7.5e-6 on both sites, where the per-species split had them 90
+        degrees apart on one.
         """
         if not self.system.starting_moments:
             return None
@@ -3409,12 +3415,19 @@ class Calculation:
             diagonal = np.array([
                 occupations[nb] / (2 * l + 1) for nb, l, _ in projector_channels(pseudo)
             ])
-            per_spin = self._becsum_split(t) [:, None] * diagonal[None, :]
+            # ``(natom, nspin_mag)`` -- one row per atom rather than one per
+            # species, so a ``STARTING_MOMENTS`` texture reaches the one-centre
+            # occupations and not only the charge.
+            split = self._becsum_split_per_atom(t, atoms)
+            per_atom_spin = split[:, :, None] * diagonal[None, None, :]
             becsum.append(
-                jnp.broadcast_to(
-                    jnp.stack([jnp.diag(jnp.asarray(row)) for row in per_spin])[:, None],
-                    (self.nspin_mag, len(atoms), pseudo.nh, pseudo.nh),
-                )
+                jnp.stack([
+                    jnp.stack([
+                        jnp.diag(jnp.asarray(per_atom_spin[a, s]))
+                        for a in range(len(atoms))
+                    ])
+                    for s in range(self.nspin_mag)
+                ])
             )
         return tuple(becsum)
 
@@ -3434,6 +3447,29 @@ class Calculation:
             return np.ones(1)
         moment = self.starting_magnetization[t] * self.magnetization_directions[t]
         return np.concatenate([[1.0], moment])
+
+    def _becsum_split_per_atom(self, t: int, atoms) -> np.ndarray:
+        """``(natom_of_species, nspin_mag)``: the split, one row per *atom*.
+
+        The per-species version above starts every atom of a species pointing
+        the same way. With a ``STARTING_MOMENTS`` card that is wrong in exactly
+        the case the card exists for: the charge density carries the texture and
+        the one-centre occupations do not, so iteration 1 contradicts itself on
+        a PAW or ultrasoft dataset -- and for PAW the one-centre terms are a
+        *function* of ``becsum``, so the contradiction is in the Hamiltonian and
+        not only in the guess.
+
+        The rows are :meth:`local_seed_weights`, the card divided by each atom's
+        valence charge, because that is the same weight
+        :meth:`_noncollinear_starting_density` applies to the tabulated atomic
+        charge -- the two guesses have to agree about how polarized each atom
+        is, which is what :attr:`spin_weights` says one species at a time.
+        """
+        rows = self._becsum_split(t)
+        if not self.noncolin or self.nspin_mag == 1 or not self.system.starting_moments:
+            return np.broadcast_to(rows, (len(atoms), rows.size))
+        weights = self.local_seed_weights[np.asarray(atoms, dtype=int)]
+        return np.concatenate([np.ones((len(atoms), 1)), weights], axis=1)
 
     def starting_wavefunctions(self, hamiltonians, nbnd: int, span=None) -> jnp.ndarray:
         """The first guess at the wavefunctions, from the atomic orbitals.

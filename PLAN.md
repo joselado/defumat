@@ -12802,6 +12802,66 @@ is the negative channel again. This changes the seeded density of every existing
 input by a factor of `Z_v`; on hydrogen, which is what every committed texture test uses,
 `Z_v = 1` and nothing moves at all.
 
+### P77d -- A stated texture had three consumers and reached one. ✅ DONE.
+
+`defumat/scf/driver.py`, `hubbard/occupations.py`. `NONCOLLINEAR.md`'s Tier 1 item 5.
+`STARTING_MOMENTS` says which way each atom's moment points, and three things are built
+from it before the first Hamiltonian exists: the charge density, the Hubbard occupation
+matrix, and an ultrasoft or PAW dataset's atomic `becsum`. **Only the charge saw it.**
+
+`initial_ns_noncollinear` took its axis from the per-*species* `angle1`/`angle2` and wrote
+one 2x2 spin block into every slot of that species; `_becsum_split` was indexed by species
+and `starting_becsum` broadcast it over `len(atoms)`. So a texture on one species -- a
+helix, a cycloid, a two-sublattice antiferromagnet written with one label -- started every
+correlated site and every one-centre occupation pointing the *same* way while the charge
+carried the texture.
+
+**Why that is worse than a poor guess.** For PAW the one-centre terms are a *function* of
+`becsum`, so the two sites got a different Hamiltonian at iteration 1 than the density
+asked for -- it is in the operator, not only in the starting point. And nothing in the SCF
+turns a moment: noncollinear DFT+U is forced to `nosym` (`driver.py:1552-1565`), so the
+starting occupation matrix is the only steering there is, and
+`initial_ns_noncollinear`'s own docstring already said such a run "converges with the shell
+polarised along the wrong axis and reports success". These are transition-metal magnets --
+the systems that need a U and ship as PAW, and the user's stated targets.
+
+**Measured on two PAW oxygens at 90 degrees** (`tests/data/qe/o2-paw-texture.in`, card rows
+`(0,0,1.5)` and `(1.5,0,0)`), the one-centre moment per atom:
+
+| | atom 0 | atom 1 |
+|---|---|---|
+| card | `(0, 0, 1.5)` | `(1.5, 0, 0)` |
+| `becsum` before | `(0, 0, 0.3)` | `(0, 0, 0.3)` |
+| `becsum` after | `(0, 0, 1.5)` | `(1.5, 0, 0)` |
+
+and the two guesses now agree per atom: the sphere-integrated moment of the starting charge
+against the one-centre `becsum`, **7.5e-6** in direction on both sites, where the
+per-species split had them **90 degrees apart** on atom 1. The magnitudes agree too --
+1.4994 against 1.5000, the difference being the atomic charge's tail outside the
+integration radius, which is a property of the region rather than a disagreement.
+
+On two correlated nitrogens on one species (`n2-ldau-texture.in`) the Hubbard shells now
+point along `+z` and `+x` following the card, where both pointed along `+z`.
+
+**One sign convention, and getting it wrong would have been invisible.** The per-species
+routine swaps the two Hund's-rule fillings for a negative moment, because a scalar has no
+axis to carry the sign. With a per-atom *vector* the axis carries it -- `-m` along `z` is
+`+m` along `-z` -- so doing both would undo it. The swap is now conditional on there being
+no vector.
+
+**The per-species path is untouched**, which is most existing inputs:
+`bn-ldau-noncol.in`, the committed spinor DFT+U case validated against `pw.x` at 1.2e-7 Ry,
+has no card and its occupation matrix still comes from
+`starting_magnetization`/`angle1`/`angle2`. That is a test rather than a claim.
+
+**What is outstanding.** The audit asked for one number this does not have: the same
+two-site PAW antiferromagnet run to convergence with the per-species seed and with the
+per-atom one, comparing iteration count *and* converged per-site directions -- which is what
+would settle whether the old docstring's "the SCF repairs it and nothing is wrong at
+convergence" was true. That claim is now removed rather than disproved. P77's site-moment
+readout is what makes the converged directions observable, so the measurement is cheap and
+is the natural next step.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.

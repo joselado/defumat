@@ -293,7 +293,9 @@ def spin_averaged_ns(ns) -> jnp.ndarray:
     return jnp.broadcast_to(jnp.mean(ns, axis=0, keepdims=True), ns.shape)
 
 
-def initial_ns_noncollinear(setup, starting_magnetization, angle1, angle2) -> jnp.ndarray:
+def initial_ns_noncollinear(
+    setup, starting_magnetization, angle1, angle2, per_atom=None
+) -> jnp.ndarray:
     """``init_ns``'s spinor form: Hund's rule, along the species' own direction.
 
     The collinear routine fills the majority channel first and spreads the rest
@@ -304,28 +306,53 @@ def initial_ns_noncollinear(setup, starting_magnetization, angle1, angle2) -> jn
     turns a moment, so a spinor DFT+U run started with a moment along ``z`` on a
     species whose ``angle1`` points elsewhere converges with the shell polarised
     along the wrong axis and reports success.
+
+    ``per_atom`` is the ``(nat, 3)`` ``STARTING_MOMENTS`` field in Bohr
+    magnetons, and when it is given **the axis is taken per slot** rather than
+    per species. Without it a texture on one species -- a helix, a cycloid, a
+    two-sublattice antiferromagnet written with one label -- started every
+    correlated site of that species pointing the *same* way, while the charge
+    density carried the texture: iteration 1 then contradicted itself, and the
+    U term is the strongest thing in the first Hamiltonian for exactly the
+    transition-metal magnets that need one. Noncollinear DFT+U is forced to
+    ``nosym``, so the starting matrix is the only steering there is.
+
+    The sign is carried by the axis and not by a swap of the two fillings. A
+    moment of ``-m`` along ``z`` is ``+m`` along ``-z``, which is the same
+    state; doing both would undo it.
     """
     ns = np.zeros((4, setup.nslot, setup.ldmx, setup.ldmx), dtype=complex)
     magnetization = np.asarray(starting_magnetization, dtype=float)
     theta = np.deg2rad(np.asarray(angle1, dtype=float))
     phi = np.deg2rad(np.asarray(angle2, dtype=float))
+    textured = None if per_atom is None else np.asarray(per_atom, dtype=float)
     for slot, t in enumerate(setup.types):
         item = setup.species[t]
         ldim, total = item.ldim, item.occupation
-        moment = magnetization[t] if t < len(magnetization) else 0.0
+        if textured is None:
+            moment = magnetization[t] if t < len(magnetization) else 0.0
+            vector = None
+        else:
+            vector = textured[setup.atoms[slot]]
+            moment = float(np.linalg.norm(vector))
         if total > ldim:
             major, minor = 1.0, (total - ldim) / ldim
         else:
             major, minor = total / ldim, 0.0
         if moment == 0.0:
             major = minor = total / 2.0 / ldim
-        elif moment < 0.0:
+        elif vector is None and moment < 0.0:
+            # Per species there is no axis to carry the sign, so the two
+            # fillings swap. With a per-atom vector the axis carries it.
             major, minor = minor, major
-        axis = np.array([
-            np.sin(theta[t]) * np.cos(phi[t]),
-            np.sin(theta[t]) * np.sin(phi[t]),
-            np.cos(theta[t]),
-        ]) if t < len(theta) else np.array([0.0, 0.0, 1.0])
+        if vector is not None and moment > 0.0:
+            axis = vector / moment
+        else:
+            axis = np.array([
+                np.sin(theta[t]) * np.cos(phi[t]),
+                np.sin(theta[t]) * np.sin(phi[t]),
+                np.cos(theta[t]),
+            ]) if t < len(theta) else np.array([0.0, 0.0, 1.0])
         charge, spin = 0.5 * (major + minor), 0.5 * (major - minor)
         # ``(n/2) I + (m/2) sigma . n``, whose eigenvalues are the two fillings.
         block = charge * np.eye(2) + spin * np.array([

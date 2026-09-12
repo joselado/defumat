@@ -2,8 +2,8 @@
 
 ## 1. What this file is
 
-> **Status, 2026-09-12.** Items **1**, **2**, **6**, **7**, the guard half of **3** and **4** are
-> fixed (`9f806b0`, `1828c4e` and the commit after them), with the numbers folded into each entry below and into `PLAN.md`
+> **Status, 2026-09-12.** Items **1**, **2**, **6**, **7**, the guard half of **3**, **4** and **5**
+> are fixed (`9f806b0`, `1828c4e` and the commit after them), with the numbers folded into each entry below and into `PLAN.md`
 > P77/P77a; two defects found while fixing them -- `at_cell` never remeasuring the
 > integration spheres, and `forces/torque.py` guarding a per-point modulus with a global
 > norm -- are fixed with them. **Everything else in this file still stands.** Each fixed
@@ -326,6 +326,15 @@ against 1.0: it will come out at `Z_v`. Then transcribe `input.f90:1448-1449` an
 **Size.** Session.
 
 #### 5. A per-atom texture never reaches the DFT+U occupation matrix or the one-centre `becsum`
+
+**FIXED 2026-09-12.** `initial_ns_noncollinear` takes `per_atom` and its axis per
+*slot*; `_becsum_split_per_atom` gives `starting_becsum` one row per atom. On two PAW
+oxygens at 90 degrees the one-centre moments now follow the card -- `(0,0,1.5)` and
+`(1.5,0,0)` where both were `(0,0,0.3)` -- and the sphere-integrated charge moment and
+the `becsum` agree in direction to **7.5e-6** on both sites, where the per-species split
+had them 90 degrees apart on one. The unmeasured claim "the SCF repairs it and nothing
+is wrong at convergence" is **removed rather than disproved**; the run that would settle
+it is in `PLAN.md` P77d's outstanding paragraph, and P77's readout makes it cheap.
 
 **What.** A texture is stated once and consumed in three places -- the charge density, the
 Hubbard occupation matrix, and a PAW or ultrasoft dataset's atomic `becsum`. Only the

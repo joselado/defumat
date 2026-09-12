@@ -1,0 +1,38 @@
+! Two correlated nitrogen atoms on ONE species with a STARTING_MOMENTS texture,
+! one moment along z and one along x. Noncollinear DFT+U is forced to nosym, so
+! the starting occupation matrix is the only thing that says which way each
+! shell points: nothing in the SCF turns a moment.
+&control
+      calculation = 'scf'
+   /
+   &system
+      ibrav = 4
+      celldm(1) = 4.7419,
+      celldm(3) = 4.3,
+      nat = 2
+      ntyp = 1
+      ecutwfc = 35
+      ecutrho = 350.0
+      occupations = 'smearing'
+      smearing = 'gauss'
+      degauss = 0.01
+      noncolin = .true.
+      nosym = .true.
+      lspinorb = .true.
+      starting_magnetization(1) = 0.5
+   /
+   &electrons
+      conv_thr =  1.d-8
+   /
+   ATOMIC_SPECIES
+   N 14.00674  N.rel-pz-n-rrkjus_psl.1.0.0.UPF
+   ATOMIC_POSITIONS crystal
+   N   0.010000000  -0.288675135   0.000000000
+   N   0.000000000   0.288675135   0.000000000
+   K_POINTS automatic
+   3 3 1 0 0 0
+   HUBBARD ortho-atomic
+   U   N-2p   2.0
+STARTING_MOMENTS
+  0.0  0.0  2.5
+  2.5  0.0  0.0

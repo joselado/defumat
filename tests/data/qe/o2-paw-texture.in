@@ -1,0 +1,29 @@
+! Two PAW oxygen atoms with a STARTING_MOMENTS texture: one moment along z
+! and one along x. The card has to reach the atomic becsum as well as the
+! charge, because for PAW the one-centre terms are a *function* of becsum --
+! so a split by the per-species starting_magnetization does not merely give a
+! poorer guess, it puts a different Hamiltonian on the two sites at iteration 1.
+&control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 1, celldm(1) = 14.0,
+    nat = 2, ntyp = 1,
+    ecutwfc = 30, ecutrho = 240,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.02
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.3
+ /
+ &electrons
+    conv_thr = 1.0d-6
+ /
+ATOMIC_SPECIES
+ O  15.999  O.pz-kjpaw.UPF
+ATOMIC_POSITIONS {crystal}
+ O  0.25 0.25 0.25
+ O  0.75 0.75 0.75
+K_POINTS {gamma}
+STARTING_MOMENTS
+  0.0  0.0  1.5
+  1.5  0.0  0.0
