@@ -104,16 +104,32 @@ def test_no_moment_means_no_filtering():
     assert kept.rotations == full.rotations
 
 
+#: The committed inputs that **are** one-species compensated magnets, so the
+#: filter is *supposed* to cut them. Kept as a list rather than a prefix match
+#: because the sweep below turns it into a second positive assertion: every name
+#: here must lose operations, and every name not here must keep all of them.
+#: ``o2-paw-afm.in`` earned its place by breaking the sweep when it was added --
+#: which is the sweep working, since a new case silently joining the "unchanged"
+#: side is exactly how a coverage claim goes quietly false.
+DELIBERATELY_CUT = {
+    "h2-mirror-afm.in",
+    "h2-mirror-afm-nosym.in",
+    "o2-paw-afm.in",
+}
+
+
 def test_the_filter_changes_nothing_on_the_committed_collinear_inputs():
     """A silent regression here would move numbers validated against ``pw.x``.
 
-    None of the committed collinear cases is a one-species compensated magnet
-    -- precisely because that spelling did not work -- so the filter must be a
-    no-op on all of them.
+    Apart from the handful in :data:`DELIBERATELY_CUT`, none of the committed
+    collinear cases is a one-species compensated magnet -- precisely because
+    that spelling did not work -- so the filter must be a no-op on all of them.
     """
+    expected_to_cut = []
     unchanged, cut, unparsed = [], [], []
     for path in sorted(QE.glob("*.in")):
-        if path.name.startswith("h2-mirror-afm"):
+        if path.name in DELIBERATELY_CUT:
+            expected_to_cut.append(path)
             continue
         try:
             system = system_from_file(path)
@@ -137,6 +153,18 @@ def test_the_filter_changes_nothing_on_the_committed_collinear_inputs():
         f"least 20); inputs that did not build: {unparsed}"
     )
     assert not cut, f"the filter cut operations on {cut}"
+
+    # The other half: the exemptions are exemptions and not a quiet allowlist.
+    # ``nosym`` inputs have a group of one and nothing to cut, so they are only
+    # required not to be *larger* than the filter would leave them.
+    for path in expected_to_cut:
+        system = system_from_file(path)
+        full = find_symmetries(system.cell, system.structure)
+        if system.nosym:
+            continue
+        assert system.symmetry_group().nsym < full.nsym, (
+            f"{path.name} is listed as a case the filter cuts and it did not"
+        )
 
 
 @pytest.mark.slow
