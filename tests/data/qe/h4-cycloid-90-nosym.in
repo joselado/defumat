@@ -7,11 +7,16 @@
 ! case the two runs agree site by site, or it is too large, in which case this
 ! one keeps a texture the other has lost.
 !
-! **The discriminator is the singular values of the (nat, 3) matrix of site
-! moments**, not their norms: two nonzero singular values mean the moments still
-! span a plane, which is what a cycloid is, and one means they have collapsed
-! onto a line. `SCFResult.site_moments` is that matrix and `history` carries it
-! per iteration.
+! **The discriminator is a pair, and the singular values alone are not it.** Two
+! nonzero singular values of the (nat, 3) site-moment matrix mean the moments
+! still span a plane, which is what a cycloid is -- but that ratio is scale free,
+! so it reads as a perfect cycloid on a cell whose moments have gone to nothing.
+! The same chain at 3 bohr spacing instead of 5 gives singular values
+! [3.24e-4, 3.23e-4, 1.4e-23]: planar to 1e-5 and collapsed by a factor of 450
+! from iteration 1. What has to be asserted is the pair -- sigma_2/sigma_1 for
+! the shape, and sigma_1 against its own value at iteration 1 for whether there
+! is anything left to have a shape. `SCFResult.site_moments` is that matrix and
+! `history` carries it per iteration, so both halves are available.
  &control
     calculation = 'scf'
  /

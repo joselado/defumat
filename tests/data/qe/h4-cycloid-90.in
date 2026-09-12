@@ -6,11 +6,13 @@
 ! **Symmetry is left ON, which is the point of the file.** The simple-tetragonal
 ! lattice gives 16 operations for a ferromagnet along z and the magnetic filter
 ! cuts them to 4 for this texture. Whether that filter is enough was an open
-! question: the seed's residual under its own group is 6e-16, and under the
+! question: the seed's residual under its own group is 6.7e-16, and under the
 ! ferromagnet's 16 operations the same density has its magnetization removed
-! *entirely* (residual 1.0, and every site moment goes from 0.27 to 1e-19).
-! `h4-cycloid-90-nosym.in` is the same cell with no symmetry at all, and the two
-! are run as a pair: what survives an SCF here must survive it there.
+! *entirely* -- residual 1.0, and every site moment goes from 0.460 mu_B to
+! 1.7e-18. `h4-cycloid-90-nosym.in` is the same cell with no symmetry at all, and
+! the two are run as a pair: what survives an SCF here must survive it there.
+! They do: 0.4543 mu_B per site either way, four moments 90.00 degrees apart, and
+! the two total energies 8.0e-9 Ry apart.
 !
 ! There is no constraint and no field. Nothing in the SCF holds an angle, so
 ! whether the cycloid is still there at convergence is a statement about the

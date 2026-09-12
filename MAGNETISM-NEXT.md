@@ -53,6 +53,9 @@ number, because the whole rule of this project is that a claim is a number:
 | nothing held a texture that was not the ground state | it does — `'atomic'`, not `'atomic texture'` | 120° held to **0.55° per site** in 38 iterations, against a collapse to 180° in ten |
 | every DFT+U continuation into `nspin = 4` was refused | promoted into the two diagonal spin blocks | 4 iterations against 78 from scratch |
 | a spinor `ns` lost its imaginary part through `starting_ns` | the complex side of the precision policy | every `starting_ns=` and every noncollinear DFT+U resume, silently collinear since P62b |
+| nothing said whether the group a run uses belongs to the density it starts from | `Calculation.symmetry_residual`, checked before iteration 1 and warned above 1e-3 | 6.7e-16 from a card against **1.0** for the same texture under a group too large; the charge reads 5.9e-16 in *both* (P80) |
+| no **vector** texture had ever been carried through an SCF and inspected | one has: a 90-degree cycloid on four hydrogens, symmetrised and free | 0.4543 mu_B per site either way, angles 90.00 degrees, the pair 8.0e-9 Ry apart (P80) |
+| a relaxation of a magnet said nothing per site | `site_charges`/`site_moments` on all three drivers' step objects | mechanical; and the *final* geometry is the one step that cannot show a collapse (P80) |
 
 Three of those were **not** in the audit and were found while fixing it: the spinor `ns`
 cast, nickel's `conv_thr` (`OPEN.md` Y1), and `'atomic texture'`'s `1/|m|`. The first is
@@ -259,27 +262,41 @@ first.
 These are `NONCOLLINEAR.md` §6's open questions, with the ones P77–P79 answered removed.
 None is a phase; each is one or a few runs, and several are an afternoon.
 
-**Q1 — has a *vector* texture ever survived an SCF?** [O1, noncollinear half] The collinear
-half is now a committed test (`h2-mirror-afm.in`, survives with symmetry on, where before it
-converged cleanly to the nonmagnetic state 6.6 meV up). No **vector** texture has been
-carried through an SCF and inspected. Take the four-atom 90-degree cycloid already built at
-`tests/unit/test_textured_symmetry.py`, converge it twice at `conv_thr = 1e-8`, once with
-`nosym = .true.` and once without, and compare the per-site directions. **The discriminator
-is the singular values of the `(nat, 3)` matrix of directions**: two nonzero means the
-texture held, and `[3.873, 0.0056, 0]` is the collapse signature P75 recorded.
-`SCFResult.site_moments` is that matrix, and `history` has it per iteration, so the
-inspection no longer has to be typed at a prompt.
+**Q1 — has a *vector* texture ever survived an SCF? Yes; closed by P80.** The pair is
+`h4-cycloid-90.in` and `h4-cycloid-90-nosym.in`: 0.4543 mu_B per site either way, four
+moments 90.00 degrees apart, the two total energies 8.0e-9 Ry apart, and the symmetrised
+run planar to **1.7e-21** where the free one reaches only 8e-6 -- the four surviving
+operations forbid the out-of-plane component, so symmetry buys exactness here rather than
+costing physics.
+
+**What did not survive is this question's own discriminator, and that is the finding to
+carry forward.** "Two nonzero singular values means the texture held" is **scale-free**. The
+same cell at 3 bohr spacing instead of 5 gives `[3.235e-4, 3.231e-4, 1.4e-23]`, neighbour
+angles 90.06/89.89/89.99/90.05, and the two runs agreeing to 1.1e-8 Ry -- a perfect cycloid
+by that criterion, and *nothing*: the moments had fallen from 0.1465 at iteration 1 by a
+factor of 450, because a hydrogen chain is not magnetic at 3 bohr. Assert the **pair**:
+`sigma_2/sigma_1` for the shape, and `sigma_1` against its own value at iteration 1 for
+whether there is anything left to have a shape. 5 bohr reads (0.99998, 1.012) and 3 bohr
+(0.99988, 2.2e-3).
 
 **Q2 — does one survive on a production magnet?** [O2] P75's own outstanding item: the
 45-atom NiBr2 cycloid has not converged to a textured state at any k-mesh. The run that
 supplies the figure is the open question, not the feature.
 
-**Q3 — how much does the symmetriser remove?** [O3] Compute `‖m − sym(m)‖ / ‖m‖` on the
-first density, before mixing; both arrays are in hand inside `Calculation.symmetrize`. **Feed
-it a case that must trip it** — the four-atom cycloid handed to `run_scf` as a starting
-density with **no** card, where the residual must be order one — and the same run with the
-card, where it must be at round-off. Warn above ~1e-3. This is the in-run diagnostic that
-would have caught P75 at iteration 6 instead of after 23 clean ones.
+**Q3 — how much does the symmetriser remove? All of it; closed by P80.** It removes the
+magnetization *entirely* -- residual **1.0**, every site moment from 0.460 mu_B to 1.7e-18 --
+because averaging four directions 90 degrees apart over a group that permutes the four sites
+gives zero rather than something smaller. From a `STARTING_MOMENTS` card the same figure is
+6.7e-16, at both group sizes. `Calculation.symmetry_residual` reports the charge and the
+magnetization **apart**, and that is not cosmetic: in the failing case the charge residual is
+5.9e-16, so a residual computed on the density as one object reads as a clean pass.
+
+**One correction to this question as it was posed.** It asked for the *first output* density.
+That is the wrong array: an output density is a wedge sum and is not invariant by
+construction -- putting the rest of the zone back is what `sym_rho` is for -- so the same
+number there is large exactly when symmetry is working and cannot be told from the failure.
+The seed is where there is no ambiguity, and it is also *earlier*: the warning fires before
+iteration 1 rather than at iteration 6.
 
 **Q4 — is the noncollinear GGA branch correct at all?** [O8, and P77a's remaining half] The
 *guard* is in and measured (nan on 243 components → finite). Whether the branch is right has
@@ -335,9 +352,11 @@ gitignored and absent here, so neither can be re-executed and
 or restore the vendored tree first. **Do not add a cell to one of those two and commit it
 unexecuted.**
 
-**Site moments are not reported by every driver.** `run_relax`, `run_vc_relax` and the
-response stack do not carry `site_moments`/`site_charges` through, so a relaxation of a
-magnet still says nothing per site. One pass, mechanical.
+**Site moments are not reported by every driver. Closed by P80 for the relaxations; the
+response stack is still open.** `RelaxStep`, `VCRelaxStep` and `SpiralRelaxStep` carry
+`site_charges` and `site_moments` at each of their own steps, and the console line carries
+the SCF's own `|m|_site = min..max` suffix. The response stack does not, and has no obvious
+step object to hang them on.
 
 **`colin_mag = 2` / `t_rev` is not implemented for a collinear run.** P77 added the
 collinear magnetic filter in its `colin_mag == 1` form, which discards time-reversed

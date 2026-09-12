@@ -13161,21 +13161,23 @@ state.
 
 **Q3 asked how much the symmetriser removes. It removes all of it, and the number is 1.0.**
 `Calculation.symmetry_residual` is `||rho - sym(rho)|| / ||rho||` on the density a run starts
-from, reported as a **pair** -- the charge and the magnetization apart. On a four-atom
-hydrogen chain with a 90-degree-per-site cycloid
-(`tests/unit/test_seed_symmetry.py`, and `tests/data/qe/h4-cycloid-90.in`):
+from, reported as a **pair** -- the charge and the magnetization apart. On
+`tests/data/qe/h4-cycloid-90.in`, a four-atom hydrogen chain with a 90-degree-per-site
+cycloid on one species:
 
 | seed | group | charge | magnetization |
 |---|---|---|---|
-| the cycloid, from its `STARTING_MOMENTS` card | its own, `nsym = 4` | 5.2e-16 | **6.2e-16** |
-| a ferromagnet along z, from `starting_magnetization` | its own, `nsym = 16` | 5.7e-16 | 5.1e-16 |
-| **the cycloid's density handed to the ferromagnet's group** | `nsym = 16` | **5.7e-16** | **1.0** |
+| the cycloid, from its `STARTING_MOMENTS` card | its own, `nsym = 4` | 5.8e-16 | **6.7e-16** |
+| a ferromagnet along z, from `starting_magnetization` | its own, `nsym = 16` | 5.9e-16 | 6.5e-16 |
+| **the cycloid's density handed to the ferromagnet's group** | `nsym = 16` | **5.9e-16** | **1.0** |
 
-Row three is P75 reproduced in one call and no SCF: every site moment goes from 0.27 mu_B to
-1e-19, because averaging four directions 90 degrees apart over a group that permutes the
-four sites gives **zero** rather than something smaller. Rows one and two are the magnetic
-filter (`sgam_at_mag`, `sgam_at_collin`) doing exactly its job, at both group sizes -- which
-is what says the number measures invariance and not how many operations there are.
+Row three is P75 reproduced in one call and no SCF: every site moment goes from
+**0.460 mu_B to 1.7e-18**, because averaging four directions 90 degrees apart over a group
+that permutes the four sites gives **zero** rather than something smaller. Rows one and two
+are the magnetic filter (`sgam_at_mag`, `sgam_at_collin`) doing exactly its job, at both
+group sizes -- which is what says the number measures invariance and not how many operations
+there are. `tests/unit/test_seed_symmetry.py` asserts the same three rows on its own inline
+cubic cell, where the counts are the same and the sphere moment is 0.27 mu_B.
 
 **The charge cannot see it, which is why the pair is reported apart.** In the failing row the
 charge residual is 5.7e-16 -- the group leaves the charge *exactly* alone -- so a residual
@@ -13194,6 +13196,37 @@ from a card a nonzero residual is a defect in the filter, handed in it is the ca
 that does not match the caller's density and `nosym` is the fix. It costs one symmetrisation
 of the seed, once per run, and changes nothing the run computes (the trap: a diagnostic must
 not change the run it is diagnosing).
+
+**Q1 asked whether a *vector* texture has ever survived an SCF. It has, and the symmetrised
+run and the free one agree.** The same four-atom chain, converged twice at `conv_thr = 1e-8`
+(`h4-cycloid-90.in` and `h4-cycloid-90-nosym.in`, 5 bohr between hydrogens):
+
+| | `nosym` | symmetry on (`nsym = 4`) |
+|---|---|---|
+| iterations | 4 | 4 |
+| total energy (Ry) | -3.8187830180 | -3.8187830260 |
+| site moment (mu_B) | 0.4542 | 0.4543 |
+| neighbour angles | 90.00, 90.00, 90.00, 90.00 | 90.00, 90.00, 90.00, 90.00 |
+| singular values | 0.64240, 0.64239, **8.1e-6** | 0.64240, 0.64239, **1.7e-21** |
+
+The two agree to **8.0e-9 Ry** and site by site to 8e-5 mu_B, which is P77's magnetic filter
+measured on a texture that is a genuine vector field rather than a collinear one with a sign.
+The third singular value is the one place the pair differs and the difference is the right
+way round: the four surviving operations *forbid* an out-of-plane component, so the
+symmetrised run is planar to **1.7e-21** where the free run finds planarity only to 8e-6 --
+symmetry buying exactness rather than costing physics.
+
+**Q1's own proposed discriminator is scale-free, and it gave a false pass.** The queue's
+criterion was "two nonzero singular values means the texture held". The *same* cell at 3 bohr
+spacing instead of 5 gives `[3.235e-4, 3.231e-4, 1.4e-23]` -- two equal nonzero values, a
+third at machine zero, neighbour angles 90.06/89.89/89.99/90.05, and the symmetrised and free
+runs agreeing to 1.1e-8 Ry. By that criterion it is a perfect cycloid. It is **nothing**: the
+moments are 2e-4 mu_B, having fallen from 0.1465 at iteration 1 by a factor of **450**, and
+the cell is simply not magnetic at 3 bohr. So the discriminator is a **pair** -- `sigma_2 /
+sigma_1` for the shape and `sigma_1` against its own value at iteration 1 for whether there
+is anything left to have a shape. The 5-bohr cell reads (0.99998, **1.012**) and the 3-bohr
+one (0.99988, **2.2e-3**). This is the recurring "a check whose null result cannot be told
+from a pass" in a new place, and the place is the queue's own text.
 
 **The owed deliverable: all three relaxation drivers now carry the site moments per ionic
 step.** `RelaxStep`, `VCRelaxStep` and `SpiralRelaxStep` gained `site_charges` and

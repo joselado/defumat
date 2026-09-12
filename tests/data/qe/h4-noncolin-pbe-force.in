@@ -44,7 +44,8 @@
     nbnd = 24
  /
  &electrons
-    mixing_beta = 0.3
+    mixing_beta = 0.1
+    electron_maxstep = 300
     conv_thr = 1.0d-11
  /
 ATOMIC_SPECIES
