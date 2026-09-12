@@ -53,7 +53,8 @@ from defumat.xc.functional import (
 )
 
 __all__ = ["Potential", "v_of_rho", "hartree", "exchange_correlation",
-           "gradient_correction", "meta_exchange", "scf_accuracy", "scf_accuracy_terms", "total_charge",
+           "gradient_correction", "meta_exchange", "scf_accuracy", "scf_accuracy_terms", "scf_accuracy_split",
+           "total_charge",
            "with_core", "as_potential_components",
            "DEFAULT_FUNCTIONAL"]
 
@@ -151,8 +152,22 @@ def scf_accuracy(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell) -> jnp
     uniform shift of the magnetization is a real error where a uniform shift of
     the charge is forbidden by neutrality.
     """
+    return scf_accuracy_split(residual_r, gvectors, cell)[0]
+
+
+def scf_accuracy_split(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell):
+    """``(dr2, charge, magnetization)`` -- the total **and** its two halves.
+
+    One function rather than two, and one transform of the residual rather than
+    two, because both numbers are wanted every iteration and the residual's FFT
+    is not free. The total is the *fused* ``charge + magnetic`` computed here
+    and not a Python sum of the two returned floats: those differ by one ulp
+    (2.2e-16 relative, measured), and ``dr2`` is what QE's ``ethr`` schedule is
+    computed from, so one ulp there moves the eigensolver's threshold and with
+    it the last digits of every eigenvalue.
+    """
     charge, magnetic = scf_accuracy_terms(residual_r, gvectors, cell)
-    return charge + magnetic
+    return charge + magnetic, charge, magnetic
 
 
 def scf_accuracy_terms(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell):

@@ -551,8 +551,16 @@ diagonal spin blocks with the off-diagonal ones zero, which is the shape
 `initial_ns_noncollinear` builds for a moment along z; `4 -> 4` is a pass-through, and it is
 the checkpoint resume. Coming back keeps the diagonal and **refuses by name** above a
 transverse block of 1e-8, because the diagonal of a canted occupation matrix is a different
-state and not a coarser one. Unit coverage of the array algebra; the end-to-end
-`run_scf(starting_from=...)` identity is still owed.
+state and not a coarser one.
+
+**The end-to-end test found a second defect the array-algebra one could not.**
+`driver.py`'s `starting_ns` branch pushed the matrix through `precision.as_real`, which for
+a spinor `ns` discards the imaginary part -- the off-diagonal spin blocks, where a canted
+shell lives. Every `run_scf(starting_ns=)` and every noncollinear DFT+U resume came back
+with the shell rotated onto the collinear axis, converged, and silent; NumPy's
+`ComplexWarning` was the only trace. Measured, on nickel with `U = 4`: the resume now
+reproduces an uninterrupted run, and a collinear state promoted into a spinor run converges
+in **4 iterations against 78** from scratch, agreeing with its collinear source to 6e-9 Ry.
 
 **What.** Converging a hard magnet is staged: get a collinear ferromagnet or
 antiferromagnet, then promote it and let the moments cant. That route is closed for

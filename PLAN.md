@@ -2153,7 +2153,8 @@ a force short of one term.
 *Refused, by name rather than ignored:* `lda_plus_u_kind = 1` (Liechtenstein's full
 formulation with `J`, `B`, `E2`, `E3`), `lda_plus_u_kind = 2` (the intersite `V`), the
 background channels (`Hubbard_U2`), the orbital-resolved variant, the `wf` and `pseudo`
-projector sets, noncollinear `ns_nc`, DFT+U on a spin spiral, and a symmetry group carrying
+projector sets, noncollinear `ns_nc` (**done in P62b**, and the continuation into it in
+P79), DFT+U on a spin spiral, and a symmetry group carrying
 time-reversed operations (`new_ns`'s `colin_mag == 2` spin flip, which no case here
 exercises: FeO's two sublattices are distinct *species*, so no operation maps one to the
 other). Also not done: `hub_pot_fix`, QE's protocol of freezing `v_hub` when
@@ -2627,10 +2628,18 @@ and re-seeding `becsum`: the projector counts differ (18 against 34 for platinum
 source `becsum` of the wrong shape is dropped with a warning rather than reshaped, because
 that is a different pseudopotential and not a different spin regime.
 
-**Also refused by name:** a Hubbard `U` crossing into `nspin = 4` (`ns_nc` is refused by name
-in P20, so there is nothing to promote into), a grid or an electron count that does not
-match, and a spiral target for the wavefunctions, whose two components live on different
-plane-wave spheres.
+**Also refused by name:** a grid or an electron count that does not match, and a spiral
+target for the wavefunctions, whose two components live on different plane-wave spheres.
+
+*A Hubbard `U` crossing into `nspin = 4` was refused here too, and is not any more* (P79).
+The reason given was that "`ns_nc` is refused by name in P20, so there is nothing to promote
+into" -- which P62b made false without anyone editing this paragraph. The promotion is the
+density's own rule one axis out: a collinear pair goes into the two **diagonal** spin blocks
+of the `(4, nslot, ldmx, ldmx)` spinor `ns` with the off-diagonal ones zero. Two workflows
+were closed by it: converging a hard magnet in stages (collinear antiferromagnet, then
+promote and let the moments cant), and -- because the refusal was gated on the *target's*
+`nspin` alone -- the `4 -> 4` **checkpoint resume**, so a wall-clock-killed noncollinear
+DFT+U run could not restart from its own `checkpoint_dir`.
 
 *Notebook 18.*
 
@@ -8790,8 +8799,10 @@ linear tensor vanishes under time reversal, so Elk *applies* a large external
 field to break it by hand and differences against a small further change. The
 magnetism is induced rather than spontaneous, which makes a plain gapped
 semiconductor usable -- and GaAs is zincblende, so the other symmetry that would
-force zero is broken too. Elk's other example, NiO-AFM, is out of reach here for
-an unrelated reason: it needs DFT+U with a noncollinear `ns_nc`, which is refused.
+force zero is broken too. Elk's other example, NiO-AFM, was out of reach here for
+an unrelated reason -- it needs DFT+U with a noncollinear `ns_nc` -- and **that
+reason has since gone**: P62b implemented `ns_nc` and P79 opened the promotion
+into it. Whether the rest of this quantity works on that cell is untested.
 
 **Two blockers, and the first is a real trap.** *Elk's `bfieldc` and QE's
 `B_field` are not the same normalisation.* Transcribing Elk's `0.1` literally
@@ -12946,13 +12957,26 @@ the magnetization residual by a constant, a factor of 13.6 apart at `G_min` on
 `fe-mag-1k`, so an `accuracy` below `conv_thr` bounds the moment much more weakly than it
 bounds the charge.
 
-*One trap, paid for here.* The first version computed `accuracy` **as** the sum of the two
-halves. That differs from the fused expression by one ulp -- **2.2e-16** relative, measured
-over eight random residuals -- and `accuracy` is not only reported: `electrons.f90`'s
-`ethr` schedule is computed from it, so one ulp moves the eigensolver's threshold and with
-it the last digits of every eigenvalue. The reported total is now still the fused value and
-the split is computed separately. **A diagnostic must not change the run it is
-diagnosing**, and the cost of finding that out was a four-minute nickel run.
+*One trap and one cost, both paid for here.* The first version computed `accuracy` **as** a
+Python sum of the two halves. That differs from the fused expression by one ulp --
+**2.2e-16** relative, on one residual in four -- and `accuracy` is not only reported:
+`electrons.f90`'s `ethr` schedule is computed from it, so one ulp moves the eigensolver's
+threshold and with it the last digits of every eigenvalue. **A diagnostic must not change
+the run it is diagnosing.**
+
+The second version computed the total and the split *separately*, which preserved the
+historical value bit for bit and paid a second transform of the residual for it:
+**12.2 ms per iteration** on a 64³ grid at `nspin_mag = 4`, against 12.4 ms for one call
+returning all three. So the answer is one function, `scf_accuracy_split`, returning
+`(dr2, charge, magnetic)` from one FFT, with the total the *fused* `charge + magnetic`
+rather than a Python sum of the two returned floats.
+
+The honest consequence, since it is exactly the trap above: XLA fuses a one-output and a
+three-output function differently, so this total differs from the old `scf_accuracy`'s by
+one ulp on about one residual in four. That is a change against a *historical* value and
+not against a more correct one -- neither association is righter -- and what it buys is the
+property a reader will actually check, `accuracy == charge + magnetic` exactly, in one
+transform instead of two.
 
 **Two silences at the ends of a run.** `run_scf` returned an unconverged result with no
 warning -- the facade raises, and the functional entry point, which is the one a script
@@ -13077,10 +13101,40 @@ back keeps the diagonal, which is exact only while the shell is polarised along 
 transverse block above `TRANSVERSE_NS = 1e-8` is **refused by name** rather than dropped:
 taking the diagonal of a canted occupation matrix is a different state, not a coarser one.
 
-**What is outstanding.** The Elk feedback field above; and the `2 -> 4` promotion has unit
-coverage of the array algebra but no end-to-end run -- P62b's collinear-as-spinor identity
-reached through `run_scf(starting_from=...)` instead of from scratch is the test that would
-close it, and it is an SCF pair rather than a session's worth of work.
+**The end-to-end test found a second defect, and it is the reason the mock was not enough.**
+`driver.py`'s `starting_ns` branch pushed the array through `precision.as_real`, which for a
+spinor `ns` -- `(4, nslot, ldmx, ldmx)` **complex** -- discards the imaginary part, and the
+off-diagonal spin blocks are where a canted shell lives. So *every* `run_scf(starting_ns=)`
+and every checkpoint resume of a noncollinear DFT+U run came back with the shell rotated
+onto the collinear axis, converged, and said nothing. NumPy raised a `ComplexWarning` from
+inside `jnp.asarray` and nothing was listening. `promote_ns` could have been correct in
+every element and the resume still wrong, which is exactly this file's own "a check whose
+null result cannot be told from a pass": the array-algebra test passes whether or not the
+driver routes anything through it.
+
+**The numbers, from `tests/regression/test_noncollinear_hubbard_resume.py`** (nickel,
+`U = 4`, `J = 0.9`, ultrasoft, two atoms):
+
+| run | iterations | total energy (Ry) |
+|---|---|---|
+| collinear | 42 | -171.0002508525 |
+| spinor, from scratch | **78** | -171.0002443437 |
+| spinor, promoted from the collinear one | **4** | -171.0002508585 |
+
+Four against seventy-eight is the feature. The energy is asserted against the **collinear**
+run, not the fresh spinor one: no cant develops here, so the promoted run is P62b's
+collinear-as-spinor identity reached through the continuation, and it agrees to **6e-9 Ry**.
+The fresh spinor run lands 6.5e-6 Ry *higher* with off-diagonal spin traces of 1e-5 -- a
+neighbouring, slightly canted minimum that 78 iterations from `initial_ns_noncollinear`
+found and the promotion stepped over. Holding the two spinor runs to each other would pin
+which minimum a from-scratch start falls into.
+
+One more number, and it is `OPEN.md` Y1 for the third time in a day: those two states agree
+in **energy to 6e-9 Ry** and in `Tr ns` to **6e-5 out of 4.34**, both having stopped on
+`dr2 < 1e-8`. `dr2` bounds a magnetic quantity two to four orders more weakly than it bounds
+an energy, and the test's tolerance is set from that measurement rather than from hope.
+
+**What is outstanding.** The Elk feedback field above.
 
 ## 4. Validation strategy
 

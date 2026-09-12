@@ -561,6 +561,17 @@ has none, because nothing in the SCF breaks spin symmetry on its own and an
 unseeded promotion would converge back to the unpolarized solution and report
 success.
 
+A \code{HUBBARD} card comes along: the occupation matrix promotes with the
+density, a collinear pair going into the two \emph{diagonal} spin blocks of the
+spinor \code{ns} with the off-diagonal ones zero. That closes the staged route
+into a hard magnet --- converge the collinear antiferromagnet, promote it, let
+the moments cant --- and, because a spinor-to-spinor promotion is the same code
+path, the \textbf{checkpoint resume} of a noncollinear DFT+U run. Coming back
+the other way keeps the diagonal, which is exact only while the shell is
+polarised along $z$, so a transverse block above $10^{-8}$ is refused rather
+than dropped: the diagonal of a canted occupation matrix is a different state,
+not a coarser one.
+
 \textbf{Convergence.} \code{mixing\_mode} selects \code{anderson} (default),
 \code{linear}, \code{broyden}, Kerker/Thomas--Fermi preconditioning (\code{TF}),
 or \code{local-TF}; \code{scf\_solver} offers a Newton--Krylov alternative that

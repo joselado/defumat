@@ -1636,6 +1636,14 @@ more weakly than it bounds the charge. `<L>` is a moment. This is `NONCOLLINEAR.
 18's prediction, found in the wild the same day the split that measures it landed: the two
 halves are now on `scf.history` as `charge_accuracy` and `magnetic_accuracy`.
 
+**It recurred twice more the same day**, which is what makes it a section rather than a test
+fix. A noncollinear DFT+U promotion and its collinear source agree in **total energy to
+6e-9 Ry** and in `Tr ns` to **6e-5 out of 4.34**, both having stopped on `dr2 < 1e-8`. And a
+from-scratch spinor run of the same cell converged 6.5e-6 Ry *above* the promoted one, into
+a neighbouring minimum with off-diagonal spin traces of 1e-5 -- a real cant of the size the
+convergence criterion does not resolve. In all three cases the energy is converged two to
+four orders tighter than the magnetic quantity read off the same state.
+
 **What is not settled.** The three-orientation spread is now measured at one cutoff on one
 cell. Whether `1e-12` is the right default for a magnetic run generally, and whether the
 `ethr` schedule should be driven by the magnetization half rather than the sum on a

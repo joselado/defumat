@@ -134,7 +134,7 @@ from defumat.scf.potential import (
     as_potential_components,
     fixed_quantization_axis,
     scf_accuracy,
-    scf_accuracy_terms,
+    scf_accuracy_split,
     v_of_rho,
 )
 from defumat.xc.mgga import thomas_fermi_tau
@@ -183,7 +183,7 @@ def _field_potential(field, rho_r, cell, scale):
 #: it comes from the *input* magnetization and cannot change during a run.
 _potential_of_rho = jax.jit(v_of_rho, static_argnums=(6,))
 _accuracy = jax.jit(scf_accuracy)
-_accuracy_terms = jax.jit(scf_accuracy_terms)
+_accuracy_split = jax.jit(scf_accuracy_split)
 
 
 #: Where ``ethr`` starts, from ``PW/src/setup.f90``: the starting potential is a
@@ -4313,8 +4313,17 @@ def run_scf(
         if starting_ns is None:
             ns_state = calculation.starting_ns()
         else:
-            # Through the precision policy, never a literal dtype (config.py).
-            ns_state = system.kpoints.precision.as_real(starting_ns)
+            # Through the precision policy, never a literal dtype (config.py)
+            # -- and through the **complex** side of it for a spinor, because a
+            # noncollinear ``ns`` is ``(4, nslot, ldmx, ldmx)`` complex and its
+            # two off-diagonal spin blocks are where the canting lives. Forcing
+            # it real discarded exactly those, silently, on every
+            # ``starting_ns=`` and every checkpoint resume of a noncollinear
+            # DFT+U run: the shell came back collinear and the run converged.
+            precision = system.kpoints.precision
+            spinor = np.iscomplexobj(np.asarray(starting_ns))
+            ns_state = (precision.as_complex if spinor else precision.as_real)(
+                starting_ns)
             expected = ns_shape(calculation.hubbard, calculation.nspin)
             if ns_state.shape != expected:
                 raise ValueError(
@@ -4535,17 +4544,16 @@ def run_scf(
             # the conservative direction. Using the smooth GVectors here would
             # be a silent error whenever they differ: their fft_index addresses
             # a smaller box than the array being gathered from.
-            # **The reported total stays the fused expression.** Splitting it
-            # and adding the halves back in Python differs by one ulp -- 2.2e-16
-            # relative, measured -- and ``accuracy`` is not only reported: the
-            # ``ethr`` schedule is computed from it, so one ulp there moves the
+            # One call, three numbers, **one** transform of the residual. The
+            # total is the fused ``charge + magnetic`` and not a Python sum of
+            # the two halves: those differ by one ulp -- 2.2e-16 relative,
+            # measured -- and ``accuracy`` is not only reported, the ``ethr``
+            # schedule is computed from it, so one ulp there moves the
             # eigensolver's threshold and with it the last digits of every
-            # eigenvalue. A diagnostic must not change the run it is diagnosing.
-            accuracy = float(_accuracy(
-                rho_out - rho, calculation.basis.dense, calculation.system.cell
-            ))
-            charge_accuracy, magnetic_accuracy = (
-                float(term) for term in _accuracy_terms(
+            # eigenvalue. A diagnostic must not change the run it is diagnosing,
+            # and it must not pay for a second FFT of the residual either.
+            accuracy, charge_accuracy, magnetic_accuracy = (
+                float(term) for term in _accuracy_split(
                     rho_out - rho, calculation.basis.dense, calculation.system.cell
                 )
             )

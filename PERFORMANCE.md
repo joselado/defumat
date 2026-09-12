@@ -4490,6 +4490,46 @@ collinear symmetry filter changes, and it is not a timing: the filter cuts
 iterations as the `nosym` spelling, against 5 iterations to the wrong (nonmagnetic) state
 before. **Three more iterations for the right physics.**
 
+## What the mixing depth is worth on the magnetic benchmark (P78, OPEN.md H9)
+
+`mixing_ndim` was parsed and ignored -- `AndersonMixer.history` was fixed at 8, which is
+`pw.x`'s default, so an input that set it behaved exactly like one that did not. It reaches
+the mixer now, and the first thing to do with a knob is measure it.
+
+`benchmarks/fe-mag-1k.in`, `conv_thr = 1e-8`, one core, iterations to convergence:
+
+| `mixing_ndim` | `fe-mag-1k.in` (noncollinear, magnetic) | `fe-unstable-nonmagnetic.in` (the deconfounder) |
+|---|---|---|
+| 4 | 27 | 26 |
+| **8** (default) | **25** | **21** |
+| 12 | 33 | 30 |
+| 20 | 39 | 26 |
+
+`pw.x` takes **12** on the magnetic cell.
+
+**Raising it does not help, and that is the point of the row.** The default is the best
+value on both cells and everything above it is worse. This is the standard first move on a
+cell that will not converge, and it is now measured rather than assumed. Unset and
+`mixing_ndim = 8` give the same count and the same energy to ten digits, so nothing about
+an existing input changed.
+
+**It is also the first measurement against the mixer-metric hypothesis** (`OPEN.md` H9,
+`NONCOLLINEAR.md` item 17), and it points away from it. That item reads the 25-versus-12 gap
+as evidence for `rho_ddot` in the Anderson Gram matrix, on the grounds that a Euclidean
+metric mis-weights the magnetization. The deconfounder `fe-unstable-nonmagnetic.in` is the
+same cell, same dataset, same `mixing_beta = 0.3`, `nspin = 1`, where that mechanism cannot
+act at all -- and it takes **21**. So most of the excess over `pw.x` is not magnetic, and
+whatever the metric is worth it is bounded by the four iterations between 25 and 21 rather
+than by the thirteen between 25 and 12. The hypothesis is not refuted; its headroom is.
+
+### What reporting `dr2` as two halves costs
+
+Nothing, once it is one function. `scf_accuracy_split` returns `(dr2, charge, magnetic)`
+from **one** transform of the residual: **12.4 ms** per iteration on a 64³ grid at
+`nspin_mag = 4`, against **12.2 ms** for the total alone. Computing the split separately --
+which is what preserving the old total bit for bit would need -- costs a second transform,
+24.6 ms, so the fused form is a 1.5% surcharge where the separate one is 100%.
+
 ## History
 
 | Date | Change | Effect |

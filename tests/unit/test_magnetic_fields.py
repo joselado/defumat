@@ -600,6 +600,15 @@ def test_the_two_halves_of_dr2_add_up_to_dr2(density, cell):
         float(scf_accuracy(residual, gvectors, cell)), rel=1e-14
     )
 
+    # The driver reads all three from one call and one transform of the
+    # residual -- 12.2 ms per iteration on a 64^3 grid, which is what a second
+    # one would cost. Its total must be the *fused* sum and not a Python one.
+    from defumat.scf.potential import scf_accuracy_split
+    total, split_charge, split_magnetic = scf_accuracy_split(residual, gvectors, cell)
+    assert float(split_charge) == float(charge)
+    assert float(split_magnetic) == float(magnetic)
+    assert float(total) == float(charge + magnetic)
+
     # nspin = 1 has no magnetization to be inaccurate about.
     charge1, magnetic1 = scf_accuracy_terms(residual[:1], gvectors, cell)
     assert float(magnetic1) == 0.0
