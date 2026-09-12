@@ -93,8 +93,13 @@ def main(name: str) -> None:
 
     print(f"{name}: {system.kpoints.grid} grid, {system.kpoints.nk} irreducible "
           f"k-points, {record['symmetry_operations']} symmetry operations")
+    # Elk's count is printed beside it as context, **not as a comparison**:
+    # different mixers, different starting densities, and elkpy's run had
+    # `epsengy` tightened well past Elk's default, so neither direction means
+    # anything. It does not belong in a table with the numbers that do.
     print(f"  converged {scf.converged} in {scf.iterations} iterations "
-          f"(Elk: {ELK['iterations']}), {elapsed:.0f} s")
+          f"(Elk's run took {ELK['iterations']}, not a comparison), "
+          f"{elapsed:.0f} s")
     print(f"  E     = {scf.total_energy:.8f} Ry   "
           f"(no Elk counterpart: -8681.03 Ha is all-electron)")
     print(f"  E_F   = {scf.fermi_energy:.8f} Ry")

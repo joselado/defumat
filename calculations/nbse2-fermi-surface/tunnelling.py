@@ -118,11 +118,11 @@ def main(grid=(24, 24, 1)) -> None:
         broadening=ETA_RY,
         smearing="gaussian",
         # **The delta is centred on the SCF's own Fermi level, not the dense
-        # grid's.** Elk's task 9007 reads EFERMI.OUT, which is the ground
-        # state's, and elkpy's shares were taken at it; letting the dense grid
-        # re-find its own would centre the two codes' deltas at different
-        # energies and move every share. The dense-grid level is reported
-        # below anyway, because its shift is itself comparable with Elk's.
+        # grid's.** Elk's task 9007 has no `occupy` call: it takes `efermi`
+        # from `readstate` and evaluates its window once before the k-loop, so
+        # its eigenvalues are dense and its chemical potential is the coarse
+        # one. Letting the dense grid re-find its own would centre the two
+        # codes' deltas at different energies and move every share.
         energies=float(scf.fermi_energy),
     )
     print(f"{np.prod(grid)} k-points, {len(distances)} heights, "
@@ -130,7 +130,9 @@ def main(grid=(24, 24, 1)) -> None:
 
     print(f"  E_F on the {grid[0]}x{grid[1]} grid: {run.fermi_energy:.8f} Ry, "
           f"{(run.fermi_energy - scf.fermi_energy) * 1e3:+.3f} mRy from the "
-          f"SCF's (Elk moves -0.713 mRy from 12x12 to 24x24)")
+          "SCF's -- which is the error freezing the level leaves in any "
+          "absolute total,\n  and is why the shares and the reweighting are "
+          "what this reports")
 
     corners = pocket_mask(run.kcartesian, system.cell)
     at = 2  # the 3.5 A row, which is elkpy's headline height
@@ -238,8 +240,11 @@ def _report(record, run, corners) -> None:
     print(f"    kappa_K^2 - kappa_G^2 = {identity['measured'] * scale:.4f} 1/A^2 "
           f"against |K|^2 = {identity['expected'] * scale:.4f}, "
           f"{identity['relative_residual']:.1%} low")
-    print(f"    -> a zone-centre pocket of radius "
-          f"{identity['implied_pocket_radius'] / BOHR:.3f} 1/A would close it")
+    print(f"    (a zone-centre pocket of radius "
+          f"{identity['pocket_radius_that_would_close_it'] / BOHR:.3f} 1/A would "
+          "close it -- a hypothetical, not a measurement: refitting over "
+          "different\n     ranges moves the residual across zero, so read the "
+          "per-interval kappas above before reading anything into the sign)")
     print()
     print(f"  interference (coherent minus incoherent) is "
           f"{record['interference_share_at_3.5A']:.2%} of the tunnelling column")

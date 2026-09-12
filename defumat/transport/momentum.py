@@ -490,15 +490,23 @@ def decay_identity(kappa_1: float, kappa_2: float, k_1, k_2) -> dict:
 
     Returns the two sides and the relative residual. A residual near **3**
     rather than near zero is :func:`decay_constants`'s factor of two applied on
-    one side only.
+    one side only -- a factor of four on the measured side, which is the failure
+    this is built to catch and the reason it is worth running at all.
 
-    **The residual has a sign and the sign means something.** ``k_1`` and
-    ``k_2`` are the pockets' *centres*, and a pocket of finite radius sits at a
-    larger ``|k_par|`` than its centre on the side facing outward -- so a
-    zone-centre *hole* pocket of radius ``k_0`` raises ``kappa_2`` and makes the
-    measured difference come out **low** by about ``k_0^2``. Reading a small
-    deficit as a failure of the identity, rather than as a measurement of that
-    radius, is the mistake this note is here to prevent.
+    **What it does not measure.** The residual is a per-cent-level number and it
+    is tempting to read a physical quantity out of it: ``k_1`` and ``k_2`` are
+    pocket *centres*, so a zone-centre pocket of radius ``k_0`` would raise
+    ``kappa_2`` and pull the measured difference **low** by about ``k_0^2``.
+    That reading does not survive. Refitting the same sweep over different
+    ranges moves the residual across zero -- on the Elk data it is 1.4% low
+    fitting 1.5-6.5 A and 0.8% *high* dropping the first, non-asymptotic
+    interval -- and the scatter between fits is four times the deficit any
+    plausible pocket would explain. So an explanation that *fits* the number is
+    not thereby established: :func:`decay_constants` reports a ``kappa`` per
+    interval for this reason, and ``pocket_radius_that_would_close_it`` below is
+    named as the hypothetical it is rather than as a measurement. What the
+    identity establishes is the **exponent** and the ``kappa`` convention, to
+    about a per cent, and that is worth having on its own.
     """
     k_1 = float(np.linalg.norm(np.asarray(k_1, dtype=float)))
     k_2 = float(np.linalg.norm(np.asarray(k_2, dtype=float)))
@@ -510,9 +518,12 @@ def decay_identity(kappa_1: float, kappa_2: float, k_1, k_2) -> dict:
         "expected": expected,
         "relative_residual": (abs(measured - expected) / abs(expected)
                               if expected else float("inf")),
-        # What a zone-centre pocket of this radius would account for, in the
-        # units of ``k_1``/``k_2``. Meaningless when the residual is positive.
-        "implied_pocket_radius": float(np.sqrt(deficit)) if deficit > 0 else 0.0,
+        # The radius a zone-centre pocket would need for the deficit to be it,
+        # in the units of ``k_1``/``k_2``. A hypothetical, not a measurement:
+        # see the docstring, and compare it with the scatter between fit ranges
+        # before reading anything into it. Zero when the residual is positive.
+        "pocket_radius_that_would_close_it": (
+            float(np.sqrt(deficit)) if deficit > 0 else 0.0),
         "kappa": (float(kappa_1), float(kappa_2)),
         "k_parallel": (k_1, k_2),
     }
