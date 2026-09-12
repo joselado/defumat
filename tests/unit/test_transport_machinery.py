@@ -42,11 +42,13 @@ from defumat.transport.substrate import (
 
 
 class _Cell:
-    """The two things :mod:`defumat.transport.substrate` asks a cell for."""
+    """The three things :mod:`defumat.transport` asks a cell for."""
 
     def __init__(self, at):
         self.at = np.asarray(at, dtype=float)
         self.volume = float(abs(np.linalg.det(self.at)))
+        # ``Cell.bg``'s convention: rows b1, b2, b3, with a_i . b_j = 2 pi.
+        self.bg = 2.0 * np.pi * np.linalg.inv(self.at).T
 
 
 def _orthonormal_bands(miller, nbnd, seed=0):
@@ -756,3 +758,269 @@ def test_the_band_edge_weight_is_blind_to_a_degenerate_rotation():
         return top.sum() / total.sum()
 
     assert abs(naive(mixed_a, mixed_s) - naive(amplitudes, overlaps)) > 1e-3
+
+
+# --------------------------------------------------------------------------
+# the momentum-resolved weight: a plane tip instead of a point one
+# --------------------------------------------------------------------------
+
+
+def _two_planes(seed=5, nbnd=4, nk=2):
+    """A case with two *distinct* exit planes, which is what separates the forms.
+
+    Both Gram matrices have to have off-diagonals, and they have to be
+    different from each other: the transposed contraction the module docstring
+    warns about agrees with the right one whenever either is diagonal, so a case
+    built from one plane cannot tell them apart.
+    """
+    cell, axis = HEXAGONAL, 2
+    miller = _sphere(2)
+    exit_gram, tip_gram = [], []
+    for ik in range(nk):
+        bands = _orthonormal_bands(miller, nbnd, seed=seed + ik)
+        exit_gram.append(exit_overlap(bands, miller, 0.13, axis, cell))
+        tip_gram.append(exit_overlap(bands, miller, 0.71, axis, cell))
+    rng = np.random.default_rng(seed)
+    kweights = rng.uniform(0.3, 1.0, size=nk)
+    weights = rng.uniform(0.2, 1.0, size=(nk, nbnd))
+    return np.array(exit_gram), np.array(tip_gram), kweights, weights
+
+
+def test_the_momentum_weight_is_the_plane_integral_of_the_point_tip_map():
+    """The theorem the whole module rests on, evaluated literally on both sides.
+
+    ``sum_k W(k)`` must equal the point-tip map of
+    :func:`~defumat.transport.green.transmission` integrated over one cell's
+    worth of the tip plane. The two routes share only ``exit_overlap``: one
+    samples ``psi`` on a real-space quadrature of the tip plane and squares a
+    Green's function, the other never leaves reciprocal space. The quadrature is
+    *exact* rather than approximate -- ``psi*_n psi_m`` is a trigonometric
+    polynomial of in-plane degree ``2 max|h|``, so a grid past that integrates
+    it with no error -- which is why this can be asserted at round-off.
+    """
+    from defumat.transport.momentum import momentum_weights
+
+    cell, axis = HEXAGONAL, 2
+    exit_height, tip_height = 0.13, 0.71
+    miller = _sphere(2)
+    k = np.array([0.25, 0.5, 0.0])
+    nbnd, nk = 4, 2
+
+    bands = [_orthonormal_bands(miller, nbnd, seed=5 + ik) for ik in range(nk)]
+    exit_gram = np.array([exit_overlap(b, miller, exit_height, axis, cell)
+                          for b in bands])
+    tip_gram = np.array([exit_overlap(b, miller, tip_height, axis, cell)
+                         for b in bands])
+    rng = np.random.default_rng(5)
+    kweights = rng.uniform(0.3, 1.0, size=nk)
+    weights = rng.uniform(0.2, 1.0, size=(nk, nbnd))
+
+    fast = momentum_weights(exit_gram, tip_gram, kweights, weights)["weight"]
+
+    # The point-tip map, on an exact quadrature of the tip plane.
+    n = 2 * int(np.abs(miller[:, :2]).max()) + 3
+    u, v = np.meshgrid(np.arange(n) / n, np.arange(n) / n, indexing="ij")
+    plane = np.stack([u.ravel(), v.ravel(), np.full(u.size, tip_height)], axis=1)
+    amplitudes = np.array([
+        sample_wavefunctions(b, miller, k, plane, cell.volume) for b in bands])
+    slow_map = transmission(amplitudes, exit_gram, kweights,
+                            weights.astype(complex))
+    slow = surface_area(cell, axis) / plane.shape[0] * slow_map.sum()
+
+    assert abs(fast.sum() - slow) / abs(slow) < 1.0e-12
+
+
+def test_the_transposed_contraction_is_a_different_number_on_two_planes():
+    """The trap, made visible: it needs two *distinct* planes to show at all.
+
+    ``Tr[D S^exit D S^tip]`` against the elementwise ``sum_nm ... S^exit[n,m]
+    S^tip[n,m]``, which is ``Tr[D S^exit D (S^tip)^T]``. Both are real, both are
+    non-negative, and they coincide the moment either matrix is diagonal -- so
+    the Tersoff-Hamann limit, a one-band metal and every single-plane check
+    agree. On random orthonormal bands they differ by about **3%**, which is
+    the size worth knowing: far above round-off and far below anything a plot
+    would show, so the wrong form is not something a picture catches. The
+    previous test is what says which of the two is the plane integral.
+    """
+    from defumat.transport.momentum import momentum_weights
+
+    exit_gram, tip_gram, kweights, weights = _two_planes()
+    right = momentum_weights(exit_gram, tip_gram, kweights, weights)["weight"]
+
+    scaled = exit_gram * weights[:, :, None] * weights[:, None, :]
+    transposed = kweights * np.real(np.einsum("kij,kij->k", scaled, tip_gram))
+
+    assert np.all(right > 0.0) and np.all(transposed > 0.0)
+    difference = np.abs(right - transposed).max() / right.max()
+    assert 1.0e-3 < difference < 0.5
+
+
+def test_the_momentum_weight_is_blind_to_a_rotation_inside_a_multiplet():
+    """Rule D4, satisfied by construction: ``Tr[U'XU U'YU] = Tr[XY]``.
+
+    A degenerate eigensolver may return any basis inside a multiplet. Both Gram
+    matrices rotate the same way, and a trace of their product does not move --
+    which is why ``weight`` needs no degeneracy handling at all, where the
+    ``incoherent`` column below does.
+    """
+    from defumat.transport.momentum import momentum_weights
+
+    exit_gram, tip_gram, kweights, weights = _two_planes()
+    weights[:, 1:3] = weights[:, 1:3].mean()  # a degenerate pair, equal g_n
+    before = momentum_weights(exit_gram, tip_gram, kweights, weights)["weight"]
+
+    rng = np.random.default_rng(3)
+    raw = rng.normal(size=(2, 2)) + 1.0j * rng.normal(size=(2, 2))
+    u = np.linalg.qr(raw)[0]
+    mix = np.eye(exit_gram.shape[1], dtype=complex)
+    mix[1:3, 1:3] = u
+    rotate = lambda g: np.einsum("ni,knm,mj->kij", mix.conj(), g, mix)
+    after = momentum_weights(rotate(exit_gram), rotate(tip_gram), kweights,
+                             weights)["weight"]
+
+    assert np.abs(after - before).max() / before.max() < 1.0e-12
+
+
+def test_the_tersoff_hamann_column_is_the_structureless_substrate_limit():
+    """``S^exit -> 1`` and the transmission *is* the tip plane's local DOS.
+
+    Not approximately: widening the substrate to the whole cell makes its Gram
+    matrix the identity by orthonormality, and then the trace collapses onto the
+    tip's diagonal. Both further limits are here too -- both matrices the
+    identity leaves the plain Fermi-surface weight, which is what ``bare`` is.
+    """
+    from defumat.transport.momentum import momentum_weights
+
+    exit_gram, tip_gram, kweights, weights = _two_planes()
+    identity = np.broadcast_to(np.eye(exit_gram.shape[1], dtype=complex),
+                               exit_gram.shape).copy()
+
+    columns = momentum_weights(identity, tip_gram, kweights, weights)
+    assert columns["weight"] == pytest.approx(columns["tersoff_hamann"],
+                                              rel=1.0e-13)
+    both = momentum_weights(identity, identity, kweights, weights)
+    assert both["weight"] == pytest.approx(both["bare"], rel=1.0e-13)
+    assert both["bare"] == pytest.approx(kweights * (weights**2).sum(axis=1))
+
+
+def test_the_momentum_weight_cannot_go_negative():
+    """Two positive semi-definite matrices, so ``Tr[XY] >= 0``. No sign to have."""
+    from defumat.transport.momentum import momentum_weights
+
+    exit_gram, tip_gram, kweights, weights = _two_planes(seed=17, nbnd=6, nk=4)
+    for column in momentum_weights(exit_gram, tip_gram, kweights, weights,
+                                   eigenvalues=np.zeros((4, 6))).values():
+        assert np.all(column >= 0.0)
+
+
+def test_the_incoherent_column_is_blind_to_a_degenerate_rotation():
+    """A diagonal is not invariant, so it is taken in the substrate's own basis.
+
+    This is the one column that needs the degeneracy handling ``weight`` does
+    not, and it is the same :func:`~defumat.transport.green.channel_basis` the
+    real-space map uses.
+    """
+    from defumat.transport.momentum import momentum_weights
+
+    exit_gram, tip_gram, kweights, weights = _two_planes()
+    eigenvalues = np.tile(np.array([0.0, 0.5, 0.5, 1.2]), (exit_gram.shape[0], 1))
+    weights[:, 1:3] = weights[:, 1:3].mean()
+    before = momentum_weights(exit_gram, tip_gram, kweights, weights,
+                              eigenvalues=eigenvalues)["incoherent"]
+
+    rng = np.random.default_rng(8)
+    u = np.linalg.qr(rng.normal(size=(2, 2))
+                     + 1.0j * rng.normal(size=(2, 2)))[0]
+    mix = np.eye(exit_gram.shape[1], dtype=complex)
+    mix[1:3, 1:3] = u
+    rotate = lambda g: np.einsum("ni,knm,mj->kij", mix.conj(), g, mix)
+    after = momentum_weights(rotate(exit_gram), rotate(tip_gram), kweights,
+                             weights, eigenvalues=eigenvalues)["incoherent"]
+
+    assert np.abs(after - before).max() / before.max() < 1.0e-10
+    assert np.all(before <= momentum_weights(
+        exit_gram, tip_gram, kweights, weights)["weight"] * 1e6)
+
+
+def test_momentum_weights_refuse_shapes_they_cannot_read():
+    from defumat.transport.momentum import momentum_weights
+
+    exit_gram, tip_gram, kweights, weights = _two_planes()
+    with pytest.raises(ValueError, match="same shape"):
+        momentum_weights(exit_gram, tip_gram[:, :2, :2], kweights, weights)
+    with pytest.raises(ValueError, match="do not match"):
+        momentum_weights(exit_gram, tip_gram, kweights, weights[:, :2])
+
+
+# --- the zone partition and the vacuum decay ---------------------------------
+
+
+def test_the_pocket_partition_covers_the_zone_exactly_once():
+    """Closer to a corner than to the centre: a partition, not a contour mask.
+
+    Every k-point belongs to exactly one side, so the two shares add to one and
+    no threshold enters -- masking on the weight instead would make the shares
+    depend on where the threshold was put.
+
+    **On a hexagonal zone the corner share is exactly 2/3**, which is what fixes
+    the geometry rather than an assumption about which region is bigger. The six
+    perpendicular bisectors between ``Gamma`` and the corners bound a hexagon of
+    inradius ``|K|/2``, of area ``sqrt(3) |K|^2 / 2``; the zone itself has
+    inradius ``|M| = (sqrt(3)/2)|K|`` and area ``3 sqrt(3) |K|^2 / 2``. The ratio
+    is ``1/3``, so the corners take the other two-thirds -- and it is worth
+    knowing before reading any share, because a Fermi surface that carried its
+    weight uniformly would already report 67% at ``K``.
+    """
+    from defumat.transport.momentum import pocket_mask
+
+    n = 30
+    grid = np.stack(np.meshgrid(np.arange(n) / n, np.arange(n) / n, [0.0],
+                                indexing="ij"), axis=-1).reshape((-1, 3))
+    cartesian = grid @ np.asarray(HEXAGONAL.bg)
+    mask = pocket_mask(cartesian, HEXAGONAL)
+    assert mask.dtype == bool and mask.shape == (n * n,)
+    assert mask.mean() == pytest.approx(2.0 / 3.0, abs=0.01)
+    # Gamma is never a corner point and a corner is always one.
+    assert not mask[0]
+    corner = np.array([[1 / 3, 1 / 3, 0.0]]) @ np.asarray(HEXAGONAL.bg)
+    assert pocket_mask(corner, HEXAGONAL)[0]
+
+
+def test_the_decay_constant_is_the_amplitude_one_and_not_twice_it():
+    """``W ~ exp(-2 kappa z)`` for a tip sweep and ``exp(-4 kappa z)`` for both.
+
+    Planted rather than measured: the factor is the whole content of the
+    function, and getting it wrong makes :func:`decay_identity` come out four
+    times too large -- which is the failure mode the identity exists to catch.
+    """
+    from defumat.transport.momentum import decay_constants
+
+    heights = np.linspace(2.0, 8.0, 7)
+    kappa = np.array([0.31, 0.77])
+    tip = np.exp(-2.0 * np.outer(heights, kappa))
+    assert decay_constants(heights, tip) == pytest.approx(kappa, rel=1.0e-10)
+    both = np.exp(-4.0 * np.outer(heights, kappa))
+    assert decay_constants(heights, both, planes="both") == pytest.approx(
+        kappa, rel=1.0e-10)
+    with pytest.raises(ValueError, match="planes must be"):
+        decay_constants(heights, tip, planes="exit")
+
+
+def test_the_decay_identity_closes_on_a_planted_free_electron_tail():
+    """``kappa^2 - kappa'^2 = |k|^2 - |k'|^2``, and a factor of two reads as four.
+
+    Two pockets given the *same* barrier height and different lateral momenta:
+    the identity is then exact by construction, so what it tests is the
+    bookkeeping. Feeding it twice a decay constant, which is what fitting
+    ``|psi|^2`` without halving the slope would give, puts the residual at 3 --
+    a factor of four on the measured side.
+    """
+    from defumat.transport.momentum import decay_identity
+
+    barrier, k_corner, k_centre = 0.55, np.array([0.42, 0.0, 0.0]), np.zeros(3)
+    kappa = [np.sqrt(barrier**2 + float(k @ k)) for k in (k_corner, k_centre)]
+    closed = decay_identity(kappa[0], kappa[1], k_corner, k_centre)
+    assert closed["relative_residual"] < 1.0e-12
+
+    doubled = decay_identity(2 * kappa[0], 2 * kappa[1], k_corner, k_centre)
+    assert doubled["relative_residual"] == pytest.approx(3.0, rel=1.0e-12)

@@ -27,6 +27,14 @@ A *finite* contact patch is a different physical regime and is not this.
 stacking axis and so is the tip plane, and the material has to lie **between**
 them -- a cell is periodic, so "above" and "below" are only meaningful relative
 to where the atoms are. That is checked and warned about rather than assumed.
+
+**The conjugate question is :func:`run_momentum_transport`.** Replace the point
+tip by a *plane* and the real-space map collapses; what is left is one weight
+per k-point -- which pocket of the Fermi surface the current actually comes out
+of. It is the same object: integrating the point-tip map over the tip plane
+gives the sum over k of the other. :mod:`defumat.transport.momentum` derives it,
+and it costs a small fraction of the map, because nothing is sampled in real
+space.
 """
 
 from __future__ import annotations
@@ -49,6 +57,7 @@ from defumat.transport.green import (
     spin_transmission,
     transmission,
 )
+from defumat.transport.momentum import MomentumTransport, momentum_weights
 from defumat.transport.substrate import (
     exit_overlap,
     spin_projector,
@@ -60,7 +69,8 @@ from defumat.system.kpoints import for_spin as kpoints_for_spin
 from defumat.workflows.nscf import fixed_density_states
 from defumat.workflows.stm import _plane, _refuse_what_has_no_fermi_level
 
-__all__ = ["run_vertical_transport", "whole_grid"]
+__all__ = ["run_vertical_transport", "run_momentum_transport",
+           "whole_grid"]
 
 #: The leads' broadening when none is given, in Ry. Small enough to resolve a
 #: band structure and large enough that a discrete k-mesh does not show as
@@ -289,6 +299,187 @@ def run_vertical_transport(
         grid=None if grid is None else tuple(int(n) for n in grid),
         least_eigenvalue=extras["least_eigenvalue"],
         offdiagonal_weight=extras["offdiagonal_weight"],
+        notes=extras["notes"],
+    )
+
+
+def run_momentum_transport(
+    system,
+    pseudos,
+    result,
+    *,
+    exit_height: float,
+    height: float,
+    exit_axis: int = 2,
+    energies=None,
+    bias: float | None = None,
+    nenergies: int = 1,
+    broadening: float = DEFAULT_BROADENING,
+    method: str = "spectral",
+    smearing: str = "gaussian",
+    spin=None,
+    polarization: float = 1.0,
+    grid: tuple[int, int, int] | None = None,
+    shift: tuple[int, int, int] | None = None,
+    kpoints=None,
+    nbnd: int | None = None,
+    conv_thr: float = 1.0e-6,
+    k_batch: int | None | str = "default",
+) -> MomentumTransport:
+    """``W(k; E)``: which k-points the tunnelling current comes out of.
+
+    The tip is a **plane** here rather than a point, so there is no image and no
+    real-space sampling: one Gram matrix per k-point at each of the two heights
+    and one ``nbnd^2`` trace between them, which is
+    :func:`~defumat.transport.momentum.momentum_weights`. That derivation, and
+    the reason the answer is the plane integral of
+    :func:`run_vertical_transport`'s map, are in
+    :mod:`defumat.transport.momentum`.
+
+    Args:
+        system, pseudos, result: the converged run, wavefunctions and all.
+        exit_height: the substrate plane's crystal coordinate along
+            ``exit_axis``, in the vacuum below the material.
+        height: the **tip** plane's crystal coordinate along the same axis, in
+            the vacuum above it -- or a *sequence* of them, which is a height
+            sweep and is what the vacuum decay constants are fitted to. Unlike
+            :func:`run_vertical_transport` this is required and may not be
+            tilted: a tilted plane is not spanned by two lattice vectors, and
+            the exact Miller-index orthogonality
+            :func:`~defumat.transport.substrate.exit_overlap` rests on is what
+            makes both sides cheap.
+
+            **A sweep costs one band solve, not one per height.** The bands do
+            not know where the tip is; only the tip's Gram matrix does, and
+            that is two gathers and an ``nbnd x n_hpar`` product. The whole
+            six-height sweep is therefore a rounding error on top of the
+            diagonalisations, which is the same observation the energy axis
+            rests on one level down.
+        exit_axis: the stacking axis, 2 for an ordinary slab.
+        energies, bias, nenergies, broadening, method, smearing: exactly as in
+            :func:`run_vertical_transport`, and they mean the same thing.
+        spin, polarization: a spin-selective **substrate**, as there. There is
+            no ``tip_spin`` here: a magnetic *plane* tip would contract the two
+            spinor components through its own 2x2 projector, which the trace
+            over a plane does not collapse the same way, so it is left to the
+            map rather than approximated.
+        grid, shift, kpoints, nbnd, conv_thr: re-solve at fixed density on a
+            denser k-set. This is the convergence parameter of the whole
+            quantity -- ``W(k)`` *is* a function of k, so the grid is its
+            resolution -- and it is built **whole** rather than reduced, for
+            the reason :func:`whole_grid` gives.
+        k_batch: the band solve's batching dial. The assembly here allocates
+            only ``(nk, nbnd, nbnd)``, so it needs no bound of its own.
+
+    Returns a :class:`~defumat.transport.momentum.MomentumTransport`, carrying
+    the transmission and its two limits -- the Tersoff-Hamann one and the plain
+    Fermi surface -- because all three come from the same two arrays and the
+    physics is in their ratio. Its columns are ``(nheights, nenergies, nk)``
+    with each of the first two axes **squeezed away when a scalar was asked
+    for**, which is the convention the rest of this package uses for the energy
+    axis already.
+    """
+    _refuse_what_has_no_fermi_level(system, result)
+    refuse_gamma_storage(
+        gamma_storage_is_consumable(system, pseudos),
+        "the momentum-resolved tunnelling weight",
+        "the exit-plane Gram matrix is a sum over the stored k + G list and a "
+        "half sphere is missing its conjugate partner (transport/substrate.py)",
+    )
+    if method.strip().lower() == "resolvent":
+        warnings.warn(
+            "method='resolvent' is the exact Landauer denominator and a "
+            "truncated band sum cannot evaluate it: measured at a cancellation "
+            "factor of 349 on a cell diagonalised completely. The result "
+            "depends on nbnd at every band count",
+            stacklevel=2,
+        )
+    if exit_axis not in (0, 1, 2):
+        raise ValueError(f"exit_axis must be 0, 1 or 2, got {exit_axis}")
+
+    if kpoints is None and grid is not None:
+        kpoints = whole_grid(system, grid, shift)
+
+    if kpoints is None:
+        calculation = Calculation(system, pseudos, k_batch=k_batch)
+        eigenvalues = np.asarray(result.eigenvalues_by_spin)
+        wavefunctions = result.wavefunctions
+        levels = {"fermi_energy": result.fermi_energy,
+                  "homo": result.homo, "lumo": result.lumo}
+    else:
+        calculation, system, eigenvalues, wavefunctions = fixed_density_states(
+            system, pseudos, result.density, kpoints, nbnd, conv_thr, k_batch,
+            ns=getattr(result, "ns", None),
+            tau=getattr(result, "tau", None),
+            becsum=tuple(getattr(result, "becsum", ()) or ()),
+            field=getattr(result, "magnetic_field", None),
+            field_scale=getattr(result, "field_scale", None),
+        )
+        eigenvalues = np.asarray(eigenvalues)
+        _, levels = calculation.occupations(eigenvalues)
+
+    if wavefunctions is None:
+        raise ValueError(
+            "a tunnelling weight is built from the wavefunctions and this "
+            "result carries none: run the SCF without discarding them, or pass "
+            "a grid so the bands are re-solved"
+        )
+
+    sweep = np.atleast_1d(np.asarray(height, dtype=float))
+    if sweep.ndim != 1 or sweep.size == 0:
+        raise ValueError(
+            f"height must be a number or a sequence of them, got {height!r}")
+    scalar_height = np.ndim(height) == 0
+
+    used = calculation.system
+    _refuse_a_k_set_this_cannot_sum(used, exit_axis)
+    _refuse_an_augmented_plane(used, pseudos, exit_axis,
+                               (float(exit_height), *map(float, sweep)),
+                               "the two planes")
+    for one in sweep:
+        _warn_if_the_planes_do_not_straddle(used, exit_axis, float(exit_height),
+                                            float(one))
+
+    grid_energies = _energies(energies, levels, bias, nenergies)
+    wavefunctions = np.asarray(wavefunctions)
+
+    columns, extras = _assemble_momentum(
+        calculation, wavefunctions, eigenvalues,
+        exit_height=float(exit_height), heights=sweep,
+        exit_axis=exit_axis, energies=grid_energies,
+        broadening=float(broadening), spin=spin,
+        polarization=float(polarization), method=method, smearing=smearing,
+    )
+
+    if bias is not None:
+        # The finite-bias current: the conductance integrated over the window.
+        columns = {key: np.trapezoid(array, grid_energies, axis=1)[:, None]
+                   for key, array in columns.items()}
+    if columns["weight"].shape[1] == 1:
+        columns = {key: array[:, 0] for key, array in columns.items()}
+    if scalar_height:
+        columns = {key: array[0] for key, array in columns.items()}
+
+    crystal = np.asarray(used.kpoints.crystal(used.cell))
+    return MomentumTransport(
+        weight=columns["weight"],
+        tersoff_hamann=columns["tersoff_hamann"],
+        bare=columns["bare"],
+        incoherent=columns["incoherent"],
+        kpoints=crystal,
+        kcartesian=np.asarray(used.kpoints.cartesian(used.cell)),
+        kweights=np.asarray(used.kpoints.weights, dtype=float),
+        energies=np.atleast_1d(grid_energies if bias is None
+                               else np.array([grid_energies[0]])),
+        broadening=float(broadening),
+        smearing=str(smearing),
+        height=float(sweep[0]) if scalar_height else tuple(map(float, sweep)),
+        exit_height=float(exit_height),
+        exit_axis=int(exit_axis),
+        grid=None if grid is None else tuple(int(n) for n in grid),
+        fermi_energy=levels.get("fermi_energy"),
+        least_eigenvalue=extras["least_eigenvalue"],
+        hermiticity=extras["hermiticity"],
         notes=extras["notes"],
     )
 
@@ -562,6 +753,138 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
     }
     return values, extras
 
+
+
+def _assemble_momentum(calculation, wavefunctions, eigenvalues, *,
+                       exit_height, heights, exit_axis, energies, broadening,
+                       spin, polarization, method, smearing):
+    """A Gram matrix per plane per k-point, then one trace. No real-space sampling.
+
+    The whole cost of :func:`_assemble` is the ``(npol, nk, nbnd, npoints)``
+    array of tip amplitudes; there is none here, because a plane tip integrates
+    the map away analytically. What is allocated is ``(nk, nbnd, nbnd)`` per
+    plane, and the energy loop is free on top of it -- the overlaps do not
+    depend on ``E`` and only the per-state weight does, which is the same
+    observation the map's docstring makes. **The height axis is free in the same
+    sense and for a different reason**: the *bands* do not depend on where the
+    tip is, so a sweep pays one extra Gram matrix per height against a whole
+    band solve.
+
+    **A spinor's two components are added, not contracted**, which is the
+    nonmagnetic-tip trace of :func:`_assemble`; ``exit_overlap`` already sums
+    them when ``projector`` is ``None``, and the substrate's own acceptance goes
+    inside it exactly as it does there. The two heights use the *same*
+    projector: it describes which spins leave, and the tip plane is where they
+    come from.
+    """
+    used = calculation.system
+    basis = build_basis(used)
+    miller = np.asarray(basis.planewaves.miller(basis.smooth))
+    mask = np.asarray(basis.planewaves.mask)
+    kweights = np.asarray(used.kpoints.weights, dtype=float)
+    npol = 2 if calculation.noncolin else 1
+
+    projector, channel_scale = _substrate_acceptance(
+        spin, polarization, npol, wavefunctions.shape[0])
+
+    nspin, nk, nbnd, _ = wavefunctions.shape
+    shape = (len(heights), energies.shape[0], nk)
+    columns = {name: np.zeros(shape) for name in
+               ("weight", "tersoff_hamann", "bare", "incoherent")}
+    least, hermiticity = np.inf, 0.0
+
+    def gram_at(block_of, plane_height):
+        out = np.empty((nk, nbnd, nbnd), dtype=complex)
+        for ik in range(nk):
+            out[ik] = exit_overlap(
+                block_of(ik), miller[ik], plane_height, exit_axis, used.cell,
+                mask=mask[ik], npol=npol, projector=projector,
+            )
+        return out
+
+    for ispin in range(nspin):
+        scale = 1.0 if channel_scale is None else channel_scale[ispin]
+        block_of = lambda ik, s=ispin: np.asarray(wavefunctions[s, ik])
+        exit_gram = gram_at(block_of, exit_height)
+        for ih, plane_height in enumerate(heights):
+            tip_gram = gram_at(block_of, float(plane_height))
+            for gram in (exit_gram, tip_gram):
+                hermiticity = max(hermiticity, float(
+                    np.abs(gram - np.conj(np.swapaxes(gram, 1, 2))).max()))
+                hermitian = 0.5 * (gram + np.conj(np.swapaxes(gram, 1, 2)))
+                least = min(least, float(np.linalg.eigvalsh(hermitian).min()))
+
+            for ie, energy in enumerate(energies):
+                weights = amplitude_weights(
+                    eigenvalues[ispin], float(energy), broadening, method,
+                    smearing)
+                here = momentum_weights(exit_gram, tip_gram, kweights,
+                                        np.real(weights),
+                                        eigenvalues=eigenvalues[ispin])
+                for name, column in here.items():
+                    columns[name][ih, ie] += scale * column
+
+    notes = {
+        "bands": int(nbnd),
+        "planes": (tuple(map(float, heights)), float(exit_height)),
+        # What the plane sees of the topmost multiplet: the band-count
+        # truncation measure, in the same spirit as the map's.
+        "top_multiplet_share": _top_multiplet_share(
+            columns["weight"], eigenvalues, energies, broadening),
+    }
+    return columns, {"least_eigenvalue": float(least),
+                     "hermiticity": float(hermiticity), "notes": notes}
+
+
+def _top_multiplet_share(weight, eigenvalues, energies, broadening):
+    """How much of the answer the highest band carries -- a truncation measure.
+
+    A band sum stops somewhere, and the honest question is not "how many bands"
+    but "how much is the last one worth". The highest band's amplitude weight,
+    summed over the k-set and divided by every band's, is that number: it is
+    zero when the band set reaches past the window and grows as the window
+    approaches the top of it.
+    """
+    eigenvalues = np.asarray(eigenvalues)
+    from defumat.stm.image import smeared_delta
+
+    share = 0.0
+    for energy in np.atleast_1d(energies):
+        delta = smeared_delta((float(energy) - eigenvalues) / broadening,
+                              "gaussian")
+        total = float(delta.sum())
+        if total > 0.0:
+            share = max(share, float(delta[..., -1].sum()) / total)
+    return share
+
+
+def _warn_if_the_planes_do_not_straddle(system, axis, exit_height, height):
+    """Both planes in the vacuum, with the atoms between them.
+
+    A cell is periodic, so "above" and "below" mean nothing until the atoms say
+    where they are -- and a tip plane on the *same* side as the exit plane is a
+    perfectly well-defined number that is not a transmission through anything.
+    """
+    positions = np.asarray(system.structure.positions_crystal(system.cell))
+    along = np.sort(positions[:, axis] % 1.0)
+    lo, hi = float(along[0]), float(along[-1])
+    inside = [name for name, s in (("the exit plane", exit_height % 1.0),
+                                   ("the tip plane", height % 1.0))
+              if lo - 1.0e-9 <= s <= hi + 1.0e-9]
+    if inside:
+        warnings.warn(
+            f"{' and '.join(inside)} sits inside the slab, whose atoms span "
+            f"[{lo:.3f}, {hi:.3f}] along axis {axis}: the material has to lie "
+            "between the two planes for this to be a transmission through it",
+            stacklevel=3,
+        )
+    elif (exit_height % 1.0 < lo) == (height % 1.0 < lo):
+        warnings.warn(
+            f"both planes are on the same side of the slab (atoms span "
+            f"[{lo:.3f}, {hi:.3f}] along axis {axis}): nothing tunnels through "
+            "the material between a tip and a substrate that are both above it",
+            stacklevel=3,
+        )
 
 
 def _top_multiplet_mask(eigenvalues, tol: float = DEGENERACY_TOL):

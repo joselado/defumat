@@ -1004,6 +1004,34 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS)
         )
 
+    def get_momentum_transport(self, exit_height=None, height=None, **options):
+        """Which k-points the tunnelling current comes out of.
+
+        The conjugate of :meth:`get_vertical_transport`: a **plane** tip in
+        place of a point one, so the real-space map collapses and what is left
+        is one weight per k-point -- which pocket of the Fermi surface an
+        electron actually leaves through. It is the same object, and
+        integrating the map over the tip plane gives the sum over k of this.
+
+        Three columns come back together because they come from the same two
+        Gram matrices, and the physics is in their ratio: the transmission, its
+        Tersoff-Hamann limit (the substrate made structureless), and the plain
+        Fermi surface. The k-set must be the **whole** grid, which ``grid``
+        builds.
+        """
+        from defumat.workflows.transport import run_momentum_transport
+
+        result = self._ground_state("a momentum-resolved transmission")
+        if exit_height is not None:
+            options = {**options, "exit_height": exit_height}
+        if height is not None:
+            options = {**options, "height": height}
+        return run_momentum_transport(
+            self.system, self.pseudos, result,
+            **self._call_options(run_momentum_transport, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
     def get_nesting(self, grid=None, **options):
         """``N(q)``, the Fermi-surface nesting function, on a dense grid.
 
