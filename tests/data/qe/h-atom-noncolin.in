@@ -1,0 +1,44 @@
+! **The collinear limit of a noncollinear run, and the only reason it exists.**
+! `h-atom-lsda.in`'s cell, atom, cutoff and smearing, with the spin regime
+! changed and nothing else: the moment is put along `+z` (`angle1 = 0`), where
+! `h10-chain-noncolin.in` puts its moments in the plane.
+!
+! Without spin-orbit coupling the noncollinear Hamiltonian of a state polarized
+! along `z` block-diagonalises into the two collinear ones, so every quantity
+! this run produces has to match `h-atom-lsda.in`'s exactly -- including the
+! *projected* density of states, whose two spin channels are then the LSDA run's
+! two channels. That identity is what validates `partialdos_nc`'s up/down split
+! here, where no `projwfc.x` reference for a noncollinear run without spin-orbit
+! coupling has been generated.
+!
+! **Saturated on purpose.** One electron, so `zeta = 1` at every point carrying
+! any density -- which is the boundary the exchange-correlation clamp sits on.
+! The minority potential there was discontinuous in the last bit of `zeta` until
+! 2026-09-12 (`jnp.clip` splits a tangent evenly at a tie, so the boundary got
+! half the interior's), and this pair of runs is what found it: the same ground
+! state reached two ways lands on opposite sides of it by rounding alone.
+!
+! `nbnd` is doubled because a spinor band holds one electron.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 1, celldm(1) = 12.0,
+    nat = 1, ntyp = 1,
+    ecutwfc = 25.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.02
+    noncolin = .true.
+    starting_magnetization(1) = 0.6
+    angle1(1) = 0.0
+    nbnd = 8
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ H 0.0 0.0 0.0
+K_POINTS {automatic}
+ 1 1 1 0 0 0

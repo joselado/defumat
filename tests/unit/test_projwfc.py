@@ -207,21 +207,25 @@ def test_a_symmetrised_spinor_projection_is_refused_by_name():
         )
 
 
-def test_a_noncollinear_projection_without_spin_orbit_is_refused_by_name():
-    """``partialdos_nc``'s ``nspin0 = 2`` layout is not implemented.
+def test_a_noncollinear_projection_without_spin_orbit_is_no_longer_refused():
+    """``partialdos_nc``'s ``nspin0 = 2`` layout is implemented (``OPEN.md`` E3).
 
-    The orbitals for that branch exist (``atomic_wfc_nc``, an up and a down copy
-    of each harmonic) and the labels carry their ``s_z``; what is missing is that
-    such a run's columns are routed into an up or a down density of states by
-    ``ind <= 2l+1``, where ``compute_pdos`` would bin them as one. Refused rather
-    than shipped as a plausible decomposition, and there is no generated
-    reference for it either.
+    The orbitals for that branch always existed (``atomic_wfc_nc``, an up and a
+    down copy of each harmonic) and the labels carried their ``s_z``; what was
+    missing was routing such a run's columns into an up or a down *density of
+    states*, which :func:`~defumat.workflows.pdos.split_spin_columns` now does.
 
-    A *relativistic* dataset never reaches this: ``Calculation`` already refuses
-    ``has_so`` without ``lspinorb`` where QE calls ``average_pp``.
+    It gets past the refusal and fails later for want of a real calculation --
+    an ``AttributeError`` on the stub -- which is what says no refusal stopped
+    it. The physics is in ``tests/regression/test_noncollinear_pdos.py``, where
+    the collinear limit checks it against an LSDA run.
+
+    A *relativistic* dataset never reaches this branch: ``Calculation`` already
+    refuses ``has_so`` without ``lspinorb`` where QE calls ``average_pp``.
     """
-    with pytest.raises(NotImplementedError, match="without spin-orbit"):
+    with pytest.raises(Exception) as caught:
         atomic_projections(_stub(noncolin=True, lspinorb=False), None)
+    assert not isinstance(caught.value, NotImplementedError), caught.value
 
 
 def test_a_spinor_projection_is_not_refused_without_symmetry():

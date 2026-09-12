@@ -11181,6 +11181,40 @@ figure needed no workaround.
 atomic manifold at all (`projwfc.x` gives 0.000 for two of them). The unit test that
 checks the rule sets the projections to one for exactly that reason.
 
+**Later (2026-09-12): the residue this phase left, and what it turned up.** `OPEN.md` E3.
+A noncollinear run **without** spin-orbit coupling was refused -- there is no `j` to
+resolve by, and `partialdos_nc`'s other branch, which routes the `2 natomwfc` up/down
+columns into `nspin0 = 2` densities of states, was not written. It is now
+(`workflows/pdos.split_spin_columns`), so such a run comes back with the shape an LSDA
+projection has: the spin an *axis* rather than a label on a column, `charges.polarization`
+meaningful, and `charges_lm` filled -- a documented divergence from `print_lowdin`, which
+allocates it only for `nspin /= 4` for a reason (a spin-angle function has no `m`) that is
+true of the spin-orbit branch alone.
+
+**No `projwfc.x` reference was generated and the identity that replaced it is the better
+check.** The vendored QE tree is not on this machine; and without spin-orbit coupling a
+moment along `+z` block-diagonalises the noncollinear Hamiltonian into the two collinear
+ones, so the projection has to reproduce an LSDA run of the same cell channel for channel
+-- and the LSDA route is itself validated against `projwfc.x`. The two share the ground
+state and nothing else: different orbitals, a different projector construction, twice the
+columns, a different integration layout. *Measured* on a hydrogen atom in a 12 bohr box:
+3e-12 Ry in total energy, **2e-5 of the peak** on the majority curve, 0.39 per cent on the
+minority one, 5e-3 on the Löwdin charges. The minority bound is looser for an arithmetic
+reason that is stated rather than absorbed: the noncollinear branch reaches `rho_down` as
+`(n - |m|)/2`, a cancellation of two numbers of order 0.1, which is worth 1.1e-4 Ry on the
+empty minority eigenvalue where every occupied one agrees to 1e-6.
+
+**The axis is the global `z`**, not the local moment, exactly as QE's is, so an in-plane
+moment reports two equal channels -- a statement about the frame the orbitals are built in.
+That case is in the test file beside the `z` one, because on its own it is a null a code
+that binned every column into one channel and halved it would also pass.
+
+**And the identity found a defect outside the projection**, which is the more valuable
+half: the comparison was 85 per cent out until the exchange-correlation clamp's tangent was
+fixed (P70's later note, `OPEN.md` G1). The cell is saturated on purpose so that it stays
+the case that guards it. What remains refused is the **symmetrised** spinor projection, in
+both noncollinear branches, which needs the SU(2) representation of each operation.
+
 ### P70 — The screened response and the Born charges of a magnetic insulator. ✅ DONE.
 
 **Two refusals, one cell, and neither of them needed a derivation.** `nspin = 2` had a
@@ -11292,6 +11326,27 @@ atom-to-atom spread of 1-2e-5 on this cell and the ultrasoft-silicon 8e-6. A `co
 1e-10` ground state moves `zz` by 7e-6, so it is not the SCF's convergence and no term is
 named for it; the cheapest next experiment is P43's per-partial decomposition against a
 finite difference of the force under a field, on the `zz` column alone.
+
+**Later (2026-09-12): the neighbouring boundary, and the potential rather than the
+kernel.** `OPEN.md` G1. P70's finding is that `|zeta| >= 1` is where QE **defines** the
+LSDA kernel to be zero, on both of `dmxc_lsda`'s branches -- a convention, and one this
+code adopted with `_fully_polarized`. The *potential* at the same boundary is not a
+convention and was wrong: `jnp.clip(zeta, -1, 1)` is `minimum(maximum(...))`, JAX splits a
+gradient **evenly at a tie**, so at `zeta` exactly `1.0` the tangent was `0.5` and the
+minority potential kept half of its `de_c/dzeta . dzeta/drho_down` term. *Measured*:
+`v_down` -0.22756 against the correct -0.38993 on a hydrogen atom's density, **0.162 Ry**,
+with the energy identical -- so the same ground state reached as an LSDA run and as a
+noncollinear one disagreed by **0.07 Ry** in its empty minority eigenvalues while agreeing
+to 7e-13 Ry in total energy and to 1e-8 in every Löwdin charge. Which side of the boundary
+a run lands on is rounding: `rho_down` of 4.7e-18 makes `zeta` round to exactly 1 and
+1.4e-17 does not. The clamp is now a `where` (`xc/lda.py:clamp_polarization`, four sites,
+plus the same tie in `local_spin_frame`'s `minimum(|m|, |n|)`), continuity is asserted as a
+**rate** -- the gap closes as `rho_down^(1/3)`, ratio `10^(4/3)` between 1e-12 and 1e-16 --
+and the two branches now agree to 6.5e-6 Ry in the minority potential and 1.1e-4 Ry in the
+empty minority eigenvalue, the residue being the cancellation in `rho_down = (n - |m|)/2`
+rather than the functional. **What is not done is the comparison against `pz_spin`'s own
+`vc_dn` at `zeta = 1`**, which needs the vendored QE tree and is not on this machine;
+continuity stands in for it. `CLAUDE.md`'s trap list has the entry.
 
 ### P68a — The dynamical matrix under gamma storage. ✅ DONE.
 

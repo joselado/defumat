@@ -872,7 +872,39 @@ in the output to say that what is actually missing is the Fermi-level shift and 
 **Two separate pieces of work**, and the first is minutes: a refusal that names the
 right missing term, then the term itself.
 
-### E3. Projected DOS for a noncollinear run *without* spin-orbit coupling
+### E3. Projected DOS for a noncollinear run *without* spin-orbit coupling **[closed 2026-09-12]**
+
+> The columns are routed into an up and a down density of states
+> (`workflows/pdos.split_spin_columns`, `partialdos_nc`'s `nspin0 = 2`), so the
+> result has the shape an LSDA projection has: `nspin = 2`, the spin an *axis*
+> rather than a label on a column, `charges.polarization` meaning what it says,
+> and `charges_lm` filled -- which a `j`-resolved projection leaves `None`, and
+> which is a **documented divergence** from `print_lowdin`, since QE allocates it
+> only for `nspin /= 4` and the reason it gives (a spin-angle function has no
+> `m`) is true of the spin-orbit branch alone.
+>
+> **The entry's second requirement was not met and was replaced by something
+> better.** No `projwfc.x` reference was generated: the vendored QE tree is not
+> on this machine. What stands in its place is an identity that shares no
+> machinery with the thing it checks -- without spin-orbit coupling a moment
+> along `+z` block-diagonalises the noncollinear Hamiltonian into the two
+> collinear ones, so the projection must reproduce an LSDA run of the same cell
+> channel for channel, and the LSDA route *is* validated against `projwfc.x`.
+>
+> *Measured* on a hydrogen atom in a 12 bohr box: the two runs agree to 3e-12 Ry
+> in total energy, the majority channel's curve to **2e-5 of the peak**, the
+> minority one to 0.39 per cent, and the Löwdin charges to 5e-3. The minority
+> bound is looser for a stated arithmetic reason rather than a tolerance chosen
+> to pass: the noncollinear branch reaches `rho_down` as `(n - |m|)/2`, a
+> cancellation of two numbers of order 0.1, and that is worth 1.1e-4 Ry on the
+> empty minority eigenvalue where every occupied one agrees to 1e-6.
+>
+> **It found G1 on the way**, which is the more valuable half: the same
+> comparison was 85 per cent out before the exchange-correlation clamp's tangent
+> was fixed, and the cell here is saturated on purpose so that it stays the case
+> that guards it.
+
+
 
 `defumat/projwfc/projections.py:222`. The spin-angle orbitals are built, the labels
 carry their `s_z`, `_updown_matrix` exists. The missing term is `partialdos_nc`'s split
@@ -884,6 +916,102 @@ non-SOC case.
 The regime is a real one: any bcc-Fe noncollinear run with scalar-relativistic datasets,
 and `alas-magnetoelectric-nosoc.in` is already in that regime. **On none of the gap
 lists** -- it is the residue P69 left behind.
+
+---
+
+## G. Opened 2026-09-12, while closing E3
+
+### G1. A saturated magnet's minority potential is discontinuous in the last bit of `zeta` **[closed 2026-09-12, the same day]**
+
+> **The cause was not the clamp's value but `jnp.clip`'s *tangent*.** JAX's
+> `minimum`/`maximum` split the gradient **evenly at a tie**, and `clip` is built
+> out of them, so `d clip(z, -1, 1)/dz` is `0.5` at `z = 1` exactly -- not 1,
+> and not 0, which would at least have been visible. The minority potential
+> therefore received half of its `de_c/dzeta . dzeta/drho_down` term. Written as
+> a `where` (`defumat/xc/lda.py`'s `clamp_polarization`) the value is still
+> clamped, the interior's tangent survives at the boundary, and beyond it the
+> tangent is genuinely zero. Four sites: `spin_interpolation`, `pw_spin_hartree`,
+> PBE's `gcc_spin` and `_spin_channels`, plus the same tie in
+> `local_spin_frame`'s `minimum(|m|, |n|)`, which is a saturated point by
+> definition.
+>
+> *Measured, on the hydrogen atom that found it.* Pointwise, `v_down` at
+> `rho_down = 0` is now **-0.38993** against the limit's -0.38993 -- it was
+> -0.22756 -- and continuity is asserted as a **rate** rather than a tolerance:
+> the gap closes as `rho_down^(1/3)`, the exchange's cube root, so 6.9e-5 at
+> 1e-12 and 3.2e-6 at 1e-16, a ratio of `10^(4/3)` that says the value at zero
+> is the limit rather than a number that happens to be near it. On the whole
+> calculation, the same ground state as an LSDA run and as a noncollinear one
+> now agrees to **6.5e-6 Ry** in the minority potential (was 0.162), to
+> **1e-6 Ry** on every occupied eigenvalue, and to **1.1e-4 Ry** on the empty
+> minority one (was 7e-2). The remaining 1.1e-4 is not this: it is the
+> cancellation in `rho_down = (n - |m|)/2`, two numbers of order 0.1 leaving
+> round-off where the collinear branch carries `rho_down` itself.
+>
+> **The energy never moved** -- asserted, and it is the reason nothing else saw
+> this: `h-atom-lsda.in`'s total is the same to 2e-16 Ry. That is `CLAUDE.md`'s
+> "the energy can be right while its derivative is wrong" with a mask boundary
+> in place of a structure factor, and the trap list has gained the entry.
+> `tests/unit/test_xc_spin_kernel.py` (pointwise, three functionals) and
+> `tests/regression/test_noncollinear_pdos.py` (the whole calculation).
+>
+> **What is still not done is the comparison against `pz_spin` itself**, which
+> is what would settle the value against QE rather than against continuity.
+> It needs the vendored tree and that is not on this machine.
+
+
+
+`defumat/xc/lda.py`'s `spin_interpolation` clips `zeta` to `[-1, 1]`, and the
+clip's *tangent* is what the potential is built from -- `v_xc` is `jax.grad` of
+the energy. At `zeta` exactly `1.0` the clip stops passing the gradient through,
+so `dE_c/dzeta . dzeta/drho_down` is dropped from the minority potential, and
+that term is **0.162 Ry**:
+
+| `rho_down` | `zeta` | `v_down` |
+|---|---|---|
+| 0 | `1.0` | -0.22756352 |
+| 4.7e-18 | `1.0` (rounds to it) | -0.22756352 |
+| 1.0e-17 | `0.9999999999999998` | **-0.38992878** |
+| 1e-12 | `0.999999999999981` | -0.38986115 |
+| 1e-6 | `0.999980655` | -0.40713967 |
+
+at `rho_up = 0.10338550`. The limit from inside is the physical one -- `v_down`
+is the one-sided derivative `dE/drho_down` at `rho_down = 0+`, which is what an
+added minority electron feels, and QE's `pz_spin` gives it analytically and
+continuously -- so the value at exactly `|zeta| = 1` is **the wrong one of the
+two**, by 0.16 Ry.
+
+**Which side a run lands on is rounding**, which is how this was found. A
+hydrogen atom in a 12 bohr box is saturated by construction, and the *same
+ground state* reached two ways lands on opposite sides: `h-atom-lsda.in` gives
+`rho_down = 4.7e-18` (so `zeta` rounds to exactly 1) and the noncollinear run of
+the same cell gives `1.39e-17` (so it does not). The two agree on **the total
+energy to 7e-13 Ry**, on every occupied eigenvalue, and on the Löwdin charges to
+1e-8 -- and disagree on the *empty minority* eigenvalues by **0.07 Ry**, and on
+`v_down` by 0.162 Ry pointwise. It is `CLAUDE.md`'s "the energy can be right
+while its derivative is wrong", with a mask boundary that symmetry reaches
+exactly in place of a supercell's structure factor.
+
+**What it affects.** Nothing occupied, and nothing in a total energy. Every
+*empty* minority state of a saturated system, so: an NSCF band structure or a
+density of states above `E_F` for a half-metal or any fully polarized cell, and
+anything built on those -- a response, a spectrum, a projected DOS above the
+Fermi level. P70's finding is the neighbouring one and is **not** this: there,
+the *kernel* `dmxc_lsda` is **defined** to be zero at `|zeta| >= 1` on both of
+QE's branches, which is a convention; here it is the potential, and the two
+sides are not two conventions but a value and a dropped term.
+
+**What to write.** The clip is the wrong instrument for a quantity whose
+one-sided derivative is wanted: clamp the *channel densities* to be
+non-negative instead (`rho_down = max((n - |m|)/2, 0)`), which is where the
+constraint actually lives, or write `zeta` so the tangent survives at the
+boundary. **Do not take the table above as the acceptance test** -- the check is
+against `pz_spin`'s own `vc_up`/`vc_dn` at `zeta = 1`, which needs the vendored
+QE tree, and that is not on this machine.
+
+**Cost.** The fix is a line; the validation is not, and it reaches every
+spin-polarized run in the suite. Worth doing beside a `pw.x` comparison rather
+than alone.
 
 ---
 

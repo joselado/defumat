@@ -388,7 +388,7 @@ Newton solve to **5.3e-12 Ry**. The mixer damps its way past it. It is diagnosed
 by name in `solvers.py` now instead of surfacing as a scipy "RHS must contain
 only finite numbers".
 
-### Projected DOS + noncollinear *without* spin-orbit, and the symmetrised spinor
+### Projected DOS + the symmetrised spinor — *one half closed 2026-09-12*
 
 **Two thirds of this entry was closed by P69 and the entry did not say so** — it
 claimed the whole spinor regime was refused and named three missing pieces, two
@@ -405,15 +405,19 @@ to call blocked — are committed.
 
 **Still missing, and they are two separate things:**
 
-- **`nspin = 4` without `lspinorb`** (`projections.py:222`). The spin-angle
-  orbitals are built and the labels carry their `s_z`; `_updown_matrix` exists.
-  What is missing is `partialdos_nc`'s split of the columns into up and down
-  channels (`nspin0 = 2`, each column routed by `ind <= 2l+1`), plus a generated
-  `projwfc.x` reference — `tests/data/qe` has `pt-soc`, `pt-soc-paw`,
-  `pw_lsda-lsda`, `al-tetrahedra` and `si10-nc`, and no noncollinear non-SOC
-  case. The regime is a real one: any bcc-Fe noncollinear run with
-  scalar-relativistic datasets, and `alas-magnetoelectric-nosoc.in` is already
-  in it. It is the residue P69 left behind and it is on no other gap list.
+- ~~**`nspin = 4` without `lspinorb`**~~ — **closed 2026-09-12** (`OPEN.md` E3).
+  The columns are routed into an up and a down density of states
+  (`split_spin_columns`, `partialdos_nc`'s `nspin0 = 2`), so the result has the
+  shape an LSDA projection has and `charges.polarization` means what it says.
+  **The `projwfc.x` reference is still not generated** — the vendored QE tree is
+  not on this machine — and what stands in its place is stronger than one would
+  have been: without spin-orbit coupling a moment along `+z` block-diagonalises
+  the noncollinear Hamiltonian into the two collinear ones, so the projection
+  must reproduce an LSDA run of the same cell channel for channel, and the LSDA
+  route is itself validated against `projwfc.x`. `h-atom-noncolin.in` is
+  committed for it. The one thing to know about the quantity: the axis is the
+  **global** `z` and not the local moment, exactly as QE's is, so an in-plane
+  texture reports two equal channels.
 - **The symmetrised spinor projection** (`projections.py:206`). `sym_proj_so`
   needs the SU(2) representation of each point-group operation beside the
   rotation of the harmonics. `nosym = .true.` with the whole k-grid, or

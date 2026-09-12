@@ -169,18 +169,53 @@ _PWA = (0.016887, 0.11125, 10.357, 3.6231, 0.88026, 0.49671)
 _FZ0 = 1.709921
 
 
+def clamp_polarization(zeta: jnp.ndarray, limit: float = 1.0) -> jnp.ndarray:
+    """``zeta`` restricted to ``[-limit, limit]``, **with the interior's tangent
+    at the ends**.
+
+    ``jnp.clip`` is the obvious spelling and it is wrong here, for a reason that
+    is about automatic differentiation rather than about the functional:
+    ``clip`` is ``minimum(maximum(x, a), b)``, and JAX's ``minimum``/``maximum``
+    split the gradient **evenly at a tie**. So at ``zeta`` exactly ``1.0`` the
+    tangent that comes through is *half* the interior one -- not zero, which
+    would at least be visible, and not one, which is what the physics wants.
+
+    ``|zeta| = 1`` is not a measure-zero curiosity: it is every point of a
+    **saturated** magnet, where one channel density is zero, and a run reaches
+    it exactly. Halving the tangent there halves the ``de_c/dzeta . dzeta/drho``
+    term of the *minority* potential, which is worth **0.162 Ry** on a hydrogen
+    atom (``v_down`` -0.22756 against the correct -0.38993) and 0.07 Ry in the
+    empty minority eigenvalues. The energy is untouched, which is why nothing
+    else saw it -- ``CLAUDE.md``'s "the energy can be right while its derivative
+    is wrong", with a mask boundary that saturation reaches exactly where a
+    supercell's structure factor reaches zero.
+
+    ``v_down`` at a vanishing minority density is the **one-sided** derivative
+    ``dE/drho_down`` at ``0+``: what an added minority electron would feel. The
+    interpolation is continuously differentiable on ``(-1, 1]``, and QE's
+    ``pz_spin`` and ``pw_spin`` evaluate their ``dfz`` analytically at ``z = 1``
+    with no special case, so the interior tangent is the one both codes mean.
+
+    A ``jnp.where`` gives exactly that: the value is clamped, the selected
+    branch at the boundary is ``zeta`` itself, and beyond it the tangent is
+    genuinely zero. The fractional powers still never see a negative argument,
+    which is what the clamp was for -- a plane-wave magnetization can exceed the
+    density it is divided by where both are near zero, and ``(1 - z)^(4/3)``
+    would be a NaN rather than a large number.
+    """
+    return jnp.where(zeta > limit, limit, jnp.where(zeta < -limit, -limit, zeta))
+
+
 def spin_interpolation(zeta: jnp.ndarray) -> jnp.ndarray:
     """``f(zeta) = ((1+z)^(4/3) + (1-z)^(4/3) - 2) / (2^(4/3) - 2)``.
 
     Zero for an unpolarized density and one for a fully polarized one -- the
     universal interpolation von Barth and Hedin introduced and every LSDA
-    correlation functional here uses. ``zeta`` is clipped to [-1, 1] first, as
-    ``xc_lsda`` clips it, so that the fractional powers never see a negative
-    argument: a plane-wave magnetization can exceed the density it is divided by
-    in low-density regions, and ``(1 - z)^(4/3)`` would then be a NaN rather
-    than a large number.
+    correlation functional here uses. ``zeta`` is clamped to [-1, 1] first, as
+    ``xc_lsda`` clips it -- see :func:`clamp_polarization` for why that clamp is
+    not ``jnp.clip``.
     """
-    z = jnp.clip(zeta, -1.0, 1.0)
+    z = clamp_polarization(zeta)
     return ((1.0 + z) ** (4.0 / 3.0) + (1.0 - z) ** (4.0 / 3.0) - 2.0) / (
         2.0 ** (4.0 / 3.0) - 2.0
     )
@@ -248,7 +283,7 @@ def pw_spin_hartree(rs: jnp.ndarray, zeta: jnp.ndarray) -> jnp.ndarray:
     :func:`pw_correlation_hartree`, because PBE's spin correlation is built on
     top of it in Hartree.
     """
-    z = jnp.clip(zeta, -1.0, 1.0)
+    z = clamp_polarization(zeta)
     z4 = z**4
     fz = spin_interpolation(z)
 

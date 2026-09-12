@@ -295,9 +295,17 @@ self-consistent run used, and this reproduces that only when asked to.
 A $j$-resolved projection **refuses to be symmetrised**: averaging over the point group needs
 the spin-space representation of each operation beside the rotation of the harmonics, and
 that is not built, so a spin-orbit run is projected with `nosym` and the whole k-grid, where
-no averaging happens on either side. A noncollinear run *without* spin-orbit coupling is
-refused for the opposite reason: there is no $j$ to resolve by, and the up and down
-projection that case wants is not built here.
+no averaging happens on either side.
+
+A noncollinear run *without* spin-orbit coupling has no $j$ to resolve by, and is decomposed
+by spin instead: nothing couples $s_z$ to the orbital motion there, so the orbitals are
+harmonics times an up or a down spinor and what comes back is an up and a down density of
+states, the shape an LSDA projection has. The axis is the **global** $z$ rather than the
+local moment, so a texture lying in the plane reports two equal channels: that is what the
+decomposition means, not a limitation of it. Without a spin-orbit term the identity that
+says the two channels are right is exact, and it is what this is checked against -- a state
+polarized along $z$ makes the noncollinear Hamiltonian two collinear ones, so its projection
+has to be the LSDA run's, channel for channel.
 
 ---
 The tests behind this notebook: `tests/regression/test_pdos.py`, which holds the projections,
@@ -306,4 +314,5 @@ the Löwdin charges and the spilling against `projwfc.x` on seven cases; and
 orthogonalisation over the whole `natomwfc` manifold rather than the Hubbard one. The
 spin-angle half is in `tests/regression/test_spinor_pdos.py` and
 `tests/unit/test_spinor_projection.py`, which hold the column labels, the multiplet sums and
-the isometry of each $(l, j)$ shell.
+the isometry of each $(l, j)$ shell; the spin-resolved half is in
+`tests/regression/test_noncollinear_pdos.py`, which holds the collinear limit.

@@ -434,6 +434,19 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   structure factor vanishes *exactly*, which symmetry arranges on a supercell; `|m|` in the
   gradient correction differentiates through its own nodes. Five sites so far (P24, P28a,
   P45, P58).
+- **A clamp's *tangent* at the boundary, where JAX splits a tie evenly.**
+  `jnp.clip(z, -1, 1)` is `minimum(maximum(...))`, and JAX's `minimum`/`maximum` give
+  **half** the gradient to each argument where the two are equal — so at `z = 1` exactly
+  the tangent is `0.5`, not 1 and not 0. `|zeta| = 1` is every point of a **saturated**
+  magnet, so it is reached rather than approached, and the halved tangent halved the
+  minority potential's `de_c/dzeta` term: **0.162 Ry** in `v_down`, 0.07 Ry in the empty
+  minority eigenvalues, with the **energy unchanged**, so nothing else saw it. Which side
+  of the boundary a run lands on is *rounding* — the same H atom as an LSDA run and as a
+  noncollinear one gave `rho_down` of 4.7e-18 and 1.4e-17, and only the first makes `zeta`
+  round to exactly 1. Write the clamp as a `jnp.where` so the interior's tangent survives
+  at the boundary (`xc/lda.py:clamp_polarization`); a one-sided derivative is what a
+  potential at a vanishing channel density *is*. Four sites plus `minimum(|m|, |n|)`, which
+  is a saturated point by definition (`OPEN.md` G1).
 - **Rule D4: a diagonal is not invariant under the rotation a degenerate eigensolver is
   free in.** Anything built from `<psi_n|A|psi_n>` band by band — a Drude weight, a band
   velocity difference, an incoherent channel sum — takes the **multiplet block average**

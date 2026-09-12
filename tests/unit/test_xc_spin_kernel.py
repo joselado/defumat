@@ -248,3 +248,96 @@ def test_the_mask_changes_nothing_at_an_ordinary_point(pz_functional):
     )[1]
     masked = jax.jvp(pz_functional.spin_potential, (rho,), (probe,))[1]
     assert np.array_equal(np.asarray(masked), np.asarray(unmasked))
+
+
+# --------------------------------------------------------------------------
+# the *potential* at full polarization, which is a different question
+# --------------------------------------------------------------------------
+
+
+def test_the_clamp_keeps_the_interior_tangent_at_the_boundary():
+    """``jnp.clip`` halves a gradient at a tie and this is where that matters.
+
+    JAX's ``minimum``/``maximum`` split the tangent evenly where their two
+    arguments are **equal**, and ``jnp.clip`` is built out of them -- so
+    ``d clip(z, -1, 1)/dz`` is ``0.5`` at ``z = 1`` exactly, not ``1`` and not
+    ``0``. ``|zeta| = 1`` is every point of a saturated magnet, so this is
+    reached rather than approached.
+    """
+    from defumat.xc.lda import clamp_polarization
+
+    derivative = jax.grad(clamp_polarization)
+    assert float(derivative(1.0)) == 1.0
+    assert float(derivative(-1.0)) == 1.0
+    assert float(derivative(0.3)) == 1.0
+    assert float(derivative(1.5)) == 0.0  # genuinely outside: no tangent
+    assert float(derivative(-2.0)) == 0.0
+    # the value is still clamped, which is what the clamp was for
+    assert float(clamp_polarization(jnp.asarray(1.5))) == 1.0
+    assert float(clamp_polarization(jnp.asarray(-2.0))) == -1.0
+    # and the halving is real, so the two spellings genuinely differ
+    assert float(jax.grad(lambda z: jnp.clip(z, -1.0, 1.0))(1.0)) == 0.5
+
+
+@pytest.mark.parametrize("name", ["pz", "pw", "pbe"])
+def test_the_minority_potential_is_continuous_at_full_polarization(name):
+    """``v_down`` at a vanishing minority density is a one-sided derivative.
+
+    It is ``dE/drho_down`` at ``rho_down = 0+`` -- what an added minority
+    electron would feel -- and the energy is continuously differentiable in
+    ``zeta`` on ``(-1, 1]``, so the value at the boundary has to be the limit
+    from inside. QE's ``pz_spin`` and ``pw_spin`` evaluate their ``dfz``
+    analytically at ``z = 1`` with no special case, which is the same
+    statement.
+
+    Before the clamp was written as a ``where`` this jumped by **0.162 Ry**
+    between ``zeta`` exactly ``1.0`` and one ulp below it -- ``v_down`` of
+    -0.22756 against -0.38993 on a hydrogen atom's density -- because the
+    halved tangent halved the ``de_c/dzeta . dzeta/drho_down`` term. Which side
+    a run landed on was rounding: the same H atom as an LSDA run and as a
+    noncollinear one gave ``rho_down`` of 4.7e-18 and 1.4e-17, one of which
+    makes ``zeta`` round to exactly 1 and the other of which does not.
+
+    The energy is *not* what moves, which is why nothing else saw it.
+    """
+    functional = get_functional(name)
+    up = 0.10338550105355025
+
+    def potential(down):
+        return np.asarray(
+            functional.spin_potential(jnp.asarray([[up], [down]]))
+        )[:, 0]
+
+    saturated = potential(0.0)
+    near = potential(1.0e-16)
+    further = potential(1.0e-12)
+
+    # **Continuity is asserted as a rate, not as a tolerance.** ``v_down``
+    # approaches its limit as ``rho_down^(1/3)`` -- the exchange's cube root --
+    # so the gap at 1e-12 is 10^(4/3) times the gap at 1e-16, and reading that
+    # ratio back is what says the value at zero is the *limit* rather than a
+    # number that merely happens to be close.
+    close = abs(saturated[1] - near[1])
+    far = abs(saturated[1] - further[1])
+    assert close < 1.0e-5, close
+    assert far < 1.0e-4, far
+    assert far / close == pytest.approx(10.0 ** (4.0 / 3.0), rel=0.05), far / close
+    # ...and both are three to four orders below the 0.162 Ry the halved tangent
+    # cost, which is what this is guarding.
+    assert far < 0.01 * 0.162
+    # The majority channel never had the defect and does not move.
+    assert abs(saturated[0] - further[0]) < 1.0e-8
+
+
+def test_the_saturated_energy_never_moved():
+    """The other half of the story: only the derivative was wrong.
+
+    A one-sided check that this fix is a fix rather than a change of
+    functional -- ``e_xc`` at a saturated point is what it always was, and the
+    validated total energies rest on it.
+    """
+    functional = get_functional("pz")
+    up = 0.10338550105355025
+    energy = functional.spin_energy_density(jnp.asarray([[up], [0.0]]))
+    approached = functional.spin_energy_density(jnp.asarray([[up], [1.0e-13]]))
+    assert float(np.abs(np.asarray(energy) - np.asarray(approached)).max()) < 1.0e-12

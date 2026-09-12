@@ -72,6 +72,7 @@ __all__ = [
     "compute_pdos",
     "lowdin_charges",
     "partial_energy_grid",
+    "split_spin_columns",
     "project_states",
     "run_pdos",
 ]
@@ -376,6 +377,89 @@ class ProjectedDOS:
 
 
 # --------------------------------------------------------------------------
+# ``partialdos_nc``: a noncollinear run without spin-orbit coupling
+# --------------------------------------------------------------------------
+
+
+def split_spin_columns(channels, projections, eigenvalues, occupations):
+    """``partialdos_nc``'s ``nspin0 = 2`` layout, for a run without ``lspinorb``.
+
+    Without spin-orbit coupling ``s_z`` is still a good quantum number, so
+    ``atomic_wfc_nc`` builds an up and a down copy of every harmonic and the
+    projection has ``2 natomwfc`` columns where a collinear run has
+    ``natomwfc``. ``partialdos.f90``'s noncollinear branch then does not report
+    twice as many channels: it sets ``nspin0 = 2`` and routes each column into
+    an up or a down *density of states* by which half of the shell it sits in,
+    so what comes out has the shape an LSDA projection has.
+
+    That is what this does, and it is bookkeeping rather than physics: the
+    ``(1, nk, 2 nproj, nbnd)`` projection becomes ``(2, nk, nproj, nbnd)`` and
+    the single set of bands is repeated to match, because **both** spin
+    channels are projections of the same spinor bands. Each column keeps its
+    own weight, so the two channels still add up to what the unsplit table
+    would have given.
+
+    The one thing to get right is the order. ``fill_nlmchi``'s noncollinear
+    branch emits every ``m`` of a shell up and then every ``m`` down, inside a
+    loop over atoms and orbitals, so taking the ``s_z > 0`` columns in order
+    gives exactly the scalar table -- which is what makes the collinear limit a
+    shape-for-shape comparison against an LSDA run. The labels are renumbered
+    and their ``s_z`` dropped, because after the split the spin is an *axis*
+    and a column carrying it as well would be labelled twice.
+
+    Returns ``(channels, projections, eigenvalues, occupations)`` unchanged for
+    every other regime.
+    """
+    if not channels or not all(c.s_z is not None for c in channels):
+        return channels, projections, eigenvalues, occupations
+
+    up = [c for c in channels if c.s_z > 0.0]
+    down = [c for c in channels if c.s_z < 0.0]
+    if len(up) != len(down):
+        raise ValueError(
+            f"the projection has {len(up)} up columns and {len(down)} down "
+            "ones; atomic_wfc_nc builds one of each per harmonic"
+        )
+    for a, b in zip(up, down):
+        if (a.atom, a.wfc, a.l, a.m) != (b.atom, b.wfc, b.l, b.m):
+            raise ValueError(
+                "the up and down columns are not in the same order: "
+                f"{a} against {b}. fill_nlmchi emits every m of a shell up and "
+                "then every m down, and the split relies on it"
+            )
+
+    projections = jnp.asarray(projections)
+    if projections.ndim == 3:
+        projections = projections[None]
+    eigenvalues = jnp.asarray(eigenvalues)
+    if eigenvalues.ndim == 2:
+        eigenvalues = eigenvalues[None]
+    if projections.shape[0] != 1 or eigenvalues.shape[0] != 1:
+        raise ValueError(
+            "a noncollinear run carries one set of spinor bands and this one "
+            f"has {projections.shape[0]}"
+        )
+
+    split = jnp.stack([
+        jnp.take(projections[0], jnp.asarray([c.index for c in group]), axis=1)
+        for group in (up, down)
+    ])
+    bands = jnp.concatenate([eigenvalues, eigenvalues], axis=0)
+    filled = np.asarray(occupations)
+    if filled.ndim == 2:
+        filled = filled[None]
+    filled = np.concatenate([filled, filled], axis=0)
+
+    from dataclasses import replace
+
+    labels = tuple(
+        replace(channel, index=position, s_z=None)
+        for position, channel in enumerate(up)
+    )
+    return labels, split, bands, filled
+
+
+# --------------------------------------------------------------------------
 # The integration
 # --------------------------------------------------------------------------
 
@@ -395,6 +479,7 @@ def compute_pdos(
     nelec: float | None = None,
     nat: int | None = None,
     projectors: str = "ortho-atomic",
+    total_eigenvalues=None,
 ) -> ProjectedDOS:
     """Integrate eigenvalues and projections into a projected density of states.
 
@@ -406,6 +491,14 @@ def compute_pdos(
 
     The channels are looped over here and nowhere else, exactly as
     :func:`defumat.workflows.dos.compute_dos` does it.
+
+    ``total_eigenvalues`` is the band set the **unprojected** density of states
+    is built from, and it is not always ``eigenvalues``: a noncollinear run
+    without spin-orbit coupling is projected into two spin channels that are
+    projections of *one* set of spinor bands (:func:`split_spin_columns`), so
+    the bands are repeated for the channel integration and passing them on to
+    ``compute_dos`` would count every state twice. Defaults to
+    ``eigenvalues``, which is every other regime.
     """
     energies = jnp.asarray(energies)
     eigenvalues = jnp.asarray(eigenvalues)
@@ -436,7 +529,7 @@ def compute_pdos(
     integrated = np.stack([np.asarray(n).T for _, n in results])
 
     total = compute_dos(
-        eigenvalues,
+        eigenvalues if total_eigenvalues is None else jnp.asarray(total_eigenvalues),
         weights,
         energies,
         scheme,
@@ -531,6 +624,13 @@ def project_states(
     projections = atomic_projections(
         calculation, wavefunctions, kind=projectors, symmetrize=symmetrize
     )
+    # ``partialdos_nc``'s ``nspin0 = 2``: a noncollinear run without spin-orbit
+    # coupling reports an up and a down density of states rather than twice as
+    # many columns. Every other regime comes back untouched.
+    bands = eigenvalues
+    channels, projections, bands, occupations = split_spin_columns(
+        channels, projections, eigenvalues, occupations
+    )
 
     scheme, degauss = default_scheme(system, scheme, degauss, delta_e)
     tetrahedra = None
@@ -544,7 +644,7 @@ def project_states(
         np.asarray(eigenvalues), emin, emax, delta_e, degauss or 0.0
     )
     return compute_pdos(
-        eigenvalues,
+        bands,
         system.kpoints.weights,
         projections,
         energies,
@@ -558,6 +658,7 @@ def project_states(
         nelec=calculation.nelec,
         nat=system.structure.nat,
         projectors=projectors,
+        total_eigenvalues=eigenvalues,
     )
 
 

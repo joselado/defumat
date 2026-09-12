@@ -61,6 +61,7 @@ from defumat.xc.gga import (
 )
 from defumat.xc.lda import (
     RHO_THRESHOLD,
+    clamp_polarization,
     no_correlation,
     no_correlation_spin,
     no_exchange,
@@ -608,10 +609,8 @@ class Functional(eqx.Module):
         safe_density = jnp.maximum(jnp.abs(density), RHO_THRESHOLD_GGA)
         # ``gcc_spin`` clamps |zeta| to 1 - rho_threshold_gga before testing it,
         # so a polarization that rounds to exactly 1 is kept rather than cut.
-        zeta = jnp.clip(
-            (rho[0] - rho[1]) / safe_density,
-            -(1.0 - RHO_THRESHOLD_GGA),
-            1.0 - RHO_THRESHOLD_GGA,
+        zeta = clamp_polarization(
+            (rho[0] - rho[1]) / safe_density, 1.0 - RHO_THRESHOLD_GGA
         )
         active = (density > RHO_THRESHOLD_GGA) & (
             jnp.sqrt(jnp.abs(sigma)) > RHO_THRESHOLD_GGA
@@ -637,7 +636,7 @@ def _spin_channels(rho):
     absolute = jnp.abs(density)
     active = absolute > RHO_THRESHOLD
     safe = jnp.maximum(absolute, RHO_THRESHOLD)
-    zeta = jnp.clip((rho[0] - rho[1]) / safe, -1.0, 1.0)
+    zeta = clamp_polarization((rho[0] - rho[1]) / safe)
     return active, safe, zeta
 
 
@@ -831,7 +830,13 @@ def local_spin_frame(charge: jnp.ndarray, magnetization: jnp.ndarray):
     # -- which is why small bulk cells never showed it. See
     # :func:`safe_modulus`.
     modulus = safe_modulus(magnetization)
-    clamped = jnp.minimum(modulus, jnp.abs(charge))
+    # ``jnp.minimum`` would split the tangent evenly where the two are *equal*,
+    # which is exactly a saturated point -- see
+    # :func:`defumat.xc.lda.clamp_polarization`, the same defect on ``zeta``.
+    # Written as a ``where`` so a saturated point keeps the tangent of the
+    # physical side, the one where ``|m| < n``.
+    absolute_charge = jnp.abs(charge)
+    clamped = jnp.where(modulus > absolute_charge, absolute_charge, modulus)
     channels = jnp.stack([(charge + clamped) / 2.0, (charge - clamped) / 2.0])
     safe = jnp.where(modulus > 0.0, modulus, 1.0)
     direction = jnp.where(modulus > VANISHING_MAGNETIZATION, magnetization / safe, 0.0)

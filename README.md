@@ -162,7 +162,7 @@ drive any of this and is what the examples below use.
 | **Total energies**, self-consistently, broken down term by term — insulators and metals alike | `calculation = 'scf'` | ✓ | ✓ |
 | **Band structures** along a path through the Brillouin zone | `run_bands` | ✓ | ✓ |
 | **Densities of states**, by smearing or by tetrahedra | `run_dos`, `defumat dos` | ✓ | ✓ |
-| **Projected densities of states** — resolved by atom, by $l$ and by $m$, or by $j$ and $m_j$ for a spin-orbit run, with Löwdin charges and the spilling parameter | `run_pdos`, `defumat pdos` | ✓ | (✓)¹⁶ |
+| **Projected densities of states** — resolved by atom, by $l$ and by $m$, by spin channel where the run is magnetic, or by $j$ and $m_j$ for a spin-orbit run, with Löwdin charges and the spilling parameter | `run_pdos`, `defumat pdos` | ✓ | (✓)¹⁶ |
 | **Forces on the atoms** — unpolarized, collinear spin and noncollinear/spin-orbit, on norm-conserving, ultrasoft and PAW. For a spinor the hand-derived cross-check has no counterpart and `method='analytic'` is refused | `compute_forces` | ✓ | ✓ |
 | **Structural relaxation** — the atoms moved downhill to their equilibrium positions | `calculation = 'relax'`, `defumat relax` | ✓ | ✓ |
 | **Variable-cell relaxation** — the cell and the atoms relaxed together, at an applied pressure | `calculation = 'vc-relax'`, `run_vc_relax` | ✓ | ✓ |

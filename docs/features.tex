@@ -598,16 +598,73 @@ than projecting --- the projection and its integration are 0.137~s of it here.
 Norm-conserving is untested rather than refused --- no reference case is
 committed for it.
 
+\subsection*{Two spin channels for a noncollinear run without spin--orbit coupling}
+
+With \code{noncolin} but \code{lspinorb = .false.} there is no $j$ to resolve
+by: nothing couples $s_z$ to the orbital motion, so $s_z$ is still a good
+quantum number and the orbitals are $|l\,m\rangle\chi_\sigma$ --- an up and a
+down copy of every harmonic, $2\,\mathrm{natomwfc}$ columns where a collinear
+run has $\mathrm{natomwfc}$. What comes back is nonetheless \emph{not} twice as
+many channels: the columns are routed into an \textbf{up and a down density of
+states}, which is \code{partialdos\_nc}'s \code{nspin0 = 2} and is the shape an
+LSDA projection has. This is the regime of any magnetic run with
+scalar-relativistic datasets, and it is what \code{h10-chain-noncolin.in} and
+\code{alas-magnetoelectric-nosoc.in} are.
+
+\begin{pycode}
+from defumat import Calculator
+
+calc = Calculator.from_file("h-atom-noncolin.in",   # noncolin, no lspinorb
+                            pseudo_dir="../pseudo")
+pdos = calc.get_pdos(symmetrize=False)
+
+print(pdos.nspin)                # -> 2: an up channel and a down one
+print(pdos.channels[0])          # -> #1 H1 s: no s_z, the spin is an axis now
+print(pdos.charges.polarization) # -> [0.99857905]: the moment the s shell carries
+\end{pycode}
+
+The decomposition is along the \textbf{global} $z$ and not along the local
+moment, exactly as QE's is: an in-plane texture reports two equal channels,
+which is a statement about the frame the orbitals are built in rather than a
+defect.
+
+\textbf{No \code{projwfc.x} reference for this regime is committed here}, so
+what validates it is an identity instead, and a sharper one: without spin--orbit
+coupling a state polarized along $+z$ block-diagonalises the noncollinear
+Hamiltonian into the two collinear ones, so the projection of such a run must
+reproduce an LSDA run of the same cell channel for channel --- and the LSDA
+route is itself validated against \code{projwfc.x}. On a hydrogen atom in a 12~bohr box the two
+runs agree to \textbf{3e-12~Ry} in total energy, their majority curves to
+\textbf{2e-5 of the peak} and their minority ones to \textbf{0.4 per cent}, and
+their Löwdin charges to \textbf{5e-3} on a polarization of \textbf{0.9986}
+electrons --- which is the number a code that binned both spins into one channel,
+or split the weight evenly, would get wrong while passing every sum rule. The two
+bounds differ for an arithmetic reason rather than a chosen tolerance: the
+noncollinear branch reaches $\rho_\downarrow$ as $(n - |m|)/2$, a cancellation of
+two numbers of order $0.1$ where the collinear branch carries $\rho_\downarrow$
+itself, and that is worth $1.1\times10^{-4}$~Ry on the \emph{empty} minority
+eigenvalue where every occupied one agrees to $10^{-6}$.
+
+Unlike a spin--orbit run this case \emph{does} have an $m$ to report, so
+\code{charges\_lm} is filled where a $j$-resolved projection leaves it
+\code{None}. \code{print\_lowdin} allocates it only \code{IF (nspin /= 4)} and
+so prints none for either noncollinear branch; the reason it gives --- a
+spin-angle function has no $m$ --- is true of the spin--orbit branch alone, and
+the table here is the richer one on purpose.
+
 \begin{refuses}
-\textbf{Refuses.} A \textbf{symmetrised} spinor projection: averaging over the
-point group needs the SU(2) representation of each operation beside the rotation
-of the harmonics, and that is not built --- run with \code{nosym} and the whole
-$\mathbf k$-grid, where both codes use every point and neither averages.
-\textbf{\code{noncolin} without \code{lspinorb}}: there is no $j$ to resolve by,
-and the up/down projection that case wants is not built here. An
-$m$-resolved charge is \emph{absent} rather than refused: \code{charges\_lm} is
-\code{None} for a spinor run, since a spin-angle function has an $m_j$ and no
-$m$, and there is no $p_x$ weight to report.
+\textbf{Refuses.} A \textbf{symmetrised} spinor projection, in either
+noncollinear branch: averaging over the point group needs the SU(2)
+representation of each operation beside the rotation of the harmonics, and that
+is not built --- run with \code{nosym} and the whole $\mathbf k$-grid, where
+both codes use every point and neither averages, or pass
+\code{symmetrize=False}. A \textbf{fully-relativistic dataset with
+\code{lspinorb = .false.}}: QE dispatches the orbitals on \code{has\_so} and
+their labels on \code{lspinorb}, so it builds $j$-resolved columns and calls
+them up/down ones. An $m$-resolved charge is \emph{absent} rather than refused
+for a \textbf{spin--orbit} run: \code{charges\_lm} is \code{None} there, since a
+spin-angle function has an $m_j$ and no $m$, and there is no $p_x$ weight to
+report.
 \end{refuses}
 
 % =====================================================================

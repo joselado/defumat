@@ -39,7 +39,8 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from defumat.units import E2
-from defumat.xc.lda import pw_correlation_hartree, pw_spin_hartree
+from defumat.xc.lda import (clamp_polarization, pw_correlation_hartree,
+                            pw_spin_hartree)
 
 __all__ = ["pbe_exchange", "pbe_correlation", "pbe_correlation_spin",
            "no_gradient_exchange", "no_gradient_correlation",
@@ -169,7 +170,7 @@ def pbe_correlation_spin(rho, zeta, sigma, beta: float = PBE_BETA):
     (they contain ``vc_up - ec`` and a ``dh0/dzeta``) is here just a term in an
     expression that ``jax.grad`` differentiates.
     """
-    z = jnp.clip(zeta, -1.0, 1.0)
+    z = clamp_polarization(zeta)
     rs = _PI34 / rho ** (1.0 / 3.0)
     ec = pw_spin_hartree(rs, z)
 

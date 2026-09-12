@@ -218,22 +218,6 @@ def atomic_projections(
             "nothing here builds those. Run with nosym = .true. and the whole "
             "k-grid, which is the same physics, or pass symmetrize=False"
         )
-    if noncolin and not lspinorb:
-        # The *orbitals* for this branch are built (``atomic_wfc_nc``, an up and
-        # a down copy of each harmonic -- ``_updown_matrix``), and the labels
-        # carry their ``s_z``. What is not here is ``partialdos_nc``'s layout for
-        # it: that branch has ``nspin0 = 2`` and routes each column into an up or
-        # a down channel by ``ind <= 2l+1``, where this package's ``compute_pdos``
-        # would bin all of them as one. No reference was generated for it either,
-        # so it is refused rather than shipped as a plausible decomposition --
-        # the same rule the rest of the package follows.
-        raise NotImplementedError(
-            "a projected density of states for a noncollinear run without "
-            "spin-orbit coupling is not implemented: the spin-angle orbitals are "
-            "built, but partialdos_nc splits such a run's columns into up and "
-            "down densities of states (nspin0 = 2) and nothing here does that. "
-            "lspinorb = .true. is implemented and validated against projwfc.x"
-        )
     channels = calculation_channels(calculation)
     if not channels:
         raise ValueError(
