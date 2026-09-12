@@ -12730,7 +12730,7 @@ deliberate calculation and the result object already says so. Not a refusal, bec
 state is a legitimate thing to compute -- and every response entry point already refuses it
 by name.
 
-### P77c -- `starting_magnetization = 2` meant two different things in the two codes. ✅ DONE, per species; ⏳ the card.
+### P77c -- `starting_magnetization = 2` meant two different things in the two codes. ✅ DONE.
 
 `defumat/scf/driver.py`. `NONCOLLINEAR.md`'s Tier 1 item 4, the half that is not a
 convention question. `pw.x` reads a starting magnetization at or above 1 as **Bohr
@@ -12779,15 +12779,28 @@ polarized the atom is or the first iteration contradicts itself."
 `constrained_magnetization = 'atomic'` therefore aims at exactly the number the user wrote.
 That is right and changing it would break it.
 
-**What is outstanding: the `STARTING_MOMENTS` card's unit, which is a user decision rather
-than a bug to fix.** The card is documented as Bohr magnetons in four places
-(`io/pwin.py:51`, `builder.py:94-95`, `builder.py:1593`, `docs/features.tex:875-877`) and
-is consumed as the per-atom *weight* on that species' tabulated atomic charge, so a row of
-`(0, 0, 1.0)` seeds **6.0** mu_B on oxygen and a row of `(0, 0, 3.0)` seeds 18 and a
-negative channel. Both readings are defensible -- Bohr magnetons matches the documentation
-and the constraint side, a fraction matches `starting_magnetization` three lines below --
-and **picking one changes the seeded density for every existing texture input**, so it is
-not a change to make silently. Measured, stated, and left for the user.
+**The card's unit was the user's decision and they took Bohr magnetons**, which is what it
+was documented as in four places (`io/pwin.py:51`, `builder.py:94-95`, `builder.py:1593`,
+`docs/features.tex:875-877`), what the `atomic` constraint aims at, and what `get_locals`
+reports back. It was consumed as the per-atom *weight* on that species' tabulated atomic
+charge, so a row of `(0, 0, 1.0)` seeded **6.0** mu_B on oxygen and `(0, 0, 3.0)` seeded 18
+and a channel of **-6 electrons**. `Calculation.local_seed_weights` now divides the rows by
+each atom's valence charge on the way into the seed:
+
+| card row (mu_B) | 1.0 | 2.0 | -3.0 | 6.0 | 9.0 |
+|---|---|---|---|---|---|
+| seeded before | +6.0 | +12.0 | -18.0 | +36.0 | +54.0 |
+| seeded after | +1.0 | +2.0 | -3.0 | +6.0 | **+6.0**, warned |
+
+**The division belongs to the seed and to nothing else.** `System.local_moments` stays in
+Bohr magnetons, which is what the magnetic symmetry filter and the constraint targets read:
+the filter tests a pattern of *physical* moments, and dividing a two-species texture by two
+different valence charges would hand it a pattern nothing physical has. A row larger than
+the atom's valence charge is **clamped with a warning rather than refused** -- an atomic
+superposition cannot express more moment than the atom has electrons, and the alternative
+is the negative channel again. This changes the seeded density of every existing texture
+input by a factor of `Z_v`; on hydrogen, which is what every committed texture test uses,
+`Z_v = 1` and nothing moves at all.
 
 ## 4. Validation strategy
 

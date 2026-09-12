@@ -899,7 +899,16 @@ cell; the default of 10 is a guess until it is.
 
 \textbf{A starting magnetic texture} (\code{STARTING\_MOMENTS} card): one
 starting moment per \emph{atom}, cartesian, in Bohr magnetons, one line per atom
-in the order of \code{ATOMIC\_POSITIONS}. QE's \code{starting\_magnetization},
+in the order of \code{ATOMIC\_POSITIONS}. \emph{Bohr magnetons} is meant
+literally: a row of \code{0.0 0.0 2.0} seeds a $2\,\mu_B$ moment on that atom
+whatever its valence charge, which is the same number the \code{atomic}
+constraint aims at and the same one the per-site report gives back. A row asking
+for more moment than the atom has valence electrons is clamped to it, with a
+warning --- a superposition of atomic charges cannot express more, and the
+alternative is a negative spin channel. \code{starting\_magnetization} in the
+namelist follows \qe{}: below 1 it is a \emph{fraction} of the valence charge,
+and at or above 1 it is Bohr magnetons and every species is divided by its own
+valence charge (\code{input.f90:1448}). QE's \code{starting\_magnetization},
 \code{angle1} and \code{angle2} are per \emph{species}, so a helix, a cycloid or
 a skyrmion cannot be stated in a \code{pw.x} input at all.
 

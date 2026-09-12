@@ -287,3 +287,58 @@ def test_the_collinear_and_noncollinear_seeds_use_the_same_rule(pseudo_dir):
     assert fraction[0] == pytest.approx(0.5, abs=1e-12)   # 3.0 / 6
     assert weights[0, 0] == pytest.approx(0.75, abs=1e-12)
     assert weights[1, 0] == pytest.approx(0.25, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    "row, seeded, clamped",
+    [(1.0, 1.0, False), (2.0, 2.0, False), (-3.0, -3.0, False),
+     (6.0, 6.0, False), (9.0, 6.0, True)],
+)
+def test_a_card_row_seeds_the_moment_it_names(row, seeded, clamped, pseudo_dir):
+    """``STARTING_MOMENTS`` is in Bohr magnetons, which is what it always said.
+
+    It was documented as Bohr magnetons in four places and consumed as the
+    per-atom weight on that species' tabulated atomic charge, so a row of
+    ``(0, 0, 1.0)`` seeded **6.0** on this oxygen atom and ``(0, 0, 3.0)``
+    seeded 18 and a channel of -6 electrons. The rows are now divided by the
+    valence charge on the way into the seed, and only there.
+
+    A row larger than the valence charge is clamped with a warning rather than
+    refused: an atomic superposition cannot express more moment than the atom
+    has electrons, and the alternative is a negative channel density.
+    """
+    import re
+    import tempfile
+    import warnings
+
+    text = re.sub(
+        r"starting_magnetization\(1\)\s*=\s*[-\d.]+",
+        "starting_magnetization(1) = 0.0",
+        (QE / "o-atom-lsda.in").read_text(),
+    )
+    directory = Path(tempfile.mkdtemp())
+    (directory / "case.in").write_text(
+        text + f"STARTING_MOMENTS\n 0.0 0.0 {row}\n"
+    )
+    system = system_from_file(directory / "case.in")
+    pseudos = tuple(
+        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        calculation = Calculation(system, pseudos)
+        density = np.asarray(calculation.starting_density())
+    scale = system.cell.volume / density[0].size
+    up, down = (density.sum(axis=(1, 2, 3)) * scale)[:2]
+
+    assert up - down == pytest.approx(seeded, abs=1e-9)
+    assert min(up, down) >= -1e-12, "a channel density went negative"
+    assert up + down == pytest.approx(6.0, abs=1e-9)
+    assert bool([w for w in caught if "valence charge" in str(w.message)]) is clamped
+
+    # **The card itself does not move.** The magnetic symmetry filter and the
+    # constraint targets read ``System.local_moments``, and they want the
+    # physical moment in Bohr magnetons -- dividing a two-species texture by
+    # two different valence charges would give the filter a pattern nothing
+    # physical has.
+    assert np.asarray(system.local_moments)[0, 2] == pytest.approx(row, abs=1e-12)

@@ -2,8 +2,8 @@
 
 ## 1. What this file is
 
-> **Status, 2026-09-12.** Items **1**, **2**, **6**, **7**, the guard half of **3** and the
-> per-species half of **4** are fixed (`9f806b0`, `1828c4e` and the commit after them), with the numbers folded into each entry below and into `PLAN.md`
+> **Status, 2026-09-12.** Items **1**, **2**, **6**, **7**, the guard half of **3** and **4** are
+> fixed (`9f806b0`, `1828c4e` and the commit after them), with the numbers folded into each entry below and into `PLAN.md`
 > P77/P77a; two defects found while fixing them -- `at_cell` never remeasuring the
 > integration spheres, and `forces/torque.py` guarding a per-point modulus with a global
 > norm -- are fixed with them. **Everything else in this file still stands.** Each fixed
@@ -277,14 +277,15 @@ has to be generated and committed.
 
 #### 4. QE divides `starting_magnetization` by the valence charge above 1, and this code does not
 
-**HALF FIXED 2026-09-12.** The per-species rule is transcribed, clamp included: on
+**FIXED 2026-09-12.** The per-species rule is transcribed, clamp included: on
 `o-atom-lsda.in` (`Z_v = 6`) a written `2.0` now seeds **+2.00** mu_B where it seeded
 **+12.00** and a `N_down` of **-3 electrons**. The trap was a *second copy* of the
 padding in `spin_weights`, which the collinear seed and PAW's `becsum` both read, so
-the first version of the fix moved the noncollinear seed only. **The card's unit is
-left open deliberately** -- it is a user decision, measured in `PLAN.md` P77c: a row of
-`(0,0,1.0)` seeds 6.0 mu_B on oxygen, and picking a meaning changes the seeded density
-for every existing texture input.
+the first version of the fix moved the noncollinear seed only. **The card's unit was put to the
+user and they chose Bohr magnetons**, which is what it was always documented as: a row of
+`(0,0,1.0)` now seeds 1.0 mu_B on oxygen where it seeded 6.0, and the division happens on
+the way into the *seed* only -- `System.local_moments`, which the filter and the constraint
+read, stays in Bohr magnetons.
 
 **What.** `pw.x` reads a starting magnetization at or above 1 as **Bohr magnetons** and
 divides every species by its valence charge; below 1 it is a fraction of the valence

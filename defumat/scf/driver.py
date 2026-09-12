@@ -3245,7 +3245,50 @@ class Calculation:
         """
         if not self.system.starting_moments:
             return None
-        return np.asarray(self.system.local_moments, dtype=float)[:, axis]
+        return self.local_seed_weights[:, axis]
+
+    @property
+    def local_seed_weights(self) -> np.ndarray:
+        """``(nat, 3)``: each atom's card moment as a **fraction of its charge**.
+
+        The card is in **Bohr magnetons** -- that is what it is documented as in
+        four places, what the ``atomic`` constraint aims at, and what
+        ``get_locals`` reports back -- but what the starting density needs is a
+        *weight* on that species' tabulated atomic charge, exactly as
+        ``starting_magnetization`` is. So the rows are divided by the valence
+        charge here, and nowhere else.
+
+        **This division belongs to the seed alone.** ``System.local_moments``
+        stays in Bohr magnetons, which is what the magnetic symmetry filter and
+        the constraint targets read -- the filter tests a pattern of *physical*
+        moments, and dividing a two-species texture by two different valence
+        charges would change that pattern into one nothing physical has.
+
+        Before this, a row of ``(0, 0, 1.0)`` seeded **6.0** mu_B on an oxygen
+        atom and ``(0, 0, 3.0)`` seeded 18 and a channel of **-6 electrons**.
+        The clamp is the same one ``starting_magnetization`` gets and for the
+        same reason: a moment larger than the atom's valence charge is not one
+        an atomic superposition can express.
+        """
+        moments = np.asarray(self.system.local_moments, dtype=float)
+        types = np.asarray(self.system.structure.types, dtype=int)
+        valence = np.array(
+            [float(self.pseudos[t].z_valence) for t in types]
+        )[:, None]
+        weights = moments / valence
+        largest = np.max(np.abs(weights)) if weights.size else 0.0
+        if largest > 1.0:
+            warnings.warn(
+                f"a STARTING_MOMENTS row asks for more moment than the atom has "
+                f"valence charge (the largest is {largest:.3f} times it), which "
+                f"an atomic superposition cannot seed -- a channel density would "
+                f"go negative. The rows are in Bohr magnetons; they are clamped "
+                f"to the valence charge for the starting guess, and the SCF is "
+                f"free to move away from it. The constraint targets, if any, are "
+                f"not clamped",
+                stacklevel=2,
+            )
+        return np.clip(weights, -1.0, 1.0)
 
     @property
     def starting_magnetization(self) -> np.ndarray:
