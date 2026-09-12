@@ -193,10 +193,10 @@ K_POINTS automatic
 """
 
 
-def _nickel(pseudo_dir, angle1, angle2=0.0):
+def _nickel(pseudo_dir, angle1, angle2=0.0, conv_thr=1.0e-12):
     text = _NICKEL.format(angle1=angle1, angle2=angle2)
     calculator = Calculator.from_text(text, pseudo_dir, announce=False)
-    scf = calculator.get_scf(conv_thr=1e-10)
+    scf = calculator.get_scf(conv_thr=conv_thr)
     return angular_momenta(calculator.calculation, scf), scf
 
 
@@ -226,11 +226,27 @@ def test_the_orbital_moment_rotates_with_the_magnetization(pseudo_dir):
 
     The moment is driven along ``z``, ``x`` and ``y`` in turn; the magnitude
     must be the same in all three -- the three cubic axes are equivalent by
-    symmetry -- and ``<L>`` must follow ``<S>``. Measured: **0.0364767** in each,
-    a spread of 7.3e-11 over the three axes, with ``L.S/|L||S| = 1.00000000``.
+    symmetry -- and ``<L>`` must follow ``<S>``. Measured at ``conv_thr =
+    1e-12``: **0.03647659** in each, a spread of **7.4e-10** over the three
+    axes, with ``L.S/|L||S| = 1.00000000``. All three take 20 iterations and
+    their total energies agree to 3e-12 Ry.
 
-    The threshold matters and is why this converges to 1e-10: at 1e-8 the same
-    spread is 1e-5, which is the SCF's own scatter and not the symmetry.
+    **The threshold is the whole test and 1e-10 is not tight enough**, which is
+    a stronger statement than the one this docstring used to make. At 1e-10 the
+    three runs stop at *different states*: the x one at
+    -335.167135773432 Ry in 15 iterations and the other two at
+    -335.167135784928 in 16, which is 1.15e-8 Ry apart, and the spread in
+    ``|<L>|`` is 2.3e-7 -- three hundred times the symmetry it is meant to
+    measure. The state the tight runs reach is the *x* one, so the other two
+    were stopping short rather than the x one overshooting.
+
+    That is worth more than a threshold change. ``dr2`` is 9e-11 at the stop and
+    the energy is 1.15e-8 out, a hundredfold, and the reason is item 18's:
+    ``rho_ddot`` weights the magnetization residual by a constant where it
+    weights the charge by ``1/G^2``, so on a magnetic cell an ``accuracy`` below
+    ``conv_thr`` bounds the moment much more weakly than it bounds the charge --
+    and ``<L>`` is a moment. ``scf.history`` now carries the two halves
+    separately, which is the instrument this would have needed.
     """
     magnitudes = []
     for angle1, angle2 in ((0.0, 0.0), (90.0, 0.0), (90.0, 90.0)):
@@ -239,7 +255,10 @@ def test_the_orbital_moment_rotates_with_the_magnetization(pseudo_dir):
         cosine = orbital @ spin / (np.linalg.norm(orbital) * np.linalg.norm(spin))
         assert abs(cosine - 1.0) < 1.0e-6, (angle1, angle2, cosine)
         magnitudes.append(np.linalg.norm(orbital))
-    assert np.ptp(magnitudes) < 1.0e-9, magnitudes
+    # 7.4e-10 measured; the bound is an order above it, because what is left at
+    # 1e-12 is the residual scatter of three independent runs and not a
+    # quantity anything here converges further.
+    assert np.ptp(magnitudes) < 5.0e-9, magnitudes
 
 
 @pytest.mark.slow

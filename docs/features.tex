@@ -582,7 +582,30 @@ diagonal in $\mathbf G$ and is inverted iteratively at each step. On a cobalt
 film it converges at \code{mixing\_beta = 0.7} where plain Anderson at the same
 $\beta$ diverges and Kerker at $0.3$ is still far out after 250 iterations. \code{max\_iterations}
 defaults to 100 --- \textbf{a hard SCF may need more}, and hitting the cap is
-reported as not converged rather than as an answer.
+reported as not converged rather than as an answer: \code{run\_scf} issues a
+\code{RuntimeWarning} naming the accuracy it reached, and \code{Calculator}
+raises. Both matter, because a script driving the functional entry point --- a
+spiral scan, a $\lambda$ ramp, a moment-versus-field sweep --- is exactly what
+would otherwise read \code{total\_energy} off an unconverged density without
+looking at \code{converged}.
+
+\code{mixing\_ndim} sets how many previous iterations the extrapolation spans,
+default 8 as in \code{pw.x}. Raising it is the standard first move on a cell
+that will not converge, and \emph{on the magnetic benchmark here it does not
+help}: \code{benchmarks/fe-mag-1k.in} at \code{conv\_thr = 1e-8} takes 27
+iterations at 4, \textbf{25 at 8}, 33 at 12 and 39 at 20, so the default is
+already the best value and the deeper histories are worse. The nonmagnetic twin
+of the same cell (\code{fe-unstable-nonmagnetic.in}, same $\beta$) has the same
+shape --- 26, \textbf{21}, 30, 26 --- which says the sensitivity is not about
+magnetism.
+
+\textbf{\code{dr2} is reported as its two halves} as well as its total, in
+\code{scf.history} and on the console. \code{rho\_ddot} weights the charge
+residual by $1/G^2$ and the magnetization residual by a constant --- a factor of
+13.6 apart at $G_{\min}$ on \code{fe-mag-1k} --- so a single \code{accuracy}
+below \code{conv\_thr} bounds the moment much more weakly than it bounds the
+charge, and only the split can say whether it is the charge or the magnetization
+that is still moving.
 
 % =====================================================================
 \section{Bands, densities of states, projections}
@@ -852,6 +875,47 @@ iterations with $9.5\times10^{-2}$~Ry applied and a total $4.7\times10^{-5}$~Ry
 out. A run that stops above $10^{-4}$~Ry now says so, naming
 \code{field\_scale}, the residual and \code{field\_energy}; a field held at full
 strength (\code{reducebf = 1}) is a deliberate calculation and is left alone.
+\code{reducebf} is also held to Elk's own $[0.5, 1]$
+(\code{readinput.f90:1264}), which this used to accept any value outside:
+above 1 the symmetry-breaking field \emph{grows} every iteration, and below 0.5
+it is gone before the density has responded to it.
+
+\begin{refuses}
+\textbf{Refused.} \code{constrained\_magnetization = 'fsm'} together with
+\code{lspinorb = .true.} The fixed-spin-moment search measures $\chi = \delta
+m_a / \delta B_a$ one cartesian component at a time and inverts it the same
+way, which models $\partial m_a/\partial B_b$ as \emph{diagonal} --- three
+independent one-dimensional searches. Spin-orbit coupling ties the moment to the
+lattice and is exactly what makes that untrue: pushing along $x$ moves the moment
+along $z$ as well. The scheme would still converge sometimes and find the wrong
+field the rest of the time, with nothing in the output to say which. Use a
+penalty scheme (\code{'total'}, \code{'atomic'}) to hold a moment under
+spin-orbit coupling.
+
+\textbf{Also refused:} \code{noncolin = .true.} with \code{angle1}/\code{angle2}
+set and no \code{starting\_magnetization}. The angles are the \emph{direction}
+of a moment whose length is \code{starting\_magnetization}, so with no length
+there is no moment: \code{domag} goes false, \code{nspin\_mag} collapses to 1,
+and what runs is an unpolarized calculation with spinor wavefunctions ---
+converged, successful, and not the calculation the angles asked for. \code{pw.x}
+runs that input silently. A spinor run with nothing magnetic in it stays
+accepted, because that is an ordinary calculation; the refusal is about a
+\emph{stated} direction with nothing to point.
+
+\textbf{The polar-angle constraint is guarded on the axis.}
+\code{'total direction'} used to return a NaN potential in all three components
+whenever the moment lay along $z$ --- which is where a run seeded from
+\code{starting\_magnetization} with no angles starts. $\arccos'$ diverges at the
+poles while the transverse moment's own derivative vanishes there, so the chain
+is $0 \times \infty$; and at a \emph{round-off} transverse moment $m_z/|m|$
+rounds to bit-exactly 1 and the clamp halves the tangent instead. The angle is
+written $\operatorname{atan2}(|m_\perp|, m_z)$ with both arguments masked at the
+value the derivative is taken at, which reproduces QE's \code{fact1} to 1e-12
+off the axis and QE's zeroed transverse factors on it, plus its literal
+$10^{-14}$ escape field along $x$ --- without which the moment sits at an
+unstable stationary point of its own penalty and never turns
+(\code{add\_bfield.f90:184-192}).
+\end{refuses}
 
 \textbf{Restarting an SCF from the middle} (\code{checkpoint\_dir},
 \code{checkpoint\_every}, \code{max\_seconds}). A job killed at its wall clock

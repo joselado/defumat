@@ -1612,6 +1612,37 @@ memory direction, which is the one still open.
 
 ---
 
+## Y. `conv_thr` bounds a moment much more weakly than it bounds a charge
+
+### Y1. `dr2 = 9e-11` on a magnetic cell left the total energy 1.15e-8 Ry out **[found by a test]**
+
+**Closed as a test fix, kept here as the measurement**, because the mechanism is general
+and the next person to pick a `conv_thr` for a magnetic quantity needs it.
+
+`tests/unit/test_angular_momenta.py::test_the_orbital_moment_rotates_with_the_magnetization`
+drives nickel's moment along z, x and y in turn and asserts `|<L>|` is the same in all
+three -- the cubic axes are equivalent, so it is a pure symmetry check. At the
+`conv_thr = 1e-10` it used, the three runs **stop at different states**: x at
+-335.167135773432 Ry in 15 iterations, z and y at -335.167135784928 in 16, which is
+**1.15e-8 Ry** apart, and the spread in `|<L>|` is **2.3e-7** against the test's own 1e-9.
+At `conv_thr = 1e-12` all three take 20 iterations, agree to **3e-12 Ry**, and `|<L>|`
+spreads by **7.4e-10**. The tight value, 0.03647659, is the one the docstring quoted, so
+the *x* run was the accurate one at 1e-10 and the other two were stopping short.
+
+**Why `dr2` did not see it.** `rho_ddot` weights the charge residual by `1/G^2` and the
+magnetization residual by a constant -- a factor of 13.6 apart at `G_min` on
+`fe-mag-1k` -- so on a magnetic cell an `accuracy` below `conv_thr` bounds the moment much
+more weakly than it bounds the charge. `<L>` is a moment. This is `NONCOLLINEAR.md` item
+18's prediction, found in the wild the same day the split that measures it landed: the two
+halves are now on `scf.history` as `charge_accuracy` and `magnetic_accuracy`.
+
+**What is not settled.** The three-orientation spread is now measured at one cutoff on one
+cell. Whether `1e-12` is the right default for a magnetic run generally, and whether the
+`ethr` schedule should be driven by the magnetization half rather than the sum on a
+magnetic cell, are both open and neither has a number. `pw.x` uses the same summed
+`rho_ddot` for its schedule, so this would be a deliberate departure rather than a
+correction.
+
 ## X. Downgraded, and test-suite hygiene
 
 ### X1. The analytic force recompiles per ionic step -- real, and not the severity the entry claims

@@ -12882,6 +12882,134 @@ convergence" was true. That claim is now removed rather than disproved. P77's si
 readout is what makes the converged directions observable, so the measurement is cheap and
 is the natural next step.
 
+### P78 -- The magnetic audit's Tier 2 and Tier 3: eight silences and one crash. ✅ DONE.
+
+`defumat/scf/fields.py`, `scf/driver.py`, `scf/potential.py`, `scf/mixing.py`,
+`system/builder.py`, `calculator.py`. `NONCOLLINEAR.md` items 8, 14, 16, 18, 19, 20, 21 and
+four of the smaller ones. Every one of them is a run that starts and finishes.
+
+**`'atomic texture'` crashed on its own first potential build.** The driver decided whether
+to build the per-atom integration spheres from a hand-written tuple of two constraint names
+and the third was never added to it, so `regions = None` reached
+`fields.local_moments`'s `self.regions.integrate(...)` -- an `AttributeError`, for any
+input that did not also happen to carry a `LOCAL_MAGNETIC_FIELDS` card. It escaped because
+every committed test built the `MagneticField` directly with regions supplied, and P75's
+production run set 45 per-atom fields. The tuple is now `fields.ATOM_RESOLVED`, one set
+beside `CONSTRAINTS`; `sphere_moments` refuses by name rather than letting `None` surface
+two frames down. `tests/data/qe/h2-texture-120.in` is the input that could not run.
+
+**`'total direction'` returned NaN in all three components of the potential whenever the
+moment lay along z.** That is where a run seeded from `starting_magnetization` with no
+angles *starts*, so the constraint failed on its own first iteration. Two mechanisms, and
+which one fires is rounding: `arccos'` diverges at the poles while `d|m_perp|/dm_x`
+vanishes there, giving `0 * inf`; and at a transverse moment of round-off (6.3e-16,
+measured -- a random channel cancelled against its own mean) `m_z/|m|` rounds to
+bit-exactly 1.0, so `jnp.clip` lands on its boundary and halves the tangent as well. Both
+were NaN. The angle is now `atan2(|m_perp|, m_z)` with **both** arguments masked at the
+value the derivative is taken at -- `|m_perp|` at its own square, and `m_z` where there is
+no moment at all, since `atan2`'s own JVP is `0/0` at the origin.
+
+*The number:* off the axis the gradient is QE's `fact1` -- `(0.8, 0, -0.6)` against
+`(0.8, 0, -0.6)` on the test density, agreeing to **1e-12** across the whole potential; on
+it, zero, which is QE's zeroed transverse factors. QE's literal `1.D-14` escape along x is
+carried too, written as the energy term whose derivative it is (`stop_gradient` on the
+prefactor, because the point is a *constant* field and not a second penalty). Without it
+the moment sits at an unstable stationary point of its own penalty and never turns. One
+deliberate difference from `add_bfield.f90:189`: QE gates the escape on
+`mcons(3,1) > 0`, so a moment on the **-z** axis with a target of 0 gets no kick and stays
+at pi; here the gate is `error != 0`, which covers QE's case and that one.
+
+**`mixing_ndim` was parsed and dropped on the floor.** `AndersonMixer.history` was fixed at
+8 and `run_scf` had no depth parameter, so an input that set it behaved exactly like one
+that did not. It now reaches the mixer through `run_scf`, `Calculator`, and all three
+relaxation drivers -- the last found by `test_the_relaxation_drivers_name_every_option_the_scf_does`,
+which is the test that exists because `mixing_fixed_ns` had the same gap. `get_mixer` drops
+a `None` and refuses a keyword the named mixer has no field for, so `linear` with a
+`history` is a named error rather than a `TypeError` from inside a dataclass.
+
+*The number, and it is a negative one worth having.* Raising `mixing_ndim` is the standard
+first move on a cell that will not converge, and on the magnetic benchmark **it does not
+help**. `benchmarks/fe-mag-1k.in` at `conv_thr = 1e-8`: 27 iterations at `ndim = 4`,
+**25 at 8**, 33 at 12, 39 at 20 -- the default is the best value and the deeper histories
+are monotonically worse above it. The deconfounder `fe-unstable-nonmagnetic.in` (same cell,
+same dataset, same `mixing_beta = 0.3`, `nspin = 1`) has the same shape: 26, **21**, 30, 26.
+So the sensitivity is not magnetic, and neither is most of the gap to `pw.x`'s 12 --- the
+*nonmagnetic* twin of the magnetic benchmark takes 21 here. That is evidence against item
+17's mixer-metric hypothesis rather than for it, and it is the first measurement anyone has
+put against that item. Unset and `mixing_ndim = 8` give the same count and the same energy
+to ten digits.
+
+**`dr2` folded the charge and the magnetization into one scalar.** `scf_accuracy_terms`
+returns them separately; `run_scf` records both in `history` and prints them per iteration
+when the magnetic half is nonzero. `rho_ddot` weights the charge residual by `1/G^2` and
+the magnetization residual by a constant, a factor of 13.6 apart at `G_min` on
+`fe-mag-1k`, so an `accuracy` below `conv_thr` bounds the moment much more weakly than it
+bounds the charge.
+
+*One trap, paid for here.* The first version computed `accuracy` **as** the sum of the two
+halves. That differs from the fused expression by one ulp -- **2.2e-16** relative, measured
+over eight random residuals -- and `accuracy` is not only reported: `electrons.f90`'s
+`ethr` schedule is computed from it, so one ulp moves the eigensolver's threshold and with
+it the last digits of every eigenvalue. The reported total is now still the fused value and
+the split is computed separately. **A diagnostic must not change the run it is
+diagnosing**, and the cost of finding that out was a four-minute nickel run.
+
+**Two silences at the ends of a run.** `run_scf` returned an unconverged result with no
+warning -- the facade raises, and the functional entry point, which is the one a script
+drives, said nothing; it now issues a `RuntimeWarning` naming the accuracy it reached. A
+warning rather than a raise because a deliberate `max_iterations = 1` is a legitimate thing
+to ask for and eight committed tests do. And `noncolin` with `angle1`/`angle2` set and no
+`starting_magnetization` is refused: the angles are the *direction* of a moment whose length
+is `starting_magnetization`, so with no length `domag` is false, `nspin_mag` collapses to 1,
+and what runs is an unpolarized calculation with spinor wavefunctions. `pw.x` runs it
+silently. The refusal discriminates -- a spinor run with nothing magnetic in it is the
+spin-orbit platinum case in the fast gate and stays accepted.
+
+**`fsm` with `lspinorb` is refused by name.** `_secant_step` measures `chi = dm_a/dB_a` one
+cartesian component at a time and inverts it the same way, modelling the susceptibility as
+diagonal; spin-orbit coupling ties the moment to the lattice and is exactly what makes that
+untrue. The scheme would still converge sometimes, with nothing in the output to say which
+time. **`reducebf` is held to Elk's `[0.5, 1]`** (`readinput.f90:1264`), where this accepted
+anything: above 1 the field grows every iteration and below 0.5 it is gone before the
+density has responded to it.
+
+**A texture had no Python route, and the obvious workaround was silently wrong.**
+`System.with_moments` and `Calculator.with_moments` take an `(nat, 3)` array of Bohr
+magnetons, or `None` to drop the card. The machinery already existed -- `_respin_kpoints`
+forwards `per_atom` -- and no method reached it, so a sweep over magnetic configurations
+meant one input file per configuration.
+
+*The number, and it needs no SCF.* On `tests/data/qe/h4-chain-ferro.in`, four hydrogen
+atoms of one species with symmetry on: the ferromagnet has **nsym = 16** and **9** k-points
+from a 2x2x4 grid. `dataclasses.replace(system, starting_moments=cycloid)` leaves those 9
+k-points in place while `symmetry_group()` -- a *property*, recomputed -- returns **4**, so
+the density would be symmetrised with a group its k-set cannot support. `with_moments`
+rebuilds to **12** k-points at nsym = 4, and dropping the card restores 9 at 16. On a system
+built nonmagnetic the same workaround also flips `domag`, so the k-set carries a
+`time_reversal` a magnetic run must not have.
+
+**`SCFResult.site_residuals`** says how far each atom ended from its own constraint target,
+in degrees for the two direction schemes and Bohr magnetons for `'atomic'`.
+`constraint_energy` is one scalar over every site, so under `'atomic texture'` one flipped
+site out of fifteen read as a small number indistinguishable from partial convergence
+everywhere.
+
+**Two names, and a function that never existed.** `MagneticField.local_moments` is now
+`sphere_moments`: two different objects were called `local_moments` and a constraint
+compares them against each other -- `System.local_moments` is the per-atom moment the input
+*asked for* and decides the magnetic group, the other is what the current density *has* in
+each sphere. And `_atomic_b_field`'s docstring pointed at `_refuse_untextured_symmetry` for
+two phases; no such function was ever written, and there should not be one -- since P77b's
+tolerance fix a `LOCAL_MAGNETIC_FIELDS` card reaches `symmetry_group` at any magnitude
+above 1e-12, so a run whose texture lives only in the fields is no longer a run whose group
+cannot see it. Three prose sites said the opposite and now say that.
+
+**What is outstanding.** The notebook, which P77 also owes. Items 10, 11, 12, 13, 15 and 17
+are phases rather than sessions and are untouched: nothing holds a texture that is not the
+ground state, no noncollinear linear response, no noncollinear magnons, no `d_spin_ldau`,
+no external number for a spin spiral, and no measurement of the mixer's metric beyond the
+`mixing_ndim` sweep above.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.

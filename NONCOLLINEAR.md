@@ -2,13 +2,31 @@
 
 ## 1. What this file is
 
-> **Status, 2026-09-12.** Items **1**, **2**, **6**, **7**, the guard half of **3**, **4** and **5**
-> are fixed (`9f806b0`, `1828c4e` and the commit after them), with the numbers folded into each entry below and into `PLAN.md`
-> P77/P77a; two defects found while fixing them -- `at_cell` never remeasuring the
-> integration spheres, and `forces/torque.py` guarding a per-point modulus with a global
-> norm -- are fixed with them. **Everything else in this file still stands.** Each fixed
-> entry keeps its full reasoning, because the reasoning is why the fix has the shape it
-> does; read the bold line at its head for the state.
+> **Status, 2026-09-12, second pass.** Fixed: **all of Tier 1** (items 1-7, the guard half
+> of 3), and from Tier 2/3 items **8**, **14**, **16**, **18**, **19**, **20** and the
+> refusal half of **21**, plus four of the smaller items -- the `reducebf` range, the two
+> objects called `local_moments`, the per-site constraint residual, and the phantom
+> `_refuse_untextured_symmetry`. Numbers are folded into each entry below and into
+> `PLAN.md` P77/P77a-d and **P78**.
+>
+> **Still open, and every one of them is a phase rather than a session:** **10** (nothing
+> holds a texture that is not the ground state), **11** (no noncollinear linear response),
+> **12** (no noncollinear magnons), **13** (`d_spin_ldau`, which gates three consumers),
+> **15** (no external number for a spin spiral), **17** (the mixer's metric -- but see
+> item 16's measurement, which points away from it), **22** (the memory wall, unmeasured
+> since P73/P74), and **9** (the DFT+U continuation, a session that has not been taken).
+> Plus the notebook, and the open questions O1-O14.
+>
+> Three defects found *while* fixing, none of which is in this file's own list: `at_cell`
+> never remeasuring the integration spheres, `forces/torque.py` guarding a per-point
+> modulus with a global norm, and `tests/unit/test_angular_momenta.py`'s cubic-symmetry
+> check on `|<L>|` failing at 2.3e-7 against its own 1e-9 -- three orientations of the same
+> nickel cell stopping at states 1.15e-8 Ry apart at `conv_thr = 1e-10`, which is item 18's
+> weighting in the wild.
+>
+> **Everything not listed as fixed still stands.** Each fixed entry keeps its full
+> reasoning, because the reasoning is why the fix has the shape it does; read the bold line
+> at its head for the state.
 
 This is an **audit**, run on **2026-09-12** at commit `314d676`, of everything in this
 package that a physicist would touch to set up, converge, trust and analyse a
@@ -486,6 +504,12 @@ the properly seeded magnetic run.
 
 #### 8. DO FIRST: `constrained_magnetization = 'atomic texture'` crashes unless the input also carries a per-atom field
 
+**FIXED 2026-09-12 (P78).** `fields.ATOM_RESOLVED`, one set beside `CONSTRAINTS`, replaces
+the hand-written tuple, and `sphere_moments` refuses by name when the spheres are absent.
+`tests/data/qe/h2-texture-120.in` is the input that could not run -- two hydrogen atoms of
+one species asked to sit 120 degrees apart, no field card -- and the test reaches
+`constraint_energy`, since constructing the `Calculation` succeeded on the broken code too.
+
 **What.** The one constraint in the package that can tell a cycloid from the collinear
 state raises `AttributeError` on the first potential build, for any input that does not
 also happen to set `LOCAL_MAGNETIC_FIELDS`.
@@ -687,6 +711,12 @@ the wiring check is the wedge-versus-closed-grid comparison
 
 #### 14. A texture can only be stated in an input file, and the obvious Python workaround is silently wrong
 
+**FIXED 2026-09-12 (P78).** `System.with_moments` and `Calculator.with_moments`, built
+exactly as `with_spin` is. The hazard is measured on `tests/data/qe/h4-chain-ferro.in` and
+needs no SCF: the ferromagnet has `nsym = 16` and 9 k-points, `dataclasses.replace` leaves
+those 9 while `symmetry_group()` recomputes to 4, and `with_moments` rebuilds to 12 at
+nsym = 4. Dropping the card restores 9 at 16.
+
 **Evidence.** `starting_moments` is assigned in exactly one place, `build_system`
 (`builder.py:947`). `System.with_spin` takes `nspin`, `lspinorb`, `starting_magnetization`,
 `angle1`, `angle2`, `nbnd` and nothing else (`builder.py:338-346`), and
@@ -762,6 +792,14 @@ the `|m| = 0.0001` baseline.
 
 #### 16. `mixing_ndim` is parsed and silently ignored
 
+**FIXED 2026-09-12 (P78), and the measurement says the knob is not the cure this item
+assumed.** It reaches the mixer through `run_scf`, the facade and all three relaxation
+drivers. On `fe-mag-1k.in` at `conv_thr = 1e-8`: 27 iterations at `ndim = 4`, **25 at 8**,
+33 at 12, 39 at 20 -- the default is the best value. The deconfounder
+`fe-unstable-nonmagnetic.in` has the same shape (26, **21**, 30, 26), so the sensitivity is
+not magnetic and neither is most of the gap to `pw.x`'s 12: the nonmagnetic twin takes 21
+here. That is the first measurement against item 17 and it points away from it.
+
 `AndersonMixer.history` is fixed at 8 (`mixing.py:103`); `driver.py:3950` is
 `get_mixer(mixing_mode, beta=mixing_beta)`; `run_scf` has no depth parameter
 (`driver.py:3748-3776`); and `mixing_ndim` occurs **nowhere** in `defumat/` -- not in
@@ -799,6 +837,15 @@ deconfounder is committed: `fe-mag-1k.in` is the only one of the ten that sets
 
 #### 18. `dr2` folds the charge and the magnetization into one scalar
 
+**FIXED 2026-09-12 (P78).** `scf_accuracy_terms` returns the two halves; `run_scf` puts
+both in `history` and prints them per iteration. It found something the same day: on the
+nickel orbital-moment test `dr2 = 9e-11` while the total energy was **1.15e-8 Ry** from
+converged, a hundredfold, and three runs of the same cell at three orientations stopped at
+states 1.15e-8 apart -- exactly the weighting this item predicted. One trap: computing
+`accuracy` **as** the sum of the halves differs from the fused expression by one ulp
+(2.2e-16 relative, measured), and `accuracy` drives the `ethr` schedule, so the split is
+computed separately and the reported total is still the fused value.
+
 `scf_accuracy` computes the charge Hartree term and the magnetization term separately and
 returns their sum (`potential.py:150-167`); `residual` is a max over all channels at once
 (`driver.py:612`). `|m|` is already logged per iteration
@@ -810,6 +857,12 @@ less than the charge at `G_min` on `fe-mag-1k`, so a `dr2` below `conv_thr` boun
 much more weakly than it bounds the charge. **Session.**
 
 #### 19. Two silences at the ends of a run
+
+**FIXED 2026-09-12 (P78).** Both. `noncolin` with `angle1`/`angle2` and no
+`starting_magnetization` is refused by name; a spinor run with nothing magnetic in it stays
+accepted, which is the discrimination that matters. And `run_scf` warns when it returns
+unconverged -- a warning rather than a raise, because a deliberate `max_iterations = 1` is
+legitimate and eight committed tests do it.
 
 **A noncollinear run with angles and no magnitude is nonmagnetic and says nothing.**
 `build_system` refuses `nspin = 2` with no `starting_magnetization`, with a paragraph
@@ -833,6 +886,14 @@ an answer", which is true of the attribute and of nothing the user sees. **Sessi
 
 #### 20. `constrained_magnetization = 'total direction'` returns a NaN potential when the moment lies along z
 
+**FIXED 2026-09-12 (P78).** The angle is now `atan2(|m_perp|, m_z)` with **both**
+arguments masked at the value the derivative is taken at. Off the axis the gradient is QE's
+`fact1` to 1e-12; on it, zero, plus QE's literal `1.D-14` escape along x written as the
+energy term whose derivative it is. Two mechanisms were live, not one: the diverging
+`arccos'`, and -- at a *round-off* transverse moment of 6.3e-16 -- `m_z/|m|` rounding to
+bit-exactly 1.0 so the clamp halved the tangent. Which fires is rounding, which is why the
+guard is QE's threshold and not a test for zero.
+
 `fields.py:350` computes `angle = jnp.arccos(jnp.clip(_polar_cosine(moment[None])[0], -1, 1))`
 inside `constraint_energy`, and `:373` takes `jax.grad` of that same function to build the
 potential. `arccos'` diverges at `+-1` and `jnp.clip` hands each argument half the tangent, so
@@ -847,6 +908,10 @@ and adds a `1.D-14` kick along x "in order to allow the magnetization to rotate"
 **Session.**
 
 #### 21. The fixed-spin-moment secant assumes a diagonal susceptibility, and nothing enforces its scope
+
+**FIXED 2026-09-12 (P78), the refusal half.** `constrained_magnetization = 'fsm'` with
+`lspinorb = .true.` is refused by name at input. The 3x3 secant is still a phase and is not
+written. The print-width half was closed by P77.
 
 `_secant_step` measures `chi = response / change` elementwise per cartesian component and
 takes `secant = -error / chi` the same way (`fields.py:429-438`), modelling `dm_a/dB_b` as
