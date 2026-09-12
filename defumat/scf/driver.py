@@ -556,6 +556,11 @@ def _newd_noncollinear(deeq_components, dvan_so, fcoef, soc_scale: float = 1.0):
     return dvan_so + dressed
 
 
+def _as_tuple(values):
+    """``None`` through, anything else as a tuple of floats for the result."""
+    return None if values is None else tuple(float(v) for v in np.asarray(values))
+
+
 def _warn_if_the_field_did_not_fade(field, field_scale, converged, e_field) -> None:
     """``reducebf`` asked the field to leave, and it may not have.
 
@@ -950,6 +955,16 @@ class SCFResult:
     #: same convention. ``None`` when the run had no field.
     field_energy: float | None = None
     constraint_energy: float | None = None
+    #: ``(nat,)``: how far each atom ended from its own constraint target --
+    #: **degrees** for the two direction schemes, Bohr magnetons for
+    #: ``'atomic'``. ``None`` unless the constraint is atom-resolved.
+    #:
+    #: :attr:`constraint_energy` is one scalar over every site, so under
+    #: ``'atomic texture'`` a single flipped site out of fifteen reads as a
+    #: small number indistinguishable from partial convergence everywhere. This
+    #: is the same comparison site by site, which is the only form of it that
+    #: can tell those two apart.
+    site_residuals: tuple | None = None
     #: The field the run ended with, which is not the one it started with when
     #: ``reducebf`` or the fixed-spin-moment scheme was in use.
     magnetic_field: object | None = None
@@ -4520,12 +4535,20 @@ def run_scf(
             # the conservative direction. Using the smooth GVectors here would
             # be a silent error whenever they differ: their fft_index addresses
             # a smaller box than the array being gathered from.
+            # **The reported total stays the fused expression.** Splitting it
+            # and adding the halves back in Python differs by one ulp -- 2.2e-16
+            # relative, measured -- and ``accuracy`` is not only reported: the
+            # ``ethr`` schedule is computed from it, so one ulp there moves the
+            # eigensolver's threshold and with it the last digits of every
+            # eigenvalue. A diagnostic must not change the run it is diagnosing.
+            accuracy = float(_accuracy(
+                rho_out - rho, calculation.basis.dense, calculation.system.cell
+            ))
             charge_accuracy, magnetic_accuracy = (
                 float(term) for term in _accuracy_terms(
                     rho_out - rho, calculation.basis.dense, calculation.system.cell
                 )
             )
-            accuracy = charge_accuracy + magnetic_accuracy
             if calculation.is_hubbard:
                 ns_out = calculation.occupation_matrix(wavefunctions, wg)
                 if iteration == 1 and starting_density is None and starting_ns is None:
@@ -4725,6 +4748,9 @@ def run_scf(
             # :mod:`defumat.scf.fields`.
             entry["field_energy"] = float(potential.e_field)
             entry["constraint_energy"] = float(potential.e_constraint)
+            residuals = field.site_residuals(rho_out, calculation.system.cell)
+            if residuals is not None:
+                entry["site_residuals"] = np.asarray(residuals)
         if calculation.is_hubbard:
             entry["hubbard_energy"] = float(eth)
             # ``write_ns``'s headline number, per correlated atom: the trace of
@@ -4875,6 +4901,28 @@ def run_scf(
         0.0 if field is None else float(potential.e_field),
     )
 
+    if not converged:
+        # ``pw.x`` prints "convergence NOT achieved after N iterations:
+        # stopping" and exits non-zero. Here the loop simply falls out and the
+        # attribute says so, which a script driving ``run_scf`` -- a spiral
+        # scan, a lambda ramp, a moment-versus-field sweep, all the things a
+        # hard magnetic cell is used for -- has to remember to read. The facade
+        # raises (``Calculator._ground_state``); the functional entry point is
+        # the one that cannot, because a deliberate one-iteration run is a
+        # legitimate thing to ask for.
+        warnings.warn(
+            f"the SCF stopped without converging: {completed} iterations "
+            f"reached accuracy = "
+            f"{'unmeasured' if accuracy is None else format(accuracy, '.3e')} Ry "
+            f"against conv_thr = "
+            f"{conv_thr:.3e}. Every quantity on this result is computed from an "
+            f"unconverged density. Raise electron_maxstep, lower mixing_beta, "
+            f"or start from a better density (run_scf(starting_from=...)); "
+            f"SCFResult.converged and .accuracy are what say which this is",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
     if verbose and site_moments is not None:
         _report_mag(
             calculation.system, calculation.local_regions(),
@@ -4959,6 +5007,8 @@ def run_scf(
         ),
         field_energy=None if field is None else float(potential.e_field),
         constraint_energy=None if field is None else float(potential.e_constraint),
+        site_residuals=None if field is None else _as_tuple(
+            field.site_residuals(rho, calculation.system.cell)),
         magnetic_field=field,
         field_scale=float(field_scale),
         fermi_energy=levels.get("fermi_energy"),

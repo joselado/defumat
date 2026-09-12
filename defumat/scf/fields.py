@@ -345,8 +345,16 @@ class MagneticField(eqx.Module):
 
     # --- the energy, which is the primitive ----------------------------------
 
-    def local_moments(self, rho_r: jnp.ndarray, cell: Cell) -> jnp.ndarray:
-        """``(nat, ncomponent)``: the moment inside each atom's sphere.
+    def sphere_moments(self, rho_r: jnp.ndarray, cell: Cell) -> jnp.ndarray:
+        """``(nat, ncomponent)``: the moment inside each atom's sphere *now*.
+
+        **Not** :attr:`System.local_moments`, which was also called
+        ``local_moments`` and is a different object: that one is the per-atom
+        moment an input file *asked for*, in Bohr magnetons, and it is what the
+        magnetic symmetry group is decided from. This one is what the current
+        density actually has in each sphere, and it exists only when a field or
+        an atom-resolved constraint built the spheres. Two things a constraint
+        compares against each other should not share a name.
 
         Refuses by name when the spheres were never built, rather than letting
         ``None.integrate`` surface as an ``AttributeError`` two frames down: the
@@ -379,7 +387,7 @@ class MagneticField(eqx.Module):
         )
         if self.atomic is not None:
             energy = energy - scale * jnp.sum(
-                jnp.asarray(self.atomic) * self.local_moments(rho_r, cell)
+                jnp.asarray(self.atomic) * self.sphere_moments(rho_r, cell)
             )
         return energy
 
@@ -395,7 +403,7 @@ class MagneticField(eqx.Module):
         targets = jnp.asarray(self.targets)
 
         if self.constraint == "atomic":
-            difference = self.local_moments(rho_r, cell) - targets
+            difference = self.sphere_moments(rho_r, cell) - targets
             return self.penalty * jnp.sum(difference**2)
 
         if self.constraint == "atomic texture":
@@ -403,12 +411,12 @@ class MagneticField(eqx.Module):
             # where it was asked to and rising with the angle. The full unit
             # vector, where ``atomic direction`` takes the polar angle alone --
             # see :data:`CONSTRAINTS`.
-            moments = self.local_moments(rho_r, cell)
+            moments = self.sphere_moments(rho_r, cell)
             cosine = _unit_cosine(moments, targets)
             return self.penalty * jnp.sum(1.0 - cosine)
 
         if self.constraint == "atomic direction":
-            moments = self.local_moments(rho_r, cell)
+            moments = self.sphere_moments(rho_r, cell)
             cosine = _polar_cosine(moments)
             return self.penalty * jnp.sum((cosine - targets[:, 0]) ** 2)
 
@@ -438,6 +446,37 @@ class MagneticField(eqx.Module):
             f"constrained_magnetization = {self.constraint!r} is not implemented; "
             f"available: {sorted(CONSTRAINTS)}"
         )
+
+    def site_residuals(self, rho_r: jnp.ndarray, cell: Cell):
+        """``(nat,)``: how far each atom is from its own target, or ``None``.
+
+        ``constraint_energy`` is one scalar over every site, so under
+        ``'atomic texture'`` a single flipped site out of fifteen reads as a
+        small number indistinguishable from partial convergence everywhere.
+        This is the same comparison, site by site.
+
+        The unit follows the scheme, because the schemes constrain different
+        things: **degrees** for the two direction schemes, which is the angle
+        between the converged moment and the target, and **Bohr magnetons** for
+        ``'atomic'``, which is the length of the vector difference. ``None``
+        for the schemes with no per-site target at all.
+        """
+        if self.constraint not in ATOM_RESOLVED:
+            return None
+        targets = jnp.asarray(self.targets)
+        moments = self.sphere_moments(rho_r, cell)
+        if self.constraint == "atomic":
+            return jnp.linalg.norm(moments - targets, axis=-1)
+        if self.constraint == "atomic texture":
+            cosine = _unit_cosine(moments, targets)
+            return jnp.rad2deg(jnp.arccos(jnp.clip(cosine, -1.0, 1.0)))
+        # ``atomic direction``: the target is the cosine of the polar angle, so
+        # the residual is the difference of the two angles rather than of their
+        # cosines -- a cosine difference is a very uneven measure of an angle
+        # near the poles, and the poles are where a seeded run starts.
+        angle, _ = _polar_angle(moments)
+        target = jnp.arccos(jnp.clip(targets[:, 0], -1.0, 1.0))
+        return jnp.rad2deg(jnp.abs(angle - target))
 
     def energy(self, rho_r: jnp.ndarray, cell: Cell, scale: float = 1.0):
         return self.field_energy(rho_r, cell, scale) + self.constraint_energy(rho_r, cell)

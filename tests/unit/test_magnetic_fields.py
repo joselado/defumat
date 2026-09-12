@@ -56,7 +56,7 @@ def regions():
 
 
 def _moments(field: MagneticField, density, cell):
-    return np.asarray(field.local_moments(density, cell))
+    return np.asarray(field.sphere_moments(density, cell))
 
 
 def _potential(field: MagneticField, density, cell, scale: float = 1.0):
@@ -694,3 +694,52 @@ def test_reducebf_outside_elks_range_is_refused(value):
     """
     with pytest.raises(ValueError, match=r"outside \[0.5, 1\]"):
         _build(_REDUCEBF % value)
+
+
+_NONCOLIN_ANGLES = """
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 1, celldm(1) = 10.0, nat = 1, ntyp = 1, ecutwfc = 15.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.02
+    noncolin = .true.
+    nosym = .true.
+%s
+ /
+ &electrons
+    conv_thr = 1.0d-6
+ /
+ATOMIC_SPECIES
+ H 1.008 H.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ H 0.0 0.0 0.0
+K_POINTS gamma
+"""
+
+
+def test_angles_with_no_magnitude_are_refused_rather_than_run_unpolarized():
+    """``angle1`` without ``starting_magnetization`` is a nonmagnetic run.
+
+    The angles are the *direction* of a moment whose length is
+    ``starting_magnetization``. With no length there is no moment, ``domag``
+    goes false, ``nspin_mag`` collapses to 1, and what runs is an unpolarized
+    calculation with spinor wavefunctions -- converged, successful, and not the
+    calculation the angles asked for. ``pw.x`` runs it silently; the collinear
+    sibling of this refusal has been here since P9.
+    """
+    with pytest.raises(ValueError, match="no moment, domag is false"):
+        _build(_NONCOLIN_ANGLES % "    angle1(1) = 90.0\n    angle2(1) = 0.0")
+
+
+@pytest.mark.parametrize("body, nspin_mag", [
+    ("    starting_magnetization(1) = 0.5\n    angle1(1) = 90.0", 4),
+    ("    starting_magnetization(1) = 0.5", 4),
+    # A spinor run with nothing magnetic in it is a perfectly ordinary
+    # calculation -- it is the spin-orbit platinum case in the fast gate -- and
+    # must stay accepted. The refusal is about a *stated* direction with
+    # nothing to point.
+    ("", 1),
+])
+def test_the_angle_refusal_does_not_catch_a_run_that_meant_it(body, nspin_mag):
+    assert _build(_NONCOLIN_ANGLES % body).nspin_mag == nspin_mag

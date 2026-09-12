@@ -1,0 +1,29 @@
+! Four hydrogen atoms in a chain, one species, noncollinear and ferromagnetic,
+! with symmetry left ON.
+!
+! The point of the cell is that its group is large -- 16 operations, reducing a
+! 2x2x4 grid to 9 k-points -- so replacing its moments with a texture visibly
+! changes both numbers. It is the demonstration cell for `with_moments`: a
+! cycloid on these four sites drops the group to 4 and the k-set grows to 12.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 1.66666666666667,
+    nat = 4, ntyp = 1, ecutwfc = 20.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10
+    noncolin = .true.
+    starting_magnetization(1) = 0.6
+ /
+ &electrons
+    conv_thr = 1.0d-8
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H 0.0 0.0 0.00
+ H 0.0 0.0 0.25
+ H 0.0 0.0 0.50
+ H 0.0 0.0 0.75
+K_POINTS {automatic}
+ 2 2 4 0 0 0

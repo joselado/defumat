@@ -41,6 +41,11 @@ __all__ = ["System", "build_system", "system_from_file", "local_moments",
            "is_magnetic"]
 
 
+#: "the caller did not say", where ``None`` is a value a caller can mean --
+#: dropping a ``STARTING_MOMENTS`` card is exactly that.
+_UNSET = object()
+
+
 class System(eqx.Module):
     """A cell, its atoms, and the k-points to sample -- the output of setup.
 
@@ -424,6 +429,52 @@ class System(eqx.Module):
             kpoints=self._respin_kpoints(nspin, magnetization, angle1, angle2),
         )
 
+    def with_moments(self, per_atom) -> "System":
+        """The same crystal with a different moment on each atom.
+
+        The Python route to what a ``STARTING_MOMENTS`` card states: a
+        ``(nat, 3)`` array of Bohr magnetons, one row per atom in
+        ``ATOMIC_POSITIONS`` order, or ``None`` to drop the card and go back to
+        the per-species ``starting_magnetization``. This is what a sweep over
+        magnetic configurations needs -- a 120-degree Neel state against a
+        collinear one, a cone at five angles -- and there was no method for it,
+        so the only way in was to write an input file.
+
+        **The workaround it replaces is silently wrong.**
+        ``dataclasses.replace(system, starting_moments=...)`` leaves
+        ``kpoints`` reduced with the *old* group while
+        :meth:`symmetry_group` is a property recomputed from the new moments,
+        so the symmetrisation group ends up **smaller** than the group the
+        k-set was reduced with -- and on a cell built nonmagnetic it also flips
+        ``domag``, so the k-set carries a ``time_reversal`` a magnetic run must
+        not have. Nothing checks either. Here the k-points are rebuilt, exactly
+        as :meth:`with_spin` rebuilds them for a change of regime.
+
+        The collinear refusal is the one :func:`local_moments` already makes:
+        an ``nspin = 2`` run has one component, so a row with an x or y part is
+        an error rather than a projection.
+        """
+        if per_atom is None:
+            moments = ()
+        else:
+            rows = np.asarray(per_atom, dtype=float)
+            if rows.ndim != 2 or rows.shape != (self.structure.nat, 3):
+                raise ValueError(
+                    f"starting_moments must be (nat, 3) = "
+                    f"({self.structure.nat}, 3) Bohr magnetons in "
+                    f"ATOMIC_POSITIONS order; got {rows.shape}"
+                )
+            moments = tuple(tuple(float(x) for x in row) for row in rows)
+
+        replaced = dataclasses.replace(self, starting_moments=moments)
+        return dataclasses.replace(
+            replaced,
+            kpoints=replaced._respin_kpoints(
+                self.nspin, self.starting_magnetization,
+                self.angle1, self.angle2, per_atom=moments,
+            ),
+        )
+
     def with_cell(self, at, positions=None) -> "System":
         """The same crystal in a relaxed cell, with its k-points rebuilt.
 
@@ -495,15 +546,18 @@ class System(eqx.Module):
             )
         return kpoints_for_spin(rebuilt, self.nspin)
 
-    def _respin_kpoints(self, nspin, magnetization, angle1, angle2) -> KPoints:
+    def _respin_kpoints(self, nspin, magnetization, angle1, angle2,
+                        per_atom=_UNSET) -> KPoints:
         """The target regime's k-point set, reduced with *its* symmetry group."""
         kpoints = self.kpoints
+        if per_atom is _UNSET:
+            per_atom = self.starting_moments
         if kpoints.path_length is not None or kpoints.gamma_only:
             return kpoints_for_spin(kpoints, nspin)
 
         moments = local_moments(
             self.structure, nspin, magnetization, angle1, angle2,
-            per_atom=self.starting_moments,
+            per_atom=per_atom,
         )
         fields = np.asarray(self.atomic_b_field, dtype=float)
         axial = (moments, fields) if self.atomic_b_field else moments
@@ -866,6 +920,37 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
             )
     angle1 = tuple(pwin.indexed("system", "angle1", structure.ntyp))
     angle2 = tuple(pwin.indexed("system", "angle2", structure.ntyp))
+    if (
+        scf_like
+        and nspin == 4
+        and any(value != 0.0 for value in angle1 + angle2)
+        and not given_magnetization
+        and not _starting_moments(pwin, structure.nat)
+    ):
+        # The noncollinear sibling of the ``nspin = 2`` refusal above, and the
+        # same physics: nothing in the SCF breaks spin symmetry on its own.
+        # ``angle1``/``angle2`` are the *direction* of a moment whose length is
+        # ``starting_magnetization``, so with no length there is no moment for
+        # them to point, ``domag`` is False, ``nspin_mag`` collapses to 1, and
+        # what runs is an unpolarized calculation with spinor wavefunctions --
+        # converged, successful, and not the calculation the angles asked for.
+        #
+        # ``pw.x`` is silent on this input. `GAPS.md` records the sibling case
+        # (a field in a nonmagnetic noncollinear run) as closed by a named
+        # refusal on the reasoning that QE's silence is the worse of the two
+        # behaviours, and this is that reasoning applied to the case that has
+        # the clearer statement of intent: an angle is not something a user
+        # writes by accident.
+        raise ValueError(
+            "noncolin = .true. with angle1/angle2 set and no "
+            "starting_magnetization: the angles are the direction of a moment "
+            "whose length is starting_magnetization, so with no length there "
+            "is no moment, domag is false and this runs as an unpolarized "
+            "calculation with spinor wavefunctions -- converged, and not what "
+            "the angles asked for. Set starting_magnetization for the species "
+            "carrying an angle, or give each atom a moment with a "
+            "STARTING_MOMENTS card. pw.x runs this input silently"
+        )
 
     # An automatic k-grid is reduced to its irreducible wedge here, which is
     # where QE does it too (``setup.f90``, after the symmetry analysis and
@@ -1657,8 +1742,18 @@ def _starting_moments(pwin: PwInput, nat: int) -> tuple:
     **What it is for is the magnetic symmetry group.** ``m_loc`` decides that
     group and is built from the per-species variables, so without this card a
     textured run hands the symmetry search a ferromagnet, keeps operations the
-    texture does not have, and has the texture symmetrised away by ``sym_rho``
-    -- see :func:`_refuse_untextured_symmetry`.
+    texture does not have, and has the texture symmetrised away by ``sym_rho``.
+
+    **There is no refusal for that shape and there should not be**, which this
+    docstring claimed the opposite of for two phases by pointing at a function
+    that was never written. The other way to state a texture is a
+    ``LOCAL_MAGNETIC_FIELDS`` card, and since P77's tolerance fix that card
+    reaches :meth:`System.symmetry_group` through ``axial_fields`` at any
+    magnitude above 1e-12 -- so a run whose texture lives only in the fields is
+    no longer a run whose group cannot see it, and there is nothing left to
+    refuse. :func:`_distinct_directions` is the diagnostic such a refusal would
+    have needed; its callers are in ``tests/unit/test_textured_symmetry.py``,
+    where it measures the two cards against each other.
     """
     card = pwin.card("STARTING_MOMENTS")
     if card is None:

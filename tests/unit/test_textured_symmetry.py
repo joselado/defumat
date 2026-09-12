@@ -12,9 +12,12 @@ Measured on a 45-atom NiBr2 helix: one distinct Ni direction in ``m_loc`` agains
 24-degree-per-site cycloid collapsed to collinear between iterations 3 and 6 --
 at Elk's own converged per-atom fields, biasing the other way.
 
-Two things are asserted here: the refusal fires on that shape, and the
-``STARTING_MOMENTS`` card removes the cause rather than the symptom by putting
-the texture into ``m_loc``.
+Two things are asserted here, and **neither is a refusal** -- there is none for
+this shape, and an earlier version of this docstring said there was. What is
+asserted is that the group *sees* the texture by both routes: the
+``STARTING_MOMENTS`` card puts it into ``m_loc``, which is the cause rather than
+the symptom, and since P77 a ``LOCAL_MAGNETIC_FIELDS`` card reaches the same
+filter at any magnitude above 1e-12.
 """
 
 import numpy as np

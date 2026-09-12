@@ -233,8 +233,8 @@ sets would quietly hold several sets of them. \code{calc.scf\_result} reads the
 slot without triggering anything, and a state that did not converge is refused
 rather than differentiated.
 
-\textbf{Nothing mutates.} \code{with\_positions}, \code{with\_cell} and
-\code{with\_spin} return a \emph{new} calculator with an empty cache; the
+\textbf{Nothing mutates.} \code{with\_positions}, \code{with\_cell},
+\code{with\_spin} and \code{with\_moments} return a \emph{new} calculator with an empty cache; the
 converged state crosses as a starting guess where that is sound, which for
 \code{with\_spin} is the spin-regime continuation described under
 \emph{Spin, magnetism and spin-orbit} and converges in one iteration rather
@@ -939,6 +939,37 @@ STARTING_MOMENTS
  -1.29903811  0.75000000  0.00000000
 \end{lstlisting}
 
+\textbf{A texture from Python, without writing a file}
+(\code{Calculator.with\_moments}, \code{System.with\_moments}). The card above is
+the only way to \emph{state} a texture in an input, and a sweep over magnetic
+configurations --- a 120-degree N\'eel state against a collinear one, a cone at
+five angles --- wants to state several from one script. \code{with\_moments}
+takes an \code{(nat, 3)} array of Bohr magnetons in \code{ATOMIC\_POSITIONS}
+order, or \code{None} to drop the card, and returns a new calculator whose
+k-points have been rebuilt for the new moments' magnetic group.
+
+\begin{lstlisting}[language=Python]
+import numpy as np
+from defumat import Calculator
+
+ferro = Calculator.from_file("h4-chain-ferro.in")  # tests/data/qe
+angles = np.deg2rad([0.0, 90.0, 180.0, 270.0])
+cycloid = 0.6 * np.stack([np.sin(angles), np.zeros(4), np.cos(angles)], axis=1)
+
+print(ferro.system.symmetry_group().nsym, ferro.system.kpoints.nk)   # 16 9
+textured = ferro.with_moments(cycloid)
+print(textured.system.symmetry_group().nsym, textured.system.kpoints.nk)  # 4 12
+\end{lstlisting}
+
+\emph{The obvious workaround is silently wrong}, which is why this is a method
+rather than an attribute. \code{dataclasses.replace(system,
+starting\_moments=...)} swaps the field and leaves \code{kpoints} reduced with
+the group the \emph{old} moments had, while \code{symmetry\_group()} is a
+property recomputed from the new ones --- 9 k-points reduced with 16 operations,
+symmetrised with 4, measured on the cell above. On a system built nonmagnetic it
+also flips \code{domag}, so the k-set carries a \code{time\_reversal} a magnetic
+run must not have. Nothing compares the two.
+
 \textbf{Holding a texture} (\code{constrained\_magnetization = 'atomic
 texture'}) constrains the \emph{full} unit vector of every atom's moment,
 %
@@ -953,6 +984,14 @@ direction'} (\code{i\_cons = 2}), constrains $m_z/|m|$ --- the polar angle
 \emph{alone} --- so it is exactly satisfied by every texture lying in a plane
 that contains $z$, a helix and a collinear state alike, at zero penalty: it
 cannot hold one, and reports success while failing to.
+
+\emph{How far each atom is from its target} is on
+\code{SCFResult.site\_residuals}, one number per atom --- degrees for the two
+direction schemes, Bohr magnetons for \code{'atomic'}. \code{constraint\_energy}
+is a single scalar over every site, so under \code{'atomic texture'} one flipped
+site out of fifteen reads as a small number indistinguishable from partial
+convergence everywhere; the per-site array is the only form of the comparison
+that can tell those apart.
 
 \begin{refuses}
 \textbf{Refused.} \code{'atomic texture'} needs \code{noncolin = .true.} (a

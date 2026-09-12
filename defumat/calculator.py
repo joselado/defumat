@@ -1425,6 +1425,27 @@ class Calculator:
         system = self.system.with_spin(nspin, **options)
         return self._derived(system, seed=True)
 
+    def with_moments(self, per_atom) -> "Calculator":
+        """A calculator with a different moment on each atom, warm-started.
+
+        The Python route to a ``STARTING_MOMENTS`` card: ``(nat, 3)`` Bohr
+        magnetons in ``ATOMIC_POSITIONS`` order, or ``None`` to drop the card.
+        It is what a sweep over magnetic configurations needs -- a 120-degree
+        Neel state against a collinear one, a cone at five angles -- and the
+        alternative was writing an input file per configuration.
+
+        The k-points are rebuilt with the new moments' magnetic group, which is
+        the whole reason this is a method: see
+        :meth:`~defumat.system.builder.System.with_moments` for what
+        ``dataclasses.replace`` gets silently wrong.
+
+        The converged state comes across as a seed, not as an answer, exactly
+        as it does through :meth:`with_spin` -- a different texture is a
+        different calculation, so the cache is empty and the next ``get_scf``
+        reruns from this density.
+        """
+        return self._derived(self.system.with_moments(per_atom), seed=True)
+
     def _derived(self, system: System, *, seed: bool = False, scf=None) -> "Calculator":
         """A calculator on ``system``, sharing this one's pseudos and options."""
         derived = Calculator(system, self.pseudos, announce=self.announce,
