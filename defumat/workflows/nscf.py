@@ -20,6 +20,8 @@ from dataclasses import dataclass
 
 import equinox as eqx
 import jax.numpy as jnp
+import warnings
+
 import numpy as np
 
 from defumat.pseudo.upf import Pseudopotential
@@ -220,8 +222,51 @@ def fixed_density_states(
     # There is no SCF here to tighten the threshold over, so ``setup.f90`` picks
     # one up front from the accuracy of the density the bands are computed in.
     ethr = max(ETHR_MIN, 0.1 * min(1.0e-2, conv_thr / max(1.0, calculation.nelec)))
-    eigenvalues, wavefunctions = calculation.diagonalize(hamiltonians, nbnd, None, ethr)
+    eigenvalues, wavefunctions, steps, notcnv = calculation.diagonalize(
+        hamiltonians, nbnd, None, ethr, return_steps=True)
+    _say_what_did_not_converge(steps, notcnv, ethr, conv_thr, nbnd)
     return calculation, system, np.asarray(eigenvalues), wavefunctions
+
+
+def _say_what_did_not_converge(steps, notcnv, ethr, conv_thr, nbnd) -> None:
+    """Warn when the eigensolver ran out of iterations. Nothing used to.
+
+    **The solver has always counted this and nothing has ever read it.** A
+    fixed-density solve has no schedule behind it -- unlike an SCF, where an
+    early iteration is *meant* to be loose and ``ethr`` tightens as the density
+    settles -- so a k-point that exhausts its budget here is simply not solved,
+    and its wavefunctions go into whatever asked for them.
+
+    That is the quiet kind of wrong. Measured on a 1H-NbSe2 monolayer at the
+    ``ethr = 4e-9`` that ``conv_thr = 1e-6`` produces: **seven of ten k-points
+    hit the 100-step budget** with one to six bands unsettled, one of them
+    degraded until its overlap lost positivity, and the tunnelling weight built
+    on top of them looked entirely plausible. Loosening ``ethr`` by two decades
+    converged every k-point in 15 to 35 steps and was 3.7x faster.
+
+    So the message names the number of k-points, the worst band count, and the
+    two knobs -- because the useful response is almost always to loosen
+    ``conv_thr`` rather than to raise the iteration budget.
+    """
+    unsettled = np.asarray(notcnv)
+    if not unsettled.size or not (unsettled > 0).any():
+        return
+    stalled = int((unsettled > 0).sum())
+    total = int(unsettled.size)
+    worst = int(unsettled.max())
+    taken = np.asarray(steps)
+    warnings.warn(
+        f"the fixed-density solve did not converge at {stalled} of {total} "
+        f"k-points: up to {worst} of {nbnd} bands are unsettled and the worst "
+        f"k-point took {int(taken.max())} Davidson steps, at ethr = {ethr:.1e} "
+        f"(from conv_thr = {conv_thr:.1e}). There is no later iteration to fix "
+        "this -- the density is fixed -- so these wavefunctions are what every "
+        "quantity built on them will use. Loosen conv_thr (ethr is "
+        "0.1 x conv_thr / nelec, QE's setup.f90 rule) before raising the "
+        "iteration budget: a threshold the solve cannot reach costs the whole "
+        "budget at every k-point and is where an overlap loses positivity",
+        stacklevel=3,
+    )
 
 
 def fixed_density_bands(*args, **kwargs):

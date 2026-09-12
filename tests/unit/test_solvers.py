@@ -15,6 +15,9 @@ equally valid answer.
 import dataclasses
 from pathlib import Path
 
+import warnings
+
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -202,3 +205,151 @@ def test_a_cholesky_that_returns_nan_is_rescued_outside_the_k_batch(silicon,
         assert not np.isfinite(np.asarray(unguarded)).all()
     finally:
         davidson.davidson_eigensolver_all.clear_cache()
+
+
+# --------------------------------------------------------------------------
+# the retry keeps what the fast route already converged
+# --------------------------------------------------------------------------
+
+
+class _StubHamiltonian:
+    """The two attributes ``davidson_eigensolver_all`` reads before it solves.
+
+    It broadcasts ``ethr`` to ``(nk, nbnd)`` using the kinetic term's dtype, so
+    a bare ``None`` does not get as far as the stubbed ``_every_k``.
+    """
+
+    nk = 5
+
+    class kinetic:
+        dtype = np.float64
+
+
+_HAMILTONIAN_IS_UNUSED = _StubHamiltonian()
+
+
+def _stub_every_k(bad_index, nk=5, nbnd=3, ndim=7):
+    """A fake ``_every_k``: the fast route fails at one k-point, robust at none.
+
+    The select logic is what is under test, so the two routes return *different*
+    finite numbers where both succeed. That is what makes "the fast answer was
+    kept" a checkable statement rather than a coincidence.
+    """
+    fast_e = np.tile(np.arange(nbnd, dtype=float), (nk, 1))
+    fast_psi = np.ones((nk, nbnd, ndim))
+    fast_e[bad_index] = np.nan
+    fast_psi[bad_index] = np.nan
+    # Built from scratch, NOT from ``fast_e``: ``fast_e * 0 + 100`` keeps the
+    # NaN and the test then cannot tell a working select from a broken one.
+    robust_e = np.full((nk, nbnd), 100.0)
+    robust_psi = np.full((nk, nbnd, ndim), 7.0)
+
+    def stub(*_arguments, robust=False, return_steps=False):
+        e, psi = (robust_e, robust_psi) if robust else (fast_e, fast_psi)
+        out = (jnp.asarray(e), jnp.asarray(psi))
+        if return_steps:
+            out = out + (jnp.zeros(nk, dtype=int), jnp.zeros(nk, dtype=int))
+        return out
+
+    return stub, fast_e, fast_psi, robust_e, robust_psi
+
+
+def test_the_retry_replaces_only_the_k_points_that_failed(monkeypatch):
+    """One bad k-point used to discard every other k-point's converged answer.
+
+    The guard was a single scalar over the whole set --
+    ``bool(jnp.isfinite(...).all())`` -- and the retry it gated returned the
+    robust route's result for *every* k-point. On a dense mesh one failure in
+    ten is ordinary rather than exceptional, so that threw away nine converged
+    Cholesky solves and recomputed them from a fresh random start; and since
+    nothing downstream reads ``notcnv``, a robust pass that then hit its
+    iteration budget handed back **less** converged wavefunctions than the ones
+    it discarded. Measured on a 1H-NbSe2 mesh at ``ethr = 4e-9``: k-points 0-4
+    finite, k-point 9 not, 509 s of solve turned into 1368 s.
+
+    The predicate is now per k-point and the robust answer is taken only where
+    the fast one has none.
+    """
+    from defumat.solvers import davidson
+
+    stub, fast_e, fast_psi, robust_e, robust_psi = _stub_every_k(bad_index=2)
+    monkeypatch.setattr(davidson, "_every_k", stub)
+
+    with pytest.warns(UserWarning, match="non-finite"):
+        values, vectors = davidson.davidson_eigensolver_all(
+            _HAMILTONIAN_IS_UNUSED, 3, None, 1.0e-6)
+
+    values, vectors = np.asarray(values), np.asarray(vectors)
+    for k in (0, 1, 3, 4):
+        assert values[k] == pytest.approx(fast_e[k]), f"k={k} was not kept"
+        assert vectors[k] == pytest.approx(fast_psi[k]), f"k={k} was not kept"
+    assert values[2] == pytest.approx(robust_e[2])
+    assert vectors[2] == pytest.approx(robust_psi[2])
+
+
+def test_no_retry_and_no_warning_when_every_k_point_is_finite(monkeypatch):
+    """The clean case must be untouched -- and pay no second solve."""
+    from defumat.solvers import davidson
+
+    calls = []
+    stub, fast_e, _, _, _ = _stub_every_k(bad_index=2)
+
+    def clean(*arguments, robust=False, return_steps=False):
+        calls.append(robust)
+        nk, nbnd, ndim = 5, 3, 7
+        return (jnp.tile(jnp.arange(nbnd, dtype=float), (nk, 1)),
+                jnp.ones((nk, nbnd, ndim)))
+
+    monkeypatch.setattr(davidson, "_every_k", clean)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")          # any warning fails the test
+        davidson.davidson_eigensolver_all(_HAMILTONIAN_IS_UNUSED, 3, None, 1.0e-6)
+    assert calls == [False], "the robust route ran on a clean solve"
+
+
+def test_the_warning_names_which_k_points_failed(monkeypatch):
+    """"Something went non-finite" is not actionable; an index is."""
+    from defumat.solvers import davidson
+
+    stub, *_ = _stub_every_k(bad_index=3)
+    monkeypatch.setattr(davidson, "_every_k", stub)
+    with pytest.warns(UserWarning, match=r"1 of 5 k-points.*\[3\]"):
+        davidson.davidson_eigensolver_all(_HAMILTONIAN_IS_UNUSED, 3, None, 1.0e-6)
+
+
+
+
+
+# --------------------------------------------------------------------------
+# a fixed-density solve that ran out of iterations says so
+# --------------------------------------------------------------------------
+
+
+def test_a_stalled_fixed_density_solve_is_reported_rather_than_returned():
+    """The solver has always counted this and nothing ever read it.
+
+    An SCF's early iterations are *meant* to be loose -- ``ethr`` tightens as
+    the density settles -- but a fixed-density solve has no later iteration, so
+    a k-point that exhausts its budget is simply not solved and its
+    wavefunctions go into whatever asked for them. Measured on a 1H-NbSe2
+    monolayer at the ``ethr = 4e-9`` that ``conv_thr = 1e-6`` produces: seven of
+    ten k-points hit the 100-step budget with one to six bands unsettled, and
+    the quantity built on top of them looked entirely plausible.
+    """
+    from defumat.workflows.nscf import _say_what_did_not_converge
+
+    settled = np.zeros((1, 4), dtype=int)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _say_what_did_not_converge(np.full((1, 4), 30), settled, 4e-9, 1e-6, 24)
+
+    stalled = np.array([[0, 3, 0, 6]])
+    with pytest.warns(UserWarning) as caught:
+        _say_what_did_not_converge(np.array([[30, 100, 41, 100]]), stalled,
+                                   4e-9, 1e-6, 24)
+    message = str(caught[0].message)
+    # The numbers a user needs to act: how many k-points, the worst band count,
+    # the budget that was hit, and the threshold that caused it.
+    for expected in ("2 of 4", "6 of 24", "100 Davidson steps", "4.0e-09",
+                     "1.0e-06", "conv_thr"):
+        assert expected in message, f"{expected!r} missing from: {message}"

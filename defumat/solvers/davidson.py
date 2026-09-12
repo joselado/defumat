@@ -116,8 +116,11 @@ from __future__ import annotations
 
 from functools import partial
 
+import warnings
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from defumat.basis.fft import force_real_g0, gamma_inner
 from defumat.batching import map_k, resolve_k_batch
@@ -739,10 +742,41 @@ def davidson_eigensolver_all(
     # because the failure sat in a triangle nothing read -- so a guard that
     # watches only the energies can pass a wavefunction with a NaN in it
     # straight into the density. Two reductions against a solve is not a cost.
-    finite = bool(jnp.isfinite(fast[0]).all() & jnp.isfinite(fast[1]).all())
-    if finite:
+    #
+    # **Per k-point, not over the whole set.** This reduction used to be one
+    # scalar ``jnp.isfinite(...).all()``, and the retry it gated replaced
+    # *every* k-point's result with the robust route's. That is wrong twice
+    # over on a dense mesh, where one bad k-point in ten is ordinary rather
+    # than exceptional: the converged Cholesky answers at the other nine were
+    # discarded and recomputed from a fresh random start, and if the robust
+    # pass then hit its iteration budget -- which nothing downstream checks --
+    # the caller received *less* converged wavefunctions than the ones thrown
+    # away. Measured on a 1H-NbSe2 mesh at ``ethr = 4e-9``: k-points 0-4 all
+    # finite, k-point 9 non-finite, and the whole-set retry turned 509 s into
+    # 1368 s while replacing four good solves.
+    per_k = (jnp.isfinite(fast[0]).all(axis=1)
+             & jnp.isfinite(fast[1]).reshape(fast[1].shape[0], -1).all(axis=1))
+    failed = ~np.asarray(per_k)
+    if not failed.any():
         return fast
-    return _every_k(*arguments, robust=True, return_steps=return_steps)
+    warnings.warn(
+        f"{int(failed.sum())} of {failed.size} k-points came back non-finite "
+        f"from the Cholesky route ({np.flatnonzero(failed).tolist()[:8]}"
+        f"{' ...' if failed.sum() > 8 else ''}) and are being re-solved with "
+        "canonical orthogonalisation. A non-finite overlap here is usually a "
+        "solve that stalled rather than a bad Hamiltonian -- check the step "
+        "counts, and loosen ethr (conv_thr) before trusting the result",
+        stacklevel=2,
+    )
+    robust = _every_k(*arguments, robust=True, return_steps=return_steps)
+    # Keep what the fast route already converged. The robust pass still runs
+    # over the whole k-set -- the shapes are static, so it must -- but its
+    # answer is taken only where the fast one has none.
+    take = jnp.asarray(failed)
+    return tuple(
+        jnp.where(take.reshape((-1,) + (1,) * (jnp.ndim(quick) - 1)), sturdy, quick)
+        for quick, sturdy in zip(fast, robust)
+    )
 
 
 davidson_eigensolver_all.clear_cache = _every_k.clear_cache
