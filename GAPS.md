@@ -9,9 +9,13 @@ the seven of §1 whose fix was a term or a forwarding
 **one** entry of §3 — `occupations = 'fixed'` with `nspin = 2`, the fourth
 (`tests/unit/test_unreachable_combinations.py`). §2c, found later and the only
 *wrong answer* on this list rather than a refusal, is closed too. What is left
-is the rest of §3,
-and the widest of them is still the first one listed there: the Sternheimer
-response with `nspin = 2`, which is untouched.
+is part of §3, and the entry that used to head it -- the Sternheimer response with
+`nspin = 2` -- **is closed** (P45, 2026-08-30), as are the spinor forces and the Kubo
+Berry curvature below it. The five that remain are the elastic constants of a **metal**,
+the **symmetrised** spinor projection, **meta-GGA with DFT+U** (where what is missing is
+validation rather than code), **linear response under a magnetic field or a constrained
+moment**, which is the widest, and **linear response with a meta-GGA**, which is the
+hardest and needs a term nobody has written.
 
 This is not `PLAN.md`. That file is the phase record and says what was built and
 what each phase's traps were; this one is a list of what a user can ask for and
@@ -332,13 +336,16 @@ functional a spinor force needs.
 
 ### Strain response and elastic constants + a metal
 
-`response/strain.py:234` calls `require_a_sternheimer_regime(calculation)`
-without `metals=True`; the sibling perturbation passes it
-(`response/phonon.py:293`). So the elastic constants of any metal are
+`response/strain.py:244` refuses a metal, where the sibling perturbation does not
+(`response/phonon.py` passes `metals=True`). So the elastic constants of any metal are
 unreachable — aluminium's `C_11`/`C_12`/`C_44` being the textbook case and the
-very cell P28/P28a already run phonons on. The message a user gets says a metal
-"has no `epsilon_infinity` and no Born effective charge", which is not what they
-asked for.
+very cell P28/P28a already run phonons on.
+
+**The message is fixed and the capability is not** (`OPEN.md` E2, 2026-09-11). The refusal
+used to answer a question the user had not asked — that a metal "has no `epsilon_infinity`
+and no Born effective charge" — and now passes `metals_missing=_NO_METAL_YET`, which names
+the Fermi-level shift and the weight split instead. What is below is therefore the whole of
+what is left here.
 
 **Missing:** the two pieces P28 already wrote for the *displacement* coordinate
 — the Fermi-level shift (a strain changes the volume, so `ef` moves) and the

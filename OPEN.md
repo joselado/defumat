@@ -15,9 +15,13 @@ P73 section, under "Three test failures were seen while validating this phase".
 **Status, 2026-09-11 (later the same day).** Sixteen entries are closed, each with a
 test that was checked to fail against the old code: **A1, A3, A4, A5, A6, A7, A8, A9,
 A10, B2, D2, E1, E2, F1, F2, F3**, together with Part I item 1 and its two siblings
-C2/C3. What is left is D1, D3, E3 and Part I item 2 -- the entries
-whose *test* is expensive rather than whose fix is. **A2, B3, B1 and C1 closed on
-2026-09-12.** None
+C2/C3. What was left after that day -- D1, D3, E3 and Part I item 2 -- was the set whose
+*test* is expensive rather than whose fix is, and **all of it except Part I item 2 closed
+on 2026-09-12**, together with A2, B3, B1, C1 and G1, which was opened and closed the same
+day. **So one entry of Part I and Part II together is open: item 2**, the 11,088 MB peak of
+`test_spinorbit.py`, whose first step is a measurement rather than a fix -- and whose
+number predates P74's band-batching fixes, which should have moved it (`PLAN.md` P74,
+"What is outstanding"). None
 went the way the sweep predicted: A2's two non-refusal sites looked like a null
 and are not; B3's NaN claim is a null while its other two
 hold -- the absolute threshold turned out to be wrong in *both* directions at
@@ -101,6 +105,12 @@ not it has happened yet. The watchdog named
 `test_spin_orbit_total_energy[spinorbit-paw.in]` at 10,818 MB; **its assertions
 passed** -- the memory is the finding, not a failure. For scale, the next file
 down in the same run is `test_stress.py` at 6,317 MB.
+
+**The number predates P74 and should have moved.** It was measured with the whole band
+block in the FFT box, before `vloc_psi_nc` learned to call `map_bands`, so the spinor local
+term was transforming every band at once in exactly the file this peak belongs to. Whether
+11,088 MB is still the peak is unread (`PLAN.md` P74, "What is outstanding"), which is one
+more reason the first step is a measurement.
 
 **The one lead, and what it is not.** The stderr shows XLA constant-folding and
 transposing an `f64[25,1277,34,34]` inside `jvp(jit(_paw_onecenter))`, twice,
