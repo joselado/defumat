@@ -58,6 +58,7 @@ from defumat.system.cell import Cell
 __all__ = [
     "MagneticField",
     "CONSTRAINTS",
+    "ATOM_RESOLVED",
     "FSM_UPDATES",
     "DEFAULT_FSM_UPDATE",
     "constraint_targets",
@@ -83,9 +84,32 @@ CONSTRAINTS = {
     "atomic texture": None,
 }
 
+#: The constraints whose penalty is a sum over *atoms*, so each one needs the
+#: per-atom integration spheres to exist. **Read this set rather than spelling
+#: the names again**: a caller that built its own tuple left ``atomic texture``
+#: out of it, and the omission surfaced as an ``AttributeError`` on ``None``
+#: inside the first potential build rather than as a refusal at input
+#: (`NONCOLLINEAR.md` item 8).
+ATOM_RESOLVED = frozenset({"atomic", "atomic direction", "atomic texture"})
+
 #: Below this moment a direction constraint has nothing to act on, and QE stops
 #: rather than dividing (``add_bfield``'s ``1.d-30`` / ``1.D-12``).
 VANISHING_MOMENT = 1.0e-12
+
+#: Below this **transverse** moment the polar angle has no gradient to speak of,
+#: because the polar angle is genuinely not differentiable on the ``z`` axis --
+#: which way it moves depends on which way you leave the axis. QE's
+#: ``add_bfield.f90:185-192`` picks the convention: zero the transverse
+#: derivative and add a tiny field along ``x`` so the moment can start turning.
+#: The number is QE's ``1.D-14``.
+VANISHING_TRANSVERSE = 1.0e-14
+
+#: The size of that escape field, QE's literal ``fact1(1) = 1.D-14``. It exists
+#: to break a tie rather than to change an answer: a moment seeded from
+#: ``starting_magnetization`` with no angles lies **exactly** on the axis, so
+#: without it a polar-angle constraint has nothing to push with and the run sits
+#: at an unstable stationary point of its own penalty.
+AXIS_ESCAPE = 1.0e-14
 
 #: How close the fixed-spin-moment scheme has to get before a run counts as
 #: converged, in Bohr magnetons. **This is a convergence criterion in its own
@@ -322,7 +346,22 @@ class MagneticField(eqx.Module):
     # --- the energy, which is the primitive ----------------------------------
 
     def local_moments(self, rho_r: jnp.ndarray, cell: Cell) -> jnp.ndarray:
-        """``(nat, ncomponent)``: the moment inside each atom's sphere."""
+        """``(nat, ncomponent)``: the moment inside each atom's sphere.
+
+        Refuses by name when the spheres were never built, rather than letting
+        ``None.integrate`` surface as an ``AttributeError`` two frames down: the
+        caller decides whether an atom-resolved scheme is in force, and getting
+        that decision wrong is a *construction* bug in the caller
+        (:data:`ATOM_RESOLVED`).
+        """
+        if self.regions is None:
+            raise ValueError(
+                f"constrained_magnetization = '{self.constraint}' is resolved "
+                "by atom and needs the per-atom integration spheres, which "
+                "this MagneticField was built without. Every atom-resolved "
+                "scheme is listed in defumat.scf.fields.ATOM_RESOLVED -- read "
+                "that set rather than naming the schemes again"
+            )
         magnetization = magnetization_components(rho_r)
         scale = cell.volume / magnetization[0].size
         return scale * self.regions.integrate(magnetization)
@@ -378,8 +417,22 @@ class MagneticField(eqx.Module):
 
         if self.constraint == "total direction":
             moment = self.total_moment(rho_r, cell)
-            angle = jnp.arccos(jnp.clip(_polar_cosine(moment[None])[0], -1.0, 1.0))
-            return self.penalty * (angle - jnp.deg2rad(targets[0])) ** 2
+            angle, off_axis = _polar_angle(moment[None])
+            error = angle[0] - jnp.deg2rad(targets[0])
+            energy = self.penalty * error**2
+            # QE's escape from the axis, as the energy term whose derivative is
+            # its ``fact1(1) = 1.D-14``. ``stop_gradient`` on the prefactor is
+            # what makes that true: the whole point is a *constant* field of
+            # 1e-14 along x, not a second contribution to the penalty. It is
+            # off by construction when the moment already points where it was
+            # asked to, since ``error`` is then zero -- which covers QE's
+            # ``IF (mcons(3,1) > 0)`` and one case QE's test does not: a moment
+            # on the **-z** axis with a target of 0, where QE declines to kick
+            # and the run stays stuck at pi.
+            escape = AXIS_ESCAPE * moment[0] * jax.lax.stop_gradient(
+                2.0 * self.penalty * error
+            )
+            return energy + jnp.where(off_axis[0], 0.0, escape)
 
         raise NotImplementedError(
             f"constrained_magnetization = {self.constraint!r} is not implemented; "
@@ -534,6 +587,34 @@ def _polar_cosine(moments: jnp.ndarray) -> jnp.ndarray:
     """``m_z / |m|`` per row, zero where there is no moment to take it of."""
     modulus, present = _safe_modulus(moments)
     return jnp.where(present, moments[..., -1] / modulus, 0.0)
+
+
+def _polar_angle(moments: jnp.ndarray):
+    """``(theta, is_it_off_the_axis)`` per row, with QE's guard on the axis.
+
+    Written as ``atan2(|m_perp|, m_z)`` rather than as ``arccos(m_z / |m|)``,
+    which is the same angle and a different derivative. ``arccos'`` diverges at
+    ``+-1`` while ``d|m_perp|/dm_x`` vanishes there, so the chain is ``0 * inf``
+    and every component of the potential comes back NaN -- and the axis is not
+    a corner case but the state a run seeded from ``starting_magnetization``
+    with no angles **starts** in.
+
+    Both arguments of ``atan2`` are masked at the value the derivative is taken
+    at, which is the P70 lesson: ``|m_perp|`` at its own square, so its tangent
+    is zero rather than infinite on the axis, and ``m_z`` where there is no
+    moment at all, since ``atan2``'s own JVP is ``0/0`` at the origin. What
+    comes out is QE's ``fact1`` exactly -- ``m_x m_z / (m_perp |m|^2)`` and
+    ``-m_perp / |m|^2`` off the axis, and zero on it
+    (``add_bfield.f90:184-192``).
+    """
+    square_perp = jnp.sum(moments[..., :2] ** 2, axis=-1)
+    off_axis = square_perp > VANISHING_TRANSVERSE**2
+    perp = jnp.where(
+        off_axis, jnp.sqrt(jnp.where(off_axis, square_perp, 1.0)), 0.0
+    )
+    _, present = _safe_modulus(moments)
+    along_z = jnp.where(present, moments[..., 2], 1.0)
+    return jnp.arctan2(perp, along_z), off_axis
 
 
 def _unit_cosine(moments: jnp.ndarray, targets: jnp.ndarray) -> jnp.ndarray:

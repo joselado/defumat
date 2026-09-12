@@ -1,0 +1,45 @@
+! Two hydrogen atoms of ONE species asked to sit 120 degrees apart, held there
+! by `constrained_magnetization = 'atomic texture'` and nothing else.
+!
+! This is the cheapest cell that is a *canted* magnet rather than a collinear
+! one: the two moments are at +60 and -60 degrees from z in the xz plane, so
+! the state is neither ferromagnetic nor antiferromagnetic and no collinear
+! machinery can represent it. Nothing in the SCF holds an angle, so without a
+! constraint the pair relaxes to whichever collinear arrangement is lower and
+! the 120 degrees is gone.
+!
+! Two things are deliberate. There is **no** LOCAL_MAGNETIC_FIELDS card: the
+! per-atom integration spheres have to be built because the constraint is
+! atom-resolved, not because a field asked for them. And `lambda` is left at a
+! value the SCF tolerates rather than the largest that would hold the angle
+! best -- the penalty's stiffness is a convergence parameter, and the point of
+! the cell is to measure what it buys.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 9.0, celldm(3) = 1.0,
+    nat = 2, ntyp = 1,
+    ecutwfc = 20.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.05
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.6
+    constrained_magnetization = 'atomic texture'
+    lambda = 0.5
+    nbnd = 12
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-8
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H 0.0 0.0 0.00
+ H 0.0 0.0 0.40
+K_POINTS {automatic}
+ 1 1 2 0 0 0
+STARTING_MOMENTS
+  0.5196152423  0.0  0.3
+ -0.5196152423  0.0  0.3

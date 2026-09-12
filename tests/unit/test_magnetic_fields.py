@@ -16,6 +16,8 @@ with random per-atom weights. Nothing about this test needs a physical density,
 and using one would only make the comparison harder to read.
 """
 
+from pathlib import Path
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -204,6 +206,174 @@ def test_total_direction_constraint_matches_add_bfield(density, cell):
         assert v[ipol + 1] == pytest.approx(np.full(GRID, bfield[ipol]), abs=1e-9)
     _, _, e_constraint = field.potential(density, cell)
     assert float(e_constraint) == pytest.approx(penalty * xx**2)
+
+
+@pytest.fixture(scope="module")
+def axial_density():
+    """A noncollinear density whose total moment lies **exactly** on ``z``.
+
+    This is not a contrived state: it is where a run seeded from
+    ``starting_magnetization`` with no ``angle1``/``angle2`` starts, so a polar
+    angle constraint meets it on its first iteration.
+    """
+    rng = np.random.default_rng(20260912)
+    rho = rng.normal(size=(4,) + GRID)
+    rho[0] = np.abs(rho[0]) + 0.5
+    rho = rho * 0.1
+    # Bit-exactly zero, because the boundary is reached rather than approached
+    # (`CLAUDE.md`, the clamp trap). Cancelling a random field to its own mean
+    # instead leaves 6e-16, which is the *realistic* case and is covered by the
+    # threshold rather than by the exact zero -- both are asserted below.
+    rho[1] = 0.0
+    rho[2] = 0.0
+    rho[3] = np.abs(rho[3]) + 0.2
+    return jnp.asarray(rho)
+
+
+def test_the_polar_angle_constraint_is_finite_on_the_axis(axial_density, cell):
+    """``i_cons = 6`` with the moment along ``z``: QE guards it and so must this.
+
+    ``arccos'`` diverges at ``+-1`` while ``d|m_perp|/dm_x`` vanishes there, so
+    the chain is ``0 * inf`` and **every** component of the potential comes back
+    NaN. ``add_bfield.f90:184-192`` zeroes the transverse factors below
+    ``mperp < 1.D-14``; here the same thing falls out of masking the argument
+    ``atan2`` is taken at.
+    """
+    field = MagneticField(
+        regions=None, uniform=jnp.zeros(3), atomic=None,
+        targets=jnp.asarray([40.0]), penalty=0.31,
+        constraint="total direction",
+    )
+    m = np.asarray(field.total_moment(axial_density, cell))
+    assert m[0] == 0.0 and m[1] == 0.0, "the fixture is not on the axis"
+    assert m[2] > 0.1
+
+    v = _potential(field, axial_density, cell)
+    assert np.all(np.isfinite(v)), "the polar-angle potential is not finite on the axis"
+
+    # QE's fact1(1:2) = 0 and fact1(3) = -mperp/|m|^2 = 0, so the only thing
+    # left is the 1e-14 escape along x.
+    assert np.allclose(v[2], 0.0, atol=1e-30)
+    assert np.allclose(v[3], 0.0, atol=1e-30)
+    error = 0.0 - np.deg2rad(40.0)
+    escape = 2.0 * 0.31 * error * 1.0e-14
+    assert v[1] == pytest.approx(np.full(GRID, escape), rel=1e-9)
+    assert escape < 0.0, "the escape must push the moment off the axis, not onto it"
+
+
+def test_the_polar_angle_constraint_is_finite_just_off_the_axis(axial_density, cell):
+    """The realistic case: a transverse moment of round-off rather than of zero.
+
+    Cancelling a random transverse channel against its own mean leaves ~1e-15,
+    not 0. That is **also** a NaN in the unguarded form, and for a second
+    reason: ``m_z/|m|`` rounds to bit-exactly 1.0 at that separation, so
+    ``jnp.clip`` sits on its boundary and hands each argument half the tangent
+    -- the clamp trap, on top of the diverging ``arccos'``. Which of the two
+    fires is rounding, which is why the guard is a *threshold* at QE's 1e-14
+    rather than a test for zero.
+    """
+    rho = np.asarray(axial_density).copy()
+    rng = np.random.default_rng(4242)
+    rho[1] = rng.normal(size=GRID) * 0.1
+    rho[1] -= rho[1].mean()
+    field = MagneticField(
+        regions=None, uniform=jnp.zeros(3), atomic=None,
+        targets=jnp.asarray([40.0]), penalty=0.31,
+        constraint="total direction",
+    )
+    m = np.asarray(field.total_moment(jnp.asarray(rho), cell))
+    mperp = np.hypot(m[0], m[1])
+    assert 0.0 < mperp < 1.0e-14, f"the fixture is not in the guarded band ({mperp:.3e})"
+
+    v = _potential(field, jnp.asarray(rho), cell)
+    assert np.all(np.isfinite(v))
+    assert np.max(np.abs(v[1:])) < 1e-13, "the guard is not covering the sub-threshold band"
+
+
+def test_the_polar_angle_derivative_is_qes_fact1_off_the_axis(density, cell):
+    """The guarded form must not change the answer anywhere it was already right.
+
+    Written as ``atan2(|m_perp|, m_z)`` where QE writes ``arccos(m_z/|m|)``:
+    the same angle, and the derivative has to be the same three numbers.
+    """
+    field = MagneticField(
+        regions=None, uniform=jnp.zeros(3), atomic=None,
+        targets=jnp.asarray([35.0]), penalty=0.29,
+        constraint="total direction",
+    )
+    m = np.asarray(field.total_moment(density, cell))
+    ma = np.linalg.norm(m)
+    mperp = np.hypot(m[0], m[1])
+    assert mperp > 1e-6, "the fixture is on the axis; this test is the other branch"
+    fact1 = np.array([
+        m[0] / mperp * m[2] / ma**2,
+        m[1] / mperp * m[2] / ma**2,
+        -np.sqrt(1.0 - (m[2] / ma) ** 2) / ma,
+    ])
+    xx = np.arccos(m[2] / ma) - np.deg2rad(35.0)
+
+    v = _potential(field, density, cell)
+    for ipol in range(3):
+        assert v[ipol + 1] == pytest.approx(
+            np.full(GRID, 2.0 * 0.29 * xx * fact1[ipol]), abs=1e-12
+        )
+
+
+def test_every_atom_resolved_constraint_gets_its_spheres(regions, density, cell):
+    """The set that decides whether the spheres are built must cover all three.
+
+    ``atomic texture`` was left out of a hand-written tuple in the driver, so a
+    run asking for it built ``regions = None`` and died on
+    ``None.integrate`` inside the **first potential build** -- a crash rather
+    than a wrong number, but only reachable for an input that did not also
+    happen to carry a ``LOCAL_MAGNETIC_FIELDS`` card, which is why every
+    committed test missed it.
+    """
+    from defumat.scf.fields import ATOM_RESOLVED
+
+    for constraint in sorted(ATOM_RESOLVED):
+        width = 1 if constraint == "atomic direction" else 3
+        targets = jnp.asarray(np.tile(
+            [0.0, 0.0, 1.0][:width] if width == 3 else [0.5], (NAT, 1)))
+        field = MagneticField(
+            regions=regions, uniform=jnp.zeros(3), atomic=None,
+            targets=targets, penalty=0.2, constraint=constraint,
+        )
+        assert np.isfinite(float(field.constraint_energy(density, cell)))
+
+        without = MagneticField(
+            regions=None, uniform=jnp.zeros(3), atomic=None,
+            targets=targets, penalty=0.2, constraint=constraint,
+        )
+        with pytest.raises(ValueError, match="ATOM_RESOLVED"):
+            without.constraint_energy(density, cell)
+
+
+def test_the_driver_builds_spheres_for_a_bare_atomic_texture_run():
+    """The regression itself, from the input file down.
+
+    No ``LOCAL_MAGNETIC_FIELDS``: the spheres have to be built because the
+    *constraint* is atom-resolved. Reaching ``constraint_energy`` is the point
+    -- constructing the ``Calculation`` succeeded on the broken code too.
+    """
+    from defumat import Calculator
+    from defumat.scf.driver import Calculation
+
+    calculator = Calculator.from_file(
+        "tests/data/qe/h2-texture-120.in", pseudo_dir="tests/data/pseudo")
+    lines = Path("tests/data/qe/h2-texture-120.in").read_text().splitlines()
+    assert not [ln for ln in lines
+                if ln.strip().upper().startswith("LOCAL_MAGNETIC_FIELDS")]
+
+    calculation = Calculation(calculator.system, calculator.pseudos)
+    field = calculation.magnetic_field
+    assert field.constraint == "atomic texture"
+    assert field.atomic is None, "the input must not carry a per-atom field"
+    assert field.regions is not None
+
+    energy = float(field.constraint_energy(
+        calculation.starting_density(), calculation.system.cell))
+    assert np.isfinite(energy) and energy >= 0.0
 
 
 def test_collinear_field_splits_the_two_channels(cell):

@@ -126,7 +126,8 @@ from defumat.scf.occupations import (
     tetrahedra_for,
     tetrahedron_occupations_spin,
 )
-from defumat.scf.fields import FADED_FIELD, MagneticField, constraint_targets
+from defumat.scf.fields import (ATOM_RESOLVED, FADED_FIELD, MagneticField,
+                                constraint_targets)
 from defumat.scf.locals import build_local_regions, get_locals
 from defumat.scf.potential import (
     Potential,
@@ -1882,7 +1883,7 @@ class Calculation:
 
         # The atom-resolved schemes need the integration spheres; the total ones
         # do not, and building them costs a pass over the dense grid per atom.
-        needs_regions = atomic is not None or constraint in ("atomic", "atomic direction")
+        needs_regions = atomic is not None or constraint in ATOM_RESOLVED
         regions = (
             build_local_regions(
                 system.cell, system.structure, self.basis.dense.grid,
