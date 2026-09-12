@@ -9627,6 +9627,9 @@ and stated as untested rather than claimed.
 **What.** `ns` as one `2(2l+1)` Hermitian matrix in the combined `(m, spin)` space instead
 of two `(2l+1)` blocks — QE's `new_ns_nc`/`v_hubbard_nc`/`v_hubbard_full_nc`, Elk's
 `dmatmt` with `nspinor = 2`. It is what P20 refuses under the name "noncollinear `ns_nc`",
+-- and note P79: the *continuation* into this was refused until then, and the
+`starting_ns` route into it discarded the imaginary part, so what is validated below is the
+`init_ns` route and only that --
 and it is the axis that unlocks the most: **DFT+U with spin-orbit coupling**, with
 noncollinear magnetism, and — Elk's own combination, which `pw.x` cannot form at all —
 **DFT+U on a spin spiral**.
@@ -13111,6 +13114,18 @@ inside `jnp.asarray` and nothing was listening. `promote_ns` could have been cor
 every element and the resume still wrong, which is exactly this file's own "a check whose
 null result cannot be told from a pass": the array-algebra test passes whether or not the
 driver routes anything through it.
+
+**It was not only the resume.** That line is on the `starting_ns` branch, so it caught
+*every* caller of `run_scf(starting_ns=...)` with a spinor matrix -- a hand-seeded spinor
+`ns`, a `starting_from` continuation, a checkpoint -- since P62b landed. The route into
+P62b's own validated quantity has been silently collinear that whole time; what P62b
+measured, 1.2e-7 Ry against `pw.x`, was from `init_ns` and is untouched.
+
+*The class was swept and is clean.* Every other `precision.as_real(...)` in `defumat/scf/`
+and in the response stack takes a genuinely real quantity -- k-point coordinates, positions,
+tetrahedron weights, a scissor shift, a broadening, eigenvalues -- and `starting_becsum`,
+the one companion that could also be complex under spin-orbit coupling, is passed through
+with no cast at all.
 
 **The numbers, from `tests/regression/test_noncollinear_hubbard_resume.py`** (nickel,
 `U = 4`, `J = 0.9`, ultrasoft, two atoms):
