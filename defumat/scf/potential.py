@@ -45,7 +45,12 @@ from defumat.basis.gradients import divergence, gradient, laplacian
 from defumat.basis.gvectors import GVectors
 from defumat.system.cell import Cell
 from defumat.units import E2, FPI
-from defumat.xc.functional import Functional, get_functional, local_spin_frame
+from defumat.xc.functional import (
+    Functional,
+    get_functional,
+    local_spin_frame,
+    safe_modulus,
+)
 
 __all__ = ["Potential", "v_of_rho", "hartree", "exchange_correlation",
            "gradient_correction", "meta_exchange", "scf_accuracy", "total_charge",
@@ -329,7 +334,13 @@ def _noncollinear_gradient_correction(
     """
     charge = rho_r[0]
     magnetization = rho_r[1:]
-    modulus = jnp.sqrt(jnp.sum(magnetization**2, axis=0))
+    # ``safe_modulus`` and not a bare ``sqrt``: every spinor force, stress and
+    # response ``jvp`` differentiates this function, and ``d|m|/dm`` is ``0/0``
+    # at a bit-exact zero -- which ``sym_rho``'s axial average produces
+    # *exactly* wherever the magnetic little group admits no invariant axial
+    # vector, and which any vacuum region underflows to. The mask has to go on
+    # the sum of squares: guarding the division below leaves ``0 * inf``.
+    modulus = safe_modulus(magnetization)
     if axis is None:
         sign = jnp.ones_like(modulus)
     else:
@@ -581,7 +592,13 @@ def _noncollinear_meta_exchange(
     """
     charge = rho_r[0]
     magnetization = rho_r[1:]
-    modulus = jnp.sqrt(jnp.sum(magnetization**2, axis=0))
+    # ``safe_modulus`` and not a bare ``sqrt``: every spinor force, stress and
+    # response ``jvp`` differentiates this function, and ``d|m|/dm`` is ``0/0``
+    # at a bit-exact zero -- which ``sym_rho``'s axial average produces
+    # *exactly* wherever the magnetic little group admits no invariant axial
+    # vector, and which any vacuum region underflows to. The mask has to go on
+    # the sum of squares: guarding the division below leaves ``0 * inf``.
+    modulus = safe_modulus(magnetization)
     if axis is None:
         sign = jnp.ones_like(modulus)
     else:

@@ -50,6 +50,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from defumat.xc.functional import safe_modulus
+
 __all__ = ["band_energy_at_angle", "rotated_density", "torque_at_angle"]
 
 
@@ -61,7 +63,7 @@ def rotated_density(density, direction):
     norm, which is right for a workflow argument and cannot be differentiated
     through; it stays as it is rather than being loosened, because it is on
     P58's validated path. The two are checked against each other on concrete
-    inputs in ``tests/unit/test_torque.py``.
+    inputs in ``tests/regression/test_anisotropy.py``.
     """
     density = jnp.asarray(density)
     direction = jnp.asarray(direction)
@@ -75,8 +77,13 @@ def rotated_density(density, direction):
         # Projected onto the direction it already has, which is what makes this
         # idempotent on a state that is already noncollinear.
         moment = density[1:4]
-        norm = jnp.sqrt(jnp.sum(jnp.sum(moment**2, axis=0)))
-        scalar = jnp.where(norm > 0.0, jnp.sum(moment**2, axis=0) ** 0.5, 0.0)
+        # **Per point, not per cell.** The guard here used to be a single scalar
+        # norm over the whole grid, which is nonzero as soon as *any* point
+        # carries a moment -- so it protected no individual point, and the
+        # per-point ``**0.5`` behind it kept its infinite derivative at every
+        # vacuum point and at every point ``sym_rho`` averaged to a bit-exact
+        # zero. ``safe_modulus`` masks the sum of squares itself.
+        scalar = safe_modulus(moment)
     else:
         raise ValueError(
             f"rotated_density wants a magnetic density, got {channels} channels"

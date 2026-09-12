@@ -12605,6 +12605,52 @@ dense weights it replaced, which is the same guarantee one step removed. And the
 moments are not yet reported by `run_relax`, `run_vc_relax` or the response stack, only by
 `run_scf`.
 
+### P77a -- The bare `|m|` that every spinor force differentiates. ✅ DONE, guard; ⏳ the `pw.x` force.
+
+`defumat/scf/potential.py`, `forces/torque.py`. `NONCOLLINEAR.md`'s Tier 1 item 3, second
+half. `OPEN.md` A5 found `sqrt(sum(m^2))` written bare at two sites, fixed both with
+`safe_modulus` (the mask on the **argument the derivative is taken at**, since guarding the
+division below a `sqrt` leaves `0 * inf`), and left a test whose name said "both". There
+were **five**, and the other three were never looked at because of that name --
+`paw/gradient.py:195` even claims "the same guard the plane-wave branch uses", which was
+false for the branch it sits beside.
+
+**The live one is `_noncollinear_gradient_correction`**, which `v_of_rho` dispatches into at
+`nspin_mag = 4` with a gradient-corrected functional -- so every spinor force, every spinor
+stress and every response `jvp` differentiates it. `jax.grad` of its energy on an 8 bohr
+cell at `ecut = 12` with a whole plane of bit-exact zeros: **`nan` on all 243 components of
+that plane** before, finite after, and the energy identical
+(`-0.0612744443880662` Ry) with `|m|` agreeing to **exactly 0.0** at all 81 zero points.
+That is A5's signature reproduced at a new site -- the value was never wrong, only the
+tangent.
+
+**A bit-exact zero is reached rather than approached**, which is why this is not a corner
+case: `sym_rho`'s axial average is *exact* at a grid point whose magnetic little group
+admits no invariant axial vector, and any vacuum region underflows to it. A compensated
+magnet on a symmetry-reduced grid, or any slab.
+
+**`forces/torque.py` had the shape of a guard and none of the substance:** a *global*
+scalar norm over the whole grid gated a *per-point* `** 0.5`, and the global norm is
+nonzero as soon as any one point carries a moment -- so it protected no individual point.
+
+**The test is a sweep with an allowlist, not a list of the sites somebody remembered**,
+which is the only form that survives a sixth site being added: a regex for the per-point
+pattern over every function in the six modules, with two named exemptions
+(`_noncollinear_magnetization` and `_absolute_magnetization`, both reports ending in a
+`float()`, so no tangent reaches them). It caught one thing on its first run that reasoning
+had cleared -- `rotated_density`'s normalisation of a *direction* -- which is what narrowed
+the pattern to `axis=0`: a direction's norm is identically 1 by construction and its `sqrt`
+is smooth there, where a field's modulus is evaluated at every grid point.
+
+**What is outstanding, and it is the larger half of the item.** There is still **no
+measured derivative** of this function against `pw.x`. The one regression case that looks
+as though it covers the branch, `spinorbit-pbe.in`, sets `starting_magnetization = 0`, so
+`domag` is false, `nspin_mag = 1`, and the *unpolarized* branch at `potential.py:719-730` is
+what its 4.4e-7 PBE stress measures. What is needed is `h4-noncolin-force.in` with
+`input_dft = 'PBE'` and a committed `pw.x` reference, which is a phase because the
+reference has to be generated. Until then the sign convention, the rotate-back and every
+term between them are pinned only by finiteness and by the LDA cases.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.

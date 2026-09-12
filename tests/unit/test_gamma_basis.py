@@ -334,17 +334,120 @@ def test_the_local_spin_frame_has_a_finite_gradient_where_the_magnetization_vani
     )
 
 
-def test_both_magnetization_sites_share_the_one_guarded_function():
-    """``xc/functional.py`` and ``paw/gradient.py`` had the same three lines,
-    and the same defect, written twice. One function, tested above."""
-    import inspect
+def test_every_differentiated_magnetization_site_shares_the_one_guard():
+    """The same three lines, and the same defect, were written five times.
 
+    The first audit of this found two and its name said "both", which is why
+    the other three were never looked at -- and ``paw/gradient.py`` claimed in
+    a comment to use "the same guard the plane-wave branch uses", which was
+    false for the GGA branch. So this is a **sweep with an allowlist** rather
+    than a list of the sites somebody remembered: any new bare ``|m|`` in the
+    package fails it, and exempting one costs an entry here with a reason.
+
+    What the sweep looks for is the *per-point* modulus of a three-component
+    field -- a sum of squares over ``axis=0`` under a ``sqrt`` -- because that
+    is the defect: `|m|` evaluated at every grid point, where a bit-exact zero
+    is reached rather than approached. A norm with no axis is a different
+    thing and is not flagged: ``rotated_density`` normalises a *direction*
+    whose norm is identically one by construction (``cos^2 + sin^2``), so its
+    ``sqrt`` sits at 1 where it is perfectly smooth.
+
+    The two exempt sites are exempt because **no tangent flows through them**:
+    ``_noncollinear_magnetization`` and ``_absolute_magnetization`` are reports
+    that end in a ``float()``.
+    """
+    import inspect
+    import re
+
+    from defumat.forces import torque
     from defumat.paw import gradient as paw_gradient
+    from defumat.scf import continuation, driver, potential
     from defumat.xc import functional
 
-    source = inspect.getsource(paw_gradient._noncollinear_gradient)
-    assert "safe_modulus(magnetization)" in source
-    assert "jnp.sqrt(jnp.sum(magnetization**2" not in source
-    assert "jnp.sqrt(jnp.sum(magnetization**2" not in inspect.getsource(
-        functional.local_spin_frame
+    guarded = [
+        paw_gradient._noncollinear_gradient,
+        functional.local_spin_frame,
+        potential._noncollinear_gradient_correction,
+        potential._noncollinear_meta_exchange,
+        torque.rotated_density,
+    ]
+    for target in guarded:
+        source = inspect.getsource(target)
+        assert "safe_modulus(" in source, f"{target.__name__} lost its guard"
+
+    # The per-point modulus of a vector field, in both spellings it has been
+    # written in here: ``jnp.sqrt(jnp.sum(x**2, axis=0))`` and
+    # ``jnp.sum(x**2, axis=0) ** 0.5``.
+    bare = re.compile(
+        r"sqrt\(\s*jnp\.sum\([^)]*\*\*\s*2\s*,\s*axis\s*="
+        r"|\*\*\s*2\s*,\s*axis\s*=\s*0\s*\)\s*\*\*\s*0\.5"
     )
+    exempt = {
+        driver._noncollinear_magnetization,   # a report; ends in float()
+        continuation._absolute_magnetization,  # a report; ends in float()
+    }
+    offenders = []
+    for module in (paw_gradient, functional, potential, torque, driver,
+                   continuation):
+        for name, value in vars(module).items():
+            if not callable(value) or not hasattr(value, "__code__"):
+                continue
+            if getattr(value, "__module__", None) != module.__name__:
+                continue
+            try:
+                source = inspect.getsource(value)
+            except (OSError, TypeError):
+                continue
+            if bare.search(source) and value not in exempt:
+                offenders.append(f"{module.__name__}.{name}")
+    assert not offenders, (
+        "a bare |m| is back in a differentiated path -- use safe_modulus, or "
+        f"add it to the allowlist above with a reason: {sorted(offenders)}"
+    )
+
+
+def test_the_noncollinear_gga_potential_is_finite_at_a_vanishing_moment():
+    """The site that every spinor force differentiates and no test did.
+
+    ``_noncollinear_gradient_correction`` is what ``v_of_rho`` dispatches into
+    at ``nspin_mag = 4`` with a gradient-corrected functional, and every spinor
+    force, spinor stress and response ``jvp`` goes through it. The one
+    regression case that looks as though it covers the branch sets
+    ``starting_magnetization = 0``, so ``domag`` is false and the *unpolarized*
+    branch is what it measures.
+    """
+    import jax
+
+    from defumat.basis.gvectors import generate_gvectors
+    from defumat.scf.potential import _noncollinear_gradient_correction
+    from defumat.system.cell import Cell
+    from defumat.xc.functional import get_functional
+
+    cell = Cell.from_ibrav(1, [8.0, 0, 0, 0, 0, 0])
+    gvectors = generate_gvectors(cell, 12.0)
+    grid = tuple(gvectors.grid)
+    functional = get_functional("pbe")
+
+    rng = np.random.default_rng(4)
+    charge = jnp.asarray(0.5 + 0.1 * rng.random(grid))
+    magnetization = jnp.asarray(0.05 * rng.normal(size=(3,) + grid))
+    # A whole plane of bit-exact zeros, which is what ``sym_rho``'s axial
+    # average leaves behind and what a vacuum layer underflows to.
+    magnetization = magnetization.at[:, 0, :, :].set(0.0)
+    assert not np.any(np.asarray(magnetization)[:, 0])
+
+    def energy(m):
+        rho = jnp.concatenate([charge[None], m])
+        _, value = _noncollinear_gradient_correction(
+            rho, gvectors, cell, functional, None, None
+        )
+        return value
+
+    gradient = np.asarray(jax.grad(energy)(magnetization))
+    assert np.all(np.isfinite(gradient)), (
+        "d E_xc / d m is not finite where |m| is bit-exactly zero"
+    )
+    # The tangent on the zero plane is a one-sided derivative, which is what a
+    # potential at a vanishing moment *is* -- finite, and not a direction
+    # picked out of a conical singularity.
+    assert np.all(np.isfinite(gradient[:, 0, :, :]))
