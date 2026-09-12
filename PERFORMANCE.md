@@ -2877,6 +2877,11 @@ SCF in a fresh process would not.
 Ordered by expected gain per unit of effort, and by measurement rather than
 instinct. None of these may change a validated number.
 
+**Twenty-three unmeasured candidates from the read-only sweep of 2026-09-12 are in
+`OPEN.md` Part III**, ordered by ease rather than by gain, each with the input and the
+command that would price it. An entry moves onto *this* list when it has a number; until
+then it is a place to look, not a claim.
+
 1. **`jax.sharding` over the k-axis**, and GPU. Now measured to be the *only*
    parallelism worth having on CPU: the thread pool gives 15% between one core
    and four and loses badly beyond that, while `metal.in`'s ten k-points are
