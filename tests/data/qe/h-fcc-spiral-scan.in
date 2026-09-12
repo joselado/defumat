@@ -11,13 +11,26 @@
 !
 ! It does not work, and what it does instead is worth being able to reproduce:
 ! **the spiral's own SCF leaves the magnetic branch.** At q = (0, 0, 1/2) the
-! 90-degree spiral converges to |m| = 0.0001 -- the nonmagnetic solution -- so
-! its 59 meV "gain" is demagnetization and not a spin-wave energy at all; at
-! q = (0, 0, 1/4) it lands on a different collinear solution at |m| = 0.248.
-! Starting from a 15-degree cone does not help: the cone collapses to zero at
-! 1/4 and the moment to zero at 1/2, because nothing holds either. Elk's own
-! Ni-magnon-spiral example runs fsmtype = -1 with a large field along momfix
-! for exactly that reason.
+! 90-degree spiral converges off it -- so its 59 meV "gain" is demagnetization
+! and not a spin-wave energy at all; at q = (0, 0, 1/4) it lands on a different
+! collinear solution at |m| = 0.248. Starting from a 15-degree cone does not
+! help: the cone collapses to zero at 1/4 and the moment to zero at 1/2, because
+! nothing holds either. Elk's own Ni-magnon-spiral example runs fsmtype = -1 with
+! a large field along momfix for exactly that reason.
+!
+! **The collapsed |m| is not a number, and this header used to quote one.** It
+! read 0.0001 at q = 1/2; re-running gives 0.0435 after 149 iterations. Both are
+! "off the magnetic branch" and the difference is where a wandering SCF stopped,
+! not a property of the state -- so do not hold anything to a digit of it. For
+! reference the same cell at q = 0 converges in 24 iterations to |m| = 0.0273,
+! which is barely magnetic itself on an atom seeded at 1.0.
+!
+! **Holding it with `fsm` was tried and does not work** (P80): at q = 1/2 with the
+! target at that 0.0273 the run takes 200 iterations without converging and
+! overshoots to 0.1468. `fsm` is a feedback field rather than a penalty, so
+! `constraint_energy` is 0.0 and nothing on the result says how far off target it
+! is. Elk's `fsmtype = -1` -- the direction fixed hard by a large field -- is the
+! route, and it is not implemented here.
 !
 ! PLAN.md P63 records the measurement and what replaced it in the tests.
  &control

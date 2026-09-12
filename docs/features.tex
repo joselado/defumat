@@ -2186,11 +2186,25 @@ says so rather than producing a plausible dispersion anyway.
 
 \textbf{Do not compare that against a spiral $E(q)$ without checking what the
 spiral converged to.} It is the obvious cross-check and it does not work: on fcc
-hydrogen the 90-degree spiral at $q_3 = \tfrac12$ converges to $|m| = 0.0001$,
-the \emph{nonmagnetic} solution, so its energy gain is demagnetization and not a
-spin wave; a 15-degree cone collapses the same way, because nothing holds it.
-Elk's own magnon-spiral example runs \code{fsmtype = -1} with a large field for
-exactly that reason.
+hydrogen the 90-degree spiral at $q_3 = \tfrac12$ converges \emph{off} the
+magnetic branch, so its energy gain is demagnetization and not a spin wave; a
+15-degree cone collapses the same way, because nothing holds it. (The collapsed
+$|m|$ is not a number to quote --- two runs of the same input give 0.0001 and
+0.0435, which is where a wandering SCF stopped rather than a property of the
+state.)
+
+\textbf{A constraint does not rescue it, and that edge is worth knowing.} A
+spiral SCF accepts \code{constrained\_magnetization} and a magnetic field ---
+neither is refused --- and the quantity a constraint acts on is the
+\textbf{rotated-frame} magnetization, which is the right object for a helix. But
+\code{'fsm'} does not hold one: at $q_3 = \tfrac12$ with the target at the same
+cell's $q = 0$ moment the run takes 200 iterations without converging and
+overshoots it by a factor of five. \code{'fsm'} is a \emph{feedback} field rather
+than a penalty, so \code{constraint\_energy} is 0 and nothing on the result says
+how far from its target the run is --- the failure reads as an ordinary
+non-convergence. Elk's own magnon-spiral example runs \code{fsmtype = -1} with a
+large field for exactly that reason: the \emph{direction} fixed hard, not a small
+magnitude pinned. That scheme is not implemented here.
 
 \code{goldstone\_correction=True} scales the kernel by
 $1/\lambda_{\max}(\mathbf q{=}0)$, the same factor at every $\mathbf q$, so the

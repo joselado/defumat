@@ -198,14 +198,26 @@ converts the feature from a set of identities to an external comparison, is the 
 that catches an error the five identities share, and supplies the missing
 `PERFORMANCE.md` pair in the same run.
 
-**(c), separately, is cheap and is `O5`.** A spiral SCF does not refuse a field or a
-constraint, so a spiral *can* be held — and the quantity a constraint acts on is the
-**rotated-frame** magnetization, which happens to be exactly the right thing for a helix and
-is documented nowhere near `constrained_magnetization`. Run
-`tests/data/qe/h-fcc-spiral-scan.in` at `q3 = 1/2` bare and again under
-`constrained_magnetization = 'fsm'` with `fixed_magnetization` at the collinear `|m|`. The
-bare run is on record at `|m| = 0.0001`, the nonmagnetic solution. A grep of `tests/` and
-`notebooks/` for a spiral together with a field or a constraint returns nothing.
+**(c) is run, and the answer is a negative; P80.** A spiral SCF does not refuse a field or a
+constraint, and the quantity a constraint acts on **is** the rotated-frame magnetization —
+the right object for a helix, and documented nowhere near `constrained_magnetization` before
+now. But `fsm` does not hold it: at `q3 = 1/2` with the target at the same cell's `q = 0`
+moment (0.0273 mu_B) the run takes 200 iterations **without converging**, overshoots to
+0.1468 — a factor of five — and lands 0.9 mRy *above* the bare run.
+
+The mechanism is on the result object: `constraint_energy` is 0.0 and `field_scale` is 1.0,
+because `fsm` is a **feedback** field rather than a penalty, so nothing reports how far from
+its target the run is and the failure reads as an ordinary non-convergence. That is the
+`site_residuals` gap for the schemes that are not atom-resolved. **Next step is Elk's own
+recipe for this calculation and not a larger `lambda`**: `fsmtype = -1` with a large field
+along `momfix`, which fixes the *direction* hard instead of pinning a small magnitude — and
+item B is the machinery for it.
+
+Two corrections fell out. `h-fcc-spiral-scan.in`'s header records `|m| = 0.0001` at
+`q = 1/2`; the run gives **0.0435** in 149 iterations. Both are "off the magnetic branch" and
+neither is a number — it is where a wandering SCF stopped — so the header's figure must not be
+quoted as one. And the cell's `q = 0` state is only 0.027 mu_B on an atom seeded at 1.0, so
+the target was nearly nonmagnetic to begin with, which is a poor test of a feedback field.
 
 ### F. The mixer's metric — and its headroom is now bounded [17]
 

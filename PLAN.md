@@ -13197,6 +13197,14 @@ that does not match the caller's density and `nosym` is the fix. It costs one sy
 of the seed, once per run, and changes nothing the run computes (the trap: a diagnostic must
 not change the run it is diagnosing).
 
+**Both halves of the guard are measured, which is the standing rule about guards.** It fires
+on the case that must trip it (residual 1.0, and the test feeds it that case deliberately),
+and it is **silent on all 1898 tests of the fast gate** -- zero occurrences of the message
+across every magnetic, spinor, DFT+U, PAW, continuation and checkpoint case in it, including
+every resume, which hands its mixed density in as `starting_density=` and so takes the
+handed-in branch. A guard that fires correctly and also cries wolf is not usable, and the
+second number is the one nothing would otherwise have collected.
+
 **Q1 asked whether a *vector* texture has ever survived an SCF. It has, and the symmetrised
 run and the free one agree.** The same four-atom chain, converged twice at `conv_thr = 1e-8`
 (`h4-cycloid-90.in` and `h4-cycloid-90-nosym.in`, 5 bohr between hydrogens):
@@ -13280,6 +13288,41 @@ on hydrogen both failed: four moments 90 degrees apart limit-cycle at an accurac
 moments at **5e-8**, where the same cells converge to 1e-11 under LDA in 62 iterations. The
 magnetic state is frustrated under PBE on those cells. What that half needs is a cell whose
 canted PBE state converges in `pw.x`, not a change here.
+
+**E(c) asked whether a spiral can be *held* by a constraint. It is not refused, and it does
+not work.** A spiral SCF accepts `constrained_magnetization` and a field -- nothing declines
+either -- and the quantity a constraint acts on is confirmed to be the **rotated-frame**
+magnetization, which is the right object for a helix and was documented nowhere near
+`constrained_magnetization`. What it does with it is the finding.
+`h-fcc-spiral-scan.in` at `spiral_q = (0, 0, 1/2)`, target taken from the same cell's
+`q = 0` run:
+
+| run | iterations | converged | rotated-frame `\|m\|` | E (Ry) |
+|---|---|---|---|---|
+| `q = 0`, bare | 24 | yes | 0.0273 | -0.98458891 |
+| `q = 1/2`, bare | 149 | yes | 0.0435 | -0.98461919 |
+| `q = 1/2`, `fsm` at 0.0273 along x | **200** | **no** | **0.1468** | -0.98370265 |
+
+The constrained run **overshoots its target by a factor of five and does not converge**, and
+lands 0.9 mRy *above* the bare one. The mechanism is visible on the result object:
+`constraint_energy` is **0.0** and `field_scale` is 1.0, because `fsm` is a *feedback* field
+rather than a penalty -- so there is no penalty energy to report and, more to the point,
+**nothing on the result says how far from its target the run is**. That is the
+`site_residuals` gap for the non-atom-resolved schemes, and it is why a non-convergence here
+reads as an ordinary non-convergence. Elk's own recipe for this exact calculation is
+`fsmtype = -1` with a **large** field along `momfix` -- fix the *direction* hard, not the
+magnitude at a small value -- and that is the thing to try next, not a larger `lambda`.
+
+Two things found on the way, both corrections to what was written down.
+`h-fcc-spiral-scan.in`'s header records `|m| = 0.0001` at `q = 1/2`; this run gives
+**0.0435** after 149 iterations. Both are "collapsed off the magnetic branch" and neither is a
+number: it is wherever a wandering SCF stopped, so the header's figure should not be quoted as
+one. And the cell's `q = 0` state is itself only 0.027 mu_B on an atom seeded at 1.0, so the
+target handed to `fsm` was a nearly nonmagnetic number -- which is a poor test of a feedback
+field and is part of why it did not settle. *The first criterion written for this comparison
+was also wrong in this file's recurring way*: "held if `|m| > 0.5 target`" passes at 0.1468
+against a 0.0273 target, so a five-fold **overshoot** reads as a hold. The test of a
+constraint is the distance from the target, signed, not a one-sided bound.
 
 **The QE test-suite is on this machine outside the repo, and about thirty tests were skipping
 for no reason.** `~/apps/qe-7.4.1/test-suite/` has the same directories and the same inputs
