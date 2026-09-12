@@ -13241,6 +13241,58 @@ the driver routes anything through it, which is how `promote_ns` was right in ev
 while every resume was silently collinear (P79). A nonmagnetic relaxation records `None` and
 not zeros, so the absence stays distinguishable from a measurement.
 
+**Q4 asked whether the noncollinear GGA branch is correct at all. It is, and the check is a
+derivative.** bcc iron with its moment in the plane, ultrasoft, PBE, `nosym`, a shifted
+4x4x4 grid (`tests/data/qe/fe-noncolin-pbe-stress.in`, reference generated with the local
+`pw.x` 7.4.1):
+
+| quantity | defumat | `pw.x` | difference |
+|---|---|---|---|
+| total energy | -55.78872994 Ry | -55.78872993 Ry | **6.7e-9 Ry** |
+| magnetization | (1.95101, 0.0002, 0.0001) mu_B | (1.95, 0.00, 0.00) | -- |
+| absolute magnetization | 2.14008 mu_B | 2.14 | -- |
+| stress, diagonal | 1.038232e-3 Ry/bohr^3 | 1.03807e-3 | **1.6e-7 Ry/bohr^3** |
+| pressure | 152.73 kbar | 152.71 | **0.019 kbar** |
+| iterations | 43 | 19 | -- |
+
+**The stress is the point.** With one atom in a bcc cell the force is zero by symmetry, so
+the stress is the only derivative the geometry has -- and the energy being right says nothing
+about it, since being stationary hides an error in the gradient. 1.6e-7 Ry/bohr^3 is the
+*same* level the collinear ultrasoft cases reach on the same quantity (§3 P11: 2.7e-7 for
+`si2-us-pbe-stress`, 2.4e-7 for `pw_lsda/lsda.in`), so the vector branch is no worse than the
+scalar one it generalises.
+
+**Which of QE's two noncollinear GGA branches this exercises, and it is worth knowing there
+are two.** `compute_ux` takes a fixed quantization axis whenever the starting moments are all
+parallel to one direction, and `compute_rho` then resolves the density as
+`(n +- sign(m.ux)|m|)/2` -- **signed**, so "up" stays up across a node where `m` passes
+through zero, which removes the spurious cusp `|m|` has there. One atom is trivially parallel
+to itself, so this is the signed branch, and both codes agree on the axis: `pw.x` prints
+`Fixed quantization axis for GGA: 1.000000 0.000000 0.000000` and
+`fixed_quantization_axis` returns the same. The branch is implemented here and follows QE's
+three steps (rotate, evaluate with the collinear `nspin = 2` code, rotate back with the sign
+carried through).
+
+**The unsigned branch is still unmeasured, and the obstacle is on the `pw.x` side.** Plain
+`|m|` with a real kink at every node is what a genuinely canted cell takes, and two attempts
+on hydrogen both failed: four moments 90 degrees apart limit-cycle at an accuracy of
+**5e-6 Ry** under PBE (100 iterations at `mixing_beta = 0.3`, and again 300 at 0.1) and two
+moments at **5e-8**, where the same cells converge to 1e-11 under LDA in 62 iterations. The
+magnetic state is frustrated under PBE on those cells. What that half needs is a cell whose
+canted PBE state converges in `pw.x`, not a change here.
+
+**The QE test-suite is on this machine outside the repo, and about thirty tests were skipping
+for no reason.** `~/apps/qe-7.4.1/test-suite/` has the same directories and the same inputs
+as the gitignored vendored tree, so `tests/conftest.py`'s `QE_ROOT` now reads
+`DEFUMAT_QE_ROOT` with the vendored path as its default. With it set,
+`tests/unit/test_continuation_machinery.py` goes from 8 passed and 27 skipped to **31
+passed**. The caveat is stated where the variable is: the committed regenerated references
+were produced by whichever QE that path pointed at, `reference_output` prefers them over the
+tree's own benchmark, and a minor-version mismatch between the input read and the output
+compared against is possible and undetected. 7.4.1 against 7.5 agrees to two digits in every
+`dE` and every iteration count on the whole fast benchmark set (`PERFORMANCE.md`), which is
+why it is a usable stand-in rather than a guess.
+
 **One latent breakage fixed on the way past.** `tools/generate_reference.py`'s documented
 bare form ("everything missing") globs every `.in` in `tests/data/qe`, and since P77 some of
 them carry a `STARTING_MOMENTS` card -- this code's own, which `pw.x` cannot parse, on cells

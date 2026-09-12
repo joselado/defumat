@@ -6,6 +6,7 @@ failing. The pseudopotential files under ``tests/data/pseudo`` *are* committed,
 because they are small and nothing is runnable without them.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,30 @@ import pytest
 from tests import memwatch  # stdlib + psutil only; never JAX
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-QE_ROOT = REPO_ROOT / "quantum_espresso" / "qe-7.5-ReleasePack" / "qe-7.5"
+
+#: Where the QE source tree is looked for. The vendored location is the default
+#: and nothing about it has changed; ``DEFUMAT_QE_ROOT`` points at a QE tree
+#: installed somewhere else instead.
+#:
+#: **Why this exists.** The tree is 285 MB, gitignored and never in history, so a
+#: fresh checkout has none -- and about thirty tests skip for that reason alone,
+#: including every ``test-suite`` input comparison and the continuation set. A
+#: released QE installed outside the repo has the same ``test-suite/`` and the
+#: same inputs, so those tests can run against it. **The version is the caveat
+#: and it is the caller's to weigh**: the regenerated references committed under
+#: ``tests/data/qe`` were produced with the QE this path pointed at when they were
+#: made, and ``reference_output`` prefers them over the tree's own benchmark. A
+#: minor-version mismatch between the *input* read here and the *output* compared
+#: against is therefore possible and is not detected. 7.4.1 has been checked
+#: against 7.5 on the whole fast benchmark set and agrees to two digits in every
+#: ``dE`` and every iteration count (``PERFORMANCE.md``), which is why it is a
+#: usable stand-in rather than a guess.
+QE_ROOT = Path(
+    os.environ.get(
+        "DEFUMAT_QE_ROOT",
+        REPO_ROOT / "quantum_espresso" / "qe-7.5-ReleasePack" / "qe-7.5",
+    )
+)
 
 
 @pytest.fixture(scope="session")
@@ -21,7 +45,11 @@ def qe_testsuite() -> Path:
     """Path to QE's ``test-suite`` directory, or skip if the tree is absent."""
     path = QE_ROOT / "test-suite"
     if not path.is_dir():
-        pytest.skip(f"QE reference tree not present at {path}")
+        pytest.skip(
+            f"QE reference tree not present at {path}. It is gitignored, so a "
+            f"fresh checkout has none; set DEFUMAT_QE_ROOT to a QE installation "
+            f"to run these against its test-suite instead"
+        )
     return path
 
 

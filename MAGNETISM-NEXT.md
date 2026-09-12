@@ -298,11 +298,28 @@ number there is large exactly when symmetry is working and cannot be told from t
 The seed is where there is no ambiguity, and it is also *earlier*: the warning fires before
 iteration 1 rather than at iteration 6.
 
-**Q4 — is the noncollinear GGA branch correct at all?** [O8, and P77a's remaining half] The
-*guard* is in and measured (nan on 243 components → finite). Whether the branch is right has
-**no measured derivative anywhere in the project**. Generate a `pw.x` reference for a
-magnetic noncollinear **PBE** cell with forces — `h4-noncolin-force.in` with
-`input_dft = 'PBE'` — and compare. One new `pw.x` run.
+**Q4 — is the noncollinear GGA branch correct at all? Yes for the *signed* branch; closed by
+P80. The unsigned one is still open and the obstacle is `pw.x`.** bcc iron with its moment in
+the plane, ultrasoft, PBE (`fe-noncolin-pbe-stress.in`): the energy agrees to **6.7e-9 Ry**
+and the **stress** — the only derivative a one-atom bcc cell has — to **1.6e-7 Ry/bohr^3**,
+0.019 kbar out of 152.71, which is the same level the collinear ultrasoft cases reach on the
+same quantity (2.7e-7, 2.4e-7).
+
+**There are two branches and this question did not know it.** `compute_ux` takes a fixed
+quantization axis whenever the starting moments are all parallel, and `compute_rho` then uses
+`(n ± sign(m·ux)|m|)/2` — *signed*, removing the cusp `|m|` has at a node. One atom is
+trivially parallel to itself, so iron runs the signed branch; both codes agree on the axis.
+Plain `|m|` is what a genuinely **canted** cell takes and it is the one P77a's guard is about.
+
+**Two attempts at it failed on the `pw.x` side, not here.** The obvious cell — this
+question's own suggestion, `h4-noncolin-force.in` with `input_dft = 'PBE'` — limit-cycles at
+an accuracy of **5e-6 Ry**: 100 iterations at `mixing_beta = 0.3` and 300 at 0.1. A two-atom
+version reaches 5e-8 and no further. Both converge to 1e-11 under **LDA** in 62 iterations, so
+the magnetic state is frustrated under PBE on a hydrogen chain. **First step:** a cell whose
+canted PBE state converges in `pw.x` — iron or nickel sublattices at 90 degrees rather than
+hydrogen, or the same hydrogen cell held by `constrained_magnetization = 'atomic'`, which both
+codes can state per species (and whose penalty is then outside both totals, which is the
+hazard to check before trusting agreement).
 
 **Q5 — ultrasoft or PAW with several non-parallel moments has no external number in any
 regime.** [O13] Take `fe-kind1-noncol.in` (`Fe.rel-pbe-spn-rrkjus`), build a two-atom

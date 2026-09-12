@@ -1,0 +1,62 @@
+! **A derivative of the noncollinear GGA**: bcc iron with its moment in the
+! plane, PBE, with the stress printed.
+!
+! The gradient correction of a *vector* magnetization had no measured number of
+! any kind anywhere in this project -- every committed PBE reference is collinear
+! or nonmagnetic, and every noncollinear one is LDA. This is the cheapest cell
+! that crosses the two and whose `pw.x` run converges, and what is compared is the
+! **stress**, which is a derivative: the energy can be right while its derivative
+! is wrong, and with one atom in a bcc cell the force is zero by symmetry, so the
+! stress is the only derivative this geometry has.
+!
+! **Which branch of QE's noncollinear GGA this exercises, and which it does not.**
+! `compute_ux` takes a fixed quantization axis whenever the starting moments are
+! all parallel to one direction, and then `compute_rho` resolves the density as
+! `(n +- sign(m.ux) |m|)/2` -- signed, so "up" stays up across a node where `m`
+! passes through zero. One atom is trivially parallel to itself, so this cell runs
+! the **signed** branch (`lsign = .TRUE.`, and `pw.x` prints "Fixed quantization
+! axis for GGA"). The other branch, plain `|m|` with a real kink at every node, is
+! the one a genuinely canted cell takes and it is **not** measured here. Two
+! attempts on hydrogen -- four moments 90 degrees apart, and two -- both fail for
+! a reason that is not this code's: `pw.x` limit-cycles at an accuracy of 5e-6 Ry
+! under PBE on the four-atom cell (100 iterations at `mixing_beta = 0.3`, 300 at
+! 0.1) and at 5e-8 on the two-atom one, where the same cells converge to 1e-11
+! under LDA in 62 iterations.
+!
+! The cell is QE's own `pw_noncolin/noncolin-pbe.in` -- bcc Fe at the experimental
+! lattice constant, `Fe.pbe-nd-rrkjus.UPF`, ecutwfc 25 with ecutrho 200 -- with
+! three changes. `nosym` and a plain Monkhorst-Pack grid replace its explicit
+! reduced k-list, so that the comparison is between two codes summing the same
+! Brillouin-zone sample with no symmetrisation of a vector on either side (the
+! reason `h4-noncolin-force.in` gives). `tprnfor` is added, because a force of
+! zero is still a check that nothing spurious appears. And `conv_thr` is 1e-10:
+! QE's printed stress is a derivative and is more sensitive to the density than
+! the energy is.
+ &control
+    calculation = 'scf'
+    tprnfor = .true.
+    tstress = .true.
+    verbosity = 'high'
+ /
+ &system
+    ibrav = 3, celldm(1) = 5.217, nat = 1, ntyp = 1,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    occupations = 'smearing', smearing = 'marzari-vanderbilt', degauss = 0.05
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.5
+    angle1(1) = 90.0
+    angle2(1) = 0.0
+    nbnd = 16
+ /
+ &electrons
+    mixing_beta = 0.2
+    conv_thr = 1.0d-10
+    diago_david_ndim = 4
+ /
+ATOMIC_SPECIES
+ Fe 55.847 Fe.pbe-nd-rrkjus.UPF
+ATOMIC_POSITIONS (alat)
+ Fe 0.0 0.0 0.0
+K_POINTS {automatic}
+ 4 4 4 1 1 1

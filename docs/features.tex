@@ -1475,6 +1475,24 @@ and $7.3\times10^{-7}$ (PAW), and the stress on those three plus QE's own three
 any Fortran at all, against a central finite difference of the frozen energy to
 $6.2\times10^{-9}$ Ry/bohr.
 
+\textbf{With a gradient-corrected functional} the derivative is checked
+separately, because the gradient correction of a \emph{vector} magnetization is a
+branch of its own: bcc iron with its moment in the plane, ultrasoft, PBE
+(\code{fe-noncolin-pbe-stress.in}) agrees with \code{pw.x} to
+$6.7\times10^{-9}$~Ry in energy and $1.6\times10^{-7}$~Ry/bohr$^3$ in
+\textbf{stress} --- 0.019 kbar out of 152.71, and the same level the collinear
+ultrasoft cases reach. With one atom in a bcc cell the force is zero by symmetry,
+so the stress is the only derivative that geometry has, which is why it is the
+quantity compared. \qe{} resolves the density onto a \emph{fixed} quantization
+axis whenever the starting moments are all parallel to one direction
+(\code{compute\_ux}), using $(n \pm \mathrm{sign}(\mathbf m\cdot\hat u)\,|\mathbf
+m|)/2$ so that ``up'' stays up across a node where $\mathbf m$ passes through
+zero; that is the branch iron takes, and both codes pick the same axis. A
+genuinely \textbf{canted} cell takes plain $|\mathbf m|$ instead, with a real kink
+at every node, and that branch has no external number yet --- not for want of
+trying here: \code{pw.x} itself limit-cycles at $5\times10^{-6}$~Ry on a canted
+PBE hydrogen chain that converges to $10^{-11}$ under LDA in 62 iterations.
+
 \begin{refuses}
 A noncollinear or spin-orbit run has forces, a stress and a relaxation, but only
 through the \emph{autodiff} method: \code{method='analytic'} is refused by name,
