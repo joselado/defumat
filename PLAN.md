@@ -7712,6 +7712,81 @@ magneto-optical half has no Elk timing**: an Elk nickel run with `spinorb`
 converged to a moment of 0.008 `mu_B` against this code's 0.617, so its
 `sigma_xy` is the wrong physics.
 
+**The degeneracy guard, and which route needs one** (`OPEN.md` B1, closed
+2026-09-12). The interband sum divides by `e_mn`, and the guard below which a
+pair is not a pair was `dielectric.f90`'s absolute 1e-8 Ry. It is now
+`EMPTY_ETHR_FLOOR` = 1e-5 — what an `SCFResult`'s **empty** bands are converged
+to, which is the loosest thing `optical_conductivity`'s signature accepts — with
+`degeneracy_tol` a caller override on both entry points, a count of the pairs
+removed on `OpticalConductivity.degenerate_pairs`, and a warning where their
+loss is not harmless.
+
+The measurement is on **nonmagnetic** fcc nickel with spin-orbit coupling —
+`ni-soc-nosym.in` with `starting_magnetization = 0`, so time reversal is
+unbroken and every band is exactly Kramers-degenerate. Its d-bands cross `E_F`,
+which puts **102 weight-carrying occupied/empty pairs** there split by nothing
+but arithmetic. The magnetic case cannot show any of this: a magnet has no exact
+degeneracy and its smallest weight-carrying gap is 5.1e-4 Ry.
+
+- **The frequency route does not diverge at a degeneracy, and not by luck.** The
+  two orderings carry `t_nm = -t_mn` and `z_mn = conj(z_nm)`, so what survives
+  is `W_n(1-f_m) - W_m(1-f_n) = w_k [f(e_n) - f(e_m)]`, itself linear in `e_mn`
+  whenever `f` is a smooth function of energy. Measured **flat to four
+  significant figures over eight decades** of splitting on a synthetic pair;
+  and on the nickel run `sigma_xx`, `sigma_xy` and the plasma frequency are
+  identical to every printed digit — 1.290657e5 S/cm, 8.5030e-6 S/cm, 0.688568
+  eV — at six tolerances from 5.6e-13 to 1e-5, while the count dropped goes from
+  42 to 102.
+- **`method = "curvature"` does diverge**, as `1/g`: 7.4e13, 7.4e11, 7.4e9,
+  7.4e7, 7.4e5 at splittings of 1e-12 down to 1e-4. Its `1/e_mn^2` weight leaves
+  one power after the numerator difference. That is the **intrinsic anomalous
+  Hall** route, so it is what the guard is actually for.
+- **Fixed occupations cutting a degenerate multiplet** are the other place
+  nothing cancels — `f` is not a function of energy there, one member full and
+  its partner empty at the same eigenvalue: `1/g` on the frequency route and
+  `1/g^2` on the curvature one. That pathology already had `band_cut_gap`.
+- **The splitting is a floor before it is a multiple, which is QE's own shape.**
+  Followed down three thresholds: **5.535e-12 Ry at `ethr` = 5.56e-13,
+  5.471e-12 at 5.56e-11, and 1.242e-10 at 5.56e-9** — flat over a hundredfold
+  loosening, then tracking `ethr` at about twenty times. That is
+  `max(k ethr, floor)`, the shape `cegterg.f90`'s `empty_ethr = max(5 ethr,
+  1e-5)` already has, which is the second reason to take the constant from it.
+  The floor dominates for every `conv_thr` anyone runs: 1e-5 covers `ethr` up
+  to 5e-7, which on this cell is `conv_thr` = 1e-4. Deriving the guard from the
+  fixed-density run's own `ethr` was tried and is **wrong** — it sits *under*
+  the floor and lets 60 of the 102 pairs through.
+- The gaps are **bimodal** — 102 below 5.5e-12, none at all from there to 1e-4,
+  then real transitions — so any constant in those seven decades behaves
+  identically and the old 1e-8 was inside the window rather than wrong. What it
+  was not is a statement about anything. The same argument, measured the same
+  way, is `response/spectra.py`'s `DEGENERACY_TOLERANCE` for phonon frequencies.
+
+**What the guard is worth, measured where it bites.** The curvature route on
+that same nonmagnetic nickel, whose answer is **zero** by time reversal:
+
+| `degeneracy_tol` (Ry) | pairs dropped | max abs sigma (S/cm) | `sigma_xy` (S/cm) |
+|---|---|---|---|
+| 5.6e-13 (an `ethr`-derived guard) | 42 | **1.2576** | 3.23e-2 |
+| 1e-10 | 102 | 4.668e-4 | 5.09e-5 |
+| 1e-8 (the old constant) | 102 | 4.668e-4 | 5.09e-5 |
+| 1e-5 (the new one) | 102 | 4.669e-4 | 5.07e-5 |
+
+2700x between the guard that was nearly shipped and any guard above the
+round-off floor, and **nothing at all** between the old constant and the new
+one. So on every committed case the number does not move; what changed is that
+the guard means something and says when it fired. The warning fires on all five
+curvature rows and on none of the six frequency ones.
+
+**Three corrections to the sweep, each worth more than the fix.** It named the
+wrong route — the frequency one, where the singularity cancels. It named the
+wrong observable for that route: the leak at a `P`-and-`T`-degenerate pair is
+`(2t/eta) Re(z)`, real and **symmetric**, so time reversal protects `sigma_xy`
+there by construction. And the test it proposed, an AHC moving with `conv_thr`,
+is blind on both counts as written — the two magnetic-nickel runs at 1e-10 and
+1e-6 agree to 1e-7 relative because neither ever reaches the guard. It works on
+the curvature route of a nonmagnetic spin-orbit metal, which is neither the
+route nor the case it was written for.
+
 **Cost and peak.** One NSCF with empty states, then three `jvp` calls over the
 k axis for `(3, nk, nbnd, nbnd)` matrix elements — which is the whole expense —
 and a frequency sum whose working set is `nw x nbnd^2` complex per k-point,

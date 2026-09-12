@@ -30,6 +30,7 @@ internal statements and one analytic limit, and each fails differently:
   commuting.
 """
 
+import warnings
 from functools import lru_cache
 from pathlib import Path
 
@@ -175,7 +176,7 @@ def _weights(system, pseudos, density, nbnd):
     is exactly ``(pi/2 Omega) sum t_nm |V_nm|^2`` over the pairs with a
     positive gap, so no frequency grid and no ``eta`` enter the number at all.
     """
-    from defumat.response.conductivity import _pair_weights
+    from defumat.response.conductivity import DEGENERACY_TOL, _pair_weights
 
     calculation, _, eigenvalues, psi = fixed_density_states(
         system, pseudos, density, nbnd=nbnd, conv_thr=1e-10
@@ -194,9 +195,9 @@ def _weights(system, pseudos, density, nbnd):
 
     total = 0.0
     for k in range(elements.shape[1]):
-        t, gap = _pair_weights(
+        t, gap, _ = _pair_weights(
             jnp.asarray(np.asarray(energies)[0, k]), jnp.asarray(wg[k]),
-            jnp.asarray(filling[k]),
+            jnp.asarray(filling[k]), DEGENERACY_TOL,
         )
         total += float(np.sum(np.where(np.asarray(gap) > 0.0,
                                        np.asarray(t) * np.abs(elements[0, k]) ** 2,
@@ -365,4 +366,101 @@ def test_a_k_set_handed_in_is_normalised_for_the_spin_regime():
     )
     assert float(handed.hall_conductivity[0, 1]) == pytest.approx(
         float(native.hall_conductivity[0, 1]), rel=1e-9
+    )
+
+
+# -- the degeneracy guard, on the crystal that has degeneracies to guard against --
+
+@lru_cache(maxsize=1)
+def _nonmagnetic_nickel():
+    """The same fcc nickel with its moment switched off.
+
+    Time reversal is then unbroken, so every band is **exactly**
+    Kramers-degenerate and the d-bands crossing the Fermi level put 102
+    weight-carrying occupied/empty pairs there, split by nothing but
+    arithmetic. That is the regime the degeneracy guard exists for, and the
+    magnetic cell cannot supply it: a magnet has no exact degeneracy and its
+    smallest weight-carrying gap is 5.1e-4 Ry, five orders above any guard.
+
+    Built by editing the parsed input rather than committing a second file,
+    which is ``test_spinor_forces``'s ``_platinum_nosym`` pattern.
+    """
+    data = read_pw_input(CASES / "ni-soc-nosym.in")
+    data.namelists["system"]["starting_magnetization(1)"] = 0.0
+    data.namelists["system"]["starting_magnetization"] = 0.0
+    system = build_system(data)
+    pseudos = tuple(
+        read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species
+    )
+    result = run_scf(system, pseudos, conv_thr=1e-10, max_iterations=200)
+    assert result.magnetization_vector is None
+    return system, pseudos, result
+
+
+def test_a_degenerate_pair_is_counted_and_the_guard_is_above_the_round_off():
+    """``OPEN.md`` B1, and the two halves are separate claims.
+
+    **The count is a discriminator with a predicted value**, not a zero: 102
+    pairs, which is 51 Kramers doublets counted both ways round. It is
+    off-diagonal and weight-carrying, so it is not the ``e_nn = 0`` diagonal
+    every metal has, and a gapped crystal reports zero from the same code.
+
+    **The value is the reason the guard is not derived from ``conv_thr``.**
+    This crystal's anomalous Hall conductivity is zero by time reversal, and
+    the ``curvature`` route -- whose ``1/e_mn^2`` weight is the one the
+    cancellation does not reach -- returns 4.7e-4 S/cm of residue under the
+    default guard. Hand it instead the threshold the fixed-density run
+    converged to, 5.6e-13 Ry, and it returns **1.26 S/cm**: 2700 times larger,
+    entirely round-off inverted, and smooth and finite and plausible. The
+    splitting an eigensolver leaves on a symmetry-degenerate pair sits on an
+    arithmetic floor near 5e-12 Ry, so a guard at ``ethr`` is *under* what it
+    exists to absorb.
+    """
+    system, pseudos, result = _nonmagnetic_nickel()
+
+    with pytest.warns(RuntimeWarning, match="degenerate within"):
+        default = run_conductivity(system, pseudos, result.density, nbnd=36,
+                                   method="curvature", broadening=0.01)
+    assert default.degenerate_pairs == 102
+    assert default.degeneracy_tol == pytest.approx(1.0e-5)
+    assert np.max(np.abs(default.sigma_s_per_cm)) < 1.0e-3
+
+    with pytest.warns(RuntimeWarning, match="degenerate within"):
+        tight = run_conductivity(system, pseudos, result.density, nbnd=36,
+                                 method="curvature", broadening=0.01,
+                                 degeneracy_tol=5.56e-13)
+    assert tight.degenerate_pairs == 42
+    assert np.max(np.abs(tight.sigma_s_per_cm)) > 1.0
+
+
+def test_the_guard_is_inert_on_the_frequency_route_and_says_nothing():
+    """The complement, which is what makes the warning above informative.
+
+    On the smeared frequency route the two orderings of a degenerate pair
+    cancel analytically -- what survives ``1/e_mn`` is
+    ``w_k[f(e_n) - f(e_m)]``, linear in the gap -- so the same 102 pairs cost
+    nothing and are not worth interrupting anyone for. Measured: identical to
+    every printed digit at 5.6e-13 and at the 1e-5 default, while the number
+    dropped goes from 42 to 102. A warning here would fire on every metal and
+    mean nothing, which is the failure the count was written to avoid.
+    """
+    system, pseudos, result = _nonmagnetic_nickel()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        loose = run_conductivity(system, pseudos, result.density, nbnd=36,
+                                 frequencies=[0.0], broadening=0.01)
+        tight = run_conductivity(system, pseudos, result.density, nbnd=36,
+                                 frequencies=[0.0], broadening=0.01,
+                                 degeneracy_tol=5.56e-13)
+    # Caught rather than raised, so an unrelated RuntimeWarning from the stack
+    # below cannot be mistaken for this one.
+    assert not [w for w in caught if "degenerate within" in str(w.message)]
+
+    assert loose.degenerate_pairs == 102
+    assert tight.degenerate_pairs == 42
+    assert float(loose.sigma_s_per_cm[0, 0, 0].real) == pytest.approx(
+        float(tight.sigma_s_per_cm[0, 0, 0].real), rel=1e-9
+    )
+    assert float(loose.plasma_ev[0, 0]) == pytest.approx(
+        float(tight.plasma_ev[0, 0]), rel=1e-9
     )

@@ -143,6 +143,7 @@ truncation the f-sum rule measures.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import jax.numpy as jnp
@@ -151,6 +152,7 @@ import numpy as np
 from defumat.batching import resolve_k_batch, sum_k
 from defumat.response.velocity import VelocityOperator
 from defumat.scf.occupations import smearing_order, w0gauss
+from defumat.solvers.davidson import EMPTY_ETHR_FLOOR
 from defumat.units import AU_TO_S_PER_CM, FPI, RY_TO_EV
 
 __all__ = [
@@ -214,6 +216,17 @@ class OpticalConductivity:
     nbnd: int
     nelec: float
     band_cut_gap: float = float("nan")
+    #: The gap (Ry) below which an occupied/empty pair was not treated as a
+    #: pair. See :func:`optical_conductivity`'s ``degeneracy_tol``.
+    degeneracy_tol: float = float("nan")
+    #: How many occupied/empty pairs carrying weight the guard actually
+    #: removed from the interband sum, summed over the k-set. Zero is the
+    #: ordinary case and is what every committed case here reports. Nonzero
+    #: means the band set contains pairs the eigensolver cannot tell apart at
+    #: a Fermi surface: with the Drude term running they were **moved** to it,
+    #: which is where a pair the solver cannot split belongs, and without one
+    #: they were simply dropped.
+    degenerate_pairs: int = 0
 
     # -- what a reader wants it in ----------------------------------------
 
@@ -437,6 +450,7 @@ def optical_conductivity(
     ddd_paw=None,
     ns=None,
     band_cut_gap: float = float("nan"),
+    degeneracy_tol: float | None = None,
     k_batch="default",
 ) -> OpticalConductivity:
     """``sigma_ab(omega)`` from a fixed-density run, in Hartree atomic units.
@@ -480,6 +494,13 @@ def optical_conductivity(
             in Ry, which the caller measures because this function's band set
             stops one state short of it. See
             :attr:`OpticalConductivity.band_cut_gap`.
+        degeneracy_tol: in Ry, the gap below which an occupied/empty pair is
+            not a pair. ``None`` takes :data:`DEGENERACY_TOL`, whose docstring
+            says which route the guard is protecting and why it is nearly
+            inert on the other one. Raise it if the eigenvalues handed in are
+            looser than an SCF's own empty bands; there is little reason to
+            lower it, since below the round-off an eigensolver leaves on a
+            symmetry-degenerate pair the guard stops absorbing what it is for.
         k_batch: the batching dial.
 
     Returns:
@@ -543,23 +564,37 @@ def optical_conductivity(
     eta = precision.as_real(broadening)
     zomega = (jnp.asarray(frequencies) + 1j * eta).astype(precision.complex)
 
+    tol = DEGENERACY_TOL if degeneracy_tol is None else float(degeneracy_tol)
     if method == "frequency":
         def one_k(arrays):
             element, energy, weight, fill = arrays
-            return _resolvent_sum(element, energy, weight, fill, zomega)
+            return _resolvent_sum(element, energy, weight, fill, zomega, tol)
     else:
         def one_k(arrays):
             element, energy, weight, fill = arrays
-            return _curvature_sum(element, energy, weight, fill)
+            return _curvature_sum(element, energy, weight, fill, tol)
 
-    inter = sum_k(one_k, (elements, shifted[0], wg, filling), batch=batch)
+    # ``sum_k`` tree-maps its accumulator, so the pair count adds over k the
+    # same way the tensor does.
+    inter, dropped = sum_k(one_k, (elements, shifted[0], wg, filling), batch=batch)
     inter = np.asarray(inter) * (1.0 / volume)
+    dropped = int(np.asarray(dropped))
 
     plasma, intra = _drude(
         calculation, fermi_energy, elements, shifted[0], wk, frequencies,
-        volume, broadening if relaxation is None else relaxation,
+        volume, broadening if relaxation is None else relaxation, tol,
         enabled=intraband and method == "frequency",
     )
+    # The same test ``_drude`` makes, and for the neighbouring reason: what
+    # both turn on is whether the occupation is a smooth function of energy.
+    # A tetrahedron run is *not* smeared by this test, which is right -- it
+    # integrates the step function, so a degenerate pair straddling ``E_F``
+    # cancels nothing there either.
+    scheme = str(getattr(calculation.system, "occupations", "fixed")).lower()
+    smeared = ("smearing" in scheme
+               and float(getattr(calculation.system, "degauss", 0.0) or 0.0) > 0.0)
+    _report_dropped_pairs(dropped, tol, curvature=method == "curvature",
+                          smeared=smeared)
 
     return OpticalConductivity(
         frequencies=frequencies,
@@ -573,6 +608,8 @@ def optical_conductivity(
         nbnd=nbnd,
         nelec=float(calculation.nelec),
         band_cut_gap=float(band_cut_gap),
+        degeneracy_tol=tol,
+        degenerate_pairs=dropped,
     )
 
 
@@ -591,37 +628,156 @@ def _renormalise(elements, energies, shifted):
     return elements * ratio[:, None, :, :]
 
 
-#: Below this gap (Ry) a pair of states is dropped from the interband sum.
-#: ``dielectric.f90`` uses 1e-8 and so does this; the pair is a genuine
-#: singularity of ``1/e_mn`` and its physical content -- an intraband
-#: transition -- is the Drude term instead.
-DEGENERACY_TOL = 1.0e-8
+
+def _report_dropped_pairs(dropped: int, tol: float, *, curvature: bool,
+                          smeared: bool) -> None:
+    """Say when the degeneracy guard removed pairs whose loss changes the answer.
+
+    **Not a warning on every metal**, and the condition is the cancellation
+    rather than anything about the Drude term. On the frequency route with a
+    *smeared* occupation the two orderings of a degenerate pair cancel
+    analytically -- what survives ``1/e_mn`` is ``w_k[f(e_n) - f(e_m)]``, which
+    is linear in the gap when ``f`` is a smooth function of energy -- so
+    dropping such a pair changes nothing and saying so would be noise. That
+    holds whether or not ``intraband`` is on, which is why this is not the
+    ``_drude`` test.
+
+    It fails in exactly two regimes, and those are the ones warned about:
+    ``method = "curvature"``, whose ``1/e_mn^2`` leaves a ``1/g`` divergence
+    after the same numerator difference; and occupations that are **not** a
+    function of energy -- fixed, or a tetrahedron run's step function -- where
+    one member of a degenerate pair can be full and its partner empty at the
+    same eigenvalue and nothing cancels at all.
+
+    The second is the loudest on purpose: a pair that is occupied, empty and
+    degenerate *is* a closed gap, and its usual cause here is a band set cut
+    inside a multiplet, which :attr:`OpticalConductivity.band_cut_gap` names.
+    """
+    if dropped <= 0:
+        return
+    if smeared and not curvature:
+        return
+    warnings.warn(
+        f"{dropped} occupied/empty pairs carrying weight are degenerate "
+        f"within {tol:g} Ry and were dropped. This is the one regime where "
+        "that matters: on the smeared frequency route the two orderings of "
+        "such a pair cancel and dropping them changes nothing, but here the "
+        "weight is 1/e_mn^2 (method = 'curvature') or the occupations are "
+        "fixed, and in both the contribution diverges as the splitting goes "
+        "to zero rather than cancelling. So the number returned is not a "
+        "limit -- it is whatever the guard left. With fixed occupations, read "
+        "band_cut_gap: a band set cut inside a degenerate multiplet puts one "
+        "member full and its partner empty at the same eigenvalue, which is "
+        "this, and moving the cut is the fix. With a real Fermi surface, use "
+        "method = 'frequency' with intraband = True and "
+        "occupations = 'smearing', where the pair's content is the Drude term",
+        RuntimeWarning,
+        stacklevel=3,
+    )
 
 
-def _pair_weights(energies, wg, filling):
-    """``t_nm = W_n (1 - f_m) / e_mn`` and the gap, with the degenerate pairs cut.
+#: Below this gap (Ry) a pair of states is not a pair.
+#:
+#: **Where the guard is needed, and where it provably is not.** The sum divides
+#: by ``e_mn``, so the obvious worry is a pair degenerate by symmetry that the
+#: eigensolver returns split by its own round-off. On the ``method =
+#: "frequency"`` route with a *smeared* occupation that worry is unfounded, and
+#: not by luck: the two orderings of a pair carry ``t_nm = -t_mn`` and
+#: ``z_mn = conj(z_nm)``, so what survives is ``W_n(1-f_m) - W_m(1-f_n) =
+#: w_k [f(e_n) - f(e_m)]``, which is itself linear in ``e_mn`` whenever ``f``
+#: is a smooth function of energy. The singularity cancels analytically.
+#: Measured: flat to four significant figures over **eight decades** of
+#: splitting on a synthetic pair, and on nonmagnetic fcc nickel with spin-orbit
+#: coupling -- 102 weight-carrying Kramers pairs at the Fermi level, split by
+#: nothing but arithmetic -- ``sigma_xx``, ``sigma_xy`` and the plasma
+#: frequency are identical to every printed digit (1.290657e5 S/cm, 8.5030e-6
+#: S/cm, 0.688568 eV) at every tolerance from 5.6e-13 to 1e-5, while the number
+#: dropped goes from 42 to 102.
+#:
+#: It is needed in the two places that cancellation does not reach:
+#:
+#: * ``method = "curvature"``, whose weight is ``1/e_mn^2``. The numerator
+#:   difference kills one power and leaves **1/g** -- measured 7.4e13, 7.4e11,
+#:   ..., 7.4e5 at splittings of 1e-12 down to 1e-4, which is exactly that
+#:   scaling. This is the intrinsic anomalous Hall route, so it is the
+#:   quantity the guard is actually protecting;
+#: * **fixed** occupations cutting a degenerate multiplet, where ``f`` is not a
+#:   function of energy at all -- one member full and its partner empty at the
+#:   same eigenvalue. Then nothing cancels: **1/g** on the frequency route and
+#:   **1/g^2** on the curvature one. That pathology already has a name here and
+#:   a diagnostic, :attr:`OpticalConductivity.band_cut_gap`.
+#:
+#: **Why this number.** It is what an ``SCFResult``'s *empty* bands are
+#: converged to, ``max(5 ethr, 1e-5)``
+#: (:data:`~defumat.solvers.davidson.EMPTY_ETHR_FLOOR`,
+#: :func:`~defumat.scf.driver.band_thresholds`) -- the loosest eigenvalues this
+#: signature accepts, since it takes an array and cannot see where it came
+#: from. It is deliberately **not** derived from a fixed-density run's own
+#: ``ethr``, and the measurement says why. The splitting left on a
+#: symmetry-degenerate pair was followed down three thresholds on the nickel
+#: case: **5.535e-12 Ry at ``ethr`` = 5.6e-13, 5.471e-12 at 5.6e-11, and
+#: 1.242e-10 at 5.6e-9**. So it sits on an arithmetic floor of about 5e-12
+#: until ``ethr`` rises past it, and tracks ``ethr`` at roughly twenty times
+#: above that -- which is the shape of ``max(k ethr, floor)``, the same shape
+#: ``cegterg.f90``'s own ``empty_ethr = max(5 ethr, 1e-5)`` has. That is the
+#: second reason to take the constant from it rather than to invent one: the
+#: floor dominates for every ``conv_thr`` anyone runs (1e-5 covers ``ethr`` up
+#: to 5e-7, which on this cell is ``conv_thr`` = 1e-4), and the ``5 ethr``
+#: branch is there for the ones nobody should. An ``ethr``-derived guard
+#: instead sits *under* the floor and lets 60 of the 102 pairs through.
+#:
+#: The old value was ``dielectric.f90``'s 1e-8, and it was **inside the empty
+#: window rather than wrong**: the weight-carrying gaps on that case are
+#: bimodal -- 102 below 5.5e-12, none at all from there to 1e-4, then real
+#: transitions -- so any constant in those seven decades behaves identically.
+#: What it was not is a statement about anything, which is why it moved to one.
+#: :data:`defumat.response.spectra.DEGENERACY_TOLERANCE` is the same argument
+#: made for phonon frequencies, and was measured the same way.
+DEGENERACY_TOL = EMPTY_ETHR_FLOOR
+
+#: A pair counts as "dropped" only if its weight ``W_n (1 - f_m)`` is above
+#: this. Every occupied/occupied and empty/empty pair of a well converged run
+#: sits many orders below it, so the floor is what makes the count a report
+#: about the *sum* rather than about the band set's degeneracies -- an
+#: insulator has multiplets everywhere and none of them contributes.
+PAIR_WEIGHT_FLOOR = 1.0e-12
+
+
+def _pair_weights(energies, wg, filling, tol):
+    """``t_nm = W_n (1 - f_m) / e_mn``, the gap, and how many pairs were cut.
 
     ``W_n`` is the k-weighted occupation (QE's ``wg``) and ``f_m`` the
     fractional filling in ``[0, 1]``; ``dielectric.f90``'s ``t1``, whose
     asymmetry is deliberate -- the *bra* carries the whole weight and the ket
     only the Pauli blocking factor.
+
+    The third return value is the count of pairs the guard actually removed,
+    and it is **off-diagonal and weight-carrying only**. The diagonal is the
+    whole point: ``e_nn`` is zero exactly, and in a metal ``W_n (1 - f_n)`` is
+    not, so counting every masked entry would report ``nk`` times the number
+    of partially filled bands on every metal ever run -- a number that is
+    large, constant, and says nothing, which is the failure mode the count
+    exists to rule out.
     """
     gap = energies[:, None] - energies[None, :]  # e_n - e_m
     gap = -gap  # e_mn = e_m - e_n
-    finite = jnp.abs(gap) > DEGENERACY_TOL
+    finite = jnp.abs(gap) > tol
     safe = jnp.where(finite, gap, 1.0)
-    t = jnp.where(finite, wg[:, None] * (1.0 - filling[None, :]) / safe, 0.0)
-    return t, gap
+    weight = wg[:, None] * (1.0 - filling[None, :])
+    t = jnp.where(finite, weight / safe, 0.0)
+    off = ~jnp.eye(energies.shape[0], dtype=bool)
+    dropped = jnp.sum(jnp.where(off & ~finite & (weight > PAIR_WEIGHT_FLOOR), 1, 0))
+    return t, gap, dropped
 
 
-def _resolvent_sum(element, energies, wg, filling, zomega):
-    """One k-point's interband ``sigma_ij(w)``, ``(nw, 3, 3)``.
+def _resolvent_sum(element, energies, wg, filling, zomega, tol):
+    """One k-point's ``(sigma_ij(w), dropped pairs)``, the first ``(nw, 3, 3)``.
 
     ``element`` is ``(3, nbnd, nbnd)``. The pair axis is flattened so the
     frequency dependence is one matrix product: ``(nw, pairs)`` against
     ``(pairs, 3, 3)``, which is why the frequency grid is nearly free.
     """
-    t, gap = _pair_weights(energies, wg, filling)
+    t, gap, dropped = _pair_weights(energies, wg, filling, tol)
     # z_nm = <n|v_i|m> <m|v_j|n>, the outer product in the cartesian labels.
     z = jnp.einsum("inm,jmn->nmij", element, element)
     nb = energies.shape[0]
@@ -632,11 +788,11 @@ def _resolvent_sum(element, energies, wg, filling, zomega):
     resonant = t[None, :] / (zomega[:, None] - gap[None, :])
     antires = t[None, :] / (zomega[:, None] + gap[None, :])
     return 1j * (jnp.einsum("wp,pij->wij", resonant, z)
-                 + jnp.einsum("wp,pij->wij", antires, jnp.conj(z)))
+                 + jnp.einsum("wp,pij->wij", antires, jnp.conj(z))), dropped
 
 
-def _curvature_sum(element, energies, wg, filling):
-    """The analytic ``w -> 0, eta -> 0`` limit, ``(1, 3, 3)``.
+def _curvature_sum(element, energies, wg, filling, tol):
+    """The analytic ``w -> 0, eta -> 0`` limit, ``(1, 3, 3)``, and its drop count.
 
     Both resolvents collapse onto ``1/e_mn`` with opposite signs, leaving
     ``(z - conj(z))/e_mn = 2i Im(z)/e_mn``, so the whole static tensor is
@@ -648,16 +804,16 @@ def _curvature_sum(element, energies, wg, filling):
     metal. It is the occupied manifold's Berry curvature integral, and this is
     the route :mod:`defumat.topology.kubo` reaches by a different assembly.
     """
-    t, gap = _pair_weights(energies, wg, filling)
+    t, gap, dropped = _pair_weights(energies, wg, filling, tol)
     z = jnp.einsum("inm,jmn->nmij", element, element)
-    finite = jnp.abs(gap) > DEGENERACY_TOL
+    finite = jnp.abs(gap) > tol
     safe = jnp.where(finite, gap, 1.0)
     weight = jnp.where(finite, t / safe, 0.0)
-    return (2.0 * jnp.einsum("nm,nmij->ij", weight, jnp.imag(z)))[None]
+    return (2.0 * jnp.einsum("nm,nmij->ij", weight, jnp.imag(z)))[None], dropped
 
 
 def _drude(calculation, fermi_energy, elements, energies, wk, frequencies,
-           volume, relaxation, *, enabled: bool):
+           volume, relaxation, tol, *, enabled: bool):
     """The plasma frequency tensor and the Drude conductivity it generates.
 
     ``dielectric.f90``'s intraband branch. The delta function is the smearing
@@ -704,12 +860,26 @@ def _drude(calculation, fermi_energy, elements, energies, wk, frequencies,
     #
     # **It is a rule, not a repair, and the measurement says so**: on fcc
     # nickel with spin-orbit coupling the two forms give 0.5971 eV each,
-    # because an exact degeneracy has to sit within 1e-8 Ry of the Fermi level
-    # to be caught at all and a 4x4x4 mesh puts none there. The invariant form is what is
-    # written because the diagonal one has no reason to keep agreeing on a
-    # denser mesh or a more symmetric metal, and the failure would be silent.
+    # because the mesh has to put a degeneracy *within ``tol``* of the Fermi
+    # level for the block to be anything but the diagonal, and a 4x4x4 mesh
+    # puts none there -- the smallest off-diagonal gap anywhere on it is
+    # 1.8e-6 Ry and the smallest one carrying weight is 5.1e-4. The invariant
+    # form is what is written because the diagonal one has no reason to keep
+    # agreeing on a denser mesh or a more symmetric metal, and the failure
+    # would be silent.
+    #
+    # ``tol`` is the caller's now rather than a constant of this module's
+    # (``OPEN.md`` B1), and it moved from 1e-8 to 1e-5. Neither number changes
+    # this block on either nickel case: the smallest off-diagonal gap on the
+    # magnetic one is 1.8e-6 and the nonmagnetic one's 102 exact doublets give
+    # the same 0.688568 eV whether 42 or 102 of them are inside the block. So
+    # the D4 average still has no measurement that separates it from the
+    # diagonal, on either metal.
     gap = energies[:, :, None] - energies[:, None, :]
-    multiplet = (jnp.abs(gap) < DEGENERACY_TOL).astype(delta.dtype)
+    # ``<=`` against the interband sum's ``>``, so the two halves partition the
+    # pairs exactly: a gap of precisely ``tol`` belongs to one of them rather
+    # than to neither.
+    multiplet = (jnp.abs(gap) <= tol).astype(delta.dtype)
     plasma2 = FPI / volume * jnp.real(jnp.einsum(
         "k,kn,knm,kanm,kbmn->ab", wk, delta, multiplet, elements, elements
     ))

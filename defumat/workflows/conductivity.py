@@ -52,6 +52,7 @@ def run_conductivity(
     field_scale=None,
     fermi_energy: float | None = None,
     conv_thr: float = 1.0e-10,
+    degeneracy_tol: float | None = None,
     k_batch="default",
 ) -> OpticalConductivity:
     """``sigma_ab(omega)`` for a converged run.
@@ -69,6 +70,13 @@ def run_conductivity(
         fermi_energy: in Ry. Defaults to the level the fixed-density run finds
             for its own band set, which is the right one whenever the k-set is
             the ground state's; pass the SCF's own when it is not.
+        degeneracy_tol: the gap below which an occupied/empty pair is not a
+            pair, in Ry. **Not derived from ``conv_thr``, and that was worth
+            measuring**: the splitting an eigensolver leaves on a pair that is
+            degenerate *by symmetry* sits on an arithmetic floor until ``ethr``
+            rises past it -- on nonmagnetic fcc nickel, 5.5e-12 Ry at ``ethr``
+            of both 5.6e-13 and 5.6e-11, and 1.2e-10 at 5.6e-9. See
+            :data:`~defumat.response.conductivity.DEGENERACY_TOL`.
 
     The remaining arguments are
     :func:`~defumat.response.conductivity.optical_conductivity`'s.
@@ -147,7 +155,9 @@ def run_conductivity(
         fermi_energy=fermi_energy, frequencies=frequencies, window=window,
         nw=nw, broadening=broadening, relaxation=relaxation,
         intraband=intraband, scissor=scissor, method=method,
-        ddd_paw=ddd_paw, ns=ns, band_cut_gap=band_cut_gap, k_batch=k_batch,
+        ddd_paw=ddd_paw, ns=ns, band_cut_gap=band_cut_gap,
+        degeneracy_tol=degeneracy_tol,
+        k_batch=k_batch,
     )
 
 

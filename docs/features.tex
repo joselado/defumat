@@ -1914,7 +1914,8 @@ print(sigma.kerr)                   # complex Kerr angle, degrees, per frequency
 print(sigma.hall_conductivity)      # the static antisymmetric part, S/cm
 print(sigma.plasma_ev)              # hbar omega_p, eV, a (3, 3) tensor
 print(sigma.dielectric)             # 1 + 4 pi i sigma / omega
-print(sigma.fsum, sigma.band_cut_gap)   # the two diagnostics to read
+print(sigma.fsum, sigma.band_cut_gap)   # two of the three diagnostics
+print(sigma.degenerate_pairs)       # the third: pairs the guard dropped, usually 0
 \end{pycode}
 
 There is no reference output for any of it, so the validation is internal and
@@ -1949,14 +1950,24 @@ conductivities add; a spinor run is the regime a magneto-optical spectrum wants
 anyway, since $\sigma_{xy}$ needs spin--orbit coupling and collinear spin has
 none.
 
-\textbf{Two things are reported rather than refused, and both must be read.}
-\code{band\_cut\_gap} is the gap between the last band summed and the first
-dropped: stopping \emph{inside} a degenerate multiplet keeps some members and
-drops others, and silicon's antisymmetric $\sigma$ --- zero by time reversal ---
-comes out at 4.0e-13 when the cut falls at a real gap and at 1.0e-5 when it does
-not. And the \textbf{anomalous Hall conductivity of a metal is mesh-hungry}: the
-static Berry-curvature integral is concentrated on near-degeneracies at the
-Fermi surface, so it is quoted with its $k$-convergence and not on its own.
+\textbf{Three things are reported rather than refused, and all three must be
+read.} \code{band\_cut\_gap} is the gap between the last band summed and the
+first dropped: stopping \emph{inside} a degenerate multiplet keeps some members
+and drops others, and silicon's antisymmetric $\sigma$ --- zero by time
+reversal --- comes out at 4.0e-13 when the cut falls at a real gap and at
+1.0e-5 when it does not. \code{degenerate\_pairs} counts the occupied/empty
+pairs that came back closer together than \code{degeneracy\_tol} (1e-5~Ry,
+what an SCF converges an \emph{empty} band to) and were therefore dropped.
+Zero is the ordinary case. When it is not zero it usually still does not
+matter --- on the smeared frequency route the two orderings of such a pair
+cancel analytically, because what survives the $1/\epsilon_{mn}$ is
+$w_k[f(\epsilon_n)-f(\epsilon_m)]$ and that is itself linear in the gap ---
+and the code warns exactly where that cancellation fails: \code{method =
+"curvature"}, whose $1/\epsilon_{mn}^2$ leaves a $1/g$ divergence, and a
+fixed-occupation run, where $f$ is not a function of energy at all. And the
+\textbf{anomalous Hall conductivity of a metal is mesh-hungry}: the static
+Berry-curvature integral is concentrated on near-degeneracies at the Fermi
+surface, so it is quoted with its $k$-convergence and not on its own.
 \end{refuses}
 
 \subsection{The shift current: the bulk photovoltaic effect}

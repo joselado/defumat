@@ -15,12 +15,16 @@ P73 section, under "Three test failures were seen while validating this phase".
 **Status, 2026-09-11 (later the same day).** Sixteen entries are closed, each with a
 test that was checked to fail against the old code: **A1, A3, A4, A5, A6, A7, A8, A9,
 A10, B2, D2, E1, E2, F1, F2, F3**, together with Part I item 1 and its two siblings
-C2/C3. What is left is B1, C1, D1, D3, E3 and Part I item 2 -- the entries
-whose *test* is expensive rather than whose fix is. **A2 and B3 closed on 2026-09-12.** Neither
+C2/C3. What is left is C1, D1, D3, E3 and Part I item 2 -- the entries
+whose *test* is expensive rather than whose fix is. **A2, B3 and B1 closed on
+2026-09-12.** None
 went the way the sweep predicted: A2's two non-refusal sites looked like a null
-and are not, and B3's NaN claim is a null while its other two
+and are not; B3's NaN claim is a null while its other two
 hold -- the absolute threshold turned out to be wrong in *both* directions at
-once. Each entry says which. Each closed entry is marked
+once; and **B1 is the sweep's worst entry and its most useful** -- the guard
+needed changing and all three of the entry's specific claims are false, the
+route, the observable and the test it proposed, each for a reason worth more
+than the fix. Each entry says which. Each closed entry is marked
 **[closed]** below with what the fix turned out to be, because two of them turned out
 not to be what the sweep predicted.
 
@@ -494,7 +498,92 @@ relaxed geometry can differ with nothing saying the request was ignored.
 
 ## B. Numerical guards that are fine on silicon and not on a real cell
 
-### B1. The interband conductivity's degeneracy guard is below the eigensolver's accuracy
+### B1. The interband conductivity's degeneracy guard is below the eigensolver's accuracy **[closed 2026-09-12 -- three of the sweep's claims were wrong]**
+
+> **The guard was right to change and every specific thing the sweep said about
+> it was wrong**, which is why this entry is the longest of the closed ones.
+> Measured on **nonmagnetic** fcc nickel with spin-orbit coupling
+> (`ni-soc-nosym.in` with `starting_magnetization = 0`, so time reversal is
+> unbroken and every band is exactly Kramers-degenerate): 102 weight-carrying
+> occupied/empty pairs sit at the Fermi level split by nothing but arithmetic.
+> That is the case the mechanism needs, and the magnetic nickel the sweep named
+> cannot show it -- a magnet has no exact degeneracy, and its smallest
+> weight-carrying gap is 5.1e-4 Ry, five orders above the guard.
+>
+> **1. The premise is false on the route it was made about.** The frequency
+> route's `1/e_mn` does not diverge at a degeneracy, and not by luck: the two
+> orderings of a pair carry `t_nm = -t_mn` and `z_mn = conj(z_nm)`, so what
+> survives is `w_k [f(e_n) - f(e_m)]`, which is itself linear in the gap
+> whenever `f` is a smooth function of energy. The singularity cancels
+> analytically. Measured flat to four significant figures over **eight decades**
+> of splitting on a synthetic pair, and on the nickel run `sigma_xx`,
+> `sigma_xy` and the plasma frequency are identical to every printed digit
+> (1.290657e5 S/cm, 8.5030e-6 S/cm, 0.688568 eV) at six tolerances from 5.6e-13
+> to 1e-5, while the number of pairs dropped goes from 42 to 102.
+>
+> **2. The singularity is real in two places the sweep did not name.**
+> `method = "curvature"` -- the intrinsic anomalous Hall route, which *is* the
+> quantity the entry was worried about -- has a `1/e_mn^2` weight, and the
+> numerator difference kills only one power: measured 7.4e13, 7.4e11, 7.4e9,
+> 7.4e7, 7.4e5 at splittings of 1e-12 down to 1e-4, exactly `1/g`. And **fixed**
+> occupations cutting a degenerate multiplet, where `f` is not a function of
+> energy at all: `1/g` on the frequency route and `1/g^2` on the curvature one.
+> The second already had a name and a diagnostic here, `band_cut_gap`.
+>
+> **3. The test the entry proposed is blind on the route it would have been run
+> on.** "An AHC that moves with `conv_thr`" reads `hall_conductivity`, which on
+> the default `method = "frequency"` comes from a leak of the form
+> `(2t/eta) Re(z)` -- real and **symmetric**, so time reversal protects
+> `sigma_xy` there by construction. And on the magnetic nickel the entry named,
+> the two runs at `conv_thr` 1e-10 and 1e-6 agree to 1e-7 relative because
+> neither ever reaches the guard. The test *does* work on the curvature route
+> of a nonmagnetic spin-orbit metal, which is neither the route nor the case it
+> was written for.
+>
+> **What the guard is worth, measured where it bites.** The curvature route on
+> that nickel, whose answer is **zero** by time reversal:
+>
+> | `degeneracy_tol` (Ry) | pairs dropped | max abs sigma (S/cm) | `sigma_xy` (S/cm) |
+> |---|---|---|---|
+> | 5.6e-13 (the `ethr`-derived guard) | 42 | **1.2576** | 3.23e-2 |
+> | 1e-10 | 102 | 4.668e-4 | 5.09e-5 |
+> | 1e-8 (the old constant) | 102 | 4.668e-4 | 5.09e-5 |
+> | 1e-5 (the new one) | 102 | 4.669e-4 | 5.07e-5 |
+>
+> **2700 times** between the guard that was nearly shipped and any guard above
+> the round-off floor, and nothing at all between the old constant and the new
+> one. So the honest summary is B3's: on every committed case the number does
+> not move, and what changed is that the guard now means something and says
+> when it fired. The warning fires on all five curvature rows and on none of
+> the six frequency ones, which is the discriminator working.
+>
+> **What the number is now.** `EMPTY_ETHR_FLOOR`, 1e-5 Ry -- what an
+> `SCFResult`'s *empty* bands are converged to, which is the loosest thing the
+> signature accepts, since `optical_conductivity` takes an array and cannot see
+> where it came from. Deriving it from the fixed-density run's own `ethr` was
+> tried and is **wrong**: the splitting left on a symmetry-degenerate pair sits
+> on an arithmetic floor before it is a multiple of anything -- 5.535e-12 Ry at
+> `ethr` = 5.6e-13, 5.471e-12 at 5.6e-11, 1.242e-10 at 5.6e-9 -- so an
+> `ethr`-derived guard sits under that floor and lets 60 of the 102 pairs
+> through. `max(k ethr, floor)` is the shape `empty_ethr` already has, which is
+> the second reason to take the constant from it rather than invent one.
+> The old 1e-8 was **inside the empty window rather than wrong**: the gaps are
+> bimodal, 102 below 5.5e-12 and none at all from there to 1e-4, so any constant
+> in those seven decades behaves identically. What it was not is a statement
+> about anything.
+>
+> **And it now says so.** `optical_conductivity` counts the pairs it removed --
+> off-diagonal and weight-carrying only, since `e_nn = 0` exactly and every
+> metal would otherwise report a large constant -- carries the count on
+> `OpticalConductivity.degenerate_pairs`, and warns **only where the
+> cancellation does not reach** -- the curvature route, or an occupation that
+> is not a function of energy (fixed, or a tetrahedron run's step). Not the
+> `_drude` test, which was the first attempt: a *smeared* run with
+> `intraband = False` still cancels, so warning there would be noise.
+> `degeneracy_tol`
+> is a caller override on both entry points. Five tests in
+> `tests/unit/test_conductivity_machinery.py`, including the two-route scaling
+> comparison, which is the mechanism itself and costs no SCF.
 
 `defumat/response/conductivity.py:611`: 1.0e-8 Ry. Davidson does not promise that. A
 pair degenerate by symmetry comes back split by 3e-7 Ry of residue, survives the guard,
