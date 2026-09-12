@@ -583,6 +583,34 @@ class Functional(eqx.Module):
 
         return jax.grad(total, argnums=(0, 1))(rho, grad)
 
+    def spin_gradient_terms_and_energy(self, rho: jnp.ndarray, grad: jnp.ndarray):
+        """``(v1, h, e)`` from one pass, not two.
+
+        :meth:`potential_and_energy_density`'s argument one derivative out:
+        :meth:`spin_gradient_terms` differentiates the sum of exactly the array
+        :meth:`spin_gradient_energy` returns, so the forward value of the
+        differentiated expression already *is* the energy, and evaluating the
+        functional again to read it is a second pass of ``sx + sc`` -- both
+        gates, the spin scaling and the polarization clamp -- over every grid
+        point per channel. QE never pays it either: ``xc_gcx`` returns ``sx,
+        sc`` alongside the four potentials from one call.
+
+        **The unpolarized branch does not get this treatment, and that is a
+        measurement rather than an oversight.** Written the same way it is
+        1.00x on 24^3, 45^3 and 64^3 -- XLA removes that duplicate on its own,
+        where it does not remove this one (1.10-1.14x on the same three grids).
+        The pair is therefore deliberately asymmetric; see `PERFORMANCE.md`.
+        """
+
+        def total(density, gradient):
+            energy = self.spin_gradient_energy(density, gradient)
+            return jnp.sum(energy), energy
+
+        (_, energy), (v1, h) = jax.value_and_grad(
+            total, argnums=(0, 1), has_aux=True
+        )(rho, grad)
+        return v1, h, energy
+
     def _spin_exchange_energy(self, rho, grad):
         """``sx``: the gradient correction to exchange, by spin scaling."""
         sigma = jnp.sum(grad * grad, axis=1)  # (2, ...) -- per channel

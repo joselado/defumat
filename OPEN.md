@@ -1089,11 +1089,41 @@ entries could move a validated number and are marked **[moves a number]**; they 
 number**, which is the whole rule of that file. Entries that are *siblings* of a backlog
 item say so.
 
+**Status, 2026-09-12 (later the same day).** **H1 is measured and half of it is a null** --
+the entry's central argument, that XLA does not remove a duplicated energy evaluation, is
+true of the polarized branch (1.10-1.14x, implemented) and false of the unpolarized one
+(1.00x, reverted). That is the first entry priced and it went the way Part II's did: right
+that there was something there, wrong about what. Nothing else here has been measured.
+
 ---
 
 ## H. Cheap, and the gain is bounded by a figure already on record
 
-### H1. A GGA evaluates its energy expression twice per iteration
+### H1. A GGA evaluates its energy expression twice per iteration **[measured 2026-09-12 -- half of it is a null]**
+
+> **Implemented for `nspin = 2` and reverted for `nspin = 1`, because the entry's
+> central argument is wrong on the branch it was made about.** It reasoned from
+> the LDA slot's measured 7.3 -> 3.5 ms that XLA does not remove this duplicate.
+> On the *unpolarized* GGA branch it removes it entirely: 0.99x / 1.03x / 1.00x
+> at 24^3 / 45^3 / 64^3. On the polarized branch it does not, and one call in
+> place of two is **1.14x / 1.11x / 1.10x** on the same three grids. So the pair
+> is now deliberately asymmetric, with the measurement in the docstring.
+> **The run-level effect is below this machine's noise**: `v_of_rho` on a
+> 20-atom antiferromagnetic hydrogen chain under PBE is 968.0 -> 955.7 ms, min
+> of 15, inside a 7-8% spread -- which is what the kernel table predicts, the
+> polarized kernel being ~250 ms of that 960. Four runs of the *same* binary
+> swung 39%, so no number here is read off a single pair. `v1` and `h` are
+> **exactly** identical between the forms and `etxc` is identical to the bit on
+> the real density; on a synthetic sweep across the `_sanitise` boundaries 22
+> points of 4050 differ by 1.7e-18, so this is equivalent arithmetic and not
+> identical arithmetic -- which is why the branch that gains nothing was put
+> back exactly as it was. Three cells' total energies unchanged to the last
+> printed digit, fast gate 1790 passed; every `pw.x` comparison in
+> `test_lsda.py` **skips**, the vendored tree not being on this machine.
+> `PERFORMANCE.md`, "What one evaluation of the gradient correction was worth".
+> **Two sites the entry did not name**: `paw/gradient.py` has the same pair
+> three times over, on the PAW spheres.
+
 
 `defumat/scf/potential.py:452`. `gradient_potentials` is `jax.grad` of
 `sum(where(active, _gradient_energy(r, s), 0))`, so its **forward pass already computes

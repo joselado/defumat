@@ -130,8 +130,9 @@ def onecenter_gradient_correction(rho_lm, rho_rad, core, paw, axis=None):
         # QE adds by hand: correlation depends on the *total* gradient, so
         # ``d e / d(grad rho_up)`` sees ``grad rho_dw`` too. That is ``v2cud``,
         # and here it is not a separate quantity at all.
-        v1, h = paw.functional.spin_gradient_terms(density, grad)
-        energy_density = paw.functional.spin_gradient_energy(density, grad)
+        v1, h, energy_density = paw.functional.spin_gradient_terms_and_energy(
+            density, grad
+        )
 
         h = h * r2
         h = h.at[:, 2].divide(paw.angular.sin_theta[:, None])
@@ -208,8 +209,9 @@ def _noncollinear_gradient(rho_lm, rho_rad, core, paw, axis):
     grad = jnp.stack([
         _gradient(channel_lm[s], channels[s], paw) for s in range(2)
     ])  # (2, 3, nx, mesh)
-    v1, h = paw.functional.spin_gradient_terms(channels, grad)
-    energy_density = paw.functional.spin_gradient_energy(channels, grad)
+    v1, h, energy_density = paw.functional.spin_gradient_terms_and_energy(
+        channels, grad
+    )
 
     h = h * r2
     h = h.at[:, 2].divide(paw.angular.sin_theta[:, None])

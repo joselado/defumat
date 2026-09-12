@@ -2953,6 +2953,12 @@ measurements, before being implemented. See "QE's FFT layout" above.)
   pocketfft** single-threaded (0.92 ms against 2.36 ms for a `(4, 30^3)`
   transform). There is no library-level win available; we are using a good one.
 
+* **One evaluation of the *unpolarized* gradient correction instead of two.** The LDA
+  slot's 7.3 -> 3.5 ms does not generalise: written as `value_and_grad`, the unpolarized
+  GGA branch is 0.99x / 1.03x / 1.00x at 24^3 / 45^3 / 64^3, because XLA already removes
+  that duplicate. The polarized branch, where it does not, is 1.10-1.14x and was kept. See
+  "What one evaluation of the gradient correction was worth" below.
+
 * **Folding the `1/N` FFT normalisations.** `g_to_r` multiplies by `N` and
   `r_to_g` divides by it, and inside `h_psi` the two cancel exactly. Removing
   them helps the 180-plane-wave case by 1.3x and the 1131-plane-wave case not at
@@ -4244,6 +4250,57 @@ against the few hundred megabytes of the states it is built from.
 docstring already carried — 100 MB at silicon's sizes, where the pair densities at the
 same sizes would be two hundred times that on a production cell.
 
+
+## What one evaluation of the gradient correction was worth (OPEN.md H1)
+
+**The unpolarized half is a null and the polarized half is 1.10-1.14x**, which is the
+opposite of what the sweep entry predicted: it argued from the LDA slot's measured
+7.3 -> 3.5 ms that XLA does not remove this kind of duplicate, and on the *unpolarized*
+GGA branch XLA removes it completely.
+
+`gradient_potentials` is `jax.grad` of the sum of exactly the array `gradient_energy`
+returns, so the forward pass of the derivative already contains the energy and evaluating
+the functional a second time to read it is a second pass of PBE's powers, square roots and
+exponential over every grid point. `spin_gradient_terms` and `spin_gradient_energy` are
+the same pair one spin axis up. Both were rewritten as `jax.value_and_grad(..., has_aux)`
+and measured separately, jitted, one core, min of 20 repeats:
+
+| grid | unpolarized, two calls | one call | | polarized, two calls | one call | |
+|---|---|---|---|---|---|---|
+| 24^3 = 13 824 pts | 0.71 ms | 0.72 ms | **0.99x** | 4.67 ms | 4.11 ms | **1.14x** |
+| 45^3 = 91 125 pts | 5.69 ms | 5.55 ms | **1.03x** | 44.91 ms | 40.45 ms | **1.11x** |
+| 64^3 = 262 144 pts | 28.12 ms | 28.23 ms | **1.00x** | 136.93 ms | 123.99 ms | **1.10x** |
+
+So the change was **kept for `nspin = 2` and reverted for `nspin = 1`**, and the pair is
+deliberately asymmetric with the reason in `spin_gradient_terms_and_energy`'s docstring.
+Why XLA deduplicates one and not the other is not established here; what is established is
+that it does, three times each, at three sizes.
+
+**The run-level effect is below this machine's noise, and saying so is the point.** On a
+20-atom antiferromagnetic hydrogen chain under PBE (`nspin = 2`, FFT 40x40x320,
+242 975 G-vectors), `v_of_rho` jitted is **968.0 ms before and 955.7 ms after**,
+min of 15 repeats -- inside a 7-8% spread. That is what the table above predicts: the
+polarized kernel is ~250 ms of that 960 ms, so 10% of it is ~25 ms, or 2.6%. The whole-run
+figure is smaller still, since `v_of_rho` is ~13% of an iteration.
+
+**How noisy the run-level instrument was, measured rather than asserted.** Four runs of the
+*same binary* on that input gave `v_of_rho` 0.861, 1.100, 1.197 s and warm SCF 54.0, 68.9,
+77.8, 64.9 s -- a 39% swing with nothing changed. Any 10% claim read off a single pair of
+those runs would have been an artefact, in either direction. (Part of it is the tool: the
+`v_of_rho` line in `tools/benchmark.py` times the *unjitted* function at `repeats=3`.)
+
+**What was checked, given that the vendored QE tree is not on this machine and every
+`pw.x` comparison in `test_lsda.py` skips.** `v1` and `h` come back **exactly** identical
+between the two forms. The energy density is identical on the real h20 density -- `etxc`
+is `-10.3599090983061721` both ways, every bit -- and on a synthetic sweep spanning the
+`_sanitise` mask boundaries 22 points of 4050 differ by at most **1.7e-18** absolute,
+because XLA schedules the fused expression differently. Total energies are unchanged to
+the last printed digit on all three cells: `si8-pbe-1k` -63.25766689 Ry, `si8-paw-pbe-1k`
+-373.75843786 Ry, the h20 chain -19.80509018 Ry. The fast gate is 1790 passed.
+
+**This is equivalent arithmetic, not identical arithmetic**, which is a distinction
+`xc/functional.py` draws itself -- and it is why the unpolarized branch, which gains
+nothing, was put back exactly as it was rather than left in the new form for symmetry.
 
 ## History
 
