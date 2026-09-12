@@ -32,6 +32,11 @@ Also fixed: **9** (the DFT+U continuation, including the noncollinear checkpoint
 > **Everything not listed as fixed still stands.** Each fixed entry keeps its full
 > reasoning, because the reasoning is why the fix has the shape it does; read the bold line
 > at its head for the state.
+>
+> **`MAGNETISM-NEXT.md` is the forward-looking half of this file** and is where to start if
+> the question is "what next" rather than "what was found". It carries what is left, in
+> order, with the first concrete step of each; this file keeps the reasoning behind every
+> entry, which is why the two are separate.
 
 This is an **audit**, run on **2026-09-12** at commit `314d676`, of everything in this
 package that a physicist would touch to set up, converge, trust and analyse a
