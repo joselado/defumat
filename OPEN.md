@@ -42,7 +42,7 @@ and at the end respectively.
 
 ---
 
-## 1. The Kramers bound asserts round-off where the solver promises `empty_ethr`
+## 1. The Kramers bound asserts round-off where the solver promises `empty_ethr` **[closed 2026-09-11]**
 
 `tests/regression/test_spinorbit.py::test_kramers_degeneracy_survives_spin_orbit`
 fails on `spinorbit.in` (6.5e-5 eV) and `spinorbit-pbe.in` (7.7e-5 eV) against a
@@ -81,6 +81,16 @@ non-PAW cases are involved:
 python3 -m pytest tests/regression/test_spinorbit.py \
     -k test_kramers_degeneracy_survives_spin_orbit -q
 ```
+
+> **Done** (`0e1b20c`, and the test change before it). The single bound over every
+> band is replaced by the two the solver actually promises: pairs with
+> `wg/wk >= 0.01` to 1e-6 eV -- measured 5e-12 -- and every other pair to
+> `empty_band_threshold(ethr)` in eV, 1.36e-4 at the floor, measured 6.5e-5
+> (`spinorbit.in`) and 7.7e-5 (`spinorbit-pbe.in`). `diago_full_acc = .true.`
+> gives 2.6e-11 eV over *every* band, which is the check that the split is the
+> threshold rather than the physics. P14's entry in `PLAN.md` carries the three
+> numbers; the sweep for other tests asserting a degeneracy over all bands is
+> C2/C3 below.
 
 ---
 
@@ -125,7 +135,7 @@ nothing else on the machine, nothing else being timed -- and through
 
 ---
 
-## 3. A single SCF is not restartable, only a relaxation is
+## 3. A single SCF is not restartable, only a relaxation is **[closed 2026-09-11]**
 
 `run_scf` takes no checkpoint argument at all -- confirmed against its signature,
 not remembered -- so the only way a ground state reaches disk is
@@ -730,7 +740,7 @@ detects nothing about the value of the force. **What to write:** assert it on th
 *unsymmetrised* gradient, which is where the identity is a claim rather than a
 tautology.
 
-### C2/C3. The second and third instances of Part I item 1
+### C2/C3. The second and third instances of Part I item 1 **[closed 2026-09-11]**
 
 Part I asks explicitly whether any other test asserts an eigenvalue degeneracy or
 difference over all bands without splitting occupied from empty. Two:
