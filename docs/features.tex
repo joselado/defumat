@@ -266,6 +266,85 @@ state --- \code{becsum} for a PAW dataset, \code{ns} under a Hubbard $U$,
 and the entry points refuse without them rather than computing something else.
 The calculator passes them.
 
+\subsection*{Every method, in one place}
+
+The rest of this document introduces each quantity where its physics belongs,
+and names the functional entry point beneath it. This is the index the other way
+round --- what to \emph{call}, for a reader who knows the physics and wants the
+line. It is complete: a method absent from it is a documentation bug, and a test
+says so (\code{tests/unit/test\_facade\_documentation.py}).
+
+\begin{center}
+\small
+\begin{longtable}{@{}ll@{}}
+\toprule
+\multicolumn{2}{@{}l}{\textit{The ground state}} \\
+\midrule
+\code{get\_scf} & the self-consistent field loop, or the cached result \\
+\code{get\_elk\_seed} & Elk's converged density on this run's grid, as a guess \\
+\addlinespace
+\multicolumn{2}{@{}l}{\textit{Band structure and densities of states}} \\
+\midrule
+\code{get\_bands} & diagonalise on a k-path at the converged density \\
+\code{get\_nscf} & diagonalise on a k-grid at the converged density, and occupy it \\
+\code{get\_dos} & the density of states, on a denser grid if asked \\
+\code{get\_pdos} & the projected density of states, with L\"owdin charges \\
+\addlinespace
+\multicolumn{2}{@{}l}{\textit{Derivatives of the energy}} \\
+\midrule
+\code{get\_forces} & the forces on the atoms \\
+\code{get\_stress} & the stress tensor \\
+\code{get\_relax} & relax the geometry, and the whole optimisation with it \\
+\addlinespace
+\multicolumn{2}{@{}l}{\textit{Response, vibrations and spectra}} \\
+\midrule
+\code{get\_band\_velocities} & $\mathrm{d}\varepsilon/\mathrm{d}\mathbf k$ for every band \\
+\code{get\_effective\_mass} & $(1/m^{*})_{ab}$ at one k-point, in $1/m_e$ \\
+\code{get\_angular\_momenta} & $\langle L\rangle$, $\langle S\rangle$, $\langle J\rangle$ on every atom \\
+\code{get\_dielectric\_tensor} & $\epsilon^{\infty}$, with no empty states \\
+\code{get\_born\_charges} & the Born effective charges $Z^{*}$ \\
+\code{get\_phonons} & the dynamical matrix at $\Gamma$, and its modes \\
+\code{get\_phonons\_at\_q} & the dynamical matrix at one wavevector \\
+\code{get\_raman\_tensors} & $\mathrm{d}\epsilon/\mathrm{d}\tau$, per atom \\
+\code{get\_vibrational\_spectrum} & per-mode Raman and infrared activities \\
+\code{get\_strain\_response} & the first-order response to a homogeneous strain \\
+\code{get\_elastic\_constants} & $C_{ijkl}$ \\
+\code{get\_piezoelectric\_tensor} & $e_{(k)ij}$, clamped-ion, in C/m$^2$ \\
+\code{get\_electrostriction} & $\mathrm{d}\chi/\mathrm{d}(\text{strain})$ and its four tensors \\
+\code{get\_absorption} & an optical spectrum, with excitons \\
+\code{get\_optical\_conductivity} & $\sigma_{ab}(\omega)$, the Kerr angle, the anomalous Hall \\
+\code{get\_structure\_factors} & $F(\mathbf H)$, X-ray and magnetic \\
+\code{get\_stm} & a Tersoff--Hamann scanning-tunnelling image \\
+\code{get\_vertical\_transport} & tunnelling \emph{through} a 2D material \\
+\code{get\_momentum\_transport} & which k-points that current comes out of \\
+\code{get\_nesting} & $N(\mathbf q)$, the Fermi-surface nesting function \\
+\code{get\_spin\_susceptibility} & $\chi^{+-}(\mathbf q,\omega)$ \\
+\code{get\_magnon\_dispersion} & $\omega(\mathbf q)$ along a path \\
+\code{get\_shift\_current} & the bulk photovoltaic effect, in A/V$^2$ \\
+\code{get\_shg} & $\chi^{(2)}(-2\omega;\omega,\omega)$, in pm/V \\
+\addlinespace
+\multicolumn{2}{@{}l}{\textit{Topology, polarization and magnetism}} \\
+\midrule
+\code{get\_berry\_curvature} & $\Omega(\mathbf k)$ on a plane mesh \\
+\code{get\_chern} & the Chern number of one plane \\
+\code{get\_z2} & the 2D $Z_2$ invariant, by Wilson loops or parity \\
+\code{get\_z2\_3d} & the four $Z_2$ indices of a 3D crystal \\
+\code{get\_polarization} & the Berry-phase polarization \\
+\code{get\_orbital\_magnetization} & $M_{\rm orb}$, by the modern theory \\
+\code{get\_magnetoelectric\_tensor} & $\alpha_{ij} = \mathrm{d}P_i/\mathrm{d}B_j$ \\
+\code{get\_anisotropy} & the magnetocrystalline anisotropy \\
+\code{get\_torque} & the magnetic torque, and $K$ from one angle \\
+\code{get\_first\_order\_soc} & the spin-orbit expectation at coupling-free states \\
+\code{get\_force\_theorem} & one direction of the anisotropy: its band energy alone \\
+\addlinespace
+\multicolumn{2}{@{}l}{\textit{Spin spirals}} \\
+\midrule
+\code{get\_spiral\_scan} & one SCF per spiral wavevector \\
+\code{get\_spiral\_relaxation} & the spiral wavevector relaxed down $\mathrm{d}E/\mathrm{d}\mathbf q$ \\
+\bottomrule
+\end{longtable}
+\end{center}
+
 A command line covers the common workflows:
 
 \begin{shcode}
