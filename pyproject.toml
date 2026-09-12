@@ -47,5 +47,19 @@ markers = [
     "float32: also exercised under the single-precision policy",
 ]
 
+# Dump every thread's Python stack when a single test runs longer than this.
+#
+# It costs nothing while the suite behaves and it is the only instrument that
+# works when it does not: a stalled JAX process and a busy one are
+# indistinguishable from outside -- both park the main thread in
+# `futex_wait_queue` while XLA's workers do the work -- so a hang shows up as a
+# run that never finishes and takes its account of what it was doing with it.
+# `py-spy` and `gdb` are not always installed; this is in the standard library.
+#
+# 600 s is well above the slowest single test in either group (the slow set's
+# longest is a few minutes) and well below the hours a hang costs. It found the
+# `OPEN.md` Part IV deadlock in one run after four kills had produced nothing.
+faulthandler_timeout = 600
+
 [tool.ruff]
 line-length = 100

@@ -615,6 +615,28 @@ def _warn_if_the_field_did_not_fade(field, field_scale, converged, e_field) -> N
     )
 
 
+@jax.jit
+def _relative_residuals(pairs) -> jnp.ndarray:
+    """``||a - b|| / ||b||`` for each pair, as one array and one host transfer.
+
+    ``pairs`` is a tuple of ``(symmetrised, original)``; the shapes differ
+    between entries (a charge is one field, a magnetization three), which is why
+    this takes a pytree rather than a stacked array.
+
+    A zero ``||b||`` returns 0 rather than a NaN: a channel that is identically
+    zero is invariant, and reporting that as "not a number" would make an
+    unpolarised cell look like a failure. Written as a :func:`jnp.where` on a
+    safe denominator so the unused branch produces no NaN at all, which is the
+    same rule the smeared projector's ``0/0`` follows.
+    """
+    out = []
+    for a, b in pairs:
+        scale = jnp.linalg.norm(b)
+        safe = jnp.where(scale > 0.0, scale, 1.0)
+        out.append(jnp.where(scale > 0.0, jnp.linalg.norm(a - b) / safe, 0.0))
+    return jnp.stack(out)
+
+
 def _warn_if_the_seed_is_not_symmetric(calculation, rho, from_a_card: bool) -> None:
     """The density a run starts from is not invariant under the run's own group.
 
@@ -2940,29 +2962,36 @@ class Calculation:
         reports its two apart: they are different physics with different
         thresholds, and a charge that is invariant tells nothing about a
         magnetization that is not.
+
+        **One host transfer, not four.** Both ratios are computed on device and
+        brought back as a single pair. The obvious spelling -- a helper that
+        calls ``float()`` on each norm as it goes -- costs four separate
+        device-to-host syncs around one jitted symmetrisation, and a *diagnostic*
+        that blocks four times is a diagnostic that will eventually be blamed for
+        something (``OPEN.md`` Part IV item 1: this method is where a thread-pool
+        deadlock was seen parked, with the stack in one of those ``float()``
+        calls).
         """
         if self._symmetry_maps is None:
             return 0.0, (None if self.nspin_mag == 1 else 0.0)
 
-        def relative(a, b):
-            scale = float(jnp.linalg.norm(b))
-            if scale == 0.0:
-                return 0.0
-            return float(jnp.linalg.norm(a - b) / scale)
-
         rho_r = jnp.asarray(rho_r)
         symmetrized = self.symmetrize(rho_r)
         if self.nspin_mag == 1:
-            return relative(symmetrized, rho_r), None
-        if self.nspin_mag == 2:
+            pairs = ((symmetrized, rho_r),)
+        elif self.nspin_mag == 2:
             # The collinear density is carried as ``(up, down)``, so neither
             # component is the charge or the magnetization on its own.
-            charge = relative(symmetrized[0] + symmetrized[1], rho_r[0] + rho_r[1])
-            moment = relative(symmetrized[0] - symmetrized[1], rho_r[0] - rho_r[1])
-            return charge, moment
-        return relative(symmetrized[0], rho_r[0]), relative(
-            symmetrized[1:4], rho_r[1:4]
-        )
+            pairs = (
+                (symmetrized[0] + symmetrized[1], rho_r[0] + rho_r[1]),
+                (symmetrized[0] - symmetrized[1], rho_r[0] - rho_r[1]),
+            )
+        else:
+            pairs = ((symmetrized[0], rho_r[0]), (symmetrized[1:4], rho_r[1:4]))
+        ratios = np.asarray(_relative_residuals(pairs))
+        if self.nspin_mag == 1:
+            return float(ratios[0]), None
+        return float(ratios[0]), float(ratios[1])
 
     def symmetrize_directional(self, fields: jnp.ndarray) -> jnp.ndarray:
         """Impose the crystal symmetry on three densities that form a vector.

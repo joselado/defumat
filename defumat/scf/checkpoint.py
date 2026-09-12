@@ -93,8 +93,13 @@ _REFUSED = ("magnetic_field", "hubbard_setup")
 #: geometry. Carrying them would let a pair computed for one geometry ride along
 #: beside a density reloaded into another -- the ``at_cell`` defect one layer up.
 #: :meth:`Calculation.site_moments` recomputes them from the loaded density.
+#: ``constraint_residual`` is dropped for the same pair of reasons as the site
+#: moments: it is a report rather than state, and it is a contraction of the
+#: *density* against the constraint's target, so
+#: ``MagneticField.cell_residual`` recomputes it from the loaded density. The
+#: target itself rides on ``magnetic_field``, which is carried.
 _DROPPED = ("stress", "solver", "history", "site_charges", "site_moments",
-             "site_residuals")
+             "site_residuals", "constraint_residual")
 
 #: Reconstructed from the ``system`` the caller supplies on load.
 _FROM_CALLER = ("system",)

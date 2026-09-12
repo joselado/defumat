@@ -12,6 +12,11 @@ P73 section, under "Three test failures were seen while validating this phase".
 **Part II** is the sweep of **2026-09-11** -- eight read-only agents over the package,
 28 findings, ranked by what a wrong answer costs rather than by what it costs to fix.
 
+**Part IV** is the **2026-09-13** magnetism session (`PLAN.md` P80): two entries, neither a
+defect in this code -- a **JAX thread-pool deadlock** that the fast gate now hits
+reproducibly, with a stack trace and the measurements that rule out the obvious causes, and
+P63's spiral scan no longer reproducing its own numbers.
+
 **Part III** is the sweep of **2026-09-12** -- four read-only agents over the package
 looking for **speed and memory** rather than for wrong answers, 23 entries, ordered by
 ease times impact. **Nothing in it was measured and nothing in it is a defect**: each
@@ -1748,3 +1753,92 @@ every allocation there is already sized in `PERFORMANCE.md`, and the two that ar
 the `(3 nat, nspin, dense grid)` arrays the phonon loop holds six or seven of at once, and
 `keep_internals`' `3 nat` state blocks -- both fall inside **backlog item 9**, which bounds
 them at three modes in flight.
+
+---
+
+# Part IV -- from the 2026-09-13 magnetism session (P80)
+
+---
+
+## 1. A JAX thread-pool deadlock, parked inside `Calculation.symmetry_residual`
+
+**Reproducible in the fast gate, with a stack trace, and not a slow compile.** Seen five
+times on 2026-09-13, always at `tests/unit/test_seed_symmetry.py`:
+
+| where | wall | CPU in that time | what it was |
+|---|---|---|---|
+| the file alone, first run of the session | 5.5 min | **3.4 s** | killed; reran and passed in 7 s |
+| the whole gate, at 74% | >2 min | **0 s** over a 20 s sample | killed |
+| the whole gate again, same file | 85 s+ | **0 s** | killed |
+| `pytest tests/unit` alone, ~70% | >2 min | **0 s** | dumped (below) |
+| a bare measurement script, first cell | several min | **3 s** | killed |
+
+`faulthandler_timeout` gives the answer (`pytest -o faulthandler_timeout=120`, which is the
+way to get a stack here -- `py-spy` and `gdb` are not installed):
+
+```
+File ".../jax/_src/array.py", line 642 in _value
+File ".../jax/_src/array.py", line 300 in __float__
+File "defumat/scf/driver.py", line 2948 in relative
+File "defumat/scf/driver.py", line 2963 in symmetry_residual
+File "tests/unit/test_seed_symmetry.py", line 127 in ...
+```
+
+So it is parked in a blocking device-to-host transfer, with **28-35 threads all in
+`futex_wait_queue` and no CPU at all** -- the main thread waiting for a result and every XLA
+worker idle. Not compilation: the same file with the persistent cache **off**, so every
+kernel compiled from scratch, runs its four tests in **9.8 s**. Not a file lock either: no
+lock or temporary files in `~/.cache/defumat/jax` (19,362 entries, 1.5 GB), and the blocked
+process holds no open file in it. That leaves a deadlock in XLA's CPU thread pool, which
+nothing in this project can fix.
+
+**What was done about it.** `symmetry_residual` took **four** separate host syncs around one
+jitted symmetrisation -- `float()` on each norm as it went -- and now takes **one**, both
+ratios computed on device and returned as a pair (`_relative_residuals`). That is a smaller
+target rather than a fix, and it is worth having on its own: a diagnostic should not block
+four times.
+
+**What is still open.** Whether the single-sync form still deadlocks, and why this call site
+of all of them. Two things would help the next occurrence and neither is done:
+**`faulthandler_timeout` belongs in `pyproject.toml`'s pytest config** so a stall dumps a
+stack instead of costing a run, and a note in `CLAUDE.md`'s memory section that a killed JAX
+process leaves nothing behind but that *repeated* `kill -9` of JAX processes was in the
+session's history when this appeared.
+
+**The recipe, which is the part to keep.** A stalled JAX process and a busy one look
+identical from outside: both sit in `futex_wait_queue` on the main thread, because that is
+where the main thread waits for XLA's workers. What separates them is **CPU time sampled
+twice**:
+
+```bash
+ps -p <pid> -o time --no-headers      # ... wait 20 s ...
+ps -p <pid> -o time --no-headers      # unchanged => stalled, not slow
+```
+
+A healthy gate here moves several CPU-minutes per 25 s of wall clock (a handful of busy
+threads); a stalled one moves nothing. Reading `wchan` alone says nothing, and neither does
+`%CPU`, which is an average over the process's whole life and stays high long after it stops.
+
+## 2. P63's spin-spiral scan no longer reproduces
+
+Its numbers, not its conclusion. P63 records `E(q) - E(0)` of `0, -150, -59` meV at
+`q_3 = 0, 1/4, 1/2` on `h-fcc-spiral-scan.in`; the `q_3 = 1/2` point now comes out at
+**-0.41 meV**. The reason is at `q = 0`: that run converges to **0.0273 mu_B** on an atom
+seeded at 1.0, so it is no longer on the metastable ferromagnetic branch P63 measured (which
+that phase itself found to be 58 meV *above* the nonmagnetic solution), and both ends of the
+difference are now on the nonmagnetic one. The conclusion -- a spiral leaves the magnetic
+branch, so its energy gain is demagnetization rather than a spin wave -- is untouched and if
+anything strengthened, since `q = 0` now does it too.
+
+**What to do:** find which change moved that metastable minimum. It is a *metastable* state,
+so anything touching the seed or the mixing path can select a different one, and P77-P79
+touched both -- `starting_magnetization`'s reinterpretation (P77c; a null for hydrogen, whose
+valence is 1, so probably not this), the magnetic symmetry filters (P77/P78; this input is
+`nosym`, so not this either), and `mixing_ndim` going from parsed-and-ignored to wired
+(P78), which changes the Anderson history length and so which fixed point a marginal cell
+falls into. **That last one is the candidate to test first**, by running the scan at the
+`mixing_ndim` the pre-P78 code effectively used.
+
+This is what the slow suite exists to catch and it was found by re-running one input by
+hand, which is the second time that has happened (`PLAN.md` P38 found three phases' claims
+drifted the one time the slow set was run end to end).
