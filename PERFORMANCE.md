@@ -4530,6 +4530,42 @@ from **one** transform of the residual: **12.4 ms** per iteration on a 64³ grid
 which is what preserving the old total bit for bit would need -- costs a second transform,
 24.6 ms, so the fused form is a 1.5% surcharge where the separate one is 100%.
 
+## What a spinor dielectric response costs against `ph.x` (P83)
+
+**The pair, single core each, on an idle machine.** `si-epsilon.in` with one line
+added (`noncolin = .true.`): the same two-atom silicon, 10 k-points, `ecutwfc = 18`,
+run as a spinor on both sides. `OMP_NUM_THREADS=1` and `taskset -c 0` for both, the
+affinity mask set before the interpreter starts so JAX inherits it. Three repeats on
+this side, spread 16.05 to 17.31 s.
+
+| stage | defumat | QE | ratio |
+|---|---|---|---|
+| ground state | 1.33-1.49 s | **1.21 s** (`pw.x`) | **1.2x** |
+| the field response | 16.05-17.31 s | **4.40 s** (`ph.x`, of which `solve_e` is 4.25) | **3.8x** |
+
+**The steps are the same steps**, which is the thing to state rather than assume:
+`ph.x` reads the converged ground state off disk and solves, and
+`dielectric_tensor` takes a converged `SCFResult` and solves, so the second row is
+response against response. `dielec` itself is 0.00 s on QE's side and the assembly is
+negligible here too; what is being compared is the Sternheimer solve and its
+self-consistent loop. The first run in a process pays compilation and the rest do
+not (`~/.cache/defumat/jax`); the 17.31 s is that first run and the 16.05 the second,
+so **compilation is about 1.3 s of it** and the 3.8x is not an artefact of it.
+
+**And the numbers, which is the reason to look at this pair at all.** `ph.x` gives
+**13.806615123** for the spinor run against **13.806689470** for the scalar one: QE's
+own scalar-against-spinor identity is **7.4e-5**, where this code's is **1.35e-7** at
+the same `conv_thr` and **5.0e-14** at 1e-10 (P83). The two codes' spinor answers are
+**3.1e-5** apart, which is *tighter* than the 4.3e-5 the two scalar runs sit at.
+
+**What this row is not.** A two-atom cell at `ecutwfc = 18` is where fixed overheads
+dominate, and `CLAUDE.md` says so in as many words -- it is here because it is the
+cell the correctness claim was made on and a ratio wants the same input, not because
+it is where the cost lives. The response stack has never been profiled on
+`si8-1k`-scale cells at all, which is the measurement this row should be read as
+asking for rather than answering.
+
+
 ## History
 
 | Date | Change | Effect |
