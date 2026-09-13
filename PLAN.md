@@ -14327,18 +14327,15 @@ Neither is a factor of 6.6. **The held field is not the cause.**
 
 **What is outstanding, and it is now a disagreement rather than a missing number.**
 
-* **Locate the factor. Two candidates left of three, and the k-grid is the one struck
-  off** (the sweep is two bullets down). **Basis convergence on both sides** is now the
-  cheapest untested one: `rgkmax = 7` is Elk's default and a spiral needs two `G+k` sets,
-  while defumat is at `ecutwfc = 25`; raise each and see which number moves. The `ecutwfc`
-  half is a defumat-only sweep of the same shape as the k one and costs minutes. And **the
-  field convention**, which the field table above hints at without settling: defumat's
-  moment responds much more strongly to "the same" field (0.633 against Elk's 0.538 at
-  `q = 0`), so the two codes may not be applying the same field at all -- Elk's `bfieldc`
-  enters as `(g_e/4c) sigma.B` in Hartree atomic units where this code's `B_field` is a
-  potential shift in Ry, and nobody has checked the factor. **A third has been added by the
-  `q = 1/2` run**: whatever it is, it is not an overall scale, so a single wrong constant
-  cannot be the whole story and the two `E(q)` curves differ in shape.
+* **Locate the factor. Both cheap candidates are now run: the k-grid is worth nothing and
+  the basis is worth a tenth of it.** What is left is Elk's own convergence and the field
+  convention -- the latter being what the field table above hints at without settling:
+  defumat's moment responds much more strongly to "the same" field (0.633 against Elk's
+  0.538 at `q = 0`), so the two codes may not be applying the same field at all. Elk's
+  `bfieldc` enters as `(g_e/4c) sigma.B` in Hartree atomic units where this code's
+  `B_field` is a potential shift in Ry, and nobody has checked the factor. **And whatever
+  it is, it is not an overall scale**, so a single wrong constant cannot be the whole story
+  and the two `E(q)` curves differ in shape.
 * ~~**Elk at `q = 1/2`**~~ -- **run, and the ratio moves.** 42 loops, both criteria met,
   total energy `-0.475911217903` Ha and moment `0.6380129665` mu_B. So there are three
   points and the question this bullet asked has an answer:
@@ -14377,6 +14374,25 @@ Neither is a factor of 6.6. **The held field is not the cause.**
   and the 20 per cent spread between them survives with it. The specific asymmetry argued
   above (`q = 1/4` sampled worse than `q = 1/2` because its shifted spheres fall between
   grid points) is real and is worth only that 6 per cent.
+* **The basis sweep, at the k-converged `1 1 8` so the two effects do not mix.** This one
+  does move the numbers, and it converges:
+
+  | `ecutwfc` | `E(1/4) - E(0)` | `E(1/2) - E(0)` | Elk/defumat at 1/4 | at 1/2 | \|m\|(0) |
+  |---|---|---|---|---|---|
+  | 25 (`rgkmax = 7`'s coincidence) | -22.046 meV | -52.255 meV | 6.182 | 5.075 | 0.489629 |
+  | 40 | -24.212 | -55.405 | 5.629 | 4.787 | 0.548655 |
+  | 60 | -24.941 | -56.484 | 5.465 | 4.695 | 0.567757 |
+  | 80 | **-25.153** | **-56.796** | **5.419** | **4.669** | **0.573357** |
+
+  **`ecutwfc = 25` is not converged and the coincidence that made it look matched was a
+  coincidence between two under-converged bases.** The total moves 0.010 Ry from 25 to 80
+  and `|m|(0)` moves 17 per cent. Converging it takes the ratio from 6.18 to **5.42** at
+  `q = 1/4` and 5.08 to **4.67** at `q = 1/2` -- a 12 per cent improvement, in the right
+  direction, converged by 60, and **not a factor of five of it**. So the basis explains a
+  tenth of the gap and the k-grid none, and the spread between the two wavevectors survives
+  both (5.42 against 4.67, 16 per cent). Elk's `rgkmax = 7` is its own default and is
+  presumably under-converged in the same way; raising it is the next measurement and is a
+  40-minute run per point, pinned.
 * **One thing the k-sweep did move, and it is a caution about the headline.** The `q = 0`
   moment goes from 0.514889 at `nk = 4` to **0.489805** converged -- 5 per cent -- while the
   two spiral moments do not move at all. So the "moments agree to 4 per cent" line is a
@@ -14384,7 +14400,11 @@ Neither is a factor of 6.6. **The held field is not the cause.**
   own `nk = 4` value the converged defumat moment is **+9.75** per cent out there, against
   +3.26 and +4.41 at the two spiral points. The matched comparison is the honest one, and
   the way to keep it honest is to raise `ngridk` on **both** sides, which is an Elk run that
-  has not been done.
+  has not been done. **The basis sweep says the same thing more sharply**: at `ecutwfc = 40`
+  the defumat moment is 0.5487 against Elk's 0.5376, the closest the two ever get, and by 80
+  it is 0.5734 -- 6.6 per cent *above* Elk rather than 4 per cent below. The moment agreement
+  is therefore a matched-under-convergence agreement at every point, and the converged
+  defumat moment crosses Elk's rather than approaching it.
 * **The `PERFORMANCE.md` pair.** It must be `OMP_NUM_THREADS=1` under `taskset` on an idle
   machine (`PIN=1` in the driver script), and every Elk run here was threaded and beside
   two other jobs. Netlib is slow enough that this matters: ~90 s per SCF loop pinned
