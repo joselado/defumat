@@ -5022,11 +5022,26 @@ of intermediate for a 40 MB result" at its eight frequencies.
 to every digit -- because the band contributions were already being added in index
 order.
 
-**What it does not fix, stated.** On an accelerator the band dial's default is
-`None`, which asks for every band at once and routes through a `vmap` and a sum, so
-the stack is back. That is the platform default rather than an oversight -- a GPU
-wants the batch -- and `DEFUMAT_BAND_BATCH` is what asks for the scan where the
-memory matters more.
+**The walk is pinned at `batch = 1` rather than left on the band dial's default,
+and that correction is the second half of this entry.** The first version of the fix
+took the default, which resolves to `None` on an accelerator -- every band at once,
+which is what a GPU wants of `h_psi`. Here it routes through a `vmap`, and under
+`vmap` the body's `conj(field)[None] * fields_dn` becomes `nbnd^2` **grid-sized**
+fields, which is precisely what this walk exists to avoid and what the module
+docstring calls "what makes an eighteen-band transition metal fit". The `lax.map` it
+replaced was sequential on every platform, so taking the default would have been a
+regression on the platform where memory is tightest, dressed up as a platform
+choice. Measured on the same cell:
+
+| band batch | `temp_size_in_bytes` |
+|---|---|
+| 1 (what lands) | **2,593,296** |
+| `None` (the accelerator default) | 15,558,912 |
+| the old `lax.map` + `sum` | 9,947,664 |
+
+`None` is worse than the stacking form it replaced. So this is not a dial, and
+`DEFUMAT_BAND_BATCH` deliberately does not reach it -- verified: the figure is
+2,593,296 with the variable set to `none`.
 
 ## Reassociating the augmentation charge: 2 GiB and 8.9x (MEMORY-AUDIT A9)
 
@@ -5039,8 +5054,10 @@ Contracting `becsum` with `Q_ij(G)` first instead leaves `(nat, ngm)`, smaller b
 The old order **is** `addusdens_g`'s, which holds `qgm(ngm, nij)` and `aux2(ngm,
 nij)` together -- and in QE that costs nothing, because `qvan2` has just built
 `qgm` into a buffer it is about to reuse. Here `qgm` is kept for the whole run, so
-the same association puts two arrays of that shape in flight. The docstring says
-so now, and `sizing.py` has a line for the intermediate it did not have.
+the same association puts **three** arrays of that shape in flight -- the resident
+`qgm` and two temporaries, which is what the 2.086 GiB below is: exactly twice the
+1.043 GiB one of them costs. The docstring says so now, and `sizing.py` has a line
+for the intermediate it did not have.
 
 Lowered from `ShapeDtypeStruct` at `bismuthene-soc-small`'s own shapes (`nh = 34`
 from the dataset, `ngm = 60543` from `reference.out.bismuthene-soc-small:108`,

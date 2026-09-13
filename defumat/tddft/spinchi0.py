@@ -444,10 +444,16 @@ def _one_k_terms(psi_up, index_up, mask_up, eig_up, occ_up, slope_up,
     running total instead. It changes the order the band contributions are added
     in and nothing else.
 
-    **On an accelerator the stack comes back by design.** The band dial's
-    default there is ``None`` -- every band at once, which is what a GPU wants
-    -- and that routes through a ``vmap`` and a sum. ``DEFUMAT_BAND_BATCH``
-    is what asks for the scan on hardware where the memory matters more.
+    **``batch = 1`` and not the band dial's default**, which is the one place
+    this walk is not a dial. The default on an accelerator is ``None`` -- every
+    band at once, which is what a GPU wants of ``h_psi`` -- and here that routes
+    through a ``vmap``, which turns ``conj(field)[None] * fields_dn`` into
+    ``nbnd^2`` grid-sized fields: exactly what the paragraph above says this
+    walk exists to avoid, and what the module docstring calls "what makes an
+    eighteen-band transition metal fit". Measured on the cell the numbers above
+    come from, ``temp_size_in_bytes`` is 2,593,296 at ``batch = 1`` and
+    **15,558,912** at ``None`` -- worse than the stacking form this replaced.
+    So the sequential walk is kept on every platform, as the ``lax.map`` had it.
     """
     # The padding must be zeroed before the scatter: every padding entry
     # shares the flat index of ``G = 0``, so an unmasked coefficient lands on
@@ -482,7 +488,7 @@ def _one_k_terms(psi_up, index_up, mask_up, eig_up, occ_up, slope_up,
         ) / volume
         return jnp.einsum("wp,pa,pb->wab", scalars, jnp.conj(matrix), matrix)
 
-    return sum_bands(one_band, (fields_up, eig_up, occ_up, slope_up))
+    return sum_bands(one_band, (fields_up, eig_up, occ_up, slope_up), batch=1)
 
 
 #: Two eigenvalues closer than this (Ry) are treated as degenerate, and their

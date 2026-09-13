@@ -20,6 +20,11 @@ closed later the same day**: it hung a sixth time, and the cause is neither of t
 entry had recorded as fact but the **affinity mask this package sets itself** -- 8 hangs in
 8 runs at two cores, 6 in 14 at four, none at eight or above.
 
+**Part V** is from the **2026-09-13** memory session: one entry, and it is not that
+session's work -- four of `test_magnons.py`'s eight tests fail, all four downstream of a
+ground state that stops four orders short of its own `conv_thr`, and the same input gives
+the identical energy and accuracy at the commit before that session started.
+
 **Part III** is the sweep of **2026-09-12** -- four read-only agents over the package
 looking for **speed and memory** rather than for wrong answers, 23 entries, ordered by
 ease times impact. **Nothing in it was measured and nothing in it is a defect**: each
@@ -2080,3 +2085,63 @@ converge is the failure mode this list exists for. Either way the header changes
 
 **Cost.** Minutes, plus one run of `tests/regression/test_holding_a_texture.py` to check
 the rewrite is still doing what it was doing.
+
+---
+
+# Part V -- from the 2026-09-13 memory session
+
+## 1. Four of `test_magnons.py`'s eight tests fail, and all four are one unconverged SCF
+
+**Found while checking that MEMORY-AUDIT A8 had not moved a number, and it had not:
+these predate the session entirely.** `tests/regression/test_magnons.py` is `slow`, so
+the gate never runs it.
+
+```
+4 failed, 4 passed in 2m20s
+test_the_goldstone_identity_converges_in_the_band_count       0.3958 < 0.02
+test_the_goldstone_identity_converges_in_the_response_sphere  0.3958 < 0.02
+test_the_leading_eigenvalue_at_zero_wavevector_is_one         0.6152 == 1.0 +- 0.05
+test_without_the_kernel_there_is_no_collective_mode           ValueError
+```
+
+**One cause, and the fourth failure is the one that names it.** `h-fcc-magnon.in`'s
+ground state **does not converge**: 100 iterations, `accuracy = 9.120108e-06 Ry` against
+its own `conv_thr = 1e-10`, `E = -0.984496631887 Ry`, `m = 0.143057857`. Three of the four
+tests consume that state and get a Goldstone residual of 0.40 where they ask for 0.02;
+the fourth goes through `Calculator.get_spin_susceptibility`, whose refusal fires
+correctly and raises instead. **So three of these four are the refusal *not* firing on a
+path that reaches the same state by another route** -- `_states` calls
+`fixed_density_states` on `scf.density` directly, and nothing between there and the
+assertion asks whether that density is converged.
+
+**Not this session's work, checked rather than assumed.** The same input at `47105e8`,
+the commit before this session, gives `-0.984496631887 Ry` at `9.120108e-06` after 100
+iterations -- **identical to every digit**, energy, accuracy, moment and iteration count.
+The A8 change is value-neutral on top of that: `X_0` is bit-identical across it
+(`x[0,0,0] = -0.05636548374877085+6.770340835610553e-21j`), and the failing eigenvalue is
+`0.6151549544839339` on both sides.
+
+**What to do**, and the order matters because the second is worth more than the first:
+
+1. **Make the ground state converge, or say why it cannot.** `starting_magnetization = 1.0`
+   on the only species trips the `pw.x` warning about values at or above 1; a hydrogen fcc
+   cell at one Bohr magneton per atom is a strongly magnetic guess, and the run stalls four
+   orders short rather than diverging, which is a mixing problem and not a broken
+   functional. `mixing_beta`, `electron_maxstep`, or a `starting_from` seed are the three
+   levers; the file is the one every other test in the module also uses, so a change to it
+   is a change to all eight.
+2. **Close the hole the fourth failure exposes.** `require_a_converged_ground_state` guards
+   the `Calculator` route and nothing guards `fixed_density_states`, so the identical
+   physics reaches an assertion through one door with a refusal and through the other
+   without. That is `CLAUDE.md`'s "a check whose null result cannot be told from a pass"
+   in its other form: **a refusal that one caller has and its sibling does not**. The three
+   failing tests would then fail *by name* -- "the ground state is not converged" -- rather
+   than as a Goldstone identity that looks like a physics defect.
+
+**Cost.** The second is minutes. The first is a convergence study on one small cell, and
+until it is done the module's own claims -- `PERFORMANCE.md`'s 115.04 meV against Elk's
+115.93, and the 1.99 per cent Goldstone residual -- are measured on **fcc nickel**, a
+different input, which is why they are not in question here.
+
+**How to know it worked.** `pytest tests/regression/test_magnons.py` at 8 passed, and the
+`h-fcc-magnon.in` run reporting `converged=True`.

@@ -101,8 +101,10 @@ class AugmentationCharge(eqx.Module):
         intermediate standing beside ``qgm`` -- and in QE that costs nothing,
         because ``qvan2`` has just built ``qgm`` into a buffer it is about to
         reuse. Here ``qgm`` is kept for the whole run, so the same association
-        puts *two* arrays of that shape in flight at the contraction: 1.12 GB
-        each on a bismuthene cell at ``nh = 34``, ``ngm = 60543``. Contracting
+        puts *three* arrays of that shape in flight at the contraction -- the
+        resident ``qgm`` and two temporaries, measured as exactly 2x on a
+        bismuthene cell at ``nh = 34``, ``ngm = 60543``, where one is 1.04 GiB.
+        Contracting
         ``becsum`` with ``Q_ij(G)`` first instead leaves ``(nat, ngm)``, which
         is smaller by ``nh^2 / nat`` -- a factor of 578 on that cell -- and is
         marginally fewer flops as well.

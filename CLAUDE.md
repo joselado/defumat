@@ -949,7 +949,15 @@ warming across sessions, so that more of the gate's executables are *loaded*
 rather than compiled — and loading one 603 MB cache entry is worth 6.3 GB
 resident (`OPEN.md` Part I item 2). The test is one run of
 `DEFUMAT_CACHE_DIR=off tools/test-fast.sh`, and it has not been done. 8.2 GB
-against a 12 G cap whose watchdog fires at 0.85 is less margin than it reads. Whatever is in the
+against a 12 G cap whose watchdog fires at 0.85 is less margin than it reads.
+
+**A fourth figure, and the peak came back down: 1951 passed / 176 skipped in
+9m32s at a watchdog-reported 7052 M**, warm cache, idle machine, 2026-09-13
+(2127 selected of 3022 collected). The likeliest cause of the 8.2 -> 7.05 GB is
+the commit that took a gigabyte of constants out of the force and stress
+gradients — it cut one spinor test file's own peak from 16,383 M to 6,232 M — but
+that is an inference from one number and the cache-off run is still the
+experiment that would settle it. Whatever is in the
 gate is paid on every push by someone who is not doing physics at the time,
 which is the same argument the notebooks' ten-minute ceiling rests on; the lever
 is the `slow` marker, and the question to ask of any test above a few seconds is

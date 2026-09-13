@@ -158,24 +158,84 @@ def _run_scf_frame():
 def test_the_field_keeps_its_commutators_only_for_a_reader(monkeypatch):
     """A7. Both lists are read after the loop and by nothing inside it.
 
-    Driven through the assembly rather than through a real response: what the
-    test is about is which lists were filled, and the loop that fills them is
-    above the first Sternheimer solve.
+    Behavioural rather than a source grep: the loop is stopped at its first
+    Sternheimer solve and the lists are read out of ``dielectric_tensor``'s own
+    frame, so a reformat cannot break this and a revert cannot pass it.
     """
-    source = _dielectric_source()
-    assert "if keep_commutators:" in source, (
-        "commutators are retained unconditionally again"
-    )
-    assert "if born_charges:\n                projector_velocities.append" in source, (
-        "projector_velocities are retained unconditionally again"
-    )
-    assert "commutator = derivative = overlap = position = None" in source, (
-        "the loop's own names outlive it again -- the last axis's derivative is "
-        "a whole (nk, npwx, nkb) block"
+    filled = {}
+
+    class Stop(Exception):
+        pass
+
+    # Stopped at the top of the first self-consistent iteration, which is past
+    # the loop that fills both lists and before any of the work.
+    def watched(*args, **kwargs):
+        frame = _frame_of("dielectric_tensor")
+        filled["commutators"] = len(frame.f_locals["commutators"])
+        filled["projector_velocities"] = len(
+            frame.f_locals["projector_velocities"])
+        # The loop's own names, which outlive it: the last axis's ``derivative``
+        # is a whole ``(nk, npwx, nkb)`` block and ``overlap`` and
+        # ``commutator`` a band block each.
+        filled["dangling"] = sorted(
+            name for name in ("commutator", "derivative", "overlap", "position")
+            if frame.f_locals.get(name) is not None
+        )
+        raise Stop
+
+    monkeypatch.setattr(efield, "_require_a_finite_kernel", watched)
+
+    for born, keep, expected in (
+        (False, False, (0, 0)),
+        (True, False, (3, 3)),
+        (False, True, (3, 0)),
+    ):
+        filled.clear()
+        with pytest.raises(Stop):
+            _run_a_field(born_charges=born, keep_internals=keep)
+        assert (filled["commutators"], filled["projector_velocities"]) == expected, (
+            f"born_charges={born} keep_internals={keep} kept "
+            f"{filled['commutators']} commutators and "
+            f"{filled['projector_velocities']} projector velocities"
+        )
+        assert filled["dangling"] == [], (
+            f"born_charges={born} keep_internals={keep}: the loop's own "
+            f"{filled['dangling']} are still bound under the whole of it"
+        )
+
+
+def _run_a_field(**options):
+    """The electric-field response of the committed ultrasoft dielectric case.
+
+    Ultrasoft, because that is where the augmentation dipole splits
+    ``commutators`` from ``bare`` and where ``projector_velocities`` is built at
+    all -- on a norm-conserving dataset both are free and there is nothing to
+    assert.
+    """
+    from pathlib import Path
+
+    from defumat.io.pwin import read_pw_input
+    from defumat.pseudo import read_upf
+    from defumat.scf import Calculation, run_scf
+    from defumat.system import build_system
+
+    root = Path(__file__).resolve().parents[1]
+    system = build_system(read_pw_input(root / "data" / "qe" / "si-epsilon-us.in"))
+    pseudos = tuple(read_upf(root / "data" / "pseudo" / s.pseudo_file)
+                    for s in system.structure.species)
+    calculation = Calculation(system, pseudos)
+    scf = run_scf(system, pseudos, calculation=calculation, conv_thr=1e-6)
+    return efield.dielectric_tensor(
+        calculation, scf.wavefunctions, scf.eigenvalues, scf.density, scf.becsum,
+        **options,
     )
 
 
-def _dielectric_source():
+def _frame_of(name):
+    """The innermost frame of the named function on the stack."""
     import inspect
 
-    return inspect.getsource(efield.dielectric_tensor)
+    for record in inspect.stack():
+        if record.function == name:
+            return record.frame
+    raise AssertionError(f"{name} is not on the stack")

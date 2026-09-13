@@ -634,9 +634,13 @@ actual dataset.
 > replaces the `lax.map` plus `jnp.sum`. Sized by the compiler on `h-fcc-magnon` at
 > `nbnd = 12`, `nm = 113`, `nw = 3`: `temp_size_in_bytes` **9,947,664 -> 2,593,296**, and
 > the difference is `nbnd nw nm^2 16` **to the byte**, which is what pins the mechanism.
-> `X_0` is bit-identical. The accelerator caveat the entry names is real and is stated in
-> the docstring rather than worked around: the band dial's default there is `None`, which
-> rebuilds the stack by design.
+> `X_0` is bit-identical. **The accelerator caveat the entry names is real and is the one
+> thing the entry gets backwards**: taking the band dial's default there (`None`) does not
+> merely rebuild the stack, it routes the body through a `vmap` and forms `nbnd^2`
+> *grid-sized* fields -- what this walk exists to avoid -- for 15,558,912 B against the old
+> `lax.map`'s 9,947,664 and `batch = 1`'s 2,593,296. It is **worse than what it replaced**.
+> So the walk is pinned at `batch = 1` on every platform, as the `lax.map` had it, and
+> `DEFUMAT_BAND_BATCH` does not reach it.
 
 
 **Site.** `defumat/tddft/spinchi0.py:472-473`:
