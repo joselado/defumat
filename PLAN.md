@@ -13293,6 +13293,14 @@ canted PBE state converges in `pw.x`, not a change here.
 `fsm` can hold it is still open, and the reason is that this cell cannot answer it -- `fsm`
 fails at `q = 0` too, where there is no rotated frame at all.**
 
+> **Superseded by P84, and the cause was the fixture rather than the code.** Every run in
+> this section used `h-fcc-spiral-scan.in` while it seeded `starting_magnetization = 1.0`,
+> a *fully saturated* hydrogen. On the corrected 0.9 seed the same `fsm` run **holds its
+> target** (residual -4.5e-4 against a 1e-3 tolerance, 5 iterations), so E(c)'s answer is
+> yes. What survives below is the physics and not the verdict: this cell is a marginal
+> magnet, and a target away from the bare moment still overshoots to the other side. Read
+> the table below as "what a saturated seed does", which is what it measured.
+
 What is settled. A spiral SCF does not refuse `constrained_magnetization` or a field, and the
 quantity a constraint acts on is the **rotated-frame** magnetization -- the right object for a
 helix, and documented nowhere near `constrained_magnetization` before now.
@@ -14005,6 +14013,41 @@ per site**, against a collapse to 179.5 degrees in 14 iterations with no constra
 regression test's rewrite now goes the other way, and the unit test that needs
 `'atomic texture'` builds the text itself -- a scheme that cannot converge is fine in a test
 that is about a crash in the first potential build, and is not fine in a committed input.
+
+**A fourth consequence, found by a test that stopped failing: the seed also decided
+P80's `fsm` verdict.** `tests/unit/test_fsm_residual.py` drives
+`constrained_magnetization = 'fsm'` on this same `h-fcc-spiral-scan.in` at `q = 1/2`, with
+the target at the cell's own `q = 0` moment, and P80 recorded that **this cell cannot be
+held** -- `m(B)` is nearly a step, the secant overshoots, and E(c) ("can a spiral be held by
+a constraint?") was left open because the fixture could not answer it. On the corrected seed
+the constraint is **met**: residual **-4.5e-4** against `FSM_TOLERANCE = 1e-3`, converged in
+5 iterations. Nothing in `fields.py` changed. A run that starts *saturated* has nowhere to go
+but the other saturated branch, which is what made `m(B)` read as a step; started below
+saturation, the secant holds it.
+
+So **E(c) now has a positive answer on the cell that was said to be unable to give one**: a
+spiral can be held by a feedback constraint, and the recorded failure was the seed. P80's
+physics is otherwise intact and is worth keeping separate from its verdict -- the cell *is*
+a marginal magnet, and a target away from the bare moment still overshoots badly. Measured
+at `conv_thr = 0.2`, `max_iterations = 6`, which lets the density pass while the field is
+still moving:
+
+| target (mu_B) | converged | `m_x` | residual | guard fires |
+|---|---|---|---|---|
+| 0.027282 (the `q = 0` moment) | **yes** | +0.026834 | **-4.5e-4** | no |
+| 0.10 | no | **-0.267847** | -0.368 | yes |
+| 0.30 | no | -0.006591 | -0.307 | yes |
+| 0.60 | no | +0.075665 | -0.524 | yes |
+
+**And the way this was found is the finding.** The guard test did not start failing because
+the code broke; it failed because its fixture **got better**, so the case it fed the guard
+stopped tripping it. That is this project's "a check whose null result cannot be told from a
+pass" with the sign flipped -- had the assertion been written the other way round, or had
+the test only checked that *some* warning appeared, the fixture would have gone quiet and
+the guard would have been unprotected with every test green. It now carries a target that
+cannot be reached whatever the seed does (0.10, three hundred times the tolerance and on the
+*other side*), and asserts the residual exceeds a hundred tolerances rather than one, so a
+residual drifting under the threshold cannot make it pass again.
 
 **What is outstanding, and both items are the same shape as what was fixed.**
 

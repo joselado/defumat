@@ -332,8 +332,19 @@ converts the feature from a set of identities to an external comparison, is the 
 that catches an error the five identities share, and supplies the missing
 `PERFORMANCE.md` pair in the same run.
 
-**(c) is run. A spiral accepts a constraint; whether `fsm` can *hold* one is still open,
-because this cell cannot answer it — `fsm` fails at `q = 0` too. P80.**
+**(c) is closed, and the answer is yes. A spiral accepts a constraint and `fsm` holds one;
+what P80 measured as "this cell cannot answer it" was the cell's saturated seed. P84.**
+
+On `h-fcc-spiral-scan.in`'s corrected `starting_magnetization = 0.9`, the same `fsm` run at
+`q = 1/2` reaches its target to **-4.5e-4** against `FSM_TOLERANCE = 1e-3`, converged, in 5
+iterations. Nothing in `fields.py` changed between the two verdicts. A run seeded at full
+saturation has nowhere to go but the other saturated branch, which is what made `m(B)` read
+as a step. **Everything below is still true of a saturated seed and is kept for that** — the
+cell is genuinely a marginal magnet and a target away from the bare moment still overshoots
+to the other side (target 0.10 lands at **-0.268**) — but it is no longer the verdict on
+whether a spiral can be held. The iron pairing below is still the better fixture and is
+still worth doing; it is now an improvement rather than the only way to get an answer.
+
 
 Settled: a spiral SCF does not refuse `constrained_magnetization` or a field, and the quantity
 the constraint acts on **is** the rotated-frame magnetization, which is the right object for a
