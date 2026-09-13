@@ -13389,6 +13389,163 @@ that exist *because* `starting_magnetization` is per species and cannot state a 
 all. The tool would have stopped at the first one with a parser error reading like a broken
 input file. Those inputs are now skipped by name, saying why.
 
+### P81 -- A magnet with spin-orbit coupling had a ground state and no excitations of it. ✅ DONE (the solve).
+
+`defumat/response/sternheimer.py`, `scf/driver.py`, `system/symmetry.py`,
+`response/efield.py`. `MAGNETISM-NEXT.md` item A, "the largest item here by consequence":
+everything *above* the ground state was refused for a noncollinear run -- phonons, Born
+charges, the dielectric constant, LO-TO splitting, Raman, the strain response, the elastic
+constants, electrostriction, the piezoelectric tensor, and the cheap route to the
+magnetoelectric tensor, which does six SCF runs and a central difference and says in its own
+docstring that it would rather not.
+
+**The refusal overstated its own reason, and the audit said so.** It named `incdrhoscf_nc`
+and `set_int3_nc` as "a second implementation rather than a spin axis on this one". The
+*solve* never had a spin axis to lose: a spinor is **one** vector of length `2 npwx` and
+`SpinorHamiltonian` applies to it, so the operator, the projector, the preconditioner and
+the CG were already the right shape -- `sternheimer.py:981` even read
+`degeneracy = 1 if calculation.noncolin else 2` from behind a blanket refusal, which is a
+striking thing to find there. This is the third time a refusal has been inherited without
+checking which machine it belonged to (P35's left P54 marked impossible; P20's `ns_nc` one
+closed the DFT+U continuation for fourteen phases after P62b removed the blocker).
+
+**Two things were genuinely missing, and both are outside the solve.**
+
+* **The density it feeds back.** `density_at` hardcoded the collinear `sum_band`, so an
+  induced *magnetization* did not exist at all. It routes to `spinor_sum_band` now, with
+  `state_fft_index` and the leading axis of 1 that a spinor's own spin axis makes
+  redundant -- the same split `Calculation.density` makes.
+* **The perturbation.** A change in the potential for a spinor is a 2x2 matrix
+  `dv_0 I + dm . sigma` at each point of the grid, not one scalar potential per channel.
+  The Pauli algebra is **not written a second time**: the branch calls
+  `SpinorHamiltonian._multiply`, which is `vloc_psi_nc`'s own expression, because a sign in
+  it is invisible in every shape check and every convergence test.
+
+`set_int3_nc` is real and stays refused by name: for an ultrasoft or PAW dataset `dD_ij` is
+a 2x2 matrix in spin space that then has to be sandwiched between the spin-orbit
+coefficients, where a norm-conserving dataset has **no** `dD` at all.
+
+**Three QE-free numbers, on committed cells** (`tests/regression/test_spinor_response.py`,
+9 tests, 16m15s, peak RSS 1338 M).
+
+**1. `chi_0` against a central difference of the density**, on `h-chain-90deg.in` -- four
+hydrogens, each moment turned 90 degrees from the last, `nspin_mag = 4`, `nosym`, a metal.
+Relative to the largest response, at a step of 3e-4:
+
+| probe `(n, m_x, m_y, m_z)` | relative error |
+|---|---|
+| `(1, -0.5, 0.3, 0.7)` | 7.4e-6 |
+| `(1, 0, 0, 0)` -- charge only | 7.7e-6 |
+| `(0, 0, 0, 1)` -- Zeeman along z | 1.2e-6 |
+| `(0, 1, 0, 0)` -- Zeeman along x | 2.1e-6 |
+
+That is the level the collinear cases reach and it is the difference's own truncation.
+
+**Four probes rather than one, and that is the measurement rather than a sweep.** `chi_0`
+is *not* block-diagonal in spin once the ground state carries a texture, because the two
+spinor components share the states being mixed -- and the cross terms are exactly what the
+spinor density's off-diagonal `conj(up) down` carries, so **a charge-only probe would pass
+with that term wrong**. What the cross terms come out as is readable physics rather than a
+tolerance:
+
+| probe | induced `n` | `m_x` | `m_y` | `m_z` |
+|---|---|---|---|---|
+| charge | 0.732 | 0.175 | 0.175 | **7.3e-6** |
+| Zeeman along z | **7.3e-6** | 1.0e-5 | 9.0e-6 | 0.918 |
+| Zeeman along x | 0.176 | 0.938 | 1.3e-3 | 9.6e-6 |
+
+The moments lie in the `xy` plane, so a charge perturbation moves them *in that plane* and
+not out of it; a field along `z` is perpendicular to every moment, so to first order it
+tilts them out of plane and moves no charge at all. **The null is checked against its own
+positive control**, which is the discipline the trap list asks for: the same field applied
+*in* the plane does move charge (0.176), so the zero is a statement about the texture
+rather than a channel wired to zero.
+
+**2. The factor of two in the spin sum.** `si-epsilon.in` run as a scalar and as a
+**spinor with no magnetization** -- the same input file with one line added, so the two
+sides cannot drift -- is the same physics on a doubled space: four bands of two electrons
+against eight of one. The totals agree to **1.8e-15 Ry** and `chi_0` to **1.3e-9**, which
+is the CG threshold rather than round-off, the two solves having converged their own `dpsi`
+to 1e-11 independently. Every `KPoints` constructor applies the unpolarized `degspin` and a
+spinor band holds one electron, so this bookkeeping reaches the k-point weights, the
+occupied-band count and the density; a factor of two anywhere along it is 100 per cent
+here. The weight convention is pinned one level lower too: rebuilding the converged density
+from the same weights the finite difference uses reproduces the SCF's own to **5.3e-23**.
+
+**3. The landmine, which was on nobody's list and is the finding of the phase.**
+`Calculation.symmetrize_directional` applied a plain cartesian rotation to the
+perturbation-direction axis and carried every `nspin_mag` channel as a scalar. Three of
+those channels are the **magnetization**, which is an *axial* vector: it carries `det(R)`
+and the time-reversal sign. `symmetrize_spin_vector_density` is the double rotation --
+polar on the perturbation index, axial on the spin index -- and it reduces to the old one
+*exactly* (0.0) when the spin rotation is the identity.
+
+Measured on the `h4-cycloid-90` / `h4-cycloid-90-nosym` pair (3 k-points under 4 operations
+against the closed 4-point grid), as a fraction of the largest response on the free run:
+
+| route | error against the whole zone |
+|---|---|
+| the axial rule | **2.6e-5** |
+| every channel as a scalar -- what was there | **0.665** |
+| no symmetrisation at all | 9.0e-4 |
+
+**The wrong rotation is not a worse average. It is 66 per cent, and it is worse than doing
+nothing**, because the group's mirrors have `det(R) = -1` and rotating the magnetization
+without that sign cancels the very components it should be averaging. Nothing downstream
+could see it: the result stays real, stays smooth, and satisfies every sum rule that is a
+sum over atoms.
+
+**The probe for that comparison has to be covariant, and an arbitrary one is not.** Three
+perturbations labelled by a direction can only be symmetrised if they *transform* as a
+vector under the group; one plane wave per direction does not, and symmetrising such a set
+compares the responses to two different perturbations -- which fails for **both** routes and
+so reads as a null rather than as a verdict. The probe is `d(vltot)/dr_a`, the gradient of
+an invariant scalar, which is covariant by construction.
+
+**Two refusals moved the other way in the same pass**, and both were found by asking what
+the new branch could reach that the old one could not.
+
+* `_require_a_gap_at_the_cut` -- which refuses a filling whose boundary lands inside a
+  degenerate multiplet, because which member the eigensolver returned is arbitrary and
+  `chi_0` is then 100 per cent wrong with the CG converging normally (P45's measurement on
+  the oxygen atom) -- was gated on there being **more than one** occupied-band count, i.e.
+  on `nspin = 2`. A spinor has exactly one, so it ran straight through. And a spinor is
+  where the case is *commonest* rather than rarest: spin-orbit coupling splits a shell into
+  `j` multiplets of `2j + 1` states, so any open-shell atom with an odd number of electrons
+  in its outer `j` shell cuts one, which is an ordinary heavy element rather than a
+  contrived cell.
+* `Calculation.symmetrize_displacement` -- the phonon path -- carries the **same** axial
+  landmine with one more index (the atom permutation). It has no number, so it is **refused
+  by name for `nspin_mag = 4`** rather than fixed blind: a symmetriser that has never been
+  checked against the whole zone is worse than a refusal, and the 0.665 above is what that
+  costs.
+
+**What is outstanding, and the honest state is narrower than the numbers suggest.** What is
+validated is the **solve**; every assembly above it is still refused, because every consumer
+calls the guard without the new opt-in. **No user-facing quantity changes in this phase** --
+`docs/features.tex`'s amber boxes are untouched and correct as they stand. The order the
+rest goes in:
+
+* **the screening kernel at the nodes of `|m|`.** `chi_0` is the *bare* response and
+  nothing here touches `dv_of_drho`, which is one `jvp` of `v_of_rho`'s `nspin_mag = 4`
+  branch and rotates into a local frame through `m/|m|`. A 90-degree texture has grid
+  points where `m` passes through zero, which is the `abs` trap one derivative further out
+  and is what stopped the collinear magnetic response until P70. This gates every
+  self-consistent consumer and nothing else does. `_require_a_finite_kernel` now names the
+  spinor singular set -- the saturated points `|m| >= n` and the minimum of `|m|` -- where
+  before it could only diagnose `(up, down)`.
+* **the dielectric tensor**, with the identity one level up: silicon as a spinor with no
+  magnetization must give the scalar `eps_infinity`, which is what P45 did for `nspin = 2`.
+* **an external number.** `ph.x` 7.4.1 supports noncollinear magnetism for phonons -- its
+  refusals are PAW with magnetism, `noncolin` with Raman or the electro-optic tensor,
+  `i_cons`, and el-ph with `domag` and `lspinorb` -- so the `Gamma` dynamical matrix of
+  `h-chain-90deg.in` is reachable, exercises the metal branch and the Fermi shift, and
+  supplies the `PERFORMANCE.md` pair in the same run. `test-suite/ph_Ni_nc_spinorbit_mag`
+  is a committed noncollinear spin-orbit phonon benchmark and is a *late* target rather
+  than a first one: it is ultrasoft, metallic, PBE and at finite `q`, which is every hard
+  regime at once.
+* **ultrasoft and PAW**, which is `set_int3_nc` and nothing else.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.
