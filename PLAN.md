@@ -14205,7 +14205,7 @@ state -- and the two failure modes are different enough to name what each needs,
 robust magnet for the first and an off-diagonal susceptibility for the second.
 
 
-### P86 -- The spin spiral's first external comparison: the moments agree to 4 per cent and the energy difference is out by 6.6x. ⏳ MEASURED AND UNEXPLAINED.
+### P86 -- The spin spiral's first external comparison: the moments agree to 4 per cent at three wavevectors and the energy difference is out by a factor that itself moves, 6.6 to 5.3. ⏳ MEASURED AND UNEXPLAINED.
 
 `tests/data/elk/h_chain_spiral/`, `tests/data/qe/h-chain-spiral-elk.in`.
 `MAGNETISM-NEXT.md` item E(a): "Spin spirals have no external number of any kind" -- five
@@ -14305,7 +14305,9 @@ converged too (both criteria met), so there is an `E(q) - E(0)`:
 
 **The moments agree to 4 per cent at both wavevectors and the energy difference is out by
 6.6x.** That combination is the finding: the two codes converge to what is recognisably the
-same magnetic state and disagree about what turning it costs.
+same magnetic state and disagree about what turning it costs. (A third wavevector has since
+been run and it sharpens this: the factor is **not** constant -- see the `q = 1/2` bullet
+below.)
 
 **The obvious explanation is dead, and it was killed with a number rather than an
 argument.** Elk carries `bfieldc = 0.002 Ha = 0.004 Ry` for the whole run and defumat
@@ -14325,19 +14327,64 @@ Neither is a factor of 6.6. **The held field is not the cause.**
 
 **What is outstanding, and it is now a disagreement rather than a missing number.**
 
-* **Locate the factor of 6.6.** Three candidates, none tested, cheapest first. **Basis
-  convergence on both sides**: `rgkmax = 7` is Elk's default and a spiral needs two `G+k`
-  sets, while defumat is at `ecutwfc = 25`; raise each and see which number moves. **The
-  k-grid**, which is `1 1 4` -- extremely coarse, and at `q != 0` the two spin channels sit
-  on *shifted* spheres, so the sampling error need not be the same at `q = 0` and
-  `q = 1/4`. And **the field convention**, which the table above hints at without settling:
-  defumat's moment responds much more strongly to "the same" field (0.633 against Elk's
-  0.538 at `q = 0`), so the two codes may not be applying the same field at all -- Elk's
-  `bfieldc` enters as `(g_e/4c) sigma.B` in Hartree atomic units where this code's `B_field`
-  is a potential shift in Ry, and nobody has checked the factor.
-* **Elk at `q = 1/2`**, which is running and would say whether the discrepancy grows with
-  `q` -- a ratio that stays at 6.6 across the scan points at an overall scale factor, and
-  one that moves points at the physics.
+* **Locate the factor. Two candidates left of three, and the k-grid is the one struck
+  off** (the sweep is two bullets down). **Basis convergence on both sides** is now the
+  cheapest untested one: `rgkmax = 7` is Elk's default and a spiral needs two `G+k` sets,
+  while defumat is at `ecutwfc = 25`; raise each and see which number moves. The `ecutwfc`
+  half is a defumat-only sweep of the same shape as the k one and costs minutes. And **the
+  field convention**, which the field table above hints at without settling: defumat's
+  moment responds much more strongly to "the same" field (0.633 against Elk's 0.538 at
+  `q = 0`), so the two codes may not be applying the same field at all -- Elk's `bfieldc`
+  enters as `(g_e/4c) sigma.B` in Hartree atomic units where this code's `B_field` is a
+  potential shift in Ry, and nobody has checked the factor. **A third has been added by the
+  `q = 1/2` run**: whatever it is, it is not an overall scale, so a single wrong constant
+  cannot be the whole story and the two `E(q)` curves differ in shape.
+* ~~**Elk at `q = 1/2`**~~ -- **run, and the ratio moves.** 42 loops, both criteria met,
+  total energy `-0.475911217903` Ha and moment `0.6380129665` mu_B. So there are three
+  points and the question this bullet asked has an answer:
+
+  | `q_3` | defumat | Elk | Elk/defumat | \|m\| defumat | \|m\| Elk | moment |
+  |---|---|---|---|---|---|---|
+  | 0 | 0 | 0 | -- | 0.514889 | 0.537571 | +4.41% |
+  | 1/4 | -20.712 meV | -136.294 meV | **6.581** | 0.615140 | 0.638003 | +3.72% |
+  | 1/2 | -50.214 meV | -265.206 meV | **5.282** | 0.611330 | 0.638013 | +4.36% |
+
+  **The moments agree to 4 per cent at all three wavevectors and the energy ratio moves by
+  20 per cent between two of them**, so by this bullet's own criterion it is not an overall
+  scale factor -- a units error, a `g`-factor, a double-counted spin channel -- and the two
+  curves differ in *shape*: `E(1/2)/E(1/4)` is **2.42** here against Elk's **1.95**.
+
+  **That promotes the k-grid to the leading candidate, for a reason specific to these two
+  points.** The grid is `1 1 4`, so the spacing along `z` is 1/4, and a spiral puts the two
+  spin channels on spheres shifted by `+-q/2`. At `q = 1/2` that shift is 1/4 -- one whole
+  grid spacing -- so the shifted spheres land back **on** grid points; at `q = 1/4` it is
+  1/8 and they land **between** them. So `q = 1/4` is sampled worse than `q = 1/2` and both
+  worse than `q = 0`, which is the shape of a `q`-dependent error rather than a constant
+  one, and it is the *same* asymmetry on both sides of the comparison.
+* **That candidate is now dead, and it was killed on the cheap side.** The defumat scan run
+  at `1 1 4/8/16/32`, everything else identical:
+
+  | `nk` | `E(1/4) - E(0)` | `E(1/2) - E(0)` | Elk/defumat at 1/4 | at 1/2 | \|m\|(0) |
+  |---|---|---|---|---|---|
+  | 4 | -20.712 meV | -50.214 meV | 6.581 | 5.281 | 0.514889 |
+  | 8 | **-22.046** | **-52.255** | 6.182 | 5.075 | **0.489629** |
+  | 16 | -22.033 | -52.235 | 6.186 | 5.077 | 0.490013 |
+  | 32 | -22.020 | -52.223 | 6.189 | 5.078 | 0.489805 |
+
+  **Converged at `nk = 8` and flat to 0.03 meV out to 32**, so the `1 1 4` grid costs 6 per
+  cent at `q = 1/4` and 4 per cent at `q = 1/2` -- real, worth fixing in the fixture, and
+  nothing like a factor of five. The ratio survives full k-convergence at **6.19 and 5.08**,
+  and the 20 per cent spread between them survives with it. The specific asymmetry argued
+  above (`q = 1/4` sampled worse than `q = 1/2` because its shifted spheres fall between
+  grid points) is real and is worth only that 6 per cent.
+* **One thing the k-sweep did move, and it is a caution about the headline.** The `q = 0`
+  moment goes from 0.514889 at `nk = 4` to **0.489805** converged -- 5 per cent -- while the
+  two spiral moments do not move at all. So the "moments agree to 4 per cent" line is a
+  statement about the **matched** `1 1 4` grid and is partly luck at `q = 0`: against Elk's
+  own `nk = 4` value the converged defumat moment is **+9.75** per cent out there, against
+  +3.26 and +4.41 at the two spiral points. The matched comparison is the honest one, and
+  the way to keep it honest is to raise `ngridk` on **both** sides, which is an Elk run that
+  has not been done.
 * **The `PERFORMANCE.md` pair.** It must be `OMP_NUM_THREADS=1` under `taskset` on an idle
   machine (`PIN=1` in the driver script), and every Elk run here was threaded and beside
   two other jobs. Netlib is slow enough that this matters: ~90 s per SCF loop pinned
