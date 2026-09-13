@@ -1792,18 +1792,28 @@ lock or temporary files in `~/.cache/defumat/jax` (19,362 entries, 1.5 GB), and 
 process holds no open file in it. That leaves a deadlock in XLA's CPU thread pool, which
 nothing in this project can fix.
 
-**What was done about it.** `symmetry_residual` took **four** separate host syncs around one
-jitted symmetrisation -- `float()` on each norm as it went -- and now takes **one**, both
-ratios computed on device and returned as a pair (`_relative_residuals`). That is a smaller
-target rather than a fix, and it is worth having on its own: a diagnostic should not block
-four times.
+**What fixed it, after one wrong attempt.** The first try reduced `symmetry_residual`'s
+**four** host syncs to one -- `float()` on each norm as it went became a single jitted kernel
+returning both ratios. Fewer syncs was the right instinct and the wrong fix: it **deadlocked
+the same way** on the next gate run, at the same 74%, moving only from the second test to the
+first. So the trigger is dispatching *any* jitted op at that point, not the number of
+transfers.
 
-**What is still open.** Whether the single-sync form still deadlocks, and why this call site
-of all of them. Two things would help the next occurrence and neither is done:
-**`faulthandler_timeout` belongs in `pyproject.toml`'s pytest config** so a stall dumps a
-stack instead of costing a run, and a note in `CLAUDE.md`'s memory section that a killed JAX
-process leaves nothing behind but that *repeated* `kill -9` of JAX processes was in the
-session's history when this appeared.
+The ratios are now plain **NumPy on host arrays** (:func:`_relative_residual`), which removes
+the dispatch entirely, and the gate then ran **1901 passed, 176 skipped, 0 timeouts, in
+6m58s** -- its normal time, against the 30-plus minutes the hung runs were taking before they
+were killed. The symmetrisation itself stays compiled, because it is the same kernel the SCF
+runs every iteration. **Keep it on the host**: it is a once-per-run diagnostic on two arrays
+already in hand, so a kernel buys nothing and costs this.
+
+**`faulthandler_timeout = 600` is now in `pyproject.toml`**, which is what turned four
+anonymous kills into a stack trace in one run.
+
+**What is still open** is why that call site of all of them -- a small norm kernel dispatched
+immediately after a jitted symmetrisation -- parks every worker thread, and whether anything
+else in the package dispatches in the same pattern. Nothing else is known to hang, and this
+was found rather than looked for, so the honest answer is that the underlying JAX behaviour is
+not understood.
 
 **The recipe, which is the part to keep.** A stalled JAX process and a busy one look
 identical from outside: both sit in `futex_wait_queue` on the main thread, because that is
