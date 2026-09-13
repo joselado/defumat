@@ -175,7 +175,7 @@ drive any of this and is what the examples below use.
 | **Tensor moments of the correlated shell** — the occupation matrix in an orthonormal basis of multipoles, where the charge, the spin moment and $\mathbf{L}\cdot\mathbf{S}$ are single components; and **holding one of them fixed**, which selects an orbital ordering the field would not find on its own | `TENSOR_MOMENTS` card, `tensor_moment_penalty` | | ✓ |
 | **Around-mean-field double counting** — the alternative to the fully-localised limit: the shell's mean occupation is subtracted before the interaction, so a uniformly filled shell is corrected by exactly nothing | `hubbard_double_counting = 'amf'` | | ✓ |
 | **Slater integrals from the orbital** — the interaction computed from the manifold's own all-electron radial function with a screened Coulomb kernel, so one chosen $U$ fixes $F^0$, $F^2$, $F^4$ and $J$ instead of an atomic table doing it | `hubbard_slater = 'yukawa'`, `LAMBDA` on the `HUBBARD` card | | ✓ |
-| **Holding a texture with a field instead of a penalty** — Elk's fixed-spin-moment scheme resolved by atom: one constraining field per site, driven by that site's own error, fixing either the full moment vector or its **direction alone**. A penalty leaves a residual force at convergence by construction; a converged feedback field is a genuine stationary point of the unconstrained functional under that field, and the direction-only variant has no $1/|m|$ in it at all, where the direction-only *penalty* does | `constrained_magnetization = 'atomic fsm'` and `'atomic fsm direction'` with a `STARTING_MOMENTS` card, `fsm_update` | | ✓ |
+| **Holding a texture with a field instead of a penalty** — Elk's fixed-spin-moment scheme resolved by atom: one constraining field per site, driven by that site's own error, fixing either the full moment vector or its **direction alone**. A penalty leaves a residual force at convergence by construction; a converged feedback field is a genuine stationary point of the unconstrained functional under that field, and the direction-only variant has no $1/|m|$ in it at all, where the direction-only *penalty* does | `constrained_magnetization = 'atomic fsm'` and `'atomic fsm direction'` with a `STARTING_MOMENTS` card, `fsm_update` | | ✓ |²⁰
 | **Spin spirals** at any wavevector, without a supercell. Needs `nosym`; ultrasoft, PAW and spin-orbit coupling are refused | `spiral_q`, `defumat spiral` | | ✓ |
 | **Relaxing the spiral wavevector** down $\mathrm{d}E/\mathrm{d}\mathbf{q}$ to the ground-state pitch | `relax_spiral_q`, `Calculator.get_spiral_relaxation` | | |
 | **$E(\mathbf{q})$ and the Heisenberg exchange constants** — a spiral scan's energy against its wavevector, fitted over neighbour shells to $E(\mathbf{q}) - E(0) = m^2 \sum_{\mathbf{R}} J(\mathbf{R})\,[1 - \cos(\mathbf{q}\cdot\mathbf{R})]$, which is how a spiral scan becomes a spin model; the fit residual says how well a Heisenberg model describes the surface. $E(\mathbf{q})$ can be accumulated from $\mathrm{d}E/\mathrm{d}\mathbf{q}$ instead of read off the energies, which removes the steps a rebuilt plane-wave basis puts in the curve | `run_spiral_scan`, `heisenberg_exchange`, `Calculator.get_spiral_scan` | | |
@@ -333,6 +333,15 @@ Where the tick is qualified:
   corrugation is quantised to the grid spacing where this one is interpolated
   between scan planes and takes the plane's own normal.
 
+- ²⁰ **Transcribed and not yet shown to win.** The argument for it is sound
+  and the implementation is checked against Elk's own routines, but on the only
+  cell it has been measured on it does not converge: the 120-degree hydrogen
+  pair rings with a *growing* envelope over 2000 iterations at half Elk's
+  default gain, where the vector penalty holds the angle to 0.576 degrees per
+  site in 38. That cell is unconstrained barely magnetic at all (0.000235
+  $\mu_B$), so its $m(B)$ is nearly a step and no fixed-gain controller is
+  stable against it. A robust magnet is the cell this needs; `PLAN.md` P85 has
+  the trajectory and names it.
 - ¹⁹ `pw.x` converges a noncollinear spin-orbit run at a stated moment
   direction and prints its total energy, so the quantity is reachable — by
   running it once per direction and subtracting by hand. There is no routine:

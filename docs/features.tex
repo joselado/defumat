@@ -1086,6 +1086,19 @@ moment and can never lengthen or shorten one --- and note what that buys: it has
 no $1/|\mathbf m|$ anywhere in it, where the direction-only \emph{penalty} above
 has one in its gradient and runs away.
 
+\textbf{It is transcribed and it is not yet shown to win.} The argument above is
+sound and the implementation is checked against Elk's own routines, but on the
+two-hydrogen cell measured below it does not converge at all: at half Elk's
+default gain the site residual rings over 2000 iterations with an envelope that
+\emph{grows}, from $0.15$ to between $0.3$ and $0.66\,\mu_B$, while the inner
+calculation's own accuracy swings between $10^{-6}$ and $6\times 10^{-2}$. That
+is an unstable loop rather than a slow one. The cause is the cell rather than
+the scheme: left alone this pair carries $0.000235\,\mu_B$, so its $m(B)$ is
+nearly a step and no fixed-gain controller is stable against a nearly vertical
+response --- and the cell was chosen for a \emph{penalty}, which does not care.
+Use a robust magnet, and read the vector penalty's table below as the answer
+until one has been measured.
+
 \textbf{\code{lambda} means two different things three orders of magnitude
 apart, and this is the trap of the family.} For a \emph{penalty} it is a
 stiffness, and 1 to 10 is the useful range. For a \emph{feedback} scheme it is

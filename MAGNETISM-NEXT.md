@@ -74,6 +74,7 @@ end-to-end test caught it. An array-algebra test passed either way.
 | a caller that wrote `scf.density` lost the fact that it converged | `SCFResult.require_converged`, the one implementation, with `Calculator._ground_state` wrapping it | three tests reported a Goldstone residual of 0.3958 that was an unconverged ground state, not a defect in the susceptibility (P84) |
 | a committed input asked for a scheme the code warned does not converge, and said it did | `h2-texture-120.in` is `'atomic'` at `lambda = 10`, and neither test that cites it rewrites away from a stale literal any more | 38 iterations, 121.13 degrees, 0.576 per site (P84) |
 | the anisotropy could be computed only at frozen density, so PAW and DFT+U were out | `run_relaxed_anisotropy`: one self-consistent run per direction, differencing **total** energies, which hands nothing over and so has no handoff to refuse for | 0.447 meV on tetragonal cobalt against the theorem's **free** energy 0.552 and its band sum 1.235 -- the relaxed route independently says the free energy is the right object (P87) |
+| a held texture's residual angle was a property of penalties with no alternative | Elk's per-atom feedback field, both variants, transcribed and unit-tested -- but **measured to ring** on the cell it was meant to beat | 2000 iterations at half Elk's gain with a *growing* envelope, against the penalty's 0.576 deg in 38; the cell's `m(B)` is nearly a step (P85) |
 | the relaxed route's precision was an argument, not a number | it is a number: an identity control with the coupling switched off, scanned in `conv_thr` | **0.011 meV** and it plateaus -- 1e-13 equals 1e-12 to 2 per cent while the density residual falls another order (P87) |
 
 ---
@@ -175,6 +176,28 @@ candidate as this code's exact derivative; the tie-breaker is an independent sum
 route on the same cell, which shares only the ground state.
 
 ### B. Elk's per-atom feedback field, so a held texture is exact rather than nearly [10, remaining half]
+
+**P85 built it and measured it, and the measurement is negative on this cell. Read
+`PLAN.md` P85 before picking this up.** `'atomic fsm'` and `'atomic fsm direction'` are
+Elk's `fsmtype = 2` and `-2`, transcribed with `r3vo`, unit-tested against both routines,
+wired through the driver and refused at input where they cannot work. What they do **not**
+do is beat the penalty: on the 120-degree hydrogen pair the site residual rings over 2000
+iterations with a *growing* envelope, at half Elk's default gain, where the vector penalty
+holds 0.576 degrees per site in 38 iterations.
+
+**The cause is the cell and it was predictable from this file.** Left alone that pair
+carries |m| = 0.000235 mu_B, so its `m(B)` is nearly a step -- which is exactly what item
+E(c) below records for the *other* hydrogen cell, where `fsm` also could not hold a target.
+No fixed-gain controller is stable against a nearly vertical response, and the cell was
+chosen for a penalty, which does not care.
+
+**So the remaining work is a cell, not code**, and it is the same cell Q5 asks for: a
+two-atom canted **iron** case. Building it serves both items at once and is the thing to do
+first. The secant update on a long budget is the one measurement still owed on the
+hydrogen cell itself -- every secant row so far had at most 14 field steps, because the
+iteration budget is shared with the inner SCF.
+
+**The original entry follows.**
 
 **Phase.** P79 measured that a *penalty* holds a 120° state to 0.55° per site at the largest
 `lambda` the SCF tolerates. A penalty leaves a residual force at convergence by construction

@@ -14022,6 +14022,114 @@ that is about a crash in the first potential build, and is not fine in a committ
   `require_converged`, which is one line each.
 
 
+### P85 -- Elk's per-atom feedback field: transcribed, and measured to ring on the cell it was meant to beat. ⏳ IMPLEMENTED AND MEASURED; the verdict is negative on this cell and the cell is the wrong one.
+
+`defumat/scf/fields.py`. `MAGNETISM-NEXT.md` item B: "Elk's per-atom feedback field, so a
+held texture is exact rather than nearly". The claim to beat was P79's -- the 120-degree
+hydrogen pair held to **0.55 degrees per site in 38 iterations** by the vector penalty at
+`lambda = 10`.
+
+**Why it should win, and the argument is still right.** A penalty is a term added to the
+energy, so at convergence it is still pushing: the residual angle *is* that push and no
+choice of `lambda` removes it. Elk's fixed-spin-moment scheme drives an external field
+until the moment sits where it was asked to, and a converged feedback field is a
+stationary point of the **unconstrained** functional under that field. `bfieldfsm.f90`'s
+`fsmtype = 2` and `-2` are that scheme resolved by atom, and they are here as
+`'atomic fsm'` and `'atomic fsm direction'`.
+
+**The direction-only variant is the one with real physics in it.** Elk finishes its update
+with `r3vo`, projecting the field perpendicular to the target, so the field can turn a
+moment and never lengthen one. That means it contains **no `1/|m|` anywhere**, where the
+direction-only *penalty* has one in its gradient and runs away -- and the difference is
+structural rather than a matter of tuning. It is also why the feedback schemes' potential
+is safe: `constraint_energy` is identically zero for all of them, so the potential comes
+from `field_energy = -B.m`, which is *linear* in the magnetization and has no division in
+it at all.
+
+**Five places tested `constraint == "fsm"` by name** and each would have been a new scheme
+silently behaving as though it had no constraint. They read a `FEEDBACK` set now. This is
+the `ATOM_RESOLVED` trap that this same file already documents, met a second time in the
+same file.
+
+**`lambda` means two things three orders apart, and that is the trap of the family.** For a
+penalty it is a stiffness and 1 to 10 is the range; for a feedback scheme it is Elk's
+`taufsm`, a gain multiplying a moment error in Bohr magnetons to give a field in Rydberg,
+whose Elk default is 0.01. The default now follows the family and a penalty-sized value is
+warned about by name. Measured at `tau = 0.2`, twenty times Elk's default: 200 iterations
+without converging and the moments driven to **0.82 mu_B** against a target of 0.26.
+
+**The measurement, and it is negative.** The 120-degree pair, `conv_thr = 1e-8`, targets at
+0.26 mu_B:
+
+| scheme | update | tau | converged | iterations | pair angle | per site |
+|---|---|---|---|---|---|---|
+| (none) | -- | -- | yes | 14 | 179.51 deg | 142.41 deg |
+| `atomic` (penalty) | -- | 10 | **yes** | **38** | **121.13 deg** | **0.576 deg** |
+| `atomic fsm` | elk | 0.2 | no | 200 | 113.40 | 5.195 |
+| `atomic fsm` | secant | 0.2 | no | 200 | 129.59 | 133.200 |
+| `atomic fsm direction` | elk | 0.2 | no | 200 | 81.06 | 88.808 |
+| `atomic fsm direction` | secant | 0.2 | no | 200 | 178.51 | 138.642 |
+| `atomic fsm direction` | elk | 0.05 | no | 200 | 160.11 | 86.342 |
+| `atomic fsm` | elk | 0.01 | no | 200 | 148.09 | 158.689 |
+| `atomic fsm` | elk | 0.005 | no | 200 | 120.40 | 31.099 |
+| `atomic fsm` | elk | 0.005 | no | **2000** | 148.62 | 23.425 |
+
+**The 2000-iteration row is the one that settles it, because the endpoint is not the
+evidence -- the trajectory is.** Every 200-iteration row could have been "not converged
+*yet*": the code's own docstring says Elk's update needs 1380 iterations to damp on
+`fe-fsm`, since it nudges the field while the density is still moving. So the site
+residual was printed every 80 iterations out of 2000:
+
+```
+   1: 0.151    400: 0.037    800: 0.296   1200: 0.260   1600: 0.154
+  80: 0.062    480: 0.286    880: 0.281   1280: 0.462   1760: 0.658
+ 160: 0.201    560: 0.128    960: 0.081   1360: 0.129   1840: 0.488
+ 240: 0.334    640: 0.252   1040: 0.265   1440: 0.450   1920: 0.168
+ 320: 0.228    720: 0.325   1120: 0.351   1520: 0.539   2000: 0.314
+```
+
+That is **not a decaying oscillation**. It rings with an envelope that *grows* -- 0.15 at
+the start against 0.3 to 0.66 at the end -- and the inner SCF's own accuracy swings between
+1e-6 and 6e-2 across the same run. The loop is unstable rather than slow, at half Elk's
+default gain.
+
+**Why, and it is the cell rather than the scheme.** The feedback loop's gain is
+`tau x dm/dB` folded through the density mixer, and this cell's `m(B)` is very steep:
+unconstrained it is barely magnetic at all (|m| = 0.000235 mu_B, first row of the table),
+while under the constraint it carries 0.26, so a small field moves the moment a long way.
+That is the same property `MAGNETISM-NEXT.md` item E(c) records for the *other* hydrogen
+cell, where `fsm` also could not hold a target: "m(B) here is nearly a step". A controller
+with a fixed gain cannot be stable against a nearly-vertical response, and the P79 cell was
+chosen for a *penalty*, which does not care.
+
+**One more thing this rules out, and it is the direction-only half.** It should not be
+tested on this cell at all, and the earlier rows above that do so are reported for
+completeness rather than as evidence: the scheme deliberately leaves `|m|` free, and a
+direction of a moment that is not there cannot be held. The unconstrained |m| of 0.000235
+mu_B says this cell has no moment of its own to orient.
+
+**What is outstanding, and it is a cell rather than code.**
+
+* **The cell to measure on is a robust magnet**, exactly as item E(c) concluded for the
+  cell-wide `fsm`: `fe-noncolin-pbe-stress.in` (bcc iron, 1.95 mu_B) is committed, or the
+  two-atom canted iron cell `MAGNETISM-NEXT.md` Q5 asks for and which does not exist yet.
+  Building Q5's cell serves both items at once and is the thing to do first.
+* **The secant update on a long budget** is the remaining measurement on *this* cell. It
+  steps only on converged pairs, so a 200-iteration budget shared with a ~14-iteration
+  inner SCF buys at most 14 field steps -- every secant row above is under-budgeted by an
+  order of magnitude, which is `MAGNETISM-NEXT.md` E(c)'s trap ("the budget is **shared**")
+  met again.
+* **The notebook and the `PERFORMANCE.md` pair.** Neither is owed yet: a notebook should
+  not advertise a scheme whose measured behaviour on the committed cell is a ring, and
+  `notebooks/43_magnetic_textures.ipynb` is the place once there is a cell where it wins.
+
+**The honest summary.** The scheme is transcribed from `bfieldfsm.f90` and `r3vo.f90`,
+unit-tested against both (the step per atom, the projection, its vanishing-axis escape, and
+that a feedback scheme adds nothing to the energy), wired through the driver and refused at
+input where it cannot work. It is **not** shown to beat the penalty, and on the only cell it
+has been measured on it does not converge at all.
+
+
 ### P86 -- The spin spiral's first external comparison, and the three ways an Elk ground state can quietly stop being magnetic. ⏳ FIXTURE AND ONE SIDE DONE; the Elk energies are the open half.
 
 `tests/data/elk/h_chain_spiral/`, `tests/data/qe/h-chain-spiral-elk.in`.
