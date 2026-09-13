@@ -892,18 +892,26 @@ tools/export_notebooks.sh                     # re-execute notebooks + refresh .
 ```
 
 **The suite is two groups and `slow` is the line.** `tools/test-fast.sh` is
-`pytest -m "not slow"`: **1938 tests in 11m17s** (measured 2026-09-13 on an
-otherwise idle machine, peak RSS 6043 M), and it is what runs before a push.
+`pytest -m "not slow"`: **1941 tests in 7-11 minutes** (measured 2026-09-13 on an
+otherwise idle machine, peak RSS 5.9-6.0 GB), and it is what runs before a push.
 
-**The gate is growing faster than the test count and that is worth watching.**
-The same command read 1892 tests in **7 minutes** at 4.5 GB on 2026-09-12, so
-46 more tests have cost four more minutes and 1.5 GB. Whatever is in the gate is
-paid on every push by someone who is not doing physics at the time, which is the
-same argument the notebooks' ten-minute ceiling rests on; the lever is the `slow`
-marker, and the question to ask of any test above a few seconds is whether the
-gate is where it belongs. (The 2026-09-13 figure is not the augmentation remat:
-the only two gate files that take the rematted route run in 4.18 s together, and
-every other cell in the gate takes the stored one.) The slow set is ~590 tests and **over two hours** — it runs when it is
+**Read that figure as a range, not a constant, because a third measurement
+landed between the other two and the spread is not the test set.** The same
+command read 1892 tests in **7 minutes** at 4.5 GB on 2026-09-12, 1938 in
+**11m17s** at 6043 M later on 2026-09-13, and **1941 in 7m22s** at 5903 M later
+still the same day, on an idle machine with a **4.0 GB warm**
+`~/.cache/defumat/jax`. Three more tests cannot cost minus four minutes, so what
+separates the two 2026-09-13 runs is the compiled-kernel cache and whatever else
+the machine was doing — which is the same rule the performance section states
+about timings taken beside a test run, applied to the gate itself. **Time it
+warm and idle, or do not compare it.** The thing genuinely worth watching is the
+peak RSS, which moved 4.5 -> 6.0 GB and did not come back. Whatever is in the
+gate is paid on every push by someone who is not doing physics at the time,
+which is the same argument the notebooks' ten-minute ceiling rests on; the lever
+is the `slow` marker, and the question to ask of any test above a few seconds is
+whether the gate is where it belongs. (Neither 2026-09-13 figure is the
+augmentation remat: the only two gate files that take the rematted route run in
+4.18 s together, and every other cell in the gate takes the stored one.) The slow set is ~590 tests and **over two hours** — it runs when it is
 asked for, not on every change. The split cuts across `unit` and `regression`
 both, because it is about cost and not about kind: a cheap regression case
 against a two-atom reference is in the gate, and an expensive unit test is not.

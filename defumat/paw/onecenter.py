@@ -47,6 +47,7 @@ exchange-correlation is evaluated per channel on the sphere.
 
 from __future__ import annotations
 
+import warnings
 from functools import partial
 
 import equinox as eqx
@@ -54,6 +55,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from defumat._envcompat import environ_get
+from defumat.batching import map_axis
 from defumat.paw.angular import AngularGrid, build_angular_grid
 from defumat.paw.gradient import onecenter_gradient_correction, radial_derivative
 from defumat.paw.hartree import radial_hartree
@@ -102,6 +105,101 @@ class PawSpecies(eqx.Module):
     kinetic_ps: jnp.ndarray | None = None
 
 
+#: How many atoms of one PAW species have their one-centre spheres in flight at
+#: once. ``1`` is ``PW/src/paw_onecenter.f90``'s own ``DO ia = ...`` loop, which
+#: holds a single sphere whatever ``nat`` is; ``None`` is one ``vmap`` over the
+#: whole sublattice, which is what this code did until the measurement below.
+#: ``DEFUMAT_PAW_ATOM_BATCH`` overrides it (``all``/``0`` for the ``vmap``).
+PAW_ATOM_BATCH = 1
+
+#: A sublattice of at most this many atoms runs as one ``vmap`` whatever the
+#: dial says, because below the crossover the chunk loses on *both* axes at
+#: once -- see :func:`_paw_atom_batch`. ``DEFUMAT_PAW_ATOM_BATCH`` set
+#: explicitly overrides it, in either direction.
+PAW_VMAP_ATOMS = 3
+
+
+def _paw_atom_batch(nat_t: int) -> int | None:
+    """The atom dial for a sublattice of ``nat_t`` atoms, and where it came from.
+
+    **The chunk and the remat only work together, and each alone is a loss.**
+    Every atom's one-centre reverse pass is live at once inside one
+    differentiated region, and one atom's pass is ~250 grid-sized temporaries --
+    the spin-polarized kernel takes two inner ``jax.grad``s of its own
+    (``xc/functional.py``'s ``spin_potential``, at the masked argument and at
+    the ``stop_gradient`` one), so the residuals are a reverse pass inside a
+    reverse pass. Measured on the compiled gradient's ``temp_size_in_bytes``
+    with a fully-relativistic nickel PAW dataset at ``nspin = 4``
+    (``nh = 34``, ``nx = 120``, ``mesh = 1195``), which is the NiBr2 slab's
+    nickel sublattice:
+
+    ==========  ==========  =================  ==========  ================
+    atoms       ``vmap``    ``vmap`` + remat   scan        scan + remat
+    ==========  ==========  =================  ==========  ================
+    1              267 MB             796 MB      269 MB           796 MB
+    4             1087 MB            1620 MB     1717 MB           796 MB
+    8             2175 MB            2713 MB          --           796 MB
+    15            4078 MB                 --          --           797 MB
+    ==========  ==========  =================  ==========  ================
+
+    Rematting under the ``vmap`` recomputes all fifteen atoms *simultaneously*,
+    so the recomputation is as wide as the tape it removed: the slope is
+    unchanged and a fixed barrier is added. Scanning without the remat is worse
+    than either, because the per-atom residuals stack and the ``vmap``'s shared
+    buffers are gone. Together the tape is one atom's ``becsum`` per step and
+    the peak goes **flat in the number of atoms**.
+
+    **Below the crossover the chunk loses on both axes at once, which is why
+    the default is a count and not a flat setting.** The whole force, compiled
+    and timed with nothing else on the machine:
+
+    =====================  ========  ==================  ==================
+    cell                   atoms     ``vmap``            chunked + rematted
+    =====================  ========  ==================  ==================
+    ``pt2-soc-paw-force``  2         547 MB, 0.761 s     718 MB, 1.286 s
+    ``si4-paw``            4         138 MB, 0.123 s      64 MB, 0.120 s
+    ``si10-paw-pbe``       10        381 MB, 0.505 s     189 MB, 0.418 s
+    =====================  ========  ==================  ==================
+
+    Time and memory flip together between two atoms and four, which is where
+    :data:`PAW_VMAP_ATOMS` is set: at two the chunk costs 31 per cent more tape
+    and 69 per cent more time, at four it is half the tape at the same time, and
+    at ten it is half the tape and faster. A single-atom species never reaches
+    the question at all, because ``map_axis`` calls the body once with no batch
+    axis.
+
+    **The forward path pays the barrier for a saving it cannot collect**, and
+    that is measured rather than waved past: this is called from a jitted
+    ``_paw_onecenter`` with no ``grad``, where ``jax.checkpoint`` still lowers
+    with ``prevent_cse=True`` optimization barriers. Per SCF iteration on
+    ``si10-paw-pbe``: 1.403 s as one ``vmap``, **1.237 s** chunked without the
+    remat, 1.281 s chunked with it. So the chunk is worth -12 per cent and the
+    barrier gives +3.6 per cent back -- most of the speedup is the smaller
+    working set and not the remat, which is a forward cost paid so that a force
+    or a stress taken later is four times smaller.
+
+    Setting ``DEFUMAT_PAW_ATOM_BATCH`` overrides the count in both directions:
+    an integer forces the chunk at any size (which is how the table above was
+    measured), ``all`` forces the ``vmap``.
+
+    Like every other batching dial here this is a loop bound over an exact sum
+    and must not be visible in a result beyond round-off.
+    """
+    setting = environ_get("DEFUMAT_PAW_ATOM_BATCH", "")
+    text = (setting or "").strip().lower()
+    if text in ("all", "0", "off", "none"):
+        return None
+    if text:
+        try:
+            return max(1, int(text))
+        except ValueError:
+            warnings.warn(
+                f"ignoring DEFUMAT_PAW_ATOM_BATCH={setting!r}: not a number",
+                RuntimeWarning, stacklevel=2,
+            )
+    return None if nat_t <= PAW_VMAP_ATOMS else PAW_ATOM_BATCH
+
+
 class PawCorrections(eqx.Module):
     """The PAW species of a structure, and the atoms each applies to."""
 
@@ -125,10 +223,22 @@ class PawCorrections(eqx.Module):
                 continue
             # over atoms: becsum is (nspin, nat, nh, nh) and the atom axis is
             # the one that batches, so it is moved to the front for the map.
-            atom_energy, atom_ddd = jax.vmap(
-                partial(onecenter_species, paw, meta_c=meta_c, axis=axis),
-                in_axes=1, out_axes=(0, 1),
-            )(values)
+            # **Chunked and rematted together, because neither alone works** --
+            # :func:`_paw_atom_batch` has the measurement. The remat is applied
+            # only when there is something left to chunk: rematting a whole-axis
+            # ``vmap`` recomputes every atom at once, which is exactly as wide
+            # as the tape it removed, so it pays the barrier and saves nothing.
+            nat_t = values.shape[1]
+            batch = _paw_atom_batch(nat_t)
+            body = partial(onecenter_species, paw, meta_c=meta_c, axis=axis)
+            if batch is not None and batch < nat_t:
+                body = jax.checkpoint(body)
+            atom_energy, atom_ddd = map_axis(
+                body, jnp.moveaxis(values, 1, 0), batch=batch
+            )
+            # ``map_axis`` stacks on the leading axis; ``ddd`` belongs behind
+            # the spin channel, where ``becsum`` carries the atom.
+            atom_ddd = jnp.moveaxis(atom_ddd, 0, 1)
             energy = energy + jnp.sum(atom_energy)
             coefficients.append(atom_ddd)
         return energy, tuple(coefficients)

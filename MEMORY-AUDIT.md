@@ -1,11 +1,18 @@
 # Memory audit of defumat
 
-> **Status, 2026-09-13.** The top three items are **done**: A1 (both augmentation scan
-> bodies rematted, `bismuthene-soc-small`'s force tape 2.32 GiB -> 0.99 GiB measured by
-> `memory_analysis()`, force and stress unchanged to one ulp), A2 (`run_relax`'s two
-> reference drops) and A3 (`run_vc_relax`'s one). `PERFORMANCE.md` carries the numbers and
-> `CLAUDE.md`'s P46 paragraph is corrected. Everything below is the audit as written,
-> including those three; the rest is untouched and still a to-do list.
+> **Status, 2026-09-13.** The top **four** items are **done**, and B1 with them: A1 (both
+> augmentation scan bodies rematted, `bismuthene-soc-small`'s force tape 2.32 GiB -> 0.99
+> GiB measured by `memory_analysis()`, force and stress unchanged to one ulp), A2
+> (`run_relax`'s two reference drops), A3 (`run_vc_relax`'s one), and **A4 + B1** (the PAW
+> one-centre atom axis chunked *and* rematted, which makes its tape flat in the atom count:
+> 4.08 GB -> 0.80 GB at the NiBr2 nickel sublattice, and faster). `PERFORMANCE.md` carries
+> the numbers. Everything below is the audit as written, including those four; the rest is
+> untouched and still a to-do list.
+>
+> **A4 is also the item that says why an audit is checked rather than applied.** Its
+> prescribed one-line fix was measured to be a *regression*, and the correction is inline
+> under A4 rather than replacing it, so the wrong reasoning stays legible beside the right
+> one.
 
 
 Static audit, 2026-09-13. Nothing was executed: no pytest, no notebook, no benchmark, no SCF,
@@ -45,7 +52,7 @@ run that currently does not fit on this machine or does not start at all.
 | 1 | Augmentation scan tapes the whole `Q_ij(G)` | A1 | `augmentation.py:530`, `:558` | NiBr2 slab | **76.5 GB** of reverse tape (982 GB at 15 labels); 2.73 GB at bismuthene-soc | 2 lines | a |
 | 2 | `vc_relax` holds four Calculations into the final SCF | A3 | `vc_relax.py:341` | NiBr2 scale | **18 GB** resident | 1 line | a |
 | 3 | `run_relax` holds the previous step | A2 | `relax.py:434` | NiBr2 scale | **7.7 GB** resident, +24% on a 32.30 GB peak | 3 lines | a |
-| 4 | PAW one-centre tape | A4 | `onecenter.py:128` | NiBr2 | **3-5 GB** of tape (count unverified) + 0.4 GB forward | 1 line | a |
+| 4 | PAW one-centre tape | A4 | `onecenter.py:128` | NiBr2 | **3.28 GB** measured (4.08 -> 0.80), and 0.4 GB forward with it | 1 line -> ~40 | a |
 | 5 | Structure factor is a reverse residual | A5 | `potentials.py:224`, `augmentation.py:847` | NiBr2 | **2.5-5.1 GB** of tape (CSE-dependent) | 2 lines | a |
 | 6 | `Calculator` and `run_scf` retention | A6, B2 | `calculator.py:524/679/858`, `driver.py:4489` | 64k/200-band **(hypothetical — no run this size exists here)**; NiBr2 | **24.6 GB** retained / 49 GB double-live; 8.8 GB of wavefunction sets; 2.19 GB/k span | 6 lines | a + b |
 | 7 | E-field holds three projector-velocity blocks | A7 | `efield.py:329` | P25 yardstick | **1.84 GB** across 18 iterations, *never read* on PAW | 10 lines | a |
@@ -57,7 +64,7 @@ run that currently does not fit on this machine or does not start at all.
 | 13 | `vkb` is full-k and outside the dial | A13 | `projectors.py:69` | nbse2 | **355 MB** | 60 lines | a |
 | 14 | Velocity holds four full-k blocks | A14 | `velocity.py:302` | AlAs (measured) | **200 MB** | 20 lines | a |
 | 15 | `sum_band` vmaps the spin axis | A15 | `density.py:109/118/180` | h40 at accelerator defaults | **0.21 GB** of peak (halves a 2.75 GB stage) | 3 lines | a |
-| 16 | PAW one-centre forward set has no dial | B1 | `onecenter.py:128` | NiBr2 | 0.35-0.45 GB, 1.2% of peak | 30 lines | b |
+| 16 | PAW one-centre forward set has no dial | B1 | `onecenter.py:128` | NiBr2 | 0.35-0.45 GB, 1.2% of peak — **done with A4**, and it is what makes A4 work | 30 lines | b |
 
 **What legitimately adds.** A force and a stress do not tape the same set, so the groups differ:
 
@@ -322,7 +329,26 @@ live, against ~30 MB one atom at a time. That is 1.2% of the 32.30 GB peak, and 
 **The tape is the bigger half, and the vmap is not its cause.** Every atom's one-centre reverse
 pass is live simultaneously because they are all in one differentiated region — identically so
 whether the atom axis is a `vmap` or fifteen width-one vmaps, which is what the
-one-species-per-magnetic-site writing gives. Remat is the fix; the dial is not.
+one-species-per-magnetic-site writing gives. ~~Remat is the fix; the dial is not.~~
+
+> **Measured false, 2026-09-13, and the correction is the item's whole content.** Remat alone is a
+> **regression**, and the dial alone is worse than either; only the two *together* work. Under a
+> `vmap` the rematted backward pass recomputes every atom **simultaneously**, so the recomputation
+> is exactly as wide as the tape it removed — the per-atom slope is unchanged and a fixed barrier is
+> added on top. Compiled-gradient `temp_size_in_bytes`, Ni `rel-pbe-spn-kjpaw` at `nspin = 4`:
+>
+> | atoms | `vmap` (as written) | `vmap` + remat | scan | scan + remat |
+> |---|---|---|---|---|
+> | 1 | 267 MB | 796 MB | 269 MB | 796 MB |
+> | 4 | 1087 MB | 1620 MB | 1717 MB | 796 MB |
+> | 8 | 2175 MB | 2713 MB | — | 796 MB |
+> | 15 | **4078 MB** | — | — | **797 MB** |
+>
+> So the estimate below (~50 temporaries, 3-5 GB for the Ni sublattice) was right: measured
+> **272 MB per atom**, 4.08 GB at fifteen, and 244 grid-sized temporaries rather than 50. Chunked
+> *and* rematted the peak goes **flat in the atom count**. The fix is `_paw_atom_batch` +
+> `map_axis`, which **closes B1 in the same change** — the chunk is not an alternative to the remat,
+> it is what makes the remat pay. `PERFORMANCE.md` has the whole-force numbers and the cost.
 
 Order of the tape: ~50 grid-sized temporaries in the PBE-spin kernel x 34.4 MB ~ **1.7 GB** for
 the Ni sublattice, and ~1.3 GB for the 30 Br atoms at `nx = 45` — **3-5 GB**. The count of ~50 is
@@ -332,14 +358,21 @@ and once at the masked `regular` — so each forward one-centre call already con
 reverse passes with their own tapes, and `spin_energy_density` (`:456-487`) evaluates `raw` twice,
 all before the GGA pass on top.
 
-**Fix.** `jax.checkpoint(onecenter_species)` under the vmap. The per-atom residual falls to that
-atom's `becsum`, `4 x 34^2 x 8 = 37 kB`.
+**Fix.** ~~`jax.checkpoint(onecenter_species)` under the vmap.~~ `jax.checkpoint` under a **chunked**
+`map_axis` over the atom axis — see the correction above. The per-atom residual falls to that atom's
+`becsum`, `4 x 34^2 x 8 = 37 kB`, and the peak becomes one chunk's recompute.
 
-**Cost, honestly.** Remat re-executes inner reverse passes, not an elementwise chain, so it is more
-than one forward evaluation of the functional. **Unmeasured.** Time it rather than assume it.
+**Cost, measured rather than assumed.** Nothing, above the crossover. Per-iteration SCF on
+`si10-paw-pbe` **1.403 -> 1.281 s**, its compiled force **0.505 -> 0.418 s**, its stress
+9.41 -> 9.03 s; on the built 4-atom `si4-paw` the force is 0.123 -> 0.120 s. It is *below* the
+crossover that it costs, which is why the default is a count: two atoms of the spinor PAW cell are
+**0.761 -> 1.286 s** and 547 -> 718 MB, so a sublattice of three or fewer keeps the `vmap`. In
+isolation the one-centre gradient alone is 1.63x slower at eight atoms (3.833 -> 6.241 s); the whole
+force is *faster*, because the peak allocation halves.
 
 **Do not** swap the vmap for a chunked `map_axis` and stop there — that bounds the forward set and
-not the tape, by A1's verified mechanism.
+not the tape, by A1's verified mechanism. Measured: scan without remat is **1717 MB** at four atoms
+against the vmap's 1087.
 
 **Rules.** No shape changes, no dtype literal, no host sync, no k axis (`k` does not appear in this
 call). `jax.checkpoint` is the identical function re-executed, so differentiability is exact.
@@ -1024,7 +1057,7 @@ differently.
 
 ## 3. (b) Wins that require a stated, measured, selectable trade
 
-### B1. An `atom_batch` dial for the PAW one-centre forward set
+### B1. An `atom_batch` dial for the PAW one-centre forward set — **done, with A4**
 
 **Site.** `defumat/paw/onecenter.py:128`, as A4. The *forward* live set is 0.35-0.45 GB for the Ni
 sublattice of the 45-atom cell, against ~30 MB one atom at a time — about **1.2% of the measured
@@ -1036,7 +1069,17 @@ the generic `lax.map`/`lax.scan` chunker `map_k` and `map_bands` are both built 
 and **default it to the present `None`**, so no measured number moves and the dial is there for the
 cell that needs it.
 
-**Why this is (b) and not (a): the cost is unknown.** `PERFORMANCE.md:332-338` says "Atoms were
+> **Landed with A4, and the reason it stopped being a (b) is that the cost turned out to be
+> negative.** The dial is `_paw_atom_batch` / `PAW_ATOM_BATCH` / `DEFUMAT_PAW_ATOM_BATCH` in
+> `paw/onecenter.py`, on `map_axis` exactly as proposed — but its default is **not** the present
+> `None`, because chunking is what makes A4's remat pay and above the crossover it is *faster* as
+> well as smaller (per-iteration SCF 1.403 -> 1.281 s on `si10-paw-pbe`). The paragraph below
+> predicted the opposite and was right about the mechanism and wrong about which way it points:
+> `batch = 1` does turn one dispatch into fifteen, and fifteen dispatches over a peak that has
+> halved beat one over a peak that has not. Below the crossover the prediction holds and the default
+> keeps the `vmap` there.
+
+**Why this was (b) and not (a): the cost was unknown.** `PERFORMANCE.md:332-338` says "Atoms were
 batched from the start (vmap over becsum)", and the measurement that follows — 3.0x to 2.8x against
 QE, 0.507 s to 0.477 s per iteration — is the **multipole grouping**, not the atom axis. The 35%
 headline at `:323` covers the one-centre batching as a whole and is never decomposed, so what

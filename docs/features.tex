@@ -4205,6 +4205,29 @@ rather than a clamped value, because a clamped $Q^L(q)$ would be smooth, of the
 right order and wrong, and would show up only as a bad stress.
 \end{refuses}
 
+\textbf{A PAW run's other large object is its one-centre quadrature, and what
+it costs is a \emph{derivative} rather than a run.} Each atom's sphere carries
+$(n_{\mathrm{spin}}, n_x, \text{mesh})$ radial fields, and inside a force or a
+stress every atom's reverse pass is live at once: \textbf{272~MB per atom} for a
+relativistic nickel dataset with a magnetization, so 4.1~GB for a fifteen-atom
+sublattice and no ceiling. \code{DEFUMAT\_PAW\_ATOM\_BATCH} is how many spheres
+are in flight together --- \code{all} for one \code{vmap}, an integer for
+\code{paw\_onecenter.f90}'s own loop over atoms:
+
+\begin{shcode}
+DEFUMAT_PAW_ATOM_BATCH=1   python3 run.py   # one sphere at a time
+DEFUMAT_PAW_ATOM_BATCH=all python3 run.py   # the whole sublattice at once
+\end{shcode}
+
+Left alone it chunks above three atoms per species and not below, because that
+is where the crossover was measured: chunked, the tape stops growing with the
+sublattice altogether (4.1~GB $\to$ 0.80~GB at fifteen nickel atoms) and the run
+gets \emph{faster} --- a ten-atom PAW cell's force is 0.505~s against 0.418~s
+and its SCF iteration 1.40~s against 1.28~s. On two atoms it is the other way,
+0.761~s against 1.286~s, which is what the threshold is for. Like the other
+batching dials it is a loop bound over an exact sum and is invisible in a result
+beyond round-off.
+
 \textbf{Precision.} Every dtype comes from \code{config.Precision}; x64 is
 enabled before any array exists, and all validation is float64. float32 is a
 performance mode and \textbf{never one a correctness claim is made in}.

@@ -4620,6 +4620,87 @@ returned exactly one hit before this -- a comment recording a *null* for
 `_qrad_kernel` in the **stored** route -- so nothing in the package was rematted at
 all; that null is about a different route and is not a verdict on remat here.
 
+## The PAW one-centre tape, and why the audit's one-line fix made it worse (MEMORY-AUDIT A4, B1)
+
+**What it held.** Every atom's one-centre reverse pass is live at once, because
+they are all inside one differentiated region: the sphere's XC quadrature is
+`(nspin, nx, mesh)`, and the spin-polarized kernel takes two inner `jax.grad`s
+of its own (`xc/functional.py`'s `spin_potential`, once at the masked argument
+and once at the `stop_gradient` one), so the residuals are a reverse pass inside
+a reverse pass. Measured per atom rather than estimated: **272 MB** for a
+fully-relativistic nickel PAW dataset at `nspin = 4` (`nh = 34`, `nx = 120`,
+`mesh = 1195`), linear to better than one per cent from one atom to fifteen —
+**4.08 GB** for the NiBr2 slab's nickel sublattice.
+
+**The audit prescribed `jax.checkpoint` under the `vmap`, and that is a
+regression.** The compiled gradient's `temp_size_in_bytes`, which allocates
+nothing:
+
+| atoms | `vmap` (as written) | `vmap` + remat | scan, no remat | scan + remat |
+|---|---|---|---|---|
+| 1 | 267 MB | 796 MB | 269 MB | 796 MB |
+| 4 | 1087 MB | 1620 MB | 1717 MB | 796 MB |
+| 8 | 2175 MB | 2713 MB | — | 796 MB |
+| 15 | **4078 MB** | — | — | **797 MB** |
+
+**The two negative columns are the point.** Under a `vmap` the rematted backward
+pass recomputes every atom *simultaneously*, so the recomputation is exactly as
+wide as the tape it removed: the per-atom slope is unchanged (271.6 against
+274.6 MB) and a fixed 530 MB barrier is added on top. And `prevent_cse=False`,
+the obvious way to drop that barrier, gives back the baseline **byte for byte**
+(547,404,744 both) — XLA's CSE merges the recomputation into the forward pass
+and the remat becomes a no-op. Chunking without the remat is worse than either,
+because the per-atom residuals stack *and* the `vmap`'s shared buffers are gone.
+Only the two together work, and then the peak is **flat in the atom count**.
+
+**The cost is negative above the crossover and real below it**, which is why the
+default is an atom count (`PAW_VMAP_ATOMS = 3`) rather than a flat setting.
+Whole force and stress through `Calculator`, compiled, best of three, nothing
+else on the machine:
+
+| cell | atoms | tape, `vmap` -> chunked | force | stress | SCF/iteration |
+|---|---|---|---|---|---|
+| `pt2-soc-paw-force` | 2 | 547 -> 718 MB | 0.761 -> **1.286 s** | — | — |
+| `si4-paw` | 4 | 138 -> **64 MB** | 0.123 -> 0.120 s | 20.8 -> 20.0 s | 0.387 -> 0.382 s |
+| `si10-paw-pbe` | 10 | 381 -> **189 MB** | 0.505 -> **0.418 s** | 9.41 -> 9.03 s | 1.403 -> **1.281 s** |
+
+At two atoms the chunk costs 31 per cent more tape and 69 per cent more time; at
+four it is half the tape at the same time; at ten it is half the tape and 8.7
+per cent faster per SCF iteration. **In isolation the one-centre gradient alone
+is 1.63x slower** chunked (3.833 -> 6.241 s at eight nickel atoms) — the whole
+force is nonetheless faster, which is the useful part: a component timing and a
+whole-run timing disagreed in *sign*, and only the second is what anybody pays.
+
+**What the SCF pays is the barrier, and it is measured separately**, because
+`_paw_onecenter` is jitted with no `grad` and a `jax.checkpoint` still lowers
+with `prevent_cse=True` optimization barriers there — so the forward path
+carries a cost for a saving it cannot collect. Per iteration on `si10-paw-pbe`:
+
+| | s/iteration |
+|---|---|
+| `vmap` over the sublattice | 1.403 |
+| chunked, no remat | **1.237** |
+| chunked + remat (the default) | 1.281 |
+
+So the chunk alone is worth **-12%** forward and the barrier gives **+3.6%** of
+it back, for the -8.7% net. That is the honest split: most of the speedup is the
+smaller working set, not the remat, and the remat is a forward *cost* paid so
+that a force or a stress taken later is four times smaller. It is not applied
+when there is nothing to chunk.
+
+**What did not change.** Energy, force and stress of a displaced ten-atom PAW
+PBE cell agree to round-off across the switch — 1.2e-13 Ry on 467, 9.5e-15 on a
+force component of 1.4e-2, 6.2e-17 on a stress of 2.6e-4 — and the same cell's
+converged energy is identical to every printed digit. The chunk reassociates the
+sum over atoms and the remat reorders the backward pass, so this is round-off
+rather than bit-identical, exactly as A1's was.
+
+**`si4-paw` is committed** (`tests/data/qe/si4-paw.in`): diamond silicon in the
+4-atom tetragonal cell, which is half the conventional cubic one. It exists
+because no PAW input here had between two atoms and eight, and the crossover is
+in that gap. Its energy is -46.7230 Ry/atom against the 2-atom PBE reference's
+-46.7198, the difference being the k-sampling.
+
 ## Two retention fixes in the relaxation drivers (MEMORY-AUDIT A2, A3)
 
 Neither costs anything and neither is inside a traced path; both are host-side

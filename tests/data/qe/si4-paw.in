@@ -1,0 +1,28 @@
+! Diamond silicon in a 4-atom tetragonal cell: a1 = (a/2, a/2, 0),
+! a2 = (-a/2, a/2, 0), a3 = (0, 0, a), which is half the conventional cubic
+! cell and so holds four atoms. The same crystal as si2-paw-force.in, at twice
+! the PAW sublattice -- it exists only to put a point between two atoms and
+! eight on the one-centre atom dial's crossover.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 0, celldm(1) = 10.20, nat = 4, ntyp = 1,
+    ecutwfc = 20.0, ecutrho = 160.0
+ /
+ &electrons
+    conv_thr = 1.0d-8
+ /
+CELL_PARAMETERS alat
+  0.50  0.50  0.00
+ -0.50  0.50  0.00
+  0.00  0.00  1.00
+ATOMIC_SPECIES
+ Si 28.086 Si.pbe-n-kjpaw_psl.0.1.UPF
+ATOMIC_POSITIONS alat
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+ Si 0.00 0.50 0.50
+ Si 0.25 0.75 0.75
+K_POINTS automatic
+ 4 4 2 0 0 0
