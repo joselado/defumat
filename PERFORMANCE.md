@@ -4532,14 +4532,15 @@ which is what preserving the old total bit for bit would need -- costs a second 
 
 ## What a spinor dielectric response costs against `ph.x` (P83)
 
-**The pair, single core each, on an idle machine.** `si-epsilon.in` with one line
-added (`noncolin = .true.`): the same two-atom silicon, 10 k-points, `ecutwfc = 18`,
-run as a spinor on both sides. `OMP_NUM_THREADS=1` and `taskset -c 0` for both, the
-affinity mask set before the interpreter starts so JAX inherits it. Three repeats each.
+**The pair, single core each, on an idle machine, both codes on the system BLAS.**
+`si-epsilon.in` with one line added (`noncolin = .true.`): the same two-atom
+silicon, 10 k-points, `ecutwfc = 18`, run as a spinor on both sides.
+`OMP_NUM_THREADS=1` and `taskset -c 0` for both, the affinity mask set before the
+interpreter starts so JAX inherits it. Three repeats each.
 
 | stage | defumat | QE | ratio |
 |---|---|---|---|
-| ground state | 1.33-1.49 s | **0.95-1.20 s** (`pw.x-mkl`); 1.14-1.45 s on netlib | **1.2-1.4x** |
+| ground state | 1.33-1.49 s | **1.14-1.45 s** (`pw.x`) | **~1.1x** |
 | the field response | 16.05-17.31 s | **6.5-6.7 s CPU**, 7.4-9.7 s wall (`ph.x`, of which `solve_e` is all but 0.2) | **2.5x** on CPU |
 
 **The steps are the same steps**, which is the thing to state rather than assume:
@@ -4551,25 +4552,13 @@ self-consistent loop. On this side the first run in a process pays compilation a
 the rest do not (`~/.cache/defumat/jax`): 17.31 s is a first run and 16.05 a second,
 so **compilation is about 1.3 s of it** and the ratio is not an artefact of it.
 
-**Two things about the QE side that a repeat of this measurement has to get right,
-and both were got wrong first.**
-
-- **`ph.x` must be timed from clean scratch.** Run with `out/` and `_ph0/` left over
-  from a previous `ph.x`, it reads 4.40 s; with both removed and the SCF rerun, the
-  same input takes **7.4-9.7 s**. The first figure is the one that was nearly
-  recorded here. Note also that `ph.x` is I/O-heavy on this cell -- 6.73 s CPU against
-  9.70 s wall on one run -- so its **CPU** time is the fairer number against a JAX
-  process that writes nothing, and it is what the ratio above uses.
-- **`ph.x` segfaults under the MKL preload** (`find_mode_sym_new_`,
-  `PHonon/PH/find_mode_sym.f90:181`), so `pw.x-mkl`'s wrapper cannot be used for it
-  and the response row is against netlib BLAS. That is a *weak* baseline in general
-  and the standing rule is to avoid it -- but **on this cell it is worth almost
-  nothing**: `pw.x` takes 1.14-1.45 s on netlib and 0.95-1.20 s under MKL, about 20
-  per cent rather than the 2x it is worth on `si8-nc-1k`, because a two-atom cell at
-  `ecutwfc = 18` is too small for ZGEMM to dominate. So the response ratio is
-  generous to this code by something under 20 per cent, not by a factor of two.
-  A `ph.x-mkl` wrapper is written beside `pw.x-mkl` for whoever gets the segfault
-  fixed.
+**`ph.x` must be timed from clean scratch, and that is worth nearly a factor of
+two.** Run with `out/` and `_ph0/` left over from a previous `ph.x`, this input reads
+**4.40 s**; with both removed and the SCF rerun, it takes **7.4-9.7 s**. The warm
+figure is the one you get by default, because you have just been debugging the input,
+and it is the one that was nearly recorded here. `ph.x` is also I/O-heavy on this cell
+-- 6.73 s CPU against 9.70 s wall -- so its **CPU** time is the fairer number against
+a JAX process that writes nothing, and it is what the ratio above uses.
 
 **And the numbers, which is the reason to look at this pair at all.** `ph.x` gives
 **13.806615123** for the spinor run against **13.806689470** for the scalar one: QE's
