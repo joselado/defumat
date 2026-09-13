@@ -767,11 +767,17 @@ the table here is the richer one on purpose.
 
 \begin{refuses}
 \textbf{Refuses.} A \textbf{symmetrised} spinor projection, in either
-noncollinear branch: averaging over the point group needs the SU(2)
-representation of each operation beside the rotation of the harmonics, and that
-is not built --- run with \code{nosym} and the whole $\mathbf k$-grid, where
-both codes use every point and neither averages, or pass
-\code{symmetrize=False}. A \textbf{fully-relativistic dataset with
+noncollinear branch --- run with \code{nosym} and the whole $\mathbf k$-grid,
+where both codes use every point and neither averages, or pass
+\code{symmetrize=False}. \emph{The two branches are missing different things,
+and only one of them is missing a matrix.} Without spin--orbit coupling the
+columns are $|l m\rangle \otimes |\sigma\rangle$ and the operator is the tensor
+product $D^l \otimes S$, both factors of which now exist (the harmonic rotations
+and the $SU(2)$ ones); what is left there is the coefficient table, which is
+real over $2l+1$ columns and would have to be complex over $2(2l+1)$. With
+\code{lspinorb} the columns are $|j\, m_j\rangle$ and the operator is $D^j$ for
+$j = \tfrac12 \ldots \tfrac72$, which is a different matrix and is not that
+tensor product. A \textbf{fully-relativistic dataset with
 \code{lspinorb = .false.}}: QE dispatches the orbitals on \code{has\_so} and
 their labels on \code{lspinorb}, so it builds $j$-resolved columns and calls
 them up/down ones. An $m$-resolved charge is \emph{absent} rather than refused
@@ -1359,10 +1365,14 @@ $-0.263$, $-0.355$ and $-0.388$ at $\lambda = 1, 5, 20, 80$, with the energy
 rising monotonically by $2.6$, $15.3$, $27.4$ and $32.6$~mRy.
 
 \begin{refuses}
-\textbf{Refuses.} A spinor occupation matrix needs \code{nosym}: its group
-average takes the $SU(2)$ representation of each operation beside the rotation
-of the $m$ indices, and averaging the $m$ indices alone leaves the moment
-pointing somewhere else. A fixed tensor moment needs a spinor: for a collinear
+\textbf{Refuses.} A \emph{collinear} DFT+U run needs \code{nosym} when its
+magnetic group carries time-reversed operations: there the occupation matrix is
+two separate channels and such an operation exchanges them, which is not
+written. \textbf{A spinor run does not} --- it keeps both spin indices, so the
+operation acts on the matrix itself, and both halves of that action are in: the
+$SU(2)$ representation of each operation beside the rotation of the $m$ indices,
+and, for a time-reversed one, the transpose that goes with an antiunitary
+operation. A fixed tensor moment needs a spinor: for a collinear
 run the spin-rank moments keep only their $z$ component and the constraint
 degenerates into the fixed spin moment \code{constrained\_magnetization}
 already is. \code{hubbard\_slater = 'yukawa'} needs a \textbf{PAW}
@@ -3032,12 +3042,17 @@ L\rangle \parallel \langle S\rangle$ (Hund's third rule). Driving the moment
 along $z$, $x$ and $y$ gives $|\langle L\rangle| = 0.0364767$ in all three,
 with a spread of 7.3e-11 over the three cubic axes, with nothing imposing that a magnitude is a scalar.
 
+\textbf{A symmetry-reduced k-set works}, and what makes it work is that
+$\langle L\rangle$ and $\langle S\rangle$ are averaged over the group as
+\textbf{axial} vectors --- each operation carrying $\det(R)$ and the
+time-reversal sign beside the rotation, the site charge carrying only the atom
+permutation. The distinction is not a refinement: the \emph{polar} average of an
+axial vector is exactly zero on any centrosymmetric crystal, so writing the
+obvious one would return a clean and plausible nothing rather than a wrong
+number.
+
 \begin{refuses}
-\textbf{Refuses.} A \textbf{symmetry-reduced k-set}: $\langle L\rangle$ and
-$\langle S \rangle$ are vectors, and summing a wedge sums a wedge --- the
-axial-vector group average with $\det(R)$ and the time-reversal sign is not
-written here. Run the whole grid with \code{nosym = .true.}, unshifted so that
-it is closed under the point group. A \textbf{fully-relativistic ultrasoft or
+\textbf{Refuses.} A \textbf{fully-relativistic ultrasoft or
 PAW} dataset, because the spinor overlap's off-diagonal spin blocks are
 \code{qq\_so} and the projection here applies the scalar $S$ to each component;
 a fully-relativistic \emph{norm-conserving} dataset has $S = 1$ and is exact. And

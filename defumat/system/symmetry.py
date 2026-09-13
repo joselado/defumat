@@ -39,7 +39,7 @@ if TYPE_CHECKING:  # only for annotations: importing it eagerly makes a cycle,
 
 __all__ = ["Symmetries", "lattice_point_group", "find_symmetries", "is_supercell",
            "symmetrize_density", "symmetry_maps", "apply_symmetry_maps",
-           "atom_mapping", "cartesian_rotations",
+           "atom_mapping", "cartesian_rotations", "spin_rotations",
            "symmetrize_vector", "symmetrize_matrix", "symmetrize_atom_tensor",
            "symmetrize_atom_pair_tensor", "symmetrize_cartesian_tensor",
            "symmetrize_atom_cartesian_tensor",
@@ -862,6 +862,111 @@ def cartesian_rotations(cell: Cell, symmetries: Symmetries) -> np.ndarray:
     return np.array([(inverse @ m @ at).T for m in symmetries.rotation_array()])
 
 
+#: ``sigma_x``, ``sigma_y``, ``sigma_z``. Local to this module so that the spin
+#: rotation below does not import the projected-DOS package.
+_PAULI = np.array([
+    [[0.0, 1.0], [1.0, 0.0]],
+    [[0.0, -1.0j], [1.0j, 0.0]],
+    [[1.0, 0.0], [0.0, -1.0]],
+], dtype=complex)
+
+
+def _su2_from_rotation(rotation: np.ndarray) -> np.ndarray:
+    """The SU(2) lift of a **proper** rotation: ``cos(t/2) I - i sin(t/2) n.sigma``.
+
+    QE's ``find_u`` (``divide_class_so.f90``) reads the axis off the matrix with
+    ``versor`` and the angle with ``angle_rot``, each of which splits into cases
+    -- a 180-degree rotation has no antisymmetric part to read an axis from, so
+    it is handled separately, and an axis along a coordinate direction again.
+    The same matrix comes out of the **quaternion** of the rotation, which needs
+    no case analysis beyond picking the largest component to divide by, and that
+    is what this does.
+
+    Both routes give a matrix that is only defined up to sign -- the two-valued
+    nature of the spin representation -- and QE picks the one with a
+    non-negative ``cos(t/2)``. **The sign is not imposed here, because nothing
+    downstream can see it**: every consumer contracts ``D`` against ``D*`` or
+    ``D^dagger`` (``new_ns_nc``, ``sym_proj_so``), where an overall sign
+    cancels. The property that *is* imposed, in the tests, is the one that fixes
+    the matrix up to that sign and therefore pins it to ``find_u``'s: ``U`` is
+    unitary with ``det U = 1`` and ``U sigma_a U^dagger = R_ba sigma_b``.
+    """
+    r = np.asarray(rotation, dtype=float)
+    trace = r[0, 0] + r[1, 1] + r[2, 2]
+    # ``4 q_k^2`` for each of the four quaternion components. Dividing by the
+    # largest is what keeps a 180-degree rotation -- where ``q_0`` is zero --
+    # from going through a division by zero.
+    candidates = np.array([
+        1.0 + trace,
+        1.0 + r[0, 0] - r[1, 1] - r[2, 2],
+        1.0 - r[0, 0] + r[1, 1] - r[2, 2],
+        1.0 - r[0, 0] - r[1, 1] + r[2, 2],
+    ])
+    k = int(np.argmax(candidates))
+    value = math.sqrt(max(float(candidates[k]), 0.0)) / 2.0
+    q = np.zeros(4)
+    q[k] = value
+    scale = 4.0 * value
+    if k == 0:
+        q[1] = (r[2, 1] - r[1, 2]) / scale
+        q[2] = (r[0, 2] - r[2, 0]) / scale
+        q[3] = (r[1, 0] - r[0, 1]) / scale
+    elif k == 1:
+        q[0] = (r[2, 1] - r[1, 2]) / scale
+        q[2] = (r[0, 1] + r[1, 0]) / scale
+        q[3] = (r[0, 2] + r[2, 0]) / scale
+    elif k == 2:
+        q[0] = (r[0, 2] - r[2, 0]) / scale
+        q[1] = (r[0, 1] + r[1, 0]) / scale
+        q[3] = (r[1, 2] + r[2, 1]) / scale
+    else:
+        q[0] = (r[1, 0] - r[0, 1]) / scale
+        q[1] = (r[0, 2] + r[2, 0]) / scale
+        q[2] = (r[1, 2] + r[2, 1]) / scale
+    return q[0] * np.eye(2, dtype=complex) - 1.0j * np.einsum(
+        "a,aij->ij", q[1:], _PAULI
+    )
+
+
+def spin_rotations(cell: Cell, symmetries: Symmetries) -> np.ndarray:
+    """``d_spin_ldau[s]``: how each operation turns a spinor. ``(nsym, 2, 2)``.
+
+    A spinor carries a spin frame that a point-group operation turns, so
+    anything built from ``psi^dagger ... psi`` with its two spin indices kept --
+    a noncollinear occupation matrix, a spin-angle projection -- needs this
+    matrix beside the rotation of the ``m`` indices. Symmetrising the ``m``
+    indices alone leaves the off-diagonal spin blocks in a frame that has moved,
+    which is a converged run with its magnetization pointing somewhere else.
+
+    Two things the 3x3 rotation does that the 2x2 one does not, both of them
+    QE's ``comp_dspinldau`` (``plus_u_full.f90``):
+
+    * **Inversion does nothing in spin space.** The spin is an axial vector, so
+      an improper operation acts in spin space exactly as the proper rotation
+      ``-R`` does; the ``det(R) = -1`` case is multiplied by ``-1`` first.
+    * **Time reversal is antiunitary**, so an operation that is a symmetry only
+      with time reversal carries ``i sigma_y D*`` rather than ``D``.
+
+    ``magnetization_signs`` is the same two facts for the case where only the
+    *expectation value* survives -- a per-atom moment, a magnetization density --
+    where an axial vector needs a sign and nothing more. This is the matrix the
+    full 2x2 object needs, and the two are used in different places rather than
+    one being a special case of the other.
+    """
+    rotations = cartesian_rotations(cell, symmetries)
+    t_rev = np.asarray(symmetries.t_rev_array())
+    matrices = np.zeros((len(rotations), 2, 2), dtype=complex)
+    # ``i sigma_y``, the antiunitary half of a time-reversed operation.
+    i_sigma_y = np.array([[0.0, 1.0], [-1.0, 0.0]], dtype=complex)
+    for s, rotation in enumerate(rotations):
+        proper = rotation * np.sign(np.linalg.det(rotation))
+        matrix = _su2_from_rotation(proper)
+        if t_rev[s] == 1:
+            matrix = i_sigma_y @ matrix.conj()
+        matrices[s] = matrix
+    return matrices
+
+
 def symmetrize_vector(
     vectors: jnp.ndarray, cell: Cell, symmetries: Symmetries, mapping: np.ndarray
 ) -> jnp.ndarray:
@@ -1040,7 +1145,11 @@ def symmetrize_cartesian_tensor(
 
 
 def symmetrize_atom_cartesian_tensor(
-    tensors: np.ndarray, cell: Cell, symmetries: Symmetries, mapping: np.ndarray
+    tensors: np.ndarray,
+    cell: Cell,
+    symmetries: Symmetries,
+    mapping: np.ndarray,
+    axial: bool = False,
 ) -> np.ndarray:
     """:func:`symmetrize_cartesian_tensor` with a leading atom axis carried too.
 
@@ -1056,9 +1165,19 @@ def symmetrize_atom_cartesian_tensor(
     trap is :func:`symmetrize_atom_displacement_density`'s, which carries a
     *spatial* argument as well and therefore needs ``irt^-1`` (``PLAN.md`` P28a).
 
+    ``axial`` makes every cartesian index an **axial** one, so each term of the
+    sum carries :func:`magnetization_signs` raised to the rank -- ``det(R)`` per
+    index, and the time-reversal sign with it. ``<L>`` and ``<S>`` per site are
+    the rank-one case and the reason it exists: a polar average of an axial
+    vector is a different symmetry rather than a worse one, and the wrong answer
+    it gives is smooth and plausible. A per-atom moment reaches the same rule
+    through :func:`symmetrize_vector`; this is the form that also covers rank 2
+    and above.
+
     Args:
         tensors: ``(nat, 3, ..., 3)`` cartesian, the atom axis leading.
         mapping: ``(nsym, nat)`` from :func:`atom_mapping`.
+        axial: treat every cartesian index as axial rather than polar.
     """
     tensors = np.asarray(tensors, dtype=float)
     if symmetries.nsym <= 1:
@@ -1066,11 +1185,20 @@ def symmetrize_atom_cartesian_tensor(
     axes = range(1, tensors.ndim)
     at = np.asarray(cell.at_alat, dtype=float)
     bg = np.asarray(cell.bg_2pi_alat, dtype=float)
+    rank = tensors.ndim - 1
+    signs = (
+        magnetization_signs(cell, symmetries) ** rank
+        if axial else np.ones(symmetries.nsym)
+    )
 
     crystal = _transform_axes(tensors, at, axes)
     averaged = sum(
-        _transform_axes(crystal[image], np.asarray(rotation, dtype=float), axes)
-        for rotation, image in zip(symmetries.rotation_array(), mapping)
+        sign * _transform_axes(
+            crystal[image], np.asarray(rotation, dtype=float), axes
+        )
+        for rotation, image, sign in zip(
+            symmetries.rotation_array(), mapping, signs
+        )
     ) / symmetries.nsym
     return _transform_axes(averaged, bg.T, axes)
 

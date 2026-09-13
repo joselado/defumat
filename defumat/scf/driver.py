@@ -1789,35 +1789,39 @@ class Calculation:
             return
 
         setup = self.hubbard
-        if self.noncolin and use_symmetry and self.symmetries.nsym > 1:
-            # ``new_ns_nc`` averages the occupation matrix with the **SU(2)**
-            # representation of each operation (``d_spin_ldau``) beside the
-            # rotation of the ``m`` indices, because a spinor occupation matrix
-            # carries a spin frame that the operation turns. Nothing here builds
-            # those matrices, and symmetrising the ``m`` indices alone would
-            # leave the off-diagonal spin blocks in the wrong frame -- which is
-            # a converged run with a magnetization pointing somewhere else.
-            raise NotImplementedError(
-                "DFT+U with noncolin = .true. is implemented without symmetry: "
-                "the occupation matrix is a 2x2 matrix in spin space and its "
-                "group average needs the spin rotation of each operation. Run "
-                "with nosym = .true. and the whole k-grid"
-            )
         if self.spiral:
             raise NotImplementedError(
                 "DFT+U together with a spin spiral is not implemented: the two "
                 "spinor components live on different plane-wave spheres, so a "
                 "projector would have to be built on each"
             )
-        if use_symmetry and np.any(np.asarray(self.symmetries.t_rev_array()) != 0):
-            # ``new_ns`` flips the spin index of an operation that is a symmetry
-            # only with time reversal. Nothing validates that branch here -- see
+        if (
+            not self.noncolin
+            and use_symmetry
+            and np.any(np.asarray(self.symmetries.t_rev_array()) != 0)
+        ):
+            # ``new_ns`` flips the *spin index* of an operation that is a
+            # symmetry only with time reversal (``colin_mag == 2``). Nothing
+            # validates that branch here -- see
             # :func:`defumat.hubbard.occupations.build_ns_symmetry` -- so it is
             # refused rather than silently skipped, which would symmetrise the
             # two channels into each other's frame.
+            #
+            # **The spinor branch is not refused, because it does not need that
+            # flip.** A spinor ``ns`` keeps both spin indices, so time reversal
+            # acts on the object itself rather than by permuting two channels:
+            # ``spin_rotations`` carries the ``i sigma_y D*`` twist and
+            # ``NsSymmetry._time_reverse`` the transpose that goes with it, both
+            # of which are QE's own (``comp_dspinldau``, and ``new_ns_nc``
+            # reading ``nr(m4, m3, is4, is3, nb)``). It is exercised rather than
+            # assumed: ``si-ldau-noncol.in`` has a magnetic group of 16 with
+            # **eight** ``t_rev = 1`` operations, and it is the cell the
+            # wedge-against-closed-grid check runs on.
             raise NotImplementedError(
-                "DFT+U on a symmetry group carrying time-reversed operations "
-                "(t_rev) is not implemented; run with nosym = .true."
+                "collinear DFT+U on a symmetry group carrying time-reversed "
+                "operations (t_rev) is not implemented; run with nosym = "
+                ".true., or as a spinor (noncolin = .true.), where the "
+                "occupation matrix keeps both spin indices and the branch is in"
             )
 
         self.hubbard_coefficients = coefficients_from_setup(setup)
