@@ -4530,6 +4530,49 @@ from **one** transform of the residual: **12.4 ms** per iteration on a 64³ grid
 which is what preserving the old total bit for bit would need -- costs a second transform,
 24.6 ms, so the fused form is a 1.5% surcharge where the separate one is 100%.
 
+## What a spinor dielectric response costs against `ph.x` (P83)
+
+**The pair, single core each, on an idle machine, both codes on the system BLAS.**
+`si-epsilon.in` with one line added (`noncolin = .true.`): the same two-atom
+silicon, 10 k-points, `ecutwfc = 18`, run as a spinor on both sides.
+`OMP_NUM_THREADS=1` and `taskset -c 0` for both, the affinity mask set before the
+interpreter starts so JAX inherits it. Three repeats each.
+
+| stage | defumat | QE | ratio |
+|---|---|---|---|
+| ground state | 1.33-1.49 s | **1.14-1.45 s** (`pw.x`) | **~1.1x** |
+| the field response | 16.05-17.31 s | **6.5-6.7 s CPU**, 7.4-9.7 s wall (`ph.x`, of which `solve_e` is all but 0.2) | **2.5x** on CPU |
+
+**The steps are the same steps**, which is the thing to state rather than assume:
+`ph.x` reads the converged ground state off disk and solves, and
+`dielectric_tensor` takes a converged `SCFResult` and solves, so the second row is
+response against response. `dielec` itself is 0.00 s on QE's side and the assembly is
+negligible here too; what is compared is the Sternheimer solve and its
+self-consistent loop. On this side the first run in a process pays compilation and
+the rest do not (`~/.cache/defumat/jax`): 17.31 s is a first run and 16.05 a second,
+so **compilation is about 1.3 s of it** and the ratio is not an artefact of it.
+
+**`ph.x` must be timed from clean scratch, and that is worth nearly a factor of
+two.** Run with `out/` and `_ph0/` left over from a previous `ph.x`, this input reads
+**4.40 s**; with both removed and the SCF rerun, it takes **7.4-9.7 s**. The warm
+figure is the one you get by default, because you have just been debugging the input,
+and it is the one that was nearly recorded here. `ph.x` is also I/O-heavy on this cell
+-- 6.73 s CPU against 9.70 s wall -- so its **CPU** time is the fairer number against
+a JAX process that writes nothing, and it is what the ratio above uses.
+
+**And the numbers, which is the reason to look at this pair at all.** `ph.x` gives
+**13.806615123** for the spinor run against **13.806689470** for the scalar one: QE's
+own scalar-against-spinor identity is **7.4e-5**, where this code's is **1.35e-7** at
+the same `conv_thr` and **5.0e-14** at 1e-10 (P83). The two codes' spinor answers are
+**3.1e-5** apart, which is *tighter* than the 4.3e-5 the two scalar runs sit at.
+
+**What this row is not.** A two-atom cell at `ecutwfc = 18` is where fixed overheads
+dominate, and `CLAUDE.md` says so in as many words -- it is here because it is the
+cell the correctness claim was made on and a ratio wants the same input, not because
+it is where the cost lives. The response stack has never been profiled on
+`si8-1k`-scale cells at all, which is the measurement this row should be read as
+asking for rather than answering.
+
 ## History
 
 | Date | Change | Effect |

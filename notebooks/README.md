@@ -70,6 +70,7 @@ instead, which means the physics is selected in the input file rather than at th
 | To compute | Call | Notebook |
 |---|---|---|
 | The dielectric constant | `get_dielectric_tensor()` | [19](19_linear_response.ipynb) |
+| The dielectric constant of a spin-orbit insulator | `with_spin(4)`, `get_dielectric_tensor()` | [19](19_linear_response.ipynb) |
 | Born effective charges | `get_born_charges()` | [19](19_linear_response.ipynb) |
 | Band velocities | `get_band_velocities()` | [19](19_linear_response.ipynb) |
 | Phonon frequencies at `Gamma` | `get_phonons()` | [20](20_phonons.ipynb) |
@@ -143,7 +144,7 @@ want a number.
 | [`16_projected_density_of_states.ipynb`](16_projected_density_of_states.ipynb) | Which atom and which orbital a band belongs to, as a projected DOS, Löwdin charges and fat bands, and resolved by $j$ for a spin-orbit run |
 | [`17_reaching_self_consistency.ipynb`](17_reaching_self_consistency.ipynb) | Charge sloshing and Kerker screening, and the unstable magnetic solutions a mixer cannot reach |
 | [`18_continuing_a_calculation.ipynb`](18_continuing_a_calculation.ipynb) | Starting one run from another across a change of spin regime: iron's moment rotated in one iteration |
-| [`19_linear_response.ipynb`](19_linear_response.ipynb) | Silicon's dielectric constant and Born charges against `ph.x`, norm-conserving and ultrasoft, and the charge that does the screening |
+| [`19_linear_response.ipynb`](19_linear_response.ipynb) | Silicon's dielectric constant and Born charges against `ph.x`, norm-conserving and ultrasoft, the charge that does the screening, and the same insulator written as a spinor, where every band holds one electron instead of two |
 | [`20_phonons.ipynb`](20_phonons.ipynb) | Phonons: silicon's optical mode at Gamma against `ph.x`, the charge that rearranges, a metal, and the six branches at the zone boundary |
 | [`21_electrostriction.ipynb`](21_electrostriction.ipynb) | How a strain changes the dielectric constant: electrostriction, the elasto-optic tensor and elastic constants |
 | [`22_van_der_waals.ipynb`](22_van_der_waals.ipynb) | Grimme's D2, and bilayer graphene binding at 3.23 A where PBE alone has no minimum at all |
@@ -261,13 +262,13 @@ workstation core, slowest last:
 | `09` | 6 | `06` | 23 | `23` | 35 | `30` | 131 |
 | `02` | 8 | `25` | 28 | `32` | 35 | `36` | 133 |
 | `37` | 9 | `17` | 29 | `34` | 40 | `39` | 151 |
-| `03` | 10 | `18` | 29 | `19` | 47 | `41` | 164 |
-| `05` | 10 | `12` | 30 | `10` | 50 | `08` | 171 |
-| `04` | 12 | `21` | 30 | `29` | 59 | `27` | 178 |
-| `22` | 12 | `15` | 31 | `11` | 81 | `43` | 240 |
-| `42` | 13 | `24` | 31 | `14` | 89 | `38` | 242 |
-| `16` | 18 | `28` | 33 | `26` | 109 | `35` | 276 |
-| `00` | 22 | `31` | 34 | `33` | 115 | `20` | 282 |
+| `03` | 10 | `18` | 29 | `10` | 50 | `41` | 164 |
+| `05` | 10 | `12` | 30 | `29` | 59 | `08` | 171 |
+| `04` | 12 | `21` | 30 | `11` | 81 | `27` | 178 |
+| `22` | 12 | `15` | 31 | `14` | 89 | `43` | 240 |
+| `42` | 13 | `24` | 31 | `26` | 109 | `38` | 242 |
+| `16` | 18 | `28` | 33 | `33` | 115 | `35` | 276 |
+| `00` | 22 | `31` | 34 | `19` | 125 | `20` | 282 |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two
 hand-built linear solves and a second self-consistent run that were demonstrating

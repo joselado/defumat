@@ -1512,8 +1512,10 @@ hand-derived expressions and have no spinor form. The force on an atom of a
 different plane-wave spheres, so the nonlocal term needs the projectors of both;
 \code{dE/dq} is what a spiral has instead. \textbf{Elastic constants and
 electrostriction} stay refused for \code{noncolin}: they differentiate the same
-functional a third time and their first-order wavefunctions come from a
-Sternheimer solve that has no spinor form.
+functional a third time, and while the Sternheimer solve their first-order
+wavefunctions come from now \emph{does} have a spinor form, no third derivative
+has been run with one. The refusal is about the assembly rather than the solve,
+which is the distinction that cost this project a whole quantity once before.
 \end{refuses}
 
 % =====================================================================
@@ -1617,6 +1619,41 @@ the tangent of a \emph{composition} rather than of a solve. What located them
 is that $\partial\epsilon/\partial\tau$ is a sum of five partial derivatives
 and each one can be finite-differenced on its own against a re-converged run:
 three agreed to 7e-4 and two did not.
+
+\textbf{A spinor run has a dielectric constant and Born charges}, on a
+norm-conserving dataset. A nonmagnetic one is the same physics on a doubled
+space, four bands of two electrons against eight of one, and it comes out the
+same to $5\times10^{-14}$ in $\epsilon$ and $3\times10^{-15}$ in $Z^{\ast}$;
+the symmetrised 8-point wedge of an unshifted grid gives the closed 64-point
+grid's tensor to $7\times10^{-13}$, and \code{ph.x}'s own number to
+$4.3\times10^{-5}$, which is the scalar route's figure to the digit.
+
+\begin{lstlisting}[language=Python]
+silicon = Calculator.from_file("si-epsilon.in")
+spinor  = silicon.with_spin(4)          # 8 bands of one electron, not 4 of two
+spinor.get_dielectric_tensor().isotropic    # 13.806641, against 13.806646
+\end{lstlisting}
+
+\noindent\code{with\_spin} promotes the converged state rather than starting
+again, so the second ground state is not paid for twice.
+
+\textbf{A magnetic spinor is refused, and the reason is a measurement rather
+than a missing term.} An iodine atom with spin--orbit coupling and its moment
+along $z$ (\code{i-atom-soc.in}, \code{nosym}, a 0.164~eV gap) gives
+$\epsilon = \mathrm{diag}(1.3565721,\,1.3565721,\,1.5744824)$: uniaxial along
+the moment, off-diagonals at $10^{-15}$, and \emph{nothing imposes it} --- the
+run carries no symmetry, so the two equal entries are a measurement. Turn the
+moment to $x$ and the distinct axis moves with it, returning the same two
+numbers to nine digits, which is what makes the anisotropy a statement about
+spin--orbit coupling rather than about the box. And yet \code{ph.x}, on a ground
+state the two codes agree on to the printed digit, gives 1.494594 along the
+moment against this 1.574482 --- \textbf{5.3\%}, where the two components across
+it agree to $5\times10^{-4}$. Every threshold QE's \code{dmxc\_nc} has that a
+derivative of the potential does not (a clamped $\zeta$, a zeroing above
+$|\zeta| = 1$, an $|\mathbf m| \le 10^{-10}$ rule) fires at \textbf{zero} of
+that cell's 157464 grid points, so it is not a convention at an edge. It is
+unlocated, and a number that is 5\% out while looking like a working calculation
+is what a refusal is for.
 
 \textbf{A subset of the atoms can be displaced on its own.} The cost of a
 dynamical matrix is that $3\,n_{\mathrm{at}}$ bare perturbations and
@@ -1786,6 +1823,25 @@ and such a run wants \code{nosym}; the dynamical matrix of an ultrasoft or PAW \
 \code{becsum} dependence is entirely inside \code{dpsi}, and an insulator cannot
 say which weight the three further tangents belong with); any response under a
 potential-only meta-GGA; and a shifted grid with a reduced $k$-set.
+
+A \textbf{spinor} run (\code{noncolin}, with or without \code{lspinorb}) has a
+dielectric constant and Born charges on a \textbf{norm-conserving} dataset,
+provided it carries \emph{no net moment}. A \textbf{textured} one
+(\code{nspin\_mag = 4}) is refused by name and the refusal carries its own
+measurement: it runs, its tensor is uniaxial along the moment and follows the
+moment when that is turned, and it is 5.3\% from \code{ph.x} in the component
+along the moment with the two across it agreeing to $5\times10^{-4}$. An
+\emph{ultrasoft or PAW} one is refused by name and the missing piece is exactly
+one object: $\mathrm dD_{ij}$ is a $2\times2$ matrix in spin space
+(\code{set\_int3\_nc}) where a norm-conserving dataset has no $\mathrm dD$ at
+all. The \textbf{phonons, the Raman tensor, the strain response} and everything
+built on them stay refused for a spinor, and for their own reason rather than
+this one: \code{symmetrize\_displacement} carries the axial landmine the field
+path had --- three of the four \code{nspin\_mag} channels are a magnetization
+and rotate with $\det(R)$ and the time-reversal sign --- with the atom
+permutation on top, and a symmetriser that has never been checked against the
+whole zone is worse than a refusal. That is not rhetoric: on the field path the
+wrong rotation was \textbf{66\%}, worse than no symmetrisation at all.
 
 Also refused: a ground state converged under a \textbf{magnetic field or a
 constrained moment}. The whole stack rebuilds its potential from the field the

@@ -104,7 +104,7 @@ import numpy as np
 from defumat.basis.interpolate import to_dense
 from defumat.batching import map_k
 from defumat.forces.energy import FrozenState, frozen_energy
-from defumat.scf.density import becsum as becsum_of, sum_band
+from defumat.scf.density import becsum as becsum_of, spinor_sum_band, sum_band
 
 __all__ = ["born_effective_charges", "require_born_charges"]
 
@@ -212,6 +212,15 @@ def born_effective_charges(
                 wavefunctions=states, weights=weights, eigenvalues=eigenvalues
             ),
             density=density_of, becsum=becsum_of_, multipliers=multipliers,
+            # **Asked for deliberately, as the rule in :func:`reject_spinors`
+            # requires.** ``spinors = False`` is the default precisely so that a
+            # consumer which has never been validated in this regime cannot sail
+            # past it; this one has an opt-in of its own one level up
+            # (:func:`~defumat.response.efield.dielectric_tensor` passes
+            # ``noncollinear = True`` to the Sternheimer guard), and the
+            # ultrasoft spinor -- the half that is genuinely missing -- is
+            # refused there and again by the multiplier branch inside.
+            spinors=True,
         )
 
     gradient = jax.grad(energy, argnums=0)
@@ -281,10 +290,24 @@ def _raw_mixed_state(calculation, positions, psi, weights, density, becsum):
 
     def raw_density(moved, states, occupations, parts):
         smooth, dense = moved.basis.smooth, moved.basis.dense
-        bands = sum_band(
-            states, moved.fft_index, smooth.grid, occupations,
-            moved.system.cell, moved.k_batch,
-        )
+        if moved.noncolin:
+            # The same split :meth:`Calculation.density` and
+            # :meth:`SternheimerSolver.density_at` make, and for the same
+            # reason: a spinor carries its own spin axis *inside* the
+            # coefficient vector, so the leading channel axis of ``states`` is
+            # 1 and the density that comes out has ``nspin_mag`` components
+            # rather than one. Feeding a ``2 npwx``-long spinor to the collinear
+            # builder does not give a wrong number, it fails to broadcast --
+            # which is how this site was found.
+            bands = spinor_sum_band(
+                states[0], moved.state_fft_index, smooth.grid, occupations[0],
+                moved.system.cell, moved.nspin_mag, moved.k_batch,
+            )
+        else:
+            bands = sum_band(
+                states, moved.fft_index, smooth.grid, occupations,
+                moved.system.cell, moved.k_batch,
+            )
         return moved.augmented(to_dense(bands, smooth, dense), parts)
 
     here = calculation.at_positions(positions)

@@ -71,6 +71,13 @@ end-to-end test caught it. An array-algebra test passed either way.
 
 ### A. No linear response for a spinor, so a magnet with spin-orbit coupling has no phonons and no spectra [11]
 
+**Partly closed. P81 did the solve; P83 did the dielectric tensor and the Born charges
+for a spinor carrying no net moment. What is below is the state before those, kept
+because its reasoning is why the rest has the shape it does. Still open: the textured
+case (item A2, immediately after this one), the phonons and everything above them
+(`symmetrize_displacement`'s axial landmine), and the ultrasoft spinor
+(`set_int3_nc`).**
+
 **Phase.** The largest item here by consequence: everything above the ground state is closed
 for a noncollinear run — phonons, Born charges, the dielectric constant, LO-TO splitting,
 Raman, the strain response, the elastic constants, electrostriction, the piezoelectric
@@ -107,6 +114,54 @@ atoms, norm-conserving, so `set_int3_nc` does not arise and the test is `spinor_
 plus the existing CG. That is the check P45 used to close `nspin = 2`. It exercises the
 kernel at a node, because a 90-degree texture has grid points where `m` passes through
 zero.
+
+### A2. A textured spinor's dielectric tensor is 5.3 per cent from `ph.x` and nobody knows whose fault it is [new, P83]
+
+**Phase.** P83 opened the dielectric tensor and the Born charges for a spinor and validated
+them for `nspin_mag = 1` -- the identity against the scalar run at 5.0e-14, the wedge against
+the closed grid at 7.4e-13, `ph.x` at 4.3e-5. The **textured** case (`nspin_mag = 4`) runs,
+passes two internal checks that are not weak, and disagrees with `ph.x`. It is refused by
+name (`require_a_measured_spinor_response`), which is where it stays until this is located.
+
+**The numbers, on `i-atom-soc.in`** -- an iodine atom, `lspinorb`, fixed occupations, a
+0.164 eV gap, moment 1.00 mu_B, `nosym`, and the two codes agreeing on the ground state to
+the printed digit (-25.80117002 Ry):
+
+| | across the moment | along the moment |
+|---|---|---|
+| defumat | 1.356572109, 1.356572109 | **1.574482417** |
+| `ph.x` | 1.357034400, 1.357092056 | **1.494593593** |
+
+4.6e-4 across, which is `ph.x`'s own floor on this cell (its two transverse entries differ
+from each other by 5.8e-5), and **5.3 per cent** along. The same solve in RPA gives
+1.37741894, so the disagreement is 40 per cent of the whole `f_xc` contribution.
+
+**What passes, and it is why this is interesting rather than obvious.** The tensor is
+uniaxial along the moment with nothing imposing it (`nosym`, so the symmetriser returns its
+argument and `symmatrix` is skipped), and turning the moment to `x` moves the distinct axis
+and returns **the same two numbers to nine digits**. The assembly is not wildly wrong.
+
+**Three explanations are already dead. Do not test them again.** `dmxc_nc` differs from a
+`jvp` of `v_of_rho` in exactly three places, all thresholds, and each fires at **zero** of
+this cell's 157464 grid points: the clamped `zeta` derivative (`max |zeta| = 0.3245` against
+a clamp at `1 - 2e-6`), the `|zeta| > 1` / `n <= 1e-30` zeroing (`min n = 1.3e-9`), and the
+`|m| <= 1e-10` rule. Both kernels are in their smooth interior. This is **not** P70's
+convention trap one regime up, which was the obvious guess.
+
+**The RPA control does not exist for a magnet and that is physics.** Dropping `f_xc` leaves
+the magnetization with no restoring kernel at all, since Hartree is blind to it: `ph.x`
+diverges outright (`|ddv_scf|^2` at 1e14 by iteration 44). defumat's `screening = "hartree"`
+converges instead, which is a second unexplained difference and may be the cheaper thread to
+pull.
+
+**First step, and it is cheap.** P81's own check on this cell: `chi_0` under a *potential*
+probe against a central difference of the density. It has no kernel in it at all, so it
+separates the solve from the screening -- and **no Sternheimer solve here has ever run on an
+`lspinorb` dataset**, since P81's three cells were all `H.pz-vbc` or `Si.pz-vbc`. The script
+is written (`iodine_chi0.py` in P83's scratch) and is a few minutes. If it passes, the
+kernel is the suspect and `dmxc_nc`'s own `dz = 1e-6` finite difference is as much a
+candidate as this code's exact derivative; the tie-breaker is an independent sum-over-states
+route on the same cell, which shares only the ground state.
 
 ### B. Elk's per-atom feedback field, so a held texture is exact rather than nearly [10, remaining half]
 

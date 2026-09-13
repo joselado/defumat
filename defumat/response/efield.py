@@ -98,10 +98,25 @@ Against the vendored ``ph.x``: **13.806646** against 13.806689 (norm-conserving
 Si), **14.325321** against 14.325270 (ultrasoft Si), **14.320211** against
 14.320177 (PAW Si) and **5.756059** against 5.756182 (ultrasoft C).
 
+**A spinor run carrying no net moment is not refused (P83)**, and it was the
+first assembly to ask P81's solve for its opt-in. A *textured* one
+(``nspin_mag = 4``) still is, and for a measured reason rather than a missing
+term: see :func:`require_a_measured_spinor_response`. A nonmagnetic spinor
+silicon gives the scalar run's
+own ``epsilon`` and ``Z*`` -- 5.0e-14 and 3.0e-15 apart at ``conv_thr = 1e-10``
+-- and the symmetrised 8-point wedge gives the closed 64-point grid's tensor to
+7.4e-13, against the scalar pair's own 4.1e-13. Asking found three collinear
+places nothing had reached: :mod:`defumat.response.born`'s *local* density
+builder, and in :func:`defumat.forces.energy.frozen_energy` both the ``spinors``
+opt-in and a refusal of the matrix multipliers that was really about the
+**metric** -- ``qq_so`` against the scalar ``qq`` -- and so never applied to a
+norm-conserving spinor, where ``S = 1``.
+
 What is still refused is what :func:`~defumat.response.sternheimer.
-require_a_sternheimer_regime` refuses -- metals, noncollinear magnetism, DFT+U,
-spirals -- and a metal has no ``epsilon_infinity`` in any case, which is why
-``pw.x`` refuses ``epsil`` for one too.
+require_a_sternheimer_regime` refuses -- metals, DFT+U, spirals, and an
+**ultrasoft or PAW** spinor, whose ``dD_ij`` is a 2x2 matrix in spin space
+(``set_int3_nc``) -- and a metal has no ``epsilon_infinity`` in any case, which
+is why ``pw.x`` refuses ``epsil`` for one too.
 """
 
 from __future__ import annotations
@@ -129,6 +144,7 @@ from defumat.system.symmetry import cartesian_rotations, symmetrize_matrix
 from defumat.units import FPI
 
 __all__ = ["DielectricTensor", "dielectric_tensor",
+           "require_a_measured_spinor_response",
            "require_a_symmetrisable_response"]
 
 #: QE's ``alpha_mix(1)``: the weight the mixer gives the residual. It is no
@@ -253,7 +269,10 @@ def dielectric_tensor(
     # commutator ``[H, r]`` (``dvpsi_e``, ``response/velocity.py``), which
     # builds its own plane-wave sums and has none of the corrections. Measured
     # with the guard lifted: 501.7/213.1/253.1 against an isotropic 190.8.
-    require_a_sternheimer_regime(calculation, spin_polarized=True)
+    require_a_sternheimer_regime(
+        calculation, spin_polarized=True, noncollinear=True,
+    )
+    require_a_measured_spinor_response(calculation)
     if born_charges:
         # Checked first of all: the refusal is a statement about the dataset, so
         # it should not cost a whole self-consistent response -- nor a converged
@@ -814,6 +833,89 @@ def _symmetrize_becsum_response(calculation, per_axis):
         tuple(None if values is None else values[axis] for values in symmetrised)
         for axis in range(3)
     ]
+
+
+def require_a_measured_spinor_response(calculation) -> None:
+    """A *textured* spinor dielectric tensor runs and is not trusted. P83.
+
+    ``nspin_mag`` is 4 only when the run actually carries a magnetization, and
+    that is the case this refuses. A spinor with **no** magnetization -- a
+    spin-orbit insulator with a filled shell, which is the commoner heavy-element
+    regime -- has ``nspin_mag = 1`` and is supported: it reaches ``ph.x``'s own
+    number to 4.3e-5, reproduces the scalar run's ``epsilon`` and ``Z*`` to
+    5.0e-14 and 3.0e-15, and its symmetrised wedge reproduces the closed grid to
+    7.4e-13.
+
+    **What a textured run gives, and why that is not enough.** The one cell here
+    that is at once an insulator, textured and norm-conserving is
+    ``i-atom-soc.in`` -- an iodine atom, ``lspinorb``, ``occupations = 'fixed'``,
+    7 electrons in 8 spinor bands with a 0.164 eV gap, moment 1.00 mu_B along z.
+    Two internal checks pass and they are not weak ones:
+
+    * the tensor is **uniaxial along the moment**,
+      ``diag(1.356572109, 1.356572109, 1.574482417)``, with the off-diagonal
+      entries at 6e-15 and **nothing imposing it** -- the run is ``nosym``, so
+      ``symmetrize_directional`` returns its argument and ``symmatrix`` is
+      skipped, which makes the two equal entries a measurement;
+    * turning the moment to ``x`` moves the distinct axis to ``x`` and returns
+      **the same two numbers to all nine digits**. That is what makes the
+      equality a statement about spin-orbit coupling rather than about the box:
+      without ``lspinorb`` the spin and the orbital hole decouple and the
+      anisotropy would stay wherever the eigensolver put it.
+
+    And yet ``ph.x`` on the same ground state -- whose total energy it agrees with
+    to the printed digit, -25.80117002 Ry -- gives
+    ``diag(1.357034400, 1.357092056, 1.494593593)``. The two components **across**
+    the moment agree to 4.6e-4, which is ``ph.x``'s own floor on this cell rather
+    than ours (its own ``eps_xx`` and ``eps_yy`` differ by 5.8e-5 and its
+    off-diagonals are 7e-5). The one **along** the moment is **0.080 apart, 5.3
+    per cent**, and that is 40 per cent of the whole exchange-correlation
+    contribution to it: the same solve in RPA gives 1.37741894, so ``f_xc`` is
+    worth +0.197 there and the disagreement is a large fraction of it.
+
+    **Three explanations were tested and all three are dead**, which is recorded
+    so that they are not tested a fourth time. ``dmxc_nc`` differs from a ``jvp``
+    of ``v_of_rho`` in exactly three places, and every one of them is a threshold
+    that this cell never reaches:
+
+    * it evaluates ``dv/dzeta`` as a ``dz = 1e-6`` central difference at a
+      **clamped** ``zeta_eff = sign(min(|zeta|, 1 - 2e-6), zeta)`` -- **0** of
+      157464 grid points are above that clamp, and ``max |zeta| = 0.3245``;
+    * it sets the whole 4x4 kernel to zero where ``|zeta| > 1`` or
+      ``n <= 1e-30`` -- **0** points, and ``min n = 1.3e-9``;
+    * it keeps only the charge-charge element where ``|m| <= 1e-10`` -- **0**
+      points.
+
+    So both kernels are in their smooth interior everywhere on this cell and the
+    difference is not a convention at an edge, which is what P70's
+    ``|zeta| >= 1`` turned out to be for the collinear case. It is a genuine
+    difference in what one of the two codes computes, and it is unlocated.
+
+    **Why this is a refusal and not a warning.** A user asking for the dielectric
+    constant of a magnetic spin-orbit insulator would otherwise be handed a
+    number that is 5 per cent from ``ph.x``'s, symmetric, positive, uniaxial
+    along the moment and in every visible respect a working calculation. There is
+    no workaround to route them to: the quantity is the one they asked for.
+
+    The *bare* response is **not** implicated by any of this and is separately
+    validated for ``nspin_mag = 4`` (P81: ``chi_0`` against a central difference
+    of the density on a 90-degree texture, four probes, 1.2e-6 to 7.7e-6), so
+    what is in question is the screened assembly rather than the solve.
+    """
+    if calculation.nspin_mag == 4:
+        raise NotImplementedError(
+            "the dielectric response of a *textured* spinor (nspin_mag = 4, a "
+            "noncollinear run that carries a magnetization) is refused: it runs, "
+            "and on the one comparable cell here it disagrees with ph.x by 5.3 "
+            "per cent in the component along the moment (1.574482 against "
+            "1.494594) while the two across it agree to 4.6e-4. Every threshold "
+            "dmxc_nc has that a jvp of v_of_rho does not -- the clamped zeta "
+            "derivative, the |zeta| > 1 zeroing, the |m| <= 1e-10 rule -- was "
+            "measured on that cell and fires at zero of 157464 grid points, so "
+            "the disagreement is not a convention at an edge and is unlocated. "
+            "A spinor with **no** magnetization (nspin_mag = 1, a filled-shell "
+            "spin-orbit insulator) is implemented and matches ph.x to 4.3e-5"
+        )
 
 
 def require_a_symmetrisable_response(calculation) -> None:
