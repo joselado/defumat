@@ -609,6 +609,35 @@ Full breakdown, sub-phase order, validation route and refusals: `PLAN.md` P62.
 
 ---
 
+## 9. The ultracell -- **planned, P84**
+
+Added 2026-09-13, and it is the second entry here that a walk of the task list could
+not find. Section 8's reason was that Elk's DFT+U flavours are an input block rather
+than a task; this one's is the opposite kind of miss. Tasks 700/701/720/725/731-3/741-3/771-3
+*are* in the list, and the filter at the top of this file threw them out because they emit a
+**ground state** rather than an observable and cost far more than an NSCF run. Both of those
+are true and neither makes the entry uninteresting: the ultra long-range method
+(`modulr.f90`, and Mueller, Sharma, Gross and Dewhurst, Phys. Rev. Lett. **125**, 256402
+(2020)) computes a density and magnetization modulated over a cell of hundreds or thousands
+of unit cells, at a cost set by the *number of bands* rather than the number of plane waves,
+by expanding the ultracell's states in the unit cell's own Kohn-Sham states at the folded
+k-points.
+
+`pw.x` has nothing like it -- checked by `grep` for `ultracell|ultra-long|ultralong` over
+the vendored tree's 1959 Fortran files, which returns nothing in `PW/`, `PP/` or `PWCOND/`. It is the length scale where
+spin density waves, skyrmions, domain walls and screened impurities live, and this package
+already has the noncollinear magnetism, spin-orbit coupling, constrained moments and
+`k + q` machinery that the method is assembled from. The full design, the two routes, the
+refusals and the validation route are `PLAN.md` P84; the one-line reason it is worth the
+size is that Elk reports **no total energy** for an ultracell run, so the energy gain of a
+modulated state over the uniform one is blank in both codes.
+
+**It fails the cheapness filter and is listed anyway**, for the reason section 5 established
+and this file already records: what predicts effort is how much of the assembly exists here,
+not what the quantity costs in Elk.
+
+---
+
 ## Considered and rejected
 
 | Elk task | Why not |

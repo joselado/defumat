@@ -14542,6 +14542,300 @@ told from silence is this project's most-repeated trap.
   which is a statement about that route rather than this one, and QE's own `average_pp.f90`
   refuses ultrasoft and PAW outright.
 
+### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. 📐 PLANNED, not started.
+
+Elk tasks 700/701 (ground state), 720/725 (band structure and spectral function), 731-3,
+741-3, 771-3 (plots); `src/modulr.f90` and the twenty routines around it. The method paper is
+T. Mueller, S. Sharma, E. K. U. Gross and J. K. Dewhurst, *Extending solid-state calculations
+to ultra long-range length scales*, Phys. Rev. Lett. **125**, 256402 (2020), arXiv:2008.12573.
+`pw.x` has no counterpart, and neither does anything in `PP/`: this is a **new ground-state
+driver**, not an assembly on an existing one, which is why `ELK-FEATURES.md`'s walk of the
+task list did not see it -- that survey filters for tasks that emit an observable at NSCF
+cost, and this emits a ground state.
+
+**The physics it is for.** A spin density wave in bcc Cr has a period of 21 unit cells. A
+charged impurity in silicon is screened over about 20. A skyrmion is hundreds across, and a
+ferroelectric domain wall or a moire superlattice is tens to hundreds. Every one of them is a slow
+**envelope** on a structure that is still atomically periodic, and a supercell pays the same
+price per degree of freedom for the envelope as for the atoms -- which is why the length scale
+where interesting magnetism lives is the one nobody computes from first principles. The
+ultracell splits the two: the fast, unit-cell part of the wavefunction is computed once and
+frozen, and the self-consistency is carried out on the envelope alone.
+
+**The one equation.** Take an ultracell of `N = n1 n2 n3` copies of the unit cell. Its
+reciprocal lattice vectors inside the unit cell's Brillouin zone are `N` wavevectors `Q`.
+Everything that is allowed to be long-ranged -- the density, the magnetization, the
+Kohn-Sham potential, an applied field -- is written
+
+    rho(r) = sum_Q rho_Q(r) e^{iQ.r},     rho_Q lattice periodic,
+
+which is the same object as `rho(r; R)`, one lattice-periodic density per cell `R` of the
+ultracell, and the two are a discrete Fourier transform of each other over the `N` cells
+(Elk's `rhomagq`, `rfzfftq`). The ultracell Kohn-Sham states at an ultracell Brillouin zone
+point `k` are then expanded in the **unit cell's own Kohn-Sham states at the `N` points that
+fold onto it**:
+
+    |Psi> = sum_{Q,n} c_{Qn} |psi_{k+Q,n}>,    n = 1..nbnd,
+
+and the matrix to diagonalise is
+
+    H_{(Q,m),(Q',n)} = delta_{QQ'} delta_{mn} eps_{k+Q,n}
+                       + <psi_{k+Q,m}| dV_{Q-Q'} e^{i(Q-Q').r} |psi_{k+Q',n}>,
+
+with `dV = V_ULR - V_unitcell` **at `Q = 0` and `V_ULR` elsewhere**. That subtraction is
+Elk's `vblocalu`, it is the first thing to get wrong, and getting it wrong double-counts the
+whole unit-cell potential: the diagonal already carries it, inside `eps`.
+
+**What kind of approximation this is, stated exactly, because it is the only one.** The set
+`{psi_{k+Q,n} : all Q, all n}` spans, as `nbnd -> npw`, precisely the ultracell plane-wave
+basis at `k` -- the plane waves `k+Q+G` over all `Q` and unit-cell `G` *are* the ultracell's
+plane waves. So the ultracell method is a **variational truncation of the exact supercell
+problem to `nbnd` bands per folded k-point**, and nothing else. There is one knob and it is
+`nbnd`. **The convergence carries no sign**, and that is worth writing down because it is
+about to become a test: Rayleigh-Ritz bounds the eigenvalues of a *fixed* Hamiltonian, and
+this one moves with its own truncated density, so an ultracell eigenvalue is not an upper
+bound on the supercell's. Only the total energy is variational, and it does not exist until
+stage 4. Three consequences worth writing down before any code:
+
+- **The atoms do not move.** This is a route to an electronic or magnetic modulation on a
+  fixed lattice, not to a structural supercell. A displacement pattern is P71's job.
+- **The local band structure cannot relax.** The basis is built on the *unmodulated* unit
+  cell's potential. A modulation strong enough to change the local chemistry -- a moment
+  appearing on an atom that had none -- has to be absorbed by the empty states, so
+  convergence in `nbnd` is not a formality here, it is the physics check.
+- **It converges to the supercell answer**, which is what makes the validation route exist.
+
+**Why this is cheaper, and by how much.** The unit-cell diagonalisations at the `N`-fold
+folded k-set are done **once, before the self-consistent loop**, and frozen (Elk's
+`gndstulr` calls `genevfsv` before `do iscl`). Each iteration after that rebuilds a dense
+matrix of size `nbnd N` per k-point and diagonalises it. Against a real supercell, whose
+ultracell-BZ k-set is the same `N`-times-smaller one:
+
+| | supercell | ultracell |
+|---|---|---|
+| variational dimension per k | `N npw` | `N nbnd` |
+| the expensive solve | every iteration | once, before the loop |
+| per-iteration solve | Davidson on `N npw` | dense `(N nbnd)^3` |
+
+The win is the ratio `npw/nbnd` in the basis -- typically 10^2 to 10^3 -- times not repeating
+the hard part. **It is a prefactor, not a change of scaling**: the dense solve is still
+`O((N nbnd)^3)` per k-point, so "almost unlimited size" in the paper's title means a few
+thousand cells with few bands in one dimension, not a micron in three. Say that in the guide
+rather than letting a user find it. (A Davidson on the ultracell matrix would restore
+iterative scaling and this code already has one; it is a later option, not stage 1.)
+
+**Why it is easier here than in Elk, and the fork that follows from it.** In LAPW a state at
+`k+Q` cannot be handed to `H(k)`, so Elk represents *everything* in the basis of the states
+at the central k-point, mapping `k+Q` onto `k` with an overlap matrix forced unitary by SVD
+(`hdbulrk`, `genolpq`, `unitary`). In a plane-wave basis the same object is free:
+`e^{-iQ.r} psi_{k+Q,n}` is the *same coefficient vector* re-labelled onto the `k` sphere by
+Miller index, which is P16's `<u_mk|S|u_nk'>` primitive (`topology/states.py:_alignment`,
+including the wrap that the zone edge needs), and `H(k+Q)` applied to those coefficients is
+one `h_psi` on a frozen sphere -- exactly P19's and P21's `|k+q+G|^2` and `vkb(k+q)`. So
+there are two routes, and **both go in**, because their difference is the measurement:
+
+- **The direct route.** `H` and the density are built from the states at `k+Q` themselves.
+  This is the exact Rayleigh-Ritz matrix in the stated basis: the *only* approximation left
+  is the band truncation. The density is one scatter of `c_{Qn} u_{k+Q,n}(G)` into the
+  ultracell G-box plus **one ultracell FFT per occupied ultracell state** -- no muffin tins,
+  no per-cell rebuild. Cost of the matrix build: the block `(Q, Q')` depends on both indices,
+  so it is `O(N^2 nbnd)` unit-cell FFTs per k-point per iteration.
+- **The central-k route.** Change the basis to `{e^{i(k+Q).r} u_{k,m}}` -- the *same*
+  `nbnd` cell-periodic functions at every `Q`. It is still orthonormal, so the matrix in it is
+  still an exact Rayleigh-Ritz, just in a different and more slowly converging space; and it
+  buys a factor `N`, because the potential block now depends only on `Q - Q'`, so one `vmat`
+  per `Q` is scattered into every pair whose difference is that `Q` (`genhmlu`), and the
+  density becomes an FFT over `Q` of the coefficients followed by one ordinary unit-cell
+  density build per cell `R` (`rhomaguk` -- read it: the envelope *is* the Fourier transform
+  of the `Q`-amplitudes, which is the whole physical picture in one routine). `O(N nbnd)`
+  FFTs. **The diagonal block of this matrix is one `h_psi`**: `<u_{k,m}|H(k+Q)|u_{k,n}>` with
+  the kinetic term at `|k+Q+G|^2` and `vkb(k+Q)`, on the frozen `k` sphere, which is P19's and
+  P21's construction and which LAPW cannot do. Elk *approximates that block again*, by
+  `O^† eps O` with `O` forced unitary by SVD (`hdbulrk`, `genolpq`, `unitary`), and the
+  approximation is a consequence of the basis functions, not of the method.
+
+So: **the direct route is the reference, and the central-k route is what runs at large `N`.**
+Stage 1 writes the direct route and validates it against a supercell on a small ultracell,
+where `N^2` is affordable. Stage 2 writes the other two and separates **two** errors that
+would otherwise be reported as one:
+
+  (i) the *basis* error -- the `k` states against the `k+Q` states at fixed `nbnd`, which is
+      the central-k route against the direct one and is the physics;
+  (ii) the *transcription* error -- Elk's unitarised `O^† eps O` against the exact `h_psi`
+      diagonal block in the same basis, which is arithmetic and should be small.
+
+Reporting a single number for the pair would leave (ii) hiding inside (i). Neither route is
+"the implementation" alone; the set of three is.
+
+**The tiling rule, which is the thing a user will get wrong.** `genkpakq` defaults the
+kappa-window to `nkpa = (ngridq+1)/2` -- **half** the Q-grid in each direction -- and the
+reason is arithmetic, not physics: an `m`-point window has `2m-1` distinct differences, so
+`m = (N+1)/2` is exactly the window whose differences fill the Q-set and no more. (Exactly,
+for odd `N`; for even `N` the window is `N/2`, `2m-1 = N-1`, and one difference at the zone
+edge is never formed -- so an even ultracell has one Fourier component of the potential that
+never enters the Hamiltonian. Use odd `N`, or the full window.) The price
+is that the basis at one k-point then holds `m` of the `N` folded states, and the rest have to
+come from other k-points: the union of the kappa-windows over the k-set must tile the
+Brillouin zone, which needs `ngridk_i ~ 2` in a modulated direction. **Elk's own Cr example
+does not do this** -- `ngridq 21 1 1` with `ngridk 1 6 6` puts 11 points in `|k_x| <= 5/21`
+and samples no more of that axis at all -- so the example is a deliberate under-sampling and
+should not be copied as the default. Here the default is the **full window**, `nkpa = N` with
+one k-point per ultracell-BZ point, which is the exact ultracell problem and is what makes the
+supercell comparison a comparison rather than an estimate; the difference `Q - Q'` then leaves
+the Q-set by a reciprocal lattice vector `G`, which in a plane-wave basis is a Miller-index
+shift and nothing else. Elk's half-window goes in as an option, second, with its error
+measured against the full one.
+
+**The Coulomb Green's function at `Q != 0`, and the `G = 0` term that must be kept.** The ultracell Hartree
+term is `4 pi / |G+Q|^2` over the *whole* `G+Q` set, and the `G = 0, Q != 0` element is
+**finite and kept** -- it is the term that screens a long-wavelength external potential, so
+dropping it the way the zone-centre code drops `G = 0` would remove the physics the method
+exists for. This is the same rule P71 already found for the phonon at `q != 0` and the same
+code: `response/phononq.py:hartree_at_q`. Only `G = Q = 0` is dropped, against the
+compensating background (`gengclqu` sets `gclq(1) = 0`, and `gengclgq(treg = .true.)` puts
+`gclq(iq)` into the `G = 0` element of every other `Q`).
+
+`q0cut` (manual 5.100) is Elk's knob for cutting or Yukawa-screening the small ones, and
+**the manual and the code do not say the same thing**: the manual says the Green's function
+is zeroed for all `|G+Q| < q0cut`, while `gengclqu` applies the cut-off only to `gclq`, which
+is the `G = 0` element of each `Q`. Transcribe the code, default it off, and say in the guide
+which of the two it is.
+
+**The exchange-correlation term, and the one place Elk approximates without saying so.**
+`potxcu` calls the ordinary `potxc` once per cell `R` on that cell's own density and Fourier
+transforms the result back to `Q`. For LDA that is exact -- the functional is local, so a
+per-cell call *is* the ultracell functional. For a **GGA it is not**: the gradient taken
+inside one cell misses the envelope's own gradient, an error of order `Q` in `grad rho`.
+Refuse GGA at first (LDA covers Cr, Si and LiF, which are the paper's three systems), then
+either take the gradient on the ultracell grid -- which the direct route's ultracell real-space
+density makes natural -- or measure the per-cell error and keep it as an option. Do not
+inherit the silence.
+
+**Elk has no ultracell total energy.** `energyulr.f90` (copyright 2025) computes `evalsum`
+and nothing else, and `writeengyu` prints the Fermi energy and the eigenvalue sum. So the
+energy *gain* of a spin density wave over the uniform state -- the quantity that says whether
+the modulation is the ground state at all -- is **blank in both codes**. Writing it is stage 4
+and it is a real piece of work: the double-counting corrections are integrals over the
+ultracell, `sum_Q` of `rho_Q^* V_Q` and the `E_xc` sum over cells, plus an Ewald term that does
+not change because the atoms do not move. It is the strongest candidate in this phase for a
+row with both tick columns empty.
+
+**What is refused at the door, and why each.**
+
+- **Ultrasoft and PAW.** The augmentation charge is a function of the density through
+  `D_ij`, so the frozen unit-cell states are no longer a fixed basis, and `S` enters every
+  overlap. (P16's primitive already carries `q_ij(b)`, so this is a later stage, not a
+  permanent refusal.)
+- **A non-integer ultracell.** Elk's `avecu` is an independent input with no consistency
+  check against `ngridq` (`readinput.f90:1919`, `init1.f90:168`), so an ultracell that is not
+  an integer multiple of the unit cell is *accepted* and its `R`-grid is then not a set of
+  lattice vectors. Here `avecu` is derived from three integers and anything else is refused
+  by name.
+- **Symmetry.** Elk sets `reducek = 0` for the whole ULR run and so does this: a modulation
+  breaks the crystal's group, and the group of the ultracell is not written. Full grid,
+  `nosym`, exactly as a spin spiral does.
+- **Gamma-only storage** (P68), because the basis is built at `k + Q` for `N` different `Q`
+  and none of them is `Gamma`.
+- **Meta-GGA** (potential-only, so there is nothing to be self-consistent *in* per cell),
+  **DFT+U** (the occupation matrix is per-atom and there are `N` copies of each atom),
+  **spin spirals** (a second modulation of the same states; Elk's `gndstulr` does
+  *not* check `spinsprl` and so accepts the combination untested, which is a reason to
+  refuse it here rather than a precedent), **OEP** and
+  **spin-polarised cores** (Elk's own two `Error(gndstulr)` stops).
+
+**Occupations, in one paragraph, because this is where the k-set trap lives.** There is one
+Fermi level over all `nbnd N` ultracell states at each k-point, each carrying the weight
+`w_k / N` (`occupyulr`, and the `/N` is what normalises the charge back to one unit cell).
+The k-set here is **built by the caller**, and `CLAUDE.md`'s standing trap applies without
+modification: every `KPoints` constructor applies the unpolarized `degspin` unconditionally,
+an ultracell state in a spinor run holds one electron, and the wrong answer is the plausible
+one (P51's 13.11 eV plasma frequency, P52's factor of four). The folded `k + Q` set goes
+through `for_spin` at the point it is built, and the test that catches it is the electron
+count, not the eigenvalues.
+
+**Convergence is the practical risk and it needs a number of its own.** Elk's Cr example runs
+`beta0 0.001`, linear mixing, `maxscl 2000` -- long-wavelength charge sloshing is exactly what
+a large cell does, and the ultracell is a large cell. The right instrument exists here:
+`scf/mixing.py:kerker_preconditioner` at `|G+Q|` rather than `|G|`, mixing the `Q`-resolved
+potential (minus the unit-cell part at `Q = 0`) as one complex vector through the existing
+Anderson mixer. **Iterations to convergence against Elk's 2000 is a headline number for this
+phase**, not a footnote.
+
+**The validation route, chosen before the phase starts.**
+
+1. **The null, and the guard that must fire.** `N = 1` must reproduce the ordinary unit-cell
+   SCF to round-off. `N > 1` with no external potential and no seed must stay at the uniform
+   solution -- and, because a clean zero here is indistinguishable from a dead code path
+   (`CLAUDE.md`'s "a check whose null result cannot be told from a pass"), the same test must
+   feed it a seeded `rndbfcu`-style random field and show that the state *moves*.
+2. **The number: against a real supercell in this code.** An `N`-cell supercell SCF under the
+   same modulated external potential, in defumat, with the same pseudopotentials and cutoff.
+   The two share the unit-cell SCF and none of the assembly, and the ultracell answer must
+   converge to the supercell one **in `nbnd`, with no sign asserted** -- see above: the
+   Hamiltonian moves with its own density, so a test written as "from above" would fail
+   spuriously and read as a bug. The convergence *curve* is the phase's central figure and it
+   is what the "variational truncation" claim means; the sign arrives with the total energy in
+   stage 4, where it is a real check. `N = 4` or `N = 6` on two-atom silicon is small enough
+   to run both sides.
+3. **An in-package sum rule.** A small longitudinal `V_ext` at the smallest non-zero `Q` in an
+   insulator must be screened by `1/eps_infinity`, and P24 gives `eps_infinity`
+   independently, by a route with no ultracell in it. This is the paper's own silicon
+   figure and it closes inside the package.
+4. **Elk, last, and stated as not like-for-like.** Cr's spin density wave period and
+   amplitude against task 700. An LAPW basis is not a plane-wave sphere and the pseudopotential
+   removes the core, so the comparison is of the *period and the envelope shape*, not of the
+   moment to three digits.
+
+**Memory, sized before anything is written.** The two objects that grow with `N`:
+
+- The ultracell density `rho(r; R)`: `N x (dense FFT grid) x nspin_mag`, float64. Two-atom
+  silicon at `N = 20` is 540 kB; a 21-cell Cr at a 27^3 grid with `nspin_mag = 4` is 13 MB; a
+  10^4-cell ultracell is 6.4 GB, and it is the wall that a one-dimensional modulation hits
+  first.
+- The ultracell Hamiltonian: `(nbnd N)^2` complex per k-point, which is 6.4 MB at
+  `nbnd = 30, N = 21` and is not the constraint until `N` is in the hundreds, when the `N^3`
+  solve has already stopped it.
+
+The direct route additionally holds one ultracell-grid wavefunction at a time during the
+density accumulation; band-batch it through `map_k`/`sum_k` rather than materialising the
+occupied set.
+
+**Staging, four stages, each with its own number.**
+
+1. **`nspin = 1`, norm-conserving, LDA, direct route.** Silicon or LiF under an applied
+   `V_ext(Q)`. Number: the supercell comparison (2) and the screening sum rule (3).
+2. **Elk's central-k route beside it.** Number: the projection error against stage 1 at fixed
+   `nbnd`, as a function of `N`, plus the FFT count that says why it is the route for large
+   `N`.
+3. **`nspin = 2` and `nspin = 4` with spin-orbit coupling**, the seeded random field
+   (`rndbfcu`), `reducebf`, and the `Q = 0` moment constraint -- which is the existing
+   fixed-spin-moment machinery (`scf/fields.py`) applied to one Fourier component. Number:
+   the Cr spin density wave period against Elk and against experiment.
+4. **The total energy.** Number: the energy gain of the modulated state over the uniform one,
+   checked against the supercell's own total energy difference -- the only check there is,
+   since Elk does not compute it.
+
+**What is deliberately not staged: the ultracell band structure and spectral function**
+(Elk's 720/725, `bandstrulr.f90`, where 720 is the central `kappa = 0` and 725 averages over
+all of them). It is post-processing on a converged ultracell state and it adds no physics the
+ground state does not already have, so it is deferred rather than forgotten -- and the README
+row should say so rather than tick Elk's 720 as though this computed it.
+
+**Deliverables, per `CLAUDE.md`.** A `README.md` row (`QE` blank, `Elk` ticked -- task 700); an entry in `docs/features.tex` with the amber box carrying the refusal list
+above; a notebook, which is **silicon screening over ~20 cells, not Cr** -- the ten-minute
+ceiling decides that, and the Cr number is quoted in prose; and a `PERFORMANCE.md` pair
+against Elk task 700 single-core at the same `ngridq` and `nempty`, **adding Elk's own
+`genevfsv` over the whole `k + kappa` set to its side**, because that is the work this code
+does inside its own driver and timing task 700 alone would compare a self-consistent loop
+against a loop plus the basis it stands on.
+
+**Input surface.** One new block. `ultracell` taking three integers (`n1 n2 n3`), a
+`kappa_window` switch for full-versus-half, and the external modulation: a `Q`-resolved
+external potential and magnetic field, which is Elk's `trdvclr`/`trdbfcr` read from file and
+should be a function or an array here rather than a file format. `avecu`, `scaleu`,
+`ngridkpa` are **not** copied as input variables -- they are derived or renamed, and the
+non-integer ultracell they permit is the refusal above.
+
 
 ## 4. Validation strategy
 
