@@ -1852,3 +1852,51 @@ falls into. **That last one is the candidate to test first**, by running the sca
 This is what the slow suite exists to catch and it was found by re-running one input by
 hand, which is the second time that has happened (`PLAN.md` P38 found three phases' claims
 drifted the one time the slow set was run end to end).
+
+---
+
+## 3. `h2-texture-120.in` does not converge as committed, and its header says it does
+
+**Found while writing the textures notebook, 2026-09-13, and confirmed by a second run.**
+The file states `constrained_magnetization = 'atomic texture'` at `lambda = 0.5`, and its
+header says *"`lambda` is left at a value the SCF tolerates rather than the largest that
+would hold the angle best"*. It is not. Two independent runs:
+
+| run | budget | `conv_thr` | reached | state |
+|---|---|---|---|---|
+| notebook thread | 100 iterations | 1e-8 | `6.4e-4` Ry | site residuals 49.0 and 51.7 degrees, final angle 102.7 |
+| confirmation | 120 iterations | 1e-6 (the file's own) | `4.9e-2` Ry | -- |
+
+The two accuracies are two orders apart at comparable budgets, which is itself the
+diagnosis: it is **oscillating rather than converging slowly**, so a larger budget is not
+the fix.
+
+**The code already knows.** `run_scf` prints a `RuntimeWarning` on this exact scheme
+saying that `'atomic texture'` constrains a direction and not a length, so its potential
+carries a `1/|m|` that *grows* as a site's moment shrinks, and that **no `lambda`
+converged in 400 iterations** on this very cell. That warning and this input file are
+each other's contradiction and both are committed.
+
+**Why nothing caught it.** No test runs the file as written.
+`tests/regression/test_holding_a_texture.py` reads the text and **rewrites** it to
+`'atomic'` at `lambda = 10` -- the scheme that does converge, and the one P79's 0.55
+degrees per site was measured with -- and `tests/unit/test_magnetic_fields.py` only parses
+it. So the input is referenced by two test files, `PLAN.md`, `NONCOLLINEAR.md`,
+`MAGNETISM-NEXT.md` and `docs/features.tex`, and run as committed by none of them.
+
+**What to do**, and it is a choice rather than a fix:
+
+* change the card to `'atomic'` with the `STARTING_MOMENTS` scaled to the expected moment,
+  which is what the warning recommends and what the regression test already does by hand
+  -- then the test stops rewriting the file and the input means what its header says; or
+* keep it as the *demonstration* that `'atomic texture'` does not converge, and rewrite
+  the header to say so, since a cell that fails by design is a legitimate thing to commit
+  and this one is cited as evidence in three documents.
+
+The first is better: a file whose header describes a converged run and which does not
+converge is the failure mode this list exists for. Either way the header changes, and
+`PLAN.md` P79's and `docs/features.tex`'s references to it should name which scheme the
+0.55 degrees belongs to, because the number is `'atomic'`'s and the file is not.
+
+**Cost.** Minutes, plus one run of `tests/regression/test_holding_a_texture.py` to check
+the rewrite is still doing what it was doing.
