@@ -250,6 +250,25 @@ is refused today for its own reason (two spheres), and it is the cheaper half.
 
 ### E. Spin spirals have no external number of any kind [15]
 
+**P86 built the whole apparatus for (a) and did not finish taking the number. Read that
+first** (`PLAN.md` P86): the matched input pair is committed
+(`tests/data/elk/h_chain_spiral/`, `tests/data/qe/h-chain-spiral-elk.in`), the defumat side
+of the scan is measured (`E(q) - E(0)` of 0, -20.71, -50.21 meV at `q_3 = 0, 1/4, 1/2` with
+`|m|` of 0.515, 0.615, 0.611), and **three separate ways the Elk side quietly stops being
+magnetic are identified and fixed**, each of which converged and reported success: a
+`reducebf` that fades the seed field before the moment establishes, Elk's default Broyden
+falling off the magnetic branch at loop 10 with its history full, and a binary that would
+not start because `libopenblas` is gone from this machine. What is left is running it.
+
+Two things to carry into that run. It is ~40 s per SCF loop at six threads on netlib and
+tens of loops per wavevector, so budget half an hour a point and do not take the
+`PERFORMANCE.md` pair beside anything (that one needs `PIN=1`, one core, idle). And Elk
+carries a small held field where defumat carries none: the Zeeman energy is outside the
+reported total in both codes and the field is the same at every `q`, so it largely cancels
+in `E(q) - E(0)` -- the check nobody has done is the same defumat scan under the same field.
+
+**The original entry follows.**
+
 **Phase for (a), and (b) is done.** Five internal identities on a one-atom hydrogen chain
 (4e-15, 7e-13, 3e-12 Ry, tests asserting 1e-9), plus P21's four for `dE/dq`. There is no
 `pw.x` counterpart and **no Elk number was ever taken**, although Elk implements the same
