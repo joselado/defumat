@@ -305,6 +305,17 @@ because that is what decides whether it is a session or a phase.
   follow-up; memory held by **child** processes, which the cgroup charges and this does
   not; and the fact that the failure lands at *teardown*, after the peak — if the peak is
   the kill, what survives is the log line, which is why it is written first.
+- **The ultracell beyond an unpolarized LDA** (P88, stage 1 done). What is missing, term by
+  term: **magnetism** -- which is what the method was published for, since a spin density
+  wave is the case it was built to reach -- where `nspin = 2` and `4` are refused by name;
+  a **total energy**, which neither this code nor Elk has (`energyulr.f90` is the eigenvalue
+  sum alone), so the energy gain of a modulated state over the uniform one is not a quantity
+  either code can report; a **GGA**, where the gradient of the ultracell density carries the
+  envelope's own gradient that Elk's per-cell `potxc` call silently drops; and the
+  **central-k route**, which would remove the direct route's `N^2` at the cost of a second
+  approximation, with the two errors separated. **Ultrasoft and PAW** are refused for their
+  own reason and are the nearest of the four: `D_ij` is a functional of the density, so the
+  frozen states stop being a fixed basis as soon as the modulation moves.
 - **Transferring more than a charge density from Elk** (P72). The reader and the seed are
   in for an unpolarized state of an element with no core, validated pointwise against
   Elk's own `RHO3D.OUT` on hydrogen and on SiC. What is missing is a **magnetization** (an
