@@ -24,27 +24,13 @@ checked automatically, term by term, against Quantum ESPRESSO's own reference
 outputs for around a hundred cases.
 
 On that formalism it carries features taken from, and checked against, two
-other codes:
-
-- **[Elk](https://elk.sourceforge.io)**, the all-electron LAPW code — spin
-  spirals without a supercell, magnetic fields inside a single atom's sphere,
-  effective masses, the Fermi-surface nesting function, second-harmonic
-  generation, X-ray and magnetic structure factors. None of these is something
-  `pw.x` computes at all.
-- **[pyqula](https://github.com/joselado/pyqula)**, the quantum lattice and
-  tight-binding library — the **residual solver**, which finds magnetic
-  solutions no mixer reaches by treating self-consistency as a root-finding
-  problem rather than a fixed-point iteration; and the model Hamiltonians and
-  overlap conventions the **topological invariants** here are pinned against,
-  Chern numbers and $\mathbb{Z}_2$ alike.
-
-And beyond all three there are quantities none of them computes: relaxing a spin
-spiral's wavevector down $\mathrm{d}E/\mathrm{d}\mathbf{q}$, the strain
-response and the deformation potentials, elastic and electrostriction constants,
-the magnetic torque, vertical tunnelling transport. The table below ticks off,
-quantity by quantity, what Quantum ESPRESSO and Elk compute as well; a row blank
-in both columns is one neither has, and is pinned by an identity or an
-independent second route rather than by a reference output.
+other codes: **[Elk](https://elk.sourceforge.io)**, the all-electron LAPW code,
+and **[pyqula](https://github.com/joselado/pyqula)**, the quantum lattice and
+tight-binding library. And beyond all three there are quantities none of them
+computes. The table below ticks off, quantity by quantity, what Quantum
+ESPRESSO and Elk compute as well; a row blank in both columns is one neither
+has, and is pinned by an identity or an independent second route rather than by
+a reference output.
 
 ## Capabilities at a glance
 
