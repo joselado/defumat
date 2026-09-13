@@ -98,10 +98,22 @@ Against the vendored ``ph.x``: **13.806646** against 13.806689 (norm-conserving
 Si), **14.325321** against 14.325270 (ultrasoft Si), **14.320211** against
 14.320177 (PAW Si) and **5.756059** against 5.756182 (ultrasoft C).
 
+**A spinor run is not refused (P83)**, and it was the first assembly to ask
+P81's solve for its opt-in. A nonmagnetic spinor silicon gives the scalar run's
+own ``epsilon`` and ``Z*`` -- 5.0e-14 and 3.0e-15 apart at ``conv_thr = 1e-10``
+-- and the symmetrised 8-point wedge gives the closed 64-point grid's tensor to
+7.4e-13, against the scalar pair's own 4.1e-13. Asking found three collinear
+places nothing had reached: :mod:`defumat.response.born`'s *local* density
+builder, and in :func:`defumat.forces.energy.frozen_energy` both the ``spinors``
+opt-in and a refusal of the matrix multipliers that was really about the
+**metric** -- ``qq_so`` against the scalar ``qq`` -- and so never applied to a
+norm-conserving spinor, where ``S = 1``.
+
 What is still refused is what :func:`~defumat.response.sternheimer.
-require_a_sternheimer_regime` refuses -- metals, noncollinear magnetism, DFT+U,
-spirals -- and a metal has no ``epsilon_infinity`` in any case, which is why
-``pw.x`` refuses ``epsil`` for one too.
+require_a_sternheimer_regime` refuses -- metals, DFT+U, spirals, and an
+**ultrasoft or PAW** spinor, whose ``dD_ij`` is a 2x2 matrix in spin space
+(``set_int3_nc``) -- and a metal has no ``epsilon_infinity`` in any case, which
+is why ``pw.x`` refuses ``epsil`` for one too.
 """
 
 from __future__ import annotations
@@ -253,7 +265,9 @@ def dielectric_tensor(
     # commutator ``[H, r]`` (``dvpsi_e``, ``response/velocity.py``), which
     # builds its own plane-wave sums and has none of the corrections. Measured
     # with the guard lifted: 501.7/213.1/253.1 against an isotropic 190.8.
-    require_a_sternheimer_regime(calculation, spin_polarized=True)
+    require_a_sternheimer_regime(
+        calculation, spin_polarized=True, noncollinear=True,
+    )
     if born_charges:
         # Checked first of all: the refusal is a statement about the dataset, so
         # it should not cost a whole self-consistent response -- nor a converged

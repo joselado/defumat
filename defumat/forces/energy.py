@@ -390,14 +390,24 @@ def energy_at(moved, state: FrozenState, terms: bool = False, density=None,
     reject_potential_only(moved)
     if moved.noncolin:
         reject_spinor_spiral(moved)
-        if multipliers is not None:
+        if multipliers is not None and moved.is_ultrasoft:
+            # **The refusal is about the metric, not about the spinor.** The
+            # Gram matrix :func:`_constraint_energy` builds is
+            # ``<psi_m|psi_n>`` over the whole ``2 npwx``-long coefficient
+            # vector, which is already a spinor's own inner product -- summing
+            # both components is what a spinor overlap *is*. What it cannot do
+            # is the augmentation half: it contracts the scalar ``qq`` where a
+            # spinor's metric is ``qq_so``, a complex 2x2 matrix in spin space,
+            # and ``Lambda`` then carries a spin pair as well. So a
+            # norm-conserving spinor, where ``S = 1`` and the augmentation term
+            # is not reached at all, is exactly the case this was refusing for
+            # no reason -- and it is the case P83's Born charges need.
             raise NotImplementedError(
                 "the matrix orthonormality multipliers are not implemented for "
-                "a spinor: _constraint_energy contracts the scalar qq, where a "
-                "spinor's metric is qq_so and Lambda carries a spin pair as "
-                "well. Nothing but the ultrasoft second derivative "
-                "(defumat.response.born) asks for them, and that path is "
-                "refused for noncolin already"
+                "an ultrasoft or PAW spinor: _constraint_energy contracts the "
+                "scalar qq, where a spinor's metric is qq_so and Lambda carries "
+                "a spin pair as well. A norm-conserving spinor has S = 1 and is "
+                "implemented (defumat.response.born, P83)"
             )
 
     psi, weights = state.wavefunctions, state.weights
