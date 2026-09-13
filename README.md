@@ -338,10 +338,13 @@ Where the tick is qualified:
   cell it has been measured on it does not converge: the 120-degree hydrogen
   pair rings with a *growing* envelope over 2000 iterations at half Elk's
   default gain, where the vector penalty holds the angle to 0.576 degrees per
-  site in 38. That cell is unconstrained barely magnetic at all (0.000235
-  $\mu_B$), so its $m(B)$ is nearly a step and no fixed-gain controller is
-  stable against it. A robust magnet is the cell this needs; `PLAN.md` P85 has
-  the trajectory and names it.
+  site in 38. The two update rules fail for two different reasons and each names
+  its own fix: the fixed gain is unstable because that cell is barely magnetic
+  unconstrained (0.000235 $\mu_B$), so its $m(B)$ is nearly a step; the secant
+  is stable and converges to the *wrong state*, getting the moment lengths right
+  to 8 per cent and the angles wrong by 145 degrees, because it models
+  $\mathrm{d}m/\mathrm{d}B$ as diagonal and a texture's angles are set by the
+  exchange between atoms. `PLAN.md` P85 has both trajectories.
 - ¹⁹ `pw.x` converges a noncollinear spin-orbit run at a stated moment
   direction and prints its total energy, so the quantity is reachable — by
   running it once per direction and subtracting by hand. There is no routine:

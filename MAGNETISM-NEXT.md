@@ -74,7 +74,7 @@ end-to-end test caught it. An array-algebra test passed either way.
 | a caller that wrote `scf.density` lost the fact that it converged | `SCFResult.require_converged`, the one implementation, with `Calculator._ground_state` wrapping it | three tests reported a Goldstone residual of 0.3958 that was an unconverged ground state, not a defect in the susceptibility (P84) |
 | a committed input asked for a scheme the code warned does not converge, and said it did | `h2-texture-120.in` is `'atomic'` at `lambda = 10`, and neither test that cites it rewrites away from a stale literal any more | 38 iterations, 121.13 degrees, 0.576 per site (P84) |
 | the anisotropy could be computed only at frozen density, so PAW and DFT+U were out | `run_relaxed_anisotropy`: one self-consistent run per direction, differencing **total** energies, which hands nothing over and so has no handoff to refuse for | 0.447 meV on tetragonal cobalt against the theorem's **free** energy 0.552 and its band sum 1.235 -- the relaxed route independently says the free energy is the right object (P87) |
-| a held texture's residual angle was a property of penalties with no alternative | Elk's per-atom feedback field, both variants, transcribed and unit-tested -- but **measured to ring** on the cell it was meant to beat | 2000 iterations at half Elk's gain with a *growing* envelope, against the penalty's 0.576 deg in 38; the cell's `m(B)` is nearly a step (P85) |
+| a held texture's residual angle was a property of penalties with no alternative | Elk's per-atom feedback field, both variants, transcribed and unit-tested -- and **measured not to win**, with the two updates failing for two different reasons | fixed gain: a *growing* ring over 2000 iterations at half Elk's gain. Secant: stable at `acc = 6.5e-6` and converged to the **wrong state** -- lengths right to 8 per cent, angles 145 deg out, because its `chi` is diagonal. Penalty: 0.576 deg in 38 (P85) |
 | the relaxed route's precision was an argument, not a number | it is a number: an identity control with the coupling switched off, scanned in `conv_thr` | **0.011 meV** and it plateaus -- 1e-13 equals 1e-12 to 2 per cent while the density residual falls another order (P87) |
 
 ---
@@ -191,11 +191,15 @@ E(c) below records for the *other* hydrogen cell, where `fsm` also could not hol
 No fixed-gain controller is stable against a nearly vertical response, and the cell was
 chosen for a penalty, which does not care.
 
-**So the remaining work is a cell, not code**, and it is the same cell Q5 asks for: a
-two-atom canted **iron** case. Building it serves both items at once and is the thing to do
-first. The secant update on a long budget is the one measurement still owed on the
-hydrogen cell itself -- every secant row so far had at most 14 field steps, because the
-iteration budget is shared with the inner SCF.
+**The two updates fail differently and each names its own fix.** The fixed-gain one is
+*unstable* against a steep `m(B)`, which wants a robust magnet -- the same two-atom canted
+**iron** cell Q5 asks for, so building it serves both items at once. The secant one is
+*stable and blind*: it converges at `acc = 6.5e-6` with the moment **lengths** right to 8
+per cent (0.239 against 0.26) and the **angles** wrong by 145 degrees per site, plateauing
+at a 0.4 mu_B residual for 900 iterations. That is its diagonal `chi = dm/dB` -- three
+scalars per atom -- and what sets a texture's angles is the exchange *between* atoms, which
+is exactly the off-diagonal block a diagonal model discards. A per-atom 3x3 block is the
+smallest honest replacement.
 
 **The original entry follows.**
 

@@ -14093,6 +14093,35 @@ the start against 0.3 to 0.66 at the end -- and the inner SCF's own accuracy swi
 1e-6 and 6e-2 across the same run. The loop is unstable rather than slow, at half Elk's
 default gain.
 
+**The secant update fails differently, and the difference is the diagnosis.** Same cell,
+same gain, 1000 iterations -- and unlike the fixed-gain run it is perfectly well behaved:
+the inner SCF reaches 2.6e-7 to 1e-6 routinely, which is the secant doing exactly what it
+is for, stepping only on converged pairs. What it does not do is get there:
+
+```
+   1: 0.151  acc 1.3e-02      400: 0.350  acc 1.6e-06      800: 0.388  acc 5.1e-07
+  40: 0.374  acc 1.3e-06      520: 0.399  acc 5.4e-07      880: 0.427  acc 5.5e-07
+ 120: 0.245  acc 6.1e-05      640: 0.467  acc 3.7e-06     1000: 0.475  acc 6.5e-06
+```
+
+The residual climbs from 0.151 to a **plateau** around 0.35-0.45 mu_B and stays there for
+900 iterations. It converged at `acc = 6.5e-6` with `|m| = 0.2389, 0.2389` against a target
+length of 0.26 -- and a pair angle of **168.94 degrees**, which is the collinear
+antiferromagnet.
+
+**So the secant reaches a stable fixed point that is not the target**, and the two numbers
+say which half it got: the **lengths** are right to 8 per cent and the **angles** are wrong
+by 145 degrees per site. That is a statement about the controller's model rather than about
+feedback fields. `_atomic_step`'s secant measures `chi = dm/dB` **diagonally**, per atom and
+per cartesian component -- which the method's docstring states -- and what sets a texture's
+angles is the exchange *between* the two atoms, which is exactly the off-diagonal block a
+diagonal model throws away. A diagonal controller can size a moment and cannot orient a
+pair of them.
+
+Two failures, two different causes, and both were worth separating: the fixed-gain update
+is **unstable** on a steep `m(B)`, and the secant is **stable and blind** to the coupling
+the target needs.
+
 **Why, and it is the cell rather than the scheme.** The feedback loop's gain is
 `tau x dm/dB` folded through the density mixer, and this cell's `m(B)` is very steep:
 unconstrained it is barely magnetic at all (|m| = 0.000235 mu_B, first row of the table),
@@ -14114,11 +14143,12 @@ mu_B says this cell has no moment of its own to orient.
   cell-wide `fsm`: `fe-noncolin-pbe-stress.in` (bcc iron, 1.95 mu_B) is committed, or the
   two-atom canted iron cell `MAGNETISM-NEXT.md` Q5 asks for and which does not exist yet.
   Building Q5's cell serves both items at once and is the thing to do first.
-* **The secant update on a long budget** is the remaining measurement on *this* cell. It
-  steps only on converged pairs, so a 200-iteration budget shared with a ~14-iteration
-  inner SCF buys at most 14 field steps -- every secant row above is under-budgeted by an
-  order of magnitude, which is `MAGNETISM-NEXT.md` E(c)'s trap ("the budget is **shared**")
-  met again.
+* **A susceptibility that is not diagonal**, which is what the secant's plateau asks for.
+  The smallest honest version is a per-atom 3x3 block rather than three scalars, built from
+  the same converged pairs; the full `(3 nat, 3 nat)` is a Jacobian and would want a
+  Broyden of its own. Nothing needs to be guessed about whether it is required -- the
+  plateau at 0.4 mu_B with correct lengths and 145-degree angles is the measurement saying
+  so.
 * **The notebook and the `PERFORMANCE.md` pair.** Neither is owed yet: a notebook should
   not advertise a scheme whose measured behaviour on the committed cell is a ring, and
   `notebooks/43_magnetic_textures.ipynb` is the place once there is a cell where it wins.
@@ -14126,8 +14156,10 @@ mu_B says this cell has no moment of its own to orient.
 **The honest summary.** The scheme is transcribed from `bfieldfsm.f90` and `r3vo.f90`,
 unit-tested against both (the step per atom, the projection, its vanishing-axis escape, and
 that a feedback scheme adds nothing to the energy), wired through the driver and refused at
-input where it cannot work. It is **not** shown to beat the penalty, and on the only cell it
-has been measured on it does not converge at all.
+input where it cannot work. It is **not** shown to beat the penalty. On the only cell it has
+been measured on, the fixed-gain update is unstable and the secant converges to the wrong
+state -- and the two failure modes are different enough to name what each needs, which is a
+robust magnet for the first and an off-diagonal susceptibility for the second.
 
 
 ### P86 -- The spin spiral's first external comparison, and the three ways an Elk ground state can quietly stop being magnetic. ⏳ FIXTURE AND ONE SIDE DONE; the Elk energies are the open half.

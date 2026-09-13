@@ -1096,7 +1096,19 @@ is an unstable loop rather than a slow one. The cause is the cell rather than
 the scheme: left alone this pair carries $0.000235\,\mu_B$, so its $m(B)$ is
 nearly a step and no fixed-gain controller is stable against a nearly vertical
 response --- and the cell was chosen for a \emph{penalty}, which does not care.
-Use a robust magnet, and read the vector penalty's table below as the answer
+
+The \code{secant} update fails in a different and more interesting way. It is
+perfectly well behaved, reaching $6.5\times 10^{-6}$ in the density, and it
+converges to \emph{the wrong state}: the moment lengths come out right to eight
+per cent and the angles wrong by 145 degrees per site, with the residual sitting
+on a plateau for 900 iterations. That is its model rather than its stability. It
+measures $\mathrm{d}\mathbf m/\mathrm{d}\mathbf B$ one atom and one cartesian
+component at a time, and what sets a texture's angles is the exchange
+\emph{between} atoms, which is exactly the off-diagonal part a diagonal model
+discards. A diagonal controller can size a moment and cannot orient a pair of
+them.
+
+So use a robust magnet, and read the vector penalty's table below as the answer
 until one has been measured.
 
 \textbf{\code{lambda} means two different things three orders of magnitude
