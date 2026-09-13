@@ -14222,11 +14222,39 @@ and reported success**, which is why they are recorded here rather than left in 
    It is relinked against **netlib**, which is also what `~/apps/qe-7.4.1/bin/pw.x` uses,
    so an Elk-against-QE timing is now on one BLAS.
 
-**What is outstanding, and it is the number itself.**
+**Elk's `q = 0`, converged, and the ground states agree.** 95 loops, `epspot` and
+`epsengy` both met:
 
-* **Elk's `E(q)` at the three wavevectors.** The fixture runs and the mixing is fixed; the
-  scan had not finished when this was written. Until it has, the spiral still has no
-  external number and item E(a) stays open.
+| | defumat | Elk |
+|---|---|---|
+| total energy | -0.9541545299 Ry | -0.466165068712 Ha = **-0.9323301374 Ry** |
+| moment | 0.514889 mu_B | **0.5375709754 mu_B** |
+| iterations / loops | 11 | 95 |
+
+**The moments agree to 4.4 per cent**, which is the first external number the spiral
+machinery has ever had and is in line with this project's own precedent for an
+all-electron-against-pseudopotential moment (bcc iron: 2.0613 Elk against 2.2145 here,
+`tests/data/elk/sfac.notes`). **The totals differ by 0.0218 Ry and that comparison is
+meaningless**, which is the whole reason the quantity to compare is `E(q) - E(0)`: a
+pseudopotential total and an all-electron total are not the same number even for hydrogen,
+which has no core.
+
+**A timing observation that is not a timing.** Elk took 3710 s of wall clock at six threads
+(13859 s of CPU) against defumat's 52.4 s at two, and neither figure is quotable -- different
+thread counts, a contended machine, and two bases that are not the same function space. What
+*is* worth carrying is where Elk's time went: **96.7 per cent of it is the first-variational
+eigenvalue equation** (13407 s of 13859). This cell is 720 bohr^3 of which the muffin tin is
+11.5, so it is almost entirely interstitial -- the regime a plane-wave basis is built for and
+the one an LAPW basis pays most for -- and on netlib LAPACK that one `zhegv` dominates
+everything else by a factor of thirty. Any real pair must be `PIN=1` on an idle machine, and
+should say this.
+
+**What is outstanding, and it is the difference.**
+
+* **Elk at `q = 1/4` and `q = 1/2`.** `q = 1/4` is running; each point is about an hour of
+  wall clock at six threads. Until both land there is no `E(q) - E(0)` to compare against
+  defumat's 0, -20.71, -50.21 meV, so item E(a) stays open -- what has closed is the
+  ground state at `q = 0` and the whole apparatus.
 * **The `PERFORMANCE.md` pair.** It must be `OMP_NUM_THREADS=1` under `taskset` on an idle
   machine (`PIN=1` in the driver script), and every Elk run here was threaded and beside
   two other jobs. Netlib is slow enough that this matters: ~90 s per SCF loop pinned

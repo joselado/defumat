@@ -285,7 +285,12 @@ of the scan is measured (`E(q) - E(0)` of 0, -20.71, -50.21 meV at `q_3 = 0, 1/4
 magnetic are identified and fixed**, each of which converged and reported success: a
 `reducebf` that fades the seed field before the moment establishes, Elk's default Broyden
 falling off the magnetic branch at loop 10 with its history full, and a binary that would
-not start because `libopenblas` is gone from this machine. What is left is running it.
+not start because `libopenblas` is gone from this machine. What is left is running it -- and **`q = 0` is now run and the two codes agree**: Elk's
+moment is 0.5375709754 mu_B against defumat's 0.514889, **4.4 per cent**, which is the
+first external number this machinery has ever had and matches the project's own precedent
+for an all-electron-against-pseudopotential moment (bcc iron, 2.0613 against 2.2145). The
+*totals* differ by 0.0218 Ry and that comparison means nothing, which is exactly why the
+quantity is `E(q) - E(0)` and why the other two wavevectors are still needed.
 
 Two things to carry into that run. It is ~40 s per SCF loop at six threads on netlib and
 tens of loops per wavevector, so budget half an hour a point and do not take the
