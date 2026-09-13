@@ -705,6 +705,11 @@ both ways; the axis walked is the band axis *inside* one k-point's body, so R6 i
 > routine called once per SCF iteration per species. The value is bit-identical on the same
 > arrays and `si8-us-1k` converges to `-91.013925889497 Ry in 10 iterations` either way.
 > The docstring, the `sizing.py` line and the hardcoded `16` are all in with it.
+>
+> **And it owed the project's primary measurement, so it has one**: against single-core
+> `pw.x` on that same benchmark the per-iteration ratio goes **1.6x -> 1.1x** (0.172 s ->
+> 0.114 s against QE's 0.106), reproduced in two runs, with the norm-conserving twin of the
+> cell unchanged at 1.3x as the control. `PERFORMANCE.md` has the table.
 
 
 **Site.** `defumat/pseudo/augmentation.py:157`, inside `@jax.jit _species_charge`:

@@ -5138,6 +5138,35 @@ All three agree on the value and on `d/d(kinetic)` to the last digit or one ulp.
 The docstring says so at the site, so the next reader does not spend the
 afternoon again.
 
+## What A9 is worth against `pw.x` (MEMORY-AUDIT A9, the QE side)
+
+The reassociation above was taken as a memory fix and turned out to be a **speed**
+fix, so it owes the project's primary measurement: single-core defumat against
+single-core `pw.x` on the same machine and the same input.
+
+`benchmarks/si8-us-1k.in` (eight-atom silicon, ultrasoft, one k-point,
+`ecutwfc = 20`), `~/apps/qe-7.4.1/bin/pw.x` on the **plain system BLAS** (not the MKL
+wrapper), both codes pinned to CPU 0, `OMP_NUM_THREADS=1`, `--repeats 3`, idle machine:
+
+| | QE | defumat, before | defumat, after | ratio before | ratio after |
+|---|---|---|---|---|---|
+| per SCF iteration | 0.106 s | 0.172 s | **0.114 s** | 1.6x | **1.1x** |
+| SCF, warm | 0.850 s | 1.723 s | **1.135 s** | 2.0x | **1.3-1.4x** |
+
+**The whole of the gain is `charge`**, which `_species_charge` is the body of and which
+runs once per SCF iteration per ultrasoft species. Both sides give
+`-91.01392589 Ry`, agreeing with `pw.x` to **5.03e-10 Ry**, and both take ten
+iterations to QE's eight. Reproduced: the after figure is 0.114 s in two independent
+runs.
+
+**The control says it is the augmentation and not the machine.** `si8-1k.in` -- the same
+cell with a **norm-conserving** dataset, which has no augmentation charge at all --
+reads 0.021 s per iteration against QE's 0.017 s, **1.3x**, on the same afternoon.
+Nothing there changed and nothing was expected to.
+
+`setup / init_run` stays at 17-22x and is almost entirely XLA compiling; it is paid once
+per process whatever the size of the run, which is why it is reported apart from the loop.
+
 ## History
 
 | Date | Change | Effect |
