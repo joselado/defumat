@@ -426,6 +426,21 @@ code is never like-for-like and a misleading ratio is worse than no ratio:
   operator. Add the steps up until both sides start from the same place, usually a
   converged ground state, and say which steps were added.
 
+**Two rules about *this* code's own clock, both of which have produced a confident wrong
+number here.** They are the internal counterpart of the `ph.x` warm-scratch artefact.
+
+- **Never time a first call.** It includes compilation, and compilation here is served by
+  the on-disk kernel cache (`~/.cache/defumat/jax`, 4 GB and growing), so a first call
+  times *whether the cache had that executable* — not the work. A first-call
+  `get_stress()` read 8.68 s before a change and 16.09 s after, reproducibly; compiled,
+  the two are the same to 0.5 per cent. Call it once to pay the compilation and time the
+  next one. The same effect makes the test gate read 7 or 11 minutes for the same suite.
+- **On a quantity whose expected change is zero, take a median and say how many
+  samples.** A best-of-three over samples 2.16/2.21/2.20 against 2.06/2.21/2.27 reads as a
+  confident 8 per cent in whichever direction got the lucky draw; the medians are equal to
+  0.05 per cent. Best-of-N is right for a change expected to *move* the number and wrong
+  for a check that it did not.
+
 ## The traps that recur
 
 Every one of these has been hit in more than one phase, and most of them produce a
@@ -892,8 +907,20 @@ tools/export_notebooks.sh                     # re-execute notebooks + refresh .
 ```
 
 **The suite is two groups and `slow` is the line.** `tools/test-fast.sh` is
-`pytest -m "not slow"`: **1941 tests in 7-11 minutes** (measured 2026-09-13 on an
-otherwise idle machine, peak RSS 5.9-6.0 GB), and it is what runs before a push.
+`pytest -m "not slow"`: **1945 tests in 7-11 minutes** (measured 2026-09-13 on an
+otherwise idle machine, peak RSS 5.9-8.2 GB), and it is what runs before a push.
+
+**The suite runs on eight cores where the package runs on four, and that is a
+deadlock fix rather than a speed choice.** `defumat` narrows the affinity mask
+to four at import because that is fastest for the physics (238 ms per SCF
+iteration on the eight-atom benchmark against 411 at eight cores); it is also
+the mask that parks a long-lived process with every XLA worker blocked and no
+CPU at all, at a rate that follows the mask and nothing else — 8 hangs in 8 runs
+at two cores, 6 in 14 at four, none at eight or above. `tests/conftest.py`
+therefore sets `DEFUMAT_THREADS=8` before anything imports `defumat`, which
+costs the suite 11% of wall clock and 13% of peak RSS, and an explicit setting
+still wins. `OPEN.md` Part IV item 1 has the measurement and the two theories it
+killed.
 
 **Read that figure as a range, not a constant, because a third measurement
 landed between the other two and the spread is not the test set.** The same
@@ -905,7 +932,9 @@ separates the two 2026-09-13 runs is the compiled-kernel cache and whatever else
 the machine was doing — which is the same rule the performance section states
 about timings taken beside a test run, applied to the gate itself. **Time it
 warm and idle, or do not compare it.** The thing genuinely worth watching is the
-peak RSS, which moved 4.5 -> 6.0 GB and did not come back. Whatever is in the
+peak RSS, which moved 4.5 -> 6.0 -> 8.2 GB and did not come back (13 points of
+the last step are the wider mask above; the rest is unexplained, and 8.2 GB
+against a 12 G cap whose watchdog fires at 0.85 is less margin than it reads). Whatever is in the
 gate is paid on every push by someone who is not doing physics at the time,
 which is the same argument the notebooks' ten-minute ceiling rests on; the lever
 is the `slow` marker, and the question to ask of any test above a few seconds is
