@@ -892,9 +892,18 @@ tools/export_notebooks.sh                     # re-execute notebooks + refresh .
 ```
 
 **The suite is two groups and `slow` is the line.** `tools/test-fast.sh` is
-`pytest -m "not slow"`: **1892 tests in 7 minutes** (measured 2026-09-12, peak
-RSS 4.5 GB), and it is what runs before
-a push. The slow set is ~590 tests and **over two hours** — it runs when it is
+`pytest -m "not slow"`: **1938 tests in 11m17s** (measured 2026-09-13 on an
+otherwise idle machine, peak RSS 6043 M), and it is what runs before a push.
+
+**The gate is growing faster than the test count and that is worth watching.**
+The same command read 1892 tests in **7 minutes** at 4.5 GB on 2026-09-12, so
+46 more tests have cost four more minutes and 1.5 GB. Whatever is in the gate is
+paid on every push by someone who is not doing physics at the time, which is the
+same argument the notebooks' ten-minute ceiling rests on; the lever is the `slow`
+marker, and the question to ask of any test above a few seconds is whether the
+gate is where it belongs. (The 2026-09-13 figure is not the augmentation remat:
+the only two gate files that take the rematted route run in 4.18 s together, and
+every other cell in the gate takes the stored one.) The slow set is ~590 tests and **over two hours** — it runs when it is
 asked for, not on every change. The split cuts across `unit` and `regression`
 both, because it is about cost and not about kind: a cheap regression case
 against a two-atom reference is in the gate, and an expensive unit test is not.
