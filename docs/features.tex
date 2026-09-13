@@ -1628,6 +1628,15 @@ the symmetrised 8-point wedge of an unshifted grid gives the closed 64-point
 grid's tensor to $7\times10^{-13}$, and \code{ph.x}'s own number to
 $4.3\times10^{-5}$, which is the scalar route's figure to the digit.
 
+\begin{lstlisting}[language=Python]
+silicon = Calculator.from_file("si-epsilon.in")
+spinor  = silicon.with_spin(4)          # 8 bands of one electron, not 4 of two
+spinor.get_dielectric_tensor().isotropic    # 13.806641, against 13.806646
+\end{lstlisting}
+
+\noindent\code{with\_spin} promotes the converged state rather than starting
+again, so the second ground state is not paid for twice.
+
 \textbf{A magnetic spinor is refused, and the reason is a measurement rather
 than a missing term.} An iodine atom with spin--orbit coupling and its moment
 along $z$ (\code{i-atom-soc.in}, \code{nosym}, a 0.164~eV gap) gives
