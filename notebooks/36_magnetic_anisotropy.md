@@ -35,7 +35,10 @@ mae = scalar.get_anisotropy(spinor, directions="xz")
 print(f"easy axis {mae.easy_axis}, anisotropy {mae.anisotropy_mev:.4f} meV")
 ```
 
-    easy axis (0.0, 0.0, 1.0), anisotropy 1.2353 meV
+    An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+
+
+    easy axis (0.0, 0.0, 1.0), anisotropy 1.2352 meV
 
 
 The easy axis comes out along `c`, and the crystal pays about a
@@ -65,7 +68,7 @@ print(f"force theorem on the same density: {mae.anisotropy_mev:.6f} meV")
 ```
 
     first order, in-plane and along c: -0.000001, +0.000002 meV
-    force theorem on the same density: 1.235307 meV
+    force theorem on the same density: 1.235151 meV
 
 
 ## The control: switch the coupling off
@@ -91,7 +94,7 @@ for coupling in (1.0, 0.0):
     coupling 1: spread 1.235e+00 meV
 
 
-    coupling 0: spread 4.640e-09 meV
+    coupling 0: spread 1.933e-08 meV
 
 
 
@@ -142,8 +145,8 @@ print(f"K from the band-energy difference {mae.anisotropy_mev:+.4f} meV")
 ```
 
     K from the torque at 45 deg      +0.5523 meV
-    K from the free-energy difference +0.5523 meV
-    K from the band-energy difference +1.2353 meV
+    K from the free-energy difference +0.5522 meV
+    K from the band-energy difference +1.2352 meV
 
 
 ## Against Quantum ESPRESSO
@@ -162,12 +165,92 @@ density is harder to converge here than in `pw.x`. A shift common to both
 directions cancels in the difference, which is exactly what a theorem at frozen
 density promises.
 
+
+
+## The other route: let the density relax
+
+The theorem above holds the density still. That is what makes it precise, and it
+is also what it leaves out: in a real magnet the electrons rearrange when the
+moment turns, and that rearrangement lowers the energy by a little in every
+direction. The anisotropy is then a difference of two such gains.
+
+The other way to compute it is the obvious one. Converge a complete calculation
+with the moment along each direction and subtract the two total energies. It
+costs one self consistent run per direction instead of one diagonalisation, and
+it asks two numbers near 74 Rydberg to be trusted in their eighth decimal.
+
+
+
+```python
+relaxed_cell = Calculator.from_file(CASES / "co-tetragonal-relaxed-mae.in",
+                                    PSEUDO, announce=False)
+relaxed = relaxed_cell.get_relaxed_anisotropy(directions="xz")
+
+print(f"frozen density, band energy   {mae.anisotropy_mev:.4f} meV")
+print(f"frozen density, free energy   {mae.free_anisotropy_mev:.4f} meV")
+print(f"relaxed density               {relaxed.anisotropy_mev:.4f} meV")
+print(f"easy axis {relaxed.easy_axis}, moments ended "
+      f"{relaxed.drifts.max():.3f} degrees from where they started")
+
+```
+
+    frozen density, band energy   1.2352 meV
+    frozen density, free energy   0.5522 meV
+    relaxed density               0.4473 meV
+    easy axis (0.0, 0.0, 1.0), moments ended 0.000 degrees from where they started
+
+
+Three numbers, and which two should be compared is the whole of this cell.
+
+This is a metal with a smearing, so its electrons are described by a free energy
+rather than by a sum of occupied levels: the entropy of the partially filled
+states near the Fermi level is part of the energy, and it changes when the moment
+turns. The band sum leaves that out. On this crystal at this smearing it is worth
+more than half the answer, which is why the first two lines differ by a factor of
+about two rather than by a little.
+
+The comparison to make is therefore the **second** line against the **third**,
+and those agree to about twenty per cent. What separates them is real physics
+rather than arithmetic: the frozen calculation does not let the electrons
+rearrange when the moment turns, and the relaxed one does. That rearrangement
+lowers the energy in both directions, and the part of it that does not cancel is
+the difference between the two lines.
+
+**How far can the relaxed number be trusted?** Switch the spin orbit coupling off
+and every direction must give the same energy, because nothing is then left to
+tell the crystal apart from its own rotations. On this cell that difference does
+not fall below about 0.011 meV however tightly the calculation is converged: two
+runs started from two different densities stop at two slightly different places,
+and no threshold closes the gap. So the relaxed route here is meaningful down to
+about a hundredth of a milli electron volt, which is forty times smaller than the
+anisotropy and ten times smaller than the gap between the two routes. The frozen
+route has no such floor, because everything except the band energy cancels
+between the two directions before any subtraction happens.
+
+**What the relaxed route buys.** Nothing is handed from one calculation to
+another, so the restrictions that came from that handoff are gone. A PAW dataset
+works, and tetragonal nickel with a fully relativistic PAW potential is a
+calculation the frozen route cannot do at all. So does a Hubbard `U`.
+
+**What it costs, besides time.** Nothing holds the moment while the density
+relaxes, so a direction that the symmetry of the crystal does not hold in place
+can end up somewhere else, and the energy then belongs to a state that was not
+the one asked for. Both directions here are fixed by symmetry and do not move,
+which is what the last line above checks.
+
+
 ## What it will not do
 
-A PAW dataset, because only the density is handed from the first calculation to
-the second and PAW needs more than that; a Hubbard `U` or a meta-GGA, for the
-same reason; an applied magnetic field, whose energy sits outside the reported
-total; and a spin spiral, which has no spin-orbit coupling to switch on.
+The frozen route cannot take a PAW dataset, a Hubbard `U` or a meta-GGA, because
+only the density is handed from the first calculation to the second and those
+need more than a density. The relaxed route above takes the first two, since it
+hands nothing over.
 
-The numbers quoted against `pw.x`, and the checks behind the flat line, live in
-`tests/regression/test_anisotropy.py`.
+Neither takes an applied magnetic field, whose energy sits outside the reported
+total, or a spin spiral, which has no spin orbit coupling to switch on.
+
+The numbers quoted against `pw.x`, the checks behind the flat line, and the
+measurement of the floor described above live in
+`tests/regression/test_anisotropy.py` and
+`tests/regression/test_relaxed_anisotropy.py`.
+
