@@ -131,19 +131,39 @@ def test_j_is_l_plus_s(silicon):
 # --- the refusals -----------------------------------------------------------
 
 
-def test_a_symmetry_reduced_kset_is_refused(pseudo_dir):
-    """``<L>`` is an axial vector and a wedge sum is a wedge sum.
+def test_a_symmetry_reduced_kset_is_averaged_rather_than_refused(pseudo_dir):
+    """``<L>`` is an axial vector, and a wedge sum is now completed as one.
 
-    The escape is the whole grid, unshifted, which is closed under the point
-    group -- the same one ``dielectric_tensor`` documents. Refusing is what
-    keeps a plausible, smooth, wrong vector from being returned.
+    This test asserted the **refusal** until P82. A wedge sum really is a wedge
+    sum -- that part was never wrong -- but the escape it pointed at (run the
+    whole unshifted grid) was the only one available because nothing here
+    averaged a per-atom axial vector over the group. P82 wrote that average,
+    so the quantity is computed rather than declined.
+
+    What is asserted here is **physics rather than the absence of an
+    exception**: silicon is non-magnetic and centrosymmetric, so every site's
+    ``<L>`` and ``<S>`` must vanish identically. A wedge sum that was *not*
+    completed would leave a smooth, plausible, nonzero vector pointing along
+    whichever direction the irreducible wedge happens to favour, which is
+    exactly the failure the old refusal existed to prevent -- so this catches
+    it without needing the whole grid to compare against.
+
+    The number that pins the average against the closed grid on a *magnetic*
+    cell is
+    ``tests/regression/test_spinor_hubbard_symmetry.py::test_site_angular_momenta_agree_between_the_wedge_and_the_grid``.
     """
     calculator = Calculator.from_text(
         _SILICON.format(extra=""), pseudo_dir, announce=False
     )
     scf = calculator.get_scf()
-    with pytest.raises(NotImplementedError, match="symmetry-reduced k-set"):
-        angular_momenta(calculator.calculation, scf)
+    momenta = angular_momenta(calculator.calculation, scf)
+    assert calculator.calculation.use_symmetry, "this cell must be the wedge"
+    for name in ("orbital", "spin"):
+        vectors = np.asarray(getattr(momenta, name))
+        assert np.abs(vectors).max() < 1e-8, (
+            f"non-magnetic silicon has a site <{name[0].upper()}> of "
+            f"{np.abs(vectors).max():.3e}, which is an uncompleted wedge sum"
+        )
 
 
 def test_an_unknown_projector_set_is_refused(silicon):
