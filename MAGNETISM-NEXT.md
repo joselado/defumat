@@ -73,6 +73,7 @@ end-to-end test caught it. An array-algebra test passed either way.
 | P63's spiral scan "no longer reproduces", cause unidentified, three candidates nominated | it reproduces to the digit at the right seed, and now **confirms** the magnon prediction | minimum at `q = (0,0,1/4)`, -150.1 meV, where the susceptibility says the ferromagnet first goes unstable — and P63's own `0, -150, -59` come back (P84) |
 | a caller that wrote `scf.density` lost the fact that it converged | `SCFResult.require_converged`, the one implementation, with `Calculator._ground_state` wrapping it | three tests reported a Goldstone residual of 0.3958 that was an unconverged ground state, not a defect in the susceptibility (P84) |
 | a committed input asked for a scheme the code warned does not converge, and said it did | `h2-texture-120.in` is `'atomic'` at `lambda = 10`, and neither test that cites it rewrites away from a stale literal any more | 38 iterations, 121.13 degrees, 0.576 per site (P84) |
+| the spin spiral had no external number of any kind | it has two, and they disagree: Elk against defumat at `q = 0` and `q = 1/4` | moments agree to **4 per cent** at both; `E(1/4) - E(0)` is **-136.294 meV against -20.712**, a factor of 6.6, and Elk's held field explains 6 per cent of it (P86) |
 | the anisotropy could be computed only at frozen density, so PAW and DFT+U were out | `run_relaxed_anisotropy`: one self-consistent run per direction, differencing **total** energies, which hands nothing over and so has no handoff to refuse for | 0.447 meV on tetragonal cobalt against the theorem's **free** energy 0.552 and its band sum 1.235 -- the relaxed route independently says the free energy is the right object (P87) |
 | a held texture's residual angle was a property of penalties with no alternative | Elk's per-atom feedback field, both variants, transcribed and unit-tested -- and **measured not to win**, with the two updates failing for two different reasons | fixed gain: a *growing* ring over 2000 iterations at half Elk's gain. Secant: stable at `acc = 6.5e-6` and converged to the **wrong state** -- lengths right to 8 per cent, angles 145 deg out, because its `chi` is diagonal. Penalty: 0.576 deg in 38 (P85) |
 | the relaxed route's precision was an argument, not a number | it is a number: an identity control with the coupling switched off, scanned in `conv_thr` | **0.011 meV** and it plateaus -- 1e-13 equals 1e-12 to 2 per cent while the density residual falls another order (P87) |
@@ -285,12 +286,26 @@ of the scan is measured (`E(q) - E(0)` of 0, -20.71, -50.21 meV at `q_3 = 0, 1/4
 magnetic are identified and fixed**, each of which converged and reported success: a
 `reducebf` that fades the seed field before the moment establishes, Elk's default Broyden
 falling off the magnetic branch at loop 10 with its history full, and a binary that would
-not start because `libopenblas` is gone from this machine. What is left is running it -- and **`q = 0` is now run and the two codes agree**: Elk's
-moment is 0.5375709754 mu_B against defumat's 0.514889, **4.4 per cent**, which is the
-first external number this machinery has ever had and matches the project's own precedent
-for an all-electron-against-pseudopotential moment (bcc iron, 2.0613 against 2.2145). The
-*totals* differ by 0.0218 Ry and that comparison means nothing, which is exactly why the
-quantity is `E(q) - E(0)` and why the other two wavevectors are still needed.
+not start because `libopenblas` is gone from this machine. **It has been run, and the item is no longer "no external number" -- it is a measured
+disagreement.** Elk at `q = 0` and `q = 1/4`, both converged:
+
+* the **moments agree to 4 per cent** (0.5376 against 0.5149 at `q = 0`, 0.6380 against
+  0.6151 at `q = 1/4`), which is the level this project already records for an
+  all-electron-against-pseudopotential moment (bcc iron, 2.0613 against 2.2145);
+* **`E(1/4) - E(0)` is -136.294 meV in Elk against -20.712 meV here, a factor of 6.6.**
+
+So the two codes converge to recognisably the same magnetic state and disagree about what
+turning it costs. **The obvious explanation is already dead**: Elk holds a small field and
+defumat holds none, and repeating the defumat scan under Elk's own field moves the answer
+by 6 per cent (-20.712 to -21.986), while five times that field reaches only -30.022.
+
+**Locating the 6.6 is now item E(a)**, and `PLAN.md` P86 lists three candidates, none
+tested and cheapest first: basis convergence on both sides (`rgkmax = 7` against
+`ecutwfc = 25`, and a spiral needs two `G+k` sets); the `1 1 4` k-grid, which is very coarse
+and samples *shifted* spheres at `q != 0` so its error need not be the same at the two
+wavevectors; and the field convention, which the moment response hints at -- defumat's
+moment reacts far more strongly to "the same" field (0.633 against Elk's 0.538), so the two
+codes may not be applying the same field at all.
 
 Two things to carry into that run. It is ~40 s per SCF loop at six threads on netlib and
 tens of loops per wavevector, so budget half an hour a point and do not take the

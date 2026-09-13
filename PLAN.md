@@ -14162,7 +14162,7 @@ state -- and the two failure modes are different enough to name what each needs,
 robust magnet for the first and an off-diagonal susceptibility for the second.
 
 
-### P86 -- The spin spiral's first external comparison, and the three ways an Elk ground state can quietly stop being magnetic. ⏳ FIXTURE AND ONE SIDE DONE; the Elk energies are the open half.
+### P86 -- The spin spiral's first external comparison: the moments agree to 4 per cent and the energy difference is out by 6.6x. ⏳ MEASURED AND UNEXPLAINED.
 
 `tests/data/elk/h_chain_spiral/`, `tests/data/qe/h-chain-spiral-elk.in`.
 `MAGNETISM-NEXT.md` item E(a): "Spin spirals have no external number of any kind" -- five
@@ -14249,12 +14249,53 @@ the one an LAPW basis pays most for -- and on netlib LAPACK that one `zhegv` dom
 everything else by a factor of thirty. Any real pair must be `PIN=1` on an idle machine, and
 should say this.
 
-**What is outstanding, and it is the difference.**
+**The comparison, at last, and the two codes disagree by a factor of 6.6.** `q = 1/4`
+converged too (both criteria met), so there is an `E(q) - E(0)`:
 
-* **Elk at `q = 1/4` and `q = 1/2`.** `q = 1/4` is running; each point is about an hour of
-  wall clock at six threads. Until both land there is no `E(q) - E(0)` to compare against
-  defumat's 0, -20.71, -50.21 meV, so item E(a) stays open -- what has closed is the
-  ground state at `q = 0` and the whole apparatus.
+| | defumat | Elk |
+|---|---|---|
+| \|m\| at `q = 0` | 0.514889 | 0.5375710 (**+4.4%**) |
+| \|m\| at `q = 1/4` | 0.615140 | 0.6380034 (**+3.7%**) |
+| E at `q = 0` | -0.9541545299 Ry | -0.466165068712 Ha |
+| E at `q = 1/4` | -0.9556767986 Ry | -0.471173788665 Ha |
+| **`E(1/4) - E(0)`** | **-20.712 meV** | **-136.294 meV** |
+
+**The moments agree to 4 per cent at both wavevectors and the energy difference is out by
+6.6x.** That combination is the finding: the two codes converge to what is recognisably the
+same magnetic state and disagree about what turning it costs.
+
+**The obvious explanation is dead, and it was killed with a number rather than an
+argument.** Elk carries `bfieldc = 0.002 Ha = 0.004 Ry` for the whole run and defumat
+carries none; a field cannot enter the difference directly, its Zeeman energy being outside
+the reported total in both codes, but it biases the *state* -- and it acts differently on a
+`q = 0` ferromagnet, where every moment lies along it, than on a spiral whose moments turn
+away. So the defumat scan was repeated under Elk's own field:
+
+| defumat `B_x` | \|m\|(0) | \|m\|(1/4) | `E(1/4) - E(0)` |
+|---|---|---|---|
+| 0 | 0.514889 | 0.615140 | -20.712 meV |
+| **0.004 Ry** (Elk's) | 0.632582 | 0.674677 | **-21.986 meV** |
+| 0.020 Ry (5x Elk's) | 0.819106 | 0.802359 | -30.022 meV |
+
+Elk's field moves the answer by **6 per cent**, and five times Elk's field by 45 per cent.
+Neither is a factor of 6.6. **The held field is not the cause.**
+
+**What is outstanding, and it is now a disagreement rather than a missing number.**
+
+* **Locate the factor of 6.6.** Three candidates, none tested, cheapest first. **Basis
+  convergence on both sides**: `rgkmax = 7` is Elk's default and a spiral needs two `G+k`
+  sets, while defumat is at `ecutwfc = 25`; raise each and see which number moves. **The
+  k-grid**, which is `1 1 4` -- extremely coarse, and at `q != 0` the two spin channels sit
+  on *shifted* spheres, so the sampling error need not be the same at `q = 0` and
+  `q = 1/4`. And **the field convention**, which the table above hints at without settling:
+  defumat's moment responds much more strongly to "the same" field (0.633 against Elk's
+  0.538 at `q = 0`), so the two codes may not be applying the same field at all -- Elk's
+  `bfieldc` enters as `(g_e/4c) sigma.B` in Hartree atomic units where this code's `B_field`
+  is a potential shift in Ry, and nobody has checked the factor.
+* **Elk at `q = 1/2`**, which is running and would say whether the discrepancy grows with
+  `q` -- a ratio that stays at 6.6 across the scan points at an overall scale factor, and
+  one that moves points at the physics.
+* **The `PERFORMANCE.md` pair**, still owed and still needing `PIN=1` on an idle machine.
 * **The `PERFORMANCE.md` pair.** It must be `OMP_NUM_THREADS=1` under `taskset` on an idle
   machine (`PIN=1` in the driver script), and every Elk run here was threaded and beside
   two other jobs. Netlib is slow enough that this matters: ~90 s per SCF loop pinned
