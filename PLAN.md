@@ -14295,16 +14295,16 @@ Neither is a factor of 6.6. **The held field is not the cause.**
 * **Elk at `q = 1/2`**, which is running and would say whether the discrepancy grows with
   `q` -- a ratio that stays at 6.6 across the scan points at an overall scale factor, and
   one that moves points at the physics.
-* **The `PERFORMANCE.md` pair**, still owed and still needing `PIN=1` on an idle machine.
 * **The `PERFORMANCE.md` pair.** It must be `OMP_NUM_THREADS=1` under `taskset` on an idle
   machine (`PIN=1` in the driver script), and every Elk run here was threaded and beside
   two other jobs. Netlib is slow enough that this matters: ~90 s per SCF loop pinned
   against ~42 s at six threads.
-* **The asymmetry to state with any number taken.** Elk carries a small held field and
-  defumat carries none. The Zeeman energy is outside the reported total in both codes by
-  the same convention, and the field is the same at every `q`, so it largely cancels in
-  `E(q) - E(0)` -- but "largely" is not "exactly", and the check that has not been done is
-  the same defumat scan under the same field.
+* **The asymmetry to state with any number taken, which is now sized.** Elk carries a
+  small held field and defumat carries none. The Zeeman energy is outside the reported
+  total in both codes by the same convention, and the field is the same at every `q`, so
+  it largely cancels in `E(q) - E(0)` -- and the table above says how much "largely" is
+  worth: **6 per cent**, in the direction that makes the gap slightly smaller rather than
+  larger. Quote it beside any number taken from this fixture.
 
 
 ### P87 -- The relaxed magnetocrystalline anisotropy, and the PAW the force theorem cannot reach. ✅ DONE.

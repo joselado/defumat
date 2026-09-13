@@ -13,7 +13,9 @@ more than the stiffness does:
   tightens monotonically with ``lambda``.
 * ``'atomic texture'`` constrains the *direction alone*, so its potential
   carries a ``1/|m|`` and grows as a site's moment shrinks. That is positive
-  feedback, and on this cell no ``lambda`` converged in 400 iterations.
+  feedback, and on this cell no ``lambda`` converged at all -- the budget each
+  row was given is in the table's ``iterations`` column, and the longest of
+  them, 400, is not close to enough.
 
 Measured here, two hydrogen atoms of one species at +-60 degrees from z
 (``tests/data/qe/h2-texture-120.in``), ``conv_thr = 1e-8``, targets at the
@@ -142,12 +144,21 @@ def test_the_direction_only_penalty_does_not_converge_on_this_cell(pseudo_dir):
     is amplified rather than damped. The warning at input says so and names the
     scheme that works; this asserts the warning is there and that the run it
     warns about really does fail to converge.
+
+    The budget here is ``_converge``'s 100 iterations, where the table in this
+    module's docstring measured this ``lambda`` at 200 and another at 400. A
+    shorter budget is the right one for a test that asserts *failure*: it is
+    cheaper and it can only be conservative, since a run that has not converged
+    by 200 has not converged by 100 either.
     """
     text = _text("atomic texture", 0.1, length=0.6)
     with pytest.warns(RuntimeWarning, match=r"1/\|m\|"):
         Calculator.from_text(text, pseudo_dir, announce=False)
     scf, _, _ = _converge(text, pseudo_dir)
     assert not scf.converged, (
-        "'atomic texture' converged on this cell -- if that is now true the "
-        "warning and the table in this module's docstring are both stale"
+        "'atomic texture' converged on this cell within the 100 iterations "
+        "this test allows it -- if that is now true the warning and the table "
+        "in this module's docstring are both stale. The table's own row for "
+        "this lambda ran 200 and the most generous row ran 400, so a pass here "
+        "is a stronger statement than the assertion, not a weaker one."
     )
