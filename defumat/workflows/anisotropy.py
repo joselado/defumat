@@ -79,6 +79,7 @@ spiral, which has no spin-orbit coupling to switch on.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 
 import jax.numpy as jnp
@@ -102,6 +103,10 @@ __all__ = [
     "frozen_expectation",
     "MagneticTorque",
     "run_torque",
+    "RelaxedDirection",
+    "RelaxedAnisotropy",
+    "run_relaxed_direction",
+    "run_relaxed_anisotropy",
     "cardinal_directions",
     "sphere_cover",
 ]
@@ -517,22 +522,7 @@ def run_anisotropy(
     nothing else -- which is the whole reason the difference of two numbers of
     order 100 Ry can be trusted in its eighth decimal.
     """
-    if directions is None:
-        directions = "xyz"
-    if isinstance(directions, str):
-        if directions == "cardinal":
-            directions = cardinal_directions(system)
-        elif directions == "xz":
-            directions = ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0))
-        elif directions == "xyz":
-            directions = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
-        else:
-            raise ValueError(
-                f"directions = {directions!r}: expected a sequence of vectors, "
-                "an integer, or one of 'cardinal', 'xz', 'xyz'"
-            )
-    elif isinstance(directions, (int, np.integer)):
-        directions = sphere_cover(int(directions))
+    directions = _direction_set(system, directions)
 
     results = tuple(
         run_force_theorem(
@@ -876,3 +866,374 @@ def run_torque(
         band_energy_check=check,
         fermi_energy=levels.get("fermi_energy"),
     )
+
+
+# ---------------------------------------------------------------------------
+# The relaxed anisotropy: two self-consistent totals instead of two band sums
+# ---------------------------------------------------------------------------
+
+#: How far a converged moment may sit from the direction it was asked for, in
+#: degrees, before :func:`run_relaxed_anisotropy` says so. **Nothing holds the
+#: moment in a relaxed run** -- the whole point is that the density is free --
+#: so a direction that is not a stationary point of the anisotropy energy will
+#: drift towards one that is, and the two totals then belong to two states
+#: neither of which is the one asked for. A cardinal axis of a cubic or uniaxial
+#: crystal is stationary by symmetry and does not drift; an oblique direction
+#: generally does. 1 degree is far above the wander of a converged run and far
+#: below the ~30 degrees a genuine collapse gives.
+RELAXED_DRIFT_TOL = 1.0
+
+
+@dataclass
+class RelaxedDirection:
+    """One direction converged self-consistently, and where it ended up."""
+
+    #: Cartesian unit vector the moment was started along.
+    direction: tuple
+    #: The **total** energy, in Ry -- not a band-energy sum.
+    total_energy: float
+    converged: bool
+    iterations: int
+    accuracy: float
+    #: The converged cell moment as a cartesian vector, in Bohr magnetons.
+    moment: tuple
+    #: Angle between :attr:`moment` and :attr:`direction`, in degrees.
+    drift: float
+    #: The magnitude of :attr:`moment`, in Bohr magnetons.
+    moment_length: float
+
+
+@dataclass
+class RelaxedAnisotropy:
+    """A set of directions, each with its own self-consistent total energy."""
+
+    directions: tuple
+    results: tuple
+    reference: int = 0
+
+    @property
+    def total_energies(self) -> np.ndarray:
+        return np.array([r.total_energy for r in self.results])
+
+    @property
+    def energies(self) -> np.ndarray:
+        """Total energies relative to :attr:`reference`, in Ry."""
+        return self.total_energies - self.total_energies[self.reference]
+
+    @property
+    def energies_mev(self) -> np.ndarray:
+        return self.energies * RY_TO_EV * 1000.0
+
+    @property
+    def anisotropy(self) -> float:
+        """Hardest minus easiest, in Ry."""
+        energies = self.total_energies
+        return float(np.max(energies) - np.min(energies))
+
+    @property
+    def anisotropy_mev(self) -> float:
+        return self.anisotropy * RY_TO_EV * 1000.0
+
+    @property
+    def easy_axis(self) -> tuple:
+        return self.directions[int(np.argmin(self.total_energies))]
+
+    @property
+    def hard_axis(self) -> tuple:
+        return self.directions[int(np.argmax(self.total_energies))]
+
+    @property
+    def converged(self) -> bool:
+        """Whether **every** direction's SCF converged."""
+        return all(r.converged for r in self.results)
+
+    @property
+    def drifts(self) -> np.ndarray:
+        """``(ndir,)`` in degrees: how far each moment left its direction."""
+        return np.array([r.drift for r in self.results])
+
+    @property
+    def moment_lengths(self) -> np.ndarray:
+        return np.array([r.moment_length for r in self.results])
+
+    def difference(self, i: int, j: int) -> float:
+        """``E(i) - E(j)`` in Ry."""
+        return float(self.total_energies[i] - self.total_energies[j])
+
+
+def _refuse_relaxed(system: System, pseudos, require_spin_orbit: bool = True) -> None:
+    """What a *self-consistent* anisotropy cannot do, which is less than the theorem.
+
+    **The differences from :func:`_refuse_system` are the point of this
+    function existing**, so they are named rather than left to a diff:
+
+    * **PAW is allowed.** The force theorem refuses it because its handoff is a
+      density and a PAW Hamiltonian needs ``ddd_paw``, which is built from
+      ``becsum`` -- a property of the wavefunctions of the *other* leg's run,
+      with a different pseudopotential file and a different projector count.
+      There is no handoff here. Each direction is one ordinary self-consistent
+      run that builds its own ``becsum`` from its own states, so the dataset
+      never changes hands and the refusal does not apply. This is the whole
+      reason the relaxed route is worth having beyond its second-order term:
+      it reaches a regime the theorem cannot, and
+      ``Ni.rel-pbe-spn-kjpaw_psl.1.0.0.UPF`` is a fully-relativistic PAW
+      dataset for a magnetic element.
+    * **A Hubbard U is allowed**, for the same reason: ``ns`` is converged here
+      rather than carried across.
+    * **A magnetic field or a constrained moment is still refused**, and this
+      one is *not* inherited -- it is the same argument arriving at the same
+      answer. The field's energy is deliberately outside the reported total
+      (``defumat/scf/fields.py``), so two directions' totals differ by a Zeeman
+      term that neither total accounts for, and the anisotropy is contaminated
+      by whatever the constraint cost. A held moment also makes the drift check
+      below meaningless, since the constraint is what is holding it.
+    * **A potential-only meta-GGA is still refused**, and here the reason is
+      sharper than the theorem's: ``tb09`` and ``bj06`` have no energy
+      functional at all, so the total energy this quantity is a difference of
+      is not the value of anything the run minimised (``PLAN.md`` P30-P32).
+    * **A spin spiral is still refused**: it has no spin-orbit coupling to be
+      anisotropic about.
+    """
+    if system.input_dft and system.input_dft.strip().lower() in ("tb09", "bj06"):
+        raise NotImplementedError(
+            f"a relaxed magnetic anisotropy under {system.input_dft}: a "
+            "potential-only meta-GGA has no energy functional, so its printed "
+            "total is not the value of anything the SCF minimised and a "
+            "difference of two of them is not an energy difference. The force "
+            "theorem refuses it too, for the different reason that tau is not "
+            "in its handoff"
+        )
+    if (
+        system.constrained_magnetization != "none"
+        or any(system.b_field)
+        or any(any(v) for v in system.atomic_b_field or ())
+    ):
+        raise NotImplementedError(
+            "a relaxed magnetic anisotropy with a magnetic field or a "
+            "constrained moment: the field's energy is deliberately outside the "
+            "reported total (defumat/scf/fields.py), so two directions' totals "
+            "differ by a Zeeman term no total accounts for. It also defeats the "
+            "drift check, since the constraint is what holds the moment where it "
+            "was put rather than the anisotropy"
+        )
+    if system.spiral:
+        raise NotImplementedError(
+            "a relaxed magnetic anisotropy for a spin spiral: a spiral refuses "
+            "spin-orbit coupling permanently (it breaks the generalized Bloch "
+            "theorem), so there is no coupling for the energy to depend on a "
+            "direction through"
+        )
+    if not system.noncolin:
+        raise ValueError(
+            f"a relaxed magnetic anisotropy is a noncollinear run and this "
+            f"system has nspin = {system.nspin}: set noncolin = .true. and "
+            "lspinorb = .true. with a fully-relativistic dataset"
+        )
+    if require_spin_orbit and not system.lspinorb:
+        raise ValueError(
+            "a relaxed magnetic anisotropy needs lspinorb = .true. and a "
+            "fully-relativistic dataset: without spin-orbit coupling the "
+            "Hamiltonian commutes with a global spin rotation and every "
+            "direction has exactly the same total energy. Use "
+            "run_relaxed_anisotropy(..., require_spin_orbit=False) to run it "
+            "anyway, which is the control for that identity"
+        )
+    if not system.nosym:
+        raise ValueError(
+            "a relaxed magnetic anisotropy needs nosym = .true.: a magnetic "
+            "noncollinear run reduces its k-grid with the magnetic symmetry "
+            "group, which depends on where the moment points, so two "
+            "directions would be sampled on two different wedges and their "
+            "total energies would differ by the k-sampling rather than by the "
+            "physics. The force theorem requires it for the same reason, and "
+            "here it is worse: a total energy carries the Ewald and Hartree "
+            "terms as well, so the contamination is not confined to the bands"
+        )
+
+
+def run_relaxed_direction(
+    system: System,
+    pseudos: tuple[Pseudopotential, ...],
+    direction=None,
+    require_spin_orbit: bool = True,
+    soc_scale: float | None = None,
+    **options,
+) -> RelaxedDirection:
+    """One direction, converged self-consistently, with its drift measured.
+
+    Where :func:`run_force_theorem` freezes a density and diagonalises once,
+    this runs a whole SCF with the magnetization started along ``direction``
+    and reports the **total** energy. The difference between the two routes is
+    the energy the density gains by relaxing in the spin-orbit field, which is
+    second order in the coupling where the anisotropy itself is second order --
+    so it is not negligible by any general argument, and the size of it is a
+    measurement rather than an assumption (:func:`run_relaxed_anisotropy`
+    reports both when asked).
+
+    ``options`` are :func:`~defumat.scf.driver.run_scf`'s. ``conv_thr``
+    defaults to 1e-10 rather than the SCF's usual 1e-6 for the same reason the
+    theorem's does: the answer is a difference of two numbers of order 100 Ry
+    in their eighth decimal, and a looser threshold leaves more noise than
+    signal.
+    """
+    if soc_scale is not None:
+        system = system.with_soc_scale(soc_scale)
+    # ``require_spin_orbit = False`` lifts **only** the spin-orbit clause. Every
+    # other refusal still holds, and ``nosym`` especially: without it the
+    # identity this control checks would be broken by the k-set rather than by
+    # the physics, and the control would fail for a reason unrelated to what it
+    # is controlling.
+    _refuse_relaxed(system, pseudos, require_spin_orbit)
+
+    if direction is None:
+        direction = direction_from_angles(system.angle1[0], system.angle2[0])
+    direction = np.asarray(direction, dtype=float)
+    direction = tuple(float(x) for x in direction / np.sqrt(np.sum(direction**2)))
+    # The same rebuild the force theorem needs, and for the same reason: a GGA
+    # reads its quantization axis off ``angle1``/``angle2``, so rotating where
+    # the moment is started without rotating the axis leaves the functional
+    # differentiating ``|m|`` through its own kinks
+    # (:func:`_with_quantization_axis` has the 36.8 meV that cost).
+    system = _with_quantization_axis(system, direction)
+
+    options.setdefault("conv_thr", 1.0e-10)
+    from defumat.scf.driver import run_scf
+
+    scf = run_scf(system, pseudos, **options)
+
+    moment = np.asarray(scf.magnetization_vector, dtype=float).reshape(3)
+    length = float(np.linalg.norm(moment))
+    if length > 0.0:
+        cosine = float(np.dot(moment / length, np.asarray(direction)))
+        drift = float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+    else:
+        drift = float("nan")
+    return RelaxedDirection(
+        direction=direction,
+        total_energy=float(scf.total_energy),
+        converged=bool(scf.converged),
+        iterations=int(scf.iterations),
+        accuracy=float(scf.accuracy),
+        moment=tuple(float(x) for x in moment),
+        drift=drift,
+        moment_length=length,
+    )
+
+
+def run_relaxed_anisotropy(
+    system: System,
+    pseudos: tuple[Pseudopotential, ...],
+    directions=None,
+    require_spin_orbit: bool = True,
+    soc_scale: float | None = None,
+    warn_on_drift: bool = True,
+    **options,
+) -> RelaxedAnisotropy:
+    """The magnetocrystalline anisotropy as a difference of **total** energies.
+
+    One full self-consistent noncollinear run per direction, against
+    :func:`run_anisotropy`'s one diagonalisation per direction at a frozen
+    density. The two answer slightly different questions and both are worth
+    having:
+
+    * the **force theorem** freezes the density converged without spin-orbit
+      coupling and asks what the bands cost when the coupling is switched on.
+      Every other term of the total energy is a functional of ``rho`` alone and
+      cancels exactly between two directions, so the whole answer is one band
+      sum and the noise of two nearly-equal 100 Ry totals never appears;
+    * the **relaxed** anisotropy lets the density respond to the spin-orbit
+      field in each direction. The extra energy that buys is variational, so it
+      is negative in both directions and the anisotropy is the difference of
+      two such gains -- a second-order effect on a second-order quantity, which
+      is small but is not zero and is not bounded by any argument this code
+      can make. Measuring it is the point.
+
+    ``directions`` follows :func:`run_anisotropy`: a sequence of cartesian
+    vectors, an integer for :func:`sphere_cover`, or ``"cardinal"``/``"xz"``/
+    ``"xyz"``, defaulting to ``"xyz"``.
+
+    **Nothing holds the moment**, which is the price of letting the density
+    relax, so each direction reports where its moment actually ended
+    (:attr:`RelaxedDirection.drift`) and a drift past
+    :data:`RELAXED_DRIFT_TOL` is warned about by name. A cardinal axis of a
+    cubic or uniaxial crystal is stationary by symmetry and stays put; an
+    oblique direction on a strongly anisotropic magnet need not, and an
+    anisotropy assembled from directions that drifted is a difference between
+    two states that are not the ones asked for.
+
+    ``options`` go to :func:`~defumat.scf.driver.run_scf`. ``conv_thr``
+    defaults to 1e-10.
+    """
+    directions = _direction_set(system, directions)
+    results = tuple(
+        run_relaxed_direction(
+            system, pseudos, direction=direction,
+            require_spin_orbit=require_spin_orbit, soc_scale=soc_scale,
+            **options,
+        )
+        for direction in directions
+    )
+    anisotropy = RelaxedAnisotropy(
+        directions=tuple(r.direction for r in results), results=results
+    )
+    unconverged = [r for r in results if not r.converged]
+    if unconverged:
+        warnings.warn(
+            f"{len(unconverged)} of {len(results)} directions did not converge "
+            f"(worst accuracy {max(r.accuracy for r in unconverged):.3e} Ry). A "
+            "relaxed anisotropy is a difference of total energies in their "
+            "eighth decimal, so an unconverged direction does not give a "
+            "slightly wrong anisotropy -- it gives one dominated by where the "
+            "SCF happened to stop. Raise max_iterations or loosen conv_thr "
+            "deliberately, and read RelaxedAnisotropy.converged before the "
+            "number",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    drifted = [r for r in results if np.isfinite(r.drift)
+               and r.drift > RELAXED_DRIFT_TOL]
+    if warn_on_drift and drifted:
+        worst = max(drifted, key=lambda r: r.drift)
+        warnings.warn(
+            f"{len(drifted)} of {len(results)} directions drifted more than "
+            f"{RELAXED_DRIFT_TOL} degrees from where the moment was started, "
+            f"the worst by {worst.drift:.2f} degrees (direction "
+            f"{tuple(np.round(worst.direction, 4))}, moment "
+            f"{tuple(np.round(worst.moment, 4))}). Nothing holds the moment in "
+            "a relaxed run, so that direction's total energy belongs to a "
+            "state other than the one asked for and the anisotropy built from "
+            "it is not the anisotropy of those directions. Cardinal axes of a "
+            "cubic or uniaxial crystal are stationary by symmetry and should "
+            "not drift; for an oblique direction, use the force theorem (which "
+            "cannot drift, its density being frozen) or hold the moment with "
+            "constrained_magnetization and accept that the constraint's energy "
+            "is outside the total",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return anisotropy
+
+
+def _direction_set(system: System, directions):
+    """``run_anisotropy``'s ``directions`` argument, resolved to vectors.
+
+    Shared by the frozen and relaxed routes so that the two cannot drift apart
+    in what ``"cardinal"`` means -- an anisotropy compared between them must be
+    over the same set or the comparison is of two different quantities.
+    """
+    if directions is None:
+        directions = "xyz"
+    if isinstance(directions, str):
+        if directions == "cardinal":
+            return cardinal_directions(system)
+        if directions == "xz":
+            return ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+        if directions == "xyz":
+            return ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        raise ValueError(
+            f"directions = {directions!r}: expected a sequence of vectors, "
+            "an integer, or one of 'cardinal', 'xz', 'xyz'"
+        )
+    if isinstance(directions, (int, np.integer)):
+        return sphere_cover(int(directions))
+    return tuple(directions)

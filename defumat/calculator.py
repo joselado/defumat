@@ -1293,6 +1293,36 @@ class Calculator:
             **self._defaults_for(run_anisotropy, options),
         )
 
+    def get_relaxed_anisotropy(self, directions=None, **options):
+        """The magnetocrystalline anisotropy from **total** energies, relaxed.
+
+        One full self-consistent noncollinear run per direction, differenced.
+        ``self`` is the fully-relativistic noncollinear calculator itself and
+        there is no second leg, because nothing is handed between two runs --
+        which is exactly why this route reaches what the force theorem cannot:
+
+            soc = Calculator.from_file("ni-soc.in")     # PAW is fine here
+            mae = soc.get_relaxed_anisotropy(directions="xz")
+
+        Against :meth:`get_anisotropy`, which freezes the density converged
+        without spin-orbit coupling and diagonalises once per direction, this
+        lets the density respond in each direction and pays for it in two SCF
+        runs. The extra energy is variational and the anisotropy is the
+        difference of two such gains. **PAW and a Hubbard ``U`` are allowed
+        here and refused there**, because the theorem's handoff is a density
+        and ``ddd_paw``/``ns`` are properties of wavefunctions.
+
+        Read ``.converged`` and ``.drifts`` before the number: nothing holds
+        the moment, so a direction that is not stationary by symmetry can end
+        up somewhere other than where it was started.
+        """
+        from defumat.workflows.anisotropy import run_relaxed_anisotropy
+
+        return run_relaxed_anisotropy(
+            self.system, self.pseudos, directions=directions,
+            **self._defaults_for(run_relaxed_anisotropy, options),
+        )
+
     def get_torque(self, spinor, angle=None, **options):
         """The magnetic torque, and the anisotropy constant from one angle.
 

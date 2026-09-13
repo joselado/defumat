@@ -329,24 +329,36 @@ def test_every_atom_resolved_constraint_gets_its_spheres(regions, density, cell)
     happen to carry a ``LOCAL_MAGNETIC_FIELDS`` card, which is why every
     committed test missed it.
     """
-    from defumat.scf.fields import ATOM_RESOLVED
+    from defumat.scf.fields import ATOM_RESOLVED, FEEDBACK
 
     for constraint in sorted(ATOM_RESOLVED):
         width = 1 if constraint == "atomic direction" else 3
         targets = jnp.asarray(np.tile(
             [0.0, 0.0, 1.0][:width] if width == 3 else [0.5], (NAT, 1)))
+        # **The probe has to be the method the scheme actually uses.** A penalty
+        # reads its spheres inside ``constraint_energy``; a FEEDBACK scheme's
+        # ``constraint_energy`` is identically zero by construction -- it drives
+        # a field instead of adding a term -- so probing it there would assert
+        # nothing for half the set and the test would pass on a scheme with no
+        # spheres at all. ``site_residuals`` is what every atom-resolved scheme
+        # goes through.
+        probe = ("site_residuals" if constraint in FEEDBACK
+                 else "constraint_energy")
         field = MagneticField(
-            regions=regions, uniform=jnp.zeros(3), atomic=None,
+            regions=regions, uniform=jnp.zeros(3),
+            atomic=jnp.zeros((NAT, 3)) if constraint in FEEDBACK else None,
             targets=targets, penalty=0.2, constraint=constraint,
         )
-        assert np.isfinite(float(field.constraint_energy(density, cell)))
+        assert np.all(np.isfinite(
+            np.asarray(getattr(field, probe)(density, cell))))
 
         without = MagneticField(
-            regions=None, uniform=jnp.zeros(3), atomic=None,
+            regions=None, uniform=jnp.zeros(3),
+            atomic=jnp.zeros((NAT, 3)) if constraint in FEEDBACK else None,
             targets=targets, penalty=0.2, constraint=constraint,
         )
         with pytest.raises(ValueError, match="ATOM_RESOLVED"):
-            without.constraint_energy(density, cell)
+            getattr(without, probe)(density, cell)
 
 
 def test_the_driver_builds_spheres_for_a_bare_atomic_texture_run():
@@ -356,14 +368,27 @@ def test_the_driver_builds_spheres_for_a_bare_atomic_texture_run():
     *constraint* is atom-resolved. Reaching ``constraint_energy`` is the point
     -- constructing the ``Calculation`` succeeded on the broken code too.
     """
+    import warnings
+
     from defumat import Calculator
     from defumat.scf.driver import Calculation
 
-    calculator = Calculator.from_file(
-        "tests/data/qe/h2-texture-120.in", pseudo_dir="tests/data/pseudo")
-    lines = Path("tests/data/qe/h2-texture-120.in").read_text().splitlines()
+    # **The committed file is ``'atomic'`` now**, because as ``'atomic texture'``
+    # it did not converge and said it did (``OPEN.md`` Part IV). The regression
+    # this test is about is specific to ``'atomic texture'``, so the scheme is
+    # put back here rather than left in a committed input that cannot run: the
+    # crash was in the *potential build* and does not care how the run ends.
+    text = Path("tests/data/qe/h2-texture-120.in").read_text()
+    lines = text.splitlines()
     assert not [ln for ln in lines
                 if ln.strip().upper().startswith("LOCAL_MAGNETIC_FIELDS")]
+    assert "constrained_magnetization = 'atomic'" in text
+    text = text.replace("constrained_magnetization = 'atomic'",
+                        "constrained_magnetization = 'atomic texture'")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        calculator = Calculator.from_text(
+            text, pseudo_dir="tests/data/pseudo", announce=False)
 
     calculation = Calculation(calculator.system, calculator.pseudos)
     field = calculation.magnetic_field
@@ -812,3 +837,158 @@ def test_the_grid_warning_is_quiet_where_the_shift_lands_on_the_grid(q, n):
         _warnings.simplefilter("always")
         _build(_SPIRAL.format(q=q, n=n))
     assert not [w for w in caught if "spin spiral's k-grid" in str(w.message)]
+
+
+# ---------------------------------------------------------------------------
+# The per-atom feedback field: Elk's bfieldfsm, fsmtype = 2 and -2
+# ---------------------------------------------------------------------------
+
+def test_r3vo_removes_the_component_along_the_target_and_nothing_else():
+    """``_orthogonalize`` is Elk's ``r3vo``, one row per atom.
+
+    Transcribed check: the result is perpendicular to the axis, the *change* is
+    parallel to it, and a component already perpendicular is untouched. Those
+    three together pin the projector -- a routine that merely returned zero
+    would pass the first alone, which is this project's "a clean zero is not a
+    pass" in miniature.
+    """
+    from defumat.scf.fields import _orthogonalize
+
+    rng = np.random.default_rng(3)
+    axes = jnp.asarray(rng.normal(size=(4, 3)))
+    vectors = jnp.asarray(rng.normal(size=(4, 3)))
+    out = np.asarray(_orthogonalize(vectors, axes))
+    axes_n = np.asarray(axes)
+
+    assert np.allclose(np.sum(out * axes_n, axis=-1), 0.0, atol=1e-13)
+    removed = np.asarray(vectors) - out
+    cross = np.cross(removed, axes_n)
+    assert np.allclose(cross, 0.0, atol=1e-13)
+
+    # Already perpendicular: unchanged.
+    perpendicular = np.cross(np.asarray(vectors), axes_n)
+    again = np.asarray(_orthogonalize(jnp.asarray(perpendicular), axes))
+    assert np.allclose(again, perpendicular, atol=1e-13)
+
+
+def test_r3vo_leaves_a_vanishing_axis_alone():
+    """Elk's own escape: ``IF (t1 < 1.d-8) RETURN`` (``r3vo.f90``).
+
+    A zero target carries no direction to project against, and dividing by its
+    norm is the ``0/0`` that ``CLAUDE.md``'s ``abs`` trap is about.
+    """
+    from defumat.scf.fields import _orthogonalize
+
+    axes = jnp.asarray([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    vectors = jnp.asarray([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]])
+    out = np.asarray(_orthogonalize(vectors, axes))
+    assert np.allclose(out[0], [1.0, 2.0, 3.0])
+    assert np.allclose(out[1], [1.0, 2.0, 0.0])
+    assert np.all(np.isfinite(out))
+
+
+def test_the_feedback_schemes_add_nothing_to_the_energy():
+    """A feedback scheme is a field, not a penalty, so ``constraint_energy`` is 0.
+
+    That is not a detail: it is why each of them needs a residual of its own
+    (:meth:`MagneticField.site_residuals`). A penalty's miss is visible in the
+    energy and goes to zero as the constraint is met; a feedback field's is
+    invisible there by construction, and a run that only watched the energy
+    would report a constrained answer under no constraint at all.
+    """
+    from defumat.scf.fields import FEEDBACK, MagneticField
+
+    cell = Cell.from_ibrav(1, [6.0, 0, 0, 0, 0, 0])
+    grid = (6, 6, 6)
+    rng = np.random.default_rng(11)
+    rho = jnp.asarray(rng.normal(size=(4,) + grid))
+    regions = LocalRegions(
+        weights=jnp.asarray(rng.uniform(size=(2,) + grid)), radii=(1.0,),
+        grid=grid, nat=2, scheme="qe",
+    )
+
+    for constraint in sorted(FEEDBACK):
+        targets = jnp.asarray(np.ones((2, 3)) if "atomic" in constraint
+                              else np.ones(3))
+        field = MagneticField(
+            regions=regions, uniform=jnp.zeros(3),
+            atomic=jnp.zeros((2, 3)) if "atomic" in constraint else None,
+            targets=targets, penalty=0.2, constraint=constraint,
+        )
+        assert float(field.constraint_energy(rho, cell)) == 0.0
+
+
+def test_the_per_atom_feedback_steps_each_atom_from_its_own_error():
+    """``bfieldfsm.f90:50-73``, transcribed and checked atom by atom.
+
+    Elk writes ``B_i <- B_i + tau (m_i - m_fix,i)``; this package is in QE's
+    convention, where the field enters as ``-B``, so the sign flips. The two
+    atoms are given *different* errors so that a step which averaged them, or
+    used one atom's error for both, cannot pass.
+    """
+    from defumat.scf.fields import MagneticField
+
+    class _Regions:
+        """Two disjoint half-boxes, so each atom's moment is exactly known."""
+
+        def integrate(self, magnetization):
+            half = magnetization.shape[-3] // 2
+            first = jnp.sum(magnetization[:, :half], axis=(1, 2, 3))
+            second = jnp.sum(magnetization[:, half:], axis=(1, 2, 3))
+            return jnp.stack([first, second], axis=0)
+
+    cell = Cell.from_ibrav(1, [4.0, 0, 0, 0, 0, 0])
+    grid = (4, 4, 4)
+    scale = float(cell.volume) / int(np.prod(grid))
+    m = np.zeros((4,) + grid)
+    m[1, :2] = 1.0           # atom 0: moment along x
+    m[3, 2:] = 1.0           # atom 1: moment along z
+    rho = jnp.asarray(m)
+
+    targets = jnp.asarray([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
+    tau = 0.3
+    field = MagneticField(
+        regions=_Regions(), uniform=jnp.zeros(3), atomic=jnp.zeros((2, 3)),
+        targets=targets, penalty=tau, constraint="atomic fsm",
+        fsm_update="elk",
+    )
+    moments = np.asarray(field.sphere_moments(rho, cell))
+    stepped = np.asarray(field.feedback(rho, cell).atomic)
+    assert np.allclose(stepped, -tau * moments, atol=1e-12)
+    # Each atom's own error and no mixing between them.
+    assert stepped[0, 0] != 0.0 and stepped[0, 2] == 0.0
+    assert stepped[1, 2] != 0.0 and stepped[1, 0] == 0.0
+    assert moments[0, 0] == pytest.approx(scale * 2 * 4 * 4, rel=1e-12)
+
+
+def test_the_direction_feedback_never_pushes_along_the_target():
+    """``fsmtype < 0``: the field turns a moment and cannot lengthen one.
+
+    The contrast with the penalty is the physics of the whole scheme. A
+    direction-only *penalty* divides by ``|m|``, so a shrinking moment is
+    pushed harder -- positive feedback, and no lambda converged on the
+    120-degree cell. A direction-only *field* is the error with its parallel
+    part projected out, which is bounded by construction.
+    """
+    from defumat.scf.fields import MagneticField
+
+    class _Regions:
+        def integrate(self, magnetization):
+            return jnp.stack([jnp.sum(magnetization, axis=(1, 2, 3))], axis=0)
+
+    cell = Cell.from_ibrav(1, [4.0, 0, 0, 0, 0, 0])
+    grid = (4, 4, 4)
+    m = np.zeros((4,) + grid)
+    m[1] = 0.5      # moment along x ...
+    m[3] = 0.5      # ... and z, so it is 45 degrees off a z target
+    rho = jnp.asarray(m)
+
+    target = jnp.asarray([[0.0, 0.0, 1.0]])
+    field = MagneticField(
+        regions=_Regions(), uniform=jnp.zeros(3), atomic=jnp.zeros((1, 3)),
+        targets=target, penalty=0.3, constraint="atomic fsm direction",
+        fsm_update="elk",
+    )
+    step = np.asarray(field.feedback(rho, cell).atomic)
+    assert abs(step[0, 2]) < 1e-13, "a direction field must not act along z"
+    assert abs(step[0, 0]) > 1e-6, "and must act across it"

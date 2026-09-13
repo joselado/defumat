@@ -745,7 +745,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     )
     # Imported here rather than at module scope: ``defumat.scf`` imports the
     # driver, which imports this module, and the cycle is real.
-    from defumat.scf.fields import CONSTRAINTS
+    from defumat.scf.fields import CONSTRAINTS, FEEDBACK, FEEDBACK_ATOMIC
 
     constrained_magnetization = str(
         pwin.get("system", "constrained_magnetization", "none")
@@ -823,13 +823,81 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
             "starting_magnetization/angle1/angle2 are per species, so there is "
             "nothing per-atom for it to aim at"
         )
+    if constrained_magnetization in FEEDBACK_ATOMIC:
+        if nspin != 4:
+            raise ValueError(
+                f"constrained_magnetization = {constrained_magnetization!r} "
+                "requires noncolin = .true.: it drives a vector field on each "
+                "atom towards a vector target (Elk's mommtfix), and a collinear "
+                "moment has one component"
+            )
+        if not _starting_moments(pwin, structure.nat):
+            raise ValueError(
+                f"constrained_magnetization = {constrained_magnetization!r} "
+                "needs a STARTING_MOMENTS card: it drives one field per atom "
+                "towards one target per atom, and "
+                "starting_magnetization/angle1/angle2 are per species, so there "
+                "is nothing per-atom for it to aim at"
+            )
+        if _atomic_b_field(pwin, structure.nat):
+            # Both write the same ``(nat, 3)`` slot -- the feedback would
+            # overwrite the card on its first step and the run would report a
+            # field the user never asked for, with the card's own field gone
+            # and nothing saying so.
+            raise ValueError(
+                f"constrained_magnetization = {constrained_magnetization!r} "
+                "with a LOCAL_MAGNETIC_FIELDS card: the constraint *is* a "
+                "per-atom field, driven from zero, and it writes the same array "
+                "the card fills, so the card would be silently discarded on the "
+                "first iteration. Use one or the other"
+            )
+    if constrained_magnetization in FEEDBACK:
+        from defumat.scf.fields import DEFAULT_FSM_GAIN, FSM_GAIN_WARN
+
+        given = pwin.get("system", "lambda")
+        if given is not None and float(given) > FSM_GAIN_WARN:
+            warnings.warn(
+                f"constrained_magnetization = "
+                f"{constrained_magnetization!r} with lambda = {float(given)}: "
+                f"for a FEEDBACK scheme lambda is Elk's taufsm, a *gain* on the "
+                f"constraining field, whose default is {DEFAULT_FSM_GAIN} -- not "
+                f"a penalty stiffness, where 1 to 10 is the useful range. It "
+                f"multiplies a moment error in Bohr magnetons to give a field in "
+                f"Rydbergs, so this asks for a "
+                f"{float(given):g} Ry step from a 1 mu_B error. Measured on the "
+                f"120-degree hydrogen pair, lambda = 0.2 runs 200 iterations "
+                f"without converging and drives the moments to 0.82 mu_B against "
+                f"a target of 0.26. Leave lambda unset for "
+                f"{DEFAULT_FSM_GAIN}, or use a penalty scheme ('atomic') if a "
+                f"stiffness is what you meant",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+    if constrained_magnetization in FEEDBACK and float(
+        pwin.get("system", "reducebf", 1.0)
+    ) != 1.0:
+        # ``reducebf`` multiplies the *applied* field by a factor the loop
+        # accumulates, while the feedback measures its response against the
+        # **unscaled** field it stores. The two disagree from the first
+        # iteration, so the secant's ``chi = dm/dB`` is taken against a field
+        # that is not the one acting -- and the run converges looking untroubled
+        # onto whatever field that arithmetic lands on.
+        raise ValueError(
+            f"constrained_magnetization = {constrained_magnetization!r} with "
+            f"reducebf < 1 is refused: reducebf decays the applied field after "
+            "every iteration, and a feedback constraint measures its own "
+            "response against the field it stores, which is not decayed. The "
+            "two are inconsistent from the first step and nothing in the output "
+            "would say so. reducebf is for a symmetry-breaking field that "
+            "should vanish; a constraint is not one"
+        )
     if constrained_magnetization == "total" and nspin != 4:
         raise ValueError(
             "constrained_magnetization = 'total' requires noncolin = .true.: "
             "fixed_magnetization is a vector and a collinear run has one "
             "component to compare it against (input.f90's i_cons = 3)"
         )
-    if constrained_magnetization == "fsm" and lspinorb:
+    if constrained_magnetization in FEEDBACK and lspinorb:
         # Not QE's -- ``fsm`` is Elk's scheme and QE has no counterpart -- and
         # not a limit of the physics either: it is a limit of *this* secant.
         # ``MagneticField._secant_step`` measures ``chi = dm/dB`` component by
@@ -841,7 +909,8 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         # the wrong field the rest of the time, with nothing in the output to
         # say which had happened.
         raise ValueError(
-            "constrained_magnetization = 'fsm' with lspinorb = .true. is "
+            f"constrained_magnetization = {constrained_magnetization!r} with "
+            "lspinorb = .true. is "
             "refused: the fixed-spin-moment search updates each cartesian "
             "component of the field from its own component of the moment, "
             "which assumes dm_a/dB_b is diagonal, and spin-orbit coupling is "
@@ -1095,7 +1164,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         angle1=angle1,
         angle2=angle2,
         constrained_magnetization=constrained_magnetization,
-        constraint_lambda=float(pwin.get("system", "lambda", 1.0)),
+        constraint_lambda=_constraint_lambda(pwin),
         fixed_magnetization=tuple(
             float(v) for v in pwin.indexed("system", "fixed_magnetization", 3)
         ),
@@ -1761,6 +1830,23 @@ def _reducebf(pwin) -> float:
             "density has responded to it"
         )
     return value
+
+
+def _constraint_lambda(pwin) -> float:
+    """``lambda``, whose default follows the *family* of the scheme.
+
+    A penalty's stiffness and a feedback field's gain are the same input
+    variable and are three orders apart in magnitude (see
+    :data:`~defumat.scf.fields.DEFAULT_FSM_GAIN`), so one default cannot serve
+    both: 1.0 is a weak penalty and a hundred times Elk's ``taufsm``.
+    """
+    from defumat.scf.fields import DEFAULT_FSM_GAIN, FEEDBACK
+
+    constraint = str(
+        pwin.get("system", "constrained_magnetization", "none")
+    ).lower()
+    fallback = DEFAULT_FSM_GAIN if constraint in FEEDBACK else 1.0
+    return float(pwin.get("system", "lambda", fallback))
 
 
 def _fsm_update(pwin) -> str:

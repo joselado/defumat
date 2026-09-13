@@ -1,0 +1,44 @@
+! The QE-side twin of tests/data/elk/h_chain_spiral/elk.in: the SAME hydrogen
+! chain spiral, set up so that the two codes differ by their basis and nothing
+! else that can be helped.
+!
+! One line differs from h-chain-spiral.in and it is input_dft. Elk's Perdew-
+! Zunger LDA (xctype = 2) is implemented spin-unpolarised only and Elk refuses a
+! magnetic run with it, so the functional both codes can do is Perdew-Wang
+! (Elk's default xctype = 3, QE's 'pw'). The dataset is still H.pz-vbc.UPF, a
+! PZ-generated pseudopotential run under PW -- an inconsistency that exists on
+! the QE side alone, Elk being all-electron, and one hydrogen tolerates because
+! it has no core.
+!
+! Also changed: conv_thr and the spiral wavevector are left where the scan sets
+! them, and degauss stays at 0.1 Ry (Elk's swidth = 0.05 Ha) for the reason the
+! original header gives -- at a small smearing this soft magnetic surface lands
+! in whichever nearby minimum the starting density is closest to.
+!
+! PLAN.md P85 has the comparison.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 0.41666666666667,
+    nat = 1, ntyp = 1,
+    ecutwfc = 25.0,
+    input_dft = 'pw'
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.6
+    angle1(1) = 90.0
+    spiral_q(1) = 0.0, spiral_q(2) = 0.0, spiral_q(3) = 0.25
+    nbnd = 6
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-11
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS (crystal)
+ H 0.0 0.0 0.0
+K_POINTS {automatic}
+ 1 1 4 0 0 0

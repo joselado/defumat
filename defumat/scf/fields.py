@@ -61,6 +61,9 @@ __all__ = [
     "MagneticField",
     "CONSTRAINTS",
     "ATOM_RESOLVED",
+    "FEEDBACK",
+    "FEEDBACK_ATOMIC",
+    "DIRECTION_ONLY",
     "FSM_UPDATES",
     "DEFAULT_FSM_UPDATE",
     "constraint_targets",
@@ -84,7 +87,34 @@ CONSTRAINTS = {
     # every texture lying in a plane containing ``z``, helix and collinear
     # alike, and cannot hold one. This constrains the full unit vector.
     "atomic texture": None,
+    # Elk's ``fsmtype = 2`` and ``fsmtype = -2``: the feedback field resolved by
+    # atom rather than over the cell. They are to ``'atomic'`` and
+    # ``'atomic texture'`` what ``'fsm'`` is to ``'total'`` -- the same target,
+    # reached by driving a field instead of by adding a penalty, so the
+    # converged state is a stationary point of the *unconstrained* functional
+    # under that field rather than a minimum of a modified one.
+    "atomic fsm": None,
+    "atomic fsm direction": None,
 }
+
+#: The schemes that drive a **field** rather than add a penalty, so that their
+#: ``constraint_energy`` is identically zero and their convergence is a second
+#: condition on top of the density's. **Read this set rather than testing
+#: ``== "fsm"``**: five places did that, and each one of them was a scheme that
+#: silently behaved as though it had no constraint at all -- the same failure
+#: :data:`ATOM_RESOLVED` exists to stop.
+FEEDBACK = frozenset({"fsm", "atomic fsm", "atomic fsm direction"})
+
+#: The feedback schemes that drive one field **per atom** (Elk's ``fsmtype``
+#: 2 and -2) rather than one over the cell (``fsmtype = 1``).
+FEEDBACK_ATOMIC = frozenset({"atomic fsm", "atomic fsm direction"})
+
+#: The schemes -- of either kind -- that fix a **direction** and leave the
+#: length of the moment free. For a penalty that means a ``1/|m|`` in the
+#: gradient; for a feedback field it means Elk's ``r3vo`` projection, which is
+#: bounded, and that difference is the whole point of the pair.
+DIRECTION_ONLY = frozenset({"atomic direction", "atomic texture",
+                            "total direction", "atomic fsm direction"})
 
 #: The constraints whose penalty is a sum over *atoms*, so each one needs the
 #: per-atom integration spheres to exist. **Read this set rather than spelling
@@ -92,7 +122,8 @@ CONSTRAINTS = {
 #: out of it, and the omission surfaced as an ``AttributeError`` on ``None``
 #: inside the first potential build rather than as a refusal at input
 #: (`NONCOLLINEAR.md` item 8).
-ATOM_RESOLVED = frozenset({"atomic", "atomic direction", "atomic texture"})
+ATOM_RESOLVED = frozenset({"atomic", "atomic direction", "atomic texture",
+                          "atomic fsm", "atomic fsm direction"})
 
 #: Below this moment a direction constraint has nothing to act on, and QE stops
 #: rather than dividing (``add_bfield``'s ``1.d-30`` / ``1.D-12``).
@@ -120,6 +151,25 @@ AXIS_ESCAPE = 1.0e-14
 #: from its target and the field is still being driven. A run that stopped there
 #: would report an unconstrained answer under a "constrained" heading.
 FSM_TOLERANCE = 1.0e-3
+
+#: How close a **direction-only** feedback scheme has to get, in degrees.
+#: ``'atomic fsm direction'`` leaves the length of each moment free, so
+#: :data:`FSM_TOLERANCE` -- a difference of two vectors in Bohr magnetons -- is
+#: the wrong test for it twice over: it is not the quantity the field drives,
+#: and it is **not scale-free**, so a site whose moment has collapsed to a tenth
+#: of its value passes it while pointing anywhere at all. That is
+#: ``CLAUDE.md``'s "a check whose null result cannot be told from a pass" in the
+#: form this file has already met once. The angle is the scale-free measure and
+#: it is what :meth:`MagneticField.site_residuals` already reports for the two
+#: penalty direction schemes.
+#:
+#: The number is set from the measurement rather than picked: the vector penalty
+#: at the largest ``lambda`` its SCF tolerates holds the 120-degree hydrogen pair
+#: to **0.55 degrees per site** (``PLAN.md`` P79), so a tolerance that a
+#: feedback field is allowed to claim an improvement at has to be well inside
+#: that. 0.1 degrees is a fifth of it and is two orders above what a converged
+#: stationary point reaches.
+FSM_ANGLE_TOLERANCE = 0.1
 
 #: How much applied field, in Ry, a ``reducebf`` run may still be carrying when
 #: it stops before the run says so. ``reducebf`` decays the field *after* the
@@ -176,6 +226,33 @@ FSM_UPDATES: tuple[str, ...] = ("secant", "elk")
 
 #: The default, because it is the same answer for a tenth of the iterations.
 DEFAULT_FSM_UPDATE = "secant"
+
+#: Elk's ``taufsm``, the feedback gain, and the default for **every feedback
+#: scheme** when a run does not set ``lambda``.
+#:
+#: **The same input variable means two things three orders apart, and that is
+#: the trap of this family.** ``lambda`` is a *penalty stiffness* for
+#: ``'atomic'``, ``'total'`` and the two direction penalties, where the useful
+#: range is order 1 to 10 and the largest value an SCF tolerates is what holds
+#: an angle best. For a feedback scheme it is a *gain* on a field, Elk's
+#: ``taufsm``, whose own default is 0.01 -- and it multiplies a moment error in
+#: Bohr magnetons to give a field in Rydbergs, so 10 is not a stiff penalty
+#: there but a 10 Ry step from a 1 mu_B error.
+#:
+#: Measured on the 120-degree hydrogen pair, where the penalty's answer at
+#: ``lambda = 10`` is 0.55 degrees per site in 38 iterations: at ``tau = 0.2``,
+#: twenty times Elk's default, the vector feedback scheme runs 200 iterations
+#: without converging and takes the moments to **0.82 mu_B** against a target of
+#: 0.26 -- it is not a slow approach, it is the field overshooting into
+#: saturation and staying there. So a feedback run that does not name ``lambda``
+#: gets this, and one that names a penalty-sized value is warned.
+DEFAULT_FSM_GAIN = 0.01
+
+#: Above this, a feedback gain is warned about as a probable penalty stiffness.
+#: Twenty times Elk's default is the measurement above; the threshold is set an
+#: order below it so the warning fires before the run is wasted rather than
+#: after.
+FSM_GAIN_WARN = 0.1
 
 #: A secant step is refused if the two measurements are this close in field --
 #: below it the susceptibility is a ratio of two round-off differences.
@@ -238,6 +315,33 @@ def constraint_targets(
     # texture has one direction per *atom* and QE's input cannot say one. The
     # cell-wide schemes are untouched -- ``fixed_magnetization`` is already a
     # single vector and has nothing per-atom about it.
+    if constraint in FEEDBACK_ATOMIC:
+        # Elk's ``mommtfix(:, ia, is)``: one target **vector** per atom, in Bohr
+        # magnetons, for both the length-fixing scheme and the direction-fixing
+        # one. The direction scheme keeps the whole vector rather than its unit
+        # because ``r3vo`` orthogonalises against ``mommtfix`` itself
+        # (``bfieldfsm.f90:72``) -- only the direction of it is used, and
+        # storing the unit here would be a second convention for the same array.
+        if not len(per_atom):
+            raise ValueError(
+                f"constrained_magnetization = {constraint!r} needs a "
+                "STARTING_MOMENTS card: it drives one field per atom towards one "
+                "target per atom (Elk's mommtfix), and "
+                "starting_magnetization/angle1/angle2 are per species, so there "
+                "is nothing per-atom for it to aim at"
+            )
+        targets = np.asarray(per_atom, dtype=float).reshape(-1, 3)
+        if constraint == "atomic fsm direction" and np.any(
+            np.linalg.norm(targets, axis=-1) <= VANISHING_MOMENT
+        ):
+            raise ValueError(
+                "constrained_magnetization = 'atomic fsm direction' with a zero "
+                "row in STARTING_MOMENTS: a zero vector carries no direction. "
+                "Give every atom a direction, or use 'atomic fsm' to fix the "
+                "lengths too"
+            )
+        return targets if noncollinear else targets[:, 2:3]
+
     if constraint == "atomic texture":
         if not len(per_atom):
             raise ValueError(
@@ -336,6 +440,12 @@ class MagneticField(eqx.Module):
     #: that does not make the driver hold a controller of its own.
     previous_uniform: jnp.ndarray | None = None
     previous_moment: jnp.ndarray | None = None
+    #: The same pair for the per-atom feedback schemes, ``(nat, ncomponent)``.
+    #: Kept apart from the cell-wide pair rather than overloading it: Elk's
+    #: ``fsmtype = 3`` drives **both** fields at once, and a single slot would
+    #: make that unreachable without a rewrite.
+    previous_atomic: jnp.ndarray | None = None
+    previous_site_moments: jnp.ndarray | None = None
 
     @property
     def has_field(self) -> bool:
@@ -400,7 +510,12 @@ class MagneticField(eqx.Module):
         written here as the *energy* whose derivative ``add_bfield`` adds to the
         potential.
         """
-        if self.constraint in ("none", "fsm"):
+        if self.constraint == "none" or self.constraint in FEEDBACK:
+            # A feedback scheme adds no term to the energy at all: it drives an
+            # applied field, whose Zeeman energy is ``field_energy`` and is
+            # outside the reported total by the same convention as any other
+            # applied field. This is why every feedback scheme needs a residual
+            # of its own -- there is no penalty to watch go to zero.
             return jnp.asarray(0.0)
         targets = jnp.asarray(self.targets)
 
@@ -477,9 +592,9 @@ class MagneticField(eqx.Module):
             return None
         targets = jnp.asarray(self.targets)
         moments = self.sphere_moments(rho_r, cell)
-        if self.constraint == "atomic":
+        if self.constraint in ("atomic", "atomic fsm"):
             return jnp.linalg.norm(moments - targets, axis=-1)
-        if self.constraint == "atomic texture":
+        if self.constraint in ("atomic texture", "atomic fsm direction"):
             cosine = _unit_cosine(moments, targets)
             return jnp.rad2deg(jnp.arccos(jnp.clip(cosine, -1.0, 1.0)))
         # ``atomic direction``: the target is the cosine of the polar angle, so
@@ -534,8 +649,10 @@ class MagneticField(eqx.Module):
         diverge: it drives the field the wrong way until the moment saturates,
         and the run converges to the *unconstrained* answer looking untroubled.
         """
-        if self.constraint != "fsm":
+        if self.constraint not in FEEDBACK:
             return self
+        if self.constraint in FEEDBACK_ATOMIC:
+            return self._atomic_step(rho_r, cell)
         moment = self.total_moment(rho_r, cell)
         error = moment - jnp.asarray(self.targets)
         if self.fsm_update == "elk":
@@ -543,6 +660,70 @@ class MagneticField(eqx.Module):
                 lambda field: field.uniform, self, self.uniform - self.penalty * error
             )
         return self._secant_step(moment, error)
+
+    def _atomic_step(self, rho_r: jnp.ndarray, cell: Cell) -> "MagneticField":
+        """Elk's ``bfieldfsm.f90:50-73``: one constraining field per atom.
+
+        ``B_i <- B_i - tau (m_i - m_fix,i)`` for every atom, with the same sign
+        flip against Elk that :meth:`feedback` explains (this package is in QE's
+        convention, where the field enters the potential as ``-B``).
+
+        **The direction-only variant is the one worth understanding**, because
+        it is what a texture actually wants and it is *not* the feedback
+        analogue of ``'atomic texture'``'s penalty. Elk's ``fsmtype < 0``
+        finishes the update with ``r3vo(mommtfix, bfsmcmt)``, which removes the
+        component of the field parallel to the target -- so the field can turn a
+        moment and can never lengthen or shorten one. The contrast with the
+        penalty is the whole reason this scheme exists: constraining a direction
+        with an energy term means dividing by ``|m|``, so a site whose moment
+        shrinks is pushed *harder* and the thing runs away (see
+        :meth:`constraint_energy`). Projecting a field instead is bounded by
+        construction, because nothing in it is divided by anything.
+
+        The secant is **diagonal in both indices** -- per atom and per cartesian
+        component -- which is the same modelling assumption the cell-wide secant
+        makes one index down, and it is stated rather than hidden: a field on
+        atom *i* moves atom *j*'s moment too, and that coupling is exactly what
+        is thrown away here. It costs iterations when the sublattices are
+        strongly coupled and it cannot bias the answer, since the converged
+        state is decided by where the residual is zero and not by the route.
+        """
+        targets = jnp.asarray(self.targets)
+        moments = self.sphere_moments(rho_r, cell)
+        error = moments - targets
+        if self.constraint == "atomic fsm direction":
+            # Only the part of the error that turns the moment is fed back, so
+            # the length is left to the SCF. ``r3vo`` projects the *field*; the
+            # error is projected here instead, which is the same thing done one
+            # step earlier and keeps the accumulated field free of a parallel
+            # component that would have to be removed again every iteration.
+            error = _orthogonalize(error, targets)
+        current = self.atomic
+        if self.fsm_update == "elk" or self.previous_atomic is None:
+            step = -self.penalty * error
+        else:
+            change = current - self.previous_atomic
+            response = moments - self.previous_site_moments
+            usable = jnp.abs(change) > FSM_MIN_STEP
+            chi = jnp.where(usable, response / jnp.where(usable, change, 1.0), 0.0)
+            secant = -error / jnp.where(chi > 0.0, chi, 1.0)
+            trusted = FSM_TRUST * jnp.abs(change)
+            secant = jnp.clip(secant, -trusted, trusted)
+            step = jnp.where(
+                usable & (chi > 0.0) & jnp.isfinite(secant),
+                secant, -self.penalty * error,
+            )
+            if self.constraint == "atomic fsm direction":
+                step = _orthogonalize(step, targets)
+        updated = eqx.tree_at(lambda f: f.atomic, self, current + step)
+        updated = eqx.tree_at(
+            lambda f: f.previous_atomic, updated, current,
+            is_leaf=lambda x: x is None,
+        )
+        return eqx.tree_at(
+            lambda f: f.previous_site_moments, updated, moments,
+            is_leaf=lambda x: x is None,
+        )
 
     def _secant_step(self, moment: jnp.ndarray, error: jnp.ndarray) -> "MagneticField":
         """``B <- B - (m - m_fix) / chi`` with ``chi`` measured, not assumed.
@@ -623,8 +804,20 @@ class MagneticField(eqx.Module):
         condition the SCF loop has to pass before it stops. See
         :data:`FSM_TOLERANCE`.
         """
-        if self.constraint != "fsm":
+        if self.constraint not in FEEDBACK:
             return True
+        if self.constraint in FEEDBACK_ATOMIC:
+            # The per-site residual carries the unit its scheme constrains --
+            # Bohr magnetons for the vector scheme, **degrees** for the
+            # direction one -- so each is tested against its own tolerance.
+            # Testing the direction scheme in Bohr magnetons instead would pass
+            # a site whose moment had collapsed: see :data:`FSM_ANGLE_TOLERANCE`.
+            residuals = self.site_residuals(rho_r, cell)
+            tolerance = (
+                FSM_ANGLE_TOLERANCE if self.constraint == "atomic fsm direction"
+                else FSM_TOLERANCE
+            )
+            return bool(jnp.max(jnp.abs(residuals)) < tolerance)
         error = self.total_moment(rho_r, cell) - jnp.asarray(self.targets)
         return bool(jnp.max(jnp.abs(error)) < FSM_TOLERANCE)
 
@@ -651,6 +844,29 @@ class MagneticField(eqx.Module):
                 lambda f: f.atomic, updated, updated.atomic * self.reducebf
             )
         return updated
+
+
+def _orthogonalize(vectors: jnp.ndarray, axes: jnp.ndarray) -> jnp.ndarray:
+    """Elk's ``r3vo``, one row per atom: ``v - (v.x/|x|^2) x``.
+
+    The component of ``v`` along ``x`` removed, row by row, with Elk's own
+    escape for a vanishing axis (``r3vo.f90``: below ``1e-8`` in ``|x|^2`` the
+    vector is returned untouched, because there is no direction to project
+    against). That threshold is kept rather than replaced by
+    :data:`VANISHING_MOMENT`: it is a guard on a *target*, which is an input and
+    is checked at construction, not on a density that can drift towards zero.
+
+    Written as a ``where`` and not as a masked division for the reason
+    ``CLAUDE.md`` gives about clamps: this runs inside a feedback step that is
+    not differentiated today, and the next thing that differentiates a
+    constrained run would otherwise find a ``0/0`` here on any atom whose target
+    was left at zero.
+    """
+    norm2 = jnp.sum(axes * axes, axis=-1, keepdims=True)
+    usable = norm2 > 1.0e-8
+    safe = jnp.where(usable, norm2, 1.0)
+    projection = jnp.sum(vectors * axes, axis=-1, keepdims=True) / safe
+    return jnp.where(usable, vectors - projection * axes, vectors)
 
 
 def _safe_modulus(moments: jnp.ndarray):

@@ -1,0 +1,48 @@
+! Tetragonal cobalt, converged self-consistently WITH spin-orbit coupling: the
+! relaxed magnetocrystalline anisotropy.
+!
+! Deliberately the same cell, dataset, cutoffs and k-grid as
+! co-tetragonal-anisotropy-soc.in, which is the force theorem's one-shot leg,
+! so the two routes to the same quantity can be differenced on this cell and
+! the difference is the relaxation energy rather than a change of setup.
+!
+! Three things the relaxed route needs and the theorem does not:
+!
+!   * calculation = 'scf'. There is no handoff and no second leg -- each
+!     direction is one ordinary self-consistent run with the fully-relativistic
+!     dataset, and the anisotropy is a difference of TOTAL energies.
+!   * conv_thr at 1e-10. A uniaxial cobalt anisotropy is a few tenths of a meV,
+!     which is ~1e-5 Ry on totals of order 100 Ry, so the threshold has to sit
+!     several orders below the answer. The force theorem never needs this
+!     because every term but the band sum cancels between two directions by
+!     construction; here nothing cancels and the subtraction is done on the
+!     printed numbers.
+!   * nosym. A noncollinear magnetic run reduces its k-grid with the MAGNETIC
+!     symmetry group, which depends on where the moment points -- so two
+!     directions would otherwise be sampled on two different wedges. For a
+!     total energy that is worse than for a band sum: the Ewald and Hartree
+!     terms come along too, so the contamination is not confined to the bands.
+!
+! The direction is set by the workflow through angle1/angle2, not here, so the
+! values below are the starting point of the first direction only.
+&control
+   calculation = 'scf'
+/
+&system
+   ibrav = 6, celldm(1) = 4.60, celldm(3) = 1.30, nat = 1, ntyp = 1,
+   noncolin = .true., lspinorb = .true., nosym = .true.,
+   ecutwfc = 20.0, ecutrho = 160.0,
+   occupations = 'smearing', smearing = 'mv', degauss = 0.02,
+   starting_magnetization(1) = 0.6,
+   angle1(1) = 0.0, angle2(1) = 0.0,
+/
+&electrons
+   conv_thr = 1.0e-10
+   mixing_beta = 0.3
+/
+ATOMIC_SPECIES
+Co 58.933 Co.rel-pbe-nd-rrkjus.UPF
+ATOMIC_POSITIONS crystal
+Co 0.0 0.0 0.0
+K_POINTS automatic
+3 3 2 0 0 0

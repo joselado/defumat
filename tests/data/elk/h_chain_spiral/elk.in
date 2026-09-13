@@ -1,0 +1,109 @@
+! The spin-spiral hydrogen chain of tests/data/qe/h-chain-spiral.in, as an Elk
+! ground state.  This is the external comparison that the spiral machinery has
+! never had: every number behind it until now was an internal identity, and
+! five identities that share a bug agree with each other.
+!
+! The cell is QE's ibrav = 6 with celldm(1) = 12.0 and celldm(3) = 5/12, so
+! a = b = 12 bohr and c = 5 bohr -- a chain along z with 12 bohr of vacuum
+! between images.  One hydrogen at the origin.
+!
+! What is matched between the two codes, and what cannot be:
+!
+!   * the k-grid, 1 x 1 x 4 with no offset, and symtype = 0 against QE's nosym;
+!   * the functional: Perdew-Wang LDA on both sides, which needed the QE
+!     side to override its dataset's PZ header (see xctype below);
+!   * the smearing.  stype = 0 is Methfessel-Paxton order zero, which is the
+!     Gaussian, and swidth is in HARTREE, so QE's degauss = 0.1 Ry is 0.05 here;
+!   * the basis, only by accident and worth stating: rgkmax = 7 over the
+!     species file's rmt = 1.4 bohr is |G+k|max = 5.0 a.u., which is 25 Ry --
+!     QE's ecutwfc.  That is a coincidence of the default, not an equivalence:
+!     an LAPW basis is a plane-wave interstitial plus augmentation inside the
+!     spheres and it is not the same function space.
+!   * the electron.  Hydrogen has NO core, so Elk's all-electron density and a
+!     pseudopotential's valence density are the same function -- which is why
+!     this is the cell to take an external number on and iron is not.
+!
+! The field is a seed and is meant to be gone by the end: bfieldc breaks spin
+! symmetry (Elk will not polarise on its own, where defumat seeds from
+! starting_magnetization) and reducebf decays it after every iteration, so the
+! converged state is field-free.  Check "total moment" and the magnetic field
+! in INFO.OUT before using a number.  The field is along x, perpendicular to
+! q along z, which is the plane a spiral's moments turn in -- QE's
+! angle1 = 90 says the same thing.
+
+tasks
+  0
+
+! Perdew-Wang/Ceperley-Alder.  This is Elk's own default and it is written out
+! because it is a MATCHED choice rather than an inherited one: the QE-side twin
+! of this run, tests/data/qe/h-chain-spiral-elk.in, sets input_dft = 'pw' to
+! use the same parameterisation.  Elk's xctype = 2 is Perdew-Zunger, which would
+! match H.pz-vbc.UPF's header, and it is spin-unpolarised only -- Elk refuses a
+! magnetic run with it (init0: "requested spin-polarised run with
+! spin-unpolarised exchange-correlation functional"), so PW is the one both
+! codes can do.
+xctype
+  3
+
+spinsprl
+  .true.
+
+! spin-spiral q-vector in lattice coordinates; the scan overwrites this line
+vqlss
+  0.0  0.0  0.25
+
+spinpol
+  .true.
+
+! a seed field perpendicular to q, decayed away over the run
+bfieldc
+  0.02  0.0  0.0
+
+reducebf
+  0.8
+
+! Gaussian smearing, in Hartree: QE's degauss = 0.1 Ry
+stype
+  0
+
+swidth
+  0.05
+
+! no symmetry, matching QE's nosym = .true.
+symtype
+  0
+
+nempty
+  8
+
+epspot
+  1.e-7
+
+epsengy
+  1.e-7
+
+maxscl
+  200
+
+! the species file is copied in beside elk.in so the fixture is portable
+sppath
+  './'
+
+avec
+  12.0   0.0   0.0
+   0.0  12.0   0.0
+   0.0   0.0   5.0
+
+atoms
+  1                                   : nspecies
+  'H.in'                              : spfname
+  1                                   : natoms
+  0.0  0.0  0.0    0.0  0.0  0.0      : atposl, bfcmt
+
+ngridk
+  1  1  4
+
+! pin the frame: tshift moves the origin onto an inversion centre and would put
+! GEOMETRY.OUT in a different frame from the atoms block above
+tshift
+  .false.

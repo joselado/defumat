@@ -126,8 +126,10 @@ from defumat.scf.occupations import (
     tetrahedra_for,
     tetrahedron_occupations_spin,
 )
-from defumat.scf.fields import (ATOM_RESOLVED, FADED_FIELD, FSM_TOLERANCE,
-                                MagneticField, constraint_targets)
+from defumat.scf.fields import (ATOM_RESOLVED, FADED_FIELD, FEEDBACK,
+                                FEEDBACK_ATOMIC, FSM_ANGLE_TOLERANCE,
+                                FSM_TOLERANCE, MagneticField,
+                                constraint_targets)
 from defumat.scf.locals import build_local_regions, get_locals
 from defumat.scf.potential import (
     Potential,
@@ -2077,6 +2079,15 @@ class Calculation:
             self.nspin_mag == 4,
             per_atom=system.starting_moments,
         )
+        if constraint in FEEDBACK_ATOMIC and atomic is None:
+            # The per-atom feedback schemes *are* a per-atom field, driven from
+            # zero. Without this the field has nothing to write into and the
+            # constraint is silently inert -- which is the failure mode this
+            # package has already met twice (``ATOM_RESOLVED``'s own comment,
+            # and the spinor ``ns`` cast). A ``LOCAL_MAGNETIC_FIELDS`` card
+            # would occupy the same slot and is refused at input, so reaching
+            # here with ``atomic`` already set is not possible.
+            atomic = np.zeros((system.structure.nat, components))
         return MagneticField(
             regions=regions,
             uniform=jnp.asarray(uniform),
@@ -5156,7 +5167,7 @@ def run_scf(
             # act between iterations -- after the density is mixed and before
             # the next potential is built.
             field_scale *= field.reducebf
-            if field.fsm_update == "elk" or field.constraint != "fsm":
+            if field.fsm_update == "elk" or field.constraint not in FEEDBACK:
                 field = field.feedback(rho, calculation.system.cell)
             elif inner_converged:
                 # The secant scheme steps on *converged* pairs only. Between
@@ -5226,10 +5237,25 @@ def run_scf(
         # opposite of the generic one -- the density is fine and it is the outer
         # field loop that ran out of room, which matters because the iteration
         # budget is *shared* between the two.
-        unmet = (
-            None if field is None or accuracy is None or accuracy >= conv_thr
-            else field.cell_residual(rho_out, calculation.system.cell)
-        )
+        reached = field is not None and accuracy is not None and accuracy < conv_thr
+        if reached and field.constraint in FEEDBACK_ATOMIC:
+            # The per-atom feedback schemes have no ``cell_residual`` -- their
+            # target is one vector per atom -- so the same diagnosis reads their
+            # per-site residual instead. **Without this branch they fell into
+            # the generic "raise electron_maxstep" advice**, which is backwards
+            # for exactly the same reason it is backwards for ``'fsm'``.
+            unmet = field.site_residuals(rho_out, calculation.system.cell)
+            unit = ("degrees" if field.constraint == "atomic fsm direction"
+                    else "Bohr magnetons")
+            tolerance = (FSM_ANGLE_TOLERANCE
+                         if field.constraint == "atomic fsm direction"
+                         else FSM_TOLERANCE)
+        else:
+            unmet = (
+                None if not reached
+                else field.cell_residual(rho_out, calculation.system.cell)
+            )
+            unit, tolerance = "Bohr magnetons", FSM_TOLERANCE
         if unmet is not None:
             largest = float(jnp.max(jnp.abs(jnp.asarray(unmet))))
             warnings.warn(
@@ -5237,9 +5263,11 @@ def run_scf(
                 f"accuracy = {accuracy:.3e} Ry is below conv_thr = "
                 f"{conv_thr:.3e} and what is unmet is the "
                 f"constrained_magnetization = {field.constraint!r} target, by "
-                f"{largest:.3e} Bohr magnetons against a tolerance of "
-                f"{FSM_TOLERANCE:.0e} (SCFResult.constraint_residual is the "
-                f"signed vector, and history carries it per iteration). The "
+                f"{largest:.3e} {unit} against a tolerance of "
+                f"{tolerance:.0e} (SCFResult.constraint_residual is the "
+                f"signed vector for a cell-wide scheme and "
+                f"SCFResult.site_residuals the per-atom one, and history "
+                f"carries whichever applies per iteration). The "
                 f"field steps only on converged pairs, so electron_maxstep is "
                 f"shared between the inner SCF and the outer field loop and a "
                 f"cell whose *bare* SCF needs most of it leaves the field almost "

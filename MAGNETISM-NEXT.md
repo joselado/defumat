@@ -65,6 +65,15 @@ cast, nickel's `conv_thr` (`OPEN.md` Y1), and `'atomic texture'`'s `1/|m|`. The 
 the one to remember — it was live inside a documented, validated feature, and only an
 end-to-end test caught it. An array-algebra test passed either way.
 
+### Closed on 2026-09-13 (P84 and after)
+
+| was | is | number |
+|---|---|---|
+| three "defects" on three different days, two of them the same line of one input | one **saturated seed**: `starting_magnetization = 1.0` on hydrogen polarises the atom completely, so the first potential is built at `\|zeta\| = 1` | 126 iterations to m = 0.027 against **7** to the m = 0.53125 ferromagnet; `test_magnons.py` 8 passed (P84) |
+| P63's spiral scan "no longer reproduces", cause unidentified, three candidates nominated | it reproduces to the digit at the right seed, and now **confirms** the magnon prediction | minimum at `q = (0,0,1/4)`, -150.1 meV, where the susceptibility says the ferromagnet first goes unstable — and P63's own `0, -150, -59` come back (P84) |
+| a caller that wrote `scf.density` lost the fact that it converged | `SCFResult.require_converged`, the one implementation, with `Calculator._ground_state` wrapping it | three tests reported a Goldstone residual of 0.3958 that was an unconverged ground state, not a defect in the susceptibility (P84) |
+| a committed input asked for a scheme the code warned does not converge, and said it did | `h2-texture-120.in` is `'atomic'` at `lambda = 10`, and neither test that cites it rewrites away from a stale literal any more | 38 iterations, 121.13 degrees, 0.576 per site (P84) |
+
 ---
 
 ## 2. The queue, in order
@@ -331,6 +340,33 @@ Anderson coefficients under both quadratic forms — `scf_accuracy` gives QE's f
 report the angle between the two coefficient vectors. If it is small, the metric is not the
 mechanism and this item can be closed as measured rather than fixed.
 
+**A second route, and this is the place for it: minimise the energy instead of iterating
+the density.** Raised by the user, 2026-09-13. Direct minimisation descends `E[psi]` under
+orthonormality rather than looking for a fixed point of the density map, and it is
+unusually cheap to *write* here because the energy is already written down and
+differentiated — which is the whole argument for JAX. Three things decide whether it is
+worth trying, and none of them has been measured:
+
+* **It fixes a different failure from the one this item is about.** Direct minimisation
+  cures charge sloshing — an unstable fixed-point map over a well-behaved functional. The
+  25-against-12 here is not that: `fe-mag-1k` converges, it converges slowly, and its
+  nonmagnetic twin takes 21, so most of the excess is not magnetic. Plain descent converges
+  on the **condition number** where a secant-type method converges on its square root, so
+  on a flat direction it is *worse* than what is here. Anderson already is the quasi-Newton.
+* **Both benchmark cells are smeared metals**, so the object to minimise is the free energy
+  with the occupations as variables too — Marzari-Vanderbilt ensemble minimisation. That is
+  a different algorithm, not a different optimiser, and it is the bulk of the work.
+* **It cannot sit on a saddle**, and P84 is the reminder of why that matters here: the
+  states these magnetic cells are *for* are routinely metastable or stationary-but-not-minimal
+  (`h-fcc-magnon.in`'s ferromagnet is 58 meV above the nonmagnetic solution of the same
+  cell). A fixed-point iteration is happy on any stationary point; a minimiser is entitled
+  to slide off one, and would do so silently.
+
+**So it is a candidate for the *gapped* cells and for a future direct-minimisation solver
+behind `scf_solver`, not a fix for this item.** The honest first measurement is the cheap
+one: a gapped insulator where both routes must agree, timed, before anything is written for
+a metal.
+
 ### G. The noncollinear derivative memory wall. ✅ The suspicion in this item was right, and it is fixed [22]
 
 **Closed as diagnosed, 2026-09-13.** This item's own caveat -- "P73 replaced the *stored*
@@ -376,6 +412,27 @@ P73 may not have helped the backward pass at all.
 first.
 
 ---
+
+### H. The magnetic quantities that are done "for one regime", collected [new, from `PLAN.md` §3's index]
+
+**This file never listed these and it should have.** Each is a phase marked DONE whose
+heading carries a qualifier, and a qualifier in a heading is an open item that nothing
+tracks. They are smaller than items A-D and they are the ones a user meets first, because
+each is a `get_*` that works on the cell in the tutorial and refuses the cell they brought.
+
+| phase | done for | open for | what is missing |
+|---|---|---|---|
+| **P57** magnetoelectric tensor | the column **parallel to the field**, spin-only, clamped-ion | the other two columns, the lattice-mediated part, and any external calibration | it is uncalibrated against another code, which is the part to fix first: Elk's `magnetoelt.f90` is the counterpart and is built here |
+| **P58** magnetocrystalline anisotropy | the **frozen-density force theorem**, norm-conserving and ultrasoft | PAW, and the **relaxed** anisotropy | PAW is refused because the handoff carries no `becsum`; the relaxed route needs no handoff at all, which is why it reaches PAW -- see the entry below |
+| **P63** magnons | **collinear**, norm-conserving | noncollinear (item D), and ultrasoft/PAW | the 4x4 spin response does not block-diagonalise off a collinear axis; ultrasoft needs the augmentation charge inside the transverse channel |
+| **P64** orbital magnetization | **norm-conserving** | ultrasoft and PAW | the neighbour overlap the covariant derivative is built from needs the augmentation term `bp_c_phase.f90`'s `q_ij(b)` supplies, which the Berry-phase polarization already has and this does not reuse |
+
+**The pattern is worth naming rather than fixing four times.** Three of the four are the
+*same* missing term -- an ultrasoft or PAW augmentation charge inside an object built from
+wavefunctions at two different k-points or two different perturbations. P47's Kubo Berry
+curvature (`e_n dS/dk`, "written and unvalidated") is a fourth instance. A single validated
+augmented-overlap primitive would close parts of all of them, and `bp_c_phase.f90` is the
+reference for it in every case.
 
 ## 3. Questions that need something run, not something written
 
