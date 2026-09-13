@@ -1,45 +1,49 @@
 ! The spin-spiral twin of h-fcc-magnon.in -- the same crystal, the same grid,
 ! the same functional -- run through the generalized Bloch theorem instead.
 !
-! **It exists to reproduce a negative result, not a comparison.** The plan was
-! the obvious pairing: the transverse susceptibility says the ferromagnet is
-! linearly unstable wherever the leading eigenvalue of X_0 F exceeds one, and a
-! scan of E(q) over this input should say whether a spiral at that q is actually
-! lower in energy -- two calculations sharing no machinery at all, one a sum
-! over states plus a matrix inversion on a fixed density, the other a sequence
-! of independent self-consistent fields.
+! **It exists to confirm the transverse susceptibility by a route that shares no
+! machinery with it.** The magnon calculation says the ferromagnet is linearly
+! unstable wherever the leading eigenvalue of X_0 F exceeds one, and on this
+! cell it says that first at q = (0, 0, 1/4). A scan of E(q) is the independent
+! test of the same claim: one is a sum over states plus a matrix inversion on a
+! frozen density, the other a sequence of independent self-consistent fields.
 !
-! It does not work, and what it does instead is worth being able to reproduce:
-! **the spiral's own SCF leaves the magnetic branch.** At q = (0, 0, 1/2) the
-! 90-degree spiral converges off it -- so its 59 meV "gain" is demagnetization
-! and not a spin-wave energy at all; at q = (0, 0, 1/4) it lands on a different
-! collinear solution at |m| = 0.248. Starting from a 15-degree cone does not
-! help: the cone collapses to zero at 1/4 and the moment to zero at 1/2, because
-! nothing holds either. Elk's own Ni-magnon-spiral example runs fsmtype = -1 with
-! a large field along momfix for exactly that reason.
+! **It works, and it did not before, and the difference is one number in this
+! file.** Seeded at starting_magnetization = 1.0 -- a fully polarized hydrogen
+! atom, with an empty minority channel and a first potential built at
+! |zeta| = 1 exactly -- every point of the scan left the magnetic branch, and
+! what was recorded was a demagnetization curve rather than a spin-wave energy.
+! At 0.9 the branch survives. Measured, conv_thr = 1e-10, 200 iterations
+! allowed:
 !
-! **The collapsed |m| is not a number, and this header used to quote one.** It
-! read 0.0001 at q = 1/2; re-running gives 0.0435 after 149 iterations. Both are
-! "off the magnetic branch" and the difference is where a wandering SCF stopped,
-! not a property of the state -- so do not hold anything to a digit of it. For
-! reference the same cell at q = 0 converges in 24 iterations to |m| = 0.0273,
-! which is barely magnetic itself on an atom seeded at 1.0.
+!     q_3     converged   iterations      E (Ry)          |m|      E - E(0)
+!     0         yes            7       -0.9802841602    0.53125      0.0 meV
+!     1/8       yes           10       -0.9849565354    0.40165    -63.6 meV
+!     1/4        NO          200       -0.9913133105    0.20020   -150.1 meV
+!     3/8       yes           13       -0.9868070126    0.15256    -88.7 meV
+!     1/2       yes           59       -0.9846191874    0.04355    -59.0 meV
 !
-! **Holding it with `fsm` was tried and this cell cannot be held** (P80). At
-! q = 1/2 with the target at that 0.0273 the run takes 200 iterations without
-! converging and ends at -0.1468 -- the other side of the target, not short of it.
-! It is not a sign error and not the rotated frame: it fails at q = 0 too, where
-! that frame is the laboratory frame, and there the field grows in the *right*
-! direction. The cause is the cell: m(B) here is nearly a step -- 0.057 Ry of
-! field takes the moment from 0.027 to 0.719 -- so there is little in between to
-! hold, the moment lands saturated, the inner SCF stops converging under the field
-! that put it there, and the field then freezes because it only steps on converged
-! pairs. Two numbers say the cell was unsuitable before the run: the bare q = 1/2
-! moment is 0.0435 and the target was 0.0273, so the constraint asked for a moment
-! *below* the cell's own, sixteen FSM_TOLERANCEs away, with the only other stable
-! point saturated in the opposite direction. Use a robust magnet --
-! `fe-noncolin-pbe-stress.in` is one. Elk's `fsmtype = -1`, the direction fixed
-! hard by a large field, is the other route and is not implemented here.
+! The minimum is at q = (0, 0, 1/4), which is the wavevector the susceptibility
+! named, and it is 150 meV deep. The q = 0 end reproduces the collinear
+! ferromagnet of h-fcc-magnon.in to every digit (-0.9802841602 Ry, m = 0.53125),
+! which is the check that the spiral machinery reduces correctly at q = 0.
+!
+! **Three things not to over-read in that table.** The q = 1/4 point does not
+! converge -- 1.25e-7 after 200 iterations -- which is what the bottom of a flat
+! magnetic surface looks like and is why its energy is quoted to meV and not
+! further. The q = 1/8 and 3/8 points are not commensurate with the 4x4x4 grid,
+! so their k-sampling is not the same as the other three and the shape of the
+! curve between the commensurate points is not converged in the grid. And
+! |m| falls monotonically along the scan, so this is a spiral whose moment
+! shrinks as it turns, not a rigid rotation of a fixed moment.
+!
+! **Holding it with `fsm` was tried and this cell cannot be held** (P80). The
+! cause is the cell rather than the scheme: m(B) here is nearly a step -- 0.057
+! Ry of field takes the moment from 0.027 to 0.719 -- so there is little in
+! between to hold, the moment lands saturated, the inner SCF stops converging
+! under the field that put it there, and the field then freezes because it only
+! steps on converged pairs. Use a robust magnet for a constrained spiral --
+! `fe-noncolin-pbe-stress.in` is one.
 !
 ! PLAN.md P63 records the measurement and what replaced it in the tests.
  &control
@@ -52,7 +56,7 @@
     occupations = 'smearing', smearing = 'gaussian', degauss = 0.01,
     noncolin = .true.
     nosym = .true., noinv = .true.
-    starting_magnetization(1) = 1.0
+    starting_magnetization(1) = 0.9
     angle1(1) = 90.0
     spiral_q(1) = 0.0, spiral_q(2) = 0.0, spiral_q(3) = 0.0
     nbnd = 8

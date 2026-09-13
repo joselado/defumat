@@ -1151,6 +1151,36 @@ class SCFResult:
     solver: object | None = None
     history: list = field(default_factory=list)
 
+    def require_converged(self, quantity: str) -> "SCFResult":
+        """Raise unless this ground state converged; return it if it did.
+
+        **A density is an array and carries no flag**, so the moment a caller
+        writes ``scf.density`` the information that it converged is gone, and
+        every check downstream is then about the arithmetic of an answer to a
+        question nobody established. That is not hypothetical: it is how four of
+        ``test_magnons.py``'s eight tests came to report a Goldstone residual of
+        0.40 against a tolerance of 0.02 -- a number that looks exactly like a
+        defect in the susceptibility and was an unconverged ``h-fcc-magnon.in``
+        underneath it (``OPEN.md`` Part V). The ``Calculator`` route refused the
+        same physics correctly; the functional route, reached with the bare
+        density, had nothing to refuse with.
+
+        So this is the one implementation of that refusal, callable by anything
+        holding a result: :meth:`~defumat.calculator.Calculator._ground_state`
+        is now a wrapper around it, and a test or script that takes
+        ``scf.density`` to a functional entry point should call it first. It
+        returns ``self`` so it can be written inline.
+        """
+        if not self.converged:
+            raise ValueError(
+                f"{quantity} needs a converged ground state and the SCF stopped "
+                f"at an accuracy of {self.accuracy:g} Ry after "
+                f"{self.iterations} iterations. Rerun the SCF with a looser "
+                "conv_thr, more max_iterations or a different mixing before "
+                "reading a derived quantity off it"
+            )
+        return self
+
     @property
     def hubbard_occupations(self) -> dict:
         """``{atom: (Tr n_up, Tr n_down, total)}`` -- what ``write_ns`` prints.

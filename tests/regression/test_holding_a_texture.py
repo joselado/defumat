@@ -61,18 +61,27 @@ def _card(length):
 
 
 def _text(scheme=None, lam=None, length=0.26):
-    """The committed input with its constraint replaced and its card rescaled."""
+    """The committed input with its constraint replaced and its card rescaled.
+
+    **The committed scheme is now the one that works.** The file used to carry
+    ``'atomic texture'`` at ``lambda = 0.5`` while its own header described a
+    converged run and its own code printed a warning saying that scheme does
+    not converge here; every test below rewrote it and none ran it as written,
+    so nothing caught the contradiction (``OPEN.md`` Part IV). It is
+    ``'atomic'`` at ``lambda = 10`` now -- the row of the table this module's
+    docstring calls the answer -- and the rewriting goes the other way.
+    """
     from pathlib import Path
     base = Path(INPUT).read_text()
     head = base[:base.rindex("STARTING_MOMENTS")]
     if scheme is None:
         head = head.replace(
-            "    constrained_magnetization = 'atomic texture'\n", ""
-        ).replace("    lambda = 0.5\n", "")
+            "    constrained_magnetization = 'atomic'\n", ""
+        ).replace("    lambda = 10\n", "")
     else:
-        head = head.replace("constrained_magnetization = 'atomic texture'",
+        head = head.replace("constrained_magnetization = 'atomic'",
                             f"constrained_magnetization = '{scheme}'")
-        head = head.replace("lambda = 0.5", f"lambda = {lam}")
+        head = head.replace("lambda = 10", f"lambda = {lam}")
     return head + _card(length)
 
 

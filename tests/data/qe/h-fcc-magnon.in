@@ -18,17 +18,44 @@
 !   * a = 6.5 bohr. Below about 6 the cell is not magnetic at all and above it
 !     the density ratio climbs; here the moment is 0.53 mu_B, which is an
 !     itinerant ferromagnet rather than a set of local moments.
+!   * starting_magnetization = 0.9 and NOT 1.0, which is the third deliberate
+!     thing and the one that used to be wrong. See below.
+!
+! **The seed decides which solution this cell converges to, and 1.0 picks the
+! wrong one.** Hydrogen has one valence electron, so a starting magnetization of
+! 1.0 is a *fully polarized* atom: the minority channel starts at exactly zero
+! and the first potential is built at |zeta| = 1, which is the saturated point
+! every clamp in defumat/xc is about (CLAUDE.md's clamp-tangent trap). From
+! there the run leaves the ferromagnetic branch altogether. Measured, same cell,
+! same everything else, conv_thr = 1e-10:
+!
+!     seed   converged   iterations       E (Ry)          m        vs. nonmagnetic
+!     1.0       yes         126        -0.9845889092    0.02728       -0.13 meV
+!     0.9       yes           7        -0.9802841602    0.53125      +58.44 meV
+!     0.0       yes           6        -0.9845791913    0.00000            --
+!
+! Both are genuine converged solutions of the same functional; they are not the
+! same state, and the one this cell is FOR is the second. A run seeded at 1.0
+! reaches a barely-magnetic solution whose Goldstone residual is 0.40 against a
+! tolerance of 0.02, which is not a defect in the susceptibility -- there is
+! almost no moment for a spin wave to be a rotation OF. That is what four of
+! test_magnons.py's eight tests were reporting (OPEN.md Part V).
 !
 ! **The ferromagnetic solution is not the ground state and that is why the cell
 ! is here.** It converges at m = 0.53 mu_B and sits 58 meV *above* the
 ! nonmagnetic solution of the same input, and the transverse susceptibility says
 ! so: its leading eigenvalue exceeds one at q = (0, 0, 1/4), which means the
-! uniform state is unstable against an infinitesimal spiral of that pitch. No
-! lattice constant fixes it -- at 7.0 bohr the ferromagnet is 7 meV below the
-! nonmagnetic solution and still soft at finite q, at 8.0 it is fully polarized
-! and 64 meV below and still soft -- because a half-filled band on any lattice
-! prefers antiferromagnetic order. So this cell is the *identities* case
-! (Goldstone, periodicity, the q -> -q reflection), and fcc nickel is the
+! uniform state is unstable against an infinitesimal spiral of that pitch. That
+! prediction is now confirmed by a route sharing no machinery with it: the
+! spin-spiral scan of h-fcc-spiral-scan.in, seeded the same way, has its minimum
+! at exactly q = (0, 0, 1/4), 150 meV below the ferromagnet.
+!
+! No lattice constant fixes the instability -- at 7.0 bohr the ferromagnet is
+! 7.22 meV below the nonmagnetic solution and still soft at finite q, at 8.0 it
+! is 73.80 meV below at m = 0.97 and still soft (both at the saturated seed,
+! which is the branch those two land on there) -- because a half-filled band on
+! any lattice prefers antiferromagnetic order. So this cell is the *identities*
+! case (Goldstone, periodicity, the q -> -q reflection), and fcc nickel is the
 ! physics one. See PLAN.md P63.
  &control
     calculation = 'scf'
@@ -40,7 +67,7 @@
     occupations = 'smearing', smearing = 'gaussian', degauss = 0.01,
     nspin = 2
     nosym = .true., noinv = .true.
-    starting_magnetization(1) = 1.0
+    starting_magnetization(1) = 0.9
     nbnd = 8
  /
  &electrons

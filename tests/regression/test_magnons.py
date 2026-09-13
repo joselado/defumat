@@ -67,8 +67,19 @@ def _drop_compiled_code():
 
 @lru_cache(maxsize=2)
 def _converged(name: str):
+    """The ground state, **refused if it is not one**.
+
+    Everything below takes ``scf.density`` to a functional entry point, which
+    is a bare array and carries no convergence flag -- so without this call an
+    unconverged cell arrives at a Goldstone assertion and fails as though the
+    susceptibility were wrong. It has happened: ``h-fcc-magnon.in`` seeded at
+    saturation stalled four orders short and three tests here reported 0.3958
+    against a tolerance of 0.02 (``OPEN.md`` Part V).
+    """
     calculator = Calculator.from_file(CASES / name, pseudo_dir=PSEUDO)
-    return calculator, calculator.get_scf()
+    scf = calculator.get_scf()
+    scf.require_converged(f"the magnon tests on {name}")
+    return calculator, scf
 
 
 @lru_cache(maxsize=2)

@@ -13927,6 +13927,91 @@ quantity is the one they asked for. `require_a_measured_spinor_response` refuses
   phase was taken beside other jobs.
 
 
+### P84 -- One seed decided three "defects", and the guard that could not tell. ✅ DONE.
+
+`tests/data/qe/h-fcc-magnon.in`, `h-fcc-spiral-scan.in`, `h2-texture-120.in`;
+`defumat/scf/driver.py` (`SCFResult.require_converged`). `OPEN.md` Part IV items 2 and 3
+and Part V item 1 -- three entries written on three different days, two of which are the
+same line of one input file.
+
+**The finding: `starting_magnetization = 1.0` on hydrogen is a *saturated* seed, and this
+cell has two converged solutions.** Hydrogen has one valence electron, so a starting
+magnetization of 1.0 polarises it completely: the minority channel starts at exactly zero
+and the first potential is built at `|zeta| = 1`, which is the saturated point every clamp
+in `defumat/xc` is about (`CLAUDE.md`'s clamp-tangent trap, `OPEN.md` G1). Measured on
+`h-fcc-magnon.in`, `conv_thr = 1e-10`, everything else identical:
+
+| seed | converged | iterations | E (Ry) | m (mu_B) | vs. nonmagnetic |
+|---|---|---|---|---|---|
+| 1.0 | yes | **126** | -0.9845889092 | 0.02728 | -0.13 meV |
+| 0.9 | yes | **7** | -0.9802841602 | **0.53125** | **+58.44 meV** |
+| 0.0 | yes | 6 | -0.9845791913 | 0.00000 | -- |
+
+Both are genuine solutions of the same functional. The second is the one the input's header
+describes and both modules are for, and the seed of 1.0 does not reach it.
+
+**Neither was a regression, and that is the thing to carry forward.** Three sessions had
+looked for a code change that moved a metastable minimum -- `OPEN.md` named
+`starting_magnetization`'s reinterpretation (P77c), the magnetic symmetry filters (P77/P78)
+and `mixing_ndim` being wired (P78), and called the last "the candidate to test first".
+All three are wrong. P77c is provably a null here: hydrogen's valence charge is 1, so QE's
+Bohr-magneton rule divides by 1 and its clamp leaves 1.0 alone. **The input had always
+carried the seed, so nothing that only looks at diffs could find it.**
+
+**What it bought, and it is more than three green tests.** The spiral scan of
+`h-fcc-spiral-scan.in`, rerun at 0.9:
+
+| `q_3` | converged | iterations | E (Ry) | \|m\| | E - E(0) |
+|---|---|---|---|---|---|
+| 0 | yes | 7 | -0.9802841602 | 0.53125 | 0.0 meV |
+| 1/8 | yes | 10 | -0.9849565354 | 0.40165 | -63.6 meV |
+| 1/4 | **no** | 200 | -0.9913133105 | 0.20020 | **-150.1 meV** |
+| 3/8 | yes | 13 | -0.9868070126 | 0.15256 | -88.7 meV |
+| 1/2 | yes | 59 | -0.9846191874 | 0.04355 | -59.0 meV |
+
+P63's own recorded numbers are `0, -150, -59` meV at `0, 1/4, 1/2`: they **reproduce to the
+digit**, so nothing had drifted. And the scan now does the job P63 set it and recorded as
+impossible -- its minimum is at `q = (0, 0, 1/4)`, which is exactly where the transverse
+susceptibility says the ferromagnet first goes unstable. Two routes sharing no machinery: a
+sum over states plus a matrix inversion on a frozen density, against five independent
+self-consistent fields. The `q = 0` end also reproduces the *collinear* ferromagnet to every
+digit (-0.9802841602 Ry, m = 0.53125), which is the check that the spiral reduces correctly
+at `q = 0`.
+
+Three cautions are in the input's header rather than here: `q = 1/4` does not converge
+(1.25e-7 at 200 iterations, the bottom of a flat magnetic surface), `q = 1/8` and `3/8` are
+not commensurate with the 4x4x4 grid so their k-sampling differs from the other three, and
+`|m|` falls monotonically -- this spiral's moment shrinks as it turns.
+
+**The guard, which is the part that generalises.** Four of `test_magnons.py`'s eight tests
+failed, three of them reporting a Goldstone residual of 0.3958 against a tolerance of 0.02
+-- which reads exactly like a defect in the susceptibility and was an unconverged ground
+state underneath. **A density is an array and carries no flag**, so the moment a caller
+writes `scf.density` and hands it to a functional entry point, the fact that it converged
+is gone. `Calculator` refused the same physics correctly; the functional route had nothing
+to refuse with. `SCFResult.require_converged(quantity)` is now the one implementation and
+`Calculator._ground_state` is a wrapper around it, so any caller holding a result makes the
+check in one line. `pytest tests/regression/test_magnons.py`: **8 passed in 247.82 s**, peak
+RSS 982 MB.
+
+**The third input, and it is a different failure with the same shape.**
+`h2-texture-120.in` asked for `constrained_magnetization = 'atomic texture'` while the code
+printed a warning saying that scheme does not converge on that cell, and its header claimed
+a converged run. Two test files referenced it and **neither ran it as written** -- one
+rewrote the scheme, the other only parsed it. It is `'atomic'` at `lambda = 10` now with
+the card scaled to the 0.26 mu_B sphere moment, which is the row P79 calls the answer, and
+re-measured on the committed file: **38 iterations, pair angle 121.13 degrees, 0.576 degrees
+per site**, against a collapse to 179.5 degrees in 14 iterations with no constraint. The
+regression test's rewrite now goes the other way, and the unit test that needs
+`'atomic texture'` builds the text itself -- a scheme that cannot converge is fine in a test
+that is about a crash in the first potential build, and is not fine in a committed input.
+
+**What is outstanding.** Nothing on these three. The wider question the seed raises is
+untouched: **no other committed input was audited for a saturated
+`starting_magnetization`**, and the rule -- a seed at or above one valence electron's worth
+starts the run on the clamp -- would be a cheap input-time warning that does not exist.
+
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.

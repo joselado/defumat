@@ -1,19 +1,37 @@
 ! Two hydrogen atoms of ONE species asked to sit 120 degrees apart, held there
-! by `constrained_magnetization = 'atomic texture'` and nothing else.
+! by `constrained_magnetization = 'atomic'` and nothing else.
 !
 ! This is the cheapest cell that is a *canted* magnet rather than a collinear
 ! one: the two moments are at +60 and -60 degrees from z in the xz plane, so
 ! the state is neither ferromagnetic nor antiferromagnetic and no collinear
 ! machinery can represent it. Nothing in the SCF holds an angle, so without a
 ! constraint the pair relaxes to whichever collinear arrangement is lower and
-! the 120 degrees is gone.
+! the 120 degrees is gone -- measured, it collapses to 180 degrees in ten
+! iterations.
+!
+! **The scheme is 'atomic' and it used to be 'atomic texture', which does not
+! converge on this cell.** Both constrain the same geometry and they are not
+! interchangeable. 'atomic texture' constrains a *direction* alone, so its
+! potential carries a 1/|m| and grows as a site's moment shrinks -- positive
+! feedback, and no lambda converged here in 400 iterations. 'atomic' constrains
+! the moment as a *vector*, so its potential is 2 lambda (m - m_target) and is
+! bounded. The code prints a warning saying exactly this, and for a while this
+! file was the warning's own counterexample: the header claimed a converged run
+! and the run reached 6.4e-4 Ry in 100 iterations, oscillating (OPEN.md Part IV).
 !
 ! Two things are deliberate. There is **no** LOCAL_MAGNETIC_FIELDS card: the
 ! per-atom integration spheres have to be built because the constraint is
-! atom-resolved, not because a field asked for them. And `lambda` is left at a
-! value the SCF tolerates rather than the largest that would hold the angle
-! best -- the penalty's stiffness is a convergence parameter, and the point of
-! the cell is to measure what it buys.
+! atom-resolved, not because a field asked for them. And `lambda` is 10, which
+! is the largest stiffness this SCF tolerates -- at 30 it fails to converge in
+! 200 iterations and the angle collapses. At 10 the 120 degrees is held to
+! **0.55 degrees per site in 38 iterations**, which is the number PLAN.md P79
+! quotes and it belongs to this scheme and this lambda.
+!
+! The STARTING_MOMENTS are the 120-degree unit directions times 0.26 mu_B,
+! which is the sphere moment the cell converges to. That scale matters: an
+! 'atomic' target is compared against the moment inside each atom's sphere in
+! Bohr magnetons, so a card written at some other length asks for a different
+! magnet as well as a different angle.
  &control
     calculation = 'scf'
  /
@@ -25,8 +43,8 @@
     noncolin = .true.
     nosym = .true.
     starting_magnetization(1) = 0.6
-    constrained_magnetization = 'atomic texture'
-    lambda = 0.5
+    constrained_magnetization = 'atomic'
+    lambda = 10
     nbnd = 12
  /
  &electrons
@@ -41,5 +59,5 @@ ATOMIC_POSITIONS (crystal)
 K_POINTS {automatic}
  1 1 2 0 0 0
 STARTING_MOMENTS
-  0.5196152423  0.0  0.3
- -0.5196152423  0.0  0.3
+  0.2251666050  0.0000000000  0.1300000000
+  -0.2251666050  0.0000000000  0.1300000000

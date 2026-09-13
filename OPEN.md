@@ -2014,7 +2014,45 @@ then the process **sits there** holding its memory -- 4.9 GB here. The dump is t
 diagnosis, not the recovery, which is one more reason to run anything long through
 `tools/run_regression.sh`.
 
-## 2. P63's spin-spiral scan no longer reproduces
+## 2. P63's spin-spiral scan no longer reproduces **[closed 2026-09-13 -- the cause is the seed, and the scan is better than P63's]**
+
+**It was never a regression. `starting_magnetization = 1.0` on hydrogen is a *fully
+polarized* atom** -- one valence electron, so the minority channel starts at exactly zero
+and the first potential is built at `|zeta| = 1`, the saturated point every clamp in
+`defumat/xc` is about. From there the run leaves the ferromagnetic branch. At **0.9** the
+branch survives, and the whole scan comes back:
+
+| `q_3` | converged | iterations | E (Ry) | \|m\| | E - E(0) |
+|---|---|---|---|---|---|
+| 0 | yes | 7 | -0.9802841602 | 0.53125 | 0.0 meV |
+| 1/8 | yes | 10 | -0.9849565354 | 0.40165 | -63.6 meV |
+| 1/4 | **no** | 200 | -0.9913133105 | 0.20020 | **-150.1 meV** |
+| 3/8 | yes | 13 | -0.9868070126 | 0.15256 | -88.7 meV |
+| 1/2 | yes | 59 | -0.9846191874 | 0.04355 | -59.0 meV |
+
+P63's own numbers were `0, -150, -59` meV at `0, 1/4, 1/2` and the re-run gives
+**0, -150.1, -59.0**. They reproduce to the digit.
+
+**And the scan now does what P63 wanted it to and recorded as impossible.** The minimum is
+at `q = (0, 0, 1/4)`, which is exactly the wavevector the transverse susceptibility names
+as the first instability of the ferromagnet -- two calculations sharing no machinery, one a
+sum over states plus a matrix inversion on a frozen density, the other five independent
+self-consistent fields. `h-fcc-spiral-scan.in`'s header used to say "it does not work"; it
+does.
+
+The same seed is the whole of `Part V.1` below, on the same cell, and the two were one
+defect. Three cautions are in the input's header: the `q = 1/4` point does not converge
+(1.25e-7 after 200 iterations, which is what the bottom of a flat magnetic surface looks
+like), `q = 1/8` and `3/8` are not commensurate with the 4x4x4 grid so their k-sampling
+differs from the other three, and `|m|` falls monotonically along the scan -- this is a
+spiral whose moment shrinks as it turns, not a rigid rotation.
+
+**The three candidates the entry below proposed were all wrong**, and the reason is worth
+keeping: none of them was tested before being written down. `mixing_ndim` was "the candidate
+to test first" and is not the cause; the cell's own seed was never suspected because the
+input had always carried it.
+
+### The original entry
 
 Its numbers, not its conclusion. P63 records `E(q) - E(0)` of `0, -150, -59` meV at
 `q_3 = 0, 1/4, 1/2` on `h-fcc-spiral-scan.in`; the `q_3 = 1/2` point now comes out at
@@ -2040,7 +2078,32 @@ drifted the one time the slow set was run end to end).
 
 ---
 
-## 3. `h2-texture-120.in` does not converge as committed, and its header says it does
+## 3. `h2-texture-120.in` does not converge as committed, and its header says it does **[closed 2026-09-13]**
+
+**Taken as the entry recommended: the card is `'atomic'` at `lambda = 10` now**, with the
+`STARTING_MOMENTS` scaled to the 0.26 mu_B sphere moment the cell converges to, and the
+header rewritten to describe the run the file performs. That is the row `PLAN.md` P79 calls
+the answer, and re-measured on the committed file it is unchanged: **38 iterations, pair
+angle 121.13 degrees, 0.576 degrees per site**, where the unconstrained cell collapses to
+179.5 degrees in 14.
+
+Two test files referenced the input and both are fixed in the same pass, which is the part
+that would otherwise have gone stale silently:
+
+* `tests/regression/test_holding_a_texture.py` string-replaced *from* `'atomic texture'`
+  and `lambda = 0.5`. Both literals are gone, so every rewrite in it was about to become a
+  no-op -- silently, since `str.replace` does not complain about a missing pattern. It now
+  rewrites *from* `'atomic'` and `lambda = 10`, and the direction-only test rewrites *to*
+  the scheme it is about.
+* `tests/unit/test_magnetic_fields.py` asserted `field.constraint == "atomic texture"` off
+  the committed file. It builds the text itself now: the regression it guards is a crash in
+  the **first potential build** and does not care how the run ends, so a scheme that cannot
+  converge is fine there and is not fine in a committed input.
+
+`PLAN.md` P79, `docs/features.tex` and `NONCOLLINEAR.md` all cite the file for the 0.55
+degrees; each now names the scheme the number belongs to.
+
+### The original entry
 
 **Found while writing the textures notebook, 2026-09-13, and confirmed by a second run.**
 The file states `constrained_magnetization = 'atomic texture'` at `lambda = 0.5`, and its
@@ -2090,7 +2153,41 @@ the rewrite is still doing what it was doing.
 
 # Part V -- from the 2026-09-13 memory session
 
-## 1. Four of `test_magnons.py`'s eight tests fail, and all four are one unconverged SCF
+## 1. Four of `test_magnons.py`'s eight tests fail, and all four are one unconverged SCF **[closed 2026-09-13 -- 8 passed; and the entry's own first lever was the right one]**
+
+**`pytest tests/regression/test_magnons.py` is 8 passed in 247.82 s**, peak RSS 982 MB.
+
+**The cause is the seed and nothing else.** `starting_magnetization = 1.0` on hydrogen is a
+*fully polarized* atom -- one valence electron -- so the minority channel starts at exactly
+zero and the first potential is built at `|zeta| = 1`. The entry guessed at this ("trips the
+`pw.x` warning about values at or above 1") and then reached past it for `mixing_beta`. It
+should not have: the cell has two converged solutions and the seed picks which one.
+
+| seed | converged | iterations | E (Ry) | m | vs. nonmagnetic |
+|---|---|---|---|---|---|
+| 1.0 | yes | **126** | -0.9845889092 | 0.02728 | -0.13 meV |
+| 0.9 | yes | **7** | -0.9802841602 | **0.53125** | **+58.44 meV** |
+| 0.0 | yes | 6 | -0.9845791913 | 0.00000 | -- |
+
+The second row is the state the input's header describes and the module is for: m = 0.53
+mu_B, 58 meV above the nonmagnetic solution. The first is a different, barely-magnetic
+solution -- and with almost no moment there is almost nothing for a spin wave to be a
+rotation *of*, which is the 0.3958 Goldstone residual against a tolerance of 0.02. It was
+not a defect in the susceptibility. (It also converges at 126 iterations against the
+driver's default 100, so "not converged" was itself only true at the budget used.)
+
+**Both halves of the second recommendation are done, and the library half is the one that
+matters.** `SCFResult.require_converged(quantity)` is now the single implementation of that
+refusal and `Calculator._ground_state` is a wrapper around it, so anything holding a result
+can make the same check in one line -- which is what a caller that writes `scf.density`
+needs, the array carrying no flag. `test_magnons.py`'s own `_converged` helper calls it, so
+the three tests would now fail *by name* rather than as a physics identity.
+
+**The same seed is `Part IV.2` above**, on the same cell, and the two were one defect. Fixing
+it also turned P63's spiral scan from a recorded negative result into a confirmation of the
+magnon prediction.
+
+### The original entry
 
 **Found while checking that MEMORY-AUDIT A8 had not moved a number, and it had not:
 these predate the session entirely.** `tests/regression/test_magnons.py` is `slow`, so

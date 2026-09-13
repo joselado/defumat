@@ -578,15 +578,10 @@ class Calculator:
                     file=sys.stderr,
                 )
             self.get_scf()
-        if not self._scf.converged:
-            raise ValueError(
-                f"{quantity} needs a converged ground state and the SCF stopped "
-                f"at an accuracy of {self._scf.accuracy:g} Ry after "
-                f"{self._scf.iterations} iterations. Rerun get_scf() with a "
-                "looser conv_thr, more max_iterations or a different mixing "
-                "before reading a derived quantity off it"
-            )
-        return self._scf
+        # One implementation, on the result rather than here, so that a caller
+        # who takes ``scf.density`` to a functional entry point can make the
+        # same refusal: see :meth:`~defumat.scf.driver.SCFResult.require_converged`.
+        return self._scf.require_converged(quantity)
 
     # ------------------------------------------------------------------
     # band structure, densities of states
