@@ -113,7 +113,7 @@ python3 -m pytest tests/regression/test_spinorbit.py \
 
 ---
 
-## 2. `test_spinorbit.py` peaks at 11,088 MB against a 12 GB cap
+## 2. `test_spinorbit.py` peaks at 11,088 MB against a 12 GB cap **[measured 2026-09-13 -- the peak is not a property of the code]**
 
 92% of the cap on a 30 GB machine, so it is the next out-of-memory kill whether or
 not it has happened yet. The watchdog named
@@ -123,40 +123,84 @@ down in the same run is `test_stress.py` at 6,317 MB.
 
 **The number predates P74 and should have moved.** It was measured with the whole band
 block in the FFT box, before `vloc_psi_nc` learned to call `map_bands`, so the spinor local
-term was transforming every band at once in exactly the file this peak belongs to. Whether
-11,088 MB is still the peak is unread (`PLAN.md` P74, "What is outstanding"), which is one
-more reason the first step is a measurement.
+term was transforming every band at once in exactly the file this peak belongs to.
 
 **The one lead, and what it is not.** The stderr shows XLA constant-folding and
 transposing an `f64[25,1277,34,34]` inside `jvp(jit(_paw_onecenter))`, twice,
 each fold over 2 s. That shape is `PawSpecies.density_ae`/`density_ps`,
 `(nh, nh, nlm, mesh)` at `nh = 34` for a fully-relativistic platinum dataset --
 295 MB each. They are ordinary pytree fields, so inside `_paw_onecenter` they are
-arguments; appearing as XLA *constants* means the enclosing `jit(<lambda>)`
-closes over the object holding them, which would give every compiled variant its
+arguments; appearing as XLA *constants* means the enclosing `jit(<lambda>)` closes
+over the object holding them, which would give every compiled variant its
 own copy in a cache that never shrinks. **But 590 MB is under 6% of an 11 GB
-peak.** The stderr says where the compile time goes. It does not say where the
-resident set goes, and starting from "the constant is the memory" is chasing 6%.
+peak** -- so the entry dismissed it, and **that dismissal was wrong**; see below.
 
-**So the first step is a measurement, not a fix.** Two that cost little:
+---
 
-- `jit(f).lower(*ShapeDtypeStructs).compile().memory_analysis()` on the PAW
-  spinor gradient at that case's shapes -- it runs the compiler and allocates
-  nothing, the same route P73 used for the slab it could not run;
-- the same test alone with the watchdog's own sampling, and the scope's
-  `memory.current` beside `psutil`'s RSS, since the cgroup charges page cache and
-  child processes and this process's anonymous pages are not the same number.
+### The measurement, 2026-09-13, and it answers a different question than it asked
 
-**Then the two candidates worth separating**, because the fixes are different: a
-single large allocation inside one backward pass (the augmentation table
-`Q_ij(G)` at `nh^2 x ngm` per atom is the known one, and `nh` is 34 here), versus
-accumulation of XLA executables across the file's 28 tests. `jax.clear_caches()`
-in an autouse fixture distinguishes them in one run -- if the peak drops, it is
-accumulation.
+**The peak depends on whether the compiled kernels come from the on-disk cache, and
+nothing else moves it nearly as much.** Same commit, same test, alternating, main tree,
+`DEFUMAT_THREADS=4`, `/usr/bin/time %M`:
 
-**Cost.** The measurement is one 8-minute file at 11 GB. Run it **alone** --
-nothing else on the machine, nothing else being timed -- and through
-`tools/run_regression.sh` so a kill costs the file rather than the session.
+| `DEFUMAT_CACHE_DIR` | peak | wall |
+|---|---|---|
+| `off` -- compiles every kernel | **10,111 M**, then 10,115 M | 57.0 s, 57.2 s |
+| default -- loads them | **16,406 M**, then 16,381 M | 39.3 s, 36.6 s |
+
+Reproduced in a second checkout (10,078 / 10,071 against 16,364 / 16,380) and **at eight
+cores as well** (16,470 / 16,440), so the affinity mask is *not* the variable here even
+though it is the variable for the deadlock in Part IV.
+
+**The mechanism, and it reverses this entry's own dismissal.** Pointed at an empty cache
+directory, this one test writes **375 entries totalling 606 MB -- of which a single
+`jit_<lambda>` entry is 602.8 MB**, which is the enclosing lambda the paragraph above
+identified. Then:
+
+| | peak | wall |
+|---|---|---|
+| miss (compile, then write the cache) | 10,120 M | 62.6 s |
+| hit (load it back) | 16,383 M | 37.4 s |
+
+**6,263 MB of resident memory for a 603 MB blob: a factor of 10.4.** So it is not that the
+serialized executable is held -- the gap is larger than the whole 4.8 GB cache directory --
+it is that deserialising it expands by an order of magnitude. "The constant is the memory"
+was the right instinct; what made it look like 6% was counting one copy of the constant
+instead of what loading it costs.
+
+The effect is not a fixed factor. The same off/on pair on a `si8-paw-1k` force is
+**1,082 M against 1,212 M**, 12% and 130 MB, so it scales with what the executable
+embeds -- which on this platinum cell is a fully-relativistic dataset at `nh = 34` and on
+silicon is nothing of the kind.
+
+**The entry's two candidates are both answered.** It is **one test, not accumulation**:
+that single test run alone peaks at 16,392 M where the whole 27-test file peaks at
+16,378 M. And `jax.clear_caches()` is not the lever, because the file's peak is one
+backward pass.
+
+**What this costs today.** With a warm cache the file is **SIGKILLed under
+`run_regression.sh`'s 12 G cap at any thread count** -- it was, at 12,394 M, before the cap
+was raised. Until the constants are fixed it needs `DEFUMAT_TEST_MEM_MAX=18G`, or
+`DEFUMAT_CACHE_DIR=off` at 18 s a run. The 11,088 M on record is neither figure: it is
+whatever the cache happened to hold that day.
+
+**Two methodological findings, and the second cost an hour.**
+
+- **A memory measurement here must state the cache state**, exactly as a timing must.
+  `CLAUDE.md` already says never to time a first call because it measures the cache; the
+  same sentence is true of `%M` and points the *other* way -- a cache miss is **cheaper**
+  in memory and dearer in time.
+- **A bisection across commits is a bisection across cache states.** Walking
+  9a1cc3d -> ad4b599 -> 3c5d779 -> HEAD gave 10,178 / 10,137 / 16,382 / 16,357 M and
+  looked exactly like a regression introduced by the A5 structure-factor remat. It is not:
+  every *new* code state is a cache **miss** and therefore cheap, and re-running ad4b599
+  warm gives 16,386 and 16,405. A5 is innocent, and so is the affinity mask, which the
+  same artefact had made look like the difference between passing and being killed.
+
+**What is left, and it now outranks the rest of the audit.** `PawSpecies.density_ae` and
+`density_ps` should reach `_paw_onecenter` as **arguments** rather than as constants closed
+over by the enclosing `jit(<lambda>)`. That is what puts 603 MB into one executable, and
+603 MB is what 6.3 GB of peak is being paid for.
 
 ---
 

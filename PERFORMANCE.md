@@ -673,15 +673,25 @@ run and the right one for a test suite, so the two are separated: the package
 stays at four and `tests/conftest.py` asks for eight before anything imports
 `defumat`. What the suite pays for that, isolated on one file, three samples
 each: **27.4 s and 1752 M at four cores, 30.3 s and 1981 M at eight — 11% of
-wall clock and 13% of peak RSS.**
+wall clock and 13% of peak RSS.** Read the memory half of that as provisional:
+the three runs per arm were taken in sequence rather than alternating, and peak
+RSS in this code turns out to depend on the compiled-kernel cache far more than
+on the mask (`OPEN.md` Part I item 2 — 10.1 GB against 16.4 GB on one test,
+same code). The wall-clock half is unaffected.
 
 **The gate's own before-and-after is one sample each and is not that
 measurement**, which is worth stating because it is the number someone will
 reach for: 7m22s / 5903 M at four cores, 10m37s / 8186 M at eight. The same
 suite has read 7, 11 and 7 minutes on one day, so the wall clock is inside a
 spread this log already calls unattributable; the peak is above the 4.5–6.0 GB
-previously seen and the mask explains 13 points of it. Under the 12 G cap, with
-less margin than before.
+previously seen. **Do not attribute that step to the mask** — that was written
+here first and the one-file measurement above does not carry to a 2000-test
+process. The better candidate is the **kernel cache warming across sessions**, so
+that an ever-larger fraction of the gate's executables are *loaded* rather than
+compiled, and loading is what costs memory (`OPEN.md` Part I item 2, where a
+603 MB cache entry is worth 6.3 GB resident). That is a hypothesis with a
+one-run test — `DEFUMAT_CACHE_DIR=off tools/test-fast.sh`, compare the peak —
+and it has not been run. Under the 12 G cap, with less margin than before.
 
 The two theories that died first are in `OPEN.md` Part IV item 1, and both had
 been recorded here as fact — the persistent kernel cache (`DEFUMAT_CACHE_DIR=off`

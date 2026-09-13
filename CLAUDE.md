@@ -435,6 +435,15 @@ number here.** They are the internal counterpart of the `ph.x` warm-scratch arte
   `get_stress()` read 8.68 s before a change and 16.09 s after, reproducibly; compiled,
   the two are the same to 0.5 per cent. Call it once to pay the compilation and time the
   next one. The same effect makes the test gate read 7 or 11 minutes for the same suite.
+- **A memory figure must say what the cache held, and it points the *other* way.** The
+  same rule applies to `%M`, with the sign reversed: a cache **miss is cheaper in memory
+  and dearer in time**, because loading a compiled executable expands it. On one spinor
+  PAW test, same code, alternating: **10.1 GB with `DEFUMAT_CACHE_DIR=off` against 16.4 GB
+  with the cache on**, 57 s against 37 s — a 603 MB cache entry worth 6.3 GB resident
+  (`OPEN.md` Part I item 2). The corollary is sharper than the rule: **a bisection across
+  commits is a bisection across cache states**, because every new code state is a miss.
+  Four commits walked in order read 10.2 / 10.1 / 16.4 / 16.4 GB and looked exactly like a
+  regression that did not exist — the first commit re-run warm gives 16.4 too.
 - **On a quantity whose expected change is zero, take a median and say how many
   samples.** A best-of-three over samples 2.16/2.21/2.20 against 2.06/2.21/2.27 reads as a
   confident 8 per cent in whichever direction got the lucky draw; the medians are equal to
@@ -918,8 +927,10 @@ the mask that parks a long-lived process with every XLA worker blocked and no
 CPU at all, at a rate that follows the mask and nothing else — 8 hangs in 8 runs
 at two cores, 6 in 14 at four, none at eight or above. `tests/conftest.py`
 therefore sets `DEFUMAT_THREADS=8` before anything imports `defumat`, which
-costs the suite 11% of wall clock and 13% of peak RSS, and an explicit setting
-still wins. `OPEN.md` Part IV item 1 has the measurement and the two theories it
+costs the suite 11% of wall clock and, provisionally, 13% of peak RSS — the
+memory half was measured in sequence rather than alternating, and peak RSS here
+depends on the compiled-kernel cache much more than on the mask. An explicit
+setting still wins. `OPEN.md` Part IV item 1 has the measurement and the two theories it
 killed.
 
 **Read that figure as a range, not a constant, because a third measurement
@@ -932,9 +943,13 @@ separates the two 2026-09-13 runs is the compiled-kernel cache and whatever else
 the machine was doing — which is the same rule the performance section states
 about timings taken beside a test run, applied to the gate itself. **Time it
 warm and idle, or do not compare it.** The thing genuinely worth watching is the
-peak RSS, which moved 4.5 -> 6.0 -> 8.2 GB and did not come back (13 points of
-the last step are the wider mask above; the rest is unexplained, and 8.2 GB
-against a 12 G cap whose watchdog fires at 0.85 is less margin than it reads). Whatever is in the
+peak RSS, which moved 4.5 -> 6.0 -> 8.2 GB and did not come back. **Do not
+attribute that to the wider mask**: the better candidate is the kernel cache
+warming across sessions, so that more of the gate's executables are *loaded*
+rather than compiled — and loading one 603 MB cache entry is worth 6.3 GB
+resident (`OPEN.md` Part I item 2). The test is one run of
+`DEFUMAT_CACHE_DIR=off tools/test-fast.sh`, and it has not been done. 8.2 GB
+against a 12 G cap whose watchdog fires at 0.85 is less margin than it reads. Whatever is in the
 gate is paid on every push by someone who is not doing physics at the time,
 which is the same argument the notebooks' ten-minute ceiling rests on; the lever
 is the `slow` marker, and the question to ask of any test above a few seconds is
