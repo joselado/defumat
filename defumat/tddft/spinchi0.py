@@ -72,12 +72,11 @@ is what makes an eighteen-band transition metal fit.
 from __future__ import annotations
 
 import equinox as eqx
-import jax
 import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
-from defumat.batching import resolve_k_batch, sum_k
+from defumat.batching import resolve_k_batch, sum_bands, sum_k
 from defumat.scf.occupations import smearing_order, w0gauss
 
 __all__ = [
@@ -433,8 +432,22 @@ def _one_k_terms(psi_up, index_up, mask_up, eig_up, occ_up, slope_up,
 
     The pair axis is ``nbnd^2`` and a pair density is a whole FFT box, so
     forming them all at once is ``nbnd^2`` grid-sized fields. Walking the
-    majority band with :func:`jax.lax.map` makes the working set ``nbnd`` of
-    them instead, at no cost in flops -- the transforms are the same ones.
+    majority band makes the working set ``nbnd`` of them instead, at no cost in
+    flops -- the transforms are the same ones.
+
+    **The walk accumulates rather than stacks**, which is the whole of its
+    memory saving and was missing. ``jax.lax.map`` is a scan whose per-iteration
+    output is written into a full ``ys`` buffer, so the band loop built
+    ``nbnd`` copies of the ``(nw, nm, nm)`` answer and summed them afterwards:
+    on fcc Ni at ``ecut_response = 60`` (``nm = 561``) and nine frequencies that
+    is 1.36 GB of intermediate for a 45 MB result. :func:`sum_bands` carries one
+    running total instead. It changes the order the band contributions are added
+    in and nothing else.
+
+    **On an accelerator the stack comes back by design.** The band dial's
+    default there is ``None`` -- every band at once, which is what a GPU wants
+    -- and that routes through a ``vmap`` and a sum. ``DEFUMAT_BAND_BATCH``
+    is what asks for the scan on hardware where the memory matters more.
     """
     # The padding must be zeroed before the scatter: every padding entry
     # shares the flat index of ``G = 0``, so an unmasked coefficient lands on
@@ -469,8 +482,7 @@ def _one_k_terms(psi_up, index_up, mask_up, eig_up, occ_up, slope_up,
         ) / volume
         return jnp.einsum("wp,pa,pb->wab", scalars, jnp.conj(matrix), matrix)
 
-    total = jax.lax.map(one_band, (fields_up, eig_up, occ_up, slope_up))
-    return jnp.sum(total, axis=0)
+    return sum_bands(one_band, (fields_up, eig_up, occ_up, slope_up))
 
 
 #: Two eigenvalues closer than this (Ry) are treated as degenerate, and their

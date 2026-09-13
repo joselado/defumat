@@ -4883,6 +4883,194 @@ reference lifetimes between compiled calls.
   them. **18 GB** at that scale. `relaxed` has already taken the only thing any of
   them is needed for.
 
+## Four more retention drops: the calculator's cache, the continued span, the field's loop (MEMORY-AUDIT A6, A7)
+
+Same class as A2 and A3 above -- a name that is still bound long after its last
+read -- and this time each one is **measured** rather than sized, with
+`jax.live_arrays()` summed at a chosen moment inside the run. That instrument
+allocates nothing and counts device buffers rather than resident pages, so it
+answers the only question a retention fix raises: is the old object still
+reachable while the new one is being built?
+
+**One thing to know before reading any of these numbers.** The measuring script's
+own local is a reference too. The first attempt at the `get_scf` figure below read
+**zero difference** in both directions, because the script held `first =
+calc.get_scf(...)`; the calculator's slot is only the sole owner once the caller
+lets go. `del first; gc.collect()` is what made the measurement measure anything.
+
+### `Calculator.get_scf`, `get_relax`, `get_strain_response` (A6 i, ii)
+
+`self._scf = run_scf(...)` evaluates the right-hand side while the attribute still
+points at the previous run, so the old wavefunctions are resident for the whole of
+the new SCF, Davidson peak included. All three cache slots are dropped before the
+call now, and `get_scf` drops the strain response with them -- it was cleared
+*after* the new run, which is the one place it could not help.
+
+| | live device bytes, every iteration of the re-run |
+|---|---|
+| before | 7,728,112 |
+| after | **6,349,808** |
+
+`benchmarks/si16-1k.in`, `get_scf(conv_thr=1e-6)` then `get_scf(conv_thr=1e-10)`:
+**1,378,304 B released**, which is the whole first `SCFResult` -- 755,712 B of
+wavefunctions plus its eigenvalues, density, `becsum` and occupations. Both runs
+give `-126.355971216 Ry in 8 iterations` either way.
+
+The strain response is the same defect at a larger object. `get_strain_response`'s
+cache is recomputed whenever `options` is non-empty, which is exactly the path that
+double-lived it. On `benchmarks/si-1k.in`, live bytes at the top of the recompute:
+**2,867,536 -> 1,913,680**, the latter being the ground state's own baseline to the
+byte -- the cached response (953,856 B, nine `(1, 1, 4, 180)` blocks) is gone
+before its replacement starts. At `PERFORMANCE.md`'s own hypothetical 64 k / 200
+occupied / 20000 plane-wave cell the same six distinct blocks are 24.6 GB, and the
+double-live 49 GB.
+
+**The price, stated:** a run that raises now leaves no cache behind. That is the
+honest state -- what was cached is no longer what the calculator is set up for.
+
+### The continued run's promoted span (A6 iv)
+
+A 1 -> 4 or 2 -> 4 promotion allocates a **fresh** span, `([up, 0], [0, down])`
+concatenated, at the size of the target run's own wavefunctions. It is read by the
+first diagonalisation and, provably, by no other: `wavefunctions` is set to `None`
+once above the loop and rebound by every `diagonalize`, so the `if wavefunctions is
+None` guard opens exactly once.
+
+`benchmarks/fe-mag-1k.in` as a 1 -> 4 promotion (bcc iron, ultrasoft, one k-point),
+live bytes at the top of each of the 27 diagonalisations:
+
+| | iteration 1 | iterations 2-27 |
+|---|---|---|
+| before | 19,722,805 | 20,849,765 |
+| after | 19,646,517 | **20,773,477** |
+
+**76,288 B**, which is `1 x 16 x 298 x 16` exactly -- the promoted span and nothing
+else. Same energy (`-55.574264633 Ry`) and the same 27 iterations. The figure scales
+as `nk x 2 nbnd_src x 2 npwx x 16`: at the 45-atom NiBr2 scale `PERFORMANCE.md`
+brackets at 27.23 -> 31.97 GB it is **2.19 GB/k**, held from the second iteration to
+the end.
+
+Where it frees nothing, stated: a promotion that does not change `npol` returns the
+source's own array rather than a new one, and a checkpoint resume holds the state
+through `resumed_state` anyway.
+
+### The electric field's three projector-velocity blocks (A7)
+
+`commutators` and `projector_velocities` are built before the self-consistent loop
+and read only after it -- by the Born charges and by `keep_internals`, and by
+nothing inside the loop. They are retained only when one of those will read them
+now. **A PAW run reaches this routine only with `born_charges=False`** (`require_born_charges`
+refuses PAW), so on PAW they were carried through every iteration and never read at
+all.
+
+| `tests/data/qe/si-epsilon-paw.in`, `born_charges=False` | live bytes in the loop |
+|---|---|
+| before | 45,303,286 |
+| after | **40,875,126** |
+
+**4,428,160 B, 9.8% of the loop's live set**, `eps = 14.320210737` to every digit
+either way, 9 iterations both times. The shapes say how this grows: `3 (nk, npwx,
+nkb)` for the projector velocities against `6 (nspin, nk, nocc, npwx)` for the blocks
+already counted, so the ratio is `nkb / (2 nocc nspin)` -- on P25's 16-atom yardstick
+(100 k, 32 bands, 3000 PW, `nkb = 128`) that is **1.84 GB** against a recorded 0.92,
+and two to three times worse again for a PAW Ni or Bi dataset with `nh` in the twenties.
+
+**A second site found at the same place, and it is free on every dataset.** The
+loop's own names outlive it: after three axes, `derivative` still holds a whole
+`(nk, npwx, nkb)` block and `overlap` and `commutator` a band block each, live
+across the entire self-consistent loop. Clearing them is worth **520,960 B** on
+`si-epsilon-us.in` with `born_charges=True` (34,674,430 -> 34,153,470), which is the
+case where the lists themselves are kept and this is all there is to take.
+
+**Not done here, and why.** The audit also proposes rebuilding the three
+projector-velocity blocks at the Born-charge assembly instead of holding them --
+2.9 s of `jvp` against 1.84 GB across eighteen iterations. That is a time-for-memory
+trade rather than a free drop, so it belongs with a timing rather than in this pass.
+
+## The magnon band loop was still stacking (MEMORY-AUDIT A8)
+
+**The record above says this was fixed and it was not.** The magnons entry in the
+history table claims the majority-band loop "accumulates in a `scan` carry rather
+than stacking `nbnd` matrices of `(nw, nm, nm)`". The loop was a `jax.lax.map`,
+which **is** a scan -- but a scan whose per-iteration *output* is written into a
+full `ys` buffer, so the stack the sentence says was removed was still there, with
+a `jnp.sum(total, axis=0)` one line later. The diagnosis and the byte figure in
+that entry were right; the fix had not landed. The tell was still in the code: the
+map's element parameter was named `carry`.
+
+`sum_bands` replaces it, which is `sum_k`'s machinery on the band axis -- the same
+accumulation `sum_band.f90` does over `DO ibnd`.
+
+**Sized by the compiler, which allocates nothing.** `_one_k_terms` lowered and
+compiled on `tests/data/qe/h-fcc-magnon.in` at `nbnd = 12`, `ecut_response = 20`
+(`nm = 113`) and three frequencies:
+
+| | `temp_size_in_bytes` | |
+|---|---|---|
+| `lax.map` + `sum` | 9,947,664 | 9.49 MiB |
+| `sum_bands` | **2,593,296** | **2.47 MiB** |
+
+**7,354,368 B off, a factor of 3.84** -- and that difference is `nbnd x nw x nm^2 x
+16 = 12 x 3 x 113^2 x 16` **exactly**, which is what pins the mechanism rather than
+merely agreeing with it. The same formula at the production nickel case the magnons
+entry was measured on (`nbnd = 30`, `ecut_response = 60` so `nm = 561`, nine
+frequencies) is **1.36 GB for a 45 MB result**, reproducing that entry's own "1.2 GB
+of intermediate for a 40 MB result" at its eight frequencies.
+
+`X_0` is **bit-identical** across the change on that cell -- `x[0,0,0] =
+-0.05636548374877085+6.770340835610553e-21j` and `sum|x| = 3.536177390370782e+01`
+to every digit -- because the band contributions were already being added in index
+order.
+
+**What it does not fix, stated.** On an accelerator the band dial's default is
+`None`, which asks for every band at once and routes through a `vmap` and a sum, so
+the stack is back. That is the platform default rather than an oversight -- a GPU
+wants the batch -- and `DEFUMAT_BAND_BATCH` is what asks for the scan where the
+memory matters more.
+
+## Reassociating the augmentation charge: 2 GiB and 8.9x (MEMORY-AUDIT A9)
+
+`_species_charge` contracted `becsum` with the structure factor first, leaving an
+`(nh, nh, ngm)` intermediate standing beside the resident `qgm` of the same shape.
+Contracting `becsum` with `Q_ij(G)` first instead leaves `(nat, ngm)`, smaller by
+`nh^2 / nat`.
+
+**This is a deliberate departure from "mirror QE" and that is part of the fix.**
+The old order **is** `addusdens_g`'s, which holds `qgm(ngm, nij)` and `aux2(ngm,
+nij)` together -- and in QE that costs nothing, because `qvan2` has just built
+`qgm` into a buffer it is about to reuse. Here `qgm` is kept for the whole run, so
+the same association puts two arrays of that shape in flight. The docstring says
+so now, and `sizing.py` has a line for the intermediate it did not have.
+
+Lowered from `ShapeDtypeStruct` at `bismuthene-soc-small`'s own shapes (`nh = 34`
+from the dataset, `ngm = 60543` from `reference.out.bismuthene-soc-small:108`,
+`nat = 2`), so nothing is allocated:
+
+| | `temp_size_in_bytes` | compiled call, same shapes |
+|---|---|---|
+| `aij,ag->ijg` then `ijg,ijg->g` | 2,239,606,656 (**2.086 GiB**) | 805.4 ms (median of 5) |
+| `aij,ijg->ag` then `ag,ag->g` | **1,937,376** (1.85 MiB) | **90.8 ms** |
+
+**2.086 GiB off and 8.9x faster**, with the value bit-identical
+(`sum|rho_aug| = 4.857478327606917e+06` on random arrays at those shapes). The
+audit left the BLAS-shape question open -- whether `(nat, ngm) x (nh^2, ngm)` is a
+worse shape on CPU than the present one -- and the answer is that it is much
+better, which makes this a **speed** fix as well: `charge` runs once per SCF
+iteration per species.
+
+**Acceptance, the one the audit names.** `benchmarks/si8-us-1k.in` converges to
+`-91.013925889497 Ry in 10 iterations` at `accuracy = 2.503e-12`, identical to
+every printed digit before and after. The synthetic checksum at `ngm = 4096` moves
+by **one ulp** (`3.239886677899015e+05` against `...14e+05`), which is what
+reassociating a sum costs.
+
+**The gate it corrects.** `build_augmentation` tabulates above `AUG_MAX_BYTES` (2
+GiB), sizing the *stored* array -- while the route's live set at the contraction was
+**twice** that, so a cell tuned to sit just under the default ran at twice it. It is
+now the working set the gate names. Its hardcoded `16` for the complex width goes
+with it: under `precision = 'single'` the gate fired at twice the true size, and
+the byte count comes from `cell.precision.complex.itemsize` now.
+
 ## History
 
 | Date | Change | Effect |
@@ -4931,7 +5119,7 @@ reference lifetimes between compiled calls.
 | 2026-09-02 | The full (Liechtenstein) DFT+U functional (P62a): a four-index `vee` contraction in place of a scalar `U_eff`, built once per calculation from `harmonic_products` | **The functional is free and the SCF is the same one.** On antiferromagnetic FeO at `U = 4.3`, `J = 1.0` eV, one core each: **42.8 s of SCF against `pw.x`'s 7.64 s** (52.1 s and 8.46 s end to end, of which 9.3 s is JAX compilation), in 42 iterations against 21 — so the per-iteration ratio is **2.8x**, the band this package sits in, and half the wall-clock gap is the iteration count rather than the cost of an iteration. Against the *simplified* functional on the same cell the interaction is not measurable: `vee` is `(nslot, 5, 5, 5, 5)` built once on the host, and the per-iteration einsum is 625 multiplies against a matrix the Hamiltonian applies to every band. **The comparison is like-for-like** — the same input, the same pseudopotentials, the same `conv_thr` — which is rare for a row here, and it is only available because `kind = 1` is one of the two axes `pw.x` has. |
 | 2026-09-02 | Around-mean-field double counting (P62c) and Slater integrals from the orbital (P62d) | **Neither is a per-iteration cost and that is the whole measurement.** AMF is the same `vee` contraction on a shifted matrix — the shift is one trace per slot per iteration, unmeasurable — and it converges FeO in 39 iterations against FLL's 42. The Yukawa route is **setup only**: `manifold_radial` 0.2 ms, `screening_length` 9.5 ms (about thirty evaluations of a 1195-point double integral inside a bracketed root find), `slater_set` 1.9 ms — **12 ms once**, against a 12 s SCF, so the phase's cost is three parts in ten thousand of the run it configures. **The Elk pair this project's rule asks for is not taken, and the reason is that it would not be informative rather than that it was skipped**: Elk reaches these through `dftu`/`inpdftu` inside its own ground state, so the only timeable unit is a whole all-electron LAPW SCF against a whole pseudopotential one — a comparison of two basis sets, not of this feature. What would be comparable is `genfdu` + `fyukawa` alone, which Elk does not time separately either. The absolute number above is the honest one and it is 12 ms. |
 | 2026-09-02 | The spinor occupation matrix (P62b) and tensor moments (P62e): four spin blocks as four quadrants of one operator, and the moment basis built from Wigner 3-j symbols | **The spinor DFT+U term costs what the collinear one costs**, because it is the same contraction on a projector set twice as long: relativistic BN with spin-orbit coupling converges in 10 iterations and 250 s where the same cell at `U = 0` takes 250 s too -- the correction is not measurable against the spinor SCF it rides on, whose `2 npwx` states are the whole cost. **The tensor-moment basis is setup and is cached**: `moment_matrices(2)` builds all 100 matrices of a `d` shell once, in under 40 ms, and the constraint is then one `einsum` over `(nfix, 4, ldmx, ldmx)` per iteration -- unmeasurable beside a diagonalisation. **The Elk pair is not taken and the reason is the one P62c and P62d already give**: Elk reaches both through its own ground state, so the only timeable unit is a whole all-electron LAPW SCF against a pseudopotential one, which compares two basis sets rather than this feature. What is comparable is that Elk needs a *ground state per constraint* and so does this, and the constraint itself is free on both sides. |
-| 2026-09-03 | Magnons (P63): the transverse spin susceptibility as a matrix over reciprocal lattice vectors, its Dyson equation, and the pole located as a root of `lambda_max = 1` | **The comparison is like-for-like and the ratio is 1.8x**, on Elk's own `Ni-magnetic-response` example (fcc Ni, a = 6.66 bohr, 10x10x10 shifted, one core each): `elk` does its ground state plus task 330 in **20m35s and 486 MB**, this package does the ground state (508 s), the fixed-density run at 30 bands (440 s) and one wavevector's response (1242 s) in **36m30s** -- 2190 s against 1235 s. **And the physics agrees**: Elk's pole is at 117.92 meV, of which 1.99 meV is the Zeeman gap of its own applied field (`bfieldc = 0.01` with the default `reducebf = 1.0`, scaled by `cb = gfacte/(4 solsc)` in `eveqnsv.f90` -- reading that rather than estimating it is what turned a "not comparable" into a comparison), so its field-free magnon is 115.93 meV against **115.04** here uncorrected and 123.08 Goldstone-corrected: **-0.8 and +6.2 per cent**, with the moment agreeing on the same run (0.6178 mu_B against 0.6152) and the Goldstone residual 2.04 per cent on that grid against 1.99 on a 4x4x4 one -- fifteen times the k-points moving it by 0.05 per cent, which says the residual is a truncation and not a sampling error. **Say what is not comparable**: LAPW against a 60 Ry plane-wave sphere; Elk's `gmaxrf = 5.0` is a **25 Ry** response sphere against the 60 Ry this cell needs for a 2 per cent residual, and the cost is quadratic in it (`nm` 561 against ~120); `emaxrf = 1.5` Ha caps the states it sums over where `nbnd` here does not; and the smearing schemes differ. Rebuilding the example with Elk 11.0.2 reproduces its committed `CHI_T.OUT` pole to the meV and its values to 0.49 absolute on numbers of order 8 to 28, which is that reference's own resolution. **What the response costs is `nw npairs nm^2`** and that shape is the design decision: fcc nickel on a 4x4x4 grid at `nbnd = 30`, `ecut_response = 60` is 12m42s and 6.3 GB for an SCF plus three wavevectors, and **79 s** at `nbnd = 24`, `ecut_response = 40` for one, which is what the notebook runs. Two things were measured and fixed on the way: the majority-band loop accumulates in a `scan` carry rather than stacking `nbnd` matrices of `(nw, nm, nm)` before summing them (1.2 GB of intermediate for a 40 MB result on nickel), and **the pole is found as a root of `lambda_max(omega) = 1` on a handful of frequencies rather than as a peak of a broadened spectrum** -- a hundred frequencies at `nm = 561` is twenty minutes a wavevector where eight is ninety seconds, and the root needs no broadening at all. |
+| 2026-09-03 | Magnons (P63): the transverse spin susceptibility as a matrix over reciprocal lattice vectors, its Dyson equation, and the pole located as a root of `lambda_max = 1` | **The comparison is like-for-like and the ratio is 1.8x**, on Elk's own `Ni-magnetic-response` example (fcc Ni, a = 6.66 bohr, 10x10x10 shifted, one core each): `elk` does its ground state plus task 330 in **20m35s and 486 MB**, this package does the ground state (508 s), the fixed-density run at 30 bands (440 s) and one wavevector's response (1242 s) in **36m30s** -- 2190 s against 1235 s. **And the physics agrees**: Elk's pole is at 117.92 meV, of which 1.99 meV is the Zeeman gap of its own applied field (`bfieldc = 0.01` with the default `reducebf = 1.0`, scaled by `cb = gfacte/(4 solsc)` in `eveqnsv.f90` -- reading that rather than estimating it is what turned a "not comparable" into a comparison), so its field-free magnon is 115.93 meV against **115.04** here uncorrected and 123.08 Goldstone-corrected: **-0.8 and +6.2 per cent**, with the moment agreeing on the same run (0.6178 mu_B against 0.6152) and the Goldstone residual 2.04 per cent on that grid against 1.99 on a 4x4x4 one -- fifteen times the k-points moving it by 0.05 per cent, which says the residual is a truncation and not a sampling error. **Say what is not comparable**: LAPW against a 60 Ry plane-wave sphere; Elk's `gmaxrf = 5.0` is a **25 Ry** response sphere against the 60 Ry this cell needs for a 2 per cent residual, and the cost is quadratic in it (`nm` 561 against ~120); `emaxrf = 1.5` Ha caps the states it sums over where `nbnd` here does not; and the smearing schemes differ. Rebuilding the example with Elk 11.0.2 reproduces its committed `CHI_T.OUT` pole to the meV and its values to 0.49 absolute on numbers of order 8 to 28, which is that reference's own resolution. **What the response costs is `nw npairs nm^2`** and that shape is the design decision: fcc nickel on a 4x4x4 grid at `nbnd = 30`, `ecut_response = 60` is 12m42s and 6.3 GB for an SCF plus three wavevectors, and **79 s** at `nbnd = 24`, `ecut_response = 40` for one, which is what the notebook runs. Two things were measured and fixed on the way: the majority-band loop accumulates rather than stacking `nbnd` matrices of `(nw, nm, nm)` before summing them (1.2 GB of intermediate for a 40 MB result on nickel) **-- corrected 2026-09-13: it did not, until then. The loop was a `jax.lax.map`, which is a scan whose per-iteration output is stacked into a full `ys` buffer, so the stacking this sentence claimed to have removed was still there; the diagnosis and the byte figure were right and the fix had not landed. See "The magnon band loop was still stacking" below** -- and **the pole is found as a root of `lambda_max(omega) = 1` on a handful of frequencies rather than as a peak of a broadened spectrum** -- a hundred frequencies at `nm = 561` is twenty minutes a wavevector where eight is ninety seconds, and the root needs no broadening at all. |
 | 2026-09-03 | The orbital magnetization (P64): the covariant k-derivative as dual states of the neighbouring manifolds, and `H` contracted between two of them | **The comparison is like-for-like and the ratio is 2.07x**, which is the band this package sits in. An iodine atom in a twelve-bohr box (`i-atom-soc.in`, 8829 plane waves, seven spinor bands, a 3x3x3 grid), one core each with the affinity mask set before JAX is imported: `pw.x`'s non-self-consistent `lorbm` run is **52.6 s** (its own timer agrees) and the same thing here -- the fixed-density diagonalisation on the 27-point mesh plus the assembly -- is **108.6 s**, at a 1.33 GB peak. The self-consistent legs are 3.9 s against 9.8 s (2.48x) on the same input, so the response leg is *not* the expensive half relative to QE. **Both sides start from the same place**, which is what makes the pair meaningful: each is one whole run from scratch, reading a converged density and producing the two Kubo terms. What the assembly itself costs is six overlap matrices, six `nbnd x nbnd` solves and four Hamiltonian applications per k-point -- the applications dominate, and they are the same `h_psi` a diagonalisation calls, so the ratio here is the ratio of `h_psi` and nothing new. The gather plans are `(nk, npol npwx)` integers per neighbour direction, 11 MB on this cell against the states' 53 MB. |
 | 2026-09-03 | STM images (P65): the tunnelling density as `Calculation.density` called with delta-weighted occupations, and the plane read out of the grid by its own Fourier series | **The comparison is like-for-like and this end is 5.4x faster, which is the direction this file does not usually record.** Elk's task 162 on fcc aluminium (the cell and the 4x4x4 shifted grid of QE's `pw_metal/metal.in`, a 40x40 plane, one core each, both starting from a converged ground state) is **0.49 s** against **0.09 s** here warm and 0.29 s including compilation. Each side rebuilds the density from the new occupations and then evaluates it on 1600 points; Elk's leg also re-reads `STATE.OUT` and regenerates its radial functions, which is what a post-processing task does there and has no counterpart in a cached `Calculator`. **What is not comparable is the evaluation**: `rfpts` sums spherical harmonics inside each muffin tin and does a plane-wave sum only in the interstitial, where a pseudopotential code has one Fourier sum everywhere -- so the ratio is a statement about LAPW's geometry rather than about either implementation. **The ground states go the usual way**, 0.69 s by Elk's own timer for its thirteen iterations against 1.57 s here, so the quantity is cheap on both sides and the phase's own cost is a rounding error on the SCF that feeds it. Against `pp.x` the timing is not measured and would not be informative: `plot_num = 5` re-reads the collected wavefunctions off disk and writes a text dump of the whole grid, which is I/O rather than the sum. **Peak** is `chunk x ngm` complex for the phase table -- the points are chunked to ~32 MB, because a 40x40 plane against a 30000-vector sphere is 768 MB in one block -- plus the tunnelling density itself at one dense grid, which is what a density already costs. |
 | 2026-09-03 | Vertical tunnelling transport (P66): the substrate's exit plane as a closed-form Gram matrix per k-point, the tip amplitudes as one plane-wave sum, and the whole thing as one quadratic form | **There is no like-for-like pair and the reason is the geometry rather than the physics.** QE's `pwcond.x` computes a Landauer transmission, but between two semi-infinite crystalline leads with the current along one axis -- one conductance per energy and no point contact, so no map; timing it against a tip-resolved image would compare two different calculations. Elk has nothing. So this is the absolute cost, one core, affinity mask set before JAX is imported. Monolayer graphene, the **whole** 6x6x1 grid (36 k-points, a wedge being refused), 20 bands, a 40x40 tip plane: **36.7 s** warm and 39.4 s cold, of which the fixed-density diagonalisation is **29.9 s** and the transport assembly itself is **6.8 s** -- so four fifths of the run is the NSCF every k-resolved quantity here pays, and the phase's own cost is the smaller part. **The nearest relative is P65's STM image at 8.6 s on the same call, and the gap is not the assembly**: `run_stm` may reduce its grid to a wedge and this may not, so it diagonalises 7 k-points where this does 36. That is a real cost of the quantity and it is the refusal, not the implementation. **The energy axis is free and this is the measurement that says so**: 1, 21 and 81 energies cost 35.7, 36.6 and 38.6 s, so eighty-one tip energies are **8 per cent** more than one -- the tip sampling and the Gram matrices do not depend on `E`, only the per-state weight does, which makes a transport dI/dV at every pixel a by-product rather than a sweep. **Cost shape**: sampling is `nk nbnd npts npwx` and dominates, the Gram matrices are `nk nbnd n_hpar`, and the contraction is `nk nbnd^2 npts` per energy. **Peak 0.85 GB** on that cell, of which the amplitudes are `npol nk nbnd npts` complex (18 MB here) and the phase table is chunked to ~32 MB as P65's sampler already chunks it. |

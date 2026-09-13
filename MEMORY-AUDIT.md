@@ -1,13 +1,24 @@
 # Memory audit of defumat
 
-> **Status, 2026-09-13.** The top **four** items are **done**, and B1 with them: A1 (both
-> augmentation scan bodies rematted, `bismuthene-soc-small`'s force tape 2.32 GiB -> 0.99
-> GiB measured by `memory_analysis()`, force and stress unchanged to one ulp), A2
-> (`run_relax`'s two reference drops), A3 (`run_vc_relax`'s one), and **A4 + B1** (the PAW
-> one-centre atom axis chunked *and* rematted, which makes its tape flat in the atom count:
-> 4.08 GB -> 0.80 GB at the NiBr2 nickel sublattice, and faster). `PERFORMANCE.md` carries
-> the numbers. Everything below is the audit as written, including those four; the rest is
-> untouched and still a to-do list.
+> **Status, 2026-09-13.** The top **nine** items are **done**, and B1, C4 and half of A12
+> with them: A1 (both augmentation scan bodies rematted, `bismuthene-soc-small`'s force tape
+> 2.32 GiB -> 0.99 GiB measured by `memory_analysis()`, force and stress unchanged to one
+> ulp), A2 (`run_relax`'s two reference drops), A3 (`run_vc_relax`'s one), **A4 + B1** (the
+> PAW one-centre atom axis chunked *and* rematted, which makes its tape flat in the atom
+> count: 4.08 GB -> 0.80 GB at the NiBr2 nickel sublattice, and faster), **A5 + C4** (both
+> structure factors rematted), **A6**'s free half (four retention drops: the calculator's
+> three cache slots and the continued run's promoted span), **A7** (the electric field's
+> two lists, plus a second site at the same place that the audit does not name -- the
+> loop's own locals outlive it), **A8** (the magnon band loop, whose stack the record
+> already claimed was gone) and **A9** (the augmentation contraction reassociated: 2.086
+> GiB of temp *and* 8.9x, which settles the BLAS question the entry leaves open in the good
+> direction). `PERFORMANCE.md` carries the numbers. Everything below is the audit as
+> written, including those nine; the rest is untouched and still a to-do list.
+>
+> **A6 and A7 are the first items here measured rather than sized**, with
+> `jax.live_arrays()` summed inside the run, and the instrument has one trap worth carrying
+> forward: the measuring script's own local is a reference too, so the first attempt read
+> zero difference in both directions until the result it was holding was deleted.
 >
 > **A4 is also the item that says why an audit is checked rather than applied.** Its
 > prescribed one-line fix was measured to be a *regression*, and the correction is inline
@@ -54,10 +65,10 @@ run that currently does not fit on this machine or does not start at all.
 | 3 | `run_relax` holds the previous step | A2 | `relax.py:434` | NiBr2 scale | **7.7 GB** resident, +24% on a 32.30 GB peak | 3 lines | a |
 | 4 | PAW one-centre tape | A4 | `onecenter.py:128` | NiBr2 | **3.28 GB** measured (4.08 -> 0.80), and 0.4 GB forward with it | 1 line -> ~40 | a |
 | 5 | Structure factor is a reverse residual | A5 | `potentials.py:224`, `augmentation.py:847` | NiBr2 | **~5.1 GB** of tape, 2.55 from each site (C4 decided: one copy each) | 2 lines | a |
-| 6 | `Calculator` and `run_scf` retention | A6, B2 | `calculator.py:524/679/858`, `driver.py:4489` | 64k/200-band **(hypothetical — no run this size exists here)**; NiBr2 | **24.6 GB** retained / 49 GB double-live; 8.8 GB of wavefunction sets; 2.19 GB/k span | 6 lines | a + b |
-| 7 | E-field holds three projector-velocity blocks | A7 | `efield.py:329` | P25 yardstick | **1.84 GB** across 18 iterations, *never read* on PAW | 10 lines | a |
-| 8 | `spinchi0` stacks the band loop | A8 | `spinchi0.py:472` | fcc Ni | **1.36 GB** — and `PERFORMANCE.md` says this was fixed | 3 lines | a |
-| 9 | `_species_charge` doubles the stored route | A9 | `augmentation.py:157` | bismuthene-soc-small | **1.12 GB**; the `AUG_MAX_BYTES` gate measures half the working set | 2 lines + docstring | a |
+| 6 | `Calculator` and `run_scf` retention | A6, B2 | `calculator.py:524/679/858`, `driver.py:4489` | 64k/200-band **(hypothetical — no run this size exists here)**; NiBr2 | **24.6 GB** retained / 49 GB double-live; 8.8 GB of wavefunction sets; 2.19 GB/k span | 6 lines | a + b, **free half done** |
+| 7 | E-field holds three projector-velocity blocks | A7 | `efield.py:329` | P25 yardstick | **1.84 GB** across 18 iterations, *never read* on PAW | 10 lines | a, **done** |
+| 8 | `spinchi0` stacks the band loop | A8 | `spinchi0.py:472` | fcc Ni | **1.36 GB** — and `PERFORMANCE.md` says this was fixed | 3 lines | a, **done** |
+| 9 | `_species_charge` doubles the stored route | A9 | `augmentation.py:157` | bismuthene-soc-small | **1.12 GB**; the `AUG_MAX_BYTES` gate measures half the working set | 2 lines + docstring | a, **done** |
 | 10 | Bootstrap Dyson iterates every frequency | A10 | `dyson.py:122-126` | nm=285/nw=121 | **1.1-1.3 GB** and **88%** of 37.6 s | 25 lines + a flag | a |
 | 11 | Stress tapes a real `\|psi\|^2` | A11 | `energy.py:520` | NiBr2-scale spinor stress | **1.10 GB**, a 50% surcharge on psi | 1 line | a |
 | 12 | `PawSpecies` materialises a rank-1 outer product | A12 | `onecenter.py:604` | NiBr2 Ni | **0.55 GB/label** (8.29 GB at 15), a floor under `jvp` | 40 lines | a |
@@ -453,6 +464,21 @@ not this.
 
 ### A6. `Calculator` and `run_scf` retention: four droppable holdings, all host-side
 
+> **The free half is done, 2026-09-13, and measured rather than sized.** All four sites are
+> fixed: `get_scf` drops `_scf` *and* `_strain_response` before the call rather than after
+> it, `get_relax` drops `_relax`, `get_strain_response` drops its cache inside the
+> recompute branch, and `run_scf` releases the continued span once the first
+> diagonalisation has read it. Measured with `jax.live_arrays()`: **1,378,304 B** off every
+> iteration of a `get_scf` re-run on `si16-1k`, **953,856 B** off the top of a strain-response
+> recompute on `si-1k` (back to the ground state's own baseline to the byte), and **76,288
+> B** -- the promoted span exactly -- off iterations 2-27 of a 1 -> 4 promotion on
+> `fe-mag-1k`. Energies and iteration counts identical throughout. **(iii), clearing
+> `_seed`, is still open and is still B2.** `PERFORMANCE.md` has the tables.
+>
+> One consequence to know: a run that raises now leaves no cache behind, which is the
+> honest state rather than a loss.
+
+
 Four sites, one shape of defect — an attribute or local that is live long after its last read, or
 that is still bound while its replacement is computed. All four fixes are host-side reference
 management between compiled calls: no shape becomes data-dependent, no `np.asarray` enters a
@@ -517,6 +543,22 @@ checkpoint resume `resumed_state` holds it anyway.
 
 ### A7. The electric field holds three `(nk, npwx, nkb)` projector-velocity blocks across the whole loop, and never reads them on PAW
 
+> **Done, 2026-09-13, and it found a second site the entry does not name.** Both lists are
+> now retained only when something will read them -- `commutators` on `born_charges or
+> keep_internals`, `projector_velocities` on `born_charges` alone, which is its only
+> consumer. On `si-epsilon-paw` with `born_charges=False`, the case where they were carried
+> through every iteration and never read, the loop's live set goes **45,303,286 ->
+> 40,875,126 B**, 9.8 per cent, with `eps = 14.320210737` to every digit either way.
+>
+> **The second site is free on every dataset and applies wherever a loop builds blocks.**
+> The loop's *own names* outlive it: after three axes `derivative` still holds a whole
+> `(nk, npwx, nkb)` block and `overlap` and `commutator` a band block each, live across the
+> entire self-consistent loop. Clearing them is **520,960 B** on `si-epsilon-us` with
+> `born_charges=True` -- the case where the lists themselves are kept, so it is all there is
+> left to take. The rebuild-instead-of-hold half below is a time-for-memory trade and is not
+> done.
+
+
 **Site.** `defumat/response/efield.py:313` (`bare, commutators, projector_velocities = [], [], []`),
 `:326` (`commutators.append`), `:329` (`projector_velocities.append`), `:333` (`bare.append`). Both
 lists are built before the loop at `:323` and next read at `:408-412` (Born charges) or `:420`
@@ -580,6 +622,15 @@ actual dataset.
 
 ### A8. `spinchi0` stacks `nbnd` copies of the response matrix — and the record says this was fixed
 
+> **Done, 2026-09-13, and the entry is right about everything including that.** `sum_bands`
+> replaces the `lax.map` plus `jnp.sum`. Sized by the compiler on `h-fcc-magnon` at
+> `nbnd = 12`, `nm = 113`, `nw = 3`: `temp_size_in_bytes` **9,947,664 -> 2,593,296**, and
+> the difference is `nbnd nw nm^2 16` **to the byte**, which is what pins the mechanism.
+> `X_0` is bit-identical. The accelerator caveat the entry names is real and is stated in
+> the docstring rather than worked around: the band dial's default there is `None`, which
+> rebuilds the stack by design.
+
+
 **Site.** `defumat/tddft/spinchi0.py:472-473`:
 
 ```python
@@ -634,6 +685,15 @@ both ways; the axis walked is the band axis *inside* one k-point's body, so R6 i
 ---
 
 ### A9. `_species_charge` builds a second full-size `(nh, nh, ngm)` beside the resident one, so the stored route's peak is twice what the gate measures
+
+> **Done, 2026-09-13, and the residual risk resolved the other way.** The entry leaves open
+> whether `(nat, ngm) x (nh^2, ngm)` is a worse BLAS shape on CPU. It is much better: at
+> bismuthene-soc-small's own shapes the compiled call goes **805.4 ms -> 90.8 ms** as well
+> as `temp_size_in_bytes` **2,239,606,656 -> 1,937,376**, so this is a speed fix too, on a
+> routine called once per SCF iteration per species. The value is bit-identical on the same
+> arrays and `si8-us-1k` converges to `-91.013925889497 Ry in 10 iterations` either way.
+> The docstring, the `sizing.py` line and the hardcoded `16` are all in with it.
+
 
 **Site.** `defumat/pseudo/augmentation.py:157`, inside `@jax.jit _species_charge`:
 
@@ -1484,7 +1544,8 @@ a defect, and these six are stale.
    `lax.map` hits, and `git log` shows one commit ever touched it, whose message never mentions a
    scan. The entry's own arithmetic is the tell: `1.2 GB / 40 MB` is exactly
    `nbnd=30 x nw=8 x 5.04 MB`, computable only from the stacking form. Correct it in the commit that
-   lands A8.
+   lands A8. **Corrected 2026-09-13, in place rather than by deletion**, so the claim and its
+   retraction stay in the same sentence.
 2. **P11's conclusion that "the 11 GB is the reverse pass and not the forward-mode Jacobian"** does
    not follow from peak RSS, which is a within-process high-water mark (C1).
 3. **`velocity.py:51-56` states the module's memory model as "the peak is one extra `vkb`"** and calls
@@ -1502,7 +1563,11 @@ a defect, and these six are stale.
 6. **`response/strain.py`'s module docstring says ultrasoft and PAW are refused.** `overlap_derivatives`
    (`:338`) is implemented for `is_ultrasoft`, and `require_a_sternheimer_regime` refuses only
    *noncollinear* ultrasoft, so a collinear US/PAW strain response does run and does allocate `ort`
-   (A6(i)).
+   (A6(i)). **Corrected 2026-09-13**, and it is more than stale: `PLAN.md` P41 *implemented* the
+   deforming overlap and
+   `test_electrostriction.py::test_a_moving_overlap_strain_response_matches_a_finite_difference`
+   pins both datasets at 4.6e-4 and 4.7e-4 against a central difference. A refusal nobody can trip
+   is a refusal nobody checks -- and it is why this path's six extra band blocks went unsized.
 
 One near-miss worth recording rather than correcting: `augmentation.py:296`'s null — "`jax.checkpoint`
 here was tried and measured to be worth nothing" — is about `_qrad_kernel` in the **stored** route. It
@@ -1526,7 +1591,8 @@ exists to halve it.
    `cell.precision.real`. Every PAW array — including A12's 552.6 MB pair — is float64 whatever the
    policy says.
 3. **`pseudo/augmentation.py:753`**: the `AUG_MAX_BYTES` gate hardcodes `16` for the complex byte
-   width, so in single precision it switches routes at twice the true size.
+   width, so in single precision it switches routes at twice the true size. **Fixed 2026-09-13 with
+   A9** -- it reads `cell.precision.complex.itemsize`.
 
 **Checked and *not* a breach**, so that nobody re-reports it: the bare `1j` literals at
 `density.py:148/224`, `basis/gradients.py:42/60`, `noncollinear.py:325-326` and `davidson.py:604` are

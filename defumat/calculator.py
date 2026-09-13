@@ -509,6 +509,15 @@ class Calculator:
         ``get_bands`` and its relatives: ``conv_thr`` means the SCF's own
         threshold in this method and "the accuracy the density was converged
         to" in those, and a shared passthrough would silently conflate them.
+
+        **The old state is dropped before the new run starts, not after.**
+        Rebinding a name does not release what it pointed at until the
+        right-hand side has returned, so ``self._scf = run_scf(...)`` keeps the
+        previous run's wavefunctions resident for the whole of the new SCF,
+        Davidson peak included -- and a strain response built on them is six
+        ``(nk, nocc, npwx)`` blocks more. The price is that a run which raises
+        leaves no cache behind, which is the honest state anyway: what was
+        cached is no longer what this calculator is set up for.
         """
         merged = {**self._defaults_for(run_scf), **options}
         if self._seed is not None:
@@ -521,11 +530,12 @@ class Calculator:
         # would otherwise be a silent no-op that still counted as a cache miss
         # -- the same run, again, under a different name. They rebuild it.
         self._adopt(options)
+        # Before the call rather than after it -- see the docstring. An SCF
+        # makes every response built on the previous one stale in any case.
+        self._scf = self._strain_response = None
         self._scf = run_scf(self.system, self.pseudos,
                             calculation=self.calculation, **merged)
         self._scf_options = merged
-        # An SCF makes every response built on the previous one stale.
-        self._strain_response = None
         return self._scf
 
     def get_elk_seed(self, directory, renormalise: bool = True, report=None):
@@ -670,12 +680,17 @@ class Calculator:
         This does **not** move *this* calculator: its cached ground state still
         belongs to the geometry it was built for. :meth:`relaxed` gives the
         calculator at the endpoint.
+
+        The previous relaxation is dropped before the new one starts, for the
+        reason :meth:`get_scf` gives: it holds every ionic step's converged
+        wavefunctions, and a rebind releases nothing until the call returns.
         """
         if variable_cell:
             from defumat.workflows.vc_relax import run_vc_relax as run
         else:
             from defumat.workflows.relax import run_relax as run
 
+        self._relax = None
         self._relax = run(self.system, self.pseudos,
                           calculation=self.calculation,
                           **self._defaults_for(run, options))
@@ -850,11 +865,17 @@ class Calculator:
 
         Cached, because both the elastic constants and the electrostriction are
         built from it, and it is the expensive half of either.
+
+        ``options`` recomputes, and the old response is released first: it is
+        six distinct ``(nk, nocc, npwx)`` blocks -- the ``(3, 3)`` array of
+        ``dpsi`` after symmetrisation -- so holding it while its replacement is
+        built doubles the largest thing this calculator owns.
         """
         from defumat.response.strain import strain_response
 
         result = self._ground_state("the strain response")
         if self._strain_response is None or options:
+            self._strain_response = None
             self._strain_response = strain_response(
                 self.calculation, result.wavefunctions, result.eigenvalues,
                 result.density, result.becsum,

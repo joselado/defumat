@@ -62,10 +62,22 @@ together -- so only *differences* between them mean anything. And a single
 ``deps_n`` is defined only up to the rotation a degenerate multiplet is free in,
 so the trace is what a comparison can use.
 
-**Refused rather than approximated**: ultrasoft and PAW (the augmentation charge
-``Q_ij(r)`` is a function of the cell, so ``dbecsum`` acquires a strain term of
-its own beside the one ``jvp`` gives), and everything
-:func:`~defumat.response.sternheimer.require_a_sternheimer_regime` refuses.
+**Refused rather than approximated**: everything
+:func:`~defumat.response.sternheimer.require_a_sternheimer_regime` refuses, which
+for this perturbation means a **noncollinear** ultrasoft or PAW dataset.
+
+*This paragraph used to refuse collinear ultrasoft and PAW as well, on the grounds
+that the augmentation charge ``Q_ij(r)`` is a function of the cell so ``dbecsum``
+acquires a strain term of its own. That term is where the work went:*
+:func:`overlap_derivatives` *and* :func:`density_of_strained_states` *differentiate
+it (``PLAN.md`` P41), and* ``tests/regression/test_electrostriction.py::
+test_a_moving_overlap_strain_response_matches_a_finite_difference`` *pins both
+datasets against a central difference of the converged density -- 4.6e-4 for
+ultrasoft and 4.7e-4 for PAW on the ``(0,0)`` strain against the norm-conserving
+control's 1.9e-4. The refusal outlived the thing it refused, which matters twice
+over: a refusal nobody can trip is a refusal nobody checks, and the six extra
+``(nspin, nk, nbnd, ndim)`` blocks this path allocates went unsized because the
+docstring said the path did not exist* (``MEMORY-AUDIT.md`` §6.6, A6(i)).
 """
 
 from __future__ import annotations

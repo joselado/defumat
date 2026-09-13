@@ -569,6 +569,16 @@ def estimate_size(
         if qgm_bytes <= _aug_max_bytes():
             arrays["augmentation Q_ij(G) (nh,nh,ngm)"] = qgm_bytes
             arrays["augmentation phases (nat,ngm)"] = len(structure.types) * ngm * zc
+            # ``_species_charge``'s intermediate, one species at a time, so the
+            # peak is the largest species' atom count rather than ``nat``. It
+            # used to be a second ``(nh, nh, ngm)`` -- the same size as the
+            # stored table -- which is why this line did not exist and the
+            # estimate was half the truth on an ultrasoft run.
+            arrays["augmentation contraction (nat_t,ngm)"] = ngm * zc * max(
+                sum(1 for t in structure.types if t == index)
+                for index in sorted(set(structure.types))
+                if pseudos[index].is_ultrasoft and projector_channels(pseudos[index])
+            )
             # ``_qrad_kernel``'s ``(ngm, kkbeta)`` Bessel intermediate: built one
             # L at a time, so the peak is one dataset's rather than their sum.
             # Transient -- gone before the eigensolver runs, which is why it

@@ -4487,6 +4487,9 @@ def run_scf(
             print(f"  resuming from {checkpoint_dir} at iteration "
                   f"{getattr(starting_from, 'iterations', '?')}")
 
+    # Bound whether or not there is anything to continue from, because the loop
+    # below releases it by name once the span has been read.
+    state = None
     if starting_from is not None:
         if any(x is not None for x in (starting_density, starting_becsum,
                                        starting_ns, starting_wavefunctions)):
@@ -4755,6 +4758,14 @@ def run_scf(
             wavefunctions = calculation.starting_wavefunctions(
                 hamiltonians, nbnd, span=starting_wavefunctions
             )
+            # ``wavefunctions`` is ``None`` exactly once -- it is set just above
+            # the loop and rebound by every diagonalisation -- so the span is
+            # provably never read again. A promotion between spin regimes
+            # allocates it fresh (``promote_wavefunctions`` concatenates
+            # ``([up, 0], [0, down])``), at the size of this run's *own*
+            # wavefunctions, and without this it would sit under every Davidson
+            # call for the rest of the run.
+            state = starting_wavefunctions = None
 
         davidson_steps, davidson_unconverged = 0.0, 0
         for attempt in range(2):

@@ -315,6 +315,20 @@ def dielectric_tensor(
     occupied = solver.psi
     occupied_eigenvalues = solver.eigenvalues
     dipole = _augmentation_dipole(calculation)
+    # ``bare`` drives the loop below and is always kept. The other two are read
+    # *after* it and by nothing inside it, so retaining them unconditionally
+    # carries them through every iteration of the most expensive loop in the
+    # routine for nothing. ``commutators`` is free for a norm-conserving run --
+    # ``position`` is never rebound, so its entries are ``bare``'s own objects
+    # -- and a separate ``(nspin, nk, nocc, npwx)`` block each once the
+    # augmentation dipole splits them. ``projector_velocities`` is
+    # ``3 (nk, npwx, nkb)``, which on an ultrasoft or PAW dataset is the larger
+    # of the two by a factor ``nkb / (2 nocc nspin)``.
+    #
+    # A PAW run reaches here only with ``born_charges=False``
+    # (:func:`~defumat.response.born.require_born_charges` refuses it), which
+    # is exactly the case where both were carried and never read.
+    keep_commutators = bool(born_charges or keep_internals)
     bare, commutators, projector_velocities = [], [], []
     for axis, direction in enumerate(np.eye(3)):
         # ``[H - eps S, r_a] = -i (dH/dk_a - eps dS/dk_a)``, both tangents from
@@ -328,14 +342,20 @@ def dielectric_tensor(
         # dipole. QE stores it separately because the Born charges need it
         # (``add_for_charges``), and so does
         # :func:`defumat.response.born.constraint_position_term`.
-        commutators.append(position)
+        if keep_commutators:
+            commutators.append(position)
         if dipole is not None:
             derivative = velocity.projectors(direction)
-            projector_velocities.append(derivative)
+            if born_charges:
+                projector_velocities.append(derivative)
             position = _ultrasoft_position(
                 solver, velocity, position, direction, dipole[axis], derivative
             )
         bare.append(position)
+    # The loop's own names outlive it, and three of them are band- or
+    # projector-sized: the last axis's ``derivative`` is a whole
+    # ``(nk, npwx, nkb)`` block on its own. Nothing below reads them.
+    commutator = derivative = overlap = position = None
 
     # 2. The self-consistent loop. Only the induced term changes between
     #    iterations; the bare one above is what the whole loop is driven by.

@@ -90,11 +90,26 @@ class AugmentationCharge(eqx.Module):
     def charge(self, becsum: tuple) -> jnp.ndarray:
         """``rho_aug(G)`` on the dense grid, from the per-atom ``becsum``.
 
-        ``becsum[t]`` is ``(nat_t, nh_t, nh_t)``. Summing the atoms into the
-        structure factor *before* contracting with ``Q_ij(G)`` is what
-        ``addusdens_g`` does with its ``DGEMM`` over ``nab``, and it is the
-        difference between one ``(nh, nh, ngm)`` intermediate and ``nat`` of
-        them.
+        ``becsum[t]`` is ``(nat_t, nh_t, nh_t)``, and the sum has three factors
+        -- ``becsum``, ``Q_ij(G)`` and the structure factor -- so the only
+        question is which two to contract first.
+
+        **This is a deliberate departure from "mirror QE", and the reason is
+        that one of the three factors is resident here and is not in QE's
+        loop.** ``addusdens_g`` sums the atoms into the structure factor first
+        (its ``DGEMM`` over ``nab``), which leaves an ``(nh, nh, ngm)``
+        intermediate standing beside ``qgm`` -- and in QE that costs nothing,
+        because ``qvan2`` has just built ``qgm`` into a buffer it is about to
+        reuse. Here ``qgm`` is kept for the whole run, so the same association
+        puts *two* arrays of that shape in flight at the contraction: 1.12 GB
+        each on a bismuthene cell at ``nh = 34``, ``ngm = 60543``. Contracting
+        ``becsum`` with ``Q_ij(G)`` first instead leaves ``(nat, ngm)``, which
+        is smaller by ``nh^2 / nat`` -- a factor of 578 on that cell -- and is
+        marginally fewer flops as well.
+
+        The consequence for :data:`AUG_MAX_BYTES` is in
+        :func:`build_augmentation`: the gate sizes the *stored* array, and this
+        is what makes that size the working set rather than half of it.
         """
         total = None
         for t, (q, atoms) in enumerate(zip(self.qgm, self.species_atoms)):
@@ -153,9 +168,13 @@ class AugmentationCharge(eqx.Module):
 
 @jax.jit
 def _species_charge(qgm, becsum, phases):
-    """``sum_a sum_ij becsum_ij^a Q_ij(G) e^{-i G tau_a}`` for one species."""
-    weighted = jnp.einsum("aij,ag->ijg", becsum.astype(phases.dtype), phases)
-    return jnp.einsum("ijg,ijg->g", qgm, weighted)
+    """``sum_a sum_ij becsum_ij^a Q_ij(G) e^{-i G tau_a}`` for one species.
+
+    The association is :meth:`AugmentationCharge.charge`'s subject: the
+    intermediate here is ``(nat, ngm)`` and not ``(nh, nh, ngm)``.
+    """
+    channels = jnp.einsum("aij,ijg->ag", becsum.astype(phases.dtype), qgm)
+    return jnp.einsum("ag,ag->g", channels, phases)
 
 
 @jax.jit
@@ -315,6 +334,12 @@ AUG_DQ = 0.01
 #: every validated number in this project was measured with and is the faster
 #: of the two on a small cell. ``DEFUMAT_AUG_MAX_BYTES`` overrides it; ``off``
 #: means never tabulate.
+#:
+#: **What it bounds is the stored array, which is now also the working set.**
+#: It was half of it: the contraction in :func:`_species_charge` used to form a
+#: second array of the same shape beside it, so a cell sized to sit just under
+#: this default actually ran at twice it. See
+#: :meth:`AugmentationCharge.charge`.
 AUG_MAX_BYTES = 2 * 1024**3
 
 #: QE's ``cell_factor``: how far past ``sqrt(ecutrho)`` the table reaches, so
@@ -788,7 +813,10 @@ def build_augmentation(
         if key in seen:
             continue
         seen.add(key)
-        stored_bytes += len(channels) ** 2 * gvectors.ngm * 16
+        # The dtype's own width, never a literal: under ``precision = 'single'``
+        # a hardcoded 16 fires the gate at twice the true size.
+        stored_bytes += (len(channels) ** 2 * gvectors.ngm
+                         * cell.precision.complex.itemsize)
         nh_max = max(nh_max, len(channels))
     if stored_bytes > (_aug_max_bytes() if max_bytes is None else max_bytes):
         return _build_tabulated_augmentation(
