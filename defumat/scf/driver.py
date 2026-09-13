@@ -615,26 +615,30 @@ def _warn_if_the_field_did_not_fade(field, field_scale, converged, e_field) -> N
     )
 
 
-@jax.jit
-def _relative_residuals(pairs) -> jnp.ndarray:
-    """``||a - b|| / ||b||`` for each pair, as one array and one host transfer.
-
-    ``pairs`` is a tuple of ``(symmetrised, original)``; the shapes differ
-    between entries (a charge is one field, a magnetization three), which is why
-    this takes a pytree rather than a stacked array.
+def _relative_residual(a, b) -> float:
+    """``||a - b|| / ||b||``, **on the host** -- see below for why not on device.
 
     A zero ``||b||`` returns 0 rather than a NaN: a channel that is identically
     zero is invariant, and reporting that as "not a number" would make an
-    unpolarised cell look like a failure. Written as a :func:`jnp.where` on a
-    safe denominator so the unused branch produces no NaN at all, which is the
-    same rule the smeared projector's ``0/0`` follows.
+    unpolarised cell look like a failure.
+
+    **This is deliberately NumPy and must stay NumPy.** It is a once-per-run
+    diagnostic on two arrays already in hand, so a compiled kernel buys nothing
+    -- and it cost something real. Dispatching *any* small jitted op here, right
+    after the jitted symmetrisation above it, is where a JAX thread-pool deadlock
+    parks: the fast gate hung on it five times, with every worker thread idle and
+    no CPU at all, and `faulthandler` put the stack on this line
+    (``OPEN.md`` Part IV item 1). The intermediate version that computed both
+    ratios in one jitted kernel -- fewer host syncs, which was the point --
+    deadlocked just the same. Doing the arithmetic on the host removes the
+    dispatch entirely and costs one transfer of a density this method has already
+    paid for.
     """
-    out = []
-    for a, b in pairs:
-        scale = jnp.linalg.norm(b)
-        safe = jnp.where(scale > 0.0, scale, 1.0)
-        out.append(jnp.where(scale > 0.0, jnp.linalg.norm(a - b) / safe, 0.0))
-    return jnp.stack(out)
+    a, b = np.asarray(a), np.asarray(b)
+    scale = float(np.linalg.norm(b))
+    if scale == 0.0:
+        return 0.0
+    return float(np.linalg.norm(a - b) / scale)
 
 
 def _warn_if_the_seed_is_not_symmetric(calculation, rho, from_a_card: bool) -> None:
@@ -2963,14 +2967,12 @@ class Calculation:
         thresholds, and a charge that is invariant tells nothing about a
         magnetization that is not.
 
-        **One host transfer, not four.** Both ratios are computed on device and
-        brought back as a single pair. The obvious spelling -- a helper that
-        calls ``float()`` on each norm as it goes -- costs four separate
-        device-to-host syncs around one jitted symmetrisation, and a *diagnostic*
-        that blocks four times is a diagnostic that will eventually be blamed for
-        something (``OPEN.md`` Part IV item 1: this method is where a thread-pool
-        deadlock was seen parked, with the stack in one of those ``float()``
-        calls).
+        **The ratios are taken on the host, and that is not a style choice**
+        (:func:`_relative_residual`): dispatching any jitted op here, right after
+        the symmetrisation, is where a JAX thread-pool deadlock parks -- five
+        hangs of the fast gate, ``OPEN.md`` Part IV item 1. The symmetrisation
+        itself stays compiled, because it is the same kernel the SCF runs every
+        iteration.
         """
         if self._symmetry_maps is None:
             return 0.0, (None if self.nspin_mag == 1 else 0.0)
@@ -2988,10 +2990,8 @@ class Calculation:
             )
         else:
             pairs = ((symmetrized[0], rho_r[0]), (symmetrized[1:4], rho_r[1:4]))
-        ratios = np.asarray(_relative_residuals(pairs))
-        if self.nspin_mag == 1:
-            return float(ratios[0]), None
-        return float(ratios[0]), float(ratios[1])
+        ratios = [_relative_residual(a, b) for a, b in pairs]
+        return (ratios[0], None) if self.nspin_mag == 1 else (ratios[0], ratios[1])
 
     def symmetrize_directional(self, fields: jnp.ndarray) -> jnp.ndarray:
         """Impose the crystal symmetry on three densities that form a vector.
