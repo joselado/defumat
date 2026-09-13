@@ -203,20 +203,37 @@ def atomic_projections(
     if noncolin and symmetrize and calculation.use_symmetry and (
         calculation.symmetries is not None and calculation.symmetries.nsym > 1
     ):
-        # ``sym_proj_so`` averages the projection over the group with the
-        # **SU(2)** representation of each operation beside the rotation of the
-        # harmonics, because a spin-angle function carries a spin frame that the
-        # operation turns. Nothing here builds those matrices -- DFT+U with
-        # noncolin refuses in the same place and for the same reason
-        # (``scf/driver.py``, ``d_spin_ldau``) -- and averaging the ``m``
-        # indices alone would mix ``m_j`` across a frame that has moved, which
-        # is a smooth, normalised, plausible and wrong projection.
+        # A spin-angle function carries a spin frame that the operation turns,
+        # so the group average needs a spin matrix beside the rotation of the
+        # harmonics; averaging the ``m`` indices alone mixes columns across a
+        # frame that has moved, which is a smooth, normalised, plausible and
+        # wrong projection.
+        #
+        # **The two regimes need two different matrices, and only one of them is
+        # missing.** Without spin-orbit coupling the columns are
+        # ``|l m> x |sigma>`` and ``sym_proj_nc``'s operator is the tensor
+        # product ``D^l x S`` (``PP/src/d_matrix_nc.f90`` builds exactly
+        # ``dy_l(m,n) * s_spin(m1,n1)``), whose two factors are both here --
+        # :func:`~defumat.paw.symmetry.harmonic_rotations` and
+        # :func:`~defumat.system.symmetry.spin_rotations`, the latter validated
+        # in P82. What is left there is the plumbing: this class carries **real**
+        # coefficients over ``2 lmax + 1`` columns and would need complex ones
+        # over ``2 (2 lmax + 1)``, plus ``sym_proj_nc``'s ``ind`` relabelling for
+        # a time-reversed operation.
+        #
+        # With spin-orbit coupling the columns are ``|j m_j>`` instead, and
+        # ``sym_proj_so`` contracts ``d_matrix_so``'s ``D^j`` for
+        # ``j = 1/2, 3/2, 5/2, 7/2`` -- a **different** matrix that nothing here
+        # builds, and it is not the tensor product above.
         raise NotImplementedError(
             "a symmetrised projection is not implemented for a noncollinear or "
-            "spin-orbit run: sym_proj_so needs the SU(2) representation of each "
-            "point-group operation beside the rotation of the harmonics, and "
-            "nothing here builds those. Run with nosym = .true. and the whole "
-            "k-grid, which is the same physics, or pass symmetrize=False"
+            "spin-orbit run. Without spin-orbit coupling what is missing is the "
+            "plumbing for a complex, spin-doubled coefficient table: the "
+            "operator is D^l x S (sym_proj_nc) and both factors exist "
+            "(harmonic_rotations, spin_rotations). With lspinorb it is "
+            "sym_proj_so's D^j (d_matrix_so), which is a different matrix and "
+            "is not built here. Run with nosym = .true. and the whole k-grid, "
+            "which is the same physics, or pass symmetrize=False"
         )
     channels = calculation_channels(calculation)
     if not channels:

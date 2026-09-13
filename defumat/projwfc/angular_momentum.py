@@ -248,26 +248,17 @@ def angular_momenta(
     ))  # (nk, npwx, natomwfc)
 
     density = _site_density_matrix(calculation, result, projectors, channels)
-    return _contract(density, channels, system, calculation.nspin, kind)
+    return _contract(
+        density, channels, system, calculation.nspin, kind, calculation
+    )
 
 
 def _refuse_what_is_not_written(calculation) -> None:
-    from defumat.tddft.chi0 import _kpoints_are_reduced
-
     if calculation.spiral:
         raise NotImplementedError(
             "site angular momenta on a spin spiral are not implemented: the two "
             "spinor components live on spheres centred at k + q/2 and k - q/2, "
             "so a single set of atomic orbitals does not project both"
-        )
-    if _kpoints_are_reduced(calculation) and calculation.use_symmetry:
-        raise NotImplementedError(
-            "<L> and <S> on a symmetry-reduced k-set are not implemented: they "
-            "are vectors, and summing a wedge sums a wedge -- an axial vector "
-            "needs the group average with det(R) and the time-reversal sign, "
-            "which is not written here. Run the whole grid (nosym = .true.), "
-            "unshifted so that it is closed under the point group; that is the "
-            "same escape dielectric_tensor documents"
         )
     relativistic = any(
         getattr(pseudo, "has_so", False) for pseudo in calculation.pseudos
@@ -346,7 +337,44 @@ def _site_density_matrix(calculation, result, projectors, channels):
     return density
 
 
-def _contract(density, channels, system, nspin, kind):
+def _symmetrise_axial(orbital, spin, charge, calculation):
+    """Complete a wedge sum for ``<L>``, ``<S>`` and the site charge.
+
+    A reduced k-set sums a wedge, and a wedge sum is only the answer for a
+    quantity that is *invariant* under the group. The site charge is; ``<L>``
+    and ``<S>`` are not -- they are **axial** vectors, so the missing part of
+    the zone is put back by averaging over the group with ``det(R)`` and the
+    time-reversal sign beside the rotation, which is what
+    :func:`~defumat.system.symmetry.symmetrize_atom_cartesian_tensor`'s
+    ``axial`` does.
+
+    **Averaging them as polar vectors instead is the trap this exists for**, and
+    it is silent: on a centrosymmetric crystal the polar average of any vector
+    is exactly zero, so ``<L>`` would come back as a clean, plausible zero on
+    every such cell. The two routes differ on nothing else.
+    """
+    from defumat.system.symmetry import (
+        atom_mapping, symmetrize_atom_cartesian_tensor,
+    )
+
+    symmetries = calculation.symmetries
+    if symmetries is None or symmetries.nsym <= 1 or not calculation.use_symmetry:
+        return orbital, spin, charge
+
+    system = calculation.system
+    mapping = atom_mapping(system.cell, system.structure, symmetries)
+    orbital = symmetrize_atom_cartesian_tensor(
+        orbital, system.cell, symmetries, mapping, axial=True
+    )
+    spin = symmetrize_atom_cartesian_tensor(
+        spin, system.cell, symmetries, mapping, axial=True
+    )
+    # The charge is a scalar on the atom, so only the permutation acts.
+    charge = np.asarray(charge, dtype=float)[mapping].mean(axis=0)
+    return orbital, spin, charge
+
+
+def _contract(density, channels, system, nspin, kind, calculation=None):
     """``dmatls``: ``Tr(L rho)`` per atom, and ``(1/2) Tr(sigma rho)`` beside it."""
     natom = len(system.structure.positions)
     orbital = np.zeros((natom, 3))
@@ -367,6 +395,11 @@ def _contract(density, channels, system, nspin, kind):
                 "st,mtms->", PAULI[axis], block
             )))
         charge[atom] += float(np.real(np.einsum("msms->", block)))
+
+    if calculation is not None:
+        orbital, spin, charge = _symmetrise_axial(
+            orbital, spin, charge, calculation
+        )
 
     atoms = tuple(
         AtomicMoments(

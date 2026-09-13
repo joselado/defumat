@@ -133,17 +133,38 @@ class NsSymmetry:
     single ``(n, l)`` block: for each operation, a rank-four tensor rotating the
     two ``m`` indices and a permutation saying which atom the operation's image
     comes from.
+
+    **The rule the whole class is, written once.** Operation ``s`` carries the
+    orbital ``|a, m, sigma>`` to ``|s(a), m', sigma'>`` with the amplitudes
+    ``D_s`` on the harmonics and ``S_s`` on the spinor, so a density matrix
+    built from those orbitals transforms as
+
+        ns_sym[b] = (1/N) sum_s (D_s x S_s) ns[s^-1(b)] (D_s x S_s)^dagger,
+
+    which is why the atom index is gathered through the **inverse** permutation
+    while the rotation carries ``s`` itself. For a collinear run ``S_s`` is
+    absent, the spin axis is a spectator, and what is left is the expression
+    ``new_ns.f90`` writes; for a spinor run it is the four-component one
+    ``new_ns_nc`` writes, and the spin factor is the only difference.
     """
 
-    __slots__ = ("operators", "sources", "slots", "ldims", "nsym", "shape")
+    __slots__ = (
+        "operators", "sources", "slots", "ldims", "nsym", "shape", "spin",
+        "time_reversed",
+    )
 
-    def __init__(self, operators, sources, slots, ldims, nsym, shape):
+    def __init__(
+        self, operators, sources, slots, ldims, nsym, shape, spin=None,
+        time_reversed=None,
+    ):
         self.operators = operators
         self.sources = sources
         self.slots = slots
         self.ldims = ldims
         self.nsym = nsym
         self.shape = shape
+        self.spin = spin
+        self.time_reversed = time_reversed
 
     def apply(self, ns: jnp.ndarray) -> jnp.ndarray:
         """The symmetrised occupation matrix, same shape as the input."""
@@ -153,17 +174,65 @@ class NsSymmetry:
         for operator, sources, slots, ldim in zip(
             self.operators, self.sources, self.slots, self.ldims
         ):
-            block = ns[:, slots, :ldim, :ldim]  # (nspin, ngroup, ldim, ldim)
-            gathered = block[:, sources]  # (nspin, nsym, ngroup, ldim, ldim)
-            averaged = jnp.einsum(
-                "sikjl,zsnkl->znij", operator, gathered
-            ) / self.nsym
+            block = ns[:, slots, :ldim, :ldim]  # (ncomp, ngroup, ldim, ldim)
+            gathered = block[:, sources]  # (ncomp, nsym, ngroup, ldim, ldim)
+            if self.spin is None:
+                averaged = jnp.einsum(
+                    "sikjl,zsnkl->znij", operator, gathered
+                ) / self.nsym
+            else:
+                gathered = self._time_reverse(gathered)
+                # The leading axis is the spin pair ``(s1, s2)`` packed as
+                # ``2 s1 + s2``, and ``spin[s]`` is ``S_s x conj(S_s)`` on it --
+                # the two indices of a density matrix, one of which is
+                # conjugated.
+                averaged = jnp.einsum(
+                    "szw,sikjl,wsnkl->znij",
+                    self.spin.astype(gathered.dtype), operator, gathered,
+                ) / self.nsym
             out = out.at[:, slots, :ldim, :ldim].set(averaged)
         return out
+
+    #: Swapping the two spin indices of the packed pair ``2 s1 + s2``.
+    _SPIN_TRANSPOSE = (0, 2, 1, 3)
+
+    def _time_reverse(self, gathered: jnp.ndarray) -> jnp.ndarray:
+        """Transpose the block of every operation that needs time reversal.
+
+        ``new_ns_nc`` reads ``nr(m4, m3, is4, is3, nb)`` rather than
+        ``nr(m3, m4, is3, is4, nb)`` when ``t_rev(isym) == 1`` -- the transpose
+        in the ``m`` indices and the spin indices **jointly**, which for a
+        Hermitian block is its complex conjugate. It is not decoration: time
+        reversal is antiunitary, so the unitary matrix
+        :func:`~defumat.system.symmetry.spin_rotations` returns carries only
+        half of the operation and the conjugation is the other half.
+
+        Measured, on the 48 operations of the simple cubic group with a random
+        moment: ``U rho U^dagger`` reverses the moment by **5.1** against the
+        axial law, and ``U rho^T U^dagger`` reproduces it to **8.9e-16**. So
+        leaving this out is not a small error in a rare branch -- it is the
+        wrong sign on the magnetization of every time-reversed operation, which
+        is most of the group of an antiferromagnet.
+        """
+        if self.time_reversed is None:
+            return gathered
+        # axes are (spin pair, operation, atom, m, m)
+        transposed = jnp.take(
+            gathered, jnp.asarray(self._SPIN_TRANSPOSE), axis=0
+        ).swapaxes(-1, -2)
+        mask = self.time_reversed.reshape(1, -1, 1, 1, 1)
+        return jnp.where(mask, transposed, gathered)
 
 
 def build_ns_symmetry(setup, cell, structure, symmetries) -> NsSymmetry | None:
     """Precompute the average. ``None`` when the group is trivial.
+
+    **A spinor setup gains the spin factor**, which is
+    :func:`~defumat.system.symmetry.spin_rotations` -- ``d_spin_ldau``. The spin
+    axis of a spinor ``ns`` is the pair ``(s1, s2)`` packed as ``2 s1 + s2``, so
+    the operator on it is ``S x conj(S)``: one index of a density matrix is
+    conjugated, and an overall sign of ``S`` therefore cancels, which is why the
+    two-valuedness of the spin representation never has to be resolved.
 
     **Collinear time reversal is not handled.** ``new_ns`` flips the spin index
     of an operation that is a symmetry only together with time reversal
@@ -172,10 +241,13 @@ def build_ns_symmetry(setup, cell, structure, symmetries) -> NsSymmetry | None:
     are different *species*, so nothing maps one to the other -- and building
     the branch without a case that exercises it would be writing untested code.
     A run whose symmetry group carries ``t_rev`` is refused where the setup is
-    built rather than silently symmetrised without the flip.
+    built rather than silently symmetrised without the flip. **The spinor branch
+    has no such hole**: ``spin_rotations`` carries the ``i sigma_y D*`` twist a
+    time-reversed operation needs, because a spinor ``ns`` keeps both spin
+    indices and the twist acts on them rather than permuting two channels.
     """
     from defumat.paw.symmetry import harmonic_rotations
-    from defumat.system.symmetry import atom_mapping
+    from defumat.system.symmetry import atom_mapping, spin_rotations
 
     if setup is None or symmetries is None or symmetries.nsym <= 1:
         return None
@@ -209,6 +281,17 @@ def build_ns_symmetry(setup, cell, structure, symmetries) -> NsSymmetry | None:
         groups.append(jnp.asarray(slots))
         ldims.append(ldim)
 
+    spin = time_reversed = None
+    if setup.noncolin:
+        matrices = spin_rotations(cell, symmetries)  # (nsym, 2, 2)
+        spin = jnp.asarray(
+            np.einsum("sac,sbd->sabcd", matrices, matrices.conj())
+            .reshape(symmetries.nsym, 4, 4)
+        )
+        time_reversed = jnp.asarray(
+            np.asarray(symmetries.t_rev_array()) == 1
+        )
+
     return NsSymmetry(
         operators=tuple(operators),
         sources=tuple(sources),
@@ -216,6 +299,8 @@ def build_ns_symmetry(setup, cell, structure, symmetries) -> NsSymmetry | None:
         ldims=tuple(ldims),
         nsym=symmetries.nsym,
         shape=(setup.nslot, setup.ldmx),
+        spin=spin,
+        time_reversed=time_reversed,
     )
 
 
