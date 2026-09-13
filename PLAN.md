@@ -13531,6 +13531,31 @@ magnet, and it runs the other way from the intuition that symmetrising is an app
 So the tolerance on `ns` is 1e-5 deliberately: a tighter one would be asserting that the
 group average reproduce a numerical artefact.
 
+**Two of the seven assertions were wrong on correct code, and the way they were wrong
+is the sharpest result of the phase.** Both asked whether the symmetrised answer *matched*
+the free one, and the answer is that it does not and should not: the group average
+annihilates what symmetry forbids rather than reproducing it. Reading the arrays of the
+failures:
+
+- the `nosym` `ns` is **not** a fixed point of its own crystal's group average -- residual
+  **6.0e-7** -- because it carries symmetry-forbidden entries of order 1e-9 that the average
+  drives to **exactly zero** (1e-19 and below), while every symmetry-allowed entry survives
+  to **1.1e-16**;
+- `<S>` per site is `(0, 0, 0.2521571)` symmetrised against `(2.5e-6, 1.5e-6, 0.2521624)`
+  free -- the transverse components exactly zero on one side and not on the other.
+
+A third assertion went the same way once the first two were fixed: the symmetry-allowed
+**diagonal** is preserved to 1.1e-16, 4.0e-15 and 4.7e-15 on three of the five `d` orbitals
+and only to 6.5e-11 (majority) and 1.2e-9 (minority) on the other two -- which are a
+**degenerate pair**, split by that much in the free run and equalised *exactly* by the
+average.
+
+So the tests assert the **split** rather than a single tolerance: idempotence to 1e-12, the
+symmetry-allowed diagonal to 1e-8, the shell's moment unchanged to 1e-12, and the forbidden
+components at exactly zero. A single "agrees to 1e-8" fails at 6.0e-7 on an implementation
+that is right, which is how it was first written here. Seven tests, **all passing**, 26 s
+warm.
+
 **The 29x is not a speed measurement and is not quoted as one.** The wedge ran *second* in
 the same process, so it reuses compiled executables that the first run paid for; 8.7 s
 against 249.8 s is an upper bound on what a reduced k-set is worth here, not the value of
