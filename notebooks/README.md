@@ -53,6 +53,7 @@ instead, which means the physics is selected in the input file rather than at th
 | A collinear magnetic moment | `nspin = 2` | [07](07_spin_polarization.ipynb) |
 | Spin-orbit split bands | `noncolin`, `lspinorb` | [08](08_spin_orbit_coupling.ipynb) |
 | Magnetism as a vector, fields, constrained moments | `nspin = 4`, `B_field` | [11](11_noncollinear_magnetism_and_fields.ipynb) |
+| A magnetic texture stated one atom at a time, and whether it survived | `STARTING_MOMENTS`, `with_moments()` | [43](43_magnetic_textures.ipynb) |
 | A magnon `E(q)` without a supercell | `get_spiral_scan()` | [12](12_spin_spirals.ipynb) |
 | Which way a magnet wants to point | `get_anisotropy()` | [36](36_magnetic_anisotropy.ipynb) |
 | A spin wave, and whether the magnetic order survives it | `get_magnon_dispersion()` | [38](38_magnons.ipynb) |
@@ -165,6 +166,7 @@ want a number.
 | [`40_stm_images.ipynb`](40_stm_images.ipynb) | What a scanning-tunnelling microscope sees: half of graphite's surface atoms missing, a contrast that inverts with the bias, and a magnetic tip reading four moments one at a time |
 | [`41_vertical_transport.ipynb`](41_vertical_transport.ipynb) | Tunnelling *through* a two-dimensional material into the substrate beneath it: graphene, where the current map is the microscope's picture, and a bilayer, where the two layers' paths interfere and it is not |
 | [`42_all_electron_start.ipynb`](42_all_electron_start.ipynb) | A converged all-electron density brought here and used to start a run: where a pseudopotential density is allowed to differ from the real one, and where it is not |
+| [`43_magnetic_textures.ipynb`](43_magnetic_textures.ipynb) | A moment per atom rather than a moment per crystal: a 90 degree helix that survives self consistency, the symmetry a texture leaves behind, and the two numbers it takes to say it is still there |
 
 ## Conventions
 
@@ -262,10 +264,10 @@ workstation core, slowest last:
 | `03` | 10 | `18` | 29 | `19` | 47 | `41` | 164 |
 | `05` | 10 | `12` | 30 | `10` | 50 | `08` | 171 |
 | `04` | 12 | `21` | 30 | `29` | 59 | `27` | 178 |
-| `22` | 12 | `15` | 31 | `11` | 81 | `38` | 242 |
-| `42` | 13 | `24` | 31 | `14` | 89 | `35` | 276 |
-| `16` | 18 | `28` | 33 | `26` | 109 | `20` | 282 |
-| `00` | 22 | `31` | 34 | `33` | 115 |  |  |
+| `22` | 12 | `15` | 31 | `11` | 81 | `43` | 240 |
+| `42` | 13 | `24` | 31 | `14` | 89 | `38` | 242 |
+| `16` | 18 | `28` | 33 | `26` | 109 | `35` | 276 |
+| `00` | 22 | `31` | 34 | `33` | 115 | `20` | 282 |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two
 hand-built linear solves and a second self-consistent run that were demonstrating
