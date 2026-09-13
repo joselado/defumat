@@ -122,3 +122,50 @@ def test_ns_symmetrisation_is_a_projector(pseudo_dir):
 
     once = symmetry.apply(ns)
     assert np.allclose(once, symmetry.apply(once), atol=1e-12), "not idempotent"
+
+
+def test_the_becsum_operator_is_the_factor_and_not_its_outer_product(pseudo_dir):
+    """The pair operator is never built, and contracting twice is the same sum.
+
+    ``becsum`` is indexed by two projector channels, so the object the group
+    average applies is ``D_ik D_jl``. That was stored, as
+    ``(nsym, nh, nh, nh, nh)`` -- fine at the ``nh`` of a silicon dataset and
+    **489 MB** at the ``nh = 34`` of a fully-relativistic platinum one, against
+    444 kB for the ``(nsym, nh, nh)`` factor it is an outer product of. It cost
+    twice, because a compiled force or stress gradient closes over it and an
+    array reached from a closure is a *constant* embedded in the executable
+    (``PERFORMANCE.md``, "A gigabyte of constants").
+
+    This asserts both halves: that what is stored is the factor, and that
+    applying it twice reproduces the contraction with the product it replaced,
+    which is the algebra the six call sites rest on.
+    """
+    calculation = _calculation(
+        pseudo_dir, ecutwfc=12.0, ecutrho=96.0, extra="",
+        name="Si", mass=28.086, pseudo="Si.pz-n-kjpaw_psl.0.1.UPF", cards="",
+    )
+    symmetry = calculation._becsum_symmetry
+    assert symmetry is not None
+
+    operator = next(o for o in symmetry.operators if o is not None)
+    assert operator.ndim == 3, (
+        "the stored operator must be the (nsym, nh, nh) factor: storing its "
+        "outer product is 489 MB on a relativistic platinum dataset"
+    )
+    assert operator.shape[0] == symmetry.nsym
+
+    rng = np.random.default_rng(1)
+    natoms = np.asarray(symmetry.mapping[0]).shape[1]
+    nh = operator.shape[1]
+    becsum = tuple(
+        None if o is None else _symmetric(rng, (1, natoms, nh, nh))
+        for o in symmetry.operators
+    )
+    got = symmetry.apply(becsum)
+
+    # The expression this replaced, written out with the product materialised.
+    pair = np.einsum("sik,sjl->sijkl", np.asarray(operator), np.asarray(operator))
+    values = np.asarray(becsum[0])
+    gathered = values[:, np.asarray(symmetry.mapping[0])]
+    want = np.einsum("sijkl,zsnkl->znij", pair, gathered) / symmetry.nsym
+    assert np.allclose(np.asarray(got[0]), want, rtol=0, atol=1e-13)

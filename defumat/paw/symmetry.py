@@ -91,13 +91,22 @@ def _spread_directions(n: int) -> np.ndarray:
 class BecsumSymmetry:
     """The group average, precomputed as one tensor per species.
 
-    ``operator[t]`` is ``(nsym, nh, nh, nh, nh)`` -- for each operation, the
-    matrix taking a source atom's ``becsum`` to its contribution to the image's.
-    Building it once turns the symmetrisation into a single contraction per
-    iteration, which is what keeps it inside ``jit`` and off the host.
+    ``operators[t]`` is ``(nsym, nh, nh)`` -- for each operation, the matrix
+    ``D`` that rotates one projector channel into another. The object the
+    symmetrisation actually applies is the **pair** operator
+    ``D_ik D_jl``, because ``becsum`` is indexed by two channels, and it is
+    never formed: every call site contracts ``D`` twice instead, once on each
+    channel index.
 
-    ``nh`` is a few for every element that exists, so the tensor is small; the
-    number of operations, not the size, is what makes the naive loop expensive.
+    **That is not a micro-optimisation, and the docstring it replaces was wrong
+    in a way that only a heavy element shows.** It read "``nh`` is a few for
+    every element that exists, so the tensor is small", and the pair operator
+    was built and stored. ``nh`` is 34 for a fully-relativistic platinum
+    dataset, where ``(nsym, nh, nh, nh, nh)`` at ``nsym = 48`` is **489 MB** --
+    against **444 kB** for the factor it is an outer product of. It cost twice
+    over: once on the host at setup, and again inside every compiled kernel
+    that closed over it, where it was an embedded *constant* and therefore part
+    of the executable (`OPEN.md` Part I item 2).
     """
 
     __slots__ = ("operators", "mapping", "species_atoms", "nsym", "rotations")
@@ -134,7 +143,9 @@ class BecsumSymmetry:
             gathered = values[:, sources]  # (nspin, nsym, nat_t, nh, nh)
             if self.rotations is None:
                 out.append(
-                    jnp.einsum("sijkl,zsnkl->znij", operator, gathered) / self.nsym
+                    jnp.einsum(
+                        "sik,sjl,zsnkl->znij", operator, operator, gathered
+                    ) / self.nsym
                 )
                 continue
             # ``nspin_mag = 4``: the charge component is a spectator and the
@@ -143,9 +154,12 @@ class BecsumSymmetry:
             # uses (``paw_symmetry.f90``'s ``s(kpol,is,invs(isym)) * segno``).
             # Doing them as three scalars is a different symmetry, not a
             # coarser one.
-            charge = jnp.einsum("sijkl,snkl->nij", operator, gathered[0])
+            charge = jnp.einsum(
+                "sik,sjl,snkl->nij", operator, operator, gathered[0]
+            )
             magnetization = jnp.einsum(
-                "sijkl,scd,dsnkl->cnij", operator, self.rotations, gathered[1:]
+                "sik,sjl,scd,dsnkl->cnij",
+                operator, operator, self.rotations, gathered[1:],
             )
             out.append(
                 jnp.concatenate([charge[None], magnetization], axis=0) / self.nsym
@@ -186,7 +200,8 @@ class BecsumSymmetry:
             gathered = values[:, :, sources]  # (3, nspin, nsym, nat_t, nh, nh)
             out.append(
                 jnp.einsum(
-                    "sijkl,scd,dzsnkl->cznij", operator, rotations, gathered
+                    "sik,sjl,scd,dzsnkl->cznij",
+                    operator, operator, rotations, gathered,
                 ) / self.nsym
             )
         return tuple(out)
@@ -221,8 +236,8 @@ class BecsumSymmetry:
             gathered = values[:, :, :, sources]  # (3, 3, nspin, nsym, nat_t, nh, nh)
             out.append(
                 jnp.einsum(
-                    "sijkl,sac,sbd,cdzsnkl->abznij",
-                    operator, rotations, rotations, gathered
+                    "sik,sjl,sac,sbd,cdzsnkl->abznij",
+                    operator, operator, rotations, rotations, gathered,
                 ) / self.nsym
             )
         return tuple(out)
@@ -282,7 +297,8 @@ class BecsumSymmetry:
             ])  # (nsym, nat, 3, nspin, nat_t, nh, nh)
             out.append(
                 jnp.einsum(
-                    "sijkl,scd,sadznkl->acznij", operator, rotations, gathered
+                    "sik,sjl,scd,sadznkl->acznij",
+                    operator, operator, rotations, gathered,
                 ) / self.nsym
             )
         return tuple(out)
@@ -321,7 +337,7 @@ def build_becsum_symmetry(
                 if nb_i != nb_k:
                     continue
                 single[:, i, k] = rotations[l_i][:, lm_i - l_i**2, lm_k - l_k**2]
-        operators.append(jnp.asarray(np.einsum("sik,sjl->sijkl", single, single)))
+        operators.append(jnp.asarray(single))
 
         # Which of this species' atoms is sent *onto* each of them, as a
         # position in the species' own atom list -- the inverse of ``irt``.

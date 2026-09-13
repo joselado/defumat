@@ -698,6 +698,61 @@ been recorded here as fact — the persistent kernel cache (`DEFUMAT_CACHE_DIR=o
 hangs too) and a dispatch pattern in `symmetry_residual` (removing every op
 between the kernel and the host did not stop it).
 
+## A gigabyte of constants in the force and stress gradients (2026-09-13)
+
+**The compiled gradients were carrying their own data.** Both are a `jit` of a
+function that closes over its `Calculation`, so every array reachable from it is
+a *constant* of the jaxpr and is embedded in the executable. On a one-atom
+fully-relativistic platinum cell (`nh = 34`):
+
+| gradient | constants before | after |
+|---|---|---|
+| stress, `jit(grad(...))` | **1062.4 MB** in 94 entries | **10.1 MB** in 78 |
+| force, `jit(grad(...))` | **694.3 MB** in 45 entries | **10.0 MB** in 26 |
+
+Three arrays were almost all of it, and they needed two different fixes.
+
+**1. An outer product that never had to exist — 489 MB.** `BecsumSymmetry` stored
+`operators[t]` as `(nsym, nh, nh, nh, nh)`, built as
+`einsum("sik,sjl->sijkl", single, single)` from a `(nsym, nh, nh)` factor. Its
+docstring justified this: *"`nh` is a few for every element that exists, so the
+tensor is small."* `nh` is **34** for a relativistic platinum dataset, where that
+tensor is **489 MB** against **444 kB** for the factor. It is now not built at
+all: the six contractions that used it take `single` twice instead, once on each
+channel index of `becsum`. That is fewer flops as well as less memory, and it
+removes the array from the **host** working set at setup, not only from the
+executable.
+
+**2. `PawSpecies.density_ae`/`density_ps` (281.6 MB each) and
+`AugmentationCharge.qgm` (120.9 MB) are now arguments**, not closure captures
+(`defumat/forces/energy.py`'s `HOISTED_FIELDS`). Both are `equinox` modules and
+therefore pytrees, so they cross the boundary as ordinary arguments; `None` stays
+`None` so a norm-conserving run keeps a stable pytree structure and does not
+retrace.
+
+**What it is worth, end to end**, on `test_spin_orbit_total_energy[spinorbit-paw.in]`:
+
+| | before | after |
+|---|---|---|
+| cache this test writes | 606 MB, **one 602.8 MB entry** | **4.4 MB**, largest 2.1 MB |
+| peak RSS, cache warm | 16,383 M | **6,232 M** |
+| peak RSS, cache off | 10,111 M | 6,584 M |
+| wall | 37 s | **27 s** |
+
+**62% of the peak and 25% of the time**, and the cache-state bimodality that made
+this test's memory unpredictable goes with it: warm and cold now differ by 6%
+where they differed by 62%. The stress agrees to **12 significant figures**
+(`8.932269196475903e-4` against `8.932269196477927e-4`) — the residual is the
+different contraction order, not a different quantity. Gate: 1945 passed,
+176 skipped, 0 failures, 9m54s.
+
+**The lesson is the one `OPEN.md` Part I item 2 had to learn twice.** That entry
+found the constants, sized them at 590 MB, and dismissed them as "under 6% of an
+11 GB peak". The dismissal counted *one copy of the array*. What a constant
+actually costs is its share of an executable that the persistent cache then
+reloads at roughly ten times its serialized size, on every process that has run
+the code before.
+
 ## What the eight-atom cell showed
 
 Two-atom cells are small enough that fixed overheads dominate. Going to eight

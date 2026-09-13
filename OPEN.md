@@ -113,7 +113,7 @@ python3 -m pytest tests/regression/test_spinorbit.py \
 
 ---
 
-## 2. `test_spinorbit.py` peaks at 11,088 MB against a 12 GB cap **[measured 2026-09-13 -- the peak is not a property of the code]**
+## 2. `test_spinorbit.py` peaks at 11,088 MB against a 12 GB cap **[closed 2026-09-13 at 6,708 MB -- but the diagnosis took two wrong turns first]**
 
 92% of the cap on a 30 GB machine, so it is the next out-of-memory kill whether or
 not it has happened yet. The watchdog named
@@ -197,10 +197,44 @@ whatever the cache happened to hold that day.
   warm gives 16,386 and 16,405. A5 is innocent, and so is the affinity mask, which the
   same artefact had made look like the difference between passing and being killed.
 
-**What is left, and it now outranks the rest of the audit.** `PawSpecies.density_ae` and
-`density_ps` should reach `_paw_onecenter` as **arguments** rather than as constants closed
-over by the enclosing `jit(<lambda>)`. That is what puts 603 MB into one executable, and
-603 MB is what 6.3 GB of peak is being paid for.
+### The fix, and it was two things rather than one
+
+The 602.8 MB executable is the **stress** gradient -- `run_scf` -> `compute_stress` ->
+`autodiff_stress` -- not `_paw_onecenter`, whose own cache entry is 0.1 MB. Its constants
+were **1062.4 MB in 94 entries**, and the force gradient's were 694.3 MB in 45. Three
+arrays were almost all of both, and they needed different fixes:
+
+- **`BecsumSymmetry.operators`, 489.4 MB, `(nsym, nh, nh, nh, nh)`** -- an outer product
+  `einsum("sik,sjl->sijkl", single, single)` of a **444 kB** factor, kept because its
+  docstring said *"`nh` is a few for every element that exists, so the tensor is small"*.
+  `nh` is 34 here. It is no longer built at all; the six contractions that used it apply
+  the factor twice, once per channel index of `becsum`. This also takes 489 MB off the
+  **host** at setup, which no amount of argument-passing would have done.
+- **`PawSpecies.density_ae`/`density_ps` (281.6 MB each) and `AugmentationCharge.qgm`
+  (120.9 MB)** are now **arguments** rather than closure captures
+  (`defumat/forces/energy.py`'s `HOISTED_FIELDS`). Both are `equinox` modules, so they
+  cross as ordinary pytrees.
+
+| | before | after |
+|---|---|---|
+| stress gradient constants | 1062.4 MB | **10.1 MB** |
+| force gradient constants | 694.3 MB | **10.0 MB** |
+| cache this one test writes | 606 MB, one 602.8 MB entry | **4.4 MB**, largest 2.1 MB |
+| the test's peak, cache warm | 16,383 M | **6,232 M** |
+| the test's peak, cache off | 10,111 M | 6,584 M |
+| the **whole file** (27 tests) | 16,378 M, 5m15s -- killed at a 12 G cap | **6,708 M, 4m43s** |
+
+**So the entry closes at 6,708 MB against the 11,088 MB it opened at**, 55% under the cap
+rather than 92% of it, and the cache-state bimodality goes with it -- warm and cold now
+differ by 6% where they differed by 62%. The stress agrees to **12 significant figures**;
+the residual is the different contraction order. Gate: 1945 passed, 176 skipped, 0
+failures, 9m54s.
+
+**What is still open** is `MEMORY-AUDIT.md` A12, which asks for `density_ae`/`density_ps`
+to be *factored* rather than merely passed: they are themselves a rank-1 outer product, 553
+MB per Ni species, and passing an array as an argument does not make it smaller. And the
+shape is worth looking for elsewhere -- both arrays removed here were an `einsum` writing a
+product of two indices the consumer immediately contracts away.
 
 ---
 

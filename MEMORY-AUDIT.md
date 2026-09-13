@@ -804,6 +804,25 @@ makes XLA's own cross-boundary rematerialisation less likely rather than more.
 
 ### A12. `PawSpecies.density_ae`/`density_ps` materialise a rank-1 outer product: 553 MB per PAW species that `sizing.py` reports as zero
 
+> **Half of this is fixed, 2026-09-13, and it is not the half the entry is about.** These
+> two arrays were not only large, they were **constants** of every compiled force and
+> stress gradient -- the gradient is a `jit` of a function closing over its `Calculation`,
+> so everything reachable from it is embedded in the executable. They are now
+> **arguments** (`defumat/forces/energy.py`'s `HOISTED_FIELDS`), which took the stress
+> gradient's constants from 1062.4 MB to 10.1 MB and the force gradient's from 694.3 MB to
+> 10.0 MB, and the peak of the test that carries them from 16,383 M to 6,232 M. **The
+> factoring this entry asks for is still open** and is still worth 553 MB per Ni species:
+> passing an array as an argument does not make it smaller, it only stops it being copied
+> into every executable. `PERFORMANCE.md`, "A gigabyte of constants", has the measurement.
+>
+> The same pass found and removed a **different** outer product that was not in this audit
+> at all: `BecsumSymmetry.operators`, `(nsym, nh, nh, nh, nh)` at **489 MB**, built as
+> `einsum("sik,sjl->sijkl", single, single)` from a 444 kB factor and justified by a
+> docstring reading *"`nh` is a few for every element that exists, so the tensor is
+> small"*. It is no longer built: the six contractions that used it apply the factor twice
+> instead. **Worth looking for the same shape elsewhere** -- both of these were an
+> `einsum` that writes a product of two indices the consumer immediately contracts away.
+
 **Site.** `defumat/paw/onecenter.py:604` and `:606` (with the `+=` at `:616`); declared `:73-80`:
 
 ```python

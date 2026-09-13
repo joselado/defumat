@@ -25,10 +25,20 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from defumat.forces.energy import FrozenState
+from defumat.forces.energy import FrozenState, hoisted, with_hoisted
 from defumat.stress.energy import strained_energy, strained_energy_terms
 
 __all__ = ["autodiff_stress", "autodiff_stress_terms"]
+
+
+def _hoisted_note():
+    """The big arrays this module's gradients take as **arguments**.
+
+    See :data:`~defumat.forces.energy.HOISTED_FIELDS`, which carries the
+    measurement: capturing them instead put 1062 MB of constants into the
+    compiled stress gradient, of which the largest was an outer product that
+    no longer exists at all (:class:`~defumat.paw.symmetry.BecsumSymmetry`).
+    """
 
 
 def autodiff_stress(calculation, state: FrozenState) -> jnp.ndarray:
@@ -37,7 +47,9 @@ def autodiff_stress(calculation, state: FrozenState) -> jnp.ndarray:
     ``calculation`` fixes everything the cell does not; the derivative is taken
     at *its* cell, i.e. at ``epsilon = 0``.
     """
-    gradient = _energy_gradient(calculation)(_zero(), state)
+    gradient = _energy_gradient(calculation)(
+        _zero(), state, hoisted(calculation)
+    )
     return -gradient / calculation.system.cell.volume
 
 
@@ -48,7 +60,9 @@ def autodiff_stress_terms(calculation, state: FrozenState) -> dict:
     :func:`~defumat.stress.energy.strained_energy_terms`, each already divided
     by the volume and negated, so that they sum to :func:`autodiff_stress`.
     """
-    gradients = _term_gradients(calculation)(_zero(), state)
+    gradients = _term_gradients(calculation)(
+        _zero(), state, hoisted(calculation)
+    )
     volume = calculation.system.cell.volume
     return {name: -value / volume for name, value in gradients.items()}
 
@@ -71,9 +85,11 @@ def _energy_gradient(calculation):
     """
     cached = calculation.__dict__.get("_strain_gradient")
     if cached is None or cached[0] is not calculation:
-        cached = (calculation, jax.jit(jax.grad(
-            lambda eps, state: strained_energy(calculation, eps, state, spinors=True)
-        )))
+        def energy(eps, state, big):
+            here = with_hoisted(calculation, big)
+            return strained_energy(here, eps, state, spinors=True)
+
+        cached = (calculation, jax.jit(jax.grad(energy)))
         calculation._strain_gradient = cached
     return cached[1]
 
@@ -85,8 +101,10 @@ def _term_gradients(calculation):
     """
     cached = calculation.__dict__.get("_strain_term_gradients")
     if cached is None or cached[0] is not calculation:
-        cached = (calculation, jax.jit(jax.jacfwd(
-            lambda eps, state: strained_energy_terms(calculation, eps, state, spinors=True)
-        )))
+        def terms(eps, state, big):
+            here = with_hoisted(calculation, big)
+            return strained_energy_terms(here, eps, state, spinors=True)
+
+        cached = (calculation, jax.jit(jax.jacfwd(terms)))
         calculation._strain_term_gradients = cached
     return cached[1]

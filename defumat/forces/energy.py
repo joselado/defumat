@@ -66,6 +66,8 @@ converged geometry must reproduce the SCF total energy to round-off.
 
 from __future__ import annotations
 
+import copy
+
 from functools import partial
 
 import equinox as eqx
@@ -78,6 +80,55 @@ from defumat.scf.potential import total_charge
 __all__ = ["FrozenState", "frozen_energy", "energy_at", "reject_spinors", "reject_potential_only",
            "reject_magnetic_field", "reject_spinor_spiral",
            "state_from_result"]
+
+
+#: The fields of a :class:`~defumat.scf.driver.Calculation` that a compiled
+#: gradient takes as **arguments** rather than closing over.
+#:
+#: **Why, and it is worth a gigabyte.** The force and stress gradients are a
+#: ``jit`` of a function that captures its ``Calculation``, so every array
+#: reachable from it is a *constant* of the jaxpr and is baked into the compiled
+#: executable. On a one-atom fully-relativistic platinum cell (``nh = 34``) that
+#: is **694 MB** of constants in the force gradient and **1062 MB** in the
+#: stress one, almost all of it three arrays:
+#:
+#:     281.6 MB  PawSpecies.density_ae      f64(34, 34, 25, 1277)
+#:     281.6 MB  PawSpecies.density_ps      f64(34, 34, 25, 1277)
+#:     120.9 MB  AugmentationCharge.qgm     c128(34, 34, 6855)
+#:
+#: **What that costs is the compilation cache, not the run.** The stress
+#: gradient serialised to 603 MB on disk, and *loading* it back cost 6.3 GB of
+#: resident memory against compiling it fresh -- 16.4 GB of peak against 10.1 GB
+#: on the test that carries it. Constants are paid for once per process, out of
+#: the persistent cache, on any machine that has run this before
+#: (``OPEN.md`` Part I item 2).
+#:
+#: Both are ``equinox`` modules and therefore pytrees, so they cross the
+#: boundary as ordinary arguments. ``None`` is kept as ``None`` so that a
+#: norm-conserving run has a stable pytree structure and does not retrace.
+HOISTED_FIELDS = ("paw", "augmentation")
+
+
+def hoisted(calculation) -> tuple:
+    """The large pytree fields of ``calculation``, to pass as arguments."""
+    return tuple(getattr(calculation, name, None) for name in HOISTED_FIELDS)
+
+
+def with_hoisted(calculation, values: tuple):
+    """``calculation`` carrying ``values`` in place of its own large fields.
+
+    ``copy.copy`` is what every ``Calculation.at_*`` method uses; this is the
+    same move, for the fields that have to arrive as arguments. Returns the
+    calculation unchanged when there is nothing to substitute, so a run with no
+    PAW and no augmentation pays nothing.
+    """
+    if all(value is None for value in values):
+        return calculation
+    replaced = copy.copy(calculation)
+    for name, value in zip(HOISTED_FIELDS, values):
+        if value is not None:
+            setattr(replaced, name, value)
+    return replaced
 
 
 class FrozenState(eqx.Module):

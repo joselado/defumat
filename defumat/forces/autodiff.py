@@ -19,7 +19,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from defumat.forces.energy import FrozenState, frozen_energy
+from defumat.forces.energy import FrozenState, frozen_energy, hoisted, with_hoisted
 
 __all__ = ["autodiff_forces"]
 
@@ -31,7 +31,7 @@ def autodiff_forces(calculation, state: FrozenState) -> jnp.ndarray:
     taken at *its* positions.
     """
     positions = calculation.system.structure.positions
-    gradient = _energy_gradient(calculation)(positions, state)
+    gradient = _energy_gradient(calculation)(positions, state, hoisted(calculation))
     return -gradient
 
 
@@ -46,8 +46,10 @@ def _energy_gradient(calculation):
     """
     cached = getattr(calculation, "_energy_gradient", None)
     if cached is None:
-        cached = jax.jit(jax.grad(
-            lambda tau, state: frozen_energy(calculation, tau, state, spinors=True)
-        ))
+        def energy(tau, state, big):
+            here = with_hoisted(calculation, big)
+            return frozen_energy(here, tau, state, spinors=True)
+
+        cached = jax.jit(jax.grad(energy))
         calculation._energy_gradient = cached
     return cached
