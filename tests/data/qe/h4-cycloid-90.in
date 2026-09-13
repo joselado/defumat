@@ -3,6 +3,18 @@
 ! collinear arrangement with a sign. It is stated with a STARTING_MOMENTS card,
 ! which is the only way one species can carry four different directions.
 !
+! **The name is wrong and the file keeps it: this texture is a HELIX, not a
+! cycloid.** The propagation is along `z` (the four atoms are stacked along it)
+! and every moment lies in the `xy` plane, so `m` is perpendicular to `q` at
+! every site -- a proper screw. A cycloid is the other one: its moments lie in
+! the plane that *contains* `q`, so each has a component along the propagation
+! direction. The distinction is load-bearing here rather than pedantic, because
+! `CLAUDE.md`'s trap list rests on it -- a chirality projected on `q` is
+! identically zero for a cycloid and *maximal* for a helix, so a reader who took
+! this file as the cycloid case would get the opposite of the null they wanted.
+! The filename is referenced by tests, `PLAN.md` and `MAGNETISM-NEXT.md` and is
+! left alone; what is corrected is the claim.
+!
 ! **Symmetry is left ON, which is the point of the file.** The simple-tetragonal
 ! lattice gives 16 operations for a ferromagnet along z and the magnetic filter
 ! cuts them to 4 for this texture. Whether that filter is enough was an open

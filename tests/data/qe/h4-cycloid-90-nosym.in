@@ -1,6 +1,18 @@
 ! `h4-cycloid-90.in` with `nosym`: the free half of the pair.
 !
-! The same four-hydrogen 90-degree cycloid, run with no symmetry at all, so the
+! **The name is wrong and the file keeps it: this texture is a HELIX, not a
+! cycloid.** The propagation is along `z` (the four atoms are stacked along it)
+! and every moment lies in the `xy` plane, so `m` is perpendicular to `q` at
+! every site -- a proper screw. A cycloid is the other one: its moments lie in
+! the plane that *contains* `q`, so each has a component along the propagation
+! direction. The distinction is load-bearing here rather than pedantic, because
+! `CLAUDE.md`'s trap list rests on it -- a chirality projected on `q` is
+! identically zero for a cycloid and *maximal* for a helix, so a reader who took
+! this file as the cycloid case would get the opposite of the null they wanted.
+! The filename is referenced by tests, `PLAN.md` and `MAGNETISM-NEXT.md` and is
+! left alone; what is corrected is the claim.
+!
+! The same four-hydrogen 90-degree helix, run with no symmetry at all, so the
 ! density is whatever the wedge sum gives and nothing is averaged. It is the
 ! control the symmetrised run is measured against: the group the magnetic filter
 ! leaves (4 operations out of 16) is either exactly the texture's own, in which
@@ -9,8 +21,8 @@
 !
 ! **The discriminator is a pair, and the singular values alone are not it.** Two
 ! nonzero singular values of the (nat, 3) site-moment matrix mean the moments
-! still span a plane, which is what a cycloid is -- but that ratio is scale free,
-! so it reads as a perfect cycloid on a cell whose moments have gone to nothing.
+! still span a plane, which is what a helix is -- but that ratio is scale free,
+! so it reads as a perfect helix on a cell whose moments have gone to nothing.
 ! The same chain at 3 bohr spacing instead of 5 gives singular values
 ! [3.24e-4, 3.23e-4, 1.4e-23]: planar to 1e-5 and collapsed by a factor of 450
 ! from iteration 1. What has to be asserted is the pair -- sigma_2/sigma_1 for

@@ -1,41 +1,50 @@
 # defumat
 
-A plane-wave density-functional theory code written in Python and JAX, in which
-the derivatives are taken of the energy itself rather than derived by hand.
+A plane-wave density-functional theory package written in Python and JAX, built
+around **automatic differentiation**: the whole compute path is differentiable,
+so a quantity that is usually a second implementation is here a derivative of
+the first. The forces, the stress, the phonons, the dielectric response and the
+third derivatives above them are obtained by differentiating the total energy,
+and each therefore agrees with the energy it came from by construction rather
+than by transcription.
 
-It is inspired by two established codes and benchmarked against both. **Quantum
-ESPRESSO** is where the plane-wave machinery comes from, closely enough that
+The **formalism is [Quantum ESPRESSO](https://www.quantum-espresso.org)'s**.
+That is where the plane-wave machinery comes from — the basis, the
+pseudopotentials, the SCF, the conventions and the units — closely enough that
 defumat reads its input files: you give it the same file you would give `pw.x`
-and it runs the calculation itself, with no Fortran underneath. **Elk**, the
-all-electron LAPW code, is where a second family of quantities comes from —
-spin spirals without a supercell, magnetic fields inside a single atom's sphere,
-effective masses, the Fermi-surface nesting function, second-harmonic
-generation, X-ray and magnetic structure factors — none of which `pw.x`
-computes at all.
-
-Because the whole compute path is differentiable, a quantity that is usually a
-second implementation is here a derivative of the first. The forces, the stress,
-the phonons, the dielectric response and the third derivatives above them are
-obtained by differentiating the total energy, so each agrees with the energy it
-came from by construction rather than by transcription.
+and it runs the calculation itself, with no Fortran underneath.
 
 ```
 total energy   QE  -63.36038036 Ry
           defumat  -63.36038036 Ry
 ```
 
-That is an eight-atom silicon cell, agreeing to 3.5e-9 Ry. Both codes are
-references and not only influences: the agreement is checked automatically, term
-by term, against Quantum ESPRESSO's own reference outputs for around a hundred
-cases, and against Elk for the quantities Elk computes and `pw.x` does not.
+That is an eight-atom silicon cell, agreeing to 3.5e-9 Ry. The agreement is
+checked automatically, term by term, against Quantum ESPRESSO's own reference
+outputs for around a hundred cases.
 
-On top of the two there are things neither of them computes — relaxing a spin
-spiral's wavevector down $\mathrm{d}E/\mathrm{d}\mathbf{q}$, Chern numbers and
-$\mathbb{Z}_2$ invariants, the strain response and the deformation potentials,
-elastic and electrostriction constants, the magnetic torque. The table below
-ticks off, quantity by quantity, what Quantum ESPRESSO and Elk compute as well;
-a row blank in both columns is one neither has, and is pinned by an identity or
-an independent second route rather than by a reference output.
+On that formalism it carries features taken from, and checked against, two
+other codes:
+
+- **[Elk](https://elk.sourceforge.io)**, the all-electron LAPW code — spin
+  spirals without a supercell, magnetic fields inside a single atom's sphere,
+  effective masses, the Fermi-surface nesting function, second-harmonic
+  generation, X-ray and magnetic structure factors. None of these is something
+  `pw.x` computes at all.
+- **[pyqula](https://github.com/joselado/pyqula)**, the quantum lattice and
+  tight-binding library — the **residual solver**, which finds magnetic
+  solutions no mixer reaches by treating self-consistency as a root-finding
+  problem rather than a fixed-point iteration; and the model Hamiltonians and
+  overlap conventions the **topological invariants** here are pinned against,
+  Chern numbers and $\mathbb{Z}_2$ alike.
+
+And beyond all three there are quantities none of them computes: relaxing a spin
+spiral's wavevector down $\mathrm{d}E/\mathrm{d}\mathbf{q}$, the strain
+response and the deformation potentials, elastic and electrostriction constants,
+the magnetic torque, vertical tunnelling transport. The table below ticks off,
+quantity by quantity, what Quantum ESPRESSO and Elk compute as well; a row blank
+in both columns is one neither has, and is pinned by an identity or an
+independent second route rather than by a reference output.
 
 ## Capabilities at a glance
 
