@@ -13769,6 +13769,159 @@ wedge each from cold -- and this is not it.
   sublattice here is a different species.
 * The notebook, and the QE timing.
 
+### P83 -- The first assembly to ask P81's spinor solve for its opt-in, and the three collinear places asking found. ✅ DONE (nspin_mag = 1; the textured case is refused, measured).
+
+`defumat/response/efield.py`, `response/born.py`, `forces/energy.py`. P81's own
+outstanding list, second item: "the dielectric tensor, with the identity one level up".
+P81 validated the **solve** for `noncolin = .true.` and changed no user-facing quantity,
+because every assembly above it called `require_a_sternheimer_regime` without the new flag.
+This is the first one to pass it.
+
+**One word of it was the opt-in. The rest was what the opt-in reached**, and none of the
+three is in the solve:
+
+* **`response/born.py`'s own density builder.** A Born charge differentiates the energy
+  through *moving* atoms, so `_raw_mixed_state` carries a **local copy** of the SCF's raw,
+  unsymmetrised density builder -- and that copy was the collinear `sum_band`. A
+  `2 npwx`-long spinor does not give a wrong number there, it fails to broadcast,
+  `complex128[700]` against `complex128[350]`, which is how the site was found. It routes
+  to `spinor_sum_band` now, the same split `Calculation.density` and
+  `SternheimerSolver.density_at` make.
+* **A refusal that was about the metric and not about the spinor.** `frozen_energy` refused
+  the **matrix** orthonormality multipliers for any `noncolin` run, on the ground that
+  `_constraint_energy` "contracts the scalar `qq`, where a spinor's metric is `qq_so`".
+  Half of that is right and the half that matters is not: the Gram matrix it builds is
+  `<psi_m|psi_n>` over the whole `2 npwx`-long coefficient vector, which **is** a spinor's
+  inner product -- summing both components is what a spinor overlap is. Only the
+  *augmentation* half contracts `qq`, and a norm-conserving dataset never reaches it. The
+  refusal was blocking exactly the case that works, and it is narrowed to `is_ultrasoft`,
+  where it is true.
+* **The `spinors` opt-in**, which `born_effective_charges` now asks for by name, as
+  `reject_spinors`'s own rule requires: the functional does spinors when asked, and every
+  consumer has to ask.
+
+**Three numbers for `nspin_mag = 1`** (`tests/regression/test_spinor_dielectric.py`).
+
+**1. The identity: a spinor with no magnetization is the scalar run.** `si-epsilon.in` with
+one line added rather than a second committed input, so the two sides cannot drift. Four
+bands of two electrons against eight of one, so the unconditional `degspin` every `KPoints`
+constructor applies reaches the k-point weights, the occupied-band count and the density,
+and a factor of two anywhere along it is 100 per cent. At `conv_thr = 1e-10`: **5.0e-14** in
+`epsilon`, **3.0e-15** in `Z*`, 1.8e-15 Ry in the total energy. `Z*` is the sharper half and
+the only quantity that goes through `born_effective_charges` at all -- silicon's is zero by
+symmetry, so what agrees is a **residue** of about 4 against an electronic part near 4.076.
+
+**2. The wedge against the closed grid, as a spinor.** `si-epsilon-unshifted` is 8 k-points
+reduced from an unshifted 4x4x4 grid with 48 operations; `si-epsilon-unshifted-nosym` is the
+whole 64 with no symmetry at all. They share nothing but the solve. **7.4e-13**, against the
+scalar pair's own 4.1e-13 on the same cell.
+
+**3. `ph.x`'s own number.** 13.806645970 against 13.806689470, which is **4.3e-5** -- the
+scalar route's own figure to the digit, because it is the same floor: QE interpolates every
+radial form factor from a `dq = 0.01` table where this code integrates it directly.
+
+**The identity is asserted at `conv_thr = 1e-10` and not tighter, and that is a measurement
+rather than a convenience.** The gap reads 2.1e-14, 5.0e-14, **1.35e-7** and 9.8e-9 at
+`conv_thr` = 1e-8, 1e-10, 1e-12 and 1e-14: not a trend, and not a route difference. Three
+controls say so, which is what stops "the two ground states differ a little" from being an
+explanation accepted because it fits. With four empty bands the two routes agree at 1e-12 to
+**every digit printed** (13.806634668362 on both sides); the **scalar** run alone moves by
+**2.7e-7** under a change of `k_batch`, which is a summation order and not physics; and
+`epsilon` itself wanders by **3e-5** between 1e-10 and 1e-14 without converging
+monotonically, which is the same order as this cell's whole disagreement with `ph.x`. All
+three are properties of the scalar code and predate this phase; they are recorded because
+they are the floor the identity is read against.
+
+**The textured case is refused, and the refusal is the finding of the phase.**
+
+The one committed cell that is at once an insulator, textured and norm-conserving is
+`i-atom-soc.in` -- an iodine atom in a 12-bohr box, `I.rel-pbe-nc-dojo.UPF`,
+`lspinorb = .true.`, `occupations = 'fixed'` with 7 electrons in 8 spinor bands, a 0.164 eV
+gap, moment 1.00 mu_B, `nosym`. `nspin_mag = 4`, and `dvan_so` is live.
+
+**Two internal checks pass, and they are not weak ones.**
+
+| | eps_xx | eps_yy | eps_zz |
+|---|---|---|---|
+| m along z | 1.356572109 | 1.356572109 | **1.574482417** |
+| m along x | **1.574482417** | 1.356572109 | 1.356572109 |
+
+The tensor is **uniaxial along the moment** with the off-diagonals at 6e-15, and **nothing
+imposes it**: `use_symmetry` is `False` and `_symmetry_maps` is `None`, so
+`symmetrize_directional` returns its argument and `_assemble` skips `symmatrix` -- the two
+equal entries are a measurement, exactly as "the tensor comes out cubic" is for silicon.
+Turning the moment to `x` moves the distinct axis with it and returns **the same two numbers
+to all nine digits**, which is what makes the equality a statement about spin-orbit coupling
+rather than about the box: without `lspinorb` the spin and the orbital hole decouple, and the
+anisotropy would stay wherever the eigensolver left it.
+
+**That control had to be repaired before it meant anything, and the repair is the trap.**
+The first version wrote `namelists["system"]["angle1(1)"] = 90.0`. The parser collapses
+`angle1(1) = 0.0` to `{(1,): 0.0}`, so that assignment added an **ignored key** and the
+"control" re-ran the identical calculation -- which reports the identical tensor and reads as
+"the axis is robust". It is `CLAUDE.md`'s "a check whose null result cannot be told from a
+pass", in a case where the null and the pass are the same twelve digits. The script now
+asserts the moment actually moved before it believes anything.
+
+**And `ph.x` disagrees.** On a ground state the two codes agree on to the printed digit
+(-25.80117002 Ry), `ph.x` gives `diag(1.357034400, 1.357092056, 1.494593593)`. The two
+components **across** the moment agree to 4.6e-4, which is `ph.x`'s own floor on this cell
+rather than ours -- its `eps_xx` and `eps_yy` differ from each other by 5.8e-5 and its
+off-diagonals are 7e-5. The one **along** the moment is **0.080 apart, 5.3 per cent**, and
+that is 40 per cent of the entire exchange-correlation contribution to it: the same solve in
+RPA gives 1.37741894, so `f_xc` is worth +0.197 there.
+
+**Three explanations were tested and all three are dead, and that is recorded so they are not
+tested a fourth time.** `dmxc_nc` differs from a `jvp` of `v_of_rho` in exactly three places,
+and every one of them is a threshold this cell never reaches -- measured on its own converged
+density, 157464 grid points:
+
+| QE's rule | what it does | points it fires at |
+|---|---|---|
+| `zeta_eff = sign(min(abs(zeta), 1 - 2e-6), zeta)` | evaluates `dv/dzeta` at a clamped zeta, `dz = 1e-6` | **0** (`max abs(zeta) = 0.3245`) |
+| `abs(zeta) > 1` or `n <= 1e-30` | zeroes the whole 4x4 kernel | **0** (`min n = 1.3e-9`) |
+| `abs(m) <= 1e-10` | keeps only the charge-charge element | **0** |
+
+So both kernels are in their smooth interior everywhere on this cell, and the difference is
+**not** a convention at an edge -- which is what P70's `abs(zeta) >= 1` turned out to be for
+the collinear case, and was the obvious hypothesis. It is a genuine difference in what one of
+the two codes computes, and it is unlocated.
+
+**The RPA control is unavailable for a magnet, in both codes, and that is physics rather than
+a limitation.** `lrpa` drops the whole XC kernel, and the Hartree term is blind to the
+magnetization -- so the induced magnetization has no restoring kernel at all. `ph.x` diverges
+outright on this cell (`|ddv_scf|^2` reaching 1e14 by iteration 44 from a threshold of 1e-2);
+defumat's `screening = "hartree"` converges, which is itself a difference between the two and
+is not understood either.
+
+**Why a refusal rather than a warning.** A user asking for the dielectric constant of a
+magnetic spin-orbit insulator would otherwise be handed a number that is 5 per cent from
+`ph.x`'s, symmetric, positive, uniaxial along the moment, following the moment when it turns,
+and in every visible respect a working calculation. There is nothing to route them to: the
+quantity is the one they asked for. `require_a_measured_spinor_response` refuses
+`nspin_mag = 4` by name and carries the measurement in its message.
+
+**What is outstanding.**
+
+* **Locating the 5.3 per cent**, which is the next phase and is sized in `MAGNETISM-NEXT.md`.
+  The cheapest first step is P81's own check on this cell -- `chi_0` under a *potential*
+  probe against a central difference of the density -- because it tests the solve with
+  `dvan_so` live and **no kernel at all**, and no Sternheimer solve here has ever run on an
+  `lspinorb` dataset: P81's three cells were all `H.pz-vbc` or `Si.pz-vbc`. If that passes,
+  the kernel is the remaining suspect and QE's finite-difference `dmxc_nc` is as much a
+  candidate as this code's `jvp`; an independent sum-over-states route on the same cell is
+  what would break the tie.
+* **An ultrasoft or PAW spinor** stays refused and the missing object is exactly one:
+  `dD_ij` is a 2x2 matrix in spin space (`set_int3_nc`) where a norm-conserving dataset has
+  no `dD` at all.
+* **The phonons, the Raman tensor and the strain response** stay refused for a spinor and for
+  their *own* reason: `symmetrize_displacement` carries the axial landmine P81 measured on
+  the field path, with the atom permutation on top, and the wrong rotation there was **66 per
+  cent** -- worse than no symmetrisation.
+* The `PERFORMANCE.md` pair, which has to be retaken on an idle machine: every timing in this
+  phase was taken beside other jobs.
+
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.

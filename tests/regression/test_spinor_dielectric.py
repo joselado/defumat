@@ -59,6 +59,7 @@ floor the identity is read against, not because P83 introduced it.
 from functools import lru_cache
 from pathlib import Path
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -228,3 +229,94 @@ def test_the_symmetrised_wedge_and_the_closed_grid_agree_for_a_spinor():
 
     wedge, closed = tensors
     assert np.abs(wedge - closed).max() < WEDGE
+
+
+def test_a_textured_spinor_is_refused_by_name():
+    """``nspin_mag = 4`` runs and is not trusted, so it is refused. P83.
+
+    The refusal is unusual here in that nothing is *missing*. The assembly
+    produces a tensor that passes two internal checks on ``i-atom-soc.in`` --
+    uniaxial along the moment with nothing imposing it, and the distinct axis
+    following the moment to nine digits when the moment is turned -- and then
+    disagrees with ``ph.x`` by **5.3 per cent** in the component along the
+    moment, on a ground state the two codes agree on to the printed digit.
+
+    The three thresholds ``dmxc_nc`` has that a ``jvp`` of ``v_of_rho`` does not
+    were each measured on that cell's converged density and each fires at
+    **zero** of 157464 grid points, so it is not a convention at an edge the way
+    P70's ``|zeta| >= 1`` turned out to be. It is unlocated, and a number that
+    looks like a working calculation and is 5 per cent out is exactly what a
+    refusal is for.
+    """
+    from defumat.scf import Calculation
+
+    system = build_system(read_pw_input(CASES / "i-atom-soc.in"))
+    pseudos = tuple(
+        read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species
+    )
+    calculation = Calculation(system, pseudos)
+    # The cell has to *be* the refused regime, or the test passes for the wrong
+    # reason: a guard that cannot fire reads the same as one that did not need to.
+    assert calculation.noncolin and calculation.nspin_mag == 4
+    assert system.lspinorb and not calculation.is_ultrasoft
+
+    with pytest.raises(NotImplementedError, match="textured"):
+        dielectric_tensor(
+            calculation, jnp.zeros((1, 1, 1, 1)), jnp.zeros((1, 1, 1)),
+            jnp.zeros((4, 1, 1, 1)),
+        )
+
+
+def test_an_ultrasoft_spinor_is_refused_and_a_norm_conserving_one_is_not():
+    """The dataset half of the edge, checked from both sides.
+
+    ``set_int3_nc`` is the missing object and it is a statement about the
+    *dataset*: ``dD_ij`` is a 2x2 matrix in spin space where a norm-conserving
+    dataset has no ``dD`` at all. Both sides are asserted because a refusal that
+    fires for everything is not an edge.
+    """
+    from defumat.scf import Calculation
+    from defumat.response.sternheimer import require_a_sternheimer_regime
+
+    for case, allowed in (("si-epsilon", True), ("pt2-soc-force", False),
+                          ("pt2-soc-paw-force", False)):
+        parsed = read_pw_input(CASES / f"{case}.in")
+        if case == "si-epsilon":
+            parsed.namelists["system"]["noncolin"] = True
+        system = build_system(parsed)
+        pseudos = tuple(
+            read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species
+        )
+        calculation = Calculation(system, pseudos)
+        assert calculation.noncolin
+        if allowed:
+            require_a_sternheimer_regime(
+                calculation, spin_polarized=True, noncollinear=True
+            )
+        else:
+            with pytest.raises(NotImplementedError, match="set_int3_nc"):
+                require_a_sternheimer_regime(
+                    calculation, spin_polarized=True, noncollinear=True
+                )
+
+
+def test_the_opt_in_is_what_lifts_the_refusal():
+    """Every *other* assembly still refuses a spinor, and must.
+
+    P81's refusal is opt-in for the reason this project has paid for twice: a
+    refusal belongs to a machine, and a caller that has not been measured in a
+    regime must not inherit permission from one that has. The phonons and the
+    Raman tensor go through the same guard without the flag.
+    """
+    from defumat.scf import Calculation
+    from defumat.response.sternheimer import require_a_sternheimer_regime
+
+    parsed = read_pw_input(CASES / "si-epsilon.in")
+    parsed.namelists["system"]["noncolin"] = True
+    system = build_system(parsed)
+    pseudos = tuple(
+        read_upf(PSEUDO / s.pseudo_file) for s in system.structure.species
+    )
+    calculation = Calculation(system, pseudos)
+    with pytest.raises(NotImplementedError, match="noncollinear or spin-orbit"):
+        require_a_sternheimer_regime(calculation, spin_polarized=True)
