@@ -13748,6 +13748,27 @@ against 249.8 s is an upper bound on what a reduced k-set is worth here, not the
 it. `MAGNETISM-NEXT.md` Q6 asks for that number properly -- two processes, `nosym` and the
 wedge each from cold -- and this is not it.
 
+**What is outstanding, and one item of it is a check that was asked for and not taken.**
+
+* **P62b's identity was never run, in any form.** A spinor `ns` with its moment along `z`,
+  symmetrised, must equal the collinear `ns` symmetrised -- neither through the SCF entry
+  point nor through array algebra. It is listed here rather than left to be inferred from a
+  green test run, because **the tests that do pass cannot stand in for it**: the wedge
+  against the closed grid compares this implementation with *itself* on two k-sets, so a
+  spin rotation that is wrong in a way both k-sets share would agree to 5.9e-11 and say
+  nothing. The collinear branch is the independent route, and it is the one not taken. It
+  is cheap -- a collinear run and a spinor run of the same cell, one `ns` each.
+* The **symmetrised spinor PDOS**, which stayed refused, and whose old message was wrong
+  about why: without spin-orbit coupling the operator is `D^l (x) S` and **both factors now
+  exist**, so what is missing is only the coefficient table (real over `2l+1` becoming
+  complex over `2(2l+1)`); with `lspinorb` it is `d_matrix_so`'s `D^j`, a different matrix.
+  Sized at an afternoon rather than a phase.
+* `colin_mag = 2` for a **collinear** run, which keeps `t_rev` operations rather than
+  discarding them and needs `new_ns`'s channel swap. The spinor half is done here; the
+  collinear half is not, and no committed benchmark exercises it -- every magnetic
+  sublattice here is a different species.
+* The notebook, and the QE timing.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.
