@@ -215,11 +215,35 @@ def local_potential_at_q(
 
 
 @jax.jit
+@jax.checkpoint
 def _structure_factors_at(g, positions, membership):
     """``S_t(G)`` on a G set handed in rather than derived from the cell.
 
     One function for both callers: :func:`structure_factors` passes ``G`` and
     :func:`local_potential_at_q` passes ``G+q``.
+
+    **Rematted, because the per-atom array is a reverse-mode residual that
+    nothing else keeps** (`MEMORY-AUDIT.md` A5). ``exp``'s VJP is ``ans * t``,
+    so it saves its own output -- the ``(ngm, nat)`` array below -- while this
+    function's *result* is the ``(ntyp, ngm)`` contraction on the next line,
+    smaller by ``nat/ntyp``. So every geometry and strain derivative taped a
+    per-*atom* structure factor for a per-*species* answer. Recomputing it is one
+    complex exponential per ``(atom, G)`` against an FFT-bound iteration, and the
+    residual falls to ``positions`` and the G set, which are held anyway.
+
+    **Measured as exactly one copy, not two**, which decides the audit's open
+    question C4: ``Calculation.at_positions`` calls this twice, for ``vloc`` and
+    for ``rho_core``, and XLA's CSE merges them. The compiled force's temporary
+    buffer falls by 154.6 MB on the 40-atom hydrogen chain (664.6 -> 510.0 MB,
+    **-23%**) and by 7.2 MB on ten-atom PAW silicon, each exactly
+    ``nat x ngm x 16``. Compiled force and stress times are unchanged to 0.5 per
+    cent; a *first-call* timing says otherwise and is measuring the on-disk
+    kernel cache rather than the work.
+
+    Not the ``eigts`` factorisation of ``PW/src/struct_fact.f90``: three 1-D
+    tables would shrink the *resident* array, but they tape three gathered
+    ``(nat, ngm)`` arrays where one ``exp`` tapes one, so they make the tape
+    worse unless rematted too (C2).
     """
     phases = jnp.exp(-1j * (g @ positions.T))  # (ngm, nat)
     return membership @ phases.T  # (ntyp, ngm)

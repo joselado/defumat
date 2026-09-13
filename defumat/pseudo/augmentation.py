@@ -882,6 +882,22 @@ def _assemble_qgm(coefficients, ylm, radial, beta_of, nl):
 
 
 @jax.jit
+@jax.checkpoint
 def _atom_phases(gcart, positions):
-    """``e^{-i G . tau_a}`` for every atom, ``(nat, ngm)``."""
+    """``e^{-i G . tau_a}`` for every atom, ``(nat, ngm)``.
+
+    **Rematted for the reason ``_structure_factors_at`` is** (`MEMORY-AUDIT.md`
+    A5): ``exp``'s VJP saves its own output, so this ``(nat, ngm)`` array is a
+    residual of every derivative that moves the atoms or strains the cell.
+
+    Unlike its sibling the result *is* the per-atom array and is kept as a field
+    on the augmentation charge, so it was not obvious the remat could help --
+    the same logical array is an input to the already-rematted scan body, and
+    the expectation was a no-op. It is not: the recomputed value has a short
+    live range at each use where the stored one spanned the whole pass, and the
+    compiled force's temporary buffer falls by **exactly one** ``(nat, npad)``
+    array -- 2,097,152 bytes on ``bismuthene-soc-small`` (``nat = 2``,
+    ``npad = 65536``) and 3.7 MB on ten-atom PAW silicon. Compiled force and
+    stress are unchanged in time.
+    """
     return jnp.exp(-1j * (positions @ gcart.T))

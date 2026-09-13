@@ -53,7 +53,7 @@ run that currently does not fit on this machine or does not start at all.
 | 2 | `vc_relax` holds four Calculations into the final SCF | A3 | `vc_relax.py:341` | NiBr2 scale | **18 GB** resident | 1 line | a |
 | 3 | `run_relax` holds the previous step | A2 | `relax.py:434` | NiBr2 scale | **7.7 GB** resident, +24% on a 32.30 GB peak | 3 lines | a |
 | 4 | PAW one-centre tape | A4 | `onecenter.py:128` | NiBr2 | **3.28 GB** measured (4.08 -> 0.80), and 0.4 GB forward with it | 1 line -> ~40 | a |
-| 5 | Structure factor is a reverse residual | A5 | `potentials.py:224`, `augmentation.py:847` | NiBr2 | **2.5-5.1 GB** of tape (CSE-dependent) | 2 lines | a |
+| 5 | Structure factor is a reverse residual | A5 | `potentials.py:224`, `augmentation.py:847` | NiBr2 | **~5.1 GB** of tape, 2.55 from each site (C4 decided: one copy each) | 2 lines | a |
 | 6 | `Calculator` and `run_scf` retention | A6, B2 | `calculator.py:524/679/858`, `driver.py:4489` | 64k/200-band **(hypothetical — no run this size exists here)**; NiBr2 | **24.6 GB** retained / 49 GB double-live; 8.8 GB of wavefunction sets; 2.19 GB/k span | 6 lines | a + b |
 | 7 | E-field holds three projector-velocity blocks | A7 | `efield.py:329` | P25 yardstick | **1.84 GB** across 18 iterations, *never read* on PAW | 10 lines | a |
 | 8 | `spinchi0` stacks the band loop | A8 | `spinchi0.py:472` | fcc Ni | **1.36 GB** — and `PERFORMANCE.md` says this was fixed | 3 lines | a |
@@ -418,6 +418,23 @@ augmentation field beside them.
 **Fix.** `jax.checkpoint` around `_structure_factors_at` and `_atom_phases`. The backward pass then
 recomputes one `exp` per `(atom, G)` — trivial arithmetic against an FFT-bound iteration — and the
 residual falls to `positions` and the `(ngm, 3)` G set, both of which are held anyway.
+
+> **Done, 2026-09-13, and both halves are worth exactly one copy.** Compiled-force
+> `temp_size_in_bytes`: `h40-chain-lsda` **664.6 -> 510.0 MB (-23.3%)**, `si10-paw-pbe`
+> 188.7 -> 177.8 MB (-5.8%), `bismuthene-soc-small` 1062.6 -> 1060.5 MB. Every delta is
+> `nat x ngm x 16` to the byte, which is what decides **C4**: the two `combine_species` calls are
+> CSE'd, so `_structure_factors_at` is one copy and not two. **Cost: nothing** — compiled force
+> 0.4007 -> 0.4011 s and stress 7.2359 -> 7.1976 s on `si10-paw-pbe`, forces agreeing to 6.9e-17 on
+> 1.4e-2 and the stress bit-identical.
+>
+> **`_atom_phases` was expected to be a no-op and is not**, which is the half worth reading twice.
+> Its result *is* the per-atom array, is kept as a field on the augmentation charge, and is an input
+> to the already-rematted augmentation scan — so the array looked live regardless. It is not: the
+> recomputed value has a short live range at each use where the stored one spanned the whole pass,
+> and the tape falls by exactly one `(nat, npad)` array (2,097,152 B on `bismuthene-soc-small`,
+> `nat = 2`, `npad = 65536`). **So the estimate below is right for the pair and for the wrong
+> reason** — 2.55 GB from each site on the slab, ~5.1 GB together, where it reads as 2.5-5.1 from
+> `_structure_factors_at` alone with the field merely "beside them".
 
 **Rules.** Shapes unchanged, dtype unchanged, no host sync, no traced branch, no k axis. Remat is
 the identical function re-executed.
@@ -1223,10 +1240,14 @@ A4's 3-5 GB rests on "~50 grid-sized temporaries in the PBE-spin kernel", which 
 against `nat_t = 15`. The same run gives B1's forward figure and, from the compiled time, the
 `atom_batch = 1` cost `PERFORMANCE.md` never separated.
 
-### C4. Whether XLA's CSE merges the two `combine_species` calls
+### C4. Whether XLA's CSE merges the two `combine_species` calls — **decided: it does**
 
 `at_positions` calls it at driver.py:2203 (vloc) and `:2209` (rho_core), both against the dense set.
-One residual (2.55 GB) or two (5.1 GB) — A5's range. `memory_analysis()` on the compiled force.
+~~One residual (2.55 GB) or two (5.1 GB) — A5's range.~~ **One.** Measured 2026-09-13 by
+`memory_analysis()` on the compiled force, rematting `_structure_factors_at` and reading the delta:
+**154,616,576 B** on `benchmarks/h40-chain-lsda.in` and **7,206,848 B** on `si10-paw-pbe`, each of
+which is `nat x ngm x 16` to the byte for *one* copy (40 x 241,588 and 10 x 45,043). So A5's
+`_structure_factors_at` half is the **bottom** of its range, 2.55 GB on the 45-atom slab.
 
 ### C5. Whether `jnp.take(columns, column_of, -1)` materialises a second `vkb` in the backward pass
 
