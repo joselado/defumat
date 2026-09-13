@@ -139,3 +139,78 @@ def test_a_drift_is_reported_rather_than_absorbed():
     assert result.drifts[1] > RELAXED_DRIFT_TOL
     assert result.converged
     assert np.isclose(result.anisotropy, 0.001)
+
+
+def test_the_drift_warning_actually_fires():
+    """**Test that the guard fires**, which is this project's own rule.
+
+    A diagnostic that returns a clean zero across the whole family it is meant
+    to discriminate reads as agreement rather than as silence, and nothing
+    downstream can tell the difference (``CLAUDE.md``, "a check whose null
+    result cannot be told from a pass" -- five instances in one production run).
+    So the drift warning is fed a case that must trip it, rather than checked
+    only on cases that must not.
+
+    The results are synthetic because the *warning* is what is under test, not
+    the physics of when a moment drifts -- that is a property of the crystal.
+    Monkeypatching the per-direction worker is what lets one assertion cover the
+    warning, its threshold and its text.
+    """
+    import defumat.workflows.anisotropy as aniso
+    from defumat.workflows.anisotropy import RelaxedDirection
+
+    def fake(system, pseudos, direction=None, **kwargs):
+        drift = 0.0 if direction[2] else 41.5
+        return RelaxedDirection(
+            direction=tuple(float(x) for x in direction),
+            total_energy=-100.0 - 1e-5 * drift, converged=True, iterations=11,
+            accuracy=1e-11, moment=tuple(float(x) for x in direction),
+            drift=drift, moment_length=1.6,
+        )
+
+    saved = aniso.run_relaxed_direction
+    try:
+        aniso.run_relaxed_direction = fake
+        with pytest.warns(RuntimeWarning, match="drifted more than"):
+            drifted = aniso.run_relaxed_anisotropy(None, None, directions=XZ)
+        # ... and it must stay quiet when nothing drifts, or it discriminates
+        # nothing: a warning that always fires is the same defect as one that
+        # never does.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            aniso.run_relaxed_anisotropy(
+                None, None, directions=((0.0, 0.0, 1.0), (0.0, 0.0, -1.0)))
+        assert not [w for w in caught if "drifted more than" in str(w.message)]
+    finally:
+        aniso.run_relaxed_direction = saved
+
+    assert drifted.drifts.max() == pytest.approx(41.5)
+
+
+def test_the_unconverged_warning_actually_fires():
+    """The companion guard, for the same reason.
+
+    A relaxed anisotropy is a difference of total energies in their eighth
+    decimal, so an unconverged direction does not give a slightly wrong
+    anisotropy -- it gives one dominated by where the SCF happened to stop.
+    """
+    import defumat.workflows.anisotropy as aniso
+    from defumat.workflows.anisotropy import RelaxedDirection
+
+    def fake(system, pseudos, direction=None, **kwargs):
+        return RelaxedDirection(
+            direction=tuple(float(x) for x in direction), total_energy=-100.0,
+            converged=False, iterations=300, accuracy=4.2e-7,
+            moment=tuple(float(x) for x in direction), drift=0.0,
+            moment_length=1.6,
+        )
+
+    saved = aniso.run_relaxed_direction
+    try:
+        aniso.run_relaxed_direction = fake
+        with pytest.warns(RuntimeWarning, match="did not converge"):
+            result = aniso.run_relaxed_anisotropy(None, None, directions=XZ)
+    finally:
+        aniso.run_relaxed_direction = saved
+
+    assert not result.converged

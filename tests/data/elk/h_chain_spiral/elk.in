@@ -23,13 +23,12 @@
 !     pseudopotential's valence density are the same function -- which is why
 !     this is the cell to take an external number on and iron is not.
 !
-! The field is a seed and is meant to be gone by the end: bfieldc breaks spin
-! symmetry (Elk will not polarise on its own, where defumat seeds from
-! starting_magnetization) and reducebf decays it after every iteration, so the
-! converged state is field-free.  Check "total moment" and the magnetic field
-! in INFO.OUT before using a number.  The field is along x, perpendicular to
-! q along z, which is the plane a spiral's moments turn in -- QE's
-! angle1 = 90 says the same thing.
+! The field breaks spin symmetry and STAYS ON: Elk will not polarise on its own,
+! where defumat seeds from starting_magnetization.  It is along x, perpendicular
+! to q along z, which is the plane a spiral's moments turn in -- QE's angle1 = 90
+! says the same thing.  See the bfieldc block below for why it is not decayed,
+! which is the one real trap in this fixture.  Always read "total moment" out of
+! INFO.OUT before using a number from this run.
 
 tasks
   0
@@ -55,12 +54,29 @@ vqlss
 spinpol
   .true.
 
-! a seed field perpendicular to q, decayed away over the run
+! A small seed field perpendicular to q, held for the whole run.
+!
+! **reducebf = 0.8 does not work on this cell, and the way it fails is the thing
+! to know about this fixture.**  Elk will not polarise on its own -- unlike
+! defumat, which seeds from starting_magnetization -- so the field has to
+! establish the moment, and 0.8 takes it to 0.9 per cent of its value in 21
+! loops.  Measured: the moment grew from 0.148 to 0.172 mu_B over the first eight
+! loops and then followed the field down, and the run CONVERGED, in 23 loops, to
+! a total moment of 2.0e-4 mu_B -- a nonmagnetic state -- while defumat on the
+! identical cell with no field at all sustains 0.515 mu_B.  That is a fading
+! seed, not a disagreement about the physics, and what it produces is a
+! converged-looking Elk run with the answer quietly gone.
+!
+! So the field stays on, and is small enough to read as a perturbation.  Quote it
+! beside any number taken from here: the Zeeman energy is outside the reported
+! total in both codes by the same convention, so what is being compared is
+! E(q) - E(0) at a FIXED field, and the field has to be the same at every q for
+! that difference to mean anything.
 bfieldc
-  0.02  0.0  0.0
+  0.002  0.0  0.0
 
 reducebf
-  0.8
+  1.0
 
 ! Gaussian smearing, in Hartree: QE's degauss = 0.1 Ry
 stype
@@ -75,6 +91,15 @@ symtype
 
 nempty
   8
+
+! Adaptive linear mixing, NOT Elk's default Broyden.  This is not a preference:
+! with mixtype 3 the moment grows steadily for nine loops, from 0.147 to 0.181
+! mu_B, and then falls off a cliff -- 0.0177 at loop 10 and 0.0046 at loop 11 --
+! which is the Broyden history filling (mixsdb defaults to 8) taking one bad step
+! on a soft magnetic surface.  The run then CONVERGES, reports success, and is
+! nonmagnetic.  Linear mixing is slower and it stays on the branch.
+mixtype
+  1
 
 epspot
   1.e-7

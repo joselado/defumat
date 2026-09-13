@@ -1066,6 +1066,35 @@ direction'} (\code{i\_cons = 2}), constrains $m_z/|m|$ --- the polar angle
 that contains $z$, a helix and a collinear state alike, at zero penalty: it
 cannot hold one, and reports success while failing to.
 
+\textbf{Or hold it with a field instead of a penalty.} A penalty is a term
+added to the energy, so at convergence it is still pushing --- the residual
+angle \emph{is} that push, and it cannot be made zero by choosing $\lambda$
+better. Elk's fixed-spin-moment scheme does the other thing: it drives an
+external field until the moment sits where it was asked to, and the converged
+state is then a stationary point of the \emph{unconstrained} functional under
+that field. \code{'atomic fsm'} and \code{'atomic fsm direction'} are that
+scheme resolved by atom (Elk's \code{fsmtype = 2} and $-2$),
+%
+\[
+  \mathbf B_i \leftarrow \mathbf B_i - \tau\,(\mathbf m_i - \mathbf m_{\mathrm{fix},i}),
+\]
+%
+with the targets read from \code{STARTING\_MOMENTS} in Bohr magnetons. The
+direction-only variant finishes by projecting $\mathbf B_i$ perpendicular to
+$\mathbf m_{\mathrm{fix},i}$ (Elk's \code{r3vo}), so the field can \emph{turn} a
+moment and can never lengthen or shorten one --- and note what that buys: it has
+no $1/|\mathbf m|$ anywhere in it, where the direction-only \emph{penalty} above
+has one in its gradient and runs away.
+
+\textbf{\code{lambda} means two different things three orders of magnitude
+apart, and this is the trap of the family.} For a \emph{penalty} it is a
+stiffness, and 1 to 10 is the useful range. For a \emph{feedback} scheme it is
+Elk's \code{taufsm}, a gain that multiplies a moment error in Bohr magnetons to
+give a field in Rydberg, and Elk's own default is \textbf{0.01}. Leave it unset
+and you get that; write a penalty-sized value and the run warns by name.
+Measured: at $\tau = 0.2$ the vector scheme runs 200 iterations without
+converging and drives the moments to $0.82\,\mu_B$ against a target of $0.26$.
+
 \textbf{Which penalty holds a texture, measured.} \emph{Not this one.}
 \code{'atomic texture'} constrains a direction and not a length, so its
 potential carries a $1/|\mathbf m|$ and \emph{grows} as a site's moment
@@ -3383,6 +3412,70 @@ and nothing in between: the coupling-free end of the overlap is spin-independent
 so the anisotropy vanishes identically there whatever else it is, but a blend of
 it with the true overlap partway is not the overlap of any set of projectors and
 $S$ stops being a usable metric.
+\end{refuses}
+
+\subsection{The relaxed anisotropy: total energies instead of band sums}
+
+The section above buys its precision by freezing the density: every term of the
+total energy except the band sum is a functional of $\rho$ alone, so it cancels
+between two directions exactly. The price is that the density is not allowed to
+respond to the spin-orbit field. \code{run\_relaxed\_anisotropy} pays the other
+way round --- one whole self-consistent noncollinear run per direction, and a
+difference of two \textbf{total} energies:
+%
+\[
+  E_{\mathrm{MAE}} = E_{\mathrm{tot}}[\hat{\mathbf n}_1] - E_{\mathrm{tot}}[\hat{\mathbf n}_2],
+  \qquad \text{each } E_{\mathrm{tot}} \text{ converged at its own } \hat{\mathbf n}.
+\]
+%
+The extra energy the relaxation finds is variational, so it lowers \emph{both}
+directions, and what survives in the difference is second order on a quantity
+that is already second order in the coupling. Nothing bounds it in general,
+which is why it is measured rather than argued about.
+
+\begin{lstlisting}[language=Python]
+from defumat import Calculator
+
+soc = Calculator.from_file("ni-tetragonal-relaxed-mae-paw.in",
+                           pseudo_dir="tests/data/pseudo")
+mae = soc.get_relaxed_anisotropy(directions="xz")
+
+print(mae.energies_mev)      # relative to the first direction
+print(mae.easy_axis, mae.anisotropy_mev)
+print(mae.converged, mae.drifts)   # read these BEFORE the number
+\end{lstlisting}
+
+There is \textbf{one} calculator here and no second leg. That is the whole
+practical difference from the force theorem, and it is what lets this route
+reach \textbf{PAW} and a Hubbard $U$: the theorem hands a density from a
+scalar-relativistic run to a fully-relativistic one, and \code{ddd\_paw} and
+\code{ns} are properties of \emph{wavefunctions} that cannot cross that gap. A
+relaxed run hands nothing over --- each direction converges its own
+\code{becsum} from its own states with one dataset throughout.
+
+\textbf{Read \code{.converged} and \code{.drifts} first, and the second one is
+the trap.} Nothing holds the moment in a relaxed run, which is the point of it;
+so a direction that is not a stationary point of the anisotropy energy will turn
+towards one that is, and its total energy then belongs to a state other than the
+one asked for. A cardinal axis of a cubic or uniaxial crystal is stationary by
+symmetry and does not move; an oblique direction on a strongly anisotropic
+magnet need not be. A drift past one degree raises a warning naming the
+direction and where the moment went.
+
+\begin{refuses}
+A \textbf{magnetic field} or a constrained moment, because the field's energy is
+deliberately outside the reported total, so two directions' totals would differ
+by a Zeeman term neither accounts for --- and because a constraint defeats the
+drift check, the constraint being what holds the moment rather than the
+anisotropy. A potential-only \textbf{meta-GGA}, which has no energy functional
+at all, so its printed total is not the value of anything the run minimised. A
+\textbf{spin spiral}, which refuses spin-orbit coupling permanently. A
+\textbf{collinear} run, which has no direction to point. And \code{nosym} is
+required rather than merely advised: a magnetic noncollinear run reduces its
+k-grid with the \emph{magnetic} symmetry group, which depends on where the
+moment points, and here that is worse than it is for the force theorem --- a
+total energy carries the Ewald and Hartree terms too, so the contamination is
+not confined to the bands.
 \end{refuses}
 
 \subsection{X-ray and magnetic structure factors}

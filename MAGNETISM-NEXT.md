@@ -73,6 +73,8 @@ end-to-end test caught it. An array-algebra test passed either way.
 | P63's spiral scan "no longer reproduces", cause unidentified, three candidates nominated | it reproduces to the digit at the right seed, and now **confirms** the magnon prediction | minimum at `q = (0,0,1/4)`, -150.1 meV, where the susceptibility says the ferromagnet first goes unstable — and P63's own `0, -150, -59` come back (P84) |
 | a caller that wrote `scf.density` lost the fact that it converged | `SCFResult.require_converged`, the one implementation, with `Calculator._ground_state` wrapping it | three tests reported a Goldstone residual of 0.3958 that was an unconverged ground state, not a defect in the susceptibility (P84) |
 | a committed input asked for a scheme the code warned does not converge, and said it did | `h2-texture-120.in` is `'atomic'` at `lambda = 10`, and neither test that cites it rewrites away from a stale literal any more | 38 iterations, 121.13 degrees, 0.576 per site (P84) |
+| the anisotropy could be computed only at frozen density, so PAW and DFT+U were out | `run_relaxed_anisotropy`: one self-consistent run per direction, differencing **total** energies, which hands nothing over and so has no handoff to refuse for | 0.447 meV on tetragonal cobalt against the theorem's **free** energy 0.552 and its band sum 1.235 -- the relaxed route independently says the free energy is the right object (P87) |
+| the relaxed route's precision was an argument, not a number | it is a number: an identity control with the coupling switched off, scanned in `conv_thr` | **0.011 meV** and it plateaus -- 1e-13 equals 1e-12 to 2 per cent while the density residual falls another order (P87) |
 
 ---
 
@@ -423,7 +425,7 @@ each is a `get_*` that works on the cell in the tutorial and refuses the cell th
 | phase | done for | open for | what is missing |
 |---|---|---|---|
 | **P57** magnetoelectric tensor | the column **parallel to the field**, spin-only, clamped-ion | the other two columns, the lattice-mediated part, and any external calibration | it is uncalibrated against another code, which is the part to fix first: Elk's `magnetoelt.f90` is the counterpart and is built here |
-| **P58** magnetocrystalline anisotropy | the **frozen-density force theorem**, norm-conserving and ultrasoft | PAW, and the **relaxed** anisotropy | PAW is refused because the handoff carries no `becsum`; the relaxed route needs no handoff at all, which is why it reaches PAW -- see the entry below |
+| **P58** magnetocrystalline anisotropy | the **frozen-density force theorem**, norm-conserving and ultrasoft; and, as of **P87**, the **relaxed** route, which reaches PAW and DFT+U | a `pw.x` pair for the relaxed number, and `average_pp` | ✅ mostly closed by P87: 0.447 meV relaxed against the theorem's **free** energy 0.552 on the same cobalt cell, with a measured 0.011 meV floor. What is left is an external check and `average_pp`, which belongs to the *frozen* route |
 | **P63** magnons | **collinear**, norm-conserving | noncollinear (item D), and ultrasoft/PAW | the 4x4 spin response does not block-diagonalise off a collinear axis; ultrasoft needs the augmentation charge inside the transverse channel |
 | **P64** orbital magnetization | **norm-conserving** | ultrasoft and PAW | the neighbour overlap the covariant derivative is built from needs the augmentation term `bp_c_phase.f90`'s `q_ij(b)` supplies, which the Berry-phase polarization already has and this does not reuse |
 

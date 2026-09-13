@@ -14006,10 +14006,201 @@ regression test's rewrite now goes the other way, and the unit test that needs
 `'atomic texture'` builds the text itself -- a scheme that cannot converge is fine in a test
 that is about a crash in the first potential build, and is not fine in a committed input.
 
-**What is outstanding.** Nothing on these three. The wider question the seed raises is
-untouched: **no other committed input was audited for a saturated
-`starting_magnetization`**, and the rule -- a seed at or above one valence electron's worth
-starts the run on the clamp -- would be a cheap input-time warning that does not exist.
+**What is outstanding, and both items are the same shape as what was fixed.**
+
+* **No other committed input was audited for a saturated `starting_magnetization`.** The
+  rule -- a seed at or above one valence electron's worth starts the run on the clamp -- is
+  a cheap input-time warning and there is none. `pw.x` warns about a value at or above 1
+  for a *different* reason (it reinterprets the units, P77c), and that warning fires here
+  too, which is why this one looked already covered: the two coincide on hydrogen and
+  diverge on every element with more than one valence electron.
+* **`require_converged` exists and almost nothing calls it.** `grep -rl 'scf\.density'
+  tests/` is **20 files**, each taking a bare density to a functional entry point, and two
+  call sites in the whole tree ask whether it converged. The magnon module is fixed
+  because its failure was visible; the other nineteen have the same hole and no symptom
+  yet. The cheap sweep is to route the test helpers that cache a converged state through
+  `require_converged`, which is one line each.
+
+
+### P86 -- The spin spiral's first external comparison, and the three ways an Elk ground state can quietly stop being magnetic. ⏳ FIXTURE AND ONE SIDE DONE; the Elk energies are the open half.
+
+`tests/data/elk/h_chain_spiral/`, `tests/data/qe/h-chain-spiral-elk.in`.
+`MAGNETISM-NEXT.md` item E(a): "Spin spirals have no external number of any kind" -- five
+internal identities on a hydrogen chain, P21's four more for `dE/dq`, **no `pw.x`
+counterpart and no Elk number ever taken**, and no `PERFORMANCE.md` pair, although Elk
+implements the same ansatz and is built here.
+
+**What is now in place, which is the part that did not exist.** A matched pair of inputs
+for the same physical cell -- the one-atom hydrogen chain, 12 bohr of vacuum, 5 bohr
+spacing -- with everything that can be matched matched and everything that cannot stated:
+
+* the k-grid, `1 1 4` with no offset, and Elk's `symtype = 0` against QE's `nosym`;
+* the smearing. Elk's `stype = 0` is Methfessel-Paxton order zero, which **is** the
+  Gaussian, and `swidth` is in **Hartree**, so QE's `degauss = 0.1 Ry` is `0.05`;
+* the functional, and this one forced a choice. `H.pz-vbc.UPF`'s header is Perdew-Zunger
+  and Elk's `xctype = 2` is the same parameterisation -- but Elk implements it
+  **spin-unpolarised only** and refuses a magnetic run with it outright ("requested
+  spin-polarised run with spin-unpolarised exchange-correlation functional"). So both
+  sides run Perdew-Wang instead: Elk's default `xctype = 3`, and a committed QE twin
+  `h-chain-spiral-elk.in` that sets `input_dft = 'pw'` to override its own dataset's
+  header. The dataset is still PZ-generated, which is an inconsistency on the QE side
+  alone and one hydrogen tolerates because it has no core;
+* the cutoff, **by coincidence and it is worth saying so**: `rgkmax = 7` over the species
+  file's `rmt = 1.4` bohr is `|G+k|max = 5.0` a.u., which is 25 Ry -- QE's `ecutwfc`. That
+  is a coincidence of two defaults, not an equivalence: an LAPW basis is a plane-wave
+  interstitial plus augmentation inside the spheres and is not the same function space.
+
+**The defumat side of the scan** (`h-chain-spiral-elk.in`, `conv_thr = 1e-11`):
+
+| `q_3` | converged | iterations | E (Ry) | \|m\| (mu_B) | E - E(0) |
+|---|---|---|---|---|---|
+| 0 | yes | 11 | -0.9541545299 | 0.514889 | 0.0 meV |
+| 1/4 | yes | 10 | -0.9556767986 | 0.615140 | **-20.71 meV** |
+| 1/2 | yes | 11 | -0.9578452038 | 0.611330 | **-50.21 meV** |
+
+Monotonic in `q`, with the antiferromagnet lowest, which is what a half-filled
+one-dimensional chain should do.
+
+**Three ways an Elk ground state stopped being magnetic, all of them silent.** Getting the
+Elk side to stay on the magnetic branch took three attempts and every failure **converged
+and reported success**, which is why they are recorded here rather than left in a script:
+
+1. **`reducebf = 0.8`.** Elk will not polarise on its own -- unlike defumat, which seeds
+   from `starting_magnetization` -- so a field has to establish the moment, and 0.8 takes
+   it to 0.9 per cent in 21 loops. The moment grew from 0.148 to 0.172 mu_B over eight
+   loops and then followed the field down: converged in 23 loops at a total moment of
+   **2.0e-4 mu_B**, against defumat's 0.515 on the identical cell with no field at all.
+2. **The field held, but Broyden.** With `bfieldc` at 0.002 Ha and `reducebf = 1`, the
+   moment climbed steadily for nine loops -- 0.147, 0.153, 0.159, 0.164, 0.169, 0.173,
+   0.179, 0.181 -- and then **fell off a cliff**: 0.0177 at loop 10, 0.0046 at loop 11.
+   That is Elk's default Broyden mixer (`mixtype 3`) with its history filled (`mixsdb`
+   defaults to 8) taking one bad step on a soft magnetic surface. `mixtype 1`, adaptive
+   linear, is slower and stays on the branch.
+3. **The binary would not start at all**, and this one is environmental rather than
+   physical: `libopenblas.so.0` is no longer installed on this machine, so the Elk built
+   in May 2025 exited 127 with an empty `INFO.OUT` -- which reads exactly like a bad input.
+   It is relinked against **netlib**, which is also what `~/apps/qe-7.4.1/bin/pw.x` uses,
+   so an Elk-against-QE timing is now on one BLAS.
+
+**What is outstanding, and it is the number itself.**
+
+* **Elk's `E(q)` at the three wavevectors.** The fixture runs and the mixing is fixed; the
+  scan had not finished when this was written. Until it has, the spiral still has no
+  external number and item E(a) stays open.
+* **The `PERFORMANCE.md` pair.** It must be `OMP_NUM_THREADS=1` under `taskset` on an idle
+  machine (`PIN=1` in the driver script), and every Elk run here was threaded and beside
+  two other jobs. Netlib is slow enough that this matters: ~90 s per SCF loop pinned
+  against ~42 s at six threads.
+* **The asymmetry to state with any number taken.** Elk carries a small held field and
+  defumat carries none. The Zeeman energy is outside the reported total in both codes by
+  the same convention, and the field is the same at every `q`, so it largely cancels in
+  `E(q) - E(0)` -- but "largely" is not "exactly", and the check that has not been done is
+  the same defumat scan under the same field.
+
+
+### P87 -- The relaxed magnetocrystalline anisotropy, and the PAW the force theorem cannot reach. ✅ DONE.
+
+`defumat/workflows/anisotropy.py`, `Calculator.get_relaxed_anisotropy`. `PLAN.md` §3's own
+outstanding index: "**a relaxed magnetocrystalline anisotropy**, as against P58's
+frozen-density force theorem, and **PAW** for it (the handoff carries no `becsum`)".
+
+**What it is.** One whole self-consistent noncollinear run per direction, and a difference
+of **total** energies, where P58 freezes the density converged without spin-orbit coupling
+and diagonalises once. The two answer slightly different questions and both are worth
+having: the theorem's cancellation is exact and costs one diagonalisation, and the relaxed
+route lets the density respond to the spin-orbit field, which is variational and therefore
+lowers *both* directions. What survives in the difference is second order on a quantity
+that is already second order in the coupling. Nothing bounds it in general.
+
+**The reason PAW is reachable here and refused there is not a different opinion about
+PAW.** The theorem's handoff is a density and nothing else, and a PAW Hamiltonian needs
+`ddd_paw`, built from a `becsum` belonging to the *other* leg's wavefunctions -- a
+different pseudopotential file with a different projector count. QE refuses it in the same
+place (`potinit.f90:98`). A relaxed run hands nothing over: each direction converges its
+own `becsum` from its own states with one dataset throughout, so the refusal does not
+apply. A Hubbard `U` comes along for the identical reason. `_refuse_relaxed` is written
+from scratch rather than copied, with the reason for each clause stated, because
+`CLAUDE.md`'s "inherit a refusal only after checking which machine it belongs to" has cost
+this project a whole quantity once already.
+
+**The identity control, and it does not come out zero.** Switch the coupling off and the
+Hamiltonian commutes with a global spin rotation, so the two directions must have
+*exactly* the same total energy. On `co-tetragonal-relaxed-mae.in` (tetragonal cobalt,
+ultrasoft, `Co.rel-pbe-nd-rrkjus`, 3x3x2 `nosym`), `soc_scale = 0`:
+
+| `conv_thr` | E(x) - E(z) | in Ry | iterations x / z | accuracy x / z |
+|---|---|---|---|---|
+| 1e-8 | -0.800543 meV | -5.884e-05 | 16 / 30 | 5.3e-10 / 5.9e-09 |
+| 1e-10 | +0.030704 meV | +2.257e-06 | 19 / 35 | 6.9e-11 / 2.8e-11 |
+| 1e-12 | +0.011184 meV | +8.220e-07 | 25 / 43 | 7.9e-13 / 1.9e-13 |
+| 1e-13 | +0.011376 meV | +8.361e-07 | 28 / 44 | 5.2e-14 / 2.2e-14 |
+
+**That plateau is the headline number of this phase and it is a limit rather than a
+defect.** The residual falls by 26x from 1e-8 to 1e-10, by 2.7x from 1e-10 to 1e-12, and
+then **stops**: 1e-13 is 1e-12 to two per cent while the density residual has fallen
+another order. So the relaxed route on this cell has a floor of about **0.011 meV**, and
+tightening `conv_thr` past 1e-12 buys nothing but iterations. Against a cobalt anisotropy
+of a few tenths of a meV that is a couple of per cent, which is usable -- and it is
+exactly the cancellation the force theorem is built to avoid having to rely on, now
+measured instead of asserted. **Quote the floor with any relaxed number**; the two runs
+take 25 and 43 iterations from two different seeds and their paths do not close the gap.
+
+**The number, and the cross-check is better than the number.** Same cell, same dataset,
+same 3x3x2 `nosym` grid, `conv_thr = 1e-12`:
+
+| route | E(x) - E(z) |
+|---|---|
+| relaxed, two self-consistent runs | **+0.447301 meV** |
+| force theorem, **band** energy | +1.235297 meV |
+| force theorem, **free** energy | +0.552279 meV |
+
+Easy axis along `c` on both routes, both moments drifted 0.000 degrees, |m| = 1.785 mu_B.
+
+**The relaxed route agrees with the frozen one's *free* energy to 19 per cent and
+disagrees with its band sum by a factor of 2.8**, and that is the result worth having.
+P60 measured on this very cell that the smearing's `-TS` supplies 55 per cent of the band
+energy's slope, so `sum w eps` and `F` are two different curves at a production smearing;
+what was missing was any *independent* check of which one an anisotropy is. This is it,
+and it comes from a route that shares no cancellation with the theorem at all. The
+remaining 0.105 meV is the relaxation energy -- the physics the frozen route does not
+contain -- and it is **ten times the 0.011 meV floor**, so it is a measurement rather than
+noise.
+
+**The energy differenced is the free energy**, `F = E - TS`, not the internal energy:
+`run_scf` puts `terms["smearing"]` into the total (`driver.py`, `total = sum(terms)`), so
+`SCFResult.total_energy` already carries `-TS` as `pw.x` prints it. That is the variational
+one and it is the same object `MagneticAnisotropy.free_energies` exposes on the frozen
+route -- where the distinction is worth 55 per cent of the slope on this very cell at
+`degauss = 0.02` (P60). The two routes therefore difference the same quantity, which is
+not automatic and was checked rather than assumed.
+
+**The drift, which is the price of letting the density go.** Nothing holds the moment in a
+relaxed run, so a direction that is not a stationary point of the anisotropy energy turns
+towards one that is and its total belongs to a different state. `RelaxedDirection.drift`
+is the angle between the converged moment and the direction asked for, and past
+`RELAXED_DRIFT_TOL` it warns by name. Both cardinal axes here drift **0.000 degrees**,
+which is what symmetry requires of them and is therefore a check that the reporting works
+rather than a result; the guard is tested by feeding it a case that must trip it
+(`test_the_drift_warning_actually_fires`), because a diagnostic whose clean zero cannot be
+told from silence is this project's most-repeated trap.
+
+**What is outstanding.**
+
+* **The `pw.x` pair.** The like-for-like reference is two `pw.x` 7.4.1 SCF runs at
+  `angle1`/`angle2` with `nosym`, differenced by hand -- there is no QE routine, which is
+  what the README's note 19 records. It has not been run, so the 0.447 meV is checked
+  against *this* code's other route and against an identity, not against another code.
+* **The PAW cell has not been run**, only shown to be accepted where the theorem refuses
+  it (`test_paw_is_refused_by_the_frozen_route_and_allowed_by_the_relaxed_one` asserts the
+  asymmetry from the refusals alone). `ni-tetragonal-relaxed-mae-paw.in` is committed and
+  is the run to take.
+* **The `PERFORMANCE.md` pair** is owed. Every timing here was taken beside two other
+  jobs, so none of them is quotable.
+* **`average_pp`**, the third item of the index entry, is **not** in scope here and is
+  deliberately left: it averages a fully-relativistic dataset's `j` channels back into a
+  scalar-relativistic one so that *one* file can serve both legs of the **force theorem**,
+  which is a statement about that route rather than this one, and QE's own `average_pp.f90`
+  refuses ultrasoft and PAW outright.
 
 
 ## 4. Validation strategy

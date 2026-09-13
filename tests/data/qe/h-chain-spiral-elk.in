@@ -15,7 +15,7 @@
 ! original header gives -- at a small smearing this soft magnetic surface lands
 ! in whichever nearby minimum the starting density is closest to.
 !
-! PLAN.md P85 has the comparison.
+! PLAN.md P86 has the comparison.
  &control
     calculation = 'scf'
  /
