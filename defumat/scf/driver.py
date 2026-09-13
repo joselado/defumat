@@ -158,6 +158,7 @@ from defumat.system.symmetry import (
     symmetrize_atom_displacement_density,
     symmetrize_tensor_density,
     symmetrize_magnetization,
+    symmetrize_spin_vector_density,
     symmetrize_vector_density,
 )
 from defumat.units import RY_TO_EV
@@ -3019,6 +3020,16 @@ class Calculation:
         An unshifted grid is closed exactly, and both routes are tested against
         each other (``tests/regression/test_response.py``).
 
+        **A spinor run's magnetization channels are not three more scalars.**
+        At ``nspin_mag = 4`` the induced density carries a spin vector as well
+        as a direction, and the two indices transform differently -- the
+        perturbation direction is polar and the magnetization is axial, so the
+        average is :func:`~defumat.system.symmetry.symmetrize_spin_vector_density`'s
+        double rotation and not this one applied four times. Rotating only the
+        direction is a *different* symmetry: the answer stays real, stays
+        smooth, and satisfies the acoustic sum rule, because that rule is a sum
+        over atoms and is blind to a transfer between spin components.
+
         Args:
             fields: ``(3, nspin_mag, n1, n2, n3)`` real, on the dense grid.
         """
@@ -3028,16 +3039,40 @@ class Calculation:
         permutations, phases = self._symmetry_maps
         rotations = jnp.asarray(cartesian_rotations(self.system.cell, self.symmetries))
 
-        def channel(three):
-            in_g = jnp.stack([r_to_g(f, gvectors.fft_index) for f in three])
-            out_g = symmetrize_vector_density(in_g, permutations, phases, rotations)
+        def to_g(three):
+            return jnp.stack([r_to_g(f, gvectors.fft_index) for f in three])
+
+        def to_r(components):
             return jnp.stack([
                 jnp.real(g_to_r(component, gvectors.fft_index, gvectors.grid))
-                for component in out_g
+                for component in components
             ])
 
-        moved = jnp.moveaxis(jnp.asarray(fields), 1, 0)  # (nspin, 3, ...)
-        return jnp.moveaxis(jnp.stack([channel(c) for c in moved]), 0, 1)
+        def channel(three):
+            return to_r(symmetrize_vector_density(
+                to_g(three), permutations, phases, rotations
+            ))
+
+        fields = jnp.asarray(fields)
+        moved = jnp.moveaxis(fields, 1, 0)  # (nspin_mag, 3, ...)
+        if self.nspin_mag != 4:
+            return jnp.moveaxis(jnp.stack([channel(c) for c in moved]), 0, 1)
+
+        signs = jnp.asarray(
+            magnetization_signs(self.system.cell, self.symmetries)
+        )
+        charge = channel(moved[0])
+        # ``(3 directions, 3 spin components, ngm)``: the magnetization block,
+        # with both indices live.
+        block = jnp.stack([to_g(moved[i]) for i in (1, 2, 3)], axis=1)
+        rotated = symmetrize_spin_vector_density(
+            block, permutations, phases, rotations,
+            signs[:, None, None] * rotations,
+        )
+        magnetization = jnp.stack([to_r(rotated[:, i]) for i in range(3)])
+        return jnp.moveaxis(
+            jnp.concatenate([charge[None], magnetization], axis=0), 0, 1
+        )
 
     def symmetrize_atom_tensor(self, tensors) -> np.ndarray:
         """``symtensor``: a rank-2 tensor per atom, carried between atoms.
@@ -3136,11 +3171,31 @@ class Calculation:
         On diamond silicon the operations that exchange the two sublattices are
         half the group.
 
+        **Refused for a spinor with a magnetization**, and it is the same
+        landmine :meth:`symmetrize_directional` carries: at ``nspin_mag = 4``
+        three of the channels below are the magnetization and are an **axial**
+        vector, so they rotate with ``det(R) (-1)^t_rev`` beside the atom
+        permutation and the polar rotation of the displacement. The fix is
+        :func:`~defumat.system.symmetry.symmetrize_spin_vector_density`'s double
+        rotation with one more index; what it does not have is a number, and a
+        symmetriser that has never been checked against the whole zone is worse
+        than a refusal -- the wrong rotation there was measured at **66 per
+        cent** on the response's own version of this method, and worse than
+        leaving the wedge sum alone (``PLAN.md`` P81).
+
         Args:
             fields: ``(nat, 3, nspin_mag, n1, n2, n3)`` real, on the dense grid.
         """
         if self._symmetry_maps is None:
             return fields
+        if self.nspin_mag == 4:
+            raise NotImplementedError(
+                "a noncollinear displacement response cannot be symmetrised "
+                "yet: its three magnetization channels are an axial vector and "
+                "carry det(R) and the time-reversal sign, which this average "
+                "does not apply. Run the whole k-grid (nosym), which for a "
+                "genuine texture is usually a small group anyway"
+            )
         gvectors = self.basis.dense
         permutations, phases = self._symmetry_maps
         rotations = jnp.asarray(cartesian_rotations(self.system.cell, self.symmetries))

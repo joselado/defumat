@@ -542,6 +542,46 @@ def symmetrize_vector_density(
     return jnp.mean(jnp.einsum("sij,sjg->sig", rotations, gathered), axis=0)
 
 
+def symmetrize_spin_vector_density(
+    field_g: jnp.ndarray, permutations, phases,
+    rotations: jnp.ndarray, spin_rotations: jnp.ndarray
+) -> jnp.ndarray:
+    """Average a response that carries a direction **and** a spin component.
+
+    :func:`symmetrize_vector_density` with a second vector index, and the two
+    indices do not transform the same way:
+
+        drho_{a,i}(G) = (1/N) sum_S R_ab d_S R_ij e^{-i G . f_S} drho_{b,j}(S^T G)
+
+    ``a`` labels the *perturbation* -- a displacement or a field direction --
+    and is **polar**, so it carries the plain cartesian rotation. ``i`` labels
+    the three magnetization components of the induced density and is **axial**,
+    so it carries ``det(R) (-1)^{t_rev}`` beside the same rotation
+    (:func:`magnetization_signs`).
+
+    **This is the whole content of a noncollinear response's symmetry, and
+    getting it wrong is invisible.** Treating the magnetization channels as
+    three scalars -- rotating only ``a`` -- averages over a group the response
+    does not have: it is a different symmetry rather than a worse average, and
+    the result stays real, stays smooth and satisfies every sum rule that is a
+    sum over atoms.
+
+    Args:
+        field_g: ``(3, 3, ngm)`` -- perturbation direction, then spin
+            component, in cartesian components for both.
+        rotations: ``(nsym, 3, 3)``, the plain cartesian rotations.
+        spin_rotations: ``(nsym, 3, 3)``, the same with the axial signs folded
+            in -- what :func:`symmetrize_magnetization` is handed.
+    """
+    gathered = (
+        phases[:, None, None, :] * field_g[:, :, permutations].transpose(2, 0, 1, 3)
+    )
+    return jnp.mean(
+        jnp.einsum("sab,sij,sbjg->saig", rotations, spin_rotations, gathered),
+        axis=0,
+    )
+
+
 def symmetrize_atom_displacement_density(
     field_g: jnp.ndarray, permutations, phases, rotations: jnp.ndarray, mapping
 ) -> jnp.ndarray:

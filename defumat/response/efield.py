@@ -477,7 +477,23 @@ def _require_a_finite_kernel(calculation, induced, density) -> None:
         return
     density = jnp.asarray(density)
     where = ""
-    if density.shape[0] == 2:
+    if density.shape[0] == 4:
+        # The same singular set in the representation a spinor carries it in:
+        # ``(n, m_x, m_y, m_z)`` rather than ``(up, down)``, so the saturated
+        # point is ``|m| >= n``. A texture adds a *second* one the collinear
+        # case does not have -- the nodes of ``|m|``, where the local spin frame
+        # the noncollinear XC rotates into is undefined.
+        total = jnp.abs(density[0])
+        magnetization = jnp.linalg.norm(density[1:], axis=0)
+        saturated = int(jnp.sum(magnetization >= total))
+        where = (
+            f" The density has {saturated} of {total.size} grid points where "
+            "|m| is at least the charge, which is where the exchange-correlation "
+            "kernel's second derivative diverges, and its |m| runs down to "
+            f"{float(jnp.min(magnetization)):.3e}, where the local spin frame is "
+            "undefined."
+        )
+    elif density.shape[0] == 2:
         total = jnp.abs(density[0] + density[1])
         magnetization = jnp.abs(density[0] - density[1])
         count = int(jnp.sum(magnetization >= total))

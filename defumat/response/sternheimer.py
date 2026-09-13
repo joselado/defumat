@@ -145,7 +145,13 @@ import jax
 from defumat.basis.fft import force_real_g0, g_to_r, g_to_r_gamma
 from defumat.basis.interpolate import to_dense, to_smooth
 from defumat.batching import map_bands, map_k
-from defumat.scf.density import becsum as becsum_of, sum_band
+from defumat.hamiltonian.noncollinear import SpinorHamiltonian
+from defumat.scf.density import (
+    becsum as becsum_of,
+    spinor_becsum,
+    spinor_sum_band,
+    sum_band,
+)
 from defumat.scf.occupations import smearing_order, w0gauss, wgauss
 from defumat.forces.energy import reject_potential_only
 from defumat.scf.potential import as_potential_components
@@ -192,9 +198,15 @@ THRESHOLD = 1.0e-11
 #: splits it at first order; the solve keeps the member it was handed. Nothing
 #: in the solve can see that, which is exactly why it is refused here.
 #:
-#: Checked only for ``nspin = 2``, which is the branch this rule is new for --
-#: an unpolarized insulator's fillings have been validated for many phases and
-#: are left bit-for-bit alone.
+#: Checked for ``nspin = 2`` and for a **spinor**, and the second was added
+#: late: the rule was gated on there being more than one occupied-band count, so
+#: a noncollinear run -- which has exactly one, its band holding one electron --
+#: ran straight through it. A spinor is where the case is *commonest* rather
+#: than rarest. Spin-orbit coupling splits a shell into ``j`` multiplets of
+#: ``2j + 1`` states, so any open-shell atom with an odd number of electrons in
+#: its outer ``j`` shell cuts one, and that is an ordinary heavy element rather
+#: than a contrived cell. An unpolarized *scalar* insulator's fillings have been
+#: validated for many phases and are left bit-for-bit alone.
 DEGENERATE_CUT_RY = 1.0e-5
 
 
@@ -319,7 +331,7 @@ class SternheimerSolver:
                 (bands[None, :] < jnp.asarray(counts)[:, None])[:, None, :],
                 self.eigenvalues.shape,
             )
-            if len(counts) > 1:
+            if len(counts) > 1 or calculation.noncolin:
                 _require_a_gap_at_the_cut(np.asarray(eigenvalues), counts)
         else:
             self.projector_mask = self.eigenvalues < smearing.cutoff
@@ -628,11 +640,22 @@ class SternheimerSolver:
         smooth, dense = calculation.basis.smooth, calculation.basis.dense
         weights = self.density_weights if weights is None else weights
         becsum_ = self._raw_becsum(states, weights)
-        rho = sum_band(
-            states, calculation.fft_index, smooth.grid, weights,
-            calculation.system.cell, calculation.k_batch,
-            fft_index_minus=calculation.fft_index_minus,
-        )
+        if calculation.noncolin:
+            # The same split :meth:`Calculation.density` makes, and for the same
+            # reason: a spinor carries its own spin axis inside the state, so
+            # the leading channel axis of ``states`` is 1 and the *density* it
+            # produces has ``nspin_mag`` components rather than one.
+            rho = spinor_sum_band(
+                states[0], calculation.state_fft_index, smooth.grid, weights[0],
+                calculation.system.cell, calculation.nspin_mag,
+                calculation.k_batch,
+            )
+        else:
+            rho = sum_band(
+                states, calculation.fft_index, smooth.grid, weights,
+                calculation.system.cell, calculation.k_batch,
+                fft_index_minus=calculation.fft_index_minus,
+            )
         return calculation.augmented(to_dense(rho, smooth, dense), becsum_)
 
     def response_density(self, dpsi) -> jnp.ndarray:
@@ -691,9 +714,17 @@ class SternheimerSolver:
         calculation = self.calculation
         if not calculation.is_ultrasoft:
             return ()
+        weights = self.density_weights if weights is None else weights
+        if calculation.noncolin:
+            # ``sum_bec``'s noncollinear branch, then the spin transform that
+            # turns its complex 2x2 blocks into the ``nspin_mag`` real
+            # components the augmentation charge is built from
+            # (``add_becsum_so``). Both are
+            # :meth:`Calculation._noncollinear_becsum`; what is *not* taken is
+            # the symmetrisation, for this method's own reason.
+            return calculation._noncollinear_becsum(states, weights)
         return becsum_of(
-            states, calculation.projectors.vkb,
-            self.density_weights if weights is None else weights,
+            states, calculation.projectors.vkb, weights,
             calculation.species_channels, calculation.k_batch,
         )
 
@@ -835,9 +866,44 @@ def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None)
         calculation, dv, v_scf, ddd_paw, dddd_paw
     )
     vkb = calculation.projectors.vkb
+    # **A spinor perturbation is one operator on a space twice as large, not two
+    # operators.** ``dv`` carries ``nspin_mag`` components -- one for a
+    # nonmagnetic spin-orbit run and four for a magnetic one -- and they are a
+    # 2x2 matrix ``dv_0 I + dm . sigma`` at each point of the grid, exactly as
+    # the self-consistent potential is. So the states are split into their two
+    # components, transformed independently (the FFT knows nothing about spin)
+    # and mixed pointwise, which is ``vloc_psi_nc`` and is
+    # :meth:`SpinorHamiltonian._local`'s own body with ``dv`` in place of ``V``.
+    # The Pauli algebra itself is *not* written a second time here -- it is that
+    # class's ``_multiply``, called below -- because a sign in it is invisible
+    # in every shape and every convergence test.
+    noncolin = bool(calculation.noncolin)
+    npwx = mask.shape[-1]
+    if noncolin:
+        # The mask is per component and the state holds both, so it is the
+        # doubled one -- ``SpinorHamiltonian._as_state`` of it.
+        mask = jnp.concatenate([mask, mask], axis=-1)
 
     def apply(states, ik, spin):
         index = fft_index[ik]
+
+        def spinor_block(block):
+            pair = block.reshape(block.shape[:-1] + (2, npwx))
+            field = g_to_r(pair, index, grid)
+            product = SpinorHamiltonian._multiply(field, fields)
+            box = jnp.fft.fftn(product, axes=(-3, -2, -1)) / n
+            gathered = jnp.take(
+                box.reshape(box.shape[:-3] + (-1,)), index, axis=-1
+            )
+            return gathered.reshape(block.shape)
+
+        if noncolin:
+            if coefficients is not None:
+                raise NotImplementedError(
+                    "a noncollinear ultrasoft or PAW perturbation needs int3 as "
+                    "a 2x2 spin matrix (set_int3_nc), which is not implemented"
+                )
+            return jnp.where(mask[ik], map_bands(spinor_block, states), 0.0)
 
         # **The bands are walked, not batched**, as everywhere else a block of
         # states goes through the grid. This is the whole linear-response
@@ -1067,6 +1133,7 @@ _NO_METAL_YET = (
 def require_a_sternheimer_regime(
     calculation, metals: bool = False, spin_polarized: bool = False,
     gamma_ok: bool = False, metals_missing: str = _NO_METAL_BY_DEFINITION,
+    noncollinear: bool = False,
 ) -> None:
     """Refuse, by name, every regime whose response needs machinery not here.
 
@@ -1119,11 +1186,31 @@ def require_a_sternheimer_regime(
         )
     system = calculation.system
     reject_potential_only(calculation)
-    if calculation.noncolin:
+    if calculation.noncolin and not noncollinear:
         raise NotImplementedError(
-            "the Sternheimer response is not implemented for a noncollinear or "
-            "spin-orbit calculation: incdrhoscf_nc and set_int3_nc are a second "
-            "implementation rather than a spin axis on this one"
+            "this response quantity is not implemented for a noncollinear or "
+            "spin-orbit calculation. **The solve is** (P81): the operator, the "
+            "projector and the preconditioner never had a spin axis to begin "
+            "with -- a spinor is one vector of length 2 npwx and the "
+            "SpinorHamiltonian applies to it -- and what was missing was the "
+            "density the solve feeds, which is now spinor_sum_band, and the "
+            "perturbation, which is dv_0 I + dm . sigma rather than one "
+            "potential per channel. What is *not* validated is this caller's "
+            "assembly on top of it"
+        )
+    if calculation.noncolin and calculation.is_ultrasoft:
+        # ``int3`` is a *scalar* per projector pair here, and for a spinor it is
+        # a 2x2 matrix in spin space that then has to be sandwiched between the
+        # spin-orbit coefficients -- ``set_int3_nc`` and ``newd_so``'s partner.
+        # One ``jvp`` of ``Calculation.coefficients`` gives the scalar
+        # integrals; what is missing is the recombination, which is
+        # ``_newd_noncollinear`` applied to a *tangent* rather than to a value.
+        raise NotImplementedError(
+            "the Sternheimer response of a noncollinear ultrasoft or PAW "
+            "dataset is not implemented: dD_ij is a 2x2 matrix in spin space "
+            "(set_int3_nc), where the norm-conserving case has no dD at all. "
+            "The noncollinear response is implemented for norm-conserving "
+            "datasets"
         )
     if getattr(calculation, "magnetic_field", None) is not None:
         # **The field the run converged under is not the field the input asked
@@ -1252,11 +1339,11 @@ def smearing_of(calculation, result) -> Smearing | None:
 
 def make_sternheimer(calculation, result, threshold: float = THRESHOLD,
                      metals: bool = False, spin_polarized: bool = False,
-                     gamma_ok: bool = False):
+                     gamma_ok: bool = False, noncollinear: bool = False):
     """A solver for a converged :class:`~defumat.scf.driver.SCFResult`."""
     require_a_sternheimer_regime(
         calculation, metals=metals, spin_polarized=spin_polarized,
-        gamma_ok=gamma_ok,
+        gamma_ok=gamma_ok, noncollinear=noncollinear,
     )
     eigenvalues = jnp.asarray(result.eigenvalues)
     if eigenvalues.ndim == 2:
@@ -1272,8 +1359,11 @@ def make_sternheimer(calculation, result, threshold: float = THRESHOLD,
     # elsewhere.
     _, ddd_paw = calculation.onecenter(result.becsum)
     hamiltonians = calculation.hamiltonian(potential.v_scf, ddd_paw)
+    wavefunctions = jnp.asarray(result.wavefunctions)
+    if wavefunctions.ndim == 3:
+        wavefunctions = wavefunctions[None]
     return SternheimerSolver(
-        calculation, hamiltonians, result.wavefunctions, eigenvalues, weights,
+        calculation, hamiltonians, wavefunctions, eigenvalues, weights,
         nocc, threshold, v_scf=potential.v_scf, becsum=result.becsum,
         smearing=smearing_of(calculation, result),
         kpoint_weights=calculation.system.kpoints.weights,
