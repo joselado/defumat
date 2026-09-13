@@ -13816,9 +13816,14 @@ reduced from an unshifted 4x4x4 grid with 48 operations; `si-epsilon-unshifted-n
 whole 64 with no symmetry at all. They share nothing but the solve. **7.4e-13**, against the
 scalar pair's own 4.1e-13 on the same cell.
 
-**3. `ph.x`'s own number.** 13.806645970 against 13.806689470, which is **4.3e-5** -- the
-scalar route's own figure to the digit, because it is the same floor: QE interpolates every
-radial form factor from a `dq = 0.01` table where this code integrates it directly.
+**3. `ph.x`'s own number, and it has to be `ph.x`'s *spinor* number.** Running QE's own
+spinor of this cell rather than comparing against its scalar one is the like-for-like
+pairing, and it is not a formality: **`ph.x` gives 13.806615123 as a spinor against
+13.806689470 as a scalar**, so QE's own scalar-against-spinor identity is **7.4e-5** where
+this code's is 1.35e-7 at the same `conv_thr` and 5.0e-14 at 1e-10. Against the right
+number this code's spinor sits **3.1e-5** away -- *tighter* than the 4.3e-5 the two scalar
+runs sit at. What is left on both sides is the same floor: QE interpolates every radial
+form factor from a `dq = 0.01` table where this code integrates it directly.
 
 **The identity is asserted at `conv_thr = 1e-10` and not tighter, and that is a measurement
 rather than a convenience.** The gap reads 2.1e-14, 5.0e-14, **1.35e-7** and 9.8e-9 at

@@ -31,8 +31,13 @@ reached:
    shared between the two routes except the solve, so agreeing is the check on
    :meth:`~defumat.scf.driver.Calculation.symmetrize_directional` reached from
    this assembly.
-3. ``ph.x``'s own 13.806689470, which the spinor route has to reproduce as well
-   as the scalar one does.
+3. ``ph.x``'s own number, and it has to be ``ph.x``'s *spinor* one. QE run as a
+   spinor on this cell gives **13.806615123** against **13.806689470** as a
+   scalar, so its own scalar-against-spinor identity is **7.4e-5** where this
+   code's is 5.0e-14. Against the like-for-like number this code sits 3.1e-5
+   away, tighter than the 4.3e-5 the two *scalar* runs sit at. The bound below
+   is loose enough to hold either pairing, which is deliberate: it is the
+   ``dq = 0.01`` radial-table floor and not a statement about the spin axis.
 
 **What the identity is measured at, and why not tighter.** At
 ``conv_thr = 1e-8`` and ``1e-10`` the two routes agree to **2.1e-14** and
@@ -182,7 +187,8 @@ def test_the_spinor_dielectric_constant_matches_quantum_espresso():
     is not an independent measurement of the physics -- it is the statement that
     the spinor *route* reaches ``ph.x`` as well as the scalar route does, which
     is what a user asking for ``get_dielectric_tensor()`` on a spin-orbit run
-    is promised. Measured 13.806645970 against 13.806689470.
+    is promised. Measured 13.806645970, against ``ph.x``'s own spinor run's
+    13.806615123 (3.1e-5) and its scalar run's 13.806689470 (4.3e-5).
     """
     _, _, spinor = _silicon(True, 1e-12)
     assert float(spinor.isotropic) == pytest.approx(
