@@ -14358,10 +14358,31 @@ told from silence is this project's most-repeated trap.
   `angle1`/`angle2` with `nosym`, differenced by hand -- there is no QE routine, which is
   what the README's note 19 records. It has not been run, so the 0.447 meV is checked
   against *this* code's other route and against an identity, not against another code.
-* **The PAW cell has not been run**, only shown to be accepted where the theorem refuses
-  it (`test_paw_is_refused_by_the_frozen_route_and_allowed_by_the_relaxed_one` asserts the
-  asymmetry from the refusals alone). `ni-tetragonal-relaxed-mae-paw.in` is committed and
-  is the run to take.
+* **The PAW cell was run and diverged, and both causes were mine.** It is committed
+  because it is the right cell -- a fully-relativistic PAW dataset for a magnetic element,
+  the regime the frozen route refuses outright -- and the two mistakes are worth more than
+  the number would have been. `Ni.rel-pbe-spn-kjpaw` is a *semicore* dataset with
+  `z_valence = 18`, so the `starting_magnetization = 0.4` I wrote seeds **7.2 mu_B** on an
+  atom whose moment is about 0.6; and the cutoffs were 40/320 where the dataset's own
+  header asks for **74.6/478.2**. Measured: 300 iterations per direction reaching an
+  accuracy of **550 and 1700 Ry**, the two totals 60 Ry apart, both moments drifted past
+  100 degrees. The input now carries 0.05 and 75/480 and says why. It has **not** been
+  rerun -- at 75 Ry on 18 k-points with a PAW spinor it is an hours-long job wanting an
+  idle machine -- so the PAW claim rests on the refusal asymmetry
+  (`test_paw_is_refused_by_the_frozen_route_and_allowed_by_the_relaxed_one`) and not on a
+  converged number.
+* **A seed stated in Bohr magnetons, and a guard that was tried and withdrawn.** P84's own
+  outstanding item asked for an input-time warning on the seed, and the nickel failure is
+  that item arriving from the other side: there a seed at one valence electron's worth
+  started the run on the clamp, here an innocuous-looking *fraction* on a high-valence
+  dataset asked for an absurd moment. A threshold on the seeded moment was written and
+  **then removed, because it does not discriminate**: cobalt's working input seeds
+  5.4 mu_B (0.6 x 9, against a real moment of 1.8) and nickel's broken one seeds 7.2, so
+  no magnitude separates them. That is `CLAUDE.md`'s "a check whose null result cannot be
+  told from a pass", caught by testing that the guard fires on the case that motivated it
+  -- it did not. **The fix is to state the seed in Bohr magnetons in the run's setup report
+  rather than to judge it**, since the number is nowhere printed in the unit it means
+  something in, in either code.
 * **The `PERFORMANCE.md` pair** is owed. Every timing here was taken beside two other
   jobs, so none of them is quotable.
 * **`average_pp`**, the third item of the index entry, is **not** in scope here and is
