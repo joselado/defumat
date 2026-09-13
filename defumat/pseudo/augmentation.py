@@ -514,10 +514,41 @@ class TabulatedAugmentation(AugmentationCharge):
 
 
 def _tabulated_charge(build, gcart, mask, phases, becsum, chunk, ngm):
-    """``rho_aug(G)`` for one species, scanning over blocks of G."""
+    """``rho_aug(G)`` for one species, scanning over blocks of G.
+
+    **The body is rematted, and that is what makes P73 reach the backward pass.**
+    Rebuilding ``Q_ij(G)`` a chunk at a time keeps it off the *forward* working
+    set, which is what P73 measured; under ``jax.grad`` it came straight back.
+    ``build(gcart_chunk)`` is a known value while ``weighted`` is not, so
+    transposing ``einsum("ijc,ijc->c", Q, weighted)`` needs ``Q`` -- and because
+    ``build``'s argument comes from a ``dynamic_slice`` on the scan index it is
+    not loop-invariant, so partial evaluation **stacks** it. The residual is
+    ``(nchunks, nh, nh, chunk)``, which is the dense table reborn, plus a
+    ``(nchunks, nat, chunk)`` copy of the atom phases.
+
+    **It has an exact floor.** :func:`build_augmentation` takes this route only
+    when ``nh^2 ngm x 16 > DEFUMAT_AUG_MAX_BYTES`` (2 GiB), and the stacked
+    residual equals that product to within ``npad/ngm``. So on every cell that
+    takes this path the tape was **at least 2 GiB by construction** -- the
+    tabulated scheme is chosen exactly when the array it rebuilds is too large
+    to store. Sized at **65.5 GB** for Ni and 11.1 GB for Br on the 45-atom
+    NiBr2 slab, and 2.73 GB on ``bismuthene-soc``, which is the cell ``PLAN.md``
+    P46 records a spinor force as not running on at all.
+
+    Under ``jax.checkpoint`` the body's residuals are its *inputs*, and
+    ``gcart``, ``phases``, ``becsum`` and ``mask`` are closed over and
+    loop-invariant, so they stay single arrays. Traced on the real function:
+    the ``(nchunks, nh, nh, chunk)`` and ``(nchunks, nat, chunk)`` residuals
+    disappear from the jaxpr and the gradient is **bit-identical** (0.0).
+
+    The cost is one extra evaluation of ``build`` over the padded sphere per
+    backward pass -- one more ``charge`` rebuild, which the docstring below
+    prices at 0.174 s on ``si8-us-1k`` against a derivative costing minutes.
+    """
     nchunks = mask.shape[0] // chunk
     nat = phases.shape[0]
 
+    @jax.checkpoint
     def body(carry, index):
         start = index * chunk
         gcart_chunk = jax.lax.dynamic_slice(gcart, (start, 0), (chunk, 3))
@@ -536,10 +567,17 @@ def _tabulated_integrals(build, gcart, mask, potential_g, phases, volume, chunk,
 
     A reduction over G rather than a map along it, so the accumulator is the
     scan's *carry*: ``(nat, nh, nh)`` whatever the chunk is.
+
+    **The carry was never the problem; the residual was.** The body is rematted
+    for the same reason :func:`_tabulated_charge`'s is, and it stacks the same
+    ``(nchunks, nh, nh, chunk)`` copy of ``Q_ij(G)`` without it -- confirmed by
+    tracing ``jax.grad`` of this function and reading the scan's residuals off
+    the jaxpr. This is the one any reverse-mode consumer of ``newd`` reaches.
     """
     nchunks = mask.shape[0] // chunk
     nat = phases.shape[0]
 
+    @jax.checkpoint
     def body(carry, index):
         start = index * chunk
         gcart_chunk = jax.lax.dynamic_slice(gcart, (start, 0), (chunk, 3))

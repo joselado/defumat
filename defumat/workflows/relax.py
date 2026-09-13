@@ -361,6 +361,17 @@ def run_relax(
         threshold = threshold_resume
 
     for index in range(first_step, nstep + 1):
+        # **The previous step's mixed state must not be live under this one's
+        # SCF.** ``result`` holds the wavefunctions, and rebinding it on the
+        # next statement is not enough: the old object stays referenced for the
+        # whole of the ``run_scf`` call that is meant to replace it, so two
+        # steps' wavefunctions coexist at the peak. Sized at 7.7 GB together
+        # with ``previous`` below on a 45-atom slab, which is what makes a
+        # relaxation there 40.0 GB where its own SCF is 32.3 on a 39 GB machine
+        # (`MEMORY-AUDIT.md` A2). Dropping it costs nothing -- the body rebinds
+        # it immediately, ``RelaxStep`` keeps no reference to it, and the
+        # post-loop ``RelaxResult`` reads whatever the last iteration left.
+        result = None
         result = run_scf(
             calculation.system,
             pseudos,
@@ -456,6 +467,11 @@ def run_relax(
         density, becsum = _extrapolate(
             previous, calculation, result, density_extrapolation
         )
+        # **After** the extrapolation and not before: that call is the last
+        # reader of the old ``Calculation``, through ``starting_density()`` and
+        # ``becsum(...)``. What it returns is bare arrays closing over nothing,
+        # so the step's projectors, augmentation tables and G sets go here.
+        del previous
 
     return RelaxResult(
         converged=converged and not optimizer.failed,

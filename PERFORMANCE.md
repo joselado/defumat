@@ -4573,6 +4573,70 @@ it is where the cost lives. The response stack has never been profiled on
 `si8-1k`-scale cells at all, which is the measurement this row should be read as
 asking for rather than answering.
 
+## What the augmentation scan was costing the backward pass (MEMORY-AUDIT A1)
+
+**P73 kept `Q_ij(G)` off the forward working set and the tape brought it straight
+back.** The tabulated route rebuilds the table a chunk at a time inside a
+`lax.scan`, which is what made the forward saving; under `jax.grad`,
+`build(gcart_chunk)` is a known value while `weighted` is not, so transposing the
+contraction needs `Q` -- and because `build`'s argument comes from a
+`dynamic_slice` on the scan index it is not loop-invariant, so partial evaluation
+**stacks** it. The residual is `(nchunks, nh, nh, chunk)`, the dense table reborn,
+plus a `(nchunks, nat, chunk)` copy of the atom phases.
+
+**It had an exact floor.** `build_augmentation` takes this route only when
+`nh^2 ngm x 16 > DEFUMAT_AUG_MAX_BYTES` (2 GiB), and the stacked residual equals
+that product to within `npad/ngm`. So on every cell that took the path, the tape
+was **at least 2 GiB by construction** -- the scheme is chosen exactly when the
+array it rebuilds is too large to store.
+
+**Measured by the compiler rather than by a stopwatch.** `jax.jit(jax.grad(...))
+.lower(...).compile().memory_analysis()` allocates nothing, so it sizes a
+derivative on a cell whose SCF need not fit (`tools/gpu/force_memory.py`).
+`bismuthene-soc-small.in` with `DEFUMAT_AUG_MAX_BYTES=0` forcing the route:
+
+| | `temp_bytes` | |
+|---|---|---|
+| plain scan | 2,495,447,288 | **2.32 GiB** |
+| body rematted | 1,062,580,440 | **0.99 GiB** |
+
+**1.33 GiB off, to 43 per cent of what it was**, at `nbnd = 38`, `npwx = 2688`,
+7 k-points, dense grid 45x45x81.
+
+**What it cost and what it did not change.** One extra evaluation of `build` over
+the padded sphere per backward pass -- one more `charge` rebuild, priced at 0.174 s
+on `si8-us-1k` against a derivative costing minutes. The force and stress of a
+displaced ultrasoft silicon cell agree **to one ulp** across the change (6.9e-18 on
+a force of 0.055 Ry/bohr, 4.3e-18 on the stress) and the total energy to every
+digit; not bit-identical, because remat reorders the backward pass. Traced on the
+real function, the two stacked residuals disappear from the jaxpr and the gradient
+of the isolated scan is bit-identical (0.0).
+
+**The general lesson, which is the reason this is here and not only in the audit.**
+A forward-path memory fix is not a derivative memory fix, and on this code the
+derivative is where the peak is. P73's entry above is correct about what it
+measured and was read as closing something it did not. `grep -rn "jax.checkpoint"`
+returned exactly one hit before this -- a comment recording a *null* for
+`_qrad_kernel` in the **stored** route -- so nothing in the package was rematted at
+all; that null is about a different route and is not a verdict on remat here.
+
+## Two retention fixes in the relaxation drivers (MEMORY-AUDIT A2, A3)
+
+Neither costs anything and neither is inside a traced path; both are host-side
+reference lifetimes between compiled calls.
+
+- **`run_relax`** held the previous ionic step's `SCFResult` *through* the
+  `run_scf` call meant to replace it -- rebinding a name does not drop the old
+  object until the call returns -- and its `Calculation` through the whole of the
+  next step. Sized at **7.7 GB** on a 45-atom slab, which is what makes a
+  relaxation there 40.0 GB where its own SCF is 32.3, on a 39 GB machine: **the
+  relaxation did not fit where the SCF did.** `result = None` at the top of the
+  body, and `del previous` *after* `_extrapolate`, which is the last reader of it.
+- **`run_vc_relax`** held `base`, `previous` and `current` -- three whole
+  `Calculation`s -- while it built a fourth and ran a from-scratch SCF beside
+  them. **18 GB** at that scale. `relaxed` has already taken the only thing any of
+  them is needed for.
+
 ## History
 
 | Date | Change | Effect |

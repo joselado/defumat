@@ -331,7 +331,25 @@ Anderson coefficients under both quadratic forms — `scf_accuracy` gives QE's f
 report the angle between the two coefficient vectors. If it is small, the metric is not the
 mechanism and this item can be closed as measured rather than fixed.
 
-### G. The noncollinear derivative memory wall, unmeasured since two memory phases moved it [22]
+### G. The noncollinear derivative memory wall. ✅ The suspicion in this item was right, and it is fixed [22]
+
+**Closed as diagnosed, 2026-09-13.** This item's own caveat -- "P73 replaced the *stored*
+`Q_ij(G)`, while `augmentation.py` says the reverse-mode cost lives in `_qrad_kernel`'s
+`(ngm, kkbeta)` intermediate, which the table route **evaluates** rather than avoids -- so
+P73 may not have helped the backward pass at all" -- was correct in its conclusion and
+wrong about the mechanism. The backward-pass cost was not `_qrad_kernel`'s intermediate: it
+was the `lax.scan` **stacking its residuals**, so the dense table came back on the tape at
+`>= 2 GiB` by construction. Both scan bodies are now rematted, and
+`bismuthene-soc-small`'s force tape goes **2.32 GiB -> 0.99 GiB** by the compiler's own
+`memory_analysis()` (`PERFORMANCE.md`, `MEMORY-AUDIT.md` A1).
+
+**What is still owed here** is the item's original ask: an end-to-end spinor force on
+`bismuthene-soc` itself, which is the cell P46 recorded as not running at all. The tape is
+no longer the blocker it was, but nothing has been run on that cell since, and the P46
+figure stands until something is. Run it under
+`systemd-run --user --scope -p MemoryMax=...`, on an idle machine, and commit first.
+
+### G2. The old text of item G, kept for its reasoning [22]
 
 **Session for the measurement, phase for a derivative term in `SizeEstimate`.** `PLAN.md`
 P46 records a bismuthene spinor force taking free memory from 24 GB to 0.65 GB and being

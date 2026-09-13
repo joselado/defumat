@@ -825,8 +825,20 @@ What neither bound touches is the peak *inside* one test, which is a real cost t
 in advance rather than discovered: the backward pass of an ultrasoft or PAW derivative
 carries the augmentation table `Q_ij(G)` — `nh^2 x ngm` per atom, and `nh` is in the
 twenties for a fully-relativistic dataset. On a **slab** that is tens of GB and is why a
-bismuthene spinor force does not run here at all (P46), while the same physics on a small
+bismuthene spinor force did not run here at all (P46), while the same physics on a small
 bulk cell runs in 33 seconds.
+
+**Both halves of that are now fixed, and the second half is the one that had gone quiet.**
+P73 kept `Q_ij(G)` off the *forward* working set by rebuilding it a chunk at a time, and
+the sentence above then read as closed — but the scan's residuals are stacked under
+`jax.grad`, so the dense table came straight back on the tape, at **`>= 2 GiB` by
+construction** (the tabulated route is chosen exactly when the array is too large to
+store). Both scan bodies are rematted (`pseudo/augmentation.py`), which takes
+`bismuthene-soc-small`'s force tape from **2.32 GiB to 0.99 GiB** measured by the
+compiler's own `memory_analysis()`, with the force and stress unchanged to one ulp. The
+lesson is the general one: **a forward-path memory fix is not a derivative memory fix, and
+on this code the derivative is where the peak is.** `MEMORY-AUDIT.md` is where the rest of
+that audit lives.
 
 ## Reading beyond the source
 

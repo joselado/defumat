@@ -1,5 +1,13 @@
 # Memory audit of defumat
 
+> **Status, 2026-09-13.** The top three items are **done**: A1 (both augmentation scan
+> bodies rematted, `bismuthene-soc-small`'s force tape 2.32 GiB -> 0.99 GiB measured by
+> `memory_analysis()`, force and stress unchanged to one ulp), A2 (`run_relax`'s two
+> reference drops) and A3 (`run_vc_relax`'s one). `PERFORMANCE.md` carries the numbers and
+> `CLAUDE.md`'s P46 paragraph is corrected. Everything below is the audit as written,
+> including those three; the rest is untouched and still a to-do list.
+
+
 Static audit, 2026-09-13. Nothing was executed: no pytest, no notebook, no benchmark, no SCF,
 nothing that imports `defumat` and allocates. Every number below is arithmetic on shapes read
 from source, on counts read from committed UPF headers and QE reference outputs, or on figures

@@ -332,12 +332,26 @@ def run_vc_relax(
 
     relaxed = current.system
     relaxation_scf = result
+    # **Four Calculations and two mixed states were live into the final SCF.**
+    # ``base``, ``previous`` and ``current`` each hold a whole ``Calculation``
+    # -- projectors, augmentation tables, the G sets -- and the block below
+    # builds a *fifth* and runs an SCF from scratch beside them. ``relaxed`` has
+    # already taken the only thing any of them is needed for, which is
+    # ``current.system``, so the names are dropped here rather than at the end
+    # of the function. Sized at **18 GB** on a 45-atom slab (`MEMORY-AUDIT.md`
+    # A3); it costs nothing, because nothing below reads a *calculation* -- the
+    # ``final_scf`` block reads the relaxed **System**, which is what ``relaxed``
+    # already holds, and it is written against that rather than against
+    # ``current.system`` for exactly this reason. Written the other way it is an
+    # AttributeError on the ``reset_gvectors`` path and nowhere else, which is a
+    # branch a quick check does not take.
+    base = previous = current = None
     if final_scf and not treinit_gvectors:
         # ``reset_gvectors``: a whole new run at the relaxed geometry, with
         # nothing carried over -- not the density, not the wavefunctions, not
         # the grids. Anything carried would be carried in the old basis.
-        relaxed = system.with_cell(current.system.cell.at,
-                                   current.system.structure.positions)
+        relaxed = system.with_cell(relaxed.cell.at,
+                                   relaxed.structure.positions)
         final = Calculation(relaxed, pseudos, diagonalization=diagonalization,
                             k_batch=k_batch)
         result = run_scf(relaxed, pseudos, nbnd=nbnd, conv_thr=conv_thr,
