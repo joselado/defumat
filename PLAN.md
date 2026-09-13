@@ -13526,14 +13526,32 @@ calls the guard without the new opt-in. **No user-facing quantity changes in thi
 `docs/features.tex`'s amber boxes are untouched and correct as they stand. The order the
 rest goes in:
 
-* **the screening kernel at the nodes of `|m|`.** `chi_0` is the *bare* response and
-  nothing here touches `dv_of_drho`, which is one `jvp` of `v_of_rho`'s `nspin_mag = 4`
-  branch and rotates into a local frame through `m/|m|`. A 90-degree texture has grid
-  points where `m` passes through zero, which is the `abs` trap one derivative further out
-  and is what stopped the collinear magnetic response until P70. This gates every
-  self-consistent consumer and nothing else does. `_require_a_finite_kernel` now names the
-  spinor singular set -- the saturated points `|m| >= n` and the minimum of `|m|` -- where
-  before it could only diagnose `(up, down)`.
+* **the screening kernel. Measured, finite, and the null does not say what it looks like
+  it says.** `chi_0` is the *bare* response and nothing above touches `dv_of_drho`, which
+  is one `jvp` of `v_of_rho`'s `nspin_mag = 4` branch and rotates into a local frame
+  through `m/|m|` -- the `abs` trap one derivative further out, and what stopped the
+  collinear magnetic response until P70. It gates every self-consistent consumer and
+  nothing else does. On both textured cells here it is **finite and right**:
+
+  | cell | grid | min `|m|` | `|m| >= n` | non-finite | vs a central difference, `h = 1e-4` / `1e-5` |
+  |---|---|---|---|---|---|
+  | `h-chain-90deg` | 40x40x64 | 1.160e-9 | 0 | **0 of 409600** | 2.420e-7 / 2.425e-9 |
+  | `h4-cycloid-90-nosym` | 40x40x64 | 1.167e-9 | 0 | **0 of 409600** | 2.508e-7 / 2.507e-9 |
+
+  The error falls by a hundred for a factor of ten in the step, so the derivative is
+  *correct* and not merely finite.
+
+  **What this is not is a statement about the regime, and reading it as one would be the
+  "a clean zero is not a pass" trap in its purest form.** Neither cell **reaches** the
+  singular set: zero grid points are saturated, zero have `n < 1e-10`, and `|m|` bottoms
+  out at 1.2e-9 rather than at zero. The collinear case that failed was not like that --
+  triplet O2 in a 10-bohr box had **1504 of 91125** points at `|zeta| >= 1` exactly, and
+  1504 NaN to go with them. So what is measured is that these two cells do not reach the
+  cliff, not that there is no cliff; a spinor cell with real vacuum, or a saturated one,
+  is the case that would discriminate and there is none here. `_require_a_finite_kernel`
+  now names the spinor singular set -- the saturated points `|m| >= n` and the minimum of
+  `|m|` -- where before it could only diagnose `(up, down)`, so the diagnosis exists for
+  when a cell does reach it.
 * **the dielectric tensor**, with the identity one level up: silicon as a spinor with no
   magnetization must give the scalar `eps_infinity`, which is what P45 did for `nspin = 2`.
 * **an external number.** `ph.x` 7.4.1 supports noncollinear magnetism for phonons -- its
