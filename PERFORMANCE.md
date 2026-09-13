@@ -5071,6 +5071,56 @@ now the working set the gate names. Its hardcoded `16` for the complex width goe
 with it: under `precision = 'single'` the gate fired at twice the true size, and
 the byte count comes from `cell.precision.complex.itemsize` now.
 
+## The stress's `|psi|^2` residual is real and is not removable (MEMORY-AUDIT A11)
+
+**A null, and the second item in this audit whose prescribed one-line fix is not
+an improvement** (A4's was a regression). It is recorded because a null that is
+not written down gets re-attempted, and because the reason generalises.
+
+The audit is right that `_kinetic_energy`'s `density = jnp.real(jnp.conj(psi) *
+psi)` is a reverse-mode residual, and right about the size: on an isolated
+gradient at 45-atom spinor shapes (`nbnd = 403`, `ndim = 3.4e5`)
+`temp_size_in_bytes` is **1,098,880,000 B** against a `|psi|^2` of 1,096,160,000
+-- the arena is that array and nothing else. It is right that it is a **stress**
+residual and not a force's: `at_strain` rebuilds `kinetic`, and under a
+displacement the term is dead-coded.
+
+**What it is wrong about is that `jax.checkpoint` removes it.** The remat does
+everything it is supposed to do at the jaxpr level -- on the full strain gradient
+of `si-epsilon` the band-shaped real array goes from 4 mentions to 3 and the
+`remat` count from 1 to 2 -- and `temp_size_in_bytes` does not move **by one
+byte**:
+
+| | isolated grad, 403x3.4e5 | full strain grad, si-epsilon | full strain grad, bi20-soc, `nbnd = 120` |
+|---|---|---|---|
+| as written | 1,098,880,000 | 215,713,488 | 41,205,673,832 |
+| `jax.checkpoint` | 1,098,880,000 | 215,713,488 | 41,205,673,832 |
+
+**The reason is that remat cannot help where the backward pass needs the same
+array the forward pass built.** `d/d(kinetic)` of `sum w einsum(density,
+kinetic)` *is* a contraction of `density`, so the array has to exist in the
+backward pass either way; all `jax.checkpoint` changes is which pass builds it,
+and XLA's buffer assignment was already reusing the forward buffer because
+`density`'s only forward consumer is the `einsum` on the next line. **A jaxpr
+residual is not a compiled buffer** -- that is the transferable lesson, and it is
+the opposite of A1, where the residual was stacked by a scan and remat took 1.33
+GiB off.
+
+**Two rewrites measured on the same shapes, both worse.** Neither is an `abs`
+and neither breaks the `Re(conj(psi) psi)` rule, so the reason to reject them is
+arithmetic rather than principle:
+
+| writing | temp |
+|---|---|
+| `Re(conj psi * psi)` then `skbg,kg->skb` (as written) | **1,098,880,000** |
+| one `skbg,skbg,kg->skb` with `Re` at the end | 2,263,040,000 |
+| `sum_bands` over the band axis at `batch = 1` | 3,288,480,264 |
+
+All three agree on the value and on `d/d(kinetic)` to the last digit or one ulp.
+**The array is what this derivative costs, not what this writing of it costs.**
+The docstring says so at the site, so the next reader does not spend the
+afternoon again.
+
 ## History
 
 | Date | Change | Effect |

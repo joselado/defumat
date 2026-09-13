@@ -15,6 +15,12 @@
 > direction). `PERFORMANCE.md` carries the numbers. Everything below is the audit as
 > written, including those nine; the rest is untouched and still a to-do list.
 >
+> **A11 is checked and is a NULL**, measured three ways: the residual is real and is 1.10
+> GB, and `jax.checkpoint` moves the compiled arena by zero bytes because the backward pass
+> needs the same array. It is struck off rather than done. Two items out of ten now, A4 and
+> A11, have had a prescribed fix that measurement refused -- which is the ratio to expect
+> of a static audit, and the reason each is checked rather than applied.
+>
 > **A6 and A7 are the first items here measured rather than sized**, with
 > `jax.live_arrays()` summed inside the run, and the instrument has one trap worth carrying
 > forward: the measuring script's own local is a reference too, so the first attempt read
@@ -70,7 +76,7 @@ run that currently does not fit on this machine or does not start at all.
 | 8 | `spinchi0` stacks the band loop | A8 | `spinchi0.py:472` | fcc Ni | **1.36 GB** — and `PERFORMANCE.md` says this was fixed | 3 lines | a, **done** |
 | 9 | `_species_charge` doubles the stored route | A9 | `augmentation.py:157` | bismuthene-soc-small | **1.12 GB**; the `AUG_MAX_BYTES` gate measures half the working set | 2 lines + docstring | a, **done** |
 | 10 | Bootstrap Dyson iterates every frequency | A10 | `dyson.py:122-126` | nm=285/nw=121 | **1.1-1.3 GB** and **88%** of 37.6 s | 25 lines + a flag | a |
-| 11 | Stress tapes a real `\|psi\|^2` | A11 | `energy.py:520` | NiBr2-scale spinor stress | **1.10 GB**, a 50% surcharge on psi | 1 line | a |
+| 11 | Stress tapes a real `\|psi\|^2` | A11 | `energy.py:520` | NiBr2-scale spinor stress | **1.10 GB**, a 50% surcharge on psi | 1 line | a, **null: measured, not removable** |
 | 12 | `PawSpecies` materialises a rank-1 outer product | A12 | `onecenter.py:604` | NiBr2 Ni | **0.55 GB/label** (8.29 GB at 15), a floor under `jvp` | 40 lines | a |
 | 13 | `vkb` is full-k and outside the dial | A13 | `projectors.py:69` | nbse2 | **355 MB** | 60 lines | a |
 | 14 | Velocity holds four full-k blocks | A14 | `velocity.py:302` | AlAs (measured) | **200 MB** | 20 lines | a |
@@ -83,7 +89,9 @@ run that currently does not fit on this machine or does not start at all.
   pass, **−79 to −82 GB** of tape (76.5 + 3-5 + 2.5-5.1, the last CSE-dependent).
 - **PAW spinor stress on the same cell**: A1 + A4 + A11, plus A5's `_atom_phases` half —
   **−81 to −83 GB**. A11 is stress-only (`kinetic` carries the strain, and under a displacement the
-  term is dead-coded); A5's `_structure_factors_at` half is reached by a force.
+  term is dead-coded); A5's `_structure_factors_at` half is reached by a force. **Read this
+  group at −80 to −82 GB**: A11's 1.10 GB was measured not to be removable (see its entry),
+  so it stays on the bill.
 - **A relaxation's resident set**: A2 + A3 are the same stage, **−25.7 GB**.
 
 Do not add across those groups: they are three different moments of a run.
@@ -815,6 +823,26 @@ dtypes follow `chi.x` throughout, as `identity = jnp.eye(..., dtype=x.dtype)` al
 ---
 
 ### A11. Every stress tapes a full real copy of `|psi|^2` for the kinetic term, on top of `psi`
+
+> **Checked 2026-09-13 and it is a NULL -- the second entry here whose prescribed one-line
+> fix is not an improvement.** Everything above about the residual and its size is
+> confirmed: an isolated gradient at 403 x 3.4e5 has `temp_size_in_bytes` 1,098,880,000
+> against a `|psi|^2` of 1,096,160,000, so the arena *is* that array. **`jax.checkpoint`
+> moves it by zero bytes**, on the isolated gradient, on `si-epsilon`'s full strain
+> gradient and on `bi20-soc`'s -- all three bit-identical before and after -- while doing
+> exactly what it should to the jaxpr (the band-shaped real array 4 mentions -> 3). The
+> backward pass has to form the same array to contract it against `weights`, so remat only
+> chooses which pass builds it, and XLA's buffer assignment was already reusing the forward
+> one. **A jaxpr residual is not a compiled buffer**, which is the opposite of A1 where a
+> scan *stacked* it.
+>
+> The entry's "do not attempt a rewrite" is right in its conclusion and wrong in its
+> reason: the two obvious rewrites keep `Re(conj(psi) psi)` perfectly well and are simply
+> **worse** -- a three-factor `einsum` doubles the arena (2,263,040,000) and `sum_bands`
+> over the band axis triples it (3,288,480,264), all three agreeing on the value and the
+> derivative. The note is at the site in `forces/energy.py` so the measurement is not
+> repeated.
+
 
 **Site.** `defumat/forces/energy.py:520-521`, inside `_kinetic_energy` (`:504`, jitted at `:503`):
 

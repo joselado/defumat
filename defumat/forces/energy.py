@@ -559,6 +559,18 @@ def _kinetic_energy(psi, kinetic, weights, gamma_only: bool = False):
     position dependence and contributes nothing to the force. It is here because
     the functional has to *be* the total energy before it is differentiated --
     that identity is the only check there is on the rest of it.
+
+    **``density`` below costs a real ``(nspin, nk, nbnd, ndim)`` array of the
+    compiled stress's temp arena -- 1.10 GB at 45-atom spinor scale, a 50 per
+    cent surcharge on ``psi`` -- and three ways of not paying it have been
+    measured and are all worse or equal** (`MEMORY-AUDIT.md` A11,
+    `PERFORMANCE.md`). ``jax.checkpoint`` here removes the residual from the
+    *jaxpr* and moves ``temp_size_in_bytes`` by **zero bytes**, because the
+    backward pass has to form the same array to contract it against ``weights``
+    and XLA already reuses the forward buffer for it. Folding the product into a
+    three-factor ``einsum`` doubles the arena and walking the band axis with
+    ``sum_bands`` triples it. Leave it alone; the array is what the derivative
+    costs, not what this writing of it costs.
     """
     # ``Re(conj(psi) psi)`` and not ``abs(psi)**2`` -- the two are the same
     # number to a rounding and only one is differentiable, ``abs``'s derivative
