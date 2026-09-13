@@ -643,6 +643,51 @@ k-points, which is exactly why the k index leads every wavefunction-shaped array
 thread pool; sharding them across CPU devices is a factor the thread pool cannot
 give.
 
+### The same mask is a deadlock, and the suite pays 11% not to hit it (2026-09-13)
+
+**The fastest setting is the one that hangs.** XLA's CPU pool is sized from that
+mask, and a long-lived process that has compiled many different cells can park
+with every worker in `futex_wait_queue` and **no CPU at all**. It is not slow
+and it never finishes: 4 seconds of CPU, unchanged over a 30 s sample, 23
+threads all blocked. The rate follows the mask and nothing else — three test
+files that hang together and pass separately, eight runs at each mask, 150 s
+timeout, otherwise idle machine:
+
+| `DEFUMAT_THREADS` | cores | hangs | wall when it passes |
+|---|---|---|---|
+| `2` | 2 | **8 / 8** | — |
+| `4` (the default above) | 4 | **6 / 14** | 32–35 s |
+| `8` | 8 | **0 / 8** | 36–38 s |
+| `off` | 12 | **0 / 14** | 37–39 s |
+
+**Widening the mask is not the answer for a calculation.** Median of five,
+compiled, on `benchmarks/si8-1k-ecut30.in` — the eight-atom cell, because a
+two-atom one shows none of this:
+
+| cores | 4 | 6 | 8 | 12 |
+|---|---|---|---|---|
+| ms/iteration | **238** | 368 | 411 | 385 |
+
+So eight cores costs **73%** of production speed. That is the wrong trade for a
+run and the right one for a test suite, so the two are separated: the package
+stays at four and `tests/conftest.py` asks for eight before anything imports
+`defumat`. What the suite pays for that, isolated on one file, three samples
+each: **27.4 s and 1752 M at four cores, 30.3 s and 1981 M at eight — 11% of
+wall clock and 13% of peak RSS.**
+
+**The gate's own before-and-after is one sample each and is not that
+measurement**, which is worth stating because it is the number someone will
+reach for: 7m22s / 5903 M at four cores, 10m37s / 8186 M at eight. The same
+suite has read 7, 11 and 7 minutes on one day, so the wall clock is inside a
+spread this log already calls unattributable; the peak is above the 4.5–6.0 GB
+previously seen and the mask explains 13 points of it. Under the 12 G cap, with
+less margin than before.
+
+The two theories that died first are in `OPEN.md` Part IV item 1, and both had
+been recorded here as fact — the persistent kernel cache (`DEFUMAT_CACHE_DIR=off`
+hangs too) and a dispatch pattern in `symmetry_residual` (removing every op
+between the kernel and the host did not stop it).
+
 ## What the eight-atom cell showed
 
 Two-atom cells are small enough that fixed overheads dominate. Going to eight
@@ -4700,6 +4745,61 @@ rather than bit-identical, exactly as A1's was.
 because no PAW input here had between two atoms and eight, and the crossover is
 in that gap. Its energy is -46.7230 Ry/atom against the 2-atom PBE reference's
 -46.7198, the difference being the k-sampling.
+
+## The structure factor was on the tape of every geometry derivative (MEMORY-AUDIT A5, C4)
+
+**`exp`'s VJP is `ans * t`, so it saves its own output.** Both places that build
+`e^{-i G . tau_a}` therefore left the `(nat, ngm)` complex array on the tape of
+every force, stress, phonon column and Born charge — on a 45-atom slab with a
+3.5-million-vector dense set, 2.55 GB per site. `jax.checkpoint` on each; the
+backward pass recomputes one complex exponential per `(atom, G)`, which is
+nothing against an FFT-bound iteration, and the residual falls to `positions`
+and the G set, both held anyway.
+
+| cell | atoms | force tape | |
+|---|---|---|---|
+| `benchmarks/h40-chain-lsda` | 40 | 664.6 -> **510.0 MB** | **-23.3%** |
+| `si10-paw-pbe` | 10 | 188.7 -> **177.8 MB** | -5.8% |
+| `bismuthene-soc-small` | 2 | 1062.6 -> 1060.5 MB | -0.2% |
+
+**Every delta is `nat x ngm x 16` to the byte, for exactly *one* copy**, and that
+settles the audit's open question C4: `Calculation.at_positions` calls
+`combine_species` twice, for `vloc` and for `rho_core`, and XLA's CSE merges
+them. 40 x 241,588 x 16 = 154,616,576 B on the chain and 10 x 45,043 x 16 =
+7,206,848 B on the silicon, both exact. So A5's `_structure_factors_at` half is
+the bottom of its stated 2.5-5.1 GB range rather than the top.
+
+**The second site was expected to be a no-op and is not.** `_atom_phases`
+*returns* the per-atom array, keeps it as a field on the augmentation charge, and
+hands it to the already-rematted augmentation scan as an input — so the array
+looked live either way. Measured, the tape still falls by exactly one
+`(nat, npad)` array (2,097,152 B on `bismuthene-soc-small`, `nat = 2`,
+`npad = 65536`): the recomputed value has a short live range at each use where
+the stored one spanned the whole pass. Which makes the pair worth ~5.1 GB on the
+slab, 2.55 from each site.
+
+**Cost: nothing, on both routes.** `si10-paw-pbe` (PAW) compiled force
+0.4007 -> 0.4011 s and compiled stress 7.2359 -> 7.1976 s, forces agreeing to
+6.9e-17 on a component of 1.4e-2 with the stress bit-identical.
+`bismuthene-soc-small` (ultrasoft, spin-orbit spinor) compiled force
+**2.202 -> 2.201 s** as a median of five and stress 85.9 -> 85.3 s, forces
+agreeing to **one ulp** and the stress again bit-identical.
+
+**That median is the number, and a best-of-three said +8%.** The five samples
+were 2.16/2.21/2.20/2.20/2.41 before and 2.06/2.21/2.27/2.19/2.20 after: a
+spread of 0.2 s around a 2.2 s measurement, so a best-of-three picks whichever
+side got the lucky sample and reads as a confident 8 per cent either way. On a
+quantity whose expected change is zero, take the median and say how many samples.
+
+**And a measurement trap that cost an hour, because it produced a plausible
+number.** A *first-call* `get_stress()` read **8.68 s before and 16.09 s after**
+— a convincing 85% regression, reproducible, and entirely an artefact: the first
+call includes compilation, and the baseline's kernels were already in
+`~/.cache/defumat/jax` while the rematted variant's had to be built. Compiled,
+the two are identical to 0.5 per cent. This is the same shape as the `ph.x`
+warm-scratch artefact recorded above, one layer in: **a first-call timing in this
+code measures the on-disk kernel cache, not the work.** Time the second call, or
+clear the cache for both sides.
 
 ## Two retention fixes in the relaxation drivers (MEMORY-AUDIT A2, A3)
 

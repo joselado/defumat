@@ -13,6 +13,34 @@ import pytest
 
 from tests import memwatch  # stdlib + psutil only; never JAX
 
+#: How many cores the suite leaves visible, and why it is not the package
+#: default.
+#:
+#: ``defumat._limit_thread_pool`` narrows the affinity mask to
+#: ``DEFAULT_THREADS = 4`` because that is the fastest setting for the physics
+#: -- 238 ms per SCF iteration on ``benchmarks/si8-1k-ecut30.in`` against 411 ms
+#: at eight cores and 385 at twelve. **It is also the setting that deadlocks**:
+#: XLA sizes its CPU thread pool from that mask, and a long-lived process that
+#: has compiled many different cells eventually parks with every worker in
+#: ``futex_wait_queue`` and no CPU at all. The rate follows the mask and nothing
+#: else (``OPEN.md`` Part IV item 1, where the whole measurement is):
+#:
+#:     2 cores  8 hangs / 8      8 cores   0 / 8
+#:     4 cores  6 hangs / 14     all 12    0 / 14
+#:
+#: So the suite widens the mask and production does not. The suite is not a
+#: performance measurement -- nothing may be timed beside a test run anyway --
+#: and it pays about 15% on wall clock for a gate that finishes every time
+#: instead of one run in three. Eight rather than "off" because this machine is
+#: shared, and a gate that takes every core takes them from another session.
+#:
+#: **This must run before ``defumat`` is first imported**, which is why it is at
+#: the top of ``conftest.py`` and not in a fixture: the mask is set once, at
+#: import. An explicit ``DEFUMAT_THREADS`` in the environment still wins, so a
+#: run that wants to reproduce the hang can ask for it.
+TEST_THREADS = "8"
+os.environ.setdefault("DEFUMAT_THREADS", TEST_THREADS)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: Where the QE source tree is looked for. The vendored location is the default

@@ -52,6 +52,22 @@ def _limit_thread_pool() -> None:
     ``DEFUMAT_THREADS`` overrides the count; ``0`` or ``off`` leaves the machine
     alone. The mask is only ever *narrowed* -- an outer ``taskset`` or a cluster
     scheduler's allocation is respected, never widened.
+
+    **The fast default is also a deadlock, and the trade is deliberate.** XLA
+    sizes its CPU thread pool from this mask, and a long-lived process that has
+    compiled many different cells can park with every worker in
+    ``futex_wait_queue`` and no CPU at all -- pool exhaustion, something waiting
+    on the pool from inside it. The rate follows the mask and nothing else:
+
+        2 cores  8 hangs / 8      8 cores   0 / 8
+        4 cores  6 hangs / 14     all 12    0 / 14
+
+    Widening the mask cures it and costs 73% of the speed above, so **this stays
+    at four and the test suite does not**: ``tests/conftest.py`` asks for eight,
+    which costs it 11% of wall clock and 13% of peak RSS and buys a gate that
+    finishes every time. A long production run that hangs this way should raise
+    ``DEFUMAT_THREADS`` rather than wait. ``OPEN.md`` Part IV item 1 has the
+    whole measurement, the two theories it killed, and what is still unknown.
     """
     setting = _environ_get("DEFUMAT_THREADS", "").strip().lower()
     if setting in ("0", "off", "none", "false"):

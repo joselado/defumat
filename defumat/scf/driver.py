@@ -623,17 +623,24 @@ def _relative_residual(a, b) -> float:
     zero is invariant, and reporting that as "not a number" would make an
     unpolarised cell look like a failure.
 
-    **This is deliberately NumPy and must stay NumPy.** It is a once-per-run
-    diagnostic on two arrays already in hand, so a compiled kernel buys nothing
-    -- and it cost something real. Dispatching *any* small jitted op here, right
-    after the jitted symmetrisation above it, is where a JAX thread-pool deadlock
-    parks: the fast gate hung on it five times, with every worker thread idle and
-    no CPU at all, and `faulthandler` put the stack on this line
-    (``OPEN.md`` Part IV item 1). The intermediate version that computed both
-    ratios in one jitted kernel -- fewer host syncs, which was the point --
-    deadlocked just the same. Doing the arithmetic on the host removes the
-    dispatch entirely and costs one transfer of a density this method has already
-    paid for.
+    **This is deliberately NumPy and must stay NumPy, and its caller must hand
+    it host arrays.** It is a once-per-run diagnostic on two arrays already in
+    hand, so a compiled kernel buys nothing -- and it cost something real.
+    Dispatching *any* small op here, right after the jitted symmetrisation above
+    it, is where a JAX thread-pool deadlock parks: the fast gate has hung on it
+    six times, with every worker thread idle and no CPU at all, and
+    ``faulthandler`` put the stack on this function twice (``OPEN.md`` Part IV
+    item 1). The intermediate version that computed both ratios in one jitted
+    kernel -- fewer host syncs, which was the point -- deadlocked just the same.
+
+    **Arithmetic on the host is not the same thing as no dispatch, and reading
+    it that way is what let the sixth hang through.** ``np.asarray`` on a
+    ``jax.Array`` is the same blocking device-to-host wait that ``float()`` is,
+    so while the ratios moved to NumPy the *transfer* only moved one line, and
+    the pairs above it were still being built out of eager slices and sums. The
+    caller now transfers each array once, before any arithmetic, which is what
+    the claim in this docstring was always supposed to mean; the ``np.asarray``
+    below is then a no-op on an array already here.
     """
     a, b = np.asarray(a), np.asarray(b)
     scale = float(np.linalg.norm(b))
@@ -2972,29 +2979,38 @@ class Calculation:
         thresholds, and a charge that is invariant tells nothing about a
         magnetization that is not.
 
-        **The ratios are taken on the host, and that is not a style choice**
-        (:func:`_relative_residual`): dispatching any jitted op here, right after
-        the symmetrisation, is where a JAX thread-pool deadlock parks -- five
-        hangs of the fast gate, ``OPEN.md`` Part IV item 1. The symmetrisation
-        itself stays compiled, because it is the same kernel the SCF runs every
-        iteration.
+        **Everything after the symmetrisation is on the host, and that is not a
+        style choice** (:func:`_relative_residual`): dispatching any op here,
+        right after the symmetrisation, is where a JAX thread-pool deadlock
+        parks -- six hangs of the fast gate, ``OPEN.md`` Part IV item 1. The
+        symmetrisation itself stays compiled, because it is the same kernel the
+        SCF runs every iteration.
+
+        **The transfer is taken once per array, before the arithmetic, and the
+        order matters.** The slices and sums below are eager device ops when
+        they are taken on a ``jax.Array``, so writing them that way dispatches
+        exactly what this routine exists not to dispatch -- and ``np.asarray``
+        on a ``jax.Array`` is the same blocking device-to-host wait a ``float()``
+        is, which is where the sixth hang parked. Pulling both arrays across
+        first leaves nothing between the compiled symmetrisation and NumPy.
         """
         if self._symmetry_maps is None:
             return 0.0, (None if self.nspin_mag == 1 else 0.0)
 
         rho_r = jnp.asarray(rho_r)
-        symmetrized = self.symmetrize(rho_r)
+        symmetrized = np.asarray(self.symmetrize(rho_r))
+        host = np.asarray(rho_r)
         if self.nspin_mag == 1:
-            pairs = ((symmetrized, rho_r),)
+            pairs = ((symmetrized, host),)
         elif self.nspin_mag == 2:
             # The collinear density is carried as ``(up, down)``, so neither
             # component is the charge or the magnetization on its own.
             pairs = (
-                (symmetrized[0] + symmetrized[1], rho_r[0] + rho_r[1]),
-                (symmetrized[0] - symmetrized[1], rho_r[0] - rho_r[1]),
+                (symmetrized[0] + symmetrized[1], host[0] + host[1]),
+                (symmetrized[0] - symmetrized[1], host[0] - host[1]),
             )
         else:
-            pairs = ((symmetrized[0], rho_r[0]), (symmetrized[1:4], rho_r[1:4]))
+            pairs = ((symmetrized[0], host[0]), (symmetrized[1:4], host[1:4]))
         ratios = [_relative_residual(a, b) for a, b in pairs]
         return (ratios[0], None) if self.nspin_mag == 1 else (ratios[0], ratios[1])
 

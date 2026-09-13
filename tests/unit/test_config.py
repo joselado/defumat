@@ -181,3 +181,31 @@ def test_the_cap_never_widens_an_existing_restriction():
 
 def test_the_cache_is_on_by_default():
     assert _cache_dir_in_a_fresh_process(None) != ""
+
+
+@pytest.mark.skipif(not hasattr(os, "sched_getaffinity"), reason="Linux only")
+def test_the_suite_widens_the_mask_that_the_package_narrows():
+    """The suite runs at eight cores, and the reason is a deadlock, not speed.
+
+    Four cores is the fastest setting for the physics and is the package
+    default; it is also the one that parks a long-lived process with every XLA
+    worker in ``futex_wait_queue`` and no CPU at all, at a rate that follows the
+    mask and nothing else -- 8 hangs in 8 runs at two cores, 6 in 14 at four,
+    none in 8 at eight or in 14 with the mask left alone (``OPEN.md`` Part IV
+    item 1).
+
+    ``tests/conftest.py`` therefore sets ``DEFUMAT_THREADS`` before ``defumat``
+    is first imported, and this is the guard on that line: the mask is read once
+    at import, so a conftest that stopped setting it would fail nothing else and
+    would bring the intermittent gate hang back.
+    """
+    from tests import conftest
+
+    if os.environ.get("DEFUMAT_THREADS") != conftest.TEST_THREADS:
+        pytest.skip("DEFUMAT_THREADS was set explicitly, which is allowed to win")
+    available = len(os.sched_getaffinity(0))
+    assert available == int(conftest.TEST_THREADS), (
+        f"the suite is running on {available} cores, not "
+        f"{conftest.TEST_THREADS}: conftest must set DEFUMAT_THREADS before "
+        f"anything imports defumat"
+    )

@@ -15,7 +15,10 @@ P73 section, under "Three test failures were seen while validating this phase".
 **Part IV** is the **2026-09-13** magnetism session (`PLAN.md` P80): two entries, neither a
 defect in this code -- a **JAX thread-pool deadlock** that the fast gate now hits
 reproducibly, with a stack trace and the measurements that rule out the obvious causes, and
-P63's spiral scan no longer reproducing its own numbers.
+P63's spiral scan no longer reproducing its own numbers. **Item 1 was reopened and then
+closed later the same day**: it hung a sixth time, and the cause is neither of the two the
+entry had recorded as fact but the **affinity mask this package sets itself** -- 8 hangs in
+8 runs at two cores, 6 in 14 at four, none at eight or above.
 
 **Part III** is the sweep of **2026-09-12** -- four read-only agents over the package
 looking for **speed and memory** rather than for wrong answers, 23 entries, ordered by
@@ -1828,6 +1831,105 @@ ps -p <pid> -o time --no-headers      # unchanged => stalled, not slow
 A healthy gate here moves several CPU-minutes per 25 s of wall clock (a handful of busy
 threads); a stalled one moves nothing. Reading `wchan` alone says nothing, and neither does
 `%CPU`, which is an average over the process's whole life and stays high long after it stops.
+
+### **Reopened and then closed, 2026-09-13 (later the same day): it is the affinity mask, and it is this project's own code**
+
+**The entry above says "a deadlock in XLA's CPU thread pool, which nothing in this project
+can fix." That is wrong, and the word doing the damage is *nothing*.** The trigger is
+`defumat._limit_thread_pool`, which narrows the process's affinity mask to four cores at
+import. XLA sizes its CPU thread pool from that mask, and the hang rate follows the mask
+and nothing else.
+
+**How it came back.** A gate run for an unrelated change hung at **73%**, on
+`tests/unit/test_seed_symmetry.py`, in the same test as before. The recipe above identified
+it correctly -- CPU time `00:28:19` at two reads 25 s apart, 45 threads all in
+`futex_wait_queue`. `faulthandler_timeout = 600` then produced a stack, and it is not the
+one on record:
+
+```
+File "defumat/scf/driver.py", line 638 in _relative_residual      <- np.asarray(a)
+File "defumat/scf/driver.py", line 2998 in symmetry_residual
+File "tests/unit/test_seed_symmetry.py", line 127 in ...
+```
+
+**Two theories died before the real one turned up, and both had been written down here as
+fact.**
+
+- *The dispatch theory.* The previous fix's claim -- "doing the arithmetic on the host
+  removes the dispatch entirely" -- was never true of the code. `np.asarray` on a
+  `jax.Array` is the same blocking device-to-host wait a `float()` is, so the transfer moved
+  one line rather than going away; and the `pairs` above it were still built from **eager
+  device ops** (`symmetrized[0] + symmetrized[1]`, `symmetrized[1:4]`). That is now really
+  fixed -- each array is transferred once, before any arithmetic, so nothing at all sits
+  between the compiled symmetrisation and NumPy -- **and it did not stop the hang.** Worth
+  keeping because it makes the code mean what its docstring says; worthless as a cure.
+- *The cache theory.* This entry's strongest datum was "cache off, 9.8 s clean; cache on,
+  hang". `DEFUMAT_CACHE_DIR=off` now hangs too, at 9.9 s of CPU over a 400 s wall clock.
+  The clean run on record was a lucky draw, which is what a 1-in-3 failure looks like when
+  it is sampled once.
+
+**The measurement that settled it.** Three files that hang together and pass separately
+(`test_seed_symmetry.py`, `test_textured_symmetry.py`, `test_textured_seeding.py`), run
+eight times at each mask, 150 s timeout, otherwise idle machine:
+
+| `DEFUMAT_THREADS` | cores | hangs | wall when it passes |
+|---|---|---|---|
+| `2` | 2 | **8 / 8** | -- |
+| `4` (the package default) | 4 | **6 / 14** | 32-35 s |
+| `8` | 8 | **0 / 8** | 36-38 s |
+| `off` | 12-14 | **0 / 14** | 37-39 s |
+
+The two-core failures are stalls and not slowness, by this entry's own recipe: **4 seconds**
+of CPU, unchanged over a 30 s sample, 23 threads all in `futex_wait_queue`. That shape --
+every worker blocked, no CPU, rate rising sharply as the pool shrinks -- is thread-pool
+**exhaustion**: something waits on the pool from inside it, and with fewer workers the wait
+has nowhere to go.
+
+**Why the default is not simply raised.** Four cores is not an arbitrary number; it is the
+fastest setting for the physics, and widening the mask costs far more than the hang does.
+Median of five, compiled, on `benchmarks/si8-1k-ecut30.in`, per SCF iteration:
+
+| cores | 4 | 6 | 8 | 12 |
+|---|---|---|---|---|
+| ms/iteration | **238** | 368 | 411 | 385 |
+
+So eight cores costs **73%** of the production speed to buy reliability. That is the wrong
+trade for a calculation and the right one for a test suite, and the two are therefore
+separated:
+
+- **Production keeps `DEFAULT_THREADS = 4`**, with the deadlock named in
+  `_limit_thread_pool`'s docstring and `DEFUMAT_THREADS` the escape.
+- **The suite runs at eight**, set in `tests/conftest.py` before anything imports
+  `defumat`, because the mask is read once at import. The gate is not a performance
+  measurement -- nothing may be timed beside a test run in any case -- so it can afford what
+  the mask costs, which is **11% of wall clock and 13% of peak RSS**: 27.4 s and 1752 M at
+  four cores against 30.3 s and 1981 M at eight, median of three each on
+  `tests/unit/test_textured_seeding.py`. Eight rather than `off` because this machine is
+  shared, and a gate that takes every core takes them from another session. An explicit
+  `DEFUMAT_THREADS` still wins, so the hang can still be reproduced on demand.
+  `tests/unit/test_config.py` guards the line, since the mask is set once at import and a
+  conftest that stopped setting it would fail nothing else.
+
+**The gate's own figures are one sample each and are not that measurement.** It ran
+**1945 passed, 176 skipped, 0 failures in 10m37s, peak 8186 M**, against 7m22s and 5903 M
+for the last four-core run. The wall clock sits inside a spread this project already records
+as unattributable -- the same suite has read 7, 11 and 7 minutes on the same day -- and the
+peak is above the 4.5-6.0 GB previously seen, of which the mask explains 13 points and the
+rest is not explained. 8186 M is still under the 12 G cap and its 0.85 watchdog threshold,
+with less margin than before.
+
+**What is still open, and it is now a much smaller question.** *Which* nested wait exhausts
+the pool. Every hang seen has been in a pytest process that had already compiled many
+different cells, and none in a single long calculation, so the suspect is a dispatch issued
+while a pool worker is itself blocked -- but that has not been localised, and the stack is
+unhelpful because the main thread is only ever the one waiting for the result. **A hang
+under a mask of eight or more would reopen this**; six months of clean gates would close
+the question rather than the symptom.
+
+**And a gate that hangs needs a kill.** `faulthandler_timeout` dumps the stack at 600 s and
+then the process **sits there** holding its memory -- 4.9 GB here. The dump is the
+diagnosis, not the recovery, which is one more reason to run anything long through
+`tools/run_regression.sh`.
 
 ## 2. P63's spin-spiral scan no longer reproduces
 
