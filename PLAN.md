@@ -13389,6 +13389,154 @@ that exist *because* `starting_magnetization` is per species and cannot state a 
 all. The tool would have stopped at the first one with a parser error reading like a broken
 input file. Those inputs are now skipped by name, saying why.
 
+### P82 -- The one matrix that gated a spinor occupation matrix, a spinor projection and an axial site moment. ✅ DONE.
+
+`defumat/system/symmetry.py`, `hubbard/occupations.py`, `scf/driver.py`,
+`projwfc/angular_momentum.py`, `projwfc/projections.py`. `MAGNETISM-NEXT.md` §2 item C.
+Three refusals named the same missing object -- the **SU(2) representation of a point-group
+operation**, QE's `d_spin_ldau` -- and two of them were right about that while the third
+needed something else entirely.
+
+**What the matrix is, and why the lift is not QE's.** A point-group operation turns a
+*spinor* as well as a position, so anything built from `psi^dagger ... psi` with its two
+spin indices kept -- a noncollinear occupation matrix, a spin-angle projection -- needs a
+2x2 matrix beside the rotation of the `m` indices. QE's `find_u`
+(`PW/src/divide_class_so.f90`) reads the axis off the rotation with `versor` and the angle
+with `angle_rot`, each of which splits into cases: a 180-degree rotation has no
+antisymmetric part to read an axis from, and an axis along a coordinate direction needs
+another branch. `_su2_from_rotation` goes through the **quaternion** instead, which needs
+no case analysis beyond dividing by the largest component, and the tests assert the
+properties that pin the matrix rather than a transcription: unitary, `det U = 1`, and
+`U sigma_a U^dagger = R_ba sigma_b`. Those three determine `U` up to sign, so it *is*
+`find_u`'s matrix up to the sign QE resolves and nothing here needs to.
+
+**The sign is deliberately left free**, which is the one place this departs from
+`comp_dspinldau`. Every consumer contracts `D` against `D*` or `D^dagger` (`new_ns_nc`,
+`sym_proj_so`), where an overall sign cancels; resolving it would be code with no
+observable.
+
+**The transpose was missing, the tests found it, and it is the finding of the phase.**
+Time reversal is **antiunitary**, so the matrix `comp_dspinldau` builds --
+`i sigma_y D*` -- is only the *unitary half* of the operation and the complex conjugation
+is the other half. Measured on the 48 operations of the simple cubic group with a random
+moment, against the axial law `m' = -det(R) R m`:
+
+| what is applied to the block | residual |
+|---|---|
+| `U rho U^dagger` -- the obvious thing | **5.1** |
+| `U rho^T U^dagger` | **8.9e-16** |
+
+That is why `new_ns_nc` reads `nr(m4, m3, is4, is3, nb)` rather than
+`nr(m3, m4, is3, is4, nb)` for a time-reversed operation: the transpose is joint over the
+`m` and the spin indices, which for a Hermitian block is its complex conjugate.
+`NsSymmetry._time_reverse` is that transpose. **Leaving it out is not a small error in a
+rare branch** -- it is the wrong sign on the magnetization of every time-reversed
+operation, and those are half the group of the cell this phase validates on.
+
+**Three numbers on the matrix itself** (`tests/unit/test_spin_rotations.py`, 22 tests, 1.3 s,
+no SCF and no JAX arrays):
+
+- the group property `D(R1) D(R2) = +-D(R1 R2)` over **every pair** of four point groups
+  -- cubic (48), tetragonal (16), hexagonal (24), orthorhombic (8) -- to **1e-12**. The
+  `+-` is not slack: a spin representation is two-valued, so demanding equality would fail
+  on a correct matrix and demanding nothing would pass on a wrong one;
+- the plain case carries a moment to `m' = det(R) R m` to **8.9e-16**, which is an
+  independent cross-check of this matrix against `magnetization_signs` -- written
+  separately, for the expectation value rather than the 2x2 object, and never compared
+  with it before;
+- the inversion is the **identity** in spin space to 1e-12, because the spin is axial.
+
+**A trap in the test harness, worth recording because it read as a physics failure.** The
+group-closure lookup keys the product matrix by `np.round(m, 6).tobytes()`, and
+`np.round(-1e-17, 6)` is `-0.0`, whose byte pattern differs from `+0.0`. On the hexagonal
+group 48 of 576 products "left the group"; the nearest existing operation was **2.8e-17**
+away. `+ 0.0` normalises the sign of zero and is now in the test with that comment.
+
+**And a real bug the wedge run found that no unit test could.** `_time_reverse` indexed a
+JAX array with a Python list, which raises -- and only the *symmetrised* path reaches it,
+so the `nosym` half of every comparison ran clean. It is the shape of the trap this
+project keeps paying for: the branch that is not taken is the branch that is not tested.
+
+**What came out, and what did not.**
+
+- **DFT+U with `noncolin` under symmetry** is no longer refused (`driver.py`'s
+  `_setup_hubbard`).
+- **`t_rev` is no longer refused for a spinor run.** It stays refused for a *collinear*
+  one, where `new_ns`'s `colin_mag == 2` channel swap really is unwritten and no committed
+  benchmark exercises it. The spinor branch needs no swap: the occupation matrix keeps
+  both spin indices, so time reversal acts on the object rather than by permuting two
+  channels.
+- **`<L>` and `<S>` on a reduced k-set** are no longer refused.
+  `symmetrize_atom_cartesian_tensor` gains `axial`, which carries `magnetization_signs`
+  raised to the tensor's rank -- `det(R)` per cartesian index, and the time-reversal sign
+  with it. At rank 2 the two signs multiply back to one, so a tensor built from two axial
+  vectors is polar again, and that is asserted.
+- **`sym_proj_so` stays refused, and the refusal was wrong about what it needed.** It named
+  one matrix where there are two. Without spin-orbit coupling the columns are
+  `|l m> x |sigma>` and `sym_proj_nc`'s operator is the tensor product `D^l x S` --
+  `PP/src/d_matrix_nc.f90` builds literally `dy_l(m,n) * s_spin(m1,n1)`, and **both factors
+  now exist here** (`harmonic_rotations` and `spin_rotations`); what is left is plumbing,
+  since `ProjectionSymmetry` carries *real* coefficients over `2 lmax + 1` columns and
+  would need complex ones over `2 (2 lmax + 1)`, plus `sym_proj_nc`'s `ind` relabelling for
+  a time-reversed operation. With `lspinorb` the columns are `|j m_j>` and `sym_proj_so`
+  contracts `d_matrix_so`'s `D^j` for `j = 1/2 ... 7/2`, which is a **different** matrix and
+  is not the tensor product. The message now says which.
+
+**The end-to-end check, and why the cell is the third one tried.** An array-algebra test
+passes whether or not the driver routes anything through the array -- `promote_ns` was
+right in every element while every spinor resume was silently collinear. So the claim is
+made by running the same cell twice, once on a symmetry-reduced k-set and once with
+`nosym` on the whole unshifted grid (`tests/regression/test_spinor_hubbard_symmetry.py`).
+
+Two cells were rejected first and both rejections are worth more than the choice:
+
+- **`bn-ldau-noncol.in`**, the committed spinor DFT+U case, is `lspinorb` and ultrasoft at
+  `ecutrho = 350` on a 3x3x1 grid. Its `nosym` half was **killed by a 10 GB cgroup cap**
+  after 2.5 minutes -- `journalctl` says `memory.oom`, and the cap did exactly what
+  `CLAUDE.md` designed it to do: it cost the run and not the session. That is the
+  augmentation table's memory wall, not a threshold to tune.
+- **Silicon with a U on 3p** holds a moment only marginally -- a nonmagnetic semiconductor
+  being pushed -- and did not reach `conv_thr = 1e-10` in 250 iterations. Its magnetic
+  group also collapses from 16 to **2** when the moment points somewhere generic rather
+  than along z, which is the measurement behind `MAGNETISM-NEXT.md`'s own remark that the
+  regime worth symmetrising is the collinear-as-spinor one and the ferromagnet with
+  spin-orbit coupling, not a texture. **That input is not committed**: nothing reads it,
+  and an input known not to converge is a trap rather than a reference.
+
+`ni-ldau-noncol.in` is fcc nickel, one atom, `U = 4` eV on 3d, noncollinear with the
+moment along z. `l = 2`, so the `m` rotation is not the identity; the magnetic group is
+**16 operations of which eight carry `t_rev = 1`**, so the time-reversal branch is
+exercised rather than assumed -- and the test asserts that premise separately, because a
+cell that quietly stopped carrying time-reversed operations would leave every other test
+passing and testing nothing.
+
+**The numbers.** Both runs to `conv_thr = 1e-9`, 12 iterations each:
+
+| | `nosym`, 4x4x4 closed grid | symmetry, `nsym = 16` |
+|---|---|---|
+| total energy | -85.640749328047 Ry | -85.640749327988 Ry |
+| site moment | (5e-6, 3e-6, **0.526388**) mu_B | (0, 0, **0.526381**) mu_B |
+| wall clock | 249.8 s | 8.7 s |
+
+**The energies agree to 5.9e-11 Ry**, two decades inside the threshold both were converged
+to. `ns` agrees to **1.6e-6** over all four spin blocks, and that residual is worth reading
+rather than tightening: it is the **`nosym` run's** error, not the symmetrised one's. The
+free run converges with a spurious transverse moment of about **5e-6 mu_B** because nothing
+forbids one, and its `Tr ns[ud]` is `1.9e-6 + 1.2e-6 i`; the symmetrised run has both at
+**exactly zero**, because the magnetic group contains operations carrying an in-plane
+component onto minus itself and the average annihilates it identically. **Symmetry buys
+exactness here rather than costing physics** -- which is P80's finding on the four-atom
+cycloid (planar to 1.7e-21 symmetrised against 8e-6 free) reproduced on a production
+magnet, and it runs the other way from the intuition that symmetrising is an approximation.
+So the tolerance on `ns` is 1e-5 deliberately: a tighter one would be asserting that the
+group average reproduce a numerical artefact.
+
+**The 29x is not a speed measurement and is not quoted as one.** The wedge ran *second* in
+the same process, so it reuses compiled executables that the first run paid for; 8.7 s
+against 249.8 s is an upper bound on what a reduced k-set is worth here, not the value of
+it. `MAGNETISM-NEXT.md` Q6 asks for that number properly -- two processes, `nosym` and the
+wedge each from cold -- and this is not it.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.

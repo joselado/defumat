@@ -56,6 +56,7 @@ number, because the whole rule of this project is that a claim is a number:
 | nothing said whether the group a run uses belongs to the density it starts from | `Calculation.symmetry_residual`, checked before iteration 1 and warned above 1e-3 | 6.7e-16 from a card against **1.0** for the same texture under a group too large; the charge reads 5.9e-16 in *both* (P80) |
 | no **vector** texture had ever been carried through an SCF and inspected | one has: a 90-degree cycloid on four hydrogens, symmetrised and free | 0.4543 mu_B per site either way, angles 90.00 degrees, the pair 8.0e-9 Ry apart (P80) |
 | a relaxation of a magnet said nothing per site | `site_charges`/`site_moments` on all three drivers' step objects | mechanical; and the *final* geometry is the one step that cannot show a collapse (P80) |
+| noncollinear DFT+U under symmetry was refused for a matrix nobody had built | `spin_rotations`, QE's `d_spin_ldau`, plus the transpose an antiunitary operation needs | wedge against closed grid on fcc nickel: **5.9e-11 Ry**; the missing transpose is worth **5.1** against 8.9e-16 on the axial law (P82) |
 | the noncollinear GGA had no measured derivative anywhere | bcc iron, ultrasoft, PBE, compared through its **stress** | 6.7e-9 Ry and 1.6e-7 Ry/bohr^3, the level the collinear ultrasoft cases reach; **signed branch only** (P80) |
 | an `fsm` run that missed its target said so nowhere | `SCFResult.constraint_residual`, signed, plus a warning of its own | `constraint_energy` is 0 for a feedback field; a run with `accuracy = 3.9e-11` under a 1e-10 threshold and its moment 0.174 out read as an ordinary non-convergence (P80) |
 
@@ -133,36 +134,36 @@ enough for something specific.
 P79's own table (`tests/regression/test_holding_a_texture.py`) with the feedback field as a
 sixth row. The claim to beat is 0.55° in 38 iterations.
 
-### C. One missing matrix gates noncollinear DFT+U with symmetry and the symmetrised spinor PDOS [13]
+### C. One missing matrix gated noncollinear DFT+U with symmetry and two more. ✅ CLOSED by P82 [13]
 
-**Phase, and it closes three consumers at once.** `driver.py:1677` refuses DFT+U with
-`noncolin` under symmetry because `new_ns_nc` averages the occupation matrix with the SU(2)
-representation of each operation (`d_spin_ldau`) beside the rotation of the `m` indices, and
-nothing here builds those matrices. `projwfc/projections.py:206` refuses a symmetrised
-spinor projection for the same object (`sym_proj_so`) and points at the first. A second
-refusal covers any group carrying `t_rev` even in the collinear case, because `new_ns` flips
-the spin index for such an operation and no benchmark here exercises it — the magnetic
-sublattices in all of them are different species.
+**Done, with one part deliberately left and sized.** `PLAN.md` §3 P82 has the full record;
+in one line each:
 
-**A third refusal looks like the same object and is not.**
-`projwfc/angular_momentum.py:265` refuses `<L>`/`<S>` on a reduced k-set, and what it needs
-is the *axial* 3×3 group average plus the atom permutation, not an SU(2) spin rotation. That
-half is written: `symmetry.py:486`'s `magnetization_signs` is `det(R) (-1)^t_rev`, `:498`
-applies it, and `:1002`'s `symmetrize_atom_cartesian_tensor` does the per-atom average at
-any rank — though it reads `symmetries.rotation_array()` internally, so the axial variant is
-a new parameter rather than a call with signed rotations passed in.
+- **DFT+U with `noncolin` under symmetry** runs. `system/symmetry.py`'s `spin_rotations` is
+  QE's `d_spin_ldau`, built through the quaternion rather than through `find_u`'s case
+  analysis, and pinned by three properties instead of by transcription.
+- **`t_rev` is no longer refused for a spinor run**, only for a collinear one. It was not
+  free: time reversal is antiunitary, so the unitary matrix is half the operation and the
+  block must be **transposed** as well — `U rho U^dagger` misses the axial law by **5.1**
+  where `U rho^T U^dagger` reproduces it to **8.9e-16**, which is why `new_ns_nc` reads
+  `nr(m4, m3, is4, is3, nb)`.
+- **`<L>`/`<S>` on a reduced k-set** run: `symmetrize_atom_cartesian_tensor(axial=True)`.
+- **The number:** `ni-ldau-noncol.in`, fcc nickel with `U = 4` eV on 3d and the moment along
+  z (`nsym = 16`, **eight** of them `t_rev = 1`), wedge against the closed 4x4x4 grid:
+  **5.9e-11 Ry**, moments 0.526381 against 0.526388 mu_B. `ns` agrees to 1.6e-6 and the
+  residual is the **`nosym`** run's — it keeps a spurious transverse moment of 5e-6 mu_B
+  that the symmetrised run annihilates exactly, which is P80's cycloid finding on a
+  production magnet.
 
-**The honest nuance.** A genuine texture's magnetic group is often small anyway (P75
-measured a four-atom test cycloid dropping from `nsym = 4` to 1), so `nosym` costs little
-there. Where it bites is the collinear-as-spinor case and the ferromagnet with spin-orbit
-coupling, which keep a large group and are the two commonest noncollinear runs.
-
-**First step, and check the matrix twice before wiring it anywhere.** Build `d_spin_ldau`
-(QE's `PW/src/d_matrix.f90` and `ldaU.f90`); assert the representation property
-`D(R1) D(R2) = ±D(R1 R2)` over the whole group, and P62b's identity — a spinor `ns` with the
-moment along z, symmetrised, must equal the collinear `ns` symmetrised, to 1e-13. Then the
-wiring check is the wedge-versus-closed-grid comparison
-`tests/regression/test_spinor_forces.py` already makes for the force.
+**What is left, and it is smaller than a phase.** The **symmetrised spinor PDOS** is still
+refused, and the old refusal was wrong about why: it named one matrix where there are two.
+Without spin-orbit coupling `sym_proj_nc`'s operator is `D^l x S` and **both factors now
+exist** (`harmonic_rotations`, `spin_rotations`) — what is missing there is plumbing, since
+`ProjectionSymmetry` carries *real* coefficients over `2 lmax + 1` columns and needs complex
+ones over `2 (2 lmax + 1)`, plus `sym_proj_nc`'s `ind` relabelling for a time-reversed
+operation. With `lspinorb` it is `sym_proj_so`'s `D^j` (`d_matrix_so`), a genuinely
+different matrix. **Take the non-SOC half first**: it is an afternoon on top of P82 and it
+covers the commoner regime.
 
 ### D. Magnons refuse a noncollinear ground state, so the states whose excitations are interesting have none [12]
 
