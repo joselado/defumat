@@ -49,6 +49,9 @@ print(np.round(field.epsilon, 6))
 print(f"\ndeparture from cubic symmetry   {field.anisotropy:.1e}")
 ```
 
+    An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+
+
     [defumat] the dielectric tensor: no ground state cached, running the SCF first (conv_thr = 1e-12). Call get_scf() to do this explicitly.
 
 
@@ -57,7 +60,7 @@ print(f"\ndeparture from cubic symmetry   {field.anisotropy:.1e}")
      [ 0.       13.806646  0.      ]
      [-0.       -0.       13.806646]]
     
-    departure from cubic symmetry   4.4e-15
+    departure from cubic symmetry   6.2e-15
 
 
 The tensor came out isotropic to 4e-15 with nothing imposing that it should be.
@@ -111,7 +114,7 @@ print(f"smallest                 {speeds.min():.4f} Ry bohr")
 
     band velocities, one vector per band per k-point: (10, 4)
     largest group velocity   1.2857 Ry bohr
-    smallest                 0.1890 Ry bohr
+    smallest                 0.1860 Ry bohr
 
 
 Nothing there was differenced: each number is an expectation value of an
@@ -140,7 +143,7 @@ print(comparison_table(
     fmt="{:.6f}", headers=("", "defumat", "ph.x", "difference")))
 ```
 
-                   defumat       ph.x  difference
+                    defumat       ph.x  difference
     epsilon (nc)  13.806646  13.806689     4.3e-05
     Z* Si 1       -0.075715  -0.075710     5.0e-06
     Z* Si 2       -0.075715  -0.075710     5.0e-06
@@ -220,10 +223,58 @@ print(comparison_table(
     [defumat] the dielectric tensor: no ground state cached, running the SCF first (conv_thr = 1e-12). Call get_scf() to do this explicitly.
 
 
-                          defumat       ph.x  difference
+                           defumat       ph.x  difference
     epsilon (ultrasoft)  14.325321  14.325270     5.1e-05
     Z* (ultrasoft)       -0.079442  -0.079450     8.3e-06
 
+
+## Spin-orbit coupling, where a band holds one electron
+
+A noncollinear calculation does not split the problem into two spin channels. It
+writes one wavefunction with two components on a space of twice the size, so
+silicon's four valence bands become eight, each holding one electron where a
+scalar band holds two. That is a genuinely different calculation of the same
+insulator, and the dielectric constant is what says it is the same insulator:
+how the bands were counted reaches the k-point weights, the occupied-band count
+and the density, and nothing about the screening should depend on any of it.
+
+`with_spin` promotes the converged state into the new regime rather than
+starting again.
+
+
+```python
+spinor = silicon.with_spin(4)      # one two-component wavefunction, 8 bands
+sp = spinor.get_dielectric_tensor()
+
+print(comparison_table(
+    [("epsilon", sp.isotropic, silicon.get_dielectric_tensor().isotropic)],
+    fmt="{:.6f}", headers=("", "spinor", "scalar", "difference")))
+```
+
+    [defumat] the dielectric tensor: no ground state cached, running the SCF first (conv_thr = 1e-12). Call get_scf() to do this explicitly.
+
+
+                spinor     scalar  difference
+    epsilon  13.806641  13.806646     4.9e-06
+
+
+The same number to seven figures, and held to a tighter convergence the two
+agree to 5e-14. Nothing in the screening knows how the bands were counted.
+
+With spin-orbit coupling switched on by a relativistic
+pseudopotential the bands are no longer degenerate in pairs and the tensor is
+free to become anisotropic, which is the case a heavy-element insulator is run
+for.
+
+A noncollinear run that carries a **magnetic moment** is a different matter and
+is refused. On an iodine atom, whose one unpaired 5p electron gives it a moment
+of one Bohr magneton, the tensor comes out uniaxial along that moment with
+nothing imposing it, and turning the moment into another direction moves the
+distinct axis with it and returns the same two numbers to nine digits. It is
+then 5.3 percent from what Quantum ESPRESSO gives along that axis, on a ground
+state the two codes agree on to the printed digit, and where that comes from is
+not known. A number that looks in every visible respect like a working
+calculation and is 5 percent out is worth refusing rather than reporting.
 
 Leaving the augmentation charge's own share out of the Born charge gives
 **+0.1625** on this cell: wrong in sign as well as in size, which is why it is
@@ -253,8 +304,8 @@ like a working calculation. That combination is refused by name. An unshifted
 grid is closed exactly, and there the escape does work.
 
 Also refused by name: **PAW Born charges**, at 1.3e-3 with the missing term
-identified rather than fitted; noncollinear magnetism, DFT+U and spin spirals in
-the response; a potential-only meta-GGA; a fixed occupation that cuts a
+identified rather than fitted; DFT+U and spin spirals in the response, and a
+noncollinear run that carries a moment; a potential-only meta-GGA; a fixed occupation that cuts a
 **degenerate multiplet**, where which member falls below the cut is arbitrary and
 the response depends on that choice; and the *screened* response of a magnetic
 system with vacuum, because the LSDA kernel diverges wherever a channel density

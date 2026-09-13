@@ -71,6 +71,12 @@ from defumat.system import build_system
 
 pytestmark = [pytest.mark.regression]
 
+#: The three refusal tests are the only ones in the gate. The whole file is
+#: **3m43s and 3966 M peak** (measured), of which the three self-consistent
+#: responses are 215 s -- a 21 per cent surcharge on a 7-minute gate for one
+#: test, which is what `slow` is the line for. Cost decides it, not importance:
+#: the identity below is the central claim of the phase and is still `slow`.
+
 CASES = Path(__file__).resolve().parents[1] / "data" / "qe"
 PSEUDO = Path(__file__).resolve().parents[1] / "data" / "pseudo"
 
@@ -132,6 +138,7 @@ def _silicon(noncolin: bool, conv_thr: float, nbnd=None):
     return calculation, result, response
 
 
+@pytest.mark.slow
 def test_a_spinor_with_no_magnetization_gives_the_scalar_dielectric_tensor():
     """The identity that catches a factor of two in the spin sum.
 
