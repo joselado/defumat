@@ -609,7 +609,7 @@ Full breakdown, sub-phase order, validation route and refusals: `PLAN.md` P62.
 
 ---
 
-## 9. The ultracell -- **planned, P84**
+## 9. The ultracell -- **P88, stage 1 done** (unpolarized, norm-conserving, LDA)
 
 Added 2026-09-13, and it is the second entry here that a walk of the task list could
 not find. Section 8's reason was that Elk's DFT+U flavours are an input block rather
@@ -628,13 +628,22 @@ the vendored tree's 1959 Fortran files, which returns nothing in `PW/`, `PP/` or
 spin density waves, skyrmions, domain walls and screened impurities live, and this package
 already has the noncollinear magnetism, spin-orbit coupling, constrained moments and
 `k + q` machinery that the method is assembled from. The full design, the two routes, the
-refusals and the validation route are `PLAN.md` P84; the one-line reason it is worth the
+refusals and the validation route are `PLAN.md` P88; the one-line reason it is worth the
 size is that Elk reports **no total energy** for an ultracell run, so the energy gain of a
 modulated state over the uniform one is blank in both codes.
 
 **It fails the cheapness filter and is listed anyway**, for the reason section 5 established
 and this file already records: what predicts effort is how much of the assembly exists here,
 not what the quantity costs in Elk.
+
+**Stage 1 landed the same day** -- `run_ultracell`, `Calculator.get_ultracell` -- and the
+prediction above held in the direction that matters: almost all the effort was in index
+bookkeeping that the existing machinery did not cover, and almost none in physics that had
+to be written twice. The induced density of a two-cell ultracell converges to a real
+four-atom supercell's monotonically over `nbnd = 8` to `80`, 43 per cent down to 0.2. What
+is *not* here is the magnetism the entry was argued on: `nspin = 2` and `4` are refused by
+name and are stage 3, so the spin density wave this method was published for is still a
+plan. `PLAN.md` P88 has both halves.
 
 ---
 

@@ -75,6 +75,7 @@ REWRITTEN = {
     "33_second_harmonic_generation",
     "34_electric_polarization",
     "35_magnetoelectric_effect",
+    "44_ultra_long_range",
 }
 
 #: Notebooks that still say ``jvp`` in a plot label or a code cell. Prose debt
@@ -139,6 +140,7 @@ HAS_A_FACADE_METHOD = {
     "run_stm": "get_stm",
     "run_vertical_transport": "get_vertical_transport",
     "magnetoelectric_tensor": "get_magnetoelectric_tensor",
+    "run_ultracell": "get_ultracell",
 }
 
 

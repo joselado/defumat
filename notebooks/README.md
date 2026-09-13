@@ -35,6 +35,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Eigenvalues on a denser grid at fixed density | `get_nscf()` | [06](06_density_of_states.ipynb) |
 | What a diffraction experiment measures: X-ray and magnetic structure factors | `get_structure_factors()` | [37](37_structure_factors.ipynb) |
 | A run started from an all-electron ground state, and how far a pseudopotential density is from one | `get_elk_seed()` | [42](42_all_electron_start.ipynb) |
+| A density or potential modulated over many unit cells at once | `get_ultracell()` | [44](44_ultra_long_range.ipynb) |
 
 ### Structure: forces, geometry, the cell
 
@@ -168,6 +169,7 @@ want a number.
 | [`41_vertical_transport.ipynb`](41_vertical_transport.ipynb) | Tunnelling *through* a two-dimensional material into the substrate beneath it: graphene, where the current map is the microscope's picture, and a bilayer, where the two layers' paths interfere and it is not |
 | [`42_all_electron_start.ipynb`](42_all_electron_start.ipynb) | A converged all-electron density brought here and used to start a run: where a pseudopotential density is allowed to differ from the real one, and where it is not |
 | [`43_magnetic_textures.ipynb`](43_magnetic_textures.ipynb) | A moment per atom rather than a moment per crystal: a 90 degree helix that survives self consistency, the symmetry a texture leaves behind, and the two numbers it takes to say it is still there |
+| [`44_ultra_long_range.ipynb`](44_ultra_long_range.ipynb) | A potential that varies over eight unit cells of silicon, and the electrons screening it: the long cell solved in the ordinary cell's own states, computed once |
 
 ## Conventions
 
@@ -258,17 +260,18 @@ workstation core, slowest last:
 
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
-| `01` | 5 | `00` | 22 | `31` | 34 | `13` | 131 |
-| `09` | 6 | `06` | 23 | `23` | 35 | `30` | 131 |
-| `02` | 8 | `25` | 28 | `32` | 35 | `39` | 151 |
-| `37` | 9 | `17` | 29 | `34` | 40 | `41` | 164 |
-| `03` | 10 | `18` | 29 | `10` | 50 | `08` | 171 |
-| `05` | 10 | `12` | 30 | `29` | 59 | `27` | 178 |
-| `04` | 12 | `21` | 30 | `11` | 81 | `43` | 240 |
-| `22` | 12 | `15` | 31 | `14` | 89 | `38` | 242 |
-| `42` | 13 | `24` | 31 | `26` | 109 | `36` | 244 |
-| `16` | 18 | `28` | 33 | `33` | 115 | `35` | 276 |
-| `07` | 22 | `40` | 34 | `19` | 125 | `20` | 282 |
+| `01` | 5 | `06` | 23 | `32` | 35 | `39` | 151 |
+| `09` | 6 | `25` | 28 | `34` | 40 | `41` | 164 |
+| `02` | 8 | `17` | 29 | `10` | 50 | `08` | 171 |
+| `37` | 9 | `18` | 29 | `44` | 50 | `27` | 178 |
+| `03` | 10 | `12` | 30 | `29` | 59 | `43` | 240 |
+| `05` | 10 | `21` | 30 | `11` | 81 | `38` | 242 |
+| `04` | 12 | `15` | 31 | `14` | 89 | `36` | 244 |
+| `22` | 12 | `24` | 31 | `26` | 109 | `35` | 276 |
+| `42` | 13 | `28` | 33 | `33` | 115 | `20` | 282 |
+| `16` | 18 | `40` | 34 | `19` | 125 |  |  |
+| `07` | 22 | `31` | 34 | `13` | 131 |  |  |
+| `00` | 22 | `23` | 35 | `30` | 131 |  |  |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two
 hand-built linear solves and a second self-consistent run that were demonstrating

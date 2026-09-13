@@ -14542,7 +14542,7 @@ told from silence is this project's most-repeated trap.
   which is a statement about that route rather than this one, and QE's own `average_pp.f90`
   refuses ultrasoft and PAW outright.
 
-### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. 📐 PLANNED, not started.
+### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stage 1 (unpolarized, norm-conserving, LDA, direct route); stages 2-4 planned.
 
 Elk tasks 700/701 (ground state), 720/725 (band structure and spectral function), 731-3,
 741-3, 771-3 (plots); `src/modulr.f90` and the twenty routines around it. The method paper is
@@ -14742,6 +14742,14 @@ row with both tick columns empty.
   *not* check `spinsprl` and so accepts the combination untested, which is a reason to
   refuse it here rather than a precedent), **OEP** and
   **spin-polarised cores** (Elk's own two `Error(gndstulr)` stops).
+- **An unconverged unit-cell ground state**, added while writing stage 1 rather than
+  planned. The unit cell's density is the one thing an ultracell holds *fixed*, so an
+  unconverged seed poisons every eigenvalue and every coefficient the envelope is built
+  from and there is no later iteration in which it could work itself out.
+  `fixed_density_states` asks nothing about the density it is handed, so this is
+  `OPEN.md` Part V item 2's shape exactly -- **a refusal that one caller has and its
+  sibling does not**, the `Calculator` door guarding it and the functional one not. Both
+  doors ask here, and `test_an_unconverged_seed_is_refused` shows it firing.
 
 **Occupations, in one paragraph, because this is where the k-set trap lives.** There is one
 Fermi level over all `nbnd N` ultracell states at each k-point, each carrying the weight
@@ -14836,6 +14844,177 @@ should be a function or an array here rather than a file format. `avecu`, `scale
 `ngridkpa` are **not** copied as input variables -- they are derived or renamed, and the
 non-integer ultracell they permit is the refusal above.
 
+
+---
+
+**What stage 1 measured.** The code is `defumat/ultracell/` -- `grid.py` (the index map),
+`hamiltonian.py`, `density.py`, `potential.py`, `mixing.py`, `driver.py` -- reached by
+`run_ultracell` and `Calculator.get_ultracell`.
+
+**The implementation deviated from this plan in one place and it was the right deviation.**
+The plan named `response/phononq.py:hartree_at_q`, Elk's `gengclgq` and P16's
+`topology/states.py:_alignment` as the machinery to reuse. **None of the three is needed.**
+Putting the whole calculation on the **ultracell FFT box** -- shape `(n1 Nd1, n2 Nd2, n3 Nd3)`
+on the unit cell's dense grid -- makes the box's own reciprocal grid *be* the `G + Q` set, and
+then:
+
+* a plane wave with unit-cell Miller index `G` at a k-point carrying `Q` sits at
+  `J_i = (n_i G_i + q_i) mod (n_i Nd_i)`, and the **umklapp of `Q - Q'` is what `mod` already
+  did** -- no pair of `Q` values needs a phase factor and no Miller alignment is built;
+* the Hartree term is `4 pi/|G_u|^2` on that grid, so there is no `gclgq` to assemble;
+* `floor(J_i/n_i)` is the unit cell's own box index of `G_i`, **for `G_i` of either sign**, so
+  a unit-cell reciprocal mask becomes the ultracell one by `np.repeat` and a unit-cell real
+  field becomes the tiled one by `np.tile`, with the two conventions provably agreeing.
+
+Each of those identities is asserted separately in `tests/unit/test_ultracell_grid.py` (41
+tests, 3 s, no SCF), because a mis-signed Miller index puts a plane wave in the **wrong cell
+of the ultracell**, which is a different physical state rather than a crash.
+
+**The number: the ultracell against a real supercell.** A two-cell silicon ultracell
+(`ecutwfc = 12`, `nosym`, folded grid `2x2x2`) against a real four-atom supercell run through
+this package's own SCF, both under the same applied `0.05 cos(2 pi x_1/2)` Ry, compared
+Fourier component by Fourier component -- in `G` space rather than in real space, because the
+two codes choose their FFT grids independently (30 against 32 here) and an interpolation error
+would land inside the number that is supposed to be measuring a basis truncation.
+
+| `nbnd` | relative error in the induced density | occupied `eps` vs the supercell | s |
+|---|---|---|---|
+| 8 | 4.25e-1 | 2.85e-2 eV | 5.7 |
+| 12 | 9.16e-2 | 9.16e-3 eV | 5.1 |
+| 16 | 6.24e-2 | 1.20e-3 eV | 5.5 |
+| 24 | 1.32e-2 | 9.04e-5 eV | 7.2 |
+| 32 | 7.81e-3 | 6.70e-5 eV | 7.9 |
+| 48 | 3.33e-3 | 2.97e-5 eV | 12.2 |
+| 64 | 2.13e-3 | 2.33e-5 eV | 16.3 |
+| 80 | 1.70e-3 | 1.83e-5 eV | 48.1 |
+
+**Monotone across the whole range, 250x from `nbnd = 8` to `nbnd = 80`, with `npw` between
+169 and 190** -- so at `nbnd = 80` the basis is about 35 per cent complete and the induced
+density is right to 0.2 per cent. That *is* the claim "a variational truncation to `nbnd`
+bands per folded k-point and nothing else", and it is the only evidence for it there is.
+
+Two things about that table are not the physics and are stated so they are not read as it.
+The **seconds column mixes two eigensolver settings** -- rows up to 32 ran at the default
+`diago_david_ndim = 4` and the three above it at 2, because `nvecx = david * nbnd` would
+otherwise exceed `npw` -- so the jump at 80 is the solver, not the method. And the frozen-state
+solve is inside every one of those times, paid once per call, which is why the *rows* are
+comparable to each other and not to a supercell.
+
+**The top row is the warning made concrete, and it is worse than 42 per cent wrong.**
+`nbnd = 8` on this cell also **fails to converge at all** in one of the two runs it was tried
+in -- 200 iterations at `dr2 = 3.2e-2`, against nine iterations to 8.4e-11 in the other, same
+input. The cut there falls inside a degenerate multiplet (`multiplet_gap` 3.6e-13 eV), so
+which member the eigensolver returned decides the basis, and rule D4 is what that is: the
+fixed point is not a function of the density. `run_ultracell` now names `multiplet_gap` in its
+non-convergence warning for exactly this reason, and the regression ladder starts at 12.
+
+**But a degenerate cut is not in itself the defect, and the first version of the warning
+fired on the runs that were fine.** `nbnd = 32`, `48` and `80` each cut a multiplet just as
+exactly -- gaps of 6e-15, 5e-12 and 4.7e-11 Ry against `nbnd = 8`'s 2.6e-14 -- and each
+converged in ten iterations, on the monotone ladder above. **The difference is where the cut
+is**, and the physics says so: the envelope is carried by the *low* empty bands, so an
+arbitrary rotation among those changes what the basis spans, and one thirty bands up mixes
+states that carry no weight. The warning is therefore gated on the cut being degenerate
+**and** low -- `nbnd <= 2 nocc`, no more empty bands than occupied ones, which is exactly
+where `nbnd = 8` sits and `nbnd = 12` does not. The gap stays on the result
+(`UltracellResult.multiplet_gap`) either way. This is the "a check whose null result cannot
+be told from a pass" trap running the other way: a check that fires on the passes is a check
+that gets ignored, and it would have fired on the tutorial notebook's own headline run.
+
+**The test that carries that table had a bug of its own, and it is the "a check whose null
+result cannot be told from a pass" trap wearing the opposite mask.** The regression
+comparison reads both densities in Fourier space at the shared Miller indices, which is right
+-- the supercell and the ultracell have the same reciprocal lattice, so the same list of `G`
+names the same plane waves in both and no interpolation between two FFT grids is needed. What
+was wrong is that it wrapped *both* fields with the **ultracell's** box shape, and the two
+boxes are not the same: the supercell chooses its own FFT dimensions from its own cutoff and
+gets `(32, 15, 15)` where the two-cell ultracell box is `(30, 15, 15)`. Right plane waves,
+wrong strides -- so what came back was a permutation of the spectrum, and the error it
+reported was **0.9998 at every band count**, 12, 24 and 48 alike. A number that is the same to
+four digits across a ladder built to make it move is the tell, and the reason it went unseen
+for a while is that the run never reached that assertion: `nbnd = 48` was failing one line
+earlier, on `converged`, for the unrelated `nvecx` reason above. **One defect hid another, and
+the one in front was the loud one.** Each field is now wrapped with the box it actually lives
+on.
+
+**Three nulls, and the third is the one that earns the first two.**
+
+* `N = 1` reproduces the unit-cell SCF, one iteration, and `dV` -- the difference between the
+  ultracell potential and the unit-cell one the frozen eigenvalues already carry -- vanishes
+  to **3.3e-16**, machine precision rather than a convergence threshold.
+* `N > 1` with nothing applied gives the **tiled** density and `N` times the electrons, again
+  in one iteration, `dV` at 4.4e-16. **This is the test that caught the one real bug**, and
+  `N = 1` could not see it: the occupation search has to be done for the *ultracell's*
+  electron count and rescaled by `N` afterwards, because `fixed_occupations` reads its
+  argument as a number of bands to fill where `smeared_occupations` reads it as the weighted
+  sum a Fermi level must reproduce. With the unit cell's count the density came out `N` times
+  too small, converged, and passed `N = 1` perfectly.
+* and the null is shown **capable of failing**: the same machinery under an applied potential
+  moves, and the induced density's Fourier weight sits on the applied wavevector's own ladder
+  and nowhere else -- every component whose `q` index along the modulated axis is zero is
+  below 1e-3 of the modulated ones.
+
+**Convergence: 9 iterations against Elk's two thousand.** Elk's own example of the method runs
+`beta0 0.001`, linear mixing, `maxscl 2000`. Here the mixed quantity is the **density** on the
+ultracell box rather than Elk's `Q`-resolved potential, the convergence test is the Hartree
+energy of the density residual (QE's `dr2`, generalised to `|G+Q|`, so `conv_thr` means what
+it means everywhere else in this package), and the Anderson mixer is Kerker-preconditioned at
+`|G+Q|` (`ultracell/mixing.py`). That matters more here than in a unit cell and by a stated
+amount: the smallest non-zero `|G+Q|` an ultracell carries is `N` times smaller, so the
+Hartree kernel there is `N^2` larger. Plain linear mixing at `beta = 0.5` **diverged** on the
+same two-cell problem (`dr2` at 4.0e+1 after 200 iterations); Anderson plus Kerker converges
+it to 9.4e-11 in **nine**.
+
+**And that is where the method's advantage actually comes from, which the crossover measured.**
+Against a real supercell of the same cell under the same applied modulation, the ultracell is
+*slower* at two cells (0.12x) and four (0.64x), **2.42x faster at six**, and at eight the
+supercell **does not converge at all** -- 100 iterations at `dr2 = 8.3e-2` -- so the `> 11.7x`
+there is a lower bound rather than a ratio. The per-iteration cost is only half of it: the
+supercell's iteration count climbs **10, 20, 46, then 100 without converging** as the cell
+lengthens, where the ultracell sits at **9 at every `N`**. A longer cell sloshes more, and only
+one of the two codes here is mixing at the wavevectors it actually has. `PERFORMANCE.md` has
+the table, the `nbnd` cost curve and the finding that the driver is **dispatch-bound rather
+than compute-bound** at small `N`.
+
+**One shared-code change, and it is a real latent defect rather than plumbing.**
+`nvecx = david * nbnd` in the Davidson solver is **not capped against the size of the space**,
+so a run asking for many empty bands -- which is exactly what an accurate ultracell basis is --
+reaches `4 nbnd > npw` and the subspace is larger than the space it lives in. `david` is now
+forwarded through `fixed_density_states`; capping it inside the solver is not done here.
+**QE refuses exactly this and this code does not** -- `c_bands.f90:286` stops with "too many
+bands, or too few plane waves" when `nbndx > npwx`, and `memory_report.f90:484` says it again
+before any work is done, where `setup.f90:468`'s `nbndx = david * nbnd` is the same arithmetic
+as ours. The symptom without the guard is a Cholesky that returns `nan` and a fallback that
+absorbs it, and the failure then surfaces three layers away: the regression ladder's
+`nbnd = 48` rung asks for 192 vectors in a 169-dimensional space, seven of eight k-points
+return non-finite overlaps, and what the test reports is **"the ultracell did not
+converge"** at `dr2 = 1.15e-1` after 200 iterations. That rung carries `david = 2`, which
+is what the table below was measured at. Without the guard the other symptom is a
+**scaling curve**: 48.1 s at `nbnd = 80` against 16.3 s
+at 64. Written up with the two-line fix in `OPEN.md` Part VI item 1.
+
+**What is outstanding.**
+
+* **Stages 2, 3 and 4** as planned above: the central-k route beside the direct one and the two
+  errors separated, the magnetic regimes (which is where a spin density wave lives), and the
+  total energy -- the quantity neither code has.
+* **The `PERFORMANCE.md` pair against Elk.** Stage 1 is unpolarized silicon under an applied
+  potential and Elk's only worked example of the method is the Cr spin density wave, which is
+  stage 3; timing task 700 on a system Elk was not set up for would be a worse number than
+  none. What is recorded instead is the comparison that *is* like-for-like -- the ultracell
+  against the supercell it approximates, in this code, on the same physics.
+* **The driver is dispatch-bound at small `N`, not compute-bound**, and that is the biggest
+  lever here. An `N = 2` iteration is a few hundred transforms of a 6750-point box -- about
+  0.05 s of arithmetic in a 5 s call. What the rest is: the state axis walked by `lax.map`
+  one box at a time (`state_batch = 1`, the memory-safe end of a dial that has no measured
+  other end yet), the `k0` axis walked in Python, and the mixer crossing to the host every
+  iteration. Jitting the per-`k0` step and letting `state_batch` follow the platform the way
+  `k_batch` does are both unstarted, and both are worth more than anything in the algorithm
+  at this size. `PERFORMANCE.md` has the measurement.
+* **A GGA** on the box, which would be a strict improvement on Elk's per-cell `potxc` rather
+  than a transcription of it, and is refused meanwhile.
+* **The band structure and spectral function** (Elk's 720/725): post-processing on a converged
+  ultracell state, deferred rather than forgotten, and the README row says so.
 
 ## 4. Validation strategy
 

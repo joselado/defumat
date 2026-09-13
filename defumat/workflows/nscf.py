@@ -92,6 +92,7 @@ def fixed_density_states(
     becsum: tuple = (),
     field=None,
     field_scale: float | None = None,
+    david: int | None = None,
 ):
     """Diagonalise once at every k-point of ``system`` with ``density`` fixed.
 
@@ -109,6 +110,12 @@ def fixed_density_states(
     for the same reason PAW's ``becsum`` is below: it is a property of the
     *wavefunctions*, so it cannot be rebuilt from the density this is handed,
     and the Hubbard potential is built from it.
+
+    ``david`` is ``diago_david_ndim``, the Davidson subspace multiple
+    ``nvecx/nbnd``. It is forwarded because ``nvecx`` is not capped against the
+    size of the space: a run asking for many empty bands -- an ultracell basis
+    (``PLAN.md`` P84) is the case that found this -- can reach
+    ``4 nbnd > npw``, where the subspace is larger than the space it lives in.
 
     ``field`` and ``field_scale`` are the pair ``SCFResult.magnetic_field`` and
     ``SCFResult.field_scale``, and they are state rather than input for the same
@@ -144,7 +151,7 @@ def fixed_density_states(
             lambda s: s.kpoints, system, kpoints_for_spin(kpoints, system.nspin)
         )
 
-    calculation = Calculation(system, pseudos, k_batch=k_batch)
+    calculation = Calculation(system, pseudos, k_batch=k_batch, david=david)
     nbnd = nbnd or system.nbnd or default_nbnd(
         calculation.nelec,
         system.occupations,

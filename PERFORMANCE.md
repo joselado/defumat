@@ -5167,6 +5167,145 @@ Nothing there changed and nothing was expected to.
 `setup / init_run` stays at 17-22x and is almost entirely XLA compiling; it is paid once
 per process whatever the size of the run, which is why it is reported apart from the loop.
 
+## What the ultracell costs, against the supercell it approximates (P88)
+
+**The Elk pair is not taken here, and that is a decision rather than an omission.**
+The standing rule is single-core defumat against the single-core code a feature was
+taken from, on the same physics. Stage 1 is *unpolarized silicon under an applied
+potential*; Elk's only worked example of the ultra long-range method is the chromium
+spin density wave (`examples/ultra-long-range/Cr-SDW`), which is magnetic, spin-orbit
+and fixed-moment -- stage 3 here, and refused meanwhile. Timing Elk's task 700 on a
+system it was not set up for, against a regime this code refuses, would compare two
+different calculations and report a ratio. **The specification for that pair, so stage
+3 inherits it rather than a promise:** Elk task 700 on `Cr-SDW` at its stated
+`ngridq 21 1 1`, single core, **adding `genevfsv` over the whole `k + kappa` set to
+Elk's side**, because that is the work this code does inside its own driver and timing
+the self-consistent loop alone would compare a loop against a loop plus the basis it
+stands on.
+
+What is measured instead is the comparison that **is** like-for-like and is the one a
+user actually faces: the ultracell against the real supercell it approximates, in this
+code, same cell, same applied modulation, same threshold.
+
+### The crossover, which is the number
+
+Silicon, `ecutwfc = 12`, `nosym`, two atoms per cell. At each `N` the ultracell is
+`supercell = (N, 1, 1)` on `kgrid = (1, 2, 2)`, expanding around a unit-cell ground
+state on the folded `(N, 2, 2)` grid; the reference is a **real `2N`-atom supercell**
+with `a^s_1 = N a_1` on its own `(1, 2, 2)` grid. Both carry the same
+`0.05 cos(2 pi x_1/N)` Ry applied potential -- the supercell's through
+`ultracell.with_external_potential`, which is the hook this comparison exists for.
+Single core, warm, median of three after a discarded first call.
+
+| `N` | atoms | supercell, s | its | ultracell, s | its | supercell / ultracell |
+|---|---|---|---|---|---|---|
+| 2 | 4 | 0.63 | 10 | 5.16 | 9 | 0.12 |
+| 4 | 8 | 5.62 | 20 | 8.82 | 9 | 0.64 |
+| 6 | 12 | 34.13 | 46 | 14.10 | 9 | **2.42** |
+| 8 | 16 | 217.10 | 100, **did not converge** | 18.61 | 9 | > 11.7 |
+
+**The last row is not a data point of the same kind and is written that way.** The
+sixteen-atom supercell **stopped at `max_iterations = 100` with `dr2 = 8.3e-2` against
+its own `conv_thr = 1e-9`** -- it did not reach the answer, so 217.10 s is a *lower
+bound* on what that answer costs and `11.7` a lower bound on the ratio. A ratio between
+one code that converged and one that did not is not a like-for-like comparison, and the
+honest headline is therefore still the `N = 6` row. What the row *is* evidence for is
+the thing the iteration column has been saying all along: a plain supercell of a long
+cell gets harder to converge as it lengthens -- 10, 20, 46, then not at all in 100 --
+while the ultracell sits at nine at every `N`. That is charge sloshing, it is exactly
+what Elk's `beta0 0.001` and `maxscl 2000` are for, and it is why the ultracell's mixer
+is preconditioned at `|G+Q|` rather than at `|G|`.
+
+**The ultracell does not win at small `N` and it is not supposed to.** At two cells it
+is eight times *slower* than simply doing the supercell, and the reason is not the
+physics: an `N = 2` iteration is a few hundred transforms of a 6750-point box, about
+0.05 s of arithmetic in a 5 s call. What the rest is, is **dispatch** -- the state axis
+walked by `lax.map` one box at a time, the k0 axis walked in Python, and the mixer
+crossing to the host each iteration. That is the backlog item this measurement creates,
+and it is a bigger lever than anything in the algorithm at this size.
+
+What the table does show is the **slope**, and the slope is the method's whole claim.
+**The crossover is between four and six cells, and at six the ultracell is 2.4 times
+faster.** Two things move it and the second is the one worth reading twice. The
+per-iteration cost: a supercell's basis grows with `N` and so does its band count,
+where the ultracell's basis per folded k-point does not. And **the iteration count** --
+the supercell's climbs 10, 20, 46 as the cell lengthens, which is charge sloshing and
+is exactly what a longer cell does, while the ultracell stays at **9 at every `N`**,
+because its mixer is preconditioned at `|G+Q|` rather than at `|G|`. The method's
+advantage is therefore partly algorithmic and partly that it is the only one of the two
+that was built knowing the cell would be long.
+
+### Where the time goes, and what `nbnd` buys
+
+One ultracell iteration is **two ultracell transforms per ket basis function**, so
+`2 N nbnd` ultracell FFTs per `k0`, which is `2 N^2 nbnd` unit-cell transforms. That
+`N^2` is the price of the *direct* route -- the potential block `(Q, Q')` depends on
+both indices rather than only on their difference -- and removing it is exactly what
+stage 2's central-k route is for, at the cost of a second approximation.
+
+Two-cell silicon against the same supercell reference, warm, each time including the
+frozen-state solve that call pays once:
+
+| `nbnd` | s | relative error in the induced density |
+|---|---|---|
+| 8 | 5.7 | 4.25e-1 |
+| 12 | 5.1 | 9.16e-2 |
+| 16 | 5.5 | 6.24e-2 |
+| 24 | 7.2 | 1.32e-2 |
+| 32 | 7.9 | 7.81e-3 |
+| 48 | 12.2 | 3.33e-3 |
+| 64 | 16.3 | 2.13e-3 |
+| 80 | 48.1 | 1.70e-3 |
+
+**The seconds column mixes two eigensolver settings and the last row is not the
+method.** Rows to 32 ran at the default `diago_david_ndim = 4`; the three above it at
+2, because `nvecx = david * nbnd` would otherwise exceed `npw`, which is between 169
+and 190 on this cell. A separate warm pair at `conv_thr = 1e-9` on the same cell:
+**2.20 s** for the four-atom supercell (10 iterations) against **5.40 s** for the
+ultracell at `nbnd = 24` (9 iterations) and **36.46 s** at `nbnd = 48`, where the extra
+time is the frozen-state Davidson reaching for many empty bands at a tight threshold
+rather than anything in the ultracell loop. `states_conv_thr` is the dial for that and
+its default is the ordinary fixed-density one.
+
+### Iterations, which is where the method earns its keep
+
+Elk's own example runs `beta0 0.001`, linear mixing, `maxscl 2000`. Long-wavelength
+charge sloshing is the whole difficulty and an ultracell is built to have long
+wavelengths in it: the smallest non-zero `|G+Q|` it carries is `N` times smaller than
+the unit cell's, so the Hartree kernel there is `N^2` larger.
+
+* plain linear mixing at `beta = 0.5` **diverges** on the two-cell problem above --
+  `dr2` at 4.0e+01 after 200 iterations, moving the wrong way from the start;
+* Anderson with Kerker at `|G+Q|` (`ultracell/mixing.py`, on by default) converges the
+  same problem to `dr2 = 9.4e-11` in **nine**.
+
+And it holds as the cell grows, which the supercell's does not: across the crossover
+table the ultracell stays at **9 iterations** at every `N` while the supercell's climbs
+10, 20, 46 and then fails to converge in 100 at sixteen atoms. That is the same physics
+from the other side -- a longer cell sloshes more -- and it is a second reason the ratio
+moves the way it does. It is also the more durable half of the comparison: the
+per-iteration cost is an implementation number that the dispatch work above would move,
+and the iteration count is the method.
+
+An eight-cell silicon ultracell under an applied modulation is 9 iterations and 28.6 s
+at `nbnd = 32` on a `(1, 2, 2)` k-grid (32 folded k-points); the four-cell one is 8
+iterations and 17.8 s. The unit-cell ground state those expand around, on its own
+`8 x 2 x 2` grid at `conv_thr = 1e-10`, is **7.0 s** and is paid once.
+
+### Memory
+
+Two objects grow with `N` and neither is the Hamiltonian until the dense solve has
+already stopped the run: the ultracell density and potential at
+`N x (dense grid) x nspin_mag` float64 -- 540 kB for two-atom silicon at `N = 20`,
+13 MB for a 21-cell chromium cell on a 27^3 grid with four components, **6.4 GB** at
+10^4 cells, which is the wall a one-dimensional modulation hits first -- and the matrix
+at `(N nbnd)^2` complex per `k0`, 6.4 MB at `nbnd = 30, N = 21`.
+
+What is deliberately *not* allocated is one ultracell box per basis function: the
+matrix build and the density both walk their state axis through `lax.map`, one box in
+flight, which is what `state_batch = 1` means and why it is the default.
+
+
 ## History
 
 | Date | Change | Effect |

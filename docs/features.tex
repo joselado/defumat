@@ -4117,6 +4117,150 @@ functional than the one being differentiated.
 \end{refuses}
 
 % =====================================================================
+\section{A modulation over many unit cells: the ultracell}
+
+A spin density wave in chromium has a period of 21 unit cells. A charged
+impurity in silicon is screened over about 20. A skyrmion is hundreds across.
+Each of them is a slow \emph{envelope} on a crystal that is still atomically
+periodic, and a supercell pays the same price per degree of freedom for the
+envelope as for the atoms --- which is why that length scale is the one nobody
+computes from first principles.
+
+The ultracell separates the two. Take $N = n_1n_2n_3$ copies of the unit cell.
+The reciprocal lattice vectors of that ultracell lying inside the unit cell's
+Brillouin zone are $N$ wavevectors $\mathbf Q$, and everything allowed to be
+long ranged is written
+\begin{equation*}
+\rho(\mathbf r) = \sum_{\mathbf Q} \rho_{\mathbf Q}(\mathbf r)\,
+   e^{i\mathbf Q\cdot\mathbf r},
+\qquad \rho_{\mathbf Q}\ \text{lattice periodic}.
+\end{equation*}
+The ultracell's Kohn-Sham states at an ultracell Brillouin zone point
+$\mathbf k$ are then expanded in the \emph{unit cell's own} Kohn-Sham states at
+the $N$ points that fold onto it,
+\begin{equation*}
+|\Psi\rangle = \sum_{\mathbf Q, n} c_{\mathbf Q n}\,
+  |\psi_{\mathbf k + \mathbf Q, n}\rangle, \qquad n \le \code{nbnd},
+\end{equation*}
+and what is diagonalised is the $N\,\code{nbnd} \times N\,\code{nbnd}$ matrix
+\begin{equation*}
+H_{(\mathbf Q m),(\mathbf Q' n)} =
+  \delta_{\mathbf Q \mathbf Q'}\delta_{mn}\,\varepsilon_{\mathbf k+\mathbf Q,n}
+  + \langle \psi_{\mathbf k+\mathbf Q, m}|\,\delta V\,
+    |\psi_{\mathbf k+\mathbf Q', n}\rangle ,
+\end{equation*}
+with $\delta V$ the ultracell potential \emph{minus} the unit cell's --- the
+eigenvalue on the diagonal already carries the whole unmodulated potential, so
+putting it in twice would be the one easy mistake here.
+
+\textbf{Why this is cheap.} The unit-cell states at the folded k-points are
+computed \textbf{once, before the self-consistent loop}, and frozen. Every
+iteration after that builds a small dense matrix and diagonalises it; no
+plane-wave Hamiltonian is touched again. The variational dimension per k-point
+is $N\,\code{nbnd}$ where a real supercell's is $N\,\code{npw}$, and the ratio
+$\code{npw}/\code{nbnd}$ is typically $10^2$ to $10^3$. It is a prefactor,
+however, not a change of scaling: the dense solve is still
+$O((N\,\code{nbnd})^3)$, so this reaches a few thousand cells along one
+direction rather than a micron in three.
+
+\textbf{What the approximation is, exactly.} As \code{nbnd} grows to the full
+plane-wave count, the basis above spans precisely the ultracell's own
+plane-wave basis. So the method is a \emph{variational truncation of the exact
+$N$-cell supercell problem to \code{nbnd} bands per folded k-point}, and
+nothing else. The convergence carries no sign --- the Hamiltonian moves with
+its own truncated density, so an ultracell eigenvalue is not an upper bound on
+the supercell's --- but it does converge, which is the property the
+implementation is checked against: a two-cell silicon ultracell under an
+applied modulation reproduces a real four-atom supercell's induced density, and
+the disagreement falls monotonically with \code{nbnd}
+(\code{tests/regression/test\_ultracell.py}).
+
+\begin{pycode}
+from defumat import Calculator
+import numpy as np
+
+cal = Calculator.from_file("si.in")        # the two-atom unit cell
+
+# a potential of one ultracell period along a_1, in Ry; x runs over [0, n_i)
+modulation = lambda x: 0.05 * np.cos(2 * np.pi * x[..., 0] / 8)
+
+ulr = cal.get_ultracell(supercell=(8, 1, 1), kgrid=(1, 2, 2),
+                        nbnd=24, external=modulation)
+
+print(ulr.iterations, ulr.accuracy)    # dr2 on the ultracell box, in Ry
+print(ulr.density.shape)               # (nspin, 8*n1, n2, n3): the whole ultracell
+print(np.abs(ulr.modulation).max())    # rho - tile(rho_0): the induced envelope
+print(ulr.fermi_energy, ulr.band_energy)
+\end{pycode}
+
+\code{supercell} is three integers and the ultracell lattice vectors are derived
+from them; \code{kgrid} samples the \emph{ultracell's} Brillouin zone, which is
+$N$ times smaller than the unit cell's, so the folded set the frozen states are
+computed on is \code{supercell * kgrid}. \code{external} is an applied potential
+in Ry, given either as an array on the ultracell grid or as a function of
+unit-cell crystal coordinates, which run over $[0, n_i)$ across the ultracell.
+\code{ulr.density} is normalised \emph{per unit cell}, so it integrates to $N$
+times the electron count over the ultracell and equals the tiled unit-cell
+density exactly when nothing is modulated.
+
+\textbf{\code{nbnd} is the convergence parameter and it is the only one.} It is
+the size of the variational basis per folded k-point, so the default --- which
+for an insulator is the occupied bands and nothing above them --- leaves the
+envelope nothing to be built from. Pass it. \code{ulr.multiplet\_gap} reports
+the smallest gap the truncation opens anywhere on the folded k-set: where that
+is small the cut has fallen inside a degenerate multiplet, which member of it
+survives is whatever the eigensolver returned, and the basis is arbitrary
+there. \textbf{Whether that matters depends on where the cut is}, and the two
+cases were measured rather than assumed. Low --- no more empty bands than
+occupied ones --- the arbitrary rotation is among the very states the response
+is built from, and \code{run\_ultracell} warns: \code{nbnd = 8} on silicon cuts
+at $2.6\times10^{-14}$~Ry and does not converge at all. High in the empty
+manifold a cut this degenerate is both common and harmless --- \code{nbnd = 32},
+\code{48} and \code{80} each open one ($6\times10^{-15}$, $5\times10^{-12}$,
+$4.7\times10^{-11}$~Ry) and
+each converged in ten iterations to a monotonically improving answer --- so the
+gap is reported there without a warning. Raise \code{nbnd} until the cut lands
+in a gap, or until it lands high enough not to be one.
+
+\textbf{Convergence.} The mixed quantity is the density on the ultracell box and
+the convergence test is the Hartree energy of its residual --- QE's \code{dr2},
+generalised to $|\mathbf G + \mathbf Q|$ --- so \code{conv\_thr} means here what
+it means everywhere else in this package. Kerker preconditioning is on by
+default and matters more here than in a unit cell: the smallest non-zero
+$|\mathbf G+\mathbf Q|$ an ultracell carries is $N$ times smaller, so the
+Hartree kernel there is $N^2$ larger and long-wavelength charge sloshing is the
+whole difficulty. Elk's own example of the method runs at a mixing parameter of
+$0.001$ for up to two thousand iterations; a two-cell silicon ultracell under an
+applied modulation converges here in nine.
+
+\textbf{There is no total energy}, in this code or in Elk, whose
+\code{energyulr.f90} reports the sum of occupied eigenvalues and the Fermi level
+and nothing else. \code{ulr.band\_energy} is that sum, per unit cell. The energy
+\emph{gain} of a modulated state over the uniform one --- the quantity that says
+whether a spin density wave is the ground state at all --- is therefore a
+quantity neither code computes.
+
+\begin{refuses}
+Ultrasoft and PAW datasets: the augmentation charge is a function of the density
+through $D_{ij}$, so the frozen unit-cell states stop being a fixed basis as soon
+as the modulation moves. Gradient-corrected functionals: the gradient of the
+ultracell density carries the envelope's own gradient, which a per-cell
+evaluation drops (Elk takes that approximation silently; it is refused here).
+Meta-GGA. Spin polarization of any kind, collinear or noncollinear --- which is
+where a spin density wave lives, and is the next stage rather than a permanent
+refusal. DFT+U, the occupation matrix being per atom where an ultracell has $N$
+copies of each. Spin spirals, as a second modulation of the same states.
+Gamma-only storage, the basis being built at $N$ points none of which is
+$\Gamma$. A double grid, the wavefunctions and the density then living on
+different ultracell boxes. Symmetry is not used at all: a modulation breaks the
+crystal's point group, so the run needs \code{nosym} and the whole k-grid. And a
+non-integer ultracell is refused, where Elk's \code{avecu} is an independent
+input with no consistency check against its Q-grid. An \textbf{unconverged}
+unit-cell ground state, because its density is the one thing an ultracell holds
+fixed and there is no later iteration in which a bad seed could work itself out.
+\end{refuses}
+
+% =====================================================================
 \section{Continuing an all-electron ground state}
 
 Elk is an all-electron LAPW code and this is a pseudopotential plane-wave one,

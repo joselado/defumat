@@ -1062,6 +1062,37 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS)
         )
 
+    def get_ultracell(self, supercell, kgrid=(1, 1, 1), **options):
+        """A density or potential modulated over many unit cells at once.
+
+        The ultra long-range method (``PLAN.md`` P84, Elk's task 700). A spin
+        density wave, a screened impurity or a domain wall is a slow **envelope**
+        on a crystal that is still atomically periodic, and a supercell pays the
+        same price for the envelope as for the atoms. Here the unit cell's own
+        Kohn-Sham states at the ``N`` folded k-points are computed **once** and
+        then used as the basis for an ultracell of ``supercell = (n1, n2, n3)``
+        cells, so the self-consistency runs on the envelope alone.
+
+        ``kgrid`` samples the *ultracell's* Brillouin zone, which is ``N`` times
+        smaller than the unit cell's. ``nbnd`` is the one knob the accuracy
+        depends on -- it is the size of the variational basis per folded
+        k-point, and the answer converges to the real ``N``-cell supercell as it
+        grows -- so pass it. ``external`` is an applied potential in Ry over the
+        ultracell.
+
+        The atoms do not move and the local band structure cannot relax: this
+        computes what a modulation does to a fixed crystal, not a different
+        crystal.
+        """
+        from defumat.ultracell.driver import run_ultracell
+
+        result = self._ground_state("an ultracell calculation")
+        return run_ultracell(
+            self.system, self.pseudos, result, supercell, kgrid,
+            **self._call_options(run_ultracell, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
     def get_nesting(self, grid=None, **options):
         """``N(q)``, the Fermi-surface nesting function, on a dense grid.
 

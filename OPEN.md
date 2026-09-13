@@ -2242,3 +2242,73 @@ different input, which is why they are not in question here.
 
 **How to know it worked.** `pytest tests/regression/test_magnons.py` at 8 passed, and the
 `h-fcc-magnon.in` run reporting `converged=True`.
+
+# Part VI -- from the 2026-09-13 ultracell session (P88)
+
+## 1. `nvecx = david * nbnd` is not capped against the size of the space, and QE stops where this does not
+
+**Found while converging the ultracell in `nbnd`**, which is the one place a small cell
+is asked for eighty bands: silicon at `ecutwfc = 12` has `npw` between 169 and 190 at the
+folded k-points, so `nbnd = 80` at the default `diago_david_ndim = 4` asks for a Davidson
+subspace of **320 vectors in a 169-dimensional space**. Nothing refuses it.
+
+**The symptom is not an error, which is why this is here.** The run continues and the
+overlap of a subspace that cannot be independent goes singular:
+
+```
+UserWarning: 1 of 8 k-points came back non-finite from the Cholesky route ([0])
+and are being re-solved with canonical orthogonalisation
+UserWarning: the fixed-density solve did not converge at 5 of 8 k-points: up to
+66 of 80 bands are unsettled and the worst k-point took 100 Davidson steps
+```
+
+The fallback catches it, the answer that comes back is usable, and the cost is the whole
+iteration budget at most k-points -- `nbnd = 80` took **48.1 s** against `nbnd = 64`'s
+16.3 s for the same call, which reads as a scaling curve and is a solver falling over.
+
+**QE refuses this and names it.** `PW/src/c_bands.f90:286-287` is
+
+```fortran
+IF ( nbndx > ipw ) &
+   CALL errore ( 'diag_bands', 'too many bands, or too few plane waves',1)
+```
+
+with `ipw = npwx` summed over the band group, and `PW/src/memory_report.f90:484` says the
+same thing a second time before any work is done. QE's own `nbndx = david * nbnd`
+(`setup.f90:468`) is **identical** to this code's `nvecx = david * nbnd`
+(`solvers/davidson.py:360`), so the arithmetic is not the difference: the guard is.
+
+**What to do.** Two lines, and the second is the one that matters.
+
+1. **Cap `nvecx` at the smallest `npw` on the k-set -- not at `ndim`.** This is the part
+   that is easy to get wrong and was, in the first draft of this entry.
+   `hamiltonian.ndim` is **`npwx`**, the padded maximum over k (`hamiltonian/operator.py:110`,
+   and `npol * npwx` for a spinor), and the k-points that go singular are precisely the ones
+   *below* it: on the cell above `npwx = 190` while the seven k-points that returned `nan`
+   have `npw = 169`, so `min(4 * 48, 190)` is still oversubscribed at every one of them. The
+   real bound is `min_k npw`, the smallest row-sum of `state_mask`, and it has to be computed
+   **outside** the `vmap` because `ik` is traced inside it. `cegterg`'s only other constraint
+   is `nvec > nvecx/2` (`cegterg.f90:125`), so a cap has to leave room for one expansion;
+   where `2 nbnd` does not fit in the space there is nothing to iterate in at all and the
+   honest answer is a direct diagonalisation of it.
+2. **Refuse `nbnd > npw` by name at the door**, as QE does, rather than letting it become
+   a Cholesky that returns `nan`. The number is known before any solve: it is the smallest
+   `npw` over the k-set.
+
+**Where it is worked around meanwhile.** `fixed_density_states` forwards `david`
+(`workflows/nscf.py`), so the caller can drop the subspace to 2 and stay inside the
+space -- which is what P88's `nbnd = 48, 64, 80` rows were measured at, and why
+`PLAN.md` P88 says the seconds column of that table mixes two solver settings.
+
+**How to know it worked.** `nbnd = 80` on `tests/data/qe/si-ultracell.in`'s cell at the
+default `david` raising by name instead of warning, and the same run at a capped `nvecx`
+coming back with no Cholesky fallback and a time on the 16.3 s trend rather than at 48.1.
+
+**It has already cost a test, which is why it is not merely latent.**
+`test_the_ultracell_converges_to_the_supercell`'s `nbnd = 48` rung at the default
+`david = 4` asks for 192 vectors in a 169-dimensional space: 7 of 8 k-points came back
+non-finite, the frozen states they produced are not eigenstates of anything, and the
+ultracell loop above them then ran 200 iterations to `dr2 = 1.15e-1`. **Nothing in that
+chain reports the cause** -- the failure surfaces as "the ultracell did not converge",
+three layers from the subspace that was too large. The rung passes `david = 2` meanwhile,
+which is what the `PLAN.md` P88 measurement was taken at.
