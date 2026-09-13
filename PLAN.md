@@ -14937,6 +14937,18 @@ earlier, on `converged`, for the unrelated `nvecx` reason above. **One defect hi
 the one in front was the loud one.** Each field is now wrapped with the box it actually lives
 on.
 
+**What is in the push gate and what is not.** `tests/unit/test_ultracell_grid.py` is 41 index
+tests, no SCF, about three seconds, and is gate work. `tests/regression/test_ultracell.py` is
+**66 s warm and 266 s cold** -- eight SCFs across the nulls, the `nbnd` ladder and three
+refusals -- so the seven tests that run one are marked `slow` and the three that only build a
+basis (`test_every_refusal_fires`, `test_the_hubbard_refusal_fires`,
+`test_the_refusals_name_themselves`) stay in the gate, which is where a refusal check belongs:
+it is cheap and it is the one that goes dead silently. Measured after the split: **47 tests in
+3.1 s** in the gate and **9 in 84.6 s** outside it. The file sweeps six cells that share no
+shape, so it carries the `jax.clear_caches()` autouse fixture `CLAUDE.md` asks for -- which is
+most of the 66 s to 85 s the slow half moved by, recompilation traded for a peak that stays
+where it was (2.3 GB).
+
 **Three nulls, and the third is the one that earns the first two.**
 
 * `N = 1` reproduces the unit-cell SCF, one iteration, and `dV` -- the difference between the

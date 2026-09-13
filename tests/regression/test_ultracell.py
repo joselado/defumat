@@ -26,6 +26,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import jax
 import jax.numpy as jnp
 
 from defumat import Calculator
@@ -35,6 +36,22 @@ from defumat.ultracell import run_ultracell, with_external_potential
 from defumat.units import RY_TO_EV
 
 pytestmark = pytest.mark.regression
+
+
+@pytest.fixture(autouse=True)
+def _drop_compiled_code():
+    """Bound the peak, because this file sweeps cells that share no shape.
+
+    The two-atom cell on four different folded k-grids, two supercell shapes, a
+    magnetic cell and a symmetric one each compile the whole SCF stack afresh,
+    and **XLA keeps every executable for the life of the process** -- so the
+    peak here grows monotonically through the file rather than being any one
+    test's. ``CLAUDE.md`` asks for this on any file over about three distinct
+    cells. Only the compiled code is dropped; the results are untouched, and
+    the trade is recompilation for a peak the machine can afford.
+    """
+    yield
+    jax.clear_caches()
 
 #: The applied modulation, in Ry. Small enough that the frozen basis is a good
 #: one and large enough that the induced density is far above the two SCFs'
@@ -152,6 +169,7 @@ def _fourier(field, grid, miller):
 # -- the three nulls ---------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_the_unit_cell_is_its_own_ultracell(tmp_path, pseudo_dir):
     """``N = 1``: the same eigenvalues, the same density, and ``dV = 0``.
 
@@ -185,6 +203,7 @@ def test_the_unit_cell_is_its_own_ultracell(tmp_path, pseudo_dir):
     assert np.abs(density - reference).max() / reference.max() < 1e-5
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("shape", [(2, 1, 1), (2, 2, 1)])
 def test_an_unmodulated_ultracell_is_the_tiled_unit_cell(shape, tmp_path, pseudo_dir):
     """``N > 1`` and nothing applied: the tiled density, and ``N`` times the charge.
@@ -218,6 +237,7 @@ def test_an_unmodulated_ultracell_is_the_tiled_unit_cell(shape, tmp_path, pseudo
     assert charge == pytest.approx(8.0 * cells, abs=1e-8)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("shape", [(2, 1, 1), (1, 2, 1)])
 def test_the_null_can_fail(shape, tmp_path, pseudo_dir):
     """The guard fires: an applied potential moves the state, at its own ``Q``.
@@ -272,6 +292,7 @@ def test_the_null_can_fail(shape, tmp_path, pseudo_dir):
 # -- the number --------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_the_ultracell_converges_to_the_supercell(tmp_path, pseudo_dir):
     """The central claim: the error is the band truncation and nothing else.
 
@@ -439,6 +460,7 @@ K_POINTS automatic
 """
 
 
+@pytest.mark.slow
 def test_a_polarized_run_is_refused_before_it_is_paid_for(tmp_path, pseudo_dir):
     """``nspin = 2`` is stage 3, and it says so *before* the expensive step.
 
@@ -457,6 +479,7 @@ def test_a_polarized_run_is_refused_before_it_is_paid_for(tmp_path, pseudo_dir):
         )
 
 
+@pytest.mark.slow
 def test_a_symmetric_run_is_refused(tmp_path, pseudo_dir):
     """Symmetry on is refused, and the reason is not that nothing symmetrises.
 
@@ -478,6 +501,7 @@ def test_a_symmetric_run_is_refused(tmp_path, pseudo_dir):
         )
 
 
+@pytest.mark.slow
 def test_an_unconverged_seed_is_refused(tmp_path, pseudo_dir):
     """The states are only a basis if the density they diagonalise is the answer.
 
