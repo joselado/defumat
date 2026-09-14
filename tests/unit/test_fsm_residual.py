@@ -93,6 +93,7 @@ def _run(pseudo_dir, target=TARGET, **options):
     return result, messages
 
 
+@pytest.mark.slow
 def test_the_residual_is_reported_signed_and_per_iteration(pseudo_dir):
     """``m - m_target`` on the result and in ``history``.
 
@@ -119,6 +120,7 @@ def test_the_residual_is_reported_signed_and_per_iteration(pseudo_dir):
     assert np.asarray(result.history[-1]["constraint_residual"]).shape == (3,)
 
 
+@pytest.mark.slow
 def test_a_converged_density_with_an_unmet_constraint_gets_its_own_warning(pseudo_dir):
     """The guard, fed the case that must trip it.
 

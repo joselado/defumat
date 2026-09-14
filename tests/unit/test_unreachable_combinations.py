@@ -119,6 +119,7 @@ def test_the_band_velocities_forward_the_whole_mixed_state():
         assert f"{name}=" in body, name
 
 
+@pytest.mark.slow
 def test_paw_band_velocities_on_a_path_run(pseudo_dir):
     """The forwarding, measured rather than inspected.
 

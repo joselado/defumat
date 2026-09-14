@@ -99,6 +99,7 @@ def _expected_ngm(reported: int, system) -> int:
 
 
 @pytest.mark.parametrize(("directory", "name"), CASES)
+@pytest.mark.slow
 def test_dense_grid_matches_reference(qe_testsuite, directory, name):
     basis, system, ref = _basis_and_reference(qe_testsuite, directory, name)
 
@@ -141,6 +142,7 @@ def test_plane_wave_counts_match_reference(qe_testsuite, directory, name):
 
 
 @pytest.mark.parametrize(("directory", "name"), CASES)
+@pytest.mark.slow
 def test_kinetic_energies_respect_the_cutoff(qe_testsuite, directory, name):
     """Every retained plane wave is inside ecutwfc, and padding contributes none."""
     basis, system, _ = _basis_and_reference(qe_testsuite, directory, name)

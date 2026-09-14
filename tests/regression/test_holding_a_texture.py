@@ -104,6 +104,7 @@ def pseudo_dir():
     return "tests/data/pseudo"
 
 
+@pytest.mark.slow
 def test_nothing_holds_a_canted_state_on_its_own(pseudo_dir):
     """The reason the constraint has to exist.
 
@@ -122,6 +123,7 @@ def test_nothing_holds_a_canted_state_on_its_own(pseudo_dir):
     (1.0, 130.30, 1.0),
     pytest.param(10.0, 121.13, 1.0, marks=pytest.mark.slow),
 ])
+@pytest.mark.slow
 def test_the_vector_penalty_holds_it_and_tightens_with_lambda(
         lam, angle, tolerance, pseudo_dir):
     """``'atomic'`` converges at every stiffness up to 10 and holds the angle.

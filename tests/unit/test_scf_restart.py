@@ -134,6 +134,7 @@ def test_a_cadence_of_zero_is_refused(qe_silicon, pseudo_dir, tmp_path):
 
 
 @pytest.mark.parametrize("beta,stop", [(0.25, 5), (0.2, 6), (0.3, 4)])
+@pytest.mark.slow
 def test_an_interrupted_scf_costs_the_same_as_an_uninterrupted_one(qe_silicon, 
     pseudo_dir, tmp_path, beta, stop
 ):

@@ -39,7 +39,12 @@
 cd "$(dirname "$0")/.."
 OUT=${1:-regression-results}
 MARK=${2:-slow}
-GLOB=${3:-tests/regression/test_*.py}
+# Both directories, because the `slow` line is about *cost* and not about
+# kind: 42 of the slow tests live in `tests/unit/`, and with the glob at
+# `tests/regression/` alone they were run by neither the gate nor this
+# runner -- only by a bare `pytest -m slow`. `CLAUDE.md` calls this "the
+# same slow set" as that command, so it has to actually be the same set.
+GLOB=${3:-tests/regression/test_*.py tests/unit/test_*.py}
 MEMMAX=${DEFUMAT_TEST_MEM_MAX:-12G}
 mkdir -p "$OUT"
 SUMMARY=$OUT/summary.txt

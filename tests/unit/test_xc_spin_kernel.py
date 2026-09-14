@@ -181,6 +181,7 @@ def test_the_regular_kernel_is_qes(pz_functional):
         )
 
 
+@pytest.mark.slow
 def test_the_kernel_is_symmetric(pz_functional):
     """It is a Hessian, so it must be -- which is what checks the off-diagonal.
 

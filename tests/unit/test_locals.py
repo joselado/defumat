@@ -127,6 +127,7 @@ def antiferromagnet(pseudo_dir):
     return system, run_scf(system, pseudos, conv_thr=1e-8, verbose=False)
 
 
+@pytest.mark.slow
 def test_the_site_moments_see_what_the_cell_total_cannot(antiferromagnet):
     """The whole reason the readout exists.
 
@@ -146,6 +147,7 @@ def test_the_site_moments_see_what_the_cell_total_cannot(antiferromagnet):
     assert charges.sum() < 2.0, "a sphere integral cannot exceed the cell's charge"
 
 
+@pytest.mark.slow
 def test_the_site_moments_are_recorded_every_iteration(antiferromagnet):
     """A texture that unwinds does it early and then converges cleanly.
 
@@ -294,6 +296,7 @@ def test_the_collinear_and_noncollinear_seeds_use_the_same_rule(pseudo_dir):
     [(1.0, 1.0, False), (2.0, 2.0, False), (-3.0, -3.0, False),
      (6.0, 6.0, False), (9.0, 6.0, True)],
 )
+@pytest.mark.slow
 def test_a_card_row_seeds_the_moment_it_names(row, seeded, clamped, pseudo_dir):
     """``STARTING_MOMENTS`` is in Bohr magnetons, which is what it always said.
 
@@ -349,6 +352,7 @@ def test_a_card_row_seeds_the_moment_it_names(row, seeded, clamped, pseudo_dir):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_a_relaxation_records_the_site_moments_at_every_ionic_step(pseudo_dir):
     """A magnet that relaxes must say, per site, whether it is still a magnet.
 

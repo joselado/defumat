@@ -140,6 +140,7 @@ def test_silicon_matches_pw_x_and_carries_the_larger_quantum():
     assert abs(abs(result.total_phase) - 1.0) < 1.0e-6
 
 
+@pytest.mark.slow
 def test_a_centrosymmetric_crystal_is_pinned_to_zero_or_half_a_quantum():
     """Silicon's phase cannot be anything else, and nothing here imposes it.
 
@@ -160,6 +161,7 @@ def test_a_centrosymmetric_crystal_is_pinned_to_zero_or_half_a_quantum():
     assert abs(abs(residue) - 0.5) < 1.0e-6, "silicon should be on the half"
 
 
+@pytest.mark.slow
 def test_the_phase_is_invariant_under_a_shift_of_the_string_mesh():
     """Which transverse points the strings start from cannot matter much.
 

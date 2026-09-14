@@ -183,6 +183,7 @@ def test_sphere_cover_is_unit_vectors_spread_over_the_sphere():
     np.testing.assert_allclose(np.diff(z), -2.0 / 20, atol=1e-12)
 
 
+@pytest.mark.slow
 def test_cardinal_directions_are_reduced_by_the_crystal_group():
     """``gentpmae``'s ``npmae < 0``: a cube keeps far fewer than its 26 rays."""
     scalar, _ = _smoke_pair()
@@ -249,6 +250,7 @@ def test_soc_scale_zero_gives_exactly_no_anisotropy():
     assert result.anisotropy_mev == pytest.approx(0.0, abs=1.0e-7)
 
 
+@pytest.mark.slow
 def test_an_intermediate_soc_scale_is_refused():
     scalar, _ = _smoke_pair()
     soc = Calculator.from_text(_SMOKE_SOC, pseudo_dir=GENERATED.parent / "pseudo")

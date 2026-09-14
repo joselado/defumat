@@ -44,6 +44,7 @@ def _direction(vector):
     return vector / length if length > 0 else vector
 
 
+@pytest.mark.slow
 def test_the_hubbard_shell_points_where_the_card_says(pseudo_dir):
     """``initial_ns_noncollinear`` took its axis per species.
 
@@ -79,6 +80,7 @@ def test_the_hubbard_shell_points_where_the_card_says(pseudo_dir):
         )
 
 
+@pytest.mark.slow
 def test_the_one_centre_occupations_point_where_the_card_says(pseudo_dir):
     """``_becsum_split`` was indexed by species and broadcast over the atoms.
 
@@ -103,6 +105,7 @@ def test_the_one_centre_occupations_point_where_the_card_says(pseudo_dir):
         assert float(np.trace(becsum[0, atom]).real) == pytest.approx(6.0, abs=1e-6)
 
 
+@pytest.mark.slow
 def test_the_charge_and_the_one_centre_guess_agree_per_atom(pseudo_dir):
     """The property ``spin_weights``' docstring asks for, checked per *atom*.
 
@@ -130,6 +133,7 @@ def test_the_charge_and_the_one_centre_guess_agree_per_atom(pseudo_dir):
         assert float(np.linalg.norm(one_centre)) == pytest.approx(1.5, abs=1e-9)
 
 
+@pytest.mark.slow
 def test_without_a_card_nothing_changes(pseudo_dir):
     """The per-species path is untouched, which is most existing inputs.
 
@@ -151,6 +155,7 @@ def test_without_a_card_nothing_changes(pseudo_dir):
     assert _direction(shell) == pytest.approx([0.0, 0.0, 1.0], abs=1e-12)
 
 
+@pytest.mark.slow
 def test_a_collinear_card_reaches_the_one_centre_occupations_too(pseudo_dir):
     """The regime the collinear symmetry filter opened up (P77).
 
@@ -183,6 +188,7 @@ def test_a_collinear_card_reaches_the_one_centre_occupations_too(pseudo_dir):
     assert np.sign(np.asarray(site)[:, 0]) == pytest.approx(np.sign(moments))
 
 
+@pytest.mark.slow
 def test_a_collinear_card_reaches_the_hubbard_shell_too(pseudo_dir):
     """``initial_ns`` took its sign from the per-species number.
 

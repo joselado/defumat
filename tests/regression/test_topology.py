@@ -55,6 +55,7 @@ def source(name: str, nocc: int) -> DFTSource:
 @pytest.mark.parametrize(
     "case, nocc", [("si2-nc-pbe.in", 4), ("si2-us.in", 4)]
 )
+@pytest.mark.slow
 def test_states_are_orthonormal_through_s(case, nocc):
     """``<u_m|S|u_n> = delta_mn`` at a single k-point.
 
@@ -68,6 +69,7 @@ def test_states_are_orthonormal_through_s(case, nocc):
     assert np.allclose(matrix, np.eye(nocc), atol=1e-9)
 
 
+@pytest.mark.slow
 def test_augmentation_at_zero_wavevector_is_the_overlap_matrix():
     """``q_ij(b) -> qq`` as ``b -> 0``.
 
@@ -267,6 +269,7 @@ def test_a_paw_fixed_density_run_reproduces_the_scf_eigenvalues():
     assert np.max(np.abs(np.asarray(states.energies)[:, :4] - reference)) < 1.0e-6
 
 
+@pytest.mark.slow
 def test_a_paw_chern_number_is_an_exact_integer():
     """Silicon is trivial, so the number is zero; that it is an *integer* is
     the statement about the machinery.

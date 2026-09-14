@@ -154,8 +154,19 @@ def _projection(request):
 
 
 def _cases(*names):
+    """Parametrise over datasets, with the PAW pair held out of the push gate.
+
+    Platinum's PAW dataset is the most expensive thing the gate ever built:
+    2.3 GB of the gate's peak and 29 s of its wall clock, in these two
+    comparisons alone, where the ultrasoft twin below costs neither. Both
+    parameters are the *same* comparison against the same ``projwfc.x``
+    columns, so the gate keeps the cheap one and the slow set keeps both.
+    """
     return pytest.mark.parametrize(
-        "_projection", names, indirect=True,
+        "_projection",
+        [pytest.param(n, marks=pytest.mark.slow) if n[0].endswith("-paw") else n
+         for n in names],
+        indirect=True,
         ids=[stem for stem, _ in names],
     )
 

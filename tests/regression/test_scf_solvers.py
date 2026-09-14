@@ -123,6 +123,7 @@ def _setup(path, ethr=1.0e-11):
 
 @pytest.mark.regression
 @pytest.mark.parametrize("case", [SILICON, SLAB], ids=["silicon", "al-slab"])
+@pytest.mark.slow
 def test_jacobian_action_matches_finite_differences(case):
     """``J v`` two ways, from a self-consistent point.
 
@@ -152,6 +153,7 @@ def test_jacobian_action_matches_finite_differences(case):
 
 
 @pytest.mark.regression
+@pytest.mark.slow
 def test_autodiff_jvp_needs_a_warm_start():
     """From a *cold* start the two backends disagree completely, and that is a
     statement about the method rather than a tolerance to be tuned.
@@ -194,6 +196,7 @@ def test_newton_krylov_finds_the_mixer_s_fixed_point(case):
 
 @pytest.mark.regression
 @pytest.mark.parametrize("case", [SILICON, SLAB], ids=["silicon", "al-slab"])
+@pytest.mark.slow
 def test_kerker_changes_the_path_and_not_the_answer(case):
     system, pseudos, _, _ = _setup(case)
     plain = run_scf(system, pseudos, calculation=Calculation(system, pseudos), conv_thr=1e-9)
@@ -205,6 +208,7 @@ def test_kerker_changes_the_path_and_not_the_answer(case):
 
 @pytest.mark.regression
 @pytest.mark.parametrize("case", [SILICON, SLAB], ids=["silicon", "al-slab"])
+@pytest.mark.slow
 def test_local_tf_changes_the_path_and_not_the_answer(case):
     """``approx_screening2``: the same fixed point as any other mixer.
 
@@ -261,6 +265,7 @@ def test_local_tf_screens_the_vacuum_less_than_the_metal():
 
 @pytest.mark.regression
 @pytest.mark.parametrize("case", [SILICON, SLAB], ids=["silicon", "al-slab"])
+@pytest.mark.slow
 def test_weights_agree_with_the_driver(case):
     """``residual._weights`` is a second copy of the driver's occupation
     dispatch, kept because ``Calculation.occupations`` syncs the Fermi level to

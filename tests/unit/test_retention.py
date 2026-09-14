@@ -155,6 +155,7 @@ def _run_scf_frame():
     raise AssertionError("run_scf is not on the stack")
 
 
+@pytest.mark.slow
 def test_the_field_keeps_its_commutators_only_for_a_reader(monkeypatch):
     """A7. Both lists are read after the loop and by nothing inside it.
 

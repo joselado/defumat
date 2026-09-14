@@ -212,6 +212,7 @@ def test_h_psi_is_the_same_operator_whatever_the_band_chunk(batch):
 
 
 @pytest.mark.parametrize("setting, widths", [("1", {1}), ("5", {5, 4}), ("all", {24})])
+@pytest.mark.slow
 def test_the_band_dial_reaches_the_spinor_h_psi(pseudo_dir, monkeypatch,
                                                 setting, widths):
     """``vloc_psi_nc``'s FFT is over one chunk of bands, not over the block.

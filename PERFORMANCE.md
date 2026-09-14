@@ -5477,3 +5477,62 @@ flight, which is what `state_batch = 1` means and why it is the default.
 | 2026-09-10 | **The band dial reaches the spinor `h_psi` (P74)**: `NoncollinearHamiltonian._local` -- `vloc_psi_nc` -- never called `map_bands`, so the whole band block went into the FFT box and `DEFUMAT_BAND_BATCH` was **silently inert in every noncollinear run**. The chunk is over the band axis alone, with the `(2, npwx)` spinor pair flattened into `map_bands`'s `ndim` so a state is never split | **33.42 GB to 1.33 GB per FFT array** on the 45-atom NiBr2 supercell at `band_batch = 16`. This is P73's unidentified fourth allocation: the XLA dump shows `c128[403,2,200,240,54]` in the Davidson and `c128[510,2,200,240,54]` in the starting subspace rotation -- 33.42 and **42.32 GB** each, `nbnd x npol x N_smooth` and `natomwfc x npol x N_smooth` -- and the H200 died on the second, where cuFFT asked for a **39.40 GiB** work area (`rank 2, input_distance 12960, batch_count 204000` = `510 x 2 x 200` planes of `240 x 54`) beside the array itself. The 83.62 GiB that answered to no knob is an aligned aggregate of two or three of these boxes plus the stick pass's `c128[510,2,2383,200]` at 7.78 GB, and it is **not reproduced to the byte** -- two 42.32 GB arrays is 84.6 GB and three 33.42 GB ones is 100.3 GB against a 89.79 GB request. The shapes are the identification; the arithmetic is not. **The arithmetic could never have closed it**: an XLA:GPU executable gets one temp buffer, the sum of every live temporary at its aligned offset, which is why `89,788,080,128 = 2^13 x 641 x 17099` divided by no array shape -- `--xla_dump_to` closed it in one run (job **20200419**, gpu50, commit `b1cde9b`). **Bit-for-bit unchanged**: `assert_array_equal` on `H|psi>` across band batches on the four-atom noncollinear hydrogen chain, since `map_bands` maps and does not reduce. `sizing.py`'s third term gains its missing `npol` in the same pass -- every point behind that fit is a **gamma-storage** cell, which a spinor run never is, so it is an extrapolation the fit never saw rather than a retuning of it. **And the slab runs**: job **20200794** on an H200 at `5ba0ada` did two SCF iterations of the 45-atom cell in **5 m 33 s** at a peak of **78.51 GB** of 143.8, where nothing about this cell had ever completed one iteration -- 184.5 s to the first (the compile) and **5.5 s** to the second, so a converged run is minutes. The helix survives: total moment `(0, -0.036, 0.001)` mu_B against per-site `|m|` of 0.84-1.13 on the fifteen Ni. **Still 2.8x low at this commit**: `sizing.py` said 27.80 GB against that 78.51. The next row is where that difference is localised -- 46 GB of it is a second instance of this same defect in `spinor_band_density`, and removing it brings the peak to 32.30 GB and the estimate to 1.16x low. |
 | 2026-09-10 | **The band dial reaches the spinor density (P74, second instance)**: `spinor_band_density` transformed the whole band block, so `sum_band`'s noncollinear branch held `nbnd x npol` real-space boxes and the stacked Pauli components built from them | **46 GB of the 45-atom NiBr2 cell's 78.51 GB peak**, and the largest single thing in the run: `g_to_r` on `(403, 2, 200, 240, 54)` is 33.4 GB and `stacked` another 33.4. **Localised rather than guessed** -- jobs **20202818** and **20203025** bracket the run and then one SCF iteration with synchronised `peak_bytes_in_use` reads (`block_until_ready` on every return, or an async dispatch is read before the work runs): `Calculation` built 8.20 GB, helix seed 9.76, `diagonalize` 27.23 -> 31.97, **`density` 31.97 -> 78.19**, live afterwards 9.37. That also **clears two suspects**: setup is 8.20 GB where P73 measured 117.55, and the Davidson's ~22 GB against a fitted 18.54 says the fit is sound at `npol = 2` and PAW -- the first hypothesis for this peak was the Davidson and it was wrong. The scalar `band_density` and the spinor `tau` were always chunked; every `g_to_r` in `scf/density.py` is now inside a `one_band`, audited. **Agreement 4.3e-16** relative against the unfixed code with the integrated charge identical to every digit -- round-off rather than bit-for-bit, because `sum_bands` sums where `map_bands` maps. **Measured: 32.30 GB against 78.51, a factor of 2.43**, job **20203515** at `17d3b16`, same cell and same brackets. `density` no longer moves the peak on either iteration (31.97 -> 31.97, then 32.30 -> 32.30) and `diagonalize` is now what the run costs, which is the term `sizing.py` models -- the estimate is **1.16x low** at 27.80 GB where it was 2.8x, with the residual unresolved because setup leaves 6.7-9.6 GB resident that the SCF estimate does not carry and 4.5 GB is less than that. **Not slower**: 168.2 s to the first iteration against 184.5 and **5.3 s** to the second against 5.5, with `E` identical to every printed digit (-9082.99449656 and -8851.22767276 Ry) and the same moment. |
 | 2026-09-10 | **The band dial reaches the response stack (P74, three latent sites)**: `phononq.response_density_at_q` (three band-sized boxes -- `psi_r`, `dpsi_r` and their product), `phononq.bare_displacements_at_q`, `phononq.induced_perturbation_at_q` and `sternheimer.local_perturbation`, which is the perturbation the whole linear-response stack applies | **No measurement says these bit anything**, and that is the point of recording them as latent: the two SCF sites were each found by a card refusing an allocation, these by an audit of every `g_to_r` caller in the package. `sum_bands` where the contraction is a weighted sum over bands, `map_bands` where it is a band in and a band out; the nonlocal terms stay outside the chunk, being `(n, npwx) x (npwx, nkb)` and holding nothing grid-sized. **Verified on one example through all four at once** -- silicon `si-epsilon-unshifted-nosym.in`, `dielectric_tensor` plus the dynamical matrix at `L` -- against the unfixed code: energy exact, dielectric tensor **3.0e-16** relative, Born charge 1.9e-14, frequencies **4.2e-15** (2.0e-12 cm^-1), and the frequencies still inside the 0.2 cm^-1 that file asserts against `ph.x`. **The gate did not run on these four.** |
+
+## The push gate, trimmed back to ten minutes and 5.5 GB (2026-09-14)
+
+**The gate had drifted to 16m18s and 9319 M**, against the 7-11 minutes and
+5.9-8.2 GB `CLAUDE.md` recorded, and none of it was a slowdown: the suite had
+grown from 2127 selected tests to 2973. A gate is paid on every push by someone
+who is not doing physics at the time, which is the same argument the notebooks'
+ten-minute ceiling rests on, so it was trimmed back rather than re-documented.
+
+| | before | after |
+|---|---|---|
+| selected | 2973 | 2609 |
+| wall clock | **978 s** (16m18s) | **620 s** (10m20s) |
+| peak RSS | **9319 M** | **5461 M** |
+| slow set | 915 | 1279 |
+
+Both figures are warm-cache, idle-machine, `DEFUMAT_TEST_MEM_MAX=12G`, which is
+the only way this project compares a gate timing at all. Nothing was deleted:
+every test moved is in the slow set, and `tools/run_regression.sh`'s default
+glob was widened to `tests/unit/` as well, because 42 of the slow tests now live
+there and the old glob ran them from neither the gate nor the runner.
+
+**How the numbers were attributed.** A per-test pytest plugin recorded wall
+clock and the *increase in* `getrusage`'s `ru_maxrss` across each test. That
+second column is the one worth knowing about: XLA never releases a compiled
+executable, so the process peak is exactly the sum of the per-test gains, and
+the check that the instrument works is `sum(gain)` against `last - first` --
+9452 M against 9434 M here, 18 M apart. It says immediately what no sorted list
+of durations does: **two tests out of 2973 held 4565 M, half the gate's peak.**
+
+**The two that mattered were refusal tests, and the cell was the cost, not the
+check.** Both build a `Calculation` so a guard can read one flag off it:
+
+| cell | `Calculation` alone |
+|---|---|
+| `germanene-soc` (US, relativistic, slab) | **11.0 s, +3619 M** |
+| `h-atom-noncolin` (norm-conserving, 1 atom) | **1.3 s, +189 M** |
+| `pt2-soc-paw-force` (PAW, relativistic) | 5.8 s, +2106 M |
+| `pt-soc-nosym` (US, relativistic, 1 atom) | 2.6 s, +471 M |
+
+`test_piezo_machinery.py`'s noncollinear refusal now builds the hydrogen atom
+and raises the byte-identical message, checked rather than assumed. That is 3.4
+GB and 10 s for nothing given up at all.
+
+**One idea measured and killed.** `test_polarization.py` is the gate's most
+expensive file (108 s) and clears XLA's caches after *every* test, so its nine
+tests each recompile the Berry-phase stack. Clearing once per file instead:
+**94 s and 3300 M, against 108 s and 1581 M.** 14 seconds for 1.7 GB is a bad
+trade at this peak, so `CLAUDE.md`'s per-test prescription stands, now with a
+number behind it rather than an argument.
+
+**What a trim actually returns, which is the part to plan around.** Removing a
+test gives back about a **third** of its measured seconds, not all of them: the
+first test to reach a cell pays to compile it and the next one inherits the bill
+when it goes. Measured twice -- 388 s of marked tests bought 332 s the first
+time and 99 s bought 26 s the second, as the remaining tests absorbed more of
+each file's fixed cost. The consequence is that the last twenty seconds cost
+several times what the first three hundred did, which is why this stopped at
+10m20s rather than chasing 10m00s.

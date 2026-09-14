@@ -74,6 +74,7 @@ def _input_path(where, qe_testsuite):
 
 @pytest.mark.parametrize(("label", "where", "reference"), CASE_LIST,
                          ids=[case[0] for case in CASE_LIST])
+@pytest.mark.slow
 def test_symmetry_count_and_fft_grid_match_qe(qe_testsuite, label, where, reference):
     text = reference.read_text()
     printed_symmetry = re.search(r"(\d+)\s+Sym\. Ops\.", text)

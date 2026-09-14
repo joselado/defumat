@@ -104,6 +104,7 @@ def test_becsum_symmetrisation_is_a_projector(pseudo_dir):
             assert np.allclose(a, b, atol=1e-12), "not idempotent"
 
 
+@pytest.mark.slow
 def test_ns_symmetrisation_is_a_projector(pseudo_dir):
     """``new_ns``'s average, applied twice, must not move."""
     calculation = _calculation(

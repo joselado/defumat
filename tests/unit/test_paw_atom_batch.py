@@ -94,6 +94,7 @@ def test_the_one_centre_tape_does_not_grow_with_the_sublattice(pseudo_dir):
     )
 
 
+@pytest.mark.slow
 def test_chunking_the_atom_axis_does_not_move_the_gradient(pseudo_dir):
     """The guard on the guard: a loop bound, not a physical parameter.
 

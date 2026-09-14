@@ -473,6 +473,7 @@ def _calculation(name, **overrides):
     return Calculation(system, pseudos)
 
 
+@pytest.mark.slow
 def test_a_filling_that_cuts_a_degenerate_multiplet_is_refused():
     """The oxygen *atom*: ``neldw = 2`` cuts the triply degenerate 2p shell.
 

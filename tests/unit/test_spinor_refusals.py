@@ -61,6 +61,7 @@ def _one_iteration(case: str, pseudo_dir: Path):
     return calculation, result
 
 
+@pytest.mark.slow
 def test_the_analytic_expressions_still_refuse_a_spinor(pseudo_dir):
     """``force_us``/``stres_knl`` are a transcription with no spinor form.
 
@@ -78,6 +79,7 @@ def test_the_analytic_expressions_still_refuse_a_spinor(pseudo_dir):
         analytic_terms(calculation, state_from_result(result))
 
 
+@pytest.mark.slow
 def test_energy_at_refuses_a_spinor_unless_asked(pseudo_dir):
     """The default is still a refusal, and that is what guards the consumers.
 

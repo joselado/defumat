@@ -102,6 +102,7 @@ def kubo_at(name, points, nocc=4, nbnd=30):
 
 # --- the operator -----------------------------------------------------------
 
+@pytest.mark.slow
 def test_the_velocity_matrix_is_the_finite_difference_of_h():
     """``<psi_m|dH/dk_a|psi_n>`` against a central difference of ``H(k)``.
 
@@ -148,6 +149,7 @@ def test_the_velocity_matrix_is_the_finite_difference_of_h():
     assert np.max(np.abs(difference - analytic)) < 1.0e-7
 
 
+@pytest.mark.slow
 def test_the_velocity_matrix_is_hermitian_and_the_overlap_does_not_move():
     """``dH/dk`` is Hermitian; ``dS/dk`` is **identically** zero here.
 
@@ -282,6 +284,7 @@ def test_the_whole_mesh_agrees_plaquette_by_plaquette_and_improves_with_it():
 
 # --- what symmetry forces ---------------------------------------------------
 
+@pytest.mark.slow
 def test_silicon_kubo_curvature_vanishes_pointwise():
     """Time reversal *and* inversion make ``Omega(k) = 0`` at every k.
 
@@ -355,6 +358,7 @@ def test_a_degenerate_multiplet_is_gauge_invariant_only_as_a_sum():
 
 # --- what is reported, and what is refused ----------------------------------
 
+@pytest.mark.slow
 def test_the_truncation_is_reported_and_the_sum_moves_with_nbnd():
     """The sum over ``m`` stops where the eigensolver stopped, and says so.
 
@@ -401,6 +405,7 @@ def test_the_truncation_is_reported_and_the_sum_moves_with_nbnd():
     assert reported.truncation_abs is not None
 
 
+@pytest.mark.slow
 def test_an_ultrasoft_kubo_curvature_is_refused_by_name():
     """``dS/dk`` is zero for every case validated here, so US/PAW is refused.
 
@@ -466,6 +471,7 @@ def test_selecting_a_subset_drops_the_velocity_operator():
     assert subset.velocity is None and subset.all_coefficients is None
 
 
+@pytest.mark.slow
 def test_fhs_is_still_the_default_and_is_untouched():
     """The registry default has not moved, and neither has the ``fhs`` answer.
 

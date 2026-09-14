@@ -162,6 +162,7 @@ def test_all_six_planes_are_required():
 @pytest.mark.parametrize(
     "mass, expected", [(-0.5, 1), (1.0, 1), (3.0, 0), (4.5, 0)]
 )
+@pytest.mark.slow
 def test_doubled_qwz_z2_matches_the_spin_chern_number(mass, expected):
     """``nu = C_up mod 2``, with the two sides computed by unrelated code.
 

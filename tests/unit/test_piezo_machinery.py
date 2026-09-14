@@ -92,7 +92,12 @@ def _calculation(case: str):
     ("si2-us", "ultrasoft"),
     ("al-metal", "metal"),
     ("o-atom-fixed-lsda", "nspin = 2"),
-    ("germanene-soc", "noncollinear"),
+    # A one-atom hydrogen cell, not the germanene slab this used to build:
+    # the guard reads a ``Calculation`` and refuses on ``noncolin`` alone, so
+    # the cell is incidental to what is asserted -- and constructing the slab
+    # cost 3.6 GB and 11 s for a refusal that fires identically here at 189 MB
+    # and 1.3 s. Both raise the same message, checked rather than assumed.
+    ("h-atom-noncolin", "noncollinear"),
 ])
 def test_the_regimes_this_was_never_run_in_are_refused(case, message):
     """Every one of these would return a number, and none of them is measured.

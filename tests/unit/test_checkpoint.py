@@ -65,6 +65,7 @@ def test_every_field_of_the_result_is_accounted_for():
 
 
 @pytest.mark.parametrize("text", [SILICON, SILICON_PAW], ids=["nc", "paw"])
+@pytest.mark.slow
 def test_the_round_trip_is_exact(text, pseudo_dir, tmp_path):
     """Bit for bit, not merely close.
 

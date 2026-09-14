@@ -66,6 +66,7 @@ def masses(silicon):
     }
 
 
+@pytest.mark.slow
 def test_the_two_routes_agree(masses):
     """They share no machinery, so this is the check on the velocity operator.
 
@@ -83,6 +84,7 @@ def test_the_two_routes_agree(masses):
     assert np.allclose(velocity[7], eigenvalue[7], rtol=5.0e-4, atol=1.0e-6)
 
 
+@pytest.mark.slow
 def test_the_tensor_is_isotropic_with_nothing_imposing_it(masses):
     """Silicon is cubic and no symmetry is applied anywhere in this path."""
     for name, mass in masses.items():

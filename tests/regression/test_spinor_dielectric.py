@@ -280,6 +280,7 @@ def test_a_textured_spinor_is_refused_by_name():
         )
 
 
+@pytest.mark.slow
 def test_an_ultrasoft_spinor_is_refused_and_a_norm_conserving_one_is_not():
     """The dataset half of the edge, checked from both sides.
 

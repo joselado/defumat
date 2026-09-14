@@ -907,8 +907,8 @@ process pays for them; `DEFUMAT_CACHE_DIR` moves it and `DEFUMAT_CACHE_DIR=off` 
 it.
 
 ```
-tools/test-fast.sh                     # THE GATE: everything not marked slow, ~7 min
-python3 -m pytest -m slow              # the other 588, over two hours
+tools/test-fast.sh                     # THE GATE: everything not marked slow, ~10 min
+python3 -m pytest -m slow              # the other 1279, over two hours
 tools/run_regression.sh                # the same slow set, one capped process per file
 python3 -m pytest tests/unit/test_qeref.py::test_scf_silicon   # a single test
 python3 -m defumat.cli inspect <qe-output>   # summarise what the parser reads
@@ -916,8 +916,38 @@ tools/export_notebooks.sh                     # re-execute notebooks + refresh .
 ```
 
 **The suite is two groups and `slow` is the line.** `tools/test-fast.sh` is
-`pytest -m "not slow"`: **1945 tests in 7-11 minutes** (measured 2026-09-13 on an
-otherwise idle machine, peak RSS 5.9-8.2 GB), and it is what runs before a push.
+`pytest -m "not slow"`: **2609 tests in 10m20s at a 5461 M peak** (measured
+2026-09-14, warm cache, idle machine), and it is what runs before a push.
+
+**The gate is held at that size on purpose, and it drifts upward on its own.**
+Left alone it reached **2973 tests in 16m18s at 9319 M** by 2026-09-14 -- a
+factor of two in time and 1.6x in peak against the figures below, entirely from
+tests being added to it rather than from anything getting slower. What brought
+it back is in `PERFORMANCE.md`; the rule that keeps it there is worth stating
+here, because it is the decision anyone adding a test has to make:
+
+* **A test above about five seconds that is not a direct number against `pw.x`,
+  `projwfc.x` or Elk belongs in the slow set.** Identities, refusals, guards and
+  internal-consistency checks are the gate's cheapest thing to lose, because the
+  slow set still runs them. A reference comparison stays whatever it costs --
+  that is what the gate is *for*.
+* **Where a parametrised reference comparison has one expensive parameter, mark
+  the parameter, not the test** (`pytest.param(..., marks=pytest.mark.slow)`).
+  Platinum's PAW spinor was 2.3 GB and 29 s of the gate for the same
+  `projwfc.x` comparison its ultrasoft twin makes for neither.
+* **Check what a refusal test is paying for before moving it.** Two of them held
+  4.5 GB between them, not because the check was expensive but because the
+  *cell* was: they built a `Calculation` only so a guard could read one flag off
+  it. Swapping a germanene slab for a one-atom hydrogen cell took 3.6 GB and 11 s
+  off a test that still raises the byte-identical message.
+
+**Two things to expect when trimming, both measured here.** Removing a test
+returns roughly a *third* of its measured seconds, not all of them, because the
+first test to reach a cell pays for compiling it and the next one inherits that
+bill when it goes -- 99 s of marked tests bought 26 s of wall clock. And the
+attribution to fix is the one from `getrusage`'s high-water mark: the process
+peak is the sum of the per-test *gains* in it and nothing else, which is what
+says two tests out of 2973 held half the peak.
 
 **The suite runs on eight cores where the package runs on four, and that is a
 deadlock fix rather than a speed choice.** `defumat` narrows the affinity mask
@@ -933,8 +963,8 @@ depends on the compiled-kernel cache much more than on the mask. An explicit
 setting still wins. `OPEN.md` Part IV item 1 has the measurement and the two theories it
 killed.
 
-**Read that figure as a range, not a constant, because a third measurement
-landed between the other two and the spread is not the test set.** The same
+**The four readings below are the history of that drift**, and they are kept
+because the spread inside them is not the test set either -- the same
 command read 1892 tests in **7 minutes** at 4.5 GB on 2026-09-12, 1938 in
 **11m17s** at 6043 M later on 2026-09-13, and **1941 in 7m22s** at 5903 M later
 still the same day, on an idle machine with a **4.0 GB warm**
@@ -963,7 +993,7 @@ which is the same argument the notebooks' ten-minute ceiling rests on; the lever
 is the `slow` marker, and the question to ask of any test above a few seconds is
 whether the gate is where it belongs. (Neither 2026-09-13 figure is the
 augmentation remat: the only two gate files that take the rematted route run in
-4.18 s together, and every other cell in the gate takes the stored one.) The slow set is ~590 tests and **over two hours** — it runs when it is
+4.18 s together, and every other cell in the gate takes the stored one.) The slow set is ~1280 tests and **over two hours** — it runs when it is
 asked for, not on every change. The split cuts across `unit` and `regression`
 both, because it is about cost and not about kind: a cheap regression case
 against a two-atom reference is in the gate, and an expensive unit test is not.
