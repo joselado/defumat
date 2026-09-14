@@ -369,6 +369,305 @@ def test_the_ultracell_converges_to_the_supercell(tmp_path, pseudo_dir):
 # -- the refusals ------------------------------------------------------------
 
 
+# -- stage 3a: two spin channels ---------------------------------------------
+
+#: A hydrogen simple-cubic lattice that is **partly** polarized, which is what
+#: this needs and what neither end of the range gives. At ``a = 5.0`` the same
+#: cell has a moment of 0.027 and takes 56 iterations -- it sits on the Stoner
+#: threshold -- and at ``a = 6.0`` it is 0.9997, a saturated atom whose moment
+#: cannot grow and whose ``|zeta| = 1`` is the clamp-tangent trap ``CLAUDE.md``
+#: names. At 5.5 with a 0.8 seed it is 0.62 in six iterations.
+HYDROGEN = """&control
+ calculation='scf'
+/
+&system
+ ibrav=1, celldm(1)=5.5, nat=1, ntyp=1, ecutwfc=15.0,
+ nosym=.true., noinv=.true.,
+ nspin=2, starting_magnetization(1)=0.8,
+ occupations='smearing', smearing='gaussian', degauss=0.02
+/
+&electrons
+ conv_thr=1.0d-11
+/
+ATOMIC_SPECIES
+ H 1.008 H.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ H 0.0 0.0 0.0
+K_POINTS automatic
+ {k0} {k1} {k2} 0 0 0
+"""
+
+
+def _hydrogen(tmp_path, pseudo_dir, kgrid) -> Calculator:
+    path = tmp_path / "h.in"
+    path.write_text(HYDROGEN.format(k0=kgrid[0], k1=kgrid[1], k2=kgrid[2]))
+    return Calculator.from_file(path, pseudo_dir=pseudo_dir)
+
+
+def _hydrogen_supercell(tmp_path, pseudo_dir, shape, kgrid) -> Calculator:
+    """The same lattice as a real ``shape`` supercell of hydrogens."""
+    rows = "\n".join(
+        " %.10f %.10f %.10f" % tuple(v) for v in np.diag(shape).astype(float)
+    )
+    frac = np.stack(
+        np.meshgrid(*[np.arange(n) / n for n in shape], indexing="ij"), axis=-1
+    ).reshape(-1, 3)
+    atoms = "\n".join(" H %.10f %.10f %.10f" % tuple(x) for x in frac)
+    path = tmp_path / "h_supercell.in"
+    path.write_text(f"""&control
+ calculation='scf'
+/
+&system
+ ibrav=0, celldm(1)=5.5, nat={len(frac)}, ntyp=1, ecutwfc=15.0,
+ nosym=.true., noinv=.true.,
+ nspin=2, starting_magnetization(1)=0.8,
+ occupations='smearing', smearing='gaussian', degauss=0.02
+/
+&electrons
+ conv_thr=1.0d-11
+/
+CELL_PARAMETERS alat
+{rows}
+ATOMIC_SPECIES
+ H 1.008 H.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+{atoms}
+K_POINTS automatic
+ {kgrid[0]} {kgrid[1]} {kgrid[2]} 0 0 0
+""")
+    return Calculator.from_file(path, pseudo_dir=pseudo_dir)
+
+
+@pytest.mark.slow
+def test_a_polarized_ultracell_is_the_tiled_unit_cell(tmp_path, pseudo_dir):
+    """The ``nspin = 2`` null: both channels tile, and the moment tiles with them.
+
+    The unpolarized null (above) cannot see the spin plumbing at all -- the two
+    channels are equal there, so an occupation rule that fills the wrong one, a
+    matrix built with ``dV[0]`` for both, or a density accumulated into channel
+    zero twice would all pass it. This runs the same null on a cell that has a
+    moment, where each of those is a different answer.
+    """
+    shape, kgrid = (2, 1, 1), (2, 2, 2)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    calculator = _hydrogen(tmp_path, pseudo_dir, folded)
+    scf = calculator.get_scf(conv_thr=1e-11, nbnd=8)
+    assert scf.converged and abs(scf.magnetization) > 0.3
+
+    result = run_ultracell(
+        calculator.system, calculator.pseudos, scf, shape, kgrid,
+        nbnd=8, conv_thr=1e-9, states_conv_thr=1e-8,
+    )
+    assert result.converged and result.iterations == 1
+    assert np.abs(np.asarray(result.delta_v)).max() < 1e-14
+
+    tiled = np.asarray(result.ultracell.tile(jnp.asarray(scf.density)))
+    density = np.asarray(result.density)
+    assert np.abs(density - tiled).max() / tiled.max() < 1e-5
+
+    # Every cell carries the unit cell's own moment, and that is the number the
+    # unpolarized null has no counterpart for.
+    moments = result.cell_moments()
+    assert len(moments) == result.ultracell.cells
+    assert moments == pytest.approx(
+        np.full(result.ultracell.cells, scf.magnetization), rel=2e-4
+    )
+
+    # **The total charge and the split between the channels are bounded by two
+    # different things, and only the second is the method's own error.** The
+    # total is ``N`` times the unit cell's to round-off, because the occupation
+    # search is done for the ultracell's electron count and nothing else can
+    # move it. How those electrons divide between the channels is the moment,
+    # and it comes back 1.3e-6 out of 0.62 -- which is the frozen states'
+    # accuracy, not a normalisation: a wrong ``N`` anywhere here would be a
+    # factor rather than a sixth digit.
+    volume = result.ultracell.volume(calculator.system.cell)
+    element = volume / density[0].size
+    per_channel = density.sum(axis=(1, 2, 3)) * element
+    cells = result.ultracell.cells
+    reference = np.asarray(scf.density).sum(axis=(1, 2, 3)) * (
+        float(calculator.system.cell.volume) / np.asarray(scf.density)[0].size
+    )
+    assert float(per_channel.sum()) == pytest.approx(
+        float(reference.sum()) * cells, abs=1e-9
+    )
+    assert per_channel == pytest.approx(reference * cells, abs=5e-6)
+
+
+@pytest.mark.slow
+def test_a_modulated_field_makes_a_spin_density_wave(tmp_path, pseudo_dir):
+    """The magnetic null **can fail**: an applied ``B(r)`` modulates the moment.
+
+    Nothing in a collinear SCF breaks spin symmetry on its own, so the two nulls
+    above would read exactly the same from a spin path that had been deleted.
+    This drives one: a field ``B cos(2 pi x / n)`` on a cell whose own moment is
+    zero, and what comes back is a spin density wave -- equal and opposite
+    moments in the two cells, with its Fourier weight at the applied wavevector
+    and nowhere else.
+
+    The **charge** response is the discriminating half. A collinear system is
+    invariant under flipping every spin together with the sign of ``B``, so the
+    charge cannot respond at linear order in ``B`` and the magnetization must:
+    a run in which both moved by the same order has coupled the channels
+    somewhere they are not coupled.
+    """
+    shape, kgrid = (2, 1, 1), (1, 2, 2)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    path = tmp_path / "si_mag.in"
+    path.write_text(MAGNETIC.replace("2 2 2 0 0 0", "{} {} {} 0 0 0".format(*folded)))
+    calculator = Calculator.from_file(path, pseudo_dir=pseudo_dir)
+    scf = calculator.get_scf(conv_thr=1e-12, nbnd=12)
+    assert abs(scf.magnetization) < 1e-5
+
+    amplitude = 0.05
+    result = run_ultracell(
+        calculator.system, calculator.pseudos, scf, shape, kgrid, nbnd=12,
+        magnetic_field=lambda x: amplitude * np.cos(2 * np.pi * x[..., 0] / shape[0]),
+        conv_thr=1e-10, states_conv_thr=1e-9,
+    )
+    assert result.converged
+
+    moments = result.cell_moments()
+    assert abs(moments[0]) > 1e-3
+    # Equal and opposite: the field has zero mean over the ultracell, so the
+    # induced moment does too, to the order the response is linear in.
+    assert moments[0] == pytest.approx(-moments[1], rel=1e-3)
+
+    magnetization = np.asarray(result.magnetization)
+    spectrum = np.moveaxis(np.fft.fftn(magnetization), 0, 0)
+    q_along = np.arange(result.ultracell.grid[0]) % shape[0]
+    peak = np.unravel_index(np.abs(spectrum).argmax(), spectrum.shape)
+    assert q_along[peak[0]] in (1, shape[0] - 1)
+    assert (np.abs(spectrum[q_along == 0]).max()
+            < 1e-3 * np.abs(spectrum[q_along != 0]).max())
+
+    # The charge moved by far less than the moment did, which is the symmetry
+    # statement above turned into a number.
+    charge = np.abs(np.asarray(result.modulation).sum(axis=0)).max()
+    assert charge < 0.7 * np.abs(magnetization).max()
+
+
+@pytest.mark.slow
+def test_a_uniform_field_is_the_unit_cell_under_the_same_field(tmp_path, pseudo_dir):
+    """The number for the field: ``N = 1`` under a uniform ``B``, against ``pw.x``'s route.
+
+    An ultracell with one cell and a *uniform* applied field is the same physics
+    as an ordinary SCF with ``B_field(3)`` -- and the two share nothing: the
+    reference goes through ``add_bfield.f90``'s expression inside a plane-wave
+    SCF, where this expands the field-free states of the same cell in a basis
+    and never applies ``H`` again. So the comparison tests the sign of the
+    field, its magnitude, and the whole spin path at once, and it must converge
+    in ``nbnd`` for the same reason the charge does: the basis truncation is
+    the only approximation between them.
+
+    Measured on this cell at ``B = 0.02`` Ry, against ``m = 0.71159883``:
+    ``nbnd = 12`` gives 9.6e-3 relative, 24 gives 3.2e-3, 40 gives 7.7e-4.
+    """
+    path = tmp_path / "si_mag.in"
+    path.write_text(MAGNETIC)
+    calculator = Calculator.from_file(path, pseudo_dir=pseudo_dir)
+    scf = calculator.get_scf(conv_thr=1e-12, nbnd=12)
+
+    field = 0.02
+    with_field = tmp_path / "si_field.in"
+    with_field.write_text(MAGNETIC.replace(
+        " degauss=0.02\n", f" degauss=0.02\n B_field(3) = {field}\n"))
+    reference = Calculator.from_file(
+        with_field, pseudo_dir=pseudo_dir).get_scf(conv_thr=1e-12, nbnd=12)
+    assert reference.converged and abs(reference.magnetization) > 0.5
+
+    errors = []
+    for nbnd in (12, 24, 40):
+        result = run_ultracell(
+            calculator.system, calculator.pseudos, scf, (1, 1, 1), (2, 2, 2),
+            nbnd=nbnd, magnetic_field=lambda x: np.full(x.shape[:-1], field),
+            conv_thr=1e-11, states_conv_thr=1e-8, david=2,
+        )
+        assert result.converged
+        moment = float(result.cell_moments().sum())
+        errors.append(abs(moment - reference.magnetization)
+                      / abs(reference.magnetization))
+
+    # **Monotone, and the sign is what a flipped field would break.** A moment
+    # that came back at -0.71 would fail the first assertion; one at half the
+    # size would fail every rung of the ladder and would not improve with nbnd.
+    assert errors == sorted(errors, reverse=True), errors
+    assert errors[-1] < 2e-3
+
+
+@pytest.mark.slow
+def test_the_magnetic_ultracell_converges_to_the_supercell(tmp_path, pseudo_dir):
+    """The number for the spin plumbing: a polarized ultracell against a supercell.
+
+    The same comparison stage 1 makes, on a cell that has a moment, and with
+    the **magnetization** compared beside the charge. The perturbation is a
+    scalar potential rather than a field, so the magnetization's response is
+    entirely indirect -- the local exchange splitting follows the local charge
+    -- which is what makes it a test of the coupled two-channel loop rather
+    than of a field's sign.
+
+    Measured at ``AMPLITUDE = 0.05`` Ry on a two-cell hydrogen ultracell:
+    charge 5.2e-4 / 2.3e-4 / 1.7e-4 and magnetization 6.2e-4 / 2.4e-4 / 1.4e-4
+    at ``nbnd = 8 / 16 / 24``, relative to the largest Fourier component of
+    each. The floor near 1.5e-4 is the two boxes, not the method: the supercell
+    picks a 27-point FFT grid along the modulated axis where the ultracell's is
+    30, and a density is not band-limited.
+    """
+    shape, kgrid = (2, 1, 1), (2, 2, 2)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    calculator = _hydrogen(tmp_path, pseudo_dir, folded)
+    scf = calculator.get_scf(conv_thr=1e-11, nbnd=8)
+    assert scf.converged
+
+    supercell = _hydrogen_supercell(tmp_path, pseudo_dir, shape, kgrid)
+    calculation = Calculation(supercell.system, supercell.pseudos)
+    grid = tuple(calculation.basis.dense.grid)
+    axes = [np.arange(m) / m for m in grid]
+    coordinates = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1)
+    applied = AMPLITUDE * np.cos(2 * np.pi * coordinates[..., 0])
+    reference = run_scf(
+        supercell.system, supercell.pseudos,
+        calculation=with_external_potential(calculation, jnp.asarray(applied)),
+        conv_thr=1e-11, nbnd=16,
+    )
+    assert reference.converged
+
+    miller = np.stack(np.meshgrid(
+        np.arange(-4, 5), np.arange(-2, 3), np.arange(-2, 3), indexing="ij"
+    ), axis=-1).reshape(-1, 3)
+    theirs = np.asarray(reference.density)
+    their_charge = _fourier(theirs.sum(axis=0), grid, miller)
+    their_moment = _fourier(theirs[0] - theirs[1], grid, miller)
+
+    charge_errors, moment_errors = [], []
+    for nbnd in (8, 16, 24):
+        result = run_ultracell(
+            calculator.system, calculator.pseudos, scf, shape, kgrid, nbnd=nbnd,
+            external=_modulation(shape, 0), conv_thr=1e-10,
+            states_conv_thr=1e-8, david=2,
+        )
+        assert result.converged
+        box = result.ultracell.grid
+        ours = np.asarray(result.density)
+        charge_errors.append(
+            np.abs(_fourier(ours.sum(axis=0), box, miller) - their_charge).max()
+            / np.abs(their_charge).max()
+        )
+        moment_errors.append(
+            np.abs(_fourier(ours[0] - ours[1], box, miller) - their_moment).max()
+            / np.abs(their_moment).max()
+        )
+
+    # **No sign is asserted** -- the Hamiltonian moves with its own truncated
+    # density, so an ultracell eigenvalue is not an upper bound on the
+    # supercell's. What is asserted is that both halves *improve* with the one
+    # knob the method has, which is the whole content of "a variational
+    # truncation to nbnd bands per folded k-point and nothing else".
+    assert charge_errors == sorted(charge_errors, reverse=True), charge_errors
+    assert moment_errors == sorted(moment_errors, reverse=True), moment_errors
+    assert charge_errors[-1] < 5e-4 and moment_errors[-1] < 5e-4
+
+
 class _Overridden:
     """A system with one attribute replaced, for firing one refusal at a time.
 
@@ -388,7 +687,6 @@ class _Overridden:
 
 
 @pytest.mark.parametrize("replaced, message", [
-    ({"nspin": 2}, "nspin = 2"),
     ({"nspin": 4}, "nspin = 4"),
     ({"spiral_q": (0.0, 0.0, 0.25)}, "spin spiral"),
     ({"nosym": False}, "nosym"),
@@ -460,22 +758,66 @@ K_POINTS automatic
 """
 
 
-@pytest.mark.slow
-def test_a_polarized_run_is_refused_before_it_is_paid_for(tmp_path, pseudo_dir):
-    """``nspin = 2`` is stage 3, and it says so *before* the expensive step.
+def test_a_field_needs_two_channels_to_split(tmp_path, pseudo_dir):
+    """An applied ``B`` with ``nspin = 1`` is refused rather than ignored.
 
-    The frozen-state diagonalisation over the folded k-set is the whole cost of
-    the method, so a refusal that fires after it would charge a user the full
-    price of a calculation they are not going to get.
+    There is one density and no channel for the field to move an electron
+    into, so the field would be silently dropped -- and a run that reports a
+    perfectly converged unmodulated state is the worst way to be told.
     """
-    path = tmp_path / "si_mag.in"
-    path.write_text(MAGNETIC)
-    calculator = Calculator.from_file(path, pseudo_dir=pseudo_dir)
-    scf = calculator.get_scf(conv_thr=1e-6, nbnd=8)
-    with pytest.raises(NotImplementedError, match="nspin = 2"):
+    from defumat.ultracell.driver import _as_field
+    from defumat.ultracell.grid import Ultracell
+
+    ultracell = Ultracell.build((2, 1, 1), (4, 4, 4))
+    with pytest.raises(ValueError, match="two spin channels"):
+        _as_field(None, lambda x: np.zeros(x.shape[:-1]), ultracell, 1)
+
+
+def test_the_collinear_field_carries_add_bfields_own_sign():
+    """``v_up -= B``, ``v_dw += B`` -- ``add_bfield.f90:237-238``.
+
+    Transcribed here rather than inferred, because a flipped sign is a
+    calculation that converges to the state with the moment the other way up:
+    every symmetry check passes, the energy is the same by time reversal, and
+    only a comparison against a field applied through some *other* route sees
+    it. That comparison is
+    :func:`test_a_uniform_field_is_the_unit_cell_under_the_same_field`; this is
+    the cheap half of it.
+    """
+    from defumat.ultracell.driver import _as_field
+    from defumat.ultracell.grid import Ultracell
+
+    ultracell = Ultracell.build((2, 1, 1), (4, 4, 4))
+    field = np.asarray(_as_field(None, lambda x: np.full(x.shape[:-1], 0.3),
+                                 ultracell, 2))
+    assert field[0] == pytest.approx(np.full(ultracell.grid, -0.3), abs=1e-14)
+    assert field[1] == pytest.approx(np.full(ultracell.grid, +0.3), abs=1e-14)
+
+    # and a scalar potential is felt in full by both, which is the other rule
+    # in the same function and the one that would otherwise be half of it.
+    both = np.asarray(_as_field(lambda x: np.full(x.shape[:-1], 0.1), None,
+                                ultracell, 2))
+    assert both[0] == pytest.approx(np.full(ultracell.grid, 0.1), abs=1e-14)
+    assert both[1] == pytest.approx(np.full(ultracell.grid, 0.1), abs=1e-14)
+
+
+@pytest.mark.slow
+def test_a_field_converged_ground_state_is_refused(tmp_path, pseudo_dir):
+    """The frozen eigenvalues would carry a Zeeman term ``dV`` does not.
+
+    ``dV`` is rebuilt here from the density alone, where the eigenvalues the
+    matrix diagonal is made of were converged under whatever field the SCF
+    *ended* with -- which ``reducebf`` and the fixed-spin-moment scheme both
+    make different from the input. The difference is a rigid shift between the
+    channels, and an ultracell would report it as a modulation.
+    """
+    calculator = _silicon(tmp_path, pseudo_dir, (2, 2, 2))
+    scf = calculator.get_scf(conv_thr=1e-10, nbnd=8)
+    under_field = _Overridden(scf, magnetic_field=object())
+    with pytest.raises(NotImplementedError, match="converged under a magnetic"):
         run_ultracell(
-            calculator.system, calculator.pseudos, scf, (2, 1, 1), (1, 2, 2),
-            nbnd=8, conv_thr=1e-8,
+            calculator.system, calculator.pseudos, under_field, (2, 1, 1),
+            (1, 2, 2), nbnd=8, conv_thr=1e-8,
         )
 
 

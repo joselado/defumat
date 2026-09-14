@@ -114,7 +114,7 @@ def fixed_density_states(
     ``david`` is ``diago_david_ndim``, the Davidson subspace multiple
     ``nvecx/nbnd``. It is forwarded because ``nvecx`` is not capped against the
     size of the space: a run asking for many empty bands -- an ultracell basis
-    (``PLAN.md`` P84) is the case that found this -- can reach
+    (``PLAN.md`` P88) is the case that found this -- can reach
     ``4 nbnd > npw``, where the subspace is larger than the space it lives in.
 
     ``field`` and ``field_scale`` are the pair ``SCFResult.magnetic_field`` and

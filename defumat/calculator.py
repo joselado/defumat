@@ -1065,7 +1065,7 @@ class Calculator:
     def get_ultracell(self, supercell, kgrid=(1, 1, 1), **options):
         """A density or potential modulated over many unit cells at once.
 
-        The ultra long-range method (``PLAN.md`` P84, Elk's task 700). A spin
+        The ultra long-range method (``PLAN.md`` P88, Elk's task 700). A spin
         density wave, a screened impurity or a domain wall is a slow **envelope**
         on a crystal that is still atomically periodic, and a supercell pays the
         same price for the envelope as for the atoms. Here the unit cell's own
@@ -1078,7 +1078,9 @@ class Calculator:
         depends on -- it is the size of the variational basis per folded
         k-point, and the answer converges to the real ``N``-cell supercell as it
         grows -- so pass it. ``external`` is an applied potential in Ry over the
-        ultracell.
+        ultracell and ``magnetic_field`` a collinear applied ``B(r)``, which is
+        what a spin density wave is driven with: ``nspin = 2`` is in and nothing
+        in a collinear SCF breaks spin symmetry on its own.
 
         The atoms do not move and the local band structure cannot relax: this
         computes what a modulation does to a fixed crystal, not a different

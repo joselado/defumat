@@ -4233,6 +4233,65 @@ whole difficulty. Elk's own example of the method runs at a mixing parameter of
 $0.001$ for up to two thousand iterations; a two-cell silicon ultracell under an
 applied modulation converges here in nine.
 
+\textbf{A spin density wave.} \code{nspin = 2} is in, and it is what the method
+was published for: a modulation of the \emph{magnetization} over tens of cells
+is the case a supercell cannot afford. Without spin-orbit coupling the ultracell
+matrix is block diagonal in spin, so two channels cost two solves of the same
+size rather than one of twice it; what the channels share is a \textbf{single
+Fermi level} over all $2N\,\code{nbnd}$ states, and that sharing is the physics
+--- it is what lets an electron cross from the minority channel in one cell to
+the majority channel in the next, which is what a spin density wave is.
+
+Nothing in a collinear calculation breaks spin symmetry on its own, so a
+modulated moment has to be driven. \code{magnetic\_field} is the knob: a
+collinear $B(\mathbf r)$ in Ry, entering as $v_\uparrow \mathrel{-}= B$ and
+$v_\downarrow \mathrel{+}= B$, in the same two forms \code{external} takes.
+
+\begin{pycode}
+from defumat import Calculator
+import numpy as np
+
+cal = Calculator.from_file("si-mag.in")     # the same cell at nspin = 2
+
+# a field of one ultracell period along a_1, in Ry
+field = lambda x: 0.05 * np.cos(2 * np.pi * x[..., 0] / 2)
+
+ulr = cal.get_ultracell(supercell=(2, 1, 1), kgrid=(1, 2, 2),
+                        nbnd=12, magnetic_field=field)
+
+print(ulr.cell_moments())          # the moment of each cell: the wave itself
+print(np.abs(ulr.magnetization).max())         # rho_up - rho_dw on the box
+print(ulr.charge_accuracy, ulr.magnetic_accuracy)
+\end{pycode}
+
+\code{ulr.cell\_moments()} integrates $\rho_\uparrow - \rho_\downarrow$ over
+each unit cell of the ultracell, which needs no sphere and no radius: the cells
+tile the ultracell exactly, so the partition is the geometry. On the cell above
+the two come back equal and opposite, which is the two-cell wave the field asked
+for.
+
+\textbf{Read \code{magnetic\_accuracy}, not \code{accuracy}, on a magnetic
+run.} \code{dr2} is the Hartree energy of the density residual, so its charge
+half is weighted by $1/|\mathbf G+\mathbf Q|^2$ and its magnetization half by a
+constant --- and in an ultracell the gap between them is wider than in a unit
+cell, because the smallest $|\mathbf G + \mathbf Q|$ is $N$ times smaller and
+the charge half's weight at the envelope's own wavevector is $N^2$ larger. A
+converged total can therefore leave the moment still moving; the two halves are
+reported apart for exactly that reason, and \code{ulr.history} carries both per
+iteration.
+
+\textbf{What a magnetic run is checked against.} At $N = 1$ a \emph{uniform}
+applied field is the same physics as an ordinary SCF with \code{B\_field(3)},
+which shares nothing with this code path --- it goes through
+\code{add\_bfield.f90}'s expression inside a plane-wave SCF. On the silicon cell
+at $B = 0.02$~Ry the reference moment is $0.71159883$ and the ultracell gives it
+to $9.6\times10^{-3}$ relative at \code{nbnd = 12}, $3.2\times10^{-3}$ at 24 and
+$7.7\times10^{-4}$ at 40: the same convergence in \code{nbnd} the charge shows,
+now for the moment and against a route with no ultracell in it. Against a real
+two-cell supercell of polarized hydrogen under a scalar modulation, the charge
+and the magnetization agree to $1.7\times10^{-4}$ and $1.4\times10^{-4}$ at
+\code{nbnd = 24}.
+
 \textbf{There is no total energy}, in this code or in Elk, whose
 \code{energyulr.f90} reports the sum of occupied eigenvalues and the Fermi level
 and nothing else. \code{ulr.band\_energy} is that sum, per unit cell. The energy
@@ -4246,10 +4305,17 @@ through $D_{ij}$, so the frozen unit-cell states stop being a fixed basis as soo
 as the modulation moves. Gradient-corrected functionals: the gradient of the
 ultracell density carries the envelope's own gradient, which a per-cell
 evaluation drops (Elk takes that approximation silently; it is refused here).
-Meta-GGA. Spin polarization of any kind, collinear or noncollinear --- which is
-where a spin density wave lives, and is the next stage rather than a permanent
-refusal. DFT+U, the occupation matrix being per atom where an ultracell has $N$
-copies of each. Spin spirals, as a second modulation of the same states.
+Meta-GGA. \textbf{Noncollinear} magnetism and spin-orbit coupling, for the shape
+of the matrix rather than the physics: a collinear ultracell matrix is block
+diagonal in spin and so is two of the same build, where a spinor state is one
+vector of $2\,\code{npwx}$ components and the potential acts on it as
+$V_0 + \boldsymbol\sigma\cdot\mathbf B$. A ground state converged \textbf{under
+a magnetic field or a constrained moment}, because the frozen eigenvalues would
+carry the field the SCF ended with --- which \code{reducebf} and the
+fixed-spin-moment scheme both change from the input --- while $\delta V$ is
+rebuilt here from the density alone; apply the field through
+\code{magnetic\_field} instead. DFT+U, the occupation matrix being per atom
+where an ultracell has $N$ copies of each. Spin spirals, as a second modulation of the same states.
 Gamma-only storage, the basis being built at $N$ points none of which is
 $\Gamma$. A double grid, the wavefunctions and the density then living on
 different ultracell boxes. Symmetry is not used at all: a modulation breaks the

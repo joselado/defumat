@@ -1,0 +1,31 @@
+! Silicon for a magnetic ultracell calculation: the same two-atom cell as
+! si-ultracell.in with two spin channels, so that an applied magnetic field can
+! modulate the moment over many cells.
+!
+! The cell has no moment of its own. That is deliberate: nothing in a collinear
+! calculation breaks spin symmetry on its own, so what a modulated field induces
+! here is the spin response and not the relaxation of a moment that was already
+! there. Smearing, because with two channels and one shared Fermi level the
+! electrons have to be free to cross between them from cell to cell, which is
+! what a spin density wave is.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.20,
+    nat = 2, ntyp = 1,
+    ecutwfc = 12.0,
+    nosym = .true., noinv = .true.,
+    nspin = 2, starting_magnetization(1) = 0.2,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.02
+ /
+ &electrons
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ Si  28.086  Si.pz-vbc.UPF
+ATOMIC_POSITIONS (alat)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS automatic
+ 8 2 2 0 0 0

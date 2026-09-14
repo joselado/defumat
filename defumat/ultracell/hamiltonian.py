@@ -30,6 +30,14 @@ sum would leave behind is absorbed by the box index map -- see
 :mod:`defumat.ultracell.grid`, and it is the reason no pair of ``Q`` values
 needs a phase factor here.
 
+**One spin channel at a time.** There is no spin axis anywhere below, and that
+is a statement about the physics rather than an omission: a collinear potential
+is diagonal in spin, so the ``(2 N nbnd)`` matrix is block diagonal and its two
+blocks are this function called twice, with ``dV[0]`` and ``dV[1]``. A spinor
+run is what would need the axis -- there the potential acts as
+``V_0 + sigma . B`` on a two-component state -- and it is refused
+(:func:`~defumat.ultracell.driver.require_an_ultracell_regime`).
+
 **Cost.** Two ultracell transforms per ket basis function, so ``2 N nbnd``
 ultracell FFTs per ``k0`` per iteration, which is ``2 N^2 nbnd`` unit-cell
 transforms. That ``N^2`` is the price of the direct route and is what stage 2

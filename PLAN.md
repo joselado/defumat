@@ -305,17 +305,22 @@ because that is what decides whether it is a session or a phase.
   follow-up; memory held by **child** processes, which the cgroup charges and this does
   not; and the fact that the failure lands at *teardown*, after the peak — if the peak is
   the kill, what survives is the log line, which is why it is written first.
-- **The ultracell beyond an unpolarized LDA** (P88, stage 1 done). What is missing, term by
-  term: **magnetism** -- which is what the method was published for, since a spin density
-  wave is the case it was built to reach -- where `nspin = 2` and `4` are refused by name;
-  a **total energy**, which neither this code nor Elk has (`energyulr.f90` is the eigenvalue
-  sum alone), so the energy gain of a modulated state over the uniform one is not a quantity
-  either code can report; a **GGA**, where the gradient of the ultracell density carries the
-  envelope's own gradient that Elk's per-cell `potxc` call silently drops; and the
-  **central-k route**, which would remove the direct route's `N^2` at the cost of a second
-  approximation, with the two errors separated. **Ultrasoft and PAW** are refused for their
-  own reason and are the nearest of the four: `D_ij` is a functional of the density, so the
-  frozen states stop being a fixed basis as soon as the modulation moves.
+- **The ultracell beyond a collinear LDA** (P88, stages 1 and 3a done). Collinear spin is in
+  and a spin density wave is reachable -- an applied `magnetic_field` modulates the moment,
+  and the two channels share one Fermi level. What is missing, term by term: **noncollinear
+  magnetism**, refused for the shape of the matrix rather than the physics (a collinear
+  matrix is block diagonal in spin and so is two of the same build; a spinor state is one
+  vector of `2 npwx` components acted on by `V_0 + sigma . B`); a **total energy**, which
+  neither this code nor Elk has (`energyulr.f90` is the eigenvalue sum alone), so the energy
+  gain of a modulated state over the uniform one is not a quantity either code can report --
+  and it is what a *spontaneous* wave, seeded by Elk's `rndbfcu` and faded by `reducebf`,
+  would be judged by; a **GGA**, where the gradient of the ultracell density carries the
+  envelope's own gradient that Elk's per-cell `potxc` call silently drops -- **and it is what
+  blocks the paper's own chromium case**, the only Cr dataset committed here being PBE; and
+  the **central-k route**, which would remove the direct route's `N^2` at the cost of a
+  second approximation, with the two errors separated. **Ultrasoft and PAW** are refused for
+  their own reason and are the nearest of these: `D_ij` is a functional of the density, so
+  the frozen states stop being a fixed basis as soon as the modulation moves.
 - **Transferring more than a charge density from Elk** (P72). The reader and the seed are
   in for an unpolarized state of an element with no core, validated pointwise against
   Elk's own `RHO3D.OUT` on hydrogen and on SiC. What is missing is a **magnetization** (an
@@ -14553,7 +14558,7 @@ told from silence is this project's most-repeated trap.
   which is a statement about that route rather than this one, and QE's own `average_pp.f90`
   refuses ultrasoft and PAW outright.
 
-### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stage 1 (unpolarized, norm-conserving, LDA, direct route); stages 2-4 planned.
+### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1 and 3a (norm-conserving, LDA, direct route, `nspin = 1` and `2`); stages 2, 3b and 4 planned.
 
 Elk tasks 700/701 (ground state), 720/725 (band structure and spectral function), 731-3,
 741-3, 771-3 (plots); `src/modulr.f90` and the twenty routines around it. The method paper is
@@ -15016,15 +15021,172 @@ is what the table below was measured at. Without the guard the other symptom is 
 **scaling curve**: 48.1 s at `nbnd = 80` against 16.3 s
 at 64. Written up with the two-line fix in `OPEN.md` Part VI item 1.
 
+---
+
+**What stage 3a measured: two spin channels, which is what the method was published for.**
+A spin density wave in bcc Cr is 21 cells long and is the paper's own headline case; stage 1
+could not express it at all, refusing every `nspin` but 1. `nspin = 2` is now in and
+`nspin = 4` is refused by name -- **for the shape of the matrix and not for the physics**,
+which is the distinction the refusal message now makes. Without spin-orbit coupling a
+collinear potential is diagonal in spin, so the `(2 N nbnd)` matrix is **block diagonal** and
+its two blocks are `ultracell_matrix` called twice with `dV[0]` and `dV[1]` -- no spin axis
+enters `hamiltonian.py` at all. A spinor state is one vector of `2 npwx` components and the
+potential acts on it as `V_0 + sigma . B`, which is a different matrix element and a
+different build.
+
+**What the two channels share is one Fermi level, and that sharing is the physics.** There is
+a single Fermi level over all `2 N nbnd` ultracell states at each `k0`, which is what lets an
+electron cross from the minority channel in one cell to the majority channel in the next --
+and that crossing *is* a spin density wave. Two separate Fermi levels forbid it, so the
+constrained branch is the **`Q = 0` moment constraint** and nothing finer: it is reached the
+way the ordinary SCF reaches it (`two_fermi_energies`, from `tot_magnetization` or from
+`occupations = 'fixed'`, which QE's `input.f90:797` requires a `tot_magnetization` with), and
+the counts are multiplied by `N` for the same reason the electron count is -- the occupation
+search runs for the ultracell and is rescaled afterwards, the trap stage 1 already found.
+
+**Nothing breaks spin symmetry on its own**, so the two nulls below would read identically
+from a spin path that had been deleted. A modulated magnetization has to be *driven*, and the
+knob is `magnetic_field`: a collinear `B(r)` in Ry entering as `v_up -= B`, `v_dw += B`, which
+is `add_bfield.f90:237-238` transcribed and unit-tested on its own. What that induces is the
+`Q`-resolved response, which is a quantity rather than an initial condition; Elk's other route
+-- a random seed field (`rndbfcu`) faded away by `reducebf`, which lets a *spontaneous* wave
+find its own period -- is not written and is named below.
+
+**The number for the field, and it shares nothing with the ultracell.** At `N = 1` a
+**uniform** applied field is the same physics as an ordinary SCF with `B_field(3)`: the
+reference goes through `add_bfield.f90` inside a plane-wave SCF, where this expands the
+*field-free* states of the same cell in a basis and never applies `H` again. On the two-atom
+silicon cell at `nspin = 2` with `B = 0.02` Ry, against a reference moment of **0.71159883**:
+
+| `nbnd` | ultracell moment | relative error |
+|---|---|---|
+| 12 | 0.70475475 | 9.6e-3 |
+| 24 | 0.70932250 | 3.2e-3 |
+| 40 | 0.71105070 | 7.7e-4 |
+
+**Monotone**, and it is the charge ladder's argument carried onto the moment: the basis
+truncation is the only approximation between the two, so the moment converges in `nbnd` the
+way the induced density does. It is also what pins the **sign and the magnitude** of the
+field. A flipped sign gives `-0.71`, which is a perfectly converged state that every symmetry
+check passes -- time reversal makes it degenerate -- and that only a comparison through some
+*other* route can see. This is that route.
+
+**The number for the spin plumbing: a magnetic ultracell against a real supercell.** A
+partly-polarized hydrogen lattice (simple cubic, `a = 5.5` bohr, `m = 0.62`) as a two-cell
+ultracell against a real two-atom supercell through this package's own SCF, both under the
+same `0.05 cos(2 pi x_1/2)` Ry **scalar** potential, compared Fourier component by Fourier
+component. The perturbation is a potential rather than a field on purpose: the magnetization's
+response is then entirely indirect -- the local exchange splitting follows the local charge --
+which makes it a test of the coupled two-channel loop rather than of a field's sign.
+
+| `nbnd` | charge | magnetization |
+|---|---|---|
+| 8 | 5.2e-4 | 6.2e-4 |
+| 16 | 2.3e-4 | 2.4e-4 |
+| 24 | 1.7e-4 | 1.4e-4 |
+
+Both monotone, both relative to the largest Fourier component of the quantity. **The floor
+near 1.5e-4 is the two boxes rather than the method**: the supercell picks a 27-point FFT grid
+along the modulated axis where the ultracell's is 30, and a density is not band-limited, so
+the two do not alias the same way. That is the same asymmetry stage 1 documented (30 against
+32) and it bites here at a tighter level because this ladder starts an order lower.
+
+**The cell is chosen and neither end of its range works**, which is worth recording because
+the obvious choice fails in both directions. The hydrogen lattice at `a = 5.0` has a moment
+of **0.027** and takes **56** SCF iterations -- it sits on the Stoner threshold, where the
+moment is the difference of two large numbers and the ultracell inherits the same softness.
+At `a = 6.0` it is **0.9997**: a saturated atom, whose moment cannot grow under a field at all
+and whose `|zeta| = 1` is exactly the clamp-tangent trap `CLAUDE.md` lists (`OPEN.md` G1). At
+5.5 with a 0.8 seed it converges in **six** iterations to 0.62 and responds to everything.
+
+**Three nulls again, and the polarized one is not the unpolarized one.** `nspin = 2` on a cell
+whose moment is zero reproduces stage 1 exactly -- `dV` at 8.9e-16, the tiled density, one
+iteration, the charge at `8 N` -- and **that null cannot see the spin path**: the two channels
+are equal there, so an occupation rule that fills the wrong one, a matrix built with `dV[0]`
+for both, and a density accumulated into channel zero twice all pass it. The same null on the
+polarized hydrogen cell is the one that discriminates, and it separates two bounds that stage
+1 had no reason to separate:
+
+* **the total charge is `N` times the unit cell's to 1e-9** -- the occupation search is done
+  for the ultracell's count and nothing else can move it;
+* **the split between the channels is out by 1.3e-6 in 0.62**, which is the *moment*, and is
+  the frozen states' own accuracy rather than a normalisation. A wrong `N` anywhere would be a
+  factor and not a sixth digit, which is what makes the pair worth asserting apart.
+
+**And the magnetic null is shown capable of failing**, with a check that the clean zero could
+not have come from a dead path. Two-atom silicon at `nspin = 2`, whose own moment is 4.8e-7,
+under `0.05 cos(2 pi x_1 / 2)` Ry of **field**: the two cells come back with moments of
+**+0.0635 and -0.0635**, the magnetization's Fourier weight sits at the applied `Q` with the
+`Q = 0` component 1.6e-5 of it, and it converges in eight iterations. The discriminating half
+is the **charge**: a collinear system is invariant under flipping every spin together with the
+sign of `B`, so the charge cannot respond at linear order and the magnetization must -- a run
+in which both moved by the same order has coupled the channels somewhere they are not coupled.
+
+**`dr2` is split, and on a magnetic ultracell that is a correctness change rather than a
+diagnostic.** `OPEN.md` Y1 measured what a summed `dr2` hides in an ordinary SCF: at
+`dr2 = 9e-11` on a magnetic cell the total energy was still 1.15e-8 Ry out, because
+`rho_ddot` weights the charge residual by `1/|G|^2` and the magnetization residual by a
+constant. **In an ultracell the gap is wider than in a unit cell rather than the same**: the
+smallest `|G+Q|` is `N` times smaller, so the charge half's weight at the envelope's own
+wavevector is `N^2` larger -- and a spin density wave is precisely a state whose entire answer
+lives in the half that is *not* amplified. `charge_accuracy` and `magnetic_accuracy` are on
+the result and in `history` per iteration, the non-convergence warning names both, and the
+convergence test is still their sum, which is QE's. On the silicon field run the two are
+1.96e-11 and 4.9e-14 at the end, three orders apart.
+
+**A ground state converged under a field is refused, and it is the same argument
+`fixed_density_states` makes one layer down.** The frozen eigenvalues carry the field the SCF
+*ended* with -- which `reducebf` and the fixed-spin-moment scheme both make different from the
+input -- while `dV` is rebuilt here from the density alone. The two would then differ by a
+rigid Zeeman shift between the channels, which an ultracell reports as a modulation. Apply the
+field through `magnetic_field` instead, which is what a `Q`-resolved susceptibility wants
+anyway.
+
+**One thing the parameter name nearly collided with.** `Calculator._call_options` injects
+`SCFResult.magnetic_field` into any entry point with a parameter called **`field`**
+(`_STATE_ARGUMENTS`), which is the converged field a band structure must be rebuilt with. The
+ultracell's applied field is called `magnetic_field`, so the two do not meet -- but they are
+one rename apart, and the refusal above is what makes the collision unreachable rather than
+merely unlikely.
+
+**What stage 3a does not have, and why each.**
+
+* **The modulated field against a supercell.** The scalar modulation compares against a real
+  supercell because `with_external_potential` puts it in `vltot`, where it is felt by both
+  channels and carries its own energy correctly. A **spin-resolved** external field has no
+  such slot: `vltot` is one scalar broadcast to both channels, and adding a `(nspin, *grid)`
+  term inside `Calculation.hamiltonian` would put `-int B m` into `eband` with nothing
+  subtracting it -- the opposite of this package's own convention that a field's energy is
+  **not** in the reported total. So the field is validated by the `N = 1` uniform identity
+  above (which needs no hook, because `B_field(3)` is an ordinary input) and the spin plumbing
+  by the scalar supercell ladder, and the two are not fused into one run.
+* **Elk's seeded random field (`rndbfcu`) and `reducebf`**, which is how a *spontaneous* wave
+  finds its own period rather than being told one. Everything it needs exists -- the field
+  enters `dV` and `MagneticField.reducebf` is already implemented for the ordinary SCF -- so
+  this is a loop variable and a warning, not new physics. Without it the ultracell answers
+  "what does this modulation do" and not "is a modulation the ground state", and **the second
+  question needs the total energy anyway** (stage 4), so the two belong together.
+* **The Cr spin density wave against Elk.** `Cr.pbe-nc-sg15.UPF` is the only chromium dataset
+  committed here and it is **PBE**, which the ultracell refuses -- the gradient of the
+  ultracell density carries the envelope's own gradient, which Elk's per-cell `potxc` drops.
+  So the paper's own system needs the GGA on the box, which is already on this list, before it
+  can be run at all. Quoting a Cr period from a run that did not happen is worse than leaving
+  the row empty.
+* **`nspin = 4`**, stage 3b, with the matrix-shape reason above.
+
+---
+
 **What is outstanding.**
 
-* **Stages 2, 3 and 4** as planned above: the central-k route beside the direct one and the two
-  errors separated, the magnetic regimes (which is where a spin density wave lives), and the
-  total energy -- the quantity neither code has.
+* **Stages 2, 3b and 4** as planned above: the central-k route beside the direct one and the
+  two errors separated, the **noncollinear** regime, and the total energy -- the quantity
+  neither code has. (Stage 3a, collinear spin, is above; the four things it does
+  not have are listed with it.)
 * **The `PERFORMANCE.md` pair against Elk.** Stage 1 is unpolarized silicon under an applied
-  potential and Elk's only worked example of the method is the Cr spin density wave, which is
-  stage 3; timing task 700 on a system Elk was not set up for would be a worse number than
-  none. What is recorded instead is the comparison that *is* like-for-like -- the ultracell
+  potential and Elk's only worked example of the method is the Cr spin density wave, which
+  stage 3a still cannot run -- the only chromium dataset committed here is PBE and the
+  ultracell refuses a GGA. Timing task 700 on a system Elk was not set up for would be a
+  worse number than none. What is recorded instead is the comparison that *is* like-for-like -- the ultracell
   against the supercell it approximates, in this code, on the same physics.
 * **The driver is dispatch-bound at small `N`, not compute-bound**, and that is the biggest
   lever here. An `N = 2` iteration is a few hundred transforms of a 6750-point box -- about
