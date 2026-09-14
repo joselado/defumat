@@ -49,14 +49,15 @@ third scheme addresses:
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from dataclasses import dataclass, field
 
 import jax
 import numpy as np
 
-__all__ = ["Mixer", "LinearMixer", "AndersonMixer", "get_mixer", "MIXERS",
-           "PRECONDITIONED", "kerker_preconditioner", "local_tf_preconditioner",
-           "thomas_fermi_screening"]
+__all__ = ["Mixer", "LinearMixer", "AndersonMixer", "AdaptiveMixer", "get_mixer",
+           "MIXERS", "PRECONDITIONED", "kerker_preconditioner",
+           "local_tf_preconditioner", "thomas_fermi_screening"]
 
 
 class Mixer:
@@ -240,6 +241,140 @@ class AndersonMixer(Mixer):
         return overlap
 
 
+@dataclass
+class AdaptiveMixer(Mixer):
+    """Elk's ``mixadapt``: one ``beta`` per component, steered by the residual's sign.
+
+    ``src/mixadapt.f90``, transcribed. Every other mixer here answers the badly
+    conditioned directions of the SCF map by *modelling* them -- Anderson fits a
+    secant Jacobian to the residual history, Kerker divides out the ``1/q^2`` the
+    Hartree kernel puts in. This one models nothing and watches instead: for each
+    component ``j`` of the mixed vector it keeps its own step length, and
+
+        beta_j <- min(beta_j + beta_0, beta_max)     if r_j did not change sign
+        beta_j <- (beta_j + beta_0) / 2              if it did
+
+    with the step then taken as ``rho_j + beta_j r_j``. A component that keeps
+    being pushed the same way is one the iteration is crawling along, so its step
+    grows until it is moving; a component that overshoots and comes back is one
+    the step was too long for, so it is cut. **That makes it a stall detector by
+    construction rather than by a threshold**, which is why it is worth having
+    beside Anderson rather than instead of it: the directions it is for are the
+    ones where the residual is *small and persistent*, and a secant fit built from
+    small residuals has nothing to extrapolate from.
+
+    The magnetic directions of a noncollinear cell are exactly of that shape.
+    Turning every moment in the cell together costs no energy without spin-orbit
+    coupling, so the residual has no component along that rotation at all and the
+    manifold has to be traversed rather than descended; twisting them slowly costs
+    only the spin-wave energy ``D q^2``, which vanishes as the cell grows.
+    ``MAGNETISM-NEXT.md`` item F2 is the full account of which directions those
+    are and what else is on offer for them.
+
+    **The whole packed vector adapts, one step length per entry**, so ``becsum``
+    and ``ns`` get their own adaptation rather than the density's. That is worth
+    saying because it arrives for free and closes a real blind spot: ``becsum`` is
+    mixed at the plain ``beta`` by every other mixer here and appears in no
+    convergence measure at all (``OPEN.md`` Y2), and on a PAW magnet the moment
+    lives in the d-shell ``becsum``.
+
+    Three differences from the Fortran, all of them deliberate:
+
+    * **Elk mixes the potential and this mixes the density.** The rule is
+      pointwise and scale-free, so it transfers, but the two are not the same
+      iteration and no Elk iteration count carries over.
+    * **Elk's ``mu`` is not kept.** It is Elk's own record of the previous input,
+      and this driver hands the input in, which is the same array whenever nothing
+      touched the density between iterations and the right one when something did.
+    * **``d`` is not returned.** Elk's RMS of the residual is not what this code
+      measures self-consistency with; that is ``rho_ddot`` (:func:`scf_accuracy`).
+
+    ``beta`` is Elk's ``beta0`` and **is not a step length**: it is the increment,
+    the starting value and the floor the halving relaxes towards, all three, so
+    Elk's default of 0.05 is small on purpose and ``mixing_beta = 0.7`` would
+    saturate at ``beta_max`` in one iteration and leave plain linear mixing at 0.9
+    wearing this mixer's name. That is what the warning below is for, and it is
+    why the entry points default ``mixing_beta`` to ``None`` and let each mixer
+    supply its own.
+
+    Not compatible with a preconditioner, and it raises rather than ignoring one:
+    the step is pointwise in real space with its own factor per point, and a
+    G-space operator carrying a single scalar does not compose with that.
+    """
+
+    #: Elk's ``beta0``: the increment, the initial value and the floor at once.
+    beta: float = 0.05
+    #: Elk's ``betamax``, and Elk's own bound on it.
+    beta_max: float = 1.0
+    _betas: np.ndarray | None = field(default=None, repr=False)
+    #: Elk's ``f``: the previous residual, whose sign against this one is the rule.
+    _previous: np.ndarray | None = field(default=None, repr=False)
+
+    def __post_init__(self):
+        # ``readinput.f90:699-708``'s two checks, with Elk's own messages behind
+        # them. A negative increment would shrink the step every iteration and a
+        # ``beta_max`` above one would take a step past the output density.
+        if self.beta < 0.0:
+            raise ValueError(
+                f"beta = {self.beta} is negative; for mixing_mode = 'adaptive' it "
+                f"is Elk's beta0, an increment added to every component's step "
+                f"each iteration, and Elk requires it to be at least zero"
+            )
+        if not 0.0 <= self.beta_max <= 1.0:
+            raise ValueError(
+                f"beta_max = {self.beta_max} is outside [0, 1], which is Elk's "
+                f"own bound (readinput.f90:705): a step longer than the residual "
+                f"overshoots the output density it is aiming at"
+            )
+        if self.beta > 0.5 * self.beta_max:
+            warnings.warn(
+                f"mixing_beta = {self.beta:g} under mixing_mode = 'adaptive' is "
+                f"Elk's beta0, which is an increment and a floor rather than a "
+                f"step length, so this saturates at beta_max = "
+                f"{self.beta_max:g} within two iterations and leaves plain linear "
+                f"mixing under an adaptive name. Elk's default is 0.05, and "
+                f"leaving mixing_beta unset gives it",
+                RuntimeWarning, stacklevel=3,
+            )
+
+    def reset(self):
+        self._betas = None
+        self._previous = None
+
+    def mix(self, rho_in, rho_out):
+        if self.precondition is not None:
+            raise ValueError(
+                "mixing_mode = 'adaptive' cannot take a preconditioner: it holds "
+                "one step length per component of the packed vector and applies "
+                "it pointwise in real space, where a Kerker or local-TF operator "
+                "is one scalar acting in G-space. Choose one or the other"
+            )
+        shape = np.asarray(rho_out).shape
+        rho_in = np.asarray(rho_in, dtype=float).ravel()
+        rho_out = np.asarray(rho_out, dtype=float).ravel()
+        residual = rho_out - rho_in
+        if self._betas is None or self._betas.shape != residual.shape:
+            # ``iscl < 1``: Elk seeds every component at ``beta0`` with a zero
+            # previous residual, and a zero compares ``>= 0`` against anything, so
+            # the first mixing step already increments and runs at ``2 beta0``.
+            # Transcribed rather than smoothed -- it is why the scheme leaves the
+            # ground at all from a start as small as 0.05.
+            self._betas = np.full(residual.shape, float(self.beta))
+            self._previous = np.zeros_like(residual)
+        self._betas = np.where(
+            residual * self._previous >= 0.0,
+            np.minimum(self._betas + self.beta, self.beta_max),
+            0.5 * (self._betas + self.beta),
+        )
+        self._previous = residual
+        # ``beta nu + (1 - beta) mu`` and not the algebraically equal
+        # ``mu + beta (nu - mu)``: the two differ in the last bit, and writing
+        # the Fortran's form is what lets the test against it assert equality
+        # rather than a tolerance. A tolerance would pass on a transcription
+        # that had drifted, which is the whole thing that test is for.
+        return (self._betas * rho_out + (1.0 - self._betas) * rho_in).reshape(shape)
+
+
 #: Name -> mixer, as written in an input file's ``mixing_mode``.
 MIXERS = {
     "linear": LinearMixer,
@@ -254,6 +389,10 @@ MIXERS = {
     "local-tf": AndersonMixer,
     # QE's own default name, so an unedited pw.x input reaches a mixer here.
     "default": AndersonMixer,
+    # **Elk's, and deliberately not aliased to any QE name.** ``pw.x`` has no
+    # adaptive mode, so giving this one of QE's names would make a pw.x input
+    # mean something pw.x does not do.
+    "adaptive": AdaptiveMixer,
 }
 
 #: Mixing modes whose ``beta`` is an operator, so the driver has to build it.

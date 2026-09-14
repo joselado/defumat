@@ -427,7 +427,7 @@ def run_ultracell(
     david: int | None = None,
     max_iterations: int = 200,
     mixing_mode: str = "anderson",
-    mixing_beta: float = 0.7,
+    mixing_beta: float | None = None,
     mixing_ndim: int | None = None,
     kerker: bool = True,
     state_batch: int | None = 1,
@@ -687,7 +687,7 @@ def run_ultracell(
         # sloshing an ordinary SCF merely tolerates becomes the whole problem.
         # This is why Elk's own example runs at ``beta0 = 0.001``.
         mixer.precondition = box_kerker(
-            ultracell, cell, nelec, (nspin_mag,) + grid, beta=mixing_beta,
+            ultracell, cell, nelec, (nspin_mag,) + grid, beta=mixer.beta,
         )
     result = None
     history = []
@@ -798,7 +798,7 @@ def run_ultracell(
             f"That is slow when the field pinning the direction is weak: raise "
             f"max_iterations (currently {max_iterations}), or pin the direction "
             f"harder with a stronger magnetic_field. **Do not lower "
-            f"mixing_beta** (currently {mixing_beta:g}) -- it was measured to "
+            f"mixing_beta** (currently {mixer.beta:g}) -- it was measured to "
             f"make this worse, 0.3 failing in 300 iterations where 0.7 "
             f"converged in 263 on the same cell."
         )

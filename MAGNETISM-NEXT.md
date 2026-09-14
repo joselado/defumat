@@ -455,6 +455,246 @@ behind `scf_solver`, not a fix for this item.** The honest first measurement is 
 one: a gapped insulator where both routes must agree, timed, before anything is written for
 a metal.
 
+**Read F2 before picking this item up.** It puts the same question one level lower, at the
+conditioning of the map rather than at the mixer that damps it, and the metric turns out to
+be one of several candidate answers rather than the candidate. F2's Option 0 also carries
+this item's own first step, the angle between the Anderson coefficients under the two
+quadratic forms, because the dump it needs is the same dump.
+
+### F2. Converging a noncollinear SCF is four problems, and the code preconditions one of them [new, opened 2026-09-14]
+
+**Item F asks whether the mixer's metric is the reason a magnet takes twice the iterations
+`pw.x` takes, and it has stayed open because the question is put one level too low.** What
+decides how fast a damped fixed-point iteration converges is not the mixer, it is the
+spectrum of the map the mixer is damping: a density error `e` comes back as `(1 - beta) e +
+beta J e` with `J = chi_0 K`, so what matters is where the eigenvalues of `J` sit, and they
+go wrong at **both** ends for different reasons.
+
+**At one end `|J| >> 1`, and at the other `J -> 1`, and no single knob serves both.** Charge
+sloshing is the first: the Hartree kernel makes one eigenvalue about `-q_TF^2/q^2` at long
+wavelength, so the iteration diverges there unless `beta` is pulled down for the *whole*
+vector, which is why the fix is a preconditioner that compresses that end rather than a
+smaller step. The three magnetic directions below are the second: `J` approaches one from
+below, `(1 - beta) + beta J` approaches one whatever `beta` is, and the residual `(J - 1) e`
+vanishes along the direction, so a mixer that sees only the residual cannot see the error at
+all. That is one sentence for two things this project has already measured separately: why
+Kerker is structurally irrelevant to the magnetic end, and why `OPEN.md` Part VI item 3 found
+the mixer stuck rather than unstable and found a *large* `mixing_beta` to be the way across.
+Kerker, `mixing_beta`, Anderson's history depth and the Gram matrix's metric are four answers
+aimed at different parts of that spectrum, and choosing between them without first saying
+which end a given cell is slow at is what has made every previous attempt here a sweep over
+knobs.
+
+**In a noncollinear cell there are four such directions, they have four different physical
+origins, and only the first of them has anything acting on it.** This is the reframing the
+rest of the item rests on, and each line is a claim about the physics that can be checked
+independently of any code:
+
+- **Long-wavelength charge.** The Hartree kernel goes as `4 pi e2 / q^2`, so a charge error
+  of wavelength `L` is amplified by roughly `q_TF^2 / q^2`, which is charge sloshing.
+  Kerker (`approx_screening`) and `local-TF` (`approx_screening2`) divide it out, both are
+  here, and `PERFORMANCE.md` has what each is worth on the aluminium slab.
+- **The longitudinal magnetization, meaning the *length* of `m(r)`.** Here the kernel is the
+  exchange-correlation one, which is local rather than `1/q^2`, so there is no long
+  wavelength divergence at all and Kerker has nothing to say. What there is instead is the
+  Stoner enhancement: the interacting susceptibility is `chi_0 / (1 - I chi_0)`, so a cell
+  sitting near `I N(E_F) = 1` amplifies a *uniform* change in the moment by a factor that
+  diverges at the transition, at every wavelength equally. This is the direction every
+  itinerant magnet in the benchmark set is slow in, and there is **no preconditioner** on it:
+  `beta * head[c]` in both routines is a step length, not an approximate inverse Jacobian.
+  Anderson's secant fit does span this direction, which is the calibration item F already
+  gives, so the claim is the narrow one, that nothing *conditions* it before the fit sees it.
+- **The rigid rotation of every moment together, at `Q = 0`, without spin-orbit coupling.**
+  A Goldstone mode of the broken spin-rotation symmetry: the restoring force is exactly
+  zero, the fixed point is a two-parameter family rather than a point, and the residual has
+  no component along it. `OPEN.md` Part VI item 3 measures this on a four-cell hydrogen
+  ultracell and is the reference; the one-line summary is that the mixer is not unstable
+  there, it is stuck, and the manifold has to be **traversed**, which is why a *large*
+  `mixing_beta` is the right reflex and a small one is the wrong one.
+- **The transverse channel at finite `q`, meaning a slow twist of the direction of `m(r)`.**
+  This is the one nothing in this project has written down, and it is the one the hard cells
+  live in. Rotating the moments by an angle that varies with wavevector `q` costs a
+  spin-wave energy `D q^2` per moment, so the restoring force vanishes as `q -> 0` and the
+  amplification goes as `1 / (D q^2 + K)`, with `K` the anisotropy gap that spin-orbit
+  coupling opens. Three consequences, and they are what make this worth separating from the
+  rotation above: a **large** cell is worse than a small one, because `q_min` goes as
+  `1/L` and the softest available twist gets softer; spin-orbit coupling helps but only by
+  `K`, which is milli-electronvolt scale, so the direction becomes stiff compared with
+  exactly zero and not compared with the charge; and where `D` is **negative**, which is
+  every cell whose ferromagnet is unstable to a spiral, the iteration is not slow in that
+  direction but genuinely divergent, and damping it is the wrong thing to do because the run
+  is supposed to move there.
+
+**The fifth entry is not a direction, it is a blind spot, and it is the one that applies to
+the run this came from.** `becsum` is mixed at the plain `beta` and appears in no
+convergence measure at all, since both halves of `accuracy` are of the smooth density and
+what reaches them is only what `addusdens` already put on the grid (`OPEN.md` Y2). On a PAW
+magnet the moment lives in the d-shell `becsum`, so a stall with a flat magnetic half and an
+energy still swinging is exactly the shape that half would make, and there is no number in
+the log that separates it from convergence.
+
+**What the code does about the four, in one line each**, because the gap is the argument for
+everything below: the charge is preconditioned two ways; the longitudinal magnetization
+takes a plain scalar, and it is the *same* scalar the charge takes, which is `pw.x`'s own
+rule (one `alphamix` for every component of `mix_type`) and is what VASP and Elk both give
+the magnetic channel its own control of; the rigid rotation has a warning naming the
+mechanism and nothing
+acting on it; and the transverse channel has neither. The magnetization is deliberately not
+Kerker-screened, and that decision is right as far as it goes (stage 3a's reason: Kerker
+would damp the long wavelengths a magnetic run has to move in), but "not Kerker" was allowed
+to stand in for "nothing", which is a different statement.
+
+**The internal tie worth keeping, and it is narrower than it first looks.** The quantity that
+sets the conditioning of the transverse channel is the transverse spin susceptibility, and
+this code computes it for a **collinear ferromagnet**: P63's magnon response is `chi_perp(q)`
+itself, and item D of this file is the reminder that it refuses a noncollinear ground state,
+which is the regime this item is about. The stiffness `D` is the small-`q` curvature of
+`E(q)`, and what P86 has is a single pair of wavevectors rather than a curvature, at
+`q = 1/4` of the zone where the quadratic form is not expected to hold, and the two codes
+disagree about even that: defumat gives `E(1/4) - E(0) = -20.712` meV against Elk's
+`-136.294`, a factor of 6.581 that P86 records as unresolved. So the tie is a direction to
+pull rather than a number to use: a proper small-`q` scan on a cell with a stable
+ferromagnet would give `D`, and `D` is what says in advance which cells are slow in the
+transverse channel.
+
+#### Option 0, and every other option's decisive number depends on it
+
+**Two runs and one dump, and it is hours rather than a phase.** Nothing below can be chosen
+on argument, because the four directions call for four different operators and no cell here
+has ever been told apart on which one it is slow in.
+
+- **The nonmagnetic twin of `tests/data/qe/fe-noncolin-pbe-stress.in`.** That cell takes 43
+  iterations where `pw.x` takes 19, and item F already records that the 25-against-12 on
+  `fe-mag-1k` turned out to be mostly *not* magnetic once `fe-unstable-nonmagnetic.in` was
+  run at 21. The same deconfounder for the noncollinear cell does not exist, so the 43 is
+  attributable to nothing yet. `benchmarks/` already carries two such twins
+  (`fe-unstable-nonmagnetic.in`, `ni-u-nonmagnetic.in`), so this is a committed input and a
+  run, not a design.
+- **One noncollinear run's residual history, split five ways per iteration.** Charge,
+  `dm` parallel to `m_in(r)` pointwise, `dm` perpendicular to it, the rigid-rotation part on
+  its own, and the magnetic part of `becsum`. The first four say which of the four directions
+  is still moving; the fifth is the blind spot above, and on a PAW magnet it is the only one
+  that can be the answer with nothing in the log to show it. The whole decomposition is
+  pointwise against the input magnetization and costs one pass over the grid.
+
+  **The rotation bin is the one that has to be defined carefully, and the obvious definition
+  is a null that cannot be told from a pass.** Taking it as the `Q = 0` transverse component,
+  which is how `OPEN.md` Part VI item 3 writes it, is right for a ferromagnet and is
+  identically zero for every compensated texture: an antiferromagnet, a spiral and the NiBr2
+  helix all have `m_{Q = 0} = 0`, and a rigid rotation leaves it zero, so the bin reads zero
+  whether or not the mode is live. The definition that works for any texture is the projection
+  of the residual on the three **generators** of the rotation,
+
+      c_a = ∫ dm(r) · (e_a × m_in(r)) dr / ∫ |e_a × m_in(r)|^2 dr,   a = x, y, z,
+
+  which reduces to the transverse `Q = 0` component for a ferromagnet and costs the same one
+  pass. **That is also a new fact about the projection option below**, which this item
+  otherwise defers to `OPEN.md`: the mean-moment form written there is ferromagnet-only, and
+  a helix needs the generator form.
+- **The trip test for the rotation bin, because the obvious one does not fire either.**
+  Rotating the input of a spin-rotation-invariant functional rotates its output with it,
+  `F(R rho) = R F(rho)`, so the residual of a rotated state is the rotated residual and is
+  *not* concentrated in the rotation bin. Two tests that do fire: the decomposition of
+  `R rho - rho` at a small angle, which must lie entirely in the generator bin and nowhere
+  else, and a rotated **converged** state fed back as input, whose residual must be zero to
+  the level the run converged at. A collinear run of the same cell must give exactly zero in
+  that bin, which is the other half of the check.
+- **Item F's own first step, in the same dump.** Recompute the Anderson coefficients under
+  the Euclidean form and under `rho_ddot`, and report the angle between the two coefficient
+  vectors. A small angle closes F as measured rather than fixed, and it is free once the
+  history is on disk.
+
+#### The options
+
+Each is written with what it buys, what it departs from, and the cell and number that would
+decide it, because a departure from `pw.x` needs a number rather than an argument.
+
+- **A separate `mixing_beta` for the magnetization.** VASP's `AMIX_MAG`/`BMIX_MAG`, which
+  exists because one scalar for charge and moment is known not to serve both. Cheapest thing
+  on the list: one input variable, one extra argument to the two preconditioners, no new
+  physics. It addresses the longitudinal direction by brute force and the transverse one by
+  accident. Decided by iterations on `fe-noncolin-pbe-stress` at fixed charge `beta`, with
+  the ceiling set by Option 0: if the dump says the residual is charge-dominated, this buys
+  nothing and should not land.
+- **Elk's `mixadapt`, transcribed as a `MIXERS` entry.** Per component of the mixed vector,
+  `beta_j` grows by `beta_0` while the residual keeps its sign and is halved toward `beta_0`
+  when it flips, so the step lengthens on its own along a direction that is not turning
+  around, which is what a flat manifold looks like from inside. It is therefore the cheapest
+  thing that addresses the rigid rotation and the soft twist together, and it is a stall
+  detector by construction rather than by a threshold. Two things to state rather than
+  discover: Elk mixes the **potential** and this would mix the density, and `mixadapt` is
+  pointwise in real space so it does not compose with Kerker as written, which makes it an
+  alternative to the preconditioned mixer and not a layer on it. Before writing a hybrid of
+  our own, fetch Elk's `mixtype = 4`, the parameter-free "robust adaptive mixer" described
+  as converging almost anything: it is **not** in the vendored 11.0.2, and transcribing a
+  published scheme is this project's method where inventing one is not.
+- **Projecting the rigid rotation out of the magnetic residual.** Fully specified already in
+  `OPEN.md` Part VI item 3, including the `lspinorb` gate (the mode is gapped there and the
+  projection would be actively wrong) and the decisive run (0.002 Ry at `mixing_beta = 0.7`,
+  263 iterations as it stands). Not respecified here. Its scope is worth repeating because it
+  excludes the cell that prompted this: a run with spin-orbit coupling does not have this
+  direction, so this is not the fix for the NiBr2 helix.
+- **A per-iteration controller hook, with the hybrid policy as its first client.** The
+  deliverable is the hook, not the policy: a callback that receives the `history` entry,
+  which already carries the charge and magnetic halves of `accuracy`, the site moments and
+  the Davidson step counts, and may change `mixer.beta`, clear the Anderson history, or swap
+  the mixer. A deterministic policy is then one function against that interface, for instance
+  raising `beta` after `n` iterations in which the magnetic half has not fallen and the
+  `Q = 0` transverse component has kept its sign, and lowering it and resetting the history
+  on a blow-up. Two constraints that are not optional: every decision the controller takes is
+  written into `history`, so a run stays reproducible and a claim about what helped is
+  checkable after the fact; and the controller's own state goes into the checkpoint beside
+  the mixer history, or a resume silently restarts the policy.
+- **Herbst and Levitt's adaptive damping, as the principled version of the same hook.** A
+  backtracking line search on the damping, with a quadratic model of the energy along the
+  search direction whose coefficients are built from `rho(V_n)` and `rho(V_n + alpha dV_n)`,
+  quantities the next iteration needs in any case, so an accepted step costs no extra
+  diagonalization and only a rejected one does. The step is accepted when either the energy
+  or the preconditioned residual falls, which is what keeps it from reverting the useful
+  steps Anderson takes late in a run, and their hard test cases are Heusler compounds and
+  transition metals, which is the class this item is about. Two departures to weigh before
+  promising it: the analysis and the algorithm are for **potential** mixing where this code
+  and `pw.x` mix the density, and the functional whose decrease is guaranteed is the
+  grand-canonical free energy, so the entropy term is part of it on every smeared metal here.
+  Neither is fatal and both mean this is a phase rather than an afternoon.
+- **The agent in the loop, and where it actually belongs.** Inside the SCF an agent is slow,
+  non-reproducible and untestable by this project's own standard, and the moment its decisions
+  are written down well enough to be tested it *is* the deterministic controller above. Between
+  runs is a different matter and is available today with no code: `_MIXER_DERIVED` is
+  `{"beta", "history", "condition_limit", "precondition"}`, so the checkpoint deliberately
+  does not store the mixer's settings and `get_mixer` rebuilds them, meaning a
+  `mixing_from` resume can change `mixing_beta`, `mixing_mode` and `mixing_ndim` while
+  keeping the Anderson history the run had earned. The first deliverable on this option is
+  therefore a protocol rather than a feature: run `n` iterations with `checkpoint_dir`, read
+  `history`, resume with different settings, and keep the trace. It is also the honest way to
+  *discover* the policy the hook should implement, since a session driving that loop by hand on
+  a hard cell is an experiment whose log is exactly the training data a rule would be written
+  from.
+- **The Stoner preconditioner for the magnetic channel, generalized to a spinor.** Barat,
+  Levitt and Torrent (arXiv 2606.26693, June 2026) build a hybrid `P = I - chi_0^LDOS K_H -
+  chi_0^diag K_xc`, where the charge keeps an LDOS-based long-range preconditioner and the
+  magnetic channel gets a local susceptibility made of an eigenvalue-variation term
+  `sum_i f'(e_i - e_F) |rho_ii><rho_ii|` and a Fermi-level term, with the expensive orbital
+  variation dropped. That is the longitudinal direction treated properly, and their result is
+  the elimination of convergence plateaus near a magnetic transition. Two facts to carry: the
+  paper is **collinear only**, so the four-component generalization is ours to write and is the
+  bulk of the work; and because it drops the orbital variation it cannot see a rotation, which
+  is entirely orbital variation, so it does not replace the projection or the controller. Size
+  it as a phase, with `n_active x nr` orbital densities in the smearing window on the grid, and
+  measure it on iron near its transition where the paper has plateaus to compare against.
+
+#### What binds any of it
+
+The five deliverables of a finished phase apply unchanged, and three of them are worth naming
+here because this is a convergence feature and convergence features are where they go stale.
+The number is **iterations to a fixed `conv_thr` on a named cell against `pw.x` on the same
+input**, never a wall clock and never a ratio against a previous version of this code. Every
+switch proposed above, the `lspinorb` gate included, is tested by feeding it a case that must
+trip it rather than by reading a clean result as a pass. And any of these that changes what a
+converged run *is*, rather than how it got there, has to show the same total energy and the
+same site moments as the unmodified route on at least one cell, to the level the two agree at
+now.
+
 ### G. The noncollinear derivative memory wall. ✅ The suspicion in this item was right, and it is fixed [22]
 
 **Closed as diagnosed, 2026-09-13.** This item's own caveat -- "P73 replaced the *stored*

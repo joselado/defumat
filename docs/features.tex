@@ -581,8 +581,8 @@ not a coarser one.
 
 \textbf{Convergence.} \code{mixing\_mode} selects \code{anderson} (default),
 \code{linear}, \code{broyden}, Kerker/Thomas--Fermi preconditioning (\code{TF}),
-or \code{local-TF}; \code{scf\_solver} offers a Newton--Krylov alternative that
-is slower but reaches solutions the mixer cannot hold.
+\code{local-TF}, or \code{adaptive}; \code{scf\_solver} offers a Newton--Krylov
+alternative that is slower but reaches solutions the mixer cannot hold.
 
 \code{TF} screens the residual with one Thomas--Fermi length for the whole cell.
 \code{local-TF} makes that length a function of $\rho(\mathbf r)$, which is what
@@ -598,7 +598,56 @@ of
 with $(\alpha f)$ multiplied in \emph{real} space, so the operator is not
 diagonal in $\mathbf G$ and is inverted iteratively at each step. On a cobalt
 film it converges at \code{mixing\_beta = 0.7} where plain Anderson at the same
-$\beta$ diverges and Kerker at $0.3$ is still far out after 250 iterations. \code{max\_iterations}
+$\beta$ diverges and Kerker at $0.3$ is still far out after 250 iterations.
+
+\code{adaptive} is Elk's \code{mixadapt} and answers the opposite failure. Every
+other mode here damps an iteration that is \emph{overshooting}; this one lengthens
+one that is crawling. It carries a separate step length for each component $j$ of
+the mixed vector and moves it by the sign of that component's residual,
+\begin{equation*}
+  \beta_j \leftarrow \min(\beta_j + \beta_0,\ \beta_{\max})
+  \quad\text{if } r_j \text{ kept its sign,}
+  \qquad
+  \beta_j \leftarrow \tfrac{1}{2}(\beta_j + \beta_0) \quad\text{if it changed,}
+\end{equation*}
+and then steps as $\beta_j\,\nu_j + (1-\beta_j)\,\mu_j$. A component pushed the
+same way for many iterations is one the SCF is crawling along, so its step grows
+until it moves; one that overshoots and comes back has its step cut. That makes it
+a stall detector with no threshold in it, which is why it is worth reaching for on
+a \textbf{magnet}: turning every moment in a cell together costs no energy without
+spin--orbit coupling, so the residual has no component along that rotation and the
+flat direction has to be crossed rather than descended, and twisting the moments
+slowly costs only the spin-wave energy $D q^2$, which vanishes as the cell grows.
+The whole packed vector adapts independently, so \code{becsum} and the Hubbard
+\code{ns} get their own step lengths rather than the density's.
+
+\textbf{\code{mixing\_beta} does not mean the same thing under \code{adaptive}},
+and this is the one thing to know before using it. It is Elk's \code{beta0}: the
+increment, the starting value and the floor the halving relaxes towards, all
+three, not a step length. Elk's default is $0.05$ and it is small on purpose;
+$0.7$ saturates at $\beta_{\max}$ within two iterations and leaves plain linear
+mixing at $0.85$ under an adaptive name. Leaving \code{mixing\_beta} unset is
+therefore the right thing --- each mode then supplies its own default, $0.7$ for
+the QE family and $0.05$ here --- and passing a step length warns rather than
+running quietly. On the two-atom silicon cell of \code{benchmarks/si-1k.in} at
+\code{conv\_thr = 1e-10} it takes 17 iterations against Anderson's 7, to the same
+total energy to ten digits: it is a \emph{robustness} mixer and is expected to
+lose on a cell that was never hard.
+
+\begin{refuses}
+\code{mixing\_mode = 'adaptive'} refuses a \textbf{preconditioner} rather than
+ignoring one. Its step is pointwise in real space with its own factor per point,
+and Kerker or \code{local-TF} is a single scalar acting in $\mathbf G$-space; the
+two do not compose, so a run asking for both raises. Choose the one that matches
+the direction the cell is slow in: Kerker for long-wavelength charge, this for a
+residual that is small and will not turn around.
+
+It is registered under its own name and is \textbf{not} aliased to any
+\code{pw.x} mode. QE has no adaptive mixer, so a \code{pw.x} input reaching one
+of QE's names here still gets what QE would do.
+\end{refuses}
+
+\code{max\_iterations}
 defaults to 100 --- \textbf{a hard SCF may need more}, and hitting the cap is
 reported as not converged rather than as an answer: \code{run\_scf} issues a
 \code{RuntimeWarning} naming the accuracy it reached, and \code{Calculator}

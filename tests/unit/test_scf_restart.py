@@ -70,8 +70,13 @@ def qe_silicon():
 
 
 def _exercised(mode, steps=4, size=24, seed=20260911):
-    """A mixer with a history in it, from a few mixes of random densities."""
-    mixer = get_mixer(mode, beta=0.7)
+    """A mixer with a history in it, from a few mixes of random densities.
+
+    ``beta`` is left unset so every mode gets its own default: 0.7 means a step
+    length to the QE-family mixers and an *increment* to ``adaptive``, where
+    forcing 0.7 both warns and saturates the scheme it is meant to exercise.
+    """
+    mixer = get_mixer(mode)
     rng = np.random.default_rng(seed)
     density = rng.normal(size=size)
     for _ in range(steps):
@@ -79,7 +84,7 @@ def _exercised(mode, steps=4, size=24, seed=20260911):
     return mixer
 
 
-@pytest.mark.parametrize("mode", ["linear", "anderson"])
+@pytest.mark.parametrize("mode", ["linear", "anderson", "adaptive"])
 def test_a_new_mixer_attribute_is_stored_or_declared_derived(mode):
     """The coverage check, the same one ``BFGS`` has.
 
@@ -87,11 +92,11 @@ def test_a_new_mixer_attribute_is_stored_or_declared_derived(mode):
     part of its history, which is worse than restarting with none: it would be
     wrong rather than slow, and nothing downstream would say so.
     """
-    assert unhandled_mixer_fields(get_mixer(mode, beta=0.7)) == set()
+    assert unhandled_mixer_fields(get_mixer(mode)) == set()
     assert unhandled_mixer_fields(_exercised(mode)) == set()
 
 
-@pytest.mark.parametrize("mode", ["linear", "anderson"])
+@pytest.mark.parametrize("mode", ["linear", "anderson", "adaptive"])
 def test_the_mixer_history_crosses_the_file_exactly(mode, tmp_path):
     """This is the claim a restart actually makes, so it is asserted exactly.
 
@@ -101,7 +106,10 @@ def test_the_mixer_history_crosses_the_file_exactly(mode, tmp_path):
     """
     original = _exercised(mode)
     save_mixer(original, tmp_path / SCF_MIXER)
-    restored = load_mixer(get_mixer(mode, beta=0.7), tmp_path / SCF_MIXER)
+    # Rebuilt the way ``run_scf`` rebuilds it: the *settings* come from the
+    # input and only the evolved state comes from the file, which is why
+    # ``_MIXER_DERIVED`` exists and why a resume may change ``mixing_beta``.
+    restored = load_mixer(get_mixer(mode), tmp_path / SCF_MIXER)
 
     assert set(vars(restored)) == set(vars(original))
     for name, before in vars(original).items():
@@ -114,6 +122,30 @@ def test_the_mixer_history_crosses_the_file_exactly(mode, tmp_path):
             np.testing.assert_array_equal(before, np.asarray(after))
         else:
             assert after == before
+
+
+def test_the_adaptive_mixers_evolved_steps_resume_where_they_stopped(tmp_path):
+    """The state that crosses the file is per component, not a history list.
+
+    ``AdaptiveMixer`` is the first mixer here whose state is neither empty nor a
+    list of past densities: it is one step length and one previous residual per
+    component, and both have to arrive for the next step to be the step the
+    uninterrupted run would have taken. Asserting the *next mix* rather than the
+    arrays is what says that, because it is the thing the run depends on.
+    """
+    original = _exercised("adaptive")
+    save_mixer(original, tmp_path / SCF_MIXER)
+    restored = load_mixer(get_mixer("adaptive"), tmp_path / SCF_MIXER)
+
+    rng = np.random.default_rng(4)
+    rho_in = rng.normal(size=24)
+    rho_out = rho_in + 0.05 * rng.normal(size=24)
+    np.testing.assert_array_equal(
+        np.asarray(original.mix(rho_in, rho_out)),
+        np.asarray(restored.mix(rho_in, rho_out)),
+    )
+    # And it is not trivially equal because the state was empty either way.
+    assert np.ptp(np.asarray(restored._betas)) > 0.0
 
 
 def test_an_empty_history_is_not_confused_with_no_history(tmp_path):

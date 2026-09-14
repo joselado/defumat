@@ -427,7 +427,7 @@ def relax_spiral_q(
     calculation: Calculation | None = None,
     diagonalization: str | None = None,
     mixing_mode: str = "anderson",
-    mixing_beta: float = 0.7,
+    mixing_beta: float | None = None,
     k_batch: int | None | str = "default",
     warm_start: bool = True,
     verbose: bool = False,

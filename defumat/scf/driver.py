@@ -4379,7 +4379,7 @@ def _solve_residual(
             )
             warm_mixer.precondition = build(
                 calculation.basis.dense, calculation.system.cell, residual.shapes[0],
-                beta=mixing_beta,
+                beta=warm_mixer.beta,
                 **({} if warmup_mixing.lower() in DENSITY_DEPENDENT
                    else {"nelec": calculation.nelec}),
             )
@@ -4403,7 +4403,7 @@ def run_scf(
     conv_thr: float = 1.0e-6,
     max_iterations: int = 100,
     mixing_mode: str = "anderson",
-    mixing_beta: float = 0.7,
+    mixing_beta: float | None = None,
     mixing_ndim: int | None = None,
     calculation: Calculation | None = None,
     diagonalization: str | None = None,
@@ -4765,7 +4765,12 @@ def run_scf(
         )
         mixer.precondition = build(
             calculation.basis.dense, calculation.system.cell, tuple(np.shape(rho)),
-            beta=mixing_beta,
+            # ``mixer.beta`` rather than ``mixing_beta``: the latter is ``None``
+            # when the caller left it unset, and which number that resolves to is
+            # the *mixer's* to decide -- 0.7 for the QE family, 0.05 for Elk's
+            # adaptive scheme, where the parameter is an increment rather than a
+            # step length.
+            beta=mixer.beta,
             **({} if mixing_mode.lower() in DENSITY_DEPENDENT
                else {"nelec": calculation.nelec}),
         )
@@ -5473,8 +5478,12 @@ def run_scf(
                 f"{'unmeasured' if accuracy is None else format(accuracy, '.3e')} Ry "
                 f"against conv_thr = "
                 f"{conv_thr:.3e}. Every quantity on this result is computed from an "
-                f"unconverged density. Raise electron_maxstep, lower mixing_beta, "
-                f"or start from a better density (run_scf(starting_from=...)); "
+                f"unconverged density. Raise electron_maxstep, change the mixing "
+                f"(a smaller mixing_beta for a run that is oscillating; "
+                f"mixing_mode = 'adaptive' for one that is crawling, where "
+                f"mixing_beta means an increment and a smaller one is the wrong "
+                f"reflex), or start from a better density "
+                f"(run_scf(starting_from=...)); "
                 f"SCFResult.converged and .accuracy are what say which this is",
                 RuntimeWarning,
                 stacklevel=2,

@@ -416,7 +416,12 @@ def load_optimizer(optimizer, path):
 #: the driver because building it needs the G-vectors the mixer does not have.
 #: Everything else on a mixer is evolving state and is written.
 _MIXER_DERIVED = frozenset({
-    "beta", "history", "condition_limit", "precondition",
+    # ``beta_max`` is here for the same reason ``beta`` is: it is a setting
+    # ``get_mixer`` rebuilds from the input, and storing it would mean a resume
+    # silently ignored a caller who changed it. What the adaptive mixer *does*
+    # carry across a resume is its evolved per-component state (``_betas``,
+    # ``_previous``), which is stored like any other array.
+    "beta", "beta_max", "history", "condition_limit", "precondition",
 })
 
 

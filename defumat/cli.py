@@ -251,7 +251,13 @@ def _spiral(args) -> int:
     scan = run_spiral_scan(
         system, pseudos, wavevectors,
         conv_thr=args.conv_thr or float(pwin.get("electrons", "conv_thr") or 1e-8),
-        mixing_beta=float(pwin.get("electrons", "mixing_beta") or 0.7),
+        # ``None`` when the input does not set it, so each mixing mode supplies
+        # its own default rather than every mode inheriting QE's 0.7 -- which
+        # under ``mixing_mode = 'adaptive'`` is an increment, not a step length.
+        mixing_beta=(
+            None if pwin.get("electrons", "mixing_beta") is None
+            else float(pwin.get("electrons", "mixing_beta"))
+        ),
         # ``mixing_mode`` means here what it means in a ``pw.x``
         # ``&electrons`` namelist: an input carrying ``mixing_mode = 'TF'``
         # gets Kerker preconditioning, and ``'local-TF'`` the density-dependent one

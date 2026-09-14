@@ -16,10 +16,14 @@ defect worth removing and is removed here, and whether it is *the* cause of that
 ``NaN`` is a separate claim that these tests do not make.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 
-from defumat.scf.mixing import AndersonMixer, LinearMixer
+from defumat.scf.mixing import (
+    AdaptiveMixer, AndersonMixer, LinearMixer, PRECONDITIONED, get_mixer,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -162,3 +166,137 @@ def test_every_relaxation_driver_names_mixing_ndim():
 
     for driver in (run_relax, run_vc_relax, relax_spiral_q):
         assert "mixing_ndim" in inspect.signature(driver).parameters
+
+
+# ---------------------------------------------------------------------------
+# Elk's ``mixadapt``
+# ---------------------------------------------------------------------------
+
+
+def _mixadapt(iscl, beta0, betamax, nu, mu, beta, f):
+    """``src/mixadapt.f90``, transcribed literally, as the thing to agree with.
+
+    Written from the Fortran and not from :class:`AdaptiveMixer`, because a
+    reference derived from the code under test only ever checks that the code
+    agrees with itself. The loop below is the Fortran's, index for index, with
+    its ``iscl < 1`` initialisation arm kept: ``mu = nu``, ``f = 0``,
+    ``beta = beta0``, and no mixing at all on that call.
+    """
+    nu, mu, beta, f = (np.array(x, dtype=float) for x in (nu, mu, beta, f))
+    if iscl < 1:
+        mu[:] = nu
+        f[:] = 0.0
+        beta[:] = beta0
+        return nu, mu, beta, f, 1.0
+    d = 0.0
+    for i in range(len(nu)):
+        t1 = nu[i] - mu[i]
+        d += t1**2
+        if t1 * f[i] >= 0.0:
+            beta[i] = beta[i] + beta0
+            if beta[i] > betamax:
+                beta[i] = betamax
+        else:
+            beta[i] = 0.5 * (beta[i] + beta0)
+        f[i] = t1
+        nu[i] = beta[i] * nu[i] + (1.0 - beta[i]) * mu[i]
+        mu[i] = nu[i]
+    return nu, mu, beta, f, np.sqrt(d / len(nu))
+
+
+def test_the_adaptive_mixer_is_elks_mixadapt_to_the_last_bit():
+    """Both driven over the same outputs, with all three branches exercised.
+
+    Component 0 keeps its residual's sign throughout, so its step climbs by
+    ``beta0`` every iteration and then sits at ``betamax``; component 1 changes
+    sign at every step, so its step is halved back towards ``beta0`` each time;
+    component 2 is the ``f = 0`` case of the very first call, where ``t1 * 0``
+    compares ``>= 0`` and Elk increments rather than halves.
+    """
+    beta0, betamax, steps = 0.05, 0.4, 24
+    rng = np.random.default_rng(20260914)
+    mixer = AdaptiveMixer(beta=beta0, beta_max=betamax)
+
+    # Elk's initialisation call, which mixes nothing.
+    density = np.array([0.0, 0.0, 0.0])
+    nu, mu, beta, f, _ = _mixadapt(0, beta0, betamax, density, density, density, density)
+    ours = density.copy()
+
+    for step in range(1, steps + 1):
+        # The same output density for both, built so the signs are as described.
+        magnitude = 0.9**step * (1.0 + 0.1 * rng.random(3))
+        out = ours + magnitude * np.array([1.0, (-1.0) ** step, 1.0])
+        # Elk is handed its own ``mu``; ours is handed the input it produced.
+        nu, mu, beta, f, _ = _mixadapt(step, beta0, betamax, out, mu, beta, f)
+        ours = np.asarray(mixer.mix(ours, out))
+        assert ours.tolist() == nu.tolist(), f"diverged at step {step}"
+        assert mixer._betas.tolist() == beta.tolist(), f"beta diverged at step {step}"
+
+    # The branches really were taken, so this is not three copies of one case.
+    assert mixer._betas[0] == pytest.approx(betamax)
+    assert beta0 < mixer._betas[1] < betamax
+
+
+def test_the_adaptive_step_grows_while_the_residual_keeps_its_sign():
+    """The whole mechanism, on the flat direction it exists for.
+
+    A residual that never turns around is what a badly conditioned direction
+    looks like from inside the mixer: the density crawls the same way for ever
+    and a fixed ``beta`` crawls with it. Elk's rule lets the step climb out.
+    """
+    mixer = AdaptiveMixer(beta=0.05, beta_max=1.0)
+    density = np.zeros(2)
+    lengths = []
+    for _ in range(30):
+        density = np.asarray(mixer.mix(density, density + np.ones(2)))
+        lengths.append(float(mixer._betas[0]))
+    assert lengths == sorted(lengths)
+    assert lengths[0] == pytest.approx(0.1)     # beta0 + beta0, the f = 0 call
+    assert lengths[-1] == pytest.approx(1.0)    # capped at beta_max, not past it
+
+
+def test_the_adaptive_mixer_refuses_a_preconditioner():
+    """And the guard is watched firing, not read.
+
+    The driver installs one only for a mode in ``PRECONDITIONED`` and this is
+    not in it, so the refusal is for the caller who sets the attribute by hand.
+    """
+    mixer = AdaptiveMixer()
+    mixer.precondition = lambda residual, density=None: residual
+    with pytest.raises(ValueError, match="cannot take a preconditioner"):
+        mixer.mix(np.zeros(4), np.ones(4))
+    assert "adaptive" not in PRECONDITIONED
+
+
+@pytest.mark.parametrize("beta,beta_max", [(-0.1, 1.0), (0.05, 1.5), (0.05, -0.2)])
+def test_the_adaptive_mixer_keeps_elks_own_bounds(beta, beta_max):
+    with pytest.raises(ValueError):
+        AdaptiveMixer(beta=beta, beta_max=beta_max)
+
+
+def test_a_step_length_passed_as_the_increment_says_so():
+    """``mixing_beta = 0.7`` is QE's step length and Elk's increment is not it.
+
+    At 0.7 the scheme saturates at ``beta_max`` in one iteration and is linear
+    mixing at 0.85 wearing an adaptive name, which is the failure that would
+    otherwise be read as "the Elk mixer does not help here".
+    """
+    with pytest.warns(RuntimeWarning, match="increment and a floor"):
+        AdaptiveMixer(beta=0.7)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        AdaptiveMixer()                      # Elk's own 0.05, silent
+        AdaptiveMixer(beta=0.05)
+
+
+def test_an_unset_mixing_beta_gives_each_mode_its_own_default():
+    """Which is the whole reason the entry points default it to ``None``.
+
+    ``get_mixer`` drops a ``None``, so a caller who never mentioned
+    ``mixing_beta`` gets QE's 0.7 where that is a step length and Elk's 0.05
+    where it is an increment, rather than 0.7 in both meanings.
+    """
+    assert get_mixer("anderson").beta == pytest.approx(0.7)
+    assert get_mixer("linear").beta == pytest.approx(0.7)
+    assert get_mixer("adaptive").beta == pytest.approx(0.05)
+    assert get_mixer("adaptive").beta_max == pytest.approx(1.0)

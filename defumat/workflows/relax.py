@@ -242,7 +242,7 @@ def run_relax(
     calculation: Calculation | None = None,
     diagonalization: str | None = None,
     mixing_mode: str = "anderson",
-    mixing_beta: float = 0.7,
+    mixing_beta: float | None = None,
     k_batch: int | None | str = "default",
     density_extrapolation: str = "atomic",
     checkpoint_dir=None,
