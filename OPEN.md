@@ -2381,25 +2381,31 @@ whole two-parameter family rather than a point. An Anderson mixer extrapolating 
 flat direction is then unbounded.
 
 **Measured**, on a four-cell hydrogen ultracell (simple cubic, `a = 5.5` bohr, one electron
-per cell, moment 0.62 mu_B/2) under a field that turns by 90 degrees per cell. The grid is
-two field strengths crossed with four `mixing_beta`, all at one iteration budget -- see the
-table in `PLAN.md` P88 stage 3b. The shape of it:
+per cell, moment 0.62 mu_B/2) under a field that turns by 90 degrees per cell, `nbnd = 16`,
+every run given a 300-iteration budget:
 
-* at **0.01 Ry** the field pins the direction well and `mixing_beta` barely matters:
-  0.7 converges in 48 iterations, 0.5 in 36, 0.3 in 42, 0.2 in 115, all to the same state.
-  The *best* value is in the middle;
-* at **0.002 Ry** the weaker field pins it hardly at all, and `beta = 0.7` takes **263
-  iterations** -- passing on the way through per-cell moments of **1.72 to 2.20 mu_B/2 on
-  an atom that holds one electron**, which is a state that cannot exist. It converges in
-  the end, to `dr2 = 1.5e-10` and a moment of 0.0865.
+| field | `mixing_beta` | iterations | converged | final `dr2` |
+|---|---|---|---|---|
+| 0.01 Ry | 0.7 | 48 | yes | 2.7e-10 |
+| 0.01 Ry | 0.5 | **36** | yes | 4.6e-10 |
+| 0.01 Ry | 0.3 | 42 | yes | 4.9e-10 |
+| 0.01 Ry | 0.2 | 115 | yes | 5.6e-10 |
+| 0.002 Ry | 0.7 | **263** | yes | 1.5e-10 |
+| 0.002 Ry | 0.3 | 300 | **no** | 1.7e-3 |
 
-**Two earlier versions of this entry were wrong and they are kept here as the record.**
-The first said "0.7 diverges, 0.3 converges", from two runs at different field strengths
-and different iteration budgets reported as one comparison. The second said the weak field
-diverges -- still from a run stopped at 40 iterations. **A non-convergence at a finite
-budget is not a divergence.** What the truncated runs showed was the excursion; only
-running to 300 iterations showed its end. The mechanism survived both corrections and the
-evidence for it did not.
+**The mixer is not unstable, it is stuck**, and the `dr2` traces are what say so: at
+`beta = 0.3` under the weak field the residual sits between 2e-5 and 9e-5 for all three
+hundred iterations and never leaves, while `beta = 0.7` covers the same range, spikes to
+1.1e-2 -- passing through per-cell moments of 2.2 mu_B/2 on an atom that holds one
+electron, a state that cannot exist -- and then drops to 3.4e-8. The flat manifold has to
+be **traversed**, and `mixing_beta` is how fast.
+
+**So lowering `mixing_beta` is the wrong reflex here and three earlier versions of this
+entry gave it as the advice.** They are kept because each failed differently: the first
+compared two runs at different fields *and* different budgets; the second called a
+40-iteration non-convergence a divergence; the third made "lower beta" standing advice in
+the driver's warning, the user guide and `PERFORMANCE.md`. The mechanism was right
+throughout, which is exactly why each wrong version was plausible.
 
 The collinear branch of the same cell has no such direction -- flipping a moment costs
 energy, and rotating one is not expressible -- so this is new at `nspin = 4` and not a

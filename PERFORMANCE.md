@@ -5338,14 +5338,18 @@ set up for would be a worse number than none, so what is recorded instead is the
 comparison that is like-for-like -- the ultracell against the supercell it approximates, in
 this code, above.
 
-**`mixing_beta` is not a cost lever here even though it looks like one.** Four values on a
-four-cell turning-field run, all converging to the same state: 0.7 in 48 iterations, **0.5
-in 36**, 0.3 in 42, 0.2 in 115. The best is in the middle and the smallest is three times
-the worst, so the habit of lowering `beta` when a magnetic run is slow costs time without
-buying anything. Where it *is* needed is a weak field, where the rigid-rotation
-mode is barely pinned: the same four-cell run at 0.002 Ry instead of 0.01 takes **263
-iterations** at `beta = 0.7` against 48, and passes through states the cell cannot hold on
-the way (`OPEN.md` Part VI item 3).
+**Lowering `mixing_beta` makes a noncollinear ultracell slower, and at a weak field it
+stops it converging at all.** Four values on a four-cell turning-field run at 0.01 Ry, all
+reaching the same state: 0.7 in 48 iterations, **0.5 in 36**, 0.3 in 42, 0.2 in 115 -- the
+best in the middle and the smallest three times the worst. At 0.002 Ry, a field five times
+weaker, `beta = 0.7` converges in **263** iterations and `beta = 0.3` **does not converge
+in 300**. The reason is that the rigid spin rotation has no restoring force, so the
+solution sits in a nearly flat manifold the mixer has to *traverse*, and a small `beta`
+traverses it too slowly to arrive: its residual sits between 2e-5 and 9e-5 for the whole
+run without ever leaving. **The reflex of lowering `beta` when a magnetic run is slow is
+the wrong one here** -- what it wants is iterations, or a stronger field to pin the
+direction (`OPEN.md` Part VI item 3, which records the three earlier versions of this entry
+that said the opposite).
 
 ### Iterations, which is where the method earns its keep
 

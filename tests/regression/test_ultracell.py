@@ -1126,6 +1126,14 @@ def test_a_uniform_vector_field_is_the_unit_cell_under_the_same_field(
     so the response stays linear: an oblique field rotates the moment by tens of
     degrees, which a truncated basis reproduces far more slowly and which would
     hide the sign inside a large deformation.
+
+    **The frozen-state solve warns at the top rungs and that is expected.**
+    ``states_conv_thr = 1e-8`` puts ``ethr`` at 1e-9, which the Davidson budget
+    does not reach for a handful of bands high in the empty manifold -- the
+    threshold ``run_ultracell``'s own docstring says not to tighten blindly for
+    a large ``nbnd``. It is kept because the recorded ladder was measured there
+    and because the monotone fall is itself the evidence that those bands carry
+    no weight: a basis corrupted at the top would not converge to the reference.
     """
     kgrid = (2, 2, 2)
     calculator = _noncollinear(tmp_path, pseudo_dir, (1, 1, 1), kgrid,
@@ -1270,3 +1278,80 @@ def test_the_noncollinear_ultracell_converges_to_the_supercell(
     for row in errors:
         assert max(row[1:]) / min(row[1:]) < 1.1, row
     assert max(errors[0]) < 3e-3 and max(errors[-1]) < 5e-4, errors
+
+
+@pytest.mark.slow
+def test_fixed_occupations_fill_spinor_bands_one_electron_at_a_time(pseudo_dir):
+    """Spin-orbit coupling in an ultracell, and the bug that found itself here.
+
+    **The claim this run exists to support is that spin-orbit coupling costs
+    this method nothing.** It is a nonlocal term in the Hamiltonian the frozen
+    unit-cell states were diagonalised with, so the ultracell only ever sees
+    their eigenvalues and their coefficients; there is no spin-orbit term
+    anywhere in ``defumat/ultracell/``. This is the run that says so rather than
+    the argument.
+
+    **What it caught on the way is the real reason it is here.** The two
+    occupation schemes read their electron count differently -- ``smearing``
+    searches for the level whose *weighted sum* reproduces it, while ``fixed``
+    counts *bands to fill* -- so only the second has to be told how many
+    electrons one band holds. A spinor band holds **one**, where a scalar band
+    holds two, and that is the same factor ``for_spin`` takes out of the
+    k-point weights, arriving a second time in a place the weights cannot
+    reach. The ultracell's occupation was not passing it.
+
+    Nothing in this file could have seen that: **every other noncollinear case
+    here uses smearing**, where the argument is not merely right but absent. An
+    iodine atom with seven valence electrons and ``occupations = 'fixed'`` is
+    the first cell to take the other branch, and it stops with "7.0 electrons
+    cannot fill 2-fold bands". Loudly, which is the one merciful thing about it.
+
+    **``N = 1`` and not more, deliberately.** This cell samples the Brillouin
+    zone at ``Gamma`` alone, which is right for an isolated atom and wrong for a
+    tiling null: at ``N = 2`` the folded set is two k-points, and the tiled
+    density of a ``Gamma``-only SCF is not the fixed point two points reproduce
+    -- it comes back 2.6 per cent away, which is the k-sampling and not the
+    method. The tiling null belongs on a crystal and is asserted on the hydrogen
+    cells above; what this cell is for is the spin-orbit regime and the
+    occupation count.
+    """
+    calculator = Calculator.from_file(
+        Path(__file__).resolve().parents[1] / "data" / "qe" / "i-atom-soc-lda.in",
+        pseudo_dir=pseudo_dir,
+    )
+    assert calculator.system.noncolin and calculator.system.lspinorb
+    assert calculator.system.occupations == "fixed"
+    scf = calculator.get_scf()
+    assert scf.converged
+
+    result = run_ultracell(
+        calculator.system, calculator.pseudos, scf, (1, 1, 1), (1, 1, 1),
+        nbnd=16, conv_thr=1e-9, states_conv_thr=1e-8, david=2,
+        mixing_beta=0.3, max_iterations=60,
+    )
+    assert result.converged and result.iterations == 1
+    assert np.abs(np.asarray(result.delta_v)).max() < 1e-13
+
+    # The electron count is what the missing degeneracy would have broken, and
+    # it is asserted on its own: seven spinor bands hold seven electrons.
+    element = float(calculator.system.cell.volume) / np.prod(
+        result.ultracell.cell_grid)
+    charge = float(np.asarray(result.density)[0].sum() * element)
+    nelec = float(Calculation(calculator.system, calculator.pseudos).nelec)
+    assert nelec == pytest.approx(7.0)
+    assert charge == pytest.approx(nelec, rel=1e-7)
+
+    # ...and the moment survives the round trip, which the charge alone cannot
+    # say: a spin-orbit ground state has a direction, and an ultracell that
+    # filled the wrong bands would keep the charge and lose it.
+    #
+    # **The tolerance is the band truncation and nothing else.** ``dV`` here is
+    # 4e-15, so the only difference between the two is that one expands the
+    # state in 16 frozen bands and the other does not expand it at all: the
+    # moment comes back 7.4e-6 away on 0.2273, which is 3.3e-5 relative and sits
+    # exactly on the ``nbnd = 16`` rung of the ladders above. Tightening this
+    # past the truncation would be asserting something the method does not claim.
+    moment = result.cell_moments()[0]
+    reference = _total_moment(scf.density, float(calculator.system.cell.volume))
+    assert moment == pytest.approx(reference, abs=5e-5)
+    assert abs(moment[2]) > 0.2 and np.abs(moment[:2]).max() < 1e-5

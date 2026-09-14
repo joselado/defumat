@@ -15324,6 +15324,32 @@ strong enough to change the local spin frame has to be absorbed by empty states 
 iteration counts, which are 9 or 10 throughout the tilted ladder and 44 to 110 through the
 oblique one.
 
+**Spin-orbit coupling costs this method nothing, and here is the run that says so.** SOC is
+a nonlocal term in the Hamiltonian the *frozen states* were diagonalised with, so the
+ultracell sees only their eigenvalues and coefficients; there is no spin-orbit term anywhere
+in `defumat/ultracell/`. An iodine atom in a twelve-bohr box (`i-atom-soc-lda.in`,
+`lspinorb`, norm-conserving, `occupations = 'fixed'`, seven valence electrons) as an
+`N = 1` ultracell: **one iteration, `dV` at 4.0e-15, charge 7.0000000000000435, and the
+moment reproduced to 7.4e-6 of 0.2273** -- 3.3e-5 relative, which is the `nbnd = 16` rung of
+the ladders above and is the *only* thing separating the two, since `dV` has vanished. The
+transverse components stay below 1e-5, so the direction survives as well as the length.
+
+**And that run found a real defect, which is why it is a committed test rather than a
+paragraph.** The two occupation schemes read their electron count differently: `smearing`
+searches for the level whose *weighted sum* reproduces it, while `fixed` counts **bands to
+fill** -- so only the second has to be told how many electrons one band holds. A spinor band
+holds **one**. That is the `for_spin` factor arriving a second time, in a band count where
+the k-point weights cannot reach, and `_occupy` was not passing it; `driver.py`'s own
+`_occupations` has had `degeneracy = 1 if noncolin else 2` all along.
+
+**Nothing in this phase could have caught it, because every null and every ladder above
+uses smearing** -- where the argument is not merely correct but *absent*. The first cell to
+take the other branch is the first cell with fixed occupations, and it stops with "7.0
+electrons cannot fill 2-fold bands". Loudly, which is the one merciful thing about it. The
+lesson generalises past this phase: **two code paths that consume the same quantity through
+different arithmetic need a test each**, and a sweep that exercises one of them thoroughly
+is not evidence about the other.
+
 **The canonical number: a noncollinear ultracell against a real supercell.** The same
 instrument stages 1 and 3a used, one regime up. A two-cell ultracell of the hydrogen cell
 above against a real **two-atom supercell** run through this package's own SCF, both under
@@ -15364,47 +15390,50 @@ electron and its space is `2 npw` rather than `npw`, so `nbnd = 128` on this cel
 same completeness, reached at a band count 1.6 times larger. The errors above should be
 read against that completeness, not against stage 1's band count.
 
-**The finding: a noncollinear ultracell has a soft direction a collinear one does not.**
-Without spin-orbit coupling or anisotropy, turning every moment together costs no energy --
-so the `Q = 0` transverse component of the magnetization is a Goldstone mode with **no
-restoring force at all**, and the self-consistent fixed point is a family rather than a
-point. An Anderson mixer has a flat direction to extrapolate along, and what it does with
-one is *wander*: on a four-cell hydrogen ultracell under a **weak** turning field
-(0.002 Ry) at `mixing_beta = 0.7` it takes **263 iterations** where the same cell under a
-five-times-stronger field takes 48, and it passes on the way through per-cell moments of
-**2.2 mu_B/2 on an atom that holds one electron** -- states the cell cannot hold. It does
-converge, to `dr2 = 1.5e-10` and a moment of 0.0865.
+**The finding: a noncollinear ultracell has a soft direction a collinear one does not, and
+the advice it needs is the opposite of the reflex.** Without spin-orbit coupling or
+anisotropy, turning every moment together costs no energy -- so the `Q = 0` transverse
+component of the magnetization is a Goldstone mode with **no restoring force at all**, and
+the self-consistent solution sits in a nearly flat manifold rather than at a point. The
+mixer has to *traverse* that manifold to find where the field pins it, and how fast it
+traverses is what `mixing_beta` sets. On a four-cell hydrogen ultracell under a turning
+field, at 300 iterations:
 
-**It took three attempts to state that correctly, and the two wrong versions are the
-record.** The first said `beta = 0.7` *diverges* and `0.3` converges, from two runs at
-*different field strengths and different iteration budgets* -- 0.002 Ry at 40 iterations
-against 0.01 Ry at 120 -- which is two experiments reported as one comparison. Run properly, at 0.01 Ry and a 300-iteration budget,
-`beta` barely matters at all and **every value converges to the same state**:
+| field | `beta` | iterations | converged | final `dr2` |
+|---|---|---|---|---|
+| 0.01 Ry | 0.7 | 48 | yes | 2.7e-10 |
+| 0.01 Ry | 0.5 | **36** | yes | 4.6e-10 |
+| 0.01 Ry | 0.3 | 42 | yes | 4.9e-10 |
+| 0.01 Ry | 0.2 | 115 | yes | 5.6e-10 |
+| 0.002 Ry | 0.7 | **263** | yes | 1.5e-10 |
+| 0.002 Ry | 0.3 | 300 | **no** | 1.7e-3 |
 
-| `mixing_beta` | iterations | `dr2` | largest cell moment |
-|---|---|---|---|
-| 0.7 | 48 | 2.70e-10 | 0.4639 |
-| 0.5 | **36** | 4.62e-10 | 0.4637 |
-| 0.3 | 42 | 4.85e-10 | 0.4639 |
-| 0.2 | 115 | 5.64e-10 | 0.4638 |
+**Lowering `mixing_beta` makes this worse, not better**, and at the weak field it is the
+difference between converging and not. The `dr2` traces say why: at `beta = 0.3` the
+residual sits between 2e-5 and 9e-5 for the whole three hundred iterations and never
+leaves, where `beta = 0.7` wanders over the same range, spikes to 1.1e-2, and then drops to
+3.4e-8. The small `beta` is not *stable* and the large one *unstable* -- the small one is
+**stuck**, crawling along a flat direction it never crosses.
 
--- four values spanning a factor of 3.5, every one of them converging to the **same state**
-to four digits, and the *best* of them 0.5 rather than the smallest. Turning `mixing_beta`
-down is not free and is not the answer here.
+**It took four attempts to state this, and the three wrong ones are the record, because
+each failed in a way this project's own trap list names.**
 
-The second version then said the weaker field *does* run away -- still from a run stopped
-at 40 iterations. Given 300 it converges. **A non-convergence at a finite budget is not a
-divergence, and the two need different evidence**; what the truncated run actually showed
-was the excursion, not its end.
+1. "`beta = 0.7` diverges, `0.3` converges" -- from two runs at *different field strengths
+   and different iteration budgets*, 0.002 Ry at 40 iterations against 0.01 Ry at 120. Two
+   experiments reported as one comparison.
+2. Same claim, corrected to name the weak field as the runaway -- still from a run stopped
+   at 40 iterations. **A non-convergence at a finite budget is not a divergence.** Given
+   300 it converges; what the truncated run showed was an excursion, not an end.
+3. "Lower `mixing_beta`" as the standing advice, written into the driver's warning, the
+   user guide and the performance log. The controlled pair reverses it.
 
-What survives all three is the mechanism and a sharper statement of it: a weaker field pins
-the direction less, so the flat mode is flatter and the wandering is longer -- 263
-iterations against 48, through states outside the physical manifold. This is `CLAUDE.md`'s
-"an explanation that fits a number and is accepted because it fits", met twice on one
-claim, and only running the thing to completion separates them.
+The mechanism -- a Goldstone direction with no restoring force -- was right at every step
+and is what made each wrong version plausible. That is `CLAUDE.md`'s "an explanation that
+fits a number and is accepted because it fits", and the cure was the same every time:
+**run it to completion, and vary one thing.**
 
-The non-convergence warning names the mechanism rather than the knob, because "lower beta"
-without the reason is advice a user cannot check.
+The non-convergence warning now asks for iterations or a stronger field and says
+explicitly **not** to lower `mixing_beta`, naming the measurement.
 
 **Whether the mixer should project the rigid rotation out is a departure from `pw.x` and is
 not taken here.** It would need a measurement rather than an argument, which is

@@ -775,20 +775,29 @@ def run_ultracell(
             f"magnetic cell it is the one that decides)"
         )
         # **A noncollinear cell has a soft direction a collinear one does not,
-        # and it is the first thing to try.** Turning every moment rigidly
-        # costs no energy without spin-orbit coupling or anisotropy, so the
-        # ``Q = 0`` transverse component of the magnetization has no restoring
-        # force at all -- and an Anderson mixer extrapolating along a flat
-        # direction is what runs away. Measured on a one-electron hydrogen
-        # lattice under a turning field: ``mixing_beta = 0.7`` diverges to a
-        # moment of 2.2 mu_B/2, which the cell cannot hold, where 0.3 converges.
+        # and the advice it needs is the opposite of the reflex.** Turning every
+        # moment rigidly costs no energy without spin-orbit coupling or
+        # anisotropy, so the ``Q = 0`` transverse magnetization has no restoring
+        # force and the fixed point sits in a nearly flat manifold that the
+        # mixer has to *traverse*. A smaller ``mixing_beta`` traverses it more
+        # slowly, so lowering it makes this worse rather than better -- measured
+        # on a four-cell hydrogen ultracell under a weak (0.002 Ry) turning
+        # field, where ``beta = 0.7`` converges in 263 iterations and ``0.3``
+        # does not converge in 300 (``OPEN.md`` Part VI item 3). At a field five
+        # times stronger every value converges and the best is 0.5. So the
+        # message asks for iterations, or a stronger field, and says explicitly
+        # not to reach for a smaller beta.
         rigid = "" if nspin_mag != 4 else (
             f" This is a noncollinear run, where turning every moment together "
             f"costs no energy without spin-orbit coupling -- so the Q = 0 "
-            f"transverse magnetization has no restoring force and an "
-            f"extrapolating mixer runs away along it. Lower mixing_beta "
-            f"(currently {mixing_beta:g}; 0.3 converges cases 0.7 diverges on) "
-            f"before anything else."
+            f"transverse magnetization has no restoring force, the solution "
+            f"sits in a nearly flat manifold, and the mixer has to traverse it. "
+            f"That is slow when the field pinning the direction is weak: raise "
+            f"max_iterations (currently {max_iterations}), or pin the direction "
+            f"harder with a stronger magnetic_field. **Do not lower "
+            f"mixing_beta** (currently {mixing_beta:g}) -- it was measured to "
+            f"make this worse, 0.3 failing in 300 iterations where 0.7 "
+            f"converged in 263 on the same cell."
         )
         warnings.warn(
             f"the ultracell loop did not converge: dr2 = {total:.3e} Ry"
@@ -879,12 +888,34 @@ def _occupy(levels, weights, nelec, cells, system, smearing, calculation):
     if int(system.nspin) == 2 and bool(getattr(calculation, "two_fermi_energies", False)):
         counts = (float(calculation.nelup) * cells, float(calculation.neldw) * cells)
     if smearing:
+        # The smeared branch needs no degeneracy argument: it searches for the
+        # level whose *weighted sum* reproduces the electron count, and the
+        # factor of two is already out of the weights (``for_spin``).
         wg, ef = smeared_occupations(
             eigenvalues, weights, total,
             float(system.degauss), system.smearing or "gaussian", counts=counts,
         )
         return np.asarray(wg) / cells, ef
-    wg, homo, lumo = fixed_occupations(eigenvalues, weights, total, counts=counts)
+    # **The fixed branch does need it, and that asymmetry is the trap.** It
+    # counts *bands to fill* rather than matching a weighted sum, so it has to
+    # be told how many electrons one band holds -- two for a scalar band, and
+    # **one** for a spinor, where there is no second spin state to put an
+    # electron in. This is the ``for_spin`` factor arriving a second time, in
+    # the band count instead of the k-point weights, and
+    # ``driver.py:_occupations`` applies exactly this rule
+    # (``degeneracy = 1 if noncolin else 2``).
+    #
+    # It went missing here and nothing saw it, because **every null this phase
+    # ran used smearing**: the two branches read their electron count
+    # differently, so the argument that is wrong in one is absent from the
+    # other. What found it was the first spin-orbit cell, an iodine atom with
+    # seven valence electrons and ``occupations = 'fixed'``, where it raises
+    # "7.0 electrons cannot fill 2-fold bands" -- loudly, which is the one
+    # merciful thing about it.
+    degeneracy = 1 if int(system.nspin) == 4 else 2
+    wg, homo, lumo = fixed_occupations(
+        eigenvalues, weights, total, degeneracy, counts=counts
+    )
     return np.asarray(wg) / cells, homo
 
 
