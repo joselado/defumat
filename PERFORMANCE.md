@@ -5537,7 +5537,13 @@ each file's fixed cost. The consequence is that the last twenty seconds cost
 several times what the first three hundred did, which is why this stopped at
 10m20s rather than chasing 10m00s.
 
-## The finiteness guard was the largest single allocation in the SCF (OPEN.md Part VII)
+## The finiteness guard was the largest allocation *outside* the sized unit (OPEN.md Part VII)
+
+> **The heading used to say "the largest single allocation in the SCF" and that is wrong**,
+> on this cell's own numbers: the eigensolver's temp buffer at the same shapes is **23.18
+> GiB** against the guard's 21.40. What made the guard matter was never its size but its
+> **position** -- outside the executable `tools/gpu/davidson_memory.py` sizes, so it appeared
+> in no line of the size report.
 
 **What it was.** `davidson_eigensolver_all`'s retry guard -- the two reductions that say
 which k-points came back non-finite from the Cholesky route -- was written in the caller,
@@ -5609,14 +5615,25 @@ allocation goes, and what replaces it is inside the executable
 `tools/gpu/davidson_memory.py` sizes -- which was the other half of the problem, since an
 allocation outside that unit appears in no line of the size report.
 
-**And it closed the size report's gap, which was the other half of the report.** The
-same job's log carries both the estimate and the peak: 49.52 GB predicted against 77.63
-measured, a 28.11 GB gap, of which **22.98 GB is this one allocation** -- 82 per cent. The
-residual is 5.13 GB, 6.6 per cent of the peak, inside the eigensolver fit's error bar. An
-independent read off the allocator's occupancy bar agrees: 31 per cent free on an 82.95 GB
-pool is 57.24 GB in use at the request, 16 per cent above the prediction rather than 60.
-The size report was not 60 per cent low; it was missing one line, and that line no longer
-exists.
+**It was reported as closing the size report's gap, and the A/B says it did not.**
+**[Retracted 2026-09-14.]** The arithmetic ran: the same job's log carries both the
+estimate and the peak, 49.52 GB predicted against 77.63 measured, a 28.11 GB gap of which
+22.98 GB is this one allocation -- 82 per cent, leaving a residual inside the eigensolver
+fit's error bar. **The relaunch refutes it.** Job **20252129** (A100 gpu41, `ad89fd9`)
+against **20244588** pre-fix, same architecture, is **byte-identical per iteration** --
+79.14 and 79.43 GB at iterations 1 and 2 on both. Removing an allocation claimed to be 82
+per cent of the gap moved the peak by **0.03 GB**, so the 21.40 GiB was served out of space
+the solver had already freed and the three terms were never shown to be simultaneously
+live. **The ~28 GB is still unexplained**; `OPEN.md` Part VII item 1 is reopened and carries
+the full retraction.
+
+What stands from that analysis is the one figure that used no model: the allocator's
+occupancy bar, **31 per cent free on an 82.95 GB pool = 57.24 GB in use** at the instant of
+the request. And the allocation did not stop existing -- it **stopped being a separate
+one**. Post-fix the guard is computed inside `_every_k`, so what the allocator is asked for
+is the eigensolver's own temp buffer (`davidson.py:799`, 23.18 GiB at
+`david 2 / band_batch 16`, measured twice). On a cell whose problem is **fragmentation
+rather than total bytes**, that is a smaller win than this entry first claimed.
 
 **No timing pair against `pw.x` here**, and that is deliberate rather than an omission:
 this is not a feature taken from QE, it is a guard on a route `cegterg` does not have

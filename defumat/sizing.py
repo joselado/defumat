@@ -62,8 +62,28 @@ buffers differently. The two it missed are both ``david = 2`` with
 ``band_batch = 64``, where the card asked for **30 per cent less** than the
 formula said (64.5 GiB against 84.3, and 59.7 against 77.1): the buffer is *not
 monotonic* in the band batch there -- 66.1, 74.9, 64.5 GiB at 16, 32, 64 -- so
-at a small subspace XLA finds a schedule the third term does not describe. It
-errs in the safe direction, and it errs.
+at a small subspace XLA finds a schedule the third term does not describe.
+
+**At ``david = 2`` the error goes both ways, and the low direction is the one
+that kills a run.** A second sweep at a *different* cell and a different card --
+the 45-atom NiBr2 spinor PAW slab, ``nbnd = 403``, on an A100-80GB (job
+**20252132**, commit ``ad89fd9``) -- measured **23.18 GiB** at
+``david 2 / band_batch 16`` where this formula said **18.55**: **4.63 GiB, 20
+per cent LOW**. That figure has **two independent routes** and is the one number
+from that cell that does: :mod:`tools.gpu.davidson_memory` compiled it, and the
+run that died asked the allocator for exactly **24,889,513,216 B** from
+``jit__every_k``, which is the same 23.18 GiB. So the fourteen points above do not describe this corner; they
+were taken at ``nbnd`` 900/1020 on an H200, and the low reading is at 403 on an
+A100. Both errors are at the smallest subspace, which is where the schedule is
+least like the fit, and ``david = 2`` is also what a memory-constrained cell is
+forced into -- so the corner that errs is the corner that gets used. **Where the
+answer is close to the card at ``david = 2``, the formula is not evidence.**
+
+The non-monotonicity moved corners with the backend rather than staying with
+the formula: on the H200 it was at ``david 2`` (66.1, 74.9, 64.5 at 16, 32, 64)
+and on the A100 that row rises cleanly (23.18, 23.94, 25.25) while ``david 3``
+is the ragged one (29.30, 27.74, 29.07). That is XLA's scheduler, not this
+expression, and it is the reason the sentence above says *measure it*.
 
 **Those GPU points were taken before the second coefficient fell from 6.20 to
 4.20**, which is :func:`~defumat.solvers.davidson.davidson_eigensolver` no
@@ -374,7 +394,10 @@ class SizeEstimate:
             "        Davidson lines above rather than adding to them. Estimated",
             "        from a fit measured on the CPU backend and checked on an",
             "        H200: within 3.1% on 12 of 14 points, 30% HIGH on the two",
-            "        at david 2 / band_batch 64. Close to the card? Measure it",
+            "        at david 2 / band_batch 64 -- but 20% LOW at david 2 /",
+            "        band_batch 16 on a 45-atom spinor PAW slab on an A100.",
+            "        At david 2 the error goes BOTH ways and the low direction",
+            "        is the one that kills a run. Close to the card? Measure it",
             "        with tools/gpu/davidson_memory.py.",
             f"  {'PEAK (resident + the larger)':<34s}{gb(self.peak_bytes)}",
         ]

@@ -139,6 +139,27 @@ def _measure(args, david, nbnd, band_batch):
             temp_bytes=int(analysis.temp_size_in_bytes),
             argument_bytes=int(analysis.argument_size_in_bytes),
             output_bytes=int(analysis.output_size_in_bytes),
+            # **Not a peak, despite the name -- it EXCLUDES scratch.**
+            # Measured rather than assumed, because the name invites the
+            # opposite reading and the first draft of this comment took it:
+            # on ``si8-1k`` this executable reports temp 8,923,008 B against
+            # ``peak_memory_in_bytes`` of 998,805, which is argument 809,618
+            # plus output 189,081 to within 106 bytes. So the field is
+            # ``argument + output - alias``, i.e. the half of the requirement
+            # that donation can remove, and the executable's real requirement
+            # is this **plus** ``temp``. It is recorded because that half was
+            # never reported at all, not because it supersedes ``temp``.
+            peak_bytes=int(analysis.peak_memory_in_bytes),
+            # Zero unless an argument was donated, and equal to the donated
+            # buffer when one was. It is here as a *check on this package*
+            # rather than on the compiler: ``donate_argnums`` appears nowhere
+            # in ``defumat`` (grep, 2026-09-14) although ``CLAUDE.md``'s JAX
+            # rules ask for it on the large wavefunction and density buffers,
+            # so this field is expected to be 0 and a nonzero reading means
+            # that changed. On the same controlled compile, donating the one
+            # wavefunction-shaped input took the peak from 48 MB to 32 -- one
+            # whole input buffer, which at slab shapes is 12.10 GB.
+            alias_bytes=int(analysis.alias_size_in_bytes),
         )
         raise _Done
 
@@ -161,6 +182,16 @@ def _measure(args, david, nbnd, band_batch):
         solvers.EIGENSOLVERS["davidson"] = real
         solvers.EIGENSOLVERS["david"] = real
     captured["temp_GiB"] = round(captured["temp_bytes"] / 2**30, 2)
+    # Reported beside it rather than instead of it, because every figure on
+    # record for this cell is a ``temp`` and the two have to be comparable.
+    # The sum of the two is an **upper bound** and is named as one: scratch and
+    # the io buffers are not proved disjoint, and the controlled compile says
+    # they are not -- arg 32 + temp 16 + out 16 = 64 MB where the field read
+    # 48. A single figure called "what it needs" would be one name over three
+    # unknowns, which is the error this cell's record already carries once.
+    captured["peak_GiB"] = round(captured["peak_bytes"] / 2**30, 2)
+    captured["temp_plus_io_upper_GiB"] = round(
+        (captured["temp_bytes"] + captured["peak_bytes"]) / 2**30, 2)
     return captured
 
 

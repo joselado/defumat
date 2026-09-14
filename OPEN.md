@@ -2477,7 +2477,52 @@ calls it, and the mid-SCF path was passing for the opposite reason -- it carried
 field for the refusal to see. Reading a refusal's source is not the same as watching it
 fire, which is `CLAUDE.md`'s own rule about guards, applied to a guard's absence.
 
-## 1. `sizing.py` reads 60 per cent low on a 45-atom spinor PAW slab **[closed 2026-09-14 -- the missing line was the guard, and 0e85a14 deleted it]**
+## 1. `sizing.py` reads 60 per cent low on a 45-atom spinor PAW slab **[REOPENED 2026-09-14 -- the closure below was withdrawn by the A/B it predicted, and the ~28 GB is still unexplained]**
+
+> **Read this before the entry.** Everything from "Closed by subtraction" to the end of the
+> caveat is **retracted**, and the commit that carried it (`23fc3b0`, *"The size report was
+> not 60 per cent low: it was missing the guard"*) is wrong in its title. The relaunch is a
+> clean A/B of the guard fix on the same architecture -- job **20252129** (A100 gpu41,
+> `ad89fd9`, `wfc_store device -> device` printed) against **20244588** pre-fix -- and the
+> per-iteration peaks are **byte-identical**: 79.14 / 79.43 GB at iterations 1 and 2 on both,
+> 79.43 and 79.46 at 3 and 4 post-fix. **Removing an allocation claimed to be 82 per cent of
+> a 28 GB gap moved the peak by 0.03 GB.** So the 21.40 GiB was served out of space the
+> solver had already freed, and `resident + temp + guard = 72.16` against a measured 72.30
+> was three plausible numbers summing to the right answer with **no evidence they were ever
+> simultaneously live**.
+>
+> **The failure mode is the one this file keeps recording, one level up.** The caveat below
+> names the hole exactly -- *"the overlap cannot be proved from a log, so 4.78 GiB is a
+> residual and not a measured solver excess"* -- and the closure was then written as if a
+> later sweep had filled it. It had not: the sweep measured the **temp**, which was the one
+> term that could be checked, and **agreement in a total was read as confirmation of its
+> parts.** A sum of three terms has one equation and three unknowns.
+>
+> **What survives, and it is not nothing.** The eigensolver temp at this cell is **23.18
+> GiB** at `david 2 / band_batch 16`, and it is now measured **twice independently**:
+> `tools/gpu/davidson_memory.py` compiled it (job 20252132), and the failing run asked the
+> allocator for exactly **24,889,513,216 B** from `jit__every_k`, which is the same number.
+> That is what makes `sizing.py`'s 18.55 **20 per cent low at this corner**, recorded in that
+> module's docstring. `david 3` costs **+6.12 GiB** over `david 2` rather than a doubling
+> (item 2 below). The arena read of 20244646 -- **57.24 GB in use** at the instant of the
+> request, from the occupancy bar -- stands, and is worth noting as **the one figure sent
+> here that used no model at all, and the one that survived.** And `0e85a14` remains right on
+> its own terms: the whole-set reduction was wrong on a dense mesh. It is simply **not a
+> memory fix on this cell**.
+>
+> **Where the allocation moved, which is the more useful finding.** Post-fix the guard is
+> computed inside `_every_k`, so forcing it to the host is what makes that executable run,
+> and what the allocator is asked for is the eigensolver's **own** temp buffer --
+> `davidson.py:799`, still `failed = ~np.asarray(per_k)`. The guard did not stop costing an
+> allocation; it stopped costing a **separate** one. On a cell whose problem is
+> **fragmentation** rather than total bytes, that is a smaller win than it read as.
+>
+> **The next instrument is not arithmetic.** Job 20252135 runs the same two iterations under
+> `DEFUMAT_STAGE_PEAKS=1`, bracketing every stage with `peak_bytes_in_use`: whatever holds 79
+> GB has to appear between one of those pairs. The last two sizings of this cell were both
+> arithmetic, both wrong, and in **opposite directions**.
+
+
 
 `run_scf.py --size-only` at a `1 6 1` mesh reported floor 42.60 GiB, eigensolver XLA temp
 buffer 18.55 GiB, **peak 46.12 GiB = 49.5 GB**. The measured working peak was **79.4 GB**,
@@ -2551,8 +2596,26 @@ Observed on the same run: 70+ Davidson inner steps per k-point at `ethr` 2.3e-6,
 into, so if the restart logic is what degrades there the fix would pay twice -- fewer steps
 *and* less allocate-and-free churn, which is what exhausted the arena in item 1.
 
-**Untested, and the obvious test does not fit the card**: `ndim = 4` doubles the subspace
-arrays at this mesh. The cheap version is a small cell where both fit -- inner steps per
+**The "does not fit the card" half of this is struck, 2026-09-14.** `ndim = 4` does double
+the subspace arrays at this mesh -- that arithmetic was never wrong -- but the *consequence*
+drawn from it was, and for the same structural reason the guard above turned out to be
+invisible: **the arrays it doubles live inside a buffer that is mostly not them.** Measured
+(job **20252132**, A100-80GB, `ad89fd9`), `david 3` costs **+6.12 GiB** over `david 2`, not
+a doubling:
+
+| temp buffer, GiB | band_batch 16 | 32 | 64 |
+|---|---|---|---|
+| `david 2` | 23.18 | 23.94 | 25.25 |
+| `david 3` | 29.30 | 27.74 | 29.07 |
+
+**The table is the claim, and nothing is added to it here.** A predicted whole-run peak at
+each `david` is exactly the arithmetic item 1 records being wrong twice on this cell, in
+opposite directions, so it is not written down -- what is measured is that the step from
+2 to 3 costs 6.12 GiB and not 23, which is the whole of what the struck sentence got wrong.
+Whether the experiment fits a given card is a question for a stage-bracketed run on that
+card, not for a sum here.
+
+The cheap version remains worth having on its own: inner steps per
 k-point against `ethr`, at `ndim` 2, 3 and 4, on `si16-1k-ecut30` or `si8-nc-1k` -- which
 says whether the step count at `ndim = 2` climbs faster than at 3 and 4 or whether 70 steps
 is simply what a tight threshold costs at any subspace size. This is related to the

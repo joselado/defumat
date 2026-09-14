@@ -26,6 +26,16 @@
 > forward: the measuring script's own local is a reference too, so the first attempt read
 > zero difference in both directions until the result it was holding was deleted.
 >
+> **2026-09-14: the audit's largest miss is now a model gap rather than an unknown.**
+> `D10` is new and is the only entry here with a measured peak behind it: on the 45-atom
+> NiBr2 slab **71.43 of the run's 79.14 GB high-water is reached before the eigensolver is
+> entered**, in the one-shot starting-wavefunction build at `driver.py:4850`, which
+> `sizing.py` has no line for. The resident half of that model was confirmed correct to
+> **2.3 per cent** in the same runs, so the whole of the long-standing ~28 GB discrepancy
+> on this cell is in the *peak* term and none of it is in the floor. Read `D10` with
+> `OPEN.md` Part VII item 1, which is **reopened**: the earlier closure of that gap was
+> withdrawn by the A/B it predicted.
+>
 > **A4 is also the item that says why an audit is checked rather than applied.** Its
 > prescribed one-line fix was measured to be a *regression*, and the correction is inline
 > under A4 rather than replacing it, so the wrong reasoning stays legible beside the right
@@ -1579,6 +1589,73 @@ of each (A2) and `vc_relax` four Calculations (A3). Plausibly part of P74's resi
 
 A9, and `:753` hardcodes `16` for the complex byte width, so under `precision = 'single'` it fires at
 twice the true size.
+
+---
+
+### D10. `wfcinit` is not modelled at all, and on the one cell measured it is what sets the peak
+
+**Added 2026-09-14, from the stage-bracketed NiBr2 runs (jobs 20252135 / 20252136), read
+independently by two sessions that agreed.** This is the largest gap in the list and it is
+the only one so far with a measured peak behind it.
+
+**Site.** `defumat/scf/driver.py:4850` -- `calculation.starting_wavefunctions(...)` under
+`if wavefunctions is None`, so it runs **exactly once**, between the Hamiltonian build and
+the first `diagonalize`. `natomwfc` appears **nowhere** in `sizing.py` (grep): the `arrays`
+table carries a `wavefunctions (nspin,nk,nbnd,ndim)` line and has no counterpart for the
+atomic span, and `peak_bytes` is `resident + max(setup transient, eigensolver buffer)`,
+which has no term for this stage either.
+
+**What the brackets say, and it needs no model.** On the 45-atom slab (`nk = 6`,
+`nbnd = 403`, `ndim = 2 npwx = 312 692`):
+
+```
+[mem] <- hamiltonian    peak 20.38 GB   live 17.90 GB
+[mem] -> diagonalize    peak 71.43 GB   live 30.00 GB
+```
+
+**A 51.05 GB rise in the high-water inside a gap that contains no instrumented call**,
+while `live` rises by 12.10 GB -- *exactly* one wavefunction set
+(`6 x 403 x 312692 x 16 = 12,097,428,096 B`). **71.43 of the run's final 79.14 GB is
+reached before the eigensolver runs.** The control is iteration 2, where the same gap moves
+`live` 30.55 -> 30.30 and the peak not at all, because by then `psi` is the seed and the
+branch is dead: the cost is paid once, which is exactly what `:4850`'s guard says.
+
+**What is in there.** `starting_wavefunctions` builds the atomic span **whole-k** and hands
+it to `_rotate_all`, which is the Rayleigh-Ritz. The span is `natomwfc` vectors where every
+other wavefunction-shaped array in the run is `nbnd`, and here `natomwfc = 510` against
+`nbnd = 403`:
+
+```
+nbnd block        6 x 403 x 312692 x 16   = 12.10 GB
+natomwfc block    6 x 510 x 312692 x 16   = 15.31 GB      (1.27x)
+three of them (the span, H|span>, S|span>) = 45.93 GB
+                                   measured rise = 51.05 GB
+```
+
+**Named rather than inferred**: P74's own XLA dump on this cell shows
+`c128[510,2,200,240,54]` at **42.32 GB** -- `natomwfc x npol x N_smooth`, the starting
+subspace rotation -- which is the same object arriving through a different instrument.
+
+**Why it went unseen for so long**, and it is the general lesson rather than this cell's:
+`peak_bytes_in_use` is a **high-water mark that never resets**, so once iteration 1 reaches
+79.14 GB every later print is `>= 79.14` and carries no information at all. Only the
+*first* iteration's rises are readable, and every earlier analysis of this cell reasoned
+from the flat later ones. A stage that runs once, early, and then never again is precisely
+the stage such an instrument hides. Print `bytes_in_use` **deltas** per bracket alongside
+the high-water; that channel stayed informative throughout.
+
+**The fix to the model is a line, not a term.** `nbnd` is not the right count for this
+stage and `natomwfc` is; `n_atom_wfc`'s rule is already transcribed (`CLAUDE.md`'s starting
+-wavefunctions row: `sum (2j+1)` for a relativistic dataset, `sum 2(2l+1)` otherwise), so
+the count is available host-side without building anything. The stage belongs in
+`peak_bytes`'s `max(...)` beside the eigensolver buffer, since like it -- and unlike the
+resident lines -- it is a moment rather than a standing cost.
+
+**The resident half of the model needs no change and should not get one.** Same runs:
+modelled resident `46.12 - 18.55 = 27.57 GiB = 29.60 GB` against a measured 30.30 GB at
+`-> diagonalize`, **2.3 per cent**. Every previous attempt on this cell went looking for a
+missing *resident* term; there is not one, and `OPEN.md` Part VII item 1 records what
+happened to the last analysis that assumed otherwise.
 
 ---
 

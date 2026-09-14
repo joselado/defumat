@@ -126,14 +126,120 @@ one k-point's however many there are. :func:`park_wavefunctions` and
 backing store: the driver parks the whole set once the density has been built
 from it and fetches it back before the next diagonalisation.
 
-**What that wins, and what it does not.** It takes the store off the
-accelerator for the span between the two -- the energy assembly, ``v_of_rho`` on
-the dense grid, the mixer's ``mixing_ndim`` histories, the PAW one-centre terms,
-the checkpoint write -- which is where the *other* large allocations are, and
-which is also where an arena fragments. It does **not** lower the peak if the
-peak is inside the solve: the store is an input to the diagonalisation, to
-``becsum`` and to the density, so it is on the device for all three. A run that
-dies in the eigensolver dies just the same.
+**What that wins, and what it does not -- now measured on a 12.10 GB store
+rather than argued.** Jobs **20252135** (device) and **20252136** (host) ran the
+45-atom NiBr2 slab on the *same* A100 node six minutes apart, same commit, same
+input, same seed, with the resolved mode printed on both. `bytes_in_use` differs at exactly
+**three** stage brackets and nowhere else; the fourth row below is where the two
+runs rejoin, and the fifth is the last bracket before the span opens:
+
+===========================  =========  ========
+bracket                      device     host
+===========================  =========  ========
+``<- density``                30.13 GB  30.13 GB
+the iteration line            30.13 GB  **18.04 GB**
+``-> onecenter`` (next it.)   30.30 GB  **18.17 GB**
+``<- hamiltonian``            30.55 GB  **18.37 GB**
+``-> diagonalize``            30.30 GB  30.22 GB
+===========================  =========  ========
+
+The drop is **12.09 GB** against a store of 12,097,428,096 B = **12.10 GB**, it
+begins after the density and has ended by the next solve, and every other
+bracket -- peaks included -- is identical to the digit printed. *When* the fetch
+happens relative to the ``-> diagonalize`` print is not knowable from this: the
+spy's ``block_until_ready`` does not force a park, so the brackets say where
+``live`` stands, never when it moved. That is this
+span statement, measured.
+
+It takes the store off the accelerator for the energy assembly, ``v_of_rho`` on
+the dense grid, the mixer's ``mixing_ndim`` histories, the PAW one-centre terms
+and the checkpoint write. It does **not** lower the peak if the peak is inside
+the solve: the store is an input to the diagonalisation, to ``becsum`` and to
+the density, so it is on the device for all three. **That is measured too, and
+it is the practical answer**: both runs peaked at **79.14 GB**, and the host one
+still died in the eigensolver on the same 23.18 GiB request from the same
+executable. ``wfc_store = 'host'`` did not make this cell fit an 80 GB card.
+**It is a resident-set dial, not a peak dial**, and a run that dies in the
+eigensolver dies just the same.
+
+**Does parking fragment the arena? Untested, unsupported by the evidence that
+exists, and the matched test is unavailable in principle from this diagnostic.**
+All three clauses are load-bearing.
+
+The worry is real and has a mechanism: parking and fetching 12.10 GB every
+iteration is an allocate-and-free cycle of a 12 GB block on an arena whose
+failure mode is a missing *hole* rather than missing bytes. And in the pair
+above, the host arm completed less work -- 20252135 finished its two-iteration
+budget, 20252136 died inside iteration 2, same node, six minutes apart. One
+trial.
+
+**The comparison that would settle it cannot be made, and that is a property of
+the instrument rather than a gap in the runs.** The allocator's arena map is a
+**failure-only** diagnostic: a run that survives prints no bar at all, and the
+device arm survived (its stderr carries zero ``bfc_allocator`` lines). So there
+is no matched pair and no job can produce one -- to get a bar from the device
+arm it would have to fail, at which point it is no longer the control.
+
+The three bars that do exist are unmatched, and to the extent they differ they
+differ *against* the mechanism. One character is about 0.83 GB on an 82.95 GB
+pool, so a one-character difference is at the quantisation limit:
+
+======================  ==========  =========  ======  =============
+job                     mode        died at    free    largest hole
+======================  ==========  =========  ======  =============
+20244646 (H100 gpu45)   device      it. 13     31%     18%
+20252129 (A100 gpu41)   device      it. 5      32%     18%
+20252136 (A100 gpu13)   **host**    it. 2      32%     **19%**
+======================  ==========  =========  ======  =============
+
+The host arm's arena is, if anything, marginally *less* fragmented than either
+device arm while dying soonest, and all three share the same gross shape (~23
+used / hole / 45 used / hole) across two architectures, two nodes and deaths at
+iterations 2, 5 and 13. That is not support for the mechanism.
+
+**What would actually test it**, recorded so the next person does not repeat the
+search above: sample the largest free block *per iteration* rather than only at
+death, and do it on a cell where **both** arms survive, so the comparison is
+between two curves instead of between two deaths.
+
+``Device.memory_stats()`` is the instrument, and it **works on the backend this
+question lives on**. Every bracket quoted above is that call --
+``jax.devices()[0].memory_stats()["peak_bytes_in_use"]`` and ``["bytes_in_use"]``
+-- taken on CUDA. It returns ``None`` on the **CPU client**, which is a property
+of that client and *not* of the API: said the wrong way round it reads as "this
+does not work", and the next person on a GPU would skip an instrument that does.
+It simply cannot be developed or checked on this workstation.
+
+These key names are present in ``libjax_common.so`` as exact strings, seen here
+on jax/jaxlib 0.11.0 and independently on 0.11.1: ``bytes_in_use``,
+``bytes_limit``, ``bytes_reservable_limit``, ``largest_alloc_size``,
+``largest_free_block_bytes``, ``num_allocs``, ``peak_bytes_in_use``,
+``pool_bytes``.
+
+**That list is not the key set, and the method could not have told us if it were
+not.** Both greps were fixed alternations of *guessed* names -- one session
+asked about six, the other about eight -- so each could only return names already
+on its own list. The two agreeing is agreement about the candidates, not about
+the set, and the two extra names in the longer list were found by guessing two
+more rather than by discovery. Reading adjacent strings out of the binary does
+not rescue it either: the string table is interleaved across translation units,
+so nothing useful neighbours these. **What enumerates is
+``sorted(device.memory_stats())`` on a GPU**, and nothing here is a substitute
+for it.
+
+**And a string in the binary is evidence the key exists, not proof the CUDA
+client populates it** -- one print from a GPU job settles both questions at once
+and has not been run.
+``largest_alloc_size`` is arguably the better single number for this question
+than ``largest_free_block_bytes``, since what a 23.18 GiB request is up against
+is the largest request the arena can still satisfy.
+
+**Index it, do not ``.get`` it.** An unpopulated key read with ``.get`` returns
+``None``, and a formatted ``None`` -- or a guarded print that skips -- is
+indistinguishable from an arena that never fragments. That is this project's
+standing trap about a check whose null result cannot be told from a pass, in the
+one place it would be most expensive: let ``stats["largest_free_block_bytes"]``
+raise ``KeyError``, or assert the key is present once at startup.
 
 **The default is per platform, for the same reason the chunk sizes are**, and it
 falls the other way round from them: on a CPU the host and the device are one
