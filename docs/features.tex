@@ -4359,12 +4359,15 @@ physical rather than numerical.} Without spin-orbit coupling or anisotropy,
 turning \emph{every} moment together by the same angle costs no energy --- so the
 $\mathbf Q = 0$ transverse component of the magnetization has no restoring force
 at all, the self-consistent solution is a family rather than a point, and an
-extrapolating mixer is free to walk along it. The weaker the applied field, the
-less it pins that direction and the further the walk: on the four-cell hydrogen
-ultracell above, a $0.002$~Ry turning field at \code{mixing\_beta = 0.7} reaches
-a per-cell moment of $2.2\,\mu_B/2$ on an atom holding \emph{one} electron,
-which is a state that cannot exist. The same \code{beta} at $0.01$~Ry converges.
-Lowering it is the answer, and the run names the mechanism when it fails rather
+extrapolating mixer has a flat direction to walk along --- and what it does with
+one is wander. The weaker the applied field, the less it pins the direction and
+the longer the walk: on the four-cell hydrogen ultracell above, a $0.002$~Ry
+turning field takes \textbf{263} iterations where a $0.01$~Ry one takes 48, and
+passes on the way through per-cell moments of $2.2\,\mu_B/2$ on an atom holding
+\emph{one} electron, which is a state that cannot exist. Both converge in the
+end. At the stronger field \code{mixing\_beta} barely matters and the best value
+is in the middle of its range, so lowering it reflexively costs time; where it
+helps is a weak field, and the run names the mechanism when it struggles rather
 than only naming the knob.
 
 \textbf{What a noncollinear run is checked against.} At $N=1$ a uniform vector

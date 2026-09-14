@@ -15368,15 +15368,17 @@ read against that completeness, not against stage 1's band count.
 Without spin-orbit coupling or anisotropy, turning every moment together costs no energy --
 so the `Q = 0` transverse component of the magnetization is a Goldstone mode with **no
 restoring force at all**, and the self-consistent fixed point is a family rather than a
-point. An Anderson mixer extrapolating along a flat direction is unbounded, and on a
-four-cell hydrogen ultracell under a turning field at `mixing_beta = 0.7` it reached a
-per-cell moment of **2.2 mu_B/2 on an atom holding one electron** -- outside the physical
-manifold, which is the tell that separates slow convergence from a runaway.
+point. An Anderson mixer has a flat direction to extrapolate along, and what it does with
+one is *wander*: on a four-cell hydrogen ultracell under a **weak** turning field
+(0.002 Ry) at `mixing_beta = 0.7` it takes **263 iterations** where the same cell under a
+five-times-stronger field takes 48, and it passes on the way through per-cell moments of
+**2.2 mu_B/2 on an atom that holds one electron** -- states the cell cannot hold. It does
+converge, to `dr2 = 1.5e-10` and a moment of 0.0865.
 
-**The first version of this entry overstated it, and the correction is the point.** It said
-`beta = 0.7` diverges and `0.3` converges, from two runs taken at *different field strengths
-and different iteration budgets* -- 0.002 Ry at 40 iterations against 0.01 Ry at 120 -- which
-is two experiments reported as one comparison. Run properly, at 0.01 Ry and a 300-iteration budget,
+**It took three attempts to state that correctly, and the two wrong versions are the
+record.** The first said `beta = 0.7` *diverges* and `0.3` converges, from two runs at
+*different field strengths and different iteration budgets* -- 0.002 Ry at 40 iterations
+against 0.01 Ry at 120 -- which is two experiments reported as one comparison. Run properly, at 0.01 Ry and a 300-iteration budget,
 `beta` barely matters at all and **every value converges to the same state**:
 
 | `mixing_beta` | iterations | `dr2` | largest cell moment |
@@ -15390,11 +15392,16 @@ is two experiments reported as one comparison. Run properly, at 0.01 Ry and a 30
 to four digits, and the *best* of them 0.5 rather than the smallest. Turning `mixing_beta`
 down is not free and is not the answer here.
 
-The runaway is at the *weaker* field, which is what the Goldstone argument actually
-predicts: a weaker field pins the direction less, so the mode is softer and there is
-further to wander. This is `CLAUDE.md`'s "an explanation that fits a number and is accepted
-because it fits" -- the mechanism was right and the evidence offered for it was not the
-evidence, and only the controlled grid separates them.
+The second version then said the weaker field *does* run away -- still from a run stopped
+at 40 iterations. Given 300 it converges. **A non-convergence at a finite budget is not a
+divergence, and the two need different evidence**; what the truncated run actually showed
+was the excursion, not its end.
+
+What survives all three is the mechanism and a sharper statement of it: a weaker field pins
+the direction less, so the flat mode is flatter and the wandering is longer -- 263
+iterations against 48, through states outside the physical manifold. This is `CLAUDE.md`'s
+"an explanation that fits a number and is accepted because it fits", met twice on one
+claim, and only running the thing to completion separates them.
 
 The non-convergence warning names the mechanism rather than the knob, because "lower beta"
 without the reason is advice a user cannot check.

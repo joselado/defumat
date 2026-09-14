@@ -5342,9 +5342,10 @@ this code, above.
 four-cell turning-field run, all converging to the same state: 0.7 in 48 iterations, **0.5
 in 36**, 0.3 in 42, 0.2 in 115. The best is in the middle and the smallest is three times
 the worst, so the habit of lowering `beta` when a magnetic run is slow costs time without
-buying anything. Where it *is* needed is a weak field, where the rigid-rotation mode is
-barely pinned and a large `beta` leaves the physical manifold altogether
-(`OPEN.md` Part VI item 3).
+buying anything. Where it *is* needed is a weak field, where the rigid-rotation
+mode is barely pinned: the same four-cell run at 0.002 Ry instead of 0.01 takes **263
+iterations** at `beta = 0.7` against 48, and passes through states the cell cannot hold on
+the way (`OPEN.md` Part VI item 3).
 
 ### Iterations, which is where the method earns its keep
 

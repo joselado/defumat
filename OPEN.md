@@ -2385,17 +2385,21 @@ per cell, moment 0.62 mu_B/2) under a field that turns by 90 degrees per cell. T
 two field strengths crossed with four `mixing_beta`, all at one iteration budget -- see the
 table in `PLAN.md` P88 stage 3b. The shape of it:
 
-* at **0.002 Ry** the weaker field pins the direction hardly at all, and `beta = 0.7`
-  leaves the physical manifold: per-cell moments of **1.72 to 2.20 mu_B/2 on an atom that
-  holds one electron**. That is the tell -- not slow convergence, a state that cannot
-  exist;
-* at **0.01 Ry** the same `beta = 0.7` **converges**, in 48 iterations.
+* at **0.01 Ry** the field pins the direction well and `mixing_beta` barely matters:
+  0.7 converges in 48 iterations, 0.5 in 36, 0.3 in 42, 0.2 in 115, all to the same state.
+  The *best* value is in the middle;
+* at **0.002 Ry** the weaker field pins it hardly at all, and `beta = 0.7` takes **263
+  iterations** -- passing on the way through per-cell moments of **1.72 to 2.20 mu_B/2 on
+  an atom that holds one electron**, which is a state that cannot exist. It converges in
+  the end, to `dr2 = 1.5e-10` and a moment of 0.0865.
 
-**The first version of this entry said 0.7 diverges and 0.3 converges, full stop, and that
-was two runs at different field strengths and different budgets reported as one
-comparison.** The mechanism was right; the evidence offered for it was not the evidence.
-Softer field, softer mode, further to wander is what the Goldstone argument predicts, and
-it is what the controlled grid shows.
+**Two earlier versions of this entry were wrong and they are kept here as the record.**
+The first said "0.7 diverges, 0.3 converges", from two runs at different field strengths
+and different iteration budgets reported as one comparison. The second said the weak field
+diverges -- still from a run stopped at 40 iterations. **A non-convergence at a finite
+budget is not a divergence.** What the truncated runs showed was the excursion; only
+running to 300 iterations showed its end. The mechanism survived both corrections and the
+evidence for it did not.
 
 The collinear branch of the same cell has no such direction -- flipping a moment costs
 energy, and rotating one is not expressible -- so this is new at `nspin = 4` and not a
