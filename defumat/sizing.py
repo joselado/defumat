@@ -94,13 +94,20 @@ the peak a converging run reaches: the loose starting threshold is a **different
 calculation** from the tight one it schedules towards. Where a card is chosen on
 this estimate, choose it for the tight end.
 
-**The figure this module reports is known to be low on a large spinor PAW slab,
-and by how much is an open item.** The same cell reported a 49.5 GB peak against
-a 79.4 GB measured working set, which is the wrong direction for a floor to be
-wrong in; ``OPEN.md`` Part VII item 1 has the breakdown and the measurement that
-would close it. Part of that gap was an allocation outside the executable this
-module sizes -- the eigensolver's finiteness guard, which has since been folded
-into it -- and most of it is still unaccounted for.
+**A gap against a measured peak is not automatically a model error, and on the
+one large cell where that was tested it mostly was not.** The same 45-atom
+spinor PAW slab reported 49.52 GB against a 77.63 GB measured peak, which looked
+like a 60 per cent shortfall in this module. It was not: **21.40 GB of the 28.11
+GB gap was one allocation**, the eigensolver's finiteness guard, which sat
+*outside* the executable this module sizes and so appeared in no line of the
+report at all. Folding that guard into the solver removed it. What is left is
+**4.78 GiB, 6.6 per cent of the peak**, inside the eigensolver fit's own error
+bar. ``OPEN.md`` Part VII item 1 has the subtraction and the caveat on it.
+
+The lesson for anyone extending this module is the one that generalises: **the
+first thing to look for in a gap is a whole term that lives outside the sized
+unit**, not a coefficient that is ten per cent off. An allocation this module
+does not model is invisible; a coefficient that is wrong is merely inaccurate.
 
 References for the conventions rather than the code: ``PW/src/setup.f90`` for
 ``nbnd``, ``Modules/recvec_subs.f90`` (``ggen``) for the sphere, and

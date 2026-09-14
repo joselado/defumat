@@ -108,6 +108,39 @@ only the order the k contributions are *added* in (~1e-15 Ry), which is what
 short-circuit ``nk == 1`` to a direct call before they look at the chunk size,
 so the new default does not put a width-one batch axis on the single-k
 benchmark cells -- the case "a batch of one is not a batch" above is about.
+
+Where the wavefunctions are *kept*
+----------------------------------
+
+The dials above bound how much of the k axis is **in flight**. They say nothing
+about where the k axis is **stored**, and on a large cell the store is the
+larger number: ``nspin nk nbnd npwx npol`` complex is 11.3 GB on a 45-atom
+NiBr2 slab at six k-points and 45 GB at twenty-four, and it sits on the
+accelerator for the whole SCF because it is the next iteration's starting guess.
+
+QE does not keep it there. ``c_bands.f90``'s ``get_buffer``/``save_buffer`` pair
+reads one k-point's ``evc`` in and writes it back out, and ``io_level`` decides
+whether the buffer is memory or disk -- so QE's *resident* wavefunction set is
+one k-point's however many there are. :func:`park_wavefunctions` and
+:func:`fetch_wavefunctions` are that buffer, with JAX's host memory kind as the
+backing store: the driver parks the whole set once the density has been built
+from it and fetches it back before the next diagonalisation.
+
+**What that wins, and what it does not.** It takes the store off the
+accelerator for the span between the two -- the energy assembly, ``v_of_rho`` on
+the dense grid, the mixer's ``mixing_ndim`` histories, the PAW one-centre terms,
+the checkpoint write -- which is where the *other* large allocations are, and
+which is also where an arena fragments. It does **not** lower the peak if the
+peak is inside the solve: the store is an input to the diagonalisation, to
+``becsum`` and to the density, so it is on the device for all three. A run that
+dies in the eigensolver dies just the same.
+
+**The default is per platform, for the same reason the chunk sizes are**, and it
+falls the other way round from them: on a CPU the host and the device are one
+piece of memory, so parking is a `memcpy` of the whole store per iteration that
+buys nothing, and the default is ``device``. On an accelerator it is ``host``.
+``DEFUMAT_WFC_STORE`` overrides the platform and an explicit ``wfc_store``
+overrides that, which is the precedence the other two dials already have.
 """
 
 from __future__ import annotations
@@ -123,7 +156,9 @@ from ._envcompat import environ_get
 
 __all__ = ["DEFAULT_K_BATCH", "resolve_k_batch", "map_k", "sum_k",
            "DEFAULT_BAND_BATCH", "resolve_band_batch", "map_bands",
-           "sum_bands", "map_axis"]
+           "sum_bands", "map_axis",
+           "WFC_STORES", "resolve_wfc_store", "park_wavefunctions",
+           "fetch_wavefunctions"]
 
 
 _UNSET = object()
@@ -393,3 +428,129 @@ def sum_bands(fn, xs, *, batch: int | None | str = "default"):
     else, so it moves the density by round-off and no more.
     """
     return sum_k(fn, xs, batch=_resolve_band_batch(batch))
+
+
+# ---------------------------------------------------------------------------
+# where the wavefunction store lives -- QE's ``get_buffer``/``save_buffer``
+# ---------------------------------------------------------------------------
+
+#: The two places the store can be. ``"device"`` is this package's own history
+#: and is what a CPU wants; ``"host"`` is QE's buffer.
+WFC_STORES = ("device", "host")
+
+
+def _wfc_store_default() -> str:
+    setting = (environ_get("DEFUMAT_WFC_STORE", "") or "").strip().lower()
+    if setting in WFC_STORES:
+        return setting
+    if setting:
+        warnings.warn(
+            f"ignoring DEFUMAT_WFC_STORE={setting!r}: expected one of "
+            f"{WFC_STORES}", RuntimeWarning, stacklevel=2,
+        )
+    return "device" if _backend() == "cpu" else "host"
+
+
+def resolve_wfc_store(requested: str | None = "default") -> str:
+    """Turn what a caller passed into ``"device"`` or ``"host"``.
+
+    ``"default"`` asks the environment and then the platform, exactly as
+    :func:`resolve_k_batch` does. ``None`` is *not* a meaningful value here --
+    unlike the chunk sizes, where it means the whole axis -- so it is treated as
+    "nothing was said" and resolves the same way.
+    """
+    if requested is None or requested == "default":
+        return _wfc_store_default()
+    value = str(requested).strip().lower()
+    if value not in WFC_STORES:
+        raise ValueError(
+            f"wfc_store must be one of {WFC_STORES} or 'default', got "
+            f"{requested!r}"
+        )
+    return value
+
+
+@functools.cache
+def _host_sharding():
+    """The pinned-host sharding for the default device, or ``None``.
+
+    ``None`` means this backend has no host memory kind to park in, which is
+    reported once by :func:`park_wavefunctions` rather than discovered as a
+    silently-ignored setting. Cached because building it costs a device query
+    and the answer cannot change inside a process.
+    """
+    try:
+        device = jax.devices()[0]
+        kinds = {memory.kind for memory in device.addressable_memories()}
+        if "pinned_host" not in kinds:
+            return None
+        return jax.sharding.SingleDeviceSharding(device, memory_kind="pinned_host")
+    except Exception:
+        return None
+
+
+def _device_sharding():
+    try:
+        return jax.sharding.SingleDeviceSharding(
+            jax.devices()[0], memory_kind="device")
+    except Exception:
+        return None
+
+
+def _not_traced(psi, verb: str) -> None:
+    """A transfer is a host-side act and must never be inside a traced path.
+
+    Under ``jax.grad`` JAX raises on its own -- a memory kind is part of the
+    aval, so the cotangent of a parked array has a type the primal does not --
+    but inside a plain ``jit`` it **succeeds**, and what it compiles is a
+    transfer in the middle of a kernel rather than a buffer that lives
+    somewhere. That is the failure this guard is for: it works, it is slower,
+    and nothing says so.
+    """
+    if isinstance(psi, jax.core.Tracer):
+        raise TypeError(
+            f"{verb} the wavefunction store is a host-side transfer and cannot "
+            "happen inside jit or grad: the store is loop state, parked between "
+            "the point the density is built from it and the next "
+            "diagonalisation, and a traced value is neither"
+        )
+
+
+def park_wavefunctions(psi, where: str = "device"):
+    """Move the store to ``where``, QE's ``save_buffer``.
+
+    ``where = "device"`` returns ``psi`` untouched, which is what makes this
+    free to call unconditionally: the driver does not branch, the dial does.
+    ``None`` passes through, since the store does not exist before the first
+    diagonalisation.
+    """
+    if psi is None or where == "device":
+        return psi
+    _not_traced(psi, "parking")
+    sharding = _host_sharding()
+    if sharding is None:
+        warnings.warn(
+            "wfc_store='host' asked for, but this backend has no pinned-host "
+            "memory to park the wavefunctions in; they stay on the device",
+            RuntimeWarning, stacklevel=2,
+        )
+        return psi
+    return jax.device_put(psi, sharding)
+
+
+def fetch_wavefunctions(psi):
+    """Bring the store back, QE's ``get_buffer``.
+
+    Idempotent on an array that is already there, and on ``None``. It is called
+    unconditionally rather than under the dial, so that a run whose dial changed
+    mid-flight -- a resume, a caller that passed its own -- still hands the
+    solver a device array.
+    """
+    if psi is None:
+        return psi
+    _not_traced(psi, "fetching")
+    kind = getattr(getattr(psi, "sharding", None), "memory_kind", None)
+    if kind is None or kind == "device":
+        return psi
+    sharding = _device_sharding()
+    return psi if sharding is None else jax.device_put(psi, sharding)

@@ -5577,6 +5577,17 @@ which is the same backend caveat `tools/gpu/davidson_memory.py`'s docstring stat
 subspace buffer, and is why the table above is about the *form* rather than the size: one
 column follows `nk` and the other does not.
 
+**How far below, measured, because the ratio to `psi` hides it.** Normalise by
+wavefunction element instead -- which survives the change of expression between the two
+jobs, where a ratio to `psi` does not: the H100 asked **30.39 bytes per element** for the
+per-k form, against **1.00** for the identical expression compiled here. 1.00 is the bool
+array and nothing else, which is what full fusion looks like; 30.4 bytes against a
+complex128 input reads as nothing fusing at all. The older whole-set scalar was **9.23**
+B/element, so the per-k form that shipped was the *more expensive* lowering per element by
+3.3x -- flat in `nk`, which is what mattered, but not cheap. **So a CPU
+`memory_analysis()` can be a lower bound on a GPU allocation by a factor of thirty**, not
+by a few per cent. That is the sharpest form of the backend caveat on record here.
+
 **Folding it in is free to the solver's own buffer.** `_every_k`'s temp buffer with the
 guard outside against inside, same cell, same `david`, same band batch:
 
@@ -5597,6 +5608,15 @@ saves. So the whole of the old
 allocation goes, and what replaces it is inside the executable
 `tools/gpu/davidson_memory.py` sizes -- which was the other half of the problem, since an
 allocation outside that unit appears in no line of the size report.
+
+**And it closed the size report's gap, which was the other half of the report.** The
+same job's log carries both the estimate and the peak: 49.52 GB predicted against 77.63
+measured, a 28.11 GB gap, of which **22.98 GB is this one allocation** -- 82 per cent. The
+residual is 5.13 GB, 6.6 per cent of the peak, inside the eigensolver fit's error bar. An
+independent read off the allocator's occupancy bar agrees: 31 per cent free on an 82.95 GB
+pool is 57.24 GB in use at the request, 16 per cent above the prediction rather than 60.
+The size report was not 60 per cent low; it was missing one line, and that line no longer
+exists.
 
 **No timing pair against `pw.x` here**, and that is deliberate rather than an omission:
 this is not a feature taken from QE, it is a guard on a route `cegterg` does not have

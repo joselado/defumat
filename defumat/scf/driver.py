@@ -97,7 +97,10 @@ from defumat.pseudo.potentials import (
 from defumat.pseudo.projectors import build_projector_core, projector_channels
 from defumat.pseudo.upf import Pseudopotential
 from defumat.pseudo.spinorbit import becsum_transform, build_spin_orbit
-from defumat.batching import map_k, resolve_k_batch
+from defumat.batching import (
+    fetch_wavefunctions, map_k, park_wavefunctions, resolve_k_batch,
+    resolve_wfc_store,
+)
 from defumat.scf.continuation import ContinuedState, continued_state
 from defumat.scf.density import (
     becsum,
@@ -4384,6 +4387,7 @@ def run_scf(
     diago_full_acc: bool = False,
     verbose: bool = False,
     k_batch: int | None | str = "default",
+    wfc_store: str | None = "default",
     starting_density: jnp.ndarray | None = None,
     starting_becsum: tuple | None = None,
     starting_ns: jnp.ndarray | None = None,
@@ -4689,6 +4693,13 @@ def run_scf(
     # *calculation* untouched, so the same object can be reused afterwards.
     field = calculation.magnetic_field
     field_scale = 1.0
+    # **Where the store lives between the points that read it** (QE's
+    # ``io_level``). ``device`` is this package's own history and is what a CPU
+    # wants, since there the host *is* the device and parking is a memcpy of the
+    # whole set for nothing; ``host`` is ``c_bands.f90``'s buffer and is the
+    # accelerator default. See :mod:`defumat.batching` for what it wins and --
+    # more to the point -- what it does not.
+    wfc_store = resolve_wfc_store(wfc_store)
 
     # A residual solver runs *before* the loop and hands it a density that is
     # already self-consistent, so the loop's first iteration is what turns that
@@ -4842,6 +4853,10 @@ def run_scf(
                 shape=(len(hamiltonians), hamiltonians[0].nk, nbnd),
                 diago_full_acc=diago_full_acc,
             )
+            # Back from the buffer, QE's ``get_buffer``. Unconditional rather
+            # than under the dial: a resume, or a caller that handed its own
+            # span in, can reach here with a store the dial did not park.
+            wavefunctions = fetch_wavefunctions(wavefunctions)
             eigenvalues, wavefunctions, steps, unsettled = calculation.diagonalize(
                 hamiltonians, nbnd, wavefunctions, thresholds, return_steps=True
             )
@@ -4861,6 +4876,14 @@ def run_scf(
             rho_out = calculation.density(wavefunctions, wg, becsum_out)
             if tau_state is not None:
                 tau_out = calculation.kinetic_energy_density(wavefunctions, wg)
+            # **The last read of the store in this iteration**, so back to the
+            # buffer it goes. Everything between here and the fetch above --
+            # the energy terms, ``v_of_rho`` on the dense grid, the mixer's
+            # history, the PAW one-centre terms, the checkpoint write -- runs
+            # with the wavefunctions off the accelerator. A second attempt
+            # fetches them again, which is the same one transfer ``c_bands``
+            # pays when ``electrons.f90`` cycles the step.
+            wavefunctions = park_wavefunctions(wavefunctions, wfc_store)
             # On the dense grid, which is the grid the residual lives on. QE
             # sums rho_ddot over the *smooth* set instead (and says so, in a
             # comment noting the change from ngm to ngms); the difference is the
@@ -5375,7 +5398,13 @@ def run_scf(
         # unpolarized result then has exactly the shape it always had.
         eigenvalues=np.asarray(eigenvalues if nspin == 2 else eigenvalues[0]),
         occupations=np.asarray(wg if nspin == 2 else wg[0]),
-        wavefunctions=wavefunctions,
+        # **Back on the device, whatever the dial said.** The store is parked
+        # between the iterations of *this* loop and nowhere else: what leaves
+        # here is an ordinary result, and forces, bands, a response and a
+        # checkpoint all read it without knowing a buffer existed. A caller that
+        # wants the final set off the accelerator is a separate decision from
+        # where the loop keeps it, and is not this one.
+        wavefunctions=fetch_wavefunctions(wavefunctions),
         density=rho,
         # ``set_vrs`` again: the local pseudopotential belongs to the charge
         # component alone once the potential is ``(n, m)``, so it cannot be

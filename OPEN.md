@@ -23,11 +23,11 @@ entry had recorded as fact but the **affinity mask this package sets itself** --
 **Part VII** is from a peer session running the **NiBr2 helix on Triton**, reported
 **2026-09-14**: four findings, two of them defects that were fixed the same day (the
 Davidson finiteness guard's allocation, and a checkpoint refusal that was wrong on both
-sides of its boundary at once). Three entries are carried: a `sizing.py` report
-that read 60 per cent low on a 45-atom spinor PAW slab, a Davidson inner-step count
-that may degrade at the minimum subspace, and the checkpoint's remaining Hubbard refusal,
-which is probably as wide as the field's was. The first two cannot be measured on this
-machine.
+sides of its boundary at once). Three entries are carried: a `sizing.py` report that looked
+60 per cent low on a 45-atom spinor PAW slab -- **closed 2026-09-14, and it was the
+guard**, not a missing model term -- a Davidson inner-step count that may degrade at the
+minimum subspace, and the checkpoint's remaining Hubbard refusal, which is probably as
+wide as the field's was.
 
 **Part V** is from the **2026-09-13** memory session: one entry, and it is not that
 session's work -- four of `test_magnons.py`'s eight tests fail, all four downstream of a
@@ -2477,28 +2477,66 @@ calls it, and the mid-SCF path was passing for the opposite reason -- it carried
 field for the refusal to see. Reading a refusal's source is not the same as watching it
 fire, which is `CLAUDE.md`'s own rule about guards, applied to a guard's absence.
 
-## 1. `sizing.py` reads 60 per cent low on a 45-atom spinor PAW slab, and it is what a card is chosen with
+## 1. `sizing.py` reads 60 per cent low on a 45-atom spinor PAW slab **[closed 2026-09-14 -- the missing line was the guard, and 0e85a14 deleted it]**
 
 `run_scf.py --size-only` at a `1 6 1` mesh reported floor 42.60 GiB, eigensolver XLA temp
 buffer 18.55 GiB, **peak 46.12 GiB = 49.5 GB**. The measured working peak was **79.4 GB**,
 with the guard above asking 21.4 GB more on top of that once `ethr` tightened. Anyone
 reading the report picks an 80 GB card for a cell that needs 141 GB.
 
-**Two of the three gaps are now accounted for and the largest is not.** The guard's
-allocation was outside the executable `tools/gpu/davidson_memory` sizes, so it appeared in
-no line of the report; folding it into `_every_k` both removes it and brings what is left
-inside the sized unit. That leaves roughly **30 GB the model does not explain**, which is
-the item. Note the direction: the module's own error bar says "within 3.1 per cent on 12
-of 14 points, 30 per cent **high** on the two at `david 2` / `band_batch 64`" -- and those
-two points are the same corner this cell runs in. So the formula is known to be
-non-monotonic in `band_batch` exactly here, and the sign of its error at this corner is
-now known to go both ways. **Do not reconcile that from one point.**
+**Closed by subtraction, from that job's own log.** The run prints its `defumat size`
+block at its head, so the estimate and the peak are in one file, and the peer session did
+the arithmetic:
 
-**First step, and it is a measurement rather than a fix.** `tools/gpu/davidson_memory.py`
-at this cell's shapes over `david` in {2, 3}, `band_batch` in {16, 32, 64} and `k_batch` 1,
-against the real working peak from the same job's `nvidia-smi` or the allocator's own arena
-report. What the report needs is not a better coefficient but a line for whatever the 30 GB
-is -- a term that is missing is worth more than a term that is 10 per cent off.
+| | GiB | GB |
+|---|---|---|
+| measured peak (H100 gpu45) | 72.30 | 77.63 |
+| what the model predicted | 46.12 | 49.52 |
+| gap | 26.18 | 28.11 |
+| **the guard, one allocation** | **21.40** | **22.98** |
+| residual | 4.78 | 5.13 |
+
+The guard is **82 per cent of the gap**, and what is left is **6.6 per cent of the peak** --
+inside the eigensolver fit's own error bar. So the line the report was missing was the
+guard itself, and `0e85a14` deleted the thing it would have described. There is no missing
+30 GB term; the entry's own estimate of one was wrong, and it was wrong because it read a
+gap as a *model* error when most of it was a single allocation the model was never asked
+to cover.
+
+**An independent check that does not use the model at all**, from the occupancy bar: 31 per
+cent free on an 82.95 GB pool is 57.24 GB in use at the instant of the request, **16 per
+cent** above the predicted 49.52 GB. Not 60.
+
+**One caveat on the 4.78 GiB, and it is the peer's own.** The model's peak is
+`resident + max(the Davidson lines, the XLA temp)`, and the guard clearly allocated while
+the solver's working set was still resident -- 27.58 + 21.40 does not reach 72.30. The
+overlap cannot be proved from a log, so 4.78 GiB is a **residual** and not a measured
+solver excess.
+
+**What is still worth running**, and it is now a confirmation rather than a diagnosis:
+`tools/gpu/davidson_memory.py` at this cell's shapes over `david` in {2, 3} and
+`band_batch` in {16, 32, 64}, `k_batch` 1, against a real working peak from the same job,
+at `5be8b15` or later. The prediction to falsify is 54.8-58.5 GB on the `1 6 1` mesh, which
+if it holds puts the 141 GB card requirement back in question.
+
+**The transferable finding is about the two backends, not about the model.** Normalised
+per wavefunction element -- which survives the change of expression between the two jobs,
+where a ratio to `psi` does not:
+
+| job | commit | form | nk | asked | B/element |
+|---|---|---|---|---|---|
+| 20212071 | `f922702` | whole-set scalar, `davidson.py:742` | 24 | 26.00 GiB | 9.23 |
+| 20244646 | `73ccb71` | per-k, `davidson.py:759` | 6 | 21.40 GiB | **30.39** |
+| (this CPU) | `73ccb71` | the same per-k expression | 6 | 0.70 GiB | **1.00** |
+
+1.00 B/element is the bool array and nothing else, which is what full fusion looks like.
+The H100 materialised **30 times** that for the same expression, and 30.4 bytes against a
+complex128 input reads as nothing fusing at all. Two things follow. The per-k form was the
+**more expensive lowering per element** -- 3.3x the whole-set scalar -- which is worth
+knowing because it is the form that shipped and ran for weeks. And a CPU
+`memory_analysis()` is a lower bound on a GPU allocation by a factor that can be 30, not a
+few per cent: `PERFORMANCE.md` says the *form* transfers and the coefficient does not, and
+this is how far "does not" can go.
 
 **A caveat that belongs beside the report and is now in the module docstring.** A short
 calibration run measures the regime the calculation *leaves*. On this cell iterations 1-12

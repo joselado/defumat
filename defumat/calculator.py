@@ -102,6 +102,11 @@ SHARED_OPTIONS = frozenset({
     "nbnd",
     "conv_thr",
     "k_batch",
+    # Where the wavefunction store lives between the points that read it, the
+    # placement counterpart of ``k_batch``'s flight dial. Only ``run_scf`` names
+    # it, so the forwarding reaches that and nothing else -- which is the whole
+    # reason the filtering is by named parameter.
+    "wfc_store",
     "diagonalization",
     "david",
     "diago_full_acc",
