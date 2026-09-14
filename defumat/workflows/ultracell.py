@@ -39,14 +39,26 @@ from defumat.basis.fft import r_to_g
 from defumat.basis.sample import sample_miller
 from defumat.stm.image import STMImage, project_spin, tunnelling_weights
 from defumat.stm.plane import PlotPlane
+from defumat.transport.green import (
+    TransportGeometry,
+    VerticalTransport,
+)
 from defumat.workflows.stm import (
     _constant_current,
     _plane,
     _tip_energy,
     _tip_width,
 )
+from defumat.workflows.transport import (
+    DEFAULT_BROADENING,
+    _assemble,
+    _energies,
+    _label,
+    _tip_points,
+    _warn_if_the_slab_is_not_between,
+)
 
-__all__ = ["run_ultracell_stm"]
+__all__ = ["run_ultracell_stm", "run_ultracell_transport"]
 
 
 def run_ultracell_stm(
@@ -198,6 +210,170 @@ def run_ultracell_stm(
     return image
 
 
+def run_ultracell_transport(
+    system,
+    pseudos,
+    result,
+    *,
+    exit_height: float,
+    exit_axis: int = 2,
+    height: float | None = None,
+    axis: int | None = None,
+    plane: tuple | PlotPlane | None = None,
+    shape: tuple[int, int] = (60, 40),
+    tip=None,
+    energies=None,
+    bias: float | None = None,
+    nenergies: int = 1,
+    broadening: float = DEFAULT_BROADENING,
+    method: str = "spectral",
+    smearing: str = "gaussian",
+    spin=None,
+    polarization: float = 1.0,
+    tip_spin=None,
+    tip_polarization: float = 1.0,
+    incoherent: bool = True,
+    exit_region: str = "plane",
+    k_batch: int | None = 1,
+) -> VerticalTransport:
+    """``T(r; E)`` through a modulated two-dimensional material.
+
+    P66's junction with an ultracell in it: the electron enters at a point above
+    the sheet and leaves into an infinite plane below, and what decides the
+    current is the nonlocal Green's function between the two. Where the sheet
+    carries a modulation -- a charge density wave, a domain wall, a moire
+    period -- the map is a map *of the modulation*, and it departs from the
+    image :func:`run_ultracell_stm` gives by the interference between states
+    degenerate at the tip energy, which is reported beside it.
+
+    **Everything is P66's**, including the contraction, the channel basis, the
+    two spin polarizers and the diagnostics: what changes is the geometry the
+    bands live on, which is the ultracell's sphere, its cell and the ultracell
+    Brillouin zone's ``k0`` (:class:`~defumat.transport.green.TransportGeometry`).
+
+    Args:
+        system, pseudos: the **unit cell's**.
+        result: the :class:`~defumat.ultracell.driver.UltracellResult`, with its
+            states kept.
+        exit_height: the substrate plane's crystal coordinate along
+            ``exit_axis``. It is the same number in both cells, because an
+            ultracell modulated along the stacking axis is refused below.
+        exit_axis: the stacking axis, 2 for an ordinary slab.
+        height, axis, plane, shape, tip: the tip plane, in **unit-cell** crystal
+            coordinates running over ``[0, n_i)`` -- :func:`run_ultracell_stm`'s
+            convention, so a map spans the whole modulation.
+        energies, bias, nenergies, broadening, method, smearing: the energy
+            selection, exactly :func:`~defumat.workflows.transport.run_vertical_transport`'s.
+        spin, polarization: the substrate's spin acceptance; ``tip_spin`` and
+            ``tip_polarization`` the tip's. Both leads may be magnetic, and with
+            both the map depends on the angle between them.
+        incoherent: report the interference-free map beside the coherent one.
+        exit_region: ``"plane"``, the substrate, or ``"volume"``, which widens
+            the exit region to the whole ultracell and must then reproduce
+            :func:`run_ultracell_stm` exactly -- the Tersoff-Hamann limit, and
+            the check that the two normalisations agree.
+        k_batch: how many ``k0`` points' amplitudes are held at once. It bounds
+            a **host** array, ``(npol, k_batch, N nbnd, npoints)`` with another
+            of the same size beside it inside the contraction, and an ultracell
+            has ``N`` times as many states per k-point as a unit cell does: a
+            40x40 map over 630 ultracell states is 16 MB per ``k0``, twice
+            over. One at a time by default, which is the whole subpackage's end
+            of that trade (``state_batch``, and the Python ``k0`` loop).
+    """
+    states = _states_of(result, "a vertical transmission")
+    if exit_axis not in (0, 1, 2):
+        raise ValueError(f"exit_axis must be 0, 1 or 2, got {exit_axis}")
+    if exit_region not in ("plane", "volume"):
+        raise ValueError(
+            f"unknown exit_region {exit_region!r}: use 'plane' (the substrate) "
+            "or 'volume' (the Tersoff-Hamann diagnostic)"
+        )
+    if axis is None:
+        axis = exit_axis
+    _refuse_what_has_no_tip_energy(system, result)
+    _refuse_a_stacked_ultracell(states, exit_axis)
+    _refuse_a_k_set_this_cannot_sum(states, exit_axis)
+
+    ultracell = states.ultracell
+    scale = np.asarray(ultracell.shape, dtype=float)
+    geometry, points = _tip_points(system.cell, height, axis, plane, shape, tip,
+                                   span=ultracell.shape)
+    _warn_if_the_slab_is_not_between(system, exit_axis, exit_height, points, axis)
+
+    levels = _levels(system, result, states)
+    grid_energies = _energies(energies, levels, bias, nenergies)
+
+    # **The exit plane's height needs no conversion and the tip points do.**
+    # The ultracell is one cell deep along the stacking axis, so a crystal
+    # coordinate along it is the same number in both; laterally it is ``n_i``
+    # cells, so a point given over ``[0, n_i)`` is ``s / n_i`` in the
+    # coordinates the ultracell's own Miller indices are written against.
+    values, extras = _assemble(
+        _ultracell_geometry(states), states, np.asarray(states.eigenvalues),
+        points / scale,
+        exit_height=float(exit_height), exit_axis=exit_axis,
+        energies=grid_energies, broadening=float(broadening),
+        spin=spin, polarization=float(polarization),
+        tip_spin=tip_spin, tip_polarization=float(tip_polarization),
+        incoherent=bool(incoherent), exit_region=exit_region,
+        method=method, smearing=smearing, k_batch=k_batch,
+    )
+
+    if bias is not None:
+        values = {key: np.trapezoid(array, grid_energies, axis=0)[None]
+                  for key, array in values.items()}
+
+    shaped = geometry.shape if geometry is not None else (points.shape[0],)
+    coherent = values["coherent"].reshape((-1,) + shaped)
+    incoherent_map = (None if "incoherent" not in values
+                      else values["incoherent"].reshape((-1,) + shaped))
+    if coherent.shape[0] == 1:
+        coherent = coherent[0]
+        if incoherent_map is not None:
+            incoherent_map = incoherent_map[0]
+
+    transport = VerticalTransport(
+        values=coherent,
+        plane=geometry,
+        energies=np.atleast_1d(grid_energies if bias is None
+                               else np.array([grid_energies[0]])),
+        broadening=float(broadening),
+        exit_height=float(exit_height),
+        exit_axis=int(exit_axis),
+        incoherent=incoherent_map,
+        fermi_energy=levels.get("fermi_energy"),
+        spin=_label(spin),
+        polarization=float(polarization),
+        tip_spin=_label(tip_spin),
+        tip_polarization=float(tip_polarization),
+        least_eigenvalue=extras["least_eigenvalue"],
+        offdiagonal_weight=extras["offdiagonal_weight"],
+        notes={**extras["notes"], "supercell": tuple(int(n) for n in ultracell.shape)},
+    )
+    return transport
+
+
+def _ultracell_geometry(states) -> TransportGeometry:
+    """Where an ultracell's bands live, as the transmission's own bundle.
+
+    The overlap is ``None`` rather than a function, and that is exact: the
+    ultracell refuses ultrasoft and PAW datasets, so ``S`` is the identity and
+    ``sum_G c* c`` is orthonormality itself. The peak here is the stacked Miller
+    indices, ``nk0 x N npwx x 3`` integers, which is small beside the one
+    ``k0`` block :meth:`~defumat.ultracell.states.UltracellStates.block` builds
+    inside the loop.
+    """
+    return TransportGeometry(
+        miller=np.stack([states.miller(ik) for ik in range(states.nk0)]),
+        mask=np.stack([states.mask(ik) for ik in range(states.nk0)]),
+        kcrystal=states.kcrystal,
+        kweights=np.asarray(states.weights, dtype=float),
+        cell=states.ultracell_cell,
+        npol=int(states.npol),
+        apply_s=None,
+    )
+
+
 # --------------------------------------------------------------------------
 # what an ultracell image needs from the run, and what it refuses
 # --------------------------------------------------------------------------
@@ -288,3 +464,45 @@ def _box_coefficients(field, states, system):
         ultracell.g2(system.cell).reshape(-1) <= float(system.ecutrho) + 1.0e-8
     )
     return np.asarray(r_to_g(np.asarray(field), index)), ultracell.miller_at(index)
+
+
+def _refuse_a_stacked_ultracell(states, exit_axis):
+    """A modulation along the stacking axis is not a junction this can sum.
+
+    The ultracell would then be ``n`` slabs stacked with the exit plane between
+    two of them, so the electron leaves through the material rather than out of
+    it -- and two ``Q`` differing only along that axis share every in-plane
+    index, which the exit integral cannot tell apart and the unit-cell code
+    would sum incoherently as different k-points. It is also what makes
+    ``exit_height`` the same number in both cells.
+    """
+    n = int(states.ultracell.shape[int(exit_axis)])
+    if n != 1:
+        raise NotImplementedError(
+            f"the ultracell is {n} cells deep along the stacking axis "
+            f"{exit_axis} and a vertical junction needs one: the exit plane "
+            "would sit between two of the stacked slabs, so the electron "
+            "leaves through the material rather than out of it. Modulate the "
+            "surface directions instead, which is where a charge density wave, "
+            "a domain wall or a moire period lives"
+        )
+
+
+def _refuse_a_k_set_this_cannot_sum(states, exit_axis):
+    """One division along the stacking axis, on the ``k0`` mesh this time.
+
+    :func:`defumat.workflows.transport._refuse_a_k_set_this_cannot_sum`'s
+    statement, re-expressed on the set the ultracell samples: lateral momentum
+    is conserved exactly and the momentum along the normal is not, so states at
+    the same ``k_parallel`` and different ``k_perp`` interfere with a phase that
+    depends on where the exit plane sits. The wedge half of it does not arise --
+    a ``k0`` mesh is unreduced and equally weighted by construction.
+    """
+    along = np.unique(np.round(np.asarray(states.k0_crystal)[:, int(exit_axis)], 8))
+    if along.size > 1:
+        raise NotImplementedError(
+            f"the ultracell k-set has {along.size} divisions along the stacking "
+            f"axis and this quantity needs one: pass a kgrid with 1 along axis "
+            f"{exit_axis} to run_ultracell. A two-dimensional material is a "
+            "slab with one k-point along its normal"
+        )

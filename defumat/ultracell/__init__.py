@@ -12,6 +12,7 @@ from defumat.ultracell.driver import (
 )
 from defumat.ultracell.grid import Ultracell, folded_kpoints
 from defumat.ultracell.hamiltonian import multiplet_cut, ultracell_matrix
+from defumat.ultracell.states import UltracellStates, ultracell_band_density
 from defumat.ultracell.potential import (
     delta_potential,
     ultracell_potential,
@@ -20,6 +21,8 @@ from defumat.ultracell.potential import (
 
 __all__ = [
     "Ultracell",
+    "UltracellStates",
+    "ultracell_band_density",
     "UltracellResult",
     "folded_kpoints",
     "run_ultracell",

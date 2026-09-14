@@ -50,6 +50,7 @@ from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.basis.sample import sample_wavefunctions
 from defumat.scf.driver import Calculation, gamma_storage_is_consumable
 from defumat.stm.plane import PlotPlane
+from defumat.workflows.stm import refuse_an_ultracell_result
 from defumat.transport.green import (
     DEGENERACY_TOL,
     TransportGeometry,
@@ -206,6 +207,9 @@ def run_vertical_transport(
             "converged transmission",
             stacklevel=2,
         )
+    refuse_an_ultracell_result(
+        result, "a vertical transmission",
+        "defumat.workflows.ultracell.run_ultracell_transport")
     if exit_axis not in (0, 1, 2):
         raise ValueError(f"exit_axis must be 0, 1 or 2, got {exit_axis}")
     if axis is None:
@@ -395,6 +399,11 @@ def run_momentum_transport(
     for**, which is the convention the rest of this package uses for the energy
     axis already.
     """
+    refuse_an_ultracell_result(
+        result, "a momentum-resolved transmission",
+        "not written: it is P89's outstanding line, because the weight would be "
+        "one number per ultracell k0 and the question worth asking is which Q "
+        "the current leaves through")
     _refuse_what_has_no_fermi_level(system, result)
     refuse_gamma_storage(
         gamma_storage_is_consumable(system, pseudos),
@@ -1055,8 +1064,13 @@ def _label(spin):
 # --------------------------------------------------------------------------
 
 
-def _tip_points(cell, height, axis, plane, shape, tip):
-    """``(geometry, points)``: a plane to make a map on, or explicit points."""
+def _tip_points(cell, height, axis, plane, shape, tip,
+                span=(1.0, 1.0, 1.0)):
+    """``(geometry, points)``: a plane to make a map on, or explicit points.
+
+    ``span`` is how far the plane reaches along each lattice vector, one cell
+    by default and ``n_i`` for an ultracell map (``PLAN.md`` P89).
+    """
     if tip is not None:
         if height is not None or plane is not None:
             raise ValueError(
@@ -1068,7 +1082,7 @@ def _tip_points(cell, height, axis, plane, shape, tip):
             raise ValueError(
                 f"tip points are (np, 3) crystal coordinates, got {points.shape}")
         return None, points
-    geometry = _plane(cell, height, axis, plane, shape)
+    geometry = _plane(cell, height, axis, plane, shape, span=span)
     return geometry, geometry.flat()
 
 

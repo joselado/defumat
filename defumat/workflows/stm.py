@@ -52,7 +52,7 @@ from defumat.stm.image import (
 from defumat.stm.plane import PlotPlane, plot_plane
 from defumat.workflows.nscf import denser_grid, fixed_density_states
 
-__all__ = ["run_stm"]
+__all__ = ["run_stm", "refuse_an_ultracell_result"]
 
 #: QE's ``stm.f90`` broadening for a run with no smearing of its own, in Ry.
 INSULATOR_WIDTH = 1.0e-5
@@ -141,6 +141,8 @@ def run_stm(
 
     Returns an :class:`~defumat.stm.image.STMImage`.
     """
+    refuse_an_ultracell_result(
+        result, "an STM image", "defumat.workflows.ultracell.run_ultracell_stm")
     _refuse_what_has_no_fermi_level(system, result)
     # A real-space wavefunction from a half sphere loses the conjugate half and
     # gains a spurious imaginary part, and nothing downstream notices.
@@ -403,6 +405,27 @@ def _tip_width(width, system):
         return float(width)
     degauss = float(getattr(system, "degauss", 0.0) or 0.0)
     return degauss if degauss > 0.0 else INSULATOR_WIDTH
+
+
+def refuse_an_ultracell_result(result, quantity: str, instead: str):
+    """An ultracell result is not a ground state and says so by name.
+
+    It has no wavefunctions on the unit cell's spheres and no eigenvalues on its
+    k-set -- its states live on the ultracell's own sphere at ``k0``
+    (:mod:`defumat.ultracell.states`) -- so what would otherwise happen here is
+    an ``AttributeError`` three lines in, which says nothing about why. The
+    quantity itself exists and is one function away, which is what the message
+    is for.
+    """
+    if getattr(result, "ultracell", None) is None:
+        return
+    raise NotImplementedError(
+        f"{quantity} of an ultracell is {instead}, not this: an "
+        "UltracellResult carries states on the ultracell's own plane-wave "
+        "sphere at k0 rather than wavefunctions on the unit cell's, so nothing "
+        "here can read it. Pass the unit cell's own SCF result to image the "
+        "unmodulated crystal"
+    )
 
 
 def _refuse_what_has_no_fermi_level(system, result):

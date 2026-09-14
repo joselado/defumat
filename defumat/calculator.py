@@ -77,6 +77,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -335,6 +336,10 @@ class Calculator:
         self._scf_options: dict | None = None
         self._relax = None
         self._relax_variable_cell = False
+        #: The last ultracell, and the options that filled it. One slot, for
+        #: :meth:`get_scf`'s reason: what it holds is the frozen states.
+        self._ultracell = None
+        self._ultracell_options: dict | None = None
         self._strain_response = None
         #: A converged state from another calculator, handed to the first SCF
         #: as ``starting_from``. Not a cache -- a starting point (P23).
@@ -545,6 +550,7 @@ class Calculator:
         # Before the call rather than after it -- see the docstring. An SCF
         # makes every response built on the previous one stale in any case.
         self._scf = self._strain_response = None
+        self._ultracell = self._ultracell_options = None
         self._scf = run_scf(self.system, self.pseudos,
                             calculation=self.calculation, **merged)
         self._scf_options = merged
@@ -997,6 +1003,7 @@ class Calculator:
         from defumat.workflows.stm import run_stm
 
         result = self._ground_state("an STM image")
+        self._say_if_an_ultracell_is_waiting("an STM image", "get_ultracell_stm()")
         if height is not None:
             options = {**options, "height": height}
         return run_stm(
@@ -1031,6 +1038,7 @@ class Calculator:
         from defumat.workflows.transport import run_vertical_transport
 
         result = self._ground_state("a vertical transmission")
+        self._say_if_an_ultracell_is_waiting("a vertical transmission", "get_ultracell_transport()")
         if exit_height is not None:
             options = {**options, "exit_height": exit_height}
         if height is not None:
@@ -1064,6 +1072,7 @@ class Calculator:
         from defumat.workflows.transport import run_momentum_transport
 
         result = self._ground_state("a momentum-resolved transmission")
+        self._say_if_an_ultracell_is_waiting("a momentum-resolved transmission", "get_ultracell_transport(), which maps it in real space instead")
         if exit_height is not None:
             options = {**options, "exit_height": exit_height}
         if height is not None:
@@ -1105,9 +1114,108 @@ class Calculator:
         from defumat.ultracell.driver import run_ultracell
 
         result = self._ground_state("an ultracell calculation")
-        return run_ultracell(
-            self.system, self.pseudos, result, supercell, kgrid,
-            **self._call_options(run_ultracell, result, options,
+        merged = self._call_options(run_ultracell, result, options,
+                                    exclude=SCF_ONLY_OPTIONS)
+        key = {**merged, "supercell": tuple(int(n) for n in supercell),
+               "kgrid": tuple(int(m) for m in kgrid)}
+        # One slot keyed by the options that filled it, for :meth:`get_scf`'s
+        # reason and more so: what it holds is the frozen states at the ``N``
+        # folded k-points, which is the largest array the method makes and the
+        # one an image or a transmission needs afterwards.
+        if self._ultracell is not None and _same_options(key, self._ultracell_options):
+            return self._ultracell
+        self._ultracell = self._ultracell_options = None
+        self._ultracell = run_ultracell(
+            self.system, self.pseudos, result, supercell, kgrid, **merged
+        )
+        self._ultracell_options = key
+        return self._ultracell
+
+    def _say_if_an_ultracell_is_waiting(self, quantity: str, instead: str):
+        """Say which crystal is about to be imaged, when there are two.
+
+        An ultracell result does not become the calculator's ground state --
+        it is an expansion *around* one -- so a ``get_*`` that takes the ground
+        state still images the **unmodulated** unit cell, correctly and
+        silently. That is the right answer to the question asked and the wrong
+        answer to the one usually meant, and the two are indistinguishable in a
+        plot, so the alternative is named rather than left to be noticed.
+        """
+        if self._ultracell is None:
+            return
+        cells = "x".join(str(n) for n in self._ultracell.ultracell.shape)
+        warnings.warn(
+            f"{quantity} is of the unmodulated unit cell, and a {cells} "
+            f"ultracell is cached: its modulation is not in this. Call "
+            f"{instead} for the modulated one",
+            stacklevel=3,
+        )
+
+    def _ultracell_state(self, quantity: str):
+        """The cached ultracell, or the refusal that says how to make one.
+
+        Unlike :meth:`_ground_state` this does **not** run one: an SCF has
+        defaults for everything and an ultracell has no default ``supercell``,
+        so there is nothing to guess and a guess would be an expensive wrong
+        answer rather than a convenience.
+        """
+        if self._ultracell is None:
+            raise ValueError(
+                f"{quantity} needs an ultracell and none is cached: call "
+                "get_ultracell(supercell, kgrid, nbnd=...) first. There is no "
+                "default supercell to run one with -- how many cells the "
+                "modulation spans is the question being asked"
+            )
+        return self._ultracell
+
+    def get_ultracell_stm(self, height=None, **options):
+        """A Tersoff-Hamann image of the modulation :meth:`get_ultracell` found.
+
+        What an experiment sees above a charge or spin density wave, a screened
+        impurity or a domain wall: the tunnelling density of states of the
+        modulated crystal, on a plane spanning the whole ultracell. ``height``
+        and the plane are in **unit-cell** crystal coordinates running over
+        ``[0, n_i)``, the convention ``external=`` already uses, so the number
+        means what it means in a unit-cell run.
+
+        A **magnetic tip** (``spin``, ``polarization``) is what a spin density
+        wave needs: it is flat in the charge and modulated in the
+        magnetization, so a nonmagnetic tip sees almost nothing of it.
+        """
+        from defumat.workflows.ultracell import run_ultracell_stm
+
+        result = self._ultracell_state("an ultracell STM image")
+        if height is not None:
+            options = {**options, "height": height}
+        return run_ultracell_stm(
+            self.system, self.pseudos, result,
+            **self._call_options(run_ultracell_stm, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
+    def get_ultracell_transport(self, exit_height=None, height=None, **options):
+        """Vertical tunnelling through the modulation, tip to substrate.
+
+        :meth:`get_vertical_transport` on an ultracell: the electron enters at a
+        point above the sheet and leaves into an infinite plane below it, so the
+        map is the nonlocal Green's function of the *modulated* material, and
+        where several bands are degenerate at the tip energy it departs from
+        :meth:`get_ultracell_stm` by their interference.
+
+        The ultracell must be one cell deep along the stacking axis -- a
+        modulation there would put the exit plane between two stacked slabs --
+        and its ``kgrid`` must have one division along it.
+        """
+        from defumat.workflows.ultracell import run_ultracell_transport
+
+        result = self._ultracell_state("an ultracell transmission")
+        if exit_height is not None:
+            options = {**options, "exit_height": exit_height}
+        if height is not None:
+            options = {**options, "height": height}
+        return run_ultracell_transport(
+            self.system, self.pseudos, result,
+            **self._call_options(run_ultracell_transport, result, options,
                                  exclude=SCF_ONLY_OPTIONS)
         )
 
