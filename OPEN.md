@@ -20,6 +20,13 @@ closed later the same day**: it hung a sixth time, and the cause is neither of t
 entry had recorded as fact but the **affinity mask this package sets itself** -- 8 hangs in
 8 runs at two cores, 6 in 14 at four, none at eight or above.
 
+**Part VII** is from a peer session running the **NiBr2 helix on Triton**, reported
+**2026-09-14**: four findings, two of them defects that were fixed the same day (the
+Davidson finiteness guard's allocation, and a checkpoint refusal that was wrong on both
+sides of its boundary at once). The two entries carried here are a `sizing.py` report
+that read 60 per cent low on a 45-atom spinor PAW slab, and a Davidson inner-step count
+that may degrade at the minimum subspace. Neither can be measured on this machine.
+
 **Part V** is from the **2026-09-13** memory session: one entry, and it is not that
 session's work -- four of `test_magnons.py`'s eight tests fail, all four downstream of a
 ground state that stops four orders short of its own `conv_thr`, and the same input gives
@@ -2436,3 +2443,82 @@ opposite of the usual reflex -- and the warning says so in those words.
 which takes **263** iterations as it stands -- converging in well under that with the
 projection on, to the same converged moments to 1e-8; and the same run with `lspinorb`
 giving the *same* answer with the projection on and off, which is the gate firing.
+
+---
+
+# Part VII -- from the NiBr2 helix on Triton, reported 2026-09-14
+
+A peer session running a 45-atom NiBr2 slab on GPU (noncollinear + `lspinorb`, FR PAW,
+`ecutwfc` 45 / `ecutrho` 240, `nbnd` 403, `npwx` 156346, 45-site
+`LOCAL_MAGNETIC_FIELDS`, `nosym`/`noinv`, anderson 0.3, `diago_david_ndim = 2`,
+`DEFUMAT_BAND_BATCH` 16, `k_batch` 1) reported four things. **Two were defects and are
+fixed**; the two below are not this session's work because neither can be measured on
+this machine.
+
+**What was fixed, for the record.** The finiteness guard in
+`davidson_eigensolver_all` reduced over the whole returned k-set, ran every iteration
+rather than only on a retry, and killed two production SCFs -- 21.40 GiB asked of an
+H100 against an 11.27 GiB wavefunction store, `RESOURCE_EXHAUSTED` at iteration 13 in a
+pool with 25.7 GB free and a 14.9 GB largest hole. It now reduces inside the per-k
+solve. And the checkpoint refusal on `magnetic_field` was on both sides of the boundary
+at once: a converged run holding a plain applied field could not be written at all,
+while a fixed-spin-moment run wrote one every cadence with its *driven* field silently
+dropped -- plus `field_scale` was saved and then reset to 1.0 on resume, so a `reducebf`
+run came back at full field.
+
+**One half of the report did not reproduce, and it is the useful kind of wrong.** The
+claim was that mid-SCF checkpointing is dead for any run carrying a field. Measured on
+one hydrogen atom with a `LOCAL_MAGNETIC_FIELDS` card, both plain and with
+`reducebf = 0.5`: the checkpoints were written every cadence, all along. The refusal
+bit the *final* `save_state` of a converged result, which is where a driver script
+calls it, and the mid-SCF path was passing for the opposite reason -- it carried no
+field for the refusal to see. Reading a refusal's source is not the same as watching it
+fire, which is `CLAUDE.md`'s own rule about guards, applied to a guard's absence.
+
+## 1. `sizing.py` reads 60 per cent low on a 45-atom spinor PAW slab, and it is what a card is chosen with
+
+`run_scf.py --size-only` at a `1 6 1` mesh reported floor 42.60 GiB, eigensolver XLA temp
+buffer 18.55 GiB, **peak 46.12 GiB = 49.5 GB**. The measured working peak was **79.4 GB**,
+with the guard above asking 21.4 GB more on top of that once `ethr` tightened. Anyone
+reading the report picks an 80 GB card for a cell that needs 141 GB.
+
+**Two of the three gaps are now accounted for and the largest is not.** The guard's
+allocation was outside the executable `tools/gpu/davidson_memory` sizes, so it appeared in
+no line of the report; folding it into `_every_k` both removes it and brings what is left
+inside the sized unit. That leaves roughly **30 GB the model does not explain**, which is
+the item. Note the direction: the module's own error bar says "within 3.1 per cent on 12
+of 14 points, 30 per cent **high** on the two at `david 2` / `band_batch 64`" -- and those
+two points are the same corner this cell runs in. So the formula is known to be
+non-monotonic in `band_batch` exactly here, and the sign of its error at this corner is
+now known to go both ways. **Do not reconcile that from one point.**
+
+**First step, and it is a measurement rather than a fix.** `tools/gpu/davidson_memory.py`
+at this cell's shapes over `david` in {2, 3}, `band_batch` in {16, 32, 64} and `k_batch` 1,
+against the real working peak from the same job's `nvidia-smi` or the allocator's own arena
+report. What the report needs is not a better coefficient but a line for whatever the 30 GB
+is -- a term that is missing is worth more than a term that is 10 per cent off.
+
+**A caveat that belongs beside the report and is now in the module docstring.** A short
+calibration run measures the regime the calculation *leaves*. On this cell iterations 1-12
+held a flat 77.63 GB at 21 s each; at iteration 10 `ethr` reached 2.30e-6 and the Davidson
+average went from **2.0 inner steps to 73.5**, and the iteration cost from 21 s to 390 s.
+Two iterations, and even twelve, said nothing about the arena three iterations later.
+
+## 2. `diago_david_ndim = 2` may degrade at the minimum subspace once `ethr` tightens
+
+Observed on the same run: 70+ Davidson inner steps per k-point at `ethr` 2.3e-6, against
+2.0 at the loose starting threshold. `ndim = 2` is what a memory-constrained cell is forced
+into, so if the restart logic is what degrades there the fix would pay twice -- fewer steps
+*and* less allocate-and-free churn, which is what exhausted the arena in item 1.
+
+**Untested, and the obvious test does not fit the card**: `ndim = 4` doubles the subspace
+arrays at this mesh. The cheap version is a small cell where both fit -- inner steps per
+k-point against `ethr`, at `ndim` 2, 3 and 4, on `si16-1k-ecut30` or `si8-nc-1k` -- which
+says whether the step count at `ndim = 2` climbs faster than at 3 and 4 or whether 70 steps
+is simply what a tight threshold costs at any subspace size. This is related to the
+`davidson-empty-ethr-defect` item (candidates 1 and 3 still open) but is not the same
+claim: that one is about how many *outer* steps a loose threshold buys, this is about the
+inner count at a tight one.
+
+**Part VI item 1** is the neighbouring entry -- `nvecx = david * nbnd` uncapped against the
+size of the space -- and a session that opens `nvecx` for either reason should read both.

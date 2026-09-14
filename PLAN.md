@@ -12465,11 +12465,43 @@ the preconditioner the driver installs. The checkpoint is written **after** `_mi
 the field steps, so the saved density is the next iteration's input and the mixer holds the
 history that belongs to it.
 
-**The write is refused, once and by name, for a run whose field changes between
-iterations.** `save_state` already refuses a state whose `field_scale` is not 1 or that
-carries a `magnetic_field`, so `reducebf` and the fixed-spin-moment feedback are out --
-correctly, since the state's field is then not the input's. The refusal is caught, reported
-and checkpointing is switched off for the rest of the run rather than retried every cadence.
+**The write is refused, once and by name, for a run whose field is *driven* rather than
+applied.** `save_state` refuses a state carrying a fixed-spin-moment field -- Elk's
+`fsmtype`, this package's `'fsm'`/`'atomic fsm'`/`'atomic fsm direction'` -- because there
+the field *is* the controller's state, replaced after every iteration, and no input file
+says what it reached. The refusal is caught, reported and checkpointing is switched off for
+the rest of the run rather than retried every cadence.
+
+**That paragraph read differently until 2026-09-14, and every clause of it was wrong in a
+way worth keeping.** It said `save_state` refuses "a state whose `field_scale` is not 1 or
+that carries a `magnetic_field`", and it refused on *neither* of those tests: there was no
+`field_scale` test at all, and the `magnetic_field` one was a blanket `is not None`. The
+consequences ran in both directions at once and each was silent.
+
+* **Too wide at the end of the run.** A converged run holding a plain
+  `LOCAL_MAGNETIC_FIELDS` card could not be written. An applied field, and a penalty
+  constraint of any flavour, are the input's from beginning to end -- `feedback` returns
+  `self` for anything outside `FEEDBACK` -- so the resume rebuilds the identical object
+  from `scf.in`. The class of run this took the feature away from is precisely the class
+  it exists for: long, magnetic, and unable to restart.
+* **Absent in the middle of it.** `_InProgressState` hardcoded `magnetic_field = None`
+  under a comment saying that was what made the refusal fire. `None` is exactly what makes
+  it *pass*, so a fixed-spin-moment run wrote a checkpoint every cadence with its driven
+  field dropped in silence -- the one case the refusal is for. **Measured** on a hydrogen
+  atom with a field, plain and with `reducebf = 0.5`: mid-SCF checkpoints were written
+  every cadence all along. Reading a refusal's source is not watching it fire, which is
+  this project's own rule about guards applied to a guard's absence.
+* **And `field_scale` was the fourth thing a restart is.** It was written into the file and
+  then reset to 1.0 by the loop on resume, so a `reducebf` run whose field had faded to
+  1e-6 over forty iterations came back at *full* field and converged somewhere else. It is
+  restored beside `ethr` and `accuracy` now. Elk's `reducebf` multiplies a scalar and
+  leaves the field object alone, which is why the pair (input field, saved scale)
+  reproduces a faded field exactly and why this is not a refusal.
+
+Both questions are asked in one place, `checkpoint._refusal`, which is what the two halves
+being on opposite sides of the boundary cost. A **Hubbard setup** stays refused: it is the
+`HUBBARD` card's and unchanged by the loop, so the same argument probably narrows it too,
+and that is left as an inference rather than taken (`OPEN.md` Part VII).
 
 **A restart is three things, and the third is the finding.** The state and the mixer are
 the obvious two. The third is the *loop state* -- `iter`, `dr2` and `ethr` -- which is

@@ -5536,3 +5536,63 @@ time and 99 s bought 26 s the second, as the remaining tests absorbed more of
 each file's fixed cost. The consequence is that the last twenty seconds cost
 several times what the first three hundred did, which is why this stopped at
 10m20s rather than chasing 10m00s.
+
+## The finiteness guard was the largest single allocation in the SCF (OPEN.md Part VII)
+
+**What it was.** `davidson_eigensolver_all`'s retry guard -- the two reductions that say
+which k-points came back non-finite from the Cholesky route -- was written in the caller,
+over the whole returned k-set, and ran on **every** SCF iteration rather than only on a
+retry. Its temporaries therefore scale with the k-set, and on a 45-atom NiBr2 slab
+(noncollinear + `lspinorb`, FR PAW, `nbnd` 403, `npwx` 156346, `k_batch` 1,
+`DEFUMAT_BAND_BATCH` 16, `diago_david_ndim` 2) it killed two production jobs:
+
+| job | card | mesh | wavefunction store | the guard asked for | died at |
+|---|---|---|---|---|---|
+| 20244646 | H100 80 GB | `1 6 1` | 11.27 GiB | **21.40 GiB** | iteration 13 |
+| 20212071 | H200 141 GB | 24 k | 45.07 GiB | **26.00 GiB** | iteration 1 |
+
+The second is the older whole-set *scalar* form, so the two are not the same expression
+and the pair does not give a scaling. **It is fragmentation, and the allocator says so**:
+at the 20244646 failure the BFC arena held 25.7 GB free in total with a largest hole of
+14.9 GB against a 23.0 GB request. More free memory than the request, and nowhere to put
+it. Why iteration 13 and not iteration 1 is the calibration point now in `sizing.py`'s
+docstring -- iterations 1-12 were flat at 77.63 GB and 21 s, and at iteration 10 `ethr`
+reached 2.30e-6 and the Davidson average went from 2.0 inner steps to 73.5, which is about
+35x the allocate-and-free churn per iteration.
+
+**What it costs now.** The fix is where the reduction happens, not what it reduces:
+`return_finite` takes the same two reductions inside the per-k solve, while that k-point's
+masked `evc` is the only one in flight. Compiled here (`.lower(...).compile()
+.memory_analysis()`, which runs the compiler and allocates nothing, so the NiBr2 shapes can
+be sized on a 30 GB workstation):
+
+| shape | `psi` | stacked (was) | per k (is) |
+|---|---|---|---|
+| nk 6, nbnd 403, ndim 2x156346 | 11.27 GiB | 0.70 GiB | **0.12 GiB** |
+| nk 24, same | 45.07 GiB | 2.82 GiB | **0.12 GiB** |
+| nk 4, nbnd 32, ndim 2x5000 | 0.02 GiB | 0.0015 GiB | 0.0004 GiB |
+
+**The CPU coefficient is far below the GPU's** -- 0.06 x `psi` here against 1.9 x there --
+which is the same backend caveat `tools/gpu/davidson_memory.py`'s docstring states for the
+subspace buffer, and is why the table above is about the *form* rather than the size: one
+column follows `nk` and the other does not.
+
+**Folding it in is free to the solver's own buffer.** `_every_k`'s temp buffer with the
+guard outside against inside, same cell, same `david`, same band batch:
+
+| cell | nk | nbnd | guard outside | guard inside | difference |
+|---|---|---|---|---|---|
+| `si16-1k-ecut30` | 1 | 32 | 0.0419 GiB | 0.0419 GiB | **+0.00 MiB** |
+| `si8-nc-1k` | 1 | 40 | 0.0125 GiB | 0.0125 GiB | **+0.00 MiB** |
+
+XLA reuses buffers that are live at that point anyway. So the whole of the old
+allocation goes, and what replaces it is inside the executable
+`tools/gpu/davidson_memory.py` sizes -- which was the other half of the problem, since an
+allocation outside that unit appears in no line of the size report.
+
+**No timing pair against `pw.x` here**, and that is deliberate rather than an omission:
+this is not a feature taken from QE, it is a guard on a route `cegterg` does not have
+(QE's Cholesky failure is a hard stop in `cdiaghg`, not a retry), and the change is
+measured in bytes rather than seconds. The solver's numbers are unchanged -- the guard
+returns the same boolean it did, asserted against the expression it replaced and across
+every `k_batch` route.

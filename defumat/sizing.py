@@ -81,6 +81,27 @@ tape this module cannot see either.
 and ``davidson_basis`` already were**, and it is reported beside them: it is the
 third term above, worth 22 GiB at 64 and 44 at 128 on that slab.
 
+**A short calibration run measures the regime the calculation leaves, not the
+one it fails in.** This is the counterpart of "never time a first call", for
+memory and for a whole SCF rather than one executable. On a 45-atom NiBr2 spinor
+PAW slab, iterations 1 to 12 held a flat 77.63 GB at about 21 s each and gave no
+warning at all; at iteration 10 ``ethr`` reached 2.30e-6 and the Davidson average
+went from **2.0 inner steps to 73.5**, the iteration cost from 21 s to 390 s, and
+three iterations later the allocator's arena had no hole large enough left --
+25.7 GB free in total, largest hole 14.9 GB, and a 23.0 GB request. So a
+two-iteration calibration, and even a twelve-iteration one, says nothing about
+the peak a converging run reaches: the loose starting threshold is a **different
+calculation** from the tight one it schedules towards. Where a card is chosen on
+this estimate, choose it for the tight end.
+
+**The figure this module reports is known to be low on a large spinor PAW slab,
+and by how much is an open item.** The same cell reported a 49.5 GB peak against
+a 79.4 GB measured working set, which is the wrong direction for a floor to be
+wrong in; ``OPEN.md`` Part VII item 1 has the breakdown and the measurement that
+would close it. Part of that gap was an allocation outside the executable this
+module sizes -- the eigensolver's finiteness guard, which has since been folded
+into it -- and most of it is still unaccounted for.
+
 References for the conventions rather than the code: ``PW/src/setup.f90`` for
 ``nbnd``, ``Modules/recvec_subs.f90`` (``ggen``) for the sphere, and
 ``PW/src/n_plane_waves.f90`` for ``npwx``.

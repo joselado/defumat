@@ -509,11 +509,12 @@ field enters through the commutator $[H,\mathbf r]$, which builds plane-wave
 sums of its own. The dielectric tensor, the Raman tensor, the strain response
 and the Born charges all stand on it. It does not fail --- with the guard
 lifted silicon's dielectric constant is $501.7/213.1/253.1$ against an isotropic
-$190.8$ --- which is why it is a refusal. A checkpoint refuses rather than drops a converged
-\emph{magnetic field} (it is not the input field wherever \code{reducebf}
-changed it) and a \emph{Hubbard setup} (without it \code{ns} is an array about
-nothing); \code{stress}, \code{solver} and \code{history} are deliberately not
-stored, so what comes back is a state and not a report.
+$190.8$ --- which is why it is a refusal. A checkpoint refuses rather than drops a
+\emph{driven} magnetic field (a fixed-spin-moment scheme's, which no input file
+determines) and a \emph{Hubbard setup} (without it \code{ns} is an array about
+nothing); an applied field is saved normally. \code{stress}, \code{solver} and
+\code{history} are deliberately not stored, so what comes back is a state and
+not a report.
 \end{refuses}
 
 % =====================================================================
@@ -965,12 +966,23 @@ writing a checkpoint on the way out, so a wall-clock kill lands after a
 checkpoint rather than between two. It is checked between iterations, so set it
 at least one iteration short of the real limit.
 
+\emph{A field is carried, and only one kind of field is refused.} An applied
+\code{LOCAL\_MAGNETIC\_FIELDS} card, and a penalty constraint of any flavour,
+leave the field exactly as the input built it, so the resume rebuilds it from
+\code{scf.in} with the rest of the calculator. Elk's \code{reducebf} fades a
+\emph{scale} rather than the field, and that scale is saved and restored --- a
+run whose field had decayed over forty iterations comes back where it left,
+not at full field.
+
 \begin{refuses}
 \textbf{Refused.} Checkpointing is switched off, once and with a message, for a
-run whose field changes between iterations --- Elk's \code{reducebf} and the
-fixed-spin-moment feedback. The state's field is then not the input's, and
-\code{save\_state} will not write a lossy one. \code{checkpoint\_every} must be
-at least 1.
+run whose field is \emph{driven} rather than applied: the fixed-spin-moment
+schemes (\code{constrained\_magnetization = 'fsm'}, \code{'atomic fsm'},
+\code{'atomic fsm direction'}), where the field is the controller's own state
+and is replaced after every iteration. No input file says what it reached, so a
+resume would start again from the input field and converge somewhere else
+without saying so. A \emph{Hubbard setup} is refused too. \code{checkpoint\_every}
+must be at least 1.
 
 \textbf{Know the cost.} The payload is the wavefunctions, which is tens of
 gigabytes on a large cell, so this is a scratch-directory operation and the
