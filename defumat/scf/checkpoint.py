@@ -26,12 +26,30 @@ quietly loses ``becsum`` reloads as a *different* state that converges to
 something plausible.
 
 Two things are refused by name rather than half-saved, both because losing them
-is silent. A converged **magnetic field** is not the input field wherever
-``reducebf`` or the fixed-spin-moment scheme changed it, and reloading a state
-without it applies a rigid Zeeman shift that a later invariant still returns an
-integer for (``PLAN.md`` P56 is the record of that bug found the hard way). And
-a **Hubbard setup** is what says which atom each slot of ``ns`` belongs to, so
-``ns`` without it is an array of numbers about nothing.
+is silent. A **Hubbard setup** is what says which atom each slot of ``ns``
+belongs to, so ``ns`` without it is an array of numbers about nothing. And a
+**magnetic field the run drove away from the input's** -- the fixed-spin-moment
+schemes, Elk's ``fsmtype``, where the field *is* the controller's state and is
+replaced after every iteration -- cannot be rebuilt from the input file, and
+reloading without it applies a rigid Zeeman shift that a later invariant still
+returns an integer for (``PLAN.md`` P56 is the record of that bug found the hard
+way).
+
+**A field is not refused for being a field**, and the difference is worth
+stating because the blanket version of this refusal made checkpointing useless
+for exactly the runs it exists for -- long, magnetic, and unable to restart. An
+applied ``LOCAL_MAGNETIC_FIELDS`` card, and a penalty constraint of any flavour,
+leave :class:`~defumat.scf.fields.MagneticField` exactly as the input built it:
+the resume rebuilds the calculator from ``scf.in`` and gets the same object
+back. Elk's ``reducebf`` does not change it either -- it multiplies a *scalar*,
+``field_scale``, which is saved here and restored by the driver on resume. So
+what has to be refused is the feedback set (:data:`~defumat.scf.fields.FEEDBACK`)
+and nothing wider.
+
+**The scale and the refusal are one mechanism, not two.** ``field_scale``
+riding in :data:`_SCALARS` while the loop reset it to 1.0 on resume was a
+``reducebf`` run silently coming back at full field, which is the same silent
+loss this refusal exists to prevent, taken one level up.
 """
 
 from __future__ import annotations
@@ -43,6 +61,8 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
+
+from defumat.scf.fields import FEEDBACK
 
 __all__ = ["save_state", "load_state", "state_fingerprint",
            "save_mixer", "load_mixer"]
@@ -78,6 +98,10 @@ _SCALARS = (
 _TUPLES = ("becsum",)
 
 #: Not saved, and refused rather than dropped. See the module docstring.
+#: ``magnetic_field`` is here because the coverage check
+#: (``tests/unit/test_checkpoint.py``) has to see every field of ``SCFResult``
+#: accounted for -- but it is *conditionally* refused, by :func:`_refusal`,
+#: where ``hubbard_setup`` is refused whenever it is there at all.
 _REFUSED = ("magnetic_field", "hubbard_setup")
 
 #: Saved by nothing and dropped on purpose: these are what the run *reported*,
@@ -139,6 +163,36 @@ def _describe(fingerprint) -> str:
             f"nspin {fingerprint['nspin']}")
 
 
+def _refusal(result) -> str | None:
+    """Why this state cannot be written, or ``None`` if it can.
+
+    One place rather than two: the mid-SCF checkpoint and the converged one go
+    through the same test, which is the half that was missing. The in-progress
+    state used to carry no field at all, so a fixed-spin-moment run wrote a
+    checkpoint every cadence with its driven field silently dropped, while a
+    plain applied field -- which a resume rebuilds perfectly from the input --
+    was refused at the end of the run. Both are the same question and it is
+    asked here.
+    """
+    if getattr(result, "hubbard_setup", None) is not None:
+        return ("this result carries a Hubbard setup, which is what says which "
+                "atom each slot of ns belongs to; ns without it is an array of "
+                "numbers about nothing")
+    field = getattr(result, "magnetic_field", None)
+    if field is not None and getattr(field, "constraint", "none") in FEEDBACK:
+        return (
+            f"this run's magnetic field is driven by the "
+            f"{field.constraint!r} fixed-spin-moment scheme, so the field is "
+            "the controller's state rather than the input's: it is replaced "
+            "after every iteration and no input file determines what it "
+            "reached. A checkpoint without it resumes at the input field and "
+            "converges somewhere else without saying so, which is why saving "
+            "is refused rather than lossy. An applied field, and a penalty "
+            "constraint, are saved normally -- they are the input's to the end"
+        )
+    return None
+
+
 def save_state(result, path) -> Path:
     """Write a converged :class:`SCFResult` to ``path`` as a ``.npz``.
 
@@ -147,16 +201,9 @@ def save_state(result, path) -> Path:
     operation, not something to do every iteration without meaning to.
     """
     path = Path(path)
-    for name in _REFUSED:
-        if getattr(result, name, None) is not None:
-            raise NotImplementedError(
-                f"this result carries {name!r}, which a checkpoint cannot "
-                "represent, and dropping it would be silent: a converged "
-                "magnetic field is not the input field wherever reducebf or a "
-                "fixed spin moment changed it, and a Hubbard setup is what says "
-                "which atom each slot of ns belongs to. Saving is refused "
-                "rather than lossy"
-            )
+    refused = _refusal(result)
+    if refused is not None:
+        raise NotImplementedError(refused)
 
     payload, meta = {}, {"format": FORMAT_VERSION}
     for name in _ARRAYS:

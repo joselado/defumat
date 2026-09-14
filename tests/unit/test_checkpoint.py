@@ -128,18 +128,78 @@ def test_loading_against_the_wrong_system_is_refused(pseudo_dir, tmp_path):
         load_state(path, system=other.system, calculation=other.calculation)
 
 
-def test_a_field_or_a_hubbard_setup_is_refused_rather_than_dropped(
-    pseudo_dir, tmp_path
-):
-    """Two things whose loss would be silent are refused by name.
+def _field(constraint):
+    """A :class:`MagneticField` of one flavour, with nothing else switched on."""
+    import jax.numpy as jnp
 
-    A converged magnetic field is not the input field wherever ``reducebf``
-    changed it, and ``ns`` without its setup is an array about nothing.
+    from defumat.scf.fields import MagneticField
+
+    return MagneticField(
+        regions=None, uniform=jnp.asarray([0.0, 0.0, 0.1]), atomic=None,
+        targets=None if constraint == "none" else jnp.asarray([0.0, 0.0, 1.0]),
+        penalty=0.2, constraint=constraint,
+    )
+
+
+def test_a_hubbard_setup_is_refused_rather_than_dropped(pseudo_dir, tmp_path):
+    """``ns`` without its setup is an array of numbers about nothing."""
+    _, result = _converged(SILICON, pseudo_dir)
+    result.hubbard_setup = object()
+    with pytest.raises(NotImplementedError, match="Hubbard setup"):
+        save_state(result, tmp_path / "refused.npz")
+
+
+@pytest.mark.parametrize(
+    "constraint", ["fsm", "atomic fsm", "atomic fsm direction"])
+def test_a_driven_field_is_refused_because_no_input_determines_it(
+    pseudo_dir, tmp_path, constraint
+):
+    """The fixed-spin-moment schemes: the field *is* the controller's state.
+
+    ``MagneticField.feedback`` replaces the field after every iteration, so what
+    a run reached is not what any input file says. A checkpoint without it
+    resumes at the input field and converges somewhere else in silence.
     """
     _, result = _converged(SILICON, pseudo_dir)
-    result.magnetic_field = object()
-    with pytest.raises(NotImplementedError, match="magnetic_field"):
+    result.magnetic_field = _field(constraint)
+    with pytest.raises(NotImplementedError, match="fixed-spin-moment"):
         save_state(result, tmp_path / "refused.npz")
+
+
+@pytest.mark.parametrize(
+    "constraint", ["none", "atomic", "total", "atomic direction"])
+def test_an_applied_field_and_a_penalty_are_saved_rather_than_refused(
+    pseudo_dir, tmp_path, constraint
+):
+    """The refusal used to be "carries a field at all", and that was too wide.
+
+    Neither an applied ``LOCAL_MAGNETIC_FIELDS`` card nor a penalty constraint
+    changes the field object: ``feedback`` returns ``self`` for anything outside
+    :data:`~defumat.scf.fields.FEEDBACK`, so the resume rebuilds the identical
+    field from ``scf.in``. Refusing these left long, constrained, magnetic runs
+    -- the class checkpointing exists for -- with no checkpoint at all.
+    """
+    calculator, result = _converged(SILICON, pseudo_dir)
+    result.magnetic_field = _field(constraint)
+    path = save_state(result, tmp_path / "kept.npz")
+    reloaded = load_state(path, system=calculator.system)
+    assert np.asarray(reloaded.density) == pytest.approx(
+        np.asarray(result.density))
+
+
+def test_reducebf_survives_the_round_trip_as_a_scale(pseudo_dir, tmp_path):
+    """Elk's ``reducebf`` multiplies a scalar, and the scalar is state.
+
+    The field object is untouched by it -- what fades is ``field_scale`` -- so
+    the pair (input field, saved scale) reproduces the faded field exactly.
+    A resume that reset the scale to 1.0 came back at full field, which is why
+    ``run_scf`` restores it beside ``ethr``.
+    """
+    calculator, result = _converged(SILICON, pseudo_dir)
+    result.magnetic_field = _field("none")
+    result.field_scale = 0.125
+    path = save_state(result, tmp_path / "faded.npz")
+    assert load_state(path, system=calculator.system).field_scale == 0.125
 
 
 def test_an_interrupted_write_leaves_no_readable_file(pseudo_dir, tmp_path):

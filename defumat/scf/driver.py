@@ -4161,7 +4161,7 @@ class _InProgressState:
                  accuracy, ethr, total_energy, energy_terms, system, field_scale,
                  fermi_energy=None, magnetization=None,
                  absolute_magnetization=None, magnetization_vector=None,
-                 meta_c=None):
+                 meta_c=None, magnetic_field=None):
         self.density = density
         self.wavefunctions = wavefunctions
         self.eigenvalues = eigenvalues
@@ -4192,11 +4192,21 @@ class _InProgressState:
         self.converged = False
         self.field_energy = None
         self.constraint_energy = None
-        # In ``checkpoint._REFUSED``: a converged field is not the input field
-        # wherever ``reducebf`` or the fixed-spin-moment scheme changed it, and
-        # a Hubbard setup is what says which atom each slot of ``ns`` belongs
-        # to. Left ``None`` so the refusal fires on the runs that have one.
-        self.magnetic_field = None
+        # **The field as the loop holds it, which is what the refusal reads.**
+        # These were hardcoded to ``None`` under a comment claiming the opposite
+        # -- "left None so the refusal fires" -- and ``None`` is precisely what
+        # makes ``checkpoint._refusal`` pass. The consequence was a
+        # fixed-spin-moment run writing a checkpoint every cadence with its
+        # *driven* field dropped in silence, which is the one case the refusal
+        # exists for. Passed in now, so the mid-SCF write asks the same question
+        # the converged one does.
+        self.magnetic_field = magnetic_field
+        # **Not** carried, and that is not the same omission. A Hubbard setup is
+        # the ``HUBBARD`` card's, unchanged by the loop, so the resume rebuilds
+        # it from ``scf.in`` with the rest of the calculator and a mid-SCF
+        # checkpoint loses nothing by leaving it out. ``save_state`` refuses a
+        # *converged* result that carries one, which is wider than it needs to
+        # be for the same reason the field's refusal was (``OPEN.md``).
         self.hubbard_setup = None
 
 
@@ -4749,9 +4759,22 @@ def run_scf(
             accuracy = float(resumed_accuracy)
         if resumed_ethr is not None:
             ethr = float(resumed_ethr)
+        # **``reducebf`` is loop state too, and it was the one that got away.**
+        # The scale was written into the checkpoint and then reset to 1.0 here,
+        # so a run whose field had faded to 1e-6 over forty iterations came back
+        # at *full* field and converged to a different state without a word --
+        # the same silent loss ``checkpoint._refusal`` exists to prevent, one
+        # level up. ``field_scale`` multiplies the external field only;
+        # constraints are not reduced, so this is exactly Elk's ``reducebf``
+        # picked up where it was left.
+        resumed_scale = getattr(resumed_state, "field_scale", None)
+        if resumed_scale is not None:
+            field_scale = float(resumed_scale)
         if verbose:
+            faded = ("" if field_scale == 1.0
+                     else f", field_scale = {field_scale:.3e}")
             print(f"  continuing the loop at iteration {resumed_at + 1} with "
-                  f"ethr = {ethr:.2e}, accuracy = {accuracy:.2e}")
+                  f"ethr = {ethr:.2e}, accuracy = {accuracy:.2e}{faded}")
 
     stopped_early = False
     for iteration in range(resumed_at + 1, resumed_at + max_iterations + 1):
@@ -5155,6 +5178,7 @@ def run_scf(
                     ethr=float(ethr),
                     total_energy=float(total), energy_terms=dict(terms),
                     system=calculation.system, field_scale=float(field_scale),
+                    magnetic_field=field,
                     magnetization=None if magnetization is None else magnetization[0],
                     absolute_magnetization=(
                         None if magnetization is None else magnetization[1]),
@@ -5205,6 +5229,7 @@ def run_scf(
                 accuracy=float(accuracy), ethr=float(ethr),
                 total_energy=float(total), energy_terms=dict(terms),
                 system=calculation.system, field_scale=float(field_scale),
+                magnetic_field=field,
                 magnetization=None if magnetization is None else magnetization[0],
                 absolute_magnetization=(
                     None if magnetization is None else magnetization[1]),

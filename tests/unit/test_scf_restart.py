@@ -317,3 +317,112 @@ def test_the_ns_block_survives_the_mixer_in_either_precision(dtype):
     assert mixed.shape == ns.shape
     assert np.iscomplexobj(mixed) == np.iscomplexobj(ns)
     assert mixed == pytest.approx(ns, rel=1e-6, abs=1e-7)
+
+
+# --------------------------------------------------------------------------
+# the fourth thing that crosses the file: the field, and the scale on it
+# --------------------------------------------------------------------------
+
+#: The cheapest cell that holds a field: one hydrogen atom, LSDA, with a
+#: ``LOCAL_MAGNETIC_FIELDS`` card. The field is what the test is about, so the
+#: physics is deliberately the smallest that can carry one.
+def _with_field(pseudo_dir, tmp_path, extra=""):
+    from tests.conftest import GENERATED
+
+    text = (GENERATED / "h-atom-lsda.in").read_text()
+    marker = text.lower().index("&system") + len("&system")
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    path = tmp_path / "field.in"
+    path.write_text(text[:marker] + extra + text[marker:]
+                    + "LOCAL_MAGNETIC_FIELDS\n 0.0 0.0 0.10\n")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return Calculator.from_file(path, pseudo_dir=pseudo_dir, announce=False)
+
+
+def test_a_run_holding_an_applied_field_still_checkpoints(pseudo_dir, tmp_path):
+    """The refusal used to be "carries a field at all", and it was too wide.
+
+    Long, magnetic and unable to restart is the class of run checkpointing
+    exists for, so a blanket refusal on the field took the feature away from
+    exactly the calculations that need it. An applied field is the input's from
+    beginning to end: the resume rebuilds the calculator from ``scf.in`` and
+    gets the identical object back.
+    """
+    calculator = _with_field(pseudo_dir, tmp_path / "cell")
+    out = tmp_path / "ckpt"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = run_scf(calculator.system, calculator.pseudos,
+                         max_iterations=2, conv_thr=1.0e-12,
+                         checkpoint_dir=out, checkpoint_every=1, verbose=False)
+
+    assert result.magnetic_field is not None, "the cell must actually hold one"
+    assert {p.name for p in out.iterdir()} == {SCF_CHECKPOINT, SCF_MIXER}
+
+
+def test_reducebf_is_picked_up_where_the_resume_left_it(pseudo_dir, tmp_path):
+    """``field_scale`` was written into the file and then reset to 1.0 on load.
+
+    Elk's ``reducebf`` multiplies the external field down towards zero after
+    every iteration, so the scale *is* loop state -- and a run whose field had
+    faded over forty iterations came back at full field and converged somewhere
+    else without a word. The saved scale is what makes (input field, scale)
+    reproduce the faded field exactly.
+    """
+    from defumat.scf.checkpoint import load_state
+
+    calculator = _with_field(pseudo_dir, tmp_path / "cell",
+                             extra="\n    reducebf = 0.5\n")
+    out = tmp_path / "ckpt"
+    options = dict(conv_thr=1.0e-12, verbose=False,
+                   checkpoint_dir=out, checkpoint_every=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        stopped = run_scf(calculator.system, calculator.pseudos,
+                          max_iterations=3, **options)
+        reloaded = load_state(out / SCF_CHECKPOINT, system=calculator.system)
+        resumed = run_scf(calculator.system, calculator.pseudos,
+                          max_iterations=2, **options)
+
+    assert stopped.field_scale == pytest.approx(0.5 ** 3)
+    assert reloaded.field_scale == pytest.approx(stopped.field_scale)
+    # The resume continues the decay rather than restarting it. Before the scale
+    # was restored this came back at 1.0, 0.5 or 0.25 -- every one of them above
+    # the 0.125 the run had reached.
+    assert resumed.field_scale <= stopped.field_scale
+
+
+def test_a_driven_field_refuses_the_mid_scf_checkpoint_too(pseudo_dir, tmp_path,
+                                                            capsys):
+    """The half that was missing, and it failed silently in the other direction.
+
+    ``_InProgressState`` hardcoded ``magnetic_field = None`` under a comment
+    saying that was what made the refusal fire -- ``None`` is exactly what makes
+    it pass. So a fixed-spin-moment run, whose field is the controller's state
+    and is replaced after every iteration, wrote a checkpoint every cadence with
+    that field dropped in silence. The state carries the loop's field now, so
+    the mid-SCF write asks the same question the converged one does.
+    """
+    from tests.conftest import GENERATED
+
+    path = GENERATED / "fe-fsm.in"
+    if not path.is_file():
+        pytest.skip(f"{path} is not present")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(path, pseudo_dir=pseudo_dir,
+                                          announce=False)
+        assert calculator.calculation.magnetic_field.constraint == "fsm"
+        out = tmp_path / "ckpt"
+        run_scf(calculator.system, calculator.pseudos, max_iterations=2,
+                checkpoint_dir=out, checkpoint_every=1, verbose=True)
+
+    assert not out.exists() or list(out.iterdir()) == [], (
+        "a driven field must not be half-saved")
+    # **Say which refusal fired.** An empty directory is also what a crash, a
+    # full disk or a cadence that never came round leaves, and the whole reason
+    # this test exists is that a silent no-op read as a working feature.
+    printed = capsys.readouterr().out
+    assert "checkpointing is off for this run" in printed
+    assert "fixed-spin-moment" in printed
