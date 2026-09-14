@@ -1784,12 +1784,30 @@ happened to the last analysis that assumed otherwise.
 > core's two arrays were in no line of the table before and now are, which is what the
 > rebuilt route needs them for.
 >
-> Measured, on the committed NiI2 spiral (`nk = 81`, 3 atoms of 2 species):
-> **PEAK 6.63 -> 6.13 GiB**. The saving is `vkb` minus `columns`, so it scales with
-> **atoms per species** -- modest at 3 atoms over 2 species, and nearly the whole array on
-> the 45-atom slab's 45 over 2. On a single-k cell the rebuilt floor is the *larger* of the
-> two (bi20-soc, 4.79 -> 4.80 GiB), because there is nothing to save and the chunk is the
-> whole array. Both directions are the model working rather than a bug.
+> Measured, on the committed NiI2 spiral (`nk = 81`): **PEAK 7.82 -> 6.13 GiB**. At a single
+> k-point the two are **exactly equal** (bi20-soc, 5.09 GiB both ways): `vkb` *is* the chunk
+> there, so the dial buys nothing and costs nothing.
+>
+> > **Both of those numbers were wrong when first written (6.63 -> 6.13, and a small *loss*
+> > at one k-point), and so was the sentence about them** -- corrected 2026-09-14 after the
+> > peer session read the diff against their own measurement. The model had `columns` and
+> > `kg` under the rebuilt branch only, but `driver.py:1489` assigns `projector_core`
+> > **unconditionally**, eight lines before the dial is resolved: the core is a cost *both*
+> > routes pay. Charging it to one understated the stored floor and made the modelled saving
+> > `vkb - columns - kg - chunk`.
+> >
+> > **This is A13's own error with the sign reversed**, from the same picture -- that the
+> > core arrives *with* the rebuilt route. A13 counted it as a **new** cost of `rebuild`;
+> > the model then counted it as a cost of `rebuild` **alone**. Getting the same object
+> > wrong twice in opposite directions is the tell that the picture was wrong rather than
+> > the arithmetic.
+> >
+> > **The measurement is the arbiter and it is unambiguous**: the resident delta is 13.96 GB
+> > = exactly `vkb` at six brackets with 0.00 residual, where `columns + kg` on that cell is
+> > 0.6-0.7 GB and would have shown. So the saving is the whole array against one chunk,
+> > which makes it `nk / k_batch` times the chunk -- it grows with how many k-points are
+> > *not* in flight. What **atoms per species** governs is how much smaller the core is than
+> > the array, and the core is paid either way.
 
 
 

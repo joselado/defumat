@@ -4635,13 +4635,18 @@ bound what is \emph{in flight} or move what is held between two points; this one
 removes what is \emph{held}, so it sits underneath every stage. Measured on that
 slab, two runs on the same card differing only in this flag: every stage bracket
 falls by 13.96~GB, and the peak with them --- \textbf{79.14~GB to 65.18~GB},
-with the converged energies identical. The saving is the whole array minus the
-core, so it scales with \textbf{atoms per species}: nearly all of it on 45 atoms
-of two species, and little on a cell with one atom per species. At a single
-$k$-point it is a small \emph{loss}, because there is nothing to save and the
-rebuilt chunk is the whole array. It costs $n_{\rm at} n_{\rm pwx}$ complex
-exponentials each time a $k$-point's projectors are used, so it is a memory dial
-and not a speed one. The default is \code{store}.
+with the converged energies identical to the last printed digit. \textbf{The
+saving is the whole of $\langle k+G|\beta\rangle$}, not that array minus a core:
+the core is built unconditionally and both routes pay for it, so what the dial
+chooses between is the whole-$k$ array and one rebuilt chunk. The saving is
+therefore $n_k/k_{\rm batch}$ times the chunk --- it grows with how many
+$k$-points are \emph{not} in flight, and at a single $k$-point it is exactly
+neutral, buying nothing and costing nothing. It is the ratio $n_{\rm kb}/n_{\rm
+cs}$, atoms per species, that decides how much smaller the core is than the
+array, which is why the core stays cheap on a large cell. Measured cost:
+$n_{\rm at} n_{\rm pwx}$ complex exponentials each time a $k$-point's projectors
+are used, which on that slab is \textbf{+1.5\% per SCF iteration} (46.1~s against
+45.4~s) and 10~s more to compile. The default is \code{store}.
 
 \begin{refuses}
 Nothing is refused, but two things are worth knowing before switching. The

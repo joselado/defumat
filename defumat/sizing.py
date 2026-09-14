@@ -567,19 +567,24 @@ def estimate_size(
 
     arrays = {
         "wavefunctions (nspin,nk,nbnd,ndim)": wf_spin * nk * nbnd * ndim * zc,
-        # **The projector storage follows the dial** (``D11``/``D13``). ``store``
-        # holds ``(nk, npwx, nkb)`` -- one column per *atom* channel -- and
-        # ``rebuild`` holds the ``ProjectorCore`` it is built from, which is one
-        # per *species* channel plus ``k + G``, and forms each k-point's on
-        # demand. On a 45-atom cell of two species that is about twenty times
-        # smaller, and it is the largest single term in this table on a many-k
-        # run, so sizing a rebuild run as a stored one overstates the floor by
-        # the biggest number in it.
+        # **The core is resident under BOTH routes**, and putting it inside the
+        # conditional below was this model's second wrong turn about the same
+        # object. ``driver.py:1489`` assigns ``projector_core`` unconditionally,
+        # eight lines *before* the dial is resolved, so ``columns`` and ``kg``
+        # are a cost ``store`` pays too. Counting them as a cost of ``rebuild``
+        # alone understates the stored floor and makes the modelled saving
+        # ``vkb - columns - kg - chunk`` where the measured resident saving is
+        # ``vkb`` flat. The slab's A/B settles it: the delta is 13.96 GB at six
+        # brackets with 0.00 residual, and ``columns + kg`` there is 0.6-0.7 GB,
+        # which would have shown. (A13 made the mirror-image error first, by
+        # counting the core as a *new* cost of the rebuilt route.)
+        "projector core columns (nk,npwx,ncs)": nk * npwx * ncs * zc,
+        "projector core kg (nk,npwx,3)": nk * npwx * 3 * zr,
+        # **What the dial actually chooses**: the whole-k array, or one chunk
+        # rebuilt from the core above and freed again. Nothing else moves.
         **({"projectors vkb (nk,npwx,nkb)": nk * npwx * nkb * zc}
            if projectors == "store" else
-           {"projector core columns (nk,npwx,ncs)": nk * npwx * ncs * zc,
-            "projector core kg (nk,npwx,3)": nk * npwx * 3 * zr,
-            "projectors rebuilt, one chunk (npwx,nkb)": k_live * npwx * nkb * zc}),
+           {"projectors rebuilt, one chunk (npwx,nkb)": k_live * npwx * nkb * zc}),
         # ``psi`` and ``hpsi``, both ``(nvecx, ndim)`` -- the subspace and H
         # applied to it. ``S|psi>`` is deliberately not stored (the Ritz
         # vector's projections are a rotation of ``becq``), which is why this

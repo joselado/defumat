@@ -192,18 +192,25 @@ def test_the_size_report_follows_the_dial():
     assert "projectors = rebuild" in rebuilt.report()
 
     # The stored route carries one line per *atom* channel; the rebuilt route
-    # carries the core it is built from plus one chunk, and no whole-k vkb.
+    # carries one rebuilt chunk instead, and no whole-k vkb.
     assert "projectors vkb (nk,npwx,nkb)" in stored.arrays
     assert "projectors vkb (nk,npwx,nkb)" not in rebuilt.arrays
-    assert "projector core columns (nk,npwx,ncs)" in rebuilt.arrays
+    assert "projectors rebuilt, one chunk (npwx,nkb)" in rebuilt.arrays
 
 
-def test_the_rebuilt_floor_is_never_the_stored_one():
-    """A dial the model does not see is a dial the model reports wrongly.
+def test_the_core_is_charged_to_both_routes():
+    """`driver.py` builds `projector_core` before the dial is even resolved.
 
-    On a many-k cell the difference is most of `vkb`; on a single-k one the
-    rebuilt route is the *larger* of the two, because there is nothing to save
-    and the chunk is the whole array. Both directions are the model working.
+    This has now been got wrong twice, in opposite directions, from the same
+    picture -- that the core arrives *with* the rebuilt route. A13 first
+    counted it as a new cost of `rebuild`; the model then counted it as a cost
+    of `rebuild` alone, which understates the stored floor and makes the
+    modelled saving `vkb - columns - kg - chunk` where the measured resident
+    saving is `vkb` flat.
+
+    The slab's A/B is the arbiter: the delta is 13.96 GB at six brackets with
+    no residual, and `columns + kg` there is 0.6-0.7 GB, which would have
+    shown. So the two core lines belong to both branches.
     """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -211,4 +218,35 @@ def test_the_rebuilt_floor_is_never_the_stored_one():
             CELL, pseudo_dir="tests/data/pseudo", announce=False)
         stored = calculator.estimate(projectors="store")
         rebuilt = calculator.estimate(projectors="rebuild")
-    assert stored.total_bytes != rebuilt.total_bytes
+
+    for name in ("projector core columns (nk,npwx,ncs)",
+                 "projector core kg (nk,npwx,3)"):
+        assert name in stored.arrays, f"{name} missing from the stored route"
+        assert name in rebuilt.arrays, f"{name} missing from the rebuilt route"
+        assert stored.arrays[name] == rebuilt.arrays[name]
+
+    # And therefore the modelled difference is exactly what the dial chooses
+    # between -- the whole-k array against one chunk -- and nothing else.
+    difference = stored.total_bytes - rebuilt.total_bytes
+    assert difference == (stored.arrays["projectors vkb (nk,npwx,nkb)"]
+                          - rebuilt.arrays["projectors rebuilt, one chunk (npwx,nkb)"])
+
+
+def test_a_single_k_point_run_saves_exactly_nothing():
+    """`vkb` *is* the chunk when there is one k-point, so the dial is neutral.
+
+    Reported as a small *loss* once, which was the double-counted core: the
+    stored floor was missing `columns + kg` and so read lower than it is. The
+    honest statement is that the dial buys nothing at `nk = 1` and costs
+    nothing either, and starts paying as soon as `nk > k_batch`.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(
+            CELL, pseudo_dir="tests/data/pseudo", announce=False)
+        stored = calculator.estimate(projectors="store", k_batch=1)
+        rebuilt = calculator.estimate(projectors="rebuild", k_batch=1)
+    if stored.nk == 1:
+        assert stored.total_bytes == rebuilt.total_bytes
+    else:
+        assert rebuilt.total_bytes < stored.total_bytes

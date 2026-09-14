@@ -5581,12 +5581,17 @@ request and the iteration-13 fragmentation that killed 20244646 are **tight-`eth
 phenomena. 17.8 GB of headroom against a 24.89 GB request is short by about 7 GB if that
 request recurs unchanged, so this does not establish that `1 6 1` survives a converged run.
 
-**No `pw.x` timing pair, and the reason is structural rather than an omission.** This is not
-a feature taken from QE and timed against it: it is QE's *existing* arrangement adopted here.
+**The energies are bit-for-bit and the cost is +1.5 per cent.** `E = -9088.38663592` and
+`-8761.56856694` Ry, both to the last printed digit, with `|drho|`, the total moment and
+`|m|_site` (0.0742..1.7112) identical as well. Iteration 2 is **46.1 s against 45.4 s**, and
+the compile is 10.4 s longer. So the `nat npwx` complex exponentials -- 7.0 M per use on this
+cell -- disappear into the FFTs at these shapes, and this is a memory dial whose speed cost
+is real but small.
+
+**No `pw.x` ratio, and the reason is structural rather than an omission.** This is not a
+feature taken from QE and timed against it: it is QE's *existing* arrangement adopted here.
 `init_us_2` inside `k_loop` means `pw.x` has always held one k-point's projectors, so the
-comparison is that this code stops differing rather than that it gets faster. The cost is
-`nat npwx` complex exponentials per use -- 7.0 M on this cell -- and is **unmeasured on a
-real cell**: the timing pair belongs with the energies when a converged run exists.
+comparison is that this code stops differing rather than that it gets faster.
 
 ## The finiteness guard was the largest allocation *outside* the sized unit (OPEN.md Part VII)
 
