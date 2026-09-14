@@ -305,14 +305,17 @@ because that is what decides whether it is a session or a phase.
   follow-up; memory held by **child** processes, which the cgroup charges and this does
   not; and the fact that the failure lands at *teardown*, after the peak — if the peak is
   the kill, what survives is the log line, which is why it is written first.
-- **The ultracell beyond a collinear LDA** (P88, stages 1 and 3a done). Collinear spin is in
-  and a spin density wave is reachable -- an applied `magnetic_field` modulates the moment,
-  and the two channels share one Fermi level. What is missing, term by term: **noncollinear
-  magnetism**, refused for the shape of the matrix rather than the physics (a collinear
-  matrix is block diagonal in spin and so is two of the same build; a spinor state is one
-  vector of `2 npwx` components acted on by `V_0 + sigma . B`); a **total energy**, which
-  neither this code nor Elk has (`energyulr.f90` is the eigenvalue sum alone), so the energy
-  gain of a modulated state over the uniform one is not a quantity either code can report --
+- **The ultracell beyond an LDA** (P88, stages 1, 3a and 3b done). Spin is in, collinear
+  and noncollinear both: an applied `magnetic_field` modulates the moment, the two collinear
+  channels share one Fermi level, and a spinor ultracell is *one* matrix per folded k-point
+  rather than two, acted on by `V_0 + sigma . B`, so a texture that **turns** is reachable
+  and not only an amplitude that waves. The cost the noncollinear regime brings with it is
+  iterations rather than a missing term: without spin-orbit coupling a rigid rotation of the
+  whole magnetization is free, so a weak field leaves the mixer with no restoring force
+  along it and a 0.002 Ry run takes 263 iterations (`OPEN.md` Part VI item 3). What is
+  missing, term by term: a **total energy**, which neither this code nor Elk has
+  (`energyulr.f90` is the eigenvalue sum alone), so the energy gain of a modulated state
+  over the uniform one is not a quantity either code can report --
   and it is what a *spontaneous* wave, seeded by Elk's `rndbfcu` and faded by `reducebf`,
   would be judged by; a **GGA**, where the gradient of the ultracell density carries the
   envelope's own gradient that Elk's per-cell `potxc` call silently drops -- **and it is what
@@ -14558,7 +14561,7 @@ told from silence is this project's most-repeated trap.
   which is a statement about that route rather than this one, and QE's own `average_pp.f90`
   refuses ultrasoft and PAW outright.
 
-### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1 and 3a (norm-conserving, LDA, direct route, `nspin = 1` and `2`); stages 2, 3b and 4 planned.
+### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1, 3a and 3b (norm-conserving, LDA, direct route, `nspin = 1`, `2` and `4`); stages 2 and 4 planned.
 
 Elk tasks 700/701 (ground state), 720/725 (band structure and spectral function), 731-3,
 741-3, 771-3 (plots); `src/modulr.f90` and the twenty routines around it. The method paper is
@@ -15455,10 +15458,22 @@ not taken here.** It would need a measurement rather than an argument, which is
 
 **What is outstanding.**
 
-* **Stages 2, 3b and 4** as planned above: the central-k route beside the direct one and the
-  two errors separated, the **noncollinear** regime, and the total energy -- the quantity
-  neither code has. (Stage 3a, collinear spin, is above; the four things it does
-  not have are listed with it.)
+* **Stages 2 and 4** as planned above: the central-k route beside the direct one and the
+  two errors separated, and the total energy -- the quantity neither code has. (Stages 3a
+  and 3b, collinear spin and the noncollinear regime, are above; what each does not have is
+  listed with it.)
+* **The noncollinear crossover against the supercell.** `PERFORMANCE.md` states where the
+  ultracell should overtake the supercell it approximates as an *expectation* from the
+  collinear pair and the measured spinor cost, not as a measurement. The collinear crossover
+  is measured; this one is arithmetic on top of it.
+* **A weak field costs 263 iterations**, which is a real cost in exactly the regime the
+  method is for -- a long-wavelength texture is a weak perturbation by construction. The
+  mechanism is the Goldstone direction: without spin-orbit coupling a rigid rotation of the
+  whole magnetization costs nothing, so the fixed point is a manifold and the mixer has no
+  restoring force to find it with. **Lowering `mixing_beta` makes it worse, not better**
+  (0.3 does not converge in 300 where 0.7 converges in 263), which is the opposite of the
+  usual reflex and is why it is written down. Projecting the rigid rotation out of the
+  mixer's residual is the candidate fix and is `OPEN.md` Part VI item 3.
 * **The `PERFORMANCE.md` pair against Elk.** Stage 1 is unpolarized silicon under an applied
   potential and Elk's only worked example of the method is the Cr spin density wave, which
   stage 3a still cannot run -- the only chromium dataset committed here is PBE and the

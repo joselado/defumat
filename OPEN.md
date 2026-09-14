@@ -2370,7 +2370,7 @@ sloshes, and it is bounded by the half of `dr2` that carries no `1/|G+Q|^2`. **T
 measurement again when that lands**; the factor of 2.2e3 in the weights is what it would
 be paid at.
 
-## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and the mixer walks along it **[opened 2026-09-14, P88 stage 3b]**
+## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and a small `mixing_beta` cannot cross it **[opened 2026-09-14, P88 stage 3b]**
 
 **The mechanism, and it is physics rather than a bug.** Without spin-orbit coupling or
 magnetic anisotropy, turning *every* moment in the cell together by the same angle costs
@@ -2429,8 +2429,10 @@ that a departure needs a number rather than an argument. The number it needs is 
 to convergence with and without the projection, on at least two cells, one of which has
 spin-orbit coupling -- where the mode is *gapped* and the projection would be actively
 wrong, so the projection has to be switched off by `lspinorb` and that gate has to be shown
-to fire. Until then, lowering `mixing_beta` is the answer and the warning says so.
+to fire. Until then the answer is a **large** `mixing_beta` and a long budget -- the
+opposite of the usual reflex -- and the warning says so in those words.
 
-**How to know it worked.** The four-cell run above converging at `mixing_beta = 0.7`, in
-fewer iterations than 0.3 takes, with the same converged moments to 1e-8; and the same
-run with `lspinorb` giving the *same* answer with the projection on and off.
+**How to know it worked.** The weak-field run above -- 0.002 Ry at `mixing_beta = 0.7`,
+which takes **263** iterations as it stands -- converging in well under that with the
+projection on, to the same converged moments to 1e-8; and the same run with `lspinorb`
+giving the *same* answer with the projection on and off, which is the gate firing.
