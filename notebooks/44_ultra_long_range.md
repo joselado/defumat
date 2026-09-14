@@ -15,7 +15,9 @@ envelope alone.
 A cosine of amplitude 0.02 Ry applied over eight unit cells comes out reduced to a
 tenth of itself. The dielectric screening at that wavelength is **10.6**, against
 silicon's measured 11.9 in the long-wavelength limit, and it falls to **6.8** when
-the modulation is squeezed into four cells instead.
+the modulation is squeezed into four cells instead. The last section does the same
+thing with a magnetic field and gets a spin density wave eight cells long, which is
+the shape of the problem the method was built for.
 
 
 ```python
@@ -135,6 +137,81 @@ for cells, run in ((4, short), (8, ulr)):
          8         0.1334     10.00 mRy      -9.06 mRy     10.61
 
 
+## A spin density wave
+
+The same machinery with two spin channels answers the question the method was
+built for. A magnetic field that varies over eight unit cells drives a
+magnetization that varies with it, and the moment of each cell traces out the
+wave.
+
+The cell below has no moment of its own. Nothing in a collinear calculation
+breaks spin symmetry by itself, so what the field induces here is the spin
+response of a nonmagnetic crystal rather than the rearrangement of moments that
+were already there. The two channels share one Fermi level, which is what lets
+an electron cross from the minority channel in one cell to the majority channel
+in the next. That crossing is what a spin density wave is made of.
+
+
+
+```python
+magnetic = Calculator.from_file('../tests/data/qe/si-ultracell-mag.in',
+                                pseudo_dir='../tests/data/pseudo')
+field = lambda x: 0.02 * np.cos(2 * np.pi * x[..., 0] / 8)
+wave = magnetic.get_ultracell(supercell=(8, 1, 1), kgrid=(1, 2, 2), nbnd=32,
+                              magnetic_field=field, david=2)
+
+moments = wave.cell_moments()
+print(f'eight unit cells, {wave.iterations} iterations')
+print(f'largest cell moment   {np.abs(moments).max():.4f} mu_B')
+print(f'net moment            {moments.sum():+.2e} mu_B')
+
+```
+
+    [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-10). Call get_scf() to do this explicitly.
+
+
+    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:494: UserWarning: the fixed-density solve did not converge at 18 of 64 k-points: up to 2 of 32 bands are unsettled and the worst k-point took 100 Davidson steps, at ethr = 1.2e-08 (from conv_thr = 1.0e-06). There is no later iteration to fix this -- the density is fixed -- so these wavefunctions are what every quantity built on them will use. Loosen conv_thr (ethr is 0.1 x conv_thr / nelec, QE's setup.f90 rule) before raising the iteration budget: a threshold the solve cannot reach costs the whole budget at every k-point and is where an overlap loses positivity
+      calculation, folded_system, eigenvalues, wavefunctions = fixed_density_states(
+
+
+    eight unit cells, 8 iterations
+    largest cell moment   0.1223 mu_B
+    net moment            +3.26e-09 mu_B
+
+
+
+```python
+cells = np.arange(len(moments))
+fig, ax = plt.subplots(figsize=(7, 3.2))
+ax.axhline(0, color='0.7', lw=0.8)
+ax.plot(cells + 0.5, 0.02 * np.cos(2 * np.pi * (cells + 0.5) / 8) * 6,
+        color='0.6', lw=1.2, ls='--', label='applied field (arbitrary scale)')
+ax.bar(cells + 0.5, moments, width=0.7, color='#3b6ea5', label='moment of each cell')
+ax.set_xlabel('unit cell along $a_1$')
+ax.set_ylabel(r'moment  ($\mu_B$)')
+ax.set_title('A spin density wave eight unit cells long')
+ax.legend(frameon=False, loc='upper right')
+fig.tight_layout()
+
+```
+
+
+    
+![png](44_ultra_long_range_files/44_ultra_long_range_9_0.png)
+    
+
+
+The moment follows the field cell by cell and sums to zero over the eight of
+them, because the field does too. What is left over is the response itself: the
+ratio of the two is the spin susceptibility at that wavelength, and it is the
+magnetic counterpart of the screening measured above.
+
+The charge barely moves. A collinear crystal is unchanged by flipping every spin
+at the same time as the sign of the field, so the charge cannot respond at first
+order in the field and the magnetization must, which is a useful check that the
+two channels are being kept apart properly.
+
+
 ## What it cannot do
 
 The atoms do not move, and the unit cell's band structure is frozen: this computes
@@ -150,5 +227,6 @@ energy gain of a modulated state over a uniform one is not yet a quantity to rea
 The checks live in `tests/regression/test_ultracell.py`, where a two-cell ultracell is
 compared against a real four-atom supercell run in full, and the disagreement in the
 induced density is shown to fall from 43 per cent at eight bands to 0.2 per cent at
-eighty. The index bookkeeping the long cell needs is checked separately in
+eighty. The magnetic side is checked the same way, against a supercell and against an
+ordinary calculation carrying the same uniform field. The index bookkeeping the long cell needs is checked separately in
 `tests/unit/test_ultracell_grid.py`.
