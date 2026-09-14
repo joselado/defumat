@@ -1150,6 +1150,24 @@ essentially nothing there. nbse2 is the cell that carries it.
 > 13.96 GB, `k_batch 1`, so a chunk of 2.33 GB -- that is **about -11.6 GB net**, which is
 > where the ~11 GB estimate lands from the other direction.
 >
+> **Measured on the slab, 2026-09-14, and it moves the peak.** Jobs 20252135 (`store`) and
+> 20257133 (`rebuild`), same A100 node, same input and seed. **Every stage bracket falls by
+> 13.96 GB and nothing else** -- `live` at `-> diagonalize` 30.00 -> **16.04** against a
+> predicted 16.04, and `<- diagonalize` **79.14 -> 65.18 GB**. This is the first dial in
+> this cell's record that moves a peak rather than a stage: the `wfc_store` result was
+> resident moved and peak untouched, and this is not that. The ~2.33 GB of chunk scratch
+> does not appear at any bracket, so it is fitting inside headroom the solve already had --
+> an observation about where this cell's peak sits, not a claim that the scratch is absent.
+> `PERFORMANCE.md` has the full bracket table.
+>
+> **It also makes `D10` the binding constraint.** The same run brackets
+> `starting_wavefunctions` directly for the first time: `6.42 -> 57.47`, **+51.05 GB**,
+> against the stored run's boundary across the same gap of `20.38 -> 71.43`, **+51.05 GB**.
+> Identical to the digit, so the dial does not touch the spike and the whole improvement is
+> the resident offset it starts from. Headroom on an 82.95 GB pool goes 3.5 -> 17.8 GB,
+> which is **not** a verdict: the 23.18 GiB request that killed 20244646 is a tight-`ethr`
+> phenomenon and 17.8 GB against a 24.89 GB request is short by about 7.
+>
 > **Rebuilding inside the loop is cheaper than hoisting, which is the opposite of the
 > obvious worry.** Compiled into a `lax.while_loop` body with loop-invariant inputs at
 > slab-like shapes: **297.8 MB** of scratch built inside against **446.4 MB** lifted out by

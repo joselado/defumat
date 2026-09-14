@@ -5537,6 +5537,57 @@ each file's fixed cost. The consequence is that the last twenty seconds cost
 several times what the first three hundred did, which is why this stopped at
 10m20s rather than chasing 10m00s.
 
+## Rebuilding the projectors per k-point moves the NiBr2 slab's peak by 13.96 GB
+
+**The first dial in this cell's record that moves a peak rather than a stage**, and the
+measurement is a one-variable A/B on the same card: jobs **20252135** (`store`) and
+**20257133** (`rebuild`), A100-80GB gpu13, `2351b41`, same input, same seed, `KBATCH 1`,
+`BAND_BATCH 16`, `wfc_store device`, with the resolved dial printed twice before either ran.
+`peak`/`live` are `memory_stats()`, decimal GB.
+
+| bracket | store peak | store live | rebuild peak | rebuild live |
+|---|---|---|---|---|
+| Calculation built | 19.42 | 17.34 | 5.47 | 3.38 |
+| helix seed built | 20.38 | 17.47 | 6.42 | 3.51 |
+| `<- hamiltonian` | 20.38 | 17.90 | 6.42 | 3.94 |
+| `-> starting_wavefunctions` | -- | -- | 6.42 | 3.94 |
+| `<- starting_wavefunctions` | -- | -- | **57.47** | 16.04 |
+| `-> diagonalize` | 71.43 | 30.00 | 57.47 | 16.04 |
+| `<- diagonalize` | **79.14** | 42.10 | **65.18** | 28.14 |
+| `-> density` | 79.14 | 30.00 | 65.18 | 16.04 |
+
+**Every row differs by 13.96 GB and nothing else**, which is `vkb` to the digit
+(13.00 GiB = 13.96 GB, `nkb = 930`, `npwx = 156346`, `nk = 6`, from the run's own header).
+`live` at `-> diagonalize` is **16.04 against a predicted 16.04**.
+
+**The chunk scratch does not show.** The prediction was about -11.6 GB net -- 13.96 held
+minus ~2.33 GB of rebuilt chunk at `KBATCH 1` -- and the measured delta is 13.96 at every
+bracket including both peaks. So the scratch is fitting inside headroom the solve already
+had. That is an observation about where this cell's peak sits and **not** a claim that the
+scratch is absent: two iterations, one cell, one configuration.
+
+**`wfcinit` is now the binding constraint, and this run brackets it directly.** The
+`starting_wavefunctions` pair only exists in the second run (`f12a8f6` added it), and the
+step is `6.42 -> 57.47`, **+51.05 GB**. The first run's stage boundary across the same gap
+is `20.38 -> 71.43`, **+51.05 GB**. Identical to the digit in both arms, so the dial does
+not touch the spike at all and the whole of the improvement is the 13.96 GB resident offset
+it starts from. `MEMORY-AUDIT.md` D10 is unchanged as a phenomenon and is now measured
+rather than inferred from a boundary.
+
+**Headroom, and what it is not.** On an A100 at `MEMFRAC 0.97` the pool is 82.95 GB, so the
+peak going 79.14 -> 65.18 takes headroom from 3.5 to **17.8 GB**. That is real and it is not
+a verdict: both iterations ran at `ethr` 1e-2 and 2.4e-3, while the 23.18 GiB Davidson
+request and the iteration-13 fragmentation that killed 20244646 are **tight-`ethr`**
+phenomena. 17.8 GB of headroom against a 24.89 GB request is short by about 7 GB if that
+request recurs unchanged, so this does not establish that `1 6 1` survives a converged run.
+
+**No `pw.x` timing pair, and the reason is structural rather than an omission.** This is not
+a feature taken from QE and timed against it: it is QE's *existing* arrangement adopted here.
+`init_us_2` inside `k_loop` means `pw.x` has always held one k-point's projectors, so the
+comparison is that this code stops differing rather than that it gets faster. The cost is
+`nat npwx` complex exponentials per use -- 7.0 M on this cell -- and is **unmeasured on a
+real cell**: the timing pair belongs with the energies when a converged run exists.
+
 ## The finiteness guard was the largest allocation *outside* the sized unit (OPEN.md Part VII)
 
 > **The heading used to say "the largest single allocation in the SCF" and that is wrong**,

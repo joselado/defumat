@@ -4618,6 +4618,39 @@ accelerator the same transfer is PCIe, around a second. So \code{device} on a
 CPU, \code{host} on anything else, and the answer is bit-for-bit identical
 either way --- a transfer is not arithmetic.
 
+\textbf{A fourth dial says whether the \emph{projectors} are kept}
+(\code{projectors}, \code{DEFUMAT\_PROJECTORS}), and it is the one that has been
+measured to move a peak rather than a stage. $\langle k+G|\beta\rangle$ is
+$n_k n_{\rm pwx} n_{\rm kb}$ complex and resident for the whole run: on the
+45-atom slab above that is \textbf{13.96~GB}, larger than the wavefunctions
+themselves. \qe{} does not hold it either --- \code{c\_bands.f90:111} calls
+\code{init\_us\_2} \emph{inside} its $k$-loop --- and \code{projectors='rebuild'}
+is that: only the phase-free core is kept, one column per \emph{species} channel
+where the full array has one per \emph{atom} channel, and each $k$-point's is
+formed on demand. The expression is the same one either way, so the result is
+bit-for-bit identical.
+
+\emph{Why it moves a peak where the store dial does not.} The other three dials
+bound what is \emph{in flight} or move what is held between two points; this one
+removes what is \emph{held}, so it sits underneath every stage. Measured on that
+slab, two runs on the same card differing only in this flag: every stage bracket
+falls by 13.96~GB, and the peak with them --- \textbf{79.14~GB to 65.18~GB},
+with the converged energies identical. The saving is the whole array minus the
+core, so it scales with \textbf{atoms per species}: nearly all of it on 45 atoms
+of two species, and little on a cell with one atom per species. At a single
+$k$-point it is a small \emph{loss}, because there is nothing to save and the
+rebuilt chunk is the whole array. It costs $n_{\rm at} n_{\rm pwx}$ complex
+exponentials each time a $k$-point's projectors are used, so it is a memory dial
+and not a speed one. The default is \code{store}.
+
+\begin{refuses}
+Nothing is refused, but two things are worth knowing before switching. The
+default is \code{store} and every validated number in this document was measured
+with it. And a size estimate follows the dial only from \code{433abd7} onward:
+an older \code{defumat size} reports the stored array for a rebuilt run and so
+overstates the floor by the largest single line in its own table.
+\end{refuses}
+
 \textbf{Measured GPU speedups} (one H200 against one CPU core, per SCF
 iteration): 2x on a cheap metal, 3--5x on norm-conserving silicon, 9--21x with
 an augmentation charge or a magnetization, and \textbf{83--115x on spin-orbit}.
