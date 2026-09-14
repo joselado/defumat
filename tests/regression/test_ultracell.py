@@ -495,6 +495,59 @@ def test_a_polarized_ultracell_is_the_tiled_unit_cell(tmp_path, pseudo_dir):
 
 
 @pytest.mark.slow
+def test_a_constrained_moment_gives_each_channel_its_own_fermi_level(
+        tmp_path, pseudo_dir):
+    """``tot_magnetization`` is the ``Q = 0`` moment constraint, and it scales by ``N``.
+
+    With the moment constrained the two channels stop sharing a Fermi level and
+    each is filled against its own electron count -- QE's
+    ``two_fermi_energies``. The count is per unit cell in the input and the
+    occupation search here runs for the **ultracell**, so both halves have to be
+    multiplied by ``N`` and then divided out again with the weights. That is
+    stage 1's own trap, one level in: getting it backwards is a factor of ``N``
+    in one channel that converges perfectly well.
+
+    The null is the sharp form of it. With ``tot_magnetization = 0`` on a cell
+    whose unconstrained moment is already zero, the constraint changes nothing
+    and the answer must still be the tiled unit-cell density in one iteration --
+    but it now arrives through the two-count branch, which the shared-Fermi
+    tests never enter.
+    """
+    shape, kgrid = (2, 1, 1), (1, 2, 2)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    path = tmp_path / "si_fsm.in"
+    path.write_text(
+        MAGNETIC.replace("2 2 2 0 0 0", "{} {} {} 0 0 0".format(*folded))
+        .replace(" degauss=0.02\n", " degauss=0.02, tot_magnetization=0.0\n")
+    )
+    calculator = Calculator.from_file(path, pseudo_dir=pseudo_dir)
+    assert calculator.system.tot_magnetization is not None
+    scf = calculator.get_scf(conv_thr=1e-12, nbnd=12)
+
+    result = run_ultracell(
+        calculator.system, calculator.pseudos, scf, shape, kgrid, nbnd=12,
+        conv_thr=1e-10, states_conv_thr=1e-9,
+    )
+    assert result.converged and result.iterations == 1
+    assert np.abs(np.asarray(result.delta_v)).max() < 1e-14
+
+    # Two Fermi levels rather than one, which is what says the branch ran.
+    assert len(np.atleast_1d(np.asarray(result.fermi_energy, dtype=float))) == 2
+
+    tiled = np.asarray(result.ultracell.tile(jnp.asarray(scf.density)))
+    density = np.asarray(result.density)
+    assert np.abs(density - tiled).max() / tiled.max() < 1e-5
+
+    # The constraint is met on the ultracell as a whole, which is the Q = 0
+    # component of the envelope and the only component it constrains.
+    assert float(result.cell_moments().sum()) == pytest.approx(0.0, abs=1e-6)
+
+    volume = result.ultracell.volume(calculator.system.cell)
+    charge = float(density.sum()) * volume / density[0].size
+    assert charge == pytest.approx(8.0 * result.ultracell.cells, abs=1e-8)
+
+
+@pytest.mark.slow
 def test_a_modulated_field_makes_a_spin_density_wave(tmp_path, pseudo_dir):
     """The magnetic null **can fail**: an applied ``B(r)`` modulates the moment.
 

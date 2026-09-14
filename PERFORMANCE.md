@@ -5298,7 +5298,9 @@ iterations and 17.8 s. The unit-cell ground state those expand around, on its ow
 under the same applied modulation, `nbnd = 24`, `david = 2`, once at `nspin = 1` and once
 at `nspin = 2` with `starting_magnetization = 0.2` and Gaussian smearing on both, medians
 of three **warm** calls after a discarded first (which pays compilation, and compilation
-here is the on-disk kernel cache rather than the work):
+here is the on-disk kernel cache rather than the work). **It is the whole
+`run_ultracell` call**, frozen-state solve included -- which is what a user pays and which
+also doubles with the channels, so the loop's own ratio is not separated out here:
 
 | | iterations | median, s | of |
 |---|---|---|---|
