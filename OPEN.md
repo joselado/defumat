@@ -2912,3 +2912,49 @@ uncorrelated with the step count (four iterations at 17.8 to 23.7 steps all took
 1.3 per cent, a fitted 0.6 s per step on an 836 s intercept), so the cost cannot check the
 count and the disagreement between them was never evidence about either. The silicon
 reproduction above is the only evidence in play, and it says the cut-off is real.
+
+### 4. `local-TF` costs about 730 s an iteration on a 3.5-million-G-vector dense grid **[opened 2026-09-14, from the NiBr2 helix run; unprofiled]**
+
+**The evidence is an A/B and a fit, which is the right order.** `nibr2_k161_localtf.scf.in`
+differs from `nibr2_k161_anderson.scf.in` in exactly one line, `mixing_mode`: same geometry,
+same `LOCAL_MAGNETIC_FIELDS` card, same `nbnd`, same `conv_thr`, same `mixing_beta`. Fitting
+wall time against the printed Davidson step count within each run:
+
+| job | mixer | occupations | `nbnd` | s per step | intercept |
+|---|---|---|---|---|---|
+| 20258495 | anderson | smearing | 403 | 4.70 | 30.3 s |
+| 20260032 | anderson | fixed | 362 | 4.24 | 26.7 s |
+| 20259567 | **local-TF** | smearing | 403 | -- | **850 s flat** at 18 to 24 steps |
+
+The two `anderson` runs agree on both coefficients to within 10 per cent across a change of
+band count *and* a change of occupations, which is what makes the law worth applying. Put the
+`local-TF` run's step counts through it and it predicts about 123 s an iteration; it spends
+850. **So `local-TF` costs roughly 730 s every iteration, five to eight times the whole rest
+of the iteration**, and the intercept says the density, `addusdens`, `v_of_rho` and `newd`
+together come to about 28 s.
+
+**What is in the routine, structurally, and none of it is attributed.** `local_tf_preconditioner`
+is the only preconditioner here that is not a diagonal multiply: `approx_screening2`'s operator
+`4 pi e2 v + |G|^2 (alpha v)` has `alpha(r)` applied in **real** space, so it is not diagonal in
+`G` and is inverted iteratively. Four properties of how that is written scale the wrong way on a
+large dense grid, and **which of them dominates is unmeasured**:
+
+- the Krylov loop is a **Python** loop, up to `LOCAL_TF_MMX = 12` directions with
+  `LOCAL_TF_REFRESHES = 4` restarts, so about 60 steps, each dispatching two separate jitted
+  FFT round-trips rather than one fused kernel;
+- its inner product `dot()` returns `float(...)`, a **host sync**, called once per new entry of
+  the `aa` matrix, so the syncs go as `m` per step and `m^2` per restart;
+- `_alpha` runs on the host in numpy over the whole dense grid and is rebuilt **every
+  iteration**, because the screening is a function of `rho(r)` -- which is the entire difference
+  between this and `kerker` and is why only this one is expensive;
+- none of it batches with anything else, so it is pure added wall clock.
+
+**Do not read this as an argument against the algorithm.** `local-TF` is in that input because
+an inhomogeneous slab is what it is for, and `kerker`'s single screening length is wrong there;
+if the 730 s is an implementation cost then the input stays right. `kerker` is the intermediate
+worth timing first, one transform against sixty.
+
+**First step.** Profile one `local_tf_preconditioner` call on a dense grid of that size,
+separating the host syncs from the FFTs, before changing anything. On a GPU the syncs are the
+first suspect and on a grid that size the FFT count is, and that cell has both -- which is
+exactly why it needs measuring rather than reasoning.
