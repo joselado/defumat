@@ -2865,3 +2865,50 @@ it worked once. Neither the commit that broke it nor the date is known: the file
 commits (`8049534`, `284d123`, `cccd9ab`) are the obvious places to bisect, and a bisect here
 is cheap because the three tests run in **57 s** on their own.
 
+
+### 3. A resume spends a whole Davidson budget re-tightening bands it does not need **[opened 2026-09-14, from the NiBr2 helix run]**
+
+**The mechanism.** `band_thresholds` (`driver.py:233`) reads `wg = None` as "the first SCF
+iteration, which has no occupations yet" and returns a flat `ethr` for every band, which is
+`pw.x`'s own rule: `btype` is all ones out of `init_run.f90:149` and `sum_band` overwrites it
+only after the first diagonalisation. A **resume** arrives with `wg = None` too, because the
+driver sets it and neither `starting_from` nor the checkpoint carries it. But `ethr` *is*
+restored from the checkpoint, tight. So the first iteration back holds every empty band to
+the converged `ethr`, where a steady-state iteration holds them to `max(5 ethr, 1e-5)`, and
+the empty bands do not get there.
+
+**Measured**, two-atom silicon, `conv_thr = 1e-12`, checkpoint at iteration 5 and resume,
+comparing the resumed run's first iteration against the same iteration of the uninterrupted
+run:
+
+| `nbnd` | uninterrupted | resumed, first iteration back |
+|---|---|---|
+| 4, all occupied | 2.0 | 2.0 |
+| 40, four occupied | 1.0 | **5.5** |
+
+so it is absent with no empty bands and 5.5x with thirty-six of them. On the 45-atom NiBr2
+slab at `nbnd = 403` the resumed iteration reports `avg # of iterations = 100.0`, which is
+`MAX_ITERATIONS` exactly, on every k-point -- the same effect reaching the budget.
+
+**The docstring already declares this a deliberate deviation** from `pw.x`, which never
+resets `btype` between SCFs, and calls the cost "one iteration of extra accuracy on the empty
+bands of a restarted run, which is the conservative direction". That is true and it
+understates the size: on a many-band cell the cost is the whole Davidson budget, not a
+little extra accuracy.
+
+**The fix, and the test it needs.** The checkpoint already carries `occupations`; feeding
+them back as `wg` on resume gives the resumed iteration the thresholds the uninterrupted run
+had. What it needs beside the code is
+`test_an_interrupted_scf_costs_the_same_as_an_uninterrupted_one` extended from **SCF
+iterations** to **Davidson steps** -- as it stands that test passes with this defect present,
+which makes it another check whose null cannot be told from a pass. It also changes the
+resumed run's eigenvalues in the last digits, so the equality it asserts has to be stated at
+a tolerance rather than exactly.
+
+**One reading to retire with it.** The first report of this took the `100.0` as a
+placeholder rather than a measurement, on the grounds that the iteration was faster than
+neighbouring ones. That argument does not survive: on that cell the wall time is
+uncorrelated with the step count (four iterations at 17.8 to 23.7 steps all took 850 s to
+1.3 per cent, a fitted 0.6 s per step on an 836 s intercept), so the cost cannot check the
+count and the disagreement between them was never evidence about either. The silicon
+reproduction above is the only evidence in play, and it says the cut-off is real.

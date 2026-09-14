@@ -103,7 +103,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.builder import build_basis
-from defumat.scf.mixing import get_mixer
+from defumat.scf.mixing import MIXERS, get_mixer
 from defumat.xc.functional import resolve_functional
 from defumat.scf.occupations import fixed_occupations, smeared_occupations
 from defumat.system.kpoints import for_spin
@@ -503,6 +503,21 @@ def run_ultracell(
     started = time.time()
     if int(max_iterations) < 1:
         raise ValueError('max_iterations must be at least 1')
+    # **Refused before anything is built, not at the first mix.** ``kerker``
+    # defaults to ``True``, so a caller who changed only ``mixing_mode`` would
+    # otherwise reach the guard inside ``AdaptiveMixer.mix`` after a ground
+    # state and a supercell had already been paid for. ``accepts_precondition``
+    # is a class attribute, so this asks the registry rather than an instance.
+    if kerker and not MIXERS[str(mixing_mode).lower()].accepts_precondition:
+        raise ValueError(
+            f"mixing_mode = {mixing_mode!r} does not take a preconditioner and "
+            f"kerker is on. Its step is pointwise in real space with a factor "
+            f"per point, where box_kerker is one scalar in G-space; pass "
+            f"kerker=False to use it, or choose a mixer that screens. On an "
+            f"ultracell the two answer different directions -- Kerker the "
+            f"long-wavelength charge a longer box makes worse, this the rigid "
+            f"spin rotation that has no restoring force at all"
+        )
     supercell = tuple(int(n) for n in supercell)
     reference = ground_state
     pseudos = tuple(pseudos)
@@ -685,7 +700,8 @@ def run_ultracell(
         # A cell ``N`` times longer carries a smallest ``|G+Q|`` that is ``N``
         # times smaller, so the Hartree kernel there is ``N^2`` larger and the
         # sloshing an ordinary SCF merely tolerates becomes the whole problem.
-        # This is why Elk's own example runs at ``beta0 = 0.001``.
+        # This is why Elk's own example runs at ``beta0 = 0.001`` -- which is
+        # this mixer's parameter, in Elk's own adaptive scheme.
         mixer.precondition = box_kerker(
             ultracell, cell, nelec, (nspin_mag,) + grid, beta=mixer.beta,
         )

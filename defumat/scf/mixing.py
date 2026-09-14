@@ -68,6 +68,12 @@ class Mixer:
     #: because building it needs the G-vectors and the mixer does not have them.
     precondition = None
 
+    #: Whether :attr:`precondition` means anything for this mixer. False for a
+    #: scheme whose step is not one scalar times the residual, so that an
+    #: install site can refuse **at setup** rather than at the first mix -- a
+    #: run that cannot work should not find out three hours in.
+    accepts_precondition = True
+
     def mix(self, rho_in: np.ndarray, rho_out: np.ndarray) -> np.ndarray:
         raise NotImplementedError
 
@@ -302,6 +308,8 @@ class AdaptiveMixer(Mixer):
     G-space operator carrying a single scalar does not compose with that.
     """
 
+    accepts_precondition = False
+
     #: Elk's ``beta0``: the increment, the initial value and the floor at once.
     beta: float = 0.05
     #: Elk's ``betamax``, and Elk's own bound on it.
@@ -350,8 +358,31 @@ class AdaptiveMixer(Mixer):
                 "is one scalar acting in G-space. Choose one or the other"
             )
         shape = np.asarray(rho_out).shape
-        rho_in = np.asarray(rho_in, dtype=float).ravel()
-        rho_out = np.asarray(rho_out, dtype=float).ravel()
+        # **The packed vector's own dtype is kept**, not forced to float64. It
+        # comes from ``config.dtypes`` through the density, and a mixer that
+        # upcast it would hand the next iteration a float64 density under a
+        # float32 policy, which is the hardcoded-dtype rule. The test is
+        # ``test_a_mixer_does_not_promote_the_densitys_precision``, and it is on
+        # the **density** block deliberately: ``_mix`` casts the ``ns`` block
+        # back to its own real type, so an assertion there passes whatever the
+        # mixer did.
+        rho_in = np.asarray(rho_in).ravel()
+        rho_out = np.asarray(rho_out).ravel()
+        if np.iscomplexobj(rho_in) or np.iscomplexobj(rho_out):
+            # **Refused, because numpy would not refuse it.** The rule below is
+            # ``residual * previous >= 0``, and numpy compares complex numbers
+            # with ``>=`` rather than raising -- it orders them on the real part
+            # and breaks ties on the imaginary one -- so a complex vector would
+            # adapt every step length on the real part alone and report nothing.
+            # ``_mix`` packs a spinor ``ns`` as a real view precisely so that
+            # this never happens from inside the driver.
+            raise TypeError(
+                "the adaptive mixer's state is one real vector: its step length "
+                "per component is chosen by the sign of that component's "
+                "residual, and a complex number has no sign. Pack a complex "
+                "block as a real view first, which is what scf/driver.py's _mix "
+                "does for a spinor ns"
+            )
         residual = rho_out - rho_in
         if self._betas is None or self._betas.shape != residual.shape:
             # ``iscl < 1``: Elk seeds every component at ``beta0`` with a zero
@@ -359,7 +390,7 @@ class AdaptiveMixer(Mixer):
             # the first mixing step already increments and runs at ``2 beta0``.
             # Transcribed rather than smoothed -- it is why the scheme leaves the
             # ground at all from a start as small as 0.05.
-            self._betas = np.full(residual.shape, float(self.beta))
+            self._betas = np.full(residual.shape, self.beta, dtype=residual.dtype)
             self._previous = np.zeros_like(residual)
         self._betas = np.where(
             residual * self._previous >= 0.0,

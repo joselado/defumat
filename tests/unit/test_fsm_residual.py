@@ -174,4 +174,12 @@ def test_an_ordinary_non_convergence_still_gets_the_generic_warning(pseudo_dir):
     stopped = [m for m in messages if "SCF stopped" in m]
     assert len(stopped) == 1
     assert "its **density** did" not in stopped[0]
-    assert "lower mixing_beta" in stopped[0]
+    # The generic branch's own markers. ``Raise electron_maxstep`` is the one
+    # that only this branch has; the mixing advice is asserted by its two
+    # halves rather than by one phrase, because it now names *both* directions
+    # -- a smaller ``mixing_beta`` for an SCF that is oscillating and
+    # ``mixing_mode = 'adaptive'`` for one that is crawling, where a smaller
+    # increment is the wrong reflex (``OPEN.md`` Part VI item 3).
+    assert "Raise electron_maxstep" in stopped[0]
+    assert "smaller mixing_beta" in stopped[0]
+    assert "adaptive" in stopped[0]

@@ -314,8 +314,34 @@ def test_an_explicit_starting_from_is_not_overridden(qe_silicon, pseudo_dir, tmp
 # --- the mixer's ns block, in both precisions -------------------------------
 
 
+@pytest.mark.parametrize("mode", ["anderson", "adaptive", "linear"])
+@pytest.mark.parametrize("dtype", ["float64", "float32"])
+def test_a_mixer_does_not_promote_the_densitys_precision(dtype, mode):
+    """The **density** block is where a hardcoded float64 inside a mixer shows.
+
+    Not the ``ns`` block, which is what the test below looks at: ``_mix`` casts
+    that one back to ``ns``'s own real type explicitly, so it comes out right
+    whatever the mixer did and an assertion there passes either way. The density
+    is unpacked with a plain ``jnp.asarray`` and carries whatever the mixer
+    returned, so this is the one place the convention is observable.
+
+    Checked to fail rather than assumed to: an ``AdaptiveMixer`` subclassed to
+    cast its arguments with ``dtype=float`` returns ``float64`` here from a
+    ``float32`` density, which is what the first draft of this mixer did.
+    """
+    import numpy as np
+
+    from defumat.scf.driver import _mix
+
+    rho = np.random.default_rng(3).normal(size=(1, 4, 4, 4)).astype(dtype)
+    mixer = get_mixer(mode, **({"beta": 0.4} if mode != "adaptive" else {}))
+    mixed, _, _ = _mix(mixer, rho, rho + 0.01, (), ())
+    assert np.asarray(mixed).dtype == np.dtype(dtype)
+
+
+@pytest.mark.parametrize("mode", ["anderson", "adaptive"])
 @pytest.mark.parametrize("dtype", ["complex128", "complex64", "float64", "float32"])
-def test_the_ns_block_survives_the_mixer_in_either_precision(dtype):
+def test_the_ns_block_survives_the_mixer_in_either_precision(dtype, mode):
     """``ns`` is packed into the mixer's one real vector and unpacked from it.
 
     The pack was an unconditional ``.view(float)`` and the unpack a
@@ -342,12 +368,16 @@ def test_the_ns_block_survives_the_mixer_in_either_precision(dtype):
         ns = rng.normal(size=shape).astype(dtype)
 
     rho = rng.normal(size=(1, 4, 4, 4))
-    mixer = get_mixer("anderson", beta=1.0)
+    # ``beta`` is left to each mode: 1.0 is the identity for Anderson and an
+    # out-of-range increment for the adaptive mixer, where the identity comes
+    # from mixing a vector with itself instead.
+    mixer = get_mixer(mode, **({"beta": 1.0} if mode == "anderson" else {}))
     _, _, mixed = _mix(mixer, rho, rho, (), (), ns_in=ns, ns_out=ns)
 
     mixed = np.asarray(mixed)
     assert mixed.shape == ns.shape
     assert np.iscomplexobj(mixed) == np.iscomplexobj(ns)
+    assert mixed.dtype == ns.dtype
     assert mixed == pytest.approx(ns, rel=1e-6, abs=1e-7)
 
 

@@ -300,3 +300,39 @@ def test_an_unset_mixing_beta_gives_each_mode_its_own_default():
     assert get_mixer("linear").beta == pytest.approx(0.7)
     assert get_mixer("adaptive").beta == pytest.approx(0.05)
     assert get_mixer("adaptive").beta_max == pytest.approx(1.0)
+
+
+def test_the_ultracell_refuses_the_pair_before_it_builds_anything():
+    """``kerker`` defaults to ``True`` there, so the clash is the easy mistake.
+
+    Watched firing rather than read: the call is made with nothing else valid,
+    which passes only because the refusal is ahead of every argument the rest of
+    the driver would touch. A guard further down would raise a different error
+    here and the test would fail, which is the point of calling it this way.
+    """
+    from defumat.ultracell.driver import run_ultracell
+
+    with pytest.raises(ValueError, match="does not take a preconditioner"):
+        run_ultracell(None, (), None, (2, 1, 1), mixing_mode="adaptive")
+    # And it is the *pair* that is refused, not the mixer: turning kerker off
+    # gets past this and on to the ordinary argument handling.
+    with pytest.raises(Exception) as other:
+        run_ultracell(None, (), None, (2, 1, 1), mixing_mode="adaptive",
+                      kerker=False)
+    assert "does not take a preconditioner" not in str(other.value)
+
+
+def test_the_adaptive_mixer_refuses_a_complex_vector():
+    """Because numpy would not, which is the whole reason the guard is there.
+
+    ``np.array([1+1j]) >= 0`` does not raise: numpy orders complex numbers on
+    the real part and breaks ties on the imaginary one. So the sign rule would
+    run on the real part alone and adapt every step length from half the
+    information, silently. The driver never reaches this -- ``_mix`` packs a
+    spinor ``ns`` as a real view -- and a caller using the mixer directly can.
+    """
+    mixer = AdaptiveMixer()
+    with pytest.raises(TypeError, match="has no sign"):
+        mixer.mix(np.zeros(4, dtype=complex), np.ones(4, dtype=complex))
+    # The premise, asserted rather than remembered: numpy really does compare.
+    assert bool((np.array([1 + 1j]) * np.array([1 + 0j]) >= 0)[0]) is True
