@@ -179,6 +179,10 @@ def scf_accuracy_terms(residual_r: jnp.ndarray, gvectors: GVectors, cell: Cell):
     a ``dr2`` below ``conv_thr`` bounds the moment far more weakly than it
     bounds the charge, and a run can stop with the charge converged and the
     magnetization still drifting. Nothing in a single scalar can say that.
+
+    Both halves are of the **smooth** density, so on an ultrasoft or PAW run
+    neither of them sees ``becsum`` except through what ``addusdens`` already
+    put on the grid: ``OPEN.md`` Y2, and the reason is in ``accuracy_of``.
     """
     residual_g = r_to_g(residual_r, gvectors.fft_index)
     charge = hartree(total_charge(residual_g), gvectors, cell)[1]

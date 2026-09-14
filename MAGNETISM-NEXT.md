@@ -419,6 +419,15 @@ Anderson coefficients under both quadratic forms — `scf_accuracy` gives QE's f
 report the angle between the two coefficient vectors. If it is small, the metric is not the
 mechanism and this item can be closed as measured rather than fixed.
 
+**The same packed vector has a third block nothing watches**, which is `OPEN.md` Y2 (opened
+2026-09-14 from the NiBr2 helix run): `becsum` is mixed at the plain `beta` and is in no
+convergence measure at all, since both halves of `accuracy` are of the smooth density and
+what reaches them is only what `addusdens` already put on the grid. On a PAW magnet the
+moment lives in the d-shell `becsum`, so a stall with a flat magnetic half and a large
+energy swing is exactly the shape that half would make, and there is no number in the log
+that says whether it is the thing still moving. The entry asks for a reported `becsum`
+residual that is fed to nothing, and it is the cheapest of the three items here.
+
 **A second route, and this is the place for it: minimise the energy instead of iterating
 the density.** Raised by the user, 2026-09-13. Direct minimisation descends `E[psi]` under
 orthonormality rather than looking for a fixed point of the density map, and it is

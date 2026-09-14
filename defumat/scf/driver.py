@@ -4326,11 +4326,24 @@ def _solve_residual(
         """The mixing loop's own convergence measure, so ``conv_thr`` means one
         thing in this file.
 
-        ``rho_ddot`` on the density part -- ``becsum``'s share is the ``paw``
-        term, which the loop adds through ``addusdens`` rather than separately --
-        plus ``ns_ddot`` when there is a Hubbard U, exactly as the loop adds it.
-        A residual solver that converged on a *different* measure than the mixer
-        could not be compared with it at all."""
+        ``rho_ddot`` on the density part, plus ``ns_ddot`` when there is a
+        Hubbard U, exactly as the loop adds it. A residual solver that converged
+        on a *different* measure than the mixer could not be compared with it at
+        all.
+
+        **``becsum`` is not in it, and that is an omission rather than a
+        redundancy.** ``addusdens`` puts ``Q_ij(r) becsum`` into the smooth
+        density, so part of a ``becsum`` error does reach this number, at the
+        charge half's ``1/|G|^2`` weight; what does not reach it at all is the
+        PAW one-centre piece, the all-electron minus pseudo Hartree and XC
+        evaluated on the radial grids, which is where a magnetic PAW cell keeps
+        most of its energy. QE's ``paw_ddot`` term is written and commented out
+        for the same result and a different reason (``PW/src/scf_mod.f90:843``,
+        "commented out because it yields too often negative values"), so
+        matching it here is deliberate: an indefinite term in ``accuracy`` would
+        drive the ``ethr`` schedule and could take ``dr2`` negative. What it
+        costs, and the diagnostic that would make it visible without feeding
+        it back, is ``OPEN.md`` Y2."""
         accuracy = _accuracy(
             jnp.asarray(r[:size]).reshape(shape), calculation.basis.dense, calculation.system.cell
         )

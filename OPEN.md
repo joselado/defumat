@@ -1712,7 +1712,7 @@ memory direction, which is the one still open.
 
 ---
 
-## Y. `conv_thr` bounds a moment much more weakly than it bounds a charge
+## Y. `conv_thr` bounds a moment much more weakly than it bounds a charge, and the PAW one-centre terms not at all
 
 ### Y1. `dr2 = 9e-11` on a magnetic cell left the total energy 1.15e-8 Ry out **[found by a test]**
 
@@ -1750,6 +1750,89 @@ cell. Whether `1e-12` is the right default for a magnetic run generally, and whe
 magnetic cell, are both open and neither has a number. `pw.x` uses the same summed
 `rho_ddot` for its schedule, so this would be a deliberate departure rather than a
 correction.
+
+### Y2. `accuracy` cannot see the PAW one-centre half of `becsum` at all, and the docstring gave the wrong reason **[opened 2026-09-14, from a production run]**
+
+Y1 is about a half that is weighted a factor of 13.6 too lightly. This is about a half that
+is not in the number at all, and the two compound on exactly the same cells.
+
+**What the code does**, checked rather than remembered. `scf_accuracy_split`
+(`defumat/scf/potential.py:158`) takes the **smooth** density residual and returns
+`(dr2, charge, magnetic)`; the mixing loop builds `accuracy` from it at
+`scf/driver.py:5019` and the residual solver's `accuracy_of` at `:4326` does the same,
+adding `ns_ddot` where there is a Hubbard U. `becsum` enters neither. What reaches the
+number is whatever `addusdens` already put on the grid, `Q_ij(r) becsum`, at the charge
+half's `1/|G|^2` weight; what does not reach it is the PAW one-centre piece, the
+all-electron minus pseudo Hartree and XC on the radial grids.
+
+**This matches `pw.x` exactly and is not a deviation.** QE writes the term and comments it
+out, `PW/src/scf_mod.f90:843-845`:
+
+```fortran
+  ! Beware: commented out because it yields too often negative values
+  ! IF (okpaw)         rho_ddot = rho_ddot + paw_ddot(rho1%bec, rho2%bec)
+```
+
+**What was wrong here was the *reason*.** `accuracy_of`'s docstring said `becsum`'s share
+is "the `paw` term, which the loop adds through `addusdens` rather than separately", which
+reads as redundancy: nothing missing, just added elsewhere. QE's comment is an admission
+that the term is missing and was given up because `paw_ddot` is not positive definite. On a
+PAW magnetic cell the difference is the whole question, because the moment lives in the
+d-shell `becsum`. Both docstrings now say so.
+
+**Where it bites, reported by the NiBr2 helix run and not re-measured here.** 45 atoms, PAW,
+noncollinear with `lspinorb`, `1 6 1`, `nosym`, a 15-site helix held by a
+`LOCAL_MAGNETIC_FIELDS` card on Ni only, `ecutwfc 45 / ecutrho 240`, `nbnd 403`,
+`conv_thr 1e-6`, `mixing_beta 0.3`, Anderson with `mixing_ndim 12`. It stalls, and the split
+Y1 added is what makes it legible:
+
+| iteration | 9 | 13 | 19 | 22 | 28 | 33 | 37 |
+|---|---|---|---|---|---|---|---|
+| `accuracy` | 8.28e-3 | 7.69e-4 | 2.07e-4 | 1.84e-4 | 1.62e-4 | 1.47e-4 | 1.75e-4 |
+| charge | 7.68e-3 | 6.11e-4 | 1.04e-4 | 1.03e-4 | 7.52e-5 | 5.57e-5 | 8.66e-5 |
+| magnetic | 6.04e-4 | 1.59e-4 | 1.02e-4 | 8.12e-5 | 8.66e-5 | 9.13e-5 | 8.84e-5 |
+
+The magnetic half falls two and a half orders and then stops dead: sixteen iterations inside
+six per cent of 8.7e-5, drifting slightly upwards. The charge half is the noisy one and the
+only one that ever goes lower. Three things reported with it that rule out the ordinary
+explanations: the cell is **gapped** (indirect 1.10 eV, direct 1.17 to 1.21 eV over the six
+k-points, 360 of 403 bands occupied and **no** band fractionally occupied at 1e-5), so
+`degauss` is inert and charge sloshing is out, since sloshing needs the `q^-2` divergence of
+a metallic response; the **total energy swings 0.27 Ry** over iterations 29 to 37 against a
+reported accuracy of 1.5e-4, a ratio of about 2000 where `dr2` is meant to bound the energy
+error within an order of magnitude; and the Davidson has not settled, 50.7, 40.3, 37.2, 35.5,
+then 7.7, 4.0, 3.5, then 30.5, 21.0, 21.7, 5.8, 13.8 average steps, where a gapped insulator
+at `ethr` 4e-8 belongs at 2 to 4. A large energy motion with a small smooth-density residual
+is what points at the one-centre terms. The checkpoint is kept at
+`/scratch/work/ladovj1/calculations/NiBr2_defumat/k161-h200/scf_iteration.npz`
+(`becsum_0`, `becsum_1`, eigenvalues and occupations are all in it).
+
+**That last step is a hypothesis and is labelled as one by the session that raised it.** The
+gap, the occupations, the energy swing and the Davidson counts are measurements; "`becsum`
+is the thing still moving" is an inference from them, and this project has a named trap for
+an explanation accepted because it fits. Nothing here has measured a `becsum` residual on
+that run, which is the point of the entry.
+
+**Two things that make the blind half less damped than the rest.** Both preconditioners pass
+`becsum` through at the plain `beta` -- `kerker_preconditioner` gives the argument
+(`scf/mixing.py:296-308`, the parts whose Jacobian block is already well conditioned want no
+preconditioning) and `local_tf_preconditioner` repeats it at `:411` -- so `mixing_beta` is
+`becsum`'s only damping. And `ultracell/driver.py:378` already records the ultracell version
+of Y1, that the charge half's weight at the envelope's own wavevector is `N^2` larger and
+"a spin density wave is exactly a state whose whole answer lives in the half that is not
+amplified". A 15-site helix is that state.
+
+**What to do, and what not to.** Do **not** put `paw_ddot` back into `dr2`: QE disabled it
+for a real reason, and here it would be worse, because `scf_accuracy_split`'s own docstring
+records that one ulp in `dr2` moves the `ethr` schedule and with it the last digits of every
+eigenvalue, so an indefinite term would corrupt eigenvalues and a negative `dr2` would break
+the schedule outright. What is wanted is a **`becsum` residual reported beside the two
+halves and deliberately fed to nothing** -- not to `ethr`, not to the `conv_thr` test. A
+plain norm is enough; it need not be `paw_ddot` and need not be an energy. That makes the
+blind half visible for the cost of one norm and keeps the property the docstring protects,
+that a diagnostic must not change the run it is diagnosing. Unstarted, and the first thing
+it needs is exactly the measurement the paragraph above says nobody has: read `becsum_0` and
+`becsum_1` off that checkpoint and see whether the thing that is still moving is there.
 
 ## X. Downgraded, and test-suite hygiene
 
