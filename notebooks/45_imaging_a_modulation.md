@@ -53,8 +53,8 @@ print(f'largest cell moment {np.abs(wave.cell_moments()).max():.4f} mu_B')
 ## What the tip is tuned to
 
 Silicon has a gap, and this run is a smeared one, so the Fermi level it reports
-sits inside that gap: 0.85 smearing widths above the top of the valence band and
-1.11 below the bottom of the conduction band. The zero-bias image is then the
+sits inside that gap: 0.47 smearing widths above the top of the valence band and
+0.67 below the bottom of the conduction band. The zero-bias image is then the
 tail of those two edges at the tip energy, which is the most sensitive thing a
 tip can be tuned to, since a level that moves by a fraction of a width changes
 the weight there by a large factor while the same shift moves the occupied

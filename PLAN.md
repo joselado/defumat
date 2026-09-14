@@ -15569,9 +15569,12 @@ coordinates. `defumat/ultracell/states.py` is that object, and the two entry poi
   `N = 1` and **1.6e-7** at `N = 2`, and the integrals agree to 1.0e-8. The reference has to
   be the folded set rather than the `k0` set, because an image is a sum over states at the
   tip energy and a different Brillouin-zone sampling is a different sum -- on this cell a
-  **factor of 1.94**, which looks exactly like a normalisation error and is not one. The
-  floor is the ultracell's own `conv_thr`: its `dV` is converged to 1e-10 rather than to
-  zero, so the states it diagonalises are not exactly the unit cell's.
+  **factor of 1.94**, which looks exactly like a normalisation error and is not one. **The
+  floor is the two routes rather than a threshold**: the null reads 5.779e-8 and the
+  integral 1.008e-8 at every `conv_thr` from 1e-6 to 1e-12, because with nothing applied the
+  loop reaches an accuracy of 1.1e-14 whatever is asked of it. What is left is the unit
+  cell's own states against the fixed-density solve's rediagonalised in the frozen envelope
+  basis, on a box of a different shape.
 * **Against a real four-atom supercell** under the same applied potential, imaged the same
   way: the error on the induced corrugation falls **22.2 -> 5.2 -> 2.0 per cent** over
   `nbnd = 12, 24, 48`, which is P88's own claim read on the observable instead of on the
@@ -15593,12 +15596,15 @@ coordinates. `defumat/ultracell/states.py` is that object, and the two entry poi
   **1.2e-6** of the peak at `N = 2`. **The floor here is the broadening and not a
   threshold**, which is what separates a transmission from an image: the two sides
   diagonalise the same Hamiltonian in two different bases and their levels come out a median
-  **1.2e-8 Ry** apart (the ultracell's density differs from the tiled one by 2.1e-8 of
-  0.107), and a transmission divides that by `eta`, since what it is built from is
-  `1/(E - e + i eta)`. Measured **6.2e-6** at `eta = 0.01`, 1.2e-6 at 0.02 and **4.6e-7** at
-  0.04, while tightening `conv_thr` or `states_conv_thr` by four orders each moves it in the
-  third digit. The image's own null on the same cell is 5.8e-8, because a density is not
-  divided by anything.
+  **1.2e-8 Ry** apart. What that is worth falls as the broadening rises -- **6.2e-6**,
+  1.2e-6, **4.6e-7** and 3.8e-7 at `eta` = 0.01, 0.02, 0.04 and 0.08, faster than `1/eta`
+  over the first step and flat by the last -- while tightening `conv_thr` or
+  `states_conv_thr` by four orders each moves it in the third digit. So it is those levels
+  disagreeing through the resolvent `1/(E - e + i eta)` rather than a convergence floor,
+  which is as far as the measurement goes: the exact shape of the dependence is not
+  accounted for, and the ultracell's density differing from the tiled one by 2.1e-8 of 0.107
+  is the likely source of the level difference rather than a computed one. The image's own
+  null on the same cell is 5.8e-8, because a density carries no resolvent.
 * **The constant-current scan**, against the unit cell's, tiled: **5.1e-7 bohr** on a
   corrugation of 1.65 bohr, with the two routes refusing **exactly the same 72 of 144
   pixels**. Half the plane coming back `nan` is the physics rather than a failure: this

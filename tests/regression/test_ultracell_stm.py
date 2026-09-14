@@ -312,12 +312,14 @@ def test_an_unmodulated_image_is_the_tiled_unit_cell_image(
     # the same statement on the integral, which is the electron count in the
     # window and is per unit cell on both sides.
     #
-    # **The floor is the ultracell's own ``conv_thr`` and not round-off.** The
-    # two sides are built from different wavefunctions -- the SCF's own, and
-    # the fixed-density solve's at the folded points -- and the ultracell's
-    # ``dV`` is converged to 1e-10 rather than to zero, so the states it
-    # diagonalises are not exactly the unit cell's. Measured at 1.0e-8 on this
-    # cell, which is what the tolerance is set against.
+    # **The floor is the two routes and not a threshold.** The two sides are
+    # built from different wavefunctions -- the SCF's own, and the fixed-density
+    # solve's at the folded points, rediagonalised in the frozen envelope basis
+    # on a box of a different shape -- so the states are not exactly the unit
+    # cell's however tightly either side is converged. Measured at 1.008e-8 on
+    # this cell, and it does not move at all over ``conv_thr`` from 1e-6 to
+    # 1e-12 (the loop reaches 1.1e-14 with nothing applied whatever is asked
+    # of it), which is why the tolerance is 1e-7 rather than on the floor.
     assert image.integral == pytest.approx(plain.integral, rel=1e-7)
 
     # and the same null in the other mode, which is a different path through
@@ -526,13 +528,13 @@ def test_the_exit_plane_transmission_is_the_unit_cell_s_tiled(pseudo_dir):
     # diagonalise the same Hamiltonian in two different bases -- the unit
     # cell's sphere at the folded points, and the frozen envelope basis on the
     # ultracell's own box -- and their levels come out a median 1.2e-8 Ry
-    # apart, which is the ultracell's density differing from the tiled one by
-    # 2.1e-8 of 0.107. A transmission divides that by the broadening, since
-    # what it is built from is ``1/(E - e + i eta)``: measured 1.2e-6 at
-    # ``eta = 0.02``, 6.2e-6 at 0.01 and 4.6e-7 at 0.04, while tightening
-    # ``conv_thr`` or ``states_conv_thr`` by four orders each moves it in the
-    # third digit. The image's own null on the same cell is 5.8e-8, because a
-    # density is not divided by anything.
+    # apart. What that is worth here falls as the broadening rises, measured
+    # 6.2e-6, 1.2e-6, 4.6e-7 and 3.8e-7 at ``eta`` = 0.01, 0.02, 0.04 and 0.08,
+    # while tightening ``conv_thr`` or ``states_conv_thr`` by four orders each
+    # moves it in the third digit: it is those levels disagreeing through the
+    # resolvent ``1/(E - e + i eta)`` and not a convergence floor. The image's
+    # own null on the same cell is 5.8e-8, because a density carries no
+    # resolvent.
     assert np.abs(np.asarray(ours.values) - tiled).max() / tiled.max() < 1e-5
 
 
