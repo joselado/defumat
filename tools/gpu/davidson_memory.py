@@ -117,11 +117,18 @@ def _measure(args, david, nbnd, band_batch):
         if unit is None:  # a build where the whole thing is one jit
             lowered = real.lower(hamiltonian, bands, psi0, ethr, **kw)
         else:
+            # ``return_finite=True`` because that is what production compiles:
+            # ``robust_retry`` defaults on, and the flag is what moved the
+            # finiteness guard's reduction *inside* this executable. Sizing it
+            # without the flag would size a unit no run uses -- and the guard
+            # sitting outside this one, invisible to every line of the size
+            # report, is what let a 21.40 GiB allocation go unaccounted for on
+            # a 45-atom NiBr2 slab (``OPEN.md`` Part VII).
             lowered = unit.lower(
                 hamiltonian, bands, psi0, ethr, None,
                 kw.get("david", davidson.DAVID_NDIM),
                 kw.get("max_iterations", davidson.MAX_ITERATIONS),
-                kw.get("k_batch", "default"), robust=False,
+                kw.get("k_batch", "default"), robust=False, return_finite=True,
             )
         analysis = lowered.compile().memory_analysis()
         captured.update(

@@ -23,9 +23,11 @@ entry had recorded as fact but the **affinity mask this package sets itself** --
 **Part VII** is from a peer session running the **NiBr2 helix on Triton**, reported
 **2026-09-14**: four findings, two of them defects that were fixed the same day (the
 Davidson finiteness guard's allocation, and a checkpoint refusal that was wrong on both
-sides of its boundary at once). The two entries carried here are a `sizing.py` report
-that read 60 per cent low on a 45-atom spinor PAW slab, and a Davidson inner-step count
-that may degrade at the minimum subspace. Neither can be measured on this machine.
+sides of its boundary at once). Three entries are carried: a `sizing.py` report
+that read 60 per cent low on a 45-atom spinor PAW slab, a Davidson inner-step count
+that may degrade at the minimum subspace, and the checkpoint's remaining Hubbard refusal,
+which is probably as wide as the field's was. The first two cannot be measured on this
+machine.
 
 **Part V** is from the **2026-09-13** memory session: one entry, and it is not that
 session's work -- four of `test_magnons.py`'s eight tests fail, all four downstream of a
@@ -2522,3 +2524,27 @@ inner count at a tight one.
 
 **Part VI item 1** is the neighbouring entry -- `nvecx = david * nbnd` uncapped against the
 size of the space -- and a session that opens `nvecx` for either reason should read both.
+
+## 3. The checkpoint's Hubbard refusal is probably as wide as the field's was
+
+`checkpoint._REFUSED` still refuses any result carrying a `hubbard_setup`, with the reason
+"`ns` without it is an array of numbers about nothing". That is true of the *file* and was
+also true of the field, which turned out not to be the question: a checkpoint is loaded
+against a `system` the caller supplies, so what matters is whether the input rebuilds the
+thing, not whether the file describes it. A Hubbard setup is the `HUBBARD` card's and
+nothing in the SCF loop appears to change it -- `hubbard_terms(ns_state)` reads it, the
+loop mixes `ns` and not the setup -- so the same argument that narrowed the field's refusal
+narrows this one to nothing.
+
+**It is left as an inference rather than taken**, which is the whole lesson of the entry
+above it: the field's refusal was wrong in *both* directions at once and reading the source
+did not show it. The mid-SCF path is the existing evidence and it points the same way --
+`_InProgressState` has always carried `hubbard_setup = None`, so a DFT+U run's mid-SCF
+checkpoints are written without it and resume correctly (`tests/regression/
+test_noncollinear_hubbard_resume.py` is a `4 -> 4` resume that passes).
+
+**What would close it.** Confirm nothing in the loop mutates the setup -- `ns_adj`, and
+whatever adjusts a starting `ns`, are where to look -- then narrow `_refusal` and assert a
+converged DFT+U result round-trips to the same `ns` and the same energy. If something
+*does* mutate it, the refusal is right and should say which routine, which is more than it
+says now.

@@ -5580,12 +5580,20 @@ column follows `nk` and the other does not.
 **Folding it in is free to the solver's own buffer.** `_every_k`'s temp buffer with the
 guard outside against inside, same cell, same `david`, same band batch:
 
-| cell | nk | nbnd | guard outside | guard inside | difference |
-|---|---|---|---|---|---|
-| `si16-1k-ecut30` | 1 | 32 | 0.0419 GiB | 0.0419 GiB | **+0.00 MiB** |
-| `si8-nc-1k` | 1 | 40 | 0.0125 GiB | 0.0125 GiB | **+0.00 MiB** |
+| cell | nk | nbnd | `k_batch` | guard outside | guard inside | difference |
+|---|---|---|---|---|---|---|
+| `si16-1k-ecut30` | 1 | 32 | default | 0.0419 GiB | 0.0419 GiB | **+0.00 MiB** |
+| `si8-nc-1k` | 1 | 40 | default | 0.0125 GiB | 0.0125 GiB | **+0.00 MiB** |
+| silicon 4x4x4 | 8 | 4 | 1 | 1.07 MiB | 1.07 MiB | **+0.00 MiB** |
+| silicon 4x4x4 | 8 | 4 | `None` | 8.96 MiB | 8.96 MiB | **+0.00 MiB** |
 
-XLA reuses buffers that are live at that point anyway. So the whole of the old
+XLA reuses buffers that are live at that point anyway. **The last row is the one to have
+asked for**: `k_batch = None` is one `vmap` over the whole k axis and is the *accelerator*
+default, where the reduction becomes a batched reduce inside the `vmap` rather than a
+`lax.map` body -- a different lowering, and free on this backend too. The 0.12 GiB column
+above is the `lax.map` form at `k_batch = 1`, which is what the NiBr2 job ran; the
+multi-k rows here are a small cell, so they say the fold is free rather than how much it
+saves. So the whole of the old
 allocation goes, and what replaces it is inside the executable
 `tools/gpu/davidson_memory.py` sizes -- which was the other half of the problem, since an
 allocation outside that unit appears in no line of the size report.
