@@ -2312,3 +2312,60 @@ ultracell loop above them then ran 200 iterations to `dr2 = 1.15e-1`. **Nothing 
 chain reports the cause** -- the failure surfaces as "the ultracell did not converge",
 three layers from the subspace that was too large. The rung passes `david = 2` meanwhile,
 which is what the `PLAN.md` P88 measurement was taken at.
+
+## 2. An ultracell's `dr2` is even more charge-dominated than a unit cell's, by `N^2` **[measured 2026-09-14: harmless on a *driven* wave at 1.7e-5, and the argument says where it would not be]**
+
+**Opened and measured 2026-09-14, while writing P88 stage 3a.**
+
+`OPEN.md` Y1 is the unit-cell version of this and it has a number: at `dr2 = 9e-11` on a
+magnetic cell the total energy was still 1.15e-8 Ry out, because `rho_ddot` weights the
+charge residual by `1/|G|^2` and the magnetization residual by a constant
+(`e2 4 pi/(2 pi)^2`). An ultracell makes the gap **wider rather than the same**, and the
+factor is exactly the one the method exists to introduce.
+
+**The arithmetic.** At the envelope's own wavevector the charge half of `dr2` carries
+`e2 4 pi/|G+Q|^2` and the magnetic half carries `e2 4 pi/(2 pi)^2`, so their ratio is
+`(2 pi)^2/|G+Q|^2`. On the notebook's eight-cell silicon cell `|Q| = 0.1334` 1/bohr, so
+that ratio is **2.2e3**: a magnetization residual and a charge residual of the same size
+contribute to `dr2` in the ratio 1 to 2200, and a run that stops at `dr2 = 1e-9` can be
+carrying a moment residual ~47 times larger than the charge residual it is bounding. The
+`N^2` is explicit: `|Q|_min` is `N` times smaller in an ultracell than in the unit cell,
+so this ratio grows as `N^2` while nothing about the convergence test changes.
+
+**Why this is an entry and not a fix.** The convergence test here is the **sum**, which is
+QE's `rho_ddot` and is what makes `conv_thr` mean the same thing in an ultracell run as in
+every other run in this package. Changing it -- a separate threshold on the magnetic half,
+or an `ethr` schedule driven by that half -- is a deliberate departure from `pw.x`, and
+`CLAUDE.md`'s rule is that a departure needs a number rather than an argument. Y1 says the
+same thing about the unit-cell case and has been open since 2026-09-12 for the same reason.
+
+**What exists meanwhile.** `UltracellResult.charge_accuracy` and `.magnetic_accuracy`, the
+pair per iteration in `.history`, and the non-convergence warning naming both -- so a run
+that stopped with its moment still moving can be *told apart* from one that stopped with
+both converged, which is the half of the problem that costs nothing. On the silicon
+field run of P88 stage 3a the two end at 1.96e-11 and 4.9e-14, three orders apart, which
+is the shape the arithmetic above predicts.
+
+**The measurement was done, and on this cell the weighting is harmless.** The same
+eight-cell field run stopped at `conv_thr = 1e-8` and at `1e-11`:
+
+| `conv_thr` | iterations | `dr2` | charge | magnetic |
+|---|---|---|---|---|
+| 1e-8 | 7 | 7.33e-10 | 7.32e-10 | 1.40e-12 |
+| 1e-11 | 9 | 1.04e-12 | 1.04e-12 | 2.85e-16 |
+
+and the per-cell moments differ by **2.0e-6 absolute, 1.7e-5 relative** across a threshold
+700 times looser. So the entry downgrades to a note -- **with the reason, which is what
+says where it would not downgrade.** The two residuals are not equipartitioned: the
+magnetic half is already at 1.4e-12 when the loop stops on a charge half of 7.3e-10,
+three orders below it, because the magnetization here is a **driven linear response** to a
+field that does not move, while the charge is the soft direction that sloshes. The
+weighting is charge-dominated and so is the residual, so the test bounds the thing that is
+actually still moving.
+
+**Where that argument fails is the case this code cannot yet run.** A *spontaneous* wave --
+Elk's `rndbfcu` seed faded by `reducebf`, listed as outstanding in `PLAN.md` P88 -- has no
+field holding its magnetization, so the moment is the soft direction and the one that
+sloshes, and it is bounded by the half of `dr2` that carries no `1/|G+Q|^2`. **Take this
+measurement again when that lands**; the factor of 2.2e3 in the weights is what it would
+be paid at.

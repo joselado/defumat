@@ -15134,6 +15134,18 @@ the result and in `history` per iteration, the non-convergence warning names bot
 convergence test is still their sum, which is QE's. On the silicon field run the two are
 1.96e-11 and 4.9e-14 at the end, three orders apart.
 
+**And the consequence was measured rather than argued, which turned the entry into a
+note.** The eight-cell field run stopped at `conv_thr = 1e-8` (7 iterations) and at `1e-11`
+(9) gives per-cell moments 2.0e-6 apart, **1.7e-5 relative**, across a threshold 700 times
+looser -- so the weighting is harmless here. The *reason* it is harmless is the part that
+says where it would not be: the two residuals are not equipartitioned, because the
+magnetization is a **driven linear response** to a field that does not move while the
+charge is the soft direction that sloshes, so the charge-weighted test is bounding the
+thing that is actually still moving. A **spontaneous** wave -- Elk's `rndbfcu` seed, which
+is outstanding below -- has no field holding its moment, and there the soft direction is
+the one with no `1/|G+Q|^2` in front of it. `OPEN.md` Part VI item 2 carries the factor
+(2.2e3 in the weights at this cell's `|Q|`) and the instruction to re-measure then.
+
 **A ground state converged under a field is refused, and it is the same argument
 `fixed_density_states` makes one layer down.** The frozen eigenvalues carry the field the SCF
 *ended* with -- which `reducebf` and the fixed-spin-moment scheme both make different from the

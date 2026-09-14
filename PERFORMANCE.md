@@ -5292,6 +5292,33 @@ at `nbnd = 32` on a `(1, 2, 2)` k-grid (32 folded k-points); the four-cell one i
 iterations and 17.8 s. The unit-cell ground state those expand around, on its own
 `8 x 2 x 2` grid at `conv_thr = 1e-10`, is **7.0 s** and is paid once.
 
+### What a second spin channel costs (P88 stage 3a)
+
+**2.21x, and the iteration count does not move.** The same four-cell silicon ultracell
+under the same applied modulation, `nbnd = 24`, `david = 2`, once at `nspin = 1` and once
+at `nspin = 2` with `starting_magnetization = 0.2` and Gaussian smearing on both, medians
+of three **warm** calls after a discarded first (which pays compilation, and compilation
+here is the on-disk kernel cache rather than the work):
+
+| | iterations | median, s | of |
+|---|---|---|---|
+| `nspin = 1` | 9 | **9.44** | 9.48 / 9.34 / 9.44 |
+| `nspin = 2` | 9 | **20.91** | 20.32 / 21.12 / 20.91 |
+
+The naive expectation is exactly **2x** and it is the right expectation: without
+spin-orbit coupling the ultracell matrix is block diagonal in spin, so two channels are
+two of the same `(N nbnd)` solve rather than one of twice the size -- if it were one
+matrix of `2 N nbnd` the dense diagonalisation alone would be 8x. The measured 2.21x is
+that 2x plus a tenth, and the tenth is **dispatch**, which is what this phase's backlog
+already says dominates at small `N`: the frozen-state solve and the `k0` loop are both
+walked in Python, so doubling the channels doubles the number of small calls as well as
+the arithmetic in them. It is the same overhead the `N`-scaling entry above measures from
+the other side, and the same two fixes would move it.
+
+**The iteration count is unchanged at 9**, which is the more durable half: the mixer sees
+one more field (the magnetization, Kerker-screened only in the charge, as
+`approx_screening` does it) and does not need more steps for it.
+
 ### Memory
 
 Two objects grow with `N` and neither is the Hamiltonian until the dense solve has
