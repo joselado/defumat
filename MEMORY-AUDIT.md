@@ -1751,7 +1751,29 @@ happened to the last analysis that assumed otherwise.
 
 ---
 
-### D11. The `projectors` dial is not in the model, so a `rebuild` run is sized as a `store` one
+### D11. The `projectors` dial is not in the model, so a `rebuild` run is sized as a `store` one **[closed 2026-09-14]**
+
+> **Closed the same day it was opened, because the first `rebuild` job on Triton printed a
+> size block that was wrong in exactly this way** -- `TOTAL (floor) 42.60 GiB` and a
+> `13.00 GiB` `vkb` line, both unchanged from the `store` runs, on a run that holds neither.
+> The floor line is the first thing anyone reads in a cluster log.
+>
+> `estimate_size` now takes `projectors`, resolves it the way the run will
+> (:func:`~defumat.batching.resolve_projectors`, so an unnamed value comes from the
+> environment as `D1` asks), names it in the header beside `k in flight` and
+> `bands in flight`, and swaps the line: `store` carries `vkb (nk, npwx, nkb)`, `rebuild`
+> carries `columns (nk, npwx, ncs)` + `kg` + one rebuilt chunk. **`D5` goes with it** -- the
+> core's two arrays were in no line of the table before and now are, which is what the
+> rebuilt route needs them for.
+>
+> Measured, on the committed NiI2 spiral (`nk = 81`, 3 atoms of 2 species):
+> **PEAK 6.63 -> 6.13 GiB**. The saving is `vkb` minus `columns`, so it scales with
+> **atoms per species** -- modest at 3 atoms over 2 species, and nearly the whole array on
+> the 45-atom slab's 45 over 2. On a single-k cell the rebuilt floor is the *larger* of the
+> two (bi20-soc, 4.79 -> 4.80 GiB), because there is nothing to save and the chunk is the
+> whole array. Both directions are the model working rather than a bug.
+
+
 
 `sizing.py`'s `projectors vkb (nk, npwx, nkb)` line is unconditional, and under
 `projectors = "rebuild"` (A13) that array is never held -- the resident cost is the

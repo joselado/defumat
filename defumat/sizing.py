@@ -281,6 +281,11 @@ class SizeEstimate:
     #: above it are: it sizes the third term of the eigensolver's buffer and
     #: appears nowhere else.
     band_batch: int | None
+    #: Which projector storage this was sized for: ``store`` holds
+    #: ``(nk, npwx, nkb)``, ``rebuild`` holds the core and forms each
+    #: k-point's on demand. It changes the largest single line in
+    #: :attr:`arrays` on a many-k run, so the report names it.
+    projectors: str = "store"
     #: ``name -> bytes`` for each array whose size the basis fixes.
     arrays: dict = field(default_factory=dict)
     #: The compiled eigensolver's single contiguous XLA temp buffer, estimated
@@ -363,7 +368,8 @@ class SizeEstimate:
             f"diago_david_ndim = {self.davidson_basis}, "
             f"k in flight = {self.k_batch if self.k_batch is not None else 'all'}, "
             f"bands in flight = "
-            f"{self.band_batch if self.band_batch is not None else 'all'})",
+            f"{self.band_batch if self.band_batch is not None else 'all'}, "
+            f"projectors = {self.projectors})",
         ]
         if self.gamma_requested and not self.gamma_only:
             lines[1:1] = [
@@ -411,6 +417,7 @@ def estimate_size(
     k_batch: int | None = None,
     davidson_basis: int | None = None,
     band_batch: int | None | str = "default",
+    projectors: str | None = "default",
 ) -> SizeEstimate:
     """Size a run from its input alone, allocating nothing on the device.
 
@@ -523,6 +530,9 @@ def estimate_size(
             noncolin=(nspin == 4),
         )
     nkb = sum(len(projector_channels(pseudos[t])) for t in structure.types)
+    # ``ncs`` is ``nkb``'s per-*species* counterpart: what ``ProjectorCore``
+    # holds, and what the ``rebuild`` route pays instead of ``vkb``.
+    ncs = sum(len(projector_channels(pseudo)) for pseudo in pseudos)
 
     from defumat.solvers.davidson import DAVID_NDIM
 
@@ -532,6 +542,13 @@ def estimate_size(
         from defumat.batching import resolve_band_batch
 
         band_batch = resolve_band_batch(band_batch)
+    # Resolved here rather than taken as given, for the reason ``D1`` gives
+    # about the other dials: the estimate has to describe the run that will
+    # happen, and this one is resolved from the environment when it is not
+    # named.
+    from defumat.batching import resolve_projectors
+
+    projectors = resolve_projectors(projectors)
     name = getattr(cell.precision, "name", "double")
     zc, zr = _COMPLEX_BYTES.get(name, 16), _REAL_BYTES.get(name, 8)
     nk = len(npw)
@@ -550,7 +567,19 @@ def estimate_size(
 
     arrays = {
         "wavefunctions (nspin,nk,nbnd,ndim)": wf_spin * nk * nbnd * ndim * zc,
-        "projectors vkb (nk,npwx,nkb)": nk * npwx * nkb * zc,
+        # **The projector storage follows the dial** (``D11``/``D13``). ``store``
+        # holds ``(nk, npwx, nkb)`` -- one column per *atom* channel -- and
+        # ``rebuild`` holds the ``ProjectorCore`` it is built from, which is one
+        # per *species* channel plus ``k + G``, and forms each k-point's on
+        # demand. On a 45-atom cell of two species that is about twenty times
+        # smaller, and it is the largest single term in this table on a many-k
+        # run, so sizing a rebuild run as a stored one overstates the floor by
+        # the biggest number in it.
+        **({"projectors vkb (nk,npwx,nkb)": nk * npwx * nkb * zc}
+           if projectors == "store" else
+           {"projector core columns (nk,npwx,ncs)": nk * npwx * ncs * zc,
+            "projector core kg (nk,npwx,3)": nk * npwx * 3 * zr,
+            "projectors rebuilt, one chunk (npwx,nkb)": k_live * npwx * nkb * zc}),
         # ``psi`` and ``hpsi``, both ``(nvecx, ndim)`` -- the subspace and H
         # applied to it. ``S|psi>`` is deliberately not stored (the Ritz
         # vector's projections are a rotation of ``becq``), which is why this
@@ -705,7 +734,7 @@ def estimate_size(
         dense_grid=tuple(int(n) for n in dense_grid),
         smooth_grid=tuple(int(n) for n in smooth_grid),
         gamma_requested=gamma_requested, gamma_only=gamma_only,
-        doublegrid=doublegrid, precision=name,
+        doublegrid=doublegrid, precision=name, projectors=projectors,
         davidson_basis=int(davidson_basis), k_batch=k_live,
         band_batch=None if band_batch is None else int(band_batch),
         arrays=arrays, eigensolver_buffer=eigensolver_buffer,

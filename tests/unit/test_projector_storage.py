@@ -166,3 +166,49 @@ def test_the_dial_is_not_visible_in_any_scf_number(path):
     assert on_rebuild.iterations == on_store.iterations
     assert np.array_equal(np.asarray(on_rebuild.eigenvalues),
                           np.asarray(on_store.eigenvalues))
+
+
+# --------------------------------------------------------------------------
+# the estimate has to describe the run that will happen
+# --------------------------------------------------------------------------
+
+def test_the_size_report_follows_the_dial():
+    """`MEMORY-AUDIT` D11: sizing a rebuild run as a stored one overstates the
+    floor by the largest single line in it.
+
+    The floor line is the first thing anyone reads in a cluster log, and on the
+    45-atom NiBr2 slab `vkb` is 13.00 GiB of a 42.60 GiB floor -- so a report
+    that ignores the dial is wrong by more than any other term it carries.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(
+            CELL, pseudo_dir="tests/data/pseudo", announce=False)
+        stored = calculator.estimate(projectors="store")
+        rebuilt = calculator.estimate(projectors="rebuild")
+
+    assert stored.projectors == "store" and rebuilt.projectors == "rebuild"
+    assert "projectors = store" in stored.report()
+    assert "projectors = rebuild" in rebuilt.report()
+
+    # The stored route carries one line per *atom* channel; the rebuilt route
+    # carries the core it is built from plus one chunk, and no whole-k vkb.
+    assert "projectors vkb (nk,npwx,nkb)" in stored.arrays
+    assert "projectors vkb (nk,npwx,nkb)" not in rebuilt.arrays
+    assert "projector core columns (nk,npwx,ncs)" in rebuilt.arrays
+
+
+def test_the_rebuilt_floor_is_never_the_stored_one():
+    """A dial the model does not see is a dial the model reports wrongly.
+
+    On a many-k cell the difference is most of `vkb`; on a single-k one the
+    rebuilt route is the *larger* of the two, because there is nothing to save
+    and the chunk is the whole array. Both directions are the model working.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(
+            CELL, pseudo_dir="tests/data/pseudo", announce=False)
+        stored = calculator.estimate(projectors="store")
+        rebuilt = calculator.estimate(projectors="rebuild")
+    assert stored.total_bytes != rebuilt.total_bytes

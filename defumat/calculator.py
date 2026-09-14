@@ -382,6 +382,11 @@ class Calculator:
         # answer describes *this run*.
         if options.get("band_batch") is None:
             options["band_batch"] = "default"
+        # The same argument as ``k_batch`` below: this calculator's own answer,
+        # not the library's, because the question is "will *this run* fit" and
+        # the dial changes the largest line in the table.
+        options.setdefault("projectors",
+                           self.defaults.get("projectors", "default"))
         if options.get("k_batch") is None:
             options["k_batch"] = resolve_k_batch(
                 self.defaults.get("k_batch", "default")
