@@ -341,6 +341,12 @@ says so (\code{tests/unit/test\_facade\_documentation.py}).
 \midrule
 \code{get\_spiral\_scan} & one SCF per spiral wavevector \\
 \code{get\_spiral\_relaxation} & the spiral wavevector relaxed down $\mathrm{d}E/\mathrm{d}\mathbf q$ \\
+\addlinespace
+\multicolumn{2}{@{}l}{\textit{Modulations over many cells}} \\
+\midrule
+\code{get\_ultracell} & a density or potential modulated over $N$ unit cells \\
+\code{get\_ultracell\_stm} & a Tersoff--Hamann image of that modulation \\
+\code{get\_ultracell\_transport} & tunnelling through it, tip to substrate \\
 \bottomrule
 \end{longtable}
 \end{center}
@@ -4448,6 +4454,124 @@ non-integer ultracell is refused, where Elk's \code{avecu} is an independent
 input with no consistency check against its Q-grid. An \textbf{unconverged}
 unit-cell ground state, because its density is the one thing an ultracell holds
 fixed and there is no later iteration in which a bad seed could work itself out.
+\end{refuses}
+
+% =====================================================================
+\section{What a modulation looks like to a tip}
+
+A charge or spin density wave, a screened impurity, a domain wall: what all of
+these are actually seen with is a scanning-tunnelling microscope, so an
+ultracell that cannot be imaged is a calculation of something nobody measures
+directly. This section is the join between the ultracell and the two things a
+tip measures, the Tersoff-Hamann image and the vertical tunnelling
+transmission.
+
+Nothing new is computed, and the reason is one observation about the basis. An
+ultracell state is
+\begin{equation*}
+  \Psi_j(\mathbf r) = \sum_{\mathbf Q, n} a^j_{\mathbf Q n}\,
+                      \psi_{\mathbf k_0 + \mathbf Q, n}(\mathbf r),
+\end{equation*}
+and in a plane-wave basis that sum is a relabelling rather than a transform: a
+plane wave with unit-cell Miller index $\mathbf G$ belonging to $\mathbf Q$ is
+the ultracell plane wave $\mathbf h = n\mathbf G + \mathbf q$, and no two of
+them collide, because reducing $n(\mathbf G - \mathbf G') + (\mathbf q -
+\mathbf q') = 0$ modulo $n$ forces $\mathbf q = \mathbf q'$ and the sphere sits
+inside the dense grid. So the union over $\mathbf Q$ of the $N$ unit-cell
+spheres \emph{is} the ultracell's own sphere at $\mathbf k_0$, the band index
+contracts away, and what is left is an ordinary coefficient vector that every
+routine written for a unit-cell wavefunction takes unchanged once it is handed
+the ultracell's Miller indices, its cell and $\mathbf k_0$ in its reciprocal
+coordinates. On a modulated two-cell silicon ultracell the state sampled from
+that vector agrees with the box transform the density is built from to
+$1.7\times10^{-16}$ against a peak of $0.14$, and it integrates to 1 over the
+ultracell.
+
+The image is then the ultracell density with a smeared delta at the tip energy
+in place of the occupations, which is what a Tersoff-Hamann image is in Elk's
+\code{wfplot.f90} and in QE's \code{stm.f90}, and the transmission is the same
+contraction \code{run\_vertical\_transport} uses with the ultracell's geometry
+in it. The entry points are \code{run\_ultracell\_stm} and
+\code{run\_ultracell\_transport}, or \code{Calculator.get\_ultracell\_stm} and
+\code{Calculator.get\_ultracell\_transport}.
+
+\begin{pycode}
+from defumat import Calculator
+import numpy as np
+
+cal = Calculator.from_file("si.in")        # the two-atom unit cell
+
+# a potential of one ultracell period along a_1, in Ry
+cal.get_ultracell(supercell=(8, 1, 1), kgrid=(1, 2, 2), nbnd=24,
+                  external=lambda x: 0.05 * np.cos(2 * np.pi * x[..., 0] / 8))
+
+img = cal.get_ultracell_stm(height=0.35, axis=2, shape=(96, 12),
+                            bias=-1.5, width=0.01)
+print(img.values.shape)        # (96, 12): the plane spans all eight cells
+print(img.integral)            # 8.0039: the electrons in the window, per cell
+\end{pycode}
+
+\textbf{Two conventions, and the second is the one to know.} The plane is given
+in \emph{unit-cell} crystal coordinates running over $[0, n_i)$ across the
+ultracell, which is what \code{external} already takes, so \code{height = 0.35}
+means what it means in a unit-cell run and a map spans the whole modulation by
+default. And the image is a tunnelling density of states \emph{per unit cell},
+in the same units a unit-cell image reports, so the two are directly
+comparable: with nothing applied, the ultracell image is the unit cell's image
+tiled, to $1.6\times10^{-7}$ of the peak at $N = 2$. The window above covers the
+whole valence band, so the integral comes back as silicon's eight valence
+electrons; a run with a Fermi level puts the tip at it instead, and one with
+fixed occupations warns and takes the middle of the gap, which is
+\code{stm.f90}'s own rule.
+
+\textbf{A magnetic tip is what a spin density wave needs.} A collinear system is
+invariant under flipping every spin together with the sign of $B$, so a spin
+density wave driven by \code{magnetic\_field} is almost invisible in the charge
+and lives entirely in the magnetization; \code{spin} and \code{polarization}
+project it, exactly as they do for a unit-cell image.
+
+\textbf{The number.} The reference is the one the ultracell itself is checked
+against: a real $N$-cell supercell under the same applied potential, run through
+this package's own SCF and imaged the same way. The error on the induced
+corrugation falls with \code{nbnd}, which is the whole content of "a variational
+truncation to \code{nbnd} bands per folded k-point": 22.2, 5.2 and 2.0 per cent
+at \code{nbnd} $= 12$, 24 and 48 on a two-cell silicon ultracell, where the
+induced corrugation is itself 0.6 per cent of the image. Widening the exit
+region of the transmission to the whole ultracell must give the image back
+exactly, with no factor between them, and does so to $10^{-11}$; that identity
+is what holds the two normalisations against each other, since the image carries
+its $N$ in the weights and the transmission carries it in the volume the states
+are normalised over.
+
+\textbf{Sampling the plane is exact and its set is the ultracell's own dense
+sphere}, $|\mathbf G + \mathbf Q|^2 \le \code{ecutrho}$, rather than Elk's
+choice of the unit cell's dense sphere at every $\mathbf Q$. Read back at the
+box's own grid points, the sphere reproduces a modulated silicon density to
+$3\times10^{-16}$ where the other set is out by $5\times10^{-9}$ at $N = 2$ and
+$2\times10^{-8}$ at $N = 3$. The box itself aliases its outermost shell from
+about $N = 5$, at $10^{-11}$, which is the ordinary $\code{ecutrho} = 4\,
+\code{ecutwfc}$ corner aliasing one level out and is a property of the
+ultracell's grid rather than of the sampling.
+
+\begin{refuses}
+Everything the ultracell itself refuses, since the run has to exist first. A
+result whose states were dropped (\code{keep\_states = False}), which cannot be
+rebuilt, the diagonalisation on the folded k-set being the expensive step of the
+whole method. For the transmission, an ultracell that is more than one cell deep
+along the stacking axis: the exit plane would then sit between two of the
+stacked slabs, so the electron leaves through the material rather than out of
+it, and two $\mathbf Q$ differing only along that axis share every in-plane
+index the exit integral has to tell apart. The same axis must carry one k-point,
+for the reason a unit-cell junction needs one. A denser k-set for the image, the
+way \code{grid} re-solves the bands for a unit-cell image: on an ultracell that
+is not post-processing but another run of the whole loop, so it is asked for
+with \code{kgrid} in \code{get\_ultracell} instead. And a constrained
+\code{tot\_magnetization}, whose two channels have their own Fermi levels where
+a tip sees one energy. An applied \code{magnetic\_field} is \textbf{not} refused
+here, where a unit-cell image refuses it: there the field is something the
+ground state was converged under and the reported total does not carry, while
+here it is the modulation's own driver and the eigenvalues the tip energy is
+read from are the eigenvalues under it.
 \end{refuses}
 
 % =====================================================================

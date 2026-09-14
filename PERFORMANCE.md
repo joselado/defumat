@@ -5418,6 +5418,40 @@ What is deliberately *not* allocated is one ultracell box per basis function: th
 matrix build and the density both walk their state axis through `lax.map`, one box in
 flight, which is what `state_batch = 1` means and why it is the default.
 
+### What imaging the modulation adds (P89)
+
+Neither `pw.x` nor Elk images an ultracell, so the comparison that means anything is
+the same one the table above makes: the ultracell route against the supercell route, in
+this code, both ending with **the same picture of the same modulated crystal on the same
+plane**. The steps are added up and named, because the two routes do not divide the work
+the same way.
+
+* ultracell: the unit-cell SCF, then `run_ultracell` (which pays the folded
+  diagonalisation once, inside itself), then `run_ultracell_stm`;
+* supercell: one SCF of the `N`-cell crystal under the same applied potential, then
+  `run_stm`.
+
+Silicon, `ecutwfc = 12`, `nosym`, `kgrid = (1, 2, 2)`, `nbnd = 24` per folded k-point,
+`conv_thr = 1e-9`. Single core, warm, the second of two calls; one sample rather than a
+median, because what is being compared is two routes and not a change expected to leave
+a number alone.
+
+| `N` | atoms | ultracell: SCF + loop + image, s | supercell: SCF + image, s | ratio |
+|---|---|---|---|---|
+| 2 | 4 | 0.29 + 4.81 + 0.24 = **5.35** | 1.79 + 0.14 = **1.93** | 0.36 |
+| 4 | 8 | 0.56 + 8.02 + 0.42 = **9.00** | 15.33 + 0.37 = **15.70** | **1.74** |
+
+**The image is not what decides this.** It is 0.24 s against 0.14 s at two cells and
+0.42 s against 0.37 s at four, so it is a small and *comparable* cost on both sides and
+it does not move the crossover the table above measures between four and six cells. The
+ratio here is lower at `N = 2` and higher at `N = 4` than that table's because these runs
+carry more empty bands and a looser threshold; the slope is the same and it is the slope
+that is the claim.
+
+The two images agree to **3.4e-4** of their peak at `N = 2` and **1.2e-4** at `N = 4`,
+which is the `nbnd` truncation and is the quantity `PLAN.md` P89's ladder measures
+properly.
+
 
 ## History
 

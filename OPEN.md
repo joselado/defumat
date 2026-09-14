@@ -2698,3 +2698,33 @@ the gap closes: if it does, the one-iteration exit is the story and the toleranc
 stopping rule rather than the demotion; if it does not, the recomposed state is genuinely
 off and `with_spin`'s axis-finding is where to look. That is one cheap run and it has not
 been done.
+
+
+### 2. Three of `test_transport.py`'s 28 fail on master, two by a factor and one by eight orders
+
+**Found in passing** while checking that P89's refactor of `_assemble` changed nothing: the
+file came back `3 failed, 25 passed` at `c381be3`, and the same three fail at **`d085b54`**,
+before any of this branch, to every printed digit. So the refactor is clean and these are
+pre-existing. They are `slow`, so the push gate is not red.
+
+**The two near misses**, both tolerance-shaped:
+
+* `test_the_three_spin_regimes_agree_where_there_is_no_magnetization` compares two means of
+  order 3.135e-8 and gets `1.70e-5` where it wants `1e-5`: a factor of 1.7 over.
+* `test_a_substrate_across_the_moment_has_no_preference` gets `3.02e-17 / 1.06e-12 = 2.8e-5`
+  against the same `1e-5`. The quantities are 1e-12 and the difference is 1e-17, so what the
+  tolerance is measuring at that size is not obvious.
+
+**The third is not a tolerance**, and it is the one to look at first.
+`test_the_two_limits_are_the_stm_image_and_the_fermi_surface_on_a_real_cell` asserts that the
+momentum-resolved weight's Tersoff-Hamann limit sums to the STM image's mean times the number
+of k-points, and gets `0.00164` against `0.01256`, a factor of **7.7** where the tolerance is
+1e-9. The nine per-k entries are one at 3.9e-30, four at 4.098e-4 and four at 4.17e-9, so the
+weight is concentrated on half the mesh in a way the image is not.
+
+**What is not known.** Nothing here says whether the defect is in the limit, in the image, or
+in the test's own arithmetic, and the identity it checks is one the README quotes at 1e-12, so
+it worked once. Neither the commit that broke it nor the date is known: the file's last three
+commits (`8049534`, `284d123`, `cccd9ab`) are the obvious places to bisect, and a bisect here
+is cheap because the three tests run in **57 s** on their own.
+

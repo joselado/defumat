@@ -324,6 +324,14 @@ because that is what decides whether it is a session or a phase.
   second approximation, with the two errors separated. **Ultrasoft and PAW** are refused for
   their own reason and are the nearest of these: `D_ij` is a functional of the density, so
   the frozen states stop being a fixed basis as soon as the modulation moves.
+- **Imaging a modulation** (P89, done; the conjugate is not). The STM image and the vertical
+  tunnelling transmission of an ultracell are in, checked against a real supercell's image.
+  What is missing is the **momentum-resolved** transmission, which is refused by name: a
+  weight per ultracell `k0` is one number, and the question worth asking is which `Q` the
+  current leaves through, a decomposition of the exit overlap's in-plane grouping by
+  `q_par = h_par mod n_par` with a null of its own. A modulation **along the stacking axis**
+  is refused permanently rather than outstanding, and so is a denser k-set asked for at the
+  image rather than at the run.
 - **Transferring more than a charge density from Elk** (P72). The reader and the seed are
   in for an unpolarized state of an element with no core, validated pointwise against
   Elk's own `RHO3D.OUT` on hydrogen and on SiC. What is missing is a **magnetization** (an
@@ -15524,6 +15532,94 @@ not taken here.** It would need a measurement rather than an argument, which is
   than a transcription of it, and is refused meanwhile.
 * **The band structure and spectral function** (Elk's 720/725): post-processing on a converged
   ultracell state, deferred rather than forgotten, and the README row says so.
+
+### P89 -- What a modulation looks like to a tip: an STM image and a transmission of an ultracell. ✅ DONE
+
+P88 converges a modulation over `N` unit cells; P65 is a Tersoff-Hamann STM image and P66 a
+vertical tunnelling transmission. Neither of the two knew the ultracell existed, so the
+observable a charge density wave, a spin density wave, a screened impurity or a domain wall
+is **actually seen with** was the one thing an ultracell run could not produce. Neither
+`pw.x` nor Elk joins them either: Elk plots an ultracell's density, potential and
+magnetization (tasks 731/2/3, 741/2/3, 771/2/3) and images a *unit cell* (task 162), and QE
+has `PP/src/stm.f90` and no ultracell at all.
+
+**The one observation, and it is the whole phase.** An ultracell state is
+`Psi_j = sum_{Q,n} a^j_{Q,n} psi_{k0+Q,n}`, and in a plane-wave basis that sum is a
+**relabelling rather than a transform**: a plane wave with unit-cell Miller index `G`
+belonging to `Q` is the ultracell plane wave `h = n G + q` (`Ultracell.box_index`), and no
+two of them collide, because reducing `n(G - G') + (q - q') = 0` modulo `n` forces `q = q'`
+where both lie in `[0, n)`, and then `G = G'` because the sphere sits inside the dense grid.
+So the union over `Q` of the `N` unit-cell spheres **is** the ultracell's own sphere at
+`k0`, of size `N npwx`; the band index contracts away; and what is left is an ordinary
+coefficient vector that `sample_wavefunctions` and `exit_overlap` take unchanged once they
+are handed the ultracell's Miller indices, its `Cell` and `k0` in its reciprocal
+coordinates. `defumat/ultracell/states.py` is that object, and the two entry points in
+`defumat/workflows/ultracell.py` are thin on top of it.
+
+**The numbers.**
+
+* **The relabelling itself**, on a *modulated* two-cell silicon ultracell: the state sampled
+  from its own sphere agrees with the box transform the density is built from to
+  **1.7e-16** against a peak of 0.14, its Gram matrix is the identity to 5.7e-15, and it
+  integrates to 1 over the ultracell. It is run on a modulated state on purpose, and that is
+  a trap of its own: a state built from a **single** `Q` differs by `e^{-2iQ.r}` if the sign
+  of `q` is wrong and by nothing at all in modulus, so every null in this phase passes with
+  the sign reversed and only a state that mixes `Q` can see it.
+* **Tiled**, against the unit cell run on the *folded* k-set: **5.8e-8** of the peak at
+  `N = 1` and **1.6e-7** at `N = 2`, and the integrals agree to 1.0e-8. The reference has to
+  be the folded set rather than the `k0` set, because an image is a sum over states at the
+  tip energy and a different Brillouin-zone sampling is a different sum -- on this cell a
+  **factor of 1.94**, which looks exactly like a normalisation error and is not one. The
+  floor is the ultracell's own `conv_thr`: its `dV` is converged to 1e-10 rather than to
+  zero, so the states it diagonalises are not exactly the unit cell's.
+* **Against a real four-atom supercell** under the same applied potential, imaged the same
+  way: the error on the induced corrugation falls **22.2 -> 5.2 -> 2.0 per cent** over
+  `nbnd = 12, 24, 48`, which is P88's own claim read on the observable instead of on the
+  density. The induced corrugation is itself 0.6 per cent of the image, and the absolute
+  agreement at `nbnd = 48` is 1.2e-5 on an image of 9.3e-2.
+* **The Tersoff-Hamann identity**, `exit_region="volume"` against the image: **1e-11**, with
+  no factor. It is what holds the two normalisations against each other, since the image
+  carries its `N` in the weights (`tunnelling_weights / N`, matching `_occupy`) and the
+  transmission carries it in the volume the states are normalised over (`Omega_u`). Note
+  what it cannot see: drop the `/N` on one side *and* use `Omega_cell` on the other and it
+  still passes, because the two paths differ in code but not in where the `N` sits -- the
+  absolute `N` is pinned by the tiled null and by the sum rule against `compute_dos`, and
+  this transfers it to the transmission.
+* **The sampling set** is the ultracell's own dense sphere, `|G+Q|^2 <= ecutrho`, and not
+  Elk's `keep` (the unit cell's dense sphere at every `Q`, which is what P88's Hartree
+  kernel and `dr2` live on). Read back at the box's own grid points, the sphere reproduces a
+  modulated silicon density to **3e-16** where `keep` is out by **5e-9** at `N = 2` and
+  **2e-8** at `N = 3`: two differently shaped sets, and `keep` misses a thin outer shell of
+  the other. The box itself aliases its outermost shell from about `N = 5`, at **9.9e-12**,
+  which is the ordinary `ecutrho = 4 ecutwfc` corner aliasing one level out and belongs to
+  P88's grid rather than to the sampling.
+* **The timing against the route it replaces** is in `PERFORMANCE.md`: the ultracell route
+  (unit-cell SCF, the folded diagonalisation, the loop, the image) against the supercell
+  route (one SCF of `N` times the cell, then the image), single core, both ending with the
+  same picture.
+
+**Two things that were silently wrong and now are not.** `run_stm` and its two relatives
+raise by name on an `UltracellResult` where they used to fail with an `AttributeError`
+three lines in; and `get_stm`, `get_vertical_transport` and `get_momentum_transport` say so
+when an ultracell is cached and the image they are about to make is of the **unmodulated**
+unit cell, which is the right answer to the question asked and the wrong answer to the one
+usually meant, and the two are indistinguishable in a plot.
+
+**What is outstanding.**
+
+* **The momentum-resolved conjugate** (`run_momentum_transport` on an ultracell), which is
+  refused by name. The weight would be one number per ultracell `k0`, and the question worth
+  asking is a different one: *which `Q` the current leaves through*, which is a decomposition
+  of the exit overlap's in-plane grouping by `q_par = h_par mod n_par`, with each term
+  positive semi-definite so the transmission is additive over them. It has its own null, an
+  unmodulated state carrying only its own `q_par`.
+* **A modulation along the stacking axis** for the transmission, refused: the exit plane
+  would sit between two of the stacked slabs, and two `Q` differing only along that axis
+  share every in-plane index the exit integral has to tell apart.
+* **A denser k-set for the image**, the way `grid=` re-solves the bands for a unit-cell
+  image. On an ultracell that is not post-processing but another run of the whole loop, so
+  it is `kgrid` in `run_ultracell` and is refused here rather than half-implemented.
+* Everything P88 itself refuses, since the run has to exist first.
 
 ## 4. Validation strategy
 

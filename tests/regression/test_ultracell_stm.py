@@ -287,8 +287,15 @@ def test_an_unmodulated_image_is_the_tiled_unit_cell_image(
     tiled = np.concatenate([plain.values] * shape[0], axis=0)
     assert np.abs(image.values - tiled).max() / np.abs(tiled).max() < 1e-6
     # the same statement on the integral, which is the electron count in the
-    # window and is per unit cell on both sides
-    assert image.integral == pytest.approx(plain.integral, rel=1e-8)
+    # window and is per unit cell on both sides.
+    #
+    # **The floor is the ultracell's own ``conv_thr`` and not round-off.** The
+    # two sides are built from different wavefunctions -- the SCF's own, and
+    # the fixed-density solve's at the folded points -- and the ultracell's
+    # ``dV`` is converged to 1e-10 rather than to zero, so the states it
+    # diagonalises are not exactly the unit cell's. Measured at 1.0e-8 on this
+    # cell, which is what the tolerance is set against.
+    assert image.integral == pytest.approx(plain.integral, rel=1e-7)
 
 
 def test_the_image_integrates_to_the_density_of_states(pseudo_dir):
@@ -393,6 +400,11 @@ def test_the_whole_cell_transmission_is_the_image(pseudo_dir):
     the transmission samples ``Psi`` with the ultracell Miller indices and
     ``k0`` directly where the image goes through the box transform, so an
     unmodulated ultracell would leave the two agreeing for the wrong reason.
+
+    Bulk silicon is not a slab, so the run warns that the atoms do not lie
+    between the two planes. That is the right warning and this is the wrong
+    geometry for it: what is being checked is an identity between two
+    contractions, which holds wherever the planes are put.
     """
     shape, kgrid = (2, 1, 1), (1, 2, 1)
     folded = tuple(n * m for n, m in zip(shape, kgrid))
@@ -423,13 +435,21 @@ def test_a_magnetic_tip_sees_a_spin_density_wave_a_plain_one_does_not(
     """The image a spin density wave is actually measured with.
 
     A modulated ``B(r)`` on a cell whose own moment is zero drives equal and
-    opposite moments in the two cells (P88). That wave is almost invisible in
-    the **charge**, because a collinear system is invariant under flipping every
-    spin together with the sign of ``B`` and so cannot respond in the charge at
-    linear order; a **magnetic tip** projects the magnetization instead and sees
-    it. The two images are the same calculation with one argument changed, so
-    the contrast between them is the phase's own statement rather than a
-    comparison of two runs.
+    opposite moments in the two cells (P88), and a **magnetic tip** is what sees
+    it: the two images here are the same calculation with one argument changed.
+
+    **What the charge image is, precisely**, because "it is flat" is the
+    plausible wrong version. A collinear system is invariant under flipping every
+    spin together with the sign of ``B``, so the charge cannot respond at *odd*
+    order in ``B`` -- it responds at twice the wavevector, following ``|m|^2``,
+    and on a longer ultracell that response is large rather than absent (37 per
+    cent of its mean, cell to cell, against 82 for one spin channel, on the
+    eight-cell cell of ``notebooks/45``). What is zero is its **odd** part, which
+    is what the contrast below measures: the difference between the two halves of
+    the ultracell, where the magnetization changes sign and the charge does not.
+    A tunnelling density of states at one energy is a far more sensitive quantity
+    than a density, and reading "the charge barely moves" off the density and
+    expecting it of the image is the mistake this docstring exists to stop.
     """
     shape, kgrid = (2, 1, 1), (1, 2, 2)
     folded = tuple(n * m for n, m in zip(shape, kgrid))

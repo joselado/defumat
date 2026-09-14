@@ -36,6 +36,7 @@ instead, which means the physics is selected in the input file rather than at th
 | What a diffraction experiment measures: X-ray and magnetic structure factors | `get_structure_factors()` | [37](37_structure_factors.ipynb) |
 | A run started from an all-electron ground state, and how far a pseudopotential density is from one | `get_elk_seed()` | [42](42_all_electron_start.ipynb) |
 | A density or potential modulated over many unit cells at once | `get_ultracell()` | [44](44_ultra_long_range.ipynb) |
+| What a tip sees above a modulation: an image of a spin density wave | `get_ultracell_stm()` | [45](45_imaging_a_modulation.ipynb) |
 
 ### Structure: forces, geometry, the cell
 
@@ -169,7 +170,8 @@ want a number.
 | [`41_vertical_transport.ipynb`](41_vertical_transport.ipynb) | Tunnelling *through* a two-dimensional material into the substrate beneath it: graphene, where the current map is the microscope's picture, and a bilayer, where the two layers' paths interfere and it is not |
 | [`42_all_electron_start.ipynb`](42_all_electron_start.ipynb) | A converged all-electron density brought here and used to start a run: where a pseudopotential density is allowed to differ from the real one, and where it is not |
 | [`43_magnetic_textures.ipynb`](43_magnetic_textures.ipynb) | A moment per atom rather than a moment per crystal: a 90 degree helix that survives self consistency, the symmetry a texture leaves behind, and the two numbers it takes to say it is still there |
-| [`44_ultra_long_range.ipynb`](44_ultra_long_range.ipynb) | A potential that varies over eight unit cells of silicon, and the electrons screening it: the long cell solved in the ordinary cell's own states, computed once. Then the two kinds of spin wave it carries, one modulating a moment's length and one its direction |
+| [`44_ultra_long_range.ipynb`](44_ultra_long_range.ipynb) | A potential that varies over eight unit cells of silicon, and the electrons screening it: the long cell solved in the ordinary cell's own states, computed once. Then the two kinds of spin wave it carries, one modulating a moment's length and one its direction, |
+| [`45_imaging_a_modulation.ipynb`](45_imaging_a_modulation.ipynb) | What a scanning-tunnelling microscope sees above a spin density wave eight unit cells long: a polarized tip images the wave itself and an unpolarized one images its square, at twice the wavevector, because a collinear crystal cannot respond in the charge at first order in the field |
 
 ## Conventions
 
@@ -260,18 +262,18 @@ workstation core, slowest last:
 
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
-| `01` | 5 | `06` | 23 | `32` | 35 | `41` | 164 |
-| `09` | 6 | `25` | 28 | `34` | 40 | `44` | 164 |
-| `02` | 8 | `17` | 29 | `10` | 50 | `08` | 171 |
-| `37` | 9 | `18` | 29 | `29` | 59 | `27` | 178 |
-| `03` | 10 | `12` | 30 | `11` | 81 | `43` | 240 |
-| `05` | 10 | `21` | 30 | `14` | 89 | `38` | 242 |
-| `04` | 12 | `15` | 31 | `26` | 109 | `36` | 244 |
-| `22` | 12 | `24` | 31 | `33` | 115 | `35` | 276 |
-| `42` | 13 | `28` | 33 | `19` | 125 | `20` | 282 |
-| `16` | 18 | `31` | 34 | `13` | 131 |  |  |
-| `00` | 22 | `40` | 34 | `30` | 131 |  |  |
-| `07` | 22 | `23` | 35 | `39` | 151 |  |  |
+| `01` | 5 | `06` | 23 | `32` | 35 | `39` | 151 |
+| `09` | 6 | `25` | 28 | `34` | 40 | `41` | 164 |
+| `02` | 8 | `17` | 29 | `10` | 50 | `44` | 164 |
+| `37` | 9 | `18` | 29 | `29` | 59 | `08` | 171 |
+| `03` | 10 | `12` | 30 | `45` | 76 | `27` | 178 |
+| `05` | 10 | `21` | 30 | `11` | 81 | `43` | 240 |
+| `04` | 12 | `15` | 31 | `14` | 89 | `38` | 242 |
+| `22` | 12 | `24` | 31 | `26` | 109 | `36` | 244 |
+| `42` | 13 | `28` | 33 | `33` | 115 | `35` | 276 |
+| `16` | 18 | `31` | 34 | `19` | 125 | `20` | 282 |
+| `00` | 22 | `40` | 34 | `13` | 131 |  |  |
+| `07` | 22 | `23` | 35 | `30` | 131 |  |  |
 
 Three of those used to be much slower, and each for the same reason. `19` lost two
 hand-built linear solves and a second self-consistent run that were demonstrating
