@@ -20,9 +20,10 @@ a collinear crystal is unchanged by flipping every spin at the same time as the
 sign of the applied field, so the charge cannot respond at first order and its
 leading response is at twice the wavevector. On a cell carrying 0.12 Bohr
 magnetons the two come out at **82 per cent** and **37 per cent** of their means
-from cell to cell, on a charge density that is itself modulated by far less: the
-density of states at one energy is a much more sensitive quantity than the
-density.
+from cell to cell, where the total charge density itself is modulated by 1.9
+parts in ten thousand, at those same two periods: the density of states at one
+energy is a far more sensitive quantity than the density, and the factor of two
+thousand between them is what makes the wave something a tip can see at all.
 
 
 
@@ -51,10 +52,16 @@ print(f'largest cell moment {np.abs(wave.cell_moments()).max():.4f} mu_B')
 
 ## What the tip is tuned to
 
-The cell is metallic, so the tip sits at the Fermi level and the image is the
-zero-bias one: a delta at that energy, as wide as the run's own smearing. A
-semiconductor would need a bias instead, since a delta in a gap is identically
-zero, and a negative bias then images the filled states below the gap.
+Silicon has a gap, and this run is a smeared one, so the Fermi level it reports
+sits inside that gap: 0.85 smearing widths above the top of the valence band and
+1.11 below the bottom of the conduction band. The zero-bias image is then the
+tail of those two edges at the tip energy, which is the most sensitive thing a
+tip can be tuned to, since a level that moves by a fraction of a width changes
+the weight there by a large factor while the same shift moves the occupied
+density hardly at all. That is the whole of why the numbers below are percentages
+where the density's own modulation is parts in ten thousand. On a metal the same
+call with no bias gives the Fermi surface instead, and where a gap is wide enough
+that its tails carry nothing, a negative bias images the filled states below it.
 
 `spin` is the tip's own moment. With `polarization = 1` the image is a single
 spin channel; with the default of `None` it is the charge, which is what an

@@ -15585,6 +15585,39 @@ coordinates. `defumat/ultracell/states.py` is that object, and the two entry poi
   still passes, because the two paths differ in code but not in where the `N` sits -- the
   absolute `N` is pinned by the tiled null and by the sum rule against `compute_dos`, and
   this transfers it to the transmission.
+* **The exit plane's own path**, which is the substrate the feature is for and is not the
+  identity above: `volume_overlap` is one matrix product and knows nothing about the cell,
+  while `exit_overlap` groups plane waves by their **in-plane** Miller index and scales by
+  the cell's area over its volume, so handing it the ultracell's indices and the ultracell's
+  `Cell` is the whole of what P89 does to it. Against the unit cell's transmission, tiled:
+  **1.2e-6** of the peak at `N = 2`. **The floor here is the broadening and not a
+  threshold**, which is what separates a transmission from an image: the two sides
+  diagonalise the same Hamiltonian in two different bases and their levels come out a median
+  **1.2e-8 Ry** apart (the ultracell's density differs from the tiled one by 2.1e-8 of
+  0.107), and a transmission divides that by `eta`, since what it is built from is
+  `1/(E - e + i eta)`. Measured **6.2e-6** at `eta = 0.01`, 1.2e-6 at 0.02 and **4.6e-7** at
+  0.04, while tightening `conv_thr` or `states_conv_thr` by four orders each moves it in the
+  third digit. The image's own null on the same cell is 5.8e-8, because a density is not
+  divided by anything.
+* **The constant-current scan**, against the unit cell's, tiled: **5.1e-7 bohr** on a
+  corrugation of 1.65 bohr, with the two routes refusing **exactly the same 72 of 144
+  pixels**. Half the plane coming back `nan` is the physics rather than a failure: this
+  plane is a cut through bulk silicon and not a surface above one, so withdrawing the tip
+  walks it towards the next atomic layer and the density rises again, and the set-point is
+  only reached above the atoms. The first version of this check asserted that every pixel
+  crossed, which is a statement about a vacuum and was false here in 63 pixels of 64.
+* **What a magnetic tip actually sees**, on the eight-cell spin density wave a 0.02 Ry
+  modulated field drives (`notebooks/45`): one spin channel is modulated by **82 per cent**
+  of its mean from cell to cell at **one** period, the other channel being the same curve
+  half a period along, and an unpolarized tip is **not** flat -- it is modulated by **37 per
+  cent** at **two** periods, because a collinear crystal is unchanged by flipping every spin
+  together with the sign of the field, so the charge cannot respond at first order and its
+  leading response is at `2q`. The total charge *density* does the same thing at **1.9e-4**
+  of its mean and at the same two periods, so the factor between what a tip sees and what
+  the density does is about **two thousand**: the tip energy sits in silicon's gap 0.85
+  smearing widths above the valence edge, where the weight is a tail of the edge rather than
+  a count of electrons, and a level that moves by a fraction of a width moves it by a large
+  factor.
 * **The sampling set** is the ultracell's own dense sphere, `|G+Q|^2 <= ecutrho`, and not
   Elk's `keep` (the unit cell's dense sphere at every `Q`, which is what P88's Hartree
   kernel and `dr2` live on). Read back at the box's own grid points, the sphere reproduces a

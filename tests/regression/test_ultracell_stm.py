@@ -25,8 +25,9 @@ The checks, in the order they are worth reading:
 * the transmission with the exit region widened to the whole ultracell, which
   must be the image exactly and with no factor -- P66's own diagnostic, and here
   it is what says the two normalisations agree;
-* a magnetic tip on a spin density wave, whose charge image is flat and whose
-  spin image is not.
+* a magnetic tip on a spin density wave, which sees the wave itself over the
+  eight cells where an unpolarized tip sees it squared, at twice the
+  wavevector.
 """
 
 import tempfile
@@ -307,6 +308,7 @@ def test_an_unmodulated_image_is_the_tiled_unit_cell_image(
 
     tiled = np.concatenate([plain.values] * shape[0], axis=0)
     assert np.abs(image.values - tiled).max() / np.abs(tiled).max() < 1e-6
+
     # the same statement on the integral, which is the electron count in the
     # window and is per unit cell on both sides.
     #
@@ -317,6 +319,41 @@ def test_an_unmodulated_image_is_the_tiled_unit_cell_image(
     # diagonalises are not exactly the unit cell's. Measured at 1.0e-8 on this
     # cell, which is what the tolerance is set against.
     assert image.integral == pytest.approx(plain.integral, rel=1e-7)
+
+    # and the same null in the other mode, which is a different path through
+    # the same field: the scan walks the tip outwards and inverts for the
+    # height at the set-point, so it samples at points the plane does not
+    # contain and takes its reach from the *unit* cell rather than from the
+    # ultracell.
+    #
+    # **Half the pixels come back nan and that is the physics, not a failure.**
+    # This plane is a cut through bulk silicon rather than a surface above one,
+    # so withdrawing the tip walks it towards the next atomic layer and the
+    # density rises again; the set-point is only reached above the atoms, which
+    # is what the warning says. What is asserted is therefore that both routes
+    # refuse the *same* pixels and agree on the rest -- and that the rest is a
+    # stated fraction, since a scan that came back all nan would satisfy any
+    # comparison of what was left.
+    current = 3.0 * float(np.median(np.asarray(plain.values)))
+    scan = dict(mode="constant-current", current=current, heights=(0.0, 5.0),
+                nheights=40)
+    with pytest.warns(UserWarning, match="never cross the set-point"):
+        one = run_stm(calculator.system, calculator.pseudos, scf,
+                      shape=(12, 12), energy=energy,
+                      **PLANE, **WINDOW, **scan)
+    with pytest.warns(UserWarning, match="never cross the set-point"):
+        many = run_ultracell_stm(
+            calculator.system, calculator.pseudos, result,
+            shape=(12 * shape[0], 12), energy=energy,
+            **PLANE, **WINDOW, **scan)
+    reference = np.concatenate([np.asarray(one.heights)] * shape[0], axis=0)
+    ours = np.asarray(many.heights)
+    crossed = np.isfinite(reference)
+    assert crossed.mean() == pytest.approx(0.5, abs=0.05)   # 72 of 144 here
+    assert np.array_equal(crossed, np.isfinite(ours))
+    assert np.ptp(reference[crossed]) > 1.0     # 1.65 bohr of corrugation
+    # measured 5.1e-7 bohr, on a corrugation of 1.65
+    assert np.abs(ours[crossed] - reference[crossed]).max() < 1e-5
 
 
 def test_the_image_integrates_to_the_density_of_states(pseudo_dir):
@@ -348,16 +385,6 @@ def test_the_image_integrates_to_the_density_of_states(pseudo_dir):
     assert per_cell > 0.0
     assert image.integral == pytest.approx(per_cell, rel=1e-10)
 
-    # and the other mode, on the same field: a set-point inside the range of
-    # the constant-height image has to be crossed everywhere, so no pixel comes
-    # back nan and the corrugation is a real length in bohr.
-    scan = run_ultracell_stm(
-        calculator.system, calculator.pseudos, result, shape=(8, 8),
-        energy=energy, width=0.02, mode="constant-current",
-        current=float(np.median(image.values)), heights=(0.0, 4.0),
-        nheights=40, **PLANE)
-    assert np.isfinite(scan.heights).all()
-    assert 0.0 < np.ptp(scan.heights) < 4.0
 
 
 def test_the_image_converges_to_the_supercell(pseudo_dir):
@@ -494,7 +521,19 @@ def test_the_exit_plane_transmission_is_the_unit_cell_s_tiled(pseudo_dir):
 
     tiled = np.concatenate([np.asarray(plain.values)] * shape[0], axis=0)
     assert tiled.max() > 0.0
-    assert np.abs(np.asarray(ours.values) - tiled).max() / tiled.max() < 1e-6
+    # **The floor here is the broadening and not either threshold**, which is
+    # what separates a transmission from the image above. The two sides
+    # diagonalise the same Hamiltonian in two different bases -- the unit
+    # cell's sphere at the folded points, and the frozen envelope basis on the
+    # ultracell's own box -- and their levels come out a median 1.2e-8 Ry
+    # apart, which is the ultracell's density differing from the tiled one by
+    # 2.1e-8 of 0.107. A transmission divides that by the broadening, since
+    # what it is built from is ``1/(E - e + i eta)``: measured 1.2e-6 at
+    # ``eta = 0.02``, 6.2e-6 at 0.01 and 4.6e-7 at 0.04, while tightening
+    # ``conv_thr`` or ``states_conv_thr`` by four orders each moves it in the
+    # third digit. The image's own null on the same cell is 5.8e-8, because a
+    # density is not divided by anything.
+    assert np.abs(np.asarray(ours.values) - tiled).max() / tiled.max() < 1e-5
 
 
 def test_the_transmission_converges_to_the_supercell(pseudo_dir):
