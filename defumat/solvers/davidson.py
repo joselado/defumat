@@ -755,6 +755,27 @@ def davidson_eigensolver_all(
                     dtype=hamiltonian.kinetic.dtype),
         (hamiltonian.nk, nbnd),
     )
+    # **``psi0`` is consumed twice, and that is what blocks ``donate_argnums``
+    # here.** ``CLAUDE.md``'s JAX rules ask for donation on the large
+    # wavefunction buffers, and this is the call where it would pay: the SCF
+    # allocates a fresh ``(nk, nbnd, ndim)`` output every iteration and frees
+    # the input, which at 45-atom slab shapes is 12.10 GB allocated and 12.10
+    # GB freed per iteration -- the alternating large-block pattern that leaves
+    # a BFC arena with bytes free and no contiguous hole, which is how every
+    # death on that cell happened. But this same tuple feeds the ``robust``
+    # call below, so a donated ``psi0`` would be deleted by the fast pass and
+    # the retry would raise on a deleted array. The retry is rare and the
+    # donation is not conditional on it, so the two cannot coexist as written.
+    #
+    # **What it would take, and why it is not done here.** Either the robust
+    # pass starts from something other than ``psi0`` -- random vectors, which
+    # is a *physics* change to the retry path and would move numbers on it --
+    # or ``psi0`` is copied for it, which is the allocation donation exists to
+    # remove. Neither is a memory decision alone. Measured, not assumed: on a
+    # controlled compile, donating one wavefunction-shaped input takes the
+    # executable's argument-plus-output requirement down by exactly one buffer
+    # and sets ``memory_analysis().alias_size_in_bytes`` to that buffer's size,
+    # so the win is real and it is this structure that is in the way.
     arguments = (hamiltonian, nbnd, psi0, ethr, residual_threshold, david,
                  max_iterations, k_batch)
     if not robust_retry:

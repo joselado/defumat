@@ -1711,6 +1711,61 @@ twice the true size.
 
 ---
 
+### A16. Fragmentation, not bytes: what churns the arena on the NiBr2 slab, and what blocks the two obvious fixes
+
+**Opened 2026-09-14.** Every death on that cell was an allocator with **bytes free and no
+contiguous hole** -- roughly 26 GB free against a 21-23 GiB request. That is a different
+problem from every other entry here, which are all about totals, and the levers are
+different too. Two were examined and **both are blocked**, which is the finding.
+
+**The churn is large, alternating, once per SCF iteration.** The solve takes a
+`(nk, nbnd, ndim)` wavefunction set in and returns a fresh one, and the old is freed on the
+caller's rebind: **12.10 GB allocated and 12.10 GB freed, every iteration, for hundreds of
+iterations**. That is the textbook way to carve an arena.
+
+**Blocked fix 1: `donate_argnums`.** `CLAUDE.md`'s JAX rules ask for donation on exactly
+these buffers and the package uses it **nowhere** (grep: 0 hits). Donating `psi0` at
+`davidson.py`'s `arguments` tuple would make the output alias the input -- no new block,
+nothing freed. Measured on a controlled compile, donation removes exactly one buffer from
+the executable's argument-plus-output requirement and sets `alias_size_in_bytes` to it, so
+the mechanism is real *and it works on the CPU backend*, which means it can be verified
+here. **It is blocked by the robustness retry**: the same `arguments` tuple feeds both the
+fast and the robust `_every_k` call, so a donated `psi0` would be deleted by the first and
+the second would raise on a deleted array. `robust_retry = True` is the default and is what
+the SCF uses. Unblocking it means either starting the robust pass from something other than
+`psi0` -- a **physics** change to the retry path -- or copying `psi0` for it, which is the
+allocation donation exists to remove. Neither is a memory decision alone. The constraint is
+written at the call site so the next attempt starts from it.
+
+**Blocked fix 2: the spin slice and re-stack, which is 3x `psi` in the eager path.**
+`Calculation.diagonalize` (`driver.py:4011-4023`) slices `psi0[spin]`, solves, and
+`jnp.stack`s the results. On a **noncollinear** run `nspin = 1`, so both are semantically
+the identity -- and both still allocate. Measured directly by buffer pointer: `psi0`,
+`psi0[0]` and `jnp.stack([psi0[0]])` are **three distinct buffers, 3.0x `psi`**, and no
+spelling avoids it -- `jnp.squeeze`, `reshape` and `[None]` each copy as well, because an
+eager JAX op always produces a new buffer. At slab shapes that is **24.2 GB of avoidable
+allocate-and-free per iteration** on top of the genuine output. **It cannot be jitted away**:
+inside a `jit` those reshapes would be bitcasts and free, but the enclosing function
+contains the retry's host branch (`np.asarray(per_k)`, `failed.any()`, `warnings.warn`),
+which cannot be traced. Removing it means storing the wavefunctions per channel rather than
+as one stacked array -- a change to the driver's state that reaches the checkpoint, the
+parking dial and the density.
+
+**What is not blocked, and is one environment variable.** BFC is the allocator that
+fragments; `XLA_PYTHON_CLIENT_ALLOCATOR=platform` bypasses it and hands every allocation to
+`cudaMalloc`/`cudaFree`, so there is no arena to carve. The cost is a synchronous driver
+call per allocation and is **unmeasured on this workload**. It turns preallocation off, so
+total bytes become binding instead of contiguity -- which is only viable *because* `A13`
+took the peak to 65.47 GB on an 82.95 GB pool. At 79.43 it would not have been. One
+variable, and a decisive answer to whether fragmentation is the whole story.
+
+**Do not read this entry as a size.** None of the figures above is a peak: they are
+allocation *events*, and what matters for fragmentation is their size and order, not their
+sum. The 3.0x is a measured buffer count on a toy array, and whether all three are
+simultaneously live at slab scale on a GPU is not established here.
+
+---
+
 ### D10. `wfcinit` is not modelled at all, and on the one cell measured it is what sets the peak
 
 **Added 2026-09-14, from the stage-bracketed NiBr2 runs (jobs 20252135 / 20252136), read
