@@ -659,8 +659,15 @@ this is the thing to know before trusting an \code{adaptive} result on a magnet.
 On the four-cell hydrogen ultracell under a turning field --- the case where
 rotating every moment together costs nothing --- it converges in 165 to 172
 iterations against Anderson's 265, and to a \emph{different state}: the per-cell
-moment comes out at $0.186\,\mu_B$ against Anderson's $0.978$, a factor of five
-in the \emph{length} of the moment rather than a rotation of it. Two values of
+moment comes out at $0.186\,\mu_B/2$ against Anderson's $0.978$, a factor of five
+in the \emph{length} of the moment rather than a rotation of it. It is the
+\emph{mixer} and not the step size: Anderson was run at $\beta = 0.1$, $0.3$ and
+$0.7$, a factor of seven, and all three sit between $0.98$ and $1.00$, while
+\code{adaptive} at two values of $\beta_0$ a factor of four apart sits at $0.186$
+twice. \textbf{Which of the two is the ground state has not been established} ---
+neither matches the $0.62\,\mu_B/2$ the record gives for this system's unit cell
+--- so this is a warning that the two disagree, not a claim that the adaptive one
+is wrong. Two values of
 $\beta_0$ a factor of four apart agree with each other to $6\times10^{-5}$, so it
 is systematic and not a stray trajectory, and both runs report
 \code{converged = True} with an \code{accuracy} three orders below

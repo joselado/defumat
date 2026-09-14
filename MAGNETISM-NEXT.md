@@ -414,12 +414,16 @@ the four iterations between 25 and 21 rather than the thirteen between 25 and 12
 `mixing_ndim`, the other obvious lever, makes both cells *worse*: 27/25/33/39 at 4/8/12/20
 on the magnetic one and 26/21/30/26 on the nonmagnetic.
 
-**A second cell shows the same 2:1 ratio, and it has no deconfounder yet.**
+**A second cell showed the same 2:1 ratio, and most of it turned out to be the knob** (see
+the correction above: at `mixing_beta = 0.7` the same cell takes **24**, which is 1.26 times
+`pw.x` rather than 2.26). As originally measured,
 `fe-noncolin-pbe-stress.in` (P80) takes **43** iterations where `pw.x` takes **19** at the
 same `mixing_beta = 0.2` and the same `conv_thr = 1e-10`, with the two energies agreeing to
-6.7e-9 Ry — noncollinear, ultrasoft, PBE, where `fe-mag-1k` is collinear. Two cells at 2:1 is
-worth more than one, and the nonmagnetic twin of *this* cell has not been run: without it the
-43/19 is no more attributable to anything magnetic than the 25/12 was.
+6.7e-9 Ry — noncollinear, ultrasoft, PBE, where `fe-mag-1k` is collinear. **That "two cells
+at 2:1" no longer stands**: raising `mixing_beta` on this one takes it to 24/19, so only one
+cell is at 2:1 and the second was a knob. The nonmagnetic twin of this cell still has not been
+run, and the same beta sweep has not been run on `fe-mag-1k`, which is now the cheaper of the
+two things to do: if 25/12 moves the same way, this item is smaller again.
 
 **First step, if it is still worth one.** Dump one run's residual history and recompute the
 Anderson coefficients under both quadratic forms — `scf_accuracy` gives QE's for free — and
@@ -628,9 +632,10 @@ decide it, because a departure from `pw.x` needs a number rather than an argumen
   and is halved toward `beta_0` when it flips, so the step lengthens on its own along a
   direction that is not turning around, which is what a flat manifold looks like from inside.
   A stall detector with no threshold in it. On `fe-noncolin-pbe-stress.in` it takes **16**
-  iterations against `anderson`'s 43 at the input's own `mixing_beta`, and against 24 at the
-  best `mixing_beta` for `anderson` on that cell, to the same energy within 3e-10 Ry and the
-  same moment within 5.0e-6 mu_B; `pw.x` takes 19. **The iteration ratio overstates it**: the
+  iterations against the best `anderson` on that cell, which is 24 at `mixing_beta = 0.7`
+  (and against 43 at the input's own 0.2, which is the number a user meets but is not the
+  like-for-like one, since 0.2 is in that input because QE wanted it there). `pw.x` takes 19.
+  Same energy within 3e-10 Ry, same moment length within 3.3e-5 mu_B. **The iteration ratio overstates it**: the
   Davidson work falls by 1.60x rather than 2.69x, because `ethr` is scheduled from `dr2` and
   a faster-falling residual buys a tighter eigenproblem. `PERFORMANCE.md` has the full table
   and the two honest headlines. Three things stated rather than discovered: Elk mixes the
@@ -647,9 +652,11 @@ decide it, because a departure from `pw.x` needs a number rather than an argumen
   manifold itself, it converges in 165 to 172 iterations against `anderson`'s 265 and to a
   **different state**: the per-cell moment is 0.186 mu_B against 0.978, a factor of five in
   the *length*, so it is not the rotation the manifold is made of. Two values of `beta0` a
-  factor of four apart agree to 6e-5, so the growing steps carry that cell out of its
-  magnetic basin systematically, and both runs report converged three orders below
-  `conv_thr`. **So the flat manifold is still unmeasured** -- this item's decisive run has
+  factor of four apart agree to 6e-5, and it is the **mixer** rather than the step length:
+  `anderson` run at 0.1, 0.3 and 0.7, a factor of seven, sits between 0.98 and 1.00 at all
+  three. Both `adaptive` runs report converged three orders below `conv_thr`. Neither cluster
+  matches the 0.62 mu_B/2 the record gives for this system's unit cell, so **no run here is
+  entitled to be called the ground state** and reconciling that is owed first. **So the flat manifold is still unmeasured** -- this item's decisive run has
   not been done, it has been attempted and invalidated -- and the projection option below is
   not displaced by the mixer. What the attempt did establish is a property to carry into
   every other option here: **a step that grows can change which solution is found, and

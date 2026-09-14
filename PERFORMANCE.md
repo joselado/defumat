@@ -5911,19 +5911,32 @@ turning 90 degrees per cell is the flat-manifold case: rotating every moment tog
 nothing, the residual has no component along it, and the mixer has to traverse rather than
 descend. `kerker = False` for all three, since `adaptive` refuses a preconditioner:
 
-| mode | `beta0` | iterations | converged | mean per-cell `|m|` |
+| mode | `beta` | iterations | converged | mean per-cell `|m|` (mu_B/2) |
 |---|---|---|---|---|
+| `anderson` | 0.1 | 300 | no, 6.1e-5 | 1.003 |
+| `anderson` | 0.3 | 300 | no, 4.5e-6 | 0.989 |
 | `anderson` | 0.7 | 265 | yes, 3.0e-10 | 0.978 |
 | `adaptive` | 0.05 | 172 | yes, 9.8e-10 | **0.186** |
 | `adaptive` | 0.2 | 165 | yes, 9.1e-10 | **0.186** |
 
 **The iteration counts are not comparable, because the runs do not end in the same place.**
-The per-cell moments differ by 1.071 mu_B between `anderson` and either `adaptive` run, which
-is not a rotation -- a rigid rotation preserves the length, and this is the length, falling by
-a factor of five to a nearly collapsed moment on an atom that holds one electron. The two
-`adaptive` runs agree with each other to 6e-5 at two values of `beta0` a factor of four apart,
-so it is systematic rather than a stray trajectory: the growing steps carry this cell out of
-the magnetic basin and it converges, cleanly and below `conv_thr`, somewhere else.
+The per-cell moments differ by 1.071 mu_B/2 between `anderson` and either `adaptive` run,
+which is not a rotation -- a rigid rotation preserves the length, and this is the length,
+falling by a factor of five to a nearly collapsed moment on an atom that holds one electron.
+
+**It partitions by mixer and not by step length, and that is the control that says so.** The
+obvious reading of the first two rows against the last two is that `adaptive` starts small and
+grows, so a short step picks one basin and a long step the other -- in which case the caveat
+would be about step length, whichever mixer took it. It is not: `anderson` was run at 0.1,
+0.3 and 0.7, a factor of **seven**, and all three sit at 0.98 to 1.00, while `adaptive` at two
+values of `beta0` a factor of four apart sits at 0.186 twice, agreeing with itself to 6e-5.
+Five runs, two clusters, and the line between them is the mixer.
+
+A mechanism that would account for that, offered as a **candidate and not a cause**, because
+nothing here tests it: `anderson` applies one set of extrapolation coefficients to the whole
+vector, so its update is a uniform rescaling that preserves the *direction* of the residual,
+while the adaptive rule gives every grid point its own step length and does not. An update
+that reshapes the residual can leave a basin that a uniformly scaled one cannot.
 
 So this case measures nothing about the flat manifold and it does establish something else,
 which is the caveat the feature ships with: **a mixer whose steps grow can change which
@@ -5931,10 +5944,15 @@ solution a run finds**, and `converged = True` with an `accuracy` three orders b
 `conv_thr` does not protect against it. It is the same hazard `OPEN.md` Part VI item 3 already
 records for a large `mixing_beta` on this cell -- excursions through per-cell moments of 2.2
 mu_B on a one-electron atom -- reached by a different route. What has not been established is
-which of the two states is the right one: `anderson`'s 0.978 is nearly saturated and
-`adaptive`'s 0.186 nearly collapsed, the record's own figure for the unit cell is 0.62, and
-the setup here is not bit-for-bit the one that entry measured. That comparison is owed before
-either number is quoted as a ground state.
+which of the two states is the right one. `cell_moments` and `OPEN.md`'s figure are in the
+same unit, mu_B/2, and the record gives **0.62** for this system's unit cell: `anderson` sits
+at 0.98 to 1.00, which is a one-electron atom essentially saturated, and `adaptive` at 0.186,
+nearly collapsed. **Neither is 0.62**, so this setup does not reproduce the state the record
+describes and no run here is entitled to be called the ground state. Two `anderson` runs also
+failed to converge inside 300 iterations, so two of the five numbers are snapshots of a moving
+density rather than fixed points. What this establishes is that the two mixers disagree by a
+factor of five on the same input; reconciling either against 0.62 is owed and is the first
+thing to do before this cell is used to decide anything.
 
 **It loses on a cell that was never hard, which is what a robustness mixer does.**
 `benchmarks/si-1k.in`, two-atom silicon at `conv_thr = 1e-10`, each mode at its own default
