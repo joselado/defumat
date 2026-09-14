@@ -141,6 +141,12 @@ piece of memory, so parking is a `memcpy` of the whole store per iteration that
 buys nothing, and the default is ``device``. On an accelerator it is ``host``.
 ``DEFUMAT_WFC_STORE`` overrides the platform and an explicit ``wfc_store``
 overrides that, which is the precedence the other two dials already have.
+
+**Only the SCF loop parks anything.** :func:`~defumat.workflows.nscf.run_nscf`
+and the band-structure path hold a full-k store of their own and are *not*
+covered: they diagonalise once, so there is no span between two solves to park
+across, and what they would want instead is to never stack the set at all. That
+is a different change and is not this one.
 """
 
 from __future__ import annotations

@@ -5624,3 +5624,64 @@ this is not a feature taken from QE, it is a guard on a route `cegterg` does not
 measured in bytes rather than seconds. The solver's numbers are unchanged -- the guard
 returns the same boolean it did, asserted against the expression it replaced and across
 every `k_batch` route.
+
+## Where the wavefunction store lives: QE's buffer, as a dial (MEMORY-AUDIT, the store)
+
+**What it is.** The wavefunctions are `nspin nk nbnd npwx npol` complex, and they sat on
+the accelerator for the whole SCF because they are the next iteration's starting guess:
+11.27 GiB on the 45-atom NiBr2 slab at six k-points, 45.07 GiB at twenty-four. `k_batch`
+and `DEFUMAT_BAND_BATCH` bound how much of the k axis is **in flight**; neither says
+anything about where it is **stored**, and on a large cell the store is the larger number.
+
+QE does not keep it on the device. `c_bands.f90`'s `get_buffer`/`save_buffer` pair reads
+one k-point's `evc` in and writes it back, with `io_level` deciding whether the buffer is
+memory or disk, so QE's resident wavefunction set is one k-point's however many there are.
+`wfc_store` is that buffer, with JAX's pinned-host memory kind as the backing store: the
+driver parks the whole set once the density has been built from it and fetches it before
+the next diagonalisation.
+
+**What the span is, and what it is not.** Parked, the store is off the accelerator for the
+energy assembly, `v_of_rho` on the dense grid, the mixer's `mixing_ndim` histories, the PAW
+one-centre terms, the field steps and the checkpoint write -- which is where the other
+large allocations are, and where an arena fragments. It is **on** the device for the
+diagonalisation, for `becsum` and for the density, because it is an input to all three. So
+**this does not lower a peak that sits inside the solve**, and the NiBr2 job that died in
+the finiteness guard would have died exactly the same way. That is stated here rather than
+left to be discovered, because a memory feature whose span is misread is worse than none.
+
+**The cost, measured on this backend.** `park` + `fetch` is a real second allocation on
+the CPU backend -- a different buffer pointer, asserted in `tests/unit/test_wfc_store.py`,
+which is what makes the host branch testable here at all:
+
+| store | park | fetch | round trip | rate |
+|---|---|---|---|---|
+| 0.25 GiB | 203.8 ms | 220.7 ms | 424.4 ms | 1.3 GB/s |
+| 0.50 GiB | 400.4 ms | 432.1 ms | 832.5 ms | 1.3 GB/s |
+| 1.00 GiB | 793.2 ms | 855.3 ms | 1648.6 ms | 1.3 GB/s |
+| 2.00 GiB | 1568.1 ms | 1673.6 ms | 3241.7 ms | 1.3 GB/s |
+
+Median of five after a warm-up, linear across a factor of eight, so extrapolating it is
+sound. **That rate is why the CPU default is `device`**, and it is a measurement rather
+than an assumption: at the NiBr2 store, a round trip on this backend would be **18.6 s per
+iteration** against a 21 s iteration. On an accelerator the same transfer is PCIe, and at
+a typical 20 GB/s it is **1.2 s** -- 6 per cent of a 21 s iteration and 0.3 per cent of
+the 390 s ones the run reaches once `ethr` tightens. The dial follows the platform for
+exactly that reason.
+
+**An SCF here cannot resolve the cost, and that is worth saying.** `si16-1k-ecut30`, six
+iterations, five samples each way: 4.280 s on the device against 4.287 s parked, a **+7.1
+ms** delta where the model predicts 27.9 ms and the sample spread is 400 ms. At a 2.88 MiB
+store the transfer is below the noise floor, so that run **validates nothing** about the
+rate -- the table above is the measurement that carries. No cell that fits on this machine
+has a store large enough to time.
+
+**What is predicted and not measured**: the accelerator saving, which is the store itself,
+`SizeEstimate.arrays`'s wavefunction line. 11.27 GiB at the NiBr2 `1 6 1` mesh and 45.07
+GiB at `1 24 1`, off the device for the span above. `tools/gpu/` is where the confirming
+measurement belongs -- `peak_bytes_in_use` at three probe points, after `diagonalize`,
+after `density`, and before the next `diagonalize`, with the dial on and off.
+
+**Bit for bit, not close.** The chunk dials change the order contributions are added in and
+move the last digit; this one moves no contribution at all, so the test standard is
+equality: same total energy, same eigenvalues, same wavefunctions, same iteration count on
+the hydrogen cell with the store on the device and parked.

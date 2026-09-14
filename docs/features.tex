@@ -4595,6 +4595,29 @@ available, because it buys the batched mode's memory with the looped mode's
 kernel launches. An explicit argument beats the environment variables, which
 beat the platform.
 
+\textbf{A third dial says where the wavefunctions are \emph{kept}}
+(\code{wfc\_store}, \code{DEFUMAT\_WFC\_STORE}), which is a different question
+from how many are in flight. The store is $n_{\rm spin} n_k n_{\rm bnd}
+n_{\rm pwx} n_{\rm pol}$ complex --- 11.3~GB on a 45-atom slab at six
+$k$-points, 45~GB at twenty-four --- and it stays resident all through the SCF
+because it is the next iteration's starting guess. \qe{} does not keep it on the
+device: \code{c\_bands.f90}'s \code{get\_buffer}/\code{save\_buffer} pair holds
+one $k$-point's worth and \code{io\_level} says where the rest lives.
+\code{wfc\_store='host'} is that buffer.
+
+\emph{What it buys, and what it does not.} Parked, the store is off the
+accelerator while the energy terms, the potential on the dense grid, the mixer's
+history, the PAW one-centre terms and the checkpoint write are running ---
+which is where the other large allocations are. It is \emph{on} the device for
+the diagonalisation, for \code{becsum} and for the density, because it is an
+input to all three, so this does \textbf{not} lower a peak that sits inside the
+eigensolver. The default follows the platform for a measured reason: on a CPU
+the host \emph{is} the device, and a round trip of the store runs at 1.3~GB/s
+here, which at slab scale would be 18.6~s per iteration for nothing. On an
+accelerator the same transfer is PCIe, around a second. So \code{device} on a
+CPU, \code{host} on anything else, and the answer is bit-for-bit identical
+either way --- a transfer is not arithmetic.
+
 \textbf{Measured GPU speedups} (one H200 against one CPU core, per SCF
 iteration): 2x on a cheap metal, 3--5x on norm-conserving silicon, 9--21x with
 an augmentation charge or a magnetization, and \textbf{83--115x on spin-orbit}.

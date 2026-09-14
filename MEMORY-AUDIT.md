@@ -82,6 +82,17 @@ run that currently does not fit on this machine or does not start at all.
 | 14 | Velocity holds four full-k blocks | A14 | `velocity.py:302` | AlAs (measured) | **200 MB** | 20 lines | a |
 | 15 | `sum_band` vmaps the spin axis | A15 | `density.py:109/118/180` | h40 at accelerator defaults | **0.21 GB** of peak (halves a 2.75 GB stage) | 3 lines | a |
 | 16 | PAW one-centre forward set has no dial | B1 | `onecenter.py:128` | NiBr2 | 0.35-0.45 GB, 1.2% of peak — **done with A4**, and it is what makes A4 work | 30 lines | b |
+| * | **The wavefunction store is resident for the whole SCF** | below | `driver.py`'s loop, `batching.py` | NiBr2 | **11.27 GiB** at `1 6 1`, **45.07 GiB** at `1 24 1`, off the device between the density and the next solve | ~15 lines | b, **done 2026-09-14** |
+
+**The store is not in the audit's own numbering because the audit never found it**: every
+entry above is a *temporary* or a retained *extra* copy, and this is the thing the run is
+supposed to be holding. It is a `b` -- a stated, measured, selectable trade -- rather than
+an `a`: the saving is real and the cost is a host transfer per iteration, which is 1.3 GB/s
+on this CPU backend and PCIe on an accelerator, so the dial's default follows the platform.
+`wfc_store` / `DEFUMAT_WFC_STORE`, `device` on a CPU and `host` on anything else. It takes
+the store off the accelerator for the energy assembly, `v_of_rho`, the mixer and the
+checkpoint write, and **not** for the solve, `becsum` or the density, where it is an input.
+`PERFORMANCE.md` has the transfer-rate table and the reason the CPU default is what it is.
 
 **What legitimately adds.** A force and a stress do not tape the same set, so the groups differ:
 
