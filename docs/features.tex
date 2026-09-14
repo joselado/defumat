@@ -4601,7 +4601,7 @@ from how many are in flight. The store is $n_{\rm spin} n_k n_{\rm bnd}
 n_{\rm pwx} n_{\rm pol}$ complex --- 11.3~GB on a 45-atom slab at six
 $k$-points, 45~GB at twenty-four --- and it stays resident all through the SCF
 because it is the next iteration's starting guess. \qe{} does not keep it on the
-device: \code{c\_bands.f90}'s \code{get\_buffer}/\code{save\_buffer} pair holds
+device: \code{c\_bands.f90:get\_buffer} and its \code{save\_buffer} partner hold
 one $k$-point's worth and \code{io\_level} says where the rest lives.
 \code{wfc\_store='host'} is that buffer.
 
