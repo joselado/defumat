@@ -162,22 +162,19 @@ wave = magnetic.get_ultracell(supercell=(8, 1, 1), kgrid=(1, 2, 2), nbnd=32,
                               states_conv_thr=1e-5)
 
 moments = wave.cell_moments()
-print(f'eight unit cells, {wave.iterations} iterations')
-print(f'largest cell moment   {np.abs(moments).max():.4f} mu_B')
-print(f'net moment            {moments.sum():+.2e} mu_B')
+print(f'eight unit cells, {wave.iterations} iterations; largest cell moment '
+      f'{np.abs(moments).max():.4f} mu_B, net {moments.sum():+.2e} mu_B')
 
 ```
 
     [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-10). Call get_scf() to do this explicitly.
 
 
-    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:494: UserWarning: the fixed-density solve did not converge at 14 of 64 k-points: up to 2 of 32 bands are unsettled and the worst k-point took 100 Davidson steps, at ethr = 1.3e-07 (from conv_thr = 1.0e-05). There is no later iteration to fix this -- the density is fixed -- so these wavefunctions are what every quantity built on them will use. Loosen conv_thr (ethr is 0.1 x conv_thr / nelec, QE's setup.f90 rule) before raising the iteration budget: a threshold the solve cannot reach costs the whole budget at every k-point and is where an overlap loses positivity
+    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:544: UserWarning: the fixed-density solve did not converge at 14 of 64 k-points: up to 2 of 32 bands are unsettled and the worst k-point took 100 Davidson steps, at ethr = 1.3e-07 (from conv_thr = 1.0e-05). There is no later iteration to fix this -- the density is fixed -- so these wavefunctions are what every quantity built on them will use. Loosen conv_thr (ethr is 0.1 x conv_thr / nelec, QE's setup.f90 rule) before raising the iteration budget: a threshold the solve cannot reach costs the whole budget at every k-point and is where an overlap loses positivity
       calculation, folded_system, eigenvalues, wavefunctions = fixed_density_states(
 
 
-    eight unit cells, 8 iterations
-    largest cell moment   0.1223 mu_B
-    net moment            +3.26e-09 mu_B
+    eight unit cells, 8 iterations; largest cell moment 0.1223 mu_B, net +3.26e-09 mu_B
 
 
 
@@ -212,6 +209,90 @@ at the same time as the sign of the field, so the charge cannot respond at first
 order in the field and the magnetization must, which is a useful check that the
 two channels are being kept apart properly.
 
+
+## A wave that turns
+
+A collinear calculation can make the moment grow and shrink along a fixed axis.
+What it cannot do is make it **point somewhere else**. A helix, a cycloid, a
+domain wall and a skyrmion are all textures in which the length of the moment
+barely changes and its direction rotates from place to place, and those are the
+long-wavelength magnetic structures worth computing.
+
+Letting the moment be a vector costs one thing: the wavefunction becomes a
+two-component spinor and the potential becomes a two-by-two matrix at every
+point of the grid,
+
+$$V(\mathbf{r}) = v_0(\mathbf{r})\,\mathbb{1} + \mathbf{B}(\mathbf{r})\cdot\boldsymbol{\sigma},$$
+
+whose off-diagonal entries mix the two components. That mixing is what lets the
+magnetization turn. Spin-orbit coupling rides along at no extra cost, because it
+lives in the unit cell's own states, which are computed once before any of this
+begins.
+
+The field that drives a turning texture has to turn itself, so it is a vector
+field rather than a number at each point. Below it rotates once in the plane
+over four unit cells of a hydrogen lattice.
+
+
+```python
+spinor = Calculator.from_file('../tests/data/qe/h-noncolin-ultracell.in',
+                              pseudo_dir='../tests/data/pseudo')
+
+# a field of 0.01 Ry turning once in the plane over the four cells
+turning = lambda x: 0.01 * np.stack(
+    [np.cos(2 * np.pi * x[..., 0] / 4), np.sin(2 * np.pi * x[..., 0] / 4),
+     np.zeros_like(x[..., 0])], axis=-1)
+
+helix = spinor.get_ultracell(supercell=(4, 1, 1), kgrid=(1, 2, 2), nbnd=16,
+                             magnetic_field=turning, mixing_beta=0.3)
+
+vectors = helix.cell_moments()          # (4, 3): a moment VECTOR per cell
+angles = np.degrees(np.arctan2(vectors[:, 1], vectors[:, 0]))
+print(f'{helix.iterations} iterations; the moment points', np.round(angles, 1),
+      'degrees, out of plane by', f'{np.abs(vectors[:, 2]).max():.0e}')
+```
+
+    [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-11). Call get_scf() to do this explicitly.
+
+
+    53 iterations; the moment points [ 27.5  62.3 -40.5 -48.1] degrees, out of plane by 6e-07
+
+
+
+```python
+cells = np.arange(4) + 0.5
+field = np.stack([np.cos(2 * np.pi * cells / 4), np.sin(2 * np.pi * cells / 4)], -1)
+unit = vectors[:, :2] / np.linalg.norm(vectors[:, :2], axis=1)[:, None]
+
+fig, ax = plt.subplots(figsize=(7, 2.6))
+for arrows, colour, name in ((field, '0.65', 'applied field'),
+                             (unit, '#b5432f', 'moment of each cell')):
+    ax.quiver(cells, np.zeros(4), arrows[:, 0], arrows[:, 1], color=colour,
+              scale=6, width=0.007, label=name)
+ax.set(xlim=(0, 4), ylim=(-0.75, 0.75), yticks=[], xlabel='unit cell along $a_1$',
+       title='The moment turns from cell to cell')
+ax.legend(frameon=False, loc='upper right', ncol=2); fig.tight_layout()
+```
+
+
+    
+![png](44_ultra_long_range_files/44_ultra_long_range_13_0.png)
+    
+
+
+The moments follow the field around the plane and stay in it, with nothing out
+of plane to five decimal places. They do not turn as far as the field does: the
+field rotates ninety degrees from one cell to the next and the moments manage
+roughly a third of that.
+
+That shortfall is the physics rather than a shortcoming. The hydrogen atoms here
+are 5.5 bohr apart, close enough that the exchange coupling between neighbouring
+cells is much larger than a field of 0.01 Ry, and exchange wants every moment
+parallel. What the calculation measures is the balance between the two: how
+stiff the magnet is against being twisted slowly in space. That stiffness is the
+same quantity that sets how much energy a long-wavelength magnon costs, and a
+crystal whose modulated direction is more weakly coupled would let the texture
+turn much further for the same field.
 
 ## What it cannot do
 
