@@ -311,6 +311,7 @@ def davidson_eigensolver(
     max_iterations: int = MAX_ITERATIONS,
     robust: bool = False,
     return_steps: bool = False,
+    return_finite: bool = False,
 ):
     """The ``nbnd`` lowest eigenpairs at k-point ``ik``, iteratively.
 
@@ -579,11 +580,25 @@ def davidson_eigensolver(
 
     final = jax.lax.while_loop(unconverged, step, state)
     evc, energies = final[8], final[10]
+    wavefunctions = jnp.where(mask, evc, 0.0)
+    out = (energies, wavefunctions)
     if return_steps:
         # Both are loop carries already: nothing is measured that was not
         # measured before, and nothing is read on the host inside the loop.
-        return energies, jnp.where(mask, evc, 0.0), final[14], final[13]
-    return energies, jnp.where(mask, evc, 0.0)
+        out += (final[14], final[13])
+    if return_finite:
+        # **The finiteness guard, reduced here rather than over the stacked
+        # k-set.** It is the same two reductions
+        # :func:`davidson_eigensolver_all` used to take over the whole returned
+        # set -- over the eigenvalues *and* over the masked wavefunctions, for
+        # the reason its docstring gives -- but taken while this k-point's
+        # ``evc`` is the only one in flight. Over the stack the temporaries
+        # scale with ``nk`` and are the largest single allocation in the SCF;
+        # here they are one k-point's, whatever the mesh. The masked array is
+        # what is reduced, not ``evc``, so the answer is identical to the
+        # stacked form rather than merely equivalent.
+        out += (jnp.isfinite(energies).all() & jnp.isfinite(wavefunctions).all(),)
+    return out
 
 
 def starting_vectors(psi0, nbnd, ndim, kinetic, mask, dtype):
@@ -606,7 +621,7 @@ def starting_vectors(psi0, nbnd, ndim, kinetic, mask, dtype):
 
 
 @partial(jax.jit, static_argnames=("nbnd", "david", "max_iterations", "k_batch",
-                                   "robust", "return_steps"))
+                                   "robust", "return_steps", "return_finite"))
 def _every_k(
     hamiltonian: Hamiltonian,
     nbnd: int,
@@ -619,12 +634,21 @@ def _every_k(
     robust: bool,
     *,
     return_steps: bool = False,
+    return_finite: bool = False,
 ):
     """One compiled solve of the whole k-set, by one of the two routes.
 
-    ``return_steps`` is keyword-only and last on purpose: ``tools/gpu``'s memory
-    tool lowers this unit by position, so a new positional parameter would break
-    it with no test to notice.
+    ``return_steps`` and ``return_finite`` are keyword-only and last on purpose:
+    ``tools/gpu``'s memory tool lowers this unit by position, so a new
+    positional parameter would break it with no test to notice.
+
+    ``return_finite`` adds a ``(nk,)`` boolean saying which k-points came back
+    finite. It belongs here rather than in the caller because the reduction is
+    then inside the chunk -- ``k_batch`` k-points at a time instead of the whole
+    stacked set -- and the guard is the caller's largest allocation otherwise.
+    It also brings the guard inside the executable ``tools/gpu/davidson_memory``
+    sizes, which is the other half of the same problem: an allocation outside
+    that unit appears in no line of the size report.
     """
     def solve(ik, start):
         # The threshold rides the traced ``ethr`` slot as an ``(nk, nbnd)``
@@ -639,7 +663,7 @@ def _every_k(
             hamiltonian, ik, nbnd, start, ethr=row,
             residual_threshold=residual_threshold, david=david,
             max_iterations=max_iterations, robust=robust,
-            return_steps=return_steps,
+            return_steps=return_steps, return_finite=return_finite,
         )
 
     batch = resolve_k_batch(k_batch)
@@ -733,9 +757,8 @@ def davidson_eigensolver_all(
     )
     arguments = (hamiltonian, nbnd, psi0, ethr, residual_threshold, david,
                  max_iterations, k_batch)
-    fast = _every_k(*arguments, robust=False, return_steps=return_steps)
     if not robust_retry:
-        return fast
+        return _every_k(*arguments, robust=False, return_steps=return_steps)
     # Both halves, not just the eigenvalues. A Cholesky factor that has gone
     # non-finite does not necessarily poison every root -- the first regression
     # test written for the 64-atom NaN passed on the *unfixed* code precisely
@@ -754,8 +777,25 @@ def davidson_eigensolver_all(
     # away. Measured on a 1H-NbSe2 mesh at ``ethr = 4e-9``: k-points 0-4 all
     # finite, k-point 9 non-finite, and the whole-set retry turned 509 s into
     # 1368 s while replacing four good solves.
-    per_k = (jnp.isfinite(fast[0]).all(axis=1)
-             & jnp.isfinite(fast[1]).reshape(fast[1].shape[0], -1).all(axis=1))
+    #
+    # **Where the reduction happens is a memory decision, and it is the whole
+    # point of ``return_finite``.** Written here, over the returned stack, it
+    # was the single largest allocation in the SCF: the temporaries scale with
+    # the *set*, and on a 45-atom NiBr2 slab (nk 6, nbnd 403, npwx 156346,
+    # spinor) an H100 was asked for **21.40 GiB** against an 11.27 GiB
+    # wavefunction store and died -- ``RESOURCE_EXHAUSTED``, at SCF iteration
+    # 13, in a pool with 25.7 GB free and a 14.9 GB largest hole. It ran every
+    # iteration, not only on a retry. Inside the per-k solve the same two
+    # reductions see one k-point, so the cost stops following ``nk``: compiled
+    # on this CPU backend the stacked form is 0.70 GiB at that shape and 2.82
+    # GiB at nk = 24, against **0.12 GiB flat** for the moved one. The CPU
+    # coefficient is far below the GPU's -- fusion is not the same on the two
+    # backends, the same caveat ``tools/gpu/davidson_memory`` states for the
+    # subspace buffer -- but the *form* is what matters here: one is
+    # proportional to the k-set and the other is not.
+    fast = _every_k(*arguments, robust=False, return_steps=return_steps,
+                    return_finite=True)
+    fast, per_k = fast[:-1], fast[-1]
     failed = ~np.asarray(per_k)
     if not failed.any():
         return fast

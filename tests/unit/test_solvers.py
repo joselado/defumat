@@ -244,11 +244,19 @@ def _stub_every_k(bad_index, nk=5, nbnd=3, ndim=7):
     robust_e = np.full((nk, nbnd), 100.0)
     robust_psi = np.full((nk, nbnd, ndim), 7.0)
 
-    def stub(*_arguments, robust=False, return_steps=False):
+    def stub(*_arguments, robust=False, return_steps=False, return_finite=False):
         e, psi = (robust_e, robust_psi) if robust else (fast_e, fast_psi)
         out = (jnp.asarray(e), jnp.asarray(psi))
         if return_steps:
             out = out + (jnp.zeros(nk, dtype=int), jnp.zeros(nk, dtype=int))
+        if return_finite:
+            # The real ``_every_k`` takes these two reductions inside the per-k
+            # solve, so that the guard's temporaries stop scaling with ``nk``.
+            # The stub does it here because it has no solve to take them in;
+            # what it has to reproduce is the *value*, which is the same pair.
+            out = out + (jnp.asarray(
+                np.isfinite(e).all(axis=1)
+                & np.isfinite(psi).reshape(psi.shape[0], -1).all(axis=1)),)
         return out
 
     return stub, fast_e, fast_psi, robust_e, robust_psi
@@ -294,17 +302,80 @@ def test_no_retry_and_no_warning_when_every_k_point_is_finite(monkeypatch):
     calls = []
     stub, fast_e, _, _, _ = _stub_every_k(bad_index=2)
 
-    def clean(*arguments, robust=False, return_steps=False):
+    def clean(*arguments, robust=False, return_steps=False, return_finite=False):
         calls.append(robust)
         nk, nbnd, ndim = 5, 3, 7
-        return (jnp.tile(jnp.arange(nbnd, dtype=float), (nk, 1)),
-                jnp.ones((nk, nbnd, ndim)))
+        out = (jnp.tile(jnp.arange(nbnd, dtype=float), (nk, 1)),
+               jnp.ones((nk, nbnd, ndim)))
+        if return_finite:
+            out = out + (jnp.ones(nk, dtype=bool),)
+        return out
 
     monkeypatch.setattr(davidson, "_every_k", clean)
     with warnings.catch_warnings():
         warnings.simplefilter("error")          # any warning fails the test
         davidson.davidson_eigensolver_all(_HAMILTONIAN_IS_UNUSED, 3, None, 1.0e-6)
     assert calls == [False], "the robust route ran on a clean solve"
+
+
+def test_the_finiteness_flag_is_the_reduction_it_replaced(silicon):
+    """``return_finite`` must agree with the stacked expression, k-point by k-point.
+
+    The guard used to be taken over the whole returned set and is now taken
+    inside the per-k solve, which is a memory decision (``davidson.py``) and
+    must not be a physics one. The check is the old expression written out here
+    against the flag the solver now hands back: two reductions, over the
+    eigenvalues and over the *masked* wavefunctions, and the second is why the
+    masked array is what the solver reduces.
+    """
+    from defumat.solvers import davidson
+
+    _, _, hamiltonian = silicon
+    values, vectors, finite = davidson._every_k(
+        hamiltonian, NBND, None, 1.0e-8, davidson.RESIDUAL_THRESHOLD,
+        davidson.DAVID_NDIM, 60, "default", robust=False, return_finite=True,
+    )
+    values, vectors = np.asarray(values), np.asarray(vectors)
+    stacked = (np.isfinite(values).all(axis=1)
+               & np.isfinite(vectors).reshape(vectors.shape[0], -1).all(axis=1))
+    assert np.asarray(finite).shape == (hamiltonian.nk,)
+    assert np.array_equal(np.asarray(finite), stacked)
+    assert stacked.all(), "silicon must solve cleanly, or this proves nothing"
+
+
+@pytest.mark.parametrize("k_batch", [1, 2, None, "default"])
+def test_the_flag_does_not_depend_on_the_chunk_size(silicon, k_batch):
+    """``k_batch`` is a memory dial and must never be visible in a result.
+
+    The guard now lives inside the per-k solve, so it rides the same
+    ``map_k`` that the chunked, the scanned and the ``vmap``ped route share --
+    which is exactly the rule a reduction written in the caller could not
+    break and one written inside the batch can.
+    """
+    from defumat.solvers import davidson
+
+    _, _, hamiltonian = silicon
+    values, _, finite = davidson._every_k(
+        hamiltonian, NBND, None, 1.0e-8, davidson.RESIDUAL_THRESHOLD,
+        davidson.DAVID_NDIM, 60, k_batch, robust=False, return_finite=True,
+    )
+    assert np.asarray(finite).tolist() == [True] * hamiltonian.nk
+    assert np.asarray(values).shape == (hamiltonian.nk, NBND)
+
+
+def test_the_flag_never_reaches_a_caller(silicon):
+    """It is the guard's own output and is stripped before the return.
+
+    ``return_steps`` is the only thing that may change what a caller unpacks,
+    and a solver that handed back a third value would break every call site
+    that writes ``values, vectors = ...``.
+    """
+    _, _, hamiltonian = silicon
+    assert len(davidson_eigensolver_all(hamiltonian, NBND, None, ethr=1.0e-8,
+                                        max_iterations=60)) == 2
+    assert len(davidson_eigensolver_all(hamiltonian, NBND, None, ethr=1.0e-8,
+                                        max_iterations=60,
+                                        return_steps=True)) == 4
 
 
 def test_the_warning_names_which_k_points_failed(monkeypatch):
