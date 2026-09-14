@@ -19,6 +19,7 @@ cannot.
 """
 
 import dataclasses
+import warnings
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -256,6 +257,85 @@ def test_the_solver_reports_its_step_count_and_what_it_left_behind(silicon):
         return_steps=True,
     )
     assert np.asarray(seeded).max() <= 1
+
+
+def test_the_unsettled_count_can_be_nonzero_and_says_so(silicon):
+    """**The positive control for every ``unsettled == 0`` in this file.**
+
+    Every other assertion about this counter is a type check or a null: it is an
+    ``int``, and it is zero on a healthy run. A diagnostic whose null cannot be
+    told from its pass is one nothing downstream can rely on, and a production
+    run reporting zero was being read as "no band was left unsettled" when all it
+    supported was "the number never moved". This is the case that must trip it.
+
+    A budget of one Davidson step cannot converge ten bands from the atomic
+    guess, so the count has to be positive and the step count has to sit exactly
+    at the budget -- the two read together, which is what the docstring above
+    says they are for.
+    """
+    _, _, hamiltonian = silicon
+    _, _, steps, unsettled = davidson_eigensolver_all(
+        hamiltonian, NBND, None, ethr=1e-13, max_iterations=1, return_steps=True
+    )
+    steps, unsettled = np.asarray(steps), np.asarray(unsettled)
+    assert (steps == 1).all(), "the solve stopped at the budget, not before it"
+    assert (unsettled > 0).all(), "one step cannot settle ten bands from atoms"
+    assert (unsettled <= NBND).all()
+
+    # And it falls back to zero when the budget is enough, on the same call and
+    # the same cell, so the two outcomes are distinguishable rather than merely
+    # different numbers.
+    _, _, _, settled = davidson_eigensolver_all(
+        hamiltonian, NBND, None, ethr=1e-8, max_iterations=60, return_steps=True
+    )
+    assert (np.asarray(settled) == 0).all()
+
+
+def test_the_scf_prints_the_unsettled_count_when_there_is_one(silicon, capsys):
+    """The other half: the number reaching the *log*, not only the history.
+
+    ``davidson_unconverged`` goes into ``history``, and ``history`` lives in the
+    process -- it is not in the checkpoint, so for a long or killed run the
+    verbose line is the only place it reaches disk. That line is appended only
+    when the count is nonzero, which means a healthy run's output is byte for
+    byte ``pw.x``'s and also that **nothing in the suite had ever seen it
+    print**. Reported from a production run whose ``grep`` for it returned zero,
+    where the zero could not be told from the line being unreachable.
+
+    The solve is left alone and only the *reported* count is bumped, so what is
+    under test is the reporting rather than the physics.
+    """
+    system, pseudos, _ = silicon
+    calculation = Calculation(system, pseudos)
+    genuine = calculation.diagonalize
+
+    def with_stragglers(*arguments, **keywords):
+        out = genuine(*arguments, **keywords)
+        if len(out) == 4:
+            values, vectors, steps, unsettled = out
+            return values, vectors, steps, np.full_like(np.asarray(unsettled), 3)
+        return out
+
+    calculation.diagonalize = with_stragglers
+    # One iteration on purpose, so the non-convergence warning is the expected
+    # outcome rather than a signal, and it is silenced rather than left to read
+    # as a failure in the suite's output.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        run_scf(system, pseudos, nbnd=NBND, calculation=calculation,
+                max_iterations=1, conv_thr=1e-6, verbose=True)
+    printed = capsys.readouterr().out
+    assert "unsettled" in printed, printed[-400:]
+    assert "up to 3 of" in printed, printed[-400:]
+
+    # And it is absent when the count is zero, which is the claim that the line
+    # does not change a healthy run's output.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        run_scf(system, pseudos, nbnd=NBND,
+                calculation=Calculation(system, pseudos),
+                max_iterations=1, conv_thr=1e-6, verbose=True)
+    assert "unsettled" not in capsys.readouterr().out
 
 
 # --------------------------------------------------------------------------
