@@ -2688,8 +2688,13 @@ iteration and stops 1.45e-7 from the fresh answer is consistent with a demotion 
 slightly off-axis and with a convergence test satisfied before the residual is, and those are
 different defects. Nothing here distinguishes them.
 
-**What would.** Run the demotion with `conv_thr` two orders tighter and see whether the gap
-closes: if it does, the one-iteration exit is the story and the tolerance is measuring the
+**Why nobody saw it, and the gate is not lying.** The file is
+`pytestmark = [pytest.mark.regression, pytest.mark.slow]`, so it is in the two-hour set and
+not in `tools/test-fast.sh`, which is the push gate. A red gate would have been a different
+and worse finding.
+
+**What would settle it.** Run the demotion with `conv_thr` two orders tighter and see whether
+the gap closes: if it does, the one-iteration exit is the story and the tolerance is measuring the
 stopping rule rather than the demotion; if it does not, the recomposed state is genuinely
 off and `with_spin`'s axis-finding is where to look. That is one cheap run and it has not
 been done.

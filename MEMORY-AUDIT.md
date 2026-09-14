@@ -1718,6 +1718,20 @@ contiguous hole** -- roughly 26 GB free against a 21-23 GiB request. That is a d
 problem from every other entry here, which are all about totals, and the levers are
 different too. Two were examined and **both are blocked**, which is the finding.
 
+> **Read the deaths as card-specific and partly as the resume pin, which is narrower than
+> this entry was first written.** Reported from Triton the same day: job **20258493**
+> (A100-80g `gpu17`, `e4f2dfd`, **fresh**, `rebuild`, `CHECKPOINT_EVERY=1`) went past
+> iteration 5 and on to 9 with **peak flat at 65.53 GB to 0.06 GB across five iterations**
+> and 17.4 GB of headroom on the 82.95 GB pool, at `ethr` 1.96e-05, which is already tighter
+> than the marker the loose-`ethr` account was written around. So the mesh **does** fit an
+> A100 at `rebuild`. What the five deaths have in common is not the cell: the `rebuild` ones
+> were on an **H100**, where the peak is 76.51 GB and the same solve asks 33.44 GiB rather
+> than 23.18 (`A17`), the earlier A100 ones were at `store` before the projector dial
+> existed, and every resumed arm was also carrying the pin `A18` fixes. The conclusion that
+> `1 6 1` does not fit an 80 GB card was drawn twice in these files and **is retired**. The
+> fragmentation-against-total-bytes question below stays open and is less pressing; the
+> confounded `platform` death remains its only datum.
+
 **The churn is large, alternating, once per SCF iteration.** The solve takes a
 `(nk, nbnd, ndim)` wavefunction set in and returns a fresh one, and the old is freed on the
 caller's rebind: **12.10 GB allocated and 12.10 GB freed, every iteration, for hundreds of
