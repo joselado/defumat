@@ -4998,8 +4998,19 @@ def run_scf(
             davidson_steps += steps_here
             davidson_unconverged = int(np.max(np.asarray(unsettled)))
             if verbose:
+                # **The unsettled count is printed and not only recorded.** A
+                # step count says how hard the solve worked; it does not say
+                # whether it gave up, and the two look the same in a log --
+                # ``avg # of iterations = 100.0`` is the budget exactly, which
+                # means every k-point was cut off mid-flight rather than that
+                # the last one took a hundred steps. It is appended only when
+                # something is actually unsettled, so a healthy run's line is
+                # byte for byte ``pw.x``'s.
+                stalled = ("" if davidson_unconverged == 0 else
+                           f",  up to {davidson_unconverged} of {nbnd} bands "
+                           "unsettled")
                 print(f"     ethr = {ethr:9.2E},  avg # of iterations = "
-                      f"{steps_here:4.1f}")
+                      f"{steps_here:4.1f}{stalled}")
             wg, levels = calculation.occupations(eigenvalues)
             becsum_out = calculation.becsum(wavefunctions, wg)
             rho_out = calculation.density(wavefunctions, wg, becsum_out)

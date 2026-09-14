@@ -1751,7 +1751,7 @@ magnetic cell, are both open and neither has a number. `pw.x` uses the same summ
 `rho_ddot` for its schedule, so this would be a deliberate departure rather than a
 correction.
 
-### Y2. `accuracy` cannot see the PAW one-centre half of `becsum` at all, and the docstring gave the wrong reason **[opened 2026-09-14, from a production run]**
+### Y2. `accuracy` cannot see the PAW one-centre half of `becsum` at all, and the docstring gave the wrong reason **[opened 2026-09-14; the run it was found on is *not* stalled on this, measured and retracted the same day]**
 
 Y1 is about a half that is weighted a factor of 13.6 too lightly. This is about a half that
 is not in the number at all, and the two compound on exactly the same cells.
@@ -1807,11 +1807,33 @@ is what points at the one-centre terms. The checkpoint is kept at
 `/scratch/work/ladovj1/calculations/NiBr2_defumat/k161-h200/scf_iteration.npz`
 (`becsum_0`, `becsum_1`, eigenvalues and occupations are all in it).
 
-**That last step is a hypothesis and is labelled as one by the session that raised it.** The
-gap, the occupations, the energy swing and the Davidson counts are measurements; "`becsum`
-is the thing still moving" is an inference from them, and this project has a named trap for
-an explanation accepted because it fits. Nothing here has measured a `becsum` residual on
-that run, which is the point of the entry.
+**That last step was a hypothesis, it was measured, and it is wrong.** Retracted by the
+session that raised it on the same day, from the live checkpoint of the running job. The
+checkpoint's `__meta__` carries `energy_terms`, so the swing **decomposes** instead of
+having to be inferred, and the first pair of iterations off the local-TF run reads:
+
+| Ry | iteration 29 | iteration 30 | change |
+|---|---|---|---|
+| total | -8926.24777949 | -8926.19519665 | **+0.052583** |
+| one-electron | -13810.642537 | -13810.603247 | +0.039290 |
+| Hartree | 7092.376134 | 7092.391386 | +0.015252 |
+| XC | -886.177080 | -886.179266 | -0.002186 |
+| one-centre PAW | -6554.149937 | -6554.149710 | **+0.000227** |
+
+The four changes sum to the total move to every digit, so nothing is hiding in a term that
+was not listed. The one-electron term is 75 per cent of the move and the Hartree 29; the
+PAW one-centre term is **0.4 per cent**, and `becsum` itself moved 4.45e-2 against a norm of
+25.54, which is 0.17 per cent. **The swing is in the eigenvalues and the smooth density**,
+which is where the Davidson counts were pointing all along, and "`becsum` is what is stuck"
+does not survive the measurement.
+
+**The method is worth more than the retraction.** Decomposing `energy_terms` off the live
+checkpoint is cheaper and sharper than norming `becsum` and inferring, and it samples
+`__meta__` and `becsum_*` alone rather than reading the 12 GB of wavefunctions in the same
+`npz`. It is the right first move on any stalled run whose energy is moving more than its
+`dr2` allows. Note what it took: **it took a decomposition to rule `becsum` out, and no
+number in the log could have**, which is the argument for the diagnostic below rather than
+against it.
 
 **Two things that make the blind half less damped than the rest.** Both preconditioners pass
 `becsum` through at the plain `beta` -- `kerker_preconditioner` gives the argument
@@ -1822,6 +1844,12 @@ of Y1, that the charge half's weight at the envelope's own wavevector is `N^2` l
 "a spin density wave is exactly a state whose whole answer lives in the half that is not
 amplified". A 15-site helix is that state.
 
+**What stands after the retraction.** The code reading does, and it is the entry: `dr2`
+cannot see the one-centre residual, `addusdens` carries the augmentation charge and not the
+all-electron minus pseudo Hartree and XC, and QE's `paw_ddot` is disabled for indefiniteness
+rather than for redundancy. What is retracted is only that this was the cause of *this*
+stall.
+
 **What to do, and what not to.** Do **not** put `paw_ddot` back into `dr2`: QE disabled it
 for a real reason, and here it would be worse, because `scf_accuracy_split`'s own docstring
 records that one ulp in `dr2` moves the `ethr` schedule and with it the last digits of every
@@ -1830,9 +1858,35 @@ the schedule outright. What is wanted is a **`becsum` residual reported beside t
 halves and deliberately fed to nothing** -- not to `ethr`, not to the `conv_thr` test. A
 plain norm is enough; it need not be `paw_ddot` and need not be an energy. That makes the
 blind half visible for the cost of one norm and keeps the property the docstring protects,
-that a diagnostic must not change the run it is diagnosing. Unstarted, and the first thing
-it needs is exactly the measurement the paragraph above says nobody has: read `becsum_0` and
-`becsum_1` off that checkpoint and see whether the thing that is still moving is there.
+that a diagnostic must not change the run it is diagnosing. Unstarted. The episode above is
+the argument *for* it: ruling `becsum` out cost a live-checkpoint decomposition, where one
+norm on the log line would have done it on iteration 20.
+
+### Y3. `davidson_unconverged` is computed every iteration and was never printed **[fixed 2026-09-14]**
+
+The log gave `avg # of iterations` and nothing about whether bands were being abandoned,
+and the two are not the same question: a step count says how hard the solve worked, not
+whether it gave up. On the NiBr2 helix's first local-TF iteration the line read
+`avg # of iterations = 100.0`, which is `MAX_ITERATIONS` **exactly** -- meaning every
+k-point was cut off mid-flight rather than that the last one took a hundred steps, and
+those read identically. `davidson_unconverged`, the worst k-point's `notcnv`, was already
+computed at `scf/driver.py:4999` and already on `scf.history` at `:5221`; it is now
+appended to the same print line, and only when it is nonzero, so a healthy run's line stays
+byte for byte `pw.x`'s. It fires: silicon at `david = 2`, `nbnd = 40`, `diago_full_acc`,
+`conv_thr = 1e-12` prints
+`ethr = 3.55E-05,  avg # of iterations = 19.8,  up to 1 of 40 bands unsettled`.
+
+**What it would have been worth on the run that asked for it**: the Anderson control ran
+50.7, 40.3, 37.2, 35.0, 35.5 steps, settled to 7.7, 4.0, 3.5, then went back to 30.5 and sat
+near 20 for the rest of the run -- it settles and then destabilises, which is not a
+cold-start artefact and which a gapped insulator at fixed `ethr` has no business doing. That
+was diagnosed at iteration 41 by a decomposition (Y2) where the line would have said it at
+iteration 20.
+
+**What is still open behind it** is the destabilisation itself, which this only makes
+visible. `OPEN.md` Part VI item 2 (`diago_david_ndim = 2` at the minimum subspace) and the
+`davidson-empty-ethr-defect` item are the two neighbouring candidates, and neither has been
+run against a gapped spinor PAW cell.
 
 ## X. Downgraded, and test-suite hygiene
 

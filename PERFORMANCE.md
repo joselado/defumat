@@ -1521,7 +1521,23 @@ is 84% of a step:
 All twelve runs land on the same energy to <= 7e-8 Ry.
 
 **Kerker is the win, and it is nearly free.** One FFT per iteration for 24 -> 14 and
-34 -> 20. It is `mix_rho.f90`'s `approx_screening`, and the one thing to get right is that
+34 -> 20. **`local-TF` is not in the same table and its iteration count must not be read
+against these as a wall-clock win**, because its per-iteration cost is not Kerker's: on the
+45-atom NiBr2 slab (dense grid 270x64x240, `nspin_mag = 4`) it is reported at **850 s an
+iteration against Anderson's 130 on the same cell and the same node, a factor of 6.5**.
+Where it goes is not profiled; `_alpha` does its work in numpy on the host, and `mmx = 12`
+with four refreshes is up to 48 operator applications with two FFTs each. That is a
+different regime from the Co(0001) slab where the preconditioner was measured at 0.23 s a
+call against a 5 s iteration, and the difference is the dense grid: this one is 30 times the
+points. Reported by the session running that job on Triton, not re-measured here.
+
+**What it buys on the half it owns, on the same run**, and this is a clean confirmation of
+both preconditioner docstrings on a real cell rather than on a slab benchmark: the first
+`local-TF` step put the **charge** half of `dr2` at **3.55e-5**, below anything forty
+iterations of the Anderson control reached (best 5.35e-5), while the **magnetic** half
+stayed at 8.73e-5 against the control's 8.99e-5. Only the charge is screened, so only the
+charge moves, which is what `kerker_preconditioner` and `local_tf_preconditioner` both say
+they do. It is `mix_rho.f90`'s `approx_screening`, and the one thing to get right is that
 **`q_TF` is derived from the cell, not chosen.** A first version here hardcoded 1.5 1/bohr
 where QE's `rs = (3 Omega/4 pi nelec)^(1/3)`, `q_TF^2 = (12/pi)^(2/3)/rs` gives 1.008 for
 this slab -- over-screening by 2.2x in `q^2`, which cost **48 iterations against 28** at
