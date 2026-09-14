@@ -1099,8 +1099,26 @@ essentially nothing there. nbse2 is the cell that carries it.
 > whole and 0.11 GB per chunk, so it does not eat the saving.
 >
 > **The measurement that confirms it** needs no new instrument: `live` at
-> `-> diagonalize` falls from **30.30 GB to about 19.5**, in the same stage brackets that
+> `-> diagonalize` falls from **30.30 GB to about 16.3**, in the same stage brackets that
 > found `D10`.
+>
+> > **That figure was 19.5 when this paragraph was written, and then 18.7, and both were
+> > wrong in the same way** -- corrected 2026-09-14 by the peer session, against a
+> > measurement already on this page. `live` is `sum(jax.live_arrays())`: it counts what is
+> > **held** and cannot see scratch. So the drop in it is the whole of `vkb`, `30.30 -
+> > 13.96 = 16.34`, and the rebuild's chunk scratch turns up in the *peak* instead. 19.5
+> > came from subtracting `columns` as a new resident cost, which it is not; 18.7 came from
+> > applying the **net** -11.6 GB, which already nets off scratch, to a quantity that has no
+> > scratch in it. **The al4-metal row below says this outright** -- `live` fell 5.57 -> 4.45
+> > MB against a `vkb` of 1.12 MB, the full array and not the array minus anything -- so the
+> > prediction contradicted a number in the same entry. A net figure and a resident figure
+> > are not interchangeable, and mixing them is how a right measurement produces a wrong
+> > forecast.
+> >
+> > This also makes `live` a **discriminating** check rather than a confirming one: 30.30 is
+> > independently `13.96 (vkb) + 12.10 (one wavefunction set) + ~4 GB of density and
+> > potential`, so if it lands near 18.7 instead of 16.3 there is something resident that
+> > neither session has a line for, which is a more interesting result than the dial working.
 >
 > The entry's own "corrected saving" arithmetic above is unaffected and still describes
 > nbse2. What changes is only the claim that the slab does not carry this.
