@@ -426,3 +426,54 @@ def test_a_driven_field_refuses_the_mid_scf_checkpoint_too(pseudo_dir, tmp_path,
     printed = capsys.readouterr().out
     assert "checkpointing is off for this run" in printed
     assert "fixed-spin-moment" in printed
+
+
+def test_a_checkpoint_beats_a_seed_passed_on_the_same_line(tmp_path, pseudo_dir):
+    """The recovery this feature advertises is "resubmit the same line".
+
+    A cluster script's line carries its seed on every submission, so the
+    mutual-exclusion check fired on exactly the run that was meant to be
+    rescued -- `ValueError: starting_from already carries the density`. The
+    checkpoint is strictly later state than any seed, so it wins, and it says
+    so rather than ignoring an argument silently.
+    """
+    out = tmp_path / "ckpt"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(
+            "tests/data/qe/h-atom-lsda.in", pseudo_dir=pseudo_dir, announce=False)
+        first = run_scf(calculator.system, calculator.pseudos, max_iterations=2,
+                        checkpoint_dir=out, checkpoint_every=1)
+        seed = np.asarray(first.density)
+
+    # the resubmitted line: same arguments, seed included, checkpoint present
+    with pytest.warns(RuntimeWarning, match="ignoring starting_density"):
+        again = run_scf(calculator.system, calculator.pseudos, max_iterations=2,
+                        checkpoint_dir=out, checkpoint_every=1,
+                        starting_density=seed)
+    assert again.iterations > first.iterations, "the resume did not continue"
+
+
+def test_an_unreadable_mixer_costs_the_history_and_not_the_run(tmp_path, pseudo_dir):
+    """The two halves of a restart are not equally recoverable.
+
+    A state that will not load means there is nothing to resume. A *mixer* that
+    will not load costs the Anderson history -- some iterations of plain mixing
+    and nothing else. Letting the cheap failure raise turns "the resume is
+    slower" into "the resume is dead", on the run least able to afford it.
+    """
+    from defumat.scf.driver import SCF_MIXER
+
+    out = tmp_path / "ckpt"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(
+            "tests/data/qe/h-atom-lsda.in", pseudo_dir=pseudo_dir, announce=False)
+        run_scf(calculator.system, calculator.pseudos, max_iterations=2,
+                checkpoint_dir=out, checkpoint_every=1)
+
+    (out / SCF_MIXER).write_bytes(b"not an npz")
+    with pytest.warns(RuntimeWarning, match="could not restore the mixer history"):
+        resumed = run_scf(calculator.system, calculator.pseudos, max_iterations=2,
+                          checkpoint_dir=out, checkpoint_every=1)
+    assert resumed.iterations > 2, "the resume did not survive a broken mixer"

@@ -4485,6 +4485,19 @@ def run_scf(
     state's field is then not the input's and ``save_state`` will not write a
     lossy one.
 
+    **Two things about a resume that the argument names do not say.** Passing
+    ``checkpoint_dir`` at a directory that already holds a state *resumes from
+    it*, and if the same call also carries a seed (``starting_density`` and its
+    siblings) the checkpoint wins and the seed is ignored with a warning -- the
+    recovery this feature advertises is "resubmit the same command line", and a
+    cluster script's line carries its seed on every submission. Pass
+    ``checkpoint_dir=None`` to start from the seed instead. And
+    ``max_iterations`` is this **submission's** budget rather than the run's
+    total: the loop runs ``resumed_at + max_iterations``, which is what a
+    resubmit wants and is not what the name suggests to a caller sizing a wall
+    clock. Use ``max_seconds`` for the wall clock, which is a deadline rather
+    than a count and stops the loop in time to write a checkpoint.
+
     ``starting_ns`` also decides *which* self-consistent solution a DFT+U run
     finds, which ``starting_density`` alone does not: ``init_ns`` fills the
     occupation matrix diagonally by **Hund's rule**, so the default start is
@@ -4555,6 +4568,30 @@ def run_scf(
             system=system, calculation=calculation,
         )
         resumed_state = starting_from
+        # **The checkpoint wins over a seed the caller also passed, rather than
+        # raising.** The recovery this feature advertises is "resubmit the same
+        # line", and a cluster script's line carries its seed on every
+        # submission -- so the mutual-exclusion check below fired on exactly the
+        # run that was meant to be rescued. The checkpoint is strictly later
+        # state than any seed, so preferring it is also the right answer and not
+        # merely the convenient one. Said out loud, because silently ignoring an
+        # argument is how a run comes back from a state nobody chose.
+        dropped = [name for name, value in (
+            ("starting_density", starting_density),
+            ("starting_becsum", starting_becsum),
+            ("starting_ns", starting_ns),
+            ("starting_wavefunctions", starting_wavefunctions),
+        ) if value is not None]
+        if dropped:
+            warnings.warn(
+                f"resuming from the checkpoint in {checkpoint_dir} and ignoring "
+                f"{', '.join(dropped)}: the checkpoint is later state than a "
+                f"seed, and a resubmitted command line carries its seed every "
+                f"time. Pass checkpoint_dir=None to start from the seed instead",
+                RuntimeWarning, stacklevel=2,
+            )
+            starting_density = starting_becsum = None
+            starting_ns = starting_wavefunctions = None
         if mixing_from is None and (Path(checkpoint_dir) / SCF_MIXER).exists():
             mixing_from = checkpoint_dir
         if verbose:
@@ -4613,9 +4650,30 @@ def run_scf(
         # ``load_optimizer`` on the BFGS side.
         from defumat.scf.checkpoint import load_mixer
 
-        load_mixer(mixer, Path(mixing_from) / SCF_MIXER)
-        if verbose:
-            print(f"  mixer history restored from {mixing_from}")
+        # **Guarded, because the two halves of a restart are not equally
+        # recoverable.** A state that will not load means there is nothing to
+        # resume; a *mixer* that will not load costs the Anderson history, which
+        # is some iterations of plain mixing and nothing else. Letting the
+        # cheap failure raise turns "the resume is slower" into "the resume is
+        # dead", which is backwards -- and it is the run after a kill, the one
+        # least able to afford it. The write itself is already atomic
+        # (``.partial`` then ``replace``), so this covers the cases that are not
+        # a torn write: a format change, a truncated filesystem, an unreadable
+        # file.
+        try:
+            load_mixer(mixer, Path(mixing_from) / SCF_MIXER)
+        except Exception as failure:       # noqa: BLE001 -- see above
+            warnings.warn(
+                f"could not restore the mixer history from {mixing_from} "
+                f"({type(failure).__name__}: {failure}); continuing with an "
+                f"empty history. The density is unaffected -- this costs the "
+                f"iterations the saved history would have saved, and nothing "
+                f"else",
+                RuntimeWarning, stacklevel=2,
+            )
+        else:
+            if verbose:
+                print(f"  mixer history restored from {mixing_from}")
     rho = (
         calculation.starting_density() if starting_density is None
         else jnp.asarray(starting_density)
