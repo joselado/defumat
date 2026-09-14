@@ -114,8 +114,53 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-__all__ = ["VerticalTransport", "transmission", "spin_transmission",
-           "amplitude_weights", "channel_basis"]
+__all__ = ["VerticalTransport", "TransportGeometry", "transmission",
+           "spin_transmission", "amplitude_weights", "channel_basis"]
+
+
+@dataclass(frozen=True)
+class TransportGeometry:
+    """Where the bands live: the sphere, the cell and the k-points.
+
+    Everything the contraction needs that is not a band index -- and it is a
+    bundle rather than a :class:`~defumat.scf.driver.Calculation` because the
+    same contraction serves two different objects. For an ordinary run these
+    are the unit cell's own plane-wave spheres and k-points; for an ultracell
+    (``PLAN.md`` P89) they are the ultracell's ``G + Q`` sphere, its lattice
+    vectors ``n_i a_i`` and the ultracell Brillouin zone's ``k0``, and nothing
+    downstream has to know which it was handed.
+
+    Attributes:
+        miller: ``(nk, npwx, 3)`` Miller indices, per k-point, in the
+            reciprocal basis of ``cell``.
+        mask: ``(nk, npwx)`` which entries are plane waves rather than padding.
+        kcrystal: ``(nk, 3)`` the k-points in the crystal basis of ``cell``.
+        kweights: ``(nk,)`` their weights, carrying the spin degeneracy exactly
+            as they do everywhere else here.
+        cell: the :class:`~defumat.system.cell.Cell` the exit integral's area
+            and volume come from.
+        npol: 1 or 2.
+        apply_s: ``(psi, ik) -> S psi``, or ``None`` where the overlap is the
+            identity -- a norm-conserving dataset, which is what an ultracell
+            is restricted to. Only :func:`~defumat.transport.substrate.volume_overlap`
+            uses it; the exit plane is in the vacuum, where ``S`` is 1.
+    """
+
+    miller: np.ndarray
+    mask: np.ndarray
+    kcrystal: np.ndarray
+    kweights: np.ndarray
+    cell: object
+    npol: int = 1
+    apply_s: object = None
+
+    @property
+    def npwx(self) -> int:
+        return int(np.asarray(self.miller).shape[1])
+
+    @property
+    def volume(self) -> float:
+        return float(self.cell.volume)
 
 
 def amplitude_weights(eigenvalues, energy: float, broadening: float,

@@ -52,6 +52,7 @@ from defumat.scf.driver import Calculation, gamma_storage_is_consumable
 from defumat.stm.plane import PlotPlane
 from defumat.transport.green import (
     DEGENERACY_TOL,
+    TransportGeometry,
     VerticalTransport,
     amplitude_weights,
     channel_basis,
@@ -259,7 +260,7 @@ def run_vertical_transport(
     wavefunctions = np.asarray(wavefunctions)
 
     values, extras = _assemble(
-        calculation, wavefunctions, eigenvalues, points,
+        _geometry(calculation), wavefunctions, eigenvalues, points,
         exit_height=float(exit_height), exit_axis=exit_axis,
         energies=grid_energies, broadening=float(broadening),
         spin=spin, polarization=float(polarization),
@@ -555,7 +556,23 @@ def whole_grid(system, grid, shift=None) -> KPoints:
 
 
 
-def _assemble(calculation, wavefunctions, eigenvalues, points, *,
+def _geometry(calculation) -> TransportGeometry:
+    """The bundle :func:`_assemble` walks, out of a plane-wave run."""
+    used = calculation.system
+    basis = build_basis(used)
+    return TransportGeometry(
+        miller=np.asarray(basis.planewaves.miller(basis.smooth)),
+        mask=np.asarray(basis.planewaves.mask),
+        kcrystal=np.asarray(used.kpoints.crystal(used.cell)),
+        kweights=np.asarray(used.kpoints.weights, dtype=float),
+        cell=used.cell,
+        npol=2 if calculation.noncolin else 1,
+        apply_s=(calculation._spinor_overlap if calculation.noncolin
+                 else calculation._overlap),
+    )
+
+
+def _assemble(geometry, wavefunctions, eigenvalues, points, *,
               exit_height, exit_axis, energies, broadening, spin,
               polarization, tip_spin, tip_polarization, incoherent,
               exit_region, method, smearing, k_batch=None):
@@ -589,15 +606,13 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
     chosen because a device wants the whole axis -- does **not** bound it. A
     machine with a GPU and an image-sized ``npoints`` should pass a number.
     """
-    used = calculation.system
-    basis = build_basis(used)
-    miller = np.asarray(basis.planewaves.miller(basis.smooth))
-    mask = np.asarray(basis.planewaves.mask)
-    kcrystal = np.asarray(used.kpoints.crystal(used.cell))
-    kweights = np.asarray(used.kpoints.weights, dtype=float)
-    volume = float(used.cell.volume)
-    npol = 2 if calculation.noncolin else 1
-    npwx = basis.npwx
+    miller = np.asarray(geometry.miller)
+    mask = np.asarray(geometry.mask)
+    kcrystal = np.asarray(geometry.kcrystal)
+    kweights = np.asarray(geometry.kweights, dtype=float)
+    volume = geometry.volume
+    npol = int(geometry.npol)
+    npwx = geometry.npwx
 
     projector, channel_scale = _substrate_acceptance(
         spin, polarization, npol, wavefunctions.shape[0])
@@ -605,9 +620,9 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
         tip_spin, tip_polarization, npol, wavefunctions.shape[0])
     # ``S`` without a Hamiltonian to hang it on, which the volume diagnostic
     # needs and the plane does not: the augmentation charge is zero in the
-    # vacuum where both planes of a tunnelling geometry sit.
-    apply_s = (calculation._spinor_overlap if calculation.noncolin
-               else calculation._overlap)
+    # vacuum where both planes of a tunnelling geometry sit. ``None`` is the
+    # identity, which is what a norm-conserving dataset's overlap is.
+    apply_s = geometry.apply_s
 
     nspin, nk, nbnd, _ = wavefunctions.shape
     total = np.zeros((energies.shape[0], points.shape[0]))
@@ -652,11 +667,13 @@ def _assemble(calculation, wavefunctions, eigenvalues, points, *,
                 if exit_region == "volume":
                     overlaps[at] = volume_overlap(
                         block, mask[ik], npol,
-                        overlap=lambda p, i=ik: apply_s(p, i))
+                        overlap=(None if apply_s is None
+                                 else (lambda p, i=ik: apply_s(p, i))))
                 else:
                     overlaps[at] = exit_overlap(
-                        block, miller[ik], exit_height, exit_axis, used.cell,
-                        mask=mask[ik], npol=npol, projector=projector,
+                        block, miller[ik], exit_height, exit_axis,
+                        geometry.cell, mask=mask[ik], npol=npol,
+                        projector=projector,
                     )
                 sampled = sample_wavefunctions(
                     block.reshape((nbnd, npol, npwx)), miller[ik],
