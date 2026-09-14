@@ -66,21 +66,97 @@ class Projectors(eqx.Module):
     coefficient matrix, block-diagonal over atoms.
     """
 
-    vkb: jnp.ndarray  # (nk, npwx, nkb), complex
+    #: ``(nk, npwx, nkb)`` complex, or ``None`` when this set is **lazy** and
+    #: rebuilds one k-point at a time from :attr:`core` -- see :meth:`at_k` and
+    #: the class docstring. Read it through the :attr:`vkb` property, never
+    #: directly: on a lazy set the property materialises the whole-k array,
+    #: which is exactly what a lazy set exists not to hold.
+    stored: jnp.ndarray | None
     dij: jnp.ndarray  # (nkb, nkb), Ry
     atom_of_channel: tuple[int, ...] = eqx.field(static=True)
     #: ``q_ij``, the integral of the augmentation charge, block diagonal over
     #: atoms like ``dij``. ``None`` for a purely norm-conserving calculation,
     #: which is what makes ``S`` the identity there.
     qq: jnp.ndarray | None = None
+    #: The phase-free core and the positions, kept only by a **lazy** set. They
+    #: are what :meth:`at_k` rebuilds from, and they are ``(nk, npwx, ncs)``
+    #: against :attr:`stored`'s ``(nk, npwx, nkb)`` -- smaller by the
+    #: multiplicity of each species, which on a 45-atom cell of two species is
+    #: about twenty.
+    core: "ProjectorCore | None" = None
+    positions: jnp.ndarray | None = None
+
+    @property
+    def is_lazy(self) -> bool:
+        """Whether this set rebuilds per k rather than holding the whole array."""
+        return self.stored is None
+
+    @property
+    def dtype(self):
+        """The complex dtype, **without materialising anything.**
+
+        ``projectors.vkb.dtype`` on a lazy set would build the whole-k array to
+        read a five-byte attribute off it, which is the silent version of this
+        feature not working. Every dtype read goes through here.
+        """
+        return (self.core.complex_dtype if self.stored is None
+                else self.stored.dtype)
+
+    @property
+    def nk(self) -> int:
+        return (self.core.columns.shape[0] if self.stored is None
+                else self.stored.shape[0])
+
+    @property
+    def vkb(self) -> jnp.ndarray:
+        """``(nk, npwx, nkb)``, materialising a lazy set if it has to.
+
+        Every consumer that wants the whole k-axis at once -- the forces, the
+        response stack, the topology overlaps -- reads this and is unchanged by
+        laziness. Inside the eigensolver, where the whole-k array *is* the
+        memory problem, use :meth:`at_k` instead.
+        """
+        if self.stored is not None:
+            return self.stored
+        return _apply_phases(
+            self.core.columns, self.core.kg, self.positions, self.core.mask,
+            jnp.asarray(self.core.atom_of_channel), self.core.column_of_channel,
+        ).astype(self.core.complex_dtype)
+
+    def at_k(self, ik) -> jnp.ndarray:
+        """``(npwx, nkb)`` for one k-point, built rather than sliced.
+
+        This is ``init_us_2`` called inside ``c_bands.f90``'s ``k_loop``: QE
+        holds one k-point's projectors however many there are, and this is the
+        same trade. ``ik`` may be a tracer -- it is, everywhere this is called
+        from, since :func:`~defumat.batching.map_k` walks the axis with
+        ``jnp.arange``.
+
+        **Rebuilding costs less memory than hoisting, which is the opposite of
+        the obvious worry.** Compiled inside a ``lax.while_loop`` body with
+        loop-invariant inputs at slab-like shapes, the scratch is one ``vkb``
+        (297.8 MB) where lifting the build out of the loop by hand is 1.5 of
+        them (446.4 MB): XLA does not hoist it, and the loop-carried array it
+        would otherwise hold is the larger cost. What rebuilding does cost is
+        ``nat npwx`` complex exponentials per call.
+        """
+        if self.stored is not None:
+            return self.stored[ik]
+        return _apply_phases(
+            self.core.columns[ik], self.core.kg[ik], self.positions,
+            self.core.mask[ik], jnp.asarray(self.core.atom_of_channel),
+            self.core.column_of_channel,
+        ).astype(self.core.complex_dtype)
 
     @property
     def nkb(self) -> int:
-        return self.vkb.shape[-1]
+        if self.stored is not None:
+            return self.stored.shape[-1]
+        return len(self.atom_of_channel)
 
     def project(self, psi: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``<beta|psi>`` for wavefunctions ``psi`` of shape ``(..., npwx)``."""
-        return jnp.einsum("...g,gk->...k", psi.conj(), self.vkb[ik]).conj()
+        return jnp.einsum("...g,gk->...k", psi.conj(), self.at_k(ik)).conj()
 
 
 class ProjectorCore(eqx.Module):
@@ -112,14 +188,29 @@ class ProjectorCore(eqx.Module):
     column_of_channel: jnp.ndarray = eqx.field(converter=jnp.asarray)
     complex_dtype: object = eqx.field(static=True, default=None)
 
-    def at_positions(self, positions: jnp.ndarray, qq=None) -> Projectors:
-        """The projectors for atoms at ``positions`` (cartesian, bohr)."""
+    def at_positions(self, positions: jnp.ndarray, qq=None,
+                     lazy: bool = False) -> Projectors:
+        """The projectors for atoms at ``positions`` (cartesian, bohr).
+
+        ``lazy`` returns a set that holds *this core* and the positions instead
+        of the ``(nk, npwx, nkb)`` array, and rebuilds one k-point at a time on
+        demand (:meth:`Projectors.at_k`). The arithmetic is identical -- same
+        expression, same order -- so nothing about a result moves; what changes
+        is that the largest resident array in a many-k run stops being resident.
+        See :mod:`defumat.batching` for the dial that chooses.
+        """
+        if lazy:
+            return Projectors(
+                stored=None, dij=self.dij,
+                atom_of_channel=self.atom_of_channel, qq=qq,
+                core=self, positions=positions,
+            )
         vkb = _apply_phases(
             self.columns, self.kg, positions, self.mask,
             jnp.asarray(self.atom_of_channel), self.column_of_channel,
         )
         return Projectors(
-            vkb=vkb.astype(self.complex_dtype),
+            stored=vkb.astype(self.complex_dtype),
             dij=self.dij,
             atom_of_channel=self.atom_of_channel,
             qq=qq,
@@ -269,7 +360,10 @@ def _apply_phases(columns, kg, tau, mask, atom_of, column_of):
     The only place the atomic positions enter the nonlocal pseudopotential, and
     therefore the only place ``grad`` with respect to them has to reach.
     """
-    phases = jnp.exp(-1j * jnp.einsum("kgc,ac->kga", kg, tau))  # (nk, npwx, nat)
+    # ``...`` rather than ``k``: the same expression serves the whole k-axis
+    # and one k-point's slice of it, which is what lets a lazy ``Projectors``
+    # rebuild through this without a second implementation of the phase.
+    phases = jnp.exp(-1j * jnp.einsum("...gc,ac->...ga", kg, tau))
     vkb = jnp.take(columns, column_of, axis=-1) * jnp.take(phases, atom_of, axis=-1)
     return jnp.where(mask[..., None], vkb, 0.0)
 

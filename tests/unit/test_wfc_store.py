@@ -242,6 +242,7 @@ def test_the_resolved_mode_is_printed_and_a_typo_does_not_read_as_a_pin(
     printed = capsys.readouterr().out
     assert "wfc_store = device" in printed
     assert "k_batch = " in printed and "band_batch = " in printed
+    assert "projectors = store" in printed
 
     # The typo. The run falls back to the platform default; the log must say
     # the default, and must not echo what was asked for.

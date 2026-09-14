@@ -446,12 +446,13 @@ class Calculator:
                 diagonalization=self.defaults.get("diagonalization"),
                 k_batch=self.defaults.get("k_batch", "default"),
                 david=self.defaults.get("david"),
+                projectors=self.defaults.get("projectors", "default"),
             )
         return self._calculation
 
     #: The options that define a :class:`~defumat.scf.driver.Calculation`
     #: rather than one run over it. Given per call, they have to rebuild it.
-    SETUP_OPTIONS = ("diagonalization", "k_batch", "david")
+    SETUP_OPTIONS = ("diagonalization", "k_batch", "david", "projectors")
 
     def _adopt(self, options) -> None:
         """Take a per-call setup option as this calculator's own.
@@ -463,7 +464,8 @@ class Calculator:
         """
         changed = {name: options[name] for name in self.SETUP_OPTIONS
                    if name in options and options[name] != self.defaults.get(
-                       name, "default" if name == "k_batch" else None)}
+                       name, "default"
+                       if name in ("k_batch", "projectors") else None)}
         if changed:
             self.defaults.update(changed)
             self._calculation = None

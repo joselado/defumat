@@ -269,6 +269,7 @@ from ._envcompat import environ_get
 __all__ = ["DEFAULT_K_BATCH", "resolve_k_batch", "map_k", "sum_k",
            "DEFAULT_BAND_BATCH", "resolve_band_batch", "map_bands",
            "sum_bands", "map_axis",
+           "PROJECTOR_STORES", "resolve_projectors",
            "WFC_STORES", "resolve_wfc_store", "park_wavefunctions",
            "fetch_wavefunctions"]
 
@@ -548,6 +549,57 @@ def sum_bands(fn, xs, *, batch: int | None | str = "default"):
 
 #: The two places the store can be. ``"device"`` is this package's own history
 #: and is what a CPU wants; ``"host"`` is QE's buffer.
+#: Whether ``<k+G|beta>`` is held for every k-point or rebuilt one at a time.
+#:
+#: ``vkb`` is ``(nk, npwx, nkb)`` and is **resident for the whole run**: on the
+#: 45-atom NiBr2 slab it is 13.96 GB against a 12.10 GB wavefunction set, the
+#: largest single array there after the states themselves. QE does not hold it
+#: -- ``c_bands.f90:111`` calls ``init_us_2`` inside ``k_loop``, so its
+#: projector storage is one k-point's however many there are.
+#:
+#: ``rebuild`` is that: the ``ProjectorCore`` stays resident, which is
+#: ``(nk, npwx, ncs)`` with one column per *species* channel rather than per
+#: *atom* channel -- about twenty times smaller on a 45-atom cell of two
+#: species -- and each k-point's ``(npwx, nkb)`` is formed on demand.
+#:
+#: **The saving is in the resident set, which is what makes it different from
+#: the other dials**: `k_batch` and `band_batch` bound what is in *flight*, and
+#: this bounds what is *held*, so it sits underneath every stage rather than
+#: inside one. It costs ``nat npwx`` complex exponentials per use.
+#:
+#: The default is ``store``, which is what every validated number on record was
+#: measured with. ``DEFUMAT_PROJECTORS`` overrides it and an explicit
+#: ``projectors=`` argument overrides that -- the precedence the other dials
+#: have.
+PROJECTOR_STORES = ("store", "rebuild")
+
+
+def _projectors_default() -> str:
+    setting = (environ_get("DEFUMAT_PROJECTORS", "") or "").strip().lower()
+    if setting in PROJECTOR_STORES:
+        return setting
+    if setting:
+        warnings.warn(
+            f"ignoring DEFUMAT_PROJECTORS={setting!r}: expected one of "
+            f"{PROJECTOR_STORES}", RuntimeWarning, stacklevel=2,
+        )
+    return "store"
+
+
+def resolve_projectors(requested: str | None = "default") -> str:
+    """Which projector storage is in force: an argument, then the environment."""
+    value = requested
+    if value is None or value == "default":
+        return _projectors_default()
+    value = str(value).strip().lower()
+    if value not in PROJECTOR_STORES:
+        raise ValueError(
+            f"projectors must be one of {PROJECTOR_STORES} or 'default', got "
+            f"{requested!r}"
+        )
+    return value
+
+
 WFC_STORES = ("device", "host")
 
 

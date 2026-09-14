@@ -1104,6 +1104,43 @@ essentially nothing there. nbse2 is the cell that carries it.
 >
 > The entry's own "corrected saving" arithmetic above is unaffected and still describes
 > nbse2. What changes is only the claim that the slab does not carry this.
+>
+> **Implemented 2026-09-14, and the saving is larger than either figure above.** The dial is
+> `projectors` / `DEFUMAT_PROJECTORS` / `Calculation(projectors=...)`, `store` (the default,
+> and what every validated number on record was measured with) against `rebuild`.
+> `Projectors` holds either the `(nk, npwx, nkb)` array or the core plus the positions, and
+> `at_k(ik)` builds one k-point's `(npwx, nkb)` through the *same* `_apply_phases` -- an
+> ellipsis replaces the k index, so there is no second implementation of the phase.
+>
+> **The saving is the whole of `vkb`, not `vkb` minus `columns`.** This entry and the
+> correction above both subtracted `columns` as a new resident cost. It is not new:
+> `driver.py:1488` keeps `projector_core` alive in **both** modes, so `columns`, `kg` and
+> `mask` were always on the books. Measured on `al4-metal` at `nk = 10`, summing
+> `jax.live_arrays()`: **5.57 MB -> 4.45 MB**, a drop of **1.12 MB against a `vkb` of
+> 1.12 MB**, to the digit.
+>
+> **What it costs is scratch inside the solve**, and that is measured too, on the same cell
+> through `_every_k.lower(...).compile().memory_analysis()`:
+>
+> | | arguments | temp |
+> |---|---|---|
+> | `store` | 1.33 MB | 1.47 MB |
+> | `rebuild` | 0.60 MB | 1.91 MB |
+>
+> So the executable gives back about 39 per cent of what the resident set saves, and the
+> scratch scales with the *chunk* rather than the whole axis. At the slab's shapes -- `vkb`
+> 13.96 GB, `k_batch 1`, so a chunk of 2.33 GB -- that is **about -11.6 GB net**, which is
+> where the ~11 GB estimate lands from the other direction.
+>
+> **Rebuilding inside the loop is cheaper than hoisting, which is the opposite of the
+> obvious worry.** Compiled into a `lax.while_loop` body with loop-invariant inputs at
+> slab-like shapes: **297.8 MB** of scratch built inside against **446.4 MB** lifted out by
+> hand. XLA does not hoist it, and the loop-carried array it would otherwise hold is the
+> larger cost. The time cost is real and is `nat npwx` complex exponentials per use.
+>
+> **`sizing.py` does not model the dial** -- its `projectors vkb (nk,npwx,nkb)` line is the
+> stored route unconditionally, so an estimate taken for a `rebuild` run is high by `vkb`.
+> That is `D11`, below.
 
 **Cost in time.** `nat x npwx` complex exponentials and two gathers per k per `map_k` body — on
 nbse2, `3 x 9804 ~ 29k` exponentials per k per SCF iteration, against a 57 s iteration (744 s / 13).
@@ -1693,6 +1730,21 @@ modelled resident `46.12 - 18.55 = 27.57 GiB = 29.60 GB` against a measured 30.3
 `-> diagonalize`, **2.3 per cent**. Every previous attempt on this cell went looking for a
 missing *resident* term; there is not one, and `OPEN.md` Part VII item 1 records what
 happened to the last analysis that assumed otherwise.
+
+---
+
+### D11. The `projectors` dial is not in the model, so a `rebuild` run is sized as a `store` one
+
+`sizing.py`'s `projectors vkb (nk, npwx, nkb)` line is unconditional, and under
+`projectors = "rebuild"` (A13) that array is never held -- the resident cost is the
+`ProjectorCore`, which `arrays` does not carry a line for either (`D5`). So the estimate is
+**high by `vkb`** for a rebuild run and, because `D5` is still open, low by the core for both.
+On the 45-atom slab those are 13.96 GB and about 0.7 GB.
+
+It is the same shape as `D1`: a dial resolved somewhere other than where the estimate is
+taken. The fix is the same too -- `estimate_size` should take `projectors` the way it takes
+`k_batch` and `davidson_basis`, resolve it as the run would, and report it in the header
+beside them, so the report describes the run that will happen rather than a neighbouring one.
 
 ---
 

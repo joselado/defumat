@@ -118,7 +118,7 @@ class Hamiltonian(eqx.Module):
 
     @property
     def dtype(self):
-        return self.projectors.vkb.dtype
+        return self.projectors.dtype
 
     @property
     def state_mask(self) -> jnp.ndarray:
@@ -169,10 +169,10 @@ class Hamiltonian(eqx.Module):
         """
         if not self.has_overlap:
             width = 0
-            empty = self.projectors.vkb[ik][:, :width]
+            empty = self.projectors.at_k(ik)[:, :width]
             becp = vectors @ empty.conj()
             return becp, becp
-        vkb = self.projectors.vkb[ik]
+        vkb = self.projectors.at_k(ik)
         becp = self._becp(vectors, vkb)
         return becp, becp @ self.projectors.qq.astype(vkb.dtype).T
 
@@ -180,7 +180,7 @@ class Hamiltonian(eqx.Module):
         """``(S - 1)|psi>`` from the stored ``q <beta|psi>``."""
         if not self.has_overlap:
             return jnp.zeros(becq.shape[:-1] + (self.ndim,), dtype=self.dtype)
-        return becq @ self.projectors.vkb[ik].T
+        return becq @ self.projectors.at_k(ik).T
 
     @property
     def coefficients(self) -> jnp.ndarray:
@@ -208,7 +208,7 @@ class Hamiltonian(eqx.Module):
         psi = jnp.where(self.mask[ik], psi, 0.0)
         if not self.has_overlap:
             return psi
-        vkb = self.projectors.vkb[ik]
+        vkb = self.projectors.at_k(ik)
         becp = self._becp(psi, vkb)
         qq = self.projectors.qq.astype(vkb.dtype)
         result = psi + jnp.einsum("gk,...k->...g", vkb, becp @ qq.T)
@@ -218,7 +218,7 @@ class Hamiltonian(eqx.Module):
         """``<k+G|S|k+G>``, the preconditioner's ``s_diag`` (``usnldiag``)."""
         if not self.has_overlap:
             return jnp.where(self.mask[ik], 1.0, 0.0)
-        vkb = self.projectors.vkb[ik]
+        vkb = self.projectors.at_k(ik)
         qq = self.projectors.qq.astype(vkb.dtype)
         diagonal = 1.0 + jnp.real(jnp.einsum("gi,ij,gj->g", vkb.conj(), qq, vkb))
         return jnp.where(self.mask[ik], diagonal, 0.0)
@@ -283,7 +283,7 @@ class Hamiltonian(eqx.Module):
         """``sum_ij |beta_i> D_ij <beta_j|psi>``."""
         if self.projectors.nkb == 0:
             return jnp.zeros_like(psi)
-        vkb = self.projectors.vkb[ik]  # (npwx, nkb)
+        vkb = self.projectors.at_k(ik)  # (npwx, nkb)
         becp = self._becp(psi, vkb)  # <beta|psi>
         dij = self.coefficients.astype(vkb.dtype)
         return jnp.einsum("gk,...k->...g", vkb, becp @ dij.T)
@@ -300,7 +300,7 @@ class Hamiltonian(eqx.Module):
         if self.hubbard is not None:
             diagonal = diagonal + self.hubbard.diagonal(ik)
         if self.projectors.nkb:
-            vkb = self.projectors.vkb[ik]
+            vkb = self.projectors.at_k(ik)
             dij = self.coefficients.astype(vkb.dtype)
             diagonal = diagonal + jnp.real(
                 jnp.einsum("gi,ij,gj->g", vkb.conj(), dij, vkb)
@@ -317,10 +317,10 @@ class Hamiltonian(eqx.Module):
         spurious eigenvalue.
         """
         mask = self.mask[ik]
-        identity = jnp.eye(self.npwx, dtype=self.projectors.vkb.dtype)
+        identity = jnp.eye(self.npwx, dtype=self.projectors.dtype)
         if not self.has_overlap:
             return identity
-        vkb = self.projectors.vkb[ik]
+        vkb = self.projectors.at_k(ik)
         qq = self.projectors.qq.astype(vkb.dtype)
         correction = vkb @ qq @ vkb.conj().T
         correction = jnp.where(mask[:, None] & mask[None, :], correction, 0.0)
@@ -334,7 +334,7 @@ class Hamiltonian(eqx.Module):
         reference that :meth:`matrix` -- which does use a formula -- is checked
         against, and through it the whole operator.
         """
-        identity = jnp.eye(self.npwx, dtype=self.projectors.vkb.dtype)
+        identity = jnp.eye(self.npwx, dtype=self.projectors.dtype)
         columns = self.apply(identity, ik)  # row b holds H e_b
         matrix = columns.T
         return 0.5 * (matrix + matrix.conj().T)
@@ -379,7 +379,7 @@ class Hamiltonian(eqx.Module):
         # are matrices already, with no transform involved.
         matrix = matrix + jnp.diag(self.kinetic[ik].astype(matrix.dtype))
         if self.projectors.nkb:
-            vkb = self.projectors.vkb[ik]
+            vkb = self.projectors.at_k(ik)
             matrix = matrix + vkb @ self.coefficients.astype(vkb.dtype) @ vkb.conj().T
         if self.hubbard is not None:
             matrix = matrix + self.hubbard.matrix(ik)

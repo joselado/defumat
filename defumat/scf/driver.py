@@ -99,7 +99,7 @@ from defumat.pseudo.upf import Pseudopotential
 from defumat.pseudo.spinorbit import becsum_transform, build_spin_orbit
 from defumat.batching import (
     fetch_wavefunctions, map_k, park_wavefunctions, resolve_band_batch,
-    resolve_k_batch, resolve_wfc_store,
+    resolve_k_batch, resolve_projectors, resolve_wfc_store,
 )
 from defumat.scf.continuation import ContinuedState, continued_state
 from defumat.scf.density import (
@@ -1322,6 +1322,7 @@ class Calculation:
         diagonalization: str | None = None,
         k_batch: int | None | str = "default",
         david: int | None = None,
+        projectors: str | None = "default",
     ):
         # **The substitution is conditional now.** Half-sphere storage is
         # consumed where it can be and substituted away where it cannot, so
@@ -1489,7 +1490,15 @@ class Calculation:
             self.pseudos, system.structure, system.cell, smooth, planewaves,
             self.basis_kpoints,
         )
-        self.projectors = self.projector_core.at_positions(system.structure.positions)
+        # ``rebuild`` keeps the *core* and forms each k-point's ``(npwx, nkb)``
+        # on demand, which is ``init_us_2`` inside ``c_bands.f90``'s ``k_loop``.
+        # It is a **resident**-set dial, so unlike ``k_batch`` it sits under
+        # every stage rather than inside one. See :mod:`defumat.batching`.
+        self.projector_storage = resolve_projectors(projectors)
+        self.projectors = self.projector_core.at_positions(
+            system.structure.positions,
+            lazy=self.projector_storage == "rebuild",
+        )
 
         # The augmentation charge lives on the *dense* grid: it is sharply
         # peaked, and holding it is what the second grid is for. Everything
@@ -2249,7 +2258,9 @@ class Calculation:
         structure = moved.system.structure
 
         qq = None if self.projectors.qq is None else self.projectors.qq
-        moved.projectors = self.projector_core.at_positions(positions, qq=qq)
+        moved.projectors = self.projector_core.at_positions(
+            positions, qq=qq, lazy=self.projector_storage == "rebuild",
+        )
         if self.augmentation is not None:
             moved.augmentation = self.augmentation.at_positions(
                 positions, dense.cartesian(cell)
@@ -4387,6 +4398,7 @@ def run_scf(
     diago_full_acc: bool = False,
     verbose: bool = False,
     k_batch: int | None | str = "default",
+    projectors: str | None = "default",
     wfc_store: str | None = "default",
     starting_density: jnp.ndarray | None = None,
     starting_becsum: tuple | None = None,
@@ -4414,6 +4426,13 @@ def run_scf(
     memory against speed without touching the answer
     (:mod:`defumat.batching`). It is ignored when ``calculation`` is given,
     which already carries its own.
+
+    ``projectors`` is the other half of that trade and is a **resident**-set
+    dial rather than an in-flight one: ``store`` holds ``<k+G|beta>`` for every
+    k-point, ``rebuild`` keeps only the phase-free core and forms each
+    k-point's on demand, which is ``init_us_2`` inside ``c_bands.f90``'s
+    ``k_loop``. Same expression either way, so no number moves. It is ignored
+    when ``calculation`` is given, for the same reason ``k_batch`` is.
 
     ``diago_full_acc`` is ``pw.x``'s switch of the same name, and it is
     ``False`` here as it is there. With it off, a band whose fractional
@@ -4507,7 +4526,7 @@ def run_scf(
     """
     calculation = calculation or Calculation(
         system, pseudos, diagonalization=diagonalization, k_batch=k_batch,
-        david=david
+        david=david, projectors=projectors,
     )
     nbnd = nbnd or system.nbnd or default_nbnd(
         calculation.nelec,
@@ -4716,7 +4735,8 @@ def run_scf(
 
         print(f"  k_batch = {_dial(calculation.k_batch)}  "
               f"band_batch = {_dial(resolve_band_batch())}  "
-              f"wfc_store = {wfc_store}")
+              f"wfc_store = {wfc_store}  "
+              f"projectors = {calculation.projector_storage}")
 
     # A residual solver runs *before* the loop and hands it a density that is
     # already self-consistent, so the loop's first iteration is what turns that

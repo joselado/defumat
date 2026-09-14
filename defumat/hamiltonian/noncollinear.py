@@ -178,7 +178,7 @@ class SpinorHamiltonian(eqx.Module):
 
     @property
     def dtype(self):
-        return self.projectors.vkb.dtype
+        return self.projectors.dtype
 
     @property
     def has_overlap(self) -> bool:
@@ -254,18 +254,18 @@ class SpinorHamiltonian(eqx.Module):
         """
         if not self.spiral:
             return jnp.einsum(
-                "gk,...ag->...ak", self.projectors.vkb[ik].conj(), components
+                "gk,...ag->...ak", self.projectors.at_k(ik).conj(), components
             )
         up, down = self._rows(ik)
-        vkb = jnp.stack([self.projectors.vkb[up], self.projectors.vkb[down]])
+        vkb = jnp.stack([self.projectors.at_k(up), self.projectors.at_k(down)])
         return jnp.einsum("agk,...ag->...ak", vkb.conj(), components)
 
     def _unproject(self, coefficients: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``sum_i |beta_i> c^a_i``, shaped ``(..., 2, npwx)``."""
         if not self.spiral:
-            return jnp.einsum("gk,...ak->...ag", self.projectors.vkb[ik], coefficients)
+            return jnp.einsum("gk,...ak->...ag", self.projectors.at_k(ik), coefficients)
         up, down = self._rows(ik)
-        vkb = jnp.stack([self.projectors.vkb[up], self.projectors.vkb[down]])
+        vkb = jnp.stack([self.projectors.at_k(up), self.projectors.at_k(down)])
         return jnp.einsum("agk,...ak->...ag", vkb, coefficients)
 
     def _local(self, components: jnp.ndarray, ik: int) -> jnp.ndarray:
@@ -400,7 +400,7 @@ class SpinorHamiltonian(eqx.Module):
         blocks = [self.kinetic[row] + average for row in rows]
         if self.projectors.nkb:
             for spin, row in enumerate(rows):
-                vkb = self.projectors.vkb[row]
+                vkb = self.projectors.at_k(row)
                 d = self.deeq[spin, spin].astype(self.dtype)
                 blocks[spin] = blocks[spin] + jnp.real(
                     jnp.einsum("gi,ij,gj->g", vkb, d, vkb.conj())
@@ -415,7 +415,7 @@ class SpinorHamiltonian(eqx.Module):
             return jnp.where(self.state_mask[ik], 1.0, 0.0)
         blocks = []
         for spin, row in enumerate(self._rows(ik)):
-            vkb = self.projectors.vkb[row]
+            vkb = self.projectors.at_k(row)
             q = self.qq[spin, spin].astype(self.dtype)
             value = 1.0 + jnp.real(jnp.einsum("gi,ij,gj->g", vkb, q, vkb.conj()))
             blocks.append(jnp.where(self.mask[row], value, 0.0))
@@ -478,8 +478,8 @@ class SpinorHamiltonian(eqx.Module):
                 if self.projectors.nkb:
                     d = self.deeq[row, column].astype(self.dtype)
                     block = block + (
-                        self.projectors.vkb[row_index] @ d
-                        @ self.projectors.vkb[column_index].conj().T
+                        self.projectors.at_k(row_index) @ d
+                        @ self.projectors.at_k(column_index).conj().T
                     )
                 pair = self.mask[row_index][:, None] & self.mask[column_index][None, :]
                 columns.append(jnp.where(pair, block, 0.0))
@@ -507,8 +507,8 @@ class SpinorHamiltonian(eqx.Module):
             for column, column_index in enumerate(component_rows):
                 q = self.qq[row, column].astype(self.dtype)
                 block = (
-                    self.projectors.vkb[row_index] @ q
-                    @ self.projectors.vkb[column_index].conj().T
+                    self.projectors.at_k(row_index) @ q
+                    @ self.projectors.at_k(column_index).conj().T
                 )
                 pair = self.mask[row_index][:, None] & self.mask[column_index][None, :]
                 columns.append(jnp.where(pair, block, 0.0))
