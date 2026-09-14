@@ -1078,9 +1078,13 @@ class Calculator:
         depends on -- it is the size of the variational basis per folded
         k-point, and the answer converges to the real ``N``-cell supercell as it
         grows -- so pass it. ``external`` is an applied potential in Ry over the
-        ultracell and ``magnetic_field`` a collinear applied ``B(r)``, which is
-        what a spin density wave is driven with: ``nspin = 2`` is in and nothing
-        in a collinear SCF breaks spin symmetry on its own.
+        ultracell and ``magnetic_field`` an applied ``B(r)``, which is what a
+        spin density wave is driven with, since nothing in an SCF breaks spin
+        symmetry on its own. Both spin regimes are in: ``nspin = 2`` takes a
+        scalar field and gives a modulation of the moment's *length*, and
+        ``nspin = 4`` takes a vector one and gives a modulation of its
+        *direction* -- a helix or a cycloid -- with spin-orbit coupling along
+        for free, since that lives entirely in the frozen states.
 
         The atoms do not move and the local band structure cannot relax: this
         computes what a modulation does to a fixed crystal, not a different

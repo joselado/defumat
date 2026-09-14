@@ -38,7 +38,7 @@ import jax.numpy as jnp
 
 from defumat.batching import sum_k
 
-__all__ = ["ultracell_density"]
+__all__ = ["ultracell_density", "spinor_ultracell_density"]
 
 
 def ultracell_density(
@@ -83,6 +83,83 @@ def ultracell_density(
         # grid points by symmetry and ``abs`` has no derivative at zero, which
         # is :func:`defumat.scf.density.band_density`'s trap in a second place.
         return state["w"] * jnp.real(jnp.conj(field) * field)
+
+    total = sum_k(one_state, {"a": vectors.T, "w": weights}, batch=batch)
+    return total / volume
+
+
+def spinor_ultracell_density(
+    coefficients: jnp.ndarray,
+    vectors: jnp.ndarray,
+    weights: jnp.ndarray,
+    box_index: jnp.ndarray,
+    grid: tuple[int, int, int],
+    volume: float,
+    nspin_mag: int = 4,
+    batch: int | None = 1,
+) -> jnp.ndarray:
+    """``(nspin_mag, *box)`` from one ``k0``'s **spinor** ultracell states.
+
+    :func:`ultracell_density` with a component axis, and it is a separate
+    function for the same reason
+    :func:`defumat.scf.density.spinor_band_density` is separate from
+    :func:`defumat.scf.density.band_density`: a collinear run builds *one*
+    channel's density at a time and the caller knows which, while a spinor state
+    produces all four components of ``(n, m_x, m_y, m_z)`` at once, because they
+    are four bilinears in the same pair of transformed components.
+
+    Args:
+        coefficients: ``(N, nbnd, 2 npwx)`` frozen spinor states at ``k0 + Q``.
+        vectors: ``(N nbnd, nstate)`` ultracell eigenvectors, column ``j`` the
+            amplitudes in the ``(Q, n)`` C-order
+            :func:`~defumat.ultracell.hamiltonian.ultracell_matrix` uses.
+        weights: ``(nstate,)`` ``w_k0 f_j / N``. A spinor state holds **one**
+            electron, which is in the k-point weights rather than here --
+            :func:`~defumat.system.kpoints.for_spin`, and it is the trap
+            ``CLAUDE.md`` lists for every caller-built k-set.
+        nspin_mag: 4 for a magnetic run, 1 for a spin-orbit run that carries no
+            magnetization -- where the charge is the only component and every
+            routine above this one runs as though the calculation were scalar.
+
+    The Pauli convention is ``spinor_band_density``'s and is not restated here:
+    ``m_x = 2 Re(conj(u) d)``, ``m_y = 2 Im(conj(u) d)``, ``m_z = |u|^2 -
+    |d|^2``. A sign on ``m_y`` is a state of the opposite chirality and is
+    degenerate with the right one wherever spin-orbit coupling is off, so
+    nothing in an energy or a symmetry check can see it -- which is why the
+    convention is taken from the one place that already has a ``pw.x`` number
+    behind it rather than rewritten.
+    """
+    cells, nbnd, width = coefficients.shape
+    npwx = width // 2
+    points = int(grid[0]) * int(grid[1]) * int(grid[2])
+    flat_index = box_index.reshape(-1)
+    parts = coefficients.reshape(cells, nbnd, 2, npwx)
+
+    def one_state(state):
+        amplitudes = state["a"].reshape(cells, nbnd)
+        mixed = jnp.einsum("qn,qnap->qap", amplitudes, parts)
+        scattered = jnp.zeros((2, points), dtype=mixed.dtype)
+        scattered = scattered.at[:, flat_index].add(
+            mixed.transpose(1, 0, 2).reshape(2, -1)
+        )
+        field = jnp.fft.ifftn(
+            scattered.reshape((2,) + tuple(grid)), axes=(-3, -2, -1)
+        ) * points
+        up, down = field[0], field[1]
+        # ``Re(conj(z) z)`` rather than ``abs(z)**2``, the trap
+        # :func:`ultracell_density` names and the same one a second time.
+        up_density = jnp.real(jnp.conj(up) * up)
+        down_density = jnp.real(jnp.conj(down) * down)
+        charge = up_density + down_density
+        if nspin_mag == 1:
+            return state["w"] * charge[None]
+        cross = jnp.conj(up) * down
+        return state["w"] * jnp.stack([
+            charge,
+            2.0 * jnp.real(cross),
+            2.0 * jnp.imag(cross),
+            up_density - down_density,
+        ])
 
     total = sum_k(one_state, {"a": vectors.T, "w": weights}, batch=batch)
     return total / volume

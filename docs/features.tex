@@ -4292,6 +4292,108 @@ two-cell supercell of polarized hydrogen under a scalar modulation, the charge
 and the magnetization agree to $1.7\times10^{-4}$ and $1.4\times10^{-4}$ at
 \code{nbnd = 24}.
 
+\textbf{A texture, not just an amplitude.} \code{nspin = 4} is in as well, and it buys
+the modulation a collinear run cannot write down: one in which the moment's
+\emph{direction} turns from cell to cell rather than its length growing and
+shrinking along a fixed axis. A helix, a cycloid, a domain wall and a skyrmion
+are all of that kind. \textbf{Spin-orbit coupling comes with it and costs
+nothing}: it is a term in the Hamiltonian the frozen unit-cell states were
+diagonalised with, and the ultracell only ever sees their eigenvalues and their
+coefficients, so there is no spin-orbit term anywhere in the method.
+
+What changes is the shape of one matrix. A collinear potential is diagonal in
+spin, so the $2N\,\code{nbnd}$ problem is two blocks of half the size; a spinor
+basis function has two components and the potential acts on it as the $2\times2$
+matrix
+%
+\begin{equation}
+V(\mathbf r) \;=\; v_0(\mathbf r)\,\mathbb 1 \;+\; \mathbf B(\mathbf r)\cdot\boldsymbol\sigma ,
+\end{equation}
+%
+whose off-diagonal entries couple the components at every point --- and that
+coupling is exactly what lets the magnetization turn. There is one block, one
+Fermi level over all $N\,\code{nbnd}$ states, and each state holds \emph{one}
+electron rather than two.
+
+The applied field changes shape with the regime: \code{magnetic\_field} is a
+scalar $B(\mathbf r)$ for \code{nspin = 2} and a \textbf{vector} one for
+\code{nspin = 4}, either as a \code{(3, *box)} array or as a function of
+unit-cell crystal coordinates returning three components per point. A field that
+\emph{turns} is what drives a helix, and it cannot be written down at all in the
+collinear form.
+
+\begin{pycode}
+from defumat import Calculator
+import numpy as np
+
+cal = Calculator.from_file("h-noncolin-ultracell.in")  # moments free to turn
+
+# a field of 0.01 Ry turning once over the ultracell, in the xy plane
+def turning(x):
+    phase = 2 * np.pi * x[..., 0] / 4
+    return 0.01 * np.stack([np.cos(phase), np.sin(phase),
+                            np.zeros_like(phase)], axis=-1)
+
+ulr = cal.get_ultracell(supercell=(4, 1, 1), kgrid=(1, 2, 2), nbnd=16,
+                        magnetic_field=turning, mixing_beta=0.3)
+
+print(ulr.cell_moments())         # (4, 3): one moment VECTOR per cell
+print(ulr.magnetization.shape)    # (3, *box): m_x, m_y, m_z on the grid
+\end{pycode}
+
+\code{cell\_moments()} returns an $(N,3)$ array for a noncollinear run where it
+returns $(N,)$ for a collinear one, and \code{magnetization} likewise becomes the
+three cartesian components on the box. Neither needs a sphere or a radius: the
+cells tile the ultracell exactly, so the partition is the geometry. On the cell
+above the four moments come back at $27^\circ$, $62^\circ$, $-41^\circ$ and
+$-48^\circ$ in the plane the field turns in, with nothing out of that plane ---
+so they follow the field, but by less than the $90^\circ$ per cell it asks for.
+That is not a convergence failure: a hydrogen lattice at $5.5$~bohr is a close-
+packed ferromagnet whose inter-cell exchange is far larger than a $0.01$~Ry
+field, and what the run is measuring is the stiffness of the magnet against a
+long-wavelength twist. A texture that turns freely wants a crystal whose
+modulated axis is weakly coupled.
+
+\textbf{Lower \code{mixing\_beta} for a noncollinear ultracell, and the reason is
+physical rather than numerical.} Without spin-orbit coupling or anisotropy,
+turning \emph{every} moment together by the same angle costs no energy --- so the
+$\mathbf Q = 0$ transverse component of the magnetization has no restoring force
+at all, the self-consistent solution is a family rather than a point, and an
+extrapolating mixer is free to walk along it. The weaker the applied field, the
+less it pins that direction and the further the walk: on the four-cell hydrogen
+ultracell above, a $0.002$~Ry turning field at \code{mixing\_beta = 0.7} reaches
+a per-cell moment of $2.2\,\mu_B/2$ on an atom holding \emph{one} electron,
+which is a state that cannot exist. The same \code{beta} at $0.01$~Ry converges.
+Lowering it is the answer, and the run names the mechanism when it fails rather
+than only naming the knob.
+
+\textbf{What a noncollinear run is checked against.} At $N=1$ a uniform vector
+field is the same physics as an ordinary SCF with \code{B\_field(1:3)}, which
+goes through \code{add\_bfield.f90}'s expression inside a plane-wave SCF and
+shares nothing with this code path --- and for a vector field that check reaches
+the transverse components, which no collinear identity can. On a hydrogen cell
+whose moment is free, that reference run says something clean on its own: the
+converged moment's direction equals $\hat{\mathbf B}$ to \emph{six decimals},
+which is what a magnet with no anisotropy does and what fixes the sign of the
+coupling. Against it, at $\mathbf B = (0.005, 0.0005, 0)$~Ry, the ultracell
+reproduces the moment to $1.9\times10^{-2}$ relative at \code{nbnd = 16},
+$6.6\times10^{-3}$ at 40, $1.5\times10^{-3}$ at 64, $4.5\times10^{-4}$ at 96 and
+$1.6\times10^{-4}$ at 128 --- monotone, and a factor of 116 across the range. What is converging is the
+\emph{transverse} component: $m_x$ is right to $1.5\times10^{-3}$ at the first
+rung, and $m_y$ walks $0.0601, 0.0634, 0.0691, 0.0694, 0.0732, 0.0740$ towards
+the reference's $0.0743$.
+
+\textbf{Expect to need more bands than a collinear run, by about a factor of
+two.} A spinor state holds one electron and lives in a space of
+$2\,\code{npwx}$, so a given \code{nbnd} is half as complete a basis as the same
+number would be for one collinear channel. The ladder above is at 37 per cent of
+the basis at \code{nbnd = 128}, which is where stage 1's charge ladder was at
+\code{nbnd = 80} on silicon. Convergence is also slower the larger the
+\emph{rotation} asked for: a field that turns the moment by 57 degrees converges
+in \code{nbnd} several times more slowly than one that tilts it by 6, because a
+change of the local spin frame has to be built out of empty states of the
+opposite spin channel, which the exchange splitting puts far away.
+
 \textbf{There is no total energy}, in this code or in Elk, whose
 \code{energyulr.f90} reports the sum of occupied eigenvalues and the Fermi level
 and nothing else. \code{ulr.band\_energy} is that sum, per unit cell. The energy
@@ -4305,11 +4407,13 @@ through $D_{ij}$, so the frozen unit-cell states stop being a fixed basis as soo
 as the modulation moves. Gradient-corrected functionals: the gradient of the
 ultracell density carries the envelope's own gradient, which a per-cell
 evaluation drops (Elk takes that approximation silently; it is refused here).
-Meta-GGA. \textbf{Noncollinear} magnetism and spin-orbit coupling, for the shape
-of the matrix rather than the physics: a collinear ultracell matrix is block
-diagonal in spin and so is two of the same build, where a spinor state is one
-vector of $2\,\code{npwx}$ components and the potential acts on it as
-$V_0 + \boldsymbol\sigma\cdot\mathbf B$. A ground state converged \textbf{under
+Meta-GGA. An applied \code{magnetic\_field} on a noncollinear cell that
+\textbf{carries no magnetization} --- a spin-orbit run on a nonmagnetic
+crystal, where the density and the potential have one component apiece and a
+field has nothing to be added to; give the unit cell a small
+\code{starting\_magnetization} so that it carries four, which it may then
+converge back to nearly zero, and what the run measures is the Pauli
+susceptibility. A ground state converged \textbf{under
 a magnetic field or a constrained moment}, because the frozen eigenvalues would
 carry the field the SCF ended with --- which \code{reducebf} and the
 fixed-spin-moment scheme both change from the input --- while $\delta V$ is

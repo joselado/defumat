@@ -15184,9 +15184,238 @@ merely unlikely.
   So the paper's own system needs the GGA on the box, which is already on this list, before it
   can be run at all. Quoting a Cr period from a run that did not happen is worse than leaving
   the row empty.
-* **`nspin = 4`**, stage 3b, with the matrix-shape reason above.
+* **`nspin = 4`**, stage 3b, with the matrix-shape reason above. **Done; the record is
+  immediately below.**
 
 ---
+
+**What stage 3b measured: a spinor ultracell, where the magnetization is a vector.**
+Stage 3a could modulate a moment's *length* along a fixed axis. What `nspin = 4` adds is a
+modulation of its **direction** -- a helix or a cycloid -- which is the texture a collinear
+calculation cannot express at all, and which is what a skyrmion, a domain wall and most of
+the interesting long-wavelength magnetism actually are. **Spin-orbit coupling comes with it
+and costs nothing**, which is the first thing worth saying: SOC is a nonlocal term in the
+Hamiltonian the *frozen unit-cell states* were diagonalised with, and the ultracell matrix
+only ever sees their eigenvalues and their coefficients. There is no spin-orbit term
+anywhere in `defumat/ultracell/`, and that is not an omission.
+
+**The code change is a component axis and a 2x2 multiply, and nothing else.** A collinear
+block feels a real `dV[s]`; a spinor block feels `v_0 I + B . sigma`, so its two components
+are transformed independently -- an FFT knows nothing about spin -- and mixed pointwise in
+between. `ultracell_matrix` gained `npol` and one branch; `spinor_ultracell_density` is a
+second function beside `ultracell_density` for the reason `spinor_band_density` is a second
+function beside `band_density`, namely that a collinear channel produces *one* component
+and a spinor state produces all four at once, from the same pair of transformed halves.
+Four numbers now run the driver rather than one: `nspin` says the regime, `npol` is the
+wavefunction's component count, `nspin_mag` the density's, and **`blocks`** -- how many
+independent matrices there are per `k0` -- is this method's own, 2 for collinear and **1**
+for a spinor.
+
+**The Pauli algebra is not written a second time.** `SpinorHamiltonian._multiply` was
+promoted to `hamiltonian/noncollinear.py:spin_multiply`, and it now has three callers: the
+spinor Hamiltonian's local term, the spinor Sternheimer solve (which was already reaching
+into the class for it) and this. The reason is the sharpest instance of this project's own
+trap list: **a sign on `m_y` is a state of the opposite chirality, which is exactly
+degenerate with the right one wherever spin-orbit coupling is off** -- so the SCF converges,
+the total energy is right, every moment has the right length, every symmetry check passes,
+and the helix turns the wrong way. Written three times it would be three chances to get that
+wrong and no way to notice.
+
+**The number, first: three identities that hold exactly, with no SCF in them.**
+`tests/unit/test_ultracell_spin.py`, **13 tests in 3.7 s**, in the push gate -- which is
+where a convention check belongs, because it is the kind that goes dead silently.
+
+* **A spinor whose down component is zero is a collinear state**, so `npol = 2` on `(c, 0)`
+  must reproduce the collinear build to round-off: **< 1e-12** on random coefficients, a
+  random box index and a random four-component potential. The transverse components of that
+  potential are deliberately non-zero and nothing in such a state can feel them. That
+  identity is what lets the spinor build inherit stage 1's and stage 3a's supercell numbers
+  on its diagonal.
+* **The block structure belongs to the potential and not to the basis.** With
+  `B_x = B_y = 0` a spinor matrix built in a basis of pure up and pure down states *is* the
+  two collinear matrices, permuted into the `(Q, n)` flattened order: **< 1e-12**. Put the
+  transverse field back and the off-diagonal blocks are **larger than 1e-2** of the matrix.
+  The first draft of that test asserted the block structure under a *general* potential and
+  failed at 2.97 -- correctly, because the code was right and the test was asserting physics
+  that is not there.
+* **A rigid spin rotation is not a physical change.** Turn every spinor by
+  `U = exp(-i theta n.sigma/2)` and the field by the matching `R(theta, n)` and the matrix
+  is **unchanged**, not merely unitarily equivalent: **< 1e-11** relative. Rotating about
+  **x** is what makes it a test, because it mixes `y` with `z`, where a rotation about `z`
+  would leave the transverse pair's relative sign untested and pass either way. The density
+  side is the same statement: the charge is unchanged and `m -> R m`, to **1e-11**.
+
+**Two of those tests were wrong in the first draft and the second way is worth recording,
+because it is `CLAUDE.md`'s transposed-pair trap exactly.** `U^dagger sigma_a U = R_ab
+sigma_b`, so `U^dagger (B . sigma) U = (R^T B) . sigma`, so the field that leaves the
+Hamiltonian alone rotates by `R` while the magnetization -- an expectation value, with `U`
+on both sides -- *also* rotates by `R`. The two look like they should be transposes of each
+other and are not; the draft had **both** of them the wrong way round, which is the kind of
+error that reads as a sign. What settled it was computing `R_ab` from `U` numerically
+(`scratchpad`) rather than reasoning about it, and only then writing the assertion.
+
+**And the guard was shown to fire against a *wrong implementation*, not a wrong input.**
+The first version of it negated `B_y` in the field and required the rotation identity to
+break. It does not break: the identity holds for every field, a flipped one included, and
+the guard passed at **1.8e-15** while proving nothing. What has to be perturbed is the
+operator, so the wrong Pauli algebra is written out in the test file and required to fail
+the same identity the right one satisfies -- **> 1e-2** against **< 1e-12**. This is
+`CLAUDE.md`'s "a check whose null result cannot be told from a pass", met in the specific
+form where the *guard against it* was itself vacuous.
+
+**The nulls, on a cell whose moment points along `(1,1,1)/sqrt(3)`.** The direction is the
+point: seeded along `z` this would be a collinear run wearing a spinor's clothes, and every
+test below would pass with the transverse terms deleted. Off-axis, the magnetic part of the
+potential is largely **off-diagonal** in the spinor basis, and all four density components
+are live.
+
+* `N = 1` reproduces the unit-cell SCF in one iteration and `dV` vanishes to **3.3e-16**.
+* `N = 2` and `N = 4` with nothing applied give the **tiled** state in one iteration,
+  `dV` at 4.4e-16, and every cell's moment **vector** identical to **9 digits** -- not its
+  length, its three components. The charge is exactly `N` times the unit cell's.
+* and the null is shown capable of failing: under a field that points `+y` in one cell and
+  `-y` in the next, the transverse moments come back **equal and opposite**, while the
+  charge does not move at linear order -- which is the discriminating half, since a
+  collinear system is invariant under flipping every spin together with the sign of `B`, so
+  the charge is even in `B` and the magnetization odd.
+
+**The external number: a uniform applied field against an ordinary SCF.** At `N = 1` a
+uniform `B` is the same physics as `run_scf` with `B_field(1:3)`, which shares nothing with
+this code path -- it goes through `add_bfield.f90`'s expression inside a plane-wave SCF,
+where this expands the *field-free* states of the same cell in a basis and never applies `H`
+again. It is what pins the field's **sign and magnitude**, and for a vector field that
+includes the transverse components, which a collinear identity cannot reach.
+
+The reference run says something clean on its own: **the moment aligns with `B`**. At
+`B = (0.004, 0.006, -0.003)` Ry the converged moment's direction is
+`(0.512148, 0.768221, -0.384111)` and `B`'s is `(0.512148, 0.768221, -0.384111)` -- **equal
+to six decimals**, with `|m| = 0.74999987` against the field-free 0.749975. That is the
+physics of a magnet with no anisotropy and no spin-orbit coupling: turning the moment costs
+nothing, so a field of any size turns it all the way, and the length is set by the exchange
+alone. It also fixes the sign, which is the one `-B . m` gives.
+
+Against that reference, with a *small transverse tilt* so that the response stays linear,
+`B = (0.005, 0.0005, 0)`, reference `m = (0.74630962, 0.07429992, 1.2e-7)`:
+
+| `nbnd` | `m_x` | `m_y` | relative error | iterations |
+|---|---|---|---|---|
+| 16 | 0.7475859 | 0.0600929 | 1.90e-2 | 9 |
+| 24 | 0.7473118 | 0.0634157 | 1.46e-2 | 9 |
+| 32 | 0.7468089 | 0.0690959 | 6.97e-3 | 10 |
+| 40 | 0.7467844 | 0.0693605 | 6.62e-3 | 10 |
+| 64 | 0.7464206 | 0.0731757 | 1.51e-3 | 9 |
+| 96 | 0.7463427 | 0.0739661 | 4.47e-4 | 9 |
+| 128 | 0.7462974 | 0.0744220 | **1.64e-4** | 9 |
+
+**Monotone across the whole range and a factor of 116 from 16 bands to 128**, which is the
+same claim stage 1's charge ladder makes -- a variational truncation to `nbnd` bands per
+folded k-point and nothing else -- now carried on a *vector* quantity whose transverse
+component is what is actually converging: `m_y` walks 0.0601, 0.0634, 0.0691, 0.0694,
+0.0732, 0.0740, 0.0744 towards the reference's 0.0743, where `m_x` was right to 1.5e-3 at
+the first rung. The last rung has overshot it by 1e-4, which is where the reference's own
+floor is.
+
+For the **oblique** field, which asks the frozen basis to reproduce a 57-degree rotation
+rather than a 5.7-degree one: 1.22e-1, 8.93e-2, 4.32e-2, **4.10e-2** at the first four band
+counts. Both monotone, and the pair is the finding: **the ladder converges more slowly the
+larger the rotation is**, which is the plan's own warning made quantitative -- a modulation
+strong enough to change the local spin frame has to be absorbed by empty states of the
+*opposite* channel, and the exchange splitting puts those far away. The same shows in the
+iteration counts, which are 9 or 10 throughout the tilted ladder and 44 to 110 through the
+oblique one.
+
+**The canonical number: a noncollinear ultracell against a real supercell.** The same
+instrument stages 1 and 3a used, one regime up. A two-cell ultracell of the hydrogen cell
+above against a real **two-atom supercell** run through this package's own SCF, both under
+the same `0.05 cos(2 pi x_1 / 2)` Ry **scalar** potential, compared Fourier component by
+Fourier component. The perturbation is a potential rather than a field for stage 3a's
+reason unchanged -- a spin-resolved external field has no slot in `vltot` -- and it makes
+the magnetization's response entirely *indirect*, which is a test of the coupled spinor
+loop rather than of a field's sign.
+
+| `nbnd` | charge | `m_x` | `m_y` | `m_z` |
+|---|---|---|---|---|
+| 8 | 1.23e-3 | 1.54e-3 | 1.55e-3 | 1.54e-3 |
+| 16 | 5.20e-4 | 6.16e-4 | 6.22e-4 | 6.18e-4 |
+| 24 | 3.77e-4 | 4.38e-4 | 4.45e-4 | 4.41e-4 |
+| 32 | 2.35e-4 | 2.40e-4 | 2.45e-4 | 2.42e-4 |
+
+**All four components monotone, and the three magnetic ones equal to each other** -- which
+they must be, since the moment lies along `(1,1,1)/sqrt(3)`, and their agreeing to two
+digits at every rung is a check on the whole component axis that costs nothing to read.
+The floor near 2e-4 is **the two FFT boxes rather than the method**, exactly as stage 3a
+recorded: the supercell picks 27 points along the modulated axis where the ultracell's box
+has 30, and a density is not band-limited, so the two do not alias the same way. Stage 3a's
+collinear ladder on the same lattice bottomed out at 1.5e-4 for the same reason.
+
+**The Goldstone drift was checked rather than assumed, and it is not there.** The moment's
+*direction* is a soft mode, so the supercell's SCF and the unit cell's could in principle
+land on directions differing by a small rigid rotation from the same seed -- and a
+component-by-component comparison would then read that rotation as basis error and put a
+spurious floor under the ladder. The measured angle between the two total-moment directions
+is **7.7e-7 rad**, so the alignment the comparison applies is a no-op. That is worth
+recording as a *null* precisely because the mechanism is real: it would have been invisible
+as a wrong floor rather than as a failure.
+
+**A spinor ultracell needs about twice the bands of a collinear one for the same basis
+completeness, and the reason is arithmetic rather than physics.** Its states hold one
+electron and its space is `2 npw` rather than `npw`, so `nbnd = 128` on this cell is
+**37 per cent** of the basis where stage 1's `nbnd = 80` on silicon was 35 per cent -- the
+same completeness, reached at a band count 1.6 times larger. The errors above should be
+read against that completeness, not against stage 1's band count.
+
+**The finding: a noncollinear ultracell has a soft direction a collinear one does not.**
+Without spin-orbit coupling or anisotropy, turning every moment together costs no energy --
+so the `Q = 0` transverse component of the magnetization is a Goldstone mode with **no
+restoring force at all**, and the self-consistent fixed point is a family rather than a
+point. An Anderson mixer extrapolating along a flat direction is unbounded, and on a
+four-cell hydrogen ultracell under a turning field at `mixing_beta = 0.7` it reached a
+per-cell moment of **2.2 mu_B/2 on an atom holding one electron** -- outside the physical
+manifold, which is the tell that separates slow convergence from a runaway.
+
+**The first version of this entry overstated it, and the correction is the point.** It said
+`beta = 0.7` diverges and `0.3` converges, from two runs taken at *different field strengths
+and different iteration budgets* -- 0.002 Ry at 40 iterations against 0.01 Ry at 120 -- which
+is two experiments reported as one comparison. Run properly, at 0.01 Ry and a 300-iteration budget,
+`beta` barely matters at all and **every value converges to the same state**:
+
+| `mixing_beta` | iterations | `dr2` | largest cell moment |
+|---|---|---|---|
+| 0.7 | 48 | 2.70e-10 | 0.4639 |
+| 0.5 | **36** | 4.62e-10 | 0.4637 |
+| 0.3 | 42 | 4.85e-10 | 0.4639 |
+| 0.2 | 115 | 5.64e-10 | 0.4638 |
+
+-- four values spanning a factor of 3.5, every one of them converging to the **same state**
+to four digits, and the *best* of them 0.5 rather than the smallest. Turning `mixing_beta`
+down is not free and is not the answer here.
+
+The runaway is at the *weaker* field, which is what the Goldstone argument actually
+predicts: a weaker field pins the direction less, so the mode is softer and there is
+further to wander. This is `CLAUDE.md`'s "an explanation that fits a number and is accepted
+because it fits" -- the mechanism was right and the evidence offered for it was not the
+evidence, and only the controlled grid separates them.
+
+The non-convergence warning names the mechanism rather than the knob, because "lower beta"
+without the reason is advice a user cannot check.
+
+**Whether the mixer should project the rigid rotation out is a departure from `pw.x` and is
+not taken here.** It would need a measurement rather than an argument, which is
+`CLAUDE.md`'s rule and `OPEN.md` Y1's own reason for staying open; it is written up as an
+`OPEN.md` entry instead.
+
+**What stage 3b does not have.**
+
+* **A modulated field against a supercell**, for stage 3a's reason unchanged: a
+  spin-resolved external field has no slot in `vltot`, which is one scalar. The scalar
+  supercell ladder and the `N = 1` uniform-field identity are what stand in its place, and
+  they are the same two instruments stage 3a used.
+* **A helix that actually turns through a full period**, on the cells measured here. A
+  4-cell rotating field on a 5.5-bohr hydrogen lattice turns the moments by only about
+  20 degrees where the field turns by 90: the inter-cell exchange of a close-packed
+  ferromagnet dominates a 0.01 Ry field. That is a physical result rather than a failure --
+  what the run measures is the stiffness of the magnet against a long-wavelength twist --
+  but a cell whose modulated axis is weakly coupled is what a *demonstration* wants.
 
 **What is outstanding.**
 

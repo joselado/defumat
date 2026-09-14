@@ -1,0 +1,40 @@
+! `i-atom-soc.in` run under LDA, which is the only way the **ultracell** can
+! reach a spin-orbit dataset at all.
+!
+! `I.rel-pbe-nc-dojo.UPF` is the one fully-relativistic *norm-conserving* set
+! committed here, and its header says PBE -- which the ultracell refuses,
+! because the gradient of an ultracell density carries the envelope's own
+! gradient and a per-cell evaluation drops it. `input_dft = 'LDA'` overrides the
+! header, which is QE's own rule and this code's.
+!
+! **A dataset generated for one functional and run under another is an
+! inconsistency, and it is deliberate here**: what this cell is for is a *null*
+! -- the ultracell against its own unit-cell SCF, which uses the same
+! pseudopotential under the same functional -- rather than a comparison against
+! `pw.x`. The inconsistency is a constant on both sides and cancels. Do not use
+! this file for a benchmark comparison; `i-atom-soc.in` is that one.
+!
+! What it covers that nothing else does: spin-orbit coupling inside an
+! ultracell, which is the regime the method adds no code for. SOC is a nonlocal
+! term in the Hamiltonian the frozen states were diagonalised with, so the
+! ultracell only ever sees their eigenvalues and coefficients -- and this is the
+! run that says so rather than the argument.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 1, celldm(1) = 12.0, nat = 1, ntyp = 1, ecutwfc = 45.0,
+    occupations = 'fixed', nbnd = 8, nosym = .true., noinv = .true.,
+    input_dft = 'LDA',
+    noncolin = .true., lspinorb = .true.,
+    starting_magnetization(1) = 0.5, angle1(1) = 0.0
+ /
+ &electrons
+    conv_thr = 1.0d-10, mixing_beta = 0.3
+ /
+ATOMIC_SPECIES
+ I 126.9 I.rel-pbe-nc-dojo.UPF
+ATOMIC_POSITIONS crystal
+ I 0.00 0.00 0.00
+K_POINTS (automatic)
+ 1 1 1 0 0 0

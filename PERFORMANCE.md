@@ -5267,6 +5267,85 @@ time is the frozen-state Davidson reaching for many empty bands at a tight thres
 rather than anything in the ultracell loop. `states_conv_thr` is the dial for that and
 its default is the ordinary fixed-density one.
 
+### What a spinor costs, against the same ultracell with one channel (P88 stage 3b)
+
+A noncollinear ultracell pays on three counts, and only the first is about spin. They
+compound, so it is worth writing them down separately rather than quoting one ratio.
+
+* **Twice the transforms per basis function.** A spinor ket is two fields, each scattered
+  into the box and transformed, mixed pointwise by the 2x2 potential and transformed back.
+  That is `4 N nbnd` ultracell FFTs per `k0` where one collinear channel costs `2 N nbnd`
+  -- and against a *collinear run of the same cell* it is a wash, because that run does the
+  `2 N nbnd` twice, once per channel.
+* **Twice the bands for the same basis completeness**, and this is the real cost. A spinor
+  state holds one electron and lives in a space of `2 npw`, so `nbnd` is half as complete
+  a basis as the same number would be for one collinear channel. There is no way around
+  it: it is the same variational space, counted differently.
+* **The dense solve is `(N nbnd)^3`**, so doubling `nbnd` is a factor of **eight** there.
+  At small `N` the driver is dispatch-bound and this does not show; it is what decides the
+  cost once `N nbnd` is in the hundreds.
+
+Measured on the hydrogen cell of stage 3b's field ladder (simple cubic, `a = 5.5` bohr,
+`ecutwfc = 15`, `npw` 152-174 per k-point, `N = 1`, 8 folded k-points, `david = 2`), each
+row a warm call including the frozen-state solve it pays once:
+
+| `nbnd` | s | iterations | relative error in the moment |
+|---|---|---|---|
+| 16 | 15 | 9 | 1.90e-2 |
+| 24 | 19 | 9 | 1.46e-2 |
+| 32 | 22 | 10 | 6.97e-3 |
+| 40 | 19 | 10 | 6.62e-3 |
+| 64 | 37 | 9 | 1.51e-3 |
+| 96 | 48 | 9 | 4.47e-4 |
+| 128 | 108 | 9 | 1.64e-4 |
+
+**The iteration count does not move -- 9 or 10 at every band count -- and the seconds do**,
+which is the same separation stage 1 found: the mixer is doing its job and what `nbnd` buys
+is accuracy per iteration rather than fewer of them. The jump at 128 is the dense solve
+starting to show at `N nbnd = 128` on a cell whose basis is 342.
+
+**What is not comparable, and it is the thing a reader would assume.** These seconds are
+*not* to be read against stage 1's silicon table: different cell, different cutoff,
+different electron count. The comparison that is like-for-like is the one above -- the same
+ultracell at different band counts -- and the one against the supercell it approximates,
+below.
+
+**Against the supercell it approximates, on the same physics.** The hydrogen lattice with
+its moment along `(1,1,1)/sqrt(3)`, a two-cell ultracell against a real two-atom supercell,
+both under the same scalar modulation, both converged to `1e-10` or tighter:
+
+| | wall clock | iterations |
+|---|---|---|
+| supercell (2 atoms, `nbnd = 32`) | **13 s** | 9 |
+| ultracell at `nbnd = 8` | 18 s | 11 |
+| ultracell at `nbnd = 16` | 20 s | 11 |
+| ultracell at `nbnd = 32` | 34 s | 11 |
+
+**The ultracell loses at two cells and is supposed to**, exactly as stage 1 found for the
+unpolarized case: the frozen-state solve is paid once and there is nothing yet for it to
+amortise over, while the supercell of two atoms is still small. Stage 1 measured the
+crossover at four to six cells and there is no reason for a spinor to move it, since both
+sides gain the same factor -- but **that is an expectation and not a measurement**, and the
+noncollinear crossover has not been run.
+
+**There is no Elk pair for this and the reason is stage 3a's, unchanged.** Elk *has* the
+regime -- `bfieldcu` is a `real(3)` cartesian field applied in the ultracell (manual §5.13)
+and tasks 771/2/3 plot the ultracell magnetisation, so its ULR code is not collinear-only.
+What blocks the comparison is the *system*: Elk's only worked example of the method is the
+chromium spin density wave, the sole chromium dataset committed here is PBE, and the
+ultracell refuses a gradient-corrected functional. Timing task 700 on a system Elk was not
+set up for would be a worse number than none, so what is recorded instead is the
+comparison that is like-for-like -- the ultracell against the supercell it approximates, in
+this code, above.
+
+**`mixing_beta` is not a cost lever here even though it looks like one.** Four values on a
+four-cell turning-field run, all converging to the same state: 0.7 in 48 iterations, **0.5
+in 36**, 0.3 in 42, 0.2 in 115. The best is in the middle and the smallest is three times
+the worst, so the habit of lowering `beta` when a magnetic run is slow costs time without
+buying anything. Where it *is* needed is a weak field, where the rigid-rotation mode is
+barely pinned and a large `beta` leaves the physical manifold altogether
+(`OPEN.md` Part VI item 3).
+
 ### Iterations, which is where the method earns its keep
 
 Elk's own example runs `beta0 0.001`, linear mixing, `maxscl 2000`. Long-wavelength

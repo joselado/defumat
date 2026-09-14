@@ -2369,3 +2369,58 @@ field holding its magnetization, so the moment is the soft direction and the one
 sloshes, and it is bounded by the half of `dr2` that carries no `1/|G+Q|^2`. **Take this
 measurement again when that lands**; the factor of 2.2e3 in the weights is what it would
 be paid at.
+
+## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and the mixer walks along it **[opened 2026-09-14, P88 stage 3b]**
+
+**The mechanism, and it is physics rather than a bug.** Without spin-orbit coupling or
+magnetic anisotropy, turning *every* moment in the cell together by the same angle costs
+exactly zero energy -- it is a Goldstone mode of the broken spin-rotation symmetry. In an
+ultracell that mode is precisely the `Q = 0` transverse component of the magnetization, and
+the self-consistency residual has **no component along it at all**: the fixed point is a
+whole two-parameter family rather than a point. An Anderson mixer extrapolating along a
+flat direction is then unbounded.
+
+**Measured**, on a four-cell hydrogen ultracell (simple cubic, `a = 5.5` bohr, one electron
+per cell, moment 0.62 mu_B/2) under a field that turns by 90 degrees per cell. The grid is
+two field strengths crossed with four `mixing_beta`, all at one iteration budget -- see the
+table in `PLAN.md` P88 stage 3b. The shape of it:
+
+* at **0.002 Ry** the weaker field pins the direction hardly at all, and `beta = 0.7`
+  leaves the physical manifold: per-cell moments of **1.72 to 2.20 mu_B/2 on an atom that
+  holds one electron**. That is the tell -- not slow convergence, a state that cannot
+  exist;
+* at **0.01 Ry** the same `beta = 0.7` **converges**, in 48 iterations.
+
+**The first version of this entry said 0.7 diverges and 0.3 converges, full stop, and that
+was two runs at different field strengths and different budgets reported as one
+comparison.** The mechanism was right; the evidence offered for it was not the evidence.
+Softer field, softer mode, further to wander is what the Goldstone argument predicts, and
+it is what the controlled grid shows.
+
+The collinear branch of the same cell has no such direction -- flipping a moment costs
+energy, and rotating one is not expressible -- so this is new at `nspin = 4` and not a
+rediscovery of ordinary charge sloshing.
+
+**What exists meanwhile.** `run_ultracell`'s non-convergence warning names the mechanism
+when `nspin_mag = 4`, rather than only naming the knob: a user who is told "lower
+`mixing_beta`" cannot check that advice, where one who is told "the rigid rotation has no
+restoring force" can. `box_kerker` already screens only the charge component and applies a
+plain `beta` to the three magnetic ones, which is `approx_screening`'s own rule and is
+correct as far as it goes -- Kerker damps *long wavelengths*, and this mode is at `Q = 0`
+where Kerker's factor is already zero for the charge. **The magnetization is deliberately
+not Kerker-screened** (stage 3a's reason: it would damp the direction a magnetic run has to
+move in), so nothing currently touches it.
+
+**The fix that is not taken, and why.** Project the rigid rotation out of the magnetic
+residual before mixing -- subtract from `m_{Q=0}` its component perpendicular to the mean
+moment, which is the generator of the rotation. That is a **departure from `pw.x`**, which
+mixes every component with one `beta` and has no such projection, and `CLAUDE.md`'s rule is
+that a departure needs a number rather than an argument. The number it needs is iterations
+to convergence with and without the projection, on at least two cells, one of which has
+spin-orbit coupling -- where the mode is *gapped* and the projection would be actively
+wrong, so the projection has to be switched off by `lspinorb` and that gate has to be shown
+to fire. Until then, lowering `mixing_beta` is the answer and the warning says so.
+
+**How to know it worked.** The four-cell run above converging at `mixing_beta = 0.7`, in
+fewer iterations than 0.3 takes, with the same converged moments to 1e-8; and the same
+run with `lspinorb` giving the *same* answer with the projection on and off.

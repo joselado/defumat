@@ -740,7 +740,6 @@ class _Overridden:
 
 
 @pytest.mark.parametrize("replaced, message", [
-    ({"nspin": 4}, "nspin = 4"),
     ({"spiral_q": (0.0, 0.0, 0.25)}, "spin spiral"),
     ({"nosym": False}, "nosym"),
 ])
@@ -823,7 +822,28 @@ def test_a_field_needs_two_channels_to_split(tmp_path, pseudo_dir):
 
     ultracell = Ultracell.build((2, 1, 1), (4, 4, 4))
     with pytest.raises(ValueError, match="two spin channels"):
-        _as_field(None, lambda x: np.zeros(x.shape[:-1]), ultracell, 1)
+        _as_field(None, lambda x: np.zeros(x.shape[:-1]), ultracell, 1, 1)
+
+
+def test_a_field_needs_a_magnetization_to_act_on(tmp_path, pseudo_dir):
+    """The same refusal for the *other* cell that reaches it: ``nspin_mag = 1``.
+
+    A spin-orbit run on a nonmagnetic crystal has spinor wavefunctions and a
+    **scalar** density, so its potential and the frozen reference potential it
+    is subtracted from both have one component. Promoting them to four here so
+    that a field has somewhere to go would leave ``dV`` in a representation the
+    eigenvalues are not in. It is refused with different advice from the
+    ``nspin = 1`` case, which is why the two are separate branches and separate
+    tests: here the fix is to give the unit cell a seed so that ``domag`` is
+    true, and the susceptibility that comes back is then the Pauli one.
+    """
+    from defumat.ultracell.driver import _as_field
+    from defumat.ultracell.grid import Ultracell
+
+    ultracell = Ultracell.build((2, 1, 1), (4, 4, 4))
+    with pytest.raises(ValueError, match="carries a magnetization"):
+        _as_field(None, lambda x: np.zeros(x.shape[:-1] + (3,)),
+                  ultracell, 4, 1)
 
 
 def test_the_collinear_field_carries_add_bfields_own_sign():
@@ -842,14 +862,14 @@ def test_the_collinear_field_carries_add_bfields_own_sign():
 
     ultracell = Ultracell.build((2, 1, 1), (4, 4, 4))
     field = np.asarray(_as_field(None, lambda x: np.full(x.shape[:-1], 0.3),
-                                 ultracell, 2))
+                                 ultracell, 2, 2))
     assert field[0] == pytest.approx(np.full(ultracell.grid, -0.3), abs=1e-14)
     assert field[1] == pytest.approx(np.full(ultracell.grid, +0.3), abs=1e-14)
 
     # and a scalar potential is felt in full by both, which is the other rule
     # in the same function and the one that would otherwise be half of it.
     both = np.asarray(_as_field(lambda x: np.full(x.shape[:-1], 0.1), None,
-                                ultracell, 2))
+                                ultracell, 2, 2))
     assert both[0] == pytest.approx(np.full(ultracell.grid, 0.1), abs=1e-14)
     assert both[1] == pytest.approx(np.full(ultracell.grid, 0.1), abs=1e-14)
 
@@ -915,3 +935,338 @@ def test_an_unconverged_seed_is_refused(tmp_path, pseudo_dir):
             calculator.system, calculator.pseudos, stalled, (2, 1, 1), (1, 2, 2),
             nbnd=8, conv_thr=1e-8,
         )
+
+
+# -- stage 3b: a spinor ultracell, where the magnetization is a vector -------
+
+#: The same hydrogen lattice as stage 3a, one regime up. The moment is seeded
+#: **off every axis**, along ``(1,1,1)/sqrt(3)``, and that is the whole point of
+#: the cell: all three magnetization components are then live, and the magnetic
+#: part of the potential is largely *off-diagonal* in the spinor basis, which is
+#: exactly the machinery a collinear run does not have. Seeded along ``z`` it
+#: would be a collinear run wearing a spinor's clothes, and every one of the
+#: tests below would pass with the transverse terms deleted.
+NONCOLLINEAR = """&control
+ calculation='scf'
+/
+&system
+ ibrav=0, celldm(1)=5.5, nat={nat}, ntyp=1, ecutwfc=15.0,
+ nosym=.true., noinv=.true.,
+ noncolin=.true., starting_magnetization(1)=0.8,
+ angle1(1)={angle1}, angle2(1)={angle2},
+ occupations='smearing', smearing='gaussian', degauss=0.02
+/
+&electrons
+ conv_thr=1.0d-11
+ mixing_beta=0.3
+/
+CELL_PARAMETERS alat
+{rows}
+ATOMIC_SPECIES
+ H 1.008 H.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+{atoms}
+K_POINTS automatic
+ {k0} {k1} {k2} 0 0 0
+"""
+
+
+def _noncollinear(tmp_path, pseudo_dir, shape, kgrid, angle1=54.735610,
+                  angle2=45.0, tag="nc") -> Calculator:
+    """The lattice as a ``shape`` supercell of hydrogens, moments all parallel."""
+    rows = "\n".join(" %.10f %.10f %.10f" % tuple(v)
+                     for v in np.diag(shape).astype(float))
+    frac = np.stack(
+        np.meshgrid(*[np.arange(n) / n for n in shape], indexing="ij"), axis=-1
+    ).reshape(-1, 3)
+    atoms = "\n".join(" H %.10f %.10f %.10f" % tuple(x) for x in frac)
+    path = tmp_path / f"h_{tag}.in"
+    path.write_text(NONCOLLINEAR.format(
+        nat=len(frac), rows=rows, atoms=atoms, angle1=angle1, angle2=angle2,
+        k0=kgrid[0], k1=kgrid[1], k2=kgrid[2]))
+    return Calculator.from_file(path, pseudo_dir=pseudo_dir)
+
+
+def _total_moment(density, volume):
+    """The cell-integrated magnetization vector of an ``(4, *box)`` density."""
+    m = np.asarray(density)[1:]
+    return m.reshape(3, -1).sum(axis=1) * float(volume) / m[0].size
+
+
+@pytest.mark.slow
+def test_a_noncollinear_ultracell_is_the_tiled_unit_cell(tmp_path, pseudo_dir):
+    """The ``nspin = 4`` null, and it sees three things the others cannot.
+
+    The unpolarized null cannot see the spin path at all and the collinear one
+    cannot see the transverse components: a build that dropped ``m_x`` and
+    ``m_y``, or contracted the spinor halves in the wrong order, passes both.
+    Here the moment points along ``(1,1,1)/sqrt(3)``, so every component of the
+    density is non-zero, the potential's magnetic part is mostly off-diagonal in
+    spin, and the null still has to come back as the exactly tiled state.
+    """
+    shape, kgrid = (2, 1, 1), (2, 2, 2)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    calculator = _noncollinear(tmp_path, pseudo_dir, (1, 1, 1), folded)
+    assert calculator.system.nspin == 4 and calculator.system.nspin_mag == 4
+    scf = calculator.get_scf(conv_thr=1e-11, nbnd=16)
+    assert scf.converged
+
+    result = run_ultracell(
+        calculator.system, calculator.pseudos, scf, shape, kgrid,
+        nbnd=16, conv_thr=1e-9, states_conv_thr=1e-8, mixing_beta=0.3,
+    )
+    assert result.converged and result.iterations == 1
+    assert np.abs(np.asarray(result.delta_v)).max() < 1e-14
+
+    tiled = np.asarray(result.ultracell.tile(jnp.asarray(scf.density)))
+    density = np.asarray(result.density)
+    assert density.shape[0] == 4
+    assert np.abs(density - tiled).max() / np.abs(tiled).max() < 1e-5
+
+    # The electron count is the ultracell's, which is what caught stage 1's one
+    # real bug, and it is asserted apart from the moment for the reason stage 3a
+    # gives: a wrong ``N`` is a factor, not a last digit.
+    element = float(calculator.system.cell.volume) / np.prod(
+        result.ultracell.cell_grid)
+    assert density[0].sum() * element == pytest.approx(
+        float(calculator.system.nelec if hasattr(calculator.system, "nelec")
+              else 1.0) * shape[0], rel=1e-8)
+
+    # Every cell carries the same moment **vector**, direction included.
+    moments = result.cell_moments()
+    assert moments.shape == (shape[0], 3)
+    assert np.abs(moments - moments[0]).max() < 1e-9
+    direction = moments[0] / np.linalg.norm(moments[0])
+    assert direction == pytest.approx(np.full(3, 1 / np.sqrt(3)), abs=2e-3)
+
+
+@pytest.mark.slow
+def test_a_turning_field_turns_the_magnetization(tmp_path, pseudo_dir):
+    """The magnetic null shown capable of failing, in the way only a spinor can.
+
+    A collinear run can be driven to modulate the *length* of its moment and
+    nothing else. What a spinor adds is a modulation of the **direction**, and
+    the field that drives one has to turn from cell to cell -- which is a vector
+    field, and a quantity a collinear ``B(r)`` cannot express at all.
+
+    The discriminating assertion is the **sense** of the turn: the moments pick
+    up a transverse component whose sign follows the applied field's, cell by
+    cell. A flipped ``m_y`` would give the mirror texture, which is degenerate
+    with this one in energy (there is no spin-orbit coupling here), converges
+    just as well, and is caught by nothing else in this file.
+    """
+    shape, kgrid = (2, 1, 1), (2, 2, 2)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    # The moment along ``x``, so a field along ``+-y`` turns it in a plane and
+    # the sign of the turn is unambiguous.
+    calculator = _noncollinear(tmp_path, pseudo_dir, (1, 1, 1), folded,
+                              angle1=90.0, angle2=0.0, tag="turn")
+    scf = calculator.get_scf(conv_thr=1e-11, nbnd=16)
+    assert scf.converged
+
+    amplitude = 0.01
+
+    def turning(x):
+        """``+y`` in the first cell and ``-y`` in the second."""
+        sign = np.cos(2 * np.pi * x[..., 0] / shape[0] - np.pi / 2)
+        zero = np.zeros_like(sign)
+        return amplitude * np.stack([zero, sign, zero], axis=-1)
+
+    result = run_ultracell(
+        calculator.system, calculator.pseudos, scf, shape, kgrid,
+        nbnd=16, conv_thr=1e-9, states_conv_thr=1e-8, mixing_beta=0.3,
+        magnetic_field=turning, max_iterations=120,
+    )
+    assert result.converged
+
+    moments = result.cell_moments()
+    # The field averages to ``+y`` over the first cell and ``-y`` over the
+    # second, so the transverse components are equal and opposite...
+    assert moments[0][1] > 0.0 and moments[1][1] < 0.0
+    assert moments[0][1] == pytest.approx(-moments[1][1], rel=1e-3)
+    # ...and large enough that this is a response rather than round-off.
+    assert abs(moments[0][1]) > 1e-3 * abs(moments[0][0])
+
+    # The **charge** must not respond at linear order, which is the half that
+    # says the two channels are not coupled where they should not be: the
+    # energy is invariant under flipping every spin together with the sign of
+    # ``B``, so the charge is even in ``B`` and the magnetization odd.
+    base = run_ultracell(
+        calculator.system, calculator.pseudos, scf, shape, kgrid,
+        nbnd=16, conv_thr=1e-9, states_conv_thr=1e-8, mixing_beta=0.3,
+    )
+    charge = np.asarray(result.density)[0]
+    unperturbed = np.asarray(base.density)[0]
+    moved = np.abs(charge - unperturbed).max() / unperturbed.max()
+    transverse = abs(moments[0][1]) / abs(moments[0][0])
+    assert moved < 0.2 * transverse, (moved, transverse)
+
+
+@pytest.mark.slow
+def test_a_uniform_vector_field_is_the_unit_cell_under_the_same_field(
+        tmp_path, pseudo_dir):
+    """The applied field's sign and magnitude, against a route with no ultracell.
+
+    At ``N = 1`` a *uniform* applied field is the same physics as an ordinary
+    SCF carrying ``B_field(1:3)``, which shares nothing with this code path: it
+    goes through ``add_bfield.f90``'s expression inside a plane-wave SCF, where
+    this expands the **field-free** states of the same cell in a basis and never
+    applies ``H`` again. For a *vector* field that comparison reaches the
+    transverse components, which no collinear identity can -- and a sign there
+    is the mirror texture, degenerate in energy and invisible to every symmetry
+    check.
+
+    The reference run says something clean on its own and it is asserted first:
+    **the moment aligns with B**. Without anisotropy or spin-orbit coupling,
+    turning the moment costs nothing, so a field of any size turns it all the
+    way and its length is set by the exchange alone. That is what fixes the sign
+    of the coupling, independently of how this code spells it.
+
+    The field is along the ground-state moment with a *small* transverse tilt,
+    so the response stays linear: an oblique field rotates the moment by tens of
+    degrees, which a truncated basis reproduces far more slowly and which would
+    hide the sign inside a large deformation.
+    """
+    kgrid = (2, 2, 2)
+    calculator = _noncollinear(tmp_path, pseudo_dir, (1, 1, 1), kgrid,
+                               angle1=90.0, angle2=0.0, tag="uniform_free")
+    scf = calculator.get_scf(conv_thr=1e-11, nbnd=16)
+    assert scf.converged
+
+    field = (0.005, 0.0005, 0.0)
+    path = tmp_path / "h_uniform_held.in"
+    text = (tmp_path / "h_uniform_free.in").read_text().replace(
+        "occupations='smearing'",
+        f"B_field(1)={field[0]}, B_field(2)={field[1]}, B_field(3)={field[2]},\n"
+        " occupations='smearing'")
+    path.write_text(text)
+    held = Calculator.from_file(path, pseudo_dir=pseudo_dir)
+    reference = held.get_scf(conv_thr=1e-11, nbnd=16)
+    assert reference.converged
+
+    volume = float(calculator.system.cell.volume)
+    m_ref = _total_moment(reference.density, volume)
+    # The moment aligns with the field, which is the sign statement.
+    assert m_ref @ np.asarray(field) > 0
+    direction = m_ref / np.linalg.norm(m_ref)
+    expected = np.asarray(field) / np.linalg.norm(field)
+    assert direction == pytest.approx(expected, abs=2e-3)
+
+    def uniform(x):
+        return np.broadcast_to(np.asarray(field), x.shape[:-1] + (3,))
+
+    errors = []
+    for nbnd in (16, 32, 64):
+        result = run_ultracell(
+            calculator.system, calculator.pseudos, scf, (1, 1, 1), kgrid,
+            nbnd=nbnd, conv_thr=1e-11, states_conv_thr=1e-8, david=2,
+            mixing_beta=0.3, max_iterations=150, magnetic_field=uniform,
+        )
+        assert result.converged
+        moment = result.cell_moments()[0]
+        errors.append(float(np.linalg.norm(moment - m_ref)
+                            / np.linalg.norm(m_ref)))
+        jax.clear_caches()
+
+    # **Monotone, and no sign is asserted on the approach.** The ultracell
+    # Hamiltonian moves with its own truncated density, so an ultracell answer
+    # is not bounded on either side of the reference -- the same warning stage 1
+    # attaches to its charge ladder, and a test written as "from below" would
+    # fail spuriously.
+    assert errors == sorted(errors, reverse=True), errors
+    assert errors[0] < 3e-2 and errors[-1] < 3e-3, errors
+
+
+@pytest.mark.slow
+def test_the_noncollinear_ultracell_converges_to_the_supercell(
+        tmp_path, pseudo_dir):
+    """The canonical check, one regime up: all four density components at once.
+
+    Stages 1 and 3a both measured the method the same way and so does this --
+    against a real ``N``-cell supercell run through this package's own SCF,
+    under the same applied potential, which shares the unit-cell machinery and
+    none of the ultracell assembly. What ``nspin = 4`` adds is that the thing
+    being compared is a *vector field* rather than one or two scalars.
+
+    **The perturbation is a scalar potential on purpose.** A spin-resolved
+    external field has no slot in a supercell's ``vltot``, which is one scalar
+    broadcast to every channel -- stage 3a's finding, unchanged. So the
+    magnetization's response here is entirely **indirect**: the local exchange
+    splitting follows the local charge, which makes this a test of the coupled
+    spinor loop rather than of a field's sign. The sign is pinned separately, by
+    the uniform-field identity above.
+
+    **The two magnetizations are aligned before they are compared, and the
+    angle is asserted to be negligible rather than assumed to be.** Without
+    spin-orbit coupling the moment's direction is a Goldstone mode, so two SCFs
+    started from the same seed could in principle converge to directions
+    differing by a small rigid rotation -- and a component-by-component
+    comparison would read that rotation as basis error, putting a floor under
+    the ladder that has nothing to do with ``nbnd``. It is measured at 7.7e-7
+    rad on this cell, so the alignment is a no-op; the check is here because the
+    failure it guards against would look like a wrong number rather than a wrong
+    answer.
+    """
+    shape, kgrid = (2, 1, 1), (2, 2, 2)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    calculator = _noncollinear(tmp_path, pseudo_dir, (1, 1, 1), folded,
+                               tag="lad_unit")
+    scf = calculator.get_scf(conv_thr=1e-11, nbnd=16)
+    assert scf.converged
+
+    supercell = _noncollinear(tmp_path, pseudo_dir, shape, kgrid, tag="lad_sup")
+    reference_calculation = Calculation(supercell.system, supercell.pseudos)
+    grid_sup = tuple(reference_calculation.basis.dense.grid)
+    axes = [np.arange(m) / m * n for m, n in zip(grid_sup, shape)]
+    coordinates = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1)
+    reference = run_scf(
+        supercell.system, supercell.pseudos,
+        calculation=with_external_potential(
+            reference_calculation,
+            jnp.asarray(_modulation(shape)(coordinates)),
+        ),
+        conv_thr=1e-11, nbnd=32, max_iterations=300,
+    )
+    assert reference.converged
+    rho_sup = np.array(reference.density)
+
+    volume = float(calculator.system.cell.volume)
+    a = _total_moment(rho_sup, volume)
+    b = _total_moment(scf.density, volume)
+    a, b = a / np.linalg.norm(a), b / np.linalg.norm(b)
+    angle = float(np.arccos(np.clip(a @ b, -1.0, 1.0)))
+    assert angle < 1e-4, f"the two moments differ by a rigid rotation of {angle} rad"
+
+    miller = None
+    errors = []
+    for nbnd in (8, 16, 32):
+        result = run_ultracell(
+            calculator.system, calculator.pseudos, scf, shape, kgrid,
+            nbnd=nbnd, conv_thr=1e-10, states_conv_thr=1e-8, david=2,
+            mixing_beta=0.3, max_iterations=200, external=_modulation(shape),
+        )
+        assert result.converged
+        grid_u = tuple(result.ultracell.grid)
+        if miller is None:
+            axes = [np.fft.fftfreq(min(u, s)) * min(u, s)
+                    for u, s in zip(grid_u, grid_sup)]
+            miller = np.stack(np.meshgrid(*axes, indexing="ij"),
+                              axis=-1).reshape(-1, 3).astype(int)
+        rho_u = np.asarray(result.density)
+        errors.append([
+            float(np.abs(_fourier(rho_u[c], grid_u, miller)
+                         - _fourier(rho_sup[c], grid_sup, miller)).max()
+                  / np.abs(_fourier(rho_sup[c], grid_sup, miller)).max())
+            for c in range(4)
+        ])
+        jax.clear_caches()
+
+    # Every component falls, and the three magnetic ones track each other --
+    # they must, since the moment lies along (1,1,1)/sqrt(3), and their agreeing
+    # is a check on the whole component axis that costs nothing to read.
+    for component in range(4):
+        column = [row[component] for row in errors]
+        assert column == sorted(column, reverse=True), (component, column)
+    for row in errors:
+        assert max(row[1:]) / min(row[1:]) < 1.1, row
+    assert max(errors[0]) < 3e-3 and max(errors[-1]) < 5e-4, errors

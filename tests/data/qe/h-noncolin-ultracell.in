@@ -1,0 +1,42 @@
+! A simple cubic hydrogen lattice whose moment is free to point anywhere: the
+! smallest cell that is genuinely noncollinear rather than a collinear one in
+! spinor clothing.
+!
+! **The moment is seeded off every axis on purpose.** Along `z` a noncollinear
+! run has `m_x = m_y = 0` and its potential is diagonal in spin, so every
+! transverse term in the spinor machinery is multiplied by zero and a build
+! that dropped them entirely would pass every test. Seeded in the `xy` plane
+! (`angle1 = 90`), or at `(1,1,1)/sqrt(3)` (`angle1 = 54.7356, angle2 = 45`),
+! the magnetic part of the potential is largely **off-diagonal** in the spinor
+! basis -- which is exactly the machinery `nspin = 2` does not have.
+!
+! **The lattice constant is chosen and neither end of its range works**, which
+! is stage 3a's finding inherited unchanged. At `a = 5.0` the moment is 0.027
+! and the cell sits on the Stoner threshold, where the moment is the difference
+! of two large numbers; at `a = 6.0` it is 0.9997, a saturated atom whose
+! `|zeta| = 1` is the clamp-tangent trap. At 5.5 with a 0.8 seed it converges in
+! six iterations to 0.62 and responds to everything.
+!
+! `nosym` because an ultracell needs it: a modulation breaks the crystal's point
+! group. `nbnd` is doubled against a collinear run because a spinor band holds
+! one electron.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 1, celldm(1) = 5.5, nat = 1, ntyp = 1, ecutwfc = 15.0,
+    nosym = .true., noinv = .true.,
+    noncolin = .true., starting_magnetization(1) = 0.8,
+    angle1(1) = 90.0, angle2(1) = 0.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.02
+ /
+ &electrons
+    conv_thr = 1.0d-11
+    mixing_beta = 0.3
+ /
+ATOMIC_SPECIES
+ H  1.008  H.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ H 0.0 0.0 0.0
+K_POINTS automatic
+ 4 2 2 0 0 0

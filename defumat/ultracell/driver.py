@@ -47,6 +47,18 @@ in the next. That crossing *is* a spin density wave, and two separate Fermi
 levels forbid it -- which is why the constrained branch here is the ``Q = 0``
 moment constraint and nothing finer.
 
+**A spinor run is one block, and the magnetization is then a vector field.**
+At ``nspin = 4`` a basis function has two components, the potential acts on it
+as the 2x2 matrix ``v_0 I + B . sigma``, and nothing factorises: the
+off-diagonal Pauli terms couple the components at every point of the grid. What
+that buys is the modulation a collinear run cannot write down -- one whose
+*direction* turns from cell to cell, which is a helix or a cycloid rather than
+an amplitude wave -- and it is the regime the method's own headline case, a
+noncollinear spin density wave, lives in. Spin-orbit coupling comes along for
+free, because it is entirely inside the frozen states and adds no term here.
+The density has four components, the states hold **one** electron each rather
+than two, and there is one Fermi level over all ``N nbnd`` of them.
+
 **Nothing breaks spin symmetry on its own**, so an unpolarized unit cell put in
 an ultracell stays unpolarized however many cells it has. A modulated
 magnetization has to be driven, and ``magnetic_field`` is what drives it: what
@@ -95,7 +107,10 @@ from defumat.scf.mixing import get_mixer
 from defumat.xc.functional import resolve_functional
 from defumat.scf.occupations import fixed_occupations, smeared_occupations
 from defumat.system.kpoints import for_spin
-from defumat.ultracell.density import ultracell_density
+from defumat.ultracell.density import (
+    spinor_ultracell_density,
+    ultracell_density,
+)
 from defumat.ultracell.grid import Ultracell, folded_kpoints
 from defumat.ultracell.hamiltonian import multiplet_cut, ultracell_matrix
 from defumat.ultracell.mixing import box_kerker
@@ -185,38 +200,59 @@ class UltracellResult:
 
     @property
     def magnetization(self) -> jnp.ndarray:
-        """``rho_up - rho_dw`` on the box, per unit cell. Zero for ``nspin = 1``.
+        """The magnetization on the box, per unit cell.
+
+        ``rho_up - rho_dw`` and shaped ``(*box)`` for a collinear run;
+        ``(3, *box)`` -- the cartesian components ``(m_x, m_y, m_z)`` -- for a
+        noncollinear one, where the *direction* is as much of the answer as the
+        length. Zero, with the collinear shape, when there is no magnetization
+        at all.
 
         The envelope a spin density wave lives in, and the reason the phase has
         a stage 3 at all: it is what a modulated field induces, what Elk's
         ``rndbfcu`` seed is looking for, and what ``magnetic_accuracy`` bounds.
         """
-        if self.density.shape[0] == 1:
+        components = self.density.shape[0]
+        if components == 1:
             return jnp.zeros_like(self.density[0])
+        if components == 4:
+            return self.density[1:]
         return self.density[0] - self.density[1]
 
     def cell_moments(self) -> np.ndarray:
-        """``(N,)`` the moment of each unit cell of the ultracell, in mu_B/2.
+        """The moment of each unit cell of the ultracell, in mu_B/2.
 
-        The integral of ``rho_up - rho_dw`` over one cell ``R``, which is the
-        quantity a spin density wave is *read off*: its sign alternates with the
-        envelope and its profile is the wave. ``None`` of it needs a sphere --
-        the cells tile the ultracell exactly, so the partition is the geometry
+        ``(N,)`` for a collinear run and ``(N, 3)`` for a noncollinear one: the
+        integral of the magnetization over one cell ``R``, which is the quantity
+        a spin density wave is *read off*. For a collinear wave its sign
+        alternates with the envelope and its profile is the wave; for a helical
+        one the length is constant and the whole answer is in how the direction
+        turns from one cell to the next. **None** of it needs a sphere -- the
+        cells tile the ultracell exactly, so the partition is the geometry
         rather than a choice of radius, which is the one thing an ultracell has
         over an atom-resolved moment.
         """
         shape = self.ultracell.shape
         cell_grid = self.ultracell.cell_grid
         m = np.asarray(self.magnetization)
+        vector = m.ndim == 4
         # Split each axis into (cell index, point inside the cell) and sum the
         # inside. The box index is ``J_i = n_i G_i + q_i`` in reciprocal space,
         # but in *real* space a cell boundary falls every ``Nd_i`` points, so
         # the reshape is (n_i, Nd_i) in that order and not the other.
-        m = m.reshape(shape[0], cell_grid[0], shape[1], cell_grid[1],
-                      shape[2], cell_grid[2])
-        per_cell = m.sum(axis=(1, 3, 5))
+        lead = (3,) if vector else ()
+        m = m.reshape(lead + (shape[0], cell_grid[0], shape[1], cell_grid[1],
+                              shape[2], cell_grid[2]))
+        axes = (1, 3, 5) if not vector else (2, 4, 6)
+        per_cell = m.sum(axis=axes)
         element = float(self.cell_volume) / float(np.prod(cell_grid))
-        return (per_cell * element).reshape(-1)
+        per_cell = per_cell * element
+        if not vector:
+            return per_cell.reshape(-1)
+        # Components last, so that a row is one cell's moment vector -- the
+        # same ``(nat, 3)`` layout ``SCFResult.site_moments`` uses, and what
+        # every angle and singular-value check downstream expects.
+        return per_cell.reshape(3, -1).T
 
     def __repr__(self) -> str:
         n = "x".join(str(m) for m in self.ultracell.shape)
@@ -230,13 +266,23 @@ class UltracellResult:
 
 
 def require_an_ultracell_regime(system, pseudos, basis) -> None:
-    """Refuse every regime stage 1 has not been measured in, by name.
+    """Refuse every regime this has not been measured in, by name.
 
     Called **before** the frozen states are computed, not after: that
     diagonalisation is the expensive step of the whole method, and a run
     that is going to be refused should not pay for it first. Everything
     checked here is available from the system, its pseudopotentials and its
     basis, so none of it needs a ``Calculation`` to have been built.
+
+    **All three spin regimes are here**, and spin-orbit coupling with them --
+    it lives entirely in the frozen unit-cell states and adds no term to
+    anything below. What is *not* here and is refused where it is reached: a
+    ground state converged under a field (:func:`run_ultracell`, because the
+    frozen eigenvalues then carry a field ``dV`` does not), and an applied
+    field on a noncollinear cell that carries no magnetization
+    (:func:`_as_field`, because its density and its potential have one
+    component and a field has nothing to be added to). Both depend on the call
+    rather than on the system, which is why neither is in this function.
     """
     require_an_ultracell_functional(
         resolve_functional([p.functional for p in pseudos], system.input_dft)
@@ -248,18 +294,6 @@ def require_an_ultracell_regime(system, pseudos, basis) -> None:
             "of the density through D_ij, so the frozen unit-cell states stop "
             "being a fixed basis the moment the modulation moves, and S enters "
             "every ultracell overlap"
-        )
-    if int(system.nspin) == 4:
-        raise NotImplementedError(
-            "the ultracell refuses noncollinear magnetism and spin-orbit "
-            "coupling (PLAN.md P88; nspin = 2 is stage 3a and is in, nspin = 4 "
-            "is not). The reason is the shape of the matrix rather than the "
-            "physics: a collinear ultracell matrix is block diagonal in spin, "
-            "so it is two of the same build with dV[0] and dV[1], where a "
-            "spinor state is one vector of 2 npwx components and the potential "
-            "acts on it as V_0 + sigma . B -- a different matrix element, with "
-            "the two components transformed separately and recombined. Use "
-            "nspin = 2 for a spin density wave along an axis"
         )
     if getattr(system, "hubbard", None) is not None:
         raise NotImplementedError(
@@ -344,15 +378,28 @@ def _accuracy(residual, ultracell, cell, g2_inverse, keep):
     residual_g = jnp.fft.fftn(residual, axes=(-3, -2, -1)) / points
     residual_g = jnp.where(keep, residual_g, 0.0)
 
-    charge_g = jnp.sum(residual_g, axis=0)
+    # **Which array is the charge depends on the representation and not on the
+    # number of components.** A collinear density is stored ``(up, down)`` and
+    # its charge is the sum; a noncollinear one is stored ``(n, m_x, m_y, m_z)``
+    # and its charge is already the first component. Summing the four would add
+    # the magnetization into the charge, which is dimensionally fine, silently
+    # wrong, and invisible on any cell whose moment is small.
+    components = residual.shape[0]
+    charge_g = residual_g[0] if components == 4 else jnp.sum(residual_g, axis=0)
     charge = float(
         0.5 * volume * E2 * FPI
         * jnp.sum(jnp.real(jnp.conj(charge_g) * charge_g) * g2_inverse)
     )
-    if residual.shape[0] == 1:
+    if components == 1:
         return charge, charge, 0.0
 
-    moment_g = residual_g[0] - residual_g[1]
+    # ``rho_ddot``'s ``of_g(:, 2:nspin)`` slice: **all three** magnetization
+    # components for a noncollinear density, the single difference for a
+    # collinear one, each at the constant weight and each keeping its
+    # ``G + Q = 0`` term.
+    moment_g = (
+        residual_g[1:] if components == 4 else (residual_g[0] - residual_g[1])[None]
+    )
     weight = E2 * FPI / (2.0 * np.pi) ** 2
     magnetic = float(
         0.5 * volume * weight * jnp.sum(jnp.real(jnp.conj(moment_g) * moment_g))
@@ -419,12 +466,15 @@ def run_ultracell(
             a screening calculation applies and what the supercell comparison
             reproduces through
             :func:`~defumat.ultracell.potential.with_external_potential`.
-        magnetic_field: a **collinear** applied field ``B(r)`` in Ry, in the
-            same two forms, which enters as ``v_up -= B`` and ``v_dw += B``
-            (``add_bfield.f90``'s ``i_cons = 4``). Needs ``nspin = 2``: it is
-            what drives a modulated magnetization, since nothing in a collinear
-            SCF breaks spin symmetry on its own, and what it induces is the
-            ``Q``-resolved spin susceptibility.
+        magnetic_field: an applied field ``B(r)`` in Ry, which is what drives a
+            modulated magnetization -- nothing in an SCF breaks spin symmetry on
+            its own -- and what it induces is the ``Q``-resolved spin
+            susceptibility. **A scalar for ``nspin = 2`` and a vector for
+            ``nspin = 4``**: either an array, ``(*box)`` or ``(3, *box)``, or a
+            callable of unit-cell crystal coordinates returning one number or
+            three per point. The noncollinear form is the one that can *turn* --
+            a field whose direction rotates from cell to cell drives a helical
+            spin density wave, which a collinear run cannot express at all.
 
     **Two thresholds set the floor and neither of them is this one.** The frozen
     states are eigenstates of the density the *unit-cell* SCF stopped at, and
@@ -499,12 +549,23 @@ def run_ultracell(
 
     cells = ultracell.cells
     nk0 = k0.nk
+    # **Three numbers, not one** (``CLAUDE.md``): ``nspin`` says which regime is
+    # in force, ``npol`` is how many spinor components a *wavefunction* has, and
+    # ``nspin_mag`` how many components a *density* has. ``blocks`` is a fourth
+    # and it belongs to this method: how many independent matrices there are per
+    # ``k0``. Two for a collinear run, because a collinear potential is diagonal
+    # in spin; **one** for a spinor run, on a space twice as large.
     nspin = int(system.nspin)
+    npol = int(system.npol)
+    nspin_mag = int(system.nspin_mag)
+    blocks = 2 if nspin == 2 else 1
     nbnd = int(eigenvalues.shape[-1])
-    npwx = int(wavefunctions.shape[-1])
+    npwx = int(wavefunctions.shape[-1]) // npol
 
-    eigenvalues = np.asarray(eigenvalues).reshape(nspin, nk0, cells, nbnd)
-    coefficients = jnp.asarray(wavefunctions).reshape(nspin, nk0, cells, nbnd, npwx)
+    eigenvalues = np.asarray(eigenvalues).reshape(blocks, nk0, cells, nbnd)
+    coefficients = jnp.asarray(wavefunctions).reshape(
+        blocks, nk0, cells, nbnd, npol * npwx
+    )
     del wavefunctions
     # **The padding is zeroed here rather than trusted.** Every plane-wave array
     # is padded to a common ``npwx`` and a padded entry points at ``G = 0``, so
@@ -513,8 +574,17 @@ def run_ultracell(
     # the cell has, which is the one place this method cannot afford noise. The
     # eigensolver does leave them zero; this makes that a property of the input
     # rather than an assumption about the solver.
+    #
+    # A spinor state is ``[c_up, c_down]`` of length ``2 npwx``, so the mask is
+    # the doubled one -- ``SpinorHamiltonian._as_state`` of it. Masking with the
+    # single copy would zero the *first half of the down component* and leave
+    # the padding of the up one alone, which is neither of the two things the
+    # mask is for.
+    mask = np.asarray(calculation.basis.planewaves.mask)
+    if npol == 2:
+        mask = np.concatenate([mask, mask], axis=-1)
     coefficients = coefficients * jnp.asarray(
-        np.asarray(calculation.basis.planewaves.mask).reshape(1, nk0, cells, 1, npwx)
+        mask.reshape(1, nk0, cells, 1, npol * npwx)
     )
 
     # **A degenerate cut is only fatal where the cut is, and that was
@@ -531,7 +601,11 @@ def run_ultracell(
     # (:attr:`UltracellResult.multiplet_gap`) and the non-convergence warning
     # names it, so a high cut is reported without being cried over.
     gap = multiplet_cut(jnp.asarray(eigenvalues))
-    occupied = int(np.ceil(float(calculation.nelec) / 2.0))
+    # A spinor band holds **one** electron where a scalar band holds two, so
+    # the count of bands the electrons need is ``nelec`` rather than half of it
+    # -- the same factor ``for_spin`` takes out of the k-point weights, arriving
+    # here instead as a band count.
+    occupied = int(np.ceil(float(calculation.nelec) / (2.0 / npol)))
     if nspin == 2:
         # A polarized channel can hold more bands than half the electrons --
         # fully polarized, the majority channel holds all of them -- so the
@@ -572,13 +646,19 @@ def run_ultracell(
         rho_core_tiled = ultracell.tile(jnp.asarray(calculation.rho_core))
     reference_potential = calculation.potential(jnp.asarray(reference.density)).v_scf
 
-    external_field = _as_field(external, magnetic_field, ultracell, nspin)
+    external_field = _as_field(
+        external, magnetic_field, ultracell, nspin, nspin_mag
+    )
 
     weights0 = np.asarray(k0.weights)
     nelec = float(calculation.nelec)
     smearing = system.occupations not in (None, "fixed")
 
     density = ultracell.tile(jnp.asarray(reference.density))
+    assert density.shape[0] == nspin_mag, (
+        f"the reference density has {density.shape[0]} components where "
+        f"nspin_mag is {nspin_mag}"
+    )
     # ``get_mixer`` drops a ``None`` keyword, so an unset history leaves the
     # mixer its own default and ``mixing_mode = "linear"``, which has no
     # history at all, is not a TypeError.
@@ -589,7 +669,7 @@ def run_ultracell(
         # sloshing an ordinary SCF merely tolerates becomes the whole problem.
         # This is why Elk's own example runs at ``beta0 = 0.001``.
         mixer.precondition = box_kerker(
-            ultracell, cell, nelec, (nspin,) + grid, beta=mixing_beta,
+            ultracell, cell, nelec, (nspin_mag,) + grid, beta=mixing_beta,
         )
     result = None
     history = []
@@ -603,20 +683,23 @@ def run_ultracell(
             potential.v_scf, reference_potential, ultracell, external_field
         )
 
-        # **The matrix is block diagonal in spin and is built one block at a
-        # time.** Without spin-orbit coupling nothing in ``dV`` couples the two
-        # channels -- a collinear potential is diagonal in spin -- so the
-        # ``(2 N nbnd)`` problem is two ``(N nbnd)`` ones, each with its own
-        # ``dV[s]``, and the only thing the channels share is the Fermi level
-        # the occupations are found at. That is why ``ultracell_matrix`` needs
-        # no spin argument: it is called twice.
-        levels = np.empty((nspin, nk0, cells * nbnd))
-        vectors = [[] for _ in range(nspin)]
-        for spin in range(nspin):
+        # **How many matrices there are per ``k0`` is the regime.** For a
+        # collinear run nothing in ``dV`` couples the two channels -- a
+        # collinear potential is diagonal in spin -- so the ``(2 N nbnd)``
+        # problem is two ``(N nbnd)`` ones, each with its own ``dV[s]``, and the
+        # only thing the channels share is the Fermi level the occupations are
+        # found at. For a **spinor** run there is one matrix and it is not
+        # block diagonal in anything: the potential's off-diagonal Pauli terms
+        # mix the components at every point of the grid, which is what lets the
+        # magnetization turn from one cell of the ultracell to the next.
+        levels = np.empty((blocks, nk0, cells * nbnd))
+        vectors = [[] for _ in range(blocks)]
+        for spin in range(blocks):
+            channel = delta_v[spin] if blocks == 2 else delta_v
             for ik in range(nk0):
                 matrix = ultracell_matrix(
                     coefficients[spin, ik], jnp.asarray(eigenvalues[spin, ik]),
-                    box_index[ik], delta_v[spin], grid, batch=state_batch,
+                    box_index[ik], channel, grid, batch=state_batch, npol=npol,
                 )
                 values, states = jnp.linalg.eigh(matrix)
                 levels[spin, ik] = np.asarray(values)
@@ -626,23 +709,38 @@ def run_ultracell(
             levels, weights0, nelec, cells, system, smearing, calculation,
         )
 
-        new = jnp.zeros((nspin,) + grid, dtype=density.dtype)
-        for spin in range(nspin):
+        # **A collinear channel produces one component and a spinor state
+        # produces all of them**, which is why the two accumulations are
+        # different functions rather than one with a flag: the four components
+        # of ``(n, m_x, m_y, m_z)`` are four bilinears in the *same* pair of
+        # transformed spinor components, and there is no channel index to add
+        # them into.
+        new = jnp.zeros((nspin_mag,) + grid, dtype=density.dtype)
+        for spin in range(blocks):
             for ik in range(nk0):
-                new = new.at[spin].add(
-                    ultracell_density(
+                if npol == 2:
+                    new = new + spinor_ultracell_density(
                         coefficients[spin, ik], vectors[spin][ik],
                         jnp.asarray(occupations[spin, ik]),
-                        box_index[ik], grid, float(cell.volume), batch=state_batch,
+                        box_index[ik], grid, float(cell.volume),
+                        nspin_mag=nspin_mag, batch=state_batch,
                     )
-                )
+                else:
+                    new = new.at[spin].add(
+                        ultracell_density(
+                            coefficients[spin, ik], vectors[spin][ik],
+                            jnp.asarray(occupations[spin, ik]),
+                            box_index[ik], grid, float(cell.volume),
+                            batch=state_batch,
+                        )
+                    )
 
         accuracy, charge_dr2, magnetic_dr2 = _accuracy(
             new - density, ultracell, cell, g2_inverse, keep
         )
         history.append((accuracy, charge_dr2, magnetic_dr2))
         if verbose:
-            extra = "" if nspin == 1 else (
+            extra = "" if nspin_mag == 1 else (
                 f"   (charge {charge_dr2:.3e}, magnetic {magnetic_dr2:.3e})"
             )
             print(f"  iteration {iteration:3d}   dr2 = {accuracy:.6e} Ry{extra}")
@@ -659,7 +757,7 @@ def run_ultracell(
             result = _result(
                 density, delta_v, levels, occupations, fermi, True, iteration,
                 (accuracy, charge_dr2, magnetic_dr2), gap, ultracell, reference,
-                started, history, float(cell.volume), nspin,
+                started, history, float(cell.volume), blocks,
             )
             break
 
@@ -671,10 +769,26 @@ def run_ultracell(
         # still hunting for its moment looks exactly like one that has
         # converged neither -- and the fixes are different: the second wants a
         # tighter seed or more iterations, the first wants Kerker.
-        halves = "" if nspin == 1 else (
+        halves = "" if nspin_mag == 1 else (
             f" (charge {charge_dr2:.3e}, magnetization {magnetic_dr2:.3e}; "
             f"the magnetization half carries no 1/|G+Q|^2 weight, so on a "
             f"magnetic cell it is the one that decides)"
+        )
+        # **A noncollinear cell has a soft direction a collinear one does not,
+        # and it is the first thing to try.** Turning every moment rigidly
+        # costs no energy without spin-orbit coupling or anisotropy, so the
+        # ``Q = 0`` transverse component of the magnetization has no restoring
+        # force at all -- and an Anderson mixer extrapolating along a flat
+        # direction is what runs away. Measured on a one-electron hydrogen
+        # lattice under a turning field: ``mixing_beta = 0.7`` diverges to a
+        # moment of 2.2 mu_B/2, which the cell cannot hold, where 0.3 converges.
+        rigid = "" if nspin_mag != 4 else (
+            f" This is a noncollinear run, where turning every moment together "
+            f"costs no energy without spin-orbit coupling -- so the Q = 0 "
+            f"transverse magnetization has no restoring force and an "
+            f"extrapolating mixer runs away along it. Lower mixing_beta "
+            f"(currently {mixing_beta:g}; 0.3 converges cases 0.7 diverges on) "
+            f"before anything else."
         )
         warnings.warn(
             f"the ultracell loop did not converge: dr2 = {total:.3e} Ry"
@@ -685,31 +799,35 @@ def run_ultracell(
             f"iteration budget. A truncation that cuts a degenerate multiplet "
             f"(multiplet_gap = {gap:.2e} Ry here) is the other way this stalls, "
             f"and the fix for that one is a larger nbnd rather than more "
-            f"iterations",
+            f"iterations.{rigid}",
             stacklevel=2,
         )
         result = _result(
             density, delta_v, levels, occupations, fermi, False, max_iterations,
             history[-1], gap, ultracell, reference, started, history,
-            float(cell.volume), nspin,
+            float(cell.volume), blocks,
         )
     return result
 
 
 def _result(density, delta_v, levels, occupations, fermi, converged, iterations,
             accuracy, gap, ultracell, reference, started, history, cell_volume,
-            nspin) -> UltracellResult:
+            blocks) -> UltracellResult:
     """Pack the loop's state, squeezing the spin axis the way every result does.
 
-    ``nspin = 1`` drops the leading channel axis from the eigenvalues and the
+    One matrix block drops the leading channel axis from the eigenvalues and the
     occupations (``CLAUDE.md``'s rule for every result object), so a stage 1
-    caller sees exactly the ``(nk0, N nbnd)`` arrays it saw before spin
-    existed. The **density** keeps its axis, because it is fed straight back
-    into ``tile`` and the potential, both of which want it.
+    caller sees exactly the ``(nk0, N nbnd)`` arrays it saw before spin existed.
+    The axis that is squeezed is the **matrix** one and not the density's, which
+    is why the argument is ``blocks``: a noncollinear run has four density
+    components and *one* block, and its eigenvalues are one list per ``k0`` in
+    which every state is a spinor. The **density** keeps its axis either way,
+    because it is fed straight back into ``tile`` and the potential, both of
+    which want it.
     """
     total, charge_dr2, magnetic_dr2 = accuracy
     band = float(np.sum(occupations * levels))
-    if nspin == 1:
+    if blocks == 1:
         levels, occupations = levels[0], occupations[0]
     return UltracellResult(
         density=density, delta_v=delta_v, eigenvalues=levels,
@@ -786,26 +904,60 @@ def _on_the_box(field, ultracell: Ultracell, what: str):
     return jnp.real(field)
 
 
-def _as_field(external, magnetic_field, ultracell: Ultracell, nspin: int):
-    """The applied fields as one ``(nspin, *box)`` addition to ``dV``.
+def _as_field(external, magnetic_field, ultracell: Ultracell, nspin: int,
+              nspin_mag: int):
+    """The applied fields as one ``(nspin_mag, *box)`` addition to ``dV``.
 
-    A scalar potential is felt in full by both channels; a **collinear magnetic
-    field** splits them, ``v_up -= B`` and ``v_dw += B``, which is
-    ``add_bfield.f90:237-238`` (``i_cons = 4``) and the same sign the Zeeman
-    energy ``-B . m`` gives when differentiated with ``m = rho_up - rho_dw``.
-    Both are in Ry, and ``B`` here is the field times the Bohr magneton, which
-    is what QE's ``bfield`` already is.
+    A scalar potential is felt in full by both channels of a collinear run and
+    by the charge component alone of a noncollinear one -- ``set_vrs``'s rule,
+    and :func:`~defumat.scf.potential.as_potential_components` is where it is
+    written down.
+
+    A **magnetic field** is where the two regimes differ, and the sign is the
+    same one twice. Collinear: ``v_up -= B`` and ``v_dw += B``, which is
+    ``add_bfield.f90:237-238``. Noncollinear: ``v(:, 2:4) -= B``, which is the
+    same routine's line 244 -- and in the ``(v_0, B_x, B_y, B_z)`` layout the
+    two say exactly the same thing, since ``v_up = v_0 + v_z``. Both are the
+    sign the Zeeman energy ``-B . m`` gives when differentiated. Everything is
+    in Ry and ``B`` is the field times the Bohr magneton, which is what QE's
+    ``bfield`` already is.
+
+    **A noncollinear field is a vector and a collinear one is a number**, so
+    the argument changes shape with the regime: ``(*box)`` for ``nspin = 2``,
+    and ``(3, *box)`` for ``nspin = 4`` -- or a callable returning ``(..., 3)``
+    from crystal coordinates, which is how a *rotating* field is written and is
+    the thing a collinear run cannot express at all. A field that turns from
+    cell to cell is what drives a helical spin density wave, and it is the
+    reason the noncollinear regime is worth having here.
 
     **Why the field is the interesting one for stage 3 and the potential was
-    for stage 1.** Nothing in a collinear SCF breaks spin symmetry on its own,
-    so an unpolarized unit cell put in an ultracell stays unpolarized however
-    many cells it has -- the modulated magnetization has to be *driven*, either
-    by a modulated field (this) or by a seed the loop is allowed to keep (which
-    is Elk's ``rndbfcu`` with ``reducebf``, and is not written). A field is the
+    for stage 1.** Nothing in an SCF breaks spin symmetry on its own, so an
+    unpolarized unit cell put in an ultracell stays unpolarized however many
+    cells it has -- the modulated magnetization has to be *driven*, either by a
+    modulated field (this) or by a seed the loop is allowed to keep (which is
+    Elk's ``rndbfcu`` with ``reducebf``, and is not written). A field is the
     honest half: what it induces is the ``Q``-resolved spin susceptibility, a
     quantity rather than an initial condition.
     """
-    if magnetic_field is not None and nspin == 1:
+    if magnetic_field is not None and nspin_mag == 1:
+        # **Two different cells land here and the advice is different.** An
+        # ``nspin = 1`` run has one density and nothing for a field to split. A
+        # spin-orbit run on a *nonmagnetic* cell has spinor wavefunctions and
+        # still ``nspin_mag = 1``: its density, its potential and the frozen
+        # reference potential all have one component, and inventing three more
+        # here would leave ``dV`` and the eigenvalues it is subtracted from in
+        # different representations.
+        if nspin == 4:
+            raise ValueError(
+                "an applied magnetic field needs a noncollinear run that "
+                "carries a magnetization: this one has nspin_mag = 1 (a "
+                "spin-orbit calculation with no magnetization), so its "
+                "density and its frozen potential are a single component and "
+                "there is nothing for a field to be added to. Give the unit "
+                "cell a small starting_magnetization so that domag is true -- "
+                "it may converge back to nearly zero, which is fine, and the "
+                "Q-resolved susceptibility this measures is then the Pauli one"
+            )
         raise ValueError(
             "an applied magnetic field needs two spin channels to split: this "
             "run is nspin = 1, where there is one density and the field has "
@@ -815,10 +967,52 @@ def _as_field(external, magnetic_field, ultracell: Ultracell, nspin: int):
         return None
 
     grid = tuple(ultracell.grid)
-    field = jnp.zeros((nspin,) + grid, dtype=ultracell.precision.real)
+    field = jnp.zeros((nspin_mag,) + grid, dtype=ultracell.precision.real)
     if external is not None:
-        field = field + _on_the_box(external, ultracell, "potential")[None]
+        scalar = _on_the_box(external, ultracell, "potential")
+        field = field + (
+            jnp.zeros_like(field).at[0].add(scalar) if nspin_mag == 4
+            else scalar[None]
+        )
     if magnetic_field is not None:
-        b = _on_the_box(magnetic_field, ultracell, "magnetic field")
-        field = field.at[0].add(-b).at[1].add(b)
+        if nspin_mag == 4:
+            b = _on_the_vector_box(magnetic_field, ultracell)
+            field = field.at[1:].add(-b)
+        else:
+            b = _on_the_box(magnetic_field, ultracell, "magnetic field")
+            field = field.at[0].add(-b).at[1].add(b)
     return field
+
+
+def _on_the_vector_box(field, ultracell: Ultracell):
+    """A noncollinear applied field as a real ``(3, *box)`` array.
+
+    The callable form takes **unit-cell crystal coordinates** shaped
+    ``(..., 3)`` -- running over ``[0, n_i)`` across the ultracell, so one
+    ultracell period along axis ``i`` is ``2 pi x_i / n_i`` -- and returns the
+    three cartesian components of ``B`` at each point, shaped ``(..., 3)``.
+    That is the natural way to write a field that turns:
+    ``lambda x: B * stack([cos(2 pi x[..., 2] / n), sin(...), zeros], -1)``.
+    An array is ``(3, *box)``, components first, like every other field here.
+    """
+    grid = tuple(ultracell.grid)
+    if callable(field):
+        axes = [np.arange(m) / n for m, n in zip(grid, ultracell.cell_grid)]
+        coordinates = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1)
+        values = jnp.asarray(field(coordinates))
+        if values.shape != grid + (3,):
+            raise ValueError(
+                f"a noncollinear magnetic field callable must return the three "
+                f"cartesian components at every point, shaped {grid + (3,)}; "
+                f"this one returned {tuple(values.shape)}"
+            )
+        return jnp.real(jnp.moveaxis(values, -1, 0))
+    values = jnp.asarray(field)
+    if values.shape != (3,) + grid:
+        raise ValueError(
+            f"a noncollinear applied magnetic field is on {(3,) + grid} -- the "
+            f"three cartesian components over the ultracell box -- and this one "
+            f"is {tuple(values.shape)}. A collinear run takes a scalar B(r); a "
+            f"noncollinear one takes a vector, which is the whole difference"
+        )
+    return jnp.real(values)

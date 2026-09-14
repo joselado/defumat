@@ -44,7 +44,45 @@ from defumat.basis.fft import g_to_r, gather_from_box, r_to_sticks, sticks_to_r
 from defumat.batching import map_bands
 from defumat.pseudo.projectors import Projectors
 
-__all__ = ["SpinorHamiltonian"]
+__all__ = ["SpinorHamiltonian", "spin_multiply"]
+
+
+def spin_multiply(field: jnp.ndarray, potential: jnp.ndarray) -> jnp.ndarray:
+    """``sum_b V_{ab}(r) psi^b(r)`` for ``field`` shaped ``(..., 2, *grid)``.
+
+    The 2x2 matrix a noncollinear potential is at every point of the grid,
+
+        V(r) = v_0(r) I + B(r) . sigma
+              = [[v_0 + B_z,  B_x - i B_y],
+                 [B_x + i B_y, v_0 - B_z]],
+
+    with ``potential`` the ``(nspin_mag, *grid)`` components ``(v_0, B_x, B_y,
+    B_z)`` in that order -- ``vloc_psi_nc``'s ``v(ir,1..4)``. With one
+    component it is a scalar multiplication of both spinor components, which is
+    the ``.NOT. domag`` branch and the case a nonmagnetic spin-orbit
+    calculation is in.
+
+    **Module-level because three unrelated places need exactly this and a sign
+    in it is invisible in every one of them.** It is the local term of
+    :class:`SpinorHamiltonian`, the perturbing potential of a spinor Sternheimer
+    solve (:mod:`defumat.response.sternheimer`), and the ultracell's matrix
+    element (:mod:`defumat.ultracell.hamiltonian`). Written three times it
+    would be three chances for ``m_y`` to carry the wrong sign -- which is a
+    state of the opposite chirality, degenerate with the right one whenever
+    spin-orbit coupling is off, so no energy and no symmetry check would see
+    it.
+    """
+    if potential.shape[0] == 1:
+        return field * potential[0]
+    v0, mx, my, mz = potential[0], potential[1], potential[2], potential[3]
+    up, down = field[..., 0, :, :, :], field[..., 1, :, :, :]
+    return jnp.stack(
+        [
+            up * (v0 + mz) + down * (mx - 1j * my),
+            down * (v0 - mz) + up * (mx + 1j * my),
+        ],
+        axis=-4,
+    )
 
 
 class SpinorHamiltonian(eqx.Module):
@@ -274,7 +312,7 @@ class SpinorHamiltonian(eqx.Module):
                     g_to_r(components[..., 0, :], self.fft_index[up], self.grid),
                     g_to_r(components[..., 1, :], self.fft_index[down], self.grid),
                 ], axis=-4)
-            product = self._multiply(field, self.potential)
+            product = spin_multiply(field, self.potential)
             n = self.grid[0] * self.grid[1] * self.grid[2]
             box = jnp.fft.fftn(product, axes=(-3, -2, -1)) / n
             if not self.spiral:
@@ -287,7 +325,7 @@ class SpinorHamiltonian(eqx.Module):
         if not self.spiral:
             columns, index = self.sticks.columns[ik], self.sticks.index[ik]
             field = sticks_to_r(components, self.sticks, columns, index)
-            product = self._multiply(field, self.potential_wave)
+            product = spin_multiply(field, self.potential_wave)
             return r_to_sticks(product, self.sticks, columns, index)
 
         # A spiral transforms each component with its own stick layout. The
@@ -300,7 +338,7 @@ class SpinorHamiltonian(eqx.Module):
             sticks_to_r(components[..., 1, :], self.sticks,
                         self.sticks.columns[down], self.sticks.index[down]),
         ], axis=-4)
-        product = self._multiply(field, self.potential_wave)
+        product = spin_multiply(field, self.potential_wave)
         return jnp.stack([
             r_to_sticks(product[..., 0, :, :, :], self.sticks,
                         self.sticks.columns[up], self.sticks.index[up]),
@@ -308,25 +346,6 @@ class SpinorHamiltonian(eqx.Module):
                         self.sticks.columns[down], self.sticks.index[down]),
         ], axis=-2)
 
-    @staticmethod
-    def _multiply(field: jnp.ndarray, potential: jnp.ndarray) -> jnp.ndarray:
-        """``sum_b V_{ab}(r) psi^b(r)`` for ``field`` shaped ``(..., 2, ...grid)``.
-
-        With one potential component this is a scalar multiplication of both
-        spinor components -- the ``.NOT. domag`` branch of ``vloc_psi_nc``, and
-        the case a nonmagnetic spin-orbit calculation is in.
-        """
-        if potential.shape[0] == 1:
-            return field * potential[0]
-        v0, mx, my, mz = potential[0], potential[1], potential[2], potential[3]
-        up, down = field[..., 0, :, :, :], field[..., 1, :, :, :]
-        return jnp.stack(
-            [
-                up * (v0 + mz) + down * (mx - 1j * my),
-                down * (v0 - mz) + up * (mx + 1j * my),
-            ],
-            axis=-4,
-        )
 
     def _nonlocal(self, components: jnp.ndarray, ik: int) -> jnp.ndarray:
         """``sum_{ab,ij} |beta_i a> D^{ab}_ij <beta_j b|psi>``.

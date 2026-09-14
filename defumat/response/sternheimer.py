@@ -145,7 +145,7 @@ import jax
 from defumat.basis.fft import force_real_g0, g_to_r, g_to_r_gamma
 from defumat.basis.interpolate import to_dense, to_smooth
 from defumat.batching import map_bands, map_k
-from defumat.hamiltonian.noncollinear import SpinorHamiltonian
+from defumat.hamiltonian.noncollinear import SpinorHamiltonian, spin_multiply
 from defumat.scf.density import (
     becsum as becsum_of,
     spinor_becsum,
@@ -874,9 +874,10 @@ def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None)
     # components, transformed independently (the FFT knows nothing about spin)
     # and mixed pointwise, which is ``vloc_psi_nc`` and is
     # :meth:`SpinorHamiltonian._local`'s own body with ``dv`` in place of ``V``.
-    # The Pauli algebra itself is *not* written a second time here -- it is that
-    # class's ``_multiply``, called below -- because a sign in it is invisible
-    # in every shape and every convergence test.
+    # The Pauli algebra itself is *not* written a second time here -- it is
+    # :func:`~defumat.hamiltonian.noncollinear.spin_multiply`, called below --
+    # because a sign in it is invisible in every shape and every convergence
+    # test.
     noncolin = bool(calculation.noncolin)
     npwx = mask.shape[-1]
     if noncolin:
@@ -890,7 +891,7 @@ def local_perturbation(calculation, dv, v_scf=None, ddd_paw=None, dddd_paw=None)
         def spinor_block(block):
             pair = block.reshape(block.shape[:-1] + (2, npwx))
             field = g_to_r(pair, index, grid)
-            product = SpinorHamiltonian._multiply(field, fields)
+            product = spin_multiply(field, fields)
             box = jnp.fft.fftn(product, axes=(-3, -2, -1)) / n
             gathered = jnp.take(
                 box.reshape(box.shape[:-3] + (-1,)), index, axis=-1
