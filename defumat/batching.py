@@ -202,6 +202,14 @@ search above: sample the largest free block *per iteration* rather than only at
 death, and do it on a cell where **both** arms survive, so the comparison is
 between two curves instead of between two deaths.
 
+**That second condition stopped being hypothetical on 2026-09-14.** The
+``projectors = 'rebuild'`` dial took the slab's peak from 79.43 to 65.47 GB, so
+the cell that previously died in every arm now has about 17.5 GB of slack -- and
+"unavailable in principle" above is a statement about the *failure-only arena
+map*, not about this question. A run that survives can be sampled; it just
+cannot print a death map. So the curve comparison is now obtainable on the cell
+that motivated it, which is the only thing that was missing.
+
 ``Device.memory_stats()`` is the instrument, and it **works on the backend this
 question lives on**. Every bracket quoted above is that call --
 ``jax.devices()[0].memory_stats()["peak_bytes_in_use"]`` and ``["bytes_in_use"]``

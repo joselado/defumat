@@ -1164,9 +1164,18 @@ essentially nothing there. nbse2 is the cell that carries it.
 > `starting_wavefunctions` directly for the first time: `6.42 -> 57.47`, **+51.05 GB**,
 > against the stored run's boundary across the same gap of `20.38 -> 71.43`, **+51.05 GB**.
 > Identical to the digit, so the dial does not touch the spike and the whole improvement is
-> the resident offset it starts from. Headroom on an 82.95 GB pool goes 3.5 -> 17.8 GB,
-> which is **not** a verdict: the 23.18 GiB request that killed 20244646 is a tight-`ethr`
-> phenomenon and 17.8 GB against a 24.89 GB request is short by about 7.
+> the resident offset it starts from. Headroom on an 82.95 GB pool goes 3.5 -> **17.5 GB**.
+>
+> > **Do not subtract the 24.89 GB eigensolver buffer from that**, as an earlier version of
+> > this line did: it is compiled into every solve and is **already inside** the peak, which
+> > is measured *at* `<- diagonalize`, after that solve allocated it. Subtracting it is the
+> > guard decomposition a third time. And all three deaths were **fragmentation** -- about
+> > 26 GB free against the request with no contiguous hole -- so the open question is
+> > whether the allocator still finds one 24.89 GB contiguous hole after hundreds of solves
+> > of churn. 14 GB more slack is the right direction and not a proof. `20244646` died on
+> > the 21.40 GiB **guard**, not the buffer, and the buffer is not a tight-`ethr`
+> > phenomenon: `20252136` died on it at iteration 2. `PERFORMANCE.md` carries the full
+> > correction.
 >
 > **Rebuilding inside the loop is cheaper than hoisting, which is the opposite of the
 > obvious worry.** Compiled into a `lax.while_loop` body with loop-invariant inputs at

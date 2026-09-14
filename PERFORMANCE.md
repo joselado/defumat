@@ -5574,12 +5574,32 @@ not touch the spike at all and the whole of the improvement is the 13.96 GB resi
 it starts from. `MEMORY-AUDIT.md` D10 is unchanged as a phenomenon and is now measured
 rather than inferred from a boundary.
 
-**Headroom, and what it is not.** On an A100 at `MEMFRAC 0.97` the pool is 82.95 GB, so the
-peak going 79.14 -> 65.18 takes headroom from 3.5 to **17.8 GB**. That is real and it is not
-a verdict: both iterations ran at `ethr` 1e-2 and 2.4e-3, while the 23.18 GiB Davidson
-request and the iteration-13 fragmentation that killed 20244646 are **tight-`ethr`**
-phenomena. 17.8 GB of headroom against a 24.89 GB request is short by about 7 GB if that
-request recurs unchanged, so this does not establish that `1 6 1` survives a converged run.
+**Headroom, and what the open question actually is.** On an A100 at `MEMFRAC 0.97` the pool
+is 82.95 GB, so the peak going 79.43 -> 65.47 takes headroom from 3.5 to **17.5 GB**.
+
+> **An earlier version of this paragraph subtracted the 24.89 GB eigensolver buffer from
+> that headroom and called the run "about 7 GB short". That is wrong and is the guard
+> decomposition a third time** -- retracted 2026-09-14 by the session that introduced it,
+> and mirrored here before the retraction arrived, which is the two-session version of the
+> same failure: one decomposes, the other records. **The buffer is compiled into every solve
+> and is already inside the 65.47 GB**, and this needs no arithmetic to see -- the peak is
+> *measured at* `<- diagonalize`, after that solve allocated it. (It is also 24.89 + 12.10 =
+> 36.99 GB against the 37.03 GB in flight there, 65.47 against 28.44 live, but the
+> construction is the argument and the sum is only a check.) Subtracting it treats a term
+> already inside a total as stacked on top of it.
+
+**The deaths were fragmentation, not exhaustion**, and every arena map says so: roughly 26 GB
+free against a 21-23 GiB request with **no contiguous hole**. So the open question is not
+whether there are enough bytes but whether the allocator can still find one 24.89 GB
+contiguous hole after hundreds of solves of churn. **14 GB more slack is unambiguously the
+right direction for that and is not a proof.**
+
+Two facts that go with it, both previously stated wrongly here: `20244646` died on the
+**21.40 GiB guard**, not on the buffer -- `20252129` and `20252136` are the buffer's two --
+and the buffer is **not** a tight-`ethr` phenomenon, since `20252136` died on it at
+**iteration 2** at `ethr` 2.4e-3. What tight `ethr` raises is the *churn*, 2 inner steps to
+70, which is fragmentation pressure rather than size. Deaths at iterations 2, 5 and 13 were
+never going to be predicted by a two-iteration job in either direction.
 
 **The energies are bit-for-bit and the cost is +1.5 per cent.** `E = -9088.38663592` and
 `-8761.56856694` Ry, both to the last printed digit, with `|drho|`, the total moment and
