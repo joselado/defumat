@@ -561,6 +561,25 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   negative, ask what result would have **falsified** the thing being checked and whether the
   instrument could have produced it: a search that cannot surprise you is not a search.
   (2026-09-14, in passing, while both sessions were being careful about everything else.)
+- **The forecast sentence under a verified table is the one nobody checks.** Its two
+  siblings above are about how a number was obtained; this is about *where the scrutiny
+  went*. Every figure in the NiBr2 projector-dial entry was checked by two sessions --
+  each had units, a baseline, and an obvious way to be wrong, so both attracted it. The
+  sentence saying what those figures meant for **a run not yet taken** had none of that,
+  read as a summary of work already verified, and was the only sentence a spending
+  decision rested on. It claimed the cell was "about 7 GB short" by subtracting the
+  eigensolver's 24.89 GB buffer from the headroom -- a term **already inside** the
+  measured peak, because the peak is read *at* `<- diagonalize`, after that solve
+  allocated it. One session wrote it, retracted it a minute later, and the other had
+  already copied it into the record: a verified table lends a forecast credibility the
+  forecast never earned separately. Three habits, in order of how much each is worth:
+  **check the forecast sentence deliberately**, naming which quantities it treats as
+  additive or simultaneous; **prefer a structural argument to an arithmetic one** wherever
+  both exist (*"the peak is measured after the solve allocated it"* needs no sum and
+  cannot be got wrong by a term); and remember that **a caveat which sounds more damning
+  is not therefore safer** -- "7 GB short" was both wrong and more pessimistic than the
+  truth, and on a sentence someone spends a day of cluster time against, over-caution
+  costs exactly what over-claiming does.
 
 ## Non-negotiable conventions
 
