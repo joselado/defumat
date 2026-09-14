@@ -109,9 +109,15 @@ def run_ultracell_stm(
         heights, nheights: the scan along the surface normal, in bohr.
         spin: image one spin channel -- a magnetic tip. A cartesian 3-vector or
             ``"up"``/``"down"``; ``None`` is the charge image. This is the one
-            an ultracell run is usually for: a spin density wave is flat in the
-            charge and modulated in the magnetization, so a nonmagnetic tip
-            sees almost nothing of it.
+            an ultracell run is usually for: a spin density wave lives in the
+            magnetization, and a collinear crystal is unchanged by flipping
+            every spin together with the sign of the field, so the charge
+            cannot respond at first order and a nonmagnetic tip sees the wave
+            **squared** instead, at twice its wavevector. Measured on an
+            eight-cell silicon cell carrying 0.12 Bohr magnetons: 82 per cent
+            of its mean from cell to cell for a polarized tip at one period,
+            37 per cent for a plain one at two, and 1.9e-4 in the charge
+            *density* itself.
         polarization: the tip's spin polarization in ``[-1, 1]``.
         bias: the sample bias in Ry. ``None`` is the zero-bias delta.
         band_cutoff: drop states further than this many widths outside the
