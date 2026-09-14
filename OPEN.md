@@ -2656,3 +2656,40 @@ whatever adjusts a starting `ns`, are where to look -- then narrow `_refusal` an
 converged DFT+U result round-trips to the same `ns` and the same energy. If something
 *does* mutate it, the refusal is right and should say which routine, which is more than it
 says now.
+
+---
+
+# Part VIII -- from the workstation, 2026-09-14
+
+### 1. A spinor-to-collinear demotion lands 1.45e-7 Ry out, and the regression test fails on master
+
+**Found in passing** while A/B-ing an unrelated change, so the A/B that matters was already
+run: `tests/regression/test_continuation.py::test_iron_collinear_to_noncollinear_rotates_the_moment`
+fails at `f5e190e` **and** at `f5e190e` with the resume-pin fix stashed, to every printed
+digit, so it is pre-existing and nothing in `040cce0` reaches it.
+
+**The number.** Line 152, the `4 -> 2` demotion:
+
+```
+Fe 2 -> 4: fresh -55.699684334 Ry in 30 iterations, continued -55.699684241 Ry in 1
+Fe 4 -> 2: fresh -55.699684327 Ry in 23 iterations, continued -55.699684182 Ry in 1
+```
+
+`back.total_energy` against `converged.total_energy` is **1.45e-7 Ry** against
+`SAME_SOLUTION_RY = 1e-7`, so it fails by 45 per cent of the tolerance. The **promotion**
+direction is 9.3e-8 and passes, just inside the same tolerance, which is the part that says
+this is not simply a loose constant: the two directions of the same round trip sit either
+side of the line, and the failing one is the direction whose comment says the demotion has to
+*find* the magnetization axis rather than read `m_z`.
+
+**What is not known.** Whether the tolerance was always this tight against this pair, whether
+the demotion drifted, or when either happened. A continuation that converges in **one**
+iteration and stops 1.45e-7 from the fresh answer is consistent with a demotion that starts
+slightly off-axis and with a convergence test satisfied before the residual is, and those are
+different defects. Nothing here distinguishes them.
+
+**What would.** Run the demotion with `conv_thr` two orders tighter and see whether the gap
+closes: if it does, the one-iteration exit is the story and the tolerance is measuring the
+stopping rule rather than the demotion; if it does not, the recomposed state is genuinely
+off and `with_spin`'s axis-finding is where to look. That is one cheap run and it has not
+been done.
