@@ -226,3 +226,30 @@ def test_the_solver_is_never_handed_a_parked_store(monkeypatch):
 
     assert seen, "the solver was never called"
     assert all(kind in (None, "device") for kind in seen), seen
+
+
+def test_the_resolved_mode_is_printed_and_a_typo_does_not_read_as_a_pin(
+        monkeypatch, capsys):
+    """The log says what is in force, not what was asked for.
+
+    ``_wfc_store_default`` warns and falls back on a value it does not
+    recognise, and nothing else printed the answer -- so in a cluster job's log
+    a misspelt ``DEFUMAT_WFC_STORE`` looked exactly like a working pin. The
+    line under test is the one that tells them apart, and the assertion is that
+    it agrees with :func:`resolve_wfc_store` rather than with the request.
+    """
+    _scf("device", max_iterations=1, verbose=True)
+    printed = capsys.readouterr().out
+    assert "wfc_store = device" in printed
+    assert "k_batch = " in printed and "band_batch = " in printed
+
+    # The typo. The run falls back to the platform default; the log must say
+    # the default, and must not echo what was asked for.
+    monkeypatch.setenv("DEFUMAT_WFC_STORE", "hsot")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _scf("default", max_iterations=1, verbose=True)
+        fallback = resolve_wfc_store("default")
+    printed = capsys.readouterr().out
+    assert f"wfc_store = {fallback}" in printed
+    assert "hsot" not in printed

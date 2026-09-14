@@ -98,8 +98,8 @@ from defumat.pseudo.projectors import build_projector_core, projector_channels
 from defumat.pseudo.upf import Pseudopotential
 from defumat.pseudo.spinorbit import becsum_transform, build_spin_orbit
 from defumat.batching import (
-    fetch_wavefunctions, map_k, park_wavefunctions, resolve_k_batch,
-    resolve_wfc_store,
+    fetch_wavefunctions, map_k, park_wavefunctions, resolve_band_batch,
+    resolve_k_batch, resolve_wfc_store,
 )
 from defumat.scf.continuation import ContinuedState, continued_state
 from defumat.scf.density import (
@@ -4700,6 +4700,23 @@ def run_scf(
     # accelerator default. See :mod:`defumat.batching` for what it wins and --
     # more to the point -- what it does not.
     wfc_store = resolve_wfc_store(wfc_store)
+    if verbose:
+        # **What is in force, said once.** All three of these are resolved from
+        # the platform and then from an environment variable, and all three
+        # warn-and-ignore a value they do not recognise -- so a typo in
+        # ``DEFUMAT_WFC_STORE`` is indistinguishable in a log from a working
+        # pin, which is exactly the thing a cluster job's provenance block
+        # needs to record. ``None`` prints as ``all`` to match
+        # :meth:`defumat.sizing.SizeEstimate.report`, so the estimate and the
+        # run never disagree about the same setting. ``david`` is not here: it
+        # is an explicit argument with no environment leg, so it cannot be
+        # silently dropped.
+        def _dial(value):
+            return "all" if value is None else value
+
+        print(f"  k_batch = {_dial(calculation.k_batch)}  "
+              f"band_batch = {_dial(resolve_band_batch())}  "
+              f"wfc_store = {wfc_store}")
 
     # A residual solver runs *before* the loop and hands it a density that is
     # already self-consistent, so the loop's first iteration is what turns that
