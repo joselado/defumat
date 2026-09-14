@@ -4525,10 +4525,17 @@ fixed occupations warns and takes the middle of the gap, which is
 \code{stm.f90}'s own rule.
 
 \textbf{A magnetic tip is what a spin density wave needs.} A collinear system is
-invariant under flipping every spin together with the sign of $B$, so a spin
-density wave driven by \code{magnetic\_field} is almost invisible in the charge
-and lives entirely in the magnetization; \code{spin} and \code{polarization}
-project it, exactly as they do for a unit-cell image.
+invariant under flipping every spin together with the sign of $B$, so the charge
+cannot respond at first order and a wave driven by \code{magnetic\_field} is
+almost invisible in the charge \emph{density}: on an eight-cell silicon
+ultracell carrying 0.12 Bohr magnetons the total density varies by
+$1.9\times10^{-4}$ of its mean from cell to cell. What an unpolarized tip sees
+is neither that small nor the wave itself, but the wave \emph{squared}, two
+periods where the wave has one, at 37 per cent of its mean against a polarized
+tip's 82, since the leading charge response is at twice the wavevector and the
+tip energy is a smeared band edge rather than a count of electrons.
+\code{spin} and \code{polarization} project the channel, exactly as they do for
+a unit-cell image.
 
 \textbf{The number.} The reference is the one the ultracell itself is checked
 against: a real $N$-cell supercell under the same applied potential, run through
