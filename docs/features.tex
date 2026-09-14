@@ -626,17 +626,53 @@ and this is the one thing to know before using it. It is Elk's \code{beta0}: the
 increment, the starting value and the floor the halving relaxes towards, all
 three, not a step length. Elk's default is $0.05$ and it is small on purpose;
 $0.7$ saturates at $\beta_{\max}$ within two iterations and leaves plain linear
-mixing at $0.85$ under an adaptive name. Leaving \code{mixing\_beta} unset is
-therefore the right thing --- each mode then supplies its own default, $0.7$ for
-the QE family and $0.05$ here --- and passing a step length warns rather than
-running quietly. On the two-atom silicon cell of \code{benchmarks/si-1k.in} at
-\code{conv\_thr = 1e-10} it takes 17 iterations against Anderson's 7, to the same
-total energy to ten digits: it is a \emph{robustness} mixer and is expected to
-lose on a cell that was never hard.
+mixing at $0.85$ under an adaptive name, which is what the warning above that
+value is for. Each mode supplies its own default when \code{mixing\_beta} is
+unset, $0.7$ for the QE family and $0.05$ here, so an input that names neither
+gets the right one; an input that \emph{does} set \code{mixing\_beta} has that
+number adopted as $\beta_0$, and the same figure therefore means two different
+things depending on the mode.
+
+\textbf{Elk's $0.05$ is a safe default rather than the best value}, and the
+measurement says so: on bcc iron with its moment in the plane
+(\code{tests/data/qe/fe-noncolin-pbe-stress.in}, ultrasoft, PBE, noncollinear)
+$\beta_0 = 0.2$ converges in \textbf{16} iterations where $\beta_0 = 0.05$ takes
+24, because the soft directions want the step to grow faster than Elk's default
+lets it. Anderson on the same cell takes 43 at the input's own
+\code{mixing\_beta} and 24 at the best one for it, and \code{pw.x} takes 19; all
+of them reach the same energy within $3\times10^{-10}$ Ry and the same moment
+\emph{length} within $3\times10^{-5}\,\mu_B$, with the transverse components
+that symmetry makes zero coming out below $2.4\times10^{-4}\,\mu_B$. So raising $\beta_0$ is the knob to try on a
+magnet that will not move, and it is the opposite of the reflex a slow SCF
+usually gets. The saving is smaller than the iteration count suggests, because
+the diagonalisation threshold is scheduled from the density error and a mixer
+that drops it faster is handed a tighter eigenproblem: the Davidson work falls
+by $1.6\times$ where the iteration count falls by $2.7\times$.
+
+On an easy cell it loses, which is what a robustness mixer does: two-atom
+silicon (\code{benchmarks/si-1k.in}) at \code{conv\_thr = 1e-10} takes 17
+iterations against Anderson's 7, to the same total energy to ten digits.
 
 \begin{refuses}
-\code{mixing\_mode = 'adaptive'} refuses a \textbf{preconditioner} rather than
-ignoring one. Its step is pointwise in real space with its own factor per point,
+\textbf{A mixer whose steps grow can change which solution the run finds}, and
+this is the thing to know before trusting an \code{adaptive} result on a magnet.
+On the four-cell hydrogen ultracell under a turning field --- the case where
+rotating every moment together costs nothing --- it converges in 165 to 172
+iterations against Anderson's 265, and to a \emph{different state}: the per-cell
+moment comes out at $0.186\,\mu_B$ against Anderson's $0.978$, a factor of five
+in the \emph{length} of the moment rather than a rotation of it. Two values of
+$\beta_0$ a factor of four apart agree with each other to $6\times10^{-5}$, so it
+is systematic and not a stray trajectory, and both runs report
+\code{converged = True} with an \code{accuracy} three orders below
+\code{conv\_thr}. Nothing in the result says which state is the right one.
+
+So on a cell with a soft or degenerate magnetic direction, run it against
+\code{anderson} and compare the \textbf{moments}, not just the energy: a
+converged run is not evidence that the basin was kept. \code{SCFResult.site\_moments}
+is what to compare.
+
+\code{mixing\_mode = 'adaptive'} also refuses a \textbf{preconditioner} rather
+than ignoring one. Its step is pointwise in real space with its own factor per point,
 and Kerker or \code{local-TF} is a single scalar acting in $\mathbf G$-space; the
 two do not compose, so a run asking for both raises. Choose the one that matches
 the direction the cell is slow in: Kerker for long-wavelength charge, this for a

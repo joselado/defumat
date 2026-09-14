@@ -68,8 +68,8 @@ print(f"  worst total energy along the way: {max(energies):+.2f} Ry  "
       f"(the converged one is {anderson.total_energy:.2f})")
 ```
 
-    Anderson: 24 iterations, E = -20.87908220 Ry
-      worst total energy along the way: +105.56 Ry  (the converged one is -20.88)
+    Anderson: 25 iterations, E = -20.87908226 Ry
+      worst total energy along the way: +105.51 Ry  (the converged one is -20.88)
 
 
 ## Kerker: divide the divergence out
@@ -103,8 +103,92 @@ print(f"Anderson + Kerker {kerker.iterations:3d} iterations   "
     q_TF from the cell = 1.008 1/bohr   (a hand-picked 1.5 over-screens by 2.2x in q^2)
 
 
-    Anderson           24 iterations
-    Anderson + Kerker  14 iterations   (same answer to 1.6e-09 Ry)
+    Anderson           25 iterations
+    Anderson + Kerker  15 iterations   (same answer to 4.0e-09 Ry)
+
+
+## The opposite failure: a run that crawls
+
+Kerker answers an SCF that is **oscillating**: the charge sloshes, the Hartree term amplifies
+it from one iteration to the next, and the cure is to damp the long wavelengths. The opposite
+failure is an SCF whose residual is small and never turns around, and a magnet is where that
+one lives.
+
+Without spin-orbit coupling, rotating every moment in the cell together costs no energy at
+all. The self-consistency residual therefore has **no component along that rotation**: the
+fixed point is a whole family rather than a point, and the iteration has to cross that
+direction rather than descend it. Twisting the moments slowly instead of rigidly costs only
+the spin-wave energy $D q^2$, which vanishes as the cell gets longer. Damping harder does
+nothing for a direction like that. The step has to get *longer*.
+
+`mixing_mode = 'adaptive'` is Elk's scheme and does exactly that. It carries one step length
+per component of the density and moves it by the sign of that component's residual: up while
+the residual keeps pushing the same way, halved when it turns over. A component the iteration
+is crawling along accelerates on its own, and one that overshoots is cut back, so it is a
+stall detector with nothing to tune.
+
+One thing to know before reaching for it. `mixing_beta` means something different here: it is
+the **increment** by which each step length grows, and the floor it falls back to, rather than
+a step length itself. It is small on purpose, and leaving it unset gives every mixing mode its
+own default.
+
+
+
+```python
+# bcc iron with its moment in the plane: ultrasoft, PBE, and noncollinear, so the
+# soft direction above is available to it. The input carries its own conv_thr and
+# mixing_beta, which `from_file` reads.
+IRON = Path("../tests/data/qe/fe-noncolin-pbe-stress.in")
+
+magnetic = {}
+for mode in ("anderson", "adaptive"):
+    run = Calculator.from_file(IRON, pseudo_dir=PSEUDO, announce=False)
+    magnetic[mode] = run.get_scf(mixing_mode=mode)
+    steps = sum(h["davidson_iterations"] for h in magnetic[mode].history)
+    print(f"{mode:9s} {magnetic[mode].iterations:3d} iterations, "
+          f"{steps:3.0f} Davidson steps   E = {magnetic[mode].total_energy:.9f} Ry")
+
+gap = abs(magnetic["adaptive"].total_energy - magnetic["anderson"].total_energy)
+moments = [np.asarray(magnetic[m].magnetization_vector) for m in magnetic]
+print(f"\nthe same fixed point: energies {gap:.1e} Ry apart, "
+      f"moments {np.abs(moments[0] - moments[1]).max():.1e} mu_B apart")
+
+```
+
+    anderson   43 iterations,  67 Davidson steps   E = -55.788729937 Ry
+
+
+    adaptive   16 iterations,  42 Davidson steps   E = -55.788729937 Ry
+    
+    the same fixed point: energies 3.0e-10 Ry apart, moments 2.4e-04 mu_B apart
+
+
+
+```python
+fig, ax = plt.subplots(figsize=(6.2, 3.6))
+for mode, style in (("anderson", "-o"), ("adaptive", "-s")):
+    accuracy = [h["accuracy"] for h in magnetic[mode].history]
+    ax.semilogy(range(1, len(accuracy) + 1), accuracy, style, ms=3.5, label=mode)
+ax.axhline(1e-10, color="0.6", lw=0.8, ls="--")
+ax.set_xlabel("SCF iteration")
+ax.set_ylabel("accuracy (Ry)")
+ax.set_title("bcc Fe, moment in the plane: one fixed point, two mixers")
+ax.legend(frameon=False)
+fig.tight_layout()
+
+```
+
+
+    
+![png](17_reaching_self_consistency_files/17_reaching_self_consistency_8_0.png)
+    
+
+
+The iteration count is the bigger number and the Davidson count is the honest one. Fewer
+iterations means the density error falls faster, and the diagonalisation threshold is
+scheduled from that error, so the eigensolver is held tighter sooner and each iteration
+costs more: the step counts above close most of the gap between the two ratios. The saving
+is real, and it is the smaller of the two figures.
 
 
 ## The same fixed point, as a root to be found
@@ -143,12 +227,12 @@ print(f"all three agree to "
       f"{max(abs(r.total_energy - anderson.total_energy) for r in (kerker, newton)):.1e} Ry")
 ```
 
-    all three agree to 6.2e-08 Ry
+    all three agree to 4.2e-09 Ry
 
 
 
     
-![png](17_reaching_self_consistency_files/17_reaching_self_consistency_7_1.png)
+![png](17_reaching_self_consistency_files/17_reaching_self_consistency_11_1.png)
     
 
 
@@ -226,10 +310,10 @@ print(f"iron's magnetic stabilisation energy = "
 
     from the same kicked symmetric root               E (Ry)   m (mu_B)
       Anderson, nspin = 2                       -55.44642602     3.4052
-      Newton-Krylov, nspin = 2                  -55.38228995     0.0002
-      nspin = 1 (independent reference)         -55.38228995         --
+      Newton-Krylov, nspin = 2                  -55.38228995     0.0005
+      nspin = 1 (independent reference)         -55.38228994         --
     
-    Newton's root matches the nspin = 1 reference to 3.1e-10 Ry
+    Newton's root matches the nspin = 1 reference to 7.5e-09 Ry
     iron's magnetic stabilisation energy = 64.1 mRy
 
 
@@ -299,7 +383,7 @@ print(f"{'  Newton-Krylov (returns)':<28} {back.total_energy:15.8f} {float(back.
 
 
     from the perturbed saddle             E (Ry)    m (mu_B)
-      Anderson (runs away)          -86.41841670    2.000000
+      Anderson (runs away)          -86.41841671    2.000000
       Newton-Krylov (returns)       -86.20620046    0.000005
 
 

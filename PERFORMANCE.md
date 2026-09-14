@@ -5839,3 +5839,116 @@ after `density`, and before the next `diagonalize`, with the dial on and off.
 move the last digit; this one moves no contribution at all, so the test standard is
 equality: same total energy, same eigenvalues, same wavefunctions, same iteration count on
 the hydrogen cell with the store on the device and parked.
+
+## What Elk's adaptive mixer is worth on a magnet, and the two ways to state it (2026-09-14)
+
+`mixing_mode = 'adaptive'` is Elk's `mixadapt` transcribed: one step length per component of
+the mixed vector, grown by `beta0` while that component's residual keeps its sign and halved
+back towards `beta0` when it turns over. Every other mixer here damps a residual that is
+**oscillating**; this one lengthens a step that is **crawling**, which is the shape the
+magnetic directions of a noncollinear cell have. `MAGNETISM-NEXT.md` item F2 is the account
+of which directions those are.
+
+**The cell.** `tests/data/qe/fe-noncolin-pbe-stress.in`: bcc iron with its moment in the
+plane, ultrasoft, PBE, `4x4x4` with `nosym`, `nbnd = 16`, `conv_thr = 1e-10`. Two cores.
+Iteration counts are deterministic and were reproduced to the digit on a second pass; the
+wall clocks are the warm pass, because a first call times whether the kernel cache had that
+executable.
+
+| mode | `mixing_beta` | iterations | wall clock | total energy |
+|---|---|---|---|---|
+| `anderson` | 0.2, the input's own | 43 | 118.6 s | -55.7887299367 Ry |
+| `anderson` | 0.7 | **24** | 78.0 s | -55.7887299370 Ry |
+| `adaptive` | 0.2, the input's own | **16** | 65.8 s | -55.7887299370 Ry |
+| `adaptive` | 0.05, Elk's own | 24 | 77.0 s | -55.7887299370 Ry |
+| `pw.x` | 0.2 | 19 | | |
+
+**There are two honest headlines and the difference between them is a knob, so both are
+given.** On the input as written, both modes at `mixing_beta = 0.2`, it is **43 against 16**.
+Against the best `anderson` on this cell, which is `beta = 0.7`, it is **24 against 16**. The
+second is the one to quote when someone asks what the mixer is worth, and the first is the one
+a user actually meets, because an input file's `mixing_beta` is adopted by whichever mode is
+selected. **`mixing_beta` is Elk's `beta0` under `adaptive`** -- an increment and a floor
+rather than a step length -- so the two columns of 0.2 are not the same setting, and the row
+that shows it is `adaptive` at Elk's own 0.05 taking 24 where 0.2 takes 16: on this cell the
+soft directions want the step to grow *faster* than Elk's default lets it.
+
+All four runs reach the same state, and it is worth saying at what level. The energies span
+3e-10 Ry. The moment's **length** -- which is `m_x`, since the input puts the moment along `x`
+-- agrees to 5.0e-6 mu_B between the pair at `mixing_beta = 0.2` and spans 3.3e-5 mu_B across
+all four. The two **transverse** components, which symmetry makes zero, come out at most
+2.4e-4 mu_B, so that is the level at which "the same magnetic state" is being asserted and it
+is set by the transverse residue rather than by the length. It does not track `accuracy`
+cleanly: `anderson` at 0.2 stops at 4.4e-11 carrying the largest transverse components and
+`adaptive` at 0.05 stops at 4.0e-11 carrying the smallest, so what is left in those components
+is not simply how tightly each run converged, and nothing here explains it.
+
+**A correction to item F while we are here.** `MAGNETISM-NEXT.md` F records this cell at 43
+against `pw.x`'s 19 and reads it as a 2:1 ratio needing an explanation. Most of that ratio is
+the mixing parameter: the same cell at `mixing_beta = 0.7` takes **24**, which is 1.26 times
+`pw.x` rather than 2.26 times it. The recorded 43 stands as a measurement and its
+*interpretation* does not -- `mixing_beta = 0.2` is in the input because QE wanted it there,
+not because it is the right value for this code.
+
+**The iteration ratio overstates the saving, and the reason is QE's own `ethr` schedule.**
+`electrons.f90` ties the diagonalisation threshold to `dr2`, so a mixer that drops the density
+error faster is handed a tighter eigenproblem sooner and pays for it in Davidson steps.
+Measured from the histories rather than argued, both at `mixing_beta = 0.2`:
+
+| | iterations | Davidson steps | per iteration | `ethr` at iteration 5 |
+|---|---|---|---|---|
+| `anderson` | 43 | 67 | 1.55 | 1.31e-4 |
+| `adaptive` | 16 | **42** | 2.62 | **1.24e-5** |
+
+Ten times tighter at the same iteration, and 1.69x the steps to pay for it. So 2.69x fewer
+iterations is **1.60x less Davidson work**, and the wall clock says 1.80x. **An iteration
+count is not a cost when the threshold schedule reads the residual**, and this is the first
+feature here where the two come apart by that much.
+
+**On the case it was most expected to win, it lands somewhere else, and that is the more
+important result.** The four-cell hydrogen ultracell of `OPEN.md` Part VI item 3 under a field
+turning 90 degrees per cell is the flat-manifold case: rotating every moment together costs
+nothing, the residual has no component along it, and the mixer has to traverse rather than
+descend. `kerker = False` for all three, since `adaptive` refuses a preconditioner:
+
+| mode | `beta0` | iterations | converged | mean per-cell `|m|` |
+|---|---|---|---|---|
+| `anderson` | 0.7 | 265 | yes, 3.0e-10 | 0.978 |
+| `adaptive` | 0.05 | 172 | yes, 9.8e-10 | **0.186** |
+| `adaptive` | 0.2 | 165 | yes, 9.1e-10 | **0.186** |
+
+**The iteration counts are not comparable, because the runs do not end in the same place.**
+The per-cell moments differ by 1.071 mu_B between `anderson` and either `adaptive` run, which
+is not a rotation -- a rigid rotation preserves the length, and this is the length, falling by
+a factor of five to a nearly collapsed moment on an atom that holds one electron. The two
+`adaptive` runs agree with each other to 6e-5 at two values of `beta0` a factor of four apart,
+so it is systematic rather than a stray trajectory: the growing steps carry this cell out of
+the magnetic basin and it converges, cleanly and below `conv_thr`, somewhere else.
+
+So this case measures nothing about the flat manifold and it does establish something else,
+which is the caveat the feature ships with: **a mixer whose steps grow can change which
+solution a run finds**, and `converged = True` with an `accuracy` three orders below
+`conv_thr` does not protect against it. It is the same hazard `OPEN.md` Part VI item 3 already
+records for a large `mixing_beta` on this cell -- excursions through per-cell moments of 2.2
+mu_B on a one-electron atom -- reached by a different route. What has not been established is
+which of the two states is the right one: `anderson`'s 0.978 is nearly saturated and
+`adaptive`'s 0.186 nearly collapsed, the record's own figure for the unit cell is 0.62, and
+the setup here is not bit-for-bit the one that entry measured. That comparison is owed before
+either number is quoted as a ground state.
+
+**It loses on a cell that was never hard, which is what a robustness mixer does.**
+`benchmarks/si-1k.in`, two-atom silicon at `conv_thr = 1e-10`, each mode at its own default
+`mixing_beta`: `anderson` 7 iterations, `linear` 9, `adaptive` 17, all to the same total energy
+to ten digits. Elk says the same about its own scheme in its release notes, and reaching for
+this on an easy cell is the wrong move.
+
+**What is not measured here, and why.** The rule is that a feature taken from Elk is timed
+against Elk. **Elk is not built on this machine** (`vendor/elk/src/elk` is absent), so the
+Elk-side pair is owed and not taken. Two things to know before anyone takes it. Elk mixes the
+**potential** where this mixes the density, and its basis is LAPW rather than a plane-wave
+sphere, so an iteration count does not transfer between the two codes even on the same crystal
+-- what would be comparable is each code's adaptive mode against its own default mixer, a ratio
+rather than a count. And the vendored Elk here is 11.0.2, whose `mixerifc.f90` offers types 0,
+1 and 3 only: the parameter-free "robust adaptive mixer" (`mixtype = 4`) that Elk's release
+notes describe as converging almost anything is **not** in this copy, so it has not been read,
+let alone transcribed.

@@ -399,6 +399,13 @@ the packed real-space vector where QE uses `rho_ddot`; QE extrapolates only over
 sphere and linearly mixes above it; and `_mix` packs `becsum` unconditionally where QE
 allocates `rho%bec` only `IF (okpaw)`.
 
+**Most of the 43 on the second cell is the mixing parameter, measured 2026-09-14.**
+`fe-noncolin-pbe-stress.in` at `mixing_beta = 0.7` instead of the input's 0.2 takes **24**
+rather than 43, which is 1.26 times `pw.x`'s 19 rather than 2.26 times it. The 43 stands as a
+measurement and the 2:1 reading of it does not: 0.2 is in that input because QE wanted it
+there, not because it is the right value for this code. What is left to explain on that cell
+is 24 against 19, and the same beta sweep has not been run on `fe-mag-1k`.
+
 **P78 took the first measurement against this and it points away from it.** The deconfounder
 `benchmarks/fe-unstable-nonmagnetic.in` — same cell, same dataset, same `mixing_beta = 0.3`,
 `nspin = 1`, where a magnetization weighting cannot act at all — takes **21**. So most of
@@ -616,18 +623,37 @@ decide it, because a departure from `pw.x` needs a number rather than an argumen
   accident. Decided by iterations on `fe-noncolin-pbe-stress` at fixed charge `beta`, with
   the ceiling set by Option 0: if the dump says the residual is charge-dominated, this buys
   nothing and should not land.
-- **Elk's `mixadapt`, transcribed as a `MIXERS` entry.** Per component of the mixed vector,
-  `beta_j` grows by `beta_0` while the residual keeps its sign and is halved toward `beta_0`
-  when it flips, so the step lengthens on its own along a direction that is not turning
-  around, which is what a flat manifold looks like from inside. It is therefore the cheapest
-  thing that addresses the rigid rotation and the soft twist together, and it is a stall
-  detector by construction rather than by a threshold. Two things to state rather than
-  discover: Elk mixes the **potential** and this would mix the density, and `mixadapt` is
-  pointwise in real space so it does not compose with Kerker as written, which makes it an
-  alternative to the preconditioned mixer and not a layer on it. Before writing a hybrid of
-  our own, fetch Elk's `mixtype = 4`, the parameter-free "robust adaptive mixer" described
-  as converging almost anything: it is **not** in the vendored 11.0.2, and transcribing a
-  published scheme is this project's method where inventing one is not.
+- **Elk's `mixadapt`. ✅ DONE, and it is the largest single number this item has.** Per
+  component of the mixed vector, `beta_j` grows by `beta_0` while the residual keeps its sign
+  and is halved toward `beta_0` when it flips, so the step lengthens on its own along a
+  direction that is not turning around, which is what a flat manifold looks like from inside.
+  A stall detector with no threshold in it. On `fe-noncolin-pbe-stress.in` it takes **16**
+  iterations against `anderson`'s 43 at the input's own `mixing_beta`, and against 24 at the
+  best `mixing_beta` for `anderson` on that cell, to the same energy within 3e-10 Ry and the
+  same moment within 5.0e-6 mu_B; `pw.x` takes 19. **The iteration ratio overstates it**: the
+  Davidson work falls by 1.60x rather than 2.69x, because `ethr` is scheduled from `dr2` and
+  a faster-falling residual buys a tighter eigenproblem. `PERFORMANCE.md` has the full table
+  and the two honest headlines. Three things stated rather than discovered: Elk mixes the
+  **potential** and this mixes the density; the parameter an input file's `mixing_beta`
+  reaches is Elk's `beta0`, an increment and a floor rather than a step length, so the same
+  number means two things depending on the mode; and it does not compose with Kerker, being
+  pointwise in real space, so it is an alternative to the preconditioned mixer rather than a
+  layer on it and the pair is refused. Still worth fetching before anyone writes a hybrid:
+  Elk's `mixtype = 4`, the parameter-free "robust adaptive mixer" described as converging
+  almost anything, which is **not** in the vendored 11.0.2.
+
+  **And it failed the case this item said would decide it**, which is worth more than the
+  iron number. On the four-cell hydrogen ultracell of `OPEN.md` Part VI item 3, the flat
+  manifold itself, it converges in 165 to 172 iterations against `anderson`'s 265 and to a
+  **different state**: the per-cell moment is 0.186 mu_B against 0.978, a factor of five in
+  the *length*, so it is not the rotation the manifold is made of. Two values of `beta0` a
+  factor of four apart agree to 6e-5, so the growing steps carry that cell out of its
+  magnetic basin systematically, and both runs report converged three orders below
+  `conv_thr`. **So the flat manifold is still unmeasured** -- this item's decisive run has
+  not been done, it has been attempted and invalidated -- and the projection option below is
+  not displaced by the mixer. What the attempt did establish is a property to carry into
+  every other option here: **a step that grows can change which solution is found, and
+  `converged` does not say otherwise.**
 - **Projecting the rigid rotation out of the magnetic residual.** Fully specified already in
   `OPEN.md` Part VI item 3, including the `lspinorb` gate (the mode is gapped there and the
   projection would be actively wrong) and the decisive run (0.002 Ry at `mixing_beta = 0.7`,

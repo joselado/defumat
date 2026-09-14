@@ -184,7 +184,7 @@ drive any of this and is what the examples below use.
 | **Berry-phase polarization** — King-Smith and Vanderbilt's phase along one reciprocal lattice vector, with the quantum it is defined modulo carried beside it. Norm-conserving, ultrasoft, PAW and spinor; metals, `nspin = 2` and spin spirals are refused | `lberry`/`gdir`/`nppstr`, `run_polarization`, `Calculator.get_polarization` | ✓ | ✓ |
 | **Magnetoelectric tensor** $\alpha_{ij} = \partial P_i/\partial B_j$ — the polarization a magnetic field induces. Spin (Zeeman) response, clamped-ion, by a finite difference of the Berry phase over six ground states. Needs spin-orbit coupling, a gap, and a crystal without an inversion centre; the column parallel to the applied field, since a field transverse to the seeded magnetization converges slowly | `magnetoelectric_tensor`, `Calculator.get_magnetoelectric_tensor` | | ✓ |
 | **Continuing one run from another across a change of spin regime** — a converged non-magnetic density as the starting point of a magnetic run, a collinear one of a noncollinear run, spin-orbit coupling switched on. A `HUBBARD` card comes along, which is what makes the staged route into a hard magnet available | `run_scf(starting_from=...)`, `System.with_spin` | (✓)¹ | |
-| **Reaching self-consistency** — Anderson/Broyden mixing, Kerker or local Thomas-Fermi preconditioning (the latter screening by the *local* density, which is what a slab needs), or solving the residual with its own Jacobian, which reaches magnetic solutions no mixer does | `run_scf(mixing_mode=...)`, `run_scf(scf_solver=...)` | (✓)² | (✓)² |
+| **Reaching self-consistency** — Anderson/Broyden mixing, Kerker or local Thomas-Fermi preconditioning (the latter screening by the *local* density, which is what a slab needs), Elk's adaptive scheme for an SCF that is crawling rather than oscillating, or solving the residual with its own Jacobian, which reaches magnetic solutions no mixer does | `run_scf(mixing_mode=...)`, `run_scf(scf_solver=...)` | (✓)² | (✓)² |
 | **Band velocities** $\partial\epsilon_n/\partial\mathbf{k}$, with the nonlocal pseudopotential's own contribution — norm-conserving, ultrasoft and PAW | `band_velocities`, `Calculator.get_band_velocities`, `VelocityOperator` | (✓)³ | |
 | **Effective mass tensor** $m^{\ast}_{ij}$ at any k-point, with the principal masses and the density-of-states mass. Bands inside a degenerate multiplet are reported as the multiplet's invariant sum | `effective_mass`, `Calculator.get_effective_mass` | | ✓ |
 | **Orbital, spin and total angular momentum on each atom** — $\langle L\rangle$, $\langle S\rangle$, $\langle J\rangle$, which is where the orbital moment of a spin-orbit magnet actually sits. Averaged over the group as **axial** vectors, so a symmetry-reduced k-grid works; a relativistic ultrasoft or PAW dataset is refused | `angular_momenta`, `Calculator.get_angular_momenta` | (✓)⁴ | ✓ |
@@ -226,8 +226,10 @@ Where the tick is qualified:
 - ¹ `startingpot = 'file'` reads a density across a change of `nspin`, but
   zero-fills the missing components, so a magnetic run started that way
   converges back to the unpolarized answer.
-- ² both codes have the mixing; the residual solver, which is what reaches the
-  extra solutions, is in neither.
+- ² both codes have mixing and preconditioning, and Elk additionally has the
+  adaptive scheme (`mixtype = 1`, `src/mixadapt.f90`) where `pw.x` has no
+  adaptive mode at all; the residual solver, which is what reaches the extra
+  solutions, is in neither.
 - ³ `fermi_velocity.x` finite-differences eigenvalues and reports only the
   magnitude.
 - ⁴ `lorbm` gives the **cell's** orbital magnetization and nothing per atom;

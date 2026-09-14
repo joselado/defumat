@@ -262,18 +262,24 @@ workstation core, slowest last:
 
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
-| `01` | 5 | `06` | 23 | `32` | 35 | `39` | 151 |
-| `09` | 6 | `25` | 28 | `34` | 40 | `41` | 164 |
-| `02` | 8 | `17` | 29 | `10` | 50 | `44` | 164 |
-| `37` | 9 | `18` | 29 | `29` | 59 | `08` | 171 |
-| `03` | 10 | `12` | 30 | `45` | 76 | `27` | 178 |
-| `05` | 10 | `21` | 30 | `11` | 81 | `43` | 240 |
-| `04` | 12 | `15` | 31 | `14` | 89 | `38` | 242 |
-| `22` | 12 | `24` | 31 | `26` | 109 | `36` | 244 |
-| `42` | 13 | `28` | 33 | `33` | 115 | `35` | 276 |
-| `16` | 18 | `31` | 34 | `19` | 125 | `20` | 282 |
-| `00` | 22 | `40` | 34 | `13` | 131 |  |  |
-| `07` | 22 | `23` | 35 | `30` | 131 |  |  |
+| `01` | 5 | `06` | 23 | `34` | 40 | `41` | 164 |
+| `09` | 6 | `25` | 28 | `10` | 50 | `44` | 164 |
+| `02` | 8 | `18` | 29 | `29` | 59 | `08` | 171 |
+| `37` | 9 | `12` | 30 | `45` | 76 | `27` | 178 |
+| `03` | 10 | `21` | 30 | `11` | 81 | `17` | 203 |
+| `05` | 10 | `15` | 31 | `14` | 89 | `43` | 240 |
+| `04` | 12 | `24` | 31 | `26` | 109 | `38` | 242 |
+| `22` | 12 | `28` | 33 | `33` | 115 | `36` | 244 |
+| `42` | 13 | `31` | 34 | `19` | 125 | `35` | 276 |
+| `16` | 18 | `40` | 34 | `13` | 131 | `20` | 282 |
+| `00` | 22 | `23` | 35 | `30` | 131 |  |  |
+| `07` | 22 | `32` | 35 | `39` | 151 |  |  |
+
+`17` went from 29 s to 203 s on 2026-09-14, when it gained a noncollinear iron cell run
+through two mixers, and that figure is an **upper bound**: it was taken while three other
+jobs held the machine, so an idle re-timing will read lower. It is well under the ceiling
+either way, and the pair of self-consistent runs is the physics of that section rather than
+a sweep, so it is not the cell to cut.
 
 Three of those used to be much slower, and each for the same reason. `19` lost two
 hand-built linear solves and a second self-consistent run that were demonstrating
