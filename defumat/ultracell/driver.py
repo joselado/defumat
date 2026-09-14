@@ -107,13 +107,13 @@ from defumat.scf.mixing import get_mixer
 from defumat.xc.functional import resolve_functional
 from defumat.scf.occupations import fixed_occupations, smeared_occupations
 from defumat.system.kpoints import for_spin
-from defumat.ultracell.density import (
-    spinor_ultracell_density,
-    ultracell_density,
-)
 from defumat.ultracell.grid import Ultracell, folded_kpoints
 from defumat.ultracell.hamiltonian import multiplet_cut, ultracell_matrix
 from defumat.ultracell.mixing import box_kerker
+from defumat.ultracell.states import (
+    UltracellStates,
+    ultracell_band_density,
+)
 from defumat.ultracell.potential import (
     delta_potential,
     hartree_kernel,
@@ -187,6 +187,12 @@ class UltracellResult:
     #: one cell of the ultracell can be taken without the caller holding the
     #: system as well as the result.
     cell_volume: float = 1.0
+    #: The frozen states and the envelope amplitudes, as
+    #: :class:`~defumat.ultracell.states.UltracellStates` -- what an ultracell
+    #: *wavefunction* is made of, and what anything looking at ``Psi`` rather
+    #: than at ``|Psi|^2`` needs. Kept unless ``keep_states=False``; both arrays
+    #: are alive for the whole loop in any case, so keeping them raises no peak.
+    states: object = None
 
     @property
     def eigenvalues_ev(self) -> np.ndarray:
@@ -425,6 +431,7 @@ def run_ultracell(
     mixing_ndim: int | None = None,
     kerker: bool = True,
     state_batch: int | None = 1,
+    keep_states: bool = True,
     verbose: bool = False,
 ) -> UltracellResult:
     """Converge a modulation over ``supercell`` unit cells.
@@ -475,6 +482,16 @@ def run_ultracell(
             three per point. The noncollinear form is the one that can *turn* --
             a field whose direction rotates from cell to cell drives a helical
             spin density wave, which a collinear run cannot express at all.
+        keep_states: keep the frozen states and the envelope amplitudes on the
+            result, as :class:`~defumat.ultracell.states.UltracellStates`. They
+            are what an ultracell *wavefunction* is made of, so an STM image
+            (:func:`~defumat.workflows.ultracell.run_ultracell_stm`) or a
+            tunnelling transmission
+            (:func:`~defumat.workflows.ultracell.run_ultracell_transport`)
+            needs them and cannot rebuild them -- the diagonalisation that made
+            them is the expensive step of the whole method. Keeping them raises
+            no peak, because both arrays are alive for the whole loop in any
+            case; ``False`` drops them once it is over.
 
     **Two thresholds set the floor and neither of them is this one.** The frozen
     states are eigenstates of the density the *unit-cell* SCF stopped at, and
@@ -581,6 +598,7 @@ def run_ultracell(
     # the padding of the up one alone, which is neither of the two things the
     # mask is for.
     mask = np.asarray(calculation.basis.planewaves.mask)
+    padding = mask.reshape(nk0, cells, npwx)
     if npol == 2:
         mask = np.concatenate([mask, mask], axis=-1)
     coefficients = coefficients * jnp.asarray(
@@ -709,31 +727,16 @@ def run_ultracell(
             levels, weights0, nelec, cells, system, smearing, calculation,
         )
 
-        # **A collinear channel produces one component and a spinor state
-        # produces all of them**, which is why the two accumulations are
-        # different functions rather than one with a flag: the four components
-        # of ``(n, m_x, m_y, m_z)`` are four bilinears in the *same* pair of
-        # transformed spinor components, and there is no channel index to add
-        # them into.
-        new = jnp.zeros((nspin_mag,) + grid, dtype=density.dtype)
-        for spin in range(blocks):
-            for ik in range(nk0):
-                if npol == 2:
-                    new = new + spinor_ultracell_density(
-                        coefficients[spin, ik], vectors[spin][ik],
-                        jnp.asarray(occupations[spin, ik]),
-                        box_index[ik], grid, float(cell.volume),
-                        nspin_mag=nspin_mag, batch=state_batch,
-                    )
-                else:
-                    new = new.at[spin].add(
-                        ultracell_density(
-                            coefficients[spin, ik], vectors[spin][ik],
-                            jnp.asarray(occupations[spin, ik]),
-                            box_index[ik], grid, float(cell.volume),
-                            batch=state_batch,
-                        )
-                    )
+        # **The density is the occupations and nothing else**, which is worth
+        # having in one function rather than two: an STM image is this same
+        # accumulation with a smeared delta at the tip energy in place of
+        # ``occupations`` (``PLAN.md`` P89), so a second copy of the loop here
+        # would be a second place for the normalisation to drift.
+        new = ultracell_band_density(
+            coefficients, vectors, occupations, box_index, grid,
+            float(cell.volume), npol=npol, nspin_mag=nspin_mag,
+            batch=state_batch, dtype=density.dtype,
+        )
 
         accuracy, charge_dr2, magnetic_dr2 = _accuracy(
             new - density, ultracell, cell, g2_inverse, keep
@@ -815,6 +818,20 @@ def run_ultracell(
             density, delta_v, levels, occupations, fermi, False, max_iterations,
             history[-1], gap, ultracell, reference, started, history,
             float(cell.volume), blocks,
+        )
+    if keep_states:
+        # **The last iteration's amplitudes, which are the ones the density
+        # came from.** Both branches above leave ``vectors`` and ``levels`` at
+        # the state ``result`` was packed from, converged or not, so an image
+        # built from these is an image of the density that was reported.
+        result.states = UltracellStates(
+            coefficients=coefficients,
+            vectors=jnp.stack([jnp.stack(block, axis=0) for block in vectors],
+                              axis=0),
+            eigenvalues=np.asarray(levels),
+            box_index=np.asarray(box_index), padding=padding,
+            k0_crystal=np.asarray(k0.crystal(cell)), weights=weights0,
+            ultracell=ultracell, cell=cell, npol=npol, nspin=nspin,
         )
     return result
 

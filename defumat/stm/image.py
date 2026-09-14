@@ -332,6 +332,9 @@ class STMImage:
     #: The k-set the tunnelling density was built on, ``None`` when it was the
     #: SCF's own.
     grid: tuple[int, int, int] | None = None
+    #: ``(n1, n2, n3)`` how many unit cells the image spans, for an image of an
+    #: ultracell (``PLAN.md`` P89), and ``None`` for an ordinary one.
+    supercell: tuple[int, int, int] | None = None
 
     @property
     def coordinates(self) -> np.ndarray:

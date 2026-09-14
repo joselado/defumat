@@ -178,6 +178,38 @@ class Ultracell:
         j = (n * miller + q) % box
         return j[..., 0] * (box[1] * box[2]) + j[..., 1] * box[2] + j[..., 2]
 
+    def miller_at(self, flat_index) -> np.ndarray:
+        """``(..., 3)`` ultracell Miller indices of flat box indices.
+
+        The triple ``h`` standing for ``sum_i h_i b_i / n_i``, folded to the
+        interval centred on zero -- the convention :meth:`g2` enumerates in and
+        the one the unit cell's own G-vectors are enumerated in. It is computed
+        **from the indices asked for** rather than read out of a table over the
+        whole box, and that is a memory decision rather than a style one: a
+        slab's ultracell box runs to 10^8 points, where a stored table of
+        triples would be gigabytes, and both callers ask for a small subset of
+        it -- a wavefunction sphere (``N npwx`` entries) or the dense ``keep``
+        set.
+
+        ``miller_at(box_index(G, q))`` is ``n G + q`` on the **wavefunction**
+        sphere, which is what lets an ultracell state be handed to a routine
+        written for a unit-cell one. It is not so on the dense one and does not
+        need to be: ``n G + q`` leaves the centred interval once it passes
+        ``n Nd / 2``, which the dense sphere's outer shell does from ``n = 3``
+        (23 against a half box of 22 at ``n = 3, G_i = 7``), and there what
+        comes back is the *other* representative of the same box entry -- which
+        is the frequency that entry actually carries and therefore the label a
+        sum over the box wants. The wavefunction sphere has a factor of two in
+        hand (``4n - 1`` against ``7.5n`` on the test-suite silicon) and is
+        exact at every entry.
+        """
+        flat = np.asarray(flat_index, dtype=np.int64)
+        box = np.asarray(self.grid, dtype=np.int64)
+        j = np.stack([flat // (box[1] * box[2]),
+                      (flat // box[2]) % box[1],
+                      flat % box[2]], axis=-1)
+        return np.where(j > box // 2, j - box, j)
+
     def tile(self, field):
         """A unit-cell real-space field on the ultracell grid, ``N`` copies.
 

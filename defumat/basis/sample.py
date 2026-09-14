@@ -33,7 +33,8 @@ import numpy as np
 from defumat.basis.fft import r_to_g
 from defumat.basis.gvectors import GVectors
 
-__all__ = ["sample_field", "sample_coefficients", "sample_wavefunctions"]
+__all__ = ["sample_field", "sample_coefficients", "sample_miller",
+           "sample_wavefunctions"]
 
 #: Complex entries in one phase block -- ~32 MB of complex128.
 _PHASE_BLOCK = 2_000_000
@@ -66,8 +67,21 @@ def sample_coefficients(coefficients, gvectors: GVectors, points,
     Separate because a caller that samples the same field on many planes -- a
     constant-current scan is exactly that -- should transform it once.
     """
+    return sample_miller(coefficients, gvectors.miller, points, chunk=chunk)
+
+
+def sample_miller(coefficients, miller, points, chunk: int | None = None):
+    """:func:`sample_coefficients` given the Miller indices themselves.
+
+    The same sum, for a caller whose G-set is not a
+    :class:`~defumat.basis.gvectors.GVectors` -- the ultracell's ``G + Q`` set
+    (:mod:`defumat.ultracell.grid`), whose indices are triples over the
+    ultracell's own reciprocal lattice and which has no sphere object to carry
+    them. Nothing else differs: ``points`` are crystal coordinates of whichever
+    cell ``miller`` is expressed in.
+    """
     coefficients = np.asarray(coefficients)
-    miller = np.asarray(gvectors.miller, dtype=float)
+    miller = np.asarray(miller, dtype=float)
     points = np.atleast_2d(np.asarray(points, dtype=float))
     if points.shape[-1] != 3:
         raise ValueError(f"points must be (np, 3) crystal coordinates, got {points.shape}")

@@ -226,8 +226,8 @@ def run_stm(
                 + ("1/(bohr^3 Ry)" if bias is None else "electrons/bohr^3")
             )
         image = _constant_current(
-            coefficients, dense, geometry, calculation.system.cell,
-            current, heights, nheights,
+            lambda points: sample_coefficients(coefficients, dense, points),
+            geometry, calculation.system.cell, current, heights, nheights,
         )
     else:
         raise ValueError(
@@ -254,8 +254,14 @@ def run_stm(
 # --------------------------------------------------------------------------
 
 
-def _plane(cell, height, axis, plane, shape):
-    """Either the ``height`` shortcut or Elk's three corners."""
+def _plane(cell, height, axis, plane, shape, span=(1.0, 1.0, 1.0)):
+    """Either the ``height`` shortcut or Elk's three corners.
+
+    ``span`` is how far the shortcut's plane reaches along each lattice vector,
+    in crystal coordinates. One cell everywhere is an ordinary surface image;
+    an ultracell image spans ``n_i``, because the modulation is the thing being
+    looked at (:func:`defumat.workflows.ultracell.run_ultracell_stm`).
+    """
     if isinstance(plane, PlotPlane):
         return plane
     if plane is not None:
@@ -278,14 +284,22 @@ def _plane(cell, height, axis, plane, shape):
     origin[axis] = float(height)
     first, second = [i for i in (0, 1, 2) if i != axis]
     edge1, edge2 = origin.copy(), origin.copy()
-    edge1[first] = 1.0
-    edge2[second] = 1.0
+    edge1[first] = float(span[first])
+    edge2[second] = float(span[second])
     return plot_plane(cell, origin, edge1, edge2, shape)
 
 
-def _constant_current(coefficients, dense, geometry, cell, current,
-                      heights, nheights):
-    """Scan the plane outwards and invert for the height at the set-point."""
+def _constant_current(sample, geometry, cell, current, heights, nheights):
+    """Scan the plane outwards and invert for the height at the set-point.
+
+    ``sample`` takes ``(np, 3)`` crystal coordinates of ``cell`` and returns the
+    tunnelling density there. It is a callable rather than the pair
+    ``(coefficients, G-set)`` because an ultracell image samples the same field
+    on the ultracell's own ``G + Q`` set and in its own coordinates, and
+    everything else about the scan -- how far the tip may be withdrawn, where
+    the set-point is crossed -- is a statement about the cell it is scanning
+    over.
+    """
     at = np.asarray(cell.at, dtype=float)
     normal = np.asarray(geometry.normal, dtype=float)
     # The scan coordinate is bohr along the surface normal, so the corrugation
@@ -319,7 +333,7 @@ def _constant_current(coefficients, dense, geometry, cell, current,
 
     scan = np.linspace(lo, hi, int(nheights))
     points = np.concatenate([geometry.offset(z * normal).flat() for z in scan])
-    values = sample_coefficients(coefficients, dense, points)
+    values = sample(points)
     values = values.reshape((scan.shape[0],) + geometry.shape)
 
     corrugation = constant_current_height(scan, values, current)
