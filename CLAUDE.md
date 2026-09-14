@@ -537,6 +537,30 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   fact that the number was still *climbing* at iteration 77. A constant cannot explain a
   derivative, and the arithmetic said the node effect covered 0.47 of a 3.2 excess in any
   case. (The NiBr2 helix runs, 2026-09-10/11.)
+- **A sum of N terms that matches one measured total is one equation in N unknowns.** It is
+  the most convincing wrong answer this project produces, because the agreement is real and
+  the arithmetic is right -- what is unproved is that the terms were ever *simultaneously
+  live*. A 45-atom NiBr2 slab's peak was declared explained as
+  `resident + temp + guard = 72.16 GiB` against a measured 72.30: three plausible numbers,
+  one equation, and the analysis that wrote it had **named the hole itself** ("the overlap
+  cannot be proved from a log") one paragraph earlier and then let a later measurement of
+  *one* term discharge the whole sum. The A/B refuted it outright -- deleting the guard,
+  claimed at 82 per cent of a 28 GB gap, moved the peak by **0.03 GB**, byte-identical per
+  iteration. Two sessions then independently built the *next* four-term sum, agreeing to
+  0.05 per cent, and both declined to publish it. The rule: a term is on the bill only if it
+  was measured, or if removing it is measured to move the total. **An identity that closes
+  is not evidence; an A/B is.** (`OPEN.md` Part VII item 1, reopened 2026-09-14.)
+- **A method that could not have returned a surprise: finding none is not evidence of
+  none.** The sibling of the entry above, and it lives one level further back -- in the
+  *design* of the check rather than in the reading of its result. Two sessions confirmed a
+  set of `memory_stats()` key names by grepping a binary with a fixed alternation of names
+  they had guessed, one asking about six and one about eight; each could only ever return
+  names already on its own list, so the two agreeing was agreement about **candidates** and
+  said nothing about the set. Reading adjacent strings out of the binary does not rescue it
+  either -- the string table is interleaved across translation units. Before believing a
+  negative, ask what result would have **falsified** the thing being checked and whether the
+  instrument could have produced it: a search that cannot surprise you is not a search.
+  (2026-09-14, in passing, while both sessions were being careful about everything else.)
 
 ## Non-negotiable conventions
 
