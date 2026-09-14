@@ -1068,6 +1068,43 @@ radial form factors, and is a different and more expensive fix.
 on the band blocks) and at `nk = k_batch` the per-chunk array *is* the whole array, so this saves
 essentially nothing there. nbse2 is the cell that carries it.
 
+> **That dismissal is wrong for the NiBr2 slab, corrected 2026-09-14, and this is the
+> largest lever left on that cell.** The sentence above is true as written -- at
+> `nk = k_batch` the chunk is the whole array -- but it assumes the slab runs at the
+> *accelerator default*, `k_batch = None`. **It does not.** Every production job on that
+> cell runs `KBATCH 1` against `nk = 6`, so the per-chunk array is a **sixth**, and the
+> audit was written about a configuration this cell has never used.
+>
+> At the slab's own shapes (`npwx = 156 346`, `nkb = 930`, `nk = 6`, and `vkb` reported at
+> **13.00 GiB = 13.96 GB** in the job's own size block):
+>
+> ```
+> vkb, resident today                         13.96 GB
+> one k-chunk, rebuilt in the map_k body       2.33 GB
+> columns (nk, npwx, ncs), 2 species / 45 atoms   ~0.7 GB
+> kg                                            0.02 GB
+>                                    after     ~3.05 GB
+> ```
+>
+> **~11 GB, and it is the only item on this list that lowers the run's *peak* rather than
+> one stage.** `vkb` is *resident*, so it sits underneath both of the peak stages the
+> stage-brackets identified -- the starting-wavefunction build at 71.43 GB and the solve
+> reaching 79.43 GB from a 30.30 GB base (`D10`). Taking 11 GB out of the floor moves both.
+> On a cell that dies on an 80 GB card at 79.46 GB, that is the difference between running
+> and not.
+>
+> **The mechanism is already there and is already differentiated.** `at_positions` ->
+> `_apply_phases` (`:266-274`) is one `jnp.exp`, two `jnp.take` and a mask, and it is the
+> path every force already takes through it. The `(nk, npwx, nat)` phase array is 0.68 GB
+> whole and 0.11 GB per chunk, so it does not eat the saving.
+>
+> **The measurement that confirms it** needs no new instrument: `live` at
+> `-> diagonalize` falls from **30.30 GB to about 19.5**, in the same stage brackets that
+> found `D10`.
+>
+> The entry's own "corrected saving" arithmetic above is unaffected and still describes
+> nbse2. What changes is only the claim that the slab does not carry this.
+
 **Cost in time.** `nat x npwx` complex exponentials and two gathers per k per `map_k` body — on
 nbse2, `3 x 9804 ~ 29k` exponentials per k per SCF iteration, against a 57 s iteration (744 s / 13).
 
