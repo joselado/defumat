@@ -5577,6 +5577,17 @@ rather than inferred from a boundary.
 **Headroom, and what the open question actually is.** On an A100 at `MEMFRAC 0.97` the pool
 is 82.95 GB, so the peak going 79.43 -> 65.47 takes headroom from 3.5 to **17.5 GB**.
 
+> **Read this as an A100 statement, and it survived a scare on 2026-09-14.** The 65.47 was
+> briefly withdrawn in favour of 76.51 GB on the hypothesis that the stage brackets depressed
+> the peak they measured; an **unbracketed** run (job 20258183, A100 `gpu41`, `e4f2dfd`) then
+> read 65.18 / 65.47, byte-identical to the bracketed `20257133`, so the brackets change
+> nothing and every figure in this section stands as measured. The 76.51 is a genuine reading
+> and it is an **H100** one, at the same commit and the same dials, so the **peak** saving
+> from this dial is card-dependent: 13.96 GB on the A100 and unmeasured on the H100, which
+> wants a same-node `store` against `rebuild` pair nobody has run. The 13.96 itself is safe
+> on two independent grounds regardless: it is an array size from the run's own header, and
+> it is a delta between two arms on one card, one commit and one seed. `MEMORY-AUDIT.md` A17.
+
 > **An earlier version of this paragraph subtracted the 24.89 GB eigensolver buffer from
 > that headroom and called the run "about 7 GB short". That is wrong and is the guard
 > decomposition a third time** -- retracted 2026-09-14 by the session that introduced it,

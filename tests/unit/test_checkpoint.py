@@ -8,14 +8,18 @@ enough to need checkpointing in the first place. So the coverage of
 round trip is checked to be exact rather than close.
 """
 
+import gc
 import warnings
+import weakref
 
 import numpy as np
 import pytest
 
 from defumat.calculator import Calculator
+from defumat.scf import checkpoint as checkpoint_module
 from defumat.scf.checkpoint import load_state, save_state, unhandled_fields
-from defumat.scf.driver import SCFResult, run_scf
+from defumat.scf.driver import (SCF_CHECKPOINT, Calculation, SCFResult,
+                                run_scf)
 
 pytestmark = pytest.mark.unit
 
@@ -281,4 +285,71 @@ def test_an_interrupted_relaxation_resumes_where_it_stopped(pseudo_dir, tmp_path
         np.asarray(resumed.system.structure.positions),
         np.asarray(whole.system.structure.positions),
         atol=1.0e-5,
+    )
+
+
+def test_a_resume_does_not_pin_the_checkpoint_for_the_whole_run(
+        pseudo_dir, tmp_path, monkeypatch):
+    """A resumed run must not hold the loaded state beside the live one.
+
+    ``load_state`` returns an ``SCFResult`` whose arrays are ``jnp.asarray``
+    and so device-resident, and the wavefunctions dominate it. Two names in
+    ``run_scf`` used to keep it for the life of the call -- the ``starting_from``
+    parameter, rebound to the loaded state, and ``resumed_state``, an alias
+    taken 300 lines away for four scalars -- so a resumed run carried a second
+    wavefunction set from start to finish where a fresh one frees its starting
+    guess after the first solve. On the 45-atom NiBr2 slab that is 12.10 GB and
+    it is why every resumed arm died several iterations before a fresh one.
+
+    The assertion is on **reachability rather than on bytes**, which is what
+    makes it run on any backend: ``memory_stats()`` returns ``None`` on the CPU
+    client, and the defect is a live reference, not a size. It is checked at the
+    *second* solve because the pin only exists inside the call, so a weakref
+    taken after ``run_scf`` returns is dead whatever the code does -- which is
+    the version of this test that passes on the unfixed driver.
+
+    Deleting either name alone leaves the other holding the same object and
+    frees nothing, so this fails until both go.
+    """
+    calculator, result = _converged(SILICON, pseudo_dir)
+    save_state(result, tmp_path / SCF_CHECKPOINT)
+
+    seen = {}
+    real_load = checkpoint_module.load_state
+
+    def watching_load(*args, **kwargs):
+        loaded = real_load(*args, **kwargs)
+        seen["ref"] = weakref.ref(loaded)
+        return loaded
+
+    monkeypatch.setattr(checkpoint_module, "load_state", watching_load)
+
+    solves = []
+    real_diagonalize = Calculation.diagonalize
+
+    def counting_diagonalize(self, *args, **kwargs):
+        solves.append(1)
+        if len(solves) == 2:
+            gc.collect()
+            seen["alive_at_second_solve"] = seen["ref"]() is not None
+        return real_diagonalize(self, *args, **kwargs)
+
+    monkeypatch.setattr(Calculation, "diagonalize", counting_diagonalize)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        run_scf(
+            calculator.system, calculator.pseudos,
+            calculation=calculator.calculation,
+            checkpoint_dir=tmp_path, conv_thr=1.0e-12, max_iterations=3,
+        )
+
+    assert seen.get("ref") is not None, "the run did not take the resume path"
+    assert len(solves) >= 2, (
+        "the resumed run converged in one solve, so the check never ran -- "
+        "loosen the seed or tighten conv_thr"
+    )
+    assert seen["alive_at_second_solve"] is False, (
+        "the loaded checkpoint is still reachable during the SCF loop, so a "
+        "resume is carrying a second wavefunction set for the whole run"
     )

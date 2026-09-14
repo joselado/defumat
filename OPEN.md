@@ -2519,7 +2519,14 @@ fire, which is `CLAUDE.md`'s own rule about guards, applied to a guard's absence
 >
 > **The next instrument is not arithmetic.** Job 20252135 runs the same two iterations under
 > `DEFUMAT_STAGE_PEAKS=1`, bracketing every stage with `peak_bytes_in_use`: whatever holds 79
-> GB has to appear between one of those pairs. The last two sizings of this cell were both
+> GB has to appear between one of those pairs.
+>
+> **Two things about that instrument, both from 2026-09-14 and both in `MEMORY-AUDIT.md`
+> A17.** `DEFUMAT_STAGE_PEAKS` is in **no committed file** in this repository, so every
+> bracketed number in the record rests on a patch that lives only on Triton and that nobody
+> here can read. And the brackets were suspected of depressing the peak they measure, which
+> would have made every one of those numbers a lower bound; an unbracketed run reproduced the
+> bracketed one byte for byte, so they do not, and the suspicion is closed. The last two sizings of this cell were both
 > arithmetic, both wrong, and in **opposite directions**.
 
 

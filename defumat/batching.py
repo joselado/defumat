@@ -210,6 +210,16 @@ map*, not about this question. A run that survives can be sampled; it just
 cannot print a death map. So the curve comparison is now obtainable on the cell
 that motivated it, which is the only thing that was missing.
 
+**The 65.47 holds, and it survived a scare worth recording.** It was briefly
+withdrawn on 2026-09-14 in favour of 76.51 GB, on the hypothesis that this
+paragraph's own instrument depressed the peak it measured, which would have made
+every bracketed number in this file a lower bound. An unbracketed run (job
+20258183, A100 ``gpu41``) then read **65.18 / 65.47**, byte-identical to the
+bracketed ``20257133``: the ``block_until_ready`` pairs change nothing and no
+figure here is a lower bound. **The 76.51 is real but is an H100 reading**, so
+the slack above is an A100 statement and the ``rebuild`` saving is
+card-dependent. ``MEMORY-AUDIT.md`` A17 has both.
+
 ``Device.memory_stats()`` is the instrument, and it **works on the backend this
 question lives on**. Every bracket quoted above is that call --
 ``jax.devices()[0].memory_stats()["peak_bytes_in_use"]`` and ``["bytes_in_use"]``
@@ -237,7 +247,11 @@ for it.
 
 **And a string in the binary is evidence the key exists, not proof the CUDA
 client populates it** -- one print from a GPU job settles both questions at once
-and has not been run.
+and has not been run. What *has* been observed, from job 20258211 on 2026-09-14,
+is that ``bytes_in_use`` and ``peak_bytes_in_use`` are populated under
+``XLA_PYTHON_CLIENT_ALLOCATOR=platform`` as well as under BFC, so the ``.get``
+trap does not bite on that arm. The rest of the key set is still unenumerated:
+that run printed two keys, it did not list them.
 ``largest_alloc_size`` is arguably the better single number for this question
 than ``largest_free_block_bytes``, since what a 23.18 GiB request is up against
 is the largest request the arena can still satisfy.

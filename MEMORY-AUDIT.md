@@ -1764,6 +1764,190 @@ allocation *events*, and what matters for fragmentation is their size and order,
 sum. The 3.0x is a measured buffer count on a toy array, and whether all three are
 simultaneously live at slab scale on a GPU is not established here.
 
+**Third death, and it changes this entry's shape rather than confirming it.** Reported from
+the Triton session, job **20258175** (H100 `gpu46`, `rebuild`, `BAND_BATCH 16`, `KBATCH 1`,
+`MEMFRAC 0.97`, defumat `e4f2dfd`). The log is not held on this machine, so the figures are
+recorded as reported and the job id is what checks them:
+
+```
+RESOURCE_EXHAUSTED: Out of memory while trying to allocate 33.44GiB
+  (rounded to 35905140992) ... [executable_name='jit__every_k']
+  davidson.py:799  failed = ~np.asarray(per_k)
+```
+
+The arena at that instant is 52 per cent in use (43.1 GB), **48 per cent free (39.8 GB) and a
+largest hole of 35 per cent (29.0 GB)**, with one 10.8 GB block between the two free regions.
+
+**It is still a hole problem, at a larger scale, so the opening figures above are the small
+end of a range rather than the characterisation.** The request grew from the 21 to 23 GiB
+quoted there to 33.44 GiB, and the free bytes grew with it, so the inequality that matters is
+unchanged: the largest hole (29.0 GB) falls short of the request (35.9 GB) while total free
+(39.8 GB) exceeds it. Both blocked fixes stand next to this failure, since `davidson.py:799`
+is the retry's host branch, which is both the `arguments` tuple that blocks donation and the
+untraceable branch that blocks jitting the slice away.
+
+**The 3.0x correspondence does not close, and no arithmetic account of this allocation
+belongs here.** It was offered from Triton as a correspondence to check and explicitly not as
+an identification, which is the right call, and the arithmetic supports the caution: the
+request is 35,905,140,992 B against `3 x 12,097,428,096 = 36,292,284,288 B`, so **2.968x
+rather than 3.000x, short by 387 MB**. BFC rounding here is 256 B (the figure is exactly
+256-aligned), so the gap is six orders of magnitude past anything rounding absorbs. The log
+names an executable, not a line.
+
+**The viability sentence above is an A100 statement, and that was nearly missed.** `A13`'s
+65.47 GB was briefly withdrawn on 2026-09-14 in favour of 76.51 GB and then reinstated when
+an unbracketed run reproduced it exactly (`A17`). What the 76.51 actually is, is the **H100**
+reading at the same commit and the same dials, so the headroom this paragraph rests on is
+about 17.5 GB on an A100 and about **9 GB on an H100**. On the smaller of the two the arm can
+die on **total bytes**, which would read as a refutation of the fragmentation account while
+being the opposite of one.
+
+**The arm ran, and it does not settle the question.** Job **20258211** (H100, `platform`,
+resumed) died with `cuda_executor.cc:1348 Failed to allocate device memory of 33.44GiB ...
+CUDA_ERROR_OUT_OF_MEMORY`, allocator `SE_0_space_0`, so the **driver** refused rather than an
+arena failing to find a hole, which is the total-bytes failure the paragraph above predicts
+for the H100. It is confounded: it was a **resume**, and a resume on this driver pinned a
+second wavefunction set for the whole run (`A18`), so the arm was carrying about 12 GB it did
+not need. It settles nothing about total bytes against contiguity on a fresh run, and the
+fresh pair has not been run. One thing it does settle: `memory_stats()` keeps working under
+`platform`, so the `.get` trap in `batching.py` does not bite on that arm.
+
+---
+
+### A17. The stage-peak instrument is in no committed file, and the peak it briefly withdrew is reinstated
+
+**Opened and closed 2026-09-14.** The instrument hypothesis below was **refuted within the
+day by an accidental A/B**, so the withdrawal it caused is itself withdrawn. What survives
+is the missing instrument, the rigid-offset argument, and a card-dependence nobody has
+explained.
+
+**The refutation first, because it governs everything after it.** Job **20258183** (A100
+`gpu41`, `e4f2dfd`, `rebuild`, `BAND_BATCH 16`, `KBATCH 1`, `MEMFRAC 0.97`) ran **without**
+`DEFUMAT_STAGE_PEAKS`, so without the per-stage `block_until_ready` pairs, and read
+**65.18 and 65.47 GB**, byte-identical to the bracketed `20257133` on `gpu13`. The brackets
+change nothing, the instrument suppresses nothing, and **no stage-bracketed number in this
+file or in `PERFORMANCE.md` is a lower bound**. `A13`'s 65.47 stands as measured.
+
+That also confirms the diff reading below by a second route: the two runs are on `2351b41`
+and `e4f2dfd` and agree to the digit, which is what "nothing between those commits touches
+the compute path" predicts.
+
+**Two findings, and the second is only legible because of the first.**
+
+**`DEFUMAT_STAGE_PEAKS` appears in no source file in this repository.** It is a prose mention
+in `OPEN.md` and nothing else: no module under `defumat/` or `tools/` reads it, no committed
+code emits a `[mem]` line, and `git log -S` finds the string entering only through `f12a8f6`,
+which touched `OPEN.md` alone. The brackets behind `D10`, behind `batching.py`'s device/host
+table and behind both peaks in `A13` come from an **uncommitted patch living only on
+Triton**. The numbers are in the record and the instrument that made them is not, so nobody
+here can read where its `block_until_ready` sits, and the A/B described below cannot even be
+specified from this repository.
+
+**The peak was withdrawn while that was being checked.** `A13` reported the `rebuild` arm at
+65.47 GB; the same session later reported **76.51 GB** on the same cell at the same bracket
+label and the same dials, proposing that the instrument's `block_until_ready` serialises what
+JAX would otherwise overlap, so the instrument lowers the peak it measures. The consequence
+drawn was that every stage-bracketed number is a lower bound.
+
+**Three things about that, in decreasing order of confidence.**
+
+The **13.96 GB does not inherit the caveat**, on two independent grounds. It is anchored
+arithmetically, `nkb x npwx x nk x 16 = 930 x 156346 x 6 x 16 = 13,958,570,880 B`, which is
+13.96 GB and 13.00 GiB, read off the run's own header and needing no bracket at all; and it
+is a **delta between two arms on one card, one commit and one seed**, so any instrument bias
+common to both cancels instead of propagating. What the new number does put in doubt is the
+**peak** saving rather than the resident one: 79.43 against 76.51 is 2.92 GB, where the
+committed A/B has the peak delta at 13.96 like every other row. That is the tension, and it
+is much narrower than the sentence it was written as.
+
+The **offset between the two `rebuild` runs is rigid, which argues against serialisation.**
+Against `A13`'s A/B the two arms read 65.18 / 65.47 (A100 `gpu13`) and 76.20 / 76.51 (H100
+`gpu46`), so the offset is **+11.02 and +11.04 GB** while the per-iteration increment
+survives it, 0.29 against 0.31. An overlap artefact should scale with how much there is to
+overlap, and iteration 1 carries `wfcinit`'s 51.05 GB spike where iteration 2 does not
+(`driver.py:4850`'s guard). A quantity flat to 20 MB across a stage that differs by 51 GB
+has the shape of a fixed resident allocation rather than of scheduling. What that allocation
+is, is deliberately not guessed here, since this is the cell on which that guess has been
+wrong three times.
+
+The **commit is excluded by reading the diffs.** Between `2351b41` and `e4f2dfd` nothing
+touches the compute path: `433abd7` and `6f9d3e8` are `sizing.py` plus one `calculator.py`
+hunk setting `options["projectors"]` for the size *report*, `f1b083c` is eight lines of
+`batching.py` docstring, and `5fac744`, `ba1c422` and `e4f2dfd` carry no `.py` at all. The
+two runs ran the same SCF. That leaves the card as the candidate the evidence points at, and
+the exclusion offered for it, that the H100 measured below the A100 at `store`, is a
+comparison at the other dial and does not carry to this one.
+
+**What settled it was an A/B nobody planned.** The run above was a resume-path test with the
+instrument simply not switched on, which is the only reason the control exists. The order is
+worth keeping: the rigid-offset argument reached the right answer from the shape of two
+numbers a day before the data arrived, and the elimination that produced the instrument
+hypothesis reached the wrong one because its candidate list was not exhaustive and the
+exclusion it leaned on, that the H100 measured below the A100 at `store`, was a comparison at
+the other dial.
+
+**What is left open is the card.** A100 65.47, H100 76.51, same commit, same dials, an offset
+of 11.03 GB that is flat across a stage differing by 51 GB. Nothing here names it, and the
+`rebuild` peak saving is therefore **card-dependent**: 13.96 GB on the A100 and unmeasured on
+the H100. The tempting comparison, 77.63 GB at `store` on `gpu45`, **must not be used**: that
+run predates `0e85a14`, which is an ancestor of `2351b41` by 13 commits and which relocated a
+21.40 GiB allocation, so the difference carries a node, a dial and a moved allocation a
+quarter the size of the number. A same-node `store` against `rebuild` pair on one H100 is the
+measurement, and it has not been run.
+
+**The missing instrument is unaffected and still stands as the first finding above.**
+
+---
+
+### A18. A resume pinned the checkpoint for the whole run, and the obvious one-line fix frees nothing
+
+**Opened and fixed 2026-09-14.** Found from the Triton side as a pattern in the deaths,
+confirmed in source here, and fixed with a test that fails on the unfixed driver.
+
+**The pattern.** Every resumed arm of the 45-atom NiBr2 slab died several iterations before a
+fresh one: iteration 5 on the H100 twice and iteration 3 on the A100, where the fresh A100
+run sailed past. The resumed A100's arena at death read **70 per cent in use, 58 GB**,
+against the fresh run's 16.34 GB live at the same iteration line.
+
+**The mechanism, in source.** `driver.py:4566` rebinds the **parameter** `starting_from` to
+the whole `SCFResult` that `load_state` returns, and `:4570` takes `resumed_state` as an
+*alias* to the same object, 300 lines away, to carry four scalars (`iterations`, `accuracy`,
+`ethr`, `field_scale`). Neither name was ever cleared, and `driver.py` contained no `del` at
+all. `checkpoint.load_state` builds its arrays with `jnp.asarray`, and `save_state`'s own
+docstring says the wavefunctions dominate the file at `nspin nk nbnd npwx` complex, so the
+pinned object is **device-resident**: 12.10 GB on this cell, beside the live set, for the
+whole call. That is most of what the `projectors` dial buys, given back.
+
+**Why it was missed, and it is the transferable part.** `:4938` already releases
+`state = starting_wavefunctions = None`, with a comment arguing the span is provably never
+read again. It clears the two names that look like locals somebody introduced and misses the
+two that do not: a **function parameter**, which does not read as an allocation anyone owns,
+and an alias made hundreds of lines earlier for scalars.
+
+**The one-line fix frees nothing, which is the trap.** `del resumed_state` on its own leaves
+`starting_from` holding the identical object, so the refcount never reaches zero and the peak
+does not move. A null result there reads as a refutation of a real mechanism. Both names go
+or neither does.
+
+**One candidate chased and negative, recorded because it was a real one.** `:4938` sits
+inside `if wavefunctions is None:`, so a resume might have been expected to skip it and pin
+`state` and `starting_wavefunctions` as well. It does not: `:4761` sets
+`wavefunctions = None` unconditionally, so the branch runs on every path and those two are
+genuinely released. The pin is the two names only.
+
+**The test asserts reachability, not bytes.** `memory_stats()` returns `None` on the CPU
+client and the defect is a live reference rather than a size, so
+`test_a_resume_does_not_pin_the_checkpoint_for_the_whole_run` takes a `weakref` to what
+`load_state` returned and asserts it is dead at the **second** solve, `gc.collect()` first.
+The second solve matters: the pin exists only inside the call, so a weakref taken after
+`run_scf` returns is dead whatever the code does, which is the version of this test that
+passes on the unfixed driver. **It was run against the unfixed driver first and fails
+there**, which is the only thing that makes it evidence.
+
+**Not measured on a GPU.** The 12.10 GB is the array's size on that cell and the mechanism is
+established; what the fix is worth to a resumed run's peak needs one job on Triton, and the
+same-node fresh-against-resumed pair is what would show it.
+
 ---
 
 ### D10. `wfcinit` is not modelled at all, and on the one cell measured it is what sets the peak

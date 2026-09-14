@@ -4633,6 +4633,22 @@ def run_scf(
                 starting_tau = source_tau
         if verbose:
             print(f"  continuing a previous run: {state.description}")
+        # **Released here because a *parameter* is a reference too, and it is
+        # the one that does not look like an allocation anybody owns.** On a
+        # resume ``starting_from`` is rebound above to the whole ``SCFResult``
+        # ``load_state`` returns -- wavefunctions, density, ``becsum``,
+        # potential, all of them ``jnp.asarray`` and so device-resident -- and
+        # ``resumed_state`` below is an *alias* to the same object, taken 300
+        # lines away for four scalars. Everything either of them carries has
+        # been copied into a local by this point. Without this the checkpoint's
+        # wavefunction set is pinned for the whole run beside the live one:
+        # 12.10 GB on the 45-atom NiBr2 slab, which is most of what the
+        # ``projectors`` dial buys, and it is why every resumed arm of that cell
+        # died several iterations before a fresh one. The release at the head of
+        # the loop clears ``state`` and ``starting_wavefunctions`` and cannot
+        # reach these two, so deleting either one alone frees nothing and reads
+        # as a refutation of a real mechanism.
+        starting_from = None
 
     started_at = time.time()
     mixer = get_mixer(mixing_mode, beta=mixing_beta, history=mixing_ndim)
@@ -4881,6 +4897,11 @@ def run_scf(
                      else f", field_scale = {field_scale:.3e}")
             print(f"  continuing the loop at iteration {resumed_at + 1} with "
                   f"ethr = {ethr:.2e}, accuracy = {accuracy:.2e}{faded}")
+        # The alias the comment at ``starting_from = None`` describes. Both
+        # names have to go or neither does: this one exists only to carry four
+        # scalars across the setup, and all four are plain Python floats and
+        # ints by now.
+        resumed_state = None
 
     stopped_early = False
     for iteration in range(resumed_at + 1, resumed_at + max_iterations + 1):
