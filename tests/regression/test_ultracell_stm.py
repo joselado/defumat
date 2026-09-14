@@ -98,6 +98,27 @@ K_POINTS automatic
  {k0} {k1} {k2} 0 0 0
 """
 
+NONCOLLINEAR = """&control
+ calculation='scf'
+/
+&system
+ ibrav=2, celldm(1)=10.20, nat=2, ntyp=1, ecutwfc=12.0,
+ nosym=.true., noinv=.true.,
+ noncolin=.true., starting_magnetization(1)=0.2, angle1(1)=60.0,
+ occupations='smearing', smearing='gaussian', degauss=0.02
+/
+&electrons
+ conv_thr=1.0d-8
+/
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-vbc.UPF
+ATOMIC_POSITIONS alat
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS automatic
+ {k0} {k1} {k2} 0 0 0
+"""
+
 MAGNETIC = """&control
  calculation='scf'
 /
@@ -327,6 +348,17 @@ def test_the_image_integrates_to_the_density_of_states(pseudo_dir):
     assert per_cell > 0.0
     assert image.integral == pytest.approx(per_cell, rel=1e-10)
 
+    # and the other mode, on the same field: a set-point inside the range of
+    # the constant-height image has to be crossed everywhere, so no pixel comes
+    # back nan and the corrugation is a real length in bohr.
+    scan = run_ultracell_stm(
+        calculator.system, calculator.pseudos, result, shape=(8, 8),
+        energy=energy, width=0.02, mode="constant-current",
+        current=float(np.median(image.values)), heights=(0.0, 4.0),
+        nheights=40, **PLANE)
+    assert np.isfinite(scan.heights).all()
+    assert 0.0 < np.ptp(scan.heights) < 4.0
+
 
 def test_the_image_converges_to_the_supercell(pseudo_dir):
     """The number for the phase: the image against a real supercell's image.
@@ -427,6 +459,88 @@ def test_the_whole_cell_transmission_is_the_image(pseudo_dir):
     assert np.abs(np.asarray(ours.image) - reference).max() / reference.max() < 1e-11
 
 
+def test_the_exit_plane_transmission_is_the_unit_cell_s_tiled(pseudo_dir):
+    """The plane path, which the whole-cell identity above does not reach.
+
+    ``exit_region="volume"`` goes through :func:`~defumat.transport.substrate.volume_overlap`,
+    which is one matrix product and knows nothing about the cell; the substrate
+    the feature is for is :func:`~defumat.transport.substrate.exit_overlap`,
+    which groups plane waves by their **in-plane** Miller index and scales by
+    the cell's own area over its volume. Handing it the ultracell's indices and
+    the ultracell's cell is the whole of what P89 does to it, so it needs a
+    check of its own.
+
+    With nothing applied the ultracell states are the folded unit-cell states,
+    and two of them at different ``Q`` carry different lateral momentum, so the
+    exit integral cannot mix them: the map has to come back as the unit cell's,
+    tiled. The area and the volume both double with the cell here, which is why
+    their **ratio** surviving is the thing worth asserting -- an ultracell cell
+    that had kept the unit cell's volume would pass a check on either one alone.
+    """
+    shape, kgrid = (2, 1, 1), (1, 2, 1)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    calculator, scf = _converged(str(pseudo_dir), folded)
+    energy = float(scf.homo) - 0.05
+    geometry = dict(exit_height=0.05, exit_axis=2, energies=energy,
+                    broadening=0.02, **PLANE)
+
+    plain = run_vertical_transport(calculator.system, calculator.pseudos, scf,
+                                   shape=(8, 6), **geometry)
+    result = run_ultracell(calculator.system, calculator.pseudos, scf, shape,
+                           kgrid, nbnd=12, conv_thr=1e-10, states_conv_thr=1e-12)
+    assert result.converged
+    ours = run_ultracell_transport(calculator.system, calculator.pseudos,
+                                   result, shape=(16, 6), **geometry)
+
+    tiled = np.concatenate([np.asarray(plain.values)] * shape[0], axis=0)
+    assert tiled.max() > 0.0
+    assert np.abs(np.asarray(ours.values) - tiled).max() / tiled.max() < 1e-6
+
+
+def test_the_transmission_converges_to_the_supercell(pseudo_dir):
+    """And the modulated plane path, against a real supercell's transmission.
+
+    The image's ladder one quantity along. It is a weaker statement than that
+    one -- two rungs rather than three -- because what is being asked of it is
+    different: the image has already shown that the truncation converges, and
+    what is open here is whether the exit integral over an ultracell whose
+    states genuinely mix ``Q`` is the supercell's.
+    """
+    shape, kgrid = (2, 1, 1), (1, 2, 1)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    calculator, scf = _converged(str(pseudo_dir), folded)
+    energy = float(scf.homo) - 0.05
+    geometry = dict(exit_height=0.05, exit_axis=2, energies=energy,
+                    broadening=0.02, shape=(16, 6), **PLANE)
+
+    supercell = _supercell(pseudo_dir, calculator, shape, kgrid)
+    grid = build_basis(supercell.system).dense.grid
+    coordinates = np.stack(
+        np.meshgrid(*[np.arange(m) / m for m in grid], indexing="ij"), axis=-1)
+    calculation = with_external_potential(
+        Calculation(supercell.system, supercell.pseudos),
+        jnp.asarray(AMPLITUDE * np.cos(2 * np.pi * coordinates[..., 0])))
+    exact = run_scf(supercell.system, supercell.pseudos,
+                    calculation=calculation, conv_thr=1e-11, nbnd=12)
+    assert exact.converged
+    reference = np.asarray(run_vertical_transport(
+        supercell.system, supercell.pseudos, exact, **geometry).values)
+
+    errors = {}
+    for nbnd in (12, 24):
+        result = run_ultracell(
+            calculator.system, calculator.pseudos, scf, shape, kgrid,
+            nbnd=nbnd, external=_modulation(shape), conv_thr=1e-10,
+            states_conv_thr=1e-10)
+        assert result.converged
+        ours = np.asarray(run_ultracell_transport(
+            calculator.system, calculator.pseudos, result, **geometry).values)
+        errors[nbnd] = float(np.abs(ours - reference).max() / reference.max())
+
+    assert errors[24] < errors[12]
+    assert errors[24] < 0.05
+
+
 # -- spin --------------------------------------------------------------------
 
 
@@ -474,6 +588,51 @@ def test_a_magnetic_tip_sees_a_spin_density_wave_a_plain_one_does_not(
         return float(np.abs(first - second).max() / np.abs(values).max())
 
     assert contrast(np.asarray(up.values)) > 10 * contrast(np.asarray(charge.values))
+
+
+def test_a_spinor_state_keeps_its_two_components_in_the_right_halves(pseudo_dir):
+    """The spinor layout of an ultracell state, which only the transmission reads.
+
+    An ultracell state of a noncollinear run is one vector whose two halves are
+    the up and down components, which is how every wavefunction in this package
+    is stored and what the exit-plane Gram matrix and the tip sampler both
+    expect. Orthonormality cannot see that: an interleaved vector is just as
+    orthonormal. What can is the **density**, which is built by the other route
+    entirely -- the scatter into the ultracell box, one component at a time --
+    so squaring the halves and comparing is a check of the layout and of
+    nothing else.
+    """
+    calculator = _calculator(Path(str(pseudo_dir)), "si_nc.in", NONCOLLINEAR,
+                             (2, 2, 2))
+    scf = calculator.get_scf(conv_thr=1e-10, nbnd=12)
+    assert scf.converged
+    shape, kgrid = (2, 1, 1), (1, 2, 2)
+    result = run_ultracell(calculator.system, calculator.pseudos, scf, shape,
+                           kgrid, nbnd=12, conv_thr=1e-9, states_conv_thr=1e-9)
+    states = result.states
+    assert int(states.npol) == 2
+
+    ik0, nstate = 0, 4
+    block = np.asarray(states.block(0, ik0))[:nstate]
+    grid = states.ultracell.grid
+    points = np.stack(
+        np.meshgrid(*[np.arange(m) / m for m in grid], indexing="ij"), axis=-1
+    ).reshape(-1, 3)
+    volume = states.ultracell.volume(states.cell)
+    sampled = sample_wavefunctions(
+        block.reshape((nstate, 2, states.cells * states.npwx)),
+        states.miller(ik0), states.kcrystal[ik0], points, volume,
+        mask=states.mask(ik0))
+    charge = (np.abs(sampled) ** 2).sum(axis=1)
+
+    # the same four states through the other route, with unit weights. Only
+    # the *shape* is compared: every prefactor divides out of a field over its
+    # own mean, and what is being checked is which coefficients went where.
+    weights = np.zeros((1, states.nk0, states.nstate))
+    weights[0, ik0, :nstate] = 1.0
+    reference = np.asarray(states.density(weights, nspin_mag=4))[0].reshape(-1)
+    ours = charge.sum(axis=0)
+    assert np.abs(ours / ours.mean() - reference / reference.mean()).max() < 1e-10
 
 
 # -- the refusals ------------------------------------------------------------

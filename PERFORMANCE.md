@@ -5436,7 +5436,7 @@ Silicon, `ecutwfc = 12`, `nosym`, `kgrid = (1, 2, 2)`, `nbnd = 24` per folded k-
 median, because what is being compared is two routes and not a change expected to leave
 a number alone.
 
-| `N` | atoms | ultracell: SCF + loop + image, s | supercell: SCF + image, s | ratio |
+| `N` | atoms | ultracell: SCF + loop + image, s | supercell: SCF + image, s | supercell / ultracell |
 |---|---|---|---|---|
 | 2 | 4 | 0.29 + 4.81 + 0.24 = **5.35** | 1.79 + 0.14 = **1.93** | 0.36 |
 | 4 | 8 | 0.56 + 8.02 + 0.42 = **9.00** | 15.33 + 0.37 = **15.70** | **1.74** |

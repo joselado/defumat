@@ -31,8 +31,6 @@ larger ``kgrid`` to :func:`~defumat.ultracell.driver.run_ultracell` instead.
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 
 from defumat.basis.fft import r_to_g

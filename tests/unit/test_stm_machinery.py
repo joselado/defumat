@@ -320,6 +320,22 @@ def test_a_scan_must_be_ordered():
         constant_current_height([1.0, 0.0], np.ones((2, 1, 1)), 0.5)
 
 
+def _flat_sample(cell):
+    """A tunnelling density that is the same everywhere: ``G = 0`` alone.
+
+    ``_constant_current`` takes the field as a callable rather than as a pair
+    ``(coefficients, G-set)``, because an ultracell image samples its own
+    ``G + Q`` set in its own coordinates; what the guards below are about is
+    the scan rather than the field, so a constant one is enough to reach them.
+    """
+    from defumat.basis.sample import sample_coefficients
+
+    sphere = generate_gvectors(cell, ecut=6.0)
+    coefficients = np.zeros(sphere.ngm, dtype=complex)
+    coefficients[0] = 1.0
+    return lambda points: sample_coefficients(coefficients, sphere, points)
+
+
 def test_a_scan_may_not_reach_past_the_cell():
     """The trap the guard is for, and it is silent without one.
 
@@ -333,12 +349,10 @@ def test_a_scan_may_not_reach_past_the_cell():
     from defumat.workflows.stm import _constant_current
 
     cell = Cell.from_vectors(np.diag([12.0, 12.0, 10.0]))
-    sphere = generate_gvectors(cell, ecut=6.0)
-    coefficients = np.zeros(sphere.ngm, dtype=complex)
-    coefficients[0] = 1.0
+    sample = _flat_sample(cell)
     plane = plot_plane(cell, (0, 0, 0.5), (1, 0, 0.5), (0, 1, 0.5), shape=(2, 2))
     with pytest.raises(ValueError, match="periodic image"):
-        _constant_current(coefficients, sphere, plane, cell, 0.5, (0.0, 11.0), 8)
+        _constant_current(sample, plane, cell, 0.5, (0.0, 11.0), 8)
 
 
 def test_a_scan_measures_its_reach_from_the_plane_not_from_an_axis():
@@ -352,17 +366,15 @@ def test_a_scan_measures_its_reach_from_the_plane_not_from_an_axis():
     from defumat.workflows.stm import _constant_current
 
     cell = Cell.from_vectors(np.diag([12.0, 12.0, 10.0]))
-    sphere = generate_gvectors(cell, ecut=6.0)
-    coefficients = np.zeros(sphere.ngm, dtype=complex)
-    coefficients[0] = 1.0
+    sample = _flat_sample(cell)
     plane = plot_plane(cell, (0.15, 0, 0), (0.15, 0.3, 0), (0.15, 0, 1),
                        shape=(2, 2))
     # the normal is along a1, whose period is 12 bohr -- a scan of 11 fits and
     # one of 13 does not
     with pytest.warns(UserWarning, match="never cross the set-point"):
-        _constant_current(coefficients, sphere, plane, cell, 0.5, (0.0, 11.0), 8)
+        _constant_current(sample, plane, cell, 0.5, (0.0, 11.0), 8)
     with pytest.raises(ValueError, match="periodic image"):
-        _constant_current(coefficients, sphere, plane, cell, 0.5, (0.0, 13.0), 8)
+        _constant_current(sample, plane, cell, 0.5, (0.0, 13.0), 8)
 
 
 # --------------------------------------------------------------------------
