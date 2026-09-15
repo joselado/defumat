@@ -2538,6 +2538,16 @@ along and leaves every other one free; a hard constraint on the moment direction
 that would not. The in-plane helix held its 24 degree step to better than a tenth of a degree
 throughout.
 
+**And in the plane the field is stiff rather than rigid, which is the same statement about a
+weak constraint from the other end.** The card is an exact ladder, `-90 - 24i` degrees with
+`|B| = 7.31e-03` Ry on every Ni, and the converged moments sit off their own field directions
+by up to **2.43 degrees**, rms 1.35, thirty to fifty times the 0.05 degree per-iteration
+noise, and **in a pattern** -- largest at sites 3, 10 and 12 -- rather than at random. So what
+a field buys is the compromise between itself and the exchange, not the angles that were
+asked for, and a run that needs the asked-for angles needs a hard constraint on the direction
+instead. Whether that pattern is anisotropy bunching the helix or the Br sublattice is not
+established.
+
 ## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and a small `mixing_beta` cannot cross it **[opened 2026-09-14, P88 stage 3b]**
 
 **The mechanism, and it is physics rather than a bug.** Without spin-orbit coupling or
@@ -2927,13 +2937,25 @@ which makes it another check whose null cannot be told from a pass. It also chan
 resumed run's eigenvalues in the last digits, so the equality it asserts has to be stated at
 a tolerance rather than exactly.
 
-**One reading to retire with it.** The first report of this took the `100.0` as a
-placeholder rather than a measurement, on the grounds that the iteration was faster than
-neighbouring ones. That argument does not survive: on that cell the wall time is
-uncorrelated with the step count (four iterations at 17.8 to 23.7 steps all took 850 s to
-1.3 per cent, a fitted 0.6 s per step on an 836 s intercept), so the cost cannot check the
-count and the disagreement between them was never evidence about either. The silicon
-reproduction above is the only evidence in play, and it says the cut-off is real.
+**One reading to retire with it, and the retraction has since been completed from the other
+side.** The first report of this took the `100.0` as a placeholder rather than a measurement,
+on the grounds that the iteration was faster than neighbouring ones. The first answer to that
+was that the cost cannot check the count at all, since four iterations at 17.8 to 23.7 steps
+all took 850 s to 1.3 per cent -- a fitted 0.6 s per step on an 836 s intercept, which is a
+slope of nothing. **That answer was right about those four points and wrong about the run**,
+and the NiBr2 session established which by plotting the whole of every run rather than the
+four: across a fifty-fold range of step counts, 1.5 to 100, the two `anderson` runs fall on
+one line at **4.2 s per Davidson step on a 29 s intercept**. A hundred steps is then
+29 + 420 = 449 s, and the resumed `local-TF` iteration that reported `100.0` sits at a
+cumulative 652.9 s which also carries process start, the JAX compile and a 12 GB checkpoint
+load. **So the budget really was spent and the cost corroborates the count**, in the same
+direction as the silicon reproduction rather than merely failing to contradict it.
+
+The lesson is the narrow sample rather than the conclusion: **four points over a 1.3-fold
+range of the independent variable cannot resolve a slope**, so a fit through them reads as
+"uncorrelated" whatever the truth is. That is `CLAUDE.md`'s search-that-cannot-surprise-you
+one variable further in -- the instrument could not have produced the answer it was being
+asked for, and the fifty-fold range is what made it able to.
 
 ### 4. `local-TF` costs about 730 s an iteration on a 3.5-million-G-vector dense grid **[opened 2026-09-14, from the NiBr2 helix run; unprofiled]**
 
