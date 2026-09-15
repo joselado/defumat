@@ -7,7 +7,9 @@ converged run can be carried into *any* other combination of features: magnetic 
 collinear or spinor, with spin-orbit coupling or without, with a Hubbard `U` or without.
 
 **Closed since this file was written (2026-09-15):** a seeded calculator that never read
-its own checkpoint, which is now `PLAN.md` P23b's last paragraph.
+its own checkpoint, which is now `PLAN.md` P23b's last paragraph, and the notebook P23b
+was missing, which is `notebooks/43_magnetic_textures`'s new section and a sharper case
+than the one the phase measured.
 
 The state machinery itself is in good shape on the spin axis. What was closed in the same
 pass as this file is `PLAN.md` P23b: the spin spiral's rotated frame, `magnetization=`
@@ -17,19 +19,6 @@ run that holds nothing. What is below is everything the sweep found and that pas
 take.
 
 Sizes are the author's estimate of the work, not a measurement.
-
-## The notebook P23b does not have
-
-`notebooks/43_magnetic_textures.md` already uses `with_moments`, and the result that belongs
-in it is the one that made `with_moments` change its default: on the four-site hydrogen
-chain, the *same* converged charge lands on two different magnetic states depending on
-whether the moment is carried or seeded, 8.90 mRy apart, and **both runs report
-convergence**. That is physics rather than implementation, which is the test a notebook cell
-has to pass here, and it is the concrete form of the sentence the mixer section of the user
-guide already carries: fewer iterations is satisfied by a run that found something else.
-
-One cell, one comparison table, no new SCF beyond the two runs. The numbers are in
-`PLAN.md` P23b.
 
 ## The missing `with_*` constructors
 

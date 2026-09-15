@@ -33,9 +33,6 @@ for site, m in enumerate(moments, start=1):
           f'   pointing at {turn:6.2f} degrees')
 ```
 
-    An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
-
-
     total energy -3.8187943769 Ry in 9 iterations
        site 1   |m| = 0.4675 mu_B   pointing at   0.00 degrees
        site 2   |m| = 0.4675 mu_B   pointing at  90.00 degrees
@@ -164,7 +161,7 @@ print(f'\nthe two energies differ by '
 ```
 
                          energy (Ry)   |m| per site   out of plane
-        4 operations   -3.8187943769         0.4675        2.4e-24
+        4 operations   -3.8187943769         0.4675        4.8e-24
          no symmetry   -3.8187943871         0.4676        6.5e-06
     
     the two energies differ by 1.0e-08 Ry
@@ -212,6 +209,65 @@ for label, scf in (('5 bohr', result), ('3 bohr', squeezed)):
 Both cells are planar to five digits and only one of them is a magnet. The pair
 of numbers is what separates them: the shape, and the size the moments still have
 compared with the size they had after the first step.
+
+
+## What the moments start as decides which state is found
+
+A converged magnetic state is the best starting guess there is for the next
+calculation on the same cell, and that is also what makes it a trap: a
+self-consistent loop settles into a state near the one it starts from, and
+nothing in it turns a moment back towards the arrangement that was asked for. So
+asking these four sites for a collinear antiferromagnet has two readings, and
+they are two different calculations. The moments that are already there can be
+carried over, or the new arrangement can be the one the run starts from.
+
+The antiferromagnet has the 16 operations of the table above and the helix is not
+invariant under them, so a helix carried into that run is averaged away on the
+first step, and what converges is a chain with no moments left.
+
+
+
+```python
+import warnings
+
+afm = [[0.0, 0.0, 0.6], [0.0, 0.0, -0.6]] * 2
+print(f'{"the moments start as":<22}{"iterations":>11}{"energy (Ry)":>16}'
+      f'{"|m| per site":>14}{"m_z per site":>26}')
+for label, start in (('the helix', 'auto'), ('the new card', 'seed')):
+    with warnings.catch_warnings():
+        # The carried run says out loud that the helix is not invariant under
+        # the antiferromagnet's operations, which is what becomes of it.
+        warnings.simplefilter('ignore')
+        scf = calc.with_moments(afm, magnetization=start).get_scf()
+    m = np.array(scf.site_moments)
+    print(f'{label:<22}{scf.iterations:>11d}{scf.total_energy:>16.9f}'
+          f'{np.linalg.norm(m, axis=1).mean():>14.4f}'
+          f'{np.array2string(m[:, 2], precision=2, suppress_small=True):>26}')
+```
+
+    the moments start as   iterations     energy (Ry)  |m| per site              m_z per site
+
+
+    the helix                      10    -3.816179461        0.0005             [0. 0. 0. 0.]
+
+
+    the new card                    9    -3.827162410        0.6008     [ 0.6 -0.6  0.6 -0.6]
+
+
+The antiferromagnet that was asked for is the second row: 0.60 $\mu_B$ on every
+site, alternating in sign, and **11.0 mRy below** the first. The first row is a
+chain with no magnetism left, reached in ten iterations, and it reports
+convergence exactly as confidently. Neither of the two numbers a calculation
+prints at the end, the energy and the iteration count, says which of the two
+questions was answered, and the run that found something else is not the slower
+one by any rule: here it is the state with the moments in it that took fewer
+iterations.
+
+Carrying the moments is the right default where the new calculation is the same
+magnet in a different regime, and it is the wrong one whenever the new
+arrangement is the point, which is why `with_moments` starts from the card it was
+given.
+
 
 ## What holds a texture that is not a minimum
 

@@ -2690,9 +2690,11 @@ DFT+U run could not restart from its own `checkpoint_dir`.
 
 *Notebook 18.*
 
-### P23b -- The axes a continuation did not know it was crossing. **DONE except its notebook** (2026-09-15).
+### P23b -- The axes a continuation did not know it was crossing. **DONE** (2026-09-15).
 
-Four of the five deliverables are here: the numbers below, the refusals in `docs/features.tex`'s amber box with an executed snippet, the unit coverage, and the README row P23 already carries (a row is a quantity and this adds no quantity, only knobs and refusals). **No notebook**, and the 8.9 mRy result is exactly what a notebook cell is for -- the same converged charge landing on two different magnetic states, with both runs reporting convergence -- so it is the first line of `CONTINUATION-NEXT.md` rather than a tick here. `notebooks/43_magnetic_textures.md` already uses `with_moments` and is where it goes.
+All five deliverables: the numbers below, the refusals in `docs/features.tex`'s amber box with an executed snippet, the unit coverage, the README row P23 already carries (a row is a quantity and this adds no quantity, only knobs and refusals), and the notebook section.
+
+**The notebook is `43_magnetic_textures`, and its cell is a sharper case than the one this phase measured.** The same question is asked of the cell the notebook has already converged, the 90 degree helix on four hydrogens, and the two modes answer it differently in a way that needs no continuation vocabulary to state: asking those four sites for a **collinear antiferromagnet** gives, from the carried helix, a chain with **no moments left** (10 iterations, -3.816179461 Ry, 0.0005 mu_B per site), and from the new card the antiferromagnet that was asked for (9 iterations, **-3.827162410 Ry**, 0.601 mu_B alternating). **11.0 mRy apart, both converged**, and the carried one is the slower of the two. The mechanism is the notebook's own preceding section: the antiferromagnet has 16 operations and the helix is not invariant under any of them, so it is averaged away on the first step -- which is the symmetry-of-the-seed warning `run_scf` already prints, met as physics rather than as a message. The notebook executes in 147 s over 14 cores against a 600 s ceiling.
 
 P23 closed the *spin regime* and left four things open on the other axes, found by asking
 the question a user asks rather than the one the phase asked: whether a converged run can be

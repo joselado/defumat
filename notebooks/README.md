@@ -57,6 +57,7 @@ instead, which means the physics is selected in the input file rather than at th
 | Spin-orbit split bands | `noncolin`, `lspinorb` | [08](08_spin_orbit_coupling.ipynb) |
 | Magnetism as a vector, fields, constrained moments | `nspin = 4`, `B_field` | [11](11_noncollinear_magnetism_and_fields.ipynb) |
 | A magnetic texture stated one atom at a time, and whether it survived | `STARTING_MOMENTS`, `with_moments()` | [43](43_magnetic_textures.ipynb) |
+| Which magnetic state a starting guess lands on | `with_moments(..., magnetization=)` | [43](43_magnetic_textures.ipynb) |
 | A magnon `E(q)` without a supercell | `get_spiral_scan()` | [12](12_spin_spirals.ipynb) |
 | Which way a magnet wants to point | `get_anisotropy()` | [36](36_magnetic_anisotropy.ipynb) |
 | A spin wave, and whether the magnetic order survives it | `get_magnon_dispersion()` | [38](38_magnons.ipynb) |
@@ -170,7 +171,7 @@ want a number.
 | [`40_stm_images.ipynb`](40_stm_images.ipynb) | What a scanning-tunnelling microscope sees: half of graphite's surface atoms missing, a contrast that inverts with the bias, and a magnetic tip reading four moments one at a time |
 | [`41_vertical_transport.ipynb`](41_vertical_transport.ipynb) | Tunnelling *through* a two-dimensional material into the substrate beneath it: graphene, where the current map is the microscope's picture, and a bilayer, where the two layers' paths interfere and it is not |
 | [`42_all_electron_start.ipynb`](42_all_electron_start.ipynb) | A converged all-electron density brought here and used to start a run: where a pseudopotential density is allowed to differ from the real one, and where it is not |
-| [`43_magnetic_textures.ipynb`](43_magnetic_textures.ipynb) | A moment per atom rather than a moment per crystal: a 90 degree helix that survives self consistency, the symmetry a texture leaves behind, and the two numbers it takes to say it is still there |
+| [`43_magnetic_textures.ipynb`](43_magnetic_textures.ipynb) | A moment per atom rather than a moment per crystal: a 90 degree helix that survives self consistency, the symmetry a texture leaves behind, the two numbers it takes to say it is still there, and the same four sites landing on two magnetic states 11 mRy apart depending on what their moments started as |
 | [`44_ultra_long_range.ipynb`](44_ultra_long_range.ipynb) | A potential that varies over eight unit cells of silicon, and the electrons screening it: the long cell solved in the ordinary cell's own states, computed once. What the modulation costs in energy, which is what says whether a modulation is the ground state at all. Then the two kinds of spin wave it carries, one modulating a moment's length and one its direction, |
 | [`45_imaging_a_modulation.ipynb`](45_imaging_a_modulation.ipynb) | What a scanning-tunnelling microscope sees above a spin density wave eight unit cells long: a polarized tip images the wave itself and an unpolarized one images its square, at twice the wavevector, because a collinear crystal cannot respond in the charge at first order in the field. Then the same states read as a *spectrum* rather than an image, where the band edge is seen to move through the wave by a third of an electronvolt and the two spin channels peak four cells apart |
 
@@ -264,17 +265,24 @@ workstation core, slowest last:
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
 | `01` | 5 | `06` | 23 | `34` | 40 | `41` | 164 |
-| `09` | 6 | `25` | 28 | `10` | 50 | `44` | 188 |
-| `02` | 8 | `18` | 29 | `29` | 59 | `08` | 171 |
+| `09` | 6 | `25` | 28 | `10` | 50 | `08` | 171 |
+| `02` | 8 | `18` | 29 | `29` | 59 | `43` | 173 |
 | `37` | 9 | `12` | 30 | `45` | 85 | `27` | 178 |
-| `03` | 10 | `21` | 30 | `11` | 81 | `17` | 203 |
-| `05` | 10 | `15` | 31 | `14` | 89 | `43` | 240 |
+| `03` | 10 | `21` | 30 | `11` | 81 | `44` | 188 |
+| `05` | 10 | `15` | 31 | `14` | 89 | `17` | 203 |
 | `04` | 12 | `24` | 31 | `26` | 109 | `38` | 242 |
 | `22` | 12 | `28` | 33 | `33` | 115 | `36` | 244 |
 | `42` | 13 | `31` | 34 | `19` | 125 | `35` | 276 |
 | `16` | 18 | `40` | 34 | `13` | 131 | `20` | 282 |
 | `00` | 22 | `23` | 35 | `30` | 131 |  |  |
 | `07` | 22 | `32` | 35 | `39` | 151 |  |  |
+
+`43` reads 173 s on 2026-09-15 with its starting-guess section in it, against the 240 s
+recorded before that section existed. **The pair is not a delta.** The new section is two
+SCF runs on the four-atom chain and cannot be worth a negative 67 s; what the two numbers
+differ in is everything else about when they were taken, and the one that is a measurement
+is the new one, taken pinned to a single core with `OMP_NUM_THREADS=1` on an otherwise
+quiet machine.
 
 `44` read 188 s on 2026-09-15 against 164 s before it gained the total energy, and **the
 24 s is not attributed to the energy**, which is the honest version of a sentence that
