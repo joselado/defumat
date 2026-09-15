@@ -9,20 +9,8 @@ and each therefore agrees with the energy it came from by construction rather
 than by transcription.
 
 The **formalism is [Quantum ESPRESSO](https://www.quantum-espresso.org)'s**.
-That is where the plane-wave machinery comes from — the basis, the
-pseudopotentials, the SCF, the conventions and the units — closely enough that
-defumat reads its input files: you give it the same file you would give `pw.x`
-and it runs the calculation itself, with no Fortran underneath.
-
-```
-total energy   QE  -63.36038036 Ry
-          defumat  -63.36038036 Ry
-```
-
-That is an eight-atom silicon cell, agreeing to 3.5e-9 Ry. The agreement is
-checked automatically, term by term, against Quantum ESPRESSO's own reference
-outputs for around a hundred cases.
-
+That is where the plane-wave machinery comes from, the basis, the
+pseudopotentials, the SCF, the conventions and the units.
 On that formalism it carries features taken from, and checked against, two
 other codes: **[Elk](https://elk.sourceforge.io)**, the all-electron LAPW code,
 and **[pyqula](https://github.com/joselado/pyqula)**, the quantum lattice and
