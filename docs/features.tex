@@ -4279,13 +4279,24 @@ direction rather than a micron in three.
 plane-wave count, the basis above spans precisely the ultracell's own
 plane-wave basis. So the method is a \emph{variational truncation of the exact
 $N$-cell supercell problem to \code{nbnd} bands per folded k-point}, and
-nothing else. The convergence carries no sign --- the Hamiltonian moves with
-its own truncated density, so an ultracell eigenvalue is not an upper bound on
-the supercell's --- but it does converge, which is the property the
-implementation is checked against: a two-cell silicon ultracell under an
-applied modulation reproduces a real four-atom supercell's induced density, and
-the disagreement falls monotonically with \code{nbnd}
-(\code{tests/regression/test\_ultracell.py}).
+nothing else. An eigenvalue's convergence carries no sign --- the Hamiltonian
+moves with its own truncated density, so an ultracell eigenvalue is not an
+upper bound on the supercell's, and neither is a density --- but it does
+converge, which is the property the implementation is checked against: a
+two-cell silicon ultracell under an applied modulation reproduces a real
+four-atom supercell's induced density, and the disagreement falls monotonically
+with \code{nbnd} (\code{tests/regression/test\_ultracell.py}).
+
+\textbf{The total energy is the exception, and it does carry a sign.} What the
+run reports as \code{total\_energy} is the Kohn-Sham free energy of the state
+the loop converged to, and the bases are \emph{nested} in \code{nbnd}, so it is
+a monotone non-increasing upper bound on the $N$-cell supercell's own energy:
+$+8.14\times10^{-5}$, $+3.56\times10^{-6}$, $+4.06\times10^{-7}$ and
+$+1.85\times10^{-7}$~Ry at \code{nbnd = 12, 24, 48, 64} on that same silicon
+cell. Comparing against a supercell needs the \emph{same} FFT box on both
+sides, since two discretisations of one functional differ by about
+$10^{-6}$~Ry per cell here, which is larger than the top of that ladder; within
+the ladder the box is the same one and the monotonicity is exact.
 
 \begin{pycode}
 from defumat import Calculator
@@ -4344,6 +4355,74 @@ Hartree kernel there is $N^2$ larger and long-wavelength charge sloshing is the
 whole difficulty. Elk's own example of the method runs at a mixing parameter of
 $0.001$ for up to two thousand iterations; a two-cell silicon ultracell under an
 applied modulation converges here in nine.
+
+\textbf{The total energy, and what it is for.} \code{ulr.total\_energy} is the
+Kohn-Sham free energy per unit cell, and it is what says whether a modulation is
+the ground state rather than merely what a modulation does: the energy
+\emph{gain} of a spin density wave over the uniform state is a difference of two
+of these. Neither reference code has it --- Elk's \code{energyulr.f90} computes
+the occupied eigenvalue sum alone and \code{pw.x} has no ultracell --- and the
+eigenvalue sum is not the total: it double-counts the Hartree and
+exchange-correlation energies exactly as an ordinary \code{eband} does, because
+the frozen eigenvalue carries the whole self-consistent potential. The
+assembly is therefore QE's own,
+\[
+  E = (\code{eband} + \code{deband}) + E_{\mathrm H} + E_{\mathrm{xc}}
+      + E_{\mathrm{Ewald}} + \code{demet},
+\]
+with \code{deband} the integral of the density against the potential over the
+ultracell, and \code{ulr.energy\_terms} carries the pieces. The Ewald term is the
+\emph{unit cell's}, unchanged, because the atoms do not move.
+
+\begin{pycode}
+# the same run as above -- the energy comes with it and costs nothing extra
+print(ulr.total_energy)                # Ry, per unit cell
+print(ulr.energy_terms)                # the pieces, summing to it
+print(ulr.energy_history[-3:])         # one per iteration, approaching from above
+print(ulr.field_energy)                # None without a magnetic_field
+\end{pycode}
+
+\textbf{This is the one quantity in the method that converges with a sign.} An
+ultracell eigenvalue is not an upper bound on the supercell's and neither is a
+density, for the reason above --- the Hamiltonian moves with its own truncated
+density. The energy is a bound because the bases are \emph{nested}: raising
+\code{nbnd} keeps every function already in the basis, and the union over
+$\mathbf Q$ of the folded k-point spheres is the supercell's own plane-wave
+space. So \code{total\_energy} falls monotonically towards the real supercell's
+from above, and on two-cell silicon under an applied modulation it does:
+$+8.14\times10^{-5}$, $+3.56\times10^{-6}$, $+4.06\times10^{-7}$ and
+$+1.85\times10^{-7}$~Ry at \code{nbnd = 12, 24, 48, 64}.
+
+\textbf{Comparing against a supercell needs the same FFT box on both sides.}
+Two discretisations of one functional differ by about $10^{-6}$~Ry per cell
+here, which is larger than the top of that ladder, and a supercell picks its
+dense grid from its own cutoff: at the default \code{ecutwfc = 12} it takes
+$(32,15,15)$ where the tiled unit cell's is $(30,15,15)$, and the third rung
+then comes out $1.06\times10^{-7}$~Ry \emph{below} the supercell. Choose a
+cutoff at which the two grids agree --- \code{ecutwfc = 13} puts the unit cell on
+$(18,18,18)$ and the two-cell supercell on $(36,18,18)$ --- and do it through
+\code{ecutwfc} rather than \code{ecutrho}, since an ultracell refuses a double
+grid. Within one ladder the box is the same on every rung and the monotonicity
+is exact.
+
+\textbf{An applied field's energy is not in the total}, which is QE's and Elk's
+shared convention and this package's everywhere else: \code{ulr.field\_energy}
+carries $-\int B\cdot m$ beside it. An applied \emph{scalar} potential is
+treated the other way and its energy stays in the total, once, because that is
+what \code{vltot} is --- which is also what makes a comparison against a
+supercell carrying the same modulation a comparison of the same quantity.
+
+\textbf{Under a field, the quantity that carries the sign is
+\code{total\_energy + field\_energy}}, not the total on its own. What the
+calculation minimises is the full energy with the Zeeman term in it, and the
+reported total has that term taken out, so the total alone is a bound on
+nothing --- measured on a partly-polarized hydrogen cell under a uniform
+$0.02$~Ry field, it sits $7.4\times10^{-7}$~Ry above an ordinary SCF at
+\code{nbnd = 12} and $9.7\times10^{-7}$ and $1.6\times10^{-6}$~Ry \emph{below}
+it at 24 and 40, moving monotonically the wrong way, where the sum is
+$+4.15\times10^{-6}$, $+2.47\times10^{-6}$ and $+5.15\times10^{-7}$ --- above at
+every rung and falling. Add the field energy back whenever two magnetic states
+are being compared.
 
 \textbf{A spin density wave.} \code{nspin = 2} is in, and it is what the method
 was published for: a modulation of the \emph{magnetization} over tens of cells
@@ -4548,6 +4627,16 @@ non-integer ultracell is refused, where Elk's \code{avecu} is an independent
 input with no consistency check against its Q-grid. An \textbf{unconverged}
 unit-cell ground state, because its density is the one thing an ultracell holds
 fixed and there is no later iteration in which a bad seed could work itself out.
+
+Two things are \emph{not} refused and are limits on a claim rather than on a
+run. The total energy's monotone bound rests on the free energy being minimised,
+which Methfessel-Paxton smearing breaks --- its occupation function is
+non-monotone, so the generalised entropy is not concave and the self-consistent
+point is not a minimum; gaussian, Fermi-Dirac and Marzari-Vanderbilt are safe,
+and the energy itself is computed either way. And a cell with more than one
+self-consistent solution has no ladder at all: the energy then \emph{ranks}
+solutions at one \code{nbnd} and does not certify a sequence across several,
+since nothing says the same solution is found at each.
 \end{refuses}
 
 % =====================================================================

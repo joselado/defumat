@@ -5,6 +5,7 @@ subpackage rests on and :mod:`defumat.ultracell.driver` for the loop.
 """
 
 from defumat.ultracell.density import ultracell_density
+from defumat.ultracell.energy import ultracell_energy, ultracell_entropy
 from defumat.ultracell.driver import (
     UltracellResult,
     require_an_ultracell_regime,
@@ -28,6 +29,8 @@ __all__ = [
     "run_ultracell",
     "ultracell_matrix",
     "ultracell_density",
+    "ultracell_energy",
+    "ultracell_entropy",
     "ultracell_potential",
     "delta_potential",
     "with_external_potential",

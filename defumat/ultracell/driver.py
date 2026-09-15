@@ -19,12 +19,19 @@ solved once and frozen, and the self-consistency runs on the envelope alone.
 ``{psi_{k0+Q,n} : all Q, n <= nbnd}`` spans, as ``nbnd`` grows to the full
 plane-wave count, exactly the ultracell's own plane-wave basis at ``k0``. So
 this is a truncation of the exact ``N``-cell supercell problem to ``nbnd`` bands
-per folded k-point and nothing else. **The convergence in ``nbnd`` carries no
-sign**: Rayleigh-Ritz bounds the eigenvalues of a *fixed* Hamiltonian, and this
-one moves with its own truncated density, so an ultracell eigenvalue is not an
-upper bound on the supercell's. Only a total energy would be variational, and
-there is none here (stage 4; Elk has none either -- ``energyulr.f90`` is the
-eigenvalue sum alone).
+per folded k-point and nothing else. **The convergence of an eigenvalue in
+``nbnd`` carries no sign**: Rayleigh-Ritz bounds the eigenvalues of a *fixed*
+Hamiltonian, and this one moves with its own truncated density, so an ultracell
+eigenvalue is not an upper bound on the supercell's, and neither is a density.
+
+**The total energy is the one quantity here that does carry a sign**, and it is
+``total_energy`` on the result (``ultracell/energy.py``; Elk computes none --
+``energyulr.f90`` is the eigenvalue sum alone, and ``pw.x`` has no ultracell).
+The reported number is the Kohn-Sham free energy of the state the iteration
+produced, and the bases are **nested** in ``nbnd``, so it falls monotonically
+towards the supercell's own from above: +8.14e-05, +3.56e-06, +4.06e-07 and
++1.85e-07 Ry at ``nbnd = 12, 24, 48, 64`` on two-cell silicon under an applied
+modulation.
 
 **The density is mixed, not the potential.** Elk mixes its ``Q``-resolved
 potential and reports an RMS change in it; here the mixed quantity is the
@@ -107,6 +114,11 @@ from defumat.scf.mixing import MIXERS, get_mixer
 from defumat.xc.functional import resolve_functional
 from defumat.scf.occupations import fixed_occupations, smeared_occupations
 from defumat.system.kpoints import for_spin
+from defumat.ultracell.energy import (
+    total_of,
+    ultracell_energy,
+    ultracell_entropy,
+)
 from defumat.ultracell.grid import Ultracell, folded_kpoints
 from defumat.ultracell.hamiltonian import multiplet_cut, ultracell_matrix
 from defumat.ultracell.mixing import box_kerker
@@ -153,8 +165,37 @@ class UltracellResult:
     occupations: np.ndarray
     fermi_energy: float
     #: The occupied eigenvalue sum per unit cell -- Elk's ``evalsum``, which is
-    #: the only energy an ultracell run reports in either code.
+    #: the only energy Elk's own ultracell reports (``energyulr.f90``). It is
+    #: **not** the total energy: it double-counts the Hartree and
+    #: exchange-correlation terms, exactly as an ordinary ``eband`` does. See
+    #: :attr:`total_energy`.
     band_energy: float
+    #: The **total energy per unit cell**, in Ry, which neither ``pw.x`` nor
+    #: Elk computes for an ultracell. It is the Kohn-Sham free energy of the
+    #: state the last iteration produced, so it is the quantity that says
+    #: whether a modulation is worth its own cost -- the energy *gain* of a spin
+    #: density wave over the uniform state is a difference of two of these.
+    #:
+    #: **It is the one quantity here that converges with a sign.** The bases are
+    #: nested in ``nbnd``, so it falls monotonically towards the ``N``-cell
+    #: supercell's own energy from above, where an eigenvalue or a density does
+    #: not: +8.14e-05, +3.56e-06, +4.06e-07 and +1.85e-07 Ry at
+    #: ``nbnd = 12, 24, 48, 64`` on two-cell silicon under an applied
+    #: modulation. Comparing it against a supercell needs the **same** FFT box
+    #: on both sides, since two discretisations of the same functional differ by
+    #: about 1e-6 Ry per cell here and that is larger than the top of the ladder.
+    #:
+    #: **Under an applied ``magnetic_field`` the bounded quantity is
+    #: ``total_energy + field_energy``**, not this on its own: what is minimised
+    #: is the full energy and the Zeeman term is deliberately outside what is
+    #: reported, so the total alone is a bound on nothing and was measured going
+    #: the wrong way -- 7.4e-07 Ry above an ordinary SCF at ``nbnd = 12`` and
+    #: 9.7e-07 *below* it at 24, where the sum is +4.15e-06 and +2.47e-06.
+    total_energy: float
+    #: The terms it is made of, in ``SCFResult.energy_terms``'s shape:
+    #: ``one-electron``, ``hartree``, ``xc``, ``ewald``, and ``dispersion`` and
+    #: ``smearing`` where they apply. They sum to :attr:`total_energy`.
+    energy_terms: dict
     converged: bool
     iterations: int
     #: The Hartree energy of the last density residual, in Ry: QE's ``dr2`` on
@@ -183,6 +224,22 @@ class UltracellResult:
     magnetic_accuracy: float = 0.0
     #: ``(iterations, 3)``: ``(dr2, charge, magnetization)`` per iteration.
     history: tuple = ()
+    #: The total energy per iteration, in Ry, beside :attr:`history` rather than
+    #: inside it -- a fourth column would have widened a tuple this file unpacks
+    #: as a triple. Every entry is the Kohn-Sham energy of a state that exists,
+    #: because the Hartree and exchange-correlation terms are taken at the
+    #: iteration's **output** density rather than at the mixture the next one
+    #: starts from, which is what makes QE's ``descf`` correction unnecessary.
+    #: So the sequence is an upper bound approaching from above and its decrease
+    #: is readable as convergence.
+    energy_history: tuple = ()
+    #: ``-int B . m`` per unit cell for an applied ``magnetic_field``, in Ry,
+    #: and ``None`` without one. Carried beside the total rather than inside
+    #: it, which is QE's and Elk's shared convention and this package's
+    #: (``SCFResult.field_energy``). Add it back to :attr:`total_energy` to
+    #: recover the quantity the calculation actually minimises, which is the
+    #: one that converges with a sign.
+    field_energy: float | None = None
     #: The **unit cell's** volume in bohr^3, carried so that an integral over
     #: one cell of the ultracell can be taken without the caller holding the
     #: system as well as the result.
@@ -267,7 +324,8 @@ class UltracellResult:
         fermi = ", ".join(f"{e * RY_TO_EV:.4f}" for e in levels)
         return (
             f"UltracellResult({n} cells, {self.iterations} iterations, {state}, "
-            f"dr2 = {self.accuracy:.3e} Ry, E_F = {fermi} eV)"
+            f"E = {self.total_energy:.8f} Ry, dr2 = {self.accuracy:.3e} Ry, "
+            f"E_F = {fermi} eV)"
         )
 
 
@@ -682,8 +740,18 @@ def run_ultracell(
     external_field = _as_field(
         external, magnetic_field, ultracell, nspin, nspin_mag
     )
+    # The field's half of that, kept apart because its energy leaves the total
+    # again where the scalar potential's stays in it -- see
+    # :func:`~defumat.ultracell.energy.ultracell_energy`.
+    magnetic_potential = _magnetic_potential(magnetic_field, ultracell, nspin_mag)
 
     weights0 = np.asarray(k0.weights)
+    # **A pair sum over the nuclei, and the nuclei do not move**, so this enters
+    # the ultracell's energy the way the Ewald term does: the unit cell's value,
+    # unchanged, per cell. Nothing refuses a van der Waals correction here, so a
+    # D2 dataset reaches this loop and its total would otherwise be short by a
+    # real energy.
+    dispersion = float(getattr(calculation, "dispersion", 0.0) or 0.0)
     nelec = float(calculation.nelec)
     smearing = system.occupations not in (None, "fixed")
 
@@ -707,6 +775,7 @@ def run_ultracell(
         )
     result = None
     history = []
+    energies = []
 
     for iteration in range(1, max_iterations + 1):
         potential = ultracell_potential(
@@ -757,12 +826,42 @@ def run_ultracell(
         accuracy, charge_dr2, magnetic_dr2 = _accuracy(
             new - density, ultracell, cell, g2_inverse, keep
         )
+
+        # **The energy of the state this iteration produced**, which is not the
+        # density the next one will start from. ``eband`` carries the potential
+        # the matrix was built from, so ``deband`` pairs ``new`` with
+        # ``potential`` -- the input one -- and the Hartree and
+        # exchange-correlation energies are taken at ``new`` instead, which is
+        # one more ``v_of_rho`` and is what makes QE's ``descf`` unnecessary:
+        # every iteration's number is then the Kohn-Sham energy of a state that
+        # exists, rather than a mixture's corrected to first order.
+        band = float(np.sum(occupations * levels))
+        potential_out = ultracell_potential(
+            new, ultracell, cell, rho_core_tiled, calculation.functional,
+            g2_inverse, keep,
+        )
+        entropy = 0.0
+        if smearing:
+            entropy = ultracell_entropy(levels, weights0, fermi, ultracell, system)
+        terms = ultracell_energy(
+            new, potential, potential_out, band, ultracell, cell,
+            float(calculation.ewald), magnetic_potential, entropy,
+            dispersion=dispersion,
+        )
+        energy = total_of(terms)
+
         history.append((accuracy, charge_dr2, magnetic_dr2))
+        # A **second** list rather than a fourth column, because ``history`` is
+        # unpacked as a triple in this file and its shape is documented in the
+        # user guide: widening it would break the non-convergence branch below
+        # rather than extend it.
+        energies.append(energy)
         if verbose:
             extra = "" if nspin_mag == 1 else (
                 f"   (charge {charge_dr2:.3e}, magnetic {magnetic_dr2:.3e})"
             )
-            print(f"  iteration {iteration:3d}   dr2 = {accuracy:.6e} Ry{extra}")
+            print(f"  iteration {iteration:3d}   dr2 = {accuracy:.6e} Ry   "
+                  f"E = {energy:.8f} Ry{extra}")
 
         converged = accuracy < conv_thr
         if not converged:
@@ -776,7 +875,8 @@ def run_ultracell(
             result = _result(
                 density, delta_v, levels, occupations, fermi, True, iteration,
                 (accuracy, charge_dr2, magnetic_dr2), gap, ultracell, reference,
-                started, history, float(cell.volume), blocks,
+                started, history, float(cell.volume), blocks, band, terms,
+                energies,
             )
             break
 
@@ -833,7 +933,7 @@ def run_ultracell(
         result = _result(
             density, delta_v, levels, occupations, fermi, False, max_iterations,
             history[-1], gap, ultracell, reference, started, history,
-            float(cell.volume), blocks,
+            float(cell.volume), blocks, band, terms, energies,
         )
     if keep_states:
         # **The last iteration's amplitudes, which are the ones the density
@@ -854,7 +954,7 @@ def run_ultracell(
 
 def _result(density, delta_v, levels, occupations, fermi, converged, iterations,
             accuracy, gap, ultracell, reference, started, history, cell_volume,
-            blocks) -> UltracellResult:
+            blocks, band, terms, energies) -> UltracellResult:
     """Pack the loop's state, squeezing the spin axis the way every result does.
 
     One matrix block drops the leading channel axis from the eigenvalues and the
@@ -868,7 +968,7 @@ def _result(density, delta_v, levels, occupations, fermi, converged, iterations,
     which want it.
     """
     total, charge_dr2, magnetic_dr2 = accuracy
-    band = float(np.sum(occupations * levels))
+    field_energy = terms.get("_field_energy", 0.0)
     if blocks == 1:
         levels, occupations = levels[0], occupations[0]
     return UltracellResult(
@@ -877,11 +977,16 @@ def _result(density, delta_v, levels, occupations, fermi, converged, iterations,
         fermi_energy=float(fermi) if np.ndim(fermi) == 0 else tuple(
             float(f) for f in np.atleast_1d(np.asarray(fermi))
         ),
-        band_energy=band, converged=converged, iterations=iterations,
+        band_energy=band,
+        total_energy=total_of(terms),
+        energy_terms={k: v for k, v in terms.items() if not k.startswith("_")},
+        converged=converged, iterations=iterations,
         accuracy=total, charge_accuracy=charge_dr2,
         magnetic_accuracy=magnetic_dr2, multiplet_gap=gap,
         ultracell=ultracell, reference=reference,
         seconds=time.time() - started, history=tuple(history),
+        energy_history=tuple(energies),
+        field_energy=None if not field_energy else float(field_energy),
         cell_volume=cell_volume,
     )
 
@@ -1038,14 +1143,31 @@ def _as_field(external, magnetic_field, ultracell: Ultracell, nspin: int,
             jnp.zeros_like(field).at[0].add(scalar) if nspin_mag == 4
             else scalar[None]
         )
-    if magnetic_field is not None:
-        if nspin_mag == 4:
-            b = _on_the_vector_box(magnetic_field, ultracell)
-            field = field.at[1:].add(-b)
-        else:
-            b = _on_the_box(magnetic_field, ultracell, "magnetic field")
-            field = field.at[0].add(-b).at[1].add(b)
+    magnetic = _magnetic_potential(magnetic_field, ultracell, nspin_mag)
+    if magnetic is not None:
+        field = field + magnetic
     return field
+
+
+def _magnetic_potential(magnetic_field, ultracell: Ultracell, nspin_mag: int):
+    """The applied field's own contribution to ``dV``, on its own.
+
+    Factored out of :func:`_as_field` because the **energy** needs it apart
+    from the scalar potential's, and the two go opposite ways: a scalar
+    ``external`` potential is ``vltot`` and its energy stays in the total,
+    while a field's Zeeman energy is carried beside it, by this package's
+    convention and QE's and Elk's. The way to keep it out is to pair it into
+    ``deband``, which needs exactly this array (``ultracell/energy.py``).
+    """
+    if magnetic_field is None:
+        return None
+    grid = tuple(ultracell.grid)
+    field = jnp.zeros((nspin_mag,) + grid, dtype=ultracell.precision.real)
+    if nspin_mag == 4:
+        b = _on_the_vector_box(magnetic_field, ultracell)
+        return field.at[1:].add(-b)
+    b = _on_the_box(magnetic_field, ultracell, "magnetic field")
+    return field.at[0].add(-b).at[1].add(b)
 
 
 def _on_the_vector_box(field, ultracell: Ultracell):

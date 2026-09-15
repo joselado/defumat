@@ -305,7 +305,7 @@ because that is what decides whether it is a session or a phase.
   follow-up; memory held by **child** processes, which the cgroup charges and this does
   not; and the fact that the failure lands at *teardown*, after the peak — if the peak is
   the kill, what survives is the log line, which is why it is written first.
-- **The ultracell beyond an LDA** (P88, stages 1, 3a and 3b done). Spin is in, collinear
+- **The ultracell beyond an LDA** (P88, stages 1, 3a, 3b and 4 done). Spin is in, collinear
   and noncollinear both: an applied `magnetic_field` modulates the moment, the two collinear
   channels share one Fermi level, and a spinor ultracell is *one* matrix per folded k-point
   rather than two, acted on by `V_0 + sigma . B`, so a texture that **turns** is reachable
@@ -14601,7 +14601,7 @@ told from silence is this project's most-repeated trap.
   which is a statement about that route rather than this one, and QE's own `average_pp.f90`
   refuses ultrasoft and PAW outright.
 
-### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1, 3a and 3b (norm-conserving, LDA, direct route, `nspin = 1`, `2` and `4`); stages 2 and 4 planned.
+### P88 -- The ultracell: a modulation a thousand cells long, solved in the unit cell's own states. ✅ DONE, stages 1, 3a, 3b and 4 (norm-conserving, LDA, direct route, `nspin = 1`, `2` and `4`, and the total energy); stage 2 planned.
 
 Elk tasks 700/701 (ground state), 720/725 (band structure and spectral function), 731-3,
 741-3, 771-3 (plots); `src/modulr.f90` and the twenty routines around it. The method paper is
@@ -15496,12 +15496,185 @@ not taken here.** It would need a measurement rather than an argument, which is
   what the run measures is the stiffness of the magnet against a long-wavelength twist --
   but a cell whose modulated axis is weakly coupled is what a *demonstration* wants.
 
+---
+
+**What stage 4 measured: the total energy, and the first quantity in this phase that
+carries a sign.** `defumat/ultracell/energy.py`, reached by `UltracellResult.total_energy`,
+`.energy_terms`, `.energy_history` and `.field_energy`. **Elk computes none** --
+`energyulr.f90` (copyright 2025) is four lines and is `evalsum` alone, `writeengyu.f90`
+prints the Fermi energy and that sum -- and `pw.x` has no ultracell, so this is the phase's
+row with both tick columns empty.
+
+**The assembly is QE's own, and the reason is that the ultracell matrix is an exact
+Rayleigh-Ritz.** `H_cell` is lattice periodic, so it conserves crystal momentum modulo a
+*unit-cell* `G` and cannot couple two different `Q`: the diagonal block is exactly
+`eps_{k+Q,n}`, and the frozen eigenvalue already carries the whole unit-cell potential.
+`dV` corrects that to the ultracell's, so the band sum double-counts `E_H` and `E_xc`
+exactly the way an ordinary `eband` does, and
+
+    E = (eband + deband) + E_H + E_xc + E_Ewald + demet   [+ dispersion]
+
+per unit cell. Nothing is derived a second time: `deband` is `_iteration_scalars`'
+expression on the box, `demet` is `smearing_entropy` rescaled the way `_occupy` rescales
+the occupations, `E_Ewald` is the unit cell's unchanged because the atoms do not move.
+
+**Which potential `deband` pairs with is the whole accuracy of the term, and it is the
+*input* one.** `eband` carries `v[rho_in]` inside every eigenvalue, so `eband + deband` is
+the one-electron term only if the same potential appears in both -- and then it cancels
+identically, leaving `T + int rho v_loc + E_NL`, to which `E_H[rho_out]` and `E_xc[rho_out]`
+are added. On silicon at `N = 1`, where the loop converges in **one** iteration and `rho_in`
+is the tiled reference while `rho_out` is what the frozen states rebuild, the two pairings
+are worth a factor of **10^7**:
+
+| `deband` paired with | difference from the unit cell's own SCF total |
+|---|---|
+| `v[rho_out]` | -2.917e-07 Ry |
+| `v[rho_in]` | **-2.309e-14 Ry** |
+
+So the null's floor is **machine precision rather than a convergence threshold**, which was
+not the expectation: the functional is stationary at both states, so what is left is second
+order in a density difference that is itself at the eigensolver's floor. Through the
+committed code path the same null reads -5.9e-14 at `N = 1` and **-5.5e-14 tiled at
+`N = 2`**, and the second is the one that can see a factor of `N` -- `deband` is an integral
+over the whole ultracell and `E_H`/`E_xc` arrive as ultracell totals, so each carries its
+own `/N` and each is a separate chance to drop one.
+
+**The number: the energy is a monotone upper bound on the supercell's, and it is the only
+ladder in P88 that has a direction.** An eigenvalue's convergence carries no sign and
+neither does a density's, for the reason stage 1 recorded -- this Hamiltonian moves with its
+own truncated density. The energy is different: what is reported is the Kohn-Sham free
+energy of the state the loop converged to, the bases are **nested** in `nbnd`, and the union
+over `Q` of the folded spheres is the supercell's own plane-wave space at `k0`. Two-cell
+silicon under `0.05 cos(2 pi x_1/2)` Ry against a real four-atom supercell through this
+package's own SCF at `E/N = -15.630111127875` Ry:
+
+| `nbnd` | `E` (Ry) | above the supercell | drop |
+|---|---|---|---|
+| 12 | -15.630029697332 | +8.143e-05 | |
+| 24 | -15.630107564730 | +3.563e-06 | -7.787e-05 |
+| 48 | -15.630110722359 | +4.055e-07 | -3.158e-06 |
+| 64 | -15.630110942868 | +1.850e-07 | -2.205e-07 |
+
+**Monotone and above at every rung, over a factor of 440 in the gap.**
+
+**That bound has two preconditions and the first of them is why the phase's other ladders
+have a floor.** The two sides must discretise the **same** functional, and by default they
+do not: the supercell picks its dense FFT grid from its own cutoff and gets `(32, 15, 15)`
+where the tiled unit cell's is `(30, 15, 15)`. Run at `ecutwfc = 12` the same ladder reads
++9.02e-05, +3.03e-06 and **-1.06e-07** -- it goes *below* the supercell at the third rung
+and the bound reads as violated. What that is worth was measured rather than argued, by
+running the supercell at four dense cutoffs: for a norm-conserving dataset the density is
+band-limited at `4 ecutwfc`, so raising `ecutrho` adds no Fourier component and changes only
+the real-space grid the exchange-correlation integral is taken on.
+
+| `ecutrho` | box | `E/N` (Ry) |
+|---|---|---|
+| 48 | (32,15,15) | -15.615541737015 |
+| 52 | (36,18,18) | -15.615540660436 |
+| 60 | (36,18,18) | -15.615540660613 |
+| 76 | (45,24,24) | -15.615540677675 |
+
+The supercell's own box is **1.077e-6 Ry per cell** from a converged grid, ten times the
+apparent violation; two runs on the *same* box agree to 1.8e-10, which is their SCFs' floor.
+**The fix is a cutoff at which the supercell's grid is the tiled unit cell's**, and it has
+to be reached through `ecutwfc` rather than `ecutrho`, because the ultracell refuses a
+double grid by name: `ecutwfc = 13` puts the unit cell on `(18,18,18)` and the supercell on
+`(36,18,18)`, which is the tiled one, and the ladder above is that pair. This is worth
+carrying past stage 4 -- the 30-against-32 asymmetry is the floor stages 1, 3a and 3b each
+recorded under their density ladders (1.5e-4, 2e-4), and it is removable rather than
+intrinsic.
+
+The second precondition is that the frozen states be Ritz vectors of the unit cell's
+Hamiltonian, and **Davidson returns those by construction**: `evc = coefficients.T @ psi`
+(`solvers/davidson.py:422`) is a rotation of the trial set, so `<psi_m|H_cell|psi_n>` is
+`eps_n delta_mn` to round-off at *any* `states_conv_thr` and `diag(eps)` is the exact
+projected `H_cell` rather than an approximation to it. A loose threshold only makes the span
+slightly worse, which the variational argument tolerates at second order -- which is why the
+`nbnd = 48` and `64` rungs held while warning that two of their bands were unsettled.
+
+**The energy is computed every iteration and needs no `descf`.** QE evaluates `E_H` and
+`E_xc` at the density the *next* iteration will start from and corrects the mismatch to
+first order; here they are evaluated at `rho_out` instead, so every entry of
+`energy_history` is the Kohn-Sham energy of a state that exists, and the sequence is an
+upper bound approaching from above rather than a mixture's estimate. The cost is one more
+`ultracell_potential` per iteration -- two box FFTs and a pointwise exchange-correlation
+against a matrix build of `2 N nbnd` box FFTs -- which is affordable here and is not in
+`run_scf`, where the convention is also `pw.x`'s to match.
+
+**The field's energy leaves the total, and the check that says so is not the agreement.**
+The two applied fields go opposite ways: a scalar `external` potential is `vltot` and its
+energy stays in the total once, through `eband`, which is what makes the supercell
+comparison through `with_external_potential` like for like; a `magnetic_field`'s Zeeman
+energy is carried beside the total, by QE's and Elk's shared convention and this package's
+(`SCFResult.field_energy`). Since the field is inside `dV` and therefore inside every
+eigenvalue, what removes it is pairing it into `deband` -- which is exactly what `run_scf`
+does, `v_field` being part of the `v_scf` its own `deband` integrates against
+(`driver.py:2812`). Measured at `N = 1` on the partly-polarized hydrogen cell under a
+uniform `B = 0.02` Ry, against `run_scf` with `B_field(3)`, which shares nothing with this
+path: the totals agree to **1.6e-06 Ry** at `nbnd = 40`. **The wrong convention would be
+out by `int B . m` = 0.0169 Ry, 10000 times that**, so the check discriminates by four
+orders rather than by a tolerance.
+
+**And that convention takes the bound with it, which is the price of it and was found by
+the ladder going the wrong way.** The quantity a calculation under a field minimises is
+the *full* energy, Zeeman term included; the reported total is that minus `int B . m`, so
+it is a bound on nothing:
+
+| `nbnd` | `total - reference` | `(total + field_energy) - (reference + its own)` |
+|---|---|---|
+| 12 | +7.421e-07 | +4.152e-06 |
+| 24 | **-9.659e-07** | +2.474e-06 |
+| 40 | **-1.645e-06** | +5.148e-07 |
+
+The reported total goes **below** the reference at the second rung and further below at the
+third, and is monotone in the wrong direction; the sum is above at every rung and monotone
+towards it. So the quantity to compare across `nbnd`,
+or between two magnetic states, is `total_energy + field_energy` -- which is what
+`test_a_uniform_field_is_the_unit_cell_under_the_same_field` now asserts, on both halves.
+This was one measurement away from shipping as "the bound fails for magnetic runs", and
+what caught it was running the ladder rather than the first rung.
+
+**One term was missing from the first draft and nothing in the phase would have found it.**
+Grimme's D2 is a pair sum over the nuclei outside `v_of_rho`, so it enters per cell exactly
+as the Ewald term does -- and `require_an_ultracell_regime` has **no van der Waals check at
+all**, so a D2 unit cell reaches the loop unrefused and its total would have been short by a
+real energy rather than by a convention. The plan's own sentence said every dispersion
+correction was "refused at the door already", which was false about a guard the plan's author
+had read. `grep` the guard rather than remembering it.
+
+**The Ewald identity is not round-off and the reason is structural.** The unit cell's Ewald
+against a supercell's divided by `N`: -7.1e-15 Ry for `(2,1,1)` and **+7.2e-09** for
+`(2,2,1)` and `(3,1,1)` alike. `ewald_alpha` steps `alpha` down in 0.1 until QE's 1e-7 bound
+on the reciprocal truncation is met (`scf/ewald.py:44`), so two cells that pick the same
+`alpha` agree to round-off and two that do not agree to the sum's own accuracy. Assert 1e-7,
+not zero.
+
+**What stage 4 does not have.**
+
+* **The energy gain of a *spontaneous* wave**, which is the question the energy was written
+  for and which needs Elk's `rndbfcu` seed and `reducebf` to ask -- still outstanding, and
+  now unblocked: the two belong together and the missing half was this one.
+* **A ranking of the three solutions the `(4, 2, 2)` hydrogen ultracell was measured to
+  have** (`OPEN.md` Part VI item 3). The instrument now exists and the run has not been
+  made. Note before making it that the bound above does **not** apply there: with three
+  stationary points nothing guarantees the same one at each `nbnd`, so the energy ranks
+  solutions at fixed `nbnd` and does not certify a ladder.
+* **Methfessel-Paxton smearing breaks the sign**, and is not refused. Its occupation
+  function is non-monotone, so the generalised entropy is not concave in the occupations and
+  the stationary point is not a minimum; gaussian, Fermi-Dirac and Marzari-Vanderbilt are
+  safe. Nothing here uses `mp`, so this is a statement about the *claim* rather than a
+  defect -- but a bound asserted on an `mp` run would be asserted on nothing.
+* **The comparison against the supercell has three discretisation differences, not one.**
+  The FFT box is the large one and is removable; the Hartree `G`-set is not identical either
+  (`Ultracell.reciprocal_mask` is the union of `N` shifted unit-cell spheres, Elk's choice,
+  where the supercell sums over its own sphere), and `ewald_alpha` differs with the charge.
+  The last two are at the 1e-8 level and the matched-box ladder's floor is where they live.
+
 **What is outstanding.**
 
-* **Stages 2 and 4** as planned above: the central-k route beside the direct one and the
-  two errors separated, and the total energy -- the quantity neither code has. (Stages 3a
-  and 3b, collinear spin and the noncollinear regime, are above; what each does not have is
-  listed with it.)
+* **Stage 2** as planned above: the central-k route beside the direct one and the two
+  errors separated. (Stages 3a, 3b and 4 -- collinear spin, the noncollinear regime and the
+  total energy -- are above; what each does not have is listed with it.)
 * **The noncollinear crossover against the supercell.** `PERFORMANCE.md` states where the
   ultracell should overtake the supercell it approximates as an *expectation* from the
   collinear pair and the measured spinor cost, not as a measurement. The collinear crossover

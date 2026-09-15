@@ -62,7 +62,7 @@ SILICON = """&control
  calculation='scf'
 /
 &system
- ibrav=2, celldm(1)=10.20, nat=2, ntyp=1, ecutwfc=12.0,
+ ibrav=2, celldm(1)=10.20, nat=2, ntyp=1, ecutwfc={ecut},
  nosym=.true., noinv=.true.
 /
 &electrons
@@ -78,7 +78,7 @@ K_POINTS automatic
 """
 
 
-def _silicon(tmp_path, pseudo_dir, kgrid) -> Calculator:
+def _silicon(tmp_path, pseudo_dir, kgrid, ecut=12.0) -> Calculator:
     """The two-atom cell on an unshifted, unreduced ``kgrid``.
 
     Unreduced because a modulation breaks the crystal's point group and the
@@ -86,12 +86,14 @@ def _silicon(tmp_path, pseudo_dir, kgrid) -> Calculator:
     unshifted because the folded set ``k0 + Q`` is a Monkhorst-Pack grid only
     if its origin is.
     """
-    path = tmp_path / "si.in"
-    path.write_text(SILICON.format(k0=kgrid[0], k1=kgrid[1], k2=kgrid[2]))
+    path = tmp_path / f"si-{ecut:g}.in"
+    path.write_text(SILICON.format(k0=kgrid[0], k1=kgrid[1], k2=kgrid[2],
+                                   ecut=f"{ecut:.1f}"))
     return Calculator.from_file(path, pseudo_dir=pseudo_dir)
 
 
-def _supercell(tmp_path, pseudo_dir, calculator, shape, kgrid) -> Calculator:
+def _supercell(tmp_path, pseudo_dir, calculator, shape, kgrid,
+               ecut=12.0) -> Calculator:
     """The same crystal as a real ``shape`` supercell, atoms and all.
 
     The lattice vectors are ``a^s_i = n_i a_i`` exactly, so the supercell's
@@ -113,13 +115,13 @@ def _supercell(tmp_path, pseudo_dir, calculator, shape, kgrid) -> Calculator:
     rows = "\n".join(
         f" {v[0]:.12f} {v[1]:.12f} {v[2]:.12f}" for v in vectors
     )
-    path = tmp_path / "si_supercell.in"
+    path = tmp_path / f"si_supercell-{ecut:g}.in"
     path.write_text(f"""&control
  calculation='scf'
 /
 &system
  ibrav=0, celldm(1)={float(cell.alat):.10f}, nat={len(positions)}, ntyp=1,
- ecutwfc=12.0, nosym=.true., noinv=.true.
+ ecutwfc={ecut:.1f}, nosym=.true., noinv=.true.
 /
 &electrons
  conv_thr=1.0d-12
@@ -202,6 +204,24 @@ def test_the_unit_cell_is_its_own_ultracell(tmp_path, pseudo_dir):
     density, reference = np.asarray(result.density), np.asarray(scf.density)
     assert np.abs(density - reference).max() / reference.max() < 1e-5
 
+    # **The total energy is the sharp part of this null, not the loose one**,
+    # and it is sharper than the eigenvalues above: the input potential cancels
+    # identically out of ``eband + deband``, so what is left is the same
+    # Kohn-Sham functional evaluated at two states that differ by the two
+    # Davidson solves -- and the functional is stationary there, so the
+    # difference is second order. Machine precision, not a threshold.
+    #
+    # It is also the assertion that pins the ``deband`` pairing: computing it
+    # against the *output* potential instead leaves this at 2.9e-7 Ry, a factor
+    # of 10^7, while every other number in this test is unchanged.
+    assert result.total_energy == pytest.approx(scf.total_energy, abs=1e-11)
+    assert result.field_energy is None
+    assert set(result.energy_terms) == {"one-electron", "hartree", "xc", "ewald"}
+    assert sum(result.energy_terms.values()) == pytest.approx(
+        result.total_energy, abs=1e-12
+    )
+    assert len(result.energy_history) == result.iterations
+
 
 @pytest.mark.slow
 @pytest.mark.parametrize("shape", [(2, 1, 1), (2, 2, 1)])
@@ -235,6 +255,13 @@ def test_an_unmodulated_ultracell_is_the_tiled_unit_cell(shape, tmp_path, pseudo
     volume = result.ultracell.volume(calculator.system.cell)
     charge = float(density.sum()) * volume / density[0].size
     assert charge == pytest.approx(8.0 * cells, abs=1e-8)
+
+    # **The energy is per unit cell, so a tiled ultracell has the unit cell's
+    # own.** This is where a factor of ``N`` would show and where ``N = 1``
+    # cannot see one: ``deband`` is an integral over the whole ultracell and
+    # the Hartree and exchange-correlation terms arrive as ultracell totals, so
+    # each carries a ``/N`` and each is a separate chance to drop it.
+    assert result.total_energy == pytest.approx(scf.total_energy, abs=1e-11)
 
 
 @pytest.mark.slow
@@ -364,6 +391,119 @@ def test_the_ultracell_converges_to_the_supercell(tmp_path, pseudo_dir):
     assert errors[48] < errors[24] < errors[12]
     # and it gets somewhere: below a per cent of the induced modulation.
     assert errors[48] < 0.01
+
+
+
+
+#: The cutoff at which the supercell's own dense FFT grid **is** the tiled unit
+#: cell's: 13 Ry puts the unit cell on (18, 18, 18) and the two-cell supercell
+#: on (36, 18, 18), where the default 12 gives 15 and 32 and the two do not
+#: match. It has to be reached through ``ecutwfc`` rather than ``ecutrho``,
+#: because the ultracell refuses a double grid by name.
+#:
+#: **Why this matters only for the energy.** Every other ladder in this file
+#: compares a *density* Fourier component by Fourier component, where two boxes
+#: cost a floor of about 1e-4 relative and the claim is about a trend. The
+#: energy claim is about a **sign**, and two discretisations of one functional
+#: differ by 1.08e-6 Ry per cell on this cell -- measured, by running the
+#: supercell at four dense cutoffs -- which is larger than the top of the
+#: ladder below. On the mismatched pair the third rung comes out 1.06e-7 Ry
+#: *under* the supercell and the bound reads as violated.
+MATCHED_ECUT = 13.0
+
+
+@pytest.mark.slow
+def test_the_total_energy_bounds_the_supercells_from_above(tmp_path, pseudo_dir):
+    """The one quantity in this phase that converges with a sign.
+
+    An ultracell eigenvalue is not an upper bound on the supercell's, and
+    neither is a density: the Hamiltonian moves with its own truncated density,
+    so Rayleigh-Ritz says nothing about either. The **energy** is different.
+    What the run reports is the Kohn-Sham free energy of the state the loop
+    converged to, the bases are *nested* in ``nbnd`` -- adding bands keeps every
+    old one -- and the union over ``Q`` of the folded k-point spheres is the
+    supercell's own plane-wave space at ``k0``. So the sequence is a monotone
+    non-increasing upper bound on the supercell's own energy.
+
+    Neither ``pw.x`` nor Elk computes an ultracell total energy, so the
+    reference here is a real four-atom supercell through this package's own SCF
+    -- which shares the unit-cell machinery and none of the ultracell assembly.
+
+    **Two preconditions, and both are physics rather than tolerance.** The two
+    sides must discretise the *same* functional, which is what ``MATCHED_ECUT``
+    is for. And the frozen states must be Ritz vectors of the unit cell's
+    Hamiltonian, which Davidson returns by construction (``evc`` is a rotation
+    of the trial set), so ``diag(eps)`` is the exact projected ``H_cell`` at any
+    ``states_conv_thr`` and a loose one only makes the span slightly worse.
+
+    **What this cannot see, measured rather than assumed.** Pairing ``deband``
+    with the *output* potential instead of the input one -- the defect worth a
+    factor of 10^7 at ``N = 1`` -- leaves this test passing unchanged, because
+    at ``conv_thr = 1e-11`` the two densities are equal to far better than the
+    gaps below. The null at ``N = 1`` is what catches that one, where the loop
+    converges in a single iteration and the two densities differ by the two
+    Davidson solves. What *this* test catches is a term that is wrong by a
+    factor rather than by an increment: dropping the per-cell rescaling of the
+    Hartree energy breaks the monotonicity here and is invisible at ``N = 1``.
+    The pair is the coverage, and neither half is the other.
+    """
+    shape, kgrid = (2, 1, 1), (1, 2, 2)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    calculator = _silicon(tmp_path, pseudo_dir, folded, ecut=MATCHED_ECUT)
+    scf = calculator.get_scf(conv_thr=1e-12, nbnd=8)
+
+    supercell = _supercell(tmp_path, pseudo_dir, calculator, shape, kgrid,
+                           ecut=MATCHED_ECUT)
+    basis = build_basis(supercell.system)
+    grid = tuple(basis.dense.grid)
+    unit_grid = tuple(build_basis(calculator.system).dense.grid)
+    # **Asserted rather than assumed**, because the whole test rests on it and
+    # a cutoff change elsewhere would break it silently, leaving a bound that
+    # fails for a reason nothing in the message would name.
+    assert grid == tuple(n * m for n, m in zip(shape, unit_grid)), (
+        f"the supercell is on {grid} and the tiled unit cell on "
+        f"{tuple(n * m for n, m in zip(shape, unit_grid))}: the two must "
+        f"discretise the same functional for the bound to mean anything"
+    )
+
+    coordinates = np.stack(
+        np.meshgrid(*[np.arange(m) / m for m in grid], indexing="ij"), axis=-1
+    )
+    calculation = with_external_potential(
+        Calculation(supercell.system, supercell.pseudos),
+        jnp.asarray(AMPLITUDE * np.cos(2 * np.pi * coordinates[..., 0])),
+    )
+    reference = run_scf(
+        supercell.system, supercell.pseudos, calculation=calculation,
+        conv_thr=1e-11, nbnd=12,
+    )
+    assert reference.converged
+    exact = reference.total_energy / int(np.prod(shape))
+
+    energies = {}
+    for nbnd, david in ((12, None), (24, None), (48, 2)):
+        result = run_ultracell(
+            calculator.system, calculator.pseudos, scf, shape, kgrid,
+            nbnd=nbnd, external=_modulation(shape), conv_thr=1e-11,
+            states_conv_thr=1e-10, david=david,
+        )
+        assert result.converged
+        energies[nbnd] = result.total_energy
+
+    # Monotone, which is the nesting, ...
+    assert energies[48] < energies[24] < energies[12]
+    # ... and above, which is the variational principle. Measured at
+    # +8.14e-05, +3.56e-06 and +4.06e-07 Ry; the bound is asserted with a
+    # tolerance of zero because it is a sign rather than a size, and the
+    # smallest gap is three orders above both SCFs' own convergence.
+    for nbnd, energy in energies.items():
+        assert energy > exact, (
+            f"nbnd = {nbnd} gives {energy:.12f} Ry against the supercell's "
+            f"{exact:.12f}: an upper bound cannot be below what it bounds"
+        )
+    # and it gets somewhere: within a micro-Rydberg of the supercell it
+    # approximates, on a modulation whose own energy is a milli-Rydberg.
+    assert energies[48] - exact < 1e-6
 
 
 # -- the refusals ------------------------------------------------------------
@@ -637,7 +777,7 @@ def test_a_uniform_field_is_the_unit_cell_under_the_same_field(tmp_path, pseudo_
         with_field, pseudo_dir=pseudo_dir).get_scf(conv_thr=1e-12, nbnd=12)
     assert reference.converged and abs(reference.magnetization) > 0.5
 
-    errors = []
+    errors, energies = [], []
     for nbnd in (12, 24, 40):
         result = run_ultracell(
             calculator.system, calculator.pseudos, scf, (1, 1, 1), (2, 2, 2),
@@ -648,12 +788,51 @@ def test_a_uniform_field_is_the_unit_cell_under_the_same_field(tmp_path, pseudo_
         moment = float(result.cell_moments().sum())
         errors.append(abs(moment - reference.magnetization)
                       / abs(reference.magnetization))
+        energies.append((result.total_energy, result.field_energy, moment))
 
     # **Monotone, and the sign is what a flipped field would break.** A moment
     # that came back at -0.71 would fail the first assertion; one at half the
     # size would fail every rung of the ladder and would not improve with nbnd.
     assert errors == sorted(errors, reverse=True), errors
     assert errors[-1] < 2e-3
+
+    # **The field's energy is outside the total on both sides**, which is QE's
+    # and Elk's shared convention and this package's.
+    #
+    # What is asserted first is the *internal* identity, because it is exact
+    # where an agreement with the reference is only as good as the moment: a
+    # uniform field's Zeeman energy is ``-B`` times the moment the same run
+    # reports, whatever the basis truncation has done to that moment. Asserting
+    # instead that the two runs' field energies agree is asserting the moment
+    # ladder a second time, and at ``nbnd = 12`` it is out by a per cent.
+    for total, field_energy, moment in energies:
+        assert field_energy == pytest.approx(-field * moment, rel=1e-9)
+
+    # ... and the convention itself, which is the thing this test is for: the
+    # totals agree by four orders more than the quantity a wrong convention
+    # would have left inside one of them. Read at the converged end of the
+    # ladder, where the basis is no longer the limit.
+    residual = abs(energies[-1][0] - reference.total_energy)
+    assert residual < 1e-3 * abs(reference.field_energy), (
+        f"{residual:.3e} Ry against a Zeeman energy of "
+        f"{reference.field_energy:.3e}: the total is carrying the field"
+    )
+
+    # **And the variational bound lives on the sum, not on the total**, which
+    # is the price of that convention and is worth asserting rather than
+    # assuming. What the calculation minimises is the full energy, the Zeeman
+    # term included; the reported total has that term removed, so it is a bound
+    # on nothing -- measured on a hydrogen cell it goes 7.4e-07 Ry *above* an
+    # ordinary SCF at ``nbnd = 12`` and 9.7e-07 *below* it at 24. Add
+    # ``field_energy`` back and the bound returns, monotone.
+    free = [total + field_energy for total, field_energy, _ in energies]
+    exact = reference.total_energy + reference.field_energy
+    assert free == sorted(free, reverse=True), free
+    for nbnd, value in zip((12, 24, 40), free):
+        assert value > exact, (
+            f"nbnd = {nbnd}: {value:.12f} Ry against {exact:.12f}; the "
+            f"minimised quantity is total_energy + field_energy"
+        )
 
 
 @pytest.mark.slow
@@ -913,7 +1092,7 @@ def test_a_symmetric_run_is_refused(tmp_path, pseudo_dir):
     says so.
     """
     path = tmp_path / "si_sym.in"
-    path.write_text(SILICON.format(k0=2, k1=2, k2=2).replace(
+    path.write_text(SILICON.format(k0=2, k1=2, k2=2, ecut="12.0").replace(
         "ecutwfc=12.0,\n nosym=.true., noinv=.true.\n", "ecutwfc=12.0\n"))
     calculator = Calculator.from_file(path, pseudo_dir=pseudo_dir)
     scf = calculator.get_scf(conv_thr=1e-8, nbnd=8)
