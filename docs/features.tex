@@ -612,6 +612,8 @@ noncollinear source's moment applies no rotation, so the card would never be
 read.
 
 \begin{pycode}
+turning = 0.6 * np.array([[np.sin(a), 0.0, np.cos(a)]
+                          for a in np.deg2rad([0, 90, 180, 270])])
 cycloid = Calculator.from_file("h4-chain-ferro.in").with_moments(turning)
 cycloid.get_scf()                      # 0.427 mu_B per site, a cycloid
 afm = np.array([[0.0, 0.0, s] for s in (0.6, -0.6, 0.6, -0.6)])

@@ -857,6 +857,25 @@ The trap `CLAUDE.md` added most recently, and Part I item 1 is the same family.
 > default, so that case wants `DEFUMAT_TEST_MEM_MAX=20G`; the ultrasoft case
 > peaks at 7,691 MB. Two harness kills were spent finding that out.
 
+> **A third file over the cap, 2026-09-15.**
+> `tests/regression/test_noncollinear_hubbard_resume.py` peaks at **20.1 GB**
+> and is therefore SIGKILLed by `run_regression.sh`'s 12G default *every time*,
+> which means the nickel spinor DFT+U resume has been contributing `killed` and
+> not a result to every capped run it appears in. Both its tests **pass** given
+> room: `2 passed` in 313 s at `DEFUMAT_TEST_MEM_MAX=20G`, and the watchdog
+> still fires at teardown because 85% of 20G is below the peak, so the file
+> wants **22G** to come back clean. It is one test that does it,
+> `test_a_spinor_hubbard_run_resumes_from_its_own_checkpoint`, which the
+> watchdog names.
+>
+> **Measured as an A/B across a commit rather than read off one run**, because
+> the entry above this one is about exactly how misleading a single memory
+> figure is: 20,206 M at `0da2922` against 20,120 M at `09cf109`, 0.4 per cent
+> apart, with runtimes of 313.42 s and 312.17 s. So the peak is the file's own
+> and predates the continuation work that found it. What has *not* been done is
+> to ask where 20 GB goes on a cell this size, which is a `MEMORY-AUDIT.md`
+> question and is the reason this is an entry rather than a note.
+
 
 `tests/regression/test_spinor_forces.py:260`.
 `test_the_force_carries_the_crystal_symmetry` asserts `F_x = -F_z` on forces that
