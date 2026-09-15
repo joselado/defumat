@@ -536,8 +536,8 @@ and the Born charges all stand on it. It does not fail --- with the guard
 lifted silicon's dielectric constant is $501.7/213.1/253.1$ against an isotropic
 $190.8$ --- which is why it is a refusal. A checkpoint refuses rather than drops a
 \emph{driven} magnetic field (a fixed-spin-moment scheme's, which no input file
-determines) and a \emph{Hubbard setup} (without it \code{ns} is an array about
-nothing); an applied field is saved normally. \code{stress}, \code{solver} and
+determines); an applied field is saved normally, and so is a DFT+U state, whose
+manifold is rebuilt from the \code{HUBBARD} card on load. \code{stress}, \code{solver} and
 \code{history} are deliberately not stored, so what comes back is a state and
 not a report.
 \end{refuses}
@@ -1100,8 +1100,16 @@ schemes (\code{constrained\_magnetization = 'fsm'}, \code{'atomic fsm'},
 \code{'atomic fsm direction'}), where the field is the controller's own state
 and is replaced after every iteration. No input file says what it reached, so a
 resume would start again from the input field and converge somewhere else
-without saying so. A \emph{Hubbard setup} is refused too. \code{checkpoint\_every}
-must be at least 1.
+without saying so. \code{checkpoint\_every} must be at least 1.
+
+A DFT+U state used to be refused here as well, on the grounds that \code{ns}
+without its manifold is an array of numbers about nothing. That is true of the
+file and it is not what a resume reads it against: a state is loaded against a
+system, and the manifold is rebuilt from the \code{HUBBARD} card before
+\code{ns} is looked at. \code{load\_state} restores it from the
+\code{calculation} when one is given, and leaves it \code{None} when only a
+system is, where what is missing is the label \code{hubbard\_occupations}
+reads rather than any part of the state.
 
 \textbf{Know the cost.} The payload is the wavefunctions, which is tens of
 gigabytes on a large cell, so this is a scratch-directory operation and the

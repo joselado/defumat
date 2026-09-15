@@ -25,15 +25,32 @@ dropped -- which is the failure mode that matters here, since a checkpoint that
 quietly loses ``becsum`` reloads as a *different* state that converges to
 something plausible.
 
-Two things are refused by name rather than half-saved, both because losing them
-is silent. A **Hubbard setup** is what says which atom each slot of ``ns``
-belongs to, so ``ns`` without it is an array of numbers about nothing. And a
-**magnetic field the run drove away from the input's** -- the fixed-spin-moment
-schemes, Elk's ``fsmtype``, where the field *is* the controller's state and is
-replaced after every iteration -- cannot be rebuilt from the input file, and
-reloading without it applies a rigid Zeeman shift that a later invariant still
-returns an integer for (``PLAN.md`` P56 is the record of that bug found the hard
-way).
+**One thing is refused by name** rather than half-saved, because losing it is
+silent: a **magnetic field the run drove away from the input's** -- the
+fixed-spin-moment schemes, Elk's ``fsmtype``, where the field *is* the
+controller's state and is replaced after every iteration -- cannot be rebuilt
+from the input file, and reloading without it applies a rigid Zeeman shift that
+a later invariant still returns an integer for (``PLAN.md`` P56 is the record of
+that bug found the hard way).
+
+**A Hubbard setup used to be the second, and it was the same mistake as the
+blanket field refusal one paragraph down.** "``ns`` without its setup is an
+array of numbers about nothing" is true of the *file* and the file is not what
+a resume reads it against: a state is loaded against a ``system``, and
+``run_scf`` rebuilds the manifold from the ``HUBBARD`` card through
+``build_hubbard_setup`` before it looks at ``ns`` at all. Nothing in the loop
+can make the two disagree -- ``Calculation.hubbard`` is assigned in exactly one
+place (``driver.py``'s ``__init__``), the loop mixes ``ns`` and never the setup,
+and the only attribute written on a ``HubbardSetup`` anywhere is
+``constraints``, inside ``build_hubbard_setup`` before it returns. ``ns_adj``
+does not reach a resume either: it is gated on ``iteration == 1``
+(``PW/src/init_ns.f90``'s ``IF (first .AND. starting_pot == 'atomic')``) and a
+resume re-enters at ``resumed_at + 1``. The mid-SCF path was always the
+evidence -- ``_InProgressState`` has never carried a setup, so every DFT+U run
+with ``checkpoint_dir`` has been writing and reloading one of these correctly.
+So the setup is :data:`_FROM_CALLER` now, beside ``system``, and what a load
+gives back without a ``calculation`` is exactly what a mid-SCF checkpoint has
+always given back (``OPEN.md`` Part VII item 3).
 
 **A field is not refused for being a field**, and the difference is worth
 stating because the blanket version of this refusal made checkpointing useless
@@ -101,8 +118,8 @@ _TUPLES = ("becsum",)
 #: ``magnetic_field`` is here because the coverage check
 #: (``tests/unit/test_checkpoint.py``) has to see every field of ``SCFResult``
 #: accounted for -- but it is *conditionally* refused, by :func:`_refusal`,
-#: where ``hubbard_setup`` is refused whenever it is there at all.
-_REFUSED = ("magnetic_field", "hubbard_setup")
+#: which is the only entry left in this tuple.
+_REFUSED = ("magnetic_field",)
 
 #: Saved by nothing and dropped on purpose: these are what the run *reported*,
 #: not what it converged to. A checkpoint is a state to continue from -- the
@@ -125,8 +142,12 @@ _REFUSED = ("magnetic_field", "hubbard_setup")
 _DROPPED = ("stress", "solver", "history", "site_charges", "site_moments",
              "site_residuals", "constraint_residual")
 
-#: Reconstructed from the ``system`` the caller supplies on load.
-_FROM_CALLER = ("system",)
+#: Reconstructed from what the caller supplies on load. ``system`` comes back
+#: directly; ``hubbard_setup`` is ``Calculation.hubbard``, which
+#: :func:`load_state` takes off a ``calculation`` when one is given and leaves
+#: ``None`` when it is not -- ``build_hubbard_setup`` needs the datasets as well
+#: as the card, and a bare system does not carry them.
+_FROM_CALLER = ("system", "hubbard_setup")
 
 #: Bumped when the layout changes in a way an older file cannot be read as.
 FORMAT_VERSION = 1
@@ -174,10 +195,6 @@ def _refusal(result) -> str | None:
     was refused at the end of the run. Both are the same question and it is
     asked here.
     """
-    if getattr(result, "hubbard_setup", None) is not None:
-        return ("this result carries a Hubbard setup, which is what says which "
-                "atom each slot of ns belongs to; ns without it is an array of "
-                "numbers about nothing")
     field = getattr(result, "magnetic_field", None)
     if field is not None and getattr(field, "constraint", "none") in FEEDBACK:
         return (
@@ -248,6 +265,13 @@ def load_state(path, system=None, calculation=None, strict: bool = True):
     ``history`` describe the run that produced the file and are not stored, so
     they are at their defaults here. Everything a continuation consumes --
     the density, ``becsum``, ``ns``, ``tau`` and the wavefunctions -- is.
+
+    ``hubbard_setup`` is the one field rebuilt rather than read: it is
+    ``Calculation.hubbard``, so it comes back when a ``calculation`` is given
+    and is ``None`` otherwise. A DFT+U state loaded without one carries ``ns``
+    and nothing that says which atom each slot belongs to, which is what
+    ``SCFResult.hubbard_occupations`` needs; the *resume* does not care, since
+    ``run_scf`` rebuilds the manifold from the ``HUBBARD`` card either way.
     """
     from defumat.scf.driver import SCFResult
 
@@ -277,6 +301,12 @@ def load_state(path, system=None, calculation=None, strict: bool = True):
 
     result = SCFResult(
         **fields, **arrays, becsum=becsum, system=system,
+        # Rebuilt from the caller, like ``system``. ``build_hubbard_setup``
+        # resolves the ``HUBBARD`` card against the structure *and* the
+        # datasets, so a bare system cannot do it and the field stays ``None``
+        # -- which is what ``_InProgressState`` has always written, and what
+        # every mid-SCF DFT+U resume has always reloaded.
+        hubbard_setup=None if calculation is None else calculation.hubbard,
     )
     if system is not None:
         _check_fingerprint(meta["fingerprint"], state_fingerprint(result),

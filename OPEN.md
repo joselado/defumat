@@ -24,10 +24,18 @@ entry had recorded as fact but the **affinity mask this package sets itself** --
 **2026-09-14**: four findings, two of them defects that were fixed the same day (the
 Davidson finiteness guard's allocation, and a checkpoint refusal that was wrong on both
 sides of its boundary at once). Three entries are carried: a `sizing.py` report that looked
-60 per cent low on a 45-atom spinor PAW slab -- **closed 2026-09-14, and it was the
-guard**, not a missing model term -- a Davidson inner-step count that may degrade at the
-minimum subspace, and the checkpoint's remaining Hubbard refusal, which is probably as
-wide as the field's was.
+60 per cent low on a 45-atom spinor PAW slab -- **reopened 2026-09-14**, since the A/B
+that identity predicted withdrew the closure and the 28 GB is unexplained again -- a
+Davidson inner-step count that may degrade at the minimum subspace, and the checkpoint's
+remaining Hubbard refusal, which was as wide as the field's had been and is **closed
+2026-09-15**.
+
+**Parts VIII and IX** are from the workstation, **2026-09-14** and **2026-09-15**. What is
+left open in them is the two that are measurements rather than fixes: `local-TF`'s 730 s
+an iteration, unprofiled, and the `pp.x` reference pair P90 owes. The two defects are
+closed -- a resume that spent a whole Davidson budget on bands nothing reads (Part VIII
+item 3, **closed 2026-09-15**), and a bias window integrated with no check that the axis
+resolves the broadening (Part IX item 1).
 
 **Part V** is from the **2026-09-13** memory session: one entry, and it is not that
 session's work -- four of `test_magnons.py`'s eight tests fail, all four downstream of a
@@ -2951,7 +2959,7 @@ inner count at a tight one.
 **Part VI item 1** is the neighbouring entry -- `nvecx = david * nbnd` uncapped against the
 size of the space -- and a session that opens `nvecx` for either reason should read both.
 
-## 3. The checkpoint's Hubbard refusal is probably as wide as the field's was
+## 3. The checkpoint's Hubbard refusal is probably as wide as the field's was **[closed 2026-09-15 -- it was, and the inference held; the routine to look at was the one the entry named]**
 
 `checkpoint._REFUSED` still refuses any result carrying a `hubbard_setup`, with the reason
 "`ns` without it is an array of numbers about nothing". That is true of the *file* and was
@@ -2974,6 +2982,32 @@ whatever adjusts a starting `ns`, are where to look -- then narrow `_refusal` an
 converged DFT+U result round-trips to the same `ns` and the same energy. If something
 *does* mutate it, the refusal is right and should say which routine, which is more than it
 says now.
+
+### What was done, 2026-09-15
+
+**Nothing mutates it, and the argument is structural rather than a survey.**
+`Calculation.hubbard` is assigned in exactly one place, `__init__`, from `system.hubbard`
+and the datasets; the only attribute ever written on a `HubbardSetup` anywhere in the
+package is `constraints`, inside `build_hubbard_setup` itself before it returns; and the
+loop mixes `ns` and reads the setup through `hubbard_terms`. `ns_adj` is the one that
+could have bitten and does not: it is gated on `iteration == 1`, which is QE's
+`IF (first .AND. starting_pot == 'atomic')`, and a resume re-enters at `resumed_at + 1`.
+
+So `hubbard_setup` moves from `_REFUSED` to `_FROM_CALLER`, beside `system`:
+`load_state` takes it off the `calculation` when one is given and leaves it `None` when
+only a system is, because `build_hubbard_setup` needs the datasets and a bare `System`
+carries file names. What a load without a calculation gives back is then exactly what
+every mid-SCF DFT+U checkpoint has always given back.
+
+**Measured** on the two-atom cell with a `U` of 2.0 eV on silicon's `3p` -- not physics
+anybody wants, and a manifold, a projector set and an `ns` for a fraction of a
+transition-metal oxide's cost: `ns` round-trips bit for bit, `hubbard_occupations` comes
+back identical, and `run_scf(starting_from=loaded)` converges to the same total energy,
+which at a `conv_thr` two orders tighter than the state was converged at settles a further
+**1.3e-8 Ry**. `tests/unit/test_checkpoint.py` has both halves, the round trip and the
+`None` a load without a calculation gives; the refusal test it replaces is gone.
+`docs/features.tex` had the refusal in two places, an amber box and the response
+chapter's, and both now say what is carried instead.
 
 ---
 
@@ -3126,7 +3160,7 @@ commits (`8049534`, `284d123`, `cccd9ab`) are the obvious places to bisect, and 
 is cheap because the three tests run in **57 s** on their own.
 
 
-### 3. A resume spends a whole Davidson budget re-tightening bands it does not need **[opened 2026-09-14, from the NiBr2 helix run]**
+### 3. A resume spends a whole Davidson budget re-tightening bands it does not need **[closed 2026-09-15 -- the fix is the one named here, and the guard it needed was not]**
 
 **The mechanism.** `band_thresholds` (`driver.py:233`) reads `wg = None` as "the first SCF
 iteration, which has no occupations yet" and returns a flat `ethr` for every band, which is
@@ -3184,6 +3218,44 @@ range of the independent variable cannot resolve a slope**, so a fit through the
 "uncorrelated" whatever the truth is. That is `CLAUDE.md`'s search-that-cannot-surprise-you
 one variable further in -- the instrument could not have produced the answer it was being
 asked for, and the fifty-fold range is what made it able to.
+
+### What was done, 2026-09-15
+
+**The fix is the one the entry named**, in the block where the rest of the loop state comes
+back (`driver.py`, beside `ethr`, `accuracy` and `field_scale`): the checkpoint's
+`occupations` are fed back as `wg`. They are the *same array* the loop builds -- the
+in-progress state is written with `occupations=wg` -- so nothing is converted.
+
+**The reshape beside it is narrower than it first reads, and the difference was measured
+rather than argued.** A *converged* result saved as a checkpoint by hand comes back with
+its channel axis squeezed, which is `SCFResult`'s convention at one channel and at
+`nspin = 4`, and `band_thresholds` takes its target from `np.shape(wg)`. On the main
+branch that is harmless: a rank-2 `(nk, nbnd)` broadcasts against `weights[None, :, None]`
+into `(1, nk, nbnd)`, the right shape by construction, measured at
+`band_thresholds(1e-9, wg_(2,12), w_(2,)).shape == (1, 2, 12)`. The `diago_full_acc`
+branch returns before any broadcast happens and gives `(2, 12)`, one axis short. So the
+reshape is a fix for that one branch and is kept as one, rather than as the general guard
+the first version of this paragraph claimed.
+
+**Measured, and the test was run against the unfixed driver first.** Two-atom silicon,
+`conv_thr = 1e-12`, `nbnd = 40`, checkpoint at iteration 5, comparing the resumed run's
+first iteration back with iteration 6 of the uninterrupted run: **10.0 Davidson steps
+against 2.0** before, **2.0 against 2.0** after. The entry's own numbers were 5.5 against
+1.0 at a different pair of iterations, so the factor rather than the level is what
+reproduces, which is what a threshold effect on the empty bands should do.
+`tests/unit/test_scf_restart.py::test_a_resume_does_not_re_tighten_the_bands_it_does_not_need`
+is the test, marked `slow` beside its sibling and asserting the pair to within one step
+because restoring `wg` moves the resumed eigenvalues in their last digits.
+
+**What the entry did not name, and it would have turned a fix into a regression.** A resume
+is allowed to change `nbnd`, and nothing upstream stops it: the fingerprint compares the
+loaded state against *itself*, so the shapes always agree there, and the grid check is on
+the density. The checkpoint's occupations are then about a different set of bands and the
+reshape raises, so a case that **worked** before -- resume at `nbnd = 12` from a state
+written at 8, which converges -- would have died on the new line. The occupations are
+dropped with a `RuntimeWarning` when the count does not match, which is exactly the
+behaviour every resume had until today, and the guard has a test that trips it rather than
+a clean pass that cannot be told from silence.
 
 ### 4. `local-TF` costs about 730 s an iteration on a 3.5-million-G-vector dense grid **[opened 2026-09-14, from the NiBr2 helix run; unprofiled]**
 

@@ -539,3 +539,87 @@ def test_an_unreadable_mixer_costs_the_history_and_not_the_run(tmp_path, pseudo_
         resumed = run_scf(calculator.system, calculator.pseudos, max_iterations=2,
                           checkpoint_dir=out, checkpoint_every=1)
     assert resumed.iterations > 2, "the resume did not survive a broken mixer"
+
+
+@pytest.mark.slow
+def test_a_resume_does_not_re_tighten_the_bands_it_does_not_need(
+    qe_silicon, pseudo_dir, tmp_path
+):
+    """The occupations are loop state, and the count that shows it is Davidson's.
+
+    The sibling above asserts the *SCF* iteration count and passes with this
+    defect present, because it runs at the default ``nbnd = 4``, where every
+    band is occupied and a flat threshold is the right one anyway. The empty
+    bands are what see it: ``band_thresholds`` reads ``wg = None`` as "the first
+    iteration of a fresh run", which is ``pw.x``'s ``btype`` all ones out of
+    ``init_run.f90:149``, and holds every band to ``ethr`` -- harmless at
+    ``ETHR_INIT`` and not at the converged ``ethr`` a checkpoint restores, where
+    thirty-six empty states are asked for an accuracy a steady-state iteration
+    holds them to ``max(5 ethr, 1e-5)`` at. Measured before the fix, comparing
+    the resumed run's first iteration with the same iteration of the
+    uninterrupted run: **1.0 steps against 5.5** here, and the whole 100-step
+    budget on a 45-atom slab at ``nbnd = 403`` (``OPEN.md`` Part VIII item 3).
+
+    So the assertion is on **Davidson steps** rather than on SCF iterations, and
+    at a tolerance rather than exactly: restoring ``wg`` changes the resumed
+    eigenvalues in their last digits, and the count is a mean over k-points and
+    channels.
+    """
+    stop = 5
+    options = dict(conv_thr=1.0e-12, nbnd=40, verbose=False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        calculator = Calculator.from_file(qe_silicon, pseudo_dir=pseudo_dir,
+                                          announce=False)
+        whole = run_scf(calculator.system, calculator.pseudos, **options)
+
+        stopped = run_scf(calculator.system, calculator.pseudos,
+                          max_iterations=stop, checkpoint_dir=tmp_path,
+                          checkpoint_every=1, **options)
+        assert not stopped.converged and stopped.iterations == stop
+
+        resumed = run_scf(calculator.system, calculator.pseudos,
+                          checkpoint_dir=tmp_path, checkpoint_every=1,
+                          **options)
+
+    assert whole.converged and resumed.converged
+    back = resumed.history[0]
+    assert back["iteration"] == stop + 1
+    uninterrupted, = [entry for entry in whole.history
+                      if entry["iteration"] == stop + 1]
+    assert back["davidson_iterations"] == pytest.approx(
+        uninterrupted["davidson_iterations"], abs=1.0
+    ), (f"the resumed iteration took {back['davidson_iterations']} Davidson "
+        f"steps where the uninterrupted one took "
+        f"{uninterrupted['davidson_iterations']}: the empty bands are being "
+        f"held to the checkpoint's converged ethr")
+    assert resumed.total_energy == pytest.approx(whole.total_energy, abs=1.0e-10)
+
+
+def test_a_resume_that_changes_nbnd_drops_the_occupations_and_says_so(
+    qe_silicon, pseudo_dir, tmp_path
+):
+    """The guard is tested by a case that trips it, not by a clean pass.
+
+    A resume is allowed to change ``nbnd``: nothing upstream stops it, since the
+    fingerprint compares the loaded state against itself and the grid check is
+    on the density. The checkpoint's occupations are then about a different set
+    of bands, and feeding them to ``band_thresholds`` would raise on the
+    reshape -- which would make carrying them across a resume *break* a case
+    that worked. So they are dropped, with a warning, back to the behaviour
+    every resume had before: one iteration of full accuracy on the empty bands.
+    """
+    options = dict(conv_thr=1.0e-12, verbose=False)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        calculator = Calculator.from_file(qe_silicon, pseudo_dir=pseudo_dir,
+                                          announce=False)
+        run_scf(calculator.system, calculator.pseudos, nbnd=8,
+                max_iterations=3, checkpoint_dir=tmp_path, checkpoint_every=1,
+                **options)
+        resumed = run_scf(calculator.system, calculator.pseudos, nbnd=12,
+                          checkpoint_dir=tmp_path, checkpoint_every=1,
+                          **options)
+
+    assert resumed.converged
+    assert [w for w in caught if "nbnd has changed" in str(w.message)]

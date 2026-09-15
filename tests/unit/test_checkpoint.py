@@ -49,6 +49,12 @@ SILICON_PAW = SILICON.replace(
 ).replace("ecutwfc = 12.0", "ecutwfc = 20.0, ecutrho = 120.0")
 
 
+#: DFT+U on the same two-atom cell: a ``U`` on silicon's 3p is not physics
+#: anybody wants, and it is a manifold, a projector set and an ``ns`` for a
+#: fraction of the cost of a transition-metal oxide.
+SILICON_HUBBARD = SILICON + "HUBBARD {atomic}\n U Si-3p 2.0\n"
+
+
 def _converged(text, pseudo_dir):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -145,12 +151,66 @@ def _field(constraint):
     )
 
 
-def test_a_hubbard_setup_is_refused_rather_than_dropped(pseudo_dir, tmp_path):
-    """``ns`` without its setup is an array of numbers about nothing."""
-    _, result = _converged(SILICON, pseudo_dir)
-    result.hubbard_setup = object()
-    with pytest.raises(NotImplementedError, match="Hubbard setup"):
-        save_state(result, tmp_path / "refused.npz")
+def test_a_hubbard_state_round_trips_rather_than_being_refused(pseudo_dir,
+                                                               tmp_path):
+    """The setup is the caller's to rebuild, so ``ns`` is all the file owes.
+
+    This used to be refused outright, on the grounds that ``ns`` without the
+    setup is an array of numbers about nothing. That is true of the *file* and
+    the file is not what a resume reads it against: a state is loaded against a
+    system, and ``run_scf`` rebuilds the manifold from the ``HUBBARD`` card
+    before it looks at ``ns``. So the assertions are the two halves of that --
+    the occupation matrix comes back bit for bit, and the resume reaches the
+    same energy -- plus the setup itself, which ``load_state`` takes off the
+    calculation the way it takes ``system`` off the caller.
+
+    The mid-SCF path was the standing evidence and it is why this was an
+    inference rather than a suspicion: ``_InProgressState`` has never carried a
+    setup, so every DFT+U run with ``checkpoint_dir`` has been reloading one of
+    these correctly (``OPEN.md`` Part VII item 3).
+    """
+    calculator, result = _converged(SILICON_HUBBARD, pseudo_dir)
+    assert result.ns is not None and result.hubbard_setup is not None
+
+    path = save_state(result, tmp_path / "hubbard.npz")
+    back = load_state(path, system=calculator.system,
+                      calculation=calculator.calculation)
+
+    assert np.array_equal(np.asarray(back.ns), np.asarray(result.ns))
+    assert back.hubbard_setup is calculator.calculation.hubbard
+    assert back.hubbard_occupations == result.hubbard_occupations
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        resumed = run_scf(
+            calculator.system, calculator.pseudos,
+            calculation=calculator.calculation, starting_from=back,
+            conv_thr=1.0e-10,
+        )
+    assert resumed.converged
+    # The resume runs at a *tighter* ``conv_thr`` than the state was converged
+    # at, so it settles a little further: 1.3e-8 Ry here, which is the default
+    # threshold's own slack rather than anything the file lost. Same tolerance
+    # as the round-trip test above, and for the same reason.
+    assert resumed.total_energy == pytest.approx(result.total_energy, abs=1e-6)
+
+
+def test_a_loaded_hubbard_state_without_a_calculation_has_no_setup(pseudo_dir,
+                                                                   tmp_path):
+    """And it says so by being ``None`` rather than by being wrong.
+
+    ``build_hubbard_setup`` resolves the card against the structure *and* the
+    datasets, and a bare ``system`` carries file names rather than datasets, so
+    there is nothing to rebuild from. The state is still a state -- ``ns`` is
+    there and a resume rebuilds the manifold itself -- and what is missing is
+    the label, which is what ``hubbard_occupations`` reads.
+    """
+    calculator, result = _converged(SILICON_HUBBARD, pseudo_dir)
+    path = save_state(result, tmp_path / "hubbard.npz")
+    back = load_state(path, system=calculator.system)
+
+    assert back.hubbard_setup is None
+    assert back.ns is not None
 
 
 @pytest.mark.parametrize(

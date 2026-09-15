@@ -10904,9 +10904,10 @@ need checkpointing. `unhandled_fields()` is a set difference over
 `dataclasses.fields(SCFResult)` and it earned its keep on the first run: five
 fields were missing from the first draft, and `tau` is genuine state (a
 meta-GGA rebuilds its potential from the density **and** it). Refused rather
-than dropped: a converged **magnetic field** (not the input field wherever
-`reducebf` changed it -- P56 is the record of that bug found the hard way) and a
-**Hubbard setup** (without it `ns` is an array about nothing).
+than dropped: a converged **magnetic field**, not the input field wherever
+`reducebf` changed it -- P56 is the record of that bug found the hard way. A
+**Hubbard setup** was refused beside it and is not any more (2026-09-15): it is
+rebuilt from the `HUBBARD` card on load, beside `system`, for the reason below.
 
 **A partial dynamical matrix (`atoms=`, `on_row=`).** The cost of P25's phase is
 that `3 nat` bare perturbations and `3 nat` first-order wavefunctions are held
@@ -12525,11 +12526,28 @@ consequences ran in both directions at once and each was silent.
   restored beside `ethr` and `accuracy` now. Elk's `reducebf` multiplies a scalar and
   leaves the field object alone, which is why the pair (input field, saved scale)
   reproduces a faded field exactly and why this is not a refusal.
+* **The `occupations` are the fifth, found 2026-09-14 and fixed 2026-09-15.** They were in
+  the file all along and the loop did not read them back, so a resume re-entered with
+  `wg = None` -- which `band_thresholds` reads as "the first iteration of a fresh run" and
+  answers with full accuracy for every band. That is right at `ETHR_INIT` and wrong beside
+  a *restored* `ethr`: the empty bands were held to a converged threshold a steady-state
+  iteration holds them to `max(5 ethr, 1e-5)` at. **10.0 Davidson steps against 2.0** on
+  two-atom silicon at `nbnd = 40`, and the whole 100-step budget on a 45-atom slab at
+  `nbnd = 403`. The pattern is the same as `field_scale`'s and so is the lesson: a field
+  written to the file and not read back by the loop is not carried, and the write is the
+  half that gets checked (`OPEN.md` Part VIII item 3).
 
 Both questions are asked in one place, `checkpoint._refusal`, which is what the two halves
-being on opposite sides of the boundary cost. A **Hubbard setup** stays refused: it is the
-`HUBBARD` card's and unchanged by the loop, so the same argument probably narrows it too,
-and that is left as an inference rather than taken (`OPEN.md` Part VII).
+being on opposite sides of the boundary cost. A **Hubbard setup** stayed refused here as an
+inference rather than a taken conclusion, and the inference was right: **narrowed
+2026-09-15**. It is the `HUBBARD` card's and unchanged by the loop -- `Calculation.hubbard`
+is assigned in one place, the only attribute ever written on a `HubbardSetup` is written
+inside `build_hubbard_setup` before it returns, and `ns_adj` is gated on `iteration == 1`
+where a resume re-enters at `resumed_at + 1`. So it is `_FROM_CALLER` now: `load_state`
+takes it off the `calculation` when one is given and leaves it `None` otherwise, which is
+what every mid-SCF DFT+U checkpoint has always reloaded. `ns` round-trips bit for bit and
+the resume lands within 1.3e-8 Ry, which is the slack of a `conv_thr` two orders looser
+than the resume's (`OPEN.md` Part VII item 3).
 
 **A restart is three things, and the third is the finding.** The state and the mixer are
 the obvious two. The third is the *loop state* -- `iter`, `dr2` and `ethr` -- which is

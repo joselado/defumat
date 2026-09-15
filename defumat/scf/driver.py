@@ -269,10 +269,21 @@ def band_thresholds(ethr, wg=None, weights=None, *, shape=None,
     places, ``init_run.f90:149`` and ``sum_band.f90:122-126``), so the second
     ionic step of a relaxation diagonalises its first iteration with the
     previous geometry's flags. Every :func:`run_scf` here starts from
-    ``wg = None`` instead, which is full accuracy for every band; a continuation
-    through ``starting_from`` does not carry ``wg`` either. The cost is one
-    iteration of extra accuracy on the empty bands of a restarted run, which is
-    the conservative direction.
+    ``wg = None`` instead, which is full accuracy for every band, and a
+    continuation through ``starting_from`` does not carry ``wg`` either: the
+    seed can cross a change of spin regime or of band count, so its occupations
+    are not this run's, and the run it seeds starts at ``ETHR_INIT`` in any
+    case, where full accuracy costs one iteration of the conservative
+    direction.
+
+    **A resume from a checkpoint is the exception, and used to be the same
+    case.** It comes back with ``ethr`` restored *converged*, so a flat
+    threshold at that value holds every empty band to a tolerance a
+    steady-state iteration never asks of them -- 5.5 Davidson steps against
+    1.0 on two-atom silicon at ``nbnd = 40``, and the whole 100-step budget on
+    a 45-atom slab at ``nbnd = 403``. The checkpoint carries ``occupations``,
+    so ``run_scf`` feeds them back as ``wg`` and the resumed iteration gets the
+    thresholds the uninterrupted one had (``OPEN.md`` Part VIII item 3).
 
     The result is wrapped in ``stop_gradient``: ``wg`` is a differentiable
     function of the eigenvalues through ``smeared_occupations``, and a tangent
@@ -4220,9 +4231,11 @@ class _InProgressState:
         # **Not** carried, and that is not the same omission. A Hubbard setup is
         # the ``HUBBARD`` card's, unchanged by the loop, so the resume rebuilds
         # it from ``scf.in`` with the rest of the calculator and a mid-SCF
-        # checkpoint loses nothing by leaving it out. ``save_state`` refuses a
-        # *converged* result that carries one, which is wider than it needs to
-        # be for the same reason the field's refusal was (``OPEN.md``).
+        # checkpoint loses nothing by leaving it out. This line is also the
+        # standing evidence that made the converged refusal wrong: every DFT+U
+        # run with ``checkpoint_dir`` has been writing and reloading a state
+        # without a setup, correctly, since the day this class was written
+        # (``OPEN.md`` Part VII item 3, closed 2026-09-15).
         self.hubbard_setup = None
 
 
@@ -4789,8 +4802,14 @@ def run_scf(
     # every band, and a continuation through ``starting_from`` does not carry
     # ``wg`` either -- the occupations are rebuilt from the first
     # diagonalisation, as ``scf/continuation.py`` says. The deviation is one
-    # iteration of extra accuracy on the empty bands of a restarted run, which
-    # is the conservative direction.
+    # iteration of extra accuracy on the empty bands of a seeded run, which is
+    # the conservative direction and is bounded because such a run starts at
+    # ``ETHR_INIT``.
+    #
+    # **A checkpoint resume overwrites this below**, where the rest of the loop
+    # state comes back: it re-enters with a converged ``ethr``, where a flat
+    # threshold is not one extra iteration of accuracy but a whole Davidson
+    # budget spent on bands nothing reads.
     wg = None
     potential_change = None
     converged = False
@@ -4912,11 +4931,34 @@ def run_scf(
         resumed_scale = getattr(resumed_state, "field_scale", None)
         if resumed_scale is not None:
             field_scale = float(resumed_scale)
+        # **The occupations are loop state as well, and leaving them out cost a
+        # whole Davidson budget.** ``band_thresholds`` reads ``wg = None`` as
+        # "the first iteration of a fresh run, which has no occupations yet"
+        # and holds *every* band to ``ethr``; that is right for a fresh run,
+        # whose ``ethr`` is ``ETHR_INIT``, and wrong for a resume, whose
+        # ``ethr`` comes back from the checkpoint converged. The first
+        # iteration back then held thirty-six empty bands to a threshold a
+        # steady-state iteration holds them to ``max(5 ethr, 1e-5)`` at, and
+        # they did not get there: measured on two-atom silicon at
+        # ``conv_thr = 1e-12``, 1.0 Davidson steps uninterrupted against 5.5
+        # resumed at ``nbnd = 40``, and on a 45-atom NiBr2 slab at
+        # ``nbnd = 403`` the resumed iteration reported ``avg # of iterations =
+        # 100.0``, which is ``MAX_ITERATIONS`` exactly, on every k-point
+        # (``OPEN.md`` Part VIII item 3). With no empty bands the effect is
+        # absent, which is why the restart test at ``nbnd = 4`` could not see
+        # it.
+        resumed_occupations = getattr(resumed_state, "occupations", None)
+        if resumed_occupations is not None:
+            wg = resumed_occupations
         if verbose:
             faded = ("" if field_scale == 1.0
                      else f", field_scale = {field_scale:.3e}")
+            restored = ("" if resumed_occupations is not None
+                        else ", and no occupations, so every band starts at "
+                             "full accuracy")
             print(f"  continuing the loop at iteration {resumed_at + 1} with "
-                  f"ethr = {ethr:.2e}, accuracy = {accuracy:.2e}{faded}")
+                  f"ethr = {ethr:.2e}, accuracy = {accuracy:.2e}{faded}"
+                  f"{restored}")
         # The alias the comment at ``starting_from = None`` describes. Both
         # names have to go or neither does: this one exists only to carry four
         # scalars across the setup, and all four are plain Python floats and
@@ -4979,14 +5021,54 @@ def run_scf(
             state = starting_wavefunctions = None
 
         davidson_steps, davidson_unconverged = 0.0, 0
+        threshold_shape = (len(hamiltonians), hamiltonians[0].nk, nbnd)
+        if wg is not None and np.size(wg) != int(np.prod(threshold_shape)):
+            # **A resume is allowed to change ``nbnd`` and the checkpoint's
+            # occupations are then about a different set of bands.** Nothing
+            # upstream stops it: the fingerprint compares the loaded state
+            # against itself, and the grid check is on the *density*, so a
+            # resubmitted command with a larger ``nbnd`` reaches here. Dropping
+            # them is the behaviour every resume had before they were carried at
+            # all -- one iteration of full accuracy on the empty bands -- and it
+            # is said out loud rather than left as the silent half of a feature
+            # whose whole point is the loud half.
+            warnings.warn(
+                f"the checkpoint's occupations are {np.shape(wg)} and this run "
+                f"diagonalises {threshold_shape}, so nbnd has changed since it "
+                f"was written: the first iteration back holds every band to "
+                f"ethr, which costs Davidson steps on the empty ones and is "
+                f"the conservative direction",
+                RuntimeWarning, stacklevel=2,
+            )
+            wg = None
         for attempt in range(2):
             # Rebuilt inside the attempt loop, because ``ethr`` can be
             # re-tightened below and ``empty_ethr`` is a function of it. This is
             # ``electrons.f90:890-908``'s ``CYCLE scf_step``, whose second
             # ``c_bands`` runs with the ``btype`` ``sum_band`` has just set.
+            #
+            # **The reshape is for the resumed ``wg`` and not for this loop's
+            # own**, which is built at ``threshold_shape`` already. A converged
+            # result saved by hand as a checkpoint comes back through
+            # ``load_state`` with its channel axis *squeezed*, which is
+            # ``SCFResult``'s convention at one channel and at ``nspin = 4``,
+            # and ``band_thresholds`` takes its target from ``np.shape(wg)``
+            # whenever ``wg`` is given.
+            #
+            # **Where that bites is narrower than it looks, and it was
+            # measured rather than argued.** On the main branch a rank-2
+            # ``(nk, nbnd)`` broadcasts against ``weights[None, :, None]`` into
+            # ``(1, nk, nbnd)``, which is the right shape by construction, so
+            # nothing goes wrong there. The ``diago_full_acc`` branch returns
+            # ``full`` before any broadcast happens and hands back
+            # ``(nk, nbnd)``, one axis short of what ``diagonalize`` slices per
+            # channel. So this is a one-branch fix rather than the general
+            # guard it reads as, and it is kept for the branch it is for.
             thresholds = band_thresholds(
-                ethr, wg, calculation.system.kpoints.weights,
-                shape=(len(hamiltonians), hamiltonians[0].nk, nbnd),
+                ethr,
+                None if wg is None else jnp.reshape(wg, threshold_shape),
+                calculation.system.kpoints.weights,
+                shape=threshold_shape,
                 diago_full_acc=diago_full_acc,
             )
             # Back from the buffer, QE's ``get_buffer``. Unconditional rather
