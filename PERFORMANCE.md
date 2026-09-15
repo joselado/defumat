@@ -5525,6 +5525,62 @@ which is the `nbnd` truncation and is the quantity `PLAN.md` P89's ladder measur
 properly.
 
 
+### What the energy axis costs, and what it replaces (P90)
+
+**Neither `pw.x` nor Elk has an energy axis, and that is a statement about one line of
+Fortran each rather than about the quantity**: `PP/src/stm.f90` is
+`SUBROUTINE stm(sample_bias, stmdos, istates)`, one scalar bias in and one field out, with
+`INPUT_PP.txt`'s `sample_bias` a single `REAL`; Elk's `wfplot.f90` (task 162) overwrites
+`occsv` with one delta and calls `rhomagv` once. So a spectrum is available from both codes
+by running them again at every bias, and **that is the route this is timed against** --
+`run_ultracell_stm` called `nE` times, which is the same algorithm and the same picture at
+every energy.
+
+Notebook 45's cell: the eight-cell silicon spin density wave, `nbnd = 32`,
+`kgrid = (1, 2, 2)`, a 96x12 tip plane at `height = 0.35`, width 0.02 Ry. One core
+(`OMP_NUM_THREADS=1`, the affinity mask set before JAX is imported), warm, median of three.
+
+| | wall clock |
+|---|---|
+| the ultracell run itself, for scale | 54.3 s |
+| one image | 2.47 s |
+| the spectrum, 1 energy | 2.50 s |
+| the spectrum, 21 energies | 2.56 s |
+| the spectrum, 41 energies | **2.61 s** |
+| 41 images, which is the route it replaces | **101.2 s** |
+
+**The axis is 4.4 per cent for forty-one energies**, and one energy costs what one image
+costs, so the whole saving is the axis and none of it is a cheaper image: the states are
+sampled at the tip points once and every energy after that is one
+`(nE, nbnd) x (nbnd, npoints)` contraction. Against the route it replaces it is **39x**.
+That is the same shape the transmission already measures on its own energy axis (81
+energies for 8 per cent more than one) and for the same reason.
+
+**The axis is free only once the map is large, and the crossover is `npoints`.** On the
+two-cell test cell with an 8x6 plane the same three measurements read 0.011, 0.050 and
+0.173 s against 0.088 s for an image -- 81 energies still 41x cheaper than 81 images, but
+the axis itself no longer negligible, because with 48 points the per-energy contraction is
+comparable with the sampling. The ratio is `npoints npw` against `nE Nbox log Nbox`:
+a spectrum at one point per cell, which is what a tip actually takes, is a thousandth of
+the density route's work.
+
+**Memory.** The spectrum never touches the ultracell box, which is the image's largest
+array and on a slab is 10^8 points per state. What it holds instead is one k-point's state
+block, `N^2 nbnd npwx npol` complex, which is the loop's own peak and not a new one
+(4.7 MB for eight cells of silicon at `nbnd = 24`, 0.42 GB for a 21-cell slab at
+`nbnd = 30, npwx = 2000`); beside it the amplitudes at one k-point,
+`(nbnd, npol, npoints)` complex, and the output `(nspin_mag, nE, npoints)` real -- 4.5 MB
+and 0.9 MB on the cell above. There is no k dial and nothing for one to bound: each
+k-point is sampled and added straight into the total.
+
+**What was not measured, and why.** The honest reference pair for the *unit-cell* spectrum
+is `pp.x` with `plot_num = 5` run once per bias, and it was not taken: the machine was
+carrying another job at a full core throughout, and a single-core wall clock taken beside
+one is not a measurement. The numbers above are two routes run back to back under the same
+load, so the **ratio** is the claim and the absolute figures are for scale. The `pp.x` pair
+is outstanding.
+
+
 ## History
 
 | Date | Change | Effect |

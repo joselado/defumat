@@ -324,8 +324,11 @@ because that is what decides whether it is a session or a phase.
   second approximation, with the two errors separated. **Ultrasoft and PAW** are refused for
   their own reason and are the nearest of these: `D_ij` is a functional of the density, so
   the frozen states stop being a fixed basis as soon as the modulation moves.
-- **Imaging a modulation** (P89, done; the conjugate is not). The STM image and the vertical
-  tunnelling transmission of an ultracell are in, checked against a real supercell's image.
+- **Imaging a modulation** (P89, done; the conjugate is not) **and reading it over an energy
+  axis** (P90, done). The STM image, the vertical
+  tunnelling transmission and now the **tunnelling spectrum** of an ultracell are in, the
+  first two checked against a real supercell's image and the third against the first at
+  2.5e-15, with the energy axis costing 41 times less than the same number of images.
   What is missing is the **momentum-resolved** transmission, which is refused by name: a
   weight per ultracell `k0` is one number, and the question worth asking is which `Q` the
   current leaves through, a decomposition of the exit overlap's in-plane grouping by
@@ -15889,6 +15892,146 @@ usually meant, and the two are indistinguishable in a plot.
   image. On an ultracell that is not post-processing but another run of the whole loop, so
   it is `kgrid` in `run_ultracell` and is refused here rather than half-implemented.
 * Everything P88 itself refuses, since the run has to exist first.
+
+### P90 -- The tunnelling spectrum: dI/dV over an energy axis, on a modulation. ✅ DONE
+
+P89 gives the local density of states at *one* tip energy, which is one picture at one
+bias. What an experiment takes beside it is the other section of the same function, the
+curve at one place over many biases, and on a modulated crystal it is the section that
+carries the physics: a charge density wave is a **gap that opens in antiphase with the
+charge maxima**, a spin density wave moves the two spin channels in opposite directions
+from cell to cell, and a domain wall carries a state inside the gap that lives nowhere
+else. None of the three shows in an image at a single energy, and the ultracell is exactly
+the calculation whose observable those three are.
+
+**Neither code has an axis, and it is one line of Fortran each.** QE's `PP/src/stm.f90` is
+`SUBROUTINE stm(sample_bias, stmdos, istates)` -- one scalar bias, one field out, and
+`INPUT_PP.txt`'s `sample_bias` is a single `REAL`; Elk's `wfplot.f90` (task 162) overwrites
+`occsv` with one delta at `efermi` and calls `rhomagv` **once**. Both quantities can be had
+by running the code again per bias, at the price of the whole sum each time, and that price
+is what this removes.
+
+**The one observation.** `dI/dV(r, V)` is `tunnelling_weights` at every energy of an axis
+and nothing else, so what decides whether it is affordable is where the energy dependence
+sits. The image route rebuilds the density from every state, and every energy is a whole
+image. Here the states are sampled at the tip points **once** --
+`a_n(r) = psi_n(r)`, from the ultracell's own sphere by P89's relabelling -- and the axis is
+then the matrix product `W[nE, n] |a|^2[n, r]`. `defumat/stm/spectrum.py` is the
+contraction, `sample_spectrum` in `workflows/stm.py` is the walk over k-points, and it
+takes the **same `TransportGeometry` bundle** the transmission does, so a unit cell and an
+ultracell are the same function handed a different sphere, cell and k-set. Entry points
+`run_sts`, `run_ultracell_sts`, `Calculator.get_sts`, `Calculator.get_ultracell_sts`.
+
+**The cost, which is the reason for the second route.** Sampling is
+`nk nbnd npoints npw` and is paid once; each energy after that is one
+`(nE, nbnd) x (nbnd, npoints)` contraction. On notebook 45's eight-cell cell with a 96x12
+map, **1, 21 and 41 energies cost 2.50, 2.56 and 2.61 s** against **2.47 s for one image**:
+the axis is **4.4 per cent** for forty-one energies and one energy costs what one image
+costs, so the whole saving is the axis and none of it is a cheaper image. Against the route
+it replaces, forty-one images at 101.2 s, it is **39x**. **The axis is free only once the
+map is large, and the crossover is `npoints`**: on the two-cell test cell with an 8x6 plane
+the same measurements read 0.011, 0.050 and 0.173 s against 0.088 s, still 41x against the
+images but with the axis no longer negligible, because with 48 points the per-energy
+contraction is comparable with the sampling. `PERFORMANCE.md` carries the pair and says
+what was not measured.
+
+**The numbers.**
+
+* **The spectrum at one energy is the image at that energy**, on a **modulated** two-cell
+  silicon ultracell: **2.5e-15** of the peak, and the integrals agree to 1e-12. Two routes
+  with nothing shared but `tunnelling_weights` -- one scatters the frozen coefficients into
+  the ultracell box, transforms, squares and reads the density off its own `G + Q` sphere;
+  the other relabels the same coefficients as one vector on the ultracell's plane-wave
+  sphere and evaluates `Psi` at the points. It is what pins the `N`, which sits in the
+  weights on one side and in `Omega_u` on the other. Run on a modulated state for P89's
+  reason, which is unchanged: a state built from a single `Q` differs by `e^{-2iQ.r}` if
+  the sign of `q` is wrong and by nothing at all in modulus. **The floor here is the
+  image's rather than the spectrum's** -- `_box_coefficients` reads a box that aliases its
+  outermost shell from about `N = 5`, and the spectrum never touches a box at all.
+* **Against the whole-cell transmission over the whole axis**: **2.0e-15**. It is P89's
+  Tersoff-Hamann identity with an energy axis, and it is *not* an independent route -- it
+  shares the sampler and the smeared delta. What it pins is the two `energies` conventions
+  against each other and the `sqrt(delta)` amplitude splitting, neither of which the null
+  above can see.
+* **Tiled**, against the unit cell's own image on the folded k-set at each energy:
+  **1e-6** on the map and **2.9e-7** on the integral. **The floor is the two
+  diagonalisations seen through the delta's slope, and it is looser than P89's 1e-8 by a
+  factor the width sets.** The two sides are built from different wavefunctions -- the
+  SCF's own, and the fixed-density solve's rediagonalised in the frozen envelope basis --
+  whose levels come out a median **1.24e-8 Ry** apart however tightly either side is
+  converged, which is P89's own measurement. P89's image runs in a **window**, where a
+  state's weight is 1 or 0 and a shift of 1e-8 moves nothing; a **delta** of width `w` has
+  slope `1/w` there, so the same shift is worth `1.2e-8/w`. Measured at widths 0.01, 0.02,
+  0.04 and 0.08: **7.7e-7, 2.9e-7, 1.3e-7 and 3.9e-8**. That is the ratio, and it is why
+  the tolerance is on the width rather than on a threshold.
+* **The sum rule, made falsifiable.** The weak form compares the reported `integral` with
+  `compute_dos` and agrees to **2.6e-16** -- and it is one equation satisfied by
+  construction, because both are a sum of the same `w0gauss` terms. The form the test
+  keeps samples the spectrum at the **box's own grid points** and integrates it, which is a
+  different quantity reached by a different path: **1e-10**, exact only because
+  `sum_G |c|^2 = 1`, which is the assumption the whole amplitude route rests on and is what
+  an ultrasoft dataset would break.
+* **The spinor channels** against the density route's, on simple-cubic hydrogen seeded
+  along `(1,1,1)/sqrt(3)` so that `m_x` and `m_y` are both large and equal: **1e-8**, each
+  channel against its own size. Silicon will not do this: a nonmagnetic cell seeded
+  noncollinear relaxes to a transverse component of parts in ten thousand, and at that size
+  a reversed `m_y = 2 Im(conj(u) d)` cannot be told from round-off -- it is real, the right
+  size, and wrong only in sign, which is the transposed-index trap in its usual form.
+* **`current` against the window it integrates, and the control that says why they
+  differ.** `tunnelling_weights` damps a state outside the window by the delta's **value
+  undivided by the width**, which is `stm.f90`'s expression transcribed rather than
+  corrected; integrating the delta gives its cumulative one instead -- 0.564 against 0.5
+  for a Gaussian level exactly on an edge. So the two are different conventions at an edge
+  and the same quantity away from one, and a single number would read as agreement or as a
+  bug without saying which. Moving the edge away collapses it: **8.5e-2, 3.1e-3 and
+  4.0e-9** as the nearest level goes 0.4, 1.6 and 4.0 widths out. **The width is the only
+  free variable that moves an edge away in units of itself**, because this cell's smeared
+  gap is about one width wide and there is nowhere else to put an edge -- the first version
+  of this control tried to put one at midgap and could not.
+
+**Two refusals a spectrum has and an image does not**, both from the same cause: `psi(r)`
+is sampled and squared here, where an image sums into a density.
+
+* **A symmetry-reduced k-set.** `run_stm` goes through `Calculation.density`, which
+  **symmetrises**, so a wedge gives it the whole zone's answer; nothing symmetrises the
+  amplitude route, so on a wedge it returns the sum over that wedge alone -- a plausible,
+  smooth, wrong density of states everywhere off a symmetry axis. Unfolding is not the
+  escape it is for a scalar, because unfolding a *wavefunction* means rotating it, which is
+  `whole_grid`'s own argument, so `grid=` here builds the complete grid where `run_stm`'s
+  reduces. The ultracell is exempt by construction: it requires `nosym` and its `k0` mesh
+  is unreduced.
+* **A tip inside an augmentation sphere.** There the pseudo-wavefunction is not the true
+  one and `sum_G c* c` is short -- 9 per cent on an ultrasoft carbon sheet and 3 per cent on
+  PAW silicon, already measured by `volume_overlap`. The image needs nothing, because the
+  augmentation charge follows the tunnelling weights into the density. `run_sts` inherits
+  the transmission's `_refuse_an_augmented_plane`; the ultracell refuses ultrasoft and PAW
+  outright and is exempt.
+
+**`current` is `I(V)` in this limit and the limit is stated rather than implied**: a tip
+whose own density of states is flat and a barrier that does not depend on the bias. The
+decay of each state into the vacuum *is* in it, since that is what `|Psi(r_p)|^2` carries;
+the prefactor is not fixed, as it is not for any tunnelling quantity here. It is guarded
+rather than trusted, and the guard is the one a trapezoid over a delta needs: one level of
+width `w` on an axis of step `h` integrates to 1.000000 at `h = w/2`, 1.00004 at `h = w`,
+1.14 at `2w`, 0.10 at `4w` and exactly zero by `250w` -- which is what any sane axis does
+against the **1e-5 Ry** width a fixed-occupation run gets by default, so an axis coarser
+than the width is refused by name. The same axis also needs a zero: a run with no Fermi
+level takes the middle of the gap, `stm.f90`'s own rule, rather than 0 Ry, which is a point
+in the middle of the valence band and is where an unset reference silently puts it.
+
+**What is outstanding.**
+
+* **A constant-current spectrum**, refused: the tip moves as the bias is swept, so the scan
+  is re-inverted at every energy, which is a different experiment and `nheights` times the
+  cost. Fixed height is what dI/dV spectroscopy is.
+* **The same trapezoid guard on the transmission's own `bias=`.** `run_vertical_transport`
+  and `run_ultracell_transport` both integrate over `nenergies` with no check of the step
+  against the broadening, and `_energies` refuses only `nenergies < 2`. It is the same
+  silent failure and it is recorded in `OPEN.md` rather than changed here, because it
+  touches a validated path.
+* **An energy-resolved *transmission* map beside this one** is already there
+  (`run_ultracell_transport(energies=)`), so what is not is the momentum-resolved
+  conjugate, which is P89's own outstanding item and unchanged.
 
 ## 4. Validation strategy
 
