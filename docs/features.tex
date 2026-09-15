@@ -598,6 +598,70 @@ polarised along $z$, so a transverse block above $10^{-8}$ is refused rather
 than dropped: the diagonal of a canted occupation matrix is a different state,
 not a coarser one.
 
+\code{magnetization} is how the moment crosses, on \code{run\_scf} and on
+\code{Calculator.with\_spin} and \code{with\_moments}. \code{'auto'} is the
+default and carries the source's moment where it has one, seeding the target's
+\code{starting\_magnetization} where it does not; \code{'carry'} insists on
+the first and raises rather than starting on a symmetric solution;
+\code{'seed'} keeps the converged \emph{charge} and takes the moment from the
+seed regardless, which is how a \textbf{different} magnetic state is reached
+from the same charge; \code{'none'} starts unpolarized. \code{with\_moments}
+defaults to \code{'seed'} where \code{with\_spin} defaults to \code{'auto'},
+because a new texture is a new \code{STARTING\_MOMENTS} card and carrying a
+noncollinear source's moment applies no rotation, so the card would never be
+read.
+
+\begin{pycode}
+cycloid = Calculator.from_file("h4-chain-ferro.in").with_moments(turning)
+cycloid.get_scf()                      # 0.427 mu_B per site, a cycloid
+afm = np.array([[0.0, 0.0, s] for s in (0.6, -0.6, 0.6, -0.6)])
+flipped = cycloid.with_moments(afm).get_scf()   # the converged charge, a new texture
+\end{pycode}
+
+On that cell the default is worth 8.9 mRy. Carrying the cycloid's moment into
+the antiferromagnetic card gives a converged run at $-3.792834$ Ry whose site
+moments are $(0.402, 0, -0.402, 0)$, which is the cycloid's projection on $z$
+with two sites dead and is not what was asked for; seeding gives
+$-3.801738$ Ry at $(\pm 0.589)$ alternating, the antiferromagnet, in one
+iteration fewer. Neither run says anything: both report
+\code{converged = True}.
+
+\begin{refuses}
+\textbf{A spin spiral is a change of frame and not only of regime.} A spiral
+keeps its density in the \emph{rotated} frame, the one that turns with
+$\mathbf q$, so its charge and $m_z$ mean the same thing as an ordinary
+noncollinear run's and its transverse pair $(m_x, m_y)$ does not. A source that
+has a transverse pair to carry, meaning any source with
+\code{nspin\_mag = 4}, is therefore \textbf{refused} in both directions
+across a spiral boundary. A collinear source is not: what crosses then is one
+scalar field, laid along the target's own \code{angle1}/\code{angle2}. Spiral
+to spiral is allowed at any $\mathbf q$, which is what a sweep needs.
+
+\textbf{A moment on the spiral's own axis is refused as the ferromagnet it is.}
+The spiral's spin rotation is about $z$, so a magnetization along $z$ is
+invariant under it: a cone of zero opening angle, and a stationary point at
+every $\mathbf q$. Carried into a spiral run it converges, reports a moment,
+and has computed the ferromagnet. Give the target an \code{angle1} away from
+zero, or pass \code{magnetization='seed'}.
+
+\textbf{The source density's own electron count is checked}, by integrating it,
+rather than inferred from the atom list. What that catches is a \textbf{swapped
+dataset}: a file with a semicore shell carries a different \code{z\_valence}
+on the same atoms, and a continuation carries a density rather than
+renormalising one.
+
+\textbf{A magnetization held by a field or a constraint says so when it is
+released.} A warning and not a refusal, because hold-converge-release is a
+workflow: what must not happen is that the moment being carried is the field's
+answer rather than the functional's without anyone noticing.
+
+\textbf{\code{magnetization} is refused rather than ignored} where it has
+nothing to act on: with no \code{starting\_from}, beside a
+\code{ContinuedState} that has already resolved the question, and on a
+\textbf{checkpoint resume}, where a resubmitted command line would otherwise
+throw the converged moment away after every wall-clock kill.
+\end{refuses}
+
 \textbf{Convergence.} \code{mixing\_mode} selects \code{anderson} (default),
 \code{linear}, \code{broyden}, Kerker/Thomas--Fermi preconditioning (\code{TF}),
 \code{local-TF}, or \code{adaptive}; \code{scf\_solver} offers a Newton--Krylov

@@ -122,6 +122,26 @@ def test_a_reloaded_state_is_one_a_run_can_continue_from(pseudo_dir, tmp_path):
     assert resumed.total_energy == pytest.approx(result.total_energy, abs=1e-6)
 
 
+def test_a_resume_refuses_to_be_told_how_the_magnetization_crosses(
+        pseudo_dir, tmp_path):
+    """``magnetization=`` is for a seed from another run, not for this run's own.
+
+    It is refused here rather than ignored because of what a resume is for: the
+    recovery the checkpoint advertises is "resubmit the same line", so whatever
+    is on that line arrives again after every wall-clock kill. A
+    ``magnetization='seed'`` on it would throw the converged moment away and
+    restart from the atomic superposition each time, on a run whose moment is
+    usually the slow variable and whose charge is the part that was expensive.
+    """
+    calculator, result = _converged(SILICON, pseudo_dir)
+    save_state(result, tmp_path / SCF_CHECKPOINT)
+
+    with pytest.raises(ValueError, match="nothing to decide"):
+        run_scf(calculator.system, calculator.pseudos,
+                calculation=calculator.calculation,
+                checkpoint_dir=tmp_path, magnetization="seed")
+
+
 def test_loading_against_the_wrong_system_is_refused(pseudo_dir, tmp_path):
     """A fingerprint mismatch must raise, not be discovered as a wrong answer.
 

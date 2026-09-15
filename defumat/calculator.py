@@ -344,6 +344,12 @@ class Calculator:
         #: A converged state from another calculator, handed to the first SCF
         #: as ``starting_from``. Not a cache -- a starting point (P23).
         self._seed = None
+        #: How :attr:`_seed`'s magnetization crosses, ``run_scf``'s own
+        #: ``magnetization``. It belongs to the seed rather than to the
+        #: calculator, which is why it is not a shared option: a default set on
+        #: the constructor would reach runs that have no seed for it to act on,
+        #: and ``run_scf`` refuses that combination by name.
+        self._seed_magnetization = "auto"
         #: The NSCF states the last :meth:`get_dos` or :meth:`get_pdos` ran on.
         #: Those entry points return a pair; the second half is kept here so
         #: that the method can return the quantity that was asked for.
@@ -539,6 +545,7 @@ class Calculator:
         merged = {**self._defaults_for(run_scf), **options}
         if self._seed is not None:
             merged.setdefault("starting_from", self._seed)
+            merged.setdefault("magnetization", self._seed_magnetization)
         if self._scf is not None and _same_options(merged, self._scf_options):
             return self._scf
         # ``diagonalization`` and ``k_batch`` are *not* arguments of the SCF:
@@ -1690,7 +1697,7 @@ class Calculator:
             seed=True,
         )
 
-    def with_spin(self, nspin=None, **options) -> "Calculator":
+    def with_spin(self, nspin=None, magnetization="auto", **options) -> "Calculator":
         """A calculator in another spin regime, warm-started from this one.
 
         The three regimes are three ways of writing the same ``(n, m)``, so a
@@ -1698,11 +1705,20 @@ class Calculator:
         thrown away (P23): a collinear result promoted into a noncollinear run
         whose magnetization only has to be rotated converges in one iteration
         instead of twenty-five.
+
+        ``magnetization`` is how that state's moment crosses, and it is
+        ``run_scf``'s argument of the same name reaching the front door.
+        ``"auto"`` is the default and is what a promotion wants: carry the
+        source's moment where it has one, seed this system's
+        ``starting_magnetization`` where it does not. Pass ``"seed"`` to keep
+        the converged **charge** and take the moment from the seed regardless,
+        which is how a *different* magnetic state is reached from the same
+        charge, and ``"none"`` to start unpolarized.
         """
         system = self.system.with_spin(nspin, **options)
-        return self._derived(system, seed=True)
+        return self._derived(system, seed=True, magnetization=magnetization)
 
-    def with_moments(self, per_atom) -> "Calculator":
+    def with_moments(self, per_atom, magnetization="seed") -> "Calculator":
         """A calculator with a different moment on each atom, warm-started.
 
         The Python route to a ``STARTING_MOMENTS`` card: ``(nat, 3)`` Bohr
@@ -1720,10 +1736,24 @@ class Calculator:
         as it does through :meth:`with_spin` -- a different texture is a
         different calculation, so the cache is empty and the next ``get_scf``
         reruns from this density.
-        """
-        return self._derived(self.system.with_moments(per_atom), seed=True)
 
-    def _derived(self, system: System, *, seed: bool = False, scf=None) -> "Calculator":
+        **``magnetization`` defaults to ``"seed"`` here where
+        :meth:`with_spin` leaves it at ``"auto"``, and the difference is the
+        whole method.** A new texture is a new ``STARTING_MOMENTS`` card, and
+        ``"auto"`` on a source that already has a moment resolves to *carry* --
+        which for a noncollinear source is the old texture copied over with no
+        rotation, so the card this method exists to set is never read and the
+        run starts, and very often finishes, on the configuration it was meant
+        to move away from. Seeding keeps the converged charge, which is what the
+        iterations went into, and takes the moments from the new card. Pass
+        ``magnetization="carry"`` to override, which is what a sweep wants when
+        the texture is being nudged rather than replaced.
+        """
+        return self._derived(self.system.with_moments(per_atom), seed=True,
+                             magnetization=magnetization)
+
+    def _derived(self, system: System, *, seed: bool = False, scf=None,
+                 magnetization: str = "auto") -> "Calculator":
         """A calculator on ``system``, sharing this one's pseudos and options."""
         derived = Calculator(system, self.pseudos, announce=self.announce,
                              **self.defaults)
@@ -1740,6 +1770,7 @@ class Calculator:
             # target's variables, seeding the magnetization where the source has
             # none, and converges from there.
             derived._seed = self._scf
+            derived._seed_magnetization = magnetization
         return derived
 
     # ------------------------------------------------------------------

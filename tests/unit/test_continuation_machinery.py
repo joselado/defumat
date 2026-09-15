@@ -72,11 +72,23 @@ def _result(density, nspin, nspin_mag=None, **extra) -> SCFResult:
     )
 
 
-def _random_density(shape, nspin_mag, seed=0):
-    """A positive charge with a magnetization smaller than it, on ``shape``."""
+def _random_density(shape, nspin_mag, seed=0, calculation=None):
+    """A positive charge with a magnetization smaller than it, on ``shape``.
+
+    ``calculation`` normalises the charge to that run's ``nelec``, which is not
+    decoration: a continuation refuses a source density whose own electron count
+    is not the target's, because that is what a swapped dataset looks like, and
+    a random charge is a dataset nobody has. It is left out where the density
+    never reaches :func:`~defumat.scf.continuation.continued_state` -- a
+    ``promote_wavefunctions`` call, or a shape that is refused for its grid
+    before anything counts electrons.
+    """
     rng = np.random.default_rng(seed)
     charge = 1.0 + rng.random(shape)
-    moment = 0.3 * (rng.random((3,) + shape) - 0.5)
+    if calculation is not None:
+        volume = float(calculation.system.cell.volume)
+        charge = charge * (float(calculation.nelec) / (charge.mean() * volume))
+    moment = 0.3 * (rng.random((3,) + shape) - 0.5) * charge.mean()
     return np.asarray(from_spin_components(charge, moment, nspin_mag))
 
 
@@ -106,7 +118,7 @@ def test_collinear_magnetization_is_on_z():
 def test_unpolarized_to_collinear_conserves_charge_and_seeds_a_moment():
     calculation = _calculation(2, (0.4,))
     grid = tuple(calculation.basis.dense.grid)
-    source = _random_density(grid, 1)
+    source = _random_density(grid, 1, calculation=calculation)
     state = continued_state(_result(source, 1), calculation, wavefunctions=False)
 
     assert state.regimes == (1, 2)
@@ -121,7 +133,7 @@ def test_unpolarized_to_collinear_conserves_charge_and_seeds_a_moment():
 def test_a_target_with_no_starting_magnetization_starts_unpolarized():
     calculation = _calculation(2, (0.0,))
     grid = tuple(calculation.basis.dense.grid)
-    source = _random_density(grid, 1)
+    source = _random_density(grid, 1, calculation=calculation)
     state = continued_state(_result(source, 1), calculation, wavefunctions=False)
     assert np.allclose(np.asarray(state.density[0]), np.asarray(state.density[1]))
 
@@ -131,7 +143,7 @@ def test_collinear_to_noncollinear_rotates_onto_the_targets_axis():
     calculation = _calculation(4, (0.5,), ((90.0,), (0.0,)))
     assert calculation.nspin_mag == 4
     grid = tuple(calculation.basis.dense.grid)
-    source = _random_density(grid, 2)
+    source = _random_density(grid, 2, calculation=calculation)
     state = continued_state(_result(source, 2), calculation, wavefunctions=False)
 
     assert not state.seeded
@@ -145,7 +157,7 @@ def test_collinear_to_noncollinear_rotates_onto_the_targets_axis():
 def test_demotion_to_one_channel_keeps_the_total_charge():
     calculation = _calculation(1)
     grid = tuple(calculation.basis.dense.grid)
-    source = _random_density(grid, 4)
+    source = _random_density(grid, 4, calculation=calculation)
     state = continued_state(_result(source, 4, nspin_mag=4), calculation,
                             wavefunctions=False)
     assert state.density.shape == (1,) + grid
@@ -159,6 +171,8 @@ def test_noncollinear_along_x_comes_back_down_onto_z():
     grid = tuple(calculation.basis.dense.grid)
     rng = np.random.default_rng(11)
     charge = 1.0 + rng.random(grid)
+    charge *= calculation.nelec / (charge.mean()
+                                  * float(calculation.system.cell.volume))
     # A *sign-changing* scalar magnetization, all of it along x: the case whose
     # signed integral is zero and whose axis a mean would fail to find.
     scalar = rng.normal(size=grid)
@@ -180,7 +194,7 @@ def test_noncollinear_along_x_comes_back_down_onto_z():
 def test_a_genuinely_noncollinear_source_cannot_become_collinear():
     calculation = _calculation(2, (0.4,))
     grid = tuple(calculation.basis.dense.grid)
-    source = _random_density(grid, 4, seed=5)
+    source = _random_density(grid, 4, seed=5, calculation=calculation)
     with pytest.raises(ValueError, match="genuinely noncollinear"):
         continued_state(_result(source, 4, nspin_mag=4), calculation,
                         wavefunctions=False)
@@ -189,7 +203,7 @@ def test_a_genuinely_noncollinear_source_cannot_become_collinear():
 def test_carry_refuses_a_source_with_no_magnetization():
     calculation = _calculation(2, (0.4,))
     grid = tuple(calculation.basis.dense.grid)
-    source = _random_density(grid, 1)
+    source = _random_density(grid, 1, calculation=calculation)
     with pytest.raises(ValueError, match="none to carry"):
         continued_state(_result(source, 1), calculation, magnetization="carry")
 
@@ -197,7 +211,7 @@ def test_carry_refuses_a_source_with_no_magnetization():
 def test_seed_overrides_a_source_that_has_a_magnetization():
     calculation = _calculation(2, (0.4,))
     grid = tuple(calculation.basis.dense.grid)
-    source = _random_density(grid, 2)
+    source = _random_density(grid, 2, calculation=calculation)
     state = continued_state(_result(source, 2), calculation,
                             magnetization="seed", wavefunctions=False)
     assert state.seeded
@@ -209,7 +223,7 @@ def test_seed_overrides_a_source_that_has_a_magnetization():
 def test_none_starts_the_target_unpolarized():
     calculation = _calculation(2, (0.4,))
     grid = tuple(calculation.basis.dense.grid)
-    source = _random_density(grid, 2)
+    source = _random_density(grid, 2, calculation=calculation)
     state = continued_state(_result(source, 2), calculation,
                             magnetization="none", wavefunctions=False)
     assert np.allclose(np.asarray(state.density[0]), np.asarray(state.density[1]))
@@ -235,7 +249,7 @@ def test_species_pointing_different_ways_are_refused_with_the_escape_hatch():
     stand_in = _Stand(system, calculation)
     grid = tuple(calculation.basis.dense.grid)
     with pytest.raises(ValueError, match="magnetization='seed'"):
-        continued_state(_result(_random_density(grid, 2), 2), stand_in,
+        continued_state(_result(_random_density(grid, 2, calculation=calculation), 2), stand_in,
                         wavefunctions=False)
 
 
@@ -283,7 +297,7 @@ def test_becsum_is_promoted_channel_by_channel_like_the_density():
     atomic = source_run.starting_becsum()
     grid = tuple(target.basis.dense.grid)
     state = continued_state(
-        _result(_random_density(grid, 1), 1, becsum=atomic), target,
+        _result(_random_density(grid, 1, calculation=target), 1, becsum=atomic), target,
         wavefunctions=False,
     )
     assert len(state.becsum) == len(atomic)
@@ -304,7 +318,7 @@ def test_becsum_of_a_different_pseudopotential_is_dropped_not_reshaped():
     grid = tuple(target.basis.dense.grid)
     with pytest.warns(RuntimeWarning, match="different pseudopotential"):
         state = continued_state(
-            _result(_random_density(grid, 1), 1, becsum=wrong), target,
+            _result(_random_density(grid, 1, calculation=target), 1, becsum=wrong), target,
             wavefunctions=False,
         )
     atomic = target.starting_becsum()
@@ -315,8 +329,9 @@ def test_becsum_of_a_different_pseudopotential_is_dropped_not_reshaped():
 def test_norm_conserving_becsum_is_empty():
     calculation = _calculation(2, (0.4,))
     grid = tuple(calculation.basis.dense.grid)
-    state = continued_state(_result(_random_density(grid, 1), 1), calculation,
-                            wavefunctions=False)
+    state = continued_state(
+        _result(_random_density(grid, 1, calculation=calculation), 1), calculation,
+        wavefunctions=False)
     assert state.becsum == ()
 
 
@@ -553,3 +568,253 @@ def test_continued_state_can_be_handed_to_run_scf_only_on_its_own():
         run_scf(_silicon(), (read_upf(PSEUDO),),
                 starting_from=ContinuedState(density=np.zeros((1, 2, 2, 2))),
                 starting_density=np.zeros((1, 2, 2, 2)))
+
+
+# --------------------------------------------------------------------------
+# The electron count
+
+
+def test_a_density_carrying_the_wrong_number_of_electrons_is_refused():
+    """The check the structure comparison beside it cannot make.
+
+    That one sums the *target's* ``z_valence`` over the *source's* atom types,
+    which is ``nelec`` again whenever the atoms are the same -- so it sees a
+    changed structure and never a changed dataset. A dataset is what actually
+    changes here: switching spin-orbit coupling on means a fully-relativistic
+    file, and a file with a semicore shell in it carries a different
+    ``z_valence`` on the same atoms.
+    """
+    calculation = _calculation(2, (0.4,))
+    grid = tuple(calculation.basis.dense.grid)
+    source = _random_density(grid, 1, calculation=calculation)
+    # Two electrons more, which is the smallest a swapped dataset ever differs
+    # by and is eight orders above what a converged density's own count drifts.
+    source = source * ((calculation.nelec + 2.0) / calculation.nelec)
+    with pytest.raises(ValueError, match="integrates to"):
+        continued_state(_result(source, 1), calculation, wavefunctions=False)
+
+
+def test_a_converged_density_passes_the_electron_count_comfortably():
+    """The guard has to not fire on the case it will see every time.
+
+    Measured on real runs rather than on this synthetic one: ``int n(r) dr``
+    comes out at 40.00000000000003 against 40 on ten-atom norm-conserving
+    silicon and 10.000000000000002 against 10 on platinum PAW, augmentation
+    charge included, so the tolerance sits ten orders above the noise.
+    """
+    calculation = _calculation(2, (0.4,))
+    grid = tuple(calculation.basis.dense.grid)
+    source = _random_density(grid, 1, calculation=calculation)
+    state = continued_state(_result(source, 1), calculation, wavefunctions=False)
+    assert state.density.shape[0] == 2
+
+
+# --------------------------------------------------------------------------
+# The spin spiral, which is a change of *frame* and not of regime
+
+
+def _spiral(q=(0.0, 0.0, 0.5), magnetization=(0.5,), angle1=(90.0,)) -> Calculation:
+    """A silicon spin spiral: ``nspin = 4``, no symmetry, moments in-plane.
+
+    ``angle1 = 90`` is the planar spiral; ``angle1 = 0`` is the case the guard
+    refuses, a moment on the axis the spiral turns about.
+    """
+    import dataclasses
+
+    system = _silicon(nspin=4, starting_magnetization=magnetization,
+                      angle1=angle1, angle2=(0.0,))
+    system = dataclasses.replace(system, spiral_q=q, nosym=True)
+    return Calculation(system, (read_upf(PSEUDO),))
+
+
+def test_a_vector_magnetization_does_not_cross_into_a_spirals_frame():
+    """Its transverse pair is measured in a frame that turns, and ours does not."""
+    spiral = _spiral()
+    plain = _calculation(4, (0.5,), ((90.0,), (0.0,)))
+    grid = tuple(spiral.basis.dense.grid)
+    source = _random_density(grid, 4, calculation=spiral)
+    with pytest.raises(NotImplementedError, match="turns with q"):
+        continued_state(_result(source, 4, nspin_mag=4, system=plain.system),
+                        spiral, wavefunctions=False)
+
+
+def test_a_spirals_magnetization_does_not_cross_out_of_its_frame_either():
+    """The same refusal read the other way round, which is the demotion."""
+    spiral = _spiral()
+    plain = _calculation(4, (0.5,), ((90.0,), (0.0,)))
+    grid = tuple(plain.basis.dense.grid)
+    source = _random_density(grid, 4, calculation=plain)
+    with pytest.raises(NotImplementedError, match="turns with q"):
+        continued_state(_result(source, 4, nspin_mag=4, system=spiral.system),
+                        plain, wavefunctions=False)
+
+
+def test_a_moment_on_the_spiral_axis_is_refused_as_the_ferromagnet_it_is():
+    """``z`` is the axis the spiral turns about, so a moment on it does not turn.
+
+    The state is then stationary at every ``q``, and the run would converge,
+    report a moment, and have computed the ferromagnet.
+    """
+    spiral = _spiral(angle1=(0.0,))
+    collinear = _calculation(2, (0.4,))
+    grid = tuple(spiral.basis.dense.grid)
+    source = _random_density(grid, 2, calculation=spiral)
+    with pytest.raises(ValueError, match="invariant under the rotation"):
+        continued_state(_result(source, 2, system=collinear.system), spiral,
+                        wavefunctions=False)
+
+
+def test_a_collinear_moment_crosses_into_a_spiral_when_the_angles_are_in_plane():
+    """The case that must keep working, and it is the useful one.
+
+    A collinear source has no transverse pair to misread: what crosses is one
+    scalar field, laid along the target's own ``angle1``, which for a planar
+    spiral is the seed a spiral run wants.
+    """
+    spiral = _spiral(angle1=(90.0,))
+    collinear = _calculation(2, (0.4,))
+    grid = tuple(spiral.basis.dense.grid)
+    source = _random_density(grid, 2, calculation=spiral)
+    state = continued_state(_result(source, 2, system=collinear.system), spiral,
+                            wavefunctions=False)
+    _, moment = spin_components(state.density, 4)
+    assert not np.allclose(np.asarray(moment[0]), 0.0)
+    assert np.allclose(np.asarray(moment[2]), 0.0)
+
+
+def test_one_spiral_continues_into_another_at_a_different_wavevector():
+    """Both sides in the same rotated frame, which is what a ``q`` sweep is."""
+    source_run = _spiral(q=(0.0, 0.0, 0.5))
+    target = _spiral(q=(0.0, 0.0, 0.25))
+    grid = tuple(target.basis.dense.grid)
+    source = _random_density(grid, 4, calculation=target)
+    state = continued_state(
+        _result(source, 4, nspin_mag=4, system=source_run.system), target,
+        wavefunctions=False,
+    )
+    assert state.magnetization == "carry"
+
+
+def test_a_source_that_cannot_say_which_frame_it_used_says_so():
+    """Silence is not agreement: the frame question has no answer here."""
+    spiral = _spiral()
+    grid = tuple(spiral.basis.dense.grid)
+    source = _random_density(grid, 4, calculation=spiral)
+    with pytest.warns(RuntimeWarning, match="rotated frame cannot"):
+        continued_state(_result(source, 4, nspin_mag=4), spiral,
+                        wavefunctions=False)
+
+
+# --------------------------------------------------------------------------
+# A magnetization that was held by something
+
+
+def _held(calculation, **fields) -> Calculation:
+    import dataclasses
+
+    return dataclasses.replace(calculation.system, **fields)
+
+
+def test_a_constrained_source_says_so_when_its_moment_is_released():
+    """The workflow is right and it is the silence that is not.
+
+    Hold the moment, converge, let go: the moment being carried is then the
+    constraint's answer rather than the functional's, and the run starts on a
+    state it will converge away from.
+    """
+    calculation = _calculation(2, (0.4,))
+    grid = tuple(calculation.basis.dense.grid)
+    source = _random_density(grid, 2, calculation=calculation)
+    held = _held(calculation, constrained_magnetization="atomic")
+    with pytest.warns(RuntimeWarning, match="rather than the functional's"):
+        continued_state(_result(source, 2, system=held), calculation,
+                        wavefunctions=False)
+
+
+def test_a_target_under_the_same_constraint_is_not_warned_about():
+    """Nothing is being released, so there is nothing to say."""
+    import warnings as _warnings
+
+    calculation = _calculation(2, (0.4,))
+    grid = tuple(calculation.basis.dense.grid)
+    source = _random_density(grid, 2, calculation=calculation)
+    held = _held(calculation, constrained_magnetization="atomic")
+    stand_in = _Stand(held, calculation)
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")
+        continued_state(_result(source, 2, system=held), stand_in,
+                        wavefunctions=False)
+
+
+def test_a_field_that_decays_to_nothing_is_not_a_held_magnetization():
+    """``reducebf`` multiplies the field away, so the density it leaves is free.
+
+    The response stack refuses such a state for a different reason, that it
+    rebuilds its potential from the *input* field; here there is nothing to
+    release and a warning would be noise on every symmetry-broken start.
+    """
+    import warnings as _warnings
+
+    calculation = _calculation(2, (0.4,))
+    grid = tuple(calculation.basis.dense.grid)
+    source = _random_density(grid, 2, calculation=calculation)
+    decayed = _held(calculation, b_field=(0.0, 0.0, 0.01), reducebf=0.5)
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error")
+        continued_state(_result(source, 2, system=decayed), calculation,
+                        wavefunctions=False)
+
+
+# --------------------------------------------------------------------------
+# ``magnetization`` reaching the front door
+
+
+def test_magnetization_without_a_seed_is_refused_rather_than_ignored():
+    """It says how a continuation crosses, and there is no continuation."""
+    from defumat.scf import run_scf
+
+    calculation = _calculation(2, (0.4,))
+    with pytest.raises(ValueError, match="no continuation here"):
+        run_scf(calculation.system, (read_upf(PSEUDO),),
+                calculation=calculation, magnetization="seed")
+
+
+def test_magnetization_beside_a_continued_state_is_refused_as_a_second_answer():
+    """The state has already resolved the question; two answers is one too many."""
+    from defumat.scf import run_scf
+
+    calculation = _calculation(2, (0.4,))
+    grid = tuple(calculation.basis.dense.grid)
+    state = continued_state(
+        _result(_random_density(grid, 1, calculation=calculation), 1),
+        calculation, wavefunctions=False,
+    )
+    assert isinstance(state, ContinuedState)
+    with pytest.raises(ValueError, match="already resolved"):
+        run_scf(calculation.system, (read_upf(PSEUDO),), calculation=calculation,
+                starting_from=state, magnetization="seed")
+
+
+def test_with_moments_seeds_where_with_spin_carries():
+    """The default is the whole difference between the two methods.
+
+    A new texture is a new ``STARTING_MOMENTS`` card, and carrying a
+    noncollinear source's moment across applies no rotation -- so ``"auto"``,
+    which resolves to carry whenever the source has a moment, would start the
+    run on the configuration the new card was written to leave.
+    """
+    from defumat.calculator import Calculator
+
+    calculation = _calculation(2, (0.4,))
+    calculator = Calculator(calculation.system, (read_upf(PSEUDO),),
+                            announce=False)
+    calculator._scf = _result(
+        _random_density(tuple(calculation.basis.dense.grid), 2,
+                        calculation=calculation),
+        2, system=calculation.system,
+    )
+
+    assert calculator.with_spin(4)._seed_magnetization == "auto"
+    assert calculator.with_moments(
+        np.array([[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]]))._seed_magnetization == "seed"
+    assert calculator.with_spin(4, magnetization="none")._seed_magnetization == "none"

@@ -2678,6 +2678,90 @@ that is a different pseudopotential and not a different spin regime.
 **Also refused by name:** a grid or an electron count that does not match, and a spiral
 target for the wavefunctions, whose two components live on different plane-wave spheres.
 
+### P23b -- The axes a continuation did not know it was crossing. ✅ DONE (2026-09-15).
+
+P23 closed the *spin regime* and left four things open on the other axes, found by asking
+the question a user asks rather than the one the phase asked: whether a converged run can be
+carried into any other combination of features. `CONTINUATION-NEXT.md` holds what this pass
+did not take, sized, including the `with_*` constructors that do not exist and the seven
+combinations that have no identity measured for them.
+
+**A spin spiral is a change of *frame*, and nothing said so.** A spiral keeps its density in
+the rotated frame (`scf/density.py`), so the charge and `m_z` mean the same thing on both
+sides of a spiral boundary and the transverse pair `(m_x, m_y)` does not; there is no
+laboratory-frame copy anywhere in the package. Only the *wavefunctions* were refused. A
+source with a transverse pair to carry, which is any source with `nspin_mag = 4`, is now
+refused in both directions across that boundary, and a collinear source still crosses,
+because what crosses then is one scalar field laid along the target's own angles. Spiral to
+spiral is allowed at any `q`, which is the checkpoint resume and is what a `q` sweep needs.
+
+**The second spiral refusal is the trap rather than the bookkeeping.** The spiral's spin
+rotation is about `z`, so a magnetization along `z` is invariant under it: a cone of zero
+opening angle, which is the ferromagnet, and a stationary point at **every** `q`. Carried
+into a spiral run it converges, reports a moment, and has computed the ferromagnet with `q`
+playing no part. That is the "nothing in the SCF breaks the symmetry on its own" trap this
+phase already names for an unpolarized source, one axis further out, and it is refused with
+`angle1` named as the way through. The *fresh-run* sibling is untouched and is the first
+item in `CONTINUATION-NEXT.md`: a spiral started from scratch with every `angle1` at zero
+reaches the same state by the same route and nothing says so either.
+
+**The electron-count guard did not check the electron count, and read as though it did.** It
+summed the *target's* `z_valence` over the *source's* atom types, and `Calculation.nelec` is
+the same sum over the target's types, so the two agreed by construction for every
+continuation whose atom list was unchanged. What it caught was a changed structure. What it
+could not catch was a **swapped dataset**, which is exactly the route this phase measured
+for switching spin-orbit coupling on: a file with a semicore shell carries a different
+`z_valence` on the same atoms. The density's own count is the check that sees it and it is
+one grid sum. Measured, so the tolerance is not a guess: `int n(r) dr` is
+**40.00000000000003** against 40 on ten-atom norm-conserving silicon and
+**10.000000000000002** against 10 on platinum PAW, augmentation charge included, so 8e-16
+relative at worst against a `1e-6` tolerance and at least one whole electron on the case it
+is looking for. It is a bad guess rather than a wrong answer -- the occupations come from
+`nelec` and `sum_band` rebuilds the density every iteration -- but it was paid silently.
+
+**A held magnetization crossing into a run that holds nothing is now said out loud.** A
+warning and not a refusal: hold-converge-release is a workflow and one of the better reasons
+to continue at all. `reducebf` is deliberately *not* a trigger, because a field multiplied
+down to nothing by convergence has left an unconstrained density behind, which is the whole
+point of it; the response stack refuses such a state for the different reason that it
+rebuilds its potential from the *input* field.
+
+**`magnetization=` now reaches the front door, and its default on `with_moments` was worth
+8.9 mRy.** The mode was reachable only by building a `ContinuedState` by hand, while the
+refusal messages this module writes tell the user to pass `magnetization='seed'` -- which is
+the mode that reaches a *different* magnetic state from the same converged charge, and so
+the mode the sweep `with_moments` exists for needs. It is now an argument on `run_scf`, on
+`Calculator.with_spin` and on `with_moments`, refused rather than ignored where it has
+nothing to act on: with no seed, beside a `ContinuedState` that has already resolved the
+question, and on a **checkpoint resume**, where the recovery being advertised is "resubmit
+the same line" and a `'seed'` on that line would throw the converged moment away after every
+wall-clock kill.
+
+**`with_moments` defaults to `'seed'` where `with_spin` defaults to `'auto'`, and the
+difference is the whole method.** A new texture is a new `STARTING_MOMENTS` card, and
+`'auto'` on a source that has a moment resolves to *carry*, which for a noncollinear source
+is the old texture copied over with no rotation -- so the card the method exists to set is
+never read. Measured on `tests/data/qe/h4-chain-ferro.in`, converging its cycloid (0.427
+mu_B per site) and then asking for a collinear antiferromagnet on the same four sites:
+
+| `magnetization` | iterations | total energy | site moments |
+|---|---|---|---|
+| `'auto'` (carry) | 10 | -3.792834001 Ry | 0.402, 0, -0.402, 0 |
+| `'seed'` (the new default) | **9** | **-3.801737921 Ry** | +0.589, -0.589, +0.589, -0.589 |
+
+The carried run is **8.90 mRy above** the seeded one, in *more* iterations, and its moments
+are the cycloid's projection on `z` with two sites dead rather than the antiferromagnet that
+was asked for. Both report `converged = True` and nothing distinguishes them, which is the
+mixer entry's "fewer iterations is satisfied by a run that found something else" reached
+through the starting guess instead.
+
+The same cell also says something about itself worth keeping: its ferromagnetic input
+(`starting_magnetization = 0.6`) **collapses to zero moment** in 24 iterations, and the
+cycloid on the same cell sits 1.65 mRy below that collapsed state. So the demonstration cell
+for `with_moments` is one whose named configuration is not its ground state, which is why
+`'auto'` would *not* have shown the defect there: with no moment to carry it falls back to
+the seed. It took a magnetic source to make the two modes differ at all.
+
 *A Hubbard `U` crossing into `nspin = 4` was refused here too, and is not any more* (P79).
 The reason given was that "`ns_nc` is refused by name in P20, so there is nothing to promote
 into" -- which P62b made false without anyone editing this paragraph. The promotion is the

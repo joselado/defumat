@@ -117,6 +117,15 @@ DIRECTION_TOL = 1.0e-6
 #: of ``int |m|^2`` and not of the moment.
 TRANSVERSE_TOL = 1.0e-6
 
+#: Relative agreement demanded between the source density's own electron count
+#: and the target's ``nelec``. It is loose against what a converged density
+#: actually delivers -- ``int n(r) dr`` measured at 40.00000000000003 against 40
+#: on ten-atom norm-conserving silicon and 10.000000000000002 against 10 on
+#: platinum PAW, so 8e-16 relative at worst, augmentation charge included -- and
+#: tight against what it is looking for, which is a swapped dataset carrying a
+#: different ``z_valence`` and therefore at least one whole electron.
+ELECTRON_TOL = 1.0e-6
+
 #: What ``magnetization=`` accepts.
 MAGNETIZATION_MODES = ("auto", "carry", "seed", "none")
 
@@ -365,6 +374,141 @@ def _transfer(result, calculation, magnetization: str) -> _SpinTransfer:
     )
 
 
+def _check_spiral(result, calculation, transfer: _SpinTransfer) -> None:
+    """A spiral on one side of the continuation and not on the other.
+
+    **A spin spiral keeps its density in the rotated frame**, the frame that
+    turns with ``q``, and nothing in this package rebuilds a laboratory-frame
+    copy of it (``scf/density.py`` says the laboratory spiral is "recovered on
+    output", and what is recovered is the reported *moment*, not the array). So
+    the charge and ``m_z`` mean the same thing on both sides of a spiral
+    boundary and the transverse pair ``(m_x, m_y)`` does not: carrying it across
+    reads one frame's numbers as the other's. That is refused here for a source
+    that has a transverse pair to carry, which is any source with
+    ``nspin_mag = 4``.
+
+    **A collinear source is a different matter and is allowed through.** What
+    crosses then is one scalar field, and :func:`_common_direction` lays it
+    along the *target's* own ``angle1``/``angle2`` -- a seed direction the target
+    chose, not a transverse field transferred from somewhere else.
+
+    **The second refusal is the trap rather than the bookkeeping.** The spiral's
+    spin rotation is about ``z``, so a magnetization that lies along ``z`` is
+    invariant under it: it is a cone of zero opening angle, which is the
+    ferromagnet, and it is a stationary point of the spiral functional at
+    **every** ``q``. Hand one to a spiral run and the run converges, reports a
+    moment, and has computed the ferromagnet with ``q`` playing no part -- the
+    same "nothing in the SCF breaks the symmetry on its own" trap this module
+    already names for an unpolarized source, one axis further out. The way
+    through is the target's own angles: ``angle1 = 90`` puts the seed in the
+    plane, which is the planar spiral.
+
+    Spiral to spiral is allowed at any ``q``, in both senses: it is the
+    checkpoint resume, and it is what a sweep over ``q`` wants, since the
+    rotated-frame density at one wavevector is a good guess at the next.
+    """
+    if transfer.mode != "carry":
+        return
+    target = calculation.system.spiral_q is not None
+    system = getattr(result, "system", None)
+    if system is None:
+        # ``_same_kpoints`` treats an absent source system as unknowable and
+        # passes; here the unknowable thing is which frame the transverse pair
+        # was measured in, so silence is not the same as agreement.
+        if target and transfer.source == 4:
+            warnings.warn(
+                "the source result carries no system, so whether its "
+                "magnetization was measured in a spiral's rotated frame cannot "
+                "be answered here. If it was not, its transverse components "
+                "mean something different in this run; pass "
+                "magnetization='seed' to keep only the converged charge",
+                RuntimeWarning, stacklevel=3,
+            )
+        return
+    source = system.spiral_q is not None
+    if source == target:
+        return
+    if transfer.source == 4:
+        was, now = ("a spin spiral", "one") if source else ("one", "a spin spiral")
+        raise NotImplementedError(
+            f"the source run is {was} and this one is {now}, and a vector "
+            "magnetization does not cross that boundary: a spiral's transverse "
+            "components (m_x, m_y) are measured in the frame that turns with q "
+            "while an ordinary noncollinear run's are measured in the "
+            "laboratory, and the two are not the same numbers. The charge and "
+            "m_z are, so pass magnetization='seed' to keep the converged charge "
+            "and take the moment from this run's starting_magnetization, or "
+            "magnetization='none' to start unpolarized"
+        )
+    if target and transfer.direction is None:
+        raise ValueError(
+            "this run is a spin spiral and the magnetization being carried "
+            "into it lies along z, which is the axis the spiral rotates about. "
+            "A moment on that axis is invariant under the rotation, so it is a "
+            "stationary point at every q and the run would converge to the "
+            "ferromagnet and report it as a spiral. Give the target an "
+            "angle1 away from zero so the seed has a transverse component, or "
+            "pass magnetization='seed' or 'none'"
+        )
+
+
+def _constraints(system) -> tuple:
+    """What is holding this system's magnetization, in words, or ``()``.
+
+    An external field and a constraint are the same thing for the purpose here:
+    the converged magnetization is theirs rather than the functional's, so a run
+    that has neither is being handed a moment it did not ask for.
+
+    ``reducebf`` is deliberately not on the list. A field multiplied down to
+    nothing by convergence has left an unconstrained density behind, which is
+    the whole point of it -- Elk's own use is to break a symmetry and then get
+    out of the way. The linear-response stack refuses such a state for a
+    different reason, that it rebuilds its potential from the *input* field.
+    """
+    held = []
+    if float(getattr(system, "reducebf", 1.0)) == 1.0:
+        if any(abs(float(b)) > 0.0 for b in getattr(system, "b_field", ())):
+            held.append(f"B_field = {tuple(system.b_field)}")
+        if getattr(system, "atomic_b_field", ()):
+            held.append("a field on the atomic spheres")
+    constraint = str(getattr(system, "constrained_magnetization", "none"))
+    if constraint != "none":
+        held.append(f"constrained_magnetization = {constraint!r}")
+    if getattr(system, "tot_magnetization", None) is not None:
+        held.append(f"tot_magnetization = {system.tot_magnetization}")
+    return tuple(held)
+
+
+def _check_fields(result, calculation, transfer: _SpinTransfer) -> None:
+    """Say so when a held magnetization crosses into a run that holds nothing.
+
+    A warning and not a refusal, because releasing a constraint is a workflow
+    rather than a mistake and is one of the better reasons to continue at all:
+    hold the moment where you want it, converge, then let go and find out
+    whether the state survives. What must not happen is that it is released
+    without anyone noticing, since the moment being carried is then the field's
+    answer and not the functional's, and the run that starts from it converges
+    away from the state whose energy was reported.
+    """
+    if transfer.mode != "carry":
+        return
+    system = getattr(result, "system", None)
+    if system is None:
+        return
+    held = set(_constraints(system)) - set(_constraints(calculation.system))
+    if held:
+        warnings.warn(
+            f"the source run converged with {', and '.join(sorted(held))}, and "
+            "this run has neither, so the magnetization being carried over is "
+            "the field's rather than the functional's. That is the right way to "
+            "release a constraint and it is being said out loud: the run starts "
+            "on a state it will converge away from, and its first iterations "
+            "are that relaxation. Pass magnetization='seed' or 'none' to start "
+            "from the converged charge alone",
+            RuntimeWarning, stacklevel=3,
+        )
+
+
 def _check_grid(result, calculation) -> None:
     """The two runs must be the same *system*, differing only in its spin."""
     grid = tuple(calculation.basis.dense.grid)
@@ -386,6 +530,41 @@ def _check_grid(result, calculation) -> None:
                 f"target {calculation.nelec}: a continuation cannot change the "
                 "number of electrons, only the spin regime"
             )
+
+    # **The line above does not check the electron count, and it reads as though
+    # it does.** It sums the *target's* ``z_valence`` over the *source's* atom
+    # types, and ``Calculation.nelec`` is the same sum over the target's types,
+    # so the two agree by construction for every continuation whose atom list is
+    # unchanged -- which is every one of them except a changed structure. What
+    # it therefore catches is a different structure, and that is worth keeping
+    # for the message it gives. What it cannot catch is a **swapped dataset**:
+    # a scalar file against a fully-relativistic one with a semicore shell in it
+    # carries a different ``z_valence`` on the same atoms, which is exactly the
+    # route P23 measured for switching spin-orbit coupling on.
+    #
+    # The density's own count is the check that sees it, and it is one grid sum.
+    # A density normalised to the wrong number of electrons is a bad guess
+    # rather than a wrong answer -- the occupations come from ``nelec`` and
+    # ``sum_band`` rebuilds the density at every iteration, so what is paid is
+    # iterations or a failure to converge -- but it is paid silently, and the
+    # run that pays it looks like a continuation that simply did not help.
+    charge, _ = spin_components(
+        jnp.asarray(result.density), int(result.nspin_mag)
+    )
+    integral = float(jnp.sum(charge)) * float(
+        calculation.system.cell.volume
+    ) / charge.size
+    if abs(integral - calculation.nelec) > ELECTRON_TOL * max(
+            1.0, float(calculation.nelec)):
+        raise ValueError(
+            f"the source density integrates to {integral:.6f} electrons and "
+            f"this run wants {calculation.nelec}. The cell and the grid match, "
+            "so what differs is the pseudopotential: one of the two datasets "
+            "carries a different z_valence, and a continuation carries a "
+            "density rather than renormalising one. Drop starting_from to "
+            "begin from the atomic superposition, or use the dataset the "
+            "source ran with"
+        )
 
 
 def promote_density(result, calculation, transfer: _SpinTransfer):
@@ -700,6 +879,8 @@ def continued_state(
     """
     _check_grid(result, calculation)
     transfer = _transfer(result, calculation, magnetization)
+    _check_spiral(result, calculation, transfer)
+    _check_fields(result, calculation, transfer)
     span = None
     if wavefunctions:
         span = promote_wavefunctions(result, calculation)

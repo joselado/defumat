@@ -4458,6 +4458,7 @@ def run_scf(
     starting_ns: jnp.ndarray | None = None,
     starting_wavefunctions: jnp.ndarray | None = None,
     starting_from: object | None = None,
+    magnetization: str = "auto",
     starting_tau: jnp.ndarray | None = None,
     mixing_fixed_ns: int = 0,
     tstress: bool | None = None,
@@ -4524,6 +4525,19 @@ def run_scf(
     this run's ``starting_magnetization``, which is what decides whether a
     magnetic run started from a non-magnetic one can leave the symmetric
     solution at all.
+
+    ``magnetization`` is that same choice without having to build the state by
+    hand, and it is what a sweep over magnetic configurations needs: ``"auto"``
+    carries the source's moment where it has one and seeds this run's
+    ``starting_magnetization`` where it does not, ``"carry"`` insists on the
+    first, ``"seed"`` insists on the second -- which is how a **different**
+    magnetic state is reached from the same converged charge -- and ``"none"``
+    starts unpolarized. It acts on ``starting_from`` and on nothing else, so it
+    is refused rather than ignored when there is no seed for it to act on, when
+    the seed is already a ``ContinuedState`` that has resolved the question, and
+    on a **checkpoint resume**: a resubmitted command line carries its arguments
+    every time, and a resume that re-seeded the magnetization would throw away
+    the converged moment on every wall-clock kill.
 
     ``checkpoint_dir`` writes the run's state and its **mixer history** every
     ``checkpoint_every`` iterations, so a job killed at its wall clock loses at
@@ -4654,6 +4668,14 @@ def run_scf(
     # Bound whether or not there is anything to continue from, because the loop
     # below releases it by name once the span has been read.
     state = None
+    if starting_from is None and magnetization != "auto":
+        raise ValueError(
+            f"magnetization = {magnetization!r} says how a continuation's "
+            "magnetization crosses into this run, and there is no continuation "
+            "here: pass starting_from= a previous run's result. To set this "
+            "run's own starting moments, use starting_magnetization (and "
+            "angle1/angle2) on the system"
+        )
     if starting_from is not None:
         if any(x is not None for x in (starting_density, starting_becsum,
                                        starting_ns, starting_wavefunctions)):
@@ -4662,9 +4684,34 @@ def run_scf(
                 "wavefunctions; giving one of them separately would start the "
                 "run from two states at once"
             )
+        if magnetization != "auto" and resumed_state is not None:
+            # **The resume is where this argument would do the most damage and
+            # is the least likely to be noticed.** The recovery the checkpoint
+            # advertises is "resubmit the same line", so whatever is on that
+            # line arrives again on every wall-clock kill -- and a
+            # ``magnetization='seed'`` on it would throw the converged moment
+            # away and restart from the atomic superposition each time, on a
+            # run whose moment is usually the slow variable.
+            raise ValueError(
+                f"magnetization = {magnetization!r} together with a resume from "
+                f"the checkpoint in {checkpoint_dir}: a resume continues *this* "
+                "run, so its magnetization is already this run's and there is "
+                "nothing to decide. Drop the argument, or pass "
+                "checkpoint_dir=None to treat the state as a seed from another "
+                "run instead"
+            )
+        if magnetization != "auto" and isinstance(starting_from, ContinuedState):
+            raise ValueError(
+                f"magnetization = {magnetization!r} together with a "
+                "ContinuedState, which has already resolved how the "
+                "magnetization crosses: pass the SCFResult itself with this "
+                "argument, or build the ContinuedState with its own "
+                "magnetization= and drop this one"
+            )
         state = (
             starting_from if isinstance(starting_from, ContinuedState)
-            else continued_state(starting_from, calculation)
+            else continued_state(starting_from, calculation,
+                                 magnetization=magnetization)
         )
         starting_density = state.density
         starting_becsum = state.becsum or None
