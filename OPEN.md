@@ -2587,7 +2587,8 @@ every run given a 300-iteration budget:
 > cell rather than the basis (only one `anderson` run converged there, so 16 shows two of the
 > three and not all three) --
 > `anderson` at 0.1 and 0.7 agree on one to eight digits of `E_band`, `anderson` at **0.3**
-> finds a third, and `adaptive` finds the one that follows the field's +90 degree ladder. So
+> finds a second, and `adaptive` finds a third, the one that follows the field's +90 degree
+> ladder. So
 > the step length selects a solution **inside** one mixer, and `PERFORMANCE.md`'s control
 > across three values of `anderson`'s `beta` does not separate mixer from step length after
 > all. The full table is there.

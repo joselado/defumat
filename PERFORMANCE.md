@@ -6053,8 +6053,9 @@ count. Doubling the basis moves the numbers and keeps the structure.
 mixers and a factor of seven in `beta` agree on the moment to 0.3 per cent and on the angles
 to 0.05 degrees. **At the partly-polarized grid there are three**, all converged three orders
 below `conv_thr`: `anderson` at 0.1 and 0.7 find the same one to eight digits in `E_band`,
-`anderson` at **0.3** finds a third, and both `adaptive` runs find the one whose moments follow
-the applied field's +90 degree ladder, which also has the lowest band energy of the three.
+`anderson` at **0.3** finds a second, and both `adaptive` runs find a third, the one whose
+moments follow the applied field's +90 degree ladder, which also has the lowest band energy of
+the three.
 
 **So the earlier reading survives in substance and its control does not.** A mixer can change
 which solution a run finds, and `converged = True` three orders below `conv_thr` does not

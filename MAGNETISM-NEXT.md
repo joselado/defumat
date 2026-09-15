@@ -670,8 +670,8 @@ decide it, because a departure from `pw.x` needs a number rather than an argumen
   (`nbnd = 32`; 16 is six per cent out in the moment) the saturated `(4, 1, 1)` grid has **one**
   state and no mixer effect at all, and the partly-polarized `(4, 2, 2)` grid has **three**, all
   converged three orders below `conv_thr`: `anderson` at 0.1 and 0.7 agree on one to eight
-  digits of `E_band`, `anderson` at **0.3** finds a third, and both `adaptive` runs find the one
-  whose moments follow the field's +90 degree ladder. So *a mixer can change which solution is
+  digits of `E_band`, `anderson` at **0.3** finds a second, and both `adaptive` runs find a
+  third, the one whose moments follow the field's +90 degree ladder. So *a mixer can change which solution is
   found* stands and is the caveat to carry; *it partitions by mixer rather than by step length*
   **falls**, because `anderson`'s own `beta` selects between solutions here and a control that
   varies `beta` therefore separates nothing. And the exact four-atom supercell under the same
