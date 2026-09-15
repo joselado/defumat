@@ -81,6 +81,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.hubbard.occupations import ns_components
+from defumat.scf.fields import VANISHING_MOMENT
 
 #: Above this, a spinor occupation matrix's off-diagonal spin blocks carry real
 #: information and there is no collinear ``ns`` that means the same thing. It is
@@ -302,35 +303,50 @@ def _absolute_magnetization(density, nspin_mag: int, cell) -> float:
 
 
 def _common_direction(calculation) -> tuple | None:
-    """The one axis every magnetic species of the target points along.
+    """The one axis every magnetic *atom* of the target points along.
 
     ``None`` when it is ``z`` (so no rotation is needed) and a ``ValueError``
-    when the species disagree: a collinear source carries one scalar field and
+    when the atoms disagree: a collinear source carries one scalar field and
     there is no way to make it point two ways at once. The message names the
     escape hatch, because there is one -- ``magnetization="seed"`` keeps the
     converged *charge* and takes the magnetization from the atomic
-    superposition, which does honour per-species angles.
+    superposition, which does honour a texture.
+
+    **Per atom rather than per species, and the difference is a whole card.**
+    This read ``starting_magnetization`` and the ``angle1``/``angle2``
+    directions, which a ``STARTING_MOMENTS`` card overrides and which are both
+    *zero* for a run that states its texture only in the card. A helix stated
+    that way therefore came back as ``None``, the scalar went in along ``z``,
+    and the card the target was built to honour was never read -- P23b's own
+    trap, that the arrangement asked for is not the one the run starts from, one
+    regime over. ``System.local_moments`` is the array the magnetic symmetry
+    group is already decided from, so reading it here means the door's spiral
+    guard (``scf/driver.py``) and this one cannot drift apart.
     """
-    magnitudes = np.asarray(calculation.starting_magnetization, dtype=float)
-    directions = np.asarray(calculation.magnetization_directions, dtype=float)
-    magnetic = np.abs(magnitudes) > 1.0e-6
+    moments = np.asarray(calculation.system.local_moments, dtype=float)
+    if moments.ndim != 2 or moments.shape[1] != 3:
+        # A collinear target has one component per atom and no direction to
+        # find; ``_transfer`` only asks for one when the target is a spinor.
+        return None
+    lengths = np.linalg.norm(moments, axis=-1)
+    magnetic = lengths > VANISHING_MOMENT
     if not np.any(magnetic):
         return None
-    axes = directions[magnetic]
-    signs = np.sign(magnitudes[magnetic])[:, None]
-    # A species with a *negative* starting magnetization points the other way
-    # along the same axis, and its collinear counterpart already carries that
-    # sign in ``m(r)``; what has to agree is the axis, not the direction on it.
-    reference = axes[0] * signs[0]
+    axes = moments[magnetic] / lengths[magnetic][:, None]
+    # An atom whose moment points the *other way* along the same axis is the
+    # antiferromagnet, and its collinear counterpart already carries that sign
+    # in ``m(r)``; what has to agree is the axis, not the direction on it.
+    reference = axes[0]
     if not np.all(np.abs(np.abs(axes @ reference) - 1.0) < DIRECTION_TOL):
         raise ValueError(
-            "the target's species point their moments along different axes "
+            "the target's atoms point their moments along different axes "
             f"(angle1 = {tuple(calculation.system.angle1)}, angle2 = "
-            f"{tuple(calculation.system.angle2)}), and a collinear source "
-            "carries one scalar magnetization that cannot point two ways at "
-            "once. Pass magnetization='seed' to keep the converged charge and "
-            "take the magnetization from the atomic superposition, which does "
-            "honour the angles"
+            f"{tuple(calculation.system.angle2)}, and a STARTING_MOMENTS card "
+            "if there is one), and a collinear source carries one scalar "
+            "magnetization that cannot point two ways at once. Pass "
+            "magnetization='seed' to keep the converged charge and take the "
+            "magnetization from the atomic superposition, which does honour "
+            "the angles and the card"
         )
     if abs(reference[2] - 1.0) < DIRECTION_TOL:
         return None
@@ -392,16 +408,18 @@ def _check_spiral(result, calculation, transfer: _SpinTransfer) -> None:
     along the *target's* own ``angle1``/``angle2`` -- a seed direction the target
     chose, not a transverse field transferred from somewhere else.
 
-    **The second refusal is the trap rather than the bookkeeping.** The spiral's
-    spin rotation is about ``z``, so a magnetization that lies along ``z`` is
-    invariant under it: it is a cone of zero opening angle, which is the
-    ferromagnet, and it is a stationary point of the spiral functional at
-    **every** ``q``. Hand one to a spiral run and the run converges, reports a
-    moment, and has computed the ferromagnet with ``q`` playing no part -- the
-    same "nothing in the SCF breaks the symmetry on its own" trap this module
-    already names for an unpolarized source, one axis further out. The way
-    through is the target's own angles: ``angle1 = 90`` puts the seed in the
-    plane, which is the planar spiral.
+    **The moment on the rotation axis is refused one layer earlier now.** A
+    magnetization along ``z`` is invariant under the spiral's own rotation, so
+    it is a cone of zero opening angle, the ferromagnet, and a stationary point
+    at **every** ``q``; carried into a spiral the run converges, reports a
+    moment, and has computed the ferromagnet with ``q`` playing no part. This
+    module refused that and no longer needs to: a spiral whose starting moments
+    are all on the axis is refused when the :class:`~defumat.scf.driver.
+    Calculation` is built (``driver.py``, beside the ``nosym`` refusal), which
+    catches the run started from scratch as well as the continued one. What
+    reaches here is therefore a target with a transverse component already, and
+    a branch nothing can trip is worse than no branch: it reads as a guard and
+    is a decoration.
 
     Spiral to spiral is allowed at any ``q``, in both senses: it is the
     checkpoint resume, and it is what a sweep over ``q`` wants, since the
@@ -439,16 +457,6 @@ def _check_spiral(result, calculation, transfer: _SpinTransfer) -> None:
             "m_z are, so pass magnetization='seed' to keep the converged charge "
             "and take the moment from this run's starting_magnetization, or "
             "magnetization='none' to start unpolarized"
-        )
-    if target and transfer.direction is None:
-        raise ValueError(
-            "this run is a spin spiral and the magnetization being carried "
-            "into it lies along z, which is the axis the spiral rotates about. "
-            "A moment on that axis is invariant under the rotation, so it is a "
-            "stationary point at every q and the run would converge to the "
-            "ferromagnet and report it as a spiral. Give the target an "
-            "angle1 away from zero so the seed has a transverse component, or "
-            "pass magnetization='seed' or 'none'"
         )
 
 

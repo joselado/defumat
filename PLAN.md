@@ -2778,6 +2778,34 @@ for `with_moments` is one whose named configuration is not its ground state, whi
 `'auto'` would *not* have shown the defect there: with no moment to carry it falls back to
 the seed. It took a magnetic source to make the two modes differ at all.
 
+**The fresh-run sibling of the spiral guard, and it took a second defect with it.** P23b
+refused a magnetization *carried* onto a spiral's rotation axis and left the run started
+from scratch alone, which reaches the same state by the same route: `starting_magnetization`
+with every `angle1` at zero is a cone of zero opening angle, the ferromagnet, and a
+stationary point at every `q`. The refusal is now at the door, in `Calculation.__init__`
+beside the `nosym` one, so it catches both, and it reads `System.local_moments` -- the array
+the magnetic symmetry group is already decided from -- rather than the angles. Zero moments
+are refused with it, being the same stationary point, and **`q = 0` is not exempted**: a
+scan installs its wavevectors afterwards through `at_spiral_q`, so the one place the moments
+can be looked at is the door, and a scan whose `q = 0` point is a ferromagnet by construction
+is one whose `E(q)` is measured against the wrong reference. **No committed number moves**:
+all seven spiral inputs in the tree, the three test cells and the four NiI2 job scripts,
+carry `angle1 = 90` and still build.
+
+The second defect is the one that came out of asking what the continuation's own branch
+would then be for. `_common_direction`, which decides the axis a *collinear* source's one
+scalar magnetization is laid along in a spinor target, read `starting_magnetization` and the
+`angle1`/`angle2` directions -- and a `STARTING_MOMENTS` card **overrides** both, leaving
+them at zero. So a target whose texture is stated only in the card was told "along `z`", the
+card was never read, and the run started from the arrangement nobody asked for, which is
+P23b's own trap one regime over. It reads `local_moments` now, per atom, so the door and the
+continuation cannot drift; a card pointing every atom along `x` gives `(1, 0, 0)` where it
+used to give `None`, and a card stating a helix is **refused** by the same "different axes"
+rule two species pointing different ways always were, since one scalar cannot follow a
+helix. With that, the continuation's axis branch became unreachable -- the door has already
+required a transverse component -- and it is deleted rather than left as a guard nothing can
+trip.
+
 **A derived calculator never read the checkpoint it had been writing, and the rule it broke
 was one this code already states.** `run_scf` reads its `checkpoint_dir` only when
 `starting_from` is `None`, which is right about an argument the *caller* passed and wrong

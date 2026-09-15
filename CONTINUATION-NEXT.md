@@ -7,9 +7,11 @@ converged run can be carried into *any* other combination of features: magnetic 
 collinear or spinor, with spin-orbit coupling or without, with a Hubbard `U` or without.
 
 **Closed since this file was written (2026-09-15):** a seeded calculator that never read
-its own checkpoint, which is now `PLAN.md` P23b's last paragraph, and the notebook P23b
+its own checkpoint, which is now `PLAN.md` P23b's last paragraph; the notebook P23b
 was missing, which is `notebooks/43_magnetic_textures`'s new section and a sharper case
-than the one the phase measured.
+than the one the phase measured; and the fresh-run sibling of the spiral guard, which is
+at the door now and took `_common_direction`'s blindness to a `STARTING_MOMENTS` card
+with it.
 
 The state machinery itself is in good shape on the spin axis. What was closed in the same
 pass as this file is `PLAN.md` P23b: the spin spiral's rotated frame, `magnetization=`
@@ -80,25 +82,6 @@ and it is the right trade: there is no counterpart to `spin_components` for a ki
 density and a reshaped guess that is wrong is worse than a crude one that cannot be. It
 belongs in the user guide rather than in the code, because what a user sees is a meta-GGA
 continuation that saves fewer iterations than they expected.
-
-## The fresh-run sibling of the spiral guard
-
-The continuation now refuses to carry a magnetization onto a spiral's own rotation axis,
-because a moment along `z` is invariant under the spiral's spin rotation and is therefore a
-stationary point at every `q`: the run converges, reports a moment, and has computed the
-ferromagnet.
-
-**A run started from scratch reaches the same state by the same route and nothing says so.**
-`starting_magnetization` with every `angle1` at zero builds exactly that seed, and the
-spiral SCF has no more ability to break the symmetry on its own than the collinear one has
-to become magnetic. The guard belongs at the door, in `Calculation`, beside the refusals a
-spiral already makes for symmetry and for ultrasoft datasets: a spiral whose starting
-moments are all on the rotation axis should be refused, naming `angle1` as the way through.
-
-It is worth checking what the existing spiral tests and `workflows/spiral.py` do about this
-before adding the refusal, since a `q` sweep that quietly includes a collapsed arm would
-start failing rather than start being wrong, which is the intended outcome but is a change
-to a committed number.
 
 ## Changing the cutoff or the grid is refused, and interpolating is the workflow
 

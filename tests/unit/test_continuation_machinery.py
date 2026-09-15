@@ -236,21 +236,38 @@ def test_a_grid_mismatch_is_refused():
         continued_state(_result(source, 1), calculation)
 
 
-def test_species_pointing_different_ways_are_refused_with_the_escape_hatch():
+def test_atoms_pointing_different_ways_are_refused_with_the_escape_hatch():
+    """One scalar cannot point two ways, and the message names the way out.
+
+    The disagreement is stated per *atom*, with a ``STARTING_MOMENTS`` card, in
+    place of the two hand-built species this test used to carry: the direction
+    now comes from :attr:`System.local_moments`, so a card is what a real
+    disagreement looks like and no stand-in is needed for it.
+    """
+    calculation = _textured(((0.4, 0.0, 0.0), (0.0, 0.4, 0.0)))
+    grid = tuple(calculation.basis.dense.grid)
+    source = _random_density(grid, 2, calculation=calculation)
+    with pytest.raises(ValueError, match="magnetization='seed'"):
+        continued_state(_result(source, 2, system=_calculation(2, (0.4,)).system),
+                        calculation, wavefunctions=False)
+
+
+def _textured(per_atom) -> Calculation:
+    """A spinor silicon whose texture is in the card and *not* in the angles.
+
+    ``angle1``/``angle2`` stay at zero, which is the case the direction used to
+    be read from: a card user's target said "along z" to anything that asked
+    the angles.
+    """
     import dataclasses
 
-    calculation = _calculation(4, (0.5,), ((90.0,), (0.0,)))
-    # One species in this cell, so the disagreement has to be built by hand:
-    # two types, one along x and one along z.
-    system = dataclasses.replace(
-        calculation.system, starting_magnetization=(0.5, 0.5),
-        angle1=(90.0, 0.0), angle2=(0.0, 0.0),
+    calculation = _calculation(4, (0.4,))
+    return Calculation(
+        dataclasses.replace(calculation.system, angle1=(0.0,), angle2=(0.0,),
+                            starting_moments=tuple(tuple(float(x) for x in row)
+                                                   for row in per_atom)),
+        (read_upf(PSEUDO),),
     )
-    stand_in = _Stand(system, calculation)
-    grid = tuple(calculation.basis.dense.grid)
-    with pytest.raises(ValueError, match="magnetization='seed'"):
-        continued_state(_result(_random_density(grid, 2, calculation=calculation), 2), stand_in,
-                        wavefunctions=False)
 
 
 class _Stand:
@@ -652,16 +669,37 @@ def test_a_spirals_magnetization_does_not_cross_out_of_its_frame_either():
 def test_a_moment_on_the_spiral_axis_is_refused_as_the_ferromagnet_it_is():
     """``z`` is the axis the spiral turns about, so a moment on it does not turn.
 
-    The state is then stationary at every ``q``, and the run would converge,
-    report a moment, and have computed the ferromagnet.
+    The state is then stationary at every ``q``: the run converges, reports a
+    moment, and has computed the ferromagnet. **The refusal is at the door**,
+    where it catches a run started from scratch as well as a continued one, so
+    what is checked here is that the spiral cannot be built at all -- a moment
+    on the axis, and no moment, which is the same stationary point.
     """
-    spiral = _spiral(angle1=(0.0,))
-    collinear = _calculation(2, (0.4,))
-    grid = tuple(spiral.basis.dense.grid)
-    source = _random_density(grid, 2, calculation=spiral)
-    with pytest.raises(ValueError, match="invariant under the rotation"):
-        continued_state(_result(source, 2, system=collinear.system), spiral,
-                        wavefunctions=False)
+    for label, moments in (("on the axis", (0.0,)), ("no moment", None)):
+        with pytest.raises(NotImplementedError, match="rotation axis"):
+            if moments is None:
+                _spiral(magnetization=(0.0,), angle1=(90.0,))
+            else:
+                _spiral(angle1=moments)
+
+
+def test_the_planar_spiral_the_guard_exists_to_allow_is_built():
+    """The case that must keep working, and the one every spiral input uses."""
+    assert _spiral(angle1=(90.0,)).spiral
+
+
+def test_a_texture_card_is_what_a_scalar_magnetization_is_laid_along():
+    """The direction comes from the atoms, not from the per-species angles.
+
+    A ``STARTING_MOMENTS`` card overrides ``angle1``/``angle2``, which are then
+    both zero -- so reading the angles said "along z" for a target whose card
+    says otherwise, and a carried scalar went in along an axis the run was
+    built not to use.
+    """
+    from defumat.scf.continuation import _common_direction
+
+    along_x = _textured(((0.4, 0.0, 0.0), (0.4, 0.0, 0.0)))
+    assert _common_direction(along_x) == pytest.approx((1.0, 0.0, 0.0))
 
 
 def test_a_collinear_moment_crosses_into_a_spiral_when_the_angles_are_in_plane():

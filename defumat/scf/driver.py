@@ -131,7 +131,7 @@ from defumat.scf.occupations import (
 )
 from defumat.scf.fields import (ATOM_RESOLVED, FADED_FIELD, FEEDBACK,
                                 FEEDBACK_ATOMIC, FSM_ANGLE_TOLERANCE,
-                                FSM_TOLERANCE, MagneticField,
+                                FSM_TOLERANCE, VANISHING_MOMENT, MagneticField,
                                 constraint_targets)
 from defumat.scf.locals import build_local_regions, get_locals
 from defumat.scf.sourcefree import refuse_source_free
@@ -1760,6 +1760,38 @@ class Calculation:
                 "is not implemented, so the density symmetrisation and the "
                 "k-point reduction would both be wrong"
             )
+        if self.spiral:
+            # **A moment on the rotation axis is a stationary point at every
+            # q.** The spiral's spin rotation is about ``z``, so a moment along
+            # it is a cone of zero opening angle -- the ferromagnet -- and ``q``
+            # plays no part in what the run converges to. Nothing in the SCF
+            # breaks that symmetry on its own, exactly as nothing makes an
+            # unpolarized run magnetic, so the run converges, reports a moment
+            # and has computed a different calculation than the one asked for.
+            # The continuation refuses the same state crossing into a spiral
+            # (``scf/continuation.py``); this is its fresh-run sibling, and it
+            # is checked at the door because a scan installs its wavevectors
+            # afterwards through :meth:`at_spiral_q`.
+            #
+            # **Including q = 0**, where the collapsed arm is the right answer
+            # and refusing it looks over-strict. It is not: a scan builds every
+            # other point from this same system, so the one place the moments
+            # can be looked at is here, and a run whose q = 0 point is a
+            # ferromagnet by construction is the one whose E(q) is measured
+            # against the wrong reference.
+            moments = np.asarray(system.local_moments, dtype=float)
+            transverse = np.linalg.norm(moments[:, :2], axis=-1)
+            if not np.any(transverse > VANISHING_MOMENT):
+                raise NotImplementedError(
+                    "a spin spiral needs starting moments off its rotation "
+                    "axis, and every atom here starts on it (or at zero): the "
+                    "spiral turns the moment about z, so a moment along z is "
+                    "invariant under it and stationary at every q -- the run "
+                    "would converge to the ferromagnet and report it as the "
+                    "spiral. Set angle1 (90 degrees puts the moment in the "
+                    "plane, which is the proper screw), or give a "
+                    "STARTING_MOMENTS card with a transverse component"
+                )
         # The axial-vector rotations, signs folded in, that the magnetization
         # needs and the charge does not.
         self._magnetization_rotations = (

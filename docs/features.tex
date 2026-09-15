@@ -639,12 +639,29 @@ across a spiral boundary. A collinear source is not: what crosses then is one
 scalar field, laid along the target's own \code{angle1}/\code{angle2}. Spiral
 to spiral is allowed at any $\mathbf q$, which is what a sweep needs.
 
-\textbf{A moment on the spiral's own axis is refused as the ferromagnet it is.}
-The spiral's spin rotation is about $z$, so a magnetization along $z$ is
-invariant under it: a cone of zero opening angle, and a stationary point at
-every $\mathbf q$. Carried into a spiral run it converges, reports a moment,
-and has computed the ferromagnet. Give the target an \code{angle1} away from
-zero, or pass \code{magnetization='seed'}.
+\textbf{A moment on the spiral's own axis is refused as the ferromagnet it is,
+and the refusal is at the door.} The spiral's spin rotation is about $z$, so a
+magnetization along $z$ is invariant under it: a cone of zero opening angle, and
+a stationary point at every $\mathbf q$. A run in that state converges, reports
+a moment, and has computed the ferromagnet with $\mathbf q$ playing no part,
+which is the \emph{nothing breaks the symmetry on its own} rule of the paragraph
+above one axis further out. A spiral whose starting moments are all on the axis,
+or all zero, is therefore refused when the calculation is built, so a run
+started from scratch is caught as well as a continued one, and \code{angle1} is
+named as the way through: 90 degrees puts the moment in the plane, which is the
+proper screw. Including at $\mathbf q = 0$, where the collapsed state is the
+right answer and refusing it looks strict --- a scan builds every other point
+from that same system, so the one place its moments can be looked at is there.
+
+\textbf{The direction a carried scalar is laid along comes from the atoms.} A
+collinear source carries one number per point, and where it points in a spinor
+target is that target's own texture: \code{System.local\_moments}, which is the
+\code{STARTING\_MOMENTS} card where there is one and \code{angle1}/\code{angle2}
+where there is not. Reading the angles alone said \emph{along $z$} for a target
+whose texture is stated only in the card, since the card leaves both angles at
+zero, and the card the run was built to honour was never read. A target whose
+atoms point along different axes is refused instead, because one scalar cannot
+follow a helix, with \code{magnetization='seed'} named as the way through.
 
 \textbf{The source density's own electron count is checked}, by integrating it,
 rather than inferred from the atom list. What that catches is a \textbf{swapped
