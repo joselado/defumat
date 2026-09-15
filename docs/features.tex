@@ -315,6 +315,7 @@ says so (\code{tests/unit/test\_facade\_documentation.py}).
 \code{get\_optical\_conductivity} & $\sigma_{ab}(\omega)$, the Kerr angle, the anomalous Hall \\
 \code{get\_structure\_factors} & $F(\mathbf H)$, X-ray and magnetic \\
 \code{get\_stm} & a Tersoff--Hamann scanning-tunnelling image \\
+\code{get\_sts} & the same, over an energy axis: a tunnelling spectrum \\
 \code{get\_vertical\_transport} & tunnelling \emph{through} a 2D material \\
 \code{get\_momentum\_transport} & which k-points that current comes out of \\
 \code{get\_nesting} & $N(\mathbf q)$, the Fermi-surface nesting function \\
@@ -346,6 +347,7 @@ says so (\code{tests/unit/test\_facade\_documentation.py}).
 \midrule
 \code{get\_ultracell} & a density or potential modulated over $N$ unit cells \\
 \code{get\_ultracell\_stm} & a Tersoff--Hamann image of that modulation \\
+\code{get\_ultracell\_sts} & a tunnelling spectrum across that modulation \\
 \code{get\_ultracell\_transport} & tunnelling through it, tip to substrate \\
 \bottomrule
 \end{longtable}
@@ -3897,7 +3899,8 @@ sts = calc.get_ultracell_sts(energies=bias, tip=tips, width=0.02, spin="up")
 sts.values        # (41, 8) dI/dV, one column per cell
 sts.bias_axis     # (41,) the bias in Ry, measured from the Fermi level
 sts.current       # (41, 8) I(V), the same axis integrated outwards from V = 0
-sts.integral      # (41,) D(E) per unit cell: the sum rule
+sts.integral      # (41,) D(E) per unit cell -- the *charge's* sum rule, which
+                  # is what the weights give exactly whatever the tip is
 
 # a whole map at every energy instead, and the ordinary unit-cell spectrum
 maps = calc.get_ultracell_sts(energies=bias, height=0.35, shape=(48, 8))
@@ -3933,7 +3936,11 @@ cent --- so a sum rule would not catch it and the image is genuinely unaffected.
 Pass \code{grid} (which builds the \emph{complete} grid here, where an image's
 reduces) or run \code{nosym}. A tip inside an \textbf{augmentation
 sphere} of an ultrasoft or PAW dataset, where the pseudo-wavefunction is not the
-true one and the norm is short by 3 to 9 per cent. An ultracell is exempt from
+true one and the norm is short by 3 to 9 per cent. On a dense bulk crystal that
+leaves nowhere to put a tip at all --- SiC's radius is 2.4 bohr and its layers
+are closer together than that --- which is the right answer rather than an
+obstacle: a tip sits above a \emph{surface}, in vacuum, where a pseudo-wavefunction
+is the true one. An ultracell is exempt from
 both: it requires \code{nosym} and refuses ultrasoft and PAW already.
 Also refused: \code{bias} together with an energy axis, since the window is the
 integral the axis already carries and \code{current} is it; and a

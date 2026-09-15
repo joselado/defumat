@@ -160,8 +160,13 @@ class STMSpectrum:
     #: spinor one, shaped like :attr:`values` -- or ``None`` when there is only
     #: a charge.
     values_by_spin: np.ndarray | None = None
-    #: ``(nE,)`` the spectrum integrated over the cell at each energy: ``D(E)``
-    #: per unit cell, in states/Ry. The sum rule the assembly is checked with.
+    #: ``(nE,)`` ``D(E)`` per unit cell, in states/Ry -- the sum of the weights,
+    #: which is exact by orthonormality. It is the **charge's** integral whatever
+    #: the tip is: a polarized tip's own field integrates to
+    #: ``[D(E) + P n.M(E)]/2``, and no sum of weights gives the transverse ``M``.
+    #: It is also the integral of :attr:`values` only where ``sum_G |c|^2 = 1``,
+    #: so on an ultrasoft or PAW dataset the sampled field falls short of it by
+    #: the augmentation charge -- which is why a tip inside a sphere is refused.
     integral: np.ndarray | None = None
     #: The tip's moment direction and polarization, or ``None``.
     spin: object = None

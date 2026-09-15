@@ -32,6 +32,7 @@ against ``|Psi_j|^2``, never touching the box. So:
   level is a few widths clear of both edges.
 """
 
+import re
 import tempfile
 from functools import lru_cache
 from pathlib import Path
@@ -130,6 +131,31 @@ COLLINEAR = SILICON.replace(
     " occupations='smearing', smearing='gaussian', degauss=0.02"
 ).replace(" conv_thr=1.0d-12", " conv_thr=1.0d-9")
 
+#: **An ultrasoft dataset**, for the one refusal the cells above cannot reach:
+#: zincblende SiC from the two soft datasets ``tests/data/qe/sic-berry.in``
+#: already uses. Inside an augmentation sphere the pseudo-wavefunction is not the
+#: true one and ``sum_G c* c`` is short, so a tip there is refused -- and only a
+#: soft dataset has a sphere at all.
+ULTRASOFT = """&control
+ calculation='scf'
+/
+&system
+ ibrav=2, celldm(1)=8.24, nat=2, ntyp=2, ecutwfc=24.0, ecutrho=192.0,
+ nosym=.true., noinv=.true.
+/
+&electrons
+ conv_thr=1.0d-8
+/
+ATOMIC_SPECIES
+ Si 28.086 Si.pz-n-rrkjus_psl.0.1.UPF
+ C 12.011 C.pz-rrkjus.UPF
+ATOMIC_POSITIONS alat
+ Si 0.00 0.00 0.00
+ C 0.25 0.25 0.25
+K_POINTS automatic
+ {k0} {k1} {k2} 0 0 0
+"""
+
 #: Symmetry left **on**, which every other cell here turns off: the one case
 #: the wedge refusal is about.
 SYMMETRIC = SILICON.replace(" nosym=.true., noinv=.true.\n", "")
@@ -150,10 +176,11 @@ def _converged(pseudos, grid, nbnd=12, template="silicon"):
     ``maxsize=2`` and never ``None``: what is held is the wavefunctions.
     """
     templates = {"silicon": SILICON, "noncollinear": NONCOLLINEAR,
-                 "collinear": COLLINEAR, "symmetric": SYMMETRIC}
+                 "collinear": COLLINEAR, "symmetric": SYMMETRIC,
+                 "ultrasoft": ULTRASOFT}
     calculator = _calculator(Path(pseudos), f"si_{template}_{''.join(map(str, grid))}.in",
                              templates[template], grid)
-    loose = {"noncollinear": 1e-10, "collinear": 1e-9}
+    loose = {"noncollinear": 1e-10, "collinear": 1e-9, "ultrasoft": 1e-8}
     scf = calculator.get_scf(conv_thr=loose.get(template, 1e-12), nbnd=nbnd)
     assert scf.converged
     return calculator, scf
@@ -553,6 +580,50 @@ def test_the_wedge_sum_the_guard_refuses_is_wrong_by_a_whole_picture(pseudo_dir)
                     energy=float(energies[1]), width=WIDTH, **geometry)
     reference = np.asarray(image.values)
     assert np.abs(reference - right[1]).max() / right[1].max() < 0.01
+
+
+def test_a_tip_inside_an_augmentation_sphere_is_refused(pseudo_dir):
+    """The other refusal a spectrum has and an image does not, on both sides.
+
+    An image sums into the density, where the augmentation charge follows the
+    tunnelling weights; a spectrum evaluates ``psi(r)`` from the plane-wave
+    coefficients alone, and inside a sphere that is not the true wavefunction --
+    ``volume_overlap`` measures the shortfall at 9 per cent on an ultrasoft
+    carbon sheet and 3 per cent on PAW silicon. So the tip is refused there.
+
+    **There is no plane on this cell that is not inside a sphere**, and that is
+    the physics rather than a limitation of the test: SiC's augmentation radius
+    is 2.4 bohr and its layers are closer together than that, so a dense bulk
+    crystal has nowhere a tip could sit. A tip lives above a *surface*, in
+    vacuum, which is where the guard's message points.
+
+    So the two sides taken here are a dataset with a sphere against one without,
+    at the same geometry, plus the check that the guard **measures** rather than
+    always firing: two heights report two different distances, where a guard
+    returning one constant would be indistinguishable from one that had stopped
+    looking.
+    """
+    calculator, scf = _converged(str(pseudo_dir), (2, 2, 2), 8, "ultrasoft")
+    energies = float(scf.homo) + np.array([-0.05, 0.0])
+
+    distances = []
+    for height in (0.0, 0.35):
+        with pytest.raises(NotImplementedError, match="augmentation sphere") as raised:
+            run_sts(calculator.system, calculator.pseudos, scf,
+                    energies=energies, width=WIDTH, shape=(4, 4),
+                    height=height, axis=2)
+        distances.append(float(re.search(r"passes ([0-9.]+) bohr",
+                                         str(raised.value)).group(1)))
+    assert distances[0] == pytest.approx(0.0, abs=1e-6)
+    assert distances[1] > 1.0
+    assert "2.395 bohr augmentation sphere" in str(raised.value)
+
+    # the same plane on a norm-conserving cell, which has no sphere at all
+    plain, plain_scf = _converged(str(pseudo_dir), (2, 2, 1))
+    through = run_sts(plain.system, plain.pseudos, plain_scf,
+                      energies=float(plain_scf.homo) + np.array([-0.05, 0.0]),
+                      width=WIDTH, shape=(4, 4), height=0.0, axis=2)
+    assert np.asarray(through.values).min() > 0.0
 
 
 def test_an_ultracell_result_is_refused_by_name(pseudo_dir):

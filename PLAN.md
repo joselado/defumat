@@ -16016,7 +16016,13 @@ is sampled and squared here, where an image sums into a density.
 * **A tip inside an augmentation sphere.** There the pseudo-wavefunction is not the true
   one and `sum_G c* c` is short -- 9 per cent on an ultrasoft carbon sheet and 3 per cent on
   PAW silicon, already measured by `volume_overlap`. The image needs nothing, because the
-  augmentation charge follows the tunnelling weights into the density. `run_sts` inherits
+  augmentation charge follows the tunnelling weights into the density. On a **dense bulk**
+  ultrasoft crystal the guard leaves nowhere to put a tip at all -- SiC's radius is 2.395
+  bohr and its layers are closer together, so every plane is inside a sphere -- and that is
+  the right answer rather than an obstacle, since a tip sits above a *surface*, in vacuum,
+  which is exactly where a pseudo-wavefunction is the true one. The test takes two heights
+  and checks the guard reports two different distances, 0.0 and 1.665 bohr, because a guard
+  returning one constant could not be told from one that had stopped looking. `run_sts` inherits
   the transmission's `_refuse_an_augmented_plane`; the ultracell refuses ultrasoft and PAW
   outright and is exempt.
 
