@@ -1226,6 +1226,16 @@ def test_a_noncollinear_ultracell_is_the_tiled_unit_cell(tmp_path, pseudo_dir):
     direction = moments[0] / np.linalg.norm(moments[0])
     assert direction == pytest.approx(np.full(3, 1 / np.sqrt(3)), abs=2e-3)
 
+    # **The energy, per unit cell, on the one regime where its contraction has
+    # four components.** ``deband`` is one sum over ``(n, m_x, m_y, m_z)``
+    # against the same four components of the potential, which is QE's
+    # ``delta_e`` and has no spinor branch -- and the unit tests check that
+    # contraction on arithmetic, where this checks it on a converged state.
+    # Smeared, so ``demet`` is live and its own ``/N`` is exercised here rather
+    # than on a synthetic array.
+    assert result.total_energy == pytest.approx(scf.total_energy, abs=1e-10)
+    assert result.field_energy is None
+
 
 @pytest.mark.slow
 def test_a_turning_field_turns_the_magnetization(tmp_path, pseudo_dir):
@@ -1350,7 +1360,7 @@ def test_a_uniform_vector_field_is_the_unit_cell_under_the_same_field(
     def uniform(x):
         return np.broadcast_to(np.asarray(field), x.shape[:-1] + (3,))
 
-    errors = []
+    errors, energies = [], []
     for nbnd in (16, 32, 64):
         result = run_ultracell(
             calculator.system, calculator.pseudos, scf, (1, 1, 1), kgrid,
@@ -1361,6 +1371,7 @@ def test_a_uniform_vector_field_is_the_unit_cell_under_the_same_field(
         moment = result.cell_moments()[0]
         errors.append(float(np.linalg.norm(moment - m_ref)
                             / np.linalg.norm(m_ref)))
+        energies.append((result.total_energy, result.field_energy))
         jax.clear_caches()
 
     # **Monotone, and no sign is asserted on the approach.** The ultracell
@@ -1370,6 +1381,22 @@ def test_a_uniform_vector_field_is_the_unit_cell_under_the_same_field(
     # fail spuriously.
     assert errors == sorted(errors, reverse=True), errors
     assert errors[0] < 3e-2 and errors[-1] < 3e-3, errors
+
+    # **The energy under a *vector* field, where the Zeeman contraction has
+    # three components rather than one.** The convention is QE's and Elk's --
+    # a field put in by hand is carried beside the total, not inside it -- and
+    # what is bounded is therefore the **sum**, since the quantity a run under a
+    # field minimises is the full energy. The collinear test measures the same
+    # pair; this is the one where a sign living in a transverse component could
+    # hide, because ``m_y`` is a twentieth of ``m_x`` here.
+    free = [total + field_energy for total, field_energy in energies]
+    exact = reference.total_energy + reference.field_energy
+    assert free == sorted(free, reverse=True), free
+    for nbnd, value in zip((16, 32, 64), free):
+        assert value > exact, (
+            f"nbnd = {nbnd}: {value:.12f} Ry against {exact:.12f}; what a run "
+            f"under a field minimises is total_energy + field_energy"
+        )
 
 
 @pytest.mark.slow

@@ -29,8 +29,8 @@ eigenvalue is not an upper bound on the supercell's, and neither is a density.
 ``energyulr.f90`` is the eigenvalue sum alone, and ``pw.x`` has no ultracell).
 The reported number is the Kohn-Sham free energy of the state the iteration
 produced, and the bases are **nested** in ``nbnd``, so it falls monotonically
-towards the supercell's own from above: +8.14e-05, +3.56e-06, +4.06e-07 and
-+1.85e-07 Ry at ``nbnd = 12, 24, 48, 64`` on two-cell silicon under an applied
+towards the supercell's own from above: +8.15e-05, +3.52e-06, +3.62e-07 and
++1.43e-07 Ry at ``nbnd = 12, 24, 48, 64`` on two-cell silicon under an applied
 modulation.
 
 **The density is mixed, not the potential.** Elk mixes its ``Q``-resolved
@@ -179,7 +179,7 @@ class UltracellResult:
     #: **It is the one quantity here that converges with a sign.** The bases are
     #: nested in ``nbnd``, so it falls monotonically towards the ``N``-cell
     #: supercell's own energy from above, where an eigenvalue or a density does
-    #: not: +8.14e-05, +3.56e-06, +4.06e-07 and +1.85e-07 Ry at
+    #: not: +8.15e-05, +3.52e-06, +3.62e-07 and +1.43e-07 Ry at
     #: ``nbnd = 12, 24, 48, 64`` on two-cell silicon under an applied
     #: modulation. Comparing it against a supercell needs the **same** FFT box
     #: on both sides, since two discretisations of the same functional differ by
@@ -969,7 +969,6 @@ def _result(density, delta_v, levels, occupations, fermi, converged, iterations,
     which want it.
     """
     total, charge_dr2, magnetic_dr2 = accuracy
-    field_energy = terms.get("_field_energy", 0.0)
     if blocks == 1:
         levels, occupations = levels[0], occupations[0]
     return UltracellResult(
@@ -987,7 +986,13 @@ def _result(density, delta_v, levels, occupations, fermi, converged, iterations,
         ultracell=ultracell, reference=reference,
         seconds=time.time() - started, history=tuple(history),
         energy_history=tuple(energies),
-        field_energy=None if not field_energy else float(field_energy),
+        # Keyed on there *being* a field, not on its energy being non-zero:
+        # ``SCFResult`` does the same (``None if field is None``), and a field
+        # whose Zeeman energy happens to vanish -- one perpendicular to every
+        # moment, which a turning field passes through -- is not the same thing
+        # as no field at all.
+        field_energy=(None if terms.get("_field_energy") is None
+                      else float(terms["_field_energy"])),
         cell_volume=cell_volume,
     )
 

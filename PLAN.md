@@ -15550,19 +15550,34 @@ package's own SCF at `E/N = -15.630111127875` Ry:
 
 | `nbnd` | `E` (Ry) | above the supercell | drop |
 |---|---|---|---|
-| 12 | -15.630029697332 | +8.143e-05 | |
-| 24 | -15.630107564730 | +3.563e-06 | -7.787e-05 |
-| 48 | -15.630110722359 | +4.055e-07 | -3.158e-06 |
-| 64 | -15.630110942868 | +1.850e-07 | -2.205e-07 |
+| 12 | -15.630029667661 | +8.146e-05 | |
+| 24 | -15.630107604990 | +3.523e-06 | -7.794e-05 |
+| 48 | -15.630110766065 | +3.618e-07 | -3.161e-06 |
+| 64 | -15.630110984544 | +1.433e-07 | -2.185e-07 |
 
-**Monotone and above at every rung, over a factor of 440 in the gap.**
+**Monotone and above at every rung, over a factor of 570 in the gap.**
+
+**Every number in that table is what `run_ultracell` reports, and the first version of it
+was not** -- which is worth the space it takes, because the defect was the one this phase
+had just measured at a factor of 10^7. The table was first taken with a scratch script
+that assembled the energy from the *result*, handing `result.density` to both potentials,
+so its `deband` paired `rho_out` with `v[rho_out]`. Its own comment said the loop had made
+the two equal at convergence and that is **false**: `density = new` happens *after* the
+matrix was built from the previous iteration's mixed density, so the last iteration still
+has `rho_in != rho_out`. The systematic that left is nearly a constant, **4e-8 Ry**, and
+the rungs it moved are the two the claim lives on: `nbnd = 48` read +4.055e-07 and is
++3.618e-07, `nbnd = 64` read +1.850e-07 and is +1.433e-07. The claims survive -- monotone,
+above, and under 1e-6 -- and the values did not. **The regression test had the pairing
+right all along and never printed a value**, which is exactly how a wrong number outlives
+a right test: the test asserted the *claims*, and the record quoted the script.
 
 **That bound has two preconditions and the first of them is why the phase's other ladders
 have a floor.** The two sides must discretise the **same** functional, and by default they
 do not: the supercell picks its dense FFT grid from its own cutoff and gets `(32, 15, 15)`
 where the tiled unit cell's is `(30, 15, 15)`. Run at `ecutwfc = 12` the same ladder reads
-+9.02e-05, +3.03e-06 and **-1.06e-07** -- it goes *below* the supercell at the third rung
-and the bound reads as violated. What that is worth was measured rather than argued, by
++9.02e-05, +2.99e-06 and **-1.49e-07** -- it goes *below* the supercell at the third rung
+and the bound reads as violated, and that too is `run_ultracell`'s own number rather than
+the scratch script's. What that is worth was measured rather than argued, by
 running the supercell at four dense cutoffs: for a norm-conserving dataset the density is
 band-limited at `4 ecutwfc`, so raising `ecutrho` adds no Fourier component and changes only
 the real-space grid the exchange-correlation integral is taken on.

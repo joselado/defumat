@@ -139,7 +139,11 @@ def test_the_field_leaves_the_total_and_is_reported_beside_it(silicon):
         magnetic_potential=zeeman,
     )
     field_energy = fielded["_field_energy"]
-    assert field_energy != 0.0
+    assert field_energy is not None and field_energy != 0.0
+    # ... and without a field the entry is ``None`` rather than zero, because a
+    # field whose Zeeman energy vanishes -- one perpendicular to every moment,
+    # which a turning field passes through -- is not the same thing as no field.
+    assert plain["_field_energy"] is None
     assert total_of(fielded) == pytest.approx(
         total_of(plain) - field_energy, rel=1e-12
     )

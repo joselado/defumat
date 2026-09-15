@@ -5285,6 +5285,16 @@ its default is the ordinary fixed-density one.
 
 ### What the total energy costs the loop (P88 stage 4)
 
+**There is no reference implementation to time this against, and that is the entry rather
+than an omission.** `CLAUDE.md` asks every feature taken from Quantum ESPRESSO or Elk for
+the other code's wall clock beside ours; this one was taken from neither. Elk's
+`energyulr.f90` computes the occupied eigenvalue sum and stops, `writeengyu.f90` prints
+that and the Fermi level, and `pw.x` has no ultracell at all -- so there is nothing on the
+other side of the comparison to put a clock on. What can be measured is what the quantity
+costs the loop that now reports it, which is below, and the like-for-like comparison this
+phase does have is the ultracell against the supercell it approximates, in the two
+sections after this one.
+
 An ultracell iteration now evaluates the Hartree and exchange-correlation terms a
 **second** time, at the iteration's *output* density rather than at the mixture the next
 one starts from. That is what makes QE's `descf` correction unnecessary here -- every

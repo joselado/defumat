@@ -4291,8 +4291,8 @@ with \code{nbnd} (\code{tests/regression/test\_ultracell.py}).
 run reports as \code{total\_energy} is the Kohn-Sham free energy of the state
 the loop converged to, and the bases are \emph{nested} in \code{nbnd}, so it is
 a monotone non-increasing upper bound on the $N$-cell supercell's own energy:
-$+8.14\times10^{-5}$, $+3.56\times10^{-6}$, $+4.06\times10^{-7}$ and
-$+1.85\times10^{-7}$~Ry at \code{nbnd = 12, 24, 48, 64} on that same silicon
+$+8.15\times10^{-5}$, $+3.52\times10^{-6}$, $+3.62\times10^{-7}$ and
+$+1.43\times10^{-7}$~Ry at \code{nbnd = 12, 24, 48, 64} on that same silicon
 cell. Comparing against a supercell needs the \emph{same} FFT box on both
 sides, since two discretisations of one functional differ by about
 $10^{-6}$~Ry per cell here, which is larger than the top of that ladder; within
@@ -4390,15 +4390,15 @@ density. The energy is a bound because the bases are \emph{nested}: raising
 $\mathbf Q$ of the folded k-point spheres is the supercell's own plane-wave
 space. So \code{total\_energy} falls monotonically towards the real supercell's
 from above, and on two-cell silicon under an applied modulation it does:
-$+8.14\times10^{-5}$, $+3.56\times10^{-6}$, $+4.06\times10^{-7}$ and
-$+1.85\times10^{-7}$~Ry at \code{nbnd = 12, 24, 48, 64}.
+$+8.15\times10^{-5}$, $+3.52\times10^{-6}$, $+3.62\times10^{-7}$ and
+$+1.43\times10^{-7}$~Ry at \code{nbnd = 12, 24, 48, 64}.
 
 \textbf{Comparing against a supercell needs the same FFT box on both sides.}
 Two discretisations of one functional differ by about $10^{-6}$~Ry per cell
 here, which is larger than the top of that ladder, and a supercell picks its
 dense grid from its own cutoff: at the default \code{ecutwfc = 12} it takes
 $(32,15,15)$ where the tiled unit cell's is $(30,15,15)$, and the third rung
-then comes out $1.06\times10^{-7}$~Ry \emph{below} the supercell. Choose a
+then comes out $1.49\times10^{-7}$~Ry \emph{below} the supercell. Choose a
 cutoff at which the two grids agree --- \code{ecutwfc = 13} puts the unit cell on
 $(18,18,18)$ and the two-cell supercell on $(36,18,18)$ --- and do it through
 \code{ecutwfc} rather than \code{ecutrho}, since an ultracell refuses a double

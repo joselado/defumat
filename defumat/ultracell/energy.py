@@ -73,7 +73,7 @@ eigenvalue is not an upper bound on the supercell's. The energy is different.
 The Kohn-Sham free energy minimised over a family of subspaces that are *nested*
 in ``nbnd`` is a monotone non-increasing upper bound on the supercell's own, and
 it was measured to be: two-cell silicon under an applied modulation reads
-+8.14e-05, +3.56e-06, +4.06e-07 and +1.85e-07 Ry above a real four-atom
++8.15e-05, +3.52e-06, +3.62e-07 and +1.43e-07 Ry above a real four-atom
 supercell at ``nbnd = 12, 24, 48, 64``. Under a **magnetic field** the bounded
 quantity is ``total_energy + field_energy`` rather than the total, for the
 reason above.
@@ -88,6 +88,17 @@ vectors by construction -- ``evc`` is a rotation of the trial set
 (``solvers/davidson.py:422``) -- so ``diag(eps)`` is the exact projected
 ``H_cell`` at any ``states_conv_thr``, and a loose one only makes the span
 slightly worse, which the argument tolerates at second order.
+
+**Everything here syncs to the host, and that is deliberate rather than
+careless.** Every term is returned as a Python ``float``, which would kill a
+gradient silently if anything differentiated it -- ``CLAUDE.md``'s
+``np.asarray`` trap. Nothing does: the ultracell loop is Python and
+``grid.py``'s own docstring records that nothing in the subpackage crosses a
+``jit`` or a ``grad``, because the atoms do not move and there is no force to
+take. A future derivative of this energy -- a `dE/dq` for a modulation
+wavevector, say -- would have to take the terms as arrays first, and it would
+find the sync rather than a wrong answer, because a traced value cannot be
+turned into a ``float`` at all.
 
 There is a third precondition that is not a tolerance either: the free energy
 has to be *minimised* at the self-consistent point, and **Methfessel-Paxton
@@ -182,7 +193,7 @@ def ultracell_energy(
     element = ultracell.volume(cell) / density_out[0].size
 
     v = potential_in.v_scf
-    field_energy = 0.0
+    field_energy = None
     if magnetic_potential is not None:
         # ``int rho . v_field`` over the components *is* ``-int B . m``,
         # collinear (``v_up = -B``, ``v_dw = +B``) and spinor (``v(2:4) = -B``)
