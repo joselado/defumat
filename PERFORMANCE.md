@@ -5283,6 +5283,52 @@ time is the frozen-state Davidson reaching for many empty bands at a tight thres
 rather than anything in the ultracell loop. `states_conv_thr` is the dial for that and
 its default is the ordinary fixed-density one.
 
+### What the total energy costs the loop (P88 stage 4)
+
+An ultracell iteration now evaluates the Hartree and exchange-correlation terms a
+**second** time, at the iteration's *output* density rather than at the mixture the next
+one starts from. That is what makes QE's `descf` correction unnecessary here -- every
+iteration's number is then the Kohn-Sham energy of a state that exists rather than a
+mixture's corrected to first order -- and `run_scf` cannot take the same trade, having
+`pw.x`'s convention to match.
+
+**The expected change is zero, so this is medians with a stated sample count**, not a
+best-of-N: best-of-N is right for a change expected to move a number and wrong for a
+check that it did not. Four-cell silicon, `ecutwfc = 12`, `nbnd = 24`, `(1, 2, 2)` over
+the ultracell's zone, eight iterations, five samples of each arm, **interleaved**.
+
+| | median, s | the five samples |
+|---|---|---|
+| with the energy | **8.252** | 7.662, 8.179, 8.252, 8.486, 8.353 |
+| the assembly stubbed out | **8.277** | 7.975, 7.953, 8.979, 8.921, 8.277 |
+
+**0.30 per cent apart, inside a spread of about ten per cent within either arm** -- so
+the energy costs nothing this instrument can resolve, and the number to quote is the
+bound rather than the difference. The sign is negative, which is impossible, and that is
+the point: it is noise.
+
+**The A/B is a monkey-patch in one process rather than two commits**, because a bisection
+across commits is a bisection across cache states. The loop makes exactly two
+`ultracell_potential` calls an iteration and consumes one of them -- the first, at the
+mixed density, is what `delta_v` and the matrix are built from, and the second is read
+only by the energy -- so returning the first one's object for the second call removes the
+energy's cost and changes nothing the loop uses.
+
+**The first version of this measurement had an impossible sign that was *not* noise, and
+that is the part worth keeping.** Run as five samples of one arm and then five of the
+other, it read the arm *with* the extra work as **3.8 per cent faster**, and the two sets
+did not overlap at all: 8.069 s against 8.389, maximum 8.119 against minimum 8.323.
+Removing work cannot make it slower, so what that measured was the **order** -- whatever
+drifts over a process's life drifted between the two blocks. It is `CLAUDE.md`'s "a
+bisection across commits is a bisection across cache states" happening inside a single
+process, and interleaving the arms is what cancels it. A ratio on its own would have been
+believed; the sign is what made it visible.
+
+**What this does not explain**: `notebooks/44` reads 188 s against 164 s before the
+energy landed. At 0.3 per cent of an iteration the energy cannot be 15 per cent of a
+notebook, so that difference is **unattributed** -- one sample, on a path whose compiled
+code had changed, is not a timing.
+
 ### What a spinor costs, against the same ultracell with one channel (P88 stage 3b)
 
 A noncollinear ultracell pays on three counts, and only the first is about spin. They

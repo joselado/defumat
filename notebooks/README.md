@@ -275,11 +275,14 @@ workstation core, slowest last:
 | `00` | 22 | `23` | 35 | `30` | 131 |  |  |
 | `07` | 22 | `32` | 35 | `39` | 151 |  |  |
 
-`44` went from 164 s to 188 s on 2026-09-15, when it gained the total energy: the extra
-cell runs nothing of its own -- the uniform reference is the ordinary crystal's own SCF,
-which is already converged -- so the 24 s is the one further potential evaluation per
-iteration that every ultracell run now pays to report a Kohn-Sham energy rather than an
-eigenvalue sum.
+`44` read 188 s on 2026-09-15 against 164 s before it gained the total energy, and **the
+24 s is not attributed to the energy**, which is the honest version of a sentence that
+first said it was. The added cell runs nothing of its own: the uniform reference is the
+ordinary crystal's own SCF, already converged. What the energy does add is one further
+potential evaluation per iteration, and an interleaved A/B measures that at **0.3 per
+cent of an iteration, inside a 10 per cent spread** (`PERFORMANCE.md`), so it cannot be
+15 per cent of a notebook. What the 24 s is instead has not been measured -- one sample,
+on a path whose compiled code had changed, is not a timing.
 
 `17` went from 29 s to 203 s on 2026-09-14, when it gained a noncollinear iron cell run
 through two mixers, and that figure is an **upper bound**: it was taken while three other
