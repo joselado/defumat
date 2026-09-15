@@ -3188,6 +3188,11 @@ transmission's own weight rather than on the delta: `h-sheet.in`, one tip point,
 | `4w` | 3.8444e-09 | 0.29828 |
 | `12w` | 1.5611e-09 | 0.12112 |
 
+**The reference is converged to about 2e-4, not to the five decimals the ratios are
+printed at**: `w/4` differs from `w/8` by 1.7e-4, so the first two rows are meaningful to
+three decimals. The conclusions sit well above that -- the `w` row is 3e-3 from one and the
+`2w` row 1e-2 -- but the ratios are not a fifth-decimal statement.
+
 So the threshold carries in units of `broadening` and the *numbers* do not: the bare delta
 reads 1.14 at `2w` and 0.10 at `4w`, and a sum over several levels reads 1.010 and 0.298.
 What is the same is the shape -- one point per width passes at 0.997, and the failure is
@@ -3197,16 +3202,26 @@ can tell which it did.
 The guard is in `_energies` (`workflows/transport.py`), after the `nenergies >= 2` check
 and before the `linspace`, at the same `broadening * (1 + 1e-8)` boundary the STM one uses,
 and it names the `nenergies` that would do rather than leaving the reader the division.
-**There were three call sites, not the two this entry named**: `run_vertical_transport`,
-`run_momentum_transport` and `run_ultracell_transport`, the last in `workflows/ultracell.py`
-rather than beside the others -- `broadening` is now a required argument of `_energies`, so a
-fourth cannot forget it. `run_sts`'s axis goes through `_spectrum_energies` instead and is
+**The check is at the door rather than in `_energies`**, which runs *after* the
+fixed-density re-solve a `grid=` asks for: it needs only `bias`, `nenergies` and
+`broadening`, so being refused after paying for an NSCF would have been the same mistake
+Part VI item 1 records one entry point over. `_check_bias_axis` is called first in each
+entry point and from `_energies` as well, so a caller that reaches it another way is still
+guarded. **There were three call sites, not the two this entry named**:
+`run_vertical_transport`, `run_momentum_transport` and `run_ultracell_transport`, the last
+in `workflows/ultracell.py` rather than beside the others.
+
+**What was not run end to end**: only `run_vertical_transport` was exercised with a real
+`bias=` window. The other two take `broadening` two lines from where they take `bias`, so
+that they forward it is read rather than measured, and the ordering test above is a
+statement about two calls in a source file rather than about a run. `run_sts`'s axis goes through `_spectrum_energies` instead and is
 integrated by `STMSpectrum.current`, which already had the guard.
 
-Three tests in `tests/unit/test_transport_machinery.py`, all in the gate and none needing an
+Four tests in `tests/unit/test_transport_machinery.py`, all in the gate and none needing an
 SCF: one that **fires** and whose suggested `nenergies` is then checked to pass, one at the
-boundary, and one showing an `energies=` list without `bias=` is untouched -- there is no
-trapezoid there, so each energy is its own zero-bias conductance.
+boundary, one showing an `energies=` list without `bias=` is untouched -- there is no
+trapezoid there, so each energy is its own zero-bias conductance -- and one reading the
+order of the two calls off each entry point's source.
 
 ## 2. The reference pair for a unit-cell tunnelling spectrum was not taken **[2026-09-15]**
 

@@ -1052,20 +1052,23 @@ def test_a_bias_window_too_coarse_for_the_leads_is_refused_by_name():
     passes, which is the whole point of ``OPEN.md``'s entry about a check whose
     null result cannot be told from a pass.
     """
-    from defumat.workflows.transport import _energies
+    from defumat.workflows.transport import _check_bias_axis, _energies
 
-    levels = {"fermi_energy": 0.0}
     with pytest.raises(ValueError, match="steps over the levels"):
-        _energies(0.0, levels, 0.24, 7, 0.02)
+        _check_bias_axis(0.24, 7, 0.02)
 
     # the message names the count that would work, and that count works
     try:
-        _energies(0.0, levels, 0.24, 7, 0.02)
+        _check_bias_axis(0.24, 7, 0.02)
     except ValueError as error:
         suggested = int(str(error).split("nenergies >= ")[1].split(",")[0])
     assert suggested == 13
-    axis = _energies(0.0, levels, 0.24, suggested, 0.02)
+    axis = _energies(0.0, {"fermi_energy": 0.0}, 0.24, suggested, 0.02)
     assert float(np.max(np.diff(axis))) <= 0.02 * (1.0 + 1.0e-8)
+
+    # the sign of the bias is a direction and not a step
+    with pytest.raises(ValueError, match="steps over the levels"):
+        _check_bias_axis(-0.24, 7, 0.02)
 
 
 def test_one_point_per_width_is_the_boundary_and_it_passes():
@@ -1091,3 +1094,29 @@ def test_the_guard_is_about_the_trapezoid_and_not_about_an_energy_list():
 
     coarse = _energies([0.0, 1.0, 2.0], {"fermi_energy": 0.0}, None, 3, 1.0e-6)
     assert np.allclose(coarse, [0.0, 1.0, 2.0])
+
+
+def test_the_bias_axis_is_checked_before_the_fixed_density_solve():
+    """Refused **at the door**, not after an NSCF has been paid for.
+
+    The check needs only ``bias``, ``nenergies`` and ``broadening``, none of
+    which depend on the run, so a caller who asks for a denser ``grid=`` should
+    not pay for the whole re-solve and be refused afterwards -- which is what
+    ``_energies`` alone would have done, since it runs after the bands. This is
+    a statement about the *order* of two calls, so it is read off the source of
+    each entry point rather than timed.
+    """
+    import inspect
+
+    from defumat.workflows import transport, ultracell
+
+    # Each entry point against the first thing it does that costs anything: the
+    # fixed-density solve where there is one, and the tip sampling where there
+    # is not -- ``run_ultracell_transport`` takes its states already solved.
+    entries = [(transport.run_vertical_transport, "fixed_density_states("),
+               (transport.run_momentum_transport, "fixed_density_states("),
+               (ultracell.run_ultracell_transport, "_tip_points(")]
+    for entry, expensive in entries:
+        body = inspect.getsource(entry)
+        assert body.index("_check_bias_axis(") < body.index(expensive), \
+            entry.__name__

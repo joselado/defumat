@@ -55,6 +55,7 @@ from defumat.workflows.stm import (
 from defumat.workflows.transport import (
     DEFAULT_BROADENING,
     _assemble,
+    _check_bias_axis,
     _energies,
     _label,
     _tip_points,
@@ -300,6 +301,7 @@ def run_ultracell_transport(
         )
     if axis is None:
         axis = exit_axis
+    _check_bias_axis(bias, nenergies, broadening)
     _refuse_what_has_no_tip_energy(system, result)
     _refuse_a_stacked_ultracell(states, exit_axis)
     _refuse_a_k_set_this_cannot_sum(states, exit_axis)

@@ -219,6 +219,7 @@ def run_vertical_transport(
             f"unknown exit_region {exit_region!r}: use 'plane' (the substrate) "
             "or 'volume' (the Tersoff-Hamann diagnostic)"
         )
+    _check_bias_axis(bias, nenergies, broadening)
 
     if kpoints is None and grid is not None:
         kpoints = whole_grid(system, grid, shift)
@@ -422,6 +423,7 @@ def run_momentum_transport(
         )
     if exit_axis not in (0, 1, 2):
         raise ValueError(f"exit_axis must be 0, 1 or 2, got {exit_axis}")
+    _check_bias_axis(bias, nenergies, broadening)
 
     if kpoints is None and grid is not None:
         kpoints = whole_grid(system, grid, shift)
@@ -1088,6 +1090,49 @@ def _tip_points(cell, height, axis, plane, shape, tip,
     return geometry, geometry.flat()
 
 
+def _check_bias_axis(bias, nenergies, broadening):
+    """The bias window's own axis, checked **at the door**.
+
+    It needs none of the run -- only ``bias``, ``nenergies`` and ``broadening``
+    -- so it is called before the fixed-density re-solve a ``grid=`` asks for,
+    rather than from :func:`_energies` alone, which runs after it. Being refused
+    after paying for an NSCF is the thing ``OPEN.md`` Part VI item 1 calls
+    refusing at the door, one entry point over.
+    """
+    if bias is None:
+        return
+    if int(nenergies) < 2:
+        raise ValueError(
+            f"integrating a bias window needs at least two points, got "
+            f"{nenergies}: without bias= a single energy is the zero-bias "
+            "conductance"
+        )
+    # **A trapezoid cannot integrate a delta it does not resolve**, the same
+    # guard :meth:`defumat.stm.spectrum.STMSpectrum.current` carries and for the
+    # same reason. ``amplitude_weights`` is the square root of the smeared
+    # delta and the transmission squares it back, so the integrand is the delta
+    # itself and the threshold is the delta's. Measured on ``h-sheet.in`` at
+    # ``broadening = 0.02`` Ry over a 0.24 Ry window, against a ``w/8`` axis:
+    # 0.99917 at ``h = w/2``, 0.99673 at ``w``, **1.00977 at ``2w``**, 0.29828
+    # at ``4w`` and 0.12112 at ``12w`` -- so the failure is not monotone either,
+    # and a coarse axis reads high before it collapses.
+    width = float(broadening)
+    step = abs(float(bias)) / (int(nenergies) - 1)
+    # One point per width is the boundary and it passes, at 0.997. The tolerance
+    # is there so that a window built to land exactly on it does not fail on the
+    # last bit of the division.
+    if step > width * (1.0 + 1.0e-8):
+        needed = int(np.ceil(abs(float(bias)) / width)) + 1
+        raise ValueError(
+            f"the bias window steps {step:.3e} Ry where the leads let states "
+            f"through over {width:.3e} Ry, so the trapezoid steps over the "
+            "levels rather than integrating them and the current would be "
+            "wrong by orders rather than by per cent -- and it can read high "
+            f"before it reads low. Use nenergies >= {needed}, or a wider "
+            "broadening=, which is what a window meant to be integrated wants"
+        )
+
+
 def _energies(energies, levels, bias, nenergies, broadening):
     """The energies in Ry: one, a list, or a bias window to integrate over."""
     if energies is None:
@@ -1115,37 +1160,10 @@ def _energies(energies, levels, bias, nenergies, broadening):
             "a bias window starts at one energy: pass a scalar energies= with "
             "bias=, or a list of energies without it"
         )
-    if int(nenergies) < 2:
-        raise ValueError(
-            f"integrating a bias window needs at least two points, got "
-            f"{nenergies}: without bias= a single energy is the zero-bias "
-            "conductance"
-        )
+    # Both of the window's own checks, so that calling this without having gone
+    # through the door is still guarded; the entry points call it first.
+    _check_bias_axis(bias, nenergies, broadening)
     low, high = sorted((float(grid[0]), float(grid[0]) + float(bias)))
-    # **A trapezoid cannot integrate a delta it does not resolve**, the same
-    # guard :meth:`defumat.stm.spectrum.STMSpectrum.current` carries and for the
-    # same reason. ``amplitude_weights`` is the square root of the smeared
-    # delta and the transmission squares it back, so the integrand is the delta
-    # itself and the threshold is the delta's. Measured on ``h-sheet.in`` at
-    # ``broadening = 0.02`` Ry over a 0.24 Ry window, against a ``w/8`` axis:
-    # 0.99917 at ``h = w/2``, 0.99673 at ``w``, **1.00977 at ``2w``**, 0.29828
-    # at ``4w`` and 0.12112 at ``12w`` -- so the failure is not monotone either,
-    # and a coarse axis reads high before it collapses.
-    step = (high - low) / (int(nenergies) - 1)
-    if step > float(broadening) * (1.0 + 1.0e-8):
-        # One point per width is the boundary and it passes, at 0.997. The
-        # tolerance is there so that a window built to land exactly on it does
-        # not fail on the last bit of the division.
-        needed = int(np.ceil((high - low) / float(broadening))) + 1
-        raise ValueError(
-            f"the bias window steps {step:.3e} Ry where the leads let states "
-            f"through over {float(broadening):.3e} Ry, so the trapezoid steps "
-            "over the levels rather than integrating them and the current "
-            "would be wrong by orders rather than by per cent -- and it can "
-            f"read high before it reads low. Use nenergies >= {needed}, or a "
-            "wider broadening=, which is what a window meant to be integrated "
-            "wants"
-        )
     return np.linspace(low, high, int(nenergies))
 
 
