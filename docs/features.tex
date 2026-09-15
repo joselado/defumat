@@ -4159,6 +4159,17 @@ as the map, and nothing is sampled in real space, so it costs a small fraction
 of one --- two Gram matrices and an $n_{\rm bnd}^2$ trace, against an
 $n_k \times n_{\rm bnd} \times n_{\rm points}$ sampling.
 
+\textbf{Both sides of it are Brillouin-zone integrals, so it holds mesh for
+mesh.} Passing \code{grid=} re-solves the bands on the grid you name, which is
+what the refusals below require; comparing the result against a quantity built
+on the k-points the SCF converged on then compares two different integrals of
+the same integrand. \code{run\_stm} is that case and has no \code{grid} of its
+own, so a comparison against it takes no \code{grid} here either. On the
+hydrogen sheet of the test suite, whose SCF runs a $4\times4\times1$ grid,
+$\sum_{\mathbf k}$ \code{tersoff\_hamann} is the image's plane integral to
+$1.2\times10^{-13}$ on the SCF's own k-points and a factor of $7.7$ out on a
+$3\times3\times1$ one.
+
 \textbf{Three columns come back together}, because they are the same trace with
 one or both matrices replaced by the identity, and \emph{the physics is in their
 ratio}. \code{weight} is $W(\mathbf k)$; \code{tersoff\_hamann} is its

@@ -2960,7 +2960,47 @@ off and `with_spin`'s axis-finding is where to look. That is one cheap run and i
 been done.
 
 
-### 2. Three of `test_transport.py`'s 28 fail on master, two by a factor and one by eight orders
+### 2. Three of `test_transport.py`'s 28 fail on master, two by a factor and one by eight orders **[closed 2026-09-15 -- three different causes, and the entry's own ranking was right]**
+
+> **The factor of 7.7 is a mesh mismatch, and it is structural rather than arithmetic.**
+> `test_the_two_limits_are_the_stm_image_and_the_fermi_surface_on_a_real_cell` asks
+> `run_momentum_transport` for `grid = (3, 3, 1)` and compares it against `run_stm`, which
+> has no `grid` argument at all and integrates the k-points the SCF converged on, `4 4 1`
+> in `h-sheet.in`. Both sides are Brillouin-zone integrals of the same integrand, so they
+> agree mesh for mesh and not otherwise. Measured: 0.87 relative at `(3, 3, 1)`, 9.0e-5 at
+> `(4, 4, 1)` re-solved, and **1.17e-13 with no grid at all**, which is the figure the
+> README quotes. The entry's observation that the weight sits on half the mesh is the
+> coarse grid crossing the Fermi contour somewhere else and not a defect in the limit.
+> What makes this structural is the sibling one test above, which passes: it hands
+> `grid = (3, 3, 1)` to **both** of its sides through a shared dict, and this test copied
+> the argument into the half that accepts one.
+>
+> **Two things came out of fixing it.** The docstring promised the `bare` column against
+> `fermi_surface_weights` and the body never asserted it, the import sitting unused at the
+> top of the function; the assertion is now there and holds **per k-point** at 2e-16 at
+> both `eta = 0.02` and `0.05`. Writing it from the docstring would have been wrong twice:
+> there is no `1/eta`, and the degeneracy must be **1** rather than the function's default
+> of 2, because the k-weights already carry `degspin` and sum to 2 on this cell. That is
+> P51's `for_spin` trap, and this is the only column here with an independent route to
+> catch it with.
+>
+> **The two near misses are not tolerance slop, they are two different unbounded
+> quantities.** For the three spin regimes, the control settles it: `nspin = 2` at zero
+> moment is the same solve twice and agrees at **1.7e-15**, while the spinor run is an
+> independent SCF and lands 1.7e-5 away -- and the same regime run again at `nbnd = 16`
+> rather than 8 lands **7.5e-5** away, four times further than the spinor does. So the
+> residual is what two independent SCF runs of this cell differ by, not anything the spinor
+> regime brings. It is not the empty bands either: `diago_full_acc = .true.` leaves the
+> ratio unchanged to every digit, which was the first hypothesis and is refuted. For the
+> substrate across the moment, the residual is the converged moment's own tilt out of the
+> plane, and **that tilt is not bounded by `conv_thr`** -- without spin-orbit coupling the
+> direction costs no energy, so `m_z/|m|` reads 7.215e-6 at `conv_thr = 1e-10` and
+> 7.251e-6 at `1e-12`, no change across two orders. The control that says it is the tilt
+> rather than the projector is the other in-plane axis: `m_y/|m|` is a fifth of `m_z` and
+> the `y` residual is an eighth of the `z` one, so the residual follows the component being
+> projected. Both axes are now asserted, both bounds are 1e-4, and the factor of two either
+> test exists to catch would read 1.0.
+
 
 **Found in passing** while checking that P89's refactor of `_assemble` changed nothing: the
 file came back `3 failed, 25 passed` at `c381be3`, and the same three fail at **`d085b54`**,

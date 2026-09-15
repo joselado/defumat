@@ -238,6 +238,18 @@ def test_the_three_spin_regimes_agree_where_there_is_no_magnetization(tmp_path):
     differently in each (2, then 1 per channel, then 1 with two components).
     Neither the contrast nor the partition can see that factor, both being
     ratios -- this is P51's ``for_spin`` trap in the form P52 records it.
+
+    **What the two tolerances are set by, measured rather than guessed.** The
+    collinear pair is the *same solve twice*, so it agrees at 1.7e-15 and is
+    held to round-off. The spinor run is an independent SCF of the same physics
+    and lands 1.7e-5 away, and the control that sizes that is the same regime
+    run again with a different band count -- ``nspin = 1`` at ``nbnd = 16``
+    rather than 8 is **7.5e-5** from this one, four times further than the
+    spinor is. So the residual is what two independently converged runs of this
+    cell differ by and not something the spinor regime brings: it is not the
+    empty bands either, since ``diago_full_acc`` leaves the spinor ratio
+    unchanged to every digit. The factor of two this test exists to catch would
+    read 1.0, which is four orders above the bound.
     """
     options = dict(shape=(4, 4), energies=-0.40, **SHEET)
     scalar = _converged("h-sheet")
@@ -256,7 +268,7 @@ def test_the_three_spin_regimes_agree_where_there_is_no_magnetization(tmp_path):
         [("nbnd = 8", "nbnd = 16")])
     c = run_vertical_transport(spinor.system, spinor.pseudos,
                                spinor.get_scf(), **options).image
-    assert abs(c.mean() / a.mean() - 1.0) < 1.0e-5
+    assert abs(c.mean() / a.mean() - 1.0) < 1.0e-4
 
 
 @pytest.mark.parametrize("regime,insert,nbnd,pair", [
@@ -290,9 +302,21 @@ def test_a_polarized_substrate_partitions_the_transmission(
 def test_a_substrate_across_the_moment_has_no_preference(tmp_path):
     """A magnet with its moment in the plane, and a substrate along ``z``.
 
-    Exactly half the total, because ``n.m = 0``. It is the statement that the
-    2x2 acceptance is a projector on a *direction* rather than a channel label,
-    and it cannot be said at all without a noncollinear run.
+    Half the total, because ``n.m = 0``. It is the statement that the 2x2
+    acceptance is a projector on a *direction* rather than a channel label, and
+    it cannot be said at all without a noncollinear run.
+
+    **It is half up to the moment's own tilt out of the plane, and that tilt is
+    not bounded by ``conv_thr``.** Without spin-orbit coupling the direction of
+    the magnetization costs no energy, so where the iteration stops rotating is
+    where it stops: tightening ``conv_thr`` from 1e-10 to 1e-12 moves the
+    converged ``m_z/|m|`` from 7.215e-6 to 7.251e-6, which is no change, while
+    the residual here goes 2.84e-5 to 2.16e-5. The residual follows the
+    component being projected rather than the threshold, which is the control
+    that says it is the tilt: ``m_y/|m|`` is 1.6e-6, a fifth of ``m_z``, and the
+    ``y`` residual is 3.6e-6, an eighth of the ``z`` one. Both axes are asserted
+    for that reason, and the bound is set above the tilt rather than above
+    round-off.
     """
     calculator = _variant(
         tmp_path, "h-sheet",
@@ -303,9 +327,10 @@ def test_a_substrate_across_the_moment_has_no_preference(tmp_path):
     result = calculator.get_scf()
     total = run_vertical_transport(calculator.system, calculator.pseudos,
                                    result, **options).image
-    across = run_vertical_transport(calculator.system, calculator.pseudos,
-                                    result, spin="z", **options).image
-    assert np.abs(across - 0.5 * total).max() / total.max() < 1.0e-5
+    for axis in ("z", "y"):
+        across = run_vertical_transport(calculator.system, calculator.pseudos,
+                                        result, spin=axis, **options).image
+        assert np.abs(across - 0.5 * total).max() / total.max() < 1.0e-4
 
 
 # --------------------------------------------------------------------------
@@ -676,9 +701,25 @@ def test_the_two_limits_are_the_stm_image_and_the_fermi_surface_on_a_real_cell()
 
     The Tersoff-Hamann column must be the plane integral of ``run_stm``'s image
     -- with no factor, for the reason the whole-cell test above gives -- and the
-    bare column must be ``fermi_surface_weights`` divided by ``eta`` and
-    multiplied by the k-weight, which is the third of the three routes to a
-    Fermi-level density of states in this package.
+    bare column must be :func:`fermi_surface_weights` times the k-weight, which
+    is the third of the three routes to a Fermi-level density of states in this
+    package.
+
+    **Both sides are Brillouin-zone integrals of the same integrand, so they
+    agree mesh for mesh and not otherwise**, and ``run_stm`` has no ``grid`` of
+    its own: it integrates the k-points the SCF converged on. So this passes no
+    ``grid``, unlike the test above, whose two sides both take one. Asking the
+    momentum run for ``(3, 3, 1)`` against the image's ``(4, 4, 1)`` gives 0.87
+    rather than 1e-13, and the per-k column shows why -- a coarser mesh crosses
+    the Fermi contour somewhere else, so four of its nine points carry 4.1e-4
+    and four carry 4.2e-9.
+
+    **The bare column's degeneracy is 1 and not 2.** The k-weights already carry
+    ``degspin``, summing to 2 on this unpolarized cell, so a
+    :func:`fermi_surface_weights` built with its default ``degeneracy = 2``
+    counts every electron twice and lands a factor of two high -- P51's
+    ``for_spin`` trap in the one place here that can see it, since this is the
+    only column with an independent route to compare against.
     """
     from defumat.response.nesting import fermi_surface_weights
     from defumat.workflows.transport import run_momentum_transport
@@ -689,13 +730,22 @@ def test_the_two_limits_are_the_stm_image_and_the_fermi_surface_on_a_real_cell()
     eta = 0.02
     run = run_momentum_transport(
         calculator.system, calculator.pseudos, scf,
-        exit_height=0.20, height=0.80, broadening=eta, grid=(3, 3, 1),
+        exit_height=0.20, height=0.80, broadening=eta,
         energies=float(scf.fermi_energy))
     image = run_stm(calculator.system, calculator.pseudos, scf,
                     height=0.80, shape=(24, 24), width=eta)
     area = surface_area(calculator.system.cell, 2)
     assert (abs(run.tersoff_hamann.sum() - area * np.asarray(image.values).mean())
             / (area * np.asarray(image.values).mean())) < 1.0e-9
+
+    # ... and the further limit, band by band and k-point by k-point rather
+    # than only in the sum, which is what makes a factor of two visible.
+    surface = fermi_surface_weights(
+        scf.eigenvalues, float(scf.fermi_energy), eta,
+        smearing=run.smearing, degeneracy=1.0)
+    bare = np.asarray(run.bare)
+    weights = np.asarray(scf.system.kpoints.weights, dtype=float)
+    assert np.abs(bare - surface * weights).max() / bare.max() < 1.0e-12
 
 
 def test_a_magnetic_plane_tip_is_refused_rather_than_approximated():
