@@ -1744,6 +1744,19 @@ a neighbouring minimum with off-diagonal spin traces of 1e-5 -- a real cant of t
 convergence criterion does not resolve. In all three cases the energy is converged two to
 four orders tighter than the magnetic quantity read off the same state.
 
+**A fourth instance, 2026-09-15, and it is the sharpest reading of `accuracy` so far.**
+`tests/regression/test_continuation.py`'s iron round trip (Part VIII item 1) fails at
+`conv_thr = 1e-8` and fails again at `1e-10`, the gap staying at about 1.5e-7 Ry across two
+orders of the threshold. The reason it does not move is that at both values the continued
+run still exits after **one** iteration, and a one-iteration continuation is where the
+weighting above does its worst: the run reports `accuracy = 4.5e-11` while its total energy
+is 1.0e-7 from the fixed point, a factor of two thousand, against a factor of about two for
+every from-scratch run of the same cell. The moment is what is moving, 5.7e-4 mu_B between
+the two loose runs against 5e-6 between the tight ones. `1e-12` fixes it not by being
+tighter but by rejecting that first residual, so the run takes three iterations; if
+`accuracy` is ever recalibrated, that test starts passing at `1e-8` again and nothing will
+say why, which is why the number is here as well as in the docstring.
+
 **What is not settled.** The three-orientation spread is now measured at one cutoff on one
 cell. Whether `1e-12` is the right default for a magnetic run generally, and whether the
 `ethr` schedule should be driven by the magnetization half rather than the sum on a
@@ -2886,7 +2899,29 @@ says now.
 
 # Part VIII -- from the workstation, 2026-09-14
 
-### 1. A spinor-to-collinear demotion lands 1.45e-7 Ry out, and the regression test fails on master
+### 1. A spinor-to-collinear demotion lands 1.45e-7 Ry out, and the regression test fails on master **[closed 2026-09-15 -- neither of the two candidates, and the experiment the entry proposed gave a third answer]**
+
+> **What it turned out to be.** The entry offered two readings, a demotion that drifted and
+> a convergence test satisfied before the residual is, and said nothing distinguished them.
+> The run it asked for distinguishes them and picks neither cleanly. Repeating the pair at
+> three thresholds: the gap is 1.45e-7 Ry at `conv_thr = 1e-8`, **1.53e-7 at 1e-10**, and
+> 2.3e-13 at 1e-12. It does not shrink between the first two because at both the continued
+> run still exits after one iteration; at 1e-12 the first residual is itself rejected, the
+> run takes three iterations, and both directions of the round trip land within 2.3e-13.
+> So the state the demotion recomposes is right and `with_spin`'s axis-finding is not where
+> to look. What the loose runs measure is where a single Davidson pass happens to stop, and
+> on a magnetic cell that is bounded very weakly indeed: the reported `accuracy` is 4.5e-11
+> where the energy error is 1.0e-7. The moments differ by 5.7e-4 mu_B at 1e-8 and 5e-6 at
+> 1e-12, which is the whole gap. That is Y1 above, in its fourth place.
+>
+> **Fixed** by putting the iron rotation on `CONTINUATION_THR = 1e-12` while the silicon
+> cases stay at 1e-8, with the three measurements in the constant's docstring so a
+> recalibration of `accuracy` cannot quietly undo it. The test takes 77 s against 51. P23's
+> table carried 2e-8 and 4e-8 for this pair and now carries 3e-14 and 2e-13; the drift
+> between those numbers and the ones this entry reported was drift in a quantity that is not
+> a property of the continuation, which answers the entry's "whether the demotion drifted"
+> as well.
+
 
 **Found in passing** while A/B-ing an unrelated change, so the A/B that matters was already
 run: `tests/regression/test_continuation.py::test_iron_collinear_to_noncollinear_rotates_the_moment`

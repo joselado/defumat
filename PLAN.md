@@ -2634,10 +2634,27 @@ starting guess is a guess and nothing else:
 |---|---|---|---|
 | Si, `nspin` 1 → 2 (seeded, decays to zero) | 5 | 4 | 2e-9 Ry |
 | Si, `nspin` 2 → 4 (nonmagnetic, `nspin_mag = 1`) | 5 | **1** | 1e-9 Ry |
-| bcc Fe, 2 → 4 with `angle1 = 90` | 25 | **1** | 2e-8 Ry |
-| bcc Fe, 4 → 2 back again (the axis found, not read) | 30 | **1** | 4e-8 Ry |
+| bcc Fe, 2 → 4 with `angle1 = 90` | ~50 | **3** | 3e-14 Ry |
+| bcc Fe, 4 → 2 back again (the axis found, not read) | 40 | **3** | 2e-13 Ry |
 | bcc Fe, 1 → 2, magnetization seeded | 30 | 27 | 5e-9 Ry |
 | Pt, scalar PAW → fully-relativistic PAW + `lspinorb` | 13 | **7** | 2e-10 Ry |
+
+**The iron pair is measured at `conv_thr = 1e-12` and the other four at `1e-8`, and the
+reason is worth carrying** (2026-09-15; the rows above used to read 25/**1**/2e-8 and
+30/**1**/4e-8 at the loose threshold). At `1e-8` the two directions of that round trip land
+9.3e-8 and 1.45e-7 Ry from their references, which straddles the 1e-7 the file asserts, and
+tightening to `1e-10` does not help: the gap comes back as 1.0e-7 and 1.53e-7. What is
+happening is that a continuation handed a converged density satisfies its convergence test on
+the **first** iteration, and on a magnetic cell the residual it satisfies it with says very
+little about the energy — the run reports an `accuracy` of 4.5e-11 while sitting 1.0e-7 from
+the fixed point, a factor of two thousand, where every from-scratch run in the same table is
+within about a factor of two of its own estimate. The variable the residual is failing to
+bound is the **moment**: the two loose runs differ by 5.7e-4 mu_B and the two tight ones by
+5e-6, and the energy that buys is exactly the gap. So `1e-12` does not work by being
+tighter, it works by being tight enough to reject that first residual, which makes the run
+take three iterations instead of one. It is `OPEN.md` Y1 in a third place, and it is the
+reason the loose numbers drifted between the phase and now without anything changing: at
+`1e-8` the landing point of a single Davidson pass is not a property of the continuation.
 
 **Where the saving is large and where it is not, and the reason is the same in both.** What
 carries over is the *charge*; when the charge is the whole answer — a nonmagnetic run
