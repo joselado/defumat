@@ -1,0 +1,35 @@
+! `ni-noncol-111.in` with no symmetry at all, on the closed 4x4x4 grid: the
+! reference the symmetrised wedge is measured against. The two converge to the
+! same total energy and the same moment, and what is compared is the Loewdin
+! charge of every projection column -- which is the quantity the wedge cannot
+! get right without the spinor rotation beside the harmonic one.
+&control
+      calculation = 'scf'
+   /
+   &system
+      ibrav = 2
+      celldm(1) = 6.65
+      nat = 1
+      ntyp = 1
+      ecutwfc = 25.0
+      ecutrho = 200.0
+      occupations = 'smearing'
+      smearing = 'mv'
+      degauss = 0.02
+      noncolin = .true.
+      nosym = .true.
+      starting_magnetization(1) = 0.5
+      angle1(1) = 54.735610317245346
+      angle2(1) = 45.0
+   /
+   &electrons
+      conv_thr = 1.d-9
+      mixing_beta = 0.3
+      electron_maxstep = 200
+   /
+   ATOMIC_SPECIES
+   Ni 58.6934 Ni.pz-nd-rrkjus.UPF
+   ATOMIC_POSITIONS crystal
+   Ni  0.00  0.00  0.00
+   K_POINTS automatic
+   4 4 4 0 0 0

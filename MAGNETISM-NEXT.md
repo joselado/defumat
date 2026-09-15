@@ -256,8 +256,7 @@ exist** (`harmonic_rotations`, `spin_rotations`) — what is missing there is pl
 `ProjectionSymmetry` carries *real* coefficients over `2 lmax + 1` columns and needs complex
 ones over `2 (2 lmax + 1)`, plus `sym_proj_nc`'s `ind` relabelling for a time-reversed
 operation. With `lspinorb` it is `sym_proj_so`'s `D^j` (`d_matrix_so`), a genuinely
-different matrix. **Take the non-SOC half first**: it is an afternoon on top of P82 and it
-covers the commoner regime.
+different matrix. **The non-SOC half is done -- P91**, and it took two cells rather than one: `ni-ldau-noncol.in`, the cell this entry nominated, turns every spin about `z` alone, so its 2x2 matrices are all diagonal and it gives the same answer for `U`, `U^T`, `conj(U)`, `U^dagger` and the identity to the last digit. `ni-noncol-111.in` was written to break that. The wedge now reaches **1.1e-5** electrons per Loewdin column against the closed grid where the unsymmetrised wedge is at 5.4e-2; the `lspinorb` half stays refused and `D^j` is still what it needs.
 
 ### D. Magnons refuse a noncollinear ground state, so the states whose excitations are interesting have none [12]
 

@@ -16095,6 +16095,76 @@ in the middle of the valence band and is where an unset reference silently puts 
   (`run_ultracell_transport(energies=)`), so what is not is the momentum-resolved
   conjugate, which is P89's own outstanding item and unchanged.
 
+### P91 -- The symmetrised spinor projection, and the cell that could not tell one convention from another. ✅ DONE.
+
+`defumat/projwfc/projections.py`, `tests/regression/test_spinor_projection_symmetry.py`,
+`tests/data/qe/ni-noncol-111.in` and its `nosym` twin.
+
+`MAGNETISM-NEXT.md` item C's remaining half. A noncollinear projected density of states
+ran only with `nosym` and the whole grid, because the group average needs a spin matrix
+beside the rotation of the harmonics and the coefficient table carried real numbers over
+`2l + 1` columns. Both factors already existed -- `harmonic_rotations` and P82's
+`spin_rotations` -- so what this phase is, in code, is the table made complex over
+`2 (2l + 1)` columns and the tensor product written into it.
+
+**The number.** Against the same cell at `nosym` on the closed 4x4x4 grid, the wedge's
+Loewdin charge in every projection column:
+
+| cell | symmetrised | unsymmetrised |
+|---|---|---|
+| `ni-noncol-111.in`, moment along (1,1,1), d shell | **1.104e-5** | 5.355e-2 |
+| `h4-cycloid-90.in`, four moments 90 degrees apart, s shell | **4.118e-6** | 3.760e-4 |
+| `ni-ldau-noncol.in`, moment along z, d shell | **7.261e-6** | 6.417e-2 |
+
+**The finding is the third row, and it is a trap-list entry rather than a result.** Nickel
+with its moment along `z` -- the cell item C and the audit both nominated, and the one P82
+validated the occupation matrix on -- **cannot tell any spin convention from any other**.
+All sixteen of its operations turn the spin about `z` alone, so every one of its 2x2
+matrices is diagonal; a diagonal factor multiplies a whole gather block by one phase, and
+the phase drops out of `|.|^2`. Measured: `U`, `U^T`, `conj(U)`, `U^dagger`, the identity
+and "the diagonal of `U` only" all give **7.261e-6**, to every digit. A phase run on that
+cell would have reported a validated feature with the spin factor absent.
+
+**Two cells are needed and neither is enough.** `h4-cycloid-90.in` carries an `s` shell
+only, so `D^l` is the number one and the spin factor is the *whole* symmetrisation: there
+the identity fails at 3.8e-4, which is exactly what no symmetrisation gives, and keeping
+only the diagonal of `U` is worse than either at **2.5e-1**. But its surviving operations
+have antidiagonal `U`, and an antidiagonal matrix is again monomial, so `U`, `U^T`,
+`conj(U)` and `U^dagger` all pass there at 4.118e-6. `ni-noncol-111.in` was written for
+this phase to break that last degeneracy: turning the moment onto a three-fold axis keeps
+twelve operations, six with time reversal, and six of the twelve mix the spin components
+with `|U - U^T| = 1`. There `U`, `U^T` and `U^dagger` read **3.9e-2, 2.1e-2 and 2.1e-2**,
+each *worse than not symmetrising the spin at all*, and only `conj(U)` reaches 1.1e-5.
+The intersection of the two cells is one convention.
+
+**And the convention it lands on is the principled one**, which is worth saying because it
+was found by measurement first. The harmonic factor is contracted on its *first* index, so
+what multiplies the projection is `D^T = D^{-1}`, the inverse operation; the spin factor
+has to be the inverse of the same operation, and for a unitary `U` contracted the same way
+that is `conj(U)`, since `conj(U)^T = U^dagger`.
+
+**Time reversal needs no index relabelling here.** `sym_proj_nc` swaps the output column
+between the two spin halves by hand (`ind = 2 m - ind0 + 2 l + 1`); that swap is already
+inside `spin_rotations`, which carries `i sigma_y D*` for an operation that is a symmetry
+only with time reversal, and the conjugation an antiunitary operation asks for is applied
+to the matrix rather than to the projection, which is the same thing under `|.|^2`.
+
+**`d_matrix_nc` is not consistent with itself and was not transcribed.** Its `l = 0` block
+is `conjg(s_spin(n1, m1))` where every `l > 0` block is `s_spin(m1, n1)`, so the two differ
+by a conjugation of the spinor matrix. A cell with only `s` channels cannot tell them
+apart, which is presumably why it has stood. The route taken here is P82's -- build from
+`spin_rotations` and pin by a property -- and the property is the wedge against the closed
+grid rather than an array identity.
+
+**What is outstanding.** The `lspinorb` branch, whose columns are `|j m_j>` and whose
+operator is `sym_proj_so`'s `D^j` (`d_matrix_so`), a genuinely different matrix that
+nothing here builds; it stays refused by name, and the refusal is now about that branch
+alone. And the five deliverables: the README row is unchanged (this lifts a refusal on an
+existing quantity rather than adding one), `docs/features.tex` carries the entry with an
+executed snippet, and **no notebook and no `projwfc.x` timing were taken** -- there is no
+`projwfc.x` reference for this regime committed here, which is the same gap the
+unsymmetrised branch already records.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.

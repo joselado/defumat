@@ -1,0 +1,55 @@
+! Face-centred-cubic nickel with its moment along a THREE-FOLD axis, (1,1,1),
+! noncollinear and without spin-orbit coupling. The cell exists for one reason:
+! it is the only committed input whose spin rotations are neither diagonal nor
+! symmetric, and that is what a symmetrised spinor projection has to be pinned
+! against.
+!
+! `ni-ldau-noncol.in` is the same crystal with the moment along `z`, and it
+! cannot do this job. Every one of its sixteen operations turns the spin about
+! `z` alone, so its 2x2 spinor matrix is diagonal, its phase factors out of a
+! modulus, and the projection comes out identical whether the spin factor is
+! the right matrix, its transpose, its conjugate or the identity -- a check
+! whose clean agreement cannot be told from doing nothing at all. Turning the
+! moment onto (1,1,1) keeps twelve operations, six of them with time reversal,
+! and six of the twelve mix the two spin components with `|U - U^T| = 1`.
+!
+! What it then measures, against the same cell at `nosym` on the closed 4x4x4
+! grid: the wedge's Loewdin charges are 1.1e-5 electrons from the closed grid's
+! with the symmetrisation on and 5.4e-2 without it, and the three arrangements
+! of the spin factor that are not `conj(U)` -- `U`, `U^T` and `U^dagger` -- sit
+! at 3.9e-2, 2.1e-2 and 2.1e-2, which is worse than not symmetrising the spin
+! at all. The Hubbard `U` of the other file is dropped: it costs iterations and
+! changes nothing about the projection.
+!
+! The angles are the (1,1,1) direction exactly -- `angle1 = acos(1/sqrt(3))` in
+! degrees, `angle2 = 45` -- and they have to be, since the three-fold operation
+! survives only for a moment on the axis itself.
+&control
+      calculation = 'scf'
+   /
+   &system
+      ibrav = 2
+      celldm(1) = 6.65
+      nat = 1
+      ntyp = 1
+      ecutwfc = 25.0
+      ecutrho = 200.0
+      occupations = 'smearing'
+      smearing = 'mv'
+      degauss = 0.02
+      noncolin = .true.
+      starting_magnetization(1) = 0.5
+      angle1(1) = 54.735610317245346
+      angle2(1) = 45.0
+   /
+   &electrons
+      conv_thr = 1.d-9
+      mixing_beta = 0.3
+      electron_maxstep = 200
+   /
+   ATOMIC_SPECIES
+   Ni 58.6934 Ni.pz-nd-rrkjus.UPF
+   ATOMIC_POSITIONS crystal
+   Ni  0.00  0.00  0.00
+   K_POINTS automatic
+   4 4 4 0 0 0

@@ -55,7 +55,7 @@ from defumat.batching import map_k
 from defumat.hubbard.projectors import build_atomic_projectors
 from defumat.paw.symmetry import harmonic_rotations
 from defumat.projwfc.channels import AtomicChannel, projection_channels
-from defumat.system.symmetry import atom_mapping
+from defumat.system.symmetry import atom_mapping, spin_rotations
 
 __all__ = [
     "ProjectionSymmetry",
@@ -98,7 +98,9 @@ class ProjectionSymmetry(eqx.Module):
     """
 
     indices: jnp.ndarray  # (nsym, natomwfc, mmax), int
-    coefficients: jnp.ndarray  # (nsym, natomwfc, mmax), real
+    coefficients: jnp.ndarray  # (nsym, natomwfc, mmax): real, or complex
+    # on a spinor run, where the coefficient is ``D^l x U`` and ``mmax``
+    # covers both spin halves of a shell.
     nsym: int = eqx.field(static=True)
 
     def apply(self, proj0: jnp.ndarray) -> jnp.ndarray:
@@ -124,15 +126,46 @@ def build_projection_symmetry(
 
     ``None`` when the group is trivial, in which case the symmetrisation is the
     identity and is skipped rather than multiplied out.
+
+    **The spinor branch is the same contraction on a longer index.** A
+    noncollinear column without spin-orbit coupling is ``|l m> x |sigma>``, and
+    the operator ``sym_proj_nc`` averages over is the tensor product
+    ``D^l x U`` -- the harmonic rotation this function already builds, times the
+    2x2 spinor rotation :func:`~defumat.system.symmetry.spin_rotations`
+    validated in P82. So the shell's block grows from ``2l+1`` columns to
+    ``2 (2l+1)``, in the order the orbitals are built (every ``m`` up, then
+    every ``m`` down), the coefficients become complex, and nothing else about
+    the contraction changes.
+
+    **The spin factor is taken from** ``spin_rotations`` **rather than from**
+    ``d_matrix_nc``, for the reason P82 gives about ``d_spin_ldau``, and here
+    there is a second reason: ``d_matrix_nc`` is not consistent with itself.
+    Its ``l = 0`` block is ``conjg(s_spin(n1, m1))`` where every ``l > 0`` block
+    is ``s_spin(m1, n1)``, so the two differ by a conjugation of the spinor
+    matrix, and a cell with only ``s`` channels cannot tell them apart. What
+    pins the convention here is a property instead: on a closed grid the
+    projection at ``S k`` must equal the rotated projection at ``k``, multiplet
+    by multiplet (``tests/unit/test_spinor_projection_symmetry.py``).
+
+    **Time reversal needs no index relabelling.** ``sym_proj_nc`` swaps the
+    output column between the two spin halves by hand
+    (``ind = 2 m - ind0 + 2 l + 1``); here that swap is already inside
+    ``spin_rotations``, which carries ``i sigma_y D*`` for an operation that is
+    a symmetry only with time reversal, and the conjugation the antiunitary
+    half asks for is applied to the matrix rather than to the projection, which
+    is the same thing under ``|.|^2``.
     """
     if symmetries is None or symmetries.nsym <= 1 or not channels:
         return None
 
+    spinor = any(channel.s_z is not None for channel in channels)
     lmax = max(channel.l for channel in channels)
     rotations = harmonic_rotations(cell, symmetries, lmax)
     mapping = atom_mapping(cell, structure, symmetries)
     nsym = symmetries.nsym
-    mmax = 2 * lmax + 1
+    npol = 2 if spinor else 1
+    mmax = npol * (2 * lmax + 1)
+    spins = spin_rotations(cell, symmetries) if spinor else None
 
     # Where each (atom, wfc, l) shell starts among the columns, so that the
     # image shell can be found by its key rather than by ``sym_proj_k``'s linear
@@ -142,22 +175,45 @@ def build_projection_symmetry(
         first.setdefault((channel.atom, channel.wfc, channel.l), channel.index)
 
     indices = np.zeros((nsym, len(channels), mmax), dtype=int)
-    coefficients = np.zeros((nsym, len(channels), mmax))
+    coefficients = np.zeros(
+        (nsym, len(channels), mmax), dtype=complex if spinor else float
+    )
     for channel in channels:
         block = rotations[channel.l]  # (nsym, 2l+1, 2l+1)
+        width = 2 * channel.l + 1
+        # ``s_z`` is +1/2 on the first half of a shell's columns and -1/2 on the
+        # second, which is the order the orbitals themselves are built in.
+        sigma = 0 if (channel.s_z is None or channel.s_z > 0.0) else 1
         for s in range(nsym):
             image = first[(int(mapping[s, channel.atom]), channel.wfc, channel.l)]
-            for m1 in range(2 * channel.l + 1):
-                indices[s, channel.index, m1] = image + m1
-                coefficients[s, channel.index, m1] = block[s, m1, channel.m]
+            for sigma1 in range(npol):
+                # ``conj(U)`` rather than ``U``, and it is not a taste: the
+                # harmonic factor is contracted on its *first* index, so what
+                # multiplies the projection is ``D^T = D^{-1}`` -- the inverse
+                # operation -- and the spin factor has to be the inverse of the
+                # same operation, which for a unitary ``U`` contracted the same
+                # way is ``conj(U)``, since ``conj(U)^T = U^dagger``. Measured,
+                # not derived and hoped for: on nickel with its moment along a
+                # three-fold axis the other three arrangements are wrong by
+                # 2.1e-2 to 3.9e-2 electrons where this one is 1.1e-5.
+                weight = 1.0 if spins is None else np.conj(spins[s, sigma1, sigma])
+                for m1 in range(width):
+                    column = m1 + width * sigma1
+                    indices[s, channel.index, column] = image + column
+                    coefficients[s, channel.index, column] = (
+                        block[s, m1, channel.m] * weight
+                    )
             # The padding columns gather from the shell's own first index with a
             # zero weight: a valid index keeps the gather in bounds and the zero
             # keeps it out of the answer.
-            indices[s, channel.index, 2 * channel.l + 1 :] = image
+            indices[s, channel.index, npol * width :] = image
 
     return ProjectionSymmetry(
         indices=jnp.asarray(indices),
-        coefficients=jnp.asarray(coefficients, dtype=cell.precision.real),
+        coefficients=jnp.asarray(
+            coefficients,
+            dtype=cell.precision.complex if spinor else cell.precision.real,
+        ),
         nsym=nsym,
     )
 
@@ -200,7 +256,7 @@ def atomic_projections(
     system = calculation.system
     noncolin = bool(system.noncolin)
     lspinorb = bool(getattr(system, "lspinorb", False))
-    if noncolin and symmetrize and calculation.use_symmetry and (
+    if lspinorb and symmetrize and calculation.use_symmetry and (
         calculation.symmetries is not None and calculation.symmetries.nsym > 1
     ):
         # A spin-angle function carries a spin frame that the operation turns,
@@ -210,30 +266,28 @@ def atomic_projections(
         # wrong projection.
         #
         # **The two regimes need two different matrices, and only one of them is
-        # missing.** Without spin-orbit coupling the columns are
+        # still missing.** Without spin-orbit coupling the columns are
         # ``|l m> x |sigma>`` and ``sym_proj_nc``'s operator is the tensor
-        # product ``D^l x S`` (``PP/src/d_matrix_nc.f90`` builds exactly
+        # product ``D^l x U`` (``PP/src/d_matrix_nc.f90`` builds exactly
         # ``dy_l(m,n) * s_spin(m1,n1)``), whose two factors are both here --
         # :func:`~defumat.paw.symmetry.harmonic_rotations` and
-        # :func:`~defumat.system.symmetry.spin_rotations`, the latter validated
-        # in P82. What is left there is the plumbing: this class carries **real**
-        # coefficients over ``2 lmax + 1`` columns and would need complex ones
-        # over ``2 (2 lmax + 1)``, plus ``sym_proj_nc``'s ``ind`` relabelling for
-        # a time-reversed operation.
+        # :func:`~defumat.system.symmetry.spin_rotations` -- and
+        # :func:`build_projection_symmetry` assembles them.
         #
         # With spin-orbit coupling the columns are ``|j m_j>`` instead, and
         # ``sym_proj_so`` contracts ``d_matrix_so``'s ``D^j`` for
         # ``j = 1/2, 3/2, 5/2, 7/2`` -- a **different** matrix that nothing here
-        # builds, and it is not the tensor product above.
+        # builds, and it is not the tensor product above. It is not reachable
+        # by relabelling the one above either: the ``j`` shells of one ``l``
+        # have different dimensions and mix under a rotation only within
+        # themselves.
         raise NotImplementedError(
-            "a symmetrised projection is not implemented for a noncollinear or "
-            "spin-orbit run. Without spin-orbit coupling what is missing is the "
-            "plumbing for a complex, spin-doubled coefficient table: the "
-            "operator is D^l x S (sym_proj_nc) and both factors exist "
-            "(harmonic_rotations, spin_rotations). With lspinorb it is "
-            "sym_proj_so's D^j (d_matrix_so), which is a different matrix and "
-            "is not built here. Run with nosym = .true. and the whole k-grid, "
-            "which is the same physics, or pass symmetrize=False"
+            "a symmetrised projection is not implemented for a spin-orbit "
+            "run: the columns are |j m_j> and sym_proj_so contracts "
+            "d_matrix_so's D^j, which is a different matrix from the D^l x U "
+            "the noncollinear branch uses and is not built here. Run with "
+            "nosym = .true. and the whole k-grid, which is the same physics, "
+            "or pass symmetrize=False"
         )
     channels = calculation_channels(calculation)
     if not channels:

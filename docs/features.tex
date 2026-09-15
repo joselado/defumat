@@ -885,19 +885,56 @@ so prints none for either noncollinear branch; the reason it gives --- a
 spin-angle function has no $m$ --- is true of the spin--orbit branch alone, and
 the table here is the richer one on purpose.
 
+\textbf{A reduced $\mathbf k$-set is allowed here}, and what makes it so is that
+the group average runs over the right operator. A point-group operation turns
+two things at once in this regime --- the real harmonics among themselves and
+the spin frame the spinor is written in --- so the matrix averaged over is the
+tensor product $D^l \otimes \overline{U}$, with $U$ the $SU(2)$ rotation that
+carries $\mathrm i \sigma_y D^{*}$ for an operation that is a symmetry only
+together with time reversal. Averaging the $m$ indices alone leaves the spin
+frame where it was.
+
+\begin{pycode}
+from defumat import Calculator
+
+# fcc nickel, noncollinear, moment along (1,1,1): twelve operations, six of
+# them with time reversal, and six of the twelve mix the two spin components.
+calc = Calculator.from_file("ni-noncol-111.in", pseudo_dir="../pseudo")
+pdos = calc.get_pdos()                   # symmetrize = True is the default
+# (nspin, nat, l, m): the majority d weights of the one atom, per m.
+print(pdos.charges.charges_lm[0, 0, 2])
+# -> [0.94676054 0.9178314  0.9178314  0.94676054 0.91783139]
+\end{pycode}
+
+The number: against the same cell run at \code{nosym} on the closed
+$4\times4\times4$ grid, the wedge's Löwdin charges agree to
+\textbf{1.1e-5 electrons} per column with the symmetrisation on and to
+\textbf{5.4e-2} without it. On the four-hydrogen helix
+(\code{h4-cycloid-90.in}), where the shell is $s$ and the spin factor is
+therefore the \emph{whole} symmetrisation, the same pair reads \textbf{4.1e-6}
+against \textbf{3.8e-4}.
+
+\emph{The conjugation is measured rather than assumed, and the obvious cell
+cannot measure it.} Nickel with its moment along $z$ --- which is what
+\code{ni-ldau-noncol.in} is --- has every operation turning the spin about $z$
+alone, so its $2\times2$ matrix is diagonal, its phase drops out of a modulus,
+and $U$, $U^{T}$, $U^{\dagger}$ and the identity all give the same answer to
+the last digit. Turning the moment onto a three-fold axis separates them:
+$U$, $U^{T}$ and $U^{\dagger}$ land 3.9e-2, 2.1e-2 and 2.1e-2 from the closed
+grid, which is worse than not symmetrising the spin at all, and only
+$\overline{U}$ reaches 1.1e-5.
+
 \begin{refuses}
-\textbf{Refuses.} A \textbf{symmetrised} spinor projection, in either
-noncollinear branch --- run with \code{nosym} and the whole $\mathbf k$-grid,
-where both codes use every point and neither averages, or pass
-\code{symmetrize=False}. \emph{The two branches are missing different things,
-and only one of them is missing a matrix.} Without spin--orbit coupling the
-columns are $|l m\rangle \otimes |\sigma\rangle$ and the operator is the tensor
-product $D^l \otimes S$, both factors of which now exist (the harmonic rotations
-and the $SU(2)$ ones); what is left there is the coefficient table, which is
-real over $2l+1$ columns and would have to be complex over $2(2l+1)$. With
-\code{lspinorb} the columns are $|j\, m_j\rangle$ and the operator is $D^j$ for
-$j = \tfrac12 \ldots \tfrac72$, which is a different matrix and is not that
-tensor product. A \textbf{fully-relativistic dataset with
+\textbf{Refuses.} A \textbf{symmetrised} projection of a \code{lspinorb}
+run --- run with \code{nosym} and the whole $\mathbf k$-grid, where both codes
+use every point and neither averages, or pass \code{symmetrize=False}. Its
+columns are $|j\, m_j\rangle$ and the operator \code{sym\_proj\_so} averages
+over is $D^j$ for $j = \tfrac12 \ldots \tfrac72$, which is a different matrix
+from the one the branch above uses and is not reachable by relabelling it.
+\emph{The noncollinear branch without spin--orbit coupling is no longer
+refused}: its columns are $|l m\rangle \otimes |\sigma\rangle$, the operator is
+the tensor product $D^l \otimes \overline{U}$ of the harmonic rotation and the
+conjugated $SU(2)$ one, and it is built. A \textbf{fully-relativistic dataset with
 \code{lspinorb = .false.}}: QE dispatches the orbitals on \code{has\_so} and
 their labels on \code{lspinorb}, so it builds $j$-resolved columns and calls
 them up/down ones. An $m$-resolved charge is \emph{absent} rather than refused
