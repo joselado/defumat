@@ -654,29 +654,31 @@ silicon (\code{benchmarks/si-1k.in}) at \code{conv\_thr = 1e-10} takes 17
 iterations against Anderson's 7, to the same total energy to ten digits.
 
 \begin{refuses}
-\textbf{A mixer whose steps grow can change which solution the run finds}, and
-this is the thing to know before trusting an \code{adaptive} result on a magnet.
-On the four-cell hydrogen ultracell under a turning field --- the case where
-rotating every moment together costs nothing --- it converges in 165 to 172
-iterations against Anderson's 265, and to a \emph{different state}: the per-cell
-moment comes out at $0.186\,\mu_B/2$ against Anderson's $0.978$, a factor of five
-in the \emph{length} of the moment rather than a rotation of it. It is the
-\emph{mixer} and not the step size: Anderson was run at $\beta = 0.1$, $0.3$ and
-$0.7$, a factor of seven, and all three sit between $0.98$ and $1.00$, while
-\code{adaptive} at two values of $\beta_0$ a factor of four apart sits at $0.186$
-twice. \textbf{Which of the two is the ground state has not been established} ---
-neither matches the $0.62\,\mu_B/2$ the record gives for this system's unit cell
---- so this is a warning that the two disagree, not a claim that the adaptive one
-is wrong. Two values of
-$\beta_0$ a factor of four apart agree with each other to $6\times10^{-5}$, so it
-is systematic and not a stray trajectory, and both runs report
+\textbf{A mixer can change which solution the run finds}, and this is the thing
+to know before trusting an \code{adaptive} result on a magnet. On a four-cell
+hydrogen ultracell under a field turning $90^\circ$ per cell --- the case where
+rotating every moment together costs nothing --- that cell has \textbf{three}
+self-consistent solutions, and every one of them reports
 \code{converged = True} with an \code{accuracy} three orders below
-\code{conv\_thr}. Nothing in the result says which state is the right one.
+\code{conv\_thr}. Anderson at $\beta = 0.1$ and $0.7$ finds one of them, agreeing
+to eight digits of the band energy; Anderson at $\beta = 0.3$ finds a second;
+\code{adaptive} at both its values finds the third, the one whose moments follow
+the applied field's ladder. \textbf{Which is the ground state is not something
+the run reports}: the moments differ by tens of degrees per cell, and nothing in
+a converged result orders them.
 
-So on a cell with a soft or degenerate magnetic direction, run it against
-\code{anderson} and compare the \textbf{moments}, not just the energy: a
-converged run is not evidence that the basin was kept. \code{SCFResult.site\_moments}
-is what to compare.
+\textbf{The step length does this too, which is the part not to file under
+``adaptive''.} Anderson's own $\beta$ moves between solutions here, so this is
+not a property of one mixer and running a second mixer is not a test that the
+basin was kept. What a growing step buys is more of the same freedom, not a new
+kind of it.
+
+So on a cell with a soft or degenerate magnetic direction, vary
+\textbf{both} the mixer and $\beta$, and compare the \textbf{moments} rather
+than the iteration count: a converged run is not evidence that the basin was
+kept, and ``fewer iterations'' is satisfied by a run that found something else.
+\code{SCFResult.site\_moments} and \code{UltracellResult.cell\_moments()} are
+what to compare.
 
 \code{mixing\_mode = 'adaptive'} also refuses a \textbf{preconditioner} rather
 than ignoring one. Its step is pointwise in real space with its own factor per point,
