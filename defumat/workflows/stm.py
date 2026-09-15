@@ -41,7 +41,7 @@ import numpy as np
 from defumat.basis.builder import build_basis
 from defumat.basis.gvectors import refuse_gamma_storage
 from defumat.basis.fft import r_to_g
-from defumat.basis.sample import sample_coefficients
+from defumat.basis.sample import sample_coefficients, sample_wavefunctions
 from defumat.scf.driver import Calculation, gamma_storage_is_consumable
 from defumat.stm.image import (
     STMImage,
@@ -49,10 +49,16 @@ from defumat.stm.image import (
     project_spin,
     tunnelling_weights,
 )
+from defumat.stm.spectrum import (
+    STMSpectrum,
+    accumulate_spectrum,
+    spectrum_weights,
+)
 from defumat.stm.plane import PlotPlane, plot_plane
 from defumat.workflows.nscf import denser_grid, fixed_density_states
 
-__all__ = ["run_stm", "refuse_an_ultracell_result"]
+__all__ = ["run_stm", "run_sts", "sample_spectrum",
+           "refuse_an_ultracell_result"]
 
 #: QE's ``stm.f90`` broadening for a run with no smearing of its own, in Ry.
 INSULATOR_WIDTH = 1.0e-5
@@ -249,6 +255,372 @@ def run_stm(
     image.integral = integral
     image.grid = None if grid is None else tuple(int(n) for n in grid)
     return image
+
+
+def run_sts(
+    system,
+    pseudos,
+    result,
+    *,
+    energies=None,
+    height: float | None = None,
+    axis: int = 2,
+    plane: tuple | PlotPlane | None = None,
+    shape: tuple[int, int] | None = None,
+    tip=None,
+    spin=None,
+    polarization: float = 1.0,
+    bias: float | None = None,
+    band_cutoff: float | None = None,
+    width: float | None = None,
+    smearing: str = "gaussian",
+    mode: str = "constant-height",
+    grid=None,
+    shift=None,
+    kpoints=None,
+    nbnd: int | None = None,
+    conv_thr: float | None = None,
+    k_batch: int | None | str = "default",
+) -> STMSpectrum:
+    """``dI/dV(r, V)``: a tunnelling spectrum at a point, a line or a plane.
+
+    :func:`run_stm` gives the local density of states at one tip energy, which
+    is one picture at one bias. This is the other section of the same function,
+    the curve at one place over many biases, which is what scanning tunnelling
+    spectroscopy measures and what resolves a gap, a band edge or a defect state
+    where an image only shows where the charge is.
+
+    Args:
+        system, pseudos, result: as :func:`run_stm`.
+        energies: ``(nE,)`` the tip energies in Ry, ``E_F + V``. There is no
+            default: the axis *is* the measurement, and a range has no natural
+            width.
+        tip: ``(npoints, 3)`` crystal coordinates of the tip, the usual form of
+            this quantity -- one point is a spectrum and a row of them is a line
+            cut. Mutually exclusive with ``height``/``plane``.
+        height, axis, plane, shape: a whole plane instead, giving a map at
+            every energy. ``shape`` defaults to a coarse ``(24, 24)``, because
+            a spectrum over a fine map is a large array rather than a slow one.
+        spin, polarization: a magnetic tip, exactly :func:`run_stm`'s.
+        bias: refused here. An energy axis is the derivative of the window, so
+            the window is :attr:`~defumat.stm.spectrum.STMSpectrum.current`.
+        band_cutoff, width, smearing: the smeared delta, as in :func:`run_stm`.
+        mode: ``"constant-height"`` only; a constant-current spectrum moves the
+            tip as the bias is swept and is a different experiment.
+        grid, shift, kpoints, nbnd, conv_thr: re-solve the bands at fixed
+            density on a **complete** k-set first, which a spectrum wants more
+            than an image does -- every feature in a dI/dV curve is a band edge,
+            and a handful of k-points puts edges where the k-set happens to have
+            states. It is :func:`~defumat.workflows.transport.whole_grid` rather
+            than :func:`~defumat.workflows.nscf.denser_grid`, for the reason the
+            wedge is refused below.
+        k_batch: the k-axis batching dial, for the band solve.
+
+    Returns an :class:`~defumat.stm.spectrum.STMSpectrum`.
+    """
+    refuse_an_ultracell_result(
+        result, "a tunnelling spectrum",
+        "defumat.workflows.ultracell.run_ultracell_sts")
+    _refuse_what_has_no_fermi_level(system, result)
+    refuse_gamma_storage(
+        gamma_storage_is_consumable(system, pseudos), "a tunnelling spectrum",
+        "psi(r) is evaluated as a bare sum over the stored k + G list "
+        "(basis/sample.py)",
+    )
+    _refuse_a_window_under_an_axis(bias, mode)
+
+    from defumat.workflows.transport import (
+        _geometry, _refuse_an_augmented_plane, _tip_points, whole_grid,
+    )
+
+    if kpoints is None and grid is not None:
+        kpoints = whole_grid(system, grid, shift)
+    if kpoints is None:
+        calculation = Calculation(system, pseudos, k_batch=k_batch)
+        eigenvalues = np.asarray(result.eigenvalues_by_spin)
+        wavefunctions = result.wavefunctions
+        levels = {"fermi_energy": result.fermi_energy,
+                  "homo": result.homo, "lumo": result.lumo}
+    else:
+        calculation, system, eigenvalues, wavefunctions = fixed_density_states(
+            system, pseudos, result.density, kpoints, nbnd, conv_thr, k_batch,
+            ns=getattr(result, "ns", None),
+            tau=getattr(result, "tau", None),
+            becsum=tuple(getattr(result, "becsum", ()) or ()),
+            field=getattr(result, "magnetic_field", None),
+            field_scale=getattr(result, "field_scale", None),
+        )
+        eigenvalues = np.asarray(eigenvalues)
+        _, levels = calculation.occupations(eigenvalues)
+    if wavefunctions is None:
+        raise ValueError(
+            "a tunnelling spectrum is built from the wavefunctions and this "
+            "result carries none: run the SCF without discarding them, or pass "
+            "a grid so the bands are re-solved"
+        )
+
+    _refuse_a_reduced_k_set(calculation.system)
+    axis_energies, fermi = _spectrum_energies(energies, levels)
+    width = _tip_width(width, system)
+    used = calculation.system
+    geometry, points = _tip_points(used.cell, height, axis, plane,
+                                   shape or (24, 24), tip)
+    _refuse_an_augmented_plane(
+        used, pseudos, axis, np.unique(np.round(points[:, axis], 10)),
+        "a tunnelling spectrum's tip")
+    channels, dos = sample_spectrum(
+        _geometry(calculation), wavefunctions, eigenvalues, points,
+        energies=axis_energies, width=width, smearing=smearing, bias=bias,
+        band_cutoff=band_cutoff, nspin_mag=int(used.nspin_mag),
+    )
+    return _finish_spectrum(
+        channels, dos, axis_energies, points, geometry, spin, polarization,
+        width=width, smearing=smearing, bias=bias, fermi=fermi,
+        grid=grid, supercell=None,
+    )
+
+
+def _finish_spectrum(channels, dos, energies, points, geometry, spin,
+                     polarization, *, width, smearing, bias, fermi, grid=None,
+                     supercell=None):
+    """The spin projection, the sum rule and the shape, for either route.
+
+    **The integral is exact rather than sampled**, which is the one place the
+    spectrum differs from the image: an image integrates its own field over the
+    grid, and here there is no field, only its value at the tip points. What
+    there is instead is orthonormality -- every state integrates to 1 over the
+    cell it is normalised in -- so the integral of ``dI/dV`` over that cell is
+    the sum of the weights, exactly. It is bookkeeping and not a measurement,
+    and what measures it is the test against ``compute_dos``.
+
+    **It is the charge's integral whatever the tip is**, and that is a real
+    limitation rather than a convention: a polarized tip's own field integrates
+    to ``[D(E) + P n.M(E)]/2``, and while the collinear ``M`` is a difference of
+    two weight sums, the transverse one is a spin expectation value and no sum
+    of weights gives it. One quantity that is exact in every regime is better
+    than one that is exact in two of the three.
+    """
+    cells = 1 if supercell is None else int(np.prod(supercell))
+    if spin is None:
+        values = (channels[0] + channels[1] if channels.shape[0] == 2
+                  else channels[0])
+    else:
+        values = project_spin(channels, spin, polarization)
+    by_spin = None if channels.shape[0] == 1 else channels
+
+    shaped = geometry.shape if geometry is not None else (points.shape[0],)
+    return STMSpectrum(
+        values=values.reshape((values.shape[0],) + shaped),
+        energies=np.asarray(energies, dtype=float),
+        points=points,
+        plane=geometry,
+        values_by_spin=by_spin,
+        integral=np.asarray(dos, dtype=float) / cells,
+        spin=None if spin is None else (
+            spin if isinstance(spin, str)
+            else tuple(float(c) for c in np.ravel(spin))),
+        polarization=float(polarization),
+        width=float(width),
+        smearing=smearing,
+        bias=None if bias is None else float(bias),
+        fermi_energy=None if fermi is None else float(fermi),
+        supercell=supercell,
+        notes={"grid": None if grid is None else tuple(int(n) for n in grid),
+               "cells": cells},
+    )
+
+
+# --------------------------------------------------------------------------
+# the spectrum: the same sum, sectioned the other way
+# --------------------------------------------------------------------------
+
+
+def sample_spectrum(geometry, wavefunctions, eigenvalues, points, *,
+                    energies, width, smearing="gaussian", bias=None,
+                    band_cutoff=None, nspin_mag=1):
+    """``(nspin_mag, nE, npoints)``: dI/dV at every point and every energy.
+
+    The counterpart of :func:`defumat.workflows.transport._assemble`, and it
+    takes the same bundle for the same reason -- an ordinary run and an
+    ultracell (``PLAN.md`` P89) differ only in which sphere, cell and k-points
+    the bands live on, and neither this contraction nor the sampler has to know
+    which it was handed.
+
+    **The states are sampled once and the energy axis is a matrix product.**
+    ``psi_n(r)`` does not depend on the energy, so what depends on it is the
+    per-state weight alone: sampling is ``nk nbnd npoints npw`` and is paid
+    once, and each energy after that costs one ``(nE, nbnd) x (nbnd, npoints)``
+    contraction. That is the whole reason a spectrum is not a loop over
+    :func:`run_stm`, which would rebuild the density from every state at every
+    energy.
+
+    Args:
+        geometry: the sphere, the cell and the k-points
+            (:class:`~defumat.transport.green.TransportGeometry`).
+        wavefunctions: indexable as ``[ispin, ik]``, giving
+            ``(nbnd, npol npwx)`` -- an array, or an
+            :class:`~defumat.ultracell.states.UltracellStates`.
+        eigenvalues: ``(nspin, nk, nbnd)`` in Ry.
+        points: ``(npoints, 3)`` crystal coordinates of the tip, in the basis
+            of ``geometry.cell``.
+        nspin_mag: 1 for a charge alone, 2 for the two collinear channels, 4
+            for ``(n, m_x, m_y, m_z)``.
+
+    **There is no k dial here and there is nothing for one to bound**, which is
+    the difference from :func:`~defumat.workflows.transport._assemble`: that
+    one holds ``(npol, nk, nbnd, npoints)`` amplitudes at once because the
+    contraction needs a whole chunk of them together, and each k-point here is
+    sampled and added straight into the total, so the peak is one k-point's
+    ``(nbnd, npol, npoints)`` complex whatever is asked. On an ultracell the
+    larger term is the state block itself, ``N^2 nbnd npwx npol`` complex
+    (:class:`~defumat.ultracell.states.UltracellStates`), and it is also per
+    ``k0``.
+
+    The volume the states are normalised over is ``geometry.cell``'s, so an
+    ultracell's weights go in **undivided**: the ``N`` sits in ``Omega_u``
+    there, where the density route puts it in the occupations instead
+    (:class:`~defumat.ultracell.states.UltracellStates`).
+
+    Returns ``(channels, dos)`` -- the spectrum and ``D(E)`` of the states it
+    was summed from, in states/Ry over the whole of ``geometry.cell``.
+    """
+    miller = np.asarray(geometry.miller)
+    mask = np.asarray(geometry.mask)
+    kcrystal = np.asarray(geometry.kcrystal)
+    kweights = np.asarray(geometry.kweights, dtype=float)
+    volume = geometry.volume
+    npol = int(geometry.npol)
+    npwx = geometry.npwx
+
+    eigenvalues = np.asarray(eigenvalues, dtype=float)
+    nspin, nk, nbnd = eigenvalues.shape
+    weights = spectrum_weights(eigenvalues, kweights, energies, width=width,
+                               smearing=smearing, bias=bias,
+                               band_cutoff=band_cutoff)
+    points = np.atleast_2d(np.asarray(points, dtype=float))
+    total = np.zeros((int(nspin_mag), weights.shape[0], points.shape[0]))
+    # ``D(E)`` of these states, which is what the spectrum integrates to over
+    # the cell the states are normalised in -- exactly, by orthonormality, so
+    # it is carried out of here rather than sampled back.
+    density_of_states = weights.reshape(weights.shape[0], -1).sum(axis=1)
+
+    # A collinear run is two independent channels and a spinor state carries
+    # every component itself, which is the one structural difference between
+    # the two and the same split ``ultracell_band_density`` makes.
+    channels = None if npol == 2 else (None if int(nspin_mag) == 1 else 0)
+    for ispin in range(nspin):
+        channel = None if channels is None else ispin
+        for ik in range(nk):
+            block = np.asarray(wavefunctions[ispin, ik])
+            sampled = sample_wavefunctions(
+                block.reshape((nbnd, npol, npwx)), miller[ik],
+                kcrystal[ik], points, volume, mask=mask[ik],
+            )
+            accumulate_spectrum(total, weights[:, ispin, ik], sampled,
+                                channel=channel, nspin_mag=int(nspin_mag))
+    return total, density_of_states
+
+
+def _spectrum_energies(energies, levels):
+    """The axis, and the zero the bias is measured from.
+
+    **A spectrum needs that zero where an image does not**, which is the one
+    thing here that is not shared with :func:`run_stm`: an image is taken at an
+    energy and reports it, while ``dI/dV`` is plotted against a *bias* and
+    ``I(V)`` is integrated outwards from ``V = 0``, so a spectrum with no zero
+    has an axis with no origin and a current that starts nowhere. The zero is
+    the Fermi level, and for a fixed-occupation run it is the middle of the gap
+    -- the same fallback :func:`_tip_energy` and
+    :func:`defumat.workflows.transport._energies` already take, said once here
+    so that a run without a Fermi level gets a defined ``V = 0`` rather than
+    0 Ry, which is a point in the middle of the valence band and is where an
+    unset reference silently puts it.
+    """
+    if energies is None:
+        raise ValueError(
+            "a tunnelling spectrum needs an energy axis and there is no "
+            "default width for one: pass energies= in Ry, usually the Fermi "
+            "level plus a range of biases. An image at one energy is run_stm"
+        )
+    axis = np.atleast_1d(np.asarray(energies, dtype=float))
+    if axis.ndim != 1 or axis.size == 0:
+        raise ValueError(
+            f"the energies are a one-dimensional axis, got shape {axis.shape}")
+
+    fermi = levels.get("fermi_energy")
+    if fermi is not None:
+        return axis, float(fermi)
+    homo, lumo = levels.get("homo"), levels.get("lumo")
+    if homo is None or lumo is None:
+        warnings.warn(
+            "this run has no Fermi level and no gap to put one in, so the "
+            "spectrum carries no zero of bias: STMSpectrum.bias_axis is then "
+            "the energies themselves and STMSpectrum.current is refused. Pass "
+            "energies= measured from wherever the tip is referenced",
+            stacklevel=3,
+        )
+        return axis, None
+    midgap = 0.5 * (float(homo) + float(lumo))
+    warnings.warn(
+        "this run has fixed occupations, so there is no Fermi level: the zero "
+        f"of the bias axis is the middle of the gap, {midgap:.4f} Ry, which is "
+        "stm.f90's own rule. Every dI/dV value is unaffected -- it is the bias "
+        "axis and the current that are measured from it",
+        stacklevel=3,
+    )
+    return axis, midgap
+
+
+def _refuse_a_reduced_k_set(system):
+    """A wedge sum of ``|psi_k(r)|^2`` is not the local density of states.
+
+    **This is the one thing a spectrum does not inherit from an image**, and it
+    is the wedge trap ``CLAUDE.md`` lists. :func:`run_stm` sums through
+    :meth:`~defumat.scf.driver.Calculation.density`, which **symmetrises**, so a
+    reduced k-set gives it the whole zone's answer; the amplitude route adds
+    ``|psi_k(r)|^2`` point by point with nothing to symmetrise it, so on a wedge
+    it returns the sum over that wedge alone -- a plausible, smooth, wrong
+    density of states everywhere off a symmetry axis. Unfolding is not the
+    escape it is for a scalar: unfolding a *wavefunction* means rotating it,
+    which is :func:`~defumat.workflows.transport.whole_grid`'s own argument.
+
+    The test is the k-weights, exactly as
+    :func:`~defumat.workflows.transport._refuse_a_k_set_this_cannot_sum` tests
+    them, and it is a sufficient condition rather than a necessary one: a
+    reduced set whose orbits all happen to have the same size would pass it.
+    What makes that acceptable is that it is the *reduction* that varies the
+    weights on every real k-set, and a run meaning to do this passes
+    ``nosym = .true.`` or ``grid=``, both of which are complete by construction.
+    """
+    weights = np.asarray(system.kpoints.weights, dtype=float)
+    if weights.size > 1 and np.ptp(weights) > 1.0e-8 * np.abs(weights).max():
+        raise NotImplementedError(
+            "a tunnelling spectrum on a symmetry-reduced k-set is refused: "
+            "psi(r) is sampled and squared point by point, so the sum is over "
+            "the wedge alone and nothing symmetrises it -- unlike an image, "
+            "which goes through the density and is symmetrised there. Pass "
+            "grid= to re-solve on the whole grid, or run with nosym = .true."
+        )
+
+
+def _refuse_a_window_under_an_axis(bias, mode):
+    """Two knobs an energy axis turns into a different experiment."""
+    if bias is not None:
+        raise ValueError(
+            "bias= integrates the states in a window and an energy axis is "
+            "the derivative of exactly that integral, so asking for both is "
+            "asking for I(V) twice: run without bias= and read "
+            "STMSpectrum.current, which is the same window count and is "
+            "carried rather than recomputed"
+        )
+    if mode != "constant-height":
+        raise NotImplementedError(
+            f"a spectrum in {mode!r} mode is refused: a constant-current "
+            "spectrum re-inverts the scan at every energy, which is a "
+            "different experiment (the tip moves as the bias is swept) and a "
+            "different cost. Take the spectrum at fixed height, which is what "
+            "dI/dV spectroscopy is"
+        )
 
 
 # --------------------------------------------------------------------------

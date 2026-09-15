@@ -36,6 +36,7 @@ import numpy as np
 from defumat.basis.fft import r_to_g
 from defumat.basis.sample import sample_miller
 from defumat.stm.image import STMImage, project_spin, tunnelling_weights
+from defumat.stm.spectrum import STMSpectrum
 from defumat.stm.plane import PlotPlane
 from defumat.transport.green import (
     TransportGeometry,
@@ -43,9 +44,13 @@ from defumat.transport.green import (
 )
 from defumat.workflows.stm import (
     _constant_current,
+    _finish_spectrum,
     _plane,
+    _refuse_a_window_under_an_axis,
+    _spectrum_energies,
     _tip_energy,
     _tip_width,
+    sample_spectrum,
 )
 from defumat.workflows.transport import (
     DEFAULT_BROADENING,
@@ -56,7 +61,8 @@ from defumat.workflows.transport import (
     _warn_if_the_slab_is_not_between,
 )
 
-__all__ = ["run_ultracell_stm", "run_ultracell_transport"]
+__all__ = ["run_ultracell_stm", "run_ultracell_sts",
+           "run_ultracell_transport"]
 
 
 def run_ultracell_stm(
@@ -355,6 +361,99 @@ def run_ultracell_transport(
         notes={**extras["notes"], "supercell": tuple(int(n) for n in ultracell.shape)},
     )
     return transport
+
+
+def run_ultracell_sts(
+    system,
+    pseudos,
+    result,
+    *,
+    energies=None,
+    height: float | None = None,
+    axis: int = 2,
+    plane: tuple | PlotPlane | None = None,
+    shape: tuple[int, int] | None = None,
+    tip=None,
+    spin=None,
+    polarization: float = 1.0,
+    bias: float | None = None,
+    band_cutoff: float | None = None,
+    width: float | None = None,
+    smearing: str = "gaussian",
+    mode: str = "constant-height",
+) -> STMSpectrum:
+    """``dI/dV(r, V)`` across a modulation: a tunnelling spectrum of an ultracell.
+
+    :func:`run_ultracell_stm` gives one picture at one bias, and a modulated
+    crystal is the case where that is least of what a tip measures: a charge
+    density wave is a **gap that opens in antiphase with the charge maxima**, a
+    spin density wave moves the two spin channels in opposite directions from
+    cell to cell, and a domain wall carries a state inside the gap that lives
+    nowhere else. All three are an energy axis at every position, and none of
+    them shows in an image at a single energy.
+
+    The sum is the image's, sectioned the other way: the ultracell states are
+    sampled at the tip points **once** (:mod:`defumat.ultracell.states`, the
+    relabelling P89 rests on) and the axis is then one matrix product per
+    k-point, so ``nE`` energies cost barely more than one -- where a loop over
+    :func:`run_ultracell_stm` would rebuild the whole ultracell density ``nE``
+    times.
+
+    Args:
+        system, pseudos: the **unit cell's**, the ones the ultracell ran on.
+        result: the :class:`~defumat.ultracell.driver.UltracellResult`, with its
+            states kept.
+        energies: ``(nE,)`` the tip energies in Ry. No default: the axis is the
+            measurement.
+        tip: ``(npoints, 3)`` tip positions in **unit-cell** crystal
+            coordinates running over ``[0, n_i)``, which is
+            :func:`run_ultracell_stm`'s convention. One point per cell along
+            the modulation is the line cut this quantity is for.
+        height, axis, plane, shape: a plane instead, giving a map at every
+            energy. ``shape`` defaults to ``(24, 8)``, coarser than an image's:
+            a spectrum over a fine map is ``nE`` times the array.
+        spin, polarization: a magnetic tip, which is what a spin density wave
+            needs for the reason :func:`run_ultracell_stm` gives.
+        bias: refused under an axis; the window is
+            :attr:`~defumat.stm.spectrum.STMSpectrum.current`.
+        band_cutoff, width, smearing: the smeared delta.
+        mode: ``"constant-height"`` only. There is no ``k_batch`` and nothing
+            for one to bound: each ``k0`` is sampled and added straight into
+            the total, so the peak is one ``k0``'s state block, ``N^2 nbnd
+            npwx npol`` complex, which is the same one the loop itself pays.
+
+    Returns an :class:`~defumat.stm.spectrum.STMSpectrum` whose ``integral`` is
+    ``D(E)`` **per unit cell**, the same number a unit-cell spectrum reports.
+
+    **What this does not inherit** is the transmission's two refusals: there is
+    no exit plane here, so a modulation along the stacking axis and a ``k0``
+    mesh with more than one division along it are both fine. A spectrum is
+    available wherever an image is.
+    """
+    states = _states_of(result, "a tunnelling spectrum")
+    _refuse_what_has_no_tip_energy(system, result)
+    _refuse_a_window_under_an_axis(bias, mode)
+
+    ultracell = states.ultracell
+    scale = np.asarray(ultracell.shape, dtype=float)
+    levels = _levels(system, result, states)
+    axis_energies, fermi = _spectrum_energies(energies, levels)
+    width = _tip_width(width, system)
+
+    geometry, points = _tip_points(system.cell, height, axis, plane,
+                                   shape or (24, 8), tip,
+                                   span=ultracell.shape)
+    nspin_mag = int(np.asarray(result.density).shape[0])
+    channels, dos = sample_spectrum(
+        _ultracell_geometry(states), states, np.asarray(states.eigenvalues),
+        points / scale, energies=axis_energies, width=width, smearing=smearing,
+        bias=bias, band_cutoff=band_cutoff, nspin_mag=nspin_mag,
+    )
+    return _finish_spectrum(
+        channels, dos, axis_energies, points, geometry, spin, polarization,
+        width=width, smearing=smearing, bias=bias, fermi=fermi,
+        supercell=tuple(int(n) for n in ultracell.shape),
+    )
 
 
 def _ultracell_geometry(states) -> TransportGeometry:

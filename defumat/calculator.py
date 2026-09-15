@@ -1012,6 +1012,39 @@ class Calculator:
                                  exclude=SCF_ONLY_OPTIONS)
         )
 
+    def get_sts(self, energies=None, **options):
+        """``dI/dV(r, V)``: a tunnelling spectrum, the curve beside the image.
+
+        :meth:`get_stm` gives the local density of states at one tip energy,
+        which is one picture at one bias; this is the other section of the same
+        function, the curve at one place over many biases. It resolves a gap, a
+        band edge or a state in the gap, none of which an image at a single
+        energy shows.
+
+        ``energies`` is the axis in Ry and has no default -- it *is* the
+        measurement. ``tip`` gives the positions explicitly, one point being a
+        spectrum and a row of them a line cut; ``height`` gives a whole plane
+        and a map at every energy.
+
+        Two things a spectrum refuses where an image does not, both because
+        ``psi(r)`` is sampled and squared rather than summed into a density: a
+        **symmetry-reduced** k-set, which nothing here symmetrises, and a tip
+        inside an **augmentation sphere**, where the pseudo-wavefunction is not
+        the true one.
+        """
+        from defumat.workflows.stm import run_sts
+
+        result = self._ground_state("a tunnelling spectrum")
+        self._say_if_an_ultracell_is_waiting("a tunnelling spectrum",
+                                             "get_ultracell_sts()")
+        if energies is not None:
+            options = {**options, "energies": energies}
+        return run_sts(
+            self.system, self.pseudos, result,
+            **self._call_options(run_sts, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
     def get_vertical_transport(self, exit_height=None, height=None, **options):
         """Tunnelling *through* a two-dimensional material, tip to substrate.
 
@@ -1190,6 +1223,33 @@ class Calculator:
         return run_ultracell_stm(
             self.system, self.pseudos, result,
             **self._call_options(run_ultracell_stm, result, options,
+                                 exclude=SCF_ONLY_OPTIONS)
+        )
+
+    def get_ultracell_sts(self, energies=None, **options):
+        """``dI/dV`` across the modulation :meth:`get_ultracell` found.
+
+        :meth:`get_ultracell_stm` at every energy of an axis, which is the
+        measurement a modulated crystal is actually read with: a charge density
+        wave is a gap that opens in antiphase with the charge maxima, a spin
+        density wave moves the two channels in opposite directions from cell to
+        cell, and a domain wall carries a state that lives nowhere else. None of
+        the three shows in an image at one energy.
+
+        The states are sampled at the tip points once and the axis is a matrix
+        product after that, so a spectrum costs about what one image costs
+        rather than ``nE`` of them. ``tip`` and ``height`` are in **unit-cell**
+        crystal coordinates over ``[0, n_i)``, :meth:`get_ultracell_stm`'s
+        convention.
+        """
+        from defumat.workflows.ultracell import run_ultracell_sts
+
+        result = self._ultracell_state("an ultracell tunnelling spectrum")
+        if energies is not None:
+            options = {**options, "energies": energies}
+        return run_ultracell_sts(
+            self.system, self.pseudos, result,
+            **self._call_options(run_ultracell_sts, result, options,
                                  exclude=SCF_ONLY_OPTIONS)
         )
 

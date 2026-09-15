@@ -26,7 +26,7 @@ from defumat.workflows.magnons import (MagnonDispersion, SpinSusceptibility,
 from defumat.workflows.tddft import OpticalSpectrum, run_absorption
 from defumat.workflows.polarization import run_polarization
 from defumat.workflows.sfac import run_structure_factors
-from defumat.workflows.stm import run_stm
+from defumat.workflows.stm import run_stm, run_sts
 from defumat.workflows.topology import (
     DFTSource,
     run_berry_curvature,
@@ -58,6 +58,7 @@ __all__ = [
     "run_nesting",
     "run_structure_factors",
     "run_stm",
+    "run_sts",
     "fixed_density_bands",
     "fixed_density_states",
     "project_states",

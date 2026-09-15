@@ -22,8 +22,18 @@ from defumat.stm.image import (
     tunnelling_weights,
 )
 from defumat.stm.plane import plot_plane
+from defumat.stm.spectrum import (
+    STMSpectrum,
+    spectrum_weights,
+    state_densities,
+)
 from defumat.system.cell import Cell
-from defumat.workflows.stm import _plane, _refuse_what_has_no_fermi_level
+from defumat.workflows.stm import (
+    _plane,
+    _refuse_a_reduced_k_set,
+    _refuse_a_window_under_an_axis,
+    _refuse_what_has_no_fermi_level,
+)
 
 
 @pytest.fixture(scope="module")
@@ -406,3 +416,157 @@ def test_the_calculator_reaches_it():
     from defumat.calculator import Calculator
 
     assert hasattr(Calculator, "get_stm")
+
+
+# --------------------------------------------------------------------------
+# the spectrum: the same sum, sectioned the other way (P90)
+# --------------------------------------------------------------------------
+
+
+def test_a_spectrum_at_one_energy_is_the_image_s_own_weights():
+    """``spectrum_weights`` is ``tunnelling_weights`` stacked and nothing else.
+
+    The reason to check something this thin: the delta, the window, the
+    k-weights and ``band_cutoff`` have one implementation, and a second one
+    would drift. A spectrum at one energy has to be the image at that energy to
+    the last bit, not to a tolerance.
+    """
+    rng = np.random.default_rng(7)
+    eigenvalues = np.sort(rng.normal(size=(2, 3, 5)), axis=-1)
+    kweights = np.array([0.5, 0.25, 0.25])
+    for bias, cutoff in ((None, None), (0.4, None), (-0.4, 3.0)):
+        stacked = spectrum_weights(eigenvalues, kweights, [0.1, 0.3],
+                                   width=0.2, bias=bias, band_cutoff=cutoff)
+        for at, energy in enumerate((0.1, 0.3)):
+            one = tunnelling_weights(eigenvalues, kweights, energy=energy,
+                                     width=0.2, bias=bias, band_cutoff=cutoff)
+            assert np.array_equal(stacked[at], one)
+
+
+def test_a_spinor_state_s_four_channels_are_the_density_s_own_bilinears():
+    """``(n, m_x, m_y, m_z)`` in ``spinor_band_density``'s convention.
+
+    **The transverse pair is what needs checking and a collinear state cannot
+    check it**: ``m_y = 2 Im(conj(u) d)`` with the two factors exchanged is
+    still real, still the right size and wrong in sign, and it is zero on
+    anything polarized along ``z``. So the state here has a moment in the
+    ``xy`` plane, where a swapped index reverses ``m_y`` and shows.
+    """
+    # one state, one point: a spinor at 60 degrees from z in the xz plane,
+    # then given a phase so that m_y is not zero either.
+    theta, phi = np.pi / 3.0, 0.7
+    up = np.cos(theta / 2.0)
+    down = np.sin(theta / 2.0) * np.exp(1.0j * phi)
+    amplitudes = np.array([[[up], [down]]])           # (nbnd, npol, npoints)
+    n, mx, my, mz = state_densities(amplitudes, nspin_mag=4)[:, 0, 0]
+
+    assert n == pytest.approx(1.0)
+    assert mx == pytest.approx(np.sin(theta) * np.cos(phi))
+    assert my == pytest.approx(np.sin(theta) * np.sin(phi))
+    assert mz == pytest.approx(np.cos(theta))
+    # the positive control: the exchanged pair is what a transposed index gives
+    swapped = 2.0 * np.imag(np.conj(down) * up)
+    assert swapped == pytest.approx(-my)
+    assert abs(my) > 0.5           # so the sign is not a null
+
+    # and a spin-orbit run with no magnetization keeps only the charge
+    charge = state_densities(amplitudes, nspin_mag=1)
+    assert charge.shape == (1, 1, 1)
+    assert charge[0, 0, 0] == pytest.approx(n)
+
+
+def test_a_degenerate_multiplet_can_be_rotated_without_moving_the_spectrum():
+    """Rule D4 does not reach this sum, and here is the reason made into a test.
+
+    A weight that depends on the state only through its eigenvalue is constant
+    inside a degenerate block, so the sum over the block is the trace of its
+    projector and no unitary mixing of its members can change it. The control is
+    the same rotation applied to states that are **not** degenerate, which does
+    move the answer -- without it this test would pass on a spectrum that had
+    quietly become independent of the states.
+    """
+    rng = np.random.default_rng(11)
+    amplitudes = (rng.normal(size=(4, 1, 6))
+                  + 1.0j * rng.normal(size=(4, 1, 6)))
+    block = np.linalg.qr(rng.normal(size=(4, 4))
+                         + 1.0j * rng.normal(size=(4, 4)))[0]
+    mixed = np.einsum("jn,npq->jpq", block, amplitudes)
+
+    degenerate = np.full((1, 1, 4), 0.3)
+    weights = spectrum_weights(degenerate, np.array([1.0]), [0.3, 0.5],
+                               width=0.1)[:, 0, 0]
+    plain = np.einsum("en,cnp->cep", weights, state_densities(amplitudes))
+    rotated = np.einsum("en,cnp->cep", weights, state_densities(mixed))
+    assert np.abs(rotated - plain).max() < 1e-13
+
+    split = np.array([[[0.3, 0.32, 0.34, 0.36]]])
+    weights = spectrum_weights(split, np.array([1.0]), [0.3, 0.5],
+                               width=0.1)[:, 0, 0]
+    plain = np.einsum("en,cnp->cep", weights, state_densities(amplitudes))
+    rotated = np.einsum("en,cnp->cep", weights, state_densities(mixed))
+    assert np.abs(rotated - plain).max() > 1e-3
+
+
+def test_the_current_is_the_integral_of_the_conductance():
+    """``I(V)`` from ``dI/dV``, outwards from zero bias and with its sign."""
+    axis = np.linspace(-0.4, 0.4, 81)
+    flat = STMSpectrum(values=np.ones((81, 2)), energies=axis,
+                       points=np.zeros((2, 3)), fermi_energy=0.0, width=0.05)
+    assert np.abs(flat.current - axis[:, None]).max() < 1e-13
+    assert flat.current[np.argmin(np.abs(axis))] == pytest.approx(0.0, abs=1e-14)
+    # the filled side comes back negative, which is the experiment's sign
+    assert flat.current[0].max() < 0.0 < flat.current[-1].min()
+
+
+def test_an_axis_that_cannot_resolve_the_delta_is_refused_rather_than_integrated():
+    """The guard fires, and it is fed the case that must trip it.
+
+    A trapezoid over a delta it steps across does not return a slightly wrong
+    number, it returns a number of the wrong order -- and the default width for
+    a fixed-occupation run is ``1e-5`` Ry, which no sane axis resolves. So the
+    refusal is checked by the axis that would have produced the wrong answer,
+    and the neighbouring case that must still pass.
+    """
+    axis = np.linspace(-0.4, 0.4, 41)
+    common = dict(energies=axis, points=np.zeros((2, 3)), fermi_energy=0.0)
+    with pytest.raises(ValueError, match="steps over the levels"):
+        STMSpectrum(values=np.ones((41, 2)), width=1.0e-5, **common).current
+    assert STMSpectrum(values=np.ones((41, 2)), width=0.02, **common).current is not None
+
+    with pytest.raises(ValueError, match="no zero of bias"):
+        STMSpectrum(values=np.ones((41, 2)), energies=axis, width=0.02,
+                    points=np.zeros((2, 3))).current
+    with pytest.raises(ValueError, match="already a window count"):
+        STMSpectrum(values=np.ones((41, 2)), width=0.02, bias=0.1,
+                    **common).current
+    with pytest.warns(UserWarning, match="does not include V = 0"):
+        STMSpectrum(values=np.ones((41, 2)), energies=axis + 1.0, width=0.02,
+                    points=np.zeros((2, 3)), fermi_energy=0.0).current
+
+
+def test_the_two_knobs_an_energy_axis_turns_into_another_experiment():
+    """``bias=`` and constant current, refused by name under an axis."""
+    with pytest.raises(ValueError, match="asking for I\\(V\\) twice"):
+        _refuse_a_window_under_an_axis(0.1, "constant-height")
+    with pytest.raises(NotImplementedError, match="the tip moves"):
+        _refuse_a_window_under_an_axis(None, "constant-current")
+    assert _refuse_a_window_under_an_axis(None, "constant-height") is None
+
+
+def test_a_wedge_is_refused_because_nothing_here_symmetrises_it():
+    """The one thing a spectrum does not inherit from an image.
+
+    ``run_stm`` sums through ``Calculation.density``, which symmetrises; the
+    amplitude route adds ``|psi_k(r)|^2`` with nothing to symmetrise it, so a
+    reduced k-set would give the sum over the wedge alone. Both branches are
+    checked, since a guard that never fires and a guard that always fires look
+    the same from one side.
+    """
+    reduced = SimpleNamespace(kpoints=SimpleNamespace(
+        weights=np.array([0.25, 0.75])))
+    with pytest.raises(NotImplementedError, match="symmetry-reduced"):
+        _refuse_a_reduced_k_set(reduced)
+    whole = SimpleNamespace(kpoints=SimpleNamespace(weights=np.full(4, 0.5)))
+    assert _refuse_a_reduced_k_set(whole) is None
+    one = SimpleNamespace(kpoints=SimpleNamespace(weights=np.array([2.0])))
+    assert _refuse_a_reduced_k_set(one) is None
