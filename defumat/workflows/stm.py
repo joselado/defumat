@@ -406,9 +406,9 @@ def _finish_spectrum(channels, dos, energies, points, geometry, spin,
                   else channels[0])
     else:
         values = project_spin(channels, spin, polarization)
-    by_spin = None if channels.shape[0] == 1 else channels
-
     shaped = geometry.shape if geometry is not None else (points.shape[0],)
+    by_spin = (None if channels.shape[0] == 1 else
+               channels.reshape(channels.shape[:2] + shaped))
     return STMSpectrum(
         values=values.reshape((values.shape[0],) + shaped),
         energies=np.asarray(energies, dtype=float),

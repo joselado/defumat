@@ -154,9 +154,11 @@ class STMSpectrum:
     #: given explicitly.
     points: np.ndarray
     plane: object = None
-    #: ``(nspin_mag, nE, npoints)`` the channels behind :attr:`values` --
+    #: ``(nspin_mag, nE, npoints)`` -- or ``(nspin_mag, nE, n1, n2)`` on a
+    #: plane -- the channels behind :attr:`values`:
     #: ``(up, down)`` for a collinear run and ``(n, m_x, m_y, m_z)`` for a
-    #: spinor one -- or ``None`` when there is only a charge.
+    #: spinor one, shaped like :attr:`values` -- or ``None`` when there is only
+    #: a charge.
     values_by_spin: np.ndarray | None = None
     #: ``(nE,)`` the spectrum integrated over the cell at each energy: ``D(E)``
     #: per unit cell, in states/Ry. The sum rule the assembly is checked with.

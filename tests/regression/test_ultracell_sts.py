@@ -87,18 +87,40 @@ K_POINTS automatic
  {k0} {k1} {k2} 0 0 0
 """
 
-#: The same cell with the moment off every axis, so that ``m_x`` and ``m_y`` are
-#: not zero and the transverse half of the Pauli convention is reachable.
-NONCOLLINEAR = SILICON.replace(
-    " nosym=.true., noinv=.true.",
-    " nosym=.true., noinv=.true.,\n"
-    " noncolin=.true., starting_magnetization(1)=0.2, angle1(1)=60.0,\n"
-    " occupations='smearing', smearing='gaussian', degauss=0.02"
-).replace(" conv_thr=1.0d-12", " conv_thr=1.0d-8")
+#: **A magnet, and with its moment off every axis**, which silicon is not: a
+#: nonmagnetic cell seeded noncollinear relaxes to a moment of parts in ten
+#: thousand, and a transverse component that small cannot tell a reversed
+#: ``m_y`` from round-off. This is the committed simple-cubic hydrogen of
+#: ``tests/data/qe/h-noncolin-ultracell.in``, whose lattice constant is chosen
+#: so the moment is 0.62 and responds to everything, seeded along
+#: ``(1,1,1)/sqrt(3)`` so that ``m_x`` and ``m_y`` are both large and equal --
+#: which makes a swapped index in ``m_y = 2 Im(conj(u) d)`` a sign reversal of a
+#: quantity the size of the moment rather than of a null.
+NONCOLLINEAR = """&control
+ calculation='scf'
+/
+&system
+ ibrav=1, celldm(1)=5.5, nat=1, ntyp=1, ecutwfc=15.0,
+ nosym=.true., noinv=.true.,
+ noncolin=.true., starting_magnetization(1)=0.8,
+ angle1(1)=54.7356, angle2(1)=45.0,
+ occupations='smearing', smearing='gaussian', degauss=0.02
+/
+&electrons
+ conv_thr=1.0d-10
+ mixing_beta=0.3
+/
+ATOMIC_SPECIES
+ H 1.008 H.pz-vbc.UPF
+ATOMIC_POSITIONS crystal
+ H 0.0 0.0 0.0
+K_POINTS automatic
+ {k0} {k1} {k2} 0 0 0
+"""
 
 #: Symmetry left **on**, which every other cell here turns off: the one case
 #: the wedge refusal is about.
-SYMMETRIC = SILICON.replace(" nosym=.true., noinv=.true.,\n", "")
+SYMMETRIC = SILICON.replace(" nosym=.true., noinv=.true.\n", "")
 
 _WORK = Path(tempfile.mkdtemp(prefix="defumat-sts-"))
 
@@ -120,7 +142,7 @@ def _converged(pseudos, grid, nbnd=12, template="silicon"):
     calculator = _calculator(Path(pseudos), f"si_{template}_{''.join(map(str, grid))}.in",
                              templates[template], grid)
     scf = calculator.get_scf(
-        conv_thr=1e-8 if template == "noncollinear" else 1e-12, nbnd=nbnd)
+        conv_thr=1e-10 if template == "noncollinear" else 1e-12, nbnd=nbnd)
     assert scf.converged
     return calculator, scf
 
@@ -228,6 +250,18 @@ def test_an_unmodulated_spectrum_is_the_tiled_unit_cell_s(shape, kgrid,
     check the plumbing rather than the answer. The k-set has to be the folded
     one for P89's reason: a spectrum is a sum over states and a different
     Brillouin-zone sampling is a different sum.
+
+    **The floor is the two diagonalisations seen through the delta's slope, and
+    it is looser here than P89's 1e-8 by a factor the width sets.** The two
+    sides are built from different wavefunctions -- the SCF's own, and the
+    fixed-density solve's rediagonalised in the frozen envelope basis -- whose
+    levels come out a median **1.24e-8 Ry** apart however tightly either side is
+    converged. P89's image runs in a **window**, where a state's weight is 1 or 0
+    and a shift of 1e-8 moves nothing; a **delta** of width ``w`` has slope
+    ``1/w`` there, so the same shift is worth ``1.2e-8/w``. Measured on this
+    cell at width 0.01, 0.02, 0.04 and 0.08: **7.7e-7, 2.9e-7, 1.3e-7 and
+    3.9e-8**, which is that ratio and is why the tolerance is on the width
+    rather than on a threshold.
     """
     folded = tuple(n * m for n, m in zip(shape, kgrid))
     calculator, scf = _converged(str(pseudo_dir), folded)
@@ -246,7 +280,8 @@ def test_an_unmodulated_spectrum_is_the_tiled_unit_cell_s(shape, kgrid,
         tiled = np.concatenate([plain.values] * shape[0], axis=0)
         assert np.abs(np.asarray(spectrum.values)[at] - tiled).max() \
             / np.abs(tiled).max() < 1e-6
-        assert spectrum.integral[at] == pytest.approx(plain.integral, rel=1e-7)
+        # 2.9e-7 at this width, and it is the level difference above
+        assert spectrum.integral[at] == pytest.approx(plain.integral, rel=1e-6)
 
 
 def test_the_unit_cell_spectrum_is_the_unit_cell_image_energy_by_energy(
@@ -316,27 +351,39 @@ def test_a_spinor_spectrum_carries_the_density_s_own_four_channels(pseudo_dir):
     ``values_by_spin``, built by scattering into the box one component at a
     time.
     """
-    calculator, scf = _converged(str(pseudo_dir), (2, 2, 2), 12, "noncollinear")
-    result = run_ultracell(calculator.system, calculator.pseudos, scf,
-                           (2, 1, 1), (1, 2, 2), nbnd=12, conv_thr=1e-8,
-                           states_conv_thr=1e-8)
+    shape, kgrid = (2, 1, 1), (1, 2, 2)
+    folded = tuple(n * m for n, m in zip(shape, kgrid))
+    calculator, scf = _converged(str(pseudo_dir), folded, 16, "noncollinear")
+    result = run_ultracell(calculator.system, calculator.pseudos, scf, shape,
+                           kgrid, nbnd=16, external=_modulation(shape),
+                           conv_thr=1e-8, states_conv_thr=1e-8,
+                           mixing_beta=0.3, max_iterations=120)
     assert result.converged
     assert int(result.states.npol) == 2
 
-    geometry = dict(shape=(8, 6), **PLANE)
+    geometry = dict(shape=(8, 6), height=0.5, axis=2)
     energy = float(scf.fermi_energy)
-    spectrum = run_sts_of(calculator, result, [energy], **geometry)
+    spectrum = run_ultracell_sts(calculator.system, calculator.pseudos, result,
+                                 energies=[energy], width=WIDTH, **geometry)
     image = run_ultracell_stm(calculator.system, calculator.pseudos, result,
                               energy=energy, width=WIDTH, **geometry)
     reference = np.asarray(image.values_by_spin)
     assert reference.shape[0] == 4
     ours = np.asarray(spectrum.values_by_spin)[:, 0]
-    scale = np.abs(reference[0]).max()
-    assert scale > 0.0
-    # the transverse pair is not a null: it is a real fraction of the charge
-    assert np.abs(reference[1]).max() / scale > 1e-3
-    assert np.abs(reference[2]).max() / scale > 1e-3
-    assert np.abs(ours - reference).max() / scale < 1e-10
+
+    charge = np.abs(reference[0]).max()
+    assert charge > 0.0
+    for channel in range(4):
+        scale = np.abs(reference[channel]).max()
+        # **each channel against its own size**, so that a transverse component
+        # is compared with itself rather than with the charge, where a reversed
+        # sign would hide behind a small ratio
+        assert scale / charge > 1e-2, f"channel {channel} is a null, not a test"
+        assert np.abs(ours[channel] - reference[channel]).max() / scale < 1e-8
+    # and the two transverse components are equal, which is the seeded
+    # direction and is what makes a swap between them visible as well
+    assert np.abs(reference[1]).max() == pytest.approx(
+        np.abs(reference[2]).max(), rel=1e-3)
 
 
 # -- the current, and why it is not the window to the last digit --------------
@@ -405,7 +452,7 @@ def test_a_wedge_is_refused_and_the_whole_grid_is_not(pseudo_dir):
 
     spectrum = run_sts(calculator.system, calculator.pseudos, scf,
                        energies=energies, width=WIDTH, shape=(4, 4),
-                       grid=(2, 2, 2), **PLANE)
+                       grid=(2, 2, 2), conv_thr=1e-8, **PLANE)
     assert np.asarray(spectrum.values).shape == (2, 4, 4)
     assert np.asarray(spectrum.values).min() > 0.0
 
