@@ -312,12 +312,12 @@ because that is what decides whether it is a session or a phase.
   and not only an amplitude that waves. The cost the noncollinear regime brings with it is
   iterations rather than a missing term: without spin-orbit coupling a rigid rotation of the
   whole magnetization is free, so a weak field leaves the mixer with no restoring force
-  along it and a 0.002 Ry run takes 263 iterations (`OPEN.md` Part VI item 3). What is
-  missing, term by term: a **total energy**, which neither this code nor Elk has
-  (`energyulr.f90` is the eigenvalue sum alone), so the energy gain of a modulated state
-  over the uniform one is not a quantity either code can report --
-  and it is what a *spontaneous* wave, seeded by Elk's `rndbfcu` and faded by `reducebf`,
-  would be judged by; a **GGA**, where the gradient of the ultracell density carries the
+  along it and a 0.002 Ry run takes 263 iterations (`OPEN.md` Part VI item 3). The
+  **total energy** is in and Elk still has none (`energyulr.f90` is the eigenvalue sum alone), so the
+  energy gain of a modulated state over the uniform one is a quantity this code reports
+  and no other does; what is missing beside it is the *spontaneous* wave it would judge,
+  seeded by Elk's `rndbfcu` and faded by `reducebf`. Term by term, what is left: a **GGA**,
+  where the gradient of the ultracell density carries the
   envelope's own gradient that Elk's per-cell `potxc` call silently drops -- **and it is what
   blocks the paper's own chromium case**, the only Cr dataset committed here being PBE; and
   the **central-k route**, which would remove the direct route's `N^2` at the cost of a
