@@ -2654,8 +2654,15 @@ self-consistent solutions at `(4, 2, 2)`, so "converged in well under 263" is sa
 run that found a different one, which is precisely the failure this entry's own mechanism
 predicts and which an iteration count cannot see.
 
-**One measurement the ultracell cannot make and the exact calculation can.** An ultracell run
-reports no total energy, so nothing in it ranks its own solutions. A real four-atom supercell
+**The measurement the ultracell could not make, it now can** (2026-09-15, `PLAN.md` P88
+stage 4). This entry was written when an ultracell reported only an eigenvalue sum, so
+nothing in it ranked its own solutions; it reports a **total energy** now, and the three
+solutions at `(4, 2, 2)` can be put in order. That run has not been made. The one caveat
+to carry into it is that stage 4's *ladder* does not apply here -- with three stationary
+points nothing says the same one is found at each `nbnd`, so the energy ranks solutions at
+one fixed `nbnd` and certifies nothing across several.
+
+**What the exact calculation said, before there was any other way to ask.** A real four-atom supercell
 under a `LOCAL_MAGNETIC_FIELDS` ladder of 0.01 Ry turning 90 degrees per site converges in
 **26** iterations to a clean helix, 90.0 degrees from site to site and `|m| = 0.604` on every
 site; seeded ferromagnetically instead it does **not** converge in 400 iterations and ends on

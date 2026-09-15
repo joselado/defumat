@@ -6113,10 +6113,12 @@ length selects a solution inside one mixer, and a control that varies `beta` can
 the two. **What the growing step buys is not a different kind of freedom, it is more of the
 same one.**
 
-**What the exact calculation says, since the ultracell cannot rank its own states.** An
-ultracell run reports the occupied eigenvalue sum and no total energy, so `E_band` above
-orders nothing. A real **four-atom supercell** of the same lattice goes through the ordinary
-SCF, which does report one. Under a `LOCAL_MAGNETIC_FIELDS` ladder of the same 0.01 Ry turning
+**What the exact calculation says, from when the ultracell could not rank its own states.**
+This was measured while an ultracell reported the occupied eigenvalue sum and nothing else,
+so `E_band` above ordered nothing; it reports a **total energy** now (`PLAN.md` P88 stage 4)
+and the three solutions can be ranked directly, which has not been done. A real **four-atom
+supercell** of the same lattice goes through the ordinary SCF, which reported one all
+along. Under a `LOCAL_MAGNETIC_FIELDS` ladder of the same 0.01 Ry turning
 90 degrees per site, seeded on the ladder, it converges in **26** iterations to a clean helix,
 exactly 90.0 degrees from site to site and `|m| = 0.604` on every one, at
 `E = -3.7298232078` Ry with the field's own `-2.415e-02` Ry carried separately. Seeded

@@ -15642,6 +15642,16 @@ real energy rather than by a convention. The plan's own sentence said every disp
 correction was "refused at the door already", which was false about a guard the plan's author
 had read. `grep` the guard rather than remembering it.
 
+**One check that shares nothing with the supercell, and it came out of the notebook.**
+Second-order perturbation theory on `notebooks/44`'s own screening table: an induced
+Hartree potential of **-9.06 mRy** at `|Q| = 0.1334 /bohr` against 10 mRy applied gives
+`delta_rho = V_H q^2 / 8 pi = -6.42e-06` e/bohr^3, and
+`dE = delta_rho . V_ext . Omega = -1.70e-05` Ry on a cell of 265.3 bohr^3. The assembly
+reports **-0.01701 mRy**. Three digits, through a route with no `deband`, no Ewald term
+and no second code in it -- and it is **one data point**, which is what it is worth: the
+test that would make it decisive is the *exponent*, since halving the amplitude must
+divide the cost by four, and that has not been run.
+
 **The Ewald identity is not round-off and the reason is structural.** The unit cell's Ewald
 against a supercell's divided by `N`: -7.1e-15 Ry for `(2,1,1)` and **+7.2e-09** for
 `(2,2,1)` and `(3,1,1)` alike. `ewald_alpha` steps `alpha` down in 0.1 until QE's 1e-7 bound

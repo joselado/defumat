@@ -682,6 +682,15 @@ decide it, because a departure from `pw.x` needs a number rather than an argumen
   not displaced by the mixer. What the attempt did establish is a property to carry into
   every other option here: **a step that grows can change which solution is found, and
   `converged` does not say otherwise.**
+
+  **And the missing instrument now exists** (2026-09-15, `PLAN.md` P88 stage 4). Three
+  converged solutions with no way to say which is the ground state was the shape of this
+  finding, and an ultracell now reports a **total energy** rather than an eigenvalue sum,
+  so the three can be ranked. The run has not been made. One thing to know before making
+  it: the variational ladder stage 4 measured does **not** apply here -- with three
+  stationary points nothing guarantees the same one is found at each `nbnd`, so the energy
+  ranks solutions at one fixed `nbnd` and certifies no sequence across several. Quote the
+  grid, the field and the `nbnd` with every number, which is this section's own rule.
 - **Projecting the rigid rotation out of the magnetic residual.** Fully specified already in
   `OPEN.md` Part VI item 3, including the `lspinorb` gate (the mode is gapped there and the
   projection would be actively wrong) and the decisive run (0.002 Ry at `mixing_beta = 0.7`,
