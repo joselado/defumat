@@ -37,6 +37,7 @@ instead, which means the physics is selected in the input file rather than at th
 | A run started from an all-electron ground state, and how far a pseudopotential density is from one | `get_elk_seed()` | [42](42_all_electron_start.ipynb) |
 | A density or potential modulated over many unit cells at once | `get_ultracell()` | [44](44_ultra_long_range.ipynb) |
 | What a tip sees above a modulation: an image of a spin density wave | `get_ultracell_stm()` | [45](45_imaging_a_modulation.ipynb) |
+| A tunnelling spectrum across a modulation: where the band edge sits, cell by cell | `get_ultracell_sts()`, `get_sts()` | [45](45_imaging_a_modulation.ipynb) |
 
 ### Structure: forces, geometry, the cell
 
@@ -171,7 +172,7 @@ want a number.
 | [`42_all_electron_start.ipynb`](42_all_electron_start.ipynb) | A converged all-electron density brought here and used to start a run: where a pseudopotential density is allowed to differ from the real one, and where it is not |
 | [`43_magnetic_textures.ipynb`](43_magnetic_textures.ipynb) | A moment per atom rather than a moment per crystal: a 90 degree helix that survives self consistency, the symmetry a texture leaves behind, and the two numbers it takes to say it is still there |
 | [`44_ultra_long_range.ipynb`](44_ultra_long_range.ipynb) | A potential that varies over eight unit cells of silicon, and the electrons screening it: the long cell solved in the ordinary cell's own states, computed once. What the modulation costs in energy, which is what says whether a modulation is the ground state at all. Then the two kinds of spin wave it carries, one modulating a moment's length and one its direction, |
-| [`45_imaging_a_modulation.ipynb`](45_imaging_a_modulation.ipynb) | What a scanning-tunnelling microscope sees above a spin density wave eight unit cells long: a polarized tip images the wave itself and an unpolarized one images its square, at twice the wavevector, because a collinear crystal cannot respond in the charge at first order in the field |
+| [`45_imaging_a_modulation.ipynb`](45_imaging_a_modulation.ipynb) | What a scanning-tunnelling microscope sees above a spin density wave eight unit cells long: a polarized tip images the wave itself and an unpolarized one images its square, at twice the wavevector, because a collinear crystal cannot respond in the charge at first order in the field. Then the same states read as a *spectrum* rather than an image, where the band edge is seen to move through the wave by a third of an electronvolt and the two spin channels peak four cells apart |
 
 ## Conventions
 
@@ -265,7 +266,7 @@ workstation core, slowest last:
 | `01` | 5 | `06` | 23 | `34` | 40 | `41` | 164 |
 | `09` | 6 | `25` | 28 | `10` | 50 | `44` | 188 |
 | `02` | 8 | `18` | 29 | `29` | 59 | `08` | 171 |
-| `37` | 9 | `12` | 30 | `45` | 76 | `27` | 178 |
+| `37` | 9 | `12` | 30 | `45` | 85 | `27` | 178 |
 | `03` | 10 | `21` | 30 | `11` | 81 | `17` | 203 |
 | `05` | 10 | `15` | 31 | `14` | 89 | `43` | 240 |
 | `04` | 12 | `24` | 31 | `26` | 109 | `38` | 242 |

@@ -3842,6 +3842,106 @@ warning saying how many; and a zero-bias image of a gapped run is identically
 zero, the delta sitting in the gap, which is what \code{bias} is for.
 \end{refuses}
 
+\subsection{Tunnelling spectra: $\mathrm{d}I/\mathrm{d}V$ over an energy axis}
+
+An image is the local density of states at one tip energy, which is one picture
+at one bias. The other section of the same function is the curve at one place
+over many biases, which is what a scanning tunnelling microscope measures when
+it is used as a spectrometer, and what resolves a gap, a band edge or a state
+sitting inside a gap --- none of which an image shows, since an image at a single
+energy reports only how much weight there is and not where in energy it sits,
+\begin{equation*}
+  \frac{\mathrm{d}I}{\mathrm{d}V}(\mathbf r, V) \;\propto\;
+  \rho(\mathbf r, E_F + eV) \;=\;
+  \sum_{\mathbf k, n} w_{\mathbf k}\,
+     \delta\!\left(E_F + eV - \varepsilon_{\mathbf k n}\right)
+     \left|\psi_{\mathbf k n}(\mathbf r)\right|^2 ,
+\end{equation*}
+the same sum \code{run\_stm} builds, evaluated at every energy of an axis.
+
+\textbf{This is the measurement a modulation is read with}, and it is why the
+quantity is here rather than only in the unit cell: a charge density wave is a
+\emph{gap} that opens in antiphase with the charge maxima, a spin density wave
+moves the two spin channels in opposite directions from cell to cell, and a
+domain wall carries a state that lives nowhere else. Each of the three is an
+energy axis at every position, and an ultracell, the subject of \emph{A
+modulation over many unit cells}, is the calculation that has them.
+
+\textbf{The energy axis is nearly free, and that is the whole of the
+implementation.} $\psi_{\mathbf k n}(\mathbf r)$ does not depend on the energy,
+so the states are sampled at the tip points \emph{once} and each energy after
+that is one matrix product against the per-state weight. On an eight-cell spin
+density wave with a $96\times12$ map, one, twenty-one and forty-one energies cost
+2.50, 2.56 and 2.61 s, against 2.47 s for a single image: forty-one energies are
+4.4 per cent more than one, and 39 times less than the forty-one images that are
+the only other way to get them. Neither \code{pw.x} nor Elk has an axis ---
+\code{stm.f90} takes one scalar \code{sample\_bias} and \code{wfplot.f90} sets
+one delta --- so both compute a spectrum by being run again at every bias, paying
+the whole sum each time.
+
+\begin{pycode}
+import numpy as np
+from defumat import Calculator
+
+calc = Calculator.from_file("si-ultracell-mag.in")
+field = lambda x: 0.02 * np.cos(2 * np.pi * x[..., 0] / 8)
+wave = calc.get_ultracell(supercell=(8, 1, 1), kgrid=(1, 2, 2), nbnd=32,
+                          magnetic_field=field)
+
+# a spectrum above the middle of each unit cell: one tip point per cell,
+# which is the line cut across the modulation
+tips = np.stack([np.arange(8) + 0.5, np.full(8, 0.5), np.full(8, 0.35)], axis=-1)
+bias = wave.fermi_energy + np.linspace(-0.06, 0.06, 41)
+sts = calc.get_ultracell_sts(energies=bias, tip=tips, width=0.02, spin="up")
+
+sts.values        # (41, 8) dI/dV, one column per cell
+sts.bias_axis     # (41,) the bias in Ry, measured from the Fermi level
+sts.current       # (41, 8) I(V), the same axis integrated outwards from V = 0
+sts.integral      # (41,) D(E) per unit cell: the sum rule
+
+# a whole map at every energy instead, and the ordinary unit-cell spectrum
+maps = calc.get_ultracell_sts(energies=bias, height=0.35, shape=(48, 8))
+plain = calc.get_sts(energies=bias, tip=tips[:1], width=0.02, grid=(4, 4, 4))
+\end{pycode}
+
+\textbf{Reading it.} \code{energies} is the axis in Rydberg and has no default:
+the axis \emph{is} the measurement and a range has no natural width. What comes
+back is \code{values}, of shape \code{(nE,) + } whatever the sampling was --- a
+row of tip points, or a plane. \code{current} is $I(V)$ within this
+approximation, a tip whose own density of states is flat and a barrier that does
+not depend on the bias; the decay of each state into the vacuum \emph{is} in it,
+the prefactor is not, and the experiment's sign convention is kept, so the filled
+states below the Fermi level come back negative. A magnetic tip works exactly as
+it does for an image, through \code{spin} and \code{polarization}, and on a spin
+density wave it is what is wanted: an unpolarized tip cannot see the wave at
+first order and sees its square instead.
+
+\begin{refuses}
+\textbf{Refuses.} Everything an image refuses, and two more of its own, both
+because $\psi(\mathbf r)$ is sampled and squared here where an image sums into a
+density. A \textbf{symmetry-reduced k-set}: \code{run\_stm} goes through the
+density, which is symmetrised, so a wedge gives it the whole zone's answer, while
+nothing symmetrises this one and a wedge would return the sum over that wedge
+alone --- a smooth, plausible, wrong density of states everywhere off a symmetry
+axis. Pass \code{grid} (which builds the \emph{complete} grid here, where an
+image's reduces) or run \code{nosym}. A tip inside an \textbf{augmentation
+sphere} of an ultrasoft or PAW dataset, where the pseudo-wavefunction is not the
+true one and the norm is short by 3 to 9 per cent. An ultracell is exempt from
+both: it requires \code{nosym} and refuses ultrasoft and PAW already.
+Also refused: \code{bias} together with an energy axis, since the window is the
+integral the axis already carries and \code{current} is it; and a
+constant-current spectrum, where the tip moves as the bias is swept, which is a
+different experiment and $n_{\rm heights}$ times the cost.
+\textbf{Said rather than refused}: \code{current} raises on an axis whose step is
+coarser than the smeared delta, because a trapezoid that steps over a level
+returns a number of the wrong order rather than a slightly wrong one --- one
+level of width $w$ on an axis of step $h$ integrates to $1.00004$ at $h = w$,
+$1.14$ at $2w$ and exactly zero by $250w$, which is what any sane axis does
+against the $10^{-5}$~Ry width a fixed-occupation run gets by default. A run with
+no Fermi level takes the middle of the gap as the zero of bias, with a warning,
+rather than 0~Ry.
+\end{refuses}
+
 \subsection{Vertical tunnelling transport through a two-dimensional material}
 
 An STM image says what the tip \emph{sees}. This says what gets

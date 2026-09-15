@@ -3058,3 +3058,44 @@ worth timing first, one transform against sixty.
 separating the host syncs from the FFTs, before changing anything. On a GPU the syncs are the
 first suspect and on a grid that size the FFT count is, and that cell has both -- which is
 exactly why it needs measuring rather than reasoning.
+
+---
+
+# Part IX -- from the tunnelling spectrum, 2026-09-15 (P90)
+
+## 1. A bias window is integrated with no check that the axis resolves the broadening **[found 2026-09-15, not yet measured on the transmission]**
+
+`run_vertical_transport(bias=)` and `run_ultracell_transport(bias=)` both turn a bias into an
+axis through `_energies(energies, levels, bias, nenergies)` and then `np.trapezoid` over it
+(`workflows/transport.py:278` and `:495`), and the only thing `_energies` checks is
+`nenergies >= 2`. Nothing compares the **step** of that axis against `broadening`.
+
+**Why that is not a small error.** A trapezoid over a Lorentzian or a Gaussian it does not
+resolve does not return a slightly wrong number, it returns one of the wrong order. Measured
+on the smeared delta this package uses, one level of width `w` on an axis of step `h`
+integrates to **1.000000 at `h = w/2`, 1.00004 at `h = w`, 1.14 at `2w`, 0.10 at `4w` and
+exactly 0.000000 by `250w`** -- so the failure is not monotone either, and a coarse axis can
+read *high* before it reads zero. The default `nenergies` is 1, which `_energies` then
+refuses; every larger value is accepted whatever the window is.
+
+**What exists meanwhile.** `STMSpectrum.current` (P90) has the guard: it refuses an axis whose
+largest step exceeds the width, naming both numbers, and `tests/unit/test_stm_machinery.py`
+feeds it the case that must trip it. What is missing is the same guard on the transmission's
+own `bias=`, which is a validated path and was left alone rather than changed in a phase about
+something else.
+
+**What it would take.** The guard is three lines in `_energies`, which both entry points
+already go through, and it needs `broadening` passed in -- it is not currently. The measurement
+to take first is the one above on the *transmission's* own weight rather than on the delta:
+`amplitude_weights` splits the delta as a square root, so the integrand is the delta itself and
+the numbers should carry over, but that is an argument and not a measurement.
+
+## 2. The reference pair for a unit-cell tunnelling spectrum was not taken **[2026-09-15]**
+
+`pp.x` with `plot_num = 5`, run once per bias, is the honest reference for `run_sts` with an
+energy axis, and `pp.x` is built in the vendored tree. It was not measured because the machine
+was carrying another job at a full core for the whole session, and a single-core wall clock
+taken beside one is not a measurement (`PERFORMANCE.md` says so in the entry). What went in
+instead is this code's own two routes run back to back under the same load, where the **ratio**
+is robust and the absolute figures are for scale. Take the pair on a quiet machine: 41 biases
+through `pp.x` against one `run_sts` call, both single core, same cell.

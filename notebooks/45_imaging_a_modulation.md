@@ -43,7 +43,7 @@ print(f'largest cell moment {np.abs(wave.cell_moments()).max():.4f} mu_B')
     [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-10). Call get_scf() to do this explicitly.
 
 
-    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:561: UserWarning: the fixed-density solve did not converge at 14 of 64 k-points: up to 2 of 32 bands are unsettled and the worst k-point took 100 Davidson steps, at ethr = 1.3e-07 (from conv_thr = 1.0e-05). There is no later iteration to fix this -- the density is fixed -- so these wavefunctions are what every quantity built on them will use. Loosen conv_thr (ethr is 0.1 x conv_thr / nelec, QE's setup.f90 rule) before raising the iteration budget: a threshold the solve cannot reach costs the whole budget at every k-point and is where an overlap loses positivity
+    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:635: UserWarning: the fixed-density solve did not converge at 14 of 64 k-points: up to 2 of 32 bands are unsettled and the worst k-point took 100 Davidson steps, at ethr = 1.3e-07 (from conv_thr = 1.0e-05). There is no later iteration to fix this -- the density is fixed -- so these wavefunctions are what every quantity built on them will use. Loosen conv_thr (ethr is 0.1 x conv_thr / nelec, QE's setup.f90 rule) before raising the iteration budget: a threshold the solve cannot reach costs the whole budget at every k-point and is where an overlap loses positivity
       calculation, folded_system, eigenvalues, wavefunctions = fixed_density_states(
 
 
@@ -131,6 +131,58 @@ the image itself, and the tip height is then the distance into the vacuum: the
 tunnelling density falls by orders of magnitude across it, which is what makes an
 STM sensitive to the outermost layer alone.
 
+
+## At every bias, not only at oneAn image answers how much weight there is at the tip and says nothing about wherein energy it sits. A modulation moves the two spin channels apart from cell tocell, so what a tip finds if the bias is swept at one place is a curve whosefeatures move as the tip is walked along the wave, and that is the measurementan experiment calls a spectrum. `get_ultracell_sts()` takes it, at a point, alonga line, or over a whole plane at every energy.The states do not depend on the bias, so they are sampled at the tip once andevery energy after that is a matrix product: forty-one biases here cost four percent more than one, where forty-one images cost forty-one times an image.
+
+
+```python
+tips = np.stack([np.arange(8) + 0.5, np.full(8, 0.5), np.full(8, 0.35)], axis=-1)
+# a window on the conduction edge, which is where the weight is at
+# this tip height; the filled states below the gap are three smearing
+# widths away and contribute almost nothing here
+bias = wave.fermi_energy + np.linspace(-0.06, 0.06, 41)
+channels = {name: magnetic.get_ultracell_sts(energies=bias, tip=tips,
+                                             width=0.02, spin=name)
+            for name in ('up', 'down')}
+
+# where each channel's curve peaks, cell by cell, in eV from the Fermi level
+edges = {name: sts.bias_axis[np.argmax(np.asarray(sts.values), axis=0)] * 13.6057
+         for name, sts in channels.items()}
+for name, edge in edges.items():
+    print(f'{name:5s} peak moves {np.ptp(edge):.2f} eV, highest at cell '
+          f'{np.argmax(edge)}, lowest at cell {np.argmin(edge)}')
+print(f'the two channels are {abs(np.argmax(edges["up"]) - np.argmax(edges["down"]))}'
+      f' cells apart, on a wave eight cells long')
+```
+
+    up    peak moves 0.33 eV, highest at cell 3, lowest at cell 7
+    down  peak moves 0.33 eV, highest at cell 7, lowest at cell 3
+    the two channels are 4 cells apart, on a wave eight cells long
+
+
+
+```python
+fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.6), sharey=True)
+top = max(np.asarray(sts.values).max() for sts in channels.values())
+for ax, (name, sts) in zip(axes, channels.items()):
+    values = np.asarray(sts.values)
+    ax.pcolormesh(np.arange(8) + 0.5, sts.bias_axis * 13.6057, values,
+                  shading='nearest', cmap='magma', vmin=0.0, vmax=top)
+    ax.plot(np.arange(8) + 0.5, edges[name], 'o-', color='white', lw=1.2, ms=4)
+    ax.set_xlabel('unit cell along $a_1$')
+    ax.set_title(f'tip polarized {name}')
+axes[0].set_ylabel('sample bias (eV)')
+fig.suptitle('$dI/dV$ across a spin density wave eight cells long')
+fig.tight_layout()
+```
+
+
+    
+![png](45_imaging_a_modulation_files/45_imaging_a_modulation_8_0.png)
+    
+
+
+The two channels peak at opposite ends of the wave, four cells apart on a waveeight cells long, which is the half period an image of them also shows. What thespectrum adds is the axis it happens on: the edge moves by about a third of anelectronvolt through the wave, where the image only records that the brightnesschanged. That splitting in energy is what an experiment fits an exchangesplitting to, and it is not something a brightness can be converted into, since alevel that moves and a level that gains weight look the same at one bias.The swing is smaller than the applied field's own, which is 0.54 eV from one endof the wave to the other. The difference is the response: the field drives amoment, the moment splits the bands, and neither step is rigid. Reading that ratioas a susceptibility is a further calculation and not something this figuremeasures.The white line follows the maximum of each curve, which is a good tracker onlywhile the window holds one feature. Widen it until the next conduction featurecomes in and the line jumps to that instead, which is a property of taking amaximum and not of the crystal.Note what the two panels share, colour scale included. They are the same crystaland the same states; only the tip's moment differs, and reversing it moves thewhole pattern half a period along. An unpolarized tip averages the two, so itsfeatures sit where the moment is largest in magnitude, at twice the period, forthe same reason its image does.
 
 ## The current that goes through
 
