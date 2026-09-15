@@ -6,13 +6,44 @@ the part of it that is not done. The audit behind it was a sweep of the whole
 converged run can be carried into *any* other combination of features: magnetic or not,
 collinear or spinor, with spin-orbit coupling or without, with a Hubbard `U` or without.
 
-The state machinery itself is in good shape on the spin axis. The four items that were
-closed in the same pass as this file are in `PLAN.md` P23: the spin spiral's rotated frame,
-`magnetization=` reaching the front door, the electron count that was never checked, and a
-held magnetization crossing into a run that holds nothing. What is below is everything the
-sweep found and that pass did not take.
+The state machinery itself is in good shape on the spin axis. What was closed in the same
+pass as this file is `PLAN.md` P23b: the spin spiral's rotated frame, `magnetization=`
+reaching the front door, the electron count that was never checked, a deformed cell refused
+by name so the count cannot blame a dataset for it, and a held magnetization crossing into a
+run that holds nothing. What is below is everything the sweep found and that pass did not
+take.
 
 Sizes are the author's estimate of the work, not a measurement.
+
+## The notebook P23b does not have
+
+`notebooks/43_magnetic_textures.md` already uses `with_moments`, and the result that belongs
+in it is the one that made `with_moments` change its default: on the four-site hydrogen
+chain, the *same* converged charge lands on two different magnetic states depending on
+whether the moment is carried or seeded, 8.90 mRy apart, and **both runs report
+convergence**. That is physics rather than implementation, which is the test a notebook cell
+has to pass here, and it is the concrete form of the sentence the mixer section of the user
+guide already carries: fewer iterations is satisfied by a run that found something else.
+
+One cell, one comparison table, no new SCF beyond the two runs. The numbers are in
+`PLAN.md` P23b.
+
+## A seeded calculator never reads its own checkpoint
+
+`run_scf` loads a checkpoint only when `starting_from is None`, and `Calculator.get_scf`
+always sets `starting_from` to the seed on a derived calculator. So
+`calc.with_spin(4).get_scf(checkpoint_dir=X)`, killed at its wall clock and resubmitted,
+restarts from the seed every time and never reads the checkpoint it has been writing.
+
+It is pre-existing and it is a stated design choice read one layer too narrowly: "an
+explicit `starting_from` wins" is right about an argument the *caller* passed and wrong
+about one the calculator inserted on their behalf, which is not something anybody chose per
+run. The checkpoint is strictly later state than the seed in both cases, which is the
+argument the driver's own comment already makes for preferring it over a caller's seed.
+
+The fix is one condition and the question is where it belongs: `get_scf` could decline to
+insert the seed when a `checkpoint_dir` holds a checkpoint, which keeps `run_scf`'s rule
+exactly as written and is the smaller change.
 
 ## The missing `with_*` constructors
 

@@ -530,6 +530,26 @@ def _check_grid(result, calculation) -> None:
                 f"target {calculation.nelec}: a continuation cannot change the "
                 "number of electrons, only the spin regime"
             )
+        # **Before the electron count below, because the count cannot tell the
+        # two apart and its message would name the wrong cause.** A density is
+        # a set of values on a grid the *cell* defines, so a deformed cell
+        # holding the same number of electrons integrates to something else
+        # entirely -- and a strain of a per cent usually leaves the FFT
+        # dimensions alone, so the shape check above passes it through. The
+        # integral would then read 8.24 electrons where the run wants 8 and
+        # blame a pseudopotential that did not change.
+        if not np.allclose(np.asarray(system.cell.at, dtype=float),
+                           np.asarray(calculation.system.cell.at, dtype=float),
+                           atol=1.0e-10):
+            raise ValueError(
+                "the source run and this one use different cells, and a "
+                "density lives on a grid its cell defines: the same array of "
+                "values means a different amount of charge in a cell of a "
+                "different size. Drop starting_from -- Calculator.with_cell "
+                "carries nothing across for this reason -- or relax with "
+                "with_positions, where the cell is fixed and the density does "
+                "cross"
+            )
 
     # **The line above does not check the electron count, and it reads as though
     # it does.** It sums the *target's* ``z_valence`` over the *source's* atom

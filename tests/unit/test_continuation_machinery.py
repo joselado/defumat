@@ -818,3 +818,26 @@ def test_with_moments_seeds_where_with_spin_carries():
     assert calculator.with_moments(
         np.array([[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]]))._seed_magnetization == "seed"
     assert calculator.with_spin(4, magnetization="none")._seed_magnetization == "none"
+
+
+def test_a_deformed_cell_is_refused_by_the_cell_and_not_by_the_count():
+    """A strain leaves the grid alone and changes what the density integrates to.
+
+    The two are worth separating because the electron count cannot: a per-cent
+    strain usually leaves the FFT dimensions unchanged, so the shape check
+    passes, and the integral would then read the wrong number of electrons and
+    blame a pseudopotential that did not change.
+    """
+    import dataclasses
+
+    calculation = _calculation(2, (0.4,))
+    grid = tuple(calculation.basis.dense.grid)
+    source = _random_density(grid, 1, calculation=calculation)
+    # 0.5 per cent, which this cell keeps at a 16^3 grid where 1 per cent moves
+    # it to 20^3 and would be caught by the shape check instead.
+    strained = calculation.system.with_cell(
+        np.asarray(calculation.system.cell.at) * 1.005)
+    assert tuple(Calculation(strained, (read_upf(PSEUDO),)).basis.dense.grid) == grid
+    with pytest.raises(ValueError, match="different cells"):
+        continued_state(_result(source, 1, system=strained), calculation,
+                        wavefunctions=False)

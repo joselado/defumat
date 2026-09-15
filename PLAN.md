@@ -2678,7 +2678,21 @@ that is a different pseudopotential and not a different spin regime.
 **Also refused by name:** a grid or an electron count that does not match, and a spiral
 target for the wavefunctions, whose two components live on different plane-wave spheres.
 
-### P23b -- The axes a continuation did not know it was crossing. ✅ DONE (2026-09-15).
+*A Hubbard `U` crossing into `nspin = 4` was refused here too, and is not any more* (P79).
+The reason given was that "`ns_nc` is refused by name in P20, so there is nothing to promote
+into" -- which P62b made false without anyone editing this paragraph. The promotion is the
+density's own rule one axis out: a collinear pair goes into the two **diagonal** spin blocks
+of the `(4, nslot, ldmx, ldmx)` spinor `ns` with the off-diagonal ones zero. Two workflows
+were closed by it: converging a hard magnet in stages (collinear antiferromagnet, then
+promote and let the moments cant), and -- because the refusal was gated on the *target's*
+`nspin` alone -- the `4 -> 4` **checkpoint resume**, so a wall-clock-killed noncollinear
+DFT+U run could not restart from its own `checkpoint_dir`.
+
+*Notebook 18.*
+
+### P23b -- The axes a continuation did not know it was crossing. **DONE except its notebook** (2026-09-15).
+
+Four of the five deliverables are here: the numbers below, the refusals in `docs/features.tex`'s amber box with an executed snippet, the unit coverage, and the README row P23 already carries (a row is a quantity and this adds no quantity, only knobs and refusals). **No notebook**, and the 8.9 mRy result is exactly what a notebook cell is for -- the same converged charge landing on two different magnetic states, with both runs reporting convergence -- so it is the first line of `CONTINUATION-NEXT.md` rather than a tick here. `notebooks/43_magnetic_textures.md` already uses `with_moments` and is where it goes.
 
 P23 closed the *spin regime* and left four things open on the other axes, found by asking
 the question a user asks rather than the one the phase asked: whether a converged run can be
@@ -2762,17 +2776,6 @@ for `with_moments` is one whose named configuration is not its ground state, whi
 `'auto'` would *not* have shown the defect there: with no moment to carry it falls back to
 the seed. It took a magnetic source to make the two modes differ at all.
 
-*A Hubbard `U` crossing into `nspin = 4` was refused here too, and is not any more* (P79).
-The reason given was that "`ns_nc` is refused by name in P20, so there is nothing to promote
-into" -- which P62b made false without anyone editing this paragraph. The promotion is the
-density's own rule one axis out: a collinear pair goes into the two **diagonal** spin blocks
-of the `(4, nslot, ldmx, ldmx)` spinor `ns` with the off-diagonal ones zero. Two workflows
-were closed by it: converging a hard magnet in stages (collinear antiferromagnet, then
-promote and let the moments cant), and -- because the refusal was gated on the *target's*
-`nspin` alone -- the `4 -> 4` **checkpoint resume**, so a wall-clock-killed noncollinear
-DFT+U run could not restart from its own `checkpoint_dir`.
-
-*Notebook 18.*
 
 **P24 — Linear response by autodiff: the velocity operator, the Sternheimer equation,
 and the dielectric constant. ✅ DONE.** `defumat/response/` — `velocity.py`,
