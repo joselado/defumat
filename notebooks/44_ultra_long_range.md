@@ -74,8 +74,7 @@ box = ulr.ultracell.grid
 x = np.arange(box[0]) * 8.0 / box[0]        # position in unit cells
 
 profile = lambda f: np.asarray(f).reshape(box).mean(axis=(1, 2))
-v_total = profile(ulr.delta_v[0])
-rho_ind = profile(ulr.modulation[0])
+v_total, rho_ind = profile(ulr.delta_v[0]), profile(ulr.modulation[0])
 v_ext = 0.02 * np.cos(2 * np.pi * x / 8)
 ```
 
@@ -85,8 +84,7 @@ fig, (top, bottom) = plt.subplots(2, 1, figsize=(7, 5.2), sharex=True)
 top.plot(x, v_ext * 1000, label='applied', color='C1')
 top.plot(x, v_total * 1000, label='what an electron feels', color='C0')
 top.set_ylabel('potential (mRy)'); top.legend(); top.axhline(0, lw=0.5, c='k')
-bottom.plot(x, rho_ind * 1000, color='C2')
-bottom.axhline(0, lw=0.5, c='k')
+bottom.plot(x, rho_ind * 1000, color='C2'); bottom.axhline(0, lw=0.5, c='k')
 bottom.set_xlabel('position along the long cell (unit cells)')
 bottom.set_ylabel(r'induced density (10$^{-3}$ e/bohr$^3$)')
 fig.suptitle('Silicon screening a potential eight unit cells long')
@@ -121,11 +119,11 @@ def screening(result):
     shape = result.ultracell.grid
     induced = np.fft.fftn(np.asarray(result.modulation[0])) / np.prod(shape)
     q2 = result.ultracell.g2(calc.system.cell).reshape(shape)[1, 0, 0]
-    hartree = 8 * np.pi * induced[1, 0, 0].real / q2     # Rydberg atomic units
+    hartree = 8 * np.pi * induced[1, 0, 0].real / q2   # Rydberg atomic units
     return np.sqrt(q2), 0.01, hartree, 0.01 / (0.01 + hartree)
 
 short = calc.get_ultracell(supercell=(4, 1, 1), kgrid=(1, 2, 2), nbnd=32,
-                           external=lambda x: 0.02 * np.cos(2 * np.pi * x[..., 0] / 4))
+    external=lambda x: 0.02 * np.cos(2 * np.pi * x[..., 0] / 4))
 print(f"{'cells':>6}{'|Q| (1/bohr)':>15}{'applied':>12}{'induced V_H':>14}{'epsilon':>10}")
 for cells, run in ((4, short), (8, ulr)):
     q, applied, hartree, eps = screening(run)
@@ -135,6 +133,37 @@ for cells, run in ((4, short), (8, ulr)):
      cells   |Q| (1/bohr)     applied   induced V_H   epsilon
          4         0.2667     10.00 mRy      -8.53 mRy      6.79
          8         0.1334     10.00 mRy      -9.06 mRy     10.61
+
+
+## What the modulation costs
+
+The long cell has a total energy of its own, per unit cell, and the difference between
+it and the ordinary crystal is what the modulation costs. The crystal is the right
+reference and it is free: with nothing applied, the long cell is the unit cell repeated,
+and its energy per cell comes back as the unit cell's own to machine precision.
+
+There is no first-order term. The unperturbed density is the same in every cell, so it
+has no overlap with a potential that averages to zero over the long cell, and the leading
+cost is second order in what was applied. The sign is the physics: the electrons
+rearrange into the potential rather than against it, which is what screening is, so the
+modulated crystal sits below the uniform one under an applied potential.
+
+The energy is also what says whether a modulation is worth having at all. A spin density
+wave or a charge density wave is the ground state only if its energy is below the uniform
+state's, and comparing the two is a subtraction of two of these numbers.
+
+
+
+```python
+uniform = calc.get_scf().total_energy      # the ordinary crystal
+cost = (ulr.total_energy - uniform) * 1000
+print(f'uniform {uniform:.8f} Ry, modulated {ulr.total_energy:.8f} Ry')
+print(f'the modulation costs {cost:+.5f} mRy per unit cell')
+
+```
+
+    uniform -15.71359794 Ry, modulated -15.71361495 Ry
+    the modulation costs -0.01701 mRy per unit cell
 
 
 ## A spin density wave
@@ -170,7 +199,7 @@ print(f'eight unit cells, {wave.iterations} iterations; largest cell moment '
     [defumat] an ultracell calculation: no ground state cached, running the SCF first (conv_thr = 1e-10). Call get_scf() to do this explicitly.
 
 
-    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:544: UserWarning: the fixed-density solve did not converge at 14 of 64 k-points: up to 2 of 32 bands are unsettled and the worst k-point took 100 Davidson steps, at ethr = 1.3e-07 (from conv_thr = 1.0e-05). There is no later iteration to fix this -- the density is fixed -- so these wavefunctions are what every quantity built on them will use. Loosen conv_thr (ethr is 0.1 x conv_thr / nelec, QE's setup.f90 rule) before raising the iteration budget: a threshold the solve cannot reach costs the whole budget at every k-point and is where an overlap loses positivity
+    /u/40/ladovj1/data/Documents/programs/claude/defumat/defumat/ultracell/driver.py:634: UserWarning: the fixed-density solve did not converge at 14 of 64 k-points: up to 2 of 32 bands are unsettled and the worst k-point took 100 Davidson steps, at ethr = 1.3e-07 (from conv_thr = 1.0e-05). There is no later iteration to fix this -- the density is fixed -- so these wavefunctions are what every quantity built on them will use. Loosen conv_thr (ethr is 0.1 x conv_thr / nelec, QE's setup.f90 rule) before raising the iteration budget: a threshold the solve cannot reach costs the whole budget at every k-point and is where an overlap loses positivity
       calculation, folded_system, eigenvalues, wavefunctions = fixed_density_states(
 
 
@@ -185,17 +214,15 @@ ax.axhline(0, color='0.7', lw=0.8)
 ax.plot(cells + 0.5, 0.02 * np.cos(2 * np.pi * (cells + 0.5) / 8) * 6,
         color='0.6', lw=1.2, ls='--', label='applied field (arbitrary scale)')
 ax.bar(cells + 0.5, moments, width=0.7, color='#3b6ea5', label='moment of each cell')
-ax.set_xlabel('unit cell along $a_1$')
-ax.set_ylabel(r'moment  ($\mu_B$)')
-ax.set_title('A spin density wave eight unit cells long')
-ax.legend(frameon=False, loc='upper right')
-fig.tight_layout()
+ax.set(xlabel='unit cell along $a_1$', ylabel=r'moment  ($\mu_B$)',
+       title='A spin density wave eight unit cells long')
+ax.legend(frameon=False, loc='upper right'); fig.tight_layout()
 
 ```
 
 
     
-![png](44_ultra_long_range_files/44_ultra_long_range_9_0.png)
+![png](44_ultra_long_range_files/44_ultra_long_range_11_0.png)
     
 
 
@@ -276,7 +303,7 @@ ax.legend(frameon=False, loc='upper right', ncol=2); fig.tight_layout()
 
 
     
-![png](44_ultra_long_range_files/44_ultra_long_range_13_0.png)
+![png](44_ultra_long_range_files/44_ultra_long_range_15_0.png)
     
 
 
@@ -302,9 +329,13 @@ A modulation strong enough to change the local chemistry has to be absorbed by t
 empty states, which is the reason the band count is worth converging rather than
 guessing.
 
-There is also no total energy here. The occupied eigenvalues are summed and reported,
-and that is all either this code or Elk offers for a calculation of this kind, so the
-energy gain of a modulated state over a uniform one is not yet a quantity to read off.
+The total energy is reported and is the quantity to compare two modulations with, but
+it converges from one side only when both calculations discretise the same problem: a
+comparison against a real supercell needs the same plane-wave grid on both sides, since
+two grids differ by about a micro-Rydberg per cell and that is larger than the accuracy
+the band count reaches. Under an applied magnetic field the quantity that behaves is the
+total plus the field's own energy, which is reported beside it, because what a field
+holds fixed is the full energy and the reported total leaves the Zeeman term out.
 
 The checks live in `tests/regression/test_ultracell.py`, where a two-cell ultracell is
 compared against a real four-atom supercell run in full, and the disagreement in the

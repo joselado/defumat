@@ -190,7 +190,8 @@ class UltracellResult:
     #: is the full energy and the Zeeman term is deliberately outside what is
     #: reported, so the total alone is a bound on nothing and was measured going
     #: the wrong way -- 7.4e-07 Ry above an ordinary SCF at ``nbnd = 12`` and
-    #: 9.7e-07 *below* it at 24, where the sum is +4.15e-06 and +2.47e-06.
+    #: 9.7e-07 and 1.6e-06 *below* it at 24 and 40, where the sum is +4.15e-06,
+    #: +2.47e-06 and +5.15e-07, above at every rung and falling.
     total_energy: float
     #: The terms it is made of, in ``SCFResult.energy_terms``'s shape:
     #: ``one-electron``, ``hartree``, ``xc``, ``ewald``, and ``dispersion`` and

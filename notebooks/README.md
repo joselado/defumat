@@ -170,7 +170,7 @@ want a number.
 | [`41_vertical_transport.ipynb`](41_vertical_transport.ipynb) | Tunnelling *through* a two-dimensional material into the substrate beneath it: graphene, where the current map is the microscope's picture, and a bilayer, where the two layers' paths interfere and it is not |
 | [`42_all_electron_start.ipynb`](42_all_electron_start.ipynb) | A converged all-electron density brought here and used to start a run: where a pseudopotential density is allowed to differ from the real one, and where it is not |
 | [`43_magnetic_textures.ipynb`](43_magnetic_textures.ipynb) | A moment per atom rather than a moment per crystal: a 90 degree helix that survives self consistency, the symmetry a texture leaves behind, and the two numbers it takes to say it is still there |
-| [`44_ultra_long_range.ipynb`](44_ultra_long_range.ipynb) | A potential that varies over eight unit cells of silicon, and the electrons screening it: the long cell solved in the ordinary cell's own states, computed once. Then the two kinds of spin wave it carries, one modulating a moment's length and one its direction, |
+| [`44_ultra_long_range.ipynb`](44_ultra_long_range.ipynb) | A potential that varies over eight unit cells of silicon, and the electrons screening it: the long cell solved in the ordinary cell's own states, computed once. What the modulation costs in energy, which is what says whether a modulation is the ground state at all. Then the two kinds of spin wave it carries, one modulating a moment's length and one its direction, |
 | [`45_imaging_a_modulation.ipynb`](45_imaging_a_modulation.ipynb) | What a scanning-tunnelling microscope sees above a spin density wave eight unit cells long: a polarized tip images the wave itself and an unpolarized one images its square, at twice the wavevector, because a collinear crystal cannot respond in the charge at first order in the field |
 
 ## Conventions
@@ -263,7 +263,7 @@ workstation core, slowest last:
 | | s | | s | | s | | s |
 |---|---|---|---|---|---|---|---|
 | `01` | 5 | `06` | 23 | `34` | 40 | `41` | 164 |
-| `09` | 6 | `25` | 28 | `10` | 50 | `44` | 164 |
+| `09` | 6 | `25` | 28 | `10` | 50 | `44` | 188 |
 | `02` | 8 | `18` | 29 | `29` | 59 | `08` | 171 |
 | `37` | 9 | `12` | 30 | `45` | 76 | `27` | 178 |
 | `03` | 10 | `21` | 30 | `11` | 81 | `17` | 203 |
@@ -274,6 +274,12 @@ workstation core, slowest last:
 | `16` | 18 | `40` | 34 | `13` | 131 | `20` | 282 |
 | `00` | 22 | `23` | 35 | `30` | 131 |  |  |
 | `07` | 22 | `32` | 35 | `39` | 151 |  |  |
+
+`44` went from 164 s to 188 s on 2026-09-15, when it gained the total energy: the extra
+cell runs nothing of its own -- the uniform reference is the ordinary crystal's own SCF,
+which is already converged -- so the 24 s is the one further potential evaluation per
+iteration that every ultracell run now pays to report a Kohn-Sham energy rather than an
+eigenvalue sum.
 
 `17` went from 29 s to 203 s on 2026-09-14, when it gained a noncollinear iron cell run
 through two mixers, and that figure is an **upper bound**: it was taken while three other
