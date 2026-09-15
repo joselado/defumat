@@ -59,6 +59,7 @@ second route beside it.
 | The other DFT+U flavours | -- (the `dft+u` block) | P62 |
 | Transverse spin susceptibility `chi^{+-}(q, w)` and magnons | 330/331 (`tddftsplr.f90`) | P63 |
 | Scanning-tunnelling microscopy images, including spin-polarized | 162 (`wfplot.f90`) | P65 |
+| Tunnelling spectra, `dI/dV` over an energy axis | none -- 162 is one delta at one energy | P90 |
 
 **The second-harmonic row was in the *rejected* table until P54 and was wrong
 there**, which is worth recording because the reasoning that put it there is
@@ -86,6 +87,16 @@ noncollinear crystal makes the picture depend on which way the tip points -- is
 in neither code, and it is free here because the tunnelling density already
 carries its channel axis. **"QE has it" is a reason to check what QE's version
 omits, not a reason to stop.**
+
+**And neither has an energy axis**, which is the same lesson one level out and is
+P90. `stm.f90` is `SUBROUTINE stm(sample_bias, stmdos, istates)` -- one scalar
+bias in, one field out, and `INPUT_PP.txt`'s `sample_bias` is a single `REAL`;
+`wfplot.f90` overwrites `occsv` with one delta at `efermi` and calls `rhomagv`
+once. So a **spectrum** -- the curve at one place over many biases, which is what
+resolves a gap or a band edge and what a modulation has to be read with -- is had
+from either code only by running it again at every bias, paying the whole sum
+each time. Here the states are sampled at the tip once and the axis is a matrix
+product after that: forty-one biases for 4 per cent more than one.
 
 ---
 
