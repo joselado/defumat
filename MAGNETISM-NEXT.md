@@ -654,9 +654,19 @@ decide it, because a departure from `pw.x` needs a number rather than an argumen
   the *length*, so it is not the rotation the manifold is made of. Two values of `beta0` a
   factor of four apart agree to 6e-5, and it is the **mixer** rather than the step length:
   `anderson` run at 0.1, 0.3 and 0.7, a factor of seven, sits between 0.98 and 1.00 at all
-  three. Both `adaptive` runs report converged three orders below `conv_thr`. Neither cluster
-  matches the 0.62 mu_B/2 the record gives for this system's unit cell, so **no run here is
-  entitled to be called the ground state** and reconciling that is owed first. **So the flat manifold is still unmeasured** -- this item's decisive run has
+  three. Both `adaptive` runs report converged three orders below `conv_thr`.
+
+  **The 0.62 that was held against those numbers is a different cell, and that half is
+  withdrawn** (2026-09-15). It is the unit cell's moment on the `(4, 2, 2)` k-grid every
+  stage 3a and 3b test folds to; this comparison ran at `(4, 1, 1)`, where the same cell is
+  **saturated** at 1.0000 and the ultracell starts there, so `anderson`'s 0.98 to 1.00 is the
+  reference state rather than a state it found. `PERFORMANCE.md` has the grid table. On the
+  unit cell itself both mixers give the same moment and the same total energy to ten digits at
+  every grid and `beta` tried, so the mixer is cleared of the general charge. **And the
+  comparison cannot be repeated**: neither record wrote down the field's functional form, and
+  taking the description literally -- 0.01 Ry rotating 90 degrees per cell, `kerker = False` --
+  all five runs converge to one state, `|m|` 0.461 to 0.462 turning -41 degrees per cell, with
+  no factor of five anywhere. **So the flat manifold is still unmeasured** -- this item's decisive run has
   not been done, it has been attempted and invalidated -- and the projection option below is
   not displaced by the mixer. What the attempt did establish is a property to carry into
   every other option here: **a step that grows can change which solution is found, and

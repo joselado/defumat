@@ -5944,15 +5944,42 @@ solution a run finds**, and `converged = True` with an `accuracy` three orders b
 `conv_thr` does not protect against it. It is the same hazard `OPEN.md` Part VI item 3 already
 records for a large `mixing_beta` on this cell -- excursions through per-cell moments of 2.2
 mu_B on a one-electron atom -- reached by a different route. What has not been established is
-which of the two states is the right one. `cell_moments` and `OPEN.md`'s figure are in the
-same unit, mu_B/2, and the record gives **0.62** for this system's unit cell: `anderson` sits
-at 0.98 to 1.00, which is a one-electron atom essentially saturated, and `adaptive` at 0.186,
-nearly collapsed. **Neither is 0.62**, so this setup does not reproduce the state the record
-describes and no run here is entitled to be called the ground state. Two `anderson` runs also
-failed to converge inside 300 iterations, so two of the five numbers are snapshots of a moving
-density rather than fixed points. What this establishes is that the two mixers disagree by a
-factor of five on the same input; reconciling either against 0.62 is owed and is the first
-thing to do before this cell is used to decide anything.
+which of the two states is the right one. Two `anderson` runs also failed to converge inside
+300 iterations, so two of the five numbers are snapshots of a moving density rather than fixed
+points.
+
+**The 0.62 that was owed a reconciliation was never the same cell, and the reconciliation is
+withdrawn** (measured 2026-09-15). The sentence that stood here read `anderson`'s 0.98 to 1.00
+and `adaptive`'s 0.186 against the **0.62 mu_B/2** `OPEN.md` Part VI item 3 gives for this
+system's unit cell, found neither, and called for reconciling them. **That 0.62 is a k-grid**,
+not a lattice constant: the hydrogen cell at `a = 5.5` with a 0.8 seed has a moment of
+
+| folded k-grid | (1,1,1) | (4,1,1) | (4,2,2) | (4,4,4) | (6,6,6) |
+|---|---|---|---|---|---|
+| \|m\| (mu_B/2) | 1.0000 | **1.0000** | **0.6234** | 0.7901 | 0.8020 |
+
+and the fixture's comment quoting "0.62 in six iterations" is the `(4, 2, 2)` column, which is
+what every stage 3a and 3b test folds to. **This comparison ran at `(4, 1, 1)`**, where the
+same cell is a **saturated** atom whose moment cannot grow -- the regime the fixture's own
+comment says it exists to avoid. So `anderson`'s 0.98 to 1.00 is not a state it found, it is
+the reference state it started from and stayed at, the ultracell loop beginning at
+`tile(reference.density)`; and the two numbers were never about one cell. Nothing was owed.
+
+**The mixer is cleared of the general charge on the same cell.** The unit cell itself, both
+mixers, `beta` at 0.7, 0.3, 0.2 and 0.05, at `(4, 1, 1)` and `(4, 4, 4)`: the same moment and
+the same total energy **to ten digits** every time. So a growing step does not choose a basin
+here in general; whatever happens, happens in the ultracell.
+
+**What cannot be recovered is this comparison itself, and that is the defect in the record.**
+Neither this section nor `OPEN.md` item 3 wrote down **the field's functional form**, and item
+3 does not write down its k-grid either -- only "a field that turns by 90 degrees per cell" and
+an amplitude. Re-run at `(4, 1, 1)` with `kerker = False` under a field
+`0.01 (cos 2 pi x/4, sin 2 pi x/4, 0)` Ry, which is that description taken literally, **all
+five runs converge to one state**: `|m|` 0.4610 to 0.4623, moments turning -41.0 degrees per
+cell, agreeing across both mixers and a factor of seven in `beta` to 0.3 per cent, in 262, 157,
+83, 101 and 94 iterations. The factor of five does not appear. So the split is real about
+*some* field and this is not it, and no one can tell which, because the field was never
+written down. **A field is an input and belongs in the record beside the amplitude.**
 
 **It loses on a cell that was never hard, which is what a robustness mixer does.**
 `benchmarks/si-1k.in`, two-atom silicon at `conv_thr = 1e-10`, each mode at its own default

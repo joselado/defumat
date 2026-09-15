@@ -2562,6 +2562,19 @@ flat direction is then unbounded.
 per cell, moment 0.62 mu_B/2) under a field that turns by 90 degrees per cell, `nbnd = 16`,
 every run given a 300-iteration budget:
 
+> **Two things this table does not say, and a later session needed both** (2026-09-15). The
+> **0.62 is a k-grid**: that is the unit cell's moment on the `(4, 2, 2)` grid the stage 3a and
+> 3b tests fold to, with no field, and the same cell is **1.0000** on `(4, 1, 1)`, 0.7901 on
+> `(4, 4, 4)` and 0.8020 on `(6, 6, 6)`. This table does not state which grid it ran on, so the
+> number in its own header does not identify its own cell. And it does not state the **field's
+> functional form**, only that it turns 90 degrees per cell, which is not enough to repeat it:
+> taking that description literally, as `0.01 (cos 2 pi x/4, sin 2 pi x/4, 0)` Ry at
+> `(4, 1, 1)` with `kerker = False`, `anderson` at `beta = 0.7` converges in **83** iterations
+> where this table says 48. **A field and a k-grid are inputs and belong beside the amplitude.**
+> One more thing to carry into any rerun: at `(4, 2, 2)`, `nbnd = 16` cuts a multiplet at
+> **5.0e-9 Ry**, below `DEGENERATE_CUT`, so the frozen basis there is whatever the eigensolver
+> returned and two runs need not share it.
+
 | field | `mixing_beta` | iterations | converged | final `dr2` |
 |---|---|---|---|---|
 | 0.01 Ry | 0.7 | 48 | yes | 2.7e-10 |
