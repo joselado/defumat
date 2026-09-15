@@ -2516,6 +2516,28 @@ sloshes, and it is bounded by the half of `dr2` that carries no `1/|G+Q|^2`. **T
 measurement again when that lands**; the factor of 2.2e3 in the weights is what it would
 be paid at.
 
+**The case arrived from somewhere else, and it is the ordinary SCF rather than an ultracell**
+(reported 2026-09-15 by the NiBr2 session on Triton, job 20260032, a 45-atom slab under a
+15-site `LOCAL_MAGNETIC_FIELDS` helix). Two measurements, and together they say the weighting
+bites here in the way the paragraph above predicts. **Where the magnetization moves is the
+grid scale**: of the power of the magnetization difference between consecutive iterations, 93
+to 96 per cent lies above `|G| = 0.8` 1/bohr and 0.2 to 0.3 per cent below 0.4, which is
+exactly the band the charge half's `1/|G|^2` suppresses and the magnetic half cannot. **And
+what it is doing is a slow coherent drift no single iteration shows**: `m_z` went 0.0000,
+0.0034, 0.0197, 0.0489, 0.1153, 0.1420 over iterations 4, 40, 80, 120, 160, 186, with the
+absolute magnetization going 30.8 to 36.5 mu_B, while the per-iteration angle change had a
+mean an order of magnitude *below* its spread across sites. So four consecutive iterations
+read as grid-scale noise and a hundred of them are the whole story, which is the shape of
+thing a residual reads as converged.
+
+**The cause there is the constraint and not the mixer**, which is worth recording because it
+is the same lesson as `CLAUDE.md`'s `i_cons = 2` trap one step out: the card carries only `x`
+and `y` components, so **out-of-plane canting costs the constraint nothing** and the field is
+stiff only in the plane it has components in. A field pins the directions it has a component
+along and leaves every other one free; a hard constraint on the moment direction is the thing
+that would not. The in-plane helix held its 24 degree step to better than a tenth of a degree
+throughout.
+
 ## 3. A noncollinear ultracell's rigid spin rotation has no restoring force, and a small `mixing_beta` cannot cross it **[opened 2026-09-14, P88 stage 3b]**
 
 **The mechanism, and it is physics rather than a bug.** Without spin-orbit coupling or

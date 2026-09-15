@@ -377,6 +377,14 @@ def test_the_ultracell_converges_to_the_supercell(tmp_path, pseudo_dir):
 #: threshold -- and at ``a = 6.0`` it is 0.9997, a saturated atom whose moment
 #: cannot grow and whose ``|zeta| = 1`` is the clamp-tangent trap ``CLAUDE.md``
 #: names. At 5.5 with a 0.8 seed it is 0.62 in six iterations.
+#:
+#: **That 0.62 is a k-grid as much as it is a lattice constant**, and leaving
+#: the grid off this line cost a later session a whole comparison. The moment
+#: is 0.6234 on the ``(4, 2, 2)`` grid every test below folds to, and on
+#: nothing else: ``(4, 1, 1)`` gives **1.0000**, a saturated atom, ``(4, 4, 4)``
+#: 0.7901 and ``(6, 6, 6)`` 0.8020, so the partly-polarized cell this fixture
+#: exists to provide is the one this grid picks out. Quote the number with the
+#: grid or the cell it names is a different cell.
 HYDROGEN = """&control
  calculation='scf'
 /
