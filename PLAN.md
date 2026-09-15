@@ -15663,9 +15663,41 @@ Hartree potential of **-9.06 mRy** at `|Q| = 0.1334 /bohr` against 10 mRy applie
 `delta_rho = V_H q^2 / 8 pi = -6.42e-06` e/bohr^3, and
 `dE = delta_rho . V_ext . Omega = -1.70e-05` Ry on a cell of 265.3 bohr^3. The assembly
 reports **-0.01701 mRy**. Three digits, through a route with no `deband`, no Ewald term
-and no second code in it -- and it is **one data point**, which is what it is worth: the
-test that would make it decisive is the *exponent*, since halving the amplitude must
-divide the cost by four, and that has not been run.
+and no second code in it.
+
+**And the obvious way to strengthen that is nearly vacuous, which is worth knowing before
+anyone spends a run on it.** The natural next test is the *exponent*: halving the
+amplitude must divide the cost by four. It does, on two-cell silicon at 0.08, 0.04, 0.02
+and 0.01 Ry -- ratios of **4.001, 4.000, 4.000**, with the deviation from four itself
+falling by four (8.7e-4, 2.1e-4, 4e-5), which is the quartic term behaving as it should.
+**But the exponent is guaranteed by symmetry whatever the assembly does**: translation by
+one unit cell maps `v_ext` to `-v_ext` and is a symmetry of the unperturbed crystal, so
+any functional of the density is even in the amplitude, and an energy that double-counted
+`int rho v_ext` would pass the exponent test unchanged. What it rules out is a spurious
+*odd* term and nothing else.
+
+**What pins the coefficient is the comparison above**, and it is checked at four
+amplitudes rather than one. By Hellmann-Feynman `dE/dlambda = int rho(lambda) V`, so
+`Delta E = (1/2) int delta_rho . v_ext + O(lambda^4)`, with `delta_rho` the run's own
+`modulation` -- the induced density, validated against a real supercell by a route with
+no energy in it. On two-cell silicon:
+
+| amplitude, Ry | `dE`, mRy | `(1/2) int delta_rho . v_ext`, mRy | residual | absolute |
+|---|---|---|---|---|
+| 0.08 | -3.031890 | -3.032795 | -2.98e-04 | 9.0e-07 Ry |
+| 0.04 | -0.757807 | -0.757862 | -7.21e-05 | 5.5e-08 Ry |
+| 0.02 | -0.189442 | -0.189445 | -2.03e-05 | 3.8e-09 Ry |
+| 0.01 | -0.047360 | -0.047360 | -6.58e-06 | 3.1e-10 Ry |
+
+**Seven parts in a million at the smallest amplitude**, against a second-order estimate
+that shares no `deband`, no Ewald term and no exchange-correlation energy with it. And
+the *approach* is the check rather than the agreement: the residual is `-(b/a) lambda^2`
+exactly, so it must fall by four each halving, and it does -- 4.13, then 3.55, then 3.09
+as it flattens into the two runs' own convergence floor at 3e-10 Ry absolute. The same
+quartic coefficient read off the ratio ladder instead (the deviation from four is
+`3 (b/a) lambda^2`, measured at 8.7e-4, giving `(b/a) lambda^2 = 2.9e-4`) agrees with the
+residual's 2.98e-4 to **three per cent**, which is two independent extractions of one
+number.
 
 **The Ewald identity is not round-off and the reason is structural.** The unit cell's Ewald
 against a supercell's divided by `N`: -7.1e-15 Ry for `(2,1,1)` and **+7.2e-09** for
