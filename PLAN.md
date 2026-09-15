@@ -2776,6 +2776,30 @@ for `with_moments` is one whose named configuration is not its ground state, whi
 `'auto'` would *not* have shown the defect there: with no moment to carry it falls back to
 the seed. It took a magnetic source to make the two modes differ at all.
 
+**A derived calculator never read the checkpoint it had been writing, and the rule it broke
+was one this code already states.** `run_scf` reads its `checkpoint_dir` only when
+`starting_from` is `None`, which is right about an argument the *caller* passed and wrong
+about the seed a derived calculator inserts on their behalf: nobody chose that per run. So
+`calc.with_spin(2).get_scf(checkpoint_dir=X)`, killed at its wall clock and resubmitted,
+started from the parent's state every time. `Calculator.get_scf` now withholds the seed when
+the directory holds a state, which leaves `run_scf`'s rule exactly as written. Measured on
+`al-metal.in`, a non-magnetic ground state converged at `conv_thr = 1e-8` promoted into
+`nspin = 2` at the input's `1e-12`: the first line takes two iterations, and every
+resubmission after it **re-enters at iteration 2 with the checkpoint's own `ethr = 1e-13`
+and finishes in one**, at the same -4.1854697253 Ry. Before, each resubmission repeated both
+iterations from the seed, starting at `ethr = 1e-2` and paying the "ethr was too large"
+re-diagonalisation the schedule then asks for.
+
+Two things about that fix are worth more than the condition itself. **The seed and the
+`magnetization` beside it are withheld together**: a resume refuses a `magnetization`
+argument by name, there being nothing left for it to decide, and `with_moments` defaults to
+`'seed'` -- so dropping only the state would have turned a resubmitted texture run from one
+that silently restarted into one that raises. And **the cache key is the options rather than
+what is passed**, because whether the seed goes in now depends on a file on disk and a
+converged run does not delete its last checkpoint: keying on it would make the second
+`get_scf` miss its own cache and rerun the whole SCF, from a mid-run state at that. There is
+a test for each, and the first two fail against the old code.
+
 
 **P24 — Linear response by autodiff: the velocity operator, the Sternheimer equation,
 and the dielectric constant. ✅ DONE.** `defumat/response/` — `velocity.py`,

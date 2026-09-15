@@ -841,3 +841,105 @@ def test_a_deformed_cell_is_refused_by_the_cell_and_not_by_the_count():
     with pytest.raises(ValueError, match="different cells"):
         continued_state(_result(source, 1, system=strained), calculation,
                         wavefunctions=False)
+
+
+def _seeded_calculator(calculation):
+    """A derived calculator holding a converged parent state as its seed."""
+    from defumat.calculator import Calculator
+
+    parent = Calculator(calculation.system, (read_upf(PSEUDO),), announce=False)
+    parent._scf = _result(
+        _random_density(tuple(calculation.basis.dense.grid), 1,
+                        calculation=calculation),
+        1, system=calculation.system,
+    )
+    return parent
+
+
+def _record_run_scf(monkeypatch, calculation):
+    """Replace ``run_scf`` where the calculator looks it up, and record calls."""
+    calls = []
+
+    def fake_run_scf(system, pseudos, **options):
+        calls.append(options)
+        return _result(
+            _random_density(tuple(calculation.basis.dense.grid), 1,
+                            calculation=calculation),
+            1, system=calculation.system,
+        )
+
+    monkeypatch.setattr("defumat.calculator.run_scf", fake_run_scf)
+    return calls
+
+
+def test_a_seeded_calculator_reads_the_checkpoint_it_has_been_writing(
+        monkeypatch, tmp_path):
+    """A checkpoint is later state than the seed, and used to be invisible.
+
+    ``run_scf`` reads its own ``checkpoint_dir`` only when nothing was passed as
+    ``starting_from``, and a derived calculator inserts the parent's state there
+    on the caller's behalf -- so a job killed at its wall clock and resubmitted
+    restarted from the seed every time and never read the file it had written.
+    """
+    from defumat.scf.driver import SCF_CHECKPOINT
+
+    calculation = _calculation(1)
+    calculator = _seeded_calculator(calculation).with_spin(2)
+    calls = _record_run_scf(monkeypatch, calculation)
+
+    calculator.get_scf(checkpoint_dir=tmp_path)
+    assert calls[-1]["starting_from"] is not None, (
+        "an empty directory has nothing to continue, so the seed still goes in")
+
+    (tmp_path / SCF_CHECKPOINT).write_bytes(b"")
+    calculator._scf = None
+    calculator.get_scf(checkpoint_dir=tmp_path)
+    assert "starting_from" not in calls[-1]
+    assert "magnetization" not in calls[-1], (
+        "both keys are withheld together: a resume refuses a magnetization")
+
+
+def test_the_seed_and_its_magnetization_are_withheld_together(
+        monkeypatch, tmp_path):
+    """``with_moments`` defaults to ``'seed'``, which a resume refuses by name.
+
+    Withholding ``starting_from`` alone would turn a resubmitted texture run
+    from one that silently restarts into one that raises.
+    """
+    from defumat.scf.driver import SCF_CHECKPOINT
+
+    calculation = _calculation(1)
+    calculator = _seeded_calculator(calculation).with_moments(
+        np.array([[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]]))
+    assert calculator._seed_magnetization == "seed"
+    calls = _record_run_scf(monkeypatch, calculation)
+
+    (tmp_path / SCF_CHECKPOINT).write_bytes(b"")
+    calculator.get_scf(checkpoint_dir=tmp_path)
+    assert "magnetization" not in calls[-1]
+
+    # And a caller who asks for one anyway still reaches ``run_scf``'s refusal,
+    # which is where that argument is decided.
+    calculator._scf = None
+    calculator.get_scf(checkpoint_dir=tmp_path, magnetization="seed")
+    assert calls[-1]["magnetization"] == "seed"
+
+
+def test_a_checkpoint_left_behind_does_not_cost_the_cache(monkeypatch, tmp_path):
+    """The cache key is the options, and the seed is not one of them.
+
+    A converged run does not delete its last checkpoint, so whether the seed is
+    inserted depends on a file that appears halfway through the calculator's
+    life. Keying on it would make the second ``get_scf`` miss and rerun the
+    whole SCF, against a mid-run state at that.
+    """
+    from defumat.scf.driver import SCF_CHECKPOINT
+
+    calculation = _calculation(1)
+    calculator = _seeded_calculator(calculation).with_spin(2)
+    calls = _record_run_scf(monkeypatch, calculation)
+
+    first = calculator.get_scf(checkpoint_dir=tmp_path)
+    (tmp_path / SCF_CHECKPOINT).write_bytes(b"")
+    assert calculator.get_scf(checkpoint_dir=tmp_path) is first
+    assert len(calls) == 1

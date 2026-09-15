@@ -1188,6 +1188,34 @@ writing a checkpoint on the way out, so a wall-clock kill lands after a
 checkpoint rather than between two. It is checked between iterations, so set it
 at least one iteration short of the real limit.
 
+\emph{A derived calculator reads the checkpoint rather than the state it was
+derived from.} \code{with\_spin}, \code{with\_positions} and their relatives hand
+the parent's converged state to the first SCF as a starting point, and
+\code{run\_scf} looks in its checkpoint directory only when nothing was handed to
+it --- so a promoted run killed at its wall clock and resubmitted used to start
+from the seed every time and never read the file it had been writing. The
+checkpoint wins, for the reason it wins over a seed the caller passed: it is
+strictly later state. Measured on fcc aluminium, a non-magnetic ground state
+converged at \code{1e-8} and promoted into a two-channel run at the input's
+\code{conv\_thr = 1e-12}: the first line takes two iterations, and the
+resubmitted one re-enters at iteration 2 carrying the checkpoint's own
+\code{ethr = 1e-13} and finishes in one, at the same $-4.1854697253$~Ry. Before,
+every resubmission repeated both iterations from the seed, starting at
+\code{ethr = 1e-2} and paying the re-diagonalisation the schedule then asks for.
+
+\begin{lstlisting}[language=Python]
+calculator = Calculator.from_file("al-metal.in")
+calculator.get_scf()                          # the non-magnetic ground state
+spinor = calculator.with_spin(2)              # carries it as a seed
+scf = spinor.get_scf(checkpoint_dir="ckpt")   # resubmit after a kill: continues
+\end{lstlisting}
+
+The seed and the \code{magnetization} beside it are withheld together, which is
+not bookkeeping: a resume refuses a \code{magnetization} argument by name,
+there being nothing left for it to decide, and \code{with\_moments} sets one by
+default --- so dropping only the state would turn a resubmitted texture run from
+one that silently restarted into one that raises.
+
 \emph{A field is carried, and only one kind of field is refused.} An applied
 \code{LOCAL\_MAGNETIC\_FIELDS} card, and a penalty constraint of any flavour,
 leave the field exactly as the input built it, so the resume rebuilds it from

@@ -83,7 +83,8 @@ from pathlib import Path
 import numpy as np
 
 from defumat.pseudo.upf import Pseudopotential, read_upf
-from defumat.scf.driver import Calculation, SCFResult, run_scf
+from defumat.scf.driver import (Calculation, SCF_CHECKPOINT, SCFResult,
+                                run_scf)
 from defumat.system.builder import System, build_system
 from defumat.system.kpoints import for_spin
 
@@ -541,11 +542,22 @@ class Calculator:
         ``(nk, nocc, npwx)`` blocks more. The price is that a run which raises
         leaves no cache behind, which is the honest state anyway: what was
         cached is no longer what this calculator is set up for.
+
+        **A checkpoint in ``checkpoint_dir`` beats the inherited seed**, which
+        is the same rule :func:`~defumat.scf.driver.run_scf` states for a seed
+        the caller passed and for the same reason: the checkpoint is strictly
+        later state, and the recovery a checkpoint advertises is "resubmit the
+        same command line". A derived calculator inserts its parent's state as
+        ``starting_from`` on the caller's behalf, and ``run_scf`` reads its
+        directory only when nothing was passed, so a
+        ``calc.with_spin(4).get_scf(checkpoint_dir=...)`` killed at its wall
+        clock and resubmitted used to start from the seed every time and never
+        read the checkpoint it had been writing. The seed and the
+        ``magnetization`` beside it are withheld **together**, since a resume
+        refuses a ``magnetization`` argument -- there is nothing left for it to
+        decide -- and ``with_moments`` sets one by default.
         """
         merged = {**self._defaults_for(run_scf), **options}
-        if self._seed is not None:
-            merged.setdefault("starting_from", self._seed)
-            merged.setdefault("magnetization", self._seed_magnetization)
         if self._scf is not None and _same_options(merged, self._scf_options):
             return self._scf
         # ``diagonalization`` and ``k_batch`` are *not* arguments of the SCF:
@@ -559,9 +571,32 @@ class Calculator:
         self._scf = self._strain_response = None
         self._ultracell = self._ultracell_options = None
         self._scf = run_scf(self.system, self.pseudos,
-                            calculation=self.calculation, **merged)
+                            calculation=self.calculation, **self._seeded(merged))
+        # The key is the options, without the seed -- see ``_seeded``.
         self._scf_options = merged
         return self._scf
+
+    def _seeded(self, merged: dict) -> dict:
+        """``merged`` with the inherited seed in it, unless a checkpoint wins.
+
+        Both keys go in or neither does. Dropping only ``starting_from`` would
+        let the ``magnetization`` beside it reach a resume, which refuses one
+        by name -- so a ``with_moments`` calculator, whose default is
+        ``'seed'``, would go from restarting silently to raising.
+
+        **This is why the cache key is the options and not what is passed.** The
+        seed is a property of the calculator rather than of the call, so keying
+        on it would add nothing -- except that whether it goes in depends on a
+        file on disk, and a converged run does not delete its last checkpoint.
+        The second ``get_scf`` would then miss its own cache and rerun the whole
+        SCF, from a mid-run state at that.
+        """
+        if self._seed is None or _has_checkpoint(merged.get("checkpoint_dir")):
+            return merged
+        seeded = dict(merged)
+        seeded.setdefault("starting_from", self._seed)
+        seeded.setdefault("magnetization", self._seed_magnetization)
+        return seeded
 
     def get_elk_seed(self, directory, renormalise: bool = True, report=None):
         """Elk's converged density on this run's grid, as a starting guess.
@@ -1888,6 +1923,17 @@ def _resolve_pseudos(system: System, pseudos, pseudo_dir) -> tuple:
             )
         loaded.append(read_upf(path))
     return tuple(loaded)
+
+
+def _has_checkpoint(checkpoint_dir) -> bool:
+    """Whether :func:`~defumat.scf.driver.run_scf` would resume from here.
+
+    The same test the driver makes, spelled the same way, so that the two
+    cannot drift apart: what decides a resume is the state file, and the mixer
+    history beside it is picked up only if the state was.
+    """
+    return (checkpoint_dir is not None
+            and (Path(checkpoint_dir) / SCF_CHECKPOINT).exists())
 
 
 def _same_options(new: dict, old: dict | None) -> bool:
