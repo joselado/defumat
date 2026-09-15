@@ -134,8 +134,8 @@ class Hamiltonian(eqx.Module):
         k rather than ``npwx`` because a shell sitting on the cutoff makes some
         k-points hold fewer plane waves than others, and those are the ones an
         oversized subspace goes singular at: on silicon at ``ecutwfc = 12``
-        folded to an ultracell, ``npwx`` is 190 while the k-points that returned
-        ``nan`` hold 169.
+        folded to a 32 k-point ultracell the spheres run from 169 to 192, so a
+        bound at ``npwx`` would leave every k-point below 192 oversubscribed.
         """
         if self.npw is None:
             return self.ndim

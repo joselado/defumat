@@ -2486,6 +2486,13 @@ is QE's own `ipw`; only hand-built test fixtures reach that.
 | 80 | uncapped | 1 of 32 | 33 / 15.3 | 0 |
 | 80 | capped | **1 of 32** | 36 / 18.6 | 0 |
 
+**This is not a repeat of the run at the head of this entry.** That one was 8 k-points
+through `fixed_density_states` on a folded grid and reported 5 of 8 unconverged with up to
+66 of 80 bands unsettled; this is `si-ultracell.in`'s own 32 k-point set solved directly at
+`ethr = 1e-8`, where no row leaves a band unsettled at all. The table measures **the cap**,
+by solving one Hamiltonian both ways, and the entry's original 8 k-point run was not
+repeated.
+
 The step counts on the uncapped `nbnd = 48` row are 4 because the loop **exits** as soon as
 the eigenvalues stop being finite, so a short count there is the failure and not a fast
 solve. The `nbnd = 48` case is closed: 192 vectors in a 169-dimensional space became 169,
@@ -2516,7 +2523,34 @@ ultracell loop above them then ran 200 iterations to `dr2 = 1.15e-1`. **Nothing 
 chain reports the cause** -- the failure surfaces as "the ultracell did not converge",
 three layers from the subspace that was too large. The rung passed `david = 2` meanwhile,
 which is what the `PLAN.md` P88 measurement was taken at; **that workaround is removed and
-the rung now runs at the default**, which makes it the regression test for the cap.
+the rung now runs at the default**, which makes it the regression test for the cap. The
+energy ladder in `test_the_total_energy_bounds_the_supercells_from_above` carried the same
+`(48, 2)` rung and it is removed with it.
+
+**Five other `david = 2` call sites in that file said nothing about why they were there,
+and all five turn out not to need it.** They were on the hydrogen ultracells rather than on
+silicon, and a bare keyword is not evidence of its own reason, so each was run alone at the
+default:
+
+| test | | peak |
+|---|---|---|
+| `a_uniform_field_is_the_unit_cell_under_the_same_field` | passed, 76.1 s | 2712 MB |
+| `the_magnetic_ultracell_converges_to_the_supercell` | passed, 75.9 s | 2785 MB |
+| `a_uniform_vector_field_is_the_unit_cell_under_the_same_field` | passed, 67.7 s | 1315 MB |
+| `the_noncollinear_ultracell_converges_to_the_supercell` | passed, 83.2 s | 1658 MB |
+| `fixed_occupations_fill_spinor_bands_one_electron_at_a_time` | passed, 52.1 s | 1723 MB |
+
+The magnetic one was measured both ways, since it was the one that looked like it might be
+a *memory* choice rather than the subspace workaround: 2785 MB at the default against
+**2866 MB** at `david = 2`, one sample each, which is the same number to three per cent and
+does not support a direction. So the keyword is removed at all five.
+
+**Two of those runs were killed before that was measured, and neither kill was the test.**
+Five in one process died the way `CLAUDE.md` says a multi-cell file does -- XLA holds every
+executable it builds -- and a second attempt died at the end of a sequential loop with 21 GB
+free. Each test alone peaks under 3 GB. The rule that worked is the one already written
+down: one process per test, and read the peak off the watchdog rather than off the run that
+contained it.
 
 ## 2. An ultracell's `dr2` is even more charge-dominated than a unit cell's, by `N^2` **[measured 2026-09-14: harmless on a *driven* wave at 1.7e-5, and the argument says where it would not be]**
 

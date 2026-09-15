@@ -224,6 +224,8 @@ class _StubHamiltonian:
     nk = 5
     npol = 1
     npwx = 64
+    #: Must stay above ``2 * NBND`` or the subspace refusal fires and these
+    #: tests fail for a reason that has nothing to do with the retry.
     space = 64
 
     class kinetic:
@@ -477,12 +479,18 @@ def test_the_subspace_is_capped_at_the_smallest_k_point_and_not_at_npwx():
     """
     from defumat.hamiltonian.operator import Hamiltonian
 
-    spheres = (169, 180, 192)
-    built = object.__new__(Hamiltonian)
-    object.__setattr__(built, "npw", spheres)
-    assert Hamiltonian.space.fget(built) == 169
+    class _Spheres:
+        """Only what ``space`` reads. Constructing a real ``Hamiltonian`` here
+        would cost a basis and a set of projectors to test three lines of
+        arithmetic, and reaching past ``eqx.Module``'s frozen dataclass to build
+        a half-made one would tie this test to equinox's internals."""
 
-    # and with no sphere counts the bound falls back to npwx, which is QE's own
-    object.__setattr__(built, "npw", None)
-    object.__setattr__(built, "kinetic", np.zeros((3, 192)))
-    assert Hamiltonian.space.fget(built) == 192
+        npol = 1
+        npw = (169, 180, 192)
+        ndim = 192
+
+    assert Hamiltonian.space.fget(_Spheres()) == 169
+
+    # and with no sphere counts the bound falls back to ndim, which is QE's own
+    _Spheres.npw = None
+    assert Hamiltonian.space.fget(_Spheres()) == 192

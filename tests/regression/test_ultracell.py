@@ -481,11 +481,14 @@ def test_the_total_energy_bounds_the_supercells_from_above(tmp_path, pseudo_dir)
     exact = reference.total_energy / int(np.prod(shape))
 
     energies = {}
-    for nbnd, david in ((12, None), (24, None), (48, 2)):
+    # The top rung ran at ``david = 2`` until the Davidson subspace was capped
+    # at the size of the space it lives in; it is the default now, for the
+    # reason the density ladder above gives.
+    for nbnd in (12, 24, 48):
         result = run_ultracell(
             calculator.system, calculator.pseudos, scf, shape, kgrid,
             nbnd=nbnd, external=_modulation(shape), conv_thr=1e-11,
-            states_conv_thr=1e-10, david=david,
+            states_conv_thr=1e-10,
         )
         assert result.converged
         energies[nbnd] = result.total_energy
@@ -782,7 +785,7 @@ def test_a_uniform_field_is_the_unit_cell_under_the_same_field(tmp_path, pseudo_
         result = run_ultracell(
             calculator.system, calculator.pseudos, scf, (1, 1, 1), (2, 2, 2),
             nbnd=nbnd, magnetic_field=lambda x: np.full(x.shape[:-1], field),
-            conv_thr=1e-11, states_conv_thr=1e-8, david=2,
+            conv_thr=1e-11, states_conv_thr=1e-8,
         )
         assert result.converged
         moment = float(result.cell_moments().sum())
@@ -884,7 +887,7 @@ def test_the_magnetic_ultracell_converges_to_the_supercell(tmp_path, pseudo_dir)
         result = run_ultracell(
             calculator.system, calculator.pseudos, scf, shape, kgrid, nbnd=nbnd,
             external=_modulation(shape, 0), conv_thr=1e-10,
-            states_conv_thr=1e-8, david=2,
+            states_conv_thr=1e-8,
         )
         assert result.converged
         box = result.ultracell.grid
@@ -1364,7 +1367,7 @@ def test_a_uniform_vector_field_is_the_unit_cell_under_the_same_field(
     for nbnd in (16, 32, 64):
         result = run_ultracell(
             calculator.system, calculator.pseudos, scf, (1, 1, 1), kgrid,
-            nbnd=nbnd, conv_thr=1e-11, states_conv_thr=1e-8, david=2,
+            nbnd=nbnd, conv_thr=1e-11, states_conv_thr=1e-8,
             mixing_beta=0.3, max_iterations=150, magnetic_field=uniform,
         )
         assert result.converged
@@ -1464,7 +1467,7 @@ def test_the_noncollinear_ultracell_converges_to_the_supercell(
     for nbnd in (8, 16, 32):
         result = run_ultracell(
             calculator.system, calculator.pseudos, scf, shape, kgrid,
-            nbnd=nbnd, conv_thr=1e-10, states_conv_thr=1e-8, david=2,
+            nbnd=nbnd, conv_thr=1e-10, states_conv_thr=1e-8,
             mixing_beta=0.3, max_iterations=200, external=_modulation(shape),
         )
         assert result.converged
@@ -1540,7 +1543,7 @@ def test_fixed_occupations_fill_spinor_bands_one_electron_at_a_time(pseudo_dir):
 
     result = run_ultracell(
         calculator.system, calculator.pseudos, scf, (1, 1, 1), (1, 1, 1),
-        nbnd=16, conv_thr=1e-9, states_conv_thr=1e-8, david=2,
+        nbnd=16, conv_thr=1e-9, states_conv_thr=1e-8,
         mixing_beta=0.3, max_iterations=60,
     )
     assert result.converged and result.iterations == 1
