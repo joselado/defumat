@@ -14975,7 +14975,11 @@ bands per folded k-point and nothing else", and it is the only evidence for it t
 Two things about that table are not the physics and are stated so they are not read as it.
 The **seconds column mixes two eigensolver settings** -- rows up to 32 ran at the default
 `diago_david_ndim = 4` and the three above it at 2, because `nvecx = david * nbnd` would
-otherwise exceed `npw` -- so the jump at 80 is the solver, not the method. And the frozen-state
+otherwise exceed `npw` -- so the jump at 80 is the solver, not the method. **That is a
+measurement taken before the cap and it is not what a rerun would give**: `nvecx` is capped
+at `min_k npw` since 2026-09-15, so every row runs at the default subspace and the three
+above 32 no longer need a setting of their own (`OPEN.md` Part VI item 1, where the A/B is).
+The table is left as it was measured rather than restated from a rerun that was not done. And the frozen-state
 solve is inside every one of those times, paid once per call, which is why the *rows* are
 comparable to each other and not to a supercell.
 

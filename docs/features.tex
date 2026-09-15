@@ -436,6 +436,23 @@ and is stale: \code{input\_parameters.f90} sets 4 and \code{input.f90} assigns
 it straight through, so the number \code{pw.x} runs is \textbf{4}, and that is
 the default here.
 
+\noindent \textbf{The subspace is capped at the space it lives in}, which is
+$n_{pol}\,\min_{\mathbf k} n_{pw}$ --- the \emph{smallest} sphere on the k-set, not
+$n_{pwx}$, which is the padded maximum and sits above the k-points that go
+singular. A small cell asked for many bands is where this bites: silicon at
+$E_{\mathrm{cut}}=12$~Ry folded to a 32 k-point ultracell holds between 169 and
+192 plane waves, so $n_{bnd}=48$ at the default asks for 192 vectors in a
+169-dimensional space, and 25 of the 32 overlaps came back non-finite where the
+capped solve leaves none. A cap removes the case where the subspace is
+\emph{larger} than the space and not the case where it \emph{equals} it: at
+$n_{bnd}=80$ on the same cell the cap is the whole space at the smallest
+k-point, one overlap still goes singular, and the canonical-orthogonalisation
+fallback carries it. Two cases no cap can rescue are refused by name instead ---
+more bands than the space holds, which is QE's own
+\code{c\_bands.f90:286}, and $2\,n_{bnd}$ not fitting, which leaves Davidson no
+room to expand (\code{cegterg.f90:125}) and wants a direct diagonalisation of
+the space that is not written here.
+
 \subsection*{A converged state on disk}
 
 \code{result.save(path)} writes the state and \code{SCFResult.load(path,

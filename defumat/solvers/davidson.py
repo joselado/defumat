@@ -358,7 +358,16 @@ def davidson_eigensolver(
     ethr = ETHR if ethr is None else ethr
     gamma_only = hamiltonian.gamma_only
     ndim = hamiltonian.ndim
-    nvecx = david * nbnd
+    # **The subspace cannot be larger than the space it lives in.** QE stops
+    # here (``c_bands.f90:286``, ``IF (nbndx > ipw) CALL errore``) and this used
+    # to run on regardless: the extra vectors cannot be independent, the overlap
+    # goes singular, the Cholesky returns ``nan`` and the canonical-orthogonalisation
+    # fallback then spends the whole iteration budget. ``space`` is
+    # ``npol * min_k npw`` rather than ``ndim``, because ``ndim`` is ``npwx``,
+    # the padded maximum over k, and the k-points that go singular are precisely
+    # the ones below it. ``davidson_eigensolver_all`` refuses the cases a cap
+    # cannot rescue; this is the cap itself, and it is static.
+    nvecx = min(david * nbnd, hamiltonian.space)
     mask = hamiltonian.state_mask[ik]
     kinetic = hamiltonian.state_kinetic[ik]
     diagonal = hamiltonian.diagonal(ik)
@@ -673,6 +682,43 @@ def _every_k(
     return map_k(lambda pair: solve(*pair), (indices, psi0), batch=batch)
 
 
+def _refuse_a_space_too_small(hamiltonian, nbnd: int) -> None:
+    """``nbnd`` bands asked of a space that does not hold them, refused by name.
+
+    QE's own check, one routine over: ``c_bands.f90:286`` stops with *"too many
+    bands, or too few plane waves"* and ``memory_report.f90:484`` says it a
+    second time before any work is done. What is checked here is
+    ``npol * min_k npw`` rather than ``npwx``, for the reason
+    :attr:`~defumat.hamiltonian.operator.Hamiltonian.space` gives, and there are
+    two thresholds rather than one: ``nbnd`` bands need ``nbnd`` dimensions to
+    be independent in, and Davidson needs room for one expansion on top of that
+    -- ``cegterg.f90:125``'s ``nvec > nvecx/2``. Between them the answer is a
+    direct diagonalisation of the space itself rather than an iterative solve
+    inside it, and that is refused by name rather than written, because nothing
+    on any cell committed here reaches it and an untested path is worse than a
+    refusal.
+    """
+    space = hamiltonian.space
+    if nbnd > space:
+        raise ValueError(
+            f"{nbnd} bands asked of a space that holds {space}: the smallest "
+            f"k-point on this set carries {space // hamiltonian.npol} plane "
+            f"waves (npwx is {hamiltonian.npwx}), so the bands beyond that "
+            "cannot be independent and the eigenvalues past it are not "
+            "eigenvalues of anything. Raise ecutwfc, or ask for fewer bands. "
+            "This is QE's own refusal, c_bands.f90:286"
+        )
+    if 2 * nbnd > space:
+        raise ValueError(
+            f"{nbnd} bands in a space of {space} leaves Davidson no room to "
+            "expand: it needs one correction vector per band beside the band "
+            "itself (cegterg.f90:125), so 2 nbnd has to fit. What is right "
+            "here is a direct diagonalisation of the space rather than an "
+            "iterative solve inside it, and that is not written. Raise "
+            "ecutwfc, or ask for fewer bands"
+        )
+
+
 def davidson_eigensolver_all(
     hamiltonian: Hamiltonian,
     nbnd: int,
@@ -750,6 +796,7 @@ def davidson_eigensolver_all(
     return, ``(nk,)`` each. It is off by default so that every existing caller
     still unpacks two values.
     """
+    _refuse_a_space_too_small(hamiltonian, nbnd)
     ethr = jnp.broadcast_to(
         jnp.asarray(ETHR if ethr is None else ethr,
                     dtype=hamiltonian.kinetic.dtype),

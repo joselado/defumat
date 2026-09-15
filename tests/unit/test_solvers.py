@@ -213,13 +213,18 @@ def test_a_cholesky_that_returns_nan_is_rescued_outside_the_k_batch(silicon,
 
 
 class _StubHamiltonian:
-    """The two attributes ``davidson_eigensolver_all`` reads before it solves.
+    """The attributes ``davidson_eigensolver_all`` reads before it solves.
 
     It broadcasts ``ethr`` to ``(nk, nbnd)`` using the kinetic term's dtype, so
-    a bare ``None`` does not get as far as the stubbed ``_every_k``.
+    a bare ``None`` does not get as far as the stubbed ``_every_k``; and it
+    carries a ``space`` large enough that the subspace refusal passes, since
+    what is under test here is the retry and not the bound.
     """
 
     nk = 5
+    npol = 1
+    npwx = 64
+    space = 64
 
     class kinetic:
         dtype = np.float64
@@ -424,3 +429,60 @@ def test_a_stalled_fixed_density_solve_is_reported_rather_than_returned():
     for expected in ("2 of 4", "6 of 24", "100 Davidson steps", "4.0e-09",
                      "1.0e-06", "conv_thr"):
         assert expected in message, f"{expected!r} missing from: {message}"
+
+
+# --------------------------------------------------------------------------
+# the subspace against the size of the space it lives in
+# --------------------------------------------------------------------------
+
+
+class _SmallSpace(_StubHamiltonian):
+    """A Hamiltonian whose smallest k-point holds ten plane waves."""
+
+    npol = 1
+    npwx = 16
+    space = 10
+
+
+def test_too_many_bands_for_the_space_is_refused_by_name():
+    """QE's own refusal, ``c_bands.f90:286``, which this code used to lack.
+
+    The bands past the size of the space cannot be independent, so what came
+    back was an overlap that had gone singular, a Cholesky returning ``nan``,
+    and -- three layers up -- "the ultracell did not converge". A refusal by
+    name is the whole point: the failure it replaces is silent.
+    """
+    with pytest.raises(ValueError, match="cannot be independent"):
+        davidson_eigensolver_all(_SmallSpace(), 12, None)
+
+
+def test_no_room_to_expand_is_refused_and_names_what_would_be_right():
+    """``cegterg.f90:125``: Davidson needs ``2 nbnd`` to fit, not only ``nbnd``.
+
+    Between the two thresholds the honest answer is a direct diagonalisation of
+    the space rather than an iterative solve inside it, and that is refused by
+    name rather than written -- an untested path being worse than a refusal.
+    """
+    with pytest.raises(ValueError, match="no room to expand"):
+        davidson_eigensolver_all(_SmallSpace(), 6, None)
+
+
+def test_the_subspace_is_capped_at_the_smallest_k_point_and_not_at_npwx():
+    """``space`` is ``npol * min_k npw``, which is *below* ``ndim``.
+
+    The distinction is the whole entry: ``ndim`` is ``npwx``, the padded maximum
+    over k, and the k-points that go singular are precisely the ones under it --
+    on the ultracell's cell ``npwx`` is 192 while the smallest sphere holds 169,
+    so a cap at ``ndim`` would still oversubscribe seven k-points.
+    """
+    from defumat.hamiltonian.operator import Hamiltonian
+
+    spheres = (169, 180, 192)
+    built = object.__new__(Hamiltonian)
+    object.__setattr__(built, "npw", spheres)
+    assert Hamiltonian.space.fget(built) == 169
+
+    # and with no sphere counts the bound falls back to npwx, which is QE's own
+    object.__setattr__(built, "npw", None)
+    object.__setattr__(built, "kinetic", np.zeros((3, 192)))
+    assert Hamiltonian.space.fget(built) == 192

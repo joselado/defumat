@@ -122,6 +122,16 @@ class SpinorHamiltonian(eqx.Module):
     #: projector columns that are themselves spinors, so it applies to the
     #: ``2 npwx`` vector exactly as the collinear one applies to ``npwx``.
     hubbard: object | None = None
+    #: ``(nk,)`` how many plane waves each k-point's sphere actually holds, as
+    #: against ``npwx``, which is the padded maximum over k. **Static, because
+    #: it bounds an array's length**: the Davidson subspace cannot be larger
+    #: than the smallest space it is built in, and the k-points that go singular
+    #: are precisely the ones *below* ``npwx`` -- see
+    #: :func:`~defumat.solvers.davidson.davidson_eigensolver_all`. ``None``
+    #: leaves the bound at ``npwx``, which is QE's own ``ipw``
+    #: (``c_bands.f90:286``) and is what a Hamiltonian built without its basis
+    #: gets.
+    npw: tuple[int, ...] | None = eqx.field(static=True, default=None)
 
     @property
     def gamma_only(self) -> bool:
@@ -171,6 +181,20 @@ class SpinorHamiltonian(eqx.Module):
     @property
     def ndim(self) -> int:
         return 2 * self.npwx
+
+    @property
+    def space(self) -> int:
+        """The smallest space a state is solved in, ``2 min_k npw``.
+
+        What the Davidson subspace has to fit inside; see the collinear
+        operator's own ``space``. On a **spiral** the two components sit on
+        different spheres and ``npw`` has ``2 nk`` entries, so this takes twice
+        the smallest of either component's rather than one from each: a lower
+        bound on the true space, which is the safe direction for a bound.
+        """
+        if self.npw is None:
+            return self.ndim
+        return 2 * min(self.npw)
 
     @property
     def nspin_mag(self) -> int:

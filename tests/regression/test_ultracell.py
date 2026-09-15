@@ -360,20 +360,20 @@ def test_the_ultracell_converges_to_the_supercell(tmp_path, pseudo_dir):
     exact = _fourier(np.asarray(reference.density)[0], grid, miller)
 
     errors = {}
-    # **The top rung carries its own ``david`` and that is not a tuning knob.**
-    # The Davidson subspace is ``david * nbnd`` and it is not capped against the
+    # **The top rung used to carry ``david = 2`` and no longer does.** The
+    # Davidson subspace is ``david * nbnd``, and it was not capped against the
     # size of the space (``OPEN.md`` Part VI item 1): at ``nbnd = 48`` the
-    # default asks for 192 vectors where these k-points hold between 169 and
-    # 190 plane waves, seven of eight overlaps then go non-finite, and what
-    # surfaces three layers up is "the ultracell did not converge". Two is what
-    # the measurement in ``PLAN.md`` P88 was taken at. It changes how the frozen
-    # states are *found*, not what they are once converged, so the ladder below
-    # is the same claim either way.
-    for nbnd, david in ((12, None), (24, None), (48, 2)):
+    # default asked for 192 vectors where these k-points hold between 169 and
+    # 192 plane waves, the overlaps went non-finite, and what surfaced three
+    # layers up was "the ultracell did not converge". It is capped now, at
+    # ``min_k npw``, so the default subspace is what this rung runs at -- and
+    # the rung is the regression test for the cap: at ``david = 4`` on this cell
+    # 25 of 32 k-points came back non-finite before and none does now.
+    for nbnd in (12, 24, 48):
         result = run_ultracell(
             calculator.system, calculator.pseudos, scf, shape, kgrid,
             nbnd=nbnd, external=_modulation(shape), conv_thr=1e-10,
-            states_conv_thr=1e-10, david=david,
+            states_conv_thr=1e-10,
         )
         assert result.converged
         box = result.ultracell.grid

@@ -80,6 +80,16 @@ class Hamiltonian(eqx.Module):
     #: ``None`` unless this is a gamma-only run. Its presence *is* the switch:
     #: see :attr:`gamma_only`.
     fft_index_minus: jnp.ndarray | None = None
+    #: ``(nk,)`` how many plane waves each k-point's sphere actually holds, as
+    #: against ``npwx``, which is the padded maximum over k. **Static, because
+    #: it bounds an array's length**: the Davidson subspace cannot be larger
+    #: than the smallest space it is built in, and the k-points that go singular
+    #: are precisely the ones *below* ``npwx`` -- see
+    #: :func:`~defumat.solvers.davidson.davidson_eigensolver_all`. ``None``
+    #: leaves the bound at ``npwx``, which is QE's own ``ipw``
+    #: (``c_bands.f90:286``) and is what a Hamiltonian built without its basis
+    #: gets.
+    npw: tuple[int, ...] | None = eqx.field(static=True, default=None)
 
     @property
     def gamma_only(self) -> bool:
@@ -115,6 +125,21 @@ class Hamiltonian(eqx.Module):
         another operator rather than another solver.
         """
         return self.npwx
+
+    @property
+    def space(self) -> int:
+        """The smallest space a state is solved in, ``npol * min_k npw``.
+
+        What the Davidson subspace has to fit inside. It is the *minimum* over
+        k rather than ``npwx`` because a shell sitting on the cutoff makes some
+        k-points hold fewer plane waves than others, and those are the ones an
+        oversized subspace goes singular at: on silicon at ``ecutwfc = 12``
+        folded to an ultracell, ``npwx`` is 190 while the k-points that returned
+        ``nan`` hold 169.
+        """
+        if self.npw is None:
+            return self.ndim
+        return self.npol * min(self.npw)
 
     @property
     def dtype(self):

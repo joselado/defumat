@@ -2404,7 +2404,7 @@ different input, which is why they are not in question here.
 
 # Part VI -- from the 2026-09-13 ultracell session (P88)
 
-## 1. `nvecx = david * nbnd` is not capped against the size of the space, and QE stops where this does not
+## 1. `nvecx = david * nbnd` is not capped against the size of the space, and QE stops where this does not **[closed 2026-09-15 -- the cap closes `nbnd = 48` outright and is marginal at 80, and this entry's own acceptance sentence contradicted its own fix]**
 
 **Found while converging the ultracell in `nbnd`**, which is the one place a small cell
 is asked for eighty bands: silicon at `ecutwfc = 12` has `npw` between 169 and 190 at the
@@ -2463,14 +2463,60 @@ space -- which is what P88's `nbnd = 48, 64, 80` rows were measured at, and why
 default `david` raising by name instead of warning, and the same run at a capped `nvecx`
 coming back with no Cholesky fallback and a time on the 16.3 s trend rather than at 48.1.
 
+### What was done, and where the entry was wrong about itself
+
+**Both halves are in, as the entry asked.** `Hamiltonian` and `SpinorHamiltonian` carry the
+per-k sphere counts as a **static** field, `npw`, filled from `basis.planewaves.npw` at the
+two places a Hamiltonian is built, and a `space` property reads `npol * min_k npw` off it.
+It has to be static because `nvecx` is an array *shape*: a value read off `state_mask`
+inside the solve is a tracer, and one read on the host would make a traced caller and an
+untraced one disagree about the subspace, which is the one thing a dial here may never do.
+`davidson_eigensolver` then takes `nvecx = min(david * nbnd, space)`, and
+`davidson_eigensolver_all` -- QE's `diag_bands`, which is the door -- refuses `nbnd > space`
+and `2 nbnd > space` by name. Where `space` is unset the bound falls back to `ndim`, which
+is QE's own `ipw`; only hand-built test fixtures reach that.
+
+**The measurement, on `si-ultracell.in`'s own 32 k-point set** (spheres from 169 to 192,
+`npwx = 192`), `ethr = 1e-8`, `david = 4`, the same Hamiltonian solved both ways:
+
+| `nbnd` | | non-finite k-points | steps, max / mean | unsettled |
+|---|---|---|---|---|
+| 48 | uncapped | **25 of 32** | 4 / 4.0 | 0 |
+| 48 | capped | **none** | 18 / 14.4 | 0 |
+| 80 | uncapped | 1 of 32 | 33 / 15.3 | 0 |
+| 80 | capped | **1 of 32** | 36 / 18.6 | 0 |
+
+The step counts on the uncapped `nbnd = 48` row are 4 because the loop **exits** as soon as
+the eigenvalues stop being finite, so a short count there is the failure and not a fast
+solve. The `nbnd = 48` case is closed: 192 vectors in a 169-dimensional space became 169,
+and nothing goes singular.
+
+**`nbnd = 80` is not closed and the cap cannot close it.** There `space` is 169 and
+`2 nbnd` is 160, so the subspace is allowed and is capped to 169 -- which is the *entire*
+space at k-point 0. A Davidson expansion that has filled the space has nothing independent
+left to add, so the overlap goes singular at that one k-point whatever the cap says, the
+canonical-orthogonalisation fallback catches it and the solve converges with no unsettled
+band. The distinction to carry forward is that **a cap removes the case where the subspace
+is larger than the space, not the case where it equals it**, and the second is a cell asking
+for more bands than a `12 Ry` cutoff has room to iterate in.
+
+**This entry's "how to know it worked" contradicted its own "what to do".** It asked for
+`nbnd = 80` at the default `david` to *raise by name*, which is QE's behaviour --
+`nbndx = 320 > ipw = 192` errors outright -- while its own point 1 asked for the subspace to
+be **capped**, under which the same run is allowed. The cap is the better of the two here
+and that is a deliberate departure: `david` is a tuning knob and `nbnd` is a physical
+request, so an oversized *subspace* is this code's business to bound while an oversized
+*band count* is the caller's to fix. Refusing is kept for the two cases no cap can rescue.
+
 **It has already cost a test, which is why it is not merely latent.**
 `test_the_ultracell_converges_to_the_supercell`'s `nbnd = 48` rung at the default
 `david = 4` asks for 192 vectors in a 169-dimensional space: 7 of 8 k-points came back
 non-finite, the frozen states they produced are not eigenstates of anything, and the
 ultracell loop above them then ran 200 iterations to `dr2 = 1.15e-1`. **Nothing in that
 chain reports the cause** -- the failure surfaces as "the ultracell did not converge",
-three layers from the subspace that was too large. The rung passes `david = 2` meanwhile,
-which is what the `PLAN.md` P88 measurement was taken at.
+three layers from the subspace that was too large. The rung passed `david = 2` meanwhile,
+which is what the `PLAN.md` P88 measurement was taken at; **that workaround is removed and
+the rung now runs at the default**, which makes it the regression test for the cap.
 
 ## 2. An ultracell's `dr2` is even more charge-dominated than a unit cell's, by `N^2` **[measured 2026-09-14: harmless on a *driven* wave at 1.7e-5, and the argument says where it would not be]**
 
