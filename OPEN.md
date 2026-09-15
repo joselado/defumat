@@ -2998,8 +2998,25 @@ been done.
 > 7.251e-6 at `1e-12`, no change across two orders. The control that says it is the tilt
 > rather than the projector is the other in-plane axis: `m_y/|m|` is a fifth of `m_z` and
 > the `y` residual is an eighth of the `z` one, so the residual follows the component being
-> projected. Both axes are now asserted, both bounds are 1e-4, and the factor of two either
-> test exists to catch would read 1.0.
+> projected -- to within a factor of 1.7 in the constant, which is tracking rather than
+> proportionality and is all two points establish. Both axes are now asserted and both
+> bounds are 1e-4, which each guard clears by four orders: a spin factor of two would put
+> the three-regime ratio at 1.0, and a factor of two in the projector would put the
+> substrate residual at 0.5 or 0.25.
+>
+> **The `for_spin` trap was looked for beyond the test and has no live instance.** Only two
+> things in the package call `fermi_surface_weights`, and neither is wrong: the nesting
+> function forwards `degeneracy` from its own caller, which sets it from the spin regime
+> (`workflows/nesting.py:167`, P52's fix), and it contracts on a complete grid where every
+> point has the same weight, so there is no k-weight for the factor to double against. The
+> new assertion is the only place the two conventions meet.
+>
+> **What the 9.0e-5 at a re-solved `(4, 4, 1)` means**, since it is the same mesh and ought
+> to be round-off: `fixed_density_states` converges the bands to its *own* `ethr` rather
+> than to the one the SCF finished on, so asking for a grid re-solves states that are not
+> quite the SCF's even when the grid matches. It bounds how well any `grid=` comparison can
+> agree with a quantity built from the SCF's own states, and it is the same shape as
+> Part VIII item 3 one workflow over.
 
 
 **Found in passing** while checking that P89's refactor of `_assemble` changed nothing: the

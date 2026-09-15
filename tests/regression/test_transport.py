@@ -314,9 +314,13 @@ def test_a_substrate_across_the_moment_has_no_preference(tmp_path):
     the residual here goes 2.84e-5 to 2.16e-5. The residual follows the
     component being projected rather than the threshold, which is the control
     that says it is the tilt: ``m_y/|m|`` is 1.6e-6, a fifth of ``m_z``, and the
-    ``y`` residual is 3.6e-6, an eighth of the ``z`` one. Both axes are asserted
-    for that reason, and the bound is set above the tilt rather than above
-    round-off.
+    ``y`` residual is 3.6e-6, an eighth of the ``z`` one. That is *tracking*
+    rather than proportionality -- the two constants are 3.9 and 2.3, a factor
+    of 1.7 apart, which is what the tilt at the tip plane differing from the
+    cell-integrated one would give, and two points do not establish more than
+    that. Both axes are asserted for that reason, and the bound is set above the
+    tilt rather than above round-off. A factor of two in the projector would put
+    the residual at 0.5 or 0.25 rather than near the tilt, four orders above it.
     """
     calculator = _variant(
         tmp_path, "h-sheet",
