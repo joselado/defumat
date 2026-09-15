@@ -2583,7 +2583,9 @@ every run given a 300-iteration budget:
 > **Redone at `nbnd = 32` the flat manifold is not where this table put it.** At `(4, 1, 1)` there is **one** state and no mixer effect: both mixers and `beta`
 > across a factor of seven give `|m|` 0.4305 to 0.4318 and -42.5 degrees per cell, every run
 > converged. At `(4, 2, 2)` there are **three**, all converged three orders below `conv_thr`,
-> and the same partition is there at `nbnd = 16`, so it is the cell rather than the basis --
+> and the two clusters that converged at `nbnd = 16` are the same two, so the structure is the
+> cell rather than the basis (only one `anderson` run converged there, so 16 shows two of the
+> three and not all three) --
 > `anderson` at 0.1 and 0.7 agree on one to eight digits of `E_band`, `anderson` at **0.3**
 > finds a third, and `adaptive` finds the one that follows the field's +90 degree ladder. So
 > the step length selects a solution **inside** one mixer, and `PERFORMANCE.md`'s control

@@ -5990,10 +5990,11 @@ is a claim too.** Two candidate fields, both grids, `nbnd = 16` as recorded:
   so that `adaptive` could run at all, the rotating field at `(4, 2, 2)` takes **43** -- and at
   `(4, 1, 1)` it takes 105, and with Kerker off 300-without-converging and 82. So 43 against 48
   identifies item 3's k-grid as `(4, 2, 2)`, the one it never stated, and identifies the
-  remaining gap as its field's exact form. **Kerker on or off is worth a factor of seven here**
-  (43 against 300-and-stalled at the same `beta`), which is why the comparison's `kerker =
-  False` control makes its counts incomparable with item 3's and why that has to be said
-  wherever either is quoted.
+  remaining gap as its field's exact form. **Kerker on or off is worth at least a factor of
+  seven here** -- 43 converged against a Kerker-off run that spent its whole 300-iteration
+  budget at 8.2e-7 without converging, so seven is a lower bound rather than a ratio -- which is
+  why the comparison's `kerker = False` control makes its counts incomparable with item 3's and
+  why that has to be said wherever either is quoted.
 - **The handoff's split is not recovered by any field tried.** Its 0.186 has no functional form
   attached, so both candidates were run: the rotating one above, and the test file's own
   `turning`, a field along `+-y` whose *sign* alternates rather than a direction that rotates,
@@ -6041,10 +6042,12 @@ converged below 1e-9:
 | (4,2,2) | `adaptive` | 0.05 | 152 | 0.4380 | **+94.33** | -0.4521353 |
 | (4,2,2) | `adaptive` | 0.2 | 266 | 0.4364 | **+103.58** | -0.4521380 |
 
-**The three-solution structure is present at `nbnd = 16` too**, which is the other half of the
-basis being exonerated: at 16 the same grid gives `anderson` at 0.7 turning -25.2 degrees per
-cell and both `adaptive` runs +98 and +105, the same partition into a bunched cluster and a
-field-following one. Doubling the basis moves the numbers and keeps the structure.
+**The partition is present at `nbnd = 16` too**, which is the other half of the basis being
+exonerated: at 16 the same grid gives `anderson` at 0.7 turning -25.2 degrees per cell and both
+`adaptive` runs +98 and +105, the same split into a bunched cluster and a field-following one.
+It shows **two** of the three, not all three -- `anderson` at 0.1 and 0.3 spent their budgets
+there without converging -- so what carries across the two bases is the split rather than the
+count. Doubling the basis moves the numbers and keeps the structure.
 
 **At the saturated grid there is one state and no mixer effect at all**: five runs across both
 mixers and a factor of seven in `beta` agree on the moment to 0.3 per cent and on the angles
