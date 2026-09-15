@@ -260,6 +260,14 @@ different matrix. **The non-SOC half is done -- P91**, and it took two cells rat
 
 ### D. Magnons refuse a noncollinear ground state, so the states whose excitations are interesting have none [12]
 
+**The ultrasoft half is closed -- P93.** This item's own heading is about the *noncollinear*
+refusal and that stands; what is gone is the second refusal beside it, which sent every
+ultrasoft magnet away. The transverse matrix element now carries `Q_ij(q+G)` through the
+primitive the ultrasoft Berry phase already uses, and on fcc nickel the Goldstone residual
+is **0.071** with it against 0.984 without, falling to **0.0128** as the response sphere is
+opened to 48 Ry. PAW is still refused and the reason has changed: its matrix element is
+carried, and what is missing is the one-centre part of its *kernel*.
+
 **Phase.** `tddft/spinchi0.py:229` refuses `system.noncolin` with a correctly named reason —
 the 4×4 spin-density response no longer block-diagonalises, so the transverse channel is not
 a matrix in `(G, G')` on its own, and Elk's `genspchi0` carries all sixteen blocks. It also
@@ -814,15 +822,43 @@ each is a `get_*` that works on the cell in the tutorial and refuses the cell th
 |---|---|---|---|
 | **P57** magnetoelectric tensor | the column **parallel to the field**, spin-only, clamped-ion | the other two columns, the lattice-mediated part, and any external calibration | it is uncalibrated against another code, which is the part to fix first: Elk's `magnetoelt.f90` is the counterpart and is built here |
 | **P58** magnetocrystalline anisotropy | the **frozen-density force theorem**, norm-conserving and ultrasoft; and, as of **P87**, the **relaxed** route, which reaches PAW and DFT+U | a `pw.x` pair for the relaxed number, and `average_pp` | ✅ mostly closed by P87: 0.447 meV relaxed against the theorem's **free** energy 0.552 on the same cobalt cell, with a measured 0.011 meV floor. What is left is an external check and `average_pp`, which belongs to the *frozen* route |
-| **P63** magnons | **collinear**, norm-conserving | noncollinear (item D), and ultrasoft/PAW | the 4x4 spin response does not block-diagonalise off a collinear axis; ultrasoft needs the augmentation charge inside the transverse channel |
+| **P63** magnons | **collinear**, norm-conserving **and ultrasoft** (P93) | noncollinear (item D), and PAW | the 4x4 spin response does not block-diagonalise off a collinear axis; PAW needs the one-centre part of `B_xc/m`, which is a *kernel* term and not the matrix element P93 closed |
 | **P64** orbital magnetization | **norm-conserving** | ultrasoft and PAW | the neighbour overlap the covariant derivative is built from needs the augmentation term `bp_c_phase.f90`'s `q_ij(b)` supplies, which the Berry-phase polarization already has and this does not reuse |
 
 **The pattern is worth naming rather than fixing four times.** Three of the four are the
 *same* missing term -- an ultrasoft or PAW augmentation charge inside an object built from
 wavefunctions at two different k-points or two different perturbations. P47's Kubo Berry
-curvature (`e_n dS/dk`, "written and unvalidated") is a fourth instance. A single validated
-augmented-overlap primitive would close parts of all of them, and `bp_c_phase.f90` is the
-reference for it in every case.
+curvature (`e_n dS/dk`, "written and unvalidated") is a fourth instance.
+
+**Corrected 2026-09-15, and the correction goes both ways.** The paragraph used to end "a
+single validated augmented-overlap primitive would close parts of all of them". That
+sentence was wrong twice over, and it is the kind of forecast `CLAUDE.md`'s last trap is
+about -- it sat under a table of verified rows and was never checked itself.
+
+* **The primitive already exists and is already validated.**
+  `defumat/topology/augmentation.py:augmentation_at_q` is exactly
+  `q^a_ij(b) = Omega Q_ij(b) e^{-i b . tau_a}` at an arbitrary wavevector, it carries the
+  `qq_so` map for a relativistic dataset, and it is pinned by `b -> 0` reproducing the
+  `qq` the projectors already hold and by the Chern number coming out an exact integer on
+  an ultrasoft dataset. So the item is **not** "build a primitive", it is "call it from
+  three places", which is a different and smaller thing.
+* **And it does not close P64.** The orbital magnetization's refusal is not the missing
+  `q_ij(b)`; its own module docstring says the dual states would then have to be dual in
+  the `S` metric with `H` contracted against them accordingly, which is a second missing
+  construction with nothing norm-conserving to validate it -- and `setup.f90:130` refuses
+  `lorbm` for ultrasoft too, so there is no reference to check it against. It stays
+  refused, and the reason is that rather than the primitive.
+
+**What is reachable is the ultrasoft magnon**, where the missing term is the augmentation
+inside the transverse matrix element,
+
+    M_G = <psi_{nk,up}| e^{-i(q+G).r} |psi_{m k+q,dn}>
+        + sum_a sum_ij Q^a_ij(q+G) <psi_{nk}|beta^k_i> <beta^{k+q}_j|psi_{m k+q}>,
+
+which is `augmentation_at_q(q + G)` once per `G` of the response sphere. The check that
+must fire is the Goldstone identity `X_0 B_xc = m`, which has to fail by the augmentation's
+share of the moment with the bare elements -- most of it, for a d shell -- and pass with
+them.
 
 ## 3. Questions that need something run, not something written
 

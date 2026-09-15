@@ -16257,6 +16257,107 @@ notebook.** Elk's `sxcscf` (the scaled spin field, `tssxc`) is the same paper's 
 and is **not built**, named rather than silently absent. And the torque is refused for a
 **potential-only meta-GGA**, which is the only functional regime it does not cover.
 
+### P93 -- The augmentation charge inside a transverse matrix element, and a primitive that was already there. ✅ DONE.
+
+`defumat/tddft/spinchi0.py` (`augmentation_factors`, `state_projections`),
+`tests/regression/test_ultrasoft_magnon.py`, `tests/data/qe/ni-fcc-magnon-us.in`.
+
+**`MAGNETISM-NEXT.md` item H, and the item's own premise was wrong.** It said three
+qualifiers -- ultrasoft magnons (P63), the orbital magnetization beyond norm-conserving
+(P64) and P47's Kubo curvature -- were the same missing term and that "a single validated
+augmented-overlap primitive would close parts of all of them". Two corrections, both now in
+that file:
+
+* **The primitive exists and is validated.** `topology/augmentation.py:augmentation_at_q` is
+  `q^a_ij(b) = Omega Q_ij(b) e^{-i b tau_a}` at an arbitrary wavevector, written for the
+  ultrasoft Berry phase, pinned by `b -> 0` reproducing the projectors' own `qq` and by a
+  Chern number coming out an exact integer on an ultrasoft dataset. So the work was calling
+  it, not building it.
+* **It does not close P64.** The orbital magnetization's refusal is not the missing
+  `q_ij(b)`: the dual states would then have to be dual in the `S` metric with `H`
+  contracted against them, which is a second construction, and `setup.f90:130` refuses
+  `lorbm` for ultrasoft too, so there is no reference. It stays refused.
+
+**What was taken is the ultrasoft magnon.** The transverse matrix element gains
+
+    M_G += sum_a sum_ij Q^a_ij(q+G) <psi_{nk}|beta^k_i> <beta^{k+q}_j|psi_{m k+q}>,
+
+which is `augmentation_at_q(q + G)` once per `G` of the response sphere -- 13 ms each after
+the first on a one-atom transition metal, so a 59-vector sphere is under a second and is not
+worth batching.
+
+**The number, on `ni-fcc-magnon-us.in` (fcc nickel, LDA, ultrasoft, `nspin = 2`, 4x4x4
+closed grid, m = 0.6188 mu_B), as the Goldstone residual `X_0 B_xc = m` at `q = 0`:**
+
+| | residual |
+|---|---|
+| without the augmentation term | **0.984** |
+| with it | **0.071** |
+
+and it is truncation rather than a missing term, checked in the axis that binds on a 3d
+metal:
+
+| `ecut_response` (Ry) | 6 | 8 | 12 | 16 | 24 | 48 |
+|---|---|---|---|---|---|---|
+| residual | 0.1063 | 0.0706 | 0.0992 | 0.0987 | 0.0854 | **0.0128** |
+
+**and it is not monotone, which the first version of this table hid by leaving the default
+out.** The 8 Ry point is the workflow's own default and it sits *below* the 12 and 24 Ry
+ones; the sequence was re-run and reproduces bit for bit (0.10629355441264682 and
+0.07056220138600774 on two separate runs), so the dip is the shell structure of the sphere
+rather than noise. A four-point table that happened to descend was the more convincing
+number and the wrong one to publish.
+
+**and the other axis of the same double truncation is flat here**, which is worth
+recording because it is the opposite of the light-element case: `nbnd` of 14, 20
+and 30 give 0.070562, 0.070589 and 0.070582, flat to 3e-5, where the sphere moves the
+number by a factor of eight. `goldstone_residual` says the band count is the axis that binds on a light element
+and the sphere the one that binds on a 3d metal, and this is that sentence measured.
+
+**The bare 0.984 is not an independent error bar and the record will not pretend it is.**
+`goldstone_residual` reads `m` off the *dense-grid* density, which for an ultrasoft run
+already carries `addusdens`'s augmentation charge, so the bare run compares an unaugmented
+`X_0` against an augmented `m` and 0.984 is the augmentation's **share of the moment**. That
+is still the guard firing -- it says the term is most of the quantity -- and what measures
+the assembly is the augmented number and its convergence.
+
+**Two unit slips, both silent at `q = 0`, and one of them survived a passing measurement.**
+
+* `GVectors.g2` is QE's `gg`, in units of `tpiba^2`, where `GVectors.cartesian` is in
+  1/bohr. (Found in P92, recorded here because it is the same family.)
+* **`Cell.k_to_cartesian` returns QE's `xk`, in units of `2 pi / alat`, where `cell.bg` is
+  in 1/bohr.** The first version of `augmentation_factors` added one to the other, which is
+  out by `tpiba` -- 0.94 on this cell. The Goldstone check is at `q = 0`, where that term
+  vanishes identically, so **the whole table above was measured with the bug live and is
+  unaffected by it**; every `q != 0` magnon would have been wrong. `KPoints.cartesian` is
+  the accessor that *is* in 1/bohr, which is why `topology/states.py` can add `shift @ bg`
+  to it. Both wavevectors now go through `bg`.
+
+**The sign of `b`, and the two checks that could not have found it wrong.** `Q_ij(b)`
+takes `b = +(q + G)`, and pinning that took three attempts rather than one:
+
+* the **Goldstone** identity is at `q = 0`, where the sphere is symmetric under `G -> -G`,
+  so a flipped sign only permutes the `G` index;
+* **reciprocal-lattice periodicity** at `q != 0` was the obvious fix and is *also* blind --
+  measured at **6.8e-16 with `+b` and 5.5e-16 with `-b`**, both passing to round-off,
+  because periodicity is a relabelling that holds for either convention. That is
+  `CLAUDE.md`'s "a search that cannot surprise you is not a search", found by running the
+  check both ways instead of only the way that was expected to pass;
+* what pins it is a **structural** correspondence rather than an arithmetic one.
+  `topology/states.py`'s augmented overlap builds the same object for a pair of k-points,
+  takes its wavevector as `k_ket - k_bra`, and is validated by a Chern number coming out an
+  exact integer on an ultrasoft dataset. This matrix element has its bra at `k` and its ket
+  at `k + q`, so the same rule gives `+(q + G)`, and the test asserts the `G = 0` entry is
+  the **identical array** the Berry phase would use for that pair, with the opposite sign
+  shown to differ so the comparison can fail.
+
+**What is outstanding.** **PAW stays
+refused**, and the reason changed: its matrix element is now carried, and what it is refused
+for is the *kernel* -- `B_xc/m` is built from the grid field alone and a PAW run has a
+one-centre field on the spheres beside it, so a PAW magnon would have the right matrix
+element and the wrong enhancement. And the deliverables: **no notebook** and **no Elk pair**
+for the ultrasoft magnon, where P63's norm-conserving nickel has one.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.

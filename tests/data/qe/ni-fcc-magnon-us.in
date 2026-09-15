@@ -1,0 +1,46 @@
+! Face-centred-cubic nickel with an ULTRASOFT dataset, collinear: the cell the
+! augmentation charge inside a transverse matrix element is measured on.
+!
+! Every magnon here before P93 was norm-conserving, because
+! `<psi_up| e^{-i(q+G)r} |psi_dn>` is the plane-wave overlap of the pseudo
+! states only when all of the charge is in `|psi|^2`. With an ultrasoft dataset
+! it is not, and what is missing is `Q_ij(q+G)` -- the same augmentation charge
+! the ultrasoft Berry phase already carries at an arbitrary wavevector.
+!
+! The check the cell exists for is the Goldstone identity, `X_0 B_xc = m` at
+! `q = 0`, which is a statement about the *whole* moment: a spin wave of
+! infinite wavelength is a rigid rotation and costs nothing. Most of a
+! transition metal's moment lives in the d shell, which is exactly where an
+! ultrasoft dataset puts its augmentation, so the identity fails by roughly the
+! augmentation's share of the moment when the term is dropped and holds when it
+! is kept. That is a check whose null result cannot be mistaken for a pass.
+!
+! `nosym` and `noinv` with the whole 4x4x4 grid, for the reason
+! `h-fcc-magnon.in` gives: the states at `k + q` are read out of this same grid,
+! which needs it closed under translation by `q`, and `X_0(G, G')` is a matrix
+! in two G indices that nothing here symmetrises. LDA rather than PBE, so that
+! the kernel `B_xc/m` is the local field and nothing else.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 6.65,
+    nat = 1, ntyp = 1,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    occupations = 'smearing', smearing = 'mv', degauss = 0.02,
+    nspin = 2
+    nosym = .true., noinv = .true.
+    starting_magnetization(1) = 0.5
+    nbnd = 14
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-10
+    electron_maxstep = 200
+ /
+ATOMIC_SPECIES
+ Ni 58.6934 Ni.pz-nd-rrkjus.UPF
+ATOMIC_POSITIONS (crystal)
+ Ni 0.0 0.0 0.0
+K_POINTS {automatic}
+ 4 4 4 0 0 0

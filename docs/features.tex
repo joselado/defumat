@@ -2636,13 +2636,51 @@ off by default, and it is honest only if the residual error is
 $\mathbf q$-independent --- check that by running the dispersion at two
 $(n_{\text{bnd}},\ \code{ecut\_response})$ settings.
 
+\textbf{An ultrasoft magnet needs one more term in every matrix element}, and
+without it there is no magnon at all rather than a slightly wrong one.
+$\langle\psi_{n\mathbf k\uparrow}|e^{-i(\mathbf q+\mathbf G)\cdot\mathbf r}
+|\psi_{m\,\mathbf k+\mathbf q\downarrow}\rangle$ is the plane-wave overlap of
+the pseudo states only when all of the charge is in $|\psi|^2$; with an
+ultrasoft dataset what is missing is
+
+\begin{equation*}
+\sum_a\sum_{ij} Q^a_{ij}(\mathbf q+\mathbf G)\,
+\langle\psi_{n\mathbf k}|\beta^{\mathbf k}_i\rangle
+\langle\beta^{\mathbf k+\mathbf q}_j|\psi_{m\,\mathbf k+\mathbf q}\rangle,
+\end{equation*}
+
+the augmentation charge at the same wavevector the exponent carries. Nothing is
+derived for it: $q^a_{ij}(\mathbf b)$ at an arbitrary wavevector is the
+primitive the ultrasoft Berry phase already uses, called once per $\mathbf G$ of
+the response sphere (13~ms each, so a sphere of 59 vectors is under a second).
+
+The number is the Goldstone identity on fcc nickel with an ultrasoft dataset:
+\textbf{0.984} without the term against \textbf{0.071} with it, at the same
+sphere and band count. The bare figure is not an independent error bar and the
+guide will not pretend it is --- the identity's $\mathbf m$ is read off the
+dense-grid density, which already carries \code{addusdens}'s augmentation, so
+0.984 is the augmentation's \emph{share of the moment}. What measures the
+assembly is the augmented number, and it is truncation rather than a missing
+term: over \code{ecut\_response} of 6, 8, 12, 16, 24 and 48~Ry it reads 0.1063,
+0.0706, 0.0992, 0.0987, 0.0854 and \textbf{0.0128}. \emph{Not} monotone --- the 8~Ry
+point is the default and sits below the next two, reproducibly --- so read the
+identity at the setting a dispersion is to be run at rather than trusting a
+trend.
+
 \begin{refuses}
 \textbf{Refuses.} \code{nspin != 2}: without a collinear magnetization the
 transverse block does not decouple and $B_{xc}/m$ does not exist, and a
 \textbf{noncollinear} ground state needs the full $4\times4$ spin-density
-response, which is a different object. \textbf{Ultrasoft and PAW}, because
-$\langle u_i|e^{-i(\mathbf q+\mathbf G)\cdot\mathbf r}|u_j\rangle$ is not the
-plane-wave overlap once the charge is not all in $|\psi|^2$. A \textbf{spin
+response, which is a different object. \textbf{PAW}, and no longer
+ultrasoft. $\langle u_i|e^{-i(\mathbf q+\mathbf G)\cdot\mathbf r}|u_j\rangle$
+is not the plane-wave overlap once the charge is not all in $|\psi|^2$, and the
+missing augmentation charge $Q_{ij}(\mathbf q+\mathbf G)$ is now carried --- it
+is the primitive the ultrasoft Berry phase already uses, called once per
+$\mathbf G$ of the response sphere. What PAW is refused for is a \emph{second}
+term that is not this one: its exchange-correlation field has a one-centre part
+on the spheres, where the kernel $B_{xc}/m$ is built from the grid field alone,
+so a PAW magnon would carry the right matrix element and the wrong
+enhancement. A \textbf{spin
 spiral}, whose rotating frame is not the one the kernel was derived in. A
 \textbf{Hubbard $U$}, which responds to the magnetization too. An
 \textbf{applied magnetic field or a constrained moment}, because the rotation

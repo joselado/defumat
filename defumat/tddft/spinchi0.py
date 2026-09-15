@@ -72,6 +72,7 @@ is what makes an eighteen-band transition metal fit.
 from __future__ import annotations
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -191,11 +192,15 @@ def require_a_transverse_regime(calculation) -> None:
         block to decouple. A noncollinear one needs Elk's full 4x4
         ``genspchi0``, which is a different object rather than a spin axis on
         this one; an unpolarized one has ``m = 0`` and no kernel at all.
-    ultrasoft and PAW
-        ``<u_i|e^{-i(q+G).r}|u_j>`` is not the plane-wave overlap when the
-        charge is not all in ``|psi|^2``. This is the same missing
-        ``Q_ij(q+G)`` that ``PLAN.md`` P40 measured and did not close in the
-        charge channel.
+    PAW
+        ``<u_i|e^{-i(q+G).r}|u_j>`` gains the augmentation charge
+        ``Q_ij(q+G)`` when the charge is not all in ``|psi|^2``, and that term
+        is carried for an **ultrasoft** dataset (see
+        :func:`augmentation_factors`). PAW is refused for a *second* term that
+        is not this one: its exchange-correlation field has a one-centre part
+        on the spheres which the kernel ``B_xc/m`` is built from the grid
+        alone, so a PAW magnon would carry the right matrix element and the
+        wrong enhancement.
     a spin spiral
         the two spinor components live on spheres centred at ``k +- q/2``, and
         the generalized Bloch theorem's rotating frame is not the frame this
@@ -217,13 +222,15 @@ def require_a_transverse_regime(calculation) -> None:
         needs the grid to be closed anyway. Run with ``nosym`` and ``noinv``.
     """
     system = calculation.system
-    if calculation.is_ultrasoft or calculation.is_paw:
+    if calculation.is_paw:
         raise NotImplementedError(
-            "a transverse spin susceptibility with an ultrasoft or PAW "
-            "pseudopotential is not implemented: every matrix element gains "
-            "the augmentation charge Q_ij(q+G), and without it the magnon is "
-            "wrong by the whole augmentation and still looks like a magnon. "
-            "Use a norm-conserving dataset"
+            "a transverse spin susceptibility with a PAW dataset is not "
+            "implemented: the matrix element's augmentation charge Q_ij(q+G) "
+            "is carried (it is the same one the Berry phase uses), but the "
+            "kernel B_xc/m is built from the grid field alone and a PAW run's "
+            "exchange-correlation field has a one-centre part on the spheres "
+            "beside it -- so the enhancement would be wrong where the matrix "
+            "element is right. Use an ultrasoft or norm-conserving dataset"
         )
     if system.noncolin:
         raise NotImplementedError(
@@ -337,6 +344,67 @@ def commensurate_shift(calculation, q):
     return index, umklapp
 
 
+
+def augmentation_factors(calculation, q, sphere):
+    """``q^a_ij(q + G)`` for every ``G`` of the response sphere, or ``None``.
+
+    An ultrasoft matrix element is not the plane-wave overlap of the pseudo
+    states: the charge is not all in ``|psi|^2``, and what is missing is the
+    augmentation charge at the *same* wavevector the exponent carries,
+
+        M_G += sum_a sum_ij q^a_ij(q + G) <psi_{nk}|beta^k_i>
+                                          <beta^{k+q}_j|psi_{m k+q}>.
+
+    Nothing is derived here. ``q^a_ij(b)`` at an arbitrary wavevector is
+    :func:`defumat.topology.augmentation.augmentation_at_q`, written for the
+    ultrasoft Berry phase (``bp_c_phase.f90``'s ``q_g``) and pinned by ``b -> 0``
+    reproducing the projectors' own ``qq`` and by a Chern number coming out an
+    exact integer on an ultrasoft dataset. This function calls it once per
+    ``G``, which costs 13 ms each after the first on a one-atom transition
+    metal, so a sphere of 59 vectors is under a second and is not worth
+    batching.
+
+    **The umklapp does not enter.** The plane-wave part reads the pair density
+    at ``G + G0``, ``G0`` being the reciprocal lattice vector that brought
+    ``k + q`` back into the grid; this term does not, because the wavevector in
+    the exponent is the *unwrapped* ``q + G`` and the projections themselves are
+    invariant under a ``G0`` shift of the k-point (``beta^{k+G0}(G) =
+    beta^k(G + G0)``, and so for ``psi``). Using the folded wavevector here
+    instead would be wrong by a whole reciprocal lattice vector in both
+    ``Q_ij`` and the structure factor, which is the trap
+    :mod:`defumat.topology.augmentation` states in its own signature.
+    """
+    if calculation.augmentation is None:
+        return None
+    from defumat.topology.augmentation import augmentation_at_q
+
+    cell = calculation.system.cell
+    # **Both wavevectors through the same matrix**, and that is not a
+    # simplification: ``Cell.k_to_cartesian`` returns QE's ``xk``, in units of
+    # ``2 pi / alat``, where ``cell.bg`` is in 1/bohr, so adding one to the
+    # other is out by ``tpiba`` -- a factor of 0.94 on this cell, which is
+    # invisible at ``q = 0`` (the Goldstone check) and wrong everywhere else.
+    bg = np.asarray(cell.bg)
+    qcart = np.asarray(q, dtype=float).reshape(3) @ bg
+    miller = np.asarray(sphere.miller, dtype=float)
+    blocks = [
+        augmentation_at_q(calculation, qcart + row @ bg) for row in miller
+    ]
+    if any(block is None for block in blocks):
+        return None
+    return jnp.stack([jnp.asarray(block) for block in blocks])
+
+
+def state_projections(calculation, coefficients):
+    """``<beta^k_i|psi_{nk}>`` for every k-point: ``(nk, nbnd, npol, nkb)``."""
+    from defumat.topology.states import _project
+
+    npol = int(calculation.npol)
+    return jax.vmap(lambda c, v: _project(c, v, npol))(
+        coefficients, calculation.projectors.vkb
+    )
+
+
 def transverse_response(
     calculation,
     wavefunctions,
@@ -408,22 +476,40 @@ def transverse_response(
     zomega = zomega.astype(precision.complex)
     slope = occupation_slope(calculation, eigenvalues, info)
 
+    # ``q^a_ij(q + G)``, once for the whole run: it depends on the wavevector
+    # and the geometry and on nothing that varies with k or with the band.
+    factors = augmentation_factors(calculation, q, sphere)
+    if factors is None:
+        # A norm-conserving run carries no augmentation, and the projections it
+        # would contract are not built either -- there is nothing to project on.
+        # The placeholder keeps the k and band axes the walkers scan over, and
+        # ``augmented`` is static so nothing is contracted with it.
+        nk, nbnd = wavefunctions.shape[1], wavefunctions.shape[2]
+        becp_up = becp_dn = jnp.zeros((nk, nbnd, 1, 1),
+                                      dtype=wavefunctions.dtype)
+        factors = jnp.zeros((sphere.nm, 1, 1), dtype=wavefunctions.dtype)
+        augmented = False
+    else:
+        becp_up = state_projections(calculation, wavefunctions[majority])
+        becp_dn = state_projections(calculation, wavefunctions[minority])[index]
+        augmented = True
+
     def one_k(arrays):
-        (psi_up, index_up, mask_up, eig_up, occ_up, slope_up,
-         psi_dn, index_dn, mask_dn, eig_dn, occ_dn, gather) = arrays
+        (psi_up, index_up, mask_up, eig_up, occ_up, slope_up, bec_up,
+         psi_dn, index_dn, mask_dn, eig_dn, occ_dn, bec_dn, gather) = arrays
         return _one_k_terms(
-            psi_up, index_up, mask_up, eig_up, occ_up, slope_up,
-            psi_dn, index_dn, mask_dn, eig_dn, occ_dn,
-            gather, grid, volume, zomega,
+            psi_up, index_up, mask_up, eig_up, occ_up, slope_up, bec_up,
+            psi_dn, index_dn, mask_dn, eig_dn, occ_dn, bec_dn,
+            gather, grid, volume, zomega, factors, augmented,
         )
 
     x = sum_k(
         one_k,
         (
             wavefunctions[majority], fft_index, mask,
-            eigenvalues[majority], weights[majority], slope[majority],
+            eigenvalues[majority], weights[majority], slope[majority], becp_up,
             wavefunctions[minority][index], fft_index[index], mask[index],
-            eigenvalues[minority][index], weights[minority][index],
+            eigenvalues[minority][index], weights[minority][index], becp_dn,
             flat,
         ),
         batch=resolve_k_batch(k_batch),
@@ -438,9 +524,9 @@ def transverse_response(
     )
 
 
-def _one_k_terms(psi_up, index_up, mask_up, eig_up, occ_up, slope_up,
-                 psi_dn, index_dn, mask_dn, eig_dn, occ_dn,
-                 gather, grid, volume, zomega):
+def _one_k_terms(psi_up, index_up, mask_up, eig_up, occ_up, slope_up, bec_up,
+                 psi_dn, index_dn, mask_dn, eig_dn, occ_dn, bec_dn,
+                 gather, grid, volume, zomega, factors, augmented):
     """One k-point's contribution, walked one majority band at a time.
 
     The pair axis is ``nbnd^2`` and a pair density is a whole FFT box, so
@@ -476,10 +562,19 @@ def _one_k_terms(psi_up, index_up, mask_up, eig_up, occ_up, slope_up,
     fields_dn = g_to_r(psi_dn * mask_dn[None, :], index_dn, grid)
 
     def one_band(carry):
-        field, energy, occupation, slope = carry
+        field, energy, occupation, slope, projection = carry
         # ``M_G = <psi_up| e^{-i(q+G).r} |psi_dn>`` for every minority band, at
         # the shifted gather.
         matrix = r_to_g(jnp.conj(field)[None] * fields_dn, gather)  # (nbnd, nm)
+        if augmented:
+            # The ultrasoft term, contracted exactly as the Berry phase's
+            # augmented overlap contracts it -- the bra's projection conjugated,
+            # the ket's not, and the block matrix between them. Here it carries
+            # a ``G`` index as well, because the exponent does.
+            matrix = matrix + jnp.einsum(
+                "ai,gij,maj->mg", jnp.conj(projection),
+                factors.astype(matrix.dtype), bec_dn,
+            )
 
         difference = occupation - occ_dn  # f_up - f_dn, (nbnd,)
         denominator = zomega[:, None] + (energy - eig_dn)[None, :]
@@ -501,7 +596,9 @@ def _one_k_terms(psi_up, index_up, mask_up, eig_up, occ_up, slope_up,
         ) / volume
         return jnp.einsum("wp,pa,pb->wab", scalars, jnp.conj(matrix), matrix)
 
-    return sum_bands(one_band, (fields_up, eig_up, occ_up, slope_up), batch=1)
+    return sum_bands(
+        one_band, (fields_up, eig_up, occ_up, slope_up, bec_up), batch=1
+    )
 
 
 #: Two eigenvalues closer than this (Ry) are treated as degenerate, and their
