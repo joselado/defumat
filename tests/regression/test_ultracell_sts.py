@@ -503,6 +503,58 @@ def test_a_wedge_is_refused_and_the_whole_grid_is_not(pseudo_dir):
     assert np.asarray(spectrum.values).min() > 0.0
 
 
+def test_the_wedge_sum_the_guard_refuses_is_wrong_by_a_whole_picture(pseudo_dir):
+    """**What the refusal is worth**, built by hand past the guard.
+
+    A refusal with no number behind it is an untested claim, and this one has
+    three numbers that only make sense together:
+
+    * the wedge sum of ``|psi_k(r)|^2`` differs from the whole grid's by **98
+      per cent** of the peak -- it is not a small error, it is a different
+      picture;
+    * its **integral is right to about 1 per cent**, because the integral is a
+      sum of weights and the weights of a wedge are correct. So the sum rule
+      this file checks elsewhere would have *passed* on the wedge, which is why
+      the guard is a guard and not a tolerance;
+    * the **image** on the very same reduced k-set agrees with the whole grid's
+      spectrum to **0.3 per cent**, which is the symmetrisation inside
+      ``Calculation.density`` doing its job -- so the refusal is about this route
+      and not about wedges, exactly as it claims.
+    """
+    from defumat.scf.driver import Calculation
+    from defumat.workflows.stm import _finish_spectrum, sample_spectrum
+    from defumat.workflows.transport import _geometry, _tip_points
+
+    calculator, scf = _converged(str(pseudo_dir), (4, 4, 4), 12, "symmetric")
+    geometry = dict(height=0.35, axis=2, shape=(12, 12))
+    energies = float(scf.homo) + np.linspace(-0.05, 0.05, 3)
+
+    whole = run_sts(calculator.system, calculator.pseudos, scf,
+                    energies=energies, width=WIDTH, grid=(4, 4, 4),
+                    conv_thr=1e-8, **geometry)
+
+    calculation = Calculation(calculator.system, calculator.pseudos)
+    plane, points = _tip_points(calculator.system.cell, geometry["height"],
+                                geometry["axis"], None, geometry["shape"], None)
+    channels, dos = sample_spectrum(
+        _geometry(calculation), scf.wavefunctions,
+        np.asarray(scf.eigenvalues_by_spin), points, energies=energies,
+        width=WIDTH, nspin_mag=int(calculator.system.nspin_mag))
+    wedge = _finish_spectrum(channels, dos, energies, points, plane, None, 1.0,
+                             width=WIDTH, smearing="gaussian", bias=None,
+                             fermi=None)
+
+    right = np.asarray(whole.values)
+    assert np.abs(np.asarray(wedge.values) - right).max() / right.max() > 0.5
+    # and the sum rule, which cannot see any of it
+    assert wedge.integral[1] == pytest.approx(whole.integral[1], rel=0.05)
+
+    image = run_stm(calculator.system, calculator.pseudos, scf,
+                    energy=float(energies[1]), width=WIDTH, **geometry)
+    reference = np.asarray(image.values)
+    assert np.abs(reference - right[1]).max() / right[1].max() < 0.01
+
+
 def test_an_ultracell_result_is_refused_by_name(pseudo_dir):
     """``run_sts`` says which function to call, as its three relatives do."""
     calculator, scf, result = _modulated(str(pseudo_dir), (2, 1, 1), (1, 2, 1))

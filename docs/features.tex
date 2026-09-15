@@ -3926,8 +3926,12 @@ density. A \textbf{symmetry-reduced k-set}: \code{run\_stm} goes through the
 density, which is symmetrised, so a wedge gives it the whole zone's answer, while
 nothing symmetrises this one and a wedge would return the sum over that wedge
 alone --- a smooth, plausible, wrong density of states everywhere off a symmetry
-axis. Pass \code{grid} (which builds the \emph{complete} grid here, where an
-image's reduces) or run \code{nosym}. A tip inside an \textbf{augmentation
+axis. On silicon's $4\times4\times4$ grid reduced to eight k-points the wedge sum
+differs from the whole grid's by 98 per cent of the peak, while its \emph{integral}
+is right to 1 per cent and the image on that same reduced set is right to 0.3 per
+cent --- so a sum rule would not catch it and the image is genuinely unaffected.
+Pass \code{grid} (which builds the \emph{complete} grid here, where an image's
+reduces) or run \code{nosym}. A tip inside an \textbf{augmentation
 sphere} of an ultrasoft or PAW dataset, where the pseudo-wavefunction is not the
 true one and the norm is short by 3 to 9 per cent. An ultracell is exempt from
 both: it requires \code{nosym} and refuses ultrasoft and PAW already.

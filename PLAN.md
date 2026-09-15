@@ -16001,7 +16001,14 @@ is sampled and squared here, where an image sums into a density.
 * **A symmetry-reduced k-set.** `run_stm` goes through `Calculation.density`, which
   **symmetrises**, so a wedge gives it the whole zone's answer; nothing symmetrises the
   amplitude route, so on a wedge it returns the sum over that wedge alone -- a plausible,
-  smooth, wrong density of states everywhere off a symmetry axis. Unfolding is not the
+  smooth, wrong density of states everywhere off a symmetry axis. **Measured**, on
+  silicon's 4x4x4 grid reduced to 8 k-points: the wedge sum differs from the whole grid's
+  by **98 per cent** of the peak, which is a different picture rather than a small error;
+  its **integral is right to 1 per cent**, because an integral is a sum of weights and a
+  wedge's weights are correct, so this file's own sum rule would have *passed* on it; and
+  the **image** on that same reduced set agrees with the whole grid's spectrum to **0.3 per
+  cent**, which is `Calculation.density`'s symmetrisation doing its job and is what says
+  the refusal is about this route rather than about wedges. Unfolding is not the
   escape it is for a scalar, because unfolding a *wavefunction* means rotating it, which is
   `whole_grid`'s own argument, so `grid=` here builds the complete grid where `run_stm`'s
   reduces. The ultracell is exempt by construction: it requires `nosym` and its `k0` mesh
