@@ -1030,3 +1030,64 @@ def test_the_decay_identity_closes_on_a_planted_free_electron_tail():
 
     doubled = decay_identity(2 * kappa[0], 2 * kappa[1], k_corner, k_centre)
     assert doubled["relative_residual"] == pytest.approx(3.0, rel=1.0e-12)
+
+
+# --------------------------------------------------------------------------
+# the bias window's own axis
+# --------------------------------------------------------------------------
+
+
+def test_a_bias_window_too_coarse_for_the_leads_is_refused_by_name():
+    """A trapezoid over a delta it does not resolve, refused before the solve.
+
+    The integrand is the smeared delta itself -- ``amplitude_weights`` is its
+    square root and the transmission squares it back -- so the axis has to carry
+    at least one point per ``broadening``. Measured on ``h-sheet.in`` at
+    ``broadening = 0.02`` Ry over a 0.24 Ry window, against a ``w/8`` axis, the
+    current is 0.99673 of it at ``h = w``, **1.00977 at ``2w``**, 0.29828 at
+    ``4w`` and 0.12112 at ``12w``: not monotone, so a coarse axis reads high
+    before it collapses and nothing downstream can tell which it did.
+
+    The guard is fed the case that must trip it rather than only the case that
+    passes, which is the whole point of ``OPEN.md``'s entry about a check whose
+    null result cannot be told from a pass.
+    """
+    from defumat.workflows.transport import _energies
+
+    levels = {"fermi_energy": 0.0}
+    with pytest.raises(ValueError, match="steps over the levels"):
+        _energies(0.0, levels, 0.24, 7, 0.02)
+
+    # the message names the count that would work, and that count works
+    try:
+        _energies(0.0, levels, 0.24, 7, 0.02)
+    except ValueError as error:
+        suggested = int(str(error).split("nenergies >= ")[1].split(",")[0])
+    assert suggested == 13
+    axis = _energies(0.0, levels, 0.24, suggested, 0.02)
+    assert float(np.max(np.diff(axis))) <= 0.02 * (1.0 + 1.0e-8)
+
+
+def test_one_point_per_width_is_the_boundary_and_it_passes():
+    """``h = w`` integrates to 0.997 of the converged current, so it is in.
+
+    The tolerance is there because a window built to land exactly on the
+    boundary arrives as a float that does not divide cleanly.
+    """
+    from defumat.workflows.transport import _energies
+
+    axis = _energies(0.0, {"fermi_energy": 0.0}, 0.3, 11, 0.03)
+    assert axis.size == 11
+    assert float(np.max(np.diff(axis))) == pytest.approx(0.03, rel=1.0e-12)
+
+
+def test_the_guard_is_about_the_trapezoid_and_not_about_an_energy_list():
+    """Without ``bias=`` there is no integration, so an axis of any step is fine.
+
+    Each energy is its own zero-bias conductance there, and a list of them is a
+    spectrum rather than a current.
+    """
+    from defumat.workflows.transport import _energies
+
+    coarse = _energies([0.0, 1.0, 2.0], {"fermi_energy": 0.0}, None, 3, 1.0e-6)
+    assert np.allclose(coarse, [0.0, 1.0, 2.0])

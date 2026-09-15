@@ -3155,7 +3155,7 @@ exactly why it needs measuring rather than reasoning.
 
 # Part IX -- from the tunnelling spectrum, 2026-09-15 (P90)
 
-## 1. A bias window is integrated with no check that the axis resolves the broadening **[found 2026-09-15, not yet measured on the transmission]**
+## 1. A bias window is integrated with no check that the axis resolves the broadening **[closed 2026-09-15 -- measured on the transmission, and the threshold is the delta's]**
 
 `run_vertical_transport(bias=)` and `run_ultracell_transport(bias=)` both turn a bias into an
 axis through `_energies(energies, levels, bias, nenergies)` and then `np.trapezoid` over it
@@ -3176,11 +3176,37 @@ feeds it the case that must trip it. What is missing is the same guard on the tr
 own `bias=`, which is a validated path and was left alone rather than changed in a phase about
 something else.
 
-**What it would take.** The guard is three lines in `_energies`, which both entry points
-already go through, and it needs `broadening` passed in -- it is not currently. The measurement
-to take first is the one above on the *transmission's* own weight rather than on the delta:
-`amplitude_weights` splits the delta as a square root, so the integrand is the delta itself and
-the numbers should carry over, but that is an argument and not a measurement.
+**What it took, and the argument held.** The measurement was taken first, on the
+transmission's own weight rather than on the delta: `h-sheet.in`, one tip point,
+`broadening = 0.02` Ry over a 0.24 Ry window, every row against a `w/8` axis.
+
+| `h/w` | current | ratio |
+|---|---|---|
+| `w/2` | 1.2878e-08 | 0.99917 |
+| `w` | 1.2847e-08 | 0.99673 |
+| `2w` | 1.3015e-08 | **1.00977** |
+| `4w` | 3.8444e-09 | 0.29828 |
+| `12w` | 1.5611e-09 | 0.12112 |
+
+So the threshold carries in units of `broadening` and the *numbers* do not: the bare delta
+reads 1.14 at `2w` and 0.10 at `4w`, and a sum over several levels reads 1.010 and 0.298.
+What is the same is the shape -- one point per width passes at 0.997, and the failure is
+**not monotone**, so a coarse axis reads high before it collapses and nothing downstream
+can tell which it did.
+
+The guard is in `_energies` (`workflows/transport.py`), after the `nenergies >= 2` check
+and before the `linspace`, at the same `broadening * (1 + 1e-8)` boundary the STM one uses,
+and it names the `nenergies` that would do rather than leaving the reader the division.
+**There were three call sites, not the two this entry named**: `run_vertical_transport`,
+`run_momentum_transport` and `run_ultracell_transport`, the last in `workflows/ultracell.py`
+rather than beside the others -- `broadening` is now a required argument of `_energies`, so a
+fourth cannot forget it. `run_sts`'s axis goes through `_spectrum_energies` instead and is
+integrated by `STMSpectrum.current`, which already had the guard.
+
+Three tests in `tests/unit/test_transport_machinery.py`, all in the gate and none needing an
+SCF: one that **fires** and whose suggested `nenergies` is then checked to pass, one at the
+boundary, and one showing an `energies=` list without `bias=` is untouched -- there is no
+trapezoid there, so each energy is its own zero-bias conductance.
 
 ## 2. The reference pair for a unit-cell tunnelling spectrum was not taken **[2026-09-15]**
 

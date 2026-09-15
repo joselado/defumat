@@ -16060,11 +16060,15 @@ in the middle of the valence band and is where an unset reference silently puts 
 * **A constant-current spectrum**, refused: the tip moves as the bias is swept, so the scan
   is re-inverted at every energy, which is a different experiment and `nheights` times the
   cost. Fixed height is what dI/dV spectroscopy is.
-* **The same trapezoid guard on the transmission's own `bias=`.** `run_vertical_transport`
-  and `run_ultracell_transport` both integrate over `nenergies` with no check of the step
-  against the broadening, and `_energies` refuses only `nenergies < 2`. It is the same
-  silent failure and it is recorded in `OPEN.md` rather than changed here, because it
-  touches a validated path.
+* ~~**The same trapezoid guard on the transmission's own `bias=`.**~~ **Done
+  2026-09-15**, and the measurement the entry asked for was taken first: on `h-sheet.in`
+  at `broadening = 0.02` Ry over a 0.24 Ry window, the current is 0.997 of an eight-times
+  finer axis at `h = w`, **1.010 at `2w`**, 0.298 at `4w` and 0.121 at `12w`, so the
+  threshold carries in units of the broadening while the numbers do not, and the failure
+  is not monotone -- a coarse axis reads high before it collapses. There were **three**
+  call sites rather than the two recorded: `run_momentum_transport` shares `_energies` and
+  `run_ultracell_transport` lives in `workflows/ultracell.py`. `broadening` is now a
+  required argument of `_energies` so a fourth cannot forget it (`OPEN.md` Part IX item 1).
 * **An energy-resolved *transmission* map beside this one** is already there
   (`run_ultracell_transport(energies=)`), so what is not is the momentum-resolved
   conjugate, which is P89's own outstanding item and unchanged.

@@ -260,7 +260,8 @@ def run_vertical_transport(
         tuple(float(s) for s in np.unique(np.round(points[:, exit_axis], 12))),
         "the tip plane")
 
-    grid_energies = _energies(energies, levels, bias, nenergies)
+    grid_energies = _energies(energies, levels, bias, nenergies,
+                              float(broadening))
     wavefunctions = np.asarray(wavefunctions)
 
     values, extras = _assemble(
@@ -479,7 +480,8 @@ def run_momentum_transport(
         _warn_if_the_planes_do_not_straddle(used, exit_axis, float(exit_height),
                                             float(one))
 
-    grid_energies = _energies(energies, levels, bias, nenergies)
+    grid_energies = _energies(energies, levels, bias, nenergies,
+                              float(broadening))
     wavefunctions = np.asarray(wavefunctions)
 
     columns, extras = _assemble_momentum(
@@ -1086,7 +1088,7 @@ def _tip_points(cell, height, axis, plane, shape, tip,
     return geometry, geometry.flat()
 
 
-def _energies(energies, levels, bias, nenergies):
+def _energies(energies, levels, bias, nenergies, broadening):
     """The energies in Ry: one, a list, or a bias window to integrate over."""
     if energies is None:
         fermi = levels.get("fermi_energy")
@@ -1120,6 +1122,30 @@ def _energies(energies, levels, bias, nenergies):
             "conductance"
         )
     low, high = sorted((float(grid[0]), float(grid[0]) + float(bias)))
+    # **A trapezoid cannot integrate a delta it does not resolve**, the same
+    # guard :meth:`defumat.stm.spectrum.STMSpectrum.current` carries and for the
+    # same reason. ``amplitude_weights`` is the square root of the smeared
+    # delta and the transmission squares it back, so the integrand is the delta
+    # itself and the threshold is the delta's. Measured on ``h-sheet.in`` at
+    # ``broadening = 0.02`` Ry over a 0.24 Ry window, against a ``w/8`` axis:
+    # 0.99917 at ``h = w/2``, 0.99673 at ``w``, **1.00977 at ``2w``**, 0.29828
+    # at ``4w`` and 0.12112 at ``12w`` -- so the failure is not monotone either,
+    # and a coarse axis reads high before it collapses.
+    step = (high - low) / (int(nenergies) - 1)
+    if step > float(broadening) * (1.0 + 1.0e-8):
+        # One point per width is the boundary and it passes, at 0.997. The
+        # tolerance is there so that a window built to land exactly on it does
+        # not fail on the last bit of the division.
+        needed = int(np.ceil((high - low) / float(broadening))) + 1
+        raise ValueError(
+            f"the bias window steps {step:.3e} Ry where the leads let states "
+            f"through over {float(broadening):.3e} Ry, so the trapezoid steps "
+            "over the levels rather than integrating them and the current "
+            "would be wrong by orders rather than by per cent -- and it can "
+            f"read high before it reads low. Use nenergies >= {needed}, or a "
+            "wider broadening=, which is what a window meant to be integrated "
+            "wants"
+        )
     return np.linspace(low, high, int(nenergies))
 
 

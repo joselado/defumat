@@ -4123,6 +4123,14 @@ again; and a transverse direction on a collinear run for either lead, where
 $m_x$ and $m_y$ are absent rather than zero. And, inherited from the STM images
 unchanged: a spin spiral, a constrained \code{tot\_magnetization}, an applied
 magnetic field.
+A \code{bias=} window whose axis does not resolve \code{broadening}: the current
+is a trapezoid over a smeared delta, so an axis coarser than one point per width
+steps over the levels rather than integrating them and the answer is wrong by
+orders. Measured on the hydrogen sheet at $\eta = 0.02$~Ry over a 0.24~Ry window,
+against an axis eight times finer: 0.997 of it at $h = \eta$, \textbf{1.010 at
+$2\eta$}, 0.298 at $4\eta$ and 0.121 at $12\eta$ --- not monotone, so a coarse
+axis reads high before it collapses. The refusal names the \code{nenergies} that
+would do.
 \textbf{Said rather than refused}: a geometry whose atoms do not lie between the
 two planes warns --- a cell is periodic, so with both planes on the same side
 the electron tunnels through the vacuum and around the periodic image, which is

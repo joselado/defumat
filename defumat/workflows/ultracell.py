@@ -311,7 +311,8 @@ def run_ultracell_transport(
     _warn_if_the_slab_is_not_between(system, exit_axis, exit_height, points, axis)
 
     levels = _levels(system, result, states)
-    grid_energies = _energies(energies, levels, bias, nenergies)
+    grid_energies = _energies(energies, levels, bias, nenergies,
+                              float(broadening))
 
     # **The exit plane's height needs no conversion and the tip points do.**
     # The ultracell is one cell deep along the stacking axis, so a crystal
