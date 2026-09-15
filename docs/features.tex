@@ -3904,6 +3904,9 @@ maps = calc.get_ultracell_sts(energies=bias, height=0.35, shape=(48, 8))
 plain = calc.get_sts(energies=bias, tip=tips[:1], width=0.02, grid=(4, 4, 4))
 \end{pycode}
 
+The entry points are \code{run\_sts} and \code{run\_ultracell\_sts}, or
+\code{Calculator.get\_sts} and \code{Calculator.get\_ultracell\_sts}.
+
 \textbf{Reading it.} \code{energies} is the axis in Rydberg and has no default:
 the axis \emph{is} the measurement and a range has no natural width. What comes
 back is \code{values}, of shape \code{(nE,) + } whatever the sampling was --- a
@@ -4747,7 +4750,11 @@ these are actually seen with is a scanning-tunnelling microscope, so an
 ultracell that cannot be imaged is a calculation of something nobody measures
 directly. This section is the join between the ultracell and the two things a
 tip measures, the Tersoff-Hamann image and the vertical tunnelling
-transmission.
+transmission. The third, the \emph{spectrum} at one place over many biases, is
+the same relabelling read along an energy axis and has its own subsection under
+\emph{Tunnelling spectra} --- on a modulation it is usually the one to reach
+for, since a wave moves a band edge and an image at one bias cannot tell a level
+that moved from a level that gained weight.
 
 Nothing new is computed, and the reason is one observation about the basis. An
 ultracell state is

@@ -15971,6 +15971,12 @@ what was not measured.
   different quantity reached by a different path: **1e-10**, exact only because
   `sum_G |c|^2 = 1`, which is the assumption the whole amplitude route rests on and is what
   an ultrasoft dataset would break.
+* **The two collinear channels**, which neither of the cells above reaches: an unpolarized
+  run carries one component and a spinor run four, and two is the only case where a
+  magnetic tip is a *difference of channels* rather than a contraction of a spinor. Against
+  the image at the same energies with the same tip, both channels and the projection:
+  **1e-12**. Each channel is taken separately as well as projected, because `up` and `down`
+  are the same shape and only the reference tells them apart.
 * **The spinor channels** against the density route's, on simple-cubic hydrogen seeded
   along `(1,1,1)/sqrt(3)` so that `m_x` and `m_y` are both large and equal: **1e-8**, each
   channel against its own size. Silicon will not do this: a nonmagnetic cell seeded

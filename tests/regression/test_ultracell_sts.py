@@ -118,6 +118,18 @@ K_POINTS automatic
  {k0} {k1} {k2} 0 0 0
 """
 
+#: Two channels, which is the regime neither of the cells above exercises: an
+#: unpolarized run has one and a spinor run has four, and the two-channel path is
+#: the only one where a tip's projection is a *difference of channels* rather
+#: than a contraction of a spinor. Silicon's moment collapses to nothing here and
+#: that does not matter: what is being compared is two routes to the same two
+#: channels, which is exact whether or not there is a moment between them.
+COLLINEAR = SILICON.replace(
+    " nosym=.true., noinv=.true.",
+    " nosym=.true., noinv=.true., nspin=2, starting_magnetization(1)=0.1,\n"
+    " occupations='smearing', smearing='gaussian', degauss=0.02"
+).replace(" conv_thr=1.0d-12", " conv_thr=1.0d-9")
+
 #: Symmetry left **on**, which every other cell here turns off: the one case
 #: the wedge refusal is about.
 SYMMETRIC = SILICON.replace(" nosym=.true., noinv=.true.\n", "")
@@ -138,11 +150,11 @@ def _converged(pseudos, grid, nbnd=12, template="silicon"):
     ``maxsize=2`` and never ``None``: what is held is the wavefunctions.
     """
     templates = {"silicon": SILICON, "noncollinear": NONCOLLINEAR,
-                 "symmetric": SYMMETRIC}
+                 "collinear": COLLINEAR, "symmetric": SYMMETRIC}
     calculator = _calculator(Path(pseudos), f"si_{template}_{''.join(map(str, grid))}.in",
                              templates[template], grid)
-    scf = calculator.get_scf(
-        conv_thr=1e-10 if template == "noncollinear" else 1e-12, nbnd=nbnd)
+    loose = {"noncollinear": 1e-10, "collinear": 1e-9}
+    scf = calculator.get_scf(conv_thr=loose.get(template, 1e-12), nbnd=nbnd)
     assert scf.converged
     return calculator, scf
 
@@ -304,6 +316,40 @@ def test_the_unit_cell_spectrum_is_the_unit_cell_image_energy_by_energy(
         reference = np.asarray(image.values)
         assert np.abs(np.asarray(spectrum.values)[at] - reference).max() \
             / reference.max() < 1e-12
+
+
+def test_a_collinear_tip_picks_the_same_channel_the_image_does(pseudo_dir):
+    """The two-channel regime, which neither of the other cells reaches.
+
+    An unpolarized run carries one component and a spinor run four; two is the
+    only case where a magnetic tip is a **difference of channels** rather than a
+    contraction of a spinor, and it goes through
+    :func:`~defumat.stm.image.project_spin`'s collinear branch. The check is the
+    image at the same energies, so it is the same null as the unpolarized one
+    with the projection in the path, and each channel is taken separately as
+    well as projected -- the two together are what say the channel axis did not
+    get transposed, since ``up`` and ``down`` are the same shape and only the
+    reference tells them apart.
+    """
+    calculator, scf = _converged(str(pseudo_dir), (2, 2, 1), 12, "collinear")
+    energies = float(scf.fermi_energy) + np.linspace(-0.04, 0.04, 3)
+    for spin in ("up", "down"):
+        spectrum = run_sts(calculator.system, calculator.pseudos, scf,
+                           energies=energies, width=WIDTH, shape=(8, 8),
+                           spin=spin, **PLANE)
+        for at, energy in enumerate(energies):
+            image = run_stm(calculator.system, calculator.pseudos, scf,
+                            shape=(8, 8), energy=float(energy), width=WIDTH,
+                            spin=spin, **PLANE)
+            reference = np.asarray(image.values)
+            assert reference.max() > 0.0
+            assert np.abs(np.asarray(spectrum.values)[at] - reference).max() \
+                / reference.max() < 1e-12
+            # and the two raw channels beside the projection
+            channels = np.asarray(spectrum.values_by_spin)[:, at]
+            assert channels.shape[0] == 2
+            assert np.abs(channels - np.asarray(image.values_by_spin)).max() \
+                / reference.max() < 1e-12
 
 
 def test_the_sum_rule_is_the_spectrum_integrated_not_the_weights_resummed(
