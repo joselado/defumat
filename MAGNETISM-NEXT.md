@@ -664,9 +664,20 @@ decide it, because a departure from `pw.x` needs a number rather than an argumen
   unit cell itself both mixers give the same moment and the same total energy to ten digits at
   every grid and `beta` tried, so the mixer is cleared of the general charge. **And the
   comparison cannot be repeated**: neither record wrote down the field's functional form, and
-  taking the description literally -- 0.01 Ry rotating 90 degrees per cell, `kerker = False` --
-  all five runs converge to one state, `|m|` 0.461 to 0.462 turning -41 degrees per cell, with
-  no factor of five anywhere. **So the flat manifold is still unmeasured** -- this item's decisive run has
+  neither of the two candidates reproduces the split.
+
+  **What replaces it is a better result and a worse control.** On a converged basis
+  (`nbnd = 32`; 16 is six per cent out in the moment) the saturated `(4, 1, 1)` grid has **one**
+  state and no mixer effect at all, and the partly-polarized `(4, 2, 2)` grid has **three**, all
+  converged three orders below `conv_thr`: `anderson` at 0.1 and 0.7 agree on one to eight
+  digits of `E_band`, `anderson` at **0.3** finds a third, and both `adaptive` runs find the one
+  whose moments follow the field's +90 degree ladder. So *a mixer can change which solution is
+  found* stands and is the caveat to carry; *it partitions by mixer rather than by step length*
+  **falls**, because `anderson`'s own `beta` selects between solutions here and a control that
+  varies `beta` therefore separates nothing. And the exact four-atom supercell under the same
+  field has **one** solution, the clean 90 degree helix at `|m| = 0.604` in 26 iterations, where
+  a ferromagnetic seed does not converge in 400 -- so the bunched ultracell states are the
+  frozen basis or the flat manifold rather than physics. **So the flat manifold is still unmeasured** -- this item's decisive run has
   not been done, it has been attempted and invalidated -- and the projection option below is
   not displaced by the mixer. What the attempt did establish is a property to carry into
   every other option here: **a step that grows can change which solution is found, and

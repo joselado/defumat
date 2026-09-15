@@ -5981,6 +5981,102 @@ cell, agreeing across both mixers and a factor of seven in `beta` to 0.3 per cen
 *some* field and this is not it, and no one can tell which, because the field was never
 written down. **A field is an input and belongs in the record beside the amplitude.**
 
+**How far each record can be recovered, measured rather than guessed, because "unrecoverable"
+is a claim too.** Two candidate fields, both grids, `nbnd = 16` as recorded:
+
+- **`OPEN.md` item 3 is *nearly* recovered, and what recovers it is Kerker.** That entry's
+  table says `anderson` at `beta = 0.7` under a 0.01 Ry field takes **48** iterations. With
+  `kerker = True`, which is `run_ultracell`'s default and which the mixer comparison turned off
+  so that `adaptive` could run at all, the rotating field at `(4, 2, 2)` takes **43** -- and at
+  `(4, 1, 1)` it takes 105, and with Kerker off 300-without-converging and 82. So 43 against 48
+  identifies item 3's k-grid as `(4, 2, 2)`, the one it never stated, and identifies the
+  remaining gap as its field's exact form. **Kerker on or off is worth a factor of seven here**
+  (43 against 300-and-stalled at the same `beta`), which is why the comparison's `kerker =
+  False` control makes its counts incomparable with item 3's and why that has to be said
+  wherever either is quoted.
+- **The handoff's split is not recovered by any field tried.** Its 0.186 has no functional form
+  attached, so both candidates were run: the rotating one above, and the test file's own
+  `turning`, a field along `+-y` whose *sign* alternates rather than a direction that rotates,
+  which is the only turning field in the suite. Neither reproduces 0.98-against-0.186. Under
+  the alternating field at `(4, 2, 2)` moments in that neighbourhood **do** appear -- `anderson`
+  at 0.7 converges to **0.2008** and `adaptive` at 0.05 to **0.2010** -- so 0.186 is a number
+  this cell produces, but the two mixers *agree* there rather than splitting, and at `(4, 1, 1)`
+  the same field gives 0.462 from all five. So the split is real about some setup and none of
+  the four tried is it.
+
+That is the useful form of the negative: **0.186 is not a wrong number, it is an unattributed
+one**, and what is missing is one line of input.
+
+**The second thing to check was the basis, and it comes back a null -- which is worth writing
+down, because the null is not obvious and the check looked damning.** `nbnd = 16`, the value
+`OPEN.md` item 3 states and every stage 3a and 3b test passes, **does** cut a degenerate
+multiplet on this cell at both grids: 5.0e-9 Ry at `(4, 2, 2)` and 3.4e-9 at `(4, 1, 1)`,
+against `DEGENERATE_CUT = 1e-8`. **The driver's warning does not fire, and it is right not
+to.** The gate is `nbnd <= 2 occupied`, and this is a one-electron spinor cell, so `occupied`
+is **1** and the cut sits fifteen bands above the only band that holds anything -- the regime
+`driver.py:625-635` measured directly, where `nbnd = 32`, `48` and `80` each cut a multiplet
+just as exactly, at 6e-15, 5e-12 and 4.7e-11 Ry, and each converged in ten iterations to a
+monotonically improving answer. A cut this degenerate is common high in the empty manifold and
+changes nothing that carries weight. So the split is not an arbitrary span.
+
+**What `nbnd` does change here is ordinary basis convergence, and 16 is not converged.** At
+`(4, 2, 2)`, `anderson` at 0.7 gives `|m| = 0.3912` and 79 iterations at `nbnd = 16` and
+**0.3674** and 57 at `nbnd = 32` -- six per cent in the moment, on the knob the method's
+accuracy depends on. Every moment in the records above is quoted from `nbnd = 16`.
+
+**At `nbnd = 32`, where the truncation gap is 4.1e-4 and 1.7e-3 rather than nanoscale, the
+result is two different things at the two grids and neither is the recorded one.** Rotating field, `kerker = False`, every run
+converged below 1e-9:
+
+| grid | mixer | `beta` | iterations | mean \|m\| | turn per cell | `E_band` |
+|---|---|---|---|---|---|---|
+| (4,1,1) | `anderson` | 0.1 | 135 | 0.4307 | -42.49 | -0.5921860 |
+| (4,1,1) | `anderson` | 0.3 | 132 | 0.4307 | -42.49 | -0.5921854 |
+| (4,1,1) | `anderson` | 0.7 | 205 | 0.4305 | -42.49 | -0.5921899 |
+| (4,1,1) | `adaptive` | 0.05 | 98 | 0.4318 | -42.44 | -0.5921845 |
+| (4,1,1) | `adaptive` | 0.2 | 91 | 0.4317 | -42.44 | -0.5921846 |
+| (4,2,2) | `anderson` | 0.1 | 120 | 0.3667 | **-27.40** | -0.44996015 |
+| (4,2,2) | `anderson` | 0.3 | 108 | 0.4924 | **-38.99** | -0.4477690 |
+| (4,2,2) | `anderson` | 0.7 | 57 | 0.3674 | **-27.39** | -0.44996014 |
+| (4,2,2) | `adaptive` | 0.05 | 152 | 0.4380 | **+94.33** | -0.4521353 |
+| (4,2,2) | `adaptive` | 0.2 | 266 | 0.4364 | **+103.58** | -0.4521380 |
+
+**The three-solution structure is present at `nbnd = 16` too**, which is the other half of the
+basis being exonerated: at 16 the same grid gives `anderson` at 0.7 turning -25.2 degrees per
+cell and both `adaptive` runs +98 and +105, the same partition into a bunched cluster and a
+field-following one. Doubling the basis moves the numbers and keeps the structure.
+
+**At the saturated grid there is one state and no mixer effect at all**: five runs across both
+mixers and a factor of seven in `beta` agree on the moment to 0.3 per cent and on the angles
+to 0.05 degrees. **At the partly-polarized grid there are three**, all converged three orders
+below `conv_thr`: `anderson` at 0.1 and 0.7 find the same one to eight digits in `E_band`,
+`anderson` at **0.3** finds a third, and both `adaptive` runs find the one whose moments follow
+the applied field's +90 degree ladder, which also has the lowest band energy of the three.
+
+**So the earlier reading survives in substance and its control does not.** A mixer can change
+which solution a run finds, and `converged = True` three orders below `conv_thr` does not
+protect against it: that is confirmed, on a clean basis, and it is the caveat the feature
+ships with. What does not survive is the claim that it **partitions by mixer rather than by
+step length**, which rested on `anderson` giving the same answer at 0.1, 0.3 and 0.7. On a
+clean basis `anderson` at 0.3 lands somewhere neither of its own neighbours does, so the step
+length selects a solution inside one mixer, and a control that varies `beta` cannot separate
+the two. **What the growing step buys is not a different kind of freedom, it is more of the
+same one.**
+
+**What the exact calculation says, since the ultracell cannot rank its own states.** An
+ultracell run reports the occupied eigenvalue sum and no total energy, so `E_band` above
+orders nothing. A real **four-atom supercell** of the same lattice goes through the ordinary
+SCF, which does report one. Under a `LOCAL_MAGNETIC_FIELDS` ladder of the same 0.01 Ry turning
+90 degrees per site, seeded on the ladder, it converges in **26** iterations to a clean helix,
+exactly 90.0 degrees from site to site and `|m| = 0.604` on every one, at
+`E = -3.7298232078` Ry with the field's own `-2.415e-02` Ry carried separately. Seeded
+**ferromagnetically** it does not converge at all -- 400 iterations, `accuracy = 5.1e-6`,
+ending on no particular texture. So in the exact calculation this cell has one solution and it
+is the helix, and the bunched ultracell states are the frozen basis or the flat manifold rather
+than physics. The two are not like for like -- a sphere-shaped field against a continuous one,
+an exact basis against a frozen `nbnd` -- so this ranks **textures on the lattice**, not the
+ultracell's states, and it is quoted for that.
+
 **It loses on a cell that was never hard, which is what a robustness mixer does.**
 `benchmarks/si-1k.in`, two-atom silicon at `conv_thr = 1e-10`, each mode at its own default
 `mixing_beta`: `anderson` 7 iterations, `linear` 9, `adaptive` 17, all to the same total energy

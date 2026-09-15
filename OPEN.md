@@ -2571,9 +2571,24 @@ every run given a 300-iteration budget:
 > taking that description literally, as `0.01 (cos 2 pi x/4, sin 2 pi x/4, 0)` Ry at
 > `(4, 1, 1)` with `kerker = False`, `anderson` at `beta = 0.7` converges in **83** iterations
 > where this table says 48. **A field and a k-grid are inputs and belong beside the amplitude.**
-> One more thing to carry into any rerun: at `(4, 2, 2)`, `nbnd = 16` cuts a multiplet at
-> **5.0e-9 Ry**, below `DEGENERATE_CUT`, so the frozen basis there is whatever the eigensolver
-> returned and two runs need not share it.
+> **`nbnd = 16` cuts a degenerate multiplet here and it does not matter, which is worth one
+> line so the next session does not spend an afternoon on it.** The gap is 5.0e-9 Ry at
+> `(4, 2, 2)` and 3.4e-9 at `(4, 1, 1)`, under `DEGENERATE_CUT`, and the warning correctly
+> stays silent: the gate is `nbnd <= 2 occupied` and this one-electron spinor cell has
+> `occupied = 1`, so the cut lies fifteen bands above anything that holds weight, which is the
+> case `driver.py:625-635` measured as harmless. What `nbnd` does move is ordinary accuracy --
+> `anderson` at 0.7 gives 0.3912 in 79 iterations at 16 and 0.3674 in 57 at 32, six per cent --
+> so 16 is not converged for quoting a moment, and every moment in this table is quoted from it.
+>
+> **Redone at `nbnd = 32` the flat manifold is not where this table put it.** At `(4, 1, 1)` there is **one** state and no mixer effect: both mixers and `beta`
+> across a factor of seven give `|m|` 0.4305 to 0.4318 and -42.5 degrees per cell, every run
+> converged. At `(4, 2, 2)` there are **three**, all converged three orders below `conv_thr`,
+> and the same partition is there at `nbnd = 16`, so it is the cell rather than the basis --
+> `anderson` at 0.1 and 0.7 agree on one to eight digits of `E_band`, `anderson` at **0.3**
+> finds a third, and `adaptive` finds the one that follows the field's +90 degree ladder. So
+> the step length selects a solution **inside** one mixer, and `PERFORMANCE.md`'s control
+> across three values of `anderson`'s `beta` does not separate mixer from step length after
+> all. The full table is there.
 
 | field | `mixing_beta` | iterations | converged | final `dr2` |
 |---|---|---|---|---|
@@ -2627,6 +2642,24 @@ opposite of the usual reflex -- and the warning says so in those words.
 which takes **263** iterations as it stands -- converging in well under that with the
 projection on, to the same converged moments to 1e-8; and the same run with `lspinorb`
 giving the *same* answer with the projection on and off, which is the gate firing.
+
+**Redo that run before using it as the target** (2026-09-15), for the two reasons above: at
+`nbnd = 16` its basis is arbitrary, and neither its k-grid nor its field's functional form is
+written down here, so the 263 cannot be reproduced from this entry. **And state the number it
+converges *to*, not only how many iterations it took** -- on a clean basis this cell has three
+self-consistent solutions at `(4, 2, 2)`, so "converged in well under 263" is satisfied by a
+run that found a different one, which is precisely the failure this entry's own mechanism
+predicts and which an iteration count cannot see.
+
+**One measurement the ultracell cannot make and the exact calculation can.** An ultracell run
+reports no total energy, so nothing in it ranks its own solutions. A real four-atom supercell
+under a `LOCAL_MAGNETIC_FIELDS` ladder of 0.01 Ry turning 90 degrees per site converges in
+**26** iterations to a clean helix, 90.0 degrees from site to site and `|m| = 0.604` on every
+site; seeded ferromagnetically instead it does **not** converge in 400 iterations and ends on
+no texture. So the lattice has one solution under that field and it is the helix, and the
+bunched ultracell states are the frozen basis or this entry's flat manifold rather than
+physics. The field shapes differ, a sphere ladder against a continuous `B(r)`, so this ranks
+textures on the lattice rather than the ultracell's states.
 
 ---
 
