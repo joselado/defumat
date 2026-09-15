@@ -273,8 +273,24 @@ than an observable: it measures how far a constrained or non-self-consistent
 magnetic configuration is from stationarity, and it is the quantity that
 underlies spin dynamics and the adiabatic magnon picture.
 
-**Not a phase.** A rider on notebook 11 (noncollinear magnetism) plus a test
-asserting it vanishes at self-consistency and does not under a constraint.
+**Taken in P92, and the entry above is wrong in the one way that matters.**
+The test it proposes -- assert the torque vanishes at self-consistency -- cannot
+discriminate anything: in the local spin-density approximation, and in every
+gradient correction built on it, `B_xc` is parallel to `m` at **every point**, so
+the cross product is identically zero at every density, converged or not,
+constrained or not. Measured at `parallel_fraction = 1.00000000` on converged
+nickel. That is `CLAUDE.md`'s first trap in its purest form, and it is why this
+is not a rider.
+
+What makes the torque a quantity rather than a null is a field that is *not*
+parallel to `m`, and Elk has one: the **source-free** `B_xc` reached by
+`nosource` (`src/projsbf.f90`), which is why task 160 exists there at all. The
+two are one item and were taken as one. With the projection on, nickel's torque
+grows from 2e-18 to 6.3e-4 Ry as one site's moment is turned through 90 degrees,
+where the local functional reports zero at every angle. `PLAN.md` P92 has the
+rest, including the second null -- the *total* torque is zero by the global
+spin-rotation symmetry whatever the state, so the per-site split is the number
+to read.
 
 ---
 

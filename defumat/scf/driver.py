@@ -134,6 +134,7 @@ from defumat.scf.fields import (ATOM_RESOLVED, FADED_FIELD, FEEDBACK,
                                 FSM_TOLERANCE, MagneticField,
                                 constraint_targets)
 from defumat.scf.locals import build_local_regions, get_locals
+from defumat.scf.sourcefree import refuse_source_free
 from defumat.scf.potential import (
     Potential,
     as_potential_components,
@@ -187,7 +188,9 @@ def _field_potential(field, rho_r, cell, scale):
 
 #: ``quantization_axis`` is a fixed three-vector or ``None``, so it is static:
 #: it comes from the *input* magnetization and cannot change during a run.
-_potential_of_rho = jax.jit(v_of_rho, static_argnums=(6,))
+#: ``source_free`` is Elk's ``nosource`` and is an input flag, so it is
+#: static beside ``quantization_axis``.
+_potential_of_rho = jax.jit(v_of_rho, static_argnums=(6, 8))
 _accuracy = jax.jit(scf_accuracy)
 _accuracy_split = jax.jit(scf_accuracy_split)
 
@@ -1704,6 +1707,27 @@ class Calculation:
         )
         self.quantization_axis = None if axis is None else tuple(float(v) for v in axis)
 
+        #: ``nosource``: whether the exchange-correlation field has its
+        #: longitudinal part projected out (:mod:`defumat.scf.sourcefree`). A
+        #: plain ``bool`` because it crosses the ``jit`` boundary as a static
+        #: argument, and the refusals are made **here**, at the door, rather
+        #: than inside the potential -- a run that cannot have it must not
+        #: start, since the symptom otherwise is a converged number.
+        self.source_free = bool(getattr(system, "nosource", False))
+        if self.source_free:
+            refuse_source_free(system, self.functional)
+            if self.is_paw:
+                raise NotImplementedError(
+                    "a source-free exchange-correlation field with a PAW "
+                    "dataset is not implemented: the one-centre B_xc on the "
+                    "spheres is a second copy of the field that this "
+                    "projection does not reach, so the two halves of one "
+                    "potential would belong to different functionals. Elk "
+                    "projects its muffin-tin part together with the "
+                    "interstitial one. Use a norm-conserving or ultrasoft "
+                    "dataset"
+                )
+
         self.symmetries = system.symmetry_group()
         #: Whether this run actually symmetrises with :attr:`symmetries`.
         #:
@@ -2808,6 +2832,7 @@ class Calculation:
             self.rho_core_g,
             self.quantization_axis,
             tau,
+            self.source_free,
         )
         field = self.magnetic_field if field is None else field
         if field is None:
@@ -4856,6 +4881,19 @@ def run_scf(
     # density into an ``SCFResult`` -- every energy term, the magnetization, the
     # stress. Nothing about the result has a second implementation, and the one
     # iteration it costs is counted in ``solver.steps`` like any other.
+    if calculation.source_free:
+        warnings.warn(
+            "nosource projects the longitudinal part out of the "
+            "exchange-correlation magnetic field, which changes the potential "
+            "and leaves the energy expression alone: the total energy this run "
+            "reports is therefore not the value of anything the SCF minimised, "
+            "it is not comparable with a total energy from a run without it, "
+            "and forces, stress and response are refused for it. What it is "
+            "for is the magnetic texture and the exchange-correlation torque, "
+            "which is identically zero without it",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     if calculation.functional.is_meta:
         warnings.warn(
             f"{calculation.functional.name} is a potential and not the "

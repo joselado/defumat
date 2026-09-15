@@ -350,7 +350,8 @@ def require_an_ultracell_regime(system, pseudos, basis) -> None:
     rather than on the system, which is why neither is in this function.
     """
     require_an_ultracell_functional(
-        resolve_functional([p.functional for p in pseudos], system.input_dft)
+        resolve_functional([p.functional for p in pseudos], system.input_dft),
+        bool(getattr(system, "nosource", False)),
     )
     if any(p.is_ultrasoft or p.is_paw for p in pseudos):
         raise NotImplementedError(

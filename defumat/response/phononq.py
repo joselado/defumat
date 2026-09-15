@@ -888,6 +888,12 @@ def require_a_two_sphere_regime(calculation, q_crystal) -> None:
             "any q: tb09 and bj06 are potentials with no energy functional, so "
             "there is no second derivative of an energy to take (P30)"
         )
+    if getattr(calculation, "source_free", False):
+        raise NotImplementedError(
+            "a phonon under nosource is not implemented, at any q: the "
+            "source-free projection changes the potential and not the energy, "
+            "so there is no second derivative of an energy to take"
+        )
     if calculation.is_hubbard:
         raise NotImplementedError(
             "a phonon at q != 0 with a Hubbard U is not implemented: the "

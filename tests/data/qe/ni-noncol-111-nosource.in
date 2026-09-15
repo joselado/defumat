@@ -1,0 +1,44 @@
+! `ni-noncol-111.in` with Elk's `nosource`: the longitudinal part of the
+! exchange-correlation magnetic field projected out, so that `div B_xc = 0`.
+!
+! The cell is a robust magnet on purpose. The projection removes roughly the
+! radial part of each atom's field, which is most of what holds a *marginal*
+! moment together: on the four-hydrogen helix the same flag takes the site
+! moments from 0.4675 to 0.0003 mu_B, and that collapse is the cell rather than
+! the method. Nickel survives and its moment goes the other way, 0.6576 to
+! 0.7045 mu_B, which is the size of change the source-free literature reports
+! for a transition metal.
+!
+! It is LDA on purpose too, so that the torque assembly is complete: the
+! exchange-correlation field of a gradient-corrected run is built in the local
+! spin frame and there is nothing to be gained here from carrying that as well.
+&control
+      calculation = 'scf'
+   /
+   &system
+      ibrav = 2
+      celldm(1) = 6.65
+      nat = 1
+      ntyp = 1
+      ecutwfc = 25.0
+      ecutrho = 200.0
+      occupations = 'smearing'
+      smearing = 'mv'
+      degauss = 0.02
+      noncolin = .true.
+      nosource = .true.
+      starting_magnetization(1) = 0.5
+      angle1(1) = 54.735610317245346
+      angle2(1) = 45.0
+   /
+   &electrons
+      conv_thr = 1.d-9
+      mixing_beta = 0.3
+      electron_maxstep = 200
+   /
+   ATOMIC_SPECIES
+   Ni 58.6934 Ni.pz-nd-rrkjus.UPF
+   ATOMIC_POSITIONS crystal
+   Ni  0.00  0.00  0.00
+   K_POINTS automatic
+   4 4 4 0 0 0

@@ -116,6 +116,15 @@ class System(eqx.Module):
     #: three p channels filled) needs it, and symmetrising anyway converges to a
     #: different state.
     nosym: bool = eqx.field(static=True, default=False)
+    #: ``nosource``: project the longitudinal part out of the
+    #: exchange-correlation magnetic field, so that ``div B_xc = 0``. Elk's own
+    #: spelling (``src/projsbf.f90``), and this code's own knob rather than a
+    #: ``pw.x`` one -- QE has nothing of the kind. It is a **potential with no
+    #: energy functional behind it**, like a potential-only meta-GGA, so a run
+    #: that sets it reports a total energy that is not the value of anything it
+    #: minimised and every derivative of that energy refuses by name
+    #: (:mod:`defumat.scf.sourcefree`).
+    nosource: bool = eqx.field(static=True, default=False)
     #: ``noinv``: switch off the ``k -> -k`` reduction of the k-grid.
     #: ``setup.f90`` sets ``time_reversal = .NOT. noinv .AND. .NOT.
     #: magnetic_sym``, so it is independent of :attr:`nosym` -- a run may keep
@@ -1047,6 +1056,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
     # no ``-k = k`` (``magnetic_sym`` in ``setup.f90``) -- then symmetry, then
     # k-points.
     nosym = _logical(pwin.get("system", "nosym", False))
+    nosource = _logical(pwin.get("system", "nosource", False))
     noinv = _logical(pwin.get("system", "noinv", False))
     # ``tstress`` and nothing else: there is no ``tprnstress`` in QE 7.5
     # (``INPUT_PW.txt`` lists one stress switch and a grep of the tree finds no
@@ -1156,6 +1166,7 @@ def build_system(pwin: PwInput, precision: Precision = DEFAULT_PRECISION) -> Sys
         tot_magnetization=_tot_magnetization(pwin),
         starting_moments=starting_moments,
         nosym=nosym,
+        nosource=nosource,
         noinv=noinv,
         tstress=tstress,
         lspinorb=lspinorb,

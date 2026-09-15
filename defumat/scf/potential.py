@@ -41,6 +41,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from defumat.basis.fft import g_to_r, r_to_g
+from defumat.scf.sourcefree import project_source_free
 from defumat.basis.gradients import divergence, gradient, laplacian
 from defumat.basis.gvectors import GVectors
 from defumat.system.cell import Cell
@@ -673,6 +674,7 @@ def v_of_rho(
     rho_core_g: jnp.ndarray | None = None,
     quantization_axis: jnp.ndarray | None = None,
     tau: jnp.ndarray | None = None,
+    source_free: bool = False,
 ) -> Potential:
     """The full self-consistent potential from a real-space density.
 
@@ -684,6 +686,14 @@ def v_of_rho(
     gradient-corrected functional: its gradient is taken in G space along with
     the valence density's, which is why ``set_rhoc`` keeps ``rhog_core`` around
     rather than only its transform.
+
+    ``source_free`` asks for Elk's ``nosource``: the longitudinal part of the
+    exchange-correlation magnetic field is projected out after the functional
+    has built it, so ``div B_xc = 0`` and the field is no longer parallel to the
+    magnetization (:mod:`defumat.scf.sourcefree`). It changes the *potential*
+    and not the energy, which is why nothing about ``etxc`` moves here and why
+    the run has to say so -- the number it reports is then not the value of
+    anything it minimised.
 
     ``tau`` is the kinetic energy density in Ry, per spin channel, and is
     required by -- and only by -- a meta-GGA functional. It is the one
@@ -760,8 +770,14 @@ def v_of_rho(
                 jnp.real(rho_r), gvectors, cell, functional, rho_core,
                 quantization_axis,
             )
+            v_xc = v_xc + v_gradient
+            if source_free:
+                # After the gradient correction and before Hartree: what is
+                # projected is the whole exchange-correlation field, and the
+                # Hartree term has no magnetic component to project.
+                v_xc = project_source_free(v_xc, gvectors, cell)
             return Potential(
-                v_scf=as_potential_components(v_hartree_r, nspin) + v_xc + v_gradient,
+                v_scf=as_potential_components(v_hartree_r, nspin) + v_xc,
                 ehart=ehart,
                 etxc=etxc + e_gradient,
                 meta_c=meta_c,
@@ -781,6 +797,9 @@ def v_of_rho(
         )
         v_xc = v_xc + v_gradient
         etxc = etxc + e_gradient
+
+    if source_free:
+        v_xc = project_source_free(v_xc, gvectors, cell)
 
     # The Hartree potential is spin-independent, so it follows the *potential*
     # rule and not the density's: both channels of an ``(up, down)`` potential

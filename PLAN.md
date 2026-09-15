@@ -16165,6 +16165,98 @@ executed snippet, and **no notebook and no `projwfc.x` timing were taken** -- th
 `projwfc.x` reference for this regime committed here, which is the same gap the
 unsymmetrised branch already records.
 
+### P92 -- The source-free exchange-correlation field, and the diagnostic that was a null. ✅ DONE.
+
+`defumat/scf/sourcefree.py`, `defumat/scf/spin_torque.py`, `nosource`,
+`Calculator.get_exchange_torque`, `tests/unit/test_source_free_field.py`,
+`tests/regression/test_source_free_run.py`,
+`tests/data/qe/ni-noncol-111-nosource.in`.
+
+**This phase started by striking an entry off a backlog.** `ELK-FEATURES.md` §4 offered
+Elk's task 160, the exchange-correlation spin torque `tau = int m x B_xc`, as a cheap rider
+on notebook 11 "plus a test asserting it vanishes at self-consistency and does not under a
+constraint". That test cannot exist. A local functional resolves the density onto
+`m`-hat at every point and attaches its answer there, so `B_xc` is parallel to `m`
+*pointwise* and the cross product is identically zero at **every** density -- the guard's
+clean zero that cannot be told from a pass, and `scf/potential.py:_noncollinear_xc` says so
+in its own docstring ("a functional of `|m|` alone cannot produce a torque"). Measured:
+`parallel_fraction = 1.00000000` and `|tau| = 9e-21 Ry` on converged fcc nickel.
+
+**So the torque and the thing that makes it nonzero are one item.** Elk's `nosource`
+(`src/projsbf.f90`, reached from `potks.f90`) projects the longitudinal part out of
+`B_xc`, which in Elk is a divergence, a Poisson solve and a gradient added back, and on a
+plane-wave grid is `B(G) -> B(G) - G (G . B(G))/|G|^2` with `G = 0` left alone.
+
+**The numbers, on `ni-noncol-111.in` (fcc nickel, LDA, moment along (1,1,1)):**
+
+| | without `nosource` | with |
+|---|---|---|
+| `int |div B_xc|^2` | 1.49e-2 | **1.13e-32** |
+| `parallel_fraction` | 1.00000000 | 0.98220 |
+| site moment | 0.6576 mu_B | **0.7045** mu_B |
+| total energy | -85.7244943726 Ry | -85.7245069815 Ry |
+
+and the torque, with one site's moment turned about its own axis inside its own sphere --
+a configuration neither functional converged to:
+
+| turned by | local functional | source-free |
+|---|---|---|
+| 0 degrees | 7e-22 Ry | 2e-18 Ry |
+| 15 degrees | 4e-20 Ry | **1.64e-4 Ry** |
+| 45 degrees | 5e-20 Ry | **4.47e-4 Ry** |
+| 90 degrees | 1e-21 Ry | **6.32e-4 Ry** |
+
+**The left column is the result.** The local functional reports zero at every angle, not
+only at the one it converged to, which is the claim the struck backlog entry would have
+tested the wrong way round.
+
+**Three traps were paid for here.**
+
+- **`GVectors.g2` is not `|cartesian|^2`.** It is QE's `gg`, in units of `tpiba^2`, where
+  `cartesian` is in 1/bohr, and the two differ by `(2 pi / alat)^2`. Mixing them scales the
+  projection by a lattice-constant-dependent number, so `div B` fell by a factor of **2.7**
+  where it has to fall to round-off. Nothing but a unit test on a pure gradient saw it: the
+  run converged, the moment moved, the torque became nonzero, and every run-level number
+  looked like a working feature.
+- **The projection is written as `B - (the longitudinal part)`** and not as "transform to
+  the sphere, project, transform back". The second form band-limits the whole of `B_xc` to
+  the dense sphere, which changes the potential even when there is nothing longitudinal to
+  remove, and that change would be silent.
+- **The `0/0` at `G = 0` is masked rather than divided and repaired**, which is
+  `CLAUDE.md`'s first trap at one more site; the test that the tangent is finite is in the
+  unit file.
+
+**A second null, and it is a symmetry rather than an approximation.** The *total* torque
+over the cell is zero without spin-orbit coupling whatever the state, because the energy is
+invariant under a global rotation of every spin. So `ExchangeTorque.sites` is the number to
+read and the total is a check on the assembly; Elk's own task prints only the total, which
+is informative there because Elk's targets carry spin-orbit coupling. Asserted at 1e-15 in
+both regimes so that a change which breaks it is seen.
+
+**The hydrogen collapse, and why the committed cell is nickel.** On `h4-cycloid-90.in` the
+same flag takes the site moments from **0.4675 to 0.0003 mu_B**. The projection removes
+roughly the radial part of each atom's field, which is most of what holds a moment
+together, and every hydrogen cell in this repository is Stoner-marginal (`MAGNETISM-NEXT.md`
+item B and E(c) both say so). Nickel goes the other way by 7 per cent, which is the size of
+change the source-free literature reports for a transition metal, so the collapse is
+recorded as the marginal case rather than as the method.
+
+**Potential-only, and the consequences are enforced rather than documented.** `run_scf`
+warns, and `reject_potential_only` refuses every consumer of `forces/energy.py:energy_at`.
+Four more refusals do not route through it and were added by hand: the **magnon** kernel
+(`tddft/spinchi0.py`), whose `f_xc^{+-} = B_xc/m` is a scalar only while `B ∥ m` and which
+is therefore the sharpest of them; the **q-phonon**; the **ultracell**, whose per-cell
+potential stops being a function of that cell's density once `1/|G|^2` couples the whole
+modulation; and, at the door, a **collinear** run, **PAW**, a **spiral** and a
+**meta-GGA**.
+
+**What is outstanding.** **No Elk number was taken** -- the external comparison this
+project's rule asks for would be Elk with `nosource = .true.` on P86's matched
+hydrogen-chain pair, and it is not done, so there is no `PERFORMANCE.md` row either. **No
+notebook.** Elk's `sxcscf` (the scaled spin field, `tssxc`) is the same paper's other knob
+and is **not built**, named rather than silently absent. And the torque is refused for a
+**potential-only meta-GGA**, which is the only functional regime it does not cover.
+
 ## 4. Validation strategy
 
 The primary test is **the same input run through QE and through defumat**.

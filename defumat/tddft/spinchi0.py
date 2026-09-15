@@ -266,6 +266,19 @@ def require_a_transverse_regime(calculation) -> None:
             "is not implemented: there is no exchange-correlation energy for "
             "the rotation argument to be about"
         )
+    if getattr(calculation, "source_free", False):
+        # The sharpest of the nosource refusals, because the kernel *is* the
+        # assumption the projection breaks: f_xc^{+-} = B_xc/m is a scalar only
+        # while B_xc is parallel to m, which is exactly what projecting the
+        # longitudinal part out stops being true. Dividing the two anyway gives
+        # a finite kernel and a plausible magnon.
+        raise NotImplementedError(
+            "a transverse spin susceptibility under nosource is not "
+            "implemented: the kernel B_xc/m is a scalar only because the local "
+            "functional makes B_xc parallel to m at every point, and the "
+            "source-free projection is precisely what breaks that -- the "
+            "quotient is still finite and the magnon it gives is meaningless"
+        )
     weights = np.asarray(calculation.system.kpoints.weights)
     if weights.size > 1 and np.ptp(weights) > 1e-8 * np.abs(weights).max():
         raise NotImplementedError(

@@ -71,7 +71,7 @@ class UltracellPotential:
         self.etxc = etxc
 
 
-def require_an_ultracell_functional(functional) -> None:
+def require_an_ultracell_functional(functional, source_free: bool = False) -> None:
     """Refuse what the box's pointwise exchange-correlation cannot represent."""
     if functional.is_meta:
         raise NotImplementedError(
@@ -79,6 +79,13 @@ def require_an_ultracell_functional(functional) -> None:
             "potential-only functional has no energy to be self-consistent in "
             "per cell, and tau is a property of the states rather than of the "
             "density the loop carries"
+        )
+    if source_free:
+        raise NotImplementedError(
+            "the ultracell refuses nosource: the projection is a division by "
+            "|G|^2 over the *whole* modulation, so it couples every cell of "
+            "the ultracell to every other one, and the per-cell potential this "
+            "loop carries is not a function of that cell's density any more"
         )
     if functional.is_gradient:
         raise NotImplementedError(

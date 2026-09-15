@@ -324,6 +324,21 @@ def reject_potential_only(calculation) -> None:
             "refused for it. The band structure, the density of states and the "
             "density itself are unaffected -- they are what it is for"
         )
+    if bool(getattr(getattr(calculation, "system", None), "nosource", False)):
+        # The same position one functional over, and the same refusal. The
+        # projection changes B_xc without changing the energy it came from, so
+        # the converged state is stationary for a functional this module does
+        # not write down -- and the missing term is silent, since the force
+        # comes back finite and sums to zero over the atoms.
+        raise NotImplementedError(
+            "nosource projects the longitudinal part out of the "
+            "exchange-correlation field, which changes the potential and not "
+            "the energy, so the total energy this run reports is not the value "
+            "of anything it minimised and there is nothing to differentiate: "
+            "forces, stress, phonons and linear response are refused for it. "
+            "The band structure, the density of states, the magnetic texture "
+            "and the exchange-correlation torque are what it is for"
+        )
 
 
 def reject_magnetic_field(calculation) -> None:

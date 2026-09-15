@@ -1540,6 +1540,20 @@ class Calculator:
             **self._defaults_for(run_relaxed_anisotropy, options),
         )
 
+    def get_exchange_torque(self):
+        """``int m x B_xc``: how far the texture is from stationary.
+
+        Elk's task 160. **It is identically zero unless the run set
+        ``nosource``**, because a functional of ``|m|`` alone builds a field
+        parallel to ``m`` at every point -- the result carries
+        ``parallel_fraction`` so that a zero can be told from that silence. See
+        :mod:`defumat.scf.spin_torque`.
+        """
+        from defumat.scf.spin_torque import torque_of_result
+
+        result = self._ground_state("the exchange-correlation spin torque")
+        return torque_of_result(self.calculation, result)
+
     def get_torque(self, spinor, angle=None, **options):
         """The magnetic torque, and the anisotropy constant from one angle.
 

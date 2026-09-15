@@ -1648,6 +1648,118 @@ as a \code{NaN}. The mixer damps its way past it, and a \emph{gapped}
 fixed-occupation LSDA cell agrees between the two solvers to 5e-12~Ry.
 \end{refuses}
 
+\subsection{The source-free exchange-correlation field, and the torque}
+
+Let us ask what turns a moment. The exchange-correlation field of a local
+functional is built pointwise: at each point the density is resolved onto the
+direction of $\mathbf m(\mathbf r)$, the collinear expression is evaluated
+there, and the splitting is attached back to $\hat{\mathbf m}$. So
+$\mathbf B_{xc}(\mathbf r) \parallel \mathbf m(\mathbf r)$ everywhere, and the
+torque the field exerts,
+
+\begin{equation*}
+\boldsymbol\tau = \int \mathbf m(\mathbf r)\times\mathbf B_{xc}(\mathbf r)\,
+\mathrm d^3 r,
+\end{equation*}
+
+is \textbf{identically zero at every density}, converged or not, constrained or
+not. A functional of $|\mathbf m|$ alone cannot turn a moment, which is a
+statement about the approximation rather than about this implementation, and it
+means a test asserting that this quantity vanishes at self-consistency passes on
+a broken code exactly as it passes on a working one.
+
+A magnetic field in nature has no sources. \code{nosource} makes the
+exchange-correlation one obey that, by projecting out its longitudinal part ---
+Elk's \code{src/projsbf.f90}, which takes the divergence, solves a Poisson
+equation for it and adds the gradient of the solution back, and which on a
+plane-wave grid is one line in reciprocal space,
+$\mathbf B(\mathbf G) \to \mathbf B(\mathbf G) - \hat{\mathbf G}\,
+(\hat{\mathbf G}\cdot\mathbf B(\mathbf G))$, with $\mathbf G = 0$ left alone
+since a Poisson equation cannot move a constant. The projected field is no
+longer parallel to $\mathbf m$, so the torque stops being zero.
+
+\begin{pycode}
+from defumat import Calculator
+
+# fcc nickel, noncollinear, LDA, with nosource = .true. in &system
+calc = Calculator.from_file("ni-noncol-111-nosource.in", pseudo_dir="../pseudo")
+torque = calc.get_exchange_torque()
+
+print(torque.parallel_fraction)   # -> 0.982: B_xc is no longer along m
+print(torque.sites.shape)         # -> (1, 3): one atom, one torque vector
+\end{pycode}
+
+\code{parallel\_fraction} is
+$\int|\mathbf m\cdot\mathbf B_{xc}| / \int|\mathbf m||\mathbf B_{xc}|$, and it
+is reported beside the torque so that a zero can be told from a silence: one
+means the field is everywhere along the magnetization and the zero is the
+approximation speaking. Without \code{nosource} it is $1$ to round-off.
+
+\textbf{The numbers.} On the cell above, $\int|\nabla\cdot\mathbf B_{xc}|^2$
+falls from $1.5\times10^{-2}$ to $1.1\times10^{-32}$, and the moment goes from
+\textbf{0.6576 to 0.7045}~$\mu_B$ --- the size of change the source-free
+literature reports for a transition metal. On the four-hydrogen helix the same
+flag takes the site moments from 0.4675 to \textbf{0.0003}~$\mu_B$, and that
+collapse is the cell rather than the method: the projection removes roughly the
+radial part of each atom's field, and a Stoner-marginal magnet crosses its own
+criterion when it does.
+
+\textbf{And the torque fires.} Turning one site's moment inside its own sphere,
+away from where it sat, on the same nickel cell:
+
+\begin{center}
+\begin{tabular}{lrr}
+\hline
+turned by & local functional & source-free field \\
+\hline
+$0^\circ$  & 7e-22 Ry & 2e-18 Ry \\
+$15^\circ$ & 4e-20 Ry & \textbf{1.64e-4 Ry} \\
+$45^\circ$ & 5e-20 Ry & \textbf{4.47e-4 Ry} \\
+$90^\circ$ & 1e-21 Ry & \textbf{6.32e-4 Ry} \\
+\hline
+\end{tabular}
+\end{center}
+
+The left column is the point of the table: the local functional reports zero at
+\emph{every} angle, not only at the one it converged to.
+
+Note that the \emph{total} torque over the cell is zero for a second reason, and
+that one is a symmetry rather than an approximation: without spin--orbit
+coupling the energy does not change under a global rotation of every spin, so
+the net torque on the cell cannot either. What to read is
+\code{torque.sites}; the total is a check on the assembly.
+
+\begin{refuses}
+\textbf{Refuses.} Everything that differentiates the total energy ---
+\textbf{forces, stress, phonons, the elastic constants and the whole linear
+response} --- because the projection changes the potential and leaves the energy
+expression alone, exactly as a potential-only meta-GGA does, so the converged
+state is stationary for a functional nothing writes down. \code{run\_scf} warns
+for the same reason: the total energy a \code{nosource} run reports is not the
+value of anything it minimised and is not comparable with a run without it.
+\textbf{Magnons}, and this is the sharpest one: the transverse kernel
+$f_{xc}^{+-} = B_{xc}/m$ is a scalar only because the local functional makes
+$\mathbf B_{xc}$ parallel to $\mathbf m$, which is precisely what the projection
+breaks --- the quotient is still finite and the magnon it gives is meaningless.
+A \textbf{collinear} run, since a transverse projection gives a field along $z$
+components along $x$ and $y$ that an $(n, m_z)$ density has nowhere to carry
+(Elk's \code{init0.f90} requires \code{ncmag} for the same reason). \textbf{PAW},
+whose one-centre $\mathbf B_{xc}$ on the spheres is a second copy of the field
+that this projection does not reach, where Elk projects its muffin-tin part
+together with the interstitial one. A \textbf{spin spiral}, since
+$\nabla\cdot\mathbf B$ is a laboratory-frame statement and the magnetization is
+stored in the rotating frame. A \textbf{potential-only meta-GGA}, because
+stacking two potentials with no energy behind them leaves nothing at all that
+says what the run is a stationary point of. And the \textbf{ultracell}, whose
+per-cell potential stops being a function of that cell's density once a
+division by $|\mathbf G|^2$ couples the whole modulation.
+
+Elk's other half is \textbf{not built}: \code{sxcscf} scales the spin part of
+the field by a constant, which is the same paper's second knob and a different
+approximation. Elk labels \code{nosource} an experimental feature and that
+label carries here.
+\end{refuses}
+
 % =====================================================================
 \section{Forces, stress and relaxation}
 
