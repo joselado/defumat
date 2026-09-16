@@ -75,12 +75,12 @@ print("\nconverged = %s;  the answer it had to find is q3 = 0.5, and it was not 
 ```
 
      step         q3             E [Ry]    max |dE/dq|   SCF its
-        1    0.30000      -0.9620589567       5.03e-03        11
+        1    0.30000      -0.9620589569       5.03e-03        11
         2    0.34463      -0.9625849405       4.76e-03         8
         3    0.39372      -0.9630968974       3.77e-03         8
         4    0.46736      -0.9635797035       1.29e-03         8
-        5    0.50559      -0.9636329038       2.20e-04         8
-        6    0.50001      -0.9636298167       5.77e-07         7
+        5    0.50559      -0.9636329046       2.20e-04         8
+        6    0.50001      -0.9636298167       5.71e-07         7
     
     converged = True;  the answer it had to find is q3 = 0.5, and it was not told
 
@@ -146,17 +146,43 @@ energy surface is milli-Rydbergs deep, two orders softer, so the first step of a
 BFGS overshoots the zone. `BFGSSettings.hessian_scale` sets that first step to the trust
 radius instead.
 
+## An ultrasoft or PAW dataset, where $\mathbf q$ reaches one term more
+
+A pitch is worth having on a real magnet rather than on a hydrogen chain, and a real magnet
+is a transition metal with an augmentation charge. That charge is the one thing which makes
+$dE/d\mathbf q$ more than the two terms above. Notebook 12 says why for the ground state: the
+charge an augmented dataset puts back around each nucleus is shared between the two spinor
+components, which sit at $\mathbf k + \mathbf q/2$ and $\mathbf k - \mathbf q/2$, so what
+enters the transverse part of the density is that charge displaced by $\mathbf q$. Being a
+function of $\mathbf q$, it moves when the wavevector moves, and its motion is part of the
+gradient. So is the orthonormality of the states, which on such a dataset is measured with the
+overlap operator rather than with a plain inner product, and on a PAW dataset so is the energy
+that lives inside the spheres.
+
+On an oxygen chain at $q_3 = 0.3$ the gradient agrees with a finite difference of the
+**re-converged** energy to $2.4\times10^{-7}$ Ry per unit $\mathbf q$ on an ultrasoft dataset,
+falling as the square of the step in the way a finite difference should. On a PAW dataset it
+stops falling at $1.4\times10^{-6}$, and that floor is not the spiral's. The cleanest way to
+see what it is uses the two wavevectors symmetry pins: at $q_3 = 0$ and at the zone boundary
+the slope is zero exactly, so whatever is reported there is the error itself, and it reads
+$2.5\times10^{-6}$ for PAW against $8.5\times10^{-8}$ for ultrasoft. Doubling the density
+cutoff takes the PAW number down by a factor of seven, and the same cell shows the same gap
+between PAW's spherical and grid representations with no spiral in it at all. It is what PAW
+costs everywhere, read here through a derivative.
+
 ## What it refuses
 
 A **magnetic field**, because its energy is deliberately left out of the reported total
 (notebook 11) -- so the state would be stationary for a different functional than the one
 being differentiated, and the gradient would be of neither. Everything notebook 12 refuses
-applies here too: spin-orbit coupling permanently, symmetry until the spin space group
-exists, and ultrasoft or PAW datasets.
+applies here too: spin-orbit coupling permanently, and symmetry until the spin space group
+exists. One thing is refused for the gradient alone: an augmentation charge kept as a radial
+table, which is what a cell large enough for the tabulated form falls onto, since the extent
+of that table is decided from $|\mathbf q|$ before the derivative is taken.
 
 ---
 The tests behind this notebook: `tests/regression/test_spiral_relaxation.py`, which holds the
 identity that the functional being differentiated *is* the total energy at the converged
 state, the gradient against a finite difference of that functional at frozen states, the
-sharper one against re-converged runs at moved $\mathbf q$, and the exact vanishing of the
-gradient at the two symmetry points.
+sharper one against re-converged runs at moved $\mathbf q$, the exact vanishing of the
+gradient at the two symmetry points, and the same four on an ultrasoft and a PAW dataset.

@@ -50,7 +50,7 @@ print("hydrogen chain at q = %s:   E = %.9f Ry,   |m| = %.4f mu_B"
          np.linalg.norm(scf.magnetization_vector)))
 ```
 
-    hydrogen chain at q = (0.0, 0.0, 0.25):   E = -0.954746110 Ry,   |m| = 0.5396 mu_B
+    hydrogen chain at q = (0.0, 0.0, 0.25):   E = -0.954746110 Ry,   |m| = 0.5397 mu_B
 
 
 One atom per cell, a chain along $z$, and a quarter-turn spiral. In the *rotated* frame this
@@ -182,7 +182,7 @@ print("largest residual of the two-shell fit   %.3f meV   (%.1f%% of the curve)"
          100 * residual / max(abs(scan.energies - scan.energies[0]))))
 ```
 
-    J1 = -112.256 meV  (nearest)      J2 = +28.989 meV  (next-nearest)
+    J1 = -112.272 meV  (nearest)      J2 = +28.993 meV  (next-nearest)
     largest residual of the two-shell fit   0.814 meV   (2.2% of the curve)
 
 
@@ -215,9 +215,10 @@ looks wrong: it is smooth, it is normalised, and the moment comes out the right 
 The test of that is a spiral turning by a quarter turn per cell against the four-cell
 supercell holding the same four moments explicitly, which shares none of the machinery: the
 two agree to $2\times10^{-9}$ Ry on an ultrasoft dataset and $3\times10^{-7}$ on a PAW one.
-What is still refused on these datasets is the *pitch relaxation* of notebook 14, because
-the slope $dE/d\mathbf q$ then carries a term from that displaced charge which is not
-taken yet.
+The *pitch relaxation* of notebook 14 runs on these datasets as well, since being a function
+of $\mathbf q$ the displaced charge moves as the wavevector does and that motion is part of
+the slope; what stays out of reach there is a cell large enough to keep its augmentation
+charge as a radial table rather than on the grid.
 
 ---
 Notebook 14 relaxes $\mathbf q$ itself downhill, which costs a fraction of the runs this scan

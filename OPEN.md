@@ -2019,6 +2019,16 @@ ever traced to a term. It has now been traced as far as it goes: the floor is th
 method's, shared with `pw.x`, so the tolerance is a property of the physics at that
 cutoff rather than a number waiting on a fix.
 
+**It showed up again the same day, one derivative out, and the discriminator is worth
+keeping** (P96). `dE/dq` on the same PAW chain agrees with a finite difference of the
+re-converged energy down to 1.4e-06 Ry per unit `q` and then stops falling, where the
+ultrasoft arm keeps converging as `delta^2` to 2.4e-07. The dial that moves it is this
+entry's: `conv_thr` and the mixing leave it where it is, and doubling `ecutrho` takes it
+from 1.964e-06 to 2.812e-07. The cheap way to measure a gradient's own error is a
+**wavevector symmetry forces to zero** -- `E(q)` is even and periodic, so `dE/dq` vanishes
+exactly at `q3 = 0` and `1/2`, and what comes back there is the error with no finite
+difference and no truncation in it, at one SCF and one gradient per rung instead of three.
+
 ## X. Downgraded, and test-suite hygiene
 
 ### X1. The analytic force recompiles per ionic step -- real, and not the severity the entry claims

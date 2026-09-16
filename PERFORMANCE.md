@@ -6554,3 +6554,59 @@ to take the tabulated branch, which is the branch such a cell takes anyway.
 Everything else the spiral allocates is what P19 already measured: the doubled k-list
 means two plane-wave spheres per state, and that was the cost of a spiral before any of
 this.
+
+## What `dE/dq` costs on an augmented dataset, and where the peak is (P96)
+
+**There is nothing to time it against, and that is the quantity rather than the
+measurement.** `pw.x` has no spin spiral at all; Elk has one but relaxes its pitch by
+**scanning** `E(q)` and looking at the curve, so a ratio against Elk would compare a
+derivative with a sweep and would be measuring the method rather than the code. What can
+be compared like for like is **the same cell on three datasets**, which is what the
+augmentation charge costs the derivative.
+
+**Machine and date:** this workstation, CPU only, 2026-09-16, `OMP_NUM_THREADS=1`, each
+arm in its own process under a `MemoryMax` scope, the on-disk kernel cache already
+populated by an earlier identical run. Silicon, two atoms, `ecutwfc = 15`, `ecutrho = 120`,
+a 2x2x2 grid run `nosym` so eight k-points, `nbnd = 12`, a spiral seeded at `q3 = 0.3`.
+Each process runs one SCF and then the gradient **twice**, and the peak is that process's
+`VmHWM` with the cache on -- which is the expensive direction for memory and the cheap one
+for time.
+
+| dataset | SCF | `dE/dq`, first call | `dE/dq`, compiled | peak |
+|---|---|---|---|---|
+| norm-conserving, `Si.pz-vbc` | 5.5 s | 0.8 s | **0.2 s** | 0.93 GB |
+| ultrasoft, `Si.pz-n-rrkjus_psl` | 8.3 s | 3.6 s | **1.7 s** | 2.88 GB |
+| PAW, `Si.pz-n-kjpaw_psl` | 11.0 s | 5.3 s | **2.0 s** | 3.12 GB |
+
+**The compiled column is the measurement and the first-call one is why this was re-timed.**
+A first call compiles `value_and_grad` of the whole functional, and that graph is far larger
+on an augmented dataset than on a norm-conserving one, so a cold pair charges the
+augmentation for the compiler's work as well as for the arithmetic -- and, in this case,
+**understates** it: cold, the ultrasoft gradient is 4.5x the norm-conserving one; compiled,
+it is **8.5x**, and PAW is **10x**. The peak goes the other way and is 3.1x. The SCF column
+is the control, at 1.5x and 2.0x, so the derivative is where an augmented dataset is
+expensive rather than the ground state.
+
+**The peak is the dense G set, not the k axis, and on a real cell it is the gate.** The
+displaced table is rebuilt inside every gradient evaluation -- it is a function of `q`,
+which is the whole of P96 -- so the radial Bessel transforms run there, and in reverse
+mode their `(ngm, kkbeta)` intermediates are live at once. On the oxygen chain the phase
+was measured on, one atom in a 12 bohr cell at `ecutrho = 200` with four k-points, that
+is **11.4 GB** for the gradient against a few hundred megabytes for the SCF; the same
+gradient at `ecutrho = 400` was killed at a **20 GB** cap. Halving the vacuum to 9 bohr,
+which is what the dense G set scales with, brings it to 6.7-7.1 GB at 200 and
+15.8-17.1 GB at 400 -- which is how P96's cutoff discriminator was run at all.
+
+Two consequences that are not obvious from the table. **The k dial does not bound this
+one**: an augmented spiral gradient is a single pass over the whole k axis whatever
+`k_batch` says, because the density carries `q` and the Hartree energy is quadratic in it,
+so a sum of per-chunk gradients is not the gradient. And **the tests cannot use the
+physical cell**: 11.4 GB is `tools/run_regression.sh`'s whole 12 GiB per-file cap, so
+`test_spiral_relaxation.py` carries the identities on the silicon cell above, where the
+whole file peaks at 4.25 GB and the eight new tests take 78 s.
+
+**What has not been tried is the obvious fix.** `_qrad_kernel`'s intermediate is a
+`jax.checkpoint` candidate exactly as the augmentation scan bodies were in P74, where
+rematting took a spinor PAW force tape from 2.32 GiB to 0.99 GiB with the force unchanged
+to one ulp. Nobody has measured it here, and until somebody does, the `ecutrho = 400`
+gradient of a physical cell is out of reach on a 30 GB machine.

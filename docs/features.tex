@@ -4669,6 +4669,40 @@ projectors at the \emph{same} $\mathbf k$ and keep the resident table. Nothing
 else changes: the displaced table is built by the same assembly, and at
 $\mathbf q \to 0$ it is the resident one term for term.
 
+\textbf{$dE/d\mathbf q$ on such a dataset differentiates three terms the
+norm-conserving one does not have.} The displaced table is a function of
+$\mathbf q$ exactly as $|\mathbf k \mp \mathbf q/2 + \mathbf G|^2$ and
+$v_{\mathrm{nl}}$ are, so it is rebuilt inside the differentiated path rather
+than held fixed; the orthonormality constraint the frozen-coefficient gradient
+carries is $\langle\psi|S|\psi\rangle - 1$ rather than
+$\langle\psi|\psi\rangle - 1$, and $S$ pairs each spinor component with the
+projectors of its \emph{own} shifted sphere, so it moves with $\mathbf q$ and
+its derivative is the spiral's Pulay term; and PAW's one-centre energy is part
+of the total being differentiated. The last of those is the one a test would
+have caught immediately --- without it the functional misses the whole of
+$E_{\mathrm{PAW}}$ --- and the first two are the ones that would have been
+silent, which is why each is measured separately below.
+
+\textbf{What it agrees with, and what PAW's own floor is.} Against a central
+difference of the \emph{re-converged} energy at a frozen plane-wave sphere, on
+the oxygen chain at $q_3 = 0.3$, an ultrasoft dataset converges onto the finite
+difference as $\delta^2$ and reaches $2.4\times10^{-7}$~Ry per unit $\mathbf q$
+at $\delta = 0.0025$. PAW stops falling at $1.4\times10^{-6}$, and that floor is
+\emph{not} the spiral's.
+
+The sharpest way to see it needs no finite difference at all: at $q_3 = 0$ and
+$q_3 = \tfrac12$ symmetry forces $dE/d\mathbf q$ to vanish exactly, so what
+comes back there \emph{is} the gradient's own error --- $4$ to
+$6\times10^{-10}$ at the zone centre for both datasets, and $8.5\times10^{-8}$
+(ultrasoft) against $2.5\times10^{-6}$ (PAW) at the zone boundary. That residue
+is insensitive to \code{conv\_thr} and to the mixing and falls by a factor of
+\textbf{seven} when \code{ecutrho} is doubled, the finite-difference residual
+falling by three over the same step since it also carries the difference's own
+truncation. And the same cell with no spiral in it at all shows a gap of the
+same size between the collinear and noncollinear paths, which \code{pw.x}
+reproduces to every digit it prints. So it is what PAW's spherical terms cost
+against the grid, inherited here rather than introduced.
+
 Two consequences are worth knowing rather than discovering. The transverse pair
 is augmented as one \emph{complex} field, because $Q_{ij}(\mathbf r)$ is real
 and so the resident table satisfies
@@ -4738,15 +4772,25 @@ written at any rank.
 \begin{refuses}
 \textbf{Refuses.} A spiral with spin-orbit coupling, permanently --- it breaks
 the theorem, and Elk refuses it too; a spiral with symmetry, until the spin
-space group is written, so a spiral needs \code{nosym}; $dE/d\mathbf q$, and so
-\code{relax\_spiral\_q} and the integrated route through \code{gradients=True},
-on an \textbf{ultrasoft or PAW} dataset --- the \emph{ground state} of such a
-spiral runs, but the displaced table above is itself a function of $\mathbf q$
-and a gradient taken at a frozen table would be wrong by the whole
-$dQ_{ij}(\mathbf G - \mathbf q)/d\mathbf q$ term, which is refused by name
-rather than differentiated anyway; and spiral relaxation under a magnetic field,
-whose energy is outside the reported total, so the state is stationary for a
-different functional than the one being differentiated.
+space group is written, so a spiral needs \code{nosym}; $dE/d\mathbf q$ on a
+dataset whose augmentation charge is held as a \emph{radial} table rather than
+on the dense $\mathbf G$ set --- the branch a large cell falls onto when
+$n_h^2 n_{\mathrm{gm}}$ is over \code{DEFUMAT\_AUG\_MAX\_BYTES} --- because that
+route reads $|\mathbf q|$ on the host to size its interpolation and running past
+the end of the table is a NaN rather than a clamp, so a tracer cannot go through
+it at all; and spiral relaxation under a magnetic field, whose energy is outside
+the reported total, so the state is stationary for a different functional than
+the one being differentiated.
+
+\textbf{Warns rather than refuses}: $dE/d\mathbf q$ on an augmented dataset is
+evaluated in \emph{one} pass over the whole $k$ axis whatever \code{k\_batch}
+asks for, because the density carries $\mathbf q$ there and the Hartree energy
+is quadratic in it, so a sum of per-chunk gradients is not the gradient. The
+peak then scales with $n_k$ rather than with the chunk size, and it is the one
+place $dE/d\mathbf q$ costs more than the SCF it follows: 11.4~GB on the
+one-atom oxygen chain of \code{tests/data/qe/o-chain-spiral-us.in} at
+\code{ecutrho = 200} with four $k$-points, against a few hundred megabytes for
+the SCF.
 \end{refuses}
 
 % =====================================================================

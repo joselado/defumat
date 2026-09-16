@@ -43,6 +43,7 @@ frozen-sphere comparison is the test of the physics, and the other one is the
 measurement of what the discretisation costs.
 """
 
+import warnings
 from functools import lru_cache
 from pathlib import Path
 
@@ -521,3 +522,205 @@ def test_chunking_the_k_axis_regroups_the_same_gradient(pseudo_dir):
     # A cell with projectors is the point of this fixture: a gradient that were
     # kinetic-only would still pass every assertion above.
     assert calculation.projectors.vkb.shape[-1] > 0
+
+
+# ---------------------------------------------------------------------------
+# P96: the same identities on a dataset that carries an augmentation charge.
+#
+# Three terms carry ``q`` there that do not on a norm-conserving dataset: the
+# displaced table ``Q_ij(G - q)``, the orthonormality constraint -- which is
+# ``<psi|S|psi> - 1``, and ``S`` pairs each spinor component with the
+# projectors of its *own* shifted sphere -- and PAW's one-centre energy. Only
+# the last announces itself if it is missing, which is why the identities are
+# repeated here rather than assumed to carry over.
+# ---------------------------------------------------------------------------
+
+#: Silicon with an augmentation charge and a spiral seeded on it: the augmented
+#: counterpart of :data:`SPINOR_SILICON`, with the dataset substituted for the
+#: PAW arm.
+#:
+#: **The cell is small for a memory reason rather than a physical one.** On an
+#: augmented dataset ``dE/dq`` is one pass over the whole k axis, and its tape
+#: scales with the dense G set, because the radial Bessel transforms are rebuilt
+#: inside every gradient evaluation and their ``(ngm, kkbeta)`` intermediates are
+#: live at once in reverse mode. The oxygen chain the phase was measured on
+#: (``o-chain-spiral-us.in``, ``ecutrho = 200``, four k-points) peaks at
+#: **11.4 GB**, which is this file's whole cgroup cap on its own; here it is
+#: 3.0 GB for ultrasoft and 3.2 GB for PAW. The spiral is seeded rather than
+#: physical, which is all an identity between two evaluations of one functional
+#: needs -- ``PLAN.md`` P96 has the physical cell's numbers.
+AUGMENTED_SILICON = """
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.2, nat = 2, ntyp = 1,
+    ecutwfc = 15.0, ecutrho = 120.0, nbnd = 12,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.05
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.3
+    angle1(1) = 90.0
+    spiral_q(1) = 0.0, spiral_q(2) = 0.0, spiral_q(3) = {q3}
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-11
+ /
+ATOMIC_SPECIES
+ Si  28.086  {pseudo}
+ATOMIC_POSITIONS (crystal)
+ Si 0.00 0.00 0.00
+ Si 0.25 0.25 0.25
+K_POINTS {{automatic}}
+ 2 2 2 0 0 0
+"""
+
+#: The two datasets, which differ in one thing that matters here: PAW carries a
+#: one-centre energy on the spheres and ultrasoft does not.
+AUGMENTED_DATASETS = {
+    "us": "Si.pz-n-rrkjus_psl.0.1.UPF",
+    "paw": "Si.pz-n-kjpaw_psl.0.1.UPF",
+}
+
+
+@lru_cache(maxsize=2)
+def _converged_augmented(dataset: str, q3: float, pseudo_dir: Path):
+    """``maxsize = 2``: the two datasets at one wavevector, and no more."""
+    text = AUGMENTED_SILICON.format(pseudo=AUGMENTED_DATASETS[dataset], q3=q3)
+    system = build_system(parse_pw_input(text))
+    pseudos = _pseudos(system, pseudo_dir)
+    calculation = Calculation(system, pseudos)
+    result = run_scf(
+        system, pseudos, calculation=calculation,
+        conv_thr=1e-11, mixing_beta=0.3, max_iterations=200,
+    )
+    assert result.converged
+    assert calculation.is_ultrasoft  # true of PAW as well -- both carry Q_ij
+    return calculation, result
+
+
+@pytest.mark.parametrize("dataset", ["us", "paw"])
+def test_the_augmented_functional_is_the_total_energy(dataset, pseudo_dir):
+    """Identity 1 again, and for PAW it is the sharp one.
+
+    PAW's one-centre energy was not in the differentiated functional at all
+    before P96, so this assertion fails by the whole of ``epaw`` -- tens of
+    Rydberg on this cell -- rather than by a gradient term. Ultrasoft's arm
+    checks the augmented density's own contribution the same way.
+
+    Measured: 3.6e-15 Ry for ultrasoft and 1.4e-14 for PAW.
+    """
+    calculation, result = _converged_augmented(dataset, 0.3, pseudo_dir)
+    gradient = compute_spiral_gradient(calculation, result, k_batch=None)
+    assert gradient.total_energy == pytest.approx(result.total_energy, abs=1e-12)
+
+
+@pytest.mark.parametrize("dataset", ["us", "paw"])
+def test_the_augmented_gradient_differentiates_the_functional(dataset, pseudo_dir):
+    """Identity 2 again: the two silent terms are in here and nowhere else.
+
+    Frozen state and frozen sphere on both sides, so what is compared is the
+    differentiation alone -- and on this dataset that includes
+    ``dQ_ij(G - q)/dq`` and the derivative of the overlap the orthonormality
+    constraint carries. Either of them missing leaves an energy that is right
+    and a derivative that is wrong, which is this repository's P68 shape of
+    error.
+
+    Measured: -3.5e-10 for ultrasoft and +1.2e-09 for PAW, against a gradient
+    of 0.43 Ry per unit of ``q``.
+    """
+    calculation, result = _converged_augmented(dataset, 0.3, pseudo_dir)
+    state = state_from_result(result)
+    gradient = compute_spiral_gradient(calculation, result, k_batch=None)
+
+    delta = 1.0e-5
+    q = np.asarray(calculation.system.spiral_q, dtype=float)
+    for axis in range(3):
+        plus, minus = q.copy(), q.copy()
+        plus[axis] += delta
+        minus[axis] -= delta
+        difference = (
+            float(spiral_energy(calculation, jnp.asarray(plus), state))
+            - float(spiral_energy(calculation, jnp.asarray(minus), state))
+        ) / (2.0 * delta)
+        assert difference == pytest.approx(gradient.gradient[axis], abs=1e-8)
+
+
+@pytest.mark.parametrize("dataset", ["us", "paw"])
+def test_symmetry_fixes_the_augmented_gradient_at_zero(dataset, pseudo_dir):
+    """``q = 0``, where the displaced table *is* the resident one.
+
+    ``E(-q) = E(q)`` makes this a stationary point whatever the dataset does, so
+    the gradient is zero in exact arithmetic and what is left is the k-sum's
+    round-off. It is the cheapest check that the new terms did not introduce a
+    spurious slope: a displaced table that was rebuilt at the wrong wavevector,
+    or an overlap derivative with the wrong sign, would show here.
+
+    Measured on this cell: the whole gradient vector is **below 1e-10** for both
+    datasets, against the 1e-07 :data:`SYMMETRY_ZERO` the norm-conserving tests
+    assert, so the assertion has three orders of headroom and is still a test --
+    the same quantity on the physical chain is 2.5e-06 for PAW.
+
+    ``PLAN.md`` P96 has the other stationary point, ``q3 = 1/2``, on that chain
+    -- where PAW leaves 2.5e-06 against ultrasoft's 8.5e-08 and the difference
+    is traced to the dense grid rather than to the spiral.
+    """
+    calculation, result = _converged_augmented(dataset, 0.0, pseudo_dir)
+    gradient = compute_spiral_gradient(calculation, result, k_batch=None)
+    assert np.abs(np.asarray(gradient.gradient)).max() < SYMMETRY_ZERO
+
+
+def test_an_augmented_gradient_is_one_pass_over_the_k_axis(pseudo_dir):
+    """The dial is overridden rather than obeyed, and it says so.
+
+    On an augmented dataset the density carries ``q`` and the Hartree energy is
+    quadratic in the density, so a sum of per-chunk gradients is **not** the
+    gradient -- the cross terms between chunks are missing. The chunked route is
+    therefore refused for this dataset by overriding ``k_batch``, and because
+    the dial's default on a CPU is the chunked end, the override is announced:
+    the peak then scales with ``n_k`` rather than with the chunk size.
+
+    Both halves are asserted, because a warning that fires on the wrong
+    condition is as bad as one that does not fire: a chunk size *below* ``n_k``
+    warns and gives the single pass's answer, and ``k_batch >= n_k`` is not
+    chunking at all and must go through silently.
+    """
+    calculation, result = _converged_augmented("us", 0.3, pseudo_dir)
+    nk = calculation.system.kpoints.nk
+    whole = compute_spiral_gradient(calculation, result, k_batch=None)
+
+    with pytest.warns(RuntimeWarning, match="single pass"):
+        overridden = compute_spiral_gradient(calculation, result, k_batch=1)
+    assert overridden.gradient == pytest.approx(whole.gradient, abs=1e-12)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        unchunked = compute_spiral_gradient(calculation, result, k_batch=nk)
+    assert not [w for w in caught if "single pass" in str(w.message)]
+    assert unchunked.gradient == pytest.approx(whole.gradient, abs=1e-12)
+
+
+def test_a_tabulated_augmentation_table_is_refused(pseudo_dir, monkeypatch):
+    """The one thing ``dE/dq`` still refuses on an augmented dataset.
+
+    A cell whose stored ``Q_ij(G)`` is over ``DEFUMAT_AUG_MAX_BYTES`` keeps the
+    radial table instead and interpolates it, and that branch reads ``|q|`` on
+    the *host* to decide how far the table has to reach -- running past its end
+    is a NaN rather than a clamp. A tracer has no such value, so the branch
+    cannot take a traced ``q`` at all and says so by name.
+
+    The guard is made to fire by setting the budget to one byte, which is this
+    repository's rule about testing that a guard fires rather than reading a
+    clean result as a pass. The state is the one the stored-table run converged
+    to: the refusal is raised while the functional is being traced, before any
+    of it is read.
+    """
+    calculation, result = _converged_augmented("us", 0.3, pseudo_dir)
+    monkeypatch.setenv("DEFUMAT_AUG_MAX_BYTES", "1")
+
+    text = AUGMENTED_SILICON.format(pseudo=AUGMENTED_DATASETS["us"], q3=0.3)
+    system = build_system(parse_pw_input(text))
+    tabulated = Calculation(system, _pseudos(system, pseudo_dir))
+    with pytest.raises(NotImplementedError, match="tabulated"):
+        compute_spiral_gradient(tabulated, state_from_result(result), k_batch=None)

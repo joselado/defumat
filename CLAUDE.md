@@ -110,15 +110,23 @@ in `docs/features.tex`'s amber boxes.
   test; **the field's energy is not in the reported total**, by QE's and Elk's shared
   convention, and is carried separately. Spirals (`spiral_q`, Elk's `vqlss`) put the up
   component at `k + q/2` and the down at `k - q/2`, each on its own sphere — the whole of
-  the generalized Bloch theorem. Refused for a spiral: spin-orbit coupling permanently,
-  symmetry (until the spin space group is written, so `nosym` and the full grid), and
-  ultrasoft/PAW.
+  the generalized Bloch theorem. An **ultrasoft or PAW** dataset runs too (P95, P96): the
+  transverse block of the density pairs projectors at two different k-points, so its
+  augmentation charge is the resident table displaced to `Q_ij(G - q)`, and that table is
+  a function of `q` exactly as `|k ± q/2 + G|^2` and `vkb` are, so `dE/dq` rebuilds it
+  rather than differentiating at a frozen one. Refused for a spiral: spin-orbit coupling
+  permanently, symmetry (until the spin space group is written, so `nosym` and the full
+  grid), and — for `dE/dq` alone — a *tabulated* augmentation table, which reads `|q|` on
+  the host and cannot take a tracer.
 - **Relaxing the spiral wavevector** (P21): `q` is a coordinate like an atomic position, so
   `dE/dq` is `jax.grad` at frozen wavefunctions and a frozen sphere (`forces/spiral.py`,
   `workflows/spiral.relax_spiral_q`), with the same BFGS
-  handed the **reciprocal** cell as its metric. Only `|k ± q/2 + G|^2` and `vkb(k ± q/2)`
-  carry `q`. Two traps: the compiled gradient closes over its sphere and must be dropped on
-  every `at_spiral_q`, and BFGS's initial inverse Hessian is out by two orders on a
+  handed the **reciprocal** cell as its metric. On a norm-conserving dataset only
+  `|k ± q/2 + G|^2` and `vkb(k ± q/2)` carry `q`; on an augmented one (P96) three more terms
+  do, and they are the displaced table `Q_ij(G - q)`, the orthonormality constraint, which
+  is `<psi|S|psi> - 1` and therefore moves with `q` where `<psi|psi> - 1` does not, and
+  PAW's one-centre energy. Two traps: the compiled gradient closes over its sphere and must
+  be dropped on every `at_spiral_q`, and BFGS's initial inverse Hessian is out by two orders on a
   milli-Rydberg magnetic surface (`BFGSSettings.hessian_scale`). A magnetic field is
   refused — its energy is outside the reported total, so the state is stationary for a
   different functional.

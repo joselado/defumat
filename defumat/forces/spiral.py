@@ -355,7 +355,8 @@ def compute_spiral_gradient(
     q = jnp.asarray(calculation.system.spiral_q, dtype=float)
     batch = (calculation.k_batch if isinstance(k_batch, str) and k_batch == "default"
              else resolve_k_batch(k_batch))
-    if calculation.is_ultrasoft and batch is not None:
+    if (calculation.is_ultrasoft and batch is not None
+            and batch < calculation.system.kpoints.nk):
         # **The chunked route cannot express an augmented spiral**, and the
         # reason is the Hartree energy rather than the augmentation: on this
         # dataset the density carries ``q``, and a quadratic functional of a
@@ -366,6 +367,11 @@ def compute_spiral_gradient(
         # It is said out loud because the cost is real: the single pass carries
         # every k-point's ``vkb(k +- q/2)`` and the displaced table's radial
         # intermediates on one tape.
+        #
+        # ``batch < nk`` rather than ``batch is not None``, because a chunk at
+        # or above the whole axis is not chunking: the dispatch below sends it
+        # to the same single pass, so warning about it would be announcing an
+        # override that did not happen.
         warnings.warn(
             "dE/dq on an ultrasoft or PAW spiral is evaluated in a single pass "
             f"over all {calculation.system.kpoints.nk} k-points rather than in "

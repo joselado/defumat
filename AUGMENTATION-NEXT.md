@@ -198,25 +198,37 @@ energy, and it moves it by **2.9e-12 Ry** for ultrasoft and **1.4e-11** for PAW.
 the fifth entry in this file's own tally of sizings that were wrong for the same reason:
 written from the refusal's message instead of from the code and the physics around it.
 
-### 1e'. `dE/dq` for an ultrasoft or PAW spiral
+### 1e'. `dE/dq` for an ultrasoft or PAW spiral. ✅ DONE.
 
-`forces/spiral.py`, `_require_a_differentiable_spiral`, and
-`scf/driver.py`'s `at_spiral_q(rebuild_basis = False)` refuses it a second time so no
-other caller reaches a frozen table.
+**Closed 2026-09-16.** `PLAN.md` P96 has the numbers, and `relax_spiral_q`, the
+integrated `E(q)` route and `Calculator.get_spiral_relaxation` all run on an augmented
+dataset now. What is still refused is a *tabulated* augmentation table, which reads
+`|q|` on the host to size its radial interpolation and therefore cannot take a tracer at
+all.
 
-**What is missing.** The displaced table `Q_ij(G - q)` is a function of `q` exactly as
-`|k + G|^2` and `vkb` are, and the traced path the gradient is taken along rebuilds
-neither it nor its radial transforms. A gradient taken anyway is the derivative at a
-frozen augmentation charge: right to look at and wrong by the whole
-`dQ_ij(G - q)/dq` term, which is this repository's P68 shape of error.
+**The entry named one missing term and there were three**, which is the same failure this
+file keeps recording: the sizing was written from the refusal's message rather than from
+the functional. The named one was right -- the displaced table `Q_ij(G - q)` is a
+function of `q` exactly as `|k + G|^2` and `vkb` are, and is rebuilt now inside
+`at_spiral_q(rebuild_basis = False)`. The two that were not named were the ones a test
+could have missed:
 
-**What it needs first.** Nothing that does not exist -- the table is built by
-`build_augmentation(shift=...)`, whose arithmetic is `jnp` end to end, so rebuilding it
-inside `at_spiral_q(rebuild_basis = False)` with a traced `q` is the whole change. The
-work is not the term, it is the **measurement**: a finite difference of the energy in
-`q`, which now exists to be differenced and did not before. **Size:** part of a phase,
-and the cost to watch is that a radial transform then runs inside every gradient
-evaluation rather than once per wavevector.
+* **the orthonormality constraint**. `<psi|psi> - 1` carries no `q`, but on an augmented
+  dataset the constraint is `<psi|S|psi> - 1`, and `S` pairs each spinor component with
+  the projectors of its own shifted sphere, so it moves with `q` and its derivative is
+  the spiral's Pulay term;
+* **PAW's one-centre energy**, which was not in the differentiated functional at all --
+  so the identity against the SCF total fails by the whole of `epaw` on the first PAW
+  run, which is the one of the three that announces itself.
+
+**What it cost, which the sizing did not name either.** The gradient is one pass over the
+whole k axis whatever `k_batch` asks for, because the density carries `q` on this dataset
+and the Hartree energy is quadratic in it, so a sum of per-chunk gradients is not the
+gradient. The peak is **11.4 GB** on the one-atom oxygen chain at `ecutrho = 200` with
+four k-points, against a few hundred megabytes for the SCF it follows, and it scales with
+the dense G set: the same gradient at `ecutrho = 400` does not fit in 20 GB. That is the
+practical gate on this feature and it is `MEMORY-AUDIT.md`'s kind of number rather than
+a refusal.
 
 ### 1f. A source-free exchange-correlation field with a PAW dataset
 

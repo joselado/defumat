@@ -273,8 +273,12 @@ because that is what decides whether it is a session or a phase.
   say the blocker was a *case*, and that was false when it was written**: the soft
   zincblende datasets are committed and `tests/data/qe/alas-piezo.in` is now the
   nonmagnetic cell to measure on.)
-- **An ultrasoft spin spiral** (P42, attempted and reverted, four findings banked) and
-  **ultrasoft/PAW in the sum-over-states `chi_0`** (P40, two findings banked).
+- ~~**An ultrasoft spin spiral**~~ (P42, attempted and reverted, four findings banked) --
+  **closed by P95 for the ground state and by P96 for `dE/dq`**: the transverse block's
+  augmentation charge is the resident table displaced to `Q_ij(G - q)`, and that table is a
+  function of `q` like every other term the gradient differentiates. What is left of it is
+  a *tabulated* table, which reads `|q|` on the host and cannot take a tracer.
+  **Ultrasoft/PAW in the sum-over-states `chi_0`** is still open (P40, two findings banked).
 - ~~**An unidentified 83.62 GiB allocation at the first diagonalisation of a 45-atom
   slab**~~ (P73) — **closed by P74**: it was `vloc_psi_nc` transforming the whole band
   block because the spinor local term never called `map_bands`, so `DEFUMAT_BAND_BATCH`
@@ -16986,7 +16990,7 @@ running; if they do not, the refusal stays with the two pieces pinned and the as
 written down as unchecked. Until then the three stay refused, and the reason on the record
 is "this comparison could not have told the difference" rather than "the two disagree".
 
-### P95 -- A spin spiral on an ultrasoft or PAW dataset: the augmentation charge displaced by `q`. ✅ DONE for the ground state; `dE/dq` refused by name.
+### P95 -- A spin spiral on an ultrasoft or PAW dataset: the augmentation charge displaced by `q`. ✅ DONE for the ground state; `dE/dq` is P96.
 
 `defumat/pseudo/augmentation.py` (`build_augmentation(shift=...)`,
 `AugmentationCharge.shift`, `cross_integrals`), `defumat/scf/driver.py`
@@ -17160,7 +17164,9 @@ excluded is PAW's one-centre path, which is the one piece of machinery showing a
 inconsistency of the same order on the same cell. Naming a cause for it would be the
 mistake the entry above is about.
 
-**What is refused, and why it is refused rather than differentiated.** `dE/dq`, and with
+**What is refused, and why it is refused rather than differentiated.** ***Lifted by P96 the
+same day, and the entry is kept because its reasoning is what P96 implemented: the term
+named here is one of the three the gradient turned out to need.*** `dE/dq`, and with
 it `relax_spiral_q` and the `gradients=True` route through a scan. The displaced table is
 a function of `q` exactly as `|k+G|^2` and `vkb` are, and
 `at_spiral_q(rebuild_basis = False)` -- the traced path the gradient is taken along --
@@ -17190,3 +17196,151 @@ moved, plus `test_textured_seeding.py` and `test_collinear_symmetry.py`, 13 pass
 the resident one, so an augmented spiral holds **twice** what `AUG_MAX_BYTES` sizes --
 the gate measures one of them. On the tabulated branch it is free: that branch keeps the
 radial table rather than the G-space array, and a second radial table is kilobytes.
+
+### P96 -- `dE/dq` for a spin spiral on an ultrasoft or PAW dataset: three terms, and a floor that is the dense grid. ✅ DONE
+
+`defumat/forces/spiral.py` (`spiral_energy`, `_energy_and_gradient`,
+`_require_a_differentiable_spiral`), `defumat/scf/driver.py`
+(`at_spiral_q(rebuild_basis = False)`), `tests/regression/test_spiral_relaxation.py`,
+`AUGMENTATION-NEXT.md` 1e'.
+
+**The refusal named one term and there were three.** `AUGMENTATION-NEXT.md` 1e' said the
+missing object is the displaced table's own `q`-dependence -- `Q_ij(G - q)` is a function
+of `q` exactly as `|k + G|^2` and `vkb` are, and the traced path rebuilt neither it nor
+its radial transforms. That was right and it was a third of the answer. The other two were
+visible in the functional rather than in the refusal, and they are of opposite kinds:
+
+* **the orthonormality constraint.** `<psi|psi> - 1` carries no `q`, but on an augmented
+  dataset the constraint is `<psi|S|psi> - 1`, and `S` pairs each spinor component with
+  the projectors of its **own** shifted sphere, so it moves with `q` and its derivative is
+  the spiral's Pulay term. What enters it is `qq` and not the displaced table: without
+  spin-orbit coupling, which a spiral refuses permanently, `S` is diagonal in the spinor
+  index and each component pairs projectors at one and the same k-point;
+* **PAW's one-centre energy**, which was not in the differentiated functional at all. This
+  is the one of the three that cannot be silent: the identity against the SCF total fails
+  by the whole of `epaw` on the first PAW run, which is tens of Rydberg.
+
+The first two are the silent kind, which is the reason the validation below is five
+identities rather than one finite difference.
+
+**The identities, on the oxygen chain of `tests/data/qe/o-chain-spiral-{us,paw}.in` at
+`q3 = 0.3`.** A generic wavevector on purpose: `E(q)` is even about `0` and `1/2`, so a
+gradient measured there is forced to zero by symmetry and would pass with terms missing.
+
+| identity | ultrasoft | PAW |
+|---|---|---|
+| 1. `spiral_energy` at the converged state *is* `etot` | 1.42e-14 Ry | 1.42e-14 Ry |
+| 2. `jax.grad` against a central difference of the same functional, frozen state and frozen sphere | 3.8e-10 | 1.4e-09 |
+| 3. against a central difference of the **re-converged** energy, `delta = 0.0025` | 2.4e-07 | 1.4e-06 |
+| 4. `dE/dq` at `q3 = 0`, which symmetry forces to zero | 3.8e-10 | 6.3e-10 |
+| 4'. the same at `q3 = 1/2` | 8.5e-08 | 2.5e-06 |
+| 5. the atom moved to `tau_z = 1/3`, which a spiral is invariant under | 9.2e-09 | -- |
+
+Identity 2 is the differentiation alone and identity 3 is **stationarity**, which is what
+the frozen-state gradient rests on. Identity 5 is the structure factor's half of
+`vkb(k +- q/2)`: with the atom at the origin `e^{-i(k +- q/2 + G).tau}` is one for every
+`q`, so every other row above is blind to it, and the off-origin gradient agrees with an
+off-origin frozen finite difference to 1.3e-10 as well.
+
+**Ultrasoft converges onto the finite difference and PAW floors.** Identity 3 refined over
+a step ladder, `delta = 0.02, 0.01, 0.005, 0.0025`:
+
+    ultrasoft   -3.948e-05  -3.762e-06  -9.438e-07  -2.389e-07     falls by 10.5, 4.0, 4.0
+    PAW         -1.077e-05  -3.622e-06  -1.829e-06  -1.379e-06     falls by  3.0, 2.0, 1.3
+
+Ultrasoft is a clean `delta^2` truncation and PAW stops falling at 1.4e-06. Since
+ultrasoft shares every piece of the new machinery, the floor is not the spiral's.
+
+**Which dial moves the floor, measured rather than argued.** Three were moved, and the one
+that moves it is the **dense grid**. The cheapest discriminator is `q3 = 1/2` rather than
+the ladder: `E(q)` is even and periodic there, so `dE/dq` is exactly zero and whatever
+comes back is the gradient's own error, with no finite difference and no truncation in it,
+at one SCF and one gradient per rung.
+
+**Each row names its cell and its quantity**, because the three dials were not all moved on
+the same pair: the `ecutrho` rungs are on a chain with 9 bohr of vacuum instead of 12, for
+the memory reason below, and the mixing was moved on the ladder rather than at `q3 = 1/2`.
+
+| dial | cell | quantity | PAW | what it says |
+|---|---|---|---|---|
+| `conv_thr` 1e-11 to 1e-13 | 12 bohr | `dE/dq` at `q3 = 1/2` | 2.359e-06 to 2.486e-06 | not convergence -- tightening it does not reduce the residue |
+| `mixing_beta` 0.3 to 0.5 | 12 bohr | ladder residual, `delta = 0.0025` | -1.379e-06 to -1.414e-06 | not the path to the fixed point either: 3.5e-08 apart |
+| `ecutrho` 200 to 400 | 9 bohr | `dE/dq` at `q3 = 1/2` | 1.964e-06 to 2.812e-07 | **the dense grid**, a fall of 7 |
+| `ecutrho` 200 to 400 | 9 bohr | ladder residual, `delta = 0.0025` | -4.547e-07 to -1.418e-07 | the same dial, and a fall of 3.2 rather than 7 |
+
+with ultrasoft as the control on the same cell and the same two cutoffs: **3.040e-08 and
+7.526e-08**, which do not fall because they are already the k-sum's own round-off -- the
+norm-conserving tests carry `SYMMETRY_ZERO = 1e-07` for exactly this quantity -- and PAW's
+1.964e-06 at `ecutrho = 200` is sixty-five times above them. What the denser grid does is
+bring PAW down to 2.812e-07, four times the control rather than sixty-five.
+
+**The two `ecutrho` rows do not fall by the same factor, and that is expected rather than a
+discrepancy.** The `q3 = 1/2` residue is the gradient's error alone, so it falls by 7; the
+ladder residual is that error *plus* the finite difference's own `delta^2` truncation, which
+a denser grid does not touch, and it falls by 3.2. At `ecutrho = 400` what the ladder leaves
+is 1.418e-07, which is the size of the truncation the **ultrasoft** ladder shows at the same
+step -- so at that cutoff the ladder is no longer measuring a floor at all, which is the
+reason the symmetry residue is the discriminator and the ladder is the corroboration.
+
+That is the mechanism `OPEN.md` Y4 measured on a cell with no spiral in it at all -- the
+same doubled oxygen chain run as `nspin = 2` and as `noncolin` differs by 8.51e-05 Ry at
+`ecutrho = 200` and 2.65e-06 at 400, **and `pw.x` reproduces both to every digit it
+prints**, so it is PAW's own one-centre-against-grid discretisation rather than this
+code's. `dE/dq` inherits it and the inheritance is the whole of PAW's floor.
+
+The `ecutrho = 400` rungs are on a chain with 9 bohr of vacuum instead of 12, holding the
+5.2 bohr chain spacing fixed, for the memory reason below: at the committed cell's size
+that gradient does not fit in 20 GB. The mechanism is the same at both cell sizes -- PAW's
+`q3 = 1/2` residue is 2.486e-06 at 12 bohr and 1.964e-06 at 9.
+
+**One candidate was tested and refuted before the cutoff was found.** `ddd_paw` is
+transcribed rather than differentiated, and it is not exactly `d(epaw)/d(becsum)`: it
+differs by 8.85e-08 in the charge channel with the three magnetic channels exact to
+round-off, which is the kind of thing that breaks the stationarity identity 3 rests on.
+Replacing `ddd` by `jax.grad` of the same energy and re-converging moves the residual from
+-1.379e-06 to -1.377e-06. **The first attempt at that A/B was a null that read as a
+pass**: the method was patched after the SCF body had been traced, so the patched routine
+was called zero times and the two arms came out identical to every digit. The arms are
+separate processes now and each prints its own call count -- 0 for A and 1 for B.
+
+**One pass over the k axis, and it is the one place `dE/dq` costs more than the SCF.** On
+an augmented dataset the density carries `q`, and the Hartree energy is quadratic in the
+density, so a sum of per-chunk gradients is not the gradient: an augmented run overrides
+`k_batch` to the single pass and **warns**, since the CPU default is the chunked end.
+The cost is the dense G set rather than the k-axis: `at_spiral_q` rebuilds the radial
+Bessel transforms inside every gradient evaluation, and in reverse mode `_qrad_kernel`'s
+`(ngm, kkbeta)` intermediates are live at once.
+
+    o-chain, ecutrho = 200, 4 k-points, 12 bohr cell   peak 11.4 GB for the gradient
+    the same at ecutrho = 400                          killed at a 20 GB cap
+    the same at 9 bohr, ecutrho = 200 / 400            peak 6.7-7.1 GB / 15.8-17.1 GB
+
+with the on-disk kernel cache on, which is the expensive direction for memory. **The times
+are in `PERFORMANCE.md` rather than here, and they are compiled ones**: the same three
+datasets on one silicon cell give 0.2 s norm-conserving, 1.7 s ultrasoft and 2.0 s PAW for
+the gradient, where a *first* call reads 0.8, 3.6 and 5.3 -- so a cold pair charges the
+augmentation for the compiler's work as well and, in this case, understates the arithmetic.
+
+There is nothing to time it against: `pw.x` has no spin spiral, and Elk has spirals but
+relaxes `q` by scanning `E(q)` rather than by differentiating it, so a ratio would compare
+a derivative with a sweep.
+
+**The norm-conserving path did not move, and that was checked rather than asserted.**
+Re-executing notebook 12 against this code changed its printed `|m|` from 0.5396 to 0.5397
+and the fitted `J1` from -112.256 to -112.272 meV, which looks exactly like an augmented
+change reaching a norm-conserving run. It is not: the same hydrogen chain run against three
+code states -- P95's commit, the commit before P96's code, and this one -- gives
+**E = -0.954746109586 Ry and |m| = 0.53967088 in all three**, identical to every digit, in
+ten iterations each. The notebook's committed output was therefore produced by a code state
+older than P95 and had been carried along without re-execution, which is worth knowing
+because a stale committed output reads as a regression when the notebook is next run.
+
+**What is outstanding.** A *tabulated* augmentation table is refused by name rather than
+differentiated: that branch reads `|q|` on the host to size its radial interpolation and
+running past the end of the table is a NaN rather than a clamp, so a tracer cannot go
+through it at all. It is reached only by a cell whose stored `Q_ij(G)` is over
+`AUG_MAX_BYTES`, which is also the cell where the gradient's tape carries the table twice
+over -- so the refusal and the memory gate are the same cell, and lifting one without the
+other buys nothing. The reverse-mode `(ngm, kkbeta)` intermediate is the obvious
+`jax.checkpoint` candidate, the same fix P74 applied to the force tape, and it is
+unmeasured here.

@@ -72,8 +72,8 @@ A chain of three refusals decides this, and none of it is a preference:
   all of which are US or PAW. **That refusal is gone** (`PLAN.md` P95: the
   augmentation charge between the two components is the resident table displaced
   to `Q_ij(G - q)`), so the choice below is no longer forced and a rerun on a PAW
-  Ni dataset is open. What is still refused is `dE/dq` on such a dataset, which
-  this calculation does not use;
+  Ni dataset is open. `dE/dq` on such a dataset is no longer refused either
+  (`PLAN.md` P96), which this calculation does not use in any case;
 * a **fully-relativistic** dataset without `lspinorb` is refused too (QE's
   `average_pp` is not implemented, and consuming `j`-resolved projectors as
   though they were `l`-resolved is worth ~20 Ry), which rules out the

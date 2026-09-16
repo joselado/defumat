@@ -299,6 +299,13 @@ jobs held the machine, so an idle re-timing will read lower. It is well under th
 either way, and the pair of self-consistent runs is the physics of that section rather than
 a sweep, so it is not the cell to cut.
 
+`12` and `14` read **68 s and 190 s** on 2026-09-16, re-executed together after the spiral
+gradient gained its augmented terms, against the 30 s and 89 s in the table. **The pair is
+not a delta and neither notebook gained a cell**: what each gained is prose, and the
+re-execution was pinned with `OMP_NUM_THREADS=1` where the table's figures were not
+necessarily taken that way. Both are far under the ceiling, so the table is left as it
+stands rather than half of it being replaced by numbers taken under a different rule.
+
 `19` reads 243 s on 2026-09-16 against 125 s before, and the 118 s is one added cell:
 AlAs, whose Born charge is a charge rather than the residue silicon's is, at
 `ecutwfc = 25` with a dual of 8 where silicon runs at 20 and 4. It is the notebook's

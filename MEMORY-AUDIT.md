@@ -1538,6 +1538,35 @@ explicit gradient-cache pop at driver.py:2662-2663. `PERFORMANCE.md:1146-1152` a
 per-step recompilation as a deliberate trade, but in **time**, never in resident bytes. The
 accompanying `result = None` before `:302` is free and does not collide with `keep_results`.
 
+### C7. `dE/dq` on an augmented spiral holds the radial transform's tape, and it is the largest thing the spiral allocates **[measured 2026-09-16, P96]**
+
+`scf/driver.py`'s `at_spiral_q(rebuild_basis = False)` and `pseudo/augmentation.py`'s
+`_qrad_kernel`. Not a candidate: **measured**, and it is already the gate on which cells the
+feature runs at all.
+
+The displaced table `Q_ij(G - q)` is a function of `q`, so it is rebuilt **inside** every
+gradient evaluation rather than once per wavevector, which puts the radial Bessel transforms
+on the tape; in reverse mode their `(ngm, kkbeta)` intermediates are live at once. Measured
+peaks, one process each, `VmHWM` after the gradient, **with the on-disk kernel cache on**,
+which is this file's expensive direction for memory:
+
+| cell | `ecutrho` | peak |
+|---|---|---|
+| o-chain, 1 atom, 12 bohr cell, 4 k-points | 200 | **11.4 GB** |
+| the same | 400 | killed at a 20 GB cap |
+| the same with 9 bohr of vacuum | 200 / 400 | 6.7-7.1 / 15.8-17.1 GB |
+| silicon, 2 atoms, `ecutwfc = 15`, 8 k-points | 120 | 3.0 GB (1.0 GB norm-conserving) |
+
+**Two things follow and both are already acted on.** The k dial cannot bound it -- an
+augmented spiral gradient is one pass over the whole k axis, because the density carries `q`
+and the Hartree energy is quadratic in it -- and `test_spiral_relaxation.py` therefore carries
+its augmented identities on the silicon cell rather than on the physical chain, since 11.4 GB
+is `tools/run_regression.sh`'s whole per-file cap.
+
+**The fix that has not been measured** is a `jax.checkpoint` on `_qrad_kernel`, which is what
+P74 did to the augmentation scan bodies for the force tape (2.32 GiB to 0.99 GiB, the force
+unchanged to one ulp). `PERFORMANCE.md`'s P96 entry has the timings beside these peaks.
+
 ---
 
 ## 5. (d) Model gaps in `sizing.py`
