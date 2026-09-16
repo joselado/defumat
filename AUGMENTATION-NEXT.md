@@ -308,12 +308,67 @@ all when the two legs cannot share a `becsum`, rather than how to move one.
 
 ### 1k. The ultracell with an ultrasoft or PAW dataset
 
-`ultracell/driver.py:356`. Both.
+`ultracell/driver.py`, `require_an_ultracell_regime`. Both.
 
-**What is missing.** The augmentation charge is a function of the density through `D_ij`,
-so the frozen unit-cell states the ultracell is built from are not a fixed basis any
-more. P88's stage 1 is norm-conserving by design. **Size:** a phase, and it belongs to
-the ultracell's own roadmap rather than to this one.
+**This entry used to say the wrong thing, in the same way §1e did**, and it is rewritten
+from the code rather than from the refusal's message (2026-09-16). It said the frozen
+unit-cell states "are not a fixed basis any more" because `D_ij` depends on the density.
+They are a fixed basis: they are frozen by construction, and what a modulation changes is
+`H` inside their span. The refusal's other reason, that `S` enters every ultracell
+overlap, is also wrong, and the sum is one line -- the augmentation part of
+`<psi_{k0+Q}|S|psi_{k0+Q'}>` over the `N` cells carries `sum_R e^{i(Q'-Q).R}`, and `Q - Q'`
+is a reciprocal vector of the ultracell, so it is `N delta_{QQ'}`. **The basis is exactly
+S-orthonormal across `Q` and the eigenproblem stays an ordinary one.**
+
+**What is actually missing is one term and its two consumers.** The matrix element gains
+
+    <psi_{k0+Q,m}| dV |psi_{k0+Q',n}>
+        += sum_a sum_ij [int dV(r) Q~^a_ij(r) dr] conj(B^Q_i) B^{Q'}_j
+
+with `B^Q_i = <beta^{k0+Q}_i|psi_{k0+Q,m}>` and `Q~` the augmentation charge **displaced
+by `Q' - Q`**, the ket's wavevector minus the bra's. The conjugate sits on the **bra's**
+projection: the other spelling is real, correctly Hermitian and wrong, which is this
+repository's "index order in a transposed pair reads as a sign" trap and has cost two
+phases already.
+
+**Both signs are fixed by the spiral rather than by the derivation alone**, which is the
+point of writing them down here: the spiral is this formula's special case with
+`Q = +q/2` (the up component, the bra) and `Q' = -q/2` (the down component, the ket), so
+`Q' - Q = -q` -- and `-q` is the displacement `Calculation.augmented` implements and the
+90-degree supercell measures to 1.65e-09 Ry. The first draft of this entry had `Q - Q'`
+and would have sent the next session to `+q`. The derivation is the spin spiral's, one index further out: the per-copy
+integrals summed against `e^{i(Q'-Q).R}` leave only the ultracell G vectors congruent to
+`Q - Q'` modulo the unit cell's reciprocal lattice, which is
+`build_augmentation(shift=Q - Q')` -- the primitive §1e built and validated. **That term
+*is* `delta D` per atom copy**; there is no second one to find.
+
+Its two consumers: the **density** needs `becsum` per `(atom, cell copy)`, which is a
+quadratic form over the `(Q, n)` amplitudes with the phases `e^{i(k0+Q).R}`, and then the
+augmented charge on the ultracell box through the same displaced tables; and **PAW** needs
+its one-centre terms per copy.
+
+**What it needs first.** Nothing that does not exist. The `N` displaced tables are `N`
+calls to a builder that is written and has a `b -> 0` test; the cost to size before
+building is `nh^2 x ngm x N` per species, the same `N` the box already pays, with P73's
+chunked rebuild as the fallback.
+
+**The practical gate is the *other* refusal, not this one.** `require_an_ultracell_regime`
+also refuses a double grid, and an ultrasoft run at the usual `ecutrho = 8 to 12 ecutwfc`
+trips that first. So stage 1 of this item is: lift the ultrasoft/PAW refusal, keep the
+doublegrid one, and validate at `ecutrho = 4 ecutwfc`, which `pw.x` accepts. On the
+ultracell the smooth set `{G+Q}` is a subset of the dense one, so the interpolation between
+the two grids is exact zero-padding when someone comes to write it.
+
+**The checks, in the order they should be run.** The tiled null first -- with no modulation
+the ultracell density must reproduce the tiled unit-cell density *including* the
+augmentation charge, to round-off, and it is the one check that needs no supercell. Then an
+applied modulation against the `N`-cell supercell under the same modulation **on the same
+FFT box**, since two discretisations of one functional differ by about 1e-6 Ry per cell
+here. Then the `nbnd` ladder, which for the total energy converges from above.
+
+**Size:** a phase. Smaller than this file previously implied, because the object it needs
+is built and the eigenproblem does not change, and larger than one sitting, because PAW's
+one-centre terms per copy are their own piece.
 
 ---
 

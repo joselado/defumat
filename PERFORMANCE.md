@@ -6497,3 +6497,60 @@ rather than a count. And the vendored Elk here is 11.0.2, whose `mixerifc.f90` o
 1 and 3 only: the parameter-free "robust adaptive mixer" (`mixtype = 4`) that Elk's release
 notes describe as converging almost anything is **not** in this copy, so it has not been read,
 let alone transcribed.
+
+## What an augmented spin spiral costs, and what it is compared against (P95)
+
+**There is no reference pair for the spiral itself, and that is a property of the
+quantity rather than a gap in the measurement.** Neither `pw.x` nor Elk computes a
+plane-wave spin spiral: QE has no spiral at all, and Elk's is LAPW, whose basis is not a
+plane-wave sphere. What a user actually chooses between is a spiral in the primitive
+cell and **the supercell that holds the same moments explicitly** -- so that is the pair
+timed here, with the reference code on the supercell side, where it can run.
+
+**Machine and date:** this workstation, CPU only, 2026-09-16. Both codes pinned to CPU 0
+with `OMP_NUM_THREADS=1`, the affinity mask set before JAX is imported;
+`tools/compare_qe.py` on `tests/data/qe/o-chain-90deg-us.in` for the first two rows and
+the same protocol by hand for the third. Every defumat figure is a **warm** SCF, the
+minimum of two after a cold one, so none of them is timing the kernel cache.
+
+| | cell | SCF | per iteration | iterations |
+|---|---|---|---|---|
+| `pw.x` 7.5, the supercell | 4 atoms, 1 k-point | **60.76 s** | 3.376 s | 18 |
+| defumat, the same supercell | 4 atoms, 1 k-point | **140.61 s** | 8.271 s | 17 |
+| defumat, the spiral | 1 atom, 4 k-points | **10.28 s** | 1.142 s | 9 |
+
+**Two ratios, and they say different things.** On identical work -- the same input, the
+same 60x60x96 box, the same 142,989 G vectors -- this code is **2.3x** slower than
+`pw.x`, which is the ordinary noncollinear ultrasoft ratio and is the number to improve.
+On the *physics a user wants*, the spiral reaches the same state in **10.3 s** where
+`pw.x` needs **60.8 s** for the supercell it has no alternative to, which is **5.9x** the
+other way, and **13.7x** against this code's own supercell. The spiral wins by doing less
+work, not by running faster, and it wins by enough to cover the 2.3x.
+
+**What is not comparable, said rather than discovered.** The two sides are different
+decompositions of one calculation: four atoms at one k-point against one atom at four
+k-points, which the spiral doubles into eight shifted spheres. Both codes parallelise
+over k, so a ratio taken with more cores would move in the spiral's favour and this
+single-core pair is the conservative end of it. The iteration counts differ as well (18,
+17 and 9), so the per-iteration column is the one to compare and the SCF column is what a
+user pays.
+
+**The energies agree, and that was not the point of the run.**
+`pw.x` gives **-125.97825849 Ry** on the supercell and this code **-125.97825849 Ry**,
+**3.10e-10 Ry** apart. Since the supercell is the reference side of P95's sharpest spiral
+identity, that closes a chain the phase could not close on its own: spiral to supercell
+at 1.65e-09 Ry, supercell to `pw.x` at 3.10e-10. It came out of a timing run, which is
+worth noting -- P95's record had already been written saying there was no external number.
+
+**The memory, stated because it is a deviation and it is not small.** The displaced
+transverse table is a **second** `(nh, nh, ngm)` array per ultrasoft species, held beside
+the resident one for the life of the run. `AUG_MAX_BYTES` sizes *one* of them, so an
+augmented spiral's stored augmentation charge is **twice** what the gate's estimate says,
+and a cell near the gate crosses it without the gate noticing. On the tabulated branch
+the cost is nothing: that branch keeps QE's radial table rather than the G-space array,
+and a second radial table is kilobytes. The right response on a large cell is therefore
+to take the tabulated branch, which is the branch such a cell takes anyway.
+
+Everything else the spiral allocates is what P19 already measured: the doubled k-list
+means two plane-wave spheres per state, and that was the cost of a spiral before any of
+this.

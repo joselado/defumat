@@ -1928,6 +1928,57 @@ visible. `OPEN.md` Part VI item 2 (`diago_david_ndim = 2` at the minimum subspac
 `davidson-empty-ethr-defect` item are the two neighbouring candidates, and neither has been
 run against a gapped spinor PAW cell.
 
+### Y4. PAW's collinear and noncollinear paths do not converge onto each other, and it is not a threshold **[opened 2026-09-16, while validating P95]**
+
+**The same cell, the same physics, twice.** An oxygen chain in a cell doubled along `z`
+with the two moments antiparallel, run once as `nspin = 2` and once as `noncolin` with
+both moments turned into the plane. Nothing about the state differs -- without spin-orbit
+coupling the energy cannot know which axis the moments lie on -- so the two totals are the
+same number computed by this code's two SCF paths.
+
+| `ecutrho` | 200 | 300 | 400 |
+|---|---|---|---|
+| ultrasoft (`O.pz-rrkjus`) | 7.03e-07 | 1.32e-07 | **6.11e-13** |
+| PAW (`O.pz-kjpaw`) | 8.51e-05 | 4.94e-06 | **2.65e-06** |
+
+**Ultrasoft converges onto itself and PAW does not.** At `ecutrho = 400` the ultrasoft
+pair agree to 6e-13 Ry, which is round-off, while the PAW pair sit 2.65e-06 apart and
+stop falling -- the last two cutoffs move it by less than a factor of two where the first
+step moved it by seventeen.
+
+**It is not `conv_thr`, which is the obvious reading and is the one this section is
+otherwise about.** Tightening from 1e-11 to 1e-13 costs each side four more iterations
+(13 to 17 collinear, 16 to 19 noncollinear) and leaves the gap at **2.6466e-06 Ry,
+identical to every printed digit**. So this is not Y1's mechanism at one more remove: it
+is a reproducible difference between two code paths on the same physics, and the fact
+that only the PAW dataset shows it points at the one-centre terms, which are the only
+machinery the two paths do not share bit for bit.
+
+**How it was found, and what it was nearly blamed on.** P95 validates an augmented spin
+spiral against supercells, and one of those references is collinear. The residue that
+identity left looked exactly like a G-sphere truncation -- ultrasoft-only, absent for a
+norm-conserving dataset, falling with `ecutrho` -- and was written up as one before the
+control above was run. The control showed the spiral residue is **half** the number in
+this table at every cutoff, the factor a doubled cell's energy is divided by, so the
+spiral was contributing nothing and the whole ladder was this. The spiral's own error is
+1.65e-09 Ry, measured against a supercell that shares the noncollinear path and so never
+touches this.
+
+**What it is not, measured rather than argued.** It is not a structure factor or a
+grid-alignment effect: both atoms of the doubled cell sit on exact FFT grid points (`z = 0`
+and `1/2` on grids of 48 dense and 36 smooth), and on the one-atom cell of the same family
+moving the atom to another exact grid point costs **1.4e-11 Ry** for the same PAW dataset.
+That leaves the one-centre XC or Hartree on the spheres, or a difference in how `becsum`
+is symmetrised or spin-transformed between the two paths -- which is the only machinery
+the collinear and noncollinear routes do not share bit for bit.
+
+**The first thing to run**, before any of that, is `pw.x` on both inputs: QE has both
+paths too, so if its collinear and noncollinear PAW totals agree on this cell to better
+than 2.6e-06 the gap is this code's, and if they do not it is the shared convention.
+Nothing here has been compared against `pw.x` yet, and until it has **the direction of
+the error is unknown** -- this is recorded as a disagreement between two of this code's
+paths and not as a defect in either.
+
 ## X. Downgraded, and test-suite hygiene
 
 ### X1. The analytic force recompiles per ionic step -- real, and not the severity the entry claims

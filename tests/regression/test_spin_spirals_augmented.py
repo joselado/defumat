@@ -74,6 +74,11 @@ pytestmark = [pytest.mark.regression, pytest.mark.slow]
 #: round number: ultrasoft reaches 1.65e-09 on the same identity, and what
 #: separates the two is PAW's one-centre path rather than anything the spiral
 #: does.
+#:
+#: **Set from one dataset on one cell**, with a factor of six of headroom over
+#: the largest measured residue. If PAW's 3.26e-07 is ever traced to a term --
+#: ``OPEN.md`` Y4 is the thread -- this wants revisiting downwards rather than
+#: leaving as the number that happened to pass.
 CONSISTENCY_RY = 2.0e-06
 
 #: What the displaced table is worth. Anything above this and the transverse
@@ -143,8 +148,9 @@ def test_a_zero_spiral_is_an_ordinary_noncollinear_run(dataset, pseudo_dir):
     between two spheres, and the recombination of the two real transverse
     components into one complex field and back. At ``q = 0`` all of it has to
     collapse onto the ordinary noncollinear ultrasoft path that P17 validated,
-    and it does so to round-off rather than to the truncation tolerance,
-    because at ``q = 0`` the two G-spheres coincide as well.
+    and it does so to round-off rather than to the consistency floor below,
+    because both sides are then literally the same calculation: the displaced
+    table at ``q = 0`` is the resident one, array for array.
 
     It says nothing about the *displacement*: at ``q = 0`` a wrong sign, a
     wrong magnitude and a missing structure factor are all invisible. The

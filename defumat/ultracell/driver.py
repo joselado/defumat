@@ -354,12 +354,63 @@ def require_an_ultracell_regime(system, pseudos, basis) -> None:
         bool(getattr(system, "nosource", False)),
     )
     if any(p.is_ultrasoft or p.is_paw for p in pseudos):
+        # **Both reasons this refusal used to give are wrong**, and they are
+        # written out here rather than deleted, because each made the lift look
+        # like a different and larger piece of work than it is (``PLAN.md``
+        # P95 closed the sibling refusal on the spin spiral after the same
+        # mistake).
+        #
+        # It said the frozen states "stop being a fixed basis the moment the
+        # modulation moves". They do not: they are frozen by construction, and
+        # what the modulation changes is ``H`` inside their span, not the span.
+        # That ``D_ij`` depends on the density is exactly why there is an extra
+        # term in the matrix element, and it is that term, not the basis.
+        #
+        # It also said "S enters every ultracell overlap". It does not, and the
+        # sum is one line: the augmentation part of
+        # ``<psi_{k0+Q}|S|psi_{k0+Q'}>`` over the ``N`` cells of the ultracell
+        # carries ``sum_R e^{i(Q'-Q).R}``, and ``Q - Q'`` is a reciprocal vector
+        # of the ultracell, so that sum is ``N delta_{QQ'}``. The basis is
+        # exactly S-orthonormal across ``Q``, and the eigenproblem stays an
+        # ordinary one.
+        #
+        # What is actually missing is one term and its two consumers:
+        #
+        #   <psi_{k0+Q,m}| dV |psi_{k0+Q',n}> gains
+        #       sum_a sum_ij [int dV(r) Q~^a_ij(r) dr] conj(B^Q_i) B^{Q'}_j
+        #
+        # with B^Q_i = <beta^{k0+Q}_i | psi_{k0+Q,m}>. The conjugate is on the
+        # **bra's** projection, which is the ordering trap this repository has
+        # met twice: the other spelling is real, correctly Hermitian and wrong.
+        #
+        # where ``Q~`` is the augmentation charge displaced by ``Q' - Q``, the
+        # **ket's** wavevector minus the bra's. The derivation is the spiral's:
+        # summing the per-copy integrals against ``e^{i(Q'-Q).R}`` leaves only
+        # the ultracell G vectors congruent to ``Q' - Q`` modulo the unit
+        # cell's reciprocal lattice, which is
+        # ``build_augmentation(shift=Q' - Q)`` -- the primitive P95 built and
+        # validated. That term *is* ``delta D`` per atom copy; there is no
+        # second one.
+        #
+        # **The sign is checked against the spiral rather than trusted**, since
+        # the spiral is the special case ``Q = +q/2`` (the up component, the
+        # bra) and ``Q' = -q/2`` (the down component, the ket): ``Q' - Q`` is
+        # then ``-q``, which is the displacement
+        # :meth:`defumat.scf.driver.Calculation.augmented` implements and the
+        # 90-degree supercell measures. The opposite spelling gives ``+q`` and
+        # is wrong. Its consumers are the density (``becsum`` per atom copy,
+        # then the augmented charge on the ultracell box) and, for PAW, the
+        # one-centre terms per copy.
+        #
+        # ``AUGMENTATION-NEXT.md`` has this as a sized item. It stays refused
+        # because none of it is written, not because it is hard.
         raise NotImplementedError(
             "the ultracell refuses ultrasoft and PAW datasets (PLAN.md P88, "
-            "stage 1 is norm-conserving). The augmentation charge is a function "
-            "of the density through D_ij, so the frozen unit-cell states stop "
-            "being a fixed basis the moment the modulation moves, and S enters "
-            "every ultracell overlap"
+            "stage 1 is norm-conserving). What is missing is the augmentation "
+            "term in <psi_Q|dV|psi_Q'>, which is the resident table displaced "
+            "by Q - Q', together with becsum and PAW's one-centre terms per "
+            "atom copy; the frozen states stay a fixed basis and S does not "
+            "enter, see the comment above this raise"
         )
     if getattr(system, "hubbard", None) is not None:
         raise NotImplementedError(

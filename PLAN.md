@@ -15083,10 +15083,19 @@ row with both tick columns empty.
 
 **What is refused at the door, and why each.**
 
-- **Ultrasoft and PAW.** The augmentation charge is a function of the density through
+- **Ultrasoft and PAW.** ~~The augmentation charge is a function of the density through
   `D_ij`, so the frozen unit-cell states are no longer a fixed basis, and `S` enters every
-  overlap. (P16's primitive already carries `q_ij(b)`, so this is a later stage, not a
-  permanent refusal.)
+  overlap.~~ **Both halves of that are wrong and were corrected 2026-09-16** (P95, and
+  `AUGMENTATION-NEXT.md` §1k has the sized item). The frozen states stay a fixed basis --
+  they are frozen by construction, and the modulation changes `H` inside their span, not
+  the span. And `S` does not enter: the augmentation part of
+  `<psi_{k0+Q}|S|psi_{k0+Q'}>` over the `N` cells carries `sum_R e^{i(Q'-Q).R}`, which is
+  `N delta_{QQ'}`, so the basis is exactly S-orthonormal across `Q` and the eigenproblem
+  stays an ordinary one. What is missing is **one** term, `sum_a sum_ij [int dV Q~^a_ij]
+  conj(B^Q_i) B^{Q'}_j` in the matrix element with `Q~` displaced by `Q' - Q`, plus
+  `becsum` and PAW's one-centre terms per atom copy. The displaced table is
+  `build_augmentation(shift=...)`, written and validated by P95; the practical gate is the
+  *doublegrid* refusal, which an ultrasoft run trips first.
 - **A non-integer ultracell.** Elk's `avecu` is an independent input with no consistency
   check against `ngridq` (`readinput.f90:1919`, `init1.f90:168`), so an ultracell that is not
   an integer multiple of the unit cell is *accepted* and its `R`-grid is then not a set of
@@ -17083,6 +17092,28 @@ left, which is the spiral's own error and is the same order as the quarter turn'
 1.65e-09 measured against a supercell that shares the noncollinear machinery. So the
 augmented spiral's error is round-off-sized, and the truncation shell, if it is there at
 all, is below that.
+
+**What that number cannot see, said here rather than left to the number.** Every
+identity above is against *this code's own* noncollinear machinery: the quarter turn is a
+spiral against a four-cell noncollinear supercell, and both sides run the same
+`_noncollinear_coefficients` and the same `sum_band`. So any error that collapses at
+`q = 0` onto the ordinary noncollinear path **and** that a supercell carries identically
+is invisible to all of it -- the same blind spot the collinear/noncollinear control just
+exposed one level down, where a residue that looked like the spiral's turned out to be
+the two paths disagreeing. There is **no direct** external number, from `pw.x` or from
+Elk, and there cannot easily be one: neither code computes a plane-wave spin spiral,
+which is why P19 validated the norm-conserving case by identities too.
+
+**What there is instead is a chain, and it was closed while taking the timing.** The
+reference side of the quarter turn is an ordinary noncollinear ultrasoft supercell, and
+`pw.x` runs that: on `o-chain-90deg-us.in`, single core, same input,
+`pw.x` gives **-125.97825849 Ry** and this code **-125.97825849 Ry**, **3.10e-10 Ry**
+apart (`PERFORMANCE.md`). So the augmented spiral is tied to `pw.x` in two steps --
+1.65e-09 Ry from the spiral to the supercell, 3.10e-10 Ry from the supercell to `pw.x` --
+and what is not covered by the chain is only an error that a *spiral and its supercell
+share*, which is a much smaller class than "everything internal". That reference run was
+taken for the timing and the energy came free; it is worth saying that nobody planned it
+as the validation, which is how the gap above came to be written before it.
 
 **The habit this is an instance of** is `CLAUDE.md`'s "an explanation that *fits* a number
 and is accepted because it fits", and the reason the wrong one survived scrutiny is that
