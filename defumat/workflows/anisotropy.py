@@ -112,6 +112,7 @@ from defumat.workflows.nscf import fixed_density_states
 
 __all__ = [
     "becsum_fits",
+    "becsum_for_leg",
     "ForceTheorem",
     "MagneticAnisotropy",
     "run_force_theorem",
@@ -259,6 +260,20 @@ class MagneticAnisotropy:
     def difference(self, i: int, j: int) -> float:
         """``eband(i) - eband(j)`` in Ry, the sign QE's README states."""
         return float(self.band_energies[i] - self.band_energies[j])
+
+
+def becsum_for_leg(becsum, source, pseudos) -> tuple:
+    """The first leg's ``becsum`` when it belongs to this leg's dataset.
+
+    The decision the front door takes, written here so that the front door
+    stays one line and the reasoning stays with the physics. On the one-file
+    route, where the two legs differ by ``soc_scale`` alone, ``becsum`` is
+    indexed by the projectors this leg has and crosses. On the two-file route
+    it is not, and handing over nothing is right: an ultrasoft dataset needs no
+    ``becsum`` at all and a PAW one then refuses by name, with the one-file
+    route in the message.
+    """
+    return tuple(becsum or ()) if becsum_fits(becsum, pseudos, source=source) else ()
 
 
 def _files(pseudos) -> tuple:
