@@ -256,10 +256,17 @@ the ultracell's own roadmap rather than to this one.
 
 ---
 
-## 2. A term that is written and unvalidated
+## 2. A term that is half written, and the half that is missing is a term
 
 Three refusals, one term. All three say the same sentence in `docs/features.tex` and all
 three would lift or stay together.
+
+**This section used to be called "a term that is written and unvalidated" and that was
+wrong** (P94). Writing the derivation out splits it: the *convention* is right by
+construction and needed a derivation rather than a measurement, and what is actually
+missing is a second term that has nowhere to go in the present assembly. So this belongs
+with §1 rather than beside it, and the sizing is a phase rather than the afternoon this
+file first claimed.
 
 The term is the off-diagonal `<psi_n| dS/dk_a |psi_m>`, which enters the velocity of a
 generalised eigenproblem as `-e_n dS/dk_a` and is **identically zero for a
@@ -284,27 +291,39 @@ comparison looking the same.
   order further out: the dipole carries `dS/dk` and its derivative carries
   `d^2 S/dk_a dk_b`.
 
-**What is already pinned, and what is not.** `response/efield.py:336` builds
+**The convention is settled, on paper.** Differentiating `H c = e S c` and projecting on
+`c_n` for `n != m` gives `<n|S|d_a m> = <n|d_a H - e_m d_a S|m> / (e_m - e_n)`, the
+**ket** band's energy; the curvature `-2 Im <d_1 n|S|d_2 n>` with the identity resolved as
+`sum_m c_m c_m^dagger S = 1` then has `n` as the ket in both factors, so `e_n` multiplies
+`dS/dk` in each. That is exactly what `kubo_from_matrices` builds.
+
+**What is missing is the augmentation dipole, and it has nowhere to go.** With
+`S = T^dagger T`, the true states are `T c` and
+`<Psi_n|d Psi_m> = c_n^dagger S d c_m + c_n^dagger T^dagger (d T) c_m`. The first piece is
+the formula above; the second is `adddvepsi_us`'s `dpqq`, the position operator acting on
+the augmentation charge, and `kubo_from_matrices` sees only `dH` and `dS` so there is no
+slot for it. FHS has it, because `q^a_ij(b)` **is** `T^dagger(k) T(k')` to first order in
+`b`. `response/efield.py:336` builds
 `-i (dH/dk_a - eps_v dS/dk_a)|psi_v>` from `VelocityOperator.both`, solves it into the
-empty space with `P_c`, and the resulting ultrasoft dielectric constant is 8e-6 from
-`ph.x`. So `apply_s` acting on an occupied state, with the occupied eigenvalue
-multiplying it, is validated, and the occupied-to-empty off-diagonal is exercised by the
-projector. What efield carries and the three above do **not** is the augmentation
-dipole, `_ultrasoft_position`, which is `adddvepsi_us`: the position operator acting on
-the augmentation charge. Whether a Kubo sum needs an analogue of it is the open question,
-and it is not settled by argument.
+empty space with `P_c`, and adds the dipole separately as `_ultrasoft_position` -- and its
+ultrasoft dielectric constant is 8e-6 from `ph.x`, so the object exists and is pinned. It
+is the *Kubo* assembly that does not carry it.
 
-**What decides it is not a finer mesh.** The uncertainty is a *convention* -- `e_n` in
-both factors, and the sign of `dS/dk` -- which is a statement about `kubo_from_matrices`,
-a function that takes matrices and knows nothing about plane waves. So it splits into two
-checks with no mesh floor: the convention against FHS on a Haldane model given a
-`k`-dependent overlap `S(k)`, where `tests/unit/test_topology_curvature.py` already pins
-the norm-conserving case to 4.8e-11; and, separately, whether
-`VelocityOperator.apply_s` returns the right off-diagonal, by a finite difference of
-`<n_k|S(k')|m_k>` in `k'` at frozen states. Each can fail on its own, which the AlAs
-comparison could not.
+**What decides it is not a finer mesh.** The model that shows the missing term without a
+mesh at all: Haldane's `H_0(k)` with `H = A^dagger H_0 A` and `S = A^dagger A` for a
+smooth invertible `A(k)`, where the generalised problem's physical curvature is `H_0`'s
+exactly. `kubo_from_matrices` then misses it by `(e_m - e_n) c_n^dagger (dA)^dagger A c_m`
+in each factor, which is the model's `T^dagger dT`, and subtracting that recovers it. The
+correction depends on `A` rather than on `S = A^dagger A` alone -- `U(k) A` leaves `S`
+unchanged and moves the physical states -- which is why the plane-wave version needs
+`dpqq` rather than only `dS/dk`.
 
-**Size:** the two checks are about a day, and passing both lifts all three refusals.
+**Size:** a phase. The model check is an afternoon and pins the structure; what follows is
+the dipole in matrix-element form inside `velocity_matrices`, from `efield.py`'s
+machinery, and then an **assembly** check on plane waves, because a sum of separately
+validated pieces is this repository's most convincing wrong answer. That check is the one
+P94 used for `dS/dk`: zero the dipole on AlAs-US and read the shift, and only run the
+AlAs comparison if the two terms together exceed its 4.4 to 6.3 per cent floor.
 
 ---
 

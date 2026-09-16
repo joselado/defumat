@@ -16795,38 +16795,72 @@ mesh       norm-conserving max/L2    ultrasoft max/L2
 6x6        0.354 / --                0.438 / 0.351
 12x12      0.148 / 0.116             0.201 / 0.122
 18x18      0.070 / 0.058             0.085 / 0.057
-24x24      0.063 / 0.044             --
+24x24      0.063 / 0.044             0.044 / 0.035
 ========  ========================  ========================
 
 The ultrasoft column tracks the control, which reads as agreement. **It is not.** Zeroing
 `dS/dk` in the Kubo velocity on the ultrasoft case moves `Omega` by **2.51 per cent** in
-the maximum and 2.05 per cent in L2 at 12x12 -- five times *less* than the 12 to 20 per
-cent gap between the two methods at that mesh, and still half the 4.4 to 6.3 per cent gap
-at 24x24. So the term the test exists to check is smaller than the test's own resolution
-at every mesh run, and deleting it entirely would leave the comparison looking exactly the
-same. This is `CLAUDE.md`'s "a check whose null result cannot be told from a pass", and it
+the maximum and 2.05 per cent in L2 -- five times *less* than the 12 to 20 per cent gap
+between the two methods at 12x12, and still below the 4.4 per cent (3.5 in L2) that
+remains at 24x24. So the term the test exists to check is smaller than the test's own
+resolution at every mesh run, and deleting it entirely would leave the comparison looking
+the same. This is `CLAUDE.md`'s "a check whose null result cannot be told from a pass", and it
 was visible only because the falsification control was written beside the test rather than
 after it: **ask what result would have falsified the thing being checked, and whether the
 instrument could have produced it.**
 
-**What a future attempt needs, and it is not a bigger mesh.** Pushing the
-method-to-method gap under 2.5 per cent would take about a 60x60 mesh, 3600 k-points each
-carrying a velocity operator, which is the wrong answer to the wrong question. The
-refusal's stated uncertainty is a **convention** -- `e_n` in both factors rather than
-`e_n` in one and `e_m` in the other, and the sign of `dS/dk` -- and that is a statement
-about `kubo_from_matrices`, which takes matrices and knows nothing about plane waves. It
-decomposes into two checks with no mesh floor at all:
+**Finding 4 -- the refusal is misclassified, and half of it closes on paper while the
+other half turns out to be a missing term.** `AUGMENTATION-NEXT.md` filed these three as
+"a term that is written and unvalidated". Writing the derivation out says otherwise.
 
-* **the convention, on a model.** `tests/unit/test_topology_curvature.py` already pins the
-  norm-conserving Kubo route against FHS to 4.8e-11 on the Haldane model. Give that model
-  a `k`-dependent overlap -- a non-orthogonal tight-binding basis, `S(k) = 1 + s cos(k.a)`
-  -- solve `H c = e S c` densely, hand `dH/dk`, `dS/dk` and `e` to `kubo_from_matrices`,
-  and compare against FHS built from `<n_k|S|m_k'>`. Exact on a fine mesh, seconds to run.
-* **the plane-wave operator, separately:** whether `VelocityOperator.apply_s` returns the
-  right off-diagonal `<n|dS/dk_a|m>`, which is a finite difference of `<n_k|S(k')|m_k>` in
-  `k'` at frozen states -- the same trick `band_velocities` is checked with.
+*The convention is right, by construction.* Differentiating `H c = e S c` and projecting
+on `c_n` with `n != m` gives `(e_n - e_m) <n|S|d_a m> = e_m <n|d_a S|m> - <n|d_a H|m>`, so
+the covariant derivative carries the **ket** band's energy. The curvature of band `n` is
+`-2 Im <d_1 n|S|d_2 n>`, and inserting the resolution of the identity in this metric,
+`sum_m c_m c_m^dagger S = 1`, makes both factors `<d n|S|m>` with `n` the *ket* in each --
+so `e_n` appears in both, which is what `kubo_from_matrices` builds
+(`a1[n,m] = dh1[n,m] - e[n] ds1[n,m]`, `a2[n,m] = dh2[m,n] - e[n] ds2[m,n]`). Half of the
+refusal's stated doubt needed a derivation rather than a measurement.
 
-Each of those can fail on its own, which is exactly what the AlAs comparison could not do.
-Passing both is what lifts the three refusals. Until then they stay, and the reason on the
-record is "this comparison could not have told the difference" rather than "the two
-disagree".
+*The other half is a term with nowhere to go.* The pseudo states are related to the true
+ones by `S = T^dagger T` with `T` carrying `beta^k`, so the true states are `T c` and
+
+    <Psi_n|d_a Psi_m> = c_n^dagger S d_a c_m + c_n^dagger T^dagger (d_a T) c_m.
+
+The first piece is what the formula above builds. **The second is the augmentation
+dipole** -- `adddvepsi_us`'s `dpqq`, the position operator acting on the augmentation
+charge -- and there is no slot for it in `kubo_from_matrices`, which sees only `dH` and
+`dS`. FHS carries it because `q^a_ij(b)` *is* `T^dagger(k) T(k')` to first order in `b`;
+the Kubo route has nothing corresponding. The refusal's own text says so ("there is a
+second one beside it"), and this entry is where it stops being an aside: **the three
+refusals move from class (b) to class (a), and the sizing goes from a day to a phase.**
+One thing is in their favour: `efield.py` already computes the object
+(`_ultrasoft_position`, from `dipole`), pinned by the ultrasoft dielectric constant
+agreeing with `ph.x` to 8e-6.
+
+**The model that shows the term exists, and it costs an afternoon.** Take Haldane's
+`H_0(k)` and a smooth invertible `A(k) = 1 + s M(k)`, `M` Hermitian and periodic in `k`
+with `s` well below `1/||M||`; set `H = A^dagger H_0 A` and `S = A^dagger A`. The
+generalised problem has the same eigenvalues and `c = A^{-1} v`, so the physical curvature
+is `H_0`'s exactly, computable at the same k-points from `kubo_from_matrices(dH_0, 0, e)`
+-- no mesh, no truncation, two bands and one occupied. Carrying the algebra through,
+
+    c_n^dagger (d_a H - e_n d_a S) c_m = v_n^dagger (d_a H_0) v_m
+                                       + (e_m - e_n) c_n^dagger (d_a A)^dagger A c_m,
+
+so the generalised formula **misses** `Omega_0` by exactly the leftover, and that leftover
+is the model's `T^dagger d T`. Two assertions: the plain call does not reproduce `Omega_0`,
+and subtracting the leftover from both factors does, to 1e-12. Note the correction depends
+on `A` and not only on `S = A^dagger A` -- replacing `A` by `U(k) A` with `U` unitary
+leaves `S` alone and moves the physical states -- which is precisely why the plane-wave
+version needs `dpqq` rather than only `dS/dk`.
+
+**And what a lift needs after that, stated so it is not skipped.** The dipole in
+matrix-element form inside `velocity_matrices`, taken from `efield.py`'s machinery, and
+then an assembly check on plane waves -- because a sum of separately validated pieces is
+this repository's most convincing wrong answer. The check is the one used here: zero the
+dipole on AlAs-US and read the shift. If `dS/dk` and the dipole together exceed the 24x24
+floor of 4.4 to 6.3 per cent, the AlAs comparison becomes discriminating and is worth
+running; if they do not, the refusal stays with the two pieces pinned and the assembly
+written down as unchecked. Until then the three stay refused, and the reason on the record
+is "this comparison could not have told the difference" rather than "the two disagree".
