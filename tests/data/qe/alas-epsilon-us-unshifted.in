@@ -1,23 +1,26 @@
-! AlAs with an ultrasoft dataset on both species: the Born charge of a **polar**
-! crystal, which is the one thing `si-epsilon-us.in` cannot measure.
+! AlAs, ultrasoft, on an **unshifted** 2x2x2 grid **reduced to its wedge**: half of
+! the pair that says a Born charge's wedge sum has been completed.
 !
-! Silicon's `Z*` is zero by symmetry, so the -0.07945 both codes print there is a
-! basis-set residue and the 8e-6 agreement is between two codes' errors. AlAs is
-! zincblende, so `Z*` is a real charge of order 2 with opposite signs on the two
-! species, and `constraint_position_term` -- worth 0.55 on silicon, seven times
-! the answer it is added to -- is finally compared against something of its own
-! size.
+! Its partner is `alas-epsilon-us-unshifted-nosym.in`, the same cell and the same
+! k-sample run whole with the symmetrisation switched off. An unshifted grid is
+! closed under the point group, so the two are the same sample by two routes and
+! agreeing is the only check `symmetrize_directional` has at this order -- QE
+! computes the reduced route alone.
 !
-! The cell, cutoffs and datasets are `alas-us.in`'s, whose bands are validated
-! against Elk along L-Gamma-X (0.062 eV rms on the valence manifold). Symmetry is
-! left on and the grid is shifted, both as in `si-epsilon-us.in`, so that the two
-! ultrasoft cases differ in the crystal alone.
+! **The crystal is polar and the dataset is augmented, and both are needed for the
+! pair to say anything.** On a centrosymmetric cell `Z*` is zero by symmetry, so
+! what the two routes agree about is the sum-rule residue and not the charge; and
+! at frozen wavefunctions the density moves with the atoms only when `S` does, so
+! the term that fails to complete -- `int (drho/du) K (drho/dE)`, a product of two
+! per-k tangents -- does not exist on a norm-conserving dataset at all.
 !
-! `ecutrho` is 8 x `ecutwfc`: the augmentation charge is sharply peaked and is
-! not representable on a dual-4 grid.
+! **2x2x2 is deliberate and is not a converged sample.** The charges come out near
+! 0.27 and -8.63 rather than near 2, which makes the comparison absolute rather
+! than a cancellation between two large numbers, and it keeps the pair inside the
+! slow suite's budget: the whole-grid half is eight k-points rather than the
+! sixty-four an unshifted 4x4x4 would need.
 !
-! The reference is regenerated with the vendored `ph.x` (`alas-epsilon-us.ph.in`)
-! and committed as `reference.out.ph-alas-epsilon-us`.
+! Cell, cutoffs and datasets are `alas-epsilon-us.in`'s.
  &control
     calculation = 'scf'
  /

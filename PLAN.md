@@ -3180,10 +3180,15 @@ computed for it — the perturbation is contracted differently.
 | ultrasoft AlAs, As | −2.165827 | −2.16581 | 1.7e-5 |
 
 Carbon is the independent case — different element, cutoffs and lattice
-constant, and the **opposite sign** — and its 2.3e-4 is where its dielectric
-constant already is (1.2e-4 against silicon's 4.3e-5, the radial form factors'
-interpolation floor), arriving amplified because `Z*` is the residue of 4 against
-3.958. And the norm-conserving number agrees with the transcribed `zstar_eu.f90`
+constant, and the **opposite sign**. Its number was 0.0415594, 2.3e-4 out, and
+that was explained as the radial form factors' interpolation floor arriving
+amplified through the residue of 4 against 3.958, because its dielectric
+constant's 1.2e-4 is the same order. **The explanation fitted and was wrong**:
+the wedge correction P39a added moves carbon to 0.041839, 2.8e-4 *toward*
+`ph.x`, leaving 4.9e-5. Carbon was the one committed case whose residue was
+large enough to show the defect, and an explanation that fitted is what kept it
+from being looked at — the trap `CLAUDE.md` names beside "a check whose null
+result cannot be told from a pass". And the norm-conserving number agrees with the transcribed `zstar_eu.f90`
 beside it to **1.3e-14**, which is the phase's regression gate: every term added
 here has to switch itself off when `S = 1`, and that equality is what says it
 does.
@@ -6007,6 +6012,15 @@ from 1.3e-3 to 9e-6), 0.041839 / 0.04179 ultrasoft C, and 2.101065 / −2.165827
 against 2.10106 / −2.16581 on ultrasoft AlAs. The norm-conserving cases do not
 move at all, which is the structural check: the term corrected does not exist
 there.
+
+**Carbon is the fifth confirmation and it was not part of the diagnosis**, which
+is what makes it worth more than the four that were. It was at 0.0415594 before,
+2.3e-4 from `ph.x`, and the correction takes it to 0.041839, 4.9e-5 — a move of
+2.8e-4 **toward** the reference on a cell nothing about this work was tuned on.
+It also says the blind spot was not quite what the AlAs measurement made it look
+like: silicon's residue barely moves (2e-6) and carbon's moves by 2.8e-4, so a
+centrosymmetric cell *can* see this and carbon did, for eleven days, while its
+2.3e-4 was explained by an interpolation floor.
 
 **The refusal is gone and the sizing that stood behind it was wrong in the
 direction this file keeps being wrong in.** `AUGMENTATION-NEXT.md` ranked PAW

@@ -541,8 +541,10 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   case. (The NiBr2 helix runs, 2026-09-10/11.)
 - **A quantity symmetry forces to zero is a residue, and agreeing about a residue
   says nothing about the half symmetry deleted.** The Born charge against `ph.x` was
-  this project's tightest reference number for a year -- **8e-6** on ultrasoft silicon,
-  every printed digit on norm-conserving -- and silicon is centrosymmetric, so `Z*` is
+  one of this project's tightest reference numbers from the day it was written (P24b,
+  2026-09-02) to the day it was checked on another crystal (2026-09-16) -- **8e-6** on
+  ultrasoft silicon, every printed digit on norm-conserving -- and silicon is
+  centrosymmetric, so `Z*` is
   zero there by symmetry and what both codes print is the *symmetric* part alone, the
   sum-rule residue an incomplete basis leaves. The **antisymmetric** part is what a Born
   charge physically is, it had never been compared against anything, and it was wrong by
@@ -554,7 +556,12 @@ plausible wrong answer rather than an error. `PLAN.md` has the phase that found 
   quantity the validation cell allows to be nonzero** -- and silicon, carbon and every
   diamond-structure cell in `tests/data/qe` allow fewer than a reader assumes. It is the
   "a check whose null result cannot be told from a pass" trap one level out: the check
-  returned a number, the number was right, and it was right about the wrong half.
+  returned a number, the number was right, and it was right about the wrong half. **Its
+  sibling was in the same table**: ultrasoft *carbon* sat at 2.3e-4 where silicon sat at
+  8e-6, and that was explained by the radial interpolation floor, because the dielectric
+  constant's own error is the same order. The explanation fitted, so nobody looked again;
+  the correction moved carbon **2.8e-4 toward** `ph.x`. A residue can show a defect of
+  this kind and one of them was showing it the whole time.
   (`PLAN.md` P39a, 2026-09-16.)
 - **A sum of N terms that matches one measured total is one equation in N unknowns.** It is
   the most convincing wrong answer this project produces, because the agreement is real and

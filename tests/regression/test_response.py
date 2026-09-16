@@ -672,18 +672,21 @@ QE_TOTAL_ENERGY = -15.84452726
 #: ``dq = 0.01`` table where this code integrates it directly.
 EPSILON_TOLERANCE = 5e-4
 
-#: How far ``Z*`` may sit from ``ph.x``'s, per case. Silicon's two are at the
-#: printed digit; **carbon's is three times looser and for the same reason its
-#: dielectric constant is** -- 1.2e-4 there against silicon's 4.3e-5, the
-#: radial form factors' interpolation floor (``tests/tolerances.py``). ``Z*`` is
-#: a residue of ``4`` against ``3.958``, so that floor arrives amplified by the
-#: cancellation: 2.3e-4 on the residue is 6e-5 relative to the 4 it came from.
+#: How far ``Z*`` may sit from ``ph.x``'s, per case. Every case is inside 5e-5,
+#: which is what the assembly is worth once the wedge is completed (P39a).
+#:
+#: **Carbon's bound used to be three times looser and the reason given for it was
+#: wrong.** It sat at 2.3e-4, attributed to the radial form factors'
+#: interpolation floor arriving amplified through the residue of 4 against 3.958,
+#: because the dielectric constant's own 1.2e-4 is the same order. P39a's
+#: correction moved carbon 2.8e-4 *toward* ``ph.x``, to 4.9e-5: most of what the
+#: floor was blamed for was an incomplete wedge sum. The explanation fitted the
+#: number, which is why nobody looked again.
 BORN_TOLERANCE = {
     "si-epsilon": 1e-4, "si-epsilon-us": 1e-4, "si-epsilon-paw": 1e-4,
-    "c-epsilon": 3e-4,
-    # Measured 5e-6 and 1.7e-5 on the two atoms. Looser than silicon's because
-    # the quantity is a charge of 2 rather than a residue of 0.08, so the same
-    # radial-interpolation floor arrives at 25 times the size.
+    "c-epsilon": 1e-4,
+    # Measured 5e-6 and 1.7e-5 on the two atoms, on a quantity of size 2 rather
+    # than a residue of 0.08.
     "alas-epsilon-us": 1e-4,
 }
 

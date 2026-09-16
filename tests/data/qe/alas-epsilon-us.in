@@ -16,6 +16,13 @@
 ! `ecutrho` is 8 x `ecutwfc`: the augmentation charge is sharply peaked and is
 ! not representable on a dual-4 grid.
 !
+! **What it found, since a case's header should say that and not only what it was
+! written for**: the antisymmetric part was wrong by 1.4e-2 on a charge of 3.3,
+! because the term that carries it is quadratic in a per-k tangent and its wedge
+! sum had never been completed (`PLAN.md` P39a). PAW was refused for that same
+! error, measured on a wedge and read as a missing one-centre term, and that
+! refusal is gone.
+!
 ! The reference is regenerated with the vendored `ph.x` (`alas-epsilon-us.ph.in`)
 ! and committed as `reference.out.ph-alas-epsilon-us`.
  &control
