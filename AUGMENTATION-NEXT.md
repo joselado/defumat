@@ -351,7 +351,9 @@ which is exactly what `average_pp` cannot do for a PAW dataset.
 with the coupling off: **3.142e-10 meV**. The same run with `becsum` carried but not
 rotated with the density: **468.0 meV**, on a cell whose answer is exactly zero. What is
 not yet measured is a magnetocrystalline anisotropy on a fully-relativistic PAW dataset,
-which is the same code on an hours-long cell.
+and `PLAN.md` P97 names the two cells that were run for it and how each failed -- the
+committed tetragonal nickel diverged and a platinum dimer converged nonmagnetic. The next
+attempt wants a third cell rather than a third run of those two.
 
 ### 1k. The ultracell with an ultrasoft or PAW dataset
 

@@ -17414,12 +17414,27 @@ consistent. For a collinear first leg that is exact. For a noncollinear `soc_sca
 leg it means a canted state's canting does not survive the handoff, which is the same
 statement `nc_magnetization_from_lsda` has always made about the density.
 
-**What is outstanding.** The identity above is measured on a *scalar* PAW dataset with the
-coupling off, which is what tests the handoff and the rotation. A magnetocrystalline
-anisotropy with a fully-relativistic PAW dataset is the same code on the one cell that has
-one committed (`ni-tetragonal-relaxed-mae-paw.in`, at its own 75/480 Ry cutoffs), and that
-run is hours long on this machine; until it lands, no *number* for a PAW anisotropy is
-claimed here, only that the handoff it needs is in and measured.
+**What is outstanding, and the two cells that did not give it.** The identity above is
+measured on a *scalar* PAW dataset with the coupling off, which is what tests the handoff
+and the rotation and is blind to `qq_so`. A magnetocrystalline anisotropy on a
+fully-relativistic PAW dataset is the same code and has **no number yet**; two cells were
+run for it and each failed for its own reason, which is worth recording because the next
+attempt should start from a third.
+
+- `ni-tetragonal-relaxed-mae-paw.in`, the only committed fully-relativistic magnetic PAW
+  cell, at its own 75/480 Ry cutoffs with the k-grid cut to 2x2x2 and `conv_thr` at 1e-8:
+  the `soc_scale = 0` leg **diverged**, 200 iterations to an accuracy of 5.2e+02 Ry in
+  910 s. The cell's own header says it has never been run to convergence and wants an idle
+  machine; cutting its k-grid did not make it easier.
+- A platinum dimer in a 16 bohr box, `Pt.rel-pbe-n-kjpaw_psl.0.1.UPF`, chosen because a
+  dimer has a bond axis and therefore a real uniaxial anisotropy rather than a residue
+  symmetry forces to zero. It **converged nonmagnetic**: the moment came out at 4e-08
+  mu_B, and the handoff then refused, correctly, a source magnetization with no axis to
+  read. Platinum needs a longer bond or a lower-dimensional geometry to hold a moment in
+  PBE, and each attempt is half an hour here.
+
+So what is claimed is the handoff and the rotation, measured; what is not claimed is a PAW
+anisotropy energy.
 
 **2. The source-free field with a PAW dataset** (`AUGMENTATION-NEXT.md` 1f): refused for
 the projection rather than for a term, and the refusal moved to where its own docstring
