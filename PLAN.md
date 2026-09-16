@@ -16690,3 +16690,143 @@ against QE's Hellmann-Feynman + Pulay forces — a strong independent check on b
 DOS. They need: the velocity operator (D2), degeneracy-safe formulations (D4), and either
 sum-over-states or a Sternheimer solver. Nothing in P0–P8 should make them harder — which
 in practice means D1, D2, and D3 are respected as the earlier phases are written.
+
+
+### P94 -- Two checks P40 named and never ran, and a test that could not have failed. 📋 OPEN, three findings banked.
+
+`defumat/tddft/chi0.py` (reverted), `defumat/topology/kubo.py` (unchanged),
+`AUGMENTATION-NEXT.md`.
+
+**What this phase set out to do.** `AUGMENTATION-NEXT.md` ranked the sum-over-states
+`chi_0` on an ultrasoft dataset as the easiest refusal to lift, on the grounds that its
+missing object is `q^a_ij(q + G)`, which P93 had already written and validated. That
+ranking was wrong and the entry has been corrected: **P40 had built exactly that, body
+augmentation and head dipole together, and measured that it does not close.** What
+produced the wrong ranking was reading the raise at `chi0.py:301` without reading the
+docstring twelve lines above it, which is the "inherit a refusal only after checking which
+machine it belongs to" trap run backwards. The two things P40 left explicitly open are
+what this phase measured instead.
+
+**Finding 1 -- the two routes to `Q_ij(G)` disagree at `G != 0`, and P40's number is the
+one that moves.** P40 gathered `Q_ij(G)` from the dense table by Miller index; the route
+here is `topology/augmentation.py:augmentation_at_q`, radial Bessel transforms evaluated
+at `|G|` with the structure factor and the volume already in it, reached through
+`tddft/spinchi0.py:augmentation_factors`. The two were matched at `G = 0` by the `qq`
+identity and never anywhere else, which P40 said in as many words. On `si-us-nosym.in` at
+`nbnd = 60` and `ecut_response = 8`, in RPA against `screening = "hartree"`, the same
+comparison P40 used:
+
+===================  ==============  ==========
+route                 `eps_M(0)`      residual
+===================  ==============  ==========
+dense-table (P40)            55.5      -1.20
+`augmentation_at_q`        57.200      +0.540
+===================  ==============  ==========
+
+1.7 apart in the value and the residual changes sign. So the identity P40 could not check
+is now checked and it fails, and the dense-table gather is the half with no independent
+support at `G != 0`.
+
+**What was corrected is the body and only the body**, and every number below has to be
+read with that in front of it. The head of `chi_0` is built from
+`VelocityOperator.matrix_elements`, which is `<psi_m| dH/dk_a |psi_n>` and carries no
+`-e_n dS/dk_a`, and `adddvepsi_us`'s `dpqq` is not there either. Both are terms an
+ultrasoft head needs. The only reason to expect them small is P40's own measurement of
+them, **0.0015 on 55**, taken with P40's body rather than this one.
+
+**Finding 2 -- the residual's *trend* says the defect is not a constant, which one number
+could not.** P40 took a single band count on both datasets. Running the count out:
+
+=========  =========================  ==========================
+`nbnd`      norm-conserving control     ultrasoft
+=========  =========================  ==========================
+30          22.2776, **-0.0675**        56.9091, **+0.2497**
+45          --                          57.1371, **+0.4778**
+60          22.3322, **-0.0129**        57.1997, **+0.5403**
+80          --                          57.2534, **+0.5941**
+90          22.3429, **-0.0022**        out of reach: `npw = 169`
+=========  =========================  ==========================
+
+The control is **negative and falls by a factor of five per step**, -0.0675 to -0.0129 to
+-0.0022, which is what a truncated sum over empty states does; and its `nbnd = 60` entry
+reproduces P40's own recorded -0.0129 on 22.3 digit for digit, so the ultrasoft branch
+added here is inert on the norm-conserving path, which is the check that the edit is where
+it is meant to be.
+
+**The ultrasoft residual does the opposite, and what is proved is less than it looks.** It
+is positive at every count and it does not tend to zero: +0.2497, +0.4778, +0.5403,
++0.5941, with increments +0.228, +0.063, +0.054. The last increment is still positive and
+is barely smaller than the one before it, and 80 of the 169 available states is as far as
+this cell goes, so **it is not established that the sequence converges and no limit is
+claimed here.** What is established is the only thing needed: a truncated sum over empty
+states goes to zero, the control demonstrates that it does on this very cell, and this
+does not. So the disagreement is **not a truncation**, and it is not a missing
+normalisation either, since a constant factor would not be approached from below. At the
+largest count that runs it is +0.59 on 57.25, about 1 per cent, against P40's -2.1 at
+`nbnd = 60` -- opposite in sign and smaller. The high bands *adding* rather than
+subtracting is consistent with `<beta|psi_j>` keeping weight at high `G` where a pseudo
+pair density does not, which is where to look.
+
+**The code is reverted, as P40's was**, and for the same reason: the term is measured to
+misbehave rather than established. It is three lines -- `augmentation_factors` at `q = 0`,
+`state_projections`, and one `einsum` inside `_pair_terms` before `sqrt_coulomb` -- and it
+is reconstructible from this entry.
+
+**Finding 3 -- the Kubo-against-FHS test of the moving overlap could not have failed, and
+only the control says so.** `topology/kubo.py`, `response/conductivity.py` and
+`response/photocurrent.py` refuse an augmented dataset for one term, the off-diagonal
+`<psi_n| dS/dk_a |psi_m>`, which is written (`VelocityOperator.apply_s`) and which no
+norm-conserving validation can see because it vanishes identically there. The obvious
+discriminating test is `method='kubo'` against `method='fhs'` on an ultrasoft crystal,
+since FHS carries both this term and `q^a_ij(b)` correctly and is exact on any mesh. Run
+on zincblende AlAs, whose curvature is nonzero pointwise where a centrosymmetric crystal's
+is not, with the Kubo mesh shifted half a plaquette so that it samples the plaquette
+centres FHS reports at. **The two columns below are not a matched pair and the conclusion
+does not rest on comparing them.** `alas-raman.in` is norm-conserving LDA at
+`ecutwfc = 10` and `alas-us.in` the PBE ultrasoft `psl` pair at 25, so the functional and
+the cutoff move with the dataset and the two columns are two band structures. The
+norm-conserving column is here to show what the gap between the two *methods* is when the
+term under test is identically absent -- a scale to read the other column against, not a
+control:
+
+========  ========================  ========================
+mesh       norm-conserving max/L2    ultrasoft max/L2
+========  ========================  ========================
+6x6        0.354 / --                0.438 / 0.351
+12x12      0.148 / 0.116             0.201 / 0.122
+18x18      0.070 / 0.058             0.085 / 0.057
+24x24      0.063 / 0.044             --
+========  ========================  ========================
+
+The ultrasoft column tracks the control, which reads as agreement. **It is not.** Zeroing
+`dS/dk` in the Kubo velocity on the ultrasoft case moves `Omega` by **2.51 per cent** in
+the maximum and 2.05 per cent in L2 at 12x12 -- five times *less* than the 12 to 20 per
+cent gap between the two methods at that mesh, and still half the 4.4 to 6.3 per cent gap
+at 24x24. So the term the test exists to check is smaller than the test's own resolution
+at every mesh run, and deleting it entirely would leave the comparison looking exactly the
+same. This is `CLAUDE.md`'s "a check whose null result cannot be told from a pass", and it
+was visible only because the falsification control was written beside the test rather than
+after it: **ask what result would have falsified the thing being checked, and whether the
+instrument could have produced it.**
+
+**What a future attempt needs, and it is not a bigger mesh.** Pushing the
+method-to-method gap under 2.5 per cent would take about a 60x60 mesh, 3600 k-points each
+carrying a velocity operator, which is the wrong answer to the wrong question. The
+refusal's stated uncertainty is a **convention** -- `e_n` in both factors rather than
+`e_n` in one and `e_m` in the other, and the sign of `dS/dk` -- and that is a statement
+about `kubo_from_matrices`, which takes matrices and knows nothing about plane waves. It
+decomposes into two checks with no mesh floor at all:
+
+* **the convention, on a model.** `tests/unit/test_topology_curvature.py` already pins the
+  norm-conserving Kubo route against FHS to 4.8e-11 on the Haldane model. Give that model
+  a `k`-dependent overlap -- a non-orthogonal tight-binding basis, `S(k) = 1 + s cos(k.a)`
+  -- solve `H c = e S c` densely, hand `dH/dk`, `dS/dk` and `e` to `kubo_from_matrices`,
+  and compare against FHS built from `<n_k|S|m_k'>`. Exact on a fine mesh, seconds to run.
+* **the plane-wave operator, separately:** whether `VelocityOperator.apply_s` returns the
+  right off-diagonal `<n|dS/dk_a|m>`, which is a finite difference of `<n_k|S(k')|m_k>` in
+  `k'` at frozen states -- the same trick `band_velocities` is checked with.
+
+Each of those can fail on its own, which is exactly what the AlAs comparison could not do.
+Passing both is what lifts the three refusals. Until then they stay, and the reason on the
+record is "this comparison could not have told the difference" rather than "the two
+disagree".

@@ -109,10 +109,24 @@ trend: its numbers are at 60 bands on both datasets and there is a reason to exp
 ultrasoft sum to converge slower, since the augmentation term carries `<beta|psi_j>` and
 a localised projector keeps weight at high `G` where a pseudo pair density does not.
 
-**Size:** the two checks are an afternoon each and both return a number. Closing the
-2.1 per cent is a phase and nobody knows yet how large. **PAW stays refused whatever
-happens**, for `spinchi0`'s reason rather than this one: its exchange-correlation kernel
-has a one-centre part on the spheres that the grid does not carry.
+**Both checks were run, and P94 has them.** The two routes disagree at `G != 0`: 57.200
+against P40's 55.5 at the same `nbnd = 60`, with the residual at +0.540 against -1.20, so
+the identity P40 could not check fails and the dense-table gather is the half with no
+support. And the trend says what the single number could not: the norm-conserving control
+falls to zero like a truncation (-0.0675, -0.0129, -0.0022 at 30, 60 and 90 bands, the
+middle one reproducing P40's own digit for digit), while the ultrasoft residual is
+positive at every count and does not tend to zero (+0.2497, +0.4778, +0.5403, +0.5941 at
+30, 45, 60 and 80, where `npw = 169` caps the count). **No limit is claimed** -- the last
+increment is still positive -- but a truncation goes to zero and this does not, so the
+disagreement is neither a truncation nor a missing normalisation. At the largest count
+that runs it is about 1 per cent, opposite in sign to P40's -2.1 and smaller. Two
+qualifiers on that number: only the **body** was corrected, the head still being
+`<m|dH/dk|n>` with no `-e_n dS/dk` and no `dpqq`, and the code is reverted as P40's was.
+It is three lines.
+
+**Size:** closing it is a phase and nobody knows yet how large. **PAW stays refused
+whatever happens**, for `spinchi0`'s reason rather than this one: its exchange-correlation
+kernel has a one-centre part on the spheres that the grid does not carry.
 
 ### 1b. Born effective charges with a PAW dataset
 
@@ -254,6 +268,14 @@ norm-conserving dataset**. It is written -- `VelocityOperator.apply_s`, one `jvp
 checked is its convention, because no norm-conserving validation can see a term that
 vanishes.
 
+**The obvious test was run and it cannot discriminate** (P94). Kubo against FHS on
+ultrasoft AlAs agrees to 8.5 per cent at 18x18, beside 7.0 on a norm-conserving AlAs run
+(not a matched control -- the functional and the cutoff move with the dataset), which
+reads as a pass. But zeroing `dS/dk` moves `Omega` by only **2.5 per cent**, five times
+less than the gap between the two methods at 12x12 and half of it at 24x24, so the term
+is below the test's own resolution at every mesh and deleting it entirely would leave the
+comparison looking the same.
+
 - **The Kubo Berry curvature**, `topology/kubo.py:236`. `method='fhs'` is the default,
   carries both this term and `q^a_ij(b)` correctly, and is exact on any mesh, so nothing
   is unreachable.
@@ -272,17 +294,17 @@ dipole, `_ultrasoft_position`, which is `adddvepsi_us`: the position operator ac
 the augmentation charge. Whether a Kubo sum needs an analogue of it is the open question,
 and it is not settled by argument.
 
-**The measurement that settles it, and it is short.** `method='kubo'` against
-`method='fhs'` for the Chern number of the same ultrasoft cell. FHS is exact on any mesh
-and carries the augmentation correctly; Kubo converges spectrally to the same integer if
-and only if its velocity is the right one. The ultrasoft fixture exists
-(`tests/data/qe/si2-us.in`, used by `tests/regression/test_topology.py` for the `b -> 0`
-check that pins `q^a_ij(b)` against `qq`). If they agree, the Kubo refusal lifts with a
-number and the conductivity's lifts with it; if they do not, the refusal stays and the
-disagreement is the measurement. **Either outcome is a deliverable**, which is why this
-is the first thing to run.
+**What decides it is not a finer mesh.** The uncertainty is a *convention* -- `e_n` in
+both factors, and the sign of `dS/dk` -- which is a statement about `kubo_from_matrices`,
+a function that takes matrices and knows nothing about plane waves. So it splits into two
+checks with no mesh floor: the convention against FHS on a Haldane model given a
+`k`-dependent overlap `S(k)`, where `tests/unit/test_topology_curvature.py` already pins
+the norm-conserving case to 4.8e-11; and, separately, whether
+`VelocityOperator.apply_s` returns the right off-diagonal, by a finite difference of
+`<n_k|S(k')|m_k>` in `k'` at frozen states. Each can fail on its own, which the AlAs
+comparison could not.
 
-**Size:** the measurement is an afternoon. Lifting all three afterwards is a phase.
+**Size:** the two checks are about a day, and passing both lifts all three refusals.
 
 ---
 
@@ -348,14 +370,15 @@ phase.
 
 By what the first step costs, not by what the item is worth.
 
-1. **The Kubo-against-FHS measurement** (§2). An afternoon, and it returns a number
-   whichever way it goes. It decides three refusals at once.
-2. **The two checks P40 left open on `chi_0`** (§1a). Not the lift, which P40 measured
-   as not closing: the second route to `Q_ij(G)` at `G != 0`, and the `nbnd` trend of
-   the residual. Both return a number and neither writes new physics.
-3. **Site angular momenta on a relativistic augmented dataset** (§1i) and **the force
+The first two entries of this list were run in P94 and neither lifted a refusal; what
+they left is a sharper target and a warning about the instrument. What is left:
+
+1. **Site angular momenta on a relativistic augmented dataset** (§1i) and **the force
    theorem's PAW handoff** (§1j). Both are applying an object that exists in a place that
-   does not yet call it.
-4. **Born charges on PAW** (§1b). One named term, a measured 1.5e-3 gap, and a reference
+   does not yet call it, which is the only shape of work here that is not new physics.
+2. **Born charges on PAW** (§1b). One named term, a measured 1.5e-3 gap, and a reference
    routine to transcribe.
+3. **The `chi_0` gap** (§1a), now a band-converged 1.0 per cent rather than an unknown.
+4. **The moving overlap in a Kubo sum** (§2), whose first step is finding a system where
+   the term exceeds the mesh floor.
 5. Everything else, in whatever order the physics wants.

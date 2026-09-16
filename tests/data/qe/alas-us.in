@@ -1,0 +1,37 @@
+! AlAs, the same cell as `alas-raman.in`, with an ultrasoft dataset on both
+! species: the noncentrosymmetric ultrasoft crystal P94 measures the Kubo
+! curvature's moving-overlap term on. Zincblende, so nothing forces the Berry
+! curvature to vanish pointwise the way inversion does in silicon, and two
+! ultrasoft species, so `S` has a `k` in it.
+!
+! **It is not a matched control for `alas-raman.in` and must not be read as
+! one.** That file is `Al.pz-vbc` and `As.pz-bhs`, norm-conserving LDA at
+! `ecutwfc = 10`; these are the PBE ultrasoft `psl` pair and need 25 with a
+! dual of 8. So the two runs differ in the functional and the cutoff as well as
+! in the dataset, and the pair bounds the size of an effect rather than
+! isolating one. Every conclusion P94 draws from this cell rests on this column
+! alone -- how far `Omega` moves when `dS/dk` is zeroed, against how far the two
+! curvature methods are apart on the *same* run.
+!
+! The cell, positions, k-grid and `nosym`/`noinv` are `alas-raman.in`'s.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.575, nat = 2, ntyp = 2,
+    ecutwfc = 25.0, ecutrho = 200.0
+    nosym = .true.
+    noinv = .true.
+ /
+ &electrons
+    conv_thr = 1.0d-10
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Al  26.98  Al.pbe-n-rrkjus_psl.1.0.0.UPF
+ As  74.92  As.pbe-n-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS (alat)
+ Al 0.00 0.00 0.00
+ As 0.25 0.25 0.25
+K_POINTS (automatic)
+ 4 4 4 0 0 0
