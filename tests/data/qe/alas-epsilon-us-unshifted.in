@@ -1,0 +1,39 @@
+! AlAs with an ultrasoft dataset on both species: the Born charge of a **polar**
+! crystal, which is the one thing `si-epsilon-us.in` cannot measure.
+!
+! Silicon's `Z*` is zero by symmetry, so the -0.07945 both codes print there is a
+! basis-set residue and the 8e-6 agreement is between two codes' errors. AlAs is
+! zincblende, so `Z*` is a real charge of order 2 with opposite signs on the two
+! species, and `constraint_position_term` -- worth 0.55 on silicon, seven times
+! the answer it is added to -- is finally compared against something of its own
+! size.
+!
+! The cell, cutoffs and datasets are `alas-us.in`'s, whose bands are validated
+! against Elk along L-Gamma-X (0.062 eV rms on the valence manifold). Symmetry is
+! left on and the grid is shifted, both as in `si-epsilon-us.in`, so that the two
+! ultrasoft cases differ in the crystal alone.
+!
+! `ecutrho` is 8 x `ecutwfc`: the augmentation charge is sharply peaked and is
+! not representable on a dual-4 grid.
+!
+! The reference is regenerated with the vendored `ph.x` (`alas-epsilon-us.ph.in`)
+! and committed as `reference.out.ph-alas-epsilon-us`.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 2, celldm(1) = 10.575, nat = 2, ntyp = 2,
+    ecutwfc = 25.0, ecutrho = 200.0
+ /
+ &electrons
+    conv_thr = 1.0d-12
+    mixing_beta = 0.7
+ /
+ATOMIC_SPECIES
+ Al  26.98  Al.pbe-n-rrkjus_psl.1.0.0.UPF
+ As  74.92  As.pbe-n-rrkjus_psl.1.0.0.UPF
+ATOMIC_POSITIONS (alat)
+ Al 0.00 0.00 0.00
+ As 0.25 0.25 0.25
+K_POINTS (automatic)
+ 2 2 2 0 0 0

@@ -78,8 +78,11 @@ Against the vendored ``ph.x``:
 ===================  ==============  ==============  =========
 case                 here            ``ph.x``        difference
 ===================  ==============  ==============  =========
-norm-conserving Si   -0.0757150      -0.07571        every digit
-ultrasoft Si         -0.0794420      -0.07945        **8e-6**
+norm-conserving Si   -0.075715       -0.07571        every digit
+ultrasoft Si         -0.079440       -0.07945        1.0e-5
+PAW Si               -0.079601       -0.07961        9e-6
+ultrasoft AlAs (Al)  +2.101065       +2.10106        5e-6
+ultrasoft AlAs (As)  -2.165827       -2.16581        1.7e-5
 ===================  ==============  ==============  =========
 
 and the norm-conserving number agrees with the transcribed ``zstar_eu.f90``
@@ -88,11 +91,16 @@ beside it (:func:`~defumat.response.efield.born_charges_zstar_eu`) to
 module adds for an ultrasoft dataset has to switch itself off for a
 norm-conserving one, and that is the test that says it does.
 
-**PAW is refused by name** (:func:`require_born_charges`) and the measurement
-behind the refusal is in the docstring there: everything above gets it to
--0.078293 against ``ph.x``'s -0.07961, 1.3e-3, and what is left is QE's fifth
-stage -- ``int3_paw`` against ``becsumort``, the one-centre twin of
-:func:`constraint_position_term`.
+**Silicon is a residue and AlAs is a charge, and the difference is the reason
+the last two rows are there.** Diamond's two atoms are the same species, so
+``Z*(1) = Z*(2)`` and the whole of what both codes print is the *symmetric*
+part, the sum-rule violation left by an incomplete basis -- 4 against an
+electronic 4.076. The antisymmetric part, which is what a Born charge physically
+is, is zero by symmetry there and was therefore never compared against anything
+until AlAs was run. It was wrong, by 1.4e-2 on a charge of 3.3, for the whole
+time silicon was agreeing to 8e-6: see :func:`_full_zone_field_response`. PAW
+was refused for that same error, measured on a wedge and read as a missing
+one-centre term (``PLAN.md`` P39a); it is not one, and the refusal is gone.
 """
 
 from __future__ import annotations
@@ -105,65 +113,37 @@ from defumat.basis.interpolate import to_dense
 from defumat.batching import map_k
 from defumat.forces.energy import FrozenState, frozen_energy
 from defumat.scf.density import becsum as becsum_of, spinor_sum_band, sum_band
+from defumat.system.symmetry import cartesian_rotations
 
 __all__ = ["born_effective_charges", "require_born_charges"]
 
 
 def require_born_charges(calculation) -> None:
-    """PAW is refused, and the gap is one named term rather than a whole method.
+    """Nothing is refused here any more, and the name is kept because callers hold it.
 
-    Everything this module does works for a PAW dataset up to **1.3e-3**:
-    -0.078293 against the vendored ``ph.x``'s -0.07961, where the ultrasoft case
-    of the *same* assembly reaches 8e-6 and the norm-conserving one is exact.
-    The 1.3e-3 is QE's fifth stage, ``zstar_eu_us.f90``'s last block:
+    **PAW was refused until 2026-09-16 and the term it was refused for did not
+    exist.** The refusal quoted -0.078293 against ``ph.x``'s -0.07961, 1.3e-3,
+    and named ``zstar_eu_us.f90``'s one-centre stage -- ``int3_paw`` against
+    ``becsumort`` -- as what was missing. Two things say it was not:
 
-        zstareu0 -= int3_paw(ih,jh,na,is,jpol) * becsumort(ijh,na,is,mode)
+    * on a ``nosym`` grid, which has no wedge in it, PAW silicon reaches
+      ``ph.x`` to **8e-6** with nothing added, the same as ultrasoft;
+    * the 1.3e-3 was a wedge sum that had not been completed
+      (:func:`_full_zone_field_response`), and closing that leaves **-0.079601
+      against -0.07961, 9e-6**, on the same committed case the refusal was
+      measured on.
 
-    -- the one-centre twin of :func:`constraint_position_term`, pairing the
-    field's response of the one-centre coefficients (which
-    :func:`~defumat.response.sternheimer.paw_response` already produces) with
-    the displacement's orthogonality ``becsum``. It is the term that has no
-    counterpart in the plane-wave part, because the constraint
-    ``<psi|S|psi> = 1`` carries the whole of ``becsum``'s share of the energy for
-    an ultrasoft dataset and not for a PAW one, whose one-centre energy is a
-    second, independent function of ``becsum``.
-
-    **Two candidates were measured and both were rejected**, which is what makes
-    this a refusal with a shape rather than an open question (``PLAN.md`` P39a).
-    QE's fifth stage assembled directly from the objects P39 built --
-    ``paw_response`` along the field's ``dbecsum`` for ``int3_paw``,
-    :func:`~defumat.response.phonon.non_variational_response` for
-    ``becsumort`` -- comes to **0.004882**, where the gap to close is 0.001317:
-    3.7 times too large in either sign, so what is missing here is not that
-    term, and the reason is that the Lagrangian already carries it through the
-    multiplier tangent. And symmetrising the ``becsum`` response before it
-    enters the one-centre energy -- P36's "the value inside a nonlinear
-    functional must be the full-zone object", where the raw and symmetrised
-    field responses differ by **19 to 46 per cent** -- moves PAW the *wrong*
-    way, from 1.3e-3 to **2.8e-3**, while leaving the norm-conserving case
-    exact to every digit and the ultrasoft one at 1.0e-5. The raw chain-rule
-    tangent is the better one and ``symtensor`` really does complete it.
-
-    It is refused rather than returned because 1.3e-3 is sixteen times the last
-    digit ``ph.x`` prints, and because the sign of that term could not be settled
-    from the Fortran with confidence: ``compute_drhous`` builds its ``dbecsum``
-    without the one-half that the orthogonality correction
-    ``dpsi^ort = -1/2 sum_m psi_m <psi_m|dS/du|psi_n>`` carries, and
-    ``addusdbec`` accumulates one of the two cross terms rather than both, so the
-    factor is a product of two conventions rather than a derivation. Fitting it
-    to the reference would make this number a measurement of ``ph.x`` and not of
-    the code.
+    ``PLAN.md`` P39a's candidate 1 was therefore rejected for the right reason:
+    the one-centre term really is already carried through the multiplier
+    tangent, which is why assembling it separately came to 3.7 times the gap.
+    Its candidate 2 -- symmetrising the ``becsum`` response -- had the right
+    idea in the wrong place, and silicon could not tell: diamond's ``Z*`` is
+    zero by symmetry, so what both codes print there is the *symmetric*
+    sum-rule residue and the antisymmetric part, which is the physical charge
+    and the half that was wrong, does not exist on that crystal. A polar cell
+    was what it needed, and ``alas-epsilon-us.in`` is it.
     """
-    if calculation.is_paw:
-        raise NotImplementedError(
-            "Born effective charges with a PAW pseudopotential are not "
-            "implemented: zstar_eu_us.f90's one-centre stage (int3_paw against "
-            "becsumort) is missing, which leaves -0.078293 against ph.x's "
-            "-0.07961 -- 1.3e-3, sixteen times the last digit it prints. "
-            "Norm-conserving and ultrasoft datasets are implemented and match "
-            "ph.x to 8e-6. Pass born_charges=False for the dielectric tensor "
-            "alone, which *is* right for PAW"
-        )
+    return None
 
 
 def born_effective_charges(
@@ -205,13 +185,34 @@ def born_effective_charges(
         calculation, positions, psi, weights, density, becsum
     )
 
-    def energy(pos, states, multipliers):
+    # The three field responses, and the correction that makes each of them the
+    # **full-zone** object inside a term that is quadratic in a per-k tangent.
+    # See :func:`_full_zone_field_response`.
+    states_by_axis = [
+        jnp.zeros_like(psi).at[:, :, :nocc].set(dpsi[axis]) for axis in range(3)
+    ]
+    shifts, becsum_shifts = _full_zone_field_response(
+        calculation, positions, psi, weights, density_of, becsum_of_,
+        states_by_axis,
+    )
+
+    def energy(pos, states, multipliers, shift, becsum_shift):
+        def shifted_becsum(moved, s, occupations):
+            return tuple(
+                None if part is None else part + offset
+                for part, offset in zip(becsum_of_(moved, s, occupations),
+                                        becsum_shift)
+            )
+
         return frozen_energy(
             calculation, pos,
             FrozenState(
                 wavefunctions=states, weights=weights, eigenvalues=eigenvalues
             ),
-            density=density_of, becsum=becsum_of_, multipliers=multipliers,
+            density=lambda moved, s, occupations, parts: (
+                density_of(moved, s, occupations, parts) + shift
+            ),
+            becsum=shifted_becsum, multipliers=multipliers,
             # **Asked for deliberately, as the rule in :func:`reject_spinors`
             # requires.** ``spinors = False`` is the default precisely so that a
             # consumer which has never been validated in this regime cannot sail
@@ -234,14 +235,20 @@ def born_effective_charges(
     )(positions))
 
     charges = np.zeros((natoms, 3, 3))
+    unshifted = jnp.zeros_like(shifts[0])
+    no_becsum_shift = tuple(
+        None if offset is None else jnp.zeros_like(offset)
+        for offset in becsum_shifts[0]
+    )
     for axis in range(3):
-        states = jnp.zeros_like(psi).at[:, :, :nocc].set(dpsi[axis])
+        states = states_by_axis[axis]
         multipliers = _multiplier_response(
             solver, perturbations[axis], weights, psi.shape[2], nocc
         )
         _, column = jax.jvp(
-            gradient, (positions, psi, ground),
-            (jnp.zeros_like(positions), states, multipliers),
+            gradient, (positions, psi, ground, unshifted, no_becsum_shift),
+            (jnp.zeros_like(positions), states, multipliers, shifts[axis],
+             becsum_shifts[axis]),
         )
         charges[:, axis, :] = (
             frozen[axis]
@@ -254,6 +261,114 @@ def born_effective_charges(
     # ``symtensor``: a wedge sum is exact for a scalar and not for a rank-2
     # tensor the group carries between atoms.
     return calculation.symmetrize_atom_tensor(charges)
+
+
+def _full_zone_field_response(calculation, positions, psi, weights,
+                              density_of, becsum_of_, states_by_axis):
+    """``(3, nspin_mag, ...)``: what to add to the density's *tangent* so it is the crystal's.
+
+    The trap ``CLAUDE.md`` names as "a wedge sum completes only for a quantity
+    linear in a covariant per-k object", in the one place a Born charge is
+    quadratic in one. At frozen wavefunctions the density does not move with the
+    atoms at all for a norm-conserving dataset, and does move for an ultrasoft
+    or PAW one -- the augmentation charge ``Q_ij(r - tau) becsum`` is part of it
+    -- so the mixed derivative carries
+
+        int (drho/du_j) K (drho/dE_i)
+
+    which is a product of *two* per-k tangents and is present only when ``S``
+    moves with the atoms. A wedge sum of a product is not the product of the
+    full-zone objects, so ``symtensor`` on the assembled tensor cannot complete
+    it, and no amount of averaging afterwards repairs a factor that was already
+    contracted. The rule is P36's: **one** factor has to be the full-zone object
+    and the other stays the raw wedge sum, and then
+
+        (1/N) sum_S R R [ int X_i K Y_j ] = int X_i K Y^true_j
+
+    by changing variables in the integral and using ``X``'s own covariance. The
+    field response is the factor made full-zone here, the same choice
+    :mod:`~defumat.response.electrostriction` makes one order up, because it is
+    the one ``symdvscf``'s average is already written for
+    (:meth:`~defumat.scf.driver.Calculation.symmetrize_directional`) -- an
+    induced charge density is a **polar** vector field, not three scalars.
+
+    The correction is returned rather than applied so that the *value* of the
+    density is untouched and only the tangent moves: the shift enters
+    :func:`~defumat.forces.energy.frozen_energy` as an argument whose primal is
+    zero. **On a run with no symmetry it is exactly zero**, since
+    ``symmetrize_directional`` returns its argument there, which is what makes
+    the closed-grid and wedge routes a real check of each other rather than two
+    spellings of one.
+
+    Measured on ultrasoft AlAs, an unshifted 4x4x4 grid, against the same cell
+    run with ``nosym``: without this the wedge gives ``Z*(As) = -3.300047``
+    against -3.285854 on the closed grid, and ``ph.x`` reaches -3.28589 by
+    either route. Silicon cannot see it -- diamond's two atoms are the same
+    species, so ``Z*`` is *entirely* the symmetric sum-rule residue and the
+    antisymmetric part this gets wrong is zero by symmetry.
+    """
+    here = calculation.at_positions(positions)
+
+    def mixed(states):
+        parts = becsum_of_(here, states, weights)
+        return density_of(here, states, weights, parts), parts
+
+    tangents = [jax.jvp(mixed, (psi,), (states,))[1] for states in states_by_axis]
+    raw = jnp.stack([density for density, _ in tangents])
+    becsum_shifts = _full_zone_becsum_response(
+        calculation, [parts for _, parts in tangents]
+    )
+
+    # **The augmentation charge would otherwise be corrected twice.** The
+    # density is built *from* ``becsum``, so the shift handed to the one-centre
+    # energy travels into the density as well; what the density needs on top of
+    # it is only the rest of the average. ``augmented`` is linear in ``becsum``,
+    # so that path is one more tangent of the same builder.
+    parts_here = becsum_of_(here, psi, weights)
+    through_becsum = jnp.stack([
+        jax.jvp(lambda parts: density_of(here, psi, weights, parts),
+                (parts_here,), (offsets,))[1]
+        for offsets in becsum_shifts
+    ])
+    shift = calculation.symmetrize_directional(raw) - raw - through_becsum
+    return shift, becsum_shifts
+
+
+def _full_zone_becsum_response(calculation, per_axis):
+    """The same correction one level down, on ``becsum``, and **PAW needs it too**.
+
+    ``PAW_dusymmetrize`` (:meth:`~defumat.paw.symmetry.BecsumSymmetry.
+    apply_directional`). An ultrasoft dataset carries ``becsum``'s whole share of
+    the energy through the augmentation charge inside the density, so correcting
+    the density is enough for it and this returns zeros; a **PAW** dataset's
+    one-centre energy is a second, independent functional of ``becsum``, so the
+    mixed derivative has a term quadratic in ``dbecsum`` that the density
+    correction never reaches.
+
+    Measured on PAW silicon, an unshifted 4x4x4 grid, against the same cell run
+    with ``nosym``: the density correction alone leaves the wedge at -1.257257
+    where the closed grid gives -1.254979, and this closes it.
+    """
+    symmetry = calculation._becsum_symmetry
+    if symmetry is None or not per_axis or not per_axis[0]:
+        return [
+            tuple(None if part is None else jnp.zeros_like(part) for part in parts)
+            for parts in per_axis
+        ]
+    rotations = cartesian_rotations(calculation.system.cell, calculation.symmetries)
+    stacked = tuple(
+        None if per_axis[0][species] is None
+        else jnp.stack([per_axis[axis][species] for axis in range(3)])
+        for species in range(len(per_axis[0]))
+    )
+    symmetrised = symmetry.apply_directional(stacked, rotations)
+    return [
+        tuple(
+            None if values is None else values[axis] - per_axis[axis][species]
+            for species, values in enumerate(symmetrised)
+        )
+        for axis in range(3)
+    ]
 
 
 def _ground_state_multipliers(weights, eigenvalues, dtype):

@@ -50,10 +50,12 @@ constraint's multipliers get a matrix tangent; the fifth,
 ``add_for_charges``, is transcribed because it contains the position operator's
 occupied-occupied block, which is finite only in the combination it appears in.
 Against the vendored ``ph.x``: **-0.075715** norm-conserving (every digit of its
--0.07571) and **-0.079442** ultrasoft (8e-6 from its -0.07945). PAW is refused by
-name -- :func:`~defumat.response.born.require_born_charges` carries the
-measurement. ``zstar_eu.f90`` itself is transcribed beside it as the cross-check
-(:func:`born_charges_zstar_eu`), and the two agree to 1.3e-14 where both apply.
+-0.07571), **-0.079440** ultrasoft (1.0e-5 from its -0.07945) and **-0.079601**
+PAW (9e-6 from its -0.07961). On the polar crystal that makes ``Z*`` a charge
+rather than a residue, ultrasoft AlAs gives **2.101065 / -2.165827** against
+2.10106 / -2.16581. ``zstar_eu.f90`` itself is transcribed beside it as the
+cross-check (:func:`born_charges_zstar_eu`), and the two agree to 1.3e-14 where
+both apply.
 
 The tensor itself is ``dielec.f90``:
 
@@ -325,9 +327,8 @@ def dielectric_tensor(
     # ``3 (nk, npwx, nkb)``, which on an ultrasoft or PAW dataset is the larger
     # of the two by a factor ``nkb / (2 nocc nspin)``.
     #
-    # A PAW run reaches here only with ``born_charges=False``
-    # (:func:`~defumat.response.born.require_born_charges` refuses it), which
-    # is exactly the case where both were carried and never read.
+    # Both are read by every dataset now that PAW is no longer refused; what
+    # decides whether they are kept is the caller asking for ``Z*`` at all.
     keep_commutators = bool(born_charges or keep_internals)
     bare, commutators, projector_velocities = [], [], []
     for axis, direction in enumerate(np.eye(3)):

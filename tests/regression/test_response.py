@@ -641,17 +641,27 @@ QE_DIELECTRIC = {
     "si-epsilon-us": 14.325269631,
     "si-epsilon-paw": 14.320176984,
     "c-epsilon": 5.756181864,
+    "alas-epsilon-us": 9.520257751,
 }
-#: What the vendored ``ph.x`` prints for ``Z*``, per case. Silicon's is zero by
-#: symmetry in a converged calculation, so the number is a *residue* -- 4 against
-#: an electronic part near 4.076 -- which makes it a sharper check of the
-#: machinery than the dielectric constant. Carbon's has the opposite **sign**,
-#: on a different element at different cutoffs, so agreeing on both is not
-#: agreeing twice on the same arithmetic.
+#: What the vendored ``ph.x`` prints for ``Z*``, per case and **per atom**,
+#: read from its "without acoustic sum rule" block, which is the one this
+#: assembly corresponds to.
+#:
+#: **Every silicon and carbon entry is a residue rather than a charge**, and
+#: that is the reason ``alas-epsilon-us`` is here. In diamond the two atoms are
+#: the same species, so ``Z*(1) = Z*(2)`` and what both codes print is entirely
+#: the *symmetric* part -- the sum-rule violation an incomplete basis leaves, 4
+#: against an electronic 4.076. The antisymmetric part is what a Born charge
+#: physically is, it is zero by symmetry on those cells, and it went unchecked
+#: against anything until AlAs was run: zincblende puts two different species on
+#: the two sites, so ``Z*`` is a real charge near 2 with opposite signs. It was
+#: **wrong by 1.4e-2** while silicon was agreeing to 8e-6 (``PLAN.md`` P39a).
 QE_BORN = {
-    "si-epsilon": -0.07571,
-    "si-epsilon-us": -0.07945,
-    "c-epsilon": 0.04179,
+    "si-epsilon": (-0.07571, -0.07571),
+    "si-epsilon-us": (-0.07945, -0.07945),
+    "si-epsilon-paw": (-0.07961, -0.07961),
+    "c-epsilon": (0.04179, 0.04179),
+    "alas-epsilon-us": (2.10106, -2.16581),
 }
 QE_TOTAL_ENERGY = -15.84452726
 
@@ -668,7 +678,14 @@ EPSILON_TOLERANCE = 5e-4
 #: radial form factors' interpolation floor (``tests/tolerances.py``). ``Z*`` is
 #: a residue of ``4`` against ``3.958``, so that floor arrives amplified by the
 #: cancellation: 2.3e-4 on the residue is 6e-5 relative to the 4 it came from.
-BORN_TOLERANCE = {"si-epsilon": 1e-4, "si-epsilon-us": 1e-4, "c-epsilon": 3e-4}
+BORN_TOLERANCE = {
+    "si-epsilon": 1e-4, "si-epsilon-us": 1e-4, "si-epsilon-paw": 1e-4,
+    "c-epsilon": 3e-4,
+    # Measured 5e-6 and 1.7e-5 on the two atoms. Looser than silicon's because
+    # the quantity is a charge of 2 rather than a residue of 0.08, so the same
+    # radial-interpolation floor arrives at 25 times the size.
+    "alas-epsilon-us": 1e-4,
+}
 
 #: The tensor is cubic by symmetry and nothing here imposes that, so its
 #: departure from a scalar is round-off.
@@ -692,8 +709,7 @@ def _dielectric(case: str):
     response = dielectric_tensor(
         calculation, result.wavefunctions, result.eigenvalues, result.density,
         result.becsum,
-        # Born charges are norm-conserving and ultrasoft; PAW is refused.
-        born_charges=not calculation.is_paw,
+        born_charges=True,
         # The transcribed ``zstar_eu`` cross-check reads ``dpsi`` and the solver
         # back out of the same run rather than paying for a second one.
         keep_internals=True,
@@ -766,7 +782,9 @@ def test_the_born_charges_match_quantum_espresso(case):
     assert charges.shape == (2, 3, 3)
     for atom in range(2):
         diagonal = np.diag(charges[atom])
-        assert np.allclose(diagonal, QE_BORN[case], atol=BORN_TOLERANCE[case])
+        assert np.allclose(
+            diagonal, QE_BORN[case][atom], atol=BORN_TOLERANCE[case]
+        )
         off = charges[atom] - np.diag(diagonal)
         assert np.abs(off).max() < CUBIC_TOLERANCE
 
@@ -796,31 +814,39 @@ def test_the_mixed_derivative_reproduces_the_transcribed_zstar_eu():
     assert np.abs(transcribed - response.born_charges).max() < 1e-9
 
 
-def test_born_charges_are_refused_for_a_paw_dataset():
-    """The one dataset the mixed derivative does not finish, refused by name.
+@pytest.mark.slow
+def test_the_wedge_and_the_closed_grid_give_one_born_charge():
+    """The pair that catches a Born charge whose wedge has not been completed.
 
-    Everything in :mod:`defumat.response.born` gets PAW to **1.3e-3** --
-    -0.078293 against ``ph.x``'s -0.07961, where the ultrasoft case of the same
-    assembly reaches 8e-6 -- and what is left is QE's last stage, ``int3_paw``
-    against ``becsumort``: the one-centre twin of ``add_for_charges``, pairing
-    the field's response of the one-centre coefficients with the displacement's
-    orthogonality ``becsum``. 1.3e-3 is sixteen times the last digit ``ph.x``
-    prints, so it is refused rather than returned. The dielectric constant from
-    the *same* run is right to 3.4e-5 and is not refused.
+    Its neighbour below is the same construction on the dielectric constant, and
+    it could not have found this: ``eps`` is right to 3e-5 in every case here,
+    including the ones whose ``Z*`` was wrong by 1.4e-2. Two things have to
+    change for the check to bite. The crystal must be **polar**, so that ``Z*``
+    has an antisymmetric part -- on diamond the two atoms are one species and
+    the whole of ``Z*`` is the sum-rule residue, which was never wrong. And the
+    dataset must be **ultrasoft or PAW**, because at frozen wavefunctions the
+    density moves with the atoms only when ``S`` does, and that is what makes
+    the mixed derivative carry ``int (drho/du) K (drho/dE)`` -- a product of two
+    per-k tangents, where a wedge sum of a product is not the product of the
+    full-zone objects and no average applied afterwards can separate them again.
+
+    The sample is 2x2x2 and unshifted, which is closed under the point group, so
+    the same k-points can be run reduced with the response symmetrised or whole
+    with the symmetrisation switched off. It is a coarse sample on purpose: the
+    charges come out near 0.27 and -8.63 rather than near 2, so the agreement
+    below is absolute rather than a cancellation. Without
+    :func:`~defumat.response.born._full_zone_field_response` the wedge gives
+    -8.634862 where the closed grid gives -8.627197, so this fires at 7.7e-3 --
+    and the closed grid does not move at all, because the correction is
+    identically zero where there is no group to average over, which is what
+    keeps the pair a check rather than a tautology.
     """
-    from defumat.response.efield import dielectric_tensor
-    from defumat.scf import Calculation
+    reduced, wedge = _dielectric("alas-epsilon-us-unshifted")
+    whole, closed = _dielectric("alas-epsilon-us-unshifted-nosym")
 
-    system = build_system(read_pw_input(CASES / "si-epsilon-paw.in"))
-    pseudo_dir = Path(__file__).resolve().parents[1] / "data" / "pseudo"
-    pseudos = tuple(
-        read_upf(pseudo_dir / s.pseudo_file) for s in system.structure.species
-    )
-    calculation = Calculation(system, pseudos)
-    with pytest.raises(NotImplementedError, match="becsumort"):
-        dielectric_tensor(
-            calculation, None, np.zeros((1, 1, 1)), None, born_charges=True
-        )
+    assert reduced.total_energy == pytest.approx(whole.total_energy, abs=1e-9)
+    assert wedge.isotropic == pytest.approx(closed.isotropic, abs=1e-4)
+    assert np.abs(wedge.born_charges - closed.born_charges).max() < 1e-4
 
 
 @pytest.mark.slow
