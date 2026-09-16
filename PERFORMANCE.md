@@ -3140,6 +3140,88 @@ SCF in a fresh process would not.
 `nspin = 2`, ultrasoft/PAW, gamma-only storage, any cell above 16 atoms, memory
 (nothing came near the 4 GB scope cap), and the slow test suite.
 
+## Where the CPU gap against `pw.x` actually is, and the subspace ladder (2026-09-16)
+
+**The eigensolver is 83 per cent of the SCF on a sixteen-atom cell, and what is
+expensive inside it was the subspace algebra rather than `h_psi`.** Backlog item
+2 is implemented and the rest of this section is the diagnosis that chose it.
+
+The reference is `pw.x` 7.5 built in the vendored tree on this machine and linked
+against **OpenBLAS and FFTW3** (`ldd`, recorded because the 2026-09-12 entry
+above found a netlib `pw.x` flattering this code by 2.0x). Both codes one core,
+both from the same input at `conv_thr = 1e-10`.
+
+| `si16-1k-ecut30`, 16 atoms, 32 bands, 5900 PWs | QE 7.5 | defumat, before | after |
+|---|---|---|---|
+| whole SCF | 3.47 s | 6.499 s | **5.736 s** |
+| SCF iterations | 12 | 9 | 9 |
+| per SCF iteration | 0.289 s | 0.722 s (2.5x) | **0.637 s (2.2x)** |
+| eigensolver share | 80% (`cegterg`) | 85% | 83% |
+| one eigensolver call | 212 ms | 561 ms | **461 ms** |
+
+`si8-1k-ecut30`: 1.135 s to **1.017 s**, against QE's 0.63 s over 9 iterations,
+so 2.3x per iteration becomes 2.1x. Both cells give **the same total energy and
+the same eigenvalues to the last bit** either way.
+
+**`h_psi` is close to parity and was never the gap.** QE's own report splits its
+`cegterg` for us: `h_psi` 2.38 s over 48 calls, `vloc_psi` 2.01 s (84 per cent of
+it), `fftw` 2.00 s over 2834 calls. Subtracting `sum_band`'s 13 x 32 transforms
+leaves 2418 over 48 calls at two a band, so **`cegterg`'s average block was 25.2
+bands of 32** -- that is `notcnv` narrowing, which is backlog item 3 and is worth
+1.27x on `h_psi` here. Per band, `h_psi` is **1.97 ms in QE against 2.54 ms here
+on `si16` and 1.015 against 1.067 on `si8`**, so 1.29x and 1.05x.
+
+**No library is the problem, and each of the three was checked at the shape it is
+used at rather than on a convenient one.** One core throughout:
+
+| | ours | the alternative | |
+|---|---|---|---|
+| the 2D `xy` pass, `(72, 36, 36)` | XLA **0.51 ms** | MKL DFT 1.44, pocketfft 1.56 | XLA is 2.8x MKL |
+| complex128 GEMM, `(32,128)x(128,5900)` | XLA **8.28 ms**, 23.3 GFLOP/s | numpy 8.58, `zgemm` 12.14 | parity |
+| the subspace solve, 128x128 | **4.97 ms** | LAPACK `zhegv` 4.68 | 1.06x |
+
+The 2026-08 entry that rejected a faster FFT library rejected it on a full-box
+measurement; this is the same conclusion at `vloc_psi`'s own shapes, which is the
+measurement that was missing.
+
+**The ladder.** `cegterg` sizes `cdiaghg` and its ZGEMMs by `nbase`; static shapes
+made all of that `nvecx = 4 nbnd` here, so on a cell converging in two or three
+steps most of every product was over exact zeros. The widths are now multiples of
+`nbnd` chosen by a `lax.switch`, taken only where there is no batch axis --
+`lax.switch` under `vmap` evaluates every branch. Ablated on `si16` at a forced
+three steps, `h_psi` replaced by the identity to weigh the rest:
+
+| | total | `h_psi` | everything else |
+|---|---|---|---|
+| at `nvecx` | 629.79 ms | 483.53 ms | 146.26 ms |
+| at the live width | **535.90 ms** | 451.86 ms | **84.04 ms** |
+
+**1.74x on the algebra**, which is the item as written.
+
+**Two traps this measurement produced, both of which gave a confident wrong
+number first.**
+
+- **An unjitted `h_psi` is not the one the Davidson runs.** Called directly it
+  reads **125.70 ms** on `si16` where the same call inside a `jit` reads
+  **81.38 ms**, 1.54x, because the surrounding operations dispatch and
+  materialise separately. The first diagnosis of this gap was written on the
+  unjitted number and put the whole 2.2x in the transform, which is wrong.
+- **Two arms in one process measure one executable.** Comparing the ladder on
+  and off inside a single run gave **1.00x** on both cells, and the reason is
+  that the SCF traces the solver once: the second arm reused the first arm's
+  compiled program, and a spy confirmed the flag never reached a retrace. In
+  separate processes the same comparison is 1.12x and 1.13x. Any A/B on a static
+  argument needs a process each, or `jax.clear_caches()` between them.
+
+**What is left, sized.** `h_psi` inside the loop costs **113 ms a call against
+79 ms standalone**, 1.43x, on identical shapes -- the subspace buffers are
+12 MB each and live across it, where QE's `vloc_psi_k` works a band at a time in
+one `psic`. That 1.43x, and the 1.27x of backlog item 3, are what stands between
+2.2x and parity on this cell. Item 3 is **not** bundled here: a `lax.switch` over
+`notcnv` puts a copy of `h_psi` in the executable per rung, which is the
+duplication `davidson_eigensolver_all`'s docstring already sizes at 5.8 GiB on a
+157-atom slab, so it needs `notcnv` measured per step before it is written.
+
 ## Optimisation backlog
 
 Ordered by expected gain per unit of effort, and by measurement rather than
@@ -3156,13 +3238,12 @@ then it is a place to look, not a claim.
    independent and are currently run through a single pool. This is where the
    remaining structural factor is, and the k-axis already leads every
    wavefunction-shaped array so that it can be taken.
-2. **Size the Davidson subspace solve by the live basis**, and the two Ritz
-   rotations with it (`cegterg`'s `nbase`, lost here to static shapes). Measured
-   at about 7% of a Davidson step on `si16-1k-ecut30` and aimed at ~80% of one
-   on the 64-atom cell, where the device stage timings are `h_psi` 0.012 s
-   against Davidson 0.640 s. **Unbatched path only** — `lax.switch` runs every
-   branch under `vmap`, exactly as `lax.cond` does — which is where the large
-   single-k cells are anyway. See "Inside a Davidson step".
+2. *(done, 2026-09-16)* **Size the Davidson subspace solve by the live basis**,
+   and the two Ritz rotations and the projection update with it (`cegterg`'s
+   `nbase`). A `lax.switch` over a ladder of multiples of `nbnd`, on the
+   unbatched path only. **1.74x on the algebra of a forced three-step solve and
+   1.12-1.13x on the whole SCF**, bit-identical energies and eigenvalues. See
+   "Where the CPU gap against `pw.x` actually is".
 3. **Expand by `notcnv` rather than by `nbnd`.** In the seeded regime the SCF
    runs, the live roots fall 20 -> 13 -> 10 -> 0 over four steps at
    `ethr = 1e-13`, and `h_psi` is exactly linear in the block's width on a CPU —
