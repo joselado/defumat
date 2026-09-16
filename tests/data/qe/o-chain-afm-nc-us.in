@@ -1,0 +1,42 @@
+! o-chain-afm-us.in with both moments turned into the xy plane and computed by
+! the noncollinear path instead of the collinear one. Same cell, same atoms,
+! same k-grid, same antiferromagnetic state: without spin-orbit coupling the
+! energy cannot know which axis the moments lie on, so the two totals are one
+! number computed by two of this code's SCF paths.
+!
+! **It is a control, and it exists because an identity that closes is not
+! evidence.** P95 validates an augmented spin spiral at q = b3/2 against
+! o-chain-afm-us.in, and the residue that identity left was explained as a
+! G-sphere truncation the spiral causes. Running this pair -- the same doubled
+! cell with no spiral anywhere in it -- showed the residue is twice the spiral's
+! at every cutoff, the factor a doubled cell's energy is divided by, so the
+! identity was measuring the gap between these two paths and the spiral was
+! along for the ride.
+!
+! pw.x has both paths too, and reproduces the gap: see OPEN.md Y4.
+ &control
+    calculation = 'scf'
+ /
+ &system
+    ibrav = 6, celldm(1) = 12.0, celldm(3) = 0.86666666666667,
+    nat = 2, ntyp = 2,
+    ecutwfc = 25.0, ecutrho = 200.0,
+    occupations = 'smearing', smearing = 'gaussian', degauss = 0.10
+    noncolin = .true.
+    nosym = .true.
+    starting_magnetization(1) = 0.6, angle1(1) = 90.0, angle2(1) =   0.0
+    starting_magnetization(2) = 0.6, angle1(2) = 90.0, angle2(2) = 180.0
+    nbnd = 40
+ /
+ &electrons
+    mixing_beta = 0.3
+    conv_thr = 1.0d-10
+ /
+ATOMIC_SPECIES
+ O1  16.0  O.pz-rrkjus.UPF
+ O2  16.0  O.pz-rrkjus.UPF
+ATOMIC_POSITIONS (crystal)
+ O1 0.0 0.0 0.0
+ O2 0.0 0.0 0.5
+K_POINTS {automatic}
+ 1 1 2 0 0 0

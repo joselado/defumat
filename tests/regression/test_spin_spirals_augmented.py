@@ -60,6 +60,7 @@ from pathlib import Path
 
 import pytest
 
+from defumat.io import read_qe_output
 from defumat.io.pwin import parse_pw_input
 from defumat.pseudo import read_upf
 from defumat.scf import run_scf
@@ -76,14 +77,32 @@ pytestmark = [pytest.mark.regression, pytest.mark.slow]
 #: does.
 #:
 #: **Set from one dataset on one cell**, with a factor of six of headroom over
-#: the largest measured residue. If PAW's 3.26e-07 is ever traced to a term --
-#: ``OPEN.md`` Y4 is the thread -- this wants revisiting downwards rather than
-#: leaving as the number that happened to pass.
+#: the largest measured residue. PAW's floor has since been traced as far as it
+#: goes and it is not a defect here: ``pw.x`` run on the same control cells has
+#: the same collinear/noncollinear gap to four digits (``OPEN.md`` Y4), so this
+#: tolerance is a property of the PAW method at this cutoff rather than a
+#: number waiting on a fix.
 CONSISTENCY_RY = 2.0e-06
 
 #: What the displaced table is worth. Anything above this and the transverse
 #: augmentation charge is simply absent; the measured value is 1.15e-03.
 WITHOUT_THE_DISPLACEMENT_RY = 1.0e-04
+
+
+#: What each control cell may differ from its ``pw.x`` reference by. The
+#: reference is QE's stdout, which prints the total energy to eight decimals,
+#: so 1e-08 Ry is the number's own resolution and nothing tighter can be
+#: asserted against it. Measured: 1.0e-09, 2.2e-09, 5.2e-09 and 8.3e-09 Ry on
+#: the four cells.
+REFERENCE_RY = 3.0e-08
+
+#: What this code's collinear/noncollinear gap may differ from ``pw.x``'s by.
+#: Looser than :data:`REFERENCE_RY` for a bookkeeping reason rather than a
+#: physical one: the reference gap is a difference of two eight-decimal
+#: numbers, so it carries 1e-08 before anything in either code moves.
+#: Measured: 3.2e-09 for ultrasoft and 1.4e-08 for PAW, against gaps of
+#: 7.03e-07 and 8.51e-05.
+GAP_RY = 4.0e-08
 
 
 def _pseudos(system, pseudo_dir: Path):
@@ -256,6 +275,55 @@ def test_half_a_reciprocal_vector_is_the_antiferromagnet(pseudo_dir):
     assert _electronic(spiral) == pytest.approx(
         _electronic(doubled) / 2.0, abs=CONSISTENCY_RY
     )
+
+
+@pytest.mark.parametrize("dataset", ["us", "paw"])
+def test_the_two_paths_disagree_by_what_pw_x_disagrees_by(dataset, pseudo_dir):
+    """The collinear/noncollinear gap is the reference's gap, not this code's.
+
+    The same doubled cell in the same antiferromagnetic state, run once as
+    ``nspin = 2`` and once as ``noncolin`` with both moments turned into the
+    plane. There is no spin-orbit coupling, so the energy cannot know which
+    axis the moments lie on and the two totals are one number computed by two
+    of this code's SCF paths. They do not agree: at ``ecutrho = 200`` the
+    ultrasoft pair sit 7.03e-07 Ry apart and the PAW pair 8.51e-05, and PAW's
+    is the floor :data:`CONSISTENCY_RY` is set by.
+
+    **``pw.x`` has both paths too, and it has the same gaps** -- 7.03e-07 and
+    8.510e-05 on the same inputs -- so what this measures is a property of the
+    method both codes implement rather than a defect here. That is the whole
+    point of the test: an assertion that the two paths *agree* would fail, and
+    an assertion about this code alone could not tell a shared convention from
+    a transcription error. Each path is therefore pinned to its own ``pw.x``
+    reference, and the two gaps are compared with each other.
+
+    ``OPEN.md`` Y4 has the cutoff ladder, where PAW flattens at 2.65e-06 Ry
+    while ultrasoft falls to round-off -- in both codes.
+    """
+    collinear_system, collinear = _run(
+        (GENERATED / f"o-chain-afm-{dataset}.in").read_text(), pseudo_dir
+    )
+    noncollinear_system, noncollinear = _run(
+        (GENERATED / f"o-chain-afm-nc-{dataset}.in").read_text(), pseudo_dir
+    )
+    assert collinear.converged and noncollinear.converged
+    assert collinear_system.nspin == 2 and noncollinear_system.nspin == 4
+
+    reference = {
+        name: read_qe_output(GENERATED / f"reference.out.{name}").total_energy
+        for name in (f"o-chain-afm-{dataset}", f"o-chain-afm-nc-{dataset}")
+    }
+    assert collinear.total_energy == pytest.approx(
+        reference[f"o-chain-afm-{dataset}"], abs=REFERENCE_RY
+    )
+    assert noncollinear.total_energy == pytest.approx(
+        reference[f"o-chain-afm-nc-{dataset}"], abs=REFERENCE_RY
+    )
+
+    gap = collinear.total_energy - noncollinear.total_energy
+    reference_gap = (reference[f"o-chain-afm-{dataset}"]
+                     - reference[f"o-chain-afm-nc-{dataset}"])
+    assert gap == pytest.approx(reference_gap, abs=GAP_RY)
 
 
 def test_a_scan_moves_the_displaced_table_with_q(pseudo_dir):

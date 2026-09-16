@@ -176,7 +176,7 @@ responses are unaffected and are validated. **Size:** a phase.
 
 ### 1e. A spin spiral with an ultrasoft or PAW dataset. ✅ DONE for the ground state.
 
-**Closed 2026-09-16.** `PLAN.md` P89 has the numbers. What is left of this entry is
+**Closed 2026-09-16.** `PLAN.md` P95 has the numbers. What is left of this entry is
 `dE/dq`, which is item 1e' below.
 
 **What the entry said was missing, and what it actually was.** It said the augmentation

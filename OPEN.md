@@ -1928,7 +1928,7 @@ visible. `OPEN.md` Part VI item 2 (`diago_david_ndim = 2` at the minimum subspac
 `davidson-empty-ethr-defect` item are the two neighbouring candidates, and neither has been
 run against a gapped spinor PAW cell.
 
-### Y4. PAW's collinear and noncollinear paths do not converge onto each other, and it is not a threshold **[opened 2026-09-16, while validating P95]**
+### Y4. PAW's collinear and noncollinear paths do not converge onto each other, and neither do `pw.x`'s **[opened 2026-09-16, closed the same day: the gap is the reference's, reproduced to four digits]**
 
 **The same cell, the same physics, twice.** An oxygen chain in a cell doubled along `z`
 with the two moments antiparallel, run once as `nspin = 2` and once as `noncolin` with
@@ -1972,12 +1972,52 @@ That leaves the one-centre XC or Hartree on the spheres, or a difference in how 
 is symmetrised or spin-transformed between the two paths -- which is the only machinery
 the collinear and noncollinear routes do not share bit for bit.
 
-**The first thing to run**, before any of that, is `pw.x` on both inputs: QE has both
-paths too, so if its collinear and noncollinear PAW totals agree on this cell to better
-than 2.6e-06 the gap is this code's, and if they do not it is the shared convention.
-Nothing here has been compared against `pw.x` yet, and until it has **the direction of
-the error is unknown** -- this is recorded as a disagreement between two of this code's
-paths and not as a defect in either.
+**That was the first thing to run, and running it settles the direction.** `pw.x` has
+both paths too, so the same four cells went through it, single core, same inputs, with
+the totals read out of QE's own XML rather than off its eight-decimal stdout:
+
+| `ecutrho` | 200 | 400 |
+|---|---|---|
+| ultrasoft, this code | 7.03e-07 | 6.11e-13 |
+| ultrasoft, `pw.x` | **7.0339e-07** | **1.64e-11** |
+| PAW, this code | 8.510e-05 | 2.6466e-06 |
+| PAW, `pw.x` | **8.5102e-05** | **2.6469e-06** |
+
+**QE has the same gap, to four digits, on both datasets and at both cutoffs**, including
+the flattening: its PAW pair stops falling at 2.6469e-06 where its ultrasoft pair reaches
+1.6e-11. So this is a property of the PAW method both codes implement and not a defect
+introduced here, which is what the entry above could not tell apart.
+
+**And each path separately reproduces its own reference**, which is the part that
+excludes the coincidence of two different errors leaving the same difference: on the
+committed `ecutrho = 200` cells this code sits **1.0e-09, 2.2e-09, 5.2e-09 and 8.3e-09
+Ry** from `pw.x` for collinear ultrasoft, noncollinear ultrasoft, collinear PAW and
+noncollinear PAW -- at or below the 1e-08 the reference is printed to. A gap that agreed
+by accident would need both members to be wrong and wrong by the same amount.
+
+**What it does not say.** It does not say 2.65e-06 Ry is right. Without spin-orbit
+coupling the energy cannot depend on which axis the moments lie on, so the two paths
+*should* give one number, and at `ecutrho = 400` they do not -- in either code. What is
+settled is where to look for it, and it is not in this repository's transcription: the
+one-centre machinery here follows `paw_onecenter.f90`, and a faithful transcription is
+exactly what reproduces a shared convention's residue to four digits. Chasing it further
+is a question about the PAW noncollinear one-centre treatment itself, which is outside
+what this project validates against.
+
+**The pair is committed rather than left as a session's scratch**, so nobody re-runs
+`pw.x` for it: `tests/data/qe/o-chain-afm-nc-us.in` and `o-chain-afm-nc-paw.in` beside
+the collinear pair that was already there, with all four references, and
+`tests/regression/test_spin_spirals_augmented.py::test_the_two_paths_disagree_by_what_pw_x_disagrees_by`
+pinning each path to its own reference **and** the two gaps to each other. The test
+asserts the disagreement rather than agreement: an assertion that the two paths agree
+would fail, and one about this code alone could not have told a shared convention from a
+transcription error.
+
+**What it changes upstream.** P95's `CONSISTENCY_RY = 2.0e-06` was set by PAW's 3.26e-07
+on the quarter turn, with a note saying it wants revisiting downwards if that number is
+ever traced to a term. It has now been traced as far as it goes: the floor is the
+method's, shared with `pw.x`, so the tolerance is a property of the physics at that
+cutoff rather than a number waiting on a fix.
 
 ## X. Downgraded, and test-suite hygiene
 

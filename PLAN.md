@@ -17149,9 +17149,11 @@ refusal's message rather than from the code around it.
 **PAW sits two orders above ultrasoft on the quarter turn -- 3.26e-07 against 1.65e-09 --
 and the control says where to look.** PAW's collinear and noncollinear paths do not
 converge onto each other the way ultrasoft's do: the control above **flattens at
-2.65e-06 Ry** where ultrasoft's reaches 6.1e-13. That is a gap in the existing code, on
-physics with no spiral anywhere in it, and this phase only surfaced it -- `OPEN.md` has
-it as an item of its own. The quarter turn is noncollinear on both sides so that gap does
+2.65e-06 Ry** where ultrasoft's reaches 6.1e-13. That is not a gap in this code: `pw.x` run on the
+same four control cells has the same numbers -- 7.0339e-07 and 1.64e-11 for ultrasoft,
+**8.5102e-05 and 2.6469e-06 for PAW** -- and each of this code's four paths sits within
+1e-08 Ry of its own reference, so what the control measures is a property of the PAW
+method both codes implement (`OPEN.md` Y4, closed the same day it was opened). The quarter turn is noncollinear on both sides so that gap does
 not enter it directly, and 3.26e-07 is not attributed here to any cause: what is excluded
 is a missing phase (the off-origin number, 1.4e-11) and convergence, and what is *not*
 excluded is PAW's one-centre path, which is the one piece of machinery showing an
