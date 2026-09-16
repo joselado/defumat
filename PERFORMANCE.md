@@ -3243,11 +3243,36 @@ allocates `zeros_like(psi)`, `expansion`'s elementwise chain and the two
 rather than another ablation.
 
 `h_psi` itself is **1.24x** QE per band (2.45 ms against 1.97) and is not where
-the remaining factor is. Backlog item 3 is worth 1.27x on it and is **not**
-bundled here: a `lax.switch` over `notcnv` puts a copy of `h_psi` in the
-executable per rung, which is the duplication `davidson_eigensolver_all`'s
-docstring already sizes at 5.8 GiB on a 157-atom slab, so it needs `notcnv`
-measured per step before it is written.
+the remaining factor is.
+
+**Backlog item 3 is worth nothing on this cell, which is the measurement it was
+waiting for.** The live-root count after each step, reconstructed by capping the
+loop at `m` steps and reading the solver's own exit `notcnv`, is **0 after every
+step when seeded** -- the regime the SCF runs in, where the solve converges in
+one step and every root settles together -- and **32 of 32 after every step from
+a cold start**, at `ethr` 1e-6, 1e-10 and 1e-13 alike. There is no intermediate
+value to narrow to, so a `lax.switch` on `notcnv` would select the full width
+every time and buy the ladder's cost for nothing. This does **not** carry to
+every cell: `si10-nc`'s seven k-points fall 20 to 13 to 10 to 0 over four steps
+("Inside a Davidson step"), so the quantity is cell-dependent and the item is
+suspended rather than closed.
+
+**It also does not explain QE's 25.2 bands of 32**, and the two measurements are
+not in contradiction: that average is over a whole 13-iteration run with QE's
+own `ethr` schedule and its `btype`, while this probe is at one converged
+density. The 25.2 is `pw.x`'s observed block width, not a saving measured for
+this code, and nothing here has established what item 3 would be worth in the
+regime that produced it.
+
+**The structural difference to `cegterg` is the rotation's output width, not
+`h_psi`'s.** `cegterg.f90:353-395` forms only the `notcnv` correction vectors a
+step -- two ZGEMMs of width `notcnv` straight into `psi(1,nb1)` -- and rotates
+to the full `nbnd` Ritz vectors only at the refresh (`:576-581`). `solve` here
+returns `evc` and `hevc` at `nbnd` **every step**, because `expansion` is built
+from them. Where `notcnv` is genuinely smaller than `nbnd` that is the whole
+difference, and it is a change to what the loop carries rather than a ladder on
+top of what it already does. Nothing above prices it, for the reason the
+paragraph before this one gives.
 
 ## Optimisation backlog
 
