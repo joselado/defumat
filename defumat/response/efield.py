@@ -923,12 +923,12 @@ def require_a_measured_spinor_response(calculation) -> None:
     7.7e-6), but every cell it used was ``H.pz-vbc`` or ``Si.pz-vbc``, so no
     Sternheimer solve had touched a fully relativistic dataset until the same
     check was run here (2026-09-16, ``scratchpad/iodine_chi0.py``): four
-    amplitude patterns, along the moment and across it, four steps each. The two
-    probes that commute with the ground state along its own axis -- a charge
-    probe and a field along the moment -- are flat in the step at **6.81e-7** and
-    **1.06e-6**, which is the CG threshold, and every probe with a transverse
-    component falls as ``h^2`` (1.69e-4, 4.43e-5, 1.36e-5, 7.5e-6), with all four
-    density channels live rather than null.
+    amplitude patterns, along the moment and across it, four steps each. Two of
+    them -- a charge probe and a field along the moment -- are flat in the step at
+    **6.81e-7** and **1.06e-6**, so what is left in those is the solve's own
+    threshold rather than the difference's truncation, and every probe with a
+    transverse component falls as ``h^2`` (1.69e-4, 4.43e-5, 1.36e-5, 7.5e-6),
+    with all four density channels live rather than null.
 
     So what is in question is above ``chi_0``, and it is three things rather than
     the kernel alone: the kernel itself, where ``dmxc_nc``'s ``dz = 1e-6``
@@ -945,7 +945,12 @@ def require_a_measured_spinor_response(calculation) -> None:
             "dmxc_nc has that a jvp of v_of_rho does not -- the clamped zeta "
             "derivative, the |zeta| > 1 zeroing, the |m| <= 1e-10 rule -- was "
             "measured on that cell and fires at zero of 157464 grid points, so "
-            "the disagreement is not a convention at an edge and is unlocated. "
+            "the disagreement is not a convention at an edge. The bare response "
+            "underneath is not the fault either: on the same cell chi_0 under a "
+            "potential probe, which carries no kernel and no field at all, "
+            "reproduces a central difference of the density to 6.8e-7, so what "
+            "is unlocated sits above chi_0 -- the kernel, the field's own source "
+            "term, or ph.x. "
             "A spinor with **no** magnetization (nspin_mag = 1, a filled-shell "
             "spin-orbit insulator) is implemented and matches ph.x to 4.3e-5"
         )

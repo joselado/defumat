@@ -485,8 +485,16 @@ RELATIVISTIC_STEP = 1.0e-4
 
 #: What the two step-independent probes measure on that cell: 6.81e-7 for the
 #: charge one and 1.06e-6 for the field along the moment, unchanged across a
-#: factor of eight in the step. The bound is a few times that, and it is the
-#: CG threshold rather than the difference's truncation.
+#: factor of eight in the step -- so what is left in them is the solve's own
+#: threshold and not the difference's truncation.
+#:
+#: **The bound is 5x the larger of those two and it is deliberately tight**,
+#: because a floor is the one thing a bound can be set against honestly: there
+#: is no step to blame. What would move it is the solve's threshold or the
+#: reference's Davidson tolerance, neither of which is loosened without a
+#: reason -- and if one is, this failing is the correct outcome rather than a
+#: brittle test, since the number recorded in ``PLAN.md`` P83 would have moved
+#: with it.
 RELATIVISTIC_RELATIVE = 5e-6
 
 #: Buffer bands for the reference, for ``test_response.py``'s measured reason:
@@ -557,7 +565,10 @@ def test_chi0_matches_a_finite_difference_with_spin_orbit_coupling(
     response underneath it, which carries no kernel and no field at all, so what
     it says is whether the disagreement is in the solve or above it. It is above
     it: measured **6.81e-7** for the charge probe and **1.06e-6** for the field
-    along the moment, both unchanged across steps from 5e-5 to 4e-4.
+    along the moment, both unchanged across steps from 5e-5 to 4e-4, while every
+    probe with a transverse component falls as ``h^2``. Why these two are the
+    step-independent ones is not established here; that they are the probes
+    leaving the ground state's axis alone is a candidate and no more.
 
     Both probes are along ``(0, 0, 1)``, which is the moment's own axis and the
     component ``ph.x`` disagrees along -- P81's cycloid check ran across the

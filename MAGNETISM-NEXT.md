@@ -176,10 +176,13 @@ Sternheimer solve here to run on an `lspinorb` dataset at all: P81's three cells
 the full table in `PLAN.md` P83. What matters is the *shape* of the numbers rather than any
 one of them:
 
-* the two probes that commute with the ground state along its own axis -- a charge probe and
-  a field along the moment, both at `G = (0,0,1)` -- do not move with `h` at all, sitting at
-  **6.81e-7** and **1.06e-6** across a factor of eight in step, which is the CG threshold
-  and not a truncation;
+* two of the probes -- a charge probe and a field along the moment, both at `G = (0,0,1)`
+  -- do not move with `h` at all, sitting at **6.81e-7** and **1.06e-6** across a factor of
+  eight in step, so what is left in them is the solve's own threshold rather than the
+  difference's truncation. Why those two and not the others is *not* measured here: that
+  they are the probes leaving the ground state's axis alone is the obvious candidate and is
+  an explanation that fits a number, which is the thing this project does not accept as
+  evidence;
 * every probe with a transverse component falls as `h^2` (1.69e-4, 4.43e-5, 1.36e-5, 7.5e-6
   for the mixed probe along the moment: ratios 3.82, 3.26, then flattening into the floor);
 * all four density channels are **live** in the mixed probes rather than nulls read as

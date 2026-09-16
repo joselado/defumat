@@ -14171,9 +14171,10 @@ quantity is the one they asked for. `require_a_measured_spinor_response` refuses
   | Zeeman `m_x` | 9.0e-6, 1.74e-5, 5.32e-5, 2.04e-4 | 7.0e-6, 1.75e-5, 6.34e-5, 2.49e-4 |
 
   **Every entry is either a floor or an `h^2`**, which is what makes this a pass rather than
-  a number under a bound: the two probes that commute with the ground state along its own
-  axis -- charge, and a field along the moment -- do not move with `h` at all and sit at the
-  CG threshold's **6.8e-7** and **1.1e-6**, while every probe with a transverse component
+  a number under a bound: two of the probes -- charge, and a field along the moment, both
+  along `(0,0,1)` -- do not move with `h` at all, so what is left in them is the solve's own
+  threshold rather than the difference's truncation, at **6.8e-7** and **1.1e-6**; every
+  probe with a transverse component
   falls with ratios approaching 4 (1.69e-4 to 4.43e-5 to 1.36e-5 is 3.82 and 3.26, flattening
   into the floor at the smallest step). Nothing is stuck at a large value anywhere. All four
   channels are **live** in the mixed probes rather than nulls read as agreement (charge
