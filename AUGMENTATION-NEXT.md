@@ -22,6 +22,16 @@ Where the other files fit (`CLAUDE.md` has the full table):
 **File and line references go stale.** The function or the guard is named wherever there
 is one, so `grep` the name rather than trusting the number.
 
+**The sizings in this file have been wrong three times, always in the same direction and
+always for the same reason.** §1a was called the easiest lift here when `PLAN.md` P40 had
+already measured that route as not closing; §1i was called "the most likely of the class
+to be an afternoon" when its projector set is scalar and cannot take the spinor operator
+at all; §1j was called plumbing when the object it wanted to move is indexed by a
+projector set that does not survive the handoff. Each came from reading the refusal's
+*message* and not the code around it. So **a size in this file is a hypothesis until the
+guard's surroundings have been read**, and the three corrected entries say what reading
+them changed.
+
 ## How the list was made, and what that method cannot see
 
 Two sweeps, because one of them cannot surprise you. The first was a scan for every
@@ -228,10 +238,27 @@ is a **consequence** rather than a term, and it lifts when those do. **Size:** f
 fully-relativistic **norm-conserving** dataset has `S = 1` and is exact, which is the
 regime the `j`-resolved PDOS of P69 runs in.
 
-**What it needs first.** `SpinOrbitCoupling.qq_so` exists and
-`topology/augmentation.py` already routes `q^a_ij(b)` through it, so the map is written;
-what is missing is applying it inside the projection. **Size:** part of a phase, and the
-most likely of the class to be an afternoon.
+**What it needs first, read off the code rather than off the message.**
+`Calculation._spinor_overlap` is the operator with `qq_so` in it and it exists; what it
+cannot be handed is this module's projector set, which is *scalar*
+(`build_atomic_projectors` is called with neither `noncolin` nor `spinor_basis`, giving
+`(nk, npwx, natomwfc)`), and `_spinor_overlap` wants `(..., 2 npwx)`. The default `kind`
+is `ortho-atomic`, so the Löwdin matrix `<phi|S|phi>` is spin-blocked too and cannot be
+left scalar either.
+
+The route that works is the one `workflows/anisotropy.py:_project_band_energy` already
+takes: build the set with `Calculation._as_spinors`, which is
+`atomic_wfc_nc_updown` -- a real harmonic times a pure up or down spinor -- orthogonalise
+it in the spinor space against `_spinor_overlap`, and contract. That basis is the right
+one here for a reason beyond convenience: `_contract` labels its blocks by `(m, spin)`,
+and `m` and the spin are good labels in `nc_updown` and are **not** good labels in the
+`j`-resolved `atomic_wfc_nc_proj` that `projwfc/projections.py` uses. So the columns
+double to `2 natomwfc` with a known order and the shell bookkeeping survives.
+
+**Size:** an afternoon for the code and a phase for the number, which is the part with no
+route yet: `<L>` and `<S>` per site on a fully-relativistic augmented dataset need a
+reference, and neither `projwfc.x` nor Elk's `LSJ.OUT` has been located for that
+combination.
 
 ### 1j. The force theorem for magnetocrystalline anisotropy with PAW
 
@@ -241,9 +268,18 @@ most likely of the class to be an afternoon.
 nothing else, and a PAW Hamiltonian needs `ddd_paw`, which is built from `becsum` -- a
 property of the states rather than of the density.
 
-**What it needs first.** Widening the handoff to carry `becsum`, which is the same object
-`run_nscf` and the topology workflows already demand by name. **Size:** part of a phase,
-and it is plumbing rather than physics.
+**What it needs first, and it is not widening the handoff.** This entry first said to
+carry `becsum` across, the way `run_nscf` demands it. That cannot be done: the two legs of
+the force theorem use **different pseudopotential files** -- the collinear leg runs the
+scalar-relativistic average and the spinor leg the fully-relativistic dataset -- so the
+first run's `becsum` has a different number of projectors from the second run's
+Hamiltonian. The density crosses because it is a field on a grid; `becsum` is indexed by a
+projector set that does not survive the change. QE refuses in the same place and for the
+same reason (`potinit.f90:98`), and an ultrasoft dataset works precisely because its
+augmentation charge is already inside the density that crosses.
+
+**Size:** a phase, and the first question is whether a PAW force theorem is well posed at
+all when the two legs cannot share a `becsum`, rather than how to move one.
 
 ### 1k. The ultracell with an ultrasoft or PAW dataset
 
@@ -398,12 +434,14 @@ By what the first step costs, not by what the item is worth.
 The first two entries of this list were run in P94 and neither lifted a refusal; what
 they left is a sharper target and a warning about the instrument. What is left:
 
-1. **Site angular momenta on a relativistic augmented dataset** (§1i) and **the force
-   theorem's PAW handoff** (§1j). Both are applying an object that exists in a place that
-   does not yet call it, which is the only shape of work here that is not new physics.
-2. **Born charges on PAW** (§1b). One named term, a measured 1.5e-3 gap, and a reference
-   routine to transcribe.
-3. **The `chi_0` gap** (§1a), now a band-converged 1.0 per cent rather than an unknown.
-4. **The moving overlap in a Kubo sum** (§2), whose first step is finding a system where
-   the term exceeds the mesh floor.
+1. **Born charges on PAW** (§1b). One named term, a gap measured at 1.5e-3, and a
+   reference routine to transcribe -- the only item here whose target, method and
+   reference are all already written down.
+2. **The moving overlap in a Kubo sum** (§2). The missing term's shape is now pinned
+   exactly on a model, so what is left is writing it in matrix-element form from
+   `efield.py`'s machinery and checking the *assembly*.
+3. **Site angular momenta on a relativistic augmented dataset** (§1i). The code route is
+   clear; the open question is what to validate it against.
+4. **The `chi_0` gap** (§1a), now not a truncation and about 1 per cent rather than an
+   unknown.
 5. Everything else, in whatever order the physics wants.
