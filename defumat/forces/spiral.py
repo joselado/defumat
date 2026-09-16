@@ -83,6 +83,7 @@ invisible.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from functools import partial
 
@@ -157,17 +158,26 @@ def spiral_energy(calculation, q_crystal, state: FrozenState):
     becsum_ = moved.becsum(psi, weights)
     rho = moved.density(psi, weights, becsum_)
     potential = moved.potential(rho)
+    # PAW's one-centre terms, which are a function of ``becsum`` and therefore
+    # of ``q`` through the same projectors the augmentation charge goes through.
+    # ``(0, None)`` when no species is PAW.
+    epaw, _ = moved.onecenter(becsum_)
     volume = calculation.system.cell.volume
     local = volume / rho[0].size * jnp.sum(moved.vltot * total_charge(rho))
 
     kinetic = _kinetic_energy(psi, moved.state_kinetic, weights)
-    nonlocal_ = _nonlocal_energy(
-        psi, moved.projectors.vkb, moved.dvan_so, weights, calculation.system.kpoints.nk
+    nonlocal_, overlap = _projector_energies(
+        psi, moved.projectors.vkb, moved.dvan_so, moved.qq_so, weights,
+        state.eigenvalues, calculation.system.kpoints.nk,
     )
-    # ``S`` is the identity for the norm-conserving datasets a spiral is
-    # restricted to, so the orthonormality constraint carries no ``q`` and
-    # contributes nothing to the gradient. It is here for the same reason the
-    # density is: the identity against the SCF total energy is the check.
+    # The orthonormality constraint, in two pieces. ``<psi|psi> - 1`` carries no
+    # ``q`` -- the plane-wave coefficients are frozen and the sphere with them --
+    # and is here for the same reason the density is, so that the identity
+    # against the SCF total energy is a check on everything else. The
+    # augmentation half above it is *not* inert: ``S`` pairs each spinor
+    # component with the projectors of **its own** shifted sphere, so
+    # ``<psi|S|psi>`` moves with ``q`` and its derivative is the spiral's
+    # Pulay term. A norm-conserving dataset has ``S = 1`` and never reaches it.
     norm = jnp.sum(weights * state.eigenvalues * (_norms(psi) - 1.0))
 
     return (
@@ -176,6 +186,8 @@ def spiral_energy(calculation, q_crystal, state: FrozenState):
         + local
         + potential.ehart
         + potential.etxc
+        + epaw
+        - overlap
         + moved.ewald
         # Carried for the same reason the density is: a spiral does not move an
         # atom, so the dispersion energy has no ``q`` dependence and contributes
@@ -187,8 +199,8 @@ def spiral_energy(calculation, q_crystal, state: FrozenState):
     )
 
 
-def q_dependent_energy(calculation, q_crystal, psi, weights, rows):
-    """The two terms that carry ``q``, over a *subset* of the k-points.
+def q_dependent_energy(calculation, q_crystal, psi, weights, eigenvalues, rows):
+    """The terms that carry ``q``, over a *subset* of the k-points.
 
     ``rows`` indexes the ``2 nk`` axis both shifted spheres live on -- the up
     component's ``nk`` rows first -- so a chunk of ``m`` k-points is the ``m``
@@ -199,11 +211,21 @@ def q_dependent_energy(calculation, q_crystal, psi, weights, rows):
     Miller ordering against the same numbers and silently wrong.
 
     Everything else in :func:`spiral_energy` -- the density, Hartree,
-    exchange-correlation, the local term, Ewald, the orthonormality constraint
-    -- is ``q``-independent at frozen coefficients and is *not* here, because
-    its gradient is zero and the chunking exists to keep the backward pass off
-    it. :func:`q_independent_energy` evaluates it once, forward only, so the
+    exchange-correlation, the local term, Ewald, ``<psi|psi> - 1`` -- is
+    ``q``-independent at frozen coefficients and is *not* here, because its
+    gradient is zero and the chunking exists to keep the backward pass off it.
+    :func:`q_independent_energy` evaluates it once, forward only, so the
     identity against the SCF total energy survives.
+
+    **That split is what makes this route norm-conserving only.** On an
+    augmented dataset the density itself carries ``q``, through the displaced
+    table and through ``becsum``, and the Hartree energy is *quadratic* in the
+    density -- so the sum of per-chunk gradients is no longer the gradient of
+    the sum. :func:`compute_spiral_gradient` sends such a run down the single
+    pass instead. The augmentation half of the constraint is written here
+    nonetheless, and is identically zero on everything that reaches this
+    function, because the two routes differing term by term is how a later
+    lifting of that restriction would go wrong quietly.
     """
     cell = calculation.system.cell
     smooth = calculation.basis.smooth
@@ -231,10 +253,11 @@ def q_dependent_energy(calculation, q_crystal, psi, weights, rows):
 
     m = kinetic.shape[0] // 2
     state_kinetic = jnp.concatenate([kinetic[:m], kinetic[m:]], axis=-1)
-    return (
-        _kinetic_energy(psi, state_kinetic, weights)
-        + _nonlocal_energy(psi, projectors.vkb, calculation.dvan_so, weights, m)
+    nonlocal_, overlap = _projector_energies(
+        psi, projectors.vkb, calculation.dvan_so, calculation.qq_so, weights,
+        eigenvalues, m,
     )
+    return _kinetic_energy(psi, state_kinetic, weights) + nonlocal_ - overlap
 
 
 def q_independent_energy(calculation, state: FrozenState):
@@ -282,8 +305,8 @@ def _chunked_energy_and_gradient(calculation, q, state: FrozenState, k_batch: in
     fn = calculation.__dict__.get("_spiral_gradient_chunk")
     if fn is None:
         fn = jax.jit(jax.value_and_grad(
-            lambda q, psi, weights, rows:
-                q_dependent_energy(calculation, q, psi, weights, rows)
+            lambda q, psi, weights, eigenvalues, rows:
+                q_dependent_energy(calculation, q, psi, weights, eigenvalues, rows)
         ))
         calculation._spiral_gradient_chunk = fn
 
@@ -296,8 +319,9 @@ def _chunked_energy_and_gradient(calculation, q, state: FrozenState, k_batch: in
         live = np.concatenate([np.ones(len(ks)), np.zeros(pad)])
         psi = state.wavefunctions[:, padded]
         weights = state.weights[:, padded] * live[None, :, None]
+        eigenvalues = state.eigenvalues[:, padded]
         rows = jnp.asarray(np.concatenate([padded, nk + padded]))
-        value, slope = fn(q, psi, weights, rows)
+        value, slope = fn(q, psi, weights, eigenvalues, rows)
         energy += value
         gradient = gradient + slope
     return energy + q_independent_energy(calculation, state), gradient
@@ -331,6 +355,28 @@ def compute_spiral_gradient(
     q = jnp.asarray(calculation.system.spiral_q, dtype=float)
     batch = (calculation.k_batch if isinstance(k_batch, str) and k_batch == "default"
              else resolve_k_batch(k_batch))
+    if calculation.is_ultrasoft and batch is not None:
+        # **The chunked route cannot express an augmented spiral**, and the
+        # reason is the Hartree energy rather than the augmentation: on this
+        # dataset the density carries ``q``, and a quadratic functional of a
+        # sum is not the sum of the per-chunk quadratic functionals, so
+        # accumulating :func:`q_dependent_energy`'s gradients would be wrong by
+        # every cross term. The dial's default on a CPU is the chunked end, so
+        # this overrides the dial rather than leaving the dispatch to pick.
+        # It is said out loud because the cost is real: the single pass carries
+        # every k-point's ``vkb(k +- q/2)`` and the displaced table's radial
+        # intermediates on one tape.
+        warnings.warn(
+            "dE/dq on an ultrasoft or PAW spiral is evaluated in a single pass "
+            f"over all {calculation.system.kpoints.nk} k-points rather than in "
+            f"chunks of {batch}: the density carries q on this dataset and the "
+            "Hartree energy is quadratic in it, so a sum of per-chunk "
+            "gradients is not the gradient. The peak working set scales with "
+            "nk rather than with the chunk size",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        batch = None
     if batch is None or batch >= calculation.system.kpoints.nk:
         energy, gradient = _energy_and_gradient(calculation)(q, state)
     else:
@@ -380,34 +426,18 @@ def _energy_and_gradient(calculation):
 
 
 def _require_a_differentiable_spiral(calculation) -> None:
-    """The three things that make ``dE/dq`` at frozen state not be the answer."""
+    """The two things that make ``dE/dq`` at frozen state not be the answer.
+
+    An ultrasoft or PAW dataset **was** the third and is no longer (P96): the
+    displaced table is rebuilt with a traced ``q`` inside
+    :meth:`~defumat.scf.driver.Calculation.at_spiral_q`, which is where the
+    remaining refusal lives -- a *tabulated* table reads ``|q|`` on the host
+    and cannot take a tracer at all.
+    """
     if not calculation.spiral:
         raise ValueError(
             "dE/dq needs a spin spiral: set spiral_q, which is the coordinate "
             "being differentiated with respect to"
-        )
-    if calculation.is_ultrasoft:
-        # **The ground state of such a spiral now runs**; what is missing is one
-        # term of this derivative, and it is named rather than approximated.
-        # The transverse augmentation charge is the displaced table
-        # ``Q_ij(G - q) e^{-i (G - q).tau_a}``
-        # (:meth:`defumat.scf.driver.Calculation.augmented`), so it is a
-        # function of ``q`` like the kinetic energy and ``vkb`` are -- but
-        # ``at_spiral_q(rebuild_basis = False)``, the traced path this gradient
-        # is taken along, deliberately freezes everything that is not a
-        # function of the sphere, and the table is rebuilt in neither branch.
-        # A gradient taken anyway would be the energy's derivative at a frozen
-        # augmentation charge, which is right to look at and wrong by the whole
-        # ``dQ_ij(G - q)/dq`` term. That is this repository's P68 shape of
-        # error -- the energy right and the derivative wrong -- so it is
-        # refused until the term is written and measured against a finite
-        # difference of the energy, which now exists to be differenced.
-        raise NotImplementedError(
-            "dE/dq for an ultrasoft or PAW spiral is not implemented: the "
-            "ground state is (the transverse augmentation charge is the "
-            "displaced table Q_ij(G - q)), but that table is a function of q "
-            "and its derivative is not threaded through at_spiral_q, so the "
-            "gradient would silently be missing dQ_ij(G - q)/dq"
         )
     if calculation.magnetic_field is not None:
         raise NotImplementedError(
@@ -437,21 +467,34 @@ def _norms(psi):
 
 
 @partial(jax.jit, static_argnames=("nk",))
-def _nonlocal_energy(psi, vkb, dvan_so, weights, nk):
-    """``sum w f <psi|V_NL|psi>`` with the projectors of both shifted spheres.
+def _projector_energies(psi, vkb, dvan_so, qq_so, weights, eigenvalues, nk):
+    """``<psi|V_NL|psi>`` and ``<psi|S - 1|psi>``, with both shifted spheres.
 
-    ``add_vuspsi_nc``'s quadratic form: ``D`` is a 2x2 matrix in spin space
-    (``dvan_so``, which for a scalar-relativistic dataset is the ordinary
-    ``dion`` on each diagonal block), and the two spinor components are
-    projected onto *different* projectors -- ``vkb(k + q/2)`` and
-    ``vkb(k - q/2)`` -- which is the only place the spiral enters the nonlocal
-    term and one of only two places it enters the energy at all.
+    ``add_vuspsi_nc``'s quadratic form and ``s_psi_nc``'s beside it: ``D`` is a
+    2x2 matrix in spin space (``dvan_so``, which for a scalar-relativistic
+    dataset is the ordinary ``dion`` on each diagonal block), and the two spinor
+    components are projected onto *different* projectors -- ``vkb(k + q/2)`` and
+    ``vkb(k - q/2)`` -- which is where the spiral enters both terms.
+
+    ``dvan_so`` is the **bare** ``D``, for the reason
+    :func:`defumat.forces.energy._spinor_projector_energies` gives: the
+    self-consistent ``int V_eff Q_ij`` half of ``deeq`` is already inside the
+    augmented density, so taking the screened one here would count it twice.
+
+    The second return is the augmentation half of the orthonormality
+    constraint, ``sum w f eps <psi|Q|psi>``, and it is zero for a
+    norm-conserving dataset, where ``qq_so`` is ``None`` and ``S`` is the
+    identity. ``qq_so`` is the **resident** ``Omega Q_ij(G = 0)`` rather than
+    the displaced table: ``S`` is diagonal in the spinor index without
+    spin-orbit coupling -- which a spiral refuses permanently -- so each
+    component pairs projectors at one and the same k-point, and no displacement
+    enters. What makes the term move with ``q`` is ``vkb`` alone.
 
     The indices below are ``s`` spin (one, for a spinor run), ``k`` k-point,
     ``n`` band, ``a``/``b`` spinor component, ``i``/``j`` projector channel.
     """
     if vkb.shape[-1] == 0:
-        return jnp.zeros(())
+        return jnp.zeros(()), jnp.zeros(())
     npwx = vkb.shape[1]
     components = psi.reshape(psi.shape[:-1] + (2, npwx))
     # The spiral's two blocks of rows -- the up component's ``nk`` first --
@@ -463,4 +506,11 @@ def _nonlocal_energy(psi, vkb, dvan_so, weights, nk):
         "sknai,abij,sknbj->skn",
         becp.conj(), dvan_so.astype(becp.dtype), becp, optimize=True,
     ))
-    return jnp.sum(weights * bands)
+    nonlocal_ = jnp.sum(weights * bands)
+    if qq_so is None:
+        return nonlocal_, jnp.zeros(())
+    overlap = jnp.real(jnp.einsum(
+        "sknai,abij,sknbj->skn",
+        becp.conj(), qq_so.astype(becp.dtype), becp, optimize=True,
+    ))
+    return nonlocal_, jnp.sum(weights * eigenvalues * overlap)

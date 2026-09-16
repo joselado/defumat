@@ -86,7 +86,7 @@ from defumat.hubbard.occupations import (
 from defumat.hubbard.operator import HubbardTerm, block_potential
 from defumat.hubbard.projectors import build_hubbard_projectors
 from defumat.paw.symmetry import build_becsum_symmetry
-from defumat.pseudo.augmentation import build_augmentation
+from defumat.pseudo.augmentation import TabulatedAugmentation, build_augmentation
 from defumat.pseudo.potentials import (
     combine_species,
     species_atomic_charge,
@@ -2893,19 +2893,39 @@ class Calculation:
             if self.cross_augmentation is not None:
                 # The transverse augmentation charge is the displaced table
                 # ``Q_ij(G - q)``, so it is a function of ``q`` exactly as
-                # ``|k+G|^2`` and ``vkb`` are -- and unlike them it is not
-                # rebuilt below. Returning a calculation whose table belongs to
-                # the *old* ``q`` would give a traced energy that is wrong by
-                # one term and silent about it, which is what
-                # :func:`defumat.forces.spiral._require_a_differentiable_spiral`
-                # refuses one level up. Refused here as well, so no other
-                # caller can reach the frozen table by another route.
-                raise NotImplementedError(
-                    "at_spiral_q(rebuild_basis = False) on an ultrasoft or PAW "
-                    "spiral is not implemented: the transverse augmentation "
-                    "charge Q_ij(G - q) is a function of q and is not rebuilt "
-                    "on this path, so the energy it returns would be frozen at "
-                    "the old q in that one term"
+                # ``|k+G|^2`` and ``vkb`` are, and it is rebuilt here for the
+                # same reason they are. Leaving it at the old ``q`` would give
+                # a traced energy that is wrong by the whole
+                # ``dQ_ij(G - q)/dq`` term and silent about it, which is this
+                # repository's P68 shape of error -- the energy right and the
+                # derivative wrong.
+                #
+                # **This is the one expensive thing on a path that is otherwise
+                # arithmetic**: the radial Bessel transforms run inside every
+                # gradient evaluation rather than once per wavevector, and in
+                # reverse mode their ``(ngm, kkbeta)`` intermediates are live
+                # at once (``_qrad_kernel``). It is the cost ``dE/dq`` pays for
+                # an augmented dataset and it is measured in `PLAN.md` P96.
+                if isinstance(self.cross_augmentation, TabulatedAugmentation):
+                    # The tabulated branch reads ``|shift|`` on the host, to
+                    # extend its radial table by that much -- running past the
+                    # end of the table is a NaN rather than a clamp. A tracer
+                    # has no such value, so this branch cannot take a traced
+                    # ``q`` at all. It is reached only by a cell whose stored
+                    # ``Q_ij(G)`` is over ``AUG_MAX_BYTES``, and on such a cell
+                    # the gradient's tape carries the table twice over.
+                    raise NotImplementedError(
+                        "dE/dq for a spiral whose augmentation charge is "
+                        "tabulated is not implemented: the radial table's "
+                        "extent is set from |q| on the host, which a traced q "
+                        "does not have. Raise DEFUMAT_AUG_MAX_BYTES so the "
+                        "table is stored rather than tabulated, or scan E(q) "
+                        "instead of following its gradient"
+                    )
+                qcart = cell.k_to_cartesian(jnp.asarray(q_crystal)) * cell.tpiba
+                moved.cross_augmentation = build_augmentation(
+                    self.pseudos, self.system.structure, cell, self.basis.dense,
+                    shift=-qcart,
                 )
             planewaves = self.basis.planewaves
             kcart = spiral_kcart(self.system.kpoints, q_crystal, cell)
