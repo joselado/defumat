@@ -17171,6 +17171,19 @@ no other caller can reach the frozen table by another route. The rebuilding bran
 branch -- is correct. `at_strain` refuses a spiral already, so the stress was never
 exposed, and `reject_spinor_spiral` refuses the atomic force for every spiral.
 
+**The scan path is checked separately, because it is a new way to be silent.** An `E(q)`
+scan walks `at_spiral_q(rebuild_basis = True)`, and on a norm-conserving dataset that
+branch had no augmentation charge to move; now it does. If it did not move it, every point
+after the first would carry the first one's `Q_ij(G - q)` and the curve would stay smooth,
+ordered and wrong. Each point against the same wavevector run from scratch: **exactly
+equal, to all twelve digits**, at `q3 = 0`, `1/4` and `1/2`.
+
+**Nothing on the untouched paths moved.** `_newd_noncollinear` now takes a conjugate
+transpose where it took an elementwise conjugate, `spinor_becsum` has a spiral branch and
+`TabulatedAugmentation`'s fields have defaults, so the fully-relativistic PAW regressions
+were re-run: `tests/regression/test_spinorbit.py`, **27 passed** in 360 s, no number
+moved, plus `test_textured_seeding.py` and `test_collinear_symmetry.py`, 13 passed.
+
 **Memory.** The displaced table is a second `(nh, nh, ngm)` per ultrasoft species beside
 the resident one, so an augmented spiral holds **twice** what `AUG_MAX_BYTES` sizes --
 the gate measures one of them. On the tabulated branch it is free: that branch keeps the

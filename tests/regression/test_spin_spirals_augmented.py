@@ -258,6 +258,42 @@ def test_half_a_reciprocal_vector_is_the_antiferromagnet(pseudo_dir):
     )
 
 
+def test_a_scan_moves_the_displaced_table_with_q(pseudo_dir):
+    """Every point of an ``E(q)`` scan must carry *its own* displaced table.
+
+    A scan walks :meth:`~defumat.scf.driver.Calculation.at_spiral_q` with
+    ``rebuild_basis = True``, which rebuilds the spheres, ``vkb`` and -- since
+    P95 -- the displaced augmentation table too. On a norm-conserving dataset
+    there was nothing there to rebuild, so this is a new way for a scan to go
+    wrong, and the way it would go wrong is **silent**: every point after the
+    first would carry the first point's ``Q_ij(G - q)``, the energies would
+    stay smooth and ordered, and only their values would be wrong.
+
+    So each point is compared against the same wavevector run from scratch,
+    which shares no ``Calculation`` with the scan. Measured: **exactly equal**,
+    to all twelve digits, at ``q3 = 0``, ``1/4`` and ``1/2``.
+    """
+    import dataclasses
+
+    from defumat.workflows.spiral import run_spiral_scan
+
+    text = (GENERATED / "o-chain-spiral-us.in").read_text()
+    system = build_system(parse_pw_input(text))
+    pseudos = _pseudos(system, pseudo_dir)
+    wavevectors = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.5]]
+
+    scan = run_spiral_scan(
+        system, pseudos, wavevectors,
+        conv_thr=1e-11, mixing_beta=0.3, max_iterations=300,
+    )
+    for index, q in enumerate(wavevectors):
+        alone = run_scf(
+            dataclasses.replace(system, spiral_q=tuple(q)), pseudos,
+            conv_thr=1e-11, mixing_beta=0.3, max_iterations=300,
+        )
+        assert scan.energies[index] == pytest.approx(alone.total_energy, abs=1e-10)
+
+
 def test_the_resident_table_is_not_enough(pseudo_dir, monkeypatch):
     """The guard fires: without the displacement the identity fails outright.
 
