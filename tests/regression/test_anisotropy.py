@@ -488,6 +488,54 @@ def test_a_becsum_from_the_other_file_is_refused_and_a_matching_count_is_not_eno
 
 
 @pytest.mark.slow
+def test_the_front_door_hands_becsum_over_on_one_file_and_not_on_two(monkeypatch):
+    """``Calculator.get_anisotropy`` decides this, so the decision is asserted.
+
+    The guide says the front door passes ``becsum`` when the first leg's
+    dataset is the one the second leg has, and hands over nothing when it is
+    not. Both branches are checked against what actually arrives at
+    :func:`run_anisotropy`, since a facade that quietly dropped it would leave
+    a PAW run refusing with a message about a route the caller had already
+    taken.
+    """
+    import defumat.calculator as facade
+
+    seen = {}
+
+    def spy(system, pseudos, density, **options):
+        seen["becsum"] = options.get("becsum", ())
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(facade, "run_anisotropy", spy, raising=False)
+    monkeypatch.setattr(
+        "defumat.workflows.anisotropy.run_anisotropy", spy, raising=False
+    )
+
+    scalar, _ = _smoke_pair()
+    two_file = Calculator.from_text(_SMOKE_SOC, pseudo_dir=GENERATED.parent / "pseudo")
+    with pytest.raises(RuntimeError, match="stop here"):
+        scalar.get_anisotropy(two_file, directions="xz")
+    assert not seen["becsum"], (
+        "the two legs are two files here, so nothing about the first leg's "
+        "becsum fits the second leg's projectors"
+    )
+
+    one_file = Calculator.from_text(
+        _SMOKE_SR.replace("calculation='scf'", "calculation='nscf'").replace(
+            "   nspin = 2,",
+            "   noncolin = .true., lforcet = .true., nosym = .true.,",
+        ),
+        pseudo_dir=GENERATED.parent / "pseudo",
+    )
+    with pytest.raises(RuntimeError, match="stop here"):
+        scalar.get_anisotropy(one_file, directions="xz")
+    assert seen["becsum"], (
+        "one file for both legs, so the first leg's becsum is indexed by the "
+        "projectors the second leg has and has to cross"
+    )
+
+
+@pytest.mark.slow
 def test_a_paw_force_theorem_carries_becsum_and_the_rotation_identity_holds():
     """Rung 1 on a PAW dataset, which is what the handoff had to reach.
 
